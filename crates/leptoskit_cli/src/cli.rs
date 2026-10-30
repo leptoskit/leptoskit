@@ -156,8 +156,8 @@ pub enum Command {
 		#[command(subcommand)]
 		command: RpcCommand,
 	},
-	/// Generates an application, a runtime plugin crate, or a tooling plugin
-	/// program.
+	/// Generates an application, sign-in screens, a runtime plugin crate, or
+	/// a tooling plugin program.
 	Generate {
 		#[command(subcommand)]
 		kind: GenerateCommand,
@@ -186,6 +186,11 @@ pub enum Command {
 		/// table the backend serves.
 		#[arg(long, value_name = "postgres|sqlite")]
 		db: Option<leptoskit_config::DbDialect>,
+		/// Start with sign-in wired up: email codes, a user table, and the
+		/// sign-in screens in front of the app. Adds a SQLite database unless
+		/// `--db` picks one.
+		#[arg(long)]
+		auth: bool,
 	},
 	/// Runs every platform you have set up, and rebuilds them on change.
 	///
@@ -315,6 +320,11 @@ pub enum GenerateCommand {
 		/// table the backend serves.
 		#[arg(long, value_name = "postgres|sqlite")]
 		db: Option<leptoskit_config::DbDialect>,
+		/// Start with sign-in wired up: email codes, a user table, and the
+		/// sign-in screens in front of the app. Adds a SQLite database unless
+		/// `--db` picks one.
+		#[arg(long)]
+		auth: bool,
 	},
 	/// Generates an independently publishable runtime plugin with an echo
 	/// method.
@@ -328,6 +338,19 @@ pub enum GenerateCommand {
 		/// publication.
 		#[arg(long)]
 		bridge_path: Option<String>,
+	},
+	/// Writes sign-in screens into this app: an email-and-code sign-in
+	/// screen and a "where you're signed in" screen, on the headless auth
+	/// client, so they work on the web and in native apps.
+	///
+	/// Also adds `[auth]` to leptoskit.toml, the leptoskit features the
+	/// screens use, the file router's routes when the app has one, and the
+	/// server's sign-in module when it has a server and a database. Running it
+	/// again changes nothing; a file you've edited is kept.
+	Auth {
+		/// Replace files that differ from the templates.
+		#[arg(long)]
+		force: bool,
 	},
 	/// Generates a tooling plugin: a program leptoskit runs once per hook.
 	ToolPlugin {
@@ -503,6 +526,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 					name,
 					sdk_path,
 					db,
+					auth,
 				} => {
 					if let Some(target) = native_target {
 						anyhow::ensure!(
@@ -510,8 +534,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 							"--native-target requires --platform native"
 						);
 						anyhow::ensure!(
-							db.is_none(),
-							"--db needs the standard project; leave out --native-target"
+							db.is_none() && !auth,
+							"--db and --auth need the standard project; leave out --native-target"
 						);
 						return crate::native::scaffold::run_for_target(
 							&path,
@@ -520,14 +544,16 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 							Some(target),
 						);
 					}
-					new_project::run_with_database(
+					new_project::run_with_options(
 						&path,
 						platform,
 						name.as_deref(),
 						sdk_path.as_deref(),
 						db,
+						auth,
 					)
 				}
+				GenerateCommand::Auth { force } => crate::auth_pages::run(force),
 				GenerateCommand::Plugin {
 					path,
 					name,
@@ -545,6 +571,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			name,
 			sdk_path,
 			db,
+			auth,
 		} => {
 			run(Cli {
 				command: Command::Generate {
@@ -555,6 +582,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 						name,
 						sdk_path,
 						db,
+						auth,
 					},
 				},
 			})

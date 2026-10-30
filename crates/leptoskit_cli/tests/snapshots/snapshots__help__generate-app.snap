@@ -15,5 +15,6 @@ Options:
       --name <NAME>                    Package name, otherwise taken from the directory
       --sdk-path <SDK_PATH>            A local leptoskit repository whose crates the project depends on by path instead of the published release
       --db <postgres|sqlite>           Add a database: a crate of tables, migrations, and an example `Note` table the backend serves
+      --auth                           Start with sign-in wired up: email codes, a user table, and the sign-in screens in front of the app. Adds a SQLite database unless `--db` picks one
   -h, --help                           Print help
   -V, --version                        Print version
