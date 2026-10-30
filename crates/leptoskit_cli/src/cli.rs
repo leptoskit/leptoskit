@@ -183,8 +183,13 @@ pub enum Command {
 		#[arg(long)]
 		sdk_path: Option<String>,
 		/// Add a database: a crate of tables, migrations, and an example `Note`
-		/// table the backend serves.
-		#[arg(long, value_name = "postgres|sqlite")]
+		/// table the backend serves. Postgres unless you name SQLite.
+		#[arg(
+			long,
+			value_name = "postgres|sqlite",
+			num_args = 0..=1,
+			default_missing_value = "postgres"
+		)]
 		db: Option<leptoskit_config::DbDialect>,
 	},
 	/// Runs every platform you have set up, and rebuilds them on change.
@@ -312,8 +317,13 @@ pub enum GenerateCommand {
 		#[arg(long)]
 		sdk_path: Option<String>,
 		/// Add a database: a crate of tables, migrations, and an example `Note`
-		/// table the backend serves.
-		#[arg(long, value_name = "postgres|sqlite")]
+		/// table the backend serves. Postgres unless you name SQLite.
+		#[arg(
+			long,
+			value_name = "postgres|sqlite",
+			num_args = 0..=1,
+			default_missing_value = "postgres"
+		)]
 		db: Option<leptoskit_config::DbDialect>,
 	},
 	/// Generates an independently publishable runtime plugin with an echo

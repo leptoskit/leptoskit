@@ -7,6 +7,9 @@
 //! to the platforms named. Every change rebuilds the web app and each native
 //! guest, and the native apps swap their new guest in without being
 //! reinstalled.
+//!
+//! With a `[db]` table, it also runs the development database (see
+//! `db::dev_server`) and keeps it in step with the tables as they change.
 
 mod guests;
 mod native;
@@ -94,10 +97,20 @@ pub fn run(
 		selection.web || !selection.native.is_empty(),
 		"this machine can run none of the platforms in app.platforms"
 	);
+	// Declared before the app server, so it outlives it: a development
+	// database `dev` started stops after the server that uses it.
+	let database = crate::db::DevDatabase::start(&config, &root)?;
+	if let Some(database) = &database {
+		database.tables_changed();
+	}
+	let database_env = database
+		.as_ref()
+		.map(crate::db::DevDatabase::env)
+		.unwrap_or_default();
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
 	let mut web = if selection.web {
-		Some(Web::start(&config, &root, port, &runtime)?)
+		Some(Web::start(&config, &root, port, &runtime, database_env)?)
 	} else {
 		None
 	};
@@ -134,6 +147,11 @@ pub fn run(
 	let public = root.join("public");
 	let config_file = root.join(leptoskit_config::CONFIG_FILE);
 	let config_changed = Arc::new(AtomicBool::new(false));
+	// The package that declares the tables: a change there may change them.
+	let tables_dir = database
+		.as_ref()
+		.and_then(|database| database.package_dir(&metadata));
+	let tables_changed = Arc::new(AtomicBool::new(false));
 
 	let filter = WatchFilter {
 		public: public.clone(),
@@ -149,11 +167,21 @@ pub fn run(
 	};
 	let watched_config = config_file.clone();
 	let changed = Arc::clone(&config_changed);
+	let tables = Arc::clone(&tables_changed);
 	let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
 		match event {
 			Ok(event) if event.paths.iter().any(|path| filter.is_relevant(path)) => {
 				if event.paths.contains(&watched_config) {
 					changed.store(true, Ordering::Relaxed);
+				}
+
+				if let Some(dir) = &tables_dir
+					&& event
+						.paths
+						.iter()
+						.any(|path| path.starts_with(dir) && filter.is_relevant(path))
+				{
+					tables.store(true, Ordering::Relaxed);
 				}
 
 				let _ = events_tx.send(Wake::Changed);
@@ -197,6 +225,12 @@ pub fn run(
 				Err(RecvTimeoutError::Timeout) => break,
 			}
 		}
+		// Before the rebuild, so the server embeds a migration written now.
+		if let Some(database) = &database
+			&& tables_changed.swap(false, Ordering::Relaxed)
+		{
+			database.tables_changed();
+		}
 		if let Some(web) = &mut web {
 			web.rebuild();
 		}
@@ -236,6 +270,8 @@ struct Web {
 	address: SocketAddr,
 	server_rendered: bool,
 	app_server: Option<Child>,
+	/// Extra variables for the app server, such as the database's URL.
+	env: Vec<(String, String)>,
 }
 
 impl Web {
@@ -245,6 +281,7 @@ impl Web {
 		root: &Path,
 		port: Option<u16>,
 		runtime: &tokio::runtime::Runtime,
+		env: Vec<(String, String)>,
 	) -> Result<Self> {
 		let port = port.unwrap_or(config.serve.port);
 		let ip: IpAddr = config.serve.address.parse().with_context(|| {
@@ -278,6 +315,7 @@ impl Web {
 			address,
 			server_rendered,
 			app_server: None,
+			env,
 		};
 
 		if let Some(listener) = listener {
@@ -299,7 +337,7 @@ impl Web {
 			});
 			println!("[web] serving {} on {}", out_dir.display(), web.url());
 		} else {
-			web.app_server = Some(start_app_server(config, &output, address)?);
+			web.app_server = Some(start_app_server(config, &output, address, &web.env)?);
 			println!("[web] running the app server on {}", web.url());
 		}
 
@@ -321,7 +359,7 @@ impl Web {
 			Ok(output) => {
 				println!("[web] rebuilt in {:?}", started.elapsed());
 				if self.server_rendered {
-					match start_app_server(&self.config, &output, self.address) {
+					match start_app_server(&self.config, &output, self.address, &self.env) {
 						Ok(child) => self.app_server = Some(child),
 						Err(error) => {
 							eprintln!("[web] could not restart the app server: {error:#}");
@@ -348,6 +386,7 @@ fn start_app_server(
 	config: &LeptoskitConfig,
 	output: &crate::build::BuildOutput,
 	address: SocketAddr,
+	env: &[(String, String)],
 ) -> Result<Child> {
 	let binary = output.server_binary.as_deref().with_context(|| {
 		format!(
@@ -362,7 +401,7 @@ fn start_app_server(
 		address,
 		env: LeptosEnv::Dev,
 	};
-	crate::server::spawn(binary, &site)
+	crate::server::spawn_with(binary, &site, env)
 }
 
 /// Stops a child process and reaps it. A child that already exited is fine.
