@@ -389,7 +389,8 @@ impl JobsHandle {
 
 /// Wakes idle workers when the jobs table changes on any instance: an
 /// insert there is a job to run. The table is live, so the change arrives
-/// over Postgres `NOTIFY`, or in process on SQLite.
+/// over Postgres `NOTIFY`, or on SQLite in process, and from other processes
+/// within a second.
 async fn waker(db: Db, wake: Arc<Notify>, shutdown: Arc<AtomicBool>) {
 	let Ok(mut feed) = db.system("wake job workers").changes().await else {
 		// Without a feed the workers poll, which is slower but complete.

@@ -28,7 +28,8 @@ use crate::policy::Access;
 /// `NOTIFY` from any server sharing a Postgres database, a commit through
 /// this process's SQLite pool, or the listening connection coming back,
 /// after which readers catch up on what they missed. Readers always read
-/// the log itself; a wake only says when.
+/// the log itself; a wake only says when. Nothing wakes a SQLite reader for
+/// another process's commit, so it also reads every second.
 pub(crate) struct Hub {
 	pulse: watch::Sender<u64>,
 	/// Whether the database has the `live` pack, once it's been seen.

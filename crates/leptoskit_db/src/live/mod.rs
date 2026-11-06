@@ -28,7 +28,9 @@
 //! that falls behind, or a server whose connection to the database drops,
 //! catches up rather than missing anything; a commit that rolls back never
 //! reaches the log. On Postgres a `NOTIFY` at commit wakes every server
-//! sharing the database; on SQLite, commits through this process wake it.
+//! sharing the database. On SQLite, commits through this process wake it at
+//! once, and an idle feed reads the log every second as well, so commits
+//! from other processes on the same file reach it within a second.
 //!
 //! On Postgres, `[db] live_capture = "replication"` fills the same log from
 //! the write-ahead log instead, a moment after each commit, so writers pay

@@ -552,6 +552,39 @@ async fn changes_reach_every_server_sharing_a_postgres_database() {
 	.await;
 }
 
+#[tokio::test]
+async fn changes_reach_another_process_sharing_a_sqlite_file() {
+	let directory = tempfile::tempdir().unwrap();
+	let url = format!(
+		"sqlite://{}",
+		directory.path().join("app.sqlite3").display()
+	);
+	let db = Db::connect(&url).await.unwrap();
+	create_schema(&db).await;
+	// Its own pool, as another process has: this pool's commits never wake it.
+	let elsewhere = Db::connect(&url).await.unwrap();
+	let mut feed = elsewhere.system("another process").changes().await.unwrap();
+	// Idle before the commit, so only its timer can bring the change.
+	let waiting = tokio::spawn(async move { feed.next().await });
+	tokio::time::sleep(Duration::from_millis(200)).await;
+
+	let written = NewMarker {}
+		.insert(&db.system("this process"))
+		.await
+		.unwrap();
+	// The feed reads the log every second; allow as long again for a busy
+	// machine.
+	let heard = tokio::time::timeout(Duration::from_secs(2), waiting)
+		.await
+		.expect("the other process's commit arrives within the interval")
+		.unwrap()
+		.unwrap();
+	assert_eq!(
+		heard,
+		changed(&[rows("live_markers", [written.id.to_string()])])
+	);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_lost_listening_connection_reconnects_and_catches_up() {
 	let Some(cluster) = support::postgres::PostgresCluster::start() else {

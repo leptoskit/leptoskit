@@ -240,6 +240,12 @@ mod reading {
 	/// The most commits one read of the log returns.
 	const COMMITS_PER_READ: usize = 256;
 
+	/// How long an idle SQLite reader waits before reading the log again.
+	/// Nothing tells this process about another process's commits, so this
+	/// bounds how late it sees them; a read that finds nothing is one
+	/// indexed lookup.
+	pub(crate) const SQLITE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 	/// Reads the change log after a version, waking when a commit may have
 	/// added to it: what [`Feed`](super::super::Feed) and
 	/// [`ChangeLog`](super::super::ChangeLog) are built on.
@@ -309,14 +315,28 @@ mod reading {
 				let entries = read(&self.db, self.version).await?;
 
 				if entries.is_empty() {
-					self.wake
-						.changed()
-						.await
-						.map_err(|_| DbError::connection(Closed))?;
+					self.wait().await?;
 				} else {
 					self.ready.extend(entries);
 				}
 			}
+		}
+
+		/// Waits for a wake, or on SQLite at most [`SQLITE_POLL`]: another
+		/// process's commits wake nothing here, but they are in the log
+		/// after this version all the same.
+		async fn wait(&mut self) -> Result<()> {
+			let changed = self.wake.changed();
+			let changed = if self.db.dialect() == Dialect::Sqlite {
+				match tokio::time::timeout(SQLITE_POLL, changed).await {
+					Ok(changed) => changed,
+					Err(_) => return Ok(()),
+				}
+			} else {
+				changed.await
+			};
+
+			changed.map_err(|_| DbError::connection(Closed))
 		}
 	}
 
