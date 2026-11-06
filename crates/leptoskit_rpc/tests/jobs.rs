@@ -301,6 +301,23 @@ pub async fn ping(_cx: &rpc::JobCx, tag: String) -> rpc::Result<()> {
 
 static PINGS: AtomicU32 = AtomicU32::new(0);
 
+/// A job only a newer build, sharing the database in a rolling deploy,
+/// registers: this one can enqueue it but has no `#[rpc::job]` for it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct NewerBuild {
+	tag: String,
+}
+
+impl rpc::Job for NewerBuild {
+	type Output = ();
+
+	const NAME: &'static str = "added_in_a_newer_build";
+
+	fn run(self, _cx: &rpc::JobCx) -> impl Future<Output = rpc::Result<()>> + Send {
+		std::future::ready(Err(rpc::Error::permanent("only the newer build runs it")))
+	}
+}
+
 fn account() -> Id<()> {
 	Id::new()
 }
@@ -675,6 +692,37 @@ async fn a_job_called_directly_runs_inline(db: &Db) {
 	assert_eq!(tally(db, "inline").await, 1);
 }
 
+async fn jobs_this_build_lacks_are_left_for_another(db: &Db) {
+	let jobs = TestJobs::new(db);
+	let foreign = rpc::enqueue(
+		db,
+		NewerBuild {
+			tag: "foreign".into(),
+		},
+	)
+	.await
+	.unwrap();
+	let local = rpc::enqueue(
+		db,
+		Ping {
+			tag: "local".into(),
+		},
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(jobs.run_jobs_until_idle().await, 1);
+	assert_eq!(row(db, local).await.state, JobState::Done);
+	// However long it waits, this build neither runs nor fails it; the
+	// hour lets cron and earlier scenarios' jobs come due and run.
+	jobs.advance(Duration::from_hours(1)).await;
+	jobs.run_jobs_until_idle().await;
+	let waiting = row(db, foreign).await;
+	assert_eq!(waiting.state, JobState::Pending);
+	assert_eq!(waiting.attempts, 0);
+	assert_eq!(waiting.error, None);
+}
+
 async fn workers_wake_on_enqueue(enqueue_on: &Db, work_on: &Db, tag: &str) {
 	// A long poll: only the wake-up can make it this quick.
 	let jobs = Jobs::new(work_on.clone())
@@ -763,6 +811,7 @@ async fn scenarios(db: &Db) {
 	who_may_see_a_job(db).await;
 	notices_reach_their_owner_and_enqueued_jobs_inherit_it(db).await;
 	a_job_called_directly_runs_inline(db).await;
+	jobs_this_build_lacks_are_left_for_another(db).await;
 }
 
 /// The tests share outside-world tags and counters, so they run one at a

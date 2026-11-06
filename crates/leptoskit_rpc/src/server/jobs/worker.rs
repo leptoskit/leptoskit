@@ -489,14 +489,25 @@ fn lease_for(settings: &Settings, name: &str) -> Duration {
 }
 
 /// Takes the first due job this worker may run: waiting ones whose time has
-/// come, and running ones whose worker's lease ran out.
+/// come, and running ones whose worker's lease ran out. Only jobs this build
+/// registers count, so instances on different builds sharing a database,
+/// as in a rolling deploy, leave each other's jobs alone.
 async fn claim(db: &Db, settings: &Settings) -> Result<Option<JobRow>, DbError> {
+	let names = inventory::iter::<JobRegistration>()
+		.map(|registration| registration.name.to_owned())
+		.collect::<Vec<_>>();
+
+	if names.is_empty() {
+		return Ok(None);
+	}
+
 	let system = db.system("claim jobs");
 	let now = settings.clock.now();
 	let candidates = JobRow::query()
 		.filter(|job| {
-			(job.state.eq(JobState::Pending) & job.run_at.lte(now))
-				| (job.state.eq(JobState::Running) & job.locked_until.lt(now))
+			job.name.in_list(names)
+				& ((job.state.eq(JobState::Pending) & job.run_at.lte(now))
+					| (job.state.eq(JobState::Running) & job.locked_until.lt(now)))
 		})
 		.order_by(|job| job.priority.desc())
 		.order_by(|job| job.run_at.asc())
@@ -660,7 +671,8 @@ async fn execute(db: &Db, settings: &Settings, row: JobRow, heartbeat: bool) {
 		)
 		.await
 	} else {
-		// Another instance, on a newer build, may know it.
+		// `claim` takes only registered jobs, so this is a defence: another
+		// instance, on a newer build, may know it.
 		Outcome::Failed {
 			error: format!("no job is named `{}`; is its crate linked?", row.name),
 			permanent: false,
