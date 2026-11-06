@@ -90,12 +90,7 @@ pub fn run(url: &str, root: &Path, data: &Path) -> Result<()> {
 	runtime.block_on(work(&url, &key, data, project, service))
 }
 fn request(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<Value> {
-	let agent: ureq::Agent = ureq::Agent::config_builder()
-		.timeout_global(Some(std::time::Duration::from_secs(20)))
-		.max_redirects(0)
-		.http_status_as_error(false)
-		.build()
-		.into();
+	let agent = client::agent(url, 20);
 	let mut request = agent.post(format!("{url}{path}"));
 
 	if let Some(key) = key {

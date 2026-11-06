@@ -63,12 +63,7 @@ impl Connection {
 	}
 
 	fn request(&self, path: &str, body: Option<&serde_json::Value>) -> Result<serde_json::Value> {
-		let agent: ureq::Agent = ureq::Agent::config_builder()
-			.timeout_global(Some(std::time::Duration::from_secs(15)))
-			.max_redirects(0)
-			.http_status_as_error(false)
-			.build()
-			.into();
+		let agent = agent(&self.url, 15);
 		let url = format!("{}{}", self.url, path);
 		let response = if let Some(body) = body {
 			agent
@@ -119,11 +114,26 @@ impl Connection {
 	}
 }
 
+/// An agent for a service origin from [`origin`]: no redirects, statuses
+/// returned rather than raised, and a whole-request timeout.
+pub(super) fn agent(origin: &str, timeout_seconds: u64) -> ureq::Agent {
+	let mut config = ureq::Agent::config_builder()
+		.timeout_global(Some(std::time::Duration::from_secs(timeout_seconds)))
+		.max_redirects(0)
+		.http_status_as_error(false);
+	// ureq routes every request through ALL_PROXY, HTTPS_PROXY or HTTP_PROXY,
+	// whatever the scheme. A proxy can never reach this machine's own loopback
+	// service, so a local origin connects directly.
+	if url::Url::parse(origin).is_ok_and(|url| loopback(&url)) {
+		config = config.proxy(None);
+	}
+	config.build().into()
+}
+
 pub(super) fn origin(value: &str) -> Result<String> {
 	let url = url::Url::parse(value).context("invalid deployment service URL")?;
-	let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
 	ensure!(
-		(url.scheme() == "https" || (local && url.scheme() == "http"))
+		(url.scheme() == "https" || (loopback(&url) && url.scheme() == "http"))
 			&& url.path() == "/"
 			&& url.username().is_empty()
 			&& url.password().is_none()
@@ -132,6 +142,10 @@ pub(super) fn origin(value: &str) -> Result<String> {
 		"deployment service URL needs an HTTPS origin or localhost HTTP"
 	);
 	Ok(url.origin().ascii_serialization())
+}
+
+fn loopback(url: &url::Url) -> bool {
+	matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
 }
 
 fn credential_path(url: &str, project: &str) -> Result<PathBuf> {
