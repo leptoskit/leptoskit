@@ -972,6 +972,33 @@ fn the_stored_connection_is_discovered_and_the_explicit_key_wins() {
 
 #[cfg(unix)]
 #[test]
+fn a_loopback_service_is_reached_directly_despite_proxy_variables() {
+	let server = Server::start(vec![Reply::json(overview(0))]);
+	let fixture = child::Fixture::new();
+	let config = fixture.config_home("config");
+	let project = fixture.project("demo", &infra_config("demo", Some(server.origin())));
+
+	// Nothing listens on the discard port, so a proxied request would fail.
+	let proxy = "http://127.0.0.1:9";
+	fixture.run_ok(
+		"status",
+		&project,
+		&config,
+		&[
+			("LEPTOSKIT_CONTROL_KEY", KEY),
+			("ALL_PROXY", proxy),
+			("HTTPS_PROXY", proxy),
+			("HTTP_PROXY", proxy),
+		],
+	);
+
+	let requests = server.requests();
+	assert_eq!(requests.len(), 1);
+	assert_eq!(requests[0].path, "/api/v1/overview");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_stored_credential_must_be_private_and_well_formed() {
 	let server = Server::start(Vec::new());
 	let fixture = child::Fixture::new();
