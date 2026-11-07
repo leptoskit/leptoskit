@@ -1090,6 +1090,7 @@ dependencies = [
  "leptoskit_rpc",
  "leptoskit_yoga",
  "monosecret",
+ "reactive_stores",
 ]
 
 [[package]]
@@ -1269,6 +1270,7 @@ dependencies = [
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
+ "reactive_stores",
  "sha2",
  "wasm-bindgen",
  "web-sys",
