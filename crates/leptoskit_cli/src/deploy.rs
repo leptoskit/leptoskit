@@ -185,12 +185,18 @@ impl Project {
 		// Cargo owns package discovery: it matches workspace members, globs,
 		// and inherited manifests, including an app directory with no
 		// manifest of its own.
-		let metadata = crate::wasm::cargo_metadata(&app_root)
+		let metadata = deployment_metadata(&app_root)
 			.with_context(|| format!("could not read the Cargo workspace for {app_root:?}"))?;
 		let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
 			.unwrap_or_else(|_| metadata.workspace_root.clone());
+		validate_local_dependencies(&workspace_root, &metadata)?;
 		let app_dir = app_relative_dir(&workspace_root, &app_root)?;
 		let app_dir = path_to_slashes(&app_dir);
+		anyhow::ensure!(
+			!app_dir.is_empty() || metadata.target_directory == workspace_root.join("target"),
+			"standalone deployment expects target/release; remove build.target-dir from Cargo \
+			 configuration before generation, or maintain a custom Dockerfile"
+		);
 		let app = config.app.name.clone();
 		let package = metadata.package(&app).with_context(|| {
 			format!(
@@ -247,7 +253,9 @@ impl Project {
 		} else {
 			workspace_dockerignore(&workspace_root, &app_root, &app_dir)?
 		};
-		let target_dir = container_target(&workspace_root, &metadata.target_directory);
+		// Container builds deliberately override host target-directory
+		// settings.
+		let target_dir = "/src/target".to_owned();
 		let database = config.db.as_ref().map(|db| {
 			Database {
 				dialect: db.dialect,
@@ -598,6 +606,51 @@ fn package_directory(workspace_root: &Path, package: &str, manifest: &Path) -> R
 	Ok(directory)
 }
 
+/// Host build output overrides must not determine container recipes.
+fn deployment_metadata(root: &Path) -> Result<crate::wasm::CargoMetadata> {
+	let output = std::process::Command::new("cargo")
+		.args(["metadata", "--no-deps", "--format-version", "1"])
+		.env_remove("CARGO_TARGET_DIR")
+		.current_dir(root)
+		.output()
+		.context("could not run cargo metadata for deployment")?;
+	anyhow::ensure!(
+		output.status.success(),
+		"cargo metadata failed: {}",
+		String::from_utf8_lossy(&output.stderr)
+	);
+	serde_json::from_slice(&output.stdout).context("could not parse deployment Cargo metadata")
+}
+
+/// Check every local dependency, including non-member path dependencies.
+fn validate_local_dependencies(root: &Path, metadata: &crate::wasm::CargoMetadata) -> Result<()> {
+	let mut seen: std::collections::BTreeSet<PathBuf> = metadata
+		.packages
+		.iter()
+		.map(|package| package.manifest_path.clone())
+		.collect();
+	let mut pending = metadata.packages.clone();
+	while let Some(package) = pending.pop() {
+		for dependency in package.dependencies {
+			let Some(path) = dependency.path else {
+				continue;
+			};
+			let manifest = path.join("Cargo.toml");
+			package_directory(root, &dependency.name, &manifest).context(
+				"move local path dependencies inside the workspace before generating a deployment",
+			)?;
+			if seen.insert(manifest) {
+				let local = crate::wasm::cargo_metadata(&path)?;
+				for member in &local.packages {
+					seen.insert(member.manifest_path.clone());
+				}
+				pending.extend(local.packages);
+			}
+		}
+	}
+	Ok(())
+}
+
 /// Whether `root` or one of its ancestors has a `Cargo.toml`, so an app
 /// directory inside a workspace needs no manifest of its own.
 fn has_manifest_in_ancestors(root: &Path) -> bool {
@@ -644,22 +697,6 @@ fn find_toolchain(app_root: &Path, workspace_root: &Path) -> Option<PathBuf> {
 	}
 
 	None
-}
-
-/// Where Cargo writes binaries in the build container: the workspace's
-/// target directory, mounted at `/src`.
-fn container_target(workspace_root: &Path, target_directory: &Path) -> String {
-	target_directory.strip_prefix(workspace_root).map_or_else(
-		|_| "/src/target".to_owned(),
-		|relative| {
-			let relative = path_to_slashes(relative);
-			if relative.is_empty() {
-				"/src".to_owned()
-			} else {
-				format!("/src/{relative}")
-			}
-		},
-	)
 }
 
 /// The workspace build context's ignore policy, plus the exclusions the
@@ -1018,11 +1055,19 @@ RUN curl --fail --silent --show-error --location \\
 		);
 	}
 
-	out.push_str(
-		"RUN cargo install leptoskit_cli --version \"${LEPTOSKIT_VERSION}\" --locked
+	if project.app_dir.is_empty() {
+		out.push_str(
+			"RUN cargo install leptoskit_cli --version \"${LEPTOSKIT_VERSION}\" --locked
 WORKDIR /src
 ",
-	);
+		);
+	} else {
+		out.push_str(
+			"# Optional CLI crate path inside the workspace, for an unreleased SDK.\nARG \
+			 LEPTOSKIT_CLI_PATH=\nRUN if [ -z \"$LEPTOSKIT_CLI_PATH\" ]; then cargo install \
+			 leptoskit_cli --version \"${LEPTOSKIT_VERSION}\" --locked; fi\nWORKDIR /src\n",
+		);
+	}
 
 	if let Some(file) = &project.toolchain_file {
 		let destination = Path::new(file.as_str()).parent().map_or_else(
@@ -1082,6 +1127,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \\
 
 		out.push_str(
 			"COPY . .
+# Source builds use the workspace toolchain and lockfile after COPY.
+RUN if [ -n \"$LEPTOSKIT_CLI_PATH\" ]; then \\
+      cli=$(realpath -e \"/src/$LEPTOSKIT_CLI_PATH\") && \\
+      case \"$cli\" in /src/*) cargo install --path \"$cli\" --locked --bin leptoskit ;; \\
+      *) echo 'LEPTOSKIT_CLI_PATH must stay inside the workspace' >&2; exit 1 ;; esac; fi
 # The cache mounts keep downloaded crates and compiled dependencies between
 # builds. The server is copied out, since the target directory is a cache.
 RUN ",

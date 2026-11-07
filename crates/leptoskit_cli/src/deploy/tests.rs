@@ -704,16 +704,16 @@ fn an_app_outside_its_workspace_is_refused_before_it_becomes_a_context() {
 fn managed_state_patterns_follow_the_app_into_a_workspace() {
 	let root = tempfile::tempdir().unwrap();
 	let config = nested_project(root.path(), "site");
-	let project = Project::read(&root.path().join("apps/site"), &config).unwrap();
+	let resolved = Project::read(&root.path().join("apps/site"), &config).unwrap();
 	assert_eq!(
-		project.managed_state_patterns(),
+		resolved.managed_state_patterns(),
 		[
 			"/apps/site/infra".to_owned(),
 			"/apps/site/.kamal".to_owned()
 		]
 	);
 	assert_eq!(
-		project.ignore_path(),
+		resolved.ignore_path(),
 		std::fs::canonicalize(root.path())
 			.unwrap()
 			.join("apps/site/Dockerfile.dockerignore")
@@ -721,13 +721,13 @@ fn managed_state_patterns_follow_the_app_into_a_workspace() {
 
 	let root = tempfile::tempdir().unwrap();
 	let config = project(root.path(), Db::None);
-	let project = Project::read(root.path(), &config).unwrap();
+	let resolved = Project::read(root.path(), &config).unwrap();
 	assert_eq!(
-		project.managed_state_patterns(),
+		resolved.managed_state_patterns(),
 		["/infra".to_owned(), "/.kamal".to_owned()]
 	);
 	assert_eq!(
-		project.ignore_path(),
+		resolved.ignore_path(),
 		std::fs::canonicalize(root.path())
 			.unwrap()
 			.join(".dockerignore")
@@ -839,4 +839,65 @@ fn deployment_uses_cargos_discovered_and_explicit_binary_targets() {
 		 false\n\n[[bin]]\nname = \"serve\"\npath = \"src/bin/serve.rs\"\n",
 	);
 	assert_eq!(Project::read(&app, &config).unwrap().binary, "serve");
+}
+
+#[test]
+fn external_path_dependencies_fail_before_writing_deployment_files() {
+	let root = tempfile::tempdir().unwrap();
+	let external = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "notes");
+	write(
+		external.path(),
+		"Cargo.toml",
+		"[package]\nname = \"external\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n",
+	);
+	write(external.path(), "src/lib.rs", "");
+	let manifest = root.path().join("apps/notes/server/Cargo.toml");
+	let mut text = std::fs::read_to_string(&manifest).unwrap();
+	text.push_str(&format!("external = {{ path = {:?} }}\n", external.path()));
+	std::fs::write(manifest, text).unwrap();
+	let app = root.path().join("apps/notes");
+	let error = generate(&app, &config, Target::Docker, false).unwrap_err();
+	assert!(format!("{error:#}").contains("outside the Cargo workspace"));
+	assert!(!app.join("Dockerfile").exists());
+}
+
+#[test]
+fn nested_recipes_offer_an_explicit_workspace_cli_source() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "notes");
+	let project = Project::read(&root.path().join("apps/notes"), &config).unwrap();
+	let recipe = super::dockerfile(&project);
+	assert!(recipe.contains("ARG LEPTOSKIT_CLI_PATH="));
+	assert!(recipe.contains("cargo install --path \"$cli\" --locked --bin leptoskit"));
+	assert!(recipe.find("COPY . .").unwrap() < recipe.find("cargo install --path").unwrap());
+	assert!(recipe.contains("CARGO_TARGET_DIR=/src/target"));
+}
+
+#[test]
+fn standalone_custom_target_is_rejected_before_writing() {
+	let root = tempfile::tempdir().unwrap();
+	let config = project(root.path(), Db::None);
+	write(
+		root.path(),
+		".cargo/config.toml",
+		"[build]\ntarget-dir = \"custom-output\"\n",
+	);
+	let error = generate(root.path(), &config, Target::Docker, false).unwrap_err();
+	assert!(format!("{error:#}").contains("remove build.target-dir"));
+	assert!(!root.path().join("Dockerfile").exists());
+}
+
+#[test]
+fn nested_custom_target_is_overridden_in_the_container() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "notes");
+	write(
+		root.path(),
+		".cargo/config.toml",
+		"[build]\ntarget-dir = \"../outside-target\"\n",
+	);
+	let project = Project::read(&root.path().join("apps/notes"), &config).unwrap();
+	assert_eq!(project.target_dir, "/src/target");
+	assert!(super::dockerfile(&project).contains("CARGO_TARGET_DIR=/src/target"));
 }
