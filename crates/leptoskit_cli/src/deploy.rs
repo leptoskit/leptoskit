@@ -1297,11 +1297,12 @@ RUN ",
 		);
 	}
 
-	out.push_str(
+	let _ = write!(
+		out,
 		"
 FROM debian:bookworm-slim
 # curl answers the health check, and `app` is the unprivileged user the
-# server runs as, with uid and gid 10001.
+# server runs as, with uid and gid {APP_UID}.
 RUN apt-get update \\
  && apt-get install --yes --no-install-recommends curl \\
  && rm -rf /var/lib/apt/lists/* \\
@@ -3094,7 +3095,6 @@ WantedBy=multi-user.target
 }
 
 fn kubernetes_next(project: &Project) -> Vec<String> {
-	let image = project.image();
 	let resource = project.kubernetes_name();
 	let mut steps = vec![
 		if project.app_dir.is_empty() {
