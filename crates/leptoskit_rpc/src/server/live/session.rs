@@ -330,15 +330,10 @@ impl Session {
 		loop {
 			let blocked = (self.pending.is_some() || self.full_next) && self.out.capacity() == 0;
 			let stall_deadline = blocked.then(|| self.pending_progress + self.live.stall());
-			let deadline = self
-				.lease
-				.refresh_at
-				.into_iter()
-				.chain(self.lease.expires_at)
-				.min();
-			if !self.check_due_deadline(deadline).await {
+			if !self.check_due_deadline().await {
 				return false;
 			}
+			let deadline = self.next_identity_deadline();
 			let sender = self.out.clone();
 			tokio::select! {
 				// Randomized selection keeps client input and completion fair under continuous writes.
@@ -1120,7 +1115,16 @@ impl Session {
 		false
 	}
 
-	async fn check_due_deadline(&mut self, deadline: Option<SystemTime>) -> bool {
+	fn next_identity_deadline(&self) -> Option<SystemTime> {
+		self.lease
+			.refresh_at
+			.into_iter()
+			.chain(self.lease.expires_at)
+			.min()
+	}
+
+	async fn check_due_deadline(&mut self) -> bool {
+		let deadline = self.next_identity_deadline();
 		if deadline.is_some_and(|at| at <= SystemTime::now()) {
 			self.check_deadline().await
 		} else {
