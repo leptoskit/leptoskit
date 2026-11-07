@@ -323,7 +323,7 @@ A Dockerfile-specific ignore file named `Dockerfile.dockerignore` replaces the c
 
 The `Dockerfile` has two stages:
 
-1. **Build.** It installs the leptoskit CLI at the version your project uses and runs `leptoskit build --release` from the app directory, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. The nearest `rust-toolchain.toml` or `rust-toolchain` file from the app root up to the workspace root picks the Rust release; otherwise the image uses the latest stable. Binaries come from the workspace target directory and the site from the app's `dist/`.
+1. **Build.** It installs the leptoskit CLI at the version your project uses and runs `leptoskit build --release` from the app directory, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. The nearest `rust-toolchain.toml` or `rust-toolchain` file from the app root up to the workspace root picks the Rust release; otherwise the image uses the latest stable. Binaries come from the workspace target directory and the site from the app's `dist/`. Cargo discovers the server targets, including `src/bin` files and explicit `[[bin]]` entries. Deployment selects the binary named after the server package, or its only binary, using the same rule as `leptoskit build`.
 2. **Run.** A small Debian image with the server and `dist/`, nothing else. It sets the `LEPTOS_*` environment (`LEPTOS_SITE_ADDR=0.0.0.0:3000`, `LEPTOS_SITE_ROOT=/app/dist`, `LEPTOS_OUTPUT_NAME`, and `LEPTOS_ENV=PROD`), runs as an unprivileged user, and writes nothing to its own filesystem, so it runs with a read-only root filesystem. A SQLite database lives on a volume at `/data`, the one path it writes. A `HEALTHCHECK` calls `/healthz`.
 
 Secrets never go in the `Dockerfile`, `compose.yaml`, `fly.toml`, `kubernetes.yaml`, or the unit file. The Postgres URL, `AUTH_ENCRYPTION_KEYS`, and mail settings come from the environment when the container starts: `docker run -e`, an `.env` file beside `compose.yaml`, or `fly secrets set`. The container ignore file keeps `.env` files, local databases, build caches, and managed infrastructure state out of the image.
@@ -475,7 +475,7 @@ Create the app's user, install the binary and site, put the environment in `/etc
 
 ## Limits
 
-- The image builds from the project's root. Crates outside it, such as a local leptoskit checkout passed with `--sdk-path`, aren't in the build context, so the build can't find them.
-- The build copies the server from `target/release`. If `.cargo/config.toml` moves the target directory, change the `cp` line in the `Dockerfile` to match.
+- The image builds from the Cargo workspace root. Local dependencies outside that workspace, such as a separate leptoskit checkout passed with `--sdk-path`, are not in the build context; use published dependencies or place the needed crates inside the workspace.
+- Nested workspace apps use Cargo's configured target directory inside the container. The standalone recipe expects `target/release`; if `.cargo/config.toml` moves it, adjust the `cp` line and cache mount in that Dockerfile.
 - The first build compiles the leptoskit CLI and every dependency, which takes several minutes. Later builds reuse Docker's caches.
 - The Kubernetes manifest and the systemd unit assume the image, binary, and site are installed where they say; the generator doesn't push images or copy files to hosts.

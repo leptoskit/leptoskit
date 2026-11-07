@@ -323,43 +323,34 @@ fn toolchain_channels_pin_the_image_only_when_they_name_a_release() {
 
 #[test]
 fn the_binary_is_the_one_named_after_the_package_or_the_only_one() {
-	let root = tempfile::tempdir().unwrap();
-	let dir = root.path();
-	write(
-		dir,
-		"Cargo.toml",
-		"[package]\nname = \"notes\"\n\n[[bin]]\nname = \"serve\"\npath = \"src/serve.rs\"\n",
-	);
-	write(dir, "src/serve.rs", "fn main() {}\n");
-	let (binary, source) = super::binary(dir, "notes").unwrap();
-	assert_eq!(binary, "serve");
-	assert_eq!(source, Some(dir.join("src/serve.rs")));
-
-	write(
-		dir,
-		"Cargo.toml",
-		"[package]\nname = \"notes\"\n\n[[bin]]\nname = \"serve\"\n\n[[bin]]\nname = \"notes\"\n",
-	);
-	let (binary, source) = super::binary(dir, "notes").unwrap();
-	assert_eq!(binary, "notes");
-	assert_eq!(source, None, "src/bin/notes.rs doesn't exist");
-
-	write(
-		dir,
-		"Cargo.toml",
-		"[package]\nname = \"notes\"\n\n[[bin]]\nname = \"a\"\n\n[[bin]]\nname = \"b\"\n",
-	);
-	let error = super::binary(dir, "notes").unwrap_err().to_string();
+	let mut package = crate::wasm::MetadataPackage {
+		name: "notes".to_owned(),
+		manifest_path: Path::new("notes/Cargo.toml").to_owned(),
+		targets: vec![crate::wasm::MetadataTarget {
+			name: "serve".to_owned(),
+			kind: vec!["bin".to_owned()],
+		}],
+		features: Default::default(),
+		dependencies: Vec::new(),
+	};
+	assert_eq!(super::binary(&package).unwrap(), "serve");
+	package.targets.push(crate::wasm::MetadataTarget {
+		name: "notes".to_owned(),
+		kind: vec!["bin".to_owned()],
+	});
+	assert_eq!(super::binary(&package).unwrap(), "notes");
+	package.targets[1].name = "other".to_owned();
+	let error = super::binary(&package).unwrap_err().to_string();
 	assert!(
-		error.starts_with(
-			"the server package `notes` has several binaries and none is called `notes`"
-		),
+		error.starts_with("the server package `notes` has several binaries"),
 		"{error}"
 	);
-
-	write(dir, "Cargo.toml", "[package]\nname = \"notes\"\n");
-	std::fs::remove_file(dir.join("src/serve.rs")).unwrap();
-	let error = super::binary(dir, "notes").unwrap_err().to_string();
+	package.targets.clear();
+	package.targets.push(crate::wasm::MetadataTarget {
+		name: "notes".to_owned(),
+		kind: vec!["lib".to_owned()],
+	});
+	let error = super::binary(&package).unwrap_err().to_string();
 	assert!(
 		error.starts_with("the server package `notes` has no binary"),
 		"{error}"
@@ -823,4 +814,29 @@ fn custom_ignore_exceptions_do_not_reintroduce_managed_state() {
 			"{pattern}: {ignore}"
 		);
 	}
+}
+
+#[test]
+fn deployment_uses_cargos_discovered_and_explicit_binary_targets() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
+	std::fs::remove_file(app.join("server/src/main.rs")).unwrap();
+	write(&app, "server/src/bin/serve.rs", "fn main() {}\n");
+	assert_eq!(Project::read(&app, &config).unwrap().binary, "serve");
+
+	// An ignored src/main.rs must not turn the declared single executable
+	// into a different package-named executable in the deployment image.
+	write(
+		&app,
+		"server/src/main.rs",
+		"compile_error!(\"autobins is disabled\");\n",
+	);
+	write(
+		&app,
+		"server/Cargo.toml",
+		"[package]\nname = \"huddle\"\nversion = \"0.1.0\"\nedition.workspace = true\nautobins = \
+		 false\n\n[[bin]]\nname = \"serve\"\npath = \"src/bin/serve.rs\"\n",
+	);
+	assert_eq!(Project::read(&app, &config).unwrap().binary, "serve");
 }

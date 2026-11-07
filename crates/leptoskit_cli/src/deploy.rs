@@ -200,8 +200,8 @@ impl Project {
 				workspace_root.join("Cargo.toml").display()
 			)
 		})?;
-		let server = package_directory(&workspace_root, &app, &package.manifest_path)?;
-		let (binary, _) = binary(&server, &app)?;
+		package_directory(&workspace_root, &app, &package.manifest_path)?;
+		let binary = binary(package)?;
 
 		let output_name = match &config.build.client_package {
 			Some(client) => {
@@ -798,55 +798,37 @@ fn cache_mount(path: &str) -> Option<String> {
 	(!path.bytes().any(is_space)).then(|| format!("--mount=type=cache,target={path}"))
 }
 
-/// The server's binary target, and its source when it can be found:
-/// the one named after the package, or its only one.
-fn binary(dir: &Path, package: &str) -> Result<(String, Option<PathBuf>)> {
-	let manifest = dir.join("Cargo.toml");
-	let document = read_manifest(&manifest)?.unwrap_or_default();
-	let mut binaries: Vec<(String, PathBuf)> = document
-		.get("bin")
-		.and_then(toml::Value::as_array)
-		.into_iter()
-		.flatten()
-		.filter_map(|bin| {
-			let name = bin.get("name")?.as_str()?.to_owned();
-			let path = bin.get("path").and_then(toml::Value::as_str).map_or_else(
-				|| dir.join("src/bin").join(format!("{name}.rs")),
-				|path| dir.join(path),
-			);
-			Some((name, path))
-		})
+/// Select the same target that `leptoskit build` selects from Cargo's
+/// executable messages: the package-named binary, or its only binary.
+/// Cargo owns discovery, including `src/bin` and `autobins = false`.
+fn binary(package: &crate::wasm::MetadataPackage) -> Result<String> {
+	let targets: Vec<_> = package
+		.targets
+		.iter()
+		.filter(|target| target.kind.iter().any(|kind| kind == "bin"))
 		.collect();
-	let main = dir.join("src/main.rs");
 
-	if main.is_file() && !binaries.iter().any(|(_, path)| *path == main) {
-		binaries.push((package.to_owned(), main));
+	if let Some(target) = targets.iter().find(|target| target.name == package.name) {
+		return Ok(target.name.clone());
 	}
 
-	if let Some(index) = binaries.iter().position(|(name, _)| name == package) {
-		let (name, path) = binaries.swap_remove(index);
-
-		return Ok((name, Some(path).filter(|path| path.is_file())));
-	}
-
-	match binaries.as_slice() {
-		[(name, path)] => {
-			Ok((
-				name.clone(),
-				Some(path.clone()).filter(|path| path.is_file()),
-			))
-		}
+	match targets.as_slice() {
+		[target] => Ok(target.name.clone()),
 		[] => {
 			anyhow::bail!(
-				"the server package `{package}` has no binary: add src/main.rs, or a [[bin]] in {}",
-				manifest.display()
+				"the server package `{}` has no binary: add src/main.rs, or a [[bin]] in {}",
+				package.name,
+				package.manifest_path.display()
 			)
 		}
 		_ => {
 			anyhow::bail!(
-				"the server package `{package}` has several binaries and none is called \
-				 `{package}`; name the server's [[bin]] `{package}` in {}",
-				manifest.display()
+				"the server package `{}` has several binaries and none is called `{}`; name the \
+				 server's [[bin]] `{}` in {}",
+				package.name,
+				package.name,
+				package.name,
+				package.manifest_path.display()
 			)
 		}
 	}
