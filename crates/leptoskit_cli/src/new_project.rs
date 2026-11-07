@@ -1086,6 +1086,10 @@ leptoskit_build = {build_dependency}
 }
 
 /// Platform folders contain app-owned native integration and host manifests.
+#[expect(
+	clippy::too_many_lines,
+	reason = "one list of platform files reads better than several partial lists"
+)]
 fn platform_files(
 	config: &LeptoskitConfig,
 	sdk: Option<&Utf8Path>,

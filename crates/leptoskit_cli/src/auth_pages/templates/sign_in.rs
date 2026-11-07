@@ -729,7 +729,7 @@ impl SignIn {
 					}
 				})
 				.on_error(move |failed| {
-					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+					hold_off(this.wait, this.manual, this.countdown, &failed.error);
 				}),
 		);
 	}
@@ -978,7 +978,7 @@ impl SignIn {
 					}
 				})
 				.on_error(move |failed| {
-					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+					hold_off(this.wait, this.manual, this.countdown, &failed.error);
 				}),
 		);
 	}
@@ -1028,7 +1028,7 @@ impl SignIn {
 					}
 				})
 				.on_error(move |failed| {
-					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+					hold_off(this.wait, this.manual, this.countdown, &failed.error);
 				}),
 		);
 	}
@@ -1083,8 +1083,10 @@ fn hold_off(
 	let Some(seconds) = retry_after(error) else {
 		return;
 	};
-	wait.set(seconds);
-	manual.set(false);
+	// A mutation can answer after sign-out disposed this screen. Touching a
+	// disposed signal must not panic; the generation check below then stops.
+	let _ = wait.try_set(seconds);
+	let _ = manual.try_set(false);
 
 	let Some(generation) = countdown.try_update(|countdown| {
 		*countdown = countdown.wrapping_add(1);
@@ -1093,33 +1095,51 @@ fn hold_off(
 		return;
 	};
 
-	leptoskit::leptos::task::spawn_local(async move {
-		while wait.try_get_untracked().is_some_and(|left| left > 0) {
-			if countdown.try_get_untracked() != Some(generation) {
-				return;
-			}
+	leptoskit::leptos::task::spawn_local(count_down(
+		wait,
+		manual,
+		countdown,
+		generation,
+		|duration| leptoskit::query::try_sleep(duration),
+	));
+}
 
-			if leptoskit::query::try_sleep(Duration::from_secs(1))
-				.await
-				.is_err()
-			{
-				// No timer, or the host rejected it: stop counting, keep the
-				// server's retry-after message, and let the person try again
-				// by hand. The server still refuses too early.
-				if countdown.try_get_untracked() == Some(generation) {
-					let _ = wait.try_set(0);
-					let _ = manual.try_set(true);
-				}
-				return;
-			}
-
-			if countdown.try_get_untracked() != Some(generation) {
-				return;
-			}
-
-			wait.try_update(|left| *left = left.saturating_sub(1));
+/// The countdown itself, apart from spawning it so its generation and timer
+/// failure handling can be tested without an executor. Every sleep is
+/// checked against `generation`: a newer refusal, starting over, or the
+/// screen's owner going away stops this one before it changes anything.
+async fn count_down(
+	wait: RwSignal<u64>,
+	manual: RwSignal<bool>,
+	countdown: RwSignal<u64>,
+	generation: u64,
+	sleep: impl Fn(
+		Duration,
+	)
+		-> leptoskit::query::BoxFuture<'static, Result<(), leptoskit::query::SleepError>>,
+) {
+	while wait.try_get_untracked().is_some_and(|left| left > 0) {
+		if countdown.try_get_untracked() != Some(generation) {
+			return;
 		}
-	});
+
+		if sleep(Duration::from_secs(1)).await.is_err() {
+			// No timer, or the host rejected it: stop counting, keep the
+			// server's retry-after message, and let the person try again
+			// by hand. The server still refuses too early.
+			if countdown.try_get_untracked() == Some(generation) {
+				let _ = wait.try_set(0);
+				let _ = manual.try_set(true);
+			}
+			return;
+		}
+
+		if countdown.try_get_untracked() != Some(generation) {
+			return;
+		}
+
+		wait.try_update(|left| *left = left.saturating_sub(1));
+	}
 }
 
 /// How many seconds to wait before trying again, when the server refused
@@ -1214,6 +1234,8 @@ pub fn sentence(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+	use leptoskit::leptos::prelude::Owner;
+
 	use super::*;
 
 	fn refusal(error: &str, retry_after: Option<u64>) -> ErrorResponse {
@@ -1299,6 +1321,144 @@ mod tests {
 	}
 
 	// leptoskit: end passwords
+	fn finished() -> leptoskit::query::BoxFuture<'static, Result<(), leptoskit::query::SleepError>>
+	{
+		Box::pin(std::future::ready(Ok(())))
+	}
+
+	fn failed(
+		error: leptoskit::query::SleepError,
+	) -> leptoskit::query::BoxFuture<'static, Result<(), leptoskit::query::SleepError>> {
+		Box::pin(std::future::ready(Err(error)))
+	}
+
+	/// Polls a future whose timer the test controls: every fake sleep here is
+	/// ready, so a pending loop is a bug and the timeout below says so.
+	fn ready<F: Future>(future: F) -> F::Output {
+		let mut future = std::pin::pin!(future);
+		let waker = std::task::Waker::noop();
+		let mut context = std::task::Context::from_waker(waker);
+
+		for _ in 0..100 {
+			match future.as_mut().poll(&mut context) {
+				std::task::Poll::Ready(output) => return output,
+				std::task::Poll::Pending => std::thread::yield_now(),
+			}
+		}
+
+		panic!("the countdown waited on a timer the test made ready");
+	}
+
+	#[test]
+	fn a_host_timer_counts_the_whole_wait_down() {
+		let owner = Owner::new();
+		owner.with(|| {
+			let wait = RwSignal::<u64>::new(3);
+			let manual = RwSignal::<bool>::new(false);
+			let countdown = RwSignal::<u64>::new(7);
+			let slept = std::cell::Cell::new(0);
+
+			ready(count_down(wait, manual, countdown, 7, |_| {
+				slept.set(slept.get() + 1);
+				finished()
+			}));
+
+			assert_eq!(slept.get(), 3, "one sleep for each second");
+			assert_eq!(wait.get_untracked(), 0);
+			assert!(
+				!manual.get_untracked(),
+				"a real countdown needs no manual retry"
+			);
+		});
+	}
+
+	#[test]
+	fn a_missing_or_rejected_timer_never_claims_the_wait_elapsed() {
+		let owner = Owner::new();
+		owner.with(|| {
+			for error in [
+				leptoskit::query::SleepError::Unavailable,
+				leptoskit::query::SleepError::Rejected,
+			] {
+				let wait = RwSignal::<u64>::new(30);
+				let manual = RwSignal::<bool>::new(false);
+				let countdown = RwSignal::<u64>::new(1);
+
+				ready(count_down(wait, manual, countdown, 1, |_| failed(error)));
+
+				assert_eq!(wait.get_untracked(), 0, "no time was measured");
+				assert!(
+					manual.get_untracked(),
+					"the server's message stays and a manual retry is enabled"
+				);
+			}
+		});
+	}
+
+	#[test]
+	fn a_newer_refusal_or_start_over_stops_an_older_countdown() {
+		let owner = Owner::new();
+		owner.with(|| {
+			let wait = RwSignal::<u64>::new(9);
+			let manual = RwSignal::<bool>::new(false);
+			let countdown = RwSignal::<u64>::new(1);
+
+			// Starting over clears the wait and invalidates what came before.
+			wait.set(0);
+			let _ = countdown.try_update(|countdown| *countdown = countdown.wrapping_add(1));
+			ready(count_down(wait, manual, countdown, 1, |_| finished()));
+			assert_eq!(
+				wait.get_untracked(),
+				0,
+				"the old countdown changed the new wait"
+			);
+
+			let wait = RwSignal::<u64>::new(9);
+			let manual = RwSignal::<bool>::new(false);
+			// A newer refusal bumps the generation before its own countdown.
+			let countdown = RwSignal::<u64>::new(2);
+			ready(count_down(wait, manual, countdown, 1, |_| finished()));
+			assert_eq!(
+				wait.get_untracked(),
+				9,
+				"the old countdown changed the new wait"
+			);
+			assert!(!manual.get_untracked());
+		});
+	}
+
+	#[test]
+	fn a_disposed_screen_stops_its_countdown_without_panicking() {
+		let owner = Owner::new();
+		let wait = owner.with(|| RwSignal::<u64>::new(3));
+		let manual = owner.with(|| RwSignal::<bool>::new(false));
+		let countdown = owner.with(|| RwSignal::<u64>::new(1));
+
+		// The first timer resolves after the owner is gone; the countdown must
+		// touch no disposed signal and must not claim a wait it couldn't
+		// finish.
+		ready(count_down(wait, manual, countdown, 1, move |_| {
+			owner.cleanup();
+			finished()
+		}));
+
+		assert!(wait.try_get_untracked().is_none());
+		assert!(manual.try_get_untracked().is_none());
+	}
+
+	#[test]
+	fn a_disposed_screen_ignores_a_late_refusal() {
+		let owner = Owner::new();
+		let wait = owner.with(|| RwSignal::<u64>::new(0));
+		let manual = owner.with(|| RwSignal::<bool>::new(false));
+		let countdown = owner.with(|| RwSignal::<u64>::new(1));
+		owner.cleanup();
+
+		// A mutation's error can arrive after sign-out. Touching the disposed
+		// signals must not panic, and no timer task is started.
+		hold_off(wait, manual, countdown, &refusal("rate_limited", Some(30)));
+	}
+
 	#[test]
 	fn messages_read_as_sentences() {
 		assert_eq!(

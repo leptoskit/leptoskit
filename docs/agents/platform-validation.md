@@ -135,6 +135,8 @@ It drives the generated screens with surface presses and change events, not copi
 - the auth app's session resolution, emailed code read from `/_leptoskit/mail`, notes over the HTTP plugin, sign-out, a second account with no previous rows, and held list/save replies delivered after their reactive owner was disposed;
 - a rate-limited address on the timer-less headless guest: the sixth code request keeps the server's message and a usable manual retry instead of a countdown that can never finish.
 
+The generated app's own `cargo test` also runs the sign-in countdown's state tests: a host timer counts the whole wait down, a missing or rejected timer keeps the server's message without claiming time passed, a newer refusal or starting over stops an older countdown, and a disposed screen ignores both an in-flight take and a late refusal.
+
 The tests are ignored by default because they compile nested apps:
 
 ```sh

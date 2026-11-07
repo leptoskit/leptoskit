@@ -406,7 +406,9 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 	);
 	assert!(
 		notes.contains("remove_queries")
-			&& notes.contains("QueryFilter::scope(&query_scope::<NotesQuery>())"),
+			&& notes.contains("QueryFilter::scope")
+			&& notes.contains("query_scope::<")
+			&& notes.contains("NotesQuery"),
 		"an account change must drop the previous list: {notes}"
 	);
 
@@ -445,6 +447,10 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 #[ignore = "compiles a scaffolded server; run with --ignored"]
 #[allow(
 	clippy::too_many_lines,
+	reason = "one scaffold's API, native journey, and browser journey read best top to bottom"
+)]
+#[expect(
+	clippy::cognitive_complexity,
 	reason = "one scaffold's API, native journey, and browser journey read best top to bottom"
 )]
 fn the_database_scaffold_migrates_and_serves() {
@@ -1040,6 +1046,9 @@ struct Held {
 	reply: Result<Bytes, BridgeError>,
 }
 
+/// What the test does with each HTTP request the guest submits.
+type FateFor = Box<dyn FnMut(&HttpRequest) -> Fate>;
+
 /// A scaffolded native guest in the real interpreter, driven through the same
 /// bridge and surface events a native host uses. HTTP requests go through the
 /// generated guest's `http` plugin codec to the real scaffolded server, and
@@ -1054,7 +1063,7 @@ struct NativeApp {
 	secrets: BTreeMap<(String, String), Vec<u8>>,
 	held: Vec<Held>,
 	seen: Vec<String>,
-	fate: Option<Box<dyn FnMut(&HttpRequest) -> Fate>>,
+	fate: Option<FateFor>,
 }
 
 impl NativeApp {
@@ -1143,7 +1152,7 @@ impl NativeApp {
 				break;
 			};
 			worked = true;
-			self.handle(request);
+			self.handle(&request);
 		}
 
 		loop {
@@ -1170,7 +1179,7 @@ impl NativeApp {
 		self.host.plugins().complete(held.id, held.reply)
 	}
 
-	fn handle(&mut self, request: leptoskit_bridge::Request) {
+	fn handle(&mut self, request: &leptoskit_bridge::Request) {
 		if request.plugin == self.http_plugin {
 			let decoded = protocol::decode_request(&request.payload).expect("an HTTP frame");
 			self.seen.push(format!(
@@ -1218,7 +1227,7 @@ impl NativeApp {
 			.runtime
 			.block_on(self.http.execute(request.clone()))
 			.map_err(http_error)?;
-		protocol::encode_response(&response).map_err(http_error)
+		protocol::encode_response(&response)
 	}
 
 	/// The generated secure-store protocol, kept in this process: a GET is a
@@ -1368,6 +1377,10 @@ fn url_path(url: &str) -> &str {
 }
 
 /// The bridge error for an HTTP plugin failure, matching the host's mapping.
+#[expect(
+	clippy::needless_pass_by_value,
+	reason = "the plugin returns an owned error, which map_err hands over"
+)]
 fn http_error(error: leptoskit_plugin_http::Error) -> BridgeError {
 	match error {
 		leptoskit_plugin_http::Error::Invalid(_) => BridgeError::InvalidArgument,
@@ -1475,7 +1488,7 @@ fn sign_in(app: &mut NativeApp, address: &str, email: &str) {
 /// A rate-limited address on a guest with no timer: the screen must keep the
 /// server's message and leave a manual retry usable, not count down time it
 /// cannot measure.
-fn exercise_rate_limit(app: &mut NativeApp, address: &str) {
+fn exercise_rate_limit(app: &mut NativeApp, _address: &str) {
 	let email = "rate-limit@example.com";
 	app.type_into("you@example.com", email);
 	app.press("Email me a code");

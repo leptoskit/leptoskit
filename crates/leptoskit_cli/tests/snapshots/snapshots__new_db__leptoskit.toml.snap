@@ -1,6 +1,6 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 332
+assertion_line: 334
 expression: contents
 ---
 #:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
@@ -41,9 +41,7 @@ precompress = true
 
 [native]
 update_contract = "mobile-v1"
-plugins = [
-    "http",
-]
+plugins = ["http"]
 package_id = "com.leptoskit.snapshotted"
 viewport_width = 390.0
 viewport_height = 844.0
