@@ -2067,16 +2067,17 @@ fn verified_descriptor(root: &Path) -> (String, String) {
 	(path.to_str().unwrap().into(), leptoskit_db::checksum(&text))
 }
 
+fn with_infrastructure_cache(root: &Path) {
+	let path = root.join("leptoskit.toml");
+	let config = fs::read_to_string(&path).unwrap();
+	fs::write(path, format!("{config}\n[infra.services]\ncache = true\n")).unwrap();
+}
+
 #[test]
 fn verified_release_command_enforces_evidence_before_and_after_boot() {
 	let root = project();
 	let (path, pin) = verified_descriptor(root.path());
-	let config = fs::read_to_string(root.path().join("leptoskit.toml")).unwrap();
-	fs::write(
-		root.path().join("leptoskit.toml"),
-		format!("{config}\n[infra.services]\ncache = true\n"),
-	)
-	.unwrap();
+	with_infrastructure_cache(root.path());
 	let args = [
 		"deploy",
 		"--setup",
