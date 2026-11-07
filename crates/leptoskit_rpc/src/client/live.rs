@@ -142,6 +142,10 @@ struct Inner {
 	/// Answered calls waiting for a transition to reach their version.
 	waiting: Mutex<Vec<Waiting>>,
 	next_id: AtomicU32,
+	/// Which handshake's frames a subscription was last sent in, so a
+	/// subscription made before the connection opened is sent once, not
+	/// again by the command that woke it.
+	connection: AtomicU64,
 	version: AtomicU64,
 	/// Set when the app's sign-in changed, until the connection reads as
 	/// the new identity.
@@ -179,6 +183,10 @@ struct Subscriber {
 	/// Whether it has its first value, so a reconnect can resume it
 	/// rather than subscribe again.
 	ready: bool,
+	/// The connection whose handshake last sent this subscription, ready
+	/// in the hello or waiting for its first value. The queued command
+	/// that woke that handshake then leaves it alone.
+	sent: Option<u64>,
 }
 
 struct PendingAction {
@@ -351,6 +359,7 @@ impl LiveClient {
 			streams: Mutex::new(HashMap::new()),
 			waiting: Mutex::new(Vec::new()),
 			next_id: AtomicU32::new(1),
+			connection: AtomicU64::new(0),
 			version: AtomicU64::new(0),
 			reauthenticate: AtomicBool::new(false),
 			auth_pending: AtomicU32::new(0),
@@ -417,6 +426,7 @@ impl LiveClient {
 				args,
 				sender,
 				ready: false,
+				sent: None,
 			},
 		);
 		let _ = self.inner.commands.unbounded_send(Command::Subscribe(id));
@@ -1158,6 +1168,7 @@ async fn read_as_new_identity(inner: &Inner, connection: &dyn Connection) -> Rea
 /// results the client holds. When the sign-in changed while the client was
 /// away, nothing resumes: every query takes a fresh first value.
 async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
+	let epoch = inner.connection.fetch_add(1, Ordering::SeqCst) + 1;
 	let changed = inner.reauthenticate.swap(false, Ordering::SeqCst);
 	let unfinished = inner.auth_pending.swap(0, Ordering::SeqCst) > 0;
 	if changed || unfinished {
@@ -1173,9 +1184,10 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 
 	let queries: Vec<ResumeQuery> = inner
 		.subscribers()
-		.iter()
+		.iter_mut()
 		.filter(|(_, subscriber)| subscriber.ready)
 		.map(|(&id, subscriber)| {
+			subscriber.sent = Some(epoch);
 			ResumeQuery {
 				id,
 				query: subscriber.name.clone(),
@@ -1194,7 +1206,7 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 		return false;
 	}
 
-	resubscribe(inner, connection).await;
+	resubscribe(inner, connection, epoch).await;
 	resend_calls(inner, connection).await;
 	reopen_streams(inner, connection).await;
 	rejoin(inner, connection).await;
@@ -1205,15 +1217,20 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 async fn send_command(inner: &Inner, connection: &dyn Connection, command: Command) -> bool {
 	let frame = match command {
 		Command::Subscribe(id) => {
-			match inner.subscribers().get(&id) {
-				Some(subscriber) => {
+			let epoch = inner.connection.load(Ordering::SeqCst);
+
+			match inner.subscribers().get_mut(&id) {
+				Some(subscriber) if subscriber.sent != Some(epoch) => {
+					subscriber.sent = Some(epoch);
 					ClientFrame::Sub {
 						id,
 						query: subscriber.name.clone(),
 						args: subscriber.args.clone(),
 					}
 				}
-				None => return true,
+				// The handshake already sent it on this connection, or the
+				// screen that wanted it is gone.
+				_ => return true,
 			}
 		}
 		Command::Unsubscribe(id) => ClientFrame::Unsub { id },
@@ -1536,13 +1553,15 @@ fn send_channel(inner: &Inner, channel: &str, event: ChannelEvent) {
 }
 
 /// Subscribes whatever hasn't had its first value: the rest resumed in
-/// the hello.
-async fn resubscribe(inner: &Inner, connection: &dyn Connection) {
+/// the hello. Records which handshake sent each one, so the command that
+/// woke the connection doesn't send it again.
+async fn resubscribe(inner: &Inner, connection: &dyn Connection, epoch: u64) {
 	let frames: Vec<ClientFrame> = inner
 		.subscribers()
-		.iter()
+		.iter_mut()
 		.filter(|(_, subscriber)| !subscriber.ready)
 		.map(|(&id, subscriber)| {
+			subscriber.sent = Some(epoch);
 			ClientFrame::Sub {
 				id,
 				query: subscriber.name.clone(),
@@ -2818,11 +2837,41 @@ mod tests {
 					.unwrap();
 				owner.cleanup();
 				assert!(!client.inner.subscribers().contains_key(&id));
+				let frame = socket.next_sent().await;
 				assert!(
-					matches!(socket.next_sent().await, ClientFrame::Unsub { id: sent } if sent == id)
+					matches!(frame, ClientFrame::Unsub { id: sent } if sent == id),
+					"the cleanup sent {frame:?}"
 				);
 				assert_eq!(*applied.lock().unwrap(), vec![Update::Ok(json!("first"))]);
 				assert!(sender.unbounded_send(Update::Ok(json!("late"))).is_err());
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn a_subscription_made_before_the_connection_opens_is_sent_once() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = Memory::default();
+				let client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				let (id, _updates) = client.subscribe("notes", json!({}));
+				assert!(matches!(
+					socket.next_sent().await,
+					ClientFrame::Hello { .. }
+				));
+				assert!(
+					matches!(socket.next_sent().await, ClientFrame::Sub { id: sent, .. } if sent == id)
+				);
+
+				// The handshake sent the subscription, so the command that
+				// woke the connection doesn't send it a second time.
+				assert!(
+					tokio::time::timeout(Duration::from_millis(50), socket.next_sent())
+						.await
+						.is_err(),
+					"a queued subscribe sent a duplicate frame"
+				);
 			})
 			.await;
 	}
