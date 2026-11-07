@@ -47,6 +47,13 @@ private final class SystemLiveActivityService: LiveActivityService {
         fields: [String: String],
         pushUpdates: Bool
     ) async throws {
+        // Replace any prior ActivityKit activity with this app id so update/end
+        // stay unambiguous and we never orphan a previous request.
+        if let existing = activity(id: id) {
+            await existing.end(nil, dismissalPolicy: .immediate)
+            stopObserving(id: id)
+        }
+
         let attributes = LeptosKitLiveActivityAttributes(id: id, kind: kind, title: title)
         let state = LeptosKitLiveActivityAttributes.ContentState(fields: fields)
         let content = ActivityContent(state: state, staleDate: nil)
@@ -101,8 +108,20 @@ private final class SystemLiveActivityService: LiveActivityService {
         if let existing = latestTokens.removeValue(forKey: id) { return existing }
 
         guard activity(id: id) != nil else { throw PluginError.unavailable }
-        return try await withCheckedThrowingContinuation { continuation in
-            waiters[id] = continuation
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
+                if let displaced = waiters.updateValue(continuation, forKey: id) {
+                    displaced.resume(throwing: PluginError.cancelled)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                if let waiter = self.waiters.removeValue(forKey: id) {
+                    waiter.resume(throwing: PluginError.cancelled)
+                }
+            }
         }
     }
 
@@ -216,7 +235,21 @@ public final class LiveActivitiesPlugin: NativePlugin {
                 try reader.finish()
                 return id
             }
-            let token = try await gated(id) { try await service.waitPushToken(id: id) }
+            // Waiting for a push token must not hold the per-id mutation lock;
+            // apps still need to update or end the activity while waiting.
+            guard !closed else { throw PluginError.cancelled }
+            try Task.checkCancellation()
+            let token: Data
+
+            do {
+                token = try await service.waitPushToken(id: id)
+            } catch is CancellationError {
+                throw PluginError.cancelled
+            } catch let error as PluginError {
+                throw error
+            } catch {
+                throw PluginError.native
+            }
 
             guard !token.isEmpty, token.count <= 512 else { throw PluginError.invalidArgument }
             return encodeBytes(token)
@@ -404,7 +437,10 @@ private struct Reader {
         for _ in 0..<count {
             let key = try identifier()
             let value = try text(maximum: 256, required: false)
-            fields[key] = value
+
+            if fields.updateValue(value, forKey: key) != nil {
+                throw PluginError.invalidArgument
+            }
         }
         return fields
     }

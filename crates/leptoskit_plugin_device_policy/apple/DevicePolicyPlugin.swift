@@ -15,7 +15,18 @@ public final class DevicePolicyPlugin: NativePlugin {
         guard !closed else { throw PluginError.cancelled }
 
         guard methods.contains(method) else { throw PluginError.unavailable }
-        _ = payload
+        // Validate empty vs non-empty payloads before Unavailable so malformed
+        // calls stay InvalidArgument on every host.
+        try payload.withUnsafeBytes { bytes in
+            switch method {
+            case 0, 2, 7:
+                guard bytes.isEmpty else { throw PluginError.invalidArgument }
+            case 1, 3, 4, 5, 6:
+                guard !bytes.isEmpty else { throw PluginError.invalidArgument }
+            default:
+                break
+            }
+        }
         throw PluginError.unavailable
     }
 

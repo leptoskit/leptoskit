@@ -107,9 +107,11 @@ class DevicePolicyPlugin(
 
     /** Opens Android's device-admin consent UI after an explicit caller request. */
     private suspend fun requestActivation(payload: ByteBuffer): ByteArray {
-        if (isActive()) return words(OUTCOME_ALREADY_ACTIVE)
-
+        // Validate the explanation before short-circuit outcomes so malformed
+        // payloads stay InvalidArgument even when admin is already active.
         val explanation = explanationOf(payload)
+
+        if (isActive()) return words(OUTCOME_ALREADY_ACTIVE)
 
         if (activity == null) throw PluginException(PluginException.UNAVAILABLE)
         val host = host ?: throw PluginException(PluginException.UNAVAILABLE)

@@ -157,10 +157,7 @@ private struct Snapshot {
         let url = try reader.text(maximum: 2048, multiline: false, required: false)
 
         if !url.isEmpty {
-            guard url.contains(":"),
-                  !url.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
-                throw PluginError.invalidArgument
-            }
+            guard isAllowedURL(url) else { throw PluginError.invalidArgument }
         }
 
         try reader.finish()
@@ -214,5 +211,36 @@ private struct Reader {
 
     func finish() throws {
         guard offset == bytes.count else { throw PluginError.invalidArgument }
+    }
+}
+
+/// HTTP(S) or an app deep-link scheme; rejects javascript/data/file/blob/vbscript.
+private func isAllowedURL(_ url: String) -> Bool {
+    if url.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) {
+        return false
+    }
+
+    guard let separator = url.firstIndex(of: ":"),
+          separator > url.startIndex,
+          separator < url.index(before: url.endIndex)
+    else { return false }
+
+    let scheme = String(url[..<separator]).lowercased()
+    guard let first = scheme.unicodeScalars.first,
+          (97...122).contains(first.value)
+    else { return false }
+
+    guard scheme.unicodeScalars.dropFirst().allSatisfy({
+        let value = $0.value
+        return (97...122).contains(value)
+            || (48...57).contains(value)
+            || value == 43 || value == 45 || value == 46
+    }) else { return false }
+
+    switch scheme {
+    case "javascript", "data", "file", "blob", "vbscript":
+        return false
+    default:
+        return true
     }
 }

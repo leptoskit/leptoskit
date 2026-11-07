@@ -59,6 +59,31 @@ class HomeWidgetsPluginTest {
                     expectError(PluginException.INVALID_ARGUMENT) {
                         plugin.invoke(CAPABILITY, buffer(byteArrayOf(0)))
                     }
+                    expectError(PluginException.INVALID_ARGUMENT) {
+                        plugin.invoke(
+                            SET,
+                            buffer(encodeSnapshot(url = "javascript:alert(1)")),
+                        )
+                    }
+                } finally {
+                    plugin.close()
+                }
+            }
+        }
+
+    @Test
+    fun installedReportsNoneForUnknownKind() =
+        runBlocking {
+            withContext(Dispatchers.Main) {
+                val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+                val plugin = HomeWidgetsPlugin(context)
+                try {
+                    val installed =
+                        ByteBuffer
+                            .wrap(plugin.invoke(INSTALLED, buffer(kindOnly("definitely-missing-kind"))))
+                            .order(ByteOrder.LITTLE_ENDIAN)
+                            .int
+                    assertEquals(INSTALLED_NONE, installed)
                 } finally {
                     plugin.close()
                 }
@@ -82,6 +107,8 @@ class HomeWidgetsPluginTest {
         const val SET = 1
         const val GET = 2
         const val CLEAR = 3
+        const val INSTALLED = 5
+        const val INSTALLED_NONE = 1
 
         fun empty(): ByteBuffer = ByteBuffer.allocate(0)
 

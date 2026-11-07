@@ -62,8 +62,20 @@ private final class FakeLiveActivities: LiveActivityService {
         if let existing = tokens.removeValue(forKey: id) { return existing }
 
         guard activities[id] != nil else { throw PluginError.unavailable }
-        return try await withCheckedThrowingContinuation { continuation in
-            tokenWaiters[id] = continuation
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
+                if let displaced = tokenWaiters.updateValue(continuation, forKey: id) {
+                    displaced.resume(throwing: PluginError.cancelled)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                if let waiter = self.tokenWaiters.removeValue(forKey: id) {
+                    waiter.resume(throwing: PluginError.cancelled)
+                }
+            }
         }
     }
 
@@ -139,6 +151,51 @@ final class LiveActivitiesTests: XCTestCase {
         do {
             _ = try await plugin.invoke(method: 2, payload: NativeBuffer(taking: lk_buffer()))
             XCTFail("Empty start accepted")
+        } catch {
+            XCTAssertEqual(error as? PluginError, .invalidArgument)
+        }
+    }
+
+    func testCancelledPushWaitDoesNotFreezeMutations() async throws {
+        let service = FakeLiveActivities()
+        let plugin = LiveActivitiesPlugin(service: service)
+        _ = try await plugin.invoke(method: 2, payload: startPayload(push: true))
+        let waiting = Task {
+            try await plugin.invoke(method: 5, payload: idPayload("ride-1"))
+        }
+        await Task.yield()
+        waiting.cancel()
+
+        do {
+            _ = try await waiting.value
+            XCTFail("Cancelled wait should fail")
+        } catch {
+            XCTAssertEqual(error as? PluginError, .cancelled)
+        }
+
+        // Mutation must still succeed after a cancelled wait (no stuck busy lock).
+        _ = try await plugin.invoke(method: 3, payload: updatePayload())
+        XCTAssertEqual(service.activities["ride-1"]?.fields["eta"], "2")
+        _ = try await plugin.invoke(method: 4, payload: endPayload())
+        XCTAssertTrue(service.activities.isEmpty)
+    }
+
+    func testDuplicateFieldKeysAreRejected() async {
+        let plugin = LiveActivitiesPlugin(service: FakeLiveActivities())
+        var data = Data()
+        try? append("ride-1", to: &data)
+        try? append("ride", to: &data)
+        try? append("Driver en route", to: &data)
+        append(UInt32(0), to: &data)
+        append(UInt32(2), to: &data)
+        try? append("eta", to: &data)
+        try? append("4", to: &data)
+        try? append("eta", to: &data)
+        try? append("2", to: &data)
+
+        do {
+            _ = try await plugin.invoke(method: 2, payload: buffer(data))
+            XCTFail("Duplicate content keys accepted")
         } catch {
             XCTAssertEqual(error as? PluginError, .invalidArgument)
         }

@@ -39,16 +39,16 @@ impl WatchOsHost {
 	}
 
 	/// Starts with an explicit viewport (for unusual faces).
-	#[must_use]
-	pub fn with_viewport(viewport: WatchViewport) -> Self {
-		assert_eq!(
-			viewport.kind,
-			leptoskit_watch::WatchKind::WatchOs,
-			"WatchOsHost requires a watchOS viewport"
-		);
-		Self {
-			inner: RecordingHost::new(viewport),
+	pub fn with_viewport(viewport: WatchViewport) -> Result<Self, WatchError> {
+		if viewport.kind != leptoskit_watch::WatchKind::WatchOs {
+			return Err(WatchError::Unavailable(
+				"WatchOsHost requires a watchOS viewport".into(),
+			));
 		}
+
+		Ok(Self {
+			inner: RecordingHost::new(viewport),
+		})
 	}
 
 	/// Presentations recorded so far.
@@ -104,5 +104,14 @@ mod tests {
 		let mut host = WatchOsHost::new();
 		host.present_app(&app).unwrap();
 		assert_ne!(host.presentations(), []);
+	}
+
+	#[test]
+	fn rejects_a_wearos_viewport() {
+		let viewport = WatchViewport::wear_os_medium();
+		assert!(matches!(
+			WatchOsHost::with_viewport(viewport),
+			Err(WatchError::Unavailable(_))
+		));
 	}
 }

@@ -26,10 +26,10 @@ private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
 
 @Test
 @MainActor
-func everyMethodIsUnavailableWithoutInferringAdminRights() async throws {
+func emptyPayloadMethodsAreUnavailableWithoutInferringAdminRights() async throws {
     let plugin = DevicePolicyPlugin()
 
-    for method in plugin.methods {
+    for method: UInt32 in [0, 2, 7] {
         await #expect(throws: PluginError.unavailable) {
             try await plugin.invoke(method: method, payload: payload())
         }
@@ -38,5 +38,23 @@ func everyMethodIsUnavailableWithoutInferringAdminRights() async throws {
     plugin.close()
     await #expect(throws: PluginError.cancelled) {
         try await plugin.invoke(method: 0, payload: payload())
+    }
+}
+
+@Test
+@MainActor
+func payloadMethodsRejectEmptyBeforeUnavailable() async throws {
+    let plugin = DevicePolicyPlugin()
+
+    for method: UInt32 in [1, 3, 4, 5, 6] {
+        await #expect(throws: PluginError.invalidArgument) {
+            try await plugin.invoke(method: method, payload: payload())
+        }
+    }
+
+    for method: UInt32 in [1, 3, 4, 5, 6] {
+        await #expect(throws: PluginError.unavailable) {
+            try await plugin.invoke(method: method, payload: payload([1, 0, 0, 0]))
+        }
     }
 }
