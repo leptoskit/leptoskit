@@ -36,6 +36,7 @@ use super::Invocation;
 use super::Live;
 use super::Outbound;
 use super::hub::Batch;
+use super::hub::Changed;
 use super::hub::Registration;
 use super::hub::ShareKey;
 use super::run_query;
@@ -137,7 +138,24 @@ struct Session {
 struct Subscription {
 	query: String,
 	args: Value,
-	value: Arc<Value>,
+	/// The latest result, including failures; never recover an earlier success
+	/// after a policy or identity change makes the current query fail.
+	result: Result<Arc<Value>, WireError>,
+}
+
+impl Subscription {
+	fn apply(&mut self, changed: Changed) -> Update {
+		let (update, result) = changed.into_update();
+		self.result = result;
+		update
+	}
+
+	fn full_update(&self) -> Update {
+		match &self.result {
+			Ok(value) => Update::Ok((**value).clone()),
+			Err(error) => Update::Err(error.clone()),
+		}
+	}
 }
 
 struct Joined {
@@ -599,8 +617,14 @@ impl Session {
 			.stats_ref()
 			.subscriptions
 			.fetch_add(1, Ordering::Relaxed);
-		self.subscriptions
-			.insert(id, Subscription { query, args, value });
+		self.subscriptions.insert(
+			id,
+			Subscription {
+				query,
+				args,
+				result: Ok(value),
+			},
+		);
 	}
 
 	/// Subscribes `id` through the hub: joins the group already watching
@@ -978,10 +1002,13 @@ impl Session {
 					});
 
 					if let Some(subscription) = self.subscriptions.get_mut(&id) {
-						subscription.value = started.value;
+						subscription.result = Ok(started.value);
 					}
 				}
 				Err(error) => {
+					if let Some(subscription) = self.subscriptions.get_mut(&id) {
+						subscription.result = Err(error.clone());
+					}
 					updates.push(SubscriptionUpdate {
 						id,
 						update: Update::Err(error),
@@ -1102,12 +1129,7 @@ impl Session {
 				// Unsubscribed while the batch was on its way.
 				continue;
 			};
-			let (update, value) = changed.into_update();
-
-			if let Some(value) = value {
-				subscription.value = value;
-			}
-
+			let update = subscription.apply(changed);
 			updates.push(SubscriptionUpdate { id, update });
 		}
 
@@ -1135,7 +1157,7 @@ impl Session {
 				.map(|(id, subscription)| {
 					SubscriptionUpdate {
 						id: *id,
-						update: Update::Ok((*subscription.value).clone()),
+						update: subscription.full_update(),
 					}
 				})
 				.collect();
@@ -1427,5 +1449,72 @@ async fn identity_deadline(deadline: Option<SystemTime>) {
 			.await;
 		}
 		None => std::future::pending().await,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::json;
+
+	use super::*;
+	use crate::live::Patch;
+	use crate::live::Upsert;
+
+	fn subscription() -> Subscription {
+		Subscription {
+			query: "notes".to_owned(),
+			args: json!({}),
+			result: Ok(Arc::new(json!([{"id": "1", "body": "before"}]))),
+		}
+	}
+
+	#[test]
+	fn full_recovery_keeps_a_query_failure_until_a_new_success() {
+		let mut subscription = subscription();
+		let error = WireError {
+			status: 403,
+			message: "no longer available".to_owned(),
+		};
+		assert_eq!(
+			subscription.apply(Changed::Failed(error.clone())),
+			Update::Err(error.clone())
+		);
+		assert_eq!(subscription.full_update(), Update::Err(error));
+
+		let current = json!([{"id": "2", "body": "after"}]);
+		subscription.apply(Changed::Whole(Arc::new(current.clone())));
+		assert_eq!(subscription.full_update(), Update::Ok(current));
+	}
+
+	#[test]
+	fn full_recovery_uses_the_complete_value_behind_a_patch() {
+		let mut subscription = subscription();
+		let row = json!({"id": "1", "body": "after"});
+		let value = json!([row.clone()]);
+		let patch = Patch {
+			upsert: vec![Upsert { at: 0, value: row }],
+			..Patch::default()
+		};
+		assert_eq!(
+			subscription.apply(Changed::Patch(
+				Arc::new(patch.clone()),
+				Arc::new(value.clone())
+			)),
+			Update::Patch(patch)
+		);
+		assert_eq!(subscription.full_update(), Update::Ok(value));
+	}
+
+	#[test]
+	fn full_recovery_preserves_the_latest_error_including_repeated_failures() {
+		let mut subscription = subscription();
+		for status in [503, 401, 403] {
+			let error = WireError {
+				status,
+				message: format!("failure {status}"),
+			};
+			subscription.apply(Changed::Failed(error.clone()));
+			assert_eq!(subscription.full_update(), Update::Err(error));
+		}
 	}
 }
