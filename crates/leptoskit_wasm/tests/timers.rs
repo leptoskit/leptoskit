@@ -373,3 +373,34 @@ fn exhausting_the_pump_budget_requests_one_more_turn_then_returns_to_the_deadlin
 		Err(leptoskit_bridge::Error::Busy)
 	);
 }
+
+#[test]
+fn cancelled_timers_release_capacity_before_replacements_are_admitted() {
+	let mut host = WasmHost::headless(IDLE.as_bytes()).expect("compile wat");
+	*host.plugins() = leptoskit_bridge::Bridge::new(leptoskit_bridge::Limits {
+		calls: 512,
+		..Default::default()
+	});
+	host.enable_timers().expect("timers");
+	host.start(100.0, 100.0).expect("start");
+	let old: Vec<_> = (0..256).map(|_| submit(&mut host, 60_000)).collect();
+	host.pump_timers().expect("fill the scheduler");
+	for id in old {
+		host.plugins().cancel(id).expect("cancel old timer");
+	}
+	let replacements: Vec<_> = (0..256).map(|_| submit(&mut host, 60_000)).collect();
+	host.pump_timers().expect("cancel before replacing");
+	// A full final batch may request one extra bounded turn.
+	host.pump_timers().expect("settle remaining routing");
+	for id in replacements {
+		assert!(
+			host.plugins()
+				.take_result(id)
+				.expect("live replacement")
+				.is_none(),
+			"a replacement must wait, not be rejected because cancelled timers held capacity"
+		);
+		assert!(host.cancel_timer(id), "every replacement was scheduled");
+	}
+	assert!(host.next_timer_deadline().is_none());
+}

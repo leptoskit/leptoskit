@@ -1004,6 +1004,22 @@ impl<B: NativeBackend> WasmHost<B> {
 		for _ in 0..8 {
 			let mut moved = 0;
 
+			// Release abandoned timers before admitting replacement calls.
+			// Otherwise a full scheduler can reject work with reusable
+			// capacity.
+			while moved < TIMER_TURN {
+				let Some(id) = self.store.data_mut().plugins.next_cancelled() else {
+					break;
+				};
+
+				if !self.cancel_timer(id) && self.routed_cancelled.len() < MAX_ROUTED_CANCELLATIONS
+				{
+					self.routed_cancelled.push_back(id);
+				}
+
+				moved += 1;
+			}
+
 			while moved < TIMER_TURN {
 				let Some(request) = self.store.data_mut().plugins.next_request() else {
 					break;
@@ -1018,19 +1034,6 @@ impl<B: NativeBackend> WasmHost<B> {
 					self.reject_routed_request(request.id, leptoskit_bridge::Error::Busy);
 					moved += 1;
 				}
-			}
-
-			while moved < TIMER_TURN {
-				let Some(id) = self.store.data_mut().plugins.next_cancelled() else {
-					break;
-				};
-
-				if !self.cancel_timer(id) && self.routed_cancelled.len() < MAX_ROUTED_CANCELLATIONS
-				{
-					self.routed_cancelled.push_back(id);
-				}
-
-				moved += 1;
 			}
 
 			let delivered = self.poll_due_timers()?;
