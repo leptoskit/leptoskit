@@ -100,3 +100,7 @@ let subscription = push
 `Strategy` values describe cache-first, network-first, stale-while-revalidate, network-only, and cache-only behaviour. Post them to your worker script (or read them inside one) so routes stay defined in one place. `caches` helpers open Cache Storage from the page when you need to precache or inspect entries yourself.
 
 This is the page side only: you still write the worker script that handles `fetch`, `push`, and `message` events. Calls return `Unavailable` outside a secure browser context, so the same app code compiles in tests and on native targets. Browser extensions use a different background worker through [extensions](extension.md); do not mix the two.
+
+## App icon badges
+
+Installed progressive web apps can show an icon badge through the browser Badging API. Depend on `leptoskit_plugin_badge` and call `web::set` / `web::clear` from the page; `web::get` returns the last count this adapter published, because the API has no read-back. Browsers that omit the API, or pages that are not eligible for a badge, return `Unavailable`.

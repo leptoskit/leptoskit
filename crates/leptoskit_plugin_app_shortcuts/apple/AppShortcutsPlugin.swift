@@ -23,12 +23,15 @@ protocol ShortcutPublisher {
     func clear() throws
 }
 
-/// Latest shortcuts published for the macOS dock menu. The generated host can
-/// return these from `applicationDockMenu(_:)` until the host wires the menu
-/// automatically.
+/// Latest shortcuts published for the macOS dock menu. Generated hosts return
+/// these from `applicationDockMenu(_:)` and call ``noteLaunch(id:)`` when the
+/// user picks an item.
 @MainActor
 public enum DockShortcutStore {
     public static var items: [AppShortcutItem] = []
+    /// The registered plugin instance, when the generated host selected
+    /// `app-shortcuts`.
+    public static weak var plugin: AppShortcutsPlugin?
 }
 
 @MainActor
@@ -67,10 +70,12 @@ public final class AppShortcutsPlugin: NativePlugin {
 
     public init() {
         publisher = SystemShortcutPublisher()
+        DockShortcutStore.plugin = self
     }
 
     init(publisher: any ShortcutPublisher) {
         self.publisher = publisher
+        DockShortcutStore.plugin = self
     }
 
     /// Records that the OS launched or activated the app through this id.
@@ -78,6 +83,12 @@ public final class AppShortcutsPlugin: NativePlugin {
         guard !closed else { throw PluginError.cancelled }
         try Self.validateId(id)
         launchId = id
+    }
+
+    /// Notes a home-screen quick action or dock-menu selection when a plugin
+    /// instance is registered.
+    public static func noteLaunchIfPresent(id: String) {
+        try? DockShortcutStore.plugin?.noteLaunch(id: id)
     }
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {

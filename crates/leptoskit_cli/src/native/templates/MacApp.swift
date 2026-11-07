@@ -1,5 +1,8 @@
 import AppKit
 import LeptosKitBridge
+#if canImport(LeptosKitAppShortcuts)
+import LeptosKitAppShortcuts
+#endif
 
 @main
 @MainActor
@@ -83,6 +86,37 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         editItem.submenu = edit
         NSApp.mainMenu = menu
     }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        #if canImport(LeptosKitAppShortcuts)
+        let items = DockShortcutStore.items
+        guard !items.isEmpty else { return nil }
+        let menu = NSMenu()
+        for item in items {
+            let entry = NSMenuItem(
+                title: item.title,
+                action: #selector(activateDockShortcut(_:)),
+                keyEquivalent: ""
+            )
+            entry.representedObject = item.id
+            entry.target = self
+            if !item.subtitle.isEmpty {
+                entry.toolTip = item.subtitle
+            }
+            menu.addItem(entry)
+        }
+        return menu
+        #else
+        return nil
+        #endif
+    }
+
+    #if canImport(LeptosKitAppShortcuts)
+    @objc private func activateDockShortcut(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        AppShortcutsPlugin.noteLaunchIfPresent(id: id)
+    }
+    #endif
 
     func windowWillClose(_ notification: Notification) {
         controller?.close()

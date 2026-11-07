@@ -6,8 +6,9 @@
 //! hosts currently omit runtime plugins; use explicit registration in a custom
 //! host there. Guests enable the `guest` feature and reuse
 //! `guest::AppShortcuts` rather than resolving the plugin on every call. The
-//! plugin publishes a bounded static shortcut list to the OS launcher, dock, or
-//! jump list; it never invents icons or deep-link handlers.
+//! plugin publishes a bounded static shortcut list to the OS launcher or dock;
+//! generated iOS, Android, and macOS hosts call `noteLaunch` when the OS
+//! activates one. It never invents icons or deep-link handlers.
 //!
 //! <!-- {/p_app_shortcutsSummary} -->
 

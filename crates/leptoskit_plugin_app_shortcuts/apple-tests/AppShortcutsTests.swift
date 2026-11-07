@@ -58,11 +58,12 @@ private func encodeList(_ items: [(String, String, String)]) -> [UInt8] {
 func setClearAndConsumeLaunchUsePublisherWithoutSystemUI() async throws {
     let publisher = PublisherSpy()
     let plugin = AppShortcutsPlugin(publisher: publisher)
+    #expect(DockShortcutStore.plugin === plugin)
     let encoded = encodeList([("inbox", "Inbox", "Mail"), ("compose", "Compose", "")])
     #expect(try await plugin.invoke(method: 0, payload: payload(encoded)) == Data())
     #expect(publisher.items.last?.count == 2)
     #expect(publisher.items.last?.first?.id == "inbox")
-    try plugin.noteLaunch(id: "inbox")
+    AppShortcutsPlugin.noteLaunchIfPresent(id: "inbox")
     let launch = try await plugin.invoke(method: 2, payload: payload())
     #expect(String(data: launch.dropFirst(4), encoding: .utf8) == "inbox")
     let empty = try await plugin.invoke(method: 2, payload: payload())

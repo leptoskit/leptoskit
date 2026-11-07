@@ -1,5 +1,8 @@
 import UIKit
 import LeptosKitBridge
+#if canImport(LeptosKitAppShortcuts)
+import LeptosKitAppShortcuts
+#endif
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -11,6 +14,17 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let configuration = UISceneConfiguration(name: "Main", sessionRole: session.role)
         configuration.delegateClass = SceneDelegate.self
         return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        #if canImport(LeptosKitAppShortcuts)
+        AppShortcutsPlugin.noteLaunchIfPresent(id: shortcutItem.type)
+        #endif
+        completionHandler(true)
     }
 }
 
@@ -28,6 +42,23 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         installController(in: window)
         self.window = window
         window.makeKeyAndVisible()
+
+        #if canImport(LeptosKitAppShortcuts)
+        if let shortcut = options.shortcutItem {
+            AppShortcutsPlugin.noteLaunchIfPresent(id: shortcut.type)
+        }
+        #endif
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        #if canImport(LeptosKitAppShortcuts)
+        AppShortcutsPlugin.noteLaunchIfPresent(id: shortcutItem.type)
+        #endif
+        completionHandler(true)
     }
 
     private func installController(in window: UIWindow) {

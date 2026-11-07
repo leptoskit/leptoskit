@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Features
+
+#### Generated hosts deliver app-shortcut launches
+
+New iOS, Android, and macOS hosts call `noteLaunch` for home-screen quick actions, launcher shortcuts, and dock-menu picks when `app-shortcuts` is selected. Android activities use `singleTop` so a warm shortcut launch reaches `onNewIntent`.
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes

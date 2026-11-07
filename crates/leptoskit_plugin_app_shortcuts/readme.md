@@ -33,9 +33,9 @@
 
 ## Overview
 
-Publishes up to eight static shortcuts with portable ids, titles, and optional subtitles. iOS uses home-screen quick actions, Android uses `ShortcutManager` dynamic shortcuts, and macOS installs a dock menu. Windows jump-list publishing and Linux desktop-action publishing are not registered by generated hosts yet; the crate's in-memory `Registry` is for custom hosts and tests. The browser is unavailable: PWA shortcuts belong in the web app manifesto.
+Publishes up to eight static shortcuts with portable ids, titles, and optional subtitles. iOS uses home-screen quick actions, Android uses `ShortcutManager` dynamic shortcuts with a unique intent per id, and macOS fills the dock menu from `DockShortcutStore`. Generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates a shortcut. Windows jump-list publishing and Linux desktop-action publishing are not registered by generated hosts yet; the crate's in-memory `Registry` is for custom hosts and tests. The browser is unavailable: PWA shortcuts belong in the web app manifesto.
 
-Enable `guest` for native bridge calls. Select `app-shortcuts` in `native.plugins`. No permissions or entitlements are added. The host must call `noteLaunch` when the OS activates a shortcut so `consume_launch` can return that id once. Closing the native plugin clears any shortcuts it published so launcher entries do not outlive the bridge.
+Enable `guest` for native bridge calls. Select `app-shortcuts` in `native.plugins`. No permissions or entitlements are added. Custom hosts still call `noteLaunch` when the OS activates a shortcut so `consume_launch` can return that id once. Closing the native plugin clears any shortcuts it published so launcher entries do not outlive the bridge.
 
 This port does not add icons, deep-link handlers, Siri App Intents, or pinned/manifest shortcuts beyond the dynamic list.
 
@@ -43,7 +43,7 @@ This port does not add icons, deep-link handlers, Siri App Intents, or pinned/ma
 
 <!-- {=p_app_shortcutsSummary} -->
 
-Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher, dock, or jump list; it never invents icons or deep-link handlers.
+Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
 
 <!-- {/p_app_shortcutsSummary} -->
 
