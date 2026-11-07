@@ -110,7 +110,7 @@ impl ServiceWake {
 
 	/// Schedules one coalesced platform turn from any thread.
 	pub(super) fn notify(&self) {
-		(self.0.notify)();
+		self.0.wake_by_ref();
 	}
 
 	fn invalidate(&self) {

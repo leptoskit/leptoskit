@@ -396,3 +396,22 @@ fn cancellation_while_pending_prevents_late_delivery() {
 	let mut owner = harness.closing.borrow_mut().pop().unwrap();
 	assert_eq!(poll_close(&mut owner), Poll::Ready(Ok(())));
 }
+
+#[test]
+fn timer_notifications_coalesce_and_stop_when_the_service_closes() {
+	let notifications = Arc::new(AtomicUsize::new(0));
+	let count = Arc::clone(&notifications);
+	let wake = ServiceWake::new(move || {
+		count.fetch_add(1, Ordering::AcqRel);
+	});
+	wake.notify();
+	wake.notify();
+	assert_eq!(notifications.load(Ordering::Acquire), 1);
+	let _waker = wake.waker();
+	wake.notify();
+	assert_eq!(notifications.load(Ordering::Acquire), 2);
+	wake.invalidate();
+	let _waker = wake.waker();
+	wake.notify();
+	assert_eq!(notifications.load(Ordering::Acquire), 2);
+}
