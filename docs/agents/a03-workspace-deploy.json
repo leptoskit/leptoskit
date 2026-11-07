@@ -1,6 +1,6 @@
 {
 	"audit": "A03",
-	"status": "local_acceptance_passed",
+	"status": "accepted",
 	"base": "6081ca4ec0e79832b50d41b02bee54302dd9097e",
 	"imported_head": "6593c1bf9df89faf2ba0c08cd5db7cfffdb352b1",
 	"import_signatures": "four valid SSH signatures; verifier reported no principal matched",
@@ -59,7 +59,17 @@
 			"snapshot_changes": 0,
 			"log": ".git/a03-evidence/lint-push.log"
 		},
-		"normal_pre_push": "pending",
+		"normal_pre_push": {
+			"result": "passed",
+			"source_head": "8f756ea18cf8f50e74bd70315971c133275b5e54",
+			"workspace_tests_passed": 5131,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"postgres_required": true,
+			"log": ".git/a03-evidence/git-push.log",
+			"credential_helper": "existing gh authentication, command-only override after Keychain helper stalled",
+			"bypass": false
+		},
 		"commands_and_snapshots": {
 			"passed": 61,
 			"failed": 0,
@@ -93,7 +103,12 @@
 			"interruption": "schema check cargo process killed with signal 9, exit 137; target later measured 192 MiB instead of 19 GiB",
 			"log": ".git/a03-evidence/lint-push-interrupted.log"
 		},
-		"focused_units_in_full_gate": 68
+		"focused_units_in_full_gate": 68,
+		"transitive_path_dependency_test": {
+			"result": "passed",
+			"name": "an_excluded_local_dependency_cannot_hide_an_external_dependency",
+			"log": ".git/a03-evidence/transitive-test.log"
+		}
 	},
 	"incidents": [
 		".git/a03-target disappeared during validation; no removal command issued by this task",
@@ -114,5 +129,6 @@
 		}
 	},
 	"vm": "removed after accepted images were exported; no VM left running",
-	"build_storage": ".git/a03-target links to task-owned .git/a03-evidence/host-build to preserve backing output if the target entry is removed"
+	"build_storage": ".git/a03-target links to task-owned .git/a03-evidence/host-build to preserve backing output if the target entry is removed",
+	"pull_request": "https://github.com/leptoskit/leptoskit/pull/601"
 }

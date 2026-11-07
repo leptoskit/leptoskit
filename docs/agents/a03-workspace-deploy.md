@@ -33,3 +33,5 @@ Huddle's generated image also built successfully with `LEPTOSKIT_CLI_PATH=crates
 Both accepted runtime images were exported before stopping and removing the task VM. The full gate and normal pre-push hook results are recorded separately in the JSON evidence.
 
 The unmodified `devenv shell lint:push` completed successfully on the rebased source: 5,131 workspace tests, 16 file-routes tests, and 43 devtools tests passed with Postgres required. Clippy, format, documentation, release validation, schema checks, workflow security, and dependency policy passed. No snapshots changed.
+
+An actual `git push` completed through the normal pre-push hook with every gate passing and Postgres required. The Keychain credential helper initially stalled; the successful invocation used the existing GitHub CLI authentication through a command-only credential helper override. Repository identity, signing, and hooks were not reconfigured. An earlier attempt passed its checks but was rejected by the hook's working-tree guard after a documentation edit during the run; the successful retry used an untouched clean tree.

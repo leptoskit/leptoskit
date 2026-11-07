@@ -907,3 +907,38 @@ fn nested_custom_target_is_overridden_in_the_container() {
 	assert_eq!(project.target_dir, "/src/target");
 	assert!(super::dockerfile(&project).contains("CARGO_TARGET_DIR=/src/target"));
 }
+
+#[test]
+fn an_excluded_local_dependency_cannot_hide_an_external_dependency() {
+	let root = tempfile::tempdir().unwrap();
+	let external = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "notes");
+	let manifest = root.path().join("Cargo.toml");
+	let workspace = std::fs::read_to_string(&manifest).unwrap();
+	std::fs::write(
+		manifest,
+		workspace.replacen("[workspace]", "[workspace]\nexclude = [\"local\"]", 1),
+	)
+	.unwrap();
+	write(
+		external.path(),
+		"Cargo.toml",
+		"[package]\nname = \"external\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n",
+	);
+	write(external.path(), "src/lib.rs", "");
+	let mut local = String::from(
+		"[package]\nname = \"local\"\nversion = \"0.1.0\"\nedition = \
+		 \"2024\"\n[workspace]\n[dependencies]\n",
+	);
+	writeln!(local, "external = {{ path = {:?} }}", external.path()).unwrap();
+	write(root.path(), "local/Cargo.toml", &local);
+	write(root.path(), "local/src/lib.rs", "");
+	let manifest = root.path().join("apps/notes/server/Cargo.toml");
+	let mut server = std::fs::read_to_string(&manifest).unwrap();
+	server.push_str("local = { path = \"../../../local\" }\n");
+	std::fs::write(manifest, server).unwrap();
+	let app = root.path().join("apps/notes");
+	let error = generate(&app, &config, Target::Docker, false).unwrap_err();
+	assert!(format!("{error:#}").contains("outside the Cargo workspace"));
+	assert!(!app.join("Dockerfile").exists());
+}
