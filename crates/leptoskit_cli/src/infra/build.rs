@@ -149,7 +149,8 @@ pub(super) fn run(
 		return Ok(());
 	}
 	let label = format!("{SCHEMA_LABEL}={schema}");
-	let status = docker(root, private.as_ref())
+	let project = crate::deploy::Project::read(root, config)?;
+	let status = docker(project.build_context(), private.as_ref())
 		.args([
 			"build",
 			"--platform",
@@ -158,6 +159,8 @@ pub(super) fn run(
 			&label,
 			"--tag",
 			&tag,
+			"--file",
+			project.dockerfile_path(),
 			".",
 		])
 		.status()

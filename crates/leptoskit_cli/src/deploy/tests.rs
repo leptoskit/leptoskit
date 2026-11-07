@@ -77,6 +77,7 @@ fn project(root: &Path, db: Db) -> LeptoskitConfig {
 		"[package]\nname = \"notes_app\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"rlib\", \
 		 \"cdylib\"]\n",
 	);
+	write(root, "notes_app/src/lib.rs", "");
 	LeptoskitConfig::from_toml(&config, root).expect("config")
 }
 
@@ -256,11 +257,10 @@ fn a_server_without_probes_is_told_how_to_add_them() {
 fn the_project_is_read_from_its_manifests() {
 	let root = tempfile::tempdir().unwrap();
 	let mut config = project(root.path(), Db::None);
-	write(
-		root.path(),
-		"rust-toolchain.toml",
-		"[toolchain]\nchannel = \"1.96.0\"\n",
-	);
+	let toolchain_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rust-toolchain.toml");
+	let toolchain = std::fs::read_to_string(&toolchain_file).unwrap();
+	write(root.path(), "rust-toolchain.toml", &toolchain);
+	let rust_version = super::toolchain_channel(&toolchain_file).unwrap_or_else(|| "1".to_owned());
 	write(
 		root.path(),
 		"notes_app/Cargo.toml",
@@ -278,14 +278,14 @@ fn the_project_is_read_from_its_manifests() {
 		project.toolchain_file.as_deref(),
 		Some("rust-toolchain.toml")
 	);
-	assert_eq!(project.rust_version, "1.96.0");
+	assert_eq!(project.rust_version, rust_version);
 	assert!(project.has_probes);
 
 	// A server-only build skips the wasm toolchain and binaryen, and the
 	// toolchain file comes in before anything is built.
 	let dockerfile = super::dockerfile(&project);
 	assert!(!dockerfile.contains("wasm"), "{dockerfile}");
-	assert!(dockerfile.contains("ARG RUST_VERSION=1.96.0\n"));
+	assert!(dockerfile.contains(&format!("ARG RUST_VERSION={rust_version}\n")));
 	assert!(dockerfile.contains("COPY rust-toolchain.toml ./\nCOPY . .\n"));
 	assert!(dockerfile.contains("leptoskit build --release --platform server"));
 	assert!(dockerfile.contains("EXPOSE 8080\n"));
@@ -425,4 +425,352 @@ fn probes_depend_on_the_declared_contract_not_source_spelling() {
 		"// TODO: Readiness /readyz\nfn main() {}\n",
 	);
 	assert!(!Project::read(root.path(), &config).unwrap().has_probes);
+}
+
+/// A Cargo workspace whose app is a directory of member crates with no
+/// manifest of its own, the shape Huddle has.
+fn nested_project(root: &Path, app: &str) -> LeptoskitConfig {
+	write(
+		root,
+		"Cargo.toml",
+		"[workspace]\nmembers = [\"apps/*/server\", \"apps/*/client\"]\nresolver = \
+		 \"2\"\n\n[workspace.package]\nedition = \"2024\"\n\n[workspace.dependencies]\nanyhow = \
+		 \"1\"\n",
+	);
+	let app_root = root.join("apps").join(app);
+	let config = String::from(
+		"schema_version = 0\n\n[app]\nname = \"huddle\"\nversion = \"0.1.0\"\nrender = \
+		 \"csr\"\nplatforms = [\"web\"]\n\n[serve]\naddress = \"127.0.0.1\"\nport = 3000\nprobes \
+		 = true\n\n[build]\nclient_package = \"huddle_app\"\n",
+	);
+	write(&app_root, "leptoskit.toml", &config);
+	write(
+		&app_root,
+		"server/Cargo.toml",
+		"[package]\nname = \"huddle\"\nversion = \"0.1.0\"\nedition.workspace = \
+		 true\n\n[dependencies]\nanyhow.workspace = true\n",
+	);
+	write(&app_root, "server/src/main.rs", SERVER);
+	write(
+		&app_root,
+		"client/Cargo.toml",
+		"[package]\nname = \"huddle_app\"\nversion = \"0.1.0\"\nedition.workspace = \
+		 true\n\n[lib]\ncrate-type = [\"rlib\", \"cdylib\"]\n",
+	);
+	write(&app_root, "client/src/lib.rs", "");
+	LeptoskitConfig::from_toml(&config, &app_root).expect("config")
+}
+
+#[test]
+fn a_nested_app_resolves_through_cargo_workspace_globs() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
+	let project = Project::read(&app, &config).unwrap();
+	let workspace = std::fs::canonicalize(root.path()).unwrap();
+
+	assert_eq!(project.build_context(), workspace.as_path());
+	assert_eq!(project.app_dir, "apps/site");
+	assert_eq!(project.context, "../..");
+	assert_eq!(project.dockerfile, "apps/site/Dockerfile");
+	assert_eq!(project.binary, "huddle");
+	assert_eq!(project.output_name, "huddle_app");
+	assert_eq!(project.toolchain_file, None);
+	assert_eq!(project.rust_version, "1");
+	assert_eq!(project.target_dir, "/src/target");
+
+	let report = generate(&app, &config, Target::Docker, false).unwrap();
+	assert!(
+		report.changed.contains(&"created Dockerfile".to_owned()),
+		"{report}"
+	);
+	assert!(
+		report
+			.changed
+			.contains(&"created Dockerfile.dockerignore".to_owned()),
+		"{report}"
+	);
+	assert!(!app.join(".dockerignore").exists());
+
+	let dockerfile = std::fs::read_to_string(app.join("Dockerfile")).unwrap();
+	assert!(
+		dockerfile.contains("docker build -f apps/site/Dockerfile -t huddle ."),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("RUN cd apps/site && rustup target add wasm32-unknown-unknown"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("--mount=type=cache,target=/src/apps/site/.leptoskit"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains(
+			"cd apps/site && CARGO_TARGET_DIR=/src/target leptoskit build --release --platform web"
+		),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("cp /src/target/release/huddle /usr/local/bin/huddle"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("COPY --from=build /src/apps/site/dist /app/dist"),
+		"{dockerfile}"
+	);
+	assert!(
+		!dockerfile.contains("COPY --from=build /src/dist /app/dist"),
+		"{dockerfile}"
+	);
+
+	let ignore = std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap();
+	for pattern in [
+		"**/target",
+		"**/.leptoskit",
+		"**/dist",
+		"**/*.sqlite3",
+		"**/.env.*",
+		"**/infra/*.tfstate*",
+		"**/.kamal",
+	] {
+		assert!(ignore.contains(pattern), "{pattern}: {ignore}");
+	}
+
+	let compose = generate(&app, &config, Target::Compose, false).unwrap();
+	let text = compose.to_string();
+	assert!(
+		text.contains("docker compose -f apps/site/compose.yaml up --build"),
+		"{text}"
+	);
+	let yaml = std::fs::read_to_string(app.join("compose.yaml")).unwrap();
+	assert!(yaml.contains("      context: \"../..\"\n"), "{yaml}");
+	assert!(
+		yaml.contains("      dockerfile: \"apps/site/Dockerfile\"\n"),
+		"{yaml}"
+	);
+
+	generate(&app, &config, Target::Fly, false).unwrap();
+	let fly = std::fs::read_to_string(app.join("fly.toml")).unwrap();
+	assert!(
+		fly.contains("dockerfile = \"apps/site/Dockerfile\"\n"),
+		"{fly}"
+	);
+	let fly_next = generate(&app, &config, Target::Fly, false)
+		.unwrap()
+		.next
+		.join("\n");
+	assert!(
+		fly_next
+			.contains("fly deploy --config apps/site/fly.toml --dockerfile apps/site/Dockerfile"),
+		"{fly_next}"
+	);
+
+	let kubernetes_next = generate(&app, &config, Target::Kubernetes, false)
+		.unwrap()
+		.next
+		.join("\n");
+	assert!(
+		kubernetes_next.contains("docker build -f apps/site/Dockerfile -t huddle ."),
+		"{kubernetes_next}"
+	);
+}
+
+#[test]
+fn workspace_paths_with_spaces_are_quoted_and_kept_inside_the_context() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "my app");
+	let app = root.path().join("apps/my app");
+	let toolchain = std::fs::read_to_string(
+		Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rust-toolchain.toml"),
+	)
+	.unwrap();
+	write(&app, "rust-toolchain.toml", &toolchain);
+	let project = Project::read(&app, &config).unwrap();
+	assert_eq!(project.app_dir, "apps/my app");
+	assert_eq!(
+		project.toolchain_file.as_deref(),
+		Some("apps/my app/rust-toolchain.toml")
+	);
+	assert_eq!(project.rust_version, "1");
+	assert_eq!(
+		project.docker_build_command(),
+		"docker build -f 'apps/my app/Dockerfile' -t huddle ."
+	);
+
+	generate(&app, &config, Target::Compose, false).unwrap();
+	let dockerfile = std::fs::read_to_string(app.join("Dockerfile")).unwrap();
+	assert!(
+		dockerfile.contains("COPY [\"apps/my app/rust-toolchain.toml\", \"apps/my app/\"]"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("RUN cd 'apps/my app' && rustup target add wasm32-unknown-unknown"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("cd 'apps/my app' && CARGO_TARGET_DIR=/src/target"),
+		"{dockerfile}"
+	);
+	assert!(
+		!dockerfile.contains("my app/.leptoskit"),
+		"a cache path with whitespace is left out: {dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("COPY --from=build [\"/src/apps/my app/dist\", \"/app/dist\"]"),
+		"{dockerfile}"
+	);
+	let yaml = std::fs::read_to_string(app.join("compose.yaml")).unwrap();
+	assert!(yaml.contains("      context: \"../..\"\n"), "{yaml}");
+	assert!(
+		yaml.contains("      dockerfile: \"apps/my app/Dockerfile\"\n"),
+		"{yaml}"
+	);
+	let next = generate(&app, &config, Target::Compose, false)
+		.unwrap()
+		.next
+		.join("\n");
+	assert!(
+		next.contains("docker compose -f 'apps/my app/compose.yaml' up --build"),
+		"{next}"
+	);
+
+	generate(&app, &config, Target::Fly, false).unwrap();
+	let fly = std::fs::read_to_string(app.join("fly.toml")).unwrap();
+	assert!(
+		fly.contains("dockerfile = \"apps/my app/Dockerfile\"\n"),
+		"{fly}"
+	);
+	let next = generate(&app, &config, Target::Fly, false)
+		.unwrap()
+		.next
+		.join("\n");
+	assert!(
+		next.contains("--dockerfile 'apps/my app/Dockerfile'"),
+		"{next}"
+	);
+}
+
+#[test]
+fn the_workspace_ignore_keeps_project_exclusions_without_touching_the_root() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
+	write(root.path(), ".dockerignore", "workspace-secret\n");
+	write(&app, ".dockerignore", "app-secret\n!published.txt\n");
+
+	generate(&app, &config, Target::Docker, false).unwrap();
+	let ignore = std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap();
+	assert!(ignore.contains("\nworkspace-secret\n"), "{ignore}");
+	assert!(ignore.contains("\napps/site/app-secret\n"), "{ignore}");
+	assert!(ignore.contains("\n!apps/site/published.txt\n"), "{ignore}");
+	assert_eq!(
+		std::fs::read_to_string(root.path().join(".dockerignore")).unwrap(),
+		"workspace-secret\n"
+	);
+	assert_eq!(
+		std::fs::read_to_string(app.join(".dockerignore")).unwrap(),
+		"app-secret\n!published.txt\n"
+	);
+
+	write(&app, "Dockerfile.dockerignore", "custom-ignore\n");
+	let report = generate(&app, &config, Target::Docker, false).unwrap();
+	assert_eq!(
+		report.kept,
+		["kept Dockerfile.dockerignore: it differs from the template; --force replaces it"]
+	);
+	assert_eq!(
+		std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap(),
+		"custom-ignore\n"
+	);
+}
+
+#[test]
+fn an_app_outside_its_workspace_is_refused_before_it_becomes_a_context() {
+	let error = super::app_relative_dir(Path::new("/workspace"), Path::new("/outside/app"))
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("outside its Cargo workspace"), "{error}");
+	assert!(error.contains("can only include files inside"), "{error}");
+
+	let error = super::package_directory(
+		Path::new("/workspace"),
+		"notes",
+		Path::new("/outside/notes/Cargo.toml"),
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(error.contains("the package `notes`"), "{error}");
+	assert!(error.contains("outside the Cargo workspace"), "{error}");
+}
+
+#[test]
+fn managed_state_patterns_follow_the_app_into_a_workspace() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let project = Project::read(&root.path().join("apps/site"), &config).unwrap();
+	assert_eq!(
+		project.managed_state_patterns(),
+		[
+			"/apps/site/infra".to_owned(),
+			"/apps/site/.kamal".to_owned()
+		]
+	);
+	assert_eq!(
+		project.ignore_path(),
+		std::fs::canonicalize(root.path())
+			.unwrap()
+			.join("apps/site/Dockerfile.dockerignore")
+	);
+
+	let root = tempfile::tempdir().unwrap();
+	let config = project(root.path(), Db::None);
+	let project = Project::read(root.path(), &config).unwrap();
+	assert_eq!(
+		project.managed_state_patterns(),
+		["/infra".to_owned(), "/.kamal".to_owned()]
+	);
+	assert_eq!(
+		project.ignore_path(),
+		std::fs::canonicalize(root.path())
+			.unwrap()
+			.join(".dockerignore")
+	);
+}
+
+#[test]
+fn huddle_resolves_inside_the_repository_workspace() {
+	let repository =
+		std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap();
+	let app = repository.join("examples/huddle");
+	let raw = std::fs::read_to_string(app.join("leptoskit.toml")).unwrap();
+	let config = LeptoskitConfig::from_toml(&raw, &app).unwrap();
+	let project = Project::read(&app, &config).unwrap();
+
+	assert_eq!(project.app, "huddle");
+	assert_eq!(project.binary, "huddle");
+	assert_eq!(project.output_name, "huddle_app");
+	assert_eq!(project.app_dir, "examples/huddle");
+	assert_eq!(project.context, "../..");
+	assert_eq!(project.dockerfile, "examples/huddle/Dockerfile");
+	assert_eq!(project.build_context(), repository.as_path());
+	assert_eq!(
+		project.toolchain_file.as_deref(),
+		Some("rust-toolchain.toml")
+	);
+	assert_eq!(project.target_dir, "/src/target");
+
+	let dockerfile = super::dockerfile(&project);
+	assert!(
+		dockerfile.contains("COPY rust-toolchain.toml ./"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("cd examples/huddle && CARGO_TARGET_DIR=/src/target leptoskit build"),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("COPY --from=build /src/examples/huddle/dist /app/dist"),
+		"{dockerfile}"
+	);
 }

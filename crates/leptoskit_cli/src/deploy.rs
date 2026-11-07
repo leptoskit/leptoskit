@@ -51,7 +51,7 @@ impl Target {
 	fn files(self, project: &Project) -> Vec<(String, String)> {
 		let mut files = vec![
 			("Dockerfile".to_owned(), dockerfile(project)),
-			(".dockerignore".to_owned(), DOCKERIGNORE.to_owned()),
+			(project.ignore_file.clone(), project.ignore_contents.clone()),
 		];
 
 		match self {
@@ -112,7 +112,22 @@ pub struct Project {
 	/// The platform `leptoskit build` builds: `web` when the app has a web
 	/// client, otherwise `server`.
 	pub platform: Platform,
-	/// The Rust toolchain file at the root, if there is one.
+	/// The Cargo workspace root: the Docker build context.
+	pub workspace_root: PathBuf,
+	/// The app's root, where `leptoskit.toml` lives.
+	pub app_root: PathBuf,
+	/// The app's root relative to the workspace root, with `/` separators.
+	/// Empty when the app is the workspace root.
+	pub app_dir: String,
+	/// The path to the workspace root from the app root, for a Compose file
+	/// written beside the app's `leptoskit.toml`.
+	pub context: String,
+	/// The `Dockerfile` path in the build context, with `/` separators.
+	pub dockerfile: String,
+	/// Where Cargo writes binaries inside the build container.
+	pub target_dir: String,
+	/// The Rust toolchain file, relative to the workspace root, if there is
+	/// one between the app root and the workspace root.
 	pub toolchain_file: Option<String>,
 	/// The Rust image's version: the toolchain file's channel when it names
 	/// a release, otherwise `1`, the latest stable.
@@ -128,6 +143,10 @@ pub struct Project {
 	pub urls: Vec<String>,
 	/// Whether to run each role as its own Deployment (`--split-roles`).
 	pub split_roles: bool,
+	/// The ignore file the container build reads, beside the `Dockerfile`.
+	ignore_file: String,
+	/// Its contents, including the project's own exclusions.
+	ignore_contents: String,
 }
 
 /// The database a project uses.
@@ -152,26 +171,48 @@ impl Project {
 			"build.backend = false selects a static app; upload {DIST_DIR}/ to a CDN, or set \
 			 build.backend = true and name the backend in app.name"
 		);
+		let app_root = std::fs::canonicalize(root)
+			.with_context(|| format!("could not resolve the app root {}", root.display()))?;
+		// A local manifest is parsed here so a malformed one names itself,
+		// before cargo reads it on the way to the workspace.
+		if app_root.join("Cargo.toml").is_file() {
+			read_manifest(&app_root.join("Cargo.toml"))?;
+		}
+		if !has_manifest_in_ancestors(&app_root) {
+			anyhow::bail!("there's no Cargo.toml at {}", root.display());
+		}
+
+		// Cargo owns package discovery: it matches workspace members, globs,
+		// and inherited manifests, including an app directory with no
+		// manifest of its own.
+		let metadata = crate::wasm::cargo_metadata(&app_root)
+			.with_context(|| format!("could not read the Cargo workspace for {app_root:?}"))?;
+		let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
+			.unwrap_or_else(|_| metadata.workspace_root.clone());
+		let app_dir = app_relative_dir(&workspace_root, &app_root)?;
+		let app_dir = path_to_slashes(&app_dir);
 		let app = config.app.name.clone();
-		let server = package_dir(root, &app)?.with_context(|| {
+		let package = metadata.package(&app).with_context(|| {
 			format!(
 				"app.name `{app}` in {} must name the server package, but there's no package \
 				 called `{app}` in {}",
 				leptoskit_config::CONFIG_FILE,
-				root.join("Cargo.toml").display()
+				workspace_root.join("Cargo.toml").display()
 			)
 		})?;
+		let server = package_directory(&workspace_root, &app, &package.manifest_path)?;
 		let (binary, _) = binary(&server, &app)?;
 
 		let output_name = match &config.build.client_package {
 			Some(client) => {
-				let dir = package_dir(root, client)?.with_context(|| {
+				let package = metadata.package(client).with_context(|| {
 					format!(
 						"build.client_package `{client}` in {} isn't a package in the workspace",
 						leptoskit_config::CONFIG_FILE
 					)
 				})?;
-				lib_name(&dir.join("Cargo.toml"))?.unwrap_or_else(|| client.replace('-', "_"))
+				let directory = package_directory(&workspace_root, client, &package.manifest_path)?;
+				lib_name(&directory.join("Cargo.toml"))?.unwrap_or_else(|| client.replace('-', "_"))
 			}
 			None => app.replace('-', "_"),
 		};
@@ -181,14 +222,32 @@ impl Project {
 			Platform::Server
 		};
 
-		let toolchain_file = ["rust-toolchain.toml", "rust-toolchain"]
-			.into_iter()
-			.find(|file| root.join(file).is_file())
-			.map(str::to_owned);
-		let rust_version = toolchain_file
+		let toolchain = find_toolchain(&app_root, &workspace_root);
+		let toolchain_file = toolchain
 			.as_deref()
-			.and_then(|file| toolchain_channel(&root.join(file)))
+			.and_then(|file| file.strip_prefix(&workspace_root).ok())
+			.map(path_to_slashes);
+		let rust_version = toolchain
+			.as_deref()
+			.and_then(toolchain_channel)
 			.unwrap_or_else(|| "1".to_owned());
+		let context = context_from_app(&app_dir);
+		let dockerfile = if app_dir.is_empty() {
+			"Dockerfile".to_owned()
+		} else {
+			format!("{app_dir}/Dockerfile")
+		};
+		let ignore_file = if app_dir.is_empty() {
+			".dockerignore".to_owned()
+		} else {
+			"Dockerfile.dockerignore".to_owned()
+		};
+		let ignore_contents = if app_dir.is_empty() {
+			DOCKERIGNORE.to_owned()
+		} else {
+			workspace_dockerignore(&workspace_root, &app_root, &app_dir)
+		};
+		let target_dir = container_target(&workspace_root, &metadata.target_directory);
 		let database = config.db.as_ref().map(|db| {
 			Database {
 				dialect: db.dialect,
@@ -226,6 +285,12 @@ impl Project {
 			port: config.serve.port,
 			output_name,
 			platform,
+			workspace_root,
+			app_root,
+			app_dir,
+			context,
+			dockerfile,
+			target_dir,
 			toolchain_file,
 			rust_version,
 			database,
@@ -233,7 +298,64 @@ impl Project {
 			has_probes,
 			urls,
 			split_roles: false,
+			ignore_file,
+			ignore_contents,
 		})
+	}
+
+	/// The Docker build context.
+	#[must_use]
+	pub fn build_context(&self) -> &Path {
+		&self.workspace_root
+	}
+
+	/// The `Dockerfile` path inside the build context.
+	#[must_use]
+	pub fn dockerfile_path(&self) -> &str {
+		&self.dockerfile
+	}
+
+	/// The ignore file Docker reads beside the `Dockerfile`.
+	#[must_use]
+	pub fn ignore_path(&self) -> PathBuf {
+		self.app_root.join(self.ignore_file.as_str())
+	}
+
+	/// The managed infrastructure's state patterns, relative to the build
+	/// context, to add beside the generated ignore policy.
+	#[must_use]
+	pub fn managed_state_patterns(&self) -> [String; 2] {
+		let root = if self.app_dir.is_empty() {
+			String::new()
+		} else {
+			format!("/{}", self.app_dir)
+		};
+		[format!("{root}/infra"), format!("{root}/.kamal")]
+	}
+
+	/// The command that builds the app's image, run from the build context.
+	#[must_use]
+	pub fn docker_build_command(&self) -> String {
+		let image = self.image();
+
+		if self.app_dir.is_empty() {
+			format!("docker build -t {image} .")
+		} else {
+			format!(
+				"docker build -f {} -t {image} .",
+				shell_quote(&self.dockerfile)
+			)
+		}
+	}
+
+	/// A file beside `leptoskit.toml`, relative to the build context.
+	#[must_use]
+	fn in_context(&self, file: &str) -> String {
+		if self.app_dir.is_empty() {
+			file.to_owned()
+		} else {
+			format!("{}/{file}", self.app_dir)
+		}
 	}
 
 	/// The image name: the app's name in lowercase.
@@ -437,36 +559,224 @@ fn write_owned(
 	Ok(())
 }
 
-/// The directory of the package called `name`: the root package, or a
-/// workspace member.
-fn package_dir(root: &Path, name: &str) -> Result<Option<PathBuf>> {
-	let manifest = root.join("Cargo.toml");
-	let document = read_manifest(&manifest)?
-		.with_context(|| format!("there's no Cargo.toml at {}", root.display()))?;
+/// The app directory relative to the Cargo workspace that owns it.
+fn app_relative_dir(workspace_root: &Path, app_root: &Path) -> Result<PathBuf> {
+	app_root
+		.strip_prefix(workspace_root)
+		.map(Path::to_path_buf)
+		.with_context(|| {
+			format!(
+				"the app at {} is outside its Cargo workspace at {}; the container build context \
+				 can only include files inside the workspace",
+				app_root.display(),
+				workspace_root.display()
+			)
+		})
+}
 
-	if package_name(&document) == Some(name) {
-		return Ok(Some(root.to_path_buf()));
+/// The directory of a Cargo package that the build context can include.
+fn package_directory(workspace_root: &Path, package: &str, manifest: &Path) -> Result<PathBuf> {
+	let directory = manifest
+		.parent()
+		.with_context(|| format!("the package `{package}` has no directory"))?;
+
+	directory.strip_prefix(workspace_root).with_context(|| {
+		format!(
+			"the package `{package}` at {} is outside the Cargo workspace at {}; the container \
+			 build context can only include files inside the workspace",
+			directory.display(),
+			workspace_root.display()
+		)
+	})?;
+	Ok(directory.to_path_buf())
+}
+
+/// Whether `root` or one of its ancestors has a `Cargo.toml`, so an app
+/// directory inside a workspace needs no manifest of its own.
+fn has_manifest_in_ancestors(root: &Path) -> bool {
+	root.ancestors().any(|dir| dir.join("Cargo.toml").is_file())
+}
+
+/// A path with `/` separators, for Docker and Compose files.
+fn path_to_slashes(path: &Path) -> String {
+	path.to_string_lossy().replace('\\', "/")
+}
+
+/// The path from the app root back to the workspace root.
+fn context_from_app(app_dir: &str) -> String {
+	let depth = app_dir
+		.split('/')
+		.filter(|component| !component.is_empty())
+		.count();
+
+	if depth == 0 {
+		".".to_owned()
+	} else {
+		vec![".."; depth].join("/")
 	}
+}
 
-	let members = document
-		.get("workspace")
-		.and_then(|workspace| workspace.get("members"))
-		.and_then(toml::Value::as_array)
-		.into_iter()
-		.flatten()
-		.filter_map(toml::Value::as_str);
+/// The toolchain file Cargo and rustup select from the app root: the
+/// nearest one between the app root and the workspace root.
+fn find_toolchain(app_root: &Path, workspace_root: &Path) -> Option<PathBuf> {
+	let mut current = Some(app_root);
 
-	for member in members {
-		let dir = root.join(member);
-
-		if let Some(member) = read_manifest(&dir.join("Cargo.toml"))?
-			&& package_name(&member) == Some(name)
-		{
-			return Ok(Some(dir));
+	while let Some(dir) = current {
+		for name in ["rust-toolchain.toml", "rust-toolchain"] {
+			let file = dir.join(name);
+			if file.is_file() {
+				return Some(file);
+			}
 		}
+
+		if dir == workspace_root {
+			break;
+		}
+
+		current = dir.parent();
 	}
 
-	Ok(None)
+	None
+}
+
+/// Where Cargo writes binaries in the build container: the workspace's
+/// target directory, mounted at `/src`.
+fn container_target(workspace_root: &Path, target_directory: &Path) -> String {
+	target_directory.strip_prefix(workspace_root).map_or_else(
+		|_| "/src/target".to_owned(),
+		|relative| {
+			let relative = path_to_slashes(relative);
+			if relative.is_empty() {
+				"/src".to_owned()
+			} else {
+				format!("/src/{relative}")
+			}
+		},
+	)
+}
+
+/// The workspace build context's ignore policy, plus the exclusions the
+/// project already keeps in `.dockerignore` files. A Dockerfile-specific
+/// ignore file replaces the context's own, so those exclusions are copied
+/// in rather than silently dropped.
+fn workspace_dockerignore(workspace_root: &Path, app_root: &Path, app_dir: &str) -> String {
+	let mut out = WORKSPACE_DOCKERIGNORE.to_owned();
+
+	if let Ok(text) = std::fs::read_to_string(workspace_root.join(".dockerignore")) {
+		append_ignore(&mut out, "the workspace's", &text, "");
+	}
+
+	if app_root != workspace_root
+		&& let Ok(text) = std::fs::read_to_string(app_root.join(".dockerignore"))
+	{
+		append_ignore(&mut out, "the app's", &text, app_dir);
+	}
+
+	out
+}
+
+/// Adds a project's own ignore lines, rebased into the workspace context.
+fn append_ignore(out: &mut String, owner: &str, text: &str, prefix: &str) {
+	let lines: Vec<String> = text
+		.lines()
+		.filter_map(|line| {
+			let line = line.trim();
+			if line.is_empty() || line.starts_with('#') {
+				return None;
+			}
+			Some(rebase_ignore(line, prefix))
+		})
+		.collect();
+
+	if lines.is_empty() {
+		return;
+	}
+
+	let _ = write!(
+		out,
+		"\n# {owner} .dockerignore, which a Dockerfile-specific ignore file\n# would otherwise \
+		 replace.\n"
+	);
+
+	for line in lines {
+		out.push_str(&line);
+		out.push('\n');
+	}
+}
+
+/// Rebase one ignore pattern under the app directory. Negations keep their
+/// `!`, so an exception still applies after the prefix.
+fn rebase_ignore(pattern: &str, prefix: &str) -> String {
+	if prefix.is_empty() {
+		return pattern.to_owned();
+	}
+
+	let (negation, rest) = match pattern.strip_prefix('!') {
+		Some(rest) => ("!", rest),
+		None => ("", pattern),
+	};
+	let rest = rest.trim_start_matches('/');
+	format!("{negation}{prefix}/{rest}")
+}
+
+/// A shell word, quoted when it needs to be.
+fn shell_quote(word: &str) -> String {
+	if !word.is_empty()
+		&& word
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || b"-_./:@%+".contains(&byte))
+	{
+		return word.to_owned();
+	}
+
+	format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+/// A Compose scalar, quoted so spaces and `#` stay part of the path.
+fn yaml_string(text: &str) -> String {
+	serde_json::to_string(text).unwrap_or_default()
+}
+
+/// A `COPY` instruction, with JSON syntax when a path has whitespace.
+fn docker_copy(source: &str, destination: &str) -> String {
+	if source.bytes().any(is_space) || destination.bytes().any(is_space) {
+		format!(
+			"COPY [{}]",
+			[source, destination]
+				.iter()
+				.map(|path| serde_json::to_string(path).unwrap_or_default())
+				.collect::<Vec<_>>()
+				.join(", ")
+		)
+	} else {
+		format!("COPY {source} {destination}")
+	}
+}
+
+/// A `COPY --from` instruction, with JSON syntax when a path has whitespace.
+fn docker_copy_from(stage: &str, source: &str, destination: &str) -> String {
+	if source.bytes().any(is_space) || destination.bytes().any(is_space) {
+		format!(
+			"COPY --from={stage} [{}]",
+			[source, destination]
+				.iter()
+				.map(|path| serde_json::to_string(path).unwrap_or_default())
+				.collect::<Vec<_>>()
+				.join(", ")
+		)
+	} else {
+		format!("COPY --from={stage} {source} {destination}")
+	}
+}
+
+fn is_space(byte: u8) -> bool {
+	byte.is_ascii_whitespace()
+}
+
+/// A cache mount, unless its path has whitespace: the mount syntax treats
+/// whitespace as syntax, and the build stays correct without the cache.
+fn cache_mount(path: &str) -> Option<String> {
+	(!path.bytes().any(is_space)).then(|| format!("--mount=type=cache,target={path}"))
 }
 
 /// The server's binary target, and its source when it can be found:
@@ -591,8 +901,43 @@ const DOCKERIGNORE: &str = "\
 .env.*
 ";
 
+/// The same policy for a build context that is the whole Cargo workspace:
+/// every nested app's state, databases, caches, and environment files stay
+/// out, and a Dockerfile-specific ignore file applies from the workspace
+/// root.
+const WORKSPACE_DOCKERIGNORE: &str = "\
+# Written by `leptoskit generate deploy`. Keeps the build context small, and
+# local builds, databases, state, and secrets out of the image. Docker reads
+# this beside the Dockerfile and applies it from the workspace root.
+.git
+**/.git
+**/target
+**/node_modules
+**/.leptoskit
+**/dist
+**/.gradle
+**/android/**/build
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.dump
+**/.env
+**/.env.*
+**/.cargo/credentials
+**/.cargo/credentials.toml
+**/.kamal
+**/infra/.terraform
+**/infra/*.tfstate*
+**/infra/*.plan
+**/infra/plan.sha256
+**/infra/operation.lock
+**/infra/releases.json
+**/infra/release.yml
+**/infra/.kamal
+";
+
 /// The multi-stage `Dockerfile`: build with `leptoskit build --release`,
 /// run as an unprivileged user on a read-only filesystem.
+#[allow(clippy::too_many_lines)]
 fn dockerfile(project: &Project) -> String {
 	let Project {
 		app,
@@ -606,15 +951,20 @@ fn dockerfile(project: &Project) -> String {
 	let image = project.image();
 	let web = *platform == Platform::Web;
 	let version = env!("CARGO_PKG_VERSION");
+	let build = if project.app_dir.is_empty() {
+		format!("Build it from the project root:\n#\n#   docker build -t {image} .\n")
+	} else {
+		format!(
+			"Build it from the workspace root:\n#\n#   {}\n",
+			project.docker_build_command()
+		)
+	};
 	let mut out = format!(
 		"# syntax=docker/dockerfile:1
 #
 # The container for {app}, written by `leptoskit generate deploy`. It's yours
 # to edit: running the generator again keeps your changes unless you pass
-# --force. Build it from the project root:
-#
-#   docker build -t {image} .
-#
+# --force. {build}#
 # The first stage runs `leptoskit build --release`, as you would on your
 # machine. The second runs the server as an unprivileged user that writes
 # nothing to the image's filesystem, so it works with a read-only root
@@ -674,19 +1024,39 @@ WORKDIR /src
 	);
 
 	if let Some(file) = &project.toolchain_file {
+		let destination = Path::new(file.as_str()).parent().map_or_else(
+			|| "./".to_owned(),
+			|parent| {
+				if parent.as_os_str().is_empty() {
+					"./".to_owned()
+				} else {
+					format!("{}/", path_to_slashes(parent))
+				}
+			},
+		);
 		let _ = writeln!(
 			out,
-			"# The toolchain file picks the toolchain everything below uses.\nCOPY {file} ./"
+			"# The toolchain file picks the toolchain everything below uses.\n{}",
+			docker_copy(file.as_str(), &destination)
 		);
 	}
 
 	if web {
-		out.push_str("RUN rustup target add wasm32-unknown-unknown\n");
+		if project.app_dir.is_empty() {
+			out.push_str("RUN rustup target add wasm32-unknown-unknown\n");
+		} else {
+			let _ = writeln!(
+				out,
+				"RUN cd {} && rustup target add wasm32-unknown-unknown",
+				shell_quote(&project.app_dir)
+			);
+		}
 	}
 
-	let _ = write!(
-		out,
-		"COPY . .
+	if project.app_dir.is_empty() {
+		let _ = write!(
+			out,
+			"COPY . .
 # The cache mounts keep downloaded crates and compiled dependencies between
 # builds. The server is copied out, since the target directory is a cache.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \\
@@ -694,7 +1064,43 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \\
     --mount=type=cache,target=/src/.leptoskit \\
     leptoskit build --release --platform {platform} \\
  && cp target/release/{binary} /usr/local/bin/{binary}
+"
+		);
+	} else {
+		let app = shell_quote(&project.app_dir);
+		let target = shell_quote(&project.target_dir);
+		let mut mounts = vec!["--mount=type=cache,target=/usr/local/cargo/registry".to_owned()];
 
+		if let Some(mount) = cache_mount(&project.target_dir) {
+			mounts.push(mount);
+		}
+
+		if let Some(mount) = cache_mount(&format!("/src/{}/.leptoskit", project.app_dir)) {
+			mounts.push(mount);
+		}
+
+		out.push_str(
+			"COPY . .
+# The cache mounts keep downloaded crates and compiled dependencies between
+# builds. The server is copied out, since the target directory is a cache.
+RUN ",
+		);
+
+		for mount in mounts {
+			let _ = writeln!(out, "{mount} \\");
+		}
+
+		let _ = write!(
+			out,
+			"    cd {app} && CARGO_TARGET_DIR={target} leptoskit build --release --platform \
+			 {platform} \\
+ && cp {target}/release/{binary} /usr/local/bin/{binary}
+"
+		);
+	}
+
+	out.push_str(
+		"
 FROM debian:bookworm-slim
 # curl answers the health check, and `app` is the unprivileged user the
 # server runs as.
@@ -711,12 +1117,19 @@ RUN apt-get update \\
 		);
 	}
 
+	let build_dir = if project.app_dir.is_empty() {
+		"/src".to_owned()
+	} else {
+		format!("/src/{}", project.app_dir)
+	};
+	let server_copy = docker_copy_from("build", &format!("/usr/local/bin/{binary}"), "/app/server");
+	let dist_copy = docker_copy_from("build", &format!("{build_dir}/{DIST_DIR}"), "/app/dist");
 	let _ = write!(
 		out,
 		"
 WORKDIR /app
-COPY --from=build /usr/local/bin/{binary} /app/server
-COPY --from=build /src/{DIST_DIR} /app/{DIST_DIR}
+{server_copy}
+{dist_copy}
 # What `leptoskit serve` sets from leptoskit.toml, for a container: listen on
 # every interface, and serve the site from /app/{DIST_DIR}.
 ENV LEPTOS_ENV=PROD \\
@@ -766,6 +1179,7 @@ CMD [\"/app/server\"]
 }
 
 /// `compose.yaml`: the app, read-only, with Postgres or a SQLite volume.
+#[allow(clippy::too_many_lines)]
 fn compose(project: &Project) -> String {
 	let image = project.image();
 	let port = project.port;
@@ -777,27 +1191,42 @@ fn compose(project: &Project) -> String {
 	}
 
 	required.extend(project.secrets.iter().cloned());
+	let command = if project.app_dir.is_empty() {
+		"docker compose up --build".to_owned()
+	} else {
+		format!(
+			"docker compose -f {} up --build",
+			shell_quote(&project.in_context("compose.yaml"))
+		)
+	};
+	let ignore = if project.app_dir.is_empty() {
+		".dockerignore"
+	} else {
+		"Dockerfile.dockerignore"
+	};
 	let mut out = format!(
 		"# {app} with Docker Compose, written by `leptoskit generate deploy`. It's
 # yours to edit: running the generator again keeps your changes unless you
 # pass --force.
 #
-#   docker compose up --build
+#   {command}
 #
 ",
 		app = project.app
 	);
 
 	if required.is_empty() {
-		out.push_str(
+		let _ = write!(
+			out,
 			"# Secrets, once the app has some, come from the environment or an `.env`\n# file \
-			 beside this one, which .dockerignore keeps out of the image. They never\n# go in \
-			 this file.\n",
+			 beside this one, which {ignore} keeps out of the image. They never\n# go in this \
+			 file.\n"
 		);
 	} else {
-		out.push_str(
+		let _ = write!(
+			out,
 			"# It reads these secrets from the environment, or from an `.env` file\n# beside this \
-			 one, which .dockerignore keeps out of the image. They never go\n# in this file.\n#\n",
+			 one, which {ignore} keeps out of the image. They never go\n# in this file.\n#\n"
 		);
 
 		for secret in &required {
@@ -805,6 +1234,15 @@ fn compose(project: &Project) -> String {
 		}
 	}
 
+	let build = if project.app_dir.is_empty() {
+		"    build: .\n".to_owned()
+	} else {
+		format!(
+			"    build:\n      context: {}\n      dockerfile: {}\n",
+			yaml_string(&project.context),
+			yaml_string(&project.dockerfile)
+		)
+	};
 	let _ = write!(
 		out,
 		"
@@ -812,8 +1250,7 @@ name: {image}
 
 services:
   app:
-    build: .
-    image: {image}
+{build}    image: {image}
     # Only this machine reaches the server: put a proxy that terminates TLS
     # in front of it.
     ports:
@@ -910,10 +1347,21 @@ volumes:
 /// `fly.toml`: checks on `/readyz`, a kill timeout past the grace period,
 /// and machines that stay up for long-lived connections.
 fn fly(project: &Project) -> String {
+	let config = project.in_context("fly.toml");
+	let create = if project.app_dir.is_empty() {
+		"Create the app from it with `fly launch --copy-config --no-deploy`.".to_owned()
+	} else {
+		format!(
+			"Create it from the workspace root with `fly launch --config {} --copy-config \
+			 --no-deploy`.",
+			shell_quote(&config)
+		)
+	};
+	let dockerfile = toml::Value::String(project.dockerfile.clone()).to_string();
 	let mut out = format!(
 		"# {app} on Fly.io, written by `leptoskit generate deploy`. It's yours to
 # edit: running the generator again keeps your changes unless you pass
-# --force. Create the app from it with `fly launch --copy-config --no-deploy`.
+# --force. {create}
 
 app = \"{fly_app}\"
 
@@ -923,7 +1371,7 @@ kill_signal = \"SIGTERM\"
 kill_timeout = \"{STOP_TIMEOUT_SECONDS}s\"
 
 [build]
-  dockerfile = \"Dockerfile\"
+  dockerfile = {dockerfile}
 
 [http_service]
   internal_port = {port}
@@ -944,7 +1392,7 @@ kill_timeout = \"{STOP_TIMEOUT_SECONDS}s\"
     timeout = \"2s\"
     method = \"GET\"
     path = \"/readyz\"
-",
+"
 		app = project.app,
 		fly_app = project.app.to_ascii_lowercase().replace('_', "-"),
 		port = project.port,
@@ -991,7 +1439,17 @@ fn docker_next(project: &Project) -> Vec<String> {
 
 	let _ = write!(run, " {image}");
 
-	let mut steps = vec![format!("Build the image: `docker build -t {image} .`")];
+	let mut steps = if project.app_dir.is_empty() {
+		vec![format!(
+			"Build the image: `{}`",
+			project.docker_build_command()
+		)]
+	} else {
+		vec![format!(
+			"Build the image from the workspace root: `{}`",
+			project.docker_build_command()
+		)]
+	};
 	let secrets = project.runtime_secrets();
 
 	if !secrets.is_empty() {
@@ -1020,16 +1478,40 @@ fn compose_next(project: &Project) -> Vec<String> {
 		steps.push(format!("Set {secret}, in your shell or in .env."));
 	}
 
-	steps.push("Start it: `docker compose up --build`".to_owned());
+	if project.app_dir.is_empty() {
+		steps.push("Start it: `docker compose up --build`".to_owned());
+	} else {
+		steps.push(format!(
+			"Start it from the workspace root: `docker compose -f {} up --build`",
+			shell_quote(&project.in_context("compose.yaml"))
+		));
+	}
 	steps
 }
 
 fn fly_next(project: &Project) -> Vec<String> {
-	let mut steps =
-		vec!["Create the app from fly.toml: `fly launch --copy-config --no-deploy`".to_owned()];
+	let config = project.in_context("fly.toml");
+	let dockerfile = project.dockerfile.clone();
+	let workspace = !project.app_dir.is_empty();
+	let config_arg = if workspace {
+		format!(" --config {}", shell_quote(&config))
+	} else {
+		String::new()
+	};
+	let mut steps = vec![if workspace {
+		format!(
+			"Create the app from fly.toml: `fly launch --config {} --copy-config --no-deploy` \
+			 (from the workspace root)",
+			shell_quote(&config)
+		)
+	} else {
+		"Create the app from fly.toml: `fly launch --copy-config --no-deploy`".to_owned()
+	}];
 
 	if project.sqlite().is_some() {
-		steps.push("Create the database's volume: `fly volumes create data --size 1`".to_owned());
+		steps.push(format!(
+			"Create the database's volume: `fly volumes create data --size 1{config_arg}`"
+		));
 	}
 
 	if let Some(database) = project.postgres() {
@@ -1053,12 +1535,20 @@ fn fly_next(project: &Project) -> Vec<String> {
 			.map(|secret| format!("{secret}=..."))
 			.collect();
 		steps.push(format!(
-			"Set the secrets: `fly secrets set {}`",
+			"Set the secrets: `fly secrets set {}{config_arg}`",
 			pairs.join(" ")
 		));
 	}
 
-	steps.push("Deploy: `fly deploy`".to_owned());
+	steps.push(if workspace {
+		format!(
+			"Deploy: `fly deploy --config {} --dockerfile {}`",
+			shell_quote(&config),
+			shell_quote(&dockerfile)
+		)
+	} else {
+		"Deploy: `fly deploy`".to_owned()
+	});
 	steps
 }
 
@@ -1506,9 +1996,18 @@ WantedBy=multi-user.target
 fn kubernetes_next(project: &Project) -> Vec<String> {
 	let image = project.image();
 	let mut steps = vec![
-		format!(
-			"Build and push the image: `docker build -t {image} .` then push it to your registry."
-		),
+		if project.app_dir.is_empty() {
+			format!(
+				"Build and push the image: `{}` then push it to your registry.",
+				project.docker_build_command()
+			)
+		} else {
+			format!(
+				"Build and push the image from the workspace root: `{}` then push it to your \
+				 registry.",
+				project.docker_build_command()
+			)
+		},
 		"Set image to the pushed reference in kubernetes.yaml.".to_owned(),
 	];
 
@@ -1530,15 +2029,23 @@ fn kubernetes_next(project: &Project) -> Vec<String> {
 }
 
 fn systemd_next(project: &Project) -> Vec<String> {
-	let mut steps = vec![
-		"Install the binary at /usr/local/bin and the built site at /srv/<app>.".to_owned(),
-		"Put the environment, including secrets, in /etc/<app>/<app>.env.".to_owned(),
-		format!(
-			"Install the unit and start it: `sudo cp {}.service /etc/systemd/system/ && sudo \
-			 systemctl daemon-reload && sudo systemctl enable --now {}`.",
-			project.app, project.app
-		),
-	];
+	let mut steps = Vec::new();
+
+	if !project.app_dir.is_empty() {
+		steps.push(format!(
+			"Build and install from the workspace root: run `leptoskit build --release --platform \
+			 {}` in {}.",
+			project.platform, project.app_dir
+		));
+	}
+
+	steps.push("Install the binary at /usr/local/bin and the built site at /srv/<app>.".to_owned());
+	steps.push("Put the environment, including secrets, in /etc/<app>/<app>.env.".to_owned());
+	steps.push(format!(
+		"Install the unit and start it: `sudo cp {}.service /etc/systemd/system/ && sudo \
+		 systemctl daemon-reload && sudo systemctl enable --now {}`.",
+		project.app, project.app
+	));
 	steps.push("Create the app's system user, or change User/Group in the unit.".to_owned());
 	steps
 }

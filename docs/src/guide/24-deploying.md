@@ -292,7 +292,7 @@ This page covers the generated files, health checks, and graceful shutdown. It d
 
 | Target       | What it writes                   | What you get                                                                                                                                                     |
 | ------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker`     | `Dockerfile`, `.dockerignore`    | An image for any container platform.                                                                                                                             |
+| `docker`     | `Dockerfile`, `.dockerignore`    | An image for any container platform. Inside a Cargo workspace the ignore file is `Dockerfile.dockerignore` and the build context is the workspace root.          |
 | `compose`    | the above, and `compose.yaml`    | The app and its database on one machine with `docker compose up`: a Postgres service with its own volume, or a volume for the SQLite file.                       |
 | `fly`        | the above, and `fly.toml`        | An app on Fly.io whose proxy checks `/readyz`, gives the server time to stop, and keeps machines running. SQLite gets a volume; Postgres is attached.            |
 | `kubernetes` | the above, and `kubernetes.yaml` | A Deployment, Service, and `PodDisruptionBudget` for any cluster, with `/readyz` and `/healthz` probes and a preStop drain. SQLite gets a PersistentVolumeClaim. |
@@ -311,14 +311,22 @@ The generator reads:
 
 It tells you when something is missing, such as a `[[bin]]` it can't choose between, or an `app.name` that isn't a package in the workspace.
 
+### Apps inside a Cargo workspace
+
+An app does not need its own `Cargo.toml`. The generator asks Cargo for the workspace and its packages, so `app.name` and `build.client_package` can name members found through workspace globs, and the app folder can hold only `leptoskit.toml` and its crates. A scaffolded standalone app resolves the same way.
+
+The build context is the workspace root, because the app may build against sibling path dependencies. The generated `Dockerfile` stays beside `leptoskit.toml`; run `docker build -f <app>/Dockerfile .` from the workspace root. `compose.yaml` and `fly.toml` are written beside it too, with the workspace root as their context, and the database, generated site, assets, migrations, and toolchain keep the roots they had on your machine. A toolchain file between the app and the workspace root is the one the image uses.
+
+A Dockerfile-specific ignore file named `Dockerfile.dockerignore` replaces the context's `.dockerignore`. The generator writes that file next to the app's `Dockerfile` with the same exclusions rebased to the workspace root, and copies in any exclusions from the workspace root and app `.dockerignore` files rather than dropping them. It never rewrites either `.dockerignore` file. If a path would leave the workspace, generation stops instead of building from a context that cannot contain the app.
+
 ## The container
 
 The `Dockerfile` has two stages:
 
-1. **Build.** It installs the leptoskit CLI at the version your project uses and runs `leptoskit build --release`, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. A `rust-toolchain.toml` at the root picks the Rust release; otherwise the image uses the latest stable.
+1. **Build.** It installs the leptoskit CLI at the version your project uses and runs `leptoskit build --release` from the app directory, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. The nearest `rust-toolchain.toml` or `rust-toolchain` file from the app root up to the workspace root picks the Rust release; otherwise the image uses the latest stable. Binaries come from the workspace target directory and the site from the app's `dist/`.
 2. **Run.** A small Debian image with the server and `dist/`, nothing else. It sets the `LEPTOS_*` environment (`LEPTOS_SITE_ADDR=0.0.0.0:3000`, `LEPTOS_SITE_ROOT=/app/dist`, `LEPTOS_OUTPUT_NAME`, and `LEPTOS_ENV=PROD`), runs as an unprivileged user, and writes nothing to its own filesystem, so it runs with a read-only root filesystem. A SQLite database lives on a volume at `/data`, the one path it writes. A `HEALTHCHECK` calls `/healthz`.
 
-Secrets never go in the `Dockerfile`, `compose.yaml`, `fly.toml`, `kubernetes.yaml`, or the unit file. The Postgres URL, `AUTH_ENCRYPTION_KEYS`, and mail settings come from the environment when the container starts: `docker run -e`, an `.env` file beside `compose.yaml`, or `fly secrets set`. The `.dockerignore` keeps `.env` files, local databases, and build output out of the image.
+Secrets never go in the `Dockerfile`, `compose.yaml`, `fly.toml`, `kubernetes.yaml`, or the unit file. The Postgres URL, `AUTH_ENCRYPTION_KEYS`, and mail settings come from the environment when the container starts: `docker run -e`, an `.env` file beside `compose.yaml`, or `fly secrets set`. The container ignore file keeps `.env` files, local databases, build caches, and managed infrastructure state out of the image.
 
 To build and run the image on your machine:
 
@@ -326,6 +334,8 @@ To build and run the image on your machine:
 docker build -t my_app .
 docker run --rm --read-only --tmpfs /tmp -p 127.0.0.1:3000:3000 my_app
 ```
+
+Inside a workspace, run the first command from the workspace root with `-f <app>/Dockerfile`, as the generated `Dockerfile` says.
 
 ## Health checks
 
@@ -425,6 +435,8 @@ fly launch --copy-config --no-deploy
 fly secrets set AUTH_ENCRYPTION_KEYS="$(date +%Y-%m):$(openssl rand 32 | basenc --base64url | tr -d =)"
 fly deploy
 ```
+
+For an app inside a Cargo workspace, run these from the workspace root and pass `--config <app>/fly.toml`; the generated `fly.toml` names the `Dockerfile` relative to that root, so Fly builds the workspace context.
 
 ## Kubernetes
 
