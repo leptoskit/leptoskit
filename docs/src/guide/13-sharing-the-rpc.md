@@ -606,6 +606,10 @@ Then, in CI, compare the next revision with it:
 leptoskit rpc check --against rpc.json
 ```
 
-It fails on a removed function, a changed kind, route, or encoding, a changed result schema, a removed argument, a new required argument, or a new required OAuth scope — the changes a client generated from the old spec can't survive. Calls and functions excluded by `rpc.exclude` are compared the same way unless `--include-internal` asks otherwise. Fix the break or give the operation a new name, and keep the old one as a deprecated alias until installed clients have moved on.
+It checks the HTTP and live contracts used by browser, native, and generated clients. It fails on removed functions or channels; changed routes, operation kinds, request/response/error encodings, or live paths; changed argument, result, message, or presence schemas; removed arguments; new required arguments; arguments becoming required; and new OAuth scopes. It follows named schemas, including recursive types, so changing a type behind the same `$ref` is checked too. Channel join field order matters because it determines the room key.
+
+The comparison is conservative: any schema change needs review, even if some clients could accept it. Missing or external references and dynamic reference resolution also need review. Documentation on operations can change, and new operations or optional arguments can be added. The check compares declarations; it cannot prove that handler behavior, authorization rules, or runtime versions remain compatible. Use `rpc generate --strict` separately to check each target language's schema support.
+
+Keep the previous published spec as the baseline. Current `rpc.exclude` settings affect the new contract and cannot hide a removal from the baseline. Internal operations are included only with `--include-internal`. Fix the break or give the operation a new name, and keep the old one as a deprecated alias until installed clients have moved on. Changing the spec's version label alone does not preserve their contract.
 
 `--from` reads the current spec from a file or URL instead of building the server, so the check runs without a toolchain.

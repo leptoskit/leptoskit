@@ -2478,3 +2478,88 @@ fn backend_approvals_gate_release_reuse_rollback_and_recovery() {
 		"requires operator backend-trust.json",
 	);
 }
+
+#[test]
+fn operator_rpc_window_gates_release_reuse_rollback_and_recovery() {
+	let root = project();
+	let (path, _) = verified_descriptor(root.path());
+	let mut descriptor: serde_json::Value =
+		serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+	let specification = include_str!("fixtures/fns_spec.json");
+	let contract_pin = leptoskit_db::checksum(specification);
+	descriptor["format_version"] = serde_json::json!(3);
+	descriptor["rpc_contract"] = serde_json::json!({"state":"exported","sha256":contract_pin,
+		"compatibility":{"checked":{"algorithm":"leptoskit-rpc-structural-v1","specification":specification,
+		"baselines":[{"sha256":contract_pin,"specification":specification}]}}});
+	let text = serde_json::to_string(&descriptor).unwrap();
+	let pin = leptoskit_db::checksum(&text);
+	fs::write(&path, text).unwrap();
+	backend_authorization(root.path(), &path, &pin);
+	let dir = root.path().join("infra/notes-production");
+	let trust_path = dir.join("backend-trust.json");
+	let mut trust: serde_json::Value =
+		serde_json::from_slice(&fs::read(&trust_path).unwrap()).unwrap();
+	trust["format_version"] = serde_json::json!(2);
+	trust["rpc_contracts"] = serde_json::json!([contract_pin]);
+	let trusted = serde_json::to_vec(&trust).unwrap();
+	fs::write(&trust_path, &trusted).unwrap();
+	succeeds(&cli(
+		root.path(),
+		&[
+			"deploy",
+			"--setup",
+			"--version",
+			"v1",
+			"--verified-descriptor",
+			&path,
+			"--descriptor-sha256",
+			&pin,
+		],
+		&[],
+	));
+	let history_path = root
+		.path()
+		.join("remote/state/notes-production/control/releases.json");
+	for flags in [
+		vec![
+			"deploy",
+			"--version",
+			"v2",
+			"--verified-descriptor",
+			&path,
+			"--descriptor-sha256",
+			&pin,
+		],
+		vec![
+			"deploy",
+			"--version",
+			"v3",
+			"--verified-descriptor",
+			&path,
+			"--descriptor-sha256",
+			&pin,
+		],
+		vec!["deploy", "--rollback", "v1"],
+		vec!["deploy", "--recover", "--version", "v1"],
+	] {
+		trust["rpc_contracts"] = serde_json::json!(["f".repeat(64)]);
+		fs::write(&trust_path, serde_json::to_vec(&trust).unwrap()).unwrap();
+		let history = fs::read(&history_path).unwrap();
+		fs::write(dir.join("kamal-calls"), "").unwrap();
+		fails_with(
+			&cli(root.path(), &flags, &[]),
+			"operator-required RPC baseline",
+		);
+		let calls = fs::read_to_string(dir.join("kamal-calls")).unwrap();
+		assert!(!calls.contains("app boot") && !calls.contains("proxy boot"));
+		assert_eq!(fs::read(&history_path).unwrap(), history);
+		fs::write(&trust_path, &trusted).unwrap();
+		succeeds(&cli(root.path(), &flags, &[]));
+	}
+	// A fresh tag can reuse these image bytes, but recorded tags cannot be
+	// overwritten with new evidence. Recovery uses the recorded descriptor.
+	fails_with(
+		&cli(root.path(), &["deploy", "--version", "v1"], &[]),
+		"tag already recorded",
+	);
+}

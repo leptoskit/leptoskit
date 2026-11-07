@@ -40,7 +40,7 @@ use resources::resources;
 #[derive(Debug, clap::Subcommand)]
 pub enum InfraCommand {
 	/// Reproduce and package a backend without rebuilding it in the image.
-	BuildVerified(verified::Args),
+	BuildVerified(Box<verified::Args>),
 	/// Queries read-only JSON evidence from one app instance, not a fleet
 	/// total.
 	Analytics,

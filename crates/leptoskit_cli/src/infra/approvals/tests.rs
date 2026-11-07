@@ -9,6 +9,12 @@ fn fixture() -> (Evidence, Descriptor, Trust) {
 	fixture_for(false)
 }
 fn fixture_for(website: bool) -> (Evidence, Descriptor, Trust) {
+	fixture_contract(website, None)
+}
+fn fixture_contract(
+	website: bool,
+	contract: Option<serde_json::Value>,
+) -> (Evidence, Descriptor, Trust) {
 	let mut value = serde_json::json!({
 		"format_version": 1, "kind": "leptoskit-verified-backend-image",
 		"inventory_sha256": "a".repeat(SHA256_HEX_LENGTH),
@@ -36,6 +42,10 @@ fn fixture_for(website: bool) -> (Evidence, Descriptor, Trust) {
 			"pkg/site_bg.wasm": {"kind":"file","mode":420,"size":1,"sha256":"d".repeat(64)}
 		}}});
 	}
+	if let Some(contract) = contract {
+		value["format_version"] = serde_json::json!(3);
+		value["rpc_contract"] = contract;
+	}
 	let descriptor: Descriptor = serde_json::from_value(value).unwrap();
 	let bytes = serde_json::to_string_pretty(&descriptor).unwrap();
 	let policy = serde_json::json!({
@@ -62,6 +72,7 @@ fn fixture_for(website: bool) -> (Evidence, Descriptor, Trust) {
 			approvers: vec![],
 			threshold: 2,
 			deployment_keys: vec![],
+			rpc_contracts: vec![],
 		},
 		approvers: vec![signing(1).verifying_key(), signing(2).verifying_key()],
 		deployment_keys: vec![signing(3).verifying_key()],
@@ -87,6 +98,88 @@ fn independent_approvals_and_exact_policy_pass() {
 			.check_pin(&hash(format!("{} ", evidence.descriptor).as_bytes()))
 			.is_err()
 	);
+}
+
+fn rpc_fixture(website: bool) -> (Evidence, Descriptor, Trust) {
+	let specification = leptoskit_rpc_codegen::ApiSpec::empty("Published", "1")
+		.to_json()
+		.unwrap();
+	let pin = hash(specification.as_bytes());
+	let contract = serde_json::json!({"state":"exported", "sha256":pin,
+		"compatibility":{"checked":{"algorithm":"leptoskit-rpc-structural-v1", "specification":specification,
+		"baselines":[{"sha256":pin, "specification":specification}]}}});
+	let (evidence, descriptor, mut trust) = fixture_contract(website, Some(contract));
+	trust.configuration.format_version = 2;
+	trust.configuration.rpc_contracts = vec![pin];
+	(evidence, descriptor, trust)
+}
+
+#[test]
+fn signed_backend_and_website_contracts_satisfy_only_the_operator_window() {
+	for website in [false, true] {
+		let (evidence, descriptor, mut trust) = rpc_fixture(website);
+		check(&evidence, &descriptor, &trust).unwrap();
+		trust.configuration.rpc_contracts = vec!["f".repeat(64)];
+		assert!(check(&evidence, &descriptor, &trust).is_err());
+	}
+}
+
+#[test]
+fn legacy_approval_cannot_bypass_a_new_operator_contract_requirement() {
+	let (evidence, descriptor, mut trust) = fixture();
+	trust.configuration.format_version = 2;
+	trust.configuration.rpc_contracts = vec!["f".repeat(64)];
+	assert!(check(&evidence, &descriptor, &trust).is_err());
+}
+
+#[test]
+fn replacing_a_valid_checked_baseline_requires_new_approval() {
+	let (mut evidence, descriptor, mut trust) = rpc_fixture(false);
+	let mut value = serde_json::to_value(descriptor).unwrap();
+	let baseline = &mut value["rpc_contract"]["compatibility"]["checked"]["baselines"][0];
+	let specification = format!("{} ", baseline["specification"].as_str().unwrap());
+	let pin = hash(specification.as_bytes());
+	baseline["specification"] = serde_json::json!(specification);
+	baseline["sha256"] = serde_json::json!(pin);
+	let replacement: Descriptor = serde_json::from_value(value).unwrap();
+	replacement.validate().unwrap();
+	// Even a newly allowed, structurally identical baseline is different
+	// approved evidence. Keep the old signatures to prove this binding.
+	trust.configuration.rpc_contracts = vec![pin];
+	evidence.descriptor = serde_json::to_string_pretty(&replacement).unwrap();
+	let error = check(&evidence, &replacement, &trust).unwrap_err();
+	assert!(
+		error
+			.to_string()
+			.contains("approval descriptor digest differs")
+	);
+}
+
+#[test]
+fn contract_policy_cannot_use_a_legacy_version_empty_window_or_duplicate_pins() {
+	let (_, _, mut trust) = rpc_fixture(false);
+	trust.configuration.format_version = 1;
+	assert!(trust.configuration.validate_rpc_policy().is_err());
+	trust.configuration.format_version = 2;
+	let pin = trust.configuration.rpc_contracts[0].clone();
+	trust.configuration.rpc_contracts.push(pin);
+	assert!(trust.configuration.validate_rpc_policy().is_err());
+	trust.configuration.rpc_contracts.clear();
+	assert!(trust.configuration.validate_rpc_policy().is_err());
+}
+
+#[test]
+fn checked_contract_evidence_cannot_be_labeled_as_a_legacy_descriptor() {
+	let (_, descriptor, _) = rpc_fixture(false);
+	let mut value = serde_json::to_value(descriptor).unwrap();
+	value["format_version"] = serde_json::json!(1);
+	let downgraded: Descriptor = serde_json::from_value(value).unwrap();
+	assert!(downgraded.validate().is_err());
+	let (_, legacy, _) = fixture();
+	let mut value = serde_json::to_value(legacy).unwrap();
+	value["format_version"] = serde_json::json!(3);
+	let promoted: Descriptor = serde_json::from_value(value).unwrap();
+	assert!(promoted.validate().is_err());
 }
 #[test]
 fn duplicates_and_publisher_only_do_not_count() {

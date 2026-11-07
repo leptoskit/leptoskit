@@ -26,15 +26,19 @@
 //! without linking the server binary against the generators.
 //!
 //! ```
+//! # #[cfg(feature = "generators")]
+//! # {
 //! # use leptoskit_rpc_codegen::ApiSpec;
 //! # use leptoskit_rpc_codegen::GenerateOptions;
 //! # use leptoskit_rpc_codegen::TargetLanguage;
 //! let spec = ApiSpec::empty("demo", "0.1.0");
 //! let generated = spec.generate(&GenerateOptions::new(TargetLanguage::OpenApi, "demo-api"));
 //! assert_eq!(generated.files.len(), 2);
+//! # }
 //! ```
 
 pub mod asyncapi;
+mod compatibility;
 pub mod openapi;
 pub mod spec;
 pub mod yaml;
