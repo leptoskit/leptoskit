@@ -332,6 +332,27 @@ mod tests {
 	}
 
 	#[test]
+	fn bounds_come_from_the_geometry_when_the_header_has_none() {
+		let connection = connection();
+		// A GeoPackage header without an envelope, around a WKB point.
+		let mut bytes = b"GP\0\x01".to_vec();
+		bytes.extend_from_slice(&4326_i32.to_le_bytes());
+		bytes.push(1);
+		bytes.extend_from_slice(&1_u32.to_le_bytes());
+		bytes.extend_from_slice(&2.0_f64.to_le_bytes());
+		bytes.extend_from_slice(&3.0_f64.to_le_bytes());
+
+		let bounds: (f64, f64, f64, f64) = connection
+			.query_row(
+				"SELECT ST_MinX(?1), ST_MaxX(?1), ST_MinY(?1), ST_MaxY(?1)",
+				[&bytes],
+				|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+			)
+			.unwrap();
+		assert_eq!(bounds, (2.0, 2.0, 3.0, 3.0));
+	}
+
+	#[test]
 	fn mismatched_and_malformed_shapes_fail() {
 		let connection = connection();
 		let here = gpkg(&point!(x: 0.0, y: 0.0).into(), 4326);
@@ -410,6 +431,40 @@ mod tests {
 				})
 				.unwrap(),
 			0
+		);
+	}
+}
+
+#[cfg(test)]
+mod length_tests {
+	use geo_types::GeometryCollection;
+	use geo_types::Line;
+	use geo_types::MultiLineString;
+
+	use super::*;
+	use crate::geo::LineString;
+	use crate::geo::coord;
+	use crate::geo::point;
+
+	#[test]
+	fn lengths_add_every_line_of_a_multipart_shape() {
+		let line = LineString::from(vec![coord! { x: 0.0, y: 0.0 }, coord! { x: 3.0, y: 4.0 }]);
+		let five = |geometry: &Geometry| (length(geometry, &Euclidean) - 5.0).abs() < 1e-9;
+
+		assert!(five(&Geometry::LineString(line.clone())));
+		assert!(five(&Geometry::Line(Line::new(
+			coord! { x: 0.0, y: 0.0 },
+			coord! { x: 3.0, y: 4.0 },
+		))));
+		assert!(five(&Geometry::MultiLineString(MultiLineString::new(
+			vec![line.clone(),]
+		))));
+		assert!(five(&Geometry::GeometryCollection(
+			GeometryCollection::from(vec![Geometry::LineString(line)])
+		)));
+		assert_eq!(
+			length(&Geometry::Point(point!(x: 0.0, y: 0.0)), &Euclidean),
+			0.0
 		);
 	}
 }

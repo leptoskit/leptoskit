@@ -164,6 +164,10 @@ async fn distinct_reads_each_row_once() {
 		// never repeat a row, since their keys are unique.
 		assert_eq!(StoryTitle::query().count(&db).await.unwrap(), 4);
 		assert_eq!(StoryTitle::query().distinct().count(&db).await.unwrap(), 3);
+		assert_eq!(
+			StoryTitle::query().distinct().all(&db).await.unwrap().len(),
+			3
+		);
 	})
 	.await;
 }

@@ -249,3 +249,26 @@ impl<T: Table> Fused<T> {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn a_hit_without_a_rank_is_worst() {
+		let hit = |text_rank, vector_rank| {
+			HybridHit::<()> {
+				row: (),
+				score: 0.0,
+				text_rank,
+				vector_rank,
+				distance: None,
+			}
+		};
+
+		assert_eq!(best(&hit(Some(3), Some(1))), 1);
+		assert_eq!(best(&hit(None, Some(2))), 2);
+		assert_eq!(best(&hit(Some(4), None)), 4);
+		assert_eq!(best(&hit(None, None)), usize::MAX);
+	}
+}

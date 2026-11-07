@@ -1110,3 +1110,14 @@ async fn reading_through_the_enum_shows_exactly_what_the_model_allows() {
 		assert!(!holds(&postgres, 64, ignoring_the_supertype));
 	}
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn variants_default_to_every_kind() {
+	on_both(async |db| {
+		person(&db.system("a polymorphic test"), "Ada", true).await;
+
+		let variants = leptoskit_db::Variants::<Actor>::default();
+		assert_eq!(variants.count(&db).await.unwrap(), 1);
+	})
+	.await;
+}

@@ -214,3 +214,38 @@ impl DbError {
 
 /// The outcome of a database operation.
 pub type Result<T, E = DbError> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn only_contention_counts_as_contention() {
+		assert!(
+			!DbError::NotFound {
+				table: "notes".into(),
+			}
+			.is_contended()
+		);
+		#[cfg(any(feature = "postgres", feature = "sqlite"))]
+		assert!(!DbError::query(std::io::Error::other("anything else")).is_contended());
+
+		#[cfg(feature = "sqlite")]
+		{
+			let failure = |code| {
+				DbError::query(rusqlite::Error::SqliteFailure(
+					rusqlite::ffi::Error {
+						code,
+						extended_code: 0,
+					},
+					None,
+				))
+			};
+
+			assert!(failure(rusqlite::ErrorCode::DatabaseBusy).is_contended());
+			assert!(failure(rusqlite::ErrorCode::DatabaseLocked).is_contended());
+			assert!(!failure(rusqlite::ErrorCode::ConstraintViolation).is_contended());
+			assert!(!DbError::connection(rusqlite::Error::InvalidQuery).is_contended());
+		}
+	}
+}

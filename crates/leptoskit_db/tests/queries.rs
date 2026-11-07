@@ -10,7 +10,10 @@ use leptoskit_db::DbError;
 use leptoskit_db::Dialect;
 use leptoskit_db::Id;
 use leptoskit_db::Json;
+use leptoskit_db::Read;
+use leptoskit_db::Statement;
 use leptoskit_db::Timestamp;
+use leptoskit_db::Value;
 use leptoskit_db::table;
 use leptoskit_db_schema::RequireHints;
 use leptoskit_db_schema::Schema;
@@ -729,5 +732,72 @@ async fn tls_is_required_when_the_url_asks_for_it() {
 	assert!(
 		matches!(error, DbError::Connection(_)),
 		"the test cluster has no TLS: {error:?}"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saving_a_row_that_is_gone_says_it_is_missing() {
+	on_both(|db| {
+		async move {
+			let mut user = new_user("ada").insert(&db).await.unwrap();
+			leptoskit_db::__private::write::destroy(&db, &user)
+				.await
+				.unwrap();
+
+			user.karma = 3;
+			let error = user.save(&db).await.unwrap_err();
+			assert!(error.is_not_found(), "{error:?}");
+		}
+	})
+	.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_reads_what_it_knows_and_names_types_it_doesnt() {
+	let Some(cluster) = support::postgres::PostgresCluster::start() else {
+		return;
+	};
+	let db = Db::connect(&cluster.database()).await.unwrap();
+
+	// An integer bound where the statement asks for a float is converted.
+	for (sql, found) in [
+		("SELECT $1::float4", f64::from(2.0_f32)),
+		("SELECT $1::float8", 2.0_f64),
+	] {
+		let rows = db
+			.fetch(Statement {
+				sql: sql.into(),
+				args: vec![Value::Int(2)],
+			})
+			.await
+			.unwrap();
+		assert_eq!(rows, [[Value::Float(found)]], "{sql}");
+	}
+
+	let at = leptoskit_db::now();
+	let rows = db
+		.fetch(Statement {
+			sql: "SELECT $1::timestamp".into(),
+			args: vec![Value::Timestamp(at)],
+		})
+		.await
+		.unwrap();
+	match rows[0][0] {
+		Value::LocalTimestamp(read) => assert_eq!(read, at.naive_utc()),
+		ref other => panic!("expected a local timestamp, found {other:?}"),
+	}
+
+	// A type the database layer doesn't read yet is named in the error.
+	let error = db
+		.fetch(Statement {
+			sql: "SELECT '(1,2)'::point".into(),
+			args: Vec::new(),
+		})
+		.await
+		.unwrap_err();
+	let debug = format!("{error:?}");
+	assert!(
+		debug.contains("Postgres type") && debug.contains("point"),
+		"{debug}"
 	);
 }

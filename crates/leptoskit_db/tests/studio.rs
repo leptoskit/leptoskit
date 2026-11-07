@@ -803,3 +803,61 @@ async fn schema_migrations_and_live_changes() {
 	})
 	.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_name_what_they_cannot_find() {
+	on_both(async |fixture| {
+		let reply = fixture.get("/table/nope", &[]).await;
+		assert!(
+			reply.body.contains("there's no table `nope`"),
+			"{}",
+			reply.body
+		);
+
+		// An edit form needs the row's key.
+		let reply = fixture
+			.get(
+				"/table/notes/edit",
+				&[("as", "writer"), ("who", "any"), ("edit", "1")],
+			)
+			.await;
+		assert!(
+			reply.body.contains("the row's key is missing or malformed"),
+			"{}",
+			reply.body
+		);
+
+		// A studio told nothing about migrations says so.
+		let running = leptoskit_db::studio::start(
+			fixture.db.clone(),
+			Options {
+				address: "127.0.0.1:0".parse().unwrap(),
+				migrations: None,
+			},
+		)
+		.await
+		.unwrap();
+		let url = running.url.clone();
+		let (address, token) = url
+			.strip_prefix("http://")
+			.and_then(|rest| rest.split_once("/?token="))
+			.unwrap();
+		let reply = send(
+			address.parse().unwrap(),
+			&format!(
+				"GET /migrations?token={token} HTTP/1.1\r\nHost: {address}\r\nConnection: \
+				 close\r\n\r\n"
+			),
+		)
+		.await;
+		assert!(
+			reply
+				.body
+				.contains("the studio wasn't told where the migrations are"),
+			"{}",
+			reply.body
+		);
+		running.stop();
+	})
+	.await;
+}

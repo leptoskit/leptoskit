@@ -207,3 +207,23 @@ async fn the_database_computes_generated_columns_on_every_write() {
 	})
 	.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saving_a_deleted_generated_row_says_it_is_missing() {
+	on_both(|db| {
+		async move {
+			let mut member = new_member("ada", "Ada", Some("Lovelace"))
+				.insert(&db)
+				.await
+				.unwrap();
+			leptoskit_db::__private::write::destroy(&db, &member)
+				.await
+				.unwrap();
+
+			member.first = "Grace".into();
+			let error = member.save(&db).await.unwrap_err();
+			assert!(error.is_not_found(), "{error:?}");
+		}
+	})
+	.await;
+}

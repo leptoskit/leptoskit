@@ -390,3 +390,80 @@ fn meters_convert_to_and_from_numbers() {
 fn trafalgar() -> Geography<Point> {
 	Geography(point!(x: -0.1281, y: 51.5080))
 }
+
+#[test]
+fn every_geometry_kind_is_named() {
+	use geo_types::GeometryCollection;
+	use geo_types::Line;
+	use geo_types::MultiLineString;
+	use geo_types::MultiPoint;
+	use geo_types::MultiPolygon;
+	use geo_types::Rect;
+	use geo_types::Triangle;
+
+	let origin = coord! { x: 0.0, y: 0.0 };
+	let corner = coord! { x: 1.0, y: 1.0 };
+	let line = LineString::from(vec![origin, corner]);
+	let polygon = Polygon::new(line.clone(), Vec::new());
+	let kinds = [
+		(Geometry::Point(Point::from(origin)), "Point"),
+		(Geometry::Line(Line::new(origin, corner)), "Line"),
+		(Geometry::LineString(line.clone()), "LineString"),
+		(Geometry::Polygon(polygon.clone()), "Polygon"),
+		(
+			Geometry::MultiPoint(MultiPoint::from(vec![Point::from(origin)])),
+			"MultiPoint",
+		),
+		(
+			Geometry::MultiLineString(MultiLineString::new(vec![line.clone()])),
+			"MultiLineString",
+		),
+		(
+			Geometry::MultiPolygon(MultiPolygon::from(vec![polygon])),
+			"MultiPolygon",
+		),
+		(
+			Geometry::GeometryCollection(GeometryCollection::from(vec![Geometry::Point(
+				Point::from(origin),
+			)])),
+			"GeometryCollection",
+		),
+		(Geometry::Rect(Rect::new(origin, corner)), "Rect"),
+		(
+			Geometry::Triangle(Triangle::new(origin, corner, coord! { x: 2.0, y: 0.0 })),
+			"Triangle",
+		),
+	];
+
+	for (geometry, name) in kinds {
+		assert_eq!(kind_name(&geometry), name);
+	}
+}
+
+#[test]
+fn a_polygon_with_a_hole_is_no_rectangle() {
+	let outer = LineString::from(vec![
+		coord! { x: 0.0, y: 0.0 },
+		coord! { x: 4.0, y: 0.0 },
+		coord! { x: 4.0, y: 4.0 },
+		coord! { x: 0.0, y: 4.0 },
+		coord! { x: 0.0, y: 0.0 },
+	]);
+	let hole = LineString::from(vec![
+		coord! { x: 1.0, y: 1.0 },
+		coord! { x: 2.0, y: 1.0 },
+		coord! { x: 2.0, y: 2.0 },
+		coord! { x: 1.0, y: 1.0 },
+	]);
+
+	assert!(rect_of(&Polygon::new(outer.clone(), Vec::new())).is_some());
+	assert!(rect_of(&Polygon::new(outer, vec![hole])).is_none());
+}
+
+#[test]
+fn a_wkb_value_is_the_value_it_wraps() {
+	let here = Geography(point!(x: 1.0, y: 2.0));
+	let wrapped = Wkb(here.clone());
+	assert_eq!(wrapped.shape(), here.shape());
+	assert_eq!(Wkb::<Geography<Point>>::from_shape(*here.shape()), wrapped);
+}

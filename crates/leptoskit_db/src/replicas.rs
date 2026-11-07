@@ -443,3 +443,37 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+mod handle_tests {
+	use super::*;
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn a_handle_without_replicas_stays_on_the_primary() {
+		let primary = crate::Db::connect("sqlite::memory:").await.unwrap();
+		assert_eq!(primary.replica_count(), 0);
+		assert_eq!(primary.replica_stats().len(), 0);
+		assert_eq!(primary.wal_position().await.unwrap(), None);
+		assert_eq!(primary.replica_position().await, None);
+		assert!(
+			primary
+				.on_replica_at(1, Duration::from_millis(1))
+				.await
+				.is_none()
+		);
+
+		let replicating = primary.on_replica();
+		assert!(!replicating.is_on_replica(), "there is no replica to read");
+		let copied = primary.reading_like(&replicating);
+		assert!(!copied.is_on_replica());
+		assert!(!primary.on_primary().is_on_replica());
+
+		// SQLite has no replicas to add.
+		assert!(
+			primary
+				.with_replica("postgres://reader@127.0.0.1/app")
+				.is_err()
+		);
+	}
+}

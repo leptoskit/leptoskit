@@ -53,6 +53,17 @@ pub struct Notice {
 	pub deleted_at: Option<Timestamp>,
 }
 
+/// A tag on a club, keyed by both its columns, gone with the club.
+#[table(name = "club_tags")]
+pub struct ClubTag {
+	#[db(key, on_soft_delete = cascade)]
+	pub club_id: Id<Club>,
+	#[db(key)]
+	pub name: String,
+	#[db(deleted_at)]
+	pub deleted_at: Option<Timestamp>,
+}
+
 /// A member's badge: it stays when the member goes, since its link doesn't
 /// cascade.
 #[table(name = "badges")]
@@ -342,6 +353,38 @@ async fn bulk_cascades_join_the_callers_transaction() {
 			.await;
 		assert!(outcome.is_err());
 		assert_eq!(alive::<Member>(&db).await, 2);
+	})
+	.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_composite_keyed_link_is_soft_deleted_without_cascading_further() {
+	on_both(async |db| {
+		let mut tagged = NewClub {
+			name: "Tagged".into(),
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+
+		for name in ["north", "south"] {
+			NewClubTag {
+				club_id: tagged.id,
+				name: name.into(),
+			}
+			.insert(&db)
+			.await
+			.unwrap();
+		}
+
+		tagged.delete(&db).await.unwrap();
+
+		// The tags went with the club, and their composite key stops the
+		// cascade there.
+		assert_eq!(alive::<ClubTag>(&db).await, 0);
+		assert_eq!(ClubTag::query().with_deleted().count(&db).await.unwrap(), 2);
+		let gone = ClubTag::query().with_deleted().all(&db).await.unwrap();
+		assert!(gone.iter().all(|tag| tag.deleted_at == tagged.deleted_at));
 	})
 	.await;
 }
