@@ -14,10 +14,13 @@
 //! host build is expected to provide; device probes, widget suites, and code
 //! push journeys remain separate evidence and are never inferred from it.
 
+use std::collections::BTreeSet;
+
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::CodePushError;
+use crate::installed::activation;
 use crate::manifest::hash_bytes;
 
 /// The descriptor format this build writes and reads.
@@ -197,84 +200,14 @@ fn invalid(message: impl Into<String>) -> CodePushError {
 impl HostCapabilityDescriptor {
 	/// Checks the version, identifiers, uniqueness, and option digests.
 	pub fn validate(&self) -> Result<(), CodePushError> {
-		if self.format_version != CAPABILITY_CONTRACT_VERSION {
-			return Err(CodePushError::UnsupportedContractVersion(
-				self.format_version,
-			));
-		}
+		validate_descriptor_version(self.format_version)?;
+		validate_descriptor_identity(&self.platform, &self.flavor)?;
+		validate_protocol(self.protocol)?;
 
-		if !capability_identifier(&self.platform) || !capability_identifier(&self.flavor) {
-			return Err(invalid("platform and flavor must be stable identifiers"));
-		}
+		validate_capability_entries(&self.capabilities)?;
+		let plugins = validate_plugin_entries(&self.plugins)?;
 
-		if self.protocol.guest_abi == 0 || self.protocol.bridge == 0 {
-			return Err(invalid("protocol versions must be positive"));
-		}
-
-		let mut capabilities = std::collections::BTreeSet::new();
-
-		for capability in &self.capabilities {
-			if !capability_identifier(&capability.id) {
-				return Err(invalid(format!(
-					"`{}` is not a stable capability identifier",
-					capability.id
-				)));
-			}
-
-			if !capabilities.insert(capability.id.as_str()) {
-				return Err(invalid(format!(
-					"capability `{}` is declared more than once",
-					capability.id
-				)));
-			}
-		}
-
-		let mut plugins = std::collections::BTreeSet::new();
-
-		for plugin in &self.plugins {
-			if !capability_identifier(&plugin.name) {
-				return Err(invalid(format!(
-					"plugin `{}` is not a stable identifier",
-					plugin.name
-				)));
-			}
-
-			if !plugins.insert(plugin.name.as_str()) {
-				return Err(invalid(format!(
-					"plugin `{}` is declared more than once",
-					plugin.name
-				)));
-			}
-
-			if plugin.option_keys.windows(2).any(|pair| pair[0] >= pair[1]) {
-				return Err(invalid(format!(
-					"plugin `{}` option keys must be sorted and unique",
-					plugin.name
-				)));
-			}
-
-			if let Some(digest) = &plugin.options_sha256
-				&& !is_sha256(digest)
-			{
-				return Err(invalid(format!(
-					"plugin `{}` options digest must be lowercase hex SHA-256",
-					plugin.name
-				)));
-			}
-		}
-
-		for capability in &self.capabilities {
-			if let Some(name) = capability.id.strip_prefix("plugin.")
-				&& plugins.contains(name)
-			{
-				return Err(invalid(format!(
-					"capability `{}` conflicts with the plugin entry of the same name",
-					capability.id
-				)));
-			}
-		}
-
-		Ok(())
+		reject_plugin_capability_conflicts(&self.capabilities, &plugins)
 	}
 
 	/// The capability or plugin state for `id`, with its detail.
@@ -295,19 +228,21 @@ impl HostCapabilityDescriptor {
 	/// plugins. A grant permits access; the entry separately records whether
 	/// the generated host has an implementation.
 	pub(crate) fn validate_grants(&self, grants: &[String]) -> Result<(), CodePushError> {
-		let mut names = std::collections::BTreeSet::new();
+		let mut names = BTreeSet::new();
+
 		for name in grants {
 			if !capability_identifier(name) || !names.insert(name.as_str()) {
 				return Err(invalid(format!(
 					"host plugin grant `{name}` must be a unique stable identifier"
 				)));
 			}
-			if !self.plugins.iter().any(|plugin| &plugin.name == name) {
+			if !self.plugins.iter().any(|plugin| plugin.name == *name) {
 				return Err(invalid(format!(
 					"host plugin grant `{name}` has no resolved plugin entry"
 				)));
 			}
 		}
+
 		for plugin in &self.plugins {
 			if !names.contains(plugin.name.as_str()) {
 				return Err(invalid(format!(
@@ -316,6 +251,7 @@ impl HostCapabilityDescriptor {
 				)));
 			}
 		}
+
 		for capability in &self.capabilities {
 			if capability.id.starts_with("plugin.") && capability.state.usable() {
 				return Err(invalid(format!(
@@ -354,6 +290,137 @@ impl HostCapabilityDescriptor {
 	}
 }
 
+/// Native requirements in the bundle's `runtime.json`, or the host descriptor
+/// in the store build's `codepush.json`.
+///
+/// A legacy descriptor has no `format_version`: it carried only `abi`,
+/// `shell`, and `plugins`, so its compatibility is unknown rather than
+/// verified. Version 2 additionally carries signed guest requirements in a
+/// bundle, or the locally authoritative host descriptor in the store build.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeContract {
+	/// Native guest ABI revision.
+	pub abi: u32,
+	/// Shell compatibility identity, changed when native capabilities change.
+	pub shell: String,
+	/// Plugin grants retained for the legacy compatibility check. A grant is
+	/// permission to call a plugin, not evidence of a host implementation.
+	/// Versioned requirements separately declare mandatory availability.
+	pub plugins: Vec<String>,
+	/// `None` for a legacy descriptor; otherwise [`RUNTIME_CONTRACT_VERSION`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub format_version: Option<u32>,
+	/// The signed guest's required and optional capabilities.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub requirements: Option<RuntimeRequirements>,
+	/// The store build's locally authoritative host contract.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub host: Option<HostCapabilityDescriptor>,
+}
+
+impl RuntimeContract {
+	/// Checks a store build's descriptor. A host configuration never carries
+	/// guest requirements, and a versioned one always carries its descriptor.
+	pub fn validate_host(&self) -> Result<(), CodePushError> {
+		match self.format_version {
+			None => {
+				if self.requirements.is_some() || self.host.is_some() {
+					return Err(CodePushError::InvalidCapabilityContract(
+						"an unversioned host runtime cannot carry contract fields".into(),
+					));
+				}
+			}
+			Some(RUNTIME_CONTRACT_VERSION) => {
+				if self.requirements.is_some() {
+					return Err(CodePushError::InvalidCapabilityContract(
+						"a host runtime cannot carry guest requirements".into(),
+					));
+				}
+
+				let host = self.host.as_ref().ok_or_else(|| {
+					CodePushError::InvalidCapabilityContract(
+						"a versioned host runtime needs its host capability descriptor".into(),
+					)
+				})?;
+				host.validate()?;
+				host.validate_grants(&self.plugins)?;
+
+				if host.protocol.guest_abi != self.abi {
+					return Err(CodePushError::InvalidCapabilityContract(format!(
+						"host descriptor speaks guest ABI {}, but the runtime names {}",
+						host.protocol.guest_abi, self.abi
+					)));
+				}
+			}
+			Some(version) => return Err(CodePushError::UnsupportedContractVersion(version)),
+		}
+
+		Ok(())
+	}
+
+	/// Checks a signed guest's descriptor against the store build's host
+	/// configuration. Downloaded code never supplies the host descriptor.
+	pub fn verify_guest(&self, host: &Self) -> Result<ContractCompatibility, CodePushError> {
+		host.validate_host()?;
+		if self.abi != host.abi
+			|| self.shell != host.shell
+			|| self
+				.plugins
+				.iter()
+				.any(|plugin| !host.plugins.contains(plugin))
+		{
+			return Err(activation(
+				"bundle requires an incompatible native ABI, shell, or plugin",
+			));
+		}
+
+		match self.format_version {
+			None => {
+				if self.requirements.is_some() || self.host.is_some() {
+					return Err(CodePushError::InvalidCapabilityContract(
+						"an unversioned guest runtime cannot carry contract fields".into(),
+					));
+				}
+
+				Ok(ContractCompatibility::Legacy)
+			}
+			Some(RUNTIME_CONTRACT_VERSION) => {
+				if self.host.is_some() {
+					return Err(CodePushError::InvalidCapabilityContract(
+						"a downloaded guest cannot declare host capabilities".into(),
+					));
+				}
+
+				let requirements = self.requirements.as_ref().ok_or_else(|| {
+					CodePushError::InvalidCapabilityContract(
+						"a versioned guest runtime needs its capability requirements".into(),
+					)
+				})?;
+				let descriptor = host.host.as_ref().ok_or_else(|| {
+					CodePushError::InvalidCapabilityContract(
+						"the installed host has no capability descriptor; ship a store build that \
+						 writes one"
+							.into(),
+					)
+				})?;
+				requirements.verify_against(descriptor)?;
+				let complete = self.plugins.iter().all(|name| {
+					descriptor
+						.state_of(&plugin_capability(name))
+						.is_some_and(|(state, _)| state.usable())
+				});
+				Ok(if complete {
+					ContractCompatibility::Verified
+				} else {
+					ContractCompatibility::Incomplete
+				})
+			}
+			Some(version) => Err(CodePushError::UnsupportedContractVersion(version)),
+		}
+	}
+}
+
 impl RuntimeRequirements {
 	/// Checks the version and that required and optional entries are stable,
 	/// unique, and disjoint.
@@ -369,7 +436,7 @@ impl RuntimeRequirements {
 		}
 
 		for (name, entries) in [("required", &self.required), ("optional", &self.optional)] {
-			let mut seen = std::collections::BTreeSet::new();
+			let mut seen = BTreeSet::new();
 
 			for id in entries {
 				if !capability_identifier(id) {
@@ -427,8 +494,115 @@ impl RuntimeRequirements {
 	}
 }
 
+/// A SHA-256 digest is written as 64 lowercase hexadecimal characters.
+const SHA256_HEX_LENGTH: usize = 64;
+
+fn validate_descriptor_version(version: u32) -> Result<(), CodePushError> {
+	if version == CAPABILITY_CONTRACT_VERSION {
+		Ok(())
+	} else {
+		Err(CodePushError::UnsupportedContractVersion(version))
+	}
+}
+
+fn validate_descriptor_identity(platform: &str, flavor: &str) -> Result<(), CodePushError> {
+	if capability_identifier(platform) && capability_identifier(flavor) {
+		Ok(())
+	} else {
+		Err(invalid("platform and flavor must be stable identifiers"))
+	}
+}
+
+fn validate_protocol(protocol: ProtocolVersions) -> Result<(), CodePushError> {
+	if protocol.guest_abi == 0 || protocol.bridge == 0 {
+		Err(invalid("protocol versions must be positive"))
+	} else {
+		Ok(())
+	}
+}
+
+fn validate_capability_entries(entries: &[CapabilityEntry]) -> Result<(), CodePushError> {
+	let mut identifiers = BTreeSet::new();
+
+	for capability in entries {
+		if !capability_identifier(&capability.id) {
+			return Err(invalid(format!(
+				"`{}` is not a stable capability identifier",
+				capability.id
+			)));
+		}
+
+		if !identifiers.insert(capability.id.as_str()) {
+			return Err(invalid(format!(
+				"capability `{}` is declared more than once",
+				capability.id
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn validate_plugin_entries(entries: &[PluginCapability]) -> Result<BTreeSet<&str>, CodePushError> {
+	let mut names = BTreeSet::new();
+
+	for plugin in entries {
+		if !capability_identifier(&plugin.name) {
+			return Err(invalid(format!(
+				"plugin `{}` is not a stable identifier",
+				plugin.name
+			)));
+		}
+
+		if !names.insert(plugin.name.as_str()) {
+			return Err(invalid(format!(
+				"plugin `{}` is declared more than once",
+				plugin.name
+			)));
+		}
+
+		if plugin.option_keys.windows(2).any(|pair| pair[0] >= pair[1]) {
+			return Err(invalid(format!(
+				"plugin `{}` option keys must be sorted and unique",
+				plugin.name
+			)));
+		}
+
+		if plugin
+			.options_sha256
+			.as_deref()
+			.is_some_and(|digest| !is_sha256(digest))
+		{
+			return Err(invalid(format!(
+				"plugin `{}` options digest must be lowercase hex SHA-256",
+				plugin.name
+			)));
+		}
+	}
+
+	Ok(names)
+}
+
+fn reject_plugin_capability_conflicts(
+	capabilities: &[CapabilityEntry],
+	plugins: &BTreeSet<&str>,
+) -> Result<(), CodePushError> {
+	for capability in capabilities {
+		if let Some(name) = capability.id.strip_prefix("plugin.")
+			&& plugins.contains(name)
+		{
+			return Err(invalid(format!(
+				"capability `{}` conflicts with the plugin entry of the same name",
+				capability.id
+			)));
+		}
+	}
+
+	Ok(())
+}
+
 fn is_sha256(value: &str) -> bool {
-	value.len() == 64
+	value.len() == SHA256_HEX_LENGTH
 		&& value
 			.bytes()
 			.all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -438,38 +612,43 @@ fn is_sha256(value: &str) -> bool {
 /// change a digest.
 fn canonical_json(value: &serde_json::Value, out: &mut Vec<u8>) {
 	match value {
-		serde_json::Value::Object(map) => {
-			out.push(b'{');
-			let mut entries: Vec<_> = map.iter().collect();
-			entries.sort_by(|left, right| left.0.cmp(right.0));
-
-			for (index, (key, value)) in entries.into_iter().enumerate() {
-				if index > 0 {
-					out.push(b',');
-				}
-
-				out.extend(serde_json::to_vec(key).expect("a JSON key serializes"));
-				out.push(b':');
-				canonical_json(value, out);
-			}
-
-			out.push(b'}');
-		}
-		serde_json::Value::Array(values) => {
-			out.push(b'[');
-
-			for (index, value) in values.iter().enumerate() {
-				if index > 0 {
-					out.push(b',');
-				}
-
-				canonical_json(value, out);
-			}
-
-			out.push(b']');
-		}
+		serde_json::Value::Object(map) => canonical_object(map, out),
+		serde_json::Value::Array(values) => canonical_array(values, out),
 		other => out.extend(serde_json::to_vec(other).expect("a JSON value serializes")),
 	}
+}
+
+fn canonical_object(map: &serde_json::Map<String, serde_json::Value>, out: &mut Vec<u8>) {
+	out.push(b'{');
+
+	let mut entries: Vec<_> = map.iter().collect();
+	entries.sort_by(|left, right| left.0.cmp(right.0));
+
+	for (index, (key, value)) in entries.into_iter().enumerate() {
+		if index > 0 {
+			out.push(b',');
+		}
+
+		out.extend(serde_json::to_vec(key).expect("a JSON key serializes"));
+		out.push(b':');
+		canonical_json(value, out);
+	}
+
+	out.push(b'}');
+}
+
+fn canonical_array(values: &[serde_json::Value], out: &mut Vec<u8>) {
+	out.push(b'[');
+
+	for (index, value) in values.iter().enumerate() {
+		if index > 0 {
+			out.push(b',');
+		}
+
+		canonical_json(value, out);
+	}
+
+	out.push(b']');
 }
 
 /// The canonical SHA-256 of a non-secret plugin option table, already encoded
@@ -530,9 +709,11 @@ mod tests {
 		let mut unordered = serde_json::Map::new();
 		unordered.insert("z".into(), serde_json::json!(1));
 		unordered.insert("a".into(), serde_json::json!(2));
+
 		let mut ordered = serde_json::Map::new();
 		ordered.insert("a".into(), serde_json::json!(2));
 		ordered.insert("z".into(), serde_json::json!(1));
+
 		let mut unordered_bytes = Vec::new();
 		let mut ordered_bytes = Vec::new();
 		canonical_json(&serde_json::Value::Object(unordered), &mut unordered_bytes);

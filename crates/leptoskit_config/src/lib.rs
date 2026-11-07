@@ -1009,68 +1009,84 @@ impl NativeConfig {
 	/// Required and optional capability/plugin declarations must be unique,
 	/// not both required and optional, and refer only to granted plugins.
 	fn validate_requirements(&self) -> Result<(), ConfigError> {
-		for (kind, names) in [
-			("required-plugins", &self.required_plugins),
-			("optional-plugins", &self.optional_plugins),
-			("required-capabilities", &self.required_capabilities),
-			("optional-capabilities", &self.optional_capabilities),
-		] {
-			let mut seen = BTreeSet::new();
+		unique_requirements("required-plugins", &self.required_plugins)?;
+		unique_requirements("optional-plugins", &self.optional_plugins)?;
+		unique_requirements("required-capabilities", &self.required_capabilities)?;
+		unique_requirements("optional-capabilities", &self.optional_capabilities)?;
 
-			for name in names {
-				if !seen.insert(name.as_str()) {
-					return Err(ConfigError::InvalidNativeRequirement(format!(
-						"native.{kind} names `{name}` more than once"
-					)));
-				}
+		granted_requirements("required-plugins", &self.required_plugins, &self.plugins)?;
+		granted_requirements("optional-plugins", &self.optional_plugins, &self.plugins)?;
 
-				if name.trim().is_empty() {
-					return Err(ConfigError::InvalidNativeRequirement(format!(
-						"native.{kind} contains an empty entry"
-					)));
-				}
-			}
-		}
-
-		for (kind, names) in [
-			("required-plugins", &self.required_plugins),
-			("optional-plugins", &self.optional_plugins),
-		] {
-			for name in names {
-				if !self.plugins.contains(name) {
-					return Err(ConfigError::InvalidNativeRequirement(format!(
-						"native.{kind} names `{name}`, which is not granted in native.plugins"
-					)));
-				}
-			}
-		}
-
-		for (left, right) in [
-			(&self.required_plugins, &self.optional_plugins),
-			(&self.required_capabilities, &self.optional_capabilities),
-		] {
-			if let Some(name) = left.iter().find(|name| right.contains(name)) {
-				return Err(ConfigError::InvalidNativeRequirement(format!(
-					"`{name}` is both required and optional; list it in one place"
-				)));
-			}
-		}
+		disjoint_requirements(&self.required_plugins, &self.optional_plugins)?;
+		disjoint_requirements(&self.required_capabilities, &self.optional_capabilities)?;
 
 		for name in self
 			.required_capabilities
 			.iter()
 			.chain(&self.optional_capabilities)
 		{
-			if !capability_identifier(name) {
-				return Err(ConfigError::InvalidNativeRequirement(format!(
-					"`{name}` is not a stable capability identifier: use lowercase ASCII letters, \
-					 digits, `-`, `_`, and `.`, starting with a letter or digit"
-				)));
-			}
+			stable_capability_identifier(name)?;
 		}
 
 		Ok(())
 	}
+}
+
+fn unique_requirements(kind: &str, names: &[String]) -> Result<(), ConfigError> {
+	let mut seen = BTreeSet::new();
+
+	for name in names {
+		if !seen.insert(name.as_str()) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}` more than once"
+			)));
+		}
+
+		if name.trim().is_empty() {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} contains an empty entry"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn granted_requirements(
+	kind: &str,
+	names: &[String],
+	granted: &[String],
+) -> Result<(), ConfigError> {
+	for name in names {
+		if !granted.contains(name) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}`, which is not granted in native.plugins"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn disjoint_requirements(left: &[String], right: &[String]) -> Result<(), ConfigError> {
+	if let Some(name) = left.iter().find(|name| right.contains(name)) {
+		return Err(ConfigError::InvalidNativeRequirement(format!(
+			"`{name}` is both required and optional; list it in one place"
+		)));
+	}
+
+	Ok(())
+}
+
+fn stable_capability_identifier(name: &str) -> Result<(), ConfigError> {
+	if capability_identifier(name) {
+		return Ok(());
+	}
+
+	Err(ConfigError::InvalidNativeRequirement(format!(
+		"`{name}` is not a stable capability identifier: use lowercase ASCII letters, digits, \
+		 `-`, `_`, and `.`, starting with a letter or digit"
+	)))
 }
 
 /// Stable capability identifiers are dot-separated words. Plugin names may

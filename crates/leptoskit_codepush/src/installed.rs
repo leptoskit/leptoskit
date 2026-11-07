@@ -29,10 +29,6 @@ use crate::Transport;
 use crate::TrustedKeys;
 use crate::UpdatePlan;
 use crate::capability::ContractCompatibility;
-use crate::capability::HostCapabilityDescriptor;
-use crate::capability::RUNTIME_CONTRACT_VERSION;
-use crate::capability::RuntimeRequirements;
-use crate::capability::plugin_capability;
 use crate::durable::is_temporary;
 use crate::durable::sync_directory;
 use crate::durable::write_atomically;
@@ -50,136 +46,7 @@ pub const MAX_BUNDLE_BYTES: u64 = crate::manifest::MAX_CONTAINER_BYTES;
 /// policy. It lives outside the bundle's files, which are never consulted.
 const APPROVALS_FILE: &str = "approvals.json";
 
-/// Native requirements in the bundle's `runtime.json`, or the host descriptor
-/// in the store build's `codepush.json`.
-///
-/// A legacy descriptor has no `format_version`: it carried only `abi`,
-/// `shell`, and `plugins`, so its compatibility is unknown rather than
-/// verified. Version 2 additionally carries signed guest requirements in a
-/// bundle, or the locally authoritative host descriptor in the store build.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeContract {
-	/// Native guest ABI revision.
-	pub abi: u32,
-	/// Shell compatibility identity, changed when native capabilities change.
-	pub shell: String,
-	/// Plugin grants retained for the legacy compatibility check. A grant is
-	/// permission to call a plugin, not evidence of a host implementation.
-	/// Versioned requirements separately declare mandatory availability.
-	pub plugins: Vec<String>,
-	/// `None` for a legacy descriptor; otherwise [`RUNTIME_CONTRACT_VERSION`].
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub format_version: Option<u32>,
-	/// The signed guest's required and optional capabilities.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub requirements: Option<RuntimeRequirements>,
-	/// The store build's locally authoritative host contract.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub host: Option<HostCapabilityDescriptor>,
-}
-
-impl RuntimeContract {
-	/// Checks a store build's descriptor. A host configuration never carries
-	/// guest requirements, and a versioned one always carries its descriptor.
-	pub fn validate_host(&self) -> Result<(), CodePushError> {
-		match self.format_version {
-			None => {
-				if self.requirements.is_some() || self.host.is_some() {
-					return Err(CodePushError::InvalidCapabilityContract(
-						"an unversioned host runtime cannot carry contract fields".into(),
-					));
-				}
-			}
-			Some(RUNTIME_CONTRACT_VERSION) => {
-				if self.requirements.is_some() {
-					return Err(CodePushError::InvalidCapabilityContract(
-						"a host runtime cannot carry guest requirements".into(),
-					));
-				}
-
-				let host = self.host.as_ref().ok_or_else(|| {
-					CodePushError::InvalidCapabilityContract(
-						"a versioned host runtime needs its host capability descriptor".into(),
-					)
-				})?;
-				host.validate()?;
-				host.validate_grants(&self.plugins)?;
-
-				if host.protocol.guest_abi != self.abi {
-					return Err(CodePushError::InvalidCapabilityContract(format!(
-						"host descriptor speaks guest ABI {}, but the runtime names {}",
-						host.protocol.guest_abi, self.abi
-					)));
-				}
-			}
-			Some(version) => return Err(CodePushError::UnsupportedContractVersion(version)),
-		}
-
-		Ok(())
-	}
-
-	/// Checks a signed guest's descriptor against the store build's host
-	/// configuration. Downloaded code never supplies the host descriptor.
-	pub fn verify_guest(&self, host: &Self) -> Result<ContractCompatibility, CodePushError> {
-		host.validate_host()?;
-		if self.abi != host.abi
-			|| self.shell != host.shell
-			|| self
-				.plugins
-				.iter()
-				.any(|plugin| !host.plugins.contains(plugin))
-		{
-			return Err(activation(
-				"bundle requires an incompatible native ABI, shell, or plugin",
-			));
-		}
-
-		match self.format_version {
-			None => {
-				if self.requirements.is_some() || self.host.is_some() {
-					return Err(CodePushError::InvalidCapabilityContract(
-						"an unversioned guest runtime cannot carry contract fields".into(),
-					));
-				}
-
-				Ok(ContractCompatibility::Legacy)
-			}
-			Some(RUNTIME_CONTRACT_VERSION) => {
-				if self.host.is_some() {
-					return Err(CodePushError::InvalidCapabilityContract(
-						"a downloaded guest cannot declare host capabilities".into(),
-					));
-				}
-
-				let requirements = self.requirements.as_ref().ok_or_else(|| {
-					CodePushError::InvalidCapabilityContract(
-						"a versioned guest runtime needs its capability requirements".into(),
-					)
-				})?;
-				let descriptor = host.host.as_ref().ok_or_else(|| {
-					CodePushError::InvalidCapabilityContract(
-						"the installed host has no capability descriptor; ship a store build that \
-						 writes one"
-							.into(),
-					)
-				})?;
-				requirements.verify_against(descriptor)?;
-				let complete = self.plugins.iter().all(|name| {
-					descriptor
-						.state_of(&plugin_capability(name))
-						.is_some_and(|(state, _)| state.usable())
-				});
-				Ok(if complete {
-					ContractCompatibility::Verified
-				} else {
-					ContractCompatibility::Incomplete
-				})
-			}
-			Some(version) => Err(CodePushError::UnsupportedContractVersion(version)),
-		}
-	}
-}
+pub use crate::capability::RuntimeContract;
 
 /// Store-shell configuration. Downloaded code cannot replace these trust pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,53 +248,19 @@ impl InstalledBundles {
 		let baseline_hash = baseline.manifest.bundle_hash();
 		let directory_lock = ownership::acquire(directory)?;
 		fs::create_dir_all(directory.join("releases"))?;
-		let initial = || {
-			State {
-				format: 1,
-				embedded: baseline_hash.clone(),
-				confirmed: None,
-				candidate: None,
-				generation: 0,
-				rejected: Vec::new(),
-				launch: None,
-				floor: None,
-			}
-		};
-		let mut recovery = None;
 
-		let state = match fs::read(directory.join("state.json")) {
-			Ok(bytes) => {
-				match serde_json::from_slice::<State>(&bytes) {
-					Ok(state) if state.format == 1 => state,
-					parsed => {
-						recovery =
-							Some(format!("discarded invalid installed selector: {parsed:?}"));
-						initial()
-					}
-				}
-			}
-
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => initial(),
-			Err(error) => return Err(error.into()),
-		};
+		let (state, state_recovery) = read_state(directory)?;
+		let state = state.unwrap_or_else(|| initial_state(&baseline_hash));
+		let mut recovery = state_recovery;
 
 		// A floor that can't be read is unknown, not absent: opening fails
 		// rather than accept a release below it. A damaged one falls back to
 		// the copy in the selector and the confirmed release.
-		let stored_floor = match fs::read(directory.join(FLOOR_FILE)) {
-			Ok(bytes) => {
-				match serde_json::from_slice::<Floor>(&bytes) {
-					Ok(floor) if floor.format == 1 => Some(floor),
-					parsed => {
-						recovery = Some(format!("discarded invalid version floor: {parsed:?}"));
-						None
-					}
-				}
-			}
+		let (stored_floor, floor_recovery) = read_floor(directory)?;
 
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-			Err(error) => return Err(error.into()),
-		};
+		if floor_recovery.is_some() {
+			recovery = floor_recovery;
+		}
 		// Floors recorded for another store build no longer apply.
 		let recorded: Vec<Floor> = stored_floor
 			.iter()
@@ -1031,6 +864,57 @@ fn provenance_policy(
 	Ok(Some(policy))
 }
 
+fn initial_state(embedded: &str) -> State {
+	State {
+		format: 1,
+		embedded: embedded.to_owned(),
+		confirmed: None,
+		candidate: None,
+		generation: 0,
+		rejected: Vec::new(),
+		launch: None,
+		floor: None,
+	}
+}
+
+fn read_state(directory: &Path) -> Result<(Option<State>, Option<String>), CodePushError> {
+	match fs::read(directory.join("state.json")) {
+		Ok(bytes) => {
+			Ok(match serde_json::from_slice::<State>(&bytes) {
+				Ok(state) if state.format == 1 => (Some(state), None),
+				parsed => {
+					(
+						None,
+						Some(format!("discarded invalid installed selector: {parsed:?}")),
+					)
+				}
+			})
+		}
+
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn read_floor(directory: &Path) -> Result<(Option<Floor>, Option<String>), CodePushError> {
+	match fs::read(directory.join(FLOOR_FILE)) {
+		Ok(bytes) => {
+			Ok(match serde_json::from_slice::<Floor>(&bytes) {
+				Ok(floor) if floor.format == 1 => (Some(floor), None),
+				parsed => {
+					(
+						None,
+						Some(format!("discarded invalid version floor: {parsed:?}")),
+					)
+				}
+			})
+		}
+
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+		Err(error) => Err(error.into()),
+	}
+}
+
 fn release_order(manifest: &BundleManifest) -> (&Version, u64) {
 	(&manifest.version, manifest.build)
 }
@@ -1048,7 +932,7 @@ fn report(
 	}
 }
 
-fn activation(message: impl Into<String>) -> CodePushError {
+pub(crate) fn activation(message: impl Into<String>) -> CodePushError {
 	CodePushError::Activation(message.into())
 }
 
