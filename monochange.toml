@@ -124,6 +124,7 @@ packages = [
 	"leptoskit_plugin_screen_orientation",
 	"leptoskit_plugin_light_sensor",
 	"leptoskit_plugin_pedometer",
+	"leptoskit_plugin_health",
 	"leptoskit_plugin_accelerometer",
 	"leptoskit_plugin_device_motion",
 	"leptoskit_plugin_age_range",
@@ -465,6 +466,9 @@ path = "crates/leptoskit_plugin_light_sensor"
 
 [package.leptoskit_plugin_pedometer]
 path = "crates/leptoskit_plugin_pedometer"
+
+[package.leptoskit_plugin_health]
+path = "crates/leptoskit_plugin_health"
 
 [package.leptoskit_plugin_accelerometer]
 path = "crates/leptoskit_plugin_accelerometer"
