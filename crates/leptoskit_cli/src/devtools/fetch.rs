@@ -574,4 +574,314 @@ mod tests {
 			"https://example.test/releases/download/v1.2.3/leptoskit-devtools-1.2.3.tar.gz"
 		);
 	}
+
+	/// A server that answers every request with one fixed status and body.
+	fn status_server(status: &str, body: &[u8]) -> String {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let base = format!("http://{}", listener.local_addr().unwrap());
+		let status = status.to_owned();
+		let body = body.to_vec();
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else {
+					continue;
+				};
+				let mut buffer = [0_u8; 4096];
+				let _ = stream.read(&mut buffer);
+				let head = format!(
+					"HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+					body.len()
+				);
+				let _ = stream.write_all(head.as_bytes());
+				let _ = stream.write_all(&body);
+			}
+		});
+		base
+	}
+
+	/// A server that promises more than it sends, then hangs up.
+	fn truncated_server() -> String {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let base = format!("http://{}", listener.local_addr().unwrap());
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else {
+					continue;
+				};
+				let mut buffer = [0_u8; 4096];
+				let _ = stream.read(&mut buffer);
+				let _ = stream.write_all(
+					b"HTTP/1.1 200 OK\r\ncontent-length: 4096\r\nconnection: close\r\n\r\nshort",
+				);
+			}
+		});
+		base
+	}
+
+	#[test]
+	fn a_connection_failure_names_the_command_that_retries() {
+		// Bind and release a port so the address is one nothing listens on.
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let base = format!("http://{}", listener.local_addr().unwrap());
+		drop(listener);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &"0".repeat(64))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("could not reach"), "{error}");
+		assert!(error.contains("leptoskit devtools fetch"), "{error}");
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn an_unexpected_status_is_reported_as_answered() {
+		let base = status_server("500 Internal Server Error", b"broken");
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &"0".repeat(64))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("answered 500"), "{error}");
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn a_truncated_download_is_an_error_not_a_partial_build() {
+		let base = truncated_server();
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &"0".repeat(64))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("could not download"), "{error}");
+		assert!(!dir.exists());
+	}
+
+	fn symlink_archive(path: &str, target: &str) -> Vec<u8> {
+		let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+		let mut header = tar::Header::new_gnu();
+		header.set_entry_type(tar::EntryType::Symlink);
+		header.set_size(0);
+		header.set_mode(0o777);
+		header.set_cksum();
+		builder.append_link(&mut header, path, target).unwrap();
+		builder.into_inner().unwrap().finish().unwrap()
+	}
+
+	/// A tar.gz holding one regular file whose recorded name is written raw,
+	/// because the archive builder refuses traversal names.
+	fn raw_name_archive(name: &str) -> Vec<u8> {
+		let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+		let mut header = tar::Header::new_gnu();
+		header.set_size(4);
+		header.set_mode(0o644);
+		header.set_entry_type(tar::EntryType::Regular);
+		header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+		header.set_cksum();
+		builder.append(&header, &b"evil"[..]).unwrap();
+		builder.into_inner().unwrap().finish().unwrap()
+	}
+
+	/// A tar.gz with a directory entry, an empty-name entry and a plain file.
+	fn directory_archive() -> Vec<u8> {
+		let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+		builder.append_dir("pkg", ".").unwrap();
+		let mut header = tar::Header::new_gnu();
+		header.set_size(0);
+		header.set_mode(0o755);
+		header.set_entry_type(tar::EntryType::Directory);
+		header.as_mut_bytes()[..1].copy_from_slice(b".");
+		header.set_cksum();
+		builder.append(&header, &b""[..]).unwrap();
+		builder
+			.append_data(
+				&mut {
+					let mut file = tar::Header::new_gnu();
+					file.set_size(7);
+					file.set_mode(0o644);
+					file.set_entry_type(tar::EntryType::Regular);
+					file
+				},
+				"index.html",
+				&b"<html/>"[..],
+			)
+			.unwrap();
+		builder.into_inner().unwrap().finish().unwrap()
+	}
+
+	#[test]
+	fn a_symlink_entry_is_refused() {
+		let bytes = symlink_archive("pkg/link", "/etc/passwd");
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &sha(&bytes))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("is not a plain file"), "{error}");
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn an_entry_that_climbs_out_of_the_archive_is_refused() {
+		let bytes = raw_name_archive("../evil");
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &sha(&bytes))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("leaves its folder"), "{error}");
+		assert!(!cache.path().join("evil").exists());
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn directories_and_empty_entries_are_unpacked_without_error() {
+		let bytes = directory_archive();
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		release(&base, "0.4.0", &sha(&bytes)).install(&dir).unwrap();
+
+		assert!(dir.join("pkg").is_dir());
+		assert_eq!(
+			fs::read_to_string(dir.join("index.html")).unwrap(),
+			"<html/>"
+		);
+	}
+
+	#[test]
+	fn a_file_that_cannot_be_written_is_reported_with_its_path() {
+		// The directory entry creates `index.html`, so the file entry below
+		// cannot be created over it.
+		let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+		builder.append_dir("index.html", ".").unwrap();
+		let mut header = tar::Header::new_gnu();
+		header.set_size(4);
+		header.set_mode(0o644);
+		header.set_entry_type(tar::EntryType::Regular);
+		header.set_cksum();
+		builder
+			.append_data(&mut header, "index.html", &b"nope"[..])
+			.unwrap();
+		let bytes = builder.into_inner().unwrap().finish().unwrap();
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &sha(&bytes))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("could not write"), "{error}");
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn an_entry_below_a_plain_file_is_refused() {
+		// `pkg` is written as a file first, so its child entry has no
+		// directory to create.
+		let bytes = archive(&[("pkg", b"file"), ("pkg/a.js", b"export {}")]);
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let dir = cache.path().join("0.4.0");
+		let error = release(&base, "0.4.0", &sha(&bytes))
+			.install(&dir)
+			.unwrap_err()
+			.to_string();
+
+		assert_ne!(error, "");
+		assert!(!dir.exists());
+	}
+
+	#[test]
+	fn an_interface_directory_whose_parent_is_a_file_is_refused() {
+		let bytes = interface("0.4.0");
+		let (base, _) = server(vec![(
+			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),
+			bytes.clone(),
+		)]);
+		let cache = tempfile::tempdir().unwrap();
+		let parent = cache.path().join("not-a-directory");
+		fs::write(&parent, "file").unwrap();
+		let error = release(&base, "0.4.0", &sha(&bytes))
+			.install(&parent.join("0.4.0"))
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("could not create"), "{error}");
+		assert_eq!(fs::read_to_string(parent).unwrap(), "file");
+	}
+
+	#[test]
+	fn a_checkout_build_explains_that_it_has_no_interface_to_download() {
+		if expected_hash().is_some() {
+			// A packaged build knows its archive; the download needs a network.
+			return;
+		}
+
+		let error = run(false).unwrap_err().to_string();
+		assert!(error.contains("built from source"), "{error}");
+		assert!(error.contains(ui::UI_ENV), "{error}");
+	}
+
+	#[test]
+	fn first_use_does_nothing_when_a_local_build_or_no_release_exists() {
+		let local = tempfile::tempdir().unwrap();
+		let cache = tempfile::tempdir().unwrap();
+		let sources = ui::Sources {
+			local: Some(local.path().to_path_buf()),
+			cache: Some(cache.path().to_path_buf()),
+		};
+		on_first_use(&sources);
+
+		let sources = ui::Sources {
+			local: None,
+			cache: None,
+		};
+		on_first_use(&sources);
+	}
+
+	#[test]
+	fn first_use_leaves_an_installed_interface_alone() {
+		let cache = tempfile::tempdir().unwrap();
+		fs::write(cache.path().join("index.html"), "<html/>").unwrap();
+		let sources = ui::Sources {
+			local: None,
+			cache: Some(cache.path().to_path_buf()),
+		};
+		on_first_use(&sources);
+
+		assert_eq!(
+			fs::read_to_string(cache.path().join("index.html")).unwrap(),
+			"<html/>"
+		);
+	}
 }
