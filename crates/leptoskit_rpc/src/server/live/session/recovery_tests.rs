@@ -260,6 +260,25 @@ async fn a_resume_failure_survives_coalescing_without_a_subscription() {
 }
 
 #[tokio::test]
+async fn authentication_before_resume_does_not_claim_a_recovered_snapshot() {
+	let (mut session, mut out, _input, _incoming) = session().await;
+	assert!(session.authenticate("first token".to_owned()).await);
+	assert!(session.pending.is_none());
+	assert!(!session.full_next);
+	let Outbound::Frame { text, .. } = out.try_recv().unwrap() else {
+		panic!("authentication is acknowledged");
+	};
+	assert!(matches!(
+		serde_json::from_str::<ServerFrame>(&text).unwrap(),
+		ServerFrame::AuthStatus {
+			refused: false,
+			expiring: false
+		}
+	));
+	assert!(out.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn a_new_identity_discards_the_previous_identitys_unsent_snapshot() {
 	let (mut session, mut out, _input, incoming) = session().await;
 	session.live = session.live.clone().identify(ReplacementCaller);

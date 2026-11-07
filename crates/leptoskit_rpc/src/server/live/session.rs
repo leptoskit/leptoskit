@@ -997,7 +997,7 @@ impl Session {
 		}
 
 		self.pending = None;
-		self.full_next = true;
+		self.full_next = !self.subscriptions.is_empty();
 		self.extra_errors.clear();
 		// Detach every old group before awaiting any new identity's reads.
 		// Batches already queued belong to the old identity as well.
