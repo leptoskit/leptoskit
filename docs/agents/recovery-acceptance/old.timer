@@ -1,0 +1,8 @@
+[Unit]
+Description=Database backup schedule for notes-production
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=300
+[Install]\
+		 nWantedBy=timers.target

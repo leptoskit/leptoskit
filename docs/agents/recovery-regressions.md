@@ -27,4 +27,19 @@ SHA-256 artifact digests:
 | Fixed service | `87d0ac443435ce181f5c5e9926a7928295ef96a6cd280ddfc433137b9c094733` |
 | Fixed timer   | `f8213c1a9f0329020e3fdb6ecd1f8758581ed98c525bf8a7b2d5749ee444be06` |
 
-The implementation checkout retains commands, environment, CLI binary digest, artifacts, negative controls, and logs under `.git/recovery-evidence/`: `targeted.sh`, `targeted.log`, `generate-fixed.py`, `fixed-cli-result.json`, `run-systemd.sh`, `systemd-acceptance.sh`, `systemd.log`, and `vm-cleanup.log`. These local files are not required to build the repository. The original parent probes remain separately preserved there; they are not database runtime proof.
+## Revalidation after evidence loss
+
+The earlier local logs were externally deleted and are absent evidence. On 7 November 2026, the four patches were rebased onto main `7e8a7c7b`; range-diff reported all four unchanged and all four signatures verified. The revalidated implementation is `6a034f2b`.
+
+Fresh focused results: 63 CLI unit tests, 49 command tests, and 15 SQLite/Postgres migration tests passed, each with zero ignored tests. Postgres and Restic were required. The real encrypted restore test passed. Fresh systemd 259 acceptance rejected the exact old CLI artifacts, accepted freshly generated fixed artifacts, enabled the fixture timer and confirmed real-manager linkage with the timer inactive. Its artifact hashes match the table above.
+
+Reproduction scripts and non-secret unit fixtures are committed in [recovery-acceptance](recovery-acceptance/). Run `focused.sh` inside devenv with an exclusive target and the pinned nightly toolchain. `generate.py` invokes the actual CLI using transports extracted from the committed command tests. `systemd.sh` runs only inside a disposable Linux VM as root. The VM used two CPUs and 3 GiB; it does not exercise scheduled backup execution or production Docker recovery.
+
+New logs live outside generic caches at `/Users/mini02/Developer/recovery-revalidation-20261107/logs`, with an ownership note and checksum index in the parent directory. This note does not enforce global protection. Mini03 SSH backup was unavailable: its existing proxy reported no Tailscale IPv6 address for the host. Small acceptance records and fixtures are therefore retained in signed source commits as the fallback. No lost log has been reconstructed or counted as fresh evidence.
+
+Fresh focused log SHA-256 values:
+
+- `cli-units.log`: `5b04db083d92f92d41afec77cab42c661a7896162c5d1ad82d98c127eb3794b1`
+- `infra.log`: `f9086e450fe4c6ba4ded18c2cc37c6cc36b428d8964c3b4d0d13e614bf03b7e2`
+- `migrations.log`: `442f4d0d59da511d74b3cb57293a7ad32955fc4fee6f23e415b23b5d76baa10a`
+- `systemd-2.log`: `fbd40f3f9c66d96ea7aadc478fba689cfed3a996a68ba984c3bc5328a5f32fd7`
