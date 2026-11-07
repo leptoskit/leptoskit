@@ -328,59 +328,76 @@ impl Session {
 
 		heartbeat.tick().await;
 		loop {
-			let blocked = (self.pending.is_some() || self.full_next) && self.out.capacity() == 0;
-			let stall_deadline = blocked.then(|| self.pending_progress + self.live.stall());
 			if !self.check_due_deadline().await {
 				return false;
 			}
-			let deadline = self.next_identity_deadline();
-			let sender = self.out.clone();
-			tokio::select! {
-				// Randomized selection keeps client input and completion fair under continuous writes.
-				() = capacity_deadline(stall_deadline) => return false,
-				() = identity_deadline(deadline) => {
-					if !self.check_deadline().await { return false; }
-				}
-				() = self.out.closed() => return false,
-				_ = drained.recv() => return true,
-				permit = sender.reserve_owned(), if self.pending.is_some() || self.full_next => {
-					let Ok(permit) = permit else { return false };
-					if !self.send_pending(permit) { return false; }
-				}
-				Some(batch) = self.batches.recv() => {
-					if !self.apply(batch).await { return false; }
-				}
-				incoming = frames.recv() => {
-					let Some(incoming) = incoming else { return false };
-					if !self.handle(incoming).await {
-						return false;
-					}
-				}
-				Some(finished) = self.finished.recv() => {
-					if !self.answer(finished).await {
-						return false;
-					}
-				}
-				Some(text) = self.stream_frames.recv() => {
-					if !self.deliver(Outbound::Frame { text, version: None }).await {
-						return false;
-					}
-				}
-				Ok(()) = self.applied.changed(), if self.awaiting.is_some() => {}
-				_ = heartbeat.tick() => {
-					// An idle connection still learns how far the log has
-					// gone, so it resumes from somewhere recent.
-					if !self.settle(true).await { return false; }
-					if !self.deliver(Outbound::Heartbeat).await {
-						return false;
-					}
-				}
+			if let Some(draining) = self.step(frames, drained, &mut heartbeat).await {
+				return draining;
 			}
 
 			if !self.settle(false).await {
 				return false;
 			}
 		}
+	}
+
+	async fn step(
+		&mut self,
+		frames: &mut mpsc::Receiver<Incoming>,
+		drained: &mut broadcast::Receiver<()>,
+		heartbeat: &mut tokio::time::Interval,
+	) -> Option<bool> {
+		let stall_deadline = self.pending_deadline();
+		let deadline = self.next_identity_deadline();
+		let sender = self.out.clone();
+		tokio::select! {
+			// Randomized selection keeps client input and completion fair under continuous writes.
+			() = capacity_deadline(stall_deadline) => return Some(false),
+			() = identity_deadline(deadline) => {
+				if !self.check_deadline().await { return Some(false); }
+			}
+			() = self.out.closed() => return Some(false),
+			_ = drained.recv() => return Some(true),
+			permit = sender.reserve_owned(), if self.pending.is_some() || self.full_next => {
+				let Ok(permit) = permit else { return Some(false) };
+				if !self.send_pending(permit) { return Some(false); }
+			}
+			Some(batch) = self.batches.recv() => {
+				if !self.apply(batch).await { return Some(false); }
+			}
+			incoming = frames.recv() => {
+				let Some(incoming) = incoming else { return Some(false) };
+				if !self.handle(incoming).await {
+					return Some(false);
+				}
+			}
+			Some(finished) = self.finished.recv() => {
+				if !self.answer(finished).await {
+					return Some(false);
+				}
+			}
+			Some(text) = self.stream_frames.recv() => {
+				if !self.deliver(Outbound::Frame { text, version: None }).await {
+					return Some(false);
+				}
+			}
+			Ok(()) = self.applied.changed(), if self.awaiting.is_some() => {}
+			_ = heartbeat.tick() => {
+				// An idle connection still learns how far the log has
+				// gone, so it resumes from somewhere recent.
+				if !self.heartbeat().await { return Some(false); }
+			}
+		}
+		None
+	}
+
+	fn pending_deadline(&self) -> Option<tokio::time::Instant> {
+		let blocked = (self.pending.is_some() || self.full_next) && self.out.capacity() == 0;
+		blocked.then(|| self.pending_progress + self.live.stall())
+	}
+
+	async fn heartbeat(&mut self) -> bool {
+		self.settle(true).await && self.deliver(Outbound::Heartbeat).await
 	}
 
 	/// Sends what the hub has queued, and an empty transition when a
