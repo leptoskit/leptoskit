@@ -379,6 +379,26 @@ fn links_between_pages_relative_to_each_page() {
 }
 
 #[test]
+fn uses_an_absolute_social_image_as_is() {
+	let root = tempfile::tempdir().unwrap();
+	fs::write(root.path().join("SUMMARY.md"), "[Home](readme.md)\n").unwrap();
+	fs::write(root.path().join("readme.md"), "# Home\n").unwrap();
+
+	let out = tempfile::tempdir().unwrap();
+	Site::new(root.path())
+		.url("https://example.github.io/project")
+		.social_image("https://cdn.example.com/social.png")
+		.build(out.path())
+		.unwrap();
+
+	let home = read(out.path().join("index.html"));
+	assert!(
+		home.contains("<meta content=\"https://cdn.example.com/social.png\" property=\"og:image\">"),
+		"{home}"
+	);
+}
+
+#[test]
 fn the_logo_leads_to_the_books_first_page_or_the_sites_home() {
 	let out = tempfile::tempdir().unwrap();
 	site(fixture()).build(out.path()).unwrap();
