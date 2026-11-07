@@ -1,0 +1,23 @@
+---
+source: crates/leptoskit_docs/src/builder.rs
+expression: convert_file(PREFERENCES)
+---
+use leptoskit::components::helpers::Card;
+use leptoskit::components::helpers::ListTile;
+use leptoskit::prelude::*;
+
+#[component]
+pub fn Preferences(checked: bool, update: impl Fn(bool) + Send + Sync + 'static) -> Element {
+	Card()
+		.class("gap-4")
+		.child(Text("Preferences").class("text-xl font-semibold"))
+		.child(ListTile(
+			None,
+			Text("Notifications"),
+			Some(
+				Switch(checked)
+					.aria_label("Notifications")
+					.on_toggle(update),
+			),
+		))
+}

@@ -30,11 +30,14 @@ fn builds_every_chapter_of_the_book() {
 
 	for chapter in chapters {
 		let source = chapter.path.as_deref().unwrap();
+
 		let page = match source.strip_suffix(".md").unwrap() {
 			"readme" => "index".to_owned(),
+
 			stem if stem.ends_with("/readme") => stem.replace("/readme", "/index"),
 			stem => stem.to_owned(),
 		};
+
 		let html = read(out.path().join(format!("{page}.html")));
 		assert!(html.starts_with("<!DOCTYPE html>"), "{page}");
 		assert!(
@@ -202,6 +205,7 @@ fn skribble_art_is_repeatable_and_every_theme_resource_is_packaged() {
 	let out = tempfile::tempdir().unwrap();
 	site(book()).build(out.path()).unwrap();
 	let css = fs::read_to_string(out.path().join("theme/skribble.css")).unwrap();
+
 	for url in css.split("url(\"").skip(1) {
 		let relative = url.split('"').next().unwrap();
 		assert!(
@@ -209,7 +213,119 @@ fn skribble_art_is_repeatable_and_every_theme_resource_is_packaged() {
 			"missing theme resource {relative}"
 		);
 	}
+
 	let mask = fs::read_to_string(out.path().join("_leptoskit/generated/card-1.svg")).unwrap();
+
 	assert!(mask.contains("non-scaling-stroke"));
 	assert!(mask.contains("<path"));
+}
+
+/// The code in each `<pre data-lk-variant="…">` of a page, as a reader
+/// copies it.
+fn variants(html: &str, variant: &str) -> Vec<String> {
+	let open = format!("<pre data-lk-variant=\"{variant}\">");
+	html.match_indices(&open)
+		.map(|(at, _)| {
+			let rest = &html[at + open.len()..];
+			let end = rest.find("</pre>").expect("a closed <pre>");
+			text_of(&rest[..end])
+		})
+		.collect()
+}
+
+/// HTML without its tags, with the entities the renderer writes decoded.
+fn text_of(html: &str) -> String {
+	let mut text = String::new();
+	let mut in_tag = false;
+
+	for character in html.chars() {
+		match character {
+			'<' => in_tag = true,
+			'>' if in_tag => in_tag = false,
+
+			_ if !in_tag => text.push(character),
+			_ => {}
+		}
+	}
+
+	text.replace("&lt;", "<")
+		.replace("&gt;", ">")
+		.replace("&quot;", "\"")
+		.replace("&#39;", "'")
+		.replace("&#x27;", "'")
+		.replace("&amp;", "&")
+}
+
+/// Whether `code` is Rust: a file, statements, or an expression.
+fn is_rust(code: &str) -> bool {
+	use syn::parse::Parser;
+
+	syn::parse_file(code).is_ok()
+		|| syn::Block::parse_within.parse_str(code).is_ok()
+		|| syn::parse_str::<syn::Expr>(code).is_ok()
+}
+
+/// Whether `code` is a list of separate `view! { … }` samples, one per line,
+/// which Rust reads as statements only because a braced macro needs no
+/// semicolon; as builder calls they are separate expressions.
+fn is_list_of_views(code: &str) -> bool {
+	use syn::parse::Parser;
+
+	syn::Block::parse_within
+		.parse_str(code)
+		.is_ok_and(|statements| {
+			statements.len() > 1
+				&& statements.iter().all(|statement| {
+					matches!(statement, syn::Stmt::Macro(mac) if mac.semi_token.is_none())
+						|| matches!(statement, syn::Stmt::Expr(syn::Expr::Macro(_), None))
+				})
+		})
+}
+
+#[test]
+fn shows_component_samples_as_builder_calls_that_are_still_rust() {
+	let out = tempfile::tempdir().unwrap();
+	site(book()).build(out.path()).unwrap();
+
+	let summary = Summary::parse(&read(book().join("SUMMARY.md"))).unwrap();
+	let mut samples = 0;
+
+	for chapter in summary.pages() {
+		let source = chapter.path.as_deref().unwrap();
+
+		let page = match source.strip_suffix(".md").unwrap() {
+			"readme" => "index".to_owned(),
+
+			stem if stem.ends_with("/readme") => stem.replace("/readme", "/index"),
+			stem => stem.to_owned(),
+		};
+
+		let html = read(out.path().join(format!("{page}.html")));
+		let markup = variants(&html, "markup");
+		let builder = variants(&html, "builder");
+		assert_eq!(markup.len(), builder.len(), "{page}");
+		assert_eq!(
+			html.matches("data-lk-styles").count(),
+			markup.len(),
+			"{page}"
+		);
+
+		for (markup, builder) in markup.iter().zip(&builder) {
+			assert_ne!(markup, builder, "{page}");
+
+			if is_rust(markup) && !is_list_of_views(markup) {
+				assert!(is_rust(builder), "{page}: not Rust\n{builder}");
+			}
+		}
+
+		samples += markup.len();
+	}
+
+	// The guide's first app and the `view!` reference both build trees.
+	for page in ["guide/02-creating", "reference/view"] {
+		let html = read(out.path().join(format!("{page}.html")));
+		assert!(html.contains("data-lk-styles"), "{page} has a switch");
+	}
+
+	assert!(samples > 0);
 }

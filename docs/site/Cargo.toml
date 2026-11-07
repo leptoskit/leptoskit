@@ -17,6 +17,8 @@ leptoskit_docs = { workspace = true }
 skribble_rough = { workspace = true }
 
 [dev-dependencies]
+# The book's builder samples are checked to still be Rust.
+syn = { workspace = true, features = ["full"] }
 tempfile = { workspace = true }
 
 [lints]

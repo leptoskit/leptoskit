@@ -1,0 +1,39 @@
+---
+source: crates/leptoskit_docs/src/builder.rs
+expression: convert_file(SETTINGS)
+---
+use leptoskit::prelude::*;
+
+/// A settings row with a trailing control.
+#[component]
+pub fn SettingRow(
+	/// The row's label.
+	#[prop(into)]
+	title: String,
+	/// Shown under the title when set.
+	#[prop(optional, into)]
+	detail: Option<String>,
+	children: Children,
+) -> impl IntoView {
+	View()
+		.class("flex-row gap-3 items-center px-4 h-12")
+		.child(
+			View()
+				.class("flex-1")
+				.child(Text(title).class("text-base"))
+				.children(detail.map(|detail| Text(detail).class("text-sm text-slate-500"))),
+		)
+		.children(children)
+}
+
+#[component]
+pub fn Settings(wifi: bool, toggle: impl Fn(bool) + Send + Sync + 'static) -> Element {
+	ScrollView().class("flex-1").child(
+		SettingRow(
+			"Wi-Fi".into(),
+			Some("Home 5G".into()),
+			Fragment::new().with(Switch(wifi).accessibility_label("Wi-Fi").on_toggle(toggle)),
+		)
+		.into_view(),
+	)
+}

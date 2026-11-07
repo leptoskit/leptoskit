@@ -17,6 +17,8 @@ use crate::Components;
 use crate::Diagnostic;
 use crate::Document;
 use crate::Props;
+use crate::builder;
+use crate::builder::PageComponents;
 use crate::components::CalloutKind;
 use crate::components::callout;
 use crate::highlight;
@@ -125,6 +127,9 @@ impl<'a> Renderer<'a> {
 	/// components, invalid or unknown props, and footnotes without a
 	/// definition.
 	pub fn render(&self, document: &Document) -> Result<Rendered, Vec<Diagnostic>> {
+		let mut blocks = Vec::new();
+		rust_blocks(&document.root, &mut blocks);
+
 		let mut walker = Walker {
 			components: self.components,
 			links: LinkLog {
@@ -141,6 +146,7 @@ impl<'a> Renderer<'a> {
 			sections: Vec::new(),
 			quiet: 0,
 			diagnostics: Vec::new(),
+			page_components: PageComponents::collect(blocks),
 		};
 		walker.collect_definitions(&document.root);
 
@@ -235,6 +241,9 @@ struct Walker<'d, 'r> {
 	/// heading's own text.
 	quiet: usize,
 	diagnostics: Vec<Diagnostic>,
+	/// The `#[component]`s the page's Rust blocks define, so markup that uses
+	/// them converts to calls in their argument order.
+	page_components: PageComponents,
 }
 
 impl<'d> Walker<'d, '_> {
@@ -527,9 +536,40 @@ impl<'d> Walker<'d, '_> {
 		let title = code.meta.as_deref().and_then(code_title).map(|title| {
 			view! { <figcaption class="lk-code-title">{title.to_owned()}</figcaption> }
 		});
+		let lang = language.unwrap_or("text").to_owned();
+		let body = self.highlighted(&code.value, language, at);
 
-		let highlighted = match language.map(|language| highlight::highlight(&code.value, language))
-		{
+		let Some(builder) = self.builder_variant(code, language, at) else {
+			return view! {
+				<figure class="lk-code" data-lang=lang>{title} <pre>{body}</pre></figure>
+			}
+			.into_any();
+		};
+
+		// The same tree as `view!` markup and as builder calls. The page's
+		// root says which one shows, before the first paint and without
+		// JavaScript; the switch changes it for every sample at once.
+		let builder = self.highlighted(&builder, language, at);
+		view! {
+			<figure class="lk-code" data-lang=lang data-lk-styles="">
+				{title}
+				<div class="lk-code-bar">
+					<div class="lk-style-switch" role="radiogroup" aria-label="Code style">
+						{style_option("markup", "Markup", true)}
+						{style_option("builder", "Builder", false)}
+					</div>
+				</div>
+				<pre data-lk-variant="markup">{body}</pre>
+				<pre data-lk-variant="builder">{builder}</pre>
+			</figure>
+		}
+		.into_any()
+	}
+
+	/// `source` as highlighted `<code>`, or as plain text when no grammar
+	/// knows `language`.
+	fn highlighted(&mut self, source: &str, language: Option<&str>, at: (usize, usize)) -> AnyView {
+		let highlighted = match language.map(|language| highlight::highlight(source, language)) {
 			Some(Ok(html)) => html,
 			Some(Err(message)) => {
 				self.diagnostics.push(Diagnostic::new(at.0, at.1, message));
@@ -538,17 +578,41 @@ impl<'d> Walker<'d, '_> {
 			None => None,
 		};
 
-		let body = match highlighted {
+		match highlighted {
 			Some(html) => html::code().inner_html(html).into_any(),
-			None => html::code().child(code.value.clone()).into_any(),
-		};
-
-		view! {
-			<figure class="lk-code" data-lang=language.unwrap_or("text").to_owned()>
-				{title} <pre>{body}</pre>
-			</figure>
+			None => html::code().child(source.to_owned()).into_any(),
 		}
-		.into_any()
+	}
+
+	/// A Rust block's component trees written as builder calls, when it has
+	/// leptoskit `view!` markup and its fence does not say `markup-only`.
+	/// Markup that cannot be converted fails the build, at its line.
+	fn builder_variant(
+		&mut self,
+		code: &mdast::Code,
+		language: Option<&str>,
+		at: (usize, usize),
+	) -> Option<String> {
+		if !matches!(language, Some("rust" | "rs")) || fence_has(code, MARKUP_ONLY) {
+			return None;
+		}
+
+		match builder::builder_variant(&code.value, &self.page_components) {
+			Ok(variant) => variant,
+			Err(error) => {
+				// The block's first line follows the fence.
+				self.diagnostics.push(Diagnostic::new(
+					at.0 + error.line,
+					error.column,
+					format!(
+						"{}; to show this block as markup alone, write `{MARKUP_ONLY}` after its \
+						 language, as in ```rust {MARKUP_ONLY}",
+						error.message
+					),
+				));
+				None
+			}
+		}
 	}
 
 	fn table(&mut self, table: &'d mdast::Table) -> AnyView {
@@ -852,6 +916,63 @@ fn alert(text: &str) -> Option<(CalloutKind, &str)> {
 	let (kind, rest) = marker.split_once(']')?;
 	let kind = kind.parse().ok()?;
 	(rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((kind, rest))
+}
+
+/// The fence attribute that keeps a Rust block's markup from also showing
+/// as builder calls.
+const MARKUP_ONLY: &str = "markup-only";
+
+/// Whether a fence's info string carries `flag`, as a word after the
+/// language (```` ```rust markup-only ````) or in its comma list
+/// (```` ```rust,ignore,markup-only ````).
+fn fence_has(code: &mdast::Code, flag: &str) -> bool {
+	let in_language = code
+		.lang
+		.as_deref()
+		.is_some_and(|lang| lang.split(',').any(|part| part.trim() == flag));
+	let in_meta = code
+		.meta
+		.as_deref()
+		.is_some_and(|meta| meta.split([' ', ',']).any(|part| part == flag));
+	in_language || in_meta
+}
+
+/// Every Rust code block in a document, for the components they define.
+fn rust_blocks<'d>(node: &'d Node, blocks: &mut Vec<&'d str>) {
+	if let Node::Code(code) = node
+		&& matches!(
+			code.lang.as_deref().and_then(highlight::language),
+			Some("rust" | "rs")
+		) {
+		blocks.push(&code.value);
+	}
+
+	for child in node.children().into_iter().flatten() {
+		rust_blocks(child, blocks);
+	}
+}
+
+/// One option of a sample's code style switch. The page starts on markup;
+/// `site.js` moves the check and the focus stop when a reader chooses.
+fn style_option(style: &'static str, label: &'static str, checked: bool) -> impl IntoView {
+	let (aria_checked, tabindex) = if checked {
+		("true", "0")
+	} else {
+		("false", "-1")
+	};
+
+	view! {
+		<button
+			type="button"
+			class="lk-style-option"
+			role="radio"
+			aria-checked=aria_checked
+			tabindex=tabindex
+			data-lk-style-option=style
+		>
+			{label}
+		</button>
+	}
 }
 
 /// The `title="…"` of a fence's info string, as in

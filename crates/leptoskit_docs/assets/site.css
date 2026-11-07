@@ -738,6 +738,76 @@ a > code {
 	}
 }
 
+/* A sample shown both ways: as `view!` markup, or as the same tree in
+ * builder calls. The root's `data-code-style`, which theme.js sets before
+ * the first paint, picks one; without JavaScript the markup shows and the
+ * switch stays hidden. */
+.lk-code [data-lk-variant="builder"],
+:root[data-code-style="builder"] .lk-code [data-lk-variant="markup"] {
+	display: none;
+}
+
+:root[data-code-style="builder"] .lk-code [data-lk-variant="builder"] {
+	display: block;
+}
+
+.lk-code-bar {
+	display: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	min-height: 2.5rem;
+	padding: 0.3rem 0.45rem 0.3rem 0.6rem;
+	border-bottom: 1px solid var(--lk-code-line);
+}
+
+:root[data-code-style] .lk-code-bar {
+	display: flex;
+}
+
+.lk-style-switch {
+	display: inline-flex;
+	gap: 2px;
+	padding: 2px;
+	border: 1px solid var(--lk-code-line);
+	border-radius: 0.5rem;
+	background: rgb(0 0 0 / 0.2);
+}
+
+.lk-style-option {
+	padding: 0.22rem 0.65rem;
+	border: 0;
+	border-radius: 0.35rem;
+	background: transparent;
+	color: #b9afc6;
+	font: 500 0.75rem var(--lk-font-mono);
+	cursor: pointer;
+	transition: background-color 0.15s, color 0.15s;
+}
+
+.lk-style-option:hover {
+	color: var(--lk-code-text);
+}
+
+.lk-style-option:focus-visible {
+	outline-offset: 1px;
+}
+
+/* The chosen option follows the root too, so it is right from the first
+ * paint, before site.js brings `aria-checked` in line. */
+:root[data-code-style="markup"] .lk-style-option[data-lk-style-option="markup"],
+:root[data-code-style="builder"]
+	.lk-style-option[data-lk-style-option="builder"] {
+	background: var(--lk-code-line);
+	color: var(--lk-code-text);
+	box-shadow: inset 0 -2px 0 var(--lk-ember-warm);
+}
+
+/* The copy button sits at the end of the bar, so it covers no code. */
+.lk-code-bar .lk-copy {
+	position: static;
+}
+
 /* Highlighting: code sits on ink in both themes, so one palette serves. The
  * classes are arborium's tree-sitter categories. */
 .hl-comment {

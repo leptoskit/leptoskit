@@ -450,7 +450,7 @@ a:focus-visible, button:focus-visible {
 	color: var(--ember-text);
 	font-size: 0.62rem;
 }
-#fan-tree-code {
+#fan-tree-markup, #fan-tree-builder {
 	white-space: pre;
 	font: 0.78rem/1.85 var(--code);
 }
@@ -900,7 +900,8 @@ a:focus-visible, button:focus-visible {
 	margin-bottom: 0.3rem;
 	border-bottom: 1.5px dashed var(--line);
 }
-[id^="map-row-"][id$="-code"] {
+#widget-map > div > [id$="-markup"], #widget-map > div > [id$="-builder"] {
+	grid-column: 1;
 	white-space: pre;
 }
 [id$="-swap"] {
@@ -1192,7 +1193,7 @@ a:focus-visible, button:focus-visible {
 #source-caption, #preview-caption {
 	color: var(--quiet);
 }
-#source-code {
+#source-markup, #source-builder {
 	white-space: pre;
 	overflow-x: auto;
 	font: 0.82rem/1.85 var(--code);
@@ -1206,6 +1207,66 @@ a:focus-visible, button:focus-visible {
 }
 #source-guide {
 	margin-top: auto;
+}
+
+/* Code style -------------------------------------------------------------- */
+
+/* Samples read as `view!` markup or builder calls. The head's theme script
+ * sets the root's `data-code-style` before the first paint, so a sample never
+ * flips once drawn; without it, the page reads as markup and the switches,
+ * which need the script, stay hidden. */
+:root:not([data-code-style="builder"])
+	:is(#fan-tree-builder, #source-builder, #widget-map > div > [id$="-builder"]),
+:root[data-code-style="builder"]
+	:is(#fan-tree-markup, #source-markup, #widget-map
+		> div
+		> [id$="-markup"], [id^="map-extra-"]) {
+	display: none;
+}
+#source-head {
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.75rem 1rem;
+}
+#map-head-code {
+	align-items: flex-start;
+	gap: 0.6rem;
+}
+#map-style, #source-style {
+	display: none;
+	flex-direction: row;
+	gap: 0.2rem;
+	padding: 0.2rem;
+	border: 1.5px dashed var(--line);
+	border-radius: var(--sk-wobbly-small);
+}
+:root[data-code-style] :is(#map-style, #source-style) {
+	display: flex;
+}
+:is(#map-style, #source-style) > button {
+	padding: 0.3rem 0.7rem;
+	border: 0;
+	border-radius: var(--sk-wobbly-small);
+	background: transparent;
+	color: var(--quiet);
+	font: 0.72rem/1.4 var(--code);
+	letter-spacing: 0.04em;
+	transition: background-color 0.2s ease, color 0.2s ease;
+}
+:is(#map-style, #source-style) > button:hover {
+	color: var(--ink);
+}
+:is(#map-style, #source-style) > button:focus-visible {
+	outline-offset: 2px;
+}
+:root:not([data-code-style="builder"])
+	:is(#map-style-markup, #source-style-markup),
+:root[data-code-style="builder"]
+	:is(#map-style-builder, #source-style-builder) {
+	background: var(--warm);
+	color: var(--sk-on-accent);
 }
 #preview-panel {
 	padding: var(--space-card);
@@ -1507,7 +1568,7 @@ noscript {
 		height: 420px;
 		scale: none;
 	}
-	#source-code {
+	#source-markup, #source-builder {
 		font-size: 0.72rem;
 	}
 	#capability-grid {
@@ -1625,7 +1686,7 @@ noscript {
 		width: 17.6rem;
 		padding: 0.8rem 0.9rem 0.9rem;
 	}
-	#fan-tree-code {
+	#fan-tree-markup, #fan-tree-builder {
 		font-size: 0.75rem;
 	}
 	#site h2 {
@@ -1649,7 +1710,7 @@ noscript {
 	#studio-board {
 		grid-template-columns: minmax(0, 1fr);
 	}
-	#source-code {
+	#source-markup, #source-builder {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 		font-size: 0.75rem;
@@ -1695,7 +1756,12 @@ noscript {
 			padding: 0.7rem 0.8rem;
 			font-size: 0.58rem;
 		}
+		/* Only the code style switch stays above the tree. */
 		#widget-map > #map-head {
+			padding-bottom: 0.4rem;
+			margin-bottom: 0.2rem;
+		}
+		#map-head-tree, #map-head-platforms {
 			display: none;
 		}
 		#widget-map [id$="-swap"] {

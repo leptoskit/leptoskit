@@ -1,0 +1,26 @@
+---
+source: crates/leptoskit_docs/src/builder.rs
+expression: convert_file(CHANNEL)
+---
+use leptoskit::prelude::*;
+use leptoskit::rpc::use_live;
+
+#[component]
+pub fn Channel(channel: ChannelId) -> impl IntoView {
+	let messages = use_live::<messages>(move || {
+		messages {
+			channel,
+			limit: 100,
+		}
+	});
+
+	View()
+		.class("flex-col gap-2 p-4")
+		.children(Fragment::new().with(move || {
+			messages
+				.data()
+				.unwrap_or_default()
+				.into_iter()
+				.map(MessageRow)
+		}))
+}

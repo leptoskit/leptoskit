@@ -1,0 +1,20 @@
+---
+source: crates/leptoskit_docs/tests/render.rs
+expression: pretty(&html)
+---
+<figure data-lang="rust" data-lk-styles="" class="lk-code">
+<div class="lk-code-bar">
+<div role="radiogroup" aria-label="Code style" class="lk-style-switch"><button type="button" role="radio" aria-checked="true" tabindex="0" data-lk-style-option="markup" class="lk-style-option">Markup</button><button type="button" role="radio" aria-checked="false" tabindex="-1" data-lk-style-option="builder" class="lk-style-option">Builder</button>
+</div>
+</div>
+<pre data-lk-variant="markup"><code><span class="hl-keyword">use</span> leptoskit<span class="hl-punctuation">::</span>prelude<span class="hl-punctuation">::</span><span class="hl-operator">*</span><span class="hl-punctuation">;</span>
+
+<span class="hl-macro">view!</span> <span class="hl-punctuation">{</span>
+	&lt;<span class="hl-constructor">View</span> class=<span class="hl-string">&quot;p-</span><span class="hl-constant">4</span><span class="hl-string">&quot;</span>&gt;
+		&lt;<span class="hl-constructor">Text</span>&gt;<span class="hl-string">&quot;Hello&quot;</span>&lt;/<span class="hl-constructor">Text</span>&gt;
+	&lt;/<span class="hl-constructor">View</span>&gt;
+<span class="hl-punctuation">}</span></code></pre>
+<pre data-lk-variant="builder"><code><span class="hl-keyword">use</span> leptoskit<span class="hl-punctuation">::</span>prelude<span class="hl-punctuation">::</span><span class="hl-operator">*</span><span class="hl-punctuation">;</span>
+
+<span class="hl-function">View</span><span class="hl-punctuation">().</span><span class="hl-function">class</span><span class="hl-punctuation">(</span><span class="hl-string">&quot;p-4&quot;</span><span class="hl-punctuation">).</span><span class="hl-function">child</span><span class="hl-punctuation">(</span><span class="hl-function">Text</span><span class="hl-punctuation">(</span><span class="hl-string">&quot;Hello&quot;</span><span class="hl-punctuation">))</span></code></pre>
+</figure>
