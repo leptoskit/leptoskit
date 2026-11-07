@@ -94,8 +94,9 @@ use crate::live::MAX_RESULT_BYTES;
 use crate::live::PresenceMember;
 use crate::live::WireError;
 
-/// How many frames may queue for a slow connection before intermediate
-/// transitions are dropped in favour of a full one.
+/// How many frames may queue for a slow connection. An unfinished
+/// transition retains its remaining chunks; later changes coalesce into
+/// one current snapshot when transport capacity returns.
 const OUTGOING: usize = 32;
 
 /// How many frames one connection may send before the server serves it no
@@ -188,7 +189,7 @@ pub struct LiveStats {
 	/// Queries re-run after a change. Subscriptions that share a query,
 	/// its arguments and its caller re-run once between them.
 	pub reruns: u64,
-	/// Transitions sent, including ones dropped for a slow connection.
+	/// Transitions produced, including ones coalesced for a slow connection.
 	pub transitions: u64,
 	/// Commits read from the change log: once each, however many
 	/// connections are open.

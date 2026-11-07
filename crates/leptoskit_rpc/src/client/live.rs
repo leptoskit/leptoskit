@@ -2858,6 +2858,72 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn a_split_transition_releases_a_mutation_only_after_its_final_chunk() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = Memory::default();
+				let client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				let _ = socket.next_sent().await;
+				let (first, mut first_values) = client.subscribe("first", json!({}));
+				let _ = socket.next_sent().await;
+				let (second, mut second_values) = client.subscribe("second", json!({}));
+				let _ = socket.next_sent().await;
+				let mut answer = Box::pin(client.mutate("both", json!({}), None));
+				let ClientFrame::Mutate { request, .. } = socket.next_sent().await else {
+					panic!("the mutation is sent");
+				};
+				socket.server_says(&ServerFrame::Done {
+					request,
+					ok: Some(json!("saved")),
+					err: None,
+					version: 9,
+				});
+				let chunk = |id, to| {
+					ServerFrame::Transition(Transition {
+						from: 0,
+						to,
+						full: true,
+						updates: vec![crate::live::SubscriptionUpdate {
+							id,
+							update: Update::Ok(json!(id)),
+						}],
+					})
+				};
+				socket.server_says(&chunk(first, 0));
+				assert_eq!(
+					tokio::time::timeout(Duration::from_secs(2), first_values.next())
+						.await
+						.unwrap()
+						.unwrap(),
+					Update::Ok(json!(first))
+				);
+				assert_eq!(client.version(), 0);
+				assert!(
+					answer.as_mut().now_or_never().is_none(),
+					"an incomplete transition cannot satisfy read-your-writes"
+				);
+				socket.server_says(&chunk(second, 9));
+				assert_eq!(
+					tokio::time::timeout(Duration::from_secs(2), second_values.next())
+						.await
+						.unwrap()
+						.unwrap(),
+					Update::Ok(json!(second))
+				);
+				assert_eq!(
+					tokio::time::timeout(Duration::from_secs(2), answer)
+						.await
+						.unwrap()
+						.unwrap(),
+					json!("saved")
+				);
+				assert_eq!(client.version(), 9);
+			})
+			.await;
+	}
+
+	#[tokio::test]
 	async fn a_mutation_the_client_already_holds_resolves_at_once() {
 		start();
 		let local = tokio::task::LocalSet::new();

@@ -85,17 +85,17 @@ pub(super) enum Changed {
 	Whole(Arc<Value>),
 	/// A patch from the value the member had to `.1`.
 	Patch(Arc<Patch>, Arc<Value>),
-	/// The re-run failed; the member keeps its value.
+	/// The re-run failed; recovery must repeat this error.
 	Failed(WireError),
 }
 
 impl Changed {
-	/// The wire update, and the member's value after it, if it has one.
-	pub(super) fn into_update(self) -> (Update, Option<Arc<Value>>) {
+	/// The wire update and the current complete result for recovery.
+	pub(super) fn into_update(self) -> (Update, Result<Arc<Value>, WireError>) {
 		match self {
-			Self::Whole(value) => (Update::Ok((*value).clone()), Some(value)),
-			Self::Patch(patch, value) => (Update::Patch((*patch).clone()), Some(value)),
-			Self::Failed(error) => (Update::Err(error), None),
+			Self::Whole(value) => (Update::Ok((*value).clone()), Ok(value)),
+			Self::Patch(patch, value) => (Update::Patch((*patch).clone()), Ok(value)),
+			Self::Failed(error) => (Update::Err(error.clone()), Err(error)),
 		}
 	}
 }

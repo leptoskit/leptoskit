@@ -1064,7 +1064,7 @@ class _Core:
         kind = frame.get("type")
         if kind == "welcome":
             self._attempt = 0
-            self.version = _number(frame.get("version"), self.version)
+            # Only transitions advance the applied cursor.
             self._start_heartbeat(_number(frame.get("heartbeat_seconds"), 30))
             self._set_status(
                 LiveStatus("live", version=self.version, connection=str(frame.get("connection") or ""))

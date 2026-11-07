@@ -23,6 +23,7 @@ use std::time::SystemTime;
 
 use leptoskit_db::Db;
 use leptoskit_db::ReadEntry;
+use pending::PendingTransition;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -36,6 +37,7 @@ use super::Invocation;
 use super::Live;
 use super::Outbound;
 use super::hub::Batch;
+use super::hub::Changed;
 use super::hub::Registration;
 use super::hub::ShareKey;
 use super::run_query;
@@ -64,6 +66,10 @@ use crate::server::registration_in;
 use crate::server::run::recording_commits;
 use crate::server::stream;
 use crate::server::stream::StreamSink;
+
+mod pending;
+#[cfg(all(test, feature = "sqlite"))]
+mod recovery_tests;
 
 /// How often a subscription's first run may find a round applied under it
 /// before it registers anyway and has the hub run it again.
@@ -119,11 +125,19 @@ struct Session {
 	/// What running streams send, forwarded in order.
 	stream_frames: mpsc::UnboundedReceiver<String>,
 	stream_out: mpsc::UnboundedSender<String>,
-	/// The version of the last transition sent.
+	/// The version of the last complete transition queued for transport.
 	last_sent: u64,
-	/// Whether a transition was dropped for a slow connection, so the next
-	/// repeats every value.
+	/// At most one unfinished transition; new batches coalesce into a later
+	/// full snapshot instead of growing an unbounded per-connection queue.
+	pending: Option<PendingTransition>,
+	pending_progress: tokio::time::Instant,
+	/// Results changed while an earlier transition was waiting to be sent.
 	full_next: bool,
+	/// The latest version represented by the session's stored results.
+	latest: u64,
+	/// Resume errors for queries that have no registered subscription.
+	extra_errors: HashMap<u32, WireError>,
+	transport_failed: bool,
 	/// The newest commit a mutation or action answered with that no
 	/// transition has reached yet.
 	awaiting: Option<u64>,
@@ -137,7 +151,24 @@ struct Session {
 struct Subscription {
 	query: String,
 	args: Value,
-	value: Arc<Value>,
+	/// The latest result, including failures; never recover an earlier success
+	/// after a policy or identity change makes the current query fail.
+	result: Result<Arc<Value>, WireError>,
+}
+
+impl Subscription {
+	fn apply(&mut self, changed: Changed) -> Update {
+		let (update, result) = changed.into_update();
+		self.result = result;
+		update
+	}
+
+	fn full_update(&self) -> Update {
+		match &self.result {
+			Ok(value) => Update::Ok((**value).clone()),
+			Err(error) => Update::Err(error.clone()),
+		}
+	}
 }
 
 struct Joined {
@@ -239,7 +270,12 @@ impl Live {
 			stream_frames,
 			stream_out,
 			last_sent: version,
+			pending: None,
+			pending_progress: tokio::time::Instant::now(),
 			full_next: false,
+			latest: version,
+			extra_errors: HashMap::new(),
+			transport_failed: false,
 			awaiting: None,
 			resume_floor,
 			frame_tokens: FRAME_BURST * 1_000,
@@ -290,48 +326,13 @@ impl Session {
 			return false;
 		}
 
+		heartbeat.tick().await;
 		loop {
-			let deadline = self
-				.lease
-				.refresh_at
-				.into_iter()
-				.chain(self.lease.expires_at)
-				.min();
-			tokio::select! {
-				biased;
-				() = identity_deadline(deadline) => {
-					if !self.check_deadline().await { return false; }
-				}
-				() = self.out.closed() => return false,
-				_ = drained.recv() => return true,
-				Some(batch) = self.batches.recv() => {
-					if !self.apply(batch).await { return false; }
-				}
-				incoming = frames.recv() => {
-					let Some(incoming) = incoming else { return false };
-					if !self.handle(incoming).await {
-						return false;
-					}
-				}
-				Some(finished) = self.finished.recv() => {
-					if !self.answer(finished).await {
-						return false;
-					}
-				}
-				Some(text) = self.stream_frames.recv() => {
-					if !self.deliver(Outbound::Frame { text, version: None }).await {
-						return false;
-					}
-				}
-				Ok(()) = self.applied.changed(), if self.awaiting.is_some() => {}
-				_ = heartbeat.tick() => {
-					// An idle connection still learns how far the log has
-					// gone, so it resumes from somewhere recent.
-					if !self.settle(true).await { return false; }
-					if !self.deliver(Outbound::Heartbeat).await {
-						return false;
-					}
-				}
+			if !self.check_due_deadline().await {
+				return false;
+			}
+			if let Some(draining) = self.step(frames, drained, &mut heartbeat).await {
+				return draining;
 			}
 
 			if !self.settle(false).await {
@@ -340,14 +341,85 @@ impl Session {
 		}
 	}
 
+	async fn step(
+		&mut self,
+		frames: &mut mpsc::Receiver<Incoming>,
+		drained: &mut broadcast::Receiver<()>,
+		heartbeat: &mut tokio::time::Interval,
+	) -> Option<bool> {
+		let stall_deadline = self.pending_deadline();
+		let deadline = self.next_identity_deadline();
+		let sender = self.out.clone();
+		tokio::select! {
+			// Randomized selection keeps client input and completion fair under continuous writes.
+			() = capacity_deadline(stall_deadline) => return Some(false),
+			() = identity_deadline(deadline) => {
+				if !self.check_deadline().await { return Some(false); }
+			}
+			() = self.out.closed() => return Some(false),
+			_ = drained.recv() => return Some(true),
+			permit = sender.reserve_owned(), if self.pending.is_some() || self.full_next => {
+				let Ok(permit) = permit else { return Some(false) };
+				if !self.send_pending(permit) { return Some(false); }
+			}
+			Some(batch) = self.batches.recv() => {
+				if !self.apply(batch).await { return Some(false); }
+			}
+			incoming = frames.recv() => {
+				let Some(incoming) = incoming else { return Some(false) };
+				if !self.handle(incoming).await {
+					return Some(false);
+				}
+			}
+			Some(finished) = self.finished.recv() => {
+				if !self.answer(finished).await {
+					return Some(false);
+				}
+			}
+			Some(text) = self.stream_frames.recv() => {
+				if !self.deliver(Outbound::Frame { text, version: None }).await {
+					return Some(false);
+				}
+			}
+			Ok(()) = self.applied.changed(), if self.awaiting.is_some() => {}
+			_ = heartbeat.tick() => {
+				// An idle connection still learns how far the log has
+				// gone, so it resumes from somewhere recent.
+				if !self.heartbeat().await { return Some(false); }
+			}
+		}
+		None
+	}
+
+	fn pending_deadline(&self) -> Option<tokio::time::Instant> {
+		let blocked = (self.pending.is_some() || self.full_next) && self.out.capacity() == 0;
+		blocked.then(|| self.pending_progress + self.live.stall())
+	}
+
+	async fn heartbeat(&mut self) -> bool {
+		self.settle(true).await && self.deliver(Outbound::Heartbeat).await
+	}
+
 	/// Sends what the hub has queued, and an empty transition when a
 	/// mutation is waiting for a commit that changed none of this
 	/// connection's results, or when `catch_up` asks for one.
 	async fn settle(&mut self, catch_up: bool) -> bool {
-		while let Ok(batch) = self.batches.try_recv() {
+		// Return to the select loop after a bounded batch so a continuously
+		// busy database cannot starve available transport capacity.
+		for _ in 0..super::OUTGOING {
+			let Ok(batch) = self.batches.try_recv() else {
+				break;
+			};
 			if !self.apply(batch).await {
 				return false;
 			}
+		}
+		if self.transport_failed {
+			return false;
+		}
+		if !self.batches.is_empty() {
+			// The stored results have not applied every queued batch yet.
+			return true;
 		}
 
 		let applied = *self.applied.borrow_and_update();
@@ -445,6 +517,10 @@ impl Session {
 			ClientFrame::Ping => self.send(ServerFrame::Pong).await,
 			ClientFrame::Sub { id, query, args } => self.subscribe(id, query, args).await,
 			ClientFrame::Unsub { id } => {
+				if let Some(pending) = &mut self.pending {
+					pending.remove(id);
+				}
+				self.extra_errors.remove(&id);
 				self.subscriptions.remove(&id);
 				self.live.hub().leave(self.number, id);
 				true
@@ -595,12 +671,22 @@ impl Session {
 	}
 
 	fn keep(&mut self, id: u32, query: String, args: Value, value: Arc<Value>) {
+		if let Some(pending) = &mut self.pending {
+			pending.remove(id);
+		}
+		self.extra_errors.remove(&id);
 		self.live
 			.stats_ref()
 			.subscriptions
 			.fetch_add(1, Ordering::Relaxed);
-		self.subscriptions
-			.insert(id, Subscription { query, args, value });
+		self.subscriptions.insert(
+			id,
+			Subscription {
+				query,
+				args,
+				result: Ok(value),
+			},
+		);
 	}
 
 	/// Subscribes `id` through the hub: joins the group already watching
@@ -931,6 +1017,10 @@ impl Session {
 				.await;
 		}
 
+		self.pending = None;
+		self.pending_progress = tokio::time::Instant::now();
+		self.full_next = !self.subscriptions.is_empty();
+		self.extra_errors.clear();
 		// Detach every old group before awaiting any new identity's reads.
 		// Batches already queued belong to the old identity as well.
 		for id in self.subscriptions.keys().copied() {
@@ -978,10 +1068,13 @@ impl Session {
 					});
 
 					if let Some(subscription) = self.subscriptions.get_mut(&id) {
-						subscription.value = started.value;
+						subscription.result = Ok(started.value);
 					}
 				}
 				Err(error) => {
+					if let Some(subscription) = self.subscriptions.get_mut(&id) {
+						subscription.result = Err(error.clone());
+					}
 					updates.push(SubscriptionUpdate {
 						id,
 						update: Update::Err(error),
@@ -1038,6 +1131,23 @@ impl Session {
 		// valid. Reconnect instead of telling the app it was signed out.
 		self.send(ServerFrame::Reconnect { after_ms: 250 }).await;
 		false
+	}
+
+	fn next_identity_deadline(&self) -> Option<SystemTime> {
+		self.lease
+			.refresh_at
+			.into_iter()
+			.chain(self.lease.expires_at)
+			.min()
+	}
+
+	async fn check_due_deadline(&mut self) -> bool {
+		let deadline = self.next_identity_deadline();
+		if deadline.is_some_and(|at| at <= SystemTime::now()) {
+			self.check_deadline().await
+		} else {
+			true
+		}
 	}
 
 	async fn check_deadline(&mut self) -> bool {
@@ -1102,12 +1212,7 @@ impl Session {
 				// Unsubscribed while the batch was on its way.
 				continue;
 			};
-			let (update, value) = changed.into_update();
-
-			if let Some(value) = value {
-				subscription.value = value;
-			}
-
+			let update = subscription.apply(changed);
 			updates.push(SubscriptionUpdate { id, update });
 		}
 
@@ -1116,85 +1221,95 @@ impl Session {
 		true
 	}
 
-	/// Sends one transition to `to`, split into frames under the size
-	/// limit, all at the same `to`, and repeating every value when an
-	/// earlier one was dropped.
+	/// Retain one unfinished transition and coalesce subsequent changes into
+	/// the current subscription results. Capacity wakes the session even if
+	/// no further client frame or database commit arrives.
 	fn send_transition(
 		&mut self,
 		from: u64,
-		mut updates: Vec<SubscriptionUpdate>,
+		updates: Vec<SubscriptionUpdate>,
 		to: u64,
 		full: bool,
 	) {
-		let full = full || self.full_next;
+		self.latest = self.latest.max(to);
+		self.live
+			.stats_ref()
+			.transitions
+			.fetch_add(1, Ordering::Relaxed);
+		if self.pending.is_some() || self.full_next {
+			self.full_next = true;
+			for update in updates {
+				if !self.subscriptions.contains_key(&update.id)
+					&& let Update::Err(error) = update.update
+				{
+					if self.extra_errors.len() >= MAX_SUBSCRIPTIONS
+						&& !self.extra_errors.contains_key(&update.id)
+					{
+						self.transport_failed = true;
+						return;
+					}
+					self.extra_errors.insert(update.id, error);
+				}
+			}
+		} else {
+			self.pending_progress = tokio::time::Instant::now();
+			self.pending = Some(PendingTransition::new(from, updates, to, full));
+		}
+		// Fill only immediately available slots; never wait inside a batch.
+		for _ in 0..super::OUTGOING {
+			if self.pending.is_none() && !self.full_next {
+				break;
+			}
+			let Ok(permit) = self.out.clone().try_reserve_owned() else {
+				break;
+			};
+			if !self.send_pending(permit) {
+				self.transport_failed = true;
+				break;
+			}
+		}
+	}
 
-		if self.full_next {
-			updates = self
+	fn send_pending(&mut self, permit: mpsc::OwnedPermit<Outbound>) -> bool {
+		if self.pending.is_none() && self.full_next {
+			let mut updates: Vec<_> = self
 				.subscriptions
 				.iter()
 				.map(|(id, subscription)| {
 					SubscriptionUpdate {
 						id: *id,
-						update: Update::Ok((*subscription.value).clone()),
+						update: subscription.full_update(),
 					}
 				})
 				.collect();
+			updates.extend(self.extra_errors.drain().map(|(id, error)| {
+				SubscriptionUpdate {
+					id,
+					update: Update::Err(error),
+				}
+			}));
+			self.pending = Some(PendingTransition::new(
+				self.last_sent,
+				updates,
+				self.latest,
+				true,
+			));
+			self.full_next = false;
 		}
-
-		self.full_next = false;
-
-		// A frame over the limit is split, all at the same `to`: the client
-		// applies the chunks in order and lands on the same state.
-		let mut chunk = Vec::new();
-		let mut sent = false;
-
-		for update in updates {
-			chunk.push(update);
-			let transition = Transition {
-				from,
-				to,
-				updates: chunk.clone(),
-				full,
-			};
-			let Ok(text) = serde_json::to_string(&ServerFrame::Transition(transition)) else {
-				continue;
-			};
-
-			if text.len() > MAX_FRAME_BYTES && chunk.len() > 1 {
-				let last = chunk.pop().expect("just pushed");
-
-				self.send_chunk(from, &chunk, to, full);
-				sent = true;
-				chunk = vec![last];
-			}
-		}
-
-		if !chunk.is_empty() || !sent {
-			self.send_chunk(from, &chunk, to, full);
-		}
-
-		self.last_sent = to;
-		self.live
-			.stats_ref()
-			.transitions
-			.fetch_add(1, Ordering::Relaxed);
-	}
-
-	fn send_chunk(&mut self, from: u64, updates: &[SubscriptionUpdate], to: u64, full: bool) {
-		let transition = Transition {
-			from,
-			to,
-			updates: updates.to_vec(),
-			full,
+		let Some(pending) = &mut self.pending else {
+			return true;
 		};
-		let Some(outbound) = Outbound::frame(&ServerFrame::Transition(transition), Some(to)) else {
-			return;
+		let Some((frame, complete)) = pending.frame() else {
+			return false;
 		};
-
-		if self.out.try_send(outbound).is_err() {
-			// A slow connection gets the newest state, not every step.
-			self.full_next = true;
+		let to = pending.to;
+		permit.send(frame);
+		self.pending_progress = tokio::time::Instant::now();
+		if complete {
+			self.last_sent = to;
+			self.pending = None;
 		}
+		true
 	}
 
 	/// Checks every joined channel again, for the new identity.
@@ -1415,6 +1530,13 @@ impl Session {
 	}
 }
 
+async fn capacity_deadline(deadline: Option<tokio::time::Instant>) {
+	match deadline {
+		Some(at) => tokio::time::sleep_until(at).await,
+		None => std::future::pending().await,
+	}
+}
+
 /// Sleep until a lease deadline, or stay pending for an unlimited identity.
 async fn identity_deadline(deadline: Option<SystemTime>) {
 	match deadline {
@@ -1427,5 +1549,72 @@ async fn identity_deadline(deadline: Option<SystemTime>) {
 			.await;
 		}
 		None => std::future::pending().await,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::json;
+
+	use super::*;
+	use crate::live::Patch;
+	use crate::live::Upsert;
+
+	fn subscription() -> Subscription {
+		Subscription {
+			query: "notes".to_owned(),
+			args: json!({}),
+			result: Ok(Arc::new(json!([{"id": "1", "body": "before"}]))),
+		}
+	}
+
+	#[test]
+	fn full_recovery_keeps_a_query_failure_until_a_new_success() {
+		let mut subscription = subscription();
+		let error = WireError {
+			status: 403,
+			message: "no longer available".to_owned(),
+		};
+		assert_eq!(
+			subscription.apply(Changed::Failed(error.clone())),
+			Update::Err(error.clone())
+		);
+		assert_eq!(subscription.full_update(), Update::Err(error));
+
+		let current = json!([{"id": "2", "body": "after"}]);
+		subscription.apply(Changed::Whole(Arc::new(current.clone())));
+		assert_eq!(subscription.full_update(), Update::Ok(current));
+	}
+
+	#[test]
+	fn full_recovery_uses_the_complete_value_behind_a_patch() {
+		let mut subscription = subscription();
+		let row = json!({"id": "1", "body": "after"});
+		let value = json!([row.clone()]);
+		let patch = Patch {
+			upsert: vec![Upsert { at: 0, value: row }],
+			..Patch::default()
+		};
+		assert_eq!(
+			subscription.apply(Changed::Patch(
+				Arc::new(patch.clone()),
+				Arc::new(value.clone())
+			)),
+			Update::Patch(patch)
+		);
+		assert_eq!(subscription.full_update(), Update::Ok(value));
+	}
+
+	#[test]
+	fn full_recovery_preserves_the_latest_error_including_repeated_failures() {
+		let mut subscription = subscription();
+		for status in [503, 401, 403] {
+			let error = WireError {
+				status,
+				message: format!("failure {status}"),
+			};
+			subscription.apply(Changed::Failed(error.clone()));
+			assert_eq!(subscription.full_update(), Update::Err(error));
+		}
 	}
 }

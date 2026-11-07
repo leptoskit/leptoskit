@@ -881,10 +881,8 @@ async fn an_action_that_finishes_after_authentication_is_refused() {
 	);
 }
 
-/// A transition larger than one frame is split under the limit, all at the
-/// same version.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_large_transition_is_split_under_the_frame_limit() {
+/// Three results change together and require more than one frame.
+async fn large_transition() -> (Server, Socket) {
 	let db = leptoskit_db::testing::sqlite().await;
 	let doc = NewDoc {
 		body: "a".repeat(400_000),
@@ -916,6 +914,14 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 		.await
 		.unwrap();
 
+	(server, socket)
+}
+
+/// Only the final chunk acknowledges the complete version.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_transition_is_split_under_the_frame_limit() {
+	let (_server, mut socket) = large_transition().await;
+
 	let mut transitions = Vec::new();
 	while transitions.len() < 2 {
 		if let ServerFrame::Transition(transition) = next(&mut socket).await {
@@ -924,9 +930,17 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 	}
 
 	let mut ids = Vec::new();
-	let to = transitions[0].to;
+	let from = transitions[0].from;
+	assert_eq!(
+		transitions[0].to, from,
+		"the prefix cannot advance the cursor"
+	);
+	assert!(
+		transitions[1].to > from,
+		"the last chunk reaches the commit"
+	);
 	for transition in &transitions {
-		assert_eq!(transition.to, to, "every chunk lands on the same version");
+		assert_eq!(transition.from, from);
 		ids.extend(transition.updates.iter().map(|update| update.id));
 	}
 	ids.sort_unstable();
@@ -937,6 +951,55 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 			.all(|transition| transition.updates.len() < 3),
 		"the transition was not split"
 	);
+}
+
+/// Reconnecting after a prefix chunk replays the whole unfinished update.
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnecting_between_transition_chunks_does_not_skip_results() {
+	let (server, mut socket) = large_transition().await;
+	let first = loop {
+		if let ServerFrame::Transition(transition) = next(&mut socket).await {
+			break transition;
+		}
+	};
+	assert!(first.updates.len() < 3);
+	// The client has consumed only this prefix. Discard the transport
+	// without reading its remaining frames, then resume its actual cursor.
+	drop(socket);
+	let mut socket = connect(&server, None).await;
+	send(
+		&mut socket,
+		ClientFrame::Hello {
+			resume: Some(Resume {
+				version: first.to,
+				queries: (1..=3)
+					.map(|id| {
+						ResumeQuery {
+							id,
+							query: "session_doc".to_owned(),
+							args: json!({}),
+						}
+					})
+					.collect(),
+			}),
+		},
+	)
+	.await;
+	let mut ids = Vec::new();
+	let reached = loop {
+		if let ServerFrame::Transition(transition) = next(&mut socket).await {
+			for update in transition.updates {
+				assert_eq!(update.update, Update::Ok(json!("b".repeat(400_100))));
+				ids.push(update.id);
+			}
+			if ids.len() >= 3 {
+				break transition.to;
+			}
+		}
+	};
+	ids.sort_unstable();
+	assert_eq!(ids, [1, 2, 3]);
+	assert!(reached > first.to);
 }
 
 /// A client that falls far behind gets the whole state in one full

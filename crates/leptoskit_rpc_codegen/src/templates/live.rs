@@ -966,7 +966,7 @@ impl Shared {
 		match frame["type"].as_str().unwrap_or_default() {
 			"welcome" => {
 				state.attempt = 0;
-				state.version = number(&frame["version"]).unwrap_or(state.version);
+				// Only transitions advance the applied cursor.
 				self.status.send_replace(LiveStatus::Live {
 					version: state.version,
 					connection: frame["connection"].as_str().unwrap_or_default().to_owned(),

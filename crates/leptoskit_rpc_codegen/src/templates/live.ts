@@ -474,7 +474,7 @@ export class LiveConnection {
 		switch (frame.type) {
 			case "welcome": {
 				this.#attempt = 0;
-				this.#version = number(frame.version, this.#version);
+				// Only transitions advance the applied cursor.
 				this.#startHeartbeat(number(frame.heartbeat_seconds, 30));
 				this.#setStatus({
 					state: "live",
