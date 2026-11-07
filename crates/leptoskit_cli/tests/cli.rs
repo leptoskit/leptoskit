@@ -261,6 +261,16 @@ fn scaffolds_a_project_with_config_and_source() {
 	assert!(index.contains("/pkg/counter_app.js"));
 	assert!(index.contains("href=\"/assets/app.css\""));
 	assert_eq!(config.native.plugins, [] as [String; 0]);
+	let toolchain =
+		std::fs::read_to_string(project.join("rust-toolchain.toml")).expect("rust-toolchain");
+	assert!(
+		toolchain.contains("channel = \"nightly-2026-10-21\""),
+		"new apps pin the SDK channel so edition 2024 builds: {toolchain}"
+	);
+	assert!(
+		toolchain.contains("wasm32-unknown-unknown"),
+		"new apps enable the wasm target: {toolchain}"
+	);
 }
 
 #[test]
@@ -690,6 +700,7 @@ fn scaffold_files_are_the_promised_set() {
 		&[
 			leptoskit_config::CONFIG_FILE,
 			"monosecret.toml",
+			"rust-toolchain.toml",
 			".gitignore",
 			"Cargo.toml",
 			"src/main.rs",

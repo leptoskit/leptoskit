@@ -1,6 +1,6 @@
 # Creating a project
 
-`leptoskit new` creates one app that runs in the browser and as a native app on iOS, Android, macOS, Windows, and Linux. You write the screens once; each platform draws them with its own widgets.
+`leptoskit new` creates one app that runs in the browser and as a native app on iOS, Android, macOS, Windows, and Linux. You write the screens once; each platform draws them with its own widgets. The starter uses server-side rendering (`app.render = "ssr"`) and pins a `rust-toolchain.toml` so the `edition = "2024"` workspace builds even when rustup's default toolchain is older.
 
 ```bash
 leptoskit new water

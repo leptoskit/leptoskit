@@ -23,7 +23,9 @@ The `leptoskit` command (or `lk`) does the work. Run it from the project root. `
 ## Working rules
 
 - Read `leptoskit.toml` first: `[app].platforms`, `[extension]`, `[publish]`, and `[db]` decide what the commands do.
-- Screens are file routes under the app crate's `src/routes/`; `leptoskit` regenerates `routes.rs` from them. Don't edit `routes.rs` by hand.
+- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). Keep `plugins = []` and Cargo `default-features = false` until you need a feature; see the small-bundles guide before turning on islands, split budgets, or extra plugins.
+- Default screens live under the app crate's `src/routes/` and are declared by hand in `src/routes.rs` with `leptoskit::platform_module!`. That file is yours to edit. File routes that regenerate `routes.rs` are optional: enable the `router` plugin in `leptoskit.toml`, then let `leptoskit` regenerate the module (see the file-routes guide).
+- New projects pin a `rust-toolchain.toml` so `edition = "2024"` builds even when rustup's default toolchain is older. Prefer that pin (or the matching SDK channel when using `--sdk-path`) over a stale global default.
 - Tailwind classes are checked when a screen renders: an unsupported class panics with its name. Use the ones the project already uses, or check the CSS coverage page of the docs.
 - Generated output lives in `.leptoskit/` and `dist/`; never edit it.
 - Secrets never go in `leptoskit.toml`. Credentials come from the environment or a file outside the project.
@@ -59,7 +61,7 @@ markup_style = "deny"
 component_attribute = "deny"
 ```
 
-Then rewrite any `view!` the lint reports, including the starter screen `leptoskit new` generates, and keep `leptoskit lint --deny-warnings` passing. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
+Then rewrite leptoskit UI trees the lint reports (including the starter home screen) as builders, and keep `leptoskit lint --deny-warnings` passing. Leave the web document `shell` in leptos `view!` (`<html>`, `<head>`, `HydrationScripts`, …): that is HTML for the SSR document, not a leptoskit component tree. Silence the shell with `// leptoskit-lint: allow(markup_style)` on the line immediately above the reported tag (usually `<html>`), not above the function. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
 
 ## Components
 
@@ -69,15 +71,17 @@ A component is a capitalized function that returns a view, marked `#[component]`
 use leptoskit::prelude::*;
 
 #[component]
-pub fn SettingRow(#[prop(into)] title: String, children: Children) -> impl IntoView {
+pub fn SettingRow(#[prop(into)] title: String, children: Children) -> Element {
 	View()
 		.class("flex-row items-center gap-3 px-4 h-12")
 		.child(Text(title).class("flex-1 text-base"))
 		.children(children)
 }
 
-let row = SettingRow("Wi-Fi".into(), Fragment::new().with(Switch(true)));
+View().child(SettingRow("Wi-Fi".into(), Fragment::new().with(Switch(true))));
 ```
+
+Return `Element` when the caller will pass the component into `.child(…)`. `impl IntoView` is fine for `view!` trees and fragments; `.child` on a leptoskit `View` needs an `Element`.
 
 - `View`, `ScrollView`, `Row`, `Column`, `Card`, … take no arguments; `Text(content)`, `Button(label)`, `Image(source)`, `Switch(checked)`, `Status(text)`, and `Alert(text)` take their content.
 - Style with Tailwind through `.class("…")`; it compiles to native layout and styles on every platform.

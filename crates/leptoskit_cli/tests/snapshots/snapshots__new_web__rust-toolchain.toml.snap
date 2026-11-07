@@ -1,0 +1,7 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: contents
+---
+[toolchain]
+channel = "nightly-2026-10-21"
+targets = ["wasm32-unknown-unknown"]

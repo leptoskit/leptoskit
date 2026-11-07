@@ -22,6 +22,11 @@ use leptoskit_config::RenderMode;
 
 const NATIVE_PLATFORMS: [&str; 6] = ["ios", "android", "macos", "windows", "linux", "tui"];
 
+/// Rustup channel new apps pin. Keep aligned with the repository
+/// `rust-toolchain.toml` so `--sdk-path` builds and `edition = "2024"` work
+/// even when the machine's default toolchain is older.
+const APP_RUST_TOOLCHAIN_CHANNEL: &str = "nightly-2026-10-21";
+
 /// Writes a new application workspace, depending on the published SDK.
 ///
 /// # Errors
@@ -422,6 +427,7 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 			config.to_toml_string().context("serialize config")?,
 		),
 		("monosecret.toml".into(), secrets_manifest(config)?),
+		("rust-toolchain.toml".into(), rust_toolchain_toml()),
 		(
 			".gitignore".into(),
 			"/target\n/dist\n/.env\n/.env.*\n/.leptoskit\n/android/.gradle\n/android/**/build\n/\
@@ -1401,6 +1407,7 @@ pub fn template_files() -> &'static [&'static str] {
 	&[
 		leptoskit_config::CONFIG_FILE,
 		"monosecret.toml",
+		"rust-toolchain.toml",
 		".gitignore",
 		"Cargo.toml",
 		"src/main.rs",
@@ -1409,6 +1416,14 @@ pub fn template_files() -> &'static [&'static str] {
 		"assets/app.css",
 		"README.md",
 	]
+}
+
+/// The `rust-toolchain.toml` every new app gets.
+fn rust_toolchain_toml() -> String {
+	format!(
+		"[toolchain]\nchannel = \"{APP_RUST_TOOLCHAIN_CHANNEL}\"\ntargets = \
+		 [\"wasm32-unknown-unknown\"]\n"
+	)
 }
 
 /// Ensures the workspace contains its shared crates and every platform runner.
