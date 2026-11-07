@@ -21,6 +21,7 @@ use crate::Event;
 use crate::EventBatch;
 use crate::KeyState;
 use crate::REGISTRATION_CAPACITY;
+use crate::valid_accelerator_text;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static HANDLER: Once = Once::new();
@@ -140,6 +141,37 @@ impl Inner {
 		self.events.queue.lock().remove(key.id());
 		Ok(())
 	}
+
+	fn unregister_remaining(&self) {
+		let remaining: Vec<HotKey> = self.events.queue.lock().keys.values().copied().collect();
+
+		for key in remaining {
+			if let Err(error) = self.unregister(key) {
+				*self.cleanup_error.borrow_mut() = Some(error);
+			}
+		}
+	}
+}
+
+impl Drop for Inner {
+	fn drop(&mut self) {
+		// Registration::drop may fail a native unregister and leave the chord
+		// in `queue.keys`. Retry before the backend itself is released so OS
+		// registrations do not outlive the owner.
+		self.unregister_remaining();
+	}
+}
+
+fn wayland_session(wayland_display: bool, xdg_session_type: Option<&str>) -> bool {
+	wayland_display || xdg_session_type.is_some_and(|value| value == "wayland")
+}
+
+fn require_x11_session(wayland_display: bool, xdg_session_type: Option<&str>) -> Result<(), Error> {
+	if wayland_session(wayland_display, xdg_session_type) {
+		Err(Error::Unavailable)
+	} else {
+		Ok(())
+	}
 }
 
 /// One process-wide backend owner, confined to its creating event-loop thread.
@@ -173,11 +205,10 @@ impl GlobalShortcuts {
 		}
 
 		#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-		if std::env::var_os("WAYLAND_DISPLAY").is_some()
-			|| std::env::var("XDG_SESSION_TYPE").is_ok_and(|value| value == "wayland")
-		{
-			return Err(Error::Unavailable);
-		}
+		require_x11_session(
+			std::env::var_os("WAYLAND_DISPLAY").is_some(),
+			std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+		)?;
 		let exclusive = Exclusive::acquire()?;
 		let events = Arc::new(Events {
 			queue: Mutex::new(Queue::default()),
@@ -215,10 +246,12 @@ impl GlobalShortcuts {
 	/// Registers one accelerator without replacing another application's
 	/// binding.
 	///
-	/// The guard owns the registration, and keeps the backend alive if this
-	/// manager is dropped first. Failed registration never produces a guard.
+	/// Accelerators use the same muda syntax as menu items (`CmdOrCtrl+S`,
+	/// `Control+Shift+KeyK`, …). The guard owns the registration, and keeps the
+	/// backend alive if this manager is dropped first. Failed registration
+	/// never produces a guard, and never replaces an existing chord.
 	pub fn register(&self, accelerator: &str) -> Result<Registration, Error> {
-		if accelerator.is_empty() || accelerator.len() > 256 {
+		if !valid_accelerator_text(accelerator) {
 			return Err(Error::InvalidShortcut);
 		}
 
@@ -591,6 +624,101 @@ mod tests {
 			(Error::Native("failed".into()), BridgeError::Native),
 		] {
 			assert_eq!(BridgeError::from(error), expected);
+		}
+	}
+
+	#[test]
+	fn menu_style_accelerators_parse_and_reject_invalid_text() {
+		let owner = manager(Arc::new(Mock::default()));
+		let guard = owner.register("CmdOrCtrl+S").unwrap();
+		assert!(matches!(
+			owner.register("CmdOrCtrl+S"),
+			Err(Error::Conflict(_))
+		));
+		drop(guard);
+		assert!(matches!(owner.register(""), Err(Error::InvalidShortcut)));
+		assert!(matches!(
+			owner.register("Ctrl+\tS"),
+			Err(Error::InvalidShortcut)
+		));
+		assert!(matches!(
+			owner.register("not a shortcut"),
+			Err(Error::InvalidShortcut)
+		));
+		assert!(owner.register("CmdOrCtrl+S").is_ok());
+	}
+
+	#[test]
+	fn registration_capacity_is_enforced_without_leaking_slots() {
+		let backend = Arc::new(Mock::default());
+		let owner = manager(Arc::clone(&backend));
+		let mut guards = Vec::with_capacity(REGISTRATION_CAPACITY);
+
+		for index in 0..REGISTRATION_CAPACITY {
+			let function = (index % 12) + 1;
+			let accelerator = match index / 12 {
+				0 => format!("Control+F{function}"),
+				1 => format!("Control+Shift+F{function}"),
+				2 => format!("Alt+F{function}"),
+				3 => format!("Alt+Shift+F{function}"),
+				4 => format!("Control+Alt+F{function}"),
+				_ => format!("Control+Alt+Shift+F{function}"),
+			};
+			guards.push(owner.register(&accelerator).unwrap());
+		}
+
+		assert!(matches!(
+			owner.register("Control+KeyZ"),
+			Err(Error::Capacity)
+		));
+		guards.pop();
+		assert!(owner.register("Control+KeyZ").is_ok());
+	}
+
+	#[test]
+	fn owner_drop_retries_native_cleanup_after_failed_guard_drop() {
+		let backend = Arc::new(Mock::default());
+		let owner = manager(Arc::clone(&backend));
+		let guard = owner.register("Control+KeyK").unwrap();
+		backend.unregister_fails.store(true, Ordering::Relaxed);
+		drop(guard);
+		assert!(matches!(owner.take_cleanup_error(), Some(Error::Native(_))));
+		assert_eq!(owner.inner.events.queue.lock().keys.len(), 1);
+		assert_eq!(backend.unregisters.lock().len(), 1);
+		backend.unregister_fails.store(false, Ordering::Relaxed);
+		drop(owner);
+		assert_eq!(backend.unregisters.lock().len(), 2);
+	}
+
+	#[test]
+	fn wayland_sessions_are_detected_without_xwayland_fallback() {
+		assert!(!wayland_session(false, None));
+		assert!(!wayland_session(false, Some("x11")));
+		assert!(wayland_session(true, None));
+		assert!(wayland_session(false, Some("wayland")));
+		assert!(wayland_session(true, Some("wayland")));
+		assert!(require_x11_session(false, Some("x11")).is_ok());
+		assert!(matches!(
+			require_x11_session(true, None),
+			Err(Error::Unavailable)
+		));
+		assert!(matches!(
+			require_x11_session(false, Some("wayland")),
+			Err(Error::Unavailable)
+		));
+	}
+
+	#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+	#[test]
+	fn with_waker_probes_the_session_before_claiming_the_owner_slot() {
+		// Exercises the live WAYLAND_DISPLAY / XDG_SESSION_TYPE probe. On X11
+		// (this agent) construction may still fail natively; it must not be
+		// Unavailable from a Wayland false positive.
+		match GlobalShortcuts::with_waker(|| {}) {
+			Ok(owner) => drop(owner),
+			Err(Error::Native(_) | Error::AlreadyOwned) => {}
+			Err(Error::Unavailable) => panic!("X11 session treated as Wayland"),
+			Err(error) => panic!("unexpected {error:?}"),
 		}
 	}
 }
