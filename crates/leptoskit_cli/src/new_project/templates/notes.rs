@@ -58,7 +58,7 @@ impl Notes {
 	}
 
 	/// Creates the screen for a host without sign-in: no account changes, so
-	/// the server-rendered list can be hydrated without fetching it again.
+	/// data streamed by the server can hydrate the browser query cache.
 	pub fn shared() -> Self {
 		Self::build("anonymous".to_owned())
 	}
@@ -75,7 +75,8 @@ impl Notes {
 					args.client
 						.invalidate_scope(&query_scope::<NotesQuery>())
 						.await;
-					draft.set(String::new());
+					// The write can finish after sign-out disposed this screen.
+					let _ = draft.try_set(String::new());
 				}
 			}),
 		);
@@ -124,7 +125,10 @@ impl Notes {
 		View()
 			.class("w-full max-w-[640px] gap-4 p-6 bg-slate-950 text-white")
 			.child(Heading(1, "Notes").class("text-3xl font-bold"))
-			.child(Text("Write a note. It's saved for you alone.").class("text-sm text-slate-300"))
+			.child(
+				Text("Write a note and keep track of what matters.")
+					.class("text-sm text-slate-300"),
+			)
 			.child(
 				View()
 					.class("flex-row items-center gap-2")

@@ -884,7 +884,7 @@ fn database_readme(name: &str, db: &DbConfig, auth: bool) -> String {
 
 `{name}_shared` declares the app's queries and mutations next to its contracts: `notes` lists the newest notes, and `add_note` adds one. Every screen calls them the same way, in the browser, in a native app, and while the server renders a page: `leptoskit::rpc::client::call(AddNote {{ body }}).await`. Their bodies, and the database code in them, compile only into the server, through `{name}_shared`'s `server` feature.{caller}
 
-The generated home screen in `{name}_app/src/notes.rs` uses those same types: it shows loading, empty, failed, and loaded states, checks the body before sending it, reports the mutation's result, and offers Refresh. In the browser the list stays current over the live socket; the server renders the first list in process rather than calling its own URL from HTML.
+The generated home screen in `{name}_app/src/notes.rs` uses those same types: it shows loading, empty, failed, and loaded states, checks the body before sending it, reports the mutation's result, and offers Refresh. In the browser the list stays current over the live socket; SSR loads query data in process and streams it into the browser cache, with a loading state in the initial HTML.
 
 The server answers each at `POST /api/<name>`, with its arguments as one JSON object: `POST /api/notes` with `{{}}`, and `POST /api/add_note` with `{{"body": "Milk"}}`. A failure answers `Kind|message` as text with its status, such as `400` for an empty note. The live socket at `/live` sends a subscribed query's result again whenever a write changes it.
 
