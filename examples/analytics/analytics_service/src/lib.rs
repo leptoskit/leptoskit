@@ -23,9 +23,9 @@
 //!   who that is. The app forwards it: a first-party service like this one gets
 //!   `forward_identity` by default, so the browser, a native app, and the app's
 //!   server while it renders sign each call with a short-lived token naming the
-//!   person, which only this service accepts. The service sees them as the
-//!   caller `person:<id>`, and [`capture`] records their events under that id
-//!   instead of the browser's visitor id.
+//!   person, which only this service accepts. The service finds them in the
+//!   request's `ForwardedIdentity`, and [`capture`] records their events under
+//!   `person:<id>` instead of the browser's visitor id.
 //!
 //! After changing the table, write a migration with `leptoskit db migration
 //! create <name> --service analytics`: see `readme.md`.
@@ -210,7 +210,7 @@ pub async fn capture(
 	#[serde(default)] properties: BTreeMap<String, String>,
 ) -> rpc::Result<()> {
 	check_event(&event, &distinct_id, &properties).map_err(rpc::Error::invalid)?;
-	let distinct_id = person(cx.identity()).map_or(distinct_id, str::to_owned);
+	let distinct_id = person(cx.identity()).unwrap_or(distinct_id);
 	let properties = serde_json::to_string(&properties)
 		.map_err(|error| rpc::Error::server(error.to_string()))?;
 	NewEvent {
@@ -309,7 +309,7 @@ pub async fn mine(cx: &rpc::QueryCx, limit: u32) -> rpc::Result<Vec<RecentEvent>
 	};
 
 	let rows = Event::query()
-		.filter(|event| event.distinct_id.eq(me.to_owned()))
+		.filter(|event| event.distinct_id.eq(me.clone()))
 		.order_by(|event| event.created_at.desc())
 		.limit(u64::from(limit.clamp(1, MAX_MINE)))
 		.all(cx.db())
@@ -318,13 +318,16 @@ pub async fn mine(cx: &rpc::QueryCx, limit: u32) -> rpc::Result<Vec<RecentEvent>
 	Ok(rows.into_iter().map(recent_event).collect())
 }
 
-/// The `person:` id of the signed-in person the app forwarded, if it did.
+/// The `person:` id of the signed-in person the app forwarded, if it did:
+/// read from the [`ForwardedIdentity`](rpc::server::ForwardedIdentity) only
+/// `ServiceCallers` adds after checking the token, never from a caller's
+/// name.
 #[cfg(feature = "service")]
-fn person(identity: &rpc::server::Identity) -> Option<&str> {
+fn person(identity: &rpc::server::Identity) -> Option<String> {
 	identity
-		.caller
-		.as_deref()
-		.filter(|caller| caller.starts_with(rpc::server::PERSON_CALLER_PREFIX))
+		.context
+		.get::<rpc::server::ForwardedIdentity>()
+		.map(|me| format!("{PERSON_PREFIX}{}", me.person))
 }
 
 #[cfg(feature = "service")]

@@ -118,15 +118,21 @@ pub(crate) fn for_service(config: &ClientConfig, service: &str) -> ClientConfig 
 	}
 }
 
-/// In the browser and a native app: asks the app for the signed-in person's
-/// token for `service`.
+/// In the browser and a native app: the [`IdentityToken`] for `service`,
+/// one per service, which its HTTP calls and its live connection share.
 #[cfg(target_arch = "wasm32")]
 #[expect(
 	clippy::unnecessary_wraps,
 	reason = "a server's version has nothing to give"
 )]
 fn identity_credentials(service: &str) -> Option<Arc<dyn super::Credentials>> {
-	Some(Arc::new(IdentityToken::new(service, super::api)))
+	static TOKENS: Mutex<Option<HashMap<String, Arc<IdentityToken>>>> = Mutex::new(None);
+	let mut tokens = TOKENS.lock().unwrap_or_else(PoisonError::into_inner);
+	let token = tokens
+		.get_or_insert_with(HashMap::new)
+		.entry(service.to_owned())
+		.or_insert_with(|| Arc::new(IdentityToken::new(service, super::api)));
+	Some(Arc::clone(token) as Arc<dyn super::Credentials>)
 }
 
 /// A server signs its calls to a service itself: see [`FromEnvironment`].
@@ -149,10 +155,15 @@ pub(crate) fn forget_identities() {
 /// How long before a token runs out the client asks for a new one.
 const RENEW_BEFORE_MS: u64 = 60_000;
 
-/// How long the client goes without asking again after the app gave no
-/// token: nobody is signed in, the app doesn't forward identity to the
-/// service, or the app couldn't be asked. A sign-in asks again at once.
+/// How long the client goes without asking again after the app answered
+/// that it has no token to give: nobody is signed in, or the app doesn't
+/// forward identity to the service. A sign-in asks again at once.
 const UNSIGNED_FOR_MS: u64 = 300_000;
+
+/// How long the client waits before asking again after asking failed,
+/// such as a dropped connection or a server error: doubling with each
+/// failure in a row, up to [`UNSIGNED_FOR_MS`].
+const FAILED_FOR_MS: u64 = 2_000;
 
 /// What signs a service's calls in the browser and in a native app: the
 /// signed-in person's token for that service, which the app's server mints
@@ -162,24 +173,42 @@ const UNSIGNED_FOR_MS: u64 = 300_000;
 /// It keeps the token until a minute before it runs out, asks again when
 /// the service refuses it, and forgets it on
 /// [`reauthenticate`](super::reauthenticate), which `leptoskit_auth`'s client
-/// calls on every sign-in and sign-out. When the app gives no token, calls
-/// go without one: they're anonymous, never more than that.
+/// calls on every sign-in and sign-out. Calls made while it asks wait for
+/// the same answer. When the app gives no token, calls go without one:
+/// they're anonymous, never more than that.
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(dead_code, reason = "a server signs its calls to a service itself")
 )]
 pub(crate) struct IdentityToken {
+	inner: Arc<Inner>,
+}
+
+struct Inner {
 	service: String,
 	/// The app's own client, which asks for the token.
 	app: Arc<dyn Fn() -> Arc<dyn Api> + Send + Sync>,
-	held: Mutex<Option<Held>>,
+	state: Mutex<State>,
+}
+
+/// An answer the app is still giving, which every call that needs it waits
+/// for.
+type Pending = futures::future::Shared<BoxFuture<'static, Option<String>>>;
+
+#[derive(Default)]
+struct State {
+	held: Option<Held>,
+	/// The question in flight, and the sign-in generation it was asked in.
+	pending: Option<(u64, Pending)>,
+	/// How many times in a row asking failed.
+	failures: u32,
 }
 
 /// What a service's client holds for it now.
 enum Kept {
 	/// `Bearer <token>`.
 	Token(String),
-	/// The app gave no token: call anonymously.
+	/// The app gave no token, or couldn't be asked: call anonymously.
 	Unsigned,
 	/// Nothing current: ask the app.
 	Nothing,
@@ -194,6 +223,15 @@ struct Held {
 	until_ms: u64,
 }
 
+/// What the app answered.
+enum Answer {
+	Token(crate::ServiceToken),
+	/// It has no token to give.
+	None,
+	/// It couldn't be asked, or answered with an error.
+	Failed,
+}
+
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(dead_code, reason = "a server signs its calls to a service itself")
@@ -204,16 +242,24 @@ impl IdentityToken {
 		app: impl Fn() -> Arc<dyn Api> + Send + Sync + 'static,
 	) -> Self {
 		Self {
-			service: service.to_owned(),
-			app: Arc::new(app),
-			held: Mutex::new(None),
+			inner: Arc::new(Inner {
+				service: service.to_owned(),
+				app: Arc::new(app),
+				state: Mutex::new(State::default()),
+			}),
 		}
+	}
+}
+
+impl Inner {
+	fn state(&self) -> std::sync::MutexGuard<'_, State> {
+		self.state.lock().unwrap_or_else(PoisonError::into_inner)
 	}
 
 	/// What's held, if it's still current.
 	fn current(&self) -> Kept {
-		let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-		let current = held.as_ref().filter(|held| {
+		let state = self.state();
+		let current = state.held.as_ref().filter(|held| {
 			held.generation == GENERATION.load(Ordering::SeqCst)
 				&& leptoskit_query::now_ms() < held.until_ms
 		});
@@ -228,45 +274,91 @@ impl IdentityToken {
 		}
 	}
 
+	/// The app's answer: the one already being asked for in this sign-in,
+	/// or a new question.
+	async fn fetch(self: &Arc<Self>) -> Option<String> {
+		let generation = GENERATION.load(Ordering::SeqCst);
+		let pending = {
+			let mut state = self.state();
+
+			match &state.pending {
+				Some((asked_in, pending)) if *asked_in == generation => pending.clone(),
+				_ => {
+					let inner = Arc::clone(self);
+					let ask: BoxFuture<'static, Option<String>> =
+						Box::pin(async move { inner.ask(generation).await });
+					let pending = futures::FutureExt::shared(ask);
+					state.pending = Some((generation, pending.clone()));
+					pending
+				}
+			}
+		};
+
+		pending.await
+	}
+
 	/// Asks the app for a token, and keeps the answer. A sign-in or
 	/// sign-out while it was asked makes the answer someone else's, so the
 	/// call then goes without one.
-	async fn fetch(&self) -> Option<String> {
-		let generation = GENERATION.load(Ordering::SeqCst);
+	async fn ask(&self, generation: u64) -> Option<String> {
 		let asked = leptoskit_query::now_ms();
-		let answer = (self.app)()
+		let answer = match (self.app)()
 			.call(
 				crate::service::SERVICE_TOKEN_OPERATION,
 				serde_json::json!({ "service": self.service }),
 				Key::None,
 			)
-			.await;
-		let minted = answer
-			.ok()
-			.and_then(|value| serde_json::from_value::<Option<crate::ServiceToken>>(value).ok())
-			.flatten();
-		let (authorization, until_ms) = match minted {
-			Some(minted) => {
-				let lasts = minted
-					.expires_in
-					.saturating_mul(1000)
-					.saturating_sub(RENEW_BEFORE_MS);
-				(
-					Some(format!("Bearer {}", minted.token)),
-					asked.saturating_add(lasts),
-				)
+			.await
+		{
+			Ok(value) => {
+				match serde_json::from_value::<Option<crate::ServiceToken>>(value) {
+					Ok(Some(minted)) => Answer::Token(minted),
+					Ok(None) => Answer::None,
+					Err(_) => Answer::Failed,
+				}
 			}
-			None => (None, asked.saturating_add(UNSIGNED_FOR_MS)),
+			Err(_) => Answer::Failed,
 		};
+
+		let mut state = self.state();
+
+		if state
+			.pending
+			.as_ref()
+			.is_some_and(|(asked_in, _)| *asked_in == generation)
+		{
+			state.pending = None;
+		}
 
 		if GENERATION.load(Ordering::SeqCst) != generation {
 			return None;
 		}
 
-		*self.held.lock().unwrap_or_else(PoisonError::into_inner) = Some(Held {
+		let (authorization, lasts) = match answer {
+			Answer::Token(minted) => {
+				state.failures = 0;
+				let lasts = minted
+					.expires_in
+					.saturating_mul(1000)
+					.saturating_sub(RENEW_BEFORE_MS);
+				(Some(format!("Bearer {}", minted.token)), lasts)
+			}
+			Answer::None => {
+				state.failures = 0;
+				(None, UNSIGNED_FOR_MS)
+			}
+			Answer::Failed => {
+				let wait = FAILED_FOR_MS
+					.saturating_mul(1 << state.failures.min(16))
+					.min(UNSIGNED_FOR_MS);
+				state.failures = state.failures.saturating_add(1);
+				(None, wait)
+			}
+		};
+		state.held = Some(Held {
 			generation,
 			authorization: authorization.clone(),
-			until_ms,
+			until_ms: asked.saturating_add(lasts),
 		});
 		authorization
 	}
@@ -275,25 +367,26 @@ impl IdentityToken {
 impl super::Credentials for IdentityToken {
 	fn authorization(&self) -> BoxFuture<'_, Result<Option<String>, FnError>> {
 		Box::pin(async move {
-			match self.current() {
+			match self.inner.current() {
 				Kept::Token(authorization) => Ok(Some(authorization)),
 				Kept::Unsigned => Ok(None),
-				Kept::Nothing => Ok(self.fetch().await),
+				Kept::Nothing => Ok(self.inner.fetch().await),
 			}
 		})
 	}
 
 	/// The service refused `sent`, or its live connection asked for a new
-	/// one: asks the app again, unless another call already has.
+	/// one: asks the app again, unless another call already has, or the
+	/// call went anonymously and the client is still waiting to ask.
 	fn refused(&self, sent: Option<String>) -> BoxFuture<'_, Result<bool, FnError>> {
 		Box::pin(async move {
-			if let Kept::Token(current) = self.current()
-				&& Some(&current) != sent.as_ref()
-			{
-				return Ok(true);
+			match self.inner.current() {
+				Kept::Token(current) if Some(&current) != sent.as_ref() => return Ok(true),
+				Kept::Unsigned if sent.is_none() => return Ok(false),
+				_ => {}
 			}
 
-			let renewed = self.fetch().await;
+			let renewed = self.inner.fetch().await;
 			Ok(renewed.is_some() && renewed != sent)
 		})
 	}
