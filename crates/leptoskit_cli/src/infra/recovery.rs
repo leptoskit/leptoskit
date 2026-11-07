@@ -10,6 +10,8 @@ use serde_json::json;
 use super::remote::Reservation;
 use super::remote::{self};
 
+mod units;
+
 pub(super) fn credentials() -> Result<Value> {
 	let required = |name| {
 		std::env::var(name)
@@ -66,29 +68,24 @@ pub(super) fn install(
 		include_bytes!("recovery.py"),
 	)?;
 	let unit = format!("leptoskit-{}-backup", c.name);
-	let service = format!(
-		"[Unit]\nDescription=Encrypted verified database backup for {}\nAfter=docker.service \
-		 network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nUMask=0077\\
-		 nExecStart=/usr/bin/python3 {base}/recovery.py \
-		 backup\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\\
-		 nReadWritePaths={base} /run/docker.sock\n",
-		c.name
-	);
-	let timer = format!(
-		"[Unit]\nDescription=Database backup schedule for \
-		 {}\n[Timer]\nOnCalendar={}\nPersistent=true\nRandomizedDelaySec=300\n[Install]\\
-		 nWantedBy=timers.target\n",
-		c.name, c.backups.schedule
-	);
+	let service_path = format!("/etc/systemd/system/{unit}.service");
+	let timer_path = format!("/etc/systemd/system/{unit}.timer");
+	remote::write(ip, &service_path, units::service(&c.name, &base).as_bytes())?;
 	remote::write(
 		ip,
-		&format!("/etc/systemd/system/{unit}.service"),
-		service.as_bytes(),
+		&timer_path,
+		units::timer(&c.name, &c.backups.schedule).as_bytes(),
 	)?;
-	remote::write(
+	// Validate the installed bytes before initializing the repository or
+	// enabling the timer. Calendar validation alone cannot catch broken units.
+	remote::execute(
 		ip,
-		&format!("/etc/systemd/system/{unit}.timer"),
-		timer.as_bytes(),
+		&format!(
+			"systemd-analyze verify --man=no {} {}",
+			remote::quote(&service_path),
+			remote::quote(&timer_path),
+		),
+		None,
 	)?;
 	invoke(ip, c, "init", "latest", false, Some(&reservation.owner))?;
 	remote::execute(
