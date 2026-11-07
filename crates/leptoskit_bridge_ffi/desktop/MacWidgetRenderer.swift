@@ -7,6 +7,12 @@ import LeptosKitBridge
 
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+
+    /// A light or dark switch lays the guest out again, which passes it on.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsLayout = true
+    }
 }
 
 /// Draws a `Vector` in shape layers, repainted only when its drawing, size or backing scale changes.

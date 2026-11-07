@@ -18,6 +18,7 @@ final class NativeGuestRuntime {
     private let requests = NativeRequestExecutor()
     private var started = false
     private var lastSize = CGSize.zero
+    private var lastDark = false
     private lazy var frames = NativeFrameLink { [weak self] timestamp, period in
         self?.frame(timestamp: timestamp, period: period)
     }
@@ -70,18 +71,22 @@ final class NativeGuestRuntime {
         close()
     }
 
-    /// The first positive layout starts the guest; later size changes resize it.
+    /// The first positive layout starts the guest; later size or appearance
+    /// changes resize it.
     func layout(size: CGSize, dark: Bool) throws {
         guard let guest, size.width > 0, size.height > 0 else { return }
 
         if !started {
             started = true
             try check(lk_guest_start(guest, Float(size.width), Float(size.height)))
-        } else if lastSize != size {
+            // The guest starts light; tell it at once when the view is dark.
+            if dark { try check(lk_guest_resize(guest, Float(size.width), Float(size.height), dark)) }
+        } else if lastSize != size || lastDark != dark {
             try check(lk_guest_resize(guest, Float(size.width), Float(size.height), dark))
         }
 
         lastSize = size
+        lastDark = dark
     }
 
     /// Stops the guest, waiting only for the step it is in, then closes the app it gives back.
