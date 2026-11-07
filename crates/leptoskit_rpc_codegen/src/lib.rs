@@ -35,6 +35,7 @@
 //! ```
 
 pub mod asyncapi;
+mod compatibility;
 pub mod openapi;
 pub mod spec;
 pub mod yaml;

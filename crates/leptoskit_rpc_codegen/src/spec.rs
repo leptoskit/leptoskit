@@ -530,50 +530,77 @@ fn is_null_schema(schema: &Value) -> bool {
 
 /// Collects every schema name a schema references.
 fn collect_refs(schema: &Value, refs: &mut BTreeSet<String>) {
+	visit_schema(schema, &mut |schema| {
+		if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+			&& let Some(name) = ref_name(reference)
+		{
+			// A reference may address a field within a named definition.
+			let name = name.split('/').next().unwrap_or(name);
+			refs.insert(name.replace("~1", "/").replace("~0", "~"));
+		}
+	});
+}
+
+/// Visits schema positions only: examples, defaults and enum values are
+/// application data even when they contain a key named `$ref`.
+pub(crate) fn visit_schema(schema: &Value, visit: &mut impl FnMut(&Value)) {
+	visit(schema);
 	let Some(object) = schema.as_object() else {
 		return;
 	};
-
-	collect_reference(object, refs);
-	collect_nested(object, refs);
-	collect_variants(object, refs);
-	collect_properties(object, refs);
-}
-
-/// The schema's own `$ref`, when it has one.
-fn collect_reference(object: &Map<String, Value>, refs: &mut BTreeSet<String>) {
-	if let Some(Value::String(reference)) = object.get("$ref")
-		&& let Some(name) = ref_name(reference)
-	{
-		refs.insert(name.to_owned());
-	}
-}
-
-/// The schemas under single-schema keywords.
-fn collect_nested(object: &Map<String, Value>, refs: &mut BTreeSet<String>) {
-	for key in ["items", "additionalProperties", "contains", "propertyNames"] {
+	for key in [
+		"additionalProperties",
+		"contains",
+		"propertyNames",
+		"not",
+		"if",
+		"then",
+		"else",
+		"unevaluatedProperties",
+		"unevaluatedItems",
+		"additionalItems",
+	] {
 		if let Some(nested) = object.get(key) {
-			collect_refs(nested, refs);
+			visit_schema(nested, visit);
 		}
 	}
-}
-
-/// The schemas listed under variant keywords.
-fn collect_variants(object: &Map<String, Value>, refs: &mut BTreeSet<String>) {
+	// Older tuple schemas use an array under items; current ones use
+	// prefixItems.
+	if let Some(items) = object.get("items") {
+		if let Some(items) = items.as_array() {
+			for item in items {
+				visit_schema(item, visit);
+			}
+		} else {
+			visit_schema(items, visit);
+		}
+	}
 	for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
-		if let Some(Value::Array(variants)) = object.get(key) {
+		if let Some(variants) = object.get(key).and_then(Value::as_array) {
 			for variant in variants {
-				collect_refs(variant, refs);
+				visit_schema(variant, visit);
 			}
 		}
 	}
-}
-
-/// The schemas of an object's properties.
-fn collect_properties(object: &Map<String, Value>, refs: &mut BTreeSet<String>) {
-	if let Some(Value::Object(properties)) = object.get("properties") {
-		for property in properties.values() {
-			collect_refs(property, refs);
+	for key in [
+		"properties",
+		"patternProperties",
+		"dependentSchemas",
+		"$defs",
+		"definitions",
+	] {
+		if let Some(properties) = object.get(key).and_then(Value::as_object) {
+			for property in properties.values() {
+				visit_schema(property, visit);
+			}
+		}
+	}
+	if let Some(dependencies) = object.get("dependencies").and_then(Value::as_object) {
+		for dependency in dependencies
+			.values()
+			.filter(|value| value.is_object() || value.is_boolean())
+		{
+			visit_schema(dependency, visit);
 		}
 	}
 }

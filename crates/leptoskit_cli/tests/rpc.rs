@@ -16,6 +16,8 @@ const SPEC: &str = include_str!("fixtures/fns_spec.json");
 const LOSSY_SPEC: &str =
 	include_str!("../../leptoskit_rpc_codegen/tests/fixtures/schema_fidelity.json");
 
+#[path = "rpc/compatibility.rs"]
+mod compatibility;
 #[path = "rpc/concurrent.rs"]
 mod concurrent;
 

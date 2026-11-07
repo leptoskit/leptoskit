@@ -133,10 +133,8 @@ fn write_spec(
 	Ok(())
 }
 
-/// Fails on a change that would break a client generated from the previous
-/// spec: a removed function, a changed kind or route, a new required
-/// argument, a removed argument, a changed result schema, or a new required
-/// scope.
+/// Conservatively compares the published HTTP and live wire contract,
+/// including referenced schemas, through the shared codegen comparator.
 fn check(
 	config: &LeptoskitConfig,
 	root: &Utf8PathBuf,
@@ -145,11 +143,9 @@ fn check(
 	include_internal: bool,
 ) -> Result<()> {
 	let current = visible(config, &acquire_spec(config, root, from)?, include_internal);
-	let previous = visible(
-		config,
-		&acquire_spec(config, root, Some(against))?,
-		include_internal,
-	);
+	// Today's exclusions must not erase operations from yesterday's contract.
+	let previous = acquire_spec(config, root, Some(against))?;
+	let previous = previous.published(include_internal, &[]);
 	let breaks = breaking_changes(&previous, &current);
 
 	if breaks.is_empty() {
@@ -163,85 +159,16 @@ fn check(
 	}
 
 	anyhow::bail!(
-		"{} breaking change(s) against {against}; bump the RPC's version or keep the old shape",
+		"{} contract change(s) against {against} need review; retain the old wire contract or \
+		 publish a separately named endpoint while installed clients still use it",
 		breaks.len()
 	)
 }
 
-/// The changes from `previous` to `current` an installed client would break
-/// on.
+/// Shared with artifact tooling so publication and deployment compare the
+/// same wire contract.
 fn breaking_changes(previous: &ApiSpec, current: &ApiSpec) -> Vec<String> {
-	let mut breaks = Vec::new();
-
-	for old in &previous.functions {
-		let Some(new) = current
-			.functions
-			.iter()
-			.find(|function| function.name == old.name)
-		else {
-			breaks.push(format!("removed `{}`", old.name));
-			continue;
-		};
-
-		if old.kind != new.kind {
-			breaks.push(format!(
-				"`{}` changed from a {} to a {}",
-				old.name,
-				old.kind.as_str(),
-				new.kind.as_str()
-			));
-		}
-
-		if old.path != new.path || old.method != new.method {
-			breaks.push(format!(
-				"`{}` moved from {} {} to {} {}",
-				old.name, old.method, old.path, new.method, new.path
-			));
-		}
-
-		if old.input != new.input || old.output != new.output {
-			breaks.push(format!("`{}` changed its encoding", old.name));
-		}
-
-		if old.output_schema != new.output_schema {
-			breaks.push(format!("`{}` changed its result schema", old.name));
-		}
-
-		for param in &old.params {
-			if !new
-				.params
-				.iter()
-				.any(|candidate| candidate.name == param.name)
-			{
-				breaks.push(format!(
-					"`{}` removed its `{}` argument",
-					old.name, param.name
-				));
-			}
-		}
-
-		for param in &new.params {
-			let was = old
-				.params
-				.iter()
-				.find(|candidate| candidate.name == param.name);
-
-			if was.is_none() && param.is_required() {
-				breaks.push(format!(
-					"`{}` added the required `{}` argument",
-					old.name, param.name
-				));
-			}
-		}
-
-		for scope in &new.scopes {
-			if !old.scopes.contains(scope) {
-				breaks.push(format!("`{}` now requires the `{scope}` scope", old.name));
-			}
-		}
-	}
-
-	breaks
+	previous.breaking_changes(current)
 }
 
 fn list_spec(
