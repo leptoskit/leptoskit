@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -227,6 +228,31 @@ impl DesktopMenu {
 		Ok(())
 	}
 
+	/// Updates a command or check accelerator. `None` clears it. Submenus and
+	/// separators return [`Error::InvalidItem`]. Does not re-scan the tree for
+	/// collisions with other items; call sites that rearrange shortcuts should
+	/// rebuild the menu when uniqueness matters.
+	pub fn set_accelerator(&self, id: &str, accelerator: Option<&str>) -> Result<(), Error> {
+		let parsed = parse(accelerator)?;
+
+		match &self.entry(id)?.item {
+			muda::MenuItemKind::MenuItem(item) => {
+				item.set_accelerator(parsed).map_err(|_| Error::Native)?;
+			}
+			muda::MenuItemKind::Check(item) => {
+				item.set_accelerator(parsed).map_err(|_| Error::Native)?;
+			}
+			_ => return Err(Error::InvalidItem),
+		}
+
+		Ok(())
+	}
+
+	/// The validated definition this native menu was built from.
+	pub fn definition(&self) -> &Definition {
+		&self.definition
+	}
+
 	fn entry(&self, id: &str) -> Result<&Entry, Error> {
 		self.local
 			.get(id)
@@ -322,12 +348,24 @@ fn parse(accelerator: Option<&str>) -> Result<Option<Accelerator>, Error> {
 }
 
 fn validate_accelerators(items: &[Item]) -> Result<(), Error> {
+	let mut seen = HashSet::new();
+	validate_accelerators_rec(items, &mut seen)
+}
+
+fn validate_accelerators_rec(items: &[Item], seen: &mut HashSet<Accelerator>) -> Result<(), Error> {
 	for item in items {
 		match item {
 			Item::Command { accelerator, .. } | Item::Check { accelerator, .. } => {
-				parse(accelerator.as_deref())?;
+				if let Some(accelerator) = parse(accelerator.as_deref())? {
+					// Same chord on two rows is ambiguous on every desktop
+					// backend (Windows accelerator tables keep both cmds;
+					// AppKit key equivalents collide silently).
+					if !seen.insert(accelerator) {
+						return Err(Error::InvalidAccelerator);
+					}
+				}
 			}
-			Item::Submenu { items, .. } => validate_accelerators(items)?,
+			Item::Submenu { items, .. } => validate_accelerators_rec(items, seen)?,
 			Item::Separator => {}
 		}
 	}
@@ -461,5 +499,89 @@ mod tests {
 			),
 			Err(Error::InvalidAccelerator)
 		));
+	}
+
+	#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+	#[test]
+	fn duplicate_accelerator_chords_are_rejected_across_the_tree() {
+		assert!(matches!(
+			DesktopMenu::new(
+				Definition::new(vec![
+					Item::Command {
+						id: "save".into(),
+						label: "Save".into(),
+						enabled: true,
+						accelerator: Some("CmdOrCtrl+S".into()),
+					},
+					Item::Submenu {
+						id: "file".into(),
+						label: "File".into(),
+						enabled: true,
+						items: vec![Item::Check {
+							id: "autosave".into(),
+							label: "Autosave".into(),
+							enabled: true,
+							checked: false,
+							// Same chord after muda normalizes CmdOrCtrl on Linux.
+							accelerator: Some("Ctrl+S".into()),
+						}],
+					},
+				])
+				.unwrap(),
+			),
+			Err(Error::InvalidAccelerator)
+		));
+	}
+
+	#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+	#[test]
+	fn set_accelerator_updates_commands_and_rejects_submenus() {
+		let menu = DesktopMenu::new(
+			Definition::new(vec![
+				Item::Command {
+					id: "save".into(),
+					label: "Save".into(),
+					enabled: true,
+					accelerator: Some("CmdOrCtrl+S".into()),
+				},
+				Item::Check {
+					id: "pin".into(),
+					label: "Pin".into(),
+					enabled: true,
+					checked: false,
+					accelerator: None,
+				},
+				Item::Submenu {
+					id: "view".into(),
+					label: "View".into(),
+					enabled: true,
+					items: vec![Item::Command {
+						id: "zoom".into(),
+						label: "Zoom".into(),
+						enabled: true,
+						accelerator: None,
+					}],
+				},
+			])
+			.unwrap(),
+		)
+		.unwrap();
+		assert_eq!(menu.definition().items().len(), 3);
+		menu.set_accelerator("save", Some("CmdOrCtrl+Shift+S"))
+			.unwrap();
+		menu.set_accelerator("save", None).unwrap();
+		menu.set_accelerator("pin", Some("CmdOrCtrl+P")).unwrap();
+		assert_eq!(
+			menu.set_accelerator("view", Some("CmdOrCtrl+V")),
+			Err(Error::InvalidItem)
+		);
+		assert_eq!(
+			menu.set_accelerator("missing", Some("CmdOrCtrl+M")),
+			Err(Error::InvalidItem)
+		);
+		assert_eq!(
+			menu.set_accelerator("save", Some("NotAKey+Q")),
+			Err(Error::InvalidAccelerator)
+		);
 	}
 }

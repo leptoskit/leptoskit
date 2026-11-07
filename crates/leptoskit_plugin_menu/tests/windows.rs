@@ -86,6 +86,22 @@ fn window_menu_commands_and_teardown() {
 		let previous = CreateMenu();
 		assert!(!previous.is_null());
 		assert_ne!(SetMenu(window, previous), 0);
+		let flat = Rc::new(
+			DesktopMenu::new(
+				Definition::new(vec![Item::Command {
+					id: "quit".into(),
+					label: "Quit".into(),
+					enabled: true,
+					accelerator: None,
+				}])
+				.unwrap(),
+			)
+			.unwrap(),
+		);
+		assert!(matches!(
+			WindowMenu::attach(flat, window),
+			Err(Error::Unavailable)
+		));
 		let lease = WindowMenu::attach(menu.clone(), window).unwrap();
 		assert!(matches!(
 			WindowMenu::attach(menu.clone(), window),
@@ -110,6 +126,17 @@ fn window_menu_commands_and_teardown() {
 		if let Some(event) = events.try_recv() {
 			assert!(menu.handle_event(&event).is_none());
 		}
+
+		// With F6 still registered, forward a keydown through the lease.
+		let mut message = std::mem::zeroed::<windows_sys::Win32::UI::WindowsAndMessaging::MSG>();
+		message.hwnd = window;
+		message.message = windows_sys::Win32::UI::WindowsAndMessaging::WM_KEYDOWN;
+		message.wParam = 0x75; // VK_F6
+		let _ = lease.translate_accelerator(&message);
+		// Clearing the only chord drops muda's HACCEL; translate must stay
+		// safe.
+		menu.set_accelerator("save", None).unwrap();
+		assert!(!lease.translate_accelerator(&message));
 
 		drop(lease);
 		assert_eq!(GetMenu(window), previous);

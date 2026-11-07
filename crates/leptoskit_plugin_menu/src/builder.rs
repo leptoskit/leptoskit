@@ -150,12 +150,9 @@ impl MenuBarBuilder {
 
 	/// Validates the definition and that every root item is a submenu.
 	pub fn build(self) -> Result<Definition, Error> {
-		if self.items.is_empty()
-			|| self
-				.items
-				.iter()
-				.any(|item| !matches!(item, Item::Submenu { .. }))
-		{
+		// Empty or flat roots are a presentation rule (`Unavailable`), not a
+		// definition bound; `Definition::new` still validates children.
+		if !crate::root_items_are_submenus_slice(&self.items) {
 			return Err(Error::Unavailable);
 		}
 

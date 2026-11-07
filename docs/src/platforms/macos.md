@@ -40,7 +40,6 @@ The generated Swift host still ships a small hardcoded Edit menu. A Rust desktop
 
 ```rust
 use leptoskit_plugin_menu::{Command, MenuBar, Submenu, macos};
-use std::rc::Rc;
 
 let definition = MenuBar()
 	.submenu(
@@ -53,7 +52,7 @@ let application = macos::application(main_thread);
 let lease = macos::ApplicationMenu::install(definition, &application)?;
 ```
 
-Keep the lease for as long as the menu should stay installed; dropping it restores the previous menu when nothing else replaced the slot. Status-item / tray menus reuse the same `DesktopMenu` through `leptoskit_plugin_tray::TrayHost::set_menu` and do not take this lease. Menu is a host-owned desktop API, not a guest plugin: list it as a host dependency, not under `native.plugins`. See the [plugin inventory](plugin-inventory.md) for Windows and Linux parity.
+Keep the lease for as long as the menu should stay installed; dropping it restores the previous menu when nothing else replaced the slot. Duplicate accelerator chords in one tree are rejected before any native allocation; hosts can still call `DesktopMenu::set_accelerator` later to change or clear a row. Status-item / tray menus reuse the same `DesktopMenu` through `leptoskit_plugin_tray::TrayHost::set_menu` and do not take this lease. Menu is a host-owned desktop API, not a guest plugin: list it as a host dependency, not under `native.plugins`. See the [plugin inventory](plugin-inventory.md) for Windows and Linux parity.
 
 ## Desktop widgets
 
