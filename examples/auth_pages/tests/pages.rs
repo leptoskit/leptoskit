@@ -1226,7 +1226,7 @@ async fn the_account_bar_opens_each_section_and_signs_out() {
 					cache.set_query_data(&client::connected_apps(), (), Vec::new());
 				},
 				true,
-				|screens| screens.gate(|| Text("Home")),
+				|screens| screens.gate(|| view! { <Text>"Home"</Text> }),
 			)
 			.await;
 			assert!(shown.has("Home"), "{}", shown.text());
