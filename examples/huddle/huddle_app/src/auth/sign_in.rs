@@ -887,4 +887,389 @@ mod tests {
 		assert_eq!(sentence("Done!"), "Done!");
 		assert_eq!(sentence("  "), "");
 	}
+
+	// The states only the screen can reach: the steps after the email, the
+	// two-step prompts, and what each refusal says. Their inputs live in
+	// private signals, so these tests drive the same screen the app mounts
+	// from this module. They share the binary with the room's tokio test, so
+	// they run on the same executor instead of installing their own.
+
+	use leptoskit::leptos::prelude::Owner;
+	use leptoskit::query::QueryClient;
+	use leptoskit::query::QueryDefaults;
+	use leptoskit::query::RetryPolicy;
+	use leptoskit_testing::Finder;
+	use leptoskit_testing::Queries;
+	use leptoskit_testing::WidgetTester;
+
+	fn fixture() -> (Owner, SignIn, QueryClient) {
+		let owner = Owner::new();
+		let (sign_in, client) = owner.with(|| {
+			let client = QueryClient::new()
+				.with_defaults(QueryDefaults::new().with_retry(RetryPolicy::Never));
+			client.provide();
+			(SignIn::default(), client)
+		});
+		(owner, sign_in, client)
+	}
+
+	fn mount(owner: &Owner, sign_in: &SignIn) -> WidgetTester {
+		let owner = owner.clone();
+		let sign_in = *sign_in;
+		WidgetTester::new(move || owner.with(|| sign_in.screen()), 800.0, 2400.0)
+			.expect("the sign-in screen mounts")
+	}
+
+	fn prompt(factors: Vec<Factor>) -> SecondFactorPrompt {
+		SecondFactorPrompt {
+			factors,
+			expires_in: 300,
+		}
+	}
+
+	/// The refusals a call can leave on screen; which one depends on the
+	/// features this test binary was built with alongside other packages.
+	fn refused(screen: &WidgetTester) -> bool {
+		[
+			"This build can't reach the server: turn on leptoskit_auth's `web` feature for the \
+			 browser, or `guest` for a native app.",
+			"Signing in and out runs in the browser or the app, not while the server renders.",
+			"Something went wrong; try again.",
+		]
+		.iter()
+		.any(|text| !screen.find_all(&Finder::text(*text)).is_empty())
+	}
+
+	/// Runs every queued effect and call to rest.
+	async fn settle() {
+		for _ in 0..8 {
+			any_spawner::Executor::tick().await;
+			tokio::task::yield_now().await;
+		}
+	}
+
+	#[tokio::test]
+	async fn the_code_step_checks_and_sends_again() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				sign_in.mounted.set(true);
+				sign_in.email.set("ada@example.com".into());
+				sign_in.sent_to.set(Some("ada@example.com".into()));
+				settle().await;
+				let sign_in_button = Finder::role(NativeKind::Button, "Sign in");
+				let mut screen = mount(&owner, &sign_in);
+
+				screen
+					.get(&Finder::text(
+						"Check ada@example.com for a code. It works for 10 minutes.",
+					))
+					.unwrap();
+				screen.get(&Finder::label("Code")).unwrap();
+				screen.get(&Finder::text("Send a new code")).unwrap();
+				screen
+					.get(&Finder::text("Use a different address"))
+					.unwrap();
+
+				// An empty code is refused here.
+				screen.tap(&sign_in_button).unwrap();
+				settle().await;
+				screen.pump();
+				screen
+					.get(&Finder::text("Enter the code from the email."))
+					.unwrap();
+
+				// A typed one reaches the client, which has no server here.
+				screen
+					.enter_text(&Finder::label("Code"), "ABCD-EFGH")
+					.unwrap();
+				screen.tap(&sign_in_button).unwrap();
+				settle().await;
+				screen.pump();
+				assert!(refused(&screen), "the code's refusal is on screen");
+
+				// Sending another code without an address asks for one first.
+				sign_in.email.set(String::new());
+				screen.pump();
+				screen.tap(&Finder::text("Send a new code")).unwrap();
+				settle().await;
+				screen.pump();
+				screen
+					.get(&Finder::text(
+						"Enter an email address, such as ada@example.com.",
+					))
+					.unwrap();
+
+				// Starting over returns to the address step.
+				screen
+					.tap(&Finder::text("Use a different address"))
+					.unwrap();
+				settle().await;
+				screen.pump();
+				screen.get(&Finder::label("Email address")).unwrap();
+
+				drop(screen);
+				owner.cleanup();
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn the_second_step_names_every_factor_it_offers() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				sign_in.mounted.set(true);
+				sign_in
+					.second
+					.set(Some(prompt(vec![Factor::Totp, Factor::RecoveryCode])));
+				settle().await;
+				let mut screen = mount(&owner, &sign_in);
+
+				screen
+					.get(&Finder::text(
+						"Enter the 6-digit code from your authenticator app. Lost your phone? \
+						 Enter one of your recovery codes instead.",
+					))
+					.unwrap();
+				assert!(
+					screen.query_by_text("Use a passkey").unwrap().is_none(),
+					"no passkey was offered"
+				);
+
+				// The code is checked before it is sent, then the call fails.
+				screen.tap(&Finder::text("Continue")).unwrap();
+				settle().await;
+				screen.pump();
+				screen
+					.get(&Finder::text("Enter the code from your authenticator app."))
+					.unwrap();
+				screen
+					.enter_text(&Finder::label("Authenticator or recovery code"), "123456")
+					.unwrap();
+				screen.tap(&Finder::text("Continue")).unwrap();
+				settle().await;
+				screen.pump();
+				assert!(refused(&screen), "the code's refusal is on screen");
+
+				// Without a recovery code the hint only names the app.
+				sign_in.second.set(Some(prompt(vec![Factor::Totp])));
+				settle().await;
+				screen.pump();
+				screen
+					.get(&Finder::text(
+						"Enter the 6-digit code from your authenticator app.",
+					))
+					.unwrap();
+
+				// A passkey alone offers the passkey button, and its refusal
+				// shows.
+				sign_in.second.set(Some(prompt(vec![Factor::Passkey])));
+				settle().await;
+				screen.pump();
+				screen
+					.get(&Finder::text(
+						"Use your passkey, or enter one of your recovery codes.",
+					))
+					.unwrap();
+				screen.tap(&Finder::text("Use a passkey")).unwrap();
+				settle().await;
+				screen.pump();
+				assert!(refused(&screen), "the passkey's refusal is on screen");
+
+				// Starting again clears every step.
+				screen.tap(&Finder::text("Start again")).unwrap();
+				settle().await;
+				screen.pump();
+				screen.get(&Finder::label("Email address")).unwrap();
+				assert!(sign_in.second.get_untracked().is_none());
+
+				drop(screen);
+				owner.cleanup();
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn an_email_already_in_use_offers_both_ways_forward() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				sign_in.mounted.set(true);
+				// The mount effect reads how a provider sign-in ended and
+				// would clear a value set before it ran.
+				settle().await;
+				sign_in.outcome.set(Some(ProviderOutcome::EmailInUse));
+				let mut screen = mount(&owner, &sign_in);
+
+				screen
+					.get(&Finder::text(
+						"An account with that email address already exists. Sign in to it with \
+						 your email to connect this sign-in from its security settings, or \
+						 continue with a separate account.",
+					))
+					.unwrap();
+
+				// Signing in with the address goes back to step one.
+				screen.tap(&Finder::text("Sign in with my email")).unwrap();
+				settle().await;
+				screen.pump();
+				screen.get(&Finder::label("Email address")).unwrap();
+
+				// A separate account runs the mutation, which fails here.
+				sign_in.outcome.set(Some(ProviderOutcome::EmailInUse));
+				settle().await;
+				screen.pump();
+				screen
+					.tap(&Finder::text("Continue with a separate account"))
+					.unwrap();
+				settle().await;
+				screen.pump();
+				assert!(refused(&screen), "the refusal is on screen");
+
+				drop(screen);
+				owner.cleanup();
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn a_returning_provider_says_how_it_ended() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				sign_in.mounted.set(true);
+				settle().await;
+				sign_in
+					.outcome
+					.set(Some(ProviderOutcome::Failed("locked".into())));
+				let mut screen = mount(&owner, &sign_in);
+
+				screen
+					.get(&Finder::text(
+						"This account is locked for a while after too many attempts.",
+					))
+					.unwrap();
+
+				// A signed-in return says nothing here: the session query
+				// moves the screen on by itself.
+				sign_in.outcome.set(Some(ProviderOutcome::SignedIn));
+				settle().await;
+				screen.pump();
+				assert!(
+					screen
+						.query_by_text(
+							"This account is locked for a while after too many attempts."
+						)
+						.unwrap()
+						.is_none()
+				);
+
+				drop(screen);
+				owner.cleanup();
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn a_waiting_screen_counts_down_and_says_so() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				sign_in.mounted.set(true);
+				sign_in.wait.set(30);
+				settle().await;
+				let mut screen = mount(&owner, &sign_in);
+				screen.get(&Finder::text("Try again in 30 s")).unwrap();
+
+				sign_in.sent_to.set(Some("ada@example.com".into()));
+				settle().await;
+				screen.pump();
+				screen.get(&Finder::text("Try again in 30 s")).unwrap();
+
+				sign_in.second.set(Some(prompt(vec![Factor::Totp])));
+				settle().await;
+				screen.pump();
+				screen.get(&Finder::text("Try again in 30 s")).unwrap();
+
+				// A rate limit starts the countdown at its own second, and
+				// asking again while it runs doesn't start a second one.
+				let error = refusal("rate_limited", Some(3));
+				sign_in.wait.set(0);
+				hold_off(sign_in.wait, &error);
+				assert_eq!(sign_in.wait.get_untracked(), 3);
+				hold_off(sign_in.wait, &error);
+				assert_eq!(sign_in.wait.get_untracked(), 3);
+
+				drop(screen);
+				owner.cleanup();
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn an_unmounted_screen_does_not_claim_to_know() {
+		let _ = any_spawner::Executor::init_tokio();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let (owner, sign_in, client) = fixture();
+				let session: PublicSession = serde_json::from_value(serde_json::json!({
+					"id": "0192f3c4-0000-7000-8000-000000000090",
+					"account_id": "0192f3c4-0000-7000-8000-000000000091",
+					"aal": "aal1",
+					"authenticated_at": "2026-11-01T10:00:00Z",
+					"mfa_at": null,
+					"last_seen_at": "2026-11-01T10:00:00Z",
+					"idle_expires_at": "2026-11-02T10:00:00Z",
+					"expires_at": "2026-12-01T10:00:00Z",
+					"device": "the test",
+					"revoked_at": null,
+					"created_at": "2026-11-01T10:00:00Z"
+				}))
+				.expect("a session");
+				client.set_query_data(&leptoskit::auth::client::session(), (), Some(session));
+
+				// Until the mount effect runs, the answer is unknown on
+				// purpose, so a server render and the browser's first render
+				// agree.
+				assert!(sign_in.known().is_none());
+				assert!(!sign_in.is_signed_in());
+				let checking = mount(&owner, &sign_in);
+				checking
+					.get(&Finder::text("Checking whether you're signed in…"))
+					.unwrap();
+				drop(checking);
+
+				sign_in.mounted.set(true);
+				settle().await;
+				assert_eq!(sign_in.known(), Some(true));
+				assert!(sign_in.session().is_some());
+				assert!(sign_in.is_signed_in());
+				assert!(!sign_in.is_signing_out());
+				sign_in.sign_out();
+				settle().await;
+				assert!(!sign_in.is_signing_out());
+
+				let screen = mount(&owner, &sign_in);
+				screen.get(&Finder::text("You're signed in.")).unwrap();
+				drop(screen);
+
+				client.set_query_data(&leptoskit::auth::client::session(), (), None);
+				settle().await;
+				assert_eq!(sign_in.known(), Some(false));
+
+				owner.cleanup();
+			})
+			.await;
+	}
 }
