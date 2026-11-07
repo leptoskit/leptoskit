@@ -34,3 +34,6 @@ rules:
       - hosted-pilot.yml
       - publish.yml
       - release.yml
+      # Acceptance uses the composite actions from the checked-out release
+      # revision, which can differ from the workflow caller's revision.
+      - sdk-acceptance.yml

@@ -22,8 +22,8 @@
 //!
 //! The tests need each language's toolchain, so they're ignored by default:
 //! `cargo nextest run -p leptoskit_rpc --all-features --test sdk_live
-//! --run-ignored all`. A test whose toolchain is missing says so and passes,
-//! unless `LEPTOSKIT_REQUIRE_SDK_TOOLCHAINS=1`.
+//! --run-ignored all`. Selecting a test requires its toolchain; missing tools
+//! fail the test. `devenv shell test:sdk` runs every language serially.
 
 #![cfg(all(feature = "live", feature = "sqlite"))]
 
@@ -324,6 +324,7 @@ async fn relay(
 				// The mutation committed; its answer is lost with the
 				// connection.
 				cuts.fetch_add(1, Ordering::SeqCst);
+
 				return;
 			}
 
@@ -355,9 +356,8 @@ fn generate(language: TargetLanguage, package: &str, dir: &Path) {
 		.expect("write the client");
 }
 
-/// Whether `program` runs; otherwise the test is skipped, unless every
-/// toolchain is required.
-fn have(program: &str) -> bool {
+/// A selected acceptance test must execute its client, never silently skip.
+fn require_toolchain(program: &str) {
 	// `go` spells it `go version`.
 	let found = ["--version", "version"].iter().any(|flag| {
 		Command::new(program)
@@ -366,15 +366,16 @@ fn have(program: &str) -> bool {
 			.is_ok_and(|output| output.status.success())
 	});
 
-	if !found {
-		assert!(
-			std::env::var("LEPTOSKIT_REQUIRE_SDK_TOOLCHAINS").as_deref() != Ok("1"),
-			"`{program}` is required but isn't on PATH"
-		);
-		eprintln!("skipped: `{program}` isn't on PATH");
-	}
+	assert!(
+		found,
+		"`{program}` is required by this SDK acceptance test; use `devenv shell test:sdk`"
+	);
+}
 
-	found
+#[test]
+#[should_panic(expected = "is required by this SDK acceptance test")]
+fn a_missing_sdk_toolchain_fails_instead_of_skipping() {
+	require_toolchain("leptoskit-nonexistent-sdk-toolchain-test");
 }
 
 /// A fresh directory for one test's client.
@@ -469,14 +470,13 @@ fn deadline(mut command: Command) -> Command {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs deno; run with --run-ignored all"]
 async fn typescript_sdk_runs_live_under_deno() {
-	if !have("deno") {
-		return;
-	}
+	require_toolchain("deno");
 
 	let harness = start().await;
 	let dir = scratch("deno");
 	generate(TargetLanguage::TypeScript, "sdk-live", dir.path());
 	std::fs::copy(programs().join("client.ts"), dir.path().join("client.ts")).unwrap();
+
 	let check = Command::new("deno")
 		.args(["check", "index.ts", "live.ts", "client.ts"])
 		.current_dir(dir.path())
@@ -497,9 +497,7 @@ async fn typescript_sdk_runs_live_under_deno() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs node 22 or newer; run with --run-ignored all"]
 async fn typescript_sdk_runs_live_under_node() {
-	if !have("node") {
-		return;
-	}
+	require_toolchain("node");
 
 	let harness = start().await;
 	let dir = scratch("node");
@@ -515,15 +513,14 @@ async fn typescript_sdk_runs_live_under_node() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs uv; run with --run-ignored all"]
 async fn python_sdk_runs_live() {
-	if !have("uv") {
-		return;
-	}
+	require_toolchain("uv");
 
 	let harness = start().await;
 	let dir = scratch("python");
 	let package = dir.path().join("generated");
 	generate(TargetLanguage::Python, "sdk_live", &package);
 	let venv = dir.path().join("venv");
+
 	let uv = |args: &[&std::ffi::OsStr]| {
 		let output = Command::new("uv").args(args).output().unwrap();
 		assert!(
@@ -532,6 +529,7 @@ async fn python_sdk_runs_live() {
 			String::from_utf8_lossy(&output.stderr)
 		);
 	};
+
 	uv(&[
 		"venv".as_ref(),
 		"--python".as_ref(),
@@ -543,9 +541,11 @@ async fn python_sdk_runs_live() {
 	} else {
 		venv.join("bin/python")
 	};
+
 	// Installing the package checks its declared dependencies: the live
 	// extra brings in `websockets`, and the async one `httpx`.
 	let requirement = format!("{}[async,live]", package.display());
+
 	uv(&[
 		"pip".as_ref(),
 		"install".as_ref(),
@@ -562,9 +562,7 @@ async fn python_sdk_runs_live() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dart; run with --run-ignored all"]
 async fn dart_sdk_runs_live() {
-	if !have("dart") {
-		return;
-	}
+	require_toolchain("dart");
 
 	let harness = start().await;
 	let dir = scratch("dart");
@@ -572,6 +570,7 @@ async fn dart_sdk_runs_live() {
 	let bin = dir.path().join("bin");
 	std::fs::create_dir_all(&bin).unwrap();
 	std::fs::copy(programs().join("client.dart"), bin.join("client.dart")).unwrap();
+
 	let dart = |args: &[&str]| {
 		let output = Command::new("dart")
 			.args(args)
@@ -585,6 +584,7 @@ async fn dart_sdk_runs_live() {
 			String::from_utf8_lossy(&output.stderr)
 		);
 	};
+
 	dart(&["pub", "get"]);
 	// Errors and warnings fail the analysis; the client program is checked
 	// against the generated package too.
@@ -599,9 +599,7 @@ async fn dart_sdk_runs_live() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs go; run with --run-ignored all"]
 async fn go_sdk_runs_live() {
-	if !have("go") {
-		return;
-	}
+	require_toolchain("go");
 
 	let harness = start().await;
 	let dir = scratch("go");
@@ -611,6 +609,7 @@ async fn go_sdk_runs_live() {
 		dir.path().join("client_test.go"),
 	)
 	.unwrap();
+
 	let go = |args: &[&str]| {
 		let output = Command::new("go")
 			.args(args)
@@ -643,7 +642,10 @@ async fn go_sdk_runs_live() {
 /// Where the generated Rust crates build: one directory every run shares,
 /// so their dependencies build once.
 fn rust_target() -> PathBuf {
-	Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sdk_live")
+	std::env::var_os("LEPTOSKIT_SDK_TARGET_DIR").map_or_else(
+		|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sdk_live"),
+		PathBuf::from,
+	)
 }
 
 /// Builds the generated crate in `dir`, and checks it built without
@@ -751,11 +753,13 @@ async fn cli_watch_streams_ndjson() {
 	// A command that needs a scope gives the CLI its sign-in, whose token
 	// the live connection carries too: the channel lets only callers join.
 	let mut spec = rpc::spec::collect(&SpecOptions::new("SdkLive", "0.1.0")).expect("the spec");
+
 	for function in &mut spec.functions {
 		if function.name == "add_sdk_note" {
 			function.scopes = vec!["notes".to_owned()];
 		}
 	}
+
 	spec.generate(&GenerateOptions::new(TargetLanguage::Cli, "sdk-live-cli"))
 		.write_to(dir.path(), Scaffold::Full)
 		.expect("write the CLI");
