@@ -405,7 +405,7 @@ What the service learns, and what it can't do with it:
 
 - It learns the person's id and nothing else: not their session, email, or roles.
 - A token for one service doesn't work at any other service, or at your app.
-- When someone signs out, `leptoskit_auth`'s client forgets their tokens and the client stops asking for more. A token already handed out keeps working until it expires, at most five minutes later. If you don't use `leptoskit_auth`'s client, call `rpc::client::reauthenticate()` after signing in or out.
+- When someone signs out, `leptoskit_auth`'s client forgets their tokens and the client stops asking for more. But a token can't be taken back once it's handed out: a service can keep seeing that person for up to about five and a half minutes after they sign out, or after an admin revokes their session, and a live connection to the service can stay open as them for up to five. If a service's data must disappear the moment someone signs out, don't forward identity to it; have the app's server read it with `call_as_app` instead. If you don't use `leptoskit_auth`'s client, call `rpc::client::reauthenticate()` after signing in or out.
 
 It needs two things you probably already have: your app's server serves `rpc::server::Server` with your sign-in as its `Identify`, which answers the client's request for a token, and the service builds its server with `ServiceCallers::for_service`, which accepts tokens made for it.
 

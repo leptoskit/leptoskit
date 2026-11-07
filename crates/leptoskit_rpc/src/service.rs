@@ -108,8 +108,10 @@ pub(crate) const SERVICE_TOKEN_OPERATION: &str = "rpc.service_token";
 ///
 /// The client asks for one itself before it calls a service, and signs the
 /// service's calls and its live connection with it; an app doesn't call
-/// this. The answer is `None` for a caller nobody is signed in as, and a
-/// `Forbidden` error when the app doesn't forward identity to that service.
+/// this. The answer is `None` for a caller nobody is signed in as, and for a
+/// service the app doesn't forward identity to. A service's own server, and
+/// a caller that is a forwarded person, a service, or the app, are refused
+/// with `Forbidden`.
 ///
 /// It's an action, so it runs no transaction and keeps no receipt: a token
 /// is never stored.
@@ -150,7 +152,7 @@ impl Operation for ServiceTokenArgs {
 
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	fn run(self, cx: &Self::Context) -> impl Future<Output = crate::Result<Self::Output>> + Send {
-		std::future::ready(crate::server::service_identity_token(
+		std::future::ready(crate::server::answer_service_token(
 			&self.service,
 			cx.identity(),
 		))

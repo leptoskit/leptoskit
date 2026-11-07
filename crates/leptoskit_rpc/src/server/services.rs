@@ -125,7 +125,7 @@ const SERVICE_NAME: &str = "LEPTOSKIT_SERVICE_NAME";
 /// #[rpc::query(service = "analytics")]
 /// pub async fn mine(cx: &rpc::QueryCx) -> rpc::Result<Vec<Event>> {
 /// 	let Some(me) = cx.identity().context.get::<rpc::server::ForwardedIdentity>() else {
-/// 		return Err(rpc::Error::unauthorized("sign in to see your events"));
+/// 		return Err(rpc::Error::forbidden("sign in to see your events"));
 /// 	};
 /// 	// … the events of `me.person`
 /// }
@@ -133,6 +133,10 @@ const SERVICE_NAME: &str = "LEPTOSKIT_SERVICE_NAME";
 ///
 /// A token for another service, an expired one, or one that was changed is
 /// refused with `401`, which tells the client to fetch a new one.
+///
+/// Only this layer names callers `app`, `person:…`, and `service:…`, and only
+/// it adds a [`ForwardedIdentity`]: an identity from `inner` that does is
+/// refused, so a mistake there can't pass for the app or a forwarded person.
 pub struct ServiceCallers<I> {
 	inner: I,
 	/// Each token's SHA-256 and its caller name.
@@ -252,31 +256,66 @@ fn bearer(request: &http::request::Parts) -> Option<&str> {
 	)
 }
 
+impl<I: Identify> ServiceCallers<I> {
+	/// Who `token` names, when this layer knows it: a forwarded person or a
+	/// known caller. `None` leaves it to `inner`.
+	fn own(&self, token: &str) -> Option<Result<Identity, Error>> {
+		if let Some(key) = &self.identity
+			&& token.starts_with(TOKEN_PREFIX)
+		{
+			return Some(
+				key.verify(token, SystemTime::now())
+					.map(|forwarded| forwarded.identity()),
+			);
+		}
+
+		self.known(token)
+			.map(|caller| Ok(Identity::anonymous().with_caller(caller)))
+	}
+}
+
+/// An identity `inner` gave, unless it claims what only [`ServiceCallers`]
+/// gives: the caller `app`, `person:…`, or `service:…`, or a
+/// [`ForwardedIdentity`].
+fn from_inner(identity: Identity) -> Result<Identity, Error> {
+	let reserved = identity.caller.as_deref().is_some_and(|caller| {
+		caller == APP_CALLER
+			|| caller.starts_with(PERSON_CALLER_PREFIX)
+			|| caller.starts_with(SERVICE_CALLER_PREFIX)
+	});
+
+	if reserved || identity.context.get::<ForwardedIdentity>().is_some() {
+		return Err(Error::server(
+			"the server's `Identify` named a caller that only `ServiceCallers` names (`app`, \
+			 `person:…`, or `service:…`); give it another name",
+		));
+	}
+
+	Ok(identity)
+}
+
 impl<I: Identify> Identify for ServiceCallers<I> {
 	fn identify<'a>(
 		&'a self,
 		request: &'a http::request::Parts,
 	) -> BoxFuture<'a, Result<Identity, Error>> {
-		let Some(token) = bearer(request) else {
-			return self.inner.identify(request);
-		};
-
-		if let Some(key) = &self.identity
-			&& token.starts_with(TOKEN_PREFIX)
-		{
-			let identity = key
-				.verify(token, SystemTime::now())
-				.map(|forwarded| forwarded.identity());
+		if let Some(identity) = bearer(request).and_then(|token| self.own(token)) {
 			return Box::pin(std::future::ready(identity));
 		}
 
-		match self.known(token) {
-			Some(caller) => {
-				let identity = Identity::anonymous().with_caller(caller);
-				Box::pin(std::future::ready(Ok(identity)))
-			}
-			None => self.inner.identify(request),
+		Box::pin(async move { from_inner(self.inner.identify(request).await?) })
+	}
+
+	/// As [`identify`](Self::identify) for a request with `token`, except
+	/// that a token this layer doesn't know goes to `inner`'s own
+	/// `identify_token`, which may judge a token on a socket more strictly
+	/// than on one request.
+	fn identify_token<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<Identity, Error>> {
+		if let Some(identity) = self.own(token.trim()) {
+			return Box::pin(std::future::ready(identity));
 		}
+
+		Box::pin(async move { from_inner(self.inner.identify_token(token).await?) })
 	}
 
 	/// A forwarded person keeps a live connection until their token runs
@@ -542,7 +581,7 @@ pub(crate) fn service_identity_token_with(
 
 	if !crate::service::forwards_identity(service, &lookup) {
 		return Err(Error::forbidden(format!(
-			"the app doesn't tell the `{service}` service who is signed in; turn on 			 \
+			"the app doesn't tell the `{service}` service who is signed in; turn on \
 			 `forward_identity` in [services.{service}] if it should know"
 		)));
 	}
@@ -563,6 +602,48 @@ pub(crate) fn service_identity_token_with(
 		token: key.mint(actor.uuid(), now, IDENTITY_LIFETIME),
 		expires_in: IDENTITY_LIFETIME.as_secs(),
 	}))
+}
+
+/// What `rpc.service_token` answers: [`service_identity_token`], refused
+/// for anyone but a person calling the app itself.
+///
+/// - A service's own server mints nothing: a service holding another service's
+///   token by mistake must not turn a person's token for it into one for the
+///   other.
+/// - Nor does the app for a caller that is itself forwarded, a service, or the
+///   app: only people sign in to the app.
+///
+/// A service the app doesn't forward identity to answers `None`, the same
+/// as nobody signed in, since the client can't tell a refusal from an
+/// outage and either way calls anonymously.
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub(crate) fn answer_service_token(
+	service: &str,
+	identity: &Identity,
+) -> Result<Option<ServiceToken>, Error> {
+	if super::installed().is_some_and(|server| server.service_name().is_some()) {
+		return Err(Error::forbidden(
+			"only the app's server mints tokens for its services",
+		));
+	}
+
+	let forwarded = identity.caller.as_deref().is_some_and(|caller| {
+		caller == APP_CALLER
+			|| caller.starts_with(PERSON_CALLER_PREFIX)
+			|| caller.starts_with(SERVICE_CALLER_PREFIX)
+	});
+
+	if forwarded || identity.context.get::<ForwardedIdentity>().is_some() {
+		return Err(Error::forbidden(
+			"a token for one service can't be traded for one for another: only people signed in \
+			 to the app get them",
+		));
+	}
+
+	match service_identity_token(service, identity) {
+		Err(Error::Forbidden(_)) => Ok(None),
+		minted => minted,
+	}
 }
 
 /// Seconds since the Unix epoch, or 0 before it.
@@ -825,6 +906,87 @@ mod tests {
 		// Without a key, such a token is nobody special.
 		let app = ServiceCallers::new(Anonymous);
 		assert_eq!(caller(&app, Some(&format!("Bearer {token}"))).await, None);
+	}
+
+	/// An inner `Identify` that names every caller what the request's
+	/// `x-name` header says, and refuses every socket token.
+	struct Named;
+
+	impl Identify for Named {
+		fn identify<'a>(
+			&'a self,
+			request: &'a http::request::Parts,
+		) -> BoxFuture<'a, Result<Identity, Error>> {
+			let name = request
+				.headers
+				.get("x-name")
+				.and_then(|value| value.to_str().ok())
+				.map(str::to_owned);
+			Box::pin(std::future::ready(Ok(match name.as_deref() {
+				Some("forwarded") => {
+					ForwardedIdentity {
+						person: PERSON,
+						expires_at: SystemTime::now(),
+					}
+					.identity()
+					.with_caller("someone")
+				}
+				Some(name) => Identity::anonymous().with_caller(name),
+				None => Identity::anonymous(),
+			})))
+		}
+
+		fn identify_token<'a>(&'a self, _token: &'a str) -> BoxFuture<'a, Result<Identity, Error>> {
+			Box::pin(std::future::ready(Err(Error::unauthorized(
+				"the session has ended",
+			))))
+		}
+	}
+
+	#[tokio::test]
+	async fn only_this_layer_names_the_app_people_and_services() {
+		let callers = ServiceCallers::new(Named)
+			.caller("s3cret", APP_CALLER)
+			.forwarded_identity("echo", "s3cret");
+		let named = |name: &str| {
+			let mut request = http::Request::builder().uri("/api/summary");
+			request = request.header("x-name", name);
+			request.body(()).unwrap().into_parts().0
+		};
+
+		for name in ["app", "person:someone", "service:cards", "forwarded"] {
+			assert!(
+				matches!(callers.identify(&named(name)).await, Err(Error::Server(_))),
+				"{name}"
+			);
+		}
+		assert_eq!(
+			callers
+				.identify(&named("session-1"))
+				.await
+				.unwrap()
+				.caller
+				.as_deref(),
+			Some("session-1")
+		);
+		// This layer's own names still come through.
+		assert_eq!(
+			callers
+				.identify_token("s3cret")
+				.await
+				.unwrap()
+				.caller
+				.as_deref(),
+			Some("app")
+		);
+		let token = key().mint(PERSON, SystemTime::now(), IDENTITY_LIFETIME);
+		assert!(callers.identify_token(&token).await.is_ok());
+		// A token this layer doesn't know is judged by `inner`'s own
+		// `identify_token`, not by `identify`.
+		assert!(matches!(
+			callers.identify_token("unknown").await,
+			Err(Error::Unauthorized(_))
+		));
 	}
 
 	#[test]

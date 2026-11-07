@@ -381,7 +381,8 @@ async fn a_service_is_signed_with_the_persons_token_for_it_until_the_sign_in_cha
 		.answer(200, r#"{"token":"lkid1.first","expires_in":300}"#)
 		.answer(200, r#"{"token":"lkid1.second","expires_in":300}"#)
 		.answer(200, "null")
-		.answer(500, "ServerError|the app is down");
+		.answer(500, "ServerError|the app is down")
+		.answer(200, r#"{"token":"lkid1.third","expires_in":300}"#);
 	let api: Arc<dyn Api> = Arc::new(remote(
 		&app,
 		ClientConfig::new().origin("https://app.example"),
@@ -413,18 +414,66 @@ async fn a_service_is_signed_with_the_persons_token_for_it_until_the_sign_in_cha
 	assert_eq!(app.sent().len(), 2);
 
 	// Signing out forgets it, and the app has nothing for nobody: calls go
-	// anonymously, without asking each time.
+	// anonymously, without asking each time, and a service refusing an
+	// anonymous call doesn't ask again either.
 	forget_identities();
 	assert_eq!(token.authorization().await, Ok(None));
 	assert_eq!(token.authorization().await, Ok(None));
+	assert_eq!(token.refused(None).await, Ok(false));
 	assert_eq!(app.sent().len(), 3);
 
-	// When the app can't be asked, calls go anonymously too: never more
-	// than anonymous, and never a failure of the service's call.
-	assert_eq!(token.refused(None).await, Ok(false));
-	assert_eq!(app.sent().len(), 4);
+	// When the app can't be asked, the call goes anonymously too, never
+	// failing and never more than anonymous; it asks again seconds later,
+	// not minutes.
+	forget_identities();
 	assert_eq!(token.authorization().await, Ok(None));
 	assert_eq!(app.sent().len(), 4);
+	assert_eq!(token.authorization().await, Ok(None));
+	assert_eq!(app.sent().len(), 4, "it waits before asking again");
+	tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+	assert_eq!(
+		token.authorization().await,
+		Ok(Some("Bearer lkid1.third".to_owned()))
+	);
+	assert_eq!(app.sent().len(), 5);
+
+	// Calls that need a token at once wait for one answer between them.
+	let slow = Arc::new(Slow::default());
+	let api = Arc::clone(&slow);
+	let token = IdentityToken::new("analytics", move || Arc::clone(&api) as Arc<dyn Api>);
+	let (a, b, c) = futures::join!(
+		token.authorization(),
+		token.authorization(),
+		token.authorization()
+	);
+	assert_eq!((a.clone(), b, c), (a.clone(), a.clone(), a));
+	assert_eq!(
+		slow.calls.load(std::sync::atomic::Ordering::SeqCst),
+		1,
+		"one question for all three"
+	);
+}
+
+/// An app that takes a moment to answer with a token, and counts how often
+/// it's asked.
+#[derive(Default)]
+struct Slow {
+	calls: std::sync::atomic::AtomicU32,
+}
+
+impl Api for Slow {
+	fn call(
+		&self,
+		_name: &'static str,
+		_arguments: serde_json::Value,
+		_key: Key,
+	) -> BoxFuture<'static, Result<serde_json::Value, FnError>> {
+		self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+		Box::pin(async {
+			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+			Ok(json!({ "token": "lkid1.slow", "expires_in": 300 }))
+		})
+	}
 }
 
 #[tokio::test]

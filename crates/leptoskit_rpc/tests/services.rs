@@ -640,6 +640,23 @@ fn echo_service(db: leptoskit_db::Db) -> rpc::server::Server {
 	)
 }
 
+/// Removes the `echo` service's variables when dropped, so a test that
+/// fails half way doesn't leave them set for the next.
+struct EchoEnv;
+
+impl EchoEnv {
+	fn new() -> Self {
+		echo_env(None, false, false);
+		Self
+	}
+}
+
+impl Drop for EchoEnv {
+	fn drop(&mut self) {
+		echo_env(None, false, false);
+	}
+}
+
 /// Sets the variables `leptoskit dev` gives the app for the `echo` service,
 /// or removes them.
 fn echo_env(url: Option<String>, token: bool, identity: bool) {
@@ -668,6 +685,7 @@ fn echo_env(url: Option<String>, token: bool, identity: bool) {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	let _serial = SERIAL.lock().await;
+	let _env = EchoEnv::new();
 	echo_env(None, true, true);
 	let app = rpc::server::Server::new(leptoskit_db::testing::sqlite().await).identify(People);
 	let ask = r#"{"service":"echo"}"#;
@@ -753,26 +771,59 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 		assert_eq!(status, StatusCode::UNAUTHORIZED, "{token}: {body}");
 	}
 
-	// A service the app doesn't forward identity to, as an isolated one
-	// by default: no token, and the refusal says how to opt in.
-	echo_env(None, true, false);
-	let app = rpc::server::Server::new(leptoskit_db::testing::sqlite().await).identify(People);
+	// The service's own server mints nothing, whoever asks: a person's
+	// token for it can't be traded there for one for another service.
+	let service = echo_service(leptoskit_db::testing::sqlite().await);
 	let (status, body) = send(
-		app.router(),
+		service.router(),
 		"/api/rpc.service_token",
 		ask,
-		&[("x-person", &ada)],
+		&[("authorization", &bearer)],
 	)
 	.await;
 	assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-	assert!(body.contains("forward_identity"), "{body}");
 
-	echo_env(None, false, false);
+	// Nor does the app for a caller that is itself forwarded, even one
+	// whose server mistakenly accepts forwarded tokens.
+	let confused = rpc::server::Server::new(leptoskit_db::testing::sqlite().await)
+		.identify(ServiceCallers::new(People).forwarded_identity("echo", "t0k3n"));
+	let (status, body) = send(
+		confused.router(),
+		"/api/rpc.service_token",
+		ask,
+		&[("authorization", &bearer)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+	assert!(body.contains("can't be traded"), "{body}");
+
+	// A service the app doesn't forward identity to, as an isolated one
+	// by default: no token, the same answer as for nobody signed in.
+	// `service_identity_token` itself says how to opt in.
+	echo_env(None, true, false);
+	let app = rpc::server::Server::new(leptoskit_db::testing::sqlite().await).identify(People);
+	assert_eq!(
+		send(
+			app.router(),
+			"/api/rpc.service_token",
+			ask,
+			&[("x-person", &ada)],
+		)
+		.await,
+		(StatusCode::OK, "null".to_owned())
+	);
+	let signed_in = Identity::new(Context::new().with(Actor::from_uuid(ADA)));
+	let refusal = rpc::server::service_identity_token("echo", &signed_in).unwrap_err();
+	assert!(
+		matches!(&refusal, rpc::Error::Forbidden(message) if message.contains("forward_identity")),
+		"{refusal:?}"
+	);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn server_rendering_signs_a_services_calls_as_the_person_it_renders_for() {
 	let _serial = SERIAL.lock().await;
+	let _env = EchoEnv::new();
 	let service = echo_service(leptoskit_db::testing::sqlite().await);
 	let address =
 		serve(axum::Router::new().nest(&rpc::service_prefix("echo"), service.router())).await;
@@ -812,8 +863,6 @@ async fn server_rendering_signs_a_services_calls_as_the_person_it_renders_for() 
 	// Without `forward_identity`, a page rendered for Ada calls anonymously.
 	echo_env(Some(format!("http://{address}")), true, false);
 	assert_eq!(rendering_for(Some(ADA)).await, nobody);
-
-	echo_env(None, false, false);
 }
 
 /// The next `AuthStatus` frame on `socket`: whether it was refused, and
@@ -867,7 +916,9 @@ async fn a_services_live_socket_holds_a_forwarded_person_while_their_token_lasts
 	let (mut socket, _) = connect_async(format!("ws://{address}{prefix}/live"))
 		.await
 		.unwrap();
-	let short = key.mint(ADA, std::time::SystemTime::now(), Duration::from_secs(2));
+	// Four seconds: `iat` is rounded down to the second and the lease ends
+	// at `exp`, so this leaves three to four seconds for the first answers.
+	let short = key.mint(ADA, std::time::SystemTime::now(), Duration::from_secs(4));
 	futures::SinkExt::send(&mut socket, auth(short))
 		.await
 		.unwrap();
