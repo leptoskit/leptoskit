@@ -84,6 +84,7 @@ wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["Window", "Location", "Document", "Element", "HtmlElement", "Node"] }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 leptoskit_testing = { workspace = true }
 # Reads the landing page's code samples as tokens, to check them against the
 # code its tests build.

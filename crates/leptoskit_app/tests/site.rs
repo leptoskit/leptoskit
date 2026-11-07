@@ -363,3 +363,76 @@ fn a_website_without_the_console_chunk_cannot_be_served() {
 			.contains("missing website asset pkg/split_mount_console_1.wasm")
 	);
 }
+
+/// Every file the client and the landing page name must ship; a missing one
+/// is named rather than served as a broken page.
+#[test]
+fn a_website_missing_a_named_asset_cannot_be_served() {
+	let directory = tempfile::tempdir().unwrap();
+	web_assets(directory.path());
+	std::fs::remove_file(directory.path().join("rive/brand.riv")).unwrap();
+	let result = leptoskit_app::site::router(
+		Router::new(),
+		directory.path(),
+		&directory.path().join("docs"),
+		"https://deploy.example.test",
+	);
+	assert!(
+		result
+			.unwrap_err()
+			.to_string()
+			.contains("missing website asset rive/brand.riv")
+	);
+}
+
+/// Without the split manifest, the artifact cannot be checked: the manifest
+/// itself is one of the files every site must ship.
+#[test]
+fn a_website_without_its_split_manifest_cannot_be_served() {
+	let directory = tempfile::tempdir().unwrap();
+	web_assets(directory.path());
+	std::fs::remove_file(directory.path().join("pkg/__wasm_split_manifest.json")).unwrap();
+	let result = leptoskit_app::site::router(
+		Router::new(),
+		directory.path(),
+		&directory.path().join("docs"),
+		"https://deploy.example.test",
+	);
+	assert!(
+		result
+			.unwrap_err()
+			.to_string()
+			.contains("missing website asset pkg/__wasm_split_manifest.json")
+	);
+}
+
+/// A split manifest that cannot be read, such as one the publisher forgot to
+/// make readable, fails before the site accepts traffic.
+#[test]
+fn an_unreadable_split_manifest_cannot_be_served() {
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt as _;
+		let directory = tempfile::tempdir().unwrap();
+		web_assets(directory.path());
+		let manifest = directory.path().join("pkg/__wasm_split_manifest.json");
+		std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o000)).unwrap();
+		// A privileged runner reads it anyway; there is no unreadable file
+		// to hand the packager there.
+		if std::fs::read(&manifest).is_ok() {
+			return;
+		}
+		let result = leptoskit_app::site::router(
+			Router::new(),
+			directory.path(),
+			&directory.path().join("docs"),
+			"https://deploy.example.test",
+		);
+		assert!(
+			result
+				.unwrap_err()
+				.to_string()
+				.contains("could not read pkg/__wasm_split_manifest.json")
+		);
+	}
+}
