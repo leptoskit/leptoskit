@@ -310,7 +310,7 @@ fn measurements(fleet: Option<&Fleet>) -> Element {
 				.class(
 					if matches!(
 						series.key.outcome,
-						leptoskit::analytics::Outcome::ServerError
+						leptoskit::apm::Outcome::ServerError
 					) {
 						"text-sm text-red-600 dark:text-red-400"
 					} else {

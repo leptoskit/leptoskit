@@ -1,4 +1,4 @@
-//! <!-- {=analyticsSummary|trim|linePrefix:"//! ":true} -->
+//! <!-- {=apmSummary|trim|linePrefix:"//! ":true} -->
 //!
 //! See which application routes are failing or slow. The app keeps bounded
 //! minute aggregates and a small correlation buffer in memory. Connect the
@@ -6,7 +6,7 @@
 //! per-process endpoint without an extra observability service. Unexported
 //! in-memory data resets on restart.
 //!
-//! <!-- {/analyticsSummary} -->
+//! <!-- {/apmSummary} -->
 //!
 //! [`Analytics`] retains aggregate windows and a small correlation buffer.
 //! With `server`, [`server::mount`] instruments Axum and provides protected

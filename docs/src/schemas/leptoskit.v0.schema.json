@@ -1855,7 +1855,7 @@
 			"additionalProperties": false
 		},
 		"InfraAnalytics": {
-			"description": "Bounded, in-process analytics. Requires the application's `analytics`\nfeature and the `LeptosKit` server entrypoint (or an explicit Axum mount).",
+			"description": "Bounded, in-process route metrics. Requires the application's `apm`\nfeature and the `LeptosKit` server entrypoint (or an explicit Axum mount).",
 			"type": "object",
 			"properties": {
 				"browser_routes": {

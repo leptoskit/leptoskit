@@ -63,7 +63,7 @@ ignore = { workspace = true }
 # App icons: one source image, resized for every platform; and the store
 # screenshots, checked before they are uploaded.
 image = { version = "0.25.8", default-features = false, features = ["jpeg", "png"] }
-leptoskit_analytics = { workspace = true }
+leptoskit_apm = { workspace = true }
 leptoskit_auth = { workspace = true, features = ["oauth", "postgres", "sqlite"] }
 leptoskit_axum = { workspace = true }
 leptoskit_bridge = { workspace = true }

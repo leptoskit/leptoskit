@@ -403,12 +403,12 @@ pub async fn serve_listener_with(
 ) -> Result<(), ServeError> {
 	// Fails only when an executor is already set, which is the app's choice.
 	let _ = any_spawner::Executor::init_tokio();
-	#[cfg(feature = "analytics")]
-	let router = match leptoskit_analytics::server::from_env()
+	#[cfg(feature = "apm")]
+	let router = match leptoskit_apm::server::from_env()
 		.map_err(|error| ServeError::Serve(error.to_string()))?
 	{
 		Some(config) => {
-			leptoskit_analytics::server::mount(router, config)
+			leptoskit_apm::server::mount(router, config)
 				.map_err(|error| ServeError::Serve(error.to_string()))?
 				.0
 		}

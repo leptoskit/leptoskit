@@ -19,14 +19,14 @@ code, so a published app shows new interfaces without a new build.
 
 <!-- {/agentUiSummary} -->
 
-<!-- {@analyticsSummary} -->
+<!-- {@apmSummary} -->
 
 See which application routes are failing or slow. The app keeps bounded minute aggregates
 and a small correlation buffer in memory. Connect the optional deployment service for
 durable fleet history, or use the per-process endpoint without an extra observability
 service. Unexported in-memory data resets on restart.
 
-<!-- {/analyticsSummary} -->
+<!-- {/apmSummary} -->
 
 <!-- {@androidSummary} -->
 

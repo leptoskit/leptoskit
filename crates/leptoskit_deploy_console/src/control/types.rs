@@ -109,8 +109,8 @@ pub struct Event {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FleetSeries {
 	pub release: String,
-	pub key: leptoskit::analytics::SeriesKey,
-	pub windows: Vec<leptoskit::analytics::Window>,
+	pub key: leptoskit::apm::SeriesKey,
+	pub windows: Vec<leptoskit::apm::Window>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -130,8 +130,8 @@ pub struct HostReport {
 	pub instance: String,
 	pub release: String,
 	pub seen: u64,
-	pub host: Option<leptoskit::analytics::HostSample>,
-	pub export: Option<leptoskit::analytics::ExportHealth>,
+	pub host: Option<leptoskit::apm::HostSample>,
+	pub export: Option<leptoskit::apm::ExportHealth>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

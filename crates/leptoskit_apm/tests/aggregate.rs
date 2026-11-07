@@ -3,7 +3,7 @@ use std::sync::MutexGuard;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use leptoskit_analytics::*;
+use leptoskit_apm::*;
 
 static NOW: AtomicU64 = AtomicU64::new(120);
 // The collector accepts a function pointer, so its test clock is shared.

@@ -412,7 +412,7 @@ async fn ingest(
 	State(service): State<Service>,
 	Path(project): Path<String>,
 	headers: HeaderMap,
-	Json(snapshot): Json<leptoskit::analytics::Snapshot>,
+	Json(snapshot): Json<leptoskit::apm::Snapshot>,
 ) -> ApiResult<StatusCode> {
 	let principal = service.auth(&headers, true).await?;
 

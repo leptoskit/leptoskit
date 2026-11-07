@@ -2869,8 +2869,8 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "leptoskit_3d",
- "leptoskit_analytics",
  "leptoskit_android",
+ "leptoskit_apm",
  "leptoskit_appkit",
  "leptoskit_auth",
  "leptoskit_axum",
@@ -2919,23 +2919,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptoskit_analytics"
-version = "0.3.0"
-dependencies = [
- "axum",
- "getrandom 0.4.3",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.21",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "leptoskit_android"
 version = "0.3.0"
 dependencies = [
@@ -2951,6 +2934,23 @@ name = "leptoskit_animation"
 version = "0.3.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "leptoskit_apm"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -3017,6 +3017,7 @@ dependencies = [
 name = "leptoskit_axum"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "axum",
  "hyper",
  "hyper-util",
@@ -3437,6 +3438,7 @@ dependencies = [
  "reactive_graph",
  "send_wrapper",
  "thiserror 2.0.21",
+ "url",
  "wasm-bindgen",
  "web-sys",
 ]

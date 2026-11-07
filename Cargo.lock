@@ -5106,8 +5106,8 @@ dependencies = [
  "leptos_router",
  "leptoskit_3d",
  "leptoskit_agent_ui",
- "leptoskit_analytics",
  "leptoskit_android",
+ "leptoskit_apm",
  "leptoskit_appkit",
  "leptoskit_aria",
  "leptoskit_auth",
@@ -5179,24 +5179,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptoskit_analytics"
-version = "0.3.0"
-dependencies = [
- "axum",
- "getrandom 0.4.3",
- "reqwest 0.12.28",
- "rustix",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.21",
- "tokio",
- "tower",
- "url",
-]
-
-[[package]]
 name = "leptoskit_android"
 version = "0.3.0"
 dependencies = [
@@ -5215,6 +5197,24 @@ version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "leptoskit_apm"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "reqwest 0.12.28",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "url",
 ]
 
 [[package]]
@@ -5339,7 +5339,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_codepush",
  "leptoskit_config",
  "semver",
@@ -5462,7 +5462,7 @@ dependencies = [
  "ignore",
  "image",
  "insta",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_auth",
  "leptoskit_axum",
  "leptoskit_bridge",
@@ -5675,7 +5675,7 @@ dependencies = [
  "hmac 0.12.1",
  "leptos",
  "leptoskit",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_testing",
  "reactive_graph",
  "reqwest 0.12.28",

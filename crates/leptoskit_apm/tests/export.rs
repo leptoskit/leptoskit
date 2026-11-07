@@ -1,5 +1,5 @@
 #![cfg(feature = "server")]
-use leptoskit_analytics::*;
+use leptoskit_apm::*;
 
 #[test]
 fn otlp_histograms_export_completed_delta_windows_with_standard_json_encoding() {
