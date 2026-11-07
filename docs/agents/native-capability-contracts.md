@@ -22,7 +22,7 @@ The old `runtime.json` also had no explicit format version. A host could not tel
 - `CapabilityEntry` — a stable identifier and one of `available`, `unsupported`, `experimental`, or `unknown`, plus a plain-language detail.
 - `PluginCapability` — the plugin's resolved state and implementation flavour, its option key names, and the SHA-256 of the canonical non-secret option table. Values are never written.
 - `RuntimeRequirements` — the signed guest's `required` and `optional` identifiers.
-- `ContractCompatibility` — `verified` or `legacy`.
+- `ContractCompatibility` — `verified`, `incomplete`, or `legacy`.
 
 The CLI builds the descriptor in `crates/leptoskit_cli/src/native/registry/capability.rs` from the registry that actually resolved: `HostCapabilities::of(target)`, each selected `Plugin::implementation`, the missing-plugin reasons, and the app's option tables. It never re-derives support from a hand-written table.
 
@@ -71,13 +71,15 @@ optional-capabilities = ["host.plugin.native.android"]
 - `runtime.json` inside the signed bundle: legacy `abi`/`shell`/`plugins` plus `format_version = 2` and signed `requirements` (never a host descriptor).
 - `capabilities.json` next to the generated bundle: the host descriptor and its digest, for diagnostics and documentation. The standalone `native bundle --out bundle` command writes `bundle.capabilities.json` beside the output directory, so packaging that directory never includes host evidence. Watch preparation writes `.leptoskit/<platform>/capabilities.json` and enforces requirements before scaffolding.
 
-The mobile host's store-shipped `codepush.json` embeds the same descriptor in `runtime.json`-style `host`. `RuntimeContract::validate_host` rejects a host configuration that mixes guest requirements into the host side, omits the descriptor, or speaks a different guest ABI.
+The mobile host's store-shipped `codepush.json` embeds the same descriptor in `runtime.json`-style `host`. `RuntimeContract::validate_host` rejects a host configuration that mixes guest requirements into the host side, omits the descriptor, or speaks a different guest ABI. Its plugin grants must match the descriptor's plugin entries exactly. A host-level `plugin.*` entry cannot substitute for a resolved plugin entry and grant.
 
 `RuntimeContract::verify_guest` is called by `validate_container` for the store baseline, every downloaded release before it is staged, and every stored release at launch:
 
 - No `format_version`: explicit legacy decoding. The old ABI/shell/plugin checks still run, and `UpdateReport.contract` is `legacy`.
 - `format_version = 2`: requires signed `requirements`; the downloaded guest may not carry `host`; the guest ABI and bridge protocol must match the host, and every required identifier is looked up in the installed host descriptor. `unsupported`, `experimental`-without-opt-in, and `unknown` reject the release before storage. Optional identifiers never gate; explicitly optional plugins are excluded from the guest's legacy mandatory plugin list.
 - Any other version is rejected with `UnsupportedContractVersion`.
+
+The legacy plugin list records access grants, which may include plugins omitted under `missing-plugins = "warn"`. After checking explicit requirements, version 2 also checks the availability of those retained grants. If any is `unsupported` or `unknown`, the update retains its existing fallback behavior but reports `incomplete`, never `verified`. Marking such a plugin explicitly required rejects the update; marking it optional declares that the app can run without it and removes it from the legacy list. `verified` proves the declared requirements and retained plugin availability against build metadata, not that a device executed the app successfully.
 
 The guest's requirements are covered by the release signature because `runtime.json` is a bundle file and the signature covers the manifest hash. A downloaded guest cannot supply the host side, so its labels are ignored.
 
@@ -95,6 +97,7 @@ The `host.update.codepush` capability is `available` only for iOS, iOS Simulator
 
 - `native.update_contract` and the legacy `abi`/`shell`/`plugins` fields keep their meaning. Existing projects and signed releases continue to work.
 - A legacy release is never upgraded to `verified`; it is `legacy` in the update report.
+- A versioned release whose unclassified plugin grants lack implementation evidence is `incomplete`. Required capability failures still reject the release; this state preserves legacy warning behavior without claiming complete compatibility.
 - A versioned release cannot ship to a host that predates `format_version = 2`: that host's `deny_unknown_fields` decoding rejects it. This is the explicit compatibility boundary rather than silently ignoring unsigned extensions.
 - A version 2 descriptor with missing fields, unknown versions, duplicate capabilities/plugins, unsorted option keys, or invalid option digests is rejected.
 

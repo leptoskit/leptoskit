@@ -32,6 +32,7 @@ use crate::capability::ContractCompatibility;
 use crate::capability::HostCapabilityDescriptor;
 use crate::capability::RUNTIME_CONTRACT_VERSION;
 use crate::capability::RuntimeRequirements;
+use crate::capability::plugin_capability;
 use crate::durable::is_temporary;
 use crate::durable::sync_directory;
 use crate::durable::write_atomically;
@@ -63,7 +64,9 @@ pub struct RuntimeContract {
 	pub abi: u32,
 	/// Shell compatibility identity, changed when native capabilities change.
 	pub shell: String,
-	/// Required plugin names; the host may support additional plugins.
+	/// Plugin grants retained for the legacy compatibility check. A grant is
+	/// permission to call a plugin, not evidence of a host implementation.
+	/// Versioned requirements separately declare mandatory availability.
 	pub plugins: Vec<String>,
 	/// `None` for a legacy descriptor; otherwise [`RUNTIME_CONTRACT_VERSION`].
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +104,7 @@ impl RuntimeContract {
 					)
 				})?;
 				host.validate()?;
+				host.validate_grants(&self.plugins)?;
 
 				if host.protocol.guest_abi != self.abi {
 					return Err(CodePushError::InvalidCapabilityContract(format!(
@@ -161,7 +165,16 @@ impl RuntimeContract {
 					)
 				})?;
 				requirements.verify_against(descriptor)?;
-				Ok(ContractCompatibility::Verified)
+				let complete = self.plugins.iter().all(|name| {
+					descriptor
+						.state_of(&plugin_capability(name))
+						.is_some_and(|(state, _)| state.usable())
+				});
+				Ok(if complete {
+					ContractCompatibility::Verified
+				} else {
+					ContractCompatibility::Incomplete
+				})
 			}
 			Some(version) => Err(CodePushError::UnsupportedContractVersion(version)),
 		}
@@ -225,7 +238,8 @@ pub struct UpdateReport {
 	/// Current or staged release build.
 	pub build: u64,
 	/// Whether the release's signed capability contract was verified against
-	/// this host, or whether it predates versioned contracts.
+	/// this host, has unresolved legacy plugin availability, or predates
+	/// versioned contracts. This does not attest to runtime behavior.
 	pub contract: ContractCompatibility,
 }
 

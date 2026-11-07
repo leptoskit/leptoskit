@@ -2470,3 +2470,109 @@ fn contract_verification_also_enforces_legacy_abi_shell_and_plugin_requirements(
 		assert!(changed.verify_guest(&host).is_err());
 	}
 }
+
+#[test]
+fn unclassified_plugin_grants_do_not_prove_plugin_availability() {
+	for state in [CapabilityState::Unsupported, CapabilityState::Unknown] {
+		let mut host = host_runtime();
+		let plugin = &mut host.host.as_mut().unwrap().plugins[0];
+		plugin.state = state;
+		plugin.implementation = None;
+		let guest = guest_runtime(Vec::new(), Vec::new());
+		assert_eq!(
+			guest.verify_guest(&host).unwrap(),
+			ContractCompatibility::Incomplete
+		);
+		// A grant alone never satisfies an explicit availability requirement.
+		let required = guest_runtime(vec!["plugin.clipboard"], Vec::new());
+		assert!(required.verify_guest(&host).is_err());
+		// Explicit optionality declares a fallback and removes the old grant
+		// requirement. It does not pretend the plugin is available.
+		let mut optional = guest_runtime(Vec::new(), vec!["plugin.clipboard"]);
+		optional.plugins.clear();
+		assert_eq!(
+			optional.verify_guest(&host).unwrap(),
+			ContractCompatibility::Verified
+		);
+	}
+	assert_eq!(
+		guest_runtime(Vec::new(), Vec::new())
+			.verify_guest(&host_runtime())
+			.unwrap(),
+		ContractCompatibility::Verified
+	);
+}
+
+#[test]
+fn a_signed_release_with_unclassified_missing_plugins_reports_incomplete() {
+	let directory = tempfile::tempdir().unwrap();
+	let baseline = native_bundle(0, BASELINE);
+	let guest = guest_runtime(Vec::new(), Vec::new());
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut host = host_runtime();
+	let plugin = &mut host.host.as_mut().unwrap().plugins[0];
+	plugin.state = CapabilityState::Unsupported;
+	plugin.implementation = None;
+	let mut installed =
+		InstalledBundles::open(directory.path(), &baseline, configuration_with(host)).unwrap();
+	let report = installed
+		.sync_with(&mut Registry::new(replacement))
+		.unwrap();
+	assert_eq!(report.status, UpdateStatus::Staged);
+	assert_eq!(report.contract, ContractCompatibility::Incomplete);
+	assert_eq!(
+		serde_json::to_value(&report).unwrap()["contract"],
+		"incomplete"
+	);
+	// Preserve the old missing-plugin policy while reporting its evidence
+	// accurately. Explicit required plugins would have rejected this release.
+	assert_eq!(installed.launch().unwrap().wasm, REPLACEMENT);
+}
+
+#[test]
+fn a_versioned_host_cannot_confuse_plugin_grants_with_resolved_support() {
+	let mut missing_entry = host_runtime();
+	missing_entry.host.as_mut().unwrap().plugins.clear();
+	assert!(missing_entry.validate_host().is_err());
+
+	let mut ungranted_entry = host_runtime();
+	ungranted_entry.plugins.clear();
+	assert!(ungranted_entry.validate_host().is_err());
+
+	let mut duplicate_grant = host_runtime();
+	duplicate_grant.plugins.push("clipboard".into());
+	assert!(duplicate_grant.validate_host().is_err());
+
+	let mut invalid_grant = host_runtime();
+	invalid_grant.plugins[0] = "Clipboard".into();
+	invalid_grant.host.as_mut().unwrap().plugins[0].name = "Clipboard".into();
+	assert!(invalid_grant.validate_host().is_err());
+
+	let mut guessed_plugin = host_runtime();
+	guessed_plugin
+		.host
+		.as_mut()
+		.unwrap()
+		.capabilities
+		.push(CapabilityEntry {
+			id: "plugin.guessed".into(),
+			state: CapabilityState::Available,
+			detail: None,
+		});
+	assert!(guessed_plugin.validate_host().is_err());
+	// An unresolved declaration may be recorded, but cannot satisfy a guest.
+	guessed_plugin
+		.host
+		.as_mut()
+		.unwrap()
+		.capabilities
+		.last_mut()
+		.unwrap()
+		.state = CapabilityState::Unknown;
+	guessed_plugin.validate_host().unwrap();
+	assert!(
+		guest_runtime(vec!["plugin.guessed"], Vec::new())
+			.verify_guest(&guessed_plugin)
+			.is_err()
+	);
+}

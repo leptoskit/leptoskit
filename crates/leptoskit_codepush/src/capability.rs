@@ -175,8 +175,12 @@ pub struct RuntimeRequirements {
 #[serde(rename_all = "snake_case")]
 pub enum ContractCompatibility {
 	/// The guest named a versioned contract and the host descriptor satisfied
-	/// every required capability.
+	/// every required capability and every retained legacy plugin grant.
 	Verified,
+	/// Explicit requirements passed, but a plugin kept under the legacy
+	/// missing-plugin policy is unavailable or unknown. The release may run
+	/// with its existing fallback; its full plugin compatibility is unproven.
+	Incomplete,
 	/// The guest predates versioned capability contracts. It passed the
 	/// legacy ABI, shell, and plugin checks, but compatibility is unknown.
 	#[default]
@@ -282,6 +286,42 @@ impl HostCapabilityDescriptor {
 			.iter()
 			.find(|entry| entry.id == id)
 			.map(|entry| (&entry.state, entry.detail.as_deref()))
+	}
+
+	/// A store runtime's grant list and its descriptor must describe the same
+	/// plugins. A grant permits access; the entry separately records whether
+	/// the generated host has an implementation.
+	pub(crate) fn validate_grants(&self, grants: &[String]) -> Result<(), CodePushError> {
+		let mut names = std::collections::BTreeSet::new();
+		for name in grants {
+			if !capability_identifier(name) || !names.insert(name.as_str()) {
+				return Err(invalid(format!(
+					"host plugin grant `{name}` must be a unique stable identifier"
+				)));
+			}
+			if !self.plugins.iter().any(|plugin| &plugin.name == name) {
+				return Err(invalid(format!(
+					"host plugin grant `{name}` has no resolved plugin entry"
+				)));
+			}
+		}
+		for plugin in &self.plugins {
+			if !names.contains(plugin.name.as_str()) {
+				return Err(invalid(format!(
+					"host descriptor names plugin `{}` without a plugin grant",
+					plugin.name
+				)));
+			}
+		}
+		for capability in &self.capabilities {
+			if capability.id.starts_with("plugin.") && capability.state.usable() {
+				return Err(invalid(format!(
+					"host capability `{}` needs a resolved plugin entry and grant",
+					capability.id
+				)));
+			}
+		}
+		Ok(())
 	}
 
 	/// Canonical bytes for [`Self::digest`]: sorted entries and no map order.

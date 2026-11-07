@@ -1262,6 +1262,39 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn generated_contract_reports_unresolved_grants_without_claiming_support() {
+		use leptoskit_codepush::capability::ContractCompatibility;
+		use leptoskit_codepush::installed::RuntimeContract;
+
+		let root = Path::new(".");
+		let mut config = LeptoskitConfig::default();
+		config.native.plugins = vec!["http".into()];
+		let descriptor = registry::descriptor(&config, Target::Ios, &[], &[]);
+		let host: RuntimeContract = serde_json::from_value(host_runtime_descriptor(
+			root,
+			&config,
+			Target::Ios,
+			&descriptor,
+		))
+		.unwrap();
+		let guest = |config: &LeptoskitConfig| -> RuntimeContract {
+			serde_json::from_value(guest_runtime_descriptor(root, config, Target::Ios)).unwrap()
+		};
+		assert_eq!(
+			guest(&config).verify_guest(&host).unwrap(),
+			ContractCompatibility::Incomplete
+		);
+		config.native.required_plugins.push("http".into());
+		assert!(guest(&config).verify_guest(&host).is_err());
+		config.native.required_plugins.clear();
+		config.native.optional_plugins.push("http".into());
+		assert_eq!(
+			guest(&config).verify_guest(&host).unwrap(),
+			ContractCompatibility::Verified
+		);
+	}
+
+	#[test]
 	fn optional_plugins_do_not_become_legacy_update_requirements() {
 		let mut config = LeptoskitConfig::default();
 		config.native.plugins = vec!["http".into(), "haptics".into(), "clipboard".into()];
