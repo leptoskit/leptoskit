@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_rpc_codegen/tests/generators.rs
-assertion_line: 578
 expression: "generate(TargetLanguage::Dart, \"todos\")"
 ---
 ===== pubspec.yaml (Scaffold) =====
@@ -47,10 +46,10 @@ class Todo {
 	final String title;
 
 	factory Todo.fromJson(Map<String, dynamic> json) => Todo(
-		done: json['done'] as bool,
-		id: (json['id'] as num).toInt(),
+		done: _requiredValue(json, 'done') as bool,
+		id: (_requiredValue(json, 'id') as num).toInt(),
 		tags: json['tags'] == null ? null : (json['tags'] as List<dynamic>).map((item) => item as String).toList(),
-		title: json['title'] as String,
+		title: _requiredValue(json, 'title') as String,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
@@ -86,8 +85,8 @@ class TodoRoom {
 	final int list;
 
 	factory TodoRoom.fromJson(Map<String, dynamic> json) => TodoRoom(
-		filter: TodoFilter.fromJson(json['filter']),
-		list: (json['list'] as num).toInt(),
+		filter: TodoFilter.fromJson(_requiredValue(json, 'filter')),
+		list: (_requiredValue(json, 'list') as num).toInt(),
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
@@ -105,12 +104,61 @@ class Viewer {
 	final String name;
 
 	factory Viewer.fromJson(Map<String, dynamic> json) => Viewer(
-		name: json['name'] as String,
+		name: _requiredValue(json, 'name') as String,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
 		'name': name,
 	};
+}
+
+/// An optional argument or field with three states: absent, present as `null`,
+/// and present with a value. A nullable Dart type alone cannot tell an omitted
+/// field from an explicit `null`.
+sealed class Presence<T> {
+  /// The three-state wrapper.
+  const Presence();
+
+  /// Leaves the argument or field out of the JSON object.
+  const factory Presence.absent() = _Absent<T>;
+
+  /// Sends [value], including `null` when the schema allows it.
+  const factory Presence.present(T value) = _Present<T>;
+
+  /// Whether a value, possibly `null`, is sent.
+  bool get isPresent;
+
+  /// The value to send; throws when [isPresent] is false.
+  T get value;
+}
+
+final class _Absent<T> extends Presence<T> {
+  const _Absent();
+
+  @override
+  bool get isPresent => false;
+
+  @override
+  T get value => throw StateError('the value is absent');
+}
+
+final class _Present<T> extends Presence<T> {
+  const _Present(this.value);
+
+  @override
+  bool get isPresent => true;
+
+  @override
+  final T value;
+}
+
+/// The value of a required field, which must be present even when it may be
+/// `null`.
+Object? _requiredValue(Map<String, dynamic> json, String key) {
+  if (!json.containsKey(key)) {
+    throw StateError('missing required field \'$key\'');
+  }
+  return json[key];
 }
 
 /// How a failed call is classified, mirroring `leptoskit_rpc::FnError`.
@@ -165,7 +213,8 @@ class FnError implements Exception {
 }
 
 /// Encodes a value the way `serde_qs` does: nested keys in brackets, lists by
-/// index, `null` omitted.
+/// index, `null` omitted. Query-string and form encodings cannot send an
+/// explicit null; use JSON or the live connection when null is meaningful.
 String toQueryString(Map<String, Object?> value) {
   final pairs = <String>[];
 
@@ -235,12 +284,12 @@ class Client {
 	/// - `limit`: How many to return.
 	Future<List<Todo>> listTodos({
 		required TodoFilter filter,
-		int? limit
+		required int? limit
 	}) async {
 		final result = await _invoke('POST', '/api/list_todos', 'form', 
 				<String, Object?>{
 				'filter': filter.toJson(),
-				if (limit != null) 'limit': limit,
+				'limit': limit,
 				});
 		return (result as List<dynamic>).map((item) => Todo.fromJson(item as Map<String, dynamic>)).toList();
 	}
@@ -332,12 +381,9 @@ class Client {
 			body = Uint8List.fromList(utf8.encode(toQueryString(payload)));
 		} else {
 			headers['Content-Type'] = 'application/json';
-			// Absent optional arguments are omitted, as `serde_qs` omits them.
-			final present = <String, Object?>{
-				for (final entry in payload.entries)
-					if (entry.value != null) entry.key: entry.value,
-			};
-			body = Uint8List.fromList(utf8.encode(jsonEncode(present)));
+			// The payload already omits absent optional arguments; a null value here is an
+			// explicit null the schema allows, so it must stay in the body.
+			body = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
 		}
 		late http.Response response;
 		try {
@@ -1454,17 +1500,14 @@ LiveError _wireError(Object? err) {
 int _int(Object? value, int fallback) =>
     value is num && value.isFinite ? value.toInt() : fallback;
 
-/// The arguments without absent optional fields, as the HTTP calls send them.
+/// The arguments as the HTTP calls send them: absent optional fields are
+/// already missing from the map, while an explicit `null` stays a value.
 Object? _present(Object? args) {
-  if (args == null) {
-    return const <String, Object?>{};
-  }
   if (args is! Map) {
     return args;
   }
   return <String, Object?>{
-    for (final entry in args.entries)
-      if (entry.value != null) '${entry.key}': entry.value,
+    for (final entry in args.entries) '${entry.key}': entry.value,
   };
 }
 
@@ -1507,7 +1550,7 @@ import 'package:todos/todos.dart';
 final client = Client(serverUrl: 'https://todos.example');
 
 try {
-  final result = await client.listTodos(filter: ...);
+  final result = await client.listTodos(filter: ..., limit: ...);
 } on FnError catch (error) {
   if (error.retryable) {
     // a network or server failure: safe to try again

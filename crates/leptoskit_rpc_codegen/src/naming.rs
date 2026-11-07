@@ -582,6 +582,7 @@ pub(crate) const DART_RESERVED_TYPES: &[&str] = &[
 	"Map",
 	"MapEntry",
 	"Object",
+	"Presence",
 	"PresenceMember",
 	"Stream",
 	"String",

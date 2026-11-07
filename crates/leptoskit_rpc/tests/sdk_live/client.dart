@@ -87,7 +87,7 @@ Future<void> scenario() async {
   final first = await bob.api.addSdkNote.live(body: '${prefix}one');
   check(first.isNotEmpty, 'the mutation returns the id');
   check(bob.has('${prefix}one') == 1, "Bob sees his own write: ${bob.notes}");
-  check(bob.page!.items.length == 1 && bob.page!.end == first && bob.page!.hasMore,
+  check(bob.page!.items.length == 1 && bob.page!.end.isPresent && bob.page!.end.value == first && bob.page!.hasMore,
       "Bob's page rows and metadata reflect his write");
   print('ok read-your-writes');
 
@@ -100,7 +100,7 @@ Future<void> scenario() async {
       'an insertion before the existing row');
   check(ada.has('${prefix}one') == 1 && ada.notes![0].body == '${prefix}alpha',
       'inserting preserves the existing row');
-  check(ada.page!.items[0].body == '${prefix}alpha' && ada.page!.end == first && !ada.page!.hasMore,
+  check(ada.page!.items[0].body == '${prefix}alpha' && ada.page!.end.isPresent && ada.page!.end.value == first && !ada.page!.hasMore,
       'page patches update rows and metadata together');
   print('ok insertion and page');
 
@@ -119,7 +119,7 @@ Future<void> scenario() async {
   await ada.until(
       () => ada.has('${prefix}two') == 1, 'a note after the reconnect');
   await ada.until(() => ada.page!.items.length == 4, 'the resumed page');
-  check(ada.notes!.length == 4 && ada.page!.end == last && !ada.page!.hasMore,
+  check(ada.notes!.length == 4 && ada.page!.end.isPresent && ada.page!.end.value == last && !ada.page!.hasMore,
       'resumed list and page preserve every row and update the end cursor');
   print('ok resumed');
 

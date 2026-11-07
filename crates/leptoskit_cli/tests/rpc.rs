@@ -441,6 +441,45 @@ fn strict_accepts_targets_that_preserve_the_schema() {
 }
 
 #[test]
+fn dart_strict_accepts_json_presence_and_rejects_form_null_loss() {
+	for (input, succeeds) in [("Json", true), ("Form", false)] {
+		let scratch = Scratch::new("dart-presence-strict");
+		project(&scratch.path, "");
+		let mut spec: serde_json::Value = serde_json::from_str(include_str!(
+			"../../leptoskit_rpc_codegen/tests/fixtures/dart_presence.json"
+		))
+		.expect("presence spec");
+		spec["functions"][0]["input"] = serde_json::json!(input);
+		std::fs::write(
+			scratch.path.join("spec.json"),
+			serde_json::to_vec(&spec).unwrap(),
+		)
+		.expect("write presence spec");
+		let output = leptoskit(
+			&scratch.path,
+			&[
+				"rpc",
+				"generate",
+				"--from",
+				"spec.json",
+				"--target",
+				"dart",
+				"--strict",
+			],
+		);
+		assert_eq!(output.status.success(), succeeds, "{}", stderr(&output));
+		assert_eq!(scratch.path.join("clients/dart").exists(), succeeds);
+		if !succeeds {
+			assert!(
+				stderr(&output).contains("functions.send.params.required_nullable_text"),
+				"{}",
+				stderr(&output)
+			);
+		}
+	}
+}
+
+#[test]
 fn generate_out_needs_a_single_target() {
 	let scratch = Scratch::new("out");
 	project(&scratch.path, "");

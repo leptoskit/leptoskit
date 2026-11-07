@@ -24,3 +24,6 @@ export LEPTOSKIT_SDK_TARGET_DIR
 
 cargo nextest run --locked --package leptoskit_rpc --all-features \
 	--test sdk_live --run-ignored all --no-tests=fail --test-threads=1
+
+cargo nextest run --locked -p leptoskit_rpc_codegen --features generators \
+	--test dart_presence --run-ignored all --no-tests=fail --test-threads=1

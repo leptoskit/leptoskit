@@ -1,6 +1,7 @@
 //! Schema fidelity diagnostics: what each target can and cannot carry.
 #![cfg(feature = "generators")]
 
+use leptoskit_rpc_codegen::ApiChannel;
 use leptoskit_rpc_codegen::ApiFunction;
 use leptoskit_rpc_codegen::ApiKind;
 use leptoskit_rpc_codegen::ApiParam;
@@ -172,11 +173,7 @@ fn targets_differ_in_what_they_can_represent() {
 		);
 	}
 
-	assert_eq!(
-		kinds(&dart, "components.Account.properties.deleted_at"),
-		[DiagnosticKind::NullableCollapsed]
-	);
-	for diagnostics in [&typescript, &python, &go, &rust, &cli] {
+	for diagnostics in [&typescript, &python, &go, &rust, &cli, &dart] {
 		assert!(
 			at(diagnostics, "components.Account.properties.deleted_at").is_empty(),
 			"these targets keep required-nullable distinct"
@@ -282,11 +279,15 @@ fn optional_nullable_fields_and_explicit_extra_properties_are_reported() {
 		let nullable = kinds(&found, "components.User.properties.note");
 		if matches!(
 			target,
-			TargetLanguage::Dart | TargetLanguage::Go | TargetLanguage::Rust | TargetLanguage::Cli
+			TargetLanguage::Go | TargetLanguage::Rust | TargetLanguage::Cli
 		) {
 			assert_eq!(nullable, [DiagnosticKind::NullableCollapsed]);
 		} else {
-			assert_eq!(nullable, []);
+			assert_eq!(
+				nullable,
+				[],
+				"{target} keeps an optional nullable model field distinct from absence"
+			);
 		}
 	}
 }
@@ -328,7 +329,7 @@ fn bounded_wide_integers_are_safe_for_javascript_targets() {
 }
 
 #[test]
-fn dart_and_go_nullable_aliases_cannot_hide_null_omission() {
+fn go_nullable_aliases_cannot_hide_null_omission() {
 	let mut spec = supported_spec();
 	spec.schemas.insert(
 		"MaybeText".to_owned(),
@@ -336,21 +337,188 @@ fn dart_and_go_nullable_aliases_cannot_hide_null_omission() {
 	);
 	spec.schemas.get_mut("User").unwrap()["properties"]["note"] =
 		json!({ "$ref": "#/components/schemas/MaybeText" });
-	for target in [TargetLanguage::Dart, TargetLanguage::Go] {
+	assert_eq!(
+		kinds(
+			&diagnostics(&spec, TargetLanguage::Go),
+			"components.User.properties.note"
+		),
+		[DiagnosticKind::NullableCollapsed]
+	);
+	// Dart follows the alias into a three-state presence wrapper, and Rust
+	// can wrap the named Option alias in another Option for absence.
+	for target in [TargetLanguage::Dart, TargetLanguage::Rust] {
 		assert_eq!(
 			kinds(
 				&diagnostics(&spec, target),
 				"components.User.properties.note"
 			),
-			[DiagnosticKind::NullableCollapsed]
+			[]
 		);
 	}
-	// Rust can wrap the named Option alias in another Option for absence.
+}
+
+/// Dart's typed API keeps null distinct from absence, but query-string and
+/// form encodings cannot carry that distinction. The diagnostic names the
+/// argument and nested field that lose it.
+#[test]
+fn dart_query_and_form_arguments_report_null_encoding_loss() {
+	let mut spec = supported_spec();
+	spec.schemas.insert(
+		"Nested".to_owned(),
+		json!({
+			"type": "object",
+			"properties": {
+				"note": { "type": ["string", "null"] },
+				"values": { "type": "array", "items": { "type": ["integer", "null"] } }
+			}
+		}),
+	);
+	spec.functions[0].input = HttpInput::Query;
+	spec.functions[0].params = vec![
+		ApiParam {
+			name: "required".to_owned(),
+			docs: String::new(),
+			schema: json!({ "type": ["string", "null"] }),
+			required: true,
+		},
+		ApiParam {
+			name: "optional".to_owned(),
+			docs: String::new(),
+			schema: json!({ "type": ["string", "null"] }),
+			required: false,
+		},
+		ApiParam {
+			name: "nested".to_owned(),
+			docs: String::new(),
+			schema: json!({ "$ref": "#/components/schemas/Nested" }),
+			required: true,
+		},
+	];
+	let found = diagnostics(&spec, TargetLanguage::Dart);
+	assert_eq!(
+		kinds(&found, "functions.read.params.required"),
+		[DiagnosticKind::NullableCollapsed]
+	);
+	assert_eq!(
+		kinds(&found, "functions.read.params.optional"),
+		[DiagnosticKind::NullableCollapsed]
+	);
+	assert_eq!(
+		kinds(&found, "functions.read.params.nested.properties.note"),
+		[DiagnosticKind::NullableCollapsed]
+	);
 	assert_eq!(
 		kinds(
-			&diagnostics(&spec, TargetLanguage::Rust),
-			"components.User.properties.note"
+			&found,
+			"functions.read.params.nested.properties.values.items"
 		),
-		[]
+		[DiagnosticKind::NullableCollapsed]
 	);
+	assert!(
+		at(&found, "components.Nested.properties.note").is_empty(),
+		"the model itself keeps null and absence distinct"
+	);
+
+	// The same schemas over JSON are lossless.
+	spec.functions[0].input = HttpInput::Json;
+	assert!(
+		diagnostics(&spec, TargetLanguage::Dart).is_empty(),
+		"JSON bodies carry explicit null"
+	);
+}
+
+#[test]
+fn dart_channel_presence_cannot_confuse_absence_with_null() {
+	let mut spec = supported_spec();
+	spec.channels.push(ApiChannel {
+		name: "room".to_owned(),
+		module_path: "supported::api".to_owned(),
+		struct_name: "Room".to_owned(),
+		docs: String::new(),
+		fields: vec!["id".to_owned()],
+		args_schema: json!({
+			"type": "object",
+			"properties": { "id": { "type": "string" } },
+			"required": ["id"]
+		}),
+		message_schema: json!({ "type": "string" }),
+		presence_schema: json!({ "type": ["string", "null"] }),
+		internal: false,
+		deprecated: false,
+		tags: Vec::new(),
+	});
+	assert_eq!(
+		kinds(
+			&diagnostics(&spec, TargetLanguage::Dart),
+			"channels.room.presence"
+		),
+		[DiagnosticKind::NullableCollapsed]
+	);
+	// A non-nullable presence has only absence and a value, so it is fine.
+	spec.channels[0].presence_schema = json!({ "type": "string" });
+	assert_eq!(
+		kinds(
+			&diagnostics(&spec, TargetLanguage::Dart),
+			"channels.room.presence"
+		),
+		vec![]
+	);
+}
+
+#[test]
+fn dart_null_only_and_untyped_values_need_json_encoding() {
+	for schema in [json!({"type": "null"}), json!(true), json!({})] {
+		let mut spec = supported_spec();
+		spec.schemas.insert("NullableAlias".into(), schema);
+		spec.functions[0].input = HttpInput::Form;
+		spec.functions[0].params = vec![ApiParam {
+			name: "value".into(),
+			docs: String::new(),
+			required: true,
+			schema: json!({"$ref": "#/components/schemas/NullableAlias"}),
+		}];
+		let path = format!("functions.{}.params.value", spec.functions[0].name);
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			[DiagnosticKind::NullableCollapsed]
+		);
+		spec.functions[0].input = HttpInput::Json;
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			vec![]
+		);
+	}
+}
+
+#[test]
+fn dart_unconstrained_collection_values_report_null_encoding_loss() {
+	for (schema, suffix) in [
+		(json!({"type": "array"}), "items"),
+		(
+			json!({"type": "object", "additionalProperties": true}),
+			"additionalProperties",
+		),
+	] {
+		let mut spec = supported_spec();
+		spec.functions[0].input = HttpInput::Form;
+		spec.functions[0].params = vec![ApiParam {
+			name: "values".into(),
+			docs: String::new(),
+			required: true,
+			schema,
+		}];
+		let path = format!(
+			"functions.{}.params.values.{suffix}",
+			spec.functions[0].name
+		);
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			[DiagnosticKind::NullableCollapsed]
+		);
+		spec.functions[0].input = HttpInput::Json;
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			vec![]
+		);
+	}
 }

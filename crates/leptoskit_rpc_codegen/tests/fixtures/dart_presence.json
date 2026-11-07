@@ -1,0 +1,662 @@
+{
+	"leptoskit_rpc_spec": 3,
+	"title": "DartPresence",
+	"version": "1.0.0",
+	"description": "Requiredness and nullability in generated Dart clients.",
+	"servers": [
+		"https://presence.example"
+	],
+	"functions": [
+		{
+			"name": "send",
+			"kind": "mutation",
+			"module_path": "presence::api",
+			"struct_name": "Send",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/send",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [
+				{
+					"name": "required_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": true
+				},
+				{
+					"name": "required_nullable_text",
+					"docs": "",
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"required": true
+				},
+				{
+					"name": "optional_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_nullable_text",
+					"docs": "",
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"required": false
+				},
+				{
+					"name": "optional_flag",
+					"docs": "",
+					"schema": {
+						"type": "boolean"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_count",
+					"docs": "",
+					"schema": {
+						"type": "integer"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_empty_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_items",
+					"docs": "",
+					"schema": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					},
+					"required": false
+				},
+				{
+					"name": "optional_labels",
+					"docs": "",
+					"schema": {
+						"type": "object",
+						"additionalProperties": {
+							"type": "string"
+						}
+					},
+					"required": false
+				},
+				{
+					"name": "required_nullable_nested",
+					"docs": "",
+					"schema": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					},
+					"required": true
+				},
+				{
+					"name": "optional_nullable_nested",
+					"docs": "",
+					"schema": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					},
+					"required": false
+				},
+				{
+					"name": "optional_nullable_alias",
+					"docs": "",
+					"schema": {
+						"$ref": "#/components/schemas/MaybeText"
+					},
+					"required": false
+				}
+			],
+			"output_schema": {
+				"type": "null"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "form_echo",
+			"kind": "call",
+			"module_path": "presence::api",
+			"struct_name": "FormEcho",
+			"docs": "Sends optional zero and empty values as a form.",
+			"path": "/api/form_echo",
+			"method": "POST",
+			"input": "Form",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [
+				{
+					"name": "optional_flag",
+					"docs": "",
+					"schema": {
+						"type": "boolean"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_count",
+					"docs": "",
+					"schema": {
+						"type": "integer"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_empty_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": false
+				}
+			],
+			"output_schema": {
+				"type": "null"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_echo",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelEcho",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_echo",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/Echo"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_default",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelDefault",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_default",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/DefaultRequired"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_null",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelNull",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_null",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/OnlyNull"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "observe",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "Observe",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/observe",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [
+				{
+					"name": "required_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": true
+				},
+				{
+					"name": "required_nullable_text",
+					"docs": "",
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"required": true
+				},
+				{
+					"name": "optional_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_nullable_text",
+					"docs": "",
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
+					"required": false
+				},
+				{
+					"name": "optional_flag",
+					"docs": "",
+					"schema": {
+						"type": "boolean"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_count",
+					"docs": "",
+					"schema": {
+						"type": "integer"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_empty_text",
+					"docs": "",
+					"schema": {
+						"type": "string"
+					},
+					"required": false
+				},
+				{
+					"name": "optional_items",
+					"docs": "",
+					"schema": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					},
+					"required": false
+				},
+				{
+					"name": "optional_labels",
+					"docs": "",
+					"schema": {
+						"type": "object",
+						"additionalProperties": {
+							"type": "string"
+						}
+					},
+					"required": false
+				},
+				{
+					"name": "required_nullable_nested",
+					"docs": "",
+					"schema": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					},
+					"required": true
+				},
+				{
+					"name": "optional_nullable_nested",
+					"docs": "",
+					"schema": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					},
+					"required": false
+				},
+				{
+					"name": "optional_nullable_alias",
+					"docs": "",
+					"schema": {
+						"$ref": "#/components/schemas/MaybeText"
+					},
+					"required": false
+				}
+			],
+			"output_schema": {
+				"type": "string"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		}
+	],
+	"channels": [
+		{
+			"name": "room",
+			"module_path": "presence::api",
+			"struct_name": "Room",
+			"docs": "A room whose join arguments exercise presence.",
+			"fields": [
+				"required_text",
+				"required_nullable_text",
+				"optional_text",
+				"optional_nullable_text"
+			],
+			"args_schema": {
+				"$ref": "#/components/schemas/Room"
+			},
+			"message_schema": {
+				"$ref": "#/components/schemas/Signal"
+			},
+			"presence_schema": {
+				"$ref": "#/components/schemas/Viewer"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "null_room",
+			"module_path": "presence::api",
+			"struct_name": "NullRoom",
+			"docs": "A room whose join arguments exercise presence.",
+			"fields": [],
+			"args_schema": {
+				"type": "null"
+			},
+			"message_schema": {
+				"type": "null"
+			},
+			"presence_schema": {
+				"$ref": "#/components/schemas/Viewer"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		}
+	],
+	"live_path": "/live",
+	"schemas": {
+		"MaybeText": {
+			"type": [
+				"string",
+				"null"
+			]
+		},
+		"Nested": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string"
+				},
+				"note": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"required": [
+				"value"
+			]
+		},
+		"Echo": {
+			"type": "object",
+			"properties": {
+				"required_text": {
+					"type": "string"
+				},
+				"required_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"optional_text": {
+					"type": "string"
+				},
+				"optional_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"required_nullable_nested": {
+					"anyOf": [
+						{
+							"$ref": "#/components/schemas/Nested"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"optional_nullable_nested": {
+					"anyOf": [
+						{
+							"$ref": "#/components/schemas/Nested"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"required_nullable_alias": {
+					"$ref": "#/components/schemas/MaybeText"
+				},
+				"optional_nullable_alias": {
+					"$ref": "#/components/schemas/MaybeText"
+				},
+				"optional_flag": {
+					"type": "boolean"
+				},
+				"optional_count": {
+					"type": "integer"
+				},
+				"optional_empty_text": {
+					"type": "string"
+				},
+				"optional_items": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"optional_labels": {
+					"type": "object",
+					"additionalProperties": {
+						"type": "string"
+					}
+				},
+				"nullable_items": {
+					"type": [
+						"array",
+						"null"
+					],
+					"items": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					}
+				},
+				"nullable_map": {
+					"type": [
+						"object",
+						"null"
+					],
+					"additionalProperties": {
+						"anyOf": [
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
+						]
+					}
+				},
+				"null_items": {
+					"type": "array",
+					"items": {
+						"type": "null"
+					}
+				},
+				"null_map": {
+					"type": "object",
+					"additionalProperties": {
+						"type": "null"
+					}
+				}
+			},
+			"required": [
+				"required_text",
+				"required_nullable_text",
+				"required_nullable_nested",
+				"required_nullable_alias"
+			]
+		},
+		"Room": {
+			"type": "object",
+			"properties": {
+				"required_text": {
+					"type": "string"
+				},
+				"required_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"optional_text": {
+					"type": "string"
+				},
+				"optional_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"required": [
+				"required_text",
+				"required_nullable_text"
+			]
+		},
+		"Signal": {
+			"type": "object",
+			"properties": {
+				"text": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"text"
+			]
+		},
+		"Viewer": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"name"
+			]
+		},
+		"DefaultRequired": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string",
+					"default": "fallback"
+				}
+			},
+			"required": [
+				"value"
+			]
+		},
+		"OnlyNull": {
+			"type": "object",
+			"properties": {
+				"required_null": {
+					"type": "null"
+				},
+				"optional_null": {
+					"type": "null"
+				}
+			},
+			"required": [
+				"required_null"
+			]
+		}
+	}
+}

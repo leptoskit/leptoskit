@@ -330,7 +330,7 @@ Every schema becomes a type in each client, but some JSON Schemas describe more 
 
 Free-form JSON is intentional, so it does not produce a warning. Other mappings can lose structure for particular targets. TypeScript's `number` cannot represent every 64-bit integer exactly. Dart's `int` uses signed 64-bit values on the VM and has JavaScript number limits when compiled for the web; see [Dart's integer representation](https://api.dart.dev/dart-core/int-class.html). Strict generation diagnoses both targets unless the schema declares a range within JavaScript's safe integers.
 
-Dart omits nullable fields when they are null, including required fields. Go and Rust also omit optional nullable fields, so those fields cannot send explicit null separately from absence. Objects that combine named fields with explicit `additionalProperties` produce a warning because the generated model has no field or index signature for the extra keys.
+Dart keeps requiredness and nullability separate: a required nullable field or argument is still required, and its `null` is written to JSON. An optional nullable value uses the three-state `Presence` wrapper, so omitting it, sending `null`, and sending a value stay distinct. Go and Rust still omit optional nullable fields, so those fields cannot send explicit null separately from absence. Dart's query-string and form encodings cannot represent explicit null, so `--strict` reports a nullable query or form argument even though its JSON and live forms are lossless. Objects that combine named fields with explicit `additionalProperties` produce a warning because the generated model has no field or index signature for the extra keys.
 
 `leptoskit rpc generate` prints a warning for each such mapping, with the schema path that caused it:
 
@@ -351,6 +351,32 @@ Strict runs the same diagnostics for every requested target first. If a diagnost
 When an endpoint has a default, omitting its argument and sending a zero value can mean different things. Generated Go clients use pointers for optional arguments and fields: `nil` omits the value, while `&enabled` sends `false` when `enabled` is false. The same applies to zero numbers and empty strings. This works in Go clients on any platform, for HTTP and live calls. JSON and live calls also preserve empty collections; form and query encoding cannot express an empty collection.
 
 After regenerating an older client, pass addresses for optional arguments you previously supplied directly. Optional nullable fields can still collapse JSON null into absence; `--strict` reports this limitation.
+
+### Optional and nullable values in Dart
+
+A Dart nullable type has two states, so it cannot tell an omitted optional field from an explicit `null`. Generated Dart clients therefore keep the two dimensions separate:
+
+- A **required nullable** field or argument is `required` and its type is nullable. Its key is always written, including when its value is `null`.
+- An **optional non-nullable** field or argument is a nullable Dart type. Omitting it leaves the key out; `false`, `0`, an empty string, an empty list, and an empty map are all written to JSON and live payloads. Query-string and form encodings cannot express an empty collection.
+- An **optional nullable** field or argument is a `Presence<T?>` with three states: `const Presence<T?>.absent()` leaves the key out, `Presence<T?>.present(null)` writes `null`, and `Presence<T?>.present(value)` writes the value. Free-form JSON that admits `null` uses the same wrapper when it is optional.
+
+```dart
+final todo = Todo(
+  id: 1,
+  title: 'Milk',
+  note: const Presence<String?>.present(null), // send "note": null
+  // An optional non-nullable field is simply omitted.
+);
+
+// Reading a nullable optional field:
+if (todo.note.isPresent) {
+  show(todo.note.value); // may be null
+}
+```
+
+A JSON Schema default is an annotation: a field listed as required still needs an explicit value. A null-only schema uses Dart's `Null` value type in fields, collections, and channels. Decoding a model rejects missing required properties, including required nullable properties.
+
+Regenerating changes the Dart signatures of optional nullable fields and arguments from `T?` to `Presence<T?>`. Required nullable fields become required constructor arguments and required operation arguments. JSON and live calls preserve all three states; query-string and form encodings omit `null`, which `--strict` reports as a remaining encoding limitation. A channel's optional presence argument also uses `null` for absence, so a presence schema that itself allows `null` is reported too.
 
 ### What regeneration overwrites
 

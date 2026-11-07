@@ -126,7 +126,7 @@ jobs:
           # The upload step's `bin:` input is the only `bin:` key in this file.
           shipped=$(grep -E '^[[:space:]]*bin:' .github/workflows/publish.yml \
             | sed -E 's/^[[:space:]]*bin:[[:space:]]*//' \
-            | tr ', ' '\n\n' | sed '/^$/d' | sort)
+            | tr ', ' '[\n*]' | sed '/^$/d' | sort)
 
           if [ "$declared" != "$shipped" ]; then
             echo "::error file=.github/workflows/publish.yml::the CLI declares binaries [$(tr '\n' ' ' <<< "$declared")] but the upload step ships [$(tr '\n' ' ' <<< "$shipped")]"
@@ -350,6 +350,7 @@ jobs:
           # The dist profile is the workspace's release-build profile: LTO, one codegen unit, and
           # stripped symbols.
           profile: dist
+          locked: true
           # The action resolves the release to upload to from this ref and refuses a bare SHA, so
           # it gets the tag itself; the checkout above has already proven the tag names the commit
           # being built.
