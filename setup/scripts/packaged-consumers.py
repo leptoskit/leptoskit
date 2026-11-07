@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from consumer_acceptance.model import PRESETS, inspect_graph, write_consumer
-from consumer_acceptance.packages import load_packages, sha256
+from consumer_acceptance.packages import load_packages, sha256, verify_report
 
 
 def capture(arguments, directory, environment):
@@ -53,11 +53,13 @@ def compile_consumer(preset, packages, output, environment):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archives", type=Path, required=True, help="cargo package output directory")
-    parser.add_argument("--output", type=Path, required=True, help="new directory outside the checkout")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--output", type=Path, help="new directory outside the checkout")
+    mode.add_argument("--verify-report", type=Path, help="compare prepared archives with a passed run")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
-    output = args.output.resolve()
-    if output.is_relative_to(root):
+    output = args.output.resolve() if args.output else None
+    if output and output.is_relative_to(root):
         raise ValueError("consumer output must be outside the repository")
     for tool in ["cargo", "rustc", "rustup"]:
         if shutil.which(tool) is None:
@@ -68,16 +70,22 @@ def main():
     environment["RUSTUP_TOOLCHAIN"] = capture(
         ["rustup", "show", "active-toolchain"], root, environment
     ).split()[0]
-    targets = capture(["rustup", "target", "list", "--installed"], root, environment).splitlines()
-    if "wasm32-unknown-unknown" not in targets:
-        raise ValueError("required target missing: wasm32-unknown-unknown")
-    # Reusing a previous directory could leave stale successful evidence.
-    output.mkdir(parents=True, exist_ok=False)
-    environment["CARGO_TARGET_DIR"] = str(output / "target")
+    if output:
+        targets = capture(["rustup", "target", "list", "--installed"], root, environment).splitlines()
+        if "wasm32-unknown-unknown" not in targets:
+            raise ValueError("required target missing: wasm32-unknown-unknown")
+        # Reusing a previous directory could leave stale successful evidence.
+        output.mkdir(parents=True, exist_ok=False)
+        environment["CARGO_TARGET_DIR"] = str(output / "target")
     revision = capture(["git", "rev-parse", "HEAD"], root, environment)
     metadata = json.loads(capture(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], root, environment
     ))
+    if args.verify_report:
+        report = json.loads(args.verify_report.read_text())
+        verify_report(report, metadata, args.archives.resolve(), revision, PRESETS)
+        print("Prepared archives match all tested consumer payloads")
+        return
     packages = load_packages(metadata, args.archives.resolve(), output / "packages", revision)
     results = []
     for preset in PRESETS:

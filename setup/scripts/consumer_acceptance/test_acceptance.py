@@ -185,5 +185,63 @@ class Orchestration(unittest.TestCase):
         })
 
 
+class PublicationReport(unittest.TestCase):
+    def setUp(self):
+        from packages import sha256
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.archive = self.root / "leptoskit-1.0.0.crate"
+        self.archive.write_bytes(b"tested package bytes")
+        self.metadata = {"packages": [{"name": "leptoskit", "version": "1.0.0", "publish": None}]}
+        self.report = {
+            "format_version": 1, "state": "passed", "source_revision": "commit",
+            "packages": {"leptoskit": {"version": "1.0.0", "sha256": sha256(self.archive)}},
+            "consumers": [{"preset": name, "state": "passed", "features": features,
+                           "target": target or "host"} for name, (features, target) in PRESETS.items()],
+        }
+
+    def verify(self):
+        from packages import verify_report
+        verify_report(self.report, self.metadata, self.root, "commit", PRESETS)
+
+    def test_exact_tested_archives_pass(self):
+        self.verify()
+
+    def test_changed_archive_fails(self):
+        self.archive.write_bytes(b"different prepared upload")
+        with self.assertRaisesRegex(ValueError, "differs from the tested payload"):
+            self.verify()
+
+    def test_different_revision_fails(self):
+        self.report["source_revision"] = "different"
+        with self.assertRaisesRegex(ValueError, "source revision"):
+            self.verify()
+
+    def test_partial_or_repeated_profiles_fail(self):
+        original = self.report["consumers"]
+        for consumers in [original[:-1], [original[0]] * len(original)]:
+            self.report["consumers"] = consumers
+            with self.assertRaisesRegex(ValueError, "required profiles"):
+                self.verify()
+
+    def test_wrong_features_or_target_or_failed_profile_fails(self):
+        original = self.report["consumers"][0].copy()
+        for field, value in [("features", ["server"]), ("target", "different"), ("state", "failed")]:
+            self.report["consumers"][0] = {**original, field: value}
+            with self.assertRaisesRegex(ValueError, "incomplete evidence"):
+                self.verify()
+
+    def test_missing_package_fails(self):
+        self.report["packages"] = {}
+        with self.assertRaisesRegex(ValueError, "package set"):
+            self.verify()
+
+    def test_untested_package_fails(self):
+        self.report["packages"]["leptoskit_extra"] = {"version": "1.0.0", "sha256": "0" * 64}
+        with self.assertRaisesRegex(ValueError, "package set"):
+            self.verify()
+
+
 if __name__ == "__main__":
     unittest.main()

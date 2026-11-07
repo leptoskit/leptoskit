@@ -62,3 +62,27 @@ def load_packages(metadata, archives, output, revision):
             raise ValueError(f"missing package archive {archive.name}; run cargo package first")
         packages[name] = extract_archive(archive, output, name, version, revision)
     return packages
+
+
+def verify_report(report, metadata, archives, revision, presets):
+    """Match a successful full consumer run to freshly prepared upload archives."""
+    if (report.get("format_version") != 1 or report.get("state") != "passed"
+            or report.get("source_revision") != revision):
+        raise ValueError("consumer report does not match this source revision")
+    consumers = report.get("consumers", [])
+    if len(consumers) != len(presets) or {item.get("preset") for item in consumers} != set(presets):
+        raise ValueError("consumer report is missing required profiles or repeats one")
+    for consumer in consumers:
+        features, target = presets[consumer["preset"]]
+        if (consumer.get("state") != "passed" or consumer.get("features") != features
+                or consumer.get("target") != (target or "host")):
+            raise ValueError(f"consumer report has incomplete evidence for {consumer['preset']}")
+    expected = {item["name"]: item["version"] for item in metadata["packages"]
+                if item.get("publish") != []}
+    tested = report.get("packages", {})
+    if not expected or "leptoskit" not in expected or set(tested) != set(expected):
+        raise ValueError("consumer report package set differs from the publication")
+    for name, version in expected.items():
+        archive = archives / f"{name}-{version}.crate"
+        if tested[name].get("version") != version or sha256(archive) != tested[name].get("sha256"):
+            raise ValueError(f"{name}: prepared archive differs from the tested payload")
