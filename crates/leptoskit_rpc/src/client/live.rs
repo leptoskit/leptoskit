@@ -61,6 +61,8 @@ use futures::channel::mpsc;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::mpsc::UnboundedSender;
 use futures::channel::oneshot;
+use futures::future::AbortHandle;
+use futures::future::Abortable;
 use futures::future::Either;
 use futures::future::FutureExt;
 use futures::stream::Peekable;
@@ -2445,7 +2447,6 @@ where
 	}
 
 	let key = ArcMemo::new(move |_| Args::new(args()));
-	let subscription = StoredValue::new(None::<u32>);
 	let cache: QueryClient = use_query_client();
 
 	Effect::new_isomorphic(move |_| {
@@ -2454,44 +2455,64 @@ where
 		let Some(live) = client_for(Q::SERVICE) else {
 			return;
 		};
-		if let Some(previous) = subscription.get_value() {
-			live.unsubscribe(previous);
-		}
-
 		let Ok(value) = serde_json::to_value(key.get()) else {
-			subscription.set_value(None);
 			return;
 		};
-		let (id, mut updates) = live.subscribe(Q::NAME, value);
-		subscription.set_value(Some(id));
-
 		let cache = cache.clone();
 		let scope = query_scope::<Q>();
-		let read = key.clone();
-		Executor::spawn_local(async move {
-			while let Some(update) = updates.next().await {
-				match update {
-					Update::Ok(value) => {
-						if let Ok(output) = serde_json::from_value(value) {
-							cache.set_query_data(&scope, read.clone(), output);
-						}
+		subscribe_in_owner(live, Q::NAME, value, move |update| {
+			match update {
+				Update::Ok(value) => {
+					if let Ok(output) = serde_json::from_value(value) {
+						cache.set_query_data(&scope, key.clone(), output);
 					}
-					Update::Patch(patch) => {
-						let update = Update::Patch(patch);
-						cache.update_query_data(&scope, read.clone(), |current| {
-							let current = current?;
-							let mut value = serde_json::to_value(current).ok()?;
-							apply(&mut value, &update);
-							serde_json::from_value(value).ok()
-						});
-					}
-					Update::Err(_) => {}
 				}
+				Update::Patch(patch) => {
+					let update = Update::Patch(patch);
+					cache.update_query_data(&scope, key.clone(), |current| {
+						let current = current?;
+						let mut value = serde_json::to_value(current).ok()?;
+						apply(&mut value, &update);
+						serde_json::from_value(value).ok()
+					});
+				}
+				Update::Err(_) => {}
 			}
 		});
 	});
 
 	handle
+}
+
+/// Stops both the remote subscription and buffered local updates when the
+/// current owner is cleaned up, including when an effect changes its key.
+fn subscribe_in_owner(
+	live: &LiveClient,
+	query: &'static str,
+	args: Value,
+	apply: impl Fn(Update) + 'static,
+) -> u32 {
+	let (id, mut updates) = live.subscribe(query, args);
+	let (abort, registration) = AbortHandle::new_pair();
+	let cleanup = LiveClient {
+		inner: Arc::clone(&live.inner),
+	};
+	on_cleanup(move || {
+		abort.abort();
+		cleanup.unsubscribe(id);
+	});
+	Executor::spawn_local(async move {
+		let _ = Abortable::new(
+			async move {
+				while let Some(update) = updates.next().await {
+					apply(update);
+				}
+			},
+			registration,
+		)
+		.await;
+	});
+	id
 }
 
 /// The `leptoskit_query` scope of a mutation or an action sent over the
@@ -2761,6 +2782,49 @@ mod tests {
 				}
 			})
 		}
+	}
+
+	#[tokio::test]
+	async fn owner_cleanup_unsubscribes_and_discards_buffered_updates() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = Memory::default();
+				let client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				let owner = Owner::new();
+				let applied = Arc::new(Mutex::new(Vec::new()));
+				let values = Arc::clone(&applied);
+				let id = owner.with(|| {
+					subscribe_in_owner(&client, "notes", json!({}), move |update| {
+						values.lock().unwrap().push(update);
+					})
+				});
+				assert!(matches!(
+					socket.next_sent().await,
+					ClientFrame::Hello { .. }
+				));
+				assert!(
+					matches!(socket.next_sent().await, ClientFrame::Sub { id: sent, .. } if sent == id)
+				);
+				let sender = client.inner.subscribers().get(&id).unwrap().sender.clone();
+				sender.unbounded_send(Update::Ok(json!("first"))).unwrap();
+				tokio::task::yield_now().await;
+				assert_eq!(*applied.lock().unwrap(), vec![Update::Ok(json!("first"))]);
+
+				// An already queued result must not populate a replacement
+				// screen's cache.
+				sender
+					.unbounded_send(Update::Ok(json!("old account")))
+					.unwrap();
+				owner.cleanup();
+				assert!(!client.inner.subscribers().contains_key(&id));
+				assert!(
+					matches!(socket.next_sent().await, ClientFrame::Unsub { id: sent } if sent == id)
+				);
+				assert_eq!(*applied.lock().unwrap(), vec![Update::Ok(json!("first"))]);
+				assert!(sender.unbounded_send(Update::Ok(json!("late"))).is_err());
+			})
+			.await;
 	}
 
 	#[tokio::test]
