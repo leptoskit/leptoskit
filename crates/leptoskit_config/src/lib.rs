@@ -27,6 +27,7 @@ pub mod publish;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod services;
+pub mod workspace;
 
 pub use extension::Browser;
 pub use extension::ContentScript;

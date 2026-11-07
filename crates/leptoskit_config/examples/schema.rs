@@ -14,12 +14,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src");
 	let versioned = format!("schemas/leptoskit.v{SCHEMA_VERSION}.schema.json");
-	let assets = ["schema.json", "schemas/leptoskit.schema.json", &versioned];
+	let assets = [
+		("schema.json", false),
+		("schemas/leptoskit.schema.json", false),
+		(versioned.as_str(), false),
+		("schemas/leptoskit.workspace.v1.schema.json", true),
+	];
 	let mut stale = Vec::new();
 
-	for asset in assets {
+	for (asset, workspace) in assets {
 		let id = format!("https://leptoskit.dev/{asset}");
-		let schema = schema::configuration(&id);
+		let schema = if workspace {
+			schema::workspace(&id)
+		} else {
+			schema::configuration(&id)
+		};
 		// Match the repository's dprint JSON format for deterministic checks.
 		let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
 		let mut serializer = serde_json::Serializer::with_formatter(Vec::new(), formatter);

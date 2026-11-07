@@ -50,6 +50,33 @@ pub fn configuration(id: &str) -> Schema {
 	schema
 }
 
+/// Editor schema for the separate workspace composition manifest.
+pub fn workspace(id: &str) -> Schema {
+	let mut schema = schemars::generate::SchemaSettings::draft2020_12()
+		.for_deserialize()
+		.into_generator()
+		.into_root_schema_for::<crate::workspace::Workspace>();
+	schema.insert("$id".into(), Value::String(id.into()));
+	schema.insert(
+		"title".into(),
+		Value::String(crate::workspace::WORKSPACE_FILE.into()),
+	);
+	let object = schema.ensure_object();
+	let properties = object.get_mut("properties").expect("workspace properties");
+	properties["format_version"]["const"] = serde_json::json!(crate::workspace::WORKSPACE_VERSION);
+	properties["applications"]["minProperties"] = serde_json::json!(1);
+	properties["applications"]["maxProperties"] = serde_json::json!(256);
+	properties["applications"]["propertyNames"] =
+		serde_json::json!({"pattern": "^[a-z][a-z0-9-]{0,62}$"});
+	let definitions = object.get_mut("$defs").expect("workspace definitions");
+	definitions["Application"]["properties"]["depends-on"]["uniqueItems"] = serde_json::json!(true);
+	for name in ["url-env", "token-env"] {
+		definitions["Binding"]["properties"][name]["pattern"] =
+			serde_json::json!("^[A-Z_][A-Z0-9_]*$");
+	}
+	schema
+}
+
 pub(crate) fn public_keys(_: &mut schemars::SchemaGenerator) -> Schema {
 	schemars::json_schema!({
 		"type": "array",
