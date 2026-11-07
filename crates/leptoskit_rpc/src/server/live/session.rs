@@ -23,6 +23,7 @@ use std::time::SystemTime;
 
 use leptoskit_db::Db;
 use leptoskit_db::ReadEntry;
+use pending::PendingTransition;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -65,6 +66,10 @@ use crate::server::registration_in;
 use crate::server::run::recording_commits;
 use crate::server::stream;
 use crate::server::stream::StreamSink;
+
+mod pending;
+#[cfg(all(test, feature = "sqlite"))]
+mod recovery_tests;
 
 /// How often a subscription's first run may find a round applied under it
 /// before it registers anyway and has the hub run it again.
@@ -120,11 +125,18 @@ struct Session {
 	/// What running streams send, forwarded in order.
 	stream_frames: mpsc::UnboundedReceiver<String>,
 	stream_out: mpsc::UnboundedSender<String>,
-	/// The version of the last transition sent.
+	/// The version of the last complete transition queued for transport.
 	last_sent: u64,
-	/// Whether a transition was dropped for a slow connection, so the next
-	/// repeats every value.
+	/// At most one unfinished transition; new batches coalesce into a later
+	/// full snapshot instead of growing an unbounded per-connection queue.
+	pending: Option<PendingTransition>,
+	/// Results changed while an earlier transition was waiting to be sent.
 	full_next: bool,
+	/// The latest version represented by the session's stored results.
+	latest: u64,
+	/// Resume errors for queries that have no registered subscription.
+	extra_errors: HashMap<u32, WireError>,
+	transport_failed: bool,
 	/// The newest commit a mutation or action answered with that no
 	/// transition has reached yet.
 	awaiting: Option<u64>,
@@ -257,7 +269,11 @@ impl Live {
 			stream_frames,
 			stream_out,
 			last_sent: version,
+			pending: None,
 			full_next: false,
+			latest: version,
+			extra_errors: HashMap::new(),
+			transport_failed: false,
 			awaiting: None,
 			resume_floor,
 			frame_tokens: FRAME_BURST * 1_000,
@@ -315,6 +331,7 @@ impl Session {
 				.into_iter()
 				.chain(self.lease.expires_at)
 				.min();
+			let sender = self.out.clone();
 			tokio::select! {
 				biased;
 				() = identity_deadline(deadline) => {
@@ -322,6 +339,10 @@ impl Session {
 				}
 				() = self.out.closed() => return false,
 				_ = drained.recv() => return true,
+				permit = sender.reserve_owned(), if self.pending.is_some() || self.full_next => {
+					let Ok(permit) = permit else { return false };
+					if !self.send_pending(permit) { return false; }
+				}
 				Some(batch) = self.batches.recv() => {
 					if !self.apply(batch).await { return false; }
 				}
@@ -362,10 +383,22 @@ impl Session {
 	/// mutation is waiting for a commit that changed none of this
 	/// connection's results, or when `catch_up` asks for one.
 	async fn settle(&mut self, catch_up: bool) -> bool {
-		while let Ok(batch) = self.batches.try_recv() {
+		// Return to the select loop after a bounded batch so a continuously
+		// busy database cannot starve available transport capacity.
+		for _ in 0..super::OUTGOING {
+			let Ok(batch) = self.batches.try_recv() else {
+				break;
+			};
 			if !self.apply(batch).await {
 				return false;
 			}
+		}
+		if self.transport_failed {
+			return false;
+		}
+		if !self.batches.is_empty() {
+			// The stored results have not applied every queued batch yet.
+			return true;
 		}
 
 		let applied = *self.applied.borrow_and_update();
@@ -463,6 +496,10 @@ impl Session {
 			ClientFrame::Ping => self.send(ServerFrame::Pong).await,
 			ClientFrame::Sub { id, query, args } => self.subscribe(id, query, args).await,
 			ClientFrame::Unsub { id } => {
+				if let Some(pending) = &mut self.pending {
+					pending.remove(id);
+				}
+				self.extra_errors.remove(&id);
 				self.subscriptions.remove(&id);
 				self.live.hub().leave(self.number, id);
 				true
@@ -613,6 +650,10 @@ impl Session {
 	}
 
 	fn keep(&mut self, id: u32, query: String, args: Value, value: Arc<Value>) {
+		if let Some(pending) = &mut self.pending {
+			pending.remove(id);
+		}
+		self.extra_errors.remove(&id);
 		self.live
 			.stats_ref()
 			.subscriptions
@@ -955,6 +996,9 @@ impl Session {
 				.await;
 		}
 
+		self.pending = None;
+		self.full_next = true;
+		self.extra_errors.clear();
 		// Detach every old group before awaiting any new identity's reads.
 		// Batches already queued belong to the old identity as well.
 		for id in self.subscriptions.keys().copied() {
@@ -1138,21 +1182,57 @@ impl Session {
 		true
 	}
 
-	/// Sends one transition to `to`, split into frames under the size
-	/// limit. Only the last chunk advances the resume cursor; earlier
-	/// chunks may be replayed if the connection drops before it arrives.
-	/// Repeat every current result when an earlier transition was dropped.
+	/// Retain one unfinished transition and coalesce subsequent changes into
+	/// the current subscription results. Capacity wakes the session even if
+	/// no further client frame or database commit arrives.
 	fn send_transition(
 		&mut self,
 		from: u64,
-		mut updates: Vec<SubscriptionUpdate>,
+		updates: Vec<SubscriptionUpdate>,
 		to: u64,
 		full: bool,
 	) {
-		let full = full || self.full_next;
+		self.latest = self.latest.max(to);
+		self.live
+			.stats_ref()
+			.transitions
+			.fetch_add(1, Ordering::Relaxed);
+		if self.pending.is_some() || self.full_next {
+			self.full_next = true;
+			for update in updates {
+				if !self.subscriptions.contains_key(&update.id)
+					&& let Update::Err(error) = update.update
+				{
+					if self.extra_errors.len() >= MAX_SUBSCRIPTIONS
+						&& !self.extra_errors.contains_key(&update.id)
+					{
+						self.transport_failed = true;
+						return;
+					}
+					self.extra_errors.insert(update.id, error);
+				}
+			}
+		} else {
+			self.pending = Some(PendingTransition::new(from, updates, to, full));
+		}
+		// Fill only immediately available slots; never wait inside a batch.
+		for _ in 0..super::OUTGOING {
+			if self.pending.is_none() && !self.full_next {
+				break;
+			}
+			let Ok(permit) = self.out.clone().try_reserve_owned() else {
+				break;
+			};
+			if !self.send_pending(permit) {
+				self.transport_failed = true;
+				break;
+			}
+		}
+	}
 
-		if self.full_next {
-			updates = self
+	fn send_pending(&mut self, permit: mpsc::OwnedPermit<Outbound>) -> bool {
+		if self.pending.is_none() && self.full_next {
+			let mut updates: Vec<_> = self
 				.subscriptions
 				.iter()
 				.map(|(id, subscription)| {
@@ -1162,75 +1242,31 @@ impl Session {
 					}
 				})
 				.collect();
-		}
-
-		self.full_next = false;
-
-		// A partial batch must not claim its final version: a reconnect
-		// needs to replay every changed result if the last chunk was lost.
-		let mut chunk = Vec::new();
-		let mut sent = false;
-		let mut complete = true;
-
-		for update in updates {
-			chunk.push(update);
-			let transition = Transition {
-				from,
-				to,
-				updates: chunk.clone(),
-				full,
-			};
-			let Ok(text) = serde_json::to_string(&ServerFrame::Transition(transition)) else {
-				continue;
-			};
-
-			if text.len() > MAX_FRAME_BYTES && chunk.len() > 1 {
-				let last = chunk.pop().expect("just pushed");
-
-				if !self.send_chunk(from, &chunk, from, full) {
-					complete = false;
-					break;
+			updates.extend(self.extra_errors.drain().map(|(id, error)| {
+				SubscriptionUpdate {
+					id,
+					update: Update::Err(error),
 				}
-				sent = true;
-				chunk = vec![last];
-			}
+			}));
+			self.pending = Some(PendingTransition::new(
+				self.last_sent,
+				updates,
+				self.latest,
+				true,
+			));
+			self.full_next = false;
 		}
-
-		if complete && (!chunk.is_empty() || !sent) {
-			complete = self.send_chunk(from, &chunk, to, full);
-		}
-
+		let Some(pending) = &mut self.pending else {
+			return true;
+		};
+		let Some((frame, complete)) = pending.frame() else {
+			return false;
+		};
+		let to = pending.to;
+		permit.send(frame);
 		if complete {
 			self.last_sent = to;
-		}
-		self.live
-			.stats_ref()
-			.transitions
-			.fetch_add(1, Ordering::Relaxed);
-	}
-
-	fn send_chunk(
-		&mut self,
-		from: u64,
-		updates: &[SubscriptionUpdate],
-		to: u64,
-		full: bool,
-	) -> bool {
-		let transition = Transition {
-			from,
-			to,
-			updates: updates.to_vec(),
-			full,
-		};
-		let Some(outbound) = Outbound::frame(&ServerFrame::Transition(transition), Some(to)) else {
-			self.full_next = true;
-			return false;
-		};
-
-		if self.out.try_send(outbound).is_err() {
-			// A slow connection gets the newest state, not every step.
-			self.full_next = true;
-			return false;
+			self.pending = None;
 		}
 		true
 	}
