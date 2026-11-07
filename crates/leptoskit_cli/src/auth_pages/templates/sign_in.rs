@@ -97,6 +97,13 @@ pub struct SignIn {
 	problem: RwSignal<Option<String>>,
 	/// Seconds until the server takes another attempt, after `rate_limited`.
 	wait: RwSignal<u64>,
+	/// The server refused a rate-limited attempt and this host has no timer to
+	/// count down with, so the screen offers a manual retry and keeps the
+	/// server's message.
+	manual: RwSignal<bool>,
+	/// Identifies the current countdown, so starting over or a newer refusal
+	/// stops an older wait task instead of letting it decrement the new one.
+	countdown: RwSignal<u64>,
 	/// How a third-party sign-in that just came back ended.
 	outcome: RwSignal<Option<ProviderOutcome>>,
 	/// Whether the person pressed the passkey button, so its failure is worth
@@ -140,10 +147,17 @@ impl SignIn {
 		let outcome = RwSignal::new(None);
 		let passkey = use_mutation(passkey_sign_in());
 		let second = RwSignal::new(None);
-		// Effects never run while the server renders. On mount, the screen
+		// Runs on mount in the browser and in a native guest. It skips server
+		// rendering, so the first HTML matches the browser's first render, and
+		// uses `new_isomorphic` because a native guest builds without the
+		// `effects` feature that `Effect::new` needs. On mount, the screen
 		// reads how a provider sign-in ended, and offers saved passkeys in
 		// the email field's suggestions, where the browser can.
-		Effect::new(move |_| {
+		Effect::new_isomorphic(move |_| {
+			if leptoskit::query::is_server() {
+				return;
+			}
+
 			mounted.set(true);
 			show_outcome(outcome, second);
 			passkey.mutate(PasskeyMode::Autofill);
@@ -165,6 +179,8 @@ impl SignIn {
 			second,
 			problem: RwSignal::new(None),
 			wait: RwSignal::new(0),
+			manual: RwSignal::new(false),
+			countdown: RwSignal::new(0),
 			outcome,
 			asked_for_passkey: RwSignal::new(false),
 			mounted,
@@ -608,8 +624,11 @@ impl SignIn {
 		let text = match (self.problem.get(), error) {
 			(Some(problem), _) => problem,
 			// The button counts down; once it reaches zero, the refusal no
-			// longer applies.
-			(None, Some(error)) if retry_after(&error).is_some() && self.wait.get() == 0 => {
+			// longer applies. Without a timer the screen cannot count down,
+			// so it keeps the server's message and offers a manual retry.
+			(None, Some(error))
+				if retry_after(&error).is_some() && self.wait.get() == 0 && !self.manual.get() =>
+			{
 				return None;
 			}
 
@@ -670,11 +689,13 @@ impl SignIn {
 		self.verify.reset();
 		let sent_to = self.sent_to;
 		let wait = self.wait;
+		let manual = self.manual;
+		let countdown = self.countdown;
 		self.send.mutate_with(
 			email.clone(),
 			MutateCallbacks::new()
 				.on_success(move |_| sent_to.set(Some(email)))
-				.on_error(move |failed| hold_off(wait, &failed.error)),
+				.on_error(move |failed| hold_off(wait, manual, countdown, &failed.error)),
 		);
 	}
 
@@ -707,7 +728,9 @@ impl SignIn {
 						this.second.set(Some(prompt.clone()));
 					}
 				})
-				.on_error(move |failed| hold_off(this.wait, &failed.error)),
+				.on_error(move |failed| {
+					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+				}),
 		);
 	}
 
@@ -737,7 +760,7 @@ impl SignIn {
 							"That took too long. Enter your email address to start again.".into(),
 						));
 					} else {
-						hold_off(this.wait, &failed.error);
+						hold_off(this.wait, this.manual, this.countdown, &failed.error);
 					}
 				}),
 		);
@@ -750,6 +773,14 @@ impl SignIn {
 		self.second.set(None);
 		self.problem.set(None);
 		self.outcome.set(None);
+		// Starting over may use another address, so stop this address's
+		// countdown. The server still refuses an attempt that is too early,
+		// and the next refusal starts a fresh one.
+		self.wait.set(0);
+		self.manual.set(false);
+		let _ = self
+			.countdown
+			.try_update(|countdown| *countdown = countdown.wrapping_add(1));
 		self.send.reset();
 		self.verify.reset();
 
@@ -946,7 +977,9 @@ impl SignIn {
 						this.second.set(Some(prompt.clone()));
 					}
 				})
-				.on_error(move |failed| hold_off(this.wait, &failed.error)),
+				.on_error(move |failed| {
+					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+				}),
 		);
 	}
 
@@ -994,7 +1027,9 @@ impl SignIn {
 						this.second.set(Some(prompt.clone()));
 					}
 				})
-				.on_error(move |failed| hold_off(this.wait, &failed.error)),
+				.on_error(move |failed| {
+					hold_off(this.wait, this.manual, this.countdown, &failed.error)
+				}),
 		);
 	}
 }
@@ -1036,21 +1071,52 @@ impl Default for SignIn {
 
 /// After a `rate_limited` answer, counts `wait` down a second at a time from
 /// the server's `retry_after`. The buttons stay disabled until it reaches
-/// zero.
-fn hold_off(wait: RwSignal<u64>, error: &ErrorResponse) {
+/// zero. A host without a usable timer cannot count down: the screen then
+/// keeps the server's message and enables a manual retry, so an old host never
+/// leaves the button disabled forever or claims time that did not pass.
+fn hold_off(
+	wait: RwSignal<u64>,
+	manual: RwSignal<bool>,
+	countdown: RwSignal<u64>,
+	error: &ErrorResponse,
+) {
 	let Some(seconds) = retry_after(error) else {
 		return;
 	};
-	let counting = wait.get_untracked() > 0;
 	wait.set(seconds);
+	manual.set(false);
 
-	if counting {
+	let Some(generation) = countdown.try_update(|countdown| {
+		*countdown = countdown.wrapping_add(1);
+		*countdown
+	}) else {
 		return;
-	}
+	};
 
 	leptoskit::leptos::task::spawn_local(async move {
 		while wait.try_get_untracked().is_some_and(|left| left > 0) {
-			leptoskit::query::sleep(Duration::from_secs(1)).await;
+			if countdown.try_get_untracked() != Some(generation) {
+				return;
+			}
+
+			if leptoskit::query::try_sleep(Duration::from_secs(1))
+				.await
+				.is_err()
+			{
+				// No timer, or the host rejected it: stop counting, keep the
+				// server's retry-after message, and let the person try again
+				// by hand. The server still refuses too early.
+				if countdown.try_get_untracked() == Some(generation) {
+					let _ = wait.try_set(0);
+					let _ = manual.try_set(true);
+				}
+				return;
+			}
+
+			if countdown.try_get_untracked() != Some(generation) {
+				return;
+			}
+
 			wait.try_update(|left| *left = left.saturating_sub(1));
 		}
 	});
