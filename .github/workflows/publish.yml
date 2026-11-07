@@ -64,6 +64,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      revision: ${{ steps.version.outputs.revision }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -77,6 +78,7 @@ jobs:
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Releasing version $version"
 
       - name: verify every manifest carries the release version
@@ -145,12 +147,19 @@ jobs:
             || cargo install --locked --version 0.21.0 monochange
           monochange step validate
 
+  sdk-acceptance:
+    name: verify generated SDKs before publication
+    needs: validate
+    uses: ./.github/workflows/sdk-acceptance.yml
+    with:
+      revision: ${{ needs.validate.outputs.revision }}
+
   # The DevTools interface is built once, for the version being released, and the hash of its
   # archive goes into every binary below. `leptoskit dev` downloads exactly that archive and checks
   # the hash before serving it, so the interface and the CLI that fetches it always match.
   devtools-ui:
     name: build the DevTools interface
-    needs: validate
+    needs: [validate, sdk-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

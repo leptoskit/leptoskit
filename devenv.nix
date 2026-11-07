@@ -32,6 +32,7 @@ in
       cargo-run-bin
       chromedriver
       curl
+      dart
       deno
       dprint
       geckodriver
@@ -49,6 +50,7 @@ in
       # servers locally.
       nats-server
       nixfmt-rfc-style
+      nodejs
       openssl
       python3
       restic
@@ -57,6 +59,7 @@ in
       sql-formatter
       taplo
       unzip
+      uv
       xpkgs.mdt
       xpkgs.monochange
       xpkgs.monostyle
@@ -508,12 +511,20 @@ in
       exec = ''
         set -euo pipefail
         test:cargo
+        test:sdk
         test:harmonyos
         test:docs
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
         deno test crates/leptoskit_app/tests/landing.mjs
       '';
       description = "Run all tests.";
+      binary = "bash";
+    };
+    "test:sdk" = {
+      exec = ''
+        exec bash "${currentDir}/setup/scripts/sdk-acceptance.sh"
+      '';
+      description = "Run every generated SDK against the live server; missing tools fail.";
       binary = "bash";
     };
     "test:cargo" = {

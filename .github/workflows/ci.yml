@@ -30,6 +30,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  sdk-acceptance:
+    name: generated SDK acceptance
+    uses: ./.github/workflows/sdk-acceptance.yml
+
   schema:
     name: configuration schemas and migrations
     runs-on: ubuntu-latest
