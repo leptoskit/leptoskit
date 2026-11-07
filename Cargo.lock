@@ -5193,6 +5193,7 @@ dependencies = [
  "leptoskit_analytics",
  "leptoskit_auth",
  "leptoskit_axum",
+ "leptoskit_bridge",
  "leptoskit_codepush",
  "leptoskit_config",
  "leptoskit_db",
@@ -5205,12 +5206,14 @@ dependencies = [
  "leptoskit_lint",
  "leptoskit_native",
  "leptoskit_plugin",
+ "leptoskit_plugin_http",
  "leptoskit_plugin_router",
  "leptoskit_router_codegen",
  "leptoskit_rpc",
  "leptoskit_rpc_codegen",
  "leptoskit_testing",
  "leptoskit_wasm",
+ "leptoskit_yoga",
  "md-5",
  "notify",
  "plist",
@@ -6416,6 +6419,7 @@ dependencies = [
  "futures",
  "hydration_context",
  "leptos",
+ "leptoskit_bridge",
  "leptoskit_db",
  "parking_lot",
  "send_wrapper",
@@ -10470,6 +10474,17 @@ checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "timer_guest_probe"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "futures",
+ "leptoskit_bridge",
+ "leptoskit_query",
+ "reactive_graph",
 ]
 
 [[package]]

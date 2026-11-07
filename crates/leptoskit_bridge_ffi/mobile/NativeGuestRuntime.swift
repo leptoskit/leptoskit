@@ -44,6 +44,9 @@ final class NativeGuestRuntime {
         self.app = app
         // This runtime drives the guest's frame clock from the display link.
         guard lk_app_enable_frames(app.raw) == 0 else { throw PluginError.native }
+        // Timers are optional: an unavailable timer leaves the guest with
+        // `Unavailable` rather than failing the whole app.
+        if lk_app_enable_timers(app.raw) != 0 { NSLog("LeptosKit: timers unavailable") }
         app.onWake = { [weak self] in self?.wake() }
         requests.onCapacity = { [weak self] in self?.takeRequests() }
         requests.onCompletion = { [weak self] id, result in self?.finishRequest(id: id, result: result) }

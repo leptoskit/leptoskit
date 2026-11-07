@@ -55,7 +55,7 @@ use crate::state::QueryStatus;
 use crate::state::status_of;
 use crate::time::BoxFuture;
 use crate::time::now_ms;
-use crate::time::sleep;
+use crate::time::try_sleep;
 
 /// Completes when the fetch it belongs to settles — with data, with an
 /// error, or cancelled. Read the query afterwards for the outcome.
@@ -737,7 +737,10 @@ where
 
 		let weak = self.self_weak.clone();
 		spawn(async move {
-			if until_cancelled(&token, sleep(gc_time)).await.is_none() {
+			if !matches!(
+				until_cancelled(&token, try_sleep(gc_time)).await,
+				Some(Ok(()))
+			) {
 				return;
 			}
 

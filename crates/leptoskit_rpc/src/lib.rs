@@ -547,11 +547,12 @@ pub type RetryFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, FnError>> + 
 /// `fetch` returns a fresh future every attempt; the error type is
 /// [`FnError`] so classification decides what retries.
 ///
-/// Backoff waits on [`leptoskit_query::sleep`], which works on every host
-/// that crate supports: a tokio runtime when one is running and a helper
+/// Backoff waits on [`leptoskit_query::try_sleep`], which works on every
+/// host that crate supports: a tokio runtime when one is running and a helper
 /// thread otherwise on native targets, the global `setTimeout` in browser
 /// windows and workers, and whatever [`leptoskit_query::install_sleep`]
-/// installed anywhere else.
+/// installed anywhere else. A host that cannot schedule the wait surfaces the
+/// failed attempt instead of waiting forever.
 ///
 /// With the `devtools` feature, each attempt is recorded for leptoskit's
 /// devtools; see [`devtools`].
@@ -588,7 +589,15 @@ where
 						return Err(error);
 					}
 
-					leptoskit_query::sleep(Duration::from_millis(policy.delay_ms(attempt))).await;
+					// A host with no timer can't pace the retry. Surface the
+					// failure the app can show rather than wait forever for a
+					// wait that can never finish.
+					if leptoskit_query::try_sleep(Duration::from_millis(policy.delay_ms(attempt)))
+						.await
+						.is_err()
+					{
+						return Err(error);
+					}
 				}
 			}
 		}

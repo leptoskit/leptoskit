@@ -34,6 +34,19 @@ pub trait TuiApplication {
 
 	/// Commits the first tree; called once after the first resize.
 	fn mount(&mut self) {}
+
+	/// Advances host-owned work whose deadline is not an input or animation
+	/// tick, such as a timer the guest is waiting for. Returns whether the
+	/// interface changed and needs a repaint.
+	fn pump(&mut self) -> bool {
+		false
+	}
+
+	/// How long until [`Self::pump`] has work, so the loop can wake then
+	/// instead of polling. `None` means no host-owned deadline waits.
+	fn deadline(&self) -> Option<Duration> {
+		None
+	}
 }
 
 /// Where painted frames go: a terminal, or a test recorder.
@@ -182,7 +195,15 @@ impl TuiHost {
 				return Ok(Exit::SourceEnded);
 			}
 
+			if app.pump() {
+				self.repaint(app, out)?;
+			}
+
 			let timeout = self.options.tick.saturating_sub(last_tick.elapsed());
+			let timeout = match app.deadline() {
+				Some(deadline) => timeout.min(deadline),
+				None => timeout,
+			};
 
 			if source.poll(timeout)? {
 				let Some(event) = source.read()? else {

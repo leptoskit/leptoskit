@@ -51,7 +51,7 @@ impl Drop for Callbacks {
 }
 
 /// Activates an inert installer after native wake and close owners exist.
-/// A no-service app succeeds and releases the unused callbacks immediately.
+/// A no-service app succeeds and keeps only the wake for timer completions.
 ///
 /// # Safety
 /// App is exclusively borrowed on its UI thread. Context is owned until
@@ -80,6 +80,13 @@ pub unsafe extern "C" fn lk_app_activate_service(
 	};
 
 	if app.service.is_none() {
+		// No service to own, but the platform still supplied a wake: timer
+		// completions use it so a direct host, such as macOS, polls on time.
+		let notification = Arc::clone(&callbacks);
+		app.with_host(|host| {
+			host.set_timer_wake(move || notification.notify());
+		});
+
 		return 0;
 	}
 

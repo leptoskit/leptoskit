@@ -4,7 +4,7 @@ expression: contents
 ---
 # snapshotted
 
-Write the application once in `snapshotted_app`. The browser, web SSR server, and native runners render the same screen and counter behavior. `snapshotted_backend` implements RPC endpoints; `snapshotted_shared` holds their serializable contracts. The root server imports the app and backend, while application builds never import backend implementation.
+Write the application once in `snapshotted_app`. The browser, web SSR server, and native runners render the same screen and behavior. `snapshotted_backend` implements RPC endpoints; `snapshotted_shared` holds their serializable contracts. The root server imports the app and backend, while application builds never import backend implementation.
 
 ```sh
 leptoskit build
@@ -34,7 +34,7 @@ The module path is relative to the app crate's `src/` directory. Add `routes/hom
 
 `leptoskit dev` resolves `monosecret.toml` through Monosecret before starting. Install Monosecret, then store credentials in its keyring or your team's provider. The manifest declares names; keep secret values out of Git. Use `leptoskit dev --no-secrets` when your host supplies the environment. In production, run `monosecret run -- ./target/release/snapshotted`. See [secret management](https://leptoskit.dev/docs/guide/secrets.html).
 
-The starter requests no native plugin capabilities. Add native plugins to the runner's direct Cargo dependencies and grant them explicitly in `native.plugins`.
+The starter grants no native plugin capabilities unless the app needs them. Add native plugins to the runner's direct Cargo dependencies and grant them explicitly in `native.plugins`.
 
 ## Database
 
@@ -50,6 +50,8 @@ While `leptoskit dev` runs, a change to the tables that keeps every row becomes 
 ## Operations
 
 `snapshotted_shared` declares the app's queries and mutations next to its contracts: `notes` lists the newest notes, and `add_note` adds one. Every screen calls them the same way, in the browser, in a native app, and while the server renders a page: `leptoskit::rpc::client::call(AddNote { body }).await`. Their bodies, and the database code in them, compile only into the server, through `snapshotted_shared`'s `server` feature. A native app's calls go to `SERVER` in `snapshotted_app/src/lib.rs` with the signed-in person's token, since the sign-in client's `configure` sets this client up too. Each runs as whoever signed in, and the `Note` table's policy shows and changes only their own notes; before sign-in, both answer `401`.
+
+The generated home screen in `snapshotted_app/src/notes.rs` uses those same types: it shows loading, empty, failed, and loaded states, checks the body before sending it, reports the mutation's result, and offers Refresh. In the browser the list stays current over the live socket; SSR loads query data in process and streams it into the browser cache, with a loading state in the initial HTML.
 
 The server answers each at `POST /api/<name>`, with its arguments as one JSON object: `POST /api/notes` with `{}`, and `POST /api/add_note` with `{"body": "Milk"}`. A failure answers `Kind|message` as text with its status, such as `400` for an empty note. The live socket at `/live` sends a subscribed query's result again whenever a write changes it.
 
@@ -75,3 +77,7 @@ monosecret set AUTH_ENCRYPTION_KEYS --provider keyring "$(date +%Y-%m):$(openssl
 Before you deploy, set `origin` in `[auth]` to your site's URL, such as `https://myapp.com`, and say how to send email in `[auth.mail]`. In a debug build, emails aren't sent: open `/_leptoskit/mail` to read them, or sign in to any address without a code by posting `{ "email": "ada@example.com" }` to `/auth/dev/sign-in`. Release builds have neither, and refuse to start without `[auth.mail]`.
 
 The screens live in `snapshotted_app/src/auth/` and are yours to restyle. They work the same in the browser and in native apps. A native app finds the server at `SERVER` in `snapshotted_app/src/lib.rs`. It reaches it through the `http` plugin and keeps its refresh token with `secure-store`; both are granted in `[native]` in `leptoskit.toml`, and the HTTP plugin may reach the development server. Before you ship, set `SERVER` to your site's origin and put that origin in `[native.plugin-options.http] origins`. The Linux, Windows, and terminal runners can't host plugins yet, so there the screens answer that sign-in isn't set up.
+
+## Notes and accounts
+
+Once signed in, the home screen is the notes screen in `snapshotted_app/src/notes.rs`. It calls the shared `Notes` and `AddNote` operations, so the server runs each as the signed-in person and the `Note` table's policy keeps every account to its own rows. Signing out drops the screen, and signing in as someone else builds a new one after removing the previous account's cached list; one person's notes never show under another's name. The browser keeps the list current over `/live`. Native apps read it over the `http` plugin and offer Refresh; the Linux, Windows, and terminal hosts can't host plugins, so the list reports that it can't reach the server there.

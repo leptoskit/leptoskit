@@ -277,7 +277,14 @@ struct Index {
       if (this.scene.nodes.get(id)?.kind !== 'rive') { this.riveVisibleIds.delete(id); }
     });
     this.requestRiveFrame();
-    if (batch.pending && this.timer < 0) {
+    // Each guest entry can add or cancel a wait. Replace the old timeout
+    // with the remaining deadline; never poll an idle guest on an interval.
+    if (this.timer >= 0) {
+      clearTimeout(this.timer);
+      this.timer = -1;
+    }
+    const delay = batch.pending ? 0 : batch.timerDelayMs;
+    if (delay >= 0) {
       this.timer = setTimeout(() => {
         this.timer = -1;
         try {
@@ -287,7 +294,7 @@ struct Index {
         } catch (error) {
           this.fail(error);
         }
-      }, 0);
+      }, delay);
     }
   }
 

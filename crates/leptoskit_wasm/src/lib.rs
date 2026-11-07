@@ -54,6 +54,13 @@
 //!   `leptoskit_query`'s `guest` feature exports it. Hosts and modules that
 //!   predate it skip it.
 //!
+//! Timers are a reserved bridge plugin, `leptoskit.timer`, rather than a new
+//! import. [`WasmHost::enable_timers`] registers it; [`WasmHost::pump_timers`]
+//! completes due sleeps on the host thread and wakes the guest. A host that
+//! does not enable it leaves the plugin unregistered, so a guest's
+//! `leptoskit_bridge::guest::sleep` returns `Unavailable` instead of resolving
+//! early; code push can therefore ship timer-using bundles to older hosts.
+//!
 //! Each guest entry point is fuel-metered; exhausting the instruction budget
 //! surfaces as [`WasmError::OutOfFuel`]. Host calls and rendering have separate
 //! costs and are not a frame-time guarantee.
@@ -102,6 +109,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
 use leptoskit_native::Element;
 use leptoskit_native::EventOutcome;
@@ -245,6 +253,19 @@ pub const MAX_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 ///
 /// Rust guests can use both an indirect-function table and an externref table.
 pub const MAX_TABLE_ELEMENTS: usize = 65_536;
+
+/// How many non-timer plugin requests a host may hold while it drains timers.
+///
+/// A host that installs its own plugin router takes these with
+/// [`WasmHost::take_routed_request`]. Unclaimed requests fail rather than
+/// grow without bound.
+const MAX_ROUTED_REQUESTS: usize = 64;
+
+/// How many non-timer cancellations a host may hold while it drains timers.
+const MAX_ROUTED_CANCELLATIONS: usize = 64;
+
+/// How many requests or cancellations one timer turn moves.
+const TIMER_TURN: usize = 64;
 
 /// A commit waiting for the host loop to render it.
 #[derive(Debug)]
@@ -462,6 +483,20 @@ pub struct WasmHost<B: NativeBackend> {
 	flush: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	viewport_fn: Option<TypedFunc<(f32, f32), ()>>,
 	clock_fn: Option<TypedFunc<i64, ()>>,
+	/// The reserved timer plugin, registered only when the host offers real
+	/// sleeps; see [`Self::enable_timers`].
+	timer_plugin: Option<leptoskit_bridge::PluginId>,
+	timer: Option<leptoskit_bridge::timer::host::TimerScheduler>,
+	/// Immediate routing failures also need a guest wake, without a deadline.
+	routed_replies_pending: bool,
+	/// A bounded pump yielded with more routing or guest work to drain.
+	timer_routing_pending: bool,
+	/// Retained so a replaced guest keeps the same timer wake.
+	timer_wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+	/// Non-timer requests collected while [`Self::pump_timers`] routes work.
+	routed_requests: VecDeque<leptoskit_bridge::Request>,
+	/// Non-timer cancellations collected by the same pump.
+	routed_cancelled: VecDeque<leptoskit_bridge::CallId>,
 	/// A failure from reporting the viewport, which cannot fail its caller;
 	/// the next [`Self::start`] or [`Self::dispatch`] returns it.
 	deferred: Option<WasmError>,
@@ -628,6 +663,13 @@ impl<B: NativeBackend> WasmHost<B> {
 			flush: guest.flush,
 			viewport_fn: guest.viewport_fn,
 			clock_fn: guest.clock_fn,
+			timer_plugin: None,
+			timer: None,
+			routed_replies_pending: false,
+			timer_routing_pending: false,
+			timer_wake: None,
+			routed_requests: VecDeque::new(),
+			routed_cancelled: VecDeque::new(),
 			deferred: None,
 			fuel_budget: DEFAULT_FUEL_BUDGET,
 		})
@@ -647,6 +689,17 @@ impl<B: NativeBackend> WasmHost<B> {
 	/// from [`Self::new`].
 	pub fn replace_guest(&mut self, wasm: &[u8]) -> Result<(), WasmError> {
 		let guest = Guest::instantiate(wasm)?;
+		let timers = self.timer_plugin.is_some();
+
+		if let Some(timer) = self.timer.take() {
+			timer.close();
+		}
+
+		self.timer_plugin = None;
+		self.routed_replies_pending = false;
+		self.timer_routing_pending = false;
+		self.routed_requests.clear();
+		self.routed_cancelled.clear();
 		self.identity = HostIdentity(std::sync::Arc::new(()));
 		self.store = guest.store;
 		self.main_fn = guest.main_fn;
@@ -659,6 +712,11 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.viewport_fn = guest.viewport_fn;
 		self.clock_fn = guest.clock_fn;
 		self.deferred = None;
+
+		if timers {
+			self.enable_timers()?;
+		}
+
 		Ok(())
 	}
 
@@ -816,6 +874,267 @@ impl<B: NativeBackend> WasmHost<B> {
 	/// and events, avoiding an idle polling loop.
 	pub fn plugins(&mut self) -> &mut leptoskit_bridge::Bridge {
 		&mut self.store.data_mut().plugins
+	}
+
+	/// Offers the guest the timer clock: a real, cancellable sleep that wakes
+	/// at its deadline rather than on a frame or a poll loop.
+	///
+	/// Call it before [`Self::start`]. A host that cannot schedule timers must
+	/// not call it: the reserved plugin then does not resolve and the guest's
+	/// `leptoskit_bridge::guest::sleep` returns
+	/// [`leptoskit_bridge::Error::Unavailable`] instead of resolving early.
+	///
+	/// # Errors
+	///
+	/// The bridge's error when the reserved plugin cannot be registered or
+	/// granted, or when the timer thread cannot start.
+	pub fn enable_timers(&mut self) -> Result<(), WasmError> {
+		if self.timer_plugin.is_some() {
+			return Ok(());
+		}
+
+		use leptoskit_bridge::timer::SLEEP;
+		use leptoskit_bridge::timer::TIMER_PLUGIN;
+
+		let timers = leptoskit_bridge::timer::host::TimerScheduler::new()
+			.map_err(|error| WasmError::Trap(error.to_string()))?;
+		let id = {
+			let bridge = &mut self.store.data_mut().plugins;
+			let id = bridge
+				.register(TIMER_PLUGIN, [SLEEP])
+				.map_err(|error| WasmError::Trap(error.to_string()))?;
+			bridge
+				.grant(id, SLEEP, true)
+				.map_err(|error| WasmError::Trap(error.to_string()))?;
+			id
+		};
+
+		if let Some(wake) = self.timer_wake.clone() {
+			timers.set_wake(move || wake());
+		}
+
+		self.timer_plugin = Some(id);
+		self.timer = Some(timers);
+		Ok(())
+	}
+
+	/// Whether this host offers the guest's timer plugin.
+	pub fn timers_enabled(&self) -> bool {
+		self.timer_plugin.is_some()
+	}
+
+	/// Replaces the callback that asks the host to poll timers.
+	///
+	/// It runs on the timer thread, so it must only wake the event loop; never
+	/// enter the guest or borrow host state from it.
+	pub fn set_timer_wake(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+		let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(wake);
+
+		if let Some(timers) = &self.timer {
+			let wake = std::sync::Arc::clone(&wake);
+			timers.set_wake(move || wake());
+		}
+
+		self.timer_wake = Some(wake);
+	}
+
+	/// How long until [`Self::poll_due_timers`] has work, or `None` when the
+	/// host has no timer waiting. `Some(Duration::ZERO)` means due now.
+	pub fn next_timer_deadline(&self) -> Option<std::time::Duration> {
+		if self.routed_replies_pending || self.timer_routing_pending {
+			return Some(std::time::Duration::ZERO);
+		}
+
+		self.timer
+			.as_ref()
+			.and_then(leptoskit_bridge::timer::host::TimerScheduler::next_deadline)
+	}
+
+	/// Cancels one timer, returning whether it was waiting or due.
+	pub fn cancel_timer(&mut self, id: leptoskit_bridge::CallId) -> bool {
+		self.timer.as_ref().is_some_and(|timers| timers.cancel(id))
+	}
+
+	/// Takes the next plugin request for the host's own router, scheduling a
+	/// timer request instead of returning it.
+	///
+	/// Call this instead of `plugins().next_request()` on a host that enabled
+	/// timers, so a timer never reaches the platform.
+	pub fn next_host_request(&mut self) -> Option<leptoskit_bridge::Request> {
+		loop {
+			let request = self.store.data_mut().plugins.next_request()?;
+
+			if !self.route_timer(&request) {
+				return Some(request);
+			}
+		}
+	}
+
+	/// Takes a non-timer request held by [`Self::pump_timers`].
+	pub fn take_routed_request(&mut self) -> Option<leptoskit_bridge::Request> {
+		self.routed_requests.pop_front()
+	}
+
+	/// Takes a non-timer cancellation held by [`Self::pump_timers`].
+	pub fn take_routed_cancellation(&mut self) -> Option<leptoskit_bridge::CallId> {
+		self.routed_cancelled.pop_front()
+	}
+
+	/// Routes pending requests and cancellations, completes every timer whose
+	/// deadline passed, and lets the guest run.
+	///
+	/// Direct hosts that have no plugin router of their own call this after
+	/// each entry point and whenever [`Self::next_timer_deadline`] elapses.
+	/// Non-timer work is kept for [`Self::take_routed_request`] rather than
+	/// dropped; more than 64 waiting calls fail with
+	/// [`leptoskit_bridge::Error::Busy`].
+	///
+	/// # Errors
+	///
+	/// A guest trap while it consumes a completed sleep.
+	///
+	/// Returns whether a due timer woke the guest.
+	pub fn pump_timers(&mut self) -> Result<bool, WasmError> {
+		if self.timer_plugin.is_none() {
+			return Ok(false);
+		}
+
+		let mut woke = false;
+
+		for _ in 0..8 {
+			let mut moved = 0;
+
+			// Release abandoned timers before admitting replacement calls.
+			// Otherwise a full scheduler can reject work with reusable
+			// capacity.
+			while moved < TIMER_TURN {
+				let Some(id) = self.store.data_mut().plugins.next_cancelled() else {
+					break;
+				};
+
+				if !self.cancel_timer(id) && self.routed_cancelled.len() < MAX_ROUTED_CANCELLATIONS
+				{
+					self.routed_cancelled.push_back(id);
+				}
+
+				moved += 1;
+			}
+
+			while moved < TIMER_TURN {
+				let Some(request) = self.store.data_mut().plugins.next_request() else {
+					break;
+				};
+
+				if self.route_timer(&request) {
+					moved += 1;
+				} else if self.routed_requests.len() < MAX_ROUTED_REQUESTS {
+					self.routed_requests.push_back(request);
+					moved += 1;
+				} else {
+					self.reject_routed_request(request.id, leptoskit_bridge::Error::Busy);
+					moved += 1;
+				}
+			}
+
+			let delivered = self.poll_due_timers()?;
+			woke |= delivered;
+
+			// A full routing batch can leave requests or cancellations queued
+			// even when no timer is due. Drain another bounded batch before
+			// sleeping; after the overall budget, request an immediate turn.
+			self.timer_routing_pending = moved == TIMER_TURN || delivered;
+			if !self.timer_routing_pending {
+				break;
+			}
+		}
+
+		if self.timer_routing_pending
+			&& let Some(wake) = &self.timer_wake
+		{
+			wake();
+		}
+		Ok(woke)
+	}
+
+	/// Completes the timer calls whose deadlines passed and wakes the guest.
+	///
+	/// Hosts with their own plugin router call this after routing requests.
+	///
+	/// # Errors
+	///
+	/// A guest trap while it consumes a completed sleep.
+	///
+	/// Returns whether a due timer woke the guest.
+	pub fn poll_due_timers(&mut self) -> Result<bool, WasmError> {
+		let due = self
+			.timer
+			.as_ref()
+			.map(leptoskit_bridge::timer::host::TimerScheduler::take_due)
+			.unwrap_or_default();
+
+		let mut delivered = std::mem::take(&mut self.routed_replies_pending);
+
+		for id in due {
+			match self
+				.store
+				.data_mut()
+				.plugins
+				.complete(id, Ok(leptoskit_bridge::Bytes::new()))
+			{
+				Ok(()) => delivered = true,
+				Err(leptoskit_bridge::Error::InvalidCall) => {}
+				Err(error) => return Err(WasmError::Trap(error.to_string())),
+			}
+		}
+
+		if delivered && self.plugins_ready.is_some() {
+			self.wake_plugins()?;
+
+			return Ok(true);
+		}
+
+		Ok(delivered)
+	}
+
+	/// Rejected calls have no timer deadline to wake callback-driven hosts.
+	/// Queue one owner-thread pump just as a successful timer would.
+	fn reject_routed_request(
+		&mut self,
+		id: leptoskit_bridge::CallId,
+		error: leptoskit_bridge::Error,
+	) {
+		if self
+			.store
+			.data_mut()
+			.plugins
+			.complete(id, Err(error))
+			.is_ok()
+		{
+			let already_pending = std::mem::replace(&mut self.routed_replies_pending, true);
+			if !already_pending && let Some(wake) = &self.timer_wake {
+				wake();
+			}
+		}
+	}
+
+	/// Schedules a timer request, returning whether it was one.
+	fn route_timer(&mut self, request: &leptoskit_bridge::Request) -> bool {
+		if Some(request.plugin) != self.timer_plugin {
+			return false;
+		}
+
+		let result = leptoskit_bridge::timer::decode(&request.payload).and_then(|duration| {
+			self.timer
+				.as_ref()
+				.ok_or(leptoskit_bridge::Error::Unavailable)?
+				.schedule(request.id, duration)
+		});
+
+		if let Err(error) = result {
+			self.reject_routed_request(request.id, error);
+		}
+
+		true
 	}
 
 	/// Notifies the guest that plugin replies or events are available.

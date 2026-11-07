@@ -61,6 +61,8 @@ use futures::channel::mpsc;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::mpsc::UnboundedSender;
 use futures::channel::oneshot;
+use futures::future::AbortHandle;
+use futures::future::Abortable;
 use futures::future::Either;
 use futures::future::FutureExt;
 use futures::stream::Peekable;
@@ -140,6 +142,10 @@ struct Inner {
 	/// Answered calls waiting for a transition to reach their version.
 	waiting: Mutex<Vec<Waiting>>,
 	next_id: AtomicU32,
+	/// Which handshake's frames a subscription was last sent in, so a
+	/// subscription made before the connection opened is sent once, not
+	/// again by the command that woke it.
+	connection: AtomicU64,
 	version: AtomicU64,
 	/// Set when the app's sign-in changed, until the connection reads as
 	/// the new identity.
@@ -177,6 +183,10 @@ struct Subscriber {
 	/// Whether it has its first value, so a reconnect can resume it
 	/// rather than subscribe again.
 	ready: bool,
+	/// The connection whose handshake last sent this subscription, ready
+	/// in the hello or waiting for its first value. The queued command
+	/// that woke that handshake then leaves it alone.
+	sent: Option<u64>,
 }
 
 struct PendingAction {
@@ -274,7 +284,8 @@ pub enum LiveState {
 		/// How long until the next one.
 		next_in: Duration,
 	},
-	/// This build holds no live connection, as while the server renders.
+	/// No live connection: for example during server rendering, or when the
+	/// host cannot schedule a reconnect. New work or credentials can try again.
 	Offline,
 }
 
@@ -348,6 +359,7 @@ impl LiveClient {
 			streams: Mutex::new(HashMap::new()),
 			waiting: Mutex::new(Vec::new()),
 			next_id: AtomicU32::new(1),
+			connection: AtomicU64::new(0),
 			version: AtomicU64::new(0),
 			reauthenticate: AtomicBool::new(false),
 			auth_pending: AtomicU32::new(0),
@@ -414,6 +426,7 @@ impl LiveClient {
 				args,
 				sender,
 				ready: false,
+				sent: None,
 			},
 		);
 		let _ = self.inner.commands.unbounded_send(Command::Subscribe(id));
@@ -947,9 +960,8 @@ enum Reauthenticated {
 /// Waits until the connection has something to do, on a host without a
 /// timer, and returns `false` once the client is gone.
 ///
-/// Without a timer, as in a native app's guest, a backoff can't wait, so a
-/// server it can't reach is retried without pause. There the socket opens
-/// once it has something to do: a call, a subscription, or a channel, or
+/// On a host without a timer, the socket opens only once it has something
+/// to do: a call, a subscription, or a channel, or
 /// calls the offline queue kept. An app that never goes live, such as one
 /// that only signs in, never connects. Until then, a change of identity has
 /// nothing to update: the handshake reads the current one.
@@ -988,71 +1000,25 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 
 	loop {
 		let Ok(connection) = inner.transport.connect().await else {
-			attempt = attempt.saturating_add(1);
-			inner.set_state(LiveState::Reconnecting {
-				attempt,
-				next_in: Duration::from_millis(backoff),
-			});
-			leptoskit_query::sleep(Duration::from_millis(backoff)).await;
-			backoff = (backoff * 2).min(BACKOFF_MAX);
+			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+				return;
+			}
 			continue;
 		};
-		backoff = BACKOFF_START;
-
 		if !handshake(inner.as_ref(), connection.as_ref()).await {
+			inner.disconnected();
+			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+				return;
+			}
 			continue;
 		}
 
+		backoff = BACKOFF_START;
 		attempt = 0;
 		inner.set_state(LiveState::Live {
 			version: inner.version.load(Ordering::Relaxed),
 		});
-		let mut at_once = false;
-
-		loop {
-			let command = commands.next().fuse();
-			let frame = connection.next().fuse();
-			futures::pin_mut!(command, frame);
-
-			match futures::future::select(command, frame).await {
-				Either::Left((Some(Command::Reconnect) | None, _)) => break,
-				Either::Left((Some(Command::RefreshCredentials { refused }), _)) => {
-					let sent = lock(&inner.authorization).clone();
-					let renewed = match &inner.credentials {
-						Some(credentials) => credentials.refused(sent).await.unwrap_or(false),
-						None => false,
-					};
-					if renewed {
-						inner.reauthenticate.store(true, Ordering::SeqCst);
-						if !matches!(
-							read_as_new_identity(inner.as_ref(), connection.as_ref()).await,
-							Reauthenticated::InPlace
-						) {
-							break;
-						}
-					} else if refused {
-						break;
-					}
-				}
-				Either::Left((Some(Command::Reauthenticate), _)) => {
-					match read_as_new_identity(inner.as_ref(), connection.as_ref()).await {
-						Reauthenticated::InPlace => {}
-						Reauthenticated::Reconnect => {
-							at_once = true;
-							break;
-						}
-						Reauthenticated::Closed => break,
-					}
-				}
-				Either::Left((Some(command), _)) => {
-					if !send_command(inner.as_ref(), connection.as_ref(), command).await {
-						break;
-					}
-				}
-				Either::Right((Ok(Some(text)), _)) => dispatch(inner.as_ref(), &text),
-				Either::Right((..)) => break,
-			}
-		}
+		let at_once = connected(&inner, connection.as_ref(), &mut commands).await;
 
 		inner.disconnected();
 
@@ -1061,14 +1027,114 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 			continue;
 		}
 
-		attempt = attempt.saturating_add(1);
-		inner.set_state(LiveState::Reconnecting {
-			attempt,
-			next_in: Duration::from_millis(backoff),
-		});
-		leptoskit_query::sleep(Duration::from_millis(backoff)).await;
-		backoff = (backoff * 2).min(BACKOFF_MAX);
+		if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+			return;
+		}
 	}
+}
+
+/// Drives an established connection until it closes or needs a new identity.
+/// Returns whether identity changes need an immediate new handshake.
+async fn connected(
+	inner: &Inner,
+	connection: &dyn Connection,
+	commands: &mut Peekable<UnboundedReceiver<Command>>,
+) -> bool {
+	let mut at_once = false;
+
+	loop {
+		let command = commands.next().fuse();
+		let frame = connection.next().fuse();
+		futures::pin_mut!(command, frame);
+
+		match futures::future::select(command, frame).await {
+			Either::Left((Some(Command::Reconnect) | None, _)) => break,
+			Either::Left((Some(Command::RefreshCredentials { refused }), _)) => {
+				let sent = lock(&inner.authorization).clone();
+				let renewed = match &inner.credentials {
+					Some(credentials) => credentials.refused(sent).await.unwrap_or(false),
+					None => false,
+				};
+				if renewed {
+					inner.reauthenticate.store(true, Ordering::SeqCst);
+					if !matches!(
+						read_as_new_identity(inner, connection).await,
+						Reauthenticated::InPlace
+					) {
+						break;
+					}
+				} else if refused {
+					break;
+				}
+			}
+			Either::Left((Some(Command::Reauthenticate), _)) => {
+				match read_as_new_identity(inner, connection).await {
+					Reauthenticated::InPlace => {}
+					Reauthenticated::Reconnect => {
+						at_once = true;
+						break;
+					}
+					Reauthenticated::Closed => break,
+				}
+			}
+			Either::Left((Some(command), _)) => {
+				if !send_command(inner, connection, command).await {
+					break;
+				}
+			}
+			Either::Right((Ok(Some(text)), _)) => dispatch(inner, &text),
+			Either::Right((..)) => break,
+		}
+	}
+	at_once
+}
+
+/// A failed transport or handshake must wait before reconnecting. If this
+/// host cannot schedule that wait, only a new command can request another
+/// attempt; a missing or full timer queue must never create a hot loop.
+async fn retry_after(
+	inner: &Inner,
+	commands: &mut Peekable<UnboundedReceiver<Command>>,
+	attempt: &mut u32,
+	backoff: &mut u64,
+) -> bool {
+	*attempt = attempt.saturating_add(1);
+	let delay = Duration::from_millis(*backoff);
+	inner.set_state(LiveState::Reconnecting {
+		attempt: *attempt,
+		next_in: delay,
+	});
+
+	if let Err(error) = leptoskit_query::try_sleep(delay).await {
+		leptos::logging::warn!("leptoskit_rpc: reconnect paused: {error}");
+		inner.set_state(LiveState::Offline);
+		return wait_for_retry_command(commands).await;
+	}
+
+	*backoff = (*backoff * 2).min(BACKOFF_MAX);
+	true
+}
+
+/// Subscriptions and queued calls are retained by `Inner` and sent by the
+/// next handshake. Teardown and flow-control messages alone create no work.
+async fn wait_for_retry_command(commands: &mut Peekable<UnboundedReceiver<Command>>) -> bool {
+	while let Some(command) = commands.next().await {
+		if matches!(
+			command,
+			Command::Subscribe(_)
+				| Command::Mutate(_)
+				| Command::Act(_)
+				| Command::Join(_)
+				| Command::Stream(_)
+				| Command::Reauthenticate
+				| Command::RefreshCredentials { .. }
+				| Command::Reconnect
+		) {
+			return true;
+		}
+	}
+
+	false
 }
 
 /// Reads as the identity the credentials now hold: a bearer token in an
@@ -1102,6 +1168,7 @@ async fn read_as_new_identity(inner: &Inner, connection: &dyn Connection) -> Rea
 /// results the client holds. When the sign-in changed while the client was
 /// away, nothing resumes: every query takes a fresh first value.
 async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
+	let epoch = inner.connection.fetch_add(1, Ordering::SeqCst) + 1;
 	let changed = inner.reauthenticate.swap(false, Ordering::SeqCst);
 	let unfinished = inner.auth_pending.swap(0, Ordering::SeqCst) > 0;
 	if changed || unfinished {
@@ -1117,9 +1184,10 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 
 	let queries: Vec<ResumeQuery> = inner
 		.subscribers()
-		.iter()
+		.iter_mut()
 		.filter(|(_, subscriber)| subscriber.ready)
 		.map(|(&id, subscriber)| {
+			subscriber.sent = Some(epoch);
 			ResumeQuery {
 				id,
 				query: subscriber.name.clone(),
@@ -1138,7 +1206,7 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 		return false;
 	}
 
-	resubscribe(inner, connection).await;
+	resubscribe(inner, connection, epoch).await;
 	resend_calls(inner, connection).await;
 	reopen_streams(inner, connection).await;
 	rejoin(inner, connection).await;
@@ -1149,15 +1217,20 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 async fn send_command(inner: &Inner, connection: &dyn Connection, command: Command) -> bool {
 	let frame = match command {
 		Command::Subscribe(id) => {
-			match inner.subscribers().get(&id) {
-				Some(subscriber) => {
+			let epoch = inner.connection.load(Ordering::SeqCst);
+
+			match inner.subscribers().get_mut(&id) {
+				Some(subscriber) if subscriber.sent != Some(epoch) => {
+					subscriber.sent = Some(epoch);
 					ClientFrame::Sub {
 						id,
 						query: subscriber.name.clone(),
 						args: subscriber.args.clone(),
 					}
 				}
-				None => return true,
+				// The handshake already sent it on this connection, or the
+				// screen that wanted it is gone.
+				_ => return true,
 			}
 		}
 		Command::Unsubscribe(id) => ClientFrame::Unsub { id },
@@ -1480,13 +1553,15 @@ fn send_channel(inner: &Inner, channel: &str, event: ChannelEvent) {
 }
 
 /// Subscribes whatever hasn't had its first value: the rest resumed in
-/// the hello.
-async fn resubscribe(inner: &Inner, connection: &dyn Connection) {
+/// the hello. Records which handshake sent each one, so the command that
+/// woke the connection doesn't send it again.
+async fn resubscribe(inner: &Inner, connection: &dyn Connection, epoch: u64) {
 	let frames: Vec<ClientFrame> = inner
 		.subscribers()
-		.iter()
+		.iter_mut()
 		.filter(|(_, subscriber)| !subscriber.ready)
 		.map(|(&id, subscriber)| {
+			subscriber.sent = Some(epoch);
 			ClientFrame::Sub {
 				id,
 				query: subscriber.name.clone(),
@@ -2391,7 +2466,6 @@ where
 	}
 
 	let key = ArcMemo::new(move |_| Args::new(args()));
-	let subscription = StoredValue::new(None::<u32>);
 	let cache: QueryClient = use_query_client();
 
 	Effect::new_isomorphic(move |_| {
@@ -2400,44 +2474,64 @@ where
 		let Some(live) = client_for(Q::SERVICE) else {
 			return;
 		};
-		if let Some(previous) = subscription.get_value() {
-			live.unsubscribe(previous);
-		}
-
 		let Ok(value) = serde_json::to_value(key.get()) else {
-			subscription.set_value(None);
 			return;
 		};
-		let (id, mut updates) = live.subscribe(Q::NAME, value);
-		subscription.set_value(Some(id));
-
 		let cache = cache.clone();
 		let scope = query_scope::<Q>();
-		let read = key.clone();
-		Executor::spawn_local(async move {
-			while let Some(update) = updates.next().await {
-				match update {
-					Update::Ok(value) => {
-						if let Ok(output) = serde_json::from_value(value) {
-							cache.set_query_data(&scope, read.clone(), output);
-						}
+		subscribe_in_owner(live, Q::NAME, value, move |update| {
+			match update {
+				Update::Ok(value) => {
+					if let Ok(output) = serde_json::from_value(value) {
+						cache.set_query_data(&scope, key.clone(), output);
 					}
-					Update::Patch(patch) => {
-						let update = Update::Patch(patch);
-						cache.update_query_data(&scope, read.clone(), |current| {
-							let current = current?;
-							let mut value = serde_json::to_value(current).ok()?;
-							apply(&mut value, &update);
-							serde_json::from_value(value).ok()
-						});
-					}
-					Update::Err(_) => {}
 				}
+				Update::Patch(patch) => {
+					let update = Update::Patch(patch);
+					cache.update_query_data(&scope, key.clone(), |current| {
+						let current = current?;
+						let mut value = serde_json::to_value(current).ok()?;
+						apply(&mut value, &update);
+						serde_json::from_value(value).ok()
+					});
+				}
+				Update::Err(_) => {}
 			}
 		});
 	});
 
 	handle
+}
+
+/// Stops both the remote subscription and buffered local updates when the
+/// current owner is cleaned up, including when an effect changes its key.
+fn subscribe_in_owner(
+	live: &LiveClient,
+	query: &'static str,
+	args: Value,
+	apply: impl Fn(Update) + 'static,
+) -> u32 {
+	let (id, mut updates) = live.subscribe(query, args);
+	let (abort, registration) = AbortHandle::new_pair();
+	let cleanup = LiveClient {
+		inner: Arc::clone(&live.inner),
+	};
+	on_cleanup(move || {
+		abort.abort();
+		cleanup.unsubscribe(id);
+	});
+	Executor::spawn_local(async move {
+		let _ = Abortable::new(
+			async move {
+				while let Some(update) = updates.next().await {
+					apply(update);
+				}
+			},
+			registration,
+		)
+		.await;
+	});
+	id
 }
 
 /// The `leptoskit_query` scope of a mutation or an action sent over the
@@ -2537,6 +2631,28 @@ mod tests {
 
 	use super::*;
 
+	#[tokio::test]
+	async fn an_unavailable_retry_timer_waits_for_new_work() {
+		let (sender, commands) = mpsc::unbounded();
+		let mut commands = commands.peekable();
+		let waiting = wait_for_retry_command(&mut commands);
+		futures::pin_mut!(waiting);
+		assert!(waiting.as_mut().now_or_never().is_none());
+		sender.unbounded_send(Command::Unsubscribe(1)).unwrap();
+		sender.unbounded_send(Command::Cancel(1)).unwrap();
+		assert!(waiting.as_mut().now_or_never().is_none());
+		sender.unbounded_send(Command::Subscribe(2)).unwrap();
+		assert!(waiting.await);
+	}
+
+	#[tokio::test]
+	async fn closing_retry_commands_stops_the_wait() {
+		let (sender, commands) = mpsc::unbounded();
+		let mut commands = commands.peekable();
+		drop(sender);
+		assert!(!wait_for_retry_command(&mut commands).await);
+	}
+
 	static START: Once = Once::new();
 
 	fn start() {
@@ -2613,6 +2729,55 @@ mod tests {
 		}
 	}
 
+	/// The upgrade succeeds, but writing the hello fails.
+	#[derive(Clone, Default)]
+	struct HandshakeRefused(Arc<Mutex<Vec<std::time::Instant>>>);
+
+	impl Transport for HandshakeRefused {
+		fn connect(&self) -> BoxFuture<'static, Result<Box<dyn Connection>, String>> {
+			self.0.lock().unwrap().push(std::time::Instant::now());
+			let this = self.clone();
+			Box::pin(async move { Ok(Box::new(this) as Box<dyn Connection>) })
+		}
+	}
+
+	impl Connection for HandshakeRefused {
+		fn send(&self, _: String) -> BoxFuture<'static, Result<(), String>> {
+			Box::pin(async {
+				// Let the assertion run even if a regression removes the
+				// backoff.
+				tokio::task::yield_now().await;
+				Err("the hello failed".to_owned())
+			})
+		}
+
+		fn next(&self) -> BoxFuture<'static, Result<Option<String>, String>> {
+			Box::pin(std::future::pending())
+		}
+	}
+
+	#[tokio::test]
+	async fn a_failed_handshake_waits_before_connecting_again() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = HandshakeRefused::default();
+				let _client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				tokio::time::timeout(Duration::from_secs(5), async {
+					while socket.0.lock().unwrap().len() < 2 {
+						tokio::time::sleep(Duration::from_millis(5)).await;
+					}
+				})
+				.await
+				.expect("a failed handshake should eventually reconnect");
+				let attempts = socket.0.lock().unwrap();
+				assert!(
+					attempts[1].duration_since(attempts[0]) >= Duration::from_millis(BACKOFF_START)
+				);
+			})
+			.await;
+	}
+
 	impl Connection for Memory {
 		fn send(&self, text: String) -> BoxFuture<'static, Result<(), String>> {
 			self.sent.lock().unwrap().push(text);
@@ -2636,6 +2801,79 @@ mod tests {
 				}
 			})
 		}
+	}
+
+	#[tokio::test]
+	async fn owner_cleanup_unsubscribes_and_discards_buffered_updates() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = Memory::default();
+				let client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				let owner = Owner::new();
+				let applied = Arc::new(Mutex::new(Vec::new()));
+				let values = Arc::clone(&applied);
+				let id = owner.with(|| {
+					subscribe_in_owner(&client, "notes", json!({}), move |update| {
+						values.lock().unwrap().push(update);
+					})
+				});
+				assert!(matches!(
+					socket.next_sent().await,
+					ClientFrame::Hello { .. }
+				));
+				assert!(
+					matches!(socket.next_sent().await, ClientFrame::Sub { id: sent, .. } if sent == id)
+				);
+				let sender = client.inner.subscribers().get(&id).unwrap().sender.clone();
+				sender.unbounded_send(Update::Ok(json!("first"))).unwrap();
+				tokio::task::yield_now().await;
+				assert_eq!(*applied.lock().unwrap(), vec![Update::Ok(json!("first"))]);
+
+				// An already queued result must not populate a replacement
+				// screen's cache.
+				sender
+					.unbounded_send(Update::Ok(json!("old account")))
+					.unwrap();
+				owner.cleanup();
+				assert!(!client.inner.subscribers().contains_key(&id));
+				let frame = socket.next_sent().await;
+				assert!(
+					matches!(frame, ClientFrame::Unsub { id: sent } if sent == id),
+					"the cleanup sent {frame:?}"
+				);
+				assert_eq!(*applied.lock().unwrap(), vec![Update::Ok(json!("first"))]);
+				assert!(sender.unbounded_send(Update::Ok(json!("late"))).is_err());
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn a_subscription_made_before_the_connection_opens_is_sent_once() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = Memory::default();
+				let client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				let (id, _updates) = client.subscribe("notes", json!({}));
+				assert!(matches!(
+					socket.next_sent().await,
+					ClientFrame::Hello { .. }
+				));
+				assert!(
+					matches!(socket.next_sent().await, ClientFrame::Sub { id: sent, .. } if sent == id)
+				);
+
+				// The handshake sent the subscription, so the command that
+				// woke the connection doesn't send it a second time.
+				assert!(
+					tokio::time::timeout(Duration::from_millis(50), socket.next_sent())
+						.await
+						.is_err(),
+					"a queued subscribe sent a duplicate frame"
+				);
+			})
+			.await;
 	}
 
 	#[tokio::test]

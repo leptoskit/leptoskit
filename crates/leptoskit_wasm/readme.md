@@ -61,6 +61,9 @@ The module exports:
 | `leptoskit_event(id, kind, ptr, len)` | yes                | rebuild after an event; returns `1` when handled                         |
 | `leptoskit_alloc(len) -> ptr`         | for payload events | returns a non-zero pointer to `len` writable bytes for the event payload |
 | `leptoskit_abi_version() -> i32`      | no                 | checked against `ABI_VERSION` on load; a mismatch is refused             |
+| `leptoskit_clock(unix_ms: i64)`       | no                 | the host reports the wall clock before every other entry point           |
+
+`WasmHost::enable_timers` registers the reserved `leptoskit.timer` plugin: the guest asks for a duration and the host completes the call at its deadline, cancelling it when the guest drops the future. `pump_timers` routes timer requests away from the platform and wakes the guest when one is due; `next_timer_deadline` lets a direct host wake at that moment instead of polling. A host that does not enable it leaves the plugin unregistered, so a guest's `leptoskit_bridge::guest::sleep` returns `Unavailable` rather than resolving early.
 
 Every entry point is fuel-metered, so guest instruction execution is bounded (exhaustion returns `WasmError::OutOfFuel`). Host calls and rendering have separate costs; diffing commits avoids recreating unchanged widgets but does not guarantee a frame-time budget.
 

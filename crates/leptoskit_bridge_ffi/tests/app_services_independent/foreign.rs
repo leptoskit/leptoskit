@@ -15,6 +15,7 @@ use leptoskit_bridge_ffi::app::lk_app_begin_close;
 use leptoskit_bridge_ffi::app::lk_app_close_poll;
 use leptoskit_bridge_ffi::app::lk_app_close_release;
 use leptoskit_bridge_ffi::app::lk_app_destroy;
+use leptoskit_bridge_ffi::app::lk_app_next_request;
 use leptoskit_bridge_ffi::app::lk_app_poll_service;
 
 use super::support::GUEST;
@@ -215,16 +216,57 @@ fn pending_foreign_close_release_reschedules_until_joined_error() {
 }
 
 #[test]
-fn no_service_activation_releases_context_without_scheduling_cleanup() {
+fn no_service_activation_retains_timer_wake_until_app_destruction() {
 	let callbacks_owner = Arc::new(Callbacks::default());
 	let app = Box::into_raw(Box::new(App::new(GUEST).unwrap()));
 
 	// SAFETY: App is uniquely owned and callbacks transfer to activation once.
 	unsafe {
 		assert_eq!(lk_app_activate_service(app, callbacks(&callbacks_owner)), 0);
-		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 1);
+		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 0);
 		lk_app_destroy(app);
+		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 1);
 	}
 
+	assert!(callbacks_owner.closing.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_timer_can_wake_a_no_service_host_activated_before_timers() {
+	let callbacks_owner = Arc::new(Callbacks::default());
+	let app = Box::into_raw(Box::new(App::new(GUEST).unwrap()));
+	// SAFETY: The test owns the app and transfers one callback context.
+	unsafe {
+		assert_eq!(lk_app_activate_service(app, callbacks(&callbacks_owner)), 0);
+		(*app).enable_timers().unwrap();
+		(*app).with_host(|host| {
+			let plugin = host
+				.plugins()
+				.resolve(leptoskit_bridge::timer::TIMER_PLUGIN)
+				.unwrap();
+			let payload =
+				leptoskit_bridge::timer::encode(std::time::Duration::from_millis(10)).unwrap();
+			host.plugins()
+				.submit(
+					plugin,
+					leptoskit_bridge::timer::SLEEP,
+					leptoskit_bridge::Bytes::copy_from_slice(&payload),
+				)
+				.unwrap();
+		});
+		let mut request = std::mem::MaybeUninit::uninit();
+		assert_eq!(lk_app_next_request(app, request.as_mut_ptr()), 0);
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+		while callbacks_owner.notified.load(Ordering::Acquire) == 0
+			&& std::time::Instant::now() < deadline
+		{
+			std::thread::sleep(std::time::Duration::from_millis(2));
+		}
+		assert_eq!(callbacks_owner.notified.load(Ordering::Acquire), 1);
+		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 0);
+		lk_app_destroy(app);
+	}
+	assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 1);
+	assert_eq!(Arc::strong_count(&callbacks_owner), 1);
 	assert!(callbacks_owner.closing.lock().unwrap().is_empty());
 }

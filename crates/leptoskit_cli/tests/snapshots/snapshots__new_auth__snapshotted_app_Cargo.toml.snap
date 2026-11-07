@@ -29,11 +29,11 @@ devtools = ["leptoskit/devtools"]
 
 [dependencies]
 snapshotted_shared = { path = "../snapshotted_shared" }
-leptoskit = { version = "=[version]", default-features = false, features = ["auth", "leptos", "query"] }
+leptoskit = { version = "=[version]", default-features = false, features = ["auth", "leptos", "query", "rpc"] }
 leptos = { version = "0.9.0-rc0", default-features = false, optional = true }
 # The embedded wasm-bindgen CLI accepts exactly its matching library version.
 wasm-bindgen = { version = "=0.2.129", optional = true }
-# The native build's executor for sign-in requests.
+# The native build's executor for query and sign-in requests.
 any_spawner = { version = "0.3", optional = true }
 futures = { version = "0.3", default-features = false, features = ["executor"], optional = true }
 

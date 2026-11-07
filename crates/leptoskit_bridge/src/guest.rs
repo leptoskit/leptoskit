@@ -319,3 +319,53 @@ pub async fn next_frame() -> Result<crate::frame::Frame, Error> {
 	let reply = client.call(crate::frame::NEXT_FRAME, &[])?.await?;
 	crate::frame::Frame::decode(&reply).ok_or(Error::Native)
 }
+
+thread_local! {
+	/// Resolved once: a host's timer capability does not change while its
+	/// guest is loaded, and a missing plugin must stay missing.
+	static TIMER: std::cell::OnceCell<Option<Client>> = const { std::cell::OnceCell::new() };
+}
+
+fn timer_client() -> Result<Client, Error> {
+	TIMER.with(|timer| {
+		timer
+			.get_or_init(|| Client::new(crate::timer::TIMER_PLUGIN).ok())
+			.ok_or(Error::Unavailable)
+	})
+}
+
+/// Whether this host offers real, cancellable sleeps.
+///
+/// Resolving the reserved timer plugin is cheap and needs no call. A host
+/// built before timers existed reports `false`; [`sleep`] then returns
+/// [`Error::Unavailable`] instead of resolving early.
+pub fn timer_available() -> bool {
+	TIMER.with(|timer| {
+		timer
+			.get_or_init(|| Client::new(crate::timer::TIMER_PLUGIN).ok())
+			.is_some()
+	})
+}
+
+/// Waits for `duration` on the host's timer.
+///
+/// This is a real sleep, not a frame wait or a poll loop. Dropping the future
+/// cancels the host's timer, so an abandoned retry, debounce, or cache
+/// collection costs nothing until its deadline. A zero duration resolves
+/// without a call.
+///
+/// # Errors
+///
+/// [`Error::Unavailable`] when the host has no timer plugin,
+/// [`Error::Cancelled`] when the host closes first, or the error the bridge
+/// reports for the call.
+pub async fn sleep(duration: std::time::Duration) -> Result<(), Error> {
+	if duration.is_zero() {
+		return Ok(());
+	}
+
+	let client = timer_client()?;
+	let payload = crate::timer::encode(duration)?;
+	client.call(crate::timer::SLEEP, &payload)?.await?;
+	Ok(())
+}

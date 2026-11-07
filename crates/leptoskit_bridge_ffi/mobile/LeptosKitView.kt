@@ -98,6 +98,9 @@ class LeptosKitView(
             register(NativeApp.plugins(app), dispatcher)
             // This view drives the guest's frame clock from the Choreographer.
             checkStatus(NativeApp.enableFrames(app))
+            // Timers are optional: an unavailable one stays `Unavailable` to
+            // the guest instead of failing application startup.
+            NativeApp.enableTimers(app)
             guest = NativeApp.guestSpawn(app, GuestNotifier(handler) { runUi { drain() } })
             check(guest != 0L) { "Cannot start the guest thread" }
             riveAnimator =

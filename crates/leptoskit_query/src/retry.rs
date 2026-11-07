@@ -18,7 +18,7 @@ use futures::future::select;
 use crate::cancel::CancelToken;
 use crate::managers::OnlineManager;
 use crate::options::NetworkMode;
-use crate::time::sleep;
+use crate::time::try_sleep;
 
 /// How a run of attempts ended.
 pub(crate) enum Settled<T, E> {
@@ -70,8 +70,10 @@ impl<E> Attempts<'_, E> {
 				return Settled::Error(error);
 			}
 
-			if until_cancelled(self.token, sleep(delay)).await.is_none() {
-				return Settled::Cancelled;
+			match until_cancelled(self.token, try_sleep(delay)).await {
+				Some(Ok(())) => {}
+				Some(Err(_)) => return Settled::Error(error),
+				None => return Settled::Cancelled,
 			}
 
 			// Retries wait for the network unless the mode says to always

@@ -37,6 +37,7 @@ pub mod frame;
 mod reply;
 pub use reply::Reply;
 pub use reply::ReplyGuard;
+pub mod timer;
 
 #[cfg(all(feature = "async-host", not(target_arch = "wasm32")))]
 pub mod async_host;

@@ -57,6 +57,8 @@ In a Wasm bundle loaded by `leptoskit_wasm`, enable the `guest` feature (it exis
 
 The guest talks to the host through the `leptoskit_plugins_v1` import module and is woken by the exported `leptoskit_plugins_ready`. Most apps never use this directly; each `leptoskit_plugin_*` crate wraps it in a typed `guest` module.
 
+`guest::sleep(Duration)` waits on the host's real timer through the reserved `leptoskit.timer` plugin, and dropping the future cancels it. A host built before the plugin existed leaves it unregistered, so `timer_available()` is `false` and `sleep` returns `Unavailable` rather than resolving early. A native host registers it with `timer::host::TimerScheduler` and routes it with `WasmHost::enable_timers`; `leptoskit_bridge_ffi::App` exposes `lk_app_enable_timers` and `lk_app_poll_timers`.
+
 ## Limits
 
 `Limits` bounds everything before it is accepted: outstanding calls (128 by default), buffered events (256), bytes per request, reply, or event (8 MiB), and total retained bytes (32 MiB). Exceeding one returns `Error::Busy` or `Error::TooLarge` instead of growing. Errors (`Unavailable`, `PermissionDenied`, `InvalidArgument`, `Busy`, `TooLarge`, `Cancelled`, `Native`, `InvalidCall`, `Exhausted`) have stable wire codes, shared with the Swift, Kotlin, and C++ hosts in [`leptoskit_bridge_ffi`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_bridge_ffi).

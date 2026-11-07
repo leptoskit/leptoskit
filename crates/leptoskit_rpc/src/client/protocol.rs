@@ -184,13 +184,22 @@ impl<H: Http> Inner<H> {
 			attempt += 1;
 
 			match self.send(&url, &body, idempotency_key.as_ref()).await {
-				Err(FnError::Network(_)) if attempt < attempts => {
-					leptoskit_query::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
+				Err(error @ FnError::Network(_)) if attempt < attempts => {
+					// A host with no usable timer cannot pace a retry. Report
+					// the network failure instead of waiting forever: the
+					// server may have run the mutation, but the app must be
+					// able to show what happened and let the person try again.
+					if leptoskit_query::try_sleep(Duration::from_millis(250 * u64::from(attempt)))
+						.await
+						.is_err()
+					{
+						break Err(error);
+					}
 				}
 
-				outcome => break outcome?,
+				outcome => break outcome,
 			}
-		};
+		}?;
 
 		decode(&response)
 	}

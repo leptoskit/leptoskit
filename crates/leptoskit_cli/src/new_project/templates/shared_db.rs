@@ -49,6 +49,12 @@ pub async fn notes(cx: &rpc::QueryCx) -> rpc::Result<Vec<PublicNote>> {
 #[api(crate = "leptoskit::rpc", tag = "notes")]
 #[rpc::mutation]
 pub async fn add_note(cx: &rpc::MutationCx, body: String) -> rpc::Result<PublicNote> {
-	let note = __CRATE___db::NewNote { body }.insert(cx.tx()).await?;
+	// The screen trims what it sends; the server does too, so a client that
+	// calls this route directly can't store a note that is only whitespace.
+	let note = __CRATE___db::NewNote {
+		body: body.trim().to_owned(),
+	}
+	.insert(cx.tx())
+	.await?;
 	Ok(note.into())
 }

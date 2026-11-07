@@ -331,7 +331,7 @@ impl Shared {
 /// thread cannot start.
 ///
 /// Create the app, register its plugins, set its text measurer, enable its
-/// frames, and activate its service first: from here until
+/// frames and timers, and activate its service first: from here until
 /// [`lk_guest_stop`] returns, do not pass the app to any other function.
 ///
 /// # Safety
@@ -352,6 +352,11 @@ pub unsafe extern "C" fn lk_guest_spawn(app: *mut App, callbacks: GuestCallbacks
 		notify,
 		release,
 	}));
+	let wake = Arc::clone(&shared);
+	// SAFETY: The app is this call's alone until it is lent below.
+	unsafe { app.as_mut() }
+		.expect("the caller lends a live app")
+		.with_host(|host| host.set_timer_wake(move || wake.post(Command::Wake)));
 	let lent = LentApp(app);
 	let thread = std::thread::Builder::new()
 		.name("leptoskit-guest".into())
@@ -852,6 +857,10 @@ fn step(
 ) -> Result<bool, String> {
 	let mut rive_images = Vec::new();
 	let mut rive_pending = None;
+
+	if app.poll_timers() < 0 {
+		return Err(app.error.clone());
+	}
 
 	for command in commands {
 		let status = match command {

@@ -170,6 +170,8 @@ pub mod guest {
 	pub use leptoskit_bridge::Error;
 	pub use leptoskit_bridge::frame::Frame;
 	pub use leptoskit_bridge::guest::next_frame;
+	pub use leptoskit_bridge::guest::sleep;
+	pub use leptoskit_bridge::guest::timer_available;
 	pub use leptoskit_native::guest::*;
 }
 

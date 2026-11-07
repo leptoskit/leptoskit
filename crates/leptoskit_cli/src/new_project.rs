@@ -169,6 +169,8 @@ pub fn run_with_options(
 			package_id: leptoskit_config::default_package_id(name),
 			..if auth {
 				auth_native_config()
+			} else if database.is_some() {
+				rpc_native_config()
 			} else {
 				NativeConfig::default()
 			}
@@ -266,16 +268,32 @@ pub(crate) const PLUGIN_PLATFORMS: [&str; 3] = ["ios", "android", "macos"];
 /// `[native]` for a new app with sign-in: the plugins granted, and the
 /// development server as the HTTP plugin's only origins.
 fn auth_native_config() -> NativeConfig {
+	NativeConfig {
+		plugins: AUTH_PLUGINS.map(|(name, _)| name.to_owned()).to_vec(),
+		plugin_options: [("http".to_owned(), http_plugin_options())].into(),
+		..NativeConfig::default()
+	}
+}
+
+/// `[native]` for a new app with a database but no sign-in: the HTTP plugin
+/// reaches the development server, so the notes screen works in native apps.
+fn rpc_native_config() -> NativeConfig {
+	NativeConfig {
+		plugins: vec!["http".to_owned()],
+		plugin_options: [("http".to_owned(), http_plugin_options())].into(),
+		..NativeConfig::default()
+	}
+}
+
+/// The HTTP plugin's development origins: the server as a simulator or
+/// desktop sees it, and as the Android emulator does.
+fn http_plugin_options() -> toml::Table {
 	let mut http = toml::Table::new();
 	http.insert(
 		"origins".into(),
 		toml::Value::Array(AUTH_DEV_ORIGINS.map(toml::Value::from).to_vec()),
 	);
-	NativeConfig {
-		plugins: AUTH_PLUGINS.map(|(name, _)| name.to_owned()).to_vec(),
-		plugin_options: [("http".to_owned(), http)].into(),
-		..NativeConfig::default()
-	}
+	http
 }
 
 /// Rejects existing files and redirected parents before writing the workspace.
@@ -426,7 +444,7 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		),
 		(
 			format!("{app}/Cargo.toml"),
-			app_manifest(name, sdk, config.auth.is_some())?,
+			app_manifest(name, sdk, config.auth.is_some(), config.db.is_some())?,
 		),
 		(
 			format!("{app}/build.rs"),
@@ -497,7 +515,7 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 	}
 
 	if config.extension.is_some() {
-		extension_files(&mut files, name)?;
+		extension_files(&mut files, name, config.db.is_some())?;
 	}
 
 	files.extend(platform_files(config, sdk)?);
@@ -539,7 +557,7 @@ fn extension_config(name: &str) -> leptoskit_config::ExtensionConfig {
 
 /// The app crate's extension: its feature, its entry points, and the start
 /// function the website keeps to itself.
-fn extension_files(files: &mut Vec<(String, String)>, name: &str) -> Result<()> {
+fn extension_files(files: &mut Vec<(String, String)>, name: &str, database: bool) -> Result<()> {
 	let app = format!("{name}_app");
 
 	for (path, source) in files.iter_mut() {
@@ -595,7 +613,11 @@ fn extension_files(files: &mut Vec<(String, String)>, name: &str) -> Result<()> 
 
 	files.push((
 		format!("{app}/src/extension.rs"),
-		include_str!("new_project/templates/extension.rs").into(),
+		if database {
+			include_str!("new_project/templates/extension_db.rs").into()
+		} else {
+			include_str!("new_project/templates/extension.rs").into()
+		},
 	));
 	Ok(())
 }
@@ -668,6 +690,29 @@ fn database_files(
 	};
 
 	replace("src/main.rs".into(), expand(server));
+	let app = format!("{name}_app");
+	if !auth {
+		replace(
+			format!("{app}/src/lib.rs"),
+			expand(include_str!("new_project/templates/app_db.rs")),
+		);
+	}
+	replace(
+		format!("{app}/src/notes.rs"),
+		expand(include_str!("new_project/templates/notes.rs")),
+	);
+	replace(
+		format!("{app}/src/tasks.rs"),
+		include_str!("new_project/templates/tasks.rs").into(),
+	);
+	replace(
+		format!("{app}/src/routes/home.rs"),
+		if auth {
+			include_str!("new_project/templates/home_auth.rs").into()
+		} else {
+			include_str!("new_project/templates/home_notes.rs").into()
+		},
+	);
 	replace(
 		format!("{backend_crate}/Cargo.toml"),
 		backend_manifest(name, sdk, Some(feature))?,
@@ -759,6 +804,13 @@ fn auth_files(files: &mut Vec<(String, String)>, name: &str) {
 		files.push((format!("{app}/src/{path}"), contents));
 	}
 
+	let home = format!("{app}/src/routes/home.rs");
+	let contents = include_str!("new_project/templates/home_auth.rs").into();
+	match files.iter_mut().find(|(path, _)| *path == home) {
+		Some(entry) => entry.1 = contents,
+		None => files.push((home, contents)),
+	}
+
 	files.push((
 		"src/sign_in.rs".into(),
 		crate::auth_pages::server_module("../leptoskit.toml", false),
@@ -785,6 +837,10 @@ monosecret set AUTH_ENCRYPTION_KEYS --provider keyring "$(date +%Y-%m):$(openssl
 Before you deploy, set `origin` in `[auth]` to your site's URL, such as `https://myapp.com`, and say how to send email in `[auth.mail]`. In a debug build, emails aren't sent: open `/_leptoskit/mail` to read them, or sign in to any address without a code by posting `{{ "email": "ada@example.com" }}` to `/auth/dev/sign-in`. Release builds have neither, and refuse to start without `[auth.mail]`.
 
 The screens live in `{name}_app/src/auth/` and are yours to restyle. They work the same in the browser and in native apps. A native app finds the server at `SERVER` in `{name}_app/src/lib.rs`. It reaches it through the `http` plugin and keeps its refresh token with `secure-store`; both are granted in `[native]` in `leptoskit.toml`, and the HTTP plugin may reach the development server. Before you ship, set `SERVER` to your site's origin and put that origin in `[native.plugin-options.http] origins`. The Linux, Windows, and terminal runners can't host plugins yet, so there the screens answer that sign-in isn't set up.
+
+## Notes and accounts
+
+Once signed in, the home screen is the notes screen in `{name}_app/src/notes.rs`. It calls the shared `Notes` and `AddNote` operations, so the server runs each as the signed-in person and the `Note` table's policy keeps every account to its own rows. Signing out drops the screen, and signing in as someone else builds a new one after removing the previous account's cached list; one person's notes never show under another's name. The browser keeps the list current over `/live`. Native apps read it over the `http` plugin and offer Refresh; the Linux, Windows, and terminal hosts can't host plugins, so the list reports that it can't reach the server there.
 "#
 	)
 }
@@ -815,15 +871,20 @@ fn database_readme(name: &str, db: &DbConfig, auth: bool) -> String {
 		 notes; before sign-in, both answer `401`."
 			.replace("{name}", name)
 	} else {
-		" A native app reaches the server through the `http` plugin: grant it in `[native] \
-		 plugins` with the server in its allowed origins, then name the server with \
-		 `leptoskit::rpc::client::configure(ClientConfig::new().origin(…))` when the app starts."
-			.to_owned()
+		" A native app reaches the server through the `http` plugin, which the generated hosts \
+		 grant and point at `SERVER` in `{name}_app/src/lib.rs`; set both to your site's origin \
+		 before you ship. Native apps read the list over HTTP and use the Refresh button, since \
+		 the generated hosts don't grant the WebSocket plugin. The Linux, Windows, and terminal \
+		 hosts can't host plugins yet, so there the notes screen reports that it can't reach the \
+		 server."
+			.replace("{name}", name)
 	};
 	let operations = format!(
 		r#"## Operations
 
 `{name}_shared` declares the app's queries and mutations next to its contracts: `notes` lists the newest notes, and `add_note` adds one. Every screen calls them the same way, in the browser, in a native app, and while the server renders a page: `leptoskit::rpc::client::call(AddNote {{ body }}).await`. Their bodies, and the database code in them, compile only into the server, through `{name}_shared`'s `server` feature.{caller}
+
+The generated home screen in `{name}_app/src/notes.rs` uses those same types: it shows loading, empty, failed, and loaded states, checks the body before sending it, reports the mutation's result, and offers Refresh. In the browser the list stays current over the live socket; SSR loads query data in process and streams it into the browser cache, with a loading state in the initial HTML.
 
 The server answers each at `POST /api/<name>`, with its arguments as one JSON object: `POST /api/notes` with `{{}}`, and `POST /api/add_note` with `{{"body": "Milk"}}`. A failure answers `Kind|message` as text with its status, such as `400` for an empty note. The live socket at `/live` sends a subscribed query's result again whenever a write changes it.
 
@@ -960,22 +1021,23 @@ strip = "none"
 
 /// One application library supplies SSR, browser Wasm, and native Wasm exports.
 ///
-/// With sign-in, the app uses the auth client, the query cache, and leptos's
-/// signals, and a native build keeps its own executor for their tasks.
-fn app_manifest(name: &str, sdk: Option<&Utf8Path>, auth: bool) -> Result<String> {
-	let features: &[&str] = if auth {
-		&["auth", "leptos", "query"]
-	} else {
-		&[]
+/// With a database, the app uses the query cache and the RPC client, and a
+/// native build keeps its own executor for their tasks. With sign-in it also
+/// uses the auth client.
+fn app_manifest(name: &str, sdk: Option<&Utf8Path>, auth: bool, database: bool) -> Result<String> {
+	let features: &[&str] = match (auth, database) {
+		(true, _) => &["auth", "leptos", "query", "rpc"],
+		(false, true) => &["leptos", "query", "rpc"],
+		(false, false) => &[],
 	};
 
 	let dependency = sdk_dependency("leptoskit", sdk, features)?;
-	let (native, executor) = if auth {
+	let (native, executor) = if auth || database {
 		(
 			"\"leptoskit/guest\", \"dep:any_spawner\", \"dep:futures\"",
-			"# The native build's executor for sign-in requests.\nany_spawner = { version = \
-			 \"0.3\", optional = true }\nfutures = { version = \"0.3\", default-features = false, \
-			 features = [\"executor\"], optional = true }\n",
+			"# The native build's executor for query and sign-in requests.\nany_spawner = { \
+			 version = \"0.3\", optional = true }\nfutures = { version = \"0.3\", \
+			 default-features = false, features = [\"executor\"], optional = true }\n",
 		)
 	} else {
 		("\"leptoskit/guest\"", "")
@@ -1024,6 +1086,10 @@ leptoskit_build = {build_dependency}
 }
 
 /// Platform folders contain app-owned native integration and host manifests.
+#[expect(
+	clippy::too_many_lines,
+	reason = "one list of platform files reads better than several partial lists"
+)]
 fn platform_files(
 	config: &LeptoskitConfig,
 	sdk: Option<&Utf8Path>,
@@ -1160,7 +1226,13 @@ fn platform_files(
 	for platform in NATIVE_PLATFORMS {
 		files.push((
 			format!("{platform}/Cargo.toml"),
-			host_manifest(name, platform, sdk, config.auth.is_some())?,
+			host_manifest(
+				name,
+				platform,
+				sdk,
+				config.auth.is_some(),
+				config.db.is_some(),
+			)?,
 		));
 		// The terminal runs on every desktop; its gate is the architecture.
 		let gate = if platform == "tui" {
@@ -1186,7 +1258,14 @@ fn platform_files(
 ///
 /// With sign-in, the hosts that run runtime plugins depend on the ones the
 /// client needs, since only a host's direct dependencies can register them.
-fn host_manifest(name: &str, platform: &str, sdk: Option<&Utf8Path>, auth: bool) -> Result<String> {
+/// A database app without sign-in needs the HTTP plugin for its operations.
+fn host_manifest(
+	name: &str,
+	platform: &str,
+	sdk: Option<&Utf8Path>,
+	auth: bool,
+	database: bool,
+) -> Result<String> {
 	let ffi = sdk_dependency("leptoskit_bridge_ffi", sdk, &["app"])?;
 	// The terminal runner builds wherever cargo does, so its gate is the
 	// architecture; the widget runners stay behind their operating systems.
@@ -1202,8 +1281,14 @@ fn host_manifest(name: &str, platform: &str, sdk: Option<&Utf8Path>, auth: bool)
 		 [\"staticlib\"]\n\n[target.'cfg({gate})'.dependencies]\nleptoskit_bridge_ffi = {ffi}\n"
 	);
 
-	if auth && PLUGIN_PLATFORMS.contains(&platform) {
-		for (_, package) in AUTH_PLUGINS {
+	if (auth || database) && PLUGIN_PLATFORMS.contains(&platform) {
+		let plugins: &[(&str, &str)] = if auth {
+			&AUTH_PLUGINS
+		} else {
+			&AUTH_PLUGINS[..1]
+		};
+
+		for (_, package) in plugins {
 			writeln!(
 				manifest,
 				"{package} = {}",
@@ -1265,7 +1350,7 @@ fn readme(name: &str) -> String {
 	format!(
 		r#"# {name}
 
-Write the application once in `{name}_app`. The browser, web SSR server, and native runners render the same screen and counter behavior. `{name}_backend` implements RPC endpoints; `{name}_shared` holds their serializable contracts. The root server imports the app and backend, while application builds never import backend implementation.
+Write the application once in `{name}_app`. The browser, web SSR server, and native runners render the same screen and behavior. `{name}_backend` implements RPC endpoints; `{name}_shared` holds their serializable contracts. The root server imports the app and backend, while application builds never import backend implementation.
 
 ```sh
 leptoskit build
@@ -1295,7 +1380,7 @@ The module path is relative to the app crate's `src/` directory. Add `routes/hom
 
 `leptoskit dev` resolves `monosecret.toml` through Monosecret before starting. Install Monosecret, then store credentials in its keyring or your team's provider. The manifest declares names; keep secret values out of Git. Use `leptoskit dev --no-secrets` when your host supplies the environment. In production, run `monosecret run -- ./target/release/{name}`. See [secret management](https://leptoskit.dev/docs/guide/secrets.html).
 
-The starter requests no native plugin capabilities. Add native plugins to the runner's direct Cargo dependencies and grant them explicitly in `native.plugins`.
+The starter grants no native plugin capabilities unless the app needs them. Add native plugins to the runner's direct Cargo dependencies and grant them explicitly in `native.plugins`.
 "#
 	)
 }
@@ -1408,6 +1493,35 @@ mod tests {
 	use super::host_manifest;
 
 	#[test]
+	fn the_generated_notes_screen_uses_the_shared_operations() {
+		let notes = include_str!("new_project/templates/notes.rs");
+		assert!(notes.contains("use __CRATE___shared::AddNote;"), "{notes}");
+		assert!(
+			notes.contains("use __CRATE___shared::Notes as NotesQuery;"),
+			"{notes}"
+		);
+		assert!(notes.contains("use_live(|| NotesQuery {})"), "{notes}");
+		assert!(notes.contains("use_rpc_query(|| NotesQuery {})"), "{notes}");
+		assert!(notes.contains("remove_queries"), "{notes}");
+		assert!(notes.contains("MAX_BODY"), "{notes}");
+		for state in ["Loading notes…", "No notes yet.", "Saved.", "Refresh"] {
+			assert!(notes.contains(state), "missing {state:?}: {notes}");
+		}
+
+		let auth = include_str!("new_project/templates/app_auth.rs");
+		assert!(auth.contains("Notes::new(identity.clone())"), "{auth}");
+		assert!(auth.contains("child.cleanup()"), "{auth}");
+		assert!(auth.contains("notes.owns(&identity)"), "{auth}");
+
+		let database = include_str!("new_project/templates/app_db.rs");
+		assert!(database.contains("Notes::shared()"), "{database}");
+		assert!(database.contains("origin(SERVER)"), "{database}");
+
+		let home = include_str!("new_project/templates/home_auth.rs");
+		assert!(home.contains("shell.notes()"), "{home}");
+	}
+
+	#[test]
 	fn every_server_exports_its_api_before_it_starts_anything() {
 		for (template, source) in [
 			("server.rs", include_str!("new_project/templates/server.rs")),
@@ -1443,18 +1557,18 @@ mod tests {
 
 	#[test]
 	fn the_terminal_host_is_gated_on_the_architecture_alone() {
-		let manifest = host_manifest("demo", "tui", None, true).unwrap();
+		let manifest = host_manifest("demo", "tui", None, true, true).unwrap();
 		assert_eq!(manifest.matches("[target.").count(), 1, "{manifest}");
 		assert!(manifest.contains("[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]"));
 		assert!(!manifest.contains("target_os = \"tui\""));
 		assert!(manifest.contains("name = \"demo-tui\""));
 		assert!(manifest.contains("features = [\"wasm\", \"tui\", \"codepush-http\"]"));
 
-		let linux = host_manifest("demo", "linux", None, true).unwrap();
+		let linux = host_manifest("demo", "linux", None, true, true).unwrap();
 		assert!(linux.contains("[target.'cfg(target_os = \"linux\")'.dependencies]"));
 		assert!(linux.contains("features = [\"wasm\", \"rive\", \"gtk\", \"codepush-http\"]"));
 
-		let windows = host_manifest("demo", "windows", None, true).unwrap();
+		let windows = host_manifest("demo", "windows", None, true, true).unwrap();
 		assert!(
 			windows.contains("features = [\"wasm\", \"rive\", \"windows\", \"codepush-http\"]")
 		);
@@ -1465,7 +1579,7 @@ mod tests {
 	#[test]
 	fn plugin_hosts_depend_on_the_sign_in_plugins_only_with_sign_in() {
 		for platform in ["ios", "android", "macos"] {
-			let with = host_manifest("demo", platform, None, true).unwrap();
+			let with = host_manifest("demo", platform, None, true, true).unwrap();
 			assert!(
 				with.contains("leptoskit_plugin_http = { version = "),
 				"{with}"
@@ -1475,9 +1589,24 @@ mod tests {
 				"{with}"
 			);
 
-			let without = host_manifest("demo", platform, None, false).unwrap();
+			let without = host_manifest("demo", platform, None, false, false).unwrap();
 			assert!(!without.contains("leptoskit_plugin_"), "{without}");
 		}
+	}
+
+	#[test]
+	fn database_hosts_depend_on_the_http_plugin() {
+		for platform in ["ios", "android", "macos"] {
+			let with = host_manifest("demo", platform, None, false, true).unwrap();
+			assert!(
+				with.contains("leptoskit_plugin_http = { version = "),
+				"{with}"
+			);
+			assert!(!with.contains("leptoskit_plugin_secure_store"), "{with}");
+		}
+
+		let windows = host_manifest("demo", "windows", None, false, true).unwrap();
+		assert!(!windows.contains("leptoskit_plugin_"), "{windows}");
 	}
 
 	#[test]

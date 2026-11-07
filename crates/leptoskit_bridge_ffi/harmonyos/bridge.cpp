@@ -145,6 +145,7 @@ struct Runtime {
     // Drains cancellations, then requests, before rendering, so a page
     // dispatches a whole UI turn's plugin work with the tree it produced.
     napi_value Render(napi_env env) {
+        Status(lk_app_poll_timers(app));
         napi_value cancelled, requests;
         Check(napi_create_array(env, &cancelled));
         Check(napi_create_array(env, &requests));
@@ -196,6 +197,7 @@ struct Runtime {
         pending = pending || count == kMaxBatch;
 
         const std::string json = std::string("{\"pending\":") + (pending ? "true" : "false") +
+            ",\"timerDelayMs\":" + std::to_string(lk_app_timer_delay_ms(app)) +
             ",\"render\":" + Take(lk_app_render(app)) + "}";
 
         napi_value text, global, jsonObject, parse, result;
@@ -320,6 +322,7 @@ napi_value Create(napi_env env, napi_callback_info info) {
         runtime->app = leptoskit_app_create_with_context(
             static_cast<const uint8_t *>(wasm), len, &context, &error);
         if (!runtime->app) throw std::runtime_error(Take(error));
+        runtime->Status(lk_app_enable_timers(runtime->app));
         Check(napi_wrap(env, self, runtime.get(), Finalize, nullptr, nullptr));
         runtime.release();
         return self;
