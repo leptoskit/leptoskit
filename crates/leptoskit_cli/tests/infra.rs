@@ -2533,7 +2533,7 @@ fn operator_rpc_window_gates_release_reuse_rollback_and_recovery() {
 		vec![
 			"deploy",
 			"--version",
-			"v1",
+			"v3",
 			"--verified-descriptor",
 			&path,
 			"--descriptor-sha256",
@@ -2556,4 +2556,10 @@ fn operator_rpc_window_gates_release_reuse_rollback_and_recovery() {
 		fs::write(&trust_path, &trusted).unwrap();
 		succeeds(&cli(root.path(), &flags, &[]));
 	}
+	// A fresh tag can reuse these image bytes, but recorded tags cannot be
+	// overwritten with new evidence. Recovery uses the recorded descriptor.
+	fails_with(
+		&cli(root.path(), &["deploy", "--version", "v1"], &[]),
+		"tag already recorded",
+	);
 }

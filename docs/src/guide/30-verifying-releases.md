@@ -261,7 +261,7 @@ To enforce the client window independently of the publisher, use version 2 of th
 }
 ```
 
-Every listed contract must appear in the checked descriptor. A publisher's empty or different baseline cannot replace this operator requirement. Legacy descriptors, `not_checked`, and `not_applicable` fail this policy. Rollback also uses the current client window: prepare new evidence and approvals for an older image if its previous descriptor lacks a required baseline. Version 1 trust files keep their previous behavior and cannot carry `rpc_contracts` requirements.
+Every listed contract must appear in the checked descriptor. A publisher's empty or different baseline cannot replace this operator requirement. Legacy descriptors, `not_checked`, and `not_applicable` fail this policy. Rollback also uses the current client window and its recorded descriptor. If an older release lacks a required baseline, reproduce that source with the current baselines and issue new evidence, approvals, and deployment policy for a fresh release tag. Recorded tags and their evidence cannot be overwritten. Version 1 trust files keep their previous behavior and cannot carry `rpc_contracts` requirements.
 
 This uses the conservative declaration comparison described in [Checking compatibility](13-sharing-the-rpc.md#checking-compatibility). It covers HTTP and live wire shapes for clients on any platform. It does not prove unchanged handler behavior, authorization, runtime protocol implementations, database rollout compatibility, or native host support. Schema changes may need a separately named endpoint while older clients remain supported.
 
