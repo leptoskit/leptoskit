@@ -62,7 +62,7 @@ fn references_follow_changed_definitions_and_terminate_on_cycles() {
 	before
 		.schemas
 		.insert("Value".into(), json!({"type": "string"}));
-	assert!(before.breaking_changes(&before).is_empty());
+	assert_eq!(before.breaking_changes(&before), Vec::<String>::new());
 	let mut after = before.clone();
 	after
 		.schemas
@@ -77,7 +77,7 @@ fn references_follow_changed_definitions_and_terminate_on_cycles() {
 	after
 		.schemas
 		.insert("Unrelated".into(), json!({"type": "integer"}));
-	assert!(before.breaking_changes(&after).is_empty());
+	assert_eq!(before.breaking_changes(&after), Vec::<String>::new());
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn publication_keeps_conditional_and_pattern_schema_references() {
 fn application_data_with_reference_keys_is_not_a_schema_reference() {
 	let mut before = spec();
 	before.functions[0].output_schema = json!({"type": "object", "examples": [{"$ref": "https://example.invalid/data"}], "default": {"$ref": "data"}, "const": {"$ref": "literal"}});
-	assert!(before.breaking_changes(&before).is_empty());
+	assert_eq!(before.breaking_changes(&before), Vec::<String>::new());
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn unresolved_and_dynamic_references_cannot_claim_compatibility() {
 	] {
 		let mut before = spec();
 		before.functions[0].output_schema = schema;
-		assert!(!before.breaking_changes(&before).is_empty());
+		assert_ne!(before.breaking_changes(&before), Vec::<String>::new());
 	}
 }
 
@@ -221,7 +221,7 @@ fn new_operations_optional_arguments_and_function_docs_are_allowed() {
 	param.name = "offset".into();
 	after.functions[0].params.push(param);
 	after.functions[0].docs = "Updated documentation".into();
-	assert!(before.breaking_changes(&after).is_empty());
+	assert_eq!(before.breaking_changes(&after), Vec::<String>::new());
 }
 
 #[test]
@@ -235,8 +235,32 @@ fn escaped_component_names_and_nested_pointers_keep_their_definitions() {
 	);
 	let before = before.public();
 	assert!(before.schemas.contains_key("A/B"));
-	assert!(before.breaking_changes(&before).is_empty());
+	assert_eq!(before.breaking_changes(&before), Vec::<String>::new());
 	let mut after = before.clone();
 	after.schemas["A/B"]["properties"]["value"] = json!({"type": "integer"});
-	assert!(!before.breaking_changes(&after).is_empty());
+	assert_ne!(before.breaking_changes(&after), Vec::<String>::new());
+}
+
+#[test]
+fn legacy_tuples_dependencies_and_content_schemas_follow_references() {
+	for schema in [
+		json!({"items": [{"$ref": "#/$defs/Value"}]}),
+		json!({"dependencies": {"key": {"$ref": "#/$defs/Value"}, "other": ["key"]}}),
+		json!({"contentSchema": {"$ref": "#/$defs/Value"}}),
+	] {
+		let mut before = spec();
+		before.functions[0].output_schema = schema;
+		before
+			.schemas
+			.insert("Value".into(), json!({"type": "string"}));
+		let before = before.public();
+		assert!(before.schemas.contains_key("Value"));
+		assert_eq!(before.breaking_changes(&before), Vec::<String>::new());
+		let mut after = before.clone();
+		after.schemas["Value"] = json!({"type": "integer"});
+		assert_ne!(
+			before.breaking_changes(&after.public()),
+			Vec::<String>::new()
+		);
+	}
 }

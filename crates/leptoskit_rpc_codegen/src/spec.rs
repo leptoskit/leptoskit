@@ -559,6 +559,7 @@ pub(crate) fn visit_schema(schema: &Value, visit: &mut impl FnMut(&Value)) {
 		"unevaluatedProperties",
 		"unevaluatedItems",
 		"additionalItems",
+		"contentSchema",
 	] {
 		if let Some(nested) = object.get(key) {
 			visit_schema(nested, visit);

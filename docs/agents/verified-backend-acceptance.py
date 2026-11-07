@@ -4,6 +4,7 @@ Uses a signed commit of the committed fixture tree and invocation-only local
 Git transport mapping. Tests full reproduction mechanics, not public provenance.
 No checkout, registry publication, deployment, or shared Git config changes.
 """
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -98,7 +99,10 @@ images = json.loads(run("podman", "image", "inspect", "rust:1.85-alpine", "alpin
 builder, runtime = [item["RepoDigests"][0] for item in images]
 runtime_pin = digest(json.dumps(images[1]["Config"], sort_keys=True, separators=(",", ":")).encode())
 print(json.dumps(dict(commit=commit, builder=builder, runtime=runtime, runtime_config=runtime_pin)))
-with tempfile.TemporaryDirectory(prefix="a04-acceptance-") as temp:
+evidence_dir = os.environ.get("LEPTOSKIT_ACCEPTANCE_EVIDENCE")
+if evidence_dir:
+    Path(evidence_dir).mkdir(parents=True, exist_ok=False)
+with (nullcontext(evidence_dir) if evidence_dir else tempfile.TemporaryDirectory(prefix="a04-acceptance-")) as temp:
     temp = Path(temp)
     recipe = temp / "recipe.json"
     recipe.write_text(json.dumps(dict(repository="https://github.com/leptoskit/leptoskit", commit=commit, builder_image=builder, target="aarch64-unknown-linux-musl", package="verified-backend", binary="verified-backend", features=[], no_default_features=False, rustflags=[])))

@@ -149,7 +149,7 @@ impl Contract {
 				ensure!(
 					declaration == "operator_declares_no_rpc",
 					"unsupported RPC declaration"
-				)
+				);
 			}
 			Self::Exported {
 				sha256,
