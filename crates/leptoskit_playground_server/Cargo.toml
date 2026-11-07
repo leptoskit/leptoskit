@@ -1,0 +1,32 @@
+[package]
+name = "leptoskit_playground_server"
+version.workspace = true
+default-run = "leptoskit_playground_server"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "playground-worker"
+path = "src/worker.rs"
+
+[[bin]]
+name = "playground-measure"
+path = "src/measure.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+ipnet = "2"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "process", "io-util", "sync", "time", "signal"] }
+tower-http = { workspace = true, features = ["cors"] }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

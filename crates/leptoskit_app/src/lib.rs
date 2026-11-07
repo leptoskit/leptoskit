@@ -10,6 +10,7 @@
 pub mod client;
 pub mod landing;
 pub mod motion;
+pub mod playground;
 pub mod screen;
 #[cfg(feature = "server")]
 pub mod site;

@@ -152,6 +152,11 @@ jobs:
           LEPTOSKIT_SITE=docs/dist deno test --allow-env --allow-read --allow-net \
             --allow-run --allow-write docs/site/tests/playable_examples.mjs
 
+      - name: verify playground offline behavior in chrome
+        run: |
+          LEPTOSKIT_SITE=docs/dist LEPTOSKIT_PLAY_OFFLINE=1 deno test --allow-env --allow-read --allow-net \
+            --allow-run --allow-write crates/leptoskit_app/tests/playground.mjs
+
       - name: verify public schema assets
         run: |
           cmp docs/src/schema.json docs/dist/schema.json

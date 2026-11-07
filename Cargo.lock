@@ -5667,6 +5667,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_playground_server"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "ipnet",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower",
+ "tower-http 0.6.11",
+]
+
+[[package]]
 name = "leptoskit_plugin"
 version = "0.3.0"
 dependencies = [
