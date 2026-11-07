@@ -1,5 +1,9 @@
 use super::*;
 
+const VENDOR_OUTPUT: &str = "[source.crates-io]\nreplace-with = \"vendored-sources\"\n";
+const COMPILED_OUTPUT: &str = "compiled server\n";
+const EXECUTABLE_RELATIVE: &str = "target/x86_64-unknown-linux-gnu/release/server";
+
 fn run_git(repository: &Path, args: &[&str]) -> String {
 	let output = git(repository)
 		.args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
@@ -543,7 +547,11 @@ case "$mode" in
 		if [ -n "${LEPTOSKIT_TEST_OUTPUT_RELATIVE:-}" ]; then
 			output="$work/$LEPTOSKIT_TEST_OUTPUT_RELATIVE"
 			mkdir -p "$(dirname "$output")"
-			printf '%s' "${LEPTOSKIT_TEST_OUTPUT_CONTENT:-}" > "$output"
+			content="${LEPTOSKIT_TEST_OUTPUT_CONTENT:-}"
+			case "$work" in
+				*/second*) content="${LEPTOSKIT_TEST_SECOND_CONTENT:-$content}" ;;
+			esac
+			printf '%s' "$content" > "$output"
 		fi
 		;;
 esac
@@ -551,7 +559,7 @@ esac
 	}
 
 	pub(super) struct Fixture {
-		directory: tempfile::TempDir,
+		pub(super) directory: tempfile::TempDir,
 		bin: PathBuf,
 		log: PathBuf,
 	}
@@ -775,6 +783,86 @@ esac
 		}
 	}
 
+	fn streamed_execute() {
+		let work = Work::new();
+		let recipe = recipe();
+		let builder = builder(&recipe, Engine::Docker);
+		let run = builder
+			.run(&work.scratch, false, vec!["cargo".into(), "-V".into()])
+			.unwrap();
+
+		match expect().as_str() {
+			"success" => {
+				let stdout = builder.execute(&run, false).unwrap();
+				assert!(stdout.is_empty(), "streamed output is not captured");
+			}
+			"failure" => {
+				let error = builder.execute(&run, false).unwrap_err();
+				assert!(
+					error
+						.to_string()
+						.contains("`cargo -V` failed in the builder container"),
+					"{error}"
+				);
+			}
+			other => panic!("unknown streamed execute case {other}"),
+		}
+	}
+
+	fn verified_build() {
+		let commit = std::env::var("LEPTOSKIT_TEST_COMMIT").unwrap();
+		let checkout = PathBuf::from(std::env::var("LEPTOSKIT_TEST_CHECKOUT").unwrap());
+		let mut recipe = recipe();
+		recipe.commit = commit;
+		recipe.infra = Some("deploy".to_owned());
+		let recipe_path = std::env::current_dir().unwrap().join("build.json");
+		fs::write(&recipe_path, serde_json::to_vec_pretty(&recipe).unwrap()).unwrap();
+
+		build(&BuildArgs {
+			recipe: recipe_path,
+			checkout: Some(checkout),
+			secrets: vec!["SIGNING_KEY".to_owned()],
+			out: "out".into(),
+			engine: Some(Engine::Docker),
+		})
+		.unwrap();
+	}
+
+	fn differing_build() {
+		let commit = std::env::var("LEPTOSKIT_TEST_COMMIT").unwrap();
+		let checkout = PathBuf::from(std::env::var("LEPTOSKIT_TEST_CHECKOUT").unwrap());
+		let mut recipe = recipe();
+		recipe.commit = commit;
+		let recipe_path = std::env::current_dir().unwrap().join("build.json");
+		fs::write(&recipe_path, serde_json::to_vec_pretty(&recipe).unwrap()).unwrap();
+
+		let error = build(&BuildArgs {
+			recipe: recipe_path,
+			checkout: Some(checkout),
+			secrets: Vec::new(),
+			out: "out".into(),
+			engine: Some(Engine::Docker),
+		})
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("the two builds differ"), "{error}");
+	}
+
+	fn reproduce_from_a_checkout() {
+		let checkout = PathBuf::from(std::env::var("LEPTOSKIT_TEST_CHECKOUT").unwrap());
+		let directory = std::env::current_dir().unwrap();
+		let digest = fs::read_to_string(directory.join("digest.txt")).unwrap();
+		reproduce(&ReproduceArgs {
+			bundle: directory.join("bundle"),
+			manifest: directory.join("inventory.json"),
+			sha256: digest.trim().to_owned(),
+			checkout: Some(checkout),
+			offline: false,
+			engine: Some(Engine::Docker),
+		})
+		.unwrap();
+	}
+
 	fn vendor() {
 		let work = Work::new();
 		let recipe = recipe();
@@ -975,10 +1063,14 @@ esac
 			"builder-pull-failure" => builder_pull_failure(),
 			"engine-detect" => engine_detect(),
 			"execute" => execute(),
+			"execute-stream" => streamed_execute(),
 			"vendor" => vendor(),
 			"toolchain" => toolchain(),
 			"compile" => compile(),
 			"reproduce" => reproduce_case(),
+			"build" => verified_build(),
+			"build-mismatch" => differing_build(),
+			"reproduce-checkout" => reproduce_from_a_checkout(),
 			other => panic!("unknown scenario {other}"),
 		}
 	}
@@ -1117,10 +1209,7 @@ fn compiling_returns_the_executable_or_says_what_is_missing() {
 #[test]
 fn offline_reproduce_compares_the_rebuilt_executable() {
 	let output = [
-		(
-			"LEPTOSKIT_TEST_OUTPUT_RELATIVE",
-			"target/x86_64-unknown-linux-gnu/release/server",
-		),
+		("LEPTOSKIT_TEST_OUTPUT_RELATIVE", EXECUTABLE_RELATIVE),
 		("LEPTOSKIT_TEST_OUTPUT_CONTENT", "reproduced bytes\n"),
 	];
 
@@ -1130,4 +1219,248 @@ fn offline_reproduce_compares_the_rebuilt_executable() {
 		environment.extend(output);
 		fixture.run("reproduce", &environment);
 	}
+}
+
+#[test]
+fn an_explicit_engine_skips_detection_and_mounts_need_real_paths() {
+	assert_eq!(
+		Engine::detect(Some(Engine::Podman)).unwrap(),
+		Engine::Podman
+	);
+	assert_eq!(
+		Engine::detect(Some(Engine::Docker)).unwrap(),
+		Engine::Docker
+	);
+	assert_eq!(Engine::Docker.program(), "docker");
+	assert_eq!(Engine::Podman.program(), "podman");
+
+	let error = mount(
+		Path::new("/leptoskit/definitely/not/here"),
+		"/build/source",
+		true,
+	)
+	.unwrap_err();
+	assert_ne!(error.to_string(), "");
+}
+
+#[test]
+fn git_failures_are_reported_and_commits_must_be_named_in_full() {
+	let (repository, commit) = repository(&[("Cargo.toml", "")]);
+	let dest = tempfile::tempdir().unwrap();
+	let error = export_tree(
+		repository.path(),
+		&commit[..8],
+		None,
+		&dest.path().join("short"),
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(error.contains("full ID"), "{error}");
+
+	let mut command = git(repository.path());
+	command.args(["rev-parse", "--verify", "--quiet", "refs/heads/absent"]);
+	let error = git_output(&mut command).unwrap_err().to_string();
+	assert!(error.starts_with("git failed"), "{error}");
+
+	let digest = sha256_file(&repository.path().join("Cargo.toml")).unwrap();
+	assert_eq!(digest.len(), 64);
+	assert!(sha256_file(&repository.path().join("Cargo.toml")).is_ok());
+	assert!(sha256_file(&repository.path().join("missing")).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn streamed_runs_show_their_output_and_still_report_failures() {
+	let fixture = fake_engine::Fixture::new();
+	fixture.run("execute-stream", &[("LEPTOSKIT_TEST_EXPECT", "success")]);
+	fixture.run(
+		"execute-stream",
+		&[
+			("LEPTOSKIT_TEST_EXPECT", "failure"),
+			("LEPTOSKIT_TEST_TOOLCHAIN_STATUS", "1"),
+			("LEPTOSKIT_TEST_FAIL_STDERR", "cargo is broken\n"),
+		],
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_full_build_writes_the_bundle_inventory_and_provenance() {
+	let fixture = fake_engine::Fixture::new();
+	let (repository, commit) = repository(&[
+		(
+			"Cargo.toml",
+			"[package]\nname = \"backend\"\nversion = \"0.1.0\"\n",
+		),
+		("Cargo.lock", "version = 4\n"),
+		("src/main.rs", "fn main() {}\n"),
+		("deploy/main.tf", "resource {}\n"),
+		("deploy/policy/workload.json", "{}\n"),
+	]);
+	let log = fixture.run(
+		"build",
+		&[
+			("LEPTOSKIT_TEST_COMMIT", &commit),
+			(
+				"LEPTOSKIT_TEST_CHECKOUT",
+				repository.path().to_str().unwrap(),
+			),
+			("LEPTOSKIT_TEST_VENDOR_STDOUT", VENDOR_OUTPUT),
+			("LEPTOSKIT_TEST_RUSTC_STDOUT", "rustc 1.99.1\n"),
+			("LEPTOSKIT_TEST_CARGO_STDOUT", "cargo 1.99.1\n"),
+			("LEPTOSKIT_TEST_OUTPUT_RELATIVE", EXECUTABLE_RELATIVE),
+			("LEPTOSKIT_TEST_OUTPUT_CONTENT", COMPILED_OUTPUT),
+		],
+	);
+
+	let out = fixture.directory.path().join("out");
+	let bundle = out.join("bundle");
+	assert_eq!(
+		fs::read_to_string(bundle.join("source/Cargo.toml")).unwrap(),
+		"[package]\nname = \"backend\"\nversion = \"0.1.0\"\n"
+	);
+	assert_eq!(
+		fs::read_to_string(bundle.join("infra/policy/workload.json")).unwrap(),
+		"{}\n"
+	);
+	assert_eq!(
+		fs::read_to_string(bundle.join("dependencies/.leptoskit-vendor.toml")).unwrap(),
+		VENDOR_OUTPUT
+	);
+	assert_eq!(
+		fs::read_to_string(bundle.join("artifacts/backend")).unwrap(),
+		COMPILED_OUTPUT
+	);
+	assert_eq!(
+		fs::read_to_string(bundle.join("secrets.json")).unwrap(),
+		"[\n  \"SIGNING_KEY\"\n]"
+	);
+
+	let provenance: serde_json::Value =
+		serde_json::from_slice(&fs::read(out.join("provenance.json")).unwrap()).unwrap();
+	let executable = sha256_file(&bundle.join("artifacts/backend")).unwrap();
+	assert_eq!(provenance["subject"][0]["digest"]["sha256"], executable);
+	assert_eq!(
+		provenance["predicate"]["runDetails"]["metadata"]["toolchain"],
+		"rustc 1.99.1\ncargo 1.99.1\n"
+	);
+	assert!(out.join("inventory.json").is_file());
+
+	let builds = log
+		.iter()
+		.filter(|line| line.contains(" run ") && line.contains(" build "))
+		.count();
+	assert_eq!(builds, 2, "the executable is built twice: {log:?}");
+	assert!(log.iter().any(|line| line.contains(" pull ")), "{log:?}");
+	assert!(log.iter().any(|line| line.contains(" vendor ")), "{log:?}");
+	assert!(log.iter().any(|line| line.contains("rustc -vV")), "{log:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_whose_two_rounds_differ_is_refused() {
+	let fixture = fake_engine::Fixture::new();
+	let (repository, commit) = repository(&[
+		(
+			"Cargo.toml",
+			"[package]\nname = \"backend\"\nversion = \"0.1.0\"\n",
+		),
+		("Cargo.lock", "version = 4\n"),
+		("src/main.rs", "fn main() {}\n"),
+	]);
+	fixture.run(
+		"build-mismatch",
+		&[
+			("LEPTOSKIT_TEST_COMMIT", &commit),
+			(
+				"LEPTOSKIT_TEST_CHECKOUT",
+				repository.path().to_str().unwrap(),
+			),
+			("LEPTOSKIT_TEST_VENDOR_STDOUT", VENDOR_OUTPUT),
+			("LEPTOSKIT_TEST_RUSTC_STDOUT", "rustc 1.99.1\n"),
+			("LEPTOSKIT_TEST_CARGO_STDOUT", "cargo 1.99.1\n"),
+			("LEPTOSKIT_TEST_OUTPUT_RELATIVE", EXECUTABLE_RELATIVE),
+			("LEPTOSKIT_TEST_OUTPUT_CONTENT", COMPILED_OUTPUT),
+			("LEPTOSKIT_TEST_SECOND_CONTENT", "a different build\n"),
+		],
+	);
+}
+
+#[test]
+fn a_recipe_without_infrastructure_exports_an_empty_directory() {
+	let (repository, commit) = repository(&[("Cargo.toml", "")]);
+	let mut recipe = recipe();
+	recipe.commit = commit;
+	recipe.infra = None;
+	let bundle = tempfile::tempdir().unwrap();
+	export_sources(repository.path(), &recipe, bundle.path()).unwrap();
+	assert!(bundle.path().join("source/Cargo.toml").is_file());
+	let infra = bundle.path().join("infra");
+	assert!(infra.is_dir());
+	assert_eq!(fs::read_dir(&infra).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn reproduce_with_a_checkout_compares_the_source_and_dependencies() {
+	let fixture = fake_engine::Fixture::new();
+	let (repository, commit) = repository(&[
+		(
+			"Cargo.toml",
+			"[package]\nname = \"backend\"\nversion = \"0.1.0\"\n",
+		),
+		("Cargo.lock", "version = 4\n"),
+		("src/main.rs", "fn main() {}\n"),
+		("deploy/main.tf", "resource {}\n"),
+	]);
+	let mut recipe = recipe();
+	recipe.commit = commit;
+	recipe.infra = Some("deploy".to_owned());
+	let bundle = fixture.directory.path().join("bundle");
+	fs::create_dir(&bundle).unwrap();
+	export_sources(repository.path(), &recipe, &bundle).unwrap();
+	fs::create_dir(bundle.join("dependencies")).unwrap();
+	fs::write(
+		bundle.join("dependencies/.leptoskit-vendor.toml"),
+		VENDOR_OUTPUT,
+	)
+	.unwrap();
+	fs::create_dir(bundle.join("artifacts")).unwrap();
+	fs::write(bundle.join("artifacts/backend"), "reproduced bytes\n").unwrap();
+	fs::write(
+		bundle.join("build.json"),
+		serde_json::to_vec_pretty(&recipe).unwrap(),
+	)
+	.unwrap();
+	fs::write(bundle.join("secrets.json"), "[]").unwrap();
+	let digest =
+		super::super::record(&bundle, &fixture.directory.path().join("inventory.json")).unwrap();
+	fs::write(
+		fixture.directory.path().join("digest.txt"),
+		format!("{digest}\n"),
+	)
+	.unwrap();
+
+	let log = fixture.run(
+		"reproduce-checkout",
+		&[
+			(
+				"LEPTOSKIT_TEST_CHECKOUT",
+				repository.path().to_str().unwrap(),
+			),
+			("LEPTOSKIT_TEST_VENDOR_STDOUT", VENDOR_OUTPUT),
+			("LEPTOSKIT_TEST_OUTPUT_RELATIVE", EXECUTABLE_RELATIVE),
+			("LEPTOSKIT_TEST_OUTPUT_CONTENT", "reproduced bytes\n"),
+		],
+	);
+	assert!(
+		log.iter()
+			.any(|line| line.contains("cargo vendor --locked --versioned-dirs")),
+		"{log:?}"
+	);
+	assert!(
+		log.iter()
+			.any(|line| line.contains("cargo build --release --frozen")),
+		"{log:?}"
+	);
 }

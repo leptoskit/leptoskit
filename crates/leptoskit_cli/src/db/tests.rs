@@ -1247,7 +1247,10 @@ mod child {
 	use leptoskit_db_schema::Dialect;
 
 	use super::users;
+	use crate::db::BranchCommand;
 	use crate::db::DbCommand;
+	use crate::db::MigrationCommand;
+	use crate::db::ReleaseCommand;
 	use crate::db::run;
 
 	/// The child test that executes one command; `LEPTOSKIT_TEST_DB_COMMAND`
@@ -1381,6 +1384,29 @@ esac
 			]
 		}
 
+		/// A `cargo` that exports `schema`, for commands whose target differs
+		/// from the migrations the fixture started with.
+		#[cfg(unix)]
+		pub(super) fn export_environment_for(
+			&self,
+			schema: &leptoskit_db_schema::Schema,
+		) -> Vec<(&'static str, String)> {
+			use std::os::unix::fs::PermissionsExt as _;
+
+			let bin = self.directory.path().join("bin");
+			std::fs::create_dir_all(&bin).unwrap();
+			let cargo = bin.join("cargo");
+			std::fs::write(&cargo, export_script()).unwrap();
+			std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+			let path = self.directory.path().join("exported-schema.json");
+			std::fs::write(&path, schema.to_json()).unwrap();
+			vec![
+				("CARGO", cargo.display().to_string()),
+				("LEPTOSKIT_TEST_DB_SCHEMA_FILE", path.display().to_string()),
+			]
+		}
+
 		/// Runs one command in the child, with `environment` layered on top
 		/// of the clean process it gets.
 		fn run(&self, command: &str, environment: &[(&str, &str)]) -> Output {
@@ -1460,6 +1486,56 @@ esac
 			}
 			"reset" => DbCommand::Reset { url: url(), yes },
 			"status" => DbCommand::Status { url: url() },
+			"check" => {
+				DbCommand::Check {
+					live: std::env::var("LEPTOSKIT_TEST_DB_LIVE").as_deref() == Ok("1"),
+					url: url(),
+				}
+			}
+			"push" => {
+				DbCommand::Push {
+					url: url(),
+					allow_destructive: yes,
+					drop_packs: Vec::new(),
+				}
+			}
+			"create" => {
+				DbCommand::Migration {
+					command: MigrationCommand::Create {
+						name: std::env::var("LEPTOSKIT_TEST_DB_NAME")
+							.unwrap_or_else(|_| "add column".into()),
+						allow_destructive: yes,
+						no_renames: std::env::var("LEPTOSKIT_TEST_DB_NO_RENAMES").as_deref()
+							== Ok("1"),
+						empty: std::env::var("LEPTOSKIT_TEST_DB_EMPTY").as_deref() == Ok("1"),
+						drop_packs: Vec::new(),
+					},
+				}
+			}
+			"consolidate" => {
+				DbCommand::Migration {
+					command: MigrationCommand::Consolidate {
+						keep: Vec::new(),
+						no_renames: std::env::var("LEPTOSKIT_TEST_DB_NO_RENAMES").as_deref()
+							== Ok("1"),
+						drop_packs: Vec::new(),
+					},
+				}
+			}
+			"branch" => {
+				DbCommand::Branch {
+					command: BranchCommand::List,
+				}
+			}
+			"release" => {
+				DbCommand::Release {
+					command: ReleaseCommand::Record {
+						version: std::env::var("LEPTOSKIT_TEST_DB_VERSION")
+							.unwrap_or_else(|_| "1.4.0".into()),
+						id: std::env::var("LEPTOSKIT_TEST_DB_RELEASE_ID").ok(),
+					},
+				}
+			}
 			other => panic!("unknown command {other}"),
 		};
 
@@ -2191,6 +2267,883 @@ fn amend_mode_rewrites_the_draft_since_the_release() {
 		"{:?}",
 		amended.notes
 	);
+}
+
+#[test]
+fn the_project_accessors_follow_the_configuration() {
+	let root = tempfile::tempdir().unwrap();
+	let config: leptoskit_config::LeptoskitConfig = toml::from_str(
+		"[app]\nname = \"my-app\"\nversion = \"0.1.0\"\n\n[db]\ndialect = \"postgres\"\n",
+	)
+	.unwrap();
+	let project = Project::of(&config, root.path().to_path_buf()).unwrap();
+	assert_eq!(project.database_name(), "my_app");
+	assert_eq!(project.dialect(), Dialect::Postgres);
+	assert_eq!(project.package, "my_app_db");
+	assert_eq!(project.migrations_dir(), root.path().join("migrations"));
+
+	let plain: leptoskit_config::LeptoskitConfig =
+		toml::from_str("[app]\nname = \"my-app\"\n").unwrap();
+	assert!(Project::of(&plain, root.path().to_path_buf()).is_none());
+}
+
+#[test]
+fn release_versions_and_ids_are_validated() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+
+	// No migrations, no release.
+	let error = super::record_release(&project, "1.4.0", None)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("no migrations to release"), "{error}");
+
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(
+		&project,
+		"create users",
+		&first,
+		&options(),
+		&mut RequireHints,
+	)
+	.unwrap();
+
+	for (version, expected) in [
+		("", "can't be empty"),
+		("1.4 beta", "can't be empty"),
+		("1.4(x)", "can't be empty"),
+		("1.4#1", "can't be empty"),
+	] {
+		let error = super::record_release(&project, version, None)
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains(expected), "{version:?}: {error}");
+	}
+
+	for (id, expected) in [
+		("", "release id can't be empty"),
+		("rel(1)", "release id can't be empty"),
+		("rel#1", "release id can't be empty"),
+		("rel\n1", "release id can't be empty"),
+	] {
+		let error = super::record_release(&project, "1.4.0", Some(id))
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains(expected), "{id:?}: {error}");
+	}
+
+	// A version that is only whitespace or punctuation is refused before the
+	// registry is touched.
+	let registry = std::fs::read_to_string(project.migrations_dir().join("registry.txt")).unwrap();
+	assert!(!registry.contains("# release"), "{registry}");
+}
+
+#[test]
+fn the_history_requires_every_migration_file_and_a_valid_snapshot() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let created = create(
+		&project,
+		"create users",
+		&users(Dialect::Sqlite, Vec::new()),
+		&options(),
+		&mut RequireHints,
+	)
+	.unwrap();
+	let directory = project.migrations_dir();
+
+	std::fs::remove_file(created.directory.join("migration.sql")).unwrap();
+	let error = History::read(&directory, Dialect::Sqlite)
+		.err()
+		.expect("the missing file is refused")
+		.to_string();
+	assert!(error.contains("migration.sql is missing"), "{error}");
+	std::fs::write(created.directory.join("migration.sql"), "").unwrap();
+
+	std::fs::write(created.directory.join("schema.json"), "not json").unwrap();
+	let error = History::read(&directory, Dialect::Sqlite)
+		.err()
+		.expect("the invalid snapshot is refused")
+		.to_string();
+	assert!(error.contains("isn't a valid snapshot"), "{error}");
+
+	// A comment or blank line in the registry says nothing about migrations.
+	std::fs::write(
+		created.directory.join("schema.json"),
+		users(Dialect::Sqlite, Vec::new()).to_json(),
+	)
+	.unwrap();
+	let registry = directory.join("registry.txt");
+	let text = std::fs::read_to_string(&registry).unwrap();
+	std::fs::write(&registry, format!("# a comment\n\n{text}")).unwrap();
+	let history = History::read(&directory, Dialect::Sqlite).unwrap();
+	assert_eq!(history.names.len(), 1);
+}
+
+#[test]
+fn consolidation_says_when_there_is_nothing_and_keeps_only_the_newest() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(&project, "users", &first, &options(), &mut RequireHints).unwrap();
+	super::consolidate(&project, &first, &[], &[], &mut RequireHints).unwrap();
+
+	let mut second = first.clone();
+	second.tables[0]
+		.columns
+		.push(Column::new("bio", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	create(&project, "bio", &second, &options(), &mut RequireHints).unwrap();
+	let error = super::consolidate(
+		&project,
+		&second,
+		&["not-a-draft".to_owned()],
+		&[],
+		&mut RequireHints,
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(
+		error.contains("--keep only applies to the newest migrations"),
+		"{error}"
+	);
+
+	// The released baseline can be behind every draft.
+	super::record_release(&project, "1.0.0", None).unwrap();
+	let mut third = second.clone();
+	third.tables[0]
+		.columns
+		.push(Column::new("karma", ColumnType::Int32).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	create(&project, "karma", &third, &options(), &mut RequireHints).unwrap();
+	let mut fourth = third.clone();
+	fourth.tables[0]
+		.columns
+		.push(Column::new("motto", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	create(&project, "motto", &fourth, &options(), &mut RequireHints).unwrap();
+	super::consolidate(&project, &fourth, &[], &[], &mut RequireHints).unwrap();
+	let history = History::read(&project.migrations_dir(), project.dialect()).unwrap();
+	assert_eq!(history.names.len(), 3, "two released and one consolidated");
+}
+
+#[test]
+fn live_checks_name_the_tables_and_columns_they_warn_about() {
+	use leptoskit_db_schema::Trigger;
+	use leptoskit_db_schema::TriggerAction;
+	use leptoskit_db_schema::TriggerEvent;
+	use leptoskit_db_schema::TriggerTiming;
+
+	let root = tempfile::tempdir().unwrap();
+	let plain = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let schema = users(Dialect::Sqlite, Vec::new());
+	super::check_live(&plain, &schema, None).unwrap();
+
+	let table = TableName::new("notes");
+	let notes = Table::new(
+		table.clone(),
+		vec![
+			Column::new("id", ColumnType::Uuid),
+			Column::new("body", ColumnType::Bytes),
+			Column::new(
+				"tags",
+				ColumnType::Array {
+					element: Box::new(ColumnType::TEXT),
+				},
+			),
+			Column::new("title", ColumnType::TEXT),
+		],
+		vec!["id".into()],
+	);
+	let trigger = |name: &str, columns: Vec<String>, capture: bool| {
+		Trigger {
+			name: name.into(),
+			table: table.clone(),
+			timing: TriggerTiming::After,
+			events: vec![TriggerEvent::Insert],
+			deferred: false,
+			columns,
+			action: if capture {
+				TriggerAction::Function {
+					function: leptoskit_db_schema::live::capture_function(),
+					arguments: Vec::new(),
+				}
+			} else {
+				TriggerAction::Statements {
+					when: None,
+					sql: "SELECT 1;".into(),
+				}
+			},
+		}
+	};
+	let schema = Schema::new(Dialect::Sqlite, vec![notes]).with_routines(
+		Vec::new(),
+		Vec::new(),
+		vec![
+			trigger(
+				"live_notes_insert",
+				vec![
+					"body".into(),
+					"tags".into(),
+					"title".into(),
+					"absent".into(),
+				],
+				true,
+			),
+			trigger("audit_notes_insert", vec!["body".into()], false),
+			Trigger {
+				name: "live_absent_insert".into(),
+				table: TableName::new("absent"),
+				timing: TriggerTiming::After,
+				events: vec![TriggerEvent::Insert],
+				deferred: false,
+				columns: vec!["missing".into()],
+				action: TriggerAction::Function {
+					function: leptoskit_db_schema::live::capture_function(),
+					arguments: Vec::new(),
+				},
+			},
+		],
+	);
+
+	let mut warnings: Vec<String> = super::wide_column_warnings(&schema).into_iter().collect();
+	warnings.sort();
+	assert_eq!(
+		warnings,
+		[
+			"notes.body is copied into the change log; mark it #[db(live = skip)]",
+			"notes.tags is copied into the change log; mark it #[db(live = skip)]"
+		]
+	);
+
+	assert_eq!(
+		super::namespaces(&Schema::new(
+			Dialect::Postgres,
+			vec![
+				Table::new(
+					TableName::namespaced("auth", "sessions"),
+					vec![Column::new("id", ColumnType::Uuid)],
+					vec!["id".into()]
+				),
+				Table::new(
+					TableName::namespaced("auth", "tokens"),
+					vec![Column::new("id", ColumnType::Uuid)],
+					vec!["id".into()]
+				),
+				Table::new(
+					TableName::new("notes"),
+					vec![Column::new("id", ColumnType::Uuid)],
+					vec!["id".into()]
+				),
+			]
+		)),
+		vec!["auth".to_owned()]
+	);
+}
+
+#[test]
+fn the_terminal_resolver_reads_no_answer_when_there_is_nothing_to_ask() {
+	use leptoskit_db_schema::RenameResolver as _;
+
+	let mut ask = super::Ask;
+	assert_eq!(
+		ask.table(
+			&Table::new(
+				TableName::new("people"),
+				vec![Column::new("id", ColumnType::Uuid)],
+				vec!["id".into()],
+			),
+			&[]
+		)
+		.unwrap(),
+		None
+	);
+	assert_eq!(
+		ask.column(
+			&TableName::new("people"),
+			&Column::new("name", ColumnType::TEXT),
+			&[]
+		)
+		.unwrap(),
+		None
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_check_command_names_the_matching_migration_and_skips_live_tables() {
+	let fixture = child::Fixture::new();
+	std::fs::write(
+		fixture.project().join("leptoskit.toml"),
+		"[db]\ndialect = \"sqlite\"\nfeatures = [\"server\", \"jobs\"]\n",
+	)
+	.unwrap();
+	let export = fixture.export_environment();
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.collect();
+	let stdout = fixture.run_ok("check", &environment);
+	assert!(
+		stdout.contains("the tables match 20260101T000200_add_bio"),
+		"{stdout}"
+	);
+
+	let mut environment = environment.clone();
+	environment.push(("LEPTOSKIT_TEST_DB_LIVE", "1"));
+	let stdout = fixture.run_ok("check", &environment);
+	assert!(stdout.contains("no live tables to check"), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_check_command_warns_about_searched_vectors_grown_past_the_limit() {
+	use leptoskit_db_schema::VectorDistance;
+	use leptoskit_db_schema::VectorElement;
+	use leptoskit_db_schema::VectorOptions;
+
+	let fixture = child::Fixture::new();
+	let mut tables = users(
+		Dialect::Sqlite,
+		vec![
+			Column::new("handle", ColumnType::TEXT),
+			Column::new("bio", ColumnType::TEXT).nullable(),
+		],
+	)
+	.tables;
+	let mut articles = Table::new(
+		TableName::new("articles"),
+		vec![
+			Column::new("id", ColumnType::Int64),
+			Column::new(
+				"embedding",
+				ColumnType::Vector {
+					element: VectorElement::Float32,
+					dimensions: 3,
+				},
+			),
+		],
+		vec!["id".into()],
+	);
+	let mut embedding = VectorOptions::new("embedding", Some(VectorDistance::Cosine));
+	embedding.public = true;
+	articles.vectors.push(embedding);
+	tables.push(articles);
+	tables.push(Table::new(
+		TableName::namespaced("auth", "accounts"),
+		vec![Column::new("id", ColumnType::Uuid)],
+		vec!["id".into()],
+	));
+	let schema = Schema::new(Dialect::Sqlite, tables);
+	let latest = fixture
+		.migrations()
+		.join("20260101T000200_add_bio")
+		.join("schema.json");
+	std::fs::write(&latest, schema.without_rename_hints().to_json()).unwrap();
+	std::fs::write(
+		fixture.project().join("leptoskit.toml"),
+		"[db]\ndialect = \"sqlite\"\nfeatures = [\"server\"]\n\n[db.vector]\nexact_search_rows = \
+		 0\n",
+	)
+	.unwrap();
+
+	let url = fixture.url();
+	let database = db(&url);
+	super::runtime()
+		.unwrap()
+		.block_on(async {
+			database
+				.run_script(
+					"CREATE TABLE \"articles\" (\"id\" INTEGER PRIMARY KEY, \"embedding\" BLOB); \
+					 INSERT INTO \"articles\" (\"id\") VALUES (1);",
+				)
+				.await
+		})
+		.unwrap();
+
+	let export = fixture.export_environment_for(&schema);
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.chain(std::iter::once(("LEPTOSKIT_TEST_DB_URL", url.as_str())))
+		.collect();
+	let stdout = fixture.run_ok("check", &environment);
+	assert!(
+		stdout.contains("`articles` has 1 rows"),
+		"the row count is checked: {stdout}"
+	);
+	assert!(
+		stdout.contains("`articles.embedding` is a vector clients can see"),
+		"{stdout}"
+	);
+	assert!(
+		stdout.contains("merging accounts brings their data along"),
+		"{stdout}"
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_create_command_writes_and_reports_the_migration() {
+	let fixture = child::Fixture::new();
+	let schema = users(
+		Dialect::Sqlite,
+		vec![
+			Column::new("handle", ColumnType::TEXT),
+			Column::new("bio", ColumnType::TEXT).nullable(),
+			Column::new("karma", ColumnType::Int32).nullable(),
+		],
+	);
+	let export = fixture.export_environment_for(&schema);
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.chain(std::iter::once(("LEPTOSKIT_TEST_DB_NAME", "add karma")))
+		.collect();
+	let stdout = fixture.run_ok("create", &environment);
+	assert!(stdout.contains("+ column users.karma"), "{stdout}");
+	assert!(stdout.contains("wrote migration"), "{stdout}");
+
+	let history = History::read(&fixture.migrations(), Dialect::Sqlite).unwrap();
+	assert_eq!(history.names.len(), 3);
+	assert!(
+		history.names[2].ends_with("_add_karma"),
+		"{:?}",
+		history.names
+	);
+
+	// The same tables again have nothing to write, unless the migration only
+	// changes rows.
+	let mut unchanged: Vec<(&str, &str)> = environment.clone();
+	unchanged.push(("LEPTOSKIT_TEST_DB_NO_RENAMES", "1"));
+	fixture.run_refused("create", &unchanged, "the tables haven't changed since");
+
+	let mut data: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.collect();
+	data.push(("LEPTOSKIT_TEST_DB_EMPTY", "1"));
+	let stdout = fixture.run_ok("create", &data);
+	assert!(stdout.contains("wrote migration"), "{stdout}");
+	let latest = History::read(&fixture.migrations(), Dialect::Sqlite)
+		.unwrap()
+		.names
+		.last()
+		.unwrap()
+		.clone();
+	let sql =
+		std::fs::read_to_string(fixture.migrations().join(latest).join("migration.sql")).unwrap();
+	assert!(sql.contains("A data migration"), "{sql}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_release_and_consolidate_commands_report_their_work() {
+	let fixture = child::Fixture::new();
+	let stdout = fixture.run_ok(
+		"release",
+		&[
+			("LEPTOSKIT_TEST_DB_VERSION", "1.4.0"),
+			("LEPTOSKIT_TEST_DB_RELEASE_ID", "rel_1"),
+		],
+	);
+	assert!(
+		stdout.contains("# release 1.4.0 (rel_1) snapshot"),
+		"{stdout}"
+	);
+	assert!(
+		stdout.contains("2 migration(s) are frozen through 1.4.0"),
+		"{stdout}"
+	);
+	fixture.run_refused(
+		"release",
+		&[("LEPTOSKIT_TEST_DB_VERSION", "1.4.0")],
+		"already recorded",
+	);
+
+	let export = fixture.export_environment();
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.chain(std::iter::once((
+			"LEPTOSKIT_TEST_DB_URL",
+			"sqlite://:memory:",
+		)))
+		.collect();
+	let stdout = fixture.run_ok("status", &environment);
+	assert!(
+		stdout.contains("release 1.4.0 (rel_1) froze 2 migration(s)"),
+		"{stdout}"
+	);
+	assert!(stdout.contains("it pins snapshot"), "{stdout}");
+
+	let mut third = users(
+		Dialect::Sqlite,
+		vec![
+			Column::new("handle", ColumnType::TEXT),
+			Column::new("bio", ColumnType::TEXT).nullable(),
+			Column::new("karma", ColumnType::Int32).nullable(),
+		],
+	);
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	let export = fixture.export_environment_for(&third);
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.collect();
+	let stdout = fixture.run_ok("create", &environment);
+	assert!(stdout.contains("+ column users.karma"), "{stdout}");
+	third.tables[0]
+		.columns
+		.push(Column::new("motto", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	let export = fixture.export_environment_for(&third);
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.collect();
+	let stdout = fixture.run_ok("create", &environment);
+	assert!(stdout.contains("+ column users.motto"), "{stdout}");
+
+	let mut environment: Vec<(&str, &str)> = environment;
+	environment.push(("LEPTOSKIT_TEST_DB_NO_RENAMES", "1"));
+	let stdout = fixture.run_ok("consolidate", &environment);
+	assert!(stdout.contains("folded 2 migration(s)"), "{stdout}");
+	let environment = &environment[..environment.len() - 1];
+	let stdout = fixture.run_ok("consolidate", environment);
+	assert!(stdout.contains("nothing to consolidate"), "{stdout}");
+	let history = History::read(&fixture.migrations(), Dialect::Sqlite).unwrap();
+	assert_eq!(
+		history.names.len(),
+		3,
+		"the two released and the consolidated draft"
+	);
+	assert!(
+		history.names[2].ends_with("_consolidated"),
+		"{:?}",
+		history.names
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_push_command_applies_the_tables_and_says_when_nothing_changed() {
+	let fixture = child::Fixture::new();
+	let url = fixture.url();
+	let schema = users(
+		Dialect::Sqlite,
+		vec![
+			Column::new("handle", ColumnType::TEXT),
+			Column::new("bio", ColumnType::TEXT).nullable(),
+			Column::new("karma", ColumnType::Int32).nullable(),
+		],
+	);
+	let export = fixture.export_environment_for(&schema);
+	let environment: Vec<(&str, &str)> = export
+		.iter()
+		.map(|(name, value)| (*name, value.as_str()))
+		.chain(std::iter::once(("LEPTOSKIT_TEST_DB_URL", url.as_str())))
+		.collect();
+	let stdout = fixture.run_ok("push", &environment);
+	assert!(stdout.contains("karma"), "{stdout}");
+	let stdout = fixture.run_ok("push", &environment);
+	assert!(
+		stdout.contains("the database already has the tables"),
+		"{stdout}"
+	);
+
+	let stdout = fixture.run_ok("status", &environment);
+	assert!(stdout.contains("changes pushed in development"), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_branch_command_needs_the_development_postgres() {
+	let fixture = child::Fixture::new();
+	std::fs::write(
+		fixture.project().join("leptoskit.toml"),
+		"[db]\ndialect = \"sqlite\"\ndev_server = \"off\"\n",
+	)
+	.unwrap();
+	fixture.run_refused("branch", &[], "need the development Postgres");
+}
+
+#[test]
+fn an_unreadable_registry_names_the_file_it_could_not_read() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let directory = project.migrations_dir();
+	std::fs::create_dir_all(directory.join("registry.txt")).unwrap();
+	let error = History::read(&directory, Dialect::Sqlite)
+		.err()
+		.expect("the directory is not a registry")
+		.to_string();
+	assert!(error.contains("couldn't read"), "{error}");
+	assert!(error.contains("registry.txt"), "{error}");
+}
+
+#[test]
+fn a_release_marker_pins_a_snapshot_that_must_be_readable() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let created = create(
+		&project,
+		"users",
+		&users(Dialect::Sqlite, Vec::new()),
+		&options(),
+		&mut RequireHints,
+	)
+	.unwrap();
+	super::record_release(&project, "1.2.0", None).unwrap();
+	std::fs::remove_file(created.directory.join("schema.json")).unwrap();
+	let error = History::read(&project.migrations_dir(), Dialect::Sqlite)
+		.err()
+		.expect("the pin cannot be checked")
+		.to_string();
+	assert!(error.contains("couldn't read"), "{error}");
+	assert!(error.contains("schema.json"), "{error}");
+}
+
+#[test]
+fn amend_mode_baselines_its_only_draft_on_an_empty_schema() {
+	let root = tempfile::tempdir().unwrap();
+	let mut project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	project.config.draft = leptoskit_config::DbDraft::Amend;
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(&project, "users", &first, &options(), &mut RequireHints).unwrap();
+
+	let mut second = first.clone();
+	second.tables[0]
+		.columns
+		.push(Column::new("bio", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	let amended = create(&project, "bio", &second, &options(), &mut RequireHints).unwrap();
+	let sql = std::fs::read_to_string(amended.directory.join("migration.sql")).unwrap();
+	assert!(sql.contains("\"bio\""), "{sql}");
+}
+
+#[test]
+fn consolidation_without_a_release_starts_from_an_empty_schema() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(&project, "users", &first, &options(), &mut RequireHints).unwrap();
+	let mut second = first.clone();
+	second.tables[0]
+		.columns
+		.push(Column::new("bio", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	create(&project, "bio", &second, &options(), &mut RequireHints).unwrap();
+
+	super::consolidate(&project, &second, &[], &[], &mut RequireHints).unwrap();
+	let history = History::read(&project.migrations_dir(), project.dialect()).unwrap();
+	assert_eq!(history.names.len(), 1);
+	assert!(
+		history.names[0].ends_with("_consolidated"),
+		"{:?}",
+		history.names
+	);
+}
+
+#[test]
+fn a_registry_without_a_final_newline_still_lists_every_migration() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(&project, "users", &first, &options(), &mut RequireHints).unwrap();
+	let registry = project.migrations_dir().join("registry.txt");
+	let text = std::fs::read_to_string(&registry).unwrap();
+	std::fs::write(&registry, text.trim_end_matches('\n')).unwrap();
+
+	let mut second = first.clone();
+	second.tables[0]
+		.columns
+		.push(Column::new("bio", ColumnType::TEXT).nullable());
+	std::thread::sleep(std::time::Duration::from_secs(1));
+	create(&project, "bio", &second, &options(), &mut RequireHints).unwrap();
+	let history = History::read(&project.migrations_dir(), Dialect::Sqlite).unwrap();
+	assert_eq!(history.names.len(), 2);
+}
+
+#[test]
+fn destructive_migrations_note_what_they_delete() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let first = users(
+		Dialect::Sqlite,
+		vec![Column::new("handle", ColumnType::TEXT)],
+	);
+	create(&project, "users", &first, &options(), &mut RequireHints).unwrap();
+	let created = create(
+		&project,
+		"drop",
+		&users(Dialect::Sqlite, Vec::new()),
+		&CreateOptions {
+			allow_destructive: true,
+			empty: false,
+			drop_packs: Vec::new(),
+		},
+		&mut RequireHints,
+	)
+	.unwrap();
+	let summary = created.summary();
+	assert!(summary.contains("note: loses data"), "{summary}");
+	assert!(
+		summary.contains("review migration.sql and down.sql"),
+		"{summary}"
+	);
+}
+
+#[test]
+fn the_manifest_names_a_package_the_workspace_lacks() {
+	let root = tempfile::tempdir().unwrap();
+	std::fs::write(
+		root.path().join("Cargo.toml"),
+		"[workspace]\nmembers = [\"app_db\"]\nresolver = \"2\"\n",
+	)
+	.unwrap();
+	std::fs::create_dir_all(root.path().join("app_db/src")).unwrap();
+	std::fs::write(
+		root.path().join("app_db/Cargo.toml"),
+		"[package]\nname = \"app_db\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+	)
+	.unwrap();
+	std::fs::write(root.path().join("app_db/src/lib.rs"), "").unwrap();
+	let mut project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	project.package = "absent_db".into();
+	let error = project.manifest().unwrap_err().to_string();
+	assert!(
+		error.contains("no package in the workspace is named"),
+		"{error}"
+	);
+}
+
+#[test]
+fn a_live_check_warns_about_wide_capture_columns_and_ignores_unknown_tables() {
+	use leptoskit_db_schema::Trigger;
+	use leptoskit_db_schema::TriggerAction;
+	use leptoskit_db_schema::TriggerEvent;
+	use leptoskit_db_schema::TriggerTiming;
+
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let url = format!("sqlite://{}", root.path().join("wide.sqlite").display());
+	let table = TableName::new("notes");
+	let schema = Schema::new(
+		Dialect::Sqlite,
+		vec![Table::new(
+			table.clone(),
+			vec![
+				Column::new("id", ColumnType::Uuid),
+				Column::new("body", ColumnType::Bytes),
+			],
+			vec!["id".into()],
+		)],
+	)
+	.with_routines(
+		Vec::new(),
+		Vec::new(),
+		vec![
+			Trigger {
+				name: "live_notes_insert".into(),
+				table: table.clone(),
+				timing: TriggerTiming::After,
+				events: vec![TriggerEvent::Insert],
+				deferred: false,
+				columns: vec!["body".into()],
+				action: TriggerAction::Function {
+					function: leptoskit_db_schema::live::capture_function(),
+					arguments: Vec::new(),
+				},
+			},
+			Trigger {
+				name: "live_absent_insert".into(),
+				table: TableName::new("absent"),
+				timing: TriggerTiming::After,
+				events: vec![TriggerEvent::Insert],
+				deferred: false,
+				columns: vec!["body".into()],
+				action: TriggerAction::Statements {
+					when: None,
+					sql: "SELECT 1;".into(),
+				},
+			},
+		],
+	);
+	super::runtime().unwrap().block_on(async {
+		let db = super::Db::connect(&url).await.unwrap();
+		db.run_script(
+			"CREATE TABLE notes (id BLOB PRIMARY KEY, body BLOB);\nCREATE TABLE absent (id BLOB \
+			 PRIMARY KEY, body BLOB);\nCREATE TRIGGER live_notes_insert AFTER INSERT ON notes FOR \
+			 EACH ROW BEGIN SELECT 1; END;\nCREATE TRIGGER live_absent_insert AFTER INSERT ON \
+			 absent FOR EACH ROW BEGIN SELECT 1; END;",
+		)
+		.await
+		.unwrap();
+	});
+	super::check_live(&project, &schema, Some(url)).unwrap();
+}
+
+#[test]
+fn resetting_deletes_sqlite_sidecars_too() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	create(
+		&project,
+		"users",
+		&users(Dialect::Sqlite, Vec::new()),
+		&options(),
+		&mut RequireHints,
+	)
+	.unwrap();
+	let url = format!("sqlite://{}", root.path().join("reset.sqlite3").display());
+	for suffix in ["", "-wal", "-shm"] {
+		std::fs::write(root.path().join(format!("reset.sqlite3{suffix}")), "stale").unwrap();
+	}
+	super::reset(&project, Some(url), true).unwrap();
+	assert_eq!(
+		scalar(
+			&format!("sqlite://{}", root.path().join("reset.sqlite3").display()),
+			"SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'users'",
+		),
+		1,
+		"the migrations were applied again"
+	);
+}
+
+#[test]
+fn resetting_rebuilds_the_local_development_postgres() {
+	let root = tempfile::tempdir().unwrap();
+	let Some((project, url, _server)) = push_databases(root.path())
+		.into_iter()
+		.find(|(project, ..)| project.dialect() == Dialect::Postgres)
+	else {
+		return;
+	};
+	create(
+		&project,
+		"users",
+		&users(Dialect::Postgres, Vec::new()),
+		&options(),
+		&mut RequireHints,
+	)
+	.unwrap();
+	super::reset(&project, Some(url), true).unwrap();
 }
 
 /// `schema` with a `sample` pack owning its `users` table.

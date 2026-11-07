@@ -999,4 +999,439 @@ mod tests {
 		assert!(filter.is_relevant(Path::new("/app/src/routes/index.rs")));
 		assert!(filter.is_relevant(Path::new("/app/locales/en.arb")));
 	}
+
+	/// A watcher that records what it was asked to watch instead of watching.
+	struct RecordingWatcher {
+		watched: Vec<(PathBuf, RecursiveMode)>,
+	}
+
+	impl Watcher for RecordingWatcher {
+		fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+			Ok(Self {
+				watched: Vec::new(),
+			})
+		}
+
+		fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+			self.watched.push((path.to_path_buf(), mode));
+			Ok(())
+		}
+
+		fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+			Ok(())
+		}
+
+		fn kind() -> notify::WatcherKind {
+			notify::WatcherKind::NullWatcher
+		}
+	}
+
+	#[test]
+	fn watching_skips_build_output_and_walks_around_excluded_children() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::create_dir_all(root.join("src/deep")).unwrap();
+		std::fs::create_dir_all(root.join("target/debug")).unwrap();
+		std::fs::create_dir_all(root.join("dist/assets")).unwrap();
+		std::fs::create_dir_all(root.join(".hidden/source")).unwrap();
+		let excluded = vec![root.join("target"), root.join("dist")];
+
+		let mut watcher = RecordingWatcher {
+			watched: Vec::new(),
+		};
+		let mut recursive = Vec::new();
+		watch_tree(&mut watcher, root, &excluded, &mut recursive).unwrap();
+		assert!(
+			watcher
+				.watched
+				.contains(&(root.to_path_buf(), RecursiveMode::NonRecursive))
+		);
+		assert_eq!(recursive, [root.join("src")]);
+		assert!(
+			!watcher
+				.watched
+				.iter()
+				.any(|(path, _)| path == &root.join("target")),
+			"{:?}",
+			watcher.watched
+		);
+
+		// Starting inside an excluded tree watches nothing.
+		watcher.watched.clear();
+		watch_tree(
+			&mut watcher,
+			&root.join("target/debug"),
+			&excluded,
+			&mut recursive,
+		)
+		.unwrap();
+		assert_eq!(watcher.watched.len(), 0);
+		assert_eq!(recursive, [root.join("src")]);
+
+		// A directory with nothing excluded beneath it is watched in one
+		// recursive registration.
+		let mut file = RecordingWatcher {
+			watched: Vec::new(),
+		};
+		let mut file_roots = Vec::new();
+		watch_tree(&mut file, &root.join("target/debug"), &[], &mut file_roots).unwrap();
+		assert_eq!(file_roots, [root.join("target/debug")]);
+
+		// A hidden directory and an excluded child stay out of the walk.
+		let mut nested = RecordingWatcher {
+			watched: Vec::new(),
+		};
+		let mut nested_roots = Vec::new();
+		watch_tree(
+			&mut nested,
+			root,
+			&[root.join("src/deep")],
+			&mut nested_roots,
+		)
+		.unwrap();
+		assert!(
+			nested
+				.watched
+				.contains(&(root.to_path_buf(), RecursiveMode::NonRecursive))
+		);
+		assert!(
+			!nested
+				.watched
+				.iter()
+				.any(|(path, _)| path == &root.join("src/deep")),
+			"{:?}",
+			nested.watched
+		);
+		assert!(
+			!nested
+				.watched
+				.iter()
+				.any(|(path, _)| path == &root.join(".hidden")),
+			"hidden directories stay alone: {:?}",
+			nested.watched
+		);
+	}
+
+	#[test]
+	fn the_watcher_covers_the_workspace_and_skips_generated_state() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+		)
+		.unwrap();
+		std::fs::create_dir_all(root.join("app/src")).unwrap();
+		std::fs::write(
+			root.join("app/Cargo.toml"),
+			"[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.unwrap();
+		std::fs::write(root.join("app/src/lib.rs"), "").unwrap();
+		std::fs::write(
+			root.join("leptoskit.toml"),
+			"schema_version = 0\n\n[app]\nname = \"app\"\nversion = \"0.1.0\"\n",
+		)
+		.unwrap();
+		std::fs::create_dir_all(root.join("public")).unwrap();
+		let config = LeptoskitConfig::load_from(root).unwrap();
+		let (events, _received) = mpsc::channel();
+		let (mut watcher, heard, scope) = start_watcher(&config, root, events, None).unwrap();
+
+		assert_eq!(scope.public, root.join("public"));
+		assert_eq!(scope.config_file, root.join(leptoskit_config::CONFIG_FILE));
+		assert!(
+			scope
+				.metadata
+				.packages
+				.iter()
+				.any(|package| package.name == "app"),
+			"{:?}",
+			scope.metadata.packages
+		);
+		assert!(scope.excluded.contains(&root.join("dist")));
+		assert!(scope.excluded.contains(&root.join(".leptoskit")));
+		assert_eq!(
+			excluded_dirs(root, &scope.metadata, &root.join("dist")),
+			scope.excluded
+		);
+		assert!(scope.excluded.contains(
+			&crate::native::host_dir(root, crate::native::Target::Android).join("build")
+		));
+
+		watch_roots(&mut watcher, &scope).unwrap();
+		assert!(!heard.config_changed.load(Ordering::Relaxed));
+		assert!(!heard.tables_changed.load(Ordering::Relaxed));
+	}
+
+	#[test]
+	fn a_terminal_build_refuses_the_flags_meant_for_other_platforms() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let mut config = LeptoskitConfig::default();
+		assert!(!terminal_only(&config, root, &[], false, None, &[], false).unwrap());
+		assert!(!terminal_only(&config, root, &[Platform::Web], false, None, &[], false).unwrap());
+
+		config.app.default_platform = Platform::Tui;
+		for (open, port, devices, studio) in [
+			(true, None, Vec::new(), false),
+			(false, Some(4000), Vec::new(), false),
+			(false, None, vec!["simulator".to_owned()], false),
+			(false, None, Vec::new(), true),
+		] {
+			let error = terminal_only(&config, root, &[], open, port, &devices, studio)
+				.unwrap_err()
+				.to_string();
+			assert!(
+				error.contains("the terminal app runs in this terminal alone"),
+				"{error}"
+			);
+		}
+	}
+
+	#[test]
+	fn skipped_platforms_are_reported_with_their_reason() {
+		report_skipped(&native::Selection {
+			web: true,
+			extension: false,
+			native: Vec::new(),
+			skipped: vec![
+				(Platform::Windows, "not here".to_owned()),
+				(Platform::Linux, "no GTK".to_owned()),
+			],
+		});
+		report_skipped(&native::Selection {
+			web: true,
+			..native::Selection::default()
+		});
+	}
+
+	#[test]
+	fn the_app_server_needs_a_binary_when_the_render_mode_needs_one() {
+		let mut config = LeptoskitConfig::default();
+		config.app.name = "app".into();
+		config.app.render = leptoskit_config::RenderMode::Ssr;
+		let output = crate::build::BuildOutput {
+			out_dir: camino::Utf8PathBuf::from("/tmp/dist"),
+			client: None,
+			server_binary: None,
+		};
+		let address: SocketAddr = "127.0.0.1:0".parse().unwrap();
+		let error = start_app_server(&config, &output, address, &[]).unwrap_err();
+		assert!(error.to_string().contains("built none"), "{error}");
+	}
+
+	#[test]
+	fn stopping_a_child_reaps_it_and_a_finished_child_is_fine() {
+		let mut child = Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+			.args(if cfg!(windows) {
+				["/C", "ping -n 30 127.0.0.1"]
+			} else {
+				["-c", "sleep 30"]
+			})
+			.spawn()
+			.unwrap();
+		stop(&mut child);
+		assert!(child.try_wait().unwrap().is_some(), "the child was reaped");
+
+		let mut finished = Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+			.args(if cfg!(windows) {
+				["/C", "exit 0"]
+			} else {
+				["-c", "exit 0"]
+			})
+			.spawn()
+			.unwrap();
+		stop(&mut finished);
+		assert!(finished.try_wait().unwrap().is_some());
+	}
+
+	#[test]
+	fn a_web_server_reports_its_url_and_stops_its_child() {
+		let mut web = Web {
+			config: LeptoskitConfig::default(),
+			address: "127.0.0.1:4810".parse().unwrap(),
+			runs_app_server: false,
+			app_server: None,
+			env: Vec::new(),
+		};
+		assert_eq!(web.url(), "http://127.0.0.1:4810");
+		web.stop_app_server();
+
+		let mut running = Web {
+			config: LeptoskitConfig::default(),
+			address: "127.0.0.1:4811".parse().unwrap(),
+			runs_app_server: true,
+			env: vec![("DATABASE_URL".into(), "sqlite::memory:".into())],
+			app_server: Some(
+				Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+					.args(if cfg!(windows) {
+						["/C", "ping -n 30 127.0.0.1"]
+					} else {
+						["-c", "sleep 30"]
+					})
+					.spawn()
+					.unwrap(),
+			),
+		};
+		running.stop_app_server();
+		assert!(running.app_server.is_none());
+		assert_eq!(running.env.len(), 1);
+
+		// Dropping the web half also reaps the app server it started.
+		let created = Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+			.args(if cfg!(windows) {
+				["/C", "ping -n 30 127.0.0.1"]
+			} else {
+				["-c", "sleep 30"]
+			})
+			.spawn()
+			.unwrap();
+		let doomed = Web {
+			config: LeptoskitConfig::default(),
+			address: "127.0.0.1:4812".parse().unwrap(),
+			runs_app_server: true,
+			env: Vec::new(),
+			app_server: Some(created),
+		};
+		drop(doomed);
+	}
+
+	#[test]
+	fn watching_starts_the_dev_loop_and_stops_without_a_browser() {
+		let (root, config) = workspace();
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let watching = watch(&config, root.path(), &runtime, false, None, None).unwrap();
+		drop(watching);
+	}
+
+	fn workspace() -> (tempfile::TempDir, LeptoskitConfig) {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+		)
+		.unwrap();
+		std::fs::create_dir_all(root.join("app/src")).unwrap();
+		std::fs::write(
+			root.join("app/Cargo.toml"),
+			"[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.unwrap();
+		std::fs::write(root.join("app/src/lib.rs"), "").unwrap();
+		std::fs::write(
+			root.join("leptoskit.toml"),
+			"schema_version = 0\n\n[app]\nname = \"app\"\nversion = \"0.1.0\"\n",
+		)
+		.unwrap();
+		let config = LeptoskitConfig::load_from(root).unwrap();
+		(temporary, config)
+	}
+
+	fn event_channel() -> (
+		mpsc::Sender<Wake>,
+		mpsc::Receiver<Wake>,
+		notify::RecommendedWatcher,
+	) {
+		let (events, received) = mpsc::channel();
+		let sender = events.clone();
+		let watcher = notify::recommended_watcher(|_| {}).unwrap();
+		(sender, received, watcher)
+	}
+
+	fn started() -> Started {
+		Started {
+			web: None,
+			_studio: None,
+			database: None,
+			extension: None,
+			native: None,
+			_devtools: None,
+		}
+	}
+
+	#[test]
+	fn the_rebuild_loop_absorbs_bursts_and_stops_on_the_signal() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let (events, received, watcher) = event_channel();
+		events.send(Wake::Changed).unwrap();
+		events.send(Wake::Changed).unwrap();
+		events.send(Wake::Stop).unwrap();
+		let watching = Watching {
+			_watcher: watcher,
+			events: received,
+			heard: Heard {
+				config_changed: Arc::new(AtomicBool::new(false)),
+				tables_changed: Arc::new(AtomicBool::new(false)),
+				branch: BranchWatch::new(false, root),
+			},
+		};
+		rebuild(started(), &watching);
+	}
+
+	#[test]
+	fn the_rebuild_loop_waits_out_the_debounce_and_rebuilds() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let (events, received, watcher) = event_channel();
+		let sender = events.clone();
+		let handle = std::thread::spawn(move || {
+			sender.send(Wake::Changed).unwrap();
+			std::thread::sleep(REBUILD_DEBOUNCE + std::time::Duration::from_millis(250));
+			sender.send(Wake::Stop).unwrap();
+		});
+		let watching = Watching {
+			_watcher: watcher,
+			events: received,
+			heard: Heard {
+				config_changed: Arc::new(AtomicBool::new(false)),
+				tables_changed: Arc::new(AtomicBool::new(false)),
+				branch: BranchWatch::new(false, root),
+			},
+		};
+		rebuild(started(), &watching);
+		handle.join().unwrap();
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn the_app_server_starts_from_the_binary_a_build_produced() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let binary = root.join("server");
+		std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+		use std::os::unix::fs::PermissionsExt as _;
+		std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+		let config = LeptoskitConfig::default();
+		let output = crate::build::BuildOutput {
+			out_dir: camino::Utf8PathBuf::from_path_buf(root.join("dist")).unwrap(),
+			client: None,
+			server_binary: Some(binary),
+		};
+		let mut child = start_app_server(
+			&config,
+			&output,
+			"127.0.0.1:0".parse().unwrap(),
+			&[("DATABASE_URL".into(), "sqlite::memory:".into())],
+		)
+		.unwrap();
+		assert!(child.wait().unwrap().success());
+	}
+
+	#[test]
+	fn the_development_database_starts_with_the_dev_loop() {
+		let temporary = tempfile::tempdir().unwrap();
+		let config: LeptoskitConfig = toml::from_str(
+			"[app]\nname = \"app\"\nversion = \"0.1.0\"\n\n[db]\ndialect = \"sqlite\"\nwatch = \
+			 \"push\"\n",
+		)
+		.unwrap();
+		let database = start_database(&config, temporary.path()).unwrap();
+		assert!(database.is_some());
+
+		let none = start_database(&LeptoskitConfig::default(), temporary.path()).unwrap();
+		assert!(none.is_none());
+	}
 }
