@@ -429,7 +429,7 @@ mod tests {
 			let due = wait_until(std::time::Instant::now() + Duration::from_secs(1), &timers);
 			assert_eq!(due, [CallId(7)]);
 			assert!(!timers.contains(CallId(7)));
-			assert!(timers.take_due().is_empty());
+			assert_eq!(timers.take_due(), [] as [CallId; 0]);
 			assert!(timers.is_empty());
 		}
 
@@ -442,7 +442,7 @@ mod tests {
 			assert!(timers.cancel(CallId(1)));
 			assert!(!timers.cancel(CallId(1)));
 			std::thread::sleep(Duration::from_millis(40));
-			assert!(timers.take_due().is_empty());
+			assert_eq!(timers.take_due(), [] as [CallId; 0]);
 			assert!(timers.is_empty());
 		}
 
@@ -454,7 +454,7 @@ mod tests {
 				.unwrap();
 			std::thread::sleep(Duration::from_millis(20));
 			timers.close();
-			assert!(timers.take_due().is_empty());
+			assert_eq!(timers.take_due(), [] as [CallId; 0]);
 			assert_eq!(timers.next_deadline(), None);
 			assert!(!timers.contains(CallId(1)));
 			assert_eq!(
