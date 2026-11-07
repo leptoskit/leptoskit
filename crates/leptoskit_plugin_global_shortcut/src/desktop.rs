@@ -166,6 +166,14 @@ fn wayland_session(wayland_display: bool, xdg_session_type: Option<&str>) -> boo
 	wayland_display || xdg_session_type.is_some_and(|value| value == "wayland")
 }
 
+fn require_x11_session(wayland_display: bool, xdg_session_type: Option<&str>) -> Result<(), Error> {
+	if wayland_session(wayland_display, xdg_session_type) {
+		Err(Error::Unavailable)
+	} else {
+		Ok(())
+	}
+}
+
 /// One process-wide backend owner, confined to its creating event-loop thread.
 ///
 /// This crate exclusively owns `global-hotkey`'s process-wide event callback.
@@ -197,12 +205,10 @@ impl GlobalShortcuts {
 		}
 
 		#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-		if wayland_session(
+		require_x11_session(
 			std::env::var_os("WAYLAND_DISPLAY").is_some(),
 			std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
-		) {
-			return Err(Error::Unavailable);
-		}
+		)?;
 		let exclusive = Exclusive::acquire()?;
 		let events = Arc::new(Events {
 			queue: Mutex::new(Queue::default()),
@@ -691,5 +697,28 @@ mod tests {
 		assert!(wayland_session(true, None));
 		assert!(wayland_session(false, Some("wayland")));
 		assert!(wayland_session(true, Some("wayland")));
+		assert!(require_x11_session(false, Some("x11")).is_ok());
+		assert!(matches!(
+			require_x11_session(true, None),
+			Err(Error::Unavailable)
+		));
+		assert!(matches!(
+			require_x11_session(false, Some("wayland")),
+			Err(Error::Unavailable)
+		));
+	}
+
+	#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+	#[test]
+	fn with_waker_probes_the_session_before_claiming_the_owner_slot() {
+		// Exercises the live WAYLAND_DISPLAY / XDG_SESSION_TYPE probe. On X11
+		// (this agent) construction may still fail natively; it must not be
+		// Unavailable from a Wayland false positive.
+		match GlobalShortcuts::with_waker(|| {}) {
+			Ok(owner) => drop(owner),
+			Err(Error::Native(_)) | Err(Error::AlreadyOwned) => {}
+			Err(Error::Unavailable) => panic!("X11 session treated as Wayland"),
+			Err(error) => panic!("unexpected {error:?}"),
+		}
 	}
 }
