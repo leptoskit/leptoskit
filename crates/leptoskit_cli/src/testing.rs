@@ -698,4 +698,351 @@ mod tests {
 	fn companion_wait() {
 		std::thread::sleep(Duration::from_secs(30));
 	}
+
+	#[test]
+	#[ignore = "subprocess fixture: a_failing_command_is_an_error_naming_the_logs runs it"]
+	fn companion_fail() {
+		panic!("fixture failure");
+	}
+
+	/// Arguments that make the current test binary run one ignored fixture,
+	/// so command steps are real processes without depending on a shell.
+	fn fixture(name: &str) -> Vec<OsString> {
+		vec![
+			OsString::from("--ignored"),
+			OsString::from("--exact"),
+			OsString::from(format!("testing::tests::{name}")),
+			OsString::from("--test-threads=1"),
+		]
+	}
+
+	fn arguments(names: &[&str]) -> Vec<OsString> {
+		names.iter().flat_map(|name| fixture(name)).collect()
+	}
+
+	fn host_args(artifacts: &Path, names: &[&str]) -> RunArgs {
+		RunArgs {
+			binary: std::env::current_exe().unwrap(),
+			platform: TestPlatform::Host,
+			device: None,
+			avd: None,
+			timeout: 60,
+			artifacts: artifacts.to_path_buf(),
+			args: arguments(names),
+		}
+	}
+
+	fn report(directory: &Path) -> serde_json::Value {
+		serde_json::from_slice(&fs::read(directory.join("report.json")).unwrap()).unwrap()
+	}
+
+	#[test]
+	fn a_successful_command_records_its_step_and_keeps_its_logs() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut run = Run::new(parent.path(), 60, "host".to_owned(), None).unwrap();
+		let exe = std::env::current_exe().unwrap();
+		let stdout = run
+			.command("test", Command::new(exe).args(fixture("companion_exit")))
+			.unwrap();
+
+		assert!(stdout.is_file());
+		assert_eq!(run.report.steps.len(), 1);
+		let step = &run.report.steps[0];
+		assert_eq!(step.name, "test");
+		assert_eq!(step.exit_code, Some(0));
+		assert!(!step.timed_out);
+		assert!(run.directory.join(&step.stderr).is_file());
+		assert!(step.stdout.starts_with("00-test.stdout.log"));
+
+		let directory = run.directory.clone();
+		run.finish(Ok(())).unwrap();
+		let report = report(&directory);
+		assert_eq!(report["schema_version"], 1);
+		assert_eq!(report["passed"], true);
+		assert_eq!(report["platform"], "host");
+		assert!(report["error"].is_null());
+		assert_eq!(report["steps"][0]["name"], "test");
+		assert_eq!(report["steps"][0]["exit_code"], 0);
+	}
+
+	#[test]
+	fn a_failing_command_is_an_error_naming_the_logs() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut run = Run::new(parent.path(), 60, "host".to_owned(), None).unwrap();
+		let exe = std::env::current_exe().unwrap();
+		let error = run
+			.command("test", Command::new(exe).args(fixture("companion_fail")))
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("test failed"), "{error}");
+		assert!(error.contains("logs:"), "{error}");
+		assert_ne!(run.report.steps[0].exit_code, Some(0));
+		assert!(run.report.steps[0].stderr.ends_with(".stderr.log"));
+
+		let error = run.finish(Err(anyhow::anyhow!("boom"))).unwrap_err();
+		assert_eq!(error.to_string(), "boom");
+	}
+
+	#[test]
+	fn a_command_that_cannot_start_names_the_tool_to_install() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut run = Run::new(parent.path(), 60, "host".to_owned(), None).unwrap();
+		let error = run
+			.command(
+				"missing",
+				&mut Command::new("/nonexistent/leptoskit-test-tool"),
+			)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("starting missing"), "{error}");
+		assert!(
+			error.contains("check that its tool is installed"),
+			"{error}"
+		);
+		assert!(run.report.steps.is_empty());
+	}
+
+	#[test]
+	fn a_timed_out_command_is_terminated_and_reported() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut run = Run::new(
+			parent.path(),
+			1,
+			"host".to_owned(),
+			Some("emulator-1".into()),
+		)
+		.unwrap();
+		let exe = std::env::current_exe().unwrap();
+		let error = run
+			.command_observing(
+				"slow",
+				Command::new(exe).args(fixture("companion_wait")),
+				None,
+			)
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("slow exceeded 1 seconds"), "{error}");
+		assert!(run.report.steps[0].timed_out);
+		assert_ne!(run.report.steps[0].exit_code, Some(0));
+	}
+
+	#[test]
+	fn a_running_companion_does_not_fail_the_command() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut run = Run::new(parent.path(), 60, "host".to_owned(), None).unwrap();
+		let exe = std::env::current_exe().unwrap();
+		let mut companion = Command::new(&exe)
+			.args(fixture("companion_wait"))
+			.stdout(Stdio::null())
+			.spawn()
+			.unwrap();
+		let result = run.command_observing(
+			"quick",
+			Command::new(exe).args(fixture("companion_exit")),
+			Some(&mut companion),
+		);
+
+		let _ = companion.kill();
+		let _ = companion.wait();
+		result.unwrap();
+		assert_eq!(run.report.steps[0].exit_code, Some(0));
+	}
+
+	#[test]
+	fn a_host_binary_runs_with_its_literal_arguments() {
+		let parent = tempfile::tempdir().unwrap();
+		let artifacts = parent.path().join("artifacts");
+		run_binary(&host_args(&artifacts, &["companion_exit"])).unwrap();
+
+		let runs = fs::read_dir(&artifacts).unwrap().count();
+		assert_eq!(runs, 1, "each run gets its own artifact directory");
+		let directory = fs::read_dir(&artifacts)
+			.unwrap()
+			.next()
+			.unwrap()
+			.unwrap()
+			.path();
+		let report: serde_json::Value =
+			serde_json::from_slice(&fs::read(directory.join("report.json")).unwrap()).unwrap();
+		assert_eq!(report["passed"], true);
+		assert_eq!(report["platform"], "host");
+		assert_eq!(report["steps"][0]["name"], "test");
+	}
+
+	#[test]
+	fn a_failing_host_binary_is_reported_as_a_failed_run() {
+		let parent = tempfile::tempdir().unwrap();
+		let artifacts = parent.path().join("artifacts");
+		let error = run_binary(&host_args(&artifacts, &["companion_fail"]))
+			.unwrap_err()
+			.to_string();
+
+		assert!(error.contains("test failed"), "{error}");
+		let directory = fs::read_dir(&artifacts)
+			.unwrap()
+			.next()
+			.unwrap()
+			.unwrap()
+			.path();
+		let report: serde_json::Value =
+			serde_json::from_slice(&fs::read(directory.join("report.json")).unwrap()).unwrap();
+		assert_eq!(report["passed"], false);
+		assert!(report["error"].as_str().unwrap().contains("test failed"));
+	}
+
+	#[test]
+	fn a_missing_or_directory_binary_is_refused() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut args = host_args(&parent.path().join("artifacts"), &[]);
+		args.binary = parent.path().join("missing");
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(error.contains("test executable does not exist"), "{error}");
+
+		args.binary = parent.path().to_path_buf();
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(error.contains("--binary must be a file"), "{error}");
+	}
+
+	#[test]
+	fn host_runs_refuse_device_selection() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut args = host_args(&parent.path().join("artifacts"), &["companion_exit"]);
+		args.device = Some("emulator-5554".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(
+			error.contains("--device and --avd require a mobile platform"),
+			"{error}"
+		);
+
+		args.device = None;
+		args.avd = Some("pixel".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(
+			error.contains("--device and --avd require a mobile platform"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn device_identifiers_are_validated_before_use() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut args = host_args(&parent.path().join("artifacts"), &[]);
+		let error = device(&args).unwrap_err().to_string();
+		assert!(error.contains("--device is required"), "{error}");
+
+		for invalid in ["", "-oops", "pixel 7"] {
+			args.device = Some(invalid.into());
+			let error = device(&args).unwrap_err().to_string();
+			assert!(error.contains("invalid device identifier"), "{error}");
+		}
+
+		args.device = Some("emulator-5554".into());
+		assert_eq!(device(&args).unwrap(), "emulator-5554");
+	}
+
+	#[test]
+	fn mobile_runs_require_a_device_and_android_emulator_flags() {
+		let parent = tempfile::tempdir().unwrap();
+		let artifacts = parent.path().join("artifacts");
+		let mut args = host_args(&artifacts, &[]);
+		args.platform = TestPlatform::Android;
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(error.contains("--device is required"), "{error}");
+
+		args.device = Some("R58M1234".into());
+		args.avd = Some("pixel".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(
+			error.contains("--avd requires --device emulator-PORT"),
+			"{error}"
+		);
+
+		args.device = Some("emulator-5555".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(error.contains("port must be even"), "{error}");
+
+		args.device = Some("emulator-6000".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		assert!(error.contains("between 5554 and 5682"), "{error}");
+
+		args.platform = TestPlatform::Ios;
+		args.device = Some("some-udid".into());
+		let error = run_binary(&args).unwrap_err().to_string();
+		if cfg!(target_os = "macos") {
+			assert!(
+				error.contains("--avd is only supported for Android"),
+				"{error}"
+			);
+		} else {
+			assert!(error.contains("macOS host"), "{error}");
+		}
+	}
+
+	#[test]
+	fn ios_requires_a_selected_simulator() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut args = host_args(&parent.path().join("artifacts"), &[]);
+		args.platform = TestPlatform::Ios;
+		let error = run_binary(&args).unwrap_err().to_string();
+		if cfg!(target_os = "macos") {
+			assert!(error.contains("--device is required"), "{error}");
+		} else {
+			assert!(error.contains("macOS host"), "{error}");
+		}
+	}
+
+	#[test]
+	fn cleanup_errors_do_not_hide_the_primary_failure() {
+		assert!(combine(Ok(()), Ok(())).is_ok());
+		assert_eq!(
+			combine(Err(anyhow::anyhow!("run")), Ok(()))
+				.unwrap_err()
+				.to_string(),
+			"run"
+		);
+		assert_eq!(
+			combine(Ok(()), Err(anyhow::anyhow!("cleanup")))
+				.unwrap_err()
+				.to_string(),
+			"cleanup"
+		);
+		let error =
+			combine(Err(anyhow::anyhow!("run")), Err(anyhow::anyhow!("cleanup"))).unwrap_err();
+		let chain = format!("{error:#}");
+		assert!(chain.contains("run"), "{chain}");
+		assert!(chain.contains("cleanup also failed: cleanup"), "{chain}");
+	}
+
+	#[test]
+	fn a_missing_native_suite_is_an_error_naming_the_file() {
+		let parent = tempfile::tempdir().unwrap();
+		let error = run(TestCommand::Native {
+			suite: parent.path().join("missing.json"),
+		})
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("reading"), "{error}");
+		assert!(error.contains("missing.json"), "{error}");
+	}
+
+	#[test]
+	fn a_malformed_native_suite_is_refused() {
+		let parent = tempfile::tempdir().unwrap();
+		let suite = parent.path().join("suite.json");
+		fs::write(&suite, "not json").unwrap();
+		let error = run(TestCommand::Native { suite }).unwrap_err().to_string();
+		assert_ne!(error, "");
+	}
+
+	#[test]
+	fn run_commands_dispatch_to_the_binary_runner() {
+		let parent = tempfile::tempdir().unwrap();
+		let mut args = host_args(&parent.path().join("artifacts"), &["companion_exit"]);
+		args.binary = parent.path().join("missing");
+		let error = run(TestCommand::Run(args)).unwrap_err().to_string();
+		assert!(error.contains("test executable does not exist"), "{error}");
+	}
 }

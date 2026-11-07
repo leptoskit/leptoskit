@@ -72,7 +72,7 @@ registry_username = 'team'
 
 struct Fixture {
 	data: TempDir,
-	_root: TempDir,
+	root: TempDir,
 	store: Store,
 	#[cfg(unix)]
 	service: Service,
@@ -102,12 +102,17 @@ impl Fixture {
 
 		Self {
 			data,
-			_root: root,
+			root,
 			store,
 			#[cfg(unix)]
 			service,
 			project,
 		}
+	}
+
+	#[cfg(unix)]
+	fn root(&self) -> PathBuf {
+		self.root.path().to_path_buf()
 	}
 
 	#[cfg(unix)]
@@ -649,6 +654,321 @@ async fn hosted_bindings_and_state_reach_the_child() {
 			"missing {key}"
 		);
 	}
+}
+
+#[test]
+fn every_action_maps_to_its_deployment_arguments() {
+	let owned = |values: &[&str]| {
+		values
+			.iter()
+			.map(|value| (*value).to_owned())
+			.collect::<Vec<_>>()
+	};
+
+	assert_eq!(arguments(&Action::Plan), owned(&["infra", "plan"]));
+	assert_eq!(
+		arguments(&Action::Apply {
+			plan_id: "plan-1".into()
+		}),
+		owned(&["infra", "apply"])
+	);
+	assert_eq!(
+		arguments(&Action::Deploy {
+			version: "release-001".into(),
+			setup: false,
+			maintenance: false,
+		}),
+		owned(&["deploy", "--version", "release-001"])
+	);
+	assert_eq!(
+		arguments(&Action::Deploy {
+			version: "release-001".into(),
+			setup: true,
+			maintenance: true,
+		}),
+		owned(&[
+			"deploy",
+			"--version",
+			"release-001",
+			"--setup",
+			"--maintenance",
+		])
+	);
+	assert_eq!(
+		arguments(&Action::Rollback {
+			version: "release-000".into()
+		}),
+		owned(&["deploy", "--rollback", "release-000"])
+	);
+	assert_eq!(arguments(&Action::Status), owned(&["infra", "status"]));
+	assert_eq!(
+		arguments(&Action::Backup),
+		owned(&["infra", "backups", "verify"])
+	);
+}
+
+#[test]
+fn only_hexadecimal_commit_versions_are_checked_out() {
+	assert!(git_commit(&"a".repeat(40)));
+	assert!(git_commit(&"0123456789abcdef".repeat(4)));
+	assert!(!git_commit("release-001"));
+	assert!(!git_commit(&"a".repeat(39)));
+	assert!(!git_commit(&"a".repeat(41)));
+	assert!(!git_commit(&"z".repeat(40)));
+}
+
+/// A repository whose `leptoskit.toml` is committed as `config`, plus the
+/// commit that holds it.
+#[cfg(unix)]
+fn repository(config: &str) -> (TempDir, String) {
+	let root = tempfile::tempdir().unwrap();
+	std::fs::write(root.path().join("leptoskit.toml"), config).unwrap();
+	let run = |args: &[&str]| {
+		let status = crate::git::command(root.path())
+			.args(args)
+			.status()
+			.unwrap();
+		assert!(status.success(), "git {args:?} failed");
+	};
+	run(&["init", "--quiet"]);
+	run(&["add", "--all"]);
+	run(&[
+		"-c",
+		"user.name=Fixture",
+		"-c",
+		"user.email=fixture@example.com",
+		"commit",
+		"--quiet",
+		"-m",
+		"fixture",
+	]);
+	let output = crate::git::command(root.path())
+		.args(["rev-parse", "HEAD"])
+		.output()
+		.unwrap();
+	assert!(output.status.success());
+	let commit = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+	(root, commit)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_matching_commit_gets_an_isolated_checkout_with_shared_infrastructure() {
+	let (root, commit) = repository(&config(false));
+	let fixture = Fixture::with_root(root);
+	let operation = fixture.start(Action::Deploy {
+		version: commit,
+		setup: false,
+		maintenance: false,
+	});
+	let source = checkout(fixture.data.path(), &fixture.project, &operation)
+		.await
+		.unwrap()
+		.expect("a commit-shaped version gets its own checkout");
+
+	assert_eq!(
+		source.root,
+		fixture.data.path().join("workspaces").join(&operation.id)
+	);
+	assert_eq!(source.id, fixture.project.id);
+	assert!(source.root.join("leptoskit.toml").is_file());
+	let shared = fixture.root().join("infra").join("demo");
+	let link = source.root.join("infra").join("demo");
+	assert!(
+		link.symlink_metadata().unwrap().file_type().is_symlink(),
+		"the checkout's infra must be a symlink to the trusted copy"
+	);
+	assert_eq!(
+		std::fs::canonicalize(&link).unwrap(),
+		std::fs::canonicalize(&shared).unwrap()
+	);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_commit_with_a_different_policy_is_refused() {
+	let (root, commit) = repository(&config(false).replace("app.example.com", "other.test"));
+	// The registered repository still holds the trusted policy.
+	std::fs::write(root.path().join("leptoskit.toml"), config(false)).unwrap();
+	let fixture = Fixture::with_root(root);
+	let operation = fixture.start(Action::Deploy {
+		version: commit,
+		setup: false,
+		maintenance: false,
+	});
+	let error = checkout(fixture.data.path(), &fixture.project, &operation)
+		.await
+		.unwrap_err()
+		.to_string();
+
+	assert!(
+		error.contains("differs from the registered policy"),
+		"{error}"
+	);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_commit_without_managed_infrastructure_is_refused() {
+	let (root, commit) = repository("");
+	let fixture = Fixture::with_root(root);
+	let operation = fixture.start(Action::Deploy {
+		version: commit,
+		setup: false,
+		maintenance: false,
+	});
+	let error = checkout(fixture.data.path(), &fixture.project, &operation)
+		.await
+		.unwrap_err()
+		.to_string();
+
+	assert!(error.contains("no managed infrastructure"), "{error}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_workspace_that_cannot_be_created_is_refused() {
+	let (root, commit) = repository(&config(false));
+	let fixture = Fixture::with_root(root);
+	let operation = fixture.start(Action::Deploy {
+		version: commit,
+		setup: false,
+		maintenance: false,
+	});
+	let workspace = fixture.data.path().join("workspaces").join(&operation.id);
+	std::fs::create_dir_all(&workspace).unwrap();
+	std::fs::write(workspace.join("keep.txt"), "occupied").unwrap();
+
+	let error = checkout(fixture.data.path(), &fixture.project, &operation)
+		.await
+		.unwrap_err()
+		.to_string();
+
+	assert!(
+		error.contains("could not create an isolated source checkout"),
+		"{error}"
+	);
+	assert_eq!(
+		std::fs::read_to_string(workspace.join("keep.txt")).unwrap(),
+		"occupied"
+	);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_workspace_left_by_a_previous_run_is_removed() {
+	let root = tempfile::tempdir().unwrap();
+	std::fs::write(root.path().join("leptoskit.toml"), config(false)).unwrap();
+	assert!(
+		crate::git::command(root.path())
+			.args(["init", "--quiet"])
+			.status()
+			.unwrap()
+			.success()
+	);
+	assert!(
+		crate::git::command(root.path())
+			.args([
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"user.email=fixture@example.com",
+				"commit",
+				"--allow-empty",
+				"--quiet",
+				"-m",
+				"fixture",
+			])
+			.status()
+			.unwrap()
+			.success()
+	);
+	let fixture = Fixture::with_root(root);
+	let operation = fixture.start(Action::Status);
+	let workspace = fixture.data.path().join("workspaces").join(&operation.id);
+	assert!(
+		crate::git::command(&fixture.root())
+			.args(["worktree", "add", "--detach"])
+			.arg(&workspace)
+			.arg("HEAD")
+			.status()
+			.unwrap()
+			.success()
+	);
+	assert!(workspace.exists());
+	let cli = FakeCli::new("exit 0\n");
+	let result = fixture
+		.runner(&cli.path)
+		.run(fixture.project.clone(), operation.clone())
+		.await;
+
+	assert!(result.succeeded);
+	assert!(
+		!workspace.exists(),
+		"the operation's private workspace must be removed afterwards"
+	);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_plan_that_cannot_be_inspected_is_a_worker_failure() {
+	let fixture = Fixture::new(false);
+	std::fs::create_dir_all(fixture.root().join("infra").join("demo")).unwrap();
+	let cli = FakeCli::new("exit 0\n");
+	let operation = fixture.start(Action::Plan);
+	let result = fixture
+		.runner(&cli.path)
+		.run(fixture.project.clone(), operation.clone())
+		.await;
+
+	assert!(!result.succeeded);
+	assert_eq!(result.details["code"], "worker_failed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_plan_without_infrastructure_is_a_worker_failure() {
+	let root = tempfile::tempdir().unwrap();
+	std::fs::write(root.path().join("leptoskit.toml"), "").unwrap();
+	let fixture = Fixture::with_root(root);
+	let cli = FakeCli::new("exit 0\n");
+	let operation = fixture.start(Action::Plan);
+	let result = fixture
+		.runner(&cli.path)
+		.run(fixture.project.clone(), operation.clone())
+		.await;
+
+	assert!(!result.succeeded);
+	assert_eq!(result.details["code"], "worker_failed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_otlp_plugin_does_not_need_a_managed_write_key() {
+	let root = tempfile::tempdir().unwrap();
+	let mut text = config(true);
+	text.push_str("otlp_endpoint = 'http://collector.example.com'\n");
+	std::fs::write(root.path().join("leptoskit.toml"), text).unwrap();
+	let fixture = Fixture::with_root(root);
+	let cli = FakeCli::new("exit 0\n");
+	let operation = fixture.start(Action::Status);
+	let result = fixture
+		.runner(&cli.path)
+		.run(fixture.project.clone(), operation.clone())
+		.await;
+
+	assert!(result.succeeded);
+	let environment = cli.environment();
+	assert_eq!(
+		environment
+			.get("LEPTOSKIT_ANALYTICS_READ_KEY")
+			.map(String::len),
+		Some(64)
+	);
+	assert!(
+		!environment.contains_key("LEPTOSKIT_ANALYTICS_WRITE_KEY"),
+		"an explicit OTLP endpoint owns the write path"
+	);
 }
 
 #[cfg(unix)]
