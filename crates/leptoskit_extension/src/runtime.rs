@@ -211,7 +211,7 @@ impl Port {
 		match &self.kind {
 			#[cfg(target_arch = "wasm32")]
 			PortKind::Js(port) => {
-				let on_message = js::property(port, "onMessage")?;
+				let on_message = js::object_property(port, "onMessage")?;
 				let handler = handler.clone();
 				js::listen_one(&on_message, move |message| {
 					if let Ok(value) = js::from_js::<Value>(&message)
@@ -249,7 +249,7 @@ impl Port {
 		match &self.kind {
 			#[cfg(target_arch = "wasm32")]
 			PortKind::Js(port) => {
-				let on_disconnect = js::property(port, "onDisconnect")?;
+				let on_disconnect = js::object_property(port, "onDisconnect")?;
 				let handler = handler.clone();
 				js::listen_one(&on_disconnect, move |_| (handler.borrow_mut())())
 			}

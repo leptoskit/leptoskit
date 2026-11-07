@@ -216,7 +216,7 @@ mod imp {
 	}
 
 	/// A property on a JavaScript object.
-	pub(crate) fn property(this: &JsValue, name: &str) -> Result<JsValue, Error> {
+	pub(crate) fn object_property(this: &JsValue, name: &str) -> Result<JsValue, Error> {
 		Reflect::get(this, &JsValue::from_str(name))
 			.map_err(|error| Error::Browser(message(&error)))
 	}

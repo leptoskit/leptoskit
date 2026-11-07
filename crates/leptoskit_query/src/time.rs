@@ -18,6 +18,11 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+// Cargo can unify both features in a browser build. The browser timer wins,
+// while the guest feature still enables its optional bridge dependency.
+#[cfg(all(target_arch = "wasm32", feature = "guest", feature = "browser"))]
+use leptoskit_bridge as _;
+
 /// A boxed future that can be sent across threads.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

@@ -39,7 +39,7 @@ impl HomeWidgets {
 	}
 
 	/// Reports whether any instance of `kind` is pinned, when the platform can
-	/// tell. WidgetKit returns [`Installed::Unknown`].
+	/// tell. `WidgetKit` returns [`Installed::Unknown`].
 	pub async fn installed(self, kind: &Kind) -> Result<Installed, Error> {
 		Installed::decode(&self.0.call(INSTALLED, &kind.encode()?)?.await?)
 	}
