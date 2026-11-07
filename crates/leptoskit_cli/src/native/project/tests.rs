@@ -667,3 +667,65 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 			.exists()
 	);
 }
+
+#[test]
+fn android_declares_selected_file_providers_and_copies_their_paths() {
+	let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+		"leptoskit-android-file-providers-{}",
+		std::process::id()
+	));
+	let mut registry = metadata_registry(
+		&root,
+		&[serde_json::json!({
+			"name": "share", "rust-type": "Plugin",
+			"android-file-providers": [{
+				"class": "dev.example.ShareProvider",
+				"authority-suffix": "example.share",
+				"paths": "example_paths"
+			}]
+		})],
+	);
+	for source in [
+		"android/NativePlugin.kt",
+		"android/proguard-rules.pro",
+		"mobile/LeptosKitView.kt",
+		"android/NativePermissionHost.kt",
+		"android/NativeActivityResultHost.kt",
+		"mobile/NativeRustWorker.kt",
+		"mobile/NativeReleases.kt",
+		"mobile/LeptosKitApplicationView.kt",
+	] {
+		write(&registry.bridge.join(source), "// fixture").unwrap();
+	}
+	write(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
+	)
+	.unwrap();
+	let plugin = root.join("plugin");
+	let paths = "<paths><cache-path name=\"share\" path=\"share/\"/></paths>";
+	write(&plugin.join("android/res/xml/example_paths.xml"), paths).unwrap();
+	registry.plugins[0].directory = plugin.clone();
+	let config = leptoskit_config::LeptoskitConfig::default();
+	android(&root, &config, &registry, "arm64-v8a").unwrap();
+	assert_eq!(
+		std::fs::read_to_string(root.join(".leptoskit/android/res/xml/example_paths.xml")).unwrap(),
+		paths
+	);
+	let manifest =
+		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
+	assert_eq!(manifest.matches("<provider").count(), 1, "{manifest}");
+	assert!(manifest.contains("android:authorities=\"${applicationId}.example.share\""));
+	assert!(manifest.contains("android:resource=\"@xml/example_paths\""));
+
+	// A paths file that is not a <paths> document is refused.
+	write(
+		&plugin.join("android/res/xml/example_paths.xml"),
+		"<other/>",
+	)
+	.unwrap();
+	assert!(android(&root, &config, &registry, "arm64-v8a").is_err());
+	std::fs::remove_file(plugin.join("android/res/xml/example_paths.xml")).unwrap();
+	assert!(android(&root, &config, &registry, "arm64-v8a").is_err());
+	std::fs::remove_dir_all(root).unwrap();
+}

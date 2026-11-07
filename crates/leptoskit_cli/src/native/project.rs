@@ -285,6 +285,8 @@ fn android_host(
 		}
 	}
 
+	manifest = android_file_providers(registry, &res, &manifest)?;
+
 	// Quest packages the same host for the headset: its manifest says so.
 	if let Some(quest) = quest {
 		manifest = super::quest::manifest(&manifest, quest)?;
@@ -306,6 +308,47 @@ fn android_host(
 		quote(&registry.bridge.join("mobile/app.cpp"))?
 	);
 	write(&dir.join("CMakeLists.txt"), &cmake)
+}
+
+/// Copies each selected plugin's `FileProvider` paths XML into the generated
+/// resources and declares the provider in the manifest.
+fn android_file_providers(registry: &Registry, res: &Path, manifest: &str) -> Result<String> {
+	let mut providers = Vec::new();
+
+	for plugin in &registry.plugins {
+		for provider in &plugin.android_file_providers {
+			let source = plugin
+				.directory
+				.join("android/res/xml")
+				.join(format!("{}.xml", provider.paths));
+			let metadata = std::fs::symlink_metadata(&source)
+				.with_context(|| format!("read file provider paths {}", source.display()))?;
+			anyhow::ensure!(
+				metadata.is_file() && !metadata.file_type().is_symlink(),
+				"file provider paths must be a regular file: {}",
+				source.display()
+			);
+			let xml = std::fs::read_to_string(&source)?;
+			let document = roxmltree::Document::parse(&xml)
+				.with_context(|| format!("invalid file provider paths {}", source.display()))?;
+			anyhow::ensure!(
+				document.root_element().has_tag_name("paths"),
+				"file provider paths root must be <paths>: {}",
+				source.display()
+			);
+			write(
+				&res.join("xml").join(format!("{}.xml", provider.paths)),
+				&xml,
+			)?;
+			providers.push(super::manifest::FileProvider {
+				class: &provider.class,
+				authority_suffix: &provider.authority_suffix,
+				paths: &provider.paths,
+			});
+		}
+	}
+
+	super::manifest::with_file_providers(manifest, &providers)
 }
 
 fn android_dependencies(registry: &Registry) -> String {

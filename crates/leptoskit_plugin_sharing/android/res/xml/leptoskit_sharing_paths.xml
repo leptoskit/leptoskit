@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The sharing plugin's FileProvider serves only the private cache it copies
+     shared files into; app files are never exposed in place. -->
+<paths>
+    <cache-path name="leptoskit_sharing" path="leptoskit-sharing/" />
+</paths>

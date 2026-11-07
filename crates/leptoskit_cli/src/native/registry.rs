@@ -155,6 +155,10 @@ pub struct Plugin {
 	/// Plugin-declared Android `<receiver>` entries merged into the manifest.
 	#[serde(default)]
 	pub android_receivers: Vec<AndroidReceiver>,
+	/// `FileProvider` subclasses the plugin ships, each serving the paths
+	/// XML in the plugin's `android/res/xml` directory.
+	#[serde(default)]
+	pub android_file_providers: Vec<AndroidFileProvider>,
 	/// Exported ArkTS class in `harmonyos/<type>.ts`, constructed by the
 	/// generated HarmonyOS registrant.
 	pub harmonyos_type: Option<String>,
@@ -211,6 +215,18 @@ pub struct AndroidReceiver {
 	pub exported: bool,
 	#[serde(default)]
 	pub actions: Vec<String>,
+}
+
+/// A `FileProvider` the generated manifest declares, unexported and granting
+/// URI permissions only per intent. Its authority is
+/// `${applicationId}.<authority-suffix>`, and `paths` names the plugin's
+/// `android/res/xml/<paths>.xml`, copied into the generated resources.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AndroidFileProvider {
+	pub class: String,
+	pub authority_suffix: String,
+	pub paths: String,
 }
 
 /// A `CocoaPod` the generated iOS Podfile installs, with an optional
@@ -800,6 +816,33 @@ fn validate_android_paths(plugin: &Plugin) -> Result<()> {
 		anyhow::ensure!(
 			action.contains('.') && type_path(action, "."),
 			"invalid fully qualified Android query action"
+		);
+	}
+
+	for provider in &plugin.android_file_providers {
+		anyhow::ensure!(
+			provider.class.contains('.') && type_path(&provider.class, "."),
+			"invalid Android file provider class in plugin {}",
+			plugin.name
+		);
+		anyhow::ensure!(
+			provider.authority_suffix.split('.').all(|segment| {
+				let mut bytes = segment.bytes();
+				bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+					&& bytes.all(|byte| {
+						byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+					})
+			}),
+			"invalid Android file provider authority suffix in plugin {}",
+			plugin.name
+		);
+		let mut paths = provider.paths.bytes();
+		anyhow::ensure!(
+			paths.next().is_some_and(|byte| byte.is_ascii_lowercase())
+				&& paths
+					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+			"invalid Android file provider paths resource in plugin {}",
+			plugin.name
 		);
 	}
 

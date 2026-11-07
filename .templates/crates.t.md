@@ -758,8 +758,9 @@ backend, and secrets never become a guest-selected filesystem path.
 
 Add `{{ plugin_sharing.package.name }}` as a direct dependency and select the `{{ plugin_sharing.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The app supplies the content, the user picks the
-destination, and completion only means the platform finished its API callback.
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The app supplies text, a web URL, or files from its
+own files directory or memory; the user picks the destination, and the reply says which one
+where the platform reports it. It never confirms delivery.
 
 <!-- {/p_sharingSummary} -->
 
