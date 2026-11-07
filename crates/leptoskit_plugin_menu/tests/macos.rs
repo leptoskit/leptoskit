@@ -177,10 +177,10 @@ fn assert_invalid_construction_rejected(application: &objc2_app_kit::NSApplicati
 		)
 		.unwrap(),
 	);
-	assert_eq!(
+	assert!(matches!(
 		macos::ApplicationMenu::attach(flat, application),
 		Err(Error::Unavailable)
-	);
+	));
 	assert_eq!(
 		std::thread::spawn(|| {
 			DesktopMenu::new(Definition::new(vec![Item::Separator]).unwrap()).err()
