@@ -189,6 +189,13 @@ struct Running {
 	credits: Arc<tokio::sync::Semaphore>,
 }
 
+// A cancelled or unwinding session must not detach a stream producer.
+impl Drop for Running {
+	fn drop(&mut self) {
+		self.task.abort();
+	}
+}
+
 /// A mutation or action that finished, and the commit it reached.
 struct Finished {
 	/// An action occupies its slot until the session handles its reply, not
