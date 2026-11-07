@@ -438,6 +438,8 @@ unknown variant `bogus`, expected one of `all`, `done`, `pending`
 
 A dashboard written in TypeScript, a Flutter app, a Python script that reacts to new orders: each wants to know the moment something changes, not to ask every few seconds. Every generated client keeps its one-shot calls and also speaks the live socket the app's own screens use, at `/live` on the same server: a query can be watched, a mutation can be sent over the socket, and a channel can be joined.
 
+Live queries keep a screen current; they do not deliver an event for every write. If a connection falls behind, the server combines pending query changes into the latest values or errors. This applies to the app's web client and the generated clients below. Use durable jobs for work that must run for each recorded event.
+
 ### Publishing a channel
 
 Queries and mutations are published by `#[api]` already. Put `#[api]` above a channel to publish it too, with its join arguments, its messages, and its presence:

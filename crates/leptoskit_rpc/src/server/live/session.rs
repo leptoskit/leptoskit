@@ -40,6 +40,7 @@ use super::hub::Batch;
 use super::hub::Changed;
 use super::hub::Registration;
 use super::hub::ShareKey;
+use super::mailbox;
 use super::run_query;
 use crate::Kind;
 use crate::live::ClientFrame;
@@ -113,7 +114,7 @@ struct Session {
 	member: String,
 	caller: CallerSlot,
 	out: mpsc::Sender<Outbound>,
-	batches: mpsc::UnboundedReceiver<Batch>,
+	batches: mailbox::Receiver,
 	finished: mpsc::UnboundedReceiver<Finished>,
 	acts: mpsc::UnboundedSender<Finished>,
 	/// One permit per action that may run at once.
@@ -239,7 +240,7 @@ impl Live {
 			return;
 		}
 
-		let (events, batches) = mpsc::unbounded_channel();
+		let (events, batches) = mailbox::channel();
 		let (acts, finished) = mpsc::unbounded_channel();
 		let (stream_out, stream_frames) = mpsc::unbounded_channel();
 		self.hub().connect(number, events);
@@ -362,7 +363,8 @@ impl Session {
 				let Ok(permit) = permit else { return Some(false) };
 				if !self.send_pending(permit) { return Some(false); }
 			}
-			Some(batch) = self.batches.recv() => {
+			batch = self.batches.recv() => {
+				let Some(batch) = batch else { return Some(false); };
 				if !self.apply(batch).await { return Some(false); }
 			}
 			incoming = frames.recv() => {
@@ -404,11 +406,11 @@ impl Session {
 	/// mutation is waiting for a commit that changed none of this
 	/// connection's results, or when `catch_up` asks for one.
 	async fn settle(&mut self, catch_up: bool) -> bool {
-		// Return to the select loop after a bounded batch so a continuously
-		// busy database cannot starve available transport capacity.
 		for _ in 0..super::OUTGOING {
-			let Ok(batch) = self.batches.try_recv() else {
-				break;
+			let batch = match self.batches.try_recv() {
+				Ok(batch) => batch,
+				Err(mpsc::error::TryRecvError::Empty) => break,
+				Err(mpsc::error::TryRecvError::Disconnected) => return false,
 			};
 			if !self.apply(batch).await {
 				return false;
