@@ -9,7 +9,7 @@ The recipe and inventory use the existing backend verification format. Select re
 ```sh
 lk verify build --recipe recipe.json --out verified-build
 lk verify reproduce --bundle verified-build/bundle --manifest verified-build/inventory.json --sha256 "$INVENTORY_PIN"
-lk infra build-verified --bundle verified-build/bundle --manifest verified-build/inventory.json --sha256 "$INVENTORY_PIN" --runtime-image "$RUNTIME_IMAGE_AT_DIGEST" --runtime-config-sha256 "$RUNTIME_CONFIG_PIN" --tag registry.example/backend:unique-version --out descriptor.json
+lk infra build-verified --bundle verified-build/bundle --manifest verified-build/inventory.json --sha256 "$INVENTORY_PIN" --runtime-image "$RUNTIME_IMAGE_AT_DIGEST" --runtime-config-sha256 "$RUNTIME_CONFIG_PIN" --tag registry.example/backend:unique-version --service backend-production --out descriptor.json
 ```
 
 Packaging performs full reproduction again; it does not import a reproduction claim from JSON. Offline reproduction and supplied checkouts remain useful verification commands, but cannot authorize managed packaging. Runtime config pins hash the compact, recursively key-sorted JSON of the engine inspect object's Config member (SHA-256). Select that configuration deliberately: environment, healthcheck, shell and other inherited settings remain bound to the pin. ONBUILD and volumes are rejected.
@@ -17,6 +17,8 @@ Packaging performs full reproduction again; it does not import a reproduction cl
 The private packaging context contains only the executable and generated Dockerfile. Its instructions are FROM, COPY, WORKDIR, USER, ENTRYPOINT, CMD. No application Dockerfile or RUN instruction is accepted. Image inspection checks the complete inherited/modified configuration and platform. Extraction checks executable bytes and mode 0755. The image filesystem is also checked for unsupported /app/services. No descriptor is written on a failed check. The successful descriptor reports an engine image ID, not a registry digest.
 
 The same image/configuration/extraction checks apply with `--reuse-existing`, which inspects an existing local tag instead of building it.
+
+For managed Kamal deployment, pass `--service` with the destination’s exact `infra.name`. Kamal requires this service label on the image. Packaging binds it into the image configuration hash, and reuse checks it; do not add or replace the label after signing a descriptor. Different managed names require separately packaged images even when their executable bytes match.
 
 Publication is a separate operator action; acceptance testing must not push. After deliberately publishing the checked image, authenticate the descriptor digest independently, then deploy:
 

@@ -497,7 +497,7 @@ impl InfraConfig {
 			{
 				continue;
 			}
-			if !safe(value) {
+			if !(safe(value) || port_registry_value(key, value, &self.registry)) {
 				return Some(format!("infra.{key} contains unsupported characters"));
 			}
 		}
@@ -570,6 +570,34 @@ impl InfraConfig {
 	}
 }
 
+fn port_registry_value(key: &str, value: &str, registry: &str) -> bool {
+	registry_with_port(registry)
+		&& (key == "registry"
+			|| key == "image"
+				&& value
+					.strip_prefix(&format!("{registry}/"))
+					.is_some_and(|repository| {
+						!repository.is_empty()
+							&& repository
+								.bytes()
+								.all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b))
+					}))
+}
+
+fn registry_with_port(value: &str) -> bool {
+	let Some((host, port)) = value.split_once(':') else {
+		return false;
+	};
+	!host.is_empty()
+		&& !host.starts_with('-')
+		&& host
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+		&& !port.is_empty()
+		&& port.bytes().all(|b| b.is_ascii_digit())
+		&& port.parse::<u16>().is_ok_and(|port| port > 0)
+}
+
 /// Whether a string can name an environment variable in generated bindings.
 pub fn env_name(name: &str) -> bool {
 	let mut bytes = name.bytes();
@@ -602,6 +630,30 @@ fn export_endpoint(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn registry_ports_are_bounded_authorities() {
+		for value in [
+			"localhost:5000",
+			"127.0.0.1:5000",
+			"registry.example.com:443",
+		] {
+			assert!(registry_with_port(value), "{value}");
+		}
+		for value in [
+			"host:0",
+			"host:65536",
+			"host:",
+			":5000",
+			"host:tag",
+			"host/path:5000",
+			"user@host:5000",
+			"-host:5000",
+			"host:5000/other",
+		] {
+			assert!(!registry_with_port(value), "{value}");
+		}
+	}
 
 	#[test]
 	fn plugin_versions_limits_and_route_names_are_checked() {

@@ -2742,3 +2742,27 @@ fn operator_rpc_window_gates_release_reuse_rollback_and_recovery() {
 		"tag already recorded",
 	);
 }
+
+#[test]
+fn managed_registry_port_does_not_allow_tags_or_other_authorities() {
+	for (registry, image, valid) in [
+		("127.0.0.1:5000", "127.0.0.1:5000/team/notes", true),
+		("127.0.0.1:5000", "team/notes", true),
+		("127.0.0.1:0", "team/notes", false),
+		("127.0.0.1:65536", "team/notes", false),
+		("127.0.0.1:5000", "127.0.0.2:5000/team/notes", false),
+		("127.0.0.1:5000", "127.0.0.1:5000/team/notes:latest", false),
+	] {
+		let config = CONFIG.replace("ghcr.io/team/notes", image).replace(
+			r#"registry = "ghcr.io""#,
+			&format!("registry = {registry:?}"),
+		);
+		let root = configured(&config);
+		let output = cli(root.path(), &["infra", "generate"], &[]);
+		if valid {
+			succeeds(&output);
+		} else {
+			fails_with(&output, "unsupported characters");
+		}
+	}
+}

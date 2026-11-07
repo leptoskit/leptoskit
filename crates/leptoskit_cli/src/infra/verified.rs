@@ -35,6 +35,10 @@ pub struct Args {
 	/// Local image tag. This command never pushes.
 	#[arg(long)]
 	tag: String,
+	/// Managed infra.name required by Kamal; bound into the image
+	/// configuration.
+	#[arg(long)]
+	service: Option<String>,
 	/// Inspect an existing local tag instead of packaging a new image.
 	#[arg(long)]
 	reuse_existing: bool,
@@ -188,6 +192,23 @@ fn hash_json(value: &Value) -> Result<String> {
 	Ok(digest(&serde_json::to_vec(value)?))
 }
 
+// Docker materializes these absent OCI fields as null when inspecting a
+// Podman-built image. The content-addressed image ID must still match exactly.
+fn remote_config_matches(config: &Value, expected: &str) -> Result<bool> {
+	if hash_json(config)? == expected {
+		return Ok(true);
+	}
+	let mut sparse = config.clone();
+	if let Some(object) = sparse.as_object_mut() {
+		for key in ["Cmd", "OnBuild", "Volumes"] {
+			if object.get(key).is_some_and(Value::is_null) {
+				object.remove(key);
+			}
+		}
+	}
+	Ok(hash_json(&sparse)? == expected)
+}
+
 fn output(engine: Engine, args: &[&str]) -> Result<Vec<u8>> {
 	let output = Command::new(engine.program()).args(args).output()?;
 	ensure!(
@@ -309,13 +330,12 @@ fn source_schema(bundle: &build::ReproducedBundle) -> Result<String> {
 	super::build::fingerprint(&source, &config)
 }
 
-pub(super) fn run(args: &Args) -> Result<()> {
+fn validate_arguments(args: &Args) -> Result<()> {
 	ensure!(!args.out.exists(), "descriptor output already exists");
 	ensure!(
 		!args.no_rpc || args.rpc_baseline.is_empty(),
 		"--no-rpc conflicts with RPC compatibility baselines"
 	);
-	let baselines = rpc::baselines(&args.rpc_baseline, &args.rpc_baseline_sha256)?;
 	ensure!(
 		!args.reproduction.offline && args.reproduction.checkout.is_none(),
 		"managed verified packaging requires full reproduction from the canonical repository"
@@ -328,6 +348,22 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		!args.tag.starts_with('-') && !args.tag.is_empty(),
 		"invalid local image tag"
 	);
+	if let Some(service) = &args.service {
+		ensure!(
+			!service.is_empty()
+				&& !service.starts_with('-')
+				&& service
+					.bytes()
+					.all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)),
+			"invalid managed service name"
+		);
+	}
+	Ok(())
+}
+
+pub(super) fn run(args: &Args) -> Result<()> {
+	validate_arguments(args)?;
+	let baselines = rpc::baselines(&args.rpc_baseline, &args.rpc_baseline_sha256)?;
 	let bundle = build::reproduce(&args.reproduction)?;
 	ensure!(bundle.full, "full reproduction required");
 	let migrations = source_schema(&bundle)?;
@@ -402,24 +438,34 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		expected["Labels"] = json!({});
 	}
 	expected["Labels"][super::build::SCHEMA_LABEL] = json!(migrations);
+	let service_label = args
+		.service
+		.as_ref()
+		.map(|service| format!("service={service}"));
+	if let Some(service) = &args.service {
+		expected["Labels"]["service"] = json!(service);
+	}
 	if !args.reuse_existing {
-		output(
-			engine,
-			&[
-				"build",
-				"--network=none",
-				"--platform",
-				platform,
-				"--label",
-				&label,
-				"--tag",
-				&args.tag,
-				context
-					.path()
-					.to_str()
-					.context("context path is not UTF-8")?,
-			],
-		)?;
+		let mut arguments = vec![
+			"build",
+			"--network=none",
+			"--platform",
+			platform,
+			"--label",
+			&label,
+			"--tag",
+			&args.tag,
+		];
+		if let Some(service_label) = &service_label {
+			arguments.extend(["--label", service_label]);
+		}
+		arguments.push(
+			context
+				.path()
+				.to_str()
+				.context("context path is not UTF-8")?,
+		);
+		output(engine, &arguments)?;
 	}
 	let image = inspect(engine, &args.tag)?;
 	validate_image(&image, platform, &expected)?;
@@ -625,7 +671,7 @@ impl Descriptor {
 		let image = images.first().context("remote image absent")?;
 		ensure!(
 			image["Id"].as_str() == Some(&self.engine_image_id)
-				&& hash_json(&image["Config"])? == self.image_config_sha256,
+				&& remote_config_matches(&image["Config"], &self.image_config_sha256)?,
 			"remote image differs from reproduced packaging evidence"
 		);
 		ensure!(
@@ -661,6 +707,30 @@ mod tests {
 	}
 
 	#[test]
+	fn docker_null_defaults_preserve_podman_config_identity() {
+		let original =
+			json!({"Labels":{"service":"accounts"},"Env":["SAFE=1"],"Entrypoint":["/app/backend"]});
+		let pin = hash_json(&original).unwrap();
+		let mut docker = original.clone();
+		for key in ["Cmd", "OnBuild", "Volumes"] {
+			docker[key] = Value::Null;
+		}
+		assert!(remote_config_matches(&docker, &pin).unwrap());
+		assert!(remote_config_matches(&docker, &hash_json(&docker).unwrap()).unwrap());
+		for (key, value) in [
+			("Cmd", json!(["other"])),
+			("OnBuild", json!(["RUN true"])),
+			("Volumes", json!({"/data":{}})),
+			("Labels", json!({"service":"website"})),
+			("Env", json!(["SAFE=0"])),
+		] {
+			let mut changed = docker.clone();
+			changed[key] = value;
+			assert!(!remote_config_matches(&changed, &pin).unwrap(), "{key}");
+		}
+	}
+
+	#[test]
 	fn binary_hashing_does_not_collapse_invalid_utf8() {
 		assert_ne!(digest(&[0xff]), digest(&[0xfe]));
 		assert!(executable(&archive(&[0xfe], 0o755), &digest(&[0xff])).is_err());
@@ -684,6 +754,7 @@ mod tests {
 			("Entrypoint", json!(["/bin/sh"])),
 			("User", json!("0")),
 			("Env", json!(["SAFE=0"])),
+			("Labels", json!({"service":"different-deployment"})),
 		] {
 			let mut changed = image.clone();
 			changed["Config"][key] = replacement;

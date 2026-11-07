@@ -237,10 +237,12 @@ For managed Linux backends and supported websites, retain the published RPC spec
 lk infra build-verified \
   --bundle release/bundle --manifest release/inventory.json --sha256 "$INVENTORY_PIN" \
   --runtime-image "$RUNTIME_IMAGE_AT_DIGEST" --runtime-config-sha256 "$RUNTIME_CONFIG_PIN" \
-  --tag registry.example/backend:next \
+  --tag registry.example/backend:next --service backend-production \
   --rpc-baseline published-rpc.json --rpc-baseline-sha256 "$RPC_BASELINE_PIN" \
   --out descriptor.json
 ```
+
+Set `--service` to the destination’s exact `infra.name`. Kamal requires that image label; verified packaging includes it in the pinned image configuration. Package separately for different managed names, even when the executable is identical.
 
 Obtain each baseline pin from your own release records or another authenticated source. Repeat both baseline flags in matching order for up to eight supported contracts. Each spec may be at most 16 MiB. Baseline files are read and pinned before the build begins. A comparison failure stops descriptor creation. Without a baseline, compatibility remains `not_checked`; `--no-rpc` cannot be combined with baselines.
 
