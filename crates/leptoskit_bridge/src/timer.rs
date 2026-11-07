@@ -193,7 +193,7 @@ pub mod host {
 				return Err(Error::Cancelled);
 			}
 
-			if state.timers.len() >= MAX_TIMERS
+			if state.timers.len() + state.due.len() >= MAX_TIMERS
 				|| state.timers.contains_key(&id.0)
 				|| state.due.contains(&id)
 			{
@@ -477,6 +477,29 @@ mod tests {
 				timers.schedule(CallId(MAX_TIMERS as u64 + 1), Duration::ZERO),
 				Err(Error::Busy)
 			);
+		}
+
+		#[test]
+		fn due_timers_keep_their_slots_until_delivered_or_cancelled() {
+			let timers = TimerScheduler::new().unwrap();
+			let (sender, receiver) = std::sync::mpsc::channel();
+			timers.set_wake(move || {
+				let _ = sender.send(());
+			});
+
+			// Wait for each timer to move into the delivery queue without
+			// consuming it. Its slot must remain occupied after its deadline.
+			for id in 0..MAX_TIMERS {
+				timers.schedule(CallId(id as u64), Duration::ZERO).unwrap();
+				receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+			}
+
+			let extra = CallId(MAX_TIMERS as u64);
+			assert_eq!(timers.schedule(extra, Duration::ZERO), Err(Error::Busy));
+			assert!(timers.cancel(CallId(0)));
+			timers.schedule(extra, Duration::from_secs(60)).unwrap();
+			assert_eq!(timers.take_due().len(), MAX_TIMERS - 1);
+			assert!(timers.contains(extra));
 		}
 
 		#[test]
