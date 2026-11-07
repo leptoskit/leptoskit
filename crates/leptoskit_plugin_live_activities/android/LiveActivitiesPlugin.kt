@@ -27,16 +27,31 @@ class LiveActivitiesPlugin : NativePlugin {
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
 
         when (method) {
-            0, 1, 6 -> requireEmpty(payload)
-            2 -> StartMessage.decode(payload)
-            3 -> UpdateMessage.decode(payload)
-            4 -> EndMessage.decode(payload)
+            0, 1, 6 -> {
+                requireEmpty(payload)
+            }
+
+            2 -> {
+                StartMessage.decode(payload)
+            }
+
+            3 -> {
+                UpdateMessage.decode(payload)
+            }
+
+            4 -> {
+                EndMessage.decode(payload)
+            }
+
             5 -> {
                 val reader = Reader(payload, 68)
                 reader.identifier()
                 reader.finish()
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
 
         throw PluginException(PluginException.UNAVAILABLE)
