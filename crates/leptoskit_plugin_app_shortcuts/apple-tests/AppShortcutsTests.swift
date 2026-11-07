@@ -69,7 +69,10 @@ func setClearAndConsumeLaunchUsePublisherWithoutSystemUI() async throws {
     #expect(empty == Data([0, 0, 0, 0]))
     #expect(try await plugin.invoke(method: 1, payload: payload()) == Data())
     #expect(publisher.items.last?.isEmpty == true)
+    #expect(try await plugin.invoke(method: 0, payload: payload(encoded)) == Data())
+    #expect(publisher.items.last?.count == 2)
     plugin.close()
+    #expect(publisher.items.last?.isEmpty == true)
     await #expect(throws: PluginError.cancelled) {
         try await plugin.invoke(method: 0, payload: payload(encoded))
     }

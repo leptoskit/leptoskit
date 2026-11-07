@@ -132,8 +132,9 @@ impl Definition {
 	/// lengths.
 	pub fn new(items: Vec<Item>) -> Result<Self, Error> {
 		let mut ids = HashSet::new();
+		let mut accelerators = HashSet::new();
 		let mut count = 0;
-		validate(&items, 0, &mut ids, &mut count)?;
+		validate(&items, 0, &mut ids, &mut accelerators, &mut count)?;
 		Ok(Self { items })
 	}
 
@@ -147,6 +148,7 @@ fn validate<'a>(
 	items: &'a [Item],
 	depth: usize,
 	ids: &mut HashSet<&'a str>,
+	accelerators: &mut HashSet<String>,
 	count: &mut usize,
 ) -> Result<(), Error> {
 	if items.is_empty() || depth > MAX_DEPTH || items.len() > MAX_ITEMS {
@@ -176,7 +178,7 @@ fn validate<'a>(
 			Item::Submenu {
 				id, label, items, ..
 			} => {
-				validate(items, depth + 1, ids, count)?;
+				validate(items, depth + 1, ids, accelerators, count)?;
 				(id, label, None)
 			}
 			Item::Separator => continue,
@@ -193,13 +195,20 @@ fn validate<'a>(
 			return Err(Error::InvalidDefinition);
 		}
 
-		if let Some(accelerator) = accelerator
-			&& (accelerator.is_empty()
+		if let Some(accelerator) = accelerator {
+			if accelerator.is_empty()
 				|| accelerator.len() > 64
 				|| !accelerator.is_ascii()
-				|| accelerator.chars().any(char::is_control))
-		{
-			return Err(Error::InvalidAccelerator);
+				|| accelerator.chars().any(char::is_control)
+			{
+				return Err(Error::InvalidAccelerator);
+			}
+
+			// Portable conflict check before platform parse: identical chords
+			// (ASCII case-insensitive) may not share a menu item.
+			if !accelerators.insert(accelerator.to_ascii_lowercase()) {
+				return Err(Error::InvalidAccelerator);
+			}
 		}
 	}
 
@@ -334,6 +343,32 @@ mod tests {
 				"{accelerator:?}"
 			);
 		}
+	}
+
+	#[test]
+	fn duplicate_accelerators_conflict_across_the_tree() {
+		assert_eq!(
+			Definition::new(vec![
+				Item::Command {
+					id: "save".into(),
+					label: "Save".into(),
+					enabled: true,
+					accelerator: Some("CmdOrCtrl+S".into()),
+				},
+				Item::Submenu {
+					id: "file".into(),
+					label: "File".into(),
+					enabled: true,
+					items: vec![Item::Command {
+						id: "export".into(),
+						label: "Export".into(),
+						enabled: true,
+						accelerator: Some("cmdorctrl+s".into()),
+					}],
+				},
+			]),
+			Err(Error::InvalidAccelerator)
+		);
 	}
 
 	#[test]

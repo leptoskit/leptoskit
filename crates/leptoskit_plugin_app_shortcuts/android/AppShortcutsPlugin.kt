@@ -59,7 +59,14 @@ class AppShortcutsPlugin(
     }
 
     override fun close() {
+        if (closed) return
         closed = true
+        // Best-effort teardown so dynamic shortcuts do not outlive the plugin
+        // once SET/CLEAR are refused.
+        try {
+            clear()
+        } catch (_: PluginException) {
+        }
     }
 
     private fun set(items: List<Shortcut>) {

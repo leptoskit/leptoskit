@@ -66,6 +66,9 @@ pub use unsupported::Registration;
 pub const EVENT_CAPACITY: usize = 128;
 /// Maximum concurrently registered shortcuts.
 pub const REGISTRATION_CAPACITY: usize = 64;
+/// Maximum UTF-8 length of an accelerator string. Matches menu accelerators so
+/// the same `CmdOrCtrl+…` chord can be validated once and reused.
+pub const MAX_ACCELERATOR_BYTES: usize = 64;
 /// Register a UTF-8 accelerator, returning its u32 identifier.
 pub const REGISTER: MethodId = MethodId(0);
 /// Unregister a u32 identifier owned by this plugin.
@@ -187,6 +190,16 @@ impl EventBatch {
 	}
 }
 
+/// True when `accelerator` is short, printable ASCII — the same bounds menus
+/// apply before muda/global-hotkey parse the chord.
+#[must_use]
+pub fn valid_accelerator_text(accelerator: &str) -> bool {
+	!accelerator.is_empty()
+		&& accelerator.len() <= MAX_ACCELERATOR_BYTES
+		&& accelerator.is_ascii()
+		&& !accelerator.chars().any(char::is_control)
+}
+
 /// A plugin installed explicitly by the native host on its event-loop thread.
 ///
 /// A host should use `with_waker` and post a wake message to its own event
@@ -284,9 +297,10 @@ pub mod guest {
 		}
 
 		/// Register an accelerator. The host owns it until unregister or
-		/// teardown.
+		/// teardown. Strings use the same muda/`CmdOrCtrl` syntax as menu
+		/// accelerators and must be at most [`super::MAX_ACCELERATOR_BYTES`].
 		pub async fn register(self, accelerator: &str) -> Result<u32, Error> {
-			if accelerator.is_empty() || accelerator.len() > 256 {
+			if !super::valid_accelerator_text(accelerator) {
 				return Err(Error::InvalidArgument);
 			}
 
@@ -338,5 +352,17 @@ mod tests {
 		malformed = batch.encode().to_vec();
 		malformed.push(0);
 		assert!(EventBatch::decode(&malformed).is_err());
+	}
+
+	#[test]
+	fn accelerator_text_matches_menu_bounds() {
+		assert!(valid_accelerator_text("CmdOrCtrl+S"));
+		assert!(valid_accelerator_text("Control+Shift+KeyK"));
+		assert!(!valid_accelerator_text(""));
+		assert!(!valid_accelerator_text(
+			&"K".repeat(MAX_ACCELERATOR_BYTES + 1)
+		));
+		assert!(!valid_accelerator_text("Ctrl+é"));
+		assert!(!valid_accelerator_text("Ctrl+\tS"));
 	}
 }

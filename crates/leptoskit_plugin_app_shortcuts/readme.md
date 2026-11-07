@@ -35,7 +35,7 @@
 
 Publishes up to eight static shortcuts with portable ids, titles, and optional subtitles. iOS uses home-screen quick actions, Android uses `ShortcutManager` dynamic shortcuts, and macOS installs a dock menu. Windows jump-list publishing and Linux desktop-action publishing are not registered by generated hosts yet; the crate's in-memory `Registry` is for custom hosts and tests. The browser is unavailable: PWA shortcuts belong in the web app manifesto.
 
-Enable `guest` for native bridge calls. Select `app-shortcuts` in `native.plugins`. No permissions or entitlements are added. The host must call `noteLaunch` when the OS activates a shortcut so `consume_launch` can return that id once.
+Enable `guest` for native bridge calls. Select `app-shortcuts` in `native.plugins`. No permissions or entitlements are added. The host must call `noteLaunch` when the OS activates a shortcut so `consume_launch` can return that id once. Closing the native plugin clears any shortcuts it published so launcher entries do not outlive the bridge.
 
 This port does not add icons, deep-link handlers, Siri App Intents, or pinned/manifest shortcuts beyond the dynamic list.
 

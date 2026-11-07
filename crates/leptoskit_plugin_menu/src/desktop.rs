@@ -360,6 +360,8 @@ fn validate_accelerators_rec(items: &[Item], seen: &mut HashSet<Accelerator>) ->
 					// Same chord on two rows is ambiguous on every desktop
 					// backend (Windows accelerator tables keep both cmds;
 					// AppKit key equivalents collide silently).
+					// `CmdOrCtrl+S` and `Ctrl+S` also collide after muda
+					// normalizes aliases on non-macOS hosts.
 					if !seen.insert(accelerator) {
 						return Err(Error::InvalidAccelerator);
 					}

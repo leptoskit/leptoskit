@@ -102,7 +102,11 @@ public final class AppShortcutsPlugin: NativePlugin {
     }
 
     public func close() {
+        guard !closed else { return }
         closed = true
+        // Teardown must not leave launcher/dock entries the guest can no longer
+        // clear through SET/CLEAR.
+        try? publisher.clear()
     }
 
     private static func decodeList(_ payload: NativeBuffer) throws -> [AppShortcutItem] {
