@@ -17,9 +17,13 @@ use crate::Error;
 use crate::Result;
 use crate::StreamOperation;
 use crate::live::EndReason;
+use crate::live::MAX_FRAME_BYTES;
 use crate::live::ServerFrame;
 use crate::live::WireError;
 use crate::stream::Resumable;
+
+#[cfg(test)]
+mod tests;
 
 /// One `#[rpc::stream]`, as a server build registers it.
 pub struct StreamRegistration {
@@ -70,7 +74,8 @@ pub fn open<S: StreamOperation>(
 				sink.fail(&Error::invalid(format!(
 					"the arguments of `{}` don't fit: {error}",
 					S::NAME
-				)));
+				)))
+				.await;
 			}
 		}
 	})
@@ -80,9 +85,9 @@ pub fn open<S: StreamOperation>(
 /// by the credits its client granted.
 pub struct StreamSink {
 	stream: u32,
-	/// Unbounded, because the credits bound it: at most one item per credit
-	/// is ever in it.
-	out: mpsc::UnboundedSender<String>,
+	/// Credits bound demand, while this bounded queue limits retention even
+	/// if a client renews credits before consuming its earlier items.
+	out: mpsc::Sender<String>,
 	credits: Arc<Semaphore>,
 }
 
@@ -95,11 +100,7 @@ impl StreamSink {
 		not(feature = "live"),
 		allow(dead_code, reason = "only a live session opens streams")
 	)]
-	pub(crate) fn new(
-		stream: u32,
-		out: mpsc::UnboundedSender<String>,
-		credits: Arc<Semaphore>,
-	) -> Self {
+	pub(crate) fn new(stream: u32, out: mpsc::Sender<String>, credits: Arc<Semaphore>) -> Self {
 		Self {
 			stream,
 			out,
@@ -126,7 +127,7 @@ impl StreamSink {
 			}
 
 			let Some(item) = items.next().await else {
-				self.end(EndReason::Done);
+				self.end(EndReason::Done).await;
 				return;
 			};
 
@@ -138,12 +139,12 @@ impl StreamSink {
 						cursor,
 					};
 
-					if !self.send(&frame) {
+					if !self.send(&frame).await {
 						return;
 					}
 				}
 				Err(error) => {
-					self.fail(&error);
+					self.fail(&error).await;
 					return;
 				}
 			}
@@ -152,22 +153,33 @@ impl StreamSink {
 
 	/// Ends the stream as failed, as when its body refused to start.
 	#[doc(hidden)]
-	pub fn fail(&self, error: &Error) {
+	pub async fn fail(&self, error: &Error) {
 		self.end(EndReason::Failed(WireError {
 			status: error.status(),
 			message: error.message().to_owned(),
-		}));
+		}))
+		.await;
 	}
 
-	fn end(&self, reason: EndReason) {
-		self.send(&reason.frame(self.stream));
+	async fn end(&self, reason: EndReason) {
+		self.send(&reason.frame(self.stream)).await;
 	}
 
-	fn send(&self, frame: &ServerFrame) -> bool {
+	async fn send(&self, frame: &ServerFrame) -> bool {
 		let Ok(text) = serde_json::to_string(frame) else {
 			return false;
 		};
-		self.out.send(text).is_ok()
+		if text.len() > MAX_FRAME_BYTES {
+			let error = WireError {
+				status: 413,
+				message: format!("a stream frame may contain at most {MAX_FRAME_BYTES} bytes"),
+			};
+			if let Ok(text) = serde_json::to_string(&EndReason::Failed(error).frame(self.stream)) {
+				let _ = self.out.send(text).await;
+			}
+			return false;
+		}
+		self.out.send(text).await.is_ok()
 	}
 }
 

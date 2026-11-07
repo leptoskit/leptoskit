@@ -49,7 +49,7 @@ impl ::leptoskit_rpc::StreamOperation for Answer {
                         )
                         .await
                 }
-                ::core::result::Result::Err(error) => sink.fail(&error),
+                ::core::result::Result::Err(error) => sink.fail(&error).await,
             }
         }
     }

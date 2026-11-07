@@ -336,7 +336,8 @@ macro_rules! __remote_stream_pump {
 				sink.fail(&$crate::server::remote_named_error(
 					<Self as $crate::StreamOperation>::NAME,
 					<Self as $crate::StreamOperation>::SERVICE,
-				));
+				))
+				.await;
 			}
 		}
 	};

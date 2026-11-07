@@ -88,7 +88,7 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 /// How many streams one connection may hold open at once.
 pub const MAX_STREAMS: usize = 64;
 
-/// How many actions one connection may have running at once.
+/// How many actions one connection may have running or awaiting replies.
 pub const MAX_ACTIONS: usize = 16;
 
 /// How many channels one connection may be in at once.

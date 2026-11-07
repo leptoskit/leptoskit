@@ -1392,7 +1392,7 @@ fn stream_items(
 					let Self { #(#bindings),* } = self;
 					match #call.await {
 						::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-						::core::result::Result::Err(error) => sink.fail(&error),
+						::core::result::Result::Err(error) => sink.fail(&error).await,
 					}
 				}
 			}
