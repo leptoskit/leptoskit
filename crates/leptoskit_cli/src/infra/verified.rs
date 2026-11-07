@@ -225,19 +225,13 @@ pub(super) fn backend_only(source: &Path, config: &LeptoskitConfig) -> Result<()
 		"verified packaging supports backend-only projects; website assets evidence is unsupported"
 	);
 	let raw: toml::Value = toml::from_str(&fs::read_to_string(source.join("leptoskit.toml"))?)?;
-	fn services(value: &toml::Value) -> bool {
-		match value {
-			toml::Value::Table(table) => {
-				table
-					.iter()
-					.any(|(key, value)| key == "services" || key == "service" || services(value))
-			}
-			toml::Value::Array(values) => values.iter().any(services),
-			_ => false,
-		}
-	}
+	// Application services add executables that need their own evidence.
+	// `infra.services` configures separate cache/relay containers; it does not
+	// add application executables to this image.
 	ensure!(
-		!services(&raw) && !source.join("services").exists(),
+		raw.get("services").is_none()
+			&& raw.get("service").is_none()
+			&& !source.join("services").exists(),
 		"service-bearing releases need evidence for every executable and schema; unsupported"
 	);
 	Ok(())
@@ -639,6 +633,12 @@ mod tests {
 		config.app.platforms = vec![Platform::Web];
 		assert!(backend_only(dir.path(), &config).is_err());
 		config.app.platforms = vec![Platform::Server];
+		fs::write(
+			dir.path().join("leptoskit.toml"),
+			format!("{raw}\n[infra.services]\ncache=true\nrelay=true\n"),
+		)
+		.unwrap();
+		assert!(backend_only(dir.path(), &config).is_ok());
 		fs::create_dir(dir.path().join("services")).unwrap();
 		assert!(backend_only(dir.path(), &config).is_err());
 		fs::remove_dir(dir.path().join("services")).unwrap();
