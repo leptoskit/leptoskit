@@ -24,11 +24,9 @@ fn application_menu_events_updates_and_lease_restoration() {
 
 	use leptoskit_plugin_menu::Check;
 	use leptoskit_plugin_menu::Command;
-	use leptoskit_plugin_menu::Definition;
 	use leptoskit_plugin_menu::DesktopMenu;
 	use leptoskit_plugin_menu::Error;
 	use leptoskit_plugin_menu::EventChannel;
-	use leptoskit_plugin_menu::Item;
 	use leptoskit_plugin_menu::MenuBar;
 	use leptoskit_plugin_menu::Submenu;
 	use leptoskit_plugin_menu::macos;
@@ -123,18 +121,7 @@ fn application_menu_events_updates_and_lease_restoration() {
 	assert_eq!(toggled.id, "toggle");
 	assert_eq!(toggled.checked, Some(false));
 	assert!(!menu.is_checked("toggle").unwrap());
-	assert!(matches!(
-		DesktopMenu::new(
-			Definition::new(vec![Item::Command {
-				id: "invalid".into(),
-				label: "Invalid".into(),
-				enabled: true,
-				accelerator: Some("Ctrl+NotARealKey".into())
-			}])
-			.unwrap()
-		),
-		Err(Error::InvalidAccelerator)
-	));
+
 	drop(lease);
 	assert_eq!(
 		application.mainMenu().as_deref().map(std::ptr::from_ref),
@@ -151,6 +138,28 @@ fn application_menu_events_updates_and_lease_restoration() {
 		std::ptr::from_ref(&*replacement)
 	));
 	application.setMainMenu(previous.as_deref());
+	assert_invalid_construction_rejected();
+}
+
+#[cfg(target_os = "macos")]
+fn assert_invalid_construction_rejected() {
+	use leptoskit_plugin_menu::Definition;
+	use leptoskit_plugin_menu::DesktopMenu;
+	use leptoskit_plugin_menu::Error;
+	use leptoskit_plugin_menu::Item;
+
+	assert!(matches!(
+		DesktopMenu::new(
+			Definition::new(vec![Item::Command {
+				id: "invalid".into(),
+				label: "Invalid".into(),
+				enabled: true,
+				accelerator: Some("Ctrl+NotARealKey".into())
+			}])
+			.unwrap()
+		),
+		Err(Error::InvalidAccelerator)
+	));
 	assert_eq!(
 		std::thread::spawn(|| {
 			DesktopMenu::new(Definition::new(vec![Item::Separator]).unwrap()).err()

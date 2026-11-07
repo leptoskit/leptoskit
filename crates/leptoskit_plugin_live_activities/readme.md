@@ -89,7 +89,7 @@ API scope is informed by [Apple Live Activities](https://developer.apple.com/doc
 
 <!-- {=p_live_activitiesSummary} -->
 
-Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements ActivityKit; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
+Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
 
 <!-- {/p_live_activitiesSummary} -->
 

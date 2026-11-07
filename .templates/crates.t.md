@@ -1054,13 +1054,13 @@ Add `leptoskit_plugin_device_policy` as a direct dependency and select the `devi
 
 <!-- {@p_home_widgetsSummary} -->
 
-Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for WidgetKit and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
+Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for `WidgetKit` and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
 
 <!-- {/p_home_widgetsSummary} -->
 
 <!-- {@p_live_activitiesSummary} -->
 
-Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements ActivityKit; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
+Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
 
 <!-- {/p_live_activitiesSummary} -->
 

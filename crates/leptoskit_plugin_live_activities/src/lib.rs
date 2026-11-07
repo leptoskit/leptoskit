@@ -6,7 +6,7 @@
 //! hosts currently omit runtime plugins; use explicit registration in a custom
 //! host there. Guests enable the `guest` feature and reuse
 //! `guest::LiveActivities` rather than resolving the plugin on every call. Only
-//! iOS implements ActivityKit; other platforms return `Unavailable`. Starting
+//! iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting
 //! an activity does not prove Lock Screen or Dynamic Island UI appeared: the
 //! app must ship a Widget Extension that renders
 //! `LeptosKitLiveActivityAttributes`.
