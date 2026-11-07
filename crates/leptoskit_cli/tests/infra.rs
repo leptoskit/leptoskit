@@ -49,8 +49,13 @@ fn project() -> tempfile::TempDir {
 	)
 	.unwrap();
 	fs::write(root.path().join("migrations/registry.txt"), "").unwrap();
+	project_tools(root.path());
+	root
+}
+
+fn project_tools(root: &Path) {
 	tool(
-		root.path(),
+		root,
 		"tofu",
 		r#"#!/bin/sh
 set -eu
@@ -87,7 +92,7 @@ esac
 "#,
 	);
 	tool(
-		root.path(),
+		root,
 		"kamal",
 		r#"#!/bin/sh
 set -eu
@@ -101,7 +106,7 @@ exit "${MOCK_KAMAL_EXIT:-0}"
 "#,
 	);
 	tool(
-		root.path(),
+		root,
 		"docker",
 		r#"#!/bin/sh
 set -eu
@@ -117,7 +122,7 @@ exit 0
 "#,
 	);
 	tool(
-		root.path(),
+		root,
 		"ssh",
 		r#"#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
@@ -184,7 +189,6 @@ else:
     sys.exit(subprocess.run(["/bin/sh", "-c", script]).returncode)
 "#,
 	);
-	root
 }
 
 fn tool(root: &Path, name: &str, source: &str) {
