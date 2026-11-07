@@ -148,8 +148,12 @@ async fn row(db: &Db, id: Id<JobRow>) -> JobRow {
 }
 
 /// Waits for a job's row to satisfy `ready`.
+///
+/// The budget is generous because the full suite runs every test at full
+/// parallelism; a worker starved by that load still reaches `Failed` well
+/// inside it, while an idle run gets there in about a second.
 async fn wait_row(what: &str, db: &Db, id: Id<JobRow>, ready: impl Fn(&JobRow) -> bool) -> JobRow {
-	for _ in 0..1_000 {
+	for _ in 0..3_000 {
 		let row = row(db, id).await;
 
 		if ready(&row) {

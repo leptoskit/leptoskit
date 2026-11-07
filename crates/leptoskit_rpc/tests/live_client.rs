@@ -265,6 +265,11 @@ fn live(db: Db) -> Live {
 /// do nothing.
 #[test]
 fn without_an_installed_client_the_globals_are_offline() {
+	// Reading a signal needs an owner: reactive_graph is built with
+	// sandboxed arenas, so an active one must hold the status signal.
+	let owner = Owner::new();
+	owner.set();
+
 	rpc::client::configure(ClientConfig::new());
 	assert!(!rpc::client::live::available());
 	rpc::client::live::reauthenticate();
