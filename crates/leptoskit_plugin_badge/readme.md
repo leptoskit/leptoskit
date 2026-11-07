@@ -33,7 +33,7 @@
 
 ## Overview
 
-Sets, reads, and clears a badge count up to 999,999. iOS and macOS use the system badge APIs. Android stores the requested count and clears the app's notifications when the count is zero; launcher vendors that key badges off notifications still decide visibility. Linux exposes a direct Unity/KDE `LauncherEntry` D-Bus client for custom hosts. Generated Windows/Linux runners do not register runtime plugins yet. The browser Badging API is not wired in this port.
+Sets, reads, and clears a badge count up to 999,999. iOS and macOS use the system badge APIs. Android stores the requested count and clears the app's notifications when the count is zero; launcher vendors that key badges off notifications still decide visibility. Linux exposes a direct Unity/KDE `LauncherEntry` D-Bus client for custom hosts. Generated Windows/Linux runners do not register runtime plugins yet. Browser apps call `web::set` / `web::clear` over the Badging API when the browser exposes it (typically for an installed PWA); `web::get` returns the last count this adapter published.
 
 Enable `guest` for native bridge calls. Select `badge` in `native.plugins`. No permissions are declared by this crate; showing a badge may still require notification authorization on some platforms.
 
@@ -43,7 +43,7 @@ A successful set only means the OS accepted the request. Focus modes and user se
 
 <!-- {=p_badgeSummary} -->
 
-Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Setting a count asks the OS to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
+Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Browser pages without a native host call `web::set` / `web::clear` over the Badging API. Setting a count asks the OS or browser to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
 
 <!-- {/p_badgeSummary} -->
 

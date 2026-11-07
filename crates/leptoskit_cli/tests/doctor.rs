@@ -172,6 +172,7 @@ fn complains(output: &Output, expected: &str) {
 
 /// A project that selects every platform this module checks, with the
 /// extension tools present.
+#[cfg(target_os = "macos")]
 fn everything() -> Lab {
 	let lab = Lab::new();
 	lab.config(

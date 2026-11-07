@@ -46,6 +46,13 @@ class MainActivity :
         requests.restoreState(state)
         content = applicationView(this)
         setContentView(content)
+        noteAppShortcutLaunch(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        noteAppShortcutLaunch(intent)
     }
 
     override fun onSaveInstanceState(state: Bundle) {
@@ -104,5 +111,16 @@ private fun applicationView(activity: Activity): LeptosKitApplicationView {
 
     return LeptosKitApplicationView(activity, embedded, configuration) { bridge, dispatcher ->
         GeneratedPlugins.register(activity, bridge, dispatcher)
+    }
+}
+
+private fun noteAppShortcutLaunch(intent: Intent?) {
+    // Soft-resolve so apps that omit `app-shortcuts` still compile.
+    try {
+        val plugin =
+            Class.forName("dev.leptoskit.plugins.appshortcuts.AppShortcutsPlugin")
+        plugin.getMethod("noteLaunchIfPresent", Intent::class.java).invoke(null, intent)
+    } catch (_: ClassNotFoundException) {
+    } catch (_: ReflectiveOperationException) {
     }
 }

@@ -5,9 +5,10 @@
 //! metadata. Generated Windows, Linux, and terminal hosts currently omit
 //! runtime plugins; use explicit registration in a custom host there. Guests
 //! enable the `guest` feature and reuse `guest::Badge` rather than resolving
-//! the plugin on every call. Setting a count asks the OS to show an app-icon
-//! badge; it never proves the badge is visible under the user's focus or
-//! notification settings.
+//! the plugin on every call. Browser pages without a native host call
+//! `web::set` / `web::clear` over the Badging API. Setting a count asks the OS
+//! or browser to show an app-icon badge; it never proves the badge is visible
+//! under the user's focus or notification settings.
 //!
 //! <!-- {/p_badgeSummary} -->
 
@@ -253,24 +254,94 @@ pub mod guest {
 	}
 }
 
-/// Browser badges use the Badging API when the page is an installed app.
+/// Browser badges use the Badging API when the page is an installed app or the
+/// browser otherwise exposes `navigator.setAppBadge` / `clearAppBadge`.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
 pub mod web {
+	use std::cell::Cell;
+
+	use js_sys::Function;
+	use js_sys::Promise;
+	use js_sys::Reflect;
+	use wasm_bindgen::JsCast;
+	use wasm_bindgen::JsValue;
+	use wasm_bindgen_futures::JsFuture;
+
 	use super::*;
 
-	/// Always unavailable until a dedicated web adapter lands.
+	thread_local! {
+		static COUNT: Cell<u32> = const { Cell::new(0) };
+	}
+
+	fn navigator() -> Result<JsValue, Error> {
+		let window = web_sys::window().ok_or(Error::Unavailable)?;
+		Ok(window.navigator().into())
+	}
+
+	fn method(name: &str) -> Result<Function, Error> {
+		let navigator = navigator()?;
+		let value =
+			Reflect::get(&navigator, &JsValue::from_str(name)).map_err(|_| Error::Native)?;
+
+		if value.is_undefined() || value.is_null() {
+			return Err(Error::Unavailable);
+		}
+
+		value.dyn_into::<Function>().map_err(|_| Error::Unavailable)
+	}
+
+	fn map_error(error: &JsValue) -> Error {
+		if error.is_instance_of::<js_sys::TypeError>() {
+			return Error::Unavailable;
+		}
+
+		if let Some(exception) = error.dyn_ref::<web_sys::DomException>() {
+			match exception.name().as_str() {
+				"NotAllowedError" | "SecurityError" => return Error::PermissionDenied,
+				"NotSupportedError" => return Error::Unavailable,
+				_ => {}
+			}
+		}
+
+		Error::Native
+	}
+
+	async fn await_badge(promise: Result<JsValue, JsValue>) -> Result<(), Error> {
+		let value = promise.map_err(|error| map_error(&error))?;
+		let promise = value.dyn_into::<Promise>().map_err(|_| Error::Native)?;
+		JsFuture::from(promise)
+			.await
+			.map_err(|error| map_error(&error))?;
+		Ok(())
+	}
+
+	/// Last count this adapter successfully published. The Badging API has no
+	/// read-back, so this is process-local.
 	pub fn get() -> Result<u32, Error> {
-		Err(Error::Unavailable)
+		method("setAppBadge")?;
+		Ok(COUNT.with(Cell::get))
 	}
 
-	/// Always unavailable until a dedicated web adapter lands.
-	pub fn set(_count: u32) -> Result<(), Error> {
-		Err(Error::Unavailable)
+	/// Asks the browser to show this badge count on the installed app icon.
+	pub async fn set(count: u32) -> Result<(), Error> {
+		if count > MAX_COUNT {
+			return Err(Error::InvalidArgument);
+		}
+
+		let set_badge = method("setAppBadge")?;
+		let navigator = navigator()?;
+		await_badge(set_badge.call1(&navigator, &JsValue::from_f64(f64::from(count)))).await?;
+		COUNT.with(|cell| cell.set(count));
+		Ok(())
 	}
 
-	/// Always unavailable until a dedicated web adapter lands.
-	pub fn clear() -> Result<(), Error> {
-		Err(Error::Unavailable)
+	/// Clears the browser app badge.
+	pub async fn clear() -> Result<(), Error> {
+		let clear_badge = method("clearAppBadge")?;
+		let navigator = navigator()?;
+		await_badge(clear_badge.call0(&navigator)).await?;
+		COUNT.with(|cell| cell.set(0));
+		Ok(())
 	}
 }
 

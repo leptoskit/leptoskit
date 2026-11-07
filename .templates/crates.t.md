@@ -1030,13 +1030,13 @@ grid implementation without a browser.
 
 <!-- {@p_app_shortcutsSummary} -->
 
-Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher, dock, or jump list; it never invents icons or deep-link handlers.
+Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
 
 <!-- {/p_app_shortcutsSummary} -->
 
 <!-- {@p_badgeSummary} -->
 
-Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Setting a count asks the OS to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
+Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Browser pages without a native host call `web::set` / `web::clear` over the Badging API. Setting a count asks the OS or browser to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
 
 <!-- {/p_badgeSummary} -->
 

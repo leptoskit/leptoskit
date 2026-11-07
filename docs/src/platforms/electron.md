@@ -6,29 +6,29 @@ Use this page when you know the Electron API and need the leptoskit equivalent. 
 
 ## Map
 
-| Electron concept                           | leptoskit API                                        | Notes                                                                                    |
-| ------------------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `app` identity / version                   | `leptoskit_plugin_application`                       | Host packaging metadata, not the guest crate version.                                    |
-| `process.argv`                             | `leptoskit_plugin_arguments`                         | Immutable snapshot; host chooses guest disclosure.                                       |
-| `requestSingleInstanceLock`                | `leptoskit_plugin_single_instance`                   | Lock plus second-launch `notify_running` / `poll_activation`. Focus is still host-owned. |
-| `app.setLoginItemSettings`                 | `leptoskit_plugin_autostart`                         | Host-configured identity and absolute executable.                                        |
-| `BrowserWindow` bounds / fullscreen        | `leptoskit_plugin_window_state`                      | Portable placement; owned capture/restore on macOS first.                                |
-| `Menu`                                     | `leptoskit_plugin_menu`                              | Application/window menus; roles and context menus remain.                                |
-| `Tray`                                     | `leptoskit_plugin_tray`                              | Host-owned icons and menus on macOS/Windows/Linux.                                       |
-| `globalShortcut`                           | `leptoskit_plugin_global_shortcut`                   | macOS/Windows/X11; Wayland unavailable.                                                  |
-| `dialog`                                   | `leptoskit_plugin_dialog`                            | Open/save/message dialogs with a parent window.                                          |
-| `Notification`                             | `leptoskit_plugin_notifications`                     | Immediate local posts; scheduling/actions remain.                                        |
-| `clipboard`                                | `leptoskit_plugin_clipboard`                         | Text today; images/HTML remain.                                                          |
-| `shell.openExternal` / `openPath`          | `leptoskit_plugin_linking`, `leptoskit_plugin_shell` | Linking opens validated URLs; shell runs scoped child processes.                         |
-| `powerMonitor`                             | `leptoskit_plugin_power_monitor`                     | Host-pushed lifecycle events; Windows idle-time queries.                                 |
-| `powerSaveBlocker`                         | `leptoskit_plugin_keep_awake`                        | Display-idle inhibition leases.                                                          |
-| Custom protocols / deep links / file opens | `leptoskit_plugin_deep_link`                         | Inbound queue + association descriptors; packaging still declares schemes/types.         |
-| Outbound `https` / `mailto` / `tel`        | `leptoskit_plugin_linking`                           | Default policy rejects arbitrary custom schemes.                                         |
-| `autoUpdater`                              | `leptoskit_plugin_updater`                           | Native executable hooks via a host `Backend`. Not Wasm code push.                        |
-| Guest UI over-the-air updates              | `leptoskit_codepush`                                 | Signed Wasm bundles, separate from native installers.                                    |
-| `utilityProcess` / `child_process`         | `leptoskit_plugin_shell`                             | Bounded, scoped, cancellable children — no Node compatibility.                           |
-| `safeStorage`                              | `leptoskit_plugin_secure_store`                      | OS credential entries, not a general encrypt facade.                                     |
-| Desktop capture / screenshots              | `leptoskit_plugin_screen_capture`                    | Mobile secure-window / observation today; desktop pixel capture remains.                 |
+| Electron concept                           | leptoskit API                                        | Notes                                                                                                         |
+| ------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `app` identity / version                   | `leptoskit_plugin_application`                       | Host packaging metadata, not the guest crate version.                                                         |
+| `process.argv`                             | `leptoskit_plugin_arguments`                         | Immutable snapshot; host chooses guest disclosure.                                                            |
+| `requestSingleInstanceLock`                | `leptoskit_plugin_single_instance`                   | Lock plus second-launch `notify_running` / `poll_activation`. Focus is still host-owned.                      |
+| `app.setLoginItemSettings`                 | `leptoskit_plugin_autostart`                         | Host-configured identity and absolute executable.                                                             |
+| `BrowserWindow` bounds / fullscreen        | `leptoskit_plugin_window_state`                      | Portable placement; owned capture/restore on macOS first.                                                     |
+| `Menu`                                     | `leptoskit_plugin_menu`                              | macOS application menus and Windows HWND window menus; Linux tray menus only. Roles and context menus remain. |
+| `Tray`                                     | `leptoskit_plugin_tray`                              | Host-owned icons and menus on macOS/Windows/Linux.                                                            |
+| `globalShortcut`                           | `leptoskit_plugin_global_shortcut`                   | macOS/Windows/X11; Wayland unavailable.                                                                       |
+| `dialog`                                   | `leptoskit_plugin_dialog`                            | Open/save/message dialogs with a parent window.                                                               |
+| `Notification`                             | `leptoskit_plugin_notifications`                     | Immediate local posts; scheduling/actions remain.                                                             |
+| `clipboard`                                | `leptoskit_plugin_clipboard`                         | Text today; images/HTML remain.                                                                               |
+| `shell.openExternal` / `openPath`          | `leptoskit_plugin_linking`, `leptoskit_plugin_shell` | Linking opens validated URLs; shell runs scoped child processes.                                              |
+| `powerMonitor`                             | `leptoskit_plugin_power_monitor`                     | Host-pushed lifecycle events; Windows idle-time queries.                                                      |
+| `powerSaveBlocker`                         | `leptoskit_plugin_keep_awake`                        | Display-idle inhibition leases.                                                                               |
+| Custom protocols / deep links / file opens | `leptoskit_plugin_deep_link`                         | Inbound queue + association descriptors; packaging still declares schemes/types.                              |
+| Outbound `https` / `mailto` / `tel`        | `leptoskit_plugin_linking`                           | Default policy rejects arbitrary custom schemes.                                                              |
+| `autoUpdater`                              | `leptoskit_plugin_updater`                           | Native executable hooks via a host `Backend`. Not Wasm code push.                                             |
+| Guest UI over-the-air updates              | `leptoskit_codepush`                                 | Signed Wasm bundles, separate from native installers.                                                         |
+| `utilityProcess` / `child_process`         | `leptoskit_plugin_shell`                             | Bounded, scoped, cancellable children — no Node compatibility.                                                |
+| `safeStorage`                              | `leptoskit_plugin_secure_store`                      | OS credential entries, not a general encrypt facade.                                                          |
+| Desktop capture / screenshots              | `leptoskit_plugin_screen_capture`                    | Mobile secure-window / observation today; desktop pixel capture remains.                                      |
 
 ## First-wave desktop lifecycle
 

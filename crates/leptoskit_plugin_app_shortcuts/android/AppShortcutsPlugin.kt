@@ -1,8 +1,10 @@
 package dev.leptoskit.plugins.appshortcuts
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.net.Uri
 import android.os.Build
 import android.os.Looper
 import dev.leptoskit.bridge.NativePlugin
@@ -22,6 +24,10 @@ class AppShortcutsPlugin(
 
     private var closed = false
     private var launchId: String? = null
+
+    init {
+        shared = this
+    }
 
     /** Records that the OS launched the app through this shortcut id. */
     fun noteLaunch(id: String) {
@@ -74,16 +80,24 @@ class AppShortcutsPlugin(
         val manager =
             context.getSystemService(ShortcutManager::class.java)
                 ?: throw PluginException(PluginException.UNAVAILABLE)
+        val launch =
+            context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?: throw PluginException(PluginException.UNAVAILABLE)
         val shortcuts =
             items.map { item ->
+                val intent =
+                    Intent(launch).apply {
+                        action = Intent.ACTION_VIEW
+                        data = Uri.parse("$SHORTCUT_URI_PREFIX${item.id}")
+                        putExtra(EXTRA_ID, item.id)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
                 ShortcutInfo
                     .Builder(context, item.id)
                     .setShortLabel(item.title)
                     .setLongLabel(item.subtitle.ifEmpty { item.title })
-                    .setIntent(
-                        context.packageManager.getLaunchIntentForPackage(context.packageName)
-                            ?: throw PluginException(PluginException.UNAVAILABLE),
-                    ).build()
+                    .setIntent(intent)
+                    .build()
             }
         manager.dynamicShortcuts = shortcuts
     }
@@ -187,9 +201,26 @@ class AppShortcutsPlugin(
         check(Looper.myLooper() == Looper.getMainLooper())
     }
 
-    private companion object {
-        const val SET = 0
-        const val CLEAR = 1
-        const val CONSUME_LAUNCH = 2
+    companion object {
+        const val EXTRA_ID = "dev.leptoskit.plugins.appshortcuts.ID"
+        const val SHORTCUT_URI_PREFIX = "leptoskit://app-shortcut/"
+
+        private const val SET = 0
+        private const val CLEAR = 1
+        private const val CONSUME_LAUNCH = 2
+
+        @Volatile
+        var shared: AppShortcutsPlugin? = null
+            private set
+
+        /** Notes a launcher shortcut when a plugin instance is registered. */
+        @JvmStatic
+        fun noteLaunchIfPresent(intent: Intent?) {
+            val id = intent?.getStringExtra(EXTRA_ID) ?: return
+            try {
+                shared?.noteLaunch(id)
+            } catch (_: PluginException) {
+            }
+        }
     }
 }
