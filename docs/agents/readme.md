@@ -8,6 +8,8 @@ The [workspace release graph](workspace-release-graph.md) records application bo
 
 Notes for people and coding agents working on leptoskit itself. The public site in `docs/src` is for app authors; anything about how this repository is built, tested, or planned lives here or in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). Start with [`AGENTS.md`](../../AGENTS.md).
 
+The [packaged consumer acceptance](packaged-consumer-acceptance.md) checks independent browser, guest, database and auth feature sets from the exact crate payloads before publication.
+
 | File                                                                 | What it covers                                                                                                                                                                                               |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [docs-site.md](docs-site.md)                                         | Who the public docs are for, how to write a page, and what the strict docs build rejects.                                                                                                                    |

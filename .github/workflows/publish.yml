@@ -516,6 +516,31 @@ jobs:
 
           cargo package --workspace --locked --allow-dirty "${excludes[@]}"
 
+      - name: check independent consumers of the packaged crates
+        id: packaged-consumers
+        # These fixtures resolve only the packaged payloads, in separate workspaces
+        # outside this checkout. Default package builds cannot cover the feature
+        # combinations used by browser, guest, database and auth consumers.
+        run: |
+          set -euo pipefail
+          python3 setup/scripts/packaged-consumers.py \
+            --archives "${CARGO_TARGET_DIR:-target}/package" \
+            --output "$RUNNER_TEMP/packaged-consumers"
+
+      - name: retain packaged consumer evidence
+        if: always() && steps.packaged-consumers.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packaged-consumer-evidence
+          path: |
+            ${{ runner.temp }}/packaged-consumers/acceptance.json
+            ${{ runner.temp }}/packaged-consumers/*/metadata.json
+            ${{ runner.temp }}/packaged-consumers/*/metadata.log
+            ${{ runner.temp }}/packaged-consumers/*/resolve.log
+            ${{ runner.temp }}/packaged-consumers/*/check.log
+            ${{ runner.temp }}/packaged-consumers/*/Cargo.lock
+          if-no-files-found: warn
+
       - name: request a crates.io credential via OIDC
         id: oidc
         # A crate that is not yet enrolled with a trusted publisher makes this fail, and that is not
