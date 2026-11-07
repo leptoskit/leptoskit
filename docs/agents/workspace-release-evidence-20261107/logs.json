@@ -1,0 +1,70 @@
+{
+	"deploy-8.log": {
+		"sha256": "a4dddfb852ec12ce82b63b57d1e9d8ff01cd85fcd3b21819e212f31d90679662",
+		"bytes": 15983
+	},
+	"controls-2.log": {
+		"sha256": "52d3c4f2594d4ca1d5aa9c37a17d21f8198ab2d66b21521294724179fe5ae093",
+		"bytes": 86629
+	},
+	"history-policy-controls-3.log": {
+		"sha256": "b2fef1745a1f1772eecb4b17c5ba6a38412e4789038c98896aa2de3213be23d4",
+		"bytes": 68889
+	},
+	"partial.log": {
+		"sha256": "d61a5684382cd8136e42dcd448c79a1ef0af5d3e6f3d10be179982f061a4a47f",
+		"bytes": 25007
+	},
+	"update.log": {
+		"sha256": "1d4a06af12d6357baa266486c3aa6e746a002c8578ccd289a822adbb4caf14f3",
+		"bytes": 56837
+	},
+	"packaging-controls.log": {
+		"sha256": "f52ef0c0d8de06320ba6a1a96a88e6a2e30cbe2ef3c0fb143412fa5b7fa3ba6b",
+		"bytes": 5781
+	},
+	"lint-push-restored-4.log": {
+		"sha256": "54f3dc35d9964ca68f44194be4907997507754062355033ccc4de01482cc6d21",
+		"bytes": 2374586
+	},
+	"verified-fixes-tests.log": {
+		"sha256": "534492eed3d81ecea38029116ca1647f7f416e82bfaf061163578324f979af17",
+		"bytes": 2819
+	},
+	"registry-test.log": {
+		"sha256": "6194e2a51d0fe4e88eb8434f87daad4f77425cb6aef452d8e1858a74866cf58d",
+		"bytes": 1986
+	},
+	"fixture-sources.bundle": {
+		"sha256": "1c90753d56ad01beae79c287e5a05c9ca62aafe4224cf1d50c7b542d4b929ee1",
+		"bytes": 2488
+	},
+	"plan-pin-control.log": {
+		"sha256": "e95db90cdd597f3bdb5f087dfd0b0bec3750905a0b007d3a64b3db84ab842541",
+		"bytes": 111
+	},
+	"lint-push-final.log": {
+		"sha256": "ca3d434260abbac1e54276d357c0a4dd793f607ae3a0528b3a5838fec3f5827f",
+		"bytes": 2376627
+	},
+	"final-rebase.log": {
+		"sha256": "5181b7c34f7bee4bed86e6f032013578b03f898a23ad1bd4fb5e6969f22e8e46",
+		"bytes": 1184
+	},
+	"lint-push-rebased.log": {
+		"sha256": "f1a0dc9ddcadf97c5b4cfac72037d44078c1e9e3d9fd0a77c3c7147e88aa6d9c",
+		"bytes": 275182
+	},
+	"lint-push-rebased-2.log": {
+		"sha256": "63d5a186dcbe8994d4d9d192d6d3c57c8d3bc735e02c62790cd30b36dfe645f1",
+		"bytes": 265227
+	},
+	"lint-push-rebased-serial.log": {
+		"sha256": "4b4e0a02a5b60d3d4e1b21143665bf547f4158452cc51cf1c86cb1e84d739c80",
+		"bytes": 290635
+	},
+	"lint-push-rebased-pty.log": {
+		"sha256": "e4468ae252b8ce851394dd94ae15314783dd5076d48e6178bed3e97a869f7211",
+		"bytes": 2379616
+	}
+}

@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "kind": "leptoskit-verified-backend-image",
+  "inventory_sha256": "87f4bd941fe4b99086c7ca96b5b449e1279ec82a3ef1dafc9e1f21f01ffbc913",
+  "recipe": {
+    "repository": "https://github.com/leptoskit/leptoskit",
+    "commit": "191b157e8c7c62f2424346d4343fa90e19f06b59",
+    "builder_image": "docker.io/library/rust@sha256:4333721398de61f53ccbe53b0b855bcc4bb49e55828e8f652d7a8ac33dd0c118",
+    "target": "aarch64-unknown-linux-musl",
+    "package": "verified-backend",
+    "binary": "verified-backend",
+    "features": [],
+    "no_default_features": false,
+    "rustflags": []
+  },
+  "executable_sha256": "81d175057489dd0f05464607f2111b52d9c076e996a7bd75f098d44d2b83f153",
+  "executable_mode": 493,
+  "migrations": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "runtime_image": "docker.io/library/alpine@sha256:87a4361f6c819618a6bafa2ed5228714cb0bb22195d2b49c95eb26799990128a",
+  "runtime_config_sha256": "02a7544856684ec2a995d8e0ee05a782da7e0d0126b522bef035b3878e6ca6b0",
+  "engine_image_id": "sha256:4b197c67d8c1d43747f2221b1725d8e1c905de0e50cfe977c67467dd91ff7735",
+  "image_config_sha256": "b2ba58cef01a816e04e2fbbaaddef00839545365a17fc92e3afc9a69111e9a59",
+  "platform": "linux/arm64",
+  "assets": "not_applicable",
+  "services": "unsupported",
+  "rpc_contract": {
+    "state": "exported",
+    "sha256": "c34d10e5266c0f17b0b1a06fce68bdbd5a2cddab8fae213c0d1ea87c7121029d",
+    "compatibility": "not_checked"
+  },
+  "native_guest_compatibility": "not_applicable",
+  "runtime_attestation": "absent"
+}

@@ -1,0 +1,17 @@
+{
+	"accounts": {
+		"readiness": {
+			"ready": true
+		},
+		"migration_history": [],
+		"database_container": "8555f7646f892b3ffb078f4438e038c50b692739ee2adf2c41098828f02d4c41"
+	},
+	"website": {
+		"readiness": {
+			"ready": true
+		},
+		"migration_history": [],
+		"database_container": "1109f27718e03da48351d5ece6585a59600bc70c46ff3c56b01cb33dde990f45"
+	},
+	"cli_sha256": "80bc30739bfdaaf0e804270d243ae50f9cefe94b85c118f6d6383ed6f8c543f6"
+}

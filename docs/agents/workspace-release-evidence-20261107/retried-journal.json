@@ -1,0 +1,14 @@
+{
+	"format_version": 1,
+	"plan_sha256": "0ad01b9ffa740c6f52fc6f62088e66aca744f0d7d0350728a99baea2f7ee5e02",
+	"applications": {
+		"accounts": {
+			"attempts": 23,
+			"state": "command_completed"
+		},
+		"website": {
+			"attempts": 10,
+			"state": "command_completed"
+		}
+	}
+}
