@@ -418,8 +418,9 @@ impl EndReason {
 pub struct Transition {
 	/// The version the client last had.
 	pub from: u64,
-	/// The version these updates reach. Applying them in order leaves the
-	/// client at this version.
+	/// The complete version these updates reach. Prefix chunks of a split
+	/// transition retain `from`; only its last chunk advances this cursor.
+	/// A reconnect before that last chunk replays the unfinished changes.
 	pub to: u64,
 	/// The results that changed.
 	pub updates: Vec<SubscriptionUpdate>,

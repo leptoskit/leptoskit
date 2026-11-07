@@ -1139,8 +1139,9 @@ impl Session {
 	}
 
 	/// Sends one transition to `to`, split into frames under the size
-	/// limit, all at the same `to`, and repeating every value when an
-	/// earlier one was dropped.
+	/// limit. Only the last chunk advances the resume cursor; earlier
+	/// chunks may be replayed if the connection drops before it arrives.
+	/// Repeat every current result when an earlier transition was dropped.
 	fn send_transition(
 		&mut self,
 		from: u64,
@@ -1165,10 +1166,11 @@ impl Session {
 
 		self.full_next = false;
 
-		// A frame over the limit is split, all at the same `to`: the client
-		// applies the chunks in order and lands on the same state.
+		// A partial batch must not claim its final version: a reconnect
+		// needs to replay every changed result if the last chunk was lost.
 		let mut chunk = Vec::new();
 		let mut sent = false;
+		let mut complete = true;
 
 		for update in updates {
 			chunk.push(update);
@@ -1185,24 +1187,35 @@ impl Session {
 			if text.len() > MAX_FRAME_BYTES && chunk.len() > 1 {
 				let last = chunk.pop().expect("just pushed");
 
-				self.send_chunk(from, &chunk, to, full);
+				if !self.send_chunk(from, &chunk, from, full) {
+					complete = false;
+					break;
+				}
 				sent = true;
 				chunk = vec![last];
 			}
 		}
 
-		if !chunk.is_empty() || !sent {
-			self.send_chunk(from, &chunk, to, full);
+		if complete && (!chunk.is_empty() || !sent) {
+			complete = self.send_chunk(from, &chunk, to, full);
 		}
 
-		self.last_sent = to;
+		if complete {
+			self.last_sent = to;
+		}
 		self.live
 			.stats_ref()
 			.transitions
 			.fetch_add(1, Ordering::Relaxed);
 	}
 
-	fn send_chunk(&mut self, from: u64, updates: &[SubscriptionUpdate], to: u64, full: bool) {
+	fn send_chunk(
+		&mut self,
+		from: u64,
+		updates: &[SubscriptionUpdate],
+		to: u64,
+		full: bool,
+	) -> bool {
 		let transition = Transition {
 			from,
 			to,
@@ -1210,13 +1223,16 @@ impl Session {
 			full,
 		};
 		let Some(outbound) = Outbound::frame(&ServerFrame::Transition(transition), Some(to)) else {
-			return;
+			self.full_next = true;
+			return false;
 		};
 
 		if self.out.try_send(outbound).is_err() {
 			// A slow connection gets the newest state, not every step.
 			self.full_next = true;
+			return false;
 		}
+		true
 	}
 
 	/// Checks every joined channel again, for the new identity.
