@@ -82,11 +82,35 @@ cd android
 - The generated app keeps your screen clear of the status and navigation bars. The bars take your root view's background, as a browser paints the page's background across the whole window, with light icons on a dark one. A root without an opaque background leaves the theme's white bars.
 - With the backend crate, the host reports the window insets for the system bars and display cutouts, and the [safe-area utilities](../guide/07-shared-components.md#clear-the-status-bar-and-home-indicator) pad by them.
 - The [`picture-in-picture`](plugins.md) plugin can enter activity picture-in-picture when the hosting activity declares `android:supportsPictureInPicture="true"` (scaffolded hosts set this), and can hold a system overlay after the user grants `SYSTEM_ALERT_WINDOW` in settings. Declaring the permission in the manifest never grants it; `request_overlay` opens the system grant screen and returns the status at launch—poll `overlay_status` after the user returns.
+- [Android intents](#android-intents) (`android_intent`) launch, broadcast, and resolve arbitrary intents with typed extras. Other platforms return `Unavailable`.
 - [Device policy](plugins.md#notes-on-specific-plugins) (`device-policy`) can lock the screen, set password rules, disable the camera, or wipe the device after the user enables an app-owned device-admin receiver. Status never prompts. Your `AndroidManifest.xml` must declare `DevicePolicyReceiver` with `BIND_DEVICE_ADMIN`, and `res/xml/device_admin.xml` must list only the policies you call. Google Play restricts Device Admin for many consumer apps; wipe in particular needs a clear enterprise reason.
 
 ## Home-screen widgets
 
 The [`home-widgets`](plugin-inventory.md) plugin publishes a bounded text snapshot into app-private preferences and asks `AppWidgetManager` to refresh the app's own App Widget providers. Your app still owns each `AppWidgetProvider` and its layout. Kind-to-provider matching is best-effort by class name; name providers after their kinds when you need a precise reload. `installed` reports whether any matching provider currently has pinned instances, and returns none when no provider class name matches the kind. Snapshot URLs must be HTTP(S) or an app deep-link scheme (`javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected).
+
+## Android intents
+
+Some things only exist on Android: opening one particular settings page, handing a link to a specific app with the extras it expects, or sending a broadcast your own receiver listens for. The [`android_intent`](plugin-inventory.md) plugin sends any intent you describe, as Flutter's `android_intent_plus` does. Add `leptoskit_plugin_android_intent` to your app and `"android_intent"` to `native.plugins`:
+
+```rust
+use leptoskit_plugin_android_intent::guest::AndroidIntent;
+use leptoskit_plugin_android_intent::{action, Intent};
+
+// Unavailable on the web, iOS, macOS, Windows, Linux, the terminal, HarmonyOS,
+// Wear OS, and watchOS: only Android phones and tablets register the plugin.
+let intents = AndroidIntent::new()?;
+let settings = Intent::new()
+	.action(action::APPLICATION_DETAILS_SETTINGS)
+	.data("package:com.example.app");
+intents.launch(&settings).await?;
+```
+
+It can also open an intent through a titled chooser, send broadcasts, start services, ask which activity would handle an intent, and launch `intent:` links. A call returns `Unavailable` when no app handles the intent and `PermissionDenied` when Android refuses it.
+
+Because your screens can be updated over the air, the plugin never lets an intent give another app access to your app's files: it refuses the `FLAG_GRANT_*_URI_PERMISSION` flags and `file:` links, and extras can only be numbers, text, arrays, and nested bundles. It can still reach anything your app's own permissions allow, so only select it when you need it.
+
+On Android 11 and later, asking whether an app can handle an intent only sees apps your manifest declares. Add a `<queries>` element to `android/app/src/main/AndroidManifest.xml` listing the intents or packages you check; launching doesn't need it.
 
 ## Ship an update without the Play Store
 

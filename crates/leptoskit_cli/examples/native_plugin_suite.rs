@@ -70,6 +70,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("passkeys", "leptoskit_plugin_passkeys"),
 	("web-auth", "leptoskit_plugin_web_auth"),
 	("audio", "leptoskit_plugin_audio"),
+	("android_intent", "leptoskit_plugin_android_intent"),
 ];
 
 const ANDROID_TESTS: &[&str] = &[
@@ -101,6 +102,8 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_sharing/tests/android/SharingTest.kt",
 	"leptoskit_plugin_passkeys/tests/android/PasskeysPluginTest.kt",
 	"leptoskit_plugin_web_auth/tests/android/WebAuthPluginTest.kt",
+	"leptoskit_plugin_android_intent/tests/android/AndroidIntentWireTest.kt",
+	"leptoskit_plugin_android_intent/tests/android/AndroidIntentPluginTest.kt",
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker

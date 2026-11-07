@@ -308,6 +308,19 @@ real system sensors, desktop has no sensor, and the browser uses Generic Sensor 
 
 <!-- {/p_accelerometerSummary} -->
 
+<!-- {@p_android_intentSummary} -->
+
+Add `{{ plugin_android_intent.package.name }}` as a direct dependency and select the
+`{{ plugin_android_intent.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; generated Android hosts discover it
+from Cargo metadata. Guests enable the `guest` feature and reuse `guest::AndroidIntent`
+rather than resolving the plugin on every call. It launches, broadcasts and resolves
+arbitrary Android intents with typed extras, the way Flutter's `android_intent_plus` does.
+Only Android registers it: on the web, iOS, macOS, Windows, Linux, the terminal, HarmonyOS,
+Wear OS and watchOS, `guest::AndroidIntent::new` returns `Unavailable`. Guest code can change over the
+air, so the plugin refuses URI-permission grant flags, `file:` URIs and parcelable extras.
+
+<!-- {/p_android_intentSummary} -->
+
 <!-- {@p_applicationSummary} -->
 
 Add `{{ plugin_application.package.name }}` as a direct dependency and select the `{{ plugin_application.package.metadata.leptoskit.runtime.name }}`

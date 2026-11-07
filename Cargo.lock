@@ -3534,6 +3534,7 @@ name = "harmonyos_plugins"
 version = "0.3.0"
 dependencies = [
  "leptoskit_plugin_accelerometer",
+ "leptoskit_plugin_android_intent",
  "leptoskit_plugin_app_shortcuts",
  "leptoskit_plugin_application",
  "leptoskit_plugin_arguments",
@@ -5868,6 +5869,13 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
  "leptoskit_sensor",
+]
+
+[[package]]
+name = "leptoskit_plugin_android_intent"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]
