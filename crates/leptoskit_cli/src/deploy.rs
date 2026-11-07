@@ -944,13 +944,13 @@ const WORKSPACE_DOCKERIGNORE: &str = "\
 **/.cargo/credentials
 **/.cargo/credentials.toml
 **/.kamal
-**/infra/.terraform
-**/infra/*.tfstate*
-**/infra/*.plan
-**/infra/plan.sha256
-**/infra/operation.lock
-**/infra/releases.json
-**/infra/release.yml
+**/.terraform
+**/infra/**/*.tfstate*
+**/infra/**/*.plan
+**/infra/**/plan.sha256
+**/infra/**/operation.lock
+**/infra/**/releases.json
+**/infra/**/release.yml
 **/infra/.kamal
 ";
 

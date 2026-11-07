@@ -533,7 +533,7 @@ fn a_nested_app_resolves_through_cargo_workspace_globs() {
 		"**/dist",
 		"**/*.sqlite3",
 		"**/.env.*",
-		"**/infra/*.tfstate*",
+		"**/infra/**/*.tfstate*",
 		"**/.kamal",
 	] {
 		assert!(ignore.contains(pattern), "{pattern}: {ignore}");
@@ -817,7 +817,7 @@ fn custom_ignore_exceptions_do_not_reintroduce_managed_state() {
 	generate(&app, &config, Target::Docker, false).unwrap();
 	let ignore = std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap();
 	let exception = ignore.find("!apps/site/.env").unwrap();
-	for pattern in ["**/.env", "**/.kamal", "**/infra/*.tfstate*"] {
+	for pattern in ["**/.env", "**/.kamal", "**/infra/**/*.tfstate*"] {
 		assert!(
 			ignore.rfind(pattern).unwrap() > exception,
 			"{pattern}: {ignore}"
