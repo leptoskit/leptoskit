@@ -38,6 +38,7 @@ pub use leptoskit_plugin_logging;
 pub use leptoskit_plugin_magnetometer;
 pub use leptoskit_plugin_menu;
 pub use leptoskit_plugin_network;
+pub use leptoskit_plugin_network_info;
 pub use leptoskit_plugin_nfc;
 pub use leptoskit_plugin_notifications;
 pub use leptoskit_plugin_os;

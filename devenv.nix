@@ -1100,6 +1100,7 @@ in
             --package leptoskit_plugin_sharing \
             --package leptoskit_plugin_filesystem \
             --package leptoskit_plugin_network \
+            --package leptoskit_plugin_network_info \
             --package leptoskit_plugin_posture \
             --package leptoskit_plugin_keep_awake \
             --package leptoskit_plugin_speech \

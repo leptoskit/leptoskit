@@ -617,10 +617,26 @@ Add `{{ plugin_network.package.name }}` as a direct dependency and select the `{
 Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Network` rather than resolving the plugin on every call. Apple uses
 `NWPathMonitor`, Android uses `ConnectivityManager`, desktop reports interface state,
-and the browser uses `navigator.onLine` plus `NetworkInformation`; an active connection
-never claims a server is reachable.
+and the browser uses `navigator.onLine` plus `NetworkInformation`. Each reading names a
+primary connection and the full set of transports in use (Wi-Fi, cellular, ethernet,
+Bluetooth, VPN, satellite, other), as Flutter's `connectivity_plus` lists them; an
+active connection never claims a server is reachable.
 
 <!-- {/p_networkSummary} -->
+
+<!-- {@p_networkInfoSummary} -->
+
+Add `{{ plugin_network_info.package.name }}` as a direct dependency and select the
+`{{ plugin_network_info.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from
+Cargo metadata. Guests enable the `guest` feature and reuse `guest::NetworkInfo`. One
+snapshot reports the Wi-Fi name (SSID, as raw bytes), BSSID, IPv4 and IPv6 addresses,
+subnet mask, broadcast address and gateway, as Flutter's `network_info_plus` does. Each
+field is `None` when the platform withholds it; the plugin never returns placeholders and
+never asks for permission. The SSID and BSSID need location authorization, which the
+`location` plugin requests, and on iOS the Access Wi-Fi Information entitlement too.
+Browsers return `Unavailable`.
+
+<!-- {/p_networkInfoSummary} -->
 
 <!-- {@p_notificationsSummary} -->
 

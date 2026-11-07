@@ -70,7 +70,7 @@ impl Source for WebNetwork {
 	}
 }
 
-/// Reactive battery state.
+/// Reactive network state.
 pub struct UseNetworkReturn {
 	/// `None` until the first snapshot resolves; later failures keep the last
 	/// published value.
@@ -136,16 +136,7 @@ mod tests {
 	use crate::Snapshot;
 
 	fn online(connected: bool) -> Snapshot {
-		Snapshot {
-			connection: Connection::Wifi,
-			connected: Some(connected),
-			internet_validated: None,
-			expensive: None,
-			data_saver: None,
-			downlink_kbps: None,
-			round_trip_ms: None,
-			effective_type: crate::EffectiveType::Unknown,
-		}
+		Snapshot::connection(Connection::Wifi, Some(connected))
 	}
 
 	/// Yields queued results in order; an empty queue reports `Unavailable`.

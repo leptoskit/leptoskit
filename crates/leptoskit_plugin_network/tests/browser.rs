@@ -13,5 +13,8 @@ async fn stale_reading_returns_current_state_without_waiting_for_an_event() {
 	let current = web::wait_for_change(stale).await.unwrap();
 	assert!(current.connected.is_some());
 	assert_eq!(current.internet_validated, None);
+	if current.connection == Connection::None {
+		assert!(current.transports.is_empty(), "offline has no transports");
+	}
 	assert_eq!(Snapshot::decode(&current.encode().unwrap()), Ok(current));
 }

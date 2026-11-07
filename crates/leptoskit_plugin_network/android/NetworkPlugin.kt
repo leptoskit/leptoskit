@@ -179,22 +179,25 @@ class NetworkPlugin(
         return bytes
     }
 
-    /** Mirrors the wire contract: known transport, tri-state flags, known estimate class. */
+    /** Mirrors the wire contract: known transport, tri-state flags, known estimate class, known transport bits. */
     private fun isValid(fields: IntArray): Boolean =
         fields[CONNECTION_FIELD] in 0..LAST_CONNECTION &&
             (FIRST_FLAG_FIELD..LAST_FLAG_FIELD).all { fields[it] in 0..FLAG_TRUE } &&
-            fields[EFFECTIVE_TYPE_FIELD] in 0..LAST_EFFECTIVE_TYPE
+            fields[EFFECTIVE_TYPE_FIELD] in 0..LAST_EFFECTIVE_TYPE &&
+            fields[TRANSPORTS_FIELD] and NetworkTransports.MASK.inv() == 0
 
     /** Encodes a reading; anything the OS does not report stays unknown. */
     private fun snapshot(): ByteArray {
         val connectivity = manager ?: throw PluginException(PluginException.UNAVAILABLE)
         val capabilities = activeCapabilities(connectivity)
         val connected = if (capabilities == null) FLAG_FALSE else FLAG_TRUE
+        val primary = connectionType(capabilities)
+        val present = capabilities?.let { caps -> NetworkTransports.CODES.filter(caps::hasTransport) }
 
         return ByteBuffer
             .allocate(SNAPSHOT_BYTES)
             .order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(connectionType(capabilities))
+            .putInt(primary)
             .putInt(connected)
             .putInt(if (validated(capabilities)) FLAG_TRUE else FLAG_FALSE)
             .putInt(costType(capabilities))
@@ -203,6 +206,7 @@ class NetworkPlugin(
             .putInt(UNKNOWN_ESTIMATE)
             .putInt(UNKNOWN_ESTIMATE)
             .putInt(EFFECTIVE_UNKNOWN)
+            .putInt(if (present == null) 0 else NetworkTransports.bits(present, primary))
             .array()
     }
 
@@ -247,15 +251,16 @@ class NetworkPlugin(
         /** Waits until the OS reports a different reading. */
         const val WAIT_FOR_CHANGE = 1
 
-        /** Eight little-endian u32 fields, as the wire snapshot defines them. */
-        const val SNAPSHOT_BYTES = 32
-        const val FIELD_COUNT = 8
+        /** Nine little-endian u32 fields, as the wire snapshot defines them. */
+        const val SNAPSHOT_BYTES = 36
+        const val FIELD_COUNT = 9
 
         /** Field offsets inside the reading. */
         const val CONNECTION_FIELD = 0
         const val FIRST_FLAG_FIELD = 1
         const val LAST_FLAG_FIELD = 4
         const val EFFECTIVE_TYPE_FIELD = 7
+        const val TRANSPORTS_FIELD = 8
 
         /** The highest code each field may carry. */
         const val LAST_CONNECTION = 7

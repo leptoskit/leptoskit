@@ -2,17 +2,18 @@ import Foundation
 import LeptosKitBridge
 import Network
 
-/// The wire snapshot: eight little-endian u32 fields.
-private enum Wire {
-    static let snapshotBytes = 32
+/// The wire snapshot: nine little-endian u32 fields.
+enum Wire {
+    static let snapshotBytes = 36
     static let fieldBytes = 4
-    static let fieldCount = 8
+    static let fieldCount = 9
 
     /// Field offsets inside the reading.
     static let connectionField = 0
     static let firstFlagField = 1
     static let lastFlagField = 4
     static let effectiveTypeField = 7
+    static let transportsField = 8
 
     /// The highest code each field may carry.
     static let lastConnection: UInt32 = 7
@@ -37,6 +38,44 @@ private enum Wire {
     static let cellular: UInt32 = 3
     static let ethernet: UInt32 = 4
     static let other: UInt32 = 7
+
+    /// Transport bits, matching `Transport` in the Rust crate.
+    static let wifiBit: UInt32 = 1 << 0
+    static let cellularBit: UInt32 = 1 << 1
+    static let ethernetBit: UInt32 = 1 << 2
+    static let satelliteBit: UInt32 = 1 << 5
+    static let otherBit: UInt32 = 1 << 6
+    /// Every bit the wire defines.
+    static let transportMask: UInt32 = (1 << 7) - 1
+}
+
+/// The parts of an `NWPath` the snapshot encodes, so tests can build one.
+struct PathReading: Equatable {
+    var satisfied: Bool
+    var wifi = false
+    var cellular = false
+    var wiredEthernet = false
+    var other = false
+    var expensive = false
+    var constrained = false
+    /// Apple's ultra-constrained mode, which satellite data uses.
+    var ultraConstrained = false
+}
+
+extension PathReading {
+    init(_ path: NWPath) {
+        self.init(
+            satisfied: path.status == .satisfied,
+            wifi: path.usesInterfaceType(.wifi),
+            cellular: path.usesInterfaceType(.cellular),
+            wiredEthernet: path.usesInterfaceType(.wiredEthernet),
+            other: path.usesInterfaceType(.other),
+            expensive: path.isExpensive,
+            constrained: path.isConstrained
+        )
+
+        if #available(macOS 26.0, iOS 26.0, *) { ultraConstrained = path.isUltraConstrained }
+    }
 }
 
 /// Reads NWPath state and waits for the OS to report a change.
@@ -93,23 +132,28 @@ public final class NetworkPlugin: NativePlugin {
 
     /// Reads the caller's last reading, refusing fields the wire cannot carry.
     nonisolated private static func previous(from payload: NativeBuffer) throws -> Data {
-        try payload.withUnsafeBytes { bytes in
+        try payload.withUnsafeBytes { try validated(Data($0)) }
+    }
 
-            guard bytes.count == Wire.snapshotBytes else { throw PluginError.invalidArgument }
+    /// Returns `bytes` when they form a reading the wire can carry.
+    nonisolated static func validated(_ bytes: Data) throws -> Data {
+        guard bytes.count == Wire.snapshotBytes else { throw PluginError.invalidArgument }
 
-            let fields = (0..<Wire.fieldCount).map {
-                UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: $0 * Wire.fieldBytes, as: UInt32.self))
+        let fields = bytes.withUnsafeBytes { raw in
+            (0..<Wire.fieldCount).map {
+                UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * Wire.fieldBytes, as: UInt32.self))
             }
-
-            guard fields[Wire.connectionField] <= Wire.lastConnection,
-                  fields[Wire.firstFlagField...Wire.lastFlagField].allSatisfy({ $0 <= Wire.lastFlag }),
-                  fields[Wire.effectiveTypeField] <= Wire.lastEffectiveType
-            else {
-                throw PluginError.invalidArgument
-            }
-
-            return Data(bytes)
         }
+
+        guard fields[Wire.connectionField] <= Wire.lastConnection,
+              fields[Wire.firstFlagField...Wire.lastFlagField].allSatisfy({ $0 <= Wire.lastFlag }),
+              fields[Wire.effectiveTypeField] <= Wire.lastEffectiveType,
+              fields[Wire.transportsField] & ~Wire.transportMask == 0
+        else {
+            throw PluginError.invalidArgument
+        }
+
+        return bytes
     }
 
     /// Starts a monitor and answers the first reading that differs from `previous`.
@@ -127,7 +171,7 @@ public final class NetworkPlugin: NativePlugin {
 
                 if change { changeRequest = identifier }
                 monitor.pathUpdateHandler = { [weak self] path in
-                    let data = Self.encode(path)
+                    let data = Self.encode(PathReading(path))
                     Task { @MainActor [weak self] in
                         self?.updated(identifier: identifier, data: data)
                     }
@@ -158,18 +202,19 @@ public final class NetworkPlugin: NativePlugin {
     }
 
     /// Encodes a path; no probe or request is made, so reachability stays a hint.
-    nonisolated private static func encode(_ path: NWPath) -> Data {
-        let connected = path.status == .satisfied
+    nonisolated static func encode(_ path: PathReading) -> Data {
+        let primary = connection(path)
         // A satisfied route does not prove internet access or server reachability.
         let fields: [UInt32] = [
-            connection(path, connected: connected),
-            connected ? Wire.flagTrue : Wire.flagFalse,
+            primary,
+            path.satisfied ? Wire.flagTrue : Wire.flagFalse,
             Wire.flagUnknown,
-            path.isExpensive ? Wire.flagTrue : Wire.flagFalse,
-            path.isConstrained ? Wire.flagTrue : Wire.flagFalse,
+            path.expensive ? Wire.flagTrue : Wire.flagFalse,
+            path.constrained ? Wire.flagTrue : Wire.flagFalse,
             Wire.unknown,
             Wire.unknown,
-            Wire.flagUnknown
+            Wire.flagUnknown,
+            transports(path, primary: primary)
         ]
 
         return fields.reduce(into: Data(capacity: Wire.snapshotBytes)) { result, field in
@@ -179,15 +224,31 @@ public final class NetworkPlugin: NativePlugin {
     }
 
     /// Maps the path's interface to the wire connection code.
-    nonisolated private static func connection(_ path: NWPath, connected: Bool) -> UInt32 {
-        guard connected else { return Wire.none }
+    nonisolated private static func connection(_ path: PathReading) -> UInt32 {
+        guard path.satisfied else { return Wire.none }
 
-        if path.usesInterfaceType(.wifi) { return Wire.wifi }
+        if path.wifi { return Wire.wifi }
 
-        if path.usesInterfaceType(.cellular) { return Wire.cellular }
+        if path.cellular { return Wire.cellular }
 
-        if path.usesInterfaceType(.wiredEthernet) { return Wire.ethernet }
+        if path.wiredEthernet { return Wire.ethernet }
 
         return Wire.other
+    }
+
+    /// Every interface type the path uses. `NWPath` names no VPN or Bluetooth
+    /// type, so a tunnel reports as other; the primary's bit is always present.
+    nonisolated private static func transports(_ path: PathReading, primary: UInt32) -> UInt32 {
+        guard path.satisfied else { return 0 }
+
+        let present: [(Bool, UInt32)] = [
+            (path.wifi, Wire.wifiBit),
+            (path.cellular, Wire.cellularBit),
+            (path.wiredEthernet, Wire.ethernetBit),
+            (path.other || primary == Wire.other, Wire.otherBit),
+            (path.ultraConstrained, Wire.satelliteBit)
+        ]
+
+        return present.reduce(0) { bits, entry in entry.0 ? bits | entry.1 : bits }
     }
 }
