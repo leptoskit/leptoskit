@@ -43,3 +43,9 @@ Fresh focused log SHA-256 values:
 - `infra.log`: `f9086e450fe4c6ba4ded18c2cc37c6cc36b428d8964c3b4d0d13e614bf03b7e2`
 - `migrations.log`: `442f4d0d59da511d74b3cb57293a7ad32955fc4fee6f23e415b23b5d76baa10a`
 - `systemd-2.log`: `fbd40f3f9c66d96ea7aadc478fba689cfed3a996a68ba984c3bc5328a5f32fd7`
+
+## Full normal gate
+
+The unmodified `lint:push` passed on `661cee6d`: 5,580 workspace tests passed (53 skipped, one slow), 16 file-route tests passed (zero skipped), and 43 devtools tests passed (zero skipped). Clippy, markup, documentation, formatting, Kotlin, workflow security, release checks, schema, and dependency policy all passed. The initial attempt found an inherited markup warning in main's auth account-bar example test; a one-line conversion to the existing `view!` style fixed it in signed commit `661cee6d`.
+
+`lint-push-2.log` SHA-256: `20e8745ae318126eb03325a78ce272e327a14daf3141e12c145e120e7062c49f`. This is fresh final-base evidence, distinct from the deleted pre-rebase logs. Publication still requires the normal actual pre-push hook; its outcome belongs in the PR record.
