@@ -1363,6 +1363,7 @@ mod tests {
 			out_dir: camino::Utf8PathBuf::from("/tmp/dist"),
 			client: None,
 			server_binary: None,
+			services: Vec::new(),
 		};
 		let address: SocketAddr = "127.0.0.1:0".parse().unwrap();
 		let error = start_app_server(&config, &output, address, &[]).unwrap_err();
@@ -1399,6 +1400,10 @@ mod tests {
 		let mut web = Web {
 			config: LeptoskitConfig::default(),
 			address: "127.0.0.1:4810".parse().unwrap(),
+			app_address: "127.0.0.1:4810".parse().unwrap(),
+			root: PathBuf::new(),
+			database_url: None,
+			services: DevServices::default(),
 			runs_app_server: false,
 			app_server: None,
 			env: Vec::new(),
@@ -1409,6 +1414,10 @@ mod tests {
 		let mut running = Web {
 			config: LeptoskitConfig::default(),
 			address: "127.0.0.1:4811".parse().unwrap(),
+			app_address: "127.0.0.1:4811".parse().unwrap(),
+			root: PathBuf::new(),
+			database_url: None,
+			services: DevServices::default(),
 			runs_app_server: true,
 			env: vec![("DATABASE_URL".into(), "sqlite::memory:".into())],
 			app_server: Some(
@@ -1438,6 +1447,10 @@ mod tests {
 		let doomed = Web {
 			config: LeptoskitConfig::default(),
 			address: "127.0.0.1:4812".parse().unwrap(),
+			app_address: "127.0.0.1:4812".parse().unwrap(),
+			root: PathBuf::new(),
+			database_url: None,
+			services: DevServices::default(),
 			runs_app_server: true,
 			env: Vec::new(),
 			app_server: Some(created),
@@ -1557,6 +1570,7 @@ mod tests {
 			out_dir: camino::Utf8PathBuf::from_path_buf(root.join("dist")).unwrap(),
 			client: None,
 			server_binary: Some(binary),
+			services: Vec::new(),
 		};
 		let mut child = start_app_server(
 			&config,

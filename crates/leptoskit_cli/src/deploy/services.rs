@@ -178,17 +178,16 @@ pub fn read(root: &Path, config: &LeptoskitConfig) -> Result<Vec<DeployService>>
 			// A workspace service is in the app's metadata; an installed one,
 			// fetched beside the build, is in its own.
 			let local;
-			let found = match metadata.package(package) {
-				Some(found) => found,
-				None => {
-					let dir = manifest
-						.parent()
-						.context("a package's manifest has no directory")?;
-					local = crate::wasm::cargo_metadata(dir)?;
-					local
-						.package(package)
-						.with_context(|| format!("there's no package `{package}` in {}", dir.display()))?
-				}
+			let found = if let Some(found) = metadata.package(package) {
+				found
+			} else {
+				let dir = manifest
+					.parent()
+					.context("a package's manifest has no directory")?;
+				local = crate::wasm::cargo_metadata(dir)?;
+				local.package(package).with_context(|| {
+					format!("there's no package `{package}` in {}", dir.display())
+				})?
 			};
 			super::binary(found).with_context(|| {
 				format!("services.{}: set `bin` to the binary to run", settings.name)

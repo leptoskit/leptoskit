@@ -332,6 +332,7 @@ fn the_binary_is_the_one_named_after_the_package_or_the_only_one() {
 		}],
 		features: std::collections::BTreeMap::default(),
 		dependencies: Vec::new(),
+		metadata: serde_json::Value::Null,
 	};
 	assert_eq!(super::binary(&package).unwrap(), "serve");
 	package.targets.push(crate::wasm::MetadataTarget {
@@ -953,10 +954,11 @@ pub(crate) fn project_with_services(root: &Path, db: Db, trust: &str) -> Leptosk
 	};
 	let config = format!(
 		"schema_version = 0\n\n[app]\nname = \"notes\"\nversion = \"0.1.0\"\nrender = \
-		 \"ssr\"\n\n[serve]\naddress = \"127.0.0.1\"\nport = 3000\n\n[build]\nclient_package = \
-		 \"notes_app\"\n\n[db]\ndialect = \"{dialect}\"\n\n[services.analytics]\npackage = \
-		 \"analytics_service\"\ntrust = \"{trust}\"\n\n[services.cards]\npackage = \
-		 \"cards\"\n\n[services.billing]\nurl = \"https://billing.internal.example/\"\n"
+		 \"ssr\"\n\n[serve]\naddress = \"127.0.0.1\"\nport = 3000\nprobes = \
+		 true\n\n[build]\nclient_package = \"notes_app\"\n\n[db]\ndialect = \
+		 \"{dialect}\"\n\n[services.analytics]\npackage = \"analytics_service\"\ntrust = \
+		 \"{trust}\"\n\n[services.cards]\npackage = \"cards\"\n\n[services.billing]\nurl = \
+		 \"https://billing.internal.example/\"\n"
 	);
 	write(root, "leptoskit.toml", &config);
 	write(
@@ -1116,4 +1118,55 @@ fn the_connection_budget_counts_every_pool() {
 	let tight = super::services::Budget::new(8, 1, &project.services, 30);
 	assert!(!tight.fits());
 	assert!(tight.explain().contains("services.analytics"));
+}
+
+/// A nested app's services build into the workspace's target directory, and
+/// their Compose entries build the app's image from the workspace root.
+#[test]
+fn a_nested_apps_services_build_from_the_workspace() {
+	let root = tempfile::tempdir().unwrap();
+	nested_project(root.path(), "site");
+	write(
+		root.path(),
+		"Cargo.toml",
+		"[workspace]\nmembers = [\"apps/*/server\", \"apps/*/client\", \
+		 \"apps/*/analytics\"]\nresolver = \"2\"\n\n[workspace.package]\nedition = \
+		 \"2024\"\n\n[workspace.dependencies]\nanyhow = \"1\"\n",
+	);
+	let app = root.path().join("apps/site");
+	write(
+		&app,
+		"analytics/Cargo.toml",
+		"[package]\nname = \"analytics_service\"\nversion = \"0.1.0\"\nedition.workspace = \
+		 true\n\n[package.metadata.leptoskit.service]\nname = \"analytics\"\nport = 3100\n",
+	);
+	write(&app, "analytics/src/main.rs", "fn main() {}\n");
+	let config = std::fs::read_to_string(app.join("leptoskit.toml")).unwrap()
+		+ "\n[services.analytics]\npackage = \"analytics_service\"\n";
+	write(&app, "leptoskit.toml", &config);
+	let config = LeptoskitConfig::from_toml(&config, &app).expect("config");
+
+	generate(&app, &config, Target::Compose, false).unwrap();
+	let dockerfile = std::fs::read_to_string(app.join("Dockerfile")).unwrap();
+	assert!(
+		dockerfile.contains(
+			"&& install -D /src/target/release/analytics_service \
+			 /usr/local/lib/leptoskit/services/analytics"
+		),
+		"{dockerfile}"
+	);
+	assert!(
+		dockerfile.contains("COPY --from=build /usr/local/lib/leptoskit/services /app/services"),
+		"{dockerfile}"
+	);
+
+	let compose = std::fs::read_to_string(app.join("compose.yaml")).unwrap();
+	let analytics = &compose[compose.find("\n  analytics:").expect("the service's entry")..];
+	assert!(
+		analytics.starts_with(
+			"\n  analytics:\n    build:\n      context: \"../..\"\n      dockerfile: \
+			 \"apps/site/Dockerfile\"\n"
+		),
+		"{compose}"
+	);
 }

@@ -1738,24 +1738,34 @@ fn compose_service(out: &mut String, project: &Project, service: &DeployService)
 	let token = service.token_env();
 	let command = service.command();
 	let app_port = project.port;
+	// The services run the app's image, built the way the app's is.
+	let build = if project.app_dir.is_empty() {
+		vec!["    build: .".to_owned()]
+	} else {
+		vec![
+			"    build:".to_owned(),
+			format!("      context: {}", yaml_string(&project.context)),
+			format!("      dockerfile: {}", yaml_string(&project.dockerfile)),
+		]
+	};
 	// One line per call: a literal spanning several YAML lines would be
 	// rewrapped by the formatter with `\` continuations, which swallow the
 	// newlines between them.
-	let lines = [
-		String::new(),
-		format!("  {name}:"),
-		"    build: .".to_owned(),
-		format!("    image: {image}"),
-		format!("    command: [\"{command}\"]"),
-		"    environment:".to_owned(),
-		format!("      LEPTOSKIT_SERVICE_NAME: {name}"),
-		format!("      LEPTOSKIT_SERVICE_ADDR: 0.0.0.0:{port}"),
-		format!("      LEPTOSKIT_SERVICE_TOKEN: ${{{token}:?set {token}}}"),
-		format!(
+	let lines = [String::new(), format!("  {name}:")]
+		.into_iter()
+		.chain(build)
+		.chain([
+			format!("    image: {image}"),
+			format!("    command: [\"{command}\"]"),
+			"    environment:".to_owned(),
+			format!("      LEPTOSKIT_SERVICE_NAME: {name}"),
+			format!("      LEPTOSKIT_SERVICE_ADDR: 0.0.0.0:{port}"),
+			format!("      LEPTOSKIT_SERVICE_TOKEN: ${{{token}:?set {token}}}"),
+			format!(
 			"      LEPTOSKIT_PUBLIC_ORIGIN: ${{LEPTOSKIT_PUBLIC_ORIGIN:-http://localhost:{app_port}}}"
 		),
-		format!("      LEPTOSKIT_APP_URL: http://app:{app_port}"),
-	];
+			format!("      LEPTOSKIT_APP_URL: http://app:{app_port}"),
+		]);
 
 	for line in lines {
 		let _ = writeln!(out, "{line}");
