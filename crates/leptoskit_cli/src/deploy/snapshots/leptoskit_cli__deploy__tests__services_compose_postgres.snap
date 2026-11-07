@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cli/src/deploy/tests.rs
+assertion_line: 484
 expression: pinned
 ---
 $ leptoskit generate deploy --target compose
@@ -40,11 +41,9 @@ ARG BINARYEN_VERSION=132
 FROM rust:${RUST_VERSION}-bookworm AS build
 ARG LEPTOSKIT_VERSION
 ARG BINARYEN_VERSION
-RUN curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
-      --output /tmp/binaryen.tar.gz \
+RUN curl --fail --silent --show-error --location \
       "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-$(uname -m)-linux.tar.gz" \
- && tar -xzf /tmp/binaryen.tar.gz -C /opt \
- && rm /tmp/binaryen.tar.gz \
+    | tar -xz -C /opt \
  && ln -s "/opt/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
 RUN cargo install leptoskit_cli --version "${LEPTOSKIT_VERSION}" --locked
 WORKDIR /src
@@ -62,11 +61,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 # curl answers the health check, and `app` is the unprivileged user the
-# server runs as.
+# server runs as, with uid and gid 10001.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --user-group --uid 10001 --no-create-home app \
+ && groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home app \
  && mkdir -p /volumes/exports \
  && chown app:app /volumes/exports
 WORKDIR /app
