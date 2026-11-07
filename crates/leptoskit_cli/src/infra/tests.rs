@@ -449,6 +449,27 @@ async fn database_bootstrap_gives_the_app_ownership_without_superuser() {
 
 #[test]
 #[cfg(unix)]
+fn backup_health_requires_a_recent_verified_timestamp() {
+	let directory = tempfile::tempdir().unwrap();
+	let worker = directory.path().join("recovery.py");
+	let test = directory.path().join("status_tests.py");
+	fs::write(&worker, include_bytes!("recovery.py")).unwrap();
+	fs::write(&test, include_bytes!("recovery_status_tests.py")).unwrap();
+	let output = Command::new("python3")
+		.arg(test)
+		.arg(worker)
+		.output()
+		.unwrap();
+	assert!(
+		output.status.success(),
+		"{}\n{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+}
+
+#[test]
+#[cfg(unix)]
 fn encrypted_archives_restore_real_postgres_and_preserve_the_previous_database() {
 	if Command::new("restic").arg("version").output().is_err() {
 		assert!(

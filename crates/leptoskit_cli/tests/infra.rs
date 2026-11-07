@@ -166,6 +166,9 @@ elif ".State.Status" in script:
     sys.exit(1)
 elif "install -d" in script:
     pass
+elif script.startswith("systemd-analyze verify"):
+    if os.environ.get("MOCK_SYSTEMD_VERIFY_EXIT"):
+        sys.exit(1)
 elif script.startswith("systemd-analyze") or script.startswith("systemctl") or script.startswith("cloud-init") or "docker ps -q" in script or "pg_isready" in script:
     pass
 else:
@@ -666,6 +669,41 @@ fn shared_history_and_owner_locks_survive_changing_operator_workspaces() {
 	));
 	assert!(!path.exists());
 	succeeds(&cli(root.path(), &["infra", "status"], &[]));
+}
+
+#[test]
+fn backup_units_are_validated_before_repository_initialization_and_timer_enablement() {
+	for reject in [false, true] {
+		let root = project();
+		succeeds(&cli(root.path(), &["infra", "generate"], &[]));
+		let env = if reject {
+			vec![("MOCK_SYSTEMD_VERIFY_EXIT", "1")]
+		} else {
+			vec![]
+		};
+		let output = cli(root.path(), &["infra", "backups", "install"], &env);
+		assert_eq!(output.status.success(), !reject);
+		let remote = root.path().join("remote");
+		let units = remote.join("etc/systemd/system");
+		let service =
+			fs::read_to_string(units.join("leptoskit-notes-production-backup.service")).unwrap();
+		let timer =
+			fs::read_to_string(units.join("leptoskit-notes-production-backup.timer")).unwrap();
+		assert!(service.contains("\nExecStart=/usr/bin/python3 "));
+		assert!(service.contains("\nReadWritePaths=/var/lib/leptoskit/notes-production/control "));
+		assert!(timer.contains("\n[Install]\nWantedBy=timers.target\n"));
+		let calls = fs::read_to_string(remote.join("ssh-calls")).unwrap();
+		let verification = calls.find("systemd-analyze verify --man=no").unwrap();
+		let initialization = calls.find("/recovery.py init ");
+		let enablement = calls.find("systemctl enable --now ");
+		if reject {
+			assert!(initialization.is_none());
+			assert!(enablement.is_none());
+		} else {
+			assert!(verification < initialization.unwrap());
+			assert!(initialization.unwrap() < enablement.unwrap());
+		}
+	}
 }
 
 #[test]
