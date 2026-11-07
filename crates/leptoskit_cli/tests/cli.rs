@@ -350,10 +350,14 @@ fn native_bundle_compiles_and_optimizes_the_guest() {
 
 	let contract: leptoskit_codepush::capability::HostCapabilityDescriptor =
 		serde_json::from_slice(
-			&std::fs::read(scratch.path.join("bundle/capabilities.json"))
+			&std::fs::read(scratch.path.join("bundle.capabilities.json"))
 				.expect("host capability descriptor"),
 		)
 		.expect("typed host descriptor");
+	assert!(
+		!scratch.path.join("bundle/capabilities.json").exists(),
+		"host evidence stays outside guest files"
+	);
 	assert_eq!(contract.flavor, "android");
 	assert_eq!(contract.platform, "android");
 	assert!(contract.digest().len() == 64);
@@ -3124,4 +3128,60 @@ fn dev_resolves_the_project_manifest_and_preserves_failure_status() {
 		.output()
 		.unwrap();
 	assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
+}
+
+#[test]
+fn watch_preparation_enforces_requirements_before_writing_and_records_optional_gaps() {
+	for (target, platform) in [
+		("watchos", leptoskit_config::Platform::Watchos),
+		("wearos", leptoskit_config::Platform::Wearos),
+	] {
+		let scratch = Scratch::new("watch-capability-contract");
+		let mut config = leptoskit_config::LeptoskitConfig::default();
+		config.app.name = "watch_contract".into();
+		config.app.default_platform = platform;
+		config.app.platforms = vec![platform];
+		config.native.package_id = "dev.leptoskit.watchcontract".into();
+		config.native.plugins = vec!["echo".into()];
+		config.native.required_plugins = vec!["echo".into()];
+		std::fs::write(
+			scratch.path.join("leptoskit.toml"),
+			toml::to_string(&config).unwrap(),
+		)
+		.unwrap();
+		let rejected = leptoskit(&scratch.path, &["native", "prepare", target]);
+		assert!(!rejected.status.success());
+		assert!(
+			stderr(&rejected).contains("plugin.echo"),
+			"{}",
+			stderr(&rejected)
+		);
+		assert!(!scratch.path.join("hosts").exists());
+		config.native.required_plugins.clear();
+		config.native.optional_plugins = vec!["echo".into()];
+		std::fs::write(
+			scratch.path.join("leptoskit.toml"),
+			toml::to_string(&config).unwrap(),
+		)
+		.unwrap();
+		let accepted = leptoskit(&scratch.path, &["native", "prepare", target]);
+		assert!(accepted.status.success(), "{}", stderr(&accepted));
+		let descriptor: leptoskit_codepush::capability::HostCapabilityDescriptor =
+			serde_json::from_slice(
+				&std::fs::read(
+					scratch
+						.path
+						.join(".leptoskit")
+						.join(target)
+						.join("capabilities.json"),
+				)
+				.unwrap(),
+			)
+			.unwrap();
+		assert!(descriptor.experimental);
+		assert_eq!(
+			descriptor.state_of("plugin.echo").unwrap().0,
+			leptoskit_codepush::capability::CapabilityState::Unsupported
+		);
+	}
 }

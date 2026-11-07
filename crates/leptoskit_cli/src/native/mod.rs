@@ -240,12 +240,25 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	if matches!(target, Target::Wearos | Target::Watchos) {
 		ensure_target_enabled(&config, target)?;
+		registry::enforce_required(&config, target, &[], &[])?;
+		let contract = registry::descriptor(&config, target, &[], &[]);
+		contract.validate()?;
 		let native = if target == Target::Wearos {
 			leptoskit_config::NativeTarget::Wearos
 		} else {
 			leptoskit_config::NativeTarget::Watchos
 		};
 		watch::scaffold(&root, &config, native)?;
+		write_capabilities(
+			&root
+				.join(".leptoskit")
+				.join(target.platform().to_string())
+				.join("capabilities.json"),
+			&contract,
+		)?;
+		for warning in registry::optional_warnings(&config, target, &[], &[]) {
+			eprintln!("{warning}");
+		}
 		if build {
 			return watch::build(target);
 		}
@@ -349,7 +362,7 @@ fn run_bundle(out: &str, target: Option<Target>) -> Result<()> {
 	let contract = bundle(
 		&root, &config, &plugins, &missing, target, true, None, &output,
 	)?;
-	write_capabilities(&output.join("capabilities.json"), &contract)?;
+	write_capabilities(&output.with_extension("capabilities.json"), &contract)?;
 	Ok(())
 }
 
@@ -1084,13 +1097,25 @@ fn guest_runtime_descriptor(
 	target: Target,
 ) -> serde_json::Value {
 	let shell = config::shell(root, config, target.platform());
+	let requirements = registry::requirements(config);
+	// Optional plugins must not become mandatory through the legacy list.
+	let plugins: Vec<_> = config
+		.native
+		.plugins
+		.iter()
+		.filter(|name| {
+			!requirements
+				.optional
+				.contains(&leptoskit_codepush::capability::plugin_capability(name))
+		})
+		.collect();
 
 	serde_json::json!({
 		"abi": leptoskit_wasm::ABI_VERSION,
 		"shell": shell,
-		"plugins": config.native.plugins,
+		"plugins": plugins,
 		"format_version": RUNTIME_CONTRACT_VERSION,
-		"requirements": registry::requirements(config),
+		"requirements": requirements,
 	})
 }
 
@@ -1235,6 +1260,25 @@ fn gradle_ndk_path(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn optional_plugins_do_not_become_legacy_update_requirements() {
+		let mut config = LeptoskitConfig::default();
+		config.native.plugins = vec!["http".into(), "haptics".into(), "clipboard".into()];
+		config.native.optional_plugins = vec!["haptics".into()];
+		config.native.optional_capabilities = vec!["plugin.clipboard".into()];
+		let runtime: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			guest_runtime_descriptor(Path::new("."), &config, Target::Ios),
+		)
+		.unwrap();
+		assert_eq!(runtime.plugins, vec!["http"]);
+		let required = runtime.requirements.unwrap();
+		assert_eq!(
+			required.optional,
+			vec!["plugin.clipboard", "plugin.haptics"]
+		);
+		assert_eq!(required.protocol.bridge, leptoskit_bridge::VERSION);
+	}
 
 	#[test]
 	fn universal_platforms_isolate_generated_state_and_update_contracts() {

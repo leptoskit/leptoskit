@@ -113,6 +113,10 @@ pub(crate) fn requirements(config: &leptoskit_config::LeptoskitConfig) -> Runtim
 
 	RuntimeRequirements {
 		format_version: CAPABILITY_CONTRACT_VERSION,
+		protocol: ProtocolVersions {
+			guest_abi: leptoskit_wasm::ABI_VERSION,
+			bridge: leptoskit_bridge::VERSION,
+		},
 		required,
 		optional,
 	}
@@ -126,9 +130,11 @@ pub(crate) fn enforce_required(
 	plugins: &[Plugin],
 	missing: &[MissingPlugin],
 ) -> Result<()> {
+	let requirements = requirements(config);
+	requirements.validate()?;
 	let descriptor = descriptor(config, target, plugins, missing);
 
-	for id in &requirements(config).required {
+	for id in &requirements.required {
 		let Some((state, detail)) = descriptor.state_of(id) else {
 			anyhow::bail!(
 				"native.required-capabilities declares `{id}`, but the {} {} does not describe \
@@ -407,7 +413,10 @@ fn plugin_entry(
 			}
 		} else if let Some(missing) = missing.iter().find(|missing| &missing.name == name) {
 			unsupported(missing.reason)
-		} else if matches!(target, Target::Windows | Target::Linux | Target::Tui) {
+		} else if matches!(
+			target,
+			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos
+		) {
 			(
 				CapabilityState::Unsupported,
 				None,

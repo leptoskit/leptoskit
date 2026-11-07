@@ -119,6 +119,17 @@ impl RuntimeContract {
 	/// configuration. Downloaded code never supplies the host descriptor.
 	pub fn verify_guest(&self, host: &Self) -> Result<ContractCompatibility, CodePushError> {
 		host.validate_host()?;
+		if self.abi != host.abi
+			|| self.shell != host.shell
+			|| self
+				.plugins
+				.iter()
+				.any(|plugin| !host.plugins.contains(plugin))
+		{
+			return Err(activation(
+				"bundle requires an incompatible native ABI, shell, or plugin",
+			));
+		}
 
 		match self.format_version {
 			None => {
@@ -1100,18 +1111,6 @@ fn validate_container(
 		.find(|(path, _)| path == "runtime.json")
 		.ok_or_else(|| activation("native bundle is missing runtime.json"))?;
 	let runtime: RuntimeContract = serde_json::from_slice(&descriptor.1)?;
-
-	if runtime.abi != config.runtime.abi
-		|| runtime.shell != config.runtime.shell
-		|| runtime
-			.plugins
-			.iter()
-			.any(|plugin| !config.runtime.plugins.contains(plugin))
-	{
-		return Err(activation(
-			"bundle requires an incompatible native ABI, shell, or plugin",
-		));
-	}
 
 	// The guest's requirements are signed with the bundle. The host
 	// descriptor comes only from this store build's configuration; any

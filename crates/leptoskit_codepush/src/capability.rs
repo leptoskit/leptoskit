@@ -6,9 +6,9 @@
 //! machine paths, timestamps, secret values, or a downloaded guest's claims.
 //!
 //! A guest carries [`RuntimeRequirements`] instead: the capability identifiers
-//! its app cannot run without, and the ones it can. Both sit in the signed
-//! bundle (`runtime.json`); the host checks them against the descriptor
-//! embedded in its own store build before a release is staged or activated.
+//! its app cannot run without, and the ones it can. These requirements sit
+//! in the signed bundle (`runtime.json`); the host compares them with the
+//! descriptor embedded in its store build before staging or activation.
 //!
 //! Declared build support is not runtime evidence. A descriptor says what a
 //! host build is expected to provide; device probes, widget suites, and code
@@ -161,6 +161,8 @@ pub struct HostCapabilityDescriptor {
 pub struct RuntimeRequirements {
 	/// [`CAPABILITY_CONTRACT_VERSION`].
 	pub format_version: u32,
+	/// Exact guest ABI and plugin protocol required by the compiled guest.
+	pub protocol: ProtocolVersions,
 	/// Capabilities the guest cannot run without.
 	pub required: Vec<String>,
 	/// Capabilities the guest can run without.
@@ -319,6 +321,10 @@ impl RuntimeRequirements {
 			));
 		}
 
+		if self.protocol.guest_abi == 0 || self.protocol.bridge == 0 {
+			return Err(invalid("required protocol versions must be positive"));
+		}
+
 		for (name, entries) in [("required", &self.required), ("optional", &self.optional)] {
 			let mut seen = std::collections::BTreeSet::new();
 
@@ -351,6 +357,13 @@ impl RuntimeRequirements {
 	pub fn verify_against(&self, host: &HostCapabilityDescriptor) -> Result<(), CodePushError> {
 		self.validate()?;
 		host.validate()?;
+
+		if self.protocol != host.protocol {
+			return Err(invalid(format!(
+				"guest requires protocols {:?}, but the installed host provides {:?}",
+				self.protocol, host.protocol
+			)));
+		}
 
 		for id in &self.required {
 			let Some((state, detail)) = host.state_of(id) else {
@@ -525,6 +538,10 @@ mod tests {
 
 		let mut requirements = RuntimeRequirements {
 			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: vec!["plugin.http".into()],
 			optional: vec!["plugin.http".into()],
 		};
@@ -549,6 +566,10 @@ mod tests {
 
 		let requirements = RuntimeRequirements {
 			format_version: RUNTIME_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: Vec::new(),
 			optional: Vec::new(),
 		};
@@ -563,6 +584,10 @@ mod tests {
 		let host = descriptor();
 		let required = RuntimeRequirements {
 			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: vec![CAP_HOST_PLUGIN_RUST_ASYNC.into(), "plugin.http".into()],
 			optional: vec!["plugin.missing".into()],
 		};
@@ -570,6 +595,10 @@ mod tests {
 
 		let unsupported = RuntimeRequirements {
 			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: vec!["host.plugin.native.apple".into()],
 			optional: Vec::new(),
 		};
@@ -577,6 +606,10 @@ mod tests {
 
 		let unknown = RuntimeRequirements {
 			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: vec!["plugin.not-built".into()],
 			optional: Vec::new(),
 		};

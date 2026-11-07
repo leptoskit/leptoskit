@@ -69,14 +69,14 @@ optional-capabilities = ["host.plugin.native.android"]
 `native bundle` (and therefore `native prepare`/`build`) writes:
 
 - `runtime.json` inside the signed bundle: legacy `abi`/`shell`/`plugins` plus `format_version = 2` and signed `requirements` (never a host descriptor).
-- `capabilities.json` next to the bundle: the host descriptor and its digest, for diagnostics and documentation.
+- `capabilities.json` next to the generated bundle: the host descriptor and its digest, for diagnostics and documentation. The standalone `native bundle --out bundle` command writes `bundle.capabilities.json` beside the output directory, so packaging that directory never includes host evidence. Watch preparation writes `.leptoskit/<platform>/capabilities.json` and enforces requirements before scaffolding.
 
 The mobile host's store-shipped `codepush.json` embeds the same descriptor in `runtime.json`-style `host`. `RuntimeContract::validate_host` rejects a host configuration that mixes guest requirements into the host side, omits the descriptor, or speaks a different guest ABI.
 
 `RuntimeContract::verify_guest` is called by `validate_container` for the store baseline, every downloaded release before it is staged, and every stored release at launch:
 
 - No `format_version`: explicit legacy decoding. The old ABI/shell/plugin checks still run, and `UpdateReport.contract` is `legacy`.
-- `format_version = 2`: requires signed `requirements`; the downloaded guest may not carry `host`; every required identifier is looked up in the installed host descriptor. `unsupported`, `experimental`-without-opt-in, and `unknown` reject the release before storage. Optional identifiers never gate.
+- `format_version = 2`: requires signed `requirements`; the downloaded guest may not carry `host`; the guest ABI and bridge protocol must match the host, and every required identifier is looked up in the installed host descriptor. `unsupported`, `experimental`-without-opt-in, and `unknown` reject the release before storage. Optional identifiers never gate; explicitly optional plugins are excluded from the guest's legacy mandatory plugin list.
 - Any other version is rejected with `UnsupportedContractVersion`.
 
 The guest's requirements are covered by the release signature because `runtime.json` is a bundle file and the signature covers the manifest hash. A downloaded guest cannot supply the host side, so its labels are ignored.

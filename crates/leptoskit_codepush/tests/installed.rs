@@ -2248,6 +2248,10 @@ fn guest_runtime(required: Vec<&str>, optional: Vec<&str>) -> RuntimeContract {
 		format_version: Some(RUNTIME_CONTRACT_VERSION),
 		requirements: Some(RuntimeRequirements {
 			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
 			required: required.into_iter().map(str::to_owned).collect(),
 			optional: optional.into_iter().map(str::to_owned).collect(),
 		}),
@@ -2418,8 +2422,51 @@ fn a_host_descriptor_with_the_wrong_abi_or_version_is_rejected() {
 	let mut requirements = host_runtime();
 	requirements.requirements = Some(RuntimeRequirements {
 		format_version: CAPABILITY_CONTRACT_VERSION,
+		protocol: ProtocolVersions {
+			guest_abi: 1,
+			bridge: 1,
+		},
 		required: Vec::new(),
 		optional: Vec::new(),
 	});
 	assert!(requirements.validate_host().is_err());
+}
+
+#[test]
+fn a_signed_guest_with_a_different_bridge_protocol_keeps_the_working_baseline() {
+	let directory = tempfile::tempdir().unwrap();
+	let baseline = native_bundle(0, BASELINE);
+	let mut guest = guest_runtime(Vec::new(), Vec::new());
+	guest.requirements.as_mut().unwrap().protocol.bridge += 1;
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.unwrap();
+	let error = installed
+		.sync_with(&mut Registry::new(replacement))
+		.unwrap_err();
+	assert!(
+		matches!(error, CodePushError::InvalidCapabilityContract(message) if message.contains("protocols"))
+	);
+	assert_eq!(installed.launch().unwrap().wasm, BASELINE);
+}
+
+#[test]
+fn contract_verification_also_enforces_legacy_abi_shell_and_plugin_requirements() {
+	let host = host_runtime();
+	for original in [contract(), guest_runtime(Vec::new(), Vec::new())] {
+		assert!(original.verify_guest(&host).is_ok());
+		let mut changed = original.clone();
+		changed.abi += 1;
+		assert!(changed.verify_guest(&host).is_err());
+		changed = original.clone();
+		changed.shell.push_str("-incompatible");
+		assert!(changed.verify_guest(&host).is_err());
+		changed = original;
+		changed.plugins.push("missing-plugin".into());
+		assert!(changed.verify_guest(&host).is_err());
+	}
 }
