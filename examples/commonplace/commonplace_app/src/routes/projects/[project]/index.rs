@@ -182,7 +182,7 @@ fn Notes(detail: &ProjectDetail) -> Element {
 				value=&draft
 				placeholder="What did you notice?"
 				on_change=|value| {
-					Store::current().update(|state| state.note = value.to_owned());
+					Store::current().note().set(value.to_owned());
 				}
 			/>
 		})
@@ -203,7 +203,7 @@ fn ClipForm(id: ProjectId) -> Element {
 	let (draft, busy) = store.with(|state| (state.clip.clone(), state.busy));
 	let ready = !draft.url.trim().is_empty() && !draft.quote.trim().is_empty();
 	let edit = |change: fn(&mut ClipDraft, &str)| {
-		move |value: &str| Store::current().update(|state| change(&mut state.clip, value))
+		move |value: &str| Store::current().clip().update(|clip| change(clip, value))
 	};
 	view! { <ui::PanelCard /> }
 		.child(view! { <ui::Section text="Clip a quote by hand" /> })

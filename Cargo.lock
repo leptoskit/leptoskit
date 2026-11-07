@@ -4894,6 +4894,7 @@ dependencies = [
  "leptoskit_windows",
  "leptoskit_yoga",
  "monosecret",
+ "reactive_stores",
 ]
 
 [[package]]
@@ -5659,6 +5660,7 @@ dependencies = [
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
+ "reactive_stores",
  "roxmltree",
  "serde",
  "serde_json",
@@ -7630,7 +7632,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_router",
  "leptoskit_tui",
- "reactive_graph",
+ "reactive_stores",
  "wasm-bindgen",
  "web-sys",
 ]

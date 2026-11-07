@@ -1,9 +1,11 @@
 //! The interface's state, and the store every route reads it from.
 
-use reactive_graph::signal::ArcRwSignal;
-use reactive_graph::traits::Set;
-use reactive_graph::traits::Update;
-use reactive_graph::traits::With;
+use leptoskit::prelude::GetUntracked;
+use leptoskit::prelude::Set;
+use leptoskit::prelude::With;
+use leptoskit::store::ArcField;
+use leptoskit::store::ArcStore;
+use leptoskit::store::Patch;
 
 use crate::demo;
 use crate::theme;
@@ -33,7 +35,7 @@ pub enum Action {
 }
 
 /// The agent that answers the next prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, reactive_stores::Patch)]
 pub enum Agent {
 	/// Makes changes.
 	Build,
@@ -78,7 +80,7 @@ impl Agent {
 }
 
 /// The model answering prompts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch)]
 pub struct Model {
 	/// The model's name.
 	pub name: String,
@@ -89,7 +91,7 @@ pub struct Model {
 }
 
 /// A conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch)]
 pub struct Session {
 	/// The session's title, shown in its tab and the sidebar.
 	pub title: String,
@@ -100,7 +102,7 @@ pub struct Session {
 }
 
 /// One message in a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch)]
 pub enum Message {
 	/// What the user asked.
 	User(String),
@@ -116,7 +118,7 @@ pub enum Message {
 }
 
 /// One step of an agent's turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch)]
 pub enum Part {
 	/// Markdown prose.
 	Text(String),
@@ -125,7 +127,7 @@ pub enum Part {
 	/// A file edit, with the diff it made.
 	Edit {
 		/// The edited file.
-		path: String,
+		file: String,
 		/// The changed lines and their context.
 		lines: Vec<DiffLine>,
 	},
@@ -139,7 +141,7 @@ pub enum Part {
 }
 
 /// One line of a diff.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch)]
 pub struct DiffLine {
 	/// The line's number in the file.
 	pub number: u32,
@@ -150,7 +152,7 @@ pub struct DiffLine {
 }
 
 /// How a diff line changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, reactive_stores::Patch)]
 pub enum Change {
 	/// Unchanged context.
 	Kept,
@@ -161,7 +163,7 @@ pub enum Change {
 }
 
 /// The command palette's state while it is open.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, reactive_stores::Patch)]
 pub struct Palette {
 	/// The search text.
 	pub query: String,
@@ -170,7 +172,7 @@ pub struct Palette {
 }
 
 /// The whole interface's state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, reactive_stores::Patch, reactive_stores::Store)]
 pub struct Opencode {
 	/// The prompt's current text.
 	pub draft: String,
@@ -288,12 +290,14 @@ mod store {
 
 use store::STORE;
 
-/// The reactive store the routes read and the event handlers change. Reading
-/// it inside a reactive closure, such as the browser's render closure,
-/// subscribes the closure to changes; native hosts render again after every
-/// event.
+/// The reactive store the routes read and the event handlers change. Each
+/// field is its own signal: reading one inside a reactive closure, such as
+/// the browser's render closure, subscribes that closure to that field, and
+/// [`apply`](Store::apply) notifies only the fields the action changed. The
+/// routes that read the whole state through [`with`](Store::with) still hear
+/// every field.
 #[derive(Clone, Debug)]
-pub struct Store(ArcRwSignal<Opencode>);
+pub struct Store(ArcStore<Opencode>);
 
 impl Store {
 	/// This thread's store, created with the default state on first use.
@@ -301,28 +305,60 @@ impl Store {
 	pub fn current() -> Self {
 		STORE.with_borrow_mut(|store| {
 			store
-				.get_or_insert_with(|| Self(ArcRwSignal::new(Opencode::default())))
+				.get_or_insert_with(|| Self(ArcStore::new(Opencode::default())))
 				.clone()
 		})
 	}
 
-	/// Reads the state.
+	/// Reads the state, subscribing the caller to every field.
 	pub fn with<T>(&self, read: impl FnOnce(&Opencode) -> T) -> T {
 		self.0.with(read)
 	}
 
-	/// Applies one action.
+	/// Applies one action, notifying only the fields it changed.
 	pub fn apply(&self, action: Action) {
-		self.0.update(|state| state.apply(action));
+		let mut next = self.0.get_untracked();
+		next.apply(action);
+		self.0.patch(next);
 	}
 
 	/// Starts over from the default state, as a fresh launch does.
 	pub fn reset(&self) {
-		self.0.set(Opencode::default());
+		self.0.patch(Opencode::default());
+	}
+
+	/// The prompt's current text.
+	pub fn draft(&self) -> ArcField<String> {
+		self.0.clone().draft().into()
+	}
+
+	/// The agent the next prompt goes to.
+	pub fn agent(&self) -> ArcField<Agent> {
+		self.0.clone().agent().into()
+	}
+
+	/// The model answering.
+	pub fn model(&self) -> ArcField<Model> {
+		self.0.clone().model().into()
+	}
+
+	/// The working directory and branch, as the footer shows them.
+	pub fn directory(&self) -> ArcField<String> {
+		self.0.clone().directory().into()
+	}
+
+	/// The command palette, when open.
+	pub fn palette(&self) -> ArcField<Option<Palette>> {
+		self.0.clone().palette().into()
+	}
+
+	/// The interface's size in cells, which sizes the palette's list.
+	pub fn size(&self) -> ArcField<(u16, u16)> {
+		self.0.clone().size().into()
 	}
 
 	/// Records the interface's size in cells.
 	pub fn resize(&self, cols: u16, rows: u16) {
-		self.0.update(|state| state.size = (cols, rows));
+		self.0.clone().size().set((cols, rows));
 	}
 }

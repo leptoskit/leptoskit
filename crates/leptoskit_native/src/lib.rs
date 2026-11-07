@@ -43,6 +43,7 @@ mod hash;
 pub mod motion;
 pub mod props;
 pub mod reactive;
+pub mod store;
 pub mod surface;
 pub mod tailwind;
 pub mod vector;

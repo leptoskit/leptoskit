@@ -56,7 +56,9 @@ pub fn main(surface: Surface) -> impl Fn() -> Element + Send + Sync + 'static {
 			.ok()
 			.flatten();
 		let store = Store::current();
-		store.update(|state| state.extension.project = project);
+		store
+			.extension()
+			.update(|extension| extension.project = project);
 		store.start(token);
 	});
 	let navigation = Navigation::new(route);

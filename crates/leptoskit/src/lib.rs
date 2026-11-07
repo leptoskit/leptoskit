@@ -164,6 +164,52 @@ pub mod components {
 	pub use leptoskit_native::components::*;
 }
 
+pub mod store {
+	//! Leptos stores: a state struct whose fields notify separately.
+	//!
+	//! A whole state struct in one `RwSignal` notifies every screen that read
+	//! any of it when any field changes. Deriving
+	//! [`Store`](leptoskit::store::Store) on the struct adds a getter for each
+	//! field, and holding it in an [`ArcStore`] gives each field its own
+	//! signal: `store.title().get()` subscribes the caller to `title` only,
+	//! and `store.title().set(…)` notifies `title`'s readers — and the
+	//! readers of the whole store — but not a sibling field's. The struct
+	//! stays a plain Rust value, and `ArcStore` lives as long as a clone of
+	//! it, like `ArcRwSignal`.
+	//!
+	//! ```
+	//! use leptoskit::prelude::*;
+	//! use leptoskit::store::ArcStore;
+	//!
+	//! #[derive(Default, leptoskit::store::Store)]
+	//! struct Library {
+	//! 	title: String,
+	//! 	open: bool,
+	//! }
+	//!
+	//! let library = ArcStore::new(Library::default());
+	//! let title = library.clone().title();
+	//! let open = library.clone().open();
+	//!
+	//! assert_eq!(title.get(), "");
+	//! open.set(true);
+	//! assert!(open.get());
+	//! ```
+	//!
+	//! The generated getters take the store by value, so an `ArcStore` is
+	//! cloned for each field — a reference bump — or kept as the field handle
+	//! `title` and `open` are above.
+	//!
+	//! Deriving [`Patch`](leptoskit::store::Patch) as well adds `.patch(next)`:
+	//! apply a whole new value and notify only the fields that changed, which
+	//! suits a reducer, or fresh data from the server. Every field type must
+	//! implement `PatchField`; when field types come from a crate that should
+	//! stay reactive-free, write the fields directly instead. State named at
+	//! run time stays one signal per value, and values that must never notify
+	//! stay in a `StoredValue`.
+	pub use leptoskit_native::store::*;
+}
+
 #[cfg(all(feature = "guest", target_arch = "wasm32"))]
 pub mod guest {
 	//! Shared application rendering inside a native Wasm host.
@@ -451,8 +497,12 @@ pub mod prelude {
 	pub use leptoskit_native::motion::ViewPhase;
 	pub use leptoskit_native::motion::ViewRange;
 	pub use leptoskit_native::reactive::Get;
+	pub use leptoskit_native::reactive::GetUntracked;
 	pub use leptoskit_native::reactive::RwSignal;
 	pub use leptoskit_native::reactive::Set;
+	pub use leptoskit_native::reactive::Update;
+	pub use leptoskit_native::reactive::With;
+	pub use leptoskit_native::reactive::WithUntracked;
 	pub use leptoskit_native::tailwind::ClassError;
 	pub use leptoskit_native::tailwind::StyleContext;
 	pub use leptoskit_native::tailwind::Tailwind;

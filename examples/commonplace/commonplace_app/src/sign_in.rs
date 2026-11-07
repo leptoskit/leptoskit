@@ -32,7 +32,9 @@ pub fn Form(store: &Store) -> Element {
 				value=&form.code
 				placeholder="K7QM-R2XD"
 				on_change=|value| {
-					Store::current().update(|state| state.sign_in.code = value.to_owned());
+					Store::current()
+						.sign_in()
+						.update(|form| form.code = value.to_owned());
 				}
 			/>
 		})
@@ -49,9 +51,9 @@ pub fn Form(store: &Store) -> Element {
 			<ui::Secondary
 				label="Use another address"
 				on_press=|| {
-					Store::current().update(|state| {
-						state.sign_in.sent = false;
-						state.sign_in.code.clear();
+					Store::current().sign_in().update(|form| {
+						form.sent = false;
+						form.code.clear();
 					});
 				}
 			/>
@@ -69,7 +71,9 @@ pub fn Form(store: &Store) -> Element {
 				value=&form.email
 				placeholder="you@example.com"
 				on_change=|value| {
-					Store::current().update(|state| state.sign_in.email = value.to_owned());
+					Store::current()
+						.sign_in()
+						.update(|form| form.email = value.to_owned());
 				}
 			/>
 		})

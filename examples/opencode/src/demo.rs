@@ -43,7 +43,7 @@ pub fn session(prompt: &str, agent: Agent) -> Session {
 						.to_owned(),
 					),
 					Part::Edit {
-						path: "src/timer.rs".to_owned(),
+						file: "src/timer.rs".to_owned(),
 						lines: diff(),
 					},
 					Part::Shell {

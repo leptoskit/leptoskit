@@ -97,7 +97,7 @@ pub fn BrowserRoot() -> impl IntoView {
 
 `Counter` is the same component used by the native surface. The web renderer creates semantic DOM controls and attaches the existing event handlers. Leptos owns DOM updates, server rendering, and hydration.
 
-Signals and the hooks in `leptoskit::hooks` (the `use` feature) also work in native apps on iOS, Android, macOS, Windows, and Linux. The view you pass to `leptoskit::guest::mount` runs again when it reads a signal that later changes. A value you bind, and a list or a condition you put in `For` or `Show`, updates on its own: writing the signal is enough, including from an event handler, and you do not call `leptoskit::guest::render()` afterwards. `leptoskit::prelude` carries the signal type, `For`, `Show`, and the `Get` and `Set` traits. A hook you scope yourself also needs an owner: add `reactive_graph = "0.3.0-rc0"` for `reactive_graph::owner::Owner`:
+Signals and the hooks in `leptoskit::hooks` (the `use` feature) also work in native apps on iOS, Android, macOS, Windows, and Linux. The view you pass to `leptoskit::guest::mount` runs again when it reads a signal that later changes. A value you bind, and a list or a condition you put in `For` or `Show`, updates on its own: writing the signal is enough, including from an event handler, and you do not call `leptoskit::guest::render()` afterwards. `leptoskit::prelude` carries the signal type, `For`, `Show`, and the reading and writing traits: `Get`, `Set`, and their untracked and reference-taking twins. A hook you scope yourself also needs an owner: add `reactive_graph = "0.3.0-rc0"` for `reactive_graph::owner::Owner`:
 
 ```rust
 use leptoskit::hooks::use_toggle;
@@ -163,6 +163,39 @@ The view function runs again when it reads a signal. `let n = count.get();` in t
 Keep a signal in application state rather than creating one inside a view function: a signal lives as long as the guest, so one created on every render is never freed.
 
 On the web the same tree shows the value read at build time, and leptos re-runs the screen when the signal changes, so nothing else is needed there. `leptoskit::prelude` exports leptos's own `RwSignal`, so a screen shared with the browser keeps one signal type.
+
+## Group a state struct into a store
+
+A screen's state outgrows one value: a form has its fields, a session has its messages. Keeping the whole struct in one `RwSignal` works, but the signal cannot tell the fields apart, so every screen that read any of them rebuilds when any field changes. Wrapping each field in its own signal by hand fixes that, at the cost of the struct no longer being a plain value.
+
+A store keeps the struct a plain Rust value and gives each field its own signal. Derive `Store` on the struct, hold it in an `ArcStore`, and read and write fields through the getters the derive adds:
+
+```rust
+use leptoskit::prelude::*;
+use leptoskit::store::ArcStore;
+
+#[derive(Default, reactive_stores::Store)]
+struct Library {
+	title: String,
+	open: bool,
+}
+
+let library = ArcStore::new(Library::default());
+let open = library.clone().open();
+
+view! {
+	<View class="gap-2">
+		<Text>{move || library.clone().title().get()}</Text>
+		<Button on:press=move || open.update(|open| *open = !*open)>"Toggle"</Button>
+	</View>
+};
+```
+
+The generated getters take the store by value, so an `ArcStore` is cloned for each field — a reference bump — or kept as the field handle `open` is above. Writing a field notifies the readers of that field, and of the fields that contain it, but never of its siblings: a screen that shows the title does not rebuild because the library opened. The same code runs on every platform — web, iOS, Android, macOS, Windows, Linux, the terminal, and HarmonyOS (experimental) — because a field is a signal like any other: on native a binding over it rewrites its own node, and on the web the render closure runs again when the field it read changes.
+
+Deriving `Patch` on the same structs adds `.patch(next)`: apply a whole new value — a reducer's output, or fresh data from the server — and only the fields that changed notify. Every field type must take part in patching, which the primitives, `String`, `Option`, `Vec`, and tuples do, and any other struct or enum that derives `Patch` does; when field types come from a crate that should stay free of the reactive crates, write the fields directly instead. The `opencode` example runs its whole state this way, with `Patch` for its actions, and `commonplace` writes one field at a time.
+
+The derives come from the `reactive_stores` crate, so add it next to leptoskit (`reactive_stores = "0.5.0-rc0"`), the same way the owner above adds `reactive_graph`; `leptoskit::store` re-exports the types. `ArcStore` lives as long as a clone of it does, like `ArcRwSignal`, which suits state a whole app shares. `Store::new` instead follows the reactive owner that is current where it was created, is disposed with it, and is `Copy`, so its getters need no clone. Two neighbours still apply: handles and values that must never notify, such as a subscription key, stay in `StoredValue`, and state whose names are decided at run time — a document's variables, say — stays one signal per value in a map.
 
 ## Animate from app code
 

@@ -25,7 +25,7 @@ const PROMPT_WIDTH: &str = "w-[600px] max-w-full";
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let store = Store::current();
-	let directory = store.with(|state| state.directory.clone());
+	let directory = store.directory().get();
 	let submit = {
 		let store = store.clone();
 		let navigation = navigation.clone();

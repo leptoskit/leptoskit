@@ -50,6 +50,7 @@ leptoskit_watchos = { workspace = true, optional = true }
 leptoskit_wearos = { workspace = true, optional = true }
 leptoskit_yoga = { workspace = true }
 monosecret = { workspace = true }
+reactive_stores = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 leptoskit_android = { workspace = true, optional = true }

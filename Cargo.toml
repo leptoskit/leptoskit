@@ -136,6 +136,7 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 quote = "1"
 rayon = "1"
 reactive_graph = "0.3.0-rc0"
+reactive_stores = "0.5.0-rc0"
 regex = "1"
 reqwest = { version = "0.12", default-features = false }
 ring = "0.17"

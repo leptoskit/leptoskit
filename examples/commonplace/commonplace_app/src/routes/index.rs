@@ -94,7 +94,8 @@ pub fn Page(navigation: &Navigation) -> Element {
 						placeholder="Urban heat islands"
 						on_change=|value| {
 							Store::current()
-								.update(|state| state.new_project.title = value.to_owned())
+								.new_project()
+								.update(|form| form.title = value.to_owned())
 						}
 					/>
 				})
@@ -104,9 +105,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 						value=&question
 						placeholder="Why are cities hotter than the country around them?"
 						on_change=|value| {
-							Store::current().update(|state| {
-								state.new_project.question = Some(value.to_owned())
-							});
+							Store::current()
+								.new_project()
+								.update(|form| form.question = Some(value.to_owned()));
 						}
 					/>
 				})

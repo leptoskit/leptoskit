@@ -57,7 +57,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				projects=&projects
 				chosen=chosen
 				on_pick=|project| {
-					Store::current().update(|state| state.extension.project = Some(project));
+					Store::current()
+						.extension()
+						.update(|extension| extension.project = Some(project));
 					crate::tasks::spawn(browser::keep_project(project));
 				}
 			/>
@@ -66,7 +68,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				value=&draft.note
 				placeholder="Optional"
 				on_change=|value| {
-					Store::current().update(|state| state.clip.note = value.to_owned());
+					Store::current()
+						.clip()
+						.update(|clip| clip.note = value.to_owned());
 				}
 			/>
 			<ui::Field
@@ -74,7 +78,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				value=&draft.tags
 				placeholder="method, cities"
 				on_change=|value| {
-					Store::current().update(|state| state.clip.tags = value.to_owned());
+					Store::current()
+						.clip()
+						.update(|clip| clip.tags = value.to_owned());
 				}
 			/>
 			<View class="flex-row gap-2">
@@ -95,14 +101,12 @@ pub fn Page(navigation: &Navigation) -> Element {
 						});
 						crate::tasks::spawn(async move {
 							let reply = browser::ask(ExtensionMessage::Clip(Box::new(input))).await;
-							Store::current().update(|state| {
-								if matches!(
-									reply,
-									ExtensionReply::Saved(_) | ExtensionReply::Queued
-								) {
-									state.clip = crate::store::ClipDraft::default();
-								}
-								state.extension.status = Some(browser::status(&reply));
+							let store = Store::current();
+							if matches!(reply, ExtensionReply::Saved(_) | ExtensionReply::Queued) {
+								store.clip().set(crate::store::ClipDraft::default());
+							}
+							store.extension().update(|extension| {
+								extension.status = Some(browser::status(&reply))
 							});
 						});
 					}
@@ -158,21 +162,21 @@ mod frame {
 			};
 			let selection = page.selection().await.ok().flatten();
 			let found = selection.is_some();
-			Store::current().update(|state| {
-				state.extension.page = Some(PageInput {
+			Store::current().extension().update(|extension| {
+				extension.page = Some(PageInput {
 					url: info.url,
 					title: info.title,
 					author: info.author,
 					site: info.site,
 					published: info.published,
 				});
-				state.extension.quote = selection.map(quote);
+				extension.quote = selection.map(quote);
 			});
 			page.on_event(move |event| {
 				if let PageEvent::Selection(Some(selection)) = event {
-					Store::current().update(|state| {
-						state.extension.quote = Some(quote(selection));
-						state.extension.status = None;
+					Store::current().extension().update(|extension| {
+						extension.quote = Some(quote(selection));
+						extension.status = None;
 					});
 				}
 			});

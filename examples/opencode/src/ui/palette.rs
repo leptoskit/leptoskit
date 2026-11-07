@@ -4,7 +4,6 @@
 use leptoskit::prelude::*;
 
 use crate::Action;
-use crate::Opencode;
 use crate::Palette;
 use crate::Store;
 
@@ -72,8 +71,7 @@ pub fn matching_commands(query: &str) -> Vec<Command> {
 
 /// The command the selection rests on, if any match the search.
 #[must_use]
-pub fn selected_command(state: &Opencode) -> Option<Command> {
-	let palette = state.palette.as_ref()?;
+pub fn selected_command(palette: &Palette) -> Option<Command> {
 	matching_commands(&palette.query)
 		.get(palette.selected)
 		.copied()
@@ -91,8 +89,7 @@ enum Row {
 /// its list shows half the screen's rows less its own chrome, scrolled to
 /// keep the selection in view.
 #[component]
-pub fn PaletteView(state: &Opencode, palette: &Palette, store: &Store) -> Element {
-	let rows = state.size.1;
+pub fn PaletteView(palette: &Palette, rows: u16, store: &Store) -> Element {
 	let visible = usize::from((rows / 2).saturating_sub(6)).max(1);
 	let list = rows_for(palette);
 	let selected_row = list

@@ -2253,6 +2253,7 @@ dependencies = [
  "leptoskit_windows",
  "leptoskit_yoga",
  "monosecret",
+ "reactive_stores",
 ]
 
 [[package]]
@@ -2480,6 +2481,7 @@ dependencies = [
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
+ "reactive_stores",
  "serde",
  "serde_json",
  "sha2 0.10.9",

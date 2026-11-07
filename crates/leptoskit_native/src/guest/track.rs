@@ -214,4 +214,72 @@ mod tests {
 		assert!(needs_render(ViewKind::Plain, true));
 		assert!(!needs_render(ViewKind::Plain, false));
 	}
+
+	#[test]
+	fn a_store_field_write_marks_only_the_fields_the_view_read() {
+		use crate::store::ArcStore;
+
+		#[derive(Default, reactive_stores::Store)]
+		struct Panel {
+			left: u32,
+			right: u32,
+		}
+
+		let _owner = owner();
+		let panel = ArcStore::new(Panel::default());
+
+		let read = panel.clone();
+		let (_, tracked) = render_tracking(move || {
+			let _ = read.left().get();
+			Element::view()
+		});
+		assert!(tracked, "the view read the field");
+
+		panel.clone().right().set(1);
+		assert!(
+			!take_root_dirty(),
+			"a sibling field does not ask the view to rebuild"
+		);
+
+		panel.clone().left().set(1);
+		assert!(take_root_dirty(), "the field the view read does");
+	}
+
+	#[test]
+	fn patching_a_store_notifies_readers_of_the_whole_store_and_only_changed_fields() {
+		use crate::reactive::GetUntracked;
+		use crate::store::ArcStore;
+		use crate::store::Patch;
+
+		#[derive(
+			Clone, Debug, Default, PartialEq, reactive_stores::Store, reactive_stores::Patch,
+		)]
+		struct Panel {
+			left: u32,
+			right: u32,
+		}
+
+		let _owner = owner();
+		let panel = ArcStore::new(Panel::default());
+
+		// The view reads the whole store, so any field reaches it.
+		let (_, tracked) = render_tracking(|| {
+			let _ = panel.get();
+			Element::view()
+		});
+		assert!(tracked);
+		assert!(!take_root_dirty(), "nothing was written yet");
+
+		let unchanged = panel.get_untracked();
+		panel.patch(unchanged);
+		assert!(!take_root_dirty(), "an unchanged patch notifies no one");
+
+		let mut next = panel.get_untracked();
+		next.right = 2;
+		panel.patch(next);
+		assert!(
+			take_root_dirty(),
+			"a reader of the whole store hears a field"
+		);
+	}
 }

@@ -47,6 +47,7 @@ mod frame {
 
 	#[cfg(feature = "extension")]
 	use leptoskit::extension::page::Page;
+	use leptoskit::prelude::Update;
 
 	#[cfg(feature = "extension")]
 	thread_local! {
@@ -87,14 +88,15 @@ mod frame {
 				})
 				.collect();
 			let _ = page.highlight(&quotes).await;
-			Store::current().update(|state| state.extension.on_page = clips);
+			Store::current()
+				.extension()
+				.update(|extension| extension.on_page = clips);
 			let shown = page.clone();
 			page.on_event(move |event| {
 				if let PageEvent::HighlightPressed(id) = event {
 					let store = Store::current();
-					store.update(|state| {
-						state.extension.pressed = state
-							.extension
+					store.extension().update(|extension| {
+						extension.pressed = extension
 							.on_page
 							.iter()
 							.find(|on_page| on_page.clip.id.to_string() == id)
@@ -117,7 +119,9 @@ mod frame {
 
 	/// Hides the frame again, leaving the highlights.
 	pub async fn hide() {
-		crate::store::Store::current().update(|state| state.extension.pressed = None);
+		crate::store::Store::current()
+			.extension()
+			.update(|extension| extension.pressed = None);
 		#[cfg(all(feature = "extension", target_arch = "wasm32"))]
 		{
 			let page = PAGE.with_borrow(Clone::clone);

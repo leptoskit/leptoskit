@@ -84,6 +84,7 @@ let row = SettingRow("Wi-Fi".into(), Fragment::new().with(Switch(true)));
 - Animate with Tailwind (`transition duration-300`, `translate-y-4`, `animate-spin`, `starting:opacity-0`) or with `.transition(…)`, `.entering(…)`, `.exiting(…)`, and `.layout_transition(…)` from `leptoskit::native::animation`. Change the value once; the platform animates it, so never step an animation from a timer in the guest.
 - Handlers: `.on_press(|| …)`, `.on_change(|text: &str| …)`, `.on_toggle(|checked| …)`, `.on_value_change(|value| …)`.
 - State that changes in place: hold it in a `RwSignal` and pass a closure, `Text(move || count.get().to_string())` or `.background(move || phase.get().colour())`. Writing the signal updates that node, including from an event handler. A list is `For(move || items.get(), |item| item.id, |item| row(item))` and a condition is `Show(move || open.get(), || panel())`; either one rebuilds its own children. `leptoskit::guest::spawn` runs a task, and the runtime polls it.
+- State with many fields: `#[derive(Store)]` on the struct plus `ArcStore` from `leptoskit::store` (the derive needs `reactive_stores` in Cargo.toml). Each field is its own signal — `store.title().get()` subscribes to that field only — and with `#[derive(Patch)]`, `store.patch(next)` notifies only the fields that changed. Handles that must never notify stay in a `StoredValue`.
 - Accessibility: `.accessibility_label("…")`, `.role(Role::…)`. Give anything a test needs to find a stable `.test_id("…")`.
 
 ## Check your work
