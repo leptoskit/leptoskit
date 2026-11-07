@@ -140,15 +140,18 @@ fn application_menu_events_updates_and_lease_restoration() {
 	));
 
 	application.setMainMenu(previous.as_deref());
-	assert_invalid_construction_rejected();
+	assert_invalid_construction_rejected(&application);
 }
 
 #[cfg(target_os = "macos")]
-fn assert_invalid_construction_rejected() {
+fn assert_invalid_construction_rejected(application: &objc2_app_kit::NSApplication) {
+	use std::rc::Rc;
+
 	use leptoskit_plugin_menu::Definition;
 	use leptoskit_plugin_menu::DesktopMenu;
 	use leptoskit_plugin_menu::Error;
 	use leptoskit_plugin_menu::Item;
+	use leptoskit_plugin_menu::macos;
 
 	assert!(matches!(
 		DesktopMenu::new(
@@ -162,6 +165,22 @@ fn assert_invalid_construction_rejected() {
 		),
 		Err(Error::InvalidAccelerator)
 	));
+	let flat = Rc::new(
+		DesktopMenu::new(
+			Definition::new(vec![Item::Command {
+				id: "quit".into(),
+				label: "Quit".into(),
+				enabled: true,
+				accelerator: None,
+			}])
+			.unwrap(),
+		)
+		.unwrap(),
+	);
+	assert_eq!(
+		macos::ApplicationMenu::attach(flat, application),
+		Err(Error::Unavailable)
+	);
 	assert_eq!(
 		std::thread::spawn(|| {
 			DesktopMenu::new(Definition::new(vec![Item::Separator]).unwrap()).err()

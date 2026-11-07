@@ -216,6 +216,19 @@ pub const fn supports_menu_bar() -> bool {
 	cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
+/// AppKit application menus and Win32 window menu bars expect every root
+/// entry to be a submenu. Tray / flat menus may mix commands at the root.
+pub fn root_items_are_submenus(definition: &Definition) -> bool {
+	root_items_are_submenus_slice(definition.items())
+}
+
+pub(crate) fn root_items_are_submenus_slice(items: &[Item]) -> bool {
+	!items.is_empty()
+		&& items
+			.iter()
+			.all(|item| matches!(item, Item::Submenu { .. }))
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -329,5 +342,20 @@ mod tests {
 			supports_menu_bar(),
 			cfg!(any(target_os = "macos", target_os = "windows"))
 		);
+	}
+
+	#[test]
+	fn root_submenu_shape_matches_menu_bar_expectations() {
+		let flat = Definition::new(vec![command("quit")]).unwrap();
+		assert!(!root_items_are_submenus(&flat));
+		let bar = Definition::new(vec![Item::Submenu {
+			id: "file".into(),
+			label: "File".into(),
+			enabled: true,
+			items: vec![command("save")],
+		}])
+		.unwrap();
+		assert!(root_items_are_submenus(&bar));
+		assert!(!root_items_are_submenus(&Definition { items: Vec::new() }));
 	}
 }

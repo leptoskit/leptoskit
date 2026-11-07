@@ -40,6 +40,11 @@ impl WindowMenu {
 	/// muda menu or destroy/replace this menu's native handles during the
 	/// lease. The host must run the window's message loop on this thread.
 	pub unsafe fn attach(menu: Rc<DesktopMenu>, hwnd: HWND) -> Result<Self, Error> {
+		// Match AppKit / MenuBar: window menu bars expect root submenus.
+		if !crate::root_items_are_submenus(&menu.definition) {
+			return Err(Error::Unavailable);
+		}
+
 		// SAFETY: Win32 validity/thread queries do not dereference caller
 		// memory.
 		if unsafe { IsWindow(hwnd) } == 0 {
@@ -100,12 +105,18 @@ impl WindowMenu {
 	/// `true` means it has been handled and must not be dispatched a second
 	/// time.
 	pub fn translate_accelerator(&self, message: &MSG) -> bool {
+		let haccel = self.menu.native_menu().haccel();
+		// muda returns a null HACCEL when the tree has no accelerators;
+		// TranslateAcceleratorW then fails. Skip the call so hosts can treat
+		// "no table" the same as "not handled" without touching Win32.
+		if haccel == 0 {
+			return false;
+		}
+
 		// SAFETY: the lease requires a live HWND on this thread and its menu
 		// owns the accelerator table. Win32 takes a pointer to the
 		// borrowed message.
-		unsafe {
-			TranslateAcceleratorW(self.hwnd, self.menu.native_menu().haccel() as _, message) != 0
-		}
+		unsafe { TranslateAcceleratorW(self.hwnd, haccel as _, message) != 0 }
 	}
 
 	/// The attached menu's state-update and event-routing methods.

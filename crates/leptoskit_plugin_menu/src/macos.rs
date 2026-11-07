@@ -20,7 +20,6 @@ use objc2_app_kit::NSMenu;
 use crate::Definition;
 use crate::DesktopMenu;
 use crate::Error;
-use crate::Item;
 
 thread_local! { static ATTACHED: Cell<bool> = const { Cell::new(false) }; }
 
@@ -41,12 +40,11 @@ impl ApplicationMenu {
 	/// Attaches a menu bar. AppKit menu bars require only submenus at the root;
 	/// flat menus remain usable in trays. A second active lease returns `Busy`.
 	pub fn attach(menu: Rc<DesktopMenu>, application: &NSApplication) -> Result<Self, Error> {
-		if !menu
-			.definition
-			.items()
-			.iter()
-			.all(|item| matches!(item, Item::Submenu { .. }))
-		{
+		if MainThreadMarker::new().is_none() {
+			return Err(Error::WrongThread);
+		}
+
+		if !crate::root_items_are_submenus(&menu.definition) {
 			return Err(Error::Unavailable);
 		}
 
