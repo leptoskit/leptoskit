@@ -2,7 +2,7 @@
 
 Keep a website and an accounts API in the same repository while giving each its own application configuration. A `leptoskit.workspace.toml` file describes those boundaries and checks how the apps depend on one another before a build starts.
 
-This command runs on the development machine. It reads configuration for web, server, and native apps; it does not build a platform host, connect to a database, or deploy anything.
+Inspection runs on the development machine and reads configuration for web, server, and native apps. The release commands below run on a managed deployment operator's machine and deploy already built server or supported website images. They do not build native hosts or publish code-push bundles.
 
 ```toml
 format_version = 1
@@ -45,4 +45,47 @@ The report lists app directories, packages, declared platforms, render mode, bac
 
 The JSON report has `format_version = 1` and a `checks` object. `configuration = "passed"` means the declarations passed the checks above. Artifact builds, API compatibility, physical database ownership, service identity, and deployment remain `"not_checked"`. A shared environment variable name such as `DATABASE_URL` does not prove two apps own different databases.
 
-Workspace inspection currently stops at this report. It does not inject bindings into running apps, choose which apps to rebuild, create separate images, or orchestrate releases. Use each app's existing build and release commands until those operations consume the workspace graph. Processes released inside a single app remain part of that app's release.
+Inspection stops at this report. Processes released inside a single app remain part of that app's release.
+
+## Release a set of independently built images
+
+Build and publish each selected app's image through its verified packaging workflow first. Prepare the app's managed infrastructure and operator approval policy as described in the deployment and verification guides. Put the versions and independently authenticated descriptor hashes in a release set:
+
+```toml
+format_version = 1
+
+[applications.accounts]
+version = "accounts-v1"
+descriptor = "apps/accounts/release.json"
+descriptor-sha256 = "<reviewed descriptor SHA-256>"
+setup = true
+
+[applications.accounts.environment]
+DATABASE_PASSWORD = "ACCOUNTS_DATABASE_PASSWORD"
+POSTGRES_PASSWORD = "ACCOUNTS_POSTGRES_PASSWORD"
+
+[applications.website]
+version = "web-v1"
+descriptor = "apps/website/release.json"
+descriptor-sha256 = "<reviewed descriptor SHA-256>"
+setup = true
+
+[applications.website.environment]
+DATABASE_PASSWORD = "WEB_DATABASE_PASSWORD"
+POSTGRES_PASSWORD = "WEB_POSTGRES_PASSWORD"
+```
+
+Descriptor paths are relative to the workspace file. Environment entries map a deployment variable to the name of an operator environment variable; they never contain its value. Tool-control variables such as `PATH` cannot be mapped, even if declared as app secrets. Other required credentials still come from the operator environment. Use `setup = true` for an initial release and `maintenance = true` when the app's schema-changing release requires downtime.
+
+```sh
+lk workspace plan --releases releases.toml --out release-plan.json
+lk workspace deploy --plan release-plan.json --sha256 <reviewed-plan-sha256>
+```
+
+Review the plan and retain its hash independently before deploying. Planning checks the workspace graph, application configurations, descriptor contents and migration identities. Each selected readiness dependency must also be in the release set, even if it will keep its current version. The deploy command then checks operator authorization and image/runtime evidence through the existing per-app release path. It uses direct managed deployment rather than a connected deployment service.
+
+Apps run in readiness order. Each app keeps its own reservation, migration history, image, and release records. A failure stops the remaining commands and leaves already completed apps at their new versions; this is not a transaction across apps. Progress is saved beneath `.leptoskit/workspace`. Each app has a default 900-second local command deadline, configurable with `--timeout-seconds`; a timeout may leave a remote reservation that needs inspection through `lk infra status` before recovery.
+
+Repeating the same plan revalidates completed apps. `deploy --reuse-current` checks the latest recorded version, descriptor, current approval policy, configuration, database history, running image, app environment, and readiness before leaving it untouched. A changed credential, unfinished operation, stopped container, or different current version refuses reuse. History created before configuration recording also requires a new version. The journal cannot skip these checks.
+
+Plans freeze artifact and configuration choices. They do not yet build images, calculate source-change impact, create private network connections, inject the workspace's call bindings, or infer compatibility between separate apps. Configure caller-specific credentials and connectivity explicitly; the receiving application must still enforce identity and authorization. Runtime checks are operator observations, not runtime attestation.

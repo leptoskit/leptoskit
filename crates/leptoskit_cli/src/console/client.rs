@@ -252,7 +252,10 @@ pub fn token(project: &str, scope: Scope) -> Result<()> {
 
 pub fn deploy(connection: &Connection, args: &crate::infra::ReleaseArgs) -> Result<()> {
 	ensure!(
-		args.verified_descriptor.is_none() && args.descriptor_sha256.is_none(),
+		args.verified_descriptor.is_none()
+			&& args.descriptor_sha256.is_none()
+			&& !args.reuse_current
+			&& args.configuration_sha256.is_none(),
 		"verified image descriptors require direct managed deployment; connected service \
 		 deployment does not support this evidence"
 	);

@@ -92,6 +92,7 @@ esac
 		r#"#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> kamal-calls
+if [ "$1" = prune ] && [ "${MOCK_KAMAL_FAIL_PRUNE:-0}" = 1 ]; then exit 1; fi
 if [ "$1" = app ] && [ "$2" = boot ]; then
   printf '%s\n' "${LEPTOSKIT_RELEASE:-missing}" >> boot-versions
   if [ -n "${MOCK_KAMAL_FAIL_VERSION:-}" ] && [ "${LEPTOSKIT_RELEASE:-}" = "$MOCK_KAMAL_FAIL_VERSION" ]; then exit 1; fi
@@ -153,6 +154,13 @@ elif script.startswith("docker exec") and "_leptoskit_migrations" in script:
     count_path.write_text(str(count + 1))
     after = os.environ.get("MOCK_HISTORY_AFTER")
     print(after if after and count >= 1 else os.environ.get("MOCK_HISTORY", "[]"))
+elif "leptoskit-current-release-readiness-v1" in script:
+    request = json.load(sys.stdin)
+    if os.environ.get("MOCK_REUSE_UNREADY"):
+        sys.exit(1)
+    if request["container"] != "notes-production-web-v1" or request["port"] != 3000:
+        sys.exit(1)
+    print(json.dumps({"ready": True}))
 elif script.startswith("python3 "):
     print(json.dumps({"healthy": True, "verified": True, "snapshot": "a" * 64}))
 elif "docker inspect --format" in script and ".State.Status" in script:
@@ -2121,6 +2129,125 @@ fn verified_website_release_preserves_evidence_through_rollback_and_recovery() {
 	verified_release_lifecycle(true);
 }
 
+#[test]
+fn verified_current_release_is_rechecked_without_boot_or_history_changes() {
+	let root = project();
+	let (descriptor, pin) = verified_descriptor(root.path());
+	let mut args = vec![
+		"deploy",
+		"--setup",
+		"--version",
+		"v1",
+		"--verified-descriptor",
+		&descriptor,
+		"--descriptor-sha256",
+		&pin,
+	];
+	succeeds(&cli(root.path(), &args, &[]));
+	let history = root
+		.path()
+		.join("remote/state/notes-production/control/releases.json");
+	let before = fs::read(&history).unwrap();
+	let boots = root.path().join("infra/notes-production/boot-versions");
+	let booted = fs::read(&boots).unwrap();
+	args.push("--reuse-current");
+	succeeds(&cli(root.path(), &args, &[]));
+	assert_eq!(fs::read(&history).unwrap(), before);
+	assert_eq!(fs::read(&boots).unwrap(), booted);
+	for (environment, expected) in [
+		(vec![("MOCK_REUSE_UNREADY", "1")], "remote operation failed"),
+		(
+			vec![(
+				"MOCK_CONTAINER_DIGEST",
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			)],
+			"running image differs",
+		),
+		(vec![("MOCK_IMAGE_MISMATCH", "all")], "remote image differs"),
+	] {
+		fails_with(&cli(root.path(), &args, &environment), expected);
+		assert_eq!(fs::read(&history).unwrap(), before);
+		assert_eq!(fs::read(&boots).unwrap(), booted);
+	}
+	let mut legacy: serde_json::Value = serde_json::from_slice(&before).unwrap();
+	legacy[0]
+		.as_object_mut()
+		.unwrap()
+		.remove("configuration_sha256");
+	fs::write(&history, serde_json::to_vec(&legacy).unwrap()).unwrap();
+	fails_with(
+		&cli(root.path(), &args, &[]),
+		"predates configuration recording",
+	);
+	assert_eq!(fs::read(&boots).unwrap(), booted);
+	fs::write(&history, &before).unwrap();
+	let config = fs::read_to_string(root.path().join("leptoskit.toml")).unwrap();
+	fs::write(
+		root.path().join("leptoskit.toml"),
+		config.replace("name = \"notes\"", "name = \"renamed\""),
+	)
+	.unwrap();
+	fails_with(&cli(root.path(), &args, &[]), "configuration changed");
+	assert_eq!(fs::read(&boots).unwrap(), booted);
+}
+
+#[test]
+fn planned_configuration_is_checked_before_infrastructure_operations() {
+	let root = project();
+	fails_with(
+		&cli(
+			root.path(),
+			&[
+				"deploy",
+				"--version",
+				"v1",
+				"--configuration-sha256",
+				&"0".repeat(64),
+			],
+			&[],
+		),
+		"configuration differs from the selected plan",
+	);
+	assert!(
+		!root
+			.path()
+			.join("infra/notes-production/kamal-calls")
+			.exists()
+	);
+	assert!(!root.path().join("remote/ssh-calls").exists());
+}
+
+#[test]
+fn unfinished_release_cleanup_cannot_be_reused_as_complete() {
+	let root = project();
+	let (descriptor, pin) = verified_descriptor(root.path());
+	let mut args = vec![
+		"deploy",
+		"--setup",
+		"--version",
+		"v1",
+		"--verified-descriptor",
+		&descriptor,
+		"--descriptor-sha256",
+		&pin,
+	];
+	fails_with(
+		&cli(root.path(), &args, &[("MOCK_KAMAL_FAIL_PRUNE", "1")]),
+		"Kamal operation failed",
+	);
+	let operation: serde_json::Value = serde_json::from_slice(
+		&fs::read(
+			root.path()
+				.join("remote/state/notes-production/control/operation.json"),
+		)
+		.unwrap(),
+	)
+	.unwrap();
+	assert_eq!(operation["phase"], "failed");
+	args.push("--reuse-current");
+	fails_with(&cli(root.path(), &args, &[]), "unfinished operation state");
+}
+
 fn website_descriptor(root: &Path) -> (String, String) {
 	let (path, _) = verified_descriptor(root);
 
@@ -2464,6 +2591,16 @@ fn backend_approvals_gate_release_reuse_rollback_and_recovery() {
 	succeeds(&cli(root.path(), &flags, &[]));
 	let policy = fs::read(dir.join("backend-deployment.json")).unwrap();
 	for flags in [
+		vec![
+			"deploy",
+			"--version",
+			"v1",
+			"--reuse-current",
+			"--verified-descriptor",
+			&path,
+			"--descriptor-sha256",
+			&pin,
+		],
 		vec!["deploy", "--rollback", "v1"],
 		vec!["deploy", "--recover", "--version", "v1"],
 	] {

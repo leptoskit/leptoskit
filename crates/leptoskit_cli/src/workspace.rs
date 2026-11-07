@@ -1,8 +1,10 @@
-//! Read-only workspace composition and pre-build diagnostics.
+//! Workspace composition, pre-build diagnostics, and independent releases.
 //!
 //! This layer references existing app configurations. It does not turn the
-//! processes inside one app into independent releases, run Cargo, inspect
-//! credentials, or infer deployed evidence from declarations.
+//! processes inside one app into independent releases. Inspection does not
+//! inspect credentials or infer deployed evidence from declarations. Release
+//! execution consumes separately pinned artifacts and per-app deployment
+//! checks.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -24,7 +26,9 @@ use leptoskit_config::workspace::WORKSPACE_FILE;
 use leptoskit_config::workspace::Workspace;
 use serde::Serialize;
 
-/// Workspace composition commands. Neither builds or deploys an application.
+mod releases;
+
+/// Workspace inspection and ordered releases of independently built images.
 #[derive(Debug, Subcommand)]
 pub enum WorkspaceCommand {
 	/// Shows app boundaries, readiness order, call bindings and evidence gaps.
@@ -32,6 +36,10 @@ pub enum WorkspaceCommand {
 	/// Rejects invalid graphs, escaping paths and conflicting managed
 	/// identities.
 	Check(WorkspaceArgs),
+	/// Freeze application configurations and independently pinned artifacts.
+	Plan(releases::PlanArgs),
+	/// Apply an independently pinned plan, revalidating unchanged releases.
+	Deploy(releases::DeployArgs),
 }
 
 /// Inputs shared by workspace inspection commands.
@@ -244,9 +252,15 @@ fn check_identities(
 /// # Errors
 /// Returns the same pre-build diagnostics as [`inspect`].
 pub fn run(command: WorkspaceCommand) -> Result<()> {
+	let command = match command {
+		WorkspaceCommand::Plan(args) => return releases::plan(&args),
+		WorkspaceCommand::Deploy(args) => return releases::deploy(&args),
+		command => command,
+	};
 	let (options, explain) = match command {
 		WorkspaceCommand::Explain(options) => (options, true),
 		WorkspaceCommand::Check(options) => (options, false),
+		WorkspaceCommand::Plan(_) | WorkspaceCommand::Deploy(_) => unreachable!("handled above"),
 	};
 	let manifest = match options.manifest {
 		Some(path) => path,

@@ -25,6 +25,8 @@ use super::remote::{self};
 use super::remote_history;
 use super::runtime;
 
+mod reuse;
+
 pub(super) fn history(ip: &str, c: &InfraConfig) -> Result<Vec<Release>> {
 	let history: Vec<Release> =
 		serde_json::from_slice(&remote::read(ip, &c.name, "releases.json")?)
@@ -69,7 +71,7 @@ pub(super) fn stop(hosts: &[String], c: &InfraConfig) -> Result<()> {
 	Ok(())
 }
 
-fn schema(root: &Path, config: &LeptoskitConfig) -> Result<Vec<(String, String)>> {
+pub(super) fn schema(root: &Path, config: &LeptoskitConfig) -> Result<Vec<(String, String)>> {
 	let migrations = leptoskit_db::load_migrations(
 		&root.join(&config.db.as_ref().context("missing database")?.migrations),
 	)?;
@@ -659,8 +661,48 @@ fn authorize_release(
 	Ok(authorization)
 }
 
+fn boot_application(
+	dir: &Path,
+	c: &InfraConfig,
+	hosts: &[String],
+	history: &[Release],
+	env: &BTreeMap<String, String>,
+	reservation: &Reservation,
+	version: &str,
+) -> Result<()> {
+	let result = execute(
+		dir,
+		&["app", "boot", "--version", version],
+		env,
+		reservation,
+	);
+	if let Err(error) = result {
+		record(&hosts[0], c, &reservation.owner, "failed", version)?;
+		if recover_previous(dir, c, hosts, history, env, reservation).is_err() {
+			stop(hosts, c).context("automatic recovery failed and application stop failed")?;
+			eprintln!(
+				"Automatic recovery did not complete; inspect shared status and recover \
+				 explicitly."
+			);
+		}
+		return Err(error);
+	}
+	Ok(())
+}
+
+fn check_configuration(config: &LeptoskitConfig, pin: Option<&String>) -> Result<()> {
+	if let Some(pin) = pin {
+		ensure!(
+			*pin == super::digest(&serde_json::to_vec(config)?),
+			"application configuration differs from the selected plan"
+		);
+	}
+	Ok(())
+}
+
 pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
+	check_configuration(&config, args.configuration_sha256.as_ref())?;
 	let c = managed_settings(&config)?;
 	let version = release_version(args)?;
 	let dir = directory(&root, c);
@@ -683,6 +725,23 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let mut history = history(ip, c)?;
 	let local_schema = schema(&root, &config)?;
 	let local_hash = history_fingerprint(local_schema.clone())?;
+	if args.reuse_current
+		&& reuse::current(
+			args,
+			reuse::Current {
+				root: &root,
+				config: &config,
+				dir: &dir,
+				hosts: &hosts,
+				history: &history,
+				local_hash: &local_hash,
+				private: &private,
+			},
+		)? {
+		reservation.check()?;
+		println!("Revalidated current release {version}; no application was restarted.");
+		return Ok(());
+	}
 	let target = target_release(args, &history, version, &local_hash)?;
 	let evidence = release_evidence(args, target.as_ref(), &history, &local_hash)?;
 	if let Some(evidence) = &evidence {
@@ -748,23 +807,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		);
 	}
 	super::services::prepare(ip, c, &project)?;
-	let result = execute(
-		&dir,
-		&["app", "boot", "--version", version],
-		&env,
-		&reservation,
-	);
-	if let Err(error) = result {
-		record(ip, c, &reservation.owner, "failed", version)?;
-		if recover_previous(&dir, c, &hosts, &history, &env, &reservation).is_err() {
-			stop(&hosts, c).context("automatic recovery failed and application stop failed")?;
-			eprintln!(
-				"Automatic recovery did not complete; inspect shared status and recover \
-				 explicitly."
-			);
-		}
-		return Err(error);
-	}
+	boot_application(&dir, c, &hosts, &history, &env, &reservation, version)?;
 	let expected = target
 		.as_ref()
 		.map_or(&local_hash, |target| &target.migrations);
@@ -776,6 +819,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	})();
 	let image = flight.checked(verified, &hosts)?;
 	history.push(Release {
+		configuration_sha256: Some(super::digest(&serde_json::to_vec(&config)?)),
 		authorization,
 		evidence,
 		version: version.clone(),
@@ -791,12 +835,12 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		&bytes,
 	)?;
 	fs::write(dir.join("releases.json"), &bytes)?;
-	record(ip, c, &reservation.owner, "complete", version)?;
 	if args.setup && c.backups.enabled {
 		super::recovery::install(ip, c, &output(&dir, "backup_endpoint")?, &reservation)?;
 		super::recovery::invoke(ip, c, "backup", "latest", false, Some(&reservation.owner))?;
 	}
 	execute(&dir, &["prune", "all"], &env, &reservation)?;
+	record(ip, c, &reservation.owner, "complete", version)?;
 	println!(
 		"Released {version} on {} host(s) at https://{}",
 		hosts.len(),
@@ -949,6 +993,8 @@ mod tests {
 		ReleaseArgs {
 			verified_descriptor: None,
 			descriptor_sha256: None,
+			configuration_sha256: None,
+			reuse_current: false,
 			version: None,
 			rollback: None,
 			setup: false,
@@ -961,6 +1007,7 @@ mod tests {
 
 	fn recorded(version: &str, migrations: &str) -> Release {
 		Release {
+			configuration_sha256: None,
 			authorization: None,
 			evidence: None,
 			version: version.into(),

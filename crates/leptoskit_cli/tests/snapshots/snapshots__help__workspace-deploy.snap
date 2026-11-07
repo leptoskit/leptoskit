@@ -1,0 +1,21 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Apply an independently pinned plan, revalidating unchanged releases
+
+Usage: leptoskit workspace deploy [OPTIONS] --plan <PLAN> --sha256 <SHA256>
+
+Options:
+      --manifest <MANIFEST>
+          Workspace manifest; otherwise locate it from the current directory
+      --plan <PLAN>
+          Reviewed JSON plan written by workspace plan
+      --sha256 <SHA256>
+          Independently reviewed SHA-256 of the exact plan bytes
+      --timeout-seconds <TIMEOUT_SECONDS>
+          Maximum seconds for each application's local release process tree [default: 900]
+  -h, --help
+          Print help
+  -V, --version
+          Print version

@@ -63,6 +63,8 @@ fn release_args() -> crate::infra::ReleaseArgs {
 	crate::infra::ReleaseArgs {
 		verified_descriptor: None,
 		descriptor_sha256: None,
+		configuration_sha256: None,
+		reuse_current: false,
 		version: None,
 		rollback: None,
 		setup: false,

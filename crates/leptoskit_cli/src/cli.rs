@@ -405,7 +405,7 @@ pub enum Command {
 		#[arg(long)]
 		all: bool,
 	},
-	/// Explains and validates a workspace of separately configured apps.
+	/// Validates a workspace and releases independently configured apps.
 	Workspace {
 		#[command(subcommand)]
 		command: crate::workspace::WorkspaceCommand,

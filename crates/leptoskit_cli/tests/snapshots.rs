@@ -128,6 +128,8 @@ fn help_text_is_pinned() {
 		&["workspace", "--help"][..],
 		&["workspace", "explain", "--help"][..],
 		&["workspace", "check", "--help"][..],
+		&["workspace", "plan", "--help"][..],
+		&["workspace", "deploy", "--help"][..],
 		&["console", "--help"][..],
 		&["console", "serve", "--help"][..],
 		&["console", "worker", "--help"][..],

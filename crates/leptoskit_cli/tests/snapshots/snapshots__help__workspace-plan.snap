@@ -1,0 +1,14 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Freeze application configurations and independently pinned artifacts
+
+Usage: leptoskit workspace plan [OPTIONS] --releases <RELEASES> --out <OUT>
+
+Options:
+      --manifest <MANIFEST>  Workspace manifest; otherwise locate it from the current directory
+      --releases <RELEASES>  TOML release set, with versions and independently authenticated pins
+      --out <OUT>            New plan file; never overwrites an existing plan
+  -h, --help                 Print help
+  -V, --version              Print version
