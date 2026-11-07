@@ -124,7 +124,7 @@ Unit tests live in `leptoskit_codepush::capability` (determinism, versions, dupl
 
 ## Acceptance evidence, 7 November 2026
 
-Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `89b4feab` (#619, including merged #609 timers and #615 stores), plus the acceptance fixes in the same pull request. Full logs live outside the repository in the audit state's `a06-execution-evidence/`.
+Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `0c66c581` (#628, including merged #609 timers, #615 stores, #619 plugin hardening, and #621 rollback safety), plus the acceptance fixes in the same pull request. Full logs live outside the repository in the audit state's `a06-execution-evidence/`.
 
 | Check                                                                   | Result                                                                                                      |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
