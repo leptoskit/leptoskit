@@ -487,6 +487,8 @@ pub struct WasmHost<B: NativeBackend> {
 	/// sleeps; see [`Self::enable_timers`].
 	timer_plugin: Option<leptoskit_bridge::PluginId>,
 	timer: Option<leptoskit_bridge::timer::host::TimerScheduler>,
+	/// Immediate routing failures also need a guest wake, without a deadline.
+	routed_replies_pending: bool,
 	/// Retained so a replaced guest keeps the same timer wake.
 	timer_wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 	/// Non-timer requests collected while [`Self::pump_timers`] routes work.
@@ -661,6 +663,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			clock_fn: guest.clock_fn,
 			timer_plugin: None,
 			timer: None,
+			routed_replies_pending: false,
 			timer_wake: None,
 			routed_requests: VecDeque::new(),
 			routed_cancelled: VecDeque::new(),
@@ -690,6 +693,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		}
 
 		self.timer_plugin = None;
+		self.routed_replies_pending = false;
 		self.routed_requests.clear();
 		self.routed_cancelled.clear();
 		self.identity = HostIdentity(std::sync::Arc::new(()));
@@ -933,6 +937,10 @@ impl<B: NativeBackend> WasmHost<B> {
 	/// How long until [`Self::poll_due_timers`] has work, or `None` when the
 	/// host has no timer waiting. `Some(Duration::ZERO)` means due now.
 	pub fn next_timer_deadline(&self) -> Option<std::time::Duration> {
+		if self.routed_replies_pending {
+			return Some(std::time::Duration::ZERO);
+		}
+
 		self.timer
 			.as_ref()
 			.and_then(|timers| timers.next_deadline())
@@ -1004,11 +1012,12 @@ impl<B: NativeBackend> WasmHost<B> {
 					moved += 1;
 				} else {
 					let id = request.id;
-					let _ = self
+					self.routed_replies_pending |= self
 						.store
 						.data_mut()
 						.plugins
-						.complete(id, Err(leptoskit_bridge::Error::Busy));
+						.complete(id, Err(leptoskit_bridge::Error::Busy))
+						.is_ok();
 					moved += 1;
 				}
 			}
@@ -1053,11 +1062,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			.map(leptoskit_bridge::timer::host::TimerScheduler::take_due)
 			.unwrap_or_default();
 
-		if due.is_empty() {
-			return Ok(false);
-		}
-
-		let mut delivered = false;
+		let mut delivered = std::mem::take(&mut self.routed_replies_pending);
 
 		for id in due {
 			match self
@@ -1095,11 +1100,12 @@ impl<B: NativeBackend> WasmHost<B> {
 		});
 
 		if let Err(error) = result {
-			let _ = self
+			self.routed_replies_pending |= self
 				.store
 				.data_mut()
 				.plugins
-				.complete(request.id, Err(error));
+				.complete(request.id, Err(error))
+				.is_ok();
 		}
 
 		true

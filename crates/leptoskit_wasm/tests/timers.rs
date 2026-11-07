@@ -165,6 +165,42 @@ fn a_timer_only_guest_sees_the_capability_after_enable() {
 	host.start(100.0, 100.0).expect("resolve the timer");
 }
 
+#[test]
+fn a_rejected_timer_wakes_the_guest_without_waiting_for_a_deadline() {
+	let guest = r#"
+	(module
+	  (global $woken (mut i32) (i32.const 0))
+	  (func (export "leptoskit_main"))
+	  (func (export "leptoskit_plugins_ready") (global.set $woken (i32.const 1)))
+	  (func (export "leptoskit_event") (param i64 i32 i32 i32) (result i32)
+	    (global.get $woken)))
+	"#;
+	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile wat");
+	host.enable_timers().expect("enable timers");
+	host.start(100.0, 100.0).expect("start");
+	let timer = host.plugins().resolve(TIMER_PLUGIN).expect("timer plugin");
+	let id = host
+		.plugins()
+		.submit(timer, SLEEP, Bytes::new())
+		.expect("submit");
+
+	assert!(host.pump_timers().expect("deliver the rejection"));
+	assert_eq!(
+		host.plugins()
+			.take_result(id)
+			.expect("result")
+			.expect("reply"),
+		Err(leptoskit_bridge::Error::InvalidArgument)
+	);
+	assert_eq!(
+		host.dispatch_wire(0, EventKind::Press, None)
+			.expect("inspect wake"),
+		EventOutcome::Handled
+	);
+	assert!(host.next_timer_deadline().is_none());
+	assert!(!host.pump_timers().expect("already delivered"));
+}
+
 /// Run by `devenv shell test:plugins:guest`, which compiles the Rust guest.
 /// The fixture sleeps for real, drops an abandoned sleep, and reports both.
 #[test]
