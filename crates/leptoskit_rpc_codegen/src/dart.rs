@@ -606,6 +606,9 @@ pub(crate) fn generate(context: &Context<'_>) -> Generated {
 		library.push_str(synthesized);
 	}
 
+	if library.contains("_encodeNullable(") || client.contains("_encodeNullable(") {
+		library.push_str(NULLABLE_ENCODER);
+	}
 	library.push_str(RUNTIME);
 	library.push_str(&client);
 	let mut live = context.banner("//");
@@ -1172,6 +1175,14 @@ fn live_readme(context: &Context<'_>, methods: &[String], channels: &[String]) -
 	)
 }
 
+const NULLABLE_ENCODER: &str = r"/// Encodes through a local value so nullable public fields and getters do not
+/// depend on field promotion in the consumer's Dart SDK.
+Object? _encodeNullable<T>(T? value, Object? Function(T) encode) {
+  return value == null ? null : encode(value);
+}
+
+";
+
 /// The presence wrapper, error type, `serde_qs` encoder, and helpers every
 /// package shares.
 const RUNTIME: &str = r"/// An optional argument or field with three states: absent, present as `null`,
@@ -1212,12 +1223,6 @@ final class _Present<T> extends Presence<T> {
 
   @override
   final T value;
-}
-
-/// Encodes through a local value so nullable public fields and getters do not
-/// depend on field promotion in the consumer's Dart SDK.
-Object? _encodeNullable<T>(T? value, Object? Function(T) encode) {
-  return value == null ? null : encode(value);
 }
 
 /// The value of a required field, which must be present even when it may be

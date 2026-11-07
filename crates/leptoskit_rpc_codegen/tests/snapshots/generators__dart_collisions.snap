@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_rpc_codegen/tests/generators.rs
-assertion_line: 1109
 expression: code
 ---
 ===== lib/clash.dart =====

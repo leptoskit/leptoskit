@@ -7,11 +7,19 @@ import 'package:presence/presence.dart';
 /// Runs without `package:test`: the generated package only needs `http` and
 /// `web_socket_channel`, so a plain Dart program keeps the fixture small.
 Future<void> main() async {
-  _checkModels();
-  _checkDefaultsAndNull();
-  await _checkArguments();
-  await _checkLiveArguments();
-  stdout.writeln('generated Dart presence checks passed');
+  final deadline = Timer(const Duration(seconds: 30), () {
+    stderr.writeln('Dart presence fixture exceeded 30 seconds');
+    exit(1);
+  });
+  try {
+    _checkModels();
+    _checkDefaultsAndNull();
+    await _checkArguments();
+    await _checkLiveArguments();
+    stdout.writeln('generated Dart presence checks passed');
+  } finally {
+    deadline.cancel();
+  }
 }
 
 void _checkModels() {
@@ -75,6 +83,16 @@ void _checkModels() {
     'optional_empty_text': '',
     'optional_items': <Object?>[],
     'optional_labels': <String, Object?>{},
+    'nullable_items': [
+      null,
+      {'value': 'item'},
+    ],
+    'nullable_map': {
+      'nil': null,
+      'item': {'value': 'map'},
+    },
+    'null_items': [null],
+    'null_map': {'nil': null},
   };
   final all = Echo.fromJson(wire);
   _equals(all.toJson(), wire, 'all presence and falsy values round-trip');
@@ -108,12 +126,16 @@ void _checkModels() {
     'optional_nullable_text': null,
     'optional_nullable_nested': null,
     'optional_nullable_alias': null,
+    'nullable_items': null,
+    'nullable_map': null,
   });
   _equals(explicitNull.toJson(), <String, Object?>{
     ...wire,
     'optional_nullable_text': null,
     'optional_nullable_nested': null,
     'optional_nullable_alias': null,
+    'nullable_items': null,
+    'nullable_map': null,
   }, 'explicit optional null is not omitted');
 
   _throws(() {
@@ -208,6 +230,19 @@ Future<void> _checkArguments() async {
       'required_nullable_text': null,
       'required_nullable_nested': null,
     }, 'JSON arguments omit absent optional values');
+
+    await client.send.call(
+      requiredText: 'r',
+      requiredNullableText: 'required value',
+      requiredNullableNested: Nested(value: 'nested'),
+      optionalNullableText: const Presence<String?>.present('value'),
+    );
+    _equals(jsonDecode(jsonBodies.last), {
+      'required_text': 'r',
+      'required_nullable_text': 'required value',
+      'required_nullable_nested': {'value': 'nested'},
+      'optional_nullable_text': 'value',
+    }, 'JSON arguments preserve present values');
 
     await client.formEcho(
       optionalFlag: false,
@@ -315,7 +350,8 @@ Future<void> _checkLiveArguments() async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   final sockets = <WebSocket>[];
   final mutations = <Object?>[];
-  final joined = Completer<Map<String, dynamic>>();
+  final joined = StreamController<Map<String, dynamic>>();
+  final subscriptions = <Object?>[];
   final subscription = server.listen((request) async {
     final socket = await WebSocketTransformer.upgrade(
       request,
@@ -344,8 +380,19 @@ Future<void> _checkLiveArguments() async {
               'ok': null,
             }),
           );
+        case 'sub':
+          subscriptions.add(frame['args']);
+          socket.add(
+            jsonEncode({
+              'type': 'transition',
+              'version': 0,
+              'updates': [
+                {'id': frame['id'], 'ok': 'observed'},
+              ],
+            }),
+          );
         case 'join':
-          if (!joined.isCompleted) joined.complete(frame);
+          joined.add(frame);
       }
     });
   });
@@ -389,20 +436,71 @@ Future<void> _checkLiveArguments() async {
       'required_nullable_text': null,
       'required_nullable_nested': null,
     }, 'live mutation omits absent values');
-    final room = client.room.join(
-      Room(
-        requiredText: 'r',
-        requiredNullableText: null,
-        optionalNullableText: const Presence<String?>.present(null),
-      ),
-    );
-    final frame = await joined.future.timeout(const Duration(seconds: 5));
-    _equals(frame['args'], <String, Object?>{
+    await client.send
+        .live(
+          requiredText: 'r',
+          requiredNullableText: 'text',
+          requiredNullableNested: Nested(value: 'nested'),
+          optionalNullableText: const Presence<String?>.present('value'),
+        )
+        .timeout(const Duration(seconds: 5));
+    _equals(mutations.last, {
       'required_text': 'r',
-      'required_nullable_text': null,
-      'optional_nullable_text': null,
-    }, 'channel join preserves explicit nullable arguments');
-    room.leave();
+      'required_nullable_text': 'text',
+      'required_nullable_nested': {'value': 'nested'},
+      'optional_nullable_text': 'value',
+    }, 'live mutation preserves present values');
+    for (final value in [
+      const Presence<String?>.absent(),
+      const Presence<String?>.present(null),
+      const Presence<String?>.present('value'),
+    ]) {
+      await client.observe
+          .watch(
+            requiredText: 'r',
+            requiredNullableText: null,
+            requiredNullableNested: null,
+            optionalNullableText: value,
+          )
+          .first
+          .timeout(const Duration(seconds: 5));
+      _equals(subscriptions.last, {
+        'required_text': 'r',
+        'required_nullable_text': null,
+        'required_nullable_nested': null,
+        if (value.isPresent) 'optional_nullable_text': value.value,
+      }, 'subscription preserves presence');
+    }
+    final joinFrames = StreamIterator(joined.stream);
+    for (final value in [
+      const Presence<String?>.absent(),
+      const Presence<String?>.present(null),
+      const Presence<String?>.present('value'),
+    ]) {
+      final room = client.room.join(
+        Room(
+          requiredText: 'r',
+          requiredNullableText: null,
+          optionalNullableText: value,
+        ),
+      );
+      await joinFrames.moveNext().timeout(const Duration(seconds: 5));
+      final frame = joinFrames.current;
+      _equals(frame['args'], <String, Object?>{
+        'required_text': 'r',
+        'required_nullable_text': null,
+        if (value.isPresent) 'optional_nullable_text': value.value,
+      }, 'channel join preserves explicit nullable arguments');
+      room.leave();
+    }
+    final nullRoom = client.nullRoom.join(null);
+    await joinFrames.moveNext().timeout(const Duration(seconds: 5));
+    final nullFrame = joinFrames.current;
+    if (!nullFrame.containsKey('args') || nullFrame['args'] != null) {
+      throw StateError('null-only channel args must remain explicit null');
+    }
+    nullRoom.leave();
+    await joinFrames.cancel();
   } finally {
     client.live.close();
     for (final socket in sockets) {

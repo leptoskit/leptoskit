@@ -108,6 +108,18 @@ fn generated_dart_presence_round_trips() {
 		String::from_utf8_lossy(&get.stderr)
 	);
 
+	let analyze = Command::new("dart")
+		.args(["analyze", "--fatal-infos"])
+		.current_dir(dir.path())
+		.output()
+		.expect("analyze generated Dart");
+	assert!(
+		analyze.status.success(),
+		"dart analyze failed:\n{}\n{}",
+		String::from_utf8_lossy(&analyze.stdout),
+		String::from_utf8_lossy(&analyze.stderr)
+	);
+
 	let run = Command::new("dart")
 		.args(["run", "tool/presence.dart"])
 		.current_dir(dir.path())

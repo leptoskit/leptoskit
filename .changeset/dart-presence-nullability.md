@@ -9,3 +9,5 @@ Generated Dart models and operation arguments no longer treat a nullable type as
 JSON and live payloads share the same presence-aware argument map, so HTTP calls, watched queries, live mutations, and channel join arguments round-trip missing, `null`, and real values. Query-string and form encodings cannot represent explicit `null`; `--strict` now reports that remaining encoding limitation instead of claiming the nullable field was lossless.
 
 Regenerating changes the Dart signatures of optional nullable fields and arguments from `T?` to `Presence<T?>`, and required nullable constructor arguments become `required`. Update callers to pass `Presence.present(...)` or `Presence.absent()`, and read `.isPresent`/`.value` when consuming an optional nullable field.
+
+The mandatory SDK acceptance gate now analyzes and runs generated Dart presence fixtures alongside every existing SDK journey. Release binary builds explicitly retain locked dependency resolution.

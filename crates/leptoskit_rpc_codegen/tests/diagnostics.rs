@@ -486,3 +486,33 @@ fn dart_null_only_and_untyped_values_need_json_encoding() {
 		assert!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path).is_empty());
 	}
 }
+
+#[test]
+fn dart_unconstrained_collection_values_report_null_encoding_loss() {
+	for (schema, suffix) in [
+		(json!({"type": "array"}), "items"),
+		(
+			json!({"type": "object", "additionalProperties": true}),
+			"additionalProperties",
+		),
+	] {
+		let mut spec = supported_spec();
+		spec.functions[0].input = HttpInput::Form;
+		spec.functions[0].params = vec![ApiParam {
+			name: "values".into(),
+			docs: String::new(),
+			required: true,
+			schema,
+		}];
+		let path = format!(
+			"functions.{}.params.values.{suffix}",
+			spec.functions[0].name
+		);
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			[DiagnosticKind::NullableCollapsed]
+		);
+		spec.functions[0].input = HttpInput::Json;
+		assert!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path).is_empty());
+	}
+}

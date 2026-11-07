@@ -374,6 +374,8 @@ if (todo.note.isPresent) {
 }
 ```
 
+A JSON Schema default is an annotation: a field listed as required still needs an explicit value. A null-only schema uses Dart's `Null` value type in fields, collections, and channels. Decoding a model rejects missing required properties, including required nullable properties.
+
 Regenerating changes the Dart signatures of optional nullable fields and arguments from `T?` to `Presence<T?>`. Required nullable fields become required constructor arguments and required operation arguments. JSON and live calls preserve all three states; query-string and form encodings omit `null`, which `--strict` reports as a remaining encoding limitation. A channel's optional presence argument also uses `null` for absence, so a presence schema that itself allows `null` is reported too.
 
 ### What regeneration overwrites

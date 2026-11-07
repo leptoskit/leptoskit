@@ -985,9 +985,6 @@ int _int(Object? value, int fallback) =>
 /// The arguments as the HTTP calls send them: absent optional fields are
 /// already missing from the map, while an explicit `null` stays a value.
 Object? _present(Object? args) {
-  if (args == null) {
-    return const <String, Object?>{};
-  }
   if (args is! Map) {
     return args;
   }

@@ -381,9 +381,11 @@ impl Walker<'_> {
 				}
 			}
 			Shape::Array { items } => {
-				if let Some(items) = items {
-					self.walk_omitted_null(items, &format!("{path}.items"), stack);
-				}
+				self.walk_omitted_null(
+					items.unwrap_or(&Value::Bool(true)),
+					&format!("{path}.items"),
+					stack,
+				);
 			}
 			Shape::Tuple(items) => {
 				for (index, item) in items.iter().enumerate() {
@@ -403,9 +405,11 @@ impl Walker<'_> {
 				}
 			}
 			Shape::Map { values } => {
-				if let Some(values) = values {
-					self.walk_omitted_null(values, &format!("{path}.additionalProperties"), stack);
-				}
+				self.walk_omitted_null(
+					values.unwrap_or(&Value::Bool(true)),
+					&format!("{path}.additionalProperties"),
+					stack,
+				);
 			}
 			Shape::Null
 			| Shape::Boolean
