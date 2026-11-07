@@ -17,6 +17,7 @@ final class NativeAppRuntime {
     private var pumpScheduled = false
     private var started = false
     private var lastSize = CGSize.zero
+    private var lastDark = false
     private lazy var frames = NativeFrameLink { [weak self] timestamp, period in
         self?.frame(timestamp: timestamp, period: period)
     }
@@ -64,18 +65,22 @@ final class NativeAppRuntime {
         close()
     }
 
-    /// The first positive layout starts the guest; later size changes resize it.
+    /// The first positive layout starts the guest; later size or appearance
+    /// changes resize it.
     func layout(size: CGSize, dark: Bool) throws {
         guard let app, size.width > 0, size.height > 0 else { return }
 
         if !started {
             started = true
             try check(lk_app_start(app.raw, Float(size.width), Float(size.height)))
-        } else if lastSize != size {
+            // The guest starts light; tell it at once when the view is dark.
+            if dark { try check(lk_app_resize(app.raw, Float(size.width), Float(size.height), dark)) }
+        } else if lastSize != size || lastDark != dark {
             try check(lk_app_resize(app.raw, Float(size.width), Float(size.height), dark))
         }
 
         lastSize = size
+        lastDark = dark
         try pump()
     }
 

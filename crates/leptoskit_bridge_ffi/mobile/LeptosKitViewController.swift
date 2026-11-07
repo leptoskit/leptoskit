@@ -84,6 +84,14 @@ public final class LeptosKitViewController: UIViewController, UITextFieldDelegat
         super.viewWillDisappear(animated)
     }
 
+    public override func viewDidLoad() {
+        super.viewDidLoad()
+        // A light or dark switch lays the guest out again, which passes it on.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: Self, _) in
+            controller.view.setNeedsLayout()
+        }
+    }
+
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         do {
