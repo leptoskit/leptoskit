@@ -69,6 +69,9 @@ packages = [
 	"leptoskit_android",
 	"leptoskit_gtk",
 	"leptoskit_windows",
+	"leptoskit_watch",
+	"leptoskit_watchos",
+	"leptoskit_wearos",
 	"leptoskit_aria",
 	"leptoskit_analytics",
 	"leptoskit_deploy_console",
@@ -254,6 +257,18 @@ type = "cargo"
 
 [package.leptoskit_windows]
 path = "crates/leptoskit_windows"
+type = "cargo"
+
+[package.leptoskit_watch]
+path = "crates/leptoskit_watch"
+type = "cargo"
+
+[package.leptoskit_watchos]
+path = "crates/leptoskit_watchos"
+type = "cargo"
+
+[package.leptoskit_wearos]
+path = "crates/leptoskit_wearos"
 type = "cargo"
 
 [package.leptoskit_aria]
