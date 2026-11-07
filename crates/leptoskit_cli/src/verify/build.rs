@@ -270,7 +270,7 @@ impl<'a> Builder<'a> {
 			("RUSTUP_AUTO_INSTALL", "0".to_owned()),
 			("CARGO_TERM_COLOR", "never".to_owned()),
 			("CARGO_INCREMENTAL", "0".to_owned()),
-			("CARGO_BUILD_JOBS", "4".to_owned()),
+			("CARGO_BUILD_JOBS", "2".to_owned()),
 			("SOURCE_DATE_EPOCH", SOURCE_DATE_EPOCH.to_owned()),
 			("TZ", "UTC".to_owned()),
 			("LC_ALL", "C".to_owned()),
@@ -381,7 +381,11 @@ impl<'a> Builder<'a> {
 	/// Compiles the recipe's binary without network access and returns the
 	/// executable's path under `work`.
 	fn compile(&self, source: &Path, dependencies: &Path, work: &Path) -> Result<PathBuf> {
-		self.execute(&self.compile_run(source, dependencies, work)?, false)?;
+		if let Some(website) = &self.recipe.website {
+			self.compile_website(source, dependencies, work, website)?;
+		} else {
+			self.execute(&self.compile_run(source, dependencies, work)?, false)?;
+		}
 		let executable = work
 			.join("target")
 			.join(&self.recipe.target)
@@ -393,6 +397,82 @@ impl<'a> Builder<'a> {
 			self.recipe.binary
 		);
 		Ok(executable)
+	}
+
+	/// Run the ordinary production pipeline from a private writable copy;
+	/// code generation cannot mutate the pinned source snapshot. The builder
+	/// digest pins the CLI (including bindgen/compression), wasm-opt, Rust and
+	/// the operating system. Nothing can install itself during this run.
+	fn compile_website(
+		&self,
+		source: &Path,
+		dependencies: &Path,
+		work: &Path,
+		website: &super::website::Recipe,
+	) -> Result<()> {
+		let config = leptoskit_config::LeptoskitConfig::load_from(source)?;
+		website.source(source, &config)?;
+		ensure!(
+			self.recipe.package == config.app.name && self.recipe.binary == config.app.name,
+			"website backend package and binary must match app.name"
+		);
+		fs::create_dir_all(work)?;
+		let mutable = work.join("source");
+		fs::create_dir(&mutable)?;
+		for (path, entry) in super::walk(source)? {
+			let dest = mutable.join(&path);
+			match entry {
+				Entry::Directory => fs::create_dir_all(dest)?,
+				Entry::File { unix_mode, .. } => {
+					fs::copy(source.join(path), &dest)?;
+					#[cfg(unix)]
+					if let Some(mode) = unix_mode {
+						set_mode(&dest, mode)?;
+					}
+					#[cfg(not(unix))]
+					let _ = unix_mode;
+				}
+			}
+		}
+		let mut report = self.toolchain(source, &work.join("versions"))?;
+		for command in [["leptoskit", "--version"], ["wasm-opt", "--version"]] {
+			let mut run = self.run(work, false, command.map(String::from).to_vec())?;
+			run.mounts.push(mount(source, SOURCE_MOUNT, true)?);
+			report.push_str(&String::from_utf8(self.execute(&run, true)?)?);
+		}
+		ensure!(
+			super::website::hash(report.as_bytes()) == website.toolchain_sha256,
+			"website toolchain report differs from recipe pin"
+		);
+		fs::write(work.join("website-toolchain.txt"), report)?;
+		fs::create_dir_all(work.join("cargo-home"))?;
+		fs::copy(
+			dependencies.join(VENDOR_CONFIG),
+			work.join("cargo-home/config.toml"),
+		)?;
+		let mut run = self.run(
+			work,
+			false,
+			vec![
+				"sh".into(),
+				"-c".into(),
+				"umask 022; exec leptoskit build --release --platform web --out /build/work/site"
+					.into(),
+			],
+		)?;
+		run.env
+			.push(("CARGO_BUILD_TARGET", self.recipe.target.clone()));
+		run.env.push(("LEPTOS_ENV", "PROD".into()));
+		run.mounts.push(mount(&mutable, SOURCE_MOUNT, false)?);
+		run.mounts
+			.push(mount(dependencies, DEPENDENCIES_MOUNT, true)?);
+		self.execute(&run, false)?;
+		ensure!(
+			fs::read(mutable.join("Cargo.lock"))? == fs::read(source.join("Cargo.lock"))?,
+			"website pipeline changed the frozen dependency lockfile"
+		);
+		super::website::tree(&work.join("site"), &website.output_name)?;
+		Ok(())
 	}
 
 	fn compile_run(&self, source: &Path, dependencies: &Path, work: &Path) -> Result<Run> {
@@ -668,7 +748,7 @@ pub(crate) fn provenance(
 		"predicateType": "https://slsa.dev/provenance/v1",
 		"predicate": {
 			"buildDefinition": {
-				"buildType": BUILD_TYPE,
+				"buildType": if recipe.website.is_some() { "https://leptoskit.dev/verify/website-build/v1" } else { BUILD_TYPE },
 				"externalParameters": { "recipe": recipe },
 				"internalParameters": {
 					"network": "none",
@@ -726,6 +806,12 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 	fs::create_dir(&bundle)?;
 	export_sources(repository, &recipe, &bundle)?;
 	let source = bundle.join("source");
+	if let Some(website) = &recipe.website {
+		website.source(
+			&source,
+			&leptoskit_config::LeptoskitConfig::load_from(&source)?,
+		)?;
+	}
 
 	let builder = Builder::new(engine, &recipe, false)?;
 	let scratch = tempfile::tempdir()?;
@@ -750,6 +836,25 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 
 	let artifacts = bundle.join("artifacts");
 	fs::create_dir(&artifacts)?;
+	if let Some(website) = &recipe.website {
+		let first_tree =
+			super::website::tree(&scratch.path().join("first/site"), &website.output_name)?;
+		let second_tree =
+			super::website::tree(&scratch.path().join("second/site"), &website.output_name)?;
+		ensure!(
+			first_tree == second_tree,
+			"the two website asset builds differ"
+		);
+		super::website::copy(
+			&scratch.path().join("first/site"),
+			&artifacts.join("site"),
+			&website.output_name,
+		)?;
+		fs::copy(
+			scratch.path().join("first/website-toolchain.txt"),
+			artifacts.join("website-toolchain.txt"),
+		)?;
+	}
 	fs::copy(&executable, artifacts.join("backend"))?;
 	#[cfg(unix)]
 	set_mode(&artifacts.join("backend"), 0o755)?;
@@ -813,7 +918,22 @@ fn freeze(args: &ReproduceArgs) -> Result<tempfile::TempDir> {
 	for (relative, entry) in super::walk(&args.bundle)? {
 		let dest = frozen.path().join(&relative);
 		match entry {
-			Entry::Directory => fs::create_dir_all(dest)?,
+			Entry::Directory => {
+				fs::create_dir_all(&dest)?;
+				// Website directory modes are part of its explicit profile;
+				// freezing must not change them through the host's umask.
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::PermissionsExt as _;
+					set_mode(
+						&dest,
+						fs::metadata(args.bundle.join(&relative))?
+							.permissions()
+							.mode()
+							& 0o7777,
+					)?;
+				}
+			}
 			Entry::File { unix_mode, .. } => {
 				fs::create_dir_all(dest.parent().context("bundle file parent")?)?;
 				fs::copy(args.bundle.join(relative), &dest)?;
@@ -902,6 +1022,25 @@ pub(crate) fn reproduce(args: &ReproduceArgs) -> Result<ReproducedBundle> {
 		&bundle.join("dependencies"),
 		&scratch.path().join("build"),
 	)?;
+	if let Some(website) = &recipe.website {
+		ensure!(
+			super::website::tree(&scratch.path().join("build/site"), &website.output_name)?
+				== super::website::tree(&bundle.join("artifacts/site"), &website.output_name)?,
+			"website asset tree was not reproduced"
+		);
+		ensure!(
+			fs::read(scratch.path().join("build/website-toolchain.txt"))?
+				== fs::read(bundle.join("artifacts/website-toolchain.txt"))?,
+			"website toolchain evidence differs"
+		);
+		println!("artifacts/site was reproduced with identical membership, paths, modes and bytes");
+	} else {
+		ensure!(
+			!bundle.join("artifacts/site").exists()
+				&& !bundle.join("artifacts/website-toolchain.txt").exists(),
+			"backend recipe cannot reproduce website assets"
+		);
+	}
 	let rebuilt = sha256_file(&executable)?;
 	let published = sha256_file(&bundle.join("artifacts/backend"))?;
 	ensure!(

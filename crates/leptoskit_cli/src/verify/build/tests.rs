@@ -47,6 +47,7 @@ fn recipe() -> BuildRecipe {
 		no_default_features: true,
 		rustflags: vec!["-C".to_owned(), "target-cpu=x86-64-v2".to_owned()],
 		infra: None,
+		website: None,
 	}
 }
 

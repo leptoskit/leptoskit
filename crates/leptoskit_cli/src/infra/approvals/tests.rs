@@ -6,7 +6,10 @@ fn signing(seed: u8) -> SigningKey {
 	SigningKey::from_bytes(&[seed; 32])
 }
 fn fixture() -> (Evidence, Descriptor, Trust) {
-	let value = serde_json::json!({
+	fixture_for(false)
+}
+fn fixture_for(website: bool) -> (Evidence, Descriptor, Trust) {
+	let mut value = serde_json::json!({
 		"format_version": 1, "kind": "leptoskit-verified-backend-image",
 		"inventory_sha256": "a".repeat(SHA256_HEX_LENGTH),
 		"recipe": {"repository": "https://github.com/example/backend", "commit": "a".repeat(COMMIT_HEX_LENGTH),
@@ -23,6 +26,16 @@ fn fixture() -> (Evidence, Descriptor, Trust) {
 		"rpc_contract": {"state": "not_applicable", "declaration": "operator_declares_no_rpc"},
 		"native_guest_compatibility": "not_applicable", "runtime_attestation": "absent"
 	});
+	if website {
+		value["format_version"] = serde_json::json!(2);
+		value["recipe"]["target"] = serde_json::json!("aarch64-unknown-linux-gnu");
+		value["recipe"]["website"] = serde_json::json!({"profile":"leptoskit-web-v1", "config_sha256":"a".repeat(64), "toolchain_sha256":"b".repeat(64), "output_name":"site"});
+		value["assets"] = serde_json::json!({"reproduced": {"profile":"leptoskit-web-v1", "toolchain_sha256":"b".repeat(64), "entries": {
+			"pkg": {"kind":"directory","mode":493},
+			"pkg/site.js": {"kind":"file","mode":420,"size":1,"sha256":"c".repeat(64)},
+			"pkg/site_bg.wasm": {"kind":"file","mode":420,"size":1,"sha256":"d".repeat(64)}
+		}}});
+	}
 	let descriptor: Descriptor = serde_json::from_value(value).unwrap();
 	let bytes = serde_json::to_string_pretty(&descriptor).unwrap();
 	let policy = serde_json::json!({
@@ -231,5 +244,38 @@ fn key_aliases_and_publisher_overlap_rejected() {
 		)
 		.unwrap();
 		assert!(Trust::read(&path).is_err());
+	}
+}
+
+#[test]
+fn website_tree_and_recipe_changes_invalidate_approvals_and_policy() {
+	let (evidence, descriptor, trust) = fixture_for(true);
+	check(&evidence, &descriptor, &trust).unwrap();
+	for pointer in [
+		"/assets/reproduced/entries/pkg~1site.js/sha256",
+		"/assets/reproduced/entries/pkg~1site_bg.wasm/sha256",
+		"/recipe/website/config_sha256",
+	] {
+		let mut value = serde_json::to_value(&descriptor).unwrap();
+		*value.pointer_mut(pointer).unwrap() = serde_json::json!("f".repeat(64));
+		let changed: Descriptor = serde_json::from_value(value).unwrap();
+		let mut replacement = evidence.clone();
+		replacement.descriptor = serde_json::to_string(&changed).unwrap();
+		assert!(check(&replacement, &changed, &trust).is_err());
+		// Even fresh approvals cannot reuse a policy bound to the old tree.
+		replacement.approvals = vec![
+			sign(replacement.descriptor.as_bytes(), &signing(1)).unwrap(),
+			sign(replacement.descriptor.as_bytes(), &signing(2)).unwrap(),
+		];
+		assert!(check(&replacement, &changed, &trust).is_err());
+	}
+	for assets in [
+		serde_json::json!("not_applicable"),
+		serde_json::json!({"reproduced":{"profile":"leptoskit-web-v1","toolchain_sha256":"b".repeat(64),"entries":{}}}),
+	] {
+		let mut value = serde_json::to_value(&descriptor).unwrap();
+		value["assets"] = assets;
+		let invalid: Descriptor = serde_json::from_value(value).unwrap();
+		assert!(invalid.validate().is_err());
 	}
 }

@@ -1,0 +1,250 @@
+{
+	"scope": "local committed fixture reproduction and image extraction; no authenticated public provenance or runtime attestation",
+	"fixture": "crates/leptoskit_cli/tests/fixtures/verified-website",
+	"fixture_commit": "b3ff1ac9b56253ad107a439aa16fa23a93799ca6",
+	"builder_preparation": {
+		"source_commit": "08131a292dcedf866c63822835cc14678a2c4b1e",
+		"source_archive_sha256": "b135d507a9a9ed8466a36a941e1b87704985f54ce0af7adae24fe14c070fe778",
+		"base": "docker.io/library/rust@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1",
+		"rust_toolchain": "1.95.0",
+		"cli_build": "cargo build --locked -p leptoskit_cli --bin leptoskit; CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0",
+		"cli_sha256": "1fbfb5f8a56c266a4823bb296396c7b1ef634574ea9e98e1f1e46bcd1c7bb78e",
+		"binaryen": "version_125 aarch64-linux",
+		"binaryen_archive_sha256": "d0382de3c189a7cbb9fdda93e2966f4557f6a00f201e2c4937c27ca01cead4fc",
+		"registry": "disposable VM loopback registry only; removed after acceptance"
+	},
+	"descriptor_sha256": "4521b8bb69cdf8e3fc37d216d4db7eece201dea01994c9e8dc0c439207a43cb7",
+	"descriptor": {
+		"format_version": 2,
+		"kind": "leptoskit-verified-backend-image",
+		"inventory_sha256": "673d138d1bff88c25a9f18588f605277b4307fe9ffc1595ce2fb2723d7a301db",
+		"recipe": {
+			"repository": "https://github.com/leptoskit/leptoskit",
+			"commit": "b3ff1ac9b56253ad107a439aa16fa23a93799ca6",
+			"builder_image": "127.0.0.1:5007/a04-builder@sha256:f302068ace1063152f0be8c87bb9b190d2049d0dcdc4046de781a6af7f3d1d4e",
+			"target": "aarch64-unknown-linux-gnu",
+			"package": "verified-website",
+			"binary": "verified-website",
+			"features": [],
+			"no_default_features": false,
+			"rustflags": [],
+			"website": {
+				"profile": "leptoskit-web-v1",
+				"config_sha256": "c82ab70fa1047a46eefd05b06533d0dc414e2f11112d1d3ba03c08fccd85bf36",
+				"toolchain_sha256": "02e005b18b01438db3e32dac3803b9dc445f7c0147901ec8c03f6af54054c2d0",
+				"output_name": "website_app"
+			}
+		},
+		"executable_sha256": "6c33900444f30b2276485e18adba51325c92286cc98285d733b40fae9c4e52b8",
+		"executable_mode": 493,
+		"migrations": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+		"runtime_image": "docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc",
+		"runtime_config_sha256": "d3a78b131efeb329b5ddea474d4a1946877e47c0700f2cd56d99ac9b389c78da",
+		"engine_image_id": "sha256:a2a2d523532700ce806b38f74d542f855af1a267f794279218e4d2f43646afc7",
+		"image_config_sha256": "52c17c31bd03568ed32303658d490dee85a6478938eed33416091de18299c0c4",
+		"platform": "linux/arm64",
+		"assets": {
+			"reproduced": {
+				"profile": "leptoskit-web-v1",
+				"toolchain_sha256": "02e005b18b01438db3e32dac3803b9dc445f7c0147901ec8c03f6af54054c2d0",
+				"entries": {
+					"assets": {
+						"kind": "directory",
+						"mode": 493
+					},
+					"assets/app.css": {
+						"kind": "file",
+						"mode": 420,
+						"size": 25,
+						"sha256": "3f876ff1240fb2b6e442980f352b6ca1f70e0b8cb0de7b9370d6a1b89e4f1c9c"
+					},
+					"index.html": {
+						"kind": "file",
+						"mode": 420,
+						"size": 360,
+						"sha256": "18e7b5daf1f9c490dde9192f4229ea3bf7ed580140e5501fc7e61e98226ee267"
+					},
+					"index.html.br": {
+						"kind": "file",
+						"mode": 420,
+						"size": 173,
+						"sha256": "f9e42c7685655b6717f2d9cdb9a536f9e708ec3669344d43a39ea73cbe96f92f"
+					},
+					"index.html.gz": {
+						"kind": "file",
+						"mode": 420,
+						"size": 264,
+						"sha256": "b209a039a5492a86feb7523e8781b9b072c57f10b9561880dc9715f525eb3a82"
+					},
+					"pkg": {
+						"kind": "directory",
+						"mode": 493
+					},
+					"pkg/website_app.js": {
+						"kind": "file",
+						"mode": 420,
+						"size": 5084,
+						"sha256": "59e6c50bf88ff833424e2a2899d775dd3bbe7b96b4971210b9229cf16b074ac4"
+					},
+					"pkg/website_app.js.br": {
+						"kind": "file",
+						"mode": 420,
+						"size": 1350,
+						"sha256": "9b942a6c66b7c26c9c26c53054b9cf44b5100f4d210d787a443c01ef1d040c22"
+					},
+					"pkg/website_app.js.gz": {
+						"kind": "file",
+						"mode": 420,
+						"size": 1519,
+						"sha256": "d538495c1dbd936fbadd607ed9f612d4de74649dcb9948f63e0d5c755cfaa3d9"
+					},
+					"pkg/website_app_bg.wasm": {
+						"kind": "file",
+						"mode": 420,
+						"size": 11565,
+						"sha256": "67d762b17d793034e67870facb5ae757d8c73cad2fbc6887ce71bff325b04e3d"
+					},
+					"pkg/website_app_bg.wasm.br": {
+						"kind": "file",
+						"mode": 420,
+						"size": 4488,
+						"sha256": "ca44ca52f7066afe2f94acf56724c4c6b8524261a6c0791278e9bf7b2c997e07"
+					},
+					"pkg/website_app_bg.wasm.gz": {
+						"kind": "file",
+						"mode": 420,
+						"size": 5224,
+						"sha256": "27c0ad318d9381f2ad165b049750a8fa416e87d64a066adb78116b35821ac5f4"
+					},
+					"robots.txt": {
+						"kind": "file",
+						"mode": 420,
+						"size": 24,
+						"sha256": "e5c4b84484ee4216e9373be99380320c25dd94805f99f0a805846f087636553f"
+					}
+				}
+			}
+		},
+		"services": "unsupported",
+		"rpc_contract": {
+			"state": "exported",
+			"sha256": "19d1a7a1b9727a8d0898e41fec201db6583a09b2104098fbeaf6b913bf125113",
+			"compatibility": "not_checked"
+		},
+		"native_guest_compatibility": "not_applicable",
+		"runtime_attestation": "absent"
+	},
+	"independently_extracted_assets": {
+		"assets": {
+			"kind": "directory",
+			"mode": 493
+		},
+		"assets/app.css": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "3f876ff1240fb2b6e442980f352b6ca1f70e0b8cb0de7b9370d6a1b89e4f1c9c",
+			"size": 25
+		},
+		"index.html": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "18e7b5daf1f9c490dde9192f4229ea3bf7ed580140e5501fc7e61e98226ee267",
+			"size": 360
+		},
+		"index.html.br": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "f9e42c7685655b6717f2d9cdb9a536f9e708ec3669344d43a39ea73cbe96f92f",
+			"size": 173
+		},
+		"index.html.gz": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "b209a039a5492a86feb7523e8781b9b072c57f10b9561880dc9715f525eb3a82",
+			"size": 264
+		},
+		"pkg": {
+			"kind": "directory",
+			"mode": 493
+		},
+		"pkg/website_app.js": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "59e6c50bf88ff833424e2a2899d775dd3bbe7b96b4971210b9229cf16b074ac4",
+			"size": 5084
+		},
+		"pkg/website_app.js.br": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "9b942a6c66b7c26c9c26c53054b9cf44b5100f4d210d787a443c01ef1d040c22",
+			"size": 1350
+		},
+		"pkg/website_app.js.gz": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "d538495c1dbd936fbadd607ed9f612d4de74649dcb9948f63e0d5c755cfaa3d9",
+			"size": 1519
+		},
+		"pkg/website_app_bg.wasm": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "67d762b17d793034e67870facb5ae757d8c73cad2fbc6887ce71bff325b04e3d",
+			"size": 11565
+		},
+		"pkg/website_app_bg.wasm.br": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "ca44ca52f7066afe2f94acf56724c4c6b8524261a6c0791278e9bf7b2c997e07",
+			"size": 4488
+		},
+		"pkg/website_app_bg.wasm.gz": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "27c0ad318d9381f2ad165b049750a8fa416e87d64a066adb78116b35821ac5f4",
+			"size": 5224
+		},
+		"robots.txt": {
+			"kind": "file",
+			"mode": 420,
+			"sha256": "e5c4b84484ee4216e9373be99380320c25dd94805f99f0a805846f087636553f",
+			"size": 24
+		}
+	},
+	"independently_extracted_backend_sha256": "6c33900444f30b2276485e18adba51325c92286cc98285d733b40fae9c4e52b8",
+	"result": "REAL WEBSITE ACCEPTANCE PASSED",
+	"checks": [
+		"two clean builds",
+		"full source and dependency reproduction",
+		"explicit local checkout reproduction",
+		"exact packaging and image configuration",
+		"independent backend and complete asset extraction",
+		"reuse",
+		"changed JS/Wasm/CSS with re-recorded inventories rejected",
+		"changed source/configuration rejected",
+		"addition/deletion/mode changes rejected",
+		"replacement toolchain report and recipe rejected",
+		"incorrect runtime configuration pin rejected",
+		"missing engine image rejected",
+		"image asset substitution retaining schema label rejected",
+		"no descriptor written on negative cases",
+		"actual website descriptor signed by CLI and independently verified with OpenSSL; changed digest rejected"
+	],
+	"limitations": [
+		"tiny production-pipeline fixture; no browser rendering acceptance",
+		"application services unsupported",
+		"RPC compatibility not_checked",
+		"native compatibility not_applicable",
+		"runtime attestation absent",
+		"no public registry publication or cloud deployment"
+	],
+	"descriptor_original_json": "{\n  \"format_version\": 2,\n  \"kind\": \"leptoskit-verified-backend-image\",\n  \"inventory_sha256\": \"673d138d1bff88c25a9f18588f605277b4307fe9ffc1595ce2fb2723d7a301db\",\n  \"recipe\": {\n    \"repository\": \"https://github.com/leptoskit/leptoskit\",\n    \"commit\": \"b3ff1ac9b56253ad107a439aa16fa23a93799ca6\",\n    \"builder_image\": \"127.0.0.1:5007/a04-builder@sha256:f302068ace1063152f0be8c87bb9b190d2049d0dcdc4046de781a6af7f3d1d4e\",\n    \"target\": \"aarch64-unknown-linux-gnu\",\n    \"package\": \"verified-website\",\n    \"binary\": \"verified-website\",\n    \"features\": [],\n    \"no_default_features\": false,\n    \"rustflags\": [],\n    \"website\": {\n      \"profile\": \"leptoskit-web-v1\",\n      \"config_sha256\": \"c82ab70fa1047a46eefd05b06533d0dc414e2f11112d1d3ba03c08fccd85bf36\",\n      \"toolchain_sha256\": \"02e005b18b01438db3e32dac3803b9dc445f7c0147901ec8c03f6af54054c2d0\",\n      \"output_name\": \"website_app\"\n    }\n  },\n  \"executable_sha256\": \"6c33900444f30b2276485e18adba51325c92286cc98285d733b40fae9c4e52b8\",\n  \"executable_mode\": 493,\n  \"migrations\": \"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\n  \"runtime_image\": \"docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc\",\n  \"runtime_config_sha256\": \"d3a78b131efeb329b5ddea474d4a1946877e47c0700f2cd56d99ac9b389c78da\",\n  \"engine_image_id\": \"sha256:a2a2d523532700ce806b38f74d542f855af1a267f794279218e4d2f43646afc7\",\n  \"image_config_sha256\": \"52c17c31bd03568ed32303658d490dee85a6478938eed33416091de18299c0c4\",\n  \"platform\": \"linux/arm64\",\n  \"assets\": {\n    \"reproduced\": {\n      \"profile\": \"leptoskit-web-v1\",\n      \"toolchain_sha256\": \"02e005b18b01438db3e32dac3803b9dc445f7c0147901ec8c03f6af54054c2d0\",\n      \"entries\": {\n        \"assets\": {\n          \"kind\": \"directory\",\n          \"mode\": 493\n        },\n        \"assets/app.css\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 25,\n          \"sha256\": \"3f876ff1240fb2b6e442980f352b6ca1f70e0b8cb0de7b9370d6a1b89e4f1c9c\"\n        },\n        \"index.html\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 360,\n          \"sha256\": \"18e7b5daf1f9c490dde9192f4229ea3bf7ed580140e5501fc7e61e98226ee267\"\n        },\n        \"index.html.br\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 173,\n          \"sha256\": \"f9e42c7685655b6717f2d9cdb9a536f9e708ec3669344d43a39ea73cbe96f92f\"\n        },\n        \"index.html.gz\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 264,\n          \"sha256\": \"b209a039a5492a86feb7523e8781b9b072c57f10b9561880dc9715f525eb3a82\"\n        },\n        \"pkg\": {\n          \"kind\": \"directory\",\n          \"mode\": 493\n        },\n        \"pkg/website_app.js\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 5084,\n          \"sha256\": \"59e6c50bf88ff833424e2a2899d775dd3bbe7b96b4971210b9229cf16b074ac4\"\n        },\n        \"pkg/website_app.js.br\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 1350,\n          \"sha256\": \"9b942a6c66b7c26c9c26c53054b9cf44b5100f4d210d787a443c01ef1d040c22\"\n        },\n        \"pkg/website_app.js.gz\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 1519,\n          \"sha256\": \"d538495c1dbd936fbadd607ed9f612d4de74649dcb9948f63e0d5c755cfaa3d9\"\n        },\n        \"pkg/website_app_bg.wasm\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 11565,\n          \"sha256\": \"67d762b17d793034e67870facb5ae757d8c73cad2fbc6887ce71bff325b04e3d\"\n        },\n        \"pkg/website_app_bg.wasm.br\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 4488,\n          \"sha256\": \"ca44ca52f7066afe2f94acf56724c4c6b8524261a6c0791278e9bf7b2c997e07\"\n        },\n        \"pkg/website_app_bg.wasm.gz\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 5224,\n          \"sha256\": \"27c0ad318d9381f2ad165b049750a8fa416e87d64a066adb78116b35821ac5f4\"\n        },\n        \"robots.txt\": {\n          \"kind\": \"file\",\n          \"mode\": 420,\n          \"size\": 24,\n          \"sha256\": \"e5c4b84484ee4216e9373be99380320c25dd94805f99f0a805846f087636553f\"\n        }\n      }\n    }\n  },\n  \"services\": \"unsupported\",\n  \"rpc_contract\": {\n    \"state\": \"exported\",\n    \"sha256\": \"19d1a7a1b9727a8d0898e41fec201db6583a09b2104098fbeaf6b913bf125113\",\n    \"compatibility\": \"not_checked\"\n  },\n  \"native_guest_compatibility\": \"not_applicable\",\n  \"runtime_attestation\": \"absent\"\n}",
+	"approval_command_test": {
+		"scope": "throwaway local test key, not human review or deployment trust",
+		"approval": {
+			"statement": "{\"format_version\":1,\"kind\":\"leptoskit-backend-release-approval\",\"descriptor_sha256\":\"4521b8bb69cdf8e3fc37d216d4db7eece201dea01994c9e8dc0c439207a43cb7\",\"repository\":\"https://github.com/leptoskit/leptoskit\",\"commit\":\"b3ff1ac9b56253ad107a439aa16fa23a93799ca6\"}",
+			"public_key": "57b48b3bc88a47d1544a440338ce38434eb0e519a319725846771b65caa7fbf4",
+			"signature": "6168330bd3c6a9046844a8694bdde827885b5e16acd71e8fceb688888deca13e7c40032a6d4f1ff62bb79ec1b879cbae1062232cd30c6d5a608c05e688b2510b"
+		},
+		"verification": "OpenSSL Ed25519 verification passed; replacement descriptor digest rejected"
+	}
+}

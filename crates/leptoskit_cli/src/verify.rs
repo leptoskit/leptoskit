@@ -20,6 +20,7 @@ use sha2::Sha256;
 
 pub(crate) mod build;
 pub(crate) mod deployment;
+pub(crate) mod website;
 
 const FORMAT_VERSION: u32 = 1;
 const KIND: &str = "leptoskit-backend-bundle-inventory";
@@ -88,6 +89,9 @@ pub(crate) struct BuildRecipe {
 	/// A directory in the commit copied into `infra/`, if any.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) infra: Option<String>,
+	/// Absent for the legacy backend recipe; website inputs are explicit.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) website: Option<website::Recipe>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +246,9 @@ pub(crate) fn validate_repository(value: &str) -> Result<()> {
 
 /// Checks a recipe's declared values. This validates their form only.
 pub(crate) fn validate(recipe: &BuildRecipe) -> Result<()> {
+	if let Some(website) = &recipe.website {
+		website.validate(recipe)?;
+	}
 	validate_repository(&recipe.repository)?;
 	anyhow::ensure!(
 		is_commit(&recipe.commit),
@@ -406,6 +413,16 @@ fn inventory(root: &Path) -> Result<Inventory> {
 		);
 	}
 	validate_recipe(root)?;
+	let recipe: BuildRecipe = read_json(&root.join("build.json"))?;
+	if let Some(website) = &recipe.website {
+		website::tree(&root.join("artifacts/site"), &website.output_name)?;
+		anyhow::ensure!(
+			website::hash(&std::fs::read(
+				root.join("artifacts/website-toolchain.txt")
+			)?) == website.toolchain_sha256,
+			"website toolchain file differs from recipe"
+		);
+	}
 	Ok(Inventory {
 		format_version: FORMAT_VERSION,
 		kind: KIND.to_owned(),

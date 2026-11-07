@@ -1,4 +1,4 @@
-//! Strict, backend-only packaging. Descriptors are operator evidence, not
+//! Strict backend and website packaging. Descriptors are operator evidence, not
 //! attestations.
 use std::fs;
 use std::io::Read as _;
@@ -68,11 +68,24 @@ pub(super) struct Descriptor {
 	pub(super) engine_image_id: String,
 	image_config_sha256: String,
 	platform: String,
-	assets: CheckState,
+	assets: Assets,
 	services: CheckState,
 	rpc_contract: RpcContract,
 	native_guest_compatibility: CheckState,
 	runtime_attestation: CheckState,
+}
+
+/// Legacy backend descriptors keep the string `not_applicable`. Website
+/// descriptors must carry the complete reproduced tree and its profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum Assets {
+	NotApplicable,
+	Reproduced {
+		profile: String,
+		toolchain_sha256: String,
+		entries: crate::verify::website::Tree,
+	},
 }
 
 /// Export proves only which contract these bytes emit, not compatibility or
@@ -224,17 +237,11 @@ pub(super) fn backend_only(source: &Path, config: &LeptoskitConfig) -> Result<()
 			&& config.build.backend != Some(false),
 		"verified packaging supports backend-only projects; website assets evidence is unsupported"
 	);
-	let raw: toml::Value = toml::from_str(&fs::read_to_string(source.join("leptoskit.toml"))?)?;
-	// Application services add executables that need their own evidence.
-	// `infra.services` configures separate cache/relay containers; it does not
-	// add application executables to this image.
-	ensure!(
-		raw.get("services").is_none()
-			&& raw.get("service").is_none()
-			&& !source.join("services").exists(),
-		"service-bearing releases need evidence for every executable and schema; unsupported"
-	);
-	Ok(())
+	no_application_services(source)
+}
+
+fn no_application_services(source: &Path) -> Result<()> {
+	crate::verify::website::reject_services(source)
 }
 
 /// Validate the extracted tar member rather than trusting image labels.
@@ -283,7 +290,13 @@ fn validate_image(image: &Value, platform: &str, config: &Value) -> Result<()> {
 fn source_schema(bundle: &build::ReproducedBundle) -> Result<String> {
 	let source = bundle.root().join("source");
 	let config = LeptoskitConfig::load_from(&source)?;
-	backend_only(&source, &config)?;
+	match &bundle.recipe.website {
+		Some(website) => {
+			no_application_services(&source)?;
+			website.source(&source, &config)?;
+		}
+		None => backend_only(&source, &config)?,
+	}
 	ensure!(
 		bundle.recipe.package == config.app.name,
 		"recipe package differs from managed backend"
@@ -353,8 +366,27 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	let backend = fs::read(bundle.root().join("artifacts/backend"))?;
 	let backend_hash = digest(&backend);
 	fs::write(context.path().join("backend"), &backend)?;
+	let assets = match &bundle.recipe.website {
+		Some(website) => {
+			Assets::Reproduced {
+				profile: website.profile.clone(),
+				toolchain_sha256: website.toolchain_sha256.clone(),
+				entries: crate::verify::website::copy(
+					&bundle.root().join("artifacts/site"),
+					&context.path().join("site"),
+					&website.output_name,
+				)?,
+			}
+		}
+		None => Assets::NotApplicable,
+	};
+	let website_copy = if bundle.recipe.website.is_some() {
+		"COPY site /app/dist/\n"
+	} else {
+		""
+	};
 	let dockerfile = format!(
-		"FROM {}\nCOPY --chmod=0755 backend /app/backend\nWORKDIR /app\nUSER \
+		"FROM {}\nCOPY --chmod=0755 backend /app/backend\n{website_copy}WORKDIR /app\nUSER \
 		 65532:65532\nENTRYPOINT [\"/app/backend\"]\nCMD []\n",
 		args.runtime_image
 	);
@@ -390,45 +422,14 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	let image = inspect(engine, &args.tag)?;
 	validate_image(&image, platform, &expected)?;
 	let id = image["Id"].as_str().context("missing image ID")?;
-	let container = String::from_utf8(output(engine, &["create", id])?)?
-		.trim()
-		.to_owned();
-	let checked = (|| -> Result<()> {
-		executable(
-			&output(engine, &["cp", &format!("{container}:/app/backend"), "-"])?,
-			&backend_hash,
-		)?;
-		// Reject additional application services inherited from the base.
-		let exported = context.path().join("image.tar");
-		output(
-			engine,
-			&[
-				"export",
-				"--output",
-				exported.to_str().context("export path")?,
-				&container,
-			],
-		)?;
-		for entry in tar::Archive::new(fs::File::open(exported)?).entries()? {
-			let entry = entry?;
-			let path = entry.path()?;
-			ensure!(
-				!path
-					.components()
-					.filter(|c| !matches!(c, std::path::Component::CurDir))
-					.collect::<PathBuf>()
-					.starts_with("app/services"),
-				"runtime contains unsupported application services"
-			);
-		}
-		Ok(())
-	})();
-	let removed = output(engine, &["rm", &container]);
-	checked?;
-	removed?;
+	check_contents(engine, id, context.path(), &backend_hash, &assets)?;
 	let rpc_contract = rpc_contract(engine, id, args.no_rpc)?;
 	let descriptor = Descriptor {
-		format_version: 1,
+		format_version: if bundle.recipe.website.is_some() {
+			2
+		} else {
+			1
+		},
 		kind: "leptoskit-verified-backend-image".into(),
 		inventory_sha256: bundle.inventory_sha256.clone(),
 		recipe: bundle.recipe.clone(),
@@ -440,7 +441,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		engine_image_id: format!("sha256:{}", id.strip_prefix("sha256:").unwrap_or(id)),
 		image_config_sha256: hash_json(&image["Config"])?,
 		platform: platform.into(),
-		assets: CheckState::NotApplicable,
+		assets,
 		services: CheckState::Unsupported,
 		rpc_contract,
 		native_guest_compatibility: CheckState::NotApplicable,
@@ -451,6 +452,47 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		"Packaged {id}; descriptor SHA-256 {}. No registry digest or runtime attestation.",
 		digest(&bytes)
 	);
+	Ok(())
+}
+
+fn check_contents(
+	engine: Engine,
+	id: &str,
+	context: &Path,
+	backend_hash: &str,
+	assets: &Assets,
+) -> Result<()> {
+	let container = String::from_utf8(output(engine, &["create", id])?)?
+		.trim()
+		.to_owned();
+	let checked = (|| -> Result<()> {
+		executable(
+			&output(engine, &["cp", &format!("{container}:/app/backend"), "-"])?,
+			backend_hash,
+		)?;
+		// Reject additional application services inherited from the base.
+		let exported = context.join("image.tar");
+		output(
+			engine,
+			&[
+				"export",
+				"--output",
+				exported.to_str().context("export path")?,
+				&container,
+			],
+		)?;
+		crate::verify::website::image_tree(
+			fs::File::open(exported)?,
+			match assets {
+				Assets::NotApplicable => None,
+				Assets::Reproduced { entries, .. } => Some(entries),
+			},
+		)?;
+		Ok(())
+	})();
+	let removed = output(engine, &["rm", &container]);
+	checked?;
+	removed?;
 	Ok(())
 }
 
@@ -509,15 +551,37 @@ impl Descriptor {
 			"unsupported RPC evidence"
 		);
 		ensure!(
-			self.format_version == 1
+			(self.format_version == if self.recipe.website.is_some() { 2 } else { 1 })
 				&& self.kind == "leptoskit-verified-backend-image"
-				&& self.assets == CheckState::NotApplicable
 				&& self.services == CheckState::Unsupported
 				&& self.native_guest_compatibility == CheckState::NotApplicable
 				&& self.runtime_attestation == CheckState::Absent
 				&& self.executable_mode == 0o755,
 			"unsupported release evidence"
 		);
+		match (&self.recipe.website, &self.assets) {
+			(None, Assets::NotApplicable) => {}
+			(
+				Some(website),
+				Assets::Reproduced {
+					profile,
+					toolchain_sha256,
+					entries,
+				},
+			) => {
+				ensure!(
+					profile == &website.profile && toolchain_sha256 == &website.toolchain_sha256,
+					"website evidence differs from recipe"
+				);
+				crate::verify::website::validate_tree(entries, &website.output_name)?;
+			}
+			_ => {
+				anyhow::bail!(
+					"website profile requires reproduced assets; backend-only assets must be \
+					 not_applicable"
+				)
+			}
+		}
 		ensure!(
 			self.engine_image_id
 				.strip_prefix("sha256:")
@@ -525,6 +589,19 @@ impl Descriptor {
 			"invalid engine image ID"
 		);
 		Ok(())
+	}
+
+	/// Enforce the release's local application kind even on rollback/recovery.
+	/// The recorded configuration pin remains historical; it need not match
+	/// today's config bytes when selecting an explicitly authorized old
+	/// release.
+	pub(super) fn application(&self, source: &Path, config: &LeptoskitConfig) -> Result<()> {
+		self.validate()?;
+		no_application_services(source)?;
+		match &self.recipe.website {
+			Some(_) => crate::verify::website::Recipe::configuration(config),
+			None => backend_only(source, config),
+		}
 	}
 
 	pub(super) fn check_remote(&self, host: &str, tag: &str, schema: &str) -> Result<()> {
@@ -630,6 +707,7 @@ mod tests {
 		fs::write(dir.path().join("leptoskit.toml"), raw).unwrap();
 		let mut config = LeptoskitConfig::from_toml(raw, dir.path()).unwrap();
 		assert!(backend_only(dir.path(), &config).is_ok());
+
 		config.app.platforms = vec![Platform::Web];
 		assert!(backend_only(dir.path(), &config).is_err());
 		config.app.platforms = vec![Platform::Server];

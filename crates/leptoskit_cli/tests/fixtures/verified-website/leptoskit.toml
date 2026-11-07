@@ -1,0 +1,18 @@
+[app]
+name = "verified-website"
+platforms = ["web", "server"]
+default_platform = "web"
+render = "ssr"
+
+[build]
+backend = true
+client_package = "website-app"
+
+[bundle]
+split = true
+wasm_opt = true
+precompress = true
+
+[db]
+dialect = "postgres"
+migrations = "migrations"

@@ -1,0 +1,19 @@
+[package]
+name = "website-app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "website_app"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+web = ["dep:wasm-bindgen"]
+native = []
+hydrate = ["web"]
+csr = ["web"]
+
+[dependencies]
+wasm-bindgen = { version = "=0.2.129", optional = true }
