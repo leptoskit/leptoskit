@@ -177,6 +177,11 @@ fn a_rejected_timer_wakes_the_guest_without_waiting_for_a_deadline() {
 	"#;
 	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile wat");
 	host.enable_timers().expect("enable timers");
+	let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+	let counted = wakes.clone();
+	host.set_timer_wake(move || {
+		counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+	});
 	host.start(100.0, 100.0).expect("start");
 	let timer = host.plugins().resolve(TIMER_PLUGIN).expect("timer plugin");
 	let id = host
@@ -184,7 +189,13 @@ fn a_rejected_timer_wakes_the_guest_without_waiting_for_a_deadline() {
 		.submit(timer, SLEEP, Bytes::new())
 		.expect("submit");
 
-	assert!(host.pump_timers().expect("deliver the rejection"));
+	assert!(
+		host.next_host_request().is_none(),
+		"timer stays in the host"
+	);
+	assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
+	assert_eq!(host.next_timer_deadline(), Some(Duration::ZERO));
+	assert!(host.poll_due_timers().expect("deliver the rejection"));
 	assert_eq!(
 		host.plugins()
 			.take_result(id)

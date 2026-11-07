@@ -138,3 +138,23 @@ fn the_timer_api_rejects_a_missing_app() {
 		assert_eq!(lk_app_poll_timers(ptr::null_mut()), -1);
 	}
 }
+
+#[test]
+fn owner_thread_deadlines_disappear_after_cancellation_and_close() {
+	let app = create_app();
+	// SAFETY: The test owns the app and never uses its pointer after destroy.
+	unsafe {
+		assert_eq!(lk_app_timer_delay_ms(app), -1);
+		assert_eq!(lk_app_enable_timers(app), 0);
+		assert_eq!(lk_app_start(app, 100.0, 100.0), 0);
+		let id = submit(app, 30_000);
+		let mut request = MaybeUninit::uninit();
+		assert_eq!(lk_app_next_request(app, request.as_mut_ptr()), 0);
+		assert!((0..=30_000).contains(&lk_app_timer_delay_ms(app)));
+		(*app).with_host(|host| host.plugins().cancel(id)).unwrap();
+		assert_eq!((*app).next_cancelled(), None);
+		assert_eq!(lk_app_timer_delay_ms(app), -1);
+		lk_app_destroy(app);
+		assert_eq!(lk_app_timer_delay_ms(ptr::null_mut()), -1);
+	}
+}

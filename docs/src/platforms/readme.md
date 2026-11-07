@@ -28,7 +28,7 @@ Generated macOS, iOS, and Android apps use the Swift or Kotlin renderers in `lep
 
 <!-- {/generatedHostLimits} -->
 
-Generated macOS, iOS, Android, Windows, Linux, and terminal apps also give the guest a real, cancellable timer through the reserved `leptoskit.timer` plugin. Experimental HarmonyOS does not yet wire it, and a generated host built before the plugin existed answers `Unavailable`; neither claims a sleep completed.
+Generated macOS, iOS, Android, Windows, Linux, terminal, and experimental HarmonyOS apps give the guest a cancellable timer through the reserved `leptoskit.timer` plugin. HarmonyOS schedules the next deadline on its UI thread. A host built before the plugin existed answers `Unavailable` instead of claiming a sleep completed.
 
 **The backend crates**, `leptoskit_appkit`, `leptoskit_uikit`, `leptoskit_android`, `leptoskit_gtk`, and `leptoskit_windows`, draw every built-in component. They are what the screenshots on this site, the [examples](../examples.md), and leptoskit's own widget tests use. You use them directly when you put a `NativeSurface` in your own native Rust app, for example with `UIKitHost` on iOS. Your screens are then compiled into the app rather than run as WebAssembly, so code push doesn't apply.
 

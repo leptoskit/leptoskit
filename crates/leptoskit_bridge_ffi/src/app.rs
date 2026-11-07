@@ -1219,6 +1219,25 @@ pub unsafe extern "C" fn lk_app_poll_timers(app: *mut App) -> i32 {
 	app.poll_timers()
 }
 
+/// Milliseconds until the next timer pump, rounded up; `-1` when no timer
+/// waits or `app` is null. Zero means a reply is ready now. Call after routing
+/// requests and cancellations, then schedule one owner-thread pump. Read the
+/// deadline again after every guest entry so new waits and cancellations
+/// replace the previous timeout.
+///
+/// # Safety
+/// `app` is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_timer_delay_ms(app: *mut App) -> i64 {
+	// SAFETY: The embedding host owns the app.
+	let Some(app) = (unsafe { app.as_mut() }) else {
+		return -1;
+	};
+	app.host_mut().next_timer_deadline().map_or(-1, |delay| {
+		i64::try_from(delay.as_nanos().div_ceil(1_000_000)).unwrap_or(i64::MAX)
+	})
+}
+
 /// Offers the guest the display frame clock. Call before [`lk_app_start`],
 /// and only from a host whose display link calls [`lk_app_frame`] while
 /// [`lk_app_frame_requested`] is 1. Zero on success, negative on failure.

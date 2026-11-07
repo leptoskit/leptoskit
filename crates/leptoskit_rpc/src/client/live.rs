@@ -948,9 +948,8 @@ enum Reauthenticated {
 /// Waits until the connection has something to do, on a host without a
 /// timer, and returns `false` once the client is gone.
 ///
-/// Without a timer, as in a native app's guest, a backoff can't wait, so a
-/// server it can't reach is retried without pause. There the socket opens
-/// once it has something to do: a call, a subscription, or a channel, or
+/// On a host without a timer, the socket opens only once it has something
+/// to do: a call, a subscription, or a channel, or
 /// calls the offline queue kept. An app that never goes live, such as one
 /// that only signs in, never connects. Until then, a change of identity has
 /// nothing to update: the handshake reads the current one.
@@ -1072,7 +1071,7 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 /// attempt; a missing or full timer queue must never create a hot loop.
 async fn retry_after(
 	inner: &Inner,
-	commands: &mut UnboundedReceiver<Command>,
+	commands: &mut Peekable<UnboundedReceiver<Command>>,
 	attempt: &mut u32,
 	backoff: &mut u64,
 ) -> bool {
@@ -1095,7 +1094,7 @@ async fn retry_after(
 
 /// Subscriptions and queued calls are retained by `Inner` and sent by the
 /// next handshake. Teardown and flow-control messages alone create no work.
-async fn wait_for_retry_command(commands: &mut UnboundedReceiver<Command>) -> bool {
+async fn wait_for_retry_command(commands: &mut Peekable<UnboundedReceiver<Command>>) -> bool {
 	while let Some(command) = commands.next().await {
 		if matches!(
 			command,
@@ -2583,7 +2582,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn an_unavailable_retry_timer_waits_for_new_work() {
-		let (sender, mut commands) = mpsc::unbounded();
+		let (sender, commands) = mpsc::unbounded();
+		let mut commands = commands.peekable();
 		let waiting = wait_for_retry_command(&mut commands);
 		futures::pin_mut!(waiting);
 		assert!(waiting.as_mut().now_or_never().is_none());
@@ -2596,7 +2596,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn closing_retry_commands_stops_the_wait() {
-		let (sender, mut commands) = mpsc::unbounded();
+		let (sender, commands) = mpsc::unbounded();
+		let mut commands = commands.peekable();
 		drop(sender);
 		assert!(!wait_for_retry_command(&mut commands).await);
 	}

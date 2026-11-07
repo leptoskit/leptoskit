@@ -82,6 +82,8 @@ export interface NativeRequest {
 }
 export interface RenderBatch {
 	pending: boolean;
+	/** Next guest timer deadline in milliseconds; -1 when idle. */
+	timerDelayMs: number;
 	render: Transaction;
 	/** New calls for ArkTS plugins, after `cancelled` is applied. */
 	requests: NativeRequest[];

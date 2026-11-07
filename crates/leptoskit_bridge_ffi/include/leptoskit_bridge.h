@@ -135,6 +135,8 @@ int32_t lk_app_frame(lk_app *app, uint64_t timestamp_ns, uint64_t period_ns);
 /* Real cancellable sleeps, before lk_app_start; poll completions from the pump. */
 int32_t lk_app_enable_timers(lk_app *app);
 int32_t lk_app_poll_timers(lk_app *app);
+// Next owner-thread timer pump in milliseconds, rounded up; -1 when idle.
+int64_t lk_app_timer_delay_ms(lk_app *app);
 /* 1 when lk_app_render has changes, a new root or a failure to send, else 0:
  * call it first and skip rendering when nothing changed. */
 int32_t lk_app_render_pending(lk_app *app);

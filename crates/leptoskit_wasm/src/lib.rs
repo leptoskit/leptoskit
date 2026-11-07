@@ -1011,13 +1011,7 @@ impl<B: NativeBackend> WasmHost<B> {
 					self.routed_requests.push_back(request);
 					moved += 1;
 				} else {
-					let id = request.id;
-					self.routed_replies_pending |= self
-						.store
-						.data_mut()
-						.plugins
-						.complete(id, Err(leptoskit_bridge::Error::Busy))
-						.is_ok();
+					self.reject_routed_request(request.id, leptoskit_bridge::Error::Busy);
 					moved += 1;
 				}
 			}
@@ -1086,6 +1080,29 @@ impl<B: NativeBackend> WasmHost<B> {
 		Ok(delivered)
 	}
 
+	/// Rejected calls have no timer deadline to wake callback-driven hosts.
+	/// Queue one owner-thread pump just as a successful timer would.
+	fn reject_routed_request(
+		&mut self,
+		id: leptoskit_bridge::CallId,
+		error: leptoskit_bridge::Error,
+	) {
+		if self
+			.store
+			.data_mut()
+			.plugins
+			.complete(id, Err(error))
+			.is_ok()
+		{
+			let already_pending = std::mem::replace(&mut self.routed_replies_pending, true);
+			if !already_pending {
+				if let Some(wake) = &self.timer_wake {
+					wake();
+				}
+			}
+		}
+	}
+
 	/// Schedules a timer request, returning whether it was one.
 	fn route_timer(&mut self, request: &leptoskit_bridge::Request) -> bool {
 		if Some(request.plugin) != self.timer_plugin {
@@ -1100,12 +1117,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		});
 
 		if let Err(error) = result {
-			self.routed_replies_pending |= self
-				.store
-				.data_mut()
-				.plugins
-				.complete(request.id, Err(error))
-				.is_ok();
+			self.reject_routed_request(request.id, error);
 		}
 
 		true

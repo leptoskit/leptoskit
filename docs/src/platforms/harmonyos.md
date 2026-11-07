@@ -165,3 +165,7 @@ Edit `guest/src/lib.rs` for your app and the sources under `hosts/harmonyos` for
 The bridge owns each runtime through a Node-API object that closes once, explicitly or when it is garbage-collected. The runtime stays on the UI thread, and each render updates the ArkUI components with the frames leptoskit's layout engine computed. Text input, submit, focus, blur, and button events go back to your Rust code. Leaving the page cancels pending work and destroys the runtime.
 
 ArkTS plugins run on the same UI thread. Each prepare regenerates `entry/src/main/ets/leptoskit` with the selected plugins and a registrant that creates them; don't edit it. The page registers them before the runtime starts, hands each render's plugin calls to them, and returns their answers on a later turn. When your Rust code stops waiting for a call, the plugin is told and its answer is dropped. Projects created before ArkTS plugins existed keep their own `Index.ets` and `index.d.ts`, which don't wire plugins up: copy both from a newly created starter to use them.
+
+## Guest timers
+
+The generated host provides `leptoskit.timer`, so a guest can await `leptoskit::guest::sleep` and query retry delays. ArkTS schedules one timeout for the next deadline on the UI thread; each guest entry updates it after new waits and cancellations. Closing the page cancels the timeout and destroys the host scheduler. Suspended UI execution may delay delivery, but a wait is never reported as finished before its deadline. This timer does not enable the other worker or asynchronous plugins.
