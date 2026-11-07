@@ -647,3 +647,22 @@ fn box_at(width: f32, height: f32) -> Element {
 fn columns(count: u8) -> NonZeroU8 {
 	NonZeroU8::new(count).expect("positive column count")
 }
+
+#[test]
+fn layout_errors_describe_the_constraint_that_failed() {
+	for (error, text) in [
+		(
+			LayoutError::InvalidConstraint("width"),
+			"width must be finite and nonnegative",
+		),
+		(
+			LayoutError::InvertedConstraints("height"),
+			"maximum height must not be smaller than minimum height",
+		),
+		(LayoutError::InvalidAspectRatio, "aspect ratio"),
+		(LayoutError::InvalidOpacity, "opacity"),
+		(LayoutError::InvalidRadius, "corner radius"),
+	] {
+		assert!(error.to_string().contains(text), "{error}");
+	}
+}

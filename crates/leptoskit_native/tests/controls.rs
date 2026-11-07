@@ -638,3 +638,40 @@ fn slider_precision_boundary_round_trips_across_binary_exponents() {
 		"boundary coverage must include a substantial accepted domain"
 	);
 }
+
+#[test]
+fn control_errors_describe_the_broken_contract() {
+	for (error, text) in [
+		(
+			ControlTreeError::RiveNotEnabled,
+			"enable the leptoskit rive feature",
+		),
+		(
+			ControlTreeError::MissingRadioGroup,
+			"radio requires an explicit RadioGroup",
+		),
+		(
+			ControlTreeError::MultipleSelectedRadio {
+				group: "plan".to_owned(),
+			},
+			"radio group `plan` has more than one selected option",
+		),
+		(
+			ControlTreeError::InvalidScrollOffset,
+			"a scroll offset must be finite",
+		),
+	] {
+		assert!(error.to_string().contains(text), "{error}");
+	}
+}
+
+#[test]
+fn progress_values_convert_to_and_from_their_fraction() {
+	let value = ProgressValue::new(0.25).expect("a valid fraction");
+	assert_eq!(f64::from(value), 0.25);
+	assert_eq!(
+		ProgressValue::try_from(0.25).expect("a valid fraction"),
+		value
+	);
+	assert!(ProgressValue::try_from(1.5).is_err());
+}

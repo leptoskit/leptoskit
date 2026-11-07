@@ -4,6 +4,7 @@
 use leptoskit_native::HeadlessBackend;
 use leptoskit_native::Mutation;
 use leptoskit_native::MutationList;
+use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeSurface;
 use leptoskit_native::components::Text;
 use leptoskit_native::components::View;
@@ -70,4 +71,60 @@ fn the_recording_backend_debug_output_names_its_log() {
 
 	assert!(debug.starts_with("HeadlessBackend"));
 	assert!(debug.contains("log"));
+}
+
+/// A backend that implements only the required methods, so the trait's
+/// default forwarding is what runs.
+#[derive(Default)]
+struct MinimalBackend {
+	applied: Vec<&'static str>,
+}
+
+impl NativeBackend for MinimalBackend {
+	fn create(
+		&mut self,
+		_id: NodeId,
+		_kind: leptoskit_native::NativeKind,
+		_props: &leptoskit_native::NativeProps,
+	) {
+		self.applied.push("create");
+	}
+
+	fn update_props(&mut self, _id: NodeId, _props: &leptoskit_native::NativeProps) {
+		self.applied.push("update_props");
+	}
+
+	fn update_layout(&mut self, _id: NodeId, _x: f32, _y: f32, _width: f32, _height: f32) {
+		self.applied.push("update_layout");
+	}
+
+	fn insert_child(&mut self, _parent: NodeId, _child: NodeId, _index: usize) {
+		self.applied.push("insert_child");
+	}
+
+	fn remove_child(&mut self, _parent: NodeId, _child: NodeId) {
+		self.applied.push("remove_child");
+	}
+
+	fn delete(&mut self, _id: NodeId) {
+		self.applied.push("delete");
+	}
+
+	fn text_measurer(&self) -> leptoskit_native::SharedTextMeasurer {
+		std::sync::Arc::new(leptoskit_native::ApproxTextMeasurer::new())
+	}
+}
+
+#[test]
+fn the_trait_defaults_forward_each_mutation_and_report_no_error() {
+	let mut surface = NativeSurface::new(MinimalBackend::default());
+	surface.set_root(&View().child(Text("Hello")));
+
+	let applied = &surface.backend().applied;
+	assert!(applied.contains(&"create"), "{applied:?}");
+	assert!(applied.contains(&"insert_child"), "{applied:?}");
+	assert!(applied.contains(&"update_layout"), "{applied:?}");
+
+	surface.backend_mut().limit_mutation_log(64);
+	assert_eq!(surface.backend().render_error(), None);
 }

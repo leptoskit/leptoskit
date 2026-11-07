@@ -199,3 +199,128 @@ fn css_colors_cover_the_common_syntaxes() {
 	);
 	assert_eq!(fill("transparent"), Some(Color::rgba(0, 0, 0, 0)));
 }
+
+#[test]
+fn svg_errors_describe_the_problem() {
+	use leptoskit_native::VectorError;
+
+	for (error, text) in [
+		(SvgError::Xml("bad".to_owned()), "not well-formed XML"),
+		(SvgError::NotSvg, "not an SVG <svg>"),
+		(SvgError::MissingViewBox, "needs a viewBox"),
+		(
+			SvgError::UnsupportedElement("text".to_owned()),
+			"<text> is not supported",
+		),
+		(
+			SvgError::Unsupported {
+				name: "fill".to_owned(),
+				value: "url(#g)".to_owned(),
+			},
+			"`fill: url(#g)` is not supported",
+		),
+		(
+			SvgError::Invalid {
+				name: "width".to_owned(),
+				value: "1em".to_owned(),
+			},
+			"`1em` is not a valid width",
+		),
+	] {
+		assert!(error.to_string().contains(text), "{error}");
+	}
+
+	let vector = VectorError::PathData { offset: 5 };
+	assert_eq!(SvgError::Vector(vector).to_string(), vector.to_string());
+}
+
+#[test]
+fn malformed_values_and_unsupported_properties_are_errors() {
+	let svg = |body: &str| {
+		Drawing::parse_svg(&format!(
+			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">{body}</svg>"#
+		))
+	};
+
+	assert_eq!(
+		svg(r#"<rect width="1" height="1"/>"#)
+			.expect("a plain rect imports")
+			.paths()
+			.len(),
+		1
+	);
+	assert_eq!(
+		Drawing::parse_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10"/>"#),
+		Err(SvgError::Invalid {
+			name: "viewBox".to_owned(),
+			value: "0 0 10".to_owned()
+		})
+	);
+	assert_eq!(
+		Drawing::parse_svg(
+			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" preserveAspectRatio="none slice"/>"#
+		)
+		.expect("`none` stretches")
+		.vector_scaling(),
+		VectorScaling::Stretch
+	);
+	for value in ["xMidYMidX", "xMidYMid stretch"] {
+		let document = format!(
+			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" preserveAspectRatio="{value}"><rect width="1" height="1"/></svg>"#
+		);
+		assert!(
+			Drawing::parse_svg(&document).is_err(),
+			"preserveAspectRatio={value} should be rejected"
+		);
+	}
+	for (attribute, value) in [
+		("fill-rule", "very"),
+		("stroke-linecap", "pointy"),
+		("stroke-linejoin", "sharp"),
+		("visibility", "maybe"),
+		("stroke-dasharray", "1fx"),
+		("stroke-miterlimit", "wide"),
+		("color", "not-a-color"),
+	] {
+		let document = format!(
+			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="1" height="1" {attribute}="{value}"/></svg>"#
+		);
+		assert!(
+			Drawing::parse_svg(&document).is_err(),
+			"{attribute}={value} should be rejected"
+		);
+	}
+
+	for attribute in [
+		"marker-start",
+		"marker-mid",
+		"marker-end",
+		"marker",
+		"paint-order",
+		"mix-blend-mode",
+		"mask",
+		"filter",
+	] {
+		let document = format!(
+			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="1" height="1" {attribute}="url(#x)"/></svg>"#
+		);
+		assert!(
+			Drawing::parse_svg(&document).is_err(),
+			"{attribute} should be rejected"
+		);
+	}
+
+	let drawing = parse(
+		r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+			<foreign:shape xmlns:foreign="urn:example"/>
+			<rect width="1" height="1" display="none"/>
+			<rect width="2" height="2" visibility="hidden"/>
+			<rect width="3" height="3"/>
+		</svg>"#,
+	);
+	assert_eq!(
+		drawing.paths().len(),
+		1,
+		"display:none, visibility:hidden, and foreign elements draw nothing"
+	);
+}

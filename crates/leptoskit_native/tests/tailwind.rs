@@ -1145,3 +1145,298 @@ fn starting_rules_become_an_entering_animation() {
 		None
 	);
 }
+
+#[test]
+fn flex_aspect_and_spacing_keywords_resolve() {
+	let (style, _) = resolve("flex-auto");
+	assert_eq!(style.flex_grow, 1.0);
+	assert_eq!(style.flex_shrink, 1.0);
+	assert_eq!(style.flex_basis, Dimension::Auto);
+
+	let (style, _) = resolve("flex-initial");
+	assert_eq!((style.flex_grow, style.flex_shrink), (0.0, 1.0));
+	let (style, _) = resolve("flex-none");
+	assert_eq!((style.flex_grow, style.flex_shrink), (0.0, 0.0));
+	assert_eq!(resolve("grow").0.flex_grow, 1.0);
+	assert_eq!(resolve("shrink").0.flex_shrink, 1.0);
+
+	assert_eq!(resolve("aspect-auto").0.aspect_ratio, None);
+	assert_eq!(resolve("aspect-square").0.aspect_ratio, Some(1.0));
+	close(resolve("aspect-video").0.aspect_ratio.unwrap(), 16.0 / 9.0);
+	close(resolve("aspect-[4/3]").0.aspect_ratio.unwrap(), 4.0 / 3.0);
+
+	let (style, _) = resolve("pr-2 pb-3 pl-4");
+	assert_eq!(
+		(
+			style.padding.right,
+			style.padding.bottom,
+			style.padding.left
+		),
+		(
+			Dimension::Points(8.0),
+			Dimension::Points(12.0),
+			Dimension::Points(16.0)
+		)
+	);
+	let (style, _) = resolve("my-2 mt-1 mr-3 mb-4 ml-5");
+	assert_eq!(
+		(
+			style.margin.top,
+			style.margin.right,
+			style.margin.bottom,
+			style.margin.left
+		),
+		(
+			Dimension::Points(4.0),
+			Dimension::Points(12.0),
+			Dimension::Points(16.0),
+			Dimension::Points(20.0)
+		)
+	);
+	let (style, _) = resolve("right-2 bottom-3 left-4");
+	assert_eq!(
+		(style.inset.right, style.inset.bottom, style.inset.left),
+		(
+			Dimension::Points(8.0),
+			Dimension::Points(12.0),
+			Dimension::Points(16.0)
+		)
+	);
+	let (style, _) = resolve("inset-x-2 inset-y-3");
+	assert_eq!(
+		(
+			style.inset.left,
+			style.inset.right,
+			style.inset.top,
+			style.inset.bottom
+		),
+		(
+			Dimension::Points(8.0),
+			Dimension::Points(8.0),
+			Dimension::Points(12.0),
+			Dimension::Points(12.0)
+		)
+	);
+
+	assert_eq!(
+		resolve("p-px").0.padding.top,
+		Dimension::Points(1.0),
+		"`px` alone is one pixel, not the x axis"
+	);
+}
+
+#[test]
+fn sizing_alignment_and_typography_utilities_resolve() {
+	let (style, _) = resolve("w-screen h-screen");
+	assert_eq!(style.width, Dimension::Points(800.0));
+	assert_eq!(style.height, Dimension::Points(600.0));
+
+	for (class, points) in [
+		("max-w-3xs", 256.0),
+		("max-w-2xs", 288.0),
+		("max-w-xs", 320.0),
+		("max-w-sm", 384.0),
+		("max-w-md", 448.0),
+		("max-w-lg", 512.0),
+		("max-w-xl", 576.0),
+		("max-w-2xl", 672.0),
+		("max-w-3xl", 768.0),
+		("max-w-4xl", 896.0),
+		("max-w-5xl", 1024.0),
+		("max-w-6xl", 1152.0),
+		("max-w-7xl", 1280.0),
+	] {
+		assert_eq!(
+			resolve(class).0.max_width,
+			Dimension::Points(points),
+			"{class}"
+		);
+	}
+
+	let (style, _) = resolve("justify-items-center self-end content-between justify-self-stretch");
+	let grid = style.grid.as_ref().expect("a grid");
+	assert_eq!(grid.justify_items, Align::Center);
+	assert_eq!(style.align_self, Align::FlexEnd);
+	assert_eq!(style.align_content, Align::SpaceBetween);
+	assert_eq!(grid.justify_self, Align::Stretch);
+	assert_eq!(
+		resolve("content-evenly").0.align_content,
+		Align::SpaceEvenly
+	);
+
+	let (style, _) = resolve("place-items-center place-self-end");
+	let grid = style.grid.as_ref().expect("a grid");
+	assert_eq!(style.align_items, Align::Center);
+	assert_eq!(grid.justify_items, Align::Center);
+	assert_eq!(style.align_self, Align::FlexEnd);
+	assert_eq!(grid.justify_self, Align::FlexEnd);
+
+	for (class, size) in [
+		("text-xs", 12.0),
+		("text-sm", 14.0),
+		("text-base", 16.0),
+		("text-lg", 18.0),
+		("text-xl", 20.0),
+		("text-2xl", 24.0),
+		("text-3xl", 30.0),
+		("text-4xl", 36.0),
+		("text-5xl", 48.0),
+		("text-6xl", 60.0),
+		("text-7xl", 72.0),
+		("text-8xl", 96.0),
+		("text-9xl", 128.0),
+		("text-[14px]", 14.0),
+	] {
+		assert_eq!(resolve(class).1.font_size, Some(size), "{class}");
+	}
+}
+
+#[test]
+fn border_radius_and_placement_utilities_resolve() {
+	for (class, radius) in [
+		("rounded-none", 0.0),
+		("rounded-xs", 2.0),
+		("rounded-sm", 4.0),
+		("rounded-md", 6.0),
+		("rounded-lg", 8.0),
+		("rounded-xl", 12.0),
+		("rounded-2xl", 16.0),
+		("rounded-3xl", 24.0),
+		("rounded-4xl", 32.0),
+		("rounded-full", 9999.0),
+	] {
+		assert_eq!(resolve(class).1.corner_radius, Some(radius), "{class}");
+	}
+
+	let edges = resolve("border-r border-b-2 border-l-4 border-x-8 border-y-[3px]")
+		.1
+		.border_edges();
+	assert_eq!(
+		(edges.top, edges.right, edges.bottom, edges.left),
+		(3.0, 1.0, 2.0, 4.0),
+		"single edges outrank the axis pairs"
+	);
+
+	let (style, _) = resolve("border-t");
+	assert!(style.border.top > 0.0, "a bare edge utility is one pixel");
+
+	assert_eq!(resolve("border-[3px]").1.border_width, Some(3.0));
+	assert_eq!(resolve("opacity-[25%]").1.opacity, Some(0.25));
+	assert!(
+		resolve("bg-red-500/[25%]").1.background.is_some(),
+		"an arbitrary color opacity modifier is valid"
+	);
+	assert_eq!(
+		resolve("col-auto").0.grid.expect("grid style").column,
+		leptoskit_yoga::GridPlacement::AUTO
+	);
+	assert_eq!(
+		resolve("row-auto").0.grid.expect("grid style").row,
+		leptoskit_yoga::GridPlacement::AUTO
+	);
+	assert_eq!(
+		resolve("grid-cols-[repeat(2,minmax(0,1fr))]")
+			.0
+			.grid
+			.expect("grid style")
+			.template_columns
+			.len(),
+		2
+	);
+	assert_eq!(
+		resolve("w-[var(--width,var(--fallback,2rem))]").0.width,
+		Dimension::Points(32.0)
+	);
+	assert_eq!(
+		resolve("rounded-[var(--radius,4px)]").1.corner_radius,
+		Some(4.0)
+	);
+	assert_eq!(
+		resolve("border-[length:var(--stroke,2px)]").1.border_width,
+		Some(2.0)
+	);
+}
+
+#[test]
+fn malformed_values_report_their_reason() {
+	for utility in [
+		"p-[2em]",
+		"p-[2vmin]",
+		"bg-[var(--brand!)]",
+		"-p-[var(--pad)]",
+		"bg-[var(--brand]",
+		"bg-[var(--a,var(--b,var(--c)))]",
+		"bg-[var(nope)]",
+		"bg-[var(--bad name)]",
+		"w-[var(--a,var(--b,var(--c)))]",
+		"justify-nope",
+		"content-nope",
+		"grid-flow-diagonal",
+		"col-span-x",
+		"col-under",
+		"col-start-x",
+		"grid-cols-[repeat(x,1fr)]",
+		"grid-cols-[repeat(2,)]",
+		"grid-cols-[]",
+		"grid-cols-x",
+		"grid-cols-[minmax(0,1fr,2fr)]",
+		"grid-cols-[minmax(0,1fr,)]",
+		"grid-cols-[repeat(2,1fr]",
+	] {
+		let error = Tailwind::parse(utility).expect_err(utility);
+		assert!(
+			!error.reason.is_empty(),
+			"{utility} should name what is wrong"
+		);
+	}
+
+	let too_many = format!("grid-cols-[{}]", "1fr ".repeat(257));
+	assert!(Tailwind::parse(&too_many).is_err());
+}
+
+#[test]
+fn theme_lengths_parse_and_install_without_losing_their_unit() {
+	use std::collections::BTreeMap;
+
+	use leptoskit_native::ThemeLength;
+
+	for (text, css) in [
+		("2px", "2px"),
+		("1.5rem", "1.5rem"),
+		("50%", "50%"),
+		("10vw", "10vw"),
+		("10vh", "10vh"),
+	] {
+		assert_eq!(ThemeLength::parse(text).unwrap().css(), css, "{text}");
+	}
+	for invalid in ["2em", "xrem", "NaNpx", "2000000px"] {
+		assert!(ThemeLength::parse(invalid).is_err(), "{invalid}");
+	}
+
+	Theme::clear();
+	let colors = BTreeMap::from([
+		("transparent".to_owned(), "transparent".to_owned()),
+		("ink".to_owned(), "#abc".to_owned()),
+		("paper".to_owned(), "#abcd".to_owned()),
+	]);
+	let lengths = BTreeMap::from([("gap".to_owned(), "0.5rem".to_owned())]);
+	Theme::install_maps(&colors, &lengths).expect("valid theme maps");
+	let css = Theme::css();
+	assert!(css.contains("--transparent:#00000000;"), "{css}");
+	assert!(css.contains("--ink:#aabbccff;"), "{css}");
+	assert!(css.contains("--paper:#aabbccdd;"), "{css}");
+	assert!(css.contains("--gap:0.5rem;"), "{css}");
+	assert_eq!(
+		resolve("gap-[var(--gap)]").0.gap.top,
+		Dimension::Points(8.0)
+	);
+	Theme::clear();
+
+	let bad_color = BTreeMap::from([("brand".to_owned(), "mauve".to_owned())]);
+	let error = Theme::install_maps(&bad_color, &BTreeMap::new()).unwrap_err();
+	assert!(error.contains("theme.colors.brand"), "{error}");
+	let bad_length = BTreeMap::from([("gap".to_owned(), "2em".to_owned())]);
+	let error = Theme::install_maps(&BTreeMap::new(), &bad_length).unwrap_err();
+	assert!(error.contains("theme.lengths.gap"), "{error}");
+	Theme::clear();
+}
