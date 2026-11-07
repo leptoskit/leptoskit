@@ -330,7 +330,7 @@ fn the_binary_is_the_one_named_after_the_package_or_the_only_one() {
 			name: "serve".to_owned(),
 			kind: vec!["bin".to_owned()],
 		}],
-		features: Default::default(),
+		features: std::collections::BTreeMap::default(),
 		dependencies: Vec::new(),
 	};
 	assert_eq!(super::binary(&package).unwrap(), "serve");
@@ -529,7 +529,13 @@ fn a_nested_app_resolves_through_cargo_workspace_globs() {
 	] {
 		assert!(ignore.contains(pattern), "{pattern}: {ignore}");
 	}
+}
 
+#[test]
+fn nested_platform_commands_use_the_workspace_context() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
 	let compose = generate(&app, &config, Target::Compose, false).unwrap();
 	let text = compose.to_string();
 	assert!(
@@ -854,7 +860,7 @@ fn external_path_dependencies_fail_before_writing_deployment_files() {
 	write(external.path(), "src/lib.rs", "");
 	let manifest = root.path().join("apps/notes/server/Cargo.toml");
 	let mut text = std::fs::read_to_string(&manifest).unwrap();
-	text.push_str(&format!("external = {{ path = {:?} }}\n", external.path()));
+	writeln!(text, "external = {{ path = {:?} }}", external.path()).unwrap();
 	std::fs::write(manifest, text).unwrap();
 	let app = root.path().join("apps/notes");
 	let error = generate(&app, &config, Target::Docker, false).unwrap_err();

@@ -185,8 +185,12 @@ impl Project {
 		// Cargo owns package discovery: it matches workspace members, globs,
 		// and inherited manifests, including an app directory with no
 		// manifest of its own.
-		let metadata = deployment_metadata(&app_root)
-			.with_context(|| format!("could not read the Cargo workspace for {app_root:?}"))?;
+		let metadata = deployment_metadata(&app_root).with_context(|| {
+			format!(
+				"could not read the Cargo workspace for {}",
+				app_root.display()
+			)
+		})?;
 		let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
 			.unwrap_or_else(|_| metadata.workspace_root.clone());
 		validate_local_dependencies(&workspace_root, &metadata)?;
@@ -718,7 +722,7 @@ fn workspace_dockerignore(workspace_root: &Path, app_root: &Path, app_dir: &str)
 
 	// Docker uses the last matching rule. Keep generated state exclusions
 	// after custom negations so an exception cannot reintroduce secrets.
-	out.push_str("\n");
+	out.push('\n');
 	out.push_str(WORKSPACE_DOCKERIGNORE);
 	Ok(out)
 }
