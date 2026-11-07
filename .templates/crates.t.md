@@ -893,6 +893,18 @@ unchanged.
 
 <!-- {/p_passkeysSummary} -->
 
+<!-- {@p_healthSummary} -->
+
+Add `{{ plugin_health.package.name }}` as a direct dependency and select the `{{ plugin_health.package.metadata.leptoskit.runtime.name }}` plugin
+in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
+registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Health` rather than resolving the plugin on every call. Android reads Health
+Connect and iOS reads `HealthKit`; the app supplies the Apple purpose string and any
+background or history manifest permissions it wants to request.
+
+<!-- {/p_healthSummary} -->
+
 <!-- {@p_pedometerSummary} -->
 
 Add `{{ plugin_pedometer.package.name }}` as a direct dependency and select the `{{ plugin_pedometer.package.metadata.leptoskit.runtime.name }}` plugin

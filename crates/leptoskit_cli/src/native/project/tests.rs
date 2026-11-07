@@ -858,3 +858,133 @@ fn android_declares_selected_file_providers_and_copies_their_paths() {
 	assert!(android(&root, &config, &registry, "arm64-v8a").is_err());
 	std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn android_adds_selected_query_packages_and_activities_to_the_manifest() {
+	let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+		"leptoskit-android-components-{}",
+		std::process::id()
+	));
+	let registry = metadata_registry(
+		&root,
+		&[serde_json::json!({
+			"name": "health", "rust-type": "Plugin",
+			"android-query-packages": ["com.google.android.apps.healthdata"],
+			"android-activities": [
+				{
+					"name": "dev.example.ViewUsage", "target-activity": "dev.example.Rationale",
+					"exported": true, "permission": "android.permission.START_VIEW_PERMISSION_USAGE",
+					"intent-filters": [{
+						"actions": ["android.intent.action.VIEW_PERMISSION_USAGE"],
+						"categories": ["android.intent.category.HEALTH_PERMISSIONS"]
+					}]
+				},
+				{
+					"name": "dev.example.Rationale", "exported": true,
+					"intent-filters": [{"actions": ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"]}]
+				}
+			]
+		})],
+	);
+	for source in [
+		"android/NativePlugin.kt",
+		"android/proguard-rules.pro",
+		"mobile/LeptosKitView.kt",
+		"android/NativePermissionHost.kt",
+		"android/NativeActivityResultHost.kt",
+		"mobile/NativeRustWorker.kt",
+		"mobile/NativeReleases.kt",
+		"mobile/LeptosKitApplicationView.kt",
+	] {
+		write(&registry.bridge.join(source), "// fixture").unwrap();
+	}
+	write(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
+	)
+	.unwrap();
+	android(
+		&root,
+		&leptoskit_config::LeptoskitConfig::default(),
+		&registry,
+		"arm64-v8a",
+	)
+	.unwrap();
+	let manifest =
+		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
+	assert!(manifest.contains("<package android:name=\"com.google.android.apps.healthdata\"/>"));
+	let activity = manifest
+		.find("<activity android:name=\"dev.example.Rationale\" android:exported=\"true\">")
+		.unwrap();
+	let alias = manifest
+		.find("<activity-alias android:name=\"dev.example.ViewUsage\"")
+		.unwrap();
+	assert!(
+		activity < alias,
+		"an alias must follow its target:\n{manifest}"
+	);
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn ios_signs_with_selected_plugin_entitlements_and_drops_them_when_deselected() {
+	let root = std::env::temp_dir()
+		.canonicalize()
+		.unwrap()
+		.join(format!("leptoskit-ios-entitlements-{}", std::process::id()));
+	let bridge = root.join("sdk/leptoskit_bridge_ffi");
+	write(&bridge.join("Package.swift"), "// bridge").unwrap();
+	let directory = root.join("sdk/Health");
+	write(&directory.join("Package.swift"), "// plugin").unwrap();
+	let mut plugin: super::super::registry::Plugin = serde_json::from_value(serde_json::json!({
+		"name": "health", "apple-module": "Health", "apple-type": "HealthPlugin",
+		"apple-entitlements": ["com.apple.developer.healthkit"]
+	}))
+	.unwrap();
+	plugin.directory = directory;
+	plugin.package_name = "Health".into();
+	let mut registry = Registry {
+		package: "demo".into(),
+		plugins: vec![plugin],
+		support: vec![],
+		bridge,
+		target: root.join("target"),
+		host_features: vec![],
+		devtools_feature: None,
+		missing: Vec::new(),
+		scene3d: false,
+	};
+	let config = leptoskit_config::LeptoskitConfig::default();
+	ios::generate(&root, &config, &registry).unwrap();
+	let path = root.join(".leptoskit/ios/App.entitlements");
+	let entitlements = plist::Value::from_file(&path).unwrap();
+	assert_eq!(
+		entitlements
+			.as_dictionary()
+			.unwrap()
+			.get("com.apple.developer.healthkit"),
+		Some(&plist::Value::Boolean(true))
+	);
+	let project = root.join(".leptoskit/ios/Host.xcodeproj/project.pbxproj");
+	let setting = format!(
+		"CODE_SIGN_ENTITLEMENTS = {};",
+		serde_json::to_string(path.to_str().unwrap()).unwrap()
+	);
+	assert_eq!(
+		std::fs::read_to_string(&project)
+			.unwrap()
+			.matches(&setting)
+			.count(),
+		2
+	);
+
+	registry.plugins.clear();
+	ios::generate(&root, &config, &registry).unwrap();
+	assert!(!path.exists());
+	assert!(
+		!std::fs::read_to_string(&project)
+			.unwrap()
+			.contains("CODE_SIGN_ENTITLEMENTS")
+	);
+	std::fs::remove_dir_all(root).unwrap();
+}

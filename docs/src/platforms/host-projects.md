@@ -111,7 +111,7 @@ optional-capabilities = ["host.plugin.native.android"]
 
 Capability identifiers name what the generated host can do, such as `host.plugin.rust.sync`, `host.plugin.rust.async`, `host.plugin.service`, `host.plugin.native.apple`, `host.update.codepush`, `host.timer`, or `plugin.<name>` for a granted plugin. A required capability the host reports unsupported, experimental without its opt-in, or unknown fails before packaging; an optional one warns. A declaration never grants a plugin, permission, or native authority by itself: `native.plugins` and the generated grants remain the only source of runtime access.
 
-Registering a plugin doesn't grant operating-system permissions. Add the permission strings and entitlements the plugin's README asks for to your host, such as `NSMotionUsageDescription` in `ios/Info.plist` for the pedometer, or `android.permission.ACTIVITY_RECOGNITION` in the Android manifest. Your app still asks the user at run time.
+Registering a plugin doesn't grant operating-system permissions. The CLI merges the permission strings and manifest entries a plugin declares in its metadata into the host, and signs the entitlements a plugin asks for. What it cannot supply is your own words and choices: add the purpose strings the plugin's README asks for to your host, such as `NSMotionUsageDescription` in `ios/Info.plist` for the pedometer or `NSHealthShareUsageDescription` for health, and any optional permissions your app wants beyond the plugin's own, such as Health Connect's background read in the Android manifest. Your app still asks the user at run time.
 
 The guest's clock and timer are not runtime plugins in `native.plugins`: the generated host enables the reserved `leptoskit.timer` plugin itself. macOS, iOS, Android, Windows, Linux, the terminal, and experimental HarmonyOS schedule real sleeps, so retry backoff and cache expiry wait. The capability descriptor records this as `host.timer`, so an app that cannot run without a timer can require it:
 
@@ -232,6 +232,33 @@ android-file-providers = [
 ```
 
 A provider class your own manifest already declares is left as you wrote it.
+
+A plugin whose library needs other apps visible declares `android-query-packages`, and one whose native sources need manifest entries declares `android-activities`: an `<activity>`, or an `<activity-alias>` with `target-activity`. The health plugin's Health Connect integration is the example: it queries the Health Connect app's package and declares the permission-rationale activity Android 13 and earlier launch, plus the usage alias Android 14 and later show:
+
+```toml
+android-query-packages = ["com.google.android.apps.healthdata"]
+
+[[package.metadata.leptoskit.runtime.android-activities]]
+name = "dev.leptoskit.plugins.health.HealthPermissionsRationaleActivity"
+exported = true
+theme = "@android:style/Theme.NoDisplay"
+intent-filters = [
+	{ actions = ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"] },
+]
+
+[[package.metadata.leptoskit.runtime.android-activities]]
+name = "dev.leptoskit.plugins.health.ViewPermissionUsageActivity"
+target-activity = "dev.leptoskit.plugins.health.HealthPermissionsRationaleActivity"
+exported = true
+permission = "android.permission.START_VIEW_PERMISSION_USAGE"
+intent-filters = [
+	{ actions = ["android.intent.action.VIEW_PERMISSION_USAGE"], categories = ["android.intent.category.HEALTH_PERMISSIONS"] },
+]
+```
+
+The generated manifest keeps anything the app declares itself under the same name, so an app can replace a generated activity by declaring its own with the same intent filter. Names are validated down to the characters Android uses, because they are written into XML verbatim.
+
+On iOS, `apple-entitlements` names entitlement keys the app is signed with, each set to `true`, such as the health plugin's `com.apple.developer.healthkit`. The CLI writes them into `.leptoskit/ios/App.entitlements` and signs the app with it while a selected plugin needs one; selecting none removes the file again. Entitlement keys don't carry values here; a plugin needing a value-shaped entitlement still needs the app to extend the file itself.
 
 ### Per-platform registration
 

@@ -118,6 +118,7 @@ pub(super) fn generate(
 		&frameworks,
 		&resources,
 	)?;
+	let entitlements = entitlements(registry, &dir)?;
 	ios_configurations(
 		&mut objects,
 		root,
@@ -131,6 +132,7 @@ pub(super) fn generate(
 		&linked_frameworks(registry)?,
 		&background_modes(registry),
 		&bg_task_identifiers(registry),
+		entitlements.as_deref(),
 	)?;
 	targets(&mut objects, &products, &package_refs, &extras)?;
 	write(
@@ -448,14 +450,20 @@ fn ios_configurations(
 	frameworks: &str,
 	background_modes: &[String],
 	bg_task_identifiers: &[String],
+	entitlements: Option<&Path>,
 ) -> Result<()> {
 	let info = versioned_info_plist(root, background_modes, bg_task_identifiers, launch_screen)?;
 	let version = marketing_version(config);
-	let icon = if icon {
-		" ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;"
+	// Settings only some apps carry: the icon set and plugin entitlements.
+	let mut optional = if icon {
+		" ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;".to_owned()
 	} else {
-		""
+		String::new()
 	};
+
+	if let Some(path) = entitlements {
+		write!(optional, " CODE_SIGN_ENTITLEMENTS = {};", quote(path)?)?;
+	}
 
 	for (offset, name) in [(0, "Debug"), (1, "Release")] {
 		writeln!(
@@ -481,7 +489,7 @@ fn ios_configurations(
 			 (\"$(inherited)\",{}); SWIFT_INCLUDE_PATHS = {}; OTHER_SWIFT_FLAGS = \
 			 (\"$(inherited)\",\"-I\",{}); LD_RUNPATH_SEARCH_PATHS = \
 			 (\"$(inherited)\",\"@executable_path/Frameworks\"); MARKETING_VERSION = {version}; \
-			 CURRENT_PROJECT_VERSION = 1;{icon}{frameworks}{release_strip} }}; }};",
+			 CURRENT_PROJECT_VERSION = 1;{optional}{frameworks}{release_strip} }}; }};",
 			id(APP_DEBUG + offset),
 			config.native.package_id,
 			quote(&info)?,
@@ -493,6 +501,35 @@ fn ios_configurations(
 
 	Ok(())
 }
+/// The entitlements selected plugins need, each `true`, in
+/// `.leptoskit/ios/App.entitlements`; `None`, and no stale file, when no
+/// selected plugin needs one.
+fn entitlements(registry: &Registry, dir: &Path) -> Result<Option<std::path::PathBuf>> {
+	let path = dir.join("App.entitlements");
+	let keys: std::collections::BTreeSet<_> = registry
+		.plugins
+		.iter()
+		.flat_map(|plugin| &plugin.apple_entitlements)
+		.collect();
+
+	if keys.is_empty() {
+		if std::fs::symlink_metadata(&path).is_ok() {
+			std::fs::remove_file(&path)?;
+		}
+
+		return Ok(None);
+	}
+
+	let dictionary: plist::Dictionary = keys
+		.into_iter()
+		.map(|key| (key.clone(), plist::Value::Boolean(true)))
+		.collect();
+	let mut xml = Vec::new();
+	plist::Value::Dictionary(dictionary).to_writer_xml(&mut xml)?;
+	write(&path, &String::from_utf8(xml)?)?;
+	Ok(Some(path))
+}
+
 /// The app's version for `CFBundleShortVersionString`: Apple takes up to
 /// three integers, so a pre-release's label is dropped.
 fn marketing_version(config: &leptoskit_config::LeptoskitConfig) -> String {

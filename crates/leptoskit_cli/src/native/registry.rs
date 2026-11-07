@@ -142,6 +142,10 @@ pub struct Plugin {
 	/// builds with Swift Package Manager, which cannot integrate pods.
 	#[serde(default)]
 	pub apple_pods: Vec<ApplePod>,
+	/// Entitlements the iOS app is signed with, each set to `true`, such as
+	/// `com.apple.developer.healthkit`. iOS only.
+	#[serde(default)]
+	pub apple_entitlements: Vec<String>,
 	/// `UIBackgroundModes` entries the plugin needs, such as `fetch` and
 	/// `processing`. Merged into the generated iOS `Info.plist`.
 	#[serde(default)]
@@ -168,6 +172,14 @@ pub struct Plugin {
 	/// Explicit Maven coordinates, never Gradle expressions or version ranges.
 	#[serde(default)]
 	pub android_dependencies: Vec<String>,
+	/// Packages the app must be able to see, added to the manifest's
+	/// `<queries>`.
+	#[serde(default)]
+	pub android_query_packages: Vec<String>,
+	/// Activities and activity aliases the plugin's Kotlin sources need in
+	/// the app's manifest.
+	#[serde(default)]
+	pub android_activities: Vec<AndroidActivity>,
 	/// Plugin-declared Android `<service>` entries merged into the manifest.
 	#[serde(default)]
 	pub android_services: Vec<AndroidService>,
@@ -246,6 +258,35 @@ pub struct AndroidFileProvider {
 	pub class: String,
 	pub authority_suffix: String,
 	pub paths: String,
+}
+
+/// An `<activity>`, or with `target-activity` an `<activity-alias>`, that a
+/// plugin adds to the app's manifest. Every value is validated down to the
+/// characters Android names use, so it is written into XML unescaped.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AndroidActivity {
+	/// The fully qualified class, or the alias's name.
+	pub name: String,
+	/// The activity an alias launches.
+	pub target_activity: Option<String>,
+	#[serde(default)]
+	pub exported: bool,
+	/// The permission a caller must hold to start it.
+	pub permission: Option<String>,
+	/// A theme resource, such as `@android:style/Theme.NoDisplay`.
+	pub theme: Option<String>,
+	#[serde(default)]
+	pub intent_filters: Vec<AndroidIntentFilter>,
+}
+
+/// An intent filter of an [`AndroidActivity`].
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AndroidIntentFilter {
+	pub actions: Vec<String>,
+	#[serde(default)]
+	pub categories: Vec<String>,
 }
 
 /// A `CocoaPod` the generated iOS Podfile installs, with an optional
@@ -787,6 +828,8 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 	validate_frameworks(plugin)?;
 	validate_option_features(plugin)?;
 
+	validate_components(plugin)?;
+
 	for dependency in &plugin.android_dependencies {
 		anyhow::ensure!(
 			maven_coordinate(dependency),
@@ -1027,6 +1070,83 @@ fn validate_apple_background(plugin: &Plugin) -> Result<()> {
 		);
 	}
 
+	Ok(())
+}
+
+/// A dotted name with at least two segments, such as a package, class,
+/// action or entitlement.
+fn qualified(value: &str, extra: &str) -> bool {
+	value.contains('.') && value.split('.').all(|segment| identifier(segment, extra))
+}
+
+/// A theme reference: `@style/Name` or `@android:style/Name`, with dotted
+/// names.
+fn theme(value: &str) -> bool {
+	["@style/", "@android:style/"].iter().any(|prefix| {
+		value
+			.strip_prefix(prefix)
+			.is_some_and(|name| name.split('.').all(|segment| identifier(segment, "_")))
+	})
+}
+
+fn validate_components(plugin: &Plugin) -> Result<()> {
+	for key in &plugin.apple_entitlements {
+		anyhow::ensure!(
+			qualified(key, "_-"),
+			"invalid Apple entitlement in plugin {}: {key}",
+			plugin.name
+		);
+	}
+
+	for package in &plugin.android_query_packages {
+		anyhow::ensure!(
+			qualified(package, "_"),
+			"invalid Android query package in plugin {}: {package}",
+			plugin.name
+		);
+	}
+
+	for activity in &plugin.android_activities {
+		validate_activity(activity).with_context(|| {
+			format!(
+				"Android activity {} in plugin {}",
+				activity.name, plugin.name
+			)
+		})?;
+	}
+
+	Ok(())
+}
+
+fn validate_activity(activity: &AndroidActivity) -> Result<()> {
+	let names = std::iter::once(&activity.name)
+		.chain(&activity.target_activity)
+		.chain(&activity.permission);
+
+	for name in names.chain(
+		activity
+			.intent_filters
+			.iter()
+			.flat_map(|filter| filter.actions.iter().chain(&filter.categories)),
+	) {
+		anyhow::ensure!(qualified(name, "_"), "invalid fully qualified name: {name}");
+	}
+
+	anyhow::ensure!(
+		activity.theme.as_deref().is_none_or(theme),
+		"invalid theme: use @style/Name or @android:style/Name"
+	);
+	anyhow::ensure!(
+		activity
+			.intent_filters
+			.iter()
+			.all(|filter| !filter.actions.is_empty()),
+		"an intent filter needs at least one action"
+	);
+	anyhow::ensure!(
+		activity.target_activity.is_none() || activity.theme.is_none(),
+		"an activity alias takes its theme from its target"
+	);
 	Ok(())
 }
 

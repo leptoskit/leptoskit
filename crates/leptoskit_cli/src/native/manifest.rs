@@ -1,4 +1,5 @@
 //! Add selected plugin declarations while preserving app-owned XML verbatim.
+pub mod components;
 mod queries;
 #[cfg(test)]
 mod scheme_tests;
