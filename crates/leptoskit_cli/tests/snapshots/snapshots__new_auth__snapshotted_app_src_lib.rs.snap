@@ -58,6 +58,7 @@ pub fn screen(shell: &Shell) -> leptoskit::prelude::Element {
 pub fn provide() -> Shell {
 	use leptoskit::leptos::prelude::GetValue as _;
 	use leptoskit::leptos::prelude::SetValue as _;
+	use leptoskit::leptos::prelude::UpdateValue as _;
 
 	leptoskit::query::QueryClient::new().provide();
 	auth::provide();
@@ -73,7 +74,7 @@ pub fn provide() -> Shell {
 	// drops it, and signing in as someone else builds theirs with the previous
 	// account's cached list removed, so one person's notes never show under
 	// another's name.
-	leptoskit::leptos::prelude::Effect::new(move |_| {
+	leptoskit::leptos::prelude::Effect::new_isomorphic(move |_| {
 		let identity = shell.identity();
 		let active = signed_in
 			.try_get_value()

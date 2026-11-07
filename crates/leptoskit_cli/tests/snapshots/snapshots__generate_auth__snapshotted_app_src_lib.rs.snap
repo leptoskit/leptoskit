@@ -30,8 +30,9 @@ pub fn App() -> impl leptos::prelude::IntoView {
 /// Starts the app's shared state in the current reactive owner: the query
 /// cache the notes screen keeps its list in, and the list itself.
 ///
-/// The server renders the first list in process, so the browser can hydrate
-/// it without calling its own relative URL from HTML rendering.
+/// During SSR, query data loads in process and streams into the browser
+/// cache. The initial HTML can show the loading state; rendering never
+/// calls the server through its own relative URL.
 pub fn provide() -> Notes {
 	leptoskit::query::QueryClient::new().provide();
 	Notes::shared()

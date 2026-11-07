@@ -125,6 +125,25 @@ leptoskit native build macos
 
 Its **Check files** action also checks HTTP binary data, denied origins, redirects, response limits, cancellation, and WebSocket text/binary messages and close. For an arm64 Android emulator, generate with `--target android --host 10.0.2.2` (use `android-x86_64` for x86-64 emulators) so its explicit host scopes point to the development machine. The fixture server binds only loopback; it is test tooling, not an app service.
 
+## Generated notes journey
+
+`crates/leptoskit_cli/tests/db.rs` builds the real `leptoskit new --db sqlite` and `--auth` apps, including the optimized `wasm32-unknown-unknown` guest with the `native` feature, and runs them through `leptoskit_wasm::WasmHost::headless`. The host registers the generated guest's `http` plugin, sends its binary requests through `leptoskit_plugin_http` to the real scaffolded server, and answers the secure-store protocol in memory, so no device, Keychain, or cloud service is touched. The test edits the scaffold's `SERVER` and `[native.plugin-options.http] origins` to one loopback fixture before compiling, so a guest that reached anywhere else would fail.
+
+It drives the generated screens with surface presses and change events, not copied screen logic:
+
+- the database app's loading, empty, failed, and loaded lists; draft validation; a held save that shows "Saving…" and then "Saved."; a failed save; the draft clearing; and Refresh picking up another client's note;
+- the auth app's session resolution, emailed code read from `/_leptoskit/mail`, notes over the HTTP plugin, sign-out, a second account with no previous rows, and held list/save replies delivered after their reactive owner was disposed;
+- a rate-limited address on the timer-less headless guest: the sixth code request keeps the server's message and a usable manual retry instead of a countdown that can never finish.
+
+The tests are ignored by default because they compile nested apps:
+
+```sh
+cargo nextest run -p leptoskit_cli --test db --run-ignored ignored-only \
+  -E 'test(the_database_scaffold_migrates_and_serves) | test(the_auth_scaffold_signs_people_in)'
+```
+
+They are interpreter and HTTP integration tests. They do not prove the AppKit, UIKit, Android, GTK, or Win32 widget layers, and they do not use a simulator, emulator, or device.
+
 ## Code push journey
 
 `cargo run -p leptoskit_cli --example mobile_codepush -- --platform ios|android --device <id> --sdk-path . --cli target/debug/leptoskit` runs the full journey against a booted simulator or emulator, and CI runs it on both platforms. It scaffolds an app, builds four signed guests from one source, and serves them from a local registry. Then it taps a counter that steps by one, downloads and activates a replacement that steps by ten, and relaunches offline. Then it activates a guest that traps on startup and checks that the working guest is still interactive, both straight away and after a relaunch. Finally it installs a second good update after that rollback, and checks that it survives an offline relaunch.

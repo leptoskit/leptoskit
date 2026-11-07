@@ -95,6 +95,27 @@ fn the_screens_and_config_land_in_the_client_crate() {
 		read(root.path(), "app_app/src/auth/sign_in.rs"),
 		pages(PLAIN)[1].1
 	);
+	// A native guest has no leptos `effects` feature, so the mount effect has
+	// to be isomorphic and skip server rendering itself.
+	for page in ["sign_in.rs", "security.rs"] {
+		let screen = read(root.path(), &format!("app_app/src/auth/{page}"));
+		assert!(
+			screen.contains("Effect::new_isomorphic") && screen.contains("is_server()"),
+			"{page} would not run its mount effect in a native guest: {screen}"
+		);
+		assert!(
+			!screen.contains("Effect::new(move"),
+			"{page} still has a client-only effect: {screen}"
+		);
+
+		if page == "sign_in.rs" {
+			assert!(
+				screen.contains("try_sleep") && screen.contains("manual"),
+				"a rate-limited screen must fall back to a manual retry on a host without a \
+				 timer: {screen}"
+			);
+		}
+	}
 	assert!(read(root.path(), "app_app/src/lib.rs").ends_with(
 		"pub mod routes;\n\n/// Written by `leptoskit generate auth`.\npub mod auth;\n"
 	));

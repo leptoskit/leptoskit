@@ -4,11 +4,25 @@
 //! Ignored by default because it compiles the app; CI runs it with the other
 //! end-to-end tests (`--ignored`).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
+
+use leptoskit_bridge::Bytes;
+use leptoskit_bridge::Error as BridgeError;
+use leptoskit_bridge::MethodId;
+use leptoskit_bridge::codec::Decoder;
+use leptoskit_bridge::codec::Encoder;
+use leptoskit_native::EventOutcome;
+use leptoskit_native::NativeEvent;
+use leptoskit_native::NativeKind;
+use leptoskit_plugin_http::Method as HttpMethod;
+use leptoskit_plugin_http::Request as HttpRequest;
+use leptoskit_plugin_http::protocol;
+use leptoskit_yoga::NodeId;
 
 const TABLES: &str = r#"
 use leptoskit_db::Id;
@@ -429,6 +443,10 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 /// the server through a restart.
 #[test]
 #[ignore = "compiles a scaffolded server; run with --ignored"]
+#[allow(
+	clippy::too_many_lines,
+	reason = "one scaffold's API, native journey, and browser journey read best top to bottom"
+)]
 fn the_database_scaffold_migrates_and_serves() {
 	use std::io::BufRead;
 
@@ -468,6 +486,8 @@ fn the_database_scaffold_migrates_and_serves() {
 			.unwrap();
 		assert!(status.success(), "cargo {}", args.join(" "));
 	};
+	let address = free_address();
+	point_native_at(&root, &format!("http://{address}"));
 	cargo(&["build", "--locked", "--package", "notes"]);
 	// The shared contracts build for the browser without the server's
 	// driver.
@@ -482,9 +502,46 @@ fn the_database_scaffold_migrates_and_serves() {
 		"hydrate",
 	]);
 	cargo(&["test", "--locked", "--package", "notes_app"]);
+	// The native guest is optimized, as `leptoskit build` makes it.
+	cargo(&[
+		"build",
+		"--locked",
+		"--release",
+		"--package",
+		"notes_app",
+		"--target",
+		"wasm32-unknown-unknown",
+		"--features",
+		"native",
+	]);
+	let origins = native_origins(&root);
+	assert_eq!(origins, [format!("http://{address}")]);
 
-	let address = free_address();
+	// The real journey runs against a fresh database, so its empty and
+	// loaded states are the scaffold's own rather than the API probes'.
+	let native_server = Server::start(&root, &target, &address, &[]);
+	native_database_journey(
+		&target.join("wasm32-unknown-unknown/release/notes_app.wasm"),
+		&address,
+		&origins,
+	);
+	assert!(
+		native_server.terminate(),
+		"the native journey's server didn't shut down cleanly"
+	);
+	remove_database(&root);
+
 	let server = Server::start(&root, &target, &address, &[]);
+	// Rendering a page loads its query in process; it must not call the
+	// server through its own relative URL.
+	let page = request(&address, "GET", "/", "");
+	assert_eq!(page.0, 200, "{}", page.1);
+	assert!(page.1.contains("Notes"), "{}", page.1);
+	assert!(
+		!page.1.contains("The notes couldn't be loaded"),
+		"{}",
+		page.1
+	);
 	let initially_empty = request(&address, "POST", "/api/notes", "{}");
 	let health = request(&address, "GET", "/api/health", "");
 	let added = request(&address, "POST", "/api/add_note", r#"{"body":"hello"}"#);
@@ -652,6 +709,11 @@ fn the_studio_serves_the_apps_tables() {
 /// from the development mailbox, and each person's notes are their own.
 #[test]
 #[ignore = "compiles a scaffolded server; run with --ignored"]
+#[allow(
+	clippy::too_many_lines,
+	reason = "one scaffold's sign-in, native journey, and per-person probes read best top to \
+	          bottom"
+)]
 fn the_auth_scaffold_signs_people_in() {
 	let scratch = tempfile::tempdir().unwrap();
 	let sdk = repository();
@@ -690,6 +752,8 @@ fn the_auth_scaffold_signs_people_in() {
 			.unwrap();
 		assert!(status.success(), "cargo {}", args.join(" "));
 	};
+	let address = free_address();
+	point_native_at(&root, &format!("http://{address}"));
 	cargo(&["build", "--locked", "--package", "notes"]);
 	cargo(&["test", "--locked", "--package", "notes_app"]);
 	cargo(&[
@@ -714,13 +778,9 @@ fn the_auth_scaffold_signs_people_in() {
 		"--features",
 		"native",
 	]);
-	native_guest_runs(&target.join("wasm32-unknown-unknown/release/notes_app.wasm"));
+	let origins = native_origins(&root);
+	assert_eq!(origins, [format!("http://{address}")]);
 
-	let address = std::net::TcpListener::bind("127.0.0.1:0")
-		.unwrap()
-		.local_addr()
-		.unwrap()
-		.to_string();
 	let origin = format!("Origin: http://{address}\r\n");
 	let mut server = Command::new(target.join("debug/notes"))
 		.current_dir(&root)
@@ -783,6 +843,15 @@ fn the_auth_scaffold_signs_people_in() {
 			"",
 		)
 	});
+	// The native journey runs before the direct probes, so its accounts start
+	// with empty note lists.
+	if ready {
+		native_auth_journey(
+			&target.join("wasm32-unknown-unknown/release/notes_app.wasm"),
+			&address,
+			&origins,
+		);
+	}
 	// Each person's notes are their own: the operations run as the caller,
 	// and the table's policy shows them only their rows.
 	let notes = cookie
@@ -906,17 +975,15 @@ fn assert_their_own(notes: Option<[(u16, String); 7]>) {
 	assert_eq!(status, 401, "a signed-out cookie still read notes: {body}");
 }
 
-/// The `--auth` scaffold's native guest imports none of the browser APIs the
-/// query cache and sign-in client use there (timers, the clock, `navigator`,
-/// the window, `fetch`, event listeners), takes the host's clock, and starts
-/// in the interpreter every native host runs, showing the sign-in screen.
+/// The generated native guest imports none of the browser APIs the query
+/// cache and sign-in client use there (timers, the clock, `navigator`, the
+/// window, `fetch`, event listeners), and takes the host's clock.
 ///
 /// `leptos` itself still links js-sys's futures and stream glue; the
 /// interpreter links those to traps, since nothing a host calls reaches them.
-fn native_guest_runs(path: &Path) {
-	let wasm = fs::read(path).unwrap();
+fn assert_native_guest_module(wasm: &[u8]) {
 	let engine = wasmi::Engine::default();
-	let module = wasmi::Module::new(&engine, &wasm).unwrap();
+	let module = wasmi::Module::new(&engine, wasm).unwrap();
 	let browser: Vec<String> = module
 		.imports()
 		.map(|import| format!("{}::{}", import.module(), import.name()))
@@ -954,22 +1021,686 @@ fn native_guest_runs(path: &Path) {
 			.any(|export| export.name() == "leptoskit_clock"),
 		"the guest takes the host's clock"
 	);
+}
 
-	let mut host = leptoskit_wasm::WasmHost::headless(&wasm).expect("the guest loads");
-	host.start(390.0, 844.0).expect("the guest starts");
-	let surface = host.surface();
-	let mut texts = Vec::new();
-	let mut nodes: Vec<_> = surface.root().into_iter().collect();
+/// What the host does with one HTTP request the guest submitted.
+#[derive(Clone, Copy)]
+enum Fate {
+	/// Run it now and deliver the answer.
+	Run,
+	/// Run it now, but keep the answer until the test releases it.
+	Hold,
+	/// Fail it without reaching the server.
+	Fail(BridgeError),
+}
 
-	while let Some(node) = nodes.pop() {
-		texts.extend(surface.props(node).text.clone());
-		nodes.extend(surface.children(node).iter().copied());
+/// One HTTP answer the test ran but has not delivered to the guest yet.
+struct Held {
+	id: leptoskit_bridge::CallId,
+	reply: Result<Bytes, BridgeError>,
+}
+
+/// A scaffolded native guest in the real interpreter, driven through the same
+/// bridge and surface events a native host uses. HTTP requests go through the
+/// generated guest's `http` plugin codec to the real scaffolded server, and
+/// the secure store is an in-memory host implementation of the same protocol,
+/// so no device or credential store is touched.
+struct NativeApp {
+	host: leptoskit_wasm::WasmHost<leptoskit_native::HeadlessBackend>,
+	runtime: tokio::runtime::Runtime,
+	http: leptoskit_plugin_http::Client,
+	http_plugin: leptoskit_bridge::PluginId,
+	secure_plugin: Option<leptoskit_bridge::PluginId>,
+	secrets: BTreeMap<(String, String), Vec<u8>>,
+	held: Vec<Held>,
+	seen: Vec<String>,
+	fate: Option<Box<dyn FnMut(&HttpRequest) -> Fate>>,
+}
+
+impl NativeApp {
+	fn new(wasm: &[u8], origins: &[String], secure_store: bool) -> Self {
+		let mut host = leptoskit_wasm::WasmHost::headless(wasm).expect("the generated guest loads");
+		let http_plugin = host
+			.plugins()
+			.register("http", [MethodId(0)])
+			.expect("register the HTTP plugin");
+		host.plugins()
+			.grant(http_plugin, MethodId(0), true)
+			.expect("grant the HTTP plugin");
+		let secure_plugin = secure_store.then(|| {
+			let methods = [MethodId(0), MethodId(1), MethodId(2)];
+			let id = host
+				.plugins()
+				.register("secure-store", methods)
+				.expect("register the secure store");
+			for method in methods {
+				host.plugins()
+					.grant(id, method, true)
+					.expect("grant the secure store");
+			}
+			id
+		});
+		let config = leptoskit_plugin_http::Config::new(origins.iter().map(String::as_str))
+			.expect("the generated HTTP origins");
+		let http = leptoskit_plugin_http::Client::new(config).expect("the HTTP client");
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.expect("the test runtime");
+		Self {
+			host,
+			runtime,
+			http,
+			http_plugin,
+			secure_plugin,
+			secrets: BTreeMap::new(),
+			held: Vec::new(),
+			seen: Vec::new(),
+			fate: None,
+		}
 	}
 
+	fn start(&mut self) {
+		self.host
+			.start(390.0, 844.0)
+			.expect("the generated guest starts");
+	}
+
+	/// Runs every task that can make progress and answers every request the
+	/// test is not holding, until the guest is quiet.
+	fn settle(&mut self) {
+		let mut quiet = 0;
+
+		for _ in 0..512 {
+			let mut worked = self.drain();
+			self.host.wake_plugins().expect("the generated guest wakes");
+			// The wake may have queued requests the guest submitted while it
+			// ran, so take them before deciding the guest is quiet.
+			worked |= self.drain();
+
+			if worked {
+				quiet = 0;
+			} else {
+				quiet += 1;
+
+				if quiet == 2 {
+					return;
+				}
+			}
+		}
+
+		panic!("the generated guest did not settle");
+	}
+
+	/// Handles every queued request and cancellation, saying whether there was
+	/// any.
+	fn drain(&mut self) -> bool {
+		let mut worked = false;
+
+		loop {
+			let request = self.host.plugins().next_request();
+			let Some(request) = request else {
+				break;
+			};
+			worked = true;
+			self.handle(request);
+		}
+
+		loop {
+			if self.host.plugins().next_cancelled().is_none() {
+				break;
+			}
+			worked = true;
+		}
+
+		worked
+	}
+
+	/// Settles with `fate` deciding what happens to each HTTP request.
+	fn settle_with(&mut self, fate: impl FnMut(&HttpRequest) -> Fate + 'static) {
+		self.fate = Some(Box::new(fate));
+		self.settle();
+		self.fate = None;
+	}
+
+	/// Delivers an answer the test held, reporting what the bridge did with a
+	/// call the guest may already have cancelled.
+	fn release(&mut self, index: usize) -> Result<(), BridgeError> {
+		let held = self.held.remove(index);
+		self.host.plugins().complete(held.id, held.reply)
+	}
+
+	fn handle(&mut self, request: leptoskit_bridge::Request) {
+		if request.plugin == self.http_plugin {
+			let decoded = protocol::decode_request(&request.payload).expect("an HTTP frame");
+			self.seen.push(format!(
+				"{} {}",
+				decoded.method.as_str(),
+				url_path(&decoded.url)
+			));
+			let fate = self.fate.as_mut().map_or(Fate::Run, |fate| fate(&decoded));
+
+			match fate {
+				Fate::Run => {
+					let reply = self.http_reply(&decoded);
+					self.host
+						.plugins()
+						.complete(request.id, reply)
+						.expect("the bridge accepts a live reply");
+				}
+				Fate::Hold => {
+					let reply = self.http_reply(&decoded);
+					self.held.push(Held {
+						id: request.id,
+						reply,
+					});
+				}
+				Fate::Fail(error) => {
+					self.host
+						.plugins()
+						.complete(request.id, Err(error))
+						.expect("the bridge accepts an error reply");
+				}
+			}
+		} else if Some(request.plugin) == self.secure_plugin {
+			let reply = self.secure_reply(request.method, &request.payload);
+			self.host
+				.plugins()
+				.complete(request.id, reply)
+				.expect("the bridge accepts a secure-store reply");
+		} else {
+			panic!("the guest called an unregistered plugin");
+		}
+	}
+
+	fn http_reply(&self, request: &HttpRequest) -> Result<Bytes, BridgeError> {
+		let response = self
+			.runtime
+			.block_on(self.http.execute(request.clone()))
+			.map_err(http_error)?;
+		protocol::encode_response(&response).map_err(http_error)
+	}
+
+	/// The generated secure-store protocol, kept in this process: a GET is a
+	/// presence flag and the secret, SET and DELETE are empty replies.
+	fn secure_reply(&mut self, method: MethodId, payload: &[u8]) -> Result<Bytes, BridgeError> {
+		let mut input = Decoder::new(payload);
+		let service = input.string()?.to_owned();
+		let key = input.string()?.to_owned();
+		let secret = if method == MethodId(1) {
+			Some(input.bytes()?.to_vec())
+		} else {
+			None
+		};
+		input.finish()?;
+
+		match method.0 {
+			0 => {
+				let mut output = Encoder::default();
+
+				if let Some(secret) = self.secrets.get(&(service, key)) {
+					output.u32(1);
+					output.bytes(secret)?;
+				} else {
+					output.u32(0);
+				}
+
+				Ok(output.finish())
+			}
+			1 => {
+				self.secrets
+					.insert((service, key), secret.unwrap_or_default());
+				Ok(Bytes::new())
+			}
+			2 => {
+				self.secrets.remove(&(service, key));
+				Ok(Bytes::new())
+			}
+			_ => Err(BridgeError::Unavailable),
+		}
+	}
+
+	fn nodes(&self) -> Vec<NodeId> {
+		let surface = self.host.surface();
+		let mut nodes = Vec::new();
+		let mut stack: Vec<NodeId> = surface.root().into_iter().collect();
+
+		while let Some(node) = stack.pop() {
+			nodes.push(node);
+			stack.extend(surface.children(node).iter().copied());
+		}
+
+		nodes
+	}
+
+	fn texts(&self) -> Vec<String> {
+		let surface = self.host.surface();
+		self.nodes()
+			.into_iter()
+			.filter_map(|node| surface.props(node).text.clone())
+			.collect()
+	}
+
+	fn text(&self) -> String {
+		self.texts().join("\n")
+	}
+
+	fn assert_text(&self, needle: &str) {
+		let text = self.text();
+		assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+	}
+
+	fn assert_no_text(&self, needle: &str) {
+		let text = self.text();
+		assert!(!text.contains(needle), "unexpected {needle:?} in:\n{text}");
+	}
+
+	fn button(&self, label: &str) -> NodeId {
+		let surface = self.host.surface();
+		self.nodes()
+			.into_iter()
+			.find(|&node| {
+				surface.kind(node) == NativeKind::Button
+					&& surface.props(node).text.as_deref() == Some(label)
+			})
+			.unwrap_or_else(|| panic!("no {label:?} button in:\n{}", self.text()))
+	}
+
+	fn input(&self, placeholder: &str) -> NodeId {
+		let surface = self.host.surface();
+		self.nodes()
+			.into_iter()
+			.find(|&node| {
+				surface.kind(node) == NativeKind::TextInput
+					&& surface.props(node).placeholder.as_deref() == Some(placeholder)
+			})
+			.unwrap_or_else(|| panic!("no {placeholder:?} input in:\n{}", self.text()))
+	}
+
+	fn value(&self, placeholder: &str) -> Option<String> {
+		let node = self.input(placeholder);
+		self.host.surface().props(node).value.clone()
+	}
+
+	fn enabled(&self, label: &str) -> bool {
+		let node = self.button(label);
+		self.host.surface().props(node).enabled != Some(false)
+	}
+
+	fn press(&mut self, label: &str) {
+		let node = self.button(label);
+		let outcome = self
+			.host
+			.dispatch(node, &NativeEvent::Press)
+			.expect("the generated guest handles a press");
+		assert_eq!(outcome, EventOutcome::Handled, "the {label:?} handler ran");
+	}
+
+	fn type_into(&mut self, placeholder: &str, text: &str) {
+		let node = self.input(placeholder);
+		let outcome = self
+			.host
+			.dispatch(
+				node,
+				&NativeEvent::Change {
+					value: text.to_owned(),
+				},
+			)
+			.expect("the generated guest handles a change");
+		assert_eq!(
+			outcome,
+			EventOutcome::Handled,
+			"the {placeholder:?} handler ran"
+		);
+	}
+
+	fn saw(&self, method: HttpMethod, path: &str) -> bool {
+		self.seen
+			.iter()
+			.any(|seen| seen == &format!("{} {path}", method.as_str()))
+	}
+}
+
+/// The path of an absolute HTTP URL, with its query.
+fn url_path(url: &str) -> &str {
+	let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+	rest.find('/').map_or("/", |index| &rest[index..])
+}
+
+/// The bridge error for an HTTP plugin failure, matching the host's mapping.
+fn http_error(error: leptoskit_plugin_http::Error) -> BridgeError {
+	match error {
+		leptoskit_plugin_http::Error::Invalid(_) => BridgeError::InvalidArgument,
+		leptoskit_plugin_http::Error::DestinationDenied => BridgeError::PermissionDenied,
+		leptoskit_plugin_http::Error::TooLarge => BridgeError::TooLarge,
+		leptoskit_plugin_http::Error::Backpressure => BridgeError::Busy,
+		leptoskit_plugin_http::Error::Unavailable => BridgeError::Unavailable,
+		leptoskit_plugin_http::Error::Timeout | leptoskit_plugin_http::Error::Transport(_) => {
+			BridgeError::Native
+		}
+	}
+}
+
+/// Points the generated app's `SERVER` at `origin` before it compiles, and
+/// grants the HTTP plugin exactly that origin in `leptoskit.toml`.
+fn point_native_at(root: &Path, origin: &str) {
+	let library = root.join("notes_app/src/lib.rs");
+	let source = fs::read_to_string(&library).expect("the generated app library");
+	let constant = "pub const SERVER: &str = \"http://localhost:3000\";";
 	assert!(
-		texts.iter().any(|text| text.contains("Checking")),
-		"the sign-in screen: {texts:?}"
+		source.contains(constant),
+		"the generated SERVER constant moved: {source}"
 	);
+	fs::write(
+		&library,
+		source.replace(constant, &format!("pub const SERVER: &str = \"{origin}\";")),
+	)
+	.expect("point the generated app at the fixture");
+
+	let path = root.join("leptoskit.toml");
+	let text = fs::read_to_string(&path).expect("the generated config");
+	let mut document: toml_edit::DocumentMut = text.parse().expect("the config is TOML");
+	let native = document["native"]
+		.as_table_mut()
+		.expect("the config has [native]");
+	let options = native["plugin-options"]
+		.as_table_mut()
+		.expect("the config has [native.plugin-options]");
+	let http = options["http"]
+		.as_table_mut()
+		.expect("the config grants the HTTP plugin");
+	http["origins"] = toml_edit::value(toml_edit::Array::from_iter([origin]));
+	fs::write(&path, document.to_string()).expect("write the generated config");
+}
+
+/// Removes the scaffold's SQLite database and its journal, with the server
+/// stopped, so the next one starts empty.
+fn remove_database(root: &Path) {
+	for entry in fs::read_dir(root).expect("the generated project") {
+		let entry = entry.expect("a project entry");
+
+		if entry
+			.file_name()
+			.to_string_lossy()
+			.starts_with("notes.sqlite3")
+		{
+			fs::remove_file(entry.path()).expect("remove the generated database");
+		}
+	}
+}
+
+/// The origins the generated config grants the HTTP plugin, after
+/// [`point_native_at`] made it exactly the fixture.
+fn native_origins(root: &Path) -> Vec<String> {
+	let text = fs::read_to_string(root.join("leptoskit.toml")).expect("the generated config");
+	let config: toml::Value = toml::from_str(&text).expect("the config is TOML");
+	config["native"]["plugin-options"]["http"]["origins"]
+		.as_array()
+		.expect("the HTTP plugin lists its origins")
+		.iter()
+		.map(|origin| origin.as_str().expect("an origin string").to_owned())
+		.collect()
+}
+
+/// The newest sign-in code in the development mailbox.
+fn latest_code(address: &str) -> String {
+	let (status, body) = request(address, "GET", "/_leptoskit/mail", "");
+	assert_eq!(status, 200, "{body}");
+	let marker = "sign-in code: ";
+	let start = body
+		.find(marker)
+		.unwrap_or_else(|| panic!("no sign-in code in the mailbox: {body}"))
+		+ marker.len();
+	body[start..]
+		.chars()
+		.take_while(|character| character.is_ascii_alphanumeric() || *character == '-')
+		.collect()
+}
+
+/// Signs in through the generated screen, the real server, and the
+/// development mailbox.
+fn sign_in(app: &mut NativeApp, address: &str, email: &str) {
+	app.type_into("you@example.com", email);
+	app.press("Email me a code");
+	app.settle();
+	app.assert_text(&format!("Check {email} for a code."));
+
+	let code = latest_code(address);
+	app.type_into("ABCD-EFGH", &code);
+	app.press("Sign in");
+	app.settle();
+	app.assert_no_text("Checking whether you're signed in…");
+}
+
+/// A rate-limited address on a guest with no timer: the screen must keep the
+/// server's message and leave a manual retry usable, not count down time it
+/// cannot measure.
+fn exercise_rate_limit(app: &mut NativeApp, address: &str) {
+	let email = "rate-limit@example.com";
+	app.type_into("you@example.com", email);
+	app.press("Email me a code");
+	app.settle();
+	app.assert_text(&format!("Check {email} for a code."));
+
+	// The address may ask for five codes; the sixth is refused.
+	for _ in 0..4 {
+		app.press("Send a new code");
+		app.settle();
+	}
+	app.press("Send a new code");
+	app.settle();
+	app.assert_text("Too many attempts");
+	app.assert_text("try again in");
+	assert!(
+		app.enabled("Send a new code"),
+		"a host without a timer must leave the manual retry usable"
+	);
+	app.assert_no_text("Try again in");
+
+	// Pressing it reaches the server again; the server, not the screen, is
+	// still the authority on when the window opens.
+	app.press("Send a new code");
+	app.settle();
+	app.assert_text("Too many attempts");
+	assert!(app.enabled("Send a new code"));
+
+	app.press("Use a different address");
+	app.settle();
+	app.assert_text("Email me a code");
+}
+
+/// The database scaffold's actual journey: the real optimized guest loads
+/// notes over the generated HTTP plugin, and the generated screen shows the
+/// loading, empty, failed, pending, saved, and refreshed states.
+fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
+	let wasm = fs::read(wasm).expect("the optimized native guest");
+	assert_native_guest_module(&wasm);
+	let mut app = NativeApp::new(&wasm, origins, false);
+	app.start();
+	app.assert_text("Loading notes…");
+
+	// The first load fails, and the manual Refresh recovers to the empty list.
+	app.settle_with(|request| {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/notes" {
+			Fate::Fail(BridgeError::Native)
+		} else {
+			Fate::Run
+		}
+	});
+	app.assert_text("The notes couldn't be loaded");
+	app.press("Refresh");
+	app.settle();
+	app.assert_text("No notes yet. The first one goes here.");
+	app.assert_text("0 notes");
+
+	// Validation happens before anything is sent.
+	let before = app.seen.len();
+	app.press("Add note");
+	app.assert_text("Write a note before adding it.");
+	assert_eq!(app.seen.len(), before, "an empty note reached the server");
+	app.type_into("Write a note", &"x".repeat(501));
+	app.press("Add note");
+	app.assert_text("Keep the note to 500 characters.");
+	assert_eq!(
+		app.seen.len(),
+		before,
+		"an overlong note reached the server"
+	);
+
+	// Clear the overlong draft the validation left behind.
+	app.type_into("Write a note", "");
+
+	// A save stays pending until its answer arrives, then clears the draft.
+	app.type_into("Write a note", "first note");
+	app.press("Add note");
+	app.settle_with(|request| {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+			Fate::Hold
+		} else {
+			Fate::Run
+		}
+	});
+	app.assert_text("Saving…");
+	assert_eq!(app.held.len(), 1);
+	app.release(0).expect("the pending save is still live");
+	app.settle();
+	app.assert_text("Saved.");
+	app.assert_text("1 note");
+	app.assert_text("first note");
+	assert_eq!(
+		app.value("Write a note").as_deref(),
+		Some(""),
+		"a saved note clears the draft"
+	);
+
+	// Refresh shows a note another client added.
+	let (status, body) = request(
+		address,
+		"POST",
+		"/api/add_note",
+		r#"{"body":"second note"}"#,
+	);
+	assert_eq!(status, 200, "{body}");
+	app.press("Refresh");
+	app.settle();
+	app.assert_text("2 notes");
+	app.assert_text("second note");
+
+	// A failed save is reported and leaves the draft in place.
+	app.type_into("Write a note", "will fail");
+	app.press("Add note");
+	app.settle_with(|request| {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+			Fate::Fail(BridgeError::Native)
+		} else {
+			Fate::Run
+		}
+	});
+	app.assert_text("The note couldn't be saved");
+	assert_eq!(app.value("Write a note").as_deref(), Some("will fail"));
+	assert!(app.saw(HttpMethod::Post, "/api/add_note"));
+}
+
+/// The auth scaffold's actual journey: session resolution, an emailed code
+/// from the development mailbox, notes over HTTP, sign-out, a second account
+/// with no previous rows, and late replies after their screen was disposed.
+fn native_auth_journey(wasm: &Path, address: &str, origins: &[String]) {
+	let wasm = fs::read(wasm).expect("the optimized native guest");
+	assert_native_guest_module(&wasm);
+	let mut app = NativeApp::new(&wasm, origins, true);
+	app.start();
+	app.assert_text("Checking whether you're signed in…");
+	app.settle();
+	app.assert_text("Email me a code");
+
+	exercise_rate_limit(&mut app, address);
+
+	sign_in(&mut app, address, "ada@example.com");
+	app.assert_text("No notes yet. The first one goes here.");
+	app.assert_text("0 notes");
+	app.type_into("Write a note", "ada native note");
+	app.press("Add note");
+	app.settle();
+	app.assert_text("1 note");
+	app.assert_text("ada native note");
+
+	// Signing out drops the screen and its rows.
+	app.press("Sign out");
+	app.settle();
+	app.assert_text("Email me a code");
+	app.assert_no_text("ada native note");
+
+	// Another account starts empty, not with the previous account's rows.
+	sign_in(&mut app, address, "bob@example.com");
+	app.assert_text("No notes yet. The first one goes here.");
+	app.assert_no_text("ada native note");
+	app.type_into("Write a note", "bob native note");
+	app.press("Add note");
+	app.settle();
+	app.assert_text("bob native note");
+	app.assert_no_text("ada native note");
+
+	// Hold a list refresh, sign out, then deliver the old answer. It must
+	// neither trap nor bring Bob's rows back on the sign-in screen.
+	app.press("Refresh");
+	app.settle_with(|request| {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/notes" {
+			Fate::Hold
+		} else {
+			Fate::Run
+		}
+	});
+	assert_eq!(app.held.len(), 1);
+	app.press("Sign out");
+	app.settle();
+	let late = app.release(0);
+	assert!(
+		matches!(late, Ok(()) | Err(BridgeError::InvalidCall)),
+		"a late list reply: {late:?}"
+	);
+	app.settle();
+	app.assert_text("Email me a code");
+	app.assert_no_text("bob native note");
+
+	// Back as Ada: only Ada's rows, never Bob's.
+	sign_in(&mut app, address, "ada@example.com");
+	app.assert_text("ada native note");
+	app.assert_no_text("bob native note");
+
+	// A save that completes after its screen is gone must not trap or
+	// restore the old account's rows.
+	app.type_into("Write a note", "late ada note");
+	app.press("Add note");
+	app.settle_with(|request| {
+		if request.method == HttpMethod::Post && url_path(&request.url) == "/api/add_note" {
+			Fate::Hold
+		} else {
+			Fate::Run
+		}
+	});
+	app.assert_text("Saving…");
+	assert_eq!(app.held.len(), 1);
+	app.press("Sign out");
+	app.settle();
+	let late = app.release(0);
+	assert!(
+		matches!(late, Ok(()) | Err(BridgeError::InvalidCall)),
+		"a late save reply: {late:?}"
+	);
+	app.settle();
+	app.assert_text("Email me a code");
+	app.assert_no_text("late ada note");
+
+	// Bob again: no Ada rows, and the app still handles events after the late
+	// completions.
+	sign_in(&mut app, address, "bob@example.com");
+	app.assert_text("bob native note");
+	app.assert_no_text("ada native note");
+	app.assert_no_text("late ada note");
+	app.type_into("Write a note", "bob again");
+	app.press("Add note");
+	app.settle();
+	app.assert_text("bob again");
 }
 
 #[test]

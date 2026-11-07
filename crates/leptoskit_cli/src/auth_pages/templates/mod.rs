@@ -253,8 +253,14 @@ impl Screens {
 		let screens = *self;
 		let session = use_auth();
 
-		// Effects never run while the server renders.
-		Effect::new(move |seen_signed_out: Option<bool>| {
+		// Effects never run while the server renders. A native guest builds
+		// without the `effects` feature, so this uses `new_isomorphic` and
+		// skips the server itself.
+		Effect::new_isomorphic(move |seen_signed_out: Option<bool>| {
+			if leptoskit::query::is_server() {
+				return seen_signed_out.unwrap_or(false);
+			}
+
 			match session.data() {
 				Some(None) => true,
 				Some(Some(_)) if seen_signed_out == Some(true) => {
