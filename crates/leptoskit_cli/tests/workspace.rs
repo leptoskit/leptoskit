@@ -145,6 +145,26 @@ registry_username = "team"
 			"domain = \"accounts.example.com\"",
 			"infra.domain",
 		),
+		(
+			"domain = \"web.example.com\"",
+			"domain = \"ACCOUNTS.EXAMPLE.COM\"",
+			"infra.domain",
+		),
+		(
+			"domain = \"web.example.com\"",
+			"domain = \"UPDATES-ACCOUNTS.EXAMPLE.COM\"",
+			"infra.domain",
+		),
+		(
+			"updates_domain = \"updates-web.example.com\"",
+			"updates_domain = \"ACCOUNTS.EXAMPLE.COM\"",
+			"infra.updates_domain",
+		),
+		(
+			"updates_domain = \"updates-web.example.com\"",
+			"updates_domain = \"UPDATES-ACCOUNTS.EXAMPLE.COM\"",
+			"infra.updates_domain",
+		),
 	] {
 		std::fs::write(
 			directory.path().join("apps/web/leptoskit.toml"),
@@ -158,6 +178,16 @@ registry_username = "team"
 			"{error:#}"
 		);
 	}
+}
+
+#[test]
+fn oversized_manifests_fail_before_application_loading() {
+	let directory = project();
+	let manifest = directory.path().join("leptoskit.workspace.toml");
+	std::fs::write(&manifest, " ".repeat(1024 * 1024 + 1)).unwrap();
+	std::fs::remove_dir_all(directory.path().join("apps")).unwrap();
+	let error = leptoskit_cli::workspace::inspect(&manifest).unwrap_err();
+	assert!(error.to_string().contains("exceeds 1 MiB"), "{error:#}");
 }
 
 #[cfg(unix)]

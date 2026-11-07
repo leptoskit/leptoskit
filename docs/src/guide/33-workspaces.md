@@ -29,7 +29,7 @@ lk workspace explain
 lk workspace check --json
 ```
 
-The command finds the nearest workspace file in the current directory or its parents, so it also works from inside either app. Use `--manifest path/to/leptoskit.workspace.toml` to name a file explicitly. `check` exits with an error for invalid app configuration, unknown dependencies, startup cycles, repeated app configuration paths, or conflicting managed infrastructure names, domains, and image repositories.
+The command finds the nearest workspace file in the current directory or its parents, so it also works from inside either app. Use `--manifest path/to/leptoskit.workspace.toml` to name a file explicitly. `check` exits with an error for invalid app configuration, unknown dependencies, startup cycles, repeated app configuration paths, or conflicting managed infrastructure names, domains, and image repositories. Application and update hostnames must be distinct across apps, including differences only in letter case.
 
 ## Readiness and calls are different
 

@@ -1,0 +1,90 @@
+{
+	"$id": "https://leptoskit.dev/schemas/leptoskit.workspace.v1.schema.json",
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "leptoskit.workspace.toml",
+	"description": "Applications with separate configuration, artifacts, and release state.",
+	"type": "object",
+	"properties": {
+		"applications": {
+			"description": "Stable deployment identities, independent of Cargo package names.",
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Application"
+			},
+			"maxProperties": 256,
+			"minProperties": 1,
+			"propertyNames": {
+				"pattern": "^[a-z][a-z0-9-]{0,62}$"
+			}
+		},
+		"format_version": {
+			"description": "Must be [`WORKSPACE_VERSION`]. Omission never silently selects a format.",
+			"type": "integer",
+			"format": "uint32",
+			"const": 1,
+			"minimum": 0
+		}
+	},
+	"additionalProperties": false,
+	"required": [
+		"format_version",
+		"applications"
+	],
+	"$defs": {
+		"Application": {
+			"description": "One app directory containing its own `leptoskit.toml`.",
+			"type": "object",
+			"properties": {
+				"bindings": {
+					"description": "Calls this app can make. These do not imply startup ordering or trust.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Binding"
+					}
+				},
+				"depends-on": {
+					"description": "Applications that must become ready before this application starts.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"uniqueItems": true
+				},
+				"path": {
+					"description": "Directory relative to the workspace manifest. Paths cannot escape it.",
+					"type": "string"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"path"
+			]
+		},
+		"Binding": {
+			"description": "A private endpoint and credential reference owned by one caller.",
+			"type": "object",
+			"properties": {
+				"application": {
+					"description": "The application providing the endpoint.",
+					"type": "string"
+				},
+				"token-env": {
+					"description": "Caller environment variable that will hold the credential for this\nbinding. This names a variable; it never contains a credential.",
+					"type": "string",
+					"pattern": "^[A-Z_][A-Z0-9_]*$"
+				},
+				"url-env": {
+					"description": "Caller environment variable that will hold the private base URL.",
+					"type": "string",
+					"pattern": "^[A-Z_][A-Z0-9_]*$"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"application",
+				"url-env",
+				"token-env"
+			]
+		}
+	}
+}

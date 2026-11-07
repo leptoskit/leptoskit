@@ -210,18 +210,29 @@ fn check_identities(
 	let Some(infra) = &config.infra else {
 		return Ok(());
 	};
-	for (kind, value) in [
-		("infra.name", &infra.name),
-		("infra.image", &infra.image),
-		("infra.domain", &infra.domain),
+	for (namespace, field, value) in [
+		("infra.name", "infra.name", infra.name.clone()),
+		("infra.image", "infra.image", infra.image.clone()),
+		(
+			"hostname",
+			"infra.domain",
+			infra.domain.to_ascii_lowercase(),
+		),
+		(
+			"hostname",
+			"infra.updates_domain",
+			infra.updates_domain.to_ascii_lowercase(),
+		),
 	] {
 		if value.is_empty() {
 			continue;
 		}
-		if let Some(previous) = seen.insert((kind, value.clone()), name.to_owned()) {
+		if let Some(previous) =
+			seen.insert((namespace, value), format!("applications.{name}.{field}"))
+		{
 			anyhow::bail!(
-				"applications.{name}: {kind} is also owned by applications.{previous}; \
-				 independent releases need distinct managed identities"
+				"applications.{name}.{field} is also owned by {previous}; independent releases \
+				 need distinct managed identities"
 			);
 		}
 	}
