@@ -585,7 +585,7 @@ async fn consolidated_rollback_is_refused(db: &Db) {
 		);
 	}
 	// Refusal must leave the connection and migration lock usable.
-	assert!(db.migrate(&registry).await.unwrap().is_empty());
+	assert_eq!(db.migrate(&registry).await.unwrap(), Vec::<String>::new());
 }
 
 #[tokio::test(flavor = "multi_thread")]

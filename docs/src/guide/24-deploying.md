@@ -148,7 +148,7 @@ On failed deployment, LeptosKit attempts the previous recorded image only if the
 
 ### Back up, verify, and restore
 
-The primary runs a systemd timer for encrypted Restic backups. Each backup captures a consistent Postgres archive and release history, uploads them, restores the archive into an isolated temporary Postgres container, and compares migration history. Retention runs only after that restore check succeeds. Defaults retain seven daily, four weekly, and three monthly snapshots. Backups older than 36 hours or failed verification/retention make status unhealthy.
+The primary runs a systemd timer for encrypted Restic backups. Each backup captures a consistent Postgres archive and release history, uploads them, restores the archive into an isolated temporary Postgres container, and compares migration history. Retention runs only after that restore check succeeds. Defaults retain seven daily, four weekly, and three monthly snapshots. Backups older than 36 hours, verification timestamps in the future, or failed verification/retention make status unhealthy. After upgrading, run `lk infra backups install` to replace existing backup units. Installation validates both units with the host’s systemd before initializing the repository or enabling the timer.
 
 ```sh
 lk infra backups install  # update credentials, schedule, or retention
