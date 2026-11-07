@@ -84,9 +84,20 @@ pub(super) fn current(args: &ReleaseArgs, current: Current<'_>) -> Result<bool> 
 		project.has_probes,
 		"release reuse requires declared readiness probes"
 	);
+	ensure!(
+		super::super::service_schemas(&project.services)? == release.services,
+		"current release's service schemas differ from the local migrations; deploy a new version"
+	);
 	let window = descriptor.migration_window()?;
 	let environment = environment(config, &project, hosts, private, version, window.as_ref())?;
-	let image = super::verify_release(hosts, c, version, local_hash, Some(release))?;
+	let image = super::verify_release(
+		hosts,
+		c,
+		version,
+		local_hash,
+		&release.services,
+		Some(release),
+	)?;
 	for host in hosts {
 		descriptor.check_remote(host, &image, local_hash)?;
 		ready(host, &c.name, version, project.port, &environment)?;
@@ -192,6 +203,7 @@ mod tests {
 			schema: Vec::new(),
 			image_digest: Some("image".into()),
 			completed_at: Some("completed".into()),
+			services: BTreeMap::new(),
 		}
 	}
 

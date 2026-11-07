@@ -997,6 +997,7 @@ fn a_rollback_checks_every_service_before_the_apps_down_migrations() {
 	);
 	let schemas = service_schemas(&project.services).unwrap();
 	let target = Release {
+		configuration_sha256: None,
 		authorization: None,
 		evidence: None,
 		version: "v1".into(),

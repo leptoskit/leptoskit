@@ -923,6 +923,23 @@ fn check_configuration(config: &LeptoskitConfig, pin: Option<&String>) -> Result
 	Ok(())
 }
 
+/// Stops the app and its services, and backs up what a release is about to
+/// change.
+fn stop_for_maintenance(
+	hosts: &[String],
+	c: &InfraConfig,
+	project: &crate::deploy::Project,
+	history: &[Release],
+	owner: &str,
+) -> Result<()> {
+	stop(hosts, c)?;
+	stop_services(&hosts[0], c, project)?;
+	if !history.is_empty() && c.backups.enabled {
+		super::recovery::invoke(&hosts[0], c, "backup", "latest", false, Some(owner))?;
+	}
+	Ok(())
+}
+
 pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	check_configuration(&config, args.configuration_sha256.as_ref())?;
@@ -1033,11 +1050,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		check_drift(ip, c, args, previous, (&local_hash, &local_services))?;
 	}
 	if args.maintenance || args.rollback_schema {
-		stop(&hosts, c)?;
-		stop_services(ip, c, &project)?;
-		if !history.is_empty() && c.backups.enabled {
-			super::recovery::invoke(ip, c, "backup", "latest", false, Some(&reservation.owner))?;
-		}
+		stop_for_maintenance(&hosts, c, &project, &history, &reservation.owner)?;
 	}
 	if let Some(target) = &target {
 		if args.rollback_schema {
