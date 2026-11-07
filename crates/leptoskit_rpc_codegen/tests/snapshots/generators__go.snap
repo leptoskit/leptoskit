@@ -1240,9 +1240,7 @@ func (l *LiveConnection) receive(session *liveSession, data []byte) {
 	switch frame.Type {
 	case "welcome":
 		l.attempt = 0
-		if frame.Version != nil {
-			l.version = *frame.Version
-		}
+		// Only transitions advance the applied cursor.
 		seconds := frame.HeartbeatSeconds
 		if seconds == 0 {
 			seconds = 30

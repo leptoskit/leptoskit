@@ -556,7 +556,7 @@ class LiveConnection {
     switch (frame['type']) {
       case 'welcome':
         _attempt = 0;
-        _version = _int(frame['version'], _version);
+        // Only transitions advance the applied cursor.
         _startHeartbeat(_int(frame['heartbeat_seconds'], 30));
         _setStatus(LiveStatus._(
           LiveState.live,

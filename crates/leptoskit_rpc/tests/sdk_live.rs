@@ -13,7 +13,9 @@
 //! 3. Ada adds a note marked `drop-me`. The proxy lets it reach the server,
 //!    holds back the answer, and cuts the connection. Ada's client reconnects,
 //!    subscribes again, and sends the mutation again with the same request ID
-//!    and key; the receipt makes it run once.
+//!    and key; the receipt makes it run once. On the first reconnect, the proxy
+//!    forwards the welcome but cuts before recovery. The next hello must retain
+//!    the earlier applied cursor.
 //! 4. Bob adds another note, and Ada's resumed subscription receives it.
 //! 5. Both join the `sdk_room` channel, see each other's presence, and Bob's
 //!    signal reaches Ada.
@@ -32,6 +34,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -192,7 +195,70 @@ struct Harness {
 	url: String,
 	/// How many connections the proxy has cut.
 	cuts: Arc<AtomicUsize>,
+	recovery: Arc<RecoveryProbe>,
 	tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// Records the resume cursor on either side of a lost recovery. An unset
+/// observation cannot accidentally pass as version zero.
+struct RecoveryProbe {
+	before: AtomicU64,
+	after: AtomicU64,
+	welcome: AtomicU64,
+}
+
+impl RecoveryProbe {
+	fn new() -> Self {
+		Self {
+			before: AtomicU64::new(u64::MAX),
+			after: AtomicU64::new(u64::MAX),
+			welcome: AtomicU64::new(u64::MAX),
+		}
+	}
+
+	fn hello(&self, stage: usize, message: &Message) {
+		let Message::Text(text) = message else { return };
+		let Ok(rpc::live::ClientFrame::Hello {
+			resume: Some(resume),
+		}) = serde_json::from_str(text)
+		else {
+			return;
+		};
+		match stage {
+			1 => self.before.store(resume.version, Ordering::SeqCst),
+			2 => self.after.store(resume.version, Ordering::SeqCst),
+			_ => {}
+		}
+	}
+
+	fn cut_before_recovery(&self, stage: usize, message: &Message) -> bool {
+		if stage != 1 {
+			return false;
+		}
+		let Message::Text(text) = message else {
+			return false;
+		};
+		match serde_json::from_str::<rpc::live::ServerFrame>(text) {
+			Ok(rpc::live::ServerFrame::Welcome { version, .. }) => {
+				self.welcome.store(version, Ordering::SeqCst);
+				false
+			}
+			Ok(rpc::live::ServerFrame::Transition(_)) => true,
+			_ => false,
+		}
+	}
+
+	fn assert_preserved(&self) {
+		let before = self.before.load(Ordering::SeqCst);
+		let welcome = self.welcome.load(Ordering::SeqCst);
+		assert_ne!(welcome, u64::MAX, "the reconnect welcome was forwarded");
+		assert!(before < welcome, "the lost recovery had unapplied changes");
+		assert_eq!(
+			self.after.load(Ordering::SeqCst),
+			before,
+			"a welcome must not advance the next resume cursor"
+		);
+	}
 }
 
 impl Drop for Harness {
@@ -216,6 +282,8 @@ async fn start() -> Harness {
 	let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let proxy_address = proxy.local_addr().unwrap();
 	let cuts = Arc::new(AtomicUsize::new(0));
+	let recovery = Arc::new(RecoveryProbe::new());
+	let proxy_recovery = Arc::clone(&recovery);
 	let armed = Arc::new(AtomicBool::new(true));
 	let proxy_cuts = Arc::clone(&cuts);
 	let proxy = tokio::spawn(async move {
@@ -225,8 +293,9 @@ async fn start() -> Harness {
 			};
 			let armed = Arc::clone(&armed);
 			let cuts = Arc::clone(&proxy_cuts);
+			let recovery = Arc::clone(&proxy_recovery);
 			tokio::spawn(async move {
-				relay(stream, server_address, armed, cuts).await;
+				relay(stream, server_address, armed, cuts, recovery).await;
 			});
 		}
 	});
@@ -235,6 +304,7 @@ async fn start() -> Harness {
 		db,
 		url: format!("http://{proxy_address}"),
 		cuts,
+		recovery,
 		tasks: vec![server, proxy],
 	}
 }
@@ -247,7 +317,9 @@ async fn relay(
 	server: std::net::SocketAddr,
 	armed: Arc<AtomicBool>,
 	cuts: Arc<AtomicUsize>,
+	recovery: Arc<RecoveryProbe>,
 ) {
+	let recovery_stage = cuts.load(Ordering::SeqCst);
 	let mut authorization = None;
 	#[expect(
 		clippy::result_large_err,
@@ -299,9 +371,11 @@ async fn relay(
 	let (mut server_sink, mut server_stream) = upstream.split();
 	let cutting = Arc::new(AtomicBool::new(false));
 	let upstream_cutting = Arc::clone(&cutting);
+	let upstream_recovery = Arc::clone(&recovery);
 
 	let up = async move {
 		while let Some(Ok(message)) = client_stream.next().await {
+			upstream_recovery.hello(recovery_stage, &message);
 			if let Message::Text(text) = &message
 				&& text.contains("\"mutate\"")
 				&& text.contains("drop-me")
@@ -317,6 +391,10 @@ async fn relay(
 	};
 	let down = async move {
 		while let Some(Ok(message)) = server_stream.next().await {
+			if recovery.cut_before_recovery(recovery_stage, &message) {
+				cuts.fetch_add(1, Ordering::SeqCst);
+				return;
+			}
 			if cutting.load(Ordering::SeqCst)
 				&& let Message::Text(text) = &message
 				&& text.contains("\"done\"")
@@ -426,10 +504,12 @@ async fn run(harness: &Harness, mut command: Command, prefix: &str) {
 		);
 	}
 
-	assert!(
-		harness.cuts.load(Ordering::SeqCst) >= 1,
-		"the proxy cut a connection"
+	assert_eq!(
+		harness.cuts.load(Ordering::SeqCst),
+		2,
+		"the proxy cut the mutation answer and then the first recovery"
 	);
+	harness.recovery.assert_preserved();
 	let marked = format!("{prefix}drop-me");
 	let written = SdkNoteRow::query()
 		.all(&harness.db)
