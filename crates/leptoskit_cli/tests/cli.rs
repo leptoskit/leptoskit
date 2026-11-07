@@ -339,6 +339,24 @@ fn native_bundle_compiles_and_optimizes_the_guest() {
 		runtime.contains("\"abi\""),
 		"the descriptor names the ABI: {runtime}"
 	);
+	let runtime: leptoskit_codepush::installed::RuntimeContract =
+		serde_json::from_str(&runtime).expect("versioned guest runtime");
+	assert_eq!(
+		runtime.format_version,
+		Some(leptoskit_codepush::capability::RUNTIME_CONTRACT_VERSION)
+	);
+	assert!(runtime.requirements.is_some(), "signed requirements");
+	assert!(runtime.host.is_none(), "a guest never declares the host");
+
+	let contract: leptoskit_codepush::capability::HostCapabilityDescriptor =
+		serde_json::from_slice(
+			&std::fs::read(scratch.path.join("bundle/capabilities.json"))
+				.expect("host capability descriptor"),
+		)
+		.expect("typed host descriptor");
+	assert_eq!(contract.flavor, "android");
+	assert_eq!(contract.platform, "android");
+	assert!(contract.digest().len() == 64);
 }
 
 #[test]

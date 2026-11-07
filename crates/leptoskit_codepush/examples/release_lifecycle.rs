@@ -208,6 +208,9 @@ fn contract() -> RuntimeContract {
 		abi: 1,
 		shell: "lighthouse-shell-v1".to_owned(),
 		plugins: Vec::new(),
+		format_version: None,
+		requirements: None,
+		host: None,
 	}
 }
 

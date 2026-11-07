@@ -1,3 +1,6 @@
+mod capability_tests {
+	include!("capability_tests.rs");
+}
 mod service_tests {
 	include!("service_tests.rs");
 }

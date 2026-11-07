@@ -14,16 +14,22 @@ use async_plugins::bridge_feature;
 use async_plugins::configure_plugin;
 use async_plugins::host_features;
 use async_plugins::validate_async;
-mod implementation;
+mod capability;
+pub(crate) use capability::descriptor;
 #[cfg(test)]
+pub(crate) use capability::documentation_table;
+pub(crate) use capability::enforce_required;
+pub(crate) use capability::optional_warnings;
+pub(crate) use capability::requirements;
+mod implementation;
 pub use implementation::Capability;
 pub use implementation::Constructor;
 pub use implementation::Flavour;
 pub use implementation::HostCapabilities;
 pub use implementation::Implementation;
-#[cfg(test)]
 pub use implementation::Missing;
 pub use implementation::MissingPlugin;
+pub use implementation::NativeKind;
 pub use implementation::PlatformRegistration;
 pub use implementation::RustRegistration;
 use implementation::select_for_target;
@@ -305,13 +311,20 @@ fn without_plugins(
 	config: &leptoskit_config::LeptoskitConfig,
 	target: Target,
 ) -> Option<(leptoskit_config::LeptoskitConfig, String)> {
-	if !matches!(target, Target::Windows | Target::Tui) || config.native.plugins.is_empty() {
+	if !matches!(target, Target::Windows | Target::Tui)
+		|| config.native.plugins.is_empty()
+		// Required entries must fail through the ordinary resolution so their
+		// diagnostic names the plugin and the missing host capability.
+		|| !config.native.required_plugins.is_empty()
+		|| !config.native.required_capabilities.is_empty()
+	{
 		return None;
 	}
 
 	let skipped = config.native.plugins.join(", ");
 	let mut config = config.clone();
 	config.native.plugins.clear();
+	config.native.optional_plugins.clear();
 	config.native.plugin_options.clear();
 	Some((config, skipped))
 }
@@ -388,7 +401,18 @@ fn resolve_for_target(
 	let plugins = selected_plugins(available, config)?;
 
 	let (plugins, missing) = match target {
-		Some(target) => select_for_target(plugins, target, config.native.missing_plugins)?,
+		Some(target) => {
+			let (plugins, missing) = select_for_target(
+				plugins,
+				target,
+				config.native.missing_plugins,
+				&config.native.optional_plugins,
+			)?;
+			// Required capabilities fail before a host project, bundle, or
+			// package is written. Optional ones only produce diagnostics.
+			capability::enforce_required(config, target, &plugins, &missing)?;
+			(plugins, missing)
+		}
 		None => (plugins, Vec::new()),
 	};
 

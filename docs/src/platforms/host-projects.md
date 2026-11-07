@@ -92,6 +92,25 @@ A plugin can also declare that a platform doesn't have the service at all; the b
 missing-plugins = "error"
 ```
 
+A plugin the app cannot run without is different from one it can degrade without. Say which is which next to the grants:
+
+```toml
+[native]
+plugins = ["http", "haptics"]
+required-plugins = ["http"]
+optional-plugins = ["haptics"]
+```
+
+A required plugin that the destination cannot register fails the native build before it packages anything, even with the default `missing-plugins = "warn"`. An optional plugin that the destination leaves out produces a warning naming the platform and the reason, then the app builds without it, even when `missing-plugins = "error"`. Plugins in neither list keep the existing `missing-plugins` behavior, so an older configuration behaves as it did. The same split exists for capability identifiers that are not a single plugin:
+
+```toml
+[native]
+required-capabilities = ["host.plugin.rust.async", "plugin.http"]
+optional-capabilities = ["host.plugin.native.android"]
+```
+
+Capability identifiers name what the generated host can do, such as `host.plugin.rust.sync`, `host.plugin.rust.async`, `host.plugin.service`, `host.plugin.native.apple`, `host.update.codepush`, or `plugin.<name>` for a granted plugin. A required capability the host reports unsupported, experimental without its opt-in, or unknown fails before packaging; an optional one warns. A declaration never grants a plugin, permission, or native authority by itself: `native.plugins` and the generated grants remain the only source of runtime access.
+
 Registering a plugin doesn't grant operating-system permissions. Add the permission strings and entitlements the plugin's README asks for to your host, such as `NSMotionUsageDescription` in `ios/Info.plist` for the pedometer, or `android.permission.ACTIVITY_RECOGNITION` in the Android manifest. Your app still asks the user at run time.
 
 The guest's clock and timer are not runtime plugins in `native.plugins`: every generated host offers them where it can. macOS, iOS, Android, Windows, Linux, and the terminal schedule real sleeps through the reserved `leptoskit.timer` plugin, so retry backoff and cache expiry wait. Experimental HarmonyOS doesn't wire it yet, and a host built before it existed answers `Unavailable`; `leptoskit_query::has_timer` reports that honestly instead of pretending a sleep finished.
@@ -246,11 +265,11 @@ leptoskit codepush release --from dist/ios --platform ios --channel production -
 leptoskit codepush publish --platform ios --endpoint https://s3.us-west-004.backblazeb2.com --bucket my-app-updates
 ```
 
-`native bundle` writes `app.wasm` and `runtime.json`, which names the host interface, the update contract, and the plugins the release needs. Each platform builds its own bundle, because each turns on its own platform feature and per-platform files. The contract gets the platform appended, such as `mobile-v1/ios`, so an iOS host refuses an Android release. [Code push](../guide/05-code-push.md) covers keys, hosting, and publishing.
+`native bundle` writes `app.wasm`, `runtime.json`, and `capabilities.json`. `runtime.json` is signed inside the release: it names the host interface, the update contract, the plugins the release needs, and its required and optional capabilities. `capabilities.json` is the resolved host descriptor for the destination, with the capability states and a stable SHA-256 digest; it is build output for diagnostics and documentation, never a guest claim. Each platform builds its own bundle, because each turns on its own platform feature and per-platform files. The contract gets the platform appended, such as `mobile-v1/ios`, so an iOS host refuses an Android release. [Code push](../guide/05-code-push.md) covers keys, hosting, and publishing.
 
 The store build carries a first copy of your app, `app.lkb`, with the trusted keys and server in `codepush.json`. When code push is on, the host shows an update bar above your app:
 
-1. **Check for update** downloads the newest release in the background. The host checks its signature, app, channel, and version, and checks that `runtime.json` matches its own interface and plugins. Nothing runs yet.
+1. **Check for update** downloads the newest release in the background. The host checks its signature, app, channel, and version, and checks that the signed `runtime.json` matches its own interface, plugins, and required capability contract. A versioned release whose requirements the installed host does not satisfy is rejected before it is stored; a release from before capability contracts passes the legacy checks and is reported as legacy, not as verified-compatible. Nothing runs yet.
 2. **Activate update** starts the new release next to the current one. It is a trial until it has drawn its first screen and survived a moment on the UI thread; then the host switches to it.
 3. If the trial crashes, the host keeps the current release and refuses that release from then on. If the app is killed during a trial, or the trial never draws, the next launch goes back to the last good release.
 4. Every launch verifies the release's signature again, and works offline. If the downloaded release can't be read any more, the host runs the copy it shipped with, but still refuses any release at or below the newest one it confirmed. A new store build replaces every earlier download.
@@ -259,7 +278,7 @@ With [`codepush.provenance`](../guide/05-code-push.md#requiring-source-approvals
 
 Release builds only reach `https://` servers; debug builds can use a local `http://` server with `codepush.allow_http = true`. Downloads follow no redirects, are capped at 32 MiB, and time out after 15 seconds to connect, 30 seconds to respond, and 10 minutes in total. If the update store fails, the host runs the copy it shipped with and says updates are unavailable.
 
-Code push protects startup only: a release that draws its first screen and fails later is not rolled back automatically. Updates are checked only when the user taps the button, and `codepush.mandatory` isn't read yet. A release that needs a new plugin, permission, or host interface needs a store release with a new `update_contract`. Store review rules still apply to what a download changes.
+Code push protects startup only: a release that draws its first screen and fails later is not rolled back automatically. Updates are checked only when the user taps the button, and `codepush.mandatory` isn't read yet. A release that needs a new plugin, permission, or host interface needs a store release with a new `update_contract`. The new store build rewrites its host descriptor; the next release's signed requirements are checked against it. Store review rules still apply to what a download changes.
 
 ## HarmonyOS
 

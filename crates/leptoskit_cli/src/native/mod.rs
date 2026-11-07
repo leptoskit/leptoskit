@@ -8,6 +8,8 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Subcommand;
 use clap::ValueEnum;
+use leptoskit_codepush::capability::HostCapabilityDescriptor;
+use leptoskit_codepush::capability::RUNTIME_CONTRACT_VERSION;
 use leptoskit_config::LeptoskitConfig;
 use leptoskit_config::Optimize;
 use leptoskit_config::Platform;
@@ -115,6 +117,32 @@ impl Target {
 			// The terminal runner compiles for whichever machine runs it.
 			Self::Tui => host_triple(),
 		}
+	}
+
+	/// The stable destination flavour a capability contract names.
+	pub(crate) fn flavor(self) -> &'static str {
+		match self {
+			Self::Macos => "macos",
+			Self::IosSimulator => "ios-simulator",
+			Self::Ios => "ios",
+			Self::Android => "android",
+			Self::AndroidX86_64 => "android-x86_64",
+			Self::Harmonyos => "harmonyos",
+			Self::HarmonyosX86_64 => "harmonyos-x86_64",
+			Self::Wearos => "wearos",
+			Self::Watchos => "watchos",
+			Self::Windows => "windows",
+			Self::Linux => "linux",
+			Self::Tui => "tui",
+		}
+	}
+
+	/// Whether the destination itself is experimental.
+	pub(crate) fn experimental(self) -> bool {
+		matches!(
+			self,
+			Self::Harmonyos | Self::HarmonyosX86_64 | Self::Wearos | Self::Watchos
+		)
 	}
 
 	pub(crate) fn platform(self) -> Platform {
@@ -244,17 +272,20 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	project::generate(&root, &config, &registry, target, release)?;
 	let generated = generated_dir(&root, target);
 	let bundle_dir = generated.join("bundle");
-	bundle(
+	let contract = bundle(
 		&root,
 		&config,
+		&registry.plugins,
+		&registry.missing,
 		target,
 		release,
 		Some(&build_dir),
 		&bundle_dir,
 	)?;
+	write_capabilities(&generated.join("capabilities.json"), &contract)?;
 
 	if matches!(target, Target::Linux | Target::Windows | Target::Tui) {
-		write_assets(&root, &config, target, &bundle_dir, release)?;
+		write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
 		rust_desktop::build(&root, &config, target, release, &registry.host_features)?;
 
 		return Ok(());
@@ -278,7 +309,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 			.join("libleptoskit_app.a"),
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
-	write_assets(&root, &config, target, &bundle_dir, release)?;
+	write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
 
 	if build {
 		build_application(&root, &config, target, release)?;
@@ -305,7 +336,35 @@ fn run_bundle(out: &str, target: Option<Target>) -> Result<()> {
 		)
 		.context("native bundle requires --target when app.default_platform is web or server")?;
 	ensure_target_enabled(&config, target)?;
-	bundle(&root, &config, target, true, None, &root.join(out))
+	// A guest with no runtime plugins needs no dependency resolution; the
+	// host descriptor still covers the destination's built-in capabilities.
+	let (plugins, missing) = if config.native.plugins.is_empty() {
+		registry::enforce_required(&config, target, &[], &[])?;
+		(Vec::new(), Vec::new())
+	} else {
+		let registry = registry::resolve(&root, &config, target)?;
+		(registry.plugins, registry.missing)
+	};
+	let output = root.join(out);
+	let contract = bundle(
+		&root, &config, &plugins, &missing, target, true, None, &output,
+	)?;
+	write_capabilities(&output.join("capabilities.json"), &contract)?;
+	Ok(())
+}
+
+/// Saves the resolved host contract next to the guest, never inside the signed
+/// guest bundle: the host descriptor is local build evidence, not a guest
+/// claim.
+fn write_capabilities(path: &Path, contract: &HostCapabilityDescriptor) -> Result<()> {
+	contract.validate()?;
+
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+
+	std::fs::write(path, serde_json::to_vec_pretty(contract)?)?;
+	Ok(())
 }
 
 /// Rejects a destination this machine or configuration cannot build, before
@@ -656,8 +715,19 @@ pub(crate) fn rebuild_guest(
 	crate::l10n::sync(root, config)?;
 	let registry = registry::resolve(root, config, target)?;
 	let build_dir = native_build_directory(root, &registry.target, target.rust())?;
-	let bundle_dir = generated_dir(root, target).join("bundle");
-	bundle(root, config, target, false, Some(&build_dir), &bundle_dir)?;
+	let generated = generated_dir(root, target);
+	let bundle_dir = generated.join("bundle");
+	let contract = bundle(
+		root,
+		config,
+		&registry.plugins,
+		&registry.missing,
+		target,
+		false,
+		Some(&build_dir),
+		&bundle_dir,
+	)?;
+	write_capabilities(&generated.join("capabilities.json"), &contract)?;
 	built_guest(root, target)
 }
 
@@ -753,6 +823,7 @@ fn write_assets(
 	target: Target,
 	bundle_dir: &Path,
 	release: bool,
+	contract: &HostCapabilityDescriptor,
 ) -> Result<()> {
 	let generated = generated_dir(root, target);
 	if matches!(
@@ -786,7 +857,8 @@ fn write_assets(
 	let mut update_config = serde_json::json!({
 		"enabled": config.codepush.enabled, "app": config.app.name,
 		"channel": channel, "server": config.codepush.server,
-		"public_keys": config.codepush.public_keys, "runtime": runtime_descriptor(root, config, target),
+		"public_keys": config.codepush.public_keys,
+		"runtime": host_runtime_descriptor(root, config, target, contract),
 		"allow_http": config.codepush.allow_http && !release,
 	});
 	// The host's own trust policy: shipped with the store build, never with a
@@ -811,16 +883,26 @@ fn write_assets(
 fn bundle(
 	root: &Path,
 	config: &LeptoskitConfig,
+	plugins: &[registry::Plugin],
+	missing: &[registry::MissingPlugin],
 	target: Target,
 	release: bool,
 	// Isolates same-named applications that share a Cargo target directory.
 	target_dir: Option<&Path>,
 	out: &Path,
-) -> Result<()> {
+) -> Result<HostCapabilityDescriptor> {
 	anyhow::ensure!(
 		!config.native.update_contract.trim().is_empty(),
 		"native.update_contract cannot be empty"
 	);
+	let contract = registry::descriptor(config, target, plugins, missing);
+	contract.validate()?;
+	registry::requirements(config).validate()?;
+
+	for warning in registry::optional_warnings(config, target, plugins, missing) {
+		eprintln!("{warning}");
+	}
+
 	let metadata = crate::wasm::cargo_metadata(root)?;
 	let portable = root
 		.join(target.platform().to_string())
@@ -898,7 +980,7 @@ fn bundle(
 
 	std::fs::write(
 		out.join("runtime.json"),
-		serde_json::to_vec_pretty(&runtime_descriptor(root, config, target))?,
+		serde_json::to_vec_pretty(&guest_runtime_descriptor(root, config, target))?,
 	)?;
 	plugins.after_build(&mut leptoskit_plugin::PluginPostBuildContext {
 		config: config.clone(),
@@ -907,8 +989,12 @@ fn bundle(
 		output_dir: out.to_path_buf(),
 		wasm_bundle: Some(out.join("app.wasm")),
 	})?;
-	crate::ui::success(format_args!("native Wasm bundle: {}", out.display()));
-	Ok(())
+	crate::ui::success(format_args!(
+		"native Wasm bundle: {} (capability contract {})",
+		out.display(),
+		contract.digest()
+	));
+	Ok(contract)
 }
 
 /// What a debug host build adds to cargo's default profile: its dependencies,
@@ -991,13 +1077,39 @@ fn profile_directory(config: &LeptoskitConfig, host: bool, release: bool) -> Str
 }
 
 /// The ordinary bundled file makes compatibility part of the signed content.
-fn runtime_descriptor(root: &Path, config: &LeptoskitConfig, target: Target) -> serde_json::Value {
+/// A guest carries requirements only; it never declares what the host can do.
+fn guest_runtime_descriptor(
+	root: &Path,
+	config: &LeptoskitConfig,
+	target: Target,
+) -> serde_json::Value {
 	let shell = config::shell(root, config, target.platform());
 
 	serde_json::json!({
 		"abi": leptoskit_wasm::ABI_VERSION,
 		"shell": shell,
 		"plugins": config.native.plugins,
+		"format_version": RUNTIME_CONTRACT_VERSION,
+		"requirements": registry::requirements(config),
+	})
+}
+
+/// The store build's `codepush.json` carries the host descriptor; it is never
+/// read from a download.
+fn host_runtime_descriptor(
+	root: &Path,
+	config: &LeptoskitConfig,
+	target: Target,
+	contract: &HostCapabilityDescriptor,
+) -> serde_json::Value {
+	let shell = config::shell(root, config, target.platform());
+
+	serde_json::json!({
+		"abi": leptoskit_wasm::ABI_VERSION,
+		"shell": shell,
+		"plugins": config.native.plugins,
+		"format_version": RUNTIME_CONTRACT_VERSION,
+		"host": contract,
 	})
 }
 
@@ -1143,24 +1255,37 @@ mod tests {
 			generated_dir(&root, Target::Ios),
 			generated_dir(&root, Target::IosSimulator)
 		);
-		let ios: leptoskit_codepush::installed::RuntimeContract =
-			serde_json::from_value(runtime_descriptor(&root, &config, Target::Ios)).unwrap();
-		let android: leptoskit_codepush::installed::RuntimeContract =
-			serde_json::from_value(runtime_descriptor(&root, &config, Target::Android)).unwrap();
+		let ios_contract = registry::descriptor(&config, Target::Ios, &[], &[]);
+		let android_contract = registry::descriptor(&config, Target::Android, &[], &[]);
+		let ios: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			host_runtime_descriptor(&root, &config, Target::Ios, &ios_contract),
+		)
+		.unwrap();
+		let android: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			host_runtime_descriptor(&root, &config, Target::Android, &android_contract),
+		)
+		.unwrap();
 		assert_ne!(ios.shell, android.shell);
+		assert_ne!(
+			ios.host.as_ref().unwrap().platform,
+			android.host.as_ref().unwrap().platform
+		);
 
 		let bundle = root.join("bundle");
 		std::fs::create_dir_all(&bundle).unwrap();
 		std::fs::write(bundle.join("app.wasm"), b"\0asm\x01\0\0\0").unwrap();
 		config.app.name = "platform_app".into();
 
-		for target in [Target::Ios, Target::Android] {
+		for (target, contract) in [
+			(Target::Ios, &ios_contract),
+			(Target::Android, &android_contract),
+		] {
 			std::fs::write(
 				bundle.join("runtime.json"),
-				serde_json::to_vec(&runtime_descriptor(&root, &config, target)).unwrap(),
+				serde_json::to_vec(&guest_runtime_descriptor(&root, &config, target)).unwrap(),
 			)
 			.unwrap();
-			write_assets(&root, &config, target, &bundle, false).unwrap();
+			write_assets(&root, &config, target, &bundle, false, contract).unwrap();
 			let mobile = generated_dir(&root, target).join("mobile");
 			let container = std::fs::read(mobile.join("app.lkb")).unwrap();
 			let manifest = leptoskit_codepush::read_container(&container)
@@ -1567,7 +1692,17 @@ mod tests {
 		config.codepush.enabled = true;
 		config.codepush.allow_http = true;
 
-		write_assets(&root, &config, Target::Android, &bundle, true).unwrap();
+		let android_contract = registry::descriptor(&config, Target::Android, &[], &[]);
+		let macos_contract = registry::descriptor(&config, Target::Macos, &[], &[]);
+		write_assets(
+			&root,
+			&config,
+			Target::Android,
+			&bundle,
+			true,
+			&android_contract,
+		)
+		.unwrap();
 		let mobile = root.join(".leptoskit/mobile");
 		let container = std::fs::read(mobile.join("app.lkb")).unwrap();
 		assert_eq!(
@@ -1587,7 +1722,15 @@ mod tests {
 		);
 		assert!(!root.join(".leptoskit/assets/app.wasm").exists());
 
-		write_assets(&root, &config, Target::Macos, &bundle, false).unwrap();
+		write_assets(
+			&root,
+			&config,
+			Target::Macos,
+			&bundle,
+			false,
+			&macos_contract,
+		)
+		.unwrap();
 		assert_eq!(
 			std::fs::read(root.join(".leptoskit/assets/app.wasm")).unwrap(),
 			wasm
@@ -1600,7 +1743,15 @@ mod tests {
 			approvers: vec!["b".repeat(64)],
 			threshold: 1,
 		});
-		write_assets(&root, &config, Target::Android, &bundle, true).unwrap();
+		write_assets(
+			&root,
+			&config,
+			Target::Android,
+			&bundle,
+			true,
+			&android_contract,
+		)
+		.unwrap();
 		let updates: leptoskit_codepush::installed::UpdateConfiguration =
 			serde_json::from_slice(&std::fs::read(mobile.join("codepush.json")).unwrap()).unwrap();
 		assert_eq!(

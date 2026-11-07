@@ -147,18 +147,24 @@ if let Some(theme) = &config.theme {
 
 ## `[native]`
 
-| Key                         | Default                       | Meaning                                                                                                           |
-| --------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `package_id`                | `com.leptoskit.<name>`        | The reverse-domain application id used by native hosts.                                                           |
-| `plugins`                   | `[]`                          | Names of runtime plugins installed from direct dependencies of the selected host package.                         |
-| `missing-plugins`           | `"warn"`                      | What a build does with a listed plugin the platform can't run: `"warn"` leaves it out, `"error"` stops.           |
-| `experimental-rust-plugins` | `false`                       | Opts into experimental pure-Rust plugin implementations (`objc2` on iOS/macOS, `jni` on Android) where available. |
-| `targets`                   | `["macos", "ios", "android"]` | The native platform for the HarmonyOS starter and older projects. Six-platform projects use `app.platforms`.      |
-| `viewport_width`            | `390.0`                       | The initial viewport width for the headless layout pass.                                                          |
-| `viewport_height`           | `844.0`                       | The initial viewport height for the headless layout pass.                                                         |
-| `update_contract`           | `"mobile-v1"`                 | The native compatibility contract named by code-pushed bundles in `runtime.json`.                                 |
+| Key                         | Default                       | Meaning                                                                                                                       |
+| --------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `package_id`                | `com.leptoskit.<name>`        | The reverse-domain application id used by native hosts.                                                                       |
+| `plugins`                   | `[]`                          | Names of runtime plugins installed from direct dependencies of the selected host package.                                     |
+| `required-plugins`          | `[]`                          | Granted plugins the app cannot run without; an unavailable one stops the build before packaging.                              |
+| `optional-plugins`          | `[]`                          | Granted plugins the app can degrade without; an unavailable one warns and is left out.                                        |
+| `required-capabilities`     | `[]`                          | Stable host capability identifiers the app requires, such as `host.plugin.rust.async` or `plugin.http`.                       |
+| `optional-capabilities`     | `[]`                          | Capability identifiers the app can run without; an unavailable one warns.                                                     |
+| `missing-plugins`           | `"warn"`                      | What a build does with a granted plugin in neither list that the platform can't run: `"warn"` leaves it out, `"error"` stops. |
+| `experimental-rust-plugins` | `false`                       | Opts into experimental pure-Rust plugin implementations (`objc2` on iOS/macOS, `jni` on Android) where available.             |
+| `targets`                   | `["macos", "ios", "android"]` | The native platform for the HarmonyOS starter and older projects. Six-platform projects use `app.platforms`.                  |
+| `viewport_width`            | `390.0`                       | The initial viewport width for the headless layout pass.                                                                      |
+| `viewport_height`           | `844.0`                       | The initial viewport height for the headless layout pass.                                                                     |
+| `update_contract`           | `"mobile-v1"`                 | The native compatibility contract named by code-pushed bundles in `runtime.json`.                                             |
 
-`native.package_id` defaults to `com.leptoskit.<name>`, with punctuation removed from the app name. Runtime plugin names belong in `native.plugins`. Each selected plugin must be a direct Cargo dependency of the selected platform's host package. See [automatic plugin registration](../platforms/host-projects.md#automatic-plugin-registration). A plugin left out of a platform's build answers every call with `Unavailable` there; set `missing-plugins = "error"` to fail the build instead, as described in [plugins a platform can't run](../platforms/host-projects.md#plugins-a-platform-cant-run).
+`native.package_id` defaults to `com.leptoskit.<name>`, with punctuation removed from the app name. Runtime plugin names belong in `native.plugins`. Each selected plugin must be a direct Cargo dependency of the selected platform's host package. See [automatic plugin registration](../platforms/host-projects.md#automatic-plugin-registration). A plugin left out of a platform's build answers every call with `Unavailable` there; set `missing-plugins = "error"` to fail the build instead, as described in [plugins a platform can't run](../platforms/host-projects.md#plugins-a-platform-cant-run). `required-plugins` and `required-capabilities` fail before packaging regardless of that setting, while `optional-plugins` and `optional-capabilities` warn. A declaration changes the requirement, never the grant: only `native.plugins` and the host's own permissions give runtime access.
+
+Every native build resolves a versioned host capability descriptor from the destination flavour, the plugin registrations it actually generated, and the non-secret plugin option tables. It writes `capabilities.json` next to the bundle and embeds the corresponding descriptor in the mobile host's `codepush.json`. The descriptor carries a stable digest; changing a plugin grant, an option value, or the set of required capabilities changes it. Code push signs the guest's required capabilities in `runtime.json`, and the installed host checks them against its own descriptor before staging or activating a release.
 
 Each package id segment starts with an ASCII letter and contains only ASCII letters and digits. Change `native.update_contract` in a store release when plugin grants or native behavior change incompatibly. Shared app workspaces append the destination, such as `mobile-v1/ios`, so hosts reject another platform's update bundle.
 

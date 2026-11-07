@@ -408,6 +408,26 @@ impl Plugin {
 		!experimental || self.experimental_rust_plugins
 	}
 
+	/// Whether the implementation this destination runs came from a Rust
+	/// registration the project opted into as experimental. A native or
+	/// service fallback is not experimental even when it sits beside one.
+	pub fn uses_experimental_rust(&self, target: Target) -> bool {
+		let table = self.platform_table(target);
+		let selected = table
+			.and_then(|table| table.rust().map(|rust| (rust, table.experimental)))
+			.filter(|&(_, experimental)| self.rust_enabled(experimental))
+			.or_else(|| self.shared_rust().map(|rust| (rust, self.experimental)))
+			.filter(|&(_, experimental)| self.rust_enabled(experimental));
+		let Some((_, experimental)) = selected else {
+			return false;
+		};
+
+		experimental
+			&& self
+				.implementation(target, HostCapabilities::of(target))
+				.is_ok_and(|implementation| implementation.rust().is_some())
+	}
+
 	/// Whether any active registration of the plugin runs on the async host,
 	/// which needs host-owned options.
 	pub(super) fn declares_async(&self) -> bool {
@@ -544,11 +564,13 @@ impl MissingPlugin {
 }
 
 /// Keep the plugins `target` can run and record the rest. With
-/// `native.missing-plugins = "error"`, any plugin left out fails the build.
+/// `native.missing-plugins = "error"`, a plugin left out fails the build
+/// unless the app explicitly listed it as optional.
 pub(super) fn select_for_target(
 	plugins: Vec<Plugin>,
 	target: Target,
 	policy: MissingPlugins,
+	optional: &[String],
 ) -> Result<(Vec<Plugin>, Vec<MissingPlugin>)> {
 	let host = HostCapabilities::of(target);
 	let mut kept = Vec::new();
@@ -567,12 +589,19 @@ pub(super) fn select_for_target(
 		}
 	}
 
-	if policy == MissingPlugins::Error && !missing.is_empty() {
-		let reasons: Vec<_> = missing.iter().map(MissingPlugin::describe).collect();
-		anyhow::bail!(
-			"native.missing-plugins = \"error\" stops the build: {}",
-			reasons.join("; ")
-		);
+	if policy == MissingPlugins::Error {
+		let reasons: Vec<_> = missing
+			.iter()
+			.filter(|missing| !optional.contains(&missing.name))
+			.map(MissingPlugin::describe)
+			.collect();
+
+		if !reasons.is_empty() {
+			anyhow::bail!(
+				"native.missing-plugins = \"error\" stops the build: {}",
+				reasons.join("; ")
+			);
+		}
 	}
 
 	Ok((kept, missing))
@@ -645,7 +674,7 @@ impl Registry {
 	#[cfg(test)]
 	pub fn select(&mut self, target: Target, policy: MissingPlugins) -> Result<()> {
 		let (plugins, missing) =
-			select_for_target(std::mem::take(&mut self.plugins), target, policy)?;
+			select_for_target(std::mem::take(&mut self.plugins), target, policy, &[])?;
 		self.plugins = plugins;
 		self.missing.extend(missing);
 		Ok(())
