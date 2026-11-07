@@ -17,8 +17,8 @@ crate-type = ["cdylib", "rlib"]
 # only: no plugin is selected, so no host glue is enabled.
 [dependencies]
 leptoskit_plugin_accelerometer = { path = "../../crates/leptoskit_plugin_accelerometer" }
-leptoskit_plugin_application = { path = "../../crates/leptoskit_plugin_application" }
 leptoskit_plugin_app_shortcuts = { path = "../../crates/leptoskit_plugin_app_shortcuts" }
+leptoskit_plugin_application = { path = "../../crates/leptoskit_plugin_application" }
 leptoskit_plugin_arguments = { path = "../../crates/leptoskit_plugin_arguments" }
 leptoskit_plugin_autostart = { path = "../../crates/leptoskit_plugin_autostart" }
 leptoskit_plugin_badge = { path = "../../crates/leptoskit_plugin_badge" }

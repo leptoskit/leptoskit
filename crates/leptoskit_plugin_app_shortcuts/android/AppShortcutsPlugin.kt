@@ -34,7 +34,9 @@ class AppShortcutsPlugin(
         payload: ByteBuffer,
     ): ByteArray {
         checkMain()
+
         if (closed) throw PluginException(PluginException.CANCELLED)
+
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
 
         return when (method) {
@@ -42,11 +44,13 @@ class AppShortcutsPlugin(
                 set(decodeList(payload))
                 byteArrayOf()
             }
+
             CLEAR -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 clear()
                 byteArrayOf()
             }
+
             else -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encodeLaunch(launchId.also { launchId = null })
@@ -93,8 +97,10 @@ class AppShortcutsPlugin(
 
     private fun decodeList(payload: ByteBuffer): List<Shortcut> {
         val buffer = payload.order(ByteOrder.LITTLE_ENDIAN)
+
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val count = buffer.int
+
         if (count !in 0..8) throw PluginException(PluginException.TOO_LARGE)
         val items = ArrayList<Shortcut>(count)
         val seen = HashSet<String>()
@@ -105,9 +111,11 @@ class AppShortcutsPlugin(
             validateId(id)
             validateText(title, allowEmpty = false)
             validateText(subtitle, allowEmpty = true)
+
             if (!seen.add(id)) throw PluginException(PluginException.INVALID_ARGUMENT)
             items.add(Shortcut(id, title, subtitle))
         }
+
         if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
         return items
     }
@@ -128,9 +136,11 @@ class AppShortcutsPlugin(
     ): String {
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val length = buffer.int
+
         if (length !in 0..max || buffer.remaining() < length) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         val bytes = ByteArray(length)
         buffer.get(bytes)
         val decoder =
@@ -147,6 +157,7 @@ class AppShortcutsPlugin(
 
     private fun validateId(id: String) {
         if (id.isEmpty() || id.length > 64) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         if (!id.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
@@ -159,6 +170,7 @@ class AppShortcutsPlugin(
         if ((!allowEmpty && value.isEmpty()) || value.length > 128) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         if (value.any { Character.isISOControl(it) }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }

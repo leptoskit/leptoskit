@@ -9,9 +9,9 @@ package dev.leptoskit.wearos
  *   (or the androidx.wear.watchface equivalent for your dependency set)
  * - complication types matching [leptoskit_watch::ComplicationFamily]
  */
-class LeptoskitComplicationDataSourcePlaceholder {
-	companion object {
-		const val SURFACE = "complication"
-		const val STATUS = "experimental-stub"
-	}
+class ComplicationDataSource {
+    companion object {
+        const val SURFACE = "complication"
+        const val STATUS = "experimental-stub"
+    }
 }

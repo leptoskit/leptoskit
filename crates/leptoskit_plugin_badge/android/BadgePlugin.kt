@@ -29,7 +29,9 @@ class BadgePlugin(
         payload: ByteBuffer,
     ): ByteArray {
         checkMain()
+
         if (closed) throw PluginException(PluginException.CANCELLED)
+
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
 
         return when (method) {
@@ -37,10 +39,12 @@ class BadgePlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encode(count)
             }
+
             SET -> {
                 set(decode(payload))
                 byteArrayOf()
             }
+
             else -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 set(0)
@@ -56,6 +60,7 @@ class BadgePlugin(
     private fun set(value: Int) {
         if (value !in 0..MAX_COUNT) throw PluginException(PluginException.INVALID_ARGUMENT)
         count = value
+
         if (value == 0 && Build.VERSION.SDK_INT >= 23) {
             manager?.cancelAll()
         }
@@ -64,6 +69,7 @@ class BadgePlugin(
     private fun decode(payload: ByteBuffer): Int {
         if (payload.remaining() != 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val value = payload.order(ByteOrder.LITTLE_ENDIAN).int
+
         if (value !in 0..MAX_COUNT) throw PluginException(PluginException.INVALID_ARGUMENT)
         return value
     }

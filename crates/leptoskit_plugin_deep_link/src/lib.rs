@@ -1,12 +1,12 @@
 //! <!-- {=p_deep_linkSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Native hosts construct [`DeepLinks`] with the schemes and file types they
+//! Native hosts construct `DeepLinks` with the schemes and file types they
 //! claim, push OS open-URL / open-file activations into it, and may expose it
 //! through the bridge. There is no automatic `native.plugins` registration.
-//! Outbound HTTP(S)/mailto/tel/sms opening remains
-//! `leptoskit_plugin_linking`. Packaging still has to declare the associations
-//! in Info.plist, the Windows registry, or a `.desktop` file; this crate holds
-//! the runtime queue and the association descriptors the host/packager use.
+//! Outbound HTTP(S)/mailto/tel/sms opening remains `leptoskit_plugin_linking`.
+//! Packaging still has to declare the associations in Info.plist, the Windows
+//! registry, or a `.desktop` file; this crate holds the runtime queue and the
+//! association descriptors the host/packager use.
 //!
 //! <!-- {/p_deep_linkSummary} -->
 //!
@@ -47,6 +47,7 @@ pub enum Activation {
 impl Activation {
 	fn encode(&self) -> Result<Bytes, BridgeError> {
 		let mut output = Encoder::with_capacity(32);
+
 		match self {
 			Self::Url(url) => {
 				output.u32(1);
@@ -58,6 +59,7 @@ impl Activation {
 				output.bytes(text.as_bytes())?;
 			}
 		}
+
 		Ok(output.finish())
 	}
 
@@ -65,10 +67,13 @@ impl Activation {
 		let mut input = Decoder::new(bytes);
 		let kind = input.u32()?;
 		let value = input.string()?;
+
 		if value.is_empty() || value.len() > MAX_TARGET_BYTES {
 			return Err(BridgeError::InvalidArgument);
 		}
+
 		input.finish()?;
+
 		match kind {
 			1 => Ok(Self::Url(value.to_owned())),
 			2 => {
@@ -76,6 +81,7 @@ impl Activation {
 				if !path.is_absolute() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				Ok(Self::File(path))
 			}
 			_ => Err(BridgeError::InvalidArgument),
@@ -97,9 +103,11 @@ impl ProtocolAssociation {
 	pub fn new(scheme: impl Into<String>, description: impl Into<String>) -> Result<Self, Error> {
 		let scheme = scheme.into();
 		let description = description.into();
+
 		if !valid_scheme(&scheme) || description.is_empty() || description.len() > 256 {
 			return Err(Error::InvalidArgument);
 		}
+
 		Ok(Self {
 			scheme,
 			description,
@@ -126,6 +134,7 @@ impl FileAssociation {
 		description: impl Into<String>,
 	) -> Result<Self, Error> {
 		let description = description.into();
+
 		if extensions.is_empty()
 			|| description.is_empty()
 			|| description.len() > 256
@@ -183,15 +192,19 @@ impl DeepLinks {
 	/// Builds a queue that accepts only the listed URL schemes.
 	pub fn new(schemes: impl IntoIterator<Item = String>) -> Result<Self, Error> {
 		let mut allowed = BTreeSet::new();
+
 		for scheme in schemes {
 			if !valid_scheme(&scheme) {
 				return Err(Error::InvalidArgument);
 			}
+
 			allowed.insert(scheme);
 		}
+
 		if allowed.is_empty() {
 			return Err(Error::InvalidArgument);
 		}
+
 		Ok(Self {
 			schemes: allowed,
 			events: VecDeque::new(),
@@ -209,6 +222,7 @@ impl DeepLinks {
 				return Err(Error::InvalidArgument);
 			}
 		}
+
 		self.protocols = protocols;
 		Ok(self)
 	}
@@ -249,10 +263,13 @@ impl DeepLinks {
 		if url.is_empty() || url.len() > MAX_TARGET_BYTES || url.chars().any(char::is_control) {
 			return Err(Error::InvalidArgument);
 		}
+
 		let parsed = url::Url::parse(url).map_err(|_| Error::InvalidArgument)?;
+
 		if !self.schemes.contains(parsed.scheme()) {
 			return Err(Error::ForbiddenScheme);
 		}
+
 		self.enqueue(Activation::Url(url.to_owned()));
 		Ok(())
 	}
@@ -260,6 +277,7 @@ impl DeepLinks {
 	/// Validates and enqueues an absolute file path.
 	pub fn push_file(&mut self, path: &Path) -> Result<(), Error> {
 		let text = path.to_str().ok_or(Error::InvalidArgument)?;
+
 		if !path.is_absolute()
 			|| text.is_empty()
 			|| text.len() > MAX_TARGET_BYTES
@@ -284,6 +302,7 @@ impl DeepLinks {
 			self.events.pop_front();
 			self.lost = self.lost.saturating_add(1);
 		}
+
 		self.events.push_back(activation);
 	}
 }
@@ -303,6 +322,7 @@ impl Plugin for DeepLinks {
 				if !payload.is_empty() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				let (lost, events) = self.drain();
 				let mut output = Encoder::with_capacity(16);
 				output.u32((lost >> 32) as u32);
@@ -312,17 +332,20 @@ impl Plugin for DeepLinks {
 					let encoded = event.encode()?;
 					output.bytes(&encoded)?;
 				}
+
 				Ok(output.finish())
 			}
 			SCHEMES => {
 				if !payload.is_empty() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				let mut output = Encoder::with_capacity(32);
 				output.u32(u32::try_from(self.schemes.len()).map_err(|_| BridgeError::TooLarge)?);
 				for scheme in &self.schemes {
 					output.bytes(scheme.as_bytes())?;
 				}
+
 				Ok(output.finish())
 			}
 			_ => Err(BridgeError::Unavailable),
@@ -337,10 +360,13 @@ pub fn decode_events(bytes: &[u8]) -> Result<(u64, Vec<Activation>), BridgeError
 	let lost_lo = u64::from(input.u32()?);
 	let count = input.u32()? as usize;
 	let mut events = Vec::with_capacity(count);
+
 	for _ in 0..count {
 		events.push(Activation::decode(input.bytes()?)?);
 	}
+
 	input.finish()?;
+
 	Ok(((lost_hi << 32) | lost_lo, events))
 }
 
@@ -403,6 +429,7 @@ mod tests {
 		));
 		let (lost, events) = links.drain();
 		assert_eq!(lost, 0);
+
 		assert_eq!(events.len(), 3);
 		assert_eq!(links.protocols().len(), 1);
 		assert_eq!(links.files()[0].extensions, ["md"]);
@@ -418,6 +445,7 @@ mod tests {
 		assert_eq!(events, vec![Activation::Url("leptoskit://home".into())]);
 		let schemes = links.invoke(SCHEMES, Bytes::new()).unwrap();
 		let mut input = Decoder::new(&schemes);
+
 		assert_eq!(input.u32().unwrap(), 1);
 		assert_eq!(input.string().unwrap(), "leptoskit");
 		input.finish().unwrap();

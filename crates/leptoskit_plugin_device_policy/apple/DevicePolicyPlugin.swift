@@ -13,6 +13,7 @@ public final class DevicePolicyPlugin: NativePlugin {
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
+
         guard methods.contains(method) else { throw PluginError.unavailable }
         _ = payload
         throw PluginError.unavailable

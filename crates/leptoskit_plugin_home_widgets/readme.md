@@ -65,7 +65,7 @@ Capability bits: supported=1, can_reload=2, can_query_installed=4, shared_store=
 
 <!-- {=p_home_widgetsSummary} -->
 
-Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for WidgetKit and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
+Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for `WidgetKit` and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
 
 <!-- {/p_home_widgetsSummary} -->
 

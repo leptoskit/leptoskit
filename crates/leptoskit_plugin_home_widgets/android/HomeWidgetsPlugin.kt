@@ -39,6 +39,7 @@ class HomeWidgetsPlugin(
         payload: ByteBuffer,
     ): ByteArray {
         check(Looper.myLooper() == Looper.getMainLooper())
+
         if (closed) throw PluginException(PluginException.CANCELLED)
         currentCoroutineContext().ensureActive()
 
@@ -47,6 +48,7 @@ class HomeWidgetsPlugin(
                 empty(payload)
                 capability()
             }
+
             SET -> {
                 val snapshot = Snapshot.decode(payload)
                 // Store raw wire bytes so GET round-trips the guest payload.
@@ -56,6 +58,7 @@ class HomeWidgetsPlugin(
                     .apply()
                 byteArrayOf()
             }
+
             GET -> {
                 val kind = Kind.decode(payload)
                 val encoded =
@@ -63,42 +66,57 @@ class HomeWidgetsPlugin(
                         ?: throw PluginException(PluginException.UNAVAILABLE)
                 android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
             }
+
             CLEAR -> {
                 val kind = Kind.decode(payload)
                 prefs.edit().remove(PREFIX + kind).apply()
                 byteArrayOf()
             }
+
             RELOAD -> {
                 val kind = optionalKind(payload)
                 reload(kind)
                 byteArrayOf()
             }
+
             INSTALLED -> {
                 val kind = Kind.decode(payload)
                 installed(kind).toByteArray()
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 
     private fun capability(): ByteArray {
         // supported | can_reload | can_query_installed | shared_store
         val flags = 1 or (1 shl 1) or (1 shl 2) or (1 shl 3)
-        return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(flags).array()
+        return ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(flags)
+            .array()
     }
 
     private fun reload(kind: String?) {
         val manager = AppWidgetManager.getInstance(context) ?: throw PluginException(PluginException.UNAVAILABLE)
         val providers = providers()
+
         if (providers.isEmpty()) throw PluginException(PluginException.UNAVAILABLE)
+
         for (provider in providers) {
             if (kind != null && !provider.className.contains(kind, ignoreCase = true)) {
                 // Kind filtering is best-effort by provider class name; apps that
                 // need exact mapping should name providers after their kinds.
                 continue
             }
+
             val ids = manager.getAppWidgetIds(provider)
+
             if (ids.isEmpty()) continue
+
             val intent =
                 Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE).apply {
                     component = provider
@@ -106,6 +124,7 @@ class HomeWidgetsPlugin(
                 }
             context.sendBroadcast(intent)
         }
+
         if (kind != null) {
             val matched =
                 providers.any { provider ->
@@ -123,9 +142,11 @@ class HomeWidgetsPlugin(
     private fun installed(kind: String): Int {
         val manager = AppWidgetManager.getInstance(context) ?: return INSTALLED_UNKNOWN
         val providers = providers()
+
         if (providers.isEmpty()) return INSTALLED_NONE
         val matching =
             providers.filter { it.className.contains(kind, ignoreCase = true) }.ifEmpty { providers }
+
         return if (matching.any { manager.getAppWidgetIds(it).isNotEmpty() }) {
             INSTALLED_SOME
         } else {
@@ -180,7 +201,11 @@ private fun optionalKind(payload: ByteBuffer): String? {
 }
 
 private fun Int.toByteArray(): ByteArray =
-    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(this).array()
+    ByteBuffer
+        .allocate(4)
+        .order(ByteOrder.LITTLE_ENDIAN)
+        .putInt(this)
+        .array()
 
 private object Kind {
     fun decode(payload: ByteBuffer): String {
@@ -203,13 +228,17 @@ private class Snapshot(
             val reader = Reader(payload, MAX_SNAPSHOT)
             val kind = reader.identifier()
             val family = reader.u32()
+
             if (family !in 0..4) throw PluginException(PluginException.INVALID_ARGUMENT)
             reader.text(256, multiline = false, required = true)
             reader.text(1024, multiline = true, required = false)
+
             val url = reader.text(2048, multiline = false, required = false)
+
             if (url.isNotEmpty() && (!url.contains(':') || url.any { it.code < 32 || it.code == 127 })) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
             reader.finish()
             val end = payload.position()
             val raw = ByteArray(end - start)
@@ -244,6 +273,7 @@ private class Reader(
 
     fun identifier(): String {
         val value = text(64, multiline = false, required = true)
+
         if (!value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
@@ -257,9 +287,11 @@ private class Reader(
     ): String {
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val length = buffer.int
+
         if (length < 0 || length > maximum || length > buffer.remaining()) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         val bytes = ByteArray(length)
         buffer.get(bytes)
         val value =
@@ -273,6 +305,7 @@ private class Reader(
             } catch (_: CharacterCodingException) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
         if (required && value.trim().isEmpty()) throw PluginException(PluginException.INVALID_ARGUMENT)
         if (value.any { ch ->
                 val code = ch.code

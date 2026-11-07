@@ -1027,3 +1027,71 @@ It is also usable on its own when a Rust tool needs React Native-style layout or
 grid implementation without a browser.
 
 <!-- {/yogaSummary} -->
+
+<!-- {@p_app_shortcutsSummary} -->
+
+Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher, dock, or jump list; it never invents icons or deep-link handlers.
+
+<!-- {/p_app_shortcutsSummary} -->
+
+<!-- {@p_badgeSummary} -->
+
+Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Setting a count asks the OS to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
+
+<!-- {/p_badgeSummary} -->
+
+<!-- {@p_deep_linkSummary} -->
+
+Native hosts construct `DeepLinks` with the schemes and file types they claim, push OS open-URL / open-file activations into it, and may expose it through the bridge. There is no automatic `native.plugins` registration. Outbound HTTP(S)/mailto/tel/sms opening remains `leptoskit_plugin_linking`. Packaging still has to declare the associations in Info.plist, the Windows registry, or a `.desktop` file; this crate holds the runtime queue and the association descriptors the host/packager use.
+
+<!-- {/p_deep_linkSummary} -->
+
+<!-- {@p_device_policySummary} -->
+
+Add `leptoskit_plugin_device_policy` as a direct dependency and select the `device-policy` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::DevicePolicy` rather than resolving the plugin on every call. Only Android implements Device Admin / Device Policy Manager capabilities; every other platform returns `Unavailable`. Status never prompts. Privileged actions require an active device admin the user enabled, and wipe requires an explicit confirmation token.
+
+<!-- {/p_device_policySummary} -->
+
+<!-- {@p_home_widgetsSummary} -->
+
+Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for `WidgetKit` and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
+
+<!-- {/p_home_widgetsSummary} -->
+
+<!-- {@p_live_activitiesSummary} -->
+
+Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
+
+<!-- {/p_live_activitiesSummary} -->
+
+<!-- {@p_nfcSummary} -->
+
+Add `leptoskit_plugin_nfc` as a direct dependency and select the `nfc` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Nfc` rather than resolving the plugin on every call. A successful read returns one bounded NDEF text or URI record; it never writes tags or claims background tag delivery.
+
+<!-- {/p_nfcSummary} -->
+
+<!-- {@p_picture_in_pictureSummary} -->
+
+Add `leptoskit_plugin_picture_in_picture` as a direct dependency and select the `picture-in-picture` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::PictureInPicture` rather than resolving the plugin on every call. Android can enter activity picture-in-picture and, with `SYSTEM_ALERT_WINDOW`, hold a system overlay window. iOS reports whether system picture-in-picture is supported but does not yet enter it without an attached video player, and has no draw-over-apps overlay. Desktop and the browser return `Unavailable`.
+
+<!-- {/p_picture_in_pictureSummary} -->
+
+<!-- {@p_power_monitorSummary} -->
+
+Native hosts construct `PowerMonitor` and may expose it through the bridge. There is no automatic `native.plugins` registration. The host pushes suspend/resume and related lifecycle events from its event loop; idle-time queries work on Windows today and return `Unavailable` elsewhere until a platform adapter lands. Mobile and browsers return `Unavailable` for idle queries; the queue and snapshot codecs still compile everywhere.
+
+<!-- {/p_power_monitorSummary} -->
+
+<!-- {@p_updaterSummary} -->
+
+Native hosts construct `Updater` with an explicit `Backend` that knows how to check, download, and install a new native executable. There is no automatic `native.plugins` registration and no built-in update server. The default `UnavailableBackend` keeps unsupported targets compiling. Guest bundle / Wasm over-the-air updates remain `leptoskit_codepush`; this crate is the installed-application updater surface, matching Electron's `autoUpdater` responsibility without shipping a specific feed format.
+
+<!-- {/p_updaterSummary} -->
+
+<!-- {@serviceWorkerSummary} -->
+
+Register a worker script, wait for control, exchange messages, open Cache
+Storage, describe caching strategies, and manage Web Push subscriptions.
+Outside a browser every call returns `Unavailable`.
+
+<!-- {/serviceWorkerSummary} -->

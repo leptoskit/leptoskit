@@ -82,6 +82,7 @@ class DevicePolicyPlugin(
                 else -> STATE_INACTIVE
             }
         val capabilities = if (available) CAPABILITIES_STANDARD else CAPABILITIES_NONE
+
         val camera =
             if (active) {
                 optionalFlag(policy!!.getCameraDisabled(component))
@@ -109,6 +110,7 @@ class DevicePolicyPlugin(
         if (isActive()) return words(OUTCOME_ALREADY_ACTIVE)
 
         val explanation = explanationOf(payload)
+
         if (activity == null) throw PluginException(PluginException.UNAVAILABLE)
         val host = host ?: throw PluginException(PluginException.UNAVAILABLE)
         val policy = policy ?: throw PluginException(PluginException.UNAVAILABLE)
@@ -155,6 +157,7 @@ class DevicePolicyPlugin(
 
     private fun setPasswordMinimumLength(payload: ByteBuffer): ByteArray {
         val length = word(payload)
+
         if (length == LENGTH_UNKNOWN) throw PluginException(PluginException.INVALID_ARGUMENT)
         try {
             requireActive().setPasswordMinimumLength(component, length)
@@ -197,31 +200,35 @@ class DevicePolicyPlugin(
 
     private fun requireActive(): DevicePolicyManager {
         val policy = policy ?: throw PluginException(PluginException.UNAVAILABLE)
+
         if (!policy.isAdminActive(component)) throw PluginException(PluginException.PERMISSION_DENIED)
         return policy
     }
 
     private fun isActive(): Boolean = policy?.isAdminActive(component) == true
 
-    private fun receiverDeclared(): Boolean {
-        return try {
+    private fun receiverDeclared(): Boolean =
+        try {
             context.packageManager.getReceiverInfo(component, PackageManager.GET_META_DATA)
             true
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }
-    }
 
     private fun explanationOf(payload: ByteBuffer): String {
         val input = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+
         if (input.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val length = input.int
+
         if (length !in 1..MAX_EXPLANATION_BYTES || input.remaining() != length) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         val bytes = ByteArray(length)
         input.get(bytes)
         val text =
+
             try {
                 Charsets.UTF_8
                     .newDecoder()
@@ -232,6 +239,7 @@ class DevicePolicyPlugin(
             } catch (_: CharacterCodingException) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
         if (text.trim().isEmpty() || text.contains('\u0000')) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
@@ -240,13 +248,18 @@ class DevicePolicyPlugin(
 
     private fun wipeFlags(payload: ByteBuffer): Int {
         val input = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+
         if (input.remaining() != 12) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         if (input.int != 1) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         if (input.int != WIPE_CONFIRMATION_TOKEN) throw PluginException(PluginException.INVALID_ARGUMENT)
         val flags = input.int
+
         if (flags and WIPE_FLAG_EXTERNAL_STORAGE.inv() != 0) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return if (flags and WIPE_FLAG_EXTERNAL_STORAGE != 0) {
             DevicePolicyManager.WIPE_EXTERNAL_STORAGE
         } else {
@@ -268,13 +281,19 @@ class DevicePolicyPlugin(
     private fun qualityWire(quality: Int): Int =
         when (quality) {
             DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED -> QUALITY_UNSPECIFIED
+
             DevicePolicyManager.PASSWORD_QUALITY_SOMETHING -> QUALITY_SOMETHING
+
             DevicePolicyManager.PASSWORD_QUALITY_NUMERIC,
             DevicePolicyManager.PASSWORD_QUALITY_NUMERIC_COMPLEX,
             -> QUALITY_NUMERIC
+
             DevicePolicyManager.PASSWORD_QUALITY_ALPHABETIC -> QUALITY_ALPHABETIC
+
             DevicePolicyManager.PASSWORD_QUALITY_ALPHANUMERIC -> QUALITY_ALPHANUMERIC
+
             DevicePolicyManager.PASSWORD_QUALITY_COMPLEX -> QUALITY_COMPLEX
+
             else -> QUALITY_UNSPECIFIED
         }
 

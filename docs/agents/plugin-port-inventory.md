@@ -164,25 +164,25 @@ Every continuous sensor needs bounded delivery, documented coalescing, unsubscri
 
 ### Lifecycle, platform UI and developer tooling
 
-| Expo entry                                                             | LeptosKit destination                       | Status / acceptance scope                                                                    |
-| ---------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Expo                                                                   | core runtime integration                    | Framework/tooling; no compatibility facade for the JavaScript framework                      |
+| Expo entry                                                             | LeptosKit destination                       | Status / acceptance scope                                                                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Expo                                                                   | core runtime integration                    | Framework/tooling; no compatibility facade for the JavaScript framework                                                          |
 | AppIntents                                                             | `app_intents` and host extension generation | Planned; alpha upstream entry; isolate unstable platform configuration. Static launcher shortcuts are partial in `app_shortcuts` |
-| BackgroundFetch                                                        | background task migration                   | Migration only; deprecated upstream entry                                                    |
-| BackgroundTask                                                         | `background_task`                           | Planned; OS scheduling, expiration and completion, without guarantees about execution time   |
-| BlurView; Checkbox; GlassEffect; LinearGradient; MeshGradient; Symbols | renderer/components                         | Framework/tooling; native visual components, not system-service ports                        |
-| Brownfield                                                             | host embedding APIs                         | Framework/tooling; embed LeptosKit in an existing application                                |
-| BuildProperties                                                        | CLI/native build configuration              | Framework/tooling; typed target settings and reproducible generated projects                 |
-| DevClient; DevMenu                                                     | developer host and diagnostics              | Framework/tooling; inspect/reload/debug workflow                                             |
-| Fingerprint                                                            | build compatibility fingerprint             | Framework/tooling; include native plugin graph and bridge version                            |
-| Manifests                                                              | application/update metadata                 | Framework/tooling; reuse versioned config and signed bundle metadata where applicable        |
-| NavigationBar; StatusBar; SystemUI                                     | native host presentation                    | Framework/tooling; implement platform UI state with restoration and scene/activity ownership |
-| Observe                                                                | `diagnostics`                               | Planned; startup/interaction spans and errors; backend integration is a separate choice      |
-| Server                                                                 | server/build tooling                        | Framework/tooling; route/runtime integration rather than a device permission                 |
-| SplashScreen                                                           | host startup lifecycle                      | Framework/tooling; first-frame readiness and failure recovery                                |
-| TaskManager                                                            | background task runtime                     | Framework/tooling; registration, restart and headless task lifecycle                         |
-| Updates                                                                | `leptoskit_codepush` plus host integration  | Partial; verified staging exists, installed application activation/recovery remains          |
-| Widgets                                                                | `widgets` and extension generation          | Planned; separate extension targets, shared data and refresh lifecycle                       |
+| BackgroundFetch                                                        | background task migration                   | Migration only; deprecated upstream entry                                                                                        |
+| BackgroundTask                                                         | `background_task`                           | Planned; OS scheduling, expiration and completion, without guarantees about execution time                                       |
+| BlurView; Checkbox; GlassEffect; LinearGradient; MeshGradient; Symbols | renderer/components                         | Framework/tooling; native visual components, not system-service ports                                                            |
+| Brownfield                                                             | host embedding APIs                         | Framework/tooling; embed LeptosKit in an existing application                                                                    |
+| BuildProperties                                                        | CLI/native build configuration              | Framework/tooling; typed target settings and reproducible generated projects                                                     |
+| DevClient; DevMenu                                                     | developer host and diagnostics              | Framework/tooling; inspect/reload/debug workflow                                                                                 |
+| Fingerprint                                                            | build compatibility fingerprint             | Framework/tooling; include native plugin graph and bridge version                                                                |
+| Manifests                                                              | application/update metadata                 | Framework/tooling; reuse versioned config and signed bundle metadata where applicable                                            |
+| NavigationBar; StatusBar; SystemUI                                     | native host presentation                    | Framework/tooling; implement platform UI state with restoration and scene/activity ownership                                     |
+| Observe                                                                | `diagnostics`                               | Planned; startup/interaction spans and errors; backend integration is a separate choice                                          |
+| Server                                                                 | server/build tooling                        | Framework/tooling; route/runtime integration rather than a device permission                                                     |
+| SplashScreen                                                           | host startup lifecycle                      | Framework/tooling; first-frame readiness and failure recovery                                                                    |
+| TaskManager                                                            | background task runtime                     | Framework/tooling; registration, restart and headless task lifecycle                                                             |
+| Updates                                                                | `leptoskit_codepush` plus host integration  | Partial; verified staging exists, installed application activation/recovery remains                                              |
+| Widgets                                                                | `widgets` and extension generation          | Planned; separate extension targets, shared data and refresh lifecycle                                                           |
 
 [Observe](https://docs.expo.dev/versions/latest/sdk/observe/) includes performance measurements and application events; a metrics API should not require a particular hosted backend. [Server](https://docs.expo.dev/versions/latest/sdk/server/) belongs with server/build integration. [AppIntegrity](https://docs.expo.dev/versions/latest/sdk/app-integrity/) requires platform attestation semantics rather than a local “trusted device” boolean.
 
@@ -192,38 +192,38 @@ Expo Router (including its navigation/UI entries) and Expo UI are renderer/routi
 
 All **30** official entries in the [Tauri catalog](https://v2.tauri.app/plugin/) are mapped below. Community plugins are outside this finite inventory. Tauri's own platform support varies; a row here is not a promise that every OS exposes the same operation.
 
-| Tauri entry                  | LeptosKit destination                 | Status / next acceptance requirement                                                                                        |
-| ---------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Autostart                    | `autostart`                           | Partial; explicit desktop configuration and exact-entry enable/disable/query; packaged login verification remains           |
-| Barcode Scanner              | `barcode_scanner`                     | Planned; camera permission, decoding and scanner lifecycle                                                                  |
-| Biometric                    | `local_authentication`                | Partial; Apple/Android local challenges and cancellation; no biometric-gated key operations                                 |
-| Command Line Interface (CLI) | `arguments`                           | Partial; desktop snapshots and typed parsing, manual guest disclosure; separate from the development CLI                    |
-| Clipboard                    | `clipboard`                           | Partial; expand beyond text only as explicit operations                                                                     |
+| Tauri entry                  | LeptosKit destination                 | Status / next acceptance requirement                                                                                         |
+| ---------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Autostart                    | `autostart`                           | Partial; explicit desktop configuration and exact-entry enable/disable/query; packaged login verification remains            |
+| Barcode Scanner              | `barcode_scanner`                     | Planned; camera permission, decoding and scanner lifecycle                                                                   |
+| Biometric                    | `local_authentication`                | Partial; Apple/Android local challenges and cancellation; no biometric-gated key operations                                  |
+| Command Line Interface (CLI) | `arguments`                           | Partial; desktop snapshots and typed parsing, manual guest disclosure; separate from the development CLI                     |
+| Clipboard                    | `clipboard`                           | Partial; expand beyond text only as explicit operations                                                                      |
 | Deep Linking                 | `deep_link` (+ outbound `linking`)    | Partial inbound queue/descriptors on desktop hosts; packaging writers and mobile inbound remain; outbound stays in `linking` |
-| Dialog                       | `dialog` plus `document_picker`       | Partial direct desktop prompts/browser selection; separate mobile document import; general dialog guest adapters remain     |
-| File System                  | `filesystem`                          | Partial; bounded app-private file operations; user grants/watchers/streaming remain                                         |
-| Geolocation                  | `location`                            | Partial; Apple/Android/browser foreground fixes; Windows/Linux and background tracking remain                               |
-| Global Shortcut              | `global_shortcut`                     | Partial; host-owned macOS/Windows/X11 registrations, bounded events and teardown; Wayland remains                           |
-| Haptics                      | `haptics`                             | Partial; portable effects and Android constants with platform-specific availability                                         |
-| HTTP Client                  | `http`                                | Partial generated native guest/direct browser requests with exact origin scopes; streamed output remains                    |
-| Localhost                    | host-serving integration              | Planned; only if an application needs a loopback server; bind/authentication/lifetime contract                              |
-| Logging                      | `logging`                             | Partial; native JSONL rotation/flush/close and browser console; remote/platform sinks remain                                |
-| NFC                          | `nfc`                                 | Partial; availability and one bounded NDEF text/URI read on iOS/Android; writes and background delivery remain              |
-| Notifications                | `notifications`                       | Partial; immediate Apple/Android/Linux/browser delivery; Windows, scheduling and interaction callbacks remain               |
-| Opener                       | `linking` plus file-opening operation | Partial outbound URLs; reveal/open-file behavior remains                                                                    |
-| OS Information               | `os`                                  | Partial; platform/architecture only                                                                                         |
-| Persisted Scope              | capability persistence                | Planned; explicit grants, expiration/revocation and app identity                                                            |
-| Positioner                   | `window` placement operations         | Planned; native window/display handles and work-area changes                                                                |
-| Process                      | `application` lifecycle               | Planned; exit/relaunch with orderly resource shutdown                                                                       |
-| Shell                        | `shell`                               | Partial; scoped desktop execution, bounded capture and direct-child cancellation/reaping; manual async guest integration    |
-| Single Instance              | `single_instance`                     | Partial host-owned process lock plus second-launch argument mailbox; window focus remains host-owned                        |
-| SQL                          | `sqlite`                              | Partial bounded SQLite reads/writes/transaction batches; migrations API and other database drivers remain                   |
-| Store                        | `store`                               | Partial staged JSON settings, save/load and atomic batches; autosave/change events remain                                   |
-| Stronghold                   | `stronghold`                          | Planned; encrypted vault/session APIs, distinct from OS secure storage                                                      |
-| Updater                      | `updater`                             | Partial hooks with pluggable backends; no built-in feed; distinct from Wasm bundle updates                                  |
-| Upload                       | `transfer`                            | Planned; bounded streaming, progress and cancellation over shared HTTP machinery                                            |
-| Websocket                    | `websocket`                           | Partial scoped native guest handles/direct browser sockets, bounded operations and close; reconnect/custom TLS remain       |
-| Window State                 | `window_state`                        | Partial; portable placement and owned macOS window capture/restore; host supplies persistence; other native adapters remain |
+| Dialog                       | `dialog` plus `document_picker`       | Partial direct desktop prompts/browser selection; separate mobile document import; general dialog guest adapters remain      |
+| File System                  | `filesystem`                          | Partial; bounded app-private file operations; user grants/watchers/streaming remain                                          |
+| Geolocation                  | `location`                            | Partial; Apple/Android/browser foreground fixes; Windows/Linux and background tracking remain                                |
+| Global Shortcut              | `global_shortcut`                     | Partial; host-owned macOS/Windows/X11 registrations, bounded events and teardown; Wayland remains                            |
+| Haptics                      | `haptics`                             | Partial; portable effects and Android constants with platform-specific availability                                          |
+| HTTP Client                  | `http`                                | Partial generated native guest/direct browser requests with exact origin scopes; streamed output remains                     |
+| Localhost                    | host-serving integration              | Planned; only if an application needs a loopback server; bind/authentication/lifetime contract                               |
+| Logging                      | `logging`                             | Partial; native JSONL rotation/flush/close and browser console; remote/platform sinks remain                                 |
+| NFC                          | `nfc`                                 | Partial; availability and one bounded NDEF text/URI read on iOS/Android; writes and background delivery remain               |
+| Notifications                | `notifications`                       | Partial; immediate Apple/Android/Linux/browser delivery; Windows, scheduling and interaction callbacks remain                |
+| Opener                       | `linking` plus file-opening operation | Partial outbound URLs; reveal/open-file behavior remains                                                                     |
+| OS Information               | `os`                                  | Partial; platform/architecture only                                                                                          |
+| Persisted Scope              | capability persistence                | Planned; explicit grants, expiration/revocation and app identity                                                             |
+| Positioner                   | `window` placement operations         | Planned; native window/display handles and work-area changes                                                                 |
+| Process                      | `application` lifecycle               | Planned; exit/relaunch with orderly resource shutdown                                                                        |
+| Shell                        | `shell`                               | Partial; scoped desktop execution, bounded capture and direct-child cancellation/reaping; manual async guest integration     |
+| Single Instance              | `single_instance`                     | Partial host-owned process lock plus second-launch argument mailbox; window focus remains host-owned                         |
+| SQL                          | `sqlite`                              | Partial bounded SQLite reads/writes/transaction batches; migrations API and other database drivers remain                    |
+| Store                        | `store`                               | Partial staged JSON settings, save/load and atomic batches; autosave/change events remain                                    |
+| Stronghold                   | `stronghold`                          | Planned; encrypted vault/session APIs, distinct from OS secure storage                                                       |
+| Updater                      | `updater`                             | Partial hooks with pluggable backends; no built-in feed; distinct from Wasm bundle updates                                   |
+| Upload                       | `transfer`                            | Planned; bounded streaming, progress and cancellation over shared HTTP machinery                                             |
+| Websocket                    | `websocket`                           | Partial scoped native guest handles/direct browser sockets, bounded operations and close; reconnect/custom TLS remain        |
+| Window State                 | `window_state`                        | Partial; portable placement and owned macOS window capture/restore; host supplies persistence; other native adapters remain  |
 
 [SQL](https://v2.tauri.app/plugin/sql/) supports more than a SQLite-only contract. [Stronghold](https://v2.tauri.app/plugin/stronghold/) is a vault capability, so an OS keychain wrapper must not be described as its complete port.
 
@@ -231,8 +231,8 @@ All **30** official entries in the [Tauri catalog](https://v2.tauri.app/plugin/)
 
 Electron is useful here as an inventory of application responsibilities. Its Chromium/Node architecture does not need to be reproduced to supply those responsibilities.
 
-| Electron reference                                                           | LeptosKit requirement                                                             | Current disposition                                                                                                  |
-| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Electron reference                                                           | LeptosKit requirement                                                             | Current disposition                                                                                                          |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | [app](https://www.electronjs.org/docs/latest/api/app)                        | Activation/quit/relaunch, app paths, file/URL associations, second-launch handoff | Single-instance lock + argument mailbox; `deep_link` inbound queue/descriptors; quit/relaunch and association writers remain |
 | [BrowserWindow](https://www.electronjs.org/docs/latest/api/browser-window)   | Create/close/focus windows, bounds, fullscreen and per-window lifecycle           | `window_state` supplies portable placement and owned macOS capture/restore; broader window lifecycle remains                 |
 | [Menu](https://www.electronjs.org/docs/latest/api/menu)                      | Application/context menus, standard command roles, accelerators and enabled state | Partial `menu` crate: explicit macOS application-menu and Windows window-menu leases; roles and context menus remain         |

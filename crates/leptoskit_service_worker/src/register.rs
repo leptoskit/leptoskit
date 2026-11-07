@@ -185,9 +185,11 @@ impl Registration {
 		#[cfg(target_arch = "wasm32")]
 		{
 			let value = js::property(&self.inner, "pushManager")?;
+
 			if value.is_undefined() || value.is_null() {
 				return Err(Error::Unavailable("PushManager".into()));
 			}
+
 			Ok(PushManager { inner: value })
 		}
 		#[cfg(not(target_arch = "wasm32"))]
@@ -246,12 +248,15 @@ pub async fn register(script_url: &str, options: RegisterOptions) -> Result<Regi
 		use wasm_bindgen::JsValue;
 		let container = js::container()?;
 		let mut args = vec![JsValue::from_str(script_url)];
+
 		if options.scope.is_some() || options.update_via_cache != UpdateViaCache::None {
 			args.push(js::to_js(&options)?);
 		}
+
 		let inner = js::call_method(&container, "register", &args).await?;
 		Ok(Registration { inner })
 	}
+
 	#[cfg(not(target_arch = "wasm32"))]
 	{
 		let _ = (script_url, options);
@@ -289,10 +294,12 @@ pub async fn get_registration(scope: Option<&str>) -> Result<Option<Registration
 	{
 		use wasm_bindgen::JsValue;
 		let container = js::container()?;
+
 		let args = match scope {
 			Some(scope) => vec![JsValue::from_str(scope)],
 			None => Vec::new(),
 		};
+
 		let value = js::call_method(&container, "getRegistration", &args).await?;
 		Ok((!value.is_undefined() && !value.is_null()).then(|| Registration { inner: value }))
 	}

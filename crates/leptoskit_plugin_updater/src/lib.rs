@@ -1,11 +1,11 @@
 //! <!-- {=p_updaterSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Native hosts construct [`Updater`] with an explicit [`Backend`] that knows
-//! how to check, download, and install a new native executable. There is no
+//! Native hosts construct `Updater` with an explicit `Backend` that knows how
+//! to check, download, and install a new native executable. There is no
 //! automatic `native.plugins` registration and no built-in update server. The
-//! default [`UnavailableBackend`] keeps unsupported targets compiling.
-//! Guest bundle / Wasm over-the-air updates remain `leptoskit_codepush`; this
-//! crate is the installed-application updater surface, matching Electron's
+//! default `UnavailableBackend` keeps unsupported targets compiling. Guest
+//! bundle / Wasm over-the-air updates remain `leptoskit_codepush`; this crate
+//! is the installed-application updater surface, matching Electron's
 //! `autoUpdater` responsibility without shipping a specific feed format.
 //!
 //! <!-- {/p_updaterSummary} -->
@@ -70,6 +70,7 @@ impl Status {
 	pub fn encode(&self) -> Result<Bytes, BridgeError> {
 		let mut output = Encoder::with_capacity(64);
 		output.u32(1);
+
 		match self {
 			Self::UpToDate => output.u32(1),
 			Self::Available { version, notes } => {
@@ -113,15 +114,18 @@ impl Status {
 				output.bytes(message.as_bytes())?;
 			}
 		}
+
 		Ok(output.finish())
 	}
 
 	/// Decodes a versioned status and rejects trailing bytes.
 	pub fn decode(bytes: &[u8]) -> Result<Self, BridgeError> {
 		let mut input = Decoder::new(bytes);
+
 		if input.u32()? != 1 {
 			return Err(BridgeError::InvalidArgument);
 		}
+
 		let status = match input.u32()? {
 			1 => Self::UpToDate,
 			2 => {
@@ -131,6 +135,7 @@ impl Status {
 					1 => Some(owned_text(input.string()?)?),
 					_ => return Err(BridgeError::InvalidArgument),
 				};
+
 				Self::Available { version, notes }
 			}
 			3 => {
@@ -144,6 +149,7 @@ impl Status {
 					1 => Some((u64::from(input.u32()?) << 32) | u64::from(input.u32()?)),
 					_ => return Err(BridgeError::InvalidArgument),
 				};
+
 				Self::Downloading { received, total }
 			}
 			4 => {
@@ -158,6 +164,7 @@ impl Status {
 			}
 			_ => return Err(BridgeError::InvalidArgument),
 		};
+
 		input.finish()?;
 		Ok(status)
 	}
@@ -239,12 +246,15 @@ impl MemoryBackend {
 	) -> Result<Self, Error> {
 		let current = current.into();
 		validate_text(&current).map_err(|_| Error::InvalidArgument)?;
+
 		if let Some((version, notes)) = &available {
 			validate_text(version).map_err(|_| Error::InvalidArgument)?;
+
 			if let Some(notes) = notes {
 				validate_text(notes).map_err(|_| Error::InvalidArgument)?;
 			}
 		}
+
 		Ok(Self {
 			current,
 			available,
@@ -269,6 +279,7 @@ impl Backend for MemoryBackend {
 				}
 			}
 		};
+
 		Ok(self.status.clone())
 	}
 
@@ -288,6 +299,7 @@ impl Backend for MemoryBackend {
 		if !self.downloaded {
 			return Err(Error::Native("no downloaded update is ready".into()));
 		}
+
 		Ok(())
 	}
 }
@@ -361,6 +373,7 @@ impl Plugin for Updater {
 		if !payload.is_empty() {
 			return Err(BridgeError::InvalidArgument);
 		}
+
 		match method {
 			CURRENT_VERSION => {
 				let version = self.current_version();

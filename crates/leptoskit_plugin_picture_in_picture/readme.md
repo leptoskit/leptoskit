@@ -23,7 +23,7 @@
 <p align="center">
   <a href="https://crates.io/crates/leptoskit_plugin_picture_in_picture"><img alt="crates.io" src="https://img.shields.io/crates/v/leptoskit_plugin_picture_in_picture.svg"></a>
   <a href="https://docs.rs/leptoskit_plugin_picture_in_picture"><img alt="docs.rs" src="https://docs.rs/leptoskit_plugin_picture_in_picture/badge.svg"></a>
-  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/leptoskit/leptoskit/blob/main/Cargo.toml"><img alt="MSRV" src="https://img.shields.io/badge/MSRV-1.95.0-blue.svg"></a>
   <a href="https://opensource.org/license/unlicense"><img alt="License: Unlicense" src="https://img.shields.io/badge/license-Unlicense-blue.svg"></a>
 </p>
@@ -84,13 +84,13 @@ if capabilities.system_overlay {
 
 ## Permissions
 
-| Platform | Requirement |
-| -------- | ----------- |
-| Android picture-in-picture | Activity attribute `android:supportsPictureInPicture="true"` (and usually `android:resizeableActivity="true"`). No runtime permission. |
-| Android system overlay | Manifest permission `android.permission.SYSTEM_ALERT_WINDOW` (added from plugin metadata when selected). The user must grant it in system settings; use `request_overlay`. |
-| iOS picture-in-picture | Background mode **Audio, AirPlay, and Picture in Picture** once a video player can enter PiP. This release only reports support. |
-| iOS system overlay | Not available. |
-| Desktop / browser | Not available. |
+| Platform                   | Requirement                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Android picture-in-picture | Activity attribute `android:supportsPictureInPicture="true"` (and usually `android:resizeableActivity="true"`). No runtime permission.                                     |
+| Android system overlay     | Manifest permission `android.permission.SYSTEM_ALERT_WINDOW` (added from plugin metadata when selected). The user must grant it in system settings; use `request_overlay`. |
+| iOS picture-in-picture     | Background mode **Audio, AirPlay, and Picture in Picture** once a video player can enter PiP. This release only reports support.                                           |
+| iOS system overlay         | Not available.                                                                                                                                                             |
+| Desktop / browser          | Not available.                                                                                                                                                             |
 
 ## Learn more
 

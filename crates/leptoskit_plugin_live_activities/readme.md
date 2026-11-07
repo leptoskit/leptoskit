@@ -22,7 +22,7 @@
 <p align="center">
   <a href="https://crates.io/crates/leptoskit_plugin_live_activities"><img alt="crates.io" src="https://img.shields.io/crates/v/leptoskit_plugin_live_activities.svg"></a>
   <a href="https://docs.rs/leptoskit_plugin_live_activities"><img alt="docs.rs" src="https://docs.rs/leptoskit_plugin_live_activities/badge.svg"></a>
-  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/leptoskit/leptoskit/ci.yml?label=CI"></a>
+  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/leptoskit/leptoskit/blob/main/Cargo.toml"><img alt="MSRV" src="https://img.shields.io/badge/MSRV-1.95.0-blue.svg"></a>
   <a href="https://opensource.org/license/unlicense"><img alt="License: Unlicense" src="https://img.shields.io/badge/license-Unlicense-blue.svg"></a>
 </p>
@@ -35,13 +35,13 @@
 
 Live Activities keep a short-lived status on the Lock Screen and, on supported devices, in the Dynamic Island while the user is outside the app. This plugin starts, updates, and ends those activities through ActivityKit, and can wait for the per-activity push token Apple uses for remote updates.
 
-| Platform        | Implementation                         | Scope                                                                                          |
-| --------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| iOS 16.1+       | Swift ActivityKit                      | Enablement queries, start/update/end, push-token wait, tracked activity list                   |
-| iPadOS          | Same ActivityKit path where available  | Lock Screen presentations; Dynamic Island only on devices that have one                        |
-| macOS           | Unavailable                            | ActivityKit Live Activities are not offered                                                    |
-| Android         | Kotlin stub                            | Every method returns `Unavailable`                                                             |
-| Browser / other | Rust `web` / `Unsupported`             | Every method returns `Unavailable`                                                             |
+| Platform        | Implementation                        | Scope                                                                        |
+| --------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
+| iOS 16.1+       | Swift ActivityKit                     | Enablement queries, start/update/end, push-token wait, tracked activity list |
+| iPadOS          | Same ActivityKit path where available | Lock Screen presentations; Dynamic Island only on devices that have one      |
+| macOS           | Unavailable                           | ActivityKit Live Activities are not offered                                  |
+| Android         | Kotlin stub                           | Every method returns `Unavailable`                                           |
+| Browser / other | Rust `web` / `Unsupported`            | Every method returns `Unavailable`                                           |
 
 A successful `start` means ActivityKit accepted the request. It does not prove Lock Screen or Dynamic Island chrome appeared. The app must include a Widget Extension that renders `LeptosKitLiveActivityAttributes` from this package. Custom attribute types, push-to-start tokens, remote payload authoring, and App Intent deep links from the island are out of scope for this port.
 
@@ -67,15 +67,15 @@ Content state is a bounded map of string fields (at most 16 keys). Keys follow t
 
 All integers are little-endian `u32`. Strings are `u32` byte lengths followed by strict UTF-8. Decoders reject trailing bytes, truncated fields, invalid UTF-8 and values outside their domain before calling ActivityKit.
 
-| ID | Method                     | Request                                                                 | Response                |
-| -- | -------------------------- | ----------------------------------------------------------------------- | ----------------------- |
-| 0  | Are enabled                | Empty                                                                   | Flag `u32`              |
-| 1  | Frequent updates enabled   | Empty                                                                   | Flag `u32`              |
-| 2  | Start                      | id, kind, title, push flag, field count, key/value pairs                | id string               |
-| 3  | Update                     | id, field count, key/value pairs                                        | Empty                   |
-| 4  | End                        | id, dismissal kind, after-seconds, optional final fields                | Empty                   |
-| 5  | Wait push token           | id                                                                      | length-prefixed bytes   |
-| 6  | List                       | Empty                                                                   | count, id strings       |
+| ID | Method                   | Request                                                  | Response              |
+| -- | ------------------------ | -------------------------------------------------------- | --------------------- |
+| 0  | Are enabled              | Empty                                                    | Flag `u32`            |
+| 1  | Frequent updates enabled | Empty                                                    | Flag `u32`            |
+| 2  | Start                    | id, kind, title, push flag, field count, key/value pairs | id string             |
+| 3  | Update                   | id, field count, key/value pairs                         | Empty                 |
+| 4  | End                      | id, dismissal kind, after-seconds, optional final fields | Empty                 |
+| 5  | Wait push token          | id                                                       | length-prefixed bytes |
+| 6  | List                     | Empty                                                    | count, id strings     |
 
 IDs and field keys contain 1–64 ASCII letters, digits, `.`, `_` or `-`. Titles have at most 128 UTF-8 bytes and must contain non-whitespace text. Field values have at most 256 UTF-8 bytes. Control characters are rejected. Push tokens are 1–512 raw bytes. Dismissal is Default=0, Immediate=1 or After=2 with `after-seconds` in 1..=86400 (zero for Default/Immediate). Flags are exactly 0 or 1.
 
@@ -89,7 +89,7 @@ API scope is informed by [Apple Live Activities](https://developer.apple.com/doc
 
 <!-- {=p_live_activitiesSummary} -->
 
-Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements ActivityKit; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
+Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
 
 <!-- {/p_live_activitiesSummary} -->
 

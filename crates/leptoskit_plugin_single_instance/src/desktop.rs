@@ -31,6 +31,7 @@ impl Activation {
 				"invalid activation program or argument count",
 			));
 		}
+
 		for value in std::iter::once(&program).chain(arguments.iter()) {
 			let text = value.to_str().ok_or_else(|| {
 				io::Error::new(
@@ -38,6 +39,7 @@ impl Activation {
 					"activation arguments must be UTF-8 for the mailbox",
 				)
 			})?;
+
 			if text.len() > 8192 || text.chars().any(char::is_control) {
 				return Err(io::Error::new(
 					io::ErrorKind::InvalidInput,
@@ -45,6 +47,7 @@ impl Activation {
 				));
 			}
 		}
+
 		Ok(Self { program, arguments })
 	}
 
@@ -53,15 +56,18 @@ impl Activation {
 		bytes.extend_from_slice(&1u32.to_le_bytes());
 		write_string(&mut bytes, self.program.to_str().unwrap());
 		bytes.extend_from_slice(&(self.arguments.len() as u32).to_le_bytes());
+
 		for argument in &self.arguments {
 			write_string(&mut bytes, argument.to_str().unwrap());
 		}
+
 		if bytes.len() > MAX_ACTIVATION_BYTES {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"activation exceeds mailbox capacity",
 			));
 		}
+
 		Ok(bytes)
 	}
 
@@ -72,32 +78,40 @@ impl Activation {
 				"activation exceeds mailbox capacity",
 			));
 		}
+
 		let mut rest = bytes;
 		let version = take_u32(&mut rest)?;
+
 		if version != 1 {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"unsupported activation version",
 			));
 		}
+
 		let program = OsString::from(take_string(&mut rest)?);
 		let count = take_u32(&mut rest)? as usize;
+
 		if count > MAX_ACTIVATION_ARGUMENTS {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"activation argument count too large",
 			));
 		}
+
 		let mut arguments = Vec::with_capacity(count);
+
 		for _ in 0..count {
 			arguments.push(OsString::from(take_string(&mut rest)?));
 		}
+
 		if !rest.is_empty() {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"trailing activation bytes",
 			));
 		}
+
 		Self::new(program, arguments)
 	}
 }
@@ -201,11 +215,14 @@ impl InstanceGuard {
 	/// block later activations. Returns `Ok(None)` when no mailbox exists.
 	pub fn poll_activation(&self) -> io::Result<Option<Activation>> {
 		let path = activation_path(&self.directory, &self.identity);
+
 		let bytes = match fs::read(&path) {
 			Ok(bytes) => bytes,
+
 			Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
 			Err(error) => return Err(error),
 		};
+
 		let _ = fs::remove_file(&path);
 		Activation::decode(&bytes).map(Some)
 	}
@@ -231,6 +248,7 @@ pub fn notify_running(directory: &Path, identity: &str, activation: &Activation)
 		file.write_all(&encoded)?;
 		file.sync_all()?;
 	}
+
 	fs::rename(&temporary, &final_path)?;
 	Ok(())
 }
@@ -271,6 +289,7 @@ fn take_u32(rest: &mut &[u8]) -> io::Result<u32> {
 			"truncated activation",
 		));
 	}
+
 	let value = u32::from_le_bytes(rest[..4].try_into().unwrap());
 	*rest = &rest[4..];
 	Ok(value)
@@ -278,12 +297,14 @@ fn take_u32(rest: &mut &[u8]) -> io::Result<u32> {
 
 fn take_string(rest: &mut &[u8]) -> io::Result<String> {
 	let len = take_u32(rest)? as usize;
+
 	if rest.len() < len {
 		return Err(io::Error::new(
 			io::ErrorKind::InvalidInput,
 			"truncated activation",
 		));
 	}
+
 	let text = std::str::from_utf8(&rest[..len])
 		.map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "activation is not UTF-8"))?;
 	*rest = &rest[len..];
@@ -396,6 +417,7 @@ mod tests {
 			&Activation::new("app".into(), vec!["--focus".into()]).unwrap(),
 		)
 		.unwrap();
+
 		assert_eq!(
 			owner.poll_activation().unwrap(),
 			Some(Activation::new("app".into(), vec!["--focus".into()]).unwrap())
@@ -432,6 +454,7 @@ mod tests {
 		);
 		// A directory occupying the lock name cannot be opened read-write.
 		fs::create_dir(dir.path().join("occupied.lock")).unwrap();
+
 		assert!(InstanceGuard::acquire(dir.path(), "occupied").is_err());
 		fs::hard_link(&file, dir.path().join("hard.lock")).unwrap();
 		#[cfg(unix)]

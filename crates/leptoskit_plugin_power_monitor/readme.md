@@ -22,7 +22,7 @@
 <p align="center">
   <a href="https://crates.io/crates/leptoskit_plugin_power_monitor"><img alt="crates.io" src="https://img.shields.io/crates/v/leptoskit_plugin_power_monitor.svg"></a>
   <a href="https://docs.rs/leptoskit_plugin_power_monitor"><img alt="docs.rs" src="https://docs.rs/leptoskit_plugin_power_monitor/badge.svg"></a>
-  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/leptoskit/leptoskit/ci.yml?label=CI"></a>
+  <a href="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/leptoskit/leptoskit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/leptoskit/leptoskit/blob/main/Cargo.toml"><img alt="MSRV" src="https://img.shields.io/badge/MSRV-1.95.0-blue.svg"></a>
   <a href="https://opensource.org/license/unlicense"><img alt="License: Unlicense" src="https://img.shields.io/badge/license-Unlicense-blue.svg"></a>
 </p>

@@ -33,9 +33,11 @@ pub const MAX_COUNT: u32 = 999_999;
 /// Validates and returns a badge count.
 pub fn decode_count(bytes: &[u8]) -> Result<u32, Error> {
 	let count = u32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArgument)?);
+
 	if count > MAX_COUNT {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(count)
 }
 
@@ -44,6 +46,7 @@ pub fn encode_count(count: u32) -> Result<[u8; 4], Error> {
 	if count > MAX_COUNT {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(count.to_le_bytes())
 }
 
@@ -92,6 +95,7 @@ impl Counter {
 		if count > MAX_COUNT {
 			return Err(Error::InvalidArgument);
 		}
+
 		self.count = count;
 		Ok(())
 	}
@@ -156,6 +160,7 @@ pub mod linux {
 		/// Connects to the session bus. `desktop_id` must end in `.desktop`.
 		pub fn new(desktop_id: impl Into<String>) -> Result<Self, Error> {
 			let desktop_id = desktop_id.into();
+
 			if desktop_id.is_empty()
 				|| desktop_id.len() > 256
 				|| !desktop_id.ends_with(".desktop")

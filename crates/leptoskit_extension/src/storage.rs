@@ -103,10 +103,12 @@ impl Area {
 	/// When the area is unavailable, or the browser has no quota API.
 	pub async fn get_bytes_in_use(self, key: Option<&str>) -> Result<u64> {
 		let path = format!("{}.getBytesInUse", self.path());
+
 		let bytes: f64 = match key {
 			Some(key) => js::call(&path, &[&key]).await?,
 			None => js::call(&path, &[]).await?,
 		};
+
 		Ok(bytes as u64)
 	}
 }

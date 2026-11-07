@@ -28,6 +28,7 @@ private final class FakeLiveActivities: LiveActivityService {
 
     func update(id: String, fields: [String: String]) async throws {
         if let updateError { throw updateError }
+
         guard var existing = activities[id] else { throw PluginError.unavailable }
         existing.fields = fields
         activities[id] = existing
@@ -41,19 +42,25 @@ private final class FakeLiveActivities: LiveActivityService {
     ) async throws {
         _ = dismissal
         _ = afterSeconds
+
         if let endError { throw endError }
+
         guard activities.removeValue(forKey: id) != nil else { throw PluginError.unavailable }
+
         if let fields {
             _ = fields
         }
+
         if let waiter = tokenWaiters.removeValue(forKey: id) {
             waiter.resume(throwing: PluginError.cancelled)
         }
+
         tokens.removeValue(forKey: id)
     }
 
     func waitPushToken(id: String) async throws -> Data {
         if let existing = tokens.removeValue(forKey: id) { return existing }
+
         guard activities[id] != nil else { throw PluginError.unavailable }
         return try await withCheckedThrowingContinuation { continuation in
             tokenWaiters[id] = continuation
@@ -152,6 +159,7 @@ final class LiveActivitiesTests: XCTestCase {
         append(UInt32(1), to: &data)
         try append("eta", to: &data)
         try append("4", to: &data)
+
         return buffer(data)
     }
 
@@ -212,6 +220,7 @@ final class LiveActivitiesTests: XCTestCase {
         }))
         var offset = 4
         var ids: [String] = []
+
         for _ in 0..<count {
             let next = try string(data, offset: offset)
             ids.append(next.value)
@@ -233,6 +242,7 @@ final class LiveActivitiesTests: XCTestCase {
         }))
         let start = offset + 4
         let end = start + length
+
         guard let value = String(data: data.subdata(in: start..<end), encoding: .utf8) else {
             throw PluginError.invalidArgument
         }

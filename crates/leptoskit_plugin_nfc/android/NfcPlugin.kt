@@ -9,14 +9,14 @@ import android.nfc.NfcManager
 import android.os.Looper
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.CancellableContinuation
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /** Foreground NDEF text/URI reads through the activity's reader mode. */
 class NfcPlugin(
@@ -36,8 +36,11 @@ class NfcPlugin(
         payload: ByteBuffer,
     ): ByteArray {
         checkMain()
+
         if (closed) throw PluginException(PluginException.CANCELLED)
+
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
+
         if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
         return when (method) {
@@ -48,11 +51,13 @@ class NfcPlugin(
 
     override fun close() {
         checkMain()
+
         if (closed) return
         closed = true
         disableReader()
         pending?.let {
             pending = null
+
             if (it.isActive) it.resumeWithException(PluginException(PluginException.CANCELLED))
         }
     }
@@ -70,6 +75,7 @@ class NfcPlugin(
         if (pending != null) throw PluginException(PluginException.BUSY)
         val owner = activity ?: throw PluginException(PluginException.UNAVAILABLE)
         val nfc = adapter ?: throw PluginException(PluginException.UNAVAILABLE)
+
         if (!nfc.isEnabled) throw PluginException(PluginException.UNAVAILABLE)
 
         return suspendCancellableCoroutine { continuation ->
@@ -105,6 +111,7 @@ class NfcPlugin(
         val continuation = pending ?: return
         pending = null
         disableReader()
+
         if (!continuation.isActive) return
         try {
             continuation.resume(encodeRecord(decode(message)))
@@ -123,18 +130,29 @@ class NfcPlugin(
 
     private fun decode(message: NdefMessage?): Pair<Int, String> {
         val record = message?.records?.firstOrNull() ?: throw PluginException(PluginException.UNAVAILABLE)
+
         return when (record.tnf) {
             NdefRecord.TNF_WELL_KNOWN -> {
                 when {
-                    record.type.contentEquals(NdefRecord.RTD_URI) ->
+                    record.type.contentEquals(NdefRecord.RTD_URI) -> {
                         1 to (record.toUri()?.toString() ?: throw PluginException(PluginException.INVALID_ARGUMENT))
-                    record.type.contentEquals(NdefRecord.RTD_TEXT) ->
+                    }
+
+                    record.type.contentEquals(NdefRecord.RTD_TEXT) -> {
                         0 to decodeText(record.payload)
-                    else -> throw PluginException(PluginException.UNAVAILABLE)
+                    }
+
+                    else -> {
+                        throw PluginException(PluginException.UNAVAILABLE)
+                    }
                 }
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }.also { (_, value) ->
+
             if (value.isEmpty() || value.toByteArray(StandardCharsets.UTF_8).size > 4096) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
@@ -146,6 +164,7 @@ class NfcPlugin(
         val status = payload[0].toInt()
         val languageLength = status and 0x3F
         val encoding = if (status and 0x80 == 0) StandardCharsets.UTF_8 else Charset.forName("UTF-16")
+
         if (payload.size < 1 + languageLength) throw PluginException(PluginException.INVALID_ARGUMENT)
         return String(payload, 1 + languageLength, payload.size - 1 - languageLength, encoding)
     }
@@ -169,7 +188,9 @@ class NfcPlugin(
     }
 
     private fun android.nfc.Tag.getNdef(): NdefMessage? {
-        val ndef = android.nfc.tech.Ndef.get(this) ?: return null
+        val ndef =
+            android.nfc.tech.Ndef
+                .get(this) ?: return null
         return try {
             ndef.connect()
             ndef.ndefMessage.also { ndef.close() }
@@ -178,6 +199,7 @@ class NfcPlugin(
                 ndef.close()
             } catch (_: Exception) {
             }
+
             null
         }
     }

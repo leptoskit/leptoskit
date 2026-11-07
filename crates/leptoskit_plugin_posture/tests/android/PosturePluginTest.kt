@@ -42,6 +42,7 @@ class PosturePluginTest {
         assertEquals(PosturePlugin.VERTICAL, view.int)
         assertEquals(PosturePlugin.FALSE, view.int)
         assertEquals(PosturePlugin.TRUE, view.int)
+
         assertEquals(1, view.int)
         assertEquals(0.48f, view.float, 0f)
         assertEquals(0f, view.float, 0f)
@@ -107,9 +108,10 @@ class PosturePluginTest {
                 height = 1f,
                 angle = PosturePlugin.NO_ANGLE,
             )
-        val hinges = List(PosturePlugin.MAX_HINGES) { index ->
-            hinge.copy(x = 0.2f * (index + 1))
-        }
+        val hinges =
+            List(PosturePlugin.MAX_HINGES) { index ->
+                hinge.copy(x = 0.2f * (index + 1))
+            }
         val bytes = PosturePlugin.encodePosture(PosturePlugin.TRUE, PosturePlugin.OPEN, hinges)
         assertEquals(
             PosturePlugin.HEADER_BYTES + PosturePlugin.HINGE_BYTES * PosturePlugin.MAX_HINGES,

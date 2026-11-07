@@ -54,6 +54,7 @@ const MAX_FIELD_VALUE_LEN: usize = 256;
 const MAX_PUSH_TOKEN_LEN: usize = 512;
 const MAX_START_BYTES: usize = 4096;
 const MAX_UPDATE_BYTES: usize = 4096;
+
 const MAX_END_BYTES: usize = 4096;
 const MAX_AFTER_SECONDS: u32 = 86_400;
 
@@ -121,16 +122,19 @@ impl ContentState {
 		fields: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
 	) -> Result<Self, Error> {
 		let mut out = Vec::new();
+
 		for (key, value) in fields {
 			let key = key.into();
 			let value = value.into();
 			validate_id_len(&key, MAX_FIELD_KEY_LEN)?;
 			validate_text(&value, MAX_FIELD_VALUE_LEN, false)?;
 			out.push((key, value));
+
 			if out.len() > MAX_FIELDS {
 				return Err(Error::InvalidArgument);
 			}
 		}
+
 		Ok(Self { fields: out })
 	}
 
@@ -142,26 +146,33 @@ impl ContentState {
 
 	fn encode_into(&self, output: &mut Encoder) -> Result<(), Error> {
 		output.u32(u32::try_from(self.fields.len()).map_err(|_| Error::TooLarge)?);
+
 		for (key, value) in &self.fields {
 			output.bytes(key.as_bytes())?;
 			output.bytes(value.as_bytes())?;
 		}
+
 		Ok(())
 	}
 
 	fn decode(input: &mut Decoder<'_>) -> Result<Self, Error> {
 		let count = input.u32()? as usize;
+
 		if count > MAX_FIELDS {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut fields = Vec::with_capacity(count);
+
 		for _ in 0..count {
 			let key = input.string()?;
 			let value = input.string()?;
 			validate_id_len(key, MAX_FIELD_KEY_LEN)?;
+
 			validate_text(value, MAX_FIELD_VALUE_LEN, false)?;
 			fields.push((key.to_owned(), value.to_owned()));
 		}
+
 		Ok(Self { fields })
 	}
 }
@@ -214,12 +225,14 @@ impl DismissalPolicy {
 				if input.u32()? != 0 {
 					return Err(Error::InvalidArgument);
 				}
+
 				Ok(Self::Default)
 			}
 			1 => {
 				if input.u32()? != 0 {
 					return Err(Error::InvalidArgument);
 				}
+
 				Ok(Self::Immediate)
 			}
 			2 => {
@@ -227,6 +240,7 @@ impl DismissalPolicy {
 				if !(1..=MAX_AFTER_SECONDS).contains(&seconds) {
 					return Err(Error::InvalidArgument);
 				}
+
 				Ok(Self::After { seconds })
 			}
 			_ => Err(Error::InvalidArgument),
@@ -314,16 +328,20 @@ impl StartRequest {
 		if payload.len() > MAX_START_BYTES {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut input = Decoder::new(payload);
 		let id = Identifier::decode(&mut input)?;
 		let kind = Identifier::decode(&mut input)?;
 		let title = input.string()?;
+
 		let push_updates = match input.u32()? {
 			0 => false,
 			1 => true,
 			_ => return Err(Error::InvalidArgument),
 		};
+
 		let content = ContentState::decode(&mut input)?;
+
 		input.finish()?;
 		Self::new(id, kind, title, content, push_updates)
 	}
@@ -367,6 +385,7 @@ impl UpdateRequest {
 		if payload.len() > MAX_UPDATE_BYTES {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut input = Decoder::new(payload);
 		let id = Identifier::decode(&mut input)?;
 		let content = ContentState::decode(&mut input)?;
@@ -420,6 +439,7 @@ impl EndRequest {
 		let mut output = Encoder::with_capacity(32);
 		self.id.encode_into(&mut output)?;
 		self.dismissal.encode(&mut output);
+
 		match &self.final_content {
 			None => output.u32(0),
 			Some(content) => {
@@ -427,6 +447,7 @@ impl EndRequest {
 				content.encode_into(&mut output)?;
 			}
 		}
+
 		Ok(output.finish())
 	}
 
@@ -435,14 +456,17 @@ impl EndRequest {
 		if payload.len() > MAX_END_BYTES {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut input = Decoder::new(payload);
 		let id = Identifier::decode(&mut input)?;
 		let dismissal = DismissalPolicy::decode(&mut input)?;
+
 		let final_content = match input.u32()? {
 			0 => None,
 			1 => Some(ContentState::decode(&mut input)?),
 			_ => return Err(Error::InvalidArgument),
 		};
+
 		input.finish()?;
 		Ok(Self::new(id, dismissal, final_content))
 	}
@@ -456,6 +480,7 @@ impl PushToken {
 	/// Accepts a non-empty token up to 512 bytes.
 	pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, Error> {
 		let bytes = bytes.into();
+
 		if bytes.is_empty() || bytes.len() > MAX_PUSH_TOKEN_LEN {
 			Err(Error::InvalidArgument)
 		} else {
@@ -473,10 +498,12 @@ impl PushToken {
 	#[must_use]
 	pub fn to_hex(&self) -> String {
 		let mut hex = String::with_capacity(self.0.len() * 2);
+
 		for byte in &self.0 {
 			use std::fmt::Write as _;
 			let _ = write!(hex, "{byte:02x}");
 		}
+
 		hex
 	}
 
@@ -515,14 +542,19 @@ pub fn encode_flag(value: bool) -> Bytes {
 pub fn decode_list(payload: &[u8]) -> Result<Vec<Identifier>, Error> {
 	let mut input = Decoder::new(payload);
 	let count = input.u32()? as usize;
+
 	if count > 64 {
 		return Err(Error::InvalidArgument);
 	}
+
 	let mut ids = Vec::with_capacity(count);
+
 	for _ in 0..count {
 		ids.push(Identifier::decode(&mut input)?);
 	}
+
 	input.finish()?;
+
 	Ok(ids)
 }
 
@@ -531,11 +563,14 @@ pub fn encode_list(ids: &[Identifier]) -> Result<Bytes, Error> {
 	if ids.len() > 64 {
 		return Err(Error::InvalidArgument);
 	}
+
 	let mut output = Encoder::with_capacity(4);
 	output.u32(u32::try_from(ids.len()).map_err(|_| Error::TooLarge)?);
+
 	for id in ids {
 		id.encode_into(&mut output)?;
 	}
+
 	Ok(output.finish())
 }
 
@@ -544,6 +579,7 @@ pub fn validate_empty(method: MethodId, payload: &[u8]) -> Result<(), Error> {
 	if !matches!(method, ARE_ENABLED | FREQUENT_UPDATES_ENABLED | LIST) {
 		return Err(Error::Unavailable);
 	}
+
 	if payload.is_empty() {
 		Ok(())
 	} else {
@@ -692,6 +728,7 @@ impl leptoskit_bridge::Plugin for Unsupported {
 			}
 			_ => return Err(Error::Unavailable),
 		}
+
 		Err(Error::Unavailable)
 	}
 }
@@ -715,11 +752,14 @@ mod tests {
 		.unwrap();
 		let encoded = start.encode().unwrap();
 		assert_eq!(StartRequest::decode(&encoded).unwrap(), start);
+
 		for length in 0..encoded.len() {
 			assert!(StartRequest::decode(&encoded[..length]).is_err());
 		}
+
 		let mut trailing = encoded.to_vec();
 		trailing.push(0);
+
 		assert!(StartRequest::decode(&trailing).is_err());
 
 		let update = UpdateRequest::new(start.id().clone(), content);

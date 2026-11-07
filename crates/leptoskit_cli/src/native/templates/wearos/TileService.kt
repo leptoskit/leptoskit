@@ -15,9 +15,9 @@ package dev.leptoskit.wearos
  * - `com.google.android.wearable.feature.TILES` metadata as required by the
  *   Wear Tiles library version you depend on
  */
-class LeptoskitTileServicePlaceholder {
-	companion object {
-		const val SURFACE = "tile"
-		const val STATUS = "experimental-stub"
-	}
+class TileService {
+    companion object {
+        const val SURFACE = "tile"
+        const val STATUS = "experimental-stub"
+    }
 }

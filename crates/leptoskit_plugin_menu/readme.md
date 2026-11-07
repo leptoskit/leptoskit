@@ -76,19 +76,13 @@ The Windows-only test creates a hidden HWND, sends `WM_COMMAND` to its menu subc
 
 <!-- {=p_menuSummary} -->
 
-Native hosts construct it explicitly; it is not a guest plugin and installs nothing by default. Prefer the chained builders (`MenuBar`, `Submenu`, `Command`, …). The desktop host owns the menu and installs it on its own windows; definitions are validated before any native allocation, and mobile and the browser expose no menu.
+Native hosts construct it explicitly; it is not a guest plugin and installs nothing by default. The desktop host owns the menu and installs it on its own windows; definitions are validated before any native allocation, and mobile and the browser expose no menu.
 
 <!-- {/p_menuSummary} -->
 
 ## Use it
 
-Build the tree with the chained constructors (`MenuBar`, `Submenu`, `Command`,
-…), then hand the validated definition to the desktop host. On macOS, attach it
-with `macos::ApplicationMenu::install` on the main thread. Tray / status-item
-menus reuse the same `DesktopMenu` through `leptoskit_plugin_tray::TrayHost::set_menu`
-and do not take the application-menu lease. Linux has no standalone menu bar
-(`supports_menu_bar()` is false; `linux::attach_menu_bar` returns `Unavailable`);
-Windows installs through an explicit HWND lease.
+Build the tree with the chained constructors (`MenuBar`, `Submenu`, `Command`, …), then hand the validated definition to the desktop host. On macOS, attach it with `macos::ApplicationMenu::install` on the main thread. Tray / status-item menus reuse the same `DesktopMenu` through `leptoskit_plugin_tray::TrayHost::set_menu` and do not take the application-menu lease. Linux has no standalone menu bar (`supports_menu_bar()` is false; `linux::attach_menu_bar` returns `Unavailable`); Windows installs through an explicit HWND lease.
 
 ```rust,no_run
 # #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

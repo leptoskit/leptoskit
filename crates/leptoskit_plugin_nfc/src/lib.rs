@@ -90,24 +90,29 @@ impl Record {
 
 	fn new(kind: Kind, value: impl Into<String>) -> Result<Self, Error> {
 		let value = value.into();
+
 		if value.is_empty() || value.len() > MAX_RECORD_BYTES {
 			return Err(Error::InvalidArgument);
 		}
+
 		if value
 			.chars()
 			.any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
 		{
 			return Err(Error::InvalidArgument);
 		}
+
 		if kind == Kind::Uri {
 			let ok = value.starts_with("https://")
 				|| value.starts_with("http://")
 				|| value.starts_with("mailto:")
 				|| value.starts_with("tel:");
+
 			if !ok {
 				return Err(Error::InvalidArgument);
 			}
 		}
+
 		Ok(Self { kind, value })
 	}
 
@@ -136,12 +141,15 @@ impl Record {
 		if payload.len() > MAX_RECORD_BYTES + 8 {
 			return Err(Error::TooLarge);
 		}
+
 		let mut decoder = Decoder::new(payload);
+
 		let kind = match decoder.u32()? {
 			0 => Kind::Text,
 			1 => Kind::Uri,
 			_ => return Err(Error::InvalidArgument),
 		};
+
 		let value = decoder.string()?;
 		decoder.finish()?;
 		Self::new(kind, value)
@@ -153,6 +161,7 @@ pub fn validate(method: MethodId, payload: &[u8]) -> Result<(), Error> {
 	if !METHODS.contains(&method) {
 		return Err(Error::Unavailable);
 	}
+
 	if payload.is_empty() {
 		Ok(())
 	} else {

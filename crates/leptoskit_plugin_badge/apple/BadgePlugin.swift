@@ -19,6 +19,7 @@ private final class SystemBadgeService: BadgeService {
 
     func set(_ count: UInt32) async throws {
         self.count = count
+
         #if canImport(AppKit) && !targetEnvironment(macCatalyst)
         NSApp.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
         #else
@@ -48,6 +49,7 @@ public final class BadgePlugin: NativePlugin {
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
+
         guard methods.contains(method) else { throw PluginError.unavailable }
 
         switch method {
@@ -71,6 +73,7 @@ public final class BadgePlugin: NativePlugin {
     private static func decode(_ payload: NativeBuffer) throws -> UInt32 {
         guard payload.count == 4 else { throw PluginError.invalidArgument }
         let count = payload.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)) }
+
         guard count <= maxCount else { throw PluginError.invalidArgument }
         return count
     }

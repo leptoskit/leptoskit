@@ -69,6 +69,9 @@ packages = [
 	"leptoskit_android",
 	"leptoskit_gtk",
 	"leptoskit_windows",
+	"leptoskit_watch",
+	"leptoskit_watchos",
+	"leptoskit_wearos",
 	"leptoskit_aria",
 	"leptoskit_analytics",
 	"leptoskit_deploy_console",
@@ -133,7 +136,6 @@ packages = [
 	"leptoskit_plugin_shell",
 	"leptoskit_plugin_logging",
 	"leptoskit_plugin_notifications",
-	"leptoskit_plugin_nfc",
 	"leptoskit_plugin_local_authentication",
 	"leptoskit_plugin_location",
 	"leptoskit_plugin_global_shortcut",
@@ -257,6 +259,18 @@ type = "cargo"
 path = "crates/leptoskit_windows"
 type = "cargo"
 
+[package.leptoskit_watch]
+path = "crates/leptoskit_watch"
+type = "cargo"
+
+[package.leptoskit_watchos]
+path = "crates/leptoskit_watchos"
+type = "cargo"
+
+[package.leptoskit_wearos]
+path = "crates/leptoskit_wearos"
+type = "cargo"
+
 [package.leptoskit_aria]
 path = "crates/leptoskit_aria"
 type = "cargo"
@@ -298,6 +312,9 @@ path = "crates/leptoskit_plugin_clipboard"
 
 [package.leptoskit_plugin_haptics]
 path = "crates/leptoskit_plugin_haptics"
+
+[package.leptoskit_plugin_home_widgets]
+path = "crates/leptoskit_plugin_home_widgets"
 
 [package.leptoskit_plugin_battery]
 path = "crates/leptoskit_plugin_battery"

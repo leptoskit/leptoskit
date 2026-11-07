@@ -61,14 +61,17 @@ pub fn connect(name: &str) -> Result<Port> {
 		let port = function
 			.call1(&runtime, &options)
 			.map_err(|error| Error::Browser(js::message(&error)))?;
+
 		if port.is_undefined() || port.is_null() {
 			return Err(Error::Unavailable("runtime.connect".into()));
 		}
+
 		Ok(Port::from_js(name.to_owned(), port))
 	}
 	#[cfg(not(target_arch = "wasm32"))]
 	{
 		let _ = name;
+
 		Err(Error::Unavailable("runtime.connect".into()))
 	}
 }
@@ -204,6 +207,7 @@ impl Port {
 		F: FnMut(M) + 'static,
 	{
 		let handler = Rc::new(RefCell::new(handler));
+
 		match &self.kind {
 			#[cfg(target_arch = "wasm32")]
 			PortKind::Js(port) => {
@@ -241,6 +245,7 @@ impl Port {
 	/// Outside an extension.
 	pub fn on_disconnect(&self, handler: impl FnMut() + 'static) -> Result<crate::Listener> {
 		let handler = Rc::new(RefCell::new(handler));
+
 		match &self.kind {
 			#[cfg(target_arch = "wasm32")]
 			PortKind::Js(port) => {
