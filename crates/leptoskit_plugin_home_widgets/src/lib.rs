@@ -4,11 +4,11 @@
 //! `home-widgets` plugin in `native.plugins`; supported generated hosts
 //! discover it from Cargo metadata. Generated Windows, Linux, and terminal
 //! hosts currently omit runtime plugins; use explicit registration in a custom
-//! host there. Guests enable the `guest` feature and reuse
-//! `guest::HomeWidgets` rather than resolving the plugin on every call. The
-//! plugin publishes bounded snapshot text for `WidgetKit` and Android App
-//! Widgets and asks the OS to reload them; it does not draw the widget UI or
-//! scaffold the extension target.
+//! host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets`
+//! rather than resolving the plugin on every call. The plugin publishes bounded
+//! snapshot text for WidgetKit and Android App Widgets and asks the OS to
+//! reload them; it does not draw the widget UI or scaffold the extension
+//! target.
 //!
 //! <!-- {/p_home_widgetsSummary} -->
 

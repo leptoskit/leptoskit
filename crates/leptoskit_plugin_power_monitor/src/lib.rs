@@ -1,7 +1,7 @@
 //! <!-- {=p_power_monitorSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Native hosts construct [`PowerMonitor`] and may expose it through the
-//! bridge. There is no automatic `native.plugins` registration. The host pushes
+//! Native hosts construct `PowerMonitor` and may expose it through the bridge.
+//! There is no automatic `native.plugins` registration. The host pushes
 //! suspend/resume and related lifecycle events from its event loop; idle-time
 //! queries work on Windows today and return `Unavailable` elsewhere until a
 //! platform adapter lands. Mobile and browsers return `Unavailable` for idle

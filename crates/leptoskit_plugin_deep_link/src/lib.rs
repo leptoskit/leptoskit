@@ -1,12 +1,12 @@
 //! <!-- {=p_deep_linkSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Native hosts construct [`DeepLinks`] with the schemes and file types they
+//! Native hosts construct `DeepLinks` with the schemes and file types they
 //! claim, push OS open-URL / open-file activations into it, and may expose it
 //! through the bridge. There is no automatic `native.plugins` registration.
-//! Outbound HTTP(S)/mailto/tel/sms opening remains
-//! `leptoskit_plugin_linking`. Packaging still has to declare the associations
-//! in Info.plist, the Windows registry, or a `.desktop` file; this crate holds
-//! the runtime queue and the association descriptors the host/packager use.
+//! Outbound HTTP(S)/mailto/tel/sms opening remains `leptoskit_plugin_linking`.
+//! Packaging still has to declare the associations in Info.plist, the Windows
+//! registry, or a `.desktop` file; this crate holds the runtime queue and the
+//! association descriptors the host/packager use.
 //!
 //! <!-- {/p_deep_linkSummary} -->
 //!

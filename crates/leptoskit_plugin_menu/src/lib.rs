@@ -1,10 +1,9 @@
 //! <!-- {=p_menuSummary|trim|linePrefix:"//! ":true} -->
 //!
 //! Native hosts construct it explicitly; it is not a guest plugin and installs
-//! nothing by default. Prefer the chained builders (`MenuBar`, `Submenu`,
-//! `Command`, …). The desktop host owns the menu and installs it on its own
-//! windows; definitions are validated before any native allocation, and mobile
-//! and the browser expose no menu.
+//! nothing by default. The desktop host owns the menu and installs it on its
+//! own windows; definitions are validated before any native allocation, and
+//! mobile and the browser expose no menu.
 //!
 //! <!-- {/p_menuSummary} -->
 //!

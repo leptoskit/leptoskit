@@ -30,7 +30,6 @@ leptoskit_config = { workspace = true }
 leptoskit_db = { workspace = true, optional = true }
 leptoskit_devtools = { workspace = true, optional = true, default-features = false }
 leptoskit_extension = { workspace = true, optional = true }
-leptoskit_service_worker = { workspace = true, optional = true }
 leptoskit_form = { workspace = true, optional = true }
 leptoskit_idp = { workspace = true, optional = true }
 leptoskit_l10n = { workspace = true, optional = true }
@@ -40,6 +39,7 @@ leptoskit_plugin = { workspace = true }
 leptoskit_query = { workspace = true, optional = true }
 leptoskit_rive = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, optional = true }
+leptoskit_service_worker = { workspace = true, optional = true }
 leptoskit_table = { workspace = true, optional = true }
 leptoskit_tui = { workspace = true, optional = true }
 leptoskit_use = { workspace = true, optional = true }

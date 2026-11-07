@@ -1,11 +1,11 @@
 //! <!-- {=p_updaterSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Native hosts construct [`Updater`] with an explicit [`Backend`] that knows
-//! how to check, download, and install a new native executable. There is no
+//! Native hosts construct `Updater` with an explicit `Backend` that knows how
+//! to check, download, and install a new native executable. There is no
 //! automatic `native.plugins` registration and no built-in update server. The
-//! default [`UnavailableBackend`] keeps unsupported targets compiling.
-//! Guest bundle / Wasm over-the-air updates remain `leptoskit_codepush`; this
-//! crate is the installed-application updater surface, matching Electron's
+//! default `UnavailableBackend` keeps unsupported targets compiling. Guest
+//! bundle / Wasm over-the-air updates remain `leptoskit_codepush`; this crate
+//! is the installed-application updater surface, matching Electron's
 //! `autoUpdater` responsibility without shipping a specific feed format.
 //!
 //! <!-- {/p_updaterSummary} -->
