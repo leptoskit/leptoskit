@@ -809,4 +809,476 @@ mod tests {
 			frame.mesh.vertices.len()
 		);
 	}
+
+	#[test]
+	fn path_fills_emit_one_mesh_per_fill_rule() {
+		let rect = Path::new().rect(Rect::new(1.0, 1.0, 8.0, 8.0));
+		let non_zero = encode(
+			&Scene::new().fill_path(rect.clone(), FillRule::NonZero, Color::BLACK),
+			10,
+			10,
+			1.0,
+		);
+		assert_eq!(non_zero.paints.len(), 1);
+		assert_eq!(non_zero.paints[0].color, Color::BLACK.premultiplied());
+		assert_eq!(non_zero.steps.len(), 1);
+		assert!(
+			matches!(&non_zero.steps[0], Step { draw: Draw::Mesh(range), stencil: 0 } if !range.is_empty()),
+			"{:?}",
+			non_zero.steps
+		);
+
+		let even_odd = encode(
+			&Scene::new().fill_path(rect, FillRule::EvenOdd, Color::WHITE),
+			10,
+			10,
+			1.0,
+		);
+		assert_eq!(even_odd.paints[0].color, Color::WHITE.premultiplied());
+		assert_eq!(even_odd.steps.len(), 1);
+		assert!(
+			matches!(&even_odd.steps[0], Step { draw: Draw::Mesh(range), .. } if !range.is_empty()),
+			"{:?}",
+			even_odd.steps
+		);
+	}
+
+	#[test]
+	fn quadratic_controls_are_part_of_a_path_bounds() {
+		let path = Path::new()
+			.move_to(1.0, 5.0)
+			.quad_to(5.0, -20.0, 9.0, 5.0)
+			.close();
+		let frame = encode(
+			&Scene::new().fill_path(path, FillRule::NonZero, Color::BLACK),
+			10,
+			10,
+			1.0,
+		);
+		assert_eq!(frame.steps.len(), 1);
+		assert!(
+			matches!(&frame.steps[0], Step { draw: Draw::Mesh(range), .. } if !range.is_empty()),
+			"{:?}",
+			frame.steps
+		);
+	}
+
+	#[test]
+	fn fills_off_the_target_are_skipped() {
+		let scene = Scene::new().fill_path(
+			Path::new().rect(Rect::new(100.0, 100.0, 20.0, 20.0)),
+			FillRule::NonZero,
+			Color::BLACK,
+		);
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert!(frame.steps.is_empty(), "{:?}", frame.steps);
+		assert_eq!(frame.paints.len(), 1, "only the placeholder paint");
+		assert_eq!(frame.mesh.vertices.len(), 0);
+	}
+
+	#[test]
+	fn strokes_cover_every_cap_join_and_degenerate_width() {
+		let path = Path::new()
+			.move_to(2.0, 2.0)
+			.line_to(8.0, 2.0)
+			.quad_to(8.0, 4.0, 8.0, 6.0)
+			.cubic_to(
+				Point::new(6.0, 9.0),
+				Point::new(4.0, 9.0),
+				Point::new(2.0, 8.0),
+			)
+			.close();
+		for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+			for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+				let scene = Scene::new().stroke_path(
+					path.clone(),
+					Stroke::new(1.5).cap(cap).join(join),
+					Color::rgba(1.0, 0.0, 0.0, 0.5),
+				);
+				let frame = encode(&scene, 10, 10, 1.0);
+				assert_eq!(frame.steps.len(), 1, "{cap:?}/{join:?}: {:?}", frame.steps);
+				assert!(
+					matches!(&frame.steps[0], Step { draw: Draw::Mesh(range), .. } if !range.is_empty()),
+					"{cap:?}/{join:?}: {:?}",
+					frame.steps
+				);
+			}
+		}
+		let zero = Scene::new().stroke_path(path, Stroke::new(0.0), Color::BLACK);
+		assert_eq!(encode(&zero, 10, 10, 1.0).steps.len(), 0);
+	}
+
+	#[test]
+	fn open_outlines_start_where_svg_starts_them() {
+		// A line before any move begins a contour at the origin.
+		let implied = Scene::new().stroke_path(
+			Path::new().line_to(8.0, 8.0).line_to(2.0, 9.0),
+			Stroke::new(1.0),
+			Color::BLACK,
+		);
+		assert!(
+			matches!(encode(&implied, 10, 10, 1.0).steps.as_slice(), [Step { draw: Draw::Mesh(range), .. }] if !range.is_empty())
+		);
+
+		// A second move ends the contour the first one opened.
+		let reopened = Scene::new().stroke_path(
+			Path::new()
+				.move_to(1.0, 1.0)
+				.move_to(5.0, 5.0)
+				.line_to(9.0, 9.0),
+			Stroke::new(1.0),
+			Color::BLACK,
+		);
+		assert!(
+			matches!(encode(&reopened, 10, 10, 1.0).steps.as_slice(), [Step { draw: Draw::Mesh(range), .. }] if !range.is_empty())
+		);
+	}
+
+	#[test]
+	fn strokes_off_the_target_are_skipped() {
+		let scene = Scene::new().stroke_path(
+			Path::new().move_to(100.0, 100.0).line_to(120.0, 120.0),
+			Stroke::new(2.0),
+			Color::BLACK,
+		);
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert!(frame.steps.is_empty(), "{:?}", frame.steps);
+	}
+
+	#[test]
+	fn clips_tessellate_rounded_rectangles_and_paths() {
+		let scene = Scene::new()
+			.push_clip(Rect::new(1.0, 1.0, 8.0, 8.0), 3.0)
+			.push_clip_path(
+				Path::new().rect(Rect::new(2.0, 2.0, 4.0, 4.0)),
+				FillRule::EvenOdd,
+			)
+			.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::WHITE)
+			.pop_clip()
+			.pop_clip();
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert_eq!(frame.steps.len(), 5, "{:?}", frame.steps);
+		assert!(matches!(frame.steps[0].draw, Draw::ClipPush(_)));
+		assert_eq!(frame.steps[0].stencil, 0);
+		assert!(matches!(frame.steps[1].draw, Draw::ClipPush(_)));
+		assert_eq!(frame.steps[1].stencil, 1);
+		assert!(matches!(frame.steps[2].draw, Draw::Quads(_)));
+		assert_eq!(frame.steps[2].stencil, 2);
+		assert!(matches!(frame.steps[3].draw, Draw::ClipPop(_)));
+		assert_eq!(frame.steps[3].stencil, 2);
+		assert!(matches!(frame.steps[4].draw, Draw::ClipPop(_)));
+		assert_eq!(frame.steps[4].stencil, 1);
+	}
+
+	#[test]
+	fn clips_with_no_visible_shape_are_empty() {
+		let scene = Scene::new()
+			.push_clip(Rect::new(50.0, 50.0, 4.0, 4.0), 0.0)
+			.push_clip_path(Path::new(), FillRule::NonZero)
+			.fill_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Color::BLACK)
+			.pop_clip()
+			.pop_clip();
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert_eq!(frame.steps[0].draw, Draw::ClipPush(0..0));
+		assert_eq!(frame.steps[1].draw, Draw::ClipPush(0..0));
+		assert_eq!(frame.steps[2].draw, Draw::Quads(0..1));
+		assert_eq!(frame.steps[3].draw, Draw::ClipPop(0..0));
+		assert_eq!(frame.steps[4].draw, Draw::ClipPop(0..0));
+	}
+
+	#[test]
+	fn pops_without_a_matching_push_are_ignored() {
+		let scene = Scene::new().pop_clip().pop_layer().pop_transform();
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert_eq!(frame.steps.len(), 0);
+		assert_eq!(frame.segments.len(), 1);
+		assert_eq!(frame.segments[0].steps.len(), 0);
+	}
+
+	#[test]
+	fn an_empty_scene_still_uploads_one_paint_record() {
+		let frame = encode(&Scene::new(), 4, 4, 1.0);
+		assert_eq!(frame.paints.len(), 1);
+		let paint = frame.paints[0];
+		assert_eq!(
+			(paint.kind, paint.row, paint.pad, paint.color, paint.geom),
+			(0, 0, [0; 2], [0.0; 4], [0.0; 4])
+		);
+		assert_eq!(frame.ramp_rows(), 0);
+		assert_eq!(frame.levels, 1);
+	}
+
+	#[test]
+	fn transparent_and_empty_rectangles_are_skipped() {
+		for rect in [
+			Rect::new(0.0, 0.0, 0.0, 4.0),
+			Rect::new(0.0, 0.0, 4.0, 0.0),
+			Rect::new(0.0, 0.0, -1.0, 4.0),
+		] {
+			let frame = encode(&Scene::new().fill_rect(rect, Color::BLACK), 10, 10, 1.0);
+			assert!(frame.steps.is_empty(), "{rect:?}: {:?}", frame.steps);
+			assert_eq!(frame.instances.len(), 0);
+		}
+	}
+
+	#[test]
+	fn a_flattening_transform_drops_quads() {
+		let scene = Scene::new()
+			.push_transform(Affine::scale(0.0, 0.0))
+			.fill_rect(Rect::new(0.0, 0.0, 4.0, 4.0), Color::BLACK)
+			.pop_transform();
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert_eq!(frame.steps.len(), 0);
+		assert_eq!(frame.instances.len(), 0);
+	}
+
+	#[test]
+	fn box_shadows_grow_their_radii_and_skip_empty_ones() {
+		let scene = Scene::new().box_shadow(
+			Rect::new(2.0, 2.0, 6.0, 6.0),
+			CornerRadii {
+				top_left: 2.0,
+				top_right: 0.0,
+				bottom_right: 1.0,
+				bottom_left: 0.0,
+			},
+			BoxShadow {
+				offset_x: 1.0,
+				offset_y: 1.0,
+				blur: 4.0,
+				spread: 1.0,
+				color: Color::rgba(0.0, 0.0, 0.0, 0.5),
+			},
+		);
+		let frame = encode(&scene, 12, 12, 1.0);
+		assert_eq!(frame.instances.len(), 1);
+		let instance = frame.instances[0];
+		assert_eq!(instance.rect, [2.0, 2.0, 8.0, 8.0]);
+		assert_eq!(instance.radii, [3.0, 0.0, 2.0, 0.0]);
+		assert_eq!(instance.params, [KIND_SHADOW, 0.0, 2.0, 0.0]);
+		assert_eq!(instance.color, [0.0, 0.0, 0.0, 0.5]);
+		assert_eq!(instance.paint, [0, 0, 0, 0]);
+		assert_eq!(instance.m1[3], 7.0, "three sigmas plus a pixel of margin");
+		assert_eq!(frame.paints.len(), 1, "shadows use a dummy paint");
+
+		let shrunk = Scene::new().box_shadow(
+			Rect::new(0.0, 0.0, 1.0, 1.0),
+			0.0,
+			BoxShadow {
+				spread: -1.0,
+				color: Color::BLACK,
+				..BoxShadow::default()
+			},
+		);
+		assert_eq!(encode(&shrunk, 10, 10, 1.0).steps.len(), 0);
+
+		let transparent = Scene::new().box_shadow(
+			Rect::new(0.0, 0.0, 5.0, 5.0),
+			0.0,
+			BoxShadow {
+				color: Color::TRANSPARENT,
+				..BoxShadow::default()
+			},
+		);
+		assert_eq!(encode(&transparent, 10, 10, 1.0).steps.len(), 0);
+	}
+
+	#[test]
+	fn gradients_bake_ramps_and_degenerate_ones_become_solid() {
+		let linear = Scene::new().fill_rect(
+			Rect::new(1.0, 1.0, 8.0, 8.0),
+			Paint::LinearGradient {
+				start: Point::new(1.0, 1.0),
+				end: Point::new(9.0, 1.0),
+				stops: vec![
+					GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 1.0)),
+					GradientStop::new(1.0, Color::rgba(0.0, 0.0, 1.0, 0.5)),
+				],
+			},
+		);
+		let frame = encode(&linear, 10, 10, 1.0);
+		assert_eq!(frame.paints.len(), 1);
+		assert_eq!(frame.paints[0].kind, 1);
+		assert_eq!(frame.paints[0].row, 0);
+		assert_eq!(frame.paints[0].geom, [1.0, 1.0, 0.125, 0.0]);
+		assert_eq!(frame.ramp_rows(), 1);
+		assert_eq!(frame.ramps.len(), RAMP_WIDTH * 4);
+		assert_eq!(&frame.ramps[..4], &[255, 0, 0, 255]);
+		assert_eq!(
+			&frame.ramps[(RAMP_WIDTH - 1) * 4..],
+			&[0, 0, 128, 128],
+			"the last stop is baked with premultiplied alpha"
+		);
+
+		let radial = Scene::new().fill_rect(
+			Rect::new(1.0, 1.0, 8.0, 8.0),
+			Paint::RadialGradient {
+				center: Point::new(5.0, 5.0),
+				radius: 4.0,
+				stops: vec![GradientStop::new(0.0, Color::WHITE)],
+			},
+		);
+		let frame = encode(&radial, 10, 10, 1.0);
+		assert_eq!(frame.paints[0].kind, 2);
+		assert_eq!(frame.paints[0].row, 0);
+		assert_eq!(frame.paints[0].geom, [5.0, 5.0, 0.25, 0.0]);
+
+		let last = Color::rgba(0.0, 1.0, 0.0, 0.5);
+		let flat = |paint| {
+			let frame = encode(
+				&Scene::new().fill_rect(Rect::new(1.0, 1.0, 8.0, 8.0), paint),
+				10,
+				10,
+				1.0,
+			);
+			assert_eq!(frame.paints.len(), 1);
+			assert_eq!(frame.paints[0].kind, 0, "a solid fallback");
+			frame.paints[0].color
+		};
+		assert_eq!(
+			flat(Paint::LinearGradient {
+				start: Point::new(3.0, 3.0),
+				end: Point::new(3.0, 3.0),
+				stops: vec![
+					GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 1.0)),
+					GradientStop::new(1.0, last),
+				],
+			}),
+			last.premultiplied()
+		);
+		assert_eq!(
+			flat(Paint::LinearGradient {
+				start: Point::new(0.0, 0.0),
+				end: Point::new(1.0, 0.0),
+				stops: Vec::new(),
+			}),
+			[0.0; 4]
+		);
+		assert_eq!(
+			flat(Paint::RadialGradient {
+				center: Point::new(3.0, 3.0),
+				radius: 0.0,
+				stops: vec![GradientStop::new(0.0, last)],
+			}),
+			last.premultiplied()
+		);
+		assert_eq!(
+			flat(Paint::RadialGradient {
+				center: Point::new(3.0, 3.0),
+				radius: 4.0,
+				stops: Vec::new(),
+			}),
+			[0.0; 4]
+		);
+	}
+
+	#[test]
+	fn ramp_colours_handle_empty_and_nan_stops() {
+		assert_eq!(ramp_color(&[], 0.5), [0.0; 4]);
+		let nan = GradientStop::new(f32::NAN, Color::WHITE);
+		assert_eq!(
+			ramp_color(&[nan, GradientStop::new(f32::NAN, Color::BLACK)], 0.5),
+			Color::BLACK.premultiplied(),
+			"an unusable span falls through to the last stop"
+		);
+	}
+
+	#[test]
+	fn lyon_paths_keep_every_command_kind() {
+		let mut builder = lyon_tessellation::path::Path::builder();
+		builder.begin(point(1.0, 2.0));
+		builder.line_to(point(3.0, 4.0));
+		builder.quadratic_bezier_to(point(5.0, 6.0), point(7.0, 8.0));
+		builder.cubic_bezier_to(point(9.0, 10.0), point(11.0, 12.0), point(13.0, 14.0));
+		builder.end(true);
+		let path = from_lyon(&builder.build());
+		assert_eq!(
+			path.commands,
+			[
+				PathCommand::MoveTo(Point::new(1.0, 2.0)),
+				PathCommand::LineTo(Point::new(3.0, 4.0)),
+				PathCommand::QuadTo(Point::new(5.0, 6.0), Point::new(7.0, 8.0)),
+				PathCommand::CubicTo(
+					Point::new(9.0, 10.0),
+					Point::new(11.0, 12.0),
+					Point::new(13.0, 14.0)
+				),
+				PathCommand::Close,
+			]
+		);
+
+		let mut open = lyon_tessellation::path::Path::builder();
+		open.begin(point(1.0, 1.0));
+		open.line_to(point(2.0, 2.0));
+		open.end(false);
+		assert_eq!(
+			from_lyon(&open.build()).commands,
+			[
+				PathCommand::MoveTo(Point::new(1.0, 1.0)),
+				PathCommand::LineTo(Point::new(2.0, 2.0)),
+			]
+		);
+	}
+
+	#[test]
+	fn shapes_that_tessellate_to_nothing_emit_no_draw() {
+		let point = Path::new().move_to(5.0, 5.0).line_to(5.0, 5.0);
+		let fill = encode(
+			&Scene::new().fill_path(point.clone(), FillRule::NonZero, Color::BLACK),
+			10,
+			10,
+			1.0,
+		);
+		assert!(fill.steps.is_empty(), "{:?}", fill.steps);
+		let stroke = encode(
+			&Scene::new().stroke_path(point, Stroke::new(1.0), Color::BLACK),
+			10,
+			10,
+			1.0,
+		);
+		assert!(stroke.steps.is_empty(), "{:?}", stroke.steps);
+	}
+
+	#[test]
+	fn a_close_with_nothing_open_is_ignored_by_lyon() {
+		let scene = Scene::new().stroke_path(
+			Path::new().close().line_to(8.0, 8.0),
+			Stroke::new(1.0),
+			Color::BLACK,
+		);
+		let frame = encode(&scene, 10, 10, 1.0);
+		assert_eq!(frame.steps.len(), 1);
+		assert!(
+			matches!(&frame.steps[0], Step { draw: Draw::Mesh(range), .. } if !range.is_empty()),
+			"{:?}",
+			frame.steps
+		);
+	}
+
+	#[test]
+	fn a_failed_tessellation_rolls_back_the_mesh() {
+		let mut encoder = Encoder {
+			frame: Frame {
+				levels: 1,
+				..Frame::default()
+			},
+			width: 10.0,
+			height: 10.0,
+			scale: 1.0,
+			transform: Affine::IDENTITY,
+			depth: 0,
+			level: 0,
+			segment: Segment {
+				level: 0,
+				clear: true,
+				steps: 0..0,
+			},
+			stack: Vec::new(),
+		};
+		encoder.frame.mesh.vertices.push(MeshVertex::default());
+		encoder.frame.mesh.indices.push(0);
+		assert_eq!(encoder.commit((0, 0), false), None);
+		assert_eq!(encoder.frame.mesh.vertices.len(), 0);
+		assert_eq!(encoder.frame.mesh.indices.len(), 0);
+	}
 }

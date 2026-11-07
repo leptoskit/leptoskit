@@ -443,3 +443,96 @@ fn renderer_draws_repeatedly_into_a_bgra_target() {
 	assert_eq!(&second[..4], &[0, 0, 255, 255]);
 	assert_eq!(&second[(9 * 4)..(9 * 4 + 4)], &[0; 4]);
 }
+
+#[test]
+fn unavailable_errors_are_the_adapter_ones() {
+	assert!(Error::NoAdapter("none".into()).is_unavailable());
+	assert!(Error::Device("refused".into()).is_unavailable());
+	assert!(
+		!Error::TooLarge {
+			width: 1,
+			height: 1,
+			limit: 0
+		}
+		.is_unavailable()
+	);
+	assert!(!Error::UnsupportedFormat(wgpu::TextureFormat::Rgba8Unorm).is_unavailable());
+	assert!(!Error::Readback("lost".into()).is_unavailable());
+}
+
+#[test]
+fn renderer_reports_limits_and_clamps_scale() {
+	let Ok((device, queue)) = headless_device() else {
+		eprintln!("skipping: no GPU");
+		return;
+	};
+	let mut unsupported = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
+	assert_eq!(unsupported.format(), wgpu::TextureFormat::Rgba16Float);
+	assert!(matches!(
+		unsupported.render_to_rgba(&Scene::new(), 4, 4, 1.0),
+		Err(Error::UnsupportedFormat(wgpu::TextureFormat::Rgba16Float))
+	));
+
+	let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+	assert_eq!(renderer.format(), wgpu::TextureFormat::Rgba8Unorm);
+	assert_eq!(
+		renderer
+			.render_to_rgba(&Scene::new(), 0, 4, 1.0)
+			.expect("an empty target draws nothing")
+			.len(),
+		0
+	);
+
+	let limit = device.limits().max_texture_dimension_2d;
+	let error = renderer
+		.render_to_rgba(&Scene::new(), limit + 1, 1, 1.0)
+		.expect_err("a target wider than the GPU limit");
+	assert!(matches!(
+		error,
+		Error::TooLarge {
+			width,
+			height: 1,
+			limit: reported,
+		} if width == limit + 1 && reported == limit
+	));
+
+	let texture = device.create_texture(&wgpu::TextureDescriptor {
+		label: None,
+		size: wgpu::Extent3d {
+			width: 1,
+			height: 1,
+			depth_or_array_layers: 1,
+		},
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format: wgpu::TextureFormat::Rgba8Unorm,
+		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+		view_formats: &[],
+	});
+	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+	renderer
+		.render(&Scene::new(), &view, 0, 0, 1.0)
+		.expect("an empty target draws nothing");
+	assert!(matches!(
+		renderer.render(&Scene::new(), &view, limit + 1, 1, 1.0),
+		Err(Error::TooLarge { .. })
+	));
+
+	// A scale that is not finite or not positive falls back to one pixel
+	// per point, and one above the maximum is capped at 16.
+	let square = Scene::new().fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), RED);
+	let natural = renderer
+		.render_to_rgba(&square, 4, 4, f32::NAN)
+		.expect("natural scale");
+	assert_eq!(&natural[..4], &[255, 0, 0, 255]);
+	assert_eq!(&natural[4..8], &[0; 4]);
+	let capped = renderer
+		.render_to_rgba(&square, 20, 20, 1.0e6)
+		.expect("capped scale");
+	assert_eq!(
+		&capped[(15 * 20 + 15) * 4..(15 * 20 + 15) * 4 + 4],
+		&[255, 0, 0, 255]
+	);
+	assert_eq!(&capped[(16 * 20 + 16) * 4..(16 * 20 + 16) * 4 + 4], &[0; 4]);
+}
