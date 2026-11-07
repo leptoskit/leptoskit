@@ -220,16 +220,19 @@ fn compiled_rust_guest_sleeps_and_cancels() {
 	let path = std::env::var("LEPTOSKIT_TIMER_GUEST").expect("fixture wasm path");
 	let wasm = std::fs::read(path).expect("read fixture");
 	let mut host = WasmHost::headless(&wasm).expect("compile fixture");
+	register_panic_report(&mut host);
 	host.enable_timers().expect("enable timers");
 	let started = Instant::now();
-	host.start(100.0, 100.0).expect("start");
+	let result = host.start(100.0, 100.0);
+	guest_result(&mut host, result);
 
 	// The guest starts a sleep in `main`; route it and wait for its deadline.
 	let deadline = Instant::now() + Duration::from_secs(2);
 	let mut done = false;
 
 	while Instant::now() < deadline {
-		host.pump_timers().expect("pump timers");
+		let result = host.pump_timers();
+		guest_result(&mut host, result);
 		done = host
 			.dispatch_wire(0, EventKind::Press, None)
 			.expect("poll the guest")
@@ -261,8 +264,9 @@ fn compiled_rust_guest_reports_missing_timer_as_an_error() {
 	let path = std::env::var("LEPTOSKIT_TIMER_GUEST").expect("fixture wasm path");
 	let wasm = std::fs::read(path).expect("read fixture");
 	let mut host = WasmHost::headless(&wasm).expect("compile fixture");
-	host.start(100.0, 100.0)
-		.expect("unsupported timer returns an error");
+	register_panic_report(&mut host);
+	let result = host.start(100.0, 100.0);
+	guest_result(&mut host, result);
 	assert_eq!(
 		host.dispatch_wire(0, EventKind::Press, None)
 			.expect("inspect result"),
@@ -270,4 +274,27 @@ fn compiled_rust_guest_reports_missing_timer_as_an_error() {
 	);
 	assert!(host.plugins().next_request().is_none());
 	assert!(host.next_timer_deadline().is_none());
+}
+
+fn register_panic_report(host: &mut WasmHost<leptoskit_native::HeadlessBackend>) {
+	let method = leptoskit_bridge::MethodId(0);
+	let plugin = host
+		.plugins()
+		.register("timer-test-panic", [method])
+		.expect("panic reporter");
+	host.plugins()
+		.grant(plugin, method, true)
+		.expect("grant panic reporter");
+}
+
+fn guest_result<T>(
+	host: &mut WasmHost<leptoskit_native::HeadlessBackend>,
+	result: Result<T, leptoskit_wasm::WasmError>,
+) -> T {
+	result.unwrap_or_else(|error| {
+		let details: Vec<_> = std::iter::from_fn(|| host.plugins().next_request())
+			.map(|request| String::from_utf8_lossy(&request.payload).into_owned())
+			.collect();
+		panic!("guest failed: {error}; pending reports: {details:?}");
+	})
 }

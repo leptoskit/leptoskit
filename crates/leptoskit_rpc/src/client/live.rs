@@ -1006,52 +1006,7 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 		inner.set_state(LiveState::Live {
 			version: inner.version.load(Ordering::Relaxed),
 		});
-		let mut at_once = false;
-
-		loop {
-			let command = commands.next().fuse();
-			let frame = connection.next().fuse();
-			futures::pin_mut!(command, frame);
-
-			match futures::future::select(command, frame).await {
-				Either::Left((Some(Command::Reconnect) | None, _)) => break,
-				Either::Left((Some(Command::RefreshCredentials { refused }), _)) => {
-					let sent = lock(&inner.authorization).clone();
-					let renewed = match &inner.credentials {
-						Some(credentials) => credentials.refused(sent).await.unwrap_or(false),
-						None => false,
-					};
-					if renewed {
-						inner.reauthenticate.store(true, Ordering::SeqCst);
-						if !matches!(
-							read_as_new_identity(inner.as_ref(), connection.as_ref()).await,
-							Reauthenticated::InPlace
-						) {
-							break;
-						}
-					} else if refused {
-						break;
-					}
-				}
-				Either::Left((Some(Command::Reauthenticate), _)) => {
-					match read_as_new_identity(inner.as_ref(), connection.as_ref()).await {
-						Reauthenticated::InPlace => {}
-						Reauthenticated::Reconnect => {
-							at_once = true;
-							break;
-						}
-						Reauthenticated::Closed => break,
-					}
-				}
-				Either::Left((Some(command), _)) => {
-					if !send_command(inner.as_ref(), connection.as_ref(), command).await {
-						break;
-					}
-				}
-				Either::Right((Ok(Some(text)), _)) => dispatch(inner.as_ref(), &text),
-				Either::Right((..)) => break,
-			}
-		}
+		let at_once = connected(&inner, connection.as_ref(), &mut commands).await;
 
 		inner.disconnected();
 
@@ -1064,6 +1019,62 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 			return;
 		}
 	}
+}
+
+/// Drives an established connection until it closes or needs a new identity.
+/// Returns whether identity changes need an immediate new handshake.
+async fn connected(
+	inner: &Inner,
+	connection: &dyn Connection,
+	commands: &mut Peekable<UnboundedReceiver<Command>>,
+) -> bool {
+	let mut at_once = false;
+
+	loop {
+		let command = commands.next().fuse();
+		let frame = connection.next().fuse();
+		futures::pin_mut!(command, frame);
+
+		match futures::future::select(command, frame).await {
+			Either::Left((Some(Command::Reconnect) | None, _)) => break,
+			Either::Left((Some(Command::RefreshCredentials { refused }), _)) => {
+				let sent = lock(&inner.authorization).clone();
+				let renewed = match &inner.credentials {
+					Some(credentials) => credentials.refused(sent).await.unwrap_or(false),
+					None => false,
+				};
+				if renewed {
+					inner.reauthenticate.store(true, Ordering::SeqCst);
+					if !matches!(
+						read_as_new_identity(inner, connection).await,
+						Reauthenticated::InPlace
+					) {
+						break;
+					}
+				} else if refused {
+					break;
+				}
+			}
+			Either::Left((Some(Command::Reauthenticate), _)) => {
+				match read_as_new_identity(inner, connection).await {
+					Reauthenticated::InPlace => {}
+					Reauthenticated::Reconnect => {
+						at_once = true;
+						break;
+					}
+					Reauthenticated::Closed => break,
+				}
+			}
+			Either::Left((Some(command), _)) => {
+				if !send_command(inner, connection, command).await {
+					break;
+				}
+			}
+			Either::Right((Ok(Some(text)), _)) => dispatch(inner, &text),
+			Either::Right((..)) => break,
+		}
+	}
+	at_once
 }
 
 /// A failed transport or handshake must wait before reconnecting. If this

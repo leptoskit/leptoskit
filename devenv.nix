@@ -998,33 +998,39 @@ in
     "test:plugins:guest" = {
       exec = ''
         set -euo pipefail
+        # Honor the protected target directory used by local and CI checks.
+        guest_target="''${CARGO_TARGET_DIR:-$(pwd)/target}"
+        case "$guest_target" in
+          /*) ;;
+          *) guest_target="$(pwd)/$guest_target" ;;
+        esac
         cargo build --locked --release --target wasm32-unknown-unknown --package plugin_guest_probe
-        LEPTOSKIT_PLUGIN_GUEST="$(pwd)/target/wasm32-unknown-unknown/release/plugin_guest_probe.wasm" \
+        LEPTOSKIT_PLUGIN_GUEST="$guest_target/wasm32-unknown-unknown/release/plugin_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test plugins compiled_rust_guest -- --ignored
         cargo build --locked --release --target wasm32-unknown-unknown --package plugin_replies_probe
-        LEPTOSKIT_PLUGIN_REPLY_GUEST="$(pwd)/target/wasm32-unknown-unknown/release/plugin_replies_probe.wasm" \
+        LEPTOSKIT_PLUGIN_REPLY_GUEST="$guest_target/wasm32-unknown-unknown/release/plugin_replies_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test plugin_replies -- --ignored
         # The native runtime's real cancellable timer: a guest sleeps, abandons
-        # a longer sleep, and the host observes both.
+        # a longer sleep, and runs real query retries, expiry, and intervals.
         cargo build --locked --release --target wasm32-unknown-unknown --package timer_guest_probe
-        LEPTOSKIT_TIMER_GUEST="$(pwd)/target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \
+        LEPTOSKIT_TIMER_GUEST="$guest_target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test timers -- --ignored
         # A debug build keeps every import its dependencies link, so any
         # wasm-bindgen import reactive_graph adds outside the interpreter's
         # shim set fails here rather than on a device.
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe
-        LEPTOSKIT_HOOKS_GUEST="$(pwd)/target/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
+        LEPTOSKIT_HOOKS_GUEST="$guest_target/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test hooks_guest -- --ignored
         # An agent's document, interpreted by an ordinary guest: what a
         # published app runs when an agent sends it interface as text.
         cargo build --locked --target wasm32-unknown-unknown --package agent_ui_guest_probe
-        LEPTOSKIT_AGENT_UI_GUEST="$(pwd)/target/wasm32-unknown-unknown/debug/agent_ui_guest_probe.wasm" \
+        LEPTOSKIT_AGENT_UI_GUEST="$guest_target/wasm32-unknown-unknown/debug/agent_ui_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test agent_ui_guest -- --ignored
         # The same guest with DevTools, in a real app reporting to a fake
         # hub. Its own target directory keeps the build above as it is.
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe \
-          --features devtools --target-dir target/devtools-guest
-        LEPTOSKIT_DEVTOOLS_GUEST="$(pwd)/target/devtools-guest/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
+          --features devtools --target-dir "$guest_target/devtools-guest"
+        LEPTOSKIT_DEVTOOLS_GUEST="$guest_target/devtools-guest/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_bridge_ffi --features devtools --test devtools_guest -- --ignored
       '';
       description = "Run compiled Rust plugin, hooks, and agent UI guests through the interpreter.";

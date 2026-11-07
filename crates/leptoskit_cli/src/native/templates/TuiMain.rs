@@ -75,7 +75,10 @@ mod application {
 		}
 
 		fn deadline(&self) -> Option<Duration> {
-			self.host.next_timer_deadline()
+			self.failure
+				.is_none()
+				.then(|| self.host.next_timer_deadline())
+				.flatten()
 		}
 	}
 

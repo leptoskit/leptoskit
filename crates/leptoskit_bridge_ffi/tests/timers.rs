@@ -10,7 +10,6 @@ use leptoskit_bridge::CallId;
 use leptoskit_bridge::timer::SLEEP;
 use leptoskit_bridge::timer::TIMER_PLUGIN;
 use leptoskit_bridge::timer::encode;
-use leptoskit_bridge_ffi::NativeRequest;
 use leptoskit_bridge_ffi::app::*;
 
 const GUEST: &str = r#"

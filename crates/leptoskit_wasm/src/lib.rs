@@ -943,7 +943,7 @@ impl<B: NativeBackend> WasmHost<B> {
 
 		self.timer
 			.as_ref()
-			.and_then(|timers| timers.next_deadline())
+			.and_then(leptoskit_bridge::timer::host::TimerScheduler::next_deadline)
 	}
 
 	/// Cancels one timer, returning whether it was waiting or due.
@@ -1095,10 +1095,8 @@ impl<B: NativeBackend> WasmHost<B> {
 			.is_ok()
 		{
 			let already_pending = std::mem::replace(&mut self.routed_replies_pending, true);
-			if !already_pending {
-				if let Some(wake) = &self.timer_wake {
-					wake();
-				}
+			if !already_pending && let Some(wake) = &self.timer_wake {
+				wake();
 			}
 		}
 	}

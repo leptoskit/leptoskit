@@ -10477,8 +10477,11 @@ dependencies = [
 name = "timer_guest_probe"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
+ "futures",
  "leptoskit_bridge",
  "leptoskit_query",
+ "reactive_graph",
 ]
 
 [[package]]

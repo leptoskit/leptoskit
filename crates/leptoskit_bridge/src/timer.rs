@@ -349,14 +349,14 @@ pub mod host {
 					inner
 						.changed
 						.wait_timeout(state, timeout)
-						.unwrap_or_else(|error| error.into_inner())
+						.unwrap_or_else(PoisonError::into_inner)
 						.0
 				}
 				None => {
 					inner
 						.changed
 						.wait(state)
-						.unwrap_or_else(|error| error.into_inner())
+						.unwrap_or_else(PoisonError::into_inner)
 				}
 			};
 			drop(state);
