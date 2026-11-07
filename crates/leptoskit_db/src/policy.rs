@@ -1203,3 +1203,44 @@ mod tests {
 		assert_eq!(Action::ALL.len(), 4);
 	}
 }
+
+#[cfg(test)]
+mod small_tests {
+	use leptoskit_db_macros::policy;
+
+	use super::*;
+	use crate::Table;
+
+	/// A table whose rule can't be written as SQL, as a failed value
+	/// comparison is.
+	#[crate::table(name = "big_rows")]
+	#[policy(select, |_, _| Expr::Opaque("a nested read"))]
+	pub struct BigRow {
+		#[db(key)]
+		pub big: u64,
+	}
+
+	#[test]
+	fn empty_contexts_share_and_any_global_does_not() {
+		assert!(Context::new().is_empty());
+		assert!(!Context::new().with(1_u8).is_empty());
+	}
+
+	#[test]
+	fn counts_compare_every_way() {
+		let count = || Context::new().count(Query::<crate::AuditEntry>::new());
+
+		assert!(matches!(count().ne(1), Expr::Count { .. }));
+		assert!(matches!(count().lte(2), Expr::Count { .. }));
+		assert_eq!(Action::Insert.verb_noun(), "insert");
+		assert_eq!(Action::Update.verb_noun(), "update");
+		assert_eq!(Action::Delete.verb_noun(), "delete");
+	}
+
+	#[test]
+	fn a_rule_that_cant_be_rendered_is_reported() {
+		let error = row_security::<BigRow>().unwrap_err();
+		assert!(error.contains("a value can't be stored"), "{error}");
+		assert_eq!(BigRow::NAME, "big_rows");
+	}
+}

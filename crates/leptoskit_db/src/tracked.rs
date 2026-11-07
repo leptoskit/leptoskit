@@ -465,6 +465,7 @@ mod tests {
 	use super::*;
 	use crate::Context;
 	use crate::expr::Comparison;
+	use crate::live::ChangeOp;
 	use crate::sql::Sql;
 
 	/// A room, to count in conditions.
@@ -578,5 +579,62 @@ mod tests {
 			changed: Vec::new(),
 		};
 		assert!(entry.could_change(&undecodable, Dialect::Sqlite));
+	}
+
+	#[test]
+	fn only_a_write_to_the_reads_own_table_can_change_it() {
+		let image = || serde_json::Map::from_iter([("floor".to_owned(), serde_json::json!(1))]);
+		let change = |table: TableName| {
+			crate::live::Change {
+				table,
+				op: ChangeOp::Insert,
+				key: vec!["1".to_owned()],
+				old: None,
+				new: Some(image()),
+				changed: Vec::new(),
+			}
+		};
+
+		let entry = ReadEntry::new(rooms(), ReadKind::Rows, Expr::always());
+		assert!(!entry.could_change(&change(TableName::new("others")), Dialect::Sqlite));
+
+		// A whole-table read is changed by any write to it.
+		let whole = ReadEntry::new(rooms(), ReadKind::Table, Expr::always());
+		assert!(whole.could_change(&change(rooms()), Dialect::Sqlite));
+
+		// A table this build doesn't know can't be judged, so it may match.
+		let unknown = TableName::new("unregistered");
+		let entry = ReadEntry::new(unknown.clone(), ReadKind::Rows, Expr::always());
+		assert!(entry.could_change(&change(unknown), Dialect::Sqlite));
+	}
+
+	#[test]
+	fn narrowing_or_tailing_nothing_changes_nothing() {
+		let empty = Reads::default();
+		assert_eq!(empty.clone().narrowed(Expr::always()).entries.len(), 0);
+		assert_eq!(empty.tail(&[], Some(1), None).entries.len(), 0);
+
+		let system = Access::System {
+			reason: "a unit test",
+			actor: None,
+		};
+		let reads = Reads::of::<Room>(&system, ReadKind::Rows, None, false).unwrap();
+		let narrowed = reads.narrowed(Room::columns().floor.gt(1));
+		assert_eq!(narrowed.entries.len(), 1);
+		assert_ne!(narrowed.entries[0].condition, Expr::always());
+
+		let tailed = narrowed.tail(&[Room::columns().floor.desc()], Some(2), Some(1));
+		assert_eq!(tailed.entries[0].limit, Some(2));
+		assert_eq!(tailed.entries[0].offset, Some(1));
+		assert_eq!(tailed.entries[0].order.len(), 1);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn a_tracked_connection_delegates_what_it_is() {
+		let db = crate::Db::connect("sqlite::memory:").await.unwrap();
+		let tracked = Tracked::new(db);
+		assert_eq!(tracked.connection().dialect(), Dialect::Sqlite);
+		assert!(!Read::row_security(&tracked));
 	}
 }

@@ -1165,3 +1165,260 @@ fn write_in_setting(
 	}
 	.write(sql)
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::Context;
+	use crate::ListSetting;
+	use crate::Setting;
+
+	/// A row to build conditions from.
+	#[crate::table(name = "expr_rows")]
+	pub struct Row {
+		pub id: Id<Self>,
+		pub number: i64,
+		pub maybe: Option<i64>,
+		pub words: Option<String>,
+		pub big: u64,
+		pub ratio: f64,
+	}
+
+	/// A setting whose value can't be written.
+	struct TooBig;
+
+	impl Setting for TooBig {
+		type Value = u64;
+
+		const NAME: &'static str = "too_big";
+
+		fn value(&self) -> u64 {
+			u64::MAX
+		}
+	}
+
+	/// A list setting whose items can't be written.
+	struct AllTooBig;
+
+	impl ListSetting for AllTooBig {
+		type Item = u64;
+
+		const NAME: &'static str = "all_too_big";
+
+		fn values(&self) -> Vec<u64> {
+			vec![u64::MAX]
+		}
+	}
+
+	/// A setting that says who is asking.
+	struct Who(String);
+
+	impl Setting for Who {
+		type Value = String;
+
+		const NAME: &'static str = "who";
+
+		fn value(&self) -> String {
+			self.0.clone()
+		}
+	}
+
+	/// A list of the teams a request belongs to.
+	struct Teams(Vec<i64>);
+
+	impl ListSetting for Teams {
+		type Item = i64;
+
+		const NAME: &'static str = "teams";
+
+		fn values(&self) -> Vec<i64> {
+			self.0.clone()
+		}
+	}
+
+	#[test]
+	#[expect(
+		clippy::clone_on_copy,
+		reason = "the column's Clone impl is what is tested"
+	)]
+	fn columns_are_copy_but_have_no_value_of_their_own() {
+		let column = Row::columns().number;
+		let copy = Clone::clone(&column);
+		assert_eq!(copy.name(), column.name());
+		assert_eq!(column.name(), "number");
+		assert_eq!(
+			Operand::<i64>::column(&column),
+			Some((Row::table_name(), "number"))
+		);
+
+		let error = Operand::<i64>::into_value(column).unwrap_err();
+		assert_eq!(
+			error.to_string(),
+			"column `number` has no value of its own; compare with it in a filter instead"
+		);
+		assert!(Operand::<Option<i64>>::into_value(column).is_err());
+
+		let words = Row::columns().words;
+		assert_eq!(
+			<Col<Row, Option<String>> as Operand<String>>::column(&words),
+			Some((Row::table_name(), "words"))
+		);
+		let error = <Col<Row, Option<String>> as Operand<String>>::into_value(words).unwrap_err();
+		assert!(error.to_string().contains("column `words`"), "{error}");
+	}
+
+	#[test]
+	fn a_setting_that_cant_be_written_makes_an_invalid_condition() {
+		let context = Context::new().with(TooBig);
+		let compared = Row::columns().big.eq(context.setting::<TooBig>());
+		assert!(matches!(compared, Expr::Invalid(_)), "{compared:?}");
+
+		let listed = Row::columns()
+			.big
+			.in_list(Context::new().with(AllTooBig).setting_list::<AllTooBig>());
+		assert!(matches!(listed, Expr::Invalid(_)), "{listed:?}");
+	}
+
+	#[test]
+	fn a_list_setting_looks_up_an_optional_column() {
+		let context = Context::new().with(Teams(vec![1, 2]));
+		let listed = Row::columns()
+			.maybe
+			.in_list(context.setting_list::<Teams>());
+		let Expr::InSetting { column, setting } = listed else {
+			panic!("expected an in-setting condition, found {listed:?}");
+		};
+		assert_eq!(column, "maybe");
+		assert_eq!(setting.name, "teams");
+		assert_eq!(setting.values, Some(vec![Value::Int(1), Value::Int(2)]));
+
+		// A request without the setting compares as `NULL` does.
+		let absent = Expr::InSetting {
+			column: "maybe",
+			setting: crate::settings::ListSettingRef {
+				name: "teams",
+				ty: leptoskit_db_schema::ColumnType::Int64,
+				values: None,
+			},
+		};
+		let mut sql = Sql::new(Dialect::Sqlite);
+		absent.write(&mut sql).unwrap();
+		assert_eq!(sql.finish().sql, "NULL");
+	}
+
+	#[test]
+	fn a_read_set_only_expression_says_so_when_run() {
+		let mut sql = Sql::new(Dialect::Sqlite);
+		let error = Expr::Opaque("a nested read").write(&mut sql).unwrap_err();
+		assert!(matches!(error, DbError::Encode(_)), "{error:?}");
+	}
+
+	#[test]
+	fn a_present_setting_renders_as_a_value_or_a_postgres_setting() {
+		let present = Context::new().with(Who("ada".into())).setting::<Who>();
+		let absent = Context::new().setting::<Who>();
+
+		let written = |expr: Expr, mut sql: Sql| {
+			expr.write(&mut sql).unwrap();
+			sql.finish().sql
+		};
+		assert_eq!(
+			written(present.is_present(), Sql::new(Dialect::Sqlite)),
+			"1 = 1"
+		);
+		assert_eq!(
+			written(absent.is_present(), Sql::new(Dialect::Sqlite)),
+			"1 = 0"
+		);
+
+		let policy = written(present.is_present(), Sql::policy(&Row::table_name()));
+		assert_eq!(
+			policy,
+			"NULLIF(current_setting('leptoskit.who', true), '') IS NOT NULL"
+		);
+		assert_eq!(
+			written(absent.is_present(), Sql::policy(&Row::table_name())),
+			policy
+		);
+
+		// A missing value compares as `NULL` in a plain statement, and reads
+		// the transaction's setting in a policy.
+		let absent = Context::new().setting::<Who>();
+		assert_eq!(
+			written(Row::columns().words.eq(absent), Sql::new(Dialect::Sqlite)),
+			"\"words\" = NULL"
+		);
+		let policy = written(
+			Row::columns().words.eq(Context::new().setting::<Who>()),
+			Sql::policy(&Row::table_name()),
+		);
+		assert!(
+			policy.contains("current_setting('leptoskit.who', true)"),
+			"{policy}"
+		);
+	}
+
+	#[test]
+	fn comparing_with_none_orders_as_sql_does() {
+		let is_null = |comparison| {
+			Expr::Compare {
+				column: "maybe",
+				comparison,
+				value: Value::Null,
+			}
+			.write(&mut Sql::new(Dialect::Sqlite))
+		};
+
+		assert!(is_null(Comparison::Equal).is_ok());
+		let error = is_null(Comparison::Greater).unwrap_err();
+		assert!(matches!(error, DbError::Encode(_)), "{error:?}");
+	}
+
+	#[test]
+	fn regexes_are_offered_on_optional_text_too() {
+		assert_eq!(
+			Row::columns().words.matches_regex("^a"),
+			Expr::Regex {
+				column: "words",
+				pattern: "^a".to_string(),
+			}
+		);
+	}
+
+	#[test]
+	fn totals_decode_what_their_function_returns() {
+		use crate::expr::Aggregate;
+		use crate::expr::Avg;
+		use crate::expr::Max;
+		use crate::expr::Min;
+		use crate::expr::Sum;
+
+		let integer = Sum(Row::columns().number);
+		assert_eq!(integer.sql(), "sum");
+		assert_eq!(integer.column(), "number");
+		assert_eq!(integer.decode(None).unwrap(), None);
+		assert_eq!(integer.decode(Some(Value::Int(7))).unwrap(), Some(7));
+		assert_eq!(integer.decode(Some(Value::Float(1.9))).unwrap(), Some(1));
+		let error = integer.decode(Some(Value::Text("x".into()))).unwrap_err();
+		assert!(matches!(error, DbError::Encode(_)), "{error:?}");
+
+		let average = Avg(Row::columns().number);
+		assert_eq!(average.sql(), "avg");
+		assert_eq!(average.decode(Some(Value::Int(4))).unwrap(), Some(4.0));
+
+		let float = Sum(Row::columns().ratio);
+		assert_eq!(float.column(), "ratio");
+		assert_eq!(float.decode(Some(Value::Float(1.5))).unwrap(), Some(1.5));
+		assert_eq!(float.decode(Some(Value::Int(2))).unwrap(), Some(2.0));
+		let error = float.decode(Some(Value::Text("x".into()))).unwrap_err();
+		assert!(matches!(error, DbError::Encode(_)), "{error:?}");
+
+		// A total is copied into each query that uses it.
+		let least = Min(Row::columns().number);
+		let greatest = Max(Row::columns().number);
+		assert_eq!(Clone::clone(&least).column(), "number");
+		assert_eq!(Clone::clone(&greatest).column(), "number");
+		assert_eq!(Clone::clone(&integer).sql(), "sum");
+		assert_eq!(Clone::clone(&average).sql(), "avg");
+	}
+}

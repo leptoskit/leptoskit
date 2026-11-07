@@ -818,6 +818,290 @@ mod reading {
 
 		Ok(Some(removed))
 	}
+
+	#[cfg(test)]
+	mod tests {
+		use super::*;
+
+		fn at() -> Timestamp {
+			"2026-01-02T03:04:05.123Z".parse().unwrap()
+		}
+
+		#[test]
+		#[expect(
+			clippy::cognitive_complexity,
+			reason = "a table of decoded values reads best as one test"
+		)]
+		fn values_are_read_as_the_log_writes_them() {
+			assert_eq!(text(Value::Text("a".into())).unwrap(), "a");
+			assert!(matches!(
+				text(Value::Int(1)).unwrap_err(),
+				DbError::Decode(_)
+			));
+
+			assert_eq!(table_name("posts"), TableName::new("posts"));
+			assert_eq!(
+				table_name("billing.invoices"),
+				TableName::namespaced("billing", "invoices")
+			);
+			assert_eq!(table_name("billing."), TableName::namespaced("billing", ""));
+
+			assert_eq!(timestamp(Value::Timestamp(at())).unwrap(), at());
+			assert_eq!(
+				timestamp(Value::Text("2026-01-02T03:04:05.123Z".into())).unwrap(),
+				at()
+			);
+			assert!(timestamp(Value::Text("yesterday".into())).is_err());
+			assert!(matches!(
+				timestamp(Value::Int(0)).unwrap_err(),
+				DbError::Decode(_)
+			));
+
+			let id = Uuid::nil();
+			assert_eq!(uuid(Value::Null).unwrap(), None);
+			assert_eq!(uuid(Value::Uuid(id)).unwrap(), Some(id));
+			assert_eq!(
+				uuid(Value::Bytes(id.as_bytes().to_vec())).unwrap(),
+				Some(id)
+			);
+			assert!(uuid(Value::Bytes(vec![1])).is_err());
+			assert!(matches!(
+				uuid(Value::Int(1)).unwrap_err(),
+				DbError::Decode(_)
+			));
+
+			assert_eq!(json(Value::Null).unwrap(), None);
+			assert_eq!(
+				json(Value::Json(serde_json::json!([1]))).unwrap(),
+				Some(serde_json::json!([1]))
+			);
+			assert_eq!(
+				json(Value::Text("[1]".into())).unwrap(),
+				Some(serde_json::json!([1]))
+			);
+			assert!(json(Value::Text("{".into())).is_err());
+			assert!(matches!(
+				json(Value::Int(1)).unwrap_err(),
+				DbError::Decode(_)
+			));
+
+			assert_eq!(object(Value::Null).unwrap(), None);
+			assert_eq!(object(Value::Json(serde_json::Value::Null)).unwrap(), None);
+			assert!(
+				object(Value::Json(serde_json::json!({ "a": 1 })))
+					.unwrap()
+					.is_some()
+			);
+			assert!(matches!(
+				object(Value::Json(serde_json::json!([1]))).unwrap_err(),
+				DbError::Decode(_)
+			));
+		}
+
+		#[test]
+		fn timestamps_may_leave_out_the_offset() {
+			assert_eq!(
+				parse_timestamp("2026-01-02T03:04:05.5"),
+				Some("2026-01-02T03:04:05.500Z".parse().unwrap())
+			);
+			assert_eq!(
+				parse_timestamp("2026-01-02T03:04:05+02:00"),
+				Some("2026-01-02T01:04:05Z".parse().unwrap())
+			);
+			assert_eq!(parse_timestamp("not a time"), None);
+		}
+
+		#[test]
+		fn commits_start_once_and_pruning_leaves_a_marker() {
+			let mut entries = Vec::new();
+			push_commit(
+				&mut entries,
+				7,
+				Value::Timestamp(at()),
+				Value::Null,
+				Value::Text("app".into()),
+				Some(3),
+			)
+			.unwrap();
+			// The same commit's next row doesn't start it again.
+			push_commit(
+				&mut entries,
+				7,
+				Value::Timestamp(at()),
+				Value::Null,
+				Value::Text("app".into()),
+				Some(3),
+			)
+			.unwrap();
+			assert_eq!(entries.len(), 1);
+
+			let RawEntry::Commit(commit) = &entries[0] else {
+				panic!("expected a commit, found {:?}", entries[0]);
+			};
+			assert_eq!(commit.version, 7);
+			assert_eq!(commit.origin, "app");
+			assert_eq!(commit.lsn, Some(3));
+			assert_eq!(commit.actor, None);
+			assert_eq!(commit.committed_at, at());
+
+			push_commit(
+				&mut entries,
+				8,
+				Value::Timestamp(at()),
+				Value::Uuid(Uuid::nil()),
+				Value::Text(PRUNED.to_string()),
+				None,
+			)
+			.unwrap();
+			// And a pruned marker absorbs the rows of its own version.
+			push_commit(
+				&mut entries,
+				8,
+				Value::Timestamp(at()),
+				Value::Uuid(Uuid::nil()),
+				Value::Text(PRUNED.to_string()),
+				None,
+			)
+			.unwrap();
+
+			assert_eq!(
+				entries
+					.iter()
+					.map(|entry| {
+						match entry {
+							RawEntry::Commit(commit) => commit.version,
+							RawEntry::Pruned { through } => *through,
+						}
+					})
+					.collect::<Vec<_>>(),
+				[7, 8]
+			);
+			assert!(matches!(entries[1], RawEntry::Pruned { through: 8 }));
+		}
+
+		#[test]
+		fn changes_decode_their_operation_key_and_images() {
+			let mut entries = Vec::new();
+			push_change(
+				&mut entries,
+				Value::Text("posts".into()),
+				Value::Text("I".into()),
+				Value::Text("[1]".into()),
+				Value::Null,
+				Value::Text(r#"{"body": "hi"}"#.into()),
+				Value::Null,
+			)
+			.unwrap();
+			// Without a commit to join, there is nothing to add.
+			assert!(entries.is_empty());
+
+			push_commit(
+				&mut entries,
+				1,
+				Value::Timestamp(at()),
+				Value::Null,
+				Value::Text("app".into()),
+				None,
+			)
+			.unwrap();
+			push_change(
+				&mut entries,
+				Value::Text("billing.invoices".into()),
+				Value::Text("U".into()),
+				Value::Text(r#"["a", 2]"#.into()),
+				Value::Text(r#"{"body": "hi"}"#.into()),
+				Value::Text(r#"{"body": "bye"}"#.into()),
+				Value::Text(r#"["body", 4]"#.into()),
+			)
+			.unwrap();
+
+			let RawEntry::Commit(commit) = &entries[0] else {
+				panic!("expected a commit");
+			};
+			let change = &commit.changes[0];
+			assert_eq!(change.table, TableName::namespaced("billing", "invoices"));
+			assert_eq!(change.op, ChangeOp::Update);
+			assert_eq!(change.key, [serde_json::json!("a"), serde_json::json!(2)]);
+			assert_eq!(change.old.as_ref().unwrap()["body"], "hi");
+			assert_eq!(change.new.as_ref().unwrap()["body"], "bye");
+			assert_eq!(change.changed, ["body"]);
+
+			// An insert with no changed names keeps an empty list.
+			push_change(
+				&mut entries,
+				Value::Text("posts".into()),
+				Value::Text("D".into()),
+				Value::Text("[3]".into()),
+				Value::Text(r#"{"body": "gone"}"#.into()),
+				Value::Null,
+				Value::Null,
+			)
+			.unwrap();
+			let RawEntry::Commit(commit) = &entries[0] else {
+				panic!("expected a commit");
+			};
+			assert_eq!(commit.changes[1].changed.len(), 0);
+			assert_eq!(commit.changes[1].op, ChangeOp::Delete);
+		}
+
+		#[test]
+		fn a_malformed_change_is_refused() {
+			let mut entries = Vec::new();
+			push_commit(
+				&mut entries,
+				1,
+				Value::Timestamp(at()),
+				Value::Null,
+				Value::Text("app".into()),
+				None,
+			)
+			.unwrap();
+			let change = |entries: &mut Vec<RawEntry>, op: &str, key: &str| {
+				push_change(
+					entries,
+					Value::Text("posts".into()),
+					Value::Text(op.to_string()),
+					Value::Text(key.to_string()),
+					Value::Null,
+					Value::Null,
+					Value::Null,
+				)
+			};
+
+			assert!(matches!(
+				change(&mut entries, "X", "[1]").unwrap_err(),
+				DbError::Decode(_)
+			));
+			assert!(matches!(
+				change(&mut entries, "I", "1").unwrap_err(),
+				DbError::Decode(_)
+			));
+			assert!(matches!(
+				change(&mut entries, "I", "{").unwrap_err(),
+				DbError::Decode(_)
+			));
+
+			// A pruned marker holds no changes.
+			entries.clear();
+			push_commit(
+				&mut entries,
+				2,
+				Value::Timestamp(at()),
+				Value::Null,
+				Value::Text(PRUNED.to_string()),
+				None,
+			)
+			.unwrap();
+			assert!(change(&mut entries, "I", "[1]").is_ok());
+			assert!(matches!(entries[0], RawEntry::Pruned { through: 2 }));
+		}
+
+		#[test]
+		fn placeholders_follow_the_dialect() {
+			assert_eq!(placeholder(Dialect::Postgres, 1), "$1");
+			assert_eq!(placeholder(Dialect::Sqlite, 2), "?2");
+		}
+	}
 }
 
 #[cfg(feature = "postgres")]
@@ -896,4 +1180,16 @@ pub(crate) fn seal_sqlite(
 			origin.unwrap_or(leptoskit_db_schema::live::DEFAULT_ORIGIN),
 		])?;
 	Ok(Some(version))
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod reader_tests {
+	use super::reading::Reader;
+
+	#[tokio::test]
+	async fn a_reader_describes_the_version_it_is_past() {
+		let db = crate::Db::connect("sqlite::memory:").await.unwrap();
+		let reader = Reader::start(db, Some(3)).await.unwrap();
+		assert_eq!(format!("{reader:?}"), "Reader { version: 3, .. }");
+	}
 }

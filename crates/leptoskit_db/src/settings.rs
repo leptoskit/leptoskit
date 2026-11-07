@@ -548,4 +548,109 @@ mod tests {
 		assert_eq!(array_item(&Value::Null), "NULL");
 		assert_eq!(array_item(&Value::Bytes(vec![1])), r#""\\x01""#);
 	}
+
+	/// A setting whose value can't be written.
+	struct TooBig;
+
+	impl Setting for TooBig {
+		type Value = u64;
+
+		const NAME: &'static str = "too_big";
+
+		fn value(&self) -> u64 {
+			u64::MAX
+		}
+	}
+
+	/// A list setting whose items can't be written.
+	struct TooBigList;
+
+	impl ListSetting for TooBigList {
+		type Item = u64;
+
+		const NAME: &'static str = "too_big_list";
+
+		fn values(&self) -> Vec<u64> {
+			vec![u64::MAX]
+		}
+	}
+
+	/// A list of the labels a request may read.
+	struct Labels(Vec<String>);
+
+	impl ListSetting for Labels {
+		type Item = String;
+
+		const NAME: &'static str = "labels";
+
+		fn values(&self) -> Vec<String> {
+			self.0.clone()
+		}
+	}
+
+	#[test]
+	fn a_setting_value_that_cant_be_written_is_refused_by_name() {
+		use crate::Operand;
+
+		let context = Context::new().with(TooBig);
+		let value = SettingValue::<u64>::of::<TooBig>(&context);
+		let error = value.reference().unwrap_err();
+		assert!(
+			error.contains("doesn't fit a 64-bit signed column"),
+			"{error}"
+		);
+
+		let error = Operand::<Option<u64>>::into_value(SettingValue::<u64>::of::<TooBig>(&context))
+			.unwrap_err();
+		assert!(error.to_string().contains("too_big"), "{error}");
+
+		let context = Context::new().with(TooBigList);
+		let list = SettingList::<u64>::of::<TooBigList>(&context);
+		let error = list.reference().unwrap_err();
+		assert!(
+			error.contains("doesn't fit a 64-bit signed column"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn entries_read_settings_and_lists_from_a_request() {
+		let context = Context::new().with(Label("ada"));
+		let entry = SettingEntry::of::<Label>();
+		assert_eq!((entry.read)(&context).unwrap().unwrap(), "ada");
+		assert!((entry.read)(&Context::new()).is_none());
+
+		let context = Context::new().with(Labels(vec!["a".into(), "b c".into()]));
+		let entry = SettingEntry::list::<Labels>();
+		assert_eq!((entry.read)(&context).unwrap().unwrap(), r#"{"a","b c"}"#);
+		assert!((entry.read)(&Context::new()).is_none());
+	}
+
+	#[cfg(feature = "postgres")]
+	#[test]
+	fn wall_clock_values_travel_as_text_and_literals() {
+		let at = chrono::NaiveDate::from_ymd_opt(2026, 1, 2)
+			.unwrap()
+			.and_hms_opt(3, 4, 5)
+			.unwrap();
+		let time = at.time();
+		let duration = chrono::Duration::minutes(90);
+
+		assert_eq!(text(&Value::LocalTimestamp(at)), "2026-01-02 03:04:05");
+		assert_eq!(text(&Value::LocalTime(time)), "03:04:05");
+		assert_eq!(text(&Value::Duration(duration)), "PT5400S");
+
+		assert_eq!(
+			postgres_literal(&Value::LocalTimestamp(at)),
+			"'2026-01-02 03:04:05'::timestamp"
+		);
+		assert_eq!(
+			postgres_literal(&Value::LocalTime(time)),
+			"'03:04:05'::time"
+		);
+		assert_eq!(
+			postgres_literal(&Value::Duration(duration)),
+			"E'PT5400S'::text"
+		);
+	}
 }

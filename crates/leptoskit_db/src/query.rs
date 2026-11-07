@@ -878,3 +878,59 @@ pub(crate) fn write_conditions<T: Table>(
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::policy::Access;
+	use crate::table;
+
+	/// A row with no actor columns.
+	#[table(name = "query_rows")]
+	pub struct QueryRow {
+		pub id: crate::Id<Self>,
+		pub name: String,
+	}
+
+	/// A row whose actor columns show both cases.
+	#[table(name = "query_actor_rows")]
+	pub struct QueryActorRow {
+		pub id: crate::Id<Self>,
+		#[db(created_by)]
+		pub creator: crate::Id<Self>,
+		#[db(updated_by)]
+		pub editor: Option<crate::Id<Self>>,
+	}
+
+	#[test]
+	fn queries_and_updates_start_empty() {
+		let query = Query::<QueryRow>::default();
+		assert!(query.filter.is_none() && query.order.is_empty());
+		assert_eq!(query.limit, None);
+
+		let update = Update::<QueryRow>::default();
+		assert!(update.filter.is_none() && update.sets.is_empty());
+	}
+
+	#[test]
+	fn actor_columns_take_null_only_when_they_allow_it() {
+		let system = Access::System {
+			reason: "a unit test",
+			actor: None,
+		};
+
+		assert_eq!(
+			actor_value::<QueryActorRow>(&system, "editor").unwrap(),
+			Value::Null
+		);
+		let error = actor_value::<QueryActorRow>(&system, "creator").unwrap_err();
+		assert!(matches!(error, DbError::NoActor { .. }), "{error:?}");
+
+		let actor = crate::Actor::from_uuid(uuid::Uuid::nil());
+		let request = Access::Context(crate::Context::new().with(actor));
+		assert_eq!(
+			actor_value::<QueryActorRow>(&request, "creator").unwrap(),
+			Value::Uuid(uuid::Uuid::nil())
+		);
+	}
+}

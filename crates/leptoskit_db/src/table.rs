@@ -1384,4 +1384,67 @@ mod tests {
 			"distinct types claiming one SQL table must be rejected"
 		);
 	}
+
+	#[test]
+	fn a_pack_declared_twice_is_reported_for_each_claim() {
+		let first = ExpectedPack::of(PackIdentity::new("idp", &[], &[]));
+		let second = ExpectedPack::of(PackIdentity::new("idp", &[], &[]));
+		let found = messages(&[&first, &second], &[]);
+		assert!(
+			found
+				.iter()
+				.any(|message| message.contains("declared more than once")),
+			"{found:#?}"
+		);
+	}
+
+	#[test]
+	fn a_declared_pack_whose_tables_never_linked_is_named() {
+		static TABLES: [super::TableEntry; 1] = [super::TableEntry::of::<crate::AuditEntry>()];
+		let pack = ExpectedPack::of(PackIdentity::new("auth", &[], &TABLES));
+		let found = messages(&[&pack], &[]);
+		assert!(
+			found.iter().any(|message| {
+				message.contains("no `auth` tables are linked") && message.contains("schema_pack!")
+			}),
+			"{found:#?}"
+		);
+	}
+
+	#[test]
+	fn a_pack_required_by_two_packs_is_reported_once() {
+		static TABLES: [super::TableEntry; 1] = [super::TableEntry::of::<crate::AuditEntry>()];
+		let app = ExpectedPack::of(PackIdentity::new("app", &["shared"], &TABLES));
+		let other = ExpectedPack::of(PackIdentity::new("other", &["shared"], &TABLES));
+		let shared = ExpectedPack::of(PackIdentity::new("shared", &[], &TABLES));
+		let actual = [
+			Pack::new("app", vec![TableName::new("_leptoskit_audit")]),
+			Pack::new("other", vec![TableName::new("_leptoskit_audit")]),
+			Pack::new("shared", vec![TableName::new("_leptoskit_audit")]),
+		];
+
+		let found = messages(&[&app, &other, &shared], &actual);
+		assert!(
+			!found
+				.iter()
+				.any(|message| message.contains("requires the `shared` pack")),
+			"every required pack is linked: {found:#?}"
+		);
+	}
+
+	#[test]
+	fn plain_tables_have_no_hidden_reads_and_no_version() {
+		use crate::Table;
+
+		assert_eq!(PlainRow::reads_through(), Some(Vec::new()));
+		let mut row = PlainRow {
+			id: crate::Id::new(),
+		};
+		row.bump_version();
+	}
+
+	#[crate::table(name = "plain_rows")]
+	struct PlainRow {
+		pub id: crate::Id<Self>,
+	}
 }

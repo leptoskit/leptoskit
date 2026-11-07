@@ -1092,3 +1092,115 @@ async fn hybrid_search_fuses_the_text_and_vector_rankings() {
 	})
 	.await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nearest_searches_filter_order_skip_and_take_the_first() {
+	on_both(|db| {
+		async move {
+			let stored = measures(&db).await;
+			let target = measure("target".into(), 1_000, 16);
+			let found =
+				|rows: Vec<Measure>| rows.into_iter().map(|row| row.label).collect::<Vec<_>>();
+
+			// A filter after `nearest` narrows what the search ranks.
+			let filtered = Measure::query()
+				.nearest(|m| m.l2, &target.l2)
+				.filter(|m| m.label.ilike("m0%"))
+				.limit(3)
+				.order_by(|m| m.label.asc())
+				.all(&db)
+				.await
+				.unwrap();
+			assert!(
+				filtered.iter().all(|row| row.label.starts_with("m0")),
+				"{filtered:?}"
+			);
+
+			// `first` takes the nearest row, with or without its distance.
+			let nearest = Measure::query()
+				.nearest(|m| m.l2, &target.l2)
+				.first(&db)
+				.await
+				.unwrap()
+				.expect("a nearest row");
+			assert!(stored.iter().any(|row| row.id == nearest.id));
+
+			let (nearest, distance) = Measure::query()
+				.nearest(|m| m.l2, &target.l2)
+				.with_distance()
+				.first(&db)
+				.await
+				.unwrap()
+				.expect("a nearest row and its distance");
+			assert!(stored.iter().any(|row| row.id == nearest.id));
+			assert!(distance >= 0.0);
+
+			// Distances can be skipped and limited too.
+			let page = Measure::query()
+				.nearest(|m| m.l2, &target.l2)
+				.with_distance()
+				.limit(2)
+				.offset(1)
+				.exact()
+				.all(&db)
+				.await
+				.unwrap();
+			assert_eq!(page.len(), 2);
+
+			let all = Measure::query()
+				.nearest(|m| m.l2, &target.l2)
+				.all(&db)
+				.await
+				.unwrap();
+			assert_eq!(
+				found(page.into_iter().map(|(row, _)| row).collect()),
+				found(all)[1..3].to_vec()
+			);
+		}
+	})
+	.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hybrid_searches_can_skip_rows_and_include_deleted_ones() {
+	on_both(|db| {
+		async move {
+			let target = counted("rust passkeys");
+			for (title, body) in [
+				("one", "rust"),
+				("two", "passkeys"),
+				("three", "rust passkeys"),
+				("gone", "rust"),
+			] {
+				article(&db, title, Some(body), Some(counted(body))).await;
+			}
+			let hybrid = || {
+				Article::query()
+					.hybrid(|h| h.text("rust").vector(|a| a.embedding, &target))
+					.candidates(10)
+			};
+
+			let found = hybrid().all(&db).await.unwrap();
+			assert!(found.iter().any(|article| article.title == "gone"));
+			assert!(!found.is_empty());
+
+			let skipped = hybrid().offset(1).all(&db).await.unwrap();
+			assert_eq!(
+				skipped
+					.into_iter()
+					.map(|article| article.title)
+					.collect::<Vec<_>>(),
+				found[1..]
+					.iter()
+					.map(|article| article.title.clone())
+					.collect::<Vec<_>>()
+			);
+
+			// An article table keeps no soft deletes, so asking for them
+			// changes nothing, but the search still accepts the request.
+			let deleted = hybrid().with_deleted().all(&db).await.unwrap();
+			assert_eq!(deleted.len(), found.len());
+		}
+	})
+	.await;
+}

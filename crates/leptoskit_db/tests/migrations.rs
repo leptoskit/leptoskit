@@ -406,7 +406,8 @@ async fn pushes_change_a_database_until_a_migration_adopts_them() {
 		let first = Migration::new(
 			"20260101T000000_notes",
 			"CREATE TABLE \"pushed_notes\" (\"id\" INTEGER NOT NULL PRIMARY KEY)",
-		);
+		)
+		.with_down("DROP TABLE \"pushed_notes\"");
 		db.migrate(std::slice::from_ref(&first)).await.unwrap();
 		assert_eq!(db.pushed_schema().await.unwrap(), None);
 
@@ -433,6 +434,12 @@ async fn pushes_change_a_database_until_a_migration_adopts_them() {
 			db.applied_migrations().await.unwrap(),
 			[first.name.as_ref()]
 		);
+
+		// Rollback refuses while pushes are unrecorded.
+		assert!(matches!(
+			db.rollback(std::slice::from_ref(&first), 1).await,
+			Err(MigrationError::RollbackHistory)
+		));
 
 		// A failing push changes nothing.
 		let broken = Migration::new("push", "ALTER TABLE \"missing\" ADD COLUMN \"x\" TEXT");
