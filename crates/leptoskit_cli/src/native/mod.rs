@@ -893,6 +893,7 @@ fn write_assets(
 /// only when the enclosing build is a release build, like the web client, and
 /// warns rather than fails when binaryen is missing: a machine that only
 /// builds for devices still prepares, bundles, and debugs native apps.
+#[allow(clippy::too_many_arguments)]
 fn bundle(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -2368,6 +2369,8 @@ mod tests {
 		let error = bundle(
 			temporary.path(),
 			&config,
+			&[],
+			&[],
 			Target::Macos,
 			false,
 			None,
@@ -2400,6 +2403,8 @@ mod tests {
 		let error = bundle(
 			root,
 			&LeptoskitConfig::default(),
+			&[],
+			&[],
 			Target::Macos,
 			false,
 			None,

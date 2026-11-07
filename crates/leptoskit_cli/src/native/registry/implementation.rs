@@ -265,6 +265,9 @@ pub struct HostCapabilities {
 	pub asynchronous: bool,
 	pub service: bool,
 	pub native: Option<NativeKind>,
+	/// Whether the generated host enables the reserved `leptoskit.timer`
+	/// plugin. The watch stubs run no guest, so they promise no timer.
+	pub timer: bool,
 }
 
 impl HostCapabilities {
@@ -276,14 +279,15 @@ impl HostCapabilities {
 				asynchronous: true,
 				service: true,
 				native: Some(native),
+				timer: true,
 			}
 		};
 
 		match target {
 			Target::Ios | Target::IosSimulator | Target::Macos => everything(NativeKind::Apple),
 			Target::Android | Target::AndroidX86_64 => everything(NativeKind::Android),
-			// `bridge.cpp` dispatches synchronous Rust calls and ArkTS plugins
-			// only.
+			// `bridge.cpp` enables the reserved timer and dispatches
+			// synchronous Rust calls and ArkTS plugins only.
 			Target::Harmonyos | Target::HarmonyosX86_64 => {
 				Self {
 					sync: true,
@@ -291,10 +295,11 @@ impl HostCapabilities {
 					asynchronous: false,
 					service: false,
 					native: Some(NativeKind::ArkTs),
+					timer: true,
 				}
 			}
 			// The Linux runner pumps a `PluginHost`, which has no plugin
-			// services.
+			// services, and enables the reserved timer.
 			Target::Linux => {
 				Self {
 					sync: true,
@@ -302,17 +307,31 @@ impl HostCapabilities {
 					asynchronous: true,
 					service: false,
 					native: None,
+					timer: true,
 				}
 			}
-			// Experimental watch hosts and the other app-owned runners don't
-			// register plugins yet.
-			Target::Windows | Target::Tui | Target::Wearos | Target::Watchos => {
+			// The Windows and terminal runners enable the reserved timer but
+			// don't register runtime plugins yet.
+			Target::Windows | Target::Tui => {
 				Self {
 					sync: false,
 					worker: false,
 					asynchronous: false,
 					service: false,
 					native: None,
+					timer: true,
+				}
+			}
+			// The experimental watch hosts are stubs: they run no guest and
+			// therefore promise neither plugins nor a timer.
+			Target::Wearos | Target::Watchos => {
+				Self {
+					sync: false,
+					worker: false,
+					asynchronous: false,
+					service: false,
+					native: None,
+					timer: false,
 				}
 			}
 		}

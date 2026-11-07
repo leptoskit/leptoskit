@@ -360,7 +360,7 @@ fn native_bundle_compiles_and_optimizes_the_guest() {
 	);
 	assert_eq!(contract.flavor, "android");
 	assert_eq!(contract.platform, "android");
-	assert!(contract.digest().len() == 64);
+	assert_eq!(contract.digest().len(), 64);
 }
 
 #[test]
@@ -3130,6 +3130,138 @@ fn dev_resolves_the_project_manifest_and_preserves_failure_status() {
 	assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
 }
 
+/// A real workspace whose platform host depends on a plugin with runtime
+/// metadata, so the CLI resolves host capabilities rather than a hand-built
+/// descriptor fixture.
+fn capability_workspace(scratch: &Scratch) {
+	let ffi = Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi");
+	let plugin = scratch.path.join("echo");
+	let app = scratch.path.join("app_guest");
+	let tui = scratch.path.join("tui");
+	for directory in [&plugin, &app, &tui] {
+		std::fs::create_dir_all(directory.join("src")).unwrap();
+	}
+	std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+	std::fs::write(
+		scratch.path.join("Cargo.toml"),
+		format!(
+			"[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \
+			 \"2021\"\n\n[workspace]\nresolver = \"2\"\nmembers = [\"app_guest\", \"echo\", \
+			 \"tui\"]\n\n[dependencies]\nleptoskit_bridge_ffi = {{ path = \"{}\", features = \
+			 [\"app\"] }}\necho = {{ path = \"echo\" }}\n",
+			ffi.display()
+		),
+	)
+	.unwrap();
+	std::fs::write(scratch.path.join("src/lib.rs"), "").unwrap();
+	std::fs::write(
+		plugin.join("Cargo.toml"),
+		"[package]\nname = \"echo\"\nversion = \"0.1.0\"\nedition = \
+		 \"2021\"\n\n[package.metadata.leptoskit.runtime]\nname = \"echo\"\nrust-type = \"Echo\"\n",
+	)
+	.unwrap();
+	std::fs::write(plugin.join("src/lib.rs"), "").unwrap();
+	std::fs::write(
+		app.join("Cargo.toml"),
+		"[package]\nname = \"app_guest\"\nversion = \"0.1.0\"\nedition = \
+		 \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[features]\ntui = []\n",
+	)
+	.unwrap();
+	std::fs::write(
+		app.join("src/lib.rs"),
+		"#[no_mangle]\npub extern \"C\" fn probe() {}\n",
+	)
+	.unwrap();
+	std::fs::write(
+		tui.join("Cargo.toml"),
+		format!(
+			"[package]\nname = \"app_tui\"\nversion = \"0.1.0\"\nedition = \
+			 \"2021\"\n\n[target.'cfg(not(target_arch = \
+			 \"wasm32\"))'.dependencies]\nleptoskit_bridge_ffi = {{ path = \"{}\", features = \
+			 [\"app\"] }}\necho = {{ path = \"../echo\" }}\n",
+			ffi.display()
+		),
+	)
+	.unwrap();
+	std::fs::write(tui.join("src/lib.rs"), "").unwrap();
+}
+
+#[test]
+fn real_host_metadata_keeps_unclassified_grants_incomplete_and_required_grants_fatal() {
+	let scratch = Scratch::new("native-contract-host");
+	capability_workspace(&scratch);
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.app.default_platform = leptoskit_config::Platform::Tui;
+	config.app.platforms = vec![leptoskit_config::Platform::Tui];
+	config.build.client_package = Some("app_guest".into());
+	config.native.plugins = vec!["echo".into()];
+	config.native.required_plugins = vec!["echo".into()];
+	std::fs::write(
+		scratch.path.join("leptoskit.toml"),
+		toml::to_string(&config).unwrap(),
+	)
+	.unwrap();
+
+	let rejected = leptoskit(
+		&scratch.path,
+		&["native", "bundle", "--target", "tui", "--out", "required"],
+	);
+	assert!(!rejected.status.success());
+	assert!(
+		stderr(&rejected).contains("plugin.echo"),
+		"{}",
+		stderr(&rejected)
+	);
+	assert!(!scratch.path.join("required.capabilities.json").exists());
+	assert!(!scratch.path.join("required").exists());
+
+	config.native.required_plugins.clear();
+	std::fs::write(
+		scratch.path.join("leptoskit.toml"),
+		toml::to_string(&config).unwrap(),
+	)
+	.unwrap();
+	let unclassified = leptoskit(
+		&scratch.path,
+		&[
+			"native",
+			"bundle",
+			"--target",
+			"tui",
+			"--out",
+			"unclassified",
+		],
+	);
+	assert!(unclassified.status.success(), "{}", stderr(&unclassified));
+	let descriptor: leptoskit_codepush::capability::HostCapabilityDescriptor =
+		serde_json::from_slice(
+			&std::fs::read(scratch.path.join("unclassified.capabilities.json")).unwrap(),
+		)
+		.unwrap();
+	assert_eq!(
+		descriptor.state_of("plugin.echo").map(|(state, _)| *state),
+		Some(leptoskit_codepush::capability::CapabilityState::Unsupported)
+	);
+	let guest: leptoskit_codepush::installed::RuntimeContract = serde_json::from_slice(
+		&std::fs::read(scratch.path.join("unclassified/runtime.json")).unwrap(),
+	)
+	.unwrap();
+	let host: leptoskit_codepush::installed::RuntimeContract =
+		serde_json::from_value(serde_json::json!({
+			"abi": guest.abi,
+			"shell": guest.shell,
+			"plugins": config.native.plugins,
+			"format_version": leptoskit_codepush::capability::RUNTIME_CONTRACT_VERSION,
+			"host": descriptor,
+		}))
+		.unwrap();
+	assert_eq!(
+		guest.verify_guest(&host).unwrap(),
+		leptoskit_codepush::capability::ContractCompatibility::Incomplete
+	);
+}
+
 #[test]
 fn watch_preparation_enforces_requirements_before_writing_and_records_optional_gaps() {
 	for (target, platform) in [
@@ -3180,8 +3312,8 @@ fn watch_preparation_enforces_requirements_before_writing_and_records_optional_g
 			.unwrap();
 		assert!(descriptor.experimental);
 		assert_eq!(
-			descriptor.state_of("plugin.echo").unwrap().0,
-			leptoskit_codepush::capability::CapabilityState::Unsupported
+			descriptor.state_of("plugin.echo").map(|(state, _)| *state),
+			Some(leptoskit_codepush::capability::CapabilityState::Unsupported)
 		);
 	}
 }

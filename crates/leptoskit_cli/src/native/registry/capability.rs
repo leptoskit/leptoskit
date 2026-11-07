@@ -16,6 +16,7 @@ use leptoskit_codepush::capability::CAP_HOST_PLUGIN_RUST_ASYNC;
 use leptoskit_codepush::capability::CAP_HOST_PLUGIN_RUST_SYNC;
 use leptoskit_codepush::capability::CAP_HOST_PLUGIN_RUST_WORKER;
 use leptoskit_codepush::capability::CAP_HOST_PLUGIN_SERVICE;
+use leptoskit_codepush::capability::CAP_HOST_TIMER;
 use leptoskit_codepush::capability::CAP_HOST_UPDATE_CODEPUSH;
 use leptoskit_codepush::capability::CAPABILITY_CONTRACT_VERSION;
 use leptoskit_codepush::capability::CapabilityEntry;
@@ -98,7 +99,7 @@ pub(crate) fn requirements(config: &leptoskit_config::LeptoskitConfig) -> Runtim
 		.iter()
 		.map(|name| plugin_capability(name))
 		.chain(config.native.required_capabilities.iter().cloned())
-		.collect::<std::collections::BTreeSet<_>>()
+		.collect::<BTreeSet<_>>()
 		.into_iter()
 		.collect();
 	let optional = config
@@ -107,7 +108,7 @@ pub(crate) fn requirements(config: &leptoskit_config::LeptoskitConfig) -> Runtim
 		.iter()
 		.map(|name| plugin_capability(name))
 		.chain(config.native.optional_capabilities.iter().cloned())
-		.collect::<std::collections::BTreeSet<_>>()
+		.collect::<BTreeSet<_>>()
 		.into_iter()
 		.collect();
 
@@ -135,10 +136,21 @@ pub(crate) fn enforce_required(
 	let descriptor = descriptor(config, target, plugins, missing);
 
 	for id in &requirements.required {
+		let declared = if id.strip_prefix("plugin.").is_some_and(|name| {
+			config
+				.native
+				.required_plugins
+				.iter()
+				.any(|entry| entry == name)
+		}) {
+			"required-plugins"
+		} else {
+			"required-capabilities"
+		};
 		let Some((state, detail)) = descriptor.state_of(id) else {
 			anyhow::bail!(
-				"native.required-capabilities declares `{id}`, but the {} {} does not describe \
-				 the capability; check its spelling or upgrade leptoskit",
+				"native.{declared} declares `{id}`, but the {} {} does not describe the \
+				 capability; check its spelling or upgrade leptoskit",
 				platform_label(target),
 				host_noun(target)
 			);
@@ -147,9 +159,8 @@ pub(crate) fn enforce_required(
 		if !state.usable() {
 			let detail = detail.map_or_else(String::new, |detail| format!(": {detail}"));
 			anyhow::bail!(
-				"native.required-capabilities declares `{id}`, but the {} {} reports it \
-				 {state:?}{detail}; make it available, move it to the optional list, or drop the \
-				 platform",
+				"native.{declared} declares `{id}`, but the {} {} reports it {state:?}{detail}; \
+				 make it available, move it to the optional list, or drop the platform",
 				platform_label(target),
 				host_noun(target)
 			);
@@ -170,7 +181,7 @@ pub(crate) fn optional_warnings(
 	let descriptor = descriptor(config, target, plugins, missing);
 	let required = requirements(config).required;
 	let mut warnings = Vec::new();
-	let mut optional_plugins = std::collections::BTreeSet::new();
+	let mut optional_plugins = BTreeSet::new();
 
 	for name in &config.native.optional_plugins {
 		optional_plugins.insert(plugin_capability(name));
@@ -198,14 +209,14 @@ pub(crate) fn optional_warnings(
 		if optional_plugins.contains(&id) {
 			let name = id.strip_prefix("plugin.").unwrap_or(&id);
 			warnings.push(format!(
-				"warning: optional runtime plugin `{name}` is not available on {}{detail}; calls \
-				 fail with Unavailable",
+				"warning: optional runtime plugin `{name}` is not available on the {}{detail}; \
+				 calls fail with Unavailable",
 				platform_label(target)
 			));
 		} else {
 			warnings.push(format!(
-				"warning: optional capability `{id}` is not available on {}{detail}; the app must \
-				 degrade without it",
+				"warning: optional capability `{id}` is not available on the {}{detail}; the app \
+				 must degrade without it",
 				platform_label(target)
 			));
 		}
@@ -222,6 +233,8 @@ pub(crate) fn optional_warnings(
 /// host support the registry actually applies.
 #[cfg(test)]
 pub(crate) fn documentation_table() -> String {
+	use std::fmt::Write as _;
+
 	const TARGETS: [Target; 12] = [
 		Target::Macos,
 		Target::IosSimulator,
@@ -241,8 +254,8 @@ pub(crate) fn documentation_table() -> String {
 		"# Platform capability matrix\n\nGenerated from the same host support model as \
 		 `capabilities.json`; do not edit by hand. Declared build support is not runtime \
 		 evidence.\n\n| Flavour | Platform | Experimental | Sync Rust | Worker Rust | Async Rust \
-		 | Service | Native | Code push |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- \
-		 |\n",
+		 | Service | Timer | Native | Code push |\n| --- | --- | --- | --- | --- | --- | --- | \
+		 --- | --- | --- |\n",
 	);
 
 	for target in TARGETS {
@@ -253,8 +266,9 @@ pub(crate) fn documentation_table() -> String {
 			Some(NativeKind::ArkTs) => "arkts",
 			None => "—",
 		};
-		out.push_str(&format!(
-			"| `{}` | `{}` | {} | {} | {} | {} | {} | {} | {} |\n",
+		let _ = writeln!(
+			out,
+			"| `{}` | `{}` | {} | {} | {} | {} | {} | {} | {} | {} |",
 			target.flavor(),
 			target.platform(),
 			yes(target.experimental()),
@@ -262,9 +276,10 @@ pub(crate) fn documentation_table() -> String {
 			yes(host.worker),
 			yes(host.asynchronous),
 			yes(host.service),
+			yes(host.timer),
 			native,
 			yes(runs_code_push(target))
-		));
+		);
 	}
 
 	out
@@ -347,6 +362,15 @@ fn host_capabilities(target: Target, host: HostCapabilities) -> Vec<CapabilityEn
 			runs_code_push(target),
 			"automatic code push checks run only in the generated iOS and Android hosts",
 		),
+		entry(
+			CAP_HOST_TIMER,
+			host.timer,
+			&format!(
+				"the {} {} does not enable the reserved `leptoskit.timer` plugin",
+				platform_label(target),
+				host_noun(target)
+			),
+		),
 	];
 
 	if target.experimental() {
@@ -354,7 +378,7 @@ fn host_capabilities(target: Target, host: HostCapabilities) -> Vec<CapabilityEn
 			id: CAP_HOST_PLATFORM_EXPERIMENTAL.into(),
 			state: CapabilityState::Experimental,
 			detail: Some(format!(
-				"{} is an experimental destination",
+				"the {} destination is experimental",
 				platform_label(target)
 			)),
 		});
@@ -396,7 +420,7 @@ fn plugin_entry(
 	});
 
 	let (state, implementation, detail) =
-		if let Some(plugin) = plugins.iter().find(|plugin| &plugin.name == name) {
+		if let Some(plugin) = plugins.iter().find(|plugin| plugin.name == name) {
 			match plugin.implementation(target, host) {
 				Ok(implementation) => {
 					(
@@ -411,7 +435,7 @@ fn plugin_entry(
 				}
 				Err(reason) => unsupported(reason),
 			}
-		} else if let Some(missing) = missing.iter().find(|missing| &missing.name == name) {
+		} else if let Some(missing) = missing.iter().find(|missing| missing.name == name) {
 			unsupported(missing.reason)
 		} else if matches!(
 			target,
@@ -430,7 +454,7 @@ fn plugin_entry(
 				CapabilityState::Unknown,
 				None,
 				Some(format!(
-					"this build did not resolve the plugin for {}",
+					"this build did not resolve the plugin for the {}",
 					platform_label(target)
 				)),
 			)
@@ -497,7 +521,7 @@ fn platform_label(target: Target) -> &'static str {
 		Target::Watchos => "watchOS",
 		Target::Windows => "Windows",
 		Target::Linux => "Linux",
-		Target::Tui => "the terminal",
+		Target::Tui => "terminal",
 	}
 }
 

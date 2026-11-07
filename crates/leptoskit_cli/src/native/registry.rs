@@ -410,7 +410,7 @@ fn resolve_for_target(
 			)?;
 			// Required capabilities fail before a host project, bundle, or
 			// package is written. Optional ones only produce diagnostics.
-			capability::enforce_required(config, target, &plugins, &missing)?;
+			enforce_required(config, target, &plugins, &missing)?;
 			(plugins, missing)
 		}
 		None => (plugins, Vec::new()),

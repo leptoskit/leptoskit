@@ -24,6 +24,18 @@ fn take(buffer: Buffer) -> Vec<u8> {
 }
 
 fn fixture() -> (TempDir, Vec<u8>, Vec<u8>, String) {
+	fixture_with(
+		&serde_json::json!({"abi": 1, "shell": "test-shell", "plugins": []}),
+		&serde_json::json!({"abi": 1, "shell": "test-shell", "plugins": []}),
+	)
+}
+
+/// A store build whose signed guest runtime and trusted host runtime are
+/// supplied separately, so tests can cross the legacy/versioned boundary.
+fn fixture_with(
+	guest_runtime: &Value,
+	host_runtime: &Value,
+) -> (TempDir, Vec<u8>, Vec<u8>, String) {
 	let temporary = TempDir::new().unwrap();
 	let source = temporary.path().join("demo/release");
 	let container = temporary.path().join("embedded.lkb");
@@ -33,14 +45,14 @@ fn fixture() -> (TempDir, Vec<u8>, Vec<u8>, String) {
 		.to_str()
 		.unwrap()
 		.to_owned();
-	let runtime = serde_json::json!({"abi": 1, "shell": "test-shell", "plugins": []});
+	let runtime = guest_runtime.clone();
 	let configuration = serde_json::to_vec(&serde_json::json!({
 		"enabled": false,
 		"app": "demo",
 		"channel": "production",
 		"server": "https://updates.example.invalid",
 		"public_keys": [],
-		"runtime": runtime,
+		"runtime": host_runtime,
 		"allow_http": false
 	}))
 	.unwrap();
@@ -185,6 +197,80 @@ fn launch_transfers_independent_buffers_and_preserves_receipt_for_runtime_valida
 		let wasm = take(wasm.assume_init());
 		assert_eq!(wasm, b"\0asm\x01\0\0\0");
 		assert!(App::new(&wasm).is_err());
+	}
+}
+
+#[test]
+fn versioned_contract_states_reach_the_native_update_report() {
+	let protocol = serde_json::json!({"guest_abi": 1, "bridge": 1});
+	let requirements = serde_json::json!({
+		"format_version": 1,
+		"protocol": protocol,
+		"required": []
+	});
+	let descriptor = |plugins: Value| {
+		serde_json::json!({
+			"format_version": 1,
+			"platform": "ios",
+			"flavor": "ios",
+			"experimental": false,
+			"protocol": {"guest_abi": 1, "bridge": 1},
+			"capabilities": [],
+			"plugins": plugins
+		})
+	};
+	let guest = |plugins: Value| {
+		serde_json::json!({
+			"abi": 1,
+			"shell": "test-shell",
+			"plugins": plugins,
+			"format_version": 2,
+			"requirements": requirements
+		})
+	};
+	let host = |grants: Value, plugins: Value| {
+		serde_json::json!({
+			"abi": 1,
+			"shell": "test-shell",
+			"plugins": grants,
+			"format_version": 2,
+			"host": descriptor(plugins)
+		})
+	};
+
+	for (guest_runtime, host_runtime, expected) in [
+		(
+			guest(serde_json::json!([])),
+			host(serde_json::json!([]), serde_json::json!([])),
+			"verified",
+		),
+		(
+			guest(serde_json::json!(["echo"])),
+			host(
+				serde_json::json!(["echo"]),
+				serde_json::json!([{
+					"name": "echo",
+					"state": "unsupported",
+					"detail": "this host does not run it"
+				}]),
+			),
+			"incomplete",
+		),
+	] {
+		let (_temporary, configuration, embedded, directory) =
+			fixture_with(&guest_runtime, &host_runtime);
+		let mut report = MaybeUninit::uninit();
+
+		// SAFETY: The trusted configuration and embedded container outlive the
+		// owner; the report points at writable storage and is released once.
+		unsafe {
+			let updates = open_fixture(&configuration, &embedded, &directory);
+			assert_eq!(lk_updates_sync(updates, report.as_mut_ptr()), 0);
+			let report: Value = serde_json::from_slice(&take(report.assume_init())).unwrap();
+			assert_eq!(report["status"], "current");
+			assert_eq!(report["contract"], expected);
+			lk_updates_destroy(updates);
+		}
 	}
 }
 

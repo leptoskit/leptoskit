@@ -14,6 +14,17 @@ fn echo_config() -> LeptoskitConfig {
 	config
 }
 
+/// Async plugins require host configuration; an empty table is enough for a
+/// fixture that only needs the resolution to succeed.
+fn async_config() -> LeptoskitConfig {
+	let mut config = echo_config();
+	config
+		.native
+		.plugin_options
+		.insert("echo".into(), toml::Table::new());
+	config
+}
+
 fn async_metadata() -> Metadata {
 	let mut value = metadata("Plugin");
 	value.packages[2].metadata = json!({"leptoskit": {"runtime": {
@@ -59,7 +70,7 @@ fn an_optional_plugin_never_turns_missing_plugins_error_into_a_failure() {
 	config.native.optional_plugins = vec!["echo".into()];
 	let registry = resolve_metadata(metadata("Plugin"), &config).expect("registry");
 
-	let (kept, missing) = super::super::implementation::select_for_target(
+	let (kept, missing) = select_for_target(
 		registry.plugins,
 		Target::Linux,
 		MissingPlugins::Error,
@@ -70,7 +81,7 @@ fn an_optional_plugin_never_turns_missing_plugins_error_into_a_failure() {
 	assert_eq!(missing.len(), 1);
 
 	assert!(
-		super::super::implementation::select_for_target(
+		select_for_target(
 			resolve_metadata(metadata("Plugin"), &echo_config())
 				.expect("registry")
 				.plugins,
@@ -85,7 +96,7 @@ fn an_optional_plugin_never_turns_missing_plugins_error_into_a_failure() {
 
 #[test]
 fn host_flavour_differences_are_part_of_the_contract() {
-	let config = echo_config();
+	let config = async_config();
 	let registry = resolve_metadata(async_metadata(), &config).expect("registry");
 	let ios = descriptor(&config, Target::Ios, &registry.plugins, &registry.missing);
 	let harmony = descriptor(
@@ -121,20 +132,23 @@ fn host_flavour_differences_are_part_of_the_contract() {
 	);
 }
 
-#[test]
-fn experimental_implementations_need_the_existing_opt_in() {
-	let mut config = echo_config();
+fn experimental_metadata() -> Metadata {
 	let mut value = metadata("Plugin");
 	value.packages[2].metadata = json!({"leptoskit": {"runtime": {
 		"name": "echo",
 		"rust-type": "Echo",
 		"experimental": true
 	}}});
-	let metadata = value;
+	value
+}
+
+#[test]
+fn experimental_implementations_need_the_existing_opt_in() {
+	let mut config = echo_config();
 
 	// Without a target in `resolve_metadata`, the plugin is still selected;
 	// resolve it for the destination to see the opt-in decision.
-	let mut selected = resolve_metadata(metadata.clone(), &config).expect("registry");
+	let mut selected = resolve_metadata(experimental_metadata(), &config).expect("registry");
 	selected.select(Target::Ios, MissingPlugins::Warn).unwrap();
 	assert_eq!(selected.missing[0].reason, Missing::ExperimentalRustPlugin);
 	let without = descriptor(&config, Target::Ios, &selected.plugins, &selected.missing);
@@ -144,7 +158,7 @@ fn experimental_implementations_need_the_existing_opt_in() {
 	);
 
 	config.native.experimental_rust_plugins = true;
-	let mut enabled = resolve_metadata(metadata, &config).expect("registry");
+	let mut enabled = resolve_metadata(experimental_metadata(), &config).expect("registry");
 	enabled.select(Target::Ios, MissingPlugins::Warn).unwrap();
 	let with = descriptor(&config, Target::Ios, &enabled.plugins, &enabled.missing);
 	assert_eq!(
@@ -157,11 +171,11 @@ fn experimental_implementations_need_the_existing_opt_in() {
 #[test]
 fn grants_and_option_values_change_the_digest() {
 	let mut config = echo_config();
-	let registry = resolve_metadata(async_metadata(), &config).expect("registry");
 	config.native.plugin_options.insert(
 		"echo".into(),
 		toml::from_str("origins = ['https://one.example']").unwrap(),
 	);
+	let registry = resolve_metadata(async_metadata(), &config).expect("registry");
 
 	let one = descriptor(&config, Target::Ios, &registry.plugins, &registry.missing);
 	config.native.plugin_options.insert(
@@ -181,11 +195,11 @@ fn grants_and_option_values_change_the_digest() {
 #[test]
 fn the_descriptor_never_contains_plugin_option_values_or_paths() {
 	let mut config = echo_config();
-	let registry = resolve_metadata(async_metadata(), &config).expect("registry");
 	config.native.plugin_options.insert(
 		"echo".into(),
 		toml::from_str("origins = ['https://secret.example']").unwrap(),
 	);
+	let registry = resolve_metadata(async_metadata(), &config).expect("registry");
 	let contract = descriptor(&config, Target::Ios, &registry.plugins, &registry.missing);
 	let json = serde_json::to_string(&contract).unwrap();
 	assert!(!json.contains("secret.example"), "{json}");
@@ -197,18 +211,28 @@ fn the_descriptor_never_contains_plugin_option_values_or_paths() {
 #[test]
 fn platform_capability_documentation_matches_the_host_model() {
 	let expected = std::fs::read_to_string(
-		std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+		Path::new(env!("CARGO_MANIFEST_DIR"))
 			.join("../../docs/agents/platform-capability-matrix.md"),
 	)
 	.expect("capability matrix");
 	// dprint aligns the table's columns; compare the cells, not its padding.
 	fn cells(text: &str) -> Vec<String> {
+		fn cell(value: &str) -> String {
+			let value = value.trim();
+			// dprint pads the separator row to the column width.
+			if !value.is_empty() && value.chars().all(|character| character == '-') {
+				"---".to_owned()
+			} else {
+				value.to_owned()
+			}
+		}
+
 		text.lines()
 			.map(|line| {
 				if line.starts_with('|') {
 					line.trim_matches('|')
 						.split('|')
-						.map(str::trim)
+						.map(cell)
 						.collect::<Vec<_>>()
 						.join("\t")
 				} else {
@@ -222,6 +246,44 @@ fn platform_capability_documentation_matches_the_host_model() {
 		cells(&expected),
 		"docs/agents/platform-capability-matrix.md is stale"
 	);
+}
+
+#[test]
+fn the_timer_contract_follows_the_generated_host_that_enables_it() {
+	use leptoskit_codepush::capability::CAP_HOST_TIMER;
+
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.required_capabilities = vec![CAP_HOST_TIMER.into()];
+
+	for target in [
+		Target::Macos,
+		Target::Ios,
+		Target::IosSimulator,
+		Target::Android,
+		Target::AndroidX86_64,
+		Target::Harmonyos,
+		Target::HarmonyosX86_64,
+		Target::Windows,
+		Target::Linux,
+		Target::Tui,
+	] {
+		assert!(
+			enforce_required(&config, target, &[], &[]).is_ok(),
+			"{target:?} enables the reserved timer"
+		);
+	}
+
+	for target in [Target::Wearos, Target::Watchos] {
+		let error =
+			enforce_required(&config, target, &[], &[]).expect_err("the watch stubs run no guest");
+		assert!(error.to_string().contains(CAP_HOST_TIMER), "{error}");
+		let descriptor = descriptor(&config, target, &[], &[]);
+		assert_eq!(
+			descriptor.state_of(CAP_HOST_TIMER).map(|(state, _)| *state),
+			Some(CapabilityState::Unsupported)
+		);
+	}
 }
 
 #[test]

@@ -109,11 +109,18 @@ required-capabilities = ["host.plugin.rust.async", "plugin.http"]
 optional-capabilities = ["host.plugin.native.android"]
 ```
 
-Capability identifiers name what the generated host can do, such as `host.plugin.rust.sync`, `host.plugin.rust.async`, `host.plugin.service`, `host.plugin.native.apple`, `host.update.codepush`, or `plugin.<name>` for a granted plugin. A required capability the host reports unsupported, experimental without its opt-in, or unknown fails before packaging; an optional one warns. A declaration never grants a plugin, permission, or native authority by itself: `native.plugins` and the generated grants remain the only source of runtime access.
+Capability identifiers name what the generated host can do, such as `host.plugin.rust.sync`, `host.plugin.rust.async`, `host.plugin.service`, `host.plugin.native.apple`, `host.update.codepush`, `host.timer`, or `plugin.<name>` for a granted plugin. A required capability the host reports unsupported, experimental without its opt-in, or unknown fails before packaging; an optional one warns. A declaration never grants a plugin, permission, or native authority by itself: `native.plugins` and the generated grants remain the only source of runtime access.
 
 Registering a plugin doesn't grant operating-system permissions. Add the permission strings and entitlements the plugin's README asks for to your host, such as `NSMotionUsageDescription` in `ios/Info.plist` for the pedometer, or `android.permission.ACTIVITY_RECOGNITION` in the Android manifest. Your app still asks the user at run time.
 
-The guest's clock and timer are not runtime plugins in `native.plugins`: every generated host offers them where it can. macOS, iOS, Android, Windows, Linux, and the terminal schedule real sleeps through the reserved `leptoskit.timer` plugin, so retry backoff and cache expiry wait. Experimental HarmonyOS doesn't wire it yet, and a host built before it existed answers `Unavailable`; `leptoskit_query::has_timer` reports that honestly instead of pretending a sleep finished.
+The guest's clock and timer are not runtime plugins in `native.plugins`: the generated host enables the reserved `leptoskit.timer` plugin itself. macOS, iOS, Android, Windows, Linux, the terminal, and experimental HarmonyOS schedule real sleeps, so retry backoff and cache expiry wait. The capability descriptor records this as `host.timer`, so an app that cannot run without a timer can require it:
+
+```toml
+[native]
+required-capabilities = ["host.timer"]
+```
+
+That requirement fails before packaging on the experimental Wear OS and watchOS stubs, which run no guest, and on a host built before the plugin existed. Those hosts answer `Unavailable`, and `leptoskit_query::has_timer` reports that honestly instead of pretending a sleep finished. An app-owned runner that embeds the backend crates directly must call `enable_timers` itself; the descriptor does not vouch for it.
 
 Network and process plugins also need a policy that says what they may reach. You give it in `leptoskit.toml`, and the host enforces it, not your app's code:
 

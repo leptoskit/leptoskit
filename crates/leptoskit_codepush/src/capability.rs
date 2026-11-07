@@ -43,6 +43,9 @@ pub const CAP_HOST_PLUGIN_NATIVE_ANDROID: &str = "host.plugin.native.android";
 pub const CAP_HOST_PLUGIN_NATIVE_ARKTS: &str = "host.plugin.native.arkts";
 /// A host-level capability: automatic code push checks.
 pub const CAP_HOST_UPDATE_CODEPUSH: &str = "host.update.codepush";
+/// A host-level capability: the generated host registers the reserved
+/// `leptoskit.timer` plugin and wakes at the next deadline.
+pub const CAP_HOST_TIMER: &str = "host.timer";
 /// A host-level capability: the destination itself is experimental.
 pub const CAP_HOST_PLATFORM_EXPERIMENTAL: &str = "host.platform.experimental";
 
