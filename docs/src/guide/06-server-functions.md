@@ -76,4 +76,4 @@ let rename = mutation_with_retry(RetryPolicy::reads(), |input: &(u64, String)| {
 | `RetryPolicy::reads()`      | 3        | 150ms, doubling, up to 2s  |
 | `RetryPolicy::aggressive()` | 5        | 250ms, doubling, up to 10s |
 
-Backoff waits use the same timer as `leptoskit_query`: `setTimeout` in a browser window or worker, Tokio's timer when a Tokio runtime is running on the server, and a helper thread when none is. A host that is none of those installs its own with `leptoskit_query::install_sleep`.
+Backoff waits use the same timer as `leptoskit_query`: `setTimeout` in a browser window or worker, Tokio's timer when a Tokio runtime is running on the server, and a helper thread when none is. A generated native app's guest uses the host's real, cancellable timer, so retries wait between attempts. A host that is none of those installs its own with `leptoskit_query::install_sleep`; an older host reports `Unavailable`, and `has_timer` lets a client avoid spinning.

@@ -14,6 +14,8 @@ mod generated {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod application {
+	use std::time::Duration;
+
 	use leptoskit::native::EventOutcome;
 	use leptoskit::native::NativeEvent;
 	use leptoskit::tui::Exit;
@@ -56,6 +58,25 @@ mod application {
 			let (width, height) = leptoskit::tui::viewport(cols, rows);
 			self.host.set_viewport(width, height);
 		}
+
+		fn pump(&mut self) -> bool {
+			if self.failure.is_some() {
+				return false;
+			}
+
+			match self.host.pump_timers() {
+				Ok(changed) => changed,
+				Err(error) => {
+					self.failure = Some(error);
+
+					false
+				}
+			}
+		}
+
+		fn deadline(&self) -> Option<Duration> {
+			self.host.next_timer_deadline()
+		}
 	}
 
 	pub(super) fn run() -> runtime::AppResult<()> {
@@ -68,8 +89,15 @@ mod application {
 
 		let wasm = runtime::guest("tui")?;
 		let mut host = WasmHost::new(TuiBackend::new(), &wasm)?;
+
+		if let Err(error) = host.enable_timers() {
+			eprintln!("leptoskit: timers unavailable: {error}");
+		}
+
 		super::generated::configure(&mut host);
 		host.start(cols as f32 * 8.0, rows as f32 * 16.0)?;
+		host.pump_timers()
+			.map_err(|error| format!("pump timers: {error}"))?;
 
 		let mut app = Guest {
 			host,

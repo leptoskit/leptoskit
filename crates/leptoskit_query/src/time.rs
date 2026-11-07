@@ -6,7 +6,12 @@
 //! `SystemTime::now` panics on `wasm32-unknown-unknown`, `setTimeout` needs a
 //! browser window, and tokio timers need a running runtime. The defaults
 //! cover each target this crate is built for; a host that is none of them
-//! installs its own with [`install_clock`] and [`install_sleep`].
+//! installs its own with [`install_clock`] and [`install_sleep`]. A guest of
+//! leptoskit's native runtime instead uses the host's `leptoskit_clock`
+//! report and its reserved `leptoskit.timer` plugin, both provided by the
+//! `guest` feature. A host built before that plugin existed answers
+//! `Unavailable`, and [`has_timer`] reports `false` rather than claiming a
+//! sleep happened.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -78,11 +83,43 @@ pub(crate) fn millis(duration: Duration) -> u64 {
 	u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Whether [`sleep`] really waits: a timer was installed, or this target has
-/// a default one. Without one every sleep resolves at once.
+/// Whether [`sleep`] really waits: a timer was installed, this target has a
+/// default one, or the native host offers the timer plugin. Without one every
+/// sleep resolves at once.
 #[must_use]
 pub fn has_timer() -> bool {
-	SLEEP.get().is_some() || cfg!(any(not(target_arch = "wasm32"), feature = "browser"))
+	if SLEEP.get().is_some() {
+		return true;
+	}
+
+	// A browser's `setTimeout` needs no host capability.
+	#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+	{
+		true
+	}
+
+	// A native guest resolves the reserved timer plugin once. An old host
+	// leaves it unregistered, so interval refetching stays off and backoff
+	// does not spin.
+	#[cfg(all(target_arch = "wasm32", feature = "guest", not(feature = "browser")))]
+	{
+		leptoskit_bridge::guest::timer_available()
+	}
+
+	#[cfg(all(
+		target_arch = "wasm32",
+		not(feature = "browser"),
+		not(feature = "guest")
+	))]
+	{
+		false
+	}
+
+	// Servers and native targets use tokio or the helper thread.
+	#[cfg(not(target_arch = "wasm32"))]
+	{
+		true
+	}
 }
 
 /// Waits for `duration`.
@@ -317,7 +354,23 @@ fn default_now_ms() -> u64 {
 	0
 }
 
-#[cfg(all(target_arch = "wasm32", not(feature = "browser")))]
+#[cfg(all(target_arch = "wasm32", feature = "guest", not(feature = "browser")))]
+fn default_sleep(duration: Duration) -> BoxFuture<'static, ()> {
+	Box::pin(async move {
+		// An old host answers `Unavailable`. Say so once rather than silently
+		// treating the wait as complete; `has_timer` keeps interval loops off
+		// there, and an app can still install its own provider.
+		if leptoskit_bridge::guest::sleep(duration).await.is_err() {
+			warn_missing_host("a timer");
+		}
+	})
+}
+
+#[cfg(all(
+	target_arch = "wasm32",
+	not(feature = "browser"),
+	not(feature = "guest")
+))]
 fn default_sleep(_duration: Duration) -> std::future::Ready<()> {
 	warn_missing_host("a timer");
 	std::future::ready(())

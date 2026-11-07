@@ -39,6 +39,11 @@ mod application {
 		gtk::init()?;
 		let wasm = runtime::guest("linux")?;
 		let mut host = WasmHost::new(GtkBackend::new(), &wasm)?;
+
+		if let Err(error) = host.enable_timers() {
+			eprintln!("leptoskit: timers unavailable: {error}");
+		}
+
 		super::generated::configure(&mut host);
 		host.start(INITIAL_WIDTH as f32, INITIAL_HEIGHT as f32)?;
 
@@ -57,14 +62,22 @@ mod application {
 			previous: Cell::new(None),
 			deadline: Cell::new(0),
 		});
-		install_events(&host, &window, &failure, &frames);
-		install_viewport(&host, &window, &frames);
+		let timers = Rc::new(TimerWake {
+			host: Rc::downgrade(&host),
+			window: window.downgrade(),
+			failure: Rc::clone(&failure),
+			source: RefCell::new(None),
+		});
+		install_events(&host, &window, &failure, &frames, &timers);
+		install_viewport(&host, &window, &frames, &timers);
 		let (settings, motion_listener) = install_rive_environment(&window, &frames);
-		install_development(&host, &wasm, &frames);
+		install_development(&host, &wasm, &frames, &timers);
 
+		timers.arm();
 		frames.request();
 		leptoskit::gtk::run_application();
 		frames.stop();
+		timers.stop();
 		settings.disconnect(motion_listener);
 
 		if let Some(error) = failure.take() {
@@ -79,11 +92,13 @@ mod application {
 		window: &gtk::Window,
 		failure: &Failure,
 		frames: &Rc<RiveFrames>,
+		timers: &Rc<TimerWake>,
 	) {
 		let weak = Rc::downgrade(host);
 		let weak_window = window.downgrade();
 		let event_failure = Rc::clone(failure);
 		let frames = Rc::clone(frames);
+		let timers = Rc::clone(timers);
 		host.borrow()
 			.surface()
 			.backend()
@@ -103,6 +118,7 @@ mod application {
 					close_window(&weak_window);
 				} else {
 					frames.request();
+					timers.arm();
 				}
 			});
 	}
@@ -115,12 +131,18 @@ mod application {
 
 	/// Swaps in each guest `leptoskit dev` rebuilds, when it launched this
 	/// debug build. The window and its unchanged widgets stay as they are.
-	fn install_development(host: &Host, running: &[u8], frames: &Rc<RiveFrames>) {
+	fn install_development(
+		host: &Host,
+		running: &[u8],
+		frames: &Rc<RiveFrames>,
+		timers: &Rc<TimerWake>,
+	) {
 		let Some(guests) = leptoskit::codepush::dev::follow_environment(running) else {
 			return;
 		};
 		let weak = Rc::downgrade(host);
 		let frames = Rc::downgrade(frames);
+		let timers = Rc::downgrade(timers);
 		gtk::glib::timeout_add_local(DEVELOPMENT_POLL, move || {
 			let (Some(host), Some(frames)) = (weak.upgrade(), frames.upgrade()) else {
 				return gtk::glib::ControlFlow::Break;
@@ -133,6 +155,9 @@ mod application {
 				} else {
 					frames.stop();
 					frames.request();
+					if let Some(timers) = timers.upgrade() {
+						timers.arm();
+					}
 				}
 			}
 
@@ -145,13 +170,20 @@ mod application {
 		super::generated::configure(host);
 		let viewport = host.surface().viewport();
 		host.start(viewport.width, viewport.height)?;
+		host.pump_timers()?;
 		eprintln!("leptoskit dev: reloaded");
 		Ok(())
 	}
 
-	fn install_viewport(host: &Host, window: &gtk::Window, frames: &Rc<RiveFrames>) {
+	fn install_viewport(
+		host: &Host,
+		window: &gtk::Window,
+		frames: &Rc<RiveFrames>,
+		timers: &Rc<TimerWake>,
+	) {
 		let weak = Rc::downgrade(host);
 		let resized = Rc::clone(frames);
+		let resize_timers = Rc::clone(timers);
 		host.borrow()
 			.surface()
 			.backend()
@@ -159,16 +191,66 @@ mod application {
 				if let Some(host) = weak.upgrade() {
 					host.borrow_mut().set_viewport(width, height);
 					resized.request();
+					resize_timers.arm();
 				}
 			});
 		let weak = Rc::downgrade(host);
 		let frames = Rc::clone(frames);
+		let scale_timers = Rc::clone(timers);
 		window.connect_scale_factor_notify(move |_| {
 			if let Some(host) = weak.upgrade() {
 				host.borrow_mut().refresh_text_measurer();
 				frames.request();
+				scale_timers.arm();
 			}
 		});
+	}
+
+	/// One GTK timeout at the guest timer's next deadline. It is rearmed only
+	/// while a timer waits, so an idle app has no timer source at all.
+	struct TimerWake {
+		host: Weak<RefCell<WasmHost<GtkBackend>>>,
+		window: gtk::glib::WeakRef<gtk::Window>,
+		failure: Failure,
+		source: RefCell<Option<gtk::glib::SourceId>>,
+	}
+
+	impl TimerWake {
+		fn stop(&self) {
+			if let Some(source) = self.source.take() {
+				source.remove();
+			}
+		}
+
+		fn arm(self: &Rc<Self>) {
+			self.stop();
+
+			let Some(host) = self.host.upgrade() else {
+				return;
+			};
+			let result = host.borrow_mut().pump_timers();
+
+			if let Err(error) = result {
+				self.failure.replace(Some(error.into()));
+				close_window(&self.window);
+
+				return;
+			}
+
+			let Some(deadline) = host.borrow().next_timer_deadline() else {
+				return;
+			};
+			let delay = deadline.max(Duration::from_millis(1));
+			let weak = Rc::downgrade(self);
+			let source = gtk::glib::timeout_add_local_once(delay, move || {
+				let Some(owner) = weak.upgrade() else {
+					return;
+				};
+				owner.source.borrow_mut().take();
+				owner.arm();
+			});
+			self.source.replace(Some(source));
+		}
 	}
 
 	/// The GTK frame clock drives visible scenes, with no polling source while

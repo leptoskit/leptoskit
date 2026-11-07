@@ -93,6 +93,8 @@ missing-plugins = "error"
 
 Registering a plugin doesn't grant operating-system permissions. Add the permission strings and entitlements the plugin's README asks for to your host, such as `NSMotionUsageDescription` in `ios/Info.plist` for the pedometer, or `android.permission.ACTIVITY_RECOGNITION` in the Android manifest. Your app still asks the user at run time.
 
+The guest's clock and timer are not runtime plugins in `native.plugins`: every generated host offers them where it can. macOS, iOS, Android, Windows, Linux, and the terminal schedule real sleeps through the reserved `leptoskit.timer` plugin, so retry backoff and cache expiry wait. Experimental HarmonyOS doesn't wire it yet, and a host built before it existed answers `Unavailable`; `leptoskit_query::has_timer` reports that honestly instead of pretending a sleep finished.
+
 Network and process plugins also need a policy that says what they may reach. You give it in `leptoskit.toml`, and the host enforces it, not your app's code:
 
 ```toml

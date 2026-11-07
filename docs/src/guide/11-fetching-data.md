@@ -158,4 +158,7 @@ The library never assumes a browser. Where it runs decides who provides time and
 
 - **Browser** — the default `browser` feature uses `setTimeout`, `Date.now()`, and the document's visibility and connectivity events.
 - **Server and native** — tokio (or a helper thread) and `SystemTime` cover time; the shell reports focus and connectivity with `FocusManager::set_focused` and `OnlineManager::set_online`, and calls `client.mount()` if it does not use `provide()`.
-- **Wasm hosted outside a browser** — build with `--no-default-features`, then `install_clock` and `install_sleep` before creating a client. Everything else is unchanged.
+- **A native Wasm guest** — build with the `guest` feature instead of `browser`. The runtime reports the time before each call into the guest, and the reserved `leptoskit.timer` plugin schedules real, cancellable sleeps. Retry backoff, debounce, and cache expiry wait there instead of firing at once. Dropping a waiting future cancels its timer.
+- **Wasm hosted outside a browser by another shell** — build with `--no-default-features`, then `install_clock` and `install_sleep` before creating a client. Everything else is unchanged.
+
+A generated macOS, iOS, Android, Windows, Linux, or terminal app offers the timer automatically. Experimental HarmonyOS, and a host built before the timer plugin existed, answer `Unavailable`; `leptoskit_query::has_timer()` then reports `false`, so interval refetching stays off and a live client waits for work instead of retrying a socket without pause. You can still install your own provider with `install_sleep`.

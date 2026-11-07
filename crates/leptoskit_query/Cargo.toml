@@ -19,10 +19,11 @@ default = ["browser"]
 # cross-tab sync. Disable for wasm hosted outside a browser and install a
 # clock, a timer, and (optionally) a broadcast transport instead.
 browser = ["dep:send_wrapper", "dep:wasm-bindgen", "dep:web-sys"]
-# The clock in leptoskit's native Wasm runtime: the host reports the time
-# before each entry point through the `leptoskit_clock` export this feature
-# defines. Turn it on for native guests instead of `browser`.
-guest = []
+# The clock and timer in leptoskit's native Wasm runtime: the host reports
+# the time before each entry point through the `leptoskit_clock` export this
+# feature defines, and the reserved `leptoskit.timer` plugin provides real
+# cancellable sleeps. Turn it on for native guests instead of `browser`.
+guest = ["dep:leptoskit_bridge", "leptoskit_bridge/guest"]
 # leptos's `nightly` feature, for its macro and renderer. Requires a nightly
 # compiler; a no-op on stable.
 nightly = ["leptos/nightly"]
@@ -49,6 +50,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+leptoskit_bridge = { workspace = true, optional = true }
 send_wrapper = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["BroadcastChannel", "Document", "Event", "EventTarget", "MessageEvent", "Navigator", "VisibilityState", "Window"] }

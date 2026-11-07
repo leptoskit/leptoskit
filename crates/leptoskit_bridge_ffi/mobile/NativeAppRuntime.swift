@@ -49,6 +49,9 @@ final class NativeAppRuntime {
         self.app = app
         // This runtime drives the guest's frame clock from the display link.
         guard lk_app_enable_frames(app.raw) == 0 else { throw PluginError.native }
+        // Timers are optional: if the host cannot start one, the guest sees
+        // `Unavailable` instead of the app failing to start.
+        if lk_app_enable_timers(app.raw) != 0 { NSLog("LeptosKit: timers unavailable") }
         app.onWake = { [weak self] in self?.schedulePump() }
         requests.onCapacity = { [weak self] in self?.schedulePump() }
         requests.onCompletion = { [weak self] id, result in self?.finishRequest(id: id, result: result) }
@@ -111,6 +114,7 @@ final class NativeAppRuntime {
     /// Poll service first, then cancellations, then admitted requests, then render.
     private func pump() throws {
         guard let app else { return }
+        try check(lk_app_poll_timers(app.raw))
         try check(lk_app_poll_service(app.raw))
         try drainCancellations(app)
         let more = try drainRequests(app)

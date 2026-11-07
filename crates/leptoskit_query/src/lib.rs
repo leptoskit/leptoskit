@@ -120,7 +120,7 @@
 //! | Need                 | Browser (`browser` feature, on by default)         | Server / native                 | Embedded wasm (`--no-default-features`)                  |
 //! | -------------------- | -------------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
 //! | An async executor    | `any_spawner::Executor::init_wasm_bindgen()`       | `Executor::init_tokio()`        | `Executor::init_custom_executor(..)`                     |
-//! | A clock and a timer  | `Date.now()`, `setTimeout`                         | `SystemTime`, tokio or a thread | [`install_clock`], [`install_sleep`]; the `guest` feature reads leptoskit's native runtime clock |
+//! | A clock and a timer  | `Date.now()`, `setTimeout`                         | `SystemTime`, tokio or a thread | [`install_clock`], [`install_sleep`]; the `guest` feature uses the native runtime's clock and timer |
 //! | Focus and network    | `visibilitychange`, `online`/`offline` listeners   | [`FocusManager::set_focused`], [`OnlineManager::set_online`] | the same setters                |
 //! | Sync between windows | `BroadcastChannel` via [`QueryClient::broadcast`]  | [`LocalBroadcast`] or a custom [`BroadcastTransport`] | a custom [`BroadcastTransport`] |
 //!
@@ -129,9 +129,10 @@
 //! a browser builds this crate with `--no-default-features`, installs a
 //! clock and a timer, and reports focus and connectivity through the
 //! managers; everything else is the same code. A guest of leptoskit's own
-//! native runtime turns on `guest` instead of installing a clock: that
-//! runtime reports the time before every call into the guest. It has no
-//! timer yet, so sleeps there still resolve at once.
+//! native runtime turns on `guest` instead: that runtime reports the time
+//! before every call into the guest and offers real, cancellable sleeps
+//! through its timer plugin. Retries, debounces, and cache expiry therefore
+//! wait there rather than firing at once.
 
 // Denied rather than forbidden: the `guest` feature needs one unmangled
 // export, which is the only exception.

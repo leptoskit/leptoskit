@@ -108,6 +108,11 @@ impl ServiceWake {
 		Waker::from(Arc::clone(&self.0))
 	}
 
+	/// Schedules one coalesced platform turn from any thread.
+	pub(super) fn notify(&self) {
+		(self.0.notify)();
+	}
+
 	fn invalidate(&self) {
 		self.0.active.store(false, Ordering::Release);
 	}

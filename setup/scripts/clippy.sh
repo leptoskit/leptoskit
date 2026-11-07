@@ -60,6 +60,7 @@ wasm_full=(
 	leptoskit_plugin_store_review leptoskit_plugin_tracking_transparency leptoskit_plugin_tray
 	leptoskit_plugin_web_auth leptoskit_plugin_websocket leptoskit_plugin_window_state leptoskit_query
 	leptoskit_rive leptoskit_router leptoskit_testing_library plugin_guest_probe plugin_replies_probe
+	timer_guest_probe
 )
 # Every feature, the library only: their tests need the host.
 wasm_library=(

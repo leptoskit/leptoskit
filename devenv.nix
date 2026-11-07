@@ -1004,6 +1004,11 @@ in
         cargo build --locked --release --target wasm32-unknown-unknown --package plugin_replies_probe
         LEPTOSKIT_PLUGIN_REPLY_GUEST="$(pwd)/target/wasm32-unknown-unknown/release/plugin_replies_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test plugin_replies -- --ignored
+        # The native runtime's real cancellable timer: a guest sleeps, abandons
+        # a longer sleep, and the host observes both.
+        cargo build --locked --release --target wasm32-unknown-unknown --package timer_guest_probe
+        LEPTOSKIT_TIMER_GUEST="$(pwd)/target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test timers -- --ignored
         # A debug build keeps every import its dependencies link, so any
         # wasm-bindgen import reactive_graph adds outside the interpreter's
         # shim set fails here rather than on a device.

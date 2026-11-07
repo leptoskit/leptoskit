@@ -45,6 +45,11 @@ mod application {
 		backend.set_dpi(window.dpi());
 		let wasm = runtime::guest("windows")?;
 		let mut app = WasmHost::new(backend, &wasm)?;
+
+		if let Err(error) = app.enable_timers() {
+			eprintln!("leptoskit: timers unavailable: {error}");
+		}
+
 		super::generated::configure(&mut app);
 		let (width, height) = window.client_size()?;
 		app.start(width, height)?;
@@ -80,6 +85,7 @@ mod application {
 		super::generated::configure(host);
 		let (width, height) = window.client_size()?;
 		host.start(width, height)?;
+		host.pump_timers()?;
 		eprintln!("leptoskit dev: reloaded");
 		Ok(())
 	}
@@ -103,6 +109,20 @@ mod application {
 
 			if !window.is_open() {
 				break;
+			}
+
+			if let Err(error) = host.borrow_mut().pump_timers() {
+				eprintln!("application timer: {error}");
+				close_failed(window);
+
+				return Err(error.into());
+			}
+
+			if let Err(error) = remount(window, &host.borrow(), mounted) {
+				eprintln!("application timer: {error}");
+				close_failed(window);
+
+				return Err(error);
 			}
 
 			if let Some(wasm) = guests.and_then(|guests| guests.try_iter().last()) {
@@ -135,6 +155,12 @@ mod application {
 			}
 
 			let wait = pending.then(|| deadline.saturating_duration_since(Instant::now()));
+			let wait = match (wait, host.borrow().next_timer_deadline()) {
+				(Some(frame), Some(timer)) => Some(frame.min(timer)),
+				(Some(frame), None) => Some(frame),
+				(None, Some(timer)) => Some(timer),
+				(None, None) => None,
+			};
 			let wait = if guests.is_some() {
 				Some(wait.map_or(DEVELOPMENT_POLL, |wait| wait.min(DEVELOPMENT_POLL)))
 			} else {

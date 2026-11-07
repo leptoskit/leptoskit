@@ -88,7 +88,7 @@ fn foreign_activation_and_error_drop_retain_close_and_callback_storage() {
 }
 
 #[test]
-fn failed_activation_never_starts_guest_and_no_service_releases_callbacks() {
+fn failed_activation_never_starts_guest_and_no_service_keeps_its_wake() {
 	let callbacks_owner = Arc::new(Callbacks::default());
 	let mut app = App::new(GUEST).unwrap();
 	app.defer_service(Box::new(|_| Err(Error::Native))).unwrap();
@@ -106,10 +106,15 @@ fn failed_activation_never_starts_guest_and_no_service_releases_callbacks() {
 		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 1);
 		let app = Box::into_raw(Box::new(App::new(GUEST).unwrap()));
 		assert_eq!(lk_app_activate_service(app, callbacks(&callbacks_owner)), 0);
-		assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 2);
+		assert_eq!(
+			callbacks_owner.released.load(Ordering::Acquire),
+			1,
+			"the wake is retained for timer completions"
+		);
 		let owner = lk_app_begin_close(app);
 		assert_eq!(lk_app_close_poll(owner), 1);
 		lk_app_close_release(owner);
 	}
+	assert_eq!(callbacks_owner.released.load(Ordering::Acquire), 2);
 	assert_eq!(callbacks_owner.closing.lock().unwrap().len(), 0);
 }

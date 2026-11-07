@@ -343,6 +343,11 @@ impl App {
 
 		self.close_scheduler = Some(close_scheduler);
 		self.close_wake = Some(wake.fork());
+		// Timer completions wake the same coalesced platform pump as service
+		// work. The callback only schedules a UI turn; it never enters the
+		// interpreter from the timer thread.
+		let timer_wake = wake.clone();
+		self.host_mut().set_timer_wake(move || timer_wake.notify());
 		self.service = Some(ServiceState::Failed);
 		let service = installer(self.host_mut())?;
 		self.service = Some(ServiceState::Active { service, wake });
@@ -406,11 +411,12 @@ impl App {
 			}
 		}
 
-		self.host_mut().plugins().next_request()
+		self.host_mut().next_host_request()
 	}
 
 	/// Routes cancellation through the same service owner as native requests.
-	/// A cancelled frame request is dropped here: the platform never saw it.
+	/// A cancelled frame request or timer is dropped here: the platform never
+	/// saw it, and the host's timer stops before its deadline.
 	pub fn next_cancelled(&mut self) -> Option<CallId> {
 		loop {
 			let id = self
@@ -418,13 +424,39 @@ impl App {
 				.pop_front()
 				.or_else(|| self.host_mut().plugins().next_cancelled())?;
 
-			match self.frame_waiters.iter().position(|waiter| *waiter == id) {
-				Some(index) => {
-					self.frame_waiters.swap_remove(index);
-				}
-				None => return Some(id),
+			if let Some(index) = self.frame_waiters.iter().position(|waiter| *waiter == id) {
+				self.frame_waiters.swap_remove(index);
+				continue;
+			}
+
+			if self.host_mut().cancel_timer(id) {
+				continue;
+			}
+
+			return Some(id);
+		}
+	}
+
+	/// Offers the guest real sleeps over the host's timer transport. Call it
+	/// before starting the guest, and only from a host whose pump calls
+	/// [`lk_app_poll_timers`] or whose timer thread can wake it.
+	pub fn enable_timers(&mut self) -> Result<(), Error> {
+		let result = self.host_mut().enable_timers();
+
+		match result {
+			Ok(()) => Ok(()),
+			Err(error) => {
+				self.error = format!("enable timers: {error}");
+				Err(Error::Native)
 			}
 		}
+	}
+
+	/// Completes every timer whose deadline passed, then lets the guest run.
+	/// Called on the application's owner thread.
+	pub fn poll_timers(&mut self) -> i32 {
+		let result = self.host_mut().poll_due_timers().map(|_| ());
+		self.record(result)
 	}
 
 	/// Offers the guest the display frame clock. Call it before starting the
@@ -1143,8 +1175,48 @@ pub unsafe extern "C" fn lk_app_wake(app: *mut App) -> i32 {
 		return -1;
 	};
 
+	if app.poll_timers() < 0 {
+		return -1;
+	}
+
 	let result = app.host_mut().wake_plugins();
 	app.record(result)
+}
+
+/// Offers the guest real sleeps over the host's timer transport. Call before
+/// [`lk_app_start`] from a host that polls [`lk_app_poll_timers`] or supplies a
+/// timer wake through service activation. Zero on success, negative on
+/// failure. Calling it again keeps the same timer.
+///
+/// # Safety
+/// `app` is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_enable_timers(app: *mut App) -> i32 {
+	// SAFETY: The embedding host owns the app.
+	let Some(app) = (unsafe { app.as_mut() }) else {
+		return -1;
+	};
+
+	match app.enable_timers() {
+		Ok(()) => 0,
+		Err(_) => -1,
+	}
+}
+
+/// Completes every timer whose deadline passed and lets the guest run, on the
+/// application's owner thread. Call it from the host pump, and from a timer
+/// wake when service activation supplied one.
+///
+/// # Safety
+/// `app` is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_poll_timers(app: *mut App) -> i32 {
+	// SAFETY: The embedding host owns the app.
+	let Some(app) = (unsafe { app.as_mut() }) else {
+		return -1;
+	};
+
+	app.poll_timers()
 }
 
 /// Offers the guest the display frame clock. Call before [`lk_app_start`],

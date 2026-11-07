@@ -39,6 +39,9 @@ object NativeApp {
     /** Offers the guest the display frame clock; call before [guestSpawn]. */
     @JvmStatic external fun enableFrames(app: Long): Int
 
+    /** Offers the guest real sleeps; call before [guestSpawn]. */
+    @JvmStatic external fun enableTimers(app: Long): Int
+
     @JvmStatic external fun error(app: Long): ByteArray
 
     /**

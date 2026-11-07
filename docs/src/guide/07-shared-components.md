@@ -186,7 +186,7 @@ async fn count_frames(counter: Counter, frames: u32) -> Result<(), leptoskit::gu
 
 Run it on your app's executor, as you would any other async plugin call. The `Frame` it returns carries `timestamp_ns` and `period_ns`, the frame's time and the display's refresh period, for motion that should follow elapsed time rather than the number of frames. On iOS and macOS, frames come from `CADisplayLink`; on Android, from the `Choreographer`. Your render happens inside that frame's callback, so a render that fits in one frame never waits an extra one. The display link runs only while your code waits for a frame.
 
-On Windows, Linux, and HarmonyOS, `next_frame` returns `leptoskit::guest::Error::Unavailable`, and so do apps built before leptoskit had a frame clock, which a code push update can still reach. Fall back to a timer there rather than treating it as a failure.
+On Windows, Linux, and HarmonyOS, `next_frame` returns `leptoskit::guest::Error::Unavailable`, and so do apps built before leptoskit had a frame clock, which a code push update can still reach. Fall back to a timer there rather than treating it as a failure. `leptoskit::guest::sleep(Duration)` waits on the host's real timer across generated macOS, iOS, Android, Windows, Linux, and terminal apps; experimental HarmonyOS and hosts older than the timer plugin answer `Unavailable`, so drive those from input or a host event instead of a frame wait.
 
 ## Combine typed styles and classes
 
