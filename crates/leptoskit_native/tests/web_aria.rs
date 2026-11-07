@@ -271,3 +271,16 @@ fn images_are_decorative_until_named() {
 	let presentational = html(Image("/divider.png").role(Role::Presentation));
 	assert!(presentational.contains("role=\"presentation\""));
 }
+
+#[test]
+fn every_heading_level_renders_its_own_element() {
+	let page = html(View().children((1..=6).map(|level| Heading(level, format!("H{level}")))));
+
+	for level in 1..=6 {
+		assert!(
+			page.contains(&format!("<h{level}")),
+			"missing h{level}: {page}"
+		);
+	}
+	assert!(!page.contains("role=\"heading\""));
+}

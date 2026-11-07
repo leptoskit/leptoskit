@@ -740,3 +740,81 @@ fn helper_components_carry_structural_semantics() {
 		assert_eq!(props.aria().orientation, Some(orientation));
 	}
 }
+
+#[test]
+fn aria_value_enums_name_every_wire_value() {
+	for (value, name) in [
+		(Tristate::False, "false"),
+		(Tristate::True, "true"),
+		(Tristate::Mixed, "mixed"),
+	] {
+		assert_eq!(value.as_str(), name);
+	}
+	assert_eq!(Tristate::from(true), Tristate::True);
+	assert_eq!(Tristate::from(false), Tristate::False);
+
+	for (value, name) in [
+		(Live::Off, "off"),
+		(Live::Polite, "polite"),
+		(Live::Assertive, "assertive"),
+	] {
+		assert_eq!(value.as_str(), name);
+	}
+
+	for (value, name) in [
+		(Current::False, "false"),
+		(Current::True, "true"),
+		(Current::Page, "page"),
+		(Current::Step, "step"),
+		(Current::Location, "location"),
+		(Current::Date, "date"),
+		(Current::Time, "time"),
+	] {
+		assert_eq!(value.as_str(), name);
+	}
+
+	for (value, name) in [
+		(Invalid::False, "false"),
+		(Invalid::True, "true"),
+		(Invalid::Grammar, "grammar"),
+		(Invalid::Spelling, "spelling"),
+	] {
+		assert_eq!(value.as_str(), name);
+	}
+	assert_eq!(Invalid::from(true), Invalid::True);
+	assert_eq!(Invalid::from(false), Invalid::False);
+
+	for (value, name) in [
+		(HasPopup::False, "false"),
+		(HasPopup::True, "true"),
+		(HasPopup::Menu, "menu"),
+		(HasPopup::ListBox, "listbox"),
+		(HasPopup::Tree, "tree"),
+		(HasPopup::Grid, "grid"),
+		(HasPopup::Dialog, "dialog"),
+	] {
+		assert_eq!(value.as_str(), name);
+	}
+	assert_eq!(HasPopup::from(true), HasPopup::True);
+	assert_eq!(HasPopup::from(false), HasPopup::False);
+
+	assert!(Aria::default().is_empty());
+	assert!(
+		!Aria {
+			busy: Some(false),
+			..Aria::default()
+		}
+		.is_empty(),
+		"any set field stops the group from serializing away"
+	);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn unknown_roles_fail_with_the_expected_shape() {
+	let error = serde_json::from_str::<Role>("1").expect_err("a number is not a role");
+	assert!(error.to_string().contains("an ARIA role name"), "{error}");
+
+	let error = serde_json::from_str::<Role>("\"holographic\"").expect_err("unknown role");
+	assert!(error.to_string().contains("unknown variant"), "{error}");
+}

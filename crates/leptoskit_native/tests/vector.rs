@@ -633,3 +633,78 @@ fn view_boxes_expose_their_edges() {
 	assert_eq!(ViewBox::default(), ViewBox::UNIT);
 	assert_eq!(NativeKind::Vector.wire_name(), "vector");
 }
+
+#[test]
+fn every_alignment_pair_has_its_svg_keyword() {
+	use leptoskit_native::VectorAlign;
+	use leptoskit_native::VectorAlignment;
+
+	for (x, y, keyword) in [
+		(VectorAlign::Start, VectorAlign::Start, "xMinYMin"),
+		(VectorAlign::Start, VectorAlign::Center, "xMinYMid"),
+		(VectorAlign::Start, VectorAlign::End, "xMinYMax"),
+		(VectorAlign::Center, VectorAlign::Start, "xMidYMin"),
+		(VectorAlign::Center, VectorAlign::Center, "xMidYMid"),
+		(VectorAlign::Center, VectorAlign::End, "xMidYMax"),
+		(VectorAlign::End, VectorAlign::Start, "xMaxYMin"),
+		(VectorAlign::End, VectorAlign::Center, "xMaxYMid"),
+		(VectorAlign::End, VectorAlign::End, "xMaxYMax"),
+	] {
+		assert_eq!(VectorAlignment::new(x, y).svg_keyword(), keyword);
+	}
+}
+
+#[test]
+fn current_color_paints_resolve_to_the_inherited_text_color() {
+	use leptoskit_native::Paint;
+	use leptoskit_native::StyleContext;
+
+	let data = PathData::parse("M0 0 L1 1").expect("valid data");
+	let icon = Vector(ViewBox::UNIT)
+		.path(VectorPath::new(data.clone()).fill(Paint::CurrentColor))
+		.path(
+			VectorPath::new(data).stroke(Stroke::new(Paint::CurrentColor, 1.0).expect("a width")),
+		);
+
+	let drawing = icon.props.drawing.as_ref().expect("a drawing");
+	assert!(drawing.uses_current_color());
+
+	let red = Color::rgba(255, 0, 0, 255);
+	let resolved = icon.color(red).resolved(&StyleContext::default());
+	let drawing = resolved.props.drawing.as_ref().expect("a drawing");
+	assert!(!drawing.uses_current_color());
+	assert_eq!(drawing.paths()[0].fill_paint(), Some(Paint::Color(red)));
+	assert_eq!(
+		drawing.paths()[1].stroke_style().map(Stroke::paint),
+		Some(Paint::Color(red))
+	);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn paints_travel_as_packed_colors_or_the_current_color_keyword() {
+	use leptoskit_native::Paint;
+
+	let color = Paint::from(Color::rgba(1, 2, 3, 4));
+	assert_eq!(color, Paint::Color(Color::rgba(1, 2, 3, 4)));
+	assert_eq!(
+		serde_json::to_value(color).expect("a packed color"),
+		serde_json::json!(0x0102_0304_u32)
+	);
+	assert_eq!(
+		serde_json::to_value(Paint::CurrentColor).expect("the keyword"),
+		serde_json::json!("current_color")
+	);
+	assert_eq!(
+		serde_json::from_value::<Paint>(serde_json::json!(0x0102_0304_u32))
+			.expect("a packed color"),
+		color
+	);
+	assert_eq!(
+		serde_json::from_value::<Paint>(serde_json::json!("current_color")).expect("the keyword"),
+		Paint::CurrentColor
+	);
+	let error =
+		serde_json::from_value::<Paint>(serde_json::json!("red")).expect_err("unknown paint");
+	assert!(error.to_string().contains("unknown paint"), "{error}");
+}

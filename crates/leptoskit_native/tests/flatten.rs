@@ -308,3 +308,23 @@ fn transformed_and_animated_containers_keep_their_view() {
 	let entering = View().entering(Presence::fade());
 	assert!(!is_layout_only(NativeKind::View, &entering.props));
 }
+
+#[test]
+fn aria_hiding_alone_is_layout_only_but_other_aria_keeps_a_view() {
+	assert!(is_layout_only(NativeKind::View, &View().props));
+	assert!(is_layout_only(
+		NativeKind::View,
+		&View().aria_hidden(true).props
+	));
+	assert!(
+		!is_layout_only(NativeKind::View, &View().aria_busy(true).props),
+		"a non-inherited aria property needs a native view"
+	);
+	assert!(
+		!is_layout_only(
+			NativeKind::View,
+			&View().aria_hidden(true).aria_label("Section").props
+		),
+		"hiding plus a name needs a native view"
+	);
+}

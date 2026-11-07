@@ -681,6 +681,18 @@ mod tests {
 	}
 
 	#[test]
+	fn nonfinite_damping_still_settles_and_view_ranges_default_to_entry() {
+		let spring = Spring::new(100.0, f32::NAN, 1.0);
+		assert!(spring.position(0.25).is_finite());
+
+		assert_eq!(
+			ViewRange::exit(),
+			ViewRange::during(ViewPhase::Exit, 0.0, 1.0)
+		);
+		assert_eq!(ViewRange::default(), ViewRange::entry());
+	}
+
+	#[test]
 	fn insets_show_the_fraction_nearest_their_edge() {
 		assert_eq!(Inset::from_left(0.25), Inset::new(0.0, 0.75, 0.0, 0.0));
 		assert_eq!(Inset::from_right(0.0), Inset::new(0.0, 0.0, 0.0, 1.0));

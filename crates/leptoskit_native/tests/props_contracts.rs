@@ -131,3 +131,95 @@ fn text_content_reads_the_account_and_password_autocomplete_tokens() {
 	}
 	assert_eq!(TextInput().props.text_content(), None);
 }
+
+#[test]
+fn property_values_convert_from_their_rust_types() {
+	use leptoskit_native::PropValue;
+
+	assert_eq!(PropValue::from("text"), PropValue::Str("text".to_owned()));
+	assert_eq!(
+		PropValue::from("text".to_owned()),
+		PropValue::Str("text".to_owned())
+	);
+	assert_eq!(PropValue::from(2.5), PropValue::Number(2.5));
+	assert_eq!(PropValue::from(true), PropValue::Bool(true));
+	assert_eq!(
+		PropValue::from(Color::rgba(1, 2, 3, 4)),
+		PropValue::Color(Color::rgba(1, 2, 3, 4))
+	);
+}
+
+#[test]
+fn scroll_offsets_know_whether_they_are_finite() {
+	use leptoskit_native::ScrollOffset;
+
+	let offset = ScrollOffset::new(1.0, 2.0);
+	assert!(!offset.animated);
+	assert!(offset.is_finite());
+	let animated = offset.animated();
+	assert!(animated.animated);
+	assert_eq!((animated.x, animated.y), (1.0, 2.0));
+	assert!(!ScrollOffset::new(f32::NAN, 0.0).is_finite());
+	assert!(!ScrollOffset::new(0.0, f32::INFINITY).is_finite());
+}
+
+#[test]
+fn key_presses_carry_their_modifiers() {
+	use leptoskit_native::KeyPress;
+
+	let plain = KeyPress::new("Enter");
+	assert!(plain.is("Enter", false, false, false));
+	let shortcut = KeyPress::new("p").ctrl().alt().shift();
+	assert_eq!(
+		(
+			shortcut.key.as_str(),
+			shortcut.ctrl,
+			shortcut.alt,
+			shortcut.shift
+		),
+		("p", true, true, true)
+	);
+	assert!(shortcut.is("p", true, true, true));
+	assert!(!shortcut.is("p", true, false, true));
+}
+
+#[test]
+fn text_spans_convert_from_plain_text() {
+	use leptoskit_native::TextSpan;
+
+	let span = TextSpan::from("hello");
+	assert_eq!(span.text, "hello");
+	assert_eq!(span, TextSpan::new("hello"));
+}
+
+#[test]
+fn the_default_approximate_measurer_matches_its_constructor() {
+	use leptoskit_native::ApproxTextMeasurer;
+	use leptoskit_native::TextMeasurer;
+	use leptoskit_native::TextStyle;
+	use leptoskit_yoga::AvailableSpace;
+	use leptoskit_yoga::Size;
+
+	let available = Size::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+	let measured = ApproxTextMeasurer::default().measure("hello", TextStyle::default(), available);
+	let built = ApproxTextMeasurer::new().measure("hello", TextStyle::default(), available);
+	assert_eq!(measured, built);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn vector_kinds_decode_and_invalid_payloads_name_the_expected_shape() {
+	use leptoskit_native::NativeKind;
+
+	assert_eq!(
+		serde_json::from_value::<NativeKind>(serde_json::json!("vector")).unwrap(),
+		NativeKind::Vector
+	);
+	let error = serde_json::from_value::<NativeKind>(serde_json::json!(1)).unwrap_err();
+	assert!(
+		error
+			.to_string()
+			.contains("a wire name, legacy kind name, or custom widget name"),
+		"{error}"
+	);
+}

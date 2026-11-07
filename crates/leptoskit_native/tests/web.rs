@@ -640,3 +640,17 @@ fn held_controls_style_through_css_active_and_dim_without_active_utilities() {
 	assert!(html.contains("aria-label=\"Card\""));
 	assert_eq!(html.matches("<button").count(), 3);
 }
+
+#[test]
+fn focused_and_scrolled_nodes_serialize_their_renderer_directives() {
+	use leptoskit_native::ScrollOffset;
+
+	let page = render(View().children([
+		Element::scroll_view().scroll_offset(ScrollOffset::new(1.0, 40.0).animated()),
+		Element::text_input().aria_label("Search").focused(true),
+	]))
+	.to_html();
+
+	assert!(page.contains("data-lk-scroll=\"1 40 smooth\""), "{page}");
+	assert!(page.contains("data-lk-focus=\"true\""), "{page}");
+}
