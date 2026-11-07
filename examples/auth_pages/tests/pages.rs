@@ -235,7 +235,17 @@ async fn the_consent_screen_needs_a_request_and_a_signed_in_person() {
 			let shown = show(Some(true), |_| {}, true, |screens| screens.consent.screen()).await;
 			assert!(shown.has("needs the request"), "{}", shown.text());
 
+			// The route without a request handle says the same thing.
 			let shown = show(
+				Some(true),
+				|_| {},
+				true,
+				|_| route_consent::page(&route_consent::Consent { request: None }),
+			)
+			.await;
+			assert!(shown.has("needs the request"), "{}", shown.text());
+
+			let mut shown = show(
 				Some(true),
 				|_| {},
 				true,
@@ -248,6 +258,8 @@ async fn the_consent_screen_needs_a_request_and_a_signed_in_person() {
 			.await;
 			assert!(shown.has(ALERT), "{}", shown.text());
 			assert!(shown.has("Try again"), "{}", shown.text());
+			shown.tap(&Finder::text("Try again")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
 
 			let shown = show(Some(false), seed_consent, true, |_| {
 				route_consent::page(&route_consent::Consent {
@@ -280,9 +292,11 @@ async fn the_device_screen_takes_a_typed_code_or_one_from_the_link() {
 				.unwrap();
 			shown.tap(&Finder::text("Continue")).await;
 			// Looked up as the server reads it; with no server, the error
-			// shows.
+			// shows and trying again fails the same way.
 			assert!(shown.has(ALERT), "{}", shown.text());
 			assert!(shown.has("Try again"), "{}", shown.text());
+			shown.tap(&Finder::text("Try again")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
 
 			let mut shown = show(
 				Some(true),
@@ -742,7 +756,12 @@ async fn security_merge_preview_explains_data_choices_before_confirmation() {
 								emails: vec!["other@example.com".into()],
 								identities: vec!["GitHub".into()],
 								passkeys: 1,
-								wallets: vec![],
+								wallets: vec![
+									leptoskit::db::Pubkey::parse(
+										"11111111111111111111111111111111",
+									)
+									.unwrap(),
+								],
 								data: vec![
 									MergeData {
 										label: "posts".into(),
@@ -755,7 +774,7 @@ async fn security_merge_preview_explains_data_choices_before_confirmation() {
 										fate: MergeFate::Dropped,
 									},
 								],
-								second_factor: vec![Factor::Totp, Factor::Passkey],
+								second_factor: vec![Factor::RecoveryCode, Factor::Passkey],
 								modes: vec![MergeMode::BringData, MergeMode::MoveLogin],
 								expires_in: 300,
 							}),
@@ -772,6 +791,14 @@ async fn security_merge_preview_explains_data_choices_before_confirmation() {
 					shown.text()
 				);
 				assert!(shown.has("other@example.com") && shown.has("1 passkey"));
+				assert!(shown.has("1111…1111"), "{}", shown.text());
+				shown
+					.tester
+					.enter_text(
+						&Finder::label("A code from the other account's authenticator app"),
+						"123456",
+					)
+					.unwrap();
 				shown
 					.tap(&Finder::text(
 						"○ Move only the sign-in methods, and delete its data",
@@ -1052,6 +1079,359 @@ async fn the_security_screen_sets_changes_and_removes_a_password() {
 			.await;
 			assert!(shown.has("Passkeys"), "{}", shown.text());
 			assert!(!shown.has("Set a password"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+/// A sign-in server offering two providers, wallets, and passkeys.
+fn seed_other_ways(cache: &QueryClient) {
+	use leptoskit::auth::client as auth_client;
+	cache.set_query_data(
+		&auth_client::providers(),
+		(),
+		serde_json::from_value(serde_json::json!([
+			{"id": "github", "name": "GitHub"},
+			{"id": "google", "name": "Google"}
+		]))
+		.unwrap(),
+	);
+	cache.set_query_data(
+		&auth_client::wallet_settings(),
+		(),
+		leptoskit::auth::WalletSettings {
+			enabled: true,
+			sign_in: true,
+			chain_id: "mainnet".into(),
+		},
+	);
+	cache.set_query_data(
+		&auth_client::wallet_apps(),
+		(),
+		vec![auth_client::WalletApp {
+			name: "Phantom".into(),
+			icon: String::new(),
+			sign_in: true,
+		}],
+	);
+}
+
+#[tokio::test]
+async fn signing_in_other_ways_offers_each_and_says_why_one_failed() {
+	local(|| {
+		async {
+			let mut shown = show(Some(false), seed_other_ways, true, |screens| {
+				screens.sign_in.screen()
+			})
+			.await;
+			for offered in [
+				"Sign in with a passkey",
+				"Continue with GitHub",
+				"Continue with Google",
+				"Sign in with Phantom",
+			] {
+				assert!(shown.has(offered), "missing {offered}: {}", shown.text());
+			}
+
+			// Each way sends its own request; with no server, each is
+			// refused and the screen says so without losing its offers.
+			for way in [
+				"Sign in with a passkey",
+				"Continue with GitHub",
+				"Sign in with Phantom",
+			] {
+				shown.tap(&Finder::text(way)).await;
+				assert!(shown.has(ALERT), "{way}: {}", shown.text());
+			}
+			assert!(shown.has("Continue with GitHub"), "{}", shown.text());
+
+			// Without a wallet to sign in with, the screen asks for one.
+			shown
+				.cache
+				.set_query_data(&leptoskit::auth::client::wallet_apps(), (), Vec::new());
+			shown.settle().await;
+			assert!(shown.has("Continue with Google"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn the_email_step_checks_the_address_before_asking_the_server() {
+	local(|| {
+		async {
+			let mut shown = show(
+				Some(false),
+				|cache| passwords(cache, true),
+				true,
+				|screens| screens.sign_in.screen(),
+			)
+			.await;
+
+			// Nothing typed: the screen says what it needs.
+			shown.tap(&Finder::text("Email me a code")).await;
+			assert!(
+				shown.has("Enter an email address, such as ada@example.com."),
+				"{}",
+				shown.text()
+			);
+
+			// A word that can't be an address is caught here too.
+			shown
+				.tester
+				.enter_text(&Finder::label("Email address"), "ada")
+				.unwrap();
+			shown.tap(&Finder::text("Email me a code")).await;
+			assert!(
+				shown.has("Enter an email address, such as ada@example.com."),
+				"{}",
+				shown.text()
+			);
+
+			// A real address goes to the server, which can't answer here.
+			shown
+				.tester
+				.enter_text(&Finder::label("Email address"), "ada@example.com")
+				.unwrap();
+			shown.tap(&Finder::text("Email me a code")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+			assert!(!shown.has("Enter an email address"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn a_sign_in_screen_whose_session_cannot_be_read_offers_to_try_again() {
+	local(|| {
+		async {
+			let mut shown = show(None, |_| {}, true, |screens| screens.sign_in.screen()).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+			shown.tap(&Finder::text("Try again")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn the_account_bar_opens_each_section_and_signs_out() {
+	local(|| {
+		async {
+			let mut shown = show(
+				Some(true),
+				|cache| {
+					seed_security(cache);
+					cache.set_query_data(&leptoskit::auth::client::devices(), (), Vec::new());
+					cache.set_query_data(&client::connected_apps(), (), Vec::new());
+				},
+				true,
+				|screens| screens.gate(|| Text("Home")),
+			)
+			.await;
+			assert!(shown.has("Home"), "{}", shown.text());
+
+			// Each section opens from the bar, and closes by pressing its
+			// tab again.
+			for (tab, expected) in [
+				("Where you're signed in", "Where you're signed in"),
+				("Security", "Authenticator app"),
+				("Connected apps", "No apps can use your account"),
+			] {
+				let button = Finder::role(NativeKind::Button, tab);
+				shown.tap(&button).await;
+				assert!(shown.has(expected), "{tab}: {}", shown.text());
+				shown.tap(&button).await;
+				assert!(shown.has("Home"), "{tab}: {}", shown.text());
+			}
+
+			// Signing out from the bar sends the request; with no server it
+			// is refused, and the screen keeps showing the account's home.
+			shown.tap(&Finder::text("Sign out")).await;
+			assert!(shown.has("Home"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn an_unread_device_list_offers_to_try_again() {
+	local(|| {
+		async {
+			// Unseeded, the device list fails without a server.
+			let mut shown = show(Some(true), |_| {}, true, |_| route_devices::page()).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+			shown.tap(&Finder::text("Try again")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn a_signed_in_person_can_sign_out_from_the_sign_in_screen() {
+	local(|| {
+		async {
+			let mut shown = show(Some(true), |_| {}, true, |_| route_sign_in::page()).await;
+			assert!(shown.has("You're signed in."), "{}", shown.text());
+			shown.tap(&Finder::text("Sign out")).await;
+			assert!(shown.has(ALERT), "{}", shown.text());
+
+			// The screen builds from its default state too.
+			shown.owner.with(|| {
+				let _default = auth::SignIn::default();
+			});
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn connected_accounts_fall_back_to_the_address_when_no_name_is_set() {
+	local(|| {
+		async {
+			use leptoskit::auth::client as auth_client;
+			let now = chrono::Utc::now();
+			let shown = show(
+				Some(true),
+				|cache| {
+					seed_security(cache);
+					cache.set_query_data(
+						&auth_client::identities(),
+						(),
+						serde_json::from_value(serde_json::json!([{
+							"id": "00000000-0000-4000-8000-000000000022",
+							"provider": "github",
+							"provider_name": "GitHub",
+							"name": null,
+							"email": "grace@example.com",
+							"created_at": now
+						}]))
+						.unwrap(),
+					);
+				},
+				true,
+				|screens| screens.security.screen(),
+			)
+			.await;
+			assert!(shown.has("grace@example.com"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn account_sections_show_they_are_loading_while_signed_out() {
+	local(|| {
+		async {
+			// The reads stay off until someone signs in, so each section
+			// says it is loading rather than reporting a failed request.
+			let shown = show(
+				Some(false),
+				|_| {},
+				true,
+				|screens| screens.security.screen(),
+			)
+			.await;
+			assert!(shown.has("Loading…"), "{}", shown.text());
+
+			let shown = show(
+				Some(false),
+				|_| {},
+				true,
+				|screens| screens.devices.screen(),
+			)
+			.await;
+			assert!(shown.has("Loading your devices…"), "{}", shown.text());
+
+			let shown = show(
+				Some(false),
+				|_| {},
+				true,
+				|screens| screens.developer_apps.screen(),
+			)
+			.await;
+			assert!(shown.has("Loading your apps…"), "{}", shown.text());
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn linked_wallets_that_cannot_be_read_say_linking_needs_a_browser() {
+	local(|| {
+		async {
+			let shown = show(
+				Some(true),
+				|cache| {
+					use leptoskit::auth::client as auth_client;
+					cache.set_query_data(&auth_client::mfa(), (), MfaStatus::default());
+					cache.set_query_data(&auth_client::passkeys(), (), Vec::new());
+					cache.set_query_data(&auth_client::identities(), (), Vec::new());
+					cache.set_query_data(&auth_client::providers(), (), Vec::new());
+					cache.set_query_data(&auth_client::merge_offer(), (), None);
+					cache.set_query_data(&auth_client::wallets(), (), Vec::new());
+					cache.set_query_data(
+						&auth_client::wallet_settings(),
+						(),
+						leptoskit::auth::WalletSettings {
+							enabled: true,
+							sign_in: false,
+							chain_id: "mainnet".into(),
+						},
+					);
+					// The wallet apps are left unseeded, so reading them
+					// fails without a server.
+				},
+				true,
+				|screens| screens.security.screen(),
+			)
+			.await;
+			assert!(
+				shown.has("Linking a wallet works in the browser for now."),
+				"{}",
+				shown.text()
+			);
+		}
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn wallet_linking_is_absent_until_its_apps_are_known() {
+	local(|| {
+		async {
+			let shown = show(
+				Some(false),
+				|cache| {
+					use leptoskit::auth::client as auth_client;
+					cache.set_query_data(&auth_client::mfa(), (), MfaStatus::default());
+					cache.set_query_data(&auth_client::passkeys(), (), Vec::new());
+					cache.set_query_data(&auth_client::identities(), (), Vec::new());
+					cache.set_query_data(&auth_client::providers(), (), Vec::new());
+					cache.set_query_data(&auth_client::merge_offer(), (), None);
+					cache.set_query_data(&auth_client::wallets(), (), Vec::new());
+					cache.set_query_data(
+						&auth_client::wallet_settings(),
+						(),
+						leptoskit::auth::WalletSettings {
+							enabled: true,
+							sign_in: false,
+							chain_id: "mainnet".into(),
+						},
+					);
+					// The wallet apps stay unread while signed out.
+				},
+				true,
+				|screens| screens.security.screen(),
+			)
+			.await;
+			assert!(shown.has("Wallets"), "{}", shown.text());
+			assert!(
+				!shown.has("Linking a wallet works in the browser for now."),
+				"{}",
+				shown.text()
+			);
 		}
 	})
 	.await;
