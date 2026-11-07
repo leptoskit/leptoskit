@@ -19,8 +19,44 @@ concurrency:
   group: native-ui-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
-  mobile:
+  # Same gate as ci.yml: one decision from the `[ci]` section of
+  # monochange.toml, keyed by this workflow's `native-ui-*` job ids, so the
+  # jobs below run when their crates or scripts change — including through a
+  # dependency — instead of a hard-coded path filter.
+  gate:
+    name: native UI gatekeeper
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      decisions: ${{ steps.gate.outputs.decisions }}
+      run-all: ${{ steps.gate.outputs.run-all }}
+      affected-packages: ${{ steps.gate.outputs.affected-packages }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: restore the gate decision memory
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .monochange/ci-memory.json
+          key: monochange-ci-memory-${{ github.run_id }}
+          restore-keys: monochange-ci-memory-
+
+      - name: decide which jobs must run
+        id: gate
+        uses: monochange/actions/ci@v0
+        with:
+          provider: opencode-go
+          api-key: ${{ secrets.OPENCODE_GO_API_KEY }}
+          on-error: run-all
+
+  native-ui-mobile:
     name: native ${{ matrix.platform }} dialogs and pixels
+    needs: gate
+    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-mobile']
     strategy:
       fail-fast: false
       matrix:
@@ -148,8 +184,10 @@ jobs:
           path: |
             target/native-ui/reports
             target/native-ui/*.log
-  macos:
+  native-ui-macos:
     name: native macOS dialogs and pixels
+    needs: gate
+    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-macos']
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
@@ -182,8 +220,10 @@ jobs:
           path: |
             target/native-ui/reports
             target/native-ui/*.log
-  windows:
+  native-ui-windows:
     name: native Windows dialogs and pixels
+    needs: gate
+    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-windows']
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -206,8 +246,10 @@ jobs:
           path: |
             target/native-ui/reports
             target/native-ui/*.log
-  linux:
+  native-ui-linux:
     name: native Linux dialogs and pixels
+    needs: gate
+    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-linux']
     # Its 6.8 Azure kernel supplies vgem; newer Azure kernels omit it.
     # The desktop itself runs Ubuntu 26.04 in the container.
     runs-on: ubuntu-22.04

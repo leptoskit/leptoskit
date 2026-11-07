@@ -11,6 +11,18 @@
 # why the pattern is intentional and why it is safe.
 
 rules:
+  # `monochange/actions/ci` is first-party: the monochange organization owns
+  # this repository too, so the reference crosses no trust boundary the
+  # repository itself does not already cross. The gatekeeper action's
+  # config-driven interface rides the moving `v0` major tag until it ships a
+  # stable release; every other action in this repository stays under the
+  # implicit hash-pin policy, and this rule should narrow to hash-pin once a
+  # release SHA exists.
+  unpinned-uses:
+    config:
+      policies:
+        monochange/actions/ci: ref-pin
+
   # The rust action exports the toolchain channel that rustup resolved from
   # the repository's own rust-toolchain.toml, so generated apps building
   # outside the checkout still use the pin. The value is one field of a
