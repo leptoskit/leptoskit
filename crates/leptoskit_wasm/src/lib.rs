@@ -489,6 +489,8 @@ pub struct WasmHost<B: NativeBackend> {
 	timer: Option<leptoskit_bridge::timer::host::TimerScheduler>,
 	/// Immediate routing failures also need a guest wake, without a deadline.
 	routed_replies_pending: bool,
+	/// A bounded pump yielded with more routing or guest work to drain.
+	timer_routing_pending: bool,
 	/// Retained so a replaced guest keeps the same timer wake.
 	timer_wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 	/// Non-timer requests collected while [`Self::pump_timers`] routes work.
@@ -664,6 +666,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			timer_plugin: None,
 			timer: None,
 			routed_replies_pending: false,
+			timer_routing_pending: false,
 			timer_wake: None,
 			routed_requests: VecDeque::new(),
 			routed_cancelled: VecDeque::new(),
@@ -694,6 +697,7 @@ impl<B: NativeBackend> WasmHost<B> {
 
 		self.timer_plugin = None;
 		self.routed_replies_pending = false;
+		self.timer_routing_pending = false;
 		self.routed_requests.clear();
 		self.routed_cancelled.clear();
 		self.identity = HostIdentity(std::sync::Arc::new(()));
@@ -937,7 +941,7 @@ impl<B: NativeBackend> WasmHost<B> {
 	/// How long until [`Self::poll_due_timers`] has work, or `None` when the
 	/// host has no timer waiting. `Some(Duration::ZERO)` means due now.
 	pub fn next_timer_deadline(&self) -> Option<std::time::Duration> {
-		if self.routed_replies_pending {
+		if self.routed_replies_pending || self.timer_routing_pending {
 			return Some(std::time::Duration::ZERO);
 		}
 
@@ -1032,11 +1036,20 @@ impl<B: NativeBackend> WasmHost<B> {
 			let delivered = self.poll_due_timers()?;
 			woke |= delivered;
 
-			if !delivered {
+			// A full routing batch can leave requests or cancellations queued
+			// even when no timer is due. Drain another bounded batch before
+			// sleeping; after the overall budget, request an immediate turn.
+			self.timer_routing_pending = moved == TIMER_TURN || delivered;
+			if !self.timer_routing_pending {
 				break;
 			}
 		}
 
+		if self.timer_routing_pending
+			&& let Some(wake) = &self.timer_wake
+		{
+			wake();
+		}
 		Ok(woke)
 	}
 

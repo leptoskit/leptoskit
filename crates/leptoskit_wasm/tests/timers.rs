@@ -298,3 +298,78 @@ fn guest_result<T>(
 		panic!("guest failed: {error}; pending reports: {details:?}");
 	})
 }
+
+#[test]
+fn a_full_request_batch_does_not_delay_later_short_timers() {
+	let mut host = host();
+	for _ in 0..99 {
+		submit(&mut host, 60_000);
+	}
+	let short = submit(&mut host, 0);
+	let woke = host.pump_timers().expect("route all admitted timers");
+	assert!(
+		host.plugins().next_request().is_none(),
+		"later timers must not wait for the first long deadline"
+	);
+	assert!(
+		woke || host
+			.next_timer_deadline()
+			.is_some_and(|delay| delay <= Duration::from_millis(10))
+	);
+	if !woke {
+		assert!(pump_until_due(
+			&mut host,
+			Instant::now() + Duration::from_secs(1)
+		));
+	}
+	assert!(
+		host.plugins()
+			.take_result(short)
+			.expect("call")
+			.expect("reply")
+			.is_ok()
+	);
+}
+
+#[test]
+fn a_full_cancellation_batch_does_not_leave_long_timers_waiting() {
+	let mut host = host();
+	let calls: Vec<_> = (0..100).map(|_| submit(&mut host, 60_000)).collect();
+	host.pump_timers().expect("route");
+	for id in calls {
+		host.plugins().cancel(id).expect("cancel");
+	}
+	host.pump_timers().expect("drain every cancellation");
+	assert!(host.next_timer_deadline().is_none());
+	assert!(host.plugins().next_cancelled().is_none());
+}
+
+#[test]
+fn exhausting_the_pump_budget_requests_one_more_turn_then_returns_to_the_deadline() {
+	let mut host = WasmHost::headless(IDLE.as_bytes()).expect("compile wat");
+	*host.plugins() = leptoskit_bridge::Bridge::new(leptoskit_bridge::Limits {
+		calls: 600,
+		..Default::default()
+	});
+	host.enable_timers().expect("timers");
+	host.start(100.0, 100.0).expect("start");
+	let mut last = None;
+	for _ in 0..600 {
+		last = Some(submit(&mut host, 60_000));
+	}
+	host.pump_timers().expect("bounded first turn");
+	assert_eq!(host.next_timer_deadline(), Some(Duration::ZERO));
+	host.pump_timers().expect("remaining queued work");
+	assert!(host.plugins().next_request().is_none());
+	assert!(
+		host.next_timer_deadline()
+			.is_some_and(|delay| delay > Duration::from_secs(1))
+	);
+	assert_eq!(
+		host.plugins()
+			.take_result(last.unwrap())
+			.expect("last call")
+			.expect("completed"),
+		Err(leptoskit_bridge::Error::Busy)
+	);
+}
