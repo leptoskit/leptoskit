@@ -44,6 +44,12 @@ Options:
       --no-rpc
           Explicit operator declaration that this backend exposes no RPC API
 
+      --rpc-baseline <RPC_BASELINE>
+          Previously published contract to keep compatible; repeat for supported client versions
+
+      --rpc-baseline-sha256 <RPC_BASELINE_SHA256>
+          Independently selected SHA-256 for each RPC baseline, in the same order
+
       --out <OUT>
           New descriptor file, written only after image extraction succeeds
 

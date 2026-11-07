@@ -229,6 +229,42 @@ Once trust is configured, missing approvals cannot fall back to an unsigned depl
 
 This path targets managed Linux backend containers. Website releases require the explicit production profile below. Application service releases remain unsupported. Approval does not prove code safety, RPC compatibility, or which executable is running on a server; runtime attestation is absent.
 
+### Keep installed clients compatible during a release
+
+For managed Linux backends and supported websites, retain the published RPC spec used by each client version you still support. During verified packaging, compare those contracts with the spec exported by the reproduced executable:
+
+```sh
+lk infra build-verified \
+  --bundle release/bundle --manifest release/inventory.json --sha256 "$INVENTORY_PIN" \
+  --runtime-image "$RUNTIME_IMAGE_AT_DIGEST" --runtime-config-sha256 "$RUNTIME_CONFIG_PIN" \
+  --tag registry.example/backend:next \
+  --rpc-baseline published-rpc.json --rpc-baseline-sha256 "$RPC_BASELINE_PIN" \
+  --out descriptor.json
+```
+
+Obtain each baseline pin from your own release records or another authenticated source. Repeat both baseline flags in matching order for up to eight supported contracts. Each spec may be at most 16 MiB. Baseline files are read and pinned before the build begins. A comparison failure stops descriptor creation. Without a baseline, compatibility remains `not_checked`; `--no-rpc` cannot be combined with baselines.
+
+The version 3 descriptor retains the exact candidate and baseline spec bytes and identifies the structural comparison algorithm. Approvals and the deployment policy bind that complete descriptor. Readers recompute the comparison from its contents when approving or consuming it, including reuse, rollback, and recovery.
+
+To enforce the client window independently of the publisher, use version 2 of the operator's `backend-trust.json` and list the required baseline hashes:
+
+```json
+{
+	"format_version": 2,
+	"repository": "https://github.com/example/backend",
+	"deployment": "production",
+	"publisher": "<publisher public key in hex>",
+	"approvers": ["<reviewer public key in hex>"],
+	"threshold": 1,
+	"deployment_keys": ["<deployment public key in hex>"],
+	"rpc_contracts": ["<authenticated published RPC spec SHA-256>"]
+}
+```
+
+Every listed contract must appear in the checked descriptor. A publisher's empty or different baseline cannot replace this operator requirement. Legacy descriptors, `not_checked`, and `not_applicable` fail this policy. Rollback also uses the current client window: prepare new evidence and approvals for an older image if its previous descriptor lacks a required baseline. Version 1 trust files keep their previous behavior and cannot carry `rpc_contracts` requirements.
+
+This uses the conservative declaration comparison described in [Checking compatibility](13-sharing-the-rpc.md#checking-compatibility). It covers HTTP and live wire shapes for clients on any platform. It does not prove unchanged handler behavior, authorization, runtime protocol implementations, database rollout compatibility, or native host support. Schema changes may need a separately named endpoint while older clients remain supported.
+
 ## Reproduce a website and its backend together
 
 To check that the JavaScript, Wasm, CSS and public files in your image match your source release, add a website profile to the build recipe before running `lk verify build`:

@@ -19,6 +19,9 @@ use serde_json::json;
 use crate::verify::build::Engine;
 use crate::verify::build::{self};
 
+mod rpc;
+use rpc::Contract as RpcContract;
+
 #[derive(Debug, clap::Args)]
 pub struct Args {
 	#[command(flatten)]
@@ -38,6 +41,13 @@ pub struct Args {
 	/// Explicit operator declaration that this backend exposes no RPC API.
 	#[arg(long)]
 	no_rpc: bool,
+	/// Previously published contract to keep compatible; repeat for supported
+	/// client versions.
+	#[arg(long, requires = "rpc_baseline_sha256", conflicts_with = "no_rpc")]
+	rpc_baseline: Vec<PathBuf>,
+	/// Independently selected SHA-256 for each RPC baseline, in the same order.
+	#[arg(long, requires = "rpc_baseline", conflicts_with = "no_rpc")]
+	rpc_baseline_sha256: Vec<String>,
 	/// New descriptor file, written only after image extraction succeeds.
 	#[arg(long)]
 	out: PathBuf,
@@ -88,21 +98,12 @@ enum Assets {
 	},
 }
 
-/// Export proves only which contract these bytes emit, not compatibility or
-/// that arbitrary application code obeys the early-export startup convention.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-enum RpcContract {
-	Exported {
-		sha256: String,
-		compatibility: CheckState,
-	},
-	NotApplicable {
-		declaration: String,
-	},
-}
-
-fn rpc_contract(engine: Engine, image: &str, no_rpc: bool) -> Result<RpcContract> {
+fn rpc_contract(
+	engine: Engine,
+	image: &str,
+	no_rpc: bool,
+	baselines: &[rpc::Baseline],
+) -> Result<RpcContract> {
 	if no_rpc {
 		return Ok(RpcContract::NotApplicable {
 			declaration: "operator_declares_no_rpc".into(),
@@ -170,11 +171,7 @@ fn rpc_contract(engine: Engine, image: &str, no_rpc: bool) -> Result<RpcContract
 			"invalid RPC export file"
 		);
 		let bytes = fs::read(path)?;
-		leptoskit_rpc_codegen::ApiSpec::from_json(std::str::from_utf8(&bytes)?)?;
-		Ok(RpcContract::Exported {
-			sha256: digest(&bytes),
-			compatibility: CheckState::NotChecked,
-		})
+		RpcContract::exported(bytes, baselines)
 	})();
 	let removed = output(engine, &["rm", "--force", &container]);
 	let contract = checked?;
@@ -315,6 +312,11 @@ fn source_schema(bundle: &build::ReproducedBundle) -> Result<String> {
 pub(super) fn run(args: &Args) -> Result<()> {
 	ensure!(!args.out.exists(), "descriptor output already exists");
 	ensure!(
+		!args.no_rpc || args.rpc_baseline.is_empty(),
+		"--no-rpc conflicts with RPC compatibility baselines"
+	);
+	let baselines = rpc::baselines(&args.rpc_baseline, &args.rpc_baseline_sha256)?;
+	ensure!(
 		!args.reproduction.offline && args.reproduction.checkout.is_none(),
 		"managed verified packaging requires full reproduction from the canonical repository"
 	);
@@ -423,9 +425,12 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	validate_image(&image, platform, &expected)?;
 	let id = image["Id"].as_str().context("missing image ID")?;
 	check_contents(engine, id, context.path(), &backend_hash, &assets)?;
-	let rpc_contract = rpc_contract(engine, id, args.no_rpc)?;
+	let rpc_contract = rpc_contract(engine, id, args.no_rpc, &baselines)?;
+	let checked_rpc = rpc_contract.checked();
 	let descriptor = Descriptor {
-		format_version: if bundle.recipe.website.is_some() {
+		format_version: if checked_rpc {
+			3
+		} else if bundle.recipe.website.is_some() {
 			2
 		} else {
 			1
@@ -520,6 +525,10 @@ pub(super) fn read(path: &Path, pin: &str) -> Result<Descriptor> {
 }
 
 impl Descriptor {
+	pub(super) fn require_rpc(&self, pins: &[String]) -> Result<()> {
+		self.rpc_contract.require(pins)
+	}
+
 	pub(super) fn validate(&self) -> Result<()> {
 		crate::verify::validate(&self.recipe)?;
 		ensure!(
@@ -539,19 +548,16 @@ impl Descriptor {
 		] {
 			ensure!(valid_digest(value), "invalid descriptor SHA-256");
 		}
+		self.rpc_contract.validate()?;
 		ensure!(
-			match &self.rpc_contract {
-				RpcContract::Exported {
-					sha256,
-					compatibility,
-				} => valid_digest(sha256) && *compatibility == CheckState::NotChecked,
-				RpcContract::NotApplicable { declaration } =>
-					declaration == "operator_declares_no_rpc",
-			},
-			"unsupported RPC evidence"
-		);
-		ensure!(
-			(self.format_version == if self.recipe.website.is_some() { 2 } else { 1 })
+			(self.format_version
+				== if self.rpc_contract.checked() {
+					3
+				} else if self.recipe.website.is_some() {
+					2
+				} else {
+					1
+				})
 				&& self.kind == "leptoskit-verified-backend-image"
 				&& self.services == CheckState::Unsupported
 				&& self.native_guest_compatibility == CheckState::NotApplicable
@@ -632,6 +638,10 @@ impl Descriptor {
 		);
 		Ok(())
 	}
+}
+
+pub(super) fn validate_rpc_pins(pins: &[String]) -> Result<()> {
+	rpc::validate_pins(pins)
 }
 
 #[cfg(test)]

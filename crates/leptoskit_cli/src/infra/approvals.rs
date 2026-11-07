@@ -64,6 +64,10 @@ struct Configuration {
 	approvers: Vec<String>,
 	threshold: usize,
 	deployment_keys: Vec<String>,
+	/// Exact prior contracts the operator still supports. Version 2 requires a
+	/// nonempty window; version 1 retains legacy unchecked behavior.
+	#[serde(default)]
+	rpc_contracts: Vec<String>,
 }
 
 struct Trust {
@@ -106,10 +110,7 @@ fn key(text: &str) -> Result<VerifyingKey> {
 impl Trust {
 	fn read(path: &Path) -> Result<Self> {
 		let configuration: Configuration = serde_json::from_slice(&std::fs::read(path)?)?;
-		ensure!(
-			configuration.format_version == 1,
-			"unsupported backend trust configuration"
-		);
+		configuration.validate_rpc_policy()?;
 		let publisher = key(&configuration.publisher)?;
 		let approvers = configuration
 			.approvers
@@ -141,6 +142,20 @@ impl Trust {
 			approvers,
 			deployment_keys,
 		})
+	}
+}
+
+impl Configuration {
+	fn validate_rpc_policy(&self) -> Result<()> {
+		ensure!(
+			match self.format_version {
+				1 => self.rpc_contracts.is_empty(),
+				2 => !self.rpc_contracts.is_empty(),
+				_ => false,
+			},
+			"backend trust v1 requires no RPC policy; v2 requires a nonempty rpc_contracts window"
+		);
+		super::verified::validate_rpc_pins(&self.rpc_contracts)
 	}
 }
 
@@ -233,6 +248,8 @@ fn verify(
 	);
 	let original: Descriptor = serde_json::from_str(&evidence.descriptor)?;
 	original.validate()?;
+	trust.configuration.validate_rpc_policy()?;
+	descriptor.require_rpc(&trust.configuration.rpc_contracts)?;
 	ensure!(
 		serde_json::to_value(&original)? == serde_json::to_value(descriptor)?,
 		"stored descriptor differs from approved bytes"
