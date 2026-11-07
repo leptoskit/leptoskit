@@ -40,7 +40,7 @@ Depend on a local checkout from a generated app with `--sdk-path`: `leptoskit ne
 
 `devenv shell test:sdk` runs TypeScript under Deno and Node, Python, Dart, Go, Rust, and the generated CLI against a real local live server. The clients exercise subscriptions, patches, read-your-writes, reconnect, mutation deduplication, and channels. The development environment supplies each language's toolchain; missing tools or an empty test selection fail. The tests run serially, and the generated Rust consumers use a separate cache configurable with `LEPTOSKIT_SDK_TARGET_DIR`.
 
-Every pull request and main push runs this command in CI. Publication runs it again on the validated release commit, before uploading artifacts or publishing crates. `test:all` includes it locally. These tests install generated packages and their dependencies, so they require registry access. They validate the SDK/server journey; native host transport, generated application, and provider recovery tests remain separate checks.
+Every pull request and main push runs this command in CI. Publication runs it again on the validated release commit, before uploading artifacts or publishing crates. Every publication build checks out that same validated commit SHA. `test:all` includes it locally. These tests install generated packages and their dependencies, so they require registry access. They validate the SDK/server journey; native host transport, generated application, and provider recovery tests remain separate checks.
 
 ## Coverage
 

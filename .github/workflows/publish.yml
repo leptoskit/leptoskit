@@ -147,6 +147,8 @@ jobs:
             || cargo install --locked --version 0.21.0 monochange
           monochange step validate
 
+  # Resolve the tag once in validate, then test and build that exact commit.
+  # Every publication side effect depends on this gate through devtools-ui.
   sdk-acceptance:
     name: verify generated SDKs before publication
     needs: validate
@@ -170,7 +172,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.revision }}
           persist-credentials: false
 
       - uses: ./.github/actions/devenv
@@ -266,7 +268,7 @@ jobs:
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.revision }}
           # The verification below compares the checkout against the tag and against main, so the
           # history has to be present.
           fetch-depth: 0
@@ -456,7 +458,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.revision }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
