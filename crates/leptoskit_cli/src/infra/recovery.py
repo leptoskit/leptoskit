@@ -291,7 +291,7 @@ def status():
     result = json.loads(path.read_text()) if path.exists() else {"verified": False}
     completed = result.get("completed_at")
     age = (datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(completed)).total_seconds() if completed else None
-    result["healthy"] = bool(result.get("verified") and age is not None and age <= CONFIG["max_age_hours"] * 3600)
+    result["healthy"] = bool(result.get("verified") and age is not None and 0 <= age <= CONFIG["max_age_hours"] * 3600)
     result["age_seconds"] = age
     failure = ROOT / "backup-error.json"
     if failure.exists():
