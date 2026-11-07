@@ -334,6 +334,7 @@ pub(crate) fn reversing(
 	let _ = pending(applied, migrations)?;
 	if steps == 0
 		|| steps > applied.len()
+		|| applied.len() > migrations.len()
 		|| migrations
 			.iter()
 			.take(applied.len())

@@ -539,6 +539,68 @@ async fn a_consolidated_migration_is_adopted_not_run() {
 	assert_eq!(db.migrate(&registry).await.unwrap().len(), 0);
 }
 
+async fn consolidated_rollback_is_refused(db: &Db) {
+	use leptoskit_db::Statement;
+	let original = [
+		Migration::new(
+			"create",
+			"CREATE TABLE kept (id INTEGER PRIMARY KEY, body TEXT);",
+		)
+		.with_down("DROP TABLE kept;"),
+		Migration::new("extend", "ALTER TABLE kept ADD COLUMN extra TEXT;")
+			.with_down("ALTER TABLE kept DROP COLUMN extra;"),
+	];
+	db.migrate(&original).await.unwrap();
+	db.execute(Statement {
+		sql: "INSERT INTO kept (id, body, extra) VALUES (1, 'original', 'new data')".into(),
+		args: vec![],
+	})
+	.await
+	.unwrap();
+	let registry = [Migration::new("combined", "SELECT must_not_run();")
+		.with_replaces(["create", "extend"])
+		.with_down("DELETE FROM kept;")];
+	assert_eq!(db.migrate(&registry).await.unwrap(), ["combined"]);
+	let history = db.applied_migrations().await.unwrap();
+	assert_eq!(history.len(), 3);
+	for steps in [1, 3] {
+		assert!(matches!(
+			db.rollback(&registry, steps).await,
+			Err(MigrationError::RollbackHistory)
+		));
+		assert_eq!(db.applied_migrations().await.unwrap(), history);
+		let rows = db
+			.fetch(Statement {
+				sql: "SELECT body, extra FROM kept WHERE id = 1".into(),
+				args: vec![],
+			})
+			.await
+			.unwrap();
+		assert_eq!(
+			rows,
+			vec![vec![
+				leptoskit_db::Value::Text("original".into()),
+				leptoskit_db::Value::Text("new data".into()),
+			]]
+		);
+	}
+	// Refusal must leave the connection and migration lock usable.
+	assert!(db.migrate(&registry).await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_consolidated_rollback_refuses_without_changing_data_or_history() {
+	consolidated_rollback_is_refused(&Db::connect("sqlite::memory:").await.unwrap()).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_consolidated_rollback_refuses_without_changing_data_or_history() {
+	let Some(cluster) = support::postgres::PostgresCluster::start() else {
+		return;
+	};
+	consolidated_rollback_is_refused(&Db::connect(&cluster.database()).await.unwrap()).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_partly_replaced_set_is_refused() {
 	// The database applied the first two migrations only.
