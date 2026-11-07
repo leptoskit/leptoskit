@@ -264,11 +264,13 @@ pub use state::QueryState;
 pub use state::QueryStatus;
 pub use time::AlreadyInstalled;
 pub use time::BoxFuture;
+pub use time::SleepError;
 pub use time::has_timer;
 pub use time::install_clock;
 pub use time::install_sleep;
 pub use time::now_ms;
 pub use time::sleep;
+pub use time::try_sleep;
 
 /// The everything-import for components.
 pub mod prelude {

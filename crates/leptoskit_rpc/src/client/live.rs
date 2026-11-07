@@ -274,7 +274,8 @@ pub enum LiveState {
 		/// How long until the next one.
 		next_in: Duration,
 	},
-	/// This build holds no live connection, as while the server renders.
+	/// No live connection: for example during server rendering, or when the
+	/// host cannot schedule a reconnect. New work or credentials can try again.
 	Offline,
 }
 
@@ -988,21 +989,20 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 
 	loop {
 		let Ok(connection) = inner.transport.connect().await else {
-			attempt = attempt.saturating_add(1);
-			inner.set_state(LiveState::Reconnecting {
-				attempt,
-				next_in: Duration::from_millis(backoff),
-			});
-			leptoskit_query::sleep(Duration::from_millis(backoff)).await;
-			backoff = (backoff * 2).min(BACKOFF_MAX);
+			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+				return;
+			}
 			continue;
 		};
-		backoff = BACKOFF_START;
-
 		if !handshake(inner.as_ref(), connection.as_ref()).await {
+			inner.disconnected();
+			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+				return;
+			}
 			continue;
 		}
 
+		backoff = BACKOFF_START;
 		attempt = 0;
 		inner.set_state(LiveState::Live {
 			version: inner.version.load(Ordering::Relaxed),
@@ -1061,14 +1061,58 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 			continue;
 		}
 
-		attempt = attempt.saturating_add(1);
-		inner.set_state(LiveState::Reconnecting {
-			attempt,
-			next_in: Duration::from_millis(backoff),
-		});
-		leptoskit_query::sleep(Duration::from_millis(backoff)).await;
-		backoff = (backoff * 2).min(BACKOFF_MAX);
+		if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
+			return;
+		}
 	}
+}
+
+/// A failed transport or handshake must wait before reconnecting. If this
+/// host cannot schedule that wait, only a new command can request another
+/// attempt; a missing or full timer queue must never create a hot loop.
+async fn retry_after(
+	inner: &Inner,
+	commands: &mut UnboundedReceiver<Command>,
+	attempt: &mut u32,
+	backoff: &mut u64,
+) -> bool {
+	*attempt = attempt.saturating_add(1);
+	let delay = Duration::from_millis(*backoff);
+	inner.set_state(LiveState::Reconnecting {
+		attempt: *attempt,
+		next_in: delay,
+	});
+
+	if let Err(error) = leptoskit_query::try_sleep(delay).await {
+		leptos::logging::warn!("leptoskit_rpc: reconnect paused: {error}");
+		inner.set_state(LiveState::Offline);
+		return wait_for_retry_command(commands).await;
+	}
+
+	*backoff = (*backoff * 2).min(BACKOFF_MAX);
+	true
+}
+
+/// Subscriptions and queued calls are retained by `Inner` and sent by the
+/// next handshake. Teardown and flow-control messages alone create no work.
+async fn wait_for_retry_command(commands: &mut UnboundedReceiver<Command>) -> bool {
+	while let Some(command) = commands.next().await {
+		if matches!(
+			command,
+			Command::Subscribe(_)
+				| Command::Mutate(_)
+				| Command::Act(_)
+				| Command::Join(_)
+				| Command::Stream(_)
+				| Command::Reauthenticate
+				| Command::RefreshCredentials { .. }
+				| Command::Reconnect
+		) {
+			return true;
+		}
+	}
+
+	false
 }
 
 /// Reads as the identity the credentials now hold: a bearer token in an
@@ -2537,6 +2581,26 @@ mod tests {
 
 	use super::*;
 
+	#[tokio::test]
+	async fn an_unavailable_retry_timer_waits_for_new_work() {
+		let (sender, mut commands) = mpsc::unbounded();
+		let waiting = wait_for_retry_command(&mut commands);
+		futures::pin_mut!(waiting);
+		assert!(waiting.as_mut().now_or_never().is_none());
+		sender.unbounded_send(Command::Unsubscribe(1)).unwrap();
+		sender.unbounded_send(Command::Cancel(1)).unwrap();
+		assert!(waiting.as_mut().now_or_never().is_none());
+		sender.unbounded_send(Command::Subscribe(2)).unwrap();
+		assert!(waiting.await);
+	}
+
+	#[tokio::test]
+	async fn closing_retry_commands_stops_the_wait() {
+		let (sender, mut commands) = mpsc::unbounded();
+		drop(sender);
+		assert!(!wait_for_retry_command(&mut commands).await);
+	}
+
 	static START: Once = Once::new();
 
 	fn start() {
@@ -2611,6 +2675,55 @@ mod tests {
 			self.attempts.fetch_add(1, Ordering::Relaxed);
 			Box::pin(std::future::ready(Err("the upgrade failed".to_owned())))
 		}
+	}
+
+	/// The upgrade succeeds, but writing the hello fails.
+	#[derive(Clone, Default)]
+	struct HandshakeRefused(Arc<Mutex<Vec<std::time::Instant>>>);
+
+	impl Transport for HandshakeRefused {
+		fn connect(&self) -> BoxFuture<'static, Result<Box<dyn Connection>, String>> {
+			self.0.lock().unwrap().push(std::time::Instant::now());
+			let this = self.clone();
+			Box::pin(async move { Ok(Box::new(this) as Box<dyn Connection>) })
+		}
+	}
+
+	impl Connection for HandshakeRefused {
+		fn send(&self, _: String) -> BoxFuture<'static, Result<(), String>> {
+			Box::pin(async {
+				// Let the assertion run even if a regression removes the
+				// backoff.
+				tokio::task::yield_now().await;
+				Err("the hello failed".to_owned())
+			})
+		}
+
+		fn next(&self) -> BoxFuture<'static, Result<Option<String>, String>> {
+			Box::pin(std::future::pending())
+		}
+	}
+
+	#[tokio::test]
+	async fn a_failed_handshake_waits_before_connecting_again() {
+		start();
+		tokio::task::LocalSet::new()
+			.run_until(async {
+				let socket = HandshakeRefused::default();
+				let _client = LiveClient::new(&ClientConfig::new(), Arc::new(socket.clone()));
+				tokio::time::timeout(Duration::from_secs(5), async {
+					while socket.0.lock().unwrap().len() < 2 {
+						tokio::time::sleep(Duration::from_millis(5)).await;
+					}
+				})
+				.await
+				.expect("a failed handshake should eventually reconnect");
+				let attempts = socket.0.lock().unwrap();
+				assert!(
+					attempts[1].duration_since(attempts[0]) >= Duration::from_millis(BACKOFF_START)
+				);
+			})
+			.await;
 	}
 
 	impl Connection for Memory {

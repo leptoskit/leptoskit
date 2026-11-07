@@ -10478,6 +10478,7 @@ name = "timer_guest_probe"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
+ "leptoskit_query",
 ]
 
 [[package]]

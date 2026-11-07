@@ -419,8 +419,8 @@ where
 		let RefetchInterval::Every(interval) = options.refetch_interval else {
 			return;
 		};
-		// Without a real timer every sleep resolves at once, and the loop
-		// below would spin without ever yielding.
+		// An interval needs a working timer. A later scheduling failure also
+		// ends the loop instead of treating the interval as elapsed.
 		if is_server() || !crate::time::has_timer() {
 			return;
 		}
@@ -431,7 +431,9 @@ where
 		let query = Arc::clone(query);
 		spawn(async move {
 			loop {
-				crate::time::sleep(interval).await;
+				if crate::time::try_sleep(interval).await.is_err() {
+					return;
+				}
 				let Some(observer) = observer.upgrade() else {
 					break;
 				};

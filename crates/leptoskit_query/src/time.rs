@@ -46,7 +46,7 @@ impl std::error::Error for AlreadyInstalled {}
 ///
 /// The defaults cover the browser (`setTimeout`) and native targets (tokio
 /// when a runtime is running, one shared timer thread otherwise). A wasm
-/// module hosted outside a browser has no default and must install one.
+/// guest uses its host timer plugin. Other Wasm hosts must install one.
 pub fn install_sleep(
 	sleep: impl Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync + 'static,
 ) -> Result<(), AlreadyInstalled> {
@@ -58,7 +58,7 @@ pub fn install_sleep(
 ///
 /// The defaults cover the browser (`Date.now()`) and native targets
 /// (`SystemTime`). A wasm module hosted outside a browser has no default and
-/// must install one.
+/// must install one unless the `guest` feature supplies the host clock.
 pub fn install_clock(
 	clock: impl Fn() -> u64 + Send + Sync + 'static,
 ) -> Result<(), AlreadyInstalled> {
@@ -83,9 +83,9 @@ pub(crate) fn millis(duration: Duration) -> u64 {
 	u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Whether [`sleep`] really waits: a timer was installed, this target has a
-/// default one, or the native host offers the timer plugin. Without one every
-/// sleep resolves at once.
+/// Whether a timer was installed, this target has a default one, or the
+/// native host offers the timer plugin. Scheduling can still fail when a
+/// host's timer queue is full; [`try_sleep`] reports that failure.
 #[must_use]
 pub fn has_timer() -> bool {
 	if SLEEP.get().is_some() {
@@ -122,17 +122,69 @@ pub fn has_timer() -> bool {
 	}
 }
 
-/// Waits for `duration`.
-pub fn sleep(duration: Duration) -> BoxFuture<'static, ()> {
+/// Why a requested wait could not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SleepError {
+	/// This host does not provide timers and no custom provider is installed.
+	Unavailable,
+	/// The host rejected or cancelled the timer, for example at its capacity
+	/// limit.
+	Rejected,
+}
+
+impl std::fmt::Display for SleepError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(match self {
+			Self::Unavailable => "this host has no timer",
+			Self::Rejected => "the host could not complete the timer",
+		})
+	}
+}
+
+impl std::error::Error for SleepError {}
+
+/// Waits for `duration`, reporting an unavailable or rejected host timer.
+/// A zero duration needs no timer. Custom [`install_sleep`] providers take
+/// precedence on every platform.
+///
+/// # Errors
+///
+/// Returns [`SleepError::Unavailable`] when the host has no timer, or
+/// [`SleepError::Rejected`] when the host cannot complete the scheduled wait.
+pub fn try_sleep(duration: Duration) -> BoxFuture<'static, Result<(), SleepError>> {
 	if let Some(sleep) = SLEEP.get() {
-		return sleep(duration);
+		let waiting = sleep(duration);
+		return Box::pin(async move {
+			waiting.await;
+			Ok(())
+		});
 	}
 
 	if duration.is_zero() {
-		return Box::pin(std::future::ready(()));
+		return Box::pin(std::future::ready(Ok(())));
 	}
 
-	Box::pin(default_sleep(duration))
+	Box::pin(default_try_sleep(duration))
+}
+
+/// Waits for `duration`. On a host that cannot complete the wait this
+/// future remains pending until dropped; it never reports elapsed time
+/// that did not pass. Use [`try_sleep`] to handle that failure explicitly.
+pub fn sleep(duration: Duration) -> BoxFuture<'static, ()> {
+	Box::pin(async move {
+		if let Err(error) = try_sleep(duration).await {
+			leptos::logging::warn!(
+				"leptoskit_query: {error}; use try_sleep to handle timer failures"
+			);
+			std::future::pending::<()>().await;
+		}
+	})
+}
+
+#[cfg(any(not(target_arch = "wasm32"), feature = "browser"))]
+async fn default_try_sleep(duration: Duration) -> Result<(), SleepError> {
+	default_sleep(duration).await;
+	Ok(())
 }
 
 // ---- native ----------------------------------------------------------------
@@ -355,15 +407,24 @@ fn default_now_ms() -> u64 {
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "guest", not(feature = "browser")))]
-fn default_sleep(duration: Duration) -> BoxFuture<'static, ()> {
-	Box::pin(async move {
-		// An old host answers `Unavailable`. Say so once rather than silently
-		// treating the wait as complete; `has_timer` keeps interval loops off
-		// there, and an app can still install its own provider.
-		if leptoskit_bridge::guest::sleep(duration).await.is_err() {
-			warn_missing_host("a timer");
-		}
-	})
+async fn default_try_sleep(mut duration: Duration) -> Result<(), SleepError> {
+	// Bound each host request while preserving long cache lifetimes. Every
+	// chunk must finish before the next one is submitted.
+	while !duration.is_zero() {
+		let chunk = duration.min(leptoskit_bridge::timer::MAX_SLEEP);
+		leptoskit_bridge::guest::sleep(chunk)
+			.await
+			.map_err(|error| {
+				if error == leptoskit_bridge::Error::Unavailable {
+					SleepError::Unavailable
+				} else {
+					SleepError::Rejected
+				}
+			})?;
+		duration -= chunk;
+	}
+
+	Ok(())
 }
 
 #[cfg(all(
@@ -371,16 +432,12 @@ fn default_sleep(duration: Duration) -> BoxFuture<'static, ()> {
 	not(feature = "browser"),
 	not(feature = "guest")
 ))]
-fn default_sleep(_duration: Duration) -> std::future::Ready<()> {
-	warn_missing_host("a timer");
-	std::future::ready(())
+fn default_try_sleep(_duration: Duration) -> std::future::Ready<Result<(), SleepError>> {
+	std::future::ready(Err(SleepError::Unavailable))
 }
 
-/// Timers and clocks the host did not provide resolve to nothing rather than
-/// hang: retries run without backoff, unobserved queries are collected at
-/// once, interval refetching is off (see [`has_timer`]), and staleness
-/// degrades to "fresh forever" with a clock stuck at zero. Said once per
-/// process, for whichever is missing first.
+/// A missing clock leaves staleness at "fresh forever" until the app installs
+/// a provider. Timer failures are reported separately by [`try_sleep`].
 #[cfg(all(target_arch = "wasm32", not(feature = "browser")))]
 fn warn_missing_host(what: &str) {
 	static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

@@ -35,7 +35,7 @@ use crate::scope::QueryData;
 use crate::scope::QueryError;
 use crate::time::BoxFuture;
 use crate::time::now_ms;
-use crate::time::sleep;
+use crate::time::try_sleep;
 
 /// Where a mutation is in its life.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -1119,8 +1119,9 @@ fn schedule_gc<V, T, E, C>(
 
 	if let GcTime::Duration(gc_time) = gc_time {
 		spawn(async move {
-			sleep(gc_time).await;
-			cache.remove(id);
+			if try_sleep(gc_time).await.is_ok() {
+				cache.remove(id);
+			}
 		});
 	}
 }

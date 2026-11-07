@@ -243,3 +243,20 @@ fn compiled_rust_guest_sleeps_and_cancels() {
 	assert!(host.plugins().next_request().is_none());
 	assert_eq!(host.plugins().buffered_bytes(), 0);
 }
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the Rust wasm fixture"]
+fn compiled_rust_guest_reports_missing_timer_as_an_error() {
+	let path = std::env::var("LEPTOSKIT_TIMER_GUEST").expect("fixture wasm path");
+	let wasm = std::fs::read(path).expect("read fixture");
+	let mut host = WasmHost::headless(&wasm).expect("compile fixture");
+	host.start(100.0, 100.0)
+		.expect("unsupported timer returns an error");
+	assert_eq!(
+		host.dispatch_wire(0, EventKind::Press, None)
+			.expect("inspect result"),
+		EventOutcome::Handled
+	);
+	assert!(host.plugins().next_request().is_none());
+	assert!(host.next_timer_deadline().is_none());
+}

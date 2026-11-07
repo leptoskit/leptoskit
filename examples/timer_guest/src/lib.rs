@@ -31,6 +31,16 @@ thread_local! {
 pub extern "C" fn leptoskit_main() {
 	TASK.with_borrow_mut(|task| {
 		*task = Some(Box::pin(async {
+			if !leptoskit_bridge::guest::timer_available() {
+				assert_eq!(
+					leptoskit_query::try_sleep(Duration::from_millis(1)).await,
+					Err(leptoskit_query::SleepError::Unavailable)
+				);
+				assert!(leptoskit_query::try_sleep(Duration::ZERO).await.is_ok());
+				DONE.with(|done| done.set(true));
+				return;
+			}
+
 			// Submit a long sleep, keep it across a shorter wait, then drop it
 			// while the host already runs it. The host must cancel it rather
 			// than let it keep the guest alive or complete later.
@@ -38,11 +48,11 @@ pub extern "C" fn leptoskit_main() {
 			let payload = encode(Duration::from_secs(1)).expect("encode");
 			let abandoned = client.call(SLEEP, &payload).expect("submit");
 
-			leptoskit_bridge::guest::sleep(Duration::from_millis(15))
+			leptoskit_query::try_sleep(Duration::from_millis(15))
 				.await
 				.expect("first sleep");
 			drop(abandoned);
-			leptoskit_bridge::guest::sleep(Duration::from_millis(1))
+			leptoskit_query::try_sleep(Duration::from_millis(1))
 				.await
 				.expect("second sleep");
 			DONE.with(|done| done.set(true));
