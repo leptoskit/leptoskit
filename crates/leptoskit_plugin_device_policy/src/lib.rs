@@ -154,6 +154,7 @@ impl Capabilities {
 		if value & !Self::KNOWN != 0 {
 			return Err(Error::InvalidArgument);
 		}
+
 		Ok(Self(value))
 	}
 
@@ -210,6 +211,7 @@ impl Status {
 	/// Strictly validates a versioned status reply.
 	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
 		let mut input = Decoder::new(bytes);
+
 		if input.u32()? != 1 {
 			return Err(Error::InvalidArgument);
 		}
@@ -217,14 +219,17 @@ impl Status {
 		let state = AdminState::decode(input.u32()?)?;
 		let capabilities = Capabilities::decode(input.u32()?)?;
 		let camera_disabled = optional_flag(input.u32()?)?;
+
 		let password_quality = match input.u32()? {
 			0 => None,
 			value => Some(PasswordQuality::decode(value.wrapping_sub(1))?),
 		};
+
 		let password_minimum_length = match input.u32()? {
 			u32::MAX => None,
 			value => Some(value),
 		};
+
 		input.finish()?;
 
 		if state != AdminState::Active
@@ -267,6 +272,7 @@ impl Status {
 			None => 0,
 			Some(quality) => (quality as u32) + 1,
 		});
+
 		output.u32(self.password_minimum_length.unwrap_or(u32::MAX));
 		Ok(output.finish())
 	}
@@ -378,22 +384,28 @@ impl WipeRequest {
 		} else {
 			0
 		});
+
 		output.finish()
 	}
 
 	/// Requires the confirmation token; unknown flags are rejected.
 	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
 		let mut input = Decoder::new(bytes);
+
 		if input.u32()? != 1 {
 			return Err(Error::InvalidArgument);
 		}
+
 		if input.u32()? != WIPE_CONFIRMATION_TOKEN {
 			return Err(Error::InvalidArgument);
 		}
+
 		let flags = input.u32()?;
+
 		if flags & !WIPE_FLAG_EXTERNAL_STORAGE != 0 {
 			return Err(Error::InvalidArgument);
 		}
+
 		input.finish()?;
 		Ok(Self {
 			wipe_external_storage: flags & WIPE_FLAG_EXTERNAL_STORAGE != 0,
@@ -416,15 +428,18 @@ pub fn encode_password_minimum_length(length: u32) -> Result<[u8; 4], Error> {
 	if length == u32::MAX {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(length.to_le_bytes())
 }
 
 /// Decodes an exact password minimum length request.
 pub fn decode_password_minimum_length(bytes: &[u8]) -> Result<u32, Error> {
 	let length = word(bytes)?;
+
 	if length == u32::MAX {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(length)
 }
 
@@ -433,6 +448,7 @@ pub fn validate_empty(method: MethodId, payload: &[u8]) -> Result<(), Error> {
 	if !matches!(method, STATUS | LOCK_NOW | REMOVE_ACTIVE) {
 		return Err(Error::Unavailable);
 	}
+
 	if payload.is_empty() {
 		Ok(())
 	} else {
@@ -467,9 +483,11 @@ fn validate_text(value: &str, limit: usize) -> Result<(), Error> {
 	if value.len() > limit {
 		return Err(Error::TooLarge);
 	}
+
 	if value.trim().is_empty() || value.contains('\0') {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(())
 }
 
@@ -662,6 +680,7 @@ mod tests {
 		for length in 0..encoded.len() {
 			assert!(Status::decode(&encoded[..length]).is_err());
 		}
+
 		assert!(Capabilities::decode(1 << 5).is_err());
 		assert_eq!(
 			Status::decode(&flags(&[2, 0, 0, 0, 0, u32::MAX])),
@@ -770,6 +789,7 @@ mod tests {
 		);
 		assert_eq!(validate_empty(STATUS, &[]), Ok(()));
 		assert_eq!(validate_empty(LOCK_NOW, &[0]), Err(Error::InvalidArgument));
+
 		assert_eq!(
 			validate_empty(SET_PASSWORD_QUALITY, &[]),
 			Err(Error::Unavailable)

@@ -40,6 +40,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
 
     func read() async throws -> NfcRecord {
         guard continuation == nil else { throw PluginError.busy }
+
         guard NFCNDEFReaderSession.readingAvailable else { throw PluginError.unavailable }
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
@@ -58,6 +59,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
             finish(.failure(PluginError.unavailable))
             return
         }
+
         finish(Result { try Self.decode(record) })
     }
 
@@ -70,6 +72,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
 
     private func map(_ error: Error) -> PluginError {
         let nfc = error as NSError
+
         if nfc.domain == NFCErrorDomain, nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
             return .cancelled
         }
@@ -81,14 +84,18 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
         case .nfcWellKnown:
             if record.type == Data("U".utf8) {
                 let uri = record.wellKnownTypeURIPayload()?.absoluteString ?? ""
+
                 guard !uri.isEmpty, uri.utf8.count <= 4096 else { throw PluginError.invalidArgument }
                 return NfcRecord(kind: 1, value: uri)
             }
+
             if record.type == Data("T".utf8) {
                 let text = record.wellKnownTypeTextPayload().0 ?? ""
+
                 guard !text.isEmpty, text.utf8.count <= 4096 else { throw PluginError.invalidArgument }
                 return NfcRecord(kind: 0, value: text)
             }
+
             fallthrough
         default:
             throw PluginError.unavailable
@@ -126,7 +133,9 @@ public final class NfcPlugin: NativePlugin {
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
+
         guard methods.contains(method) else { throw PluginError.unavailable }
+
         guard payload.count == 0 else { throw PluginError.invalidArgument }
 
         if method == 0 {
@@ -146,6 +155,7 @@ public final class NfcPlugin: NativePlugin {
         guard !record.value.isEmpty, record.value.utf8.count <= 4096 else {
             throw PluginError.invalidArgument
         }
+
         var data = Data()
         var kind = record.kind.littleEndian
         withUnsafeBytes(of: &kind) { data.append(contentsOf: $0) }

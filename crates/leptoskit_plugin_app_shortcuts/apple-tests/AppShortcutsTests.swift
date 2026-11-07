@@ -27,6 +27,7 @@ private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
     #expect(call > 0)
     var request = lk_request()
     #expect(lk_bridge_next_request(bridge, &request) == 1)
+
     return NativeBuffer(taking: request.payload)
 }
 
@@ -42,11 +43,13 @@ private func encodeList(_ items: [(String, String, String)]) -> [UInt8] {
         bytes.append(contentsOf: utf8)
     }
     appendU32(UInt32(items.count))
+
     for item in items {
         appendString(item.0)
         appendString(item.1)
         appendString(item.2)
     }
+
     return bytes
 }
 

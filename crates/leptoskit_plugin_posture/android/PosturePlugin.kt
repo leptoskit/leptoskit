@@ -218,6 +218,7 @@ class PosturePlugin(
                 output.putFloat(hinge.x)
                 output.putFloat(hinge.y)
                 output.putFloat(hinge.width)
+
                 output.putFloat(hinge.height)
                 output.putInt(hinge.angle)
             }

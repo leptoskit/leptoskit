@@ -73,6 +73,7 @@ where
 		use crate::js;
 		let container = js::container()?;
 		let mut handler = handler;
+
 		js::listen_event(&container, "message", move |event| {
 			if let Ok(data) = js::property(&event, "data")
 				&& let Ok(message) = js::from_js::<M>(&data)

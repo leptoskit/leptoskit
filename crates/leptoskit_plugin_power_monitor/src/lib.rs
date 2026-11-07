@@ -107,6 +107,7 @@ impl Snapshot {
 			Some(false) => 0,
 			Some(true) => 1,
 		});
+
 		output.u32(self.idle_ms.unwrap_or(u32::MAX));
 		output.finish()
 	}
@@ -114,21 +115,25 @@ impl Snapshot {
 	/// Decodes a versioned snapshot and rejects trailing bytes.
 	pub fn decode(bytes: &[u8]) -> Result<Self, BridgeError> {
 		let mut input = Decoder::new(bytes);
+
 		if input.u32()? != 1 {
 			return Err(BridgeError::InvalidArgument);
 		}
+
 		let on_battery = match input.u32()? {
 			u32::MAX => None,
 			0 => Some(false),
 			1 => Some(true),
 			_ => return Err(BridgeError::InvalidArgument),
 		};
+
 		let locked = match input.u32()? {
 			u32::MAX => None,
 			0 => Some(false),
 			1 => Some(true),
 			_ => return Err(BridgeError::InvalidArgument),
 		};
+
 		let idle = input.u32()?;
 		input.finish()?;
 		Ok(Self {
@@ -184,10 +189,12 @@ impl PowerMonitor {
 			Event::UnlockScreen => self.locked = Some(false),
 			_ => {}
 		}
+
 		if self.events.len() >= EVENT_CAPACITY {
 			self.events.pop_front();
 			self.lost = self.lost.saturating_add(1);
 		}
+
 		self.events.push_back(event);
 	}
 
@@ -241,12 +248,14 @@ impl Plugin for PowerMonitor {
 				if !payload.is_empty() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				Ok(self.snapshot().encode())
 			}
 			EVENTS => {
 				if !payload.is_empty() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				let (lost, events) = self.drain();
 				let mut output = Encoder::with_capacity(16 + events.len() * 4);
 				output.u32((lost >> 32) as u32);
@@ -255,12 +264,14 @@ impl Plugin for PowerMonitor {
 				for event in events {
 					output.u32(event.encode());
 				}
+
 				Ok(output.finish())
 			}
 			IDLE_TIME => {
 				if !payload.is_empty() {
 					return Err(BridgeError::InvalidArgument);
 				}
+
 				let mut output = Encoder::with_capacity(4);
 				output.u32(self.system_idle_time()?);
 				Ok(output.finish())
@@ -285,10 +296,13 @@ pub fn decode_events(bytes: &[u8]) -> Result<(u64, Vec<Event>), BridgeError> {
 	let lost_lo = u64::from(input.u32()?);
 	let count = input.u32()? as usize;
 	let mut events = Vec::with_capacity(count);
+
 	for _ in 0..count {
 		events.push(Event::decode(input.u32()?)?);
 	}
+
 	input.finish()?;
+
 	Ok(((lost_hi << 32) | lost_lo, events))
 }
 
@@ -343,6 +357,7 @@ fn system_idle_time() -> Result<u32, Error> {
 	if unsafe { GetLastInputInfo(&mut info) } == 0 {
 		return Err(Error::Unavailable);
 	}
+
 	let ticks = unsafe { GetTickCount() };
 	Ok(ticks.wrapping_sub(info.dwTime))
 }
@@ -383,9 +398,11 @@ mod tests {
 	#[test]
 	fn queue_overflow_reports_lost_events_and_bridge_drains() {
 		let mut monitor = PowerMonitor::new();
+
 		for _ in 0..EVENT_CAPACITY + 3 {
 			monitor.push(Event::Suspend);
 		}
+
 		assert_eq!(monitor.lost(), 3);
 		let (lost, events) = monitor.drain();
 		assert_eq!(lost, 3);
@@ -403,6 +420,7 @@ mod tests {
 			monitor.invoke(EVENTS, Bytes::from_static(b"x")),
 			Err(BridgeError::InvalidArgument)
 		);
+
 		assert_eq!(
 			monitor.invoke(MethodId(9), Bytes::new()),
 			Err(BridgeError::Unavailable)

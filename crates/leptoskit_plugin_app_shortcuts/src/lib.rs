@@ -91,16 +91,21 @@ impl ShortcutList {
 	/// Builds a list of at most eight shortcuts with unique ids.
 	pub fn new(items: impl IntoIterator<Item = Shortcut>) -> Result<Self, Error> {
 		let items: Vec<_> = items.into_iter().collect();
+
 		if items.len() > MAX_SHORTCUTS {
 			return Err(Error::TooLarge);
 		}
+
 		let mut seen = Vec::with_capacity(items.len());
+
 		for item in &items {
 			if seen.iter().any(|id| id == &item.id) {
 				return Err(Error::InvalidArgument);
 			}
+
 			seen.push(item.id.clone());
 		}
+
 		Ok(Self { items })
 	}
 
@@ -113,16 +118,21 @@ impl ShortcutList {
 	/// Wire: count, then id/title/subtitle length-prefixed UTF-8 strings.
 	pub fn encode(&self) -> Result<Bytes, Error> {
 		let mut capacity = 4;
+
 		for item in &self.items {
 			capacity += 12 + item.id.len() + item.title.len() + item.subtitle.len();
 		}
+
 		let mut encoder = Encoder::with_capacity(capacity);
 		encoder.u32(u32::try_from(self.items.len()).map_err(|_| Error::TooLarge)?);
+
 		for item in &self.items {
 			encoder.bytes(item.id.as_bytes())?;
 			encoder.bytes(item.title.as_bytes())?;
+
 			encoder.bytes(item.subtitle.as_bytes())?;
 		}
+
 		Ok(encoder.finish())
 	}
 
@@ -130,16 +140,21 @@ impl ShortcutList {
 	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
 		let mut decoder = Decoder::new(payload);
 		let count = decoder.u32()? as usize;
+
 		if count > MAX_SHORTCUTS {
 			return Err(Error::TooLarge);
 		}
+
 		let mut items = Vec::with_capacity(count);
+
 		for _ in 0..count {
 			let id = decoder.string()?;
 			let title = decoder.string()?;
+
 			let subtitle = decoder.string()?;
 			items.push(Shortcut::new(id, title, subtitle)?);
 		}
+
 		decoder.finish()?;
 		Self::new(items)
 	}
@@ -149,6 +164,7 @@ fn validate_id(value: &str) -> Result<(), Error> {
 	if value.is_empty() || value.len() > MAX_ID_BYTES {
 		return Err(Error::InvalidArgument);
 	}
+
 	if !value
 		.bytes()
 		.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
@@ -162,9 +178,11 @@ fn validate_text(value: &str, max: usize, allow_empty: bool) -> Result<(), Error
 	if (!allow_empty && value.is_empty()) || value.len() > max {
 		return Err(Error::InvalidArgument);
 	}
+
 	if value.chars().any(char::is_control) {
 		return Err(Error::InvalidArgument);
 	}
+
 	Ok(())
 }
 
@@ -182,6 +200,7 @@ pub fn decode_launch_id(bytes: &[u8]) -> Result<Option<String>, Error> {
 	let mut decoder = Decoder::new(bytes);
 	let id = decoder.string()?;
 	decoder.finish()?;
+
 	if id.is_empty() {
 		Ok(None)
 	} else {
@@ -193,9 +212,11 @@ pub fn decode_launch_id(bytes: &[u8]) -> Result<Option<String>, Error> {
 /// Encodes an optional launch id for native replies.
 pub fn encode_launch_id(id: Option<&str>) -> Result<Bytes, Error> {
 	let value = id.unwrap_or("");
+
 	if !value.is_empty() {
 		validate_id(value)?;
 	}
+
 	let mut encoder = Encoder::with_capacity(4 + value.len());
 	encoder.bytes(value.as_bytes())?;
 	Ok(encoder.finish())
@@ -401,6 +422,7 @@ mod tests {
 		plugin.note_launch("inbox").unwrap();
 		let reply = plugin.invoke(CONSUME_LAUNCH, Bytes::new()).unwrap();
 		assert_eq!(decode_launch_id(&reply).unwrap().as_deref(), Some("inbox"));
+
 		let reply = plugin.invoke(CONSUME_LAUNCH, Bytes::new()).unwrap();
 		assert_eq!(decode_launch_id(&reply).unwrap(), None);
 		assert!(plugin.invoke(CLEAR, Bytes::new()).unwrap().is_empty());

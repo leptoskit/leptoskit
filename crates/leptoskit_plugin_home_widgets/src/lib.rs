@@ -68,18 +68,23 @@ impl Capability {
 	#[must_use]
 	pub fn encode(self) -> [u8; 4] {
 		let mut flags = 0u32;
+
 		if self.supported {
 			flags |= Self::SUPPORTED;
 		}
+
 		if self.can_reload {
 			flags |= Self::CAN_RELOAD;
 		}
+
 		if self.can_query_installed {
 			flags |= Self::CAN_QUERY_INSTALLED;
 		}
+
 		if self.shared_store {
 			flags |= Self::SHARED_STORE;
 		}
+
 		flags.to_le_bytes()
 	}
 
@@ -88,9 +93,11 @@ impl Capability {
 		let flags = u32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArgument)?);
 		let known =
 			Self::SUPPORTED | Self::CAN_RELOAD | Self::CAN_QUERY_INSTALLED | Self::SHARED_STORE;
+
 		if flags & !known != 0 {
 			return Err(Error::InvalidArgument);
 		}
+
 		Ok(Self {
 			supported: flags & Self::SUPPORTED != 0,
 			can_reload: flags & Self::CAN_RELOAD != 0,
@@ -116,6 +123,7 @@ impl Installed {
 	/// Validates the exact four-byte reply.
 	pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
 		let value = u32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArgument)?);
+
 		match value {
 			0 => Ok(Self::Unknown),
 			1 => Ok(Self::None),
@@ -190,6 +198,7 @@ impl Kind {
 		if payload.len() > 68 {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut input = Decoder::new(payload);
 		let kind = Self::new(input.string()?)?;
 		input.finish()?;
@@ -232,8 +241,10 @@ fn validate_url(value: &str) -> Result<(), Error> {
 	if value.is_empty() {
 		return Ok(());
 	}
+
 	let has_scheme =
 		value.starts_with("https://") || value.starts_with("http://") || value.contains(':');
+
 	if value.len() > MAX_URL_BYTES
 		|| value.contains('\0')
 		|| value.chars().any(char::is_control)
@@ -317,9 +328,11 @@ impl Snapshot {
 		);
 		output.bytes(self.kind.as_str().as_bytes())?;
 		output.u32(self.family as u32);
+
 		for value in [&self.title, &self.body, &self.url] {
 			output.bytes(value.as_bytes())?;
 		}
+
 		Ok(output.finish())
 	}
 
@@ -328,12 +341,14 @@ impl Snapshot {
 		if payload.len() > MAX_SNAPSHOT_BYTES {
 			return Err(Error::InvalidArgument);
 		}
+
 		let mut input = Decoder::new(payload);
 		let kind = Kind::new(input.string()?)?;
 		let family = Family::from_u32(input.u32()?)?;
 		let title = input.string()?;
 		let body = input.string()?;
 		let url = input.string()?;
+
 		input.finish()?;
 		Self::new(kind, family, title, body, url)
 	}
@@ -379,6 +394,7 @@ mod tests {
 		for length in 0..bytes.len() {
 			assert!(Snapshot::decode(&bytes[..length]).is_err());
 		}
+
 		let mut trailing = bytes.to_vec();
 		trailing.push(0);
 		assert!(Snapshot::decode(&trailing).is_err());
@@ -386,6 +402,7 @@ mod tests {
 		for id in ["", "../a", "bad\0id", "é", &"a".repeat(65)] {
 			assert!(Kind::new(id).is_err());
 		}
+
 		assert!(Snapshot::new(Kind::new("status").unwrap(), Family::Small, "\t", "", "").is_err());
 		assert!(
 			Snapshot::new(

@@ -168,6 +168,7 @@ impl OverlayPermission {
 		let mut input = Decoder::new(bytes);
 		let value = input.u32()?;
 		input.finish()?;
+
 		match value {
 			0 => Ok(Self::Unsupported),
 			1 => Ok(Self::Denied),

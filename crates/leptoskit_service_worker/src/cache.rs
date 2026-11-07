@@ -19,6 +19,7 @@ pub async fn open(name: &str) -> Result<Cache> {
 	#[cfg(not(target_arch = "wasm32"))]
 	{
 		let _ = name;
+
 		js::unavailable_async("caches.open").await
 	}
 }
@@ -39,6 +40,7 @@ pub async fn has(name: &str) -> Result<bool> {
 	#[cfg(not(target_arch = "wasm32"))]
 	{
 		let _ = name;
+
 		js::unavailable_async("caches.has").await
 	}
 }
@@ -59,6 +61,7 @@ pub async fn delete(name: &str) -> Result<bool> {
 	#[cfg(not(target_arch = "wasm32"))]
 	{
 		let _ = name;
+
 		js::unavailable_async("caches.delete").await
 	}
 }
@@ -180,14 +183,17 @@ impl Cache {
 			let requests = js::call_method(&self.inner, "keys", &[]).await?;
 			let list = js_sys::Array::from(&requests);
 			let mut urls = Vec::with_capacity(list.length() as usize);
+
 			for index in 0..list.length() {
 				let request = list.get(index);
 				let url = js_sys::Reflect::get(&request, &"url".into())
 					.ok()
 					.and_then(|value| value.as_string())
 					.ok_or_else(|| crate::Error::Browser("cache request has no url".into()))?;
+
 				urls.push(url);
 			}
+
 			Ok(urls)
 		}
 		#[cfg(not(target_arch = "wasm32"))]

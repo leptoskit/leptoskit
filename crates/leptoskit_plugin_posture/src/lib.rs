@@ -347,6 +347,7 @@ impl Posture {
 			output.u32(hinge.fold as u32);
 			output.u32(hinge.axis as u32);
 			output.u32(flag(hinge.occluding));
+
 			output.u32(flag(hinge.separating));
 			output.u32(u32::from(hinge.region.is_some()));
 
@@ -602,6 +603,7 @@ mod tests {
 			Posture::decode(&bytes[..bytes.len() - 1]),
 			Err(Error::InvalidArgument)
 		);
+
 		let mut trailing = bytes;
 		trailing.push(0);
 		assert_eq!(Posture::decode(&trailing), Err(Error::InvalidArgument));

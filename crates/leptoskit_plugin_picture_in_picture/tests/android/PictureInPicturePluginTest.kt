@@ -33,6 +33,7 @@ class PictureInPicturePluginTest {
                     val pip = capabilities.int
                     val overlay = capabilities.int
                     assertTrue(pip == 0 || pip == 1)
+
                     assertEquals(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) 1 else 0, overlay)
 
                     val snapshot =

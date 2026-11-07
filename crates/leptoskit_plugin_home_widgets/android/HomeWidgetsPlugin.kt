@@ -39,6 +39,7 @@ class HomeWidgetsPlugin(
         payload: ByteBuffer,
     ): ByteArray {
         check(Looper.myLooper() == Looper.getMainLooper())
+
         if (closed) throw PluginException(PluginException.CANCELLED)
         currentCoroutineContext().ensureActive()
 
@@ -90,15 +91,20 @@ class HomeWidgetsPlugin(
     private fun reload(kind: String?) {
         val manager = AppWidgetManager.getInstance(context) ?: throw PluginException(PluginException.UNAVAILABLE)
         val providers = providers()
+
         if (providers.isEmpty()) throw PluginException(PluginException.UNAVAILABLE)
+
         for (provider in providers) {
             if (kind != null && !provider.className.contains(kind, ignoreCase = true)) {
                 // Kind filtering is best-effort by provider class name; apps that
                 // need exact mapping should name providers after their kinds.
                 continue
             }
+
             val ids = manager.getAppWidgetIds(provider)
+
             if (ids.isEmpty()) continue
+
             val intent =
                 Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE).apply {
                     component = provider
@@ -106,6 +112,7 @@ class HomeWidgetsPlugin(
                 }
             context.sendBroadcast(intent)
         }
+
         if (kind != null) {
             val matched =
                 providers.any { provider ->
@@ -123,12 +130,15 @@ class HomeWidgetsPlugin(
     private fun installed(kind: String): Int {
         val manager = AppWidgetManager.getInstance(context) ?: return INSTALLED_UNKNOWN
         val providers = providers()
+
         if (providers.isEmpty()) return INSTALLED_NONE
         val matching =
             providers.filter { it.className.contains(kind, ignoreCase = true) }.ifEmpty { providers }
+
         return if (matching.any { manager.getAppWidgetIds(it).isNotEmpty() }) {
             INSTALLED_SOME
         } else {
+
             INSTALLED_NONE
         }
     }
@@ -143,6 +153,7 @@ class HomeWidgetsPlugin(
             }
         val resolved =
             if (flags != null) {
+
                 context.packageManager.queryBroadcastReceivers(intent, flags)
             } else {
                 @Suppress("DEPRECATION")
@@ -203,13 +214,17 @@ private class Snapshot(
             val reader = Reader(payload, MAX_SNAPSHOT)
             val kind = reader.identifier()
             val family = reader.u32()
+
             if (family !in 0..4) throw PluginException(PluginException.INVALID_ARGUMENT)
             reader.text(256, multiline = false, required = true)
             reader.text(1024, multiline = true, required = false)
+
             val url = reader.text(2048, multiline = false, required = false)
+
             if (url.isNotEmpty() && (!url.contains(':') || url.any { it.code < 32 || it.code == 127 })) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
             reader.finish()
             val end = payload.position()
             val raw = ByteArray(end - start)
@@ -244,6 +259,7 @@ private class Reader(
 
     fun identifier(): String {
         val value = text(64, multiline = false, required = true)
+
         if (!value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
@@ -257,9 +273,11 @@ private class Reader(
     ): String {
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
         val length = buffer.int
+
         if (length < 0 || length > maximum || length > buffer.remaining()) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         val bytes = ByteArray(length)
         buffer.get(bytes)
         val value =
@@ -273,6 +291,7 @@ private class Reader(
             } catch (_: CharacterCodingException) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
         if (required && value.trim().isEmpty()) throw PluginException(PluginException.INVALID_ARGUMENT)
         if (value.any { ch ->
                 val code = ch.code

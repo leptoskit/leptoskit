@@ -42,6 +42,7 @@ class PosturePluginTest {
         assertEquals(PosturePlugin.VERTICAL, view.int)
         assertEquals(PosturePlugin.FALSE, view.int)
         assertEquals(PosturePlugin.TRUE, view.int)
+
         assertEquals(1, view.int)
         assertEquals(0.48f, view.float, 0f)
         assertEquals(0f, view.float, 0f)

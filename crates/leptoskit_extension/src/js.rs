@@ -186,6 +186,7 @@ mod imp {
 			}
 			// Only now can the handler go: the browser no longer calls it.
 			drop(self.handler.take());
+
 			if let Some(on_drop) = self.on_drop.take() {
 				on_drop();
 			}

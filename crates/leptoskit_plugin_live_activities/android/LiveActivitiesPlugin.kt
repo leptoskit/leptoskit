@@ -15,6 +15,7 @@ class LiveActivitiesPlugin : NativePlugin {
         payload: ByteBuffer,
     ): ByteArray {
         if (closed) throw PluginException(PluginException.CANCELLED)
+
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
         // Payload shape is validated on the Rust side for guest callers; the
         // Android host still refuses the capability rather than inventing state.

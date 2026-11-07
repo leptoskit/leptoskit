@@ -82,6 +82,7 @@ public final class AppShortcutsPlugin: NativePlugin {
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
+
         guard methods.contains(method) else { throw PluginError.unavailable }
 
         switch method {
@@ -108,10 +109,12 @@ public final class AppShortcutsPlugin: NativePlugin {
         try payload.withUnsafeBytes { bytes in
             var offset = 0
             let count = try readU32(bytes, &offset)
+
             guard count <= 8 else { throw PluginError.tooLarge }
             var items: [AppShortcutItem] = []
             items.reserveCapacity(Int(count))
             var seen = Set<String>()
+
             for _ in 0..<count {
                 let id = try readString(bytes, &offset, max: 64)
                 let title = try readString(bytes, &offset, max: 128)
@@ -119,9 +122,12 @@ public final class AppShortcutsPlugin: NativePlugin {
                 try validateId(id)
                 try validateText(title, allowEmpty: false)
                 try validateText(subtitle, allowEmpty: true)
+
                 guard seen.insert(id).inserted else { throw PluginError.invalidArgument }
+
                 items.append(AppShortcutItem(id: id, title: title, subtitle: subtitle))
             }
+
             guard offset == bytes.count else { throw PluginError.invalidArgument }
             return items
         }
@@ -150,6 +156,7 @@ public final class AppShortcutsPlugin: NativePlugin {
         guard allowEmpty || !value.isEmpty, value.utf8.count <= 128 else {
             throw PluginError.invalidArgument
         }
+
         guard value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
             throw PluginError.invalidArgument
         }
@@ -168,9 +175,11 @@ public final class AppShortcutsPlugin: NativePlugin {
         max: Int
     ) throws -> String {
         let length = Int(try readU32(bytes, &offset))
+
         guard length <= max, offset + length <= bytes.count else { throw PluginError.invalidArgument }
         let slice = bytes[offset..<(offset + length)]
         offset += length
+
         guard let value = String(bytes: slice, encoding: .utf8) else { throw PluginError.invalidArgument }
         return value
     }

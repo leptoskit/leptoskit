@@ -97,6 +97,7 @@ pub fn on_added(changed: impl Fn(Permissions) + 'static) -> Result<crate::Listen
 			if let Ok(permissions) = js::from_js::<Permissions>(&permissions) {
 				changed(permissions);
 			}
+
 			wasm_bindgen::JsValue::UNDEFINED
 		});
 	}
@@ -120,6 +121,7 @@ pub fn on_removed(changed: impl Fn(Permissions) + 'static) -> Result<crate::List
 			if let Ok(permissions) = js::from_js::<Permissions>(&permissions) {
 				changed(permissions);
 			}
+
 			wasm_bindgen::JsValue::UNDEFINED
 		});
 	}

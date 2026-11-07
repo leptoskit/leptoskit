@@ -360,6 +360,7 @@ mod tests {
 			.submenu(Submenu("view").item(Command("zoom")))
 			.build()
 			.unwrap();
+
 		match &definition.items()[0] {
 			Item::Command { id, label, .. } => {
 				assert_eq!(id, "save");
@@ -367,6 +368,7 @@ mod tests {
 			}
 			_ => panic!("expected command"),
 		}
+
 		match &definition.items()[1] {
 			Item::Check { id, label, .. } => {
 				assert_eq!(id, "pin");
@@ -374,6 +376,7 @@ mod tests {
 			}
 			_ => panic!("expected check"),
 		}
+
 		match &definition.items()[2] {
 			Item::Submenu {
 				id, label, items, ..

@@ -91,6 +91,7 @@ impl PushManager {
 			js_sys::Reflect::set(&opts, &"applicationServerKey".into(), &buffer)
 				.map_err(|error| Error::Browser(js::message(&error)))?;
 			let value = js::call_method(&self.inner, "subscribe", &[opts.into()]).await?;
+
 			subscription_from_js(&value)
 		}
 		#[cfg(not(target_arch = "wasm32"))]
@@ -109,9 +110,11 @@ impl PushManager {
 		#[cfg(target_arch = "wasm32")]
 		{
 			let value = js::call_method(&self.inner, "getSubscription", &[]).await?;
+
 			if value.is_null() || value.is_undefined() {
 				return Ok(None);
 			}
+
 			subscription_from_js(&value).map(Some)
 		}
 		#[cfg(not(target_arch = "wasm32"))]
@@ -130,9 +133,11 @@ impl PushManager {
 		#[cfg(target_arch = "wasm32")]
 		{
 			let value = js::call_method(&self.inner, "getSubscription", &[]).await?;
+
 			if value.is_null() || value.is_undefined() {
 				return Ok(false);
 			}
+
 			let result = js::call_method(&value, "unsubscribe", &[]).await?;
 			Ok(result.as_bool().unwrap_or(false))
 		}
@@ -178,6 +183,7 @@ fn buffer_to_bytes(value: &wasm_bindgen::JsValue) -> Result<Vec<u8>> {
 	if value.is_null() || value.is_undefined() {
 		return Err(Error::Browser("push key missing".into()));
 	}
+
 	let array = js_sys::Uint8Array::new(value);
 	let mut bytes = vec![0_u8; array.length() as usize];
 	array.copy_to(&mut bytes);
@@ -187,9 +193,11 @@ fn buffer_to_bytes(value: &wasm_bindgen::JsValue) -> Result<Vec<u8>> {
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn decode_base64_url(value: &str) -> Result<Vec<u8>> {
 	let mut padded = value.replace('-', "+").replace('_', "/");
+
 	while !padded.len().is_multiple_of(4) {
 		padded.push('=');
 	}
+
 	base64_decode(&padded)
 		.map_err(|error| Error::Json(format!("invalid applicationServerKey: {error}")))
 }
@@ -206,27 +214,34 @@ fn encode_base64_url(bytes: &[u8]) -> String {
 fn base64_encode(bytes: &[u8]) -> String {
 	const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+
 	for chunk in bytes.chunks(3) {
 		let mut n = u32::from(chunk[0]) << 16;
+
 		if chunk.len() > 1 {
 			n |= u32::from(chunk[1]) << 8;
 		}
+
 		if chunk.len() > 2 {
 			n |= u32::from(chunk[2]);
 		}
+
 		out.push(TABLE[((n >> 18) & 63) as usize] as char);
 		out.push(TABLE[((n >> 12) & 63) as usize] as char);
+
 		if chunk.len() > 1 {
 			out.push(TABLE[((n >> 6) & 63) as usize] as char);
 		} else {
 			out.push('=');
 		}
+
 		if chunk.len() > 2 {
 			out.push(TABLE[(n & 63) as usize] as char);
 		} else {
 			out.push('=');
 		}
 	}
+
 	out
 }
 
@@ -246,8 +261,10 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
 	if !input.len().is_multiple_of(4) {
 		return Err("invalid base64 length");
 	}
+
 	let bytes = input.as_bytes();
 	let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+
 	for chunk in bytes.chunks(4) {
 		let first = digit(chunk[0])?;
 		let second = digit(chunk[1])?;
@@ -261,18 +278,22 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
 		} else {
 			digit(chunk[3])?
 		};
+
 		let packed = (u32::from(first) << 18)
 			| (u32::from(second) << 12)
 			| (u32::from(third) << 6)
 			| u32::from(fourth);
 		out.push(((packed >> 16) & 0xff) as u8);
+
 		if chunk[2] != b'=' {
 			out.push(((packed >> 8) & 0xff) as u8);
 		}
+
 		if chunk[3] != b'=' {
 			out.push((packed & 0xff) as u8);
 		}
 	}
+
 	Ok(out)
 }
 

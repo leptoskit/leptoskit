@@ -74,6 +74,7 @@ fn application_menu_events_updates_and_lease_restoration() {
 		.unwrap()
 		.clone();
 	let command = submenu.items().remove(0).as_menuitem().unwrap().clone();
+
 	let event = muda::MenuEvent {
 		id: command.id().clone(),
 	};
@@ -137,6 +138,7 @@ fn application_menu_events_updates_and_lease_restoration() {
 		std::ptr::from_ref(&*application.mainMenu().unwrap()),
 		std::ptr::from_ref(&*replacement)
 	));
+
 	application.setMainMenu(previous.as_deref());
 	assert_invalid_construction_rejected();
 }

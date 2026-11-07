@@ -43,6 +43,7 @@ private final class SystemHomeWidgetService: HomeWidgetService {
 
     func kinds() -> [String] {
         defaults.dictionaryRepresentation().keys.compactMap { key in
+
             guard key.hasPrefix(Self.prefix) else { return nil }
             return String(key.dropFirst(Self.prefix.count))
         }
@@ -95,6 +96,7 @@ public final class HomeWidgetsPlugin: NativePlugin {
             return Data()
         case 2:
             let kind = try payload.withUnsafeBytes { try KindReader($0).kind }
+
             guard let bytes = service.read(kind: kind) else { throw PluginError.unavailable }
             return bytes
         case 3:
@@ -117,9 +119,11 @@ public final class HomeWidgetsPlugin: NativePlugin {
 
     private func capability() -> Data {
         var flags: UInt32 = 1 | (1 << 1) // supported + can_reload
+
         if service.sharedStoreReady {
             flags |= 1 << 3
         }
+
         var data = Data(count: 4)
         withUnsafeBytes(of: flags.littleEndian) { data.replaceSubrange(0..<4, with: $0) }
         return data
@@ -146,16 +150,19 @@ private struct Snapshot {
         var reader = try Reader(bytes, maximum: 16 + 64 + 256 + 1024 + 2048)
         kind = try reader.identifier()
         let family = try reader.u32()
+
         guard (0...4).contains(family) else { throw PluginError.invalidArgument }
         _ = try reader.text(maximum: 256, multiline: false, required: true)
         _ = try reader.text(maximum: 1024, multiline: true, required: false)
         let url = try reader.text(maximum: 2048, multiline: false, required: false)
+
         if !url.isEmpty {
             guard url.contains(":"),
                   !url.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
                 throw PluginError.invalidArgument
             }
         }
+
         try reader.finish()
     }
 }
@@ -189,12 +196,15 @@ private struct Reader {
         guard bytes.count - offset >= 4 else { throw PluginError.invalidArgument }
         let length = Int(UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self)))
         offset += 4
+
         guard length <= maximum, length <= bytes.count - offset,
               let value = String(bytes: bytes[offset..<(offset + length)], encoding: .utf8) else {
             throw PluginError.invalidArgument
         }
         offset += length
+
         guard !required || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+
               !value.unicodeScalars.contains(where: {
                   ($0.value <= 31 || (127...159).contains($0.value))
                       && !(multiline && ($0.value == 10 || $0.value == 9))

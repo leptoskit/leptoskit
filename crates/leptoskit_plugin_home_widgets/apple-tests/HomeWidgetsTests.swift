@@ -44,6 +44,7 @@ private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
     #expect(plugin == 0)
     #expect(lk_bridge_grant(bridge, 0, 0, true) == 0)
     let call = bytes.withUnsafeBufferPointer { lk_bridge_submit(bridge, 0, 0, $0.baseAddress, $0.count) }
+
     #expect(call > 0)
     var request = lk_request()
     #expect(lk_bridge_next_request(bridge, &request) == 1)
