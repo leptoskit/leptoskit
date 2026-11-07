@@ -83,6 +83,8 @@ The legacy plugin list records access grants, which may include plugins omitted 
 
 The guest's requirements are covered by the release signature because `runtime.json` is a bundle file and the signature covers the manifest hash. A downloaded guest cannot supply the host side, so its labels are ignored.
 
+The C update report, Swift `NativeSyncReport`, and Kotlin `NativeSync` preserve the contract state. Generated iOS and Android update controls display its meaning alongside the downloaded/current status. Older libraries that omit `contract` show compatibility as unreported; unknown state strings fail decoding rather than being promoted to verified. Device execution of these controls remains a separate acceptance gate.
+
 ## Evidence states
 
 These are deliberately separate:

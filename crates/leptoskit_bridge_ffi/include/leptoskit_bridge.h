@@ -206,7 +206,10 @@ void lk_updates_destroy(lk_updates *updates);
  * and launch again. On failure outputs remain uninitialized. */
 int32_t lk_updates_launch(lk_updates *updates, lk_buffer *wasm, lk_buffer *metadata);
 /* Blocking HTTP + verification + atomic stage; never activates a guest.
- * Success metadata: {status:"current"|"staged",version:string,build:uint64}.
+ * Success metadata: {status:"current"|"staged",version:string,build:uint64,
+ * contract:"verified"|"incomplete"|"legacy"}. Contract states compare declared
+ * host requirements; none attest to the running application. Older libraries
+ * omit contract; callers must treat that absence as unreported, not verified.
  * On failure output remains uninitialized. */
 int32_t lk_updates_sync(lk_updates *updates, lk_buffer *metadata);
 /* Confirm only after native first-frame attachment succeeds. Receipts identify

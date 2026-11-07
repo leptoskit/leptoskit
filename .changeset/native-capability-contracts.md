@@ -2,6 +2,7 @@
 "leptoskit_cli": minor
 "leptoskit_codepush": minor
 "leptoskit_config": minor
+"leptoskit_bridge_ffi": minor
 ---
 
 # Versioned native capability contracts
@@ -15,3 +16,5 @@ Signed releases carry versioned required/optional requirements in `runtime.json`
 Guest requirements bind the bridge protocol as well as the rendering ABI. Explicitly optional plugins no longer enter the legacy required-plugin list. Watch preparation checks requirements before writing its stubs and emits a descriptor; standalone bundles place host evidence beside the output directory.
 
 Updates whose older-style plugin grants have no available implementation report `incomplete` while preserving the existing missing-plugin fallback. Explicit required entries still reject unavailable plugins; explicit optional entries may be omitted. A versioned host descriptor must agree with its own grant list before it can check a release.
+
+Generated iOS and Android update controls show whether host requirements were checked, plugin availability remains incomplete, or only legacy checks ran. A missing report from an older runtime is shown as unreported. None of these states claims that the updated app passed device tests.

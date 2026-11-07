@@ -165,6 +165,7 @@ fn launch_transfers_independent_buffers_and_preserves_receipt_for_runtime_valida
 		let report: Value = serde_json::from_slice(&take(report.assume_init())).unwrap();
 		assert_eq!(report["status"], "current");
 		assert_eq!(report["version"], "0.1.0");
+		assert_eq!(report["contract"], "legacy");
 		assert_eq!(lk_updates_confirm(updates, ptr::null(), 1), -1);
 		assert!(
 			String::from_utf8(take(lk_updates_error(updates)))

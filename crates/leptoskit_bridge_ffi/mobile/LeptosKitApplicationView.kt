@@ -175,17 +175,11 @@ class LeptosKitApplicationView(
             result.fold(
                 { report ->
                     staged = report.staged
-                    val message = updateMessage(report)
-                    setBusy(false, message)
+                    setBusy(false, report.message)
                 },
                 { showError("Update failed", it) },
             )
         }
-    }
-
-    private fun updateMessage(report: NativeSync): String {
-        if (staged) return "Update ${report.version} (${report.build}) downloaded"
-        return "Up to date"
     }
 
     private fun activate() {
