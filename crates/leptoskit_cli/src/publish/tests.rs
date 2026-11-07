@@ -1387,10 +1387,16 @@ fn play_replaces_the_listing_images_inside_the_edit() {
 		match (request.method.as_str(), request.path.as_str()) {
 			("POST", "/token") => json(serde_json::json!({ "access_token": "t" })),
 			("POST", path) if path.ends_with("/edits") => json(serde_json::json!({ "id": "e1" })),
-			("DELETE", path) if path.ends_with("/listings/en-US/phoneScreenshots") => {
+			("DELETE", path)
+				if path.ends_with("/listings/en-US/phoneScreenshots")
+					|| path.ends_with("/listings/en-US/icon") =>
+			{
 				json(serde_json::json!({ "deleted": [] }))
 			}
-			("POST", path) if path.ends_with("/listings/en-US/phoneScreenshots") => {
+			("POST", path)
+				if path.ends_with("/listings/en-US/phoneScreenshots")
+					|| path.ends_with("/listings/en-US/icon") =>
+			{
 				json(serde_json::json!({ "image": { "id": "i" } }))
 			}
 
@@ -1686,6 +1692,35 @@ fn firefox_session(scenario: &str, answer: Answer) -> Vec<Seen> {
 	seen.lock().unwrap().clone()
 }
 
+/// The server answers addons.mozilla.org's happy path, through the upload's
+/// validation to a submitted version.
+fn firefox_success() -> Answer {
+	Box::new(|request, count| {
+		match (request.method.as_str(), request.path.as_str()) {
+			("POST", "/addons/upload/") => {
+				json(serde_json::json!({ "uuid": "u-1", "processed": false }))
+			}
+			("GET", "/addons/upload/u-1/") => {
+				json(serde_json::json!({ "uuid": "u-1", "processed": count > 1, "valid": true }))
+			}
+			("POST", "/addons/addon/notes@example.com/versions/") => {
+				json(serde_json::json!({ "id": 7, "version": "1.4.0" }))
+			}
+			("GET", "/addons/addon/notes@example.com/") => {
+				json(serde_json::json!({ "id": 9, "previews": [] }))
+			}
+			("POST", "/addons/addon/notes@example.com/previews/") => {
+				(
+					StatusCode::CREATED,
+					axum::Json(serde_json::json!({ "id": 13 })),
+				)
+					.into_response()
+			}
+			_ => StatusCode::NOT_FOUND.into_response(),
+		}
+	})
+}
+
 /// Edge Add-ons answers `202 Accepted` with a `Location` header, so these
 /// scenarios use the existing `store` fixture, which can carry headers.
 fn edge_session(scenario: &str, answer: Answer) -> Vec<Seen> {
@@ -1896,6 +1931,73 @@ fn firefox_session_reports_failed_validation() {
 }
 
 #[test]
+fn firefox_session_dry_runs_unlisted_and_names_a_missing_package() {
+	// The unlisted channel sends no listing, so a dry run checks the package
+	// only; and a build without the Firefox package is named.
+	spawn_publish("firefox-unlisted", &[], None);
+	spawn_publish("firefox-no-package", &[], None);
+}
+
+#[test]
+fn firefox_session_reports_the_first_submission_and_other_refusals() {
+	// A submitted version for an add-on addons.mozilla.org has never heard
+	// of: the run asks for its first submission on the site.
+	let requests = firefox_session(
+		"firefox-first",
+		Box::new(|request, _| {
+			match (request.method.as_str(), request.path.as_str()) {
+				("POST", "/addons/upload/") => {
+					json(serde_json::json!({ "uuid": "u-1", "processed": false }))
+				}
+				("GET", "/addons/upload/u-1/") => {
+					json(serde_json::json!({ "uuid": "u-1", "processed": true, "valid": true }))
+				}
+				_ => StatusCode::NOT_FOUND.into_response(),
+			}
+		}),
+	);
+	assert!(
+		requests
+			.iter()
+			.any(|request| request.path == "/addons/addon/notes@example.com/versions/"),
+		"{requests:?}"
+	);
+
+	// A version addons.mozilla.org refuses for another reason fails the run.
+	let requests = firefox_session(
+		"firefox-submit-refused",
+		Box::new(|request, _| {
+			match (request.method.as_str(), request.path.as_str()) {
+				("POST", "/addons/upload/") => {
+					json(serde_json::json!({ "uuid": "u-1", "processed": false }))
+				}
+				("GET", "/addons/upload/u-1/") => {
+					json(serde_json::json!({ "uuid": "u-1", "processed": true, "valid": true }))
+				}
+				("POST", "/addons/addon/notes@example.com/versions/") => {
+					(StatusCode::BAD_REQUEST, "the version is not newer").into_response()
+				}
+				_ => StatusCode::NOT_FOUND.into_response(),
+			}
+		}),
+	);
+	assert_eq!(
+		requests.last().unwrap().path,
+		"/addons/addon/notes@example.com/versions/"
+	);
+}
+
+#[test]
+fn firefox_session_uploads_the_listing_screenshots_as_previews() {
+	let requests = firefox_session("firefox-listing", firefox_success());
+	assert!(
+		requests
+			.iter()
+			.any(|request| request.path == "/addons/addon/notes@example.com/previews/")
+	);
+}
+
+#[test]
 fn publish_run_rejects_no_store_and_an_unknown_store() {
 	let no_store = project(NO_STORE_PROJECT);
 	run_scenario("run-no-store", no_store.path(), &[]);
@@ -1943,13 +2045,16 @@ fn publish_run_refuses_to_replace_an_existing_workflow() {
 /// parent made the current directory. A normal test run has no scenario and
 /// does nothing.
 fn session_child(scenario: &str) {
-	let (store_name, submit) = match scenario {
-		"chrome-draft" | "chrome-error" => ("chrome", false),
-		"chrome-submit" => ("chrome", true),
-		"edge-draft" | "edge-error" => ("edge", false),
-		"edge-submit" => ("edge", true),
-		"firefox-draft" | "firefox-error" => ("firefox", false),
-		"firefox-submit" => ("firefox", true),
+	let (store_name, submit, dry_run) = match scenario {
+		"chrome-draft" | "chrome-error" => ("chrome", false, false),
+		"chrome-submit" => ("chrome", true, false),
+		"edge-draft" | "edge-error" => ("edge", false, false),
+		"edge-submit" => ("edge", true, false),
+		"firefox-draft" | "firefox-error" => ("firefox", false, false),
+		"firefox-submit" | "firefox-first" | "firefox-submit-refused" | "firefox-listing" => {
+			("firefox", true, false)
+		}
+		"firefox-unlisted" | "firefox-no-package" => ("firefox", false, true),
 		other => panic!("unknown session scenario {other}"),
 	};
 
@@ -1963,8 +2068,25 @@ fn session_child(scenario: &str) {
 		std::fs::write(root.path().join(name), bytes).unwrap();
 	}
 
-	let config =
+	// The listing's screenshots, which a listed submit uploads as previews.
+	if scenario == "firefox-listing" {
+		let directory = root.path().join("store/screenshots/chrome-1280x800");
+		std::fs::create_dir_all(&directory).unwrap();
+		std::fs::write(
+			directory.join("01-projects.png"),
+			super::images::tests::png(1280, 800, 255),
+		)
+		.unwrap();
+	}
+
+	let mut config =
 		leptoskit_config::LeptoskitConfig::from_toml(EXTENSION_PROJECT, root.path()).unwrap();
+
+	if scenario == "firefox-unlisted" {
+		config.publish.firefox.as_mut().unwrap().channel =
+			leptoskit_config::publish::FirefoxChannel::Unlisted;
+	}
+
 	let store = super::listing::Store::load(root.path()).unwrap();
 	let credentials = super::Credentials::default();
 	let http = Http::default();
@@ -1976,19 +2098,22 @@ fn session_child(scenario: &str) {
 			zip: Some(root.path().join(zip)),
 		}
 	};
+	let mut packages = vec![package(leptoskit_config::Browser::Chromium, "chromium.zip")];
+
+	if scenario != "firefox-no-package" {
+		packages.push(package(leptoskit_config::Browser::Firefox, "firefox.zip"));
+	}
+
 	let extension = super::Extension {
 		built: crate::extension::Built {
-			packages: vec![
-				package(leptoskit_config::Browser::Chromium, "chromium.zip"),
-				package(leptoskit_config::Browser::Firefox, "firefox.zip"),
-			],
+			packages,
 			source: Some(root.path().join("firefox-source.zip")),
 		},
 		manifest: serde_json::json!({ "permissions": [] }),
 	};
 	let args = super::PublishArgs {
 		stores: vec![store_name.to_owned()],
-		dry_run: false,
+		dry_run,
 		submit,
 		staged: false,
 		yes: true,
@@ -2011,12 +2136,22 @@ fn session_child(scenario: &str) {
 	};
 	let result = session.publish(store_name);
 
-	if scenario.ends_with("-error") {
+	if scenario == "firefox-no-package" {
 		let error = result.unwrap_err().to_string();
-		let expected = match store_name {
-			"chrome" => "manifest version must be newer",
-			"edge" => "72 days",
-			"firefox" => "manifest.json is invalid",
+		assert!(
+			error.contains("the build made no firefox package"),
+			"{error}"
+		);
+		return;
+	}
+
+	if scenario.ends_with("-error") || scenario == "firefox-submit-refused" {
+		let error = result.unwrap_err().to_string();
+		let expected = match scenario {
+			"chrome-error" => "manifest version must be newer",
+			"edge-error" => "72 days",
+			"firefox-error" => "manifest.json is invalid",
+			"firefox-submit-refused" => "the version is not newer",
 			other => panic!("no expected error for {other}"),
 		};
 		assert!(error.contains(expected), "{error}");
@@ -2032,6 +2167,14 @@ fn session_child(scenario: &str) {
 			"Notes 1.4.0 passed addons.mozilla.org's validation; nothing is submitted yet."
 		}
 		"firefox-submit" => "Notes 1.4.0 is submitted (listed channel).",
+		"firefox-listing" => {
+			"Notes 1.4.0 is submitted (listed channel). Its screenshots are uploaded: 1 image for \
+			 chrome-1280x800."
+		}
+		"firefox-first" => {
+			"Notes 1.4.0 passed validation; the add-on needs its first submission on the site."
+		}
+		"firefox-unlisted" => "Notes 1.4.0 is built and checked; nothing was uploaded.",
 		other => panic!("no expected summary for {other}"),
 	};
 	assert_eq!(summary, expected);
@@ -2042,11 +2185,46 @@ fn session_child(scenario: &str) {
 			.any(|step| step.what.contains("Decide to release it")),
 		!submit
 	);
+
+	// The first-submission run asks for the site steps; the unlisted channel
+	// has no listing to edit, so its steps never ask for the privacy policy.
+	if scenario == "firefox-first" {
+		assert!(
+			steps
+				.iter()
+				.any(|step| step.what.contains("first version on the site"))
+		);
+		assert!(
+			steps
+				.iter()
+				.any(|step| step.what.contains("Choose the add-on's license"))
+		);
+	}
+
+	if scenario == "firefox-unlisted" {
+		assert!(
+			summary == expected
+				&& !steps
+					.iter()
+					.any(|step| step.what.contains("privacy policy"))
+		);
+	}
 }
 
 /// The child side of [`run_scenario`]: `super::run` must reject each bad
-/// configuration before it builds the extension or contacts a store.
+/// configuration before it builds the extension or contacts a store. The
+/// macOS dry runs go through [`run_macos_child`] instead: they succeed.
 fn run_child(scenario: &str) {
+	if scenario.starts_with("run-macos") {
+		run_macos_child(scenario);
+		return;
+	}
+
+	if scenario == "run-confirm-skipped" {
+		confirm_child();
+		return;
+	}
+
 	let args = |stores: Vec<String>, credentials: Option<std::path::PathBuf>| {
 		super::PublishArgs {
 			stores,
@@ -2099,4 +2277,1407 @@ fn subprocess_helper() {
 	} else {
 		session_child(&scenario);
 	}
+}
+
+// The publish pipeline's own parsing, validation, and step writing, which
+// the store clients and the dry runs above don't reach.
+
+#[test]
+fn build_numbers_parse_or_explain_themselves() {
+	assert_eq!(
+		"auto".parse::<super::BuildNumber>(),
+		Ok(super::BuildNumber::Auto)
+	);
+	assert_eq!(
+		"42".parse::<super::BuildNumber>(),
+		Ok(super::BuildNumber::Number(42))
+	);
+	let error = "0".parse::<super::BuildNumber>().unwrap_err();
+	assert!(error.contains("whole number above 0"), "{error}");
+
+	let error = "next".parse::<super::BuildNumber>().unwrap_err();
+	assert!(error.contains("`auto` or a whole number"), "{error}");
+}
+
+#[test]
+fn the_api_override_variable_wins_over_the_default() {
+	// A variable no test sets: the store's own address stands.
+	assert_eq!(
+		super::api("LEPTOSKIT_PUBLISH_TEST_UNSET_API", "https://store.example"),
+		"https://store.example"
+	);
+}
+
+#[test]
+fn names_fall_back_from_the_extension_to_the_app() {
+	let config = |toml: &str| {
+		leptoskit_config::LeptoskitConfig::from_toml(toml, std::path::Path::new(".")).unwrap()
+	};
+	let named = config(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\"]\n\n[extension]\nname \
+		 = \"Notes for Chrome\"\nbrowsers = [\"chromium\"]\n\n[extension.popup]\nroute = \"/\"\n",
+	);
+	assert_eq!(super::display_name(&named), "Notes for Chrome");
+
+	let auth = config(
+		"[app]\nname = \"notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\"]\n\n[auth]\napp_name \
+		 = \"Notes\"\n",
+	);
+	assert_eq!(super::display_name(&auth), "Notes");
+
+	let bare = config("[app]\nname = \"notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\"]\n");
+	assert_eq!(super::display_name(&bare), "notes");
+
+	// Apple's version takes at most three integers, so a pre-release label
+	// drops.
+	let prerelease = config(
+		"[app]\nname = \"notes\"\nversion = \"1.4.0-beta.2+local\"\nplatforms = [\"web\"]\n",
+	);
+	assert_eq!(super::apple_version(&prerelease), "1.4.0");
+}
+
+#[test]
+fn confirm_skips_its_question_when_answered_up_front() {
+	let args = |yes: bool| {
+		super::PublishArgs {
+			stores: vec!["chrome".to_owned()],
+			dry_run: false,
+			submit: true,
+			staged: false,
+			yes,
+			json: false,
+			credentials: None,
+			build_number: super::BuildNumber::Auto,
+		}
+	};
+	assert!(super::confirm(&args(true), "Notes", "1.4.0", &["chrome"]).unwrap());
+}
+
+/// The child side of the confirm scenario: its stdin is closed, so the
+/// question is skipped and everything is submitted.
+fn confirm_child() {
+	let args = super::PublishArgs {
+		stores: vec!["chrome".to_owned()],
+		dry_run: false,
+		submit: true,
+		staged: false,
+		yes: false,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	assert!(super::confirm(&args, "Notes", "1.4.0", &["chrome"]).unwrap());
+}
+
+#[test]
+fn play_summaries_name_each_rollout() {
+	assert_eq!(
+		super::play_summary(
+			"Notes",
+			"1.4.0",
+			42,
+			"internal",
+			super::play::Rollout::Draft
+		),
+		"Notes 1.4.0 (versionCode 42) is on the internal track as a draft release."
+	);
+	assert_eq!(
+		super::play_summary(
+			"Notes",
+			"1.4.0",
+			42,
+			"production",
+			super::play::Rollout::Everyone
+		),
+		"Notes 1.4.0 (versionCode 42) is released on the production track."
+	);
+	assert_eq!(
+		super::play_summary(
+			"Notes",
+			"1.4.0",
+			42,
+			"production",
+			super::play::Rollout::Staged(0.1),
+		),
+		"Notes 1.4.0 (versionCode 42) is rolling out to 10% of the production track's users."
+	);
+}
+
+/// A Google Play run with every piece of listing text and imagery present.
+fn play_run<'a>(
+	root: &'a std::path::Path,
+	store: &'a super::listing::Store,
+	rollout: super::play::Rollout,
+	exists: bool,
+	submitted: bool,
+	icon: bool,
+) -> super::PlayRun<'a> {
+	super::PlayRun {
+		package: "com.example.notes",
+		track: "internal",
+		aab: ".leptoskit/publish/android/app.aab",
+		exists,
+		rollout,
+		submitted,
+		store,
+		root,
+		screenshots: &[],
+		icon,
+	}
+}
+
+#[test]
+fn play_steps_ask_for_what_the_api_cannot_set() {
+	let root = tempfile::tempdir().unwrap();
+	let empty = super::listing::Store::default();
+
+	// A first upload: the app doesn't exist on Google Play yet.
+	let steps = super::play_steps(&play_run(
+		root.path(),
+		&empty,
+		super::play::Rollout::Draft,
+		false,
+		false,
+		false,
+	));
+	assert!(
+		steps[0].what.contains("Create the app com.example.notes"),
+		"{steps:?}"
+	);
+	assert_eq!(
+		steps[0].url.as_deref(),
+		Some("https://play.google.com/console")
+	);
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("Decide to release"))
+	);
+
+	// Every listing piece missing, before the first upload.
+	let steps = super::play_steps(&play_run(
+		root.path(),
+		&empty,
+		super::play::Rollout::Draft,
+		true,
+		false,
+		false,
+	));
+	let listing = steps
+		.iter()
+		.find(|step| step.what.contains("main store listing"))
+		.expect("a listing step");
+	let labels: Vec<&str> = listing
+		.enter
+		.iter()
+		.map(|field| field.label.as_str())
+		.collect();
+	assert_eq!(
+		labels,
+		[
+			"Icon",
+			"Feature graphic",
+			"Phone screenshots",
+			"Short description",
+			"Full description"
+		]
+	);
+
+	// With everything present and a submitted staged rollout: only the
+	// rollout watch remains, and nothing asks for the listing.
+	let full = super::listing::Store {
+		summary: Some("Keep notes.".to_owned()),
+		description: Some("Keep notes, everywhere.".to_owned()),
+		..super::listing::Store::default()
+	};
+	let staged = super::play::Rollout::Staged(0.1);
+	let steps = super::play_steps(&play_run(root.path(), &full, staged, true, true, true));
+	assert_eq!(steps.len(), 1);
+	assert!(
+		steps[0].what.contains("Watch the first 10% of users"),
+		"{steps:?}"
+	);
+	assert!(
+		steps[0]
+			.what
+			.contains("raise the rollout in Play Console, or halt it")
+	);
+
+	// Submitted for everyone: the run ends at the release, with no rollout
+	// to watch.
+	let steps = super::play_steps(&play_run(
+		root.path(),
+		&full,
+		super::play::Rollout::Everyone,
+		true,
+		true,
+		true,
+	));
+	assert_eq!(steps.len(), 0);
+
+	// A complete listing: no listing step, only the privacy policy, the
+	// declarations, and the release decision.
+	let phone = sets(&["android-phone", "play-feature-graphic"]);
+	let run = super::PlayRun {
+		package: "com.example.notes",
+		track: "internal",
+		aab: ".leptoskit/publish/android/app.aab",
+		exists: true,
+		rollout: super::play::Rollout::Draft,
+		submitted: false,
+		store: &full,
+		root: root.path(),
+		screenshots: &phone,
+		icon: true,
+	};
+	let steps = super::play_steps(&run);
+	assert_eq!(steps.len(), 3);
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("main store listing"))
+	);
+	assert!(steps[0].what.contains("Set the privacy policy"));
+}
+
+#[test]
+fn app_store_text_carries_the_versions_fields() {
+	let mut store = super::listing::Store::default();
+	assert_eq!(super::app_store_text(&store).len(), 0);
+
+	store.description = Some("Keep notes, everywhere.".to_owned());
+	store.listing.keywords = vec!["notes".to_owned(), "research".to_owned()];
+	store.summary = Some("Keep notes.".to_owned());
+	store.listing.support = Some("https://example.com/support".to_owned());
+	store.listing.homepage = Some("https://example.com".to_owned());
+	let text = super::app_store_text(&store);
+	assert_eq!(text.len(), 5);
+	assert_eq!(text["description"], "Keep notes, everywhere.");
+	assert_eq!(text["keywords"], "notes,research");
+	assert_eq!(text["promotionalText"], "Keep notes.");
+	assert_eq!(text["supportUrl"], "https://example.com/support");
+	assert_eq!(text["marketingUrl"], "https://example.com");
+}
+
+#[test]
+fn encryption_compliance_is_answered_by_the_info_plist() {
+	let root = tempfile::tempdir().unwrap();
+	let answered = root.path().join("answered.plist");
+	std::fs::write(
+		&answered,
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>
+"#,
+	)
+	.unwrap();
+	assert!(super::encryption_answered(&answered));
+
+	let unanswered = root.path().join("unanswered.plist");
+	std::fs::write(
+		&unanswered,
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleName</key><string>Notes</string></dict></plist>
+"#,
+	)
+	.unwrap();
+	assert!(!super::encryption_answered(&unanswered));
+
+	let garbage = root.path().join("garbage.plist");
+	std::fs::write(&garbage, "not a plist").unwrap();
+	assert!(!super::encryption_answered(&garbage));
+}
+
+/// An App Store run for `root` and its app-owned `Info.plist`.
+fn app_store_run<'a>(
+	root: &'a std::path::Path,
+	info_plist: &'a std::path::Path,
+	store: &'a super::listing::Store,
+	screenshots: &'a [super::images::Set],
+) -> super::AppStoreRun<'a> {
+	super::AppStoreRun {
+		app: "1234567890",
+		version: "1.4.0",
+		build: Some(42),
+		root,
+		info_plist,
+		encryption_answered: super::encryption_answered(info_plist),
+		beta_review: None,
+		submitted: false,
+		store,
+		screenshots,
+	}
+}
+
+#[test]
+fn app_store_steps_report_what_is_still_left() {
+	let root = tempfile::tempdir().unwrap();
+	let empty = super::listing::Store::default();
+
+	// Submitted, with beta review refused and compliance unanswered: exactly
+	// those two steps, and nothing about the listing.
+	let info_plist = root.path().join("ios/Info.plist");
+	let mut run = app_store_run(root.path(), &info_plist, &empty, &[]);
+	run.submitted = true;
+	run.beta_review = Some("Missing export compliance");
+	let steps = super::app_store_steps(&run);
+	assert_eq!(steps.len(), 2);
+	assert!(
+		steps[0]
+			.what
+			.contains("Submit build 42 for TestFlight's beta review")
+	);
+	assert!(
+		steps[0].enter[0]
+			.value
+			.contains("Missing export compliance")
+	);
+	assert!(
+		steps[1]
+			.what
+			.contains("Answer the export compliance question for build 42")
+	);
+	assert!(
+		steps[1].enter[0]
+			.value
+			.contains("ITSAppUsesNonExemptEncryption")
+	);
+	assert!(
+		steps[1].enter[0]
+			.value
+			.contains("every later build carries the answer")
+	);
+
+	// Compliance answered in the plist: that step disappears.
+	std::fs::create_dir_all(root.path().join("ios")).unwrap();
+	std::fs::write(
+		root.path().join("ios/Info.plist"),
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>
+"#,
+	)
+	.unwrap();
+	let run = app_store_run(root.path(), &info_plist, &empty, &[]);
+	let steps = super::app_store_steps(&run);
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("export compliance"))
+	);
+
+	// Not submitted, an empty store, and no screenshots: the page step lists
+	// everything, and the category step asks for the category and the
+	// privacy policy.
+	let steps = super::app_store_steps(&run);
+	let page = steps
+		.iter()
+		.find(|step| step.what.contains("1.4.0's App Store page is missing"))
+		.expect("a page step");
+	assert!(
+		page.enter
+			.iter()
+			.any(|field| field.label == "iPhone screenshots")
+	);
+	assert!(
+		page.enter
+			.iter()
+			.any(|field| field.label == "iPad screenshots")
+	);
+	assert!(page.enter.iter().any(|field| field.label == "Description"));
+	assert!(page.enter.iter().any(|field| field.label == "Keywords"));
+	assert!(page.enter.iter().any(|field| field.label == "Support URL"));
+	let category = steps
+		.iter()
+		.find(|step| step.what.contains("Choose the category"))
+		.expect("a category step");
+	assert!(
+		category
+			.enter
+			.iter()
+			.any(|field| field.value.contains("add category to store/listing.toml"))
+	);
+	assert!(category.enter.iter().any(|field| {
+		field
+			.value
+			.contains("add privacy_policy to store/listing.toml")
+	}));
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("App Privacy questions"))
+	);
+	assert!(steps.iter().any(|step| step.what.contains("age rating")));
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("Give App Review a contact"))
+	);
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.what.contains("Decide to release it"))
+	);
+
+	// A full store with both screenshot sizes has no page asks.
+	let full = super::listing::Store {
+		listing: super::listing::Listing {
+			category: Some("Productivity".to_owned()),
+			privacy_policy: Some("https://example.com/privacy".to_owned()),
+			keywords: vec!["notes".to_owned()],
+			support: Some("https://example.com/support".to_owned()),
+			..super::listing::Listing::default()
+		},
+		description: Some("Keep notes, everywhere.".to_owned()),
+		..super::listing::Store::default()
+	};
+	let both = sets(&["iphone-6.3", "ipad-13"]);
+	let steps = super::app_store_steps(&app_store_run(root.path(), &info_plist, &full, &both));
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("page is missing"))
+	);
+	let category = steps
+		.iter()
+		.find(|step| step.what.contains("Choose the category"))
+		.expect("a category step");
+	assert!(
+		category
+			.enter
+			.iter()
+			.any(|field| field.value == "Productivity")
+	);
+	assert!(
+		!category
+			.enter
+			.iter()
+			.any(|field| field.label == "Privacy Policy URL")
+	);
+}
+
+/// One empty image set per store size, enough for the page and step
+/// builders, which only look at folders.
+fn sets(folders: &[&str]) -> Vec<super::images::Set> {
+	folders
+		.iter()
+		.map(|folder| {
+			super::images::Set {
+				target: super::images::TARGETS
+					.iter()
+					.find(|target| target.folder == *folder)
+					.unwrap(),
+				images: Vec::new(),
+			}
+		})
+		.collect()
+}
+
+#[test]
+fn app_store_page_counts_screenshot_folders() {
+	let root = tempfile::tempdir().unwrap();
+	let store = super::listing::Store::default();
+	let info_plist = root.path().join("ios/Info.plist");
+	let iphone = sets(&["iphone-6.3"]);
+	let run = app_store_run(root.path(), &info_plist, &store, &iphone);
+	let page = super::app_store_page(&run);
+	assert!(!page.iter().any(|field| field.label == "iPhone screenshots"));
+	let ipad = page
+		.iter()
+		.find(|field| field.label == "iPad screenshots")
+		.expect("an iPad ask");
+	assert!(
+		ipad.value.contains("add the ipad-13 size"),
+		"{}",
+		ipad.value
+	);
+
+	// Without screenshots, both sizes are asked for, the iPhone one naming
+	// the size App Store Connect requires.
+	let run = app_store_run(root.path(), &info_plist, &store, &[]);
+	let page = super::app_store_page(&run);
+	assert!(page.iter().any(|field| field.label == "iPhone screenshots"));
+	assert!(
+		page.iter()
+			.any(|field| field.value.contains("add the iphone-6.3 size"))
+	);
+
+	let both = sets(&["iphone-6.3", "ipad-13"]);
+	let run = app_store_run(root.path(), &info_plist, &store, &both);
+	assert!(
+		super::app_store_page(&run)
+			.iter()
+			.all(|field| field.label != "iPad screenshots")
+	);
+}
+
+/// A Firefox run for `root`, with the store's add-on existing or not.
+#[expect(
+	clippy::too_many_arguments,
+	reason = "each argument is an independent part of the run"
+)]
+fn firefox_run<'a>(
+	settings: &'a leptoskit_config::publish::FirefoxStore,
+	store: &'a super::listing::Store,
+	zip: &'a std::path::Path,
+	source: &'a std::path::Path,
+	root: &'a std::path::Path,
+	exists: bool,
+	submitted: bool,
+	screenshots: bool,
+) -> super::FirefoxRun<'a> {
+	super::FirefoxRun {
+		guid: "notes@example.com",
+		settings,
+		store,
+		submitted,
+		exists,
+		zip,
+		source,
+		root,
+		screenshots,
+	}
+}
+
+#[test]
+fn firefox_steps_differ_by_channel_existence_and_submission() {
+	let root = tempfile::tempdir().unwrap();
+	let zip = root.path().join("firefox.zip");
+	let source = root.path().join("firefox-source.zip");
+	let store = super::listing::Store {
+		summary: Some("Keep notes.".to_owned()),
+		description: Some("Keep notes, everywhere.".to_owned()),
+		..super::listing::Store::default()
+	};
+
+	// A first submission on the listed channel: the site steps, the listing
+	// step with its screenshot ask, and the release decision.
+	let listed = leptoskit_config::publish::FirefoxStore::default();
+	let steps = super::firefox_steps(&firefox_run(
+		&listed,
+		&store,
+		&zip,
+		&source,
+		root.path(),
+		false,
+		false,
+		false,
+	));
+	assert!(steps[0].what.contains("first version on the site"));
+	assert!(
+		steps[0]
+			.enter
+			.iter()
+			.any(|field| field.label == "Source code")
+	);
+	assert!(steps[1].what.contains("Choose the add-on's license"));
+	assert!(steps[2].what.contains("Add the listing's privacy policy"));
+	assert!(
+		steps[2]
+			.enter
+			.iter()
+			.any(|field| field.label == "Screenshots")
+	);
+	assert!(
+		steps[2]
+			.enter
+			.iter()
+			.any(|field| field.label == "Screenshots")
+	);
+	assert!(
+		steps
+			.last()
+			.is_some_and(|step| step.what.contains("Decide to release it"))
+	);
+
+	// Once the add-on exists, the site steps go; screenshots present, no
+	// screenshot ask.
+	let steps = super::firefox_steps(&firefox_run(
+		&listed,
+		&store,
+		&zip,
+		&source,
+		root.path(),
+		true,
+		false,
+		true,
+	));
+	assert!(!steps.iter().any(|step| step.what.contains("first version")));
+	assert!(!steps.iter().any(|step| step.what.contains("license")));
+	let listing = steps
+		.iter()
+		.find(|step| step.what.contains("privacy policy"))
+		.unwrap();
+	assert!(
+		!listing
+			.enter
+			.iter()
+			.any(|field| field.label == "Screenshots")
+	);
+	assert!(
+		steps
+			.last()
+			.is_some_and(|step| step.what.contains("Decide to release it"))
+	);
+
+	// Unlisted: no listing step at all.
+	let unlisted = leptoskit_config::publish::FirefoxStore {
+		channel: leptoskit_config::publish::FirefoxChannel::Unlisted,
+	};
+	let steps = super::firefox_steps(&firefox_run(
+		&unlisted,
+		&store,
+		&zip,
+		&source,
+		root.path(),
+		true,
+		false,
+		true,
+	));
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("privacy policy"))
+	);
+	assert!(
+		steps
+			.last()
+			.is_some_and(|step| step.what.contains("Decide to release it"))
+	);
+
+	// Submitted: no release decision.
+	let steps = super::firefox_steps(&firefox_run(
+		&listed,
+		&store,
+		&zip,
+		&source,
+		root.path(),
+		true,
+		true,
+		true,
+	));
+	assert!(
+		!steps
+			.iter()
+			.any(|step| step.what.contains("Decide to release it"))
+	);
+}
+
+#[test]
+fn chrome_steps_ask_for_the_listing_and_justify_each_permission() {
+	let root = tempfile::tempdir().unwrap();
+	std::fs::create_dir_all(root.path().join("store/en-US")).unwrap();
+	std::fs::write(
+		root.path().join("store/permissions.toml"),
+		"tabs = \"Reads your tabs.\"\n",
+	)
+	.unwrap();
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+		 \"extension\"]\n\n[extension]\nname = \"Notes\"\ndescription = \"Keep notes.\"\nbrowsers \
+		 = [\"chromium\"]\n\n\t	 [extension.popup]\nroute = \
+		 \"/\"\n\n[publish.chrome]\npublisher_id = \"pub-1\"\nitem_id = \
+		 \"abcdefghijklmnopabcdefghijklmnop\"\n",
+		root.path(),
+	)
+	.unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let manifest = serde_json::json!({
+		"permissions": ["tabs", "activeTab"],
+		"host_permissions": ["https://example.com/*"],
+	});
+
+	let steps = super::chrome_steps(root.path(), &config, &store, &manifest, false);
+	assert_eq!(steps.len(), 4);
+	let listing = &steps[0];
+	assert!(listing.what.contains("store listing"));
+	assert!(
+		listing
+			.enter
+			.iter()
+			.any(|field| field.label == "Description" && field.value == "Keep notes.")
+	);
+	assert!(listing.enter.iter().any(|field| {
+		field.label == "Screenshots" && field.value.contains("add the chrome-1280x800 size")
+	}));
+
+	let privacy = &steps[1];
+	assert!(privacy.what.contains("privacy practices"));
+	assert!(
+		privacy
+			.enter
+			.iter()
+			.any(|field| field.label == "Single purpose" && field.value == "Keep notes.")
+	);
+	assert!(
+		privacy
+			.enter
+			.iter()
+			.any(|field| field.label == "tabs" && field.value == "Reads your tabs.")
+	);
+	assert!(privacy.enter.iter().any(|field| {
+		field.label == "activeTab" && field.value.contains("write one sentence for `activeTab`")
+	}));
+	assert!(
+		privacy
+			.enter
+			.iter()
+			.any(|field| field.label == "Host permission")
+	);
+	assert!(privacy.enter.iter().any(|field| {
+		field.label == "Privacy policy"
+			&& field.value == "(add privacy_policy to store/listing.toml)"
+	}));
+	assert!(steps[3].what.contains("Decide to release it"));
+
+	// Submitted: the release decision goes.
+	let steps = super::chrome_steps(root.path(), &config, &store, &manifest, true);
+	assert_eq!(steps.len(), 3);
+
+	// A manifest without permissions has no justifications for them.
+	let steps = super::chrome_steps(root.path(), &config, &store, &serde_json::json!({}), true);
+	let privacy = &steps[1];
+	assert!(
+		!privacy
+			.enter
+			.iter()
+			.any(|field| field.label == "Host permission")
+	);
+	assert!(!privacy.enter.iter().any(|field| field.label == "tabs"));
+}
+
+#[test]
+fn edge_steps_ask_for_properties_then_the_release() {
+	let root = tempfile::tempdir().unwrap();
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+		 \"extension\"]\n\n[extension]\nname = \"Notes\"\nbrowsers = [\"chromium\"]\n\n\t	 \
+		 [extension.popup]\nroute = \"/\"\n\n[publish.edge]\nproduct_id = \"prod-1\"\n",
+		root.path(),
+	)
+	.unwrap();
+	let store = super::listing::Store::default();
+	let steps = super::edge_steps(root.path(), &config, &store, false);
+	assert_eq!(steps.len(), 2);
+	assert!(steps[0].what.contains("Properties"));
+	assert_eq!(
+		steps[0].url.as_deref(),
+		Some("https://partner.microsoft.com/dashboard/microsoftedge/prod-1/properties")
+	);
+	assert!(steps[0].enter.iter().any(|field| {
+		field.label == "Description" && field.value == "(write it in store/en-US/description.md)"
+	}));
+	assert!(steps[1].what.contains("Decide to release it"));
+
+	let steps = super::edge_steps(root.path(), &config, &store, true);
+	assert_eq!(steps.len(), 1);
+}
+
+#[test]
+fn credentials_listing_says_what_is_missing_and_who_makes_it() {
+	let listed = super::list_credentials(&["chrome"], &super::Credentials::default());
+	assert!(listed.contains("Credentials for chrome:"), "{listed}");
+	assert!(listed.contains("missing"));
+	assert!(listed.contains("To make it:"));
+	assert!(listed.contains("Values are never printed."));
+}
+
+#[test]
+fn capture_says_how_to_make_the_screenshots() {
+	let root = tempfile::tempdir().unwrap();
+	let text = super::capture(root.path(), &["android-phone"], "the android-phone size");
+	assert!(
+		text.contains("add the android-phone size to store/screenshots/screenshots.toml"),
+		"{text}"
+	);
+
+	let plan = root.path().join("store/screenshots/screenshots.toml");
+	std::fs::create_dir_all(plan.parent().unwrap()).unwrap();
+	std::fs::write(
+		&plan,
+		"[devices.android-phone]\nandroid = \
+		 \"emulator-5554\"\n\n[devices.\"iphone-6.9\"]\nsimulator = \"iPhone 17 Pro Max\"\n",
+	)
+	.unwrap();
+	let text = super::capture(root.path(), &["android-phone"], "the android-phone size");
+	assert!(
+		text.contains("run `leptoskit publish screenshots`, which captures android-phone"),
+		"{text}"
+	);
+
+	// A prefix matches the folder that starts with it.
+	let text = super::capture(root.path(), &["iphone-"], "the iphone-6.9 size");
+	assert!(text.contains("captures iphone-6.9"), "{text}");
+}
+
+#[test]
+fn image_summaries_describe_what_was_checked_and_uploaded() {
+	let root = super::images::tests::project(&[
+		(
+			"chrome-1280x800/01-projects.png",
+			super::images::tests::png(1280, 800, 255),
+		),
+		(
+			"chrome-1280x800/02-reading.png",
+			super::images::tests::png(1280, 800, 255),
+		),
+	]);
+	let sets = super::images::load(root.path(), "firefox").unwrap();
+
+	assert_eq!(super::checked_images(&[]), "");
+	assert_eq!(super::uploaded_images(&[]), "");
+	assert_eq!(
+		super::checked_images(&sets),
+		" Its screenshots are checked: 2 images for chrome-1280x800."
+	);
+	assert_eq!(
+		super::uploaded_images(&sets),
+		" Its screenshots are uploaded: 2 images for chrome-1280x800."
+	);
+
+	// The browser stores' step counts the folder's files.
+	let field = super::browser_screenshots(root.path());
+	assert_eq!(field.label, "Screenshots");
+	assert!(
+		field
+			.value
+			.contains("upload store/screenshots/chrome-1280x800/*.png (2 files")
+	);
+	assert!(field.value.contains("`leptoskit publish screenshots`"));
+}
+
+#[test]
+fn description_and_privacy_policy_fall_back_to_what_to_write() {
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+		 \"extension\"]\n\n[extension]\nname = \"Notes\"\ndescription = \"Keep notes.\"\nbrowsers \
+		 = [\"chromium\"]\n\n\t	 [extension.popup]\nroute = \"/\"\n",
+		std::path::Path::new("."),
+	)
+	.unwrap();
+	let store = super::listing::Store::default();
+	assert_eq!(super::description(&config, &store), "Keep notes.");
+	assert_eq!(
+		super::privacy_policy(&store),
+		"(add privacy_policy to store/listing.toml)"
+	);
+
+	let written = super::listing::Store {
+		listing: super::listing::Listing {
+			privacy_policy: Some("https://example.com/privacy".to_owned()),
+			..super::listing::Listing::default()
+		},
+		description: Some("Keep notes, everywhere.".to_owned()),
+		..super::listing::Store::default()
+	};
+	assert_eq!(
+		super::description(&config, &written),
+		"Keep notes, everywhere."
+	);
+	assert_eq!(
+		super::privacy_policy(&written),
+		"https://example.com/privacy"
+	);
+}
+
+#[test]
+fn a_store_publish_does_not_know_is_refused() {
+	let root = tempfile::tempdir().unwrap();
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+		 \"macos\"]\n\n[publish.macos]\n",
+		root.path(),
+	)
+	.unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["safari".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let http = Http::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let error = session.publish("safari").unwrap_err().to_string();
+	assert!(error.contains("`safari` isn't a store"), "{error}");
+}
+
+#[test]
+fn a_missing_package_is_named_with_its_browser() {
+	let root = tempfile::tempdir().unwrap();
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+		 \"extension\"]\n\n[extension]\nname = \"Notes\"\nbrowsers = [\"chromium\", \
+		 \"firefox\"]\n\n[extension.popup]\nroute = \"/\"\n\n[extension.firefox]\nid = \
+		 \"notes@example.com\"\n\n[publish.firefox]\n",
+		root.path(),
+	)
+	.unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let package = crate::extension::Package {
+		browser: leptoskit_config::Browser::Chromium,
+		dir: root.path().join("chromium"),
+		zip: Some(root.path().join("chromium.zip")),
+	};
+	let extension = super::Extension {
+		built: crate::extension::Built {
+			packages: vec![package],
+			source: Some(root.path().join("firefox-source.zip")),
+		},
+		manifest: serde_json::json!({}),
+	};
+	let args = super::PublishArgs {
+		stores: vec!["firefox".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let http = Http::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: Some(&extension),
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let error = session.publish("firefox").unwrap_err().to_string();
+	assert!(
+		error.contains("the build made no firefox package"),
+		"{error}"
+	);
+	assert!(error.contains("[extension].browsers"), "{error}");
+}
+
+/// A project whose Android host is the example's Gradle script, so Google
+/// Play's checks pass and only the store's own refusals remain.
+fn play_project(
+	notes: Option<&str>,
+	icon: bool,
+) -> (tempfile::TempDir, leptoskit_config::LeptoskitConfig) {
+	let root = tempfile::tempdir().unwrap();
+	let example =
+		std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/commonplace");
+	std::fs::create_dir_all(root.path().join("android/app")).unwrap();
+	std::fs::write(root.path().join("android/Cargo.toml"), "").unwrap();
+	std::fs::copy(
+		example.join("android/app/build.gradle.kts"),
+		root.path().join("android/app/build.gradle.kts"),
+	)
+	.unwrap();
+
+	if let Some(notes) = notes {
+		let directory = root.path().join("store/en-US");
+		std::fs::create_dir_all(&directory).unwrap();
+		std::fs::write(directory.join("release_notes.md"), notes).unwrap();
+	}
+
+	if icon {
+		std::fs::write(
+			root.path().join("icon.svg"),
+			r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="black"/></svg>"#,
+		)
+		.unwrap();
+	}
+
+	let icon_line = if icon { "icon = \"icon.svg\"\n" } else { "" };
+	let config = leptoskit_config::LeptoskitConfig::from_toml(
+		&format!(
+			"[app]\nname = \"Notes\"\nversion = \"1.4.0\"\nplatforms = [\"web\", \
+			 \"android\"]\n{icon_line}\n[native]\npackage_id = \
+			 \"com.example.notes\"\n\n[publish.play]\ntrack = \"internal\"\n"
+		),
+		root.path(),
+	)
+	.unwrap();
+	(root, config)
+}
+
+#[test]
+fn play_refuses_oversized_store_text_before_anything_builds() {
+	let (root, config) = play_project(Some("x".repeat(501).as_str()), true);
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["play".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let http = Http::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let error = session.publish("play").unwrap_err().to_string();
+	assert!(
+		error.contains("release_notes.md has 501 characters"),
+		"{error}"
+	);
+	assert!(error.contains("Google Play takes at most 500"), "{error}");
+
+	// A store name too long for Google Play fails before the notes are
+	// read, and an app without an icon gets past the icon load.
+	let (root, config) = play_project(None, false);
+	let mut store = super::listing::Store::default();
+	store.listing.name =
+		Some("A store listing name that is far too long for Google Play".to_owned());
+	let http = Http::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let error = session.publish("play").unwrap_err().to_string();
+	assert!(
+		error.contains("the store name has 57 characters"),
+		"{error}"
+	);
+}
+
+/// Publishes the `play` store on a session in `root`'s project, with no
+/// credentials and a recorder instead of any tool.
+fn play_publish(
+	root: &std::path::Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	store: &super::listing::Store,
+	args: &super::PublishArgs,
+) -> anyhow::Result<(String, Vec<super::Step>)> {
+	let http = Http::default();
+	let credentials = super::Credentials::default();
+	let runner = super::tools::Recorder::default();
+	let session = super::Session {
+		args,
+		root,
+		config,
+		credentials: &credentials,
+		store,
+		http: &http,
+		runner: &runner,
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	session.publish("play")
+}
+
+#[test]
+fn a_play_dry_run_names_an_explicit_build_number_without_an_icon() {
+	let (root, config) = play_project(Some("Faster sync."), false);
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["play".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Number(42),
+	};
+	let (summary, steps) = play_publish(root.path(), &config, &store, &args).unwrap();
+	assert!(
+		summary.contains("numbered 42") && summary.contains("internal track as a draft"),
+		"{summary}"
+	);
+	assert!(steps.iter().all(|step| step.store == "play"));
+}
+
+#[test]
+fn play_refuses_a_bundle_its_gradle_cannot_publish() {
+	let (root, config) = play_project(None, false);
+	std::fs::write(
+		root.path().join("android/app/build.gradle.kts"),
+		"not a gradle file at all",
+	)
+	.unwrap();
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["play".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let error = play_publish(root.path(), &config, &store, &args)
+		.unwrap_err()
+		.to_string();
+	assert!(
+		error.contains("Google Play can't take this app's bundle yet"),
+		"{error}"
+	);
+}
+
+#[test]
+fn the_play_listing_sends_nothing_without_text_an_icon_or_images() {
+	let account = google_account();
+	let app = "/androidpublisher/v3/applications/com.example.notes";
+	let (base, seen) = store(Box::new(move |request, _| {
+		match (request.method.as_str(), request.path.as_str()) {
+			("POST", "/token") => json(serde_json::json!({ "access_token": "t" })),
+			("POST", path) if path == format!("{app}/edits") => {
+				json(serde_json::json!({ "id": "e1" }))
+			}
+			_ => StatusCode::NOT_FOUND.into_response(),
+		}
+	}));
+
+	let (root, config) = play_project(None, false);
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["play".to_owned()],
+		dry_run: false,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let http = Http::default();
+	let credentials = super::Credentials::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &credentials,
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let play = super::play::Play::connect(
+		&http,
+		&base,
+		&format!("{base}/token"),
+		&account,
+		"com.example.notes",
+	)
+	.unwrap();
+	let edit = play.edit().unwrap().unwrap();
+	session.play_listing(&edit, &[], None).unwrap();
+
+	// Only the sign-in and the edit: nothing to upload was uploaded.
+	assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn the_play_listing_sends_text_images_and_the_icon() {
+	let account = google_account();
+	let app = "/androidpublisher/v3/applications/com.example.notes";
+	let (base, seen) = store(Box::new(move |request, _| {
+		match (request.method.as_str(), request.path.as_str()) {
+			("POST", "/token") => json(serde_json::json!({ "access_token": "t" })),
+			("POST", path) if path == format!("{app}/edits") => {
+				json(serde_json::json!({ "id": "e1" }))
+			}
+			("PUT", path) if path.ends_with("/listings/en-US") => json(serde_json::json!({})),
+			("DELETE", path)
+				if path.ends_with("/listings/en-US/phoneScreenshots")
+					|| path.ends_with("/listings/en-US/icon") =>
+			{
+				json(serde_json::json!({ "deleted": [] }))
+			}
+			("POST", path)
+				if path.ends_with("/listings/en-US/phoneScreenshots")
+					|| path.ends_with("/listings/en-US/icon") =>
+			{
+				json(serde_json::json!({ "image": { "id": "i" } }))
+			}
+			_ => StatusCode::NOT_FOUND.into_response(),
+		}
+	}));
+
+	let (root, config) = play_project(None, true);
+	let directory = root.path().join("store/en-US");
+	std::fs::create_dir_all(&directory).unwrap();
+	std::fs::write(directory.join("summary.md"), "Keep notes.").unwrap();
+	std::fs::write(directory.join("description.md"), "Keep notes, everywhere.").unwrap();
+	super::images::tests::png(1080, 1920, 255);
+
+	for name in ["01-projects.png", "02-reading.png"] {
+		let path = root
+			.path()
+			.join("store/screenshots/android-phone")
+			.join(name);
+		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+		std::fs::write(path, super::images::tests::png(1080, 1920, 255)).unwrap();
+	}
+
+	let store = super::listing::Store::load(root.path()).unwrap();
+	let args = super::PublishArgs {
+		stores: vec!["play".to_owned()],
+		dry_run: false,
+		submit: false,
+		staged: false,
+		yes: true,
+		json: false,
+		credentials: None,
+		build_number: super::BuildNumber::Auto,
+	};
+	let http = Http::default();
+	let session = super::Session {
+		args: &args,
+		root: root.path(),
+		config: &config,
+		credentials: &super::Credentials::default(),
+		store: &store,
+		http: &http,
+		runner: &super::tools::Recorder::default(),
+		extension: None,
+		name: "Notes".to_owned(),
+		version: "1.4.0".to_owned(),
+		submit: false,
+	};
+	let play = super::play::Play::connect(
+		&http,
+		&base,
+		&format!("{base}/token"),
+		&account,
+		"com.example.notes",
+	)
+	.unwrap();
+	let edit = play.edit().unwrap().unwrap();
+	let icon = crate::icons::Icon::load(&root.path().join("icon.svg")).unwrap();
+	let screenshots = super::images::load(root.path(), "play").unwrap();
+	assert_eq!(screenshots.len(), 1);
+	session
+		.play_listing(&edit, &screenshots, Some(&icon))
+		.unwrap();
+
+	let seen = seen.lock().unwrap();
+	let listing: serde_json::Value = serde_json::from_slice(&seen[2].body).unwrap();
+	assert_eq!(
+		listing,
+		serde_json::json!({
+			"language": "en-US",
+			"title": "Notes",
+			"shortDescription": "Keep notes.",
+			"fullDescription": "Keep notes, everywhere.",
+		})
+	);
+	// Two listing screenshots, then the app icon at 512×512.
+	let images: Vec<&Vec<u8>> = seen[3..]
+		.iter()
+		.filter(|request| request.method == "POST")
+		.map(|request| &request.body)
+		.collect();
+	assert_eq!(images.len(), 3, "{} uploads", images.len());
+	let icon_body = &seen[seen.len() - 1].body;
+	let icon = image::load_from_memory(icon_body).unwrap();
+	assert_eq!((icon.width(), icon.height()), (512, 512));
+}
+
+/// A macOS-only project, so `leptoskit publish macos --dry-run` runs without
+/// the extension build.
+const MACOS_PROJECT: &str = r#"
+[app]
+name = "Notes"
+version = "1.4.0"
+platforms = ["web", "macos"]
+
+[publish.macos]
+github_release = "example/notes"
+"#;
+
+/// The child side of the macOS dry-run scenarios: `super::run` on the
+/// project the parent made the current directory, then its saved report.
+fn run_macos_child(scenario: &str) {
+	let json = scenario == "run-macos-json";
+	let args = super::PublishArgs {
+		stores: vec!["macos".to_owned()],
+		dry_run: true,
+		submit: false,
+		staged: false,
+		yes: true,
+		json,
+		credentials: None,
+		build_number: super::BuildNumber::Number(42),
+	};
+	super::run(&args).unwrap();
+
+	let output = std::env::current_dir().unwrap().join(super::OUTPUT);
+	if json {
+		let json = std::fs::read_to_string(output.join("next-steps.json")).unwrap();
+		let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+		assert_eq!(report["stores"][0]["store"], "macos");
+		assert!(
+			report["stores"][0]["summary"]
+				.as_str()
+				.unwrap()
+				.contains("is checked")
+		);
+	}
+
+	let report = std::fs::read_to_string(output.join("next-steps.md")).unwrap();
+	assert!(
+		report.contains("leptoskit publish macos --submit"),
+		"{report}"
+	);
+	assert!(report.contains("example/notes"), "{report}");
+}
+
+#[test]
+fn publish_run_dry_runs_macos_without_keys_or_sdks() {
+	for scenario in ["run-macos", "run-macos-json"] {
+		let configured = project(MACOS_PROJECT);
+		run_scenario(scenario, configured.path(), &[]);
+	}
+}
+
+#[test]
+fn confirm_skips_its_question_without_a_terminal() {
+	let configured = project(MACOS_PROJECT);
+	run_scenario("run-confirm-skipped", configured.path(), &[]);
 }

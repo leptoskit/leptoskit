@@ -391,3 +391,262 @@ fn report_release(
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+	use std::path::Path;
+
+	use leptoskit_codepush::ReleaseSigningKey;
+	use leptoskit_codepush::ReleaseStore;
+
+	use super::LeptoskitConfig;
+	use super::SignedApproval;
+	use super::SourceApproval;
+	use super::first_difference;
+	use super::project_policy;
+	use super::read_approval;
+	use super::regular_files;
+
+	const COMMIT: &str = "3f9d5a1c2b8e7f604a9d5c3e2b1f0a8d7c6e5b4a";
+	const REPOSITORY: &str = "https://github.com/example/notes";
+
+	/// A bundle directory with one file, as a build leaves it.
+	fn bundle(root: &Path) -> std::path::PathBuf {
+		let directory = root.join("bundle");
+		std::fs::create_dir_all(&directory).unwrap();
+		std::fs::write(directory.join("app.wasm"), b"a wasm bundle").unwrap();
+		directory
+	}
+
+	/// A store with one release of `bundle/` ingested, 1.0.0+1 on
+	/// `production`, and the signer, whose public key is the publisher's.
+	fn store_with_a_release(
+		root: &Path,
+	) -> (
+		ReleaseStore,
+		leptoskit_codepush::IngestedRelease,
+		ReleaseSigningKey,
+	) {
+		let signer = ReleaseSigningKey::from_seed(&[0x5a; 32]);
+		let store = ReleaseStore::open(root.join("store")).unwrap();
+		let ingested = store
+			.ingest_directory(
+				&signer,
+				"Notes",
+				"production",
+				&semver::Version::new(1, 0, 0),
+				1,
+				&bundle(root),
+				false,
+			)
+			.unwrap();
+		(store, ingested, signer)
+	}
+
+	/// The first difference, in path order, between released files and a
+	/// rebuilt directory.
+	fn difference_of(released: &[(&str, &[u8])], built: &[(&str, &[u8])]) -> Option<String> {
+		let directory = tempfile::tempdir().unwrap();
+
+		for (path, bytes) in built {
+			let path = directory.path().join(path);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, bytes).unwrap();
+		}
+
+		first_difference(
+			&released
+				.iter()
+				.map(|(path, bytes)| ((*path).to_owned(), bytes.to_vec()))
+				.collect::<Vec<_>>(),
+			directory.path(),
+		)
+		.unwrap()
+	}
+
+	#[test]
+	fn a_rebuild_must_hold_exactly_the_release_byte_for_byte() {
+		assert_eq!(
+			difference_of(&[("app.wasm", b"a")], &[("app.wasm", b"a")]),
+			None
+		);
+
+		// The same paths, but different bytes.
+		assert_eq!(
+			difference_of(&[("app.wasm", b"a")], &[("app.wasm", b"b")]),
+			Some("app.wasm differs between the release and the rebuilt directory".to_owned())
+		);
+		// A file the release has and the rebuild doesn't.
+		assert_eq!(
+			difference_of(
+				&[("app.wasm", b"a"), ("extra", b"x")],
+				&[("app.wasm", b"a")]
+			),
+			Some("extra is in the release but not in the rebuilt directory".to_owned())
+		);
+		// A file the rebuild has that the release doesn't.
+		assert_eq!(
+			difference_of(
+				&[("app.wasm", b"a")],
+				&[("app.wasm", b"a"), ("added", b"x")]
+			),
+			Some("added is in the rebuilt directory but not in the release".to_owned())
+		);
+	}
+
+	#[test]
+	fn a_rebuild_holding_special_files_is_refused() {
+		let directory = tempfile::tempdir().unwrap();
+		std::fs::write(directory.path().join("app.wasm"), b"a").unwrap();
+		std::os::unix::fs::symlink("app.wasm", directory.path().join("link")).unwrap();
+		let error = regular_files(directory.path()).unwrap_err().to_string();
+		assert!(error.contains("is not a regular file"), "{error}");
+		assert!(
+			error.contains("a release holds only regular files"),
+			"{error}"
+		);
+	}
+
+	/// A project trusting the `publisher` key and requiring two of
+	/// `approver` and `other`'s approvals.
+	fn provenance_project(
+		root: &Path,
+		publisher: &ReleaseSigningKey,
+		approver: &ReleaseSigningKey,
+		other: &ReleaseSigningKey,
+	) -> LeptoskitConfig {
+		LeptoskitConfig::from_toml(
+			&format!(
+				"[app]\nname = \"Notes\"\nversion = \"1.0.0\"\nplatforms = \
+				 [\"web\"]\n\n[codepush]\npublic_keys = \
+				 [\"{}\"]\n\n[codepush.provenance]\nrepository = \"{REPOSITORY}\"\napprovers = \
+				 [\"{}\", \"{}\"]\nthreshold = 2\n",
+				publisher.public_key().to_hex(),
+				approver.public_key().to_hex(),
+				other.public_key().to_hex(),
+			),
+			root,
+		)
+		.unwrap()
+	}
+
+	#[test]
+	fn approvals_are_read_only_when_the_project_would_count_them() {
+		let root = tempfile::tempdir().unwrap();
+		let (store, ingested, publisher) = store_with_a_release(root.path());
+		let approver = ReleaseSigningKey::from_seed(&[1; 32]);
+		let other = ReleaseSigningKey::from_seed(&[2; 32]);
+		let config = provenance_project(root.path(), &publisher, &approver, &other);
+		let policy = project_policy(&config).unwrap().expect("a policy");
+		assert_eq!(policy.threshold(), 2);
+		assert_eq!(policy.repository(), REPOSITORY);
+
+		let statement = SourceApproval::new(&ingested.record.manifest, REPOSITORY, COMMIT).unwrap();
+		let signed = SignedApproval::sign(&statement, &approver).unwrap();
+		let file = root.path().join("approval.json");
+		std::fs::write(&file, serde_json::to_vec(&signed).unwrap()).unwrap();
+
+		// The project's approver, for the policy's repository: counted.
+		read_approval(file.to_str().unwrap(), Some(&policy)).unwrap();
+
+		// An approval of another repository no app of this project counts.
+		let elsewhere = SourceApproval::new(
+			&ingested.record.manifest,
+			"https://github.com/example/elsewhere",
+			COMMIT,
+		)
+		.unwrap();
+		let file = root.path().join("elsewhere.json");
+		std::fs::write(
+			&file,
+			serde_json::to_vec(&SignedApproval::sign(&elsewhere, &approver).unwrap()).unwrap(),
+		)
+		.unwrap();
+		let error = read_approval(file.to_str().unwrap(), Some(&policy))
+			.unwrap_err()
+			.to_string();
+		assert!(
+			error.contains("not codepush.provenance.repository"),
+			"{error}"
+		);
+
+		// A key the policy doesn't list, such as the publisher's own, counts
+		// for nothing.
+		let file = root.path().join("publisher.json");
+		std::fs::write(
+			&file,
+			serde_json::to_vec(&SignedApproval::sign(&statement, &publisher).unwrap()).unwrap(),
+		)
+		.unwrap();
+		let error = read_approval(file.to_str().unwrap(), Some(&policy))
+			.unwrap_err()
+			.to_string();
+		assert!(
+			error.contains("codepush.provenance.approvers doesn't list"),
+			"{error}"
+		);
+
+		// A file that isn't an approval is refused with its name.
+		let file = root.path().join("garbage.json");
+		std::fs::write(&file, b"not an approval").unwrap();
+		let error = read_approval(file.to_str().unwrap(), Some(&policy))
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("garbage.json"), "{error}");
+
+		// The store has one approval; the policy needs two, so apps won't
+		// install the release yet.
+		let attached = store
+			.attach_approvals(&[signed])
+			.unwrap()
+			.into_iter()
+			.next()
+			.unwrap();
+		assert_eq!((attached.added, attached.total), (1, 1));
+		let held = store
+			.approvals(&ingested.record.manifest)
+			.unwrap()
+			.expect("attached")
+			.approvals;
+		assert_eq!(held.len(), 1);
+		match policy.verify(&ingested.record.manifest, &held) {
+			Err(leptoskit_codepush::CodePushError::Unapproved {
+				approvals,
+				threshold,
+				..
+			}) => assert_eq!((approvals, threshold), (1, 2)),
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn a_project_without_provenance_has_no_policy() {
+		let root = tempfile::tempdir().unwrap();
+		let config = LeptoskitConfig::from_toml(
+			"[app]\nname = \"Notes\"\nversion = \"1.0.0\"\nplatforms = [\"web\"]\n",
+			root.path(),
+		)
+		.unwrap();
+		assert!(project_policy(&config).unwrap().is_none());
+
+		// A broken policy is named, never silently ignored: the project asks
+		// for more approvers than it lists.
+		let publisher = ReleaseSigningKey::from_seed(&[0x5a; 32]);
+		let approver = ReleaseSigningKey::from_seed(&[1; 32]);
+		let mut config = LeptoskitConfig::from_toml(
+			&format!(
+				"[app]\nname = \"Notes\"\nversion = \"1.0.0\"\nplatforms = \
+				 [\"web\"]\n\n[codepush.provenance]\nrepository = \"{REPOSITORY}\"\napprovers = \
+				 [\"{}\", \"{}\"]\nthreshold = 2\n",
+				approver.public_key().to_hex(),
+				publisher.public_key().to_hex(),
+			),
+			root.path(),
+		)
+		.unwrap();
+		config.codepush.provenance.as_mut().unwrap().threshold = 3;
+		let error = project_policy(&config).unwrap_err().to_string();
+		assert!(error.contains("codepush.provenance"), "{error}");
+		assert!(error.contains("between 1 and the 2 approvers"), "{error}");
+	}
+}
