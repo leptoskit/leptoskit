@@ -37,3 +37,12 @@ rules:
       # Acceptance uses the composite actions from the checked-out release
       # revision, which can differ from the workflow caller's revision.
       - sdk-acceptance.yml
+      - services-deploy.yml
+
+  # The Kamal job installs the one release of Kamal whose behaviour
+  # docs/agents/services.md cites, by exact version, to check the
+  # configuration `lk infra` writes against it. It's the tool under test
+  # rather than a dependency, and the job holds no secrets or write access.
+  adhoc-packages:
+    ignore:
+      - services-deploy.yml
