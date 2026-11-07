@@ -506,3 +506,6 @@ fn validate_release_platform(
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests;
