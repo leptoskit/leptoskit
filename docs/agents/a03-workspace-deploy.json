@@ -1,0 +1,60 @@
+{
+	"audit": "A03",
+	"status": "in_progress",
+	"base": "914f504d4a33e2c8b1aa3607fd195b302c01f561",
+	"imported_head": "6593c1bf9df89faf2ba0c08cd5db7cfffdb352b1",
+	"import_signatures": "four valid SSH signatures; verifier reported no principal matched",
+	"host": "Mini02",
+	"logs": ".git/a03-evidence",
+	"checks": {
+		"first_focused_run": {
+			"passed": 63,
+			"failed": 1,
+			"failure": "Huddle target path inherited host CARGO_TARGET_DIR; corrected, rerun pending",
+			"real_postgres": [
+				"database_bootstrap_gives_the_app_ownership_without_superuser",
+				"encrypted_archives_restore_real_postgres_and_preserve_the_previous_database"
+			]
+		},
+		"cli_build": "passed before subsequent edits; artifact externally deleted",
+		"focused_rerun": {
+			"passed": 67,
+			"failed": 0,
+			"log": ".git/a03-evidence/focused-rebuild.log",
+			"postgres_required": true
+		},
+		"monostyle": "passed before final edits",
+		"container": {
+			"published_cli": "failed: published 0.3.0 rejects build.backend",
+			"default_podman_ignore": "failed: Dockerfile.dockerignore not selected; sentinel files copied",
+			"source_cli": {
+				"result": "passed",
+				"image_id": "276d1bf0173bd3e5dbc7bb9190073fba5ca7de193d90ac9a37b65a489b7bcc7b",
+				"server": "/app/server",
+				"site": "/app/dist",
+				"uid": 10001,
+				"read_only": true,
+				"ready_response": "a03-ready",
+				"log": ".git/a03-evidence/image-source.log"
+			},
+			"explicit_podman_ignorefile": "passed: compile-time sentinel assertions and build-stage inventory",
+			"compose": "pending"
+		},
+		"full_gate": "pending",
+		"normal_pre_push": "pending",
+		"commands_and_snapshots": {
+			"passed": 61,
+			"failed": 0,
+			"snapshot_changes": 0,
+			"log": ".git/a03-evidence/commands-snapshots.log"
+		},
+		"huddle": "Project resolution and generation passed; generated-image build pending"
+	},
+	"incidents": [
+		".git/a03-target disappeared during validation; no removal command issued by this task",
+		"Podman identity and VM backing files disappeared while VM remained running; API socket still reachable",
+		"A04 target directory also observed missing; A04 rustup still present"
+	],
+	"fly_reference": "https://docs.fly.io/launch/monorepo",
+	"implementation_head": "4f120e89d6a93bf8f09ab1166f561d6ed2970679"
+}
