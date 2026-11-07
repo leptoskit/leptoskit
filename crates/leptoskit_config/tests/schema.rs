@@ -14,6 +14,34 @@ fn document(raw: &str) -> Value {
 }
 
 #[test]
+fn workspace_schema_rejects_unknown_versions_and_literal_credentials() {
+	let generated =
+		serde_json::to_value(schema::workspace("https://example.test/workspace.json")).unwrap();
+	let validator = jsonschema::validator_for(&generated).unwrap();
+	let raw = "format_version=1\n[applications.web]\npath='apps/web'\n[applications.web.bindings.\
+	           api]\napplication='api'\nurl-env='API_URL'\ntoken-env='API_TOKEN'\n[applications.\
+	           api]\npath='apps/api'\n";
+	validator.validate(&document(raw)).unwrap();
+	for changed in [
+		raw.replace("format_version=1", "format_version=2"),
+		raw.replace("API_TOKEN", "literal credential"),
+	] {
+		assert!(validator.validate(&document(&changed)).is_err());
+	}
+}
+
+#[test]
+fn published_workspace_schema_matches_its_types() {
+	let asset = "schemas/leptoskit.workspace.v1.schema.json";
+	let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src");
+	let raw = std::fs::read_to_string(root.join(asset)).expect("run schema:update");
+	let actual: Value = serde_json::from_str(&raw).unwrap();
+	let expected =
+		serde_json::to_value(schema::workspace(&format!("https://leptoskit.dev/{asset}"))).unwrap();
+	assert_eq!(actual, expected, "run schema:update");
+}
+
+#[test]
 fn validates_defaults_and_every_project_configuration() {
 	let schema = serde_json::to_value(schema::configuration(&schema_url())).expect("schema");
 	let validator = jsonschema::validator_for(&schema).expect("valid schema");

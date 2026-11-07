@@ -162,10 +162,12 @@ impl Drop for Inner {
 	}
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn wayland_session(wayland_display: bool, xdg_session_type: Option<&str>) -> bool {
 	wayland_display || xdg_session_type.is_some_and(|value| value == "wayland")
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn require_x11_session(wayland_display: bool, xdg_session_type: Option<&str>) -> Result<(), Error> {
 	if wayland_session(wayland_display, xdg_session_type) {
 		Err(Error::Unavailable)

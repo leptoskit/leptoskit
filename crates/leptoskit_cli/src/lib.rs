@@ -66,5 +66,6 @@ pub mod testing;
 pub mod ui;
 pub mod verify;
 pub mod wasm;
+pub mod workspace;
 
 mod secrets;

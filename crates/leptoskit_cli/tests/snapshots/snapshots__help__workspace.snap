@@ -1,0 +1,18 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Validates a workspace and releases independently configured apps
+
+Usage: leptoskit workspace <COMMAND>
+
+Commands:
+  explain  Shows app boundaries, readiness order, call bindings and evidence gaps
+  check    Rejects invalid graphs, escaping paths and conflicting managed identities
+  plan     Freeze application configurations and independently pinned artifacts
+  deploy   Apply an independently pinned plan, revalidating unchanged releases
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

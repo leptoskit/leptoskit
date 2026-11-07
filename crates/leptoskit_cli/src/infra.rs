@@ -201,6 +201,18 @@ pub struct ReleaseArgs {
 	/// Independently authenticated SHA-256 of the packaging descriptor.
 	#[arg(long, requires = "verified_descriptor")]
 	pub descriptor_sha256: Option<String>,
+	/// Optional SHA-256 of the parsed application configuration selected by a
+	/// workspace plan. Checked before any infrastructure operation.
+	#[arg(long)]
+	pub configuration_sha256: Option<String>,
+	/// Leave an already current verified release running after rechecking its
+	/// policy, schema, image and readiness. Never reuses an older release.
+	#[arg(
+		long,
+		requires_all = ["version", "verified_descriptor", "descriptor_sha256"],
+		conflicts_with_all = ["rollback", "recover", "rollback_schema"]
+	)]
+	pub reuse_current: bool,
 	/// Immutable image tag, or a Git commit for the connected deployment
 	/// service.
 	#[arg(long, conflicts_with = "rollback")]
@@ -782,6 +794,9 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Release {
+	/// Configuration consumed by this release; legacy records have no pin.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	configuration_sha256: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	authorization: Option<approvals::Evidence>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -823,6 +838,29 @@ fn remote_history(ip: &str, name: &str) -> Result<String> {
 /// history; database rollback is explicit and never runs under live writers.
 pub fn release(args: &ReleaseArgs) -> Result<()> {
 	releases::run(args)
+}
+
+/// Validate immutable release inputs without contacting a provider or host.
+pub(crate) fn preflight_verified_release(
+	root: &Path,
+	config: &LeptoskitConfig,
+	version: &str,
+	path: &Path,
+	pin: &str,
+) -> Result<()> {
+	managed_settings(config)?;
+	build::validate_version(version)?;
+	let descriptor = verified::read(path, pin)?;
+	descriptor.application(root, config)?;
+	ensure!(
+		descriptor.migrations == history_fingerprint(releases::schema(root, config)?)?,
+		"verified source schema differs from application migrations"
+	);
+	ensure!(
+		config.serve.probes,
+		"managed workspace releases require serve.probes = true"
+	);
+	Ok(())
 }
 
 #[cfg(test)]

@@ -4,6 +4,8 @@ The [management service implementation](management-service.md) records the opera
 
 The [analytics and infrastructure plugins investigation](analytics-and-infra-plugins.md) records the product research, implemented embedded tier, plugin contract and remaining observability adapters.
 
+The [workspace release graph](workspace-release-graph.md) records application boundaries, readiness and call graphs, inspection evidence, and the remaining independent-release acceptance gates.
+
 Notes for people and coding agents working on leptoskit itself. The public site in `docs/src` is for app authors; anything about how this repository is built, tested, or planned lives here or in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). Start with [`AGENTS.md`](../../AGENTS.md).
 
 | File                                                                 | What it covers                                                                                                                                                                                               |

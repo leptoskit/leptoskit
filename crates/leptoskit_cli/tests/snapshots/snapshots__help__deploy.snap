@@ -11,6 +11,10 @@ Options:
           Packaging descriptor whose digest was independently authenticated
       --descriptor-sha256 <DESCRIPTOR_SHA256>
           Independently authenticated SHA-256 of the packaging descriptor
+      --configuration-sha256 <CONFIGURATION_SHA256>
+          Optional SHA-256 of the parsed application configuration selected by a workspace plan. Checked before any infrastructure operation
+      --reuse-current
+          Leave an already current verified release running after rechecking its policy, schema, image and readiness. Never reuses an older release
       --version <VERSION>
           Immutable image tag, or a Git commit for the connected deployment service
       --rollback <ROLLBACK>

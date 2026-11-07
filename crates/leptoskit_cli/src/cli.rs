@@ -405,6 +405,11 @@ pub enum Command {
 		#[arg(long)]
 		all: bool,
 	},
+	/// Validates a workspace and releases independently configured apps.
+	Workspace {
+		#[command(subcommand)]
+		command: crate::workspace::WorkspaceCommand,
+	},
 	/// Formats Rust, and the markup in `view!` macros, with the project's
 	/// `rustfmt.toml`.
 	Format(leptoskit_fmt::cli::FormatArgs),
@@ -727,11 +732,11 @@ pub fn main() {
 	}
 	let mut command = Cli::command();
 
-	// An offline verifier must not execute the current project's plugin
-	// programs merely to add their commands to its help text.
+	// Offline verification and workspace inspection must not execute project
+	// plugins merely to add their commands to the help text.
 	if arguments
 		.first()
-		.is_none_or(|argument| argument != "verify")
+		.is_none_or(|argument| !matches!(argument.as_str(), "verify" | "workspace"))
 		&& let Some(root) = std::env::current_dir().ok()
 		&& let Some(plugins) = crate::plugin_command::help_section(&root)
 	{
@@ -845,6 +850,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 		Command::Auth { command } => crate::auth_command::run(command),
 		Command::Codepush { command } => codepush::run(command),
 		Command::Doctor { all } => doctor::run(all),
+		Command::Workspace { command } => crate::workspace::run(command),
 		Command::Format(args) => {
 			match leptoskit_fmt::cli::execute(&args) {
 				Outcome::Formatted => Ok(()),

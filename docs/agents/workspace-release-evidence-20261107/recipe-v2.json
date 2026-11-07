@@ -1,0 +1,11 @@
+{
+	"repository": "https://github.com/leptoskit/leptoskit",
+	"commit": "dbdb95166a67134cf220d8462b6e092464b1ec59",
+	"builder_image": "docker.io/library/rust@sha256:4333721398de61f53ccbe53b0b855bcc4bb49e55828e8f652d7a8ac33dd0c118",
+	"target": "aarch64-unknown-linux-musl",
+	"package": "verified-backend",
+	"binary": "verified-backend",
+	"features": [],
+	"no_default_features": false,
+	"rustflags": []
+}

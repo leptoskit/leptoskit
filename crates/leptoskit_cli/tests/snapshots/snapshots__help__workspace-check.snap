@@ -1,0 +1,13 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Rejects invalid graphs, escaping paths and conflicting managed identities
+
+Usage: leptoskit workspace check [OPTIONS]
+
+Options:
+      --manifest <MANIFEST>  Workspace manifest; otherwise find leptoskit.workspace.toml in this directory or a parent. Application paths are relative to that file
+      --json                 Emit a versioned JSON report without secret values
+  -h, --help                 Print help
+  -V, --version              Print version

@@ -38,6 +38,9 @@ Options:
       --tag <TAG>
           Local image tag. This command never pushes
 
+      --service <SERVICE>
+          Managed infra.name required by Kamal; bound into the image configuration
+
       --reuse-existing
           Inspect an existing local tag instead of packaging a new image
 
