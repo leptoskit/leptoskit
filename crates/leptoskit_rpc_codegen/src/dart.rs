@@ -2,9 +2,12 @@
 //!
 //! Models are ordinary classes with `fromJson`/`toJson` generated from the
 //! schemas, string enums become Dart enums, and shapes Dart cannot model yet
-//! (tagged unions) arrive as `Object?` holding the decoded JSON. Calls go to
-//! the same routes the app itself uses. Queries, mutations and channels
-//! also run over the live socket, through the runtime in `lib/src/live.dart`.
+//! (tagged unions) arrive as `Object?` holding the decoded JSON. Requiredness
+//! and nullability stay independent: a required nullable value is required
+//! and writes `null`, while an optional nullable value uses the three-state
+//! `Presence` wrapper. Calls go to the same routes the app itself uses.
+//! Queries, mutations and channels also run over the live socket, through the
+//! runtime in `lib/src/live.dart`.
 
 // Generators build source text; the allocation `write!` would save is noise here.
 #![allow(clippy::format_push_string)]
@@ -64,6 +67,12 @@ impl DartType {
 			Self::Void | Self::Dynamic | Self::Nullable(_) => self,
 			_ => Self::Nullable(Box::new(self)),
 		}
+	}
+
+	/// Whether `null` is one of this type's values. `Object?` is the
+	/// intentional free-form JSON type, so it admits `null` too.
+	fn allows_null(&self) -> bool {
+		matches!(self, Self::Nullable(_) | Self::Dynamic)
 	}
 
 	fn render(&self) -> String {
@@ -134,7 +143,14 @@ impl DartType {
 					format!("{expr}.map((key, value) => MapEntry(key, {value}))")
 				}
 			}
-			Self::Nullable(inner) => inner.encode(expr),
+			Self::Nullable(inner) => {
+				let encoded = inner.encode(expr);
+				if encoded == expr {
+					expr.to_owned()
+				} else {
+					format!("{expr} == null ? null : {encoded}")
+				}
+			}
 		}
 	}
 }
@@ -240,12 +256,49 @@ impl DartTypes {
 }
 
 /// One field of a generated class.
+///
+/// Requiredness and nullability are independent: a required field may still
+/// hold `null`, and an optional nullable field needs three states. Such a
+/// field uses the generated `Presence` wrapper rather than a nullable Dart
+/// type, so an omitted field and an explicit `null` stay distinct.
 struct Field {
 	dart: String,
 	wire: String,
 	ty: DartType,
-	nullable: bool,
+	required: bool,
 	docs: Vec<String>,
+}
+
+impl Field {
+	/// Whether an optional field needs the three-state presence wrapper.
+	fn presence(&self) -> bool {
+		!self.required && self.ty.allows_null()
+	}
+
+	/// The Dart field type.
+	fn rendered_type(&self) -> String {
+		if self.presence() {
+			format!("Presence<{}>", self.ty.render())
+		} else if self.required {
+			self.ty.render()
+		} else {
+			self.ty.clone().optional().render()
+		}
+	}
+
+	/// The constructor's default for an absent optional nullable field.
+	fn absent(&self) -> String {
+		format!("const Presence<{}>.absent()", self.ty.render())
+	}
+}
+
+/// A schema's value as a field or argument: a lone `null` schema is still a
+/// JSON value, not Dart's `void`.
+fn value_type(ty: DartType) -> DartType {
+	match ty {
+		DartType::Void => DartType::Dynamic,
+		other => other,
+	}
 }
 
 /// The `class` declaration for an object schema.
@@ -279,15 +332,15 @@ fn class_fields(
 	let mut field_names = Scope::new(DART_RESERVED_FIELDS);
 
 	for (wire, property) in &object.properties {
-		let ty = types.convert(property, &format!("{name}{}", type_name(wire)), spec);
-		let nullable = !object.is_required(wire)
-			|| has_default(property)
-			|| matches!(ty, DartType::Nullable(_));
+		let ty = value_type(types.convert(property, &format!("{name}{}", type_name(wire)), spec));
+		// A default makes a field optional on input, but never turns a
+		// nullable field into a required one, or the reverse.
+		let required = object.is_required(wire) && !has_default(property);
 		fields.push(Field {
 			dart: field_names.bind(&dart_identifier(wire)),
 			wire: (*wire).to_owned(),
 			ty,
-			nullable,
+			required,
 			docs: description(property)
 				.map(|docs| docs.lines().map(str::trim).map(str::to_owned).collect())
 				.unwrap_or_default(),
@@ -304,10 +357,12 @@ fn constructor(name: &str, fields: &[Field]) -> String {
 		fields
 			.iter()
 			.map(|field| {
-				if field.nullable {
-					format!("\t\tthis.{},", field.dart)
-				} else {
+				if field.required {
 					format!("\t\trequired this.{},", field.dart)
+				} else if field.presence() {
+					format!("\t\tthis.{} = {},", field.dart, field.absent())
+				} else {
+					format!("\t\tthis.{},", field.dart)
 				}
 			})
 			.collect::<Vec<_>>()
@@ -320,17 +375,15 @@ fn field_lines(fields: &[Field]) -> String {
 	let mut out = String::new();
 
 	for field in fields {
-		let ty = if field.nullable {
-			field.ty.clone().optional()
-		} else {
-			field.ty.clone()
-		};
-
 		for line in &field.docs {
 			out.push_str(&format!("\t/// {line}\n"));
 		}
 
-		out.push_str(&format!("\tfinal {} {};\n", ty.render(), field.dart));
+		out.push_str(&format!(
+			"\tfinal {} {};\n",
+			field.rendered_type(),
+			field.dart
+		));
 	}
 
 	out
@@ -343,17 +396,30 @@ fn from_json(name: &str, fields: &[Field]) -> String {
 		fields
 			.iter()
 			.map(|field| {
-				let ty = if field.nullable {
-					field.ty.clone().optional()
+				let key = dart_string(&field.wire);
+				let source = if field.required {
+					format!("_requiredValue(json, {key})")
 				} else {
-					field.ty.clone()
+					format!("json[{key}]")
 				};
 
-				format!(
-					"\t\t{}: {},",
-					field.dart,
-					ty.decode(&format!("json[{}]", dart_string(&field.wire)))
-				)
+				if field.presence() {
+					format!(
+						"\t\t{}: json.containsKey({key}) ? Presence<{}>.present({}) : const \
+						 Presence<{}>.absent(),",
+						field.dart,
+						field.ty.render(),
+						field.ty.decode(&source),
+						field.ty.render()
+					)
+				} else {
+					let ty = if field.required {
+						field.ty.clone()
+					} else {
+						field.ty.clone().optional()
+					};
+					format!("\t\t{}: {},", field.dart, ty.decode(&source))
+				}
 			})
 			.collect::<Vec<_>>()
 			.join("\n")
@@ -367,20 +433,25 @@ fn to_json(fields: &[Field]) -> String {
 		fields
 			.iter()
 			.map(|field| {
-				let entry = if field.nullable {
-					field.ty.clone().optional().encode(&field.dart)
+				let key = dart_string(&field.wire);
+				if field.presence() {
+					format!(
+						"\t\tif ({0}.isPresent) {1}: {2},",
+						field.dart,
+						key,
+						field.ty.encode(&format!("{}.value", field.dart))
+					)
+				} else if field.required {
+					// A required nullable field always has a key; `null` is
+					// a value, not an omission.
+					format!("\t\t{key}: {},", field.ty.encode(&field.dart))
 				} else {
-					field.ty.encode(&field.dart)
-				};
-				if field.nullable {
 					format!(
 						"\t\tif ({0} != null) {1}: {2},",
 						field.dart,
-						dart_string(&field.wire),
-						entry
+						key,
+						field.ty.encode(&field.dart)
 					)
-				} else {
-					format!("\t\t{}: {},", dart_string(&field.wire), entry)
 				}
 			})
 			.collect::<Vec<_>>()
@@ -592,36 +663,36 @@ impl Signature {
 		let mut payload = Vec::new();
 
 		for (param, identifier) in function.params.iter().zip(&identifiers) {
-			let ty = types.convert(
+			let ty = value_type(types.convert(
 				&param.schema,
 				&format!("{}{}", type_name(&function.name), type_name(&param.name)),
 				spec,
-			);
-			// The parameter type is what the wire accepts; an optional
-			// non-nullable argument becomes nullable once, not twice.
-			let optional = !param.is_required() || matches!(ty, DartType::Nullable(_));
+			));
+			// Requiredness is the spec's `required` flag alone. A nullable
+			// required argument stays required; only an optional nullable
+			// one needs the three-state presence wrapper.
+			let required = param.required;
+			let presence = !required && ty.allows_null();
+			let key = dart_string(&param.name);
 
-			let parameter_type = if optional {
-				ty.clone().optional()
-			} else {
-				ty.clone()
-			};
-			parameters.push(if optional {
-				format!("{} {}", parameter_type.render(), identifier)
-			} else {
-				format!("required {} {}", parameter_type.render(), identifier)
-			});
-
-			if optional {
-				payload.push(format!(
-					"\t\t\t\tif ({identifier} != null) {}: {},",
-					dart_string(&param.name),
-					ty.encode(identifier)
+			if presence {
+				parameters.push(format!(
+					"Presence<{}> {} = const Presence<{}>.absent()",
+					ty.render(),
+					identifier,
+					ty.render()
 				));
-			} else {
 				payload.push(format!(
-					"\t\t\t\t{}: {},",
-					dart_string(&param.name),
+					"\t\t\t\tif ({identifier}.isPresent) {key}: {},",
+					ty.encode(&format!("{identifier}.value"))
+				));
+			} else if required {
+				parameters.push(format!("required {} {}", ty.render(), identifier));
+				payload.push(format!("\t\t\t\t{key}: {},", ty.encode(identifier)));
+			} else {
+				parameters.push(format!("{} {}", ty.clone().optional().render(), identifier));
+				payload.push(format!(
+					"\t\t\t\tif ({identifier} != null) {key}: {},",
 					ty.encode(identifier)
 				));
 			}
@@ -967,7 +1038,7 @@ fn readme(context: &Context<'_>, methods: &[String], channels: &[String]) -> Str
 					.params
 					.iter()
 					.zip(parameter_names(function))
-					.filter(|(param, _)| param.is_required())
+					.filter(|(param, _)| param.required)
 					.map(|(_, identifier)| format!("{identifier}: ..."))
 					.collect();
 				format!(
@@ -1042,7 +1113,7 @@ fn live_readme(context: &Context<'_>, methods: &[String], channels: &[String]) -
 			.params
 			.iter()
 			.zip(parameter_names(function))
-			.filter(|(param, _)| param.is_required())
+			.filter(|(param, _)| param.required)
 			.map(|(_, identifier)| format!("{identifier}: ..."))
 			.collect::<Vec<_>>()
 			.join(", ")
@@ -1094,8 +1165,58 @@ fn live_readme(context: &Context<'_>, methods: &[String], channels: &[String]) -
 	)
 }
 
-/// The error type, `serde_qs` encoder, and helpers every package shares.
-const RUNTIME: &str = r"/// How a failed call is classified, mirroring `leptoskit_rpc::FnError`.
+/// The presence wrapper, error type, `serde_qs` encoder, and helpers every
+/// package shares.
+const RUNTIME: &str = r"/// An optional argument or field with three states: absent, present as `null`,
+/// and present with a value. A nullable Dart type alone cannot tell an omitted
+/// field from an explicit `null`.
+sealed class Presence<T> {
+  /// The three-state wrapper.
+  const Presence();
+
+  /// Leaves the argument or field out of the JSON object.
+  const factory Presence.absent() = _Absent<T>;
+
+  /// Sends [value], including `null` when the schema allows it.
+  const factory Presence.present(T value) = _Present<T>;
+
+  /// Whether a value, possibly `null`, is sent.
+  bool get isPresent;
+
+  /// The value to send; throws when [isPresent] is false.
+  T get value;
+}
+
+final class _Absent<T> extends Presence<T> {
+  const _Absent();
+
+  @override
+  bool get isPresent => false;
+
+  @override
+  T get value => throw StateError('the value is absent');
+}
+
+final class _Present<T> extends Presence<T> {
+  const _Present(this.value);
+
+  @override
+  bool get isPresent => true;
+
+  @override
+  final T value;
+}
+
+/// The value of a required field, which must be present even when it may be
+/// `null`.
+Object? _requiredValue(Map<String, dynamic> json, String key) {
+  if (!json.containsKey(key)) {
+    throw StateError('missing required field \'$key\'');
+  }
+  return json[key];
+}
+
+/// How a failed call is classified, mirroring `leptoskit_rpc::FnError`.
 class FnError implements Exception {
   /// One of `network`, `invalid`, `server`, `decode`, or `other`.
   final String kind;
@@ -1147,7 +1268,8 @@ class FnError implements Exception {
 }
 
 /// Encodes a value the way `serde_qs` does: nested keys in brackets, lists by
-/// index, `null` omitted.
+/// index, `null` omitted. Query-string and form encodings cannot send an
+/// explicit null; use JSON or the live connection when null is meaningful.
 String toQueryString(Map<String, Object?> value) {
   final pairs = <String>[];
 
@@ -1189,11 +1311,10 @@ const INVOKE: &str =
 	 == 'form') {\n\t\t\theaders['Content-Type'] = \
 	 'application/x-www-form-urlencoded';\n\t\t\tbody = \
 	 Uint8List.fromList(utf8.encode(toQueryString(payload)));\n\t\t} else \
-	 {\n\t\t\theaders['Content-Type'] = 'application/json';\n\t\t\t// Absent optional arguments \
-	 are omitted, as `serde_qs` omits them.\n\t\t\tfinal present = <String, \
-	 Object?>{\n\t\t\t\tfor (final entry in payload.entries)\n\t\t\t\t\tif (entry.value != null) \
-	 entry.key: entry.value,\n\t\t\t};\n\t\t\tbody = \
-	 Uint8List.fromList(utf8.encode(jsonEncode(present)));\n\t\t}\n\t\tlate http.Response \
+	 {\n\t\t\theaders['Content-Type'] = 'application/json';\n\t\t\t// The payload already omits \
+	 absent optional arguments; a null value here is an\n\t\t\t// explicit null the schema \
+	 allows, so it must stay in the body.\n\t\t\tbody = \
+	 Uint8List.fromList(utf8.encode(jsonEncode(payload)));\n\t\t}\n\t\tlate http.Response \
 	 response;\n\t\ttry {\n\t\t\tfinal uri = Uri.parse(url);\n\t\t\tfinal request = \
 	 http.Request(method, uri)\n\t\t\t\t..headers.addAll(headers);\n\t\t\tif (body != null) \
 	 request.bodyBytes = body;\n\t\t\tresponse = await http.Response.fromStream(await \

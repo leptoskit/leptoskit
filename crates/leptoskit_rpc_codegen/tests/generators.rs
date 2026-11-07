@@ -560,15 +560,23 @@ fn dart_nullable_model_fields_are_wrapped_once() {
 		.find(|file| file.path == std::path::Path::new("lib/pages.dart"))
 		.expect("models");
 	assert!(
-		models.contents.contains("final String? end;"),
+		models.contents.contains("final Presence<String?> end;"),
 		"{}",
 		models.contents
 	);
 	assert!(!models.contents.contains("String??"), "{}", models.contents);
 	assert!(
+		models.contents.contains(concat!(
+			"end: json.containsKey('end') ? Presence<String?>.present(json['end'] == null ? ",
+			"null : json['end'] as String) : const Presence<String?>.absent(),"
+		)),
+		"{}",
+		models.contents
+	);
+	assert!(
 		models
 			.contents
-			.contains("end: json['end'] == null ? null : json['end'] as String"),
+			.contains("if (end.isPresent) 'end': end.value,"),
 		"{}",
 		models.contents
 	);

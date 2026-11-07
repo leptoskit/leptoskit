@@ -23,6 +23,7 @@ use crate::schema::analyze;
 use crate::schema::has_default;
 use crate::schema::recognize_enum;
 use crate::spec::ApiSpec;
+use crate::spec::HttpInput;
 
 /// What kind of detail a target cannot carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,10 +115,18 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 		);
 
 		for param in &function.params {
-			walker.walk(
-				&param.schema,
-				&format!("functions.{}.params.{}", function.name, param.name),
-			);
+			let path = format!("functions.{}.params.{}", function.name, param.name);
+
+			// Query-string and form encodings omit nulls at every depth, so
+			// Dart cannot send an explicit null through them even though its
+			// generated API now keeps null distinct from absence.
+			if options.language == TargetLanguage::Dart
+				&& matches!(function.input, HttpInput::Query | HttpInput::Form)
+			{
+				walker.walk_omitted_null(&param.schema, &path, &mut Vec::new());
+			}
+
+			walker.walk(&param.schema, &path);
 		}
 	}
 
@@ -134,6 +143,21 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 			&channel.presence_schema,
 			&format!("channels.{}.presence", channel.name),
 		);
+
+		// The generated `join` takes the presence value as `P?`, where `null`
+		// means "show no presence". When the schema also allows null as a
+		// presence value, those two states cannot be told apart.
+		if options.language == TargetLanguage::Dart
+			&& walker.nullable_alias(&channel.presence_schema)
+		{
+			walker.loss(
+				&format!("channels.{}.presence", channel.name),
+				DiagnosticKind::NullableCollapsed,
+				"the optional presence argument uses `null` for absence, so an explicit null \
+				 presence value cannot be sent separately"
+					.to_owned(),
+			);
+		}
 	}
 
 	for (name, schema) in &usable.schemas {
@@ -291,7 +315,11 @@ impl Walker<'_> {
 			let analyzed = analyze(property_schema);
 			let optional = !object.is_required(property) || has_default(property_schema);
 			let collapses_null = match self.target {
-				TargetLanguage::Dart => self.nullable_alias(property_schema),
+				// Dart models keep required and optional nullable fields
+				// distinct. A nullable value in a query-string or form
+				// argument is still lossy, and is reported by
+				// `walk_omitted_null` against the function's own encoding.
+				TargetLanguage::Dart => false,
 				TargetLanguage::Go => optional && self.nullable_alias(property_schema),
 				TargetLanguage::Rust | TargetLanguage::Cli => optional && analyzed.nullable,
 				_ => false,
@@ -321,8 +349,74 @@ impl Walker<'_> {
 		}
 	}
 
-	/// Dart and Go aliases retain the underlying nullable representation.
-	/// Walk references without revisiting cycles; Rust wraps named aliases
+	/// Walks a Dart query-string or form argument, reporting every place a
+	/// `null` value cannot survive encoding. References are followed so a
+	/// nullable field inside a named object is reported at its own path.
+	fn walk_omitted_null(&mut self, schema: &Value, path: &str, stack: &mut Vec<String>) {
+		let analyzed = analyze(schema);
+
+		// A union is already reported as a `dynamic` fallback, and a lone
+		// null schema has no non-null value to distinguish.
+		if analyzed.nullable && !matches!(&analyzed.shape, Shape::Null | Shape::Union(_)) {
+			self.loss(
+				path,
+				DiagnosticKind::NullableCollapsed,
+				"query-string and form encodings omit `null`; an explicit null cannot be sent \
+				 separately from an absent value"
+					.to_owned(),
+			);
+		}
+
+		match analyzed.shape {
+			Shape::Ref(name) => {
+				if stack.iter().any(|seen| seen == name) {
+					return;
+				}
+				if let Some(target) = self.spec.schema(name) {
+					stack.push(name.to_owned());
+					self.walk_omitted_null(target, path, stack);
+					stack.pop();
+				}
+			}
+			Shape::Array { items } => {
+				if let Some(items) = items {
+					self.walk_omitted_null(items, &format!("{path}.items"), stack);
+				}
+			}
+			Shape::Tuple(items) => {
+				for (index, item) in items.iter().enumerate() {
+					self.walk_omitted_null(item, &format!("{path}.prefixItems[{index}]"), stack);
+				}
+			}
+			Shape::Object(object) => {
+				for (property, property_schema) in &object.properties {
+					self.walk_omitted_null(property_schema, &property_path(path, property), stack);
+				}
+				if let Some(additional) = object.additional {
+					self.walk_omitted_null(
+						additional,
+						&format!("{path}.additionalProperties"),
+						stack,
+					);
+				}
+			}
+			Shape::Map { values } => {
+				if let Some(values) = values {
+					self.walk_omitted_null(values, &format!("{path}.additionalProperties"), stack);
+				}
+			}
+			Shape::Null
+			| Shape::Boolean
+			| Shape::Integer { .. }
+			| Shape::Number { .. }
+			| Shape::String { .. }
+			| Shape::Union(_)
+			| Shape::Any => {}
+		}
+	}
+
+	/// Go aliases retain the underlying nullable representation. Walk
+	/// references without revisiting cycles; Rust wraps named aliases
 	/// separately and can retain two Option layers, so it uses direct shape.
 	fn nullable_alias(&self, schema: &Value) -> bool {
 		let mut current = schema;

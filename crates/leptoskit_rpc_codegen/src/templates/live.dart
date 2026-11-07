@@ -982,7 +982,8 @@ LiveError _wireError(Object? err) {
 int _int(Object? value, int fallback) =>
     value is num && value.isFinite ? value.toInt() : fallback;
 
-/// The arguments without absent optional fields, as the HTTP calls send them.
+/// The arguments as the HTTP calls send them: absent optional fields are
+/// already missing from the map, while an explicit `null` stays a value.
 Object? _present(Object? args) {
   if (args == null) {
     return const <String, Object?>{};
@@ -991,8 +992,7 @@ Object? _present(Object? args) {
     return args;
   }
   return <String, Object?>{
-    for (final entry in args.entries)
-      if (entry.value != null) '${entry.key}': entry.value,
+    for (final entry in args.entries) '${entry.key}': entry.value,
   };
 }
 

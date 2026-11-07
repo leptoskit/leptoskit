@@ -26,8 +26,8 @@ class Client2 {
 	final String toJson2;
 
 	factory Client2.fromJson(Map<String, dynamic> json) => Client2(
-		id: (json['id'] as num).toInt(),
-		toJson2: json['to_json'] as String,
+		id: (_requiredValue(json, 'id') as num).toInt(),
+		toJson2: _requiredValue(json, 'to_json') as String,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
@@ -44,7 +44,7 @@ class Encoding {
 	final String name;
 
 	factory Encoding.fromJson(Map<String, dynamic> json) => Encoding(
-		name: json['name'] as String,
+		name: _requiredValue(json, 'name') as String,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
@@ -72,7 +72,7 @@ class ListTodosInput {
 	final bool x;
 
 	factory ListTodosInput.fromJson(Map<String, dynamic> json) => ListTodosInput(
-		x: json['x'] as bool,
+		x: _requiredValue(json, 'x') as bool,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
@@ -88,12 +88,61 @@ class Option {
 	final bool on_;
 
 	factory Option.fromJson(Map<String, dynamic> json) => Option(
-		on_: json['on'] as bool,
+		on_: _requiredValue(json, 'on') as bool,
 	);
 
 	Map<String, Object?> toJson() => <String, Object?>{
 		'on': on_,
 	};
+}
+
+/// An optional argument or field with three states: absent, present as `null`,
+/// and present with a value. A nullable Dart type alone cannot tell an omitted
+/// field from an explicit `null`.
+sealed class Presence<T> {
+  /// The three-state wrapper.
+  const Presence();
+
+  /// Leaves the argument or field out of the JSON object.
+  const factory Presence.absent() = _Absent<T>;
+
+  /// Sends [value], including `null` when the schema allows it.
+  const factory Presence.present(T value) = _Present<T>;
+
+  /// Whether a value, possibly `null`, is sent.
+  bool get isPresent;
+
+  /// The value to send; throws when [isPresent] is false.
+  T get value;
+}
+
+final class _Absent<T> extends Presence<T> {
+  const _Absent();
+
+  @override
+  bool get isPresent => false;
+
+  @override
+  T get value => throw StateError('the value is absent');
+}
+
+final class _Present<T> extends Presence<T> {
+  const _Present(this.value);
+
+  @override
+  bool get isPresent => true;
+
+  @override
+  final T value;
+}
+
+/// The value of a required field, which must be present even when it may be
+/// `null`.
+Object? _requiredValue(Map<String, dynamic> json, String key) {
+  if (!json.containsKey(key)) {
+    throw StateError('missing required field \'$key\'');
+  }
+  return json[key];
 }
 
 /// How a failed call is classified, mirroring `leptoskit_rpc::FnError`.
@@ -148,7 +197,8 @@ class FnError implements Exception {
 }
 
 /// Encodes a value the way `serde_qs` does: nested keys in brackets, lists by
-/// index, `null` omitted.
+/// index, `null` omitted. Query-string and form encodings cannot send an
+/// explicit null; use JSON or the live connection when null is meaningful.
 String toQueryString(Map<String, Object?> value) {
   final pairs = <String>[];
 
@@ -281,12 +331,9 @@ class Client {
 			body = Uint8List.fromList(utf8.encode(toQueryString(payload)));
 		} else {
 			headers['Content-Type'] = 'application/json';
-			// Absent optional arguments are omitted, as `serde_qs` omits them.
-			final present = <String, Object?>{
-				for (final entry in payload.entries)
-					if (entry.value != null) entry.key: entry.value,
-			};
-			body = Uint8List.fromList(utf8.encode(jsonEncode(present)));
+			// The payload already omits absent optional arguments; a null value here is an
+			// explicit null the schema allows, so it must stay in the body.
+			body = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
 		}
 		late http.Response response;
 		try {
