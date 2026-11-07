@@ -57,6 +57,7 @@
 #[cfg(feature = "relay")]
 mod cluster;
 mod hub;
+mod mailbox;
 pub(crate) mod memory;
 mod session;
 mod socket;

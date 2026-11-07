@@ -40,6 +40,7 @@ use super::hub::Batch;
 use super::hub::Changed;
 use super::hub::Registration;
 use super::hub::ShareKey;
+use super::mailbox;
 use super::run_query;
 use crate::Kind;
 use crate::live::ClientFrame;
@@ -67,6 +68,8 @@ use crate::server::run::recording_commits;
 use crate::server::stream;
 use crate::server::stream::StreamSink;
 
+#[cfg(test)]
+mod completion_tests;
 mod pending;
 #[cfg(all(test, feature = "sqlite"))]
 mod recovery_tests;
@@ -113,18 +116,18 @@ struct Session {
 	member: String,
 	caller: CallerSlot,
 	out: mpsc::Sender<Outbound>,
-	batches: mpsc::UnboundedReceiver<Batch>,
-	finished: mpsc::UnboundedReceiver<Finished>,
-	acts: mpsc::UnboundedSender<Finished>,
-	/// One permit per action that may run at once.
+	batches: mailbox::Receiver,
+	finished: mpsc::Receiver<Finished>,
+	acts: mpsc::Sender<Finished>,
+	/// One permit per running action or reply still awaiting delivery.
 	actions: Arc<tokio::sync::Semaphore>,
 	applied: watch::Receiver<u64>,
 	subscriptions: HashMap<u32, Subscription>,
 	joined: HashMap<String, Joined>,
 	streams: HashMap<u32, Running>,
 	/// What running streams send, forwarded in order.
-	stream_frames: mpsc::UnboundedReceiver<String>,
-	stream_out: mpsc::UnboundedSender<String>,
+	stream_frames: mpsc::Receiver<stream::Frame>,
+	stream_out: mpsc::Sender<stream::Frame>,
 	/// The version of the last complete transition queued for transport.
 	last_sent: u64,
 	/// At most one unfinished transition; new batches coalesce into a later
@@ -181,12 +184,23 @@ struct Joined {
 
 /// A stream the connection opened, and the room its client has left.
 struct Running {
+	generation: Arc<()>,
 	task: tokio::task::JoinHandle<()>,
 	credits: Arc<tokio::sync::Semaphore>,
 }
 
+// A cancelled or unwinding session must not detach a stream producer.
+impl Drop for Running {
+	fn drop(&mut self) {
+		self.task.abort();
+	}
+}
+
 /// A mutation or action that finished, and the commit it reached.
 struct Finished {
+	/// An action occupies its slot until the session handles its reply, not
+	/// merely until its handler returns. Mutations run inside the session.
+	_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 	epoch: u64,
 	request: u32,
 	result: Result<Value, WireError>,
@@ -239,9 +253,9 @@ impl Live {
 			return;
 		}
 
-		let (events, batches) = mpsc::unbounded_channel();
-		let (acts, finished) = mpsc::unbounded_channel();
-		let (stream_out, stream_frames) = mpsc::unbounded_channel();
+		let (events, batches) = mailbox::channel();
+		let (acts, finished) = mpsc::channel(MAX_ACTIONS);
+		let (stream_out, stream_frames) = mpsc::channel(super::OUTGOING);
 		self.hub().connect(number, events);
 		self.connections().insert(number, out.clone());
 		let version = self.hub().applied();
@@ -294,8 +308,7 @@ impl Live {
 
 		let mut drained = self.inner.shared.drain.subscribe();
 
-		if session.run(&mut frames, &mut drained).await {
-			session.interrupt_streams().await;
+		if session.run(&mut frames, &mut drained).await && session.interrupt_streams().await {
 			let after_ms = 250 + u64::from(number).wrapping_mul(7919) % 2_000;
 			session.send(ServerFrame::Reconnect { after_ms }).await;
 		}
@@ -362,7 +375,8 @@ impl Session {
 				let Ok(permit) = permit else { return Some(false) };
 				if !self.send_pending(permit) { return Some(false); }
 			}
-			Some(batch) = self.batches.recv() => {
+			batch = self.batches.recv() => {
+				let Some(batch) = batch else { return Some(false); };
 				if !self.apply(batch).await { return Some(false); }
 			}
 			incoming = frames.recv() => {
@@ -376,8 +390,8 @@ impl Session {
 					return Some(false);
 				}
 			}
-			Some(text) = self.stream_frames.recv() => {
-				if !self.deliver(Outbound::Frame { text, version: None }).await {
+			Some(frame) = self.stream_frames.recv() => {
+				if !self.forward_stream(frame).await {
 					return Some(false);
 				}
 			}
@@ -404,11 +418,11 @@ impl Session {
 	/// mutation is waiting for a commit that changed none of this
 	/// connection's results, or when `catch_up` asks for one.
 	async fn settle(&mut self, catch_up: bool) -> bool {
-		// Return to the select loop after a bounded batch so a continuously
-		// busy database cannot starve available transport capacity.
 		for _ in 0..super::OUTGOING {
-			let Ok(batch) = self.batches.try_recv() else {
-				break;
+			let batch = match self.batches.try_recv() {
+				Ok(batch) => batch,
+				Err(mpsc::error::TryRecvError::Empty) => break,
+				Err(mpsc::error::TryRecvError::Disconnected) => return false,
 			};
 			if !self.apply(batch).await {
 				return false;
@@ -574,9 +588,6 @@ impl Session {
 	/// Opens a stream as the connection's identity, with room for
 	/// `credits` items.
 	async fn open_stream(&mut self, stream: u32, name: &str, args: Value, credits: u32) -> bool {
-		self.streams
-			.retain(|_, running| !running.task.is_finished());
-
 		if let Some(previous) = self.streams.remove(&stream) {
 			previous.task.abort();
 		}
@@ -598,9 +609,17 @@ impl Session {
 				.min(MAX_CREDITS),
 		));
 		let sink = StreamSink::new(stream, self.stream_out.clone(), Arc::clone(&credits));
+		let generation = Arc::clone(&sink.generation);
 		let cx = QueryCx::new(self.db.clone(), self.identity.clone());
-		let task = tokio::spawn((registration.open)(args, cx, sink));
-		self.streams.insert(stream, Running { task, credits });
+		let task = tokio::spawn(sink.supervise(registration.open, args, cx));
+		self.streams.insert(
+			stream,
+			Running {
+				generation,
+				task,
+				credits,
+			},
+		);
 		true
 	}
 
@@ -620,30 +639,44 @@ impl Session {
 	/// Stops every stream still running, after sending what they already
 	/// produced, and tells the client each was interrupted: the connection
 	/// is going, or is about to read as somebody else.
-	async fn interrupt_streams(&mut self) {
-		let interrupted: Vec<u32> = self
-			.streams
-			.drain()
-			.filter(|(_, running)| {
-				running.task.abort();
-				!running.task.is_finished()
-			})
-			.map(|(stream, _)| stream)
-			.collect();
-
-		while let Ok(text) = self.stream_frames.try_recv() {
-			let _ = self
-				.out
-				.send(Outbound::Frame {
-					text,
-					version: None,
-				})
-				.await;
+	async fn interrupt_streams(&mut self) -> bool {
+		for running in self.streams.values() {
+			running.task.abort();
 		}
-
+		for running in self.streams.values_mut() {
+			let _ = (&mut running.task).await;
+		}
+		while let Ok(frame) = self.stream_frames.try_recv() {
+			if !self.forward_stream(frame).await {
+				return false;
+			}
+		}
+		let interrupted: Vec<u32> = self.streams.drain().map(|(id, _)| id).collect();
 		for stream in interrupted {
-			self.send(EndReason::Interrupted.frame(stream)).await;
+			if !self.send(EndReason::Interrupted.frame(stream)).await {
+				return false;
+			}
 		}
+		true
+	}
+
+	async fn forward_stream(&mut self, frame: stream::Frame) -> bool {
+		let Some(running) = self.streams.get(&frame.stream) else {
+			return true;
+		};
+		if !Arc::ptr_eq(&running.generation, &frame.generation) {
+			return true;
+		}
+		if frame.terminal
+			&& let Some(running) = self.streams.remove(&frame.stream)
+		{
+			running.task.abort();
+		}
+		self.deliver(Outbound::Frame {
+			text: frame.text,
+			version: None,
+		})
+		.await
 	}
 
 	fn over_limit(&self, id: u32) -> Option<WireError> {
@@ -883,6 +916,7 @@ impl Session {
 		.await;
 
 		self.answer(Finished {
+			_permit: None,
 			epoch: self.epoch,
 			request,
 			result: result.map_err(|error| WireError::new(&error)),
@@ -926,8 +960,7 @@ impl Session {
 					Err(WireError {
 						status: 429,
 						message: format!(
-							"a connection may run {MAX_ACTIONS} actions at once; wait for one to \
-							 finish"
+							"a connection may have {MAX_ACTIONS} pending actions; wait for a reply"
 						),
 					}),
 				)
@@ -945,13 +978,15 @@ impl Session {
 		let epoch = self.epoch;
 		tokio::spawn(async move {
 			let (result, version) = recording_commits(handler(invocation)).await;
-			drop(permit);
-			let _ = finished.send(Finished {
-				epoch,
-				request,
-				result: result.map_err(|error| WireError::new(&error)),
-				version,
-			});
+			let _ = finished
+				.send(Finished {
+					_permit: Some(permit),
+					epoch,
+					request,
+					result: result.map_err(|error| WireError::new(&error)),
+					version,
+				})
+				.await;
 		});
 		true
 	}
@@ -1042,7 +1077,9 @@ impl Session {
 			.with_context(self.identity.context.clone());
 		self.note_caller();
 		// A stream reads as whoever opened it, so none outlives the change.
-		self.interrupt_streams().await;
+		if !self.interrupt_streams().await {
+			return false;
+		}
 
 		// Every result is now read as somebody else: subscribe them all
 		// again, under the new identity's own groups.

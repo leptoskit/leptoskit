@@ -43,10 +43,10 @@ use leptoskit_db::live::ChangeLog;
 use leptoskit_db::live::LogEntry;
 use serde_json::Value;
 use tokio::sync::Notify;
-use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use super::Identity;
+use super::mailbox;
 use super::run_query;
 use crate::live::Patch;
 use crate::live::Update;
@@ -239,7 +239,7 @@ struct State {
 	/// Groups to re-run whatever the commits, because a member registered
 	/// a value the hub can't vouch for.
 	forced: HashSet<u64>,
-	connections: HashMap<u32, mpsc::UnboundedSender<Batch>>,
+	connections: HashMap<u32, mailbox::Sender>,
 	/// Authentication dependencies, including connections with no queries.
 	authentication: HashMap<u32, Vec<ReadEntry>>,
 }
@@ -389,7 +389,7 @@ impl Hub {
 	}
 
 	/// Starts sending `connection`'s batches to `events`.
-	pub(super) fn connect(&self, connection: u32, events: mpsc::UnboundedSender<Batch>) {
+	pub(super) fn connect(&self, connection: u32, events: mailbox::Sender) {
 		self.core.state().connections.insert(connection, events);
 	}
 
@@ -958,6 +958,9 @@ impl State {
 	/// Ends `connection`'s subscription `id`, and its group with its last
 	/// member.
 	fn leave(&mut self, connection: u32, id: u32) {
+		if let Some(events) = self.connections.get(&connection) {
+			events.remove(id);
+		}
 		let Some(group_id) = self.members.remove(&(connection, id)) else {
 			return;
 		};
