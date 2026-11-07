@@ -277,6 +277,27 @@ Chromium-specific `webContents`, browser sessions, preload scripts, DOM frames a
 
 [Electron's native module documentation](https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules) illustrates the importance of matching native artifacts to their runtime. LeptosKit's equivalent is matching CPU/OS target, native SDK linkage and the C/guest ABI—not adding Node module rebuilding to this project.
 
+## Background execution and headless guests
+
+Flutter's [plus_plugins](https://github.com/fluttercommunity/plus_plugins) include packages whose whole point is running Dart code while the app is closed. On Android they boot a headless `FlutterEngine` from a receiver or service and invoke a callback handle the app registered earlier. LeptosKit's equivalent is running the app's Wasm guest without a window.
+
+| plus_plugins package         | LeptosKit destination   | Status / acceptance scope                                                                                                                                                                                            |
+| ---------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `android_alarm_manager_plus` | `android_alarm_manager` | Partial; one-shot/periodic alarms with every upstream flag, exact-alarm permission and fallback, durable scheduled/fired store, boot and permission-grant restore, guest wait/drain, headless launches. Android only |
+
+### What runs today
+
+`NativeHeadlessGuest` (`crates/leptoskit_bridge_ffi/mobile/NativeHeadlessGuest.kt`) is the Android host's windowless guest. It follows `LeptosKitView`'s lifecycle on the main looper: create the `App`, install the text measurer, activate services, register the generated plugins, enable timers, spawn the guest thread, and start it with the display's size. It drops render transactions and Rive frames, runs plugin requests through the ordinary `NativePluginJobs` budget, and leaves the frame clock disabled. `stop(outcome)` posts the same close sequence as `LeptosKitView.close`, then joins plugin jobs and the service owner before reporting `FINISHED`, `TIMED_OUT` or `FAILED`. `bundledWasm(context)` returns the store-shipped guest from `app.lkb`, or null when `codepush.json` enables updates.
+
+The alarm plugin drives it from `AlarmReceiver`: the receiver records the fire in the store, and for a `headless` alarm with no live plugin instance in the process calls `goAsync()` and starts a headless guest whose plugins receive an `AlarmLaunchContext` (a `ContextWrapper` over the application carrying the fired record). The guest's `launch()` returns that record and `finish(sequence)` removes it and stops the run. The broadcast's pending result, and with it the alarm's wake lock, is held until the guest stops, at most `HEADLESS_BUDGET` (eight seconds) later. An unfinished alarm stays queued for the next `next()`/`drain()`, so delivery is at-least-once. The native plugin suite proves the path end to end: its guest finishes alarms carrying the fixture's params, and `AndroidAlarmManagerPluginTest` checks both a finished and a timed-out run.
+
+### Gaps and the design for closing them
+
+- **Code push.** A headless guest must run the code the app runs, but the update store (`NativeReleases`) is leased by the app's window and its launch selects candidates that only a first render can confirm. The plan: give `NativeUpdates` a read-only "confirmed release" query that does not take the directory lease or touch candidate state, and have `bundledWasm` fall back to it when updates are enabled. Until then, headless alarms in such apps stay queued.
+- **Longer work.** `goAsync()` keeps the process for about ten seconds. Work that needs longer should hand off to a foreground service (`FOREGROUND_SERVICE_SHORT_SERVICE`, three minutes on Android 14+) or WorkManager; both can reuse `NativeHeadlessGuest` unchanged, with the receiver starting the service and the service owning the guest. That needs `android-services` metadata alongside `android-receivers`.
+- **Choosing the handler.** Upstream stores a Dart callback handle per alarm. The guest has one entry point, so the alarm's ID and params select the handler; `handle_launch` runs before the app's other startup work. A dedicated guest export (`leptoskit_background(kind, payload)`) would let the host skip building the UI tree, but needs an interpreter entry point and generated-guest support.
+- **Other background packages.** WorkManager, background fetch and push-message handlers fit the same shape: a manifest component from `android-receivers` (or a future `android-services`), a durable queue for at-least-once delivery, and an optional headless run. Apple platforms have no way to run app code at a chosen time; `BGTaskScheduler` runs at the system's discretion and would need its own plugin and an iOS headless guest built on `NativeGuestRuntime.swift`.
+
 ## Implementation order and completion gates
 
 The current media additions provide these specific subsets:

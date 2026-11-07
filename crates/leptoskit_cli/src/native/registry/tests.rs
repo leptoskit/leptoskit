@@ -318,6 +318,51 @@ fn validates_android_query_actions_before_generating_xml() {
 }
 
 #[test]
+fn validates_android_receivers_before_generating_xml() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+
+	for (receiver, valid) in [
+		(json!({"name": "dev.example.AlarmReceiver"}), true),
+		(
+			json!({"name": "dev.example.Boot", "actions": ["android.intent.action.BOOT_COMPLETED"]}),
+			true,
+		),
+		(json!({"name": "Receiver"}), true),
+		(json!({"name": "dev.example.Receiver\"/><x"}), false),
+		(json!({"name": "dev..Receiver"}), false),
+		(
+			json!({"name": "dev.example.Boot", "actions": ["BOOT"]}),
+			false,
+		),
+		(
+			json!({"name": "dev.example.Boot", "actions": ["android.action\"><invalid"]}),
+			false,
+		),
+		(json!({"name": "dev.example.Boot", "exported": true}), true),
+		(
+			json!({"actions": ["android.intent.action.BOOT_COMPLETED"]}),
+			false,
+		),
+	] {
+		let mut metadata = metadata("Plugin");
+		metadata.packages[2]
+			.metadata
+			.pointer_mut("/leptoskit/runtime")
+			.unwrap()
+			.as_object_mut()
+			.unwrap()
+			.insert("android-receivers".into(), json!([receiver]));
+		assert_eq!(
+			resolve_metadata(metadata, &config).is_ok(),
+			valid,
+			"{receiver}"
+		);
+	}
+}
+
+#[test]
 fn validates_android_intent_schemes_and_complete_metadata_before_generating_xml() {
 	let mut config = LeptoskitConfig::default();
 	config.app.name = "app".into();

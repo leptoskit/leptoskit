@@ -344,6 +344,27 @@ fn generated_hosts_install_rust_workers_and_register_only_native_plugins() {
 		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
 	assert!(manifest.contains("android.permission.VIBRATE"));
 	let document = roxmltree::Document::parse(&manifest).unwrap();
+	let android = "http://schemas.android.com/apk/res/android";
+	let receivers: Vec<_> = document
+		.descendants()
+		.filter(|node| node.has_tag_name("receiver"))
+		.map(|node| {
+			(
+				node.attribute((android, "name")).unwrap(),
+				node.attribute((android, "exported")).unwrap(),
+				node.descendants()
+					.filter(|node| node.has_tag_name("action"))
+					.count(),
+			)
+		})
+		.collect();
+	assert_eq!(
+		receivers,
+		[
+			("dev.example.HapticsReceiver", "false", 0),
+			("dev.example.HapticsBoot", "false", 1)
+		]
+	);
 	assert!(document.descendants().any(|node| {
 		node.has_tag_name("data")
 			&& node.attribute(("http://schemas.android.com/apk/res/android", "scheme"))
@@ -475,7 +496,11 @@ fn host_registry(root: &Path) -> Registry {
 					"name": "haptics", "apple-module": "Haptics", "apple-type": "HapticsPlugin",
 					"android-type": "dev.example.HapticsPlugin", "android-context": true,
 					"android-permissions": ["android.permission.VIBRATE"],
-					"android-query-intents": [{"action":"android.intent.action.VIEW", "scheme":"solana-wallet"}]
+					"android-query-intents": [{"action":"android.intent.action.VIEW", "scheme":"solana-wallet"}],
+					"android-receivers": [
+						{"name": "dev.example.HapticsReceiver"},
+						{"name": "dev.example.HapticsBoot", "actions": ["android.intent.action.BOOT_COMPLETED"]}
+					]
 				}),
 				&haptics,
 				"haptics_crate",
@@ -572,6 +597,7 @@ fn an_android_build_skips_an_apple_only_plugin_with_a_warning() {
 	haptics.android_context = false;
 	haptics.android_permissions.clear();
 	haptics.android_query_intents.clear();
+	haptics.android_receivers.clear();
 
 	registry
 		.select(Target::Android, MissingPlugins::Warn)

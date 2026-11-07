@@ -92,6 +92,7 @@ packages = [
 	"leptoskit_plugin_contacts",
 	"leptoskit_plugin_haptics",
 	"leptoskit_plugin_home_widgets",
+	"leptoskit_plugin_android_alarm_manager",
 	"leptoskit_plugin_battery",
 	"leptoskit_plugin_cellular",
 	"leptoskit_plugin_deep_link",
@@ -362,6 +363,9 @@ path = "crates/leptoskit_plugin_haptics"
 
 [package.leptoskit_plugin_home_widgets]
 path = "crates/leptoskit_plugin_home_widgets"
+
+[package.leptoskit_plugin_android_alarm_manager]
+path = "crates/leptoskit_plugin_android_alarm_manager"
 
 [package.leptoskit_plugin_battery]
 path = "crates/leptoskit_plugin_battery"
