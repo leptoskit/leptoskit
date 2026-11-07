@@ -60,10 +60,10 @@ function compress(body, encoding) {
  * and Wasm responses are compressed with it whenever the browser accepts it,
  * as GitHub Pages (gzip) and Cloudflare (brotli) send them.
  */
-export function serve(root, { encoding } = {}) {
+export function serve(root, { encoding, playgroundService, port = 0 } = {}) {
 	const compressed = new Map();
 	return Deno.serve(
-		{ hostname: "127.0.0.1", port: 0, onListen() {} },
+		{ hostname: "127.0.0.1", port, onListen() {} },
 		async (request) => {
 			const path = decodeURIComponent(new URL(request.url).pathname);
 			if (path.split("/").includes("..")) {
@@ -91,6 +91,16 @@ export function serve(root, { encoding } = {}) {
 				// sandboxed frame's opaque origin needs to load an example.
 				"access-control-allow-origin": "*",
 			};
+			if (path === "/play/frame.html") {
+				headers["content-security-policy"] =
+					"default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+			} else if (playgroundService && path.startsWith("/play/")) {
+				headers["content-security-policy"] +=
+					`; connect-src 'self' ${playgroundService}`;
+			}
+			if (path === "/play/frame.mjs") {
+				headers["access-control-allow-origin"] = "*";
+			}
 			const accepted = (request.headers.get("accept-encoding") ?? "")
 				.split(",")
 				.map((name) => name.trim().split(";")[0]);

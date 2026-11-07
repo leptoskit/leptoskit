@@ -125,6 +125,19 @@ fn play_examples(
 /// book, the public schema aliases, and the artifact's HTML entrypoints.
 /// Returns the finished artifact's summary line.
 fn assemble(out: &Path, url: &str, mode: Mode) -> Result<&'static str> {
+	std::fs::create_dir_all(out.join("play"))?;
+	std::fs::write(
+		out.join("play/index.html"),
+		leptoskit_app::playground::html(url),
+	)?;
+	for (name, contents) in [
+		("play/playground.mjs", include_str!("../web/playground.mjs")),
+		("play/frame.html", include_str!("../web/play-frame.html")),
+		("play/frame.mjs", include_str!("../web/play-frame.mjs")),
+		("playground.css", include_str!("../web/playground.css")),
+	] {
+		std::fs::write(out.join(name), contents)?;
+	}
 	// The web bundler intentionally omits precompressed source files.
 	std::fs::create_dir_all(out.join("rive"))?;
 	let mut runtime = flate2::read::GzDecoder::new(&include_bytes!("../web/rive/rive.js.gz")[..]);

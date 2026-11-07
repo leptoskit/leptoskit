@@ -12,6 +12,7 @@ use tower::ServiceExt as _;
 fn web_assets(root: &Path) {
 	std::fs::create_dir_all(root.join("pkg")).unwrap();
 	std::fs::create_dir_all(root.join("console")).unwrap();
+	std::fs::create_dir_all(root.join("play")).unwrap();
 	std::fs::create_dir_all(root.join("rive")).unwrap();
 	for (path, bytes) in [
 		("index.html", include_str!("../web/index.html")),
@@ -19,6 +20,11 @@ fn web_assets(root: &Path) {
 		("bootstrap.js", include_str!("../web/bootstrap.js")),
 		("landing.css", include_str!("../web/landing.css")),
 		("landing.mjs", include_str!("../web/landing.mjs")),
+		("play/index.html", "fixture playground"),
+		("play/playground.mjs", include_str!("../web/playground.mjs")),
+		("play/frame.html", include_str!("../web/play-frame.html")),
+		("play/frame.mjs", include_str!("../web/play-frame.mjs")),
+		("playground.css", include_str!("../web/playground.css")),
 		("console.css", include_str!("../web/console.css")),
 		("pkg/leptoskit_app.js", "fixture module"),
 		("pkg/leptoskit_app_bg.wasm", "fixture wasm"),
@@ -52,8 +58,12 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 	let app =
 		leptoskit_app::site::router(api, directory.path(), &docs, "https://deploy.example.test")
 			.unwrap();
+	assert_playground_policy(&app).await;
 	for path in [
 		"/",
+		"/play/",
+		"/play/playground.mjs",
+		"/playground.css",
 		"/console/",
 		"/docs/",
 		"/docs/guide/29-hosted-deployments.html",
@@ -186,6 +196,46 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		assert!(
 			docs.join(path).is_file(),
 			"the landing page's {path} must be packaged"
+		);
+	}
+}
+
+async fn assert_playground_policy(app: &Router) {
+	for (path, header, required) in [
+		(
+			"/play/frame.html",
+			"content-security-policy",
+			"connect-src 'none'",
+		),
+		(
+			"/play/frame.html",
+			"content-security-policy",
+			"script-src 'self' blob:",
+		),
+		(
+			"/play/frame.html",
+			"content-security-policy",
+			"frame-ancestors 'self'",
+		),
+		("/play/frame.mjs", "access-control-allow-origin", "*"),
+		(
+			"/play/",
+			"content-security-policy",
+			leptoskit_app::playground::SERVICE,
+		),
+	] {
+		let response = app
+			.clone()
+			.oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+			.await
+			.unwrap();
+		assert_eq!(response.status(), StatusCode::OK, "{path}");
+		assert!(
+			response.headers()[header]
+				.to_str()
+				.unwrap()
+				.contains(required),
+			"{path}: {header}"
 		);
 	}
 }

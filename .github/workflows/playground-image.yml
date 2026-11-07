@@ -1,0 +1,33 @@
+name: playground toolchain image
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: build and publish immutable toolchain reference
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/playground-toolchain"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build -f crates/leptoskit_playground_server/image/Dockerfile -t "$image:$GITHUB_SHA" .
+          docker push "$image:$GITHUB_SHA"
+          docker pull "$image:$GITHUB_SHA"
+          docker inspect --format '{{index .RepoDigests 0}}' "$image:$GITHUB_SHA" > playground-toolchain.txt
+          grep -Eq '@sha256:[a-f0-9]{64}$' playground-toolchain.txt
+          docker logout ghcr.io
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playground-toolchain-pin
+          path: playground-toolchain.txt

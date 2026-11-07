@@ -36,6 +36,11 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 		SPLIT_MANIFEST,
 		"landing.css",
 		"landing.mjs",
+		"play/index.html",
+		"play/playground.mjs",
+		"play/frame.html",
+		"play/frame.mjs",
+		"playground.css",
 		"console.css",
 		"rive/rive.js",
 		"rive/rive.wasm",
@@ -76,6 +81,38 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 	let landing: Arc<str> = landing_html(origin, Mode::Hosted).into();
 	let console = ServeFile::new(assets.join("console/index.html"));
 	Ok(api
+		.route("/play", get(|| async { Redirect::permanent("/play/") }))
+		.route_service("/play/", ServeFile::new(assets.join("play/index.html")))
+		.route(
+			"/play/frame.html",
+			get(|| {
+				async {
+					(
+						[(
+							CONTENT_SECURITY_POLICY,
+							"default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval'; \
+							 style-src 'unsafe-inline'; connect-src 'none'; img-src data: blob:; \
+							 base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+						)],
+						Html(include_str!("../web/play-frame.html")),
+					)
+				}
+			}),
+		)
+		.route(
+			"/play/frame.mjs",
+			get(|| {
+				async {
+					(
+						[
+							("content-type", "text/javascript"),
+							("access-control-allow-origin", "*"),
+						],
+						include_str!("../web/play-frame.mjs"),
+					)
+				}
+			}),
+		)
 		.route(
 			"/",
 			get(move || {
@@ -94,10 +131,12 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 		.layer(axum::middleware::from_fn(played_example_headers))
 		.layer(SetResponseHeaderLayer::if_not_present(
 			CONTENT_SECURITY_POLICY,
-			HeaderValue::from_static(
-				"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' \
-				 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
-			),
+			HeaderValue::from_str(&format!(
+				"default-src 'self'; connect-src 'self' {}; script-src 'self' 'wasm-unsafe-eval'; \
+				 style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; \
+				 object-src 'none'",
+				crate::playground::SERVICE,
+			))?,
 		)))
 }
 

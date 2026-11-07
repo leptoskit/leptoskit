@@ -422,7 +422,7 @@ fn header(mode: Mode) -> Element {
 				.accessibility_label("Main navigation")
 				.id("nav")
 				.child(link("nav-tree", "One tree", "#tree"))
-				.child(link("nav-toolkit", "Try it", "#toolkit"))
+				.child(link("nav-toolkit", "Try it", "/play/"))
 				.child(link("nav-cloud", "Your cloud", "#cloud"))
 				.child(link("nav-docs", "Docs ↗", "/docs/")),
 		)
@@ -806,7 +806,8 @@ fn studio() -> Element {
 							"source-motion",
 							"Learn about motion ↗",
 							"/docs/guide/32-motion.html",
-						)),
+						))
+						.child(link("edit-code", "Edit this code ↗", "/play/")),
 				)
 				.child(
 					View()

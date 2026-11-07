@@ -1,0 +1,21 @@
+[package]
+name = "playground-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[dependencies]
+leptoskit = { path = "/repo/crates/leptoskit", features = ["web", "csr"] }
+serde = { version = "1", features = ["derive"] }
+wasm-bindgen = "=0.2.129"
+
+[profile.dev]
+debug = 0
+opt-level = 0
+codegen-units = 256
+incremental = false
