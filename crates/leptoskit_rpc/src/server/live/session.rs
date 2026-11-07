@@ -130,6 +130,7 @@ struct Session {
 	/// At most one unfinished transition; new batches coalesce into a later
 	/// full snapshot instead of growing an unbounded per-connection queue.
 	pending: Option<PendingTransition>,
+	pending_progress: tokio::time::Instant,
 	/// Results changed while an earlier transition was waiting to be sent.
 	full_next: bool,
 	/// The latest version represented by the session's stored results.
@@ -270,6 +271,7 @@ impl Live {
 			stream_out,
 			last_sent: version,
 			pending: None,
+			pending_progress: tokio::time::Instant::now(),
 			full_next: false,
 			latest: version,
 			extra_errors: HashMap::new(),
@@ -324,16 +326,23 @@ impl Session {
 			return false;
 		}
 
+		heartbeat.tick().await;
 		loop {
+			let blocked = (self.pending.is_some() || self.full_next) && self.out.capacity() == 0;
+			let stall_deadline = blocked.then(|| self.pending_progress + self.live.stall());
 			let deadline = self
 				.lease
 				.refresh_at
 				.into_iter()
 				.chain(self.lease.expires_at)
 				.min();
+			if !self.check_due_deadline(deadline).await {
+				return false;
+			}
 			let sender = self.out.clone();
 			tokio::select! {
-				biased;
+				// Randomized selection keeps client input and completion fair under continuous writes.
+				() = capacity_deadline(stall_deadline) => return false,
 				() = identity_deadline(deadline) => {
 					if !self.check_deadline().await { return false; }
 				}
@@ -1111,6 +1120,14 @@ impl Session {
 		false
 	}
 
+	async fn check_due_deadline(&mut self, deadline: Option<SystemTime>) -> bool {
+		if deadline.is_some_and(|at| at <= SystemTime::now()) {
+			self.check_deadline().await
+		} else {
+			true
+		}
+	}
+
 	async fn check_deadline(&mut self) -> bool {
 		if self
 			.lease
@@ -1213,6 +1230,7 @@ impl Session {
 				}
 			}
 		} else {
+			self.pending_progress = tokio::time::Instant::now();
 			self.pending = Some(PendingTransition::new(from, updates, to, full));
 		}
 		// Fill only immediately available slots; never wait inside a batch.
@@ -1264,6 +1282,7 @@ impl Session {
 		};
 		let to = pending.to;
 		permit.send(frame);
+		self.pending_progress = tokio::time::Instant::now();
 		if complete {
 			self.last_sent = to;
 			self.pending = None;
@@ -1486,6 +1505,13 @@ impl Session {
 			err,
 		})
 		.await
+	}
+}
+
+async fn capacity_deadline(deadline: Option<tokio::time::Instant>) {
+	match deadline {
+		Some(at) => tokio::time::sleep_until(at).await,
+		None => std::future::pending().await,
 	}
 }
 

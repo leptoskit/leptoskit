@@ -406,6 +406,39 @@ async fn relay(
 				return;
 			}
 
+			// Exercise prefix/final semantics in every generated SDK journey,
+			// even when this small fixture fits in one network frame.
+			if let Message::Text(text) = &message
+				&& let Ok(rpc::live::ServerFrame::Transition(mut transition)) =
+					serde_json::from_str(text)
+				&& transition.to > transition.from
+				&& !transition.updates.is_empty()
+			{
+				let to = transition.to;
+				transition.to = transition.from;
+				let prefix =
+					serde_json::to_string(&rpc::live::ServerFrame::Transition(transition.clone()))
+						.unwrap();
+				if client_sink
+					.send(Message::Text(prefix.into()))
+					.await
+					.is_err()
+				{
+					return;
+				}
+				transition.to = to;
+				transition.updates.clear();
+				let final_frame =
+					serde_json::to_string(&rpc::live::ServerFrame::Transition(transition)).unwrap();
+				if client_sink
+					.send(Message::Text(final_frame.into()))
+					.await
+					.is_err()
+				{
+					return;
+				}
+				continue;
+			}
 			if client_sink.send(message).await.is_err() {
 				return;
 			}

@@ -53,6 +53,7 @@ async fn session() -> (
 		stream_out,
 		last_sent: 0,
 		pending: None,
+		pending_progress: tokio::time::Instant::now(),
 		full_next: false,
 		latest: 0,
 		extra_errors: HashMap::new(),
@@ -158,7 +159,24 @@ async fn a_transition_larger_than_the_transport_queue_keeps_progressing() {
 			}
 		})
 		.collect();
+	for update in &updates {
+		if let Update::Ok(value) = &update.update {
+			session.keep(
+				update.id,
+				"test".to_owned(),
+				json!({}),
+				Arc::new(value.clone()),
+			);
+		}
+	}
 	session.send_transition(0, updates, 9, true);
+	let error = WireError::invalid("changed during snapshot");
+	let update = session
+		.subscriptions
+		.get_mut(&1)
+		.unwrap()
+		.apply(Changed::Failed(error.clone()));
+	session.send_transition(0, vec![SubscriptionUpdate { id: 1, update }], 10, false);
 	let running = run(session, incoming);
 	let mut ids = Vec::new();
 	let mut chunks = 0;
@@ -171,6 +189,22 @@ async fn a_transition_larger_than_the_transport_queue_keeps_progressing() {
 	assert!(chunks > super::super::OUTGOING);
 	ids.sort_unstable();
 	assert_eq!(ids, (0..70).collect::<Vec<_>>());
+	let mut recovered = Vec::new();
+	loop {
+		let chunk = next(&mut out).await;
+		assert!(chunk.full);
+		recovered.extend(chunk.updates);
+		if chunk.to == 10 {
+			break;
+		}
+		assert_eq!(chunk.to, 9);
+	}
+	assert_eq!(recovered.len(), 70);
+	assert!(
+		recovered
+			.iter()
+			.any(|update| update.id == 1 && update.update == Update::Err(error.clone()))
+	);
 	running.abort();
 }
 
@@ -203,7 +237,7 @@ async fn removing_a_subscription_discards_its_unsent_result() {
 	assert_eq!(next(&mut out).await.to, 1);
 	let final_update = next(&mut out).await;
 	assert_eq!(final_update.to, 2);
-	assert!(final_update.updates.is_empty());
+	assert_eq!(final_update.updates, []);
 	running.abort();
 }
 
@@ -299,4 +333,21 @@ async fn a_new_identity_discards_the_previous_identitys_unsent_snapshot() {
 	assert_eq!(recovery.updates.len(), 1);
 	assert!(matches!(recovery.updates[0].update, Update::Err(_)));
 	running.abort();
+}
+
+#[tokio::test]
+async fn pending_capacity_closes_at_the_stall_deadline() {
+	let (mut session, _out, _input, incoming) = session().await;
+	session.live = session
+		.live
+		.clone()
+		.stall_timeout(Duration::from_millis(20));
+	change(&mut session, 1, json!("before"));
+	change(&mut session, 2, json!("after"));
+	assert!(
+		!tokio::time::timeout(Duration::from_secs(2), run(session, incoming))
+			.await
+			.unwrap()
+			.unwrap()
+	);
 }
