@@ -716,7 +716,7 @@ mod tests {
 		// Unavailable from a Wayland false positive.
 		match GlobalShortcuts::with_waker(|| {}) {
 			Ok(owner) => drop(owner),
-			Err(Error::Native(_)) | Err(Error::AlreadyOwned) => {}
+			Err(Error::Native(_) | Error::AlreadyOwned) => {}
 			Err(Error::Unavailable) => panic!("X11 session treated as Wayland"),
 			Err(error) => panic!("unexpected {error:?}"),
 		}
