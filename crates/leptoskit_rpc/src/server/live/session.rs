@@ -126,8 +126,8 @@ struct Session {
 	joined: HashMap<String, Joined>,
 	streams: HashMap<u32, Running>,
 	/// What running streams send, forwarded in order.
-	stream_frames: mpsc::Receiver<String>,
-	stream_out: mpsc::Sender<String>,
+	stream_frames: mpsc::Receiver<stream::Frame>,
+	stream_out: mpsc::Sender<stream::Frame>,
 	/// The version of the last complete transition queued for transport.
 	last_sent: u64,
 	/// At most one unfinished transition; new batches coalesce into a later
@@ -184,6 +184,7 @@ struct Joined {
 
 /// A stream the connection opened, and the room its client has left.
 struct Running {
+	generation: Arc<()>,
 	task: tokio::task::JoinHandle<()>,
 	credits: Arc<tokio::sync::Semaphore>,
 }
@@ -382,8 +383,8 @@ impl Session {
 					return Some(false);
 				}
 			}
-			Some(text) = self.stream_frames.recv() => {
-				if !self.deliver(Outbound::Frame { text, version: None }).await {
+			Some(frame) = self.stream_frames.recv() => {
+				if !self.forward_stream(frame).await {
 					return Some(false);
 				}
 			}
@@ -580,9 +581,6 @@ impl Session {
 	/// Opens a stream as the connection's identity, with room for
 	/// `credits` items.
 	async fn open_stream(&mut self, stream: u32, name: &str, args: Value, credits: u32) -> bool {
-		self.streams
-			.retain(|_, running| !running.task.is_finished());
-
 		if let Some(previous) = self.streams.remove(&stream) {
 			previous.task.abort();
 		}
@@ -604,13 +602,17 @@ impl Session {
 				.min(MAX_CREDITS),
 		));
 		let sink = StreamSink::new(stream, self.stream_out.clone(), Arc::clone(&credits));
-		let completion = sink.completion();
+		let generation = Arc::clone(&sink.generation);
 		let cx = QueryCx::new(self.db.clone(), self.identity.clone());
-		let task = tokio::spawn(async move {
-			(registration.open)(args, cx, sink).await;
-			completion.await;
-		});
-		self.streams.insert(stream, Running { task, credits });
+		let task = tokio::spawn(sink.supervise(registration.open, args, cx));
+		self.streams.insert(
+			stream,
+			Running {
+				generation,
+				task,
+				credits,
+			},
+		);
 		true
 	}
 
@@ -631,34 +633,41 @@ impl Session {
 	/// produced, and tells the client each was interrupted: the connection
 	/// is going, or is about to read as somebody else.
 	async fn interrupt_streams(&mut self) -> bool {
-		let interrupted: Vec<u32> = self
-			.streams
-			.drain()
-			.filter(|(_, running)| {
-				running.task.abort();
-				!running.task.is_finished()
-			})
-			.map(|(stream, _)| stream)
-			.collect();
-
-		while let Ok(text) = self.stream_frames.try_recv() {
-			if !self
-				.deliver(Outbound::Frame {
-					text,
-					version: None,
-				})
-				.await
-			{
+		for running in self.streams.values() {
+			running.task.abort();
+		}
+		for running in self.streams.values_mut() {
+			let _ = (&mut running.task).await;
+		}
+		while let Ok(frame) = self.stream_frames.try_recv() {
+			if !self.forward_stream(frame).await {
 				return false;
 			}
 		}
-
+		let interrupted: Vec<u32> = self.streams.drain().map(|(id, _)| id).collect();
 		for stream in interrupted {
 			if !self.send(EndReason::Interrupted.frame(stream)).await {
 				return false;
 			}
 		}
 		true
+	}
+
+	async fn forward_stream(&mut self, frame: stream::Frame) -> bool {
+		let Some(running) = self.streams.get(&frame.stream) else {
+			return true;
+		};
+		if !Arc::ptr_eq(&running.generation, &frame.generation) {
+			return true;
+		}
+		if frame.terminal {
+			self.streams.remove(&frame.stream);
+		}
+		self.deliver(Outbound::Frame {
+			text: frame.text,
+			version: None,
+		})
+		.await
 	}
 
 	fn over_limit(&self, id: u32) -> Option<WireError> {

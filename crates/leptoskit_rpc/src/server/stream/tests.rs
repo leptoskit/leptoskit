@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use super::*;
 
-async fn receive(receiver: &mut mpsc::Receiver<String>) -> ServerFrame {
+async fn receive(receiver: &mut mpsc::Receiver<Frame>) -> ServerFrame {
 	let text = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
 		.await
 		.expect("the stream produces its next frame")
 		.expect("the sink remains open");
-	serde_json::from_str(&text).unwrap()
+	serde_json::from_str(&text.text).unwrap()
 }
 
 async fn saw_two(seen: &Semaphore) {
@@ -69,7 +69,14 @@ async fn dropping_the_receiver_stops_a_blocked_producer() {
 #[tokio::test]
 async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 	let (out, mut receiver) = mpsc::channel(1);
-	out.send("held".to_owned()).await.unwrap();
+	out.send(Frame {
+		stream: 0,
+		generation: Arc::new(()),
+		text: "held".to_owned(),
+		terminal: false,
+	})
+	.await
+	.unwrap();
 	let sink = StreamSink::new(1, out, Arc::new(Semaphore::new(0)));
 	let error = Error::invalid("refused");
 	let mut refusal = sink.completion();
@@ -77,7 +84,7 @@ async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 	fail(&sink, &error);
 	drop(sink);
 	assert!(futures::poll!(refusal.as_mut()).is_pending());
-	assert_eq!(receiver.recv().await.unwrap(), "held");
+	assert_eq!(receiver.recv().await.unwrap().text, "held");
 	refusal.await;
 	let ServerFrame::End {
 		err: Some(error), ..
@@ -91,7 +98,14 @@ async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 #[tokio::test]
 async fn a_failed_producer_stays_tracked_until_its_terminal_frame_is_queued() {
 	let (out, mut receiver) = mpsc::channel(1);
-	out.send("held".to_owned()).await.unwrap();
+	out.send(Frame {
+		stream: 0,
+		generation: Arc::new(()),
+		text: "held".to_owned(),
+		terminal: false,
+	})
+	.await
+	.unwrap();
 	let sink = StreamSink::new(1, out, Arc::new(Semaphore::new(1)));
 	let completion = sink.completion();
 	let mut running = Box::pin(async move {
@@ -100,7 +114,7 @@ async fn a_failed_producer_stays_tracked_until_its_terminal_frame_is_queued() {
 		completion.await;
 	});
 	assert!(futures::poll!(running.as_mut()).is_pending());
-	assert_eq!(receiver.recv().await.unwrap(), "held");
+	assert_eq!(receiver.recv().await.unwrap().text, "held");
 	running.await;
 	let ServerFrame::End {
 		err: Some(error), ..

@@ -1278,3 +1278,81 @@ async fn a_lease_refused_after_signing_in_closes_the_connection() {
 		}
 	);
 }
+
+static MAILBOX_ONCE: AtomicBool = AtomicBool::new(false);
+static MAILBOX_ENTERED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static MAILBOX_RELEASE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[rpc::query]
+pub async fn mailbox_gate(_cx: &rpc::QueryCx) -> rpc::Result<()> {
+	if !MAILBOX_ONCE.swap(true, Ordering::SeqCst) {
+		MAILBOX_ENTERED.notify_one();
+		MAILBOX_RELEASE.notified().await;
+	}
+	Ok(())
+}
+
+#[rpc::query]
+pub async fn mailbox_error(cx: &rpc::QueryCx) -> rpc::Result<usize> {
+	let count = Note::query().all(cx.db()).await?.len();
+	if count > 0 {
+		return Err(rpc::Error::invalid(format!("round {count}")));
+	}
+	Ok(count)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocked_session_coalesces_many_hub_rounds_without_another_write() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let server = serve(db.clone(), Caller).await;
+	let mut blocked = connect(&server, None).await;
+	let mut neighbor = connect(&server, None).await;
+	for socket in [&mut blocked, &mut neighbor] {
+		send(socket, subscribe(1, "session_bodies")).await;
+		answer(socket, 1).await.unwrap();
+	}
+	send(&mut blocked, subscribe(2, "mailbox_error")).await;
+	answer(&mut blocked, 2).await.unwrap();
+	send(&mut blocked, subscribe(3, "mailbox_gate")).await;
+	tokio::time::timeout(Duration::from_secs(5), MAILBOX_ENTERED.notified())
+		.await
+		.unwrap();
+	for round in 1..=40 {
+		NewNote {
+			body: format!("{round:02}"),
+		}
+		.insert(&db)
+		.await
+		.unwrap();
+		// A delivered neighbor transition proves this hub round completed
+		// before the next write; no timer guesses or concurrent write batching.
+		loop {
+			if let ServerFrame::Transition(t) = next(&mut neighbor).await
+				&& t.updates.iter().any(|update| update.id == 1)
+			{
+				break;
+			}
+		}
+	}
+	MAILBOX_RELEASE.notify_one();
+	let mut latest = false;
+	let mut error = false;
+	tokio::time::timeout(Duration::from_secs(5), async {
+		while !latest || !error {
+			let ServerFrame::Transition(t) = next(&mut blocked).await else {
+				continue;
+			};
+			for update in t.updates {
+				match (update.id, update.update) {
+					(1, Update::Ok(value)) => {
+						latest = value.as_array().is_some_and(|v| v.len() == 40);
+					}
+					(2, Update::Err(err)) => error = err.message == "round 40",
+					_ => {}
+				}
+			}
+		}
+	})
+	.await
+	.expect("latest full value and error arrive with no further write");
+}

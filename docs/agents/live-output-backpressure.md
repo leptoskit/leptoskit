@@ -15,3 +15,13 @@ Unit tests exercise action permit retention through queueing and consumption, cl
 Integrate with PR #611 and the bounded hub mailbox before full acceptance. Run the actual crate tests and macro snapshots, both database dialects, stream cancellation and reauthentication tests, service stream generation, the live session suite, and mandatory generated SDK journeys. Retain the existing cursor, slow-reader, identity, and connection-limit assertions. Run normal local and push gates.
 
 Further review remains necessary for buffered frames when a stream ID is cancelled and reused, client command and subscriber queues, and memory limits on arbitrary application-produced values. These changes bound the named server queues; they do not establish a process-wide memory bound or guarantee cancellation of application-side work.
+
+## Stream generations
+
+Every queued stream frame carries a private reference-counted run identity. The session forwards it only while that exact run owns the client ID. Cancellation and replacement invalidate buffered frames; an old terminal cannot remove a replacement. The active map retains completed producers until their terminal is consumed, so completion does not bypass admission. There is no historical ID map or generation counter to grow or wrap.
+
+The same tracked producer task catches pump panics and completes synchronous failure recording. A normal handwritten return emits Done, and a panic emits a generic 500 without exposing panic text. Reauthentication and drain abort and join producers before flushing, check generation ownership while flushing, and interrupt only runs whose terminal has not already been consumed. Output waits retain the normal stall timeout.
+
+Actual acceptance includes the RPC library, live/session/client, jobs, actions, services and both required database dialects. Deterministic session tests cover queued old items and terminals on ID reuse, normal return, synchronous failure, panic, and stopped-reader flushing. A WebSocket test gates one session across forty separately observed hub rounds; a neighbor continues receiving, and the blocked session receives the newest complete value and error with no further write.
+
+These limits do not bound client command, status, or subscriber queues, arbitrary application value sizes, or process-wide connection memory.

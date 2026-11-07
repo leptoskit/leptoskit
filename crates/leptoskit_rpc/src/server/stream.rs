@@ -5,7 +5,10 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
+use futures::FutureExt;
 use futures::Stream;
 use futures::StreamExt;
 use leptoskit_query::BoxFuture;
@@ -84,11 +87,26 @@ pub fn open<S: StreamOperation>(
 
 /// Where a running stream sends its items: the connection's session, gated
 /// by the credits its client granted.
+#[derive(Debug)]
+#[cfg_attr(
+	not(feature = "live"),
+	allow(dead_code, reason = "only live sessions consume queued frames")
+)]
+pub(crate) struct Frame {
+	pub(crate) stream: u32,
+	pub(crate) generation: Arc<()>,
+	pub(crate) text: String,
+	pub(crate) terminal: bool,
+}
+
+/// A producer sink with credit and bounded-output backpressure.
 pub struct StreamSink {
+	pub(crate) generation: Arc<()>,
+	terminal: Arc<AtomicBool>,
 	stream: u32,
 	/// Credits bound demand, while this bounded queue limits retention even
 	/// if a client renews credits before consuming its earlier items.
-	out: mpsc::Sender<String>,
+	out: mpsc::Sender<Frame>,
 	credits: Arc<Semaphore>,
 	/// An older generated pump calls `fail` synchronously. The owning
 	/// session flushes this failure before releasing the stream's task.
@@ -104,8 +122,10 @@ impl StreamSink {
 		not(feature = "live"),
 		allow(dead_code, reason = "only a live session opens streams")
 	)]
-	pub(crate) fn new(stream: u32, out: mpsc::Sender<String>, credits: Arc<Semaphore>) -> Self {
+	pub(crate) fn new(stream: u32, out: mpsc::Sender<Frame>, credits: Arc<Semaphore>) -> Self {
 		Self {
+			generation: Arc::new(()),
+			terminal: Arc::new(AtomicBool::new(false)),
 			stream,
 			out,
 			credits,
@@ -121,6 +141,8 @@ impl StreamSink {
 	)]
 	pub(crate) fn completion(&self) -> BoxFuture<'static, ()> {
 		let sink = Self {
+			generation: Arc::clone(&self.generation),
+			terminal: Arc::clone(&self.terminal),
 			stream: self.stream,
 			out: self.out.clone(),
 			credits: Arc::clone(&self.credits),
@@ -132,10 +154,37 @@ impl StreamSink {
 				.lock()
 				.unwrap_or_else(PoisonError::into_inner)
 				.take();
-			if let Some(error) = error {
-				sink.end(EndReason::Failed(error)).await;
+			if !sink.terminal.load(Ordering::Acquire) {
+				sink.end(error.map_or(EndReason::Done, EndReason::Failed))
+					.await;
 			}
 		})
+	}
+
+	/// Runs even manually registered producers under the same terminal
+	/// lifecycle.
+	#[cfg_attr(
+		not(feature = "live"),
+		allow(dead_code, reason = "only live sessions supervise producers")
+	)]
+	pub(crate) async fn supervise(self, open: Open, args: Value, cx: QueryCx) {
+		let completion = self.completion();
+		let failure = Arc::clone(&self.failure);
+		let pump = async move { open(args, cx, self).await };
+		if std::panic::AssertUnwindSafe(pump)
+			.catch_unwind()
+			.await
+			.is_err()
+		{
+			failure
+				.lock()
+				.unwrap_or_else(PoisonError::into_inner)
+				.get_or_insert(WireError {
+					status: 500,
+					message: "the stream producer failed".to_owned(),
+				});
+		}
+		completion.await;
 	}
 
 	/// Sends every item of `items`, each once the client has room for it,
@@ -217,11 +266,29 @@ impl StreamSink {
 				message: format!("a stream frame may contain at most {MAX_FRAME_BYTES} bytes"),
 			};
 			if let Ok(text) = serde_json::to_string(&EndReason::Failed(error).frame(self.stream)) {
-				let _ = self.out.send(text).await;
+				let _ = self.enqueue(text, true).await;
 			}
 			return false;
 		}
-		self.out.send(text).await.is_ok()
+		self.enqueue(text, matches!(frame, ServerFrame::End { .. }))
+			.await
+	}
+
+	async fn enqueue(&self, text: String, terminal: bool) -> bool {
+		let sent = self
+			.out
+			.send(Frame {
+				stream: self.stream,
+				generation: Arc::clone(&self.generation),
+				text,
+				terminal,
+			})
+			.await
+			.is_ok();
+		if sent && terminal {
+			self.terminal.store(true, Ordering::Release);
+		}
+		sent
 	}
 }
 
