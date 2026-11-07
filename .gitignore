@@ -58,3 +58,8 @@ benchmarks/scripts/vendor/package-lock.json
 
 # MDT data-source cache
 .mdt/
+
+# Screenshots written by browser automation tools; host images instead of
+# committing them (see docs/agents/images.md).
+/.playwright-mcp/
+/.playwright-cli/

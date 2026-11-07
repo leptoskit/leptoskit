@@ -73,6 +73,10 @@ cargo insta review          # walk the diffs and accept each one
 
 Snapshots are reviewed like code: a diff in a `.snap` file is the reviewable record of what the CLI generates.
 
+## Images
+
+Don't commit images. Host them and link the URL from the Markdown: upload to the public Backblaze `leptoskit` bucket, or attach the file to a GitHub issue or pull request (`gh pr comment --attach <file>`) and link the returned `https://github.com/user-attachments/…` URL. `lint:images` (part of `lint:all` and CI) fails when a tracked file has an image or video extension that is not in [`.github/allowed-images.txt`](.github/allowed-images.txt), which holds only fixtures, brand vectors, and toolchain scaffolding. The commands and the URL check are in [docs/agents/images.md](docs/agents/images.md).
+
 ## The docs site
 
 The public site lives in [`docs/`](docs): the book in `docs/src`, and the binary that builds it in `docs/site` (built on [`leptoskit_docs`](crates/leptoskit_docs)).

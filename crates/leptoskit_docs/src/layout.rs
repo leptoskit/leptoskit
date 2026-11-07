@@ -112,11 +112,13 @@ fn head(
 
 		format!("{url}{page}")
 	});
-	let social_image = site
-		.social_image
-		.as_ref()
-		.zip(site.url.as_ref())
-		.map(|(image, url)| format!("{url}{image}"));
+	// An absolute address, such as one on object storage, is used as is; a
+	// path in the book is joined onto the site's published address.
+	let social_image = match site.social_image.as_ref() {
+		Some(image) if image.contains("://") => Some(image.clone()),
+		Some(image) => site.url.as_ref().map(|url| format!("{url}{image}")),
+		None => None,
+	};
 
 	view! {
 		<meta charset="utf-8" />

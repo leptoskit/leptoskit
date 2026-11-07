@@ -80,7 +80,13 @@ fn renders_the_leptoskit_components() {
 	assert!(brand.contains("style=\"background: #e5304f;\""));
 
 	assert!(out.path().join("theme/leptoskit.css").is_file());
-	assert!(out.path().join("assets/social.png").is_file());
+	assert!(
+		home.contains(
+			"<meta content=\"https://f002.backblazeb2.com/file/leptoskit/docs/social.png\" \
+			 property=\"og:image\">"
+		),
+		"{home}"
+	);
 }
 
 #[test]

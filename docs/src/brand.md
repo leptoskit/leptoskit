@@ -15,15 +15,15 @@ In the wordmark, the dot on the `i` is that same mint piece.
 
 ## Files
 
-Every file lives in [`docs/src/assets`](https://github.com/leptoskit/leptoskit/tree/main/docs/src/assets).
+The vector files live in [`docs/src/assets`](https://github.com/leptoskit/leptoskit/tree/main/docs/src/assets). The repository keeps images out, so the social card is hosted at [`f002.backblazeb2.com`](https://f002.backblazeb2.com/file/leptoskit/docs/social.png).
 
-| File             | Use it for                                                          |
-| ---------------- | ------------------------------------------------------------------- |
-| `logo-light.svg` | The full logo on light backgrounds.                                 |
-| `logo-dark.svg`  | The full logo on dark backgrounds.                                  |
-| `mark.svg`       | The mark alone, on any background, including favicons down to 16px. |
-| `icon.svg`       | The mark on an ink tile, for app icons, avatars, and rustdoc.       |
-| `social.png`     | The 1280×640 card for link previews and the GitHub social preview.  |
+| File             | Use it for                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `logo-light.svg` | The full logo on light backgrounds.                                                          |
+| `logo-dark.svg`  | The full logo on dark backgrounds.                                                           |
+| `mark.svg`       | The mark alone, on any background, including favicons down to 16px.                          |
+| `icon.svg`       | The mark on an ink tile, for app icons, avatars, and rustdoc.                                |
+| `social.png`     | The 1280×640 card for link previews and the GitHub social preview, hosted at the link above. |
 
 ## Colours
 
