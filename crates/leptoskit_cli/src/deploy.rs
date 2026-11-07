@@ -736,9 +736,15 @@ fn validate_local_dependencies(root: &Path, metadata: &crate::wasm::CargoMetadat
 				continue;
 			};
 			let manifest = path.join("Cargo.toml");
-			package_directory(root, &dependency.name, &manifest).context(
-				"move local path dependencies inside the workspace before generating a deployment",
-			)?;
+			package_directory(root, &dependency.name, &manifest).with_context(|| {
+				format!(
+					"move local path dependencies inside the workspace before generating a \
+					 deployment (a project created with `--sdk-path` depends on crates outside \
+					 the app; publish or path those crates into the workspace, or omit \
+					 `--sdk-path` and depend on the released leptoskit version that matches this \
+					 CLI)"
+				)
+			})?;
 			if seen.insert(manifest) {
 				let local = crate::wasm::cargo_metadata(&path)?;
 				for member in &local.packages {
