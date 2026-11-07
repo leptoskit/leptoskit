@@ -14,7 +14,7 @@ crate-type = ["rlib", "cdylib"]
 [features]
 default = []
 web = ["leptoskit/web", "dep:leptos", "dep:wasm-bindgen"]
-native = ["leptoskit/guest"]
+native = ["leptoskit/guest", "dep:any_spawner", "dep:futures"]
 ios = ["native", "leptoskit/ios"]
 android = ["native", "leptoskit/android"]
 macos = ["native", "leptoskit/macos"]
@@ -29,10 +29,13 @@ devtools = ["leptoskit/devtools"]
 
 [dependencies]
 snapshotted_shared = { path = "../snapshotted_shared" }
-leptoskit = { version = "=[version]", default-features = false, features = ["auth", "leptos", "query"] }
+leptoskit = { version = "=[version]", default-features = false, features = ["leptos", "query", "rpc", "auth"] }
 leptos = { version = "0.9.0-rc0", default-features = false, optional = true }
 # The embedded wasm-bindgen CLI accepts exactly its matching library version.
 wasm-bindgen = { version = "=0.2.129", optional = true }
+# The native build's executor for query and sign-in requests.
+any_spawner = { version = "0.3", optional = true }
+futures = { version = "0.3", default-features = false, features = ["executor"], optional = true }
 
 [build-dependencies]
 leptoskit_build = { version = "=[version]", default-features = false }

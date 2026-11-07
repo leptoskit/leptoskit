@@ -357,6 +357,70 @@ fn exports_without_the_environment(root: &Path, operations: &[&str], client: &Pa
 	spec
 }
 
+/// The generated notes screen really uses the shared typed operations, keeps
+/// the browser and native paths apart, and, with sign-in, only shows one
+/// account's notes.
+fn assert_generated_notes_screen(root: &Path, auth: bool) {
+	let app = root.join("notes_app/src");
+	let notes = fs::read_to_string(app.join("notes.rs")).expect("the notes screen exists");
+	assert!(
+		notes.contains("_shared::AddNote;") && notes.contains("_shared::Notes as NotesQuery;"),
+		"the screen doesn't use the shared types: {notes}"
+	);
+	assert!(
+		notes.contains("mutation_scope::<AddNote>()")
+			&& notes.contains("invalidate_scope(&query_scope::<NotesQuery>())"),
+		"the screen doesn't send AddNote and refresh the list: {notes}"
+	);
+	assert!(
+		notes.contains("use_live(|| NotesQuery {})")
+			&& notes.contains("use_rpc_query(|| NotesQuery {})"),
+		"the browser live path and the native HTTP path must both exist: {notes}"
+	);
+	for state in [
+		"Loading notes…",
+		"No notes yet.",
+		"The notes couldn't be loaded",
+		"The note couldn't be saved",
+		"Saved.",
+	] {
+		assert!(notes.contains(state), "missing state {state:?}: {notes}");
+	}
+	assert!(
+		notes.contains("MAX_BODY") && notes.contains("validate(&self.draft.get_untracked())"),
+		"the body isn't validated before sending: {notes}"
+	);
+	assert!(
+		notes.contains("remove_queries")
+			&& notes.contains("QueryFilter::scope(&query_scope::<NotesQuery>())"),
+		"an account change must drop the previous list: {notes}"
+	);
+
+	let lib = fs::read_to_string(app.join("lib.rs")).expect("the app lib exists");
+	let home = fs::read_to_string(app.join("routes/home.rs")).expect("the home route exists");
+	if auth {
+		assert!(
+			lib.contains("Notes::new(identity.clone())")
+				&& lib.contains("child.cleanup()")
+				&& lib.contains("notes.owns(&identity)"),
+			"the signed-in screen isn't rebuilt per account: {lib}"
+		);
+		assert!(lib.contains("auth::screens().gate"), "{lib}");
+		assert!(home.contains("shell.notes()"), "{home}");
+	} else {
+		assert!(
+			lib.contains("Notes::shared()") && lib.contains("pub fn provide() -> Notes"),
+			"the database scaffold must keep the query cache and notes state: {lib}"
+		);
+		assert!(lib.contains("origin(SERVER)"), "{lib}");
+		assert!(home.contains("notes.screen()"), "{home}");
+	}
+	assert!(
+		!lib.contains("Counter::default()"),
+		"a database scaffold still shows the counter: {lib}"
+	);
+}
+
 /// `leptoskit new --db sqlite`, its first migration, and the server it
 /// generates: the published API exports without a database, the server
 /// migrates at startup and serves the shared crate's typed operations, and
@@ -388,6 +452,7 @@ fn the_database_scaffold_migrates_and_serves() {
 	assert!(created.contains("+ table notes (3 columns)"), "{created}");
 	assert!(created.contains("+ table rpc.receipts"), "{created}");
 	succeeds(&leptoskit(&root, &["db", "check"]));
+	assert_generated_notes_screen(&root, false);
 
 	let client = scratch.path().join("client");
 	exports_without_the_environment(&root, &["notes", "add_note"], &client);
@@ -416,21 +481,37 @@ fn the_database_scaffold_migrates_and_serves() {
 		"--features",
 		"hydrate",
 	]);
+	cargo(&["test", "--locked", "--package", "notes_app"]);
 
 	let address = free_address();
 	let server = Server::start(&root, &target, &address, &[]);
+	let initially_empty = request(&address, "POST", "/api/notes", "{}");
 	let health = request(&address, "GET", "/api/health", "");
 	let added = request(&address, "POST", "/api/add_note", r#"{"body":"hello"}"#);
 	let empty = request(&address, "POST", "/api/add_note", r#"{"body":""}"#);
+	let blank = request(&address, "POST", "/api/add_note", r#"{"body":"   "}"#);
+	let too_long = request(
+		&address,
+		"POST",
+		"/api/add_note",
+		&format!(r#"{{"body":"{}"}}"#, "x".repeat(501)),
+	);
 	let listed = request(&address, "POST", "/api/notes", "{}");
 	let ready = request(&address, "GET", "/readyz", "");
 
+	assert_eq!(initially_empty, (200, "[]".to_owned()));
 	assert_eq!(health, (200, r#"{"ready":true}"#.to_owned()));
 	let (status, body) = added;
 	assert_eq!(status, 200, "{body}");
 	assert!(body.contains(r#""body":"hello""#), "{body}");
 	let (status, body) = empty;
 	assert_eq!(status, 400, "an empty note breaks min_len: {body}");
+	assert!(body.starts_with("Args|"), "{body}");
+	let (status, body) = blank;
+	assert_eq!(status, 400, "a blank note breaks min_len: {body}");
+	assert!(body.starts_with("Args|"), "{body}");
+	let (status, body) = too_long;
+	assert_eq!(status, 400, "a 501-character note breaks max_len: {body}");
 	assert!(body.starts_with("Args|"), "{body}");
 	let (status, body) = listed;
 	assert_eq!(status, 200);
@@ -591,6 +672,7 @@ fn the_auth_scaffold_signs_people_in() {
 	assert!(created.contains("+ table users (3 columns)"), "{created}");
 	assert!(created.contains("+ table notes (4 columns)"), "{created}");
 	assert!(created.contains("+ table auth.sessions"), "{created}");
+	assert_generated_notes_screen(&root, true);
 	exports_without_the_environment(
 		&root,
 		&["notes", "add_note"],
@@ -735,9 +817,9 @@ fn the_auth_scaffold_signs_people_in() {
 }
 
 /// What Ada, signed in with `ada`, Bob, signed in here, and someone signed
-/// out get from the notes: the signed-out call, Ada's and Bob's adds, then
-/// Ada's and Bob's lists.
-fn each_persons_notes(address: &str, origin: &str, ada: &str) -> Option<[(u16, String); 5]> {
+/// out get from the notes: the signed-out calls, Ada's and Bob's adds, their
+/// lists, and Ada's list after she signs out.
+fn each_persons_notes(address: &str, origin: &str, ada: &str) -> Option<[(u16, String); 7]> {
 	let (_, head, _) = exchange(
 		address,
 		"POST",
@@ -761,21 +843,48 @@ fn each_persons_notes(address: &str, origin: &str, ada: &str) -> Option<[(u16, S
 		let (status, _, body) = exchange(address, "POST", path, &headers, body);
 		(status, body)
 	};
+	let anonymous = call(None, "/api/add_note", r#"{"body":"nobody's"}"#);
+	let anonymous_list = call(None, "/api/notes", "{}");
+	let added = call(Some(ada), "/api/add_note", r#"{"body":"ada's"}"#);
+	let bobs = call(Some(&bob), "/api/add_note", r#"{"body":"bob's"}"#);
+	let adas_list = call(Some(ada), "/api/notes", "{}");
+	let bobs_list = call(Some(&bob), "/api/notes", "{}");
+	// Signing out ends Ada's session; her old cookie must not read the list.
+	let (..) = exchange(
+		address,
+		"POST",
+		"/auth/sign-out",
+		&format!("{origin}Cookie: {ada}\r\n"),
+		"",
+	);
+	let after_sign_out = call(Some(ada), "/api/notes", "{}");
+
 	Some([
-		call(None, "/api/add_note", r#"{"body":"nobody's"}"#),
-		call(Some(ada), "/api/add_note", r#"{"body":"ada's"}"#),
-		call(Some(&bob), "/api/add_note", r#"{"body":"bob's"}"#),
-		call(Some(ada), "/api/notes", "{}"),
-		call(Some(&bob), "/api/notes", "{}"),
+		anonymous,
+		anonymous_list,
+		added,
+		bobs,
+		adas_list,
+		bobs_list,
+		after_sign_out,
 	])
 }
 
-/// Someone signed out is refused, and Ada and Bob each see only their own
-/// notes.
-fn assert_their_own(notes: Option<[(u16, String); 5]>) {
-	let [anonymous, added, bobs, adas_list, bobs_list] =
-		notes.expect("dev sign-in sets Bob's cookie");
+/// Someone signed out is refused, Ada and Bob each see only their own notes,
+/// and a signed-out session's old cookie reads nothing.
+fn assert_their_own(notes: Option<[(u16, String); 7]>) {
+	let [
+		anonymous,
+		anonymous_list,
+		added,
+		bobs,
+		adas_list,
+		bobs_list,
+		after_sign_out,
+	] = notes.expect("dev sign-in sets Bob's cookie");
 	let (status, body) = anonymous;
+	assert_eq!(status, 401, "{body}");
+	let (status, body) = anonymous_list;
 	assert_eq!(status, 401, "{body}");
 	let (status, body) = added;
 	assert_eq!(status, 200, "{body}");
@@ -793,6 +902,8 @@ fn assert_their_own(notes: Option<[(u16, String); 5]>) {
 		body.contains("bob's") && !body.contains("ada's"),
 		"Bob sees only his: {body}"
 	);
+	let (status, body) = after_sign_out;
+	assert_eq!(status, 401, "a signed-out cookie still read notes: {body}");
 }
 
 /// The `--auth` scaffold's native guest imports none of the browser APIs the

@@ -5,15 +5,16 @@ expression: contents
 //! One application shared by the browser, server, and native runners.
 
 pub mod components;
+pub mod notes;
 pub mod routes;
 pub mod services;
 
-pub use services::Counter;
+pub use notes::Notes;
 
-/// Renders the portable application tree for any host.
-pub fn screen(state: &Counter) -> leptoskit::prelude::Element {
-	routes::home::screen(state)
-}
+/// Where native apps find the server; browsers use the page's own origin.
+/// An Android emulator reaches the computer running `leptoskit dev` at
+/// `http://10.0.2.2:3000`. Change this to your site's origin before you ship.
+pub const SERVER: &str = "http://localhost:3000";
 
 /// The browser and server adapter for the same application tree.
 #[cfg(feature = "web")]
@@ -21,14 +22,24 @@ pub fn screen(state: &Counter) -> leptoskit::prelude::Element {
 pub fn App() -> impl leptos::prelude::IntoView {
 	use leptos::prelude::*;
 
-	let changed = RwSignal::new(0_u32);
-	let state = Counter::default()
-		.on_change(move || changed.update(|value| *value = value.wrapping_add(1)));
+	let notes = provide();
 
-	move || {
-		changed.get();
-		leptoskit::web::render(screen(&state))
-	}
+	move || leptoskit::web::render(screen(&notes))
+}
+
+/// Starts the app's shared state in the current reactive owner: the query
+/// cache the notes screen keeps its list in, and the list itself.
+///
+/// The server renders the first list in process, so the browser can hydrate
+/// it without calling its own relative URL from HTML rendering.
+pub fn provide() -> Notes {
+	leptoskit::query::QueryClient::new().provide();
+	Notes::shared()
+}
+
+/// Renders the portable application tree for any host.
+pub fn screen(notes: &Notes) -> leptoskit::prelude::Element {
+	routes::home::screen(notes)
 }
 
 /// The complete HTML document sent by the SSR server.
@@ -60,6 +71,10 @@ pub fn shell(options: leptos::config::LeptosOptions) -> impl leptos::prelude::In
 pub fn hydrate() {
 	#[cfg(feature = "devtools")]
 	leptoskit::devtools::install(env!("CARGO_PKG_NAME"));
+	// The browser talks to the page's own origin, with the session cookie
+	// when the app has sign-in. This configures the RPC client and the live
+	// socket too.
+	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
 	leptos::mount::hydrate_body(App);
 }
 
@@ -69,22 +84,35 @@ pub fn hydrate() {
 pub fn start() {
 	#[cfg(feature = "devtools")]
 	leptoskit::devtools::install(env!("CARGO_PKG_NAME"));
+	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
 	leptos::mount::mount_to_body(App);
 }
+
+/// The native guest's executor for requests the query client starts itself.
+#[cfg(all(target_arch = "wasm32", feature = "native"))]
+mod tasks;
 
 /// Mounts the same application in the native Wasm runtime.
 #[cfg(all(target_arch = "wasm32", feature = "native"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn leptoskit_main() {
-	let state = Counter::default();
-	leptoskit::guest::mount(move || screen(&state));
+	tasks::start();
+	// A native app has to be told where its server is.
+	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new().origin(SERVER));
+	let owner = leptoskit::leptos::prelude::Owner::new();
+	let notes = owner.with(provide);
+	leptoskit::guest::mount(move || owner.with(|| screen(&notes)));
+	tasks::poll();
 }
 
-/// Forwards platform-neutral events to the shared tree's handlers.
+/// Forwards platform-neutral events to the shared tree's handlers, then runs
+/// the tasks they started.
 #[cfg(all(target_arch = "wasm32", feature = "native"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn leptoskit_event(node: i64, kind: i32, ptr: i32, len: i32) -> i32 {
-	leptoskit::guest::dispatch(node, kind, ptr, len)
+	let handled = leptoskit::guest::dispatch(node, kind, ptr, len);
+	tasks::poll();
+	handled
 }
 
 /// Settles the values application state bound, after a turn.
@@ -94,12 +122,11 @@ pub extern "C" fn leptoskit_flush() {
 	leptoskit::guest::flush();
 }
 
-/// Runs tasks the runtime queued, then settles what they wrote. The host calls
-/// this after a plugin reply.
+/// Runs the tasks a plugin reply woke, such as the notes list's answer.
 #[cfg(all(target_arch = "wasm32", feature = "native"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn leptoskit_poll() {
-	leptoskit::guest::poll();
+	tasks::poll();
 }
 
 /// Allocates the native runtime's event payload buffer.
