@@ -36,6 +36,7 @@
 //! assert!(html.starts_with("<aside data-kind=\"tip\" class=\"lk-callout\">"));
 //! ```
 
+mod builder;
 mod components;
 mod diagnostic;
 mod document;

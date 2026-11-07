@@ -108,6 +108,82 @@ const PLATFORMS: [Platform; 8] = [
 	},
 ];
 
+/// The example component a line at a time, as `view!` markup and as the
+/// builder call that line becomes, with the index in [`Platform::widgets`]
+/// of the widget the call adds. Markup takes more lines than the calls, so
+/// some lines have none. The hero's card and the stage's map both show it.
+const TREE_LINES: [(&str, Option<(&str, usize)>); 7] = [
+	("<View>", Some(("View()", 0))),
+	(
+		"  <Heading aria_level=3>",
+		Some(("  .child(Heading(3, \"Little wins\"))", 1)),
+	),
+	("    \"Little wins\"", None),
+	("  </Heading>", None),
+	(
+		"  <Text>{shipped}</Text>",
+		Some(("  .child(Text(shipped))", 2)),
+	),
+	(
+		"  <Button>\"One more idea\"</Button>",
+		Some(("  .child(Button(\"One more idea\"))", 3)),
+	),
+	("</View>", None),
+];
+
+/// The live example's code, as the source panel shows it in markup.
+const SOURCE_MARKUP: &str = "let count = RwSignal::new(0);
+let shipped = count.get();
+let pop = Motion::enter(Pose::new().scale(1.35))
+  .spring(Spring::BOUNCY)
+  .key(shipped);
+
+view! {
+  <View>
+    <Heading aria_level=3>\"Little wins\"</Heading>
+    <Text motion=pop>
+      {format!(\"{shipped} ideas shipped\")}
+    </Text>
+    <Button
+      on:press=move || count.update(|n| *n += 1)
+    >
+      \"One more idea\"
+    </Button>
+  </View>
+}";
+
+/// The same code, as the source panel shows it in builder calls.
+const SOURCE_BUILDER: &str = "let count = RwSignal::new(0);
+let shipped = count.get();
+let pop = Motion::enter(Pose::new().scale(1.35))
+  .spring(Spring::BOUNCY)
+  .key(shipped);
+
+View()
+  .child(Heading(3, \"Little wins\"))
+  .child(
+    Text(format!(\"{shipped} ideas shipped\"))
+      .motion(pop),
+  )
+  .child(
+    Button(\"One more idea\")
+      .on_press(move || count.update(|n| *n += 1)),
+  )";
+
+/// The example component's tree as `view!` markup.
+fn tree_markup() -> String {
+	TREE_LINES.map(|(markup, _)| markup).join("\n")
+}
+
+/// The example component's tree as builder calls.
+fn tree_builder() -> String {
+	TREE_LINES
+		.iter()
+		.filter_map(|(_, builder)| builder.map(|(code, _)| code))
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
 /// The stage's scroll timeline, which every part of the morph follows.
 const STAGE: &str = "stage";
 
@@ -248,6 +324,27 @@ fn text(id: &str, content: &str) -> Element {
 
 fn link(id: &str, label: &str, href: &str) -> Element {
 	Pressable(label).id(id).href(href).child(Text(label))
+}
+
+/// A choice between the code samples' two styles: `view!` markup, which
+/// the page shows first, and builder calls. `landing.mjs` wires every switch
+/// to every sample. The root's `data-code-style`, which the head's script
+/// sets before the first paint, picks the sample and the option shown as
+/// chosen, and without it the switch stays hidden.
+fn style_switch(id: &str) -> Element {
+	let option = |style: &str, label: &str, checked: bool| {
+		Button(label)
+			.id(format!("{id}-{style}"))
+			.role(Role::Radio)
+			.aria_checked(checked)
+			.tab_index(if checked { 0 } else { -1 })
+	};
+	View()
+		.id(id)
+		.role(Role::RadioGroup)
+		.aria_label("Code style")
+		.child(option("markup", "Markup", true))
+		.child(option("builder", "Builder", false))
 }
 
 /// A section's eyebrow, title, and description. Each `\n`-separated line of
@@ -437,11 +534,8 @@ fn fan() -> Element {
 						.delay(ms(160)),
 				)
 				.child(text("fan-tree-label", "ONE COMPONENT TREE"))
-				.child(text(
-					"fan-tree-code",
-					"View()\n  .child(Heading(3, \"Little wins\"))\n  .child(Text(shipped))\n  \
-					 .child(Button(\"One more idea\"))",
-				)),
+				.child(text("fan-tree-markup", &tree_markup()))
+				.child(text("fan-tree-builder", &tree_builder())),
 		)
 }
 
@@ -453,6 +547,7 @@ fn device(prefix: &str, platform: &Platform, turn: Option<usize>) -> Element {
 	let id = format!("{prefix}-{}-device", platform.id);
 	let part = |name: &str| format!("{id}-{name}");
 	let chrome = View().id(part("chrome"));
+
 	let chrome = match platform.form {
 		Form::Browser => {
 			chrome
@@ -476,6 +571,7 @@ fn device(prefix: &str, platform: &Platform, turn: Option<usize>) -> Element {
 	} else {
 		"One more idea"
 	};
+
 	let lands = |element: Element, from: Pose, lag: f32, easing: Easing| {
 		match turn {
 			Some(turn) => element.motion(settle_on_stage(turn, from, lag).easing(easing)),
@@ -544,35 +640,46 @@ fn stage() -> Element {
 	)
 }
 
-/// The component's tree beside what each platform makes of it, one row per
-/// element. It draws what the scenes' captions say, so assistive technology
-/// reads the captions instead.
+/// The component's tree beside what each platform makes of it, a line at a
+/// time, in either code style. It draws what the scenes' captions say, so
+/// assistive technology reads the captions instead, and meets only the code
+/// style switch here.
 fn widget_map() -> Element {
-	let rows = [
-		"View()",
-		"  .child(Heading(3, \"Little wins\"))",
-		"  .child(Text(shipped))",
-		"  .child(Button(\"One more idea\"))",
-	];
-	let mut map = View().id("widget-map").aria_hidden(true).child(
+	let mut map = View().id("widget-map").child(
 		View()
 			.id("map-head")
-			.child(text("map-head-tree", "ONE RUST TREE"))
+			.child(
+				View()
+					.id("map-head-code")
+					.child(text("map-head-tree", "ONE RUST TREE").aria_hidden(true))
+					.child(style_switch("map-style")),
+			)
 			.child(
 				View()
 					.id("map-head-platforms")
+					.aria_hidden(true)
 					.child(text("map-head-becomes", "BECOMES, ON"))
 					.child(swapping("map-head", |platform| platform.name.to_owned())),
 			),
 	);
 
-	for (column, code) in rows.into_iter().enumerate() {
+	for (row, (markup, builder)) in TREE_LINES.into_iter().enumerate() {
+		// Lines only markup has hide with it, by their own prefix.
+		let id = match builder {
+			Some(_) => format!("map-row-{row}"),
+			None => format!("map-extra-{row}"),
+		};
+
 		map = map.child(
 			View()
-				.id(format!("map-row-{column}"))
-				.child(text(&format!("map-row-{column}-code"), code))
-				.child(swapping(&format!("map-row-{column}"), |platform| {
-					platform.widgets[column].to_owned()
+				.id(id.clone())
+				.aria_hidden(true)
+				.child(text(&format!("{id}-markup"), markup))
+				.children(builder.into_iter().flat_map(|(code, widget)| {
+					[
+						text(&format!("{id}-builder"), code),
+						swapping(&id, move |platform| platform.widgets[widget].to_owned()),
+					]
 				})),
 		);
 	}
@@ -682,17 +789,14 @@ fn studio() -> Element {
 				.child(
 					View()
 						.id("source-panel")
-						.child(text("source-caption", "ONE RUST COMPONENT"))
-						.child(text(
-							"source-code",
-							"let count = RwSignal::new(0);\nlet shipped = \
-							 count.get();\n\nView()\n  .child(Heading(3, \"Little wins\"))\n  \
-							 .child(\n    Text(format!(\"{shipped} ideas shipped\"))\n      \
-							 .motion(\n        Motion::enter(Pose::new().scale(1.35))\n          \
-							 .spring(Spring::BOUNCY)\n          .key(shipped),\n      ),\n  )\n  \
-							 .child(\n    Button(\"One more idea\")\n      .on_press(move || \
-							 count.update(|n| *n += 1)),\n  )",
-						))
+						.child(
+							View()
+								.id("source-head")
+								.child(text("source-caption", "ONE RUST COMPONENT"))
+								.child(style_switch("source-style")),
+						)
+						.child(text("source-markup", SOURCE_MARKUP))
+						.child(text("source-builder", SOURCE_BUILDER))
 						.child(link(
 							"source-guide",
 							"Learn the component model ↗",
@@ -998,8 +1102,10 @@ fn cloud(mode: Mode) -> Element {
 			)
 		}
 	};
+
 	let (customer_title, customer_body, customer_link, customer_href) = customer;
 	let (managed_title, managed_body, managed_link, managed_href) = managed;
+
 	let (managed_label, note) = match mode {
 		Mode::Public => {
 			(
@@ -1016,6 +1122,7 @@ fn cloud(mode: Mode) -> Element {
 			)
 		}
 	};
+
 	View()
 		.id("cloud")
 		.child(intro(
@@ -1110,7 +1217,111 @@ fn footer(mode: Mode) -> Element {
 
 #[cfg(test)]
 mod tests {
+	use reactive_graph::owner::Owner;
+
 	use super::*;
+
+	/// Builds the code a sample shows, once it is checked to be the code the
+	/// page shows, token for token. Markup the page shows without its
+	/// `view!` is passed in one.
+	macro_rules! shown {
+		($shown:expr, view! { $($tree:tt)* }) => {{
+			same_code($shown, stringify!($($tree)*));
+			view! { $($tree)* }
+		}};
+		($shown:expr, $($code:tt)*) => {{
+			same_code($shown, stringify!($($code)*));
+			{ $($code)* }
+		}};
+	}
+
+	fn same_code(shown: &str, built: &str) {
+		let tokens = |code: &str| {
+			code.parse::<proc_macro2::TokenStream>()
+				.expect("samples are Rust tokens")
+				.to_string()
+		};
+		assert_eq!(tokens(shown), tokens(built), "the page shows other code");
+	}
+
+	#[test]
+	fn the_tree_builds_the_same_in_either_style() {
+		Owner::new().with(|| {
+			let shipped = "3 ideas shipped";
+			let markup = shown!(
+				&tree_markup(),
+				view! {
+					<View>
+						<Heading aria_level=3>"Little wins"</Heading>
+						<Text>{shipped}</Text>
+						<Button>"One more idea"</Button>
+					</View>
+				}
+			);
+			let builder = shown!(
+				&tree_builder(),
+				View()
+					.child(Heading(3, "Little wins"))
+					.child(Text(shipped))
+					.child(Button("One more idea"))
+			);
+			assert_eq!(format!("{markup:?}"), format!("{builder:?}"));
+		});
+	}
+
+	#[test]
+	fn every_call_in_the_tree_sits_beside_the_widget_it_adds() {
+		let widgets: Vec<usize> = TREE_LINES
+			.iter()
+			.filter_map(|(_, builder)| builder.map(|(_, widget)| widget))
+			.collect();
+
+		for platform in &PLATFORMS {
+			assert_eq!(widgets, (0..platform.widgets.len()).collect::<Vec<_>>());
+		}
+	}
+
+	#[test]
+	fn the_live_example_builds_the_same_in_either_style() {
+		Owner::new().with(|| {
+			let markup = shown!(
+				SOURCE_MARKUP,
+				let count = RwSignal::new(0);
+				let shipped = count.get();
+				let pop = Motion::enter(Pose::new().scale(1.35))
+					.spring(Spring::BOUNCY)
+					.key(shipped);
+
+				view! {
+					<View>
+						<Heading aria_level=3>"Little wins"</Heading>
+						<Text motion=pop>{format!("{shipped} ideas shipped")}</Text>
+						<Button on:press=move || count.update(|n| *n += 1)>"One more idea"</Button>
+					</View>
+				}
+			);
+			let builder = shown!(
+				SOURCE_BUILDER,
+				let count = RwSignal::new(0);
+				let shipped = count.get();
+				let pop = Motion::enter(Pose::new().scale(1.35))
+					.spring(Spring::BOUNCY)
+					.key(shipped);
+
+				View()
+					.child(Heading(3, "Little wins"))
+					.child(
+						Text(format!("{shipped} ideas shipped"))
+							.motion(pop),
+					)
+					.child(
+						Button("One more idea")
+							.on_press(move || count.update(|n| *n += 1)),
+					)
+			);
+			assert_eq!(format!("{markup:?}"), format!("{builder:?}"));
+		});
+	}
 
 	#[test]
 	fn the_stage_gives_every_platform_its_own_turn() {

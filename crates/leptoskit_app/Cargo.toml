@@ -85,6 +85,9 @@ web-sys = { workspace = true, optional = true, features = ["Window", "Location",
 
 [dev-dependencies]
 leptoskit_testing = { workspace = true }
+# Reads the landing page's code samples as tokens, to check them against the
+# code its tests build.
+proc-macro2 = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 

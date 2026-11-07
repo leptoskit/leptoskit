@@ -1,0 +1,22 @@
+---
+source: crates/leptoskit_docs/src/builder.rs
+expression: convert_file(LANGUAGE_MENU)
+---
+use leptoskit::prelude::*;
+
+use crate::l10n::use_l10n;
+
+#[component]
+pub fn LanguageMenu() -> impl IntoView {
+	let l10n = use_l10n();
+	View().class("flex-row gap-2").children(
+		l10n.supported_locales()
+			.iter()
+			.map(|locale| {
+				let tag = locale.to_string();
+				let choice = locale.clone();
+				Button(tag).on_press(move || l10n.set_locale(&choice))
+			})
+			.collect::<Vec<_>>(),
+	)
+}

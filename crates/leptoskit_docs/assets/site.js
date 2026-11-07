@@ -65,14 +65,19 @@
 
 	// Copy buttons ------------------------------------------------------------
 	for (const figure of document.querySelectorAll(".lk-code")) {
-		const code = figure.querySelector("pre");
-		if (!code || !navigator.clipboard) continue;
+		if (!figure.querySelector("pre") || !navigator.clipboard) continue;
 
 		const button = document.createElement("button");
 		button.type = "button";
 		button.className = "lk-copy";
 		button.textContent = "Copy";
 		button.addEventListener("click", async () => {
+			// A sample shown both ways copies the way it reads now.
+			const code = figure.querySelector(
+				`pre[data-lk-variant="${html.dataset.codeStyle}"]`,
+			) || figure.querySelector("pre");
+			if (!code) return;
+
 			await navigator.clipboard.writeText(code.innerText.replace(/\n$/, ""));
 			button.textContent = "Copied";
 			button.setAttribute("data-copied", "");
@@ -81,8 +86,69 @@
 				button.removeAttribute("data-copied");
 			}, 1600);
 		});
-		figure.append(button);
+		(figure.querySelector(".lk-code-bar") || figure).append(button);
 	}
+
+	// Code style --------------------------------------------------------------
+	// Samples with component trees read as `view!` markup or builder calls.
+	// theme.js applies the saved style before the first paint; any switch
+	// changes every sample on the page and the choice holds on every page.
+	const styleOptions = /** @type {HTMLElement[]} */ ([
+		...document.querySelectorAll("[data-lk-style-option]"),
+	]);
+
+	/** @param {string} style */
+	const showStyle = (style) => {
+		const chosen = style === "builder" ? "builder" : "markup";
+
+		// Any write to the root's attribute restyles the whole page, even an
+		// unchanged one, so the style theme.js applied is left as it is.
+		if (html.dataset.codeStyle !== chosen) html.dataset.codeStyle = chosen;
+
+		for (const option of styleOptions) {
+			const checked = option.dataset.lkStyleOption === chosen;
+			option.setAttribute("aria-checked", String(checked));
+			option.tabIndex = checked ? 0 : -1;
+		}
+	};
+
+	/** @param {HTMLElement} option */
+	const chooseStyle = (option) => {
+		const before = option.getBoundingClientRect().top;
+		showStyle(option.dataset.lkStyleOption || "markup");
+		save("lk-code-style", html.dataset.codeStyle || "markup");
+		// Samples above this one change height too; keep it where it was.
+		scrollBy({
+			top: option.getBoundingClientRect().top - before,
+			behavior: "instant",
+		});
+	};
+
+	for (const option of styleOptions) {
+		option.addEventListener("click", () => chooseStyle(option));
+		option.addEventListener("keydown", (event) => {
+			const step = event.key === "ArrowRight" || event.key === "ArrowDown"
+				? 1
+				: event.key === "ArrowLeft" || event.key === "ArrowUp"
+				? -1
+				: 0;
+			if (!step || !option.parentElement) return;
+
+			event.preventDefault();
+			const group = /** @type {HTMLElement[]} */ ([
+				...option.parentElement.querySelectorAll("[data-lk-style-option]"),
+			]);
+			const next =
+				group[(group.indexOf(option) + step + group.length) % group.length];
+			chooseStyle(next);
+			next.focus();
+		});
+	}
+
+	if (styleOptions.length > 0) showStyle(html.dataset.codeStyle || "markup");
+	addEventListener("storage", (event) => {
+		if (event.key === "lk-code-style") showStyle(event.newValue || "markup");
+	});
 
 	// Tabs --------------------------------------------------------------------
 	const tabGroups = [...document.querySelectorAll("[data-lk-tabs]")];

@@ -28,7 +28,20 @@ Pages are MDX-style Markdown, and the build fails on any of these, with the file
 - a tag that is never closed: write `<br />` and `<img ... />`; HTML comments are fine;
 - an unknown component, or an attribute a component never reads;
 - a link that is not relative, or that points at a `.html` page instead of its `.md` source (`guide/x.md#anchor`), or at a chapter missing from `SUMMARY.md`, or at a heading that does not exist;
-- a link to a local address such as `http://localhost:3000` or `http://127.0.0.1:3000`. Bare URLs in prose become links in GitHub-flavoured Markdown, so write dev-server addresses as inline code.
+- a link to a local address such as `http://localhost:3000` or `http://127.0.0.1:3000`. Bare URLs in prose become links in GitHub-flavoured Markdown, so write dev-server addresses as inline code;
+- leptoskit `view!` markup in a Rust sample that has no builder form (see below).
+
+## Markup and builder samples
+
+Readers choose whether component trees read as `view!` markup or as builder calls (`View().class(…).child(Text(…))`), with a switch on every sample that has leptoskit markup. Write samples as markup only: the build derives the builder form from it, so the two cannot drift. The conversion lives in [`crates/leptoskit_docs/src/builder.rs`](../../crates/leptoskit_docs/src/builder.rs); its module docs say what it reads. A sample gets the switch when a `rust` block has a leptoskit `view!`. leptos's own `view!` (written `leptos::view!`, with lowercase HTML tags, or imported from leptos alone) is left as it is, as is everything around the markup.
+
+When markup has no builder form, the build fails with the file, line, and column, and says why: a comment after the last child, a closure inside literal text, a `<Pressable>` without `accessibility_label`, a component the page defines that is missing a required prop, and so on. Rewrite the markup, or, when the sample is about markup itself, write `markup-only` after the language to show it as written, without the switch:
+
+````markdown
+```rust markup-only
+view! { <Text>"Count: " {move || count.get()}</Text> }
+```
+````
 
 Show an example app with `<Play>`, its playable web build, rather than a screenshot: the repository holds no raster images. Give it a `description` that reads as alt text for the screen, and a `native` link to the AppKit render where one exists.
 

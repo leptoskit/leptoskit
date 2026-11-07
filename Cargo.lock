@@ -4929,6 +4929,7 @@ dependencies = [
  "leptoskit_plugin_linking",
  "leptoskit_plugin_secure_store",
  "leptoskit_testing",
+ "proc-macro2",
  "reactive_graph",
  "serde",
  "serde_json",
@@ -5414,8 +5415,12 @@ dependencies = [
  "leptos",
  "markdown",
  "notify",
+ "proc-macro2",
+ "quote",
+ "rstml",
  "serde",
  "serde_json",
+ "syn 3.0.9",
  "tempfile",
  "thiserror 2.0.21",
  "walkdir",
@@ -5429,6 +5434,7 @@ dependencies = [
  "leptos",
  "leptoskit_docs",
  "skribble_rough",
+ "syn 3.0.9",
  "tempfile",
 ]
 

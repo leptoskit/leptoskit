@@ -1,0 +1,37 @@
+---
+source: crates/leptoskit_docs/src/builder.rs
+expression: convert_file(WATER_SCREEN)
+---
+use leptoskit::prelude::*;
+
+use crate::Counter;
+
+/// Glasses of water in a day's goal.
+const GOAL: i32 = 8;
+
+/// Builds the same screen for the browser and every native app.
+pub fn screen(state: &Counter) -> Element {
+	let glasses = state.value();
+	let filled = glasses.clamp(0, GOAL) as f32 / GOAL as f32;
+	let counter = state.clone();
+
+	View()
+		.class("min-h-screen items-center justify-center gap-6 p-6 bg-sky-950 text-white")
+		.child(Text("Water today").class("text-3xl font-bold"))
+		.child(Text(format!("{glasses} of {GOAL} glasses")).class("text-xl"))
+		// A progress bar made of two boxes: the inner one is a
+		// fraction of the outer one's width.
+		.child(
+			View().class("h-3 w-64 rounded-[6px] bg-sky-800").child(
+				View()
+					.class("h-full rounded-[6px] bg-sky-400")
+					.with_style(move |style| style.width = Dimension::Percent(filled)),
+			),
+		)
+		.child(
+			Button("Drink a glass")
+				.class("rounded-lg bg-sky-400 px-6 py-3 font-semibold text-sky-950")
+				.on_press(move || counter.increment()),
+		)
+		.child(Text(format!("Drawn with {}", toolkit())).class("text-sm text-sky-200"))
+}

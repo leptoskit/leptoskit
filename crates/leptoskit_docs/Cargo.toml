@@ -18,8 +18,15 @@ arborium = { workspace = true, features = ["lang-bash", "lang-css", "lang-diff",
 leptos = { workspace = true, features = ["ssr"] }
 markdown = { workspace = true }
 notify = { workspace = true }
+# `view!` markup in Rust samples is read with the same parser as the macro,
+# so each sample also shows as builder calls. Converting keeps the source
+# around every invocation, which needs byte positions from span locations.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote = { workspace = true }
+rstml = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 thiserror = { workspace = true }
 walkdir = { workspace = true }
 

@@ -355,3 +355,48 @@ fn reports_parse_errors_with_their_position() {
 		(6, None)
 	);
 }
+
+/// A Rust sample written with leptoskit `view!` markup, as the book writes
+/// them.
+const MARKUP_SAMPLE: &str = "```rust\nuse leptoskit::prelude::*;\n\nview! {\n\t<View \
+                             class=\"p-4\">\n\t\t<Text>\"Hello\"</Text>\n\t</View>\n}\n```\n";
+
+#[test]
+fn shows_markup_samples_as_builder_calls_too() {
+	let html = render_to_html(MARKUP_SAMPLE, &Components::new()).unwrap();
+
+	insta::assert_snapshot!(pretty(&html));
+}
+
+#[test]
+fn shows_samples_without_leptoskit_markup_once() {
+	for source in [
+		"```rust\nfn main() {}\n```\n",
+		"```rust\nleptos::view! { <p>\"Hi\"</p> }\n```\n",
+		"```rust markup-only\nview! { <View /> }\n```\n",
+		"```rust,markup-only\nview! { <View /> }\n```\n",
+		"```toml\nview = \"<View />\"\n```\n",
+	] {
+		let html = render_to_html(source, &Components::new()).unwrap();
+		assert!(!html.contains("data-lk-styles"), "{source}: {html}");
+		assert_eq!(html.matches("<pre").count(), 1, "{source}: {html}");
+	}
+}
+
+#[test]
+fn reports_markup_without_a_builder_form_at_its_line() {
+	let diagnostics = render_to_html(
+		"# Pressables\n\n```rust\nview! {\n\t<Pressable on:press=open />\n}\n```\n",
+		&Components::new(),
+	)
+	.unwrap_err();
+
+	assert_eq!(diagnostics.len(), 1);
+	assert_eq!((diagnostics[0].line, diagnostics[0].column), (5, 3));
+	let message = diagnostics[0].to_string();
+	assert!(
+		message.contains("`Pressable()` needs `accessibility_label=…` to call it with"),
+		"{message}"
+	);
+	assert!(message.contains("```rust markup-only"), "{message}");
+}
