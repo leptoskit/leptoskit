@@ -1847,6 +1847,600 @@ mod tests {
 	}
 
 	#[test]
+	fn every_target_names_its_platform_and_rust_triple() {
+		for (target, platform) in [
+			(Target::Macos, Platform::Macos),
+			(Target::IosSimulator, Platform::Ios),
+			(Target::Ios, Platform::Ios),
+			(Target::Android, Platform::Android),
+			(Target::AndroidX86_64, Platform::Android),
+			(Target::Harmonyos, Platform::Harmonyos),
+			(Target::HarmonyosX86_64, Platform::Harmonyos),
+			(Target::Windows, Platform::Windows),
+			(Target::Linux, Platform::Linux),
+			(Target::Tui, Platform::Tui),
+		] {
+			assert_eq!(target.platform(), platform);
+			assert!(!target.rust().is_empty(), "{target:?}");
+		}
+
+		assert_eq!(Target::from_platform(Platform::Ios).unwrap(), Target::Ios);
+		assert_eq!(
+			Target::from_platform(Platform::Android).unwrap(),
+			Target::Android
+		);
+		assert_eq!(
+			Target::from_platform(Platform::Harmonyos).unwrap(),
+			Target::Harmonyos
+		);
+		assert_eq!(
+			Target::from_platform(Platform::Macos).unwrap(),
+			Target::Macos
+		);
+		assert_eq!(
+			Target::from_platform(Platform::Windows).unwrap(),
+			Target::Windows
+		);
+		assert_eq!(
+			Target::from_platform(Platform::Linux).unwrap(),
+			Target::Linux
+		);
+		assert_eq!(Target::from_platform(Platform::Tui).unwrap(), Target::Tui);
+
+		assert_eq!(Target::Android.rust(), "aarch64-linux-android");
+		assert_eq!(Target::AndroidX86_64.rust(), "x86_64-linux-android");
+		assert_eq!(Target::Harmonyos.rust(), "aarch64-unknown-linux-ohos");
+		assert_eq!(Target::HarmonyosX86_64.rust(), "x86_64-unknown-linux-ohos");
+		assert_eq!(Target::Ios.rust(), "aarch64-apple-ios");
+		assert_eq!(Target::Tui.rust(), host_triple());
+
+		for platform in [
+			Platform::Web,
+			Platform::Server,
+			Platform::Extension,
+			Platform::Native,
+		] {
+			assert!(
+				Target::from_platform(platform).is_err(),
+				"{platform} is not a concrete native platform"
+			);
+		}
+
+		assert!(Target::Tui.builds_on_host());
+		assert!(!Target::Macos.builds_on_host());
+		for target in [
+			Target::Macos,
+			Target::Ios,
+			Target::IosSimulator,
+			Target::Android,
+			Target::AndroidX86_64,
+		] {
+			assert!(target.reports_to_devtools(), "{target:?}");
+		}
+
+		for target in [
+			Target::Windows,
+			Target::Linux,
+			Target::Harmonyos,
+			Target::HarmonyosX86_64,
+			Target::Tui,
+		] {
+			assert!(!target.reports_to_devtools(), "{target:?}");
+		}
+	}
+
+	#[test]
+	fn host_and_code_push_rules_are_checked_before_anything_builds() {
+		let mut config = LeptoskitConfig::default();
+		config.app.platforms = vec![Platform::Web];
+		let error = check_host(&config, Target::Android, false)
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("android"), "{error}");
+
+		config.app.platforms = Platform::APPLICATION.to_vec();
+		config.codepush.enabled = true;
+		config.codepush.server = "http://push.example.com".into();
+		let error = check_host(&config, Target::Android, false)
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("requires HTTPS"), "{error}");
+		let error = check_host(&config, Target::Android, true)
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("requires HTTPS"), "{error}");
+
+		// A debug build may opt into cleartext, a release build never does.
+		config.codepush.allow_http = true;
+		assert!(
+			check_host(&config, Target::Android, false)
+				.unwrap()
+				.is_none()
+		);
+		assert!(check_host(&config, Target::Android, true).is_err());
+
+		config.codepush.enabled = false;
+
+		for (target, supported) in [
+			(Target::Macos, cfg!(target_os = "macos")),
+			(Target::Ios, cfg!(target_os = "macos")),
+			(Target::IosSimulator, cfg!(target_os = "macos")),
+			(Target::Windows, cfg!(target_os = "windows")),
+			(Target::Linux, cfg!(target_os = "linux")),
+		] {
+			assert_eq!(
+				check_host(&config, target, true).is_ok(),
+				supported,
+				"{target:?} on this host"
+			);
+		}
+	}
+
+	fn host_registry() -> registry::Registry {
+		registry::Registry {
+			package: "app_host".into(),
+			plugins: Vec::new(),
+			support: Vec::new(),
+			bridge: PathBuf::from("bridge"),
+			target: PathBuf::from("target"),
+			host_features: vec!["leptoskit_bridge_ffi/async-host".into()],
+			devtools_feature: Some("leptoskit_bridge_ffi/devtools".into()),
+			missing: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn host_library_builds_take_the_profile_features_and_ohos_toolchain() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let mut config = LeptoskitConfig::default();
+		config.bundle.optimize = Optimize::Smallest;
+		let build_dir = root.join("target");
+		let registry = host_registry();
+
+		let debug = host_library_command(
+			root,
+			&config,
+			&registry,
+			Target::Macos,
+			false,
+			&build_dir,
+			None,
+		)
+		.unwrap();
+		let debug_arguments = arguments(&debug);
+		assert!(debug_arguments.contains(&"build".to_owned()));
+		assert!(debug_arguments.contains(&"app_host".to_owned()));
+		assert!(debug_arguments.contains(&"leptoskit_bridge_ffi/async-host".to_owned()));
+		assert!(
+			debug_arguments
+				.iter()
+				.any(|argument| argument == "profile.dev.package.\"*\".opt-level=3"),
+			"{debug_arguments:?}"
+		);
+
+		let release = host_library_command(
+			root,
+			&config,
+			&registry,
+			Target::Macos,
+			true,
+			&build_dir,
+			None,
+		)
+		.unwrap();
+		let release_arguments = arguments(&release);
+		assert!(release_arguments.contains(&crate::wasm::HOST_SMALLEST_PROFILE.to_owned()));
+		assert!(
+			!release_arguments
+				.iter()
+				.any(|argument| argument.contains("opt-level=3")),
+			"{release_arguments:?}"
+		);
+		#[cfg(target_os = "macos")]
+		assert!(
+			environment(&release).iter().any(|(key, _)| {
+				key == "CC_aarch64_apple_darwin" || key == "CC_x86_64_apple_darwin"
+			}),
+			"the SDK compiler reaches cc-rs: {:?}",
+			environment(&release)
+		);
+
+		let ohos = root.join("ohos-ndk");
+		let harmony = host_library_command(
+			root,
+			&config,
+			&registry,
+			Target::Harmonyos,
+			false,
+			&build_dir,
+			Some(&ohos),
+		)
+		.unwrap();
+		let harmony_environment = environment(&harmony);
+		assert!(
+			harmony_environment.iter().any(|(key, value)| {
+				key == "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
+					&& value.starts_with(&ohos.display().to_string())
+			}),
+			"{harmony_environment:?}"
+		);
+	}
+
+	#[test]
+	fn tools_report_whether_they_ran() {
+		#[cfg(unix)]
+		{
+			let mut succeeded = Command::new("sh");
+			succeeded.args(["-c", "exit 0"]);
+			run_tool(&mut succeeded).unwrap();
+
+			let mut failed = Command::new("sh");
+			failed.args(["-c", "exit 7"]);
+			let error = run_tool(&mut failed).unwrap_err().to_string();
+			assert!(error.contains("failed"), "{error}");
+		}
+
+		let mut missing = Command::new("leptoskit-tool-that-does-not-exist");
+		let error = run_tool(&mut missing).unwrap_err().to_string();
+		assert!(error.contains("could not execute"), "{error}");
+	}
+
+	#[test]
+	fn the_built_guest_is_read_back_or_names_the_missing_bundle() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let bundle = generated_dir(root, Target::Android).join("bundle");
+		std::fs::create_dir_all(&bundle).unwrap();
+		std::fs::write(bundle.join("app.wasm"), b"\0asm").unwrap();
+		assert_eq!(built_guest(root, Target::Android).unwrap(), b"\0asm");
+
+		std::fs::remove_file(bundle.join("app.wasm")).unwrap();
+		let error = built_guest(root, Target::Android).unwrap_err().to_string();
+		assert!(error.contains("could not read"), "{error}");
+	}
+
+	#[test]
+	fn legacy_projects_infer_their_single_destination() {
+		use leptoskit_config::NativeTarget;
+
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let mut config = LeptoskitConfig::default();
+
+		for (native, target) in [
+			(NativeTarget::Harmonyos, Target::Harmonyos),
+			(NativeTarget::Macos, Target::Macos),
+			(NativeTarget::Ios, Target::IosSimulator),
+			(NativeTarget::Android, Target::Android),
+			(NativeTarget::Windows, Target::Windows),
+			(NativeTarget::Linux, Target::Linux),
+		] {
+			config.native.targets = vec![native];
+			assert_eq!(legacy_target(root, &config), target);
+		}
+
+		config.native.targets = Vec::new();
+		let inferred = legacy_target(root, &config);
+		if cfg!(target_os = "macos") {
+			assert_eq!(inferred, Target::IosSimulator);
+			std::fs::create_dir_all(root.join("macos")).unwrap();
+			std::fs::write(root.join("macos/Cargo.toml"), "").unwrap();
+			assert_eq!(legacy_target(root, &config), Target::Macos);
+		} else {
+			assert_eq!(inferred, Target::Android);
+		}
+	}
+
+	#[test]
+	fn bundling_refuses_an_empty_update_contract() {
+		let temporary = tempfile::tempdir().unwrap();
+		let mut config = LeptoskitConfig::default();
+		config.native.update_contract = String::new();
+		let error = bundle(
+			temporary.path(),
+			&config,
+			Target::Macos,
+			false,
+			None,
+			&temporary.path().join("bundle"),
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(error.contains("update_contract cannot be empty"), "{error}");
+	}
+
+	#[test]
+	fn portable_projects_must_name_the_client_package() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::write(
+			root.join("Cargo.toml"),
+			"[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+		)
+		.unwrap();
+		std::fs::create_dir_all(root.join("app/src")).unwrap();
+		std::fs::write(
+			root.join("app/Cargo.toml"),
+			"[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.unwrap();
+		std::fs::write(root.join("app/src/lib.rs"), "").unwrap();
+		std::fs::create_dir_all(root.join("macos")).unwrap();
+		std::fs::write(root.join("macos/Cargo.toml"), "").unwrap();
+
+		let error = bundle(
+			root,
+			&LeptoskitConfig::default(),
+			Target::Macos,
+			false,
+			None,
+			&root.join("bundle"),
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(
+			error.contains("portable native builds require build.client_package"),
+			"{error}"
+		);
+	}
+
+	#[test]
+	fn a_missing_podfile_needs_no_cocoapods() {
+		let temporary = tempfile::tempdir().unwrap();
+		install_ios_pods(temporary.path()).unwrap();
+	}
+
+	/// Runs one native-host situation in a child test process, so `cwd`,
+	/// `PATH`, and the Android variables are the scenario's alone.
+	#[cfg(unix)]
+	mod child {
+		use std::os::unix::fs::PermissionsExt as _;
+		use std::path::PathBuf;
+		use std::process::Command;
+		use std::process::Output;
+
+		use super::*;
+		use crate::native::NativeCommand;
+		use crate::native::run;
+
+		const HELPER: &str = "native::tests::child::helper";
+		const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+		fn pod_script() -> &'static str {
+			r#"#!/bin/sh
+set -eu
+exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
+"#
+		}
+
+		pub(super) struct Fixture {
+			pub(super) directory: tempfile::TempDir,
+		}
+
+		impl Fixture {
+			pub(super) fn new() -> Self {
+				let directory = tempfile::tempdir().unwrap();
+				let bin = directory.path().join("bin");
+				std::fs::create_dir(&bin).unwrap();
+				let pod = bin.join("pod");
+				std::fs::write(&pod, pod_script()).unwrap();
+				std::fs::set_permissions(&pod, std::fs::Permissions::from_mode(0o755)).unwrap();
+				Self { directory }
+			}
+
+			pub(super) fn project(&self) -> PathBuf {
+				let project = self.directory.path().join("project");
+				std::fs::create_dir_all(&project).unwrap();
+				std::fs::write(
+					project.join("leptoskit.toml"),
+					"schema_version = 0\n\n[app]\nname = \"app\"\nversion = \"0.1.0\"\nplatforms \
+					 = [\"web\"]\n",
+				)
+				.unwrap();
+				project
+			}
+
+			pub(super) fn root(&self) -> PathBuf {
+				self.directory.path().join("app")
+			}
+
+			pub(super) fn empty_path(&self) -> PathBuf {
+				let empty = self.directory.path().join("empty");
+				std::fs::create_dir_all(&empty).unwrap();
+				empty
+			}
+
+			fn run(&self, scenario: &str, environment: &[(&str, &str)]) -> Output {
+				let mut command = Command::new(std::env::current_exe().unwrap());
+				command
+					.args(["--exact", HELPER, "--nocapture", "--test-threads=1"])
+					.env_clear()
+					.env("PATH", SYSTEM_PATH)
+					.env("TMPDIR", self.directory.path())
+					.env("LEPTOSKIT_TEST_NATIVE", scenario)
+					.current_dir(self.project());
+
+				for (name, value) in environment {
+					command.env(name, value);
+				}
+
+				if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+					command.env("LLVM_PROFILE_FILE", profile);
+				}
+
+				command.output().unwrap()
+			}
+
+			pub(super) fn run_ok(&self, scenario: &str, environment: &[(&str, &str)]) {
+				let output = self.run(scenario, environment);
+				assert!(
+					output.status.success(),
+					"{scenario} failed\nstdout:\n{}\nstderr:\n{}",
+					String::from_utf8_lossy(&output.stdout),
+					String::from_utf8_lossy(&output.stderr),
+				);
+			}
+		}
+
+		fn expect<T>(result: Result<T>, expected: &str) {
+			let Err(error) = result else {
+				panic!("the scenario should have failed");
+			};
+			assert!(
+				format!("{error:#}").contains(expected),
+				"expected {expected:?} in {error:#}"
+			);
+		}
+
+		#[test]
+		fn helper() {
+			let Ok(scenario) = std::env::var("LEPTOSKIT_TEST_NATIVE") else {
+				return;
+			};
+			let root = std::env::var_os("LEPTOSKIT_TEST_ROOT")
+				.map_or_else(|| std::env::current_dir().unwrap(), PathBuf::from);
+			let pod_status = std::env::var("LEPTOSKIT_TEST_POD_STATUS").unwrap_or_default();
+
+			match scenario.as_str() {
+				"bundle-default" => {
+					expect(
+						run(NativeCommand::Bundle {
+							out: "dist".into(),
+							target: None,
+						}),
+						"native bundle requires --target",
+					);
+				}
+				"prepare-disabled" => {
+					expect(
+						run(NativeCommand::Prepare {
+							target: Target::Linux,
+							release: false,
+						}),
+						"linux",
+					);
+				}
+				"build-disabled" => {
+					expect(
+						run(NativeCommand::Build {
+							target: Target::Macos,
+							release: true,
+						}),
+						"macos",
+					);
+				}
+				"pods" => {
+					let result = install_ios_pods(&root);
+					match pod_status.as_str() {
+						"0" => result.expect("a present pod installs the Podfile"),
+						"1" => expect(result, "`pod install` failed"),
+						other => panic!("unknown pod status {other}"),
+					}
+				}
+				"pods-missing" => expect(install_ios_pods(&root), "CocoaPods is required"),
+				"ndk-missing" => expect(android_ndk(), "set ANDROID_HOME"),
+				"ndk-invalid" => expect(android_ndk(), "missing source.properties"),
+				"ndk-unreadable" => expect(android_ndk(), "No such file or directory"),
+				"ndk-newest" => {
+					let ndk = android_ndk().unwrap();
+					assert!(
+						ndk.ends_with("ndk/27.1.1"),
+						"the newest NDK is used: {}",
+						ndk.display()
+					);
+				}
+				other => panic!("unknown native scenario {other}"),
+			}
+		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn native_commands_refuse_disabled_destinations_before_building() {
+		let fixture = child::Fixture::new();
+		fixture.run_ok("bundle-default", &[]);
+		fixture.run_ok("prepare-disabled", &[]);
+		fixture.run_ok("build-disabled", &[]);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn pod_install_runs_only_with_a_podfile_and_needs_the_tool() {
+		let fixture = child::Fixture::new();
+		std::fs::create_dir_all(fixture.root().join(".leptoskit/ios")).unwrap();
+		std::fs::write(fixture.root().join(".leptoskit/ios/Podfile"), "# pods").unwrap();
+		let root = fixture.root().display().to_string();
+		let path = format!(
+			"{}:/usr/bin:/bin:/usr/sbin:/sbin",
+			fixture.directory.path().join("bin").display()
+		);
+
+		fixture.run_ok(
+			"pods",
+			&[
+				("LEPTOSKIT_TEST_ROOT", &root),
+				("LEPTOSKIT_TEST_POD_STATUS", "0"),
+				("PATH", &path),
+			],
+		);
+		fixture.run_ok(
+			"pods",
+			&[
+				("LEPTOSKIT_TEST_ROOT", &root),
+				("LEPTOSKIT_TEST_POD_STATUS", "1"),
+				("PATH", &path),
+			],
+		);
+		fixture.run_ok(
+			"pods-missing",
+			&[
+				("LEPTOSKIT_TEST_ROOT", &root),
+				("PATH", &fixture.empty_path().display().to_string()),
+			],
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn the_android_ndk_comes_from_the_variable_or_the_newest_sdk_installation() {
+		let fixture = child::Fixture::new();
+		fixture.run_ok("ndk-missing", &[]);
+		fixture.run_ok(
+			"ndk-unreadable",
+			&[(
+				"ANDROID_HOME",
+				&fixture
+					.directory
+					.path()
+					.join("absent-sdk")
+					.display()
+					.to_string(),
+			)],
+		);
+		let invalid = fixture.directory.path().join("not-an-ndk");
+		std::fs::create_dir_all(&invalid).unwrap();
+		fixture.run_ok(
+			"ndk-invalid",
+			&[("ANDROID_NDK_HOME", &invalid.display().to_string())],
+		);
+
+		let sdk = fixture.directory.path().join("sdk");
+		for version in ["25.0.0", "27.1.1"] {
+			let ndk = sdk.join("ndk").join(version);
+			std::fs::create_dir_all(&ndk).unwrap();
+			std::fs::write(ndk.join("source.properties"), "Pkg.Revision = 1").unwrap();
+		}
+
+		// A directory without an installation manifest is not an NDK.
+		std::fs::create_dir_all(sdk.join("ndk/28.0.0")).unwrap();
+		fixture.run_ok(
+			"ndk-newest",
+			&[("ANDROID_HOME", &sdk.display().to_string())],
+		);
+	}
+
+	#[test]
 	fn watch_targets_map_triples_platforms_and_legacy_layouts() {
 		assert_eq!(Target::Wearos.rust(), "aarch64-linux-android");
 		assert_eq!(Target::Watchos.rust(), "aarch64-apple-watchos");
