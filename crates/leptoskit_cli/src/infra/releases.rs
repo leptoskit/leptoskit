@@ -13,6 +13,7 @@ use serde_json::json;
 
 use super::Release;
 use super::ReleaseArgs;
+use super::ServiceSchema;
 use super::applied_bindings;
 use super::directory;
 use super::generate;
@@ -23,7 +24,9 @@ use super::output;
 use super::remote::Reservation;
 use super::remote::{self};
 use super::remote_history;
+use super::remote_service_history;
 use super::runtime;
+use super::services::APP_DATABASE;
 
 mod reuse;
 
@@ -54,6 +57,120 @@ pub(super) fn history(ip: &str, c: &InfraConfig) -> Result<Vec<Release>> {
 		}
 	}
 	Ok(history)
+}
+
+/// Stops the database-backed services' containers on the primary host, so
+/// nothing writes to their databases while their schemas change. The next
+/// `kamal app boot` starts them again with every other role.
+fn stop_services(ip: &str, c: &InfraConfig, project: &crate::deploy::Project) -> Result<()> {
+	for service in project
+		.services
+		.iter()
+		.filter(|service| service.is_process() && service.database)
+	{
+		remote::execute(
+			ip,
+			&format!(
+				"set -eu; ids=$(docker ps -q --filter label=service={} --filter label=role={}); \
+				 if [ -n \"$ids\" ]; then docker stop --time 30 $ids; fi",
+				c.name,
+				remote::quote(&super::services::role(service))
+			),
+			None,
+		)?;
+	}
+	Ok(())
+}
+
+/// Fails when a service's migrations changed since `previous`, the release
+/// a new one follows, without `--maintenance`. Services new since `previous`
+/// aren't checked.
+fn check_service_changes(
+	args: &ReleaseArgs,
+	previous: Option<&Release>,
+	local: &BTreeMap<String, ServiceSchema>,
+) -> Result<()> {
+	let Some(previous) = previous else {
+		return Ok(());
+	};
+	for (name, schema) in local {
+		if let Some(recorded) = previous.services.get(name) {
+			ensure!(
+				recorded.migrations == schema.migrations || args.maintenance,
+				"services.{name}: schema changes require --maintenance"
+			);
+		}
+	}
+	Ok(())
+}
+
+/// Fails when the app's database, or a service's, no longer holds what
+/// `previous` recorded, or, under `--maintenance`, what this checkout
+/// migrates it to.
+fn check_drift(
+	ip: &str,
+	c: &InfraConfig,
+	args: &ReleaseArgs,
+	previous: &Release,
+	(local_hash, local): (&str, &BTreeMap<String, ServiceSchema>),
+) -> Result<()> {
+	let actual = remote_history(ip, &c.name)?;
+	ensure!(
+		actual == previous.migrations || (args.maintenance && actual == local_hash),
+		"database drifted from shared history; investigate before a new release"
+	);
+	for (name, recorded) in &previous.services {
+		let actual = remote_service_history(ip, &c.name, &service_database(name))?;
+		let local = local.get(name).map(|schema| &schema.migrations);
+		ensure!(
+			actual == recorded.migrations || (args.maintenance && Some(&actual) == local),
+			"services.{name}: its database drifted from shared history; investigate before a new \
+			 release"
+		);
+	}
+	Ok(())
+}
+
+/// Takes each service the target release recorded back to its schema when
+/// `rollback` is asked, then fails unless every one holds it.
+fn reach_service_schemas(
+	ip: &str,
+	private: &str,
+	c: &InfraConfig,
+	project: &crate::deploy::Project,
+	target: &Release,
+	rollback: bool,
+) -> Result<()> {
+	for (name, schema) in &target.services {
+		if rollback {
+			rollback_service_schema(ip, private, c, project, name, &schema.schema)?;
+		}
+		ensure!(
+			remote_service_history(ip, &c.name, &service_database(name))? == schema.migrations,
+			"services.{name}: its database differs from target; use --rollback-schema --yes with \
+			 the newer migration files, or recover explicitly"
+		);
+	}
+	Ok(())
+}
+
+/// A service's database on the managed Postgres, which its role owns.
+fn service_database(name: &str) -> String {
+	crate::services::postgres_database(APP_DATABASE, name)
+}
+
+/// Whether each service's database holds the migrations `services` records.
+fn services_match(
+	ip: &str,
+	c: &InfraConfig,
+	services: &BTreeMap<String, ServiceSchema>,
+) -> Result<bool> {
+	for (name, schema) in services {
+		if remote_service_history(ip, &c.name, &service_database(name))? != schema.migrations {
+			return Ok(false);
+		}
+	}
+	Ok(true)
 }
 
 pub(super) fn stop(hosts: &[String], c: &InfraConfig) -> Result<()> {
@@ -177,7 +294,13 @@ fn prepare_recorded(
 			 or traffic changes"
 		);
 	}
-	verify_schema_labels(hosts, c, &release.version, &release.migrations)?;
+	verify_schema_labels(
+		hosts,
+		c,
+		&release.version,
+		&release.migrations,
+		super::services_fingerprint(&release.services)?.as_deref(),
+	)?;
 	if let Some(evidence) = &release.evidence {
 		for host in hosts {
 			evidence.check_remote(
@@ -190,11 +313,33 @@ fn prepare_recorded(
 	Ok(())
 }
 
+/// Pulls a new release's image onto every host and checks it carries this
+/// checkout's schemas: the app's, and the services' when there are any.
+fn pull_new(
+	dir: &Path,
+	c: &InfraConfig,
+	hosts: &[String],
+	version: &str,
+	(schema, services): (&str, Option<&str>),
+	env: &BTreeMap<String, String>,
+	reservation: &Reservation,
+) -> Result<()> {
+	execute(dir, &["registry", "login"], env, reservation)?;
+	execute(
+		dir,
+		&["build", "pull", "--version", version],
+		env,
+		reservation,
+	)?;
+	verify_schema_labels(hosts, c, version, schema, services)
+}
+
 fn verify_schema_labels(
 	hosts: &[String],
 	c: &InfraConfig,
 	version: &str,
 	expected: &str,
+	services: Option<&str>,
 ) -> Result<()> {
 	let first = cached_digest(&hosts[0], c, version)?;
 	for host in hosts {
@@ -213,6 +358,19 @@ fn verify_schema_labels(
 			"image migration metadata differs from the expected schema; build this checkout with \
 			 `lk infra build --version <tag> --push` before releasing"
 		);
+		if let Some(services) = services {
+			let script = format!(
+				"docker image inspect --format '{{{{index .Config.Labels \"{}\"}}}}' {}",
+				super::build::SERVICES_SCHEMA_LABEL,
+				remote::quote(&format!("{}:{version}", image(c)))
+			);
+			let value = remote::execute(host, &script, None)?;
+			ensure!(
+				String::from_utf8(value)?.trim() == services,
+				"image service migration metadata differs from the services' expected schemas; \
+				 build this checkout with `lk infra build --version <tag> --push` before releasing"
+			);
+		}
 	}
 	Ok(())
 }
@@ -438,12 +596,31 @@ fn verify_release(
 	c: &InfraConfig,
 	version: &str,
 	expected: &str,
+	services: &BTreeMap<String, ServiceSchema>,
 	target: Option<&Release>,
 ) -> Result<String> {
 	ensure!(
 		remote_history(&hosts[0], &c.name)? == expected,
 		"database does not match release; shared history was not advanced"
 	);
+	// Each service applies its own migrations as it starts, so its database
+	// gets a moment to catch up with the release.
+	for (name, schema) in services {
+		let database = service_database(name);
+		let mut actual = remote_service_history(&hosts[0], &c.name, &database)?;
+		for _ in 0..30 {
+			if actual == schema.migrations {
+				break;
+			}
+			std::thread::sleep(std::time::Duration::from_secs(2));
+			actual = remote_service_history(&hosts[0], &c.name, &database)?;
+		}
+		ensure!(
+			actual == schema.migrations,
+			"services.{name}: its database does not match the release; shared history was not \
+			 advanced"
+		);
+	}
 	let image = digest(&hosts[0], c, version)?;
 	for host in hosts {
 		ensure!(
@@ -509,6 +686,7 @@ fn recover_previous(
 	let actual = remote_history(ip, &c.name)?;
 	if let Some(previous) = history.last()
 		&& actual == previous.migrations
+		&& services_match(ip, c, &previous.services)?
 	{
 		ensure!(
 			!history.iter().any(|r| r.evidence.is_some()) || previous.evidence.is_some(),
@@ -533,6 +711,7 @@ fn recover_previous(
 			c,
 			&previous.version,
 			&previous.migrations,
+			&previous.services,
 			Some(previous),
 		)?;
 		if let Some(window) = &window {
@@ -548,6 +727,19 @@ fn recover_previous(
 	} else {
 		stop(hosts, c)?;
 	}
+	Ok(())
+}
+
+/// Writes the release history to the primary host, where it's shared, and
+/// to the operator's workspace.
+fn save_history(ip: &str, c: &InfraConfig, dir: &Path, history: &[Release]) -> Result<()> {
+	let bytes = serde_json::to_vec_pretty(history)?;
+	remote::write(
+		ip,
+		&format!("{}/releases.json", remote::base(&c.name)),
+		&bytes,
+	)?;
+	fs::write(dir.join("releases.json"), &bytes)?;
 	Ok(())
 }
 
@@ -775,8 +967,17 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		proposed_release(&config, version, target.as_ref(), local_schema, &local_hash)?;
 	proposed.evidence = evidence;
 	proposed.authorization = authorization;
-	encoded_history(&history, &proposed)?;
 	let (env, project) = runtime_files(&dir, c, &root, &config, &hosts, &private)?;
+	let local_services = super::service_schemas(&project.services)?;
+	proposed.services = target
+		.as_ref()
+		.map_or_else(|| local_services.clone(), |target| target.services.clone());
+	encoded_history(&history, &proposed)?;
+	check_service_changes(
+		args,
+		target.as_ref().map_or(history.last(), |_| None),
+		&local_services,
+	)?;
 	if c.backups.enabled && args.setup {
 		super::recovery::credentials()?;
 	}
@@ -794,14 +995,16 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	if let Some(target) = &target {
 		prepare_recorded(&dir, c, &hosts, target, &env, &reservation)?;
 	} else {
-		execute(&dir, &["registry", "login"], &env, &reservation)?;
-		execute(
+		let services = super::services_fingerprint(&local_services)?;
+		pull_new(
 			&dir,
-			&["build", "pull", "--version", version],
+			c,
+			&hosts,
+			version,
+			(&local_hash, services.as_deref()),
 			&env,
 			&reservation,
 		)?;
-		verify_schema_labels(&hosts, c, version, &local_hash)?;
 	}
 	check_evidence(
 		proposed.evidence.as_ref(),
@@ -813,15 +1016,12 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	super::schema_window::prepare(&dir, c, &hosts, window.as_ref(), &reservation)?;
 	execute(&dir, &["proxy", "boot"], &env, &reservation)?;
 	if !args.setup && target.is_none() {
-		let actual = remote_history(ip, &c.name)?;
-		let previous = &history.last().context("no previous release")?.migrations;
-		ensure!(
-			actual == *previous || (args.maintenance && actual == local_hash),
-			"database drifted from shared history; investigate before a new release"
-		);
+		let previous = history.last().context("no previous release")?;
+		check_drift(ip, c, args, previous, (&local_hash, &local_services))?;
 	}
 	if args.maintenance || args.rollback_schema {
 		stop(&hosts, c)?;
+		stop_services(ip, c, &project)?;
 		if !history.is_empty() && c.backups.enabled {
 			super::recovery::invoke(ip, c, "backup", "latest", false, Some(&reservation.owner))?;
 		}
@@ -835,6 +1035,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 			"database differs from target; use --rollback-schema --yes with the newer migration \
 			 files, or recover explicitly"
 		);
+		reach_service_schemas(ip, &private, c, &project, target, args.rollback_schema)?;
 	}
 	super::services::prepare(ip, c, &project)?;
 	boot_application(&dir, c, &hosts, &history, &env, &reservation, version)?;
@@ -845,7 +1046,14 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 			proposed.evidence.as_ref(),
 			proposed.authorization.as_ref(),
 		)?;
-		let digest = verify_release(&hosts, c, version, expected, target.as_ref())?;
+		let digest = verify_release(
+			&hosts,
+			c,
+			version,
+			expected,
+			&proposed.services,
+			target.as_ref(),
+		)?;
 		check_evidence(proposed.evidence.as_ref(), &hosts, &digest)?;
 		if let Some(window) = &window {
 			window.verify_running(&hosts, &c.name, version)?;
@@ -903,6 +1111,7 @@ fn proposed_release(
 		// timestamp bytes for RFC3339 extended years and fractions too.
 		image_digest: Some(format!("{}@sha256:{}", image(c), "0".repeat(64))),
 		completed_at: Some("0".repeat(64)),
+		services: BTreeMap::new(),
 	})
 }
 
@@ -990,20 +1199,93 @@ fn rollback_schema(
 		.as_ref()
 		.context("missing infrastructure")?
 		.name;
+	let db_config = config.db.as_ref().context("missing database")?;
+	let migrations = leptoskit_db::load_migrations(&root.join(&db_config.migrations))?;
+	let password = std::env::var("DATABASE_PASSWORD").context("set DATABASE_PASSWORD")?;
+	rollback_database(
+		ip,
+		private,
+		name,
+		APP_DATABASE,
+		&password,
+		&migrations,
+		target,
+	)
+}
+
+/// Rolls a service's database back to `target` with the down migrations in
+/// this checkout, logged in as the service's role, which owns its tables.
+fn rollback_service_schema(
+	ip: &str,
+	private: &str,
+	c: &InfraConfig,
+	project: &crate::deploy::Project,
+	name: &str,
+	target: &[(String, String)],
+) -> Result<()> {
+	let service = project
+		.services
+		.iter()
+		.find(|service| service.name == name && service.database)
+		.with_context(|| {
+			format!(
+				"services.{name} is in the target release but has no database in this checkout's \
+				 leptoskit.toml, so its down migrations aren't here; restore its \
+				 [services.{name}] table, or recover explicitly"
+			)
+		})?;
+	let directory = service
+		.migrations
+		.as_ref()
+		.with_context(|| format!("services.{name} has no migrations directory in this checkout"))?;
+	let migrations = if directory.is_dir() {
+		leptoskit_db::load_migrations(directory)?
+	} else {
+		Vec::new()
+	};
+	let variable = service.database_password_env();
+	let password = std::env::var(&variable).with_context(|| format!("set {variable}"))?;
+	rollback_database(
+		ip,
+		private,
+		&c.name,
+		&service.postgres_name(APP_DATABASE),
+		&password,
+		&migrations,
+		target,
+	)
+}
+
+/// Runs the down migrations that take `database`, owned by the role of the
+/// same name, back to `target`, through an SSH tunnel to the private
+/// Postgres, once nothing is connected to it.
+fn rollback_database(
+	ip: &str,
+	private: &str,
+	name: &str,
+	database: &str,
+	password: &str,
+	migrations: &[leptoskit_db::Migration],
+	target: &[(String, String)],
+) -> Result<()> {
+	ensure!(
+		database
+			.bytes()
+			.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+		"unexpected database name"
+	);
 	let clients = remote::execute(
 		ip,
 		&format!(
 			"docker exec {name}-db psql -U leptoskit_admin -d postgres -At -c \"SELECT count(*) \
-			 FROM pg_stat_activity WHERE datname = 'leptoskit'\""
+			 FROM pg_stat_activity WHERE datname = '{database}'\""
 		),
 		None,
 	)?;
 	ensure!(
 		String::from_utf8(clients)?.trim() == "0",
-		"database still has clients; stop external writers before down migrations"
+		"`{database}` still has clients; stop external writers before down migrations"
 	);
-	let db_config = config.db.as_ref().context("missing database")?;
-	let migrations = leptoskit_db::load_migrations(&root.join(&db_config.migrations))?;
 	ensure!(
 		target.len() <= migrations.len()
 			&& migrations
@@ -1011,7 +1293,7 @@ fn rollback_schema(
 				.take(target.len())
 				.zip(target)
 				.all(|(m, (name, sum))| m.name == *name && m.checksum == *sum),
-		"target migration prefix is not present in this checkout"
+		"the target migration prefix of `{database}` is not present in this checkout"
 	);
 	let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
 	let port = listener.local_addr()?.port();
@@ -1039,11 +1321,10 @@ fn rollback_schema(
 		}
 	}
 	let _tunnel = Tunnel(child);
-	let password = std::env::var("DATABASE_PASSWORD").context("set DATABASE_PASSWORD")?;
 	let mut url = url::Url::parse(&format!(
-		"postgres://leptoskit@127.0.0.1:{port}/leptoskit?sslmode=disable"
+		"postgres://{database}@127.0.0.1:{port}/{database}?sslmode=disable"
 	))?;
-	url.set_password(Some(&password))
+	url.set_password(Some(password))
 		.map_err(|()| anyhow::anyhow!("invalid database password"))?;
 	tokio::runtime::Runtime::new()?.block_on(async {
 		let mut connection = None;
@@ -1060,10 +1341,10 @@ fn rollback_schema(
 		let applied = db.applied_migrations().await?;
 		ensure!(
 			applied.len() >= target.len(),
-			"database is older than target schema"
+			"`{database}` is older than the target schema"
 		);
 		if applied.len() > target.len() {
-			db.rollback(&migrations, applied.len() - target.len())
+			db.rollback(migrations, applied.len() - target.len())
 				.await?;
 		}
 		anyhow::Ok(())
