@@ -52,10 +52,14 @@ class HomeWidgetsPlugin(
             SET -> {
                 val snapshot = Snapshot.decode(payload)
                 // Store raw wire bytes so GET round-trips the guest payload.
-                prefs
-                    .edit()
-                    .putString(PREFIX + snapshot.kind, snapshot.encodedBase64())
-                    .apply()
+                // commit() so a successful SET is durable before GET/RELOAD.
+                if (!prefs
+                        .edit()
+                        .putString(PREFIX + snapshot.kind, snapshot.encodedBase64())
+                        .commit()
+                ) {
+                    throw PluginException(PluginException.NATIVE)
+                }
                 byteArrayOf()
             }
 
@@ -69,7 +73,10 @@ class HomeWidgetsPlugin(
 
             CLEAR -> {
                 val kind = Kind.decode(payload)
-                prefs.edit().remove(PREFIX + kind).apply()
+
+                if (!prefs.edit().remove(PREFIX + kind).commit()) {
+                    throw PluginException(PluginException.NATIVE)
+                }
                 byteArrayOf()
             }
 
@@ -144,8 +151,10 @@ class HomeWidgetsPlugin(
         val providers = providers()
 
         if (providers.isEmpty()) return INSTALLED_NONE
-        val matching =
-            providers.filter { it.className.contains(kind, ignoreCase = true) }.ifEmpty { providers }
+        // Unmatched kinds report None — never fall back to every provider's pins.
+        val matching = providers.filter { it.className.contains(kind, ignoreCase = true) }
+
+        if (matching.isEmpty()) return INSTALLED_NONE
 
         return if (matching.any { manager.getAppWidgetIds(it).isNotEmpty() }) {
             INSTALLED_SOME
@@ -195,6 +204,26 @@ private fun empty(payload: ByteBuffer) {
     if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 }
 
+/** HTTP(S) or an app deep-link scheme; rejects javascript/data/file/blob/vbscript. */
+private fun isAllowedUrl(url: String): Boolean {
+    if (url.any { it.code < 32 || it.code == 127 }) return false
+    val separator = url.indexOf(':')
+
+    if (separator <= 0 || separator == url.lastIndex) return false
+    val scheme = url.substring(0, separator).lowercase()
+
+    if (scheme[0] !in 'a'..'z') return false
+
+    if (!scheme.drop(1).all { it in 'a'..'z' || it in '0'..'9' || it == '+' || it == '-' || it == '.' }) {
+        return false
+    }
+
+    return when (scheme) {
+        "javascript", "data", "file", "blob", "vbscript" -> false
+        else -> true
+    }
+}
+
 private fun optionalKind(payload: ByteBuffer): String? {
     if (!payload.hasRemaining()) return null
     return Kind.decode(payload)
@@ -235,7 +264,7 @@ private class Snapshot(
 
             val url = reader.text(2048, multiline = false, required = false)
 
-            if (url.isNotEmpty() && (!url.contains(':') || url.any { it.code < 32 || it.code == 127 })) {
+            if (url.isNotEmpty() && !isAllowedUrl(url)) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
 

@@ -38,7 +38,7 @@ pub const ENTER_PIP: MethodId = MethodId(2);
 pub const ENTER_OVERLAY: MethodId = MethodId(3);
 /// Empty request -> overlay permission state.
 pub const OVERLAY_STATUS: MethodId = MethodId(4);
-/// Empty request -> overlay permission after opening the system grant UI.
+/// Empty request -> overlay permission observed when the system grant UI opens.
 pub const REQUEST_OVERLAY: MethodId = MethodId(5);
 /// Exported operations.
 pub const METHODS: &[MethodId] = &[
@@ -292,14 +292,19 @@ pub mod guest {
 		}
 
 		/// Opens the system overlay settings UI on Android and returns the
-		/// permission observed when control returns. Never grants access
-		/// itself.
+		/// permission observed at settings launch. Never grants access itself.
+		/// Poll [`Self::overlay_status`] after the user returns from settings.
 		pub async fn request_overlay(self) -> Result<OverlayPermission, Error> {
 			OverlayPermission::decode(&self.0.call(REQUEST_OVERLAY, &[])?.await?)
 		}
 	}
 
 	/// One cancellable native floating session.
+	///
+	/// Dropping an overlay lease removes the overlay window. Dropping a
+	/// picture-in-picture lease best-effort brings the activity out of system
+	/// PiP; Android has no dedicated exit API, so hosts may still need a user
+	/// gesture on some devices.
 	#[must_use = "dropping the lease ends the picture-in-picture or overlay request"]
 	#[derive(Debug)]
 	pub struct Lease(leptoskit_bridge::guest::Call);

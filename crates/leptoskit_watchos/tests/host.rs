@@ -2,6 +2,7 @@
 
 use leptoskit_native::components::Text;
 use leptoskit_watch::WatchApp;
+use leptoskit_watch::WatchError;
 use leptoskit_watch::WatchHost;
 use leptoskit_watch::WatchKind;
 use leptoskit_watch::WatchPage;
@@ -30,7 +31,7 @@ fn custom_viewport_and_presentations() {
 		height_dp: 240.0,
 		safe_inset_dp: 8.0,
 	};
-	let mut host = WatchOsHost::with_viewport(viewport);
+	let mut host = WatchOsHost::with_viewport(viewport).unwrap();
 	assert_eq!(host.viewport().height_dp, 240.0);
 	let app = WatchApp::new("demo", WatchKind::WatchOs).page(WatchPage::new("home", Text("Hi")));
 	host.present_app(&app).unwrap();
@@ -44,7 +45,9 @@ fn custom_viewport_and_presentations() {
 }
 
 #[test]
-#[should_panic(expected = "WatchOsHost requires a watchOS viewport")]
 fn rejects_wearos_viewport() {
-	let _ = WatchOsHost::with_viewport(WatchViewport::wear_os_medium());
+	assert!(matches!(
+		WatchOsHost::with_viewport(WatchViewport::wear_os_medium()),
+		Err(WatchError::Unavailable(_))
+	));
 }

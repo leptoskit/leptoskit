@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.PictureInPictureModeChangedInfo
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -22,6 +23,7 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.function.Consumer
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -30,6 +32,11 @@ import kotlin.coroutines.resumeWithException
  * Overlay permission is never inferred from the manifest declaration. Entering
  * overlay without a grant returns permission-denied. Picture-in-picture needs
  * `android:supportsPictureInPicture="true"` on the hosting activity.
+ *
+ * Dropping a PiP lease best-effort brings the activity out of system PiP.
+ * User exit of PiP finishes the lease as cancelled so snapshot stays honest.
+ * `request_overlay` opens settings and returns the status observed at launch;
+ * poll `overlay_status` after the user returns.
  */
 class PictureInPicturePlugin(
     private val context: Context,
@@ -44,6 +51,7 @@ class PictureInPicturePlugin(
     private var overlayLease: CancellableContinuation<ByteArray>? = null
     private var overlayView: View? = null
     private var observing = false
+    private var pipModeListener: Consumer<PictureInPictureModeChangedInfo>? = null
 
     private val lifecycle =
         object : Application.ActivityLifecycleCallbacks {
@@ -58,7 +66,18 @@ class PictureInPicturePlugin(
 
             override fun onActivityStarted(activity: Activity) {}
 
-            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityResumed(activity: Activity) {
+                if (activity !== context) return
+
+                // Older APIs lack a PiP-mode listener; catch user exit on resume.
+                if (pipLease != null &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                    !activity.isInPictureInPictureMode
+                ) {
+                    finishPip(PluginException.CANCELLED)
+                    stopObservingIfIdle()
+                }
+            }
 
             override fun onActivityPaused(activity: Activity) {}
 
@@ -143,6 +162,7 @@ class PictureInPicturePlugin(
         if (!entered) throw PluginException(PluginException.UNAVAILABLE)
 
         observe(activity)
+        observePipMode(activity)
 
         return suspendCancellableCoroutine { continuation ->
             pipLease = continuation
@@ -150,6 +170,8 @@ class PictureInPicturePlugin(
                 runOnMain {
                     if (pipLease === continuation) {
                         pipLease = null
+                        exitPipBestEffort(activity)
+                        clearPipModeListener(activity)
                         stopObservingIfIdle()
                     }
                 }
@@ -241,7 +263,8 @@ class PictureInPicturePlugin(
             throw PluginException(PluginException.UNAVAILABLE)
         }
 
-        // The user returns later; report the status observed at launch time.
+        // Returns the status observed at settings launch. Poll overlay_status
+        // after the user returns from the system grant screen.
         return overlayStatus().toBytes()
     }
 
@@ -276,6 +299,32 @@ class PictureInPicturePlugin(
         observing = true
     }
 
+    private fun observePipMode(activity: Activity) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+
+        if (pipModeListener != null) return
+
+        val listener =
+            Consumer<PictureInPictureModeChangedInfo> { info ->
+                if (!info.isInPictureInPictureMode) {
+                    finishPip(PluginException.CANCELLED)
+                    clearPipModeListener(activity)
+                    stopObservingIfIdle()
+                }
+            }
+        activity.addOnPictureInPictureModeChangedListener(listener)
+        pipModeListener = listener
+    }
+
+    private fun clearPipModeListener(activity: Activity) {
+        val listener = pipModeListener ?: return
+        pipModeListener = null
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            activity.removeOnPictureInPictureModeChangedListener(listener)
+        }
+    }
+
     private fun stopObservingIfIdle() {
         if (pipLease == null && overlayLease == null) stopObserving()
     }
@@ -286,7 +335,24 @@ class PictureInPicturePlugin(
         observing = false
         val activity = context as? Activity ?: return
 
+        clearPipModeListener(activity)
         activity.application.unregisterActivityLifecycleCallbacks(lifecycle)
+    }
+
+    private fun exitPipBestEffort(activity: Activity) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+
+        if (!activity.isInPictureInPictureMode) return
+
+        try {
+            // Android has no exitPictureInPictureMode API; bringing the
+            // activity forward is the supported best-effort exit.
+            val intent =
+                Intent(activity, activity.javaClass).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            activity.startActivity(intent)
+        } catch (_: Exception) {
+            // Best effort only; the lease is already released.
+        }
     }
 
     private fun finishPip(code: Int) {

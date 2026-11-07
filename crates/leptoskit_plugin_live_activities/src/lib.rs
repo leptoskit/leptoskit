@@ -128,6 +128,11 @@ impl ContentState {
 			let value = value.into();
 			validate_id_len(&key, MAX_FIELD_KEY_LEN)?;
 			validate_text(&value, MAX_FIELD_VALUE_LEN, false)?;
+
+			if out.iter().any(|(existing, _)| existing == &key) {
+				return Err(Error::InvalidArgument);
+			}
+
 			out.push((key, value));
 
 			if out.len() > MAX_FIELDS {
@@ -170,6 +175,11 @@ impl ContentState {
 			validate_id_len(key, MAX_FIELD_KEY_LEN)?;
 
 			validate_text(value, MAX_FIELD_VALUE_LEN, false)?;
+
+			if fields.iter().any(|(existing, _)| existing == key) {
+				return Err(Error::InvalidArgument);
+			}
+
 			fields.push((key.to_owned(), value.to_owned()));
 		}
 
@@ -800,6 +810,14 @@ mod tests {
 			.is_err()
 		);
 		assert!(ContentState::new([("x".repeat(65), "v")]).is_err());
+		assert!(ContentState::new([("eta", "4"), ("eta", "2")]).is_err());
+		let mut duplicate = Encoder::with_capacity(32);
+		duplicate.u32(2);
+		duplicate.bytes(b"eta").unwrap();
+		duplicate.bytes(b"4").unwrap();
+		duplicate.bytes(b"eta").unwrap();
+		duplicate.bytes(b"2").unwrap();
+		assert!(ContentState::decode(&mut Decoder::new(&duplicate.finish())).is_err());
 	}
 
 	#[test]

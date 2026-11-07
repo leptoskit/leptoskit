@@ -242,17 +242,30 @@ fn validate_url(value: &str) -> Result<(), Error> {
 		return Ok(());
 	}
 
-	let has_scheme =
-		value.starts_with("https://") || value.starts_with("http://") || value.contains(':');
-
-	if value.len() > MAX_URL_BYTES
-		|| value.contains('\0')
-		|| value.chars().any(char::is_control)
-		|| !has_scheme
-	{
+	if value.len() > MAX_URL_BYTES || value.contains('\0') || value.chars().any(char::is_control) {
 		return Err(Error::InvalidArgument);
 	}
-	Ok(())
+
+	let Some((scheme, rest)) = value.split_once(':') else {
+		return Err(Error::InvalidArgument);
+	};
+
+	if rest.is_empty()
+		|| scheme.is_empty()
+		|| !scheme.bytes().enumerate().all(|(index, byte)| {
+			if index == 0 {
+				byte.is_ascii_alphabetic()
+			} else {
+				byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')
+			}
+		}) {
+		return Err(Error::InvalidArgument);
+	}
+
+	match scheme.to_ascii_lowercase().as_str() {
+		"javascript" | "data" | "file" | "blob" | "vbscript" => Err(Error::InvalidArgument),
+		_ => Ok(()),
+	}
 }
 
 /// Validated plain-text snapshot the widget extension reads from shared
@@ -268,7 +281,8 @@ pub struct Snapshot {
 
 impl Snapshot {
 	/// Constructs a bounded snapshot. `url` may be empty; otherwise it must be
-	/// a scheme-bearing deep link or absolute HTTP(S) URL without controls.
+	/// an absolute HTTP(S) URL or an app deep-link scheme without controls.
+	/// `javascript:`, `data:`, `file:`, `blob:`, and `vbscript:` are rejected.
 	pub fn new(
 		kind: Kind,
 		family: Family,
@@ -423,6 +437,48 @@ mod tests {
 				"no-scheme"
 			)
 			.is_err()
+		);
+		for bad in [
+			"javascript:alert(1)",
+			"data:text/plain,hi",
+			"file:///tmp/x",
+			"blob:abc",
+			"vbscript:msg",
+			"http:",
+			"1http://x",
+			"https://example.com/\u{0007}",
+		] {
+			assert!(
+				Snapshot::new(
+					Kind::new("status").unwrap(),
+					Family::Small,
+					"Title",
+					"",
+					bad
+				)
+				.is_err(),
+				"{bad}"
+			);
+		}
+		assert!(
+			Snapshot::new(
+				Kind::new("status").unwrap(),
+				Family::Small,
+				"Title",
+				"",
+				"https://example.com/inbox"
+			)
+			.is_ok()
+		);
+		assert!(
+			Snapshot::new(
+				Kind::new("status").unwrap(),
+				Family::Small,
+				"Title",
+				"",
+				"myapp://inbox"
+			)
+			.is_ok()
 		);
 	}
 
