@@ -1,7 +1,7 @@
 {
 	"audit": "A03",
-	"status": "in_progress",
-	"base": "ded56573fe80a3ed33db719631527e14d9433de8",
+	"status": "local_acceptance_passed",
+	"base": "6081ca4ec0e79832b50d41b02bee54302dd9097e",
 	"imported_head": "6593c1bf9df89faf2ba0c08cd5db7cfffdb352b1",
 	"import_signatures": "four valid SSH signatures; verifier reported no principal matched",
 	"host": "Mini02",
@@ -47,7 +47,18 @@
 				"log": ".git/a03-evidence/compose-build.log"
 			}
 		},
-		"full_gate": "pending",
+		"full_gate": {
+			"command": "devenv shell lint:push",
+			"exit_code": 0,
+			"source_head": "23916ab8423e38a1ab5a74ef20400abe191d2ff2",
+			"workspace_tests_passed": 5131,
+			"workspace_tests_skipped": 47,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"postgres_required": true,
+			"snapshot_changes": 0,
+			"log": ".git/a03-evidence/lint-push.log"
+		},
 		"normal_pre_push": "pending",
 		"commands_and_snapshots": {
 			"passed": 61,
@@ -62,12 +73,33 @@
 			"client": "/app/dist/pkg",
 			"log": ".git/a03-evidence/huddle-image.log",
 			"runtime": "not exercised; no auth secrets supplied"
-		}
+		},
+		"interrupted_full_gate": {
+			"base": "ded56573fe80a3ed33db719631527e14d9433de8",
+			"workspace_tests_passed": 5077,
+			"workspace_tests_skipped": 47,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"passed": [
+				"clippy",
+				"monostyle",
+				"leptoskit lint",
+				"documentation",
+				"formatting",
+				"Kotlin",
+				"workflow security",
+				"release validation"
+			],
+			"interruption": "schema check cargo process killed with signal 9, exit 137; target later measured 192 MiB instead of 19 GiB",
+			"log": ".git/a03-evidence/lint-push-interrupted.log"
+		},
+		"focused_units_in_full_gate": 68
 	},
 	"incidents": [
 		".git/a03-target disappeared during validation; no removal command issued by this task",
 		"Podman identity and VM backing files disappeared while VM remained running; API socket still reachable",
-		"A04 target directory also observed missing; A04 rustup still present"
+		"A04 target directory also observed missing; A04 rustup still present",
+		"A second target deletion reduced 19 GiB to 192 MiB after the full tests; the normal commit hook initially failed on a missing build script, then passed on retry."
 	],
 	"fly_reference": "https://docs.fly.io/launch/monorepo",
 	"implementation_head": "12c88f90",
@@ -81,5 +113,6 @@
 			"bytes": 155930112
 		}
 	},
-	"vm": "removed after accepted images were exported; no VM left running"
+	"vm": "removed after accepted images were exported; no VM left running",
+	"build_storage": ".git/a03-target links to task-owned .git/a03-evidence/host-build to preserve backing output if the target entry is removed"
 }

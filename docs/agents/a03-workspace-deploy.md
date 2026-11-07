@@ -20,7 +20,7 @@ Fly context and path behavior was checked against [the official monorepo documen
 
 ## Resource and evidence recovery
 
-One two-CPU, three-GiB task VM is used at a time. The first VM's identity and backing files and the host target directory disappeared during validation without a removal command from this task. Its open API connection remained usable. The published CLI layer was exported before stopping and removing that task VM. Replacement VM storage is inside `.git/a03-evidence/vm`; host build output is `.git/a03-target`. No other task's artifacts were removed.
+One two-CPU, three-GiB task VM is used at a time. The first VM's identity and backing files and the host target directory disappeared during validation without a removal command from this task. Its open API connection remained usable. The published CLI layer was exported before stopping and removing that task VM. Replacement VM storage is inside `.git/a03-evidence/vm`; host build output is exposed at `.git/a03-target`, backed by `.git/a03-evidence/host-build` after another deletion interrupted schema validation. No other task's artifacts were removed.
 
 The first focused run passed 63 tests, including actual Postgres bootstrap and archive recovery, and failed on the host target-directory leak. After the fix and a rebuild, all 67 focused tests passed. All 61 CLI infrastructure integration and snapshot tests also passed, with no snapshot updates. The final full-gate and image results belong in the JSON record.
 
@@ -30,4 +30,6 @@ The tiny source-CLI image built from the generated Dockerfile, passed the sentin
 
 Huddle's generated image also built successfully with `LEPTOSKIT_CLI_PATH=crates/leptoskit_cli`. The final image contains the 37 MiB `/app/server` and the separate client's JavaScript and WebAssembly files, including Brotli and gzip variants under `/app/dist/pkg`. This is build and artifact acceptance, not a claim that Huddle's authenticated runtime was exercised. No application secrets were supplied. The original `examples/huddle/deploy/` recipe was not changed or substituted.
 
-Both accepted runtime images were exported before stopping the task VM. The full gate and normal pre-push hook results are recorded separately in the JSON evidence.
+Both accepted runtime images were exported before stopping and removing the task VM. The full gate and normal pre-push hook results are recorded separately in the JSON evidence.
+
+The unmodified `devenv shell lint:push` completed successfully on the rebased source: 5,131 workspace tests, 16 file-routes tests, and 43 devtools tests passed with Postgres required. Clippy, format, documentation, release validation, schema checks, workflow security, and dependency policy passed. No snapshots changed.
