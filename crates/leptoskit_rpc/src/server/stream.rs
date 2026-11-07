@@ -3,6 +3,8 @@
 //! what the client has room for.
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
 use futures::Stream;
 use futures::StreamExt;
@@ -74,8 +76,7 @@ pub fn open<S: StreamOperation>(
 				sink.fail(&Error::invalid(format!(
 					"the arguments of `{}` don't fit: {error}",
 					S::NAME
-				)))
-				.await;
+				)));
 			}
 		}
 	})
@@ -89,6 +90,9 @@ pub struct StreamSink {
 	/// if a client renews credits before consuming its earlier items.
 	out: mpsc::Sender<String>,
 	credits: Arc<Semaphore>,
+	/// An older generated pump calls `fail` synchronously. The owning
+	/// session flushes this failure before releasing the stream's task.
+	failure: Arc<Mutex<Option<WireError>>>,
 }
 
 /// An item, encoded: its value, and where a resumable stream reached.
@@ -105,7 +109,33 @@ impl StreamSink {
 			stream,
 			out,
 			credits,
+			failure: Arc::new(Mutex::new(None)),
 		}
+	}
+
+	/// Create this before running the operation and await it afterwards.
+	/// Waiting belongs to the tracked producer task, never a detached task.
+	#[cfg_attr(
+		not(feature = "live"),
+		allow(dead_code, reason = "only a live session opens streams")
+	)]
+	pub(crate) fn completion(&self) -> BoxFuture<'static, ()> {
+		let sink = Self {
+			stream: self.stream,
+			out: self.out.clone(),
+			credits: Arc::clone(&self.credits),
+			failure: Arc::clone(&self.failure),
+		};
+		Box::pin(async move {
+			let error = sink
+				.failure
+				.lock()
+				.unwrap_or_else(PoisonError::into_inner)
+				.take();
+			if let Some(error) = error {
+				sink.end(EndReason::Failed(error)).await;
+			}
+		})
 	}
 
 	/// Sends every item of `items`, each once the client has room for it,
@@ -119,6 +149,14 @@ impl StreamSink {
 		let mut items = std::pin::pin!(items);
 
 		loop {
+			if self
+				.failure
+				.lock()
+				.unwrap_or_else(PoisonError::into_inner)
+				.is_some()
+			{
+				return;
+			}
 			// Wait for room before reading the next item, so nothing is read
 			// ahead of what the client asked for.
 			match self.credits.acquire().await {
@@ -144,7 +182,7 @@ impl StreamSink {
 					}
 				}
 				Err(error) => {
-					self.fail(&error).await;
+					self.fail(&error);
 					return;
 				}
 			}
@@ -153,12 +191,16 @@ impl StreamSink {
 
 	/// Ends the stream as failed, as when its body refused to start.
 	#[doc(hidden)]
-	pub async fn fail(&self, error: &Error) {
-		self.end(EndReason::Failed(WireError {
-			status: error.status(),
-			message: error.message().to_owned(),
-		}))
-		.await;
+	pub fn fail(&self, error: &Error) {
+		self.failure
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+			.get_or_insert_with(|| {
+				WireError {
+					status: error.status(),
+					message: error.message().to_owned(),
+				}
+			});
 	}
 
 	async fn end(&self, reason: EndReason) {

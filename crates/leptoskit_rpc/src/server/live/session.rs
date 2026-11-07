@@ -604,8 +604,12 @@ impl Session {
 				.min(MAX_CREDITS),
 		));
 		let sink = StreamSink::new(stream, self.stream_out.clone(), Arc::clone(&credits));
+		let completion = sink.completion();
 		let cx = QueryCx::new(self.db.clone(), self.identity.clone());
-		let task = tokio::spawn((registration.open)(args, cx, sink));
+		let task = tokio::spawn(async move {
+			(registration.open)(args, cx, sink).await;
+			completion.await;
+		});
 		self.streams.insert(stream, Running { task, credits });
 		true
 	}

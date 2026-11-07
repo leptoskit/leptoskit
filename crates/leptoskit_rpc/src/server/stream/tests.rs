@@ -72,7 +72,10 @@ async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 	out.send("held".to_owned()).await.unwrap();
 	let sink = StreamSink::new(1, out, Arc::new(Semaphore::new(0)));
 	let error = Error::invalid("refused");
-	let mut refusal = Box::pin(sink.fail(&error));
+	let mut refusal = sink.completion();
+	let fail: fn(&StreamSink, &Error) = StreamSink::fail;
+	fail(&sink, &error);
+	drop(sink);
 	assert!(futures::poll!(refusal.as_mut()).is_pending());
 	assert_eq!(receiver.recv().await.unwrap(), "held");
 	refusal.await;
@@ -83,6 +86,29 @@ async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 		panic!("the terminal error survives backpressure");
 	};
 	assert_eq!(error.message, "refused");
+}
+
+#[tokio::test]
+async fn a_failed_producer_stays_tracked_until_its_terminal_frame_is_queued() {
+	let (out, mut receiver) = mpsc::channel(1);
+	out.send("held".to_owned()).await.unwrap();
+	let sink = StreamSink::new(1, out, Arc::new(Semaphore::new(1)));
+	let completion = sink.completion();
+	let mut running = Box::pin(async move {
+		let items = futures::stream::iter([Err::<u32, _>(Error::invalid("failed item"))]);
+		sink.drive(items, fallible).await;
+		completion.await;
+	});
+	assert!(futures::poll!(running.as_mut()).is_pending());
+	assert_eq!(receiver.recv().await.unwrap(), "held");
+	running.await;
+	let ServerFrame::End {
+		err: Some(error), ..
+	} = receive(&mut receiver).await
+	else {
+		panic!("the failure is delivered before the producer task finishes");
+	};
+	assert_eq!(error.message, "failed item");
 }
 
 #[tokio::test]

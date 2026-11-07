@@ -8,4 +8,4 @@ Live actions keep their admission slot until the session handles their reply, so
 
 Stream flushing during reauthentication and server drain also respects the connection's stall timeout.
 
-The generated stream implementations now await `StreamSink::fail`. Handwritten implementations using this hidden server helper must await it too.
+Existing generated and handwritten stream pumps keep using the synchronous `StreamSink::fail` helper. The session waits for the recorded terminal error before releasing the producer task.
