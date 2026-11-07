@@ -231,6 +231,9 @@ impl MetadataPackage {
 /// One direct dependency of a package.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetadataDependency {
+	/// The resolved directory of a local path dependency.
+	#[serde(default)]
+	pub path: Option<PathBuf>,
 	/// The depended-on crate's package name.
 	pub name: String,
 	/// The local name, when the dependency is renamed.

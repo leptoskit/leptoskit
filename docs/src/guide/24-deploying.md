@@ -292,7 +292,7 @@ This page covers the generated files, health checks, and graceful shutdown. It d
 
 | Target       | What it writes                   | What you get                                                                                                                                                     |
 | ------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker`     | `Dockerfile`, `.dockerignore`    | An image for any container platform.                                                                                                                             |
+| `docker`     | `Dockerfile`, `.dockerignore`    | An image for any container platform. Inside a Cargo workspace the ignore file is `Dockerfile.dockerignore` and the build context is the workspace root.          |
 | `compose`    | the above, and `compose.yaml`    | The app and its database on one machine with `docker compose up`: a Postgres service with its own volume, or a volume for the SQLite file.                       |
 | `fly`        | the above, and `fly.toml`        | An app on Fly.io whose proxy checks `/readyz`, gives the server time to stop, and keeps machines running. SQLite gets a volume; Postgres is attached.            |
 | `kubernetes` | the above, and `kubernetes.yaml` | A Deployment, Service, and `PodDisruptionBudget` for any cluster, with `/readyz` and `/healthz` probes and a preStop drain. SQLite gets a PersistentVolumeClaim. |
@@ -311,14 +311,24 @@ The generator reads:
 
 It tells you when something is missing, such as a `[[bin]]` it can't choose between, or an `app.name` that isn't a package in the workspace.
 
+### Apps inside a Cargo workspace
+
+An app does not need its own `Cargo.toml`. The generator asks Cargo for the workspace and its packages, so `app.name` and `build.client_package` can name members found through workspace globs, and the app folder can hold only `leptoskit.toml` and its crates. A scaffolded standalone app resolves the same way.
+
+The build context is the workspace root, because the app may build against sibling path dependencies. The generated `Dockerfile` stays beside `leptoskit.toml`; run `docker build -f <app>/Dockerfile .` from the workspace root. `compose.yaml` and `fly.toml` are written beside it too, with the workspace root as their context, and the database, generated site, assets, migrations, and toolchain keep the roots they had on your machine. A toolchain file between the app and the workspace root is the one the image uses.
+
+For an unreleased SDK whose CLI crate is inside the workspace, pass `--build-arg LEPTOSKIT_CLI_PATH=crates/leptoskit_cli` to `docker build`. The generated nested-workspace recipe then installs that source after copying the workspace, using its lockfile and toolchain. Otherwise it installs the generating CLI's version from crates.io; override `LEPTOSKIT_VERSION` when your app needs another published version.
+
+A Dockerfile-specific ignore file named `Dockerfile.dockerignore` replaces the context's `.dockerignore`. The generator writes that file next to the app's `Dockerfile` with the same exclusions rebased to the workspace root, and copies in any exclusions from the workspace root and app `.dockerignore` files rather than dropping them. It never rewrites either `.dockerignore` file. With Podman, pass `--ignorefile <app>/Dockerfile.dockerignore` to `podman build`; Podman does not automatically select Docker's Dockerfile-specific ignore file. Add `--format docker` to preserve the image health check. For Podman Compose, forward those flags through `--podman-build-args`. If a path would leave the workspace, generation stops instead of building from a context that cannot contain the app.
+
 ## The container
 
 The `Dockerfile` has two stages:
 
-1. **Build.** It installs the leptoskit CLI at the version your project uses and runs `leptoskit build --release`, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. A `rust-toolchain.toml` at the root picks the Rust release; otherwise the image uses the latest stable.
+1. **Build.** It installs the leptoskit CLI at the generating CLI's version by default and runs `leptoskit build --release` from the app directory, the same build you run on your machine, so the server, the wasm client, and the precompressed site come out exactly as they do there. The nearest `rust-toolchain.toml` or `rust-toolchain` file from the app root up to the workspace root picks the Rust release; otherwise the image uses the latest stable. Binaries come from the workspace target directory and the site from the app's `dist/`. Cargo discovers the server targets, including `src/bin` files and explicit `[[bin]]` entries. Deployment selects the binary named after the server package, or its only binary, using the same rule as `leptoskit build`.
 2. **Run.** A small Debian image with the server and `dist/`, nothing else. It sets the `LEPTOS_*` environment (`LEPTOS_SITE_ADDR=0.0.0.0:3000`, `LEPTOS_SITE_ROOT=/app/dist`, `LEPTOS_OUTPUT_NAME`, and `LEPTOS_ENV=PROD`), runs as an unprivileged user, and writes nothing to its own filesystem, so it runs with a read-only root filesystem. A SQLite database lives on a volume at `/data`, the one path it writes. A `HEALTHCHECK` calls `/healthz`.
 
-Secrets never go in the `Dockerfile`, `compose.yaml`, `fly.toml`, `kubernetes.yaml`, or the unit file. The Postgres URL, `AUTH_ENCRYPTION_KEYS`, and mail settings come from the environment when the container starts: `docker run -e`, an `.env` file beside `compose.yaml`, or `fly secrets set`. The `.dockerignore` keeps `.env` files, local databases, and build output out of the image.
+Secrets never go in the `Dockerfile`, `compose.yaml`, `fly.toml`, `kubernetes.yaml`, or the unit file. The Postgres URL, `AUTH_ENCRYPTION_KEYS`, and mail settings come from the environment when the container starts: `docker run -e`, an `.env` file beside `compose.yaml`, or `fly secrets set`. The container ignore file keeps `.env` files, local databases, build caches, and managed infrastructure state out of the image.
 
 To build and run the image on your machine:
 
@@ -326,6 +336,8 @@ To build and run the image on your machine:
 docker build -t my_app .
 docker run --rm --read-only --tmpfs /tmp -p 127.0.0.1:3000:3000 my_app
 ```
+
+Inside a workspace, run the first command from the workspace root with `-f <app>/Dockerfile`, as the generated `Dockerfile` says.
 
 ## Health checks
 
@@ -426,6 +438,8 @@ fly secrets set AUTH_ENCRYPTION_KEYS="$(date +%Y-%m):$(openssl rand 32 | basenc 
 fly deploy
 ```
 
+For an app inside a Cargo workspace, run these from the workspace root and pass `--config <app>/fly.toml`; the generated `fly.toml` names the `Dockerfile` relative to that root, so Fly builds the workspace context.
+
 ## Kubernetes
 
 `leptoskit generate deploy --target kubernetes` writes a Deployment, a Service on port 80, and a `PodDisruptionBudget` with `minAvailable: 1`. The container:
@@ -463,7 +477,7 @@ Create the app's user, install the binary and site, put the environment in `/etc
 
 ## Limits
 
-- The image builds from the project's root. Crates outside it, such as a local leptoskit checkout passed with `--sdk-path`, aren't in the build context, so the build can't find them.
-- The build copies the server from `target/release`. If `.cargo/config.toml` moves the target directory, change the `cp` line in the `Dockerfile` to match.
+- The image builds from the Cargo workspace root. Local dependencies outside that workspace, such as a separate leptoskit checkout passed with `--sdk-path`, are not in the build context; use published dependencies or place the needed crates inside the workspace.
+- Nested workspace apps set `CARGO_TARGET_DIR=/src/target` inside the container, independently of host environment variables and Cargo target-directory configuration. The standalone recipe expects `target/release`; generation rejects a custom Cargo target directory even when a host `CARGO_TARGET_DIR` override is active. Remove that setting before generation or maintain a custom Dockerfile.
 - The first build compiles the leptoskit CLI and every dependency, which takes several minutes. Later builds reuse Docker's caches.
 - The Kubernetes manifest and the systemd unit assume the image, binary, and site are installed where they say; the generator doesn't push images or copy files to hosts.

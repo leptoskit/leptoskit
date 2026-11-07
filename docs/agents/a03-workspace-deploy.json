@@ -1,0 +1,134 @@
+{
+	"audit": "A03",
+	"status": "accepted",
+	"base": "6081ca4ec0e79832b50d41b02bee54302dd9097e",
+	"imported_head": "6593c1bf9df89faf2ba0c08cd5db7cfffdb352b1",
+	"import_signatures": "four valid SSH signatures; verifier reported no principal matched",
+	"host": "Mini02",
+	"logs": ".git/a03-evidence",
+	"checks": {
+		"first_focused_run": {
+			"passed": 63,
+			"failed": 1,
+			"failure": "Huddle target path inherited host CARGO_TARGET_DIR; corrected, rerun pending",
+			"real_postgres": [
+				"database_bootstrap_gives_the_app_ownership_without_superuser",
+				"encrypted_archives_restore_real_postgres_and_preserve_the_previous_database"
+			]
+		},
+		"cli_build": "passed before subsequent edits; artifact externally deleted",
+		"focused_rerun": {
+			"passed": 67,
+			"failed": 0,
+			"log": ".git/a03-evidence/focused-rebuild.log",
+			"postgres_required": true
+		},
+		"monostyle": "passed before final edits",
+		"container": {
+			"published_cli": "failed: published 0.3.0 rejects build.backend",
+			"default_podman_ignore": "failed: Dockerfile.dockerignore not selected; sentinel files copied",
+			"source_cli": {
+				"result": "passed",
+				"image_id": "276d1bf0173bd3e5dbc7bb9190073fba5ca7de193d90ac9a37b65a489b7bcc7b",
+				"server": "/app/server",
+				"site": "/app/dist",
+				"uid": 10001,
+				"read_only": true,
+				"ready_response": "a03-ready",
+				"log": ".git/a03-evidence/image-source.log"
+			},
+			"explicit_podman_ignorefile": "passed: compile-time sentinel assertions and build-stage inventory",
+			"compose": {
+				"result": "passed",
+				"image_id": "0a6568bb789f43cbcaccba38c43cb903995f9eb2870a40b4df9ae2ef3db14005",
+				"health": "healthy",
+				"ready_response": "a03-ready",
+				"format": "docker",
+				"log": ".git/a03-evidence/compose-build.log"
+			}
+		},
+		"full_gate": {
+			"command": "devenv shell lint:push",
+			"exit_code": 0,
+			"source_head": "23916ab8423e38a1ab5a74ef20400abe191d2ff2",
+			"workspace_tests_passed": 5131,
+			"workspace_tests_skipped": 47,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"postgres_required": true,
+			"snapshot_changes": 0,
+			"log": ".git/a03-evidence/lint-push.log"
+		},
+		"normal_pre_push": {
+			"result": "passed",
+			"source_head": "8f756ea18cf8f50e74bd70315971c133275b5e54",
+			"workspace_tests_passed": 5131,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"postgres_required": true,
+			"log": ".git/a03-evidence/git-push.log",
+			"credential_helper": "existing gh authentication, command-only override after Keychain helper stalled",
+			"bypass": false
+		},
+		"commands_and_snapshots": {
+			"passed": 61,
+			"failed": 0,
+			"snapshot_changes": 0,
+			"log": ".git/a03-evidence/commands-snapshots.log"
+		},
+		"huddle": {
+			"result": "generated image build passed",
+			"image_id": "46325cc1dec6296000fe71e81bd568f8ba7caac4eb942816bb97f7ed44c9f1b0",
+			"server": "/app/server",
+			"client": "/app/dist/pkg",
+			"log": ".git/a03-evidence/huddle-image.log",
+			"runtime": "not exercised; no auth secrets supplied"
+		},
+		"interrupted_full_gate": {
+			"base": "ded56573fe80a3ed33db719631527e14d9433de8",
+			"workspace_tests_passed": 5077,
+			"workspace_tests_skipped": 47,
+			"file_routes_tests_passed": 16,
+			"devtools_tests_passed": 43,
+			"passed": [
+				"clippy",
+				"monostyle",
+				"leptoskit lint",
+				"documentation",
+				"formatting",
+				"Kotlin",
+				"workflow security",
+				"release validation"
+			],
+			"interruption": "schema check cargo process killed with signal 9, exit 137; target later measured 192 MiB instead of 19 GiB",
+			"log": ".git/a03-evidence/lint-push-interrupted.log"
+		},
+		"focused_units_in_full_gate": 68,
+		"transitive_path_dependency_test": {
+			"result": "passed",
+			"name": "an_excluded_local_dependency_cannot_hide_an_external_dependency",
+			"log": ".git/a03-evidence/transitive-test.log"
+		}
+	},
+	"incidents": [
+		".git/a03-target disappeared during validation; no removal command issued by this task",
+		"Podman identity and VM backing files disappeared while VM remained running; API socket still reachable",
+		"A04 target directory also observed missing; A04 rustup still present",
+		"A second target deletion reduced 19 GiB to 192 MiB after the full tests; the normal commit hook initially failed on a missing build script, then passed on retry."
+	],
+	"fly_reference": "https://docs.fly.io/launch/monorepo",
+	"implementation_head": "12c88f90",
+	"exports": {
+		"tiny-accepted-image.tar": {
+			"sha256": "b1258bacdcbeff042c9a14adfdb0e54e21822bc02152eb978c8d40a0c458cc0b",
+			"bytes": 113295360
+		},
+		"huddle-accepted-image.tar": {
+			"sha256": "c76faeeac3086bb9097b19aa58d869d33d2bf0191f8c892cf117a49464caacab",
+			"bytes": 155930112
+		}
+	},
+	"vm": "removed after accepted images were exported; no VM left running",
+	"build_storage": ".git/a03-target links to task-owned .git/a03-evidence/host-build to preserve backing output if the target entry is removed",
+	"pull_request": "https://github.com/leptoskit/leptoskit/pull/601"
+}

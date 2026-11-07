@@ -78,6 +78,7 @@ fn package(
 			.iter()
 			.map(|(name, rename)| {
 				MetadataDependency {
+					path: None,
 					name: (*name).to_owned(),
 					rename: rename.map(str::to_owned),
 				}

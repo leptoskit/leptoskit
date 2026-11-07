@@ -388,10 +388,23 @@ fn generate_project(
 	// Reuse the existing container recipe rather than another build
 	// system.
 	let report = crate::deploy::generate(root, config, crate::deploy::Target::Docker, false)?;
-	let ignore = root.join(".dockerignore");
+	let project = crate::deploy::Project::read(root, config)?;
+	let ignore = project.ignore_path();
 	let mut text = fs::read_to_string(&ignore)?;
-	if !text.lines().any(|line| line.trim() == "/infra") {
-		text.push_str("\n# Managed state, plans, and runtime secret bindings\n/infra\n/.kamal\n");
+	let mut changed = false;
+
+	for pattern in project.managed_state_patterns() {
+		if !text.lines().any(|line| line.trim() == pattern.as_str()) {
+			if !changed {
+				text.push_str("\n# Managed state, plans, and runtime secret bindings\n");
+				changed = true;
+			}
+			text.push_str(&pattern);
+			text.push('\n');
+		}
+	}
+
+	if changed {
 		fs::write(ignore, text)?;
 	}
 	println!("{report}\nInfrastructure written to {}", dir.display());
