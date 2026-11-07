@@ -315,13 +315,12 @@ impl Walker<'_> {
 			let analyzed = analyze(property_schema);
 			let optional = !object.is_required(property) || has_default(property_schema);
 			let collapses_null = match self.target {
+				TargetLanguage::Go => optional && self.nullable_alias(property_schema),
+				TargetLanguage::Rust | TargetLanguage::Cli => optional && analyzed.nullable,
 				// Dart models keep required and optional nullable fields
 				// distinct. A nullable value in a query-string or form
 				// argument is still lossy, and is reported by
 				// `walk_omitted_null` against the function's own encoding.
-				TargetLanguage::Dart => false,
-				TargetLanguage::Go => optional && self.nullable_alias(property_schema),
-				TargetLanguage::Rust | TargetLanguage::Cli => optional && analyzed.nullable,
 				_ => false,
 			};
 			if collapses_null && !matches!(analyzed.shape, Shape::Null) {

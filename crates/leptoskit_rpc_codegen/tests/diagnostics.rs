@@ -456,12 +456,12 @@ fn dart_channel_presence_cannot_confuse_absence_with_null() {
 	);
 	// A non-nullable presence has only absence and a value, so it is fine.
 	spec.channels[0].presence_schema = json!({ "type": "string" });
-	assert!(
-		at(
+	assert_eq!(
+		kinds(
 			&diagnostics(&spec, TargetLanguage::Dart),
 			"channels.room.presence"
-		)
-		.is_empty()
+		),
+		vec![]
 	);
 }
 
@@ -483,7 +483,10 @@ fn dart_null_only_and_untyped_values_need_json_encoding() {
 			[DiagnosticKind::NullableCollapsed]
 		);
 		spec.functions[0].input = HttpInput::Json;
-		assert!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path).is_empty());
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			vec![]
+		);
 	}
 }
 
@@ -513,6 +516,9 @@ fn dart_unconstrained_collection_values_report_null_encoding_loss() {
 			[DiagnosticKind::NullableCollapsed]
 		);
 		spec.functions[0].input = HttpInput::Json;
-		assert!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path).is_empty());
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			vec![]
+		);
 	}
 }
