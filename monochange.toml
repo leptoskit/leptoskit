@@ -133,7 +133,6 @@ packages = [
 	"leptoskit_plugin_shell",
 	"leptoskit_plugin_logging",
 	"leptoskit_plugin_notifications",
-	"leptoskit_plugin_nfc",
 	"leptoskit_plugin_local_authentication",
 	"leptoskit_plugin_location",
 	"leptoskit_plugin_global_shortcut",
@@ -298,6 +297,9 @@ path = "crates/leptoskit_plugin_clipboard"
 
 [package.leptoskit_plugin_haptics]
 path = "crates/leptoskit_plugin_haptics"
+
+[package.leptoskit_plugin_home_widgets]
+path = "crates/leptoskit_plugin_home_widgets"
 
 [package.leptoskit_plugin_battery]
 path = "crates/leptoskit_plugin_battery"
