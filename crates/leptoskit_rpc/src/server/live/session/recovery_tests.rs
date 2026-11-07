@@ -1,6 +1,7 @@
 //! Deterministic backpressure: a bounded session channel, without relying on
 //! a machine's TCP buffers filling at a particular speed.
 
+use futures::FutureExt;
 use serde_json::json;
 
 use super::*;
@@ -350,4 +351,24 @@ async fn pending_capacity_closes_at_the_stall_deadline() {
 			.unwrap()
 			.unwrap()
 	);
+}
+
+#[tokio::test]
+async fn reauthentication_starts_a_fresh_pending_stall_budget() {
+	let (mut session, mut out, _input, _incoming) = session().await;
+	session.keep(
+		1,
+		"unregistered".to_owned(),
+		json!({}),
+		Arc::new(json!("old")),
+	);
+	session.pending_progress = tokio::time::Instant::now() - Duration::from_secs(60);
+	session.out.try_send(Outbound::Heartbeat).unwrap();
+	let mut authentication = Box::pin(session.authenticate("new token".to_owned()));
+	assert!(authentication.as_mut().now_or_never().is_none());
+	assert!(matches!(out.try_recv().unwrap(), Outbound::Heartbeat));
+	assert_eq!(authentication.as_mut().now_or_never(), Some(true));
+	drop(authentication);
+	assert!(session.full_next);
+	assert!(session.pending_deadline().unwrap() > tokio::time::Instant::now());
 }

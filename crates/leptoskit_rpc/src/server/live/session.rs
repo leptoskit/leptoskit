@@ -1018,6 +1018,7 @@ impl Session {
 		}
 
 		self.pending = None;
+		self.pending_progress = tokio::time::Instant::now();
 		self.full_next = !self.subscriptions.is_empty();
 		self.extra_errors.clear();
 		// Detach every old group before awaiting any new identity's reads.
