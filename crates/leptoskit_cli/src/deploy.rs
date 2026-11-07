@@ -245,7 +245,7 @@ impl Project {
 		let ignore_contents = if app_dir.is_empty() {
 			DOCKERIGNORE.to_owned()
 		} else {
-			workspace_dockerignore(&workspace_root, &app_root, &app_dir)
+			workspace_dockerignore(&workspace_root, &app_root, &app_dir)?
 		};
 		let target_dir = container_target(&workspace_root, &metadata.target_directory);
 		let database = config.db.as_ref().map(|db| {
@@ -588,7 +588,14 @@ fn package_directory(workspace_root: &Path, package: &str, manifest: &Path) -> R
 			workspace_root.display()
 		)
 	})?;
-	Ok(directory.to_path_buf())
+	let directory = std::fs::canonicalize(directory)
+		.with_context(|| format!("could not resolve package `{package}` directory"))?;
+	anyhow::ensure!(
+		directory.starts_with(workspace_root),
+		"the package `{package}` resolves outside the Cargo workspace at {}",
+		workspace_root.display()
+	);
+	Ok(directory)
 }
 
 /// Whether `root` or one of its ancestors has a `Cargo.toml`, so an app
@@ -659,20 +666,32 @@ fn container_target(workspace_root: &Path, target_directory: &Path) -> String {
 /// project already keeps in `.dockerignore` files. A Dockerfile-specific
 /// ignore file replaces the context's own, so those exclusions are copied
 /// in rather than silently dropped.
-fn workspace_dockerignore(workspace_root: &Path, app_root: &Path, app_dir: &str) -> String {
-	let mut out = WORKSPACE_DOCKERIGNORE.to_owned();
+fn workspace_dockerignore(workspace_root: &Path, app_root: &Path, app_dir: &str) -> Result<String> {
+	let mut out = String::new();
 
-	if let Ok(text) = std::fs::read_to_string(workspace_root.join(".dockerignore")) {
+	if let Some(text) = read_optional_ignore(&workspace_root.join(".dockerignore"))? {
 		append_ignore(&mut out, "the workspace's", &text, "");
 	}
 
 	if app_root != workspace_root
-		&& let Ok(text) = std::fs::read_to_string(app_root.join(".dockerignore"))
+		&& let Some(text) = read_optional_ignore(&app_root.join(".dockerignore"))?
 	{
 		append_ignore(&mut out, "the app's", &text, app_dir);
 	}
 
-	out
+	// Docker uses the last matching rule. Keep generated state exclusions
+	// after custom negations so an exception cannot reintroduce secrets.
+	out.push_str("\n");
+	out.push_str(WORKSPACE_DOCKERIGNORE);
+	Ok(out)
+}
+
+fn read_optional_ignore(path: &Path) -> Result<Option<String>> {
+	match std::fs::read_to_string(path) {
+		Ok(text) => Ok(Some(text)),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
+	}
 }
 
 /// Adds a project's own ignore lines, rebased into the workspace context.
@@ -1047,8 +1066,8 @@ WORKDIR /src
 		} else {
 			let _ = writeln!(
 				out,
-				"RUN cd {} && rustup target add wasm32-unknown-unknown",
-				shell_quote(&project.app_dir)
+				"RUN mkdir -p {app} && cd {app} && rustup target add wasm32-unknown-unknown",
+				app = shell_quote(&project.app_dir)
 			);
 		}
 	}
@@ -1392,7 +1411,7 @@ kill_timeout = \"{STOP_TIMEOUT_SECONDS}s\"
     timeout = \"2s\"
     method = \"GET\"
     path = \"/readyz\"
-"
+",
 		app = project.app,
 		fly_app = project.app.to_ascii_lowercase().replace('_', "-"),
 		port = project.port,

@@ -498,7 +498,9 @@ fn a_nested_app_resolves_through_cargo_workspace_globs() {
 		"{dockerfile}"
 	);
 	assert!(
-		dockerfile.contains("RUN cd apps/site && rustup target add wasm32-unknown-unknown"),
+		dockerfile.contains(
+			"RUN mkdir -p apps/site && cd apps/site && rustup target add wasm32-unknown-unknown"
+		),
 		"{dockerfile}"
 	);
 	assert!(
@@ -605,7 +607,10 @@ fn workspace_paths_with_spaces_are_quoted_and_kept_inside_the_context() {
 		"{dockerfile}"
 	);
 	assert!(
-		dockerfile.contains("RUN cd 'apps/my app' && rustup target add wasm32-unknown-unknown"),
+		dockerfile.contains(
+			"RUN mkdir -p 'apps/my app' && cd 'apps/my app' && rustup target add \
+			 wasm32-unknown-unknown"
+		),
 		"{dockerfile}"
 	);
 	assert!(
@@ -773,4 +778,49 @@ fn huddle_resolves_inside_the_repository_workspace() {
 		dockerfile.contains("COPY --from=build /src/examples/huddle/dist /app/dist"),
 		"{dockerfile}"
 	);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_package_symlink_cannot_escape_the_workspace_context() {
+	let root = tempfile::tempdir().unwrap();
+	let external = tempfile::tempdir().unwrap();
+	let workspace = root.path().canonicalize().unwrap();
+	std::os::unix::fs::symlink(external.path(), workspace.join("linked")).unwrap();
+	let error =
+		super::package_directory(&workspace, "linked", &workspace.join("linked/Cargo.toml"))
+			.unwrap_err()
+			.to_string();
+	assert!(error.contains("outside the Cargo workspace"), "{error}");
+}
+
+#[test]
+fn unreadable_ignore_policy_stops_generation() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
+	std::fs::create_dir(root.path().join(".dockerignore")).unwrap();
+	let error = generate(&app, &config, Target::Docker, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("could not read"), "{error}");
+	assert!(!app.join("Dockerfile").exists());
+}
+
+#[test]
+fn custom_ignore_exceptions_do_not_reintroduce_managed_state() {
+	let root = tempfile::tempdir().unwrap();
+	let config = nested_project(root.path(), "site");
+	let app = root.path().join("apps/site");
+	write(root.path(), ".dockerignore", "!**\n");
+	write(&app, ".dockerignore", "!.env\n");
+	generate(&app, &config, Target::Docker, false).unwrap();
+	let ignore = std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap();
+	let exception = ignore.find("!apps/site/.env").unwrap();
+	for pattern in ["**/.env", "**/.kamal", "**/infra/*.tfstate*"] {
+		assert!(
+			ignore.rfind(pattern).unwrap() > exception,
+			"{pattern}: {ignore}"
+		);
+	}
 }
