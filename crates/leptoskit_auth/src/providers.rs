@@ -1155,6 +1155,32 @@ mod tests {
 	}
 
 	#[test]
+	fn grants_and_callback_params_print_no_secrets() {
+		let grant = ProviderGrant {
+			access_token: "secret-access".into(),
+			refresh_token: Some("secret-refresh".into()),
+			expires_in: Some(3600),
+			scope: Some("openid".into()),
+		};
+		let printed = format!("{grant:?}");
+		assert!(!printed.contains("secret-access"), "{printed}");
+		assert!(!printed.contains("secret-refresh"), "{printed}");
+		assert!(printed.contains("3600"), "{printed}");
+
+		let params = CallbackParams {
+			code: Some("secret-code".into()),
+			state: Some("secret-state".into()),
+			error: Some("access_denied".into()),
+			user: Some("secret-user".into()),
+		};
+		let printed = format!("{params:?}");
+		assert!(!printed.contains("secret-code"), "{printed}");
+		assert!(!printed.contains("secret-state"), "{printed}");
+		assert!(!printed.contains("secret-user"), "{printed}");
+		assert!(printed.contains("access_denied"), "{printed}");
+	}
+
+	#[test]
 	fn only_vouched_for_addresses_count() {
 		let profile = ProviderProfile {
 			subject: "1".into(),

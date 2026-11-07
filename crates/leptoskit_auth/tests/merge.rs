@@ -10,6 +10,9 @@
 	feature = "axum"
 ))]
 
+#[cfg(feature = "passkey")]
+#[path = "support/passkey.rs"]
+mod passkey;
 #[path = "../../leptoskit_db/tests/support/postgres.rs"]
 mod postgres;
 #[path = "support/totp.rs"]
@@ -927,4 +930,125 @@ async fn a_duplicate_stops_a_plain_move_and_apps_word_their_own_preview() {
 		assert_eq!(me.bio, None);
 		assert_eq!(snapshot(&db, pair.survivor_id).await.0, 3);
 	}
+}
+
+#[cfg(feature = "passkey")]
+#[tokio::test]
+async fn the_other_accounts_passkey_is_what_proves_it() {
+	let db = databases(None).await.remove(0);
+	let app = app(&db, false);
+
+	let mut absorbed = Browser::default();
+	email_sign_in(&app, &mut absorbed, "old@example.com").await;
+	let mut survivor = Browser::default();
+	email_sign_in(&app, &mut survivor, "ada@example.com").await;
+
+	// The other account adds a passkey.
+	let mut device = passkey::SoftPasskey::new(ORIGIN);
+	let options = absorbed
+		.post(&app, "/auth/passkey/register/options", json!({}))
+		.await;
+	let options: leptoskit_auth::CreationChallengeResponse =
+		serde_json::from_value(json_body(options).await).unwrap();
+	let registered = absorbed
+		.post(
+			&app,
+			"/auth/passkey/register",
+			json!({ "credential": device.register(&options), "name": "Old phone" }),
+		)
+		.await;
+	assert_eq!(registered.status(), StatusCode::OK);
+
+	// A wallet it owns offers a merge, which its second factor guards.
+	let wallet = SoftwareWallet::new();
+	let linked = absorbed.link(&app, &wallet).await;
+	absorbed
+		.post(
+			&app,
+			"/auth/wallets/update",
+			json!({ "id": linked["wallet"]["id"], "can_sign_in": true }),
+		)
+		.await;
+	assert_eq!(survivor.link(&app, &wallet).await["outcome"], "merge");
+	assert_eq!(
+		survivor.offer(&app).await.unwrap().second_factor,
+		[
+			leptoskit_auth::Factor::Passkey,
+			leptoskit_auth::Factor::RecoveryCode
+		]
+	);
+
+	// Someone else's passkey, for this site, doesn't answer, and uses up the
+	// ceremony.
+	let mut stranger = passkey::SoftPasskey::new(ORIGIN);
+	let mut other = Browser::default();
+	email_sign_in(&app, &mut other, "eve@example.com").await;
+	let enrolled = other
+		.post(&app, "/auth/passkey/register/options", json!({}))
+		.await;
+	let enrolled: leptoskit_auth::CreationChallengeResponse =
+		serde_json::from_value(json_body(enrolled).await).unwrap();
+	let registered = other
+		.post(
+			&app,
+			"/auth/passkey/register",
+			json!({ "credential": stranger.register(&enrolled) }),
+		)
+		.await;
+	assert_eq!(registered.status(), StatusCode::OK);
+	let options = survivor
+		.post(&app, "/auth/merge/passkey/options", json!({}))
+		.await;
+	let body = json_body(options).await;
+	let started: leptoskit_auth::PasskeyOptions =
+		serde_json::from_value(body.clone()).unwrap_or_else(|error| panic!("{error}: {body}"));
+	let options = started.options;
+	let refused = survivor
+		.post(
+			&app,
+			"/auth/merge",
+			json!({
+				"mode": "move_login",
+				"confirm": true,
+				"credential": stranger.sign_with(0, &options),
+			}),
+		)
+		.await;
+	assert_eq!(json_body(refused).await["error"], "passkey_failed");
+
+	// The account's own passkey is, once.
+	let options = survivor
+		.post(&app, "/auth/merge/passkey/options", json!({}))
+		.await;
+	let body = json_body(options).await;
+	let started: leptoskit_auth::PasskeyOptions =
+		serde_json::from_value(body.clone()).unwrap_or_else(|error| panic!("{error}: {body}"));
+	let options = started.options;
+	let merged = survivor
+		.post(
+			&app,
+			"/auth/merge",
+			json!({
+				"mode": "move_login",
+				"confirm": true,
+				"credential": device.sign(&options),
+			}),
+		)
+		.await;
+	assert_eq!(merged.status(), StatusCode::NO_CONTENT);
+	assert_eq!(survivor.offer(&app).await, None);
+}
+
+#[tokio::test]
+async fn an_offer_for_an_account_that_is_gone_is_no_offer() {
+	let db = databases(None).await.remove(0);
+	let app = app(&db, false);
+	let mut pair = pair(&app, &db).await;
+	Account::query()
+		.filter(|account| account.id.eq(pair.absorbed_id))
+		.delete(&db.system("test"))
+		.await
+		.unwrap();
+
+	assert_eq!(pair.survivor.offer(&app).await, None);
 }

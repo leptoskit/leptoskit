@@ -28,17 +28,22 @@ use axum::response::Response;
 use http_body_util::BodyExt;
 use leptoskit_auth::Account;
 use leptoskit_auth::Auth;
+use leptoskit_auth::AuthError;
 use leptoskit_auth::EmailAddress;
 use leptoskit_auth::Factor;
 use leptoskit_auth::Identity;
 use leptoskit_auth::IdentityInfo;
 use leptoskit_auth::Keys;
+use leptoskit_auth::Limit;
+use leptoskit_auth::Limits;
 use leptoskit_auth::Mailbox;
 use leptoskit_auth::MergeOffer;
 use leptoskit_auth::Provider;
 use leptoskit_auth::ProviderInfo;
 use leptoskit_auth::ProviderOutcome;
+use leptoskit_auth::RequestInfo;
 use leptoskit_auth::SessionResponse;
+use leptoskit_auth::SessionToken;
 use leptoskit_db::Db;
 use leptoskit_db::Id;
 use oidc::FakeIdp;
@@ -255,6 +260,191 @@ async fn email_sign_in(app: &App, browser: &mut Browser, address: &str) {
 		)
 		.await;
 	assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_token_endpoint_that_refuses_or_omits_its_token_fails_the_sign_in() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let app = app(&db);
+
+	app.idp.tamper(Tamper::TokenError);
+	let mut browser = Browser::default();
+	let location = browser
+		.through(
+			&app,
+			"company",
+			false,
+			person("u-10", "eve@example.com", true),
+		)
+		.await;
+	assert_eq!(
+		outcome(&location),
+		ProviderOutcome::Failed("provider".into())
+	);
+
+	app.idp.tamper(Tamper::NoAccessToken);
+	let mut browser = Browser::default();
+	let github = json!({
+		"user": { "id": 9, "login": "eve" },
+		"emails": [{ "email": "eve@example.com", "primary": true, "verified": true }],
+	});
+	let location = browser.through(&app, "github", false, github).await;
+	assert_eq!(
+		outcome(&location),
+		ProviderOutcome::Failed("provider".into())
+	);
+}
+
+#[tokio::test]
+async fn returning_to_a_page_keeps_its_query_and_fragment() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let app = app(&db);
+	let mut browser = Browser::default();
+	let started = browser
+		.post(
+			&app,
+			"/auth/oauth/start",
+			json!({ "provider": "company", "redirect_to": "/home?tab=1#drafts" }),
+		)
+		.await;
+	let url = json_body(started).await["url"].as_str().unwrap().to_owned();
+	let back = app
+		.idp
+		.authorize(&url, person("u-7", "dee@example.com", true));
+	let location = browser.callback(&app, "company", &back).await;
+
+	assert_eq!(location, "/home?tab=1&auth=signed_in#drafts");
+	assert!(browser.signed_in());
+}
+
+#[tokio::test]
+async fn starting_a_provider_needs_an_origin_and_a_free_ceremony_slot() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+
+	// Without an origin, the provider has nowhere to come back to.
+	let originless = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.provider(Provider::github("client", SECRET))
+		.build()
+		.unwrap();
+	let refused = originless
+		.start_provider("github", None, None, &RequestInfo::default())
+		.await
+		.unwrap_err();
+	assert!(
+		matches!(&refused, AuthError::Config(message) if message.contains("[auth] origin")),
+		"{refused}"
+	);
+
+	// Each start stores a challenge, and one IP may only start so many.
+	let limited = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.origin(ORIGIN)
+		.provider(Provider::github("client", SECRET))
+		.limits(Limits {
+			ceremony_per_ip: Limit::new(1, std::time::Duration::from_secs(60)),
+			..Limits::default()
+		})
+		.build()
+		.unwrap();
+	let request = RequestInfo {
+		ip: Some("203.0.113.9".parse().unwrap()),
+		..RequestInfo::default()
+	};
+	limited
+		.start_provider("github", None, None, &request)
+		.await
+		.unwrap();
+	assert!(matches!(
+		limited.start_provider("github", None, None, &request).await,
+		Err(AuthError::RateLimited { .. })
+	));
+}
+
+#[tokio::test]
+async fn a_provider_answer_missing_its_code_or_refused_returns_an_error() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let app = app(&db);
+	let mut browser = Browser::default();
+
+	// No code, only the state the flow began with.
+	let started = browser
+		.post(&app, "/auth/oauth/start", json!({ "provider": "company" }))
+		.await;
+	let url = json_body(started).await["url"].as_str().unwrap().to_owned();
+	let state = url::Url::parse(&url)
+		.unwrap()
+		.query_pairs()
+		.find(|(name, _)| name == "state")
+		.unwrap()
+		.1
+		.into_owned();
+	let location = browser
+		.callback(&app, "company", &[("state".to_owned(), state)])
+		.await;
+	assert_eq!(
+		outcome(&location),
+		ProviderOutcome::Failed("provider".into())
+	);
+
+	// A provider that fails with something else isn't a cancellation.
+	let started = browser
+		.post(&app, "/auth/oauth/start", json!({ "provider": "company" }))
+		.await;
+	let url = json_body(started).await["url"].as_str().unwrap().to_owned();
+	let state = url::Url::parse(&url)
+		.unwrap()
+		.query_pairs()
+		.find(|(name, _)| name == "state")
+		.unwrap()
+		.1
+		.into_owned();
+	let location = browser
+		.callback(
+			&app,
+			"company",
+			&[
+				("state".to_owned(), state),
+				("error".to_owned(), "server_error".to_owned()),
+			],
+		)
+		.await;
+	assert_eq!(
+		outcome(&location),
+		ProviderOutcome::Failed("provider".into())
+	);
+}
+
+#[tokio::test]
+async fn connecting_to_an_account_signed_out_mid_flow_is_refused() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let app = app(&db);
+	let mut browser = Browser::default();
+	email_sign_in(&app, &mut browser, "ada@example.com").await;
+	let session = browser.jar["__Host-session"].clone();
+
+	let started = browser
+		.post(&app, "/auth/oauth/link", json!({ "provider": "company" }))
+		.await;
+	let url = json_body(started).await["url"].as_str().unwrap().to_owned();
+	let back = app
+		.idp
+		.authorize(&url, person("u-8", "ada@example.com", true));
+	app.auth
+		.sign_out(&SessionToken::new(&session), &RequestInfo::default())
+		.await
+		.unwrap();
+	let location = browser.callback(&app, "company", &back).await;
+
+	assert_eq!(
+		outcome(&location),
+		ProviderOutcome::Failed("signed_out".into())
+	);
 }
 
 #[tokio::test]
@@ -537,6 +727,23 @@ async fn google_github_microsoft_and_apple_each_work_their_own_way() {
 		.unwrap();
 	assert_eq!(emails, 0);
 
+	// An account with no address still starts an authenticator: the app's
+	// name labels it.
+	let session = SessionToken::new(&microsoft.jar["__Host-session"]);
+	let me = app.auth.resolve(&session).await.unwrap().unwrap();
+	let setup = app.auth.begin_totp(&me).await.unwrap();
+	assert!(setup.uri.starts_with("otpauth://totp/"));
+
+	// Passkeys label themselves with the app's name when there's no address.
+	#[cfg(feature = "passkey")]
+	{
+		let registration = app.auth.begin_passkey_registration(&me).await.unwrap();
+		assert_eq!(
+			serde_json::to_value(&registration).unwrap()["publicKey"]["rp"]["id"],
+			"notes.example"
+		);
+	}
+
 	// Apple posts its answer from its own site. That post only gets a page
 	// that posts it again, from this site, where the binding cookie goes.
 	let mut apple = Browser::default();
@@ -709,7 +916,7 @@ async fn connecting_disconnecting_and_merging_accounts() {
 		// Not while the other account is disabled: merging it away would
 		// shed the ban.
 		app.auth
-			.disable(absorbed, &leptoskit_auth::RequestInfo::default())
+			.disable(absorbed, &RequestInfo::default())
 			.await
 			.unwrap();
 		let refused = browser

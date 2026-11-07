@@ -799,6 +799,22 @@ async fn development_has_a_mailbox_and_signs_in_without_codes() {
 			.status(),
 		StatusCode::NOT_FOUND
 	);
+
+	// Calling it directly says development sign-in is off, rather than
+	// signing anyone in.
+	let db = leptoskit_db::testing::sqlite().await;
+	let plain = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.build()
+		.unwrap();
+	let refused = plain
+		.dev_sign_in("ada@example.com", &RequestInfo::default())
+		.await
+		.unwrap_err();
+	assert!(
+		matches!(&refused, leptoskit_auth::AuthError::Config(message) if message.contains("dev sign-in is off")),
+		"{refused}"
+	);
 }
 
 #[tokio::test]
@@ -1436,6 +1452,147 @@ async fn passkeys_answer_the_second_step_step_up_and_management_over_http() {
 		)
 		.await;
 	assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn plain_http_names_its_cookies_without_the_host_prefix() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let mailbox = Mailbox::new();
+	let auth = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(mailbox.clone())
+		.origin("http://localhost:3000")
+		.build()
+		.unwrap();
+	let router = auth.router::<()>().layer(auth.layer());
+	let call = |path: &str, body: Option<Value>, cookie: Option<String>| {
+		let mut builder = Request::builder()
+			.method("POST")
+			.uri(path)
+			.header(header::ORIGIN, "http://localhost:3000")
+			.header(header::CONTENT_TYPE, "application/json");
+
+		if let Some(cookie) = &cookie {
+			builder = builder.header(header::COOKIE, cookie.clone());
+		}
+
+		let request = builder
+			.body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
+			.unwrap();
+		let router = router.clone();
+		async move { router.oneshot(request).await.unwrap() }
+	};
+
+	let sent = call(
+		"/auth/email/send",
+		Some(json!({ "email": "ada@example.com" })),
+		None,
+	)
+	.await;
+	assert_eq!(sent.status(), StatusCode::NO_CONTENT);
+	let mail = mailbox.latest_to("ada@example.com").unwrap();
+	let code = mail.subject.rsplit(' ').next().unwrap().to_owned();
+	let verified = call(
+		"/auth/email/verify",
+		Some(json!({ "email": "ada@example.com", "code": code })),
+		None,
+	)
+	.await;
+	let cookies = set_cookies(&verified);
+	assert!(cookies[0].starts_with("session="), "{cookies:?}");
+	let cookie = cookies[0].split(';').next().unwrap().to_owned();
+
+	// Turning on an authenticator, then signing in again, names the second
+	// step's cookie without the host prefix too.
+	let setup: TotpSetup = body(call("/auth/totp", None, Some(cookie.clone())).await).await;
+	let confirmed = call(
+		"/auth/totp/confirm",
+		Some(json!({ "code": totp(&setup.secret, 0) })),
+		Some(cookie),
+	)
+	.await;
+	assert_eq!(confirmed.status(), StatusCode::OK);
+	let sent = call(
+		"/auth/email/send",
+		Some(json!({ "email": "ada@example.com" })),
+		None,
+	)
+	.await;
+	assert_eq!(sent.status(), StatusCode::NO_CONTENT);
+	let mail = mailbox.latest_to("ada@example.com").unwrap();
+	let code = mail.subject.rsplit(' ').next().unwrap().to_owned();
+	let verified = call(
+		"/auth/email/verify",
+		Some(json!({ "email": "ada@example.com", "code": code })),
+		None,
+	)
+	.await;
+	let pending = set_cookies(&verified);
+	assert!(pending[0].starts_with("second-factor="), "{pending:?}");
+
+	#[cfg(feature = "passkey")]
+	{
+		let started = call("/auth/passkey/sign-in/options", Some(json!({})), None).await;
+		assert_eq!(started.status(), StatusCode::OK);
+		let cookies = set_cookies(&started);
+		assert!(cookies[0].starts_with("passkey="), "{cookies:?}");
+	}
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn plain_http_names_the_provider_cookie_without_the_prefix() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let auth = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.origin("http://localhost:3000")
+		.provider(leptoskit_auth::Provider::github("client", "secret"))
+		.build()
+		.unwrap();
+	let router = auth.router::<()>().layer(auth.layer());
+	let response = router
+		.oneshot(
+			Request::post("/auth/oauth/start")
+				.header(header::ORIGIN, "http://localhost:3000")
+				.header(header::CONTENT_TYPE, "application/json")
+				.body(Body::from(json!({ "provider": "github" }).to_string()))
+				.unwrap(),
+		)
+		.await
+		.unwrap();
+
+	assert_eq!(response.status(), StatusCode::OK);
+	let cookies = set_cookies(&response);
+	assert!(cookies[0].starts_with("provider="), "{cookies:?}");
+}
+
+#[cfg(feature = "solana")]
+#[tokio::test]
+async fn plain_http_names_the_wallet_cookie_without_the_prefix() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let auth = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.origin("http://localhost:3000")
+		.solana(leptoskit_auth::SolanaOptions {
+			sign_in: true,
+			..leptoskit_auth::SolanaOptions::default()
+		})
+		.build()
+		.unwrap();
+	let router = auth.router::<()>().layer(auth.layer());
+	let response = router
+		.oneshot(
+			Request::post("/auth/wallets/sign-in/options")
+				.header(header::ORIGIN, "http://localhost:3000")
+				.header(header::CONTENT_TYPE, "application/json")
+				.body(Body::from("{}"))
+				.unwrap(),
+		)
+		.await
+		.unwrap();
+
+	assert_eq!(response.status(), StatusCode::OK);
+	let cookies = set_cookies(&response);
+	assert!(cookies[0].starts_with("wallet="), "{cookies:?}");
 }
 
 #[tokio::test]

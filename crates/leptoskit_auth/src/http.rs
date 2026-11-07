@@ -2224,4 +2224,174 @@ mod tests {
 			assert!(!body.message.contains("badges"), "{}", body.message);
 		}
 	}
+
+	#[test]
+	fn every_error_has_a_stable_code_and_an_http_status() {
+		use std::time::Duration;
+
+		use crate::PasswordProblem;
+
+		let errors = [
+			(
+				AuthError::InvalidEmail,
+				StatusCode::BAD_REQUEST,
+				"invalid_email",
+			),
+			(
+				AuthError::InvalidCode,
+				StatusCode::BAD_REQUEST,
+				"invalid_code",
+			),
+			(
+				AuthError::RateLimited {
+					retry_after: Duration::from_secs(5),
+				},
+				StatusCode::TOO_MANY_REQUESTS,
+				"rate_limited",
+			),
+			(AuthError::Disabled, StatusCode::FORBIDDEN, "disabled"),
+			(
+				AuthError::Locked {
+					until: leptoskit_db::now(),
+				},
+				StatusCode::FORBIDDEN,
+				"locked",
+			),
+			(AuthError::SignedOut, StatusCode::UNAUTHORIZED, "signed_out"),
+			(
+				AuthError::SignInExpired,
+				StatusCode::BAD_REQUEST,
+				"sign_in_expired",
+			),
+			(
+				AuthError::StepUpRequired,
+				StatusCode::FORBIDDEN,
+				"step_up_required",
+			),
+			(
+				AuthError::Reauthenticate,
+				StatusCode::FORBIDDEN,
+				"reauthenticate",
+			),
+			(
+				AuthError::AlreadyEnrolled,
+				StatusCode::CONFLICT,
+				"already_enrolled",
+			),
+			(AuthError::NotEnrolled, StatusCode::CONFLICT, "not_enrolled"),
+			(
+				AuthError::MfaRequired,
+				StatusCode::FORBIDDEN,
+				"mfa_required",
+			),
+			(
+				AuthError::PasskeyFailed,
+				StatusCode::BAD_REQUEST,
+				"passkey_failed",
+			),
+			(
+				AuthError::LastSignInMethod,
+				StatusCode::CONFLICT,
+				"last_sign_in_method",
+			),
+			(AuthError::NotFound, StatusCode::NOT_FOUND, "not_found"),
+			(
+				AuthError::InvalidName,
+				StatusCode::BAD_REQUEST,
+				"invalid_name",
+			),
+			(
+				AuthError::UnknownProvider,
+				StatusCode::NOT_FOUND,
+				"unknown_provider",
+			),
+			(
+				AuthError::Provider("bad signature".into()),
+				StatusCode::BAD_GATEWAY,
+				"provider",
+			),
+			(
+				AuthError::InvalidRedirect,
+				StatusCode::BAD_REQUEST,
+				"invalid_redirect",
+			),
+			(AuthError::Cancelled, StatusCode::BAD_REQUEST, "cancelled"),
+			(
+				AuthError::InvalidPassword,
+				StatusCode::BAD_REQUEST,
+				"invalid_password",
+			),
+			(
+				AuthError::WeakPassword(PasswordProblem::Common),
+				StatusCode::BAD_REQUEST,
+				"weak_password",
+			),
+			(
+				AuthError::Unsupported("not here"),
+				StatusCode::NOT_IMPLEMENTED,
+				"unsupported",
+			),
+			(
+				AuthError::Mail(crate::MailError("the provider is down".into())),
+				StatusCode::BAD_GATEWAY,
+				"mail",
+			),
+			(
+				AuthError::sign_up("closed"),
+				StatusCode::UNPROCESSABLE_ENTITY,
+				"sign_up",
+			),
+			(
+				AuthError::Config("no keys".into()),
+				StatusCode::INTERNAL_SERVER_ERROR,
+				"server",
+			),
+		];
+
+		for (error, status, code) in errors {
+			let (got, body) = error.describe();
+			assert_eq!((got, body.error.as_str()), (status, code), "{body:?}");
+		}
+
+		// A server's own failure never says why; the client hears only that
+		// something went wrong.
+		let (_, body) = AuthError::Config("AUTH_KEYS is not set".into()).describe();
+		assert_eq!(body.message, "something went wrong; try again");
+		let (_, body) = AuthError::Mail(crate::MailError("relay refused".into())).describe();
+		assert_eq!(body.message, "the email couldn't be sent; try again");
+		let (_, body) = AuthError::sign_up("closed").describe();
+		assert_eq!(body.message, "the account couldn't be created");
+		let (_, body) = AuthError::Provider("a forged ID token".into()).describe();
+		assert_eq!(
+			body.message,
+			"signing in with that account didn't work; try again"
+		);
+		let (_, body) =
+			AuthError::MergeConflict("posts.author_id: duplicate key".into()).describe();
+		assert!(body.message.contains("couldn't move here"), "{body:?}");
+		assert!(!body.message.contains("posts"), "{body:?}");
+
+		// A rate limit says how long, in the body and the header.
+		let limited = AuthError::RateLimited {
+			retry_after: Duration::from_secs(5),
+		};
+		assert_eq!(limited.describe().1.retry_after, Some(5));
+		assert!(limited.to_string().contains("try again in 5 seconds"));
+	}
+
+	#[tokio::test]
+	async fn only_unsafe_methods_from_another_site_are_checked() {
+		// Read methods always may.
+		let db = leptoskit_db::testing::sqlite().await;
+		let auth = Auth::builder(&db, crate::Keys::single("test", [3; 32]))
+			.mailer(crate::Mailbox::new())
+			.origin("https://notes.example")
+			.build()
+			.unwrap();
+		let headers = HeaderMap::new();
+
+		for method in [Method::GET, Method::HEAD, Method::OPTIONS] {
+			assert!(auth.same_site(&method, &headers), "{method}");
+		}
+	}
 }

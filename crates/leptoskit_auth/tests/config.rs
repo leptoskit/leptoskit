@@ -70,6 +70,10 @@ async fn receiver(status: StatusCode) -> (String, Received) {
 }
 
 #[tokio::test]
+#[allow(
+	clippy::too_many_lines,
+	reason = "the one test in this process walks every way [auth] is configured"
+)]
 async fn auth_is_configured_from_leptoskit_toml() {
 	let db = leptoskit_db::testing::sqlite().await;
 	let request = RequestInfo::default();
@@ -90,6 +94,21 @@ async fn auth_is_configured_from_leptoskit_toml() {
 			.to_string()
 			.contains("set LEPTOSKIT_AUTH_CONFIG_TEST_MISSING")
 	);
+
+	// A variable that is set, but isn't a key, names the variable and says
+	// it's invalid.
+	unsafe {
+		std::env::set_var("LEPTOSKIT_AUTH_CONFIG_TEST_BAD_KEYS", "not a key");
+	}
+	let invalid = Auth::from_config(
+		&db,
+		&config(Some(AuthConfig {
+			keys_env: "LEPTOSKIT_AUTH_CONFIG_TEST_BAD_KEYS".into(),
+			..AuthConfig::default()
+		})),
+	)
+	.unwrap_err();
+	assert!(invalid.to_string().contains("is invalid"), "{invalid}");
 
 	// SAFETY: this test is alone in its process, and nothing else reads the
 	// environment while it runs.
@@ -191,7 +210,7 @@ async fn auth_is_configured_from_leptoskit_toml() {
 		},
 		..auth_config.clone()
 	};
-	let auth = Auth::from_config(&db, &config(Some(refusing)))
+	let auth = Auth::from_config(&db, &config(Some(refusing.clone())))
 		.unwrap()
 		.build()
 		.unwrap();
@@ -201,6 +220,26 @@ async fn auth_is_configured_from_leptoskit_toml() {
 		.unwrap_err();
 	assert!(
 		matches!(&failed, AuthError::Mail(error) if error.to_string() == "the webhook answered 503 Service Unavailable"),
+		"{failed}"
+	);
+
+	// One that can't be reached at all is too.
+	unsafe {
+		std::env::set_var(
+			"LEPTOSKIT_AUTH_CONFIG_TEST_WEBHOOK",
+			"http://127.0.0.1:9/mail",
+		);
+	}
+	let auth = Auth::from_config(&db, &config(Some(refusing)))
+		.unwrap()
+		.build()
+		.unwrap();
+	let failed = auth
+		.send_email_code("eve@example.com", &request)
+		.await
+		.unwrap_err();
+	assert!(
+		matches!(&failed, AuthError::Mail(error) if error.to_string().contains("the webhook failed")),
 		"{failed}"
 	);
 

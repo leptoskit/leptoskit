@@ -71,3 +71,47 @@ pub(crate) async fn lease(auth: &Auth, identity: &Identity) -> Result<IdentityLe
 			}),
 	})
 }
+
+#[cfg(test)]
+mod tests {
+	use leptoskit_db::Id;
+	use leptoskit_rpc::server::Identity;
+
+	use super::*;
+
+	#[tokio::test]
+	async fn a_lease_needs_a_session_that_still_matches() {
+		let db = leptoskit_db::testing::sqlite().await;
+		let auth = Auth::builder(&db, crate::Keys::single("test", [7; 32]))
+			.mailer(crate::Mailbox::new())
+			.build()
+			.unwrap();
+
+		// A credential without a person names no session.
+		let mut context = crate::context(None);
+		context = context.with(Credential(vec![0; 32]));
+		let orphan = Identity::new(context);
+		let refused = lease(&auth, &orphan).await.unwrap_err();
+		assert!(
+			format!("{refused:?}").contains("session has ended"),
+			"{refused:?}"
+		);
+
+		// A credential and a person, but no session row.
+		let me = SignedIn {
+			account: Id::new(),
+			session: Id::new(),
+			aal: crate::Aal::One,
+			authenticated_at: leptoskit_db::now(),
+			mfa_at: None,
+		};
+		let mut context = crate::context(Some(me));
+		context = context.with(Credential(vec![0; 32]));
+		let gone = Identity::new(context);
+		let refused = lease(&auth, &gone).await.unwrap_err();
+		assert!(
+			format!("{refused:?}").contains("session has ended"),
+			"{refused:?}"
+		);
+	}
+}

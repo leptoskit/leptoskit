@@ -117,6 +117,31 @@ impl App {
 		assert_eq!(status, StatusCode::OK);
 		cookie
 	}
+
+	/// Signs in as a native app would, returning its tokens.
+	async fn sign_in_bearer(&self, email: &str) -> leptoskit_auth::Tokens {
+		let (status, _) = self
+			.post("/auth/email/send", json!({ "email": email }), &[])
+			.await;
+		assert_eq!(status, StatusCode::NO_CONTENT);
+		let code = self.mailbox.latest_to(email).unwrap();
+		let code = code.subject.rsplit(' ').next().unwrap().to_owned();
+		let (status, body) = self
+			.post(
+				"/auth/email/verify",
+				json!({
+					"email": email,
+					"code": code,
+					"transport": "bearer",
+					"device_name": "RPC",
+				}),
+				&[],
+			)
+			.await;
+		assert_eq!(status, StatusCode::OK);
+		let signed_in: leptoskit_auth::SignedInResponse = serde_json::from_str(&body).unwrap();
+		signed_in.tokens.expect("a native app's tokens")
+	}
 }
 
 #[tokio::test]
@@ -174,4 +199,45 @@ async fn operations_run_as_the_signed_in_person() {
 	let (parts, ()) = Request::post("/api/whoami").body(()).unwrap().into_parts();
 	let nobody = app.auth.identify(&parts).await.unwrap();
 	assert!(nobody.caller.is_none());
+
+	// A bearer token names its caller, and a token that names no live
+	// session is refused.
+	let tokens = app.sign_in_bearer("ada@notes.example").await;
+	let identity = app.auth.identify_token(&tokens.access_token).await.unwrap();
+	assert!(identity.caller.is_some());
+	assert!(
+		app.auth.identify_token("made-up").await.is_err(),
+		"an unknown token"
+	);
+	assert!(
+		app.auth
+			.identify_token("not a header\nvalue")
+			.await
+			.is_err(),
+		"a token that isn't a header"
+	);
+	app.auth
+		.sign_out(
+			&leptoskit_auth::SessionToken::new(&tokens.access_token),
+			&leptoskit_auth::RequestInfo::default(),
+		)
+		.await
+		.unwrap();
+	assert!(
+		app.auth.identify_token(&tokens.access_token).await.is_err(),
+		"a token whose session ended"
+	);
+
+	// A delegated identity has no first-party session to lease; neither has
+	// one that names no account.
+	let delegated = leptoskit_rpc::Identity::new(leptoskit_auth::context(None));
+	assert!(app.auth.lease(&delegated).await.is_ok());
+	let orphan = leptoskit_rpc::Identity::new(leptoskit_auth::context(Some(SignedIn {
+		account: leptoskit_db::Id::new(),
+		session: leptoskit_db::Id::new(),
+		aal: leptoskit_auth::Aal::One,
+		authenticated_at: leptoskit_db::now(),
+		mfa_at: None,
+	})));
+	assert!(app.auth.lease(&orphan).await.is_ok());
 }

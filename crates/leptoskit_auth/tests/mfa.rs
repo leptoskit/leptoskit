@@ -15,11 +15,13 @@ use leptoskit_auth::Aal;
 use leptoskit_auth::Account;
 use leptoskit_auth::Auth;
 use leptoskit_auth::AuthError;
+use leptoskit_auth::CodeRules;
 use leptoskit_auth::Event;
 use leptoskit_auth::EventKind;
 use leptoskit_auth::Factor;
 use leptoskit_auth::Keys;
 use leptoskit_auth::Mailbox;
+use leptoskit_auth::MfaPolicy;
 use leptoskit_auth::RecoveryCode;
 use leptoskit_auth::RequestInfo;
 use leptoskit_auth::STEP_UP_WINDOW;
@@ -740,4 +742,131 @@ async fn rotating_keys_re_encrypts_secrets_under_the_newest() {
 			.await
 			.unwrap();
 	}
+}
+
+#[tokio::test]
+async fn starting_the_authenticator_again_replaces_it_and_junk_is_refused() {
+	let db = databases(None).await.remove(0);
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let sign_in = sign_in(&auth, &mailbox, "ada@example.com").await;
+	let me = sign_in.signed_in();
+
+	// Starting setup again replaces the unconfirmed secret.
+	let first = auth.begin_totp(&me).await.unwrap();
+	let second = auth.begin_totp(&me).await.unwrap();
+	assert_ne!(first.secret, second.secret);
+	assert!(matches!(
+		auth.confirm_totp(&me, "not a code", &request()).await,
+		Err(AuthError::InvalidCode)
+	));
+
+	// A step accepts only a code that looks like one.
+	let setup = auth.begin_totp(&me).await.unwrap();
+	auth.confirm_totp(&me, &totp(&setup.secret, 0), &request())
+		.await
+		.unwrap();
+	let pending = SignInStep::SecondFactor(leptoskit_auth::SecondFactorChallenge {
+		token: leptoskit_auth::SessionToken::new("a token"),
+		factors: vec![Factor::Totp],
+		expires_at: leptoskit_db::now(),
+	});
+	assert!(pending.signed_in().is_none(), "not signed in yet");
+	let SignInStep::SecondFactor(challenge) =
+		email(&auth, &mailbox, "ada@example.com", &request()).await
+	else {
+		panic!("the account has a second factor");
+	};
+	assert!(matches!(
+		auth.complete_sign_in(&challenge.token, "nonsense", &request())
+			.await,
+		Err(AuthError::InvalidCode)
+	));
+}
+
+#[tokio::test]
+async fn a_second_step_with_no_attempts_allowed_expires() {
+	let db = databases(None).await.remove(0);
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let (secret, ..) = enrolled(&auth, &mailbox, "ada@example.com").await;
+	let SignInStep::SecondFactor(challenge) =
+		email(&auth, &mailbox, "ada@example.com", &request()).await
+	else {
+		panic!("the account has a second factor");
+	};
+	// A step that allows no attempts expires without checking the code.
+	let strict = Auth::builder(&db, Keys::single("test", [7; 32]))
+		.mailer(mailbox.clone())
+		.codes(CodeRules {
+			attempts: 0,
+			..CodeRules::default()
+		})
+		.build()
+		.unwrap();
+	assert!(matches!(
+		strict
+			.complete_sign_in(&challenge.token, &totp(&secret, 1), &request())
+			.await,
+		Err(AuthError::SignInExpired)
+	));
+}
+
+#[tokio::test]
+async fn a_required_factor_cannot_be_turned_off() {
+	let db = databases(None).await.remove(0);
+	let mailbox = Mailbox::new();
+	let auth = Auth::builder(&db, Keys::single("test", [7; 32]))
+		.mailer(mailbox.clone())
+		.mfa(MfaPolicy::required())
+		.build()
+		.unwrap();
+	let (secret, confirmed, _) = enrolled(&auth, &mailbox, "ada@example.com").await;
+	let stepped = auth
+		.step_up(&confirmed.signed_in(), &totp(&secret, 1), &request())
+		.await
+		.unwrap();
+
+	// Turning it off would leave the account without the factor it must
+	// have, so it stays.
+	assert!(matches!(
+		auth.disable_totp(&stepped.signed_in(), &request()).await,
+		Err(AuthError::LastSignInMethod)
+	));
+	assert!(
+		auth.mfa_status(confirmed.session.account_id)
+			.await
+			.unwrap()
+			.totp
+	);
+}
+
+#[tokio::test]
+async fn a_second_step_filed_under_something_else_expires() {
+	let db = databases(None).await.remove(0);
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let (secret, ..) = enrolled(&auth, &mailbox, "ada@example.com").await;
+	let SignInStep::SecondFactor(challenge) =
+		email(&auth, &mailbox, "ada@example.com", &request()).await
+	else {
+		panic!("the account has a second factor");
+	};
+	let table = match db.system("test").dialect() {
+		Dialect::Postgres => "auth.challenges",
+		Dialect::Sqlite => "auth_challenges",
+	};
+	db.system("test")
+		.execute(Statement {
+			sql: format!("UPDATE {table} SET subject = 'not-an-account' WHERE used_at IS NULL"),
+			args: Vec::new(),
+		})
+		.await
+		.unwrap();
+
+	assert!(matches!(
+		auth.complete_sign_in(&challenge.token, &totp(&secret, 0), &request())
+			.await,
+		Err(AuthError::SignInExpired)
+	));
 }

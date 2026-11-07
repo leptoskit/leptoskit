@@ -2343,6 +2343,8 @@ mod tests {
 		assert!(Provider::oidc("Bad ID", "x", "https://sso.example", "c", None).is_err());
 		assert!(Provider::oidc("sso", "x", "http://sso.example", "c", None).is_err());
 		assert!(Provider::oidc("sso", "x", "http://localhost:8080", "c", None).is_ok());
+		assert!(Provider::gitlab("c", None, "http://gitlab.example").is_err());
+		assert!(Provider::gitlab("c", None, "http://localhost:8080").is_ok());
 		assert!(
 			Provider::apple(
 				"s",
@@ -2461,5 +2463,795 @@ mod tests {
 		);
 		assert!(keys.find(None).is_some(), "the only signing key");
 		assert!(keys.find(Some("c")).is_none());
+
+		let two: Jwks = serde_json::from_value(serde_json::json!({
+			"keys": [
+				{ "kty": "RSA", "kid": "a", "use": "sig", "n": "AQ", "e": "AQAB" },
+				{ "kty": "RSA", "kid": "b", "use": "sig", "n": "AQ", "e": "AQAB" },
+			]
+		}))
+		.unwrap();
+		assert!(
+			two.find(None).is_none(),
+			"two signing keys need a `kid` to choose"
+		);
+	}
+
+	/// The generic issuer these tests discover.
+	const ISSUER: &str = "https://sso.example";
+
+	/// A transport answering from a script: each request takes the next
+	/// answer, and every request is kept.
+	struct Stub {
+		answers: Mutex<std::collections::VecDeque<(u16, String)>>,
+		requests: Mutex<Vec<ProviderRequest>>,
+	}
+
+	impl Stub {
+		fn new() -> Arc<Self> {
+			Arc::new(Self {
+				answers: Mutex::new(std::collections::VecDeque::new()),
+				requests: Mutex::new(Vec::new()),
+			})
+		}
+
+		fn answer(&self, status: u16, body: impl Into<String>) -> &Self {
+			self.answers
+				.lock()
+				.unwrap()
+				.push_back((status, body.into()));
+			self
+		}
+
+		fn requests(&self) -> Vec<ProviderRequest> {
+			self.requests.lock().unwrap().clone()
+		}
+	}
+
+	impl ProviderHttp for Stub {
+		fn send(&self, request: ProviderRequest) -> ProviderFuture<'_> {
+			self.requests.lock().unwrap().push(request);
+			let (status, body) = self
+				.answers
+				.lock()
+				.unwrap()
+				.pop_front()
+				.expect("an answer for every request");
+			Box::pin(std::future::ready(Ok(ProviderResponse {
+				status,
+				body: body.into_bytes(),
+			})))
+		}
+	}
+
+	fn discovery(issuer: &str, token: &str, jwks: Option<&str>) -> String {
+		let keys = jwks
+			.map(|jwks| format!(r#","jwks_uri":"{jwks}""#))
+			.unwrap_or_default();
+		format!(
+			r#"{{"issuer":"{issuer}","authorization_endpoint":"https://sso.example/authorize","token_endpoint":"{token}"{keys}}}"#
+		)
+	}
+
+	#[tokio::test]
+	async fn discovery_documents_are_fetched_once_and_checked() {
+		let stub = Stub::new();
+		stub.answer(503, "{}");
+		stub.answer(
+			200,
+			discovery(
+				"https://evil.example",
+				"https://sso.example/token",
+				Some("https://sso.example/jwks"),
+			),
+		);
+		stub.answer(
+			200,
+			discovery(
+				ISSUER,
+				"http://sso.example/token",
+				Some("https://sso.example/jwks"),
+			),
+		);
+		stub.answer(200, discovery(ISSUER, "https://sso.example/token", None));
+		stub.answer(
+			200,
+			discovery(
+				ISSUER,
+				"https://sso.example/token",
+				Some("https://sso.example/jwks"),
+			),
+		);
+		stub.answer(
+			200,
+			discovery(
+				ISSUER,
+				"https://sso.example/token",
+				Some("https://sso.example/jwks"),
+			),
+		);
+		let providers = Providers::new(
+			vec![
+				Provider::oidc(
+					"company",
+					"Company SSO",
+					ISSUER,
+					"client",
+					Some("secret".into()),
+				)
+				.unwrap(),
+			],
+			Some(stub.clone() as Arc<dyn ProviderHttp>),
+		);
+		let provider = providers.get("company").unwrap();
+
+		let refused = providers.endpoints(provider).await.unwrap_err();
+		assert!(refused.to_string().contains("answered 503"), "{refused}");
+		let refused = providers.endpoints(provider).await.unwrap_err();
+		assert!(
+			refused.to_string().contains("names another issuer"),
+			"{refused}"
+		);
+		let refused = providers.endpoints(provider).await.unwrap_err();
+		assert!(refused.to_string().contains("isn't https"), "{refused}");
+		let refused = providers.endpoints(provider).await.unwrap_err();
+		assert!(refused.to_string().contains("no keys"), "{refused}");
+
+		let found = providers.endpoints(provider).await.unwrap();
+		assert_eq!(found.issuer.as_deref(), Some(ISSUER));
+		assert_eq!(found.jwks_uri.as_deref(), Some("https://sso.example/jwks"));
+		// Trusted for a day: no fetch.
+		providers.endpoints(provider).await.unwrap();
+		assert_eq!(stub.requests().len(), 5);
+		// Stale: fetched again.
+		lock(&providers.discovered).get_mut(ISSUER).unwrap().0 = Instant::now()
+			.checked_sub(CACHE_LIFETIME + Duration::from_secs(1))
+			.unwrap();
+		providers.endpoints(provider).await.unwrap();
+		assert_eq!(stub.requests().len(), 6);
+
+		// A provider with fixed endpoints has nothing to discover; one
+		// without endpoints and without a discovery flavor says so.
+		let mut fixed = Provider::github("client", "secret");
+		fixed.endpoints = None;
+		let without = Providers::new(vec![fixed], None);
+		let refused = without
+			.endpoints(without.get("github").unwrap())
+			.await
+			.unwrap_err();
+		assert!(
+			refused.to_string().contains("has no endpoints"),
+			"{refused}"
+		);
+	}
+
+	#[tokio::test]
+	async fn key_sets_are_cached_and_refetched_only_when_stale() {
+		let uri = "https://sso.example/jwks";
+		let set = |kids: &[&str]| {
+			let keys: Vec<serde_json::Value> = kids
+				.iter()
+				.map(|kid| {
+					serde_json::json!({
+						"kty": "RSA", "kid": kid, "use": "sig", "n": "AQ", "e": "AQAB"
+					})
+				})
+				.collect();
+			serde_json::json!({ "keys": keys }).to_string()
+		};
+		let stub = Stub::new();
+		stub.answer(200, set(&["a"]));
+		stub.answer(200, set(&["c"]));
+		let providers = Providers::new(Vec::new(), Some(stub.clone() as Arc<dyn ProviderHttp>));
+
+		let key = providers.key(uri, Some("a")).await.unwrap();
+		assert_eq!(key.kid.as_deref(), Some("a"));
+		let missing = providers.key(uri, Some("b")).await.unwrap_err();
+		assert!(missing.to_string().contains("isn't published"), "{missing}");
+		assert_eq!(stub.requests().len(), 1, "a fresh set isn't fetched again");
+		assert!(
+			providers.key(uri, None).await.is_ok(),
+			"the only signing key is the one"
+		);
+
+		// Past the refetch window, an unknown `kid` fetches again.
+		lock(&providers.keys).get_mut(uri).unwrap().0 = Instant::now()
+			.checked_sub(REFETCH_AFTER + Duration::from_secs(1))
+			.unwrap();
+		assert!(providers.key(uri, Some("c")).await.is_ok());
+		assert_eq!(stub.requests().len(), 2);
+
+		// Two signing keys name no one without a `kid`.
+		let ambiguous: Jwks = serde_json::from_str(&set(&["d", "e"])).unwrap();
+		lock(&providers.keys).insert(uri.to_owned(), (Instant::now(), ambiguous));
+		assert!(providers.key(uri, None).await.is_err());
+	}
+
+	#[tokio::test]
+	async fn refresh_and_revocation_read_each_providers_answers() {
+		let stub = Stub::new();
+		stub.answer(200, r#"{"error":"invalid_grant"}"#);
+		stub.answer(200, r#"{"error":{"message":"no such grant"}}"#);
+		stub.answer(400, "{}");
+		stub.answer(200, r#"{"refresh_token":"r"}"#);
+		stub.answer(
+			200,
+			r#"{"access_token":"a","refresh_token":"r","expires_in":"60","scope":"openid"}"#,
+		);
+		stub.answer(200, "{}");
+		stub.answer(503, "{}");
+		let providers = Providers::new(
+			vec![
+				Provider::google("client", "secret"),
+				Provider::github("client", "secret"),
+			],
+			Some(stub.clone() as Arc<dyn ProviderHttp>),
+		);
+		let google = providers.get("google").unwrap();
+
+		assert!(
+			providers
+				.refresh(google, "r0", None)
+				.await
+				.unwrap()
+				.is_none(),
+			"an ended grant isn't retried"
+		);
+		let refused = providers
+			.refresh(
+				google,
+				"r1",
+				Some(("user-agent".into(), "web:Notes:x".into())),
+			)
+			.await
+			.unwrap_err();
+		assert!(refused.to_string().contains("no such grant"), "{refused}");
+		let refused = providers.refresh(google, "r2", None).await.unwrap_err();
+		assert!(refused.to_string().contains("answered 400"), "{refused}");
+		let refused = providers.refresh(google, "r3", None).await.unwrap_err();
+		assert!(
+			refused.to_string().contains("without an access token"),
+			"{refused}"
+		);
+		let grant = providers
+			.refresh(google, "r4", None)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(grant.access_token, "a");
+		assert_eq!(grant.refresh_token.as_deref(), Some("r"));
+		assert_eq!(grant.expires_in, Some(60));
+		assert_eq!(grant.scope.as_deref(), Some("openid"));
+
+		let requests = stub.requests();
+		assert!(
+			requests[1]
+				.headers
+				.iter()
+				.any(|(name, value)| { name == "user-agent" && value == "web:Notes:x" })
+		);
+		assert!(
+			requests[4]
+				.body
+				.as_deref()
+				.unwrap()
+				.contains("grant_type=refresh_token")
+		);
+
+		providers.revoke(google, "token", true).await.unwrap();
+		let refused = providers.revoke(google, "token", false).await.unwrap_err();
+		assert!(refused.to_string().contains("answered 503"), "{refused}");
+		// A provider with nowhere to revoke is fine.
+		providers
+			.revoke(providers.get("github").unwrap(), "token", true)
+			.await
+			.unwrap();
+		let bodies: Vec<String> = stub
+			.requests()
+			.into_iter()
+			.filter_map(|request| request.body)
+			.collect();
+		assert!(
+			bodies
+				.iter()
+				.any(|body| body.contains("token_type_hint=refresh_token"))
+		);
+		assert!(
+			bodies
+				.iter()
+				.any(|body| body.contains("token_type_hint=access_token"))
+		);
+	}
+
+	#[test]
+	fn token_requests_authenticate_as_each_provider_asks() {
+		let fields = || vec![("code", "abc".to_owned())];
+		let google = token_request(
+			&Provider::google("client", "secret"),
+			"https://oauth2.googleapis.com/token",
+			fields(),
+		)
+		.unwrap();
+		let body = google.body.as_deref().unwrap();
+		assert!(body.contains("client_id=client"), "{body}");
+		assert!(body.contains("client_secret=secret"), "{body}");
+		assert!(google.headers.iter().any(|(name, value)| {
+			name == "content-type" && value == "application/x-www-form-urlencoded"
+		}));
+
+		let basic = token_request(
+			&Provider::spotify("client", "s/ecret"),
+			"https://accounts.spotify.com/api/token",
+			fields(),
+		)
+		.unwrap();
+		let authorization = basic
+			.headers
+			.iter()
+			.find(|(name, _)| name == "authorization")
+			.unwrap();
+		assert!(authorization.1.starts_with("Basic "), "{authorization:?}");
+		assert!(!basic.body.as_deref().unwrap().contains("client_secret"));
+
+		let json = token_request(
+			&Provider::notion("client", "secret"),
+			"https://api.notion.com/v1/oauth/token",
+			fields(),
+		)
+		.unwrap();
+		assert!(
+			json.headers
+				.iter()
+				.any(|(name, value)| { name == "content-type" && value == "application/json" })
+		);
+		let parsed: serde_json::Value =
+			serde_json::from_str(json.body.as_deref().unwrap()).unwrap();
+		assert_eq!(parsed["code"], "abc");
+
+		// A public client names itself and nothing more.
+		let public = Provider::oidc("sso", "SSO", ISSUER, "client", None).unwrap();
+		let form = token_request(&public, "https://sso.example/token", fields()).unwrap();
+		let body = form.body.as_deref().unwrap();
+		assert!(body.contains("client_id=client"), "{body}");
+		assert!(!body.contains("client_secret"), "{body}");
+	}
+
+	#[test]
+	fn authorization_pages_carry_each_providers_quirks() {
+		let value = |provider: &Provider, name: &str, linking| {
+			authorization_params(
+				provider,
+				"https://notes.example/auth/callback/x",
+				"state",
+				"challenge",
+				"nonce",
+				linking,
+			)
+			.into_iter()
+			.find(|(key, _)| *key == name)
+			.map(|(_, value)| value)
+		};
+
+		let google = Provider::google("client", "secret");
+		assert!(value(&google, "access_type", false).is_none());
+		let storing = Provider::google("client", "secret").store_tokens(true);
+		assert_eq!(
+			value(&storing, "access_type", false).as_deref(),
+			Some("offline")
+		);
+		assert_eq!(
+			value(&storing, "prompt", true).as_deref(),
+			Some("select_account"),
+			"connecting picks the account"
+		);
+		assert!(value(&storing, "prompt", false).is_none());
+
+		let microsoft = Provider::microsoft("client", "secret", "common").store_tokens(true);
+		assert!(
+			value(&microsoft, "scope", false)
+				.unwrap()
+				.contains("offline_access")
+		);
+
+		let reddit = Provider::reddit("client", "secret");
+		assert_eq!(
+			value(&reddit, "duration", false).as_deref(),
+			Some("temporary")
+		);
+		let storing = Provider::reddit("client", "secret").store_tokens(true);
+		assert_eq!(
+			value(&storing, "duration", false).as_deref(),
+			Some("permanent"),
+			"the offline parameter replaces the quirk's own"
+		);
+
+		let notion = Provider::notion("client", "secret");
+		assert!(value(&notion, "code_challenge", false).is_none());
+		assert_eq!(value(&notion, "owner", false).as_deref(), Some("user"));
+
+		let apple = Provider::apple("com.notes.web", "TEAM1", "KEY1", &apple_pem()).unwrap();
+		assert_eq!(
+			value(&apple, "response_mode", false).as_deref(),
+			Some("form_post")
+		);
+
+		let tiktok = Provider::tiktok("key", "secret");
+		assert_eq!(value(&tiktok, "client_key", false).as_deref(), Some("key"));
+		assert!(value(&tiktok, "client_id", false).is_none());
+		assert_eq!(
+			value(&tiktok, "scope", false).as_deref(),
+			Some("user.info.basic")
+		);
+		assert!(value(&tiktok, "code_challenge", false).is_none());
+
+		let twitch = Provider::twitch("client", "secret");
+		assert!(value(&twitch, "claims", false).unwrap().contains("email"));
+	}
+
+	/// A P-256 private key, as an Apple `.p8` file holds one.
+	fn apple_pem() -> String {
+		let rng = ring::rand::SystemRandom::new();
+		let pkcs8 = ring::signature::EcdsaKeyPair::generate_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&rng,
+		)
+		.unwrap();
+		let body = STANDARD.encode(pkcs8.as_ref());
+		let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----"); // gitleaks:allow (a key made at test time)
+		pem
+	}
+
+	#[test]
+	fn apple_client_secrets_are_signed_jwts() {
+		use ring::signature::KeyPair;
+
+		let rng = ring::rand::SystemRandom::new();
+		let pkcs8 = ring::signature::EcdsaKeyPair::generate_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&rng,
+		)
+		.unwrap();
+		let key = ring::signature::EcdsaKeyPair::from_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			pkcs8.as_ref(),
+			&rng,
+		)
+		.unwrap();
+		let secret = apple_client_secret("TEAM1", "KEY1", "com.notes.web", &key).unwrap();
+		let parts: Vec<&str> = secret.split('.').collect();
+		assert_eq!(parts.len(), 3);
+
+		let header: serde_json::Value =
+			serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+		assert_eq!(header["alg"], "ES256");
+		assert_eq!(header["kid"], "KEY1");
+		let claims: serde_json::Value =
+			serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+		assert_eq!(claims["iss"], "TEAM1");
+		assert_eq!(claims["sub"], "com.notes.web");
+		assert_eq!(claims["aud"], "https://appleid.apple.com");
+
+		let signed = format!("{}.{}", parts[0], parts[1]);
+		ring::signature::UnparsedPublicKey::new(
+			&ring::signature::ECDSA_P256_SHA256_FIXED,
+			key.public_key().as_ref(),
+		)
+		.verify(
+			signed.as_bytes(),
+			&URL_SAFE_NO_PAD.decode(parts[2]).unwrap(),
+		)
+		.unwrap();
+	}
+
+	#[test]
+	fn basic_credentials_are_form_encoded_first() {
+		let encoded = basic_credentials("a b:c", "s/ecret");
+		let decoded = String::from_utf8(
+			STANDARD
+				.decode(encoded.strip_prefix("Basic ").unwrap())
+				.unwrap(),
+		)
+		.unwrap();
+		assert_eq!(decoded, "a+b%3Ac:s%2Fecret");
+	}
+
+	#[test]
+	fn every_unsigned_or_unknown_algorithm_is_refused() {
+		let jws = |alg: &str| {
+			let header = URL_SAFE_NO_PAD.encode(format!(r#"{{"alg":"{alg}"}}"#));
+			parse_jws(&format!("{header}.e30.AA")).unwrap()
+		};
+		let ec = Jwk {
+			kty: "EC".into(),
+			crv: Some("P-256".into()),
+			x: Some(URL_SAFE_NO_PAD.encode([1; 32])),
+			y: Some(URL_SAFE_NO_PAD.encode([2; 32])),
+			..rfc_key()
+		};
+
+		// The other RSA algorithms are wired up, and refuse a bad signature.
+		for alg in ["RS384", "RS512", "PS256", "PS384", "PS512"] {
+			assert!(verify_signature(&jws(alg), &rfc_key()).is_err(), "{alg}");
+			assert!(verify_signature(&jws(alg), &ec).is_err(), "{alg}");
+		}
+		// ES384 needs a P-384 key.
+		assert!(verify_signature(&jws("ES384"), &ec).is_err());
+		// EdDSA needs an Ed25519 key.
+		assert!(verify_signature(&jws("EdDSA"), &rfc_key()).is_err());
+		// A key that leaves out its parts verifies nothing.
+		let incomplete = Jwk {
+			n: None,
+			e: None,
+			..rfc_key()
+		};
+		assert!(verify_signature(&jws("RS256"), &incomplete).is_err());
+		let incomplete = Jwk {
+			x: None,
+			..ec.clone()
+		};
+		assert!(verify_signature(&jws("ES256"), &incomplete).is_err());
+	}
+
+	#[test]
+	fn a_jws_must_be_three_decodable_parts() {
+		let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#);
+
+		assert!(parse_jws(&format!("{header}.!.AA")).is_err());
+		assert!(parse_jws(&format!("{header}.e30.!")).is_err());
+		assert!(parse_jws("!.e30.AA").is_err());
+		assert!(parse_jws("..").is_err());
+	}
+
+	#[test]
+	fn grants_need_a_usable_access_token() {
+		assert!(grant(&serde_json::json!({})).is_none());
+		assert!(grant(&serde_json::json!({ "access_token": "" })).is_none());
+		assert_eq!(
+			grant(&serde_json::json!({ "access_token": "a", "expires_in": 60 }))
+				.unwrap()
+				.expires_in,
+			Some(60)
+		);
+		assert_eq!(
+			grant(&serde_json::json!({ "access_token": "a", "expires_in": "60" }))
+				.unwrap()
+				.expires_in,
+			Some(60),
+			"some providers send seconds as text"
+		);
+		assert!(
+			grant(&serde_json::json!({ "access_token": "a", "expires_in": "soon" }))
+				.unwrap()
+				.expires_in
+				.is_none()
+		);
+	}
+
+	#[test]
+	fn a_scoped_subjects_scope_is_required_and_bounded() {
+		let rules = IdTokenRules {
+			scope_claim: Some("team"),
+			..IdTokenRules::default()
+		};
+		let claims = |json: serde_json::Value| serde_json::from_value::<IdClaims>(json).unwrap();
+		let base = serde_json::json!({
+			"iss": "https://slack.com",
+			"sub": "U1",
+			"aud": "client",
+			"exp": 1,
+			"iat": 1,
+		});
+
+		let mut with = base.clone();
+		with["team"] = "T1".into();
+		assert_eq!(scoped_subject(&rules, &claims(with)).unwrap(), "T1:U1");
+		assert!(scoped_subject(&rules, &claims(base.clone())).is_err());
+		let mut empty = base.clone();
+		empty["team"] = "".into();
+		assert!(scoped_subject(&rules, &claims(empty)).is_err());
+		let mut colon = base.clone();
+		colon["team"] = "a:b".into();
+		assert!(scoped_subject(&rules, &claims(colon)).is_err());
+		let mut long = base.clone();
+		long["team"] = "T".repeat(253).into();
+		assert!(scoped_subject(&rules, &claims(long)).is_err());
+		assert_eq!(
+			scoped_subject(&IdTokenRules::default(), &claims(base)).unwrap(),
+			"U1"
+		);
+	}
+
+	#[test]
+	fn provider_errors_are_described_by_code_or_message() {
+		assert_eq!(
+			describe(&serde_json::json!("invalid_grant")),
+			"invalid_grant"
+		);
+		assert_eq!(
+			describe(&serde_json::json!({ "message": "Bad credentials" })),
+			"Bad credentials"
+		);
+		assert_eq!(describe(&serde_json::json!({ "code": "E1" })), "E1");
+		assert_eq!(describe(&serde_json::json!({ "other": 1 })), "an error");
+		assert_eq!(describe(&serde_json::json!("x".repeat(300))).len(), 200);
+	}
+
+	#[test]
+	fn only_https_or_localhost_issuers_are_secure() {
+		assert!(secure_url("https://sso.example"));
+		assert!(secure_url("http://localhost:3000"));
+		assert!(secure_url("http://127.0.0.1"));
+		assert!(secure_url("http://[::1]:8080"));
+		assert!(!secure_url("http://sso.example"));
+		assert!(!secure_url("not a url"));
+	}
+
+	#[test]
+	fn a_pem_without_a_key_is_no_key() {
+		assert!(pem_body("-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----").is_none());
+		assert!(pem_body("not base64!").is_none());
+		assert!(pem_body("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----").is_some());
+	}
+
+	#[test]
+	fn a_sealed_flow_opens_only_what_was_sealed() {
+		let flow = Flow {
+			provider: "google".into(),
+			verifier: "v".into(),
+			nonce: "n".into(),
+			redirect_to: "/home".into(),
+			intent: Intent::SignIn,
+			native: None,
+		};
+		assert_eq!(Flow::open(&flow.seal().unwrap()).unwrap(), flow);
+		assert!(matches!(
+			Flow::open(b"not json"),
+			Err(AuthError::SignInExpired)
+		));
+	}
+
+	#[tokio::test]
+	async fn unreadable_answers_and_unpublished_keys_are_refused() {
+		let stub = Stub::new();
+		stub.answer(200, "<html>not json</html>");
+		let providers = Providers::new(Vec::new(), Some(stub.clone() as Arc<dyn ProviderHttp>));
+		let error = providers
+			.json::<serde_json::Value>(get("https://sso.example/token"))
+			.await
+			.unwrap_err();
+		assert!(error.to_string().contains("unreadable JSON"), "{error}");
+		assert_eq!(stub.requests().len(), 1);
+
+		// A provider that publishes no keys can't check an ID token.
+		let mut github = Provider::github("client", "secret");
+		github.endpoints = Some(Endpoints::fixed(
+			"https://github.com/login/oauth/authorize",
+			"https://github.com/login/oauth/access_token",
+			None,
+			None,
+		));
+		github.quirks.identify = Identify::IdToken(IdTokenRules::default());
+		let providers = Providers::new(vec![github], None);
+		let provider = providers.get("github").unwrap();
+		let endpoints = provider.endpoints.clone().unwrap();
+		let refused = verify_id_token(
+			&providers,
+			provider,
+			&endpoints,
+			RFC7515_RS256,
+			Expected {
+				audience: "client",
+				nonce: "n",
+				nonce_optional: true,
+				now: 1_300_819_380,
+			},
+		)
+		.await
+		.unwrap_err();
+		assert!(
+			refused.to_string().contains("publishes no keys"),
+			"{refused}"
+		);
+	}
+
+	#[tokio::test]
+	async fn an_id_token_must_carry_the_claims_that_are_checked() {
+		let stub = Stub::new();
+		stub.answer(
+			200,
+			format!(r#"{{"keys":[{{"kty":"RSA","n":"{RFC7515_N}","e":"AQAB"}}]}}"#),
+		);
+		let mut google = Provider::google("client", "secret");
+		google.endpoints = Some(Endpoints::fixed(
+			"https://accounts.google.com/o/oauth2/v2/auth",
+			"https://oauth2.googleapis.com/token",
+			Some("https://sso.example/jwks"),
+			Some("https://accounts.google.com"),
+		));
+		let providers = Providers::new(vec![google], Some(stub.clone() as Arc<dyn ProviderHttp>));
+		let provider = providers.get("google").unwrap();
+		let endpoints = provider.endpoints.clone().unwrap();
+		let refused = verify_id_token(
+			&providers,
+			provider,
+			&endpoints,
+			RFC7515_RS256,
+			Expected {
+				audience: "client",
+				nonce: "n",
+				nonce_optional: true,
+				now: 1_300_819_380,
+			},
+		)
+		.await
+		.unwrap_err();
+		assert!(
+			refused.to_string().contains("claims are malformed"),
+			"{refused}"
+		);
+	}
+
+	#[test]
+	fn an_authorization_endpoint_must_be_a_url() {
+		let refused = authorization_url(
+			&Provider::google("client", "secret"),
+			"not a url",
+			"https://notes.example/auth/callback/google",
+			"state",
+			"challenge",
+			"nonce",
+			false,
+		)
+		.unwrap_err();
+		assert!(
+			refused.to_string().contains("bad authorization URL"),
+			"{refused}"
+		);
+	}
+
+	#[test]
+	fn eddsa_signatures_are_checked_against_the_key() {
+		use ring::signature::Ed25519KeyPair;
+		use ring::signature::KeyPair;
+
+		let rng = ring::rand::SystemRandom::new();
+		let key =
+			Ed25519KeyPair::from_pkcs8(Ed25519KeyPair::generate_pkcs8(&rng).unwrap().as_ref())
+				.unwrap();
+		let other =
+			Ed25519KeyPair::from_pkcs8(Ed25519KeyPair::generate_pkcs8(&rng).unwrap().as_ref())
+				.unwrap();
+		let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"EdDSA"}"#);
+		let payload = URL_SAFE_NO_PAD.encode("{}");
+		let signed = format!("{header}.{payload}");
+		let token = format!(
+			"{signed}.{}",
+			URL_SAFE_NO_PAD.encode(other.sign(signed.as_bytes()).as_ref())
+		);
+		let jwk = Jwk {
+			kty: "OKP".into(),
+			crv: Some("Ed25519".into()),
+			x: Some(URL_SAFE_NO_PAD.encode(key.public_key().as_ref())),
+			..rfc_key()
+		};
+		let jws = parse_jws(&token).unwrap();
+		assert!(
+			verify_signature(&jws, &jwk).is_err(),
+			"another key's signature"
+		);
+	}
+
+	#[test]
+	fn providers_are_listed_and_found_by_id() {
+		let providers = Providers::new(vec![Provider::google("client", "secret")], None);
+		assert_eq!(
+			providers.info(),
+			vec![ProviderInfo {
+				id: "google".into(),
+				name: "Google".into(),
+			}]
+		);
+		assert!(providers.get("google").is_some());
+		assert!(providers.get("myspace").is_none());
 	}
 }

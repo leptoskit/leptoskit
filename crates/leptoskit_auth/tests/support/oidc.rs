@@ -55,6 +55,11 @@ pub enum Tamper {
 	Issuer,
 	/// Signs with `alg: none`.
 	Unsigned,
+	/// Refuses the code at the token endpoint.
+	TokenError,
+	/// Hands out tokens without an access token, for a provider whose API
+	/// says who signed in.
+	NoAccessToken,
 }
 
 /// What the fake checks and answers for one provider.
@@ -530,6 +535,17 @@ impl FakeIdp {
 	/// The tokens a valid code earns, with the claims some providers put
 	/// right here rather than in an ID token.
 	fn tokens_for(&self, code: &str, grant: Grant) -> (u16, Value) {
+		let tamper = self.state.lock().unwrap().tamper;
+
+		if tamper == Tamper::TokenError {
+			// A token endpoint that answers 200 with an error, as some do.
+			return (200, json!({ "error": "invalid_client" }));
+		}
+
+		if tamper == Tamper::NoAccessToken && grant.spec.issuer.is_none() {
+			return (200, json!({ "token_type": "bearer" }));
+		}
+
 		if grant.spec.issuer.is_none() {
 			let access = URL_SAFE_NO_PAD.encode(digest(&SHA256, code.as_bytes()));
 			// Some providers, such as Notion, say who signed in right here.
