@@ -1,110 +1,150 @@
 import Foundation
 import LeptosKitBridge
-#if os(iOS)
-import UIKit
-#endif
 
+/// Device information without persistent identifiers (method 0) and, only on
+/// request, the identifiers themselves (method 1). The byte layout is
+/// documented in the Rust crate and mirrored by `DeviceWire`.
 @MainActor
 public final class DevicePlugin: NativePlugin {
     public let name = "device"
-    public let methods: [UInt32] = [0]
+    public let methods: [UInt32] = [0, 1]
 
-    public init() {}
+    private let facts: @MainActor () -> DeviceFacts
+    private let identifiers: @MainActor () -> DeviceIdentifiers
+
+    public convenience init() {
+        self.init(facts: DeviceFacts.current, identifiers: DeviceIdentifiers.current)
+    }
+
+    /// Tests supply fixed facts instead of reading the system.
+    init(
+        facts: @escaping @MainActor () -> DeviceFacts,
+        identifiers: @escaping @MainActor () -> DeviceIdentifiers
+    ) {
+        self.facts = facts
+        self.identifiers = identifiers
+    }
 
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
-        guard method == 0 else { throw PluginError.unavailable }
+        guard method == 0 || method == 1 else { throw PluginError.unavailable }
         guard payload.count == 0 else { throw PluginError.invalidArgument }
 
-        return try encode()
+        return method == 0 ? try DeviceWire.snapshot(facts()) : try DeviceWire.identifiers(identifiers())
     }
+}
 
-    /// Packs the device's kind, memory, and identifying strings.
-    private func encode() throws -> Data {
-        let process = ProcessInfo.processInfo
-        let platform = Self.platform
-        let memory = process.physicalMemory
-        var result = Data(capacity: 128)
+/// Everything method 0 reports. `nil` means unknown.
+struct DeviceFacts: Equatable {
+    /// Form factor code: unknown, phone, tablet, TV, desktop, watch, car, headset.
+    var kind: UInt32 = 0
+    var simulator: Bool?
+    var totalMemory: UInt64 = 0
+    var availableMemory: UInt64?
+    var totalDisk: UInt64 = 0
+    var freeDisk: UInt64?
+    var cpuCount: UInt32 = 0
+    var manufacturer: String?
+    var brand: String?
+    var model: String?
+    var modelIdentifier: String?
+    var osName: String?
+    var osVersion: String?
+    var architecture: String?
+    var kernelVersion: String?
+    var iosAppOnMac: Bool?
+    var macCatalyst: Bool?
+    var iosAppOnVision: Bool?
+    var cpuFrequency: UInt64 = 0
+    var localizedModel: String?
+    var osBuild: String?
+}
 
-        for field in [1, Self.kind, Self.simulator, UInt32(truncatingIfNeeded: memory), UInt32(memory >> 32)] {
-            Self.write(&result, field)
+/// Everything method 1 reports. `nil` where the platform withholds it.
+struct DeviceIdentifiers: Equatable {
+    var deviceName: String?
+    var vendorId: String?
+    var machineId: String?
+}
+
+/// The little-endian wire shared with Rust and Kotlin.
+enum DeviceWire {
+    static let snapshotVersion: UInt32 = 2
+    static let identifiersVersion: UInt32 = 1
+    static let maxText = 4096
+    static let maxIdentifier = 256
+    /// The Apple platform section's tag.
+    static let appleTag: UInt32 = 1
+
+    static func snapshot(_ facts: DeviceFacts) throws -> Data {
+        var output = WireWriter()
+        output.u32(snapshotVersion)
+        output.u32(facts.kind)
+        output.tri(facts.simulator)
+        output.u64(facts.totalMemory)
+        output.optional(facts.availableMemory)
+        output.u64(facts.totalDisk)
+        output.optional(facts.freeDisk)
+        output.u32(facts.cpuCount)
+
+        for text in [
+            facts.manufacturer, facts.brand, facts.model, facts.modelIdentifier,
+            facts.osName, facts.osVersion, facts.architecture, facts.kernelVersion
+        ] {
+            try output.text(text, max: maxText)
         }
 
-        for text in ["Apple", "Apple", platform.model, platform.system, platform.version, Self.architecture] {
-            try Self.write(&result, text)
+        output.u32(appleTag)
+        output.tri(facts.iosAppOnMac)
+        output.tri(facts.macCatalyst)
+        output.tri(facts.iosAppOnVision)
+        output.u64(facts.cpuFrequency)
+        try output.text(facts.localizedModel, max: maxText)
+        try output.text(facts.osBuild, max: maxText)
+
+        return output.data
+    }
+
+    static func identifiers(_ identifiers: DeviceIdentifiers) throws -> Data {
+        var output = WireWriter()
+        output.u32(identifiersVersion)
+
+        for text in [identifiers.deviceName, identifiers.vendorId, identifiers.machineId] {
+            try output.text(text, max: maxIdentifier)
         }
 
-        return result
+        return output.data
+    }
+}
+
+/// Appends little-endian fields.
+struct WireWriter {
+    private(set) var data = Data(capacity: 256)
+
+    mutating func u32(_ value: UInt32) {
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
     }
 
-    /// The model and OS this build reports.
-    private struct Platform {
-        let model: String
-        let system: String
-        let version: String
+    mutating func u64(_ value: UInt64) {
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
     }
 
-    /// UIKit's device on iOS, and the process on macOS.
-    private static var platform: Platform {
-        #if os(iOS)
-        let device = UIDevice.current
-
-        return Platform(model: device.model, system: device.systemName, version: device.systemVersion)
-        #else
-        let system = ProcessInfo.processInfo.operatingSystemVersion
-        let version = "\(system.majorVersion).\(system.minorVersion).\(system.patchVersion)"
-
-        return Platform(model: "", system: "macOS", version: version)
-        #endif
+    /// Unknown, no, yes as 0, 1, 2.
+    mutating func tri(_ value: Bool?) {
+        u32(value.map { $0 ? 2 : 1 } ?? 0)
     }
 
-    /// Appends a little-endian word.
-    private static func write(_ result: inout Data, _ value: UInt32) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { result.append(contentsOf: $0) }
+    /// A presence word, then the value or zero.
+    mutating func optional(_ value: UInt64?) {
+        u32(value == nil ? 0 : 1)
+        u64(value ?? 0)
     }
 
-    /// Appends a length-prefixed UTF-8 string.
-    private static func write(_ result: inout Data, _ text: String) throws {
-        let bytes = Data(text.utf8)
+    /// A length-prefixed UTF-8 string; `nil` and empty are both unknown.
+    mutating func text(_ value: String?, max: Int) throws {
+        let bytes = Data((value ?? "").utf8)
 
-        guard bytes.count <= 4096 else { throw PluginError.tooLarge }
-        write(&result, UInt32(bytes.count))
-        result.append(bytes)
-    }
-
-    private static var kind: UInt32 {
-        #if os(iOS)
-        switch UIDevice.current.userInterfaceIdiom {
-        case .phone: 1
-        case .pad: 2
-        case .tv: 3
-        case .mac: 4
-        case .carPlay: 6
-        case .vision: 7
-        default: 0
-        }
-        #else
-        4
-        #endif
-    }
-
-    private static var simulator: UInt32 {
-        #if targetEnvironment(simulator)
-        2
-        #elseif os(iOS)
-        1
-        #else
-        0
-        #endif
-    }
-
-    private static var architecture: String {
-        #if arch(arm64)
-        "aarch64"
-        #elseif arch(x86_64)
-        "x86_64"
-        #else
-        ""
-        #endif
+        guard bytes.count <= max else { throw PluginError.tooLarge }
+        u32(UInt32(bytes.count))
+        data.append(bytes)
     }
 }

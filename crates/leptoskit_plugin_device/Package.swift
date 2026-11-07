@@ -11,6 +11,11 @@ let package = Package(
             name: "LeptosKitDevice",
             dependencies: [.product(name: "LeptosKitBridge", package: "leptoskit_bridge_ffi")],
             path: "apple"
+        ),
+        .testTarget(
+            name: "LeptosKitDeviceTests",
+            dependencies: ["LeptosKitDevice", .product(name: "LeptosKitBridge", package: "leptoskit_bridge_ffi")],
+            path: "apple-tests"
         )
     ]
 )

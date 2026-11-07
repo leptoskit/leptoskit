@@ -5,141 +5,166 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Environment
+import android.os.StatFs
+import android.provider.Settings
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
-import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
-class DevicePlugin(
-    private val context: Context,
+/**
+ * Device information without persistent identifiers (method 0) and, only on
+ * request, the user-assigned device name (method 1). The byte layout is
+ * documented in the Rust crate and mirrored by [DeviceWire].
+ */
+class DevicePlugin internal constructor(
+    private val readFacts: () -> DeviceFacts,
+    private val readIdentifiers: () -> DeviceIdentifiers,
 ) : NativePlugin {
+    constructor(context: Context) : this(
+        { readFacts(context) },
+        { readIdentifiers(context) },
+    )
+
     override val name = "device"
-    override val methods = intArrayOf(STATUS)
+    override val methods = intArrayOf(SNAPSHOT, IDENTIFIERS)
 
     private companion object {
-        /** The only method: this device's identity. */
-        const val STATUS = 0
+        /** Device facts without identifiers. */
+        const val SNAPSHOT = 0
 
-        /** The wire format version every reply carries. */
-        const val VERSION_ONE = 1
-
-        // / Header words: version, kind, simulator, and a 64-bit memory size.
-        const val HEADER_BYTES = 20
-
-        /** Room for the header and this answer's six short strings. */
-        const val RESULT_CAPACITY = 128
-
-        /** Longest string the wire format carries. */
-        const val MAX_TEXT_BYTES = 4096
-
-        /** The emulator flag's value when the hardware is an emulator. */
-        const val SIMULATOR = 2
+        /** The device name; Android gives apps no other identifier here. */
+        const val IDENTIFIERS = 1
     }
 
     override suspend fun invoke(
         method: Int,
         payload: ByteBuffer,
     ): ByteArray {
-        if (method != STATUS) throw PluginException(PluginException.UNAVAILABLE)
+        if (method != SNAPSHOT && method != IDENTIFIERS) throw PluginException(PluginException.UNAVAILABLE)
 
         if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
-        return encode()
-    }
-
-    /** Packs the device's kind, memory, and identifying strings. */
-    private fun encode(): ByteArray {
-        val result = ByteArrayOutputStream(RESULT_CAPACITY)
-        result.write(
-            ByteBuffer
-                .allocate(HEADER_BYTES)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(VERSION_ONE)
-                .putInt(deviceKind())
-                .putInt(simulatorFlag())
-                .putLong(totalMemory())
-                .array(),
-        )
-
-        for (value in listOf(
-            Build.MANUFACTURER,
-            Build.BRAND,
-            Build.MODEL,
-            "Android",
-            Build.VERSION.RELEASE,
-            Build.SUPPORTED_ABIS.firstOrNull(),
-        )) {
-            writeText(result, value)
-        }
-
-        return result.toByteArray()
-    }
-
-    /** The device's total memory, or zero when the activity service is missing. */
-    private fun totalMemory(): Long {
-        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return 0L
-        val info = ActivityManager.MemoryInfo()
-        manager.getMemoryInfo(info)
-
-        return info.totalMem.coerceAtLeast(0)
-    }
-
-    /** 2 when this build runs on an emulator, and 0 otherwise. */
-    private fun simulatorFlag(): Int = if (Build.HARDWARE == "goldfish" || Build.HARDWARE == "ranchu") SIMULATOR else 0
-
-    /** Writes one length-prefixed string, treating blank and unknown values as empty. */
-    private fun writeText(
-        result: ByteArrayOutputStream,
-        value: String?,
-    ) {
-        val text = value?.takeUnless { it.isBlank() || it == Build.UNKNOWN } ?: ""
-        val bytes = text.toByteArray(Charsets.UTF_8)
-
-        if (bytes.size > MAX_TEXT_BYTES) throw PluginException(PluginException.TOO_LARGE)
-        result.write(
-            ByteBuffer
-                .allocate(4)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(bytes.size)
-                .array(),
-        )
-        result.write(bytes)
-    }
-
-    private fun deviceKind(): Int {
-        val mode = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
-
-        return when (mode?.currentModeType) {
-            Configuration.UI_MODE_TYPE_TELEVISION -> {
-                3
-            }
-
-            Configuration.UI_MODE_TYPE_VR_HEADSET -> {
-                7
-            }
-
-            Configuration.UI_MODE_TYPE_WATCH -> {
-                5
-            }
-
-            Configuration.UI_MODE_TYPE_CAR -> {
-                6
-            }
-
-            // A desk dock holds a phone or tablet; it does not make one a desktop.
-            Configuration.UI_MODE_TYPE_NORMAL, Configuration.UI_MODE_TYPE_DESK -> {
-                val width = context.resources.configuration.smallestScreenWidthDp
-                when {
-                    width >= 600 -> 2
-                    width > 0 -> 1
-                    else -> 0
-                }
-            }
-
-            else -> {
-                0
-            }
+        // Feature lists and volume statistics cross into system services and
+        // the file system, so read them off the UI thread.
+        return withContext(Dispatchers.IO) {
+            if (method == SNAPSHOT) DeviceWire.snapshot(readFacts()) else DeviceWire.identifiers(readIdentifiers())
         }
     }
 }
+
+/** Treats blank values and `Build.UNKNOWN` as unknown. */
+private fun known(value: String?): String? = DeviceWire.known(value)
+
+/** The smallest-width threshold Android's own resources use for tablets. */
+private const val TABLET_WIDTH_DP = 600
+
+/** Reads this device. Nothing here is a persistent identifier. */
+internal fun readFacts(context: Context): DeviceFacts {
+    val activity = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    val memory = ActivityManager.MemoryInfo().also { activity?.getMemoryInfo(it) }
+    val volume = runCatching { StatFs(Environment.getDataDirectory().path) }.getOrNull()
+
+    return DeviceFacts(
+        kind = deviceKind(context),
+        simulator = if (Build.HARDWARE == "goldfish" || Build.HARDWARE == "ranchu") true else null,
+        totalMemory = if (activity == null) 0 else memory.totalMem.coerceAtLeast(0),
+        availableMemory = if (activity == null) null else memory.availMem.coerceAtLeast(0),
+        totalDisk = volume?.totalBytes ?: 0,
+        freeDisk = volume?.availableBytes,
+        cpuCount = Runtime.getRuntime().availableProcessors(),
+        manufacturer = known(Build.MANUFACTURER),
+        brand = known(Build.BRAND),
+        model = known(Build.MODEL),
+        osName = "Android",
+        osVersion = known(Build.VERSION.RELEASE),
+        architecture = known(Build.SUPPORTED_ABIS.firstOrNull()),
+        kernelVersion = known(System.getProperty("os.version")),
+        build = readBuild(context, activity, memory),
+    )
+}
+
+private fun deviceKind(context: Context): Int {
+    val mode = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+
+    return when (mode?.currentModeType) {
+        Configuration.UI_MODE_TYPE_TELEVISION -> {
+            3
+        }
+
+        Configuration.UI_MODE_TYPE_VR_HEADSET -> {
+            7
+        }
+
+        Configuration.UI_MODE_TYPE_WATCH -> {
+            5
+        }
+
+        Configuration.UI_MODE_TYPE_CAR -> {
+            6
+        }
+
+        // A desk dock holds a phone or tablet; it does not make one a desktop.
+        Configuration.UI_MODE_TYPE_NORMAL, Configuration.UI_MODE_TYPE_DESK -> {
+            val width = context.resources.configuration.smallestScreenWidthDp
+            when {
+                width >= TABLET_WIDTH_DP -> 2
+                width > 0 -> 1
+                else -> 0
+            }
+        }
+
+        else -> {
+            0
+        }
+    }
+}
+
+/** `Build` and `ActivityManager` details for the Android section. */
+private fun readBuild(
+    context: Context,
+    activity: ActivityManager?,
+    memory: ActivityManager.MemoryInfo,
+): AndroidBuild =
+    AndroidBuild(
+        sdkInt = Build.VERSION.SDK_INT,
+        previewSdkInt = Build.VERSION.PREVIEW_SDK_INT,
+        lowRamDevice = activity?.isLowRamDevice,
+        lowMemory = if (activity == null) null else memory.lowMemory,
+        buildTime = Build.TIME.takeIf { it > 0 },
+        baseOs = known(Build.VERSION.BASE_OS),
+        codename = known(Build.VERSION.CODENAME),
+        incremental = known(Build.VERSION.INCREMENTAL),
+        release = known(Build.VERSION.RELEASE),
+        securityPatch = known(Build.VERSION.SECURITY_PATCH),
+        board = known(Build.BOARD),
+        bootloader = known(Build.BOOTLOADER),
+        device = known(Build.DEVICE),
+        display = known(Build.DISPLAY),
+        fingerprint = known(Build.FINGERPRINT),
+        hardware = known(Build.HARDWARE),
+        host = known(Build.HOST),
+        id = known(Build.ID),
+        product = known(Build.PRODUCT),
+        tags = known(Build.TAGS),
+        type = known(Build.TYPE),
+        supportedAbis = DeviceWire.shortList(Build.SUPPORTED_ABIS.asList()),
+        supported32BitAbis = DeviceWire.shortList(Build.SUPPORTED_32_BIT_ABIS.asList()),
+        supported64BitAbis = DeviceWire.shortList(Build.SUPPORTED_64_BIT_ABIS.asList()),
+        systemFeatures = DeviceWire.features(context.packageManager.systemAvailableFeatures.mapNotNull { it.name }),
+    )
+
+/**
+ * `Settings.Global.DEVICE_NAME`, the name shown in Bluetooth and About phone.
+ * Android gives ordinary apps no vendor or machine identifier here: the serial
+ * needs a privileged permission.
+ */
+internal fun readIdentifiers(context: Context): DeviceIdentifiers =
+    DeviceIdentifiers(
+        deviceName =
+            DeviceWire.boundedIdentifier(
+                Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME),
+            ),
+    )

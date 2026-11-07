@@ -6037,9 +6037,13 @@ version = "0.3.0"
 dependencies = [
  "js-sys",
  "leptoskit_bridge",
+ "libc",
  "sysinfo",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
