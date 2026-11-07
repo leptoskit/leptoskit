@@ -66,7 +66,6 @@ class DevicePolicyPlugin(
             SET_CAMERA_DISABLED -> setCameraDisabled(payload)
             WIPE_DATA -> wipeData(payload)
             REMOVE_ACTIVE -> removeActive(payload)
-
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
     }
@@ -208,14 +207,13 @@ class DevicePolicyPlugin(
 
     private fun isActive(): Boolean = policy?.isAdminActive(component) == true
 
-    private fun receiverDeclared(): Boolean {
-        return try {
+    private fun receiverDeclared(): Boolean =
+        try {
             context.packageManager.getReceiverInfo(component, PackageManager.GET_META_DATA)
             true
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }
-    }
 
     private fun explanationOf(payload: ByteBuffer): String {
         val input = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
@@ -263,7 +261,6 @@ class DevicePolicyPlugin(
         }
 
         return if (flags and WIPE_FLAG_EXTERNAL_STORAGE != 0) {
-
             DevicePolicyManager.WIPE_EXTERNAL_STORAGE
         } else {
             0
@@ -284,12 +281,17 @@ class DevicePolicyPlugin(
     private fun qualityWire(quality: Int): Int =
         when (quality) {
             DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED -> QUALITY_UNSPECIFIED
+
             DevicePolicyManager.PASSWORD_QUALITY_SOMETHING -> QUALITY_SOMETHING
+
             DevicePolicyManager.PASSWORD_QUALITY_NUMERIC,
             DevicePolicyManager.PASSWORD_QUALITY_NUMERIC_COMPLEX,
             -> QUALITY_NUMERIC
+
             DevicePolicyManager.PASSWORD_QUALITY_ALPHABETIC -> QUALITY_ALPHABETIC
+
             DevicePolicyManager.PASSWORD_QUALITY_ALPHANUMERIC -> QUALITY_ALPHANUMERIC
+
             DevicePolicyManager.PASSWORD_QUALITY_COMPLEX -> QUALITY_COMPLEX
 
             else -> QUALITY_UNSPECIFIED

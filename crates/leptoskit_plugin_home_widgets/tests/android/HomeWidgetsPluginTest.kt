@@ -97,6 +97,7 @@ class HomeWidgetsPluginTest {
             url: String = "myapp://inbox",
         ): ByteArray {
             val out = ArrayList<Byte>()
+
             fun append(value: String) {
                 val utf8 = value.toByteArray(Charsets.UTF_8)
                 val length =

@@ -39,10 +39,12 @@ class BadgePlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encode(count)
             }
+
             SET -> {
                 set(decode(payload))
                 byteArrayOf()
             }
+
             else -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 set(0)

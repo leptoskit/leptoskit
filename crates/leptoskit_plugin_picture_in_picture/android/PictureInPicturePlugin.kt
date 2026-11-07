@@ -175,18 +175,19 @@ class PictureInPicturePlugin(
 
         val view = View(context).apply { setBackgroundColor(0x00000000) }
         val params =
-            WindowManager.LayoutParams(
-                OVERLAY_SIZE_PX,
-                OVERLAY_SIZE_PX,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT,
-            ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = OVERLAY_MARGIN_PX
-                y = OVERLAY_MARGIN_PX
-            }
+            WindowManager
+                .LayoutParams(
+                    OVERLAY_SIZE_PX,
+                    OVERLAY_SIZE_PX,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT,
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = OVERLAY_MARGIN_PX
+                    y = OVERLAY_MARGIN_PX
+                }
 
         try {
             manager.addView(view, params)

@@ -44,11 +44,13 @@ class AppShortcutsPlugin(
                 set(decodeList(payload))
                 byteArrayOf()
             }
+
             CLEAR -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 clear()
                 byteArrayOf()
             }
+
             else -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encodeLaunch(launchId.also { launchId = null })

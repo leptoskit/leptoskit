@@ -48,6 +48,7 @@ class HomeWidgetsPlugin(
                 empty(payload)
                 capability()
             }
+
             SET -> {
                 val snapshot = Snapshot.decode(payload)
                 // Store raw wire bytes so GET round-trips the guest payload.
@@ -57,6 +58,7 @@ class HomeWidgetsPlugin(
                     .apply()
                 byteArrayOf()
             }
+
             GET -> {
                 val kind = Kind.decode(payload)
                 val encoded =
@@ -64,28 +66,38 @@ class HomeWidgetsPlugin(
                         ?: throw PluginException(PluginException.UNAVAILABLE)
                 android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
             }
+
             CLEAR -> {
                 val kind = Kind.decode(payload)
                 prefs.edit().remove(PREFIX + kind).apply()
                 byteArrayOf()
             }
+
             RELOAD -> {
                 val kind = optionalKind(payload)
                 reload(kind)
                 byteArrayOf()
             }
+
             INSTALLED -> {
                 val kind = Kind.decode(payload)
                 installed(kind).toByteArray()
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 
     private fun capability(): ByteArray {
         // supported | can_reload | can_query_installed | shared_store
         val flags = 1 or (1 shl 1) or (1 shl 2) or (1 shl 3)
-        return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(flags).array()
+        return ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(flags)
+            .array()
     }
 
     private fun reload(kind: String?) {
@@ -138,7 +150,6 @@ class HomeWidgetsPlugin(
         return if (matching.any { manager.getAppWidgetIds(it).isNotEmpty() }) {
             INSTALLED_SOME
         } else {
-
             INSTALLED_NONE
         }
     }
@@ -153,7 +164,6 @@ class HomeWidgetsPlugin(
             }
         val resolved =
             if (flags != null) {
-
                 context.packageManager.queryBroadcastReceivers(intent, flags)
             } else {
                 @Suppress("DEPRECATION")
@@ -191,7 +201,11 @@ private fun optionalKind(payload: ByteBuffer): String? {
 }
 
 private fun Int.toByteArray(): ByteArray =
-    ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(this).array()
+    ByteBuffer
+        .allocate(4)
+        .order(ByteOrder.LITTLE_ENDIAN)
+        .putInt(this)
+        .array()
 
 private object Kind {
     fun decode(payload: ByteBuffer): String {

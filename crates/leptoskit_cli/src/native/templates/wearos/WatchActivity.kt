@@ -9,9 +9,9 @@ package dev.leptoskit.wearos
  * - launcher activity with Wear category
  * - optional phone companion deep links
  */
-class LeptoskitWatchActivityPlaceholder {
-	companion object {
-		const val SURFACE = "page"
-		const val STATUS = "experimental-stub"
-	}
+class WatchActivity {
+    companion object {
+        const val SURFACE = "page"
+        const val STATUS = "experimental-stub"
+    }
 }

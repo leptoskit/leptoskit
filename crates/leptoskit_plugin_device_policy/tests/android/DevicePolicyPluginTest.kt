@@ -121,8 +121,7 @@ class DevicePolicyPluginTest {
     private class InvisibleActivity :
         Activity(),
         NativeActivityResultHost {
-        override suspend fun launchPluginActivity(intent: Intent): NativeActivityResult =
-            throw PluginException(PluginException.UNAVAILABLE)
+        override suspend fun launchPluginActivity(intent: Intent): NativeActivityResult = throw PluginException(PluginException.UNAVAILABLE)
     }
 
     private companion object {

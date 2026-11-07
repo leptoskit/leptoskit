@@ -9,14 +9,14 @@ import android.nfc.NfcManager
 import android.os.Looper
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.CancellableContinuation
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /** Foreground NDEF text/URI reads through the activity's reader mode. */
 class NfcPlugin(
@@ -134,14 +134,23 @@ class NfcPlugin(
         return when (record.tnf) {
             NdefRecord.TNF_WELL_KNOWN -> {
                 when {
-                    record.type.contentEquals(NdefRecord.RTD_URI) ->
+                    record.type.contentEquals(NdefRecord.RTD_URI) -> {
                         1 to (record.toUri()?.toString() ?: throw PluginException(PluginException.INVALID_ARGUMENT))
-                    record.type.contentEquals(NdefRecord.RTD_TEXT) ->
+                    }
+
+                    record.type.contentEquals(NdefRecord.RTD_TEXT) -> {
                         0 to decodeText(record.payload)
-                    else -> throw PluginException(PluginException.UNAVAILABLE)
+                    }
+
+                    else -> {
+                        throw PluginException(PluginException.UNAVAILABLE)
+                    }
                 }
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }.also { (_, value) ->
 
             if (value.isEmpty() || value.toByteArray(StandardCharsets.UTF_8).size > 4096) {
@@ -179,7 +188,9 @@ class NfcPlugin(
     }
 
     private fun android.nfc.Tag.getNdef(): NdefMessage? {
-        val ndef = android.nfc.tech.Ndef.get(this) ?: return null
+        val ndef =
+            android.nfc.tech.Ndef
+                .get(this) ?: return null
         return try {
             ndef.connect()
             ndef.ndefMessage.also { ndef.close() }
