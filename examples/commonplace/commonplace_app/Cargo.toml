@@ -46,7 +46,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 leptoskit = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit" }
 leptoskit_db = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_db" }
 leptoskit_router = { version = "=0.3.0", path = "../../../crates/leptoskit_router" }
-reactive_graph = "0.3.0-rc0"
+reactive_stores = "0.5.0-rc0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

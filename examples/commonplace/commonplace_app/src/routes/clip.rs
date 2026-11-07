@@ -35,7 +35,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 		crate::tasks::spawn(async move {
 			if let Some((tab, window, page)) = browser::active_tab().await {
 				TAB.set(Some((tab, window)));
-				store.update(|state| state.extension.page = page);
+				store.extension().update(|extension| extension.page = page);
 			}
 		});
 	}
@@ -82,7 +82,8 @@ pub fn Page(navigation: &Navigation) -> Element {
 								Ok(()) => browser::close_window(),
 								Err(message) => {
 									Store::current()
-										.update(|state| state.extension.status = Some(message))
+										.extension()
+										.update(|extension| extension.status = Some(message))
 								}
 							}
 						}
@@ -94,7 +95,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				projects=&projects
 				chosen=chosen
 				on_pick=|project| {
-					Store::current().update(|state| state.extension.project = Some(project));
+					Store::current()
+						.extension()
+						.update(|extension| extension.project = Some(project));
 					crate::tasks::spawn(browser::keep_project(project));
 				}
 			/>
@@ -103,7 +106,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				value=&draft.quote
 				placeholder="The passage worth keeping"
 				on_change=|value| {
-					Store::current().update(|state| state.clip.quote = value.to_owned());
+					Store::current()
+						.clip()
+						.update(|clip| clip.quote = value.to_owned());
 				}
 			/>
 			<ui::Field
@@ -111,7 +116,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				value=&draft.note
 				placeholder="Optional"
 				on_change=|value| {
-					Store::current().update(|state| state.clip.note = value.to_owned());
+					Store::current()
+						.clip()
+						.update(|clip| clip.note = value.to_owned());
 				}
 			/>
 			<ui::Field
@@ -119,7 +126,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				value=&draft.tags
 				placeholder="method, cities"
 				on_change=|value| {
-					Store::current().update(|state| state.clip.tags = value.to_owned());
+					Store::current()
+						.clip()
+						.update(|clip| clip.tags = value.to_owned());
 				}
 			/>
 			<ui::Primary
@@ -143,12 +152,12 @@ pub fn Page(navigation: &Navigation) -> Element {
 					crate::tasks::spawn(async move {
 						let reply = browser::ask(ExtensionMessage::Clip(Box::new(input))).await;
 						let store = Store::current();
-						store.update(|state| {
-							if matches!(reply, ExtensionReply::Saved(_) | ExtensionReply::Queued) {
-								state.clip = crate::store::ClipDraft::default();
-							}
-							state.extension.status = Some(browser::status(&reply));
-						});
+						if matches!(reply, ExtensionReply::Saved(_) | ExtensionReply::Queued) {
+							store.clip().set(crate::store::ClipDraft::default());
+						}
+						store
+							.extension()
+							.update(|extension| extension.status = Some(browser::status(&reply)));
 					});
 				}
 			/>

@@ -15,7 +15,7 @@ use crate::ui::palette;
 #[component]
 pub fn Layout(children: Children, navigation: &Navigation) -> Element {
 	let store = Store::current();
-	let open = store.with(|state| state.palette.clone());
+	let open = store.palette().get();
 	let keys = {
 		let store = store.clone();
 		let navigation = navigation.clone();
@@ -23,8 +23,7 @@ pub fn Layout(children: Children, navigation: &Navigation) -> Element {
 	};
 
 	let palette = open.map(|open| {
-		store
-			.with(|state| view! { <palette::PaletteView state=state palette=&open store=&store /> })
+		view! { <palette::PaletteView palette=&open rows=store.size().get().1 store=&store /> }
 	});
 
 	view! {
@@ -38,7 +37,7 @@ pub fn Layout(children: Children, navigation: &Navigation) -> Element {
 /// palette, shift+tab switches agents, and while the palette is open the
 /// arrows, enter, and escape drive it.
 fn shortcut(store: &Store, navigation: &Navigation, key: &KeyPress) -> EventOutcome {
-	let open = store.with(|state| state.palette.is_some());
+	let open = store.palette().get().is_some();
 	let action = if key.is("p", true, false, false) {
 		Action::TogglePalette
 	} else if open && key.is("Escape", false, false, false) {
@@ -48,7 +47,11 @@ fn shortcut(store: &Store, navigation: &Navigation, key: &KeyPress) -> EventOutc
 	} else if open && key.is("ArrowDown", false, false, false) {
 		Action::MoveSelection(1)
 	} else if open && key.is("Enter", false, false, false) {
-		let command = store.with(palette::selected_command);
+		let command = store
+			.palette()
+			.get()
+			.as_ref()
+			.and_then(palette::selected_command);
 		store.apply(Action::Dismiss);
 		if command.is_some_and(|command| command.title == "New session") {
 			store.apply(Action::NewSession);

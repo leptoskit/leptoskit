@@ -44,7 +44,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 				projects=&projects
 				chosen=chosen
 				on_pick=|project| {
-					Store::current().update(|state| state.extension.project = Some(project));
+					Store::current()
+						.extension()
+						.update(|extension| extension.project = Some(project));
 					crate::tasks::spawn(browser::keep_project(project));
 				}
 			/>

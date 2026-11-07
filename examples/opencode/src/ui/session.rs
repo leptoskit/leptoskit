@@ -93,14 +93,14 @@ fn part(part: &Part) -> Vec<Element> {
 				} />
 			}]
 		}
-		Part::Edit { path, lines } => {
+		Part::Edit { file, lines } => {
 			vec![view! {
 				<Tool
 					title=view! {
 						<Text spans=[
 							TextSpan::new("← Edit").color(theme::MUTED),
 							TextSpan::new(" "),
-							TextSpan::new(path.clone()).color(theme::MUTED),
+							TextSpan::new(file.clone()).color(theme::MUTED),
 						] />
 					}
 					body=view! { <Diff lines=lines /> }

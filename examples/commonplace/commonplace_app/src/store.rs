@@ -1,8 +1,10 @@
 //! The app's state, and the actions that change it.
 //!
-//! Screens read [`State`] through [`Store::current`]. Actions that need the
-//! server run as tasks: they mark what they are loading, call the API, and
-//! write the answer back, and the screen renders again.
+//! Screens read [`State`] through [`Store::current`], a whole field at a
+//! time: each field is its own signal, so a screen that reads one through its
+//! accessor renders again only when that field changes. Actions that need
+//! the server run as tasks: they mark what they are loading, call the API,
+//! and write the answer back to the field, and the screen renders again.
 
 use std::cell::RefCell;
 
@@ -17,11 +19,13 @@ use commonplace_shared::ProjectId;
 use commonplace_shared::ProjectSummary;
 use commonplace_shared::TextQuote;
 use commonplace_shared::cite::Style;
-use reactive_graph::signal::ArcRwSignal;
-use reactive_graph::traits::GetUntracked;
-use reactive_graph::traits::Update;
-use reactive_graph::traits::With;
-use reactive_graph::traits::WithUntracked;
+use leptoskit::prelude::GetUntracked;
+use leptoskit::prelude::Set;
+use leptoskit::prelude::Update;
+use leptoskit::prelude::With;
+use leptoskit::prelude::WithUntracked;
+use leptoskit::store::ArcField;
+use leptoskit::store::ArcStore;
 
 use crate::api::Api;
 use crate::api::Problem;
@@ -86,7 +90,7 @@ pub struct ClipDraft {
 }
 
 /// Everything the screens show.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, reactive_stores::Store)]
 #[cfg_attr(feature = "devtools", derive(serde::Serialize, serde::Deserialize))]
 pub struct State {
 	pub session: Session,
@@ -157,7 +161,7 @@ pub fn install(client: Api) {
 /// state.
 #[derive(Clone, Default)]
 pub struct Store {
-	state: ArcRwSignal<State>,
+	state: ArcStore<State>,
 }
 
 impl Store {
@@ -167,7 +171,9 @@ impl Store {
 		STORE.with(Clone::clone)
 	}
 
-	/// Reads the state, so the screen renders again when it changes.
+	/// Reads the state, so the screen renders again when any field changes.
+	/// A screen that reads one field, through its accessor below, renders
+	/// again only when that field changes.
 	pub fn with<T>(&self, read: impl FnOnce(&State) -> T) -> T {
 		self.state.with(read)
 	}
@@ -175,11 +181,6 @@ impl Store {
 	/// Reads the state without subscribing to it.
 	pub fn peek<T>(&self, read: impl FnOnce(&State) -> T) -> T {
 		self.state.with_untracked(read)
-	}
-
-	/// Changes the state.
-	pub fn update(&self, change: impl FnOnce(&mut State)) {
-		self.state.update(change);
 	}
 
 	/// A snapshot, for tests.
@@ -195,16 +196,74 @@ impl Store {
 		leptoskit::devtools::expose("store", self.state.clone());
 	}
 
+	/// Whether someone is signed in.
+	pub fn session(&self) -> ArcField<Session> {
+		self.state.clone().session().into()
+	}
+
+	/// The sign-in form.
+	pub fn sign_in(&self) -> ArcField<SignInForm> {
+		self.state.clone().sign_in().into()
+	}
+
+	/// The library's projects, loaded from the server.
+	pub fn library(&self) -> ArcField<Load<Vec<ProjectSummary>>> {
+		self.state.clone().library().into()
+	}
+
+	/// The open project.
+	pub fn project(&self) -> ArcField<Option<(ProjectId, Load<ProjectDetail>)>> {
+		self.state.clone().project().into()
+	}
+
+	/// The new-project form.
+	pub fn new_project(&self) -> ArcField<NewProjectInput> {
+		self.state.clone().new_project().into()
+	}
+
+	/// A clip being written by hand.
+	pub fn clip(&self) -> ArcField<ClipDraft> {
+		self.state.clone().clip().into()
+	}
+
+	/// A clip's note being added to the open project.
+	pub fn note(&self) -> ArcField<String> {
+		self.state.clone().note().into()
+	}
+
+	/// A clip's note being edited, with its text so far.
+	pub fn editing(&self) -> ArcField<Option<(ClipId, String)>> {
+		self.state.clone().editing().into()
+	}
+
+	/// The citation style exports use.
+	pub fn style(&self) -> ArcField<Style> {
+		self.state.clone().style().into()
+	}
+
+	/// Something went wrong that isn't one form's error.
+	pub fn notice(&self) -> ArcField<Option<String>> {
+		self.state.clone().notice().into()
+	}
+
+	/// An action is waiting for the server.
+	pub fn busy(&self) -> ArcField<bool> {
+		self.state.clone().busy().into()
+	}
+
+	/// The extension's own state.
+	pub fn extension(&self) -> ArcField<ExtensionState> {
+		self.state.clone().extension().into()
+	}
+
 	/// Puts a failure on screen. A signed-out failure returns to sign-in.
 	fn failed(&self, problem: &Problem) {
-		self.update(|state| {
-			state.busy = false;
-			if problem.signed_out {
-				state.session = Session::SignedOut;
-			} else {
-				state.notice = Some(problem.message.clone());
-			}
-		});
+		self.busy().set(false);
+		if problem.signed_out {
+			self.session().set(Session::SignedOut);
+		} else {
+			self.notice().set(Some(problem.message.clone()));
+		}
 	}
 
 	/// Finds out whether someone is signed in, then loads the library.
@@ -213,21 +272,21 @@ impl Store {
 		spawn(async move {
 			let api = api();
 			if api.uses_bearer() && token.is_none() {
-				store.update(|state| state.session = Session::SignedOut);
+				store.session().set(Session::SignedOut);
 				return;
 			}
 			api.set_session(token);
 			match api.signed_in().await {
 				Ok(true) => {
-					store.update(|state| state.session = Session::SignedIn);
+					store.session().set(Session::SignedIn);
 					store.load_library();
 				}
-				Ok(false) => store.update(|state| state.session = Session::SignedOut),
+				Ok(false) => store.session().set(Session::SignedOut),
 				Err(problem) => {
-					store.update(|state| {
-						state.session = Session::SignedOut;
-						state.sign_in.error = Some(problem.message);
-					});
+					store.session().set(Session::SignedOut);
+					store
+						.sign_in()
+						.update(|form| form.error = Some(problem.message));
 				}
 			}
 		});
@@ -237,21 +296,22 @@ impl Store {
 	pub fn send_code(&self) {
 		let email = self.peek(|state| state.sign_in.email.trim().to_owned());
 		if email.is_empty() {
-			self.update(|state| state.sign_in.error = Some("Enter your email address.".into()));
+			self.sign_in()
+				.update(|form| form.error = Some("Enter your email address.".into()));
 			return;
 		}
-		self.update(|state| {
-			state.sign_in.busy = true;
-			state.sign_in.error = None;
+		self.sign_in().update(|form| {
+			form.busy = true;
+			form.error = None;
 		});
 		let store = self.clone();
 		spawn(async move {
 			let result = api().send_code(&email).await;
-			store.update(|state| {
-				state.sign_in.busy = false;
+			store.sign_in().update(|form| {
+				form.busy = false;
 				match result {
-					Ok(()) => state.sign_in.sent = true,
-					Err(problem) => state.sign_in.error = Some(problem.message),
+					Ok(()) => form.sent = true,
+					Err(problem) => form.error = Some(problem.message),
 				}
 			});
 		});
@@ -265,59 +325,64 @@ impl Store {
 				state.sign_in.code.trim().to_owned(),
 			)
 		});
-		self.update(|state| {
-			state.sign_in.busy = true;
-			state.sign_in.error = None;
+		self.sign_in().update(|form| {
+			form.busy = true;
+			form.error = None;
 		});
 		let store = self.clone();
 		spawn(async move {
 			match api().verify_code(&email, &code).await {
 				Ok(token) => {
 					crate::session::keep(token).await;
-					store.update(|state| {
-						state.sign_in = SignInForm::default();
-						state.session = Session::SignedIn;
-					});
+					store.sign_in().set(SignInForm::default());
+					store.session().set(Session::SignedIn);
 					store.load_library();
 				}
 				Err(problem) => {
-					store.update(|state| {
-						state.sign_in.busy = false;
-						state.sign_in.error = Some(problem.message);
-					})
+					store.sign_in().update(|form| {
+						form.busy = false;
+						form.error = Some(problem.message);
+					});
 				}
 			}
 		});
 	}
 
-	/// Signs out, here and on the server.
+	/// Signs out, here and on the server. Each field is written rather than
+	/// the state replaced, so a screen reading one field hears its change.
 	pub fn sign_out(&self) {
 		let store = self.clone();
 		spawn(async move {
 			let _ = api().sign_out().await;
 			crate::session::keep(None).await;
-			store.update(|state| {
-				*state = State {
-					session: Session::SignedOut,
-					..State::default()
-				}
-			});
+			store.session().set(Session::SignedOut);
+			store.sign_in().set(SignInForm::default());
+			store.library().set(Load::Idle);
+			store.project().set(None);
+			store.new_project().set(NewProjectInput::default());
+			store.clip().set(ClipDraft::default());
+			store.note().set(String::new());
+			store.editing().set(None);
+			store.style().set(Style::default());
+			store.notice().set(None);
+			store.busy().set(false);
+			store.extension().set(ExtensionState::default());
 		});
 	}
 
 	/// Loads the library again.
 	pub fn load_library(&self) {
-		self.update(|state| {
-			if state.library.ready().is_none() {
-				state.library = Load::Loading;
+		self.library().update(|library| {
+			if library.ready().is_none() {
+				*library = Load::Loading;
 			}
 		});
 		let store = self.clone();
 		spawn(async move {
 			match api().projects().await {
-				Ok(projects) => store.update(|state| state.library = Load::Ready(projects)),
+				Ok(projects) => store.library().set(Load::Ready(projects)),
 				Err(problem) if problem.signed_out => store.failed(&problem),
-				Err(problem) => store.update(|state| state.library = Load::Failed(problem.message)),
+				Err(problem) => store.library().set(Load::Failed(problem.message)),
 			}
 		});
 	}
@@ -338,22 +403,20 @@ impl Store {
 		// Writing state while a screen renders would render it again in the
 		// middle; the task starts after this render.
 		spawn(async move {
-			store.update(|state| {
-				let keep = matches!(&state.project, Some((open, Load::Ready(_))) if *open == id);
-				if !keep {
-					state.project = Some((id, Load::Loading));
-				}
-			});
+			let keep = store.project().with_untracked(
+				|project| matches!(project, Some((open, Load::Ready(_))) if *open == id),
+			);
+			if !keep {
+				store.project().set(Some((id, Load::Loading)));
+			}
 			let result = api().project(id).await;
-			store.update(|state| {
-				state.project = Some((
-					id,
-					match result {
-						Ok(detail) => Load::Ready(detail),
-						Err(problem) => Load::Failed(problem.message),
-					},
-				));
-			});
+			store.project().set(Some((
+				id,
+				match result {
+					Ok(detail) => Load::Ready(detail),
+					Err(problem) => Load::Failed(problem.message),
+				},
+			)));
 		});
 	}
 
@@ -361,19 +424,17 @@ impl Store {
 	pub fn create_project(&self, then: impl FnOnce(ProjectId) + 'static) {
 		let input = self.peek(|state| state.new_project.clone());
 		if input.title.trim().is_empty() {
-			self.update(|state| state.notice = Some("Give the project a title.".into()));
+			self.notice().set(Some("Give the project a title.".into()));
 			return;
 		}
-		self.update(|state| state.busy = true);
+		self.busy().set(true);
 		let store = self.clone();
 		spawn(async move {
 			match api().create_project(&input).await {
 				Ok(project) => {
-					store.update(|state| {
-						state.busy = false;
-						state.notice = None;
-						state.new_project = NewProjectInput::default();
-					});
+					store.busy().set(false);
+					store.notice().set(None);
+					store.new_project().set(NewProjectInput::default());
 					store.load_library();
 					then(project.id);
 				}
@@ -388,7 +449,7 @@ impl Store {
 		spawn(async move {
 			match api().delete_project(id).await {
 				Ok(()) => {
-					store.update(|state| state.project = None);
+					store.project().set(None);
 					store.load_library();
 					then();
 				}
@@ -421,16 +482,14 @@ impl Store {
 			note: optional(&draft.note),
 			tags: draft.tags.clone(),
 		};
-		self.update(|state| state.busy = true);
+		self.busy().set(true);
 		let store = self.clone();
 		spawn(async move {
 			match api().create_clip(&input).await {
 				Ok(_) => {
-					store.update(|state| {
-						state.busy = false;
-						state.notice = None;
-						state.clip = ClipDraft::default();
-					});
+					store.busy().set(false);
+					store.notice().set(None);
+					store.clip().set(ClipDraft::default());
 					store.reload_project(project);
 				}
 				Err(problem) => store.failed(&problem),
@@ -451,7 +510,7 @@ impl Store {
 			};
 			match api().update_clip(clip, &changes).await {
 				Ok(_) => {
-					store.update(|state| state.editing = None);
+					store.editing().set(None);
 					store.reload_project(project);
 				}
 				Err(problem) => store.failed(&problem),
@@ -483,7 +542,7 @@ impl Store {
 		spawn(async move {
 			match api().create_note(project, &body).await {
 				Ok(_) => {
-					store.update(|state| state.note.clear());
+					store.note().update(String::clear);
 					store.reload_project(project);
 				}
 				Err(problem) => store.failed(&problem),

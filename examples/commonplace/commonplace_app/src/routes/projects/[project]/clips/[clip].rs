@@ -64,8 +64,8 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 							value=&text
 							placeholder="What this quote shows"
 							on_change=|value| {
-								Store::current().update(|state| {
-									if let Some((_, text)) = &mut state.editing {
+								Store::current().editing().update(|editing| {
+									if let Some((_, text)) = editing {
 										*text = value.to_owned();
 									}
 								});
@@ -97,8 +97,7 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 						label="Edit note"
 						on_press=move || {
 							let current = current.clone();
-							Store::current()
-								.update(|state| state.editing = Some((clip_id, current)));
+							Store::current().editing().set(Some((clip_id, current)));
 						}
 					/>
 				</View>

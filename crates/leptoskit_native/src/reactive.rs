@@ -28,7 +28,11 @@ use std::sync::Arc;
 
 pub use reactive_graph::signal::RwSignal;
 pub use reactive_graph::traits::Get;
+pub use reactive_graph::traits::GetUntracked;
 pub use reactive_graph::traits::Set;
+pub use reactive_graph::traits::Update;
+pub use reactive_graph::traits::With;
+pub use reactive_graph::traits::WithUntracked;
 
 use crate::Element;
 use crate::props::Color;

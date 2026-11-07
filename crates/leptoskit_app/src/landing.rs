@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use leptoskit::native::Role;
 use leptoskit::prelude::*;
-use reactive_graph::prelude::*;
 
 pub const REPOSITORY: &str = "https://github.com/leptoskit/leptoskit";
 

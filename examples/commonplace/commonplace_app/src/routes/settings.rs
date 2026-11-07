@@ -23,7 +23,9 @@ pub fn Page(navigation: &Navigation) -> Element {
 	if !READ_SITES.swap(true, Ordering::Relaxed) {
 		crate::tasks::spawn(async {
 			let sites = highlights::registered().await;
-			Store::current().update(|state| state.extension.sites = sites);
+			Store::current()
+				.extension()
+				.update(|extension| extension.sites = sites);
 		});
 	}
 	let (projects, chosen, sites, site, status) = store.with(|state| {
@@ -50,7 +52,8 @@ pub fn Page(navigation: &Navigation) -> Element {
 						chosen=chosen
 						on_pick=|project| {
 							Store::current()
-								.update(|state| state.extension.project = Some(project));
+								.extension()
+								.update(|extension| extension.project = Some(project));
 							crate::tasks::spawn(browser::keep_project(project));
 						}
 					/>
@@ -75,7 +78,8 @@ pub fn Page(navigation: &Navigation) -> Element {
 									crate::tasks::spawn(async move {
 										let sites = highlights::remove(&pattern).await;
 										Store::current()
-											.update(|state| state.extension.sites = sites);
+											.extension()
+											.update(|extension| extension.sites = sites);
 									});
 								}
 							/>
@@ -89,7 +93,8 @@ pub fn Page(navigation: &Navigation) -> Element {
 						placeholder="https://www.theguardian.com"
 						on_change=|value| {
 							Store::current()
-								.update(|state| state.extension.site = value.to_owned());
+								.extension()
+								.update(|extension| extension.site = value.to_owned());
 						}
 					/>
 				})
@@ -101,14 +106,14 @@ pub fn Page(navigation: &Navigation) -> Element {
 							let site = Store::current().peek(|state| state.extension.site.clone());
 							crate::tasks::spawn(async move {
 								let result = highlights::add(&site).await;
-								Store::current().update(|state| {
+								Store::current().extension().update(|extension| {
 									match result {
 										Ok(sites) => {
-											state.extension.sites = sites;
-											state.extension.site.clear();
-											state.extension.status = None;
+											extension.sites = sites;
+											extension.site.clear();
+											extension.status = None;
 										}
-										Err(message) => state.extension.status = Some(message),
+										Err(message) => extension.status = Some(message),
 									}
 								});
 							});
