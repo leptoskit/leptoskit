@@ -3,7 +3,9 @@
 	"title": "DartPresence",
 	"version": "1.0.0",
 	"description": "Requiredness and nullability in generated Dart clients.",
-	"servers": ["https://presence.example"],
+	"servers": [
+		"https://presence.example"
+	],
 	"functions": [
 		{
 			"name": "send",
@@ -20,49 +22,74 @@
 				{
 					"name": "required_text",
 					"docs": "",
-					"schema": { "type": "string" },
+					"schema": {
+						"type": "string"
+					},
 					"required": true
 				},
 				{
 					"name": "required_nullable_text",
 					"docs": "",
-					"schema": { "type": ["string", "null"] },
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
 					"required": true
 				},
 				{
 					"name": "optional_text",
 					"docs": "",
-					"schema": { "type": "string" },
+					"schema": {
+						"type": "string"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_nullable_text",
 					"docs": "",
-					"schema": { "type": ["string", "null"] },
+					"schema": {
+						"type": [
+							"string",
+							"null"
+						]
+					},
 					"required": false
 				},
 				{
 					"name": "optional_flag",
 					"docs": "",
-					"schema": { "type": "boolean" },
+					"schema": {
+						"type": "boolean"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_count",
 					"docs": "",
-					"schema": { "type": "integer" },
+					"schema": {
+						"type": "integer"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_empty_text",
 					"docs": "",
-					"schema": { "type": "string" },
+					"schema": {
+						"type": "string"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_items",
 					"docs": "",
-					"schema": { "type": "array", "items": { "type": "string" } },
+					"schema": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					},
 					"required": false
 				},
 				{
@@ -70,7 +97,9 @@
 					"docs": "",
 					"schema": {
 						"type": "object",
-						"additionalProperties": { "type": "string" }
+						"additionalProperties": {
+							"type": "string"
+						}
 					},
 					"required": false
 				},
@@ -79,8 +108,12 @@
 					"docs": "",
 					"schema": {
 						"anyOf": [
-							{ "$ref": "#/components/schemas/Nested" },
-							{ "type": "null" }
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
 						]
 					},
 					"required": true
@@ -90,8 +123,12 @@
 					"docs": "",
 					"schema": {
 						"anyOf": [
-							{ "$ref": "#/components/schemas/Nested" },
-							{ "type": "null" }
+							{
+								"$ref": "#/components/schemas/Nested"
+							},
+							{
+								"type": "null"
+							}
 						]
 					},
 					"required": false
@@ -99,11 +136,15 @@
 				{
 					"name": "optional_nullable_alias",
 					"docs": "",
-					"schema": { "$ref": "#/components/schemas/MaybeText" },
+					"schema": {
+						"$ref": "#/components/schemas/MaybeText"
+					},
 					"required": false
 				}
 			],
-			"output_schema": { "type": "null" },
+			"output_schema": {
+				"type": "null"
+			},
 			"internal": false,
 			"deprecated": false,
 			"tags": []
@@ -123,23 +164,88 @@
 				{
 					"name": "optional_flag",
 					"docs": "",
-					"schema": { "type": "boolean" },
+					"schema": {
+						"type": "boolean"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_count",
 					"docs": "",
-					"schema": { "type": "integer" },
+					"schema": {
+						"type": "integer"
+					},
 					"required": false
 				},
 				{
 					"name": "optional_empty_text",
 					"docs": "",
-					"schema": { "type": "string" },
+					"schema": {
+						"type": "string"
+					},
 					"required": false
 				}
 			],
-			"output_schema": { "type": "null" },
+			"output_schema": {
+				"type": "null"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_echo",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelEcho",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_echo",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/Echo"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_default",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelDefault",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_default",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/DefaultRequired"
+			},
+			"internal": false,
+			"deprecated": false,
+			"tags": []
+		},
+		{
+			"name": "model_null",
+			"kind": "query",
+			"module_path": "presence::api",
+			"struct_name": "ModelNull",
+			"docs": "Accepts every requiredness and nullability combination.",
+			"path": "/api/model_null",
+			"method": "POST",
+			"input": "Json",
+			"output": "Json",
+			"error_content_type": "text/plain",
+			"params": [],
+			"output_schema": {
+				"$ref": "#/components/schemas/OnlyNull"
+			},
 			"internal": false,
 			"deprecated": false,
 			"tags": []
@@ -157,9 +263,15 @@
 				"optional_text",
 				"optional_nullable_text"
 			],
-			"args_schema": { "$ref": "#/components/schemas/Room" },
-			"message_schema": { "$ref": "#/components/schemas/Signal" },
-			"presence_schema": { "$ref": "#/components/schemas/Viewer" },
+			"args_schema": {
+				"$ref": "#/components/schemas/Room"
+			},
+			"message_schema": {
+				"$ref": "#/components/schemas/Signal"
+			},
+			"presence_schema": {
+				"$ref": "#/components/schemas/Viewer"
+			},
 			"internal": false,
 			"deprecated": false,
 			"tags": []
@@ -167,32 +279,68 @@
 	],
 	"live_path": "/live",
 	"schemas": {
-		"MaybeText": { "type": ["string", "null"] },
+		"MaybeText": {
+			"type": [
+				"string",
+				"null"
+			]
+		},
 		"Nested": {
 			"type": "object",
 			"properties": {
-				"value": { "type": "string" },
-				"note": { "type": ["string", "null"] }
+				"value": {
+					"type": "string"
+				},
+				"note": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
 			},
-			"required": ["value"]
+			"required": [
+				"value"
+			]
 		},
 		"Echo": {
 			"type": "object",
 			"properties": {
-				"required_text": { "type": "string" },
-				"required_nullable_text": { "type": ["string", "null"] },
-				"optional_text": { "type": "string" },
-				"optional_nullable_text": { "type": ["string", "null"] },
+				"required_text": {
+					"type": "string"
+				},
+				"required_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"optional_text": {
+					"type": "string"
+				},
+				"optional_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
 				"required_nullable_nested": {
 					"anyOf": [
-						{ "$ref": "#/components/schemas/Nested" },
-						{ "type": "null" }
+						{
+							"$ref": "#/components/schemas/Nested"
+						},
+						{
+							"type": "null"
+						}
 					]
 				},
 				"optional_nullable_nested": {
 					"anyOf": [
-						{ "$ref": "#/components/schemas/Nested" },
-						{ "type": "null" }
+						{
+							"$ref": "#/components/schemas/Nested"
+						},
+						{
+							"type": "null"
+						}
 					]
 				},
 				"required_nullable_alias": {
@@ -201,16 +349,26 @@
 				"optional_nullable_alias": {
 					"$ref": "#/components/schemas/MaybeText"
 				},
-				"optional_flag": { "type": "boolean" },
-				"optional_count": { "type": "integer" },
-				"optional_empty_text": { "type": "string" },
+				"optional_flag": {
+					"type": "boolean"
+				},
+				"optional_count": {
+					"type": "integer"
+				},
+				"optional_empty_text": {
+					"type": "string"
+				},
 				"optional_items": {
 					"type": "array",
-					"items": { "type": "string" }
+					"items": {
+						"type": "string"
+					}
 				},
 				"optional_labels": {
 					"type": "object",
-					"additionalProperties": { "type": "string" }
+					"additionalProperties": {
+						"type": "string"
+					}
 				}
 			},
 			"required": [
@@ -223,26 +381,77 @@
 		"Room": {
 			"type": "object",
 			"properties": {
-				"required_text": { "type": "string" },
-				"required_nullable_text": { "type": ["string", "null"] },
-				"optional_text": { "type": "string" },
-				"optional_nullable_text": { "type": ["string", "null"] }
+				"required_text": {
+					"type": "string"
+				},
+				"required_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"optional_text": {
+					"type": "string"
+				},
+				"optional_nullable_text": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
 			},
-			"required": ["required_text", "required_nullable_text"]
+			"required": [
+				"required_text",
+				"required_nullable_text"
+			]
 		},
 		"Signal": {
 			"type": "object",
 			"properties": {
-				"text": { "type": "string" }
+				"text": {
+					"type": "string"
+				}
 			},
-			"required": ["text"]
+			"required": [
+				"text"
+			]
 		},
 		"Viewer": {
 			"type": "object",
 			"properties": {
-				"name": { "type": "string" }
+				"name": {
+					"type": "string"
+				}
 			},
-			"required": ["name"]
+			"required": [
+				"name"
+			]
+		},
+		"DefaultRequired": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string",
+					"default": "fallback"
+				}
+			},
+			"required": [
+				"value"
+			]
+		},
+		"OnlyNull": {
+			"type": "object",
+			"properties": {
+				"required_null": {
+					"type": "null"
+				},
+				"optional_null": {
+					"type": "null"
+				}
+			},
+			"required": [
+				"required_null"
+			]
 		}
 	}
 }

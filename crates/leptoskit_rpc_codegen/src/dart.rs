@@ -32,7 +32,6 @@ use crate::naming::type_name;
 use crate::schema::Shape;
 use crate::schema::analyze;
 use crate::schema::description;
-use crate::schema::has_default;
 use crate::spec::ApiFunction;
 use crate::spec::ApiKind;
 use crate::spec::ApiSpec;
@@ -49,6 +48,8 @@ enum NamedKind {
 enum DartType {
 	/// The `()` of a function returning nothing.
 	Void,
+	/// A JSON value whose only permitted value is null.
+	Null,
 	Bool,
 	Int,
 	Double,
@@ -64,7 +65,7 @@ impl DartType {
 	/// Make a type nullable without wrapping an already nullable type again.
 	fn optional(self) -> Self {
 		match self {
-			Self::Void | Self::Dynamic | Self::Nullable(_) => self,
+			Self::Void | Self::Null | Self::Dynamic | Self::Nullable(_) => self,
 			_ => Self::Nullable(Box::new(self)),
 		}
 	}
@@ -72,12 +73,13 @@ impl DartType {
 	/// Whether `null` is one of this type's values. `Object?` is the
 	/// intentional free-form JSON type, so it admits `null` too.
 	fn allows_null(&self) -> bool {
-		matches!(self, Self::Nullable(_) | Self::Dynamic)
+		matches!(self, Self::Nullable(_) | Self::Dynamic | Self::Null)
 	}
 
 	fn render(&self) -> String {
 		match self {
 			Self::Void => "void".to_owned(),
+			Self::Null => "Null".to_owned(),
 			Self::Bool => "bool".to_owned(),
 			Self::Int => "int".to_owned(),
 			Self::Double => "double".to_owned(),
@@ -94,6 +96,7 @@ impl DartType {
 	fn decode(&self, expr: &str) -> String {
 		match self {
 			Self::Void | Self::Dynamic => expr.to_owned(),
+			Self::Null => format!("{expr} as Null"),
 			Self::Bool => format!("{expr} as bool"),
 			Self::Int => format!("({expr} as num).toInt()"),
 			Self::Double => format!("({expr} as num).toDouble()"),
@@ -123,9 +126,13 @@ impl DartType {
 	/// An expression converting the Dart value `expr` into JSON.
 	fn encode(&self, expr: &str) -> String {
 		match self {
-			Self::Void | Self::Dynamic | Self::Bool | Self::Int | Self::Double | Self::String => {
-				expr.to_owned()
-			}
+			Self::Void
+			| Self::Null
+			| Self::Dynamic
+			| Self::Bool
+			| Self::Int
+			| Self::Double
+			| Self::String => expr.to_owned(),
 			Self::Named(..) => format!("{expr}.toJson()"),
 			Self::List(inner) => {
 				let item = inner.encode("item");
@@ -148,7 +155,10 @@ impl DartType {
 				if encoded == expr {
 					expr.to_owned()
 				} else {
-					format!("{expr} == null ? null : {encoded}")
+					format!(
+						"_encodeNullable({expr}, (value) => {})",
+						inner.encode("value")
+					)
 				}
 			}
 		}
@@ -219,7 +229,7 @@ impl DartTypes {
 			Shape::String { .. } => DartType::String,
 			Shape::Array { items } => {
 				DartType::List(Box::new(items.map_or(DartType::Dynamic, |items| {
-					self.convert(items, &format!("{hint}Item"), spec)
+					value_type(self.convert(items, &format!("{hint}Item"), spec))
 				})))
 			}
 			Shape::Tuple(_) => DartType::List(Box::new(DartType::Dynamic)),
@@ -227,7 +237,7 @@ impl DartTypes {
 				if object.properties.is_empty() {
 					DartType::Map(Box::new(
 						object.additional.map_or(DartType::Dynamic, |values| {
-							self.convert(values, &format!("{hint}Value"), spec)
+							value_type(self.convert(values, &format!("{hint}Value"), spec))
 						}),
 					))
 				} else {
@@ -240,7 +250,7 @@ impl DartTypes {
 			}
 			Shape::Map { values } => {
 				DartType::Map(Box::new(values.map_or(DartType::Dynamic, |values| {
-					self.convert(values, &format!("{hint}Value"), spec)
+					value_type(self.convert(values, &format!("{hint}Value"), spec))
 				})))
 			}
 			Shape::Union(_) | Shape::Any => DartType::Dynamic,
@@ -296,7 +306,7 @@ impl Field {
 /// JSON value, not Dart's `void`.
 fn value_type(ty: DartType) -> DartType {
 	match ty {
-		DartType::Void => DartType::Dynamic,
+		DartType::Void => DartType::Null,
 		other => other,
 	}
 }
@@ -333,9 +343,9 @@ fn class_fields(
 
 	for (wire, property) in &object.properties {
 		let ty = value_type(types.convert(property, &format!("{name}{}", type_name(wire)), spec));
-		// A default makes a field optional on input, but never turns a
-		// nullable field into a required one, or the reverse.
-		let required = object.is_required(wire) && !has_default(property);
+		// JSON Schema defaults are annotations, not permission to omit a
+		// field that the object explicitly requires.
+		let required = object.is_required(wire);
 		fields.push(Field {
 			dart: field_names.bind(&dart_identifier(wire)),
 			wire: (*wire).to_owned(),
@@ -450,7 +460,7 @@ fn to_json(fields: &[Field]) -> String {
 						"\t\tif ({0} != null) {1}: {2},",
 						field.dart,
 						key,
-						field.ty.encode(&field.dart)
+						field.ty.clone().optional().encode(&field.dart)
 					)
 				}
 			})
@@ -693,7 +703,7 @@ impl Signature {
 				parameters.push(format!("{} {}", ty.clone().optional().render(), identifier));
 				payload.push(format!(
 					"\t\t\t\tif ({identifier} != null) {key}: {},",
-					ty.encode(identifier)
+					ty.clone().optional().encode(identifier)
 				));
 			}
 		}
@@ -937,18 +947,12 @@ fn channel_class(
 	let hint = type_name(&channel.name);
 	// A channel's values are JSON, never nothing.
 	let mut convert = |schema: &Value, suffix: &str| {
-		match types.convert(schema, &format!("{hint}{suffix}"), spec) {
-			DartType::Void => DartType::Dynamic,
-			other => other,
-		}
+		value_type(types.convert(schema, &format!("{hint}{suffix}"), spec))
 	};
 	let args = convert(&channel.args_schema, "Args");
 	let message = convert(&channel.message_schema, "Message");
 	let presence = convert(&channel.presence_schema, "Presence");
-	let optional_presence = match presence {
-		DartType::Nullable(_) | DartType::Dynamic => presence.clone(),
-		_ => DartType::Nullable(Box::new(presence.clone())),
-	};
+	let optional_presence = presence.clone().optional();
 	let fields = channel
 		.fields
 		.iter()
@@ -989,7 +993,10 @@ fn to_json_value(ty: &DartType, expr: &str) -> String {
 			if encoded == expr {
 				encoded
 			} else {
-				format!("{expr} == null ? null : {encoded}")
+				format!(
+					"_encodeNullable({expr}, (value) => {})",
+					inner.encode("value")
+				)
 			}
 		}
 		_ => ty.encode(expr),
@@ -1205,6 +1212,12 @@ final class _Present<T> extends Presence<T> {
 
   @override
   final T value;
+}
+
+/// Encodes through a local value so nullable public fields and getters do not
+/// depend on field promotion in the consumer's Dart SDK.
+Object? _encodeNullable<T>(T? value, Object? Function(T) encode) {
+  return value == null ? null : encode(value);
 }
 
 /// The value of a required field, which must be present even when it may be

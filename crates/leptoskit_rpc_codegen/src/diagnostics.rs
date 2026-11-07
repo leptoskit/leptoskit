@@ -148,7 +148,7 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 		// means "show no presence". When the schema also allows null as a
 		// presence value, those two states cannot be told apart.
 		if options.language == TargetLanguage::Dart
-			&& walker.nullable_alias(&channel.presence_schema)
+			&& walker.dart_accepts_null(&channel.presence_schema)
 		{
 			walker.loss(
 				&format!("channels.{}.presence", channel.name),
@@ -355,9 +355,11 @@ impl Walker<'_> {
 	fn walk_omitted_null(&mut self, schema: &Value, path: &str, stack: &mut Vec<String>) {
 		let analyzed = analyze(schema);
 
-		// A union is already reported as a `dynamic` fallback, and a lone
-		// null schema has no non-null value to distinguish.
-		if analyzed.nullable && !matches!(&analyzed.shape, Shape::Null | Shape::Union(_)) {
+		// A required null-only value still needs a key. Intentional free-form
+		// JSON also permits null, even without a nullable type annotation.
+		if analyzed.nullable
+			|| (matches!(&analyzed.shape, Shape::Any) && analyzed.unsupported.is_none())
+		{
 			self.loss(
 				path,
 				DiagnosticKind::NullableCollapsed,
@@ -412,6 +414,31 @@ impl Walker<'_> {
 			| Shape::String { .. }
 			| Shape::Union(_)
 			| Shape::Any => {}
+		}
+	}
+
+	/// Dart's JSON value types admit null for explicit nullable, null-only,
+	/// and intentionally unconstrained schemas, including through aliases.
+	fn dart_accepts_null(&self, schema: &Value) -> bool {
+		let mut current = schema;
+		let mut seen = std::collections::BTreeSet::new();
+		loop {
+			let analyzed = analyze(current);
+			if analyzed.nullable
+				|| (matches!(analyzed.shape, Shape::Any) && analyzed.unsupported.is_none())
+			{
+				return true;
+			}
+			let Shape::Ref(name) = analyzed.shape else {
+				return false;
+			};
+			if !seen.insert(name) {
+				return false;
+			}
+			let Some(next) = self.spec.schema(name) else {
+				return false;
+			};
+			current = next;
 		}
 	}
 

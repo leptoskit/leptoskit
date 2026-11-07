@@ -2,7 +2,6 @@
 //! real JSON, without a mock of the generated code.
 #![cfg(feature = "generators")]
 
-use std::path::Path;
 use std::process::Command;
 
 use leptoskit_rpc_codegen::ApiSpec;
@@ -10,7 +9,7 @@ use leptoskit_rpc_codegen::GenerateOptions;
 use leptoskit_rpc_codegen::TargetLanguage;
 
 #[test]
-fn dart_requiredness_and_nullability_round_trip() {
+fn dart_requiredness_and_nullability_are_independent() {
 	let spec = ApiSpec::from_json(include_str!("fixtures/dart_presence.json"))
 		.expect("the Dart presence fixture is a valid spec");
 	let generated = spec.generate(&GenerateOptions::new(TargetLanguage::Dart, "presence"));
@@ -64,7 +63,14 @@ fn dart_requiredness_and_nullability_round_trip() {
 		!source.contains("if (requiredNullableText != null)"),
 		"a required nullable field is never omitted: {source}"
 	);
+}
 
+#[test]
+#[ignore = "run by test:sdk, which requires the Dart toolchain"]
+fn generated_dart_presence_round_trips() {
+	let spec =
+		ApiSpec::from_json(include_str!("fixtures/dart_presence.json")).expect("fixture spec");
+	let generated = spec.generate(&GenerateOptions::new(TargetLanguage::Dart, "presence"));
 	let dir = tempfile::tempdir().expect("temporary Dart package");
 	for file in generated.files {
 		let path = dir.path().join(file.path);
@@ -80,13 +86,10 @@ fn dart_requiredness_and_nullability_round_trip() {
 	)
 	.expect("Dart presence fixture");
 
-	// Dart is not part of the Rust toolchain; keep the generated-source
-	// assertions above useful where it is absent, and run the real package
-	// checks where it is installed.
-	let Some(dart) = Command::new("dart").arg("--version").output().ok() else {
-		eprintln!("skipping generated Dart runtime checks: `dart` is not on PATH");
-		return;
-	};
+	let dart = Command::new("dart")
+		.arg("--version")
+		.output()
+		.expect("SDK acceptance requires dart; run through devenv shell test:sdk");
 	assert!(
 		dart.status.success(),
 		"`dart --version` failed:\n{}",

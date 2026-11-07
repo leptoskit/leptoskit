@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,7 +8,9 @@ import 'package:presence/presence.dart';
 /// `web_socket_channel`, so a plain Dart program keeps the fixture small.
 Future<void> main() async {
   _checkModels();
+  _checkDefaultsAndNull();
   await _checkArguments();
+  await _checkLiveArguments();
   stdout.writeln('generated Dart presence checks passed');
 }
 
@@ -106,37 +109,27 @@ void _checkModels() {
     'optional_nullable_nested': null,
     'optional_nullable_alias': null,
   });
-  _equals(
-    explicitNull.toJson(),
-    <String, Object?>{
-      ...wire,
-      'optional_nullable_text': null,
-      'optional_nullable_nested': null,
-      'optional_nullable_alias': null,
-    },
-    'explicit optional null is not omitted',
-  );
+  _equals(explicitNull.toJson(), <String, Object?>{
+    ...wire,
+    'optional_nullable_text': null,
+    'optional_nullable_nested': null,
+    'optional_nullable_alias': null,
+  }, 'explicit optional null is not omitted');
 
-  _throws(
-    () {
-      Echo.fromJson(<String, Object?>{
-        'required_text': 'r',
-        'required_nullable_nested': null,
-        'required_nullable_alias': null,
-      });
-    },
-    'missing required nullable field',
-  );
-  _throws(
-    () {
-      Echo.fromJson(<String, Object?>{
-        'required_nullable_text': null,
-        'required_nullable_nested': null,
-        'required_nullable_alias': null,
-      });
-    },
-    'missing required non-nullable field',
-  );
+  _throws(() {
+    Echo.fromJson(<String, Object?>{
+      'required_text': 'r',
+      'required_nullable_nested': null,
+      'required_nullable_alias': null,
+    });
+  }, 'missing required nullable field');
+  _throws(() {
+    Echo.fromJson(<String, Object?>{
+      'required_nullable_text': null,
+      'required_nullable_nested': null,
+      'required_nullable_alias': null,
+    });
+  }, 'missing required non-nullable field');
 
   // Channel join arguments are ordinary models, so they share the same
   // requiredness and presence behavior.
@@ -145,27 +138,19 @@ void _checkModels() {
     'required_nullable_text': null,
     'optional_nullable_text': null,
   });
-  _equals(
-    room.toJson(),
-    <String, Object?>{
-      'required_text': 'r',
-      'required_nullable_text': null,
-      'optional_nullable_text': null,
-    },
-    'channel arguments keep an explicit optional null',
-  );
+  _equals(room.toJson(), <String, Object?>{
+    'required_text': 'r',
+    'required_nullable_text': null,
+    'optional_nullable_text': null,
+  }, 'channel arguments keep an explicit optional null');
   final roomAbsent = Room.fromJson(<String, Object?>{
     'required_text': 'r',
     'required_nullable_text': null,
   });
-  _equals(
-    roomAbsent.toJson(),
-    <String, Object?>{
-      'required_text': 'r',
-      'required_nullable_text': null,
-    },
-    'channel arguments omit an absent optional null',
-  );
+  _equals(roomAbsent.toJson(), <String, Object?>{
+    'required_text': 'r',
+    'required_nullable_text': null,
+  }, 'channel arguments omit an absent optional null');
 }
 
 Future<void> _checkArguments() async {
@@ -201,36 +186,28 @@ Future<void> _checkArguments() async {
       optionalItems: <String>[],
       optionalLabels: <String, String>{},
     );
-    _equals(
-      jsonDecode(jsonBodies.single),
-      <String, Object?>{
-        'required_text': 'r',
-        'required_nullable_text': null,
-        'required_nullable_nested': null,
-        'optional_nullable_text': null,
-        'optional_flag': false,
-        'optional_count': 0,
-        'optional_empty_text': '',
-        'optional_items': <Object?>[],
-        'optional_labels': <String, Object?>{},
-      },
-      'JSON arguments keep null and falsy values',
-    );
+    _equals(jsonDecode(jsonBodies.single), <String, Object?>{
+      'required_text': 'r',
+      'required_nullable_text': null,
+      'required_nullable_nested': null,
+      'optional_nullable_text': null,
+      'optional_flag': false,
+      'optional_count': 0,
+      'optional_empty_text': '',
+      'optional_items': <Object?>[],
+      'optional_labels': <String, Object?>{},
+    }, 'JSON arguments keep null and falsy values');
 
     await client.send.call(
       requiredText: 'r',
       requiredNullableText: null,
       requiredNullableNested: null,
     );
-    _equals(
-      jsonDecode(jsonBodies.last),
-      <String, Object?>{
-        'required_text': 'r',
-        'required_nullable_text': null,
-        'required_nullable_nested': null,
-      },
-      'JSON arguments omit absent optional values',
-    );
+    _equals(jsonDecode(jsonBodies.last), <String, Object?>{
+      'required_text': 'r',
+      'required_nullable_text': null,
+      'required_nullable_nested': null,
+    }, 'JSON arguments omit absent optional values');
 
     await client.formEcho(
       optionalFlag: false,
@@ -307,4 +284,131 @@ bool _sameJson(Object? actual, Object? expected) {
     return true;
   }
   return actual == expected;
+}
+
+void _checkDefaultsAndNull() {
+  _throws(() {
+    DefaultRequired.fromJson(<String, Object?>{});
+  }, 'a default annotation does not make a required field optional');
+  _equals(DefaultRequired(value: 'chosen').toJson(), <String, Object?>{
+    'value': 'chosen',
+  }, 'required default is explicit');
+  _equals(
+    OnlyNull.fromJson(<String, Object?>{'required_null': null}).toJson(),
+    <String, Object?>{'required_null': null},
+    'null-only required value',
+  );
+  _equals(
+    OnlyNull.fromJson(<String, Object?>{
+      'required_null': null,
+      'optional_null': null,
+    }).toJson(),
+    <String, Object?>{'required_null': null, 'optional_null': null},
+    'null-only optional value retains presence',
+  );
+  _throws(() {
+    OnlyNull.fromJson(<String, Object?>{'required_null': 'wrong'});
+  }, 'a null-only field cannot decode a non-null value');
+}
+
+Future<void> _checkLiveArguments() async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  final sockets = <WebSocket>[];
+  final mutations = <Object?>[];
+  final joined = Completer<Map<String, dynamic>>();
+  final subscription = server.listen((request) async {
+    final socket = await WebSocketTransformer.upgrade(
+      request,
+      protocolSelector: (_) => 'leptoskit.live.v1.json',
+    );
+    sockets.add(socket);
+    socket.listen((raw) {
+      final frame = jsonDecode(raw as String) as Map<String, dynamic>;
+      switch (frame['type']) {
+        case 'hello':
+          socket.add(
+            jsonEncode(<String, Object?>{
+              'type': 'welcome',
+              'version': 0,
+              'connection': 'presence-fixture',
+              'heartbeat_seconds': 30,
+            }),
+          );
+        case 'mutate':
+          mutations.add(frame['args']);
+          socket.add(
+            jsonEncode(<String, Object?>{
+              'type': 'done',
+              'request': frame['request'],
+              'version': 0,
+              'ok': null,
+            }),
+          );
+        case 'join':
+          if (!joined.isCompleted) joined.complete(frame);
+      }
+    });
+  });
+  final client = Client(
+    serverUrl: 'http://${server.address.host}:${server.port}',
+  );
+  try {
+    await client.send
+        .live(
+          requiredText: 'r',
+          requiredNullableText: null,
+          requiredNullableNested: null,
+          optionalNullableText: const Presence<String?>.present(null),
+          optionalFlag: false,
+          optionalCount: 0,
+          optionalEmptyText: '',
+          optionalItems: <String>[],
+          optionalLabels: <String, String>{},
+        )
+        .timeout(const Duration(seconds: 5));
+    _equals(mutations.single, <String, Object?>{
+      'required_text': 'r',
+      'required_nullable_text': null,
+      'required_nullable_nested': null,
+      'optional_nullable_text': null,
+      'optional_flag': false,
+      'optional_count': 0,
+      'optional_empty_text': '',
+      'optional_items': <Object?>[],
+      'optional_labels': <String, Object?>{},
+    }, 'live mutation keeps explicit null and falsy values');
+    await client.send
+        .live(
+          requiredText: 'r',
+          requiredNullableText: null,
+          requiredNullableNested: null,
+        )
+        .timeout(const Duration(seconds: 5));
+    _equals(mutations.last, <String, Object?>{
+      'required_text': 'r',
+      'required_nullable_text': null,
+      'required_nullable_nested': null,
+    }, 'live mutation omits absent values');
+    final room = client.room.join(
+      Room(
+        requiredText: 'r',
+        requiredNullableText: null,
+        optionalNullableText: const Presence<String?>.present(null),
+      ),
+    );
+    final frame = await joined.future.timeout(const Duration(seconds: 5));
+    _equals(frame['args'], <String, Object?>{
+      'required_text': 'r',
+      'required_nullable_text': null,
+      'optional_nullable_text': null,
+    }, 'channel join preserves explicit nullable arguments');
+    room.leave();
+  } finally {
+    client.live.close();
+    for (final socket in sockets) {
+      await socket.close();
+    }
+    await subscription.cancel();
+    await server.close(force: true);
+  }
 }

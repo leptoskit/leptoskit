@@ -464,3 +464,25 @@ fn dart_channel_presence_cannot_confuse_absence_with_null() {
 		.is_empty()
 	);
 }
+
+#[test]
+fn dart_null_only_and_untyped_values_need_json_encoding() {
+	for schema in [json!({"type": "null"}), json!(true), json!({})] {
+		let mut spec = supported_spec();
+		spec.schemas.insert("NullableAlias".into(), schema);
+		spec.functions[0].input = HttpInput::Form;
+		spec.functions[0].params = vec![ApiParam {
+			name: "value".into(),
+			docs: String::new(),
+			required: true,
+			schema: json!({"$ref": "#/components/schemas/NullableAlias"}),
+		}];
+		let path = format!("functions.{}.params.value", spec.functions[0].name);
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			[DiagnosticKind::NullableCollapsed]
+		);
+		spec.functions[0].input = HttpInput::Json;
+		assert!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path).is_empty());
+	}
+}
