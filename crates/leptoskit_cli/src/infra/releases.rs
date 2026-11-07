@@ -684,8 +684,8 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let local_hash = history_fingerprint(local_schema.clone())?;
 	let target = target_release(args, &history, version, &local_hash)?;
 	let evidence = release_evidence(args, target.as_ref(), &history, &local_hash)?;
-	if evidence.is_some() {
-		super::verified::backend_only(&root, &config)?;
+	if let Some(evidence) = &evidence {
+		evidence.application(&root, &config)?;
 	}
 	let authorization =
 		authorize_release(&dir, c, args, evidence.as_ref(), target.as_ref(), &history)?;

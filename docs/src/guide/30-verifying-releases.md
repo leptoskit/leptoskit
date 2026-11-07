@@ -136,7 +136,7 @@ leptoskit verify check \
   --sha256 <trusted-inventory-sha256>
 ```
 
-This is an offline file check for a prepared backend bundle, not a connection to a running backend. It applies to backend artifacts used by any client platform. It does not verify a web or native client. Unix file permission bits are compared when available; checking an inventory carrying Unix permissions requires a host and extraction method that preserve those permissions.
+This is an offline file check for a prepared backend bundle, not a connection to a running backend. It applies to backend artifacts used by any client platform. A website profile also checks its inventoried browser files, but this command does not reproduce those files or verify a native client. Unix file permission bits are compared when available; checking an inventory carrying Unix permissions requires a host and extraction method that preserve those permissions.
 
 Obtain the expected SHA-256 from independently authenticated release evidence or a previously trusted record. A checksum supplied alongside an untrusted download cannot establish who produced it. A successful check means the local files match that inventory; it does not prove that the executable was built from the included sources, that dependencies are complete, that a server runs it, or that its code is safe.
 
@@ -194,13 +194,13 @@ leptoskit verify record \
   --out ./backend-inventory.json
 ```
 
-The command prints the inventory's SHA-256 and refuses to overwrite an existing inventory. It records file paths, lengths, hashes, Unix file permissions where supported, and directory entries. Missing, changed and extra entries—including empty directories—fail a later check. Symbolic links and special files are rejected. Directory permissions, ownership, timestamps, ACLs and extended attributes are not checked. Use an extracted directory that is not being modified while checking it.
+The command prints the inventory's SHA-256 and refuses to overwrite an existing inventory. It records file paths, lengths, hashes, Unix file permissions where supported, and directory entries. Missing, changed and extra entries—including empty directories—fail a later check. Symbolic links and special files are rejected. The backend-only inventory does not check directory permissions, ownership, timestamps, ACLs or extended attributes. The website profile additionally requires fixed file and directory modes. Use an extracted directory that is not being modified while checking it.
 
 The inventory is unsigned. Authenticate it separately before others rely on it. Both commands state explicitly that build provenance and the live deployment were not verified.
 
 ## Require independent approval for a backend release
 
-For a server-only app, an operator can require reviewers to approve the complete backend image descriptor before deployment. Each reviewer checks the reproduced source, executable, image configuration, schema and RPC evidence, then signs the exact descriptor file:
+For a server-only app or a supported full-stack website, an operator can require reviewers to approve the complete backend image descriptor before deployment. Each reviewer checks the reproduced source, executable, image configuration, schema and RPC evidence, then signs the exact descriptor file:
 
 ```sh
 lk verify keygen --out reviewer.key
@@ -227,4 +227,25 @@ The deployment signer uses the existing `lk verify sign` command with a version 
 
 Once trust is configured, missing approvals cannot fall back to an unsigned deployment. Reuse, rollback and recovery recheck the signatures and the current policy. To restore an older image, issue a newer policy that explicitly authorizes its descriptor and image; preserve `backend-policy-state.json` so older or conflicting policies remain rejected. Protect these operator files from the release publisher.
 
-This path targets managed Linux backend containers. Website and service-bearing releases remain unsupported. Approval does not prove code safety, RPC compatibility, or which executable is running on a server; runtime attestation is absent.
+This path targets managed Linux backend containers. Website releases require the explicit production profile below. Application service releases remain unsupported. Approval does not prove code safety, RPC compatibility, or which executable is running on a server; runtime attestation is absent.
+
+## Reproduce a website and its backend together
+
+To check that the JavaScript, Wasm, CSS and public files in your image match your source release, add a website profile to the build recipe before running `lk verify build`:
+
+```json
+{
+	"profile": "leptoskit-web-v1",
+	"config_sha256": "<SHA-256 of the committed leptoskit.toml>",
+	"toolchain_sha256": "<SHA-256 of the ordered builder version report>",
+	"output_name": "my_app"
+}
+```
+
+This object is the recipe's `website` field. Keep the other recipe fields, use empty `features` and `rustflags` and `no_default_features: false`, and configure those settings in `leptoskit.toml`. The backend package and binary must equal `app.name`; `output_name` is the client library stem used in `pkg/my_app.js`. Select a digest-pinned builder containing Rust, the `wasm32-unknown-unknown` target, `leptoskit` and `wasm-opt`. The version report is the exact stdout of `rustc -vV`, `cargo -V`, `leptoskit --version`, and `wasm-opt --version`, concatenated in that order in the builder using your source's toolchain.
+
+This profile targets full-stack SSR or CSR websites with a Linux GNU backend on x86_64 or aarch64. It uses the ordinary production web build, including configured Wasm optimization, compression and static assets. The pinned CLI also handles the default split setting and any generated chunks. Explicit plugins, localization, islands and static generation are not supported in this profile. Application services are also unsupported. Native platform outputs are not built or verified by this command.
+
+Build and reproduce with the same commands as the backend example. Both clean builds must produce identical backend bytes and identical website paths, modes and file contents. Packaging copies these checked files to `/app/backend` and `/app/dist`, then checks the files extracted from the image. Website files must have mode 0644 and directories mode 0755; links are rejected. Keep generated `dist`, `target`, `.leptoskit`, `web/pkg` and `public/pkg` directories out of the source commit.
+
+The website descriptor includes the complete asset tree, configuration and builder inputs. Independent approvals and the deployment policy bind that entire descriptor and image. Missing website evidence blocks a verified release, including rollback or recovery. A hand-written inventory still proves only file integrity; supplied assets are never called reproduced until the source build has actually been repeated and compared. These checks do not certify API compatibility or attest what a running server executes.

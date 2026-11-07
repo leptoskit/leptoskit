@@ -1,0 +1,12 @@
+[workspace]
+members = ["app"]
+resolver = "2"
+
+[package]
+name = "verified-website"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+ssr = []

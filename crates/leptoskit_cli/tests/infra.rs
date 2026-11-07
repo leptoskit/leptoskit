@@ -2075,8 +2075,46 @@ fn with_infrastructure_cache(root: &Path) {
 
 #[test]
 fn verified_release_command_enforces_evidence_before_and_after_boot() {
+	verified_release_lifecycle(false);
+}
+
+#[test]
+fn verified_website_release_preserves_evidence_through_rollback_and_recovery() {
+	verified_release_lifecycle(true);
+}
+
+fn website_descriptor(root: &Path) -> (String, String) {
+	let (path, _) = verified_descriptor(root);
+
+	let config_path = root.join("leptoskit.toml");
+	let config = fs::read_to_string(&config_path).unwrap().replace(
+		"platforms = [\"server\"]",
+		"platforms = [\"server\", \"web\"]",
+	);
+	let config = format!("{config}\n[bundle]\nsplit = false\n");
+	fs::write(config_path, &config).unwrap();
+	let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+	value["format_version"] = serde_json::json!(2);
+	value["recipe"]["target"] = serde_json::json!("aarch64-unknown-linux-gnu");
+	value["recipe"]["website"] = serde_json::json!({"profile":"leptoskit-web-v1", "config_sha256":leptoskit_db::checksum(&config), "toolchain_sha256":"b".repeat(64), "output_name":"site"});
+	value["assets"] = serde_json::json!({"reproduced": {"profile":"leptoskit-web-v1", "toolchain_sha256":"b".repeat(64), "entries": {
+		"pkg": {"kind":"directory","mode":493},
+		"pkg/site.js": {"kind":"file","mode":420,"size":1,"sha256":"c".repeat(64)},
+		"pkg/site_bg.wasm": {"kind":"file","mode":420,"size":1,"sha256":"d".repeat(64)}
+	}}});
+	let bytes = serde_json::to_string(&value).unwrap();
+	let pin = leptoskit_db::checksum(&bytes);
+	fs::write(&path, bytes).unwrap();
+	(path, pin)
+}
+
+fn verified_release_lifecycle(website: bool) {
 	let root = project();
-	let (path, pin) = verified_descriptor(root.path());
+	let (path, pin) = if website {
+		website_descriptor(root.path())
+	} else {
+		verified_descriptor(root.path())
+	};
 	with_infrastructure_cache(root.path());
 	let args = [
 		"deploy",
@@ -2168,19 +2206,17 @@ fn verified_release_command_enforces_evidence_before_and_after_boot() {
 		&["deploy", "--recover", "--version", "v1"],
 		&[],
 	));
+	assert_verified_history(root.path());
+}
+
+fn assert_verified_history(root: &Path) {
 	let history: serde_json::Value = serde_json::from_slice(
-		&fs::read(
-			root.path()
-				.join("remote/state/notes-production/control/releases.json"),
-		)
-		.unwrap(),
+		&fs::read(root.join("remote/state/notes-production/control/releases.json")).unwrap(),
 	)
 	.unwrap();
 	assert_eq!(history[0]["evidence"], history[1]["evidence"]);
 	assert!(history[1]["evidence"].is_object());
-	let history_path = root
-		.path()
-		.join("remote/state/notes-production/control/releases.json");
+	let history_path = root.join("remote/state/notes-production/control/releases.json");
 	let mut legacy = history[0].clone();
 	legacy["version"] = "legacy".into();
 	legacy.as_object_mut().unwrap().remove("evidence");
@@ -2190,7 +2226,7 @@ fn verified_release_command_enforces_evidence_before_and_after_boot() {
 		vec!["deploy", "--rollback", "legacy"],
 		vec!["deploy", "--recover", "--version", "legacy"],
 	] {
-		fails_with(&cli(root.path(), &flags, &[]), "cannot downgrade");
+		fails_with(&cli(root, &flags, &[]), "cannot downgrade");
 		assert_eq!(
 			fs::read(&history_path).unwrap(),
 			serde_json::to_vec(&mixed).unwrap()
@@ -2200,22 +2236,14 @@ fn verified_release_command_enforces_evidence_before_and_after_boot() {
 	discarded[1].as_object_mut().unwrap().remove("evidence");
 	fs::write(&history_path, serde_json::to_vec(&discarded).unwrap()).unwrap();
 	fails_with(
-		&cli(
-			root.path(),
-			&["deploy", "--recover", "--version", "v1"],
-			&[],
-		),
+		&cli(root, &["deploy", "--recover", "--version", "v1"], &[]),
 		"discarded verified evidence",
 	);
 	let mut unknown = history.clone();
 	unknown[0]["future_evidence"] = serde_json::json!({"verified": true});
 	fs::write(&history_path, serde_json::to_vec(&unknown).unwrap()).unwrap();
 	fails_with(
-		&cli(
-			root.path(),
-			&["deploy", "--recover", "--version", "v1"],
-			&[],
-		),
+		&cli(root, &["deploy", "--recover", "--version", "v1"], &[]),
 		"invalid shared release history",
 	);
 	assert_eq!(
