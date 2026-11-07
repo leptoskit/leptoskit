@@ -25,6 +25,9 @@ pub struct SoftPasskey {
 	credentials: Vec<Credential>,
 	/// Whether new passkeys are synced, like a password manager's.
 	pub synced: bool,
+	/// Whether assertions say the user was verified, as a PIN or
+	/// biometrics does.
+	pub user_verified: bool,
 }
 
 struct Credential {
@@ -48,6 +51,7 @@ impl SoftPasskey {
 			origin: origin.to_owned(),
 			credentials: Vec::new(),
 			synced: false,
+			user_verified: true,
 		}
 	}
 
@@ -180,7 +184,8 @@ impl SoftPasskey {
 		let mut auth_data = digest(&SHA256, credential.rp_id.as_bytes())
 			.as_ref()
 			.to_vec();
-		auth_data.push(UP | UV | backup);
+		let verified = if self.user_verified { UV } else { 0 };
+		auth_data.push(UP | verified | backup);
 		auth_data.extend_from_slice(&credential.counter.to_be_bytes());
 		let client_data = json!({
 			"type": "webauthn.get",

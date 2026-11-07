@@ -650,6 +650,28 @@ async fn policies_show_each_person_only_their_own_rows() {
 }
 
 #[tokio::test]
+async fn auth_reports_its_name_origin_and_keys() {
+	let db = databases(None).await.remove(0);
+	let mailbox = Mailbox::new();
+	let auth = Auth::builder(&db, keys())
+		.app_name("Notes")
+		.origin("https://notes.example/")
+		.mailer(mailbox)
+		.build()
+		.unwrap();
+
+	assert_eq!(auth.app_name(), "Notes");
+	assert_eq!(auth.origin(), Some("https://notes.example"));
+	assert_eq!(auth.keys().ids(), ["test"]);
+	let builder = format!("{:?}", Auth::builder(&db, keys()));
+	assert!(builder.contains(r#"app_name: "this app""#), "{builder}");
+	assert!(builder.contains(r#"ids: ["test"]"#), "{builder}");
+	let printed = format!("{auth:?}");
+	assert!(printed.contains("Notes"), "{printed}");
+	assert!(!printed.contains("[7, 7"), "the keys stay out: {printed}");
+}
+
+#[tokio::test]
 async fn too_many_attempts_are_rate_limited() {
 	let cluster = PostgresCluster::start();
 
@@ -710,6 +732,32 @@ async fn too_many_attempts_are_rate_limited() {
 }
 
 #[tokio::test]
+async fn extensions_count_attempts_through_the_same_limiter() {
+	let db = databases(None).await.remove(0);
+	let auth = Auth::builder(&db, keys())
+		.mailer(Mailbox::new())
+		.build()
+		.unwrap();
+	let limit = Limit::new(1, Duration::from_secs(60));
+
+	auth.limit_attempts("device-code", "198.51.100.1", limit)
+		.await
+		.unwrap();
+	assert!(matches!(
+		auth.limit_attempts("device-code", "198.51.100.1", limit)
+			.await,
+		Err(AuthError::RateLimited { .. })
+	));
+	// Another source, and another action, count apart.
+	auth.limit_attempts("device-code", "198.51.100.2", limit)
+		.await
+		.unwrap();
+	auth.limit_attempts("password-reset", "198.51.100.1", limit)
+		.await
+		.unwrap();
+}
+
+#[tokio::test]
 async fn a_window_resets_and_concurrent_attempts_share_it() {
 	let cluster = PostgresCluster::start();
 
@@ -720,6 +768,13 @@ async fn a_window_resets_and_concurrent_attempts_share_it() {
 		// A window that has passed starts again.
 		limiter.hit(b"reset", instant).await.unwrap();
 		limiter.hit(b"reset", instant).await.unwrap();
+
+		// A window longer than a timestamp can hold is a configuration
+		// error, not a panic.
+		assert!(matches!(
+			limiter.hit(b"forever", Limit::new(1, Duration::MAX)).await,
+			Err(AuthError::Config(message)) if message.contains("too long")
+		));
 
 		let limit = Limit::new(5, Duration::from_secs(600));
 		let attempts = (0..12).map(|_| {

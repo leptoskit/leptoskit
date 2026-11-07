@@ -695,6 +695,78 @@ async fn sign_in_with_apple_on_the_device_checks_its_id_token() {
 	}
 }
 
+#[tokio::test]
+async fn a_relay_for_another_provider_and_apples_refusals_are_refused() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let app = app(&db);
+	let native = Native::default();
+
+	// A company flow's state, sent to Google's callback: it isn't the app's
+	// to relay, and the system browser keeps no cookie of this site's.
+	let (url, _token) = native
+		.start(&app, "/auth/oauth/start", "company", LOOPBACK)
+		.await;
+	let state = url::Url::parse(&url)
+		.unwrap()
+		.query_pairs()
+		.find(|(name, _)| name == "state")
+		.unwrap()
+		.1
+		.into_owned();
+	let response = send(
+		&app,
+		Request::get(format!("/auth/callback/google?state={state}&code=stolen"))
+			.body(Body::empty())
+			.unwrap(),
+	)
+	.await;
+	assert_eq!(response.status(), StatusCode::SEE_OTHER);
+	assert_eq!(
+		response.headers()[header::LOCATION].to_str().unwrap(),
+		"/?auth=error&auth_error=sign_in_expired"
+	);
+
+	// Saying no in Apple's sheet is a cancellation.
+	let started = Native::default()
+		.post(
+			&app,
+			"/auth/oauth/start",
+			json!({ "provider": "apple", "native": "apple_id" }),
+		)
+		.await;
+	let token = json_body(started).await["token"]
+		.as_str()
+		.unwrap()
+		.to_owned();
+	let refused = Native::default()
+		.post(
+			&app,
+			"/auth/oauth/finish",
+			json!({
+				"provider": "apple",
+				"token": token,
+				"id_token": "an ID token",
+				"error": "access_denied",
+			}),
+		)
+		.await;
+	assert_eq!(json_body(refused).await["error"], "cancelled");
+
+	// A flow that isn't Apple's can't be finished as Apple on the device.
+	let (_, token) = native
+		.start(&app, "/auth/oauth/start", "company", LOOPBACK)
+		.await;
+	let finished = Native::default()
+		.post(
+			&app,
+			"/auth/oauth/finish",
+			json!({ "provider": "apple", "token": token, "id_token": "an ID token" }),
+		)
+		.await;
+	assert_eq!(json_body(finished).await["error"], "sign_in_expired");
+}
+
 // The loopback is the desktop plugin's, which only builds there.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tokio::test]

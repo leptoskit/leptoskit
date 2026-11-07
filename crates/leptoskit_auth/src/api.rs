@@ -1208,5 +1208,46 @@ mod tests {
 		let printed = format!("{sign_in:?}");
 		assert!(!printed.contains("secret-token"), "{printed}");
 		assert!(printed.contains(address.as_str()), "{printed}");
+
+		let refresh = RefreshTokens {
+			refresh_token: "secret-token".into(),
+		};
+		assert_eq!(format!("{refresh:?}"), "RefreshTokens { .. }");
+		let second = SecondFactorCode {
+			code: "123456".into(),
+			token: Some("secret-token".into()),
+			transport: Transport::Bearer,
+			device_name: Some("Ada's phone".into()),
+		};
+		let printed = format!("{second:?}");
+		assert!(!printed.contains("secret-token"), "{printed}");
+		assert!(!printed.contains("123456"), "{printed}");
+		let password = PasswordSignIn {
+			email: "ada@example.com".into(),
+			password: "secret-token".into(),
+			transport: Transport::Bearer,
+			device_name: None,
+		};
+		let printed = format!("{password:?}");
+		assert!(!printed.contains("secret-token"), "{printed}");
+		assert!(printed.contains("ada@example.com"), "{printed}");
+		let set = SetPassword {
+			password: "secret-token".into(),
+		};
+		assert_eq!(format!("{set:?}"), "SetPassword { .. }");
+		let reset = ResetPassword {
+			email: "ada@example.com".into(),
+			code: "123456".into(),
+			password: "secret-token".into(),
+			transport: Transport::Bearer,
+			device_name: None,
+		};
+		let printed = format!("{reset:?}");
+		assert!(!printed.contains("secret-token"), "{printed}");
+		assert!(!printed.contains("123456"), "{printed}");
+		let factor = FactorCode {
+			code: "123456".into(),
+		};
+		assert_eq!(format!("{factor:?}"), "FactorCode { .. }");
 	}
 }

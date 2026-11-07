@@ -962,6 +962,8 @@ async fn the_scopes_call_the_configured_client() {
 	let server = Server::new().await;
 	let browser = server.browser();
 	install(Arc::clone(&browser.api));
+	assert_eq!(api().authorization().await, Ok(None));
+	assert_eq!(api().refused(None).await, Ok(false));
 	let client = QueryClient::new().with_defaults(
 		QueryDefaults::new()
 			.with_refetch_on_window_focus(RefetchOn::Never)
@@ -1034,11 +1036,175 @@ async fn the_scopes_call_the_configured_client() {
 	assert_eq!(session_id(&browser).await, None);
 }
 
+/// The code an authenticator app shows for the account's secret, `offset`
+/// steps from now.
+#[cfg(feature = "password")]
+async fn totp_code(server: &Server, account: Id<crate::Account>, offset: i64) -> String {
+	let row = crate::TotpSecret::query()
+		.first(&server.db.system("test"))
+		.await
+		.unwrap()
+		.expect("an authenticator secret");
+	let secret = crate::totp::Secret(
+		server
+			.auth
+			.keys()
+			.open(
+				&crate::mfa::totp_context(account.uuid().as_bytes()),
+				&row.secret,
+			)
+			.unwrap(),
+	);
+	let step = crate::totp::Secret::step(leptoskit_db::now().timestamp()) + offset;
+	format!("{:06}", crate::totp::hotp(&secret.0, step, 6))
+}
+
+#[cfg(feature = "password")]
+#[tokio::test]
+async fn the_two_step_and_password_scopes_call_the_configured_client() {
+	let _turn = INSTALLED.lock().await;
+	use leptos::prelude::Owner;
+	use leptoskit_query::NetworkMode;
+	use leptoskit_query::QueryClient;
+	use leptoskit_query::QueryDefaults;
+	use leptoskit_query::RefetchOn;
+	use leptoskit_query::use_mutation_in;
+
+	let _ = any_spawner::Executor::init_tokio();
+	let owner = Owner::new();
+	owner.set();
+	let server = Server::new().await;
+	let browser = server.browser();
+	install(Arc::clone(&browser.api));
+	let client = QueryClient::new().with_defaults(
+		QueryDefaults::new()
+			.with_refetch_on_window_focus(RefetchOn::Never)
+			.with_refetch_on_reconnect(RefetchOn::Never)
+			.with_network_mode(NetworkMode::Always),
+	);
+	client.provide();
+
+	let me = sign_in(&server, &browser).await;
+
+	// The password scopes: settings, setting one, signing in with it,
+	// resetting it from a code, and removing it.
+	let settings = use_password_settings().await.unwrap();
+	assert!(settings.enabled);
+	assert_eq!(settings.min_length, 15);
+	assert_eq!(
+		client
+			.fetch_query(&password_settings(), ())
+			.await
+			.unwrap()
+			.min_length,
+		15
+	);
+	use_mutation_in(client.clone(), set_password())
+		.mutate_async(GOOD_PASSWORD.to_owned())
+		.await
+		.unwrap();
+	let step = use_mutation_in(client.clone(), sign_in_with_password())
+		.mutate_async(EmailPassword {
+			email: ADA.to_owned(),
+			password: GOOD_PASSWORD.to_owned(),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(step, SignInStep::SignedIn(_)), "{step:?}");
+	assert!(use_mfa().await.unwrap().password);
+	use_mutation_in(client.clone(), send_code())
+		.mutate_async(ADA.to_owned())
+		.await
+		.unwrap();
+	let step = use_mutation_in(client.clone(), reset_password())
+		.mutate_async(PasswordReset {
+			email: ADA.to_owned(),
+			code: server.code(),
+			password: "a brand new and longer phrase".to_owned(),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(step, SignInStep::SignedIn(_)), "{step:?}");
+	use_mutation_in(client.clone(), remove_password())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert!(!use_mfa().await.unwrap().password);
+
+	// Two-step: turn an authenticator on, finish a sign-in with it, step up
+	// with a recovery code, make new codes, and turn it off.
+	let setup = use_mutation_in(client.clone(), enroll_totp())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert!(setup.uri.starts_with("otpauth://totp/"));
+	assert!(!use_mfa().await.unwrap().totp);
+	let code = totp_code(&server, me.account_id, 0).await;
+	let confirmed = use_mutation_in(client.clone(), confirm_totp())
+		.mutate_async(code)
+		.await
+		.unwrap();
+	assert_eq!(
+		client.get_query_data(&session(), &()),
+		Some(Some(confirmed.session.clone()))
+	);
+	assert!(use_mfa().await.unwrap().totp);
+
+	use_mutation_in(client.clone(), sign_out_mutation())
+		.mutate_async(())
+		.await
+		.unwrap();
+	use_mutation_in(client.clone(), send_code())
+		.mutate_async(ADA.to_owned())
+		.await
+		.unwrap();
+	let step = use_mutation_in(client.clone(), verify_code())
+		.mutate_async(EmailCode {
+			email: ADA.to_owned(),
+			code: server.code(),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(step, SignInStep::SecondFactor(_)), "{step:?}");
+	let code = totp_code(&server, me.account_id, 1).await;
+	let signed_in = use_mutation_in(client.clone(), complete_sign_in())
+		.mutate_async(code)
+		.await
+		.unwrap();
+	assert_eq!(
+		client.get_query_data(&session(), &()),
+		Some(Some(signed_in.clone()))
+	);
+
+	let codes = use_mutation_in(client.clone(), regenerate_recovery_codes())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert_eq!(codes.codes.len(), 10);
+	let stepped = use_mutation_in(client.clone(), step_up())
+		.mutate_async(codes.codes[0].clone())
+		.await
+		.unwrap();
+	assert_eq!(client.get_query_data(&session(), &()), Some(Some(stepped)));
+	use_mutation_in(client.clone(), disable_totp())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert!(!use_mfa().await.unwrap().totp);
+
+	// Finishing a step that has already ended forgets the held step.
+	let ended = Api::complete_sign_in(&*browser.api, "123456".to_owned()).await;
+	assert_eq!(ended.unwrap_err().error, "sign_in_expired");
+
+	// The next test may expect no client installed yet.
+	*CLIENT.write().unwrap() = None;
+}
+
 /// How many devices, plus what the other reads counted, or the first
 /// refusal.
 fn total(
 	devices: Result<Vec<crate::Device>, ErrorResponse>,
-	others: [Result<usize, ErrorResponse>; 7],
+	others: [Result<usize, ErrorResponse>; 8],
 ) -> Result<usize, ErrorResponse> {
 	let mut count = devices?.len();
 
@@ -1052,6 +1218,10 @@ fn total(
 /// While the server renders, the client reads the request's own session.
 #[cfg(feature = "ssr")]
 #[tokio::test]
+#[allow(
+	clippy::too_many_lines,
+	reason = "one request reads the whole surface the server can render"
+)]
 async fn server_rendering_reads_the_requests_session() {
 	use axum::Json;
 	use axum::routing::get;
@@ -1061,6 +1231,7 @@ async fn server_rendering_reads_the_requests_session() {
 
 	use super::server::Server as Rendering;
 
+	let _turn = INSTALLED.lock().await;
 	let server = Server::new().await;
 	let render = get(|request: axum::extract::Request| {
 		async move {
@@ -1087,6 +1258,10 @@ async fn server_rendering_reads_the_requests_session() {
 						Rendering.wallets().await.map(|list| list.len()),
 						Rendering
 							.wallet_settings()
+							.await
+							.map(|settings| usize::from(!settings.enabled)),
+						Rendering
+							.password_settings()
 							.await
 							.map(|settings| usize::from(!settings.enabled)),
 					];
@@ -1157,9 +1332,65 @@ async fn server_rendering_reads_the_requests_session() {
 		Rendering.confirm_totp("123456".into()).await.map(|_| ()),
 		Rendering.disable_totp().await,
 		Rendering.regenerate_recovery_codes().await.map(|_| ()),
+		Rendering
+			.sign_in_with_password(EmailPassword {
+				email: ADA.to_owned(),
+				password: GOOD_PASSWORD.to_owned(),
+			})
+			.await
+			.map(|_| ()),
+		Rendering.set_password(GOOD_PASSWORD.to_owned()).await,
+		Rendering.remove_password().await,
+		Rendering
+			.reset_password(PasswordReset {
+				email: ADA.to_owned(),
+				code: "123456".into(),
+				password: GOOD_PASSWORD.to_owned(),
+			})
+			.await
+			.map(|_| ()),
 	] {
 		assert_eq!(refused.unwrap_err().error, "server");
 	}
+
+	// Server rendering reads the session, not a token: it never sends one.
+	#[cfg(feature = "rpc")]
+	{
+		use leptoskit_rpc::client::Credentials as _;
+
+		install(Arc::new(Rendering));
+		let credentials = RpcCredentials;
+		assert_eq!(credentials.authorization().await, Ok(None));
+		assert_eq!(credentials.refused(None).await, Ok(false));
+		*CLIENT.write().unwrap() = None;
+		assert!(matches!(
+			rpc_error(ErrorResponse {
+				error: "network".into(),
+				message: "down".into(),
+				retry_after: None,
+			}),
+			leptoskit_rpc::FnError::Network(_)
+		));
+		assert!(matches!(
+			rpc_error(ErrorResponse {
+				error: "disabled".into(),
+				message: "no".into(),
+				retry_after: None,
+			}),
+			leptoskit_rpc::FnError::Other(_)
+		));
+	}
+
+	// A reset's code and password stay out of its `Debug`.
+	let reset = PasswordReset {
+		email: ADA.to_owned(),
+		code: "123456".into(),
+		password: "secret-password".into(),
+	};
+	let printed = format!("{reset:?}");
+	assert!(printed.contains(ADA), "{printed}");
+	assert!(!printed.contains("123456"), "{printed}");
+	assert!(!printed.contains("secret-password"), "{printed}");
 
 	for refused in [
 		Rendering
@@ -2358,6 +2589,284 @@ fn provider(id: &str) -> StartProvider {
 	}
 }
 
+#[cfg(all(feature = "oauth", feature = "passkey"))]
+#[tokio::test]
+async fn the_passkey_scopes_sign_in_and_finish_their_steps() {
+	let _turn = INSTALLED.lock().await;
+	use leptos::prelude::Owner;
+	use leptoskit_query::NetworkMode;
+	use leptoskit_query::QueryClient;
+	use leptoskit_query::QueryDefaults;
+	use leptoskit_query::RefetchOn;
+	use leptoskit_query::use_mutation_in;
+
+	let _ = any_spawner::Executor::init_tokio();
+	let owner = Owner::new();
+	owner.set();
+	let (server, idp) = provider_server().await;
+	let (native, _phone) = server.phone(&idp, true);
+	install(native.api.clone() as Arc<dyn Api>);
+	let client = QueryClient::new().with_defaults(
+		QueryDefaults::new()
+			.with_refetch_on_window_focus(RefetchOn::Never)
+			.with_refetch_on_reconnect(RefetchOn::Never)
+			.with_network_mode(NetworkMode::Always),
+	);
+	client.provide();
+
+	sign_in(&server, &native.device()).await;
+	use_mutation_in(client.clone(), add_passkey())
+		.mutate_async(Some("iPhone".into()))
+		.await
+		.unwrap();
+	use_mutation_in(client.clone(), sign_out_mutation())
+		.mutate_async(())
+		.await
+		.unwrap();
+
+	// Signing in with the passkey holds the new session.
+	let signed_in = use_mutation_in(client.clone(), passkey_sign_in())
+		.mutate_async(PasskeyMode::Prompt)
+		.await
+		.unwrap();
+	assert_eq!(
+		client.get_query_data(&session(), &()),
+		Some(Some(signed_in))
+	);
+
+	// A step begun with an emailed code finishes with the passkey.
+	use_mutation_in(client.clone(), sign_out_mutation())
+		.mutate_async(())
+		.await
+		.unwrap();
+	use_mutation_in(client.clone(), send_code())
+		.mutate_async(ADA.to_owned())
+		.await
+		.unwrap();
+	let step = use_mutation_in(client.clone(), verify_code())
+		.mutate_async(EmailCode {
+			email: ADA.to_owned(),
+			code: server.code(),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(step, SignInStep::SecondFactor(_)), "{step:?}");
+	let finished = use_mutation_in(client.clone(), complete_sign_in_with_passkey())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert_eq!(client.get_query_data(&session(), &()), Some(Some(finished)));
+
+	// A step another sign-in replaced is expired, and the client lets go of
+	// it.
+	let other = server.browser();
+	other.api.send_code(ADA.to_owned()).await.unwrap();
+	let replaced = other
+		.api
+		.verify_code(EmailCode {
+			email: ADA.to_owned(),
+			code: server.code(),
+		})
+		.await
+		.unwrap();
+	assert!(
+		matches!(replaced, SignInStep::SecondFactor(_)),
+		"{replaced:?}"
+	);
+	let ended = use_mutation_in(client.clone(), complete_sign_in_with_passkey())
+		.mutate_async(())
+		.await;
+	assert_eq!(ended.unwrap_err().error, "sign_in_expired");
+
+	*CLIENT.write().unwrap() = None;
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn the_provider_scopes_run_their_flows_and_refresh_their_queries() {
+	let _turn = INSTALLED.lock().await;
+	use leptos::prelude::Owner;
+	use leptoskit_query::NetworkMode;
+	use leptoskit_query::QueryClient;
+	use leptoskit_query::QueryDefaults;
+	use leptoskit_query::RefetchOn;
+	use leptoskit_query::use_mutation_in;
+
+	let _ = any_spawner::Executor::init_tokio();
+	let owner = Owner::new();
+	owner.set();
+	let (server, idp) = provider_server().await;
+	let (native, phone) = server.phone(&idp, false);
+	let client = QueryClient::new().with_defaults(
+		QueryDefaults::new()
+			.with_refetch_on_window_focus(RefetchOn::Never)
+			.with_refetch_on_reconnect(RefetchOn::Never)
+			.with_network_mode(NetworkMode::Always),
+	);
+	client.provide();
+
+	// Signing in through the scope leaves the session query signed in.
+	install(native.api.clone() as Arc<dyn Api>);
+	use_mutation_in(client.clone(), sign_in_with_provider())
+		.mutate_async(provider("company"))
+		.await
+		.unwrap();
+	assert_eq!(provider_outcome(), Some(ProviderOutcome::SignedIn));
+	assert!(use_auth().await.unwrap().is_some());
+	assert!(native.store().held().is_some());
+
+	// Connecting, then disconnecting, refreshes the identities.
+	*phone.claims.lock().unwrap() = serde_json::json!({
+		"sub": "g-1", "email": "ada@gmail.example", "email_verified": true,
+	});
+	use_mutation_in(client.clone(), link_provider())
+		.mutate_async(provider("google"))
+		.await
+		.unwrap();
+	assert_eq!(provider_outcome(), Some(ProviderOutcome::Linked));
+	let identities = use_identities().await.unwrap();
+	assert_eq!(identities.len(), 2);
+	use_mutation_in(client.clone(), link_provider())
+		.mutate_async(provider("google"))
+		.await
+		.unwrap();
+	assert_eq!(provider_outcome(), Some(ProviderOutcome::AlreadyLinked));
+	let company = identities
+		.iter()
+		.find(|identity| identity.provider == "company")
+		.unwrap();
+	use_mutation_in(client.clone(), unlink_identity())
+		.mutate_async(company.id)
+		.await
+		.unwrap();
+	assert_eq!(use_identities().await.unwrap().len(), 1);
+
+	// A passkey the other account added guards the merge.
+	let added = use_mutation_in(client.clone(), add_passkey())
+		.mutate_async(Some("Laptop".into()))
+		.await
+		.unwrap();
+	assert_eq!(added.passkey.name, "Laptop");
+
+	// A provider whose address is taken waits for the person to choose.
+	let (rival, rival_phone) = server.phone_on(&idp, false, phone.page.clone());
+	install(rival.api.clone() as Arc<dyn Api>);
+	*rival_phone.claims.lock().unwrap() = serde_json::json!({
+		"sub": "g-2", "email": ADA, "email_verified": true,
+	});
+	use_mutation_in(client.clone(), sign_in_with_provider())
+		.mutate_async(provider("google"))
+		.await
+		.unwrap();
+	assert_eq!(provider_outcome(), Some(ProviderOutcome::EmailInUse));
+	use_mutation_in(client.clone(), continue_provider_sign_up())
+		.mutate_async(())
+		.await
+		.unwrap();
+	assert!(client.get_query_data(&session(), &()).is_some());
+
+	// Connecting the identity another account already has offers a merge,
+	// which moving the login finishes.
+	*rival_phone.claims.lock().unwrap() = serde_json::json!({
+		"sub": "g-1", "email": "ada@gmail.example", "email_verified": true,
+	});
+	use_mutation_in(client.clone(), link_provider())
+		.mutate_async(provider("google"))
+		.await
+		.unwrap();
+	assert_eq!(provider_outcome(), Some(ProviderOutcome::Merge));
+	assert!(use_merge_offer().await.unwrap().is_some());
+	use_mutation_in(client.clone(), merge_accounts())
+		.mutate_async(MergeInput {
+			mode: Some(MergeMode::MoveLogin),
+			confirm: true,
+			passkey: true,
+			..MergeInput::default()
+		})
+		.await
+		.unwrap();
+	assert_eq!(use_identities().await.unwrap().len(), 2);
+
+	*CLIENT.write().unwrap() = None;
+}
+
+#[cfg(feature = "oauth")]
+#[tokio::test]
+async fn a_provider_window_closed_by_the_person_is_a_cancellation() {
+	let _turn = INSTALLED.lock().await;
+	use leptos::prelude::Owner;
+	use leptoskit_query::NetworkMode;
+	use leptoskit_query::QueryClient;
+	use leptoskit_query::QueryDefaults;
+	use leptoskit_query::RefetchOn;
+	use leptoskit_query::use_mutation_in;
+
+	let _ = any_spawner::Executor::init_tokio();
+	let owner = Owner::new();
+	owner.set();
+	let (server, idp) = provider_server().await;
+	let (native, phone) = server.phone(&idp, false);
+	phone.closes.store(true, Ordering::SeqCst);
+	install(native.api.clone() as Arc<dyn Api>);
+	let client = QueryClient::new().with_defaults(
+		QueryDefaults::new()
+			.with_refetch_on_window_focus(RefetchOn::Never)
+			.with_refetch_on_reconnect(RefetchOn::Never)
+			.with_network_mode(NetworkMode::Always),
+	);
+	client.provide();
+
+	// Closing the browser is an answer, not an error: the scope refreshes
+	// the session and the outcome says it was cancelled.
+	use_mutation_in(client.clone(), sign_in_with_provider())
+		.mutate_async(provider("company"))
+		.await
+		.unwrap();
+	assert_eq!(
+		provider_outcome(),
+		Some(ProviderOutcome::Failed("cancelled".into()))
+	);
+	assert!(use_auth().await.unwrap().is_none());
+
+	*CLIENT.write().unwrap() = None;
+}
+
+#[cfg(all(feature = "oauth", feature = "password"))]
+#[tokio::test]
+async fn a_provider_sign_in_that_needs_a_second_factor_holds_it_for_the_app() {
+	let (server, idp) = provider_server().await;
+	let (native, _phone) = server.phone(&idp, false);
+
+	// Sign up with the provider, turn an authenticator on, then start over.
+	Api::start_provider(&*native.api, provider("company"), false)
+		.await
+		.unwrap();
+	assert_eq!(
+		Api::provider_outcome(&*native.api),
+		Some(ProviderOutcome::SignedIn)
+	);
+	let me = Api::session(&*native.api).await.unwrap().unwrap();
+	let _setup = Api::begin_totp(&*native.api).await.unwrap();
+	let code = totp_code(&server, me.account_id, 0).await;
+	Api::confirm_totp(&*native.api, code).await.unwrap();
+	Api::sign_out(&*native.api).await.unwrap();
+
+	Api::start_provider(&*native.api, provider("company"), false)
+		.await
+		.unwrap();
+	assert_eq!(
+		Api::provider_outcome(&*native.api),
+		Some(ProviderOutcome::SecondFactor(vec![
+			Factor::Totp,
+			Factor::RecoveryCode
+		]))
+	);
+	// The step it held finishes the sign-in.
+	let code = totp_code(&server, me.account_id, 1).await;
+	let session = Api::complete_sign_in(&*native.api, code).await.unwrap();
+	assert_eq!(session.aal, crate::Aal::Two);
+}
+
 #[cfg(feature = "oauth")]
 #[tokio::test]
 async fn a_native_app_signs_in_with_providers_in_the_system_browser() {
@@ -2448,6 +2957,13 @@ async fn a_native_app_signs_in_with_providers_in_the_system_browser() {
 async fn a_native_app_signs_in_with_apple_on_the_device() {
 	let (server, idp) = provider_server().await;
 	let (native, phone) = server.phone(&idp, true);
+
+	// Apple's credential prints nothing secret.
+	let apple = protocol::AppleId {
+		id_token: "secret-token".into(),
+		user: Some("secret-user".into()),
+	};
+	assert_eq!(format!("{apple:?}"), "AppleId { .. }");
 
 	Api::start_provider(&*native.api, provider("apple"), false)
 		.await

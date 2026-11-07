@@ -18,6 +18,7 @@ use leptoskit_auth::Auth;
 use leptoskit_auth::AuthError;
 use leptoskit_config::AuthConfig;
 use leptoskit_config::AuthMfa;
+use leptoskit_config::AuthPasswordsConfig;
 use leptoskit_config::AuthProviderConfig;
 use leptoskit_config::LeptoskitConfig;
 
@@ -46,6 +47,10 @@ fn provider(pairs: &[(&str, &str)]) -> AuthProviderConfig {
 }
 
 #[tokio::test]
+#[allow(
+	clippy::too_many_lines,
+	reason = "the one test in this process covers every provider kind"
+)]
 async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 	let db = leptoskit_db::testing::sqlite().await;
 	let (pem, _) = oidc::apple_key();
@@ -95,6 +100,37 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 		]),
 	);
 	providers.insert(
+		"gitlab-com".to_owned(),
+		AuthProviderConfig {
+			kind: Some("gitlab".into()),
+			..provider(&[("client_id_env", "PROVIDER_TEST_ID")])
+		},
+	);
+	// Every other built-in needs only an ID and a secret.
+	for kind in [
+		"x",
+		"linkedin",
+		"slack",
+		"twitch",
+		"spotify",
+		"reddit",
+		"amazon",
+		"dropbox",
+		"bitbucket",
+		"notion",
+		"zoom",
+		"tiktok",
+		"yahoo",
+	] {
+		providers.insert(
+			kind.to_owned(),
+			AuthProviderConfig {
+				kind: Some((*kind).into()),
+				..provider(&shared)
+			},
+		);
+	}
+	providers.insert(
 		"chat".to_owned(),
 		AuthProviderConfig {
 			kind: Some("discord".into()),
@@ -117,6 +153,11 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 		origin: Some("https://notes.example".into()),
 		mfa: AuthMfa::Required,
 		providers,
+		passwords: AuthPasswordsConfig {
+			enabled: true,
+			min_length: 20,
+			breach_check: false,
+		},
 		..AuthConfig::default()
 	});
 
@@ -128,18 +169,52 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 		.collect();
 	names.sort();
 	let expected = [
+		("amazon", "Amazon"),
 		("apple", "Apple"),
+		("bitbucket", "Bitbucket"),
 		("chat", "Discord"),
 		("company", "Company SSO"),
+		("dropbox", "Dropbox"),
 		("facebook", "Facebook"),
 		("github", "GitHub"),
 		("gitlab", "GitLab"),
+		("gitlab-com", "GitLab"),
 		("google", "Google"),
+		("linkedin", "LinkedIn"),
 		("microsoft", "Microsoft"),
+		("notion", "Notion"),
+		("reddit", "Reddit"),
+		("slack", "Slack"),
+		("spotify", "Spotify"),
+		("tiktok", "TikTok"),
+		("twitch", "Twitch"),
+		("x", "X"),
+		("yahoo", "Yahoo"),
+		("zoom", "Zoom"),
 	];
 	assert_eq!(
 		names,
 		expected.map(|(id, name)| (id.to_owned(), name.to_owned()))
+	);
+	let settings = auth.password_settings();
+	assert!(settings.enabled);
+	assert_eq!(settings.min_length, 20);
+
+	// A kind leptoskit doesn't know is named, and nothing starts.
+	let mut misconfigured = config.clone();
+	if let Some(auth) = &mut misconfigured.auth {
+		auth.providers.insert(
+			"myspace".into(),
+			AuthProviderConfig {
+				kind: Some("myspace".into()),
+				..provider(&shared)
+			},
+		);
+	}
+	let error = Auth::from_config(&db, &misconfigured).unwrap_err();
+	assert!(
+		matches!(&error, AuthError::Config(message) if message.contains("isn't a provider leptoskit knows")),
+		"{error}"
 	);
 
 	// A missing variable is named, never its value.

@@ -892,12 +892,81 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn each_refusal_says_how_to_fix_it() {
+		assert_eq!(
+			PasswordProblem::TooLong { max: 256 }.to_string(),
+			"use at most 256 characters"
+		);
+		assert!(
+			PasswordProblem::Personal
+				.to_string()
+				.contains("email address")
+		);
+		assert!(
+			PasswordProblem::Breached
+				.to_string()
+				.contains("data breach")
+		);
+		assert!(PasswordProblem::Common.to_string().contains("too common"));
+	}
+
 	#[cfg(feature = "password")]
 	#[test]
 	fn passwords_compare_as_nfkc() {
 		// A full-width "Ａ" and the ligature "ﬁ" fold to "A" and "fi".
 		assert_eq!(normalize("Ａﬁ"), "Afi");
 		assert_eq!(normalize("e\u{301}"), "é");
+	}
+
+	#[cfg(feature = "password")]
+	#[test]
+	fn password_options_print_their_rules() {
+		let printed = format!("{:?}", PasswordOptions::default());
+		assert!(printed.contains("min_length"), "{printed}");
+		assert!(printed.contains("breach_check"), "{printed}");
+	}
+
+	#[cfg(feature = "password")]
+	#[test]
+	fn the_breach_check_is_only_built_when_it_is_on() {
+		let off = PasswordOptions {
+			breach_check: false,
+			..PasswordOptions::default()
+		};
+		assert!(breaches(&off, None).is_none());
+		let on = PasswordOptions {
+			breach_check: true,
+			..PasswordOptions::default()
+		};
+		assert!(breaches(&on, None).is_some(), "Have I Been Pwned");
+	}
+
+	#[cfg(feature = "password")]
+	#[tokio::test]
+	async fn a_breach_check_that_fails_lets_the_password_through() {
+		struct Down;
+
+		impl BreachedPasswords for Down {
+			fn range(&self, _prefix: &str) -> BreachFuture<'_> {
+				Box::pin(async { Err("the service is down".into()) })
+			}
+		}
+
+		let db = leptoskit_db::testing::sqlite().await;
+		let auth = Auth::builder(&db, crate::Keys::single("test", [7; 32]))
+			.mailer(crate::Mailbox::new())
+			.passwords(PasswordOptions {
+				breach_check: true,
+				..PasswordOptions::default()
+			})
+			.breached_passwords(Down)
+			.build()
+			.unwrap();
+		assert!(
+			!auth.breached("correct horse battery").await,
+			"the other rules still applied"
+		);
 	}
 
 	#[cfg(feature = "password")]

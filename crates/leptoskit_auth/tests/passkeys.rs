@@ -8,6 +8,8 @@
 mod passkey;
 #[path = "../../leptoskit_db/tests/support/postgres.rs"]
 mod postgres;
+#[path = "support/totp.rs"]
+mod totp;
 
 use chrono::TimeDelta;
 use leptoskit_auth::Aal;
@@ -370,6 +372,14 @@ async fn an_emailed_code_then_asks_for_the_passkey() {
 			panic!("the passkey is a second factor now");
 		};
 		assert_eq!(step.factors, [Factor::Passkey, Factor::RecoveryCode]);
+
+		// A code that looks like an authenticator's, on an account with no
+		// authenticator, doesn't answer the step.
+		assert!(matches!(
+			auth.complete_sign_in(&step.token, "123456", &request())
+				.await,
+			Err(AuthError::InvalidCode)
+		));
 
 		// Without a ceremony, or answering another one, it fails and counts.
 		let options = auth
@@ -767,4 +777,259 @@ async fn the_native_apps_passkeys_count_as_the_sites() {
 			.await,
 		Err(AuthError::PasskeyFailed)
 	));
+}
+
+#[tokio::test]
+async fn a_second_passkey_keeps_the_codes_and_trims_its_name() {
+	let cluster = PostgresCluster::start();
+
+	for db in databases(cluster.as_ref()).await {
+		let mailbox = Mailbox::new();
+		let auth = auth(&db, &mailbox);
+		let mut device = SoftPasskey::new(ORIGIN);
+		let (sign_in, codes) = with_passkey(&auth, &mailbox, "ada@example.com", &mut device).await;
+		let me = sign_in.signed_in();
+
+		// The account's own passkey is refused, so the same device can't
+		// register it twice.
+		let options = auth.begin_passkey_registration(&me).await.unwrap();
+		let json = serde_json::to_value(&options).unwrap();
+		let excluded = json["publicKey"]["excludeCredentials"]
+			.as_array()
+			.cloned()
+			.unwrap_or_default();
+		assert_eq!(excluded.len(), 1, "{json}");
+
+		// A second passkey shows no new recovery codes, and keeps a names
+		// length to what a device can show.
+		let long = "L".repeat(150);
+		let added = auth
+			.finish_passkey_registration(&me, &device.register(&options), Some(&long), &request())
+			.await
+			.unwrap();
+		assert!(added.recovery_codes.is_none());
+		assert_eq!(added.passkey.name, "L".repeat(100));
+		assert_eq!(auth.passkeys(me.account).await.unwrap().len(), 2);
+		assert_eq!(codes.len(), 10, "the first codes still work");
+
+		// Turning on an authenticator with recovery codes already there
+		// shows no new ones.
+		let setup = auth.begin_totp(&me).await.unwrap();
+		let confirmed = auth
+			.confirm_totp(&me, &totp::totp(&setup.secret, 0), &request())
+			.await
+			.unwrap();
+		assert!(confirmed.recovery_codes.is_none());
+	}
+}
+
+#[tokio::test]
+async fn a_garbage_answer_fails_the_ceremony_and_is_recorded() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let me = sign_in(&auth, &mailbox, "ada@example.com")
+		.await
+		.signed_in();
+	let _options = auth.begin_passkey_registration(&me).await.unwrap();
+	let garbage: leptoskit_auth::RegisterPublicKeyCredential =
+		serde_json::from_value(serde_json::json!({
+			"id": "AAAA",
+			"rawId": "AAAA",
+			"type": "public-key",
+			"response": { "attestationObject": "AAAA", "clientDataJSON": "AAAA" },
+			"extensions": {},
+		}))
+		.unwrap();
+
+	assert!(matches!(
+		auth.finish_passkey_registration(&me, &garbage, None, &request())
+			.await,
+		Err(AuthError::PasskeyFailed)
+	));
+	assert_eq!(
+		events(&db, me.account).await.last(),
+		Some(&EventKind::PasskeyFailed)
+	);
+}
+
+#[tokio::test]
+async fn starting_again_retires_the_earlier_ceremony() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let me = sign_in(&auth, &mailbox, "ada@example.com")
+		.await
+		.signed_in();
+	let mut device = SoftPasskey::new(ORIGIN);
+	let first = auth.begin_passkey_registration(&me).await.unwrap();
+	let credential = device.register(&first);
+	let _second = auth.begin_passkey_registration(&me).await.unwrap();
+
+	assert!(matches!(
+		auth.finish_passkey_registration(&me, &credential, None, &request())
+			.await,
+		Err(AuthError::PasskeyFailed)
+	));
+}
+
+#[tokio::test]
+async fn a_user_handle_for_another_account_is_refused() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let mut ada_device = SoftPasskey::new(ORIGIN);
+	with_passkey(&auth, &mailbox, "ada@example.com", &mut ada_device).await;
+	let mut grace_device = SoftPasskey::new(ORIGIN);
+	let (grace, _) = with_passkey(&auth, &mailbox, "grace@example.com", &mut grace_device).await;
+
+	// Grace's account, in the user handle of Ada's passkey's answer.
+	let challenge = auth.begin_passkey_sign_in(&request()).await.unwrap();
+	let assertion = ada_device.sign(&challenge.options);
+	let mut value = serde_json::to_value(&assertion).unwrap();
+	value["response"]["userHandle"] = base64::Engine::encode(
+		&base64::engine::general_purpose::URL_SAFE_NO_PAD,
+		grace.session.account_id.uuid().as_bytes(),
+	)
+	.into();
+	let forged: leptoskit_auth::PublicKeyCredential = serde_json::from_value(value).unwrap();
+
+	assert!(matches!(
+		auth.finish_passkey_sign_in(&challenge.token, &forged, &request())
+			.await,
+		Err(AuthError::PasskeyFailed)
+	));
+}
+
+#[tokio::test]
+async fn ceremonies_without_state_or_a_subject_expire() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let mut device = SoftPasskey::new(ORIGIN);
+	with_passkey(&auth, &mailbox, "ada@example.com", &mut device).await;
+	let table = match db.system("test").dialect() {
+		Dialect::Postgres => "auth.challenges",
+		Dialect::Sqlite => "auth_challenges",
+	};
+	// A sign-in whose ceremony was never sealed is no sign-in.
+	let challenge = auth.begin_passkey_sign_in(&request()).await.unwrap();
+	db.system("test")
+		.execute(Statement {
+			sql: format!("UPDATE {table} SET state = NULL WHERE used_at IS NULL"),
+			args: Vec::new(),
+		})
+		.await
+		.unwrap();
+	let assertion = device.sign(&challenge.options);
+	assert!(matches!(
+		auth.finish_passkey_sign_in(&challenge.token, &assertion, &request())
+			.await,
+		Err(AuthError::PasskeyFailed)
+	));
+
+	// A second step filed under something that isn't an account expires.
+	let SignInStep::SecondFactor(step) = email(&auth, &mailbox, "ada@example.com").await else {
+		panic!("a second factor");
+	};
+	db.system("test")
+		.execute(Statement {
+			sql: format!("UPDATE {table} SET subject = 'not-an-account' WHERE used_at IS NULL"),
+			args: Vec::new(),
+		})
+		.await
+		.unwrap();
+	assert!(matches!(
+		auth.begin_passkey_second_factor(&step.token, &request())
+			.await,
+		Err(AuthError::SignInExpired)
+	));
+}
+
+#[tokio::test]
+async fn passkey_sign_in_says_when_there_is_no_origin() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let auth = Auth::builder(&db, Keys::single("test", [7; 32]))
+		.mailer(Mailbox::new())
+		.build()
+		.unwrap();
+
+	assert!(matches!(
+		auth.begin_passkey_sign_in(&request()).await,
+		Err(AuthError::Config(message)) if message.contains("[auth] origin")
+	));
+}
+
+#[tokio::test]
+async fn an_origin_with_a_port_also_allows_its_https_origin() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let origin = "https://notes.example:8443";
+	let auth = Auth::builder(&db, Keys::single("test", [7; 32]))
+		.app_name("Notes")
+		.origin(origin)
+		.mailer(mailbox.clone())
+		.native_apps(leptoskit_auth::NativeApps {
+			apple_team_id: Some("ABCDE12345".into()),
+			..leptoskit_auth::NativeApps::default()
+		})
+		.build()
+		.unwrap();
+	let me = sign_in(&auth, &mailbox, "ada@example.com")
+		.await
+		.signed_in();
+	let mut device = SoftPasskey::new(origin);
+	let options = auth.begin_passkey_registration(&me).await.unwrap();
+	let json = serde_json::to_value(&options).unwrap();
+	assert_eq!(json["publicKey"]["rp"]["id"], "notes.example");
+	let added = auth
+		.finish_passkey_registration(&me, &device.register(&options), None, &request())
+		.await
+		.unwrap();
+	assert_eq!(added.sign_in.session.aal, Aal::Two);
+}
+
+#[tokio::test]
+async fn a_passkey_that_does_not_verify_its_user_is_no_second_factor() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let auth = auth(&db, &mailbox);
+	let mut device = SoftPasskey::new(ORIGIN);
+	with_passkey(&auth, &mailbox, "ada@example.com", &mut device).await;
+
+	let SignInStep::SecondFactor(step) = email(&auth, &mailbox, "ada@example.com").await else {
+		panic!("the passkey is a second factor");
+	};
+	let options = auth
+		.begin_passkey_second_factor(&step.token, &request())
+		.await
+		.unwrap();
+	device.user_verified = false;
+	let assertion = device.sign(&options);
+	assert!(matches!(
+		auth.complete_sign_in_with_passkey(&step.token, &assertion, &request())
+			.await,
+		Err(AuthError::PasskeyFailed)
+	));
+
+	// The step is still live, and the same passkey with verification is two
+	// factors.
+	let options = auth
+		.begin_passkey_second_factor(&step.token, &request())
+		.await
+		.unwrap();
+	device.user_verified = true;
+	let assertion = device.sign(&options);
+	assert!(
+		auth.complete_sign_in_with_passkey(&step.token, &assertion, &request())
+			.await
+			.is_ok()
+	);
 }

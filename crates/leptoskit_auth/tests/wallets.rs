@@ -1125,3 +1125,44 @@ fn wallet_rules_export_as_row_level_security() {
 		Some("\"treasury\" = ANY(NULLIF(current_setting('leptoskit.wallets', true), '')::text[])")
 	);
 }
+
+#[tokio::test]
+async fn wallet_messages_need_an_origin() {
+	let db = Db::connect("sqlite::memory:").await.unwrap();
+	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	let mailbox = Mailbox::new();
+	let request = leptoskit_auth::RequestInfo::default();
+	let good = Auth::builder(&db, Keys::single("test", [5; 32]))
+		.mailer(mailbox.clone())
+		.solana(SolanaOptions {
+			sign_in: true,
+			..SolanaOptions::default()
+		})
+		.build()
+		.unwrap();
+	good.send_email_code("ada@example.com", &request)
+		.await
+		.unwrap();
+	let code = mailbox
+		.latest_to("ada@example.com")
+		.unwrap()
+		.subject
+		.rsplit(' ')
+		.next()
+		.unwrap()
+		.to_owned();
+	let me = good
+		.verify_email_code("ada@example.com", &code, &request)
+		.await
+		.unwrap()
+		.signed_in()
+		.unwrap()
+		.signed_in();
+
+	// Without an origin, there's no domain for a message to name.
+	let refused = good.begin_wallet_link(&me, &request).await.unwrap_err();
+	assert!(
+		matches!(&refused, AuthError::Config(message) if message.contains("[auth] origin")),
+		"{refused}"
+	);
+}

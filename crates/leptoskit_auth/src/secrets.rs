@@ -450,6 +450,7 @@ mod tests {
 		assert!(old.open(&ADA, &tampered).is_err());
 		assert!(old.open(&ADA, &sealed[..20]).is_err());
 		assert!(old.open(&ADA, &[]).is_err());
+		assert!(old.open(&ADA, &sealed[..2]).is_err(), "a header alone");
 
 		// After a rotation the old key still opens it; once dropped, the error
 		// names the key, never the value.
