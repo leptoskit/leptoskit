@@ -291,6 +291,64 @@ impl Db {
 		}
 	}
 
+	/// Start from this build's own embedded migrations and schema checkpoint.
+	///
+	/// With no window configured, this uses ordinary strict migrations. When
+	/// the operator sets both `LEPTOSKIT_MIGRATION_WINDOW` (a file path) and
+	/// `LEPTOSKIT_MIGRATION_WINDOW_SHA256` (an independent digest), it
+	/// validates that window and uses [`Db::migrate_in_window`]. A missing
+	/// half, invalid pin, unsupported checkpoint, or out-of-window history
+	/// fails startup. It never falls back to ordinary migration after a
+	/// window error.
+	pub async fn migrate_startup(
+		&self,
+		migrations: &[Migration],
+		snapshot: Option<&str>,
+	) -> std::result::Result<Vec<String>, MigrationError> {
+		match crate::migration_window::startup_window(migrations, snapshot)? {
+			None => self.migrate(migrations).await,
+			Some(window) => {
+				let snapshot = snapshot.expect("a validated window has this build's schema");
+				self.migrate_in_window(migrations, snapshot, &window).await
+			}
+		}
+	}
+
+	/// Apply this build's pending expansions inside an explicit compatibility
+	/// window.
+	///
+	/// Both builds must embed their own schema and opt into this method before
+	/// an online rollout. The window must come from the operator's approved
+	/// release inputs. An older build can then restart against a newer history
+	/// covered by the window without reversing its schema or rewriting
+	/// checksums. The baseline must already be installed using
+	/// [`Db::migrate`].
+	///
+	/// PostgreSQL applies all pending steps and their history in one
+	/// transaction. Lock waits are limited to five seconds, statements to
+	/// thirty seconds, and the whole attempt to sixty seconds. On a timeout
+	/// or lost connection, inspect history before retrying: a commit may
+	/// have reached the server. SQLite is not supported by this online
+	/// protocol. Ordinary migrations and rollback retain their strict
+	/// history checks.
+	pub async fn migrate_in_window(
+		&self,
+		migrations: &[Migration],
+		snapshot: &str,
+		window: &crate::MigrationWindow,
+	) -> std::result::Result<Vec<String>, MigrationError> {
+		let checked = window.checked(migrations, snapshot)?;
+		match &*self.pool {
+			#[cfg(feature = "postgres")]
+			Pool::Postgres(pool) => pool.migrate_in_window(migrations, &checked).await,
+			#[cfg(feature = "sqlite")]
+			Pool::Sqlite(_) => {
+				let _ = checked;
+				Err(crate::MigrationWindowError::UnsupportedDialect.into())
+			}
+		}
+	}
+
 	/// Reverts the newest `steps` migrations, in reverse registry order.
 	///
 	/// Stop application writers and take a verified backup first. Reverse SQL

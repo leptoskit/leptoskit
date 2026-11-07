@@ -141,6 +141,23 @@ pub fn migrations(input: TokenStream) -> TokenStream {
 	}
 }
 
+/// Embeds the last committed schema snapshot, or `None` for an empty registry.
+#[proc_macro]
+pub fn migration_schema(input: TokenStream) -> TokenStream {
+	let result = syn::parse::<syn::LitStr>(input).and_then(|path| {
+		let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+			.map(std::path::PathBuf::from)
+			.ok_or_else(|| {
+				syn::Error::new(path.span(), "`migration_schema!` runs only under Cargo")
+			})?;
+		migrations::snapshot(&path, &manifest_dir, &runtime(None))
+	});
+	match result {
+		Ok(tokens) => tokens.into(),
+		Err(error) => error.to_compile_error().into(),
+	}
+}
+
 /// Stores a unit enum as text. See `leptoskit::db::Enum`.
 #[proc_macro_derive(Enum, attributes(db))]
 pub fn derive_enum(input: TokenStream) -> TokenStream {

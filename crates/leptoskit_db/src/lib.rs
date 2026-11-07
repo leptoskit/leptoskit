@@ -74,6 +74,8 @@ pub mod live;
 pub mod merge;
 #[cfg(feature = "server")]
 mod migrate;
+#[cfg(feature = "server")]
+mod migration_window;
 mod mixins;
 #[cfg(all(feature = "server", any(feature = "geo", feature = "vector")))]
 mod nearest;
@@ -250,6 +252,11 @@ pub use leptoskit_db_macros::Shape;
 /// linked from one `from` row only. A table linking to itself names its
 /// columns: `from_column = "follower_id", to_column = "followed_id"`.
 pub use leptoskit_db_macros::link;
+/// Embeds the latest committed schema snapshot beside `migrations!`.
+/// Returns `Option<&'static str>`: an empty registry yields `None`.
+/// The path is relative to the crate's `Cargo.toml`. A nonempty registry
+/// without its final `schema.json` is a compile error.
+pub use leptoskit_db_macros::migration_schema;
 /// Embeds the migrations in a directory, in `registry.txt` order:
 /// `static MIGRATIONS: &[Migration] = migrations!("../migrations");`. The path
 /// is relative to the crate's `Cargo.toml`, and the build fails if a
@@ -386,6 +393,14 @@ pub use migrate::parse_release;
 pub use migrate::registry_names;
 #[cfg(feature = "server")]
 pub use migrate::registry_releases;
+#[cfg(feature = "server")]
+pub use migration_window::MigrationContract;
+#[cfg(feature = "server")]
+pub use migration_window::MigrationWindow;
+#[cfg(feature = "server")]
+pub use migration_window::MigrationWindowError;
+#[cfg(feature = "server")]
+pub use migration_window::export_migration_contract_if_requested;
 pub use mixins::HasMixin;
 pub use mixins::Mixin;
 #[doc(hidden)]

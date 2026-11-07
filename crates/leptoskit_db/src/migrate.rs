@@ -369,6 +369,19 @@ pub(crate) fn reversing(
 /// Why migrating stopped.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
+	/// The executable's requested migration contract could not be written.
+	#[error("couldn't write migration contract {}: {source}", path.display())]
+	ContractExport {
+		/// The requested output file.
+		path: PathBuf,
+		/// The filesystem failure.
+		#[source]
+		source: std::io::Error,
+	},
+	/// An explicitly selected expansion window does not match this build
+	/// or the database. Ordinary migrations never consume a window.
+	#[error(transparent)]
+	Window(#[from] crate::MigrationWindowError),
 	/// A reverse migration is missing or needs manual implementation.
 	#[error("migration `{name}` has no reviewed down.sql; rollback stopped before making changes")]
 	Irreversible {

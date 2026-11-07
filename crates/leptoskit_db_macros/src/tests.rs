@@ -1345,6 +1345,39 @@ fn migration_mistakes_are_explained() {
 }
 
 #[test]
+fn migration_schema_tracks_the_registry_and_only_its_final_snapshot() {
+	let directory = migration_dir(
+		"first\nsecond\n# release marker\n",
+		&[("first", "SELECT 1;"), ("second", "SELECT 2;")],
+	);
+	std::fs::write(directory.path().join("second/schema.json"), "{}").unwrap();
+	let path = syn::LitStr::new(".", proc_macro2::Span::call_site());
+	let tokens = crate::migrations::snapshot(&path, directory.path(), &runtime()).unwrap();
+	syn::parse2::<syn::Expr>(tokens.clone()).unwrap();
+	let text = tokens.to_string();
+	assert!(text.contains("registry.txt"));
+	assert!(text.contains("second/schema.json"));
+	assert!(!text.contains("first/schema.json"));
+	assert!(text.contains("Option :: Some"));
+	std::fs::remove_file(directory.path().join("second/schema.json")).unwrap();
+	assert!(
+		crate::migrations::snapshot(&path, directory.path(), &runtime())
+			.unwrap_err()
+			.to_string()
+			.contains("schema.json")
+	);
+}
+
+#[test]
+fn empty_migration_registry_has_no_invented_schema_checkpoint() {
+	let directory = migration_dir("# create a migration before deploying\n", &[]);
+	let path = syn::LitStr::new(".", proc_macro2::Span::call_site());
+	let tokens = crate::migrations::snapshot(&path, directory.path(), &runtime()).unwrap();
+	syn::parse2::<syn::Expr>(tokens.clone()).unwrap();
+	assert!(tokens.to_string().contains("Option :: None"));
+}
+
+#[test]
 fn hooks_audit_and_filled_columns_become_the_tables_writes() {
 	insta::assert_snapshot!(table(
 		quote!(name = "posts", audit, hooks(before_write, after_delete)),

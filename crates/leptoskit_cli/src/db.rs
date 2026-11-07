@@ -48,6 +48,7 @@ pub(crate) mod branches;
 pub(crate) mod dev_server;
 mod push;
 mod watch;
+mod window;
 
 pub(crate) use watch::DevDatabase;
 pub(crate) use watch::StudioProcess;
@@ -175,6 +176,17 @@ pub enum BranchCommand {
 /// The `leptoskit db migration` subcommands.
 #[derive(Debug, clap::Subcommand)]
 pub enum MigrationCommand {
+	/// Writes a checked PostgreSQL expansion window from committed snapshots
+	/// and exact migration SQL. This prepares evidence; it does not deploy or
+	/// authorize a release.
+	Window {
+		/// Last migration already present in the oldest participating build.
+		#[arg(long, value_name = "MIGRATION")]
+		baseline: String,
+		/// New evidence file to write; an existing file is never overwritten.
+		#[arg(long, value_name = "PATH")]
+		out: PathBuf,
+	},
 	/// Writes a migration for everything the tables changed since the latest
 	/// one.
 	///
@@ -245,6 +257,18 @@ pub fn run(command: DbCommand) -> Result<()> {
 	let project = Project::load()?;
 
 	match command {
+		DbCommand::Migration {
+			command: MigrationCommand::Window { baseline, out },
+		} => {
+			let digest = window::prepare(
+				&project.migrations_dir(),
+				project.dialect(),
+				&baseline,
+				&out,
+			)?;
+			println!("wrote {}\nsha256 {digest}", out.display());
+			Ok(())
+		}
 		DbCommand::Migration {
 			command:
 				MigrationCommand::Create {
