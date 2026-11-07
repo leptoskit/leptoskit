@@ -508,3 +508,50 @@ async fn interrupting_streams_with_a_stopped_reader_obeys_stall_timeout() {
 			.unwrap()
 	);
 }
+
+#[tokio::test]
+async fn terminal_delivery_cancels_a_producer_that_keeps_running() {
+	struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+	impl Drop for Dropped {
+		fn drop(&mut self) {
+			if let Some(sender) = self.0.take() {
+				let _ = sender.send(());
+			}
+		}
+	}
+	let (mut session, mut out, _input, _incoming) = session().await;
+	let (dropped, stopped) = tokio::sync::oneshot::channel();
+	let (started, entered) = tokio::sync::oneshot::channel();
+	let task = tokio::spawn(async move {
+		let _dropped = Dropped(Some(dropped));
+		let _ = started.send(());
+		std::future::pending::<()>().await;
+	});
+	entered.await.unwrap();
+	let generation = Arc::new(());
+	session.streams.insert(
+		7,
+		Running {
+			generation: Arc::clone(&generation),
+			task,
+			credits: Arc::new(tokio::sync::Semaphore::new(1)),
+		},
+	);
+	let text = serde_json::to_string(&EndReason::Done.frame(7)).unwrap();
+	assert!(
+		session
+			.forward_stream(stream::Frame {
+				stream: 7,
+				generation,
+				text,
+				terminal: true,
+			})
+			.await
+	);
+	assert!(matches!(out.recv().await, Some(Outbound::Frame { .. })));
+	assert!(session.streams.is_empty());
+	tokio::time::timeout(Duration::from_secs(1), stopped)
+		.await
+		.expect("a terminal frame must not detach a still-running producer")
+		.unwrap();
+}

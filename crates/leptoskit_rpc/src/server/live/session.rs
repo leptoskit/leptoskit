@@ -660,8 +660,10 @@ impl Session {
 		if !Arc::ptr_eq(&running.generation, &frame.generation) {
 			return true;
 		}
-		if frame.terminal {
-			self.streams.remove(&frame.stream);
+		if frame.terminal
+			&& let Some(running) = self.streams.remove(&frame.stream)
+		{
+			running.task.abort();
 		}
 		self.deliver(Outbound::Frame {
 			text: frame.text,
