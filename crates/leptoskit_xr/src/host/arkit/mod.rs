@@ -68,6 +68,40 @@ impl PixelBuffer {
 	pub fn as_ptr(&self) -> *mut std::ffi::c_void {
 		Retained::as_ptr(&self.0).cast_mut().cast()
 	}
+
+	/// Copies the luma and chroma planes into CPU memory.
+	#[must_use]
+	pub fn planes(&self) -> Option<(ImagePlane, ImagePlane)> {
+		use objc2_core_video::*;
+
+		let buffer: &CVPixelBuffer = &self.0;
+		// SAFETY: Locks the buffer for reading, copies both planes, and
+		// unlocks it.
+		unsafe {
+			if CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) != 0 {
+				return None;
+			}
+
+			let plane = |index: usize| {
+				let base = CVPixelBufferGetBaseAddressOfPlane(buffer, index).cast::<u8>();
+				let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, index);
+				let height = CVPixelBufferGetHeightOfPlane(buffer, index);
+				(!base.is_null()).then(|| {
+					ImagePlane {
+						width: CVPixelBufferGetWidthOfPlane(buffer, index) as u32,
+						height: height as u32,
+						row_stride: stride as u32,
+						data: Arc::from(std::slice::from_raw_parts(base, stride * height)),
+					}
+				})
+			};
+			let planes = (CVPixelBufferGetPlaneCount(buffer) == 2)
+				.then(|| Some((plane(0)?, plane(1)?)))
+				.flatten();
+			CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly);
+			planes
+		}
+	}
 }
 
 /// ARKit's world tracking.

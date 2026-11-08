@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use leptoskit_bridge::Error;
 use openxr as xr;
+use xr::sys::Handle as _;
 
 use super::Headset;
 use super::System;
@@ -314,6 +315,50 @@ impl<G: xr::Graphics> HeadsetSession<G> {
 		self.stream
 			.end(state.predicted_display_time, self.blend_mode, layers)
 			.map_err(|_| Error::Native)
+	}
+
+	/// Ends the frame with one projection layer of `views`, over Meta's
+	/// passthrough layer when the session shows the room.
+	pub fn end_projection(
+		&mut self,
+		views: &[xr::CompositionLayerProjectionView<'_, G>],
+	) -> Result<(), Error> {
+		let state = self.frame.ok_or(Error::InvalidCall)?;
+
+		if !std::mem::take(&mut self.begun) {
+			return Err(Error::InvalidCall);
+		}
+
+		let projection = xr::CompositionLayerProjection::new()
+			.layer_flags(xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
+			.space(&self.space)
+			.views(views);
+		// `openxr` keeps its passthrough layer builder private, so the layer
+		// is written out; its header is what `xrEndFrame` reads.
+		let passthrough = self.passthrough.as_ref().map(|(_, layer)| {
+			xr::sys::CompositionLayerPassthroughFB {
+				ty: xr::sys::CompositionLayerPassthroughFB::TYPE,
+				next: std::ptr::null(),
+				flags: xr::CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA,
+				space: xr::sys::Space::from_raw(0),
+				layer_handle: *layer.inner(),
+			}
+		});
+		let time = state.predicted_display_time;
+		let result = match &passthrough {
+			Some(passthrough) => {
+				// SAFETY: `CompositionLayerBase` is a transparent wrapper over
+				// the layer header that begins every layer struct, and the
+				// layer lives until the call returns.
+				let base = unsafe {
+					&*std::ptr::from_ref(passthrough).cast::<xr::CompositionLayerBase<'_, G>>()
+				};
+				self.stream.end(time, self.blend_mode, &[base, &projection])
+			}
+			None => self.stream.end(time, self.blend_mode, &[&projection]),
+		};
+
+		result.map_err(|_| Error::Native)
 	}
 
 	fn poll_events(&mut self) -> Result<(), Error> {

@@ -42,6 +42,8 @@ host = []
 async-host = ["host", "leptoskit_bridge/async-host", "dep:serde", "dep:serde_json"]
 # The OpenXR backend, for Meta Quest, Android XR, and PC headsets.
 openxr = ["host", "dep:openxr"]
+# Camera and depth textures and headset swapchains for a wgpu renderer.
+wgpu = ["host", "dep:wgpu", "dep:ash"]
 # The WebXR backend for the browser build.
 web = [
 	"dep:js-sys",
@@ -70,7 +72,29 @@ jni = "0.21.1"
 libloading = "0.8"
 
 [target.'cfg(any(target_os = "android", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+ash = { version = "0.38", optional = true }
 openxr = { version = "0.22", default-features = false, features = ["loaded"], optional = true }
+
+# The graphics backends each platform's renderer uses: Metal on Apple
+# platforms, OpenGL ES and Vulkan on Android, Direct3D 12 and Vulkan on
+# Windows, and Vulkan on Linux.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["metal", "std"] }
+
+[target.'cfg(target_os = "android")'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["gles", "std", "vulkan"]
+
+[target.'cfg(windows)'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["dx12", "std", "vulkan"]
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["std", "vulkan"]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys = { version = "0.3", optional = true }

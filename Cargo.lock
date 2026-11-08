@@ -6952,6 +6952,7 @@ dependencies = [
 name = "leptoskit_xr"
 version = "0.3.0"
 dependencies = [
+ "ash",
  "jni 0.21.1",
  "js-sys",
  "leptoskit_bridge",
@@ -6971,6 +6972,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu",
 ]
 
 [[package]]

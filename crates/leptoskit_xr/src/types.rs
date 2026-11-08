@@ -606,6 +606,19 @@ pub struct View {
 }
 
 impl View {
+	/// World to view space, column-major: the inverse of the view's pose.
+	#[must_use]
+	pub fn view_matrix(&self) -> [f32; 16] {
+		self.pose.inverse().to_matrix()
+	}
+
+	/// View to clip space, column-major, with depth from 0 at `near` to 1 at
+	/// `far`. A platform's own matrix is returned as is.
+	#[must_use]
+	pub fn projection_matrix(&self, near: f32, far: f32) -> [f32; 16] {
+		self.projection.matrix(near, far)
+	}
+
 	/// The ray through a point on this view, where `(0, 0)` is the top-left
 	/// corner and `(1, 1)` the bottom-right.
 	#[must_use]

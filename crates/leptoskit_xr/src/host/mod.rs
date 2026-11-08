@@ -22,6 +22,9 @@ mod runtime;
 #[cfg(feature = "async-host")]
 mod plugin;
 
+#[cfg(feature = "wgpu")]
+pub mod render;
+
 #[cfg(any(target_os = "ios", target_os = "android"))]
 #[allow(unsafe_code)]
 mod sensors;
