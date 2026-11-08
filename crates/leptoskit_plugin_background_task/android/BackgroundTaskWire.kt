@@ -5,7 +5,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-internal enum class Status(val code: Int) {
+internal enum class Status(
+    val code: Int,
+) {
     Restricted(0),
     Available(1),
     Unavailable(2),

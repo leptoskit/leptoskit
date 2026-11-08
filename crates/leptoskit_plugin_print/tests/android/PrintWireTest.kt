@@ -4,7 +4,10 @@ import dev.leptoskit.bridge.PluginException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-private fun wire(kind: Int, body: String): ByteBuffer {
+private fun wire(
+    kind: Int,
+    body: String,
+): ByteBuffer {
     val bytes = body.toByteArray(Charsets.UTF_8)
     val result = ByteBuffer.allocate(8 + bytes.size).order(ByteOrder.LITTLE_ENDIAN)
     result.putInt(kind).putInt(bytes.size).put(bytes)

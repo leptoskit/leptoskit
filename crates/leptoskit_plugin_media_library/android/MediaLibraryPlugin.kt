@@ -48,12 +48,19 @@ class MediaLibraryPlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encode(status())
             }
+
             REQUEST_PERMISSION -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 encode(requestPermission())
             }
-            LIST_ASSETS -> list(ListOptions.decode(payload))
-            else -> save(SaveRequest.decode(payload))
+
+            LIST_ASSETS -> {
+                list(ListOptions.decode(payload))
+            }
+
+            else -> {
+                save(SaveRequest.decode(payload))
+            }
         }
     }
 
@@ -92,18 +99,28 @@ class MediaLibraryPlugin(
             )
         val selection =
             when (options.kind) {
-                MediaKind.All ->
+                MediaKind.All -> {
                     "${MediaStore.Files.FileColumns.MEDIA_TYPE}=? OR ${MediaStore.Files.FileColumns.MEDIA_TYPE}=?"
-                else -> null
+                }
+
+                else -> {
+                    null
+                }
             }
         val selectionArgs =
             when (options.kind) {
-                MediaKind.All ->
+                MediaKind.All -> {
                     arrayOf(
-                        MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
-                        MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
+                            .toString(),
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+                            .toString(),
                     )
-                else -> null
+                }
+
+                else -> {
+                    null
+                }
             }
         val assets = ArrayList<Asset>(options.limit)
         context.contentResolver
@@ -123,9 +140,15 @@ class MediaLibraryPlugin(
                     val id = cursor.getLong(idIndex)
                     val kind =
                         when (options.kind) {
-                            MediaKind.Images -> MediaKind.Images
-                            MediaKind.Videos -> MediaKind.Videos
-                            MediaKind.All ->
+                            MediaKind.Images -> {
+                                MediaKind.Images
+                            }
+
+                            MediaKind.Videos -> {
+                                MediaKind.Videos
+                            }
+
+                            MediaKind.All -> {
                                 if (typeIndex >= 0 &&
                                     cursor.getInt(typeIndex) ==
                                     MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
@@ -134,19 +157,23 @@ class MediaLibraryPlugin(
                                 } else {
                                     MediaKind.Images
                                 }
+                            }
                         }
                     val contentUri =
                         when (kind) {
-                            MediaKind.Videos ->
+                            MediaKind.Videos -> {
                                 ContentUris.withAppendedId(
                                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                                     id,
                                 )
-                            else ->
+                            }
+
+                            else -> {
                                 ContentUris.withAppendedId(
                                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                                     id,
                                 )
+                            }
                         }
                     assets.add(
                         Asset(
@@ -187,10 +214,14 @@ class MediaLibraryPlugin(
         context.contentResolver.openOutputStream(dest)?.use { output ->
             val input =
                 when (source.scheme) {
-                    "file" -> File(source.path!!).inputStream()
-                    else ->
+                    "file" -> {
+                        File(source.path!!).inputStream()
+                    }
+
+                    else -> {
                         context.contentResolver.openInputStream(source)
                             ?: throw PluginException(PluginException.INVALID_ARGUMENT)
+                    }
                 }
             input.use { it.copyTo(output) }
         } ?: throw PluginException(PluginException.NATIVE)
@@ -220,7 +251,11 @@ class MediaLibraryPlugin(
         }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private fun checkMain() {
         check(Looper.myLooper() == Looper.getMainLooper())

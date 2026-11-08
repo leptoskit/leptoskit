@@ -37,7 +37,11 @@ fun main() {
     }
 
     fun limit(value: Int): ByteBuffer =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).also { it.flip() }
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(value)
+            .also { it.flip() }
 
     try {
         ContactsRecord.decodeQueryLimit(limit(0))

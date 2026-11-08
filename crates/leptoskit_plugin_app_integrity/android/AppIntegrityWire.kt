@@ -4,7 +4,9 @@ import dev.leptoskit.bridge.PluginException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-internal enum class Capability(val code: Int) {
+internal enum class Capability(
+    val code: Int,
+) {
     Restricted(0),
     Available(1),
     Unavailable(2),

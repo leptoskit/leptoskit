@@ -58,16 +58,19 @@ class ContactsPlugin(
 
                 encode(status())
             }
+
             REQUEST_PERMISSION -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
                 exclusive { requestPermission() }
             }
+
             PICK -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
                 exclusive { pick() }
             }
+
             else -> {
                 val limit = ContactsRecord.decodeQueryLimit(payload)
                 exclusive { query(limit) }
@@ -99,8 +102,7 @@ class ContactsPlugin(
         }
     }
 
-    private fun granted(): Boolean =
-        context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+    private fun granted(): Boolean = context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
 
     private fun declaresPermission(): Boolean =
         context.packageManager
@@ -202,11 +204,13 @@ class ContactsPlugin(
 
     private fun readContact(uri: Uri): ContactsRecord {
         val resolver = context.contentResolver
-        resolver.query(uri, arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY), null, null, null)?.use { cursor ->
+        val projection = arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)
+        resolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) throw PluginException(PluginException.CANCELLED)
 
-            val id = cursor.string(ContactsContract.Contacts._ID)
-                ?: throw PluginException(PluginException.NATIVE)
+            val id =
+                cursor.string(ContactsContract.Contacts._ID)
+                    ?: throw PluginException(PluginException.NATIVE)
             val name =
                 cursor.string(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)?.ifBlank { null }
                     ?: id
@@ -259,7 +263,11 @@ class ContactsPlugin(
         }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private companion object {
         const val STATUS = 0

@@ -59,24 +59,29 @@ class CalendarPlugin(
 
                 encode(status())
             }
+
             REQUEST_PERMISSION -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
                 exclusive { requestPermission() }
             }
+
             LIST_CALENDARS -> {
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
                 exclusive { listCalendars() }
             }
+
             CREATE_EVENT -> {
                 val request = CalendarEventRecord.decodeCreate(payload)
                 exclusive { createEvent(request) }
             }
+
             GET_EVENT -> {
                 val id = CalendarEventRecord.decodeEventId(payload)
                 exclusive { getEvent(id) }
             }
+
             else -> {
                 val query = CalendarEventRecord.decodeListQuery(payload)
                 exclusive { listEvents(query) }
@@ -108,11 +113,9 @@ class CalendarPlugin(
         return if (rationale) DENIED else PROMPT
     }
 
-    private fun granted(): Boolean =
-        granted(Manifest.permission.READ_CALENDAR) && granted(Manifest.permission.WRITE_CALENDAR)
+    private fun granted(): Boolean = granted(Manifest.permission.READ_CALENDAR) && granted(Manifest.permission.WRITE_CALENDAR)
 
-    private fun granted(permission: String): Boolean =
-        context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    private fun granted(permission: String): Boolean = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     private fun declaresPermissions(): Boolean {
         val declared =
@@ -358,7 +361,11 @@ class CalendarPlugin(
     }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private companion object {
         const val STATUS = 0

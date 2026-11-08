@@ -88,8 +88,7 @@ internal object MapsWire {
         return buffer.array()
     }
 
-    private fun readCamera(bytes: ByteBuffer): MapCamera =
-        MapCamera.validated(readF64(bytes), readF64(bytes), readF64(bytes))
+    private fun readCamera(bytes: ByteBuffer): MapCamera = MapCamera.validated(readF64(bytes), readF64(bytes), readF64(bytes))
 
     private fun readMarker(bytes: ByteBuffer): MapMarker {
         val latitude = readF64(bytes)

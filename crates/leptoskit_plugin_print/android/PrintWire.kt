@@ -7,9 +7,13 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 
 internal sealed class PrintJob {
-    data class Html(val html: String) : PrintJob()
+    data class Html(
+        val html: String,
+    ) : PrintJob()
 
-    data class PdfUri(val uri: String) : PrintJob()
+    data class PdfUri(
+        val uri: String,
+    ) : PrintJob()
 
     companion object {
         fun decode(payload: ByteBuffer): PrintJob {
@@ -51,10 +55,14 @@ internal sealed class PrintJob {
                     val authority = rest.split('/', '?', '#').firstOrNull().orEmpty()
                     if (authority.isEmpty() || '@' in authority) throw invalid()
                 }
+
                 "file" -> {
                     if (!rest.startsWith("/") || '@' in rest) throw invalid()
                 }
-                else -> throw invalid()
+
+                else -> {
+                    throw invalid()
+                }
             }
 
             return PdfUri(value)
@@ -86,8 +94,7 @@ internal sealed class PrintJob {
             }
         }
 
-        private fun isHex(value: Char): Boolean =
-            value in '0'..'9' || value in 'a'..'f' || value in 'A'..'F'
+        private fun isHex(value: Char): Boolean = value in '0'..'9' || value in 'a'..'f' || value in 'A'..'F'
 
         private fun readU32(bytes: ByteBuffer): Int {
             if (bytes.remaining() < 4) throw invalid()

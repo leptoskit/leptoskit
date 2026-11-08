@@ -34,6 +34,7 @@ class BackgroundTaskPlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 BackgroundTaskWire.status(Status.Available)
             }
+
             1 -> {
                 val request = BackgroundTaskWire.register(payload)
                 val work =
@@ -51,18 +52,23 @@ class BackgroundTaskPlugin(
                 tasks[request.name] = request.intervalSecs
                 ByteArray(0)
             }
+
             2 -> {
                 val name = BackgroundTaskWire.name(payload)
                 WorkManager.getInstance(hostContext).cancelUniqueWork(name)
                 tasks.remove(name)
                 ByteArray(0)
             }
+
             3 -> {
                 val name = BackgroundTaskWire.name(payload)
                 if (!tasks.containsKey(name)) throw PluginException(PluginException.INVALID_ARGUMENT)
                 ByteArray(0)
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 
