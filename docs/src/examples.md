@@ -58,6 +58,7 @@ Every example lives in the leptoskit repository, most under `examples/`:
 | [`counter`](https://github.com/leptoskit/leptoskit/tree/main/examples/counter)                                                  | The element tree, layout, mutation diffing, and a code push release, written with builder calls                                                                                            | The host, headlessly                                                                        |
 | [`observatory`](https://github.com/leptoskit/leptoskit/tree/main/examples/observatory)                                          | A star catalogue and a year of sky observations: [tables](guide/18-tables.md) and [virtualized lists](guide/17-virtualized-lists.md)                                                       | A macOS window, or headlessly on any platform                                               |
 | [`postcard`](https://github.com/leptoskit/leptoskit/tree/main/examples/postcard)                                                | A postcard in five languages: [typed translations](guide/19-localization.md) with plurals, selects, fallback, and right-to-left layout                                                     | A macOS window, or headlessly on any platform                                               |
+| [`scene3d`](https://github.com/leptoskit/leptoskit/tree/main/examples/scene3d)                                                  | Turntable: a skinned character swaying as it turns on a stand, in a [3D scene](guide/33-3d-scenes.md)                                                                                      | The browser with `leptoskit dev`, and the generated iOS, macOS, and Android apps            |
 | [`harbor`](https://github.com/leptoskit/leptoskit/tree/main/examples/harbor)                                                    | A departure board: [queries](guide/11-fetching-data.md), hooks, and [server functions](guide/06-server-functions.md) with a [generated client](guide/13-sharing-the-rpc.md)                | The host, headlessly                                                                        |
 | [`huddle`](https://github.com/leptoskit/leptoskit/tree/main/examples/huddle)                                                    | A team chat and task board: [live queries, channels, and presence](guide/24-real-time.md), [jobs, actions, and the inbox](guide/24-background-work.md), and [sign-in](guide/23-sign-in.md) | The browser, macOS, and iOS, against its own server; Fly or Compose to deploy               |
 | [`release_lifecycle`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_codepush/examples/release_lifecycle.rs) | A [code push](guide/05-code-push.md) release from signing to a device that confirms it, a delta, a rollback, and a mirrored bucket                                                         | The host, headlessly                                                                        |
@@ -125,6 +126,14 @@ cargo run -p postcard_example -- summary ar            # the postcard, in Arabic
 ```
 
 The postcard opens in the language your `LANG` names when it has a translation, and in English otherwise. `summary` and `snapshot` take a tag, such as `pl` or `ja`, to choose one.
+
+### scene3d
+
+```bash
+cd examples/scene3d
+leptoskit dev                   # in the browser, with WebGPU or WebGL2
+cargo test -p scene3d_example   # the screen, the model, and one drawn frame
+```
 
 ### harbor
 

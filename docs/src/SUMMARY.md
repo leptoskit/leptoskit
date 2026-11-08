@@ -41,6 +41,7 @@
 - [Animations](guide/32-animations.md)
 - [Motion](guide/32-motion.md)
 - [Rive animations](guide/20-rive.md)
+- [3D scenes](guide/33-3d-scenes.md)
 - [Foldable phones](guide/21-foldable-phones.md)
 - [The database](guide/22-database.md)
 - [Real-time screens](guide/24-real-time.md)

@@ -44,6 +44,10 @@ The crate stands alone. No other crate depends on it, and it is not re-exported 
 
 `tests/render.rs` renders small scenes headlessly and checks pixels: solid rectangles, rounded corners, borders, linear and radial gradients, shadow falloff, offset, and spread, even-odd holes, curve anti-aliasing, stroke width and caps, clips (rectangular, rounded, nested), layer opacity, transforms, scale, a BGRA renderer reused across sizes, and a hostile scene. Without a GPU adapter, `render_to_rgba` returns an error whose `is_unavailable()` is true and each test prints `skipping:` and passes; CI Linux runners without a GPU (or without lavapipe) skip them. `tests/sanitize.rs` and the encoder's unit tests need no GPU.
 
+## Hosting built for 3D
+
+`leptoskit_3d` (see [3d.md](3d.md)) built the device and surface hosting phases B–D describe, for 3D scenes: one `wgpu` device per process (`leptoskit_3d::Gpu`), `CAMetalLayer` views on iOS and macOS paced by `CADisplayLink`, a `SurfaceView` on Android paced by `Choreographer` with OpenGL ES by default and Vulkan opt-in, and WebGPU canvases with a WebGL2 fallback in the browser, all drawing only while something changes. The canvas can reuse that device (`Gpu::device` and `Gpu::queue` go straight into `leptoskit_canvas::Renderer::new`), and the same `CAMetalLayer` and `SurfaceView` views would host it, but nothing hosts a `Canvas` yet: the element, its compact props, and its renderer wiring below are still open. The WebGL2 notes below apply to the canvas's paint storage buffer; 3D avoided storage buffers from the start.
+
 ## Phase B: the `Canvas` element and the web
 
 - A `Canvas` component in `leptoskit_native` carrying a `Scene` prop (the crate with `default-features = false`, so guests do not build wgpu). The prop needs a compact binary encoding for the guest ABI rather than JSON, and a way to send only what changed (for example, keyed sub-scenes) so an animated chart does not resend every path.
