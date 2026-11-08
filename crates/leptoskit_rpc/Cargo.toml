@@ -30,6 +30,8 @@ leptos = { workspace = true }
 leptoskit_config = { workspace = true, optional = true }
 leptoskit_db = { workspace = true, optional = true }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
+leptoskit_pod = { workspace = true }
+leptoskit_pod_macros = { workspace = true }
 # The retry backoff timer, which covers every host leptoskit_query does, and
 # the cache the client's queries and mutations live in.
 leptoskit_query = { workspace = true }

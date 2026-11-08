@@ -105,7 +105,7 @@ async fn calls_post_the_arguments_to_the_operations_route() {
 
 	let sent = script.sent();
 	assert_eq!(sent.len(), 1);
-	assert_eq!(sent[0].url, "https://notes.example/api/notes");
+	assert_eq!(sent[0].url, "https://notes.example/rpc/notes");
 	assert_eq!(sent[0].body, r#"{"starting":"m"}"#);
 	assert_eq!(
 		sent[0].headers(),
@@ -141,7 +141,7 @@ async fn credentials_sign_requests_and_renew_after_a_refusal() {
 	let sent = script.sent();
 	assert_eq!(sent[0].authorization.as_deref(), Some("Bearer stale"));
 	assert_eq!(sent[1].authorization.as_deref(), Some("Bearer fresh"));
-	assert_eq!(sent[1].url, "/api/count");
+	assert_eq!(sent[1].url, "/rpc/count");
 
 	// A second refusal that renewing can't fix reaches the caller.
 	assert_eq!(
@@ -323,7 +323,7 @@ async fn a_server_calls_a_service_at_its_url_anonymously_unless_as_the_app() {
 	let sent = script.sent();
 	assert_eq!(
 		sent[0].url,
-		"http://127.0.0.1:3100/_leptoskit/services/event-store/api/ping"
+		"http://127.0.0.1:3100/_leptoskit/services/event-store/rpc/ping"
 	);
 	assert_eq!(sent[0].authorization, None, "anonymous by default");
 
@@ -396,7 +396,7 @@ async fn a_service_is_signed_with_the_persons_token_for_it_until_the_sign_in_cha
 	assert_eq!(token.authorization().await, Ok(first.clone()));
 	let sent = app.sent();
 	assert_eq!(sent.len(), 1);
-	assert_eq!(sent[0].url, "https://app.example/api/rpc.service_token");
+	assert_eq!(sent[0].url, "https://app.example/rpc/rpc.service_token");
 	assert_eq!(
 		serde_json::from_str::<serde_json::Value>(&sent[0].body).unwrap(),
 		json!({ "service": "analytics" })
@@ -487,7 +487,7 @@ async fn a_browser_or_native_app_calls_a_service_on_the_apps_origin() {
 	browser.call("capture", json!({}), Key::None).await.unwrap();
 	assert_eq!(
 		script.sent()[0].url,
-		"/_leptoskit/services/analytics/api/capture"
+		"/_leptoskit/services/analytics/rpc/capture"
 	);
 
 	// In a native app: the configured origin, and none of the app's own
@@ -515,7 +515,7 @@ async fn a_browser_or_native_app_calls_a_service_on_the_apps_origin() {
 	let _ = native.call("capture", json!({}), Key::None).await;
 	assert_eq!(
 		script.sent()[0].url,
-		"https://app.example/_leptoskit/services/analytics/api/capture"
+		"https://app.example/_leptoskit/services/analytics/rpc/capture"
 	);
 	assert_eq!(script.sent()[0].authorization, None);
 	assert_eq!(script.sent().len(), 1, "a service's 401 renews nothing");

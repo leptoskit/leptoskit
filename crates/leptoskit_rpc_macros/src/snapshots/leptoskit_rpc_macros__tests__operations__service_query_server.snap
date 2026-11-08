@@ -3,6 +3,7 @@ source: crates/leptoskit_rpc_macros/src/tests.rs
 expression: server
 ---
 /// The latest messages in a channel.
+#[::leptoskit_rpc::__private::pod_data]
 #[derive(
     ::core::clone::Clone,
     ::leptoskit_rpc::__private::serde::Serialize,
@@ -66,7 +67,7 @@ const _: () = {
         ::leptoskit_rpc::Operation > ::NAME, kind : < Messages as
         ::leptoskit_rpc::Operation > ::KIND, module_path : ::core::module_path!(),
         service : < Messages as ::leptoskit_rpc::Operation > ::SERVICE, handler :
-        ::leptoskit_rpc::__private::handle:: < Messages >, }
+        ::leptoskit_rpc::__private::handle_pod:: < Messages >, }
     }
 };
 #[cfg(not(feature = "service"))]

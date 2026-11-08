@@ -690,7 +690,7 @@ mod operations {
 		// The descriptor is printed token by token: compare without spaces.
 		let compact: String = published.split_whitespace().collect();
 		assert!(
-			compact.contains(r#"path:"/_leptoskit/services/analytics/api/summary""#),
+			compact.contains(r#"path:"/_leptoskit/services/analytics/rpc/summary""#),
 			"{published}"
 		);
 		assert!(

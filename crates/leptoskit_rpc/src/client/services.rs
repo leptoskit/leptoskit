@@ -4,14 +4,14 @@
 //! sent to the `analytics` service rather than the app's own server:
 //!
 //! - in the browser and in a native app, to
-//!   `{origin}/_leptoskit/services/analytics/api/<name>`, on the app's origin,
+//!   `{origin}/_leptoskit/services/analytics/rpc/<name>`, on the app's origin,
 //!   which the edge (or `leptoskit dev`) forwards to the service. The app's own
 //!   credentials don't go along: only those
 //!   [`ClientConfig::service_credentials`] names for the service do. In the
 //!   browser the page's cookies still go with every same-origin request; the
 //!   edge strips them for services the app doesn't trust.
 //! - from a Rust server, such as the app's while it renders, to
-//!   `$LEPTOSKIT_SERVICE_ANALYTICS_URL/_leptoskit/services/analytics/api/
+//!   `$LEPTOSKIT_SERVICE_ANALYTICS_URL/_leptoskit/services/analytics/rpc/
 //!   <name>`, as an anonymous caller: what the server renders is what the
 //!   browser would fetch. [`call_as_app`](super::call_as_app) is the one way to
 //!   call as the app, signed with `$LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`; no

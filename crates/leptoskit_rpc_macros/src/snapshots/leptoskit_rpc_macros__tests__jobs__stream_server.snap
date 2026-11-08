@@ -3,6 +3,7 @@ source: crates/leptoskit_rpc_macros/src/tests.rs
 expression: server
 ---
 /// A model's tokens.
+#[::leptoskit_rpc::__private::pod_data]
 #[derive(
     ::core::clone::Clone,
     ::leptoskit_rpc::__private::serde::Serialize,

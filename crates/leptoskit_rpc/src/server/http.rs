@@ -29,6 +29,9 @@ pub const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// The largest request body a call may send: 2 MiB.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
+/// JSON operation routes kept on `/api` while `json` is in `[rpc].transports`.
+const LEGACY_ROUTE_PREFIX: &str = "/api";
+
 /// The app's operations, served: the database they run on, and how to tell
 /// who is calling.
 ///
@@ -207,15 +210,22 @@ impl Server {
 				continue;
 			}
 
-			let server = self.clone();
-			let path = format!("{}/{}", self.inner.route_prefix, registration.name);
-			router = router.route(
-				&path,
-				post(move |request: Request| {
-					let server = server.clone();
-					async move { server.serve(registration, request).await }
-				}),
-			);
+			let mut prefixes = vec![self.inner.route_prefix.clone()];
+			if self.inner.transports.json && self.inner.route_prefix != LEGACY_ROUTE_PREFIX {
+				prefixes.push(LEGACY_ROUTE_PREFIX.to_owned());
+			}
+
+			for prefix in prefixes {
+				let server = self.clone();
+				let path = format!("{prefix}/{}", registration.name);
+				router = router.route(
+					&path,
+					post(move |request: Request| {
+						let server = server.clone();
+						async move { server.serve(registration, request).await }
+					}),
+				);
+			}
 		}
 
 		router

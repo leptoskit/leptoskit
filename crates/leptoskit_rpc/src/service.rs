@@ -6,7 +6,7 @@
 //! `leptoskit.toml`. The app calls it with the same client it uses for its
 //! own operations:
 //!
-//! - from the browser, at `/_leptoskit/services/analytics/api/<name>` on the
+//! - from the browser, at `/_leptoskit/services/analytics/rpc/<name>` on the
 //!   page's own origin, which the edge (or `leptoskit dev`) sends to the
 //!   service;
 //! - from a native app, at the same path on the configured origin;

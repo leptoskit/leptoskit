@@ -71,7 +71,7 @@ async fn the_binary_starts_serves_and_stops_on_sigterm() {
 	assert!(mail.text().await.unwrap().contains("Huddle mail"));
 
 	let whoami = http
-		.post(format!("{base}/api/whoami"))
+		.post(format!("{base}/rpc/whoami"))
 		.header("origin", &base)
 		.header("content-type", "application/json")
 		.body("{}")

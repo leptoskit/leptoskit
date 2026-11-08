@@ -28,11 +28,11 @@ async fn serve(roles: Roles) -> (Huddle, String) {
 	(huddle, base)
 }
 
-/// The status of `POST /api/whoami` and of a plain `GET /live`.
+/// The status of `POST /rpc/whoami` and of a plain `GET /live`.
 async fn statuses(base: &str) -> (u16, u16) {
 	let http = reqwest::Client::new();
 	let api = http
-		.post(format!("{base}/api/whoami"))
+		.post(format!("{base}/rpc/whoami"))
 		.header("origin", base)
 		.header("content-type", "application/json")
 		.body("{}")

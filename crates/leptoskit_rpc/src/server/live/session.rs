@@ -943,7 +943,9 @@ impl Session {
 			match body {
 				crate::wire::WireBody::Json(value) => Ok(value),
 				crate::wire::WireBody::Pod(_) => {
-					Err(Error::server("live mutations still speak JSON".to_owned()))
+					Err(crate::Error::server(
+						"live mutations still speak JSON".to_owned(),
+					))
 				}
 			}
 		});

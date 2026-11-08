@@ -1643,16 +1643,42 @@ fn is_github_repository(repository: &str) -> bool {
 		.is_some_and(|(owner, name)| segment(owner) && segment(name) && !is_git_suffixed(name))
 }
 
+fn default_rpc_path() -> String {
+	"/rpc".into()
+}
+
+fn default_transports() -> Vec<String> {
+	vec!["pod".into()]
+}
+
+fn default_transport_name() -> String {
+	"pod".into()
+}
+
 /// The published RPC, as `leptoskit rpc` describes it and generates clients
 /// for it.
 ///
 /// Which functions are published is decided in code, with
 /// `#[leptoskit_rpc::api]`; this section names the RPC, excludes functions by
 /// pattern, and says where generated clients go.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct RpcConfig {
+	/// HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before
+	/// `/<name>`; defaults to `/rpc`.
+	#[serde(default = "default_rpc_path")]
+	pub path: String,
+	/// Live WebSocket or SSE mount; defaults to `{path}/live` when unset.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live_path: Option<String>,
+	/// Which wire encodings the server accepts on operation routes: `pod`
+	/// (LK Pod, default) and/or `json` (serde JSON on the same paths).
+	#[serde(default = "default_transports")]
+	pub transports: Vec<String>,
+	/// The encoding generated SDKs prefer; defaults to `pod`.
+	#[serde(default = "default_transport_name")]
+	pub default_transport: String,
 	/// The RPC title; defaults to `<app.name> RPC`.
 	pub title: Option<String>,
 	/// A longer description for the OpenAPI document.
@@ -1674,6 +1700,42 @@ pub struct RpcConfig {
 	/// Live queries across several servers.
 	#[serde(skip_serializing_if = "RpcLiveConfig::is_default")]
 	pub live: RpcLiveConfig,
+}
+
+impl Default for RpcConfig {
+	fn default() -> Self {
+		Self {
+			path: default_rpc_path(),
+			live_path: None,
+			transports: default_transports(),
+			default_transport: default_transport_name(),
+			title: None,
+			description: None,
+			servers: Vec::new(),
+			exclude: Vec::new(),
+			include_internal: false,
+			targets: Vec::new(),
+			jobs: RpcJobsConfig::default(),
+			live: RpcLiveConfig::default(),
+		}
+	}
+}
+
+impl RpcConfig {
+	/// The live mount path: [`live_path`](Self::live_path) or `{path}/live`.
+	#[must_use]
+	pub fn resolved_live_path(&self) -> String {
+		self.live_path
+			.clone()
+			.unwrap_or_else(|| format!("{}/live", self.path.trim_end_matches('/')))
+	}
+
+	/// Whether JSON bodies are accepted on the operation routes (dual with
+	/// Pod).
+	#[must_use]
+	pub fn serves_json(&self) -> bool {
+		self.transports.iter().any(|transport| transport == "json")
+	}
 }
 
 /// Live queries across several servers: `[rpc.live]`.

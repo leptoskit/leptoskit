@@ -111,6 +111,7 @@ pub use run::call_as;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 #[doc(hidden)]
 pub use run::handle;
+pub use run::handle_pod;
 #[cfg(feature = "db")]
 pub use services::APP_CALLER;
 #[cfg(feature = "db")]
@@ -355,8 +356,10 @@ mod tests {
 
 	fn handler(
 		_: Invocation,
-	) -> leptoskit_query::BoxFuture<'static, crate::Result<serde_json::Value>> {
-		Box::pin(std::future::ready(Ok(serde_json::Value::Null)))
+	) -> leptoskit_query::BoxFuture<'static, crate::Result<crate::wire::WireBody>> {
+		Box::pin(std::future::ready(Ok(crate::wire::WireBody::Json(
+			serde_json::Value::Null,
+		))))
 	}
 
 	static A: Registration = Registration {

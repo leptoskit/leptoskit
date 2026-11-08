@@ -66,6 +66,9 @@ staging_dir = "codepush"
 public_keys = []
 
 [rpc]
+path = "/rpc"
+transports = ["pod", "json"]
+default_transport = "pod"
 servers = []
 exclude = []
 include_internal = false

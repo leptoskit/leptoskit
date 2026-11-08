@@ -1,13 +1,13 @@
 ---
 source: crates/leptoskit_rpc/tests/actions.rs
-expression: "openapi[\"paths\"][\"/api/summarize\"]"
+expression: "openapi[\"paths\"][\"/rpc/summarize\"]"
 ---
 {
   "post": {
     "operationId": "summarize",
     "requestBody": {
       "content": {
-        "application/json": {
+        "application/vnd.leptoskit.rpc.v1+bin": {
           "schema": {
             "properties": {
               "channel": {
@@ -27,13 +27,13 @@ expression: "openapi[\"paths\"][\"/api/summarize\"]"
     "responses": {
       "200": {
         "content": {
-          "application/json": {
+          "application/vnd.leptoskit.rpc.v1+bin": {
             "schema": {
               "type": "string"
             }
           }
         },
-        "description": "The function's return value."
+        "description": "The function's return value, encoded as application/vnd.leptoskit.rpc.v1+bin."
       },
       "default": {
         "content": {
@@ -51,6 +51,8 @@ expression: "openapi[\"paths\"][\"/api/summarize\"]"
     "tags": [
       "chat"
     ],
-    "x-leptoskit-kind": "action"
+    "x-leptoskit-kind": "action",
+    "x-leptoskit-unsupported-input": "application/vnd.leptoskit.rpc.v1+bin",
+    "x-leptoskit-unsupported-output": "application/vnd.leptoskit.rpc.v1+bin"
   }
 }

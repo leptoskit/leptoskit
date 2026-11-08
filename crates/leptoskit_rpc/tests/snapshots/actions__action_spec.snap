@@ -8,10 +8,18 @@ expression: summarize
   "module_path": "actions",
   "struct_name": "Summarize",
   "docs": "Summarizes a channel with an outside service, then pins the summary.",
-  "path": "/api/summarize",
+  "path": "/rpc/summarize",
   "method": "POST",
-  "input": "Json",
-  "output": "Json",
+  "input": {
+    "Other": {
+      "content_type": "application/vnd.leptoskit.rpc.v1+bin"
+    }
+  },
+  "output": {
+    "Other": {
+      "content_type": "application/vnd.leptoskit.rpc.v1+bin"
+    }
+  },
   "error_content_type": "text/plain",
   "params": [
     {

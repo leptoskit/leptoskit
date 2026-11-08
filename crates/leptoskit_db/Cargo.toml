@@ -28,6 +28,7 @@ inventory = { workspace = true, optional = true }
 leptos = { workspace = true, optional = true, features = ["ssr"] }
 leptoskit_db_macros = { workspace = true }
 leptoskit_db_schema = { workspace = true, optional = true }
+leptoskit_pod = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true, features = ["bundled", "cache"] }
 rustls = { workspace = true, optional = true, features = ["ring", "std", "tls12"] }
@@ -107,6 +108,8 @@ vector = ["dep:half", "dep:sqlite-vec", "rusqlite?/functions"]
 ## Checks `regex` rules in `validate()`. Always on with `server`; opt in on the
 ## client.
 regex = ["dep:regex"]
+## LK Pod encode/decode for [`Id`](crate::Id) on RPC operation routes.
+pod = ["dep:leptoskit_pod"]
 ## The studio, a browser UI for the development database that `leptoskit db
 ## studio` serves. Compiled only in builds with debug assertions: a release
 ## build leaves it out even with this feature on. Never enable it for a

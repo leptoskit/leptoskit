@@ -5,7 +5,7 @@
 //!
 //! | Route              | What it is                                                                 |
 //! | ------------------ | -------------------------------------------------------------------------- |
-//! | `POST /api/<name>` | Every query, mutation, and action in `huddle_api`, as the caller           |
+//! | `POST /rpc/<name>` | Every query, mutation, and action in `huddle_api`, as the caller           |
 //! | `GET /live`        | The live socket: subscriptions, the typing room, and presence              |
 //! | `/auth/…`          | Sign-in, from `leptoskit_auth`, with dev sign-in in debug builds           |
 //! | `/_leptoskit/mail` | The demo mailbox: sign-in codes and invitations, when mail stays in-app    |

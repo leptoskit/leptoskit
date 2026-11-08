@@ -223,11 +223,15 @@ pub const POD_CONTENT_TYPE: &str = "application/vnd.leptoskit.rpc.v1+bin";
 pub const JSON_CONTENT_TYPE: &str = "application/json";
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
-mod wire;
+pub mod wire;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use wire::Transport;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use wire::TransportSet;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::WireArgs;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::WireBody;
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub mod testing;
@@ -267,6 +271,8 @@ pub mod __private {
 	pub use crate::operation::assert_output;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::handle;
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	pub use crate::server::handle_pod;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::jobs::assert_on_failure;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]

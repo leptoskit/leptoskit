@@ -1009,7 +1009,7 @@ pub(crate) fn expand(
 	let mut out = quote! {
 		#(#docs)*
 		#(#deprecated)*
-		#[#krate::__private::pod_data]
+		#[#krate::__private::pod_data(#krate::__private::leptoskit_pod)]
 		#[derive(
 			::core::clone::Clone,
 			#krate::__private::serde::Serialize,
@@ -1598,6 +1598,8 @@ fn server_items(
 		_ => quote!(),
 	};
 
+	// JSON always works; Pod replies require the output type to implement Pod
+	// codecs too. Prefer `handle` until return types are universally Pod-ready.
 	let handler = quote!(#krate::__private::handle::<#struct_ident>);
 	let service = service_const(args.service.as_ref());
 	let call = quote_spanned! {signature.output_span=>

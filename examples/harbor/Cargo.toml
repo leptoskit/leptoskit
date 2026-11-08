@@ -26,6 +26,7 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
+leptoskit_pod = { workspace = true }
 leptoskit_rpc_codegen = { workspace = true, features = ["generators"] }
 
 [lints]

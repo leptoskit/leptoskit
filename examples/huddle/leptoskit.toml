@@ -66,6 +66,10 @@ replica_url_envs = ["DATABASE_REPLICA_URL"]
 app_name = "Huddle"
 keys_env = "AUTH_ENCRYPTION_KEYS"
 
+path = "/rpc"
+transports = ["pod", "json"]
+default_transport = "pod"
+
 # With NATS_URL set, the servers take commits from the live relay rather
 # than each reading the database, and share channels through it.
 [rpc.live]

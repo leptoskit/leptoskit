@@ -158,6 +158,7 @@
 			"description": "The published RPC: what `leptoskit rpc` describes and generates\nclients for.",
 			"$ref": "#/$defs/RpcConfig",
 			"default": {
+				"default_transport": "pod",
 				"description": null,
 				"exclude": [],
 				"include_internal": false,
@@ -167,9 +168,13 @@
 					"retention_days": 7,
 					"workers": 4
 				},
+				"path": "/rpc",
 				"servers": [],
 				"targets": [],
-				"title": null
+				"title": null,
+				"transports": [
+					"pod"
+				]
 			}
 		},
 		"schema_version": {
@@ -2799,6 +2804,11 @@
 			"description": "The published RPC, as `leptoskit rpc` describes it and generates clients\nfor it.\n\nWhich functions are published is decided in code, with\n`#[leptoskit_rpc::api]`; this section names the RPC, excludes functions by\npattern, and says where generated clients go.",
 			"type": "object",
 			"properties": {
+				"default_transport": {
+					"description": "The encoding generated SDKs prefer; defaults to `pod`.",
+					"type": "string",
+					"default": "pod"
+				},
 				"description": {
 					"description": "A longer description for the OpenAPI document.",
 					"type": [
@@ -2834,6 +2844,18 @@
 					"description": "Live queries across several servers.",
 					"$ref": "#/$defs/RpcLiveConfig"
 				},
+				"live_path": {
+					"description": "Live WebSocket or SSE mount; defaults to `{path}/live` when unset.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"path": {
+					"description": "HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before\n`/<name>`; defaults to `/rpc`.",
+					"type": "string",
+					"default": "/rpc"
+				},
 				"servers": {
 					"description": "The origins the RPC is served from. The first one is the default the\ngenerated clients point at; none means the page's own origin.",
 					"type": "array",
@@ -2857,6 +2879,16 @@
 						"null"
 					],
 					"default": null
+				},
+				"transports": {
+					"description": "Which wire encodings the server accepts on operation routes: `pod`\n(LK Pod, default) and/or `json` (serde JSON on the same paths).",
+					"type": "array",
+					"default": [
+						"pod"
+					],
+					"items": {
+						"type": "string"
+					}
 				}
 			},
 			"additionalProperties": false

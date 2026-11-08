@@ -1,5 +1,5 @@
 //! Every handler the HTTP and live routes expose, driven the way a client
-//! drives them: `POST /api/<name>` with a session cookie and the wire
+//! drives them: `POST /rpc/<name>` with a session cookie and the wire
 //! frames over `/live`. The server runs in this process on SQLite, so the
 //! tests cover the bodies and their refusals without anything outside.
 
@@ -119,7 +119,7 @@ impl Person {
 	async fn call(&self, name: &str, args: Value) -> Result<Value, (u16, String)> {
 		let response = self
 			.http
-			.post(format!("{}/api/{name}", self.base))
+			.post(format!("{}/rpc/{name}", self.base))
 			.header("origin", &self.base)
 			.header("cookie", &self.cookie)
 			.header("content-type", "application/json")
@@ -195,10 +195,10 @@ impl Socket {
 	}
 }
 
-/// `POST /api/<name>` without a session, as a stranger's page would.
+/// `POST /rpc/<name>` without a session, as a stranger's page would.
 async fn anonymous(base: &str, name: &str, body: &str) -> (u16, String) {
 	let response = Client::new()
-		.post(format!("{base}/api/{name}"))
+		.post(format!("{base}/rpc/{name}"))
 		.header("origin", base)
 		.header("content-type", "application/json")
 		.body(body.to_owned())

@@ -62,6 +62,19 @@ impl_fixed! {
 	bool => bool, bool,
 }
 
+impl PodEncode for usize {
+	fn encode(&self, w: &mut Writer) -> Result<()> {
+		u64::try_from(*self).map_err(|_| Error::TooLarge)?.encode(w)
+	}
+}
+
+impl<'a> PodDecode<'a> for usize {
+	fn decode(r: &mut Reader<'a>) -> Result<Self> {
+		let value = u64::decode(r)?;
+		usize::try_from(value).map_err(|_| Error::TooLarge)
+	}
+}
+
 impl PodEncode for String {
 	fn encode(&self, w: &mut Writer) -> Result<()> {
 		w.string(self)

@@ -7,6 +7,9 @@ name = "harbor_example"
 
 # `leptoskit rpc generate` writes the TypeScript client the tests pin.
 [rpc]
+path = "/rpc"
+transports = ["pod", "json"]
+default_transport = "pod"
 title = "Harbour"
 servers = ["https://harbour.example"]
 
