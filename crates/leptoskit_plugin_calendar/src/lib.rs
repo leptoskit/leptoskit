@@ -859,6 +859,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::cognitive_complexity)]
 	fn event_and_create_round_trips_and_reject_bad_fields() {
 		let event = sample_event();
 		assert_eq!(Event::decode(&event.encode().unwrap()).unwrap(), event);
@@ -950,6 +951,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::cognitive_complexity)]
 	fn list_codecs_reject_trailers_caps_and_oversize_windows() {
 		assert_eq!(ListEvents::new(2, 1, 1), Err(Error::InvalidArgument));
 		assert_eq!(
