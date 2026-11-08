@@ -227,6 +227,9 @@ fn replay(data_dir: &Path, path: &Path, looping: bool) -> Result<ReplayBackend, 
 pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
 	let backends = Composite::new();
 
+	#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
+	let backends = backends.with(super::arkit::ArKitBackend::new());
+
 	#[cfg(any(target_os = "ios", target_os = "android"))]
 	let backends = backends.with(super::OrientationBackend::new(super::DeviceRotation::new()));
 

@@ -80,14 +80,22 @@ impl Backend for Composite {
 		}
 	}
 
-	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<(), Error> {
+	fn start(
+		&mut self,
+		config: &SessionConfig,
+		features: Features,
+	) -> Result<ReferenceSpace, Error> {
 		let index = self.owner(config.mode).ok_or(Error::Unavailable)?;
-		self.backends[index].start(config, features)?;
+		let space = self.backends[index].start(config, features)?;
 		self.active = Some(index);
-		Ok(())
+		Ok(space)
 	}
 
-	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<(), Error> {
+	fn configure(
+		&mut self,
+		config: &SessionConfig,
+		features: Features,
+	) -> Result<ReferenceSpace, Error> {
 		self.active()?.configure(config, features)
 	}
 

@@ -123,8 +123,8 @@ impl XrRuntime {
 			return Err(Error::Busy);
 		}
 
-		let info = negotiate(&state.backend.capabilities(), &config)?;
-		state.backend.start(&config, info.features)?;
+		let mut info = negotiate(&state.backend.capabilities(), &config)?;
+		info.reference_space = state.backend.start(&config, info.features)?;
 		state.generation += 1;
 		state.session = Some(Session {
 			generation: state.generation,
@@ -153,8 +153,8 @@ impl XrRuntime {
 			return Err(Error::InvalidArgument);
 		}
 
-		let info = negotiate(&state.backend.capabilities(), &config)?;
-		state.backend.configure(&config, info.features)?;
+		let mut info = negotiate(&state.backend.capabilities(), &config)?;
+		info.reference_space = state.backend.configure(&config, info.features)?;
 		session.config = config;
 		session.info = info;
 		Ok(info)
@@ -336,18 +336,11 @@ fn negotiate(capabilities: &Capabilities, config: &SessionConfig) -> Result<Sess
 		.features(config.mode)
 		.ok_or(Error::Unavailable)?;
 	let features = config.negotiate(offered).ok_or(Error::Unavailable)?;
-	// Orientation knows no position, so only its starting point means
-	// anything.
-	let reference_space = if config.mode.tracks_position() {
-		config.reference_space
-	} else {
-		ReferenceSpace::Local
-	};
 
 	Ok(SessionInfo {
 		mode: config.mode,
 		features,
-		reference_space,
+		reference_space: config.reference_space,
 	})
 }
 

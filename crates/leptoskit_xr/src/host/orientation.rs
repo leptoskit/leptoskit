@@ -128,16 +128,24 @@ impl<S: OrientationSource> Backend for OrientationBackend<S> {
 		}
 	}
 
-	fn start(&mut self, _config: &SessionConfig, _features: Features) -> Result<(), Error> {
+	fn start(
+		&mut self,
+		_config: &SessionConfig,
+		_features: Features,
+	) -> Result<ReferenceSpace, Error> {
 		self.source.start()?;
 		self.running = true;
 		self.recentre = None;
 		self.last_time = None;
-		Ok(())
+		Ok(ReferenceSpace::Local)
 	}
 
-	fn configure(&mut self, _config: &SessionConfig, _features: Features) -> Result<(), Error> {
-		Ok(())
+	fn configure(
+		&mut self,
+		_config: &SessionConfig,
+		_features: Features,
+	) -> Result<ReferenceSpace, Error> {
+		Ok(ReferenceSpace::Local)
 	}
 
 	fn update(&mut self, _time: f64) -> Result<Option<XrFrame>, Error> {

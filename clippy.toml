@@ -36,6 +36,7 @@ doc-valid-idents = [
 	"ARCore",
 	"OpenXR",
 	"WebXR",
+	"LiDAR",
 	"..",
 ]
 

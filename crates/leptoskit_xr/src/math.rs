@@ -431,6 +431,30 @@ impl Fov {
 		}
 	}
 
+	/// The angles a perspective projection matrix covers, such as the ones
+	/// ARKit, ARCore, and WebXR compute for the screen. `None` for a matrix
+	/// that isn't a perspective projection.
+	#[must_use]
+	pub fn from_matrix(m: &[f32; 16]) -> Option<Self> {
+		// x_ndc = m0·(x / −z) − m8, so the edges at ±1 are at
+		// x / −z = (m8 ± 1) / m0; likewise for y with m5 and m9.
+		if m[0].abs() < f32::EPSILON || m[5].abs() < f32::EPSILON || (m[11] + 1.0).abs() > 1e-3 {
+			return None;
+		}
+
+		let fov = Self {
+			left: ((m[8] - 1.0) / m[0]).atan(),
+			right: ((m[8] + 1.0) / m[0]).atan(),
+			up: ((m[9] + 1.0) / m[5]).atan(),
+			down: ((m[9] - 1.0) / m[5]).atan(),
+		};
+
+		[fov.left, fov.right, fov.up, fov.down]
+			.iter()
+			.all(|angle| angle.is_finite())
+			.then_some(fov)
+	}
+
 	/// A perspective projection with depth mapped to 0..1 between `near` and
 	/// `far`.
 	#[must_use]
@@ -592,6 +616,26 @@ mod tests {
 		let depth = |z: f32| (projection[10] * z + projection[14]) / -z;
 		assert!(depth(-0.1).abs() < 1e-5);
 		assert!((depth(-100.0) - 1.0).abs() < 1e-4);
+	}
+
+	#[test]
+	fn angles_survive_a_round_trip_through_a_matrix() {
+		let fov = Fov {
+			left: -0.6,
+			right: 0.5,
+			up: 0.45,
+			down: -0.55,
+		};
+		let back = Fov::from_matrix(&fov.projection(0.05, 30.0)).unwrap();
+		for (a, b) in [
+			(fov.left, back.left),
+			(fov.right, back.right),
+			(fov.up, back.up),
+			(fov.down, back.down),
+		] {
+			assert!((a - b).abs() < 1e-5);
+		}
+		assert_eq!(Fov::from_matrix(&Pose::IDENTITY.to_matrix()), None);
 	}
 
 	#[test]
