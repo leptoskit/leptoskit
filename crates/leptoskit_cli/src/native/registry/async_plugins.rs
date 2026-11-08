@@ -33,10 +33,20 @@ pub(super) fn configure_plugin(
 			"native.plugin-options.{name} exceeds 64 KiB"
 		);
 		plugin.options_json = Some(json);
+		plugin.enabled_features = plugin
+			.option_features
+			.iter()
+			.filter(|(option, _)| options.contains_key(option.as_str()))
+			.map(|(_, feature)| feature.clone())
+			.collect();
 	} else {
 		anyhow::ensure!(
 			!config.native.plugin_options.contains_key(name),
 			"plugin `{name}` does not accept native.plugin-options"
+		);
+		anyhow::ensure!(
+			plugin.option_features.is_empty(),
+			"plugin `{name}` declares option-features but takes no native.plugin-options"
 		);
 	}
 
@@ -65,14 +75,27 @@ pub(super) fn host_features(
 			None => plugin.declares_async(),
 		}
 	};
-	let mut features: Vec<_> = plugins
-		.iter()
-		.filter(|plugin| runs_async(plugin))
-		.map(|plugin| {
-			cargo_dependency_key(app, &plugin.package_name, &plugin.crate_name)
-				.map(|key| format!("{key}/async-host"))
-		})
-		.collect::<Result<_>>()?;
+	let mut features = Vec::new();
+
+	for plugin in plugins.iter().filter(|plugin| runs_async(plugin)) {
+		let key = cargo_dependency_key(app, &plugin.package_name, &plugin.crate_name)?;
+		features.push(format!("{key}/async-host"));
+
+		// Features the app's options for the plugin turn on, such as the
+		// `xr` plugin's `depth-estimation` for `depth-model`.
+		for feature in &plugin.enabled_features {
+			anyhow::ensure!(
+				packages
+					.get(&plugin.package_id)
+					.is_some_and(|package| package.features.contains_key(feature)),
+				"plugin `{}` turns on feature `{feature}` for its options, but {} has no such \
+				 feature",
+				plugin.name,
+				plugin.package_name
+			);
+			features.push(format!("{key}/{feature}"));
+		}
+	}
 
 	if !features.is_empty() {
 		features.push(bridge_feature(app, node, packages, "async-host")?);

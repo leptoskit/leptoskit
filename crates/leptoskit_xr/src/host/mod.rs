@@ -9,8 +9,10 @@ use std::sync::Arc;
 use leptoskit_bridge::Error;
 
 use crate::hit_test;
+use crate::image::Affine2;
 use crate::image::CameraImage;
 use crate::image::DepthImage;
+use crate::image::compose_affine;
 use crate::math::Pose;
 use crate::types::*;
 
@@ -22,6 +24,11 @@ mod runtime;
 
 #[cfg(feature = "async-host")]
 mod plugin;
+
+#[cfg(all(feature = "depth-estimation", feature = "async-host"))]
+mod bundle;
+#[cfg(feature = "depth-estimation")]
+mod estimated_depth;
 
 #[cfg(feature = "wgpu")]
 pub mod render;
@@ -62,12 +69,17 @@ pub mod openxr;
 pub use camera::CameraFrame;
 pub use camera::CameraSource;
 pub use camera::CapturedImage;
+pub use camera::DepthEstimate;
 pub use camera::DepthEstimator;
 pub use camera::Intrinsics;
 pub use camera::install_depth_estimator;
 pub use camera::upright_fov;
 pub use camera::upright_transform;
 pub use composite::Composite;
+#[cfg(feature = "depth-estimation")]
+pub use estimated_depth::ModelEstimator;
+#[cfg(feature = "depth-estimation")]
+pub use estimated_depth::install_depth_model;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
 #[cfg(feature = "async-host")]
@@ -159,6 +171,13 @@ pub struct XrFrame {
 	pub camera_intrinsics: Option<Intrinsics>,
 	/// The depth picture, for occlusion and hit tests.
 	pub depth: Option<DepthImage>,
+	/// The view `depth` was seen from, when it isn't this frame's: depth a
+	/// [`DepthEstimator`] read from an older camera picture was seen from
+	/// where the viewer was then, up to a second ago. Hit tests cast against
+	/// it from here, and occlusion turns it to the current view
+	/// ([`XrFrame::depth_transform`]). `None` for depth the platform measured
+	/// this frame, which `views[0]` sees.
+	pub depth_view: Option<View>,
 	/// Every plane found so far.
 	pub planes: Arc<[Plane]>,
 	/// Increases when the planes change; the runtime keeps it.
@@ -172,6 +191,28 @@ pub struct XrFrame {
 }
 
 impl XrFrame {
+	/// The transform from a point on the first view, `(0, 0)` top-left to
+	/// `(1, 1)` bottom-right, to the point in the depth picture to read for
+	/// it: the depth's own display transform, after the turn from the first
+	/// view to [`XrFrame::depth_view`] when the depth was seen from there
+	/// ([`hit_test::view_to_view`]). `None` without depth, or when the views
+	/// face too far apart for the depth to say anything about this one.
+	#[must_use]
+	pub fn depth_transform(&self) -> Option<Affine2> {
+		let depth = self.depth.as_ref()?;
+
+		match (&self.depth_view, self.views.first()) {
+			(Some(seen), Some(view)) => {
+				Some(compose_affine(
+					&depth.display_transform,
+					&hit_test::view_to_view(view, seen)?,
+				))
+			}
+			(Some(_), None) => None,
+			(None, _) => Some(depth.display_transform),
+		}
+	}
+
 	/// The guest's view of this frame, with the planes left out when
 	/// `include_planes` is false.
 	#[must_use]

@@ -73,13 +73,21 @@ pub fn draw(
 		None => Background::Scene,
 	};
 
-	let occlusion = textures.depth().map(|(depth, transform)| {
-		Occlusion {
+	// Depth estimated from an older picture is turned to the current view;
+	// when the views face too far apart, it hides nothing.
+	let occlusion = textures.depth().and_then(|(depth, uploaded)| {
+		let transform = if frame.depth_view.is_some() {
+			frame.depth_transform()?
+		} else {
+			uploaded
+		};
+
+		Some(Occlusion {
 			depth,
 			transform: Mat3::from_cols_array(&affine_matrix(&transform)),
 			scale: 1.0,
 			tolerance: OCCLUSION_TOLERANCE,
-		}
+		})
 	});
 
 	renderer.render(&RenderTarget {

@@ -167,12 +167,30 @@ fn sessions_that_do_not_ask_leave_the_camera_closed() {
 	assert!(runtime.update(0.0).unwrap().unwrap().camera_image.is_none());
 }
 
-/// An estimator that answers every frame with a flat wall two metres away,
-/// and remembers what it saw.
+/// A flat wall `meters` away, along the camera's forward axis, over a
+/// picture shown through `display_transform`.
+fn wall(meters: f32, display_transform: Affine2) -> DepthImage {
+	let data: Vec<u8> = std::iter::repeat_n(meters.to_le_bytes(), 4)
+		.flatten()
+		.collect();
+	DepthImage {
+		width: 2,
+		height: 2,
+		format: DepthFormat::Meters32,
+		data: data.into(),
+		row_stride: 8,
+		confidence: None,
+		display_transform,
+	}
+}
+
+/// An estimator that reads the first frame it is offered after a reset as a
+/// flat wall two metres away, and remembers what it saw.
 #[derive(Default)]
 struct Wall {
 	seen: Arc<Mutex<Vec<(u32, u32, f64)>>>,
-	latest: Option<DepthImage>,
+	resets: Arc<AtomicUsize>,
+	latest: Option<DepthEstimate>,
 }
 
 impl DepthEstimator for Wall {
@@ -180,30 +198,28 @@ impl DepthEstimator for Wall {
 		2
 	}
 
+	fn ready(&self) -> bool {
+		self.latest.is_none()
+	}
+
 	fn submit(&mut self, frame: Arc<CameraFrame>) {
 		self.seen
 			.lock()
 			.unwrap()
 			.push((frame.rgb.width, frame.rgb.height, frame.time));
-		let meters: Vec<u8> = std::iter::repeat_n(2.0_f32.to_le_bytes(), 4)
-			.flatten()
-			.collect();
-		self.latest = Some(DepthImage {
-			width: 2,
-			height: 2,
-			format: DepthFormat::Meters32,
-			data: meters.into(),
-			row_stride: 8,
-			confidence: None,
-			display_transform: frame.display_transform,
+		self.latest = Some(DepthEstimate {
+			depth: wall(2.0, frame.display_transform),
+			view: frame.view,
+			time: frame.time,
 		});
 	}
 
-	fn latest(&mut self) -> Option<DepthImage> {
+	fn latest(&mut self) -> Option<DepthEstimate> {
 		self.latest.clone()
 	}
 
 	fn reset(&mut self) {
+		self.resets.fetch_add(1, Ordering::SeqCst);
 		self.latest = None;
 	}
 }
@@ -243,5 +259,166 @@ fn an_estimator_fills_in_depth_from_the_camera() {
 	assert_eq!(seen.lock().unwrap().as_slice(), &[(2, 2, frame.time)]);
 	let depth = frame.depth.as_ref().expect("estimated depth");
 	assert_eq!(depth.sample_view(0.5, 0.5), Some(2.0));
+	// Read from this very frame, so seen from its own view.
+	assert_eq!(frame.depth_view, Some(frame.views[0]));
+	assert_eq!(frame.depth_transform(), Some(depth.display_transform));
 	assert!(frame.to_guest(1, true).depth);
+}
+
+/// A phone with AR tracking but no depth of its own, like ARCore without
+/// the Depth API: the viewer stands 1.5 m up and backs away along +Z,
+/// `step` metres each frame, looking straight ahead. With `measures`, it
+/// measures a wall one metre ahead itself.
+struct Retreat {
+	step: f32,
+	frames: u32,
+	measures: bool,
+	features: Features,
+}
+
+impl Retreat {
+	fn new(step: f32, measures: bool) -> Self {
+		Self {
+			step,
+			frames: 0,
+			measures,
+			features: Features::NONE,
+		}
+	}
+}
+
+impl Backend for Retreat {
+	fn capabilities(&self) -> Capabilities {
+		let depth = if self.measures {
+			Features::DEPTH
+		} else {
+			Features::NONE
+		};
+		Capabilities::NONE.with(
+			Mode::PhoneAr,
+			Features::CAMERA_IMAGE | Features::HIT_TEST | depth,
+		)
+	}
+
+	fn prepare(&mut self, _mode: Mode, _install: bool) -> Availability {
+		Availability::Ready
+	}
+
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
+		self.features = features;
+		self.frames = 0;
+		Ok(Started::new(config.reference_space, features))
+	}
+
+	fn update(&mut self, _time: f64) -> Result<Option<XrFrame>, Error> {
+		let pose = Pose::at(Vec3::new(0.0, 1.5, self.step * self.frames as f32));
+		self.frames += 1;
+		let camera = self.features.contains(Features::CAMERA_IMAGE);
+		let measured = self.measures && self.features.contains(Features::DEPTH);
+
+		Ok(Some(XrFrame {
+			time: f64::from(self.frames) / 30.0,
+			tracking: TrackingState::Normal,
+			viewer: pose,
+			views: vec![View {
+				pose,
+				projection: Projection::Fov(Fov::symmetric(1.0, 1.0)),
+			}],
+			camera_image: camera.then(|| {
+				CameraImage {
+					width: 4,
+					height: 4,
+					display_transform: IDENTITY_AFFINE,
+					pixels: grey(),
+				}
+			}),
+			camera_intrinsics: camera.then(intrinsics),
+			depth: measured.then(|| wall(1.0, IDENTITY_AFFINE)),
+			..XrFrame::default()
+		}))
+	}
+
+	fn stop(&mut self) {}
+}
+
+fn ahead(runtime: &XrRuntime) -> Vec<Hit> {
+	runtime
+		.hit_test(&HitTestRequest::screen(0.5, 0.5).targets(HitTargets::DEPTH))
+		.unwrap()
+}
+
+#[test]
+fn hit_tests_cast_against_estimated_depth_from_where_it_was_seen() {
+	let runtime = XrRuntime::new(Retreat::new(0.5, false));
+	let wall = Wall::default();
+	let (seen, resets) = (Arc::clone(&wall.seen), Arc::clone(&wall.resets));
+	runtime.set_depth_estimator(Some(Box::new(wall)));
+	let info = runtime
+		.start(SessionConfig::new(Mode::PhoneAr).prefer(Features::DEPTH))
+		.unwrap();
+	assert!(info.features.contains(Features::DEPTH));
+
+	// The first frame is read at z = 0: the wall stands at z = −2.
+	let first = runtime.update(0.0).unwrap().unwrap();
+	assert_eq!(first.depth_view, Some(first.views[0]));
+	let hit = ahead(&runtime)[0];
+	assert_eq!(hit.kind, HitKind::Depth);
+	assert!((hit.distance - 2.0).abs() < 0.03, "{}", hit.distance);
+
+	// Two frames later the viewer has backed a metre away, and the depth
+	// is still the first frame's. The wall stays where it was: three metres
+	// off now, not the two the old picture would say from here.
+	runtime.update(0.0).unwrap();
+	let third = runtime.update(0.0).unwrap().unwrap();
+	assert_eq!(seen.lock().unwrap().len(), 1);
+	assert!((third.viewer.position.z - 1.0).abs() < 1e-6);
+	assert_eq!(third.depth_view, Some(first.views[0]));
+	let hit = ahead(&runtime)[0];
+	assert!((hit.distance - 3.0).abs() < 0.03, "{}", hit.distance);
+	assert!((hit.pose.position.z + 2.0).abs() < 0.03);
+	// Only having moved, not turned, the old depth lines up with the view.
+	assert_eq!(
+		third.depth_transform(),
+		Some(third.depth.as_ref().unwrap().display_transform)
+	);
+
+	// Depth isn't asked for: nothing is hit.
+	let planes = runtime
+		.hit_test(&HitTestRequest::screen(0.5, 0.5).targets(HitTargets::PLANES))
+		.unwrap();
+	assert_eq!(planes, []);
+
+	// Stopping forgets the old depth; the next session reads its own.
+	runtime.stop();
+	assert_eq!(resets.load(Ordering::SeqCst), 1);
+	runtime
+		.start(SessionConfig::new(Mode::PhoneAr).prefer(Features::DEPTH))
+		.unwrap();
+	let restarted = runtime.update(0.0).unwrap().unwrap();
+	assert_eq!(seen.lock().unwrap().len(), 2);
+	assert_eq!(restarted.depth_view, Some(restarted.views[0]));
+}
+
+#[test]
+fn a_platform_that_measures_depth_keeps_its_own() {
+	let runtime = XrRuntime::new(Retreat::new(0.5, true));
+	let wall = Wall::default();
+	let seen = Arc::clone(&wall.seen);
+	runtime.set_depth_estimator(Some(Box::new(wall)));
+	runtime
+		.start(SessionConfig::new(Mode::PhoneAr).prefer(Features::DEPTH))
+		.unwrap();
+
+	runtime.update(0.0).unwrap();
+	let frame = runtime.update(0.0).unwrap().unwrap();
+	// The estimator is never asked: the platform's depth is newer.
+	assert!(seen.lock().unwrap().is_empty());
+	assert_eq!(frame.depth_view, None);
+	assert_eq!(
+		frame.depth.as_ref().unwrap().sample_view(0.5, 0.5),
+		Some(1.0)
+	);
+	// Measured this frame, so cast from where the viewer is now.
+	let hit = ahead(&runtime)[0];
+	assert!((hit.distance - 1.0).abs() < 0.03, "{}", hit.distance);
 }

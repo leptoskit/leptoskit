@@ -50,7 +50,7 @@ It turns one camera picture into depth in metres, on the device, for AR on phone
 
 <!-- {/depthSummary} -->
 
-It is a host library: the Wasm guest never sees camera pictures, so the depth is read in the native app, where the camera is, and answers the same hit tests and occlusion that platform depth does. `leptoskit_xr` is the intended caller: for a session that asks for depth on a phone whose platform has none, it hands camera frames to a `DepthWorker` and serves the newest `DepthMap` as the frame's depth picture.
+It is a host library: the Wasm guest never sees camera pictures, so the depth is read in the native app, where the camera is, and answers the same hit tests and occlusion that platform depth does. The `xr` plugin calls it: with `[native.plugin-options.xr] depth-model` set, `leptoskit_xr` (its `depth-estimation` feature) loads the model from the app's assets, hands camera frames to a `DepthWorker` for sessions that ask for depth on a phone whose platform has none, and serves the newest `DepthMap` as the frame's depth picture, cast against from where the camera was.
 
 ## The model file
 
@@ -63,7 +63,14 @@ curl -L -o assets/depth/depth_anything_v2_metric_indoor_small.onnx \
 echo "b81c4fae8985bd73d5026ffc1ebf545ff01d73fbf4d534a06c811abfcadb6dbd  assets/depth/depth_anything_v2_metric_indoor_small.onnx" | shasum -a 256 -c
 ```
 
-Put it in the app's `assets/` folder with its licence: `leptoskit build` bundles that folder into the iOS app and packs it into the Android APK, and the host reads its bytes through the same asset source 3D scenes load from. `MODEL.verify(&bytes)` checks it before `DepthModel::from_bytes` loads it.
+Put it in the app's `assets/` folder with its licence (`MODEL_LICENSE`, the crate's `model-license.txt`), and name it in `leptoskit.toml`:
+
+```toml
+[native.plugin-options.xr]
+depth-model = "depth/depth_anything_v2_metric_indoor_small.onnx"
+```
+
+`leptoskit build` bundles that folder into the iOS app and packs it into the Android APK, and the `xr` plugin reads the file from there on a background thread when the app starts, checks it with `MODEL.verify(&bytes)`, and loads it with `DepthModel::from_bytes`. A missing or different file is logged, and depth stays off.
 
 The file was converted for the Reapers game from the authors' weights (`depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf` at revision `8078d68a`): traced for a 252 × 448 upright picture, exported to ONNX, and quantised dynamically to unsigned 8-bit weights with ONNX Runtime's tools. Quantising changed the answers by 1 to 2% and the accuracy against NYU Depth v2 not at all.
 

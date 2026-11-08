@@ -19,6 +19,22 @@ pub fn apply_affine(transform: &Affine2, u: f32, v: f32) -> (f32, f32) {
 	(xx * u + yx * v + tx, xy * u + yy * v + ty)
 }
 
+/// `outer` after `inner`: the transform that applies `inner`, then `outer`.
+#[must_use]
+pub fn compose_affine(outer: &Affine2, inner: &Affine2) -> Affine2 {
+	let [oxx, oxy, oyx, oyy, otx, oty] = *outer;
+	let [ixx, ixy, iyx, iyy, itx, ity] = *inner;
+
+	[
+		oxx * ixx + oyx * ixy,
+		oxy * ixx + oyy * ixy,
+		oxx * iyx + oyx * iyy,
+		oxy * iyx + oyy * iyy,
+		oxx * itx + oyx * ity + otx,
+		oxy * itx + oyy * ity + oty,
+	]
+}
+
 /// The transform that undoes `transform`, or `None` when it flattens the
 /// plane.
 #[must_use]

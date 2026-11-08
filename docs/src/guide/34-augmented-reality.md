@@ -19,7 +19,7 @@ Each frame says where the viewer is, how the screen sees the world, and what the
 | `planes`   | Flat surfaces found so far: floors, tables, walls, with their outlines. On recent iPhones each is labelled `Floor`, `Wall`, … |
 | `anchors`  | Points you pinned, where they are now: they move as the phone corrects its map.                                               |
 | `light`    | How bright the room is, so a creature isn't lit like a studio in a dark hallway.                                              |
-| `depth`    | Whether the phone measured the room's depth this frame, so things hide behind real furniture.                                 |
+| `depth`    | Whether the frame has the room's depth, measured or estimated, so things hide behind real furniture.                          |
 | `tracking` | Whether tracking is `Normal`, `Limited` (and why: too dark, moving too fast), or lost.                                        |
 
 The camera picture and the depth picture never reach your app's code. The native app draws the camera behind your 3D scene and hides the parts of the scene that are behind real things; your code decides where things are.
@@ -181,9 +181,9 @@ Phones don't know where the floor is when a session starts: `LocalFloor` is repo
 
 ## Depth on phones that measure none
 
-Hiding a creature behind the sofa needs the room's depth, and many phones don't measure it: the Solana Seeker has no ARCore, many ARCore phones lack the Depth API, and only Pro iPhones and iPads have LiDAR. On those, `frame.depth` is `false`, and hit tests reach planes but not the furniture standing on them.
+Hiding a creature behind the sofa needs the room's depth, and many phones don't measure it: the Solana Seeker has no ARCore, many ARCore phones lack the Depth API, and only Pro iPhones and iPads have LiDAR. Without help, `frame.depth` is `false` on those phones, and hit tests reach planes but not the furniture standing on them.
 
-The `leptoskit_depth` crate reads depth from the camera picture instead. A small neural network, Depth Anything V2 Small fine-tuned for rooms, looks at one picture and says how far away each part of it is, in metres, on the phone's CPU: about a quarter of a second a picture on a laptop-class core, and slower on a phone, so it reads about one picture a second off the thread that draws. Nothing leaves the phone.
+The `xr` plugin can estimate the depth from the camera picture instead. A small neural network, Depth Anything V2 Small fine-tuned for rooms (the `leptoskit_depth` crate), looks at one picture and says how far away each part of it is, in metres, on the phone's CPU: about a quarter of a second a picture on a laptop-class core, and slower on a phone, so it reads about one picture a second, off the thread that draws. Nothing leaves the phone.
 
 It needs the model file, 27 MB under Apache-2.0, which your app ships rather than leptoskit. Fetch it once into your `assets/` folder, which `leptoskit build` bundles into the iOS app and the Android APK, and keep its licence beside it:
 
@@ -192,16 +192,40 @@ mkdir -p assets/depth
 curl -L -o assets/depth/depth_anything_v2_metric_indoor_small.onnx \
   https://github.com/pina-rs/reapers/releases/download/depth-model-v1/depth_anything_v2_metric_indoor_small.onnx
 echo "b81c4fae8985bd73d5026ffc1ebf545ff01d73fbf4d534a06c811abfcadb6dbd  assets/depth/depth_anything_v2_metric_indoor_small.onnx" | shasum -a 256 -c
+curl -L -o assets/depth/LICENSE.txt https://www.apache.org/licenses/LICENSE-2.0.txt
 ```
+
+Then name it in `leptoskit.toml`, relative to the `assets/` folder:
+
+```toml
+[native.plugin-options.xr]
+max-frame-rate = 30
+depth-model = "depth/depth_anything_v2_metric_indoor_small.onnx"
+```
+
+`leptoskit build` then builds the plugin with the model's runtime (its `depth-estimation` feature), and the native app loads the file in the background when it starts, in half a second to a second and a half, and checks that it is exactly the file above. A missing or different file is written to the device's log (logcat's `leptoskit-xr` tag on Android, Xcode's console on iOS) and depth stays off; the app runs as before.
+
+The model runs in Rust compiled for your app, and a debug build is not optimised: it takes nearly twenty seconds a picture instead of a quarter of one. Optimise its crates in your workspace's `Cargo.toml`, so `leptoskit dev` builds stay usable:
+
+```toml
+[profile.dev.package.tract-core]
+opt-level = 3
+
+[profile.dev.package.tract-data]
+opt-level = 3
+
+[profile.dev.package.tract-linalg]
+opt-level = 3
+```
+
+Nothing changes in your app's code. Once the model has loaded, a session that asks for `Features::DEPTH` on such a phone gets it, as `prefer` or `require`: `frame.depth` turns `true` when the first picture has been read, a `Scene3d` over the camera hides models behind real things, and `DEPTH` hit tests reach the room. Phones that measure depth keep their own; estimation never replaces it. A session started before the model loaded doesn't have estimated depth; start it again.
 
 What to expect from it:
 
 - **Its metres are approximate.** Against rooms measured with a depth sensor, a whole picture read between 13% short and 14% long. Nearer and farther stay in order, so a creature still hides behind the right things; measure against the floor where an exact size matters.
-- **It sees a portrait crop.** The model reads a 9:16 upright picture from the middle of the camera's; outside it there is no depth, so a phone held in landscape gets depth only in a strip down the middle.
-- **It is a moment old.** Each reading is the room as it was when its picture was taken, up to a second ago.
+- **It sees a portrait crop.** The model reads a 9:16 upright picture from the middle of the camera's; outside it there is no depth, so a phone held in landscape gets depth only in a strip down the middle, and a hit test outside it finds nothing.
+- **It is a moment old.** Each reading is the room as it was when its picture was taken, up to a second ago. Hit tests cast against it from where the phone was then, so a ray from where the phone is now still meets the sofa where it stands. Occlusion turns the reading to the way the phone faces now, which is close but not exact while the phone turns quickly.
 - **It can't see in the dark, through glass, or into mirrors**, and nor can a depth sensor.
-
-**Not wired yet:** the `xr` plugin doesn't call `leptoskit_depth` yet, so for now `frame.depth` stays `false` on these phones whatever the app ships. Once it does, a session that prefers `Features::DEPTH` on a phone without platform depth will be served the estimated depth, and `DEPTH` hit tests will reach it like any other.
 
 ## Test without a phone
 

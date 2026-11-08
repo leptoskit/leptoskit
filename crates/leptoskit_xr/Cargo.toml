@@ -28,6 +28,10 @@ android-dependencies = [
 apple-usage-descriptions = ["NSCameraUsageDescription"]
 apple-frameworks = ["ARKit", "AVFoundation", "CoreMotion", "CoreVideo", "Metal"]
 
+# `[native.plugin-options.xr] depth-model` turns on estimated depth, which
+# `leptoskit build` compiles in only for apps that set it.
+option-features = { depth-model = "depth-estimation" }
+
 [package.metadata.leptoskit.runtime.macos]
 unavailable = true
 
@@ -55,6 +59,10 @@ scene3d = ["3d", "async-host", "leptoskit_3d/host"]
 # from a panel app through an immersive activity. `leptoskit build --platform
 # quest` turns it on.
 quest = ["openxr", "scene3d"]
+# Depth read from the camera picture by `leptoskit_depth`'s model, for
+# sessions on phones whose platform measures none. `leptoskit build` turns it
+# on when `[native.plugin-options.xr] depth-model` is set.
+depth-estimation = ["host", "dep:leptoskit_depth"]
 # The WebXR backend for the browser build.
 web = [
 	"dep:js-sys",
@@ -69,6 +77,10 @@ leptoskit_3d = { workspace = true, optional = true, features = ["renderer"] }
 leptoskit_bridge = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
+
+# The host is native only; the model never runs in the browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+leptoskit_depth = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = { workspace = true }
@@ -117,6 +129,7 @@ web-sys = { workspace = true, optional = true, features = ["Document", "Event", 
 
 [dev-dependencies]
 pollster = { workspace = true }
+zune-jpeg = { workspace = true }
 
 [lints]
 workspace = true
@@ -136,3 +149,7 @@ required-features = ["host"]
 [[test]]
 name = "scene3d"
 required-features = ["scene3d"]
+
+[[test]]
+name = "depth_model"
+required-features = ["depth-estimation"]
