@@ -1,12 +1,20 @@
 //! Look around by turning: three degrees of freedom from the rotation
-//! sensors, for phones without AR.
+//! sensors, for phones without AR, with the camera picture behind the scene
+//! where the phone has a [`CameraSource`].
+
+use std::sync::Arc;
 
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::CameraSource;
+use super::CapturedImage;
 use super::Started;
 use super::Viewport;
 use super::XrFrame;
+use super::camera::upright_fov;
+use super::camera::upright_transform;
+use crate::image::CameraImage;
 use crate::math::Fov;
 use crate::math::Pose;
 use crate::math::Projection;
@@ -41,13 +49,32 @@ pub trait OrientationSource: Send {
 ///
 /// The world's −Z is the way the device looked when the session started, so
 /// a scene placed in front appears in front whichever way the user faced.
-#[derive(Debug)]
+///
+/// With a [`CameraSource`] ([`OrientationBackend::with_camera`]), sessions
+/// that ask for [`Features::CAMERA_IMAGE`] also carry the camera picture,
+/// turned upright and cropped to the screen, and render with the camera's
+/// field of view so the scene keeps the picture's scale. Without the
+/// camera permission such a session starts without the picture, unless it
+/// requires it.
 pub struct OrientationBackend<S> {
 	source: S,
+	camera: Option<Box<dyn CameraSource>>,
+	filming: bool,
 	viewport: Viewport,
 	running: bool,
 	recentre: Option<Quat>,
 	last_time: Option<f64>,
+}
+
+impl<S: std::fmt::Debug> std::fmt::Debug for OrientationBackend<S> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("OrientationBackend")
+			.field("source", &self.source)
+			.field("camera", &self.camera.is_some())
+			.field("filming", &self.filming)
+			.field("running", &self.running)
+			.finish_non_exhaustive()
+	}
 }
 
 impl<S: OrientationSource> OrientationBackend<S> {
@@ -55,11 +82,52 @@ impl<S: OrientationSource> OrientationBackend<S> {
 	pub fn new(source: S) -> Self {
 		Self {
 			source,
+			camera: None,
+			filming: false,
 			viewport: Viewport::default(),
 			running: false,
 			recentre: None,
 			last_time: None,
 		}
+	}
+
+	/// Also shows `camera`'s picture to sessions that ask for it.
+	#[must_use]
+	pub fn with_camera(mut self, camera: impl CameraSource + 'static) -> Self {
+		self.camera = Some(Box::new(camera));
+		self
+	}
+
+	fn has_camera(&self) -> bool {
+		self.camera
+			.as_ref()
+			.is_some_and(|camera| camera.available())
+	}
+
+	/// Opens or closes the camera for `features`, returning the features
+	/// that work.
+	fn film(&mut self, config: &SessionConfig, mut features: Features) -> Result<Features, Error> {
+		let wanted = features.contains(Features::CAMERA_IMAGE);
+
+		match self.camera.as_mut() {
+			Some(camera) if wanted && !self.filming => {
+				match camera.start() {
+					Ok(()) => self.filming = true,
+					Err(error) if config.required.contains(Features::CAMERA_IMAGE) => {
+						return Err(error);
+					}
+					Err(_) => features = features.difference(Features::CAMERA_IMAGE),
+				}
+			}
+			Some(camera) if !wanted && self.filming => {
+				camera.stop();
+				self.filming = false;
+			}
+			None if wanted => features = features.difference(Features::CAMERA_IMAGE),
+			_ => {}
+		}
+
+		Ok(features)
 	}
 
 	fn frame(&mut self, time: f64, device: Quat) -> XrFrame {
@@ -68,6 +136,21 @@ impl<S: OrientationSource> OrientationBackend<S> {
 			.recentre
 			.get_or_insert_with(|| Quat::from_axis_angle(Vec3::Y, -heading(viewer)));
 		let pose = Pose::new(Vec3::ZERO, recentre * viewer);
+		let picture = self
+			.camera
+			.as_mut()
+			.filter(|_| self.filming)
+			.and_then(|camera| camera.latest());
+		let fov = picture.as_ref().map_or_else(
+			|| Fov::symmetric(VERTICAL_FOV, self.viewport.aspect()),
+			|picture| {
+				upright_fov(
+					&picture.intrinsics,
+					picture.sensor_quarter_turns,
+					self.viewport,
+				)
+			},
+		);
 
 		XrFrame {
 			time,
@@ -75,20 +158,45 @@ impl<S: OrientationSource> OrientationBackend<S> {
 			viewer: pose,
 			views: vec![View {
 				pose,
-				projection: Projection::Fov(Fov::symmetric(VERTICAL_FOV, self.viewport.aspect())),
+				projection: Projection::Fov(fov),
 			}],
+			camera_intrinsics: picture.as_ref().map(|picture| picture.intrinsics),
+			camera_image: picture.map(|picture| self.upright(&picture)),
 			..XrFrame::default()
+		}
+	}
+
+	/// The picture with the transform that turns it upright on the screen.
+	fn upright(&self, picture: &Arc<CapturedImage>) -> CameraImage {
+		let (display_transform, _) = upright_transform(
+			picture.width,
+			picture.height,
+			picture.sensor_quarter_turns,
+			self.viewport,
+		);
+
+		CameraImage {
+			width: picture.width,
+			height: picture.height,
+			display_transform,
+			pixels: picture.pixels.clone(),
 		}
 	}
 }
 
 impl<S: OrientationSource> Backend for OrientationBackend<S> {
 	fn capabilities(&self) -> Capabilities {
-		if self.source.available() {
-			Capabilities::NONE.with(Mode::Orientation, Features::HIT_TEST | Features::ANCHORS)
-		} else {
-			Capabilities::NONE
+		if !self.source.available() {
+			return Capabilities::NONE;
 		}
+
+		let mut features = Features::HIT_TEST | Features::ANCHORS;
+
+		if self.has_camera() {
+			features = features | Features::CAMERA_IMAGE;
+		}
+
+		Capabilities::NONE.with(Mode::Orientation, features)
 	}
 
 	fn prepare(&mut self, mode: Mode, _install: bool) -> Availability {
@@ -99,15 +207,23 @@ impl<S: OrientationSource> Backend for OrientationBackend<S> {
 		}
 	}
 
-	fn start(&mut self, _config: &SessionConfig, features: Features) -> Result<Started, Error> {
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		self.source.start()?;
+		let features = match self.film(config, features) {
+			Ok(features) => features,
+			Err(error) => {
+				self.source.stop();
+				return Err(error);
+			}
+		};
 		self.running = true;
 		self.recentre = None;
 		self.last_time = None;
 		Ok(Started::new(ReferenceSpace::Local, features))
 	}
 
-	fn configure(&mut self, _config: &SessionConfig, features: Features) -> Result<Started, Error> {
+	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
+		let features = self.film(config, features)?;
 		Ok(Started::new(ReferenceSpace::Local, features))
 	}
 
@@ -136,6 +252,14 @@ impl<S: OrientationSource> Backend for OrientationBackend<S> {
 		if self.running {
 			self.source.stop();
 			self.running = false;
+		}
+
+		if self.filming {
+			if let Some(camera) = self.camera.as_mut() {
+				camera.stop();
+			}
+
+			self.filming = false;
 		}
 	}
 }

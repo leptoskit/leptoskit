@@ -87,3 +87,60 @@ fn host_features_use_manifest_keys_while_rust_uses_normalized_aliases() {
 		["renamed-echo/async-host", "ffi/async-host"]
 	);
 }
+
+#[test]
+fn apps_that_draw_scenes_turn_on_async_plugins_scene3d_features() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	config
+		.native
+		.plugin_options
+		.insert("echo".into(), toml::Table::new());
+	let with_scenes = |plugin_features: serde_json::Value| {
+		let mut metadata = async_metadata();
+		metadata.packages[2].features = serde_json::from_value(plugin_features).unwrap();
+		metadata.packages.push(
+			serde_json::from_value(json!({
+				"id": "scene3d", "name": "leptoskit_3d", "manifest_path": "/sdk/3d/Cargo.toml",
+				"metadata": {}
+			}))
+			.unwrap(),
+		);
+		metadata.resolve.nodes.push(
+			serde_json::from_value(json!({"id": "scene3d", "deps": [], "features": ["renderer"]}))
+				.unwrap(),
+		);
+		metadata
+	};
+
+	let registry = resolve_metadata(
+		with_scenes(json!({"async-host": [], "scene3d": ["async-host"]})),
+		&config,
+	)
+	.unwrap();
+	assert_eq!(
+		registry.host_features,
+		[
+			"renamed_echo/async-host",
+			"ffi/async-host",
+			"ffi/scene3d",
+			"renamed_echo/scene3d"
+		]
+	);
+
+	// A plugin without the feature, or an app without scenes, gets none.
+	let registry = resolve_metadata(with_scenes(json!({"async-host": []})), &config).unwrap();
+	assert_eq!(
+		registry.host_features,
+		["renamed_echo/async-host", "ffi/async-host", "ffi/scene3d"]
+	);
+	let mut without_scenes = async_metadata();
+	without_scenes.packages[2].features =
+		serde_json::from_value(json!({"async-host": [], "scene3d": []})).unwrap();
+	let registry = resolve_metadata(without_scenes, &config).unwrap();
+	assert_eq!(
+		registry.host_features,
+		["renamed_echo/async-host", "ffi/async-host"]
+	);
+}

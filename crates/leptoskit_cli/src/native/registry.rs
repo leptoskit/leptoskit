@@ -50,6 +50,8 @@ struct Package {
 	metadata: serde_json::Value,
 	#[serde(default)]
 	dependencies: Vec<PackageDependency>,
+	#[serde(default)]
+	features: BTreeMap<String, Vec<String>>,
 }
 #[derive(Debug, Deserialize)]
 struct PackageDependency {
@@ -268,8 +270,9 @@ pub struct Registry {
 	/// Selected plugins this destination leaves out, and why.
 	pub missing: Vec<MissingPlugin>,
 	/// Whether the app shows 3D scenes: it builds `leptoskit_3d` with more
-	/// than its protocol, so the host gets the bridge's `scene3d` feature and
-	/// the app's `assets/` folder.
+	/// than its protocol, so the host gets the bridge's `scene3d` feature, the
+	/// `scene3d` feature of every async plugin that has one (`xr`, whose
+	/// sessions the scenes draw over), and the app's `assets/` folder.
 	pub scene3d: bool,
 }
 
@@ -487,7 +490,9 @@ fn resolve_for_target(
 	let scene3d = uses_scene3d(&metadata.resolve, &packages);
 
 	if scene3d {
+		let plugin_features = scene3d_features(&host_features, &plugins, &packages);
 		host_features.push(bridge_feature(app, node, &packages, "scene3d")?);
+		host_features.extend(plugin_features);
 	}
 
 	let devtools_feature = bridge_feature(app, node, &packages, "devtools").ok();
@@ -502,6 +507,28 @@ fn resolve_for_target(
 		missing,
 		scene3d,
 	})
+}
+
+/// `<key>/scene3d` for each async plugin the host builds whose package has
+/// a `scene3d` feature, such as `leptoskit_xr`'s, which hands its sessions to
+/// the scenes. `host_features` holds the plugins' `<key>/async-host`.
+fn scene3d_features(
+	host_features: &[String],
+	plugins: &[Plugin],
+	packages: &BTreeMap<&String, &Package>,
+) -> Vec<String> {
+	host_features
+		.iter()
+		.filter_map(|feature| feature.strip_suffix("/async-host"))
+		.filter(|key| {
+			plugins.iter().any(|plugin| {
+				packages.values().any(|package| {
+					package.name == plugin.package_name && package.features.contains_key("scene3d")
+				}) && key.replace('-', "_") == plugin.crate_name
+			})
+		})
+		.map(|key| format!("{key}/scene3d"))
+		.collect()
 }
 
 /// Whether the dependency graph builds `leptoskit_3d` with more than its

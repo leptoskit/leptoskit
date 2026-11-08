@@ -78,6 +78,8 @@ A model loaded by several scenes, or spawned many times, is read and uploaded to
 
 Each frame lights the scene with one directional light and a soft studio environment, puts a soft shadow under each model, and tonemaps the result so bright highlights roll off rather than clip. Edges are smoothed with 4× multisampling. Where the view is transparent, what is behind it shows through.
 
+`Op::SetBackdrop` chooses what is behind the models: nothing (`Backdrop::Transparent`, the default), a colour, or `Backdrop::Camera`. On iOS and Android the camera backdrop is the live camera picture while an [`xr` session](34-augmented-reality.md#draw-over-the-camera) runs, drawn from the session's viewpoint; without one it is transparent.
+
 The scene draws only while something changes or animates: a scene whose clips have finished, or that plays nothing, stops asking for frames until the next op.
 
 ## Platforms

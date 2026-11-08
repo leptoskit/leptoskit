@@ -9,10 +9,14 @@ use leptoskit_bridge::Bytes;
 use leptoskit_bridge::MethodId;
 use leptoskit_bridge::async_host::AsyncPlugin;
 use leptoskit_bridge::async_host::CancellationToken;
+use leptoskit_xr::host::CameraFrame;
+use leptoskit_xr::host::DepthEstimator;
 use leptoskit_xr::host::ReplayBackend;
 use leptoskit_xr::host::XrPlugin;
 use leptoskit_xr::host::XrRuntime;
 use leptoskit_xr::host::from_context;
+use leptoskit_xr::host::install_depth_estimator;
+use leptoskit_xr::image::DepthImage;
 use leptoskit_xr::protocol::*;
 use leptoskit_xr::wire::Wire;
 use leptoskit_xr::wire::decode;
@@ -162,4 +166,48 @@ fn every_method_has_a_bounded_reply() {
 	}
 
 	assert_eq!(plugin.name(), NAME);
+}
+
+/// An estimator that never finishes a picture.
+struct Blind;
+
+impl DepthEstimator for Blind {
+	fn max_side(&self) -> u32 {
+		64
+	}
+
+	fn submit(&mut self, _frame: std::sync::Arc<CameraFrame>) {}
+
+	fn latest(&mut self) -> Option<DepthImage> {
+		None
+	}
+}
+
+#[test]
+fn an_installed_depth_estimator_reaches_every_plugin() {
+	let directory = std::env::temp_dir().join(format!("leptoskit-xr-depth-{}", std::process::id()));
+	std::fs::create_dir_all(&directory).unwrap();
+	let mut recording = walk(10);
+	recording.capabilities = recording.capabilities.with(
+		Mode::PhoneAr,
+		Features::PLANES | Features::HIT_TEST | Features::CAMERA_IMAGE,
+	);
+	std::fs::write(directory.join("walk.lkxr"), recording.to_bytes()).unwrap();
+	let context = leptoskit_bridge::AppContext::new(directory.clone(), directory.clone());
+	let options = r#"{"replay": "walk.lkxr"}"#;
+	let depth = |plugin: &XrPlugin| {
+		let capabilities: Capabilities =
+			decode(&invoke(plugin, CAPABILITIES, &()).unwrap()).unwrap();
+		capabilities
+			.features(Mode::PhoneAr)
+			.unwrap()
+			.contains(Features::DEPTH)
+	};
+
+	let before = from_context(&context, options).unwrap();
+	assert!(!depth(&before));
+	install_depth_estimator(|| Box::new(Blind));
+	assert!(depth(&before));
+	assert!(depth(&from_context(&context, options).unwrap()));
+	let _ = std::fs::remove_dir_all(directory);
 }

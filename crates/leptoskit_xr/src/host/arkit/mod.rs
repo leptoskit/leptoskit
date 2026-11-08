@@ -23,6 +23,7 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_ui_kit::UIInterfaceOrientation;
 
 use super::Backend;
+use super::Intrinsics;
 use super::Started;
 use super::Viewport;
 use super::XrFrame;
@@ -235,6 +236,14 @@ impl ArKitBackend {
 			.map_or(Projection::Matrix(projection.to_array()), Projection::Fov);
 
 		let display = self.display_transform(frame);
+		let camera_image = camera_image(frame, display);
+		// SAFETY: `camera` is a live `ARCamera`.
+		let [focal_x, focal_y, centre] = unsafe { simd::intrinsics(camera_ptr) }.columns();
+		let camera_intrinsics = Intrinsics {
+			focal: [focal_x[0], focal_y[1]],
+			principal: [centre[0], centre[1]],
+			size: [camera_image.width, camera_image.height],
+		};
 
 		XrFrame {
 			time,
@@ -244,7 +253,8 @@ impl ArKitBackend {
 				pose: viewer,
 				projection,
 			}],
-			camera_image: Some(camera_image(frame, display)),
+			camera_image: Some(camera_image),
+			camera_intrinsics: Some(camera_intrinsics),
 			depth: self
 				.features
 				.contains(Features::DEPTH)

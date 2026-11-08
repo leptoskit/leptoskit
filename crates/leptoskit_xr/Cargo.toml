@@ -47,6 +47,10 @@ wgpu = ["host", "dep:wgpu", "dep:ash"]
 # Draws a `leptoskit_3d` scene into a session: the camera picture behind it,
 # real-world depth in front of it, one view per eye.
 3d = ["wgpu", "dep:leptoskit_3d", "dep:glam"]
+# Makes the plugin's sessions the camera feed of the app's `Scene3d` views,
+# so a scene with the camera backdrop draws over the session's frames.
+# `leptoskit build` turns it on when the app shows 3D scenes.
+scene3d = ["3d", "async-host", "leptoskit_3d/host"]
 # The WebXR backend for the browser build.
 web = [
 	"dep:js-sys",
@@ -120,3 +124,11 @@ required-features = ["host"]
 [[test]]
 name = "plugin"
 required-features = ["async-host"]
+
+[[test]]
+name = "camera"
+required-features = ["host"]
+
+[[test]]
+name = "scene3d"
+required-features = ["scene3d"]

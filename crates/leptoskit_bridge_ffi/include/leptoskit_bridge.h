@@ -181,6 +181,10 @@ lk_scene3d_view *lk_scene3d_view_attach_window(uint32_t scene, void *a_native_wi
 /* wake may run on any thread; it schedules a display link and never draws. */
 void lk_scene3d_view_set_waker(lk_scene3d_view *view, void *context, lk_scene3d_wake_fn wake);
 void lk_scene3d_view_resize(lk_scene3d_view *view, uint32_t width, uint32_t height);
+/* Clockwise quarter turns of the interface from the natural orientation, 0 to 3. */
+void lk_scene3d_view_set_rotation(lk_scene3d_view *view, uint32_t quarter_turns);
+/* 1 when the last frame drew a live camera picture over the whole view. */
+int32_t lk_scene3d_view_shows_camera(const lk_scene3d_view *view);
 /* 1 wants another frame, 0 still, -1 failure. time is the display link's, in seconds. */
 int32_t lk_scene3d_view_frame(lk_scene3d_view *view, double time);
 int32_t lk_scene3d_view_needs_frame(const lk_scene3d_view *view);

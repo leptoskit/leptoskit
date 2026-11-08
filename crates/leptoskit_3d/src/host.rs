@@ -7,6 +7,12 @@
 //! and ask the scene's views for a frame. Each view draws on its platform's
 //! display link (`CADisplayLink`, `Choreographer`), and keeps asking for
 //! frames only while something animates.
+//!
+//! A scene whose backdrop is [`Backdrop::Camera`] draws over a live camera
+//! picture when something has installed a [`CameraFeed`], such as an XR
+//! session (`leptoskit_xr`'s `scene3d` feature). The feed then chooses the
+//! viewpoint as well as the picture, and the view keeps drawing on every
+//! display frame while the picture runs.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -97,6 +103,46 @@ where
 
 type FrameWaker = Arc<dyn Fn() + Send + Sync>;
 
+/// A live camera picture that scenes with the camera backdrop draw over,
+/// such as a phone's AR session. Install one with [`Hub::set_camera_feed`].
+pub trait CameraFeed: Send + Sync {
+	/// Whether a picture is coming now, so a view that shows it keeps
+	/// drawing on every display frame.
+	fn live(&self) -> bool;
+
+	/// What draws one view over the picture. Each view keeps its own, with
+	/// its own textures, for as long as its scene asks for the camera.
+	fn painter(&self) -> Box<dyn CameraPainter>;
+}
+
+/// Draws one view's scene over a [`CameraFeed`]'s picture.
+pub trait CameraPainter: Send {
+	/// Draws `renderer`'s scene into `target` over the newest picture, from
+	/// the feed's own viewpoint. Returns `None`, having drawn nothing, when
+	/// there is no picture now; the view then draws as it would without a
+	/// feed.
+	fn draw(
+		&mut self,
+		renderer: &mut Renderer,
+		target: &CameraTarget<'_>,
+	) -> Option<Result<(), Error>>;
+}
+
+/// Where a [`CameraPainter`] draws: the view's surface texture for this
+/// frame, and how the view sits on the screen.
+#[derive(Clone, Copy, Debug)]
+pub struct CameraTarget<'a> {
+	/// The surface texture's view.
+	pub color: &'a wgpu::TextureView,
+	/// Its format.
+	pub format: wgpu::TextureFormat,
+	/// Its size in pixels.
+	pub size: [u32; 2],
+	/// Clockwise quarter turns of the interface from the device's natural
+	/// orientation, 0 to 3, as the host reported with [`View::set_rotation`].
+	pub quarter_turns: u32,
+}
+
 /// A scene and who is waiting on it.
 struct SceneState {
 	/// The scene before any view has drawn it; afterwards it lives in the
@@ -171,6 +217,7 @@ pub struct Hub {
 	gpu: Mutex<Option<Gpu>>,
 	loader: Mutex<Option<mpsc::Sender<Job>>>,
 	next_view: std::sync::atomic::AtomicU64,
+	camera: Mutex<Option<Arc<dyn CameraFeed>>>,
 }
 
 impl Default for Hub {
@@ -190,6 +237,7 @@ impl Hub {
 			gpu: Mutex::new(None),
 			loader: Mutex::new(None),
 			next_view: std::sync::atomic::AtomicU64::new(1),
+			camera: Mutex::new(None),
 		}
 	}
 
@@ -202,6 +250,32 @@ impl Hub {
 	/// Where asset paths lead. Until it is set, every load fails.
 	pub fn set_asset_source(&self, source: impl AssetSource + 'static) {
 		*lock(&self.source) = Some(Arc::new(source));
+	}
+
+	/// Where scenes that ask for the camera backdrop get their picture, or
+	/// `None` to draw them without one (transparent behind the models).
+	/// Views pick it up on their next frame; call [`Hub::wake_views`] when
+	/// its picture starts or stops.
+	pub fn set_camera_feed(&self, feed: Option<Arc<dyn CameraFeed>>) {
+		*lock(&self.camera) = feed;
+		self.wake_views();
+	}
+
+	fn camera_feed(&self) -> Option<Arc<dyn CameraFeed>> {
+		lock(&self.camera).clone()
+	}
+
+	/// Asks every view of every scene for a frame, as when a camera feed's
+	/// picture starts or stops. Wakers only schedule work, so this never
+	/// draws.
+	pub fn wake_views(&self) {
+		let scenes: Vec<Arc<Scene>> = lock(&self.scenes).values().cloned().collect();
+
+		for scene in scenes {
+			for view in scene.lock().views.values() {
+				view();
+			}
+		}
 	}
 
 	/// The graphics API to draw with. It takes effect only before the first
@@ -416,6 +490,9 @@ impl Hub {
 			config,
 			configured: width > 0 && height > 0,
 			waker: None,
+			quarter_turns: 0,
+			painter: None,
+			shows_camera: false,
 		})
 	}
 }
@@ -505,6 +582,9 @@ pub struct View {
 	config: wgpu::SurfaceConfiguration,
 	configured: bool,
 	waker: Option<FrameWaker>,
+	quarter_turns: u32,
+	painter: Option<Box<dyn CameraPainter>>,
+	shows_camera: bool,
 }
 
 impl View {
@@ -542,6 +622,39 @@ impl View {
 		if let Some(wake) = &self.waker {
 			wake();
 		}
+	}
+
+	/// Tells the view how far the interface is turned from the device's
+	/// natural orientation, in clockwise quarter turns (Android's
+	/// `Surface.ROTATION_*`; on iOS, portrait 0, landscape right 1, upside
+	/// down 2, landscape left 3). A camera feed needs it to turn its picture
+	/// upright.
+	pub fn set_rotation(&mut self, quarter_turns: u32) {
+		let quarter_turns = quarter_turns % 4;
+
+		if quarter_turns != self.quarter_turns {
+			self.quarter_turns = quarter_turns;
+
+			if let Some(wake) = &self.waker {
+				wake();
+			}
+		}
+	}
+
+	/// Whether the last frame drew the camera feed's picture, which covers
+	/// the whole view. A host whose views composite above the window (an
+	/// Android `SurfaceView` on the media overlay layer) moves such a view
+	/// below the window's own views.
+	pub fn shows_camera(&self) -> bool {
+		self.shows_camera
+	}
+
+	/// The camera feed, when the scene asks for the camera backdrop and one
+	/// is installed.
+	fn feed(&self, world: &World) -> Option<Arc<dyn CameraFeed>> {
+		(world.backdrop() == Backdrop::Camera)
+			.then(|| self.hub.camera_feed())
+			.flatten()
 	}
 
 	/// Draws a frame for the display time `time` (seconds, from the display
@@ -588,16 +701,40 @@ impl View {
 		let view = texture
 			.texture
 			.create_view(&wgpu::TextureViewDescriptor::default());
-		let target = RenderTarget::new(
-			&view,
-			self.config.format,
-			self.config.width,
-			self.config.height,
-		);
 		let renderer = state.renderer.as_mut().expect("the renderer was created");
-		renderer.render(&target)?;
+		let feed = self.feed(renderer.world());
+
+		if feed.is_none() {
+			self.painter = None;
+		}
+
+		let painted = feed.as_ref().and_then(|feed| {
+			self.painter.get_or_insert_with(|| feed.painter()).draw(
+				renderer,
+				&CameraTarget {
+					color: &view,
+					format: self.config.format,
+					size: [self.config.width, self.config.height],
+					quarter_turns: self.quarter_turns,
+				},
+			)
+		});
+		self.shows_camera = painted.is_some();
+
+		match painted {
+			Some(result) => result?,
+			None => {
+				renderer.render(&RenderTarget::new(
+					&view,
+					self.config.format,
+					self.config.width,
+					self.config.height,
+				))?;
+			}
+		}
+
 		self.gpu.queue().present(texture);
-		let more = renderer.world().needs_frame();
+		let more = renderer.world().needs_frame() || feed.is_some_and(|feed| feed.live());
 
 		if renderer.world().has_events() {
 			for waiter in state.waiters.drain(..) {
@@ -611,9 +748,11 @@ impl View {
 	/// Whether the scene has changed or animates, so a display link should
 	/// run.
 	pub fn needs_frame(&self) -> bool {
-		self.hub
-			.scene(self.scene)
-			.is_some_and(|scene| scene.lock().world().needs_frame())
+		self.hub.scene(self.scene).is_some_and(|scene| {
+			let state = scene.lock();
+			let world = state.world();
+			world.needs_frame() || self.feed(world).is_some_and(|feed| feed.live())
+		})
 	}
 }
 

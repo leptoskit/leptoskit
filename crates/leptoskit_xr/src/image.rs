@@ -84,6 +84,57 @@ pub enum CameraPixels {
 	Native(NativeImage),
 }
 
+/// Copies a YUV 4:2:0 picture whose chroma comes as two planes, each
+/// `chroma_step` bytes from one sample to the next (Android's
+/// `YUV_420_888`, as ARCore's CPU image and Camera2 deliver it), into luma
+/// and interleaved chroma. `None` when a plane is shorter than its strides
+/// say.
+#[allow(
+	clippy::too_many_arguments,
+	reason = "the planes and strides as the platform hands them over"
+)]
+#[must_use]
+pub fn ycbcr_from_yuv420(
+	width: u32,
+	height: u32,
+	luma: &[u8],
+	luma_stride: u32,
+	cb: &[u8],
+	cr: &[u8],
+	chroma_stride: u32,
+	chroma_step: u32,
+) -> Option<CameraPixels> {
+	let (chroma_width, chroma_height) = (width.div_ceil(2), height.div_ceil(2));
+	let mut cbcr = Vec::with_capacity((chroma_width * chroma_height * 2) as usize);
+
+	for row in 0..chroma_height as usize {
+		for column in 0..chroma_width as usize {
+			let at = row * chroma_stride as usize + column * chroma_step as usize;
+			cbcr.push(*cb.get(at)?);
+			cbcr.push(*cr.get(at)?);
+		}
+	}
+
+	let y = ImagePlane {
+		width,
+		height,
+		row_stride: luma_stride,
+		data: Arc::from(luma),
+	};
+
+	y.is_complete(1).then(|| {
+		CameraPixels::YCbCr {
+			y,
+			cbcr: ImagePlane {
+				width: chroma_width,
+				height: chroma_height,
+				row_stride: chroma_width * 2,
+				data: cbcr.into(),
+			},
+		}
+	})
+}
+
 /// A camera image that stays in the platform's own memory, for a renderer
 /// that imports it without a copy.
 #[derive(Debug, Clone)]
@@ -202,6 +253,23 @@ mod tests {
 		let (x, y) = apply_affine(&inverse, u, v);
 		assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
 		assert_eq!(invert_affine(&[1.0, 1.0, 1.0, 1.0, 0.0, 0.0]), None);
+	}
+
+	#[test]
+	fn separate_chroma_planes_interleave() {
+		// 2 × 2 luma; Cb and Cr each one sample, two bytes apart as in a
+		// semi-planar buffer.
+		let pixels = ycbcr_from_yuv420(2, 2, &[1, 2, 3, 4], 2, &[10, 20], &[20, 30], 2, 2)
+			.expect("complete planes");
+		let CameraPixels::YCbCr { y, cbcr } = pixels else {
+			panic!("luma and chroma");
+		};
+		assert_eq!(&*y.data, &[1, 2, 3, 4]);
+		assert_eq!(
+			(cbcr.width, cbcr.height, &*cbcr.data),
+			(1, 1, &[10, 20][..])
+		);
+		assert!(ycbcr_from_yuv420(2, 2, &[1, 2, 3], 2, &[10], &[20], 2, 2).is_none());
 	}
 
 	#[test]

@@ -24,6 +24,7 @@ pub(super) type HitResult = c_void;
 pub(super) type HitResultList = c_void;
 pub(super) type LightEstimate = c_void;
 pub(super) type Image = c_void;
+pub(super) type CameraIntrinsics = c_void;
 
 /// `ArStatus`.
 pub(super) type Status = i32;
@@ -148,6 +149,12 @@ api! {
 	ArCamera_getTrackingFailureReason: fn(*const Session, *const Camera, *mut i32);
 	ArCamera_getDisplayOrientedPose: fn(*const Session, *const Camera, *mut Pose);
 	ArCamera_getProjectionMatrix: fn(*const Session, *const Camera, f32, f32, *mut f32);
+	ArCamera_getImageIntrinsics: fn(*const Session, *const Camera, *mut CameraIntrinsics);
+	ArCameraIntrinsics_create: fn(*const Session, *mut *mut CameraIntrinsics);
+	ArCameraIntrinsics_destroy: fn(*mut CameraIntrinsics);
+	ArCameraIntrinsics_getFocalLength: fn(*const Session, *const CameraIntrinsics, *mut f32, *mut f32);
+	ArCameraIntrinsics_getPrincipalPoint: fn(*const Session, *const CameraIntrinsics, *mut f32, *mut f32);
+	ArCameraIntrinsics_getImageDimensions: fn(*const Session, *const CameraIntrinsics, *mut i32, *mut i32);
 	ArPose_create: fn(*const Session, *const f32, *mut *mut Pose) -> Status;
 	ArPose_destroy: fn(*mut Pose);
 	ArPose_getPoseRaw: fn(*const Session, *const Pose, *mut f32);

@@ -249,6 +249,14 @@ mod enabled {
 		view.0.resize(width, height);
 	}
 
+	pub fn set_rotation(view: &mut ViewHandle, quarter_turns: u32) {
+		view.0.set_rotation(quarter_turns);
+	}
+
+	pub fn shows_camera(view: &ViewHandle) -> i32 {
+		i32::from(view.0.shows_camera())
+	}
+
 	pub fn frame(view: &mut ViewHandle, time: f64) -> i32 {
 		match view.0.frame(time) {
 			Ok(more) => i32::from(more),
@@ -315,6 +323,14 @@ mod enabled {
 	}
 
 	pub fn resize(view: &mut ViewHandle, _: u32, _: u32) {
+		match *view {}
+	}
+
+	pub fn set_rotation(view: &mut ViewHandle, _: u32) {
+		match *view {}
+	}
+
+	pub fn shows_camera(view: &ViewHandle) -> i32 {
 		match *view {}
 	}
 
@@ -460,6 +476,33 @@ pub unsafe extern "C" fn lk_scene3d_view_resize(view: *mut ViewHandle, width: u3
 	}
 }
 
+/// Tells the view how far the interface is turned from the device's natural
+/// orientation, in clockwise quarter turns: Android's `Display.getRotation()`,
+/// or on iOS 0 for portrait, 1 landscape right, 2 upside down, 3 landscape
+/// left. A scene drawn over the camera needs it to turn the picture upright.
+///
+/// # Safety
+/// `view` is live; call on the thread that draws it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_scene3d_view_set_rotation(view: *mut ViewHandle, quarter_turns: u32) {
+	// SAFETY: The caller lends a live view.
+	if let Some(view) = unsafe { view.as_mut() } {
+		enabled::set_rotation(view, quarter_turns);
+	}
+}
+
+/// 1 when the view's last frame drew a live camera picture, which covers the
+/// whole view, 0 otherwise. An Android host composites such a view below the
+/// window's views instead of above them.
+///
+/// # Safety
+/// `view` is null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_scene3d_view_shows_camera(view: *const ViewHandle) -> i32 {
+	// SAFETY: The caller lends a live view or null.
+	unsafe { view.as_ref() }.map_or(0, enabled::shows_camera)
+}
+
 /// Draws a frame for the display link's timestamp, in seconds. Returns 1
 /// while the scene wants more frames, 0 when it is still, -1 on failure.
 ///
@@ -523,6 +566,8 @@ mod tests {
 			assert!(lk_scene3d_view_attach_window(1, std::ptr::null_mut(), 10, 10).is_null());
 			assert_eq!(lk_scene3d_view_frame(std::ptr::null_mut(), 0.0), -1);
 			assert_eq!(lk_scene3d_view_needs_frame(std::ptr::null()), 0);
+			assert_eq!(lk_scene3d_view_shows_camera(std::ptr::null()), 0);
+			lk_scene3d_view_set_rotation(std::ptr::null_mut(), 1);
 			lk_scene3d_view_detach(std::ptr::null_mut());
 			lk_scene3d_view_resize(std::ptr::null_mut(), 1, 1);
 			assert_eq!(lk_scene3d_set_asset_directory(std::ptr::null(), 0), -1);

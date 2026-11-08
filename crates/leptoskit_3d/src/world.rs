@@ -537,6 +537,11 @@ impl World {
 		!self.events.is_empty()
 	}
 
+	/// What the scene asked to draw behind it.
+	pub fn backdrop(&self) -> Backdrop {
+		self.settings.backdrop
+	}
+
 	/// How many events were dropped because the guest did not take them.
 	pub fn dropped_events(&self) -> u64 {
 		self.dropped_events

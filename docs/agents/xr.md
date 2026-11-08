@@ -16,13 +16,13 @@
 | Backend     | Where                                                 | Implemented                                                                                                                         | Checked                                |
 | ----------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | Replay      | everywhere native                                     | Playback, looping, recording, software hit tests and anchors                                                                        | Unit and integration tests             |
-| Orientation | iOS (Core Motion), Android (NDK game rotation vector) | 3DoF with recentred heading and screen rotation                                                                                     | Math tested; sources compile-only      |
+| Orientation | iOS (Core Motion), Android (NDK game rotation vector) | 3DoF with recentred heading and screen rotation; on Android, the back camera through Camera2 (`camera2.rs`)                         | Math tested; sources compile-only      |
 | ARKit       | iOS arm64                                             | World tracking, planes with labels and outlines, smoothed LiDAR depth and confidence, light, raycasts, anchors                      | Compiles for `aarch64-apple-ios(-sim)` |
 | ARCore      | Android                                               | Planes, Depth API, ambient light, native hit tests, anchors, install and permission checks; `libarcore_sdk_c.so` opened at run time | Compiles for `aarch64-linux-android`   |
 | OpenXR      | Android (Quest, Android XR), Windows, Linux           | Instance, stereo views, Touch and simple controllers, `XR_EXT_hand_tracking`, `XR_FB_passthrough`, floor spaces                     | Compiles for `aarch64-linux-android`   |
 | WebXR       | browser (`web` feature)                               | `immersive-ar`/`-vr`, hit-test sources, anchors, plane detection, CPU depth, inputs and hands; `deviceorientation` fallback         | Compiles for `wasm32-unknown-unknown`  |
 
-Nothing here has run on a device: there was no phone, headset, or browser with WebXR in reach. The first device runs should check: ARKit's SIMD calls (below), ARCore's camera image strides and display transform on a rotated screen, the Android sensor queue made on the driving thread, OpenXR's session lifecycle on Quest, and WebXR's depth texture orientation.
+Nothing here has run on a device: there was no phone, headset, or browser with WebXR in reach. The first device runs should check: ARKit's SIMD calls (below), ARCore's camera image strides and display transform on a rotated screen, the Android sensor queue made on the driving thread, Camera2's sensor orientation and stream size on the Seeker, the Android `SurfaceView` restacking when the camera starts, OpenXR's session lifecycle on Quest, and WebXR's depth texture orientation.
 
 ### ARKit's SIMD methods
 
@@ -31,6 +31,26 @@ Nothing here has run on a device: there was no phone, headset, or browser with W
 ### ARCore's camera picture
 
 wgpu has no external textures (`samplerExternalOES`) and no sampler YCbCr conversion, so neither of ARCore's zero-copy outputs (the OES texture, the `AHardwareBuffer`) can be sampled from WGSL. The 3D renderer defaults to OpenGL ES on Android because the Solana Seeker's Vulkan driver reset the GPU when the camera closed. The backend therefore runs ARCore in `EXPOSE_HARDWARE_BUFFER` mode, which frees `ArSession_update` from needing a current GL context (so tracking runs on any thread), and copies `ArFrame_acquireCameraImage`'s YUV planes into luma and interleaved chroma, about 1.5 bytes per pixel (3 MB a frame at 1080p, a few milliseconds of memcpy on current phones, not measured here). The next step, once wgpu can import external textures on GL ES, is to wrap the hardware buffer in an `EGLImage` and skip the copy.
+
+### The camera without ARCore
+
+Phones without ARCore (the Solana Seeker among them) run `Orientation` sessions from the rotation sensor. On Android, `OrientationBackend::with_camera(Camera2Source)` adds the back camera, so a scene still draws over the room. `camera2.rs` opens `libcamera2ndk.so` and `libmediandk.so` at run time, like ARCore, picks the first back camera with a YUV stream, chooses the largest YUV size of at most 1280 × 960 nearest the sensor's aspect, and polls an `AImageReader` (two images, no listener or looper) with `acquireLatestImage`. Each new image is copied into luma and interleaved chroma with the same `ycbcr_from_yuv420` ARCore's CPU image goes through.
+
+The picture's orientation comes from `SENSOR_ORIENTATION` and the interface's rotation (`upright_transform`: the back camera turns `(sensor − display) mod 4` quarters clockwise, then the turned picture is cropped to fill the view), and the session's field of view from the camera's focal length over the cropped picture (`upright_fov`), so the scene keeps the picture's scale. The focal length is `LENS_INTRINSIC_CALIBRATION` where it is non-zero, otherwise the lens's focal length over the sensor's pixel pitch, scaled to the stream (a stream is the active array's centre cropped to its aspect).
+
+The camera opens only for sessions that ask for `CAMERA_IMAGE`. Without the permission Camera2 refuses to open; the session then starts without the picture, unless it required it, so the rotation fallback keeps working for apps that never ask for the camera. Every iPhone that runs current iOS has ARKit, so iOS has no camera-only source.
+
+### Depth from the camera picture
+
+`host::camera` is the seam a monocular depth model plugs into. `XrFrame::camera_intrinsics` describes the camera picture's projection (ARKit's `ARCamera.intrinsics`, ARCore's `ArCamera_getImageIntrinsics`, Camera2's characteristics). `CameraFrame::from_frame(frame, max_side)` shrinks a frame's picture to sRGB RGB on the CPU (a box filter on luma), with its time, the viewer's pose, the scaled intrinsics, and the picture's display transform. A `DepthEstimator` installed with `XrRuntime::set_depth_estimator`:
+
+- makes the runtime offer `DEPTH` in every mode that offers `CAMERA_IMAGE`;
+- for a session that gets `DEPTH` but whose backend has none (the rotation fallback, ARCore without the Depth API), has the backend open the camera even when the app didn't ask for the picture, and is offered a `CameraFrame` on the driving thread whenever it says it is `ready`;
+- answers each frame with `latest()`, the newest depth it finished (metres or millimetres along the camera's axis, in the frame's display transform), which becomes `XrFrame::depth` for occlusion and hit tests.
+
+The generated hosts make the plugin's runtime themselves, so a depth crate calls `host::install_depth_estimator(make)` once: every runtime the plugin has made, and every one it makes later, gets an estimator from `make`.
+
+Every call returns at once; a model runs on its own thread and drops frames it can't keep up with. Depth from an older frame is applied as it is: in an orientation session the view may have turned since, which the model's own reprojection would have to correct.
 
 ### Headsets
 
@@ -52,7 +72,18 @@ Android XR would be a small delta (its own `uses-feature` and activity property)
 
 The `3d` feature (`wgpu`, `leptoskit_3d` with its renderer, and `glam`) adds `host::scene3d::draw`, which does that mapping: the frame's views become `ViewParams` with a 5 cm near plane and a 100 m far plane, the camera picture becomes the background (or `Background::Scene` when there is none), and real-world depth becomes an `Occlusion` with 5 cm of tolerance for the sensor's noise. On a phone, `color` is `TargetColor::View` of the surface texture; on a headset it is `TargetColor::Layers` of the two eye views `VulkanHeadset::render` passes, with each view's viewport the eye's full size.
 
-Native hosts don't call it yet: the iOS and Android hosts draw a `Scene3d` without the camera picture behind it, and handing a session's frame to the scene's renderer is the next step there.
+### Phones
+
+The `scene3d` feature (`3d`, `async-host`, and `leptoskit_3d/host`) wires it into the native hosts. `leptoskit_3d::host::Hub` takes a `CameraFeed`; a `View` whose scene's backdrop is `Backdrop::Camera` asks the feed for a `CameraPainter` and lets it draw the frame, or draws as before when the painter has no picture. `SessionFeed::install`, called from `from_context`, makes the plugin's runtime the global hub's feed and sets the runtime's listener to wake every view when a session starts, changes, or stops. A painter:
+
+- tells the runtime the view's size and rotation as its `Viewport` (on change, and before a session starts, so ARKit's display transform and projection and ARCore's display geometry fit the view from the first frame);
+- draws only `PhoneAr` and `Orientation` sessions, never a headset's;
+- takes the runtime's latest frame (the driver thread keeps updating it), uploads its pictures into the view's own `FrameTextures` once per frame time, and drops the frame, so ARKit gets its pixel buffers back; `FrameTextures` also skips a picture whose buffer it already holds (a 30 Hz camera under a 60 Hz rotation sensor);
+- draws through `draw`, so the frame's view replaces the scene's camera.
+
+A view keeps drawing on every display frame while the feed is live. The Swift view reports its window scene's interface orientation each frame (a half turn between landscapes changes no size), and the Kotlin view `Display.getRotation()`, through `lk_scene3d_view_set_rotation`. The Android `SurfaceView` sits on the media overlay layer so a transparent scene shows the window behind it; once `lk_scene3d_view_shows_camera` says it drew the camera, it leaves its parent and comes back in the same place below the window, since a `SurfaceView`'s layer only changes while detached, so the interface laid over the scene stays visible.
+
+`leptoskit build` turns on the `scene3d` feature of every selected async plugin that has one when the app shows 3D scenes (`registry::scene3d_features`), next to the bridge's own.
 
 ## Estimated depth
 
@@ -163,4 +194,4 @@ On a device, first check: the time per picture on the Seeker's cores (the Flutte
 
 ## Not covered
 
-Apple Vision Pro, image and object tracking, room meshes (ARKit scene reconstruction, Quest's scene API), shared or persistent anchors, the light probe's environment map, ARCore's environmental HDR main light, and zero-copy camera import on Apple (`CVMetalTextureCache`) and Android (`AHardwareBuffer`). `FrameTextures` copies ARKit's pixel buffer planes today.
+Apple Vision Pro, image and object tracking, room meshes (ARKit scene reconstruction, Quest's scene API), shared or persistent anchors, the light probe's environment map, ARCore's environmental HDR main light, and zero-copy camera import on Apple (`CVMetalTextureCache`) and Android (`AHardwareBuffer`). `FrameTextures` copies ARKit's pixel buffer planes today. A depth model is not part of this crate; `DepthEstimator` is where one plugs in. Two `Scene3d` views of different sizes showing the camera at once share one viewport, the last one drawn.
