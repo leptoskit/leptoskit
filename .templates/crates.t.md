@@ -382,6 +382,27 @@ continuous execution, and macOS, desktop, and the browser report `Unavailable`.
 
 <!-- {/p_backgroundSummary} -->
 
+<!-- {@p_background_taskSummary} -->
+
+Add `{{ plugin_background_task.package.name }}` as a direct dependency and select the
+`{{ plugin_background_task.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts
+discover it from Cargo metadata. Generated Linux hosts register it where it
+has a Linux Rust implementation; generated Windows and terminal hosts
+currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse
+`guest::BackgroundTask` rather than resolving the plugin on every call.
+Register and unregister named OS background tasks, query availability, and
+complete an in-flight invocation before the OS expiration window. This is
+distinct from `{{ plugin_background.package.name }}`, which keeps an `AppService`
+awake with a foreground service / scheduled wake. iOS uses
+`BGTaskScheduler`; Android uses `WorkManager`; Windows, Linux, HarmonyOS,
+and the browser return `Unavailable`. Guaranteed cadence and in-guest Wasm
+execution while suspended remain later scope.
+
+<!-- {/p_background_taskSummary} -->
+
+
+
 <!-- {@p_barometerSummary} -->
 
 Add `{{ plugin_barometer.package.name }}` as a direct dependency and select the `{{ plugin_barometer.package.metadata.leptoskit.runtime.name }}` plugin
@@ -428,15 +449,18 @@ and the browser return `Unavailable`.
 
 <!-- {@p_calendarSummary} -->
 
-Add `{{ plugin_calendar.package.name }}` as a direct dependency and select the `{{ plugin_calendar.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::Calendar` rather than resolving the plugin on every call. Status never prompts;
-request permission only after the user chooses. List calendars (max 64), create an event, get
-one event by id, or list events in a time window (max 64). Purpose strings and
-manifest permissions stay app-owned; denied access never invents calendars or events.
-Browsers and desktop hosts report unavailable; legacy Expo Calendar APIs remain out of
-scope.
+Add `{{ plugin_calendar.package.name }}` as a direct dependency and select the
+`{{ plugin_calendar.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it
+from Cargo metadata. Generated Linux hosts register it where it has a Linux
+Rust implementation; generated Windows and terminal hosts currently omit
+runtime plugins, so use explicit registration in a custom host there. Guests
+enable the `guest` feature and reuse `guest::Calendar` rather than resolving
+the plugin on every call. Status never prompts; request permission only
+after the user chooses. List calendars (max 64), create an event, get one
+event by id, or list events in a time window (max 64). Purpose strings and
+manifest permissions stay app-owned; denied access never invents calendars
+or events. Browsers and desktop hosts report unavailable; legacy Expo
+Calendar APIs remain out of scope.
 
 <!-- {/p_calendarSummary} -->
 
@@ -493,13 +517,17 @@ Add `{{ plugin_device_keys.package.name }}` as a direct dependency and select th
 
 <!-- {@p_device_motionSummary} -->
 
-Add `{{ plugin_device_motion.package.name }}` as a direct dependency and select the `{{ plugin_device_motion.package.metadata.leptoskit.runtime.name }}`
-plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::DeviceMotion` rather than resolving the plugin on every call. iOS uses `CoreMotion`
-device motion, Android fuses accelerometer, gravity, gyroscope and rotation-vector sensors,
-desktop has no sensor, and the browser uses `DeviceMotionEvent` with
-`DeviceOrientationEvent` for attitude.
+Add `{{ plugin_device_motion.package.name }}` as a direct dependency and select the
+`{{ plugin_device_motion.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts
+discover it from Cargo metadata. Generated Linux hosts register it where it
+has a Linux Rust implementation; generated Windows and terminal hosts
+currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse
+`guest::DeviceMotion` rather than resolving the plugin on every call. iOS
+uses `CoreMotion` device motion, Android fuses accelerometer, gravity,
+gyroscope and rotation-vector sensors, desktop has no sensor, and the
+browser uses `DeviceMotionEvent` with `DeviceOrientationEvent` for
+attitude.
 
 <!-- {/p_device_motionSummary} -->
 
@@ -693,23 +721,31 @@ no sensor.
 
 <!-- {@p_mapsSummary} -->
 
-Add `{{ plugin_maps.package.name }}` as a direct dependency and select the
-`{{ plugin_maps.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::Maps` rather than resolving the plugin on every call. Create a session, bind it with
-`Map(session)`, then set the camera and a bounded marker list. User location remains later scope.
+Add `{{ plugin_maps.package.name }}` as a direct dependency and select the `{{ plugin_maps.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo
+metadata. Generated Linux hosts register it where it has a Linux Rust
+implementation; generated Windows and terminal hosts currently omit runtime
+plugins, so use explicit registration in a custom host there. Guests enable
+the `guest` feature and reuse `guest::Maps` rather than resolving the plugin
+on every call. Create a session, bind it with `Map(session)`, then set the
+camera and a bounded marker list. iOS and macOS use `MapKit`; Android uses
+Google Maps (`MapView`); Windows, Linux, HarmonyOS, and the browser return
+`Unavailable`. User location, polygons, and clustering remain later scope.
 
 <!-- {/p_mapsSummary} -->
 
 <!-- {@p_media_librarySummary} -->
 
 Add `{{ plugin_media_library.package.name }}` as a direct dependency and select the
-`{{ plugin_media_library.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::MediaLibrary` rather than resolving the plugin on every call. Status never prompts;
-list and save stay bounded; change observation remains later scope.
+`{{ plugin_media_library.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts
+discover it from Cargo metadata. Generated Linux hosts register it where it
+has a Linux Rust implementation; generated Windows and terminal hosts
+currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse
+`guest::MediaLibrary`. Status never prompts. List returns at most 64 assets
+with id, media kind, URI, dimensions, and creation time. Save copies an
+app-owned file URI into the system library. Change observation, albums, and
+limited-library nuance remain later scope. Browsers report Unavailable.
 
 <!-- {/p_media_librarySummary} -->
 
@@ -899,11 +935,14 @@ this MVP. Outbound `mailto:` URLs remain `leptoskit_plugin_linking`.
 
 <!-- {@p_printSummary} -->
 
-Add `{{ plugin_print.package.name }}` as a direct dependency and select the `{{ plugin_print.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::Print` rather than resolving the plugin on every call. Completion means the print
-dialog finished or the platform accepted a job; it never confirms paper left a printer.
+Add `{{ plugin_print.package.name }}` as a direct dependency and select the `{{ plugin_print.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo
+metadata. Generated Linux hosts register it where it has a Linux Rust
+implementation; generated Windows and terminal hosts currently omit runtime
+plugins, so use explicit registration in a custom host there. Guests enable
+the `guest` feature and reuse `guest::Print` rather than resolving the
+plugin on every call. Completion means the print dialog finished or the
+platform accepted a job; it never confirms paper left a printer.
 
 <!-- {/p_printSummary} -->
 
@@ -954,11 +993,16 @@ surface, Android uses Media3 `ExoPlayer` with a `PlayerView`, and the browser us
 <!-- {@p_video_thumbnailsSummary} -->
 
 Add `{{ plugin_video_thumbnails.package.name }}` as a direct dependency and select the
-`{{ plugin_video_thumbnails.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::VideoThumbnails` rather than resolving the plugin on every call. Extract one JPEG
-frame at a time offset; multi-frame extraction remains later scope.
+`{{ plugin_video_thumbnails.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts
+discover it from Cargo metadata. Generated Linux hosts register it where it
+has a Linux Rust implementation; generated Windows and terminal hosts
+currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse
+`guest::VideoThumbnails` rather than resolving the plugin on every call.
+Extract one JPEG frame from an app-owned video URI at a time offset. iOS and
+macOS use `AVAssetImageGenerator`; Android uses `MediaMetadataRetriever`;
+Windows, Linux, HarmonyOS, and the browser return `Unavailable`. Multi-frame
+extraction and custom sizes remain later scope.
 
 <!-- {/p_video_thumbnailsSummary} -->
 
@@ -966,17 +1010,19 @@ frame at a time offset; multi-frame extraction remains later scope.
 
 <!-- {@p_cameraSummary} -->
 
-Add `{{ plugin_camera.package.name }}` as a direct dependency and select the `{{ plugin_camera.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and
-terminal hosts currently omit runtime plugins, so use explicit registration in a custom
-host there. Guests enable the `guest` feature and reuse `guest::Camera` rather than
-resolving the plugin on every call. Ask for camera access through the `permissions`
-plugin; this plugin returns `PermissionDenied` or `Unavailable` when capture lacks a
-grant. iOS and macOS use `AVCaptureSession` with an `AVCaptureVideoPreviewLayer` surface,
-Android uses CameraX with a `PreviewView`, and the browser uses `getUserMedia` into an
-HTML `<video>` element; Windows, Linux, and HarmonyOS return `Unavailable`. Video
-recording is not in this MVP.
+Add `{{ plugin_camera.package.name }}` as a direct dependency and select the `{{ plugin_camera.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo
+metadata. Generated Linux hosts register it where it has a Linux Rust
+implementation; generated Windows and terminal hosts currently omit runtime
+plugins, so use explicit registration in a custom host there. Guests enable
+the `guest` feature and reuse `guest::Camera` rather than resolving the
+plugin on every call. Ask for camera access through the `permissions`
+plugin; this plugin returns `PermissionDenied` or `Unavailable` when capture
+lacks a grant. iOS and macOS use `AVCaptureSession` with an
+`AVCaptureVideoPreviewLayer` surface, Android uses `CameraX` with a
+`PreviewView`, and the browser uses `getUserMedia` into an HTML `<video>`
+element; Windows, Linux, and HarmonyOS return `Unavailable`. Video recording
+is not in this MVP.
 
 <!-- {/p_cameraSummary} -->
 
@@ -1296,11 +1342,16 @@ Add `leptoskit_plugin_live_activities` as a direct dependency and select the `li
 <!-- {@p_live_photoSummary} -->
 
 Add `{{ plugin_live_photo.package.name }}` as a direct dependency and select the
-`{{ plugin_live_photo.package.metadata.leptoskit.runtime.name }}` plugin in
-`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::LivePhoto` rather than resolving the plugin on every call. Create a session from a
-`ph://` asset id, bind it with `LivePhoto(session)`, then start or stop playback. Editing remains later scope.
+`{{ plugin_live_photo.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover
+it from Cargo metadata. Generated Linux hosts register it where it has a
+Linux Rust implementation; generated Windows and terminal hosts currently
+omit runtime plugins, so use explicit registration in a custom host there.
+Guests enable the `guest` feature and reuse `guest::LivePhoto` rather than
+resolving the plugin on every call. Create a session from an app-owned Live
+Photo asset URI, bind it with `LivePhoto(session)`, then start or stop
+playback. iOS and macOS use `PHLivePhotoView`; Android, Windows, Linux,
+HarmonyOS, and the browser return `Unavailable`. Editing and export remain
+later scope.
 
 <!-- {/p_live_photoSummary} -->
 

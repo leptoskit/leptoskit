@@ -1,0 +1,38 @@
+[package]
+name = "leptoskit_plugin_background_task"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Named OS background task registration for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "background-task"
+apple-module = "LeptosKitBackgroundTask"
+apple-type = "BackgroundTaskPlugin"
+apple-context = true
+android-type = "dev.leptoskit.plugins.backgroundtask.BackgroundTaskPlugin"
+android-context = true
+android-dependencies = ["androidx.work:work-runtime-ktx:2.9.1"]
+
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.windows]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

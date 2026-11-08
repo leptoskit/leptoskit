@@ -83,8 +83,7 @@ impl fmt::Display for ControlTreeError {
 			}
 			Self::InvalidMap => {
 				formatter.write_str(
-					"use a Map element with a session and an accessible label or \
-					 aria_hidden(true)",
+					"use a Map element with a session and an accessible label or aria_hidden(true)",
 				)
 			}
 			Self::InvalidLivePhoto => {

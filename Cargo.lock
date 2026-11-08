@@ -3542,6 +3542,7 @@ dependencies = [
  "leptoskit_plugin_arguments",
  "leptoskit_plugin_audio",
  "leptoskit_plugin_autostart",
+ "leptoskit_plugin_background_task",
  "leptoskit_plugin_badge",
  "leptoskit_plugin_barometer",
  "leptoskit_plugin_battery",
@@ -5996,6 +5997,13 @@ dependencies = [
  "libtest-mimic",
  "wasm-bindgen",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "leptoskit_plugin_background_task"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]

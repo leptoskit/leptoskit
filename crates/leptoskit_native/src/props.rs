@@ -66,7 +66,8 @@ pub enum NativeKind {
 	Camera,
 	/// A host-owned map surface; the session comes from the `map` prop.
 	Map,
-	/// A host-owned Live Photo surface; the session comes from the `live_photo` prop.
+	/// A host-owned Live Photo surface; the session comes from the `live_photo`
+	/// prop.
 	LivePhoto,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
@@ -333,8 +334,9 @@ pub struct NativeProps {
 	/// guest changes it through the `maps` plugin, never through props.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub map: Option<u32>,
-	/// The session a `LivePhoto` shows, by its id. The host owns the session; the
-	/// guest changes it through the `live-photo` plugin, never through props.
+	/// The session a `LivePhoto` shows, by its id. The host owns the session;
+	/// the guest changes it through the `live-photo` plugin, never through
+	/// props.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub live_photo: Option<u32>,
 	/// The text content of `Text`, `TextRun`, `TextInput`, and `Button`.

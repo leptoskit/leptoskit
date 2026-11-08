@@ -500,22 +500,10 @@ mod tests {
 		let camera = Camera::new(37.77, -122.42, 12.0).unwrap();
 		assert_eq!(Camera::decode(&camera.encode()), Ok(camera));
 		assert_eq!(Camera::default_pose().zoom, 2.0);
-		assert_eq!(
-			Camera::new(91.0, 0.0, 1.0),
-			Err(Error::InvalidArgument)
-		);
-		assert_eq!(
-			Camera::new(0.0, 181.0, 1.0),
-			Err(Error::InvalidArgument)
-		);
-		assert_eq!(
-			Camera::new(0.0, 0.0, 23.0),
-			Err(Error::InvalidArgument)
-		);
-		assert_eq!(
-			Camera::new(f64::NAN, 0.0, 1.0),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(Camera::new(91.0, 0.0, 1.0), Err(Error::InvalidArgument));
+		assert_eq!(Camera::new(0.0, 181.0, 1.0), Err(Error::InvalidArgument));
+		assert_eq!(Camera::new(0.0, 0.0, 23.0), Err(Error::InvalidArgument));
+		assert_eq!(Camera::new(f64::NAN, 0.0, 1.0), Err(Error::InvalidArgument));
 		assert_eq!(
 			Camera::new(0.0, f64::INFINITY, 1.0),
 			Err(Error::InvalidArgument)
@@ -538,10 +526,7 @@ mod tests {
 	#[test]
 	fn markers_status_and_unsupported_never_invent_sessions() {
 		let marker = Marker::new(1.0, 2.0, "Pin").unwrap();
-		assert_eq!(
-			Marker::new(1.0, 2.0, "a\0b"),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(Marker::new(1.0, 2.0, "a\0b"), Err(Error::InvalidArgument));
 		assert_eq!(
 			Marker::new(1.0, 2.0, "x".repeat(MAX_TITLE_BYTES + 1)),
 			Err(Error::InvalidArgument)
@@ -567,7 +552,12 @@ mod tests {
 			Err(Error::TooLarge)
 		);
 		assert_eq!(
-			SetMarkers::decode(&SetMarkers::new(SessionId(1), vec![marker]).unwrap().encode().unwrap()[..4]),
+			SetMarkers::decode(
+				&SetMarkers::new(SessionId(1), vec![marker])
+					.unwrap()
+					.encode()
+					.unwrap()[..4]
+			),
 			Err(Error::InvalidArgument)
 		);
 
@@ -640,10 +630,7 @@ mod tests {
 		let mut plugin = Unsupported;
 		assert_eq!(plugin.name(), NAME);
 		assert_eq!(plugin.methods(), METHODS);
-		assert_eq!(
-			plugin.invoke(CREATE, Bytes::new()),
-			Err(Error::Unavailable)
-		);
+		assert_eq!(plugin.invoke(CREATE, Bytes::new()), Err(Error::Unavailable));
 		assert_eq!(
 			plugin.invoke(
 				SET_CAMERA,
