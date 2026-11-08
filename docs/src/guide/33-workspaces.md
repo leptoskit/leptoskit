@@ -8,9 +8,11 @@ Inspection runs on the development machine and reads configuration for web, serv
 
 ## Multiple frontends
 
-Scaffold landing, product, and admin in one go:
+Scaffold landing, product, and admin in one go. The flag alone selects all three; list names to pick a subset (`landing`, `app`/`product`, `admin`):
 
 ```bash
+leptoskit new shop --frontends
+# same as:
 leptoskit new shop --frontends landing,app,admin
 ```
 
@@ -21,12 +23,12 @@ shop/
 ├── leptoskit.workspace.toml
 ├── README.md
 └── apps/
-    ├── landing/    # web only — marketing
-    ├── app/        # web + native hosts — product
-    └── admin/      # web only — admin console
+    ├── landing/    # web only — marketing (port 3000)
+    ├── app/        # web + native hosts — product package `shop` (port 3001)
+    └── admin/      # web only — admin console (port 3002)
 ```
 
-Each `apps/<name>` is a full leptoskit app with its own `leptoskit.toml`, ports (`3000`, `3001`, `3002`), routes, and Cargo workspace. Landing and admin omit native host crates. Build and develop from inside one app:
+Each `apps/<name>` is a full leptoskit app with its own `leptoskit.toml`, file-router routes (same defaults as `leptoskit new`), and Cargo workspace. Ports are stable per kind (order in `--frontends` does not matter). The product app under `apps/app` uses the workspace directory name as its Cargo package (`shop_app`, not `app_app`). Landing and admin omit native host crates. Build and develop from inside one app:
 
 ```bash
 cd shop/apps/landing

@@ -13,10 +13,10 @@ leptoskit dev
 For a **marketing site**, **product app**, and **admin console** as separate deployments in one repository:
 
 ```bash
-leptoskit new shop --frontends landing,app,admin
+leptoskit new shop --frontends
 ```
 
-That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/`. See [Applications in one workspace](33-workspaces.md#multiple-frontends).
+That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/` (pass `landing,app,admin` explicitly to name a subset). See [Applications in one workspace](33-workspaces.md#multiple-frontends).
 
 ## What's in the project
 

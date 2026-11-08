@@ -49,6 +49,9 @@ pub enum ApplicationKind {
 }
 
 impl ApplicationKind {
+	/// Default `--frontends` trio when the flag is passed with no values.
+	pub const DEFAULT_FRONTENDS: &'static [Self] = &[Self::Landing, Self::Product, Self::Admin];
+
 	/// The kebab/lowercase spelling written in `leptoskit.workspace.toml`.
 	#[must_use]
 	pub const fn as_str(self) -> &'static str {
@@ -72,24 +75,74 @@ impl ApplicationKind {
 		matches!(self, Self::Product)
 	}
 
+	/// Stable local `serve.port` for this kind (independent of flag order).
+	#[must_use]
+	pub const fn default_port(self) -> u16 {
+		match self {
+			Self::Landing => 3000,
+			Self::Product => 3001,
+			Self::Admin => 3002,
+			Self::Server => 3003,
+		}
+	}
+
+	/// One-line role for READMEs and `workspace explain`.
+	#[must_use]
+	pub const fn role_label(self) -> &'static str {
+		match self {
+			Self::Landing => "marketing site (web only)",
+			Self::Product => "product app (web and native hosts)",
+			Self::Admin => "admin console (web only)",
+			Self::Server => "API server",
+		}
+	}
+
 	/// Parse a frontend list entry (`landing`, `app`/`product`, `admin`).
+	///
+	/// Accepts surrounding whitespace and any ASCII letter case. Server is
+	/// not a frontend flag value; declare it by hand in the workspace file.
 	///
 	/// # Errors
 	/// Unknown names.
 	pub fn parse_frontend(name: &str) -> Result<Self, String> {
-		match name {
+		match name.trim().to_ascii_lowercase().as_str() {
 			"landing" => Ok(Self::Landing),
 			"app" | "product" => Ok(Self::Product),
 			"admin" => Ok(Self::Admin),
 			other => {
 				Err(format!(
-					"unknown frontend `{other}`; use landing, app, or admin"
+					"unknown frontend `{other}`; use landing, app, or admin (or pass --frontends \
+					 alone for all three)"
 				))
 			}
 		}
 	}
 
-	/// Default workspace application id for this kind.
+	/// Parse `--frontends` values. An empty list means
+	/// [`Self::DEFAULT_FRONTENDS`].
+	///
+	/// # Errors
+	/// Unknown names or duplicates.
+	pub fn parse_frontend_list(entries: &[String]) -> Result<Vec<Self>, String> {
+		if entries.is_empty() {
+			return Ok(Self::DEFAULT_FRONTENDS.to_vec());
+		}
+
+		let mut kinds = Vec::with_capacity(entries.len());
+		let mut seen = BTreeSet::new();
+
+		for entry in entries {
+			let kind = Self::parse_frontend(entry)?;
+			if !seen.insert(kind.application_id()) {
+				return Err(format!("duplicate frontend `{}`", kind.application_id()));
+			}
+			kinds.push(kind);
+		}
+
+		Ok(kinds)
+	}
+
+	/// Default workspace application id for this kind (`apps/<id>/`).
 	#[must_use]
 	pub const fn application_id(self) -> &'static str {
 		match self {
@@ -97,6 +150,30 @@ impl ApplicationKind {
 			Self::Product => "app",
 			Self::Admin => "admin",
 			Self::Server => "api",
+		}
+	}
+}
+
+impl std::fmt::Display for ApplicationKind {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.as_str())
+	}
+}
+
+impl std::str::FromStr for ApplicationKind {
+	type Err = String;
+
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s.trim().to_ascii_lowercase().as_str() {
+			"landing" => Ok(Self::Landing),
+			"product" | "app" => Ok(Self::Product),
+			"admin" => Ok(Self::Admin),
+			"server" => Ok(Self::Server),
+			other => {
+				Err(format!(
+					"unknown application kind `{other}`; use landing, product, admin, or server"
+				))
+			}
 		}
 	}
 }
