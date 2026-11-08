@@ -58,6 +58,7 @@ leptoskit_plugin_location = { path = "../../crates/leptoskit_plugin_location" }
 leptoskit_plugin_logging = { path = "../../crates/leptoskit_plugin_logging" }
 leptoskit_plugin_magnetometer = { path = "../../crates/leptoskit_plugin_magnetometer" }
 leptoskit_plugin_mail_composer = { path = "../../crates/leptoskit_plugin_mail_composer" }
+leptoskit_plugin_media_library = { path = "../../crates/leptoskit_plugin_media_library" }
 leptoskit_plugin_menu = { path = "../../crates/leptoskit_plugin_menu" }
 leptoskit_plugin_network = { path = "../../crates/leptoskit_plugin_network" }
 leptoskit_plugin_network_info = { path = "../../crates/leptoskit_plugin_network_info" }

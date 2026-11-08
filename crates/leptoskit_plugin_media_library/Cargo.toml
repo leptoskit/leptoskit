@@ -1,0 +1,32 @@
+[package]
+name = "leptoskit_plugin_media_library"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded photo-library list and save for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "media-library"
+apple-module = "LeptosKitMediaLibrary"
+apple-type = "MediaLibraryPlugin"
+apple-context = true
+android-type = "dev.leptoskit.plugins.medialibrary.MediaLibraryPlugin"
+android-context = true
+android-permissions = [
+	"android.permission.READ_MEDIA_IMAGES",
+	"android.permission.READ_MEDIA_VIDEO",
+]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

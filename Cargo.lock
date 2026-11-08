@@ -3576,6 +3576,7 @@ dependencies = [
  "leptoskit_plugin_logging",
  "leptoskit_plugin_magnetometer",
  "leptoskit_plugin_mail_composer",
+ "leptoskit_plugin_media_library",
  "leptoskit_plugin_menu",
  "leptoskit_plugin_network",
  "leptoskit_plugin_network_info",
@@ -6410,6 +6411,13 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_mail_composer"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_media_library"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
