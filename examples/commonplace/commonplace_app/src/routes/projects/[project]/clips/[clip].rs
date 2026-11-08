@@ -29,11 +29,13 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 			_ => Load::Loading,
 		}
 	});
+
 	let detail = match loaded {
 		Load::Ready(detail) => detail,
 		Load::Failed(message) => return view! { <ui::Problem message=&message /> },
 		Load::Idle | Load::Loading => return view! { <ui::Loading what="the clip" /> },
 	};
+
 	let back = navigation
 		.link(Project { project }, "Back to the project")
 		.child(view! { <Text class="text-amber-700">"Back to the project"</Text> });
@@ -45,6 +47,7 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 			</View>
 		};
 	};
+
 	let source = detail.source_of(clip);
 	let editing = store.with(|state| state.editing.clone().filter(|(id, _)| *id == clip_id));
 
@@ -54,6 +57,7 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 		clip.quote,
 		clip.suffix.clone().unwrap_or_default()
 	);
+
 	let note = match editing {
 		Some((_, text)) => {
 			view! {
@@ -104,6 +108,7 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 			}
 		}
 	};
+
 	let to_project = navigation.clone();
 
 	view! {
@@ -112,6 +117,8 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 			{view! { <ui::PanelCard /> }.child(view! {
 				<Text class="text-xl">{format!("\u{201c}{}\u{201d}", clip.quote)}</Text>
 			})}
+
+
 			{match source {
 				Some(source) => {
 					view! { <ui::PanelCard /> }
@@ -121,7 +128,10 @@ pub fn Page(route: &ClipPage, navigation: &Navigation) -> Element {
 				}
 				None => view! { <View /> },
 			}}
-			<ui::Section text="Your note" /> {note}
+
+
+			<ui::Section text="Your note" />
+			{note}
 			<ui::Secondary
 				label="Delete clip"
 				on_press=move || {

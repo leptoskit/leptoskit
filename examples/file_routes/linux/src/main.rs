@@ -76,6 +76,7 @@ mod application {
 		});
 		PLUGIN_WAKE.with(|plugin_wake| plugin_wake.replace(Rc::downgrade(&wake)));
 		install_events(&host, &window, &failure, &frames, &wake);
+
 		install_viewport(&host, &window, &frames, &wake);
 		let (settings, motion_listener) = install_rive_environment(&window, &frames);
 		install_development(&host, &plugins, &wasm, &frames, &wake);

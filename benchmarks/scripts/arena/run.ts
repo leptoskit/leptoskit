@@ -114,11 +114,13 @@ function list<T extends string>(
 ): T[] {
 	if (!value) return [...all];
 	const picked = value.split(",").map((item) => item.trim()) as T[];
+
 	for (const item of picked) {
 		if (!all.includes(item)) {
 			fail(`unknown value ${item}; expected one of ${all.join(", ")}`);
 		}
 	}
+
 	return picked;
 }
 
@@ -160,6 +162,7 @@ export function xcodeEnvironment(
 		!entry.startsWith("/nix/store/") && entry !== "/usr/bin"
 	);
 	kept.PATH = ["/usr/bin", ...rest, ...store].join(":");
+
 	return kept;
 }
 
@@ -184,6 +187,7 @@ export async function shell(
 		stdout: "inherit",
 		stderr: "inherit",
 	}).output();
+
 	if (!status.success) throw new Error(`command failed: ${expanded}`);
 }
 
@@ -192,6 +196,7 @@ function bootedSimulator(): string | undefined {
 		new Deno.Command("xcrun", { args: ["simctl", "list", "devices", "booted"] })
 			.outputSync().stdout,
 	);
+
 	return output.match(/\(([0-9A-F-]{36})\) \(Booted\)/)?.[1];
 }
 
@@ -202,6 +207,7 @@ async function firstAndroidDevice(): Promise<string | undefined> {
 	}/platform-tools/adb`;
 	const output = await new Deno.Command(adb, { args: ["devices"] }).output()
 		.catch(() => null);
+
 	if (!output?.success) return undefined;
 	return new TextDecoder().decode(output.stdout).split("\n").slice(1)
 		.map((line) => line.split("\t")).find(([, state]) => state === "device")
@@ -256,6 +262,7 @@ function unsupportedReason(
 	if (scenario === "echo" && platform === "web") {
 		return "the web has no native layer to call";
 	}
+
 	return descriptor.unsupported?.[scenario];
 }
 
@@ -310,18 +317,23 @@ async function measure(
 ): Promise<Map<string, Record<string, number>>> {
 	const byLane = new Map<string, Record<string, number>>();
 	let frames: PresentedFrame[] | undefined = capture.frames;
+
 	if (!frames && capture.video) {
 		frames = await presentedFrames(
 			capture.video,
 			await locateBeacon(capture.video),
 		);
 	}
+
 	const windows = frames ? phaseWindows(frames) : [];
+
 	for (const [index, report] of capture.reports.entries()) {
 		const metrics: Record<string, number> = { ...report.metrics };
+
 		if (frames) {
 			if (scenario === "cold") {
 				const ready = launchToReady(frames, capture.stillLeadIn);
+
 				if (ready !== null) metrics.launch_to_ready_ms = ready;
 			} else if (scenario === "mount") {
 				// Five rounds of create, update, clear, in order. The beacon
@@ -329,12 +341,15 @@ async function measure(
 				// that dropped one leaves the rest unmappable: report the
 				// windows only when they divide evenly into rounds.
 				const steps = ["create", "update", "clear"];
+
 				if (windows.length > 0 && windows.length % steps.length === 0) {
 					const values: Record<string, number[]> = {};
+
 					for (const [position, window] of windows.entries()) {
 						const step = steps[position % steps.length];
 						(values[step] ??= []).push((window.end - window.start) * 1000);
 					}
+
 					for (const [step, durations] of Object.entries(values)) {
 						metrics[`${step}_to_pixel_ms`] = summarise(durations).median;
 					}
@@ -349,24 +364,29 @@ async function measure(
 				const rate = effectiveRefreshHz(frames, windows[index], refreshRatesHz);
 				metrics.screen_refresh_hz = rate;
 				const stats = frameStats(frames, windows[index], rate);
+
 				for (const [key, value] of Object.entries(stats)) {
 					metrics[`screen_${key}`] = value;
 				}
 			}
 		}
+
 		if (capture.platformLaunchMs !== undefined) {
 			metrics.platform_launch_ms = capture.platformLaunchMs;
 		}
+
 		byLane.set(
 			report.lane === "tuned" ? `${scenario}.tuned` : scenario,
 			metrics,
 		);
 	}
+
 	// ARENA_KEEP_VIDEOS keeps every recording for inspection; they are large,
 	// so by default each is deleted once it has been read.
 	if (capture.video && Deno.env.get("ARENA_KEEP_VIDEOS")) {
 		log(`kept ${scenario} recording at ${capture.video}`);
 	} else if (capture.video) await Deno.remove(capture.video).catch(() => {});
+
 	return byLane;
 }
 
@@ -392,6 +412,7 @@ export function mergeResults(
 	const frameworks: Record<string, FrameworkResult> = {
 		...previous.frameworks,
 	};
+
 	for (const [name, result] of Object.entries(next.frameworks)) {
 		frameworks[name] = {
 			...result,
@@ -401,10 +422,12 @@ export function mergeResults(
 			},
 		};
 	}
+
 	const measured = new Set([
 		...Object.keys(next.frameworks),
 		...next.skipped.map((entry) => entry.framework),
 	]);
+
 	return {
 		...next,
 		frameworks,
@@ -434,6 +457,7 @@ async function main(): Promise<void> {
 	const [load] = Deno.loadavg();
 	const cpus = navigator.hardwareConcurrency ?? 1;
 	const measuring = args.flags.get("build-only") !== true;
+
 	if (measuring && load > cpus && args.flags.get("allow-busy") !== true) {
 		fail(
 			`the load average is ${
@@ -447,10 +471,12 @@ async function main(): Promise<void> {
 			ios: optionalString(args, "ios"),
 			android: optionalString(args, "android"),
 		});
+
 		if (typeof target === "string") {
 			log(`skipping ${platform}: ${target}`);
 			continue;
 		}
+
 		log(`${platform}: ${target.info.name}`);
 
 		const results: ArenaResults = {
@@ -470,6 +496,7 @@ async function main(): Promise<void> {
 		};
 		const ready: { framework: string; descriptor: Descriptor; app: string }[] =
 			[];
+
 		for (const framework of frameworks) {
 			let descriptor: Descriptor;
 			try {
@@ -479,6 +506,7 @@ async function main(): Promise<void> {
 				continue;
 			}
 			const built = installable(descriptor, platform);
+
 			if (!built) {
 				results.skipped.push({
 					framework,
@@ -487,8 +515,10 @@ async function main(): Promise<void> {
 				});
 				continue;
 			}
+
 			try {
 				const command = descriptor.targets[platform]?.build;
+
 				if (!skipBuild && command) {
 					await shell(
 						command,
@@ -497,6 +527,7 @@ async function main(): Promise<void> {
 						platform,
 					);
 				}
+
 				await target.install(built.artifact);
 			} catch (error) {
 				results.skipped.push({
@@ -531,9 +562,11 @@ async function main(): Promise<void> {
 			string,
 			Map<string, { failures: string[]; notes: Set<string> }>
 		>();
+
 		for (let round = 0; round <= runs; round += 1) {
 			const warmUp = round === 0;
 			const order = round % 2 === 1 ? ready : [...ready].reverse();
+
 			for (const scenario of scenarios) {
 				const launches = order.flatMap((entry) => [
 					{ ...entry, lane: undefined },
@@ -542,12 +575,15 @@ async function main(): Promise<void> {
 						lane,
 					})),
 				]);
+
 				for (const { framework, descriptor, app, lane } of launches) {
 					const unsupported = unsupportedReason(descriptor, scenario, platform);
 					const outcome = outcomes.get(framework)?.get(scenario) ??
 						{ failures: [], notes: new Set<string>() };
+
 					if (!outcomes.has(framework)) outcomes.set(framework, new Map());
 					outcomes.get(framework)!.set(scenario, outcome);
+
 					if (unsupported) continue;
 					log(
 						`${
@@ -572,19 +608,23 @@ async function main(): Promise<void> {
 					const failed = capture.reports.find((report: ArenaReport) =>
 						!report.ok
 					);
+
 					if (capture.reports.length === 0 || failed) {
 						outcome.failures.push(
 							failed?.error ?? `no report within ${TIMEOUT_MS[scenario]} ms`,
 						);
 						continue;
 					}
+
 					for (const report of capture.reports) {
 						for (const note of report.notes ?? []) {
 							outcome.notes.add(note);
 						}
 					}
+
 					if (warmUp) continue;
 					let lanes: Map<string, Record<string, number>>;
+
 					try {
 						lanes = await measure(
 							scenario,
@@ -597,6 +637,7 @@ async function main(): Promise<void> {
 						);
 						continue;
 					}
+
 					for (const [lane, metrics] of lanes) {
 						const perFramework = samples.get(framework) ??
 							new Map<string, Map<string, number[]>>();
@@ -604,6 +645,7 @@ async function main(): Promise<void> {
 						const perLane = perFramework.get(lane) ??
 							new Map<string, number[]>();
 						perFramework.set(lane, perLane);
+
 						for (const [key, value] of Object.entries(metrics)) {
 							if (Number.isFinite(value)) {
 								perLane.set(key, [...(perLane.get(key) ?? []), value]);
@@ -616,8 +658,10 @@ async function main(): Promise<void> {
 
 		for (const { framework, descriptor } of ready) {
 			const scenarioResults = results.frameworks[framework].scenarios;
+
 			for (const scenario of scenarios) {
 				const unsupported = unsupportedReason(descriptor, scenario, platform);
+
 				if (unsupported) {
 					scenarioResults[scenario] = {
 						status: "unsupported",
@@ -627,11 +671,14 @@ async function main(): Promise<void> {
 					};
 					continue;
 				}
+
 				const outcome = outcomes.get(framework)?.get(scenario);
+
 				const lanes = [...(samples.get(framework)?.entries() ?? [])]
 					.filter(([lane]) =>
 						lane === scenario || lane === `${scenario}.tuned`
 					);
+
 				if (lanes.length === 0) {
 					scenarioResults[scenario] = {
 						status: "failed",
@@ -641,6 +688,7 @@ async function main(): Promise<void> {
 					};
 					continue;
 				}
+
 				for (const [lane, metrics] of lanes) {
 					scenarioResults[lane] = {
 						status: "ok",

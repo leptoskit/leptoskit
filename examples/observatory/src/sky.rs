@@ -137,6 +137,7 @@ pub fn observations() -> Vec<Observation> {
 	for night in 1..=NIGHTS {
 		let count = 40 + random.below(32);
 		let mut minute = 0;
+
 		for _ in 0..count {
 			minute += 2 + random.below(10) as u16;
 			log.push(Observation {

@@ -26,17 +26,22 @@ pub(crate) async fn work(
 	wake: Arc<tokio::sync::Notify>,
 ) {
 	let mut maintenance = std::time::Instant::now();
+
 	if store.maintain().is_err() {
 		return;
 	}
+
 	loop {
 		if maintenance.elapsed().as_secs() >= 60 {
 			if store.maintain().is_err() {
 				return;
 			}
+
 			maintenance = std::time::Instant::now();
 		}
+
 		let next = store.claim();
+
 		match next {
 			Ok(Some(operation)) => {
 				let project = store
