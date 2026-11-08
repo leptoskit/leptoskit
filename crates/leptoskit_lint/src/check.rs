@@ -224,6 +224,10 @@ impl Checker<'_> {
 
 	/// Reports a tree written in the style the project does not use, once
 	/// at its root.
+	///
+	/// Markup whose root is ordinary HTML (the SSR document `shell`, for
+	/// example) is not a leptoskit component tree: builder mode does not ask
+	/// agents to rewrite `<html>` into a component call.
 	fn check_markup_style(&mut self, tree: &Tree) {
 		let expected = match tree.written {
 			Written::Builder => MarkupStyle::Builder,
@@ -254,6 +258,10 @@ impl Checker<'_> {
 				);
 			}
 			Written::Markup => {
+				if !self.components.contains(name) {
+					return;
+				}
+
 				self.report(
 					Rule::MarkupStyle,
 					tree.span,

@@ -11,7 +11,7 @@ The `leptoskit` command (or `lk`) does the work. Run it from the project root. `
 
 | Task                        | Command                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------ |
-| Start a project             | `leptoskit new my_app` (`--db sqlite`, `--extension`)                                      |
+| Start a project             | `leptoskit new my_app` (`--db postgres` / `sqlite`, `--extension`, `--auth`)               |
 | Check the machine           | `leptoskit doctor` (per-platform tools; `--all` for every platform this machine can build) |
 | Run every platform, live    | `leptoskit dev` (`--platform web`, `ios`, `extension`, …)                                  |
 | Build one platform          | `leptoskit build --platform <platform> [--release]`                                        |
@@ -50,7 +50,7 @@ When you write leptoskit code, write builder calls, not `view!` markup:
 
 ### Enforce it in the projects you work on
 
-`leptoskit lint` checks the markup style from `leptoskit.toml`. In a project you create, or one whose owner asks you to work this way, make builders the rule and a `view!` an error:
+`leptoskit lint` checks the markup style from `leptoskit.toml`. In a project you create, or one whose owner asks you to work this way, make builders the rule and a `view!` an error for **portable UI** (screens and reusable components):
 
 ```toml
 [lint]
@@ -61,7 +61,13 @@ markup_style = "deny"
 component_attribute = "deny"
 ```
 
-Then rewrite leptoskit UI trees the lint reports (including the starter home screen) as builders, and keep `leptoskit lint --deny-warnings` passing. Leave the web document `shell` in leptos `view!` (`<html>`, `<head>`, `HydrationScripts`, …): that is HTML for the SSR document, not a leptoskit component tree. Silence the shell with `// leptoskit-lint: allow(markup_style)` on the line immediately above the reported tag (usually `<html>`), not above the function. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
+Rewrite any leptoskit component `view!` the lint reports (the starter home screen already uses builders). The SSR document `shell` in `*_app/src/lib.rs` stays as `leptos::view!` HTML (`<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, hydration scripts)—that is not a leptoskit component tree, and builder-mode lint does not ask you to rewrite it. Keep `leptoskit lint --deny-warnings` passing. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
+
+### Match the CLI to the crates
+
+`leptoskit new` writes templates for **this** CLI version. Depend on the same leptoskit release in Cargo.toml (`cargo install leptoskit_cli --version …` matching the crate), or pass `--sdk-path` to a local checkout when the CLI itself was built from that checkout. Mixing a checkout CLI with crates.io crates (or the reverse) leaves scaffolds that do not compile.
+
+`--sdk-path` puts the SDK outside the app workspace. `lk infra generate` and `leptoskit generate deploy` need every path dependency inside the workspace for the container build context—use a released (non-path) dependency before generating deploy/infra Dockerfiles, or keep OpenTofu output and use a documented deploy path that does not need those path crates.
 
 ## Components
 

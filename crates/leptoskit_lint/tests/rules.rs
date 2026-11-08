@@ -70,6 +70,40 @@ fn builder_projects_report_markup_instead() {
 }
 
 #[test]
+fn builder_projects_keep_the_ssr_html_document_shell() {
+	let config = "[lint]\nmarkup = \"builder\"\n[lint.rules]\nmarkup_style = \"deny\"\n";
+	let source = r#"
+#[component]
+fn App() -> impl IntoView {
+	Text("Hi").class("text-base")
+}
+
+pub fn shell(options: leptos::config::LeptosOptions) -> impl leptos::prelude::IntoView {
+	leptos::view! {
+		<!DOCTYPE html>
+		<html lang="en">
+			<head>
+				<meta charset="utf-8" />
+				<title>"notes"</title>
+				<HydrationScripts options />
+			</head>
+			<body>
+				<App />
+			</body>
+		</html>
+	}
+}
+"#;
+	let report = lint(Some(config), source);
+	assert!(
+		!rules(&report)
+			.iter()
+			.any(|(rule, _)| *rule == Rule::MarkupStyle),
+		"HTML document tags must not trip markup_style under builder mode: {report:?}"
+	);
+}
+
+#[test]
 fn any_markup_allows_both() {
 	let config = "[lint]\nmarkup = \"any\"\n";
 	assert_eq!(rules(&lint(Some(config), BUILDER_TREE)), []);
