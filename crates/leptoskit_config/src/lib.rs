@@ -972,6 +972,9 @@ pub struct NativeConfig {
 	/// The Meta Quest build's settings.
 	#[serde(skip_serializing_if = "QuestConfig::is_default")]
 	pub quest: QuestConfig,
+	/// How a release iOS build is signed and exported.
+	#[serde(skip_serializing_if = "IosConfig::is_default")]
+	pub ios: IosConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -999,8 +1002,118 @@ impl Default for NativeConfig {
 				NativeTarget::Android,
 			],
 			quest: QuestConfig::default(),
+			ios: IosConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
+		}
+	}
+}
+
+/// How `leptoskit build --release --platform ios` signs the app and exports
+/// its `.ipa`. Only settings that aren't secret live here: the team, the
+/// signing identity, the provisioning profile, and the App Store Connect key
+/// come from the environment.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct IosConfig {
+	/// Whether Xcode manages the certificate and provisioning profile
+	/// (`automatic`), or the build names them (`manual`).
+	/// `LEPTOSKIT_IOS_SIGNING_STYLE` overrides it for one build.
+	pub signing_style: SigningStyle,
+	/// Who the `.ipa` is for: `app-store-connect` (the default), `ad-hoc`
+	/// for registered devices, or `development`. `--export-method`
+	/// overrides it for one build.
+	pub export_method: ExportMethod,
+}
+
+impl IosConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// How Xcode signs a release iOS build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum SigningStyle {
+	/// Xcode picks the certificate and makes the provisioning profile,
+	/// signed in with an App Store Connect API key or the account in Xcode.
+	#[default]
+	Automatic,
+	/// The build names the signing identity and the provisioning profile,
+	/// which must already be installed on the machine.
+	Manual,
+}
+
+impl fmt::Display for SigningStyle {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(match self {
+			Self::Automatic => "automatic",
+			Self::Manual => "manual",
+		})
+	}
+}
+
+impl std::str::FromStr for SigningStyle {
+	type Err = ConfigError;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		match value {
+			"automatic" => Ok(Self::Automatic),
+			"manual" => Ok(Self::Manual),
+			other => Err(ConfigError::UnknownSigningStyle(other.to_owned())),
+		}
+	}
+}
+
+/// Who a release iOS build's `.ipa` is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ExportMethod {
+	/// TestFlight and the App Store.
+	#[default]
+	AppStoreConnect,
+	/// The devices registered in the provisioning profile.
+	AdHoc,
+	/// Development devices, signed with a development certificate.
+	Development,
+}
+
+impl ExportMethod {
+	/// The `method` Xcode's `ExportOptions.plist` takes for it, in the names
+	/// Xcode 15.3 and later use.
+	#[must_use]
+	pub fn xcode_method(self) -> &'static str {
+		match self {
+			Self::AppStoreConnect => "app-store-connect",
+			Self::AdHoc => "release-testing",
+			Self::Development => "debugging",
+		}
+	}
+}
+
+impl fmt::Display for ExportMethod {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(match self {
+			Self::AppStoreConnect => "app-store-connect",
+			Self::AdHoc => "ad-hoc",
+			Self::Development => "development",
+		})
+	}
+}
+
+impl std::str::FromStr for ExportMethod {
+	type Err = ConfigError;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		match value {
+			"app-store-connect" => Ok(Self::AppStoreConnect),
+			"ad-hoc" => Ok(Self::AdHoc),
+			"development" => Ok(Self::Development),
+			other => Err(ConfigError::UnknownExportMethod(other.to_owned())),
 		}
 	}
 }
@@ -3375,6 +3488,12 @@ pub enum ConfigError {
 	/// An unknown optimization level was requested.
 	#[error("unknown optimize level `{0}`; expected fast or smallest")]
 	UnknownOptimize(String),
+	/// An unknown iOS signing style was requested.
+	#[error("unknown signing style `{0}`; expected automatic or manual")]
+	UnknownSigningStyle(String),
+	/// An unknown iOS export method was requested.
+	#[error("unknown export method `{0}`; expected app-store-connect, ad-hoc, or development")]
+	UnknownExportMethod(String),
 	/// Code push is enabled but has no release registry to talk to.
 	#[error("codepush.enabled is true but codepush.server is empty; set the release registry URL")]
 	CodePushServerMissing,

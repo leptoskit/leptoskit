@@ -74,6 +74,7 @@ pub fn command(
 	platform: Option<Platform>,
 	optimize: Option<Optimize>,
 	out: &str,
+	options: crate::native::signing::ReleaseOptions,
 ) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	let platform = platform.unwrap_or(config.app.default_platform);
@@ -98,6 +99,7 @@ pub fn command(
 		return crate::native::run(crate::native::NativeCommand::Build {
 			target: crate::native::Target::from_platform(platform)?,
 			release,
+			options,
 		});
 	}
 
@@ -112,7 +114,11 @@ pub fn command(
 		);
 		let target = crate::native::legacy_target(&root, &config);
 
-		return crate::native::run(crate::native::NativeCommand::Build { target, release });
+		return crate::native::run(crate::native::NativeCommand::Build {
+			target,
+			release,
+			options,
+		});
 	}
 	run(release, Some(platform), optimize, out).map(drop)
 }

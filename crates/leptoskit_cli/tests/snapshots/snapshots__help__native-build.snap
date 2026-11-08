@@ -1,8 +1,11 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 229
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-Produces an Apple, Windows, or Linux application, Android APK, or HarmonyOS HAP
+Produces an Apple, Windows, or Linux application, Android APK, or HarmonyOS HAP.
+
+A release for Android, Meta Quest, or an iOS device is signed for its store, with the signing material from the environment.
 
 Usage: leptoskit native build [OPTIONS] <TARGET>
 
@@ -26,6 +29,15 @@ Arguments:
 Options:
       --release
           
+
+      --unsigned
+          Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built
+
+      --export-method <EXPORT_METHOD>
+          Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or development. Defaults to `native.ios.export-method`
+
+      --build-number <BUILD_NUMBER>
+          The release's build number: Android's `versionCode`, and iOS's `CFBundleVersion`. Each store upload needs a higher one
 
   -h, --help
           Print help (see a summary with '-h')

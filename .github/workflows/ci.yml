@@ -1343,23 +1343,23 @@ jobs:
       # boots so the device step only installs and launches it. It is the one
       # app CI runs through R8, which strips the Kotlin the JNI library calls
       # by name unless the generated keep rules cover it; such an app builds
-      # and then crashes at launch. Gradle leaves release APKs unsigned, so a
-      # throwaway key signs it for the emulator.
+      # and then crashes at launch. A release build is signed or not built, so
+      # a throwaway upload key, handed over in the environment as a store
+      # release's would be, signs it for the emulator; the CLI checks the APK
+      # and App Bundle it collects are signed.
       - name: build the file routes example app
         shell: bash
         run: |
           set -euo pipefail
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
           cli="$PWD/target/debug/leptoskit"
-          build_tools="${ANDROID_HOME}/build-tools/36.0.0"
-          cd examples/file_routes
-          "$cli" native build android-x86_64 --release
-          "$build_tools/zipalign" -f -p 16 android/app/build/outputs/apk/release/app-release-unsigned.apk \
-            "$RUNNER_TEMP/field-aligned.apk"
           keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/field.jks" -storepass android -keypass android \
             -alias field -keyalg RSA -validity 1 -dname CN=field
-          "$build_tools/apksigner" sign --ks "$RUNNER_TEMP/field.jks" --ks-pass pass:android \
-            --out "$RUNNER_TEMP/field-release.apk" "$RUNNER_TEMP/field-aligned.apk"
+          cd examples/file_routes
+          LEPTOSKIT_ANDROID_KEYSTORE="$RUNNER_TEMP/field.jks" LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD=android \
+            LEPTOSKIT_ANDROID_KEY_ALIAS=field LEPTOSKIT_ANDROID_KEY_PASSWORD=android \
+            "$cli" native build android-x86_64 --release
+          cp .leptoskit/release/android-x86_64/file_routes_example-*.apk "$RUNNER_TEMP/field-release.apk"
 
       - name: run the widget journey on Android
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2

@@ -165,6 +165,7 @@ fn insertion_order_cannot_change_startup_order() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn optional_kind_names_frontend_roles() {
 	use std::str::FromStr as _;
 
@@ -220,7 +221,7 @@ kind = "server"
 	] {
 		assert_eq!(ApplicationKind::from_str(kind.as_str()).unwrap(), kind);
 		assert_eq!(kind.to_string(), kind.as_str());
-		assert!(!kind.role_label().is_empty());
+		assert_ne!(kind.role_label(), "");
 	}
 	assert_eq!(
 		ApplicationKind::from_str("app").unwrap(),

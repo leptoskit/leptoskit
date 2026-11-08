@@ -76,6 +76,7 @@
   - [Any OpenID Connect provider](guide/auth/providers/oidc.md)
   - [Solana wallets](guide/auth/wallets.md)
   - [Merging accounts](guide/auth/merging.md)
+- [Signing a release](guide/24-signing.md)
 - [Publishing to the stores](guide/24-publishing.md)
 - [Sign in with your app](guide/25-sign-in-with-your-app.md)
 

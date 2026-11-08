@@ -815,6 +815,7 @@ fn build_debug_app(root: &Path, target: Target) -> Result<Vec<u8>> {
 	crate::native::run(NativeCommand::Build {
 		target,
 		release: false,
+		options: crate::native::signing::ReleaseOptions::default(),
 	})?;
 	crate::native::built_guest(root, target)
 }

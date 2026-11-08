@@ -332,6 +332,8 @@ pub enum Command {
 		/// The output directory, relative to the project root.
 		#[arg(long, default_value = "dist")]
 		out: String,
+		#[command(flatten)]
+		options: crate::native::signing::ReleaseOptions,
 	},
 	/// Serves the built output.
 	Serve {
@@ -857,7 +859,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			platform,
 			optimize,
 			out,
-		} => build::command(release, platform, optimize, &out),
+			options,
+		} => build::command(release, platform, optimize, &out, options),
 		Command::Serve { dir, port } => serve_cmd::run(&dir, port),
 		Command::Services { json } => crate::services::command(json),
 		Command::Routes { check } => routes::command(check),
