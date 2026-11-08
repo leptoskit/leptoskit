@@ -125,12 +125,18 @@ class ImagePickerPlugin(
             addCategory(Intent.CATEGORY_OPENABLE)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             when (media) {
-                VIDEOS -> type = "video/*"
+                VIDEOS -> {
+                    type = "video/*"
+                }
+
                 ALL -> {
                     type = "*/*"
                     putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
                 }
-                else -> type = "image/*"
+
+                else -> {
+                    type = "image/*"
+                }
             }
         }
 

@@ -49,7 +49,9 @@ class SmsPlugin(
                 encode(availability())
             }
 
-            else -> present(SmsCompose.decode(payload))
+            else -> {
+                present(SmsCompose.decode(payload))
+            }
         }
     }
 
@@ -74,10 +76,11 @@ class SmsPlugin(
         busy = true
 
         try {
-            val intent = Intent(Intent.ACTION_SENDTO).apply {
-                data = Uri.parse(smsUri(compose.recipients))
-                if (compose.body.isNotEmpty()) putExtra("sms_body", compose.body)
-            }
+            val intent =
+                Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse(smsUri(compose.recipients))
+                    if (compose.body.isNotEmpty()) putExtra("sms_body", compose.body)
+                }
             val result = host.launchPluginActivity(intent)
 
             currentCoroutineContext().ensureActive()
@@ -107,11 +110,14 @@ class SmsPlugin(
             !it.isFinishing && !it.isDestroyed && it.window?.decorView?.isAttachedToWindow == true
         }
 
-    private fun smsUri(recipients: List<String>): String =
-        "smsto:" + recipients.joinToString(";") { Uri.encode(it) }
+    private fun smsUri(recipients: List<String>): String = "smsto:" + recipients.joinToString(";") { Uri.encode(it) }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private fun checkMain() {
         check(Looper.myLooper() == Looper.getMainLooper())

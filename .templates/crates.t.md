@@ -1439,3 +1439,26 @@ Storage, describe caching strategies, and manage Web Push subscriptions.
 Outside a browser every call returns `Unavailable`.
 
 <!-- {/serviceWorkerSummary} -->
+
+<!-- {@platformSummary} -->
+
+Contracts for platform extension crates: a versioned manifest, a capability
+matrix, and scaffold file lists. In-tree and (later) out-of-tree shells
+implement these so the CLI can grow destinations without baking every OS
+into `leptoskit_config`.
+
+<!-- {/platformSummary} -->
+
+<!-- {@harmonyosPlatformSummary} -->
+
+HarmonyOS platform extension: ArkUI host templates and the capability
+manifest the CLI and docs use for the experimental destination.
+
+<!-- {/harmonyosPlatformSummary} -->
+
+<!-- {@oculusPlatformSummary} -->
+
+Experimental Meta Quest / Oculus platform extension: host stubs and the
+capability manifest. Packaging and `OpenXR` install are not implemented yet.
+
+<!-- {/oculusPlatformSummary} -->

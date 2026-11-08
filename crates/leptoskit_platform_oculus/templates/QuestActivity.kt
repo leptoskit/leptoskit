@@ -8,8 +8,8 @@ package __PACKAGE_ID__
  * Packaging and the OpenXR session loop are not wired yet.
  */
 class QuestActivity {
-	companion object {
-		const val STATUS: String = "experimental-stub"
-		const val PLATFORM: String = "oculus"
-	}
+    companion object {
+        const val STATUS: String = "experimental-stub"
+        const val PLATFORM: String = "oculus"
+    }
 }

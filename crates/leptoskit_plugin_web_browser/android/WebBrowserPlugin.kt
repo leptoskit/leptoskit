@@ -4,8 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Looper
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.browser.customtabs.CustomTabsClient
+import androidx.browser.customtabs.CustomTabsIntent
 import dev.leptoskit.bridge.NativeActivityResultHost
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
@@ -49,7 +49,9 @@ class WebBrowserPlugin(
                 encode(availability())
             }
 
-            else -> open(WebBrowserOpen.decode(payload))
+            else -> {
+                open(WebBrowserOpen.decode(payload))
+            }
         }
     }
 
@@ -76,9 +78,10 @@ class WebBrowserPlugin(
         busy = true
 
         try {
-            val intent = CustomTabsIntent.Builder().build().intent.apply {
-                data = Uri.parse(request.url)
-            }
+            val intent =
+                CustomTabsIntent.Builder().build().intent.apply {
+                    data = Uri.parse(request.url)
+                }
             val result = host.launchPluginActivity(intent)
 
             currentCoroutineContext().ensureActive()
@@ -101,7 +104,11 @@ class WebBrowserPlugin(
         }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private fun checkMain() {
         check(Looper.myLooper() == Looper.getMainLooper())

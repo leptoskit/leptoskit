@@ -3,7 +3,7 @@
 "leptoskit_plugin_application": minor
 ---
 
-# Device and package details from Flutter's device_info_plus and package_info_plus
+# Device and package details, as in device_info_plus
 
 `leptoskit_plugin_device` now reports what Flutter's `device_info_plus` does. Every platform adds a model identifier (`iPhone15,2`, `Mac14,2`), kernel release, available memory, data-volume size and free space, and CPU count, and a new `Snapshot::platform` section carries one platform's own details: Android `Build` fields (SDK and preview SDK level, security patch, fingerprint, `Build.ID`, board, ABI lists, sorted system features, low-RAM class), Apple flags (iOS app on Mac or Vision, Mac Catalyst, OS build, CPU frequency, localized model), Windows release registry values, Linux `os-release` fields, and browser client-hint brands. `web::high_entropy_values()` asks the browser for its detailed hints only when you call it.
 
