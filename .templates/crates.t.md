@@ -372,6 +372,17 @@ physical hardware.
 
 <!-- {/p_batterySummary} -->
 
+<!-- {@p_cellularSummary} -->
+
+Add `{{ plugin_cellular.package.name }}` as a direct dependency and select the `{{ plugin_cellular.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Cellular` rather than resolving the plugin on every call. Carrier name, MCC/MNC, radio generation, and
+`VoIP` allowance stay Unknown, Unavailable, or Restricted when the platform
+does not expose them — values are never invented.
+
+<!-- {/p_cellularSummary} -->
+
 <!-- {@p_brightnessSummary} -->
 
 Add `{{ plugin_brightness.package.name }}` as a direct dependency and select the `{{ plugin_brightness.package.metadata.leptoskit.runtime.name }}`
@@ -501,6 +512,17 @@ worker so a batch takes one bridge round trip; browser calls use the same engine
 to Wasm, and large jobs belong in a Web Worker.
 
 <!-- {/p_image_manipulatorSummary} -->
+
+<!-- {@p_image_pickerSummary} -->
+
+Add `{{ plugin_image_picker.package.name }}` as a direct dependency and select the
+`{{ plugin_image_picker.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover
+it from Cargo metadata. Generated Windows and terminal hosts currently omit
+runtime plugins, so use explicit registration in a custom host there. The user picks one library image or video;
+the app receives a temporary URI and metadata under a size limit, never a persistent gallery grant. Camera capture
+is deferred to a later `camera` plugin.
+
+<!-- {/p_image_pickerSummary} -->
 
 <!-- {@p_keep_awakeSummary} -->
 
