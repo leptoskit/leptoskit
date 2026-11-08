@@ -48,7 +48,8 @@ impl Video {
 	pub fn create(self, source: &Source) -> Result<PlayerId, Error> {
 		let element = document_video()?;
 		element.set_src(source.as_str());
-		element.set_plays_inline(true);
+		// web-sys has no playsInline setter; the attribute is the portable API.
+		let _ = element.set_attribute("playsinline", "");
 		let id = NEXT_ID.with(|next| {
 			let id = *next.borrow();
 			*next.borrow_mut() = id.saturating_add(1).max(1);
@@ -88,7 +89,7 @@ impl Video {
 	/// Pauses playback.
 	pub fn pause(self, player: PlayerId) -> Result<(), Error> {
 		with_player(player, |player| {
-			player.element.pause();
+			let _ = player.element.pause();
 			Ok(())
 		})
 	}
@@ -280,8 +281,119 @@ fn attach_surfaces() {
 				surface.set_muted(player.muted);
 				surface.set_loop(player.looping);
 				surface.set_playback_rate(player.rate);
-				surface.set_plays_inline(true);
+				let _ = surface.set_attribute("playsinline", "");
 			}
 		}
 	});
+}
+
+#[cfg(test)]
+mod tests {
+	use wasm_bindgen_test::wasm_bindgen_test;
+
+	use super::*;
+	use crate::RATE_NORMAL;
+
+	wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+	#[wasm_bindgen_test]
+	fn create_controls_status_and_release() {
+		let video = Video;
+		let source = Source::url("https://example.com/clip.mp4").unwrap();
+		let id = video.create(&source).unwrap();
+		video
+			.replace(id, &Source::url("https://example.com/other.mp4").unwrap())
+			.unwrap();
+		video.set_muted(id, true).unwrap();
+		video.set_loop(id, true).unwrap();
+		video.set_rate(id, 1_250).unwrap();
+		video.seek(id, 250).unwrap();
+		let _ = video.play(id);
+		video.pause(id).unwrap();
+		let status = video.status(id).unwrap();
+		assert!(!status.playing);
+		assert_eq!(
+			video.release(PlayerId(id.0.wrapping_add(99))),
+			Err(Error::InvalidArgument)
+		);
+		video.release(id).unwrap();
+		assert_eq!(video.status(id), Err(Error::InvalidArgument));
+	}
+
+	#[wasm_bindgen_test]
+	fn invoke_round_trips_and_rejects_unknown() {
+		let video = Video;
+		let create = Source::url("https://example.com/a.mp4")
+			.unwrap()
+			.encode()
+			.unwrap();
+		let id_bytes = video.invoke(CREATE.0, &create).unwrap();
+		let id = PlayerId::decode(&id_bytes).unwrap();
+		let replace =
+			Source::encode_replace(id, &Source::url("https://example.com/b.mp4").unwrap()).unwrap();
+		assert!(video.invoke(REPLACE.0, &replace).is_ok());
+		assert!(
+			video
+				.invoke(PLAY.0, &PlayerCommand { player: id }.encode())
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(PAUSE.0, &PlayerCommand { player: id }.encode())
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(SEEK.0, &Seek::new(id, 10).unwrap().encode())
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(
+					SET_MUTED.0,
+					&PlayerFlag {
+						player: id,
+						enabled: false
+					}
+					.encode()
+				)
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(
+					SET_LOOP.0,
+					&PlayerFlag {
+						player: id,
+						enabled: false
+					}
+					.encode()
+				)
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(SET_RATE.0, &Rate::new(id, RATE_NORMAL).unwrap().encode())
+				.is_ok()
+		);
+		assert!(
+			video
+				.invoke(STATUS.0, &PlayerCommand { player: id }.encode())
+				.is_ok()
+		);
+		assert_eq!(video.invoke(99, &[]), Err(Error::Unavailable));
+		assert!(
+			video
+				.invoke(RELEASE.0, &PlayerCommand { player: id }.encode())
+				.is_ok()
+		);
+	}
+
+	#[test]
+	fn seconds_to_ms_bounds() {
+		assert_eq!(seconds_to_ms(f64::NAN), TIME_UNKNOWN);
+		assert_eq!(seconds_to_ms(-1.0), TIME_UNKNOWN);
+		assert_eq!(seconds_to_ms(1.5), 1_500);
+		assert_eq!(seconds_to_ms(f64::from(u32::MAX)), TIME_UNKNOWN);
+	}
 }

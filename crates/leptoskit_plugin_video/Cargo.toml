@@ -37,11 +37,9 @@ guest = ["leptoskit_bridge/guest"]
 leptoskit_bridge = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-futures = { workspace = true }
-gloo-events = "0.2"
 js-sys = "0.3"
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "HtmlMediaElement", "HtmlVideoElement", "MediaError", "Node", "Window"] }
+web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "HtmlMediaElement", "HtmlVideoElement", "MediaError", "Node", "NodeList", "Window"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

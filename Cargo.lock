@@ -6644,8 +6644,6 @@ dependencies = [
 name = "leptoskit_plugin_video"
 version = "0.3.0"
 dependencies = [
- "futures",
- "gloo-events",
  "js-sys",
  "leptoskit_bridge",
  "wasm-bindgen",
