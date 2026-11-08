@@ -74,7 +74,7 @@ pub fn Turntable() -> Element {
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
-	leptos::mount::mount_to_body(|| leptoskit::web::render(Turntable()));
+	leptos::mount::mount_to_body(|| leptoskit::web::render(view! { <Turntable /> }));
 	wasm_bindgen_futures::spawn_local(async {
 		let scene = Scene::new(SCENE);
 		build(&scene);
