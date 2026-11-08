@@ -308,6 +308,12 @@ real system sensors, desktop has no sensor, and the browser uses Generic Sensor 
 
 <!-- {/p_accelerometerSummary} -->
 
+<!-- {@p_android_alarm_managerSummary} -->
+
+Add `{{ plugin_android_alarm_manager.package.name }}` as a direct dependency and select the `{{ plugin_android_alarm_manager.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; the generated Android host discovers it from Cargo metadata and declares its alarm and boot receivers and its `SCHEDULE_EXACT_ALARM` and `RECEIVE_BOOT_COMPLETED` permissions. Guests enable the `guest` feature and keep one `guest::AndroidAlarmManager`. It schedules one-shot and repeating Android `AlarmManager` alarms by integer ID, with exact, wakeup, allow-while-idle, alarm-clock and reschedule-on-reboot options, and keeps scheduled and fired alarms in an on-device store that survives process death. Guests wait for or drain fired alarms, and an alarm marked `headless` starts the guest without UI when the app isn't running. iOS, macOS, Windows, Linux, HarmonyOS and the browser return `Unavailable`: they have no equivalent that runs app code at a set time.
+
+<!-- {/p_android_alarm_managerSummary} -->
+
 <!-- {@p_android_intentSummary} -->
 
 Add `{{ plugin_android_intent.package.name }}` as a direct dependency and select the

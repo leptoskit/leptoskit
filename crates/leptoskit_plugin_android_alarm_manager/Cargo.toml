@@ -1,0 +1,48 @@
+[package]
+name = "leptoskit_plugin_android_alarm_manager"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Android AlarmManager alarms, a durable fired-alarm queue and headless alarm handlers for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "android_alarm_manager"
+android-type = "dev.leptoskit.plugins.androidalarmmanager.AndroidAlarmManagerPlugin"
+android-context = true
+android-permissions = ["android.permission.SCHEDULE_EXACT_ALARM", "android.permission.RECEIVE_BOOT_COMPLETED"]
+android-receivers = [
+	{ name = "dev.leptoskit.plugins.androidalarmmanager.AlarmReceiver" },
+	{ name = "dev.leptoskit.plugins.androidalarmmanager.AlarmRestoreReceiver", actions = ["android.intent.action.BOOT_COMPLETED", "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"] },
+]
+
+[package.metadata.leptoskit.runtime.ios]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.macos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.windows]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.tui]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

@@ -35,6 +35,8 @@ The reserved `leptoskit.timer` plugin gives a guest real sleeps without a new Wa
 
 The compiled `examples/timer_guest` fixture uses the same local executor pattern as generated apps and no custom sleep provider. Its two `leptoskit_wasm` acceptance tests cover delayed retries, cache expiry, interval polling, pause/resume when focus is reported, cancellation after observer cleanup, and missing-timer error/cache retention. `test:plugins:guest` builds and executes this fixture; it respects `CARGO_TARGET_DIR`. This is interpreter and query-runtime evidence, not proof that every native shell reports lifecycle events or wakes correctly on a device.
 
+Android can also run a guest with no window. `NativeHeadlessGuest` creates the `App`, registers the generated plugins with whatever `Context` the caller passes, starts the guest at the display's size, drops its render transactions and Rive frames, and closes through the same sequence as `LeptosKitView`. A receiver or service uses it to run app code while no Activity exists; `android_alarm_manager` is the first caller. `docs/agents/plugin-port-inventory.md` has the design and its gaps (code push, work longer than a broadcast allows). Plugins that declare receivers do so with `android-receivers` runtime metadata; the generated manifest declares each one, unexported unless the entry sets `exported`.
+
 ### Resource limits and errors
 
 Bridge defaults are 128 outstanding calls, 256 buffered events, 8 MiB per payload and 32 MiB of buffered bytes. Unread replies and unobserved running-call cancellations retain call slots. Producers receive `Busy` when an event queue is full; adapters may explicitly define coalescing instead of silently dropping arbitrary events.

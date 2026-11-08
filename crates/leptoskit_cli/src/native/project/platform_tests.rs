@@ -121,6 +121,7 @@ fn assert_android_sources(root: &Path, registry: &Registry) {
 		"NativeTextMeasurer.kt",
 		"NativeApplicationTeardown.kt",
 		"NativeRustAsync.kt",
+		"NativeHeadlessGuest.kt",
 	] {
 		assert!(
 			root.join(".leptoskit/android/sources").join(name).is_file(),

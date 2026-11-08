@@ -173,6 +173,17 @@ android-query-intents = [
 
 The generated manifest adds the action and scheme together in one `<intent>`. An existing action-only query does not replace this declaration. Your own queries remain in place, including queries for particular hosts or categories.
 
+A plugin whose Kotlin code must run while the app is closed, such as when an alarm fires or the device finishes booting, declares its broadcast receivers:
+
+```toml
+android-receivers = [
+	{ name = "dev.leptoskit.plugins.androidalarmmanager.AlarmReceiver" },
+	{ name = "dev.leptoskit.plugins.androidalarmmanager.AlarmRestoreReceiver", actions = ["android.intent.action.BOOT_COMPLETED"] },
+]
+```
+
+The generated manifest declares each receiver inside `<application>` with an intent filter for each of its actions. Receivers are unexported unless the entry sets `exported = true`. Android still delivers its own broadcasts, such as `BOOT_COMPLETED`, and the app's explicit intents to an unexported receiver; other apps cannot reach it. A receiver your manifest already declares by name is left as you wrote it.
+
 ### Third-party dependencies
 
 A plugin often wraps a library the platform's package managers ship: Firebase on iOS, Google Play's review library on Android. Declare the dependency in the plugin's crate and leptoskit installs it with the platform's own tools; the app never runs a package manager by hand.

@@ -244,6 +244,7 @@ leptoskit_platform_harmonyos = { path = "crates/leptoskit_platform_harmonyos", v
 leptoskit_platform_oculus = { path = "crates/leptoskit_platform_oculus", version = "0.3.0" }
 leptoskit_plugin = { path = "crates/leptoskit_plugin", version = "0.3.0" }
 leptoskit_plugin_accelerometer = { path = "crates/leptoskit_plugin_accelerometer", version = "0.3.0" }
+leptoskit_plugin_android_alarm_manager = { path = "crates/leptoskit_plugin_android_alarm_manager", version = "0.3.0" }
 leptoskit_plugin_android_intent = { path = "crates/leptoskit_plugin_android_intent", version = "0.3.0" }
 leptoskit_plugin_app_shortcuts = { path = "crates/leptoskit_plugin_app_shortcuts", version = "0.3.0" }
 leptoskit_plugin_application = { path = "crates/leptoskit_plugin_application", version = "0.3.0" }

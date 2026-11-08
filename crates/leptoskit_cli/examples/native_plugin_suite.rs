@@ -81,6 +81,10 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("mail-composer", "leptoskit_plugin_mail_composer"),
 	("web-browser", "leptoskit_plugin_web_browser"),
 	("audio", "leptoskit_plugin_audio"),
+	(
+		"android_alarm_manager",
+		"leptoskit_plugin_android_alarm_manager",
+	),
 	("android_intent", "leptoskit_plugin_android_intent"),
 ];
 
@@ -120,6 +124,8 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_sharing/tests/android/SharingTest.kt",
 	"leptoskit_plugin_passkeys/tests/android/PasskeysPluginTest.kt",
 	"leptoskit_plugin_web_auth/tests/android/WebAuthPluginTest.kt",
+	"leptoskit_plugin_android_alarm_manager/tests/android/AlarmWireTest.kt",
+	"leptoskit_plugin_android_alarm_manager/tests/android/AndroidAlarmManagerPluginTest.kt",
 	"leptoskit_plugin_android_intent/tests/android/AndroidIntentWireTest.kt",
 	"leptoskit_plugin_android_intent/tests/android/AndroidIntentPluginTest.kt",
 	"leptoskit_plugin_sms/tests/android/SmsWireTest.kt",
@@ -233,6 +239,19 @@ class ContactsWireInstrumentationTest {
 }
 ";
 
+const ALARM_WIRE_TEST: &str = r"package dev.leptoskit.plugins.androidalarmmanager
+
+import org.junit.Test
+
+/** Runs the JVM wire, store and timing checks on the device too. */
+class AlarmWireInstrumentationTest {
+    @Test
+    fun wireStoreAndTiming() {
+        main()
+    }
+}
+";
+
 #[derive(Parser)]
 struct Args {
 	/// Built `LeptosKit` CLI binary; its SDK and templates must match this
@@ -321,6 +340,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 				"leptoskit_plugin_store",
 				"leptoskit_plugin_logging",
 				"leptoskit_plugin_crypto",
+				"leptoskit_plugin_android_alarm_manager",
 			] {
 				add_dependency(manifest, sdk, package, Side::Guest)?;
 			}
@@ -369,24 +389,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 	info.to_file_xml(plist_path)?;
 
 	let guest = destination.join("native_plugin_suite_app/src/lib.rs");
-	// The acceptance fixture exercises optional plugins without adding them to
-	// the default application's counter or capability grants.
-	let source = include_str!("../src/native/templates/guest.rs");
-	let marker = "Ok(\"File roundtrip passed\".to_owned())";
-	anyhow::ensure!(
-		source.matches(marker).count() == 1,
-		"scaffold file action changed; update optional worker integration"
-	);
-	let mut source = source.replacen(
-		marker,
-		&format!("optional_workers().await?;\n\t{marker}"),
-		1,
-	);
-	source.push('\n');
-	source.push_str(include_str!(
-		"../tests/fixtures/native_plugin_suite/workers.rs"
-	));
-	std::fs::write(guest, source)?;
+	std::fs::write(guest, suite_guest()?)?;
 
 	let tests = destination.join("android/app/src/androidTest/java");
 	let config = leptoskit_config::LeptoskitConfig::load_from(destination)?;
@@ -438,6 +441,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 			DEVICE_MOTION_WIRE_TEST,
 		),
 		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
+		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(
@@ -448,6 +452,40 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		std::fs::write(wrapper, source)?;
 	}
 	Ok(())
+}
+
+/// The scaffold guest with the suite's optional workers and headless alarm
+/// handler spliced in.
+fn suite_guest() -> Result<String> {
+	// The acceptance fixture exercises optional plugins without adding them to
+	// the default application's counter or capability grants.
+	let source = include_str!("../src/native/templates/guest.rs");
+	let marker = "Ok(\"File roundtrip passed\".to_owned())";
+	anyhow::ensure!(
+		source.matches(marker).count() == 1,
+		"scaffold file action changed; update optional worker integration"
+	);
+	let mut source = source.replacen(
+		marker,
+		&format!("optional_workers().await?;\n\t{marker}"),
+		1,
+	);
+	// A headless alarm launch runs the same entry point with no window.
+	let ready = "status(\"Ready\");";
+	anyhow::ensure!(
+		source.matches(ready).count() == 1,
+		"scaffold startup changed; update the headless alarm integration"
+	);
+	source = source.replacen(ready, &format!("{ready}\n\talarm_launch();"), 1);
+	source.push('\n');
+	source.push_str(include_str!(
+		"../tests/fixtures/native_plugin_suite/workers.rs"
+	));
+	source.push('\n');
+	source.push_str(include_str!(
+		"../tests/fixtures/native_plugin_suite/alarm.rs"
+	));
+	Ok(source)
 }
 
 fn edit_toml(path: &Path, edit: impl FnOnce(&mut toml::Table) -> Result<()>) -> Result<()> {
@@ -545,6 +583,7 @@ mod tests {
 				"mail-composer",
 				"web-browser",
 				"print",
+				"android_alarm_manager",
 			] {
 				assert!(plugins.iter().any(|value| value.as_str() == Some(name)));
 			}
@@ -559,6 +598,9 @@ mod tests {
 				"MailComposerWireInstrumentationTest.kt",
 				"WebBrowserWireTest.kt",
 				"WebBrowserWireInstrumentationTest.kt",
+				"AlarmWireTest.kt",
+				"AndroidAlarmManagerPluginTest.kt",
+				"AlarmWireInstrumentationTest.kt",
 			] {
 				assert!(tests.join(name).is_file(), "missing {name}");
 			}

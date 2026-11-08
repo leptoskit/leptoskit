@@ -24,7 +24,8 @@ let controllerTargets: [Target] = [
             "mobile/NativeWidgetProps.kt", "mobile/NativeWidgetRenderer.kt", "mobile/RenderBatch.kt",
             "mobile/LeptosKitApplicationController.swift", "mobile/app.cpp",
             "mobile/MobileApplicationTeardown.swift", "mobile/NativeDevelopmentGuests.swift",
-            "mobile/NativeDevelopmentGuests.kt", "mobile/MobileApplicationDevelopment.swift",
+            "mobile/NativeDevelopmentGuests.kt", "mobile/NativeHeadlessGuest.kt",
+            "mobile/MobileApplicationDevelopment.swift",
             "mobile/MobileApplicationGuests.swift"
         ],
         sources: [

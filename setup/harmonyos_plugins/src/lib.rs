@@ -3,6 +3,7 @@
 //! the way a HarmonyOS host does. The `harmonyos` workflow builds it.
 
 pub use leptoskit_plugin_accelerometer;
+pub use leptoskit_plugin_android_alarm_manager;
 pub use leptoskit_plugin_android_intent;
 pub use leptoskit_plugin_app_shortcuts;
 pub use leptoskit_plugin_application;

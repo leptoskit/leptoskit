@@ -76,4 +76,5 @@ pub(crate) const ANDROID: &[&str] = &[
 	"mobile/NativeTextMeasurer.kt",
 	"mobile/NativeApplicationTeardown.kt",
 	"mobile/NativeDevelopmentGuests.kt",
+	"mobile/NativeHeadlessGuest.kt",
 ];
