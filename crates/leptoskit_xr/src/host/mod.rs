@@ -34,6 +34,17 @@ pub mod arkit;
 #[allow(unsafe_code)]
 pub mod arcore;
 
+#[cfg(all(
+	feature = "openxr",
+	any(
+		target_os = "android",
+		target_os = "windows",
+		all(target_os = "linux", not(target_env = "ohos"))
+	)
+))]
+#[allow(unsafe_code)]
+pub mod openxr;
+
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
