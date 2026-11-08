@@ -1971,7 +1971,7 @@ fn rollback_schema_refuses_live_clients_and_stale_prefixes() {
 			&["deploy", "--rollback", "v1", "--rollback-schema", "--yes"],
 			&[("MOCK_DB_CLIENTS", "1")],
 		),
-		"database still has clients; stop external writers before down migrations",
+		"`leptoskit` still has clients; stop external writers before down migrations",
 	);
 
 	let stale = project();
@@ -1995,7 +1995,7 @@ fn rollback_schema_refuses_live_clients_and_stale_prefixes() {
 			&["deploy", "--rollback", "v1", "--rollback-schema", "--yes"],
 			&[("MOCK_SCHEMA_LABEL", &label)],
 		),
-		"target migration prefix is not present in this checkout",
+		"the target migration prefix of `leptoskit` is not present in this checkout",
 	);
 }
 
