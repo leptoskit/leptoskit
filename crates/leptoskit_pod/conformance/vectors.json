@@ -86,6 +86,33 @@
 			"hex": "4c4b3031",
 			"expect": "Truncated",
 			"envelope": true
+		},
+		{
+			"name": "vec_u8_huge_len",
+			"hex": "ffffffff",
+			"expect": "Truncated"
+		},
+		{
+			"name": "bad_option_tag",
+			"hex": "02",
+			"expect": "InvalidTag"
+		},
+		{
+			"name": "bad_result_tag",
+			"hex": "02",
+			"expect": "InvalidTag"
+		},
+		{
+			"name": "envelope_codec_mismatch",
+			"hex": "4c4b30310200010000000000000000",
+			"expect": "InvalidEnvelope",
+			"envelope": true
+		},
+		{
+			"name": "envelope_body_len_overflow",
+			"hex": "4c4b303101000100000010000000",
+			"expect": "Truncated",
+			"envelope": true
 		}
 	]
 }

@@ -229,6 +229,14 @@ test("conformance malformed", () => {
 				new Reader(bytes).string();
 			} else if (m.name.includes("bool")) {
 				new Reader(bytes).bool();
+			} else if (m.name.includes("option")) {
+				new Reader(bytes).optionTag();
+			} else if (m.name.includes("result")) {
+				new Reader(bytes).resultTag();
+			} else if (m.name.includes("vec")) {
+				const r = new Reader(bytes);
+				r.vecLen();
+				r.u8();
 			} else {
 				new Reader(bytes).u16();
 			}

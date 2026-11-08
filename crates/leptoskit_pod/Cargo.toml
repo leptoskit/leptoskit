@@ -2,6 +2,7 @@
 name = "leptoskit_pod"
 version = "0.3.0"
 authors.workspace = true
+build = "build.rs"
 categories = ["encoding", "network-programming", "wasm"]
 edition.workspace = true
 homepage.workspace = true

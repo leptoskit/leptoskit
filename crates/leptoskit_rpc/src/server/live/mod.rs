@@ -591,11 +591,18 @@ async fn run_query(
 		db,
 		identity,
 		request_id: None,
-		arguments: args,
+		arguments: crate::wire::WireArgs::Json(args),
+		response: crate::wire::Transport::Json,
 		reads: Some(sink.clone()),
 	})
 	.await
 	.map_err(|error| WireError::new(&error))?;
+	let value = match value {
+		crate::wire::WireBody::Json(value) => value,
+		crate::wire::WireBody::Pod(_) => {
+			return Err(WireError::server("live queries still speak JSON"));
+		}
+	};
 	let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
 
 	if size > MAX_RESULT_BYTES {

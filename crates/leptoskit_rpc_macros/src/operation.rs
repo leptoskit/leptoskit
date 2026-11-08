@@ -301,7 +301,7 @@ impl OperationArgs {
 				if !crate::is_route_segment(&name.value()) {
 					return Err(syn::Error::new_spanned(
 						&name,
-						"`name` becomes the route `/api/<name>` and the generated method names, \
+						"`name` becomes the route `/rpc/<name>` and the generated method names, \
 						 so it must be non-empty and use ASCII letters, digits, `_`, `-`, and \
 						 `.`, as in `chat.messages`",
 					));
@@ -1009,6 +1009,7 @@ pub(crate) fn expand(
 	let mut out = quote! {
 		#(#docs)*
 		#(#deprecated)*
+		#[#krate::__private::pod_data]
 		#[derive(
 			::core::clone::Clone,
 			#krate::__private::serde::Serialize,

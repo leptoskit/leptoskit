@@ -934,10 +934,19 @@ impl Session {
 			db: self.db.clone(),
 			identity: self.identity.clone(),
 			request_id: key,
-			arguments: args,
+			arguments: crate::wire::WireArgs::Json(args),
+			response: crate::wire::Transport::Json,
 			reads: None,
 		}))
 		.await;
+		let result = result.and_then(|body| {
+			match body {
+				crate::wire::WireBody::Json(value) => Ok(value),
+				crate::wire::WireBody::Pod(_) => {
+					Err(Error::server("live mutations still speak JSON".to_owned()))
+				}
+			}
+		});
 
 		self.answer(Finished {
 			_permit: None,
@@ -994,7 +1003,8 @@ impl Session {
 			db: self.db.clone(),
 			identity: self.identity.clone(),
 			request_id: None,
-			arguments: args,
+			arguments: crate::wire::WireArgs::Json(args),
+			response: crate::wire::Transport::Json,
 			reads: None,
 		};
 		let handler = registration.handler;
@@ -1002,12 +1012,24 @@ impl Session {
 		let epoch = self.epoch;
 		tokio::spawn(async move {
 			let (result, version) = recording_commits(handler(invocation)).await;
+			let result = result
+				.and_then(|body| {
+					match body {
+						crate::wire::WireBody::Json(value) => Ok(value),
+						crate::wire::WireBody::Pod(_) => {
+							Err(crate::Error::server(
+								"live actions still speak JSON".to_owned(),
+							))
+						}
+					}
+				})
+				.map_err(|error| WireError::new(&error));
 			let _ = finished
 				.send(Finished {
 					_permit: Some(permit),
 					epoch,
 					request,
-					result: result.map_err(|error| WireError::new(&error)),
+					result,
 					version,
 				})
 				.await;

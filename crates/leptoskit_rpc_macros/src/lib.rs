@@ -1008,10 +1008,10 @@ fn registration(
 	let struct_name = LitStr::new(&struct_ident.to_string(), struct_ident.span());
 	// A service's operation is reached under its prefix on the app's origin.
 	let path = service.map_or_else(
-		|| format!("/api/{}", name.value()),
+		|| format!("/rpc/{}", name.value()),
 		|service| {
 			format!(
-				"/_leptoskit/services/{}/api/{}",
+				"/_leptoskit/services/{}/rpc/{}",
 				service.value(),
 				name.value()
 			)
@@ -1053,8 +1053,8 @@ fn registration(
 					docs: #docs,
 					path: #path,
 					method: #krate::spec::OPERATION_METHOD,
-					input_content_type: "application/json",
-					output_content_type: "application/json",
+					input_content_type: "application/vnd.leptoskit.rpc.v1+bin",
+					output_content_type: "application/vnd.leptoskit.rpc.v1+bin",
 					error_content_type: "text/plain",
 					params: &[#(#params),*],
 					output_schema: |generator| {

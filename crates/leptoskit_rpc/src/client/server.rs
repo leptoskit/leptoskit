@@ -45,9 +45,23 @@ impl Api for InProcess {
 			};
 
 			server
-				.call(&parts, registration, arguments, key.resolve().await)
+				.call(
+					&parts,
+					registration,
+					crate::wire::WireArgs::Json(arguments),
+					crate::wire::Transport::Json,
+					key.resolve().await,
+				)
 				.await
 				.map_err(FnError::from)
+				.and_then(|body| {
+					match body {
+						crate::wire::WireBody::Json(value) => Ok(value),
+						crate::wire::WireBody::Pod(_) => {
+							Err(FnError::Other("in-process calls use JSON".to_owned()))
+						}
+					}
+				})
 		})
 	}
 }

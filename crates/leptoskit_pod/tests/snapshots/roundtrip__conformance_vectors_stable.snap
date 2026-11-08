@@ -18,3 +18,8 @@ bad_utf8_string: InvalidUtf8
 bad_bool: InvalidTag
 bad_magic: InvalidEnvelope
 envelope_short: Truncated
+vec_u8_huge_len: Truncated
+bad_option_tag: InvalidTag
+bad_result_tag: InvalidTag
+envelope_codec_mismatch: InvalidEnvelope
+envelope_body_len_overflow: Truncated

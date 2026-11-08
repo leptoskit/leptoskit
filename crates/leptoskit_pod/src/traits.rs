@@ -165,7 +165,7 @@ impl<T: PodEncode> PodEncode for Vec<T> {
 impl<'a, T: PodDecode<'a>> PodDecode<'a> for Vec<T> {
 	fn decode(r: &mut Reader<'a>) -> Result<Self> {
 		let len = r.vec_len()?;
-		let mut out = Vec::with_capacity(len);
+		let mut out = Vec::new();
 		for _ in 0..len {
 			out.push(T::decode(r)?);
 		}

@@ -245,6 +245,12 @@ fn conformance_vectors_stable() {
 			Reader::new(&bytes).string().unwrap_err()
 		} else if m.name.contains("bool") {
 			Reader::new(&bytes).bool().unwrap_err()
+		} else if m.name.contains("option") {
+			Reader::new(&bytes).option_tag().unwrap_err()
+		} else if m.name.contains("result") {
+			Reader::new(&bytes).result_tag().unwrap_err()
+		} else if m.name.contains("vec") {
+			Vec::<u8>::from_pod_bytes(&bytes).unwrap_err()
 		} else {
 			Reader::new(&bytes).u16().unwrap_err()
 		};

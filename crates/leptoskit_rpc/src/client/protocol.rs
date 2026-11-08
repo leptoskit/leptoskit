@@ -1,4 +1,4 @@
-//! The client every remote platform shares: `POST /api/<name>` over
+//! The client every remote platform shares: `POST /rpc/<name>` over
 //! whatever sends HTTP there, signed by whatever keeps this device's
 //! credentials.
 
@@ -169,7 +169,7 @@ impl<H: Http> Inner<H> {
 		arguments: Value,
 		idempotency_key: Option<String>,
 	) -> Result<Value, FnError> {
-		let url = format!("{}/api/{name}", self.origin);
+		let url = format!("{}{}/{}", self.origin, crate::RPC_ROUTE_PREFIX, name);
 		let body = arguments.to_string();
 		// Only a keyed call is safe to send again: the server runs it once.
 		let attempts = if idempotency_key.is_some() {

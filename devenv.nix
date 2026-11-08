@@ -676,6 +676,18 @@ in
       description = "Enforce complete line coverage for cross-platform use primitives.";
       binary = "bash";
     };
+    "coverage:pod" = {
+      exec = ''
+        set -euo pipefail
+        mkdir -p target/coverage
+        cargo llvm-cov --package leptoskit_pod --all-features --tests \
+          --ignore-filename-regex '/tests/|/src/proofs\.rs|/crates/leptoskit_pod_macros/' \
+          --fail-under-lines 100 \
+          --lcov --output-path target/coverage/leptoskit-pod.lcov
+      '';
+      description = "Enforce complete line coverage for the LK Pod wire codec.";
+      binary = "bash";
+    };
     "coverage:use:browser" = {
       exec = ''
         set -euo pipefail

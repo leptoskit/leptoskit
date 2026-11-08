@@ -1,4 +1,4 @@
-//! The one-shot HTTP transport: `POST /api/<name>` for every query and
+//! The one-shot HTTP transport: `POST /rpc/<name>` for every query and
 //! mutation, and the same calls in process while the server renders.
 
 use std::sync::Arc;
@@ -15,7 +15,6 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::post;
 use leptoskit_db::Db;
-use serde_json::Value;
 
 use super::Anonymous;
 use super::Identify;
@@ -47,6 +46,8 @@ struct Inner {
 	identify: Arc<dyn Identify>,
 	/// The service these operations belong to; `None` for the app's own.
 	service: Option<&'static str>,
+	transports: crate::wire::TransportSet,
+	route_prefix: String,
 }
 
 impl Server {
@@ -58,6 +59,22 @@ impl Server {
 				db,
 				identify: Arc::new(Anonymous),
 				service: None,
+				transports: crate::wire::TransportSet::default(),
+				route_prefix: crate::RPC_ROUTE_PREFIX.to_owned(),
+			}),
+		}
+	}
+
+	/// Applies `[rpc].path` and `[rpc].transports` from configuration.
+	#[must_use]
+	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
+		Self {
+			inner: Arc::new(Inner {
+				db: self.inner.db.clone(),
+				identify: Arc::clone(&self.inner.identify),
+				service: self.inner.service,
+				transports: crate::wire::TransportSet::from_names(&config.transports),
+				route_prefix: config.path.trim_end_matches('/').to_owned(),
 			}),
 		}
 	}
@@ -71,6 +88,8 @@ impl Server {
 				db: self.inner.db.clone(),
 				identify: Arc::new(identify),
 				service: self.inner.service,
+				transports: self.inner.transports,
+				route_prefix: self.inner.route_prefix.clone(),
 			}),
 		}
 	}
@@ -109,6 +128,8 @@ impl Server {
 				db: self.inner.db.clone(),
 				identify: Arc::clone(&self.inner.identify),
 				service: Some(name),
+				transports: self.inner.transports,
+				route_prefix: self.inner.route_prefix.clone(),
 			}),
 		}
 	}
@@ -151,7 +172,7 @@ impl Server {
 		*INSTALLED.write().unwrap_or_else(PoisonError::into_inner) = Some(self.clone());
 	}
 
-	/// `POST /api/<name>` for every registered query and mutation, relative
+	/// `POST /rpc/<name>` for every registered query and mutation, relative
 	/// to wherever the router is nested, and [installs](Self::install) this
 	/// server for in-process calls.
 	///
@@ -187,8 +208,9 @@ impl Server {
 			}
 
 			let server = self.clone();
+			let path = format!("{}/{}", self.inner.route_prefix, registration.name);
 			router = router.route(
-				&format!("/api/{}", registration.name),
+				&path,
 				post(move |request: Request| {
 					let server = server.clone();
 					async move { server.serve(registration, request).await }
@@ -206,16 +228,42 @@ impl Server {
 				"the request body is too large, or didn't arrive",
 			));
 		};
-		let arguments = if bytes.iter().all(u8::is_ascii_whitespace) {
-			Value::Object(serde_json::Map::new())
+
+		let content_type = parts
+			.headers
+			.get(header::CONTENT_TYPE)
+			.and_then(|value| value.to_str().ok());
+		let request_transport =
+			match crate::wire::request_transport(content_type, self.inner.transports) {
+				Ok(transport) => transport,
+				Err(message) => return failure(&Error::invalid(message)),
+			};
+		let response_transport = crate::wire::response_transport(
+			parts
+				.headers
+				.get(header::ACCEPT)
+				.and_then(|value| value.to_str().ok()),
+			self.inner.transports,
+			request_transport,
+		);
+
+		let arguments = if bytes.is_empty() || bytes.iter().all(u8::is_ascii_whitespace) {
+			crate::wire::WireArgs::empty(request_transport)
 		} else {
-			match serde_json::from_slice::<Value>(&bytes) {
-				Ok(value @ Value::Object(_)) => value,
-				Ok(_) | Err(_) => {
-					return failure(&Error::invalid(
-						"send the arguments as one JSON object, such as `{\"limit\": 10}`",
-					));
+			match request_transport {
+				crate::wire::Transport::Json => {
+					match serde_json::from_slice(&bytes) {
+						Ok(value @ serde_json::Value::Object(_)) => {
+							crate::wire::WireArgs::Json(value)
+						}
+						Ok(_) | Err(_) => {
+							return failure(&Error::invalid(
+								"send the arguments as one JSON object, such as `{\"limit\": 10}`",
+							));
+						}
+					}
 				}
+				crate::wire::Transport::Pod => crate::wire::WireArgs::Pod(bytes.to_vec()),
 			}
 		};
 
@@ -235,17 +283,17 @@ impl Server {
 			));
 		};
 
-		match self.call(&parts, registration, arguments, request_id).await {
-			Ok(value) => {
-				(
-					[(
-						header::CONTENT_TYPE,
-						HeaderValue::from_static("application/json"),
-					)],
-					value.to_string(),
-				)
-					.into_response()
-			}
+		match self
+			.call(
+				&parts,
+				registration,
+				arguments,
+				response_transport,
+				request_id,
+			)
+			.await
+		{
+			Ok(body) => body.into_response(),
 			Err(error) => failure(&error),
 		}
 	}
@@ -255,9 +303,10 @@ impl Server {
 		&self,
 		parts: &http::request::Parts,
 		registration: &'static Registration,
-		arguments: Value,
+		arguments: crate::wire::WireArgs,
+		response: crate::wire::Transport,
 		request_id: Option<String>,
-	) -> crate::Result<Value> {
+	) -> crate::Result<crate::wire::WireBody> {
 		let identity = self.inner.identify.identify(parts).await?;
 		let db = self.inner.db.with_context(identity.context.clone());
 		(registration.handler)(Invocation {
@@ -265,9 +314,37 @@ impl Server {
 			identity,
 			request_id,
 			arguments,
+			response,
 			reads: None,
 		})
 		.await
+	}
+}
+
+impl crate::wire::WireBody {
+	pub(crate) fn into_response(self) -> Response {
+		match self {
+			Self::Json(value) => {
+				(
+					[(
+						header::CONTENT_TYPE,
+						HeaderValue::from_static(crate::JSON_CONTENT_TYPE),
+					)],
+					value.to_string(),
+				)
+					.into_response()
+			}
+			Self::Pod(bytes) => {
+				(
+					[(
+						header::CONTENT_TYPE,
+						HeaderValue::from_static(crate::POD_CONTENT_TYPE),
+					)],
+					bytes,
+				)
+					.into_response()
+			}
+		}
 	}
 }
 
