@@ -90,7 +90,7 @@ class ConformanceTest {
 		w.u8(7u)
 		w.bool(true)
 		w.string("hi").getOrElse { fail(it.toString()) }
-		assertEquals("00000701020000006869", hexEncode(w.asSlice()))
+		assertEquals("000000000701020000006869", hexEncode(w.asSlice()))
 	}
 
 	@Test

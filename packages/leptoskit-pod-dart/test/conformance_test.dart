@@ -54,7 +54,7 @@ void main() {
     w.u8(7);
     w.podBool(true);
     w.string('hi');
-    expect(_hexEncode(w.asSlice()), '00000701020000006869');
+    expect(_hexEncode(w.asSlice()), '000000000701020000006869');
   });
 
   test('envelope rpc empty', () {
