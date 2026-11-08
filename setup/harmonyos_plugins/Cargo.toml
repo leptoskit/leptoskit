@@ -50,6 +50,7 @@ leptoskit_plugin_localization = { path = "../../crates/leptoskit_plugin_localiza
 leptoskit_plugin_location = { path = "../../crates/leptoskit_plugin_location" }
 leptoskit_plugin_logging = { path = "../../crates/leptoskit_plugin_logging" }
 leptoskit_plugin_magnetometer = { path = "../../crates/leptoskit_plugin_magnetometer" }
+leptoskit_plugin_mail_composer = { path = "../../crates/leptoskit_plugin_mail_composer" }
 leptoskit_plugin_menu = { path = "../../crates/leptoskit_plugin_menu" }
 leptoskit_plugin_network = { path = "../../crates/leptoskit_plugin_network" }
 leptoskit_plugin_network_info = { path = "../../crates/leptoskit_plugin_network_info" }
@@ -68,6 +69,7 @@ leptoskit_plugin_sensors = { path = "../../crates/leptoskit_plugin_sensors" }
 leptoskit_plugin_sharing = { path = "../../crates/leptoskit_plugin_sharing" }
 leptoskit_plugin_shell = { path = "../../crates/leptoskit_plugin_shell" }
 leptoskit_plugin_single_instance = { path = "../../crates/leptoskit_plugin_single_instance" }
+leptoskit_plugin_sms = { path = "../../crates/leptoskit_plugin_sms" }
 leptoskit_plugin_speech = { path = "../../crates/leptoskit_plugin_speech" }
 leptoskit_plugin_sqlite = { path = "../../crates/leptoskit_plugin_sqlite" }
 leptoskit_plugin_store = { path = "../../crates/leptoskit_plugin_store" }
@@ -75,6 +77,7 @@ leptoskit_plugin_store_review = { path = "../../crates/leptoskit_plugin_store_re
 leptoskit_plugin_tracking_transparency = { path = "../../crates/leptoskit_plugin_tracking_transparency" }
 leptoskit_plugin_tray = { path = "../../crates/leptoskit_plugin_tray" }
 leptoskit_plugin_updater = { path = "../../crates/leptoskit_plugin_updater" }
+leptoskit_plugin_web_browser = { path = "../../crates/leptoskit_plugin_web_browser" }
 leptoskit_plugin_websocket = { path = "../../crates/leptoskit_plugin_websocket" }
 leptoskit_plugin_window_state = { path = "../../crates/leptoskit_plugin_window_state" }
 

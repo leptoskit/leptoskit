@@ -136,7 +136,9 @@ packages = [
 	"leptoskit_plugin_screen_capture",
 	"leptoskit_plugin_store_review",
 	"leptoskit_plugin_sharing",
-	"leptoskit_plugin_sensors",
+	"leptoskit_plugin_sensors",	"leptoskit_plugin_sms",
+	"leptoskit_plugin_mail_composer",
+	"leptoskit_plugin_web_browser",
 	"leptoskit_plugin_tracking_transparency",
 	"leptoskit_plugin_websocket",
 	"leptoskit_plugin_arguments",
@@ -471,7 +473,12 @@ path = "crates/leptoskit_plugin_store_review"
 path = "crates/leptoskit_plugin_sharing"
 
 [package.leptoskit_plugin_sensors]
-path = "crates/leptoskit_plugin_sensors"
+path = "crates/leptoskit_plugin_sensors"[package.leptoskit_plugin_sms]
+path = "crates/leptoskit_plugin_sms"
+[package.leptoskit_plugin_mail_composer]
+path = "crates/leptoskit_plugin_mail_composer"
+[package.leptoskit_plugin_web_browser]
+path = "crates/leptoskit_plugin_web_browser"
 
 [package.leptoskit_plugin_tracking_transparency]
 path = "crates/leptoskit_plugin_tracking_transparency"

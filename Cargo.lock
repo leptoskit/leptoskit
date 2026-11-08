@@ -3568,6 +3568,7 @@ dependencies = [
  "leptoskit_plugin_location",
  "leptoskit_plugin_logging",
  "leptoskit_plugin_magnetometer",
+ "leptoskit_plugin_mail_composer",
  "leptoskit_plugin_menu",
  "leptoskit_plugin_network",
  "leptoskit_plugin_network_info",
@@ -3586,6 +3587,7 @@ dependencies = [
  "leptoskit_plugin_sharing",
  "leptoskit_plugin_shell",
  "leptoskit_plugin_single_instance",
+ "leptoskit_plugin_sms",
  "leptoskit_plugin_speech",
  "leptoskit_plugin_sqlite",
  "leptoskit_plugin_store",
@@ -3593,6 +3595,7 @@ dependencies = [
  "leptoskit_plugin_tracking_transparency",
  "leptoskit_plugin_tray",
  "leptoskit_plugin_updater",
+ "leptoskit_plugin_web_browser",
  "leptoskit_plugin_websocket",
  "leptoskit_plugin_window_state",
 ]
@@ -6297,6 +6300,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_mail_composer"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_menu"
 version = "0.3.0"
 dependencies = [
@@ -6522,6 +6532,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_sms"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_speech"
 version = "0.3.0"
 dependencies = [
@@ -6613,6 +6630,14 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
  "open",
+ "url",
+]
+
+[[package]]
+name = "leptoskit_plugin_web_browser"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
  "url",
 ]
 

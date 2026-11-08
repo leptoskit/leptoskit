@@ -1,0 +1,42 @@
+[package]
+name = "leptoskit_plugin_web_browser"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "In-app HTTP(S) browser presentation with dismiss for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "web-browser"
+apple-module = "LeptosKitWebBrowser"
+apple-type = "WebBrowserPlugin"
+apple-context = true
+android-type = "dev.leptoskit.plugins.webbrowser.WebBrowserPlugin"
+android-context = true
+android-dependencies = ["androidx.browser:browser:1.9.0"]
+
+[package.metadata.leptoskit.runtime.macos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.windows]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.tui]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

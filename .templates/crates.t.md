@@ -777,6 +777,28 @@ from one plugin. iOS and Android use real system sensors on the same axes, deskt
 sensor, and the browser uses Generic Sensor or `DeviceMotion` and has no barometer.
 
 <!-- {/p_sensorsSummary} -->
+<!-- {@p_smsSummary} -->
+
+Add `{{ plugin_sms.package.name }}` as a direct dependency and select the `{{ plugin_sms.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Sms` rather than resolving the plugin on every call. Completion means the OS
+finished its composer callback; it never confirms delivery. Outbound `sms:` URLs remain
+`leptoskit_plugin_linking`.
+
+<!-- {/p_smsSummary} -->
+
+<!-- {@p_mail_composerSummary} -->
+
+Add `{{ plugin_mail_composer.package.name }}` as a direct dependency and select the
+`{{ plugin_mail_composer.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::MailComposer` rather than resolving the plugin on every call. Completion means the
+OS finished its composer callback; it never confirms delivery. Attachments are deferred in
+this MVP. Outbound `mailto:` URLs remain `leptoskit_plugin_linking`.
+
+<!-- {/p_mail_composerSummary} -->
 
 <!-- {@p_shellSummary} -->
 
@@ -871,6 +893,18 @@ Linux hosts register it where it has a Linux Rust implementation; generated Wind
 provider page never loads in a web view inside the app.
 
 <!-- {/p_web_authSummary} -->
+
+<!-- {@p_web_browserSummary} -->
+
+Add `{{ plugin_web_browser.package.name }}` as a direct dependency and select the
+`{{ plugin_web_browser.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::WebBrowser` rather than resolving the plugin on every call. This opens HTTP(S) in
+an in-app or system browser and answers when it is dismissed. It is not `web-auth` (no
+OAuth return address) and not `linking.open` (which does not wait for dismiss).
+
+<!-- {/p_web_browserSummary} -->
 
 <!-- {@p_websocketSummary} -->
 

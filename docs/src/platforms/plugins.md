@@ -2,7 +2,7 @@
 
 On iOS, Android, and the other native platforms, your app's code runs as WebAssembly inside the host. That keeps it portable and lets [code push](../guide/05-code-push.md) replace it, but WebAssembly can't call UIKit, Android's Java APIs, or any other operating system library directly. A **runtime plugin** bridges that gap: a crate with a Rust API your app calls, and a native implementation that the host runs on its behalf.
 
-leptoskit ships plugins for the clipboard, device and app information, battery and network state, how a foldable is folded, haptics, sound playback, links, permissions, secure storage, files, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, motion and environment sensors (together through `sensors`, or one at a time), cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
+leptoskit ships plugins for the clipboard, device and app information, battery and network state, how a foldable is folded, haptics, sound playback, links, permissions, secure storage, files, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, motion and environment sensors (together through `sensors`, or one at a time), cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, SMS and mail composers, in-app web browsing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
 
 Runtime plugins are different from the `[[plugins]]` table in `leptoskit.toml`, which turns on build plugins.
 
@@ -120,6 +120,7 @@ Most runtime names match the crate's suffix: `leptoskit_plugin_clipboard` is `cl
 | `leptoskit_plugin_keep_awake`            | `keep-awake`            |
 | `leptoskit_plugin_live_activities`       | `live-activities`       |
 | `leptoskit_plugin_network_info`          | `network-info`          |
+| `leptoskit_plugin_mail_composer`         | `mail-composer`         |
 | `leptoskit_plugin_local_authentication`  | `local-authentication`  |
 | `leptoskit_plugin_picture_in_picture`    | `picture-in-picture`    |
 | `leptoskit_plugin_screen_capture`        | `screen-capture`        |
@@ -128,6 +129,7 @@ Most runtime names match the crate's suffix: `leptoskit_plugin_clipboard` is `cl
 | `leptoskit_plugin_store_review`          | `store-review`          |
 | `leptoskit_plugin_tracking_transparency` | `tracking-transparency` |
 | `leptoskit_plugin_web_auth`              | `web-auth`              |
+| `leptoskit_plugin_web_browser`           | `web-browser`           |
 
 `light_sensor` and `image_manipulator` keep their underscores. `dialog`, `menu`, `tray`, `global_shortcut`, `window_state`, `autostart`, `single_instance`, `arguments`, `power_monitor`, `deep_link`, and `updater` have no automatic `native.plugins` registration: the desktop host constructs them itself, because each needs something only the host has, such as a running event loop, an allowlist, or an update backend. When a host does register them on the bridge, their runtime names are `power-monitor`, `deep-link`, and `updater`.
 

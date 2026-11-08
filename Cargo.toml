@@ -276,6 +276,7 @@ leptoskit_plugin_localization = { path = "crates/leptoskit_plugin_localization",
 leptoskit_plugin_location = { path = "crates/leptoskit_plugin_location", version = "0.3.0" }
 leptoskit_plugin_logging = { path = "crates/leptoskit_plugin_logging", version = "0.3.0" }
 leptoskit_plugin_magnetometer = { path = "crates/leptoskit_plugin_magnetometer", version = "0.3.0" }
+leptoskit_plugin_mail_composer = { path = "crates/leptoskit_plugin_mail_composer", version = "0.3.0" }
 leptoskit_plugin_menu = { path = "crates/leptoskit_plugin_menu", version = "0.3.0" }
 leptoskit_plugin_network = { path = "crates/leptoskit_plugin_network", version = "0.3.0" }
 leptoskit_plugin_network_info = { path = "crates/leptoskit_plugin_network_info", version = "0.3.0" }
@@ -296,6 +297,7 @@ leptoskit_plugin_sensors = { path = "crates/leptoskit_plugin_sensors", version =
 leptoskit_plugin_sharing = { path = "crates/leptoskit_plugin_sharing", version = "0.3.0" }
 leptoskit_plugin_shell = { path = "crates/leptoskit_plugin_shell", version = "0.3.0" }
 leptoskit_plugin_single_instance = { path = "crates/leptoskit_plugin_single_instance", version = "0.3.0" }
+leptoskit_plugin_sms = { path = "crates/leptoskit_plugin_sms", version = "0.3.0" }
 leptoskit_plugin_speech = { path = "crates/leptoskit_plugin_speech", version = "0.3.0" }
 leptoskit_plugin_sqlite = { path = "crates/leptoskit_plugin_sqlite", version = "0.3.0" }
 leptoskit_plugin_store = { path = "crates/leptoskit_plugin_store", version = "0.3.0" }
@@ -304,6 +306,7 @@ leptoskit_plugin_tracking_transparency = { path = "crates/leptoskit_plugin_track
 leptoskit_plugin_tray = { path = "crates/leptoskit_plugin_tray", version = "0.3.0" }
 leptoskit_plugin_updater = { path = "crates/leptoskit_plugin_updater", version = "0.3.0" }
 leptoskit_plugin_web_auth = { path = "crates/leptoskit_plugin_web_auth", version = "0.3.0" }
+leptoskit_plugin_web_browser = { path = "crates/leptoskit_plugin_web_browser", version = "0.3.0" }
 leptoskit_plugin_websocket = { path = "crates/leptoskit_plugin_websocket", version = "0.3.0", default-features = false }
 leptoskit_plugin_window_state = { path = "crates/leptoskit_plugin_window_state", version = "0.3.0" }
 # Each consumer picks its host: `browser` for web builds, `guest` for native
