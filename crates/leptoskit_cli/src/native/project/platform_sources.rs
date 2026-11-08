@@ -2,6 +2,7 @@
 
 pub(crate) const MACOS: &[&str] = &[
 	"mobile/NativeRive.swift",
+	"mobile/NativeScene3d.swift",
 	"desktop/LeptosKitMacViewController.swift",
 	"desktop/MacWidgetRenderer.swift",
 	"desktop/MacWidgetControls.swift",
@@ -24,6 +25,7 @@ pub(crate) const MACOS: &[&str] = &[
 
 pub(crate) const IOS: &[&str] = &[
 	"mobile/NativeRive.swift",
+	"mobile/NativeScene3d.swift",
 	"mobile/LeptosKitViewController.swift",
 	"mobile/RenderTransaction.swift",
 	"mobile/BinaryTransaction.swift",
@@ -55,6 +57,7 @@ pub(crate) const IOS: &[&str] = &[
 
 pub(crate) const ANDROID: &[&str] = &[
 	"mobile/NativeRiveAnimator.kt",
+	"mobile/NativeScene3d.kt",
 	"android/NativePermissionHost.kt",
 	"android/NativeActivityResultHost.kt",
 	"mobile/NativeApp.kt",

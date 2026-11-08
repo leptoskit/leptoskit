@@ -58,6 +58,8 @@ struct Resolve {
 struct Node {
 	id: String,
 	deps: Vec<Dependency>,
+	#[serde(default)]
+	features: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 struct Dependency {
@@ -200,6 +202,10 @@ pub struct Registry {
 	pub devtools_feature: Option<String>,
 	/// Selected plugins this destination leaves out, and why.
 	pub missing: Vec<MissingPlugin>,
+	/// Whether the app shows 3D scenes: it builds `leptoskit_3d` with more
+	/// than its protocol, so the host gets the bridge's `scene3d` feature and
+	/// the app's `assets/` folder.
+	pub scene3d: bool,
 }
 
 impl Plugin {
@@ -397,7 +403,13 @@ fn resolve_for_target(
 
 	let bridge = bridge.context("native apps need a direct leptoskit_bridge_ffi dependency")?;
 	let support = resolve_support(&metadata, &plugins, &bridge)?;
-	let host_features = host_features(app, node, &packages, &plugins, target)?;
+	let mut host_features = host_features(app, node, &packages, &plugins, target)?;
+	let scene3d = uses_scene3d(&metadata.resolve, &packages);
+
+	if scene3d {
+		host_features.push(bridge_feature(app, node, &packages, "scene3d")?);
+	}
+
 	let devtools_feature = bridge_feature(app, node, &packages, "devtools").ok();
 	Ok(Registry {
 		package: app.name.clone(),
@@ -408,6 +420,22 @@ fn resolve_for_target(
 		host_features,
 		devtools_feature,
 		missing,
+		scene3d,
+	})
+}
+
+/// Whether the dependency graph builds `leptoskit_3d` with more than its
+/// protocol. Every app has the protocol (the `Scene3d` element names a
+/// scene), so only a feature beyond it means the app draws scenes.
+fn uses_scene3d(resolve: &Resolve, packages: &BTreeMap<&String, &Package>) -> bool {
+	resolve.nodes.iter().any(|node| {
+		packages
+			.get(&node.id)
+			.is_some_and(|package| package.name == "leptoskit_3d")
+			&& node
+				.features
+				.iter()
+				.any(|feature| matches!(feature.as_str(), "guest" | "renderer" | "web" | "host"))
 	})
 }
 

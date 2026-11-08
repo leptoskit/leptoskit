@@ -123,9 +123,9 @@ impl Painter<'_> {
 				self.progress(id, rect, fg, bg, attrs);
 			}
 			NativeKind::ActivityIndicator => self.activity(id, rect, fg, bg, attrs),
-			// Image and vector pixels, including Rive frames, do not resolve to
-			// cells.
-			NativeKind::Image | NativeKind::Vector | NativeKind::Rive => {
+			// Image and vector pixels, including Rive frames and 3D scenes, do
+			// not resolve to cells.
+			NativeKind::Image | NativeKind::Vector | NativeKind::Rive | NativeKind::Scene3d => {
 				self.image(rect, bg, dim);
 			}
 		}

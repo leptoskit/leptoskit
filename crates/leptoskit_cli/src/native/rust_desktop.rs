@@ -175,6 +175,7 @@ mod tests {
 			host_features: vec![],
 			devtools_feature: None,
 			missing: Vec::new(),
+			scene3d: false,
 		};
 		let mut config = LeptoskitConfig::default();
 		generate(&root, &config, &registry, Target::Linux).unwrap();
@@ -201,6 +202,7 @@ mod tests {
 		let mut strict = Registry {
 			plugins: Vec::new(),
 			missing: Vec::new(),
+			scene3d: false,
 			..registry
 		};
 		strict.plugins.push(

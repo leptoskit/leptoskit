@@ -449,6 +449,7 @@ mod tests {
 			host_features: vec![],
 			devtools_feature: None,
 			missing: Vec::new(),
+			scene3d: false,
 		};
 		project::generate(&root, &config, &registry, Target::Harmonyos, false).unwrap();
 		let source = root.join("hosts/harmonyos/entry/src/main/ets/pages/Index.ets");
@@ -568,6 +569,7 @@ mod tests {
 			host_features: vec![],
 			devtools_feature: None,
 			missing: Vec::new(),
+			scene3d: false,
 		};
 		let host = root.join("hosts/harmonyos");
 		let generated = host.join("entry/src/main/ets/leptoskit");

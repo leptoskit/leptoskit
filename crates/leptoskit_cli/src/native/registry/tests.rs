@@ -53,6 +53,41 @@ fn registers_selected_direct_dependencies_using_their_cargo_alias() {
 	assert!(resolve_metadata(metadata("Plugin"), &config).is_err());
 }
 
+/// The test app, depending on `leptoskit_3d` built with `features`.
+fn scene_metadata(features: &[&str]) -> Metadata {
+	let mut metadata = metadata("Plugin");
+	metadata.packages.push(
+		serde_json::from_value(json!({
+			"id": "scene3d", "name": "leptoskit_3d", "manifest_path": "/sdk/3d/Cargo.toml",
+			"metadata": {}
+		}))
+		.unwrap(),
+	);
+	metadata.resolve.nodes.push(
+		serde_json::from_value(json!({"id": "scene3d", "deps": [], "features": features})).unwrap(),
+	);
+	metadata
+}
+
+#[test]
+fn apps_that_draw_scenes_get_the_bridge_s_scene3d_feature() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	// Every app has the protocol, through the `Scene3d` element.
+	let registry = resolve_metadata(scene_metadata(&[]), &config).unwrap();
+	assert!(!registry.scene3d);
+	assert_eq!(registry.host_features, [] as [String; 0]);
+	for feature in ["guest", "web", "renderer"] {
+		let registry = resolve_metadata(scene_metadata(&[feature]), &config).unwrap();
+		assert!(registry.scene3d, "{feature}");
+		assert_eq!(
+			registry.host_features,
+			["ffi/scene3d"],
+			"the bridge's alias"
+		);
+	}
+}
+
 #[test]
 fn rejects_expressions_in_generated_type_paths() {
 	let mut config = LeptoskitConfig::default();
@@ -480,6 +515,7 @@ fn pod_registry(plugins: Vec<Plugin>) -> Registry {
 		host_features: Vec::new(),
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 

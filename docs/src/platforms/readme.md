@@ -13,7 +13,7 @@ A leptoskit app is one tree of components. The web renders it as HTML through le
 | HarmonyOS          | ArkUI components                    | `leptoskit native build harmonyos`     | Eight, experimental                             |
 | Wear OS            | Watch surfaces (`leptoskit::watch`) | `leptoskit native prepare wearos`      | Experimental stubs (no APK yet)                 |
 | watchOS            | Watch surfaces (`leptoskit::watch`) | `leptoskit native prepare watchos`     | Experimental stubs (no app yet)                 |
-| Terminal           | Characters in the terminal's cells  | `leptoskit build --platform tui`       | All except `Rive`                               |
+| Terminal           | Characters in the terminal's cells  | `leptoskit build --platform tui`       | All except `Rive`; `Scene3d` is a placeholder   |
 | Browser extensions | HTML and CSS, through leptos        | `leptoskit build --platform extension` | All                                             |
 
 macOS and iOS apps build on a Mac, the Windows app on Windows, and the Linux app on Linux. `leptoskit native build` takes the same platforms plus simulator and architecture variants: `ios-simulator`, `android-x86_64` for x86-64 emulators, and `harmonyos-x86_64`. [Host projects](host-projects.md) lists the tools each platform needs.
