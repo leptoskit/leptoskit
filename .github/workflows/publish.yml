@@ -489,7 +489,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev pkg-config
+          sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config
 
       - name: verify every crate builds from its package
         # Packaging builds each crate from exactly the files it ships, so a file the crate reads but
