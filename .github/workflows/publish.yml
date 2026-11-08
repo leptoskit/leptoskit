@@ -148,11 +148,18 @@ jobs:
           monochange step validate
 
   # Resolve the tag once in validate, then test and build that exact commit.
-  # Every publication side effect depends on this gate through devtools-ui.
+  # Every publication side effect depends on both acceptance gates through devtools-ui.
   sdk-acceptance:
     name: verify generated SDKs before publication
     needs: validate
     uses: ./.github/workflows/sdk-acceptance.yml
+    with:
+      revision: ${{ needs.validate.outputs.revision }}
+
+  project-acceptance:
+    name: verify generated projects before publication
+    needs: validate
+    uses: ./.github/workflows/project-acceptance.yml
     with:
       revision: ${{ needs.validate.outputs.revision }}
 
@@ -161,7 +168,7 @@ jobs:
   # the hash before serving it, so the interface and the CLI that fetches it always match.
   devtools-ui:
     name: build the DevTools interface
-    needs: [validate, sdk-acceptance]
+    needs: [validate, sdk-acceptance, project-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

@@ -19,6 +19,7 @@ devenv shell fix:all       # autofix everything fixable
 | `lint:clippy:wasm`     | clippy for the browser and guest code, which only compiles for wasm.           |
 | `lint:monostyle`       | Holds the tree to monostyle's 80 floor and `devenv.nix` to 100.                |
 | `test:sdk`             | Runs all generated clients against the live server; missing toolchains fail.   |
+| `test:projects`        | Runs generated DB, auth and universal apps; missing tools or journeys fail.    |
 | `test:browser`         | Runs the `leptoskit_testing_library` suite in Chrome.                          |
 | `coverage:all`         | Workspace coverage, held to the coverage gate (below).                         |
 | `docs:build`           | Builds the docs site into `docs/dist`.                                         |
@@ -41,6 +42,14 @@ Depend on a local checkout from a generated app with `--sdk-path`: `leptoskit ne
 `devenv shell test:sdk` runs TypeScript under Deno and Node, Python, Dart, Go, Rust, and the generated CLI against a real local live server. The clients exercise subscriptions, patches, read-your-writes, reconnect, mutation deduplication, and channels. The development environment supplies each language's toolchain; missing tools or an empty test selection fail. The tests run serially, and the generated Rust consumers use a separate cache configurable with `LEPTOSKIT_SDK_TARGET_DIR`.
 
 Every pull request and main push runs this command in CI. Publication runs it again on the validated release commit, before uploading artifacts or publishing crates. Every publication build checks out that same validated commit SHA. `test:all` includes it locally. These tests install generated packages and their dependencies, so they require registry access. They validate the SDK/server journey; native host transport, generated application, and provider recovery tests remain separate checks.
+
+## Generated application acceptance
+
+`devenv shell test:projects` requires all three generated-app journeys: database notes, authenticated notes, and the universal counter. They build fresh apps against the checked-out toolkit, exercise schema and RPC exports, run the real local servers, and load compiled native Wasm in the headless host. The database journey also runs its generated TypeScript client under Node, including reconnect after a server restart. The universal journey checks browser output, native platform overrides, and that server dependencies stay out of Wasm.
+
+The command requires Node 22 or newer, `cargo-nextest`, Binaryen, and the active toolchain's `wasm32-unknown-unknown` standard library. It sets `LEPTOSKIT_REQUIRE_SDK_TOOLCHAINS=1`, so a missing Node executable cannot silently skip client behavior. Each exact test selector must match independently. The journeys run serially; `CARGO_BUILD_JOBS` controls compilation, and the DB/auth apps share `LEPTOSKIT_E2E_TARGET_DIR` while the universal app owns its temporary build directory. A generated cache that resolves to the parent Cargo target is rejected to avoid a nested build waiting on its own lock.
+
+PRs, main, and publication use the same command. Publication checks out the validated release SHA and requires success before any artifact upload or crate publication, including validation during a dry run. `test:all` includes it locally. These are compiled application and headless host checks; they do not establish browser UI, device SDK, simulator, physical device, or provider deployment acceptance. The broader coverage jobs retain their instrumented journeys separately.
 
 ## Coverage
 

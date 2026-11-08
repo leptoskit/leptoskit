@@ -550,6 +550,7 @@ in
         set -euo pipefail
         test:cargo
         test:sdk
+        test:projects
         test:harmonyos
         test:docs
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
@@ -563,6 +564,13 @@ in
         exec bash "${currentDir}/setup/scripts/sdk-acceptance.sh"
       '';
       description = "Run every generated SDK against the live server; missing tools fail.";
+      binary = "bash";
+    };
+    "test:projects" = {
+      exec = ''
+        exec bash "${currentDir}/setup/scripts/project-acceptance.sh"
+      '';
+      description = "Run required generated DB, auth and universal app journeys without toolchain skips.";
       binary = "bash";
     };
     "test:cargo" = {

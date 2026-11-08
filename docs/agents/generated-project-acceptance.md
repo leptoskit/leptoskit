@@ -1,0 +1,13 @@
+# Mandatory generated application acceptance
+
+Audit A08 already required SDK execution before publication. Generated app tests existed in the coverage job, but publication did not depend on them; the database journey also treated an unavailable Node executable as an optional skip by default.
+
+`setup/scripts/project-acceptance.sh` requires the DB, auth, and universal journeys individually through exact nextest selectors, ignored-test execution, `--no-tests=fail`, and an explicit default-filter override. It checks Node's version and runtime features, nextest, Binaryen, and the active Wasm standard library before compiling. It forces the existing SDK-toolchain requirement and keeps generated Cargo targets separate from the parent build. It does not remove or weaken the tests' existing assertions.
+
+The reusable workflow executes the same command on the caller's commit or the explicitly validated publication SHA. The publication dependency is on `devtools-ui`, before that job's upload; binary builds/uploads, attestations, crate publication, and finalization already depend transitively on it. The gate runs for publication dry runs as well. Instrumented coverage keeps its existing app journeys; this independent release gate makes no coverage claim.
+
+The Python orchestration tests execute the production shell wrapper against controlled tool processes. They cover missing/unusable tools and Wasm std, a failed middle journey, a missing individual selector, mandatory Node checks, serial execution, and cache alias refusal. Those controls do not replace running the three compiled journeys. Current-head application execution, the full normal push gate, and publication review remain required before merging this slice. Historical PR609/654 generated-app evidence is not represented as evidence for this new command.
+
+Local command validation passed seven Python tests, Bash syntax, ShellCheck, actionlint on all changed workflows, docs/release checks, and the Nix/Python readability checks. Negative controls reproduced failure when the empty-selection guard, mandatory Node setting, or shell failure propagation was removed. An independent parsed-workflow dependency check covered every publication side-effect job and failed when the new dependency was removed. The installed nextest help confirms the required flags. The three actual application journeys and full gate have not yet run for this change.
+
+Remaining A08 scope includes device/GUI acceptance, provider recovery, exact packaged/registry consumers, and release-specific evidence retention. A10's fresh external schema-pack removal journey also remains separate. This gate does not claim those are complete.
