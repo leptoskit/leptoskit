@@ -2,8 +2,9 @@
 //!
 //! Add `leptoskit_plugin_http` as a direct dependency and select the `http`
 //! plugin in `native.plugins`; supported generated hosts discover it from Cargo
-//! metadata. Generated Windows, Linux, and terminal hosts currently omit
-//! runtime plugins; use explicit registration in a custom host there. Native
+//! metadata. Generated Linux hosts register it where it has a Linux Rust
+//! implementation; generated Windows and terminal hosts currently omit runtime
+//! plugins, so use explicit registration in a custom host there. Native
 //! requests use reqwest with rustls and need a Tokio runtime; the browser uses
 //! fetch with incremental body reading. Redirects are not followed, and every
 //! destination origin is explicit.

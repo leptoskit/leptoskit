@@ -51,7 +51,7 @@ Windows and Linux desktop hosts can call `desktop::pick(&parent_window, options)
 
 <!-- {=p_document_pickerSummary} -->
 
-Add `leptoskit_plugin_document_picker` as a direct dependency and select the `document-picker` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. The user picks the document; the app receives owned bytes under a size limit and never gets a reusable path into the document provider.
+Add `leptoskit_plugin_document_picker` as a direct dependency and select the `document-picker` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The user picks the document; the app receives owned bytes under a size limit and never gets a reusable path into the document provider.
 
 <!-- {/p_document_pickerSummary} -->
 

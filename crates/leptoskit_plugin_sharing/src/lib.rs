@@ -2,8 +2,9 @@
 //!
 //! Add `leptoskit_plugin_sharing` as a direct dependency and select the
 //! `sharing` plugin in `native.plugins`; supported generated hosts discover it
-//! from Cargo metadata. Generated Windows, Linux, and terminal hosts currently
-//! omit runtime plugins; use explicit registration in a custom host there. The
+//! from Cargo metadata. Generated Linux hosts register it where it has a Linux
+//! Rust implementation; generated Windows and terminal hosts currently omit
+//! runtime plugins, so use explicit registration in a custom host there. The
 //! app supplies the content, the user picks the destination, and completion
 //! only means the platform finished its API callback.
 //!

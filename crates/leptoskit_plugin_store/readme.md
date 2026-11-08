@@ -60,7 +60,7 @@ The wire protocol uses little-endian `u32` and length-prefixed UTF-8/JSON bytes.
 
 <!-- {=p_storeSummary} -->
 
-Add `leptoskit_plugin_store` as a direct dependency and select the `store` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Store` rather than resolving the plugin on every call. Each application gets one store, values are JSON over a binary envelope, and guests cannot choose filesystem paths.
+Add `leptoskit_plugin_store` as a direct dependency and select the `store` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Store` rather than resolving the plugin on every call. Each application gets one store, values are JSON over a binary envelope, and guests cannot choose filesystem paths.
 
 <!-- {/p_storeSummary} -->
 

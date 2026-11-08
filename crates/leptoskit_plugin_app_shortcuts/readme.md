@@ -43,7 +43,7 @@ This port does not add icons, deep-link handlers, Siri App Intents, or pinned/ma
 
 <!-- {=p_app_shortcutsSummary} -->
 
-Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
+Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
 
 <!-- {/p_app_shortcutsSummary} -->
 

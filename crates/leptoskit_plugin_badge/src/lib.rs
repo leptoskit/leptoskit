@@ -2,13 +2,14 @@
 //!
 //! Add `leptoskit_plugin_badge` as a direct dependency and select the `badge`
 //! plugin in `native.plugins`; supported generated hosts discover it from Cargo
-//! metadata. Generated Windows, Linux, and terminal hosts currently omit
-//! runtime plugins; use explicit registration in a custom host there. Guests
-//! enable the `guest` feature and reuse `guest::Badge` rather than resolving
-//! the plugin on every call. Browser pages without a native host call
-//! `web::set` / `web::clear` over the Badging API. Setting a count asks the OS
-//! or browser to show an app-icon badge; it never proves the badge is visible
-//! under the user's focus or notification settings.
+//! metadata. Generated Linux hosts register it where it has a Linux Rust
+//! implementation; generated Windows and terminal hosts currently omit runtime
+//! plugins, so use explicit registration in a custom host there. Guests enable
+//! the `guest` feature and reuse `guest::Badge` rather than resolving the
+//! plugin on every call. Browser pages without a native host call `web::set` /
+//! `web::clear` over the Badging API. Setting a count asks the OS or browser to
+//! show an app-icon badge; it never proves the badge is visible under the
+//! user's focus or notification settings.
 //!
 //! <!-- {/p_badgeSummary} -->
 

@@ -2,9 +2,10 @@
 //!
 //! Add `leptoskit_plugin_picture_in_picture` as a direct dependency and select
 //! the `picture-in-picture` plugin in `native.plugins`; supported generated
-//! hosts discover it from Cargo metadata. Generated Windows, Linux, and
-//! terminal hosts currently omit runtime plugins; use explicit registration in
-//! a custom host there. Guests enable the `guest` feature and reuse
+//! hosts discover it from Cargo metadata. Generated Linux hosts register it
+//! where it has a Linux Rust implementation; generated Windows and terminal
+//! hosts currently omit runtime plugins, so use explicit registration in a
+//! custom host there. Guests enable the `guest` feature and reuse
 //! `guest::PictureInPicture` rather than resolving the plugin on every call.
 //! Android can enter activity picture-in-picture and, with
 //! `SYSTEM_ALERT_WINDOW`, hold a system overlay window. iOS reports whether

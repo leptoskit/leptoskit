@@ -49,7 +49,7 @@ Reference: [Expo Brightness](https://docs.expo.dev/versions/latest/sdk/brightnes
 
 <!-- {=p_brightnessSummary} -->
 
-Add `leptoskit_plugin_brightness` as a direct dependency and select the `brightness` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Brightness` rather than resolving the plugin on every call. Android changes only the activity window, iOS changes the screen and restores the previous value, and desktop and the browser return `Unavailable`.
+Add `leptoskit_plugin_brightness` as a direct dependency and select the `brightness` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Brightness` rather than resolving the plugin on every call. Android changes only the activity window, iOS changes the screen and restores the previous value, and desktop and the browser return `Unavailable`.
 
 <!-- {/p_brightnessSummary} -->
 

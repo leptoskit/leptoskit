@@ -52,7 +52,7 @@ Re-query when the app resumes to reflect settings changes. Locale change events,
 
 <!-- {=p_localizationSummary} -->
 
-Add `leptoskit_plugin_localization` as a direct dependency and select the `localization` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Localization` rather than resolving the plugin on every call. Each snapshot reflects current platform state, no global locale is mutated, and a host should re-query after the application resumes.
+Add `leptoskit_plugin_localization` as a direct dependency and select the `localization` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Localization` rather than resolving the plugin on every call. Each snapshot reflects current platform state, no global locale is mutated, and a host should re-query after the application resumes.
 
 <!-- {/p_localizationSummary} -->
 

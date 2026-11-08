@@ -53,7 +53,7 @@ References: [Expo Haptics](https://docs.expo.dev/versions/latest/sdk/haptics/), 
 
 <!-- {=p_hapticsSummary} -->
 
-Add `leptoskit_plugin_haptics` as a direct dependency and select the `haptics` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Haptics` rather than resolving the plugin on every call. iOS uses UIKit feedback generators, Android uses platform haptic feedback, and macOS approximates the mobile styles with its trackpad performer; browsers use the Vibration API where allowed.
+Add `leptoskit_plugin_haptics` as a direct dependency and select the `haptics` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Haptics` rather than resolving the plugin on every call. iOS uses UIKit feedback generators, Android uses platform haptic feedback, and macOS approximates the mobile styles with its trackpad performer; browsers use the Vibration API where allowed.
 
 <!-- {/p_hapticsSummary} -->
 

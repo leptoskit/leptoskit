@@ -2,9 +2,10 @@
 //!
 //! Add `leptoskit_plugin_screen_orientation` as a direct dependency and select
 //! the `screen-orientation` plugin in `native.plugins`; supported generated
-//! hosts discover it from Cargo metadata. Generated Windows, Linux, and
-//! terminal hosts currently omit runtime plugins; use explicit registration in
-//! a custom host there. Guests enable the `guest` feature and reuse
+//! hosts discover it from Cargo metadata. Generated Linux hosts register it
+//! where it has a Linux Rust implementation; generated Windows and terminal
+//! hosts currently omit runtime plugins, so use explicit registration in a
+//! custom host there. Guests enable the `guest` feature and reuse
 //! `guest::ScreenOrientation` rather than resolving the plugin on every call. A
 //! pending hold is not an acknowledgement that the OS rotated; the snapshot
 //! reports the presented interface, not accelerometer orientation.

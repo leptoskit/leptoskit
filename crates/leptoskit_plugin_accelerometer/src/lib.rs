@@ -2,8 +2,9 @@
 //!
 //! Add `leptoskit_plugin_accelerometer` as a direct dependency and select the
 //! `accelerometer` plugin in `native.plugins`; supported generated hosts
-//! discover it from Cargo metadata. Generated Windows, Linux, and terminal
-//! hosts currently omit runtime plugins; use explicit registration in a custom
+//! discover it from Cargo metadata. Generated Linux hosts register it where it
+//! has a Linux Rust implementation; generated Windows and terminal hosts
+//! currently omit runtime plugins, so use explicit registration in a custom
 //! host there. Guests enable the `guest` feature and reuse
 //! `guest::Accelerometer` rather than resolving the plugin on every call. iOS
 //! and Android use real system sensors, desktop has no sensor, and the browser
