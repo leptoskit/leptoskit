@@ -12,5 +12,28 @@ repository.workspace = true
 rust-version.workspace = true
 description = "GPU 3D scenes for leptoskit: a host-owned scene of glTF models, animation, and lights, driven by compact ops and drawn with wgpu."
 
+[dependencies]
+bytemuck = { workspace = true, optional = true, features = ["derive"] }
+glam = { workspace = true, optional = true, features = ["bytemuck"] }
+png = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+zune-jpeg = { workspace = true, optional = true }
+
+[features]
+default = ["renderer"]
+# The glTF loader and the retained scene. Without it the crate is only the
+# ops and events a Wasm guest sends and receives.
+renderer = [
+	"dep:bytemuck",
+	"dep:glam",
+	"dep:png",
+	"dep:serde",
+	"dep:serde_json",
+	"dep:thiserror",
+	"dep:zune-jpeg",
+]
+
 [lints]
 workspace = true

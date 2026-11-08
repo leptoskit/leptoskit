@@ -1,13 +1,57 @@
 //! GPU 3D scenes for leptoskit.
 //!
-//! A guest describes a scene with [`Op`]s and the host owns it: models,
-//! their animation, lights, and the camera all live with the host, never in
-//! the guest's frame loop. This crate holds the ops and events a guest sends
-//! and receives, their compact binary form, and the bounds a host applies to
-//! them.
+//! A guest describes a scene with [`Op`]s and the host owns it: models loaded
+//! from glTF, their animation, lights, and the camera all live with the host,
+//! never in the guest's frame loop.
+//!
+//! Without the default `renderer` feature, the crate is only the ops and
+//! events and their binary form, and builds for any target, Wasm guests
+//! included.
 
 mod protocol;
 mod sanitize;
 
+#[cfg(feature = "renderer")]
+mod animation;
+#[cfg(feature = "renderer")]
+mod asset;
+#[cfg(feature = "renderer")]
+pub mod gltf;
+#[cfg(feature = "renderer")]
+mod image;
+#[cfg(feature = "renderer")]
+mod raycast;
+#[cfg(feature = "renderer")]
+mod world;
+
+#[cfg(feature = "renderer")]
+pub use asset::Asset;
+/// The math types the scene's API takes, so hosts use the same version.
+#[cfg(feature = "renderer")]
+pub use glam;
+#[cfg(feature = "renderer")]
+pub use gltf::LoadError;
 pub use protocol::*;
 pub use sanitize::*;
+#[cfg(feature = "renderer")]
+pub use world::World;
+
+#[cfg(feature = "renderer")]
+impl Asset {
+	/// Loads a model from the bytes of a `.glb` file, or of a `.gltf` file
+	/// whose buffers and images are embedded as `data:` URIs.
+	pub fn from_slice(bytes: &[u8]) -> Result<Self, LoadError> {
+		gltf::load(bytes, &mut |path| {
+			Err(format!("{path} is not embedded in the model"))
+		})
+	}
+
+	/// Loads a model whose `.gltf` refers to files beside it. `resolve` reads
+	/// one by its relative path, which is never outside the model's folder.
+	pub fn from_slice_with(
+		bytes: &[u8],
+		mut resolve: impl FnMut(&str) -> Result<Vec<u8>, String>,
+	) -> Result<Self, LoadError> {
+		gltf::load(bytes, &mut resolve)
+	}
+}

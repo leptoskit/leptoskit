@@ -3080,6 +3080,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.34.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54af5066834d6c2d404eb26ea036a15b15d9ff80db510b9a73ff95ab07f30831"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "glib"
 version = "0.20.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4900,6 +4909,15 @@ dependencies = [
 [[package]]
 name = "leptoskit_3d"
 version = "0.3.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zune-jpeg",
+]
 
 [[package]]
 name = "leptoskit_agent_ui"
