@@ -11,6 +11,7 @@ use std::sync::Arc;
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::Started;
 use super::XrFrame;
 use crate::image::DepthFormat;
 use crate::image::DepthImage;
@@ -336,23 +337,15 @@ impl Backend for ReplayBackend {
 		}
 	}
 
-	fn start(
-		&mut self,
-		config: &SessionConfig,
-		_features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		self.running = true;
 		self.started = None;
 		self.shown = None;
-		Ok(config.reference_space)
+		Ok(Started::new(config.reference_space, features))
 	}
 
-	fn configure(
-		&mut self,
-		config: &SessionConfig,
-		_features: Features,
-	) -> Result<ReferenceSpace, Error> {
-		Ok(config.reference_space)
+	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
+		Ok(Started::new(config.reference_space, features))
 	}
 
 	fn update(&mut self, time: f64) -> Result<Option<XrFrame>, Error> {

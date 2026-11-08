@@ -19,6 +19,7 @@ use std::time::Instant;
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::Started;
 use super::Viewport;
 use super::XrFrame;
 use crate::math::Pose;
@@ -124,7 +125,13 @@ impl XrRuntime {
 		}
 
 		let mut info = negotiate(&state.backend.capabilities(), &config)?;
-		info.reference_space = state.backend.start(&config, info.features)?;
+		let started = state.backend.start(&config, info.features)?;
+
+		if let Err(error) = accept(&mut info, &config, started) {
+			state.backend.stop();
+			return Err(error);
+		}
+
 		state.generation += 1;
 		state.session = Some(Session {
 			generation: state.generation,
@@ -154,7 +161,8 @@ impl XrRuntime {
 		}
 
 		let mut info = negotiate(&state.backend.capabilities(), &config)?;
-		info.reference_space = state.backend.configure(&config, info.features)?;
+		let started = state.backend.configure(&config, info.features)?;
+		accept(&mut info, &config, started)?;
 		session.config = config;
 		session.info = info;
 		Ok(info)
@@ -342,6 +350,18 @@ fn negotiate(capabilities: &Capabilities, config: &SessionConfig) -> Result<Sess
 		features,
 		reference_space: config.reference_space,
 	})
+}
+
+/// Records what the backend started, refusing a session that lost a required
+/// feature on the way.
+fn accept(info: &mut SessionInfo, config: &SessionConfig, started: Started) -> Result<(), Error> {
+	if !started.features.contains(config.required) {
+		return Err(Error::Unavailable);
+	}
+
+	info.reference_space = started.reference_space;
+	info.features = info.features.intersection(started.features);
+	Ok(())
 }
 
 fn wake(waiters: &mut Vec<Waker>) {

@@ -230,6 +230,11 @@ pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
 	#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 	let backends = backends.with(super::arkit::ArKitBackend::new());
 
+	#[cfg(target_os = "android")]
+	let backends = backends.with(super::arcore::ArCoreBackend::new(
+		context.platform().cloned(),
+	));
+
 	#[cfg(any(target_os = "ios", target_os = "android"))]
 	let backends = backends.with(super::OrientationBackend::new(super::DeviceRotation::new()));
 
