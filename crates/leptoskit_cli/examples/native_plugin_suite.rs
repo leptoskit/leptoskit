@@ -318,6 +318,19 @@ class LivePhotoWireInstrumentationTest {
 }
 ";
 
+const AGE_RANGE_WIRE_TEST: &str = r"package dev.leptoskit.plugins.agerange
+
+import org.junit.Test
+
+/** Validates synthetic age-range framing without OS age APIs. */
+class AgeRangeWireInstrumentationTest {
+    @Test
+    fun boundedThresholdAndStatus() {
+        main()
+    }
+}
+";
+
 const BACKGROUND_TASK_WIRE_TEST: &str = r"package dev.leptoskit.plugins.backgroundtask
 
 import org.junit.Test
