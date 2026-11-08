@@ -11,6 +11,8 @@ pub enum ControlTreeError {
 	InvalidRive,
 	/// Native Rive playback must be explicitly compiled into the host.
 	RiveNotEnabled,
+	/// A scene and an accessible label or decorative state are required.
+	InvalidScene3d,
 	/// A leaf widget cannot contain child widgets.
 	Children { kind: NativeKind },
 	/// Radio options require an explicit named group.
@@ -48,6 +50,12 @@ impl fmt::Display for ControlTreeError {
 			Self::InvalidRive => {
 				formatter.write_str(
 					"use a Rive element with playback content and an accessible label or \
+					 aria_hidden(true)",
+				)
+			}
+			Self::InvalidScene3d => {
+				formatter.write_str(
+					"use a Scene3d element with a scene and an accessible label or \
 					 aria_hidden(true)",
 				)
 			}

@@ -219,6 +219,21 @@ pub fn Rive(playback: leptoskit_rive::Playback) -> Element {
 
 tag!(Rive => Element::new(crate::NativeKind::Rive));
 
+/// A 3D scene the host owns and draws on the GPU: models from glTF, their
+/// animation, lights, and the camera.
+///
+/// The element only says where the scene shows. Build and change the scene
+/// with `leptoskit_3d::client::Scene` (`leptoskit::scene3d` with the `3d`
+/// feature), whose ops go straight to the host without re-rendering this
+/// element. Give it a size, such as `w-full h-96`, and an accessible label,
+/// or mark it decorative with `aria_hidden(true)`.
+#[track_caller]
+pub fn Scene3d(scene: leptoskit_3d::SceneId) -> Element {
+	Element::scene3d(scene)
+}
+
+tag!(Scene3d => Element::new(crate::NativeKind::Scene3d));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {

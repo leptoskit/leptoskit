@@ -411,7 +411,9 @@ impl UIKitBackend {
 					Control::Vector(VectorLayers::default()),
 				)
 			}
-			NativeKind::View | NativeKind::Custom(_) => {
+			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
+			// this backend holds its place as an empty view.
+			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d => {
 				(
 					UIView::initWithFrame(UIView::alloc(self.mtm), frame),
 					Control::Plain,
