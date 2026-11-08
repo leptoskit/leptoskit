@@ -9,6 +9,7 @@ import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.ViewGroup
 import java.io.IOException
 
 /**
@@ -17,6 +18,10 @@ import java.io.IOException
  * The guest's ops reach the scene through the `leptoskit.scene3d` plugin, never through this view. It
  * attaches while its surface exists, draws on the [Choreographer] only while the scene changes or animates,
  * and is woken by Rust when the scene changes while it is idle.
+ *
+ * While the scene draws a live camera picture behind it (its backdrop is the camera and an XR session is
+ * running), the view covers its whole area, so it moves below the window's own views and the interface laid
+ * over it stays visible. Otherwise it stays above them, transparent around its models.
  */
 internal class NativeScene3dView(
     context: Context,
@@ -30,6 +35,7 @@ internal class NativeScene3dView(
     private var surfaceHeight = 0
     private var scheduled = false
     private var open = true
+    private var overlay = true
 
     init {
         NativeScene3d.configure(context)
@@ -115,7 +121,30 @@ internal class NativeScene3dView(
         scheduled = false
 
         if (handle == 0L) return
-        if (NativeScene3d.frame(handle, frameTimeNanos / 1_000_000_000.0) == 1) requestFrame()
+        NativeScene3d.setRotation(handle, display?.rotation ?: Surface.ROTATION_0)
+        val more = NativeScene3d.frame(handle, frameTimeNanos / 1_000_000_000.0) == 1
+        restack(NativeScene3d.showsCamera(handle))
+        if (more) requestFrame()
+    }
+
+    /**
+     * Puts the surface below the window's views while it shows the camera, and above them otherwise. A
+     * [SurfaceView]'s layer only changes while it is out of its window, so the view leaves its parent and
+     * comes back in the same place; its surface is made again and it reattaches.
+     */
+    private fun restack(camera: Boolean) {
+        val wanted = !camera
+        if (wanted == overlay) return
+        overlay = wanted
+        val parent = parent as? ViewGroup ?: return
+        post {
+            val index = parent.indexOfChild(this)
+            if (!open || index < 0) return@post
+            val params = layoutParams
+            parent.removeViewAt(index)
+            setZOrderMediaOverlay(overlay)
+            parent.addView(this, index, params)
+        }
     }
 }
 
@@ -166,6 +195,13 @@ internal object NativeScene3d {
         view: Long,
         time: Double,
     ): Int
+
+    @JvmStatic external fun setRotation(
+        view: Long,
+        quarterTurns: Int,
+    )
+
+    @JvmStatic external fun showsCamera(view: Long): Boolean
 
     @JvmStatic external fun detach(view: Long)
 

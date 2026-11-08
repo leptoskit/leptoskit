@@ -26,6 +26,9 @@
 //!
 //! Coordinates are right-handed metres with +Y up, and a viewer looks down
 //! its own −Z axis, as on every platform underneath.
+// Proving that a painter holding wgpu textures is `Send` walks wgpu's deep
+// types past the default limit.
+#![recursion_limit = "256"]
 
 pub mod hit_test;
 pub mod image;

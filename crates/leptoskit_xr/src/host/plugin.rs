@@ -214,6 +214,14 @@ pub fn from_context(context: &AppContext, options_json: &str) -> Result<XrPlugin
 		None => XrRuntime::new(platform_backend(context)),
 	};
 
+	// A depth crate's estimator, installed before or after.
+	super::camera::adopt(&runtime);
+
+	// Scenes that ask for the camera backdrop draw over this runtime's
+	// sessions.
+	#[cfg(feature = "scene3d")]
+	super::scene3d::SessionFeed::install(&runtime, leptoskit_3d::host::Hub::global());
+
 	XrPlugin::new(runtime, options.max_frame_rate)
 		.driven()
 		.map_err(|_| Error::Native)
@@ -250,8 +258,16 @@ pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
 		context.platform().cloned(),
 	));
 
-	#[cfg(any(target_os = "ios", target_os = "android"))]
+	// Phones without AR look around by turning. Android's also show the back
+	// camera through Camera2; every iPhone that runs current iOS has ARKit.
+	#[cfg(target_os = "ios")]
 	let backends = backends.with(super::OrientationBackend::new(super::DeviceRotation::new()));
+
+	#[cfg(target_os = "android")]
+	let backends = backends.with(
+		super::OrientationBackend::new(super::DeviceRotation::new())
+			.with_camera(super::camera2::Camera2Source::new()),
+	);
 
 	let _ = context;
 	backends

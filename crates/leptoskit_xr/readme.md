@@ -38,7 +38,8 @@ A game that hides creatures behind your sofa needs to know where the floor is, h
 - **Modes.** `Orientation` (look around by turning, from the rotation sensor, on any phone), `PhoneAr` (the camera picture with 6DoF tracking), `ImmersiveVr` and `ImmersiveAr` (a headset, the second showing the room through passthrough).
 - **Frames.** Each frame carries the viewer's pose, one view per eye or screen with its projection, detected planes with their outlines and labels, anchors, a light estimate, and controllers, hands, touches, or gaze. Planes are sent only when they change.
 - **The real world.** Hit tests cast a ray (or a screen tap) against planes, the depth picture, and the platform's own estimates. Anchors stay pinned as the platform corrects its map.
-- **Backends.** ARKit on iOS (LiDAR scene depth where the device has it), ARCore on Android (Depth API, ambient light), OpenXR on Meta Quest, Android XR, and PC headsets (the `openxr` feature), WebXR in the browser (the `web` feature), Core Motion and the Android rotation vector for orientation, and a deterministic replay of recorded frames.
+- **Backends.** ARKit on iOS (LiDAR scene depth where the device has it), ARCore on Android (Depth API, ambient light), OpenXR on Meta Quest, Android XR, and PC headsets (the `openxr` feature), WebXR in the browser (the `web` feature), Core Motion and the Android rotation vector for orientation (with the back camera through Camera2 on Android), and a deterministic replay of recorded frames.
+- **Depth from the camera.** `host::DepthEstimator` turns small CPU copies of the camera picture (`host::CameraFrame`, with the camera's intrinsics) into depth for devices that measure none.
 
 Tracking and rendering stay in native code. A Wasm guest receives poses and planes, never the camera or depth pictures; the host's renderer draws the scene over the camera image or into the headset and hides what is behind real surfaces.
 
@@ -64,6 +65,7 @@ Add the crate as a direct dependency of the app and select `"xr"` in `native.plu
 | `web`        | `web::Xr` over WebXR, with a `deviceorientation` fallback.                                                             |
 | `wgpu`       | `host::render`: camera and depth textures, view matrices, and headset swapchains for a wgpu renderer.                  |
 | `3d`         | `host::scene3d::draw`, which draws a `leptoskit_3d` scene over the camera picture, hidden behind real things by depth. |
+| `scene3d`    | `host::scene3d::SessionFeed`: phone sessions become the camera native `Scene3d` views draw over (the CLI turns it on). |
 
 ## Use it
 

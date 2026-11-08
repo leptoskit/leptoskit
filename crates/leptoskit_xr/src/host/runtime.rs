@@ -19,6 +19,8 @@ use std::time::Instant;
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::CameraFrame;
+use super::DepthEstimator;
 use super::Started;
 use super::Viewport;
 use super::XrFrame;
@@ -48,7 +50,11 @@ pub struct XrRuntime {
 	state: Mutex<State>,
 	external_driver: AtomicBool,
 	clock: Instant,
+	listener: Mutex<Option<Listener>>,
 }
+
+/// Called after a session starts, changes, or stops.
+type Listener = Arc<dyn Fn() + Send + Sync>;
 
 impl std::fmt::Debug for XrRuntime {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -61,6 +67,7 @@ struct State {
 	session: Option<Session>,
 	generation: u64,
 	waiters: Vec<Waker>,
+	estimator: Option<Box<dyn DepthEstimator>>,
 }
 
 struct Session {
@@ -75,6 +82,8 @@ struct Session {
 	planes_revision: u64,
 	anchors: Vec<Anchor>,
 	next_anchor: u64,
+	/// Whether the depth estimator fills in the depth the backend lacks.
+	estimate_depth: bool,
 }
 
 impl Session {
@@ -94,9 +103,11 @@ impl XrRuntime {
 				session: None,
 				generation: 0,
 				waiters: Vec::new(),
+				estimator: None,
 			}),
 			external_driver: AtomicBool::new(false),
 			clock: Instant::now(),
+			listener: Mutex::new(None),
 		})
 	}
 
@@ -104,9 +115,36 @@ impl XrRuntime {
 		self.state.lock().unwrap_or_else(PoisonError::into_inner)
 	}
 
+	/// Calls `listener` after a session starts, changes, or stops, on the
+	/// thread that made the change and outside the runtime's lock, so it may
+	/// call the runtime. A renderer uses it to start drawing the session.
+	pub fn set_listener(&self, listener: Option<Arc<dyn Fn() + Send + Sync>>) {
+		*self.listener.lock().unwrap_or_else(PoisonError::into_inner) = listener;
+	}
+
+	fn changed(&self) {
+		let listener = self
+			.listener
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+			.clone();
+
+		if let Some(listener) = listener {
+			listener();
+		}
+	}
+
+	/// Fills in depth from camera pictures for sessions whose platform has
+	/// none, from the next session on: with an estimator, every mode that
+	/// offers the camera picture also offers depth. `None` removes it.
+	pub fn set_depth_estimator(&self, estimator: Option<Box<dyn DepthEstimator>>) {
+		self.lock().estimator = estimator;
+	}
+
 	/// What the device can do.
 	pub fn capabilities(&self) -> Capabilities {
-		self.lock().backend.capabilities()
+		let state = self.lock();
+		estimated(state.backend.capabilities(), state.estimator.is_some())
 	}
 
 	/// Whether `mode` can start now; with `install`, opens the store for a
@@ -118,21 +156,19 @@ impl XrRuntime {
 	/// Starts a session. Fails with `Busy` while one runs, and `Unavailable`
 	/// when the device lacks the mode or a required feature.
 	pub fn start(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
+		let info = self.start_locked(config)?;
+		self.changed();
+		Ok(info)
+	}
+
+	fn start_locked(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
 		let mut state = self.lock();
 
 		if state.session.is_some() {
 			return Err(Error::Busy);
 		}
 
-		let mut info = negotiate(&state.backend.capabilities(), &config)?;
-		let started = state.backend.start(&config, info.features)?;
-
-		if let Err(error) = accept(&mut info, &config, started) {
-			state.backend.stop();
-
-			return Err(error);
-		}
-
+		let (info, estimate_depth) = begin(&mut state, &config, false)?;
 		state.generation += 1;
 		state.session = Some(Session {
 			generation: state.generation,
@@ -146,6 +182,7 @@ impl XrRuntime {
 			planes_revision: 0,
 			anchors: Vec::new(),
 			next_anchor: 1,
+			estimate_depth,
 		});
 		Ok(info)
 	}
@@ -153,19 +190,27 @@ impl XrRuntime {
 	/// Changes the running session's features, reference space, or frame
 	/// rate. The mode can't change: stop and start again for that.
 	pub fn configure(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
-		let mut state = self.lock();
-		let state = &mut *state;
-		let session = state.session.as_mut().ok_or(Error::Unavailable)?;
+		let info = self.configure_locked(config)?;
+		self.changed();
+		Ok(info)
+	}
 
-		if session.config.mode != config.mode {
-			return Err(Error::InvalidArgument);
+	fn configure_locked(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
+		let mut state = self.lock();
+
+		match &state.session {
+			None => return Err(Error::Unavailable),
+			Some(session) if session.config.mode != config.mode => {
+				return Err(Error::InvalidArgument);
+			}
+			Some(_) => {}
 		}
 
-		let mut info = negotiate(&state.backend.capabilities(), &config)?;
-		let started = state.backend.configure(&config, info.features)?;
-		accept(&mut info, &config, started)?;
+		let (info, estimate_depth) = begin(&mut state, &config, true)?;
+		let session = state.session.as_mut().ok_or(Error::Unavailable)?;
 		session.config = config;
 		session.info = info;
+		session.estimate_depth = estimate_depth;
 		Ok(info)
 	}
 
@@ -195,6 +240,20 @@ impl XrRuntime {
 
 		frame.planes_revision = session.planes_revision;
 		frame.anchors.extend(session.anchors.iter().copied());
+
+		if session.estimate_depth
+			&& frame.depth.is_none()
+			&& let Some(estimator) = state.estimator.as_mut()
+		{
+			if estimator.ready()
+				&& let Some(camera) = CameraFrame::from_frame(&frame, estimator.max_side())
+			{
+				estimator.submit(Arc::new(camera));
+			}
+
+			frame.depth = estimator.latest();
+		}
+
 		session.sequence += 1;
 		let frame = Arc::new(frame);
 		session.latest = Some(Arc::clone(&frame));
@@ -299,12 +358,22 @@ impl XrRuntime {
 	/// Ends the session. Waiting frame requests resolve with `Cancelled`.
 	pub fn stop(&self) {
 		let mut state = self.lock();
+		let stopped = state.session.take().is_some();
 
-		if state.session.take().is_some() {
+		if stopped {
 			state.backend.stop();
+
+			if let Some(estimator) = state.estimator.as_mut() {
+				estimator.reset();
+			}
 		}
 
 		wake(&mut state.waiters);
+		drop(state);
+
+		if stopped {
+			self.changed();
+		}
 	}
 
 	/// Whether a renderer calls [`XrRuntime::update`] itself. While it does,
@@ -334,6 +403,76 @@ impl XrRuntime {
 			thread: Some(thread),
 		})
 	}
+}
+
+/// `capabilities` with depth added to every mode that offers the camera
+/// picture, when a depth estimator can make it.
+fn estimated(capabilities: Capabilities, estimating: bool) -> Capabilities {
+	if !estimating {
+		return capabilities;
+	}
+
+	capabilities
+		.modes()
+		.filter(|(_, features)| features.contains(Features::CAMERA_IMAGE))
+		.fold(capabilities, |capabilities, (mode, features)| {
+			capabilities.with(mode, features | Features::DEPTH)
+		})
+}
+
+/// Starts (or, with `configure`, reconfigures) the backend for `config`,
+/// asking it for the camera picture when the depth estimator stands in for
+/// depth it lacks. Returns the session's info and whether the estimator
+/// fills in depth.
+fn begin(
+	state: &mut State,
+	config: &SessionConfig,
+	configure: bool,
+) -> Result<(SessionInfo, bool), Error> {
+	let offered = state
+		.backend
+		.capabilities()
+		.features(config.mode)
+		.unwrap_or_default();
+	let mut info = negotiate(
+		&estimated(state.backend.capabilities(), state.estimator.is_some()),
+		config,
+	)?;
+	let estimating = state.estimator.is_some()
+		&& info.features.contains(Features::DEPTH)
+		&& offered.contains(Features::CAMERA_IMAGE);
+	let mut asked = info.features;
+
+	if estimating {
+		asked = asked | Features::CAMERA_IMAGE;
+
+		if !offered.contains(Features::DEPTH) {
+			asked = asked.difference(Features::DEPTH);
+		}
+	}
+
+	let mut started = if configure {
+		state.backend.configure(config, asked)?
+	} else {
+		state.backend.start(config, asked)?
+	};
+	let estimate_depth = estimating
+		&& !started.features.contains(Features::DEPTH)
+		&& started.features.contains(Features::CAMERA_IMAGE);
+
+	if estimate_depth {
+		started.features = started.features | Features::DEPTH;
+	}
+
+	if let Err(error) = accept(&mut info, config, started) {
+		if !configure {
+			state.backend.stop();
+		}
+
+		return Err(error);
+	}
+
+	Ok((info, estimate_depth))
 }
 
 fn negotiate(capabilities: &Capabilities, config: &SessionConfig) -> Result<SessionInfo, Error> {

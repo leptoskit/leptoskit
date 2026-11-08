@@ -3,12 +3,16 @@
 //!
 //! [`FrameTextures`] uploads the pictures a backend left in CPU memory. It
 //! works on every wgpu backend, OpenGL ES included, which is what Android
-//! renders with by default. ARKit's `CVPixelBuffer` is also copied for now;
-//! wrapping it in Metal textures through a `CVMetalTextureCache` is the
-//! zero-copy path (see `docs/agents/xr.md`).
+//! renders with by default. A picture that comes again in a later frame (a
+//! 30 Hz camera under a 60 Hz rotation sensor) is not uploaded again. ARKit's
+//! `CVPixelBuffer` is also copied for now; wrapping it in Metal textures
+//! through a `CVMetalTextureCache` is the zero-copy path (see
+//! `docs/agents/xr.md`).
 //!
 //! With the `openxr` feature, [`openxr_vulkan`] creates the Vulkan device a
 //! headset session needs and renders into its swapchains.
+
+use std::sync::Arc;
 
 use super::XrFrame;
 use crate::image::*;
@@ -127,6 +131,15 @@ pub struct FrameTextures {
 	depth: Option<Slot>,
 	camera: Option<(bool, Affine2)>,
 	depth_transform: Option<Affine2>,
+	/// The CPU pixels uploaded last, kept so their address can't be reused
+	/// by a newer picture while it is compared.
+	camera_pixels: Option<Arc<[u8]>>,
+	depth_pixels: Option<Arc<[u8]>>,
+}
+
+/// Whether `data` is the very buffer `last` holds.
+fn same(last: Option<&Arc<[u8]>>, data: &Arc<[u8]>) -> bool {
+	last.is_some_and(|last| Arc::ptr_eq(last, data))
 }
 
 impl FrameTextures {
@@ -156,7 +169,20 @@ impl FrameTextures {
 		image: &CameraImage,
 	) -> Option<(bool, Affine2)> {
 		match &image.pixels {
+			CameraPixels::YCbCr { y, .. }
+				if same(self.camera_pixels.as_ref(), &y.data)
+					&& self.luma.is_some()
+					&& self.chroma.is_some() =>
+			{
+				Some((true, image.display_transform))
+			}
+			CameraPixels::Rgba(rgba)
+				if same(self.camera_pixels.as_ref(), &rgba.data) && self.rgba.is_some() =>
+			{
+				Some((false, image.display_transform))
+			}
 			CameraPixels::YCbCr { y, cbcr } if y.is_complete(1) && cbcr.is_complete(2) => {
+				self.camera_pixels = Some(Arc::clone(&y.data));
 				let size = (y.width, y.height);
 				Slot::ensure(
 					&mut self.luma,
@@ -179,6 +205,7 @@ impl FrameTextures {
 			}
 
 			CameraPixels::Rgba(rgba) if rgba.is_complete(4) => {
+				self.camera_pixels = Some(Arc::clone(&rgba.data));
 				let size = (rgba.width, rgba.height);
 				Slot::ensure(
 					&mut self.rgba,
@@ -193,6 +220,7 @@ impl FrameTextures {
 
 			#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 			CameraPixels::Native(NativeImage::PixelBuffer(buffer)) => {
+				// Each copy is new, so it is never mistaken for the last.
 				let (y, cbcr) = buffer.planes()?;
 				self.upload_camera(
 					device,
@@ -224,6 +252,12 @@ impl FrameTextures {
 		if !plane.is_complete(depth.format.bytes()) {
 			return None;
 		}
+
+		if same(self.depth_pixels.as_ref(), &depth.data) && self.depth.is_some() {
+			return Some(depth.display_transform);
+		}
+
+		self.depth_pixels = Some(Arc::clone(&depth.data));
 
 		let slot = Slot::ensure(
 			&mut self.depth,

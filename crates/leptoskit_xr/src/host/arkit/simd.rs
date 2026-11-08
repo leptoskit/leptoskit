@@ -22,6 +22,21 @@ use crate::math::Vec3;
 #[derive(Clone, Copy)]
 pub(super) struct Float4x4([float32x4_t; 4]);
 
+/// `simd_float3x3`: three column vectors, each padded to four lanes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct Float3x3([float32x4_t; 3]);
+
+impl Float3x3 {
+	/// The columns, without their padding lanes.
+	pub(super) fn columns(self) -> [[f32; 3]; 3] {
+		self.0.map(|column| {
+			let [x, y, z, _] = lanes(column);
+			[x, y, z]
+		})
+	}
+}
+
 /// `simd_float3`, padded to four lanes as ARKit stores it.
 pub(super) type Float3 = float32x4_t;
 
@@ -126,6 +141,17 @@ pub(super) unsafe fn pointer(receiver: *const AnyObject, selector: Sel) -> *cons
 pub(super) unsafe fn view_matrix(camera: *const AnyObject, orientation: isize) -> Float4x4 {
 	// SAFETY: The signature is ARKit's.
 	unsafe { send!(camera, objc2::sel!(viewMatrixForOrientation:), orientation => isize; Float4x4) }
+}
+
+/// `-[ARCamera intrinsics]`: focal lengths and principal point, in pixels of
+/// the captured image.
+///
+/// # Safety
+///
+/// `camera` must be a live `ARCamera`.
+pub(super) unsafe fn intrinsics(camera: *const AnyObject) -> Float3x3 {
+	// SAFETY: The signature is ARKit's.
+	unsafe { send!(camera, objc2::sel!(intrinsics); Float3x3) }
 }
 
 /// `-[ARCamera projectionMatrixForOrientation:viewportSize:zNear:zFar:]`.

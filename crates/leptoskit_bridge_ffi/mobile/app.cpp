@@ -1190,6 +1190,20 @@ Java_dev_leptoskit_mobile_NativeScene3d_resize(JNIEnv*, jclass, jlong handle, ji
     }
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_setRotation(JNIEnv*, jclass, jlong handle, jint quarterTurns) {
+    if (auto* view = scene3d(handle); view && quarterTurns >= 0) {
+        lk_scene3d_view_set_rotation(view->view, static_cast<uint32_t>(quarterTurns));
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_showsCamera(JNIEnv*, jclass, jlong handle) {
+    auto* view = scene3d(handle);
+
+    return view && lk_scene3d_view_shows_camera(view->view) == 1;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_leptoskit_mobile_NativeScene3d_frame(JNIEnv*, jclass, jlong handle, jdouble time) {
     auto* view = scene3d(handle);

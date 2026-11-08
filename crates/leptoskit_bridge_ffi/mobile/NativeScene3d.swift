@@ -87,6 +87,21 @@ final class NativeScene3dView: NativeScene3dBase {
         return (UInt32(max(0, (size.width * scale).rounded())), UInt32(max(0, (size.height * scale).rounded())))
     }
 
+    /// Clockwise quarter turns of the interface from portrait, which a scene drawn over the camera needs to
+    /// turn the picture upright. The Mac has no camera feed, so it stays 0.
+    private var quarterTurns: UInt32 {
+        #if os(macOS)
+        0
+        #else
+        switch window?.windowScene?.interfaceOrientation {
+        case .landscapeRight: 1
+        case .portraitUpsideDown: 2
+        case .landscapeLeft: 3
+        default: 0
+        }
+        #endif
+    }
+
     #if os(macOS)
     override func layout() {
         super.layout()
@@ -148,6 +163,7 @@ final class NativeScene3dView: NativeScene3dBase {
         }
         handle = view
         attachedScene = wanted
+        lk_scene3d_view_set_rotation(view, quarterTurns)
 
         let box = NativeScene3dWake()
         box.view = self
@@ -190,6 +206,8 @@ final class NativeScene3dView: NativeScene3dBase {
 
     @objc private func step(_ display: CADisplayLink) {
         guard let handle else { stop(); return }
+        // A half turn between the two landscapes changes no size, so the rotation is read every frame.
+        lk_scene3d_view_set_rotation(handle, quarterTurns)
 
         if lk_scene3d_view_frame(handle, display.timestamp) != 1 { stop() }
     }

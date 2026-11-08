@@ -10,6 +10,7 @@ use super::Session;
 use super::ffi;
 use super::image_plane;
 use super::tracking;
+use crate::host::Intrinsics;
 use crate::host::XrFrame;
 use crate::image::*;
 use crate::math::Fov;
@@ -32,6 +33,7 @@ impl ArCoreBackend {
 			.contains(Features::CAMERA_IMAGE)
 			.then(|| camera_image(session, display_transform))
 			.flatten();
+		let camera_intrinsics = camera_image.as_ref().and_then(|_| intrinsics(session));
 		let light = features
 			.contains(Features::LIGHT_ESTIMATION)
 			.then(|| light(session))
@@ -49,6 +51,7 @@ impl ArCoreBackend {
 				projection,
 			}],
 			camera_image,
+			camera_intrinsics,
 			depth,
 			planes: planes.into(),
 			planes_revision: 0,
@@ -302,6 +305,46 @@ fn camera(session: &Session) -> (Pose, Projection, TrackingState) {
 	(scratch.read(), projection, tracking(state, reason))
 }
 
+/// How the camera projects onto the CPU image.
+fn intrinsics(session: &Session) -> Option<Intrinsics> {
+	let api = session.api;
+	let (mut camera, mut intrinsics) = (std::ptr::null_mut(), std::ptr::null_mut());
+	let (mut fx, mut fy, mut cx, mut cy, mut width, mut height) = (0.0, 0.0, 0.0, 0.0, 0, 0);
+	// SAFETY: Reads the frame's camera into an intrinsics object, then frees
+	// both.
+	unsafe {
+		(api.ArCameraIntrinsics_create)(session.handle, &raw mut intrinsics);
+		(api.ArFrame_acquireCamera)(session.handle, session.frame, &raw mut camera);
+		(api.ArCamera_getImageIntrinsics)(session.handle, camera, intrinsics);
+		(api.ArCameraIntrinsics_getFocalLength)(
+			session.handle,
+			intrinsics,
+			&raw mut fx,
+			&raw mut fy,
+		);
+		(api.ArCameraIntrinsics_getPrincipalPoint)(
+			session.handle,
+			intrinsics,
+			&raw mut cx,
+			&raw mut cy,
+		);
+		(api.ArCameraIntrinsics_getImageDimensions)(
+			session.handle,
+			intrinsics,
+			&raw mut width,
+			&raw mut height,
+		);
+		(api.ArCamera_release)(camera);
+		(api.ArCameraIntrinsics_destroy)(intrinsics);
+	}
+
+	(fx > 0.0 && fy > 0.0 && width > 0 && height > 0).then_some(Intrinsics {
+		focal: [fx, fy],
+		principal: [cx, cy],
+		size: [width as u32, height as u32],
+	})
+}
+
 /// Maps the view to the camera image, from where ARCore puts three corners
 /// of the view in the image.
 fn display_transform(session: &Session) -> Affine2 {
@@ -409,34 +452,21 @@ fn camera_image(session: &Session, display_transform: Affine2) -> Option<CameraI
 	let (luma, luma_stride, _) = image_plane(session, image.1, 0)?;
 	let (cb, chroma_stride, chroma_step) = image_plane(session, image.1, 1)?;
 	let (cr, ..) = image_plane(session, image.1, 2)?;
-	let (chroma_width, chroma_height) = (width.div_ceil(2), height.div_ceil(2));
-	let mut cbcr = Vec::with_capacity((chroma_width * chroma_height * 2) as usize);
-
-	for row in 0..chroma_height as usize {
-		for column in 0..chroma_width as usize {
-			let at = row * chroma_stride as usize + column * chroma_step as usize;
-			cbcr.push(*cb.get(at)?);
-			cbcr.push(*cr.get(at)?);
-		}
-	}
+	let pixels = ycbcr_from_yuv420(
+		width,
+		height,
+		luma,
+		luma_stride as u32,
+		cb,
+		cr,
+		chroma_stride as u32,
+		chroma_step as u32,
+	)?;
 
 	Some(CameraImage {
 		width,
 		height,
 		display_transform,
-		pixels: CameraPixels::YCbCr {
-			y: ImagePlane {
-				width,
-				height,
-				row_stride: luma_stride as u32,
-				data: Arc::from(luma),
-			},
-			cbcr: ImagePlane {
-				width: chroma_width,
-				height: chroma_height,
-				row_stride: chroma_width * 2,
-				data: cbcr.into(),
-			},
-		},
+		pixels,
 	})
 }

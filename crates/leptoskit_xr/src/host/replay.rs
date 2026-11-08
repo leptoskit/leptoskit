@@ -317,6 +317,7 @@ impl ReplayBackend {
 			viewer: frame.viewer,
 			views: frame.views.clone(),
 			camera_image: None,
+			camera_intrinsics: None,
 			depth: recorded.depth.clone(),
 			planes: frame.planes.clone().into(),
 			planes_revision: 0,

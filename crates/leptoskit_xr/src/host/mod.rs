@@ -14,6 +14,7 @@ use crate::image::DepthImage;
 use crate::math::Pose;
 use crate::types::*;
 
+mod camera;
 mod composite;
 mod orientation;
 mod replay;
@@ -39,6 +40,10 @@ pub mod arkit;
 #[allow(unsafe_code)]
 pub mod arcore;
 
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub mod camera2;
+
 #[cfg(all(
 	feature = "openxr",
 	any(
@@ -50,6 +55,14 @@ pub mod arcore;
 #[allow(unsafe_code)]
 pub mod openxr;
 
+pub use camera::CameraFrame;
+pub use camera::CameraSource;
+pub use camera::CapturedImage;
+pub use camera::DepthEstimator;
+pub use camera::Intrinsics;
+pub use camera::install_depth_estimator;
+pub use camera::upright_fov;
+pub use camera::upright_transform;
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
@@ -137,6 +150,9 @@ pub struct XrFrame {
 	pub views: Vec<View>,
 	/// The camera picture to draw behind the scene, on phones.
 	pub camera_image: Option<CameraImage>,
+	/// How the camera that took `camera_image` projects, in that picture's
+	/// pixels, where the platform says.
+	pub camera_intrinsics: Option<Intrinsics>,
 	/// The depth picture, for occlusion and hit tests.
 	pub depth: Option<DepthImage>,
 	/// Every plane found so far.

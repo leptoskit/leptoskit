@@ -2,7 +2,7 @@
 
 <Callout kind="warning" title="Experimental">
 
-The `xr` plugin is new. Its protocol, its frame stream, and recorded playback are tested; the ARKit, ARCore, and WebXR backends build for their platforms but have not yet been checked on a device. Expect to find rough edges, and report them.
+The `xr` plugin is new. Its protocol, its frame stream, recorded playback, and drawing a scene over a camera picture are tested; the ARKit, ARCore, Camera2, and WebXR backends build for their platforms but have not yet been checked on a device. Expect to find rough edges, and report them.
 
 </Callout>
 
@@ -102,6 +102,46 @@ leptos::task::spawn_local(async move {
 });
 ```
 
+## Draw over the camera
+
+A [3D scene](33-3d-scenes.md) whose backdrop is the camera draws over the live camera picture while a session runs. Ask the session for the picture, and for depth so real things hide what is behind them:
+
+```rust
+use leptoskit::prelude::*;
+use leptoskit::scene3d::Backdrop;
+use leptoskit::scene3d::Op;
+use leptoskit::scene3d::SceneId;
+use leptoskit::scene3d::client::Scene;
+use leptoskit_xr::Features;
+use leptoskit_xr::Mode;
+use leptoskit_xr::SessionConfig;
+
+const ROOM: SceneId = SceneId(1);
+
+#[component]
+fn Hunt() -> Element {
+	view! {
+		<Scene3d scene=ROOM aria_label="Your room, with the creature in it" class="w-full h-full" />
+	}
+}
+
+fn hunt_config(mode: Mode) -> SessionConfig {
+	SessionConfig::new(mode).prefer(Features::CAMERA_IMAGE | Features::DEPTH | Features::PLANES)
+}
+
+async fn show_the_room() -> Result<(), leptoskit::scene3d::client::ClientError> {
+	let scene = Scene::new(ROOM);
+	scene.push(Op::SetBackdrop(Backdrop::Camera));
+	scene.flush().await
+}
+```
+
+While the session runs, the native app draws the picture turned upright for the screen and cropped to fill the view, and draws the scene from where the phone is: the session's own view replaces the scene's camera, so place models in the session's world coordinates (the same ones `viewer`, `planes`, and hit tests use). Where the phone measures depth, models behind a real wall or table are hidden by it. When the session stops, the scene draws transparent behind its models again.
+
+On Android phones without Google Play Services for AR, an `Orientation` session shows the back camera too, and its view has the camera's field of view, so a creature keeps the picture's scale as the user turns. Ask for the camera permission before you start it: without the permission the session starts without the picture, unless it requires `CAMERA_IMAGE`. On Android the view moves below the app's other views while it shows the camera, so a heads-up display laid over it stays on top.
+
+In the browser, the WebXR session draws the camera itself; a `Scene3d` doesn't draw over it yet.
+
 ## Put things where the user taps
 
 A hit test casts a ray through a point on the screen and returns where it meets the real world, nearest first, with a pose whose +Y is the surface's normal: a ready-made place for something to stand. Pin it with an anchor so it stays put while the phone refines its map:
@@ -131,7 +171,7 @@ Hit tests can aim at `PLANES` (inside their outlines), `INFINITE_PLANES` (past t
 | Platform                | What it does                                                                                                                                                                                                                                             |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | iOS                     | ARKit world tracking: horizontal and vertical planes with labels, raycasts, anchors, light, and LiDAR depth on iPhone Pro and iPad Pro. Orientation from Core Motion elsewhere. The simulator has no AR; play a recording there (below).                 |
-| Android                 | ARCore: planes, the Depth API on supported phones, ambient light, hit tests, anchors. Phones without Google Play Services for AR use the rotation sensor. ARCore has no plane labels, so planes are `Unknown`.                                           |
+| Android                 | ARCore: planes, the Depth API on supported phones, ambient light, hit tests, anchors. Phones without Google Play Services for AR use the rotation sensor, with the back camera behind the scene. ARCore has no plane labels, so planes are `Unknown`.    |
 | Web                     | WebXR's `immersive-ar` in Chrome on Android: hit tests, anchors, and where the browser offers them, planes and depth. Start the session from a tap. Without WebXR AR, `deviceorientation` turns the view (Safari asks for motion permission from a tap). |
 | macOS, Windows, Linux   | No AR. `capabilities` reports nothing; OpenXR headsets on Windows and Linux are covered in [VR and AR on headsets](35-headsets.md).                                                                                                                      |
 | The terminal, HarmonyOS | No AR: the plugin isn't registered and `Xr::new` fails with `Unavailable`.                                                                                                                                                                               |
