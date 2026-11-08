@@ -70,7 +70,7 @@ impl ModelFile {
 /// commit that added it there.
 pub const MODEL: ModelFile = ModelFile {
 	name: "depth_anything_v2_metric_indoor_small.onnx",
-	url: "https://raw.githubusercontent.com/pina-rs/reapers/7a10588e9d7e76ff54370e674dbc6cfb6ae97fb6/reapers_flutter/assets/depth/depth_anything_v2_metric_indoor_small.onnx",
+	url: "https://github.com/pina-rs/reapers/releases/download/depth-model-v1/depth_anything_v2_metric_indoor_small.onnx",
 	sha256: "b81c4fae8985bd73d5026ffc1ebf545ff01d73fbf4d534a06c811abfcadb6dbd",
 	size: 27_237_510,
 	source: "https://huggingface.co/depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf/tree/8078d68a9c75a972131914f6afd0c1723be0da7f",

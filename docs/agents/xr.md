@@ -78,7 +78,7 @@ ONNX Runtime with its default graph optimisations (any level from basic up) retu
 
 ### The weights
 
-The 27 MB file is not committed here (see the image rule: binaries are hosted). `MODEL` pins its SHA-256 (`b81c4fae…`) and size, and its `url` is the raw file at `pina-rs/reapers@7a10588e`, the commit that added it to the Flutter game. That commit is no longer on any branch of `pina-rs/reapers` (its history was rewritten), so GitHub may collect it one day: before relying on it, tag it there or upload the file to the `leptoskit` B2 bucket and repoint `MODEL.url`. The digest stays the same either way. `MODEL_LICENSE` is the Apache-2.0 text, which ships with the file. Apps put the file in `assets/` and the host reads its bytes through the app's asset source, as `leptoskit_3d` does. The CLI does not fetch it; a `leptoskit build` step that downloads `MODEL.url` into the build's assets and checks the digest would be the next step if apps should not carry it themselves.
+The 27 MB file is not committed here (see the image rule: binaries are hosted). `MODEL` pins its SHA-256 (`b81c4fae…`) and size, and its `url` is the `depth-model-v1` release asset on `pina-rs/reapers`, where the Reapers game, which first shipped the file, keeps it beside its licence. Moving it (to the `leptoskit` B2 bucket, say) only changes `MODEL.url`; the digest stays the same. `MODEL_LICENSE` is the Apache-2.0 text, which ships with the file. Apps put the file in `assets/` and the host reads its bytes through the app's asset source, as `leptoskit_3d` does. The CLI does not fetch it; a `leptoskit build` step that downloads `MODEL.url` into the build's assets and checks the digest would be the next step if apps should not carry it themselves.
 
 ### Wiring it into `leptoskit_xr`
 

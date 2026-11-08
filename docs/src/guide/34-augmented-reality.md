@@ -150,7 +150,7 @@ It needs the model file, 27 MB under Apache-2.0, which your app ships rather tha
 ```sh
 mkdir -p assets/depth
 curl -L -o assets/depth/depth_anything_v2_metric_indoor_small.onnx \
-  https://raw.githubusercontent.com/pina-rs/reapers/7a10588e9d7e76ff54370e674dbc6cfb6ae97fb6/reapers_flutter/assets/depth/depth_anything_v2_metric_indoor_small.onnx
+  https://github.com/pina-rs/reapers/releases/download/depth-model-v1/depth_anything_v2_metric_indoor_small.onnx
 echo "b81c4fae8985bd73d5026ffc1ebf545ff01d73fbf4d534a06c811abfcadb6dbd  assets/depth/depth_anything_v2_metric_indoor_small.onnx" | shasum -a 256 -c
 ```
 
