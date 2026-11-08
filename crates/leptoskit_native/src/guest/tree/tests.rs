@@ -196,6 +196,7 @@ fn refreshing_bindings_sends_only_the_labels_that_changed() {
 	let mut host = RecordedHost::default();
 	tree.update(rows(marked), &mut host);
 	let root = tree.root.unwrap();
+
 	let children = host.nodes[&root].children.clone();
 	assert_eq!(host.commits, 1);
 
@@ -543,6 +544,7 @@ fn render_phases() {
 	time("identical render", &mut || {
 		warm.update(cards(true), &mut NullHost);
 	});
+
 	let owner = reactive_graph::owner::Owner::new();
 	owner.set();
 	let open = crate::reactive::RwSignal::new(true);
@@ -828,6 +830,7 @@ fn a_region_splice_sends_only_its_own_subtree() {
 		]),
 		&mut log,
 	);
+
 	log.0.clear();
 
 	items.set(vec![3, 1, 4]);

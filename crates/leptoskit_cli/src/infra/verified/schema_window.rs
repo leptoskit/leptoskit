@@ -38,6 +38,7 @@ impl Input {
 				)
 			}
 		};
+
 		ensure!(super::valid_digest(pin), "invalid migration window SHA-256");
 		let metadata = fs::symlink_metadata(path)?;
 		ensure!(
@@ -123,6 +124,7 @@ fn source_contract(bundle: &ReproducedBundle) -> Result<MigrationContract> {
 		!history.names.is_empty(),
 		"migration window needs an installed baseline"
 	);
+
 	let migrations = leptoskit_db::load_migrations(&directory)?;
 	Ok(MigrationContract::new(
 		&migrations,
@@ -173,6 +175,7 @@ impl Evidence {
 			fingerprint == migration_fingerprint,
 			"migration checkpoint differs from descriptor migration history"
 		);
+
 		Ok(())
 	}
 }
@@ -196,6 +199,7 @@ mod tests {
 		assert!(evidence.validate(&"0".repeat(64)).is_err());
 		let mut changed = evidence.clone();
 		changed.format_version = 2;
+
 		assert!(changed.validate(&fingerprint).is_err());
 		let mut changed = evidence.clone();
 		changed.contract.push('\n');
@@ -224,6 +228,7 @@ mod tests {
 		assert!(Input::read(Some(&path), None).is_err());
 		assert!(Input::read(None, Some(&evidence.window_sha256)).is_err());
 		assert!(Input::read(Some(&path), Some(&"0".repeat(64))).is_err());
+
 		let frozen = Input::read(Some(&path), Some(&evidence.window_sha256))
 			.unwrap()
 			.unwrap();

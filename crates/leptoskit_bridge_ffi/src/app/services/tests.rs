@@ -409,6 +409,7 @@ fn timer_notifications_coalesce_and_stop_when_the_service_closes() {
 	assert_eq!(notifications.load(Ordering::Acquire), 1);
 	let _waker = wake.waker();
 	wake.notify();
+
 	assert_eq!(notifications.load(Ordering::Acquire), 2);
 	wake.invalidate();
 	let _waker = wake.waker();

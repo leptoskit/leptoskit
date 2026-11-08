@@ -53,6 +53,7 @@ function compareRuns(
 		...Object.keys(head.metrics),
 	]);
 	const comparisons: Comparison[] = [];
+
 	for (const id of ids) {
 		const baseMetric = base.metrics[id];
 		const headMetric = head.metrics[id];
@@ -68,6 +69,7 @@ function compareRuns(
 			),
 		);
 	}
+
 	return comparisons;
 }
 
@@ -84,6 +86,7 @@ export function section(
 		`| metric | ${baseSubject} | ${headSubject} | Δ | change | status |`,
 		"| --- | ---: | ---: | ---: | ---: | --- |",
 	];
+
 	for (const comparison of comparisons) {
 		const base = comparison.base === null
 			? "—"
@@ -111,6 +114,7 @@ export function section(
 			`| ${comparison.label} | ${base} | ${head} | ${delta} | ${change} | ${status} |`,
 		);
 	}
+
 	return lines.join("\n");
 }
 
@@ -134,9 +138,11 @@ async function main(): Promise<void> {
 	const headShaShort = headSha.slice(0, 7);
 
 	const missing = [];
+
 	if (Object.keys(headRuntime.metrics).length === 0) {
 		missing.push("head runtime");
 	}
+
 	if (Object.keys(baseRuntime.metrics).length === 0) {
 		missing.push("base runtime");
 	}
@@ -157,6 +163,7 @@ async function main(): Promise<void> {
 	);
 
 	let buildComparisons: Comparison[] = [];
+
 	if (baseBuildPath && headBuildPath) {
 		const baseBuild = readRunSync(baseBuildPath);
 		const headBuild = readRunSync(headBuildPath);
@@ -176,16 +183,21 @@ async function main(): Promise<void> {
 		: Array.isArray(rawPairs)
 		? rawPairs
 		: [String(rawPairs)];
+
 	for (const specifier of pairSpecifiers) {
 		const [title, basePath, headPath] = specifier.split("|");
+
 		if (!title || !basePath || !headPath) {
 			fail(`--pair expects "title|base.json|head.json", got: ${specifier}`);
 		}
+
 		const base = readRunSync(basePath);
+
 		const head = readRunSync(headPath);
 		const comparisons = compareRuns(base, head, policy);
 		pairComparisons.push(...comparisons);
 		sections.push(section(title, "base", "head", comparisons), "");
+
 		for (const note of head.notes ?? []) {
 			sections.push(`> ℹ️ ${note}`, "");
 		}
@@ -200,11 +212,14 @@ async function main(): Promise<void> {
 		: Array.isArray(rawSingles)
 		? rawSingles
 		: [String(rawSingles)];
+
 	for (const specifier of singleSpecifiers) {
 		const [title, headPath] = specifier.split("|");
+
 		if (!title || !headPath) {
 			fail(`--single expects "title|head.json", got: ${specifier}`);
 		}
+
 		const head = readRunSync(headPath);
 		const lines = [
 			`### ${title}`,
@@ -218,6 +233,7 @@ async function main(): Promise<void> {
 			"> ℹ️ no base run for this section: the base commit predates its benchmark, so there is nothing to compare against yet.",
 			"",
 		];
+
 		sections.push(...lines);
 	}
 
@@ -241,6 +257,7 @@ async function main(): Promise<void> {
 			"",
 		);
 	}
+
 	if (newMetrics.length > 0) {
 		sections.push(
 			`> 🆕 measured for the first time: ${
@@ -249,6 +266,7 @@ async function main(): Promise<void> {
 			"",
 		);
 	}
+
 	if (fails.length > 0) {
 		sections.push(
 			`> 🔴 **${fails.length} regression${
@@ -270,6 +288,7 @@ async function main(): Promise<void> {
 	}
 
 	const markdown = sections.join("\n");
+
 	if (output) {
 		await Deno.writeTextFile(output, markdown);
 		log(`wrote ${output}`);
@@ -279,9 +298,11 @@ async function main(): Promise<void> {
 
 	const allowRegressions =
 		Deno.env.get("LEPTOSKIT_ALLOW_BENCH_REGRESSIONS") === "true";
+
 	if (missing.length > 0) {
 		Deno.exit(1);
 	}
+
 	if (fails.length > 0 && !allowRegressions) {
 		Deno.exit(2);
 	}

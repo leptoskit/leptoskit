@@ -18,6 +18,7 @@ String get arenaPlatform => Platform.operatingSystem;
 Future<List<String>> launchArguments(List<String> mainArguments) async {
   if (!_hasHostChannel) return mainArguments;
   final arguments = await _host.invokeListMethod<String>('arguments');
+
   return arguments ?? const [];
 }
 
@@ -25,6 +26,7 @@ Future<List<String>> launchArguments(List<String> mainArguments) async {
 /// expose a process start time cheaply (Windows).
 Future<double?> processUptimeMs() async {
   if (_hasHostChannel) return _host.invokeMethod<double>('uptimeMs');
+
   if (Platform.isLinux) return _linuxProcessUptimeMs();
   return null;
 }
@@ -34,8 +36,10 @@ Future<double?> processUptimeMs() async {
 Future<void> writeLogLine(String line) async {
   if (_hasHostChannel) {
     await _host.invokeMethod<void>('log', line);
+
     return;
   }
+
   stdout.writeln(line);
   await stdout.flush();
 }
@@ -49,5 +53,6 @@ double? _linuxProcessUptimeMs() {
   final fields = stat.substring(stat.lastIndexOf(')') + 2).split(' ');
   final startTicks = int.parse(fields[19]);
   final uptime = File('/proc/uptime').readAsStringSync().split(' ').first;
+
   return double.parse(uptime) * 1000 - startTicks * 10;
 }

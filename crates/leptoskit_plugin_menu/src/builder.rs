@@ -427,6 +427,7 @@ mod tests {
 			.build()
 			.unwrap();
 		assert_eq!(definition.items().len(), 4);
+
 		match &definition.items()[0] {
 			Item::Command {
 				enabled,
@@ -438,6 +439,7 @@ mod tests {
 			}
 			_ => panic!("expected command"),
 		}
+
 		match &definition.items()[2] {
 			Item::Check {
 				enabled,
@@ -451,6 +453,7 @@ mod tests {
 			}
 			_ => panic!("expected check"),
 		}
+
 		match &definition.items()[3] {
 			Item::Submenu { enabled, items, .. } => {
 				assert!(!enabled);

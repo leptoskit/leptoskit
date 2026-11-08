@@ -370,6 +370,7 @@ fn system_idle_time() -> Result<u32, Error> {
 	if let Some(value) = IDLE_OVERRIDE.with(std::cell::Cell::take) {
 		return value;
 	}
+
 	Err(Error::Unavailable)
 }
 
@@ -439,6 +440,7 @@ mod tests {
 		assert!(matches!(result, Err(Error::Unavailable)));
 		let idle = monitor.is_idle(0);
 		#[cfg(windows)]
+
 		assert!(idle.is_ok());
 		#[cfg(not(windows))]
 		assert!(matches!(idle, Err(Error::Unavailable)));
@@ -454,6 +456,7 @@ mod tests {
 		assert_eq!(Event::decode(6).unwrap(), Event::OnBattery);
 		assert_eq!(Event::decode(7).unwrap(), Event::Shutdown);
 		assert_eq!(Event::decode(8).unwrap(), Event::UserDidBecomeActive);
+
 		assert_eq!(Event::decode(9).unwrap(), Event::UserDidBecomeIdle);
 		assert!(Event::decode(0).is_err());
 		assert!(Event::decode(99).is_err());
@@ -503,6 +506,7 @@ mod tests {
 		monitor.push(Event::UnlockScreen);
 		assert_eq!(monitor.snapshot().locked, Some(false));
 		monitor.push(Event::Shutdown);
+
 		monitor.push(Event::UserDidBecomeActive);
 		monitor.push(Event::UserDidBecomeIdle);
 
@@ -524,6 +528,7 @@ mod tests {
 		#[cfg(not(windows))]
 		{
 			IDLE_OVERRIDE.with(|slot| slot.set(Some(Ok(1_250))));
+
 			let idle = monitor.invoke(IDLE_TIME, Bytes::new()).unwrap();
 			let mut words = [0u32; 1];
 			words[0] = u32::from_le_bytes(idle.as_ref().try_into().unwrap());

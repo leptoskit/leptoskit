@@ -30,6 +30,7 @@ pub fn run(report: &mut Report, config: Config, guest: Option<&[u8]>) -> Result<
 			"tap scenarios skipped: no counter guest embedded (build with \
 			 LEPTOSKIT_BENCH_COUNTER_WASM set)",
 		);
+
 		return Ok(());
 	};
 
@@ -44,9 +45,11 @@ pub fn run(report: &mut Report, config: Config, guest: Option<&[u8]>) -> Result<
 
 	{
 		let (mut host, button) = started();
+
 		for _ in 0..3 {
 			tap(&mut host, button);
 		}
+
 		verify_count(&host, 3)?;
 	}
 

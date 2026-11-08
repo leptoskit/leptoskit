@@ -136,6 +136,7 @@ impl rpc::server::Identify for Header {
 					identity.context = leptoskit_db::Context::new().with(Global);
 					identity
 				}
+
 				None => Identity::anonymous(),
 			})
 		})
@@ -284,6 +285,7 @@ async fn connections_share_one_rerun(db: Db) {
 	assert_eq!(also.updates[0].id, 7);
 	assert_eq!(seen.updates[0].update, also.updates[0].update, "one diff");
 	let after = server.live.stats();
+
 	assert_eq!(after.reruns - before.reruns, 1, "one re-run for both");
 	assert_eq!(after.commits - before.commits, 1);
 
@@ -366,6 +368,7 @@ async fn read_your_writes(db: Db) {
 	);
 	let seen = transition(&mut socket).await;
 	assert!(seen.to >= version);
+
 	assert_eq!(seen.updates.len(), 1);
 
 	let reached = a_write_the_connection_watches_nothing_of(&server, &mut socket).await;
@@ -442,6 +445,7 @@ async fn actions_over_the_connection(db: Db) {
 	// Actions run beside the session, so its commit can reach the subscription
 	// before the action's answer arrives.
 	let mut seen = None;
+
 	let (request, ok, err, version) = loop {
 		match next(&mut socket).await {
 			ServerFrame::Transition(transition) => {
@@ -456,13 +460,16 @@ async fn actions_over_the_connection(db: Db) {
 			other => panic!("expected the action answer or transition, got {other:?}"),
 		}
 	};
+
 	assert_eq!((request, err), (2, None));
 	assert_eq!(ok, Some(json!("ada")));
 	assert_eq!(version, newest(&server.db).await);
+
 	let seen = match seen {
 		Some(transition) => transition,
 		None => transition(&mut socket).await,
 	};
+
 	assert!(seen.to >= version);
 	assert_eq!(whole(&seen, 1), Some(&json!(["ada: hello"])));
 
@@ -537,12 +544,14 @@ async fn resuming(db: Db) {
 	assert_eq!(caught_up.from, reached);
 	assert!(!caught_up.full);
 	assert!(whole(&caught_up, 2).is_none(), "the tags didn't change");
+
 	// The hub may not have read the note's commit when the client came
 	// back; then the change follows in the next transition.
 	let notes = match whole(&caught_up, 1) {
 		Some(notes) => notes.clone(),
 		None => whole(&transition(&mut socket).await, 1).unwrap().clone(),
 	};
+
 	assert_eq!(notes, json!(["while away"]));
 	assert_eq!(server.live.stats().resumes - before.resumes, 1);
 
@@ -617,6 +626,7 @@ async fn resuming_after_pruning(server: &Server, reached: u64) {
 	assert!(everything.full);
 	assert_eq!(everything.updates.len(), 2);
 	assert_eq!(whole(&everything, 1), Some(&json!(["while away"])));
+
 	assert_eq!(whole(&everything, 2), Some(&json!(["after", "before"])));
 	assert_eq!(server.live.stats().resumes, before.resumes);
 }
@@ -665,6 +675,7 @@ impl Events {
 			panic!("welcome first");
 		};
 		events.connection = connection;
+
 		(events, version)
 	}
 
@@ -755,6 +766,7 @@ async fn server_sent_events(db: Db) {
 			.await,
 		StatusCode::ACCEPTED
 	);
+
 	for id in [1, 2] {
 		let (event_id, ServerFrame::Done { request, ok, .. }) = events.next().await else {
 			panic!("the subscription's first value");
@@ -790,6 +802,7 @@ async fn server_sent_events(db: Db) {
 	};
 	assert!(seen.to >= version);
 	assert_eq!(id, Some(seen.to));
+
 	let reached = seen.to;
 	drop(events);
 
@@ -808,6 +821,7 @@ async fn resuming_from_the_last_event(server: &Server, reached: u64) -> Events {
 	};
 	assert_eq!(caught_up.from, reached);
 	assert!(!caught_up.full);
+
 	assert!(whole(&caught_up, 1).is_none(), "the notes didn't change");
 	let tags = if let Some(tags) = whole(&caught_up, 2) {
 		tags.clone()
@@ -817,6 +831,7 @@ async fn resuming_from_the_last_event(server: &Server, reached: u64) -> Events {
 		};
 		whole(&next, 2).unwrap().clone()
 	};
+
 	assert_eq!(tags, json!(["posted", "while away"]));
 
 	events
@@ -904,6 +919,7 @@ async fn posts_belong_to_the_streams_caller(db: Db) {
 		StatusCode::FORBIDDEN,
 		"now it's grace's"
 	);
+
 	assert_eq!(
 		events
 			.post(

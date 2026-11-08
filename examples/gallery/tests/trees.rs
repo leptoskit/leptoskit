@@ -31,12 +31,14 @@ fn outline(element: &Element, depth: usize, lines: &mut Vec<String>) {
 	} else {
 		format!(" [{classes}]")
 	};
+
 	lines.push(format!(
 		"{}{:?}{text}{classes} #{}",
 		"  ".repeat(depth),
 		element.kind,
 		&format!("{digest:x}")[..12]
 	));
+
 	for child in &element.children {
 		outline(child, depth + 1, lines);
 	}
@@ -45,6 +47,7 @@ fn outline(element: &Element, depth: usize, lines: &mut Vec<String>) {
 #[test]
 fn screens_render_the_recorded_trees() {
 	let state = ScreenState::new(Assets::at("assets"));
+
 	for screen in &SCREENS {
 		let mut lines = Vec::new();
 		outline(&screen.render(&state), 0, &mut lines);

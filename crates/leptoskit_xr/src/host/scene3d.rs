@@ -51,6 +51,7 @@ pub fn draw(
 			}
 		})
 		.collect();
+
 	let background = match textures.camera() {
 		Some((CameraViews::YCbCr { y, cbcr }, transform)) => {
 			Background::Camera(CameraImage {
@@ -66,6 +67,7 @@ pub fn draw(
 		}
 		None => Background::Scene,
 	};
+
 	let occlusion = textures.depth().map(|(depth, transform)| {
 		Occlusion {
 			depth,

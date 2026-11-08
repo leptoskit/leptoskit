@@ -282,5 +282,6 @@ fn every_heading_level_renders_its_own_element() {
 			"missing h{level}: {page}"
 		);
 	}
+
 	assert!(!page.contains("role=\"heading\""));
 }

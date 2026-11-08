@@ -71,6 +71,7 @@ impl Screen {
 					Box::new(move || screen.screen())
 				}
 			};
+
 			(render, cache)
 		});
 		let drawing = owner.clone();
@@ -81,6 +82,7 @@ impl Screen {
 			owner,
 		};
 		shown.settle().await;
+
 		shown
 	}
 
@@ -88,10 +90,12 @@ impl Screen {
 		for round in 0..100 {
 			gloo_timers::future::TimeoutFuture::new(5).await;
 			self.tester.pump();
+
 			if round >= 5 && self.cache.fetching_count() == 0 && self.cache.mutating_count() == 0 {
 				return;
 			}
 		}
+
 		panic!(
 			"screen did not settle: fetching={}, mutating={}, requests={}\n{}",
 			self.cache.fetching_count(),
@@ -153,6 +157,7 @@ async fn authenticator_setup_recovery_and_step_up_follow_the_server() {
 	);
 	shown.tap("Turn on").await;
 	shown.has("Enter the code your app shows.");
+
 	shown.enter("Code from the app", " 123456 ").await;
 	shown.tap("Turn on").await;
 	shown.has("FIRST-RECOVERY");
@@ -209,6 +214,7 @@ async fn generated_and_huddle_sign_in_screens_complete_both_factors() {
 		shown.enter("Email address", "  ada@example.com  ").await;
 		shown.tap("Email me a code").await;
 		shown.has("Check ada@example.com for a code.");
+
 		shown.tap("Sign in").await;
 		shown.has("Enter the code from the email.");
 		shown.tap("Send a new code").await;
@@ -264,6 +270,7 @@ async fn complete_email_sign_in(shown: &mut Screen, allowed: &str, expected: &st
 		.enter("Authenticator or recovery code", " 654321 ")
 		.await;
 	shown.tap("Continue").await;
+
 	shown.has("You're signed in.");
 	shown.tap("Sign out").await;
 	shown.has("Email address");
@@ -282,6 +289,7 @@ async fn browser_passkeys_register_sign_in_and_explain_platform_refusals() {
 		.tap(&Finder::label("Remove Browser passkey"))
 		.unwrap();
 	shown.settle().await;
+
 	assert!(!shown.tester.semantics().contains("Browser passkey"));
 	let add = shown
 		.owner
@@ -298,6 +306,7 @@ async fn browser_passkeys_register_sign_in_and_explain_platform_refusals() {
 	}
 	shown.finish();
 	restore();
+
 	for kind in [Kind::SignIn, Kind::Huddle] {
 		install(false);
 		enable_passkeys();
@@ -316,11 +325,13 @@ async fn browser_passkeys_register_sign_in_and_explain_platform_refusals() {
 		shown.tap("Use a passkey").await;
 		shown.has("You're signed in.");
 		let requests: serde_json::Value = serde_json::from_str(&calls()).unwrap();
+
 		for path in ["/auth/passkey/sign-in", "/auth/passkey/second-factor"] {
 			assert!(requests.as_array().unwrap().iter().any(|call| {
 				call["path"] == path && call["body"]["credential"]["rawId"] == "AQID"
 			}));
 		}
+
 		shown.finish();
 		restore();
 	}
@@ -343,6 +354,7 @@ async fn wallet_standard_links_both_kinds_and_rejects_invalid_responses() {
 	shown.tap("Link a wallet with Fixture SIWS").await;
 	shown.has("It's linked.");
 	shown.has("Fixture account");
+
 	shown.tap("Link a wallet with Fixture Text").await;
 	shown.has("That wallet was already linked.");
 	let prove = shown

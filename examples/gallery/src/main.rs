@@ -24,6 +24,7 @@ commands:
 
 fn main() -> ExitCode {
 	let args: Vec<String> = std::env::args().skip(1).collect();
+
 	match args
 		.iter()
 		.map(String::as_str)
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
 				let (width, height) = screen.viewport;
 				println!("{:<10} {} ({width}×{height})", screen.slug, screen.title);
 			}
+
 			ExitCode::SUCCESS
 		}
 		["snapshot", out_dir] => {
@@ -47,6 +49,7 @@ fn main() -> ExitCode {
 			)
 		}
 		["window", slug] => report(desktop::window(slug)),
+
 		_ => {
 			eprintln!("{USAGE}");
 			ExitCode::from(2)

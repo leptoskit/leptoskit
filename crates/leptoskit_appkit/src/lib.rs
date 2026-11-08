@@ -103,6 +103,7 @@ mod rive;
 mod snapshot;
 #[cfg(target_os = "macos")]
 mod text;
+
 #[cfg(target_os = "macos")]
 mod vector;
 #[cfg(target_os = "macos")]

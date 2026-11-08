@@ -44,6 +44,7 @@ async fn local_storage_persists_namespaces_and_uses_the_async_contract() {
 	assert_eq!(hook.value.get(), "external");
 	(hook.remove)().await.unwrap();
 	assert_eq!(hook.value.get(), "fallback");
+
 	assert!(store.get_async("key".into()).await.unwrap().is_none());
 	store.remove_async("key".into()).await.unwrap();
 
@@ -93,6 +94,7 @@ async fn the_same_tailwind_screen_saves_through_browser_press_and_reopens() {
 	assert!(parent.text_content().unwrap().contains("Name: Ada"));
 	let reopened = LocalStorage::<String>::new("leptoskit-use:shared-screen").unwrap();
 	assert_eq!(reopened.get("name").unwrap(), Some("Ada".into()));
+
 	drop(mount);
 	parent.remove();
 	store.remove("name").unwrap();

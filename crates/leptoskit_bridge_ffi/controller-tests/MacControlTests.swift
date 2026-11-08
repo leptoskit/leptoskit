@@ -30,6 +30,7 @@ struct MacControlTests {
         let radio = try #require(renderer.widgets[4] as? NSButton)
         var events: [String] = []
         renderer.onEvent = { id, kind, payload in events.append("\(id):\(kind):\(payload)") }
+
         toggle.performClick(nil)
         #expect(events.last == "2:6:{\"checked\":true}")
         #expect(toggle.state == .off)
@@ -73,6 +74,7 @@ struct MacControlTests {
         let activity = try #require(renderer.widgets[4] as? NSProgressIndicator)
         #expect(slider.doubleValue == 12 && slider.minValue == 10 && slider.maxValue == 20)
         #expect(progress.doubleValue == 0.75 && !progress.isIndeterminate)
+
         #expect(activity.style == .spinning)
         var payloads: [String] = []
         renderer.onEvent = { _, kind, text in

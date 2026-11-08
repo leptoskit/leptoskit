@@ -6,10 +6,12 @@ const notice = (message) => {
 	if (node) node.textContent = message;
 };
 const key = find(document, "owner-key");
+
 if (key) {
 	key.type = "password";
 	key.autocomplete = "off";
 }
+
 let pending = false;
 async function api(path, body) {
 	const response = await fetch(path, {
@@ -19,12 +21,15 @@ async function api(path, body) {
 		headers: { "content-type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
+
 	if (!response.ok) {
 		const problem = await response.json().catch(() => ({
 			error: "request_failed",
 		}));
+
 		throw new Error(problem.error || "request_failed");
 	}
+
 	return response.status === 204 ? null : response.json();
 }
 document.addEventListener("click", async (event) => {
@@ -38,6 +43,7 @@ document.addEventListener("click", async (event) => {
 		);
 		return;
 	}
+
 	pending = true;
 	try {
 		if (action === "login") {

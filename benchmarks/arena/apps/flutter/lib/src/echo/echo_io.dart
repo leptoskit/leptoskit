@@ -68,17 +68,21 @@ final class _FfiEcho implements SyncEcho {
   Uint8List echoBytes(Uint8List value) {
     final output = Uint8List(value.length);
     arenaEchoBytes(value.address, value.length, output.address);
+
     return output;
   }
 
   @override
   Map<String, int> echoObject(Map<String, int> value) {
     final input = Int64List(_fieldCount);
+
     for (var field = 0; field < _fieldCount; field += 1) {
       input[field] = value['f$field']!;
     }
+
     final output = Int64List(_fieldCount);
     arenaEchoInt64s(input.address, _fieldCount, output.address);
+
     return {
       for (var field = 0; field < _fieldCount; field += 1)
         'f$field': output[field],

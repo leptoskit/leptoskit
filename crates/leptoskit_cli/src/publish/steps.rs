@@ -137,6 +137,7 @@ impl Report {
 				};
 
 				let _ = writeln!(out, "- **{}**{by}", escape(&step.what));
+
 				if let Some(url) = &step.url {
 					let _ = writeln!(out, "  - Open <{}>", escape(url));
 				}

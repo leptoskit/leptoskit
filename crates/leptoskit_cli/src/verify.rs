@@ -158,6 +158,7 @@ pub fn run(command: VerifyCommand) -> Result<()> {
 			println!("Build provenance and live deployment were not verified.");
 		}
 	}
+
 	Ok(())
 }
 
@@ -249,6 +250,7 @@ pub(crate) fn validate(recipe: &BuildRecipe) -> Result<()> {
 	if let Some(website) = &recipe.website {
 		website.validate(recipe)?;
 	}
+
 	validate_repository(&recipe.repository)?;
 	anyhow::ensure!(
 		is_commit(&recipe.commit),
@@ -284,6 +286,7 @@ pub(crate) fn validate(recipe: &BuildRecipe) -> Result<()> {
 			.all(|feature| is_name(feature, b"-_/+.")),
 		"build.json features must be plain feature names"
 	);
+
 	anyhow::ensure!(
 		recipe
 			.rustflags
@@ -291,6 +294,7 @@ pub(crate) fn validate(recipe: &BuildRecipe) -> Result<()> {
 			.all(|flag| !flag.is_empty() && !flag.contains('\u{1f}')),
 		"build.json rustflags cannot contain empty or unit-separator entries"
 	);
+
 	if let Some(infra) = &recipe.infra {
 		anyhow::ensure!(
 			is_name(infra, b"-_./")
@@ -300,6 +304,7 @@ pub(crate) fn validate(recipe: &BuildRecipe) -> Result<()> {
 			"build.json infra must be a relative directory in the repository"
 		);
 	}
+
 	Ok(())
 }
 
@@ -311,6 +316,7 @@ fn validate_recipe(root: &Path) -> Result<()> {
 /// Secret declarations are unique environment variable names, never values.
 pub(crate) fn validate_secrets(names: &[String]) -> Result<()> {
 	let mut unique = BTreeSet::new();
+
 	for name in names {
 		anyhow::ensure!(
 			!name.is_empty()
@@ -324,6 +330,7 @@ pub(crate) fn validate_secrets(names: &[String]) -> Result<()> {
 			 assignments"
 		);
 	}
+
 	Ok(())
 }
 
@@ -332,6 +339,7 @@ pub(crate) fn validate_secrets(names: &[String]) -> Result<()> {
 pub(crate) fn walk(root: &Path) -> Result<BTreeMap<String, Entry>> {
 	anyhow::ensure!(root.is_dir(), "{} must be a directory", root.display());
 	let mut entries = BTreeMap::new();
+
 	for entry in walkdir::WalkDir::new(root).min_depth(1).follow_links(false) {
 		let entry = entry?;
 		let relative = entry.path().strip_prefix(root)?;
@@ -344,6 +352,7 @@ pub(crate) fn walk(root: &Path) -> Result<BTreeMap<String, Entry>> {
 			"bundle paths cannot contain backslashes or control characters"
 		);
 		let kind = entry.file_type();
+
 		let value = if kind.is_dir() {
 			Entry::Directory
 		} else {
@@ -372,18 +381,21 @@ pub(crate) fn walk(root: &Path) -> Result<BTreeMap<String, Entry>> {
 				unix_mode,
 			}
 		};
+
 		entries.insert(name, value);
 		anyhow::ensure!(
 			entries.len() <= MAX_ENTRIES,
 			"the bundle contains too many entries"
 		);
 	}
+
 	Ok(entries)
 }
 
 fn inventory(root: &Path) -> Result<Inventory> {
 	anyhow::ensure!(root.is_dir(), "the bundle must be a directory");
 	let entries = walk(root)?;
+
 	for name in entries.keys() {
 		let top = name.split('/').next().unwrap_or_default();
 		anyhow::ensure!(
@@ -394,6 +406,7 @@ fn inventory(root: &Path) -> Result<Inventory> {
 			"unexpected top-level bundle entry {top:?}"
 		);
 	}
+
 	for name in ["source", "dependencies", "infra", "artifacts"] {
 		anyhow::ensure!(
 			entries.get(name) == Some(&Entry::Directory),
@@ -412,8 +425,10 @@ fn inventory(root: &Path) -> Result<Inventory> {
 			"the bundle needs a regular file at {name}"
 		);
 	}
+
 	validate_recipe(root)?;
 	let recipe: BuildRecipe = read_json(&root.join("build.json"))?;
+
 	if let Some(website) = &recipe.website {
 		website::tree(&root.join("artifacts/site"), &website.output_name)?;
 		anyhow::ensure!(
@@ -423,6 +438,7 @@ fn inventory(root: &Path) -> Result<Inventory> {
 			"website toolchain file differs from recipe"
 		);
 	}
+
 	Ok(Inventory {
 		format_version: FORMAT_VERSION,
 		kind: KIND.to_owned(),
@@ -453,18 +469,21 @@ pub(crate) fn check(root: &Path, manifest: &Path, expected_digest: &str) -> Resu
 		"unsupported bundle inventory format or kind"
 	);
 	let actual = inventory(root)?;
+
 	for (path, entry) in &expected.entries {
 		anyhow::ensure!(
 			actual.entries.get(path) == Some(entry),
 			"bundle entry {path:?} is missing or changed"
 		);
 	}
+
 	for path in actual.entries.keys() {
 		anyhow::ensure!(
 			expected.entries.contains_key(path),
 			"unexpected bundle entry {path:?}"
 		);
 	}
+
 	Ok(actual.entries.len())
 }
 

@@ -489,6 +489,7 @@ fn strict_wire_limits_cover_tags_numbers_columns_and_rows() {
 	let mut nonfinite = sample.to_vec();
 	nonfinite[13..17].copy_from_slice(&2_u32.to_le_bytes());
 	nonfinite[21..29].copy_from_slice(&f64::INFINITY.to_le_bytes());
+
 	assert_eq!(QueryResult::decode(&nonfinite), Err(Error::InvalidArgument));
 	assert_eq!(
 		ExecuteResult {

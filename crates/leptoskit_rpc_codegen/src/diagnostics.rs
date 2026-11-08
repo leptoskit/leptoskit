@@ -200,6 +200,7 @@ impl Walker<'_> {
 						self.target
 					)
 				}
+
 				other if !matches!(analyzed.shape, Shape::Any) => {
 					format!(
 						"{}; {} keeps the base type and drops this constraint",
@@ -207,6 +208,7 @@ impl Walker<'_> {
 						self.target
 					)
 				}
+
 				other => {
 					format!(
 						"{}; {} renders it as `{}`",
@@ -216,6 +218,7 @@ impl Walker<'_> {
 					)
 				}
 			};
+
 			self.loss(path, DiagnosticKind::UnsupportedSchema, message);
 		}
 
@@ -267,6 +270,7 @@ impl Walker<'_> {
 							 beyond 2^53-1 exactly"
 						)
 					};
+
 					self.loss(path, DiagnosticKind::IntegerPrecision, message);
 				}
 			}
@@ -314,6 +318,7 @@ impl Walker<'_> {
 
 			let analyzed = analyze(property_schema);
 			let optional = !object.is_required(property) || has_default(property_schema);
+
 			let collapses_null = match self.target {
 				TargetLanguage::Go => optional && self.nullable_alias(property_schema),
 				TargetLanguage::Rust | TargetLanguage::Cli => optional && analyzed.nullable,
@@ -323,6 +328,7 @@ impl Walker<'_> {
 				// `walk_omitted_null` against the function's own encoding.
 				_ => false,
 			};
+
 			if collapses_null && !matches!(analyzed.shape, Shape::Null) {
 				self.loss(
 					&property_path,
@@ -344,6 +350,7 @@ impl Walker<'_> {
 						.to_owned(),
 				);
 			}
+
 			self.walk(additional, &format!("{path}.additionalProperties"));
 		}
 	}
@@ -425,8 +432,10 @@ impl Walker<'_> {
 	fn dart_accepts_null(&self, schema: &Value) -> bool {
 		let mut current = schema;
 		let mut seen = std::collections::BTreeSet::new();
+
 		loop {
 			let analyzed = analyze(current);
+
 			if analyzed.nullable
 				|| (matches!(analyzed.shape, Shape::Any) && analyzed.unsupported.is_none())
 			{
@@ -435,9 +444,11 @@ impl Walker<'_> {
 			let Shape::Ref(name) = analyzed.shape else {
 				return false;
 			};
+
 			if !seen.insert(name) {
 				return false;
 			}
+
 			let Some(next) = self.spec.schema(name) else {
 				return false;
 			};
@@ -451,17 +462,22 @@ impl Walker<'_> {
 	fn nullable_alias(&self, schema: &Value) -> bool {
 		let mut current = schema;
 		let mut seen = std::collections::BTreeSet::new();
+
 		loop {
 			let analyzed = analyze(current);
+
 			if analyzed.nullable {
 				return !matches!(analyzed.shape, Shape::Null);
 			}
+
 			let Shape::Ref(name) = analyzed.shape else {
 				return false;
 			};
+
 			if !seen.insert(name) {
 				return false;
 			}
+
 			let Some(next) = self.spec.schema(name) else {
 				return false;
 			};
@@ -486,6 +502,7 @@ impl Walker<'_> {
 					dynamic_type(self.target)
 				),
 			);
+
 			return;
 		}
 
@@ -536,5 +553,6 @@ fn fits_javascript_integer(schema: &Value, format: &str) -> bool {
 		.and_then(Value::as_i64)
 		.or_else(|| (format == "uint64").then_some(0));
 	let maximum = schema.get("maximum").and_then(Value::as_i64);
+
 	matches!((minimum, maximum), (Some(min), Some(max)) if min >= -SAFE && max <= SAFE && min <= max)
 }

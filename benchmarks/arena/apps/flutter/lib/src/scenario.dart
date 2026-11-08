@@ -20,18 +20,23 @@ enum Scenario {
   /// the home screen silently.
   static Scenario? fromArguments(List<String> arguments) {
     String? id;
+
     for (var index = 0; index < arguments.length; index += 1) {
       final argument = arguments[index];
+
       if (argument == '--scenario' && index + 1 < arguments.length) {
         id = arguments[index + 1];
       } else if (argument.startsWith('--scenario=')) {
         id = argument.substring('--scenario='.length);
       }
     }
+
     if (id == null || id.isEmpty) return null;
+
     for (final scenario in values) {
       if (scenario.name == id) return scenario;
     }
+
     throw ArgumentError.value(id, 'scenario', 'unknown arena scenario');
   }
 }

@@ -40,6 +40,7 @@ class _EchoScenarioState extends State<EchoScenario> {
 
   Future<void> _run() async {
     await settle();
+
     if (!mounted) return;
     setState(() => _phase = Phase.running);
     // Let the running frame reach the screen before the loops occupy the isolate.
@@ -59,6 +60,7 @@ class _EchoScenarioState extends State<EchoScenario> {
           samples,
         );
       }
+
       for (final echoCase in _syncCases(syncEcho)) {
         _record(
           'sync',
@@ -72,6 +74,7 @@ class _EchoScenarioState extends State<EchoScenario> {
       return _fail(failure.reason);
     } on MissingPluginException catch (error) {
       return _fail('ArenaEcho is not registered: ${error.message}');
+
     } on PlatformException catch (error) {
       return _fail('ArenaEcho failed: ${error.code} ${error.message}');
     }
@@ -104,14 +107,17 @@ class _EchoScenarioState extends State<EchoScenario> {
     for (var call = 0; call < warmUpCalls; call += 1) {
       _verify(echoCase, await echoCase.invoke());
     }
+
     final clock = Stopwatch()..start();
     final latenciesUs = List<double>.filled(timedCalls, 0);
+
     for (var call = 0; call < timedCalls; call += 1) {
       final start = clock.elapsedTicks;
       final result = await echoCase.invoke();
       latenciesUs[call] = (clock.elapsedTicks - start) * 1e6 / clock.frequency;
       _verify(echoCase, result);
     }
+
     return latenciesUs;
   }
 
@@ -119,14 +125,18 @@ class _EchoScenarioState extends State<EchoScenario> {
     for (var call = 0; call < warmUpCalls; call += 1) {
       _verify(echoCase, echoCase.invoke());
     }
+
     final clock = Stopwatch()..start();
     final latenciesUs = List<double>.filled(timedCalls, 0);
+
     for (var call = 0; call < timedCalls; call += 1) {
       final start = clock.elapsedTicks;
       final result = echoCase.invoke();
       latenciesUs[call] = (clock.elapsedTicks - start) * 1e6 / clock.frequency;
+
       _verify(echoCase, result);
     }
+
     return latenciesUs;
   }
 
@@ -230,17 +240,21 @@ List<_Case<Object?>> _syncCases(SyncEcho echo) => [
 
 bool _isBytes64k(Object? result) {
   if (result is! Uint8List || result.length != _bytes64k.length) return false;
+
   for (var i = 0; i < result.length; i += 1) {
     if (result[i] != i % 251) return false;
   }
+
   return true;
 }
 
 bool _isObject(Object? result) {
   if (result is! Map || result.length != _object.length) return false;
+
   for (var i = 0; i < _object.length; i += 1) {
     if (result['f$i'] != i) return false;
   }
+
   return true;
 }
 

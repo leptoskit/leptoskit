@@ -53,6 +53,7 @@ impl Fixture {
 			leptoskit_db_schema::render(&plan, before, after).sql()
 		};
 		let sql = render(&Schema::empty(Dialect::Postgres), &baseline);
+
 		let migrations = [Migration::new("initial", sql.clone())];
 		fs::create_dir(root.path().join("migrations/initial")).unwrap();
 		fs::write(root.path().join("migrations/initial/migration.sql"), &sql).unwrap();
@@ -202,16 +203,20 @@ fn conflicting_window_file_or_lost_reservation_prevents_boot() {
 	for failure in ["file", "install", "reservation"] {
 		let fixture = Fixture::new();
 		fixture.initial();
+
 		if failure == "file" {
 			fs::create_dir_all(fixture.host_file().parent().unwrap()).unwrap();
 			fs::write(fixture.host_file(), "conflicting input").unwrap();
 		}
+
 		let extra = match failure {
 			"install" => vec![("MOCK_WINDOW_INSTALL_FAIL", "1")],
 			"reservation" => vec![("MOCK_WINDOW_LOSE_RESERVATION", "1")],
 			_ => vec![],
 		};
+
 		assert!(!fixture.deploy("v2", &extra).status.success());
+
 		assert_eq!(release_count(fixture.root.path()), 1);
 		assert!(
 			!fixture
@@ -220,6 +225,7 @@ fn conflicting_window_file_or_lost_reservation_prevents_boot() {
 				.join("infra/notes-production/boot-window-v2.json")
 				.exists()
 		);
+
 		if failure == "file" {
 			assert_eq!(
 				fs::read_to_string(fixture.host_file()).unwrap(),
@@ -269,6 +275,7 @@ fn boot_failure_restores_the_previous_window_configuration() {
 	succeeds(&fixture.deploy("v2", &[]));
 	let mut value: Value = serde_json::from_slice(&fs::read(&fixture.path).unwrap()).unwrap();
 	let candidate = format!("{}\n", fixture.window);
+
 	value["schema_window"]["window"] = json!(candidate);
 	value["schema_window"]["window_sha256"] = json!(checksum(&candidate));
 	let bytes = serde_json::to_string(&value).unwrap();
@@ -326,6 +333,7 @@ fn repeated_evidence_cannot_make_previously_readable_history_unreadable() {
 	fails_with(&fixture.deploy("v3", &[]), "release history would exceed");
 	assert_eq!(fs::read(history).unwrap(), before);
 	assert_eq!(release_count(fixture.root.path()), 2);
+
 	assert!(
 		!fixture
 			.root
@@ -385,6 +393,7 @@ fn reused_window_is_freshly_checked_without_installation_or_boot() {
 		"--descriptor-sha256",
 		&fixture.pin,
 	];
+
 	let base = [
 		("MOCK_REUSE_CONTAINER", "notes-production-web-v2"),
 		("MOCK_REUSE_WINDOW_PIN", fixture.window_pin.as_str()),

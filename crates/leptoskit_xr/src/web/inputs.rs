@@ -30,13 +30,17 @@ fn input(id: u32, source: &JsValue, xr_frame: &JsValue, space: &JsValue) -> Opti
 		Some("right") => Handedness::Right,
 		_ => Handedness::None,
 	};
+
 	let hand = js::get(source, "hand");
+
 	let kind = match js::get(source, "targetRayMode").as_string().as_deref() {
 		Some("screen") => InputKind::Screen,
 		Some("gaze") => InputKind::Gaze,
+
 		_ if !hand.is_undefined() && !hand.is_null() => InputKind::Hand,
 		_ => InputKind::Controller,
 	};
+
 	let gamepad = js::get(source, "gamepad");
 	let buttons = if gamepad.is_undefined() || gamepad.is_null() {
 		Vec::new()
@@ -53,6 +57,7 @@ fn input(id: u32, source: &JsValue, xr_frame: &JsValue, space: &JsValue) -> Opti
 			})
 			.collect()
 	};
+
 	let axes = if gamepad.is_undefined() || gamepad.is_null() {
 		Vec::new()
 	} else {
@@ -62,6 +67,7 @@ fn input(id: u32, source: &JsValue, xr_frame: &JsValue, space: &JsValue) -> Opti
 			.iter()
 			.filter_map(|axis| axis.as_f64().map(|value| value as f32))
 			.collect();
+
 		if axes.len() >= 4 {
 			axes[2..4].to_vec()
 		} else {

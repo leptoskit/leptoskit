@@ -70,12 +70,15 @@ impl Workspace {
 				self.format_version
 			));
 		}
+
 		if self.applications.is_empty() || self.applications.len() > 256 {
 			return Err("applications must contain between 1 and 256 entries".into());
 		}
+
 		for (name, app) in &self.applications {
 			self.validate_application(name, app)?;
 		}
+
 		self.order().map(|_| ())
 	}
 
@@ -90,11 +93,13 @@ impl Workspace {
 
 	fn validate_application(&self, name: &str, app: &Application) -> Result<(), String> {
 		let field = format!("applications.{name}");
+
 		if !identifier(name) {
 			return Err(format!(
 				"{field}: use a lowercase name with letters, digits, or dashes"
 			));
 		}
+
 		if app.path.as_os_str().is_empty()
 			|| app
 				.path
@@ -106,20 +111,26 @@ impl Workspace {
 			));
 		}
 		let mut dependencies = BTreeSet::new();
+
 		for dependency in &app.depends_on {
 			self.reference(&format!("{field}.depends-on"), name, dependency)?;
+
 			if !dependencies.insert(dependency) {
 				return Err(format!("{field}.depends-on repeats `{dependency}`"));
 			}
 		}
+
 		let mut variables = BTreeSet::new();
+
 		for (binding_name, binding) in &app.bindings {
 			let field = format!("{field}.bindings.{binding_name}");
+
 			if !identifier(binding_name) {
 				return Err(format!(
 					"{field}: binding names use lowercase letters, digits, or dashes"
 				));
 			}
+
 			self.reference(&format!("{field}.application"), name, &binding.application)?;
 			for (key, variable) in [
 				("url-env", &binding.url_env),
@@ -130,6 +141,7 @@ impl Workspace {
 						"{field}.{key} must name an uppercase environment variable"
 					));
 				}
+
 				if !variables.insert(variable) {
 					return Err(format!(
 						"{field}.{key}: `{variable}` is already used by another binding field"
@@ -137,6 +149,7 @@ impl Workspace {
 				}
 			}
 		}
+
 		Ok(())
 	}
 
@@ -146,9 +159,11 @@ impl Workspace {
 				"{field} cannot refer to its own application `{caller}`"
 			));
 		}
+
 		if !self.applications.contains_key(target) {
 			return Err(format!("{field} names unknown application `{target}`"));
 		}
+
 		Ok(())
 	}
 
@@ -156,6 +171,7 @@ impl Workspace {
 		let mut pending: BTreeSet<_> = self.applications.keys().cloned().collect();
 		let mut ready = BTreeSet::new();
 		let mut order = Vec::with_capacity(pending.len());
+
 		while !pending.is_empty() {
 			let next = pending.iter().find(|name| {
 				self.applications[*name]
@@ -171,9 +187,11 @@ impl Workspace {
 				));
 			};
 			pending.remove(&next);
+
 			ready.insert(next.clone());
 			order.push(next);
 		}
+
 		Ok(order)
 	}
 }

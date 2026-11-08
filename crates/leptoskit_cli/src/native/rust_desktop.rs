@@ -93,6 +93,7 @@ pub fn generate(
 			} else {
 				&config.native.package_id
 			};
+
 			writeln!(
 				rust,
 				"    let context = leptoskit_bridge_ffi::app::desktop_context({application:?})?;"
@@ -346,6 +347,7 @@ mod tests {
 		}));
 		http.crate_name = "leptoskit_plugin_http".into();
 		http.options_json = Some(r#"{"origins":["https://api.example.com"]}"#.into());
+
 		registry.plugins = vec![os()];
 		registry
 			.select(Target::Linux, MissingPlugins::Error)

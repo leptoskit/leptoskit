@@ -100,6 +100,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		for (path, patch) in planned {
 			let current = source_at(source, &path);
+
 			let patch = match patch {
 				// A different kind changes what its children may be, so the
 				// node is replaced along with them.
@@ -108,6 +109,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 					element.children.clone_from(&current.children);
 					(true, element)
 				}
+
 				SourcePatch::Node { mut element, .. } => {
 					element.children = Vec::new();
 					(false, element)

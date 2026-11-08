@@ -1270,6 +1270,7 @@ pub unsafe extern "C" fn lk_app_enable_scene3d(app: *mut App) -> i32 {
 	#[cfg(not(feature = "scene3d"))]
 	{
 		let _ = app;
+
 		0
 	}
 }

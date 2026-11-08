@@ -74,6 +74,7 @@ fn hidden_window_captures_and_restores_onto_a_visible_display() {
 	assert!(
 		restored.normal_bounds.y() + restored.normal_bounds.height() <= area.y() + area.height()
 	);
+
 	assert!(
 		!window.isVisible(),
 		"restoring a hidden window must not activate it"

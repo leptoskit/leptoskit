@@ -1045,6 +1045,7 @@ async fn edges_of_signing_in_and_out_are_refused_or_handled() {
 		])
 		.finish();
 	let ended = app.get(&format!("/oauth/end_session?{query}"), None).await;
+
 	assert_eq!(location(&ended), SIGNED_OUT);
 	let malformed = app.get("/oauth/end_session?state=a&state=b", None).await;
 	assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
@@ -1135,6 +1136,7 @@ async fn signing_out_only_returns_to_the_app_that_asked() {
 			.get(header::SET_COOKIE)
 			.is_some_and(|cookie| cookie.to_str().unwrap().contains("Max-Age=0"))
 	};
+
 	let id_token = async |cookie: &str| {
 		let code = app.code(&partner, "openid", cookie).await;
 		let tokens: TokenResponse =
@@ -1186,6 +1188,7 @@ async fn signing_out_only_returns_to_the_app_that_asked() {
 	// same, but not sent anywhere either app registered.
 	let cookie = app.sign_in("ada@example.com").await;
 	let hint = id_token(&cookie).await;
+
 	for uri in [SIGNED_OUT, OTHER_SIGNED_OUT] {
 		let ended = end_session(
 			&[
@@ -1199,6 +1202,7 @@ async fn signing_out_only_returns_to_the_app_that_asked() {
 		.await;
 		assert_eq!(location(&ended), "/");
 	}
+
 	let session: Value = body(app.get("/auth/session", Some(&cookie)).await).await;
 	assert_eq!(session["session"], Value::Null);
 }
@@ -1309,6 +1313,7 @@ async fn a_code_redeemed_twice_at_once_ends_what_it_started() {
 		} else {
 			(second, first)
 		};
+
 		assert_eq!(
 			App::error(lost, StatusCode::BAD_REQUEST).await,
 			"invalid_grant"

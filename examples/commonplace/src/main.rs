@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let url = std::env::var("DATABASE_URL")
 		.unwrap_or_else(|_| "sqlite://commonplace.sqlite3?mode=rwc".to_owned());
 	let db = leptoskit::db::Db::connect(&url).await?;
+
 	for name in db.migrate(commonplace_db::MIGRATIONS).await? {
 		println!("applied migration {name}");
 	}
@@ -59,12 +60,15 @@ fn sign_in(
 	{
 		println!("{} is not set: using the development key", auth.keys_env);
 		let mut builder = Auth::builder(db, leptoskit::auth::Keys::single("dev", [7; 32]));
+
 		if let Some(name) = &auth.app_name {
 			builder = builder.app_name(name.clone());
 		}
+
 		if let Some(origin) = &auth.origin {
 			builder = builder.origin(origin.clone());
 		}
+
 		return Ok(builder.dev_mailbox().dev_sign_in());
 	}
 

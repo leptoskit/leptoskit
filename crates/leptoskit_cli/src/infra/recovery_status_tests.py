@@ -20,18 +20,22 @@ class BackupStatus(unittest.TestCase):
                 "name": "fixture", "repository": str(root / "repository"), "max_age_hours": 36,
             }))
             (root / "backup-secrets.json").write_text("{}")
+
             if status is not None:
                 (root / "backup-status.json").write_text(json.dumps(status))
+
             if failure is not None:
                 (root / "backup-error.json").write_text(json.dumps(failure))
             result = subprocess.run(
                 [sys.executable, str(root / "recovery.py"), "status"],
                 capture_output=True, text=True, check=False,
             )
+
             return result.returncode, json.loads(result.stdout)
 
     def completed(self, hours_ago):
         timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours_ago)
+
         return {"verified": True, "snapshot": "a" * 64, "completed_at": timestamp.isoformat()}
 
     def test_recent_verified_restore_check_is_healthy(self):

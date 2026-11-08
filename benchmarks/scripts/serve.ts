@@ -26,6 +26,7 @@ export function serveStatic(root: string): StaticServer {
 	const server = Deno.serve({ hostname: "127.0.0.1", port: 0 }, (request) => {
 		return handle(request, root);
 	});
+
 	return {
 		url: `http://127.0.0.1:${
 			server.addr.transport === "tcp" ? server.addr.port : 0
@@ -38,9 +39,11 @@ async function handle(request: Request, root: string): Promise<Response> {
 	const path = new URL(request.url).pathname;
 	const relative = path === "/" ? "/index.html" : path;
 	const resolved = safelyJoin(root, relative);
+
 	if (!resolved) {
 		return new Response("not found", { status: 404 });
 	}
+
 	let bytes: Uint8Array;
 	try {
 		bytes = await Deno.readFile(resolved);
@@ -59,10 +62,13 @@ async function handle(request: Request, root: string): Promise<Response> {
 	);
 	const compress = acceptsGzip && bytes.length > 512;
 	const body = compress ? gzipBytes(bytes) : copy(bytes);
+
 	if (compress) {
 		headers.set("content-encoding", "gzip");
 	}
+
 	headers.set("content-length", String(body.length));
+
 	return new Response(body, { status: 200, headers });
 }
 
@@ -70,6 +76,7 @@ async function handle(request: Request, root: string): Promise<Response> {
 function copy(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 	const owned = new Uint8Array(bytes.byteLength);
 	owned.set(bytes);
+
 	return owned;
 }
 
@@ -80,6 +87,7 @@ function gzipBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 function extensionOf(path: string): string {
 	const name = path.replaceAll("\\", "/").split("/").pop() ?? "";
 	const dot = name.lastIndexOf(".");
+
 	return dot === -1 ? "" : name.slice(dot).toLowerCase();
 }
 
@@ -88,6 +96,7 @@ function safelyJoin(root: string, relative: string): string | null {
 	const rootPath = Deno.realPathSync(root);
 	const decoded = decodeURIComponent(relative);
 	const target = `${rootPath}/${decoded.replaceAll(/^\/+|\.\./g, "")}`;
+
 	if (!target.startsWith(`${rootPath}/`)) return null;
 	return target;
 }

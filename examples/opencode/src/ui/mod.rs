@@ -50,6 +50,7 @@ pub fn Prompt(
 							submitted.apply(Action::Draft(value.clone()));
 							submit();
 						}
+
 						EventOutcome::Handled
 					})
 				/>
@@ -79,6 +80,7 @@ pub fn Hints<'a>(pairs: &'a [(&'a str, &'a str)]) -> Element {
 		if index > 0 {
 			spans.push(TextSpan::new("  "));
 		}
+
 		spans.push(TextSpan::new(format!("{key} ")).color(theme::TEXT));
 		spans.push(TextSpan::new(*action).color(theme::MUTED));
 	}

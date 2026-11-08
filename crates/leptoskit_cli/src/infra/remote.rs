@@ -47,6 +47,7 @@ pub(super) fn execute(ip: &str, script: &str, input: Option<&[u8]>) -> Result<Ve
 		.stderr(Stdio::piped())
 		.spawn()
 		.context("couldn't run SSH")?;
+
 	if let Some(input) = input {
 		child
 			.stdin
@@ -54,6 +55,7 @@ pub(super) fn execute(ip: &str, script: &str, input: Option<&[u8]>) -> Result<Ve
 			.context("SSH stdin unavailable")?
 			.write_all(input)?;
 	}
+
 	let result = child.wait_with_output()?;
 	ensure!(
 		result.status.success(),

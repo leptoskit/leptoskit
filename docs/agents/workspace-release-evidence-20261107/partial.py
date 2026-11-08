@@ -28,6 +28,7 @@ def run(*args, env=env, ok=True):
     )
     print(r.stdout, flush=True)
     assert (r.returncode == 0) == ok, (args, r.returncode)
+
     return r.stdout
 
 
@@ -37,6 +38,7 @@ def sha(p):
 
 def snapshot():
     result = {}
+
     for app in ["accounts", "website"]:
         name = "workspace-" + app
         fmt = '{"container":{{json .Id}},"image":{{json .Image}},"started":{{json .State.StartedAt}}}'
@@ -81,6 +83,7 @@ try:
     journal = W / ".leptoskit/workspace" / (sha(plan) + ".json")
     value = json.loads(journal.read_text())
     assert value["applications"]["accounts"]["state"] == "command_completed"
+
     assert value["applications"]["website"]["state"] == "failed"
     (W / "partial-journal.json").write_bytes(journal.read_bytes())
 

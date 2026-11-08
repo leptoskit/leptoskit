@@ -71,6 +71,7 @@ fn header(model: &Model) -> Element {
 		Connection::Live => "live",
 		Connection::Lost => "reconnecting…",
 	};
+
 	let version = model
 		.hub
 		.as_ref()
@@ -100,6 +101,7 @@ fn session_chips(model: &Model) -> Element {
 				} else {
 					live.label()
 				};
+
 				session_button(model, live, label)
 			})
 		}))
@@ -146,6 +148,7 @@ fn sidebar(model: &Model) -> Element {
 						} else {
 							live.label()
 						};
+
 						session_button(model, live, label).class("text-start")
 					}))
 			})
@@ -234,6 +237,7 @@ fn tree_rows(model: &Model, live: &Live) -> Element {
 	}
 
 	let rows = model.rows();
+
 	if rows.is_empty() {
 		return Text("Nothing in the tree matches the search.").class(format!("p-2 {QUIET}"));
 	}
@@ -259,6 +263,7 @@ fn tree_row(row: &Row<'_>, selected: bool) -> Element {
 	let indent = format!("pl-[{}px]", row.depth * 14);
 	let disclosure = if row.parent {
 		let id = node.id.clone();
+
 		Button(if row.collapsed { "▸" } else { "▾" })
 			.class("w-5 text-xs")
 			.accessibility_label(if row.collapsed {
@@ -271,7 +276,9 @@ fn tree_row(row: &Row<'_>, selected: bool) -> Element {
 	} else {
 		View().class("w-5")
 	};
+
 	let id = node.id.clone();
+
 	let key = node.key.clone();
 	let tone = if selected {
 		"bg-sky-100 dark:bg-sky-900"
@@ -427,6 +434,7 @@ fn node_panel(model: &Model, live: &Live) -> Vec<Element> {
 			)
 		}
 	});
+
 	sections.push(classes_editor(model, live, node));
 	sections.push(other_platforms(model));
 	sections
@@ -759,6 +767,7 @@ fn state_panel(model: &Model, live: &Live) -> Vec<Element> {
 				}
 				None => json_view(value),
 			};
+
 			let edit = (draft.is_none() && editable && !value.truncated).then(|| {
 				let (name, json) = (name.clone(), value.json.to_string());
 				Button("Edit")
@@ -784,6 +793,7 @@ fn calls_panel(model: &Model, live: &Live) -> Vec<Element> {
 	}
 
 	let moments = model.calls();
+
 	if moments.is_empty() {
 		return vec![Text("No calls yet.").class(QUIET)];
 	}
@@ -800,6 +810,7 @@ fn calls_panel(model: &Model, live: &Live) -> Vec<Element> {
 						CallStatus::Error => "error",
 						CallStatus::Cancelled => "cancelled",
 					};
+
 					let mut detail = duration(call.started_ms, call.finished_ms);
 					if let (Some(sent), Some(back)) = (call.request_bytes, call.response_bytes) {
 						detail.push_str(&format!(" · {} sent, {} back", bytes(sent), bytes(back)));
@@ -812,6 +823,7 @@ fn calls_panel(model: &Model, live: &Live) -> Vec<Element> {
 							seconds(late.saturating_sub(call.finished_ms.unwrap_or(late)))
 						));
 					}
+
 					timeline_row(
 						call.started_ms,
 						format!("{}.{}", call.plugin, call.method),
@@ -825,6 +837,7 @@ fn calls_panel(model: &Model, live: &Live) -> Vec<Element> {
 						(None, Some(_)) => "ok".to_owned(),
 						(None, None) => "pending".to_owned(),
 					};
+
 					timeline_row(
 						attempt.started_ms,
 						format!("{} (attempt {})", attempt.function, attempt.attempt),
@@ -877,6 +890,7 @@ fn commits_panel(model: &Model, live: &Live) -> Vec<Element> {
 
 	if commits.is_empty() && moments.is_empty() {
 		sections.push(Text("No commits yet.").class(QUIET));
+
 		return sections;
 	}
 
@@ -901,6 +915,7 @@ fn commits_panel(model: &Model, live: &Live) -> Vec<Element> {
 					(None, Some(apply)) => format!("apply {apply} µs"),
 					(None, None) => String::new(),
 				};
+
 				timeline_row(
 					commit.at_ms,
 					format!("Commit {}", commit.seq),

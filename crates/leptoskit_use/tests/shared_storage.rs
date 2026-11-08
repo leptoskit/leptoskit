@@ -36,6 +36,7 @@ fn shared_tailwind_screen_persists_through_native_press_and_reopens_after_restar
 		block_on(task).unwrap();
 	}));
 	assert_eq!(surface.children(root)[0], label);
+
 	assert_eq!(surface.props(label).text.as_deref(), Some("Name: Ada"));
 	owner.cleanup();
 	let reopened = LocalStorage::<String>::new(directory.path()).unwrap();

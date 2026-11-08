@@ -36,6 +36,7 @@ fn main() {
 					.expect("ready")
 					.expect("success");
 				assert_eq!(response.len(), size);
+
 				assert_eq!(response.as_ptr(), payload.as_ptr());
 				black_box(response);
 			}

@@ -278,6 +278,7 @@ async fn checks_and_deltas_use_persisted_hashes_without_reading_base_or_delta_bo
 	let delta_url = plan["delta_url"].as_str().expect("delta offer");
 	std::fs::write(&delta_path, &expected_delta).expect("restore delta");
 	let (status, _, body) = get(&store, delta_url).await;
+
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body, expected_delta);
 }
@@ -437,6 +438,7 @@ async fn admission_includes_unconsumed_bodies_and_recovers_after_cancellation() 
 			.status(),
 		StatusCode::NOT_FOUND
 	);
+
 	assert_eq!(
 		request(&router, "/app/production/1.1.0%2B2/release.lkb")
 			.await

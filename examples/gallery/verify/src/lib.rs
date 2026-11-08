@@ -45,6 +45,7 @@ pub fn check_rendered(png: &[u8]) -> Result<(), String> {
 	let colors: HashSet<&[u8]> = pixels[..frame.buffer_size()]
 		.chunks_exact(frame.color_type.samples())
 		.collect();
+
 	if colors.len() < MIN_COLORS {
 		return Err(format!(
 			"the {}x{} capture shows only {} colors, so it looks blank",
@@ -53,6 +54,7 @@ pub fn check_rendered(png: &[u8]) -> Result<(), String> {
 			colors.len()
 		));
 	}
+
 	Ok(())
 }
 

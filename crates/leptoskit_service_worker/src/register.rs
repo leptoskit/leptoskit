@@ -356,6 +356,7 @@ mod tests {
 		// ways.
 		let default = serde_json::to_value(RegisterOptions::default()).expect("default serialize");
 		assert!(default.get("update_via_cache").is_none());
+
 		assert!(is_default_update(&UpdateViaCache::None));
 		assert!(!is_default_update(&UpdateViaCache::Imports));
 	}

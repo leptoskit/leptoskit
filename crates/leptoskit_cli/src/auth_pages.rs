@@ -183,6 +183,7 @@ pub(crate) fn render(template: &str, mode: Mode) -> String {
 			"// leptoskit: end idp" => in_idp = false,
 			"// leptoskit: passwords" => in_passwords = true,
 			"// leptoskit: end passwords" => in_passwords = false,
+
 			_ if (in_idp && !mode.idp) || (in_passwords && !mode.passwords) => {}
 			_ => out.push_str(line),
 		}
@@ -851,6 +852,7 @@ fn write_template(
 	} else {
 		None
 	};
+
 	let earlier: Vec<Mode> = template
 		.others
 		.iter()

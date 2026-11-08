@@ -88,12 +88,14 @@ fn align_for(sender: Sender) -> Align {
 #[component]
 fn Bubble(message: &Message, state: &ScreenState, colors: &Palette) -> Element {
 	let sender = message.sender();
+
 	match message {
 		Message::Text(_, text) => {
 			let (background, foreground) = match sender {
 				Sender::Them => (colors.incoming, colors.ink),
 				Sender::Me => (colors.accent, colors.surface),
 			};
+
 			view! {
 				<View
 					with_style=|style| style.align_self = align_for(sender)

@@ -40,6 +40,7 @@ fn main() -> Result<()> {
 			PathBuf::from,
 		),
 	);
+
 	match platform.as_str() {
 		"android" => android::verify(&root, &output),
 		"ios" => ios::verify(&root, &output),
@@ -122,13 +123,17 @@ mod android {
 		);
 
 		let screenshots = SCREENS.iter().copied().chain(["components-scrolled"]);
+
 		for slug in screenshots {
 			let image = device.read_app_file(PACKAGE, &format!("files/gallery-{slug}.png"))?;
+
 			if let Err(error) = check_rendered(&image) {
 				bail!("the `{slug}` screenshot is not a rendered screen: {error}");
 			}
+
 			fs::write(output.join(format!("{slug}.png")), image)?;
 		}
+
 		println!("Android gallery evidence: {}", output.display());
 		Ok(())
 	}
@@ -162,9 +167,11 @@ mod ios {
 
 	pub fn verify(root: &Path, output: &Path) -> Result<()> {
 		let app = package(root, output)?;
+
 		if let Some(device) = option("--device")? {
 			return verify_on(&device, &app, output);
 		}
+
 		let runtime =
 			option("--runtime")?.context("pass --device, or --runtime and --device-type")?;
 		let device_type = option("--device-type")?.context("pass --device-type with --runtime")?;
@@ -175,6 +182,7 @@ mod ios {
 			&runtime,
 		])?;
 		println!("Task-owned simulator {device}");
+
 		// `bootstatus -b` waits until the simulator can install and launch
 		// apps.
 		let result = simctl(&["boot", &device])
@@ -195,6 +203,7 @@ mod ios {
 		} else {
 			"x86_64-apple-ios"
 		};
+
 		run(
 			Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
 				.current_dir(root)
@@ -233,11 +242,14 @@ mod ios {
 		let documents =
 			Path::new(&simctl(&["get_app_container", device, BUNDLE, "data"])?).join("Documents");
 		let mut failures = Vec::new();
+
 		for slug in SCREENS {
 			let report = documents.join(format!("gallery-{slug}.txt"));
+
 			if report.exists() {
 				fs::remove_file(&report)?;
 			}
+
 			simctl(&[
 				"launch",
 				"--terminate-running-process",
@@ -247,6 +259,7 @@ mod ios {
 				"--verify",
 			])?;
 			let deadline = Instant::now() + REPORT_TIMEOUT;
+
 			while !report.exists() {
 				ensure!(
 					Instant::now() < deadline,
@@ -256,19 +269,24 @@ mod ios {
 				);
 				thread::sleep(Duration::from_millis(200));
 			}
+
 			let text = fs::read_to_string(&report)?;
 			fs::write(output.join(format!("{slug}.txt")), &text)?;
 			print!("{text}");
+
 			if !text.starts_with("VERIFIED\t") {
 				failures.push(slug);
 			}
+
 			thread::sleep(PRESENT_DELAY);
 			let screenshot = output.join(format!("{slug}.png"));
 			simctl(&["io", device, "screenshot", utf8(&screenshot)?])?;
+
 			if let Err(error) = check_rendered(&fs::read(&screenshot)?) {
 				bail!("the `{slug}` screenshot is not a rendered screen: {error}");
 			}
 		}
+
 		simctl(&["terminate", device, BUNDLE])?;
 		ensure!(
 			failures.is_empty(),

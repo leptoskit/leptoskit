@@ -35,6 +35,7 @@ fn lay_out(
 		Some(measurer) => HeadlessBackend::new().with_text_measurer(measurer),
 		None => HeadlessBackend::new(),
 	};
+
 	let mut surface = NativeSurface::new(backend);
 	surface.set_viewport(viewport.0, viewport.1);
 	surface.set_safe_area(safe_area);
@@ -47,6 +48,7 @@ fn lay_out(
 /// Describes a node for failure messages: its kind and text, if any.
 fn describe(surface: &NativeSurface<HeadlessBackend>, id: NodeId) -> String {
 	let props = surface.props(id);
+
 	match props.text.as_deref().or(props.source.as_deref()) {
 		Some(content) => format!("{} {content:?}", surface.kind(id)),
 		None => surface.kind(id).to_string(),
@@ -61,11 +63,13 @@ fn problems(surface: &NativeSurface<HeadlessBackend>, id: NodeId, found: &mut Ve
 	if props.hidden == Some(true) {
 		return;
 	}
+
 	// An empty, unstyled view (a spacer) draws nothing, so it may collapse.
 	let invisible = surface.kind(id) == NativeKind::View
 		&& surface.children(id).is_empty()
 		&& props.background.is_none()
 		&& props.border_width.is_none();
+
 	if !invisible && (frame.width <= 0.0 || frame.height <= 0.0) {
 		found.push(format!(
 			"{} is {}×{}",
@@ -74,7 +78,9 @@ fn problems(surface: &NativeSurface<HeadlessBackend>, id: NodeId, found: &mut Ve
 			frame.height
 		));
 	}
+
 	let scrolls = surface.kind(id) == NativeKind::ScrollView;
+
 	for &child in surface.children(id) {
 		let inner = surface
 			.frame(child)
@@ -85,6 +91,7 @@ fn problems(surface: &NativeSurface<HeadlessBackend>, id: NodeId, found: &mut Ve
 			&& inner.y + inner.height <= frame.height + TOLERANCE;
 		// Overflowing a scroll view along its axis is what scrolling is for.
 		let allowed = scrolls && inner.x + inner.width <= frame.width + TOLERANCE;
+
 		if !inside && !allowed {
 			found.push(format!(
 				"{} at ({}, {}) {}×{} overflows {} ({}×{})",
@@ -98,6 +105,7 @@ fn problems(surface: &NativeSurface<HeadlessBackend>, id: NodeId, found: &mut Ve
 				frame.height
 			));
 		}
+
 		problems(surface, child, found);
 	}
 }
@@ -113,15 +121,18 @@ fn covered(
 	found: &mut Vec<String>,
 ) {
 	let frame = surface.frame(id).expect("every committed node has a frame");
+
 	if surface.props(id).hidden == Some(true) {
 		return;
 	}
+
 	let top = top + frame.y;
 	let kind = surface.kind(id);
 	let content = !matches!(
 		kind,
 		NativeKind::View | NativeKind::ScrollView | NativeKind::Image
 	);
+
 	if content && top < safe_area.top - TOLERANCE {
 		found.push(format!(
 			"{} at y = {top} is under the {}-point status bar",
@@ -129,6 +140,7 @@ fn covered(
 			safe_area.top
 		));
 	}
+
 	if content && !scrolled && top + frame.height > height - safe_area.bottom + TOLERANCE {
 		found.push(format!(
 			"{} ending at y = {} is under the {}-point bottom inset",
@@ -137,7 +149,9 @@ fn covered(
 			safe_area.bottom
 		));
 	}
+
 	let scrolled = scrolled || kind == NativeKind::ScrollView;
+
 	for &child in surface.children(id) {
 		covered(surface, child, (top, scrolled), (height, safe_area), found);
 	}
@@ -161,6 +175,7 @@ fn assert_clean(
 		);
 		let mut found = Vec::new();
 		problems(&surface, root, &mut found);
+
 		covered(
 			&surface,
 			root,
@@ -220,6 +235,7 @@ fn slugs_are_unique_and_found() {
 		let found = gallery::find_screen(screen.slug).expect("every slug resolves");
 		assert_eq!(found.title, screen.title);
 	}
+
 	assert!(gallery::find_screen("missing").is_none());
 }
 
@@ -246,6 +262,7 @@ fn counter_buttons_change_the_count() {
 	tester
 		.find(&text(&(ScreenState::INITIAL_COUNT + 1).to_string()))
 		.unwrap();
+
 	tester.tap(&text("Reset")).unwrap();
 	tester.find(&text("0")).unwrap();
 	tester.tap(&text("−")).unwrap();
@@ -273,6 +290,7 @@ fn settings_switch_commits_checked_state_without_replacing_its_node() {
 	let root = surface.root().expect("the screen commits a root");
 	let switch = find_accessibility_label(&surface, root, "Haptics").expect("the switch exists");
 	assert_eq!(surface.kind(switch), NativeKind::Switch);
+
 	assert_eq!(surface.props(switch).checked, Some(true));
 
 	surface.dispatch_event(
@@ -312,6 +330,7 @@ fn component_studio_commits_controlled_values_and_custom_activation() {
 			.checked,
 		Some(false)
 	);
+
 	tester.tap(&label("Enable previews")).unwrap();
 	assert!(state.is_on("Preview enabled"));
 	tester.tap(&label("Compact")).unwrap();
@@ -345,6 +364,7 @@ fn find_accessibility_label(
 	if surface.props(id).accessibility_label.as_deref() == Some(label) {
 		return Some(id);
 	}
+
 	surface
 		.children(id)
 		.iter()
@@ -355,6 +375,7 @@ fn find_accessibility_label(
 fn generated_assets_are_bitmaps() {
 	let dir = std::env::temp_dir().join(format!("leptoskit-gallery-test-{}", std::process::id()));
 	let assets = Assets::generate(&dir).expect("assets generate");
+
 	for path in [assets.photo(0), assets.avatar(0), assets.cover()] {
 		let bytes = std::fs::read(&path).expect("the asset exists");
 		assert_eq!(&bytes[..2], b"BM", "{path} is a BMP");
@@ -365,6 +386,7 @@ fn generated_assets_are_bitmaps() {
 			"{path} declares its own size"
 		);
 	}
+
 	std::fs::remove_dir_all(&dir).expect("clean up");
 }
 
@@ -375,6 +397,7 @@ fn browser_assets_embed_the_same_bitmap_format() {
 	use base64::engine::general_purpose::STANDARD;
 
 	let assets = Assets::for_browser().expect("the browser artwork generates");
+
 	for source in [assets.photo(0), assets.avatar(0), assets.cover()] {
 		let encoded = source
 			.strip_prefix("data:image/bmp;base64,")

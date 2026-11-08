@@ -67,6 +67,7 @@ impl Sink {
 				.diagnostics
 				.lock()
 				.unwrap_or_else(PoisonError::into_inner);
+
 			if diagnostics.len() < 100 && !diagnostics.contains(&diagnostic) {
 				diagnostics.push(diagnostic);
 			}
@@ -217,12 +218,14 @@ impl Plan {
 								.map_err(|error| format!("`{name}`: {error}"))?
 						}
 					};
+
 					Ok((name.clone(), value))
 				})
 				.collect::<Result<_, String>>()
 		};
 
 		let mut values: std::collections::BTreeMap<String, Value> = evaluate(&self.attributes)?;
+
 		for name in &self.followed {
 			let variable = values.get(name).map(display).unwrap_or_default();
 			let current = ui
@@ -291,8 +294,10 @@ impl Pass {
 
 	fn claim_many(&mut self, node: &Node, count: usize) -> bool {
 		let limit = self.ui.limits.max_nodes;
+
 		if self.sink.open.load(Ordering::Relaxed) {
 			let used = self.sink.nodes.fetch_add(count, Ordering::Relaxed) + count;
+
 			if used <= limit {
 				return true;
 			}
@@ -303,6 +308,7 @@ impl Pass {
 					format!("the document is limited to {limit} elements; the rest is left out"),
 				);
 			}
+
 			return false;
 		}
 
@@ -391,6 +397,7 @@ impl Pass {
 
 		let Some(name) = name else {
 			self.note(Some(node), format!("<{element}> needs a `name`"));
+
 			return;
 		};
 
@@ -402,6 +409,7 @@ impl Pass {
 					 starting with a letter"
 				),
 			);
+
 			return;
 		}
 
@@ -417,6 +425,7 @@ impl Pass {
 						self.ui.limits.max_value_bytes
 					))
 				}
+
 				Ok(initial) => self.ui.store.declare_input(&name, initial, limit),
 				Err(error) => Declare::Refused(format!("<Var name=\"{name}\"> `value`: {error}")),
 			}
@@ -516,6 +525,7 @@ impl Pass {
 			3 => "text-lg font-semibold",
 			_ => "text-base font-semibold",
 		};
+
 		let depth = heading.depth;
 		self.text(&heading.children, move |spans| {
 			Heading(depth, String::new()).spans(spans).class(class)
@@ -540,6 +550,7 @@ impl Pass {
 					}
 					(None, false) => "•".to_owned(),
 				};
+
 				let content = self.blocks(&item.children);
 				Some(
 					View()
@@ -605,6 +616,7 @@ impl Pass {
 						(false, true) => "text-sm text-end",
 						(false, false) => "text-sm",
 					};
+
 					let content = self.text(&cell.children, move |spans| {
 						Text(String::new()).spans(spans).class(class)
 					});
@@ -632,12 +644,14 @@ impl Pass {
 
 		let mut parts = Vec::new();
 		let mut run: Vec<Node> = Vec::new();
+
 		for child in children {
 			if as_tag(child).is_some() {
 				if !run.is_empty() {
 					let text = std::mem::take(&mut run);
 					parts.push(self.text(&text, |spans| Text(String::new()).spans(spans)));
 				}
+
 				if let Some(element) = self.block(child) {
 					parts.push(element);
 				}
@@ -645,6 +659,7 @@ impl Pass {
 				run.push(child.clone());
 			}
 		}
+
 		if !run.is_empty() {
 			parts.push(self.text(&run, |spans| Text(String::new()).spans(spans)));
 		}
@@ -705,6 +720,7 @@ impl Pass {
 			.collect();
 
 		let first = evaluate_all(&self.ui, &formulas);
+
 		for (result, (source, node)) in first.iter().zip(&sources) {
 			if let Err(error) = result {
 				self.note(Some(node), format!("`{{{source}}}`: {error}"));
@@ -738,6 +754,7 @@ impl Pass {
 		let Some(name) = tag.name else {
 			// A fragment, `<>…</>`, is just its children.
 			let children = self.blocks(tag.children);
+
 			return Some(View().class("flex-col gap-3 min-w-0").children(children));
 		};
 
@@ -772,6 +789,7 @@ impl Pass {
 				format!("there is no component <{name}>; the components are {known}"),
 			);
 			let children = self.blocks(tag.children);
+
 			return Some(View().class("flex-col gap-3 min-w-0").children(children));
 		};
 
@@ -779,6 +797,7 @@ impl Pass {
 			Ok(plan) => plan,
 			Err(error) => return Some(self.failure(Some(node), error)),
 		};
+
 		let content: Vec<Node> = tag
 			.children
 			.iter()
@@ -923,6 +942,7 @@ impl Pass {
 						);
 					}
 				}
+
 				continue;
 			}
 
@@ -958,6 +978,7 @@ impl Pass {
 								continue;
 							}
 						}
+
 						Ok(expr) => Attribute::Formula(Arc::new(expr)),
 						Err(error) => {
 							self.note(Some(node), format!("<{name}> `{prop}`: {error}"));
@@ -970,6 +991,7 @@ impl Pass {
 			if spec.kind == PropKind::Variable && spec.follows {
 				plan.followed.push(prop.to_owned());
 			}
+
 			plan.attributes.push((prop.to_owned(), value));
 		}
 
@@ -986,6 +1008,7 @@ impl Pass {
 			let Some(child_name) = child_tag.name else {
 				continue;
 			};
+
 			if !component
 				.data_children
 				.iter()
@@ -996,10 +1019,12 @@ impl Pass {
 
 			let spec = self.ui.components.get(child_name);
 			let mut attributes = Vec::new();
+
 			for attribute in child_tag.attributes {
 				let AttributeContent::Property(property) = attribute else {
 					continue;
 				};
+
 				if spec.is_some_and(|spec| spec.prop_spec(&property.name).is_none()) {
 					self.note(
 						Some(child),
@@ -1007,6 +1032,7 @@ impl Pass {
 					);
 					continue;
 				}
+
 				let value = match &property.value {
 					None => Attribute::Fixed(Value::Bool(true)),
 					Some(AttributeValue::Literal(text)) => {
@@ -1025,8 +1051,10 @@ impl Pass {
 						}
 					}
 				};
+
 				attributes.push((property.name.clone(), value));
 			}
+
 			plan.data.push((child_name.to_owned(), attributes));
 		}
 
@@ -1046,6 +1074,7 @@ impl Pass {
 				{
 					return Some(name.to_owned());
 				}
+
 				if let Some(live) = self.first_live(tag.children) {
 					return Some(live);
 				}
@@ -1055,6 +1084,7 @@ impl Pass {
 				return Some(live);
 			}
 		}
+
 		None
 	}
 
@@ -1073,6 +1103,7 @@ impl Pass {
 		} else {
 			Vec::new()
 		};
+
 		self.depth -= 1;
 
 		let before = self.nodes_left();
@@ -1089,12 +1120,14 @@ impl Pass {
 		};
 
 		let used = before.saturating_sub(cx.nodes_left);
+
 		if used > 0 && !self.claim_many(node, used) {
 			return View().class("hidden");
 		}
 
 		// A class formula, checked once it has a value.
 		let dynamic;
+
 		let class = match (class, props.values.get("class")) {
 			(Some(classes), _) => Some(classes),
 			(None, Some(value)) => {
@@ -1102,6 +1135,7 @@ impl Pass {
 				if let Err(error) = class::check(&classes) {
 					return self.failure(Some(node), format!("<{}> {error}", component.name));
 				}
+
 				dynamic = self.ui.theme.expand(&classes);
 				Some(dynamic.as_str())
 			}
@@ -1266,13 +1300,17 @@ fn push_spans(
 						if text.chars().count() > MAX_SHOWN_TEXT {
 							text = text.chars().take(MAX_SHOWN_TEXT).collect::<String>() + "…";
 						}
+
 						styled(ui, &text, style)
 					}
+
 					Some(Err(_)) | None if ui.show_errors => {
 						TextSpan::new("⚠").color(ui.theme.resolve("negative"))
 					}
+
 					Some(Err(_)) | None => styled(ui, "—", style),
 				};
+
 				out.push(shown);
 			}
 			other => {
@@ -1286,17 +1324,22 @@ fn push_spans(
 
 fn styled(ui: &Inner, text: &str, style: Style) -> TextSpan {
 	let mut span = TextSpan::new(text);
+
 	if style.bold {
 		span = span.bold();
 	}
+
 	if style.italic {
 		span = span.italic();
 	}
+
 	if style.code {
 		span = span.background(ui.theme.resolve("surface"));
 	}
+
 	if style.link {
 		span = span.color(ui.theme.resolve("accent"));
 	}
+
 	span
 }

@@ -151,6 +151,7 @@ fn split_roles_are_pinned() {
 	let config = LeptoskitConfig::from_toml(&toml, root.path()).unwrap();
 	let report = generate_with(root.path(), &config, Target::Kubernetes, false, true).unwrap();
 	let manifest = std::fs::read_to_string(root.path().join("kubernetes.yaml")).unwrap();
+
 	insta::assert_snapshot!(
 		"kubernetes_split_roles",
 		format!(
@@ -267,6 +268,7 @@ fn the_project_is_read_from_its_manifests() {
 		"[package]\nname = \"notes_app\"\n\n[lib]\nname = \"notes_client\"\n",
 	);
 	config.app.platforms = vec![leptoskit_config::Platform::Ios];
+
 	config.serve.port = 8080;
 	let project = Project::read(root.path(), &config).unwrap();
 	assert_eq!(project.binary, "notes");
@@ -347,6 +349,7 @@ fn the_binary_is_the_one_named_after_the_package_or_the_only_one() {
 		"{error}"
 	);
 	package.targets.clear();
+
 	package.targets.push(crate::wasm::MetadataTarget {
 		name: "notes".to_owned(),
 		kind: vec!["lib".to_owned()],
@@ -450,6 +453,7 @@ fn nested_project(root: &Path, app: &str) -> LeptoskitConfig {
 		 true\n\n[lib]\ncrate-type = [\"rlib\", \"cdylib\"]\n",
 	);
 	write(&app_root, "client/src/lib.rs", "");
+
 	LeptoskitConfig::from_toml(&config, &app_root).expect("config")
 }
 
@@ -469,6 +473,7 @@ fn a_nested_app_resolves_through_cargo_workspace_globs() {
 	assert_eq!(project.output_name, "huddle_app");
 	assert_eq!(project.toolchain_file, None);
 	assert_eq!(project.rust_version, "1");
+
 	assert_eq!(project.target_dir, "/src/target");
 
 	let report = generate(&app, &config, Target::Docker, false).unwrap();
@@ -545,6 +550,7 @@ fn nested_platform_commands_use_the_workspace_context() {
 	);
 	let yaml = std::fs::read_to_string(app.join("compose.yaml")).unwrap();
 	assert!(yaml.contains("      context: \"../..\"\n"), "{yaml}");
+
 	assert!(
 		yaml.contains("      dockerfile: \"apps/site/Dockerfile\"\n"),
 		"{yaml}"
@@ -592,6 +598,7 @@ fn workspace_paths_with_spaces_are_quoted_and_kept_inside_the_context() {
 		project.toolchain_file.as_deref(),
 		Some("apps/my app/rust-toolchain.toml")
 	);
+
 	assert_eq!(project.rust_version, "1");
 	assert_eq!(
 		project.docker_build_command(),
@@ -624,6 +631,7 @@ fn workspace_paths_with_spaces_are_quoted_and_kept_inside_the_context() {
 		"{dockerfile}"
 	);
 	let yaml = std::fs::read_to_string(app.join("compose.yaml")).unwrap();
+
 	assert!(yaml.contains("      context: \"../..\"\n"), "{yaml}");
 	assert!(
 		yaml.contains("      dockerfile: \"apps/my app/Dockerfile\"\n"),
@@ -761,6 +769,7 @@ fn huddle_resolves_inside_the_repository_workspace() {
 		project.toolchain_file.as_deref(),
 		Some("rust-toolchain.toml")
 	);
+
 	assert_eq!(project.target_dir, "/src/target");
 
 	let dockerfile = super::dockerfile(&project);
@@ -815,6 +824,7 @@ fn custom_ignore_exceptions_do_not_reintroduce_managed_state() {
 	generate(&app, &config, Target::Docker, false).unwrap();
 	let ignore = std::fs::read_to_string(app.join("Dockerfile.dockerignore")).unwrap();
 	let exception = ignore.find("!apps/site/.env").unwrap();
+
 	for pattern in ["**/.env", "**/.kamal", "**/infra/**/*.tfstate*"] {
 		assert!(
 			ignore.rfind(pattern).unwrap() > exception,
@@ -862,6 +872,7 @@ fn external_path_dependencies_fail_before_writing_deployment_files() {
 	let manifest = root.path().join("apps/notes/server/Cargo.toml");
 	let mut text = std::fs::read_to_string(&manifest).unwrap();
 	writeln!(text, "external = {{ path = {:?} }}", external.path()).unwrap();
+
 	std::fs::write(manifest, text).unwrap();
 	let app = root.path().join("apps/notes");
 	let error = generate(&app, &config, Target::Docker, false).unwrap_err();
@@ -927,6 +938,7 @@ fn an_excluded_local_dependency_cannot_hide_an_external_dependency() {
 		"[package]\nname = \"external\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n",
 	);
 	write(external.path(), "src/lib.rs", "");
+
 	let mut local = String::from(
 		"[package]\nname = \"local\"\nversion = \"0.1.0\"\nedition = \
 		 \"2024\"\n[workspace]\n[dependencies]\n",
@@ -953,6 +965,7 @@ pub(crate) fn project_with_services(root: &Path, db: Db, trust: &str) -> Leptosk
 		Db::Sqlite => "[db]\ndialect = \"sqlite\"\n\n".to_owned(),
 		Db::Postgres => "[db]\ndialect = \"postgres\"\n\n".to_owned(),
 	};
+
 	let config = format!(
 		"schema_version = 0\n\n[app]\nname = \"notes\"\nversion = \"0.1.0\"\nrender = \
 		 \"ssr\"\n\n[serve]\naddress = \"127.0.0.1\"\nport = 3000\nprobes = \
@@ -986,6 +999,7 @@ pub(crate) fn project_with_services(root: &Path, db: Db, trust: &str) -> Leptosk
 		 }\n\n[package.metadata.leptoskit.service.bind]\nANALYTICS_PUBLIC_PATH = \
 		 \"{public_path}\"\nANALYTICS_AUTHORIZATION = \"Bearer {token}\"\n",
 	);
+
 	write(root, "analytics_service/src/lib.rs", "");
 	write(root, "analytics_service/src/main.rs", "fn main() {}\n");
 	write(
@@ -1012,6 +1026,7 @@ fn services_are_pinned() {
 			} else {
 				"isolated"
 			};
+
 			let config = project_with_services(root.path(), db, trust);
 			let report = generate(root.path(), &config, target, false).expect("generate");
 			let mut pinned = format!("$ leptoskit generate deploy --target {target}\n{report}");
@@ -1184,6 +1199,7 @@ fn split_roles_route_the_live_paths_beside_the_services() {
 		.unwrap();
 	let live = ingress.find("path: /live").unwrap();
 	let root_path = ingress.find("path: /\n").unwrap();
+
 	assert!(analytics < live && live < root_path, "{ingress}");
 	assert!(manifest.contains("name: notes-cards"));
 }
@@ -1227,6 +1243,7 @@ fn the_connection_budget_counts_every_pool() {
 	assert!(budget.fits());
 	let tight = super::services::Budget::new(8, 1, &project.services, 30);
 	assert!(!tight.fits());
+
 	assert!(tight.explain().contains("services.analytics"));
 }
 
@@ -1254,6 +1271,7 @@ fn a_nested_apps_services_build_from_the_workspace() {
 	let config = std::fs::read_to_string(app.join("leptoskit.toml")).unwrap()
 		+ "\n[services.analytics]\npackage = \"analytics_service\"\n";
 	write(&app, "leptoskit.toml", &config);
+
 	let config = LeptoskitConfig::from_toml(&config, &app).expect("config");
 
 	generate(&app, &config, Target::Compose, false).unwrap();

@@ -49,6 +49,7 @@ pub trait WatchHost {
 	/// Returns the first validation or presentation error.
 	fn present_app(&mut self, app: &WatchApp) -> Result<(), WatchError> {
 		app.validate()?;
+
 		if app.kind().as_str() != self.viewport().kind.as_str() {
 			return Err(WatchError::Unavailable(format!(
 				"host is {} but app targets {}",
@@ -56,12 +57,15 @@ pub trait WatchHost {
 				app.kind().display_name()
 			)));
 		}
+
 		for page in app.pages() {
 			self.present_page(page)?;
 		}
+
 		for ambient in app.ambients() {
 			self.present_ambient(ambient)?;
 		}
+
 		Ok(())
 	}
 }
@@ -115,6 +119,7 @@ impl WatchHost for RecordingHost {
 
 	fn present_app(&mut self, app: &WatchApp) -> Result<(), WatchError> {
 		app.validate()?;
+
 		if app.kind().as_str() != self.viewport.kind.as_str() {
 			return Err(WatchError::Unavailable(format!(
 				"host is {} but app targets {}",
@@ -122,13 +127,17 @@ impl WatchHost for RecordingHost {
 				app.kind().display_name()
 			)));
 		}
+
 		for page in app.pages() {
 			self.present_page(page)?;
 		}
+
 		for ambient in app.ambients() {
 			self.present_ambient(ambient)?;
 		}
+
 		self.log.push(WatchPresentation::App(app.id().to_owned()));
+
 		Ok(())
 	}
 }

@@ -159,6 +159,7 @@ impl BasePath {
 
 		match page.strip_prefix(inside) {
 			Some(rest) if rest.starts_with('/') => rest.into(),
+
 			Some(rest) if rest.is_empty() || rest.starts_with('?') => format!("/{rest}").into(),
 			_ => page.into(),
 		}

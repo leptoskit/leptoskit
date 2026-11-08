@@ -243,6 +243,7 @@ where
 	S: StreamExt<Item = Result<tungstenite::Message, tungstenite::Error>> + Unpin,
 {
 	let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+
 	loop {
 		let frame = tokio::time::timeout_at(deadline, socket.next())
 			.await

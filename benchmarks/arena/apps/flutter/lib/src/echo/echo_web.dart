@@ -79,6 +79,7 @@ final class _JsSyncEcho implements SyncEcho {
   @override
   Map<String, int> echoObject(Map<String, int> value) {
     final echoed = _echoSync(value.jsify()).dartify()! as Map<Object?, Object?>;
+
     return {
       for (final MapEntry(:key, :value) in echoed.entries)
         key! as String: (value! as num).toInt(),

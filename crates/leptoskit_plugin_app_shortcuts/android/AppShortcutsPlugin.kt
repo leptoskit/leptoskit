@@ -138,6 +138,7 @@ class AppShortcutsPlugin(
         }
 
         if (buffer.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return items
     }
 
@@ -148,6 +149,7 @@ class AppShortcutsPlugin(
         val out = ByteBuffer.allocate(4 + bytes.size).order(ByteOrder.LITTLE_ENDIAN)
         out.putInt(bytes.size)
         out.put(bytes)
+
         return out.array()
     }
 
@@ -169,6 +171,7 @@ class AppShortcutsPlugin(
                 .newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
+
         return try {
             decoder.decode(ByteBuffer.wrap(bytes)).toString()
         } catch (_: CharacterCodingException) {

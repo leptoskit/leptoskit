@@ -32,13 +32,16 @@ pub fn rust(line: &str) -> Vec<TextSpan> {
 			while index < chars.len() && chars[index] == ' ' {
 				index += 1;
 			}
+
 			spans.push(TextSpan::new(NBSP.to_string().repeat(index - start)));
 			continue;
 		} else if symbol == '"' {
 			index += 1;
+
 			while index < chars.len() && chars[index] != '"' {
 				index += if chars[index] == '\\' { 2 } else { 1 };
 			}
+
 			index = (index + 1).min(chars.len());
 			Some(theme::SUCCESS)
 		} else if symbol.is_ascii_digit() {
@@ -52,6 +55,7 @@ pub fn rust(line: &str) -> Vec<TextSpan> {
 			while index < chars.len() && (chars[index].is_alphanumeric() || chars[index] == '_') {
 				index += 1;
 			}
+
 			let word: String = chars[start..index].iter().collect();
 			let next = chars[index..]
 				.iter()
@@ -128,12 +132,15 @@ fn word_style(
 		"fn" => plain(theme::PRIMARY),
 		"self" | "Self" => plain(theme::ERROR),
 		"true" | "false" => plain(theme::WARNING),
+
 		_ if previous_symbol == Some('.') || previous_word == "fn" || next == Some('(') => {
 			plain(theme::PRIMARY)
 		}
+
 		_ if previous_symbol.is_none() && matches!(previous_word, "let" | "mut") => {
 			plain(theme::WARNING)
 		}
+
 		_ if word.starts_with(char::is_uppercase) => plain(theme::TYPE),
 		_ => {
 			Style {
@@ -147,9 +154,11 @@ fn word_style(
 fn push(spans: &mut Vec<TextSpan>, text: &[char], style: Style) {
 	let mut span = TextSpan::new(text.iter().collect::<String>());
 	span.color = style.color;
+
 	if style.italic {
 		span = span.italic();
 	}
+
 	spans.push(span);
 }
 

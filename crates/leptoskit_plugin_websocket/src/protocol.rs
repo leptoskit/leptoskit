@@ -224,6 +224,7 @@ mod tests {
 			decode_close(&close(ConnectionId(4), 1000, "done").unwrap()).unwrap(),
 			(ConnectionId(4), 1000, "done".to_owned())
 		);
+
 		let mut wide = close(ConnectionId(4), 1000, "").unwrap().to_vec();
 		wide[4..8].copy_from_slice(&65_536_u32.to_le_bytes());
 		assert_eq!(decode_close(&wide).unwrap_err(), Error::InvalidArgument);

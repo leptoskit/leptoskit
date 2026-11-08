@@ -444,6 +444,7 @@ fn releases_approves_and_attaches_in_a_project() {
 		format!("{}\n", approver.to_hex()),
 	)
 	.unwrap();
+
 	bundle(root.path());
 
 	run_in_project("release-approve-attach", root.path());
@@ -485,6 +486,7 @@ fn a_release_no_app_trusts_is_refused() {
 		format!("{}\n", publisher.to_hex()),
 	)
 	.unwrap();
+
 	bundle(root.path());
 
 	run_in_project("release-untrusted", root.path());

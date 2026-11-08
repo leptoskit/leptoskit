@@ -148,6 +148,7 @@ fn the_hub_is_known_by_the_version_it_answers_with() {
 		Hub::from_answer(r#"{"version":"0.1.0","protocol":1,"interface":"local"}"#),
 		Hub::Found("0.1.0".into())
 	);
+
 	for answer in ["", "<html></html>", "{}", r#"{"version":1}"#] {
 		assert_eq!(Hub::from_answer(answer), Hub::Missing, "{answer:?}");
 	}

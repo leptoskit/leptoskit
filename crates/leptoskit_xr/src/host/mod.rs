@@ -161,6 +161,7 @@ impl XrFrame {
 		} else {
 			Vec::new()
 		};
+
 		// Keep the largest planes when there are too many.
 		planes.sort_by(|a, b| (b.extent[0] * b.extent[1]).total_cmp(&(a.extent[0] * a.extent[1])));
 		planes.truncate(Frame::MAX_PLANES);

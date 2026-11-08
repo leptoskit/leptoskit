@@ -281,15 +281,18 @@ fn render_node(
 	// Motion has a scope of its own, so moving elements still share their
 	// style scope's sheet with the elements that look like them.
 	let motion_scope = (!motion.rules.is_empty()).then(|| motion_scope(&motion.rules));
+
 	if let Some(motion_scope) = &motion_scope {
 		sheets.entry(motion_scope.clone()).or_insert_with(|| {
 			let selector = format!("[data-lk-motion=\"{motion_scope}\"]");
 			motion.rules.replace(motion::SELECTOR, &selector)
 		});
 	}
+
 	if let Some((name, keyframes)) = motion.keyframes {
 		sheets.entry(name).or_insert(keyframes);
 	}
+
 	let child_stagger = element
 		.props
 		.motion
@@ -429,9 +432,11 @@ fn style_scope(base: &str, classes: &str, control: &str) -> String {
 fn motion_scope(rules: &str) -> String {
 	let digest = Sha256::digest(rules.as_bytes());
 	let mut scope = String::from("lk-m");
+
 	for byte in &digest[..8] {
 		write!(scope, "{byte:02x}").expect("write to String");
 	}
+
 	scope
 }
 

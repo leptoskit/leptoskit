@@ -118,18 +118,23 @@ impl WatchApp {
 		}
 
 		let mut seen = BTreeSet::new();
+
 		for page in &self.pages {
 			page.validate()?;
+
 			if !seen.insert(page.id().to_owned()) {
 				return Err(WatchError::DuplicateId(page.id().to_owned()));
 			}
 		}
+
 		for ambient in &self.ambients {
 			ambient.validate()?;
+
 			if !seen.insert(ambient.id().to_owned()) {
 				return Err(WatchError::DuplicateId(ambient.id().to_owned()));
 			}
 		}
+
 		Ok(())
 	}
 }

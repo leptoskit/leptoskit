@@ -360,6 +360,7 @@ mod tests {
 			config.request_url(&request),
 			Err(Error::Invalid(_))
 		));
+
 		request.headers = vec![Header {
 			name: "Host".into(),
 			value: b"elsewhere.test".to_vec(),

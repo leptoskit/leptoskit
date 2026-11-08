@@ -74,6 +74,7 @@ final class NativeRiveAnimator: NSObject {
         observe(.default, UIApplication.willResignActiveNotification)
         observe(.default, UIAccessibility.reduceMotionStatusDidChangeNotification)
         observe(.default, UIScreen.modeDidChangeNotification)
+
         #endif
     }
 

@@ -255,6 +255,7 @@ impl crate::Db {
 			let replica = Replica::connect(url, self.pool_options())?;
 			let mut db = self.clone();
 			db.replicas = Arc::new(self.replicas.with(replica));
+
 			return Ok(db);
 		}
 

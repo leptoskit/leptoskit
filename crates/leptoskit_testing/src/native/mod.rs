@@ -637,6 +637,7 @@ mod tests {
 		let linux = identity(Platform::Linux, Application::Identifier("kate".to_owned()));
 		assert_eq!(linux["platformName"], "linux");
 		assert_eq!(linux["appium:app"], "kate");
+
 		let desktop = identity(Platform::Linux, Application::Desktop);
 		assert_eq!(desktop["appium:app"], "Root");
 		assert!(desktop.get("appium:shouldCloseApp").is_none());

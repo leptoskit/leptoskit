@@ -99,6 +99,7 @@ const BORDER_WIDTH: u32 = 1 << 12;
 const OPACITY: u32 = 1 << 13;
 const FONT_SIZE: u32 = 1 << 14;
 const FONT_WEIGHT: u32 = 1 << 15;
+
 const TEXT_ALIGN: u32 = 1 << 16;
 const TRANSFORM: u32 = 1 << 17;
 const ANIMATION: u32 = 1 << 18;
@@ -232,6 +233,7 @@ impl Writer {
 		let border_width = rest.border_width.take();
 		let opacity = rest.opacity.take();
 		let font_size = rest.font_size.take();
+
 		let font_weight = rest.font_weight.take();
 		let text_align = rest.text_align.take();
 		let transform = rest.transform.take();

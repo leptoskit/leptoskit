@@ -132,6 +132,7 @@ impl SkyLog {
 		if night == self.night {
 			return;
 		}
+
 		self.night = night;
 		self.shown = self
 			.observations
@@ -143,6 +144,7 @@ impl SkyLog {
 		// A different night is a different list: a fresh virtualizer at its
 		// top, with the opened rows that it shows measured again.
 		self.virtualizer = log_virtualizer(&self.observations, &self.shown);
+
 		for (position, &index) in self.shown.iter().enumerate() {
 			if self.opened.contains(&index) {
 				measure(
@@ -159,6 +161,7 @@ impl SkyLog {
 		if !self.opened.remove(&observation) {
 			self.opened.insert(observation);
 		}
+
 		if let Some(position) = self.shown.iter().position(|&index| index == observation) {
 			let open = self.opened.contains(&observation);
 			measure(
@@ -212,6 +215,7 @@ fn row_size(observation: &Observation, open: bool) -> f64 {
 	} else {
 		ROW
 	};
+
 	if open { base + DETAILS } else { base }
 }
 
@@ -264,6 +268,7 @@ pub fn ribbon(
 			} else {
 				"flex-1 m-1 items-center justify-center rounded-lg bg-slate-800 text-slate-300"
 			};
+
 			view! {
 				<Pressable
 					accessibility_label=format!("Night {night}")

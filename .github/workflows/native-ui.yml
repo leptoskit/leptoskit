@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+
 env:
   # Every build re-checks the crates.io sparse index, and transient download
   # failures of index files failed whole jobs (config.json, rquickjs,

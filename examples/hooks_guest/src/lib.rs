@@ -105,6 +105,7 @@ mod devtools {
 		fn from_url(url: &RouteUrl) -> Result<Self, NoMatch> {
 			match url.segments() {
 				[] => Ok(Self::Home),
+
 				[settings] if settings == "settings" => Ok(Self::Settings),
 				_ => Err(NoMatch),
 			}

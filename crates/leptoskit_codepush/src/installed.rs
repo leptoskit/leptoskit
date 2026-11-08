@@ -242,6 +242,7 @@ impl InstalledBundles {
 		} else {
 			None
 		};
+
 		let provenance = provenance_policy(&config, keys.as_ref())?;
 
 		let baseline = validate_container(embedded, &config)?.container;
@@ -261,6 +262,7 @@ impl InstalledBundles {
 		if floor_recovery.is_some() {
 			recovery = floor_recovery;
 		}
+
 		// Floors recorded for another store build no longer apply.
 		let recorded: Vec<Floor> = stored_floor
 			.iter()
@@ -552,6 +554,7 @@ impl InstalledBundles {
 				current_contract,
 			));
 		}
+
 		// The container must carry exactly the offered manifest, so its hash
 		// is the release's identifier before a byte of it is downloaded.
 		if self.state.rejected.contains(&offer.manifest.bundle_hash()) {
@@ -564,6 +567,7 @@ impl InstalledBundles {
 
 		let offered = offer.manifest.bundle_hash();
 		let download = client.download_offer(*offer)?;
+
 		let validated = match validate_container(&download.container, &self.config) {
 			Ok(validated) => validated,
 			Err(error) => {
@@ -575,6 +579,7 @@ impl InstalledBundles {
 				return Err(error);
 			}
 		};
+
 		let parsed = validated.container;
 		let contract = validated.contract;
 		let id = parsed.manifest.bundle_hash();
@@ -800,6 +805,7 @@ impl InstalledBundles {
 
 		if let Err(error) = self.write_floor() {
 			self.floor = previous;
+
 			return Err(error);
 		}
 

@@ -706,5 +706,6 @@ fn paints_travel_as_packed_colors_or_the_current_color_keyword() {
 	);
 	let error =
 		serde_json::from_value::<Paint>(serde_json::json!("red")).expect_err("unknown paint");
+
 	assert!(error.to_string().contains("unknown paint"), "{error}");
 }

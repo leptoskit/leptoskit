@@ -115,6 +115,7 @@ fn baseline_files_require_pins_and_are_frozen_after_reading() {
 	assert!(baselines(std::slice::from_ref(&path), &["f".repeat(64)]).is_err());
 	let selected = baselines(std::slice::from_ref(&path), std::slice::from_ref(&pin)).unwrap();
 	fs::write(path, "replaced after validation").unwrap();
+
 	Contract::exported(SPEC.as_bytes().to_vec(), &selected)
 		.unwrap()
 		.require(&[pin])

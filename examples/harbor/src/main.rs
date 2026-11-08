@@ -64,10 +64,12 @@ async fn step(board: &Board, tester: &mut WidgetTester, title: &str) {
 	loop {
 		any_spawner::Executor::tick().await;
 		tokio::time::sleep(Duration::from_millis(5)).await;
+
 		if board.is_settled() {
 			break;
 		}
 	}
+
 	tester.pump();
 	println!("── {title}\n{}", tester.semantics());
 }

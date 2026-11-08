@@ -152,6 +152,7 @@ pub fn migration_schema(input: TokenStream) -> TokenStream {
 			})?;
 		migrations::snapshot(&path, &manifest_dir, &runtime(None))
 	});
+
 	match result {
 		Ok(tokens) => tokens.into(),
 		Err(error) => error.to_compile_error().into(),

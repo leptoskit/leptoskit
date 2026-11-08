@@ -36,6 +36,7 @@ async fn upgrade(db: Db, migrations: &[Migration]) {
 		auth.resolve(&sign_in.token).await.unwrap().unwrap().account,
 		account
 	);
+
 	let mut log = db
 		.system("test: upgrade capture")
 		.change_log(None)
@@ -58,6 +59,7 @@ async fn upgrade(db: Db, migrations: &[Migration]) {
 			change.table.namespace.as_deref() == Some("auth") && change.table.name == "sessions"
 		})
 		.expect("session capture is installed");
+
 	for image in session.old.iter().chain(session.new.iter()) {
 		assert!(!image.contains_key("token_hash"));
 		assert!(!image.contains_key("refresh_hash"));

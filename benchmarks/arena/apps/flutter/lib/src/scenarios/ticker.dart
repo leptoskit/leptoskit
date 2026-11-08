@@ -40,6 +40,7 @@ class _TickerScenarioState extends State<TickerScenario>
 
   Future<void> _start() async {
     await settle();
+
     if (!mounted) return;
     final refreshRate = View.of(context).display.refreshRate;
     // A callback more than 1.5 vsyncs after the previous one skipped a frame.
@@ -58,6 +59,7 @@ class _TickerScenarioState extends State<TickerScenario>
       _frame += 1;
       _phase = finished ? Phase.done : Phase.running;
     });
+
     if (finished) {
       _ticker.stop();
       _finish();
@@ -68,6 +70,7 @@ class _TickerScenarioState extends State<TickerScenario>
     await SchedulerBinding.instance.endOfFrame;
     final shown = shownText(_tileZero.currentContext! as Element);
     final ok = shown == '$_frame';
+
     if (!ok) setState(() => _phase = Phase.failed);
     await publishReport(
       ArenaReport(

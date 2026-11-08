@@ -47,6 +47,7 @@ fn asked_for_its_spec_the_app_writes_it_and_stops() {
 	);
 	let spec = std::fs::read_to_string(&path).expect("the spec was written");
 	std::fs::remove_file(&path).ok();
+
 	for function in ["sailings", "book_seat", "harbor_log"] {
 		assert!(spec.contains(&format!("\"{function}\"")), "{spec}");
 	}

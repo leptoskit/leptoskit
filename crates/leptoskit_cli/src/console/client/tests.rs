@@ -220,6 +220,7 @@ fn submit_persists_the_intent_and_removes_it_after_success() {
 	assert_eq!(requests[1].path, "/api/v1/projects/demo/operations");
 	let intent = requests[1].json();
 	assert_eq!(intent["expected_revision"], 4);
+
 	assert_eq!(intent["action"], serde_json::json!({"kind":"status"}));
 	assert_eq!(intent["idempotency_key"].as_str().unwrap().len(), 36);
 	assert_eq!(requests[2].path, "/api/v1/operations/op-1");
@@ -640,10 +641,12 @@ registry = 'ghcr.io'
 registry_username = 'team'
 "
 	);
+
 	if let Some(url) = control_url {
 		use std::fmt::Write as _;
 		let _ = writeln!(text, "control_url = '{url}'");
 	}
+
 	text
 }
 
@@ -881,6 +884,7 @@ fn connect_stores_a_private_credential_and_records_the_url() {
 		);
 	}
 	let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
 	assert_eq!(saved, serde_json::json!({ "key": KEY }));
 
 	// The project configuration now names the service, and still parses.
@@ -924,6 +928,7 @@ fn connect_stores_a_private_credential_and_records_the_url() {
 	let text =
 		std::fs::read_to_string(refused_project.join(leptoskit_config::CONFIG_FILE)).unwrap();
 	assert!(!text.contains("control_url"), "{text}");
+
 	assert!(!refused_config.join("leptoskit").exists());
 	assert_eq!(unregistered.requests().len(), 1);
 }

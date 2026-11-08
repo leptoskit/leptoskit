@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
 		false,
 	)?;
 	let online = Arc::new(AtomicBool::new(true));
+
 	let releases = Arc::new(Releases {
 		store: store.clone(),
 		channel,

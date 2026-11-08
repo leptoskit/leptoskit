@@ -325,6 +325,7 @@ pub(super) fn apply<B: NativeBackend>(
 				element: patch.element,
 			}
 		});
+
 		planned.push((patch.wire, node, patch.structure));
 	}
 

@@ -318,6 +318,7 @@ mod tests {
 			Batch::<VectorReading>::decode(&oversized, 0),
 			Err(Error::InvalidArgument)
 		);
+
 		// A sample with an invalid value fails the whole batch.
 		let mut invalid = bytes;
 		invalid[16 + 8..16 + 16].copy_from_slice(&f64::NAN.to_le_bytes());

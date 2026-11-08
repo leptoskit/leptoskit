@@ -26,9 +26,11 @@ function split(
 				[id, metric],
 			) => [id.replace(new RegExp(`\\.${suffix}$`), ""), metric]),
 	);
+
 	if (Object.keys(metrics).length === 0) {
 		fail(`no .${suffix} metrics in ${run.subject}`);
 	}
+
 	return { ...run, subject, metrics };
 }
 

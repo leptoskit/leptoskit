@@ -195,6 +195,7 @@ impl Roles {
 			} else {
 				continue;
 			};
+
 			let roles = Self::parse(&list)?;
 			named = Some(named.map_or(roles, |named| Self(named.0 | roles.0)));
 		}
@@ -314,6 +315,7 @@ mod tests {
 		for role in Role::ALL {
 			assert_eq!(role.to_string().parse::<Role>(), Ok(role));
 		}
+
 		assert_eq!(" Worker ".parse::<Role>(), Ok(Role::Worker));
 		assert_eq!(
 			"cron".parse::<Role>().unwrap_err().to_string(),

@@ -71,6 +71,7 @@ class BadgePlugin(
         val value = payload.order(ByteOrder.LITTLE_ENDIAN).int
 
         if (value !in 0..MAX_COUNT) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return value
     }
 

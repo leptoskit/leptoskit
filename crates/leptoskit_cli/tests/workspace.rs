@@ -60,6 +60,7 @@ fn explain_reports_boundaries_without_tools_secrets_or_deployment_claims() {
 		report["startup_order"],
 		serde_json::json!(["accounts", "web"])
 	);
+
 	assert_eq!(report["checks"]["configuration"], "passed");
 	for check in [
 		"artifacts",
@@ -74,6 +75,7 @@ fn explain_reports_boundaries_without_tools_secrets_or_deployment_claims() {
 		report["applications"]["web"]["bindings"]["accounts"]["token-env"],
 		"ACCOUNTS_TOKEN"
 	);
+
 	for name in ["web", "accounts"] {
 		let root = directory.path().join("apps").join(name);
 		assert!(!root.join(".leptoskit").exists());
@@ -125,6 +127,7 @@ registry = "ghcr.io"
 registry_username = "team"
 "#;
 	let manifest = directory.path().join("leptoskit.workspace.toml");
+
 	for name in ["accounts", "web"] {
 		std::fs::write(
 			directory
@@ -136,6 +139,7 @@ registry_username = "team"
 		)
 		.unwrap();
 	}
+
 	leptoskit_cli::workspace::inspect(&manifest).unwrap();
 	for (original, duplicate, field) in [
 		("web-production", "accounts-production", "infra.name"),
@@ -200,9 +204,11 @@ fn app_and_config_symlinks_cannot_escape_the_manifest_root() {
 		"[app]\nname='outside'\n",
 	)
 	.unwrap();
+
 	for directory_link in [true, false] {
 		let directory = project();
 		let root = directory.path().join("apps/accounts");
+
 		if directory_link {
 			std::fs::remove_dir_all(&root).unwrap();
 			symlink(outside.path(), &root).unwrap();
@@ -214,6 +220,7 @@ fn app_and_config_symlinks_cannot_escape_the_manifest_root() {
 			)
 			.unwrap();
 		}
+
 		let error =
 			leptoskit_cli::workspace::inspect(&directory.path().join("leptoskit.workspace.toml"))
 				.unwrap_err();

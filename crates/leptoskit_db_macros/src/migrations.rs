@@ -71,6 +71,7 @@ pub(crate) fn expand(
 					sidecar.display()
 				))
 			})?;
+
 			let folded: Vec<String> = serde_json::from_str(&json).map_err(|source| {
 				error(format!(
 					"{} isn't a JSON array of migration names: {source}",
@@ -81,6 +82,7 @@ pub(crate) fn expand(
 		} else {
 			quote! {}
 		};
+
 		if down.is_file() {
 			let down = down.to_string_lossy().to_string();
 			migrations.push(quote! { #krate::Migration::embedded_reversible(
@@ -140,6 +142,7 @@ pub(crate) fn snapshot(
 	} else {
 		quote! { ::core::option::Option::None }
 	};
+
 	let registry_path = registry_path.to_string_lossy().to_string();
 	Ok(quote! {{
 		const _: &str = ::core::include_str!(#registry_path);

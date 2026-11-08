@@ -35,6 +35,7 @@ portal=$(sed -n 's/^Exec=//p' \
 "$portal_kde" >"$out/portal-kde.log" 2>&1 &
 "$portal" >"$out/portal.log" 2>&1 &
 portal_ready=""
+
 for _ in $(seq 1 60); do
 	if names="$(bus_names)" &&
 		grep -Fq org.freedesktop.portal.Desktop <<<"$names" &&
@@ -44,6 +45,7 @@ for _ in $(seq 1 60); do
 	fi
 	sleep 0.5
 done
+
 if [ -z "$portal_ready" ]; then
 	echo "xdg-desktop-portal and its KDE backend never owned the session bus" >&2
 	exit 1
@@ -62,6 +64,7 @@ done
 # The dialog plugin's fixture presents its file chooser in the directory that
 # holds its own executable, where the runner leaves the evidence file.
 printf 'Leptoskit dialog plugin evidence\n' >target/debug/examples/evidence.txt
+
 for decision in decline accept; do
 	target/debug/examples/native_fixture >"$out/dialog-$decision.log" 2>&1 &
 	fixture_pid=$!
@@ -69,5 +72,6 @@ for decision in decline accept; do
 	target/debug/examples/dialog_plugin_journey linux http://127.0.0.1:4723 Root "$decision"
 	kill "$fixture_pid"
 	wait "$fixture_pid" || [ "$?" = 143 ]
+
 	trap - EXIT
 done

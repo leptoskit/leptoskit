@@ -19,6 +19,7 @@ fn main() {
 	} else {
 		String::new()
 	};
+
 	std::fs::write(out.join("registrant.rs"), registrant).expect("OUT_DIR is writable");
 }
 

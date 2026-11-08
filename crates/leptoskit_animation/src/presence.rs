@@ -142,6 +142,7 @@ impl Presence {
 			Curve::Timing { easing, .. } => easing,
 			Curve::Spring(_) => Easing::EASE_IN_OUT,
 		};
+
 		self.curve = Curve::timing(duration_ms, easing);
 		self
 	}
@@ -154,6 +155,7 @@ impl Presence {
 			Curve::Timing { duration_ms, .. } => duration_ms,
 			Curve::Spring(_) => 300.0,
 		};
+
 		self.curve = Curve::timing(duration_ms, easing);
 		self
 	}

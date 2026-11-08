@@ -71,6 +71,7 @@ fn every_route_renders_its_page() {
 		},
 		"privacy",
 	);
+
 	shows(
 		Section {
 			section: "privacy".to_owned(),
@@ -98,9 +99,11 @@ fn every_route_renders_its_page() {
 		tag: vec!["work".to_owned()],
 		page: 1,
 	});
+
 	for text in ["Notes matching “sync”", "#work", "Page 2"] {
 		assert!(search.iter().any(|line| line == text), "{text}: {search:?}");
 	}
+
 	shows(
 		Help {
 			topic: vec!["sync".to_owned(), "ios".to_owned()],
@@ -132,6 +135,7 @@ fn routes_in_tabs_get_the_tab_bar_and_others_do_not() {
 		assert!(shown.iter().any(|line| line == "Notes"), "{shown:?}");
 		assert!(shown.iter().any(|line| line == "You"), "{shown:?}");
 	}
+
 	let shown = render(Route::Settings);
 	assert!(!shown.iter().any(|line| line == "Today"), "{shown:?}");
 }
@@ -181,6 +185,7 @@ fn every_route_struct_converts_into_its_route() {
 			"/c",
 		),
 	];
+
 	for (route, href) in cases {
 		assert_eq!(route.href().as_str(), href);
 	}

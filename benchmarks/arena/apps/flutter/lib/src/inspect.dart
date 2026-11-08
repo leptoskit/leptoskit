@@ -10,6 +10,7 @@ List<Element> descendantsOfType<T extends Widget>(Element root) {
   }
 
   root.visitChildren(visit);
+
   return found;
 }
 
@@ -17,9 +18,11 @@ List<Element> descendantsOfType<T extends Widget>(Element root) {
 /// is what the frame actually painted.
 String shownText(Element textElement) {
   final paragraph = textElement.findRenderObject();
+
   if (paragraph is! RenderParagraph) {
     throw StateError('${textElement.widget} has no RenderParagraph');
   }
+
   return paragraph.text.toPlainText();
 }
 

@@ -149,6 +149,7 @@ pub fn list() -> Inventory {
 		.flatten()
 		.flatten()
 		.collect();
+
 	if DeviceKind::Host.target().is_some() {
 		devices.push(Device {
 			id: "host".to_owned(),

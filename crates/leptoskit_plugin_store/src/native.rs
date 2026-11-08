@@ -273,6 +273,7 @@ mod tests {
 			2,
 			"load discards staged clear"
 		);
+
 		restored.clear().unwrap();
 		restored.save().unwrap();
 		assert!(Store::new(root.path()).entries().unwrap().is_empty());
@@ -494,6 +495,7 @@ mod tests {
 		let mut missing = Decoder::new(&missing);
 		assert_eq!(missing.u32(), Ok(0));
 		missing.finish().unwrap();
+
 		assert_eq!(
 			decode(&store.invoke(ENTRIES, Bytes::new()).unwrap()).unwrap()["count"],
 			json!(3)

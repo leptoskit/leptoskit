@@ -53,10 +53,12 @@ fn shortcut(store: &Store, navigation: &Navigation, key: &KeyPress) -> EventOutc
 			.as_ref()
 			.and_then(palette::selected_command);
 		store.apply(Action::Dismiss);
+
 		if command.is_some_and(|command| command.title == "New session") {
 			store.apply(Action::NewSession);
 			navigation.navigate(Home);
 		}
+
 		return EventOutcome::Handled;
 	} else if !open && key.is("Tab", false, false, true) {
 		Action::CycleAgent

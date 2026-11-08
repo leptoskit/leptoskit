@@ -250,6 +250,7 @@ fn vector_paints_strokes_clipping_and_premultiplied_alpha_reach_real_pixels() {
 	let output =
 		std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/rive-native");
 	std::fs::create_dir_all(&output).unwrap();
+
 	let pixels = tiny_skia::Pixmap::from_vec(
 		frame.bytes().to_vec(),
 		tiny_skia::IntSize::from_wh(128, 128).unwrap(),

@@ -141,6 +141,7 @@ fn visit(
 			return;
 		}
 	};
+
 	let module = name::module_name(&parsed);
 
 	if let Some(previous) = modules.insert(module.clone(), disk_name.clone()) {

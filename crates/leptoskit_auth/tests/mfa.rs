@@ -777,6 +777,7 @@ async fn starting_the_authenticator_again_replaces_it_and_junk_is_refused() {
 	else {
 		panic!("the account has a second factor");
 	};
+
 	assert!(matches!(
 		auth.complete_sign_in(&challenge.token, "nonsense", &request())
 			.await,
@@ -795,6 +796,7 @@ async fn a_second_step_with_no_attempts_allowed_expires() {
 	else {
 		panic!("the account has a second factor");
 	};
+
 	// A step that allows no attempts expires without checking the code.
 	let strict = Auth::builder(&db, Keys::single("test", [7; 32]))
 		.mailer(mailbox.clone())
@@ -852,10 +854,12 @@ async fn a_second_step_filed_under_something_else_expires() {
 	else {
 		panic!("the account has a second factor");
 	};
+
 	let table = match db.system("test").dialect() {
 		Dialect::Postgres => "auth.challenges",
 		Dialect::Sqlite => "auth_challenges",
 	};
+
 	db.system("test")
 		.execute(Statement {
 			sql: format!("UPDATE {table} SET subject = 'not-an-account' WHERE used_at IS NULL"),

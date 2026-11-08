@@ -69,12 +69,14 @@ import Foundation
         public func retainForAppContext(_ context: inout lk_app_context) {
             typealias OwnerResolver = @convention(c) (UnsafeMutableRawPointer?, Int32) -> UnsafeMutableRawPointer?
             let resolver: OwnerResolver = { rawContext, kind in
+
                 guard let rawContext, Thread.isMainThread else { return nil }
                 let contextAddress = UInt(bitPattern: rawContext)
                 let ownerAddress: UInt = MainActor.assumeIsolated {
                     guard let ptr = UnsafeMutableRawPointer(bitPattern: contextAddress) else {
                         return 0
                     }
+
                     let pluginContext = Unmanaged<NativePluginContext>.fromOpaque(ptr)
                         .takeUnretainedValue()
                     let controller: NativePresentationOwner?
@@ -86,9 +88,11 @@ import Foundation
                     default:
                         controller = nil
                     }
+
                     guard let controller else { return 0 }
                     return UInt(bitPattern: Unmanaged.passUnretained(controller).toOpaque())
                 }
+
                 return UnsafeMutableRawPointer(bitPattern: ownerAddress)
             }
             context.platform_vm = unsafeBitCast(resolver, to: UnsafeMutableRawPointer.self)
@@ -101,6 +105,7 @@ import Foundation
                     guard let pointer = UnsafeMutableRawPointer(bitPattern: address) else { return }
                     Unmanaged<NativePluginContext>.fromOpaque(pointer).release()
                 }
+
                 if Thread.isMainThread { release() } else { DispatchQueue.main.async(execute: release) }
             }
         }

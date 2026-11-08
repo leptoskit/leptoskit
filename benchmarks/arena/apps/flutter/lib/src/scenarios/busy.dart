@@ -40,6 +40,7 @@ class _BusyScenarioState extends State<BusyScenario> {
 
   Future<void> _run() async {
     await settle();
+
     if (!mounted) return;
 
     const target = targetItem * Feed.itemExtent;
@@ -74,6 +75,7 @@ class _BusyScenarioState extends State<BusyScenario> {
   /// Busy-waits, holding the UI isolate as a heavy piece of app logic would.
   void _block() {
     final clock = Stopwatch()..start();
+
     while (clock.elapsed < blockFor) {}
     _blocks += 1;
   }

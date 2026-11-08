@@ -146,9 +146,11 @@ fn record_signature(
 		Entry::Vacant(entry) => {
 			entry.insert(Some(signature));
 		}
+
 		Entry::Occupied(mut entry) if entry.get().as_ref() != Some(&signature) => {
 			entry.insert(None);
 		}
+
 		Entry::Occupied(_) => {}
 	}
 }
@@ -466,6 +468,7 @@ impl Converter<'_> {
 		element: &NodeElement<Infallible>,
 	) -> Result<Tree, Unconvertible> {
 		let tag = element.name().span();
+
 		let (args, children) = match start {
 			Start::Bare => (Vec::new(), children),
 			Start::Content => {
@@ -891,10 +894,13 @@ impl Converter<'_> {
 		match expr {
 			Expr::Lit(literal) if matches!(literal.lit, Lit::Str(_)) => Shape::Text,
 			Expr::Macro(mac) => self.macro_shape(&mac.mac),
+
 			Expr::Path(path) if path.path.is_ident("children") => Shape::Elements,
+
 			Expr::MethodCall(call) if ADAPTERS.contains(&call.method.to_string().as_str()) => {
 				Shape::Elements
 			}
+
 			Expr::MethodCall(_) => Shape::Element,
 			Expr::Call(call) => self.call_shape(call),
 			Expr::Paren(inner) => self.shape(&inner.expr),
@@ -1059,6 +1065,7 @@ impl Converter<'_> {
 			Some(turbofish) => format!("{}{}", call.method, self.text(turbofish.span())),
 			None => call.method.to_string(),
 		};
+
 		let link = Link {
 			comments: Vec::new(),
 			method,
@@ -1282,8 +1289,10 @@ fn content(
 				format!("`{name}()` takes its text as an argument; this one has none"),
 			))
 		}
+
 		[] => Ok((code("\"\""), Vec::new())),
 		[Child::Expr { code, .. }] => Ok((code.clone(), Vec::new())),
+
 		_ if children
 			.iter()
 			.all(|child| matches!(child, Child::Text { .. })) =>
@@ -1488,6 +1497,7 @@ fn radio_arguments(
 ) -> Result<Vec<Piece>, Unconvertible> {
 	let group = take_attribute(attributes, "radio_group")
 		.ok_or_else(|| unconvertible(tag, "`Radio()` needs `radio_group=…` to call it with"))?;
+
 	let checked = match take_attribute(attributes, "checked") {
 		Some(attribute) => single_argument(attribute)?,
 		None => code("false"),
@@ -1899,6 +1909,7 @@ fn signature_after(source: &str, trees: &[TokenTree]) -> Option<(String, Signatu
 		.iter()
 		.map(|input| param(source, input))
 		.collect::<Option<Vec<_>>>()?;
+
 	let returns = return_type(&trees[params_at + 1..]);
 
 	Some((
@@ -2008,14 +2019,18 @@ impl PropOptions {
 	fn apply(&mut self, source: &str, meta: &Meta) {
 		match meta {
 			Meta::Path(path) if path.is_ident("into") => self.into = true,
+
 			Meta::Path(path) if path.is_ident("optional") => self.optional = true,
+
 			Meta::Path(path) if path.is_ident("optional_no_strip") => {
 				self.optional = true;
 				self.keep_option = true;
 			}
+
 			Meta::NameValue(pair) if pair.path.is_ident("default") => {
 				self.default = Some(source[pair.value.span().byte_range()].to_owned());
 			}
+
 			_ => {}
 		}
 	}
@@ -2483,9 +2498,11 @@ impl<'a> Layout<'a> {
 				let args = self.args(callee, args, indent, start + width(callee), false);
 				Some(format!("{callee}{args}"))
 			}
+
 			Piece::Code { text, .. } if text.contains('\n') => {
 				is_block_like(text).then(|| self.render(only, indent, start))
 			}
+
 			Piece::Code { text, .. } => {
 				let inner = width(indent) + width(self.unit);
 				(inner + width(text) + 1 > MAX_WIDTH).then(|| text.clone())

@@ -386,6 +386,7 @@ impl<'a> Builder<'a> {
 		} else {
 			self.execute(&self.compile_run(source, dependencies, work)?, false)?;
 		}
+
 		let executable = work
 			.join("target")
 			.join(&self.recipe.target)
@@ -419,8 +420,10 @@ impl<'a> Builder<'a> {
 		fs::create_dir_all(work)?;
 		let mutable = work.join("source");
 		fs::create_dir(&mutable)?;
+
 		for (path, entry) in super::walk(source)? {
 			let dest = mutable.join(&path);
+
 			match entry {
 				Entry::Directory => fs::create_dir_all(dest)?,
 				Entry::File { unix_mode, .. } => {
@@ -429,17 +432,21 @@ impl<'a> Builder<'a> {
 					if let Some(mode) = unix_mode {
 						set_mode(&dest, mode)?;
 					}
+
 					#[cfg(not(unix))]
 					let _ = unix_mode;
 				}
 			}
 		}
+
 		let mut report = self.toolchain(source, &work.join("versions"))?;
+
 		for command in [["leptoskit", "--version"], ["wasm-opt", "--version"]] {
 			let mut run = self.run(work, false, command.map(String::from).to_vec())?;
 			run.mounts.push(mount(source, SOURCE_MOUNT, true)?);
 			report.push_str(&String::from_utf8(self.execute(&run, true)?)?);
 		}
+
 		ensure!(
 			super::website::hash(report.as_bytes()) == website.toolchain_sha256,
 			"website toolchain report differs from recipe pin"
@@ -595,6 +602,7 @@ pub(crate) fn export_tree(
 		else {
 			bail!("unexpected git ls-tree output");
 		};
+
 		let executable = match mode {
 			"100644" => false,
 			"100755" => true,
@@ -604,6 +612,7 @@ pub(crate) fn export_tree(
 			"120000" => bail!("{path} is a symbolic link, which bundles cannot hold"),
 			_ => bail!("{path} has unsupported Git mode {mode}"),
 		};
+
 		let relative = match prefix {
 			Some(prefix) => {
 				path.strip_prefix(prefix)
@@ -612,6 +621,7 @@ pub(crate) fn export_tree(
 			}
 			None => path,
 		};
+
 		ensure!(
 			relative
 				.split('/')
@@ -639,6 +649,7 @@ pub(crate) fn export_tree(
 		for object in objects {
 			writeln!(input, "{object}")?;
 		}
+
 		Ok(())
 	});
 	let mut output = BufReader::new(batch.stdout.take().context("git cat-file stdout")?);
@@ -662,10 +673,12 @@ pub(crate) fn export_tree(
 			.write(true)
 			.create_new(true)
 			.open(&path)?;
+
 		let copied = std::io::copy(&mut (&mut output).take(size), &mut file)?;
 		ensure!(copied == size, "git ended {relative} early");
 		let mut newline = [0_u8];
 		output.read_exact(&mut newline)?;
+
 		#[cfg(unix)]
 		set_mode(&path, if *executable { 0o755 } else { 0o644 })?;
 		#[cfg(not(unix))]
@@ -806,6 +819,7 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 	fs::create_dir(&bundle)?;
 	export_sources(repository, &recipe, &bundle)?;
 	let source = bundle.join("source");
+
 	if let Some(website) = &recipe.website {
 		website.source(
 			&source,
@@ -836,6 +850,7 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 
 	let artifacts = bundle.join("artifacts");
 	fs::create_dir(&artifacts)?;
+
 	if let Some(website) = &recipe.website {
 		let first_tree =
 			super::website::tree(&scratch.path().join("first/site"), &website.output_name)?;
@@ -845,6 +860,7 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 			first_tree == second_tree,
 			"the two website asset builds differ"
 		);
+
 		super::website::copy(
 			&scratch.path().join("first/site"),
 			&artifacts.join("site"),
@@ -855,6 +871,7 @@ pub(super) fn build(args: &BuildArgs) -> Result<()> {
 			artifacts.join("website-toolchain.txt"),
 		)?;
 	}
+
 	fs::copy(&executable, artifacts.join("backend"))?;
 	#[cfg(unix)]
 	set_mode(&artifacts.join("backend"), 0o755)?;
@@ -915,8 +932,10 @@ impl ReproducedBundle {
 /// builds use this private snapshot, never publisher-writable input paths.
 fn freeze(args: &ReproduceArgs) -> Result<tempfile::TempDir> {
 	let frozen = tempfile::tempdir()?;
+
 	for (relative, entry) in super::walk(&args.bundle)? {
 		let dest = frozen.path().join(&relative);
+
 		match entry {
 			Entry::Directory => {
 				fs::create_dir_all(&dest)?;
@@ -941,11 +960,13 @@ fn freeze(args: &ReproduceArgs) -> Result<tempfile::TempDir> {
 				if let Some(mode) = unix_mode {
 					set_mode(&dest, mode)?;
 				}
+
 				#[cfg(not(unix))]
 				let _ = unix_mode;
 			}
 		}
 	}
+
 	super::check(frozen.path(), &args.manifest, &args.sha256)?;
 	Ok(frozen)
 }
@@ -960,6 +981,7 @@ pub(crate) fn reproduce(args: &ReproduceArgs) -> Result<ReproducedBundle> {
 	let scratch = tempfile::tempdir()?;
 
 	let fetched;
+
 	let repository = match (&args.checkout, args.offline) {
 		(Some(path), _) => Some(path.as_path()),
 		(None, false) => {
@@ -985,6 +1007,7 @@ pub(crate) fn reproduce(args: &ReproduceArgs) -> Result<ReproducedBundle> {
 				}
 				None => format!("{} at commit {}", recipe.repository, recipe.commit),
 			};
+
 			compare(&expected.join("source"), &bundle.join("source"), "source/")
 				.with_context(|| format!("source/ is not {origin}"))?;
 			compare(&expected.join("infra"), &bundle.join("infra"), "infra/")
@@ -1022,6 +1045,7 @@ pub(crate) fn reproduce(args: &ReproduceArgs) -> Result<ReproducedBundle> {
 		&bundle.join("dependencies"),
 		&scratch.path().join("build"),
 	)?;
+
 	if let Some(website) = &recipe.website {
 		ensure!(
 			super::website::tree(&scratch.path().join("build/site"), &website.output_name)?
@@ -1041,6 +1065,7 @@ pub(crate) fn reproduce(args: &ReproduceArgs) -> Result<ReproducedBundle> {
 			"backend recipe cannot reproduce website assets"
 		);
 	}
+
 	let rebuilt = sha256_file(&executable)?;
 	let published = sha256_file(&bundle.join("artifacts/backend"))?;
 	ensure!(

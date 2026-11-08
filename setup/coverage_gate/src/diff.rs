@@ -51,12 +51,14 @@ pub fn parse(diff: &str) -> Result<ChangedLines, ParseError> {
 		if line.starts_with('\\') {
 			continue;
 		}
+
 		if body > 0 {
 			if !(line.starts_with('+') || line.starts_with('-')) {
 				return Err(error(format!(
 					"expected {body} more hunk line(s), found `{line}`"
 				)));
 			}
+
 			body -= 1;
 			continue;
 		}
@@ -72,6 +74,7 @@ pub fn parse(diff: &str) -> Result<ChangedLines, ParseError> {
 			};
 		} else if let Some(header) = line.strip_prefix("@@ ") {
 			let mut fields = header.split(' ');
+
 			let old = fields
 				.next()
 				.and_then(|field| field.strip_prefix('-'))
@@ -84,6 +87,7 @@ pub fn parse(diff: &str) -> Result<ChangedLines, ParseError> {
 				return Err(error(format!("malformed hunk header `{line}`")));
 			};
 			body = u64::from(removed) + u64::from(added);
+
 			if let Some(file) = &current
 				&& added > 0
 			{
@@ -111,6 +115,7 @@ fn parse_range(range: &str) -> Option<(u32, u32)> {
 		Some((start, count)) => (start, count.parse().ok()?),
 		None => (range, 1),
 	};
+
 	Some((start.parse().ok()?, count))
 }
 

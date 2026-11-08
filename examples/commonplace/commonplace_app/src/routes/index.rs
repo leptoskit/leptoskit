@@ -28,6 +28,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 	let projects = match library {
 		Load::Idle | Load::Loading => view! { <ui::Loading what="your projects" /> },
 		Load::Failed(message) => view! { <ui::Problem message=&message /> },
+
 		Load::Ready(projects) if projects.is_empty() => {
 			view! {
 				<Text class=ui::QUIET>
@@ -36,6 +37,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 				</Text>
 			}
 		}
+
 		Load::Ready(projects) => {
 			view! {
 				<View class="gap-3">
@@ -77,6 +79,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 	view! {
 		<View class="gap-4">
 			<ui::Title text="Your projects" />
+
 			{match crate::browser::SAFARI {
 				Some(steps) => {
 					view! { <ui::PanelCard /> }

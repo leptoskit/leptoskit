@@ -82,6 +82,7 @@ fn a_guest_session_from_start_to_stop() {
 	)
 	.unwrap();
 	invoke(&plugin, REMOVE_ANCHOR, &id).unwrap();
+
 	invoke(&plugin, STOP, &()).unwrap();
 	assert_eq!(
 		invoke(&plugin, NEXT_FRAME, &NextFrame::default()),
@@ -103,6 +104,7 @@ fn a_cancelled_frame_request_ends_at_once() {
 	let mut context = std::task::Context::from_waker(std::task::Waker::noop());
 	assert!(waiting.as_mut().poll(&mut context).is_pending());
 	cancellation.cancel();
+
 	assert!(matches!(
 		waiting.as_mut().poll(&mut context),
 		Poll::Ready(Err(Error::Cancelled))
@@ -145,6 +147,7 @@ fn the_factory_plays_a_recording_named_in_the_options() {
 		from_context(&context, r#"{"replay": "walk.lkxr", "max-frame-rate": 30}"#).unwrap();
 	let capabilities: Capabilities = decode(&invoke(&plugin, CAPABILITIES, &()).unwrap()).unwrap();
 	assert!(capabilities.supports(Mode::PhoneAr));
+
 	assert!(from_context(&context, r#"{"replay": "missing.lkxr"}"#).is_err());
 	assert!(from_context(&context, r#"{"unknown": 1}"#).is_err());
 	let _ = std::fs::remove_dir_all(directory);
@@ -153,8 +156,10 @@ fn the_factory_plays_a_recording_named_in_the_options() {
 #[test]
 fn every_method_has_a_bounded_reply() {
 	let plugin = plugin();
+
 	for method in METHODS {
 		assert!(plugin.reply_limit(*method).unwrap() <= 8 * 1024 * 1024);
 	}
+
 	assert_eq!(plugin.name(), NAME);
 }

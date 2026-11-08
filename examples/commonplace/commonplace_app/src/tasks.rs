@@ -55,6 +55,7 @@ mod imp {
 				false
 			}
 		});
+
 		if ran == Ok(true) {
 			leptoskit::guest::render();
 		}

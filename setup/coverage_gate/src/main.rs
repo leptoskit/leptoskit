@@ -60,6 +60,7 @@ impl Options {
 
 		while let Some(flag) = args.next() {
 			let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+
 			match flag.as_str() {
 				"--lcov" => lcov.push(PathBuf::from(value()?)),
 				"--floor" => floor = Some(PathBuf::from(value()?)),
@@ -79,6 +80,7 @@ impl Options {
 			} else {
 				lcov
 			},
+
 			floor: floor.ok_or("--floor is required")?,
 			exclude_from,
 			base,
@@ -107,13 +109,16 @@ fn run() -> Result<bool, String> {
 		Options::parse(std::env::args().skip(1)).map_err(|error| format!("{error}\n\n{USAGE}"))?;
 	let root = git(&["rev-parse", "--show-toplevel"])?;
 	let mut coverage = lcov::Coverage::default();
+
 	for path in &options.lcov {
 		let tracefile = read(path)?;
 		let run = lcov::parse(&tracefile, root.trim())
 			.map_err(|error| format!("{}: {error}", path.display()))?;
 		coverage.merge(run);
 	}
+
 	exclude_test_modules(&mut coverage, Path::new(root.trim()))?;
+
 	let changes = match &options.base {
 		Some(base) => {
 			let diff = git(&[
@@ -133,6 +138,7 @@ fn run() -> Result<bool, String> {
 		}
 		None => None,
 	};
+
 	// Path prefixes whose lines count neither way: platform-tool glue no
 	// measuring platform can run. One per line, # comments allowed.
 	let excluded: Vec<String> = match &options.exclude_from {
@@ -147,6 +153,7 @@ fn run() -> Result<bool, String> {
 		}
 		None => Vec::new(),
 	};
+
 	let report = Report::new(&coverage, changes.as_ref(), &excluded);
 	let floor_file = read(&options.floor)?;
 
@@ -165,6 +172,7 @@ fn run() -> Result<bool, String> {
 		fs::write(&options.floor, updated)
 			.map_err(|error| format!("{}: {error}", options.floor.display()))?;
 		println!("coverage floor set to {total}");
+
 		return Ok(true);
 	}
 
@@ -175,9 +183,11 @@ fn run() -> Result<bool, String> {
 	};
 	let markdown = report.markdown(policy);
 	print!("{markdown}");
+
 	if options.annotate {
 		print!("{}", report.annotations());
 	}
+
 	if let Some(path) = &options.markdown {
 		fs::OpenOptions::new()
 			.create(true)
@@ -188,9 +198,11 @@ fn run() -> Result<bool, String> {
 	}
 
 	let failures = report.failures(policy);
+
 	for failure in &failures {
 		eprintln!("coverage_gate: {failure}");
 	}
+
 	Ok(failures.is_empty())
 }
 
@@ -205,14 +217,18 @@ fn exclude_test_modules(coverage: &mut lcov::Coverage, root: &Path) -> Result<()
 		.filter(|path| gate::is_measured(path))
 		.map(str::to_owned)
 		.collect();
+
 	for path in paths {
 		let source = match fs::read_to_string(root.join(&path)) {
 			Ok(source) => source,
+
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
 			Err(error) => return Err(format!("{path}: {error}")),
 		};
+
 		coverage.exclude(&path, &source::test_modules(&source));
 	}
+
 	Ok(())
 }
 
@@ -223,6 +239,7 @@ fn floor(contents: &str) -> Result<Percent, String> {
 		.lines()
 		.map(str::trim)
 		.filter(|line| !line.is_empty() && !line.starts_with('#'));
+
 	match (values.next(), values.next()) {
 		(Some(value), None) => value.parse(),
 		_ => Err("expected exactly one percentage".into()),
@@ -238,6 +255,7 @@ fn git(args: &[&str]) -> Result<String, String> {
 		.args(args)
 		.output()
 		.map_err(|error| format!("could not run git: {error}"))?;
+
 	if !output.status.success() {
 		return Err(format!(
 			"`git {}` failed: {}",
@@ -245,6 +263,7 @@ fn git(args: &[&str]) -> Result<String, String> {
 			String::from_utf8_lossy(&output.stderr).trim()
 		));
 	}
+
 	String::from_utf8(output.stdout)
 		.map_err(|_| format!("`git {}` printed invalid UTF-8", args.join(" ")))
 }

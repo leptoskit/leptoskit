@@ -56,6 +56,7 @@ struct MacRendererTests {
         let root = try #require(view.subviews.first)
         let username = try #require(root.subviews.first as? NSTextField)
         let password = try #require(root.subviews.last as? NSSecureTextField)
+
         #expect(!(username is NSSecureTextField))
         #expect(username.contentType == .username)
         #expect(password.stringValue == "secret")

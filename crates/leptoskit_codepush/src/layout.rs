@@ -396,6 +396,7 @@ mod tests {
 			approvals.as_str(),
 			format!("app/production/1.2.0-beta.1+abc+3/approvals/{HASH}.json")
 		);
+
 		assert_eq!(approvals.kind(), ObjectKind::Approvals);
 		assert_eq!(approvals.kind().cache_control(), INDEX_CACHE_CONTROL);
 	}

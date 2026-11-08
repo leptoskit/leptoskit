@@ -473,6 +473,7 @@ async fn malformed_proofs_are_refused_at_the_token_endpoint() {
 		// Far enough out that subtracting the clock overflows.
 		let mut ancient = token_claims();
 		ancient["iat"] = json!(-1e300);
+
 		let mut elsewhere = token_claims();
 		elsewhere["htu"] = json!("https://other.example/oauth/token");
 

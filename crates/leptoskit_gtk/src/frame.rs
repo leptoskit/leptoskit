@@ -164,6 +164,7 @@ mod imp {
 			// the web and terminal. Uniform `border` still fills every side.
 			if let Some(color) = props.border_color {
 				let edges = props.border_edges();
+
 				if edges.any() {
 					snapshot.append_border(
 						&rounded,

@@ -186,6 +186,7 @@ class ProbeActivity : Activity() {
         assertion(nativeContractStep(0) == 1, "A cleared listener receives no further proposals")
         val rive = contractHost.control(contract.getLong("rive")) as ImageView
         val bitmap = (rive.drawable as BitmapDrawable).bitmap
+
         assertion(
             bitmap.getPixel(0, 0) == Color.argb(128, 255, 0, 0) && bitmap.getPixel(1, 0) == Color.BLUE,
             "Rust JNI Rive upload owns its premultiplied RGBA pixels",
@@ -482,6 +483,7 @@ class ProbeActivity : Activity() {
                 ruled.getPixel((12 * dp).toInt(), (34 * dp).toInt()) == 0,
             "A dashed Vector stroke scales its width, dashes, and offset with the drawing",
         )
+
         nativeConfigure(18)
         assertion(
             named("Filled vector") === filled && pixels(filled).getPixel((40 * dp).toInt(), (20 * dp).toInt()) == 0xff2563eb.toInt(),

@@ -145,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		let permit = Arc::clone(&ready).acquire_owned().await?;
 		let (subscribed, done) = tokio::sync::oneshot::channel();
 		let stop = stop.subscribe();
+
 		clients.push(tokio::spawn(async move {
 			client(&base, &account, &channel, &shared, subscribed, stop).await;
 		}));
@@ -289,13 +290,16 @@ async fn client(
 	let url = format!("{}/live", base.replace("http://", "ws://"));
 	let Ok(mut request) = url.into_client_request() else {
 		let _ = subscribed.send(false);
+
 		return;
 	};
 	let Ok(cookie) = account.cookie.parse() else {
 		let _ = subscribed.send(false);
+
 		return;
 	};
 	request.headers_mut().insert("cookie", cookie);
+
 	let mut socket = match tokio_tungstenite::connect_async(request).await {
 		Ok((socket, _)) => socket,
 		Err(error) => {
@@ -304,6 +308,7 @@ async fn client(
 			return;
 		}
 	};
+
 	let sub = ClientFrame::Sub {
 		id: 1,
 		query: "messages".into(),
@@ -311,11 +316,13 @@ async fn client(
 	};
 	let Ok(text) = serde_json::to_string(&sub) else {
 		let _ = subscribed.send(false);
+
 		return;
 	};
 
 	if socket.send(Message::Text(text.into())).await.is_err() {
 		let _ = subscribed.send(false);
+
 		return;
 	}
 
@@ -381,6 +388,7 @@ async fn client(
 							Vec::new()
 						}
 					};
+
 					record(&rows, &mut seen, arrived, totals);
 				}
 			}
@@ -472,6 +480,7 @@ async fn send_messages(
 		let base = bases[(sequence / channels.len()) % bases.len()].clone();
 		let totals = Arc::clone(totals);
 		let sent = Arc::clone(&sent);
+
 		let key = format!("load-{sequence}");
 		in_flight.push(tokio::spawn(async move {
 			let args =

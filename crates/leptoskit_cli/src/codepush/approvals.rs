@@ -239,6 +239,7 @@ fn describe_difference(
 			)));
 		}
 	};
+
 	let rebuilt =
 		std::fs::read(built).with_context(|| format!("could not read {}", built.display()))?;
 
@@ -609,6 +610,7 @@ mod tests {
 			.expect("attached")
 			.approvals;
 		assert_eq!(held.len(), 1);
+
 		match policy.verify(&ingested.record.manifest, &held) {
 			Err(leptoskit_codepush::CodePushError::Unapproved {
 				approvals,

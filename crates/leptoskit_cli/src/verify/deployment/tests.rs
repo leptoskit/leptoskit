@@ -250,6 +250,7 @@ fn backend_binding_requires_v2_and_preserves_replay_protection() {
 	let dir = tempfile::tempdir().unwrap();
 	let state = dir.path().join("state.json");
 	remember(&state, &verified).unwrap();
+
 	value["releases"][0]["backend"]["descriptor_sha256"] = serde_json::json!("f".repeat(64));
 	let conflicting = check(&signed(&value, &key(1)), "https://example.com").unwrap();
 	assert!(remember(&state, &conflicting).is_err());

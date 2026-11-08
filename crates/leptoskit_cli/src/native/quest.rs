@@ -124,6 +124,7 @@ fn declarations(
 				 {prefix}:required=\"{required}\"{version}/>"
 			)?;
 		}
+
 		Ok(())
 	};
 
@@ -169,6 +170,7 @@ fn queries(source: &str, root: roxmltree::Node<'_, '_>, prefix: &str) -> Result<
 			.context("Android manifest has no application element")?
 			.range()
 			.start;
+
 		return Ok((at..at, format!("<queries>{entries}</queries>\n")));
 	};
 	let end = queries.range().end;
@@ -245,8 +247,10 @@ fn activity_attributes(source: &str, activity: roxmltree::Node<'_, '_>, prefix: 
 				} else {
 					range.start
 				};
+
 				edits.push((start..range.end, replacement));
 			}
+
 			None if value.is_some() => edits.push((insert..insert, format!(" {replacement}"))),
 			None => {}
 		}

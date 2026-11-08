@@ -1526,6 +1526,7 @@ async fn plain_http_names_its_cookies_without_the_host_prefix() {
 		None,
 	)
 	.await;
+
 	let pending = set_cookies(&verified);
 	assert!(pending[0].starts_with("second-factor="), "{pending:?}");
 

@@ -108,6 +108,7 @@ pub fn resolve(
 
 	for (name, table) in &config.services {
 		let source = table.source(name).map_err(anyhow::Error::msg)?;
+
 		let (code, manifest) = match fetched.get(name) {
 			Some((package, manifest_path, manifest)) => {
 				(
@@ -120,6 +121,7 @@ pub fn resolve(
 			}
 			None => locate(name, &source, root, metadata)?,
 		};
+
 		let settings =
 			ResolvedService::merge(name, table, manifest.as_ref()).map_err(anyhow::Error::msg)?;
 		services.push(Service { settings, code });
@@ -282,12 +284,14 @@ fn fetch(
 
 	match std::fs::read_to_string(&pinned) {
 		Ok(text) => write_if_changed(&lock, &text)?,
+
 		Err(_) if locked => {
 			anyhow::bail!(
 				"{LOCK_FILE} is missing, so the installed services aren't pinned; run `leptoskit \
 				 build` (not --release) or `leptoskit services` once and commit {LOCK_FILE}"
 			)
 		}
+
 		Err(_) => {
 			let _ = std::fs::remove_file(&lock);
 		}
@@ -381,6 +385,7 @@ fn dependency_of(source: &ServiceSource) -> Result<(String, String)> {
 				Some(GitReference::Tag(tag)) => format!(", tag = {}", quote(tag)),
 				None => String::new(),
 			};
+
 			Ok((
 				package.clone(),
 				format!(
@@ -507,6 +512,7 @@ pub fn build(
 			},
 			|app| app.options.clone(),
 		);
+
 		let mut features: Vec<String> = match app {
 			Some(app) => {
 				base.features
@@ -516,6 +522,7 @@ pub fn build(
 			}
 			None => Vec::new(),
 		};
+
 		let mut packages: Vec<&str> = app.map(|app| app.package).into_iter().collect();
 
 		for service in &workspace {
@@ -650,6 +657,7 @@ fn pick(
 	binaries: Vec<crate::server::PackagedBinary>,
 ) -> Result<PathBuf> {
 	let name = service.name();
+
 	let binary = match &service.settings.bin {
 		Some(bin) => {
 			binaries
@@ -875,11 +883,13 @@ pub fn command(json: bool) -> Result<()> {
 
 	if json {
 		println!("{}", serde_json::to_string_pretty(&listing)?);
+
 		return Ok(());
 	}
 
 	if services.is_empty() {
 		println!("no services: add a [services.<name>] table to leptoskit.toml");
+
 		return Ok(());
 	}
 
@@ -1024,10 +1034,12 @@ pub fn listing(services: &[Service], config: &LeptoskitConfig, root: &Path) -> L
 						Some(GitReference::Tag(tag)) => format!(" tag {tag}"),
 						None => String::new(),
 					};
+
 					format!("{package} from {url}{reference}")
 				}
 				ServiceSource::Remote { url } => url.clone(),
 			};
+
 			let database = settings.database.then(|| {
 				match dialect(config) {
 					DbDialect::Postgres => {

@@ -82,6 +82,7 @@ async fn every_screen_mounts_as_dom() {
 		);
 		let text = parent.text_content().unwrap_or_default();
 		assert!(!text.trim().is_empty(), "`{}` shows no text", screen.slug);
+
 		drop(handle);
 		parent.remove();
 	}
@@ -130,6 +131,7 @@ async fn phone_preview_keeps_controls_inside_the_available_width() {
 	tick().await;
 	let preview = parent.first_element_child().unwrap();
 	assert!(preview.get_bounding_client_rect().width() <= 390.0);
+
 	let input = parent.query_selector("[role=switch]").unwrap().unwrap();
 	let bounds = input.get_bounding_client_rect();
 	let host = parent.get_bounding_client_rect();

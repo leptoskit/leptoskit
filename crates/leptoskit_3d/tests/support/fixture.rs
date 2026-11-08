@@ -380,6 +380,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 		r#"{"name":"skin","mesh":0,"skin":0}"#.to_owned(),
 	];
 	let mut channels = Vec::new();
+
 	let mut samplers = Vec::new();
 
 	for joint in 0..joints {

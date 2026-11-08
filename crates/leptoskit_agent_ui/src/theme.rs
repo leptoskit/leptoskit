@@ -138,6 +138,7 @@ impl Default for Theme {
 			("muted", hex(0x0052_514e), hex(0x00c3_c2b7)),
 		];
 		let names: Vec<String> = (1..=8).map(|index| format!("series-{index}")).collect();
+
 		for (name, (light, dark)) in names.iter().zip(series) {
 			colors.push((name, hex(light), hex(dark)));
 		}
@@ -146,6 +147,7 @@ impl Default for Theme {
 			tokens: BTreeMap::new(),
 			order: Vec::new(),
 		};
+
 		for (role, light, dark) in colors {
 			let summary = ROLES
 				.iter()
@@ -153,6 +155,7 @@ impl Default for Theme {
 				.map_or("", |(_, summary)| summary);
 			theme = theme.color(role, light, dark, summary);
 		}
+
 		theme
 	}
 }
@@ -173,14 +176,17 @@ impl Theme {
 			is_role(role),
 			"theme roles are lowercase letters, digits, and hyphens: {role:?}"
 		);
+
 		if let Some(token) = self.tokens.get_mut(role) {
 			token.light = light;
 			token.dark = dark;
+
 			if !summary.is_empty() {
 				summary.clone_into(&mut token.summary);
 			}
 		} else {
 			self.order.push(role.to_owned());
+
 			self.tokens.insert(
 				role.to_owned(),
 				Token {
@@ -191,6 +197,7 @@ impl Theme {
 				},
 			);
 		}
+
 		self
 	}
 
@@ -260,10 +267,12 @@ impl Theme {
 	/// Everything else passes through unchanged.
 	pub(crate) fn expand(&self, classes: &str) -> String {
 		let mut out = String::with_capacity(classes.len() * 2);
+
 		for class in classes.split_whitespace() {
 			if !out.is_empty() {
 				out.push(' ');
 			}
+
 			match self.parse(class) {
 				Some((variants, utility, token, alpha)) => {
 					let dark_only = variants.split(':').any(|variant| variant == "dark");
@@ -272,6 +281,7 @@ impl Theme {
 				None => out.push_str(class),
 			}
 		}
+
 		out
 	}
 
@@ -285,14 +295,18 @@ impl Theme {
 			Some(index) => class.split_at(index + 1),
 			None => ("", class),
 		};
+
 		let (name, rest) = utility.split_once('-')?;
+
 		if !COLOR_UTILITIES.contains(&name) {
 			return None;
 		}
+
 		let (role, alpha) = match rest.split_once('/') {
 			Some((role, alpha)) => (role, Some(alpha)),
 			None => (rest, None),
 		};
+
 		let token = self.tokens.get(role)?;
 		Some((variants, name, token, alpha))
 	}
@@ -327,14 +341,17 @@ fn push_token(
 ) {
 	let variable = &token.variable;
 	let alpha = alpha.map(|alpha| format!("/{alpha}")).unwrap_or_default();
+
 	if dark_only {
 		let _ = write!(
 			out,
 			"{variants}{utility}-[var(--{variable}-dark,var(--{variable},{}))]{alpha}",
 			hex_color(token.dark)
 		);
+
 		return;
 	}
+
 	let _ = write!(
 		out,
 		"{variants}{utility}-[var(--{variable},{})]{alpha} \

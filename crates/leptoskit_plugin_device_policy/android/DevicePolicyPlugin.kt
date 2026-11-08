@@ -89,12 +89,14 @@ class DevicePolicyPlugin(
             } else {
                 0
             }
+
         val quality =
             if (active) {
                 qualityWire(policy!!.getPasswordQuality(component)) + 1
             } else {
                 0
             }
+
         val minimum =
             if (active) {
                 policy!!.getPasswordMinimumLength(component)
@@ -144,6 +146,7 @@ class DevicePolicyPlugin(
     private fun lockNow(payload: ByteBuffer): ByteArray {
         requireEmpty(payload)
         requireActive().lockNow()
+
         return ByteArray(0)
     }
 
@@ -154,6 +157,7 @@ class DevicePolicyPlugin(
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
+
         return ByteArray(0)
     }
 
@@ -166,6 +170,7 @@ class DevicePolicyPlugin(
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
+
         return ByteArray(0)
     }
 
@@ -176,6 +181,7 @@ class DevicePolicyPlugin(
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
+
         return ByteArray(0)
     }
 
@@ -186,6 +192,7 @@ class DevicePolicyPlugin(
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
+
         return ByteArray(0)
     }
 
@@ -197,6 +204,7 @@ class DevicePolicyPlugin(
         } catch (_: SecurityException) {
             throw PluginException(PluginException.PERMISSION_DENIED)
         }
+
         return ByteArray(0)
     }
 
@@ -204,6 +212,7 @@ class DevicePolicyPlugin(
         val policy = policy ?: throw PluginException(PluginException.UNAVAILABLE)
 
         if (!policy.isAdminActive(component)) throw PluginException(PluginException.PERMISSION_DENIED)
+
         return policy
     }
 
@@ -245,6 +254,7 @@ class DevicePolicyPlugin(
         if (text.trim().isEmpty() || text.contains('\u0000')) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return text
     }
 
@@ -305,6 +315,7 @@ class DevicePolicyPlugin(
 
     private fun word(payload: ByteBuffer): Int {
         if (payload.remaining() != 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return payload.duplicate().order(ByteOrder.LITTLE_ENDIAN).int
     }
 
@@ -320,6 +331,7 @@ class DevicePolicyPlugin(
     private fun words(vararg values: Int): ByteArray {
         val buffer = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
         values.forEach(buffer::putInt)
+
         return buffer.array()
     }
 

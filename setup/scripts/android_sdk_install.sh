@@ -14,6 +14,7 @@
 # ANDROID_SDK_INSTALL_ATTEMPTS (default 3) and ANDROID_SDK_RETRY_DELAY (seconds
 # per attempt, default 10) tune the retry.
 set -euo pipefail
+
 if [ "$#" -eq 0 ]; then
 	echo "usage: android_sdk_install.sh <package>..." >&2
 	exit 2
@@ -26,6 +27,7 @@ yes | "$sdkmanager" --licenses >/dev/null || true
 missing() {
 	local installed package
 	installed="$("$sdkmanager" --list_installed 2>/dev/null | awk -F'|' 'NF >= 3 { gsub(/ /, "", $1); print $1 }')"
+
 	for package in "$@"; do
 		grep -Fxq -- "$package" <<<"$installed" || printf '%s\n' "$package"
 	done
@@ -34,14 +36,18 @@ missing() {
 for attempt in $(seq 1 "$attempts"); do
 	# sdkmanager stages downloads here; never let an attempt reuse a bad one.
 	rm -rf "$sdk/.temp" "$sdk/.downloadIntermediates"
+
 	if "$sdkmanager" --install "$@" >/dev/null; then
 		left="$(missing "$@")"
+
 		if [ -z "$left" ]; then
 			exit 0
 		fi
 		echo "sdkmanager reported success but did not install: $(paste -sd ' ' - <<<"$left")" >&2
 	fi
+
 	if [ "$attempt" -lt "$attempts" ]; then
+
 		echo "Android SDK install attempt $attempt of $attempts failed; retrying" >&2
 		sleep $((attempt * ${ANDROID_SDK_RETRY_DELAY:-10}))
 	fi

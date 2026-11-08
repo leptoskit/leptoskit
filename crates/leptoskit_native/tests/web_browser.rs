@@ -137,6 +137,7 @@ async fn rerenders_refresh_callbacks_and_slider_configuration_without_replacing_
 	slider.set_value("17");
 	let options = web_sys::EventInit::new();
 	options.set_bubbles(true);
+
 	slider
 		.dispatch_event(&web_sys::Event::new_with_event_init_dict("input", &options).unwrap())
 		.unwrap();
@@ -207,6 +208,7 @@ async fn rich_pressables_keep_native_button_semantics_and_focus_during_updates()
 	assert_eq!(document().active_element(), Some(button.clone().into()));
 	count.set(4);
 	tick().await;
+
 	assert!(button.text_content().unwrap().contains("Activated 4"));
 	assert_eq!(document().active_element(), Some(button.clone().into()));
 	enabled.set(false);
@@ -1019,6 +1021,7 @@ async fn controlled_toggles_propose_once_bubble_typed_events_and_restore_rejecti
 	tick().await;
 	let current: web_sys::HtmlInputElement = find(&parent, "[aria-label=Rejected]");
 	assert_eq!(input, current);
+
 	assert!(input.checked());
 	assert_eq!(document().active_element(), Some(input.clone().into()));
 	let switch: web_sys::HtmlInputElement = find(&parent, "[role=switch]");
@@ -1089,6 +1092,7 @@ async fn sliders_and_passwords_keep_owner_state_and_dom_identity() {
 	value.set(2.0);
 	tick().await;
 	assert_eq!(slider.value(), "2");
+
 	assert_eq!(
 		slider,
 		find::<web_sys::HtmlInputElement>(&parent, "input[type=range]")
@@ -1162,6 +1166,7 @@ async fn radio_groups_restore_rejection_support_arrows_and_isolate_render_roots(
 		)
 		.expect("dispatch arrow");
 	tick().await;
+
 	assert_eq!(selected.get_untracked(), 1);
 	assert!(!first.checked() && second.checked() && other.checked());
 	assert_eq!(document().active_element(), Some(second.clone().into()));
@@ -1256,6 +1261,7 @@ async fn disabled_hidden_controls_reject_synthetic_input_and_spinners_stop() {
 		"disabled ancestors must not stop loading"
 	);
 	let before = spinner.get_bounding_client_rect();
+
 	let progress: web_sys::HtmlElement = find(&parent, "progress");
 	let progress_y = progress.get_bounding_client_rect().y();
 	running.set(false);

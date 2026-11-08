@@ -56,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let live_ready = roles.live().then(|| readiness.check("live"));
 	// The database, migrated before the first request.
 	let url = __DATABASE_URL__;
+
 	let db = leptoskit::db::Db::connect(&url).await?;
 
 	for name in db

@@ -32,6 +32,7 @@ class GalleryActivity : Activity() {
         setContentView(container)
         // Layout passes that keep the size (mounting, text changes) need no resize.
         container.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 container.post {
                     if (!isFinishing && !isDestroyed) updateViewport()
@@ -42,12 +43,14 @@ class GalleryActivity : Activity() {
         // bars; the shared screens pad themselves by these insets.
         container.setOnApplyWindowInsetsListener { _, insets ->
             val changed = safeArea(insets)
+
             if (changed != safeArea) {
                 safeArea = changed
                 container.post {
                     if (!isFinishing && !isDestroyed) updateViewport()
                 }
             }
+
             insets
         }
     }
@@ -72,6 +75,7 @@ class GalleryActivity : Activity() {
 
         if (width > 0 && height > 0) {
             val density = host.density
+
             if (session == 0L) {
                 session =
                     nativeCreate(
@@ -82,6 +86,7 @@ class GalleryActivity : Activity() {
                         File(filesDir, "gallery-assets").path,
                     )
             }
+
             mountRoot(
                 nativeResize(
                     session,
@@ -103,6 +108,7 @@ class GalleryActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+
         if (::host.isInitialized) host.setForeground(true)
     }
 

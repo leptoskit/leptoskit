@@ -82,10 +82,12 @@ fn nodes(host: &WasmHost<HeadlessBackend>) -> Vec<NodeId> {
 	let surface = host.surface();
 	let mut pending = vec![surface.root().expect("a root node")];
 	let mut all = Vec::new();
+
 	while let Some(node) = pending.pop() {
 		all.push(node);
 		pending.extend(surface.children(node).iter().rev());
 	}
+
 	all
 }
 

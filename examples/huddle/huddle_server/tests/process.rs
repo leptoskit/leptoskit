@@ -51,6 +51,7 @@ async fn the_binary_starts_serves_and_stops_on_sigterm() {
 	// `/readyz` only passes once the migrations applied and the live hub
 	// started, which is exactly the startup the binary promises.
 	let deadline = Instant::now() + WAIT;
+
 	loop {
 		if let Ok(response) = http.get(format!("{base}/readyz")).send().await
 			&& response.status().is_success()
@@ -102,6 +103,7 @@ async fn the_binary_starts_serves_and_stops_on_sigterm() {
 	let mut err = String::new();
 	stderr.read_to_string(&mut err).unwrap();
 	assert!(status.success(), "exit {status:?}: {err}");
+
 	assert!(out.contains("roles:"), "{out}");
 	assert!(out.contains("listening on http://"), "{out}");
 	assert!(out.contains("applied migration"), "{out}");

@@ -97,16 +97,20 @@ void _checkModels() {
   final all = Echo.fromJson(wire);
   _equals(all.toJson(), wire, 'all presence and falsy values round-trip');
   _isPresent(all.optionalNullableText, 'optional nullable field');
+
   if (all.optionalNullableText.value != null) {
     throw StateError('an explicit optional null must decode as null');
   }
+
   _isPresent(all.optionalNullableNested, 'optional nullable nested field');
   _equals(
     all.optionalNullableNested.value?.toJson(),
     wire['optional_nullable_nested'],
     'a nested optional value must decode',
   );
+
   _isPresent(all.optionalNullableAlias, 'optional nullable alias field');
+
   if (all.optionalNullableAlias.value != 'alias') {
     throw StateError('a nullable reference alias must decode its value');
   }
@@ -186,6 +190,7 @@ Future<void> _checkArguments() async {
     } else {
       jsonBodies.add(body);
     }
+
     request.response
       ..statusCode = 200
       ..headers.contentType = ContentType.json
@@ -299,25 +304,32 @@ bool _sameJson(Object? actual, Object? expected) {
     if (actual.length != expected.length) {
       return false;
     }
+
     for (final key in actual.keys) {
       if (!expected.containsKey(key) ||
           !_sameJson(actual[key], expected[key])) {
         return false;
       }
     }
+
     return true;
   }
+
   if (actual is List && expected is List) {
+
     if (actual.length != expected.length) {
       return false;
     }
+
     for (var index = 0; index < actual.length; index++) {
       if (!_sameJson(actual[index], expected[index])) {
         return false;
       }
     }
+
     return true;
   }
+
   return actual == expected;
 }
 
@@ -455,6 +467,7 @@ Future<void> _checkLiveArguments() async {
       const Presence<String?>.present(null),
       const Presence<String?>.present('value'),
     ]) {
+
       await client.observe
           .watch(
             requiredText: 'r',
@@ -496,16 +509,20 @@ Future<void> _checkLiveArguments() async {
     final nullRoom = client.nullRoom.join(null);
     await joinFrames.moveNext().timeout(const Duration(seconds: 5));
     final nullFrame = joinFrames.current;
+
     if (!nullFrame.containsKey('args') || nullFrame['args'] != null) {
       throw StateError('null-only channel args must remain explicit null');
     }
+
     nullRoom.leave();
     await joinFrames.cancel();
   } finally {
     client.live.close();
+
     for (final socket in sockets) {
       await socket.close();
     }
+
     await subscription.cancel();
     await server.close(force: true);
   }

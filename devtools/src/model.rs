@@ -136,6 +136,7 @@ impl Live {
 	#[must_use]
 	pub fn label(&self) -> String {
 		let hello = &self.info.hello;
+
 		match &hello.device {
 			Some(device) => format!("{} · {device}", platform_name(hello.platform)),
 			None => platform_name(hello.platform).to_owned(),
@@ -308,6 +309,7 @@ impl Model {
 	/// when it still exists.
 	pub fn load(&mut self, states: Vec<SessionState>) {
 		let previous = std::mem::take(&mut self.sessions);
+
 		for state in states {
 			let mut live = Live::new(state.info);
 			live.view = state.view;
@@ -352,6 +354,7 @@ impl Model {
 		if self.current.is_none() {
 			let wanted = self.wanted.clone();
 			self.show_default();
+
 			if self.wanted.is_none() {
 				self.wanted = wanted.filter(|id| !self.sessions.contains_key(id));
 			}
@@ -377,6 +380,7 @@ impl Model {
 	pub fn show(&mut self, id: &SessionId) {
 		if !self.sessions.contains_key(id) {
 			self.wanted = Some(id.clone());
+
 			return;
 		}
 
@@ -390,6 +394,7 @@ impl Model {
 			(Some(old), Some(new)) => old.info.hello.app == new.info.hello.app,
 			_ => false,
 		};
+
 		self.current = Some(id.clone());
 		self.picking = false;
 		self.drafts = Drafts::default();
@@ -718,6 +723,7 @@ impl Model {
 		source: &leptoskit_devtools_protocol::SourceLocation,
 	) -> Option<String> {
 		let file = &source.file;
+
 		if std::path::Path::new(&file.as_str())
 			.components()
 			.any(|component| matches!(component, std::path::Component::ParentDir))
@@ -725,12 +731,15 @@ impl Model {
 			return None;
 		}
 		let absolute = file.starts_with('/') || file.get(1..3) == Some(":\\");
+
 		let path = match &self.hub {
 			Some(hub) if !absolute && !hub.root.is_empty() => {
 				format!("{}/{file}", hub.root.trim_end_matches('/'))
 			}
+
 			_ => file.clone(),
 		};
+
 		Some(format!(
 			"vscode://file/{}:{}:{}",
 			path.trim_start_matches('/'),
@@ -770,6 +779,7 @@ pub fn frame_text(frame: &Frame) -> String {
 
 fn round(value: f32) -> String {
 	let rounded = (value * 10.0).round() / 10.0;
+
 	if rounded.fract() == 0.0 {
 		format!("{rounded:.0}")
 	} else {
@@ -809,6 +819,7 @@ fn matched<'a>(nodes: &BTreeMap<&'a NodeRef, &'a Node>, search: &str) -> BTreeSe
 
 	for node in nodes.values().filter(|node| matches(node, search)) {
 		let mut current = Some(&node.id);
+
 		while let Some(id) = current
 			&& keep.insert(id)
 		{
@@ -827,6 +838,7 @@ fn ancestors(view: &SessionView, node: &NodeRef) -> Vec<NodeRef> {
 		if found.contains(&id) {
 			break;
 		}
+
 		current = view.node(&id).and_then(|node| node.parent.clone());
 		found.push(id);
 	}
@@ -866,6 +878,7 @@ pub(crate) mod tests {
 				Capability::Editing,
 			]
 		};
+
 		SessionInfo {
 			id: SessionId::new(id),
 			hello: Hello::new(
@@ -1008,6 +1021,7 @@ pub(crate) mod tests {
 		assert_eq!(model.current, Some(SessionId::new("web")));
 		// The named session still wins when it turns up.
 		opened(&mut model, "missing", Platform::Web, 3);
+
 		assert_eq!(model.current, Some(SessionId::new("missing")));
 	}
 
@@ -1159,6 +1173,7 @@ pub(crate) mod tests {
 		);
 		assert!(!model.picking);
 		assert_eq!(model.node().unwrap().kind, "Button");
+
 		assert!(model.collapsed.is_empty());
 	}
 
@@ -1190,6 +1205,7 @@ pub(crate) mod tests {
 			.key
 			.clone();
 		model.select(node, key);
+
 		let counterparts = model.counterparts();
 		assert_eq!(counterparts.len(), 1);
 		assert_eq!(counterparts[0].session.info.id, SessionId::new("ios"));

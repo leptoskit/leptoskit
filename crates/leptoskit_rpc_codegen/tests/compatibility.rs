@@ -73,6 +73,7 @@ fn references_follow_changed_definitions_and_terminate_on_cycles() {
 			.iter()
 			.any(|line| line.contains("result schema"))
 	);
+
 	after = before.clone();
 	after
 		.schemas
@@ -91,15 +92,19 @@ fn publication_keeps_conditional_and_pattern_schema_references() {
 		"dependentSchemas": {"kind": {"$ref": "#/components/schemas/Dependent"}},
 		"unevaluatedProperties": {"$ref": "#/components/schemas/Other"}
 	});
+
 	for name in ["Conditional", "Negated", "Pattern", "Dependent", "Other"] {
 		before
 			.schemas
 			.insert(name.into(), json!({"type": "string"}));
 	}
+
 	let before = before.public();
 	assert_eq!(before.schemas.len(), 5);
+
 	for name in before.schemas.keys() {
 		let mut after = before.clone();
+
 		after
 			.schemas
 			.insert(name.clone(), json!({"type": "integer"}));
@@ -145,8 +150,10 @@ fn channel_removal_key_order_payloads_and_live_path_are_checked() {
 		before.breaking_changes(&after),
 		["channel `chat` changed its join field order"]
 	);
+
 	for part in 0..3 {
 		after = before.clone();
+
 		let value = match part {
 			0 => &mut after.channels[0].args_schema,
 			1 => &mut after.channels[0].message_schema,
@@ -155,6 +162,7 @@ fn channel_removal_key_order_payloads_and_live_path_are_checked() {
 		*value = json!({"type": "integer"});
 		assert_eq!(before.breaking_changes(&after).len(), 1);
 	}
+
 	after = before.clone();
 	after.live_path = "/v2/live".into();
 	assert_eq!(
@@ -200,6 +208,7 @@ fn errors_and_duplicate_names_cannot_hide_contract_changes() {
 			.any(|line| line.contains("repeats `notes` argument"))
 	);
 	after = before.clone();
+
 	after.channels = vec![channel(), channel()];
 	assert!(
 		before
@@ -237,6 +246,7 @@ fn escaped_component_names_and_nested_pointers_keep_their_definitions() {
 	assert!(before.schemas.contains_key("A/B"));
 	assert_eq!(before.breaking_changes(&before), Vec::<String>::new());
 	let mut after = before.clone();
+
 	after.schemas["A/B"]["properties"]["value"] = json!({"type": "integer"});
 	assert_ne!(before.breaking_changes(&after), Vec::<String>::new());
 }

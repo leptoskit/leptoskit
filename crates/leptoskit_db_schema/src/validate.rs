@@ -240,6 +240,7 @@ impl Schema {
 					"format 1 has no pack membership; remove `packs` or write format 2",
 				);
 			}
+
 			(format, false) if format >= 2 => {
 				problems.push(
 					"schema",
@@ -249,6 +250,7 @@ impl Schema {
 					),
 				);
 			}
+
 			_ => {}
 		}
 

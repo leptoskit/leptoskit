@@ -196,6 +196,7 @@ pub struct Prop {
 	pub(crate) kind: PropKind,
 	pub(crate) summary: String,
 	pub(crate) required: bool,
+
 	pub(crate) default: Option<String>,
 	/// For a variable prop: whether the component renders again when the
 	/// variable changes.
@@ -270,15 +271,19 @@ impl Prop {
 
 	pub(crate) fn describe(&self) -> String {
 		let mut line = format!("`{}` ({})", self.name, self.kind.label());
+
 		if self.required {
 			line.push_str(", required");
 		}
+
 		if let Some(default) = &self.default {
 			line.push_str(", default `");
 			line.push_str(default);
 			line.push('`');
 		}
+
 		line.push_str(": ");
+
 		line.push_str(&self.summary);
 		line
 	}
@@ -450,6 +455,7 @@ impl Context {
 	/// write.
 	pub fn input(&self, props: &Props, prop: &str) -> Result<Input, String> {
 		let name = props.text(prop)?;
+
 		match self.ui.store.get(&name) {
 			Some(Variable::Input { .. }) => {
 				Ok(Input {

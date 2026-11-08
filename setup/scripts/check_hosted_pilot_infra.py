@@ -25,20 +25,25 @@ def check(cli, tofu):
         (root / "leptoskit.toml").write_text(text)
         subprocess.run([str(cli), "infra", "generate"], cwd=root, env=environment,
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
         if (root / "Dockerfile").exists():
             raise RuntimeError("external provisioning unexpectedly generated a container recipe")
         source = root / "infra/leptoskit-pilot"
+
         value = json.loads((source / "main.tf.json").read_text())
+
         if "hcloud_server" in value["resource"] or "cloudflare_r2_bucket" in value["resource"]:
             raise RuntimeError("the minimal DigitalOcean pilot contains unexpected resources")
         for arguments in (["init", "-backend=false", "-input=false", "-no-color"],
                           ["validate", "-no-color"]):
             result = subprocess.run([str(tofu), *arguments], cwd=source, env=environment,
                                     capture_output=True, text=True, timeout=300)
+
             if result.returncode:
                 raise RuntimeError(result.stdout + result.stderr)
         version = subprocess.check_output([str(tofu), "version", "-json"], cwd=source,
                                           env=environment, text=True)
+
         return {"opentofu_configuration": "validated", "compute": "digitalocean",
                 "toolchain": json.loads(version), "cloud_apply": "not run"}
 
@@ -50,6 +55,8 @@ if __name__ == "__main__":
     arguments = parser.parse_args()
     cli = shutil.which(arguments.cli)
     tofu = shutil.which(arguments.tofu)
+
     if not cli or not tofu:
+
         raise SystemExit("provide installed LeptosKit and OpenTofu executable paths")
     print(json.dumps(check(Path(cli).resolve(), Path(tofu).resolve()), indent=2))

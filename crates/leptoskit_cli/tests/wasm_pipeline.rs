@@ -346,7 +346,9 @@ channel = "unlisted"
 	};
 	let output = build();
 	assert!(output.contains("firefox-source.zip"), "{output}");
+
 	let directory = scratch.path.join(".leptoskit/extension");
+
 	for browser in ["chromium", "firefox", "safari"] {
 		let package = directory.join(browser);
 		let manifest: serde_json::Value =
@@ -367,6 +369,7 @@ channel = "unlisted"
 			browser != "safari"
 		);
 	}
+
 	assert!(directory.join("firefox-source.zip").is_file());
 	std::fs::write(directory.join("chromium/stale.txt"), "old output").unwrap();
 	build();
@@ -387,6 +390,7 @@ channel = "unlisted"
 	.unwrap();
 	let stores = report["stores"].as_array().unwrap();
 	assert_eq!(stores.len(), 3);
+
 	for store in stores {
 		assert!(
 			store["summary"]

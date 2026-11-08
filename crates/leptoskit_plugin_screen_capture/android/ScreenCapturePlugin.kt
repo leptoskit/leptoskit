@@ -115,6 +115,7 @@ class ScreenCapturePlugin(
 
     /** Reports whether the window already carries the secure flag. */
     private fun protectionAnswer(activity: Activity): ByteArray =
+
         fields(WIRE_VERSION, 0, if (isProtected(activity)) SECURE_ON else SECURE_OFF)
 
     /** Reads the watch a screenshot request carries; other methods carry nothing. */

@@ -8,10 +8,13 @@ import type { MainThread } from "@lynx-js/types";
  */
 export function textOf(element: MainThread.Element | undefined | null): string {
 	"main thread";
+
 	if (element === undefined || element === null) return "";
 	const direct: unknown = element.getAttribute("text");
+
 	if (typeof direct === "string") return direct;
 	const raw = element.querySelector("raw-text");
 	const nested: unknown = raw === null ? undefined : raw.getAttribute("text");
+
 	return typeof nested === "string" ? nested : "";
 }

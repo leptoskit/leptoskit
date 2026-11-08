@@ -42,6 +42,7 @@ struct BinaryTransactionTests {
         append(UInt32(json.count))
         binary.append(json)
         let transaction = try binary.withUnsafeBytes { try Transaction(binary: $0) }
+
         let props = try #require(transaction.mutations.first?.updateProps?.props)
         #expect(props.checked == true)
         #expect(props.slider?.value == 12)
@@ -49,10 +50,13 @@ struct BinaryTransactionTests {
         #expect(props.running == false)
         #expect(props.focused == true)
         #expect(props.aria?.valueText == "Twelve")
+
         guard case .determinate(let value) = props.progress else {
             Issue.record("Missing determinate progress")
+
             return
         }
+
         #expect(value == 0.75)
     }
 

@@ -32,6 +32,7 @@ fn fixture_contract(
 		"rpc_contract": {"state": "not_applicable", "declaration": "operator_declares_no_rpc"},
 		"native_guest_compatibility": "not_applicable", "runtime_attestation": "absent"
 	});
+
 	if website {
 		value["format_version"] = serde_json::json!(2);
 		value["recipe"]["target"] = serde_json::json!("aarch64-unknown-linux-gnu");
@@ -42,10 +43,13 @@ fn fixture_contract(
 			"pkg/site_bg.wasm": {"kind":"file","mode":420,"size":1,"sha256":"d".repeat(64)}
 		}}});
 	}
+
 	if let Some(contract) = contract {
 		value["format_version"] = serde_json::json!(3);
+
 		value["rpc_contract"] = contract;
 	}
+
 	signed_fixture(serde_json::from_value(value).unwrap())
 }
 
@@ -118,11 +122,13 @@ fn backend_and_website_windows_require_exact_descriptor_approval_and_policy() {
 	for website in [false, true] {
 		let (evidence, descriptor, trust) = window_fixture(website);
 		check(&evidence, &descriptor, &trust).unwrap();
+
 		for field in ["window", "contract"] {
 			let mut value = serde_json::to_value(&descriptor).unwrap();
 			let text = format!("{}\n", value["schema_window"][field].as_str().unwrap());
 			value["schema_window"][format!("{field}_sha256")] =
 				serde_json::json!(hash(text.as_bytes()));
+
 			value["schema_window"][field] = serde_json::json!(text);
 			let replacement: Descriptor = serde_json::from_value(value).unwrap();
 			// These are valid, semantically identical inputs with different
@@ -157,11 +163,13 @@ fn window_history_cannot_downgrade_or_discard_approved_evidence() {
 	for website in [false, true] {
 		let (evidence, descriptor, trust) = window_fixture(website);
 		let mut value = serde_json::to_value(&descriptor).unwrap();
+
 		value["format_version"] = serde_json::json!(if website { 2 } else { 1 });
 		let downgraded: Descriptor = serde_json::from_value(value.clone()).unwrap();
 		assert!(downgraded.validate().is_err());
 		value["schema_window"] = serde_json::Value::Null;
 		let stripped: Descriptor = serde_json::from_value(value).unwrap();
+
 		stripped.validate().unwrap();
 		let mut changed = evidence;
 		changed.descriptor = serde_json::to_string_pretty(&stripped).unwrap();
@@ -215,6 +223,7 @@ fn replacing_a_valid_checked_baseline_requires_new_approval() {
 	baseline["specification"] = serde_json::json!(specification);
 	baseline["sha256"] = serde_json::json!(pin);
 	let replacement: Descriptor = serde_json::from_value(value).unwrap();
+
 	replacement.validate().unwrap();
 	// Even a newly allowed, structurally identical baseline is different
 	// approved evidence. Keep the old signatures to prove this binding.
@@ -238,6 +247,7 @@ fn contract_policy_cannot_use_a_legacy_version_empty_window_or_duplicate_pins() 
 	trust.configuration.rpc_contracts.push(pin);
 	assert!(trust.configuration.validate_rpc_policy().is_err());
 	trust.configuration.rpc_contracts.clear();
+
 	assert!(trust.configuration.validate_rpc_policy().is_err());
 }
 
@@ -251,6 +261,7 @@ fn checked_contract_evidence_cannot_be_labeled_as_a_legacy_descriptor() {
 	let (_, legacy, _) = fixture();
 	let mut value = serde_json::to_value(legacy).unwrap();
 	value["format_version"] = serde_json::json!(3);
+
 	let promoted: Descriptor = serde_json::from_value(value).unwrap();
 	assert!(promoted.validate().is_err());
 }

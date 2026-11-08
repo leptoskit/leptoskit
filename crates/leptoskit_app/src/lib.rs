@@ -65,6 +65,7 @@ impl Shell {
 		if self.busy.get_untracked() {
 			return;
 		}
+
 		self.busy.set(true);
 		self.output.set(String::new());
 		self.notice.set("Working…".into());
@@ -118,6 +119,7 @@ impl Shell {
 							self.overview.set(value);
 						}
 					}
+
 					#[cfg(all(target_arch = "wasm32", feature = "native"))]
 					{
 						let _ = client::save_key(&self.key.get_untracked()).await;
@@ -125,6 +127,7 @@ impl Shell {
 				}
 				Err(message) => self.notice.set(message),
 			}
+
 			self.busy.set(false);
 		});
 	}
@@ -137,6 +140,7 @@ impl Shell {
 		let Some(revision) = revision else {
 			self.notice
 				.set("Refresh application status before deploying.".into());
+
 			return;
 		};
 		// The account revision prevents replay after another mutation; the
@@ -190,6 +194,7 @@ pub fn start() {
 		.as_ref()
 		.and_then(|document| document.get_element_by_id("live-demo"))
 		.and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok());
+
 	if let Some(target) = target {
 		target.set_text_content(None);
 		leptos::mount::mount_to(target, DemoApp).forget();

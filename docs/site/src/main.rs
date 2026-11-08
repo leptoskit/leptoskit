@@ -9,6 +9,7 @@ fn main() -> ExitCode {
 			if let Some(server) = server {
 				server.wait();
 			}
+
 			ExitCode::SUCCESS
 		}
 		Err(error) => {

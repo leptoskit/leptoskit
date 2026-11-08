@@ -152,6 +152,7 @@ async fn follow<T: serde::de::DeserializeOwned + Send + Sync + 'static>(
 					EndReason::Interrupted => StreamState::Interrupted,
 					EndReason::Failed(error) => StreamState::Failed(super::live::fn_error(error)),
 				});
+
 				false
 			}
 			None => false,

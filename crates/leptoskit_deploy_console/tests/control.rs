@@ -52,6 +52,7 @@ fn snapshot(instance: &str, count: usize) -> Snapshot {
 		clock,
 	)
 	.unwrap();
+
 	for _ in 0..count {
 		analytics.record(
 			SeriesKey {
@@ -64,6 +65,7 @@ fn snapshot(instance: &str, count: usize) -> Snapshot {
 			None,
 		);
 	}
+
 	analytics.snapshot()
 }
 
@@ -85,6 +87,7 @@ fn queue_is_durable_idempotent_and_preserves_uncertain_runs() {
 	);
 	assert_eq!(store.claim().unwrap().unwrap().id, first.id);
 	let other = Store::open(&root.path().join("console.sqlite3")).unwrap();
+
 	assert!(other.claim().unwrap().is_none());
 	other.interrupt_running().unwrap();
 	assert_eq!(
@@ -153,6 +156,7 @@ fn apply_is_bound_to_the_reviewed_plan_and_cannot_reuse_it() {
 			)
 			.is_err()
 	);
+
 	let next = store
 		.enqueue("notes", &intent(2, "plan-2", Action::Plan))
 		.unwrap();
@@ -187,6 +191,7 @@ fn fleet_history_survives_restarts_and_repeated_snapshots_do_not_double_count() 
 	let from = clock().saturating_sub(3600);
 	let to = clock() + 60;
 	let fleet = store.fleet("notes", from, to).unwrap();
+
 	assert_eq!(fleet.instances, 2);
 	assert_eq!(fleet.series[0].windows[0].count, 5);
 	let mut updated = first.clone();
@@ -250,6 +255,7 @@ async fn restoring_preserves_previous_history_and_never_revives_scoped_credentia
 	store
 		.enqueue("notes", &intent(1, "after-backup", Action::Status))
 		.unwrap();
+
 	drop(store);
 	let database = root.path().join("console.sqlite3");
 	let previous = root.path().join("previous.sqlite3");
@@ -282,9 +288,11 @@ fn request(
 		.method(method)
 		.uri(path)
 		.header("content-type", "application/json");
+
 	if let Some(key) = key {
 		request = request.header("authorization", format!("Bearer {key}"));
 	}
+
 	request
 		.body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
 		.unwrap()
@@ -318,6 +326,7 @@ async fn scoped_api_and_browser_sessions_enforce_the_same_project_permissions() 
 		StatusCode::OK
 	);
 	let body = serde_json::to_value(intent(0, "denied", Action::Status)).unwrap();
+
 	for key in [&read, &ingest] {
 		assert_eq!(
 			app.clone()
@@ -333,6 +342,7 @@ async fn scoped_api_and_browser_sessions_enforce_the_same_project_permissions() 
 			StatusCode::FORBIDDEN
 		);
 	}
+
 	assert_eq!(
 		app.clone()
 			.oneshot(request(
@@ -446,6 +456,7 @@ async fn the_application_exporter_delivers_to_the_durable_service_without_manage
 	let serving = tokio::spawn(async move {
 		axum::serve(listener, router).await.unwrap();
 	});
+
 	let (app, analytics) = server::mount(
 		axum::Router::new().route("/notes/{id}", axum::routing::get(|| async { "note" })),
 		ServerConfig {
@@ -482,6 +493,7 @@ async fn the_application_exporter_delivers_to_the_durable_service_without_manage
 				assert!(fleet.hosts[0].host.is_some());
 				break;
 			}
+
 			tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 		}
 	})

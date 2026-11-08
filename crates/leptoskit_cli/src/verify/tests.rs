@@ -2,6 +2,7 @@ use super::*;
 
 fn bundle() -> tempfile::TempDir {
 	let root = tempfile::tempdir().unwrap();
+
 	for path in ["source/src", "dependencies/example", "infra", "artifacts"] {
 		std::fs::create_dir_all(root.path().join(path)).unwrap();
 	}
@@ -78,6 +79,7 @@ fn a_pinned_inventory_covers_every_role_and_has_stable_serialization() {
 	}
 	let mut changed = recipe();
 	changed["target"] = "aarch64-unknown-linux-gnu".into();
+
 	write_recipe(root.path(), &changed);
 	assert!(check(root.path(), manifest.path(), &digest).is_err());
 }
@@ -107,6 +109,7 @@ fn extra_files_empty_directories_and_missing_files_are_rejected() {
 	assert!(check(root.path(), manifest.path(), &digest).is_err());
 	std::fs::remove_dir(directory).unwrap();
 	std::fs::remove_file(root.path().join("dependencies/example/lib.rs")).unwrap();
+
 	assert!(
 		check(root.path(), manifest.path(), &digest)
 			.unwrap_err()
@@ -128,6 +131,7 @@ fn replacing_both_bundle_and_inventory_cannot_bypass_a_trusted_digest() {
 	assert!(error.contains("independently pinned digest"));
 	// The digest is checked before parsing untrusted metadata.
 	std::fs::write(manifest.path(), b"not JSON").unwrap();
+
 	assert!(
 		check(root.path(), manifest.path(), &digest)
 			.unwrap_err()
@@ -160,6 +164,7 @@ fn missing_materials_mutable_builders_and_secret_values_are_rejected() {
 		assert!(!error.contains("value-that-must-not-be-printed"));
 	}
 	std::fs::write(root.path().join("secrets.json"), "[]").unwrap();
+
 	std::fs::remove_file(root.path().join("source/Cargo.lock")).unwrap();
 	assert!(
 		inventory(root.path())
@@ -184,6 +189,7 @@ fn unknown_formats_and_undeclared_top_level_entries_are_rejected() {
 			.to_string()
 			.contains("unsupported")
 	);
+
 	std::fs::write(root.path().join(".env"), b"private data").unwrap();
 	assert!(
 		inventory(root.path())
@@ -235,6 +241,7 @@ fn symlinks_and_changed_permissions_cannot_escape_the_inventory() {
 	std::fs::remove_file(&link).unwrap();
 	symlink(root.path().join("dependencies"), &link).unwrap();
 	assert!(inventory(root.path()).is_err());
+
 	std::fs::remove_file(link).unwrap();
 	let binary = root.path().join("artifacts/backend");
 	let mode = std::fs::metadata(&binary).unwrap().permissions().mode();

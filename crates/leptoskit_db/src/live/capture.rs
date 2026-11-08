@@ -564,6 +564,7 @@ async fn session(
 
 		let leader = Leader::start(&mut client, mode.slot, settings, shared).await?;
 		shared.capturing.store(true, Ordering::Relaxed);
+
 		return leader.capture(stop).await;
 	}
 }
@@ -645,6 +646,7 @@ impl<'a> Leader<'a> {
 			mark_gap(client).await?;
 			u64::try_from(lsn).unwrap_or(0)
 		};
+
 		let recorded: Option<i64> = client
 			.query_opt(
 				"SELECT lsn FROM live.commits WHERE lsn IS NOT NULL ORDER BY version DESC LIMIT 1",
@@ -961,6 +963,7 @@ impl Transaction {
 				// Every change follows its table's description; without one,
 				// nobody can be told what changed.
 				self.truncated = true;
+
 				return;
 			};
 			let old = old.map(|old| image(relation, &old, None));
@@ -1080,6 +1083,7 @@ impl Row {
 				names.sort_unstable();
 				names
 			}
+
 			(None, Some(new)) if self.op == "U" => new.keys().cloned().collect(),
 			_ => Vec::new(),
 		};
@@ -1117,6 +1121,7 @@ fn image(
 						.unwrap_or_default()
 				}
 			};
+
 			(column.name.clone(), value)
 		})
 		.collect()

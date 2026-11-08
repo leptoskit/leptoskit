@@ -411,6 +411,7 @@ impl LiveConnection {
 				shared: Arc::clone(&connection.shared),
 				request,
 			};
+
 			let value = match answer.await.map_err(|_| closed())? {
 				Reply::Now(result) => result?,
 				Reply::Wait(value, seen) => {
@@ -419,6 +420,7 @@ impl LiveConnection {
 					value
 				}
 			};
+
 			serde_json::from_value(value).map_err(decode_error)
 		}
 	}
@@ -763,9 +765,11 @@ impl State {
 		if let Some(pending) = self.pending.remove(&request) {
 			let reply = match failure {
 				Some(error) => Reply::Now(Err(error)),
+
 				None if self.subscriptions.is_empty() || self.version >= version => {
 					Reply::Now(Ok(value))
 				}
+
 				None => {
 					let (seen, wait) = oneshot::channel();
 					self.waiters.retain(|(_, waiter)| !waiter.is_closed());
@@ -773,7 +777,9 @@ impl State {
 					Reply::Wait(value, wait)
 				}
 			};
+
 			let _ = pending.reply.send(reply);
+
 			return;
 		}
 
@@ -836,6 +842,7 @@ impl Shared {
 		state.channels.clear();
 		self.status.send_replace(LiveStatus::Offline);
 		drop(state);
+
 		self.stop.notify_one();
 	}
 
@@ -880,6 +887,7 @@ impl Shared {
 			Some(token) => token().await,
 			None => None,
 		};
+
 		let (writer, mut outgoing) = mpsc::unbounded_channel();
 
 		{
@@ -921,6 +929,7 @@ impl Shared {
 					let Some(frame) = frame else {
 						// Closed for good.
 						let _ = sink.close().await;
+
 						return;
 					};
 
@@ -935,6 +944,7 @@ impl Shared {
 						Some(Ok(Message::Close(_)) | Err(_)) | None => return,
 						Some(Ok(_)) => None,
 					};
+
 					heard = Instant::now();
 
 					if let Some(seconds) = text.and_then(|text| self.receive(&text)) {
@@ -1073,6 +1083,7 @@ async fn run(shared: Arc<Shared>) {
 				state.running = false;
 				state.reconnect_after = None;
 				shared.status.send_replace(LiveStatus::Offline);
+
 				return;
 			}
 
@@ -1173,6 +1184,7 @@ fn apply_rows(value: Option<&Value>, patch: &Value) -> Value {
 			Some(slot) if id.is_some() && slot["id"].as_str() == id => {
 				*slot = upsert["value"].clone();
 			}
+
 			_ => items.insert(at, upsert["value"].clone()),
 		}
 	}

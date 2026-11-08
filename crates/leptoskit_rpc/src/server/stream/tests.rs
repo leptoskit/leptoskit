@@ -34,14 +34,17 @@ async fn renewed_credits_do_not_make_the_sink_read_past_output_capacity() {
 	// One item is queued and one is waiting to be sent. Replenishing demand
 	// cannot let the producer collect the remaining items in memory.
 	credits.add_permits(1_000);
+
 	assert!(!task.is_finished());
 	assert_eq!(seen.available_permits(), 0);
+
 	for expected in 0..3 {
 		let ServerFrame::Item { value, .. } = receive(&mut receiver).await else {
 			panic!("each item arrives in order");
 		};
 		assert_eq!(value, serde_json::json!(expected));
 	}
+
 	assert!(matches!(
 		receive(&mut receiver).await,
 		ServerFrame::End { .. }
@@ -59,6 +62,7 @@ async fn dropping_the_receiver_stops_a_blocked_producer() {
 	let task = tokio::spawn(sink.drive(items, plain));
 	saw_two(&seen).await;
 	drop(receiver);
+
 	tokio::time::timeout(Duration::from_secs(1), task)
 		.await
 		.unwrap()
@@ -92,6 +96,7 @@ async fn a_terminal_error_waits_for_capacity_instead_of_disappearing() {
 	else {
 		panic!("the terminal error survives backpressure");
 	};
+
 	assert_eq!(error.message, "refused");
 }
 
@@ -116,6 +121,7 @@ async fn a_failed_producer_stays_tracked_until_its_terminal_frame_is_queued() {
 	assert!(futures::poll!(running.as_mut()).is_pending());
 	assert_eq!(receiver.recv().await.unwrap().text, "held");
 	running.await;
+
 	let ServerFrame::End {
 		err: Some(error), ..
 	} = receive(&mut receiver).await
@@ -163,6 +169,7 @@ async fn an_idle_stream_does_not_reserve_capacity_from_a_ready_neighbor() {
 		.await
 		.unwrap();
 	let ready = StreamSink::new(2, out, Arc::new(Semaphore::new(2)));
+
 	let produced = tokio::spawn(ready.drive(futures::stream::iter([7_u32]), plain));
 	let ServerFrame::Item { stream, value, .. } = receive(&mut receiver).await else {
 		panic!("a ready neighbor can send");

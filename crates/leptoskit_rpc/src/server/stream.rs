@@ -171,6 +171,7 @@ impl StreamSink {
 		let completion = self.completion();
 		let failure = Arc::clone(&self.failure);
 		let pump = async move { open(args, cx, self).await };
+
 		if std::panic::AssertUnwindSafe(pump)
 			.catch_unwind()
 			.await
@@ -215,6 +216,7 @@ impl StreamSink {
 
 			let Some(item) = items.next().await else {
 				self.end(EndReason::Done).await;
+
 				return;
 			};
 
@@ -260,16 +262,20 @@ impl StreamSink {
 		let Ok(text) = serde_json::to_string(frame) else {
 			return false;
 		};
+
 		if text.len() > MAX_FRAME_BYTES {
 			let error = WireError {
 				status: 413,
 				message: format!("a stream frame may contain at most {MAX_FRAME_BYTES} bytes"),
 			};
+
 			if let Ok(text) = serde_json::to_string(&EndReason::Failed(error).frame(self.stream)) {
 				let _ = self.enqueue(text, true).await;
 			}
+
 			return false;
 		}
+
 		self.enqueue(text, matches!(frame, ServerFrame::End { .. }))
 			.await
 	}
@@ -285,9 +291,11 @@ impl StreamSink {
 			})
 			.await
 			.is_ok();
+
 		if sent && terminal {
 			self.terminal.store(true, Ordering::Release);
 		}
+
 		sent
 	}
 }

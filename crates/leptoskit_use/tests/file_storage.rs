@@ -164,6 +164,7 @@ fn encoding_and_io_errors_are_returned_without_hiding_corrupt_data() {
 	fs::create_dir(&path).unwrap();
 	assert!(matches!(store.get("key"), Err(StorageError::Io(_))));
 	assert!(matches!(store.remove("key"), Err(StorageError::Io(_))));
+
 	assert!(matches!(
 		store.set("key", &"next".into()),
 		Err(StorageError::Io(_))

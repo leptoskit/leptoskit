@@ -40,6 +40,7 @@ pub async fn messages(
 	#[serde(default)] before: Option<Id<huddle_db::Message>>,
 ) -> rpc::Result<Vec<MessageView>> {
 	let limit = u64::from(limit.clamp(1, 200));
+
 	let older_than = match before {
 		Some(id) => {
 			huddle_db::Message::find(cx.db(), id)
@@ -48,6 +49,7 @@ pub async fn messages(
 		}
 		None => None,
 	};
+
 	let mut rows = huddle_db::Message::query()
 		.filter(|message| {
 			let here = message.channel_id.eq(channel);

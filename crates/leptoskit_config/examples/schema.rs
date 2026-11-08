@@ -29,9 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} else {
 			schema::configuration(&id)
 		};
+
 		// Match the repository's dprint JSON format for deterministic checks.
 		let formatter = serde_json::ser::PrettyFormatter::with_indent(b"\t");
 		let mut serializer = serde_json::Serializer::with_formatter(Vec::new(), formatter);
+
 		serde::Serialize::serialize(&schema, &mut serializer)?;
 		let mut bytes = serializer.into_inner();
 		bytes.push(b'\n');

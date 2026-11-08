@@ -275,6 +275,7 @@ fn infrastructure(model: &Model) -> Element {
 									Target::RedundantVm => "target-multiple",
 									Target::Kubernetes => "target-kubernetes",
 								};
+
 								Button(target.title())
 									.class(if target == model.target {
 										SELECTED

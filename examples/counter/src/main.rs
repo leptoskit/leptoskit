@@ -40,6 +40,7 @@ fn main() {
 	for count in 0..3 {
 		surface.set_root(&counter_ui(count, &presses));
 	}
+
 	let root = surface.root().expect("root committed");
 	println!("root frame: {:?}", surface.frame(root));
 	println!(
@@ -66,6 +67,7 @@ fn main() {
 			b"\0asm the compiled interface bundle",
 		)
 		.expect("write bundle");
+
 		match leptoskit_codepush::ReleaseStore::open(&store_root) {
 			Ok(store) => {
 				// A fixed demo key; real releases load the publisher key from a

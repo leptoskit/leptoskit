@@ -44,6 +44,7 @@ class ProbeTests(unittest.TestCase):
             "Config": {"Env": ["TOKEN=fixture-current-secret", "PATH=/usr/bin"]},
             "NetworkSettings": {"Networks": {"kamal": {"IPAddress": "127.0.0.1"}}},
         }
+
         self.request = {
             "container": "notes-web-v1", "service": "notes", "port": self.server.server_port,
             "environment": {"TOKEN": "fixture-current-secret"},
@@ -64,6 +65,7 @@ class ProbeTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, timeout=15)
         self.assertNotIn("fixture-current-secret", result.stdout + result.stderr)
         self.assertNotIn("fixture-rotated-secret", result.stdout + result.stderr)
+
         return result
 
     def test_current_running_ready_container_passes(self):
@@ -86,6 +88,7 @@ class ProbeTests(unittest.TestCase):
 
     def test_changed_or_missing_environment_fails_without_leaking_values(self):
         record = copy.deepcopy(self.record)
+
         for values in [[], ["TOKEN=fixture-rotated-secret"]]:
             record["Config"]["Env"] = values
             self.assertNotEqual(self.invoke(record).returncode, 0)

@@ -69,6 +69,7 @@ pub fn firefox() -> Option<PathBuf> {
 	} else {
 		"firefox"
 	});
+
 	candidates.push(PathBuf::from(
 		"/Applications/Firefox.app/Contents/MacOS/firefox",
 	));

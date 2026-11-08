@@ -101,9 +101,11 @@ def channel_key(fields: list[str], args: Mapping[str, Any]) -> str:
     client writes them, so every client of the same instance meets in one room.
     """
     ordered: dict[str, Any] = {field: args.get(field) for field in fields}
+
     for field, value in args.items():
         if field not in ordered:
             ordered[field] = value
+
     return _encode(ordered)
 
 
@@ -111,6 +113,7 @@ def live_url(server_url: str, path: str) -> str:
     """The live URL for a server origin, such as ``https://api.example.com``."""
     if server_url == "":
         raise LiveError(0, "a live connection needs a server URL; pass one to the client")
+
     if server_url.startswith("http"):
         return "ws" + server_url[4:] + path
     return server_url + path
@@ -178,6 +181,7 @@ class _Core:
         self.status = LiveStatus("offline")
         self.listeners: list[Callable[[LiveStatus], None]] = []
         self.version = 0
+
         self._next_id = 1
         self._subscriptions: dict[int, _Subscription] = {}
         self._pending: dict[int, _Pending] = {}
@@ -210,10 +214,12 @@ class _Core:
         subscription = _Subscription(name, _present(args), on_value, on_error, on_end)
         self._subscriptions[subscription_id] = subscription
         self._send({"type": "sub", "id": subscription_id, "query": name, "args": subscription.args})
+
         return subscription_id
 
     def unsubscribe(self, subscription_id: int) -> None:
         subscription = self._subscriptions.pop(subscription_id, None)
+
         if subscription is not None:
             self._send({"type": "unsub", "id": subscription_id})
             _safely(subscription.on_end)
@@ -232,6 +238,7 @@ class _Core:
         future: asyncio.Future[Any] = self.loop.create_future()
         self._pending[request] = _Pending(frame, future)
         self._send(frame)
+
         return future
 
     def join(
@@ -248,6 +255,7 @@ class _Core:
         joined = _Joined(name, _present(args), state, on_signal, on_presence, on_error)
         self._channels[key] = joined
         self._send(_join_frame(key, joined))
+
         return joined
 
     def signal(self, key: str, joined: _Joined, message: Any) -> None:
@@ -266,22 +274,27 @@ class _Core:
 
     async def reauthenticate(self) -> None:
         token = await self._token()
+
         if token:
             self._send({"type": "auth", "token": token})
 
     async def aclose(self) -> None:
         self.closed = True
         task, self._task = self._task, None
+
         if task is not None and task is not asyncio.current_task():
             task.cancel()
             try:
                 await task
+
             except BaseException:  # noqa: BLE001 - the task's own end
                 pass
+
         for pending in self._pending.values():
             if not pending.future.done():
                 pending.future.set_exception(LiveError(0, "the live connection closed"))
         self._pending.clear()
+
         for waiter in self._waiters:
             if waiter.timer is not None:
                 waiter.timer.cancel()
@@ -290,6 +303,7 @@ class _Core:
         subscriptions = list(self._subscriptions.values())
         self._subscriptions.clear()
         self._channels.clear()
+
         for subscription in subscriptions:
             _safely(subscription.on_end)
         self._set_status(LiveStatus("offline"))
@@ -299,6 +313,7 @@ class _Core:
     def _take_id(self) -> int:
         taken = self._next_id
         self._next_id += 1
+
         return taken
 
     def _send(self, frame: dict[str, Any]) -> None:
@@ -314,6 +329,7 @@ class _Core:
         if self.closed:
             raise LiveError(0, "the live connection is closed")
         _connector()
+
         if self._task is None:
             assert self.loop is not None
             self._task = self.loop.create_task(self._run())
@@ -323,15 +339,19 @@ class _Core:
             while not self.closed:
                 try:
                     await self._session()
+
                 except asyncio.CancelledError:
                     raise
+
                 except Exception as error:  # noqa: BLE001 - a lost connection
                     _log.debug("the live connection dropped: %s", error)
+
                 if self.closed:
                     return
                 if not self._busy():
                     self._reconnect_after = None
                     self._set_status(LiveStatus("offline"))
+
                     return
                 if self._reconnect_after is not None:
                     delay = self._reconnect_after
@@ -367,6 +387,7 @@ class _Core:
         self._ready = False
         self._last_heard = self.loop.time()
         writer = self.loop.create_task(_write(socket, outbox))
+
         reader = self.loop.create_task(self._read(socket))
         try:
             await self._greet(outbox)
@@ -375,6 +396,7 @@ class _Core:
             self._socket = None
             self._outbox = None
             self._ready = False
+
             if self._heartbeat is not None:
                 self._heartbeat.cancel()
                 self._heartbeat = None
@@ -382,23 +404,29 @@ class _Core:
             reader.cancel()
             try:
                 await socket.close()
+
             except Exception:  # noqa: BLE001 - already gone
                 pass
 
     async def _greet(self, outbox: asyncio.Queue[str]) -> None:
         """Says hello, signs in, and sends everything the connection holds."""
         hello: dict[str, Any] = {"type": "hello"}
+
         if self.version > 0:
             hello["resume"] = {"version": self.version}
         outbox.put_nowait(_encode(hello))
         try:
             token = await self._token()
+
         except Exception:  # noqa: BLE001 - connect without a token
             token = None
+
         if self._outbox is not outbox:
+
             return
         if token:
             outbox.put_nowait(_encode({"type": "auth", "token": token}))
+
         for subscription_id, subscription in self._subscriptions.items():
             outbox.put_nowait(
                 _encode(
@@ -410,6 +438,7 @@ class _Core:
                     }
                 )
             )
+
         for key, joined in self._channels.items():
             outbox.put_nowait(_encode(_join_frame(key, joined)))
         # The same request id and key: the server's receipt answers a call
@@ -420,27 +449,34 @@ class _Core:
 
     async def _token(self) -> Optional[str]:
         provider = self.options.token
+
         if provider is None:
             return None
         token = provider()
+
         if inspect.isawaitable(token):
             token = await token
+
         return token
 
     async def _read(self, socket: Any) -> None:
         assert self.loop is not None
+
         async for message in socket:
             self._last_heard = self.loop.time()
             text = message.decode("utf-8", "replace") if isinstance(message, bytes) else message
             try:
                 frame = json.loads(text)
+
             except ValueError:
                 continue
+
             if isinstance(frame, dict):
                 self._receive(frame)
 
     def _receive(self, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
+
         if kind == "welcome":
             self._attempt = 0
             # Only transitions advance the applied cursor.
@@ -451,6 +487,7 @@ class _Core:
         elif kind == "transition":
             self._transition(frame)
         elif kind == "done":
+
             self._done(frame)
         elif kind == "auth_status":
             if frame.get("refused") is True:
@@ -464,17 +501,21 @@ class _Core:
         elif kind == "signal":
             joined = self._channels.get(str(frame.get("channel")))
             sender = frame.get("from")
+
             if joined is not None and joined.on_signal is not None:
                 _safely(joined.on_signal, frame.get("message"), sender if isinstance(sender, str) else None)
         elif kind == "presence":
             joined = self._channels.get(str(frame.get("channel")))
             members = frame.get("members")
+
             if joined is not None and isinstance(members, list):
                 joined.members = members
+
                 if joined.on_presence is not None:
                     _safely(joined.on_presence, list(members))
         elif kind == "channel_error":
             joined = self._channels.get(str(frame.get("channel")))
+
             if joined is not None and joined.on_error is not None:
                 _safely(joined.on_error, _wire_error(frame.get("err")))
         # `pong`, and frames a newer server sends that this runtime doesn't
@@ -485,12 +526,15 @@ class _Core:
         updates = frame.get("updates")
         changed: list[tuple[_Subscription, Any]] = []
         failed: list[tuple[_Subscription, LiveError]] = []
+
         for update in updates if isinstance(updates, list) else []:
             if not isinstance(update, dict):
                 continue
             subscription = self._subscriptions.get(_number(update.get("id"), -1))
+
             if subscription is None:
                 continue
+
             if "ok" in update:
                 changed.append((subscription, update["ok"]))
             elif "patch" in update:
@@ -499,10 +543,13 @@ class _Core:
                 failed.append((subscription, _wire_error(update["err"])))
         to = _number(frame.get("to"), self.version)
         self.version = max(self.version, to)
+
         for subscription, value in changed:
             subscription.value = value
+
         for subscription, value in changed:
             _safely(subscription.on_value, value, to)
+
         for subscription, error in failed:
             _safely(subscription.on_error, error)
         self._reached(to)
@@ -512,25 +559,32 @@ class _Core:
         version = _number(frame.get("version"), 0)
         error = frame.get("err")
         pending = self._pending.pop(request, None)
+
         if pending is not None:
             if error is not None:
                 if not pending.future.done():
                     pending.future.set_exception(_wire_error(error))
+
                 return
             value = frame.get("ok")
+
             if not self._subscriptions or self.version >= version:
                 _resolve(pending.future, value)
+
                 return
             assert self.loop is not None
             waiter = _Waiter(version, value, pending.future)
             waiter.timer = self.loop.call_later(self.options.read_your_writes, self._expire, waiter)
             self._waiters.append(waiter)
+
             return
         subscription = self._subscriptions.get(request)
+
         if subscription is None:
             return
         if error is not None:
             _safely(subscription.on_error, _wire_error(error))
+
             return
         subscription.value = frame.get("ok")
         _safely(subscription.on_value, subscription.value, version)
@@ -539,9 +593,11 @@ class _Core:
 
     def _reached(self, version: int) -> None:
         ready = [waiter for waiter in self._waiters if waiter.version <= version]
+
         if not ready:
             return
         self._waiters = [waiter for waiter in self._waiters if waiter.version > version]
+
         for waiter in ready:
             if waiter.timer is not None:
                 waiter.timer.cancel()
@@ -554,6 +610,7 @@ class _Core:
 
     def _start_heartbeat(self, seconds: float) -> None:
         assert self.loop is not None
+
         if self._heartbeat is not None:
             self._heartbeat.cancel()
         self._heartbeat_seconds = max(1.0, float(seconds))
@@ -561,19 +618,24 @@ class _Core:
 
     async def _beat(self, socket: Any) -> None:
         assert self.loop is not None
+
         while self._socket is socket:
             await asyncio.sleep(self._heartbeat_seconds)
+
             if self._socket is not socket:
                 return
             if self.loop.time() - self._last_heard > 2 * self._heartbeat_seconds + 5:
                 # Two missed heartbeats: the connection is gone without
                 # saying so.
                 _abort(socket)
+
                 return
+
             self._send({"type": "ping"})
 
     def _set_status(self, status: LiveStatus) -> None:
         self.status = status
+
         for listener in list(self.listeners):
             _safely(listener, status)
 
@@ -597,6 +659,7 @@ class Watch(Generic[T]):
         self._error: Optional[LiveError] = None
         self._state = 0
         self._seen = 0
+
         self._ended = False
         core = connection._core
         self._id = connection._call(core.subscribe, name, args, self._on_value, self._on_error, self._on_end)
@@ -634,8 +697,10 @@ class Watch(Generic[T]):
         with self._changed:
             if not self._changed.wait_for(lambda: self._ended or matched(), timeout):
                 raise TimeoutError("the watched value didn't arrive in time")
+
             if not matched():
                 raise LiveError(0, "the watch ended")
+
             return cast(T, self._value)
 
     def close(self) -> None:
@@ -650,11 +715,14 @@ class Watch(Generic[T]):
     def __next__(self) -> T:
         with self._changed:
             self._changed.wait_for(lambda: self._state > self._seen or self._ended)
+
             if self._state == self._seen:
                 raise StopIteration
             self._seen = self._state
+
             if self._error is not None:
                 raise self._error
+
             return cast(T, self._value)
 
     def __enter__(self) -> Watch[T]:
@@ -704,6 +772,7 @@ class AsyncWatch(Generic[T]):
         self._error: Optional[LiveError] = None
         self._state = 0
         self._seen = 0
+
         self._ended = False
         self._id = core.subscribe(name, args, self._on_value, self._on_error, self._on_end)
 
@@ -742,6 +811,7 @@ class AsyncWatch(Generic[T]):
                 if self._ended:
                     raise LiveError(0, "the watch ended")
                 await self._wake.wait()
+
             return cast(T, self._value)
 
         return await asyncio.wait_for(until(), timeout)
@@ -758,11 +828,14 @@ class AsyncWatch(Generic[T]):
     async def __anext__(self) -> T:
         while self._state == self._seen and not self._ended:
             await self._wake.wait()
+
         if self._state == self._seen:
             raise StopAsyncIteration
         self._seen = self._state
+
         if self._error is not None:
             raise self._error
+
         return cast(T, self._value)
 
     async def __aenter__(self) -> AsyncWatch[T]:
@@ -902,6 +975,7 @@ class LiveConnection:
         once.
         """
         loop = self._start()
+
         if self._on_loop():
             raise LiveError(0, "a live callback can't wait for a mutation; use AsyncClient or a thread")
 
@@ -924,13 +998,16 @@ class LiveConnection:
         """Joins the instance ``key`` of the channel ``name``."""
         core = self._core
         joined = self._call(core.join, name, key, args, presence, on_signal, on_presence, on_error)
+
         return Channel(self._call, core, key, joined)
 
     def reauthenticate(self) -> None:
         """Sends the token again, such as after signing in."""
         loop = self._start()
+
         if self._on_loop():
             loop.create_task(self._core.reauthenticate())
+
             return
         asyncio.run_coroutine_threadsafe(self._core.reauthenticate(), loop).result()
 
@@ -939,17 +1016,22 @@ class LiveConnection:
         with self._lock:
             loop = self._core.loop
             thread = self._thread
+
         if loop is None or thread is None or self._core.closed:
             self._core.closed = True
+
             return
         if self._on_loop():
             loop.create_task(self._core.aclose())
+
             return
+
         try:
             asyncio.run_coroutine_threadsafe(self._core.aclose(), loop).result(timeout=10)
         finally:
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=10)
+
             if not thread.is_alive():
                 loop.close()
 
@@ -967,6 +1049,7 @@ class LiveConnection:
                 thread.start()
                 self._core.loop = loop
                 self._thread = thread
+
             return self._core.loop
 
     def _on_loop(self) -> bool:
@@ -978,6 +1061,7 @@ class LiveConnection:
             # Nothing runs on the loop anymore: the core is the caller's.
             return function(*args)
         loop = self._start()
+
         if self._on_loop():
             return function(*args)
         done: concurrent.futures.Future[T] = concurrent.futures.Future()
@@ -985,10 +1069,12 @@ class LiveConnection:
         def run() -> None:
             try:
                 done.set_result(function(*args))
+
             except BaseException as error:  # noqa: BLE001 - handed to the caller
                 done.set_exception(error)
 
         loop.call_soon_threadsafe(run)
+
         return done.result()
 
 
@@ -1034,6 +1120,7 @@ class AsyncLiveConnection:
     def watch(self, name: str, args: Any) -> AsyncWatch[Any]:
         """Watches the query ``name``."""
         self._bind()
+
         return AsyncWatch(self._core, name, args)
 
     async def mutate(self, name: str, args: Any, idempotency_key: Optional[str] = None) -> Any:
@@ -1046,6 +1133,7 @@ class AsyncLiveConnection:
         once.
         """
         self._bind()
+
         return await self._core.mutate(name, args, idempotency_key)
 
     def join(
@@ -1062,6 +1150,7 @@ class AsyncLiveConnection:
         """Joins the instance ``key`` of the channel ``name``."""
         self._bind()
         joined = self._core.join(name, key, args, presence, on_signal, on_presence, on_error)
+
         return Channel(_direct, self._core, key, joined)
 
     async def reauthenticate(self) -> None:
@@ -1072,6 +1161,7 @@ class AsyncLiveConnection:
         """Closes the connection for good; pending mutations fail, and watches end."""
         if self._core.loop is None:
             self._core.closed = True
+
             return
         await self._core.aclose()
 
@@ -1083,6 +1173,7 @@ class AsyncLiveConnection:
 
     def _bind(self) -> None:
         loop = asyncio.get_running_loop()
+
         if self._core.loop is None:
             self._core.loop = loop
         elif self._core.loop is not loop:
@@ -1110,6 +1201,7 @@ async def _write(socket: Any, outbox: asyncio.Queue[str]) -> None:
 
 def _abort(socket: Any) -> None:
     transport = getattr(socket, "transport", None)
+
     if transport is not None:
         transport.abort()
 
@@ -1117,10 +1209,12 @@ def _abort(socket: Any) -> None:
 def _connector() -> Any:
     try:
         from websockets.asyncio.client import connect
+
     except ImportError as error:
         raise ImportError(
             "the live connection needs websockets 13 or newer; install the live extra"
         ) from error
+
     return connect
 
 
@@ -1129,15 +1223,20 @@ def _apply_patch(value: Any, patch: Any) -> Any:
     if not isinstance(patch, dict):
         return value
     field = patch.get("field")
+
     if isinstance(field, str):
         if not isinstance(value, dict):
             return value
         fields = dict(value)
         changed = patch.get("set")
+
         if isinstance(changed, dict):
+
             fields.update(changed)
+
         if field in fields:
             fields[field] = _apply_rows(fields[field], patch)
+
         return fields
     return _apply_rows(value, patch)
 
@@ -1154,23 +1253,28 @@ def _apply_rows(value: Any, patch: dict[str, Any]) -> Any:
         if not (isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"] in removed)
     ]
     upserts = patch.get("upsert")
+
     for upsert in upserts if isinstance(upserts, list) else []:
         if not isinstance(upsert, dict):
             continue
+
         at = max(0, min(int(_number(upsert.get("at"), len(items))), len(items)))
         row = upsert.get("value")
         row_id = row.get("id") if isinstance(row, dict) else None
         previous = items[at] if at < len(items) else None
+
         if isinstance(row_id, str) and isinstance(previous, dict) and previous.get("id") == row_id:
             items[at] = row
         else:
             items.insert(at, row)
+
     return items
 
 
 def _wire_error(err: Any) -> LiveError:
     error = err if isinstance(err, dict) else {}
     message = error.get("message")
+
     return LiveError(_number(error.get("status"), 500), str(message if message is not None else "the server failed"))
 
 
@@ -1184,6 +1288,7 @@ def _present(args: Any) -> Any:
     """The arguments without absent optional fields, as the HTTP calls send them."""
     if args is None:
         return {}
+
     if isinstance(args, Mapping):
         return {key: item for key, item in args.items() if item is not None}
     return args
@@ -1203,5 +1308,6 @@ def _safely(callback: Callable[..., Any], *args: Any) -> None:
     """Calls an app's callback; a failure in it is logged, not the connection's."""
     try:
         callback(*args)
+
     except Exception:  # noqa: BLE001 - the app's bug, not the protocol's
         _log.exception("a live callback failed")

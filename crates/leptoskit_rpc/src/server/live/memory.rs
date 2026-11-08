@@ -167,6 +167,7 @@ impl Connection for Memory {
 						Some(Outbound::Heartbeat) => {}
 						None => return Ok(None),
 					},
+
 					// An outage drops the connection.
 					_ = down.changed() => return Ok(None),
 				}

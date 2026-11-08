@@ -147,6 +147,7 @@ async fn renders_moves_pauses_and_releases_the_real_runtime() {
 	let paused = pixels(&canvas);
 	advance(5).await;
 	assert_eq!(paused, pixels(&canvas));
+
 	assert!(Player::new(&runtime, &canvas, &asset(), &options).is_err());
 	player.close().unwrap();
 	assert_eq!(canvas.width(), 300);
@@ -213,6 +214,7 @@ async fn validates_inputs_and_rejects_broken_files_and_scene_names() {
 	);
 	drop(player);
 	let broken = Asset::new(b"RIVE\x07\x00\x00\x00").unwrap();
+
 	let player = Player::new(&runtime, &canvas, &broken, &options).unwrap();
 	assert!(player.ready().await.is_err());
 	drop(player);

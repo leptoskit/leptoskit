@@ -146,6 +146,7 @@ private struct BinaryReader {
         let opacity = has(13) ? try float() : nil
         let fontSize = has(14) ? try float() : nil
         let fontWeight = has(15) ? try choice(Self.fontWeights) : nil
+
         let textAlign = has(16) ? try choice(Self.textAligns) : nil
         let transform = has(17) ? try self.transform() : nil
         let animation = has(18) ? try self.animation() : nil

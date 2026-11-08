@@ -111,6 +111,7 @@ async function measure(origin) {
 		);
 		await page.send("Network.setCacheDisabled", { cacheDisabled: true });
 		await page.send("Emulation.setDeviceMetricsOverride", DEVICE);
+
 		await page.send("Network.emulateNetworkConditions", NETWORK);
 		await page.send("Emulation.setCPUThrottlingRate", {
 			rate: CPU_SLOWDOWN,
@@ -126,6 +127,7 @@ async function measure(origin) {
 			inFlight.add(requestId);
 			lastActivity = performance.now();
 		});
+
 		for (const event of ["Network.loadingFinished", "Network.loadingFailed"]) {
 			page.on(event, ({ requestId }) => {
 				inFlight.delete(requestId);
@@ -136,9 +138,11 @@ async function measure(origin) {
 		const loaded = page.once("Page.loadEventFired");
 		await page.send("Page.navigate", { url: `${origin}/` });
 		await loaded;
+
 		while (inFlight.size > 0 || performance.now() - lastActivity < 2_000) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
+
 		assert(
 			await page.evaluate(
 				`performance.getEntriesByType("resource").every(({ name }) => !name.includes("/bootstrap.js"))`,
@@ -162,6 +166,7 @@ async function measure(origin) {
 		while (inFlight.size > 0 || performance.now() - lastActivity < 2_000) {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
+
 		const window = await page.evaluate(`(() => {
 			const start = ${start};
 			const longTasks = globalThis.__longTasks.filter((task) => task.startTime >= start);
@@ -185,6 +190,7 @@ async function measure(origin) {
 				requests,
 			};
 		})()`);
+
 		return {
 			mounted_ms: Math.round(mounted - start),
 			rive_at_mount: rive,
@@ -199,6 +205,7 @@ async function measure(origin) {
 		await page?.close();
 		chrome.process.kill();
 		await chrome.process.status;
+
 		await removeProfile(profile);
 	}
 }
@@ -206,6 +213,7 @@ async function measure(origin) {
 function median(values) {
 	const sorted = [...values].sort((a, b) => a - b);
 	const middle = Math.floor(sorted.length / 2);
+
 	return sorted.length % 2
 		? sorted[middle]
 		: Math.round((sorted[middle - 1] + sorted[middle]) / 2);
@@ -216,9 +224,11 @@ const server = serve(site.replace(/\/$/, ""), { encoding });
 const results = [];
 try {
 	const origin = `http://127.0.0.1:${server.addr.port}`;
+
 	for (let run = 1; run <= runs; run++) {
 		const result = await measure(origin);
 		results.push(result);
+
 		console.log(
 			`run ${run}: mounted ${result.mounted_ms} ms, interactive ${result.interactive_ms} ms, ` +
 				`second press ${result.pressed_ms} ms (event ${result.press_ms} ms), ` +
@@ -247,6 +257,7 @@ for (
 	);
 }
 console.log("\nrequests after the scroll (first run):");
+
 for (const request of results[0].requests) {
 	console.log(
 		`  ${request.path.padEnd(48)} ${
@@ -257,6 +268,7 @@ for (const request of results[0].requests) {
 			} B decoded, ${request.start}–${request.end} ms`,
 	);
 }
+
 if (out) {
 	await Deno.writeTextFile(
 		out,

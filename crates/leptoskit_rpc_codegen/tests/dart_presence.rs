@@ -59,6 +59,7 @@ fn dart_requiredness_and_nullability_are_independent() {
 		source.contains("_requiredValue(json, 'required_nullable_text')"),
 		"{source}"
 	);
+
 	assert!(
 		!source.contains("if (requiredNullableText != null)"),
 		"a required nullable field is never omitted: {source}"
@@ -72,13 +73,17 @@ fn generated_dart_presence_round_trips() {
 		ApiSpec::from_json(include_str!("fixtures/dart_presence.json")).expect("fixture spec");
 	let generated = spec.generate(&GenerateOptions::new(TargetLanguage::Dart, "presence"));
 	let dir = tempfile::tempdir().expect("temporary Dart package");
+
 	for file in generated.files {
 		let path = dir.path().join(file.path);
+
 		if let Some(parent) = path.parent() {
 			std::fs::create_dir_all(parent).expect("generated directory");
 		}
+
 		std::fs::write(path, file.contents).expect("generated file");
 	}
+
 	std::fs::create_dir_all(dir.path().join("tool")).expect("tool directory");
 	std::fs::write(
 		dir.path().join("tool/presence.dart"),

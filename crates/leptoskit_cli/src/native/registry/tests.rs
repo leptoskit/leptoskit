@@ -80,9 +80,11 @@ fn apps_that_draw_scenes_get_the_bridge_s_scene3d_feature() {
 	let registry = resolve_metadata(scene_metadata(&[]), &config).unwrap();
 	assert!(!registry.scene3d);
 	assert_eq!(registry.host_features, [] as [String; 0]);
+
 	for feature in ["guest", "web", "renderer"] {
 		let registry = resolve_metadata(scene_metadata(&[feature]), &config).unwrap();
 		assert!(registry.scene3d, "{feature}");
+
 		assert_eq!(
 			registry.host_features,
 			["ffi/scene3d"],

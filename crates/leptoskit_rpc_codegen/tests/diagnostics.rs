@@ -127,6 +127,7 @@ fn targets_differ_in_what_they_can_represent() {
 			"these targets preserve an arbitrary union"
 		);
 	}
+
 	for diagnostics in [&go, &rust, &dart, &cli] {
 		assert_eq!(
 			kinds(diagnostics, "components.Choice"),
@@ -138,6 +139,7 @@ fn targets_differ_in_what_they_can_represent() {
 	// A tagged serde enum is structured in Rust; Go and Dart still flatten
 	// every union to their dynamic type.
 	assert!(at(&rust, "components.Event").is_empty(), "{rust:#?}");
+
 	for diagnostics in [&go, &dart] {
 		assert_eq!(
 			kinds(diagnostics, "components.Event"),
@@ -151,6 +153,7 @@ fn targets_differ_in_what_they_can_represent() {
 			"these targets carry a fixed tuple"
 		);
 	}
+
 	for diagnostics in [&go, &dart] {
 		assert_eq!(
 			kinds(diagnostics, "components.Point"),
@@ -166,6 +169,7 @@ fn targets_differ_in_what_they_can_represent() {
 		kinds(&dart, "components.Account.properties.id"),
 		[DiagnosticKind::IntegerPrecision]
 	);
+
 	for diagnostics in [&python, &go, &rust, &cli] {
 		assert!(
 			at(diagnostics, "components.Account.properties.id").is_empty(),
@@ -266,12 +270,16 @@ fn optional_nullable_fields_and_explicit_extra_properties_are_reported() {
 	spec.schemas.get_mut("User").unwrap()["properties"]["note"] =
 		json!({ "type": ["string", "null"] });
 	spec.schemas.get_mut("User").unwrap()["additionalProperties"] = json!({ "type": "string" });
+
 	for target in TargetLanguage::ALL {
 		let found = diagnostics(&spec, *target);
+
 		if *target == TargetLanguage::OpenApi {
 			assert_eq!(found, []);
+
 			continue;
 		}
+
 		assert_eq!(
 			kinds(&found, "components.User.additionalProperties"),
 			[DiagnosticKind::AdditionalPropertiesLost]
@@ -309,6 +317,7 @@ fn typed_conditional_shapes_are_not_silently_accepted() {
 #[test]
 fn bounded_wide_integers_are_safe_for_javascript_targets() {
 	let mut spec = supported_spec();
+
 	for target in [TargetLanguage::TypeScript, TargetLanguage::Dart] {
 		for format in ["int64", "uint64"] {
 			spec.schemas.get_mut("User").unwrap()["properties"]["id"] = json!({
@@ -407,6 +416,7 @@ fn dart_query_and_form_arguments_report_null_encoding_loss() {
 		kinds(&found, "functions.read.params.nested.properties.note"),
 		[DiagnosticKind::NullableCollapsed]
 	);
+
 	assert_eq!(
 		kinds(
 			&found,
@@ -483,6 +493,7 @@ fn dart_null_only_and_untyped_values_need_json_encoding() {
 			[DiagnosticKind::NullableCollapsed]
 		);
 		spec.functions[0].input = HttpInput::Json;
+
 		assert_eq!(
 			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
 			vec![]

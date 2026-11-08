@@ -70,13 +70,16 @@ fn serves_pages_and_stops_on(signal: &str) {
 		.expect("run kill");
 	assert!(signalled.success());
 	let deadline = Instant::now() + Duration::from_secs(10);
+
 	let status = loop {
 		if let Some(status) = server.try_wait().expect("poll the server") {
 			break status;
 		}
+
 		assert!(Instant::now() < deadline, "the server ignored SIG{signal}");
 		std::thread::sleep(Duration::from_millis(20));
 	};
+
 	let _ = std::fs::remove_dir_all(&site_root);
 	assert!(
 		status.success(),

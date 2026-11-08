@@ -40,6 +40,7 @@ pub extern "C" fn leptoskit_main() {
 				} else {
 					Err(Error::InvalidArgument)
 				};
+
 				assert_eq!(filesystem.write("test", b"content").await, expected);
 				assert_eq!(filesystem.mkdir("directory").await, expected);
 				assert_eq!(filesystem.remove("test").await, expected);
@@ -59,6 +60,7 @@ pub extern "C" fn leptoskit_main() {
 					assert_eq!(result, Err(Error::InvalidArgument));
 				}
 			}
+
 			DONE.with(|done| done.set(true));
 		}));
 	});

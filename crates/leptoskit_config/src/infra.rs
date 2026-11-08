@@ -254,9 +254,11 @@ impl InfraAnalytics {
 				&& s.bytes()
 					.all(|b| b.is_ascii_alphanumeric() || b"/:-_.*{}".contains(&b))
 		};
+
 		if self.version != 1 {
 			return Some("infra.plugins.analytics.version must be 1".into());
 		}
+
 		if !valid(&self.environment)
 			|| !(1..=60).contains(&self.retained_windows)
 			|| !(1..=512).contains(&self.max_series)
@@ -345,6 +347,7 @@ impl InfraConfig {
 		if self.ssh_key_ids.is_empty() || self.ssh_cidrs.is_empty() {
 			return Some("infra requires existing ssh_key_ids and administrator ssh_cidrs".into());
 		}
+
 		for cidr in &self.ssh_cidrs {
 			let valid = cidr.split_once('/').is_some_and(|(ip, bits)| {
 				match (ip.parse::<std::net::IpAddr>(), bits.parse::<u8>()) {
@@ -352,10 +355,12 @@ impl InfraConfig {
 					_ => false,
 				}
 			});
+
 			if !valid {
 				return Some("infra.ssh_cidrs requires valid CIDRs with nonzero prefixes".into());
 			}
 		}
+
 		None
 	}
 
@@ -364,6 +369,7 @@ impl InfraConfig {
 			if external.origin_port == 0 {
 				return Some("infra.external.origin_port must be between 1 and 65535".into());
 			}
+
 			if self.instances != 1
 				|| self.services.cache
 				|| self.services.relay
@@ -394,10 +400,12 @@ impl InfraConfig {
 					"infra.external does not use image, registry or code-push settings".into(),
 				);
 			}
+
 			if self.b2.is_some() && self.backup_bucket.is_empty() {
 				return Some("infra.b2 requires a backup_bucket".into());
 			}
 		}
+
 		None
 	}
 
@@ -420,12 +428,15 @@ impl InfraConfig {
 		if let Some(problem) = self.external_problem() {
 			return Some(problem);
 		}
+
 		if self.hosted_state && self.state.is_some() {
 			return Some("choose hosted_state or infra.state, not both".into());
 		}
+
 		if let Some(problem) = self.plugins_problem().or_else(|| self.postgres.problem()) {
 			return Some(problem);
 		}
+
 		let safe = |text: &str| {
 			!text.is_empty()
 				&& text
@@ -444,9 +455,11 @@ impl InfraConfig {
 					.into(),
 			);
 		}
+
 		if !(1..=16).contains(&self.instances) {
 			return Some("infra.instances must be between 1 and 16".into());
 		}
+
 		if self.instances > 1 && !self.services.relay {
 			return Some(
 				"several hosts require infra.services.relay so live presence and signals are \
@@ -454,6 +467,7 @@ impl InfraConfig {
 					.into(),
 			);
 		}
+
 		if self.backups.daily == 0
 			|| self.backups.max_age_hours == 0
 			|| self.backups.schedule.is_empty()
@@ -469,6 +483,7 @@ impl InfraConfig {
 					.into(),
 			);
 		}
+
 		if self
 			.b2
 			.as_ref()
@@ -476,11 +491,13 @@ impl InfraConfig {
 		{
 			return Some("infra.b2.region must be a B2 region name".into());
 		}
+
 		if self.server_type.starts_with("cax") {
 			return Some(
 				"the managed preset uses amd64 images; select an x86 Hetzner server type".into(),
 			);
 		}
+
 		if !safe(&self.name) || self.name.contains(['/', '.']) || self.name.starts_with('-') {
 			return Some(
 				"infra.name must contain only letters, digits, hyphens, and underscores".into(),
@@ -497,6 +514,7 @@ impl InfraConfig {
 			{
 				continue;
 			}
+
 			if !(safe(value) || port_registry_value(key, value, &self.registry)) {
 				return Some(format!("infra.{key} contains unsupported characters"));
 			}
@@ -508,6 +526,7 @@ impl InfraConfig {
 			if self.external.is_some() && key == "updates_domain" {
 				continue;
 			}
+
 			if !value.contains('.')
 				|| value.split('.').any(|label| {
 					label.is_empty()
@@ -520,6 +539,7 @@ impl InfraConfig {
 				return Some(format!("infra.{key} must be a DNS hostname"));
 			}
 		}
+
 		if self.external.is_none()
 			&& (self.domain == self.updates_domain || self.backup_bucket == self.updates_bucket)
 		{
@@ -527,6 +547,7 @@ impl InfraConfig {
 				"application/update hostnames and backup/update buckets must be distinct".into(),
 			);
 		}
+
 		for value in [&self.account_id, &self.zone_id] {
 			if value.len() != 32 || !value.bytes().all(|c| c.is_ascii_hexdigit()) {
 				return Some(
@@ -534,10 +555,12 @@ impl InfraConfig {
 				);
 			}
 		}
+
 		for value in [&self.backup_bucket, &self.updates_bucket] {
 			if self.external.is_some() && value.is_empty() {
 				continue;
 			}
+
 			if !(3..=63).contains(&value.len())
 				|| !value
 					.bytes()
@@ -548,6 +571,7 @@ impl InfraConfig {
 				);
 			}
 		}
+
 		if let Some(problem) = self.ssh_problem() {
 			return Some(problem);
 		}
@@ -555,6 +579,7 @@ impl InfraConfig {
 		if self.secrets.iter().any(|name| !env_name(name)) {
 			return Some("infra.secrets entries must be environment variable names".into());
 		}
+
 		if let Some(state) = &self.state
 			&& ([&state.bucket, &state.key, &state.region]
 				.iter()
@@ -672,6 +697,7 @@ mod tests {
 		assert!(plugin.problem().is_some());
 		plugin.version = 1;
 		plugin.browser_routes = vec!["/notes/{id}".into()];
+
 		assert!(plugin.problem().is_none());
 		plugin.browser_routes = vec!["/notes?token=secret".into()];
 		assert!(plugin.problem().is_some());

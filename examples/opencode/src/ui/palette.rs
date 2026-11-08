@@ -140,6 +140,7 @@ fn rows_for(palette: &Palette) -> Vec<Row> {
 			if !group.is_empty() {
 				rows.push(Row::Gap);
 			}
+
 			group = command.group;
 			rows.push(Row::Group(group));
 		}

@@ -119,6 +119,7 @@ pub(super) fn invoke(
 					.all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
 		"snapshot must be latest or an 8–64 character hexadecimal id"
 	);
+
 	let reservation = match owner {
 		Some(value) => {
 			ensure!(
@@ -129,6 +130,7 @@ pub(super) fn invoke(
 		}
 		None => String::new(),
 	};
+
 	let script = format!(
 		"python3 {}/recovery.py {} --snapshot {}{}{}",
 		remote::quote(&remote::base(&c.name)),

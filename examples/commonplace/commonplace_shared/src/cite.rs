@@ -98,6 +98,7 @@ fn month_name(month: u32) -> &'static str {
 /// MLA abbreviates months longer than four letters.
 fn mla_month(month: u32) -> String {
 	let name = month_name(month);
+
 	if name.len() > 4 && month != 9 {
 		format!("{}.", &name[..3])
 	} else if month == 9 {
@@ -111,6 +112,7 @@ fn mla_month(month: u32) -> String {
 /// organization, stays as it is.
 fn apa_author(author: &str) -> String {
 	let words: Vec<&str> = author.split_whitespace().collect();
+
 	match words.split_last() {
 		Some((family, given)) if !given.is_empty() => {
 			let initials: Vec<String> = given
@@ -120,6 +122,7 @@ fn apa_author(author: &str) -> String {
 				.collect();
 			format!("{family}, {}", initials.join(" "))
 		}
+
 		_ => author.trim().to_owned(),
 	}
 }
@@ -127,6 +130,7 @@ fn apa_author(author: &str) -> String {
 /// "Ada Lovelace" as "Lovelace, Ada".
 fn inverted(author: &str) -> String {
 	let words: Vec<&str> = author.split_whitespace().collect();
+
 	match words.split_last() {
 		Some((family, given)) if !given.is_empty() => format!("{family}, {}", given.join(" ")),
 		_ => author.trim().to_owned(),
@@ -135,6 +139,7 @@ fn inverted(author: &str) -> String {
 
 fn sentence_end(text: &str) -> String {
 	let text = text.trim();
+
 	if text.ends_with(['.', '?', '!']) {
 		text.to_owned()
 	} else {
@@ -167,6 +172,7 @@ fn apa(source: &PublicSource) -> String {
 		Some(Published { year, .. }) => format!("({year})"),
 		None => "(n.d.)".to_owned(),
 	};
+
 	let title = sentence_end(&source.title);
 	let site = source
 		.site
@@ -189,15 +195,19 @@ fn apa(source: &PublicSource) -> String {
 
 fn mla(source: &PublicSource) -> String {
 	let mut citation = String::new();
+
 	if let Some(author) = source.author.as_deref() {
 		citation.push_str(&sentence_end(&inverted(author)));
 		citation.push(' ');
 	}
+
 	let _ = write!(citation, "\u{201c}{}\u{201d}", sentence_end(&source.title));
 	let mut container = Vec::new();
+
 	if let Some(site) = source.site.as_deref() {
 		container.push(site.trim().to_owned());
 	}
+
 	if let Some(date) = published(source) {
 		container.push(match (date.month, date.day) {
 			(Some(month), Some(day)) => format!("{day} {} {}", mla_month(month), date.year),
@@ -205,6 +215,7 @@ fn mla(source: &PublicSource) -> String {
 			_ => date.year.to_string(),
 		});
 	}
+
 	container.push(
 		source
 			.url
@@ -244,37 +255,48 @@ fn bibtex_key(source: &PublicSource) -> String {
 
 fn bibtex_escape(text: &str) -> String {
 	let mut escaped = String::with_capacity(text.len());
+
 	for character in text.chars() {
 		if matches!(character, '{' | '}' | '&' | '%' | '$' | '#' | '_') {
 			escaped.push('\\');
 		}
+
 		escaped.push(character);
 	}
+
 	escaped
 }
 
 fn bibtex(source: &PublicSource) -> String {
 	let mut fields = Vec::new();
+
 	if let Some(author) = source.author.as_deref() {
 		fields.push(("author", bibtex_escape(&inverted(author))));
 	}
+
 	fields.push(("title", bibtex_escape(source.title.trim())));
+
 	if let Some(site) = source.site.as_deref() {
 		fields.push(("organization", bibtex_escape(site.trim())));
 	}
+
 	if let Some(date) = published(source) {
 		fields.push(("year", date.year.to_string()));
+
 		if let Some(month) = date.month {
 			fields.push(("month", month.to_string()));
 		}
 	}
+
 	fields.push(("url", source.url.clone()));
 	fields.push(("urldate", source.accessed_at.format("%Y-%m-%d").to_string()));
 
 	let mut entry = format!("@online{{{},\n", bibtex_key(source));
+
 	for (name, value) in fields {
 		let _ = writeln!(entry, "  {name} = {{{value}}},");
 	}
+
 	entry.push('}');
 	entry
 }
@@ -295,11 +317,14 @@ pub fn bibliography(sources: &[PublicSource], style: Style) -> String {
 	let separator = if style == Style::Bibtex { "\n\n" } else { "\n" };
 	let mut keys: Vec<String> = Vec::new();
 	let mut entries = Vec::new();
+
 	for source in sorted {
 		let mut entry = cite(source, style);
+
 		if style == Style::Bibtex {
 			let key = bibtex_key(source);
 			let repeats = keys.iter().filter(|seen| **seen == key).count();
+
 			if repeats > 0
 				|| sources
 					.iter()
@@ -312,7 +337,9 @@ pub fn bibliography(sources: &[PublicSource], style: Style) -> String {
 			}
 			keys.push(key);
 		}
+
 		entries.push(entry);
 	}
+
 	entries.join(separator)
 }

@@ -34,6 +34,7 @@ public final class PosturePlugin: NativePlugin {
         let previous = try previousPosture(method: method, payload: payload)
 
         #if canImport(UIKit, _version: 9127.0.85)
+
         return try await watch(from: previous)
         #elseif canImport(UIKit)
         _ = try context.requireAttachedOwner()
@@ -101,6 +102,7 @@ public final class PosturePlugin: NativePlugin {
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+
                 guard !Task.isCancelled, !closed else {
                     continuation.resume(throwing: PluginError.cancelled)
 

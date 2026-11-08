@@ -43,6 +43,7 @@ mod feed;
 mod images;
 #[cfg(feature = "server")]
 mod log;
+
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod maintenance;
 #[cfg(feature = "postgres")]

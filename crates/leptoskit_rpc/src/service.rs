@@ -195,6 +195,7 @@ mod tests {
 			"LEPTOSKIT_SERVICE_CARDS_TOKEN"
 		);
 		assert!(is_service_name("a1-b"));
+
 		for name in ["", "1a", "-a", "a_b", "aB", "a.b"] {
 			assert!(!is_service_name(name), "{name:?}");
 		}

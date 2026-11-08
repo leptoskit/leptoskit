@@ -246,6 +246,7 @@ mod linux {
 			disconnects(&holder),
 			"the final owner's drop closes the inhibiting connection"
 		);
+
 		let again = Lease::acquire("LeptosKit test", "a fresh inhibitor")
 			.map_err(|error| format!("acquire: {error:?}"))?;
 		assert_eq!(again.owners(), 1);

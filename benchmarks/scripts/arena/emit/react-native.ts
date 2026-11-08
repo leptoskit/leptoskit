@@ -366,12 +366,14 @@ export const emitter: TierEmitter = {
 			},
 		);
 		await Deno.mkdir(screensDir, { recursive: true });
+
 		for (const screen of app.screens) {
 			await Deno.writeTextFile(
 				`${screensDir}/${componentName(screen)}.tsx`,
 				screenSource(screen),
 			);
 		}
+
 		const source = app.screens.length === 1
 			? singleScreenApp(app.screens[0])
 			: menuApp(app);

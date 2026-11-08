@@ -84,6 +84,7 @@ class UIMethodError extends Error {
 		if (typeof this.result !== "object" || this.result === null) return false;
 		const code: unknown = Reflect.get(this.result, "code");
 		const data: unknown = Reflect.get(this.result, "data");
+
 		return code === 3 || (code === 1 && (data === "" || data === undefined));
 	}
 }
@@ -112,6 +113,7 @@ function numberField(value: unknown, field: string): number | undefined {
 	const found: unknown = typeof value === "object" && value !== null
 		? Reflect.get(value, field)
 		: undefined;
+
 	return typeof found === "number" ? found : undefined;
 }
 
@@ -123,19 +125,24 @@ async function scrollOffset(list: NodesRef): Promise<number> {
 	try {
 		const info = await invoke(list, "getScrollInfo");
 		const offset = numberField(info, "scrollY");
+
 		if (offset === undefined) {
 			throw new Error(`getScrollInfo returned ${JSON.stringify(info)}`);
 		}
+
 		return offset;
 	} catch (error: unknown) {
 		if (!(error instanceof UIMethodError && error.unsupported)) throw error;
+
 		const info = await invoke(list, "getScrollContainerInfo");
 		const offset = numberField(info, "scrollTop");
+
 		if (offset === undefined) {
 			throw new Error(
 				`getScrollContainerInfo returned ${JSON.stringify(info)}`,
 			);
 		}
+
 		return offset;
 	}
 }
@@ -152,11 +159,13 @@ type ScrollMode = "scrollBy" | "scrollToPosition";
 async function chooseScrollMode(list: NodesRef): Promise<ScrollMode> {
 	try {
 		await invoke(list, "scrollBy", { offset: 0 });
+
 		return "scrollBy";
 	} catch (error: unknown) {
 		if (error instanceof UIMethodError && error.unsupported) {
 			return "scrollToPosition";
 		}
+
 		throw error;
 	}
 }
@@ -165,6 +174,7 @@ async function chooseScrollMode(list: NodesRef): Promise<ScrollMode> {
 async function waitForCells(list: NodesRef): Promise<void> {
 	const deadline = now() + 30_000;
 	let cells: unknown;
+
 	while (now() < deadline) {
 		cells = await invoke(list, "getVisibleCells");
 		// iOS and the web answer `{ attachedCells: [...] }`; Android answers the array.
@@ -172,9 +182,11 @@ async function waitForCells(list: NodesRef): Promise<void> {
 			Array.isArray(cells) || typeof cells !== "object" || cells === null
 				? cells
 				: Reflect.get(cells, "attachedCells");
+
 		if (Array.isArray(attached) && attached.length > 0) return;
 		await nextFrame();
 	}
+
 	throw new Error(
 		`the feed list laid out no cells within 30 s (getVisibleCells: ${
 			JSON.stringify(cells)
@@ -234,6 +246,7 @@ export function Autoscroll(props: ScenarioProps) {
 				}
 				if (frames === 1) setPhase("running");
 			}
+
 			// Let the last scroll land before checking.
 			await sleep(300);
 			if (scrollError !== undefined) throw scrollError;
@@ -245,6 +258,7 @@ export function Autoscroll(props: ScenarioProps) {
 					`the list is at ${round3(actual)}, expected ${round3(offset)}`,
 				);
 			}
+
 			finish({
 				ok: true,
 				metrics: {
@@ -266,6 +280,7 @@ export function Autoscroll(props: ScenarioProps) {
 
 function busyWait(ms: number): void {
 	const until = now() + ms;
+
 	while (now() < until) {
 		// Hold the background thread, where ReactLynx state and logic run.
 	}
@@ -302,11 +317,13 @@ export function Busy(props: ScenarioProps) {
 						`the list stopped at ${round3(offset)}, expected ${target}`,
 					);
 				}
+
 				busyWait(BUSY_BLOCK_MS);
 				blocks += 1;
 				await sleep(BUSY_PERIOD_MS - BUSY_BLOCK_MS);
 				offset = await scrollOffset(list);
 			}
+
 			finish({
 				ok: true,
 				metrics: {

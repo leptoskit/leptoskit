@@ -81,6 +81,7 @@ export function mount(
 	let resize;
 	let intersection;
 	let timer;
+
 	let inputs;
 
 	function assertLive() {

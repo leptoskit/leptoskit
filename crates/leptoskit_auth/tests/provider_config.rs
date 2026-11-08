@@ -144,6 +144,7 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 		("name", "Company SSO"),
 	]);
 	company.scopes = Some(vec!["email".into()]);
+
 	providers.insert("company".to_owned(), company);
 	let mut config = LeptoskitConfig::default();
 
@@ -202,6 +203,7 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 
 	// A kind leptoskit doesn't know is named, and nothing starts.
 	let mut misconfigured = config.clone();
+
 	if let Some(auth) = &mut misconfigured.auth {
 		auth.providers.insert(
 			"myspace".into(),
@@ -211,6 +213,7 @@ async fn providers_and_the_mfa_policy_come_from_leptoskit_toml() {
 			},
 		);
 	}
+
 	let error = Auth::from_config(&db, &misconfigured).unwrap_err();
 	assert!(
 		matches!(&error, AuthError::Config(message) if message.contains("isn't a provider leptoskit knows")),

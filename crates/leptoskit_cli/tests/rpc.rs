@@ -470,7 +470,9 @@ fn dart_strict_accepts_json_presence_and_rejects_form_null_loss() {
 			],
 		);
 		assert_eq!(output.status.success(), succeeds, "{}", stderr(&output));
+
 		assert_eq!(scratch.path.join("clients/dart").exists(), succeeds);
+
 		if !succeeds {
 			assert!(
 				stderr(&output).contains("functions.send.params.required_nullable_text"),

@@ -306,6 +306,7 @@ mod tests {
 
 		for name in ["AC/DC", "../../../../Applications/Xcode", "..\\up", "a:b"] {
 			let artifacts = plan(name);
+
 			for path in [&artifacts.app, &artifacts.zip, &artifacts.dmg] {
 				assert_eq!(path.parent(), Some(out), "{name}: {}", path.display());
 			}

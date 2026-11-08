@@ -166,6 +166,7 @@ class NfcPlugin(
         val encoding = if (status and 0x80 == 0) StandardCharsets.UTF_8 else Charset.forName("UTF-16")
 
         if (payload.size < 1 + languageLength) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return String(payload, 1 + languageLength, payload.size - 1 - languageLength, encoding)
     }
 
@@ -178,6 +179,7 @@ class NfcPlugin(
 
     private fun encodeRecord(record: Pair<Int, String>): ByteArray {
         val bytes = record.second.toByteArray(StandardCharsets.UTF_8)
+
         return ByteBuffer
             .allocate(8 + bytes.size)
             .order(ByteOrder.LITTLE_ENDIAN)

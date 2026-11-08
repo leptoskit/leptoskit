@@ -125,6 +125,7 @@ impl Contract {
 				baselines: baselines.to_vec(),
 			}
 		};
+
 		let contract = Self::Exported {
 			sha256,
 			compatibility,
@@ -170,6 +171,7 @@ impl Contract {
 				}
 			}
 		}
+
 		Ok(())
 	}
 
@@ -178,9 +180,11 @@ impl Contract {
 	pub(super) fn require(&self, pins: &[String]) -> Result<()> {
 		validate_pins(pins)?;
 		self.validate()?;
+
 		if pins.is_empty() {
 			return Ok(());
 		}
+
 		let Self::Exported {
 			compatibility: Compatibility::Checked { baselines, .. },
 			..
@@ -191,12 +195,14 @@ impl Contract {
 				 evidence cannot authorize this release"
 			);
 		};
+
 		for pin in pins {
 			ensure!(
 				baselines.iter().any(|baseline| &baseline.sha256 == pin),
 				"release lacks operator-required RPC baseline {pin}"
 			);
 		}
+
 		Ok(())
 	}
 }
@@ -220,11 +226,13 @@ fn check(sha256: &str, specification: &str, baselines: &[Baseline]) -> Result<()
 		.collect();
 	validate_pins(&pins)?;
 	let current = ApiSpec::from_json(specification)?;
+
 	for baseline in baselines {
 		ensure!(
 			baseline.specification.len() <= MAX_SPEC_BYTES,
 			"RPC baseline exceeds its size limit"
 		);
+
 		ensure!(
 			digest(baseline.specification.as_bytes()) == baseline.sha256,
 			"stored RPC baseline differs from its pin"
@@ -238,6 +246,7 @@ fn check(sha256: &str, specification: &str, baselines: &[Baseline]) -> Result<()
 			changes.join("\n")
 		);
 	}
+
 	Ok(())
 }
 

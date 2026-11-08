@@ -988,6 +988,7 @@ mod tests {
 		assert_eq!(mirror.hit(1, 2.0, 3.0), Some(2));
 		assert_eq!(mirror.hit(99, 6.0, 11.0), Some(2));
 		assert_eq!(mirror.hit(99, 4.5, 8.5), Some(1));
+
 		assert_eq!(mirror.anchor(2), Some((1, frame(1.0, 2.0))));
 		assert_eq!(tree.nodes[1].kind, "Text");
 

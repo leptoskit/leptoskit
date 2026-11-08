@@ -142,10 +142,12 @@ fn SkyLogView(
 	on_event: impl Fn(LogEvent) + Clone + Send + Sync + 'static,
 ) -> Element {
 	let count = grouped(log.shown_count());
+
 	let showing = match log.night() {
 		Some(night) => format!("Night {night} · {count} observations"),
 		None => format!("Every night · {count} observations"),
 	};
+
 	let position = log.first_in_view().map_or_else(
 		|| "Nothing logged".to_owned(),
 		|observation| format!("At night {}, {}", observation.night, observation.time()),
@@ -179,11 +181,14 @@ fn SkyLogView(
 pub fn grouped(count: usize) -> String {
 	let digits = count.to_string();
 	let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
 	for (index, digit) in digits.chars().enumerate() {
 		if index > 0 && (digits.len() - index) % 3 == 0 {
 			grouped.push(',');
 		}
+
 		grouped.push(digit);
 	}
+
 	grouped
 }

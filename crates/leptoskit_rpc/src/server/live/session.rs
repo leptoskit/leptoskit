@@ -295,6 +295,7 @@ impl Live {
 			frame_tokens: FRAME_BURST * 1_000,
 			frame_at: std::time::Instant::now(),
 		};
+
 		session.note_caller();
 
 		session
@@ -340,10 +341,12 @@ impl Session {
 		}
 
 		heartbeat.tick().await;
+
 		loop {
 			if !self.check_due_deadline().await {
 				return false;
 			}
+
 			if let Some(draining) = self.step(frames, drained, &mut heartbeat).await {
 				return draining;
 			}
@@ -369,12 +372,14 @@ impl Session {
 			() = identity_deadline(deadline) => {
 				if !self.check_deadline().await { return Some(false); }
 			}
+
 			() = self.out.closed() => return Some(false),
 			_ = drained.recv() => return Some(true),
 			permit = sender.reserve_owned(), if self.pending.is_some() || self.full_next => {
 				let Ok(permit) = permit else { return Some(false) };
 				if !self.send_pending(permit) { return Some(false); }
 			}
+
 			batch = self.batches.recv() => {
 				let Some(batch) = batch else { return Some(false); };
 				if !self.apply(batch).await { return Some(false); }
@@ -424,13 +429,16 @@ impl Session {
 				Err(mpsc::error::TryRecvError::Empty) => break,
 				Err(mpsc::error::TryRecvError::Disconnected) => return false,
 			};
+
 			if !self.apply(batch).await {
 				return false;
 			}
 		}
+
 		if self.transport_failed {
 			return false;
 		}
+
 		if !self.batches.is_empty() {
 			// The stored results have not applied every queued batch yet.
 			return true;
@@ -493,10 +501,13 @@ impl Session {
 		self.frame_at = now;
 		self.frame_tokens =
 			(self.frame_tokens + elapsed * FRAMES_PER_SECOND).min(FRAME_BURST * 1_000);
+
 		if self.frame_tokens < 1_000 {
 			return false;
 		}
+
 		self.frame_tokens -= 1_000;
+
 		true
 	}
 
@@ -512,6 +523,7 @@ impl Session {
 				)),
 			)
 			.await;
+
 			return false;
 		}
 
@@ -534,6 +546,7 @@ impl Session {
 				if let Some(pending) = &mut self.pending {
 					pending.remove(id);
 				}
+
 				self.extra_errors.remove(&id);
 				self.subscriptions.remove(&id);
 				self.live.hub().leave(self.number, id);
@@ -594,12 +607,14 @@ impl Session {
 
 		let Some(registration) = stream::registration_in(self.live.service_name(), name) else {
 			let error = WireError::invalid(format!("no stream is named `{name}`"));
+
 			return self.send(EndReason::Failed(error).frame(stream)).await;
 		};
 
 		if self.streams.len() >= MAX_STREAMS {
 			let error =
 				WireError::invalid(format!("a connection may hold {MAX_STREAMS} streams open"));
+
 			return self.send(EndReason::Failed(error).frame(stream)).await;
 		}
 
@@ -643,20 +658,25 @@ impl Session {
 		for running in self.streams.values() {
 			running.task.abort();
 		}
+
 		for running in self.streams.values_mut() {
 			let _ = (&mut running.task).await;
 		}
+
 		while let Ok(frame) = self.stream_frames.try_recv() {
 			if !self.forward_stream(frame).await {
 				return false;
 			}
 		}
+
 		let interrupted: Vec<u32> = self.streams.drain().map(|(id, _)| id).collect();
+
 		for stream in interrupted {
 			if !self.send(EndReason::Interrupted.frame(stream)).await {
 				return false;
 			}
 		}
+
 		true
 	}
 
@@ -664,9 +684,11 @@ impl Session {
 		let Some(running) = self.streams.get(&frame.stream) else {
 			return true;
 		};
+
 		if !Arc::ptr_eq(&running.generation, &frame.generation) {
 			return true;
 		}
+
 		if frame.terminal
 			&& let Some(running) = self.streams.remove(&frame.stream)
 		{
@@ -707,6 +729,7 @@ impl Session {
 		if let Some(pending) = &mut self.pending {
 			pending.remove(id);
 		}
+
 		self.extra_errors.remove(&id);
 		self.live
 			.stats_ref()
@@ -851,6 +874,7 @@ impl Session {
 										.any(|change| read.could_change(change, dialect))
 								})
 						}
+
 						_ => true,
 					};
 
@@ -1005,6 +1029,7 @@ impl Session {
 				)
 				.await;
 		}
+
 		let version = match finished
 			.version
 			.and_then(|version| u64::try_from(version).ok())
@@ -1018,6 +1043,7 @@ impl Session {
 			}
 			None => self.last_sent,
 		};
+
 		let (ok, err) = match finished.result {
 			Ok(value) => (Some(value), None),
 			Err(error) => (None, Some(error)),
@@ -1061,15 +1087,20 @@ impl Session {
 		for id in self.subscriptions.keys().copied() {
 			self.live.hub().leave(self.number, id);
 		}
+
 		while self.batches.try_recv().is_ok() {}
 		let previous = self.lease.continuity.clone().filter(|key| !key.is_empty());
+
 		self.identity = identity;
+
 		if !self.validate_identity().await {
 			return false;
 		}
+
 		if previous.is_none() || previous != self.lease.continuity {
 			self.epoch = self.epoch.wrapping_add(1);
 		}
+
 		self.db = self
 			.live
 			.inner
@@ -1112,6 +1143,7 @@ impl Session {
 					if let Some(subscription) = self.subscriptions.get_mut(&id) {
 						subscription.result = Err(error.clone());
 					}
+
 					updates.push(SubscriptionUpdate {
 						id,
 						update: Update::Err(error),
@@ -1145,25 +1177,30 @@ impl Session {
 	async fn validate_identity(&mut self) -> bool {
 		for _ in 0..REGISTER_ATTEMPTS {
 			let since = self.live.hub().applied();
+
 			let lease = match self.live.inner.identify.lease(&self.identity).await {
 				Ok(lease) => lease,
 				Err(error) => return self.identity_failure(&error).await,
 			};
+
 			if lease
 				.expires_at
 				.is_some_and(|expires| expires <= SystemTime::now())
 			{
 				return self.refuse_identity().await;
 			}
+
 			if self
 				.live
 				.hub()
 				.watch_identity(self.number, lease.reads.clone(), since)
 			{
 				self.lease = lease;
+
 				return true;
 			}
 		}
+
 		// A busy log may prevent registration even when the identity is
 		// valid. Reconnect instead of telling the app it was signed out.
 		self.send(ServerFrame::Reconnect { after_ms: 250 }).await;
@@ -1180,6 +1217,7 @@ impl Session {
 
 	async fn check_due_deadline(&mut self) -> bool {
 		let deadline = self.next_identity_deadline();
+
 		if deadline.is_some_and(|at| at <= SystemTime::now()) {
 			self.check_deadline().await
 		} else {
@@ -1239,9 +1277,11 @@ impl Session {
 		{
 			return self.refuse_identity().await;
 		}
+
 		if batch.revalidate && !self.validate_identity().await {
 			return false;
 		}
+
 		let mut updates = Vec::new();
 
 		for (id, changed) in batch.changes {
@@ -1273,8 +1313,10 @@ impl Session {
 			.stats_ref()
 			.transitions
 			.fetch_add(1, Ordering::Relaxed);
+
 		if self.pending.is_some() || self.full_next {
 			self.full_next = true;
+
 			for update in updates {
 				if !self.subscriptions.contains_key(&update.id)
 					&& let Update::Err(error) = update.update
@@ -1283,6 +1325,7 @@ impl Session {
 						&& !self.extra_errors.contains_key(&update.id)
 					{
 						self.transport_failed = true;
+
 						return;
 					}
 					self.extra_errors.insert(update.id, error);
@@ -1292,14 +1335,17 @@ impl Session {
 			self.pending_progress = tokio::time::Instant::now();
 			self.pending = Some(PendingTransition::new(from, updates, to, full));
 		}
+
 		// Fill only immediately available slots; never wait inside a batch.
 		for _ in 0..super::OUTGOING {
 			if self.pending.is_none() && !self.full_next {
 				break;
 			}
+
 			let Ok(permit) = self.out.clone().try_reserve_owned() else {
 				break;
 			};
+
 			if !self.send_pending(permit) {
 				self.transport_failed = true;
 				break;
@@ -1333,6 +1379,7 @@ impl Session {
 			));
 			self.full_next = false;
 		}
+
 		let Some(pending) = &mut self.pending else {
 			return true;
 		};
@@ -1342,10 +1389,12 @@ impl Session {
 		let to = pending.to;
 		permit.send(frame);
 		self.pending_progress = tokio::time::Instant::now();
+
 		if complete {
 			self.last_sent = to;
 			self.pending = None;
 		}
+
 		true
 	}
 
@@ -1645,6 +1694,7 @@ mod tests {
 	#[test]
 	fn full_recovery_preserves_the_latest_error_including_repeated_failures() {
 		let mut subscription = subscription();
+
 		for status in [503, 401, 403] {
 			let error = WireError {
 				status,

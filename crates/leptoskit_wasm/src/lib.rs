@@ -703,6 +703,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.identity = HostIdentity(std::sync::Arc::new(()));
 		self.store = guest.store;
 		self.main_fn = guest.main_fn;
+
 		self.event_fn = guest.event_fn;
 		self.alloc_fn = guest.alloc_fn;
 		self.plugins_ready = guest.plugins_ready;
@@ -1043,6 +1044,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			// even when no timer is due. Drain another bounded batch before
 			// sleeping; after the overall budget, request an immediate turn.
 			self.timer_routing_pending = moved == TIMER_TURN || delivered;
+
 			if !self.timer_routing_pending {
 				break;
 			}
@@ -1083,6 +1085,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			{
 				Ok(()) => delivered = true,
 				Err(leptoskit_bridge::Error::InvalidCall) => {}
+
 				Err(error) => return Err(WasmError::Trap(error.to_string())),
 			}
 		}
@@ -1111,6 +1114,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			.is_ok()
 		{
 			let already_pending = std::mem::replace(&mut self.routed_replies_pending, true);
+
 			if !already_pending && let Some(wake) = &self.timer_wake {
 				wake();
 			}

@@ -569,6 +569,7 @@ impl Component {
 		let slot = &self.slots[index];
 		let docs = &prop.docs;
 		let (argument, value) = setter_argument(prop);
+
 		let used = used_generics(ty, generics, &prop.introduced);
 		let (parameters, predicates) = used.split();
 		let next = self.builder_with(index, &quote!((#ty,)));

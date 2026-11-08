@@ -431,6 +431,7 @@ fn array_items(
 
 	if chars.peek() == Some(&'}') {
 		chars.next();
+
 		return Some(serde_json::Value::Array(items));
 	}
 
@@ -470,6 +471,7 @@ fn array_items(
 				}
 			}
 		};
+
 		items.push(item);
 
 		match chars.next()? {
@@ -499,6 +501,7 @@ mod tests {
 			json(oid::TIMESTAMPTZ, "2026-11-01 12:00:00.5+00"),
 			j!("2026-11-01T12:00:00.5+00:00")
 		);
+
 		assert_eq!(
 			json(oid::TIMESTAMPTZ, "2026-11-01 12:00:00+05:30"),
 			j!("2026-11-01T12:00:00+05:30")
@@ -564,6 +567,7 @@ mod tests {
 		update.extend(1_u32.to_be_bytes());
 		update.push(b'7');
 		update.push(b'n');
+
 		update.push(b'N');
 		update.extend(2_u16.to_be_bytes());
 		update.push(b't');

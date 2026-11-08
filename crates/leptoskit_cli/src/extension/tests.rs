@@ -453,6 +453,7 @@ fn firefox_source_archives_keep_rebuild_inputs_and_exclude_even_tracked_secrets(
 		);
 		write("BUILD.md", "obsolete instructions");
 		write(".env", "SECRET_ENV_MARKER");
+
 		write("keys/signing.key", "SECRET_KEY_MARKER");
 		write("keys/apple.p8", "SECRET_APPLE_MARKER");
 		write("keys/certificate.pem", "SECRET_PEM_MARKER");
@@ -469,6 +470,7 @@ fn firefox_source_archives_keep_rebuild_inputs_and_exclude_even_tracked_secrets(
 		write("notes.md", "notes");
 		write("target/cache", "BUILD_OUTPUT_MARKER");
 		write(".gitignore", "/target/\n");
+
 		if tracked {
 			assert!(
 				crate::git::command(root.path())
@@ -498,6 +500,7 @@ fn firefox_source_archives_keep_rebuild_inputs_and_exclude_even_tracked_secrets(
 					.success()
 			);
 		}
+
 		let archive = super::source_archive(root.path(), &config(COMMONPLACE), tracked).unwrap();
 		let entries = unzip_for_test(&archive);
 		let contents = entries
@@ -557,6 +560,7 @@ fn extension_routes_are_checked_before_packaging_every_surface() {
 	let mut extension = config.extension.clone().unwrap();
 	extension.popup.as_mut().unwrap().route = "/clip?tab=saved#first".into();
 	super::check_routes(root.path(), &config, &extension).unwrap();
+
 	extension.side_panel.as_mut().unwrap().route = "/missing".into();
 	let error = super::check_routes(root.path(), &config, &extension)
 		.unwrap_err()
@@ -578,6 +582,7 @@ fn unzip_for_test(archive: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>>
 	use std::io::Read as _;
 	let mut entries = std::collections::BTreeMap::new();
 	let mut offset = 0;
+
 	while archive.get(offset..offset + 4) == Some(b"PK\x03\x04") {
 		let u16_at = |at| usize::from(u16::from_le_bytes(archive[at..at + 2].try_into().unwrap()));
 		let method = u16_at(offset + 8);
@@ -591,6 +596,7 @@ fn unzip_for_test(archive: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>>
 			String::from_utf8(archive[offset + 30..offset + 30 + name_len].to_vec()).unwrap();
 		let start = offset + 30 + name_len + extra_len;
 		let data = &archive[start..start + compressed];
+
 		let contents = match method {
 			0 => data.to_vec(),
 			8 => {
@@ -602,9 +608,11 @@ fn unzip_for_test(archive: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>>
 			}
 			other => panic!("unsupported ZIP method {other}"),
 		};
+
 		assert!(entries.insert(name, contents).is_none());
 		offset = start + compressed;
 	}
+
 	assert!(!entries.is_empty());
 	entries
 }

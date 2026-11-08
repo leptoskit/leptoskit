@@ -464,6 +464,7 @@ mod tests {
 		let oversized: Entries = (0..=MAX_ENTRIES)
 			.map(|index| (index.to_string(), Value::Null))
 			.collect();
+
 		assert_eq!(encode(&oversized), Err(Error::TooLarge));
 		let changes: Vec<_> = (0..9)
 			.map(|index| {

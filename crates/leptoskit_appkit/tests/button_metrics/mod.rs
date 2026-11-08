@@ -172,6 +172,7 @@ pub fn updates() {
 	assert_eq!(surface.children(root), &[button]);
 	assert!(surface.frame(button).unwrap().width < natural.width);
 	surface.set_root(&tree(Element::button(JOURNEY)));
+
 	assert_eq!(surface.children(root), &[button]);
 	assert_eq!(surface.frame(button), Some(natural));
 }

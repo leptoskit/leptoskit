@@ -152,6 +152,7 @@ fn text_fields_write_variables() {
 #[test]
 fn charts_render_every_kind() {
 	let ui = AgentUi::new();
+
 	for kind in ["bar", "line", "area", "pie", "donut"] {
 		let source = format!(
 			"<Chart type=\"{kind}\" title=\"Spending\" labels={{[\"Rent\", \"Food\", \"Fun\"]}} \
@@ -190,6 +191,7 @@ fn charts_explain_bad_data() {
 		("<Chart />", "needs `values`"),
 		("<Chart values={range(600)} />", "at most 500 points"),
 	];
+
 	for (source, expected) in cases {
 		let diagnostics = ui.check(source);
 		assert!(
@@ -429,6 +431,7 @@ fn components_written_on_one_line_keep_their_text() {
 #[test]
 fn charts_stay_the_height_they_ask_for() {
 	let ui = AgentUi::new();
+
 	for kind in ["bar", "line"] {
 		let source: &'static str = Box::leak(
 			format!(
@@ -450,6 +453,7 @@ fn charts_stay_the_height_they_ask_for() {
 #[test]
 fn charts_draw_without_vectors_where_a_host_cannot() {
 	let ui = AgentUi::new().widgets(Widgets::Basic);
+
 	for kind in ["line", "area", "pie", "donut"] {
 		let source: &'static str = Box::leak(
 			format!(
@@ -473,10 +477,12 @@ fn widgets(tester: &WidgetTester) -> Vec<NodeId> {
 	let surface = tester.surface();
 	let mut out = Vec::new();
 	let mut pending: Vec<NodeId> = surface.root().into_iter().collect();
+
 	while let Some(id) = pending.pop() {
 		out.push(id);
 		pending.extend(surface.children(id).iter().rev().copied());
 	}
+
 	out
 }
 
@@ -546,6 +552,7 @@ fn every_component_example_renders_cleanly_on_every_host() {
 				NativeKind::Radio,
 				NativeKind::ActivityIndicator,
 			];
+
 			if widgets != Widgets::All {
 				assert!(
 					!kinds.iter().any(|kind| native_controls.contains(kind)),
@@ -553,6 +560,7 @@ fn every_component_example_renders_cleanly_on_every_host() {
 					tester.tree()
 				);
 			}
+
 			if widgets == Widgets::Basic {
 				assert!(
 					!kinds
@@ -657,6 +665,7 @@ fn switches_checkboxes_and_radios_are_native() {
 		tester.find(&Finder::label("Fast")).unwrap().props.checked,
 		Some(true)
 	);
+
 	assert_eq!(
 		tester.find(&Finder::label("Steady")).unwrap().props.checked,
 		Some(false)
@@ -681,6 +690,7 @@ fn a_pressable_sends_its_action_and_holds_no_controls() {
 	tester.tap(&Finder::label("Choose steady")).unwrap();
 	let actions = actions.lock().unwrap();
 	assert_eq!(actions.len(), 1);
+
 	assert_eq!(actions[0].name, "choose");
 	assert_eq!(actions[0].value, Value::from("steady"));
 

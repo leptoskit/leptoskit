@@ -263,6 +263,7 @@ fn values_convert_from_the_types_applications_hold() {
 	assert_eq!(Value::Bool(false).as_number(), Some(0.0));
 	assert_eq!(Value::Null.as_number(), None);
 	assert_eq!(Value::from("$1,800").as_number(), Some(1800.0));
+
 	assert_eq!(Value::from(" ").as_number(), None);
 	assert_eq!(Value::from("inf").as_number(), None);
 	assert!(!Value::from(0.0).truthy());

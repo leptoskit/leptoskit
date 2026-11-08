@@ -50,6 +50,7 @@ impl ThemeLength {
 			.trim()
 			.parse()
 			.map_err(|_| format!("invalid number in theme length `{value}`"))?;
+
 		if !number.is_finite() || number.abs() > 1_000_000.0 {
 			return Err(format!(
 				"theme length `{value}` must be finite with magnitude at most 1000000"
@@ -152,17 +153,21 @@ impl Theme {
 		lengths: &BTreeMap<String, String>,
 	) -> Result<(), String> {
 		let mut parsed_colors = Vec::with_capacity(colors.len());
+
 		for (name, value) in colors {
 			let color = parse_theme_color(value)
 				.map_err(|reason| format!("theme.colors.{name}: {reason}"))?;
 			parsed_colors.push((name.as_str(), color));
 		}
+
 		let mut parsed_lengths = Vec::with_capacity(lengths.len());
+
 		for (name, value) in lengths {
 			let length = ThemeLength::parse(value)
 				.map_err(|reason| format!("theme.lengths.{name}: {reason}"))?;
 			parsed_lengths.push((name.as_str(), length));
 		}
+
 		Self::replace_colors(parsed_colors);
 		Self::replace_lengths(parsed_lengths);
 		Ok(())
@@ -202,6 +207,7 @@ impl Theme {
 						let _ = write!(css, "{name}:{};", length.css());
 					}
 				}
+
 				css.push('}');
 				css
 			})
@@ -211,6 +217,7 @@ impl Theme {
 
 fn normalize_name(name: &str) -> Box<str> {
 	let name = name.trim();
+
 	if name.starts_with("--") {
 		name.into()
 	} else {
@@ -220,14 +227,17 @@ fn normalize_name(name: &str) -> Box<str> {
 
 fn parse_theme_color(value: &str) -> Result<Color, String> {
 	let value = value.trim();
+
 	match value {
 		"transparent" => Ok(Color::rgba(0, 0, 0, 0)),
 		"black" => Ok(Color::rgba(0, 0, 0, 255)),
 		"white" => Ok(Color::rgba(255, 255, 255, 255)),
+
 		value if value.starts_with('#') => {
 			let hex = expand_hex(value);
 			Color::hex(&hex).ok_or_else(|| format!("invalid hex color `{value}`"))
 		}
+
 		value => {
 			Err(format!(
 				"unsupported color `{value}`; use hex, black, white, or transparent"
@@ -238,14 +248,18 @@ fn parse_theme_color(value: &str) -> Result<Color, String> {
 
 fn expand_hex(value: &str) -> String {
 	let digits = &value[1..];
+
 	if matches!(digits.len(), 3 | 4) && digits.is_ascii() {
 		let mut expanded = String::from("#");
+
 		for digit in digits.chars() {
 			use std::fmt::Write as _;
 			let _ = write!(expanded, "{digit}{digit}");
 		}
+
 		return expanded;
 	}
+
 	value.to_owned()
 }
 

@@ -150,6 +150,7 @@ mod macos {
 		let radio = native::<NSButton>(&surface, child(&surface, 1));
 		assert!(radio.effectiveAppearance().name().isEqualToString(dark));
 		surface.set_dark_mode(false);
+
 		assert!(view.effectiveAppearance().name().isEqualToString(light));
 		assert!(radio.effectiveAppearance().name().isEqualToString(light));
 	}
@@ -220,6 +221,7 @@ mod macos {
 		);
 		view.setAlphaValue(1.0);
 		assert!(surface.tick_rive(Duration::ZERO, environment).unwrap());
+
 		let image = view.image().unwrap();
 		surface.set_root(&widget(false).aria_label("Paused triangle"));
 		assert!(!surface.tick_rive(Duration::ZERO, environment).unwrap());
@@ -274,6 +276,7 @@ mod macos {
 		let pixels = bitmap.bitmapData();
 		source.copy_from_slice(&[0, 128, 0, 128, 255, 0, 0, 255]);
 		assert!(backend.present_rive(id, &RiveFrame::new(2, 1, &source).unwrap()));
+
 		assert_eq!(bitmap.bitmapData(), pixels);
 		// SAFETY: The retained bitmap still owns the same eight initialized
 		// bytes.
@@ -513,6 +516,7 @@ mod macos {
 		window.makeFirstResponder(Some(&first));
 		let right = key(&window, "\u{f703}", 124);
 		first.keyDown(&right);
+
 		assert_eq!(
 			*events.borrow(),
 			vec![(last_id, NativeEvent::Toggle { checked: true })]
@@ -669,6 +673,7 @@ mod macos {
 		assert!(!determinate.isIndeterminate());
 		assert_eq!(determinate.doubleValue(), 0.4);
 		surface.set_root(&tree(true, true));
+
 		assert_eq!(surface.backend().is_animating(activity_id), Some(false));
 		assert_eq!(surface.backend().is_animating(progress_id), Some(false));
 		surface.set_root(&tree(false, false));

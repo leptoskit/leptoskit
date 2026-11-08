@@ -1139,6 +1139,7 @@ fn a_resize_redraws_what_the_old_frame_also_showed() {
 	);
 	let mut screen = Screen::new(2, 1);
 	replayed(&mut screen, &Buffer::new(2, 1), &small);
+
 	let mut screen = Screen {
 		width: 4,
 		cells: vec![[screen.cells[0].clone(), vec![(' ', false); 2]].concat()],

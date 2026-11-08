@@ -87,6 +87,7 @@ pub fn mount(router: Router, config: ServerConfig) -> Result<(Router, Analytics)
 	}
 	let origin = url::Url::parse(&config.public_origin).map_err(|_| ServerError::Origin)?;
 	let local = matches!(origin.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+
 	if !(origin.scheme() == "https" || (origin.scheme() == "http" && local))
 		|| origin.host_str().is_none()
 		|| origin.path() != "/"
@@ -97,6 +98,7 @@ pub fn mount(router: Router, config: ServerConfig) -> Result<(Router, Analytics)
 	{
 		return Err(ServerError::Origin);
 	}
+
 	if config.browser_routes.len() > 32 || config.browser_routes.iter().any(|r| !valid_operation(r))
 	{
 		return Err(ServerError::Routes);
@@ -142,9 +144,11 @@ pub fn from_env() -> Result<Option<ServerConfig>, ServerError> {
 		Err(std::env::VarError::NotPresent) => return Ok(None),
 		Err(_) => return Err(ServerError::Environment("LEPTOSKIT_ANALYTICS")),
 	};
+
 	if enabled != "1" {
 		return Err(ServerError::Environment("LEPTOSKIT_ANALYTICS"));
 	}
+
 	let required = |name| std::env::var(name).map_err(|_| ServerError::Environment(name));
 	let parse = |name| {
 		required(name)?
@@ -183,6 +187,7 @@ fn export_from_env() -> Result<Option<export::Config>, ServerError> {
 	let Some(endpoint) = optional("LEPTOSKIT_ANALYTICS_EXPORT_ENDPOINT")? else {
 		return Ok(None);
 	};
+
 	let protocol = match optional("LEPTOSKIT_ANALYTICS_EXPORT_PROTOCOL")?.as_deref() {
 		None | Some("leptoskit") => export::Protocol::Leptoskit,
 		Some("otlp") => export::Protocol::OtlpMetrics,
@@ -192,6 +197,7 @@ fn export_from_env() -> Result<Option<export::Config>, ServerError> {
 			));
 		}
 	};
+
 	Ok(Some(export::Config {
 		endpoint,
 		protocol,
@@ -226,9 +232,11 @@ async fn evidence(State(api): State<Api>, headers: HeaderMap) -> Response {
 	let mut response = if authorized {
 		let mut evidence = api.analytics.evidence();
 		evidence.snapshot.host = Some(host::sample());
+
 		if let Some(exporter) = &api.export {
 			evidence.snapshot.export = exporter.health.lock().ok().map(|health| health.clone());
 		}
+
 		evidence
 			.snapshot
 			.limitations
@@ -238,10 +246,12 @@ async fn evidence(State(api): State<Api>, headers: HeaderMap) -> Response {
 			 database-pool or relay saturation."
 				.into(),
 		);
+
 		Json(evidence).into_response()
 	} else {
 		StatusCode::UNAUTHORIZED.into_response()
 	};
+
 	response
 		.headers_mut()
 		.insert("cache-control", HeaderValue::from_static("no-store"));
@@ -298,8 +308,10 @@ async fn ingest(
 			return rejection.status();
 		}
 	};
+
 	let origin_ok =
 		headers.get("origin").and_then(|v| v.to_str().ok()) == Some(api.origin.as_str());
+
 	if !origin_ok
 		|| batch.events.is_empty()
 		|| batch.events.len() > 32
@@ -309,6 +321,7 @@ async fn ingest(
 				|| !(0.0..=86_400_000.0).contains(&e.duration_ms)
 		}) {
 		api.analytics.reject_browser_batch();
+
 		return StatusCode::BAD_REQUEST;
 	}
 	let allowed = {
@@ -326,10 +339,13 @@ async fn ingest(
 			true
 		}
 	};
+
 	if !allowed {
 		api.analytics.reject_browser_batch();
+
 		return StatusCode::TOO_MANY_REQUESTS;
 	}
+
 	for event in batch.events {
 		let (signal, outcome) = match event.kind {
 			BrowserKind::PageView => (Signal::PageView, Outcome::Ok),
@@ -338,6 +354,7 @@ async fn ingest(
 			BrowserKind::Request => (Signal::Http, Outcome::Ok),
 			BrowserKind::RequestFailed => (Signal::Http, Outcome::ClientError),
 		};
+
 		api.analytics.record(
 			SeriesKey {
 				source: Source::Browser,
@@ -349,6 +366,7 @@ async fn ingest(
 			event.traceparent,
 		);
 	}
+
 	StatusCode::NO_CONTENT
 }
 
@@ -371,10 +389,13 @@ async fn observe(State(analytics): State<Analytics>, mut request: Request, next:
 		.and_then(|h| h.to_str().ok())
 		.and_then(TraceContext::parse);
 	let context = TraceContext::child(parent.as_ref()).ok();
+
 	if let Some(context) = &context {
 		request.extensions_mut().insert(context.clone());
 	}
+
 	request.extensions_mut().insert(analytics.clone());
+
 	let timer = Timer::new(analytics, Signal::Http, operation, context.clone());
 	let mut response = next.run(request).await;
 	let outcome = if response.status().is_server_error() {
@@ -384,7 +405,9 @@ async fn observe(State(analytics): State<Analytics>, mut request: Request, next:
 	} else {
 		Outcome::Ok
 	};
+
 	timer.finish(outcome);
+
 	if let Some(context) = context
 		&& let Ok(value) = HeaderValue::from_str(context.as_str())
 	{
@@ -427,6 +450,7 @@ impl Timer {
 		if let Some(key) = &mut self.key {
 			key.outcome = outcome;
 		}
+
 		self.record();
 	}
 

@@ -230,6 +230,7 @@ export function renderPlatform(results: ArenaResults): string {
 				footnote(`${NAMES[framework]}, \`${row.scenario}\`: ${scenario.reason}`)
 			}`;
 		}
+
 		const metric = scenario.metrics[row.metric];
 		return metric ? format(metric.median, row.unit) : null;
 	};
@@ -238,6 +239,7 @@ export function renderPlatform(results: ArenaResults): string {
 	const header = ["", ...frameworks.map((framework) => NAMES[framework])];
 	lines.push(`| ${header.join(" | ")} |`);
 	lines.push(`| ${["---", ...frameworks.map(() => "---:")].join(" | ")} |`);
+
 	for (const row of ROWS) {
 		// A row no framework has a number for (a tuned lane nobody has yet,
 		// echo on the web) is left out rather than filled with footnotes.
@@ -245,6 +247,7 @@ export function renderPlatform(results: ArenaResults): string {
 			results.frameworks[framework].scenarios[row.scenario]
 				?.metrics[row.metric] !== undefined
 		);
+
 		if (!measured) continue;
 		const cells = frameworks.map((framework) =>
 			cell(
@@ -272,10 +275,13 @@ export function renderPlatform(results: ArenaResults): string {
 			shapeOnly ? ", shape only" : ""
 		}), ${results.runs} runs per framework, medians; ${versions}._`,
 	);
+
 	for (const framework of frameworks) {
 		const caveat = results.frameworks[framework].caveat;
+
 		if (caveat) lines.push("", `_${NAMES[framework]}: ${caveat}_`);
 	}
+
 	for (const skipped of results.skipped) {
 		lines.push(
 			"",
@@ -284,12 +290,15 @@ export function renderPlatform(results: ArenaResults): string {
 			} not measured: ${skipped.reason}._`,
 		);
 	}
+
 	if (footnotes.length > 0) {
 		lines.push("");
+
 		for (const [index, text] of footnotes.entries()) {
 			lines.push(`${index + 1}. ${text.replaceAll("\n", " ")}`);
 		}
 	}
+
 	return lines.join("\n");
 }
 
@@ -310,15 +319,18 @@ export function renderSizes(results: SizeResults): string {
 	);
 	lines.push(`| --- | --- | ${frameworks.map(() => "---:").join(" | ")} |`);
 	const extraScreens = results.screens.large - results.screens.medium;
+
 	for (const platform of PLATFORMS) {
 		if (!frameworks.some((framework) => results.sizes[framework][platform])) {
 			continue;
 		}
+
 		const tierCell = (framework: string, tier: Tier): string => {
 			const size = results.sizes[framework][platform]?.[tier];
 			if (size === undefined) return "—";
 			return isSize(size) ? bytes(size.bytes) : "build failed";
 		};
+
 		for (const tier of TIERS) {
 			lines.push(
 				`| ${PLATFORM_NAMES[platform]} | ${tier} (${results.screens[tier]} ${
@@ -328,6 +340,7 @@ export function renderSizes(results: SizeResults): string {
 				} |`,
 			);
 		}
+
 		const marginal = frameworks.map((framework) => {
 			const [medium, large] = [
 				results.sizes[framework][platform]?.medium,
@@ -343,12 +356,14 @@ export function renderSizes(results: SizeResults): string {
 			} |`,
 		);
 	}
+
 	lines.push("");
 	lines.push(
 		`_Built ${
 			results.timestamp.slice(0, 10)
 		} on ${results.host}. Android: the arm64-v8a release APK. iOS: the unsigned arm64 device \`.app\`. macOS: the \`.app\` bundle. Web: bytes transferred on first load, gzip-compressed as served._`,
 	);
+
 	return lines.join("\n");
 }
 
@@ -357,9 +372,11 @@ function replaceRegion(document: string, name: string, body: string): string {
 	const end = `<!-- END GENERATED: ${name} -->`;
 	const start = document.indexOf(begin);
 	const stop = document.indexOf(end);
+
 	if (start === -1 || stop === -1) {
 		fail(`docs/src/benchmarks.md has no ${name} region`);
 	}
+
 	return `${document.slice(0, start + begin.length)}\n\n${body}\n\n${
 		document.slice(stop)
 	}`;
@@ -378,6 +395,7 @@ async function formatted(document: string): Promise<string> {
 	await writer.write(new TextEncoder().encode(document));
 	await writer.close();
 	const output = await child.output();
+
 	if (!output.success) {
 		fail(
 			`dprint could not format the page:\n${
@@ -385,6 +403,7 @@ async function formatted(document: string): Promise<string> {
 			}`,
 		);
 	}
+
 	return new TextDecoder().decode(output.stdout);
 }
 
@@ -400,6 +419,7 @@ async function main(): Promise<void> {
 	const check = Deno.args.includes("--check");
 	const original = await Deno.readTextFile(DOCS);
 	let document = original;
+
 	for (const platform of PLATFORMS) {
 		const results = readJson<ArenaResults>(`${RESULTS}/arena-${platform}.json`);
 		if (
@@ -412,19 +432,25 @@ async function main(): Promise<void> {
 			renderPlatform(results),
 		);
 	}
+
 	const sizes = readJson<SizeResults>(`${RESULTS}/arena-sizes.json`);
+
 	if (sizes) {
 		document = replaceRegion(document, "arena-sizes", renderSizes(sizes));
 	}
 
 	document = await formatted(document);
+
 	if (check) {
 		if (document !== original) {
 			fail("the arena tables are out of date; run benchmark:arena:docs");
 		}
+
 		log("arena tables are current");
+
 		return;
 	}
+
 	await Deno.writeTextFile(DOCS, document);
 	log("regenerated the arena tables");
 }

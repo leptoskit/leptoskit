@@ -116,6 +116,7 @@ fn the_screens_and_config_land_in_the_client_crate() {
 			);
 		}
 	}
+
 	assert!(read(root.path(), "app_app/src/lib.rs").ends_with(
 		"pub mod routes;\n\n/// Written by `leptoskit generate auth`.\npub mod auth;\n"
 	));

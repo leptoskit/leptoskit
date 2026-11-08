@@ -347,6 +347,7 @@ fn message_method(
 
 		_ => body,
 	};
+
 	let read = emitter.read.borrow();
 	let unread = message
 		.placeholders

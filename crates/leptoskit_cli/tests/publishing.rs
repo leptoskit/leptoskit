@@ -20,11 +20,13 @@ team_id = "ABCDE12345"
 fn run(root: &Path, arguments: &[&str]) -> Output {
 	let mut command = Command::new(env!("CARGO_BIN_EXE_leptoskit"));
 	command.current_dir(root).arg("publish").args(arguments);
+
 	for (key, _) in std::env::vars_os() {
 		if key.to_string_lossy().starts_with("LEPTOSKIT_PUBLISH_") {
 			command.env_remove(key);
 		}
 	}
+
 	command.output().unwrap()
 }
 
@@ -78,6 +80,7 @@ fn dry_runs_save_the_same_report_they_print_and_never_require_store_keys() {
 		&std::fs::read(root.path().join(".leptoskit/publish/next-steps.json")).unwrap(),
 	)
 	.unwrap();
+
 	assert_eq!(saved, report);
 	let export = std::fs::read_to_string(
 		root.path()
@@ -88,6 +91,7 @@ fn dry_runs_save_the_same_report_they_print_and_never_require_store_keys() {
 	let text = success(run(root.path(), &["--dry-run"]));
 	assert!(text.contains("one more than App Store Connect's highest"));
 	assert!(text.contains("What to do next") && text.contains("next-steps.json"));
+
 	for invalid in ["0", "-1", "later"] {
 		assert!(
 			!run(root.path(), &["--dry-run", "--build-number", invalid])
@@ -107,6 +111,7 @@ fn publishing_reports_configuration_and_credential_errors_before_building() {
 	assert!(String::from_utf8_lossy(&error.stderr).contains("isn't set"));
 	assert!(!root.path().join(".leptoskit/publish/ios").exists());
 	let error = run(root.path(), &["firefox", "--dry-run"]);
+
 	assert!(!error.status.success());
 	assert!(String::from_utf8_lossy(&error.stderr).contains("isn't configured"));
 	std::fs::write(
@@ -162,6 +167,7 @@ devices = ["chrome-1280x800"]
 	)
 	.unwrap();
 	let error = run(root.path(), &["screenshots", "--dry-run"]);
+
 	assert!(!error.status.success());
 	assert!(String::from_utf8_lossy(&error.stderr).contains("devices.unknown_size"));
 }

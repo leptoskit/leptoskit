@@ -252,6 +252,7 @@ int32_t RivePresent(void* opaque, size_t node, uint32_t width, uint32_t height,
         Check(napi_set_named_property(context.env, result, "width", w));
         Check(napi_set_named_property(context.env, result, "height", h));
         Check(napi_set_named_property(context.env, result, "pixelMap", bitmap));
+
         Check(napi_set_element(context.env, context.frames, context.count++, result));
 
         return 1;

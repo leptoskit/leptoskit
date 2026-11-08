@@ -46,6 +46,7 @@ pub(super) fn observe() {
 			font_size: Some(FONT_SIZE),
 			..NativeProps::default()
 		};
+
 		backend.create(node, NativeKind::Button, &props);
 		let view = backend.view(node).unwrap();
 		let button = view.downcast_ref::<NSButton>().unwrap();

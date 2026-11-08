@@ -91,15 +91,18 @@ const CAPTURE_HZ = 240;
 /** One synthetic screen, RGB: a beacon at (8, 8) and a bar that moves every frame. */
 function screen(beacon: [number, number, number], bar: number): Uint8Array {
 	const pixels = new Uint8Array(WIDTH * HEIGHT * 3).fill(255);
+
 	for (let y = 0; y < HEIGHT; y += 1) {
 		for (let x = 0; x < WIDTH; x += 1) {
 			const base = (y * WIDTH + x) * 3;
+
 			if (x >= 8 && x < 40 && y >= 8 && y < 40) pixels.set(beacon, base);
 			else if (y >= 60 + (bar % 120) && y < 76 + (bar % 120)) {
 				pixels.set([17, 17, 17], base);
 			}
 		}
 	}
+
 	return pixels;
 }
 
@@ -157,6 +160,7 @@ Deno.test({
 					await writer.write(image);
 				}
 			}
+
 			await writer.close();
 			const encoded = await encoder.output();
 			assert(encoded.success, new TextDecoder().decode(encoded.stderr));

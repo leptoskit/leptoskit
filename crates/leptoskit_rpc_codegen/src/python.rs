@@ -583,7 +583,9 @@ fn live_operation(
 			"Call it over HTTP, or ``.live(...)`` over the live connection.",
 		)
 	};
+
 	let sync = helpers.bind(&format!("_{base}{suffix}"));
+
 	let asynchronous = helpers.bind(&format!("_Async{base}{suffix}"));
 	let property_docs = docstring(&with_usage(docs, usage), "\t\t");
 	let call_docs = optional_docstring(docs, "\t\t");
@@ -654,6 +656,7 @@ fn channel_member(
 	} else {
 		format!("Optional[{presence}]")
 	};
+
 	let fields = channel
 		.fields
 		.iter()
@@ -745,6 +748,7 @@ fn client_module(
 			HttpInput::Form => "form",
 			HttpInput::Json | HttpInput::Other { .. } => "json",
 		};
+
 		let docs = function_docs(function);
 
 		// A mutation takes an idempotency key, so a retried call runs once.
@@ -760,6 +764,7 @@ fn client_module(
 		} else {
 			(parameters, "")
 		};
+
 		let call = format!(
 			"{}, {}, {}, {payload}{key}",
 			py_string(&function.method),

@@ -2247,6 +2247,7 @@ fn a_bucket_approvals_file_that_does_not_parse_is_a_conflict() {
 		publish_channel(&store, "app", "staging", &mut bucket),
 		Err(CodePushError::RegistryConflict(conflict)) if conflict == key.as_str()
 	));
+
 	assert_eq!(bucket.objects[key.as_str()].bytes, b"not json");
 }
 
@@ -2277,6 +2278,7 @@ fn a_client_with_a_policy_refuses_releases_without_approvals_before_downloading(
 		trusted(),
 	)
 	.with_provenance(policy(1));
+
 	let staging = scratch.path.join("client");
 	assert!(matches!(
 		client.sync(&staging),

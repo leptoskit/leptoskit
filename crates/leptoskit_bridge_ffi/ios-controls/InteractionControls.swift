@@ -18,6 +18,7 @@ extension UIKitControls {
             record(report.contract?.rawValue == wire, "update contract decodes \(wire ?? "absent")")
             record(report.message.contains(message), "update control explains \(wire ?? "absent")")
         }
+
         let future = Data(#"{"status":"current","version":"1","build":1,"contract":"future"}"#.utf8)
         do {
             _ = try JSONDecoder().decode(NativeSyncReport.self, from: future)
@@ -44,6 +45,7 @@ extension UIKitControls {
         """)
         let kinds = ["switch", "checkbox", "radio", "slider", "linear_progress_indicator",
                      "activity_indicator", "text_input", "password_input", "button"]
+
         for (index, kind) in kinds.enumerated() {
             let id = index + 2
             try render("""
@@ -52,7 +54,9 @@ extension UIKitControls {
             {"UpdateLayout":{"id":\(id),"x":0,"y":\(index * 50),"width":200,"height":44}}
             """)
         }
+
         let root = host.subviews[0]
+
         guard let toggle = root.subviews[0] as? UISwitch,
               let checkbox = root.subviews[1] as? UIButton,
               let radio = root.subviews[2] as? UIButton,
@@ -63,6 +67,7 @@ extension UIKitControls {
               let password = root.subviews[7] as? UITextField,
               let button = root.subviews[8] as? UIButton else {
             record(false, "all generated iOS controls create native views")
+
             return
         }
         let controls = InteractionWidgets(toggle: toggle, checkbox: checkbox, radio: radio,

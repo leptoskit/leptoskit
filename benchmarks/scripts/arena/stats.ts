@@ -13,6 +13,7 @@ export interface Summary {
 
 function median(sorted: number[]): number {
 	const middle = Math.floor(sorted.length / 2);
+
 	return sorted.length % 2 === 1
 		? sorted[middle]
 		: (sorted[middle - 1] + sorted[middle]) / 2;
@@ -21,6 +22,7 @@ function median(sorted: number[]): number {
 /** A fixed-seed generator, so a summary is reproducible from its samples. */
 function random(seed: number): () => number {
 	let state = seed >>> 0;
+
 	return () => {
 		state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
 		return state / 4294967296;
@@ -40,9 +42,11 @@ export function summarise(values: number[]): Summary {
 		min: sorted[0],
 		max: sorted[sorted.length - 1],
 	};
+
 	if (values.length >= 5) {
 		const next = random(values.length);
 		const medians: number[] = [];
+
 		for (let resample = 0; resample < RESAMPLES; resample += 1) {
 			const draw = Array.from(
 				{ length: values.length },
@@ -50,11 +54,13 @@ export function summarise(values: number[]): Summary {
 			);
 			medians.push(median(draw.sort((left, right) => left - right)));
 		}
+
 		medians.sort((left, right) => left - right);
 		summary.ci95 = [
 			medians[Math.floor(RESAMPLES * 0.025)],
 			medians[Math.floor(RESAMPLES * 0.975)],
 		];
 	}
+
 	return summary;
 }

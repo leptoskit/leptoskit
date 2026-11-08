@@ -42,9 +42,11 @@ pub fn site(root: impl Into<PathBuf>) -> Site {
 		.script("theme/play.js")
 		.external_fonts(false)
 		.components(components());
+
 	for (name, bytes) in ink::files() {
 		site = site.generated_asset(name, bytes);
 	}
+
 	site
 }
 
@@ -173,13 +175,16 @@ fn player(props: &Props<'_>, children: Children) -> Result<AnyView, PropError> {
 	}
 	let title = props.require("title")?.to_owned();
 	let description = props.require("description")?.to_owned();
+
 	let width = props.parse::<u32>("width")?.unwrap_or(PHONE.0);
 	let height = props.parse::<u32>("height")?.unwrap_or(PHONE.1);
+
 	if width == 0 || height == 0 {
 		return Err(PropError::new(
 			"<Play> needs a `width` and `height` above zero",
 		));
 	}
+
 	let native = props.url("native").transpose()?;
 	let bar = player_bar(&title, native.is_some());
 
@@ -202,6 +207,7 @@ fn player(props: &Props<'_>, children: Children) -> Result<AnyView, PropError> {
 	} else {
 		"lk-play"
 	};
+
 	let source = format!("{}/{}/{start}", play::DIRECTORY, example.name);
 	let native_image = native.clone().map(|source| {
 		view! {

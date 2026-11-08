@@ -377,6 +377,7 @@ fn chained(batches: &[(i64, i64, Vec<LogEntry>)]) -> Vec<i64> {
 				LogEntry::Commit(commit) => commit.version,
 				LogEntry::Pruned { through } => *through,
 			};
+
 			assert!(version > last, "in order, once");
 			last = version;
 			versions.push(version);
@@ -419,6 +420,7 @@ async fn concurrent_writers_reach_the_stream_once_each_in_order() {
 	let publisher = relay.publish(&db);
 	eventually("it follows the log", || publisher.stats().following).await;
 	let server = relayed(&db, &relay).await;
+
 	let mut watcher = connect(&server).await;
 	subscribe(&mut watcher).await;
 
@@ -492,6 +494,7 @@ async fn the_publisher_fails_over_when_it_crashes() {
 			while !publisher.stats().following {
 				tokio::time::sleep(Duration::from_millis(10)).await;
 			}
+
 			leading.send(()).unwrap();
 			std::mem::forget(publisher);
 		});
@@ -509,6 +512,7 @@ async fn the_publisher_fails_over_when_it_crashes() {
 	for count in 0..5 {
 		note(&db, &format!("before-{count}")).await;
 	}
+
 	assert_eq!(until_count(&mut watcher, 5).await.len(), 5);
 	assert!(!second.stats().leading, "one publisher at a time");
 
@@ -521,6 +525,7 @@ async fn the_publisher_fails_over_when_it_crashes() {
 	for count in 0..5 {
 		note(&db, &format!("after-{count}")).await;
 	}
+
 	assert_eq!(until_count(&mut watcher, 10).await.len(), 10);
 	// A subscriber can receive the batch before the publish acknowledgment
 	// updates the publisher's statistics.
@@ -549,6 +554,7 @@ async fn a_consumer_catches_up_from_the_stream_after_nats_restarts() {
 	eventually("it follows the log", || publisher.stats().following).await;
 	let server = relayed(&db, &relay).await;
 	let mut watcher = connect(&server).await;
+
 	subscribe(&mut watcher).await;
 	note(&db, "first").await;
 	assert_eq!(until_count(&mut watcher, 1).await, ["first"]);
@@ -581,6 +587,7 @@ async fn without_a_publisher_consumers_read_the_database() {
 	let mut watcher = connect(&server).await;
 	subscribe(&mut watcher).await;
 	note(&db, "unpublished").await;
+
 	assert_eq!(until_count(&mut watcher, 1).await, ["unpublished"]);
 	assert!(server.live.stats().relay_fills >= 1);
 }
@@ -604,6 +611,7 @@ async fn a_commit_too_big_for_a_message_is_read_from_the_database() {
 	eventually("it follows the log", || publisher.stats().following).await;
 	let server = relayed(&db, &relay).await;
 	let mut watcher = connect(&server).await;
+
 	subscribe(&mut watcher).await;
 
 	note(&db, "small").await;
@@ -630,6 +638,7 @@ async fn a_gap_in_the_stream_is_read_from_the_database() {
 	eventually("it follows the log", || publisher.stats().following).await;
 	let server = relayed(&db, &relay).await;
 	let mut watcher = connect(&server).await;
+
 	subscribe(&mut watcher).await;
 	note(&db, "one").await;
 	assert_eq!(until_count(&mut watcher, 1).await, ["one"]);
@@ -690,6 +699,7 @@ async fn presence(socket: &mut Socket, count: usize) -> Vec<String> {
 				.map(|member| member.state["name"].as_str().unwrap().to_owned())
 				.collect();
 			names.sort();
+
 			return names;
 		}
 	}
@@ -723,6 +733,7 @@ async fn channels_cross_servers() {
 		},
 	)
 	.await;
+
 	loop {
 		if let ServerFrame::Signal { message, .. } = next(&mut grace).await {
 			assert_eq!(message, json!({ "from": "ada" }));
@@ -749,6 +760,7 @@ async fn reruns_never_read_a_replica_that_is_behind() {
 	// Streaming keeps the standby a moment behind, so re-runs read it once
 	// it has replayed each commit.
 	let mut count = 0;
+
 	while server.live.stats().replica_reruns == 0 {
 		count += 1;
 		note(&db, &format!("streamed-{count:03}")).await;

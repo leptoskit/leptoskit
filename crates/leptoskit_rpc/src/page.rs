@@ -161,6 +161,7 @@ where
 		serde_json::from_str::<V>(text)
 			.map_err(|_| crate::Error::invalid(format!("`{text}` isn't a cursor of this query")))
 	};
+
 	let mut query = query.order_by(|_| order);
 
 	if let Some(after) = page.after.as_deref() {
@@ -196,6 +197,7 @@ where
 	let mut items = query.limit(u64::from(rows) + 1).all(db).await?;
 	let has_more = items.len() > limit;
 	items.truncate(limit);
+
 	let end = match items.last() {
 		Some(row) => {
 			Some(
@@ -230,6 +232,7 @@ mod tests {
 			serde_json::to_value(&first).unwrap(),
 			serde_json::json!({ "limit": 20 })
 		);
+
 		assert_eq!(Page::<u8>::default().items, Vec::<u8>::new());
 	}
 }

@@ -92,6 +92,7 @@ fn Month(
 				4 => Some("1:08"),
 				_ => None,
 			};
+
 			view! { <Tile state=state photo=photo duration=duration /> }
 		})
 		.collect::<Fragment>();
@@ -161,6 +162,7 @@ fn Tab(
 	} else {
 		colors.muted
 	};
+
 	let icon = view! { <View class="w-6 h-[22px]" corner_radius=radius /> };
 	let icon = if selected {
 		icon.background(tint)

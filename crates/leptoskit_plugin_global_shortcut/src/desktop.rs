@@ -418,6 +418,7 @@ mod tests {
 		assert_eq!(owner.drain(), EventBatch::default());
 		let mut guard = owner.register("Control+Shift+KeyK").unwrap();
 		guard.unregister().unwrap();
+
 		guard.unregister().unwrap();
 		drop(guard);
 		assert_eq!(backend.unregisters.lock().len(), 2);
@@ -582,6 +583,7 @@ mod tests {
 			plugin.invoke(MethodId(9), Bytes::new()),
 			Err(BridgeError::Unavailable)
 		);
+
 		let unknown = 404_u32.to_le_bytes().to_vec();
 		assert_eq!(
 			plugin.invoke(UNREGISTER, Bytes::from(unknown)),
@@ -658,6 +660,7 @@ mod tests {
 
 		for index in 0..REGISTRATION_CAPACITY {
 			let function = (index % 12) + 1;
+
 			let accelerator = match index / 12 {
 				0 => format!("Control+F{function}"),
 				1 => format!("Control+Shift+F{function}"),
@@ -666,6 +669,7 @@ mod tests {
 				4 => format!("Control+Alt+F{function}"),
 				_ => format!("Control+Alt+Shift+F{function}"),
 			};
+
 			guards.push(owner.register(&accelerator).unwrap());
 		}
 
@@ -687,6 +691,7 @@ mod tests {
 		assert!(matches!(owner.take_cleanup_error(), Some(Error::Native(_))));
 		assert_eq!(owner.inner.events.queue.lock().keys.len(), 1);
 		assert_eq!(backend.unregisters.lock().len(), 1);
+
 		backend.unregister_fails.store(false, Ordering::Relaxed);
 		drop(owner);
 		assert_eq!(backend.unregisters.lock().len(), 2);

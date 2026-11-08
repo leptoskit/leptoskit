@@ -172,6 +172,7 @@ mod tests {
 		restored.set(a, &[0; 40]);
 		assert_eq!(restored.encode(quota), Err(Error::TooLarge));
 		restored.remove(a);
+
 		restored.set(c, b"value");
 		assert!(restored.encode(quota).is_ok());
 	}

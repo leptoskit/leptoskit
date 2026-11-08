@@ -210,10 +210,12 @@ pub fn read(root: &Path, config: &LeptoskitConfig) -> Result<Vec<DeployService>>
 					format!("there's no package `{package}` in {}", dir.display())
 				})?
 			};
+
 			super::binary(found).with_context(|| {
 				format!("services.{}: set `bin` to the binary to run", settings.name)
 			})
 		};
+
 		let build_path = match &service.code {
 			Code::Workspace { package, manifest } => {
 				Some(format!("target/release/{}", binary(package, manifest)?))
@@ -226,6 +228,7 @@ pub fn read(root: &Path, config: &LeptoskitConfig) -> Result<Vec<DeployService>>
 			}
 			Code::Remote => None,
 		};
+
 		let url = match &settings.source {
 			leptoskit_config::ServiceSource::Remote { url } => {
 				Some(url.trim_end_matches('/').to_owned())

@@ -211,6 +211,7 @@ impl PostgresCluster {
 		} else {
 			" -c unix_socket_directories=''"
 		};
+
 		let log = directory.path().join("log");
 		let started = Command::new(self.binaries.join("pg_ctl"))
 			.arg("-D")

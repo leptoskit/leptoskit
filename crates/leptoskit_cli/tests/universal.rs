@@ -358,6 +358,7 @@ fn generated_application_shares_behavior_and_selects_platform_overrides() {
 	// check, on the route the server just answered.
 	let listed = command(&project, env!("CARGO_BIN_EXE_leptoskit"), &["rpc", "list"]);
 	assert_success(&listed);
+
 	let listed = String::from_utf8_lossy(&listed.stdout);
 	assert!(
 		listed

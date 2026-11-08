@@ -30,6 +30,7 @@ fn breaking_changes(previous: &ApiSpec, current: &ApiSpec) -> Vec<String> {
 	let mut breaks = Vec::new();
 	ambiguities(previous, "previous", &mut breaks);
 	ambiguities(current, "current", &mut breaks);
+
 	if previous.live_path != current.live_path
 		&& (!previous.channels.is_empty()
 			|| previous
@@ -72,6 +73,7 @@ fn breaking_changes(previous: &ApiSpec, current: &ApiSpec) -> Vec<String> {
 		if old.input != new.input || old.output != new.output {
 			breaks.push(format!("`{}` changed its encoding", old.name));
 		}
+
 		if old.error_content_type != new.error_content_type {
 			breaks.push(format!("`{}` changed its error encoding", old.name));
 		}
@@ -91,6 +93,7 @@ fn breaking_changes(previous: &ApiSpec, current: &ApiSpec) -> Vec<String> {
 			}
 		}
 	}
+
 	channels(previous, current, &mut breaks);
 
 	breaks
@@ -115,6 +118,7 @@ fn parameters(
 					old.name, param.name
 				));
 			}
+
 			if !same_schema(&param.schema, &candidate.schema, previous, current) {
 				breaks.push(format!(
 					"`{}` argument `{}` schema changed or has unresolved references",
@@ -154,6 +158,7 @@ fn channels(previous: &ApiSpec, current: &ApiSpec, breaks: &mut Vec<String>) {
 			breaks.push(format!("removed channel `{}`", old.name));
 			continue;
 		};
+
 		if old.fields != new.fields {
 			breaks.push(format!(
 				"channel `{}` changed its join field order",
@@ -178,10 +183,12 @@ fn channels(previous: &ApiSpec, current: &ApiSpec, breaks: &mut Vec<String>) {
 fn ambiguities(spec: &ApiSpec, label: &str, breaks: &mut Vec<String>) {
 	let mut functions = BTreeSet::new();
 	let mut routes = BTreeSet::new();
+
 	for function in &spec.functions {
 		if !functions.insert(&function.name) {
 			breaks.push(format!("{label} spec repeats function `{}`", function.name));
 		}
+
 		if function.kind.is_callable_over_http()
 			&& !routes.insert((&function.method, &function.path))
 		{
@@ -191,6 +198,7 @@ fn ambiguities(spec: &ApiSpec, label: &str, breaks: &mut Vec<String>) {
 			));
 		}
 		let mut params = BTreeSet::new();
+
 		for param in &function.params {
 			if !params.insert(&param.name) {
 				breaks.push(format!(
@@ -200,7 +208,9 @@ fn ambiguities(spec: &ApiSpec, label: &str, breaks: &mut Vec<String>) {
 			}
 		}
 	}
+
 	let mut channels = BTreeSet::new();
+
 	for channel in &spec.channels {
 		if !channels.insert(&channel.name) {
 			breaks.push(format!("{label} spec repeats channel `{}`", channel.name));
@@ -213,16 +223,19 @@ fn ambiguities(spec: &ApiSpec, label: &str, breaks: &mut Vec<String>) {
 fn same_schema(before: &Value, after: &Value, previous: &ApiSpec, current: &ApiSpec) -> bool {
 	let mut seen = BTreeSet::new();
 	let mut pending = vec![(before, after)];
+
 	while let Some((left, right)) = pending.pop() {
 		if left != right {
 			return false;
 		}
+
 		let mut references = Vec::new();
 		let mut valid = true;
 		crate::spec::visit_schema(left, &mut |schema| {
 			if !schema.is_object() && !schema.is_boolean() {
 				valid = false;
 			}
+
 			// Resource identifiers and dynamic references need a full schema
 			// resolver. Never infer compatibility by ignoring their behavior.
 			if ["$id", "$dynamicRef", "$recursiveRef"]
@@ -239,13 +252,16 @@ fn same_schema(before: &Value, after: &Value, previous: &ApiSpec, current: &ApiS
 				}
 			}
 		});
+
 		if !valid {
 			return false;
 		}
+
 		for reference in references {
 			if !seen.insert(reference.clone()) {
 				continue;
 			}
+
 			let Some(left) = resolve(&reference, before, previous) else {
 				return false;
 			};
@@ -255,14 +271,17 @@ fn same_schema(before: &Value, after: &Value, previous: &ApiSpec, current: &ApiS
 			pending.push((left, right));
 		}
 	}
+
 	true
 }
 
 fn resolve<'a>(reference: &str, root: &'a Value, spec: &'a ApiSpec) -> Option<&'a Value> {
 	let pointer = reference.strip_prefix('#')?;
+
 	if let Some(value) = root.pointer(pointer) {
 		return Some(value);
 	}
+
 	let rest = pointer
 		.strip_prefix("/components/schemas/")
 		.or_else(|| pointer.strip_prefix("/$defs/"))?;
@@ -271,6 +290,7 @@ fn resolve<'a>(reference: &str, root: &'a Value, spec: &'a ApiSpec) -> Option<&'
 		.map_or((rest, None), |(name, tail)| (name, Some(tail)));
 	let mut decoded = String::new();
 	let mut characters = name.chars();
+
 	while let Some(character) = characters.next() {
 		decoded.push(match character {
 			'~' => {
@@ -283,7 +303,9 @@ fn resolve<'a>(reference: &str, root: &'a Value, spec: &'a ApiSpec) -> Option<&'
 			_ => character,
 		});
 	}
+
 	let value = spec.schemas.get(&decoded)?;
+
 	match tail {
 		Some(tail) => value.pointer(&format!("/{tail}")),
 		None => Some(value),

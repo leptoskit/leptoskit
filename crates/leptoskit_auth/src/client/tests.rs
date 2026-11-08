@@ -1112,6 +1112,7 @@ async fn the_two_step_and_password_scopes_call_the_configured_client() {
 		.unwrap();
 	assert!(matches!(step, SignInStep::SignedIn(_)), "{step:?}");
 	assert!(use_mfa().await.unwrap().password);
+
 	use_mutation_in(client.clone(), send_code())
 		.mutate_async(ADA.to_owned())
 		.await
@@ -2739,6 +2740,7 @@ async fn the_provider_scopes_run_their_flows_and_refresh_their_queries() {
 		.mutate_async(company.id)
 		.await
 		.unwrap();
+
 	assert_eq!(use_identities().await.unwrap().len(), 1);
 
 	// A passkey the other account added guards the merge.
@@ -2814,6 +2816,7 @@ async fn a_provider_window_closed_by_the_person_is_a_cancellation() {
 			.with_refetch_on_reconnect(RefetchOn::Never)
 			.with_network_mode(NetworkMode::Always),
 	);
+
 	client.provide();
 
 	// Closing the browser is an answer, not an error: the scope refreshes

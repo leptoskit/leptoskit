@@ -369,10 +369,12 @@ pub fn routes_with(
 	let server = rpc::server::Server::new(db)
 		.service(SERVICE)
 		.identify(callers);
+
 	let live = match origin {
 		Some(origin) => server.live().origin(origin),
 		None => server.live(),
 	};
+
 	let router = leptoskit_axum::axum::Router::new().nest(
 		&rpc::service_prefix(SERVICE),
 		server.router().merge(live.router()),

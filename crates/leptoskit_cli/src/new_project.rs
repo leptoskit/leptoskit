@@ -115,6 +115,7 @@ pub fn run_with_options(
 			Some(NativeTarget::Harmonyos),
 		);
 	}
+
 	if matches!(platform, Platform::Wearos | Platform::Watchos) {
 		anyhow::ensure!(
 			database.is_none() && !auth,
@@ -131,6 +132,7 @@ pub fn run_with_options(
 		} else {
 			NativeTarget::Watchos
 		};
+
 		return crate::native::scaffold::run_for_target(path, name, sdk, Some(target));
 	}
 
@@ -712,12 +714,14 @@ fn database_files(
 
 	replace("src/main.rs".into(), expand(server));
 	let app = format!("{name}_app");
+
 	if !auth {
 		replace(
 			format!("{app}/src/lib.rs"),
 			expand(include_str!("new_project/templates/app_db.rs")),
 		);
 	}
+
 	replace(
 		format!("{app}/src/notes.rs"),
 		expand(include_str!("new_project/templates/notes.rs")),
@@ -827,6 +831,7 @@ fn auth_files(files: &mut Vec<(String, String)>, name: &str) {
 
 	let home = format!("{app}/src/routes/home.rs");
 	let contents = include_str!("new_project/templates/home_auth.rs").into();
+
 	match files.iter_mut().find(|(path, _)| *path == home) {
 		Some(entry) => entry.1 = contents,
 		None => files.push((home, contents)),
@@ -900,6 +905,7 @@ fn database_readme(name: &str, db: &DbConfig, auth: bool) -> String {
 		 server."
 			.replace("{name}", name)
 	};
+
 	let operations = format!(
 		r#"## Operations
 
@@ -946,6 +952,7 @@ fn backend_manifest(name: &str, sdk: Option<&Utf8Path>, database: Option<&str>) 
 	let backend = format!("{name}_backend");
 	let shared = format!("{name}_shared");
 	let mut features = vec!["server", "rpc-ssr"];
+
 	let shared_features = match database {
 		Some(feature) => {
 			features.push(feature);
@@ -1477,6 +1484,7 @@ fn secrets_manifest(config: &LeptoskitConfig) -> Result<String> {
 	let mut database = toml::Table::new();
 	database.insert("description".into(), "Database connection URL".into());
 	database.insert("required".into(), false.into());
+
 	if let Some(db) = &config.db {
 		// Match the generated server's local SQLite fallback.
 		if db.dialect == DbDialect::Sqlite {
@@ -1486,17 +1494,21 @@ fn secrets_manifest(config: &LeptoskitConfig) -> Result<String> {
 			);
 		}
 	}
+
 	let database_name = config
 		.db
 		.as_ref()
 		.map_or("DATABASE_URL", |db| db.url_env.as_str());
+
 	secrets.insert(database_name.into(), database.into());
+
 	if let Some(auth) = &config.auth {
 		let mut keys = toml::Table::new();
 		keys.insert("description".into(), "Sign-in encryption key ring".into());
 		keys.insert("required".into(), true.into());
 		secrets.insert(auth.keys_env.clone(), keys.into());
 	}
+
 	let mut project = toml::Table::new();
 	project.insert("name".into(), config.app.name.clone().into());
 	project.insert("revision".into(), "1.0".into());
@@ -1534,6 +1546,7 @@ mod tests {
 		assert!(notes.contains("use_rpc_query(|| NotesQuery {})"), "{notes}");
 		assert!(notes.contains("remove_queries"), "{notes}");
 		assert!(notes.contains("MAX_BODY"), "{notes}");
+
 		for state in ["Loading notes…", "No notes yet.", "Saved.", "Refresh"] {
 			assert!(notes.contains(state), "missing {state:?}: {notes}");
 		}

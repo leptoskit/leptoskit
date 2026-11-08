@@ -32,6 +32,7 @@ impl Value {
 	pub fn as_number(&self) -> Option<f64> {
 		match self {
 			Self::Number(number) => Some(*number),
+
 			Self::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
 			Self::Text(text) => parse_number(text),
 			Self::Null | Self::List(_) | Self::Record(_) => None,
@@ -96,6 +97,7 @@ pub(crate) fn parse_number(text: &str) -> Option<f64> {
 	}
 
 	let number: f64 = digits.parse().ok()?;
+
 	if !number.is_finite() {
 		return None;
 	}
@@ -114,6 +116,7 @@ pub(crate) fn format_number(number: f64) -> String {
 	}
 
 	let rounded = (number * 100.0).round() / 100.0;
+
 	if rounded.fract() == 0.0 && rounded.abs() < 1e15 {
 		return format!("{rounded:.0}");
 	}

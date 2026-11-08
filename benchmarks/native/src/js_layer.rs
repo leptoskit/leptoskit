@@ -188,8 +188,10 @@ impl JsonTreeHost {
 				"js guest committed {} parentless nodes",
 				roots.len()
 			));
+
 			return;
 		};
+
 		match self.assemble(*root) {
 			Ok(tree) => {
 				self.surface.set_root(&tree);
@@ -207,16 +209,19 @@ impl JsonTreeHost {
 		let mut element = Element::new(*kind)
 			.props(wire.props.clone())
 			.style(wire.style.clone());
+
 		if !wire.class.is_empty() {
 			element = element
 				.try_class(&wire.class)
 				.map_err(|error| format!("js guest node {id} has invalid classes: {error}"))?;
 		}
+
 		if let Some(children) = self.children.get(&id) {
 			for child in children {
 				element = element.child(self.assemble(*child)?);
 			}
 		}
+
 		Ok(element)
 	}
 }
@@ -363,6 +368,7 @@ pub fn run(report: &mut Report, config: Config) -> Result<(), String> {
 		guest
 	};
 	let rows = started().rows()?;
+
 	if rows != ROWS {
 		return Err(format!("js guest committed {rows} rows, expected {ROWS}"));
 	}
@@ -389,6 +395,7 @@ pub fn run(report: &mut Report, config: Config) -> Result<(), String> {
 		let guest = started();
 		guest.event(1, 0)?;
 		let label = guest.label(0)?;
+
 		if label != "Row 0 · 1" {
 			return Err(format!("js row 0 reads {label:?} after a press"));
 		}
@@ -407,6 +414,7 @@ pub fn run(report: &mut Report, config: Config) -> Result<(), String> {
 		guest.event(2, 0)?;
 		let label = guest.label(ROWS - 1)?;
 		let expected = format!("Row {} · gen 1", ROWS - 1);
+
 		if label != expected {
 			return Err(format!(
 				"js row {} reads {label:?}, expected {expected:?}",

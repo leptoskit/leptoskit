@@ -149,6 +149,7 @@ fn write_depth(writer: &mut Writer, depth: &DepthImage) {
 		DepthFormat::Meters32 => 0,
 		DepthFormat::Millimeters16 => 1,
 	});
+
 	writer.u32(depth.row_stride);
 	writer.bytes(&depth.data);
 
@@ -188,6 +189,7 @@ fn read_depth(reader: &mut Reader<'_>) -> Result<DepthImage, Error> {
 	} else {
 		None
 	};
+
 	let plane = ImagePlane {
 		width,
 		height,
@@ -297,6 +299,7 @@ impl ReplayBackend {
 		} else {
 			(0, elapsed)
 		};
+
 		let index = frames
 			.partition_point(|recorded| recorded.frame.time - first <= offset + TIME_TOLERANCE)
 			.checked_sub(1)?;

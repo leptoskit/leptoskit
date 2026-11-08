@@ -210,6 +210,7 @@ pub(crate) async fn mutate<M: Operation<Context = MutationCx>>(
 		&& let Some(stored) = key.find(&db).await?
 	{
 		committed_before_now(&db).await;
+
 		return decode::<M>(stored);
 	}
 

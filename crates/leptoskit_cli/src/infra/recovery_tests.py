@@ -38,6 +38,7 @@ psql("CREATE TABLE _leptoskit_migrations(name TEXT PRIMARY KEY, checksum TEXT NO
 # history, one that has applied none.
 psql("CREATE ROLE leptoskit_service_analytics LOGIN; CREATE ROLE leptoskit_service_cards LOGIN")
 psql("CREATE DATABASE leptoskit_service_analytics OWNER leptoskit_service_analytics")
+
 psql("CREATE DATABASE leptoskit_service_cards OWNER leptoskit_service_cards")
 psql("CREATE TABLE _leptoskit_migrations(name TEXT PRIMARY KEY, checksum TEXT NOT NULL); "
      "INSERT INTO _leptoskit_migrations VALUES ('events', 'fixture'); "
@@ -94,12 +95,14 @@ RELEASES = [{"version": "v1", "migrations": "app", "services": {"analytics": {"m
 (root / "releases.json").write_text(json.dumps(RELEASES))
 (root / "cache-stale").write_text("stale value")
 (root.parent / "nats").mkdir(mode=0o700)
+
 (root.parent / "nats/old-stream").write_text("events ahead of the restored database")
 
 
 def invoke(*args, success=True):
     result = subprocess.run([sys.executable, worker, *args], capture_output=True)
     assert (result.returncode == 0) == success, (args, result.stdout, result.stderr)
+
     return json.loads(result.stdout)
 
 
@@ -111,6 +114,7 @@ assert len(invoke("snapshots")) == 1
 invoke("verify", "--snapshot", snapshot)
 psql("UPDATE notes SET body = 'changed'", "leptoskit")
 psql("UPDATE events SET name = 'changed'", "leptoskit_service_analytics")
+
 psql("UPDATE cards SET id = 2", "leptoskit_service_cards")
 invoke("restore", "--snapshot", snapshot, success=False)
 assert psql("SELECT body FROM notes", "leptoskit") == "changed"

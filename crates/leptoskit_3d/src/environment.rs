@@ -95,9 +95,11 @@ fn prefiltered(normal: Vec3, roughness: f32) -> Vec3 {
 	} else {
 		Vec3::X
 	};
+
 	let tangent = up.cross(normal).normalize();
 	let bitangent = normal.cross(tangent);
 	let mut sum = Vec3::ZERO;
+
 	let mut weight = 0.0;
 
 	for index in 0..SAMPLES {

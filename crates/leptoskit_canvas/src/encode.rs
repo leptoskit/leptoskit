@@ -155,13 +155,17 @@ pub(crate) fn encode(scene: &Scene, width: u32, height: u32, scale: f32) -> Fram
 		},
 		stack: Vec::new(),
 	};
+
 	for command in &scene.commands {
 		encoder.command(command);
 	}
+
 	encoder.end_segment();
+
 	if encoder.frame.paints.is_empty() {
 		encoder.frame.paints.push(PaintRecord::zeroed());
 	}
+
 	encoder.frame
 }
 
@@ -196,6 +200,7 @@ impl Encoder {
 				if stroke.width <= 0.0 {
 					return;
 				}
+
 				let reach = stroke.width * 0.5 * stroke.miter_limit.max(1.5);
 				let Some(tessellation) = self.tessellation(path, reach) else {
 					return;
@@ -280,6 +285,7 @@ impl Encoder {
 	/// both are path meshes that follow on, at the same stencil value.
 	fn step(&mut self, draw: Draw) {
 		let stencil = self.depth;
+
 		if self.frame.steps.len() > self.segment.steps.start
 			&& let Some(last) = self.frame.steps.last_mut()
 			&& last.stencil == stencil
@@ -320,12 +326,14 @@ impl Encoder {
 			device.apply(hi),
 		];
 		let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+
 		for corner in corners {
 			min_x = min_x.min(corner.x);
 			min_y = min_y.min(corner.y);
 			max_x = max_x.max(corner.x);
 			max_y = max_y.max(corner.y);
 		}
+
 		max_x > 0.0 && max_y > 0.0 && min_x < self.width && min_y < self.height
 	}
 
@@ -344,10 +352,13 @@ impl Encoder {
 		let margin = margin + 1.0 / px;
 		let lo = Point::new(rect.x - margin, rect.y - margin);
 		let hi = Point::new(rect.x + rect.width + margin, rect.y + rect.height + margin);
+
 		if !self.visible(lo, hi) {
 			return;
 		}
+
 		let Affine(m) = self.device();
+
 		let index = self.frame.instances.len() as u32;
 		self.frame.instances.push(Instance {
 			rect: [rect.x, rect.y, rect.width, rect.height],
@@ -365,6 +376,7 @@ impl Encoder {
 		if rect.width <= 0.0 || rect.height <= 0.0 {
 			return;
 		}
+
 		let border = border.unwrap_or_default();
 		let paint = self.paint(paint);
 		self.quad(
@@ -385,9 +397,11 @@ impl Encoder {
 			rect.width + spread * 2.0,
 			rect.height + spread * 2.0,
 		);
+
 		if rect.width <= 0.0 || rect.height <= 0.0 || shadow.color.a <= 0.0 {
 			return;
 		}
+
 		let grow = |radius: f32| {
 			if radius > 0.0 {
 				(radius + spread).max(0.0)
@@ -395,6 +409,7 @@ impl Encoder {
 				0.0
 			}
 		};
+
 		let radii = CornerRadii {
 			top_left: grow(radii.top_left),
 			top_right: grow(radii.top_right),
@@ -449,6 +464,7 @@ impl Encoder {
 				}
 			}
 		};
+
 		let index = self.frame.paints.len() as u32;
 		self.frame.paints.push(record);
 		index
@@ -457,12 +473,14 @@ impl Encoder {
 	/// Bakes gradient stops into a ramp row and returns the row.
 	fn ramp(&mut self, stops: &[GradientStop]) -> u32 {
 		let row = self.frame.ramp_rows() as u32;
+
 		for texel in 0..RAMP_WIDTH {
 			let color = ramp_color(stops, texel as f32 / (RAMP_WIDTH - 1) as f32);
 			self.frame
 				.ramps
 				.extend(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8));
 		}
+
 		row
 	}
 
@@ -471,15 +489,19 @@ impl Encoder {
 	/// extends past the outline.
 	fn tessellation(&self, path: &Path, reach: f32) -> Option<f32> {
 		let px = self.pixels_per_unit()?;
+
 		if self.frame.mesh.vertices.len() >= MAX_VERTICES {
 			return None;
 		}
+
 		let (lo, hi) = bounds(path)?;
 		let lo = Point::new(lo.x - reach, lo.y - reach);
 		let hi = Point::new(hi.x + reach, hi.y + reach);
+
 		if !self.visible(lo, hi) {
 			return None;
 		}
+
 		// A quarter pixel, but never finer than 1/4096 of the path, which
 		// bounds how many vertices one curve can become at any zoom.
 		let extent = (hi.x - lo.x).max(hi.y - lo.y);
@@ -490,11 +512,14 @@ impl Encoder {
 	/// returning their index range.
 	fn commit(&mut self, start: (usize, usize), ok: bool) -> Option<Range<u32>> {
 		let mesh = &mut self.frame.mesh;
+
 		if !ok || mesh.vertices.len() > MAX_VERTICES {
 			mesh.vertices.truncate(start.0);
 			mesh.indices.truncate(start.1);
+
 			return None;
 		}
+
 		(mesh.indices.len() > start.1).then_some(start.1 as u32..mesh.indices.len() as u32)
 	}
 
@@ -515,6 +540,7 @@ impl Encoder {
 			FillRule::NonZero => lyon_tessellation::FillRule::NonZero,
 			FillRule::EvenOdd => lyon_tessellation::FillRule::EvenOdd,
 		});
+
 		let ok = FillTessellator::new()
 			.tessellate_path(
 				&lyon,
@@ -553,6 +579,7 @@ impl Encoder {
 				LineJoin::Round => lyon_tessellation::LineJoin::Round,
 				LineJoin::Bevel => lyon_tessellation::LineJoin::Bevel,
 			});
+
 		let ok = StrokeTessellator::new()
 			.tessellate_path(
 				&lyon,
@@ -595,23 +622,28 @@ pub(crate) fn ramp_color(stops: &[GradientStop], t: f32) -> [f32; 4] {
 	let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
 		return [0.0; 4];
 	};
+
 	if t <= first.offset {
 		return first.color.premultiplied();
 	}
+
 	if t >= last.offset {
 		return last.color.premultiplied();
 	}
+
 	let next = stops
 		.iter()
 		.position(|stop| stop.offset > t)
 		.unwrap_or(stops.len() - 1);
 	let (a, b) = (stops[next.saturating_sub(1)], stops[next]);
+
 	let span = b.offset - a.offset;
 	let mix = if span > 0.0 {
 		(t - a.offset) / span
 	} else {
 		1.0
 	};
+
 	let (a, b) = (a.color.premultiplied(), b.color.premultiplied());
 	std::array::from_fn(|channel| a[channel] + (b[channel] - a[channel]) * mix)
 }
@@ -670,6 +702,7 @@ fn from_lyon(path: &lyon_tessellation::path::Path) -> Path {
 	use lyon_tessellation::path::Event;
 	let at = |p: lyon_tessellation::math::Point| Point::new(p.x, p.y);
 	let mut commands = Vec::new();
+
 	for event in path {
 		match event {
 			Event::Begin { at: to } => commands.push(PathCommand::MoveTo(at(to))),
@@ -689,6 +722,7 @@ fn from_lyon(path: &lyon_tessellation::path::Path) -> Path {
 			}
 		}
 	}
+
 	Path { commands }
 }
 
@@ -699,16 +733,19 @@ fn to_lyon(path: &Path) -> lyon_tessellation::path::Path {
 	let mut open = false;
 	let mut start = point(0.0, 0.0);
 	let to = |p: Point| point(p.x, p.y);
+
 	for command in &path.commands {
 		if !open && !matches!(command, PathCommand::MoveTo(_) | PathCommand::Close) {
 			builder.begin(start);
 			open = true;
 		}
+
 		match *command {
 			PathCommand::MoveTo(p) => {
 				if open {
 					builder.end(false);
 				}
+
 				start = to(p);
 				builder.begin(start);
 				open = true;
@@ -730,9 +767,11 @@ fn to_lyon(path: &Path) -> lyon_tessellation::path::Path {
 			}
 		}
 	}
+
 	if open {
 		builder.end(false);
 	}
+
 	builder.build()
 }
 
@@ -767,6 +806,7 @@ mod tests {
 			}
 		);
 		assert_eq!(composite.stencil, 1);
+
 		assert_eq!(frame.steps.last().map(|step| step.stencil), Some(1));
 	}
 
@@ -821,6 +861,7 @@ mod tests {
 		assert_eq!(frame.paints[0].color, [0.0; 4]);
 		assert_eq!(frame.ramp_rows(), 0);
 		assert_eq!(frame.steps, [] as [Step; 0]);
+
 		assert_eq!(
 			frame.segments,
 			[Segment {
@@ -859,6 +900,7 @@ mod tests {
 		// One pixel per point: the device matrix is the identity, padded by
 		// the one-pixel anti-aliasing margin.
 		assert_eq!(quad.m0, [1.0, 0.0, 0.0, 1.0]);
+
 		assert_eq!(quad.m1, [0.0, 0.0, 1.0, 1.0]);
 		assert_eq!(quad.params[0], KIND_FILL);
 		assert_eq!(quad.params[1], 2.0, "the border width rides in params");
@@ -921,6 +963,7 @@ mod tests {
 		assert_eq!(shadow.radii, [6.0; 4], "the spread grows the corners too");
 		assert_eq!(shadow.params[0], KIND_SHADOW);
 		assert_eq!(shadow.params[2], 3.0, "sigma is half the blur");
+
 		assert_eq!(shadow.color, [0.0, 0.0, 0.0, 0.5]);
 		assert_eq!(shadow.paint, [0, 0, 0, 0], "shadows need no paint");
 		let shrunk = &frame.instances[1];
@@ -935,6 +978,7 @@ mod tests {
 	#[test]
 	fn strokes_encode_every_cap_and_join() {
 		let line = || Path::new().move_to(5.0, 5.0).line_to(35.0, 5.0);
+
 		for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
 			for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
 				let scene = Scene::new()
@@ -945,6 +989,7 @@ mod tests {
 				let Draw::Mesh(range) = &frame.steps[0].draw else {
 					panic!("a mesh draw");
 				};
+
 				assert!(!range.is_empty(), "{cap:?} {join:?}");
 			}
 		}
@@ -1043,6 +1088,7 @@ mod tests {
 		};
 		assert!(!push.is_empty(), "the rings tessellate to real geometry");
 		assert_eq!(frame.steps[0].stencil, 0);
+
 		assert!(matches!(&frame.steps[1].draw, Draw::Quads(_)));
 		assert_eq!(frame.steps[1].stencil, 1);
 		assert_eq!(frame.steps[2].draw, Draw::ClipPop(push.clone()));
@@ -1154,6 +1200,7 @@ mod tests {
 		assert_eq!(frame.paints[0].kind, 1, "linear");
 		assert_eq!(frame.paints[0].row, 0);
 		assert_eq!(frame.paints[1].kind, 2, "radial");
+
 		assert_eq!(frame.paints[1].row, 1);
 		assert_eq!(frame.paints[2].kind, 0, "solid");
 		assert_eq!(frame.paints[2].color, [0.0, 0.0, 0.0, 1.0]);

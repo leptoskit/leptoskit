@@ -32,8 +32,10 @@ pub(crate) fn random_key() -> anyhow::Result<String> {
 	let mut bytes = [0; 32];
 	getrandom::fill(&mut bytes).map_err(|_| anyhow::anyhow!("secure randomness is unavailable"))?;
 	let mut key = String::with_capacity(64);
+
 	for byte in bytes {
 		write!(&mut key, "{byte:02x}")?;
 	}
+
 	Ok(key)
 }

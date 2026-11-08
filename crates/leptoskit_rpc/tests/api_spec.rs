@@ -369,6 +369,7 @@ fn channels_are_collected_with_their_schemas_and_live_path() {
 	assert_eq!(collected.struct_name, "Room");
 	assert_eq!(collected.docs, "Who is in a room, and what they say.");
 	assert_eq!(collected.fields, ["room"]);
+
 	assert_eq!(collected.message_schema["type"], "string");
 	assert!(collected.deprecated);
 	assert!(!collected.internal);

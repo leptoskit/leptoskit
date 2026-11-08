@@ -472,6 +472,7 @@ async fn checked_upsert<T: Table>(
 	#[cfg(feature = "postgres")]
 	if connection.row_security() {
 		let values = row.to_values()?;
+
 		let result = match &existing {
 			Some(old) => upserted::<T>(&old.to_values()?, &values, target),
 			None => values,
@@ -485,6 +486,7 @@ async fn checked_upsert<T: Table>(
 	} else {
 		write_insert(connection, row).await?
 	};
+
 	let key = policy::key_of::<T>(&stored.to_values()?);
 	policy::verify::<T>(connection, &[key], action, check).await?;
 	Ok(stored)

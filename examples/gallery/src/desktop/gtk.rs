@@ -49,6 +49,7 @@ impl Host {
 			if !gallery.is_pressable(node) {
 				return false;
 			}
+
 			gallery.surface.backend().control(node)
 		};
 		let Some(button) = control.and_then(|control| control.downcast::<gtk::Button>().ok())
@@ -112,6 +113,7 @@ pub fn open(slug: &str, assets: Assets) -> Result<Host, String> {
 				session.borrow_mut().dispatch(node, &event);
 			}
 		});
+
 		let weak = Rc::downgrade(&session);
 		backend.set_resize_listener(move |width, height| {
 			if let Some(session) = weak.upgrade() {
@@ -146,6 +148,7 @@ fn painted_png(session: &Session, window: &gtk::Window) -> Result<Vec<u8>, Strin
 			if result.borrow().is_some() {
 				return;
 			}
+
 			let gallery = session.borrow();
 			let png = gallery
 				.surface
@@ -169,13 +172,17 @@ fn painted_png(session: &Session, window: &gtk::Window) -> Result<Vec<u8>, Strin
 		move || timed_out.set(true)
 	});
 	let context = gtk::glib::MainContext::default();
+
 	while result.borrow().is_none() && !timed_out.get() {
 		context.iteration(true);
 	}
+
 	clock.disconnect(painted);
+
 	if !timed_out.get() {
 		timeout.remove();
 	}
+
 	result.take().unwrap_or_else(|| {
 		Err(format!(
 			"the window did not paint within {} seconds",
@@ -195,16 +202,19 @@ pub fn snapshot(out_dir: &Path) -> Result<Vec<PathBuf>, String> {
 	let assets = default_assets()?;
 	std::fs::create_dir_all(out_dir)
 		.map_err(|error| format!("could not create {}: {error}", out_dir.display()))?;
+
 	for screen in &SCREENS {
 		let host = open(screen.slug, assets.clone())?;
 		let window = host.show()?;
 		let png = painted_png(&host.session, &window);
 		window.close();
+
 		let png = png.map_err(|error| format!("could not snapshot `{}`: {error}", screen.slug))?;
 		let path = out_dir.join(format!("{}.png", screen.slug));
 		std::fs::write(&path, png)
 			.map_err(|error| format!("could not write {}: {error}", path.display()))?;
 		written.push(path);
 	}
+
 	Ok(written)
 }

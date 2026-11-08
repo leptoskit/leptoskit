@@ -42,6 +42,7 @@ pub(crate) fn generate(context: &Context<'_>) -> Generated {
 	index.push_str(RUNTIME);
 	index.push_str(&client_section(context, &names, &methods, &channels));
 	let mut live = context.banner("//");
+
 	live.push_str(include_str!("templates/live.ts"));
 	Generated {
 		files: vec![
@@ -613,6 +614,7 @@ fn live_readme(context: &Context<'_>, methods: &[String], channels: &[String]) -
 		} else {
 			"{ /* ... */ }, "
 		};
+
 		lines.push(format!(
 			"const stop = api.{method}.subscribe({args}(value) => render(value));"
 		));
@@ -624,6 +626,7 @@ fn live_readme(context: &Context<'_>, methods: &[String], channels: &[String]) -
 		} else {
 			"{ /* ... */ }"
 		};
+
 		lines.push(format!("await api.{method}.live({args});"));
 	}
 

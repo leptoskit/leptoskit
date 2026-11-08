@@ -58,14 +58,18 @@ impl Service {
 		} else {
 			b"leptoskit-app-read-v1:"
 		});
+
 		mac.update(project.as_bytes());
 		let mut key = String::new();
+
 		for byte in mac.finalize().into_bytes() {
 			write!(&mut key, "{byte:02x}")?;
 		}
+
 		if ingest {
 			self.0.store.install_ingest_key(project, &key)?;
 		}
+
 		Ok(key)
 	}
 
@@ -143,6 +147,7 @@ impl Service {
 					session: false,
 				});
 			}
+
 			return self.token(key.to_owned(), false).await;
 		}
 		let key = headers
@@ -155,9 +160,11 @@ impl Service {
 			})
 			.ok_or_else(unauthorized)?;
 		let principal = self.token(key.to_owned(), true).await?;
+
 		if write && !self.same_origin(headers) {
 			return Err(forbidden());
 		}
+
 		Ok(principal)
 	}
 
@@ -233,15 +240,18 @@ async fn login(
 	if !service.same_origin(&headers) || body.key.len() > 256 {
 		return Err(forbidden());
 	}
+
 	let mut auth = HeaderMap::new();
 	auth.insert(
 		"authorization",
 		HeaderValue::from_str(&format!("Bearer {}", body.key)).map_err(|_| unauthorized())?,
 	);
 	let principal = service.auth(&auth, false).await?;
+
 	if principal.scope != Scope::Owner {
 		return Err(forbidden());
 	}
+
 	let key = service
 		.0
 		.store
@@ -256,6 +266,7 @@ async fn login(
 
 async fn logout(State(service): State<Service>, headers: HeaderMap) -> ApiResult<Response> {
 	let principal = service.auth(&headers, true).await?;
+
 	if principal.session
 		&& let Some(cookie) = headers
 			.get("cookie")
@@ -308,9 +319,11 @@ async fn enqueue(
 	Json(intent): Json<Intent>,
 ) -> ApiResult<Json<Operation>> {
 	let principal = service.auth(&headers, true).await?;
+
 	if !principal.allows(&project, Scope::Deploy) {
 		return Err(forbidden());
 	}
+
 	if matches!(intent.action, Action::Plan | Action::Apply { .. })
 		&& principal.scope != Scope::Owner
 	{
@@ -331,6 +344,7 @@ async fn enqueue(
 				"plan_already_consumed" => "plan_already_consumed",
 				_ => "operation_rejected",
 			};
+
 			ApiError(StatusCode::CONFLICT, code)
 		})?;
 	service.0.wake.notify_one();
@@ -349,9 +363,11 @@ async fn operation(
 		.operation(&id)
 		.map_err(storage)?
 		.ok_or(ApiError(StatusCode::NOT_FOUND, "operation_not_found"))?;
+
 	if !principal.allows(&operation.project, Scope::Read) {
 		return Err(forbidden());
 	}
+
 	Ok(Json(operation))
 }
 
@@ -367,9 +383,11 @@ async fn fleet(
 	headers: HeaderMap,
 ) -> ApiResult<Json<Fleet>> {
 	let principal = service.auth(&headers, false).await?;
+
 	if !principal.allows(&project, Scope::Read) {
 		return Err(forbidden());
 	}
+
 	let to = range.to.unwrap_or_else(now);
 	let store = service.0.store.clone();
 	let fleet = tokio::task::spawn_blocking(move || {
@@ -397,9 +415,11 @@ async fn ingest(
 	Json(snapshot): Json<leptoskit::analytics::Snapshot>,
 ) -> ApiResult<StatusCode> {
 	let principal = service.auth(&headers, true).await?;
+
 	if principal.session || !principal.allows(&project, Scope::Ingest) {
 		return Err(forbidden());
 	}
+
 	let store = service.0.store.clone();
 	tokio::task::spawn_blocking(move || store.ingest(&project, &snapshot))
 		.await
@@ -425,6 +445,7 @@ async fn issue(
 	Json(body): Json<Issue>,
 ) -> ApiResult<Json<serde_json::Value>> {
 	let principal = service.auth(&headers, true).await?;
+
 	if principal.scope != Scope::Owner || principal.project.is_some() || body.scope == Scope::Owner
 	{
 		return Err(forbidden());
@@ -442,9 +463,11 @@ async fn revoke(
 	Json(body): Json<Login>,
 ) -> ApiResult<StatusCode> {
 	let principal = service.auth(&headers, true).await?;
+
 	if principal.scope != Scope::Owner || principal.project.is_some() {
 		return Err(forbidden());
 	}
+
 	service.0.store.revoke(&body.key).map_err(storage)?;
 	Ok(StatusCode::NO_CONTENT)
 }

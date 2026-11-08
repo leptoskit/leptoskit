@@ -186,6 +186,7 @@ fn exercise() {
 	host.refresh_menu(id).unwrap();
 	host.bounds(id).unwrap();
 	host.remove(id).unwrap();
+
 	assert!(matches!(host.remove(id), Err(Error::UnknownTray)));
 	assert!(matches!(
 		host.set_visible(id, true),

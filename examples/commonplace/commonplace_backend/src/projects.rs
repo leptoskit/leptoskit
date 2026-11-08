@@ -27,6 +27,7 @@ pub async fn list(_me: SignedIn, Extension(db): Extension<Db>) -> Answer<Vec<Pro
 		.all(&db)
 		.await?;
 	let mut summaries = Vec::with_capacity(projects.len());
+
 	for project in projects {
 		let id = project.id;
 		summaries.push(ProjectSummary {
@@ -41,6 +42,7 @@ pub async fn list(_me: SignedIn, Extension(db): Extension<Db>) -> Answer<Vec<Pro
 			project: project.into(),
 		});
 	}
+
 	Ok(Json(summaries))
 }
 
@@ -51,9 +53,11 @@ pub async fn create(
 	Json(input): Json<NewProjectInput>,
 ) -> Answer<PublicProject> {
 	let title = input.title.trim().to_owned();
+
 	if title.is_empty() {
 		return Err(Failure::invalid("A project needs a title."));
 	}
+
 	let project = NewProject {
 		owner_id: me.account,
 		title,
@@ -111,9 +115,11 @@ pub async fn remove(
 		.filter(|project| project.id.eq(id))
 		.destroy(&db)
 		.await?;
+
 	if removed == 0 {
 		return Err(Failure::not_found("project"));
 	}
+
 	Ok(StatusCode::NO_CONTENT)
 }
 

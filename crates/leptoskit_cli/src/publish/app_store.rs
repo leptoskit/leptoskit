@@ -1044,6 +1044,7 @@ mod tests {
 		assert_eq!(archive.dir.as_deref(), Some(Path::new("/app")));
 		assert_eq!(archive.unset, ["LD", "LDPLUSPLUS"]);
 		insta::assert_snapshot!(archive.args.join(" "), @"archive -project .leptoskit/ios/Host.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath /app/.leptoskit/publish/ios/App.xcarchive -derivedDataPath .leptoskit/ios/build -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1 DEVELOPMENT_TEAM=ABCDE12345 CODE_SIGN_STYLE=Automatic MARKETING_VERSION=1.4.0 CURRENT_PROJECT_VERSION=42");
+
 		let export = export(Path::new("/app/.leptoskit/publish/ios"), &key());
 		insta::assert_snapshot!(export.args.join(" "), @"-exportArchive -archivePath /app/.leptoskit/publish/ios/App.xcarchive -exportPath /app/.leptoskit/publish/ios/export -exportOptionsPlist /app/.leptoskit/publish/ios/ExportOptions.plist -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1");
 	}

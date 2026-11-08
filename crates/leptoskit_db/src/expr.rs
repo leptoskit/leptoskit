@@ -624,6 +624,7 @@ impl Expr {
 						"regex filters run on Postgres; on SQLite, filter in Rust or use `ilike`",
 					));
 				}
+
 				sql.identifier(column)
 					.push(" ~ ")
 					.value(Value::Text(pattern.clone()));

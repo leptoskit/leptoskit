@@ -54,6 +54,7 @@ impl Action {
 				&& s.bytes()
 					.all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 		};
+
 		match self {
 			Self::Apply { plan_id } => super::identifier(plan_id),
 			Self::Deploy { version, .. } | Self::Rollback { version } => {

@@ -88,6 +88,7 @@ async fn the_notes_page_is_a_whole_document_with_one_island() {
 	assert!(html.contains("<title>Field notes</title>"), "{html}");
 	assert!(html.contains(r#"href="/style.css""#), "{html}");
 	assert!(html.contains("Most of a page is just words."), "{html}");
+
 	// Only the clap counter hydrates, with its props serialized for the
 	// client.
 	assert_eq!(html.matches("<leptos-island").count(), 1, "{html}");
@@ -173,6 +174,7 @@ async fn requests_past_the_in_flight_limit_are_shed() {
 	// Each hanging request takes its slot when it is first polled, so the
 	// probe is answered until the last slot is gone, then shed.
 	let deadline = Instant::now() + Duration::from_secs(10);
+
 	let status = loop {
 		let status = app
 			.clone()
@@ -180,12 +182,16 @@ async fn requests_past_the_in_flight_limit_are_shed() {
 			.await
 			.expect("the router is infallible")
 			.status();
+
 		if status == StatusCode::SERVICE_UNAVAILABLE || Instant::now() > deadline {
 			break status;
 		}
+
 		tokio::task::yield_now().await;
 	};
+
 	assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
 	for task in hanging {
 		task.abort();
 	}

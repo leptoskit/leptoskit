@@ -101,6 +101,7 @@ impl S3Bucket {
 			"backup upload failed: HTTP {}",
 			response.status()
 		);
+
 		Ok(())
 	}
 
@@ -645,6 +646,7 @@ mod tests {
 			"{}",
 			requests[0]
 		);
+
 		assert_eq!(ok.bodies(), vec![b"the index".to_vec()]);
 
 		let refused = answering(1, "HTTP/1.1 403 Forbidden", "", b"");
@@ -1084,6 +1086,7 @@ mod tests {
 			.expect_err("the handshake is refused")
 			.to_string();
 		server.join().expect("server");
+
 		assert!(
 			message.contains("GET app/production/index.json: "),
 			"{message}"

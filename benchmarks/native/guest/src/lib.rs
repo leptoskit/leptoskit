@@ -61,6 +61,7 @@ pub extern "C" fn leptoskit_main() {
 		node_create(ROOT, KIND_VIEW);
 	}
 	set_props(ROOT, r#"{"style":{"flex_direction":"Column"}}"#);
+
 	for row in 0..ROWS {
 		let row_id = ROW_BASE + row;
 		let label_id = LABEL_BASE + row;
@@ -70,11 +71,13 @@ pub extern "C" fn leptoskit_main() {
 		}
 		set_props(row_id, ROW_PROPS);
 		set_props(label_id, &label_json(row, ""));
+
 		unsafe {
 			node_insert(row_id, label_id, 0);
 			node_insert(ROOT, row_id, row as i32);
 		}
 	}
+
 	unsafe {
 		commit();
 	}
@@ -87,25 +90,32 @@ pub extern "C" fn leptoskit_event(id: i64, kind: i32, _ptr: i32, _len: i32) -> i
 	if kind != PRESS {
 		return 0;
 	}
+
 	if id == ROOT {
 		let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 		set_props(LABEL_BASE, &label_json(0, &format!(" · {count}")));
 		unsafe {
 			commit();
 		}
+
 		return 1;
 	}
+
 	if id == ROW_BASE {
 		let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
 		let suffix = format!(" · gen {generation}");
+
 		for row in 0..ROWS {
 			set_props(LABEL_BASE + row, &label_json(row, &suffix));
 		}
+
 		unsafe {
 			commit();
 		}
+
 		return 1;
 	}
+
 	0
 }
 

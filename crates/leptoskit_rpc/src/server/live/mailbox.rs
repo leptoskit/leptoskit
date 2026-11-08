@@ -51,18 +51,22 @@ impl Sender {
 	/// the mailbox instead of discarding results and advancing its cursor.
 	pub(super) fn send(&self, batch: Batch) -> bool {
 		let mut state = self.0.state();
+
 		if state.closed {
 			return false;
 		}
+
 		let batch = match state.pending.take() {
 			Some(previous) => coalesce(previous, batch),
 			None => batch,
 		};
+
 		if batch.changes.len() > MAX_SUBSCRIPTIONS {
 			state.closed = true;
 		} else {
 			state.pending = Some(batch);
 		}
+
 		let accepted = !state.closed;
 		drop(state);
 		self.0.ready.notify_one();
@@ -84,6 +88,7 @@ impl Receiver {
 			// notify_one retains a permit even before this future is polled.
 			// There is exactly one receiver, including when select cancels it.
 			let ready = self.0.ready.notified();
+
 			match self.try_recv() {
 				Ok(batch) => return Some(batch),
 				Err(TryRecvError::Disconnected) => return None,
@@ -94,6 +99,7 @@ impl Receiver {
 
 	pub(super) fn try_recv(&self) -> Result<Batch, TryRecvError> {
 		let mut state = self.0.state();
+
 		if let Some(batch) = state.pending.take() {
 			Ok(batch)
 		} else if state.closed {
@@ -135,6 +141,7 @@ fn coalesce(previous: Batch, newer: Batch) -> Batch {
 				Changed::Patch(_, value) => Changed::Whole(value),
 				other => other,
 			};
+
 			(id, changed)
 		})
 		.collect();
@@ -180,14 +187,17 @@ mod tests {
 	#[test]
 	fn a_slow_connection_retains_one_latest_result_per_subscription() {
 		let (sender, receiver) = channel();
+
 		for version in 1..=10_000 {
 			assert!(sender.send(batch(version, vec![(1, value(version)), (2, value(7))])));
 		}
+
 		let current = receiver.try_recv().unwrap();
 		assert_eq!(current.to, 10_000);
 		assert_eq!(current.changes.len(), 2);
 		assert_value(&current, 1, 10_000);
 		assert_value(&current, 2, 7);
+
 		assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 	}
 
@@ -226,8 +236,10 @@ mod tests {
 		assert!(sender.send(batch(1, vec![(1, value(1))])));
 		assert!(sender.send(refused));
 		assert!(sender.send(batch(3, vec![(2, value(3))])));
+
 		let current = receiver.try_recv().unwrap();
 		assert!(current.revalidate && current.full);
+
 		assert!(matches!(&current.changes[0], (1, Changed::Failed(actual)) if *actual == error));
 		assert_value(&current, 2, 3);
 	}
@@ -247,14 +259,17 @@ mod tests {
 	#[test]
 	fn removing_and_reusing_ids_does_not_retain_old_values_or_grow_the_mailbox() {
 		let (sender, receiver) = channel();
+
 		for id in 1..=10_000 {
 			assert!(sender.send(batch(u64::from(id), vec![(id, value(u64::from(id)))])));
 			sender.remove(id);
 		}
+
 		assert!(receiver.try_recv().unwrap().changes.is_empty());
 		assert!(sender.send(batch(10_001, vec![(1, value(1))])));
 		sender.remove(1);
 		assert!(sender.send(batch(10_002, vec![(1, value(2))])));
+
 		assert_value(&receiver.try_recv().unwrap(), 1, 2);
 	}
 

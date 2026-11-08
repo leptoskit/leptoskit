@@ -34,6 +34,7 @@ pub mod development;
 pub mod devtools;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scene3d;
+
 #[cfg(feature = "app")]
 pub mod updates;
 

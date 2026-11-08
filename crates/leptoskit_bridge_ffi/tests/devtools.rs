@@ -584,6 +584,7 @@ fn an_app_reports_its_tree_commits_and_commands_across_a_reload() {
 	let text = node(&snapshot, "Text");
 	assert_eq!(text.text.as_deref(), Some("Count: 0"));
 	assert_eq!(text.classes, ["text-lg"]);
+
 	assert_eq!(text.source.as_ref().map(|source| source.line), Some(11));
 	assert!(text.frame.is_some_and(|frame| frame.height > 0.0));
 	let button = node(&snapshot, "Button").clone();

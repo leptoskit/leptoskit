@@ -114,6 +114,7 @@ export interface Descriptor {
 
 export function readDescriptor(framework: string): Descriptor {
 	const path = `${ARENA_APPS_ROOT}/${framework}/arena.json`;
+
 	return JSON.parse(Deno.readTextFileSync(path)) as Descriptor;
 }
 
@@ -146,28 +147,38 @@ const PART = /ARENA-PART (\d+)\/(\d+) (.*)$/;
 export function parseReports(log: string): ArenaReport[] {
 	const texts: string[] = [];
 	let parts: string[] = [];
+
 	for (const rawLine of log.split("\n")) {
 		const line = rawLine.replace(/\r$/, "");
 		const part = line.match(PART);
+
 		if (part) {
 			const [index, count] = [Number(part[1]), Number(part[2])];
 			// A part for a new report restarts the assembly; a repeated part
 			// (mirrored logs) is ignored.
 			if (index === 1) parts = [];
+
 			if (index === parts.length + 1) parts.push(part[3]);
+
 			if (parts.length === count) {
 				texts.push(parts.join(""));
 				parts = [];
 			}
+
 			continue;
 		}
+
 		const whole = line.match(REPORT);
+
 		if (whole) texts.push(whole[1].trimEnd());
 	}
+
 	const reports: ArenaReport[] = [];
+
 	for (const [index, text] of texts.entries()) {
 		if (index > 0 && text === texts[index - 1]) continue;
 		reports.push(JSON.parse(text) as ArenaReport);
 	}
+
 	return reports;
 }

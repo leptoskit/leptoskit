@@ -91,6 +91,7 @@ pub(super) fn plan(args: &PlanArgs) -> Result<()> {
 		.open(&args.out)?;
 	file.write_all(&bytes)?;
 	file.sync_all()?;
+
 	println!("Plan: {}\nSHA-256: {}", args.out.display(), hash(&bytes));
 	println!(
 		"Not checked: operator authorization, live readiness, private connectivity, or caller \
@@ -144,8 +145,10 @@ fn journal(path: &Path, plan: &plan::Plan, pin: &str) -> Result<Journal> {
 			journal.applications.keys().eq(plan.applications.keys()),
 			"journal application membership differs"
 		);
+
 		return Ok(journal);
 	}
+
 	Ok(Journal {
 		format_version: 1,
 		plan_sha256: pin.into(),
@@ -187,6 +190,7 @@ fn deploy_with(args: &DeployArgs, executable: &Path) -> Result<()> {
 		})
 		.collect::<Result<BTreeMap<_, _>>>()?;
 	let state = root.join(".leptoskit/workspace");
+
 	fs::create_dir_all(&state)?;
 	ensure!(
 		state.canonicalize()?.starts_with(root),
@@ -205,6 +209,7 @@ fn deploy_with(args: &DeployArgs, executable: &Path) -> Result<()> {
 	let staging = tempfile::tempdir_in(&state)?;
 	plan::stage(root, &plan, staging.path())?;
 	save(&journal_path, &journal)?;
+
 	for name in &plan.startup_order {
 		let application = &plan.applications[name];
 		plan::unchanged(&manifest, &plan, name)?;
@@ -233,6 +238,7 @@ fn deploy_with(args: &DeployArgs, executable: &Path) -> Result<()> {
 		} else {
 			State::Failed
 		};
+
 		save(&journal_path, &journal)?;
 		outcome.with_context(|| {
 			format!(
@@ -242,6 +248,7 @@ fn deploy_with(args: &DeployArgs, executable: &Path) -> Result<()> {
 			)
 		})?;
 	}
+
 	println!(
 		"Workspace release commands completed; journal {}",
 		journal_path.display()
@@ -273,31 +280,39 @@ fn execute(
 		.args(["--configuration-sha256", &application.configuration_sha256])
 		.env("LEPTOSKIT_CONTROL_LOCAL", "1");
 	command.envs(environment);
+
 	if application.setup {
 		command.arg("--setup");
 	}
+
 	if application.maintenance {
 		command.arg("--maintenance");
 	}
+
 	crate::testing::isolate(&mut command);
 	let mut child = command.spawn().context("start per-application release")?;
 	let start = Instant::now();
+
 	loop {
 		if let Some(status) = child.try_wait()? {
 			ensure!(
 				status.success(),
 				"per-application release failed ({status})"
 			);
+
 			return Ok(());
 		}
+
 		if start.elapsed() >= timeout {
 			crate::testing::terminate(&mut child)?;
 			child.wait()?;
+
 			anyhow::bail!(
 				"release deadline exceeded; remote reservation may remain; inspect infra status \
 				 before recovery"
 			);
 		}
+
 		std::thread::sleep(Duration::from_millis(100));
 	}
 }

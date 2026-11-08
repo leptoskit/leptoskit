@@ -586,6 +586,7 @@ pub(super) fn register_rust_plugin(
 	else {
 		return Ok(());
 	};
+
 	let install = match flavour {
 		Flavour::Worker => "install_worker",
 		Flavour::MainThread => "install_main",

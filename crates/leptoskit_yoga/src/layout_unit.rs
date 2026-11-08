@@ -51,6 +51,7 @@ pub(crate) fn percent_of(basis: f32, fraction: f32) -> f32 {
 
 	if (percent - nearest).abs() < 1e-4 {
 		let basis_lu = to_layout_unit(basis);
+
 		return from_layout_unit(basis_lu * nearest as i64 / 100);
 	}
 

@@ -394,10 +394,12 @@ fn exports_migration_checkpoint_without_startup(root: &Path, target: &Path) {
 			child: command.spawn().unwrap(),
 		};
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
 		loop {
 			if let Some(status) = server.child.try_wait().unwrap() {
 				break status;
 			}
+
 			assert!(
 				std::time::Instant::now() < deadline,
 				"migration export entered normal startup"
@@ -467,6 +469,7 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 
 	let lib = fs::read_to_string(app.join("lib.rs")).expect("the app lib exists");
 	let home = fs::read_to_string(app.join("routes/home.rs")).expect("the home route exists");
+
 	if auth {
 		assert!(
 			lib.contains("Notes::new(identity.clone())")
@@ -481,9 +484,11 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 			lib.contains("Notes::shared()") && lib.contains("pub fn provide() -> Notes"),
 			"the database scaffold must keep the query cache and notes state: {lib}"
 		);
+
 		assert!(lib.contains("origin(SERVER)"), "{lib}");
 		assert!(home.contains("notes.screen()"), "{home}");
 	}
+
 	assert!(
 		!lib.contains("Counter::default()"),
 		"a database scaffold still shows the counter: {lib}"
@@ -574,6 +579,7 @@ fn the_database_scaffold_migrates_and_serves() {
 		"--features",
 		"native",
 	]);
+
 	let origins = native_origins(&root);
 	assert_eq!(origins, [format!("http://{address}")]);
 
@@ -605,6 +611,7 @@ fn the_database_scaffold_migrates_and_serves() {
 	let initially_empty = request(&address, "POST", "/api/notes", "{}");
 	let health = request(&address, "GET", "/api/health", "");
 	let added = request(&address, "POST", "/api/add_note", r#"{"body":"hello"}"#);
+
 	let empty = request(&address, "POST", "/api/add_note", r#"{"body":""}"#);
 	let blank = request(&address, "POST", "/api/add_note", r#"{"body":"   "}"#);
 	let too_long = request(
@@ -624,6 +631,7 @@ fn the_database_scaffold_migrates_and_serves() {
 	let (status, body) = empty;
 	assert_eq!(status, 400, "an empty note breaks min_len: {body}");
 	assert!(body.starts_with("Args|"), "{body}");
+
 	let (status, body) = blank;
 	assert_eq!(status, 400, "a blank note breaks min_len: {body}");
 	assert!(body.starts_with("Args|"), "{body}");
@@ -839,6 +847,7 @@ fn the_auth_scaffold_signs_people_in() {
 		"--features",
 		"native",
 	]);
+
 	let origins = native_origins(&root);
 	assert_eq!(origins, [format!("http://{address}")]);
 
@@ -913,6 +922,7 @@ fn the_auth_scaffold_signs_people_in() {
 			&origins,
 		);
 	}
+
 	// Each person's notes are their own: the operations run as the caller,
 	// and the table's policy shows them only their rows.
 	let notes = cookie
@@ -921,6 +931,7 @@ fn the_auth_scaffold_signs_people_in() {
 	// The probes answer without a session.
 	let probe = ready.then(|| request(&address, "GET", "/readyz", ""));
 	server.kill().unwrap();
+
 	server.wait().unwrap();
 
 	assert!(ready, "the server never listened on {address}");
@@ -970,6 +981,7 @@ fn each_persons_notes(address: &str, origin: &str, ada: &str) -> Option<[(u16, S
 			Some(cookie) => format!("{origin}Cookie: {cookie}\r\n"),
 			None => origin.to_owned(),
 		};
+
 		let (status, _, body) = exchange(address, "POST", path, &headers, body);
 		(status, body)
 	};
@@ -977,6 +989,7 @@ fn each_persons_notes(address: &str, origin: &str, ada: &str) -> Option<[(u16, S
 	let anonymous_list = call(None, "/api/notes", "{}");
 	let added = call(Some(ada), "/api/add_note", r#"{"body":"ada's"}"#);
 	let bobs = call(Some(&bob), "/api/add_note", r#"{"body":"bob's"}"#);
+
 	let adas_list = call(Some(ada), "/api/notes", "{}");
 	let bobs_list = call(Some(&bob), "/api/notes", "{}");
 	// Signing out ends Ada's session; her old cookie must not read the list.
@@ -1019,6 +1032,7 @@ fn assert_their_own(notes: Option<[(u16, String); 7]>) {
 	let (status, body) = added;
 	assert_eq!(status, 200, "{body}");
 	assert!(body.contains(r#""body":"ada's""#), "{body}");
+
 	assert_eq!(bobs.0, 200, "{}", bobs.1);
 	let (status, body) = adas_list;
 	assert_eq!(status, 200, "{body}");
@@ -1142,6 +1156,7 @@ impl NativeApp {
 					.grant(id, method, true)
 					.expect("grant the secure store");
 			}
+
 			id
 		});
 		let config = leptoskit_plugin_http::Config::new(origins.iter().map(String::as_str))
@@ -1214,6 +1229,7 @@ impl NativeApp {
 			if self.host.plugins().next_cancelled().is_none() {
 				break;
 			}
+
 			worked = true;
 		}
 
@@ -1296,6 +1312,7 @@ impl NativeApp {
 		} else {
 			None
 		};
+
 		input.finish()?;
 
 		match method.0 {
@@ -1555,6 +1572,7 @@ fn exercise_rate_limit(app: &mut NativeApp, _address: &str) {
 		app.press("Send a new code");
 		app.settle();
 	}
+
 	app.press("Send a new code");
 	app.settle();
 	app.assert_text("Too many attempts");
@@ -1563,6 +1581,7 @@ fn exercise_rate_limit(app: &mut NativeApp, _address: &str) {
 		app.enabled("Send a new code"),
 		"a host without a timer must leave the manual retry usable"
 	);
+
 	app.assert_no_text("Try again in");
 
 	// Pressing it reaches the server again; the server, not the screen, is
@@ -1633,6 +1652,7 @@ fn native_database_journey(wasm: &Path, address: &str, origins: &[String]) {
 	app.release(0).expect("the pending save is still live");
 	app.settle();
 	app.assert_text("Saved.");
+
 	app.assert_text("1 note");
 	app.assert_text("first note");
 	assert_eq!(
@@ -1727,6 +1747,7 @@ fn native_auth_journey(wasm: &Path, address: &str, origins: &[String]) {
 		"a late list reply: {late:?}"
 	);
 	app.settle();
+
 	app.assert_text("Email me a code");
 	app.assert_no_text("bob native note");
 
@@ -1751,6 +1772,7 @@ fn native_auth_journey(wasm: &Path, address: &str, origins: &[String]) {
 	app.press("Sign out");
 	app.settle();
 	let late = app.release(0);
+
 	assert!(
 		matches!(late, Ok(()) | Err(BridgeError::InvalidCall)),
 		"a late save reply: {late:?}"

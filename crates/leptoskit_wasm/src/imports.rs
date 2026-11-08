@@ -296,6 +296,7 @@ fn commit(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
 		state.pending = Some(PendingCommit::Patch(patches));
 		state.commits = state.commits.saturating_add(1);
 		state.clear_dirty();
+
 		return Ok(());
 	}
 

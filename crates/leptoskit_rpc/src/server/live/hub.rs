@@ -142,6 +142,7 @@ impl ShareKey {
 	) -> Self {
 		let who = match &identity.caller {
 			Some(caller) => Who::Caller(caller.clone(), identity.context.actor()),
+
 			None if identity.context.is_empty() => Who::Anonymous,
 			None => return Self::Alone { connection, id },
 		};
@@ -164,6 +165,7 @@ impl ShareKey {
 		if let Self::Shared { revision, .. } = &mut self {
 			*revision = key.filter(|key| !key.is_empty());
 		}
+
 		self
 	}
 }
@@ -360,6 +362,7 @@ impl Hub {
 				Arc::clone(&self.core.relay_fills),
 			)
 			.await?;
+
 			return Ok(Source::Relay(Box::new(feed)));
 		}
 
@@ -402,9 +405,11 @@ impl Hub {
 		since: u64,
 	) -> bool {
 		let mut state = self.core.state();
+
 		if since != state.applied {
 			return false;
 		}
+
 		state.authentication.insert(connection, reads);
 		true
 	}
@@ -493,6 +498,7 @@ impl Hub {
 			let group_id = state.next_group;
 			let tables = tables(&registration.reads);
 			let mut members = HashMap::new();
+
 			members.insert((connection, id), base);
 			state.index(
 				group_id,
@@ -658,6 +664,7 @@ impl Core {
 				if jobs.is_empty() {
 					state.apply(results, to, full, &changes, dialect);
 					self.applied.send_replace(to);
+
 					return;
 				}
 
@@ -700,6 +707,7 @@ impl Core {
 				}
 				None => jobs,
 			};
+
 			let ran: Vec<(u64, Outcome)> = futures::stream::iter(jobs)
 				.map(|job| {
 					async move {
@@ -744,6 +752,7 @@ impl Core {
 				self.floor.fetch_max(position, Ordering::Relaxed);
 			} else {
 				self.floor_stale.store(true, Ordering::Relaxed);
+
 				return None;
 			}
 		}
@@ -849,6 +858,7 @@ impl State {
 						} else {
 							match base {
 								Some(base) if Arc::ptr_eq(base, &group.result) => shared.clone(),
+
 								Some(base) if **base == *new => None,
 								Some(base) => Some(shared_change(base, &new)),
 								None => Some(Changed::Whole(Arc::clone(&new))),
@@ -908,6 +918,7 @@ impl State {
 			})
 			.map(|(&connection, _)| connection)
 			.collect();
+
 		for connection in &revalidate {
 			batches.entry(*connection).or_default();
 		}
@@ -961,6 +972,7 @@ impl State {
 		if let Some(events) = self.connections.get(&connection) {
 			events.remove(id);
 		}
+
 		let Some(group_id) = self.members.remove(&(connection, id)) else {
 			return;
 		};
@@ -1037,6 +1049,7 @@ async fn read(core: Weak<Core>, mut log: Source, stop: Arc<Notify>, kick: Arc<No
 		let next = tokio::select! {
 			next = log.next() => Some(next),
 			() = kick.notified() => None,
+
 			() = stop.notified() => return,
 		};
 		let Some(core) = core.upgrade() else {

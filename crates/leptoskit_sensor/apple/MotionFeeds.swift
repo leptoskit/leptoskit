@@ -86,6 +86,7 @@ public final class MotionFeeds {
     public func subscribe(_ kind: SensorKind, interval: TimeInterval,
                           handler: @escaping @MainActor (Event) -> Void) -> Token {
         let token = Token(kind: kind, interval: interval, handler: handler)
+
         subscribers[kind, default: [:]][ObjectIdentifier(token)] = token
         reconcile(kind)
 

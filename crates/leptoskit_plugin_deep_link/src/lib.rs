@@ -485,6 +485,7 @@ mod tests {
 		for i in 0..EVENT_CAPACITY + 2 {
 			links.push_url(&format!("myapp://item/{i}")).unwrap();
 		}
+
 		assert_eq!(links.lost(), 2);
 		let (lost, events) = links.drain();
 		assert_eq!(lost, 2);

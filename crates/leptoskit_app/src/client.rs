@@ -19,10 +19,12 @@ pub async fn request(key: &str, path: &str, body: Option<Value>) -> Result<Value
 				value: b"application/json".to_vec(),
 			},
 		];
+
 		if let Some(body) = body {
 			request.method = Method::Post;
 			request.body = serde_json::to_vec(&body).map_err(|_| "Invalid request")?;
 		}
+
 		#[cfg(feature = "native")]
 		let response = leptoskit_plugin_http::guest::HttpClient::connect()
 			.map_err(|_| "HTTP plugin unavailable")?
@@ -37,6 +39,7 @@ pub async fn request(key: &str, path: &str, body: Option<Value>) -> Result<Value
 		.execute(request)
 		.await
 		.map_err(|_| "Connection failed")?;
+
 		if !(200..300).contains(&response.status) {
 			return Err(match response.status {
 				401 => "Sign in with a valid account key",
@@ -46,6 +49,7 @@ pub async fn request(key: &str, path: &str, body: Option<Value>) -> Result<Value
 			}
 			.into());
 		}
+
 		if response.body.is_empty() {
 			Ok(Value::Null)
 		} else {
@@ -76,6 +80,7 @@ fn origin() -> Result<String, String> {
 	{
 		let parsed = url::Url::parse(crate::SERVER).map_err(|_| "Invalid server origin")?;
 		let local = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+
 		if !(parsed.scheme() == "https" || (local && parsed.scheme() == "http"))
 			|| parsed.path() != "/"
 			|| parsed.query().is_some()
@@ -96,6 +101,7 @@ pub async fn save_key(value: &str) -> Result<(), leptoskit::guest::Error> {
 	use sha2::Digest as _;
 	let name = format!("{:x}", sha2::Sha256::digest(crate::SERVER.as_bytes()));
 	let key = Key::new("leptoskit-cloud", &name)?;
+
 	if value.is_empty() {
 		store.delete(key).await
 	} else {

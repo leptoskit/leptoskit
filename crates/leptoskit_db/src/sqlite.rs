@@ -210,6 +210,7 @@ fn watch(path: &std::path::Path, live: &Weak<crate::live::Hub>) {
 		};
 
 		let now = version();
+
 		if now != seen {
 			seen = now;
 			live.wake();
@@ -550,11 +551,13 @@ impl Pool {
 			if has_pushes(connection)? {
 				return Err(MigrationError::RollbackHistory);
 			}
+
 			let mut names = Vec::new();
 			for migration in reverse {
 				apply_with_foreign_keys(connection, &migration, &Record::Reverted)?;
 				names.push(migration.name.to_string());
 			}
+
 			Ok(names)
 		})
 		.await
@@ -656,6 +659,7 @@ fn apply_migrations(
 		} else {
 			&Record::Applied
 		};
+
 		if apply_with_foreign_keys(connection, still.migration, record)? {
 			names.push(still.migration.name.to_string());
 		}
@@ -743,6 +747,7 @@ fn apply_migration(
 			if removed != 1 {
 				return Err(MigrationError::RollbackHistory);
 			}
+
 			transaction
 				.execute_batch(&migration.sql)
 				.map_err(|source| failed(error(source)))?;

@@ -64,6 +64,7 @@ pub fn run(url: &str, root: &Path, data: &Path) -> Result<()> {
 		)?;
 		key
 	};
+
 	let store = Store::open(&data.join("local.sqlite3"))?;
 	let project = Project {
 		id: infra.name.clone(),
@@ -93,9 +94,11 @@ fn request(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<Val
 		.build()
 		.into();
 	let mut request = agent.post(format!("{url}{path}"));
+
 	if let Some(key) = key {
 		request = request.header("Authorization", format!("Bearer {key}"));
 	}
+
 	let mut response = request
 		.send_json(body)
 		.map_err(|_| anyhow::anyhow!("hosted connection failed"))?;
@@ -108,6 +111,7 @@ fn request(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<Val
 		.with_config()
 		.limit(1024 * 1024)
 		.read_to_string()?;
+
 	if text.is_empty() {
 		Ok(Value::Null)
 	} else {
@@ -116,6 +120,7 @@ fn request(url: &str, path: &str, key: Option<&str>, body: &Value) -> Result<Val
 }
 async fn work(url: &str, key: &str, data: &Path, project: Project, service: Service) -> Result<()> {
 	let pending = data.join("pending.json");
+
 	loop {
 		if pending.exists() {
 			let saved: Value = serde_json::from_slice(&std::fs::read(&pending)?)?;
@@ -123,6 +128,7 @@ async fn work(url: &str, key: &str, data: &Path, project: Project, service: Serv
 				"worker stopped during execution; reconcile its pending operation on the hosted \
 				 app and remote release ledger before removing pending.json",
 			)?;
+
 			if request(url, "/api/v1/worker/finish", Some(key), result).is_ok() {
 				std::fs::remove_file(&pending)?;
 			} else {
@@ -130,10 +136,12 @@ async fn work(url: &str, key: &str, data: &Path, project: Project, service: Serv
 				continue;
 			}
 		}
+
 		let Ok(value) = request(url, "/api/v1/worker/claim", Some(key), &json!({})) else {
 			tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 			continue;
 		};
+
 		if value.is_null() {
 			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 		} else {
@@ -192,6 +200,7 @@ fn check_managed_policy(
 			"managed capacity requires DigitalOcean and an explicit reviewed compute budget"
 		);
 	}
+
 	Ok(())
 }
 

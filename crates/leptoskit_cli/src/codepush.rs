@@ -84,6 +84,7 @@ pub fn run(command: CodepushCommand) -> Result<()> {
 				}
 				_ => anyhow::bail!("pass --release <PATH>, or --version and --build"),
 			};
+
 			approvals::approve(
 				&target,
 				Path::new(&rebuilt),
@@ -320,6 +321,7 @@ fn keygen(out: &str, approver: bool) -> Result<()> {
 			 leptoskit.toml:\n\n[codepush.provenance]\napprovers = [\"{}\"]",
 			key.public_key().to_hex()
 		);
+
 		return Ok(());
 	}
 

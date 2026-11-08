@@ -39,9 +39,11 @@ fn sample_unix(mut sample: HostSample) -> HostSample {
 				text.lines()
 					.find_map(|line| line.strip_prefix("0::").map(str::to_owned))
 			});
+
 		if let Some(relative) = cgroup {
 			let root = std::path::Path::new("/sys/fs/cgroup");
 			let resolved = root.join(relative.trim_start_matches('/'));
+
 			// Container namespaces commonly mount their cgroup directly at
 			// root.
 			let root = if resolved.join("memory.current").exists() {
@@ -49,6 +51,7 @@ fn sample_unix(mut sample: HostSample) -> HostSample {
 			} else {
 				root.to_path_buf()
 			};
+
 			sample.cgroup_memory_bytes = number(&root.join("memory.current"));
 			sample.cgroup_memory_limit_bytes = number(&root.join("memory.max"));
 			sample.cgroup_cpu_seconds = std::fs::read_to_string(root.join("cpu.stat"))
@@ -68,10 +71,12 @@ fn sample_unix(mut sample: HostSample) -> HostSample {
 				});
 		}
 	}
+
 	if let Ok(stats) = rustix::fs::statvfs("/") {
 		sample.filesystem_available_bytes = stats.f_bavail.checked_mul(stats.f_frsize);
 		sample.filesystem_capacity_bytes = stats.f_blocks.checked_mul(stats.f_frsize);
 	}
+
 	sample
 }
 

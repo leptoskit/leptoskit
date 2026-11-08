@@ -120,6 +120,7 @@ impl Xr {
 			let name = self.mode_name(config.mode).ok_or(Error::Unavailable)?;
 			frame::start(&self.system, name, &config).await?
 		};
+
 		let info = state.borrow().info;
 
 		Ok(Session {
@@ -410,6 +411,7 @@ impl Session {
 			}
 			*anchor != id
 		});
+
 		state.fixed_anchors.retain(|anchor| anchor.id != id);
 
 		if state.anchors.len() + state.fixed_anchors.len() == before {

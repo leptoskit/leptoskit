@@ -74,6 +74,7 @@ impl Plugin for Os {
 		if method != INFO {
 			return Err(Error::Unavailable);
 		}
+
 		if !payload.is_empty() {
 			return Err(Error::InvalidArgument);
 		}

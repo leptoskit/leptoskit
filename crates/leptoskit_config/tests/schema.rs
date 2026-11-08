@@ -69,6 +69,7 @@ fn validates_defaults_and_every_project_configuration() {
 			"b".repeat(64)
 		)))
 		.expect("provenance policy");
+
 	validator
 		.validate(&document(
 			"[native]\nplugins = ['http']\nrequired-plugins = ['http']\nrequired-capabilities = \

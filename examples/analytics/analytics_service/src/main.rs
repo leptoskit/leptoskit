@@ -28,6 +28,7 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 	let url = env
 		.database_url()
 		.ok_or("the analytics service needs a database: set `database = true`")?;
+
 	let db = match env.database_pool() {
 		Some(max_connections) => Db::connect_with(url, PoolOptions { max_connections }).await?,
 		None => Db::connect(url).await?,
@@ -40,6 +41,7 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 	} else {
 		MIGRATIONS
 	};
+
 	#[cfg(not(feature = "postgres"))]
 	let migrations = if url.starts_with("postgres") {
 		return Err(

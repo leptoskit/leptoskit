@@ -265,6 +265,7 @@ pub async fn tip_gave_up(cx: &rpc::MutationCx, job: rpc::Failed<SettleTip>) -> r
 			.kind(rpc::NoticeKind::Error),
 	)
 	.await?;
+
 	Ok(())
 }
 

@@ -394,6 +394,7 @@ impl TriangleDecoder<'_> {
 		self.fifos.push_vertex(first, true);
 		self.fifos.push_vertex(second, second_code == 0);
 		self.fifos.push_vertex(third, third_code == 0);
+
 		self.fifos.push_edges([first, second, third]);
 		[first, second, third]
 	}
@@ -424,6 +425,7 @@ impl TriangleDecoder<'_> {
 		} else {
 			second
 		};
+
 		let third = if third_code == EXPLICIT {
 			self.explicit(EXPLICIT)?
 		} else {
@@ -461,6 +463,7 @@ impl TriangleDecoder<'_> {
 			STEP_FORWARD => self.last.wrapping_add(1),
 			_ => self.last.wrapping_add(unzigzag32(self.data.vbyte()?)),
 		};
+
 		Ok(self.last)
 	}
 }
@@ -513,6 +516,7 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 		},
 		next: 0,
 		last: 0,
+
 		fifo_codes: if version >= 1 { STEP_BACK } else { EXPLICIT },
 	};
 
@@ -610,6 +614,7 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 		(Filter::Quaternion, _) => {
 			return Err(MeshoptError("the quaternion filter needs a stride of 8"));
 		}
+
 		(Filter::Exponential, _) if stride % 4 == 0 => {
 			data.as_chunks_mut::<4>()
 				.0
@@ -617,6 +622,7 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 				.take(count * stride / 4)
 				.for_each(exponential);
 		}
+
 		(Filter::Exponential, _) => {
 			return Err(MeshoptError(
 				"the exponential filter needs a stride that divides by 4",

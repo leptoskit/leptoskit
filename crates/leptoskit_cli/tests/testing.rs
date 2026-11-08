@@ -274,6 +274,7 @@ exec sleep 60
 			!recorded.contains("emu kill"),
 			"the runner must reap its own process, not kill by reusable serial"
 		);
+
 		if failure == "none" || failure == "test" || failure == "both" {
 			assert!(
 				recorded.contains("'two words' 'a '\\''quote'\\'''"),
@@ -284,6 +285,7 @@ exec sleep 60
 				"remove-test"
 			);
 		}
+
 		if failure == "both" {
 			let error = report["error"].as_str().unwrap();
 			assert!(
@@ -291,6 +293,7 @@ exec sleep 60
 				"{error}"
 			);
 		}
+
 		if failure == "exited" {
 			assert!(
 				report["error"]
@@ -300,6 +303,7 @@ exec sleep 60
 				"{report}"
 			);
 		}
+
 		assert!(
 			std::fs::read_to_string(directory.0.join("emulator-args.txt"))
 				.unwrap()
@@ -361,6 +365,7 @@ printf 'fixture browser output\n'
 		);
 		assert_eq!(report["platform"], "web");
 		assert_eq!(report["passed"], true);
+
 		assert_eq!(report["steps"][0]["name"], "browser");
 	}
 }

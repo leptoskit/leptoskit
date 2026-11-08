@@ -56,6 +56,7 @@ pub mod live;
 mod native;
 mod offline;
 mod paginated;
+
 mod protocol;
 #[cfg(all(feature = "services", not(target_arch = "wasm32")))]
 mod reqwest;
@@ -326,6 +327,7 @@ fn backend(config: ClientConfig) -> Arc<dyn Api> {
 fn api_for(service: Option<&'static str>) -> Arc<dyn Api> {
 	match service {
 		None => api(),
+
 		Some(service) if serves_in_process(service) => api(),
 		Some(service) => services::api(service),
 	}
@@ -432,6 +434,7 @@ pub fn call_as_app<O: Operation>(
 	} else {
 		Key::None
 	};
+
 	let api = match O::SERVICE {
 		None => {
 			Err(FnError::Other(format!(
@@ -440,6 +443,7 @@ pub fn call_as_app<O: Operation>(
 				O::NAME
 			)))
 		}
+
 		Some(service) if serves_in_process(service) => Ok(api()),
 		Some(service) => Ok(services::as_app(service)),
 	};

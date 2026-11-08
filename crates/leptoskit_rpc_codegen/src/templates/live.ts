@@ -112,14 +112,17 @@ export function channelKey(
 	args: Record<string, unknown>,
 ): string {
 	const ordered: Record<string, unknown> = {};
+
 	for (const field of fields) {
 		ordered[field] = args[field] ?? null;
 	}
+
 	for (const [field, value] of Object.entries(args)) {
 		if (!(field in ordered)) {
 			ordered[field] = value;
 		}
 	}
+
 	return JSON.stringify(ordered);
 }
 
@@ -129,16 +132,19 @@ export function liveUrl(serverUrl: string, path: string): string {
 		const location =
 			(globalThis as { location?: { protocol: string; host: string } })
 				.location;
+
 		if (location === undefined) {
 			throw new LiveError(
 				0,
 				"a live connection needs a server URL outside a browser",
 			);
 		}
+
 		return `${
 			location.protocol === "https:" ? "wss" : "ws"
 		}://${location.host}${path}`;
 	}
+
 	return serverUrl.replace(/^http/, "ws") + path;
 }
 
@@ -215,6 +221,7 @@ export class LiveConnection {
 	/** Calls `listener` with every status change, until the returned function is called. */
 	onStatus(listener: (status: LiveStatus) => void): Unsubscribe {
 		this.#listeners.add(listener);
+
 		return () => this.#listeners.delete(listener);
 	}
 
@@ -240,6 +247,7 @@ export class LiveConnection {
 		});
 		this.#send({ type: "sub", id, query: name, args: present(args) });
 		this.#ensure();
+
 		return () => {
 			if (this.#subscriptions.delete(id)) {
 				this.#send({ type: "unsub", id });
@@ -296,6 +304,7 @@ export class LiveConnection {
 		this.#channels.set(key, joined);
 		this.#send(this.#joinFrame(key, joined));
 		this.#ensure();
+
 		return {
 			get members() {
 				return joined.members as PresenceMember<P>[];
@@ -323,6 +332,7 @@ export class LiveConnection {
 	/** Sends the token again, such as after signing in. */
 	async reauthenticate(): Promise<void> {
 		const token = await this.#options.token?.();
+
 		if (token) {
 			this.#send({ type: "auth", token });
 		}
@@ -336,14 +346,18 @@ export class LiveConnection {
 		this.#socket = null;
 		this.#ready = false;
 		socket?.close(1000, "closed");
+
 		for (const pending of this.#pending.values()) {
 			pending.reject(new LiveError(0, "the live connection closed"));
 		}
+
 		this.#pending.clear();
+
 		for (const waiter of this.#waiters) {
 			clearTimeout(waiter.timer);
 			waiter.resolve(waiter.value);
 		}
+
 		this.#waiters = [];
 		this.#subscriptions.clear();
 		this.#channels.clear();
@@ -377,6 +391,7 @@ export class LiveConnection {
 		if (this.#closed) {
 			throw new LiveError(0, "the live connection is closed");
 		}
+
 		if (this.#socket === null && this.#retry === null) {
 			this.#open();
 		}
@@ -387,17 +402,20 @@ export class LiveConnection {
 		const Socket = this.#options.WebSocket ??
 			(globalThis as unknown as { WebSocket?: LiveSocketConstructor })
 				.WebSocket;
+
 		if (Socket === undefined) {
 			throw new LiveError(
 				0,
 				"this platform has no WebSocket; pass one as LiveOptions.WebSocket",
 			);
 		}
+
 		let socket: LiveSocket;
 		try {
 			socket = new Socket(this.url, [LIVE_SUBPROTOCOL]);
 		} catch {
 			this.#lost();
+
 			return;
 		}
 		this.#socket = socket;
@@ -409,6 +427,7 @@ export class LiveConnection {
 			if (this.#socket !== socket) {
 				return;
 			}
+
 			this.#lastHeard = Date.now();
 			const text = typeof event.data === "string"
 				? event.data
@@ -445,12 +464,15 @@ export class LiveConnection {
 		} catch {
 			token = undefined;
 		}
+
 		if (this.#socket !== socket || socket.readyState !== OPEN) {
 			return;
 		}
+
 		if (token) {
 			raw({ type: "auth", token });
 		}
+
 		for (const [id, subscription] of this.#subscriptions) {
 			raw({
 				type: "sub",
@@ -459,14 +481,17 @@ export class LiveConnection {
 				args: subscription.args,
 			});
 		}
+
 		for (const [key, joined] of this.#channels) {
 			raw(this.#joinFrame(key, joined));
 		}
+
 		// The same request id and key: the server's receipt answers a call
 		// that already ran with its first result.
 		for (const pending of this.#pending.values()) {
 			raw(pending.frame);
 		}
+
 		this.#ready = true;
 	}
 
@@ -495,6 +520,7 @@ export class LiveConnection {
 				} else if (frame.expiring === true) {
 					void this.reauthenticate();
 				}
+
 				break;
 			case "reconnect":
 				this.#reconnectAfter = number(frame.after_ms, 0);
@@ -507,10 +533,12 @@ export class LiveConnection {
 			}
 			case "presence": {
 				const joined = this.#channels.get(String(frame.channel));
+
 				if (joined !== undefined && Array.isArray(frame.members)) {
 					joined.members = frame.members as PresenceMember<unknown>[];
 					joined.options.onPresence?.(joined.members);
 				}
+
 				break;
 			}
 			case "channel_error": {
@@ -532,11 +560,14 @@ export class LiveConnection {
 			: [];
 		const changed: [Subscription, unknown][] = [];
 		const failed: [Subscription, LiveError][] = [];
+
 		for (const update of updates) {
 			const subscription = this.#subscriptions.get(number(update.id, -1));
+
 			if (subscription === undefined) {
 				continue;
 			}
+
 			if ("ok" in update) {
 				changed.push([subscription, update.ok]);
 			} else if ("patch" in update) {
@@ -548,17 +579,22 @@ export class LiveConnection {
 				failed.push([subscription, wireError(update.err)]);
 			}
 		}
+
 		const to = number(frame.to, this.#version);
 		this.#version = Math.max(this.#version, to);
+
 		for (const [subscription, value] of changed) {
 			subscription.value = value;
 		}
+
 		for (const [subscription, value] of changed) {
 			subscription.onValue(value, to);
 		}
+
 		for (const [subscription, error] of failed) {
 			subscription.onError?.(error);
 		}
+
 		this.#reached(to);
 	}
 
@@ -566,17 +602,24 @@ export class LiveConnection {
 		const request = number(frame.request, 0);
 		const version = number(frame.version, 0);
 		const pending = this.#pending.get(request);
+
 		if (pending !== undefined) {
 			this.#pending.delete(request);
+
 			if (frame.err !== undefined && frame.err !== null) {
 				pending.reject(wireError(frame.err));
+
 				return;
 			}
+
 			const value = frame.ok ?? null;
+
 			if (this.#subscriptions.size === 0 || this.#version >= version) {
 				pending.resolve(value);
+
 				return;
 			}
+
 			const waiter: Waiter = {
 				version,
 				value,
@@ -587,16 +630,22 @@ export class LiveConnection {
 				}, this.#options.readYourWritesMs ?? 2000),
 			};
 			this.#waiters.push(waiter);
+
 			return;
 		}
+
 		const subscription = this.#subscriptions.get(request);
+
 		if (subscription === undefined) {
 			return;
 		}
+
 		if (frame.err !== undefined && frame.err !== null) {
 			subscription.onError?.(wireError(frame.err));
+
 			return;
 		}
+
 		subscription.value = frame.ok ?? null;
 		subscription.onValue(subscription.value, version);
 		// A fresh first value reflects every write the server had committed.
@@ -605,10 +654,13 @@ export class LiveConnection {
 
 	#reached(version: number): void {
 		const ready = this.#waiters.filter((waiter) => waiter.version <= version);
+
 		if (ready.length === 0) {
 			return;
 		}
+
 		this.#waiters = this.#waiters.filter((waiter) => waiter.version > version);
+
 		for (const waiter of ready) {
 			clearTimeout(waiter.timer);
 			waiter.resolve(waiter.value);
@@ -619,6 +671,7 @@ export class LiveConnection {
 		if (this.#heartbeat !== null) {
 			clearInterval(this.#heartbeat);
 		}
+
 		this.#heartbeatMs = Math.max(1, seconds) * 1000;
 		this.#heartbeat = setInterval(() => {
 			const socket = this.#socket;
@@ -631,6 +684,7 @@ export class LiveConnection {
 				this.#lost();
 				return;
 			}
+
 			this.#send({ type: "ping" });
 		}, this.#heartbeatMs);
 	}
@@ -640,6 +694,7 @@ export class LiveConnection {
 			clearTimeout(this.#retry);
 			this.#retry = null;
 		}
+
 		if (this.#heartbeat !== null) {
 			clearInterval(this.#heartbeat);
 			this.#heartbeat = null;
@@ -651,25 +706,32 @@ export class LiveConnection {
 		this.#socket = null;
 		this.#ready = false;
 		this.#clearTimers();
+
 		if (this.#closed) {
 			return;
 		}
+
 		if (!this.#busy()) {
 			this.#reconnectAfter = null;
 			this.#setStatus({ state: "offline" });
+
 			return;
 		}
+
 		let delay: number;
+
 		if (this.#reconnectAfter !== null) {
 			delay = this.#reconnectAfter;
 			this.#reconnectAfter = null;
 		} else {
 			const min = this.#options.minBackoffMs ?? 250;
+
 			const max = this.#options.maxBackoffMs ?? 30_000;
 			delay = Math.floor(
 				Math.random() * Math.min(max, min * 2 ** this.#attempt),
 			);
 		}
+
 		this.#attempt += 1;
 		this.#setStatus({
 			state: "reconnecting",
@@ -686,6 +748,7 @@ export class LiveConnection {
 
 	#setStatus(status: LiveStatus): void {
 		this.#status = status;
+
 		for (const listener of this.#listeners) {
 			listener(status);
 		}
@@ -698,6 +761,7 @@ function applyPatch(value: unknown, patch: Frame): unknown {
 		if (value === null || typeof value !== "object" || Array.isArray(value)) {
 			return value;
 		}
+
 		const fields: Frame = { ...value as Frame };
 		if (
 			patch.set !== null && typeof patch.set === "object" &&
@@ -705,11 +769,14 @@ function applyPatch(value: unknown, patch: Frame): unknown {
 		) {
 			Object.assign(fields, patch.set);
 		}
+
 		if (Object.prototype.hasOwnProperty.call(fields, patch.field)) {
 			fields[patch.field] = applyRows(fields[patch.field], patch);
 		}
+
 		return fields;
 	}
+
 	return applyRows(value, patch);
 }
 
@@ -718,6 +785,7 @@ function applyRows(value: unknown, patch: Frame): unknown {
 	if (!Array.isArray(value)) {
 		return value;
 	}
+
 	const remove = new Set(
 		Array.isArray(patch.remove) ? patch.remove as string[] : [],
 	);
@@ -734,12 +802,14 @@ function applyRows(value: unknown, patch: Frame): unknown {
 		);
 		const id = (upsert.value as { id?: unknown } | null)?.id;
 		const previous = (items[at] as { id?: unknown } | null)?.id;
+
 		if (typeof id === "string" && previous === id) {
 			items[at] = upsert.value;
 		} else {
 			items.splice(at, 0, upsert.value);
 		}
 	}
+
 	return items;
 }
 
@@ -760,6 +830,7 @@ function present(args: unknown): unknown {
 	if (args === null || args === undefined) {
 		return {};
 	}
+
 	if (typeof args !== "object" || Array.isArray(args)) {
 		return args;
 	}
@@ -773,9 +844,11 @@ function present(args: unknown): unknown {
 function randomKey(): string {
 	const crypto =
 		(globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+
 	if (crypto?.randomUUID !== undefined) {
 		return crypto.randomUUID();
 	}
+
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${
 		Math.random().toString(36).slice(2)
 	}`;

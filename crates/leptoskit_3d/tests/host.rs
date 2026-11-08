@@ -109,6 +109,7 @@ fn ops_through_the_plugin_load_assets_off_the_calling_thread() {
 	};
 	pollster::block_on(plugin.invoke(APPLY, payload(7, &[raycast]), CancellationToken::new()))
 		.unwrap();
+
 	let events = next_events(plugin, 7);
 	let [Event::RaycastHits { request, hits }] = &events[..] else {
 		panic!("{events:?}")
@@ -134,6 +135,7 @@ fn failures_come_back_as_events() {
 	pollster::block_on(plugin.invoke(APPLY, payload(1, &ops), CancellationToken::new())).unwrap();
 	let mut events = Vec::new();
 	let deadline = Instant::now() + Duration::from_secs(5);
+
 	while events.len() < 2 && Instant::now() < deadline {
 		events.extend(next_events(plugin, 1));
 	}
@@ -188,6 +190,7 @@ fn malformed_payloads_and_unknown_methods_are_refused() {
 		leptoskit_bridge::Error::Unavailable
 	);
 	assert_eq!(plugin.reply_limit(NEXT_EVENTS), Ok(MAX_EVENTS_REPLY));
+
 	assert!(plugin.reply_limit(leptoskit_bridge::MethodId(99)).is_err());
 }
 
@@ -205,6 +208,7 @@ fn waiting_for_events_ends_on_cancellation_or_close() {
 	let waiting = std::thread::spawn(move || pollster::block_on(call));
 	std::thread::sleep(Duration::from_millis(50));
 	token.cancel();
+
 	assert_eq!(
 		waiting.join().unwrap().unwrap_err(),
 		leptoskit_bridge::Error::Cancelled
@@ -231,6 +235,7 @@ fn waiting_for_events_ends_on_cancellation_or_close() {
 #[test]
 fn a_process_holds_a_bounded_number_of_scenes() {
 	let (hub, _) = hub();
+
 	for scene in 0..MAX_SCENES as u32 {
 		hub.apply_ops(SceneId(scene), Vec::new()).unwrap();
 	}

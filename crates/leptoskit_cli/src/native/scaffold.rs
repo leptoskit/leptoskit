@@ -70,6 +70,7 @@ fn watch(path: &str, name: Option<&str>, sdk: Option<&str>, target: NativeTarget
 	} else {
 		Platform::Watchos
 	};
+
 	let config = LeptoskitConfig {
 		app: AppConfig {
 			name: name.into(),
@@ -92,6 +93,7 @@ fn watch(path: &str, name: Option<&str>, sdk: Option<&str>, target: NativeTarget
 	} else {
 		"leptoskit_watchos"
 	};
+
 	let platform_dep = crate::new_project::sdk_dependency(platform_crate, sdk.as_deref(), &[])?;
 	let manifest = format!(
 		r#"[package]
@@ -118,6 +120,7 @@ leptoskit_watch = {watch_dep}
 		 leptoskit_watch::*;\n",
 	)?;
 	super::watch::scaffold(root.as_std_path(), &config, target)?;
+
 	println!(
 		"created experimental {platform} app in {root}\nnext: cd {root} && leptoskit native \
 		 prepare {platform}"
@@ -257,14 +260,17 @@ mod tests {
 			));
 			let _ = std::fs::remove_dir_all(&root);
 			run_for_target(root.to_str().unwrap(), Some("steps"), None, Some(target)).unwrap();
+
 			let host = match target {
 				NativeTarget::Wearos => root.join("hosts/wearos/android/WatchActivity.kt"),
 				NativeTarget::Watchos => root.join("hosts/watchos/swift/WatchApp.swift"),
 				_ => unreachable!("watch targets only"),
 			};
+
 			assert!(host.is_file(), "missing {}", host.display());
 			assert!(root.join("leptoskit.toml").is_file());
 			assert!(root.join("Cargo.toml").is_file());
+
 			let _ = std::fs::remove_dir_all(&root);
 		}
 	}

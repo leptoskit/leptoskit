@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
 		let elapsed = began.elapsed().as_secs_f64();
 		anyhow::ensure!(!result.wasm.is_empty(), "{}", result.stderr);
 		let wasm = base64::engine::general_purpose::STANDARD.decode(&result.wasm)?;
+
 		anyhow::ensure!(
 			artifacts.insert(Sha256::digest(&wasm)),
 			"distinct visible edits must produce distinct Wasm bundles"

@@ -104,15 +104,19 @@ async fn the_server_functions_answer_refuse_and_page() {
 	// The log pages back from the newest entry to the first.
 	let mut cursor = 0;
 	let mut entries = Vec::new();
+
 	loop {
 		let page = api::harbor_log(cursor).await.expect("a log page");
 		assert!(page.entries.len() <= LOG_PAGE as usize);
 		entries.extend(page.entries.into_iter().map(|entry| entry.id));
+
 		match page.next {
 			Some(next) => cursor = next,
 			None => break,
 		}
 	}
+
 	assert_eq!(entries, (1..=10).rev().collect::<Vec<_>>());
+
 	assert_eq!(Harbour::new().log_page(0).entries[0].id, 10);
 }

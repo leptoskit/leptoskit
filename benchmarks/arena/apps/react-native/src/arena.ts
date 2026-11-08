@@ -72,9 +72,12 @@ export function writeReport(report: Report): void {
 
 	if (json.length <= MAX_LINE_BYTES) {
 		writeLine(`ARENA ${json}`);
+
 		return;
 	}
+
 	const count = Math.ceil(json.length / MAX_LINE_BYTES);
+
 	for (let index = 0; index < count; index += 1) {
 		const chunk = json.slice(
 			index * MAX_LINE_BYTES,
@@ -86,6 +89,7 @@ export function writeReport(report: Report): void {
 
 export function failureReport(scenario: Scenario, error: unknown): Report {
 	const message = error instanceof Error ? error.message : String(error);
+
 	return {
 		scenario,
 		lane: "idiomatic",
@@ -104,11 +108,13 @@ export function percentile(values: readonly number[], rank: number): number {
 	if (values.length === 0) {
 		return Number.NaN;
 	}
+
 	const sorted = [...values].sort((a, b) => a - b);
 	const index = Math.min(
 		sorted.length - 1,
 		Math.max(0, Math.ceil((rank / 100) * sorted.length) - 1),
 	);
+
 	return sorted[index];
 }
 
@@ -143,6 +149,7 @@ export function useCommitFrame(
 		if (resolve === null) {
 			return;
 		}
+
 		pending.current = null;
 		onCommitRef.current?.();
 		// The callback's own timestamp is the frame's start, which can precede the

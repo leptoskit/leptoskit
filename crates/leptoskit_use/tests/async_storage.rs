@@ -127,6 +127,7 @@ fn async_state_keeps_its_owner_when_initialized_and_polled_outside_it() {
 	block_on((hook.remove)()).unwrap();
 	block_on((hook.remove)()).unwrap();
 	assert_eq!(hook.value.get(), 1);
+
 	assert_eq!(store.get("key"), Ok(None));
 	block_on((hook.reload)()).unwrap();
 	assert_eq!(hook.value.get(), 1);
@@ -155,6 +156,7 @@ fn pending_save_preserves_displayed_state_and_cannot_be_overtaken_by_reload() {
 	write.unwrap();
 	read.unwrap();
 	assert_eq!(hook.value.get(), 2);
+
 	assert_eq!(store.reads.load(Ordering::SeqCst), 2);
 }
 
@@ -189,6 +191,7 @@ fn asynchronous_errors_preserve_last_successful_value() {
 		Err(AsyncStorageError::Backend("read failed"))
 	));
 	assert_eq!(hook.value.get(), 2);
+
 	assert_eq!(store.values.get("key"), Ok(Some(2)));
 	assert_eq!(
 		AsyncStorageError::Backend("failure").to_string(),
@@ -276,6 +279,7 @@ fn dropping_a_pending_operation_releases_serialization_and_never_updates_state()
 	pending(remove.as_mut());
 	drop(remove);
 	assert!(resume.send(()).is_err());
+
 	assert_eq!(hook.value.get(), 3);
 }
 
@@ -298,6 +302,7 @@ fn suspended_reads_and_removal_complete_on_the_callers_executor() {
 	assert_eq!(hook.value.get(), 7);
 	resume.send(()).unwrap();
 	block_on(reload).unwrap();
+
 	assert_eq!(hook.value.get(), 8);
 	let resume = store.suspend(Kind::Remove);
 	let mut remove = (hook.remove)();

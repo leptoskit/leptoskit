@@ -276,10 +276,13 @@ impl Budget {
 
 	fn paint(&mut self, paint: &Paint) -> Paint {
 		let paint = paint.sanitized();
+
 		if !paint.is_gradient() {
 			return paint;
 		}
+
 		self.gradients += 1;
+
 		if self.gradients > MAX_GRADIENTS {
 			Paint::Solid(paint.first_color())
 		} else {
@@ -290,10 +293,12 @@ impl Budget {
 	/// Opens a push, returning whether it is kept.
 	fn open(&mut self, open: Open) -> bool {
 		let kept = self.depth < MAX_DEPTH && (open != Open::Layer || self.layers < MAX_LAYER_DEPTH);
+
 		if kept {
 			self.depth += 1;
 			self.layers += usize::from(open == Open::Layer);
 		}
+
 		self.stack.push(Frame { open, kept });
 		kept
 	}
@@ -304,11 +309,14 @@ impl Budget {
 		if self.stack.last().is_none_or(|frame| frame.open != open) {
 			return false;
 		}
+
 		let frame = self.stack.pop().unwrap_or(Frame { open, kept: false });
+
 		if frame.kept {
 			self.depth -= 1;
 			self.layers -= usize::from(open == Open::Layer);
 		}
+
 		frame.kept
 	}
 }
@@ -381,6 +389,7 @@ impl Command {
 				if !budget.open(Open::Clip) {
 					return None;
 				}
+
 				Self::PushClipPath {
 					path: budget.path(path),
 					rule: *rule,
@@ -425,11 +434,13 @@ impl Scene {
 			.take(MAX_COMMANDS)
 			.filter_map(|command| command.sanitized(&mut budget))
 			.collect();
+
 		while let Some(frame) = budget.stack.pop() {
 			if frame.kept {
 				commands.push(pop(frame.open));
 			}
 		}
+
 		Self { commands }
 	}
 }

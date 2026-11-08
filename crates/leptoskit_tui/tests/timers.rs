@@ -47,8 +47,10 @@ impl TuiApplication for App {
 		if self.due.get() && !self.fired {
 			self.fired = true;
 			self.surface.set_root(&Text("timer completed"));
+
 			return true;
 		}
+
 		false
 	}
 
@@ -94,6 +96,7 @@ fn timer_deadlines_wake_and_repaint_without_input() {
 	assert_eq!(exit, Exit::SourceEnded);
 	assert_eq!(source.waits.len(), 2);
 	assert!(source.waits[0] <= Duration::from_millis(5));
+
 	assert!(app.fired);
 	assert!(
 		app.deadline().is_none(),

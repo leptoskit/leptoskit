@@ -868,6 +868,7 @@ export function failNamed(name) {
 		assert_eq!(watch.next().await, Err(Error::Unavailable));
 		assert_eq!(watch.next().await, Err(Error::Unavailable));
 		drop(watch);
+
 		assert_eq!(sensor.counts(), counts(1.0, 1.0));
 	}
 

@@ -475,6 +475,7 @@ mod desktop {
 			drop(store);
 			let mut reopened = memory_store();
 			reopened.test_store = Some(backend);
+
 			assert_eq!(reopened.get(a).unwrap().as_deref(), Some(b"old".as_slice()));
 			reopened.delete(a).unwrap();
 			reopened.set(c, b"new").unwrap();

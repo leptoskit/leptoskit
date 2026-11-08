@@ -338,6 +338,7 @@ impl Db {
 		window: &crate::MigrationWindow,
 	) -> std::result::Result<Vec<String>, MigrationError> {
 		let checked = window.checked(migrations, snapshot)?;
+
 		match &*self.pool {
 			#[cfg(feature = "postgres")]
 			Pool::Postgres(pool) => pool.migrate_in_window(migrations, &checked).await,
@@ -589,6 +590,7 @@ impl Read for Db {
 			let settings = self.row_settings()?;
 			#[cfg(not(feature = "postgres"))]
 			let settings = None;
+
 			return replica.fetch(settings, statement).await;
 		}
 
@@ -662,6 +664,7 @@ impl Tx {
 				tx.finish(&format!("{}; COMMIT", crate::live::describe_commit()))
 					.await
 			}
+
 			#[cfg(feature = "postgres")]
 			TxInner::Postgres(tx) => tx.finish("COMMIT").await,
 			#[cfg(feature = "sqlite")]

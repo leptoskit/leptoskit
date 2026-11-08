@@ -157,7 +157,9 @@ export function borderEdges(
 			left: props.border_widths.left,
 		};
 	}
+
 	const width = props.border_width ?? 0;
+
 	return { top: width, right: width, bottom: width, left: width };
 }
 
@@ -181,10 +183,12 @@ export function textContent(
 	if (autocomplete === undefined || autocomplete === null) {
 		return undefined;
 	}
+
 	for (const token of autocomplete.toLowerCase().split(" ")) {
 		if (TEXT_CONTENT.includes(token)) {
 			return token;
 		}
 	}
+
 	return undefined;
 }

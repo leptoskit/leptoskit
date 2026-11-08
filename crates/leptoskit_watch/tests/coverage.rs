@@ -41,6 +41,7 @@ fn kind_aliases_display_and_unknown() {
 	assert_eq!(WatchKind::WearOs.to_string(), "wearos");
 	assert_eq!(WatchKind::WatchOs.to_string(), "watchos");
 	assert_eq!(WatchKind::WearOs.display_name(), "Wear OS");
+
 	assert_eq!(WatchKind::WatchOs.display_name(), "watchOS");
 }
 
@@ -114,6 +115,7 @@ fn refused_widget_kinds() {
 		("Rive", Element::new(NativeKind::Rive)),
 		("custom", Element::new(NativeKind::Custom("custom"))),
 	];
+
 	for (name, element) in cases {
 		assert_eq!(
 			measure(element, WatchBudget::page()).unwrap_err(),
@@ -121,6 +123,7 @@ fn refused_widget_kinds() {
 			"{name}"
 		);
 	}
+
 	assert!(measure(&Element::image("local.png"), WatchBudget::page()).is_ok());
 	assert!(measure(&Element::button("Go"), WatchBudget::page()).is_ok());
 	assert!(
@@ -144,6 +147,7 @@ fn refused_widget_kinds() {
 		)
 		.is_ok()
 	);
+
 	assert!(
 		measure(
 			&Element::new(NativeKind::LinearProgressIndicator),

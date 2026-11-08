@@ -166,6 +166,7 @@ async fn shared_canvas_retains_its_pose_through_updates_and_disposes_on_removal(
 	running.set(false);
 	leptos::task::tick().await;
 	let paused = pixels(&canvas);
+
 	JsFuture::from(nextFrame()).await.unwrap();
 	JsFuture::from(nextFrame()).await.unwrap();
 	assert_eq!(pixels(&canvas), paused);
@@ -268,6 +269,7 @@ async fn controlled_inputs_and_scene_replacement_recover_from_browser_failures()
 		.set_input(Name::new("amount").unwrap(), Input::Boolean(true), 2)
 		.unwrap();
 	content.set(initial);
+
 	wait_for_diagnostic(&canvas, "input type mismatch").await;
 	content
 		.set(Playback::new(asset.clone()).scene(Scene::Animation(Name::new("missing").unwrap())));

@@ -65,6 +65,7 @@ async fn calls(client: Client) {
 	let mut identities = client.plugin_id().0.to_le_bytes().to_vec();
 	identities.extend_from_slice(&running.id().unwrap().0.to_le_bytes());
 	identities.extend_from_slice(&echo_id.0.to_le_bytes());
+
 	let mut routed = client.call(MethodId(0), &identities).unwrap();
 	assert!(routed.id().is_some());
 	assert_eq!((&mut routed).await, Err(Error::Cancelled));

@@ -61,22 +61,27 @@ function list<T extends string>(
 ): T[] {
 	if (!value) return [...all];
 	const picked = value.split(",").map((item) => item.trim()) as T[];
+
 	for (const item of picked) {
 		if (!all.includes(item)) {
 			fail(`unknown value ${item}; expected one of ${all.join(", ")}`);
 		}
 	}
+
 	return picked;
 }
 
 function treeBytes(path: string): number {
 	const info = Deno.statSync(path);
+
 	if (info.isFile) return info.size;
 	let total = 0;
+
 	for (const entry of Deno.readDirSync(path)) {
 		if (entry.isSymlink) continue;
 		total += treeBytes(`${path}/${entry.name}`);
 	}
+
 	return total;
 }
 
@@ -86,10 +91,13 @@ function apkNativeLibraries(apk: string): number {
 		new Deno.Command("unzip", { args: ["-l", apk] }).outputSync().stdout,
 	);
 	let total = 0;
+
 	for (const line of listing.split("\n")) {
 		const match = line.match(/^\s*(\d+)\s+\S+\s+\S+\s+(lib\/\S+\.so)$/);
+
 		if (match) total += Number(match[1]);
 	}
+
 	return total;
 }
 
@@ -101,10 +109,13 @@ async function webTransfer(dist: string): Promise<number> {
 	try {
 		await page.navigate(`${server.url}/`);
 		let last = -1;
+
 		while (last !== page.networkBytes()) {
 			last = page.networkBytes();
+
 			await new Promise((resolve) => setTimeout(resolve, 2000));
 		}
+
 		return last;
 	} finally {
 		await page.close();
@@ -118,12 +129,14 @@ async function measure(
 	artifact: string,
 ): Promise<TierSize> {
 	if (platform === "web") return { bytes: await webTransfer(artifact) };
+
 	if (artifact.endsWith(".apk")) {
 		return {
 			bytes: Deno.statSync(artifact).size,
 			nativeLibraryBytes: apkNativeLibraries(artifact),
 		};
 	}
+
 	return { bytes: treeBytes(artifact) };
 }
 
@@ -166,6 +179,7 @@ async function main(): Promise<void> {
 		const module = await import(`./${descriptor.tiers.emitter}`) as {
 			emitter: TierEmitter;
 		};
+
 		const shellDir =
 			`${ARENA_APPS_ROOT}/${framework}/${descriptor.tiers.shell}`;
 		const perPlatform: SizeResults["sizes"][string] =
@@ -174,6 +188,7 @@ async function main(): Promise<void> {
 
 		for (const tier of tiers) {
 			const project = `${REPO_ROOT}/target/arena/tiers/${framework}/${tier}`;
+
 			await Deno.remove(project, { recursive: true }).catch(() => {});
 			await Deno.mkdir(project, { recursive: true });
 			// Build outputs never travel with the shell; dependency caches do,
@@ -199,12 +214,14 @@ async function main(): Promise<void> {
 
 			for (const platform of platforms) {
 				const build = descriptor.tiers.platforms[platform];
+
 				if (!build) continue;
 				const slot = perPlatform[platform] ?? {};
 				perPlatform[platform] = slot;
 				try {
 					await shell(build.build, project, project, platform);
 					const size = await measure(platform, `${project}/${build.artifact}`);
+
 					slot[tier] = size;
 					log(`${framework} ${tier} ${platform}: ${size.bytes} bytes`);
 				} catch (error) {

@@ -87,6 +87,7 @@ pub mod guest {
 		/// `echo()`.
 		pub async fn echo(self) -> Result<(), Error> {
 			let reply = self.0.call(ECHO_NONE, &[])?.await?;
+
 			if reply.is_empty() {
 				Ok(())
 			} else {

@@ -325,6 +325,7 @@ mod tests {
 				.supports_windows()
 		);
 		schemas[0].dialect = leptoskit_db_schema::Dialect::Postgres;
+
 		schemas[0].format = 1;
 		schemas[0].packs = None;
 		assert!(
@@ -373,6 +374,7 @@ mod tests {
 		);
 		std::fs::write(&path, "previous output").unwrap();
 		assert!(write_contract(&path, &contract).is_err());
+
 		assert_eq!(std::fs::read_to_string(path).unwrap(), "previous output");
 	}
 
@@ -388,6 +390,7 @@ mod tests {
 		let json = window.to_json();
 		let pin = crate::checksum(&json);
 		std::fs::write(&path, &json).unwrap();
+
 		let file = Some(path.as_os_str());
 		let digest = Some(OsStr::new(&pin));
 		assert!(configured_window(&contract, None, None).unwrap().is_none());

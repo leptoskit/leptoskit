@@ -11,6 +11,7 @@ pub fn NoteCard(note: NoteId, highlight: Option<u32>) -> Element {
 		Some(line) => format!("Note {note}, line {line}"),
 		None => format!("Note {note}"),
 	};
+
 	view! {
 		<View class="gap-2 p-4 rounded-xl">
 			<Text>{title}</Text>

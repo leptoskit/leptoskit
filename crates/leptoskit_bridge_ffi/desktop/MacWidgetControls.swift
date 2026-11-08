@@ -13,6 +13,7 @@ final class MacValueSlider: NSSlider {
         guard isEnabled else { return false }
         let delta = state.step ?? (state.max - state.min) / 100
         doubleValue = state.snapped(state.value + (forward ? delta : -delta))
+
         return sendAction(action, to: target)
     }
 
@@ -59,15 +60,18 @@ extension MacWidgetRenderer {
     @objc private func toggled(_ control: NSControl) {
         guard let id = node(control) else { return }
         let checked: Bool
+
         if let button = control as? MacChoiceButton {
             checked = button.radio || button.state == .on
         } else {
             checked = (control as? NSSwitch)?.state == .on
         }
+
         event(id, 6, "{\"checked\":\(checked)}")
         // AppKit can deselect sibling radios before invoking the target. Restore
         // every control from the guest's synchronous response, even on rejection.
         for (id, widget) in widgets {
+
             if let props = properties[id] { MacControlStyle.apply(props, to: widget) }
         }
     }
@@ -76,6 +80,7 @@ extension MacWidgetRenderer {
         guard let id = node(control) else { return }
         let state = properties[id]?.slider ?? .initial
         event(id, 7, "{\"value\":\(state.snapped(control.doubleValue))}")
+
         if let props = properties[id] { MacControlStyle.apply(props, to: control) }
     }
 }
@@ -84,22 +89,28 @@ extension MacWidgetRenderer {
 enum MacControlStyle {
     static func apply(_ props: WidgetProps, to widget: NSView) {
         if let control = widget as? NSControl { control.isEnabled = props.enabled ?? true }
+
         if let control = widget as? NSSwitch { control.state = props.checked == true ? .on : .off }
+
         if let control = widget as? MacChoiceButton {
             control.state = props.checked == true ? .on : .off
             control.isBordered = false
         }
+
         if let control = widget as? NSSlider {
             let state = props.slider ?? .initial
             (control as? MacValueSlider)?.state = state
+
             control.minValue = state.min
             control.maxValue = state.max
             control.doubleValue = state.value
             control.setAccessibilityValue(NSNumber(value: (props.slider ?? .initial).value))
         }
+
         if let control = widget as? NSProgressIndicator {
             if control.style == .spinning {
                 control.isIndeterminate = true
+
                 if props.running ?? true { control.startAnimation(nil) } else { control.stopAnimation(nil) }
             } else {
                 switch props.progress ?? .indeterminate {

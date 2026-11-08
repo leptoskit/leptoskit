@@ -123,12 +123,14 @@ pub fn build_for(release: bool, dev: Option<&DevManifest>, browsers: &[Browser])
 		.extension
 		.clone()
 		.context("add an [extension] table to leptoskit.toml to build an extension")?;
+
 	for browser in browsers {
 		anyhow::ensure!(
 			extension.browsers.contains(browser),
 			"{browser} is not in extension.browsers"
 		);
 	}
+
 	check_routes(&root, &config, &extension)?;
 	anyhow::ensure!(
 		!config.codepush.enabled,
@@ -200,6 +202,7 @@ pub fn build_for(release: bool, dev: Option<&DevManifest>, browsers: &[Browser])
 			dev,
 		};
 		write_package(&dir, &input, &module, &pkg, &assets, generated_icons)?;
+
 		if dev.is_some() {
 			std::fs::write(
 				dir.join("__leptoskit_probe.html"),

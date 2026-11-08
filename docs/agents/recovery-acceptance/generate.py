@@ -33,14 +33,17 @@ for name, script in re.findall(
 env = {"PATH": str(root / "bin") + os.pathsep + os.environ["PATH"],
        "HOME": str(root), "MOCK_REMOTE_ROOT": str(root / "remote"),
        "MOCK_SCHEMA_LABEL": hashlib.sha256(b"[]").hexdigest()}
+
 for key in ("RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "CARGO_HOME"):
     if key in os.environ:
         env[key] = os.environ[key]
+
 for key in ("LEPTOSKIT_BACKUP_PASSWORD", "LEPTOSKIT_BACKUP_ACCESS_KEY_ID",
             "LEPTOSKIT_BACKUP_SECRET_ACCESS_KEY", "POSTGRES_PASSWORD",
             "DATABASE_PASSWORD", "KAMAL_REGISTRY_PASSWORD",
             "NATS_TOKEN", "VALKEY_PASSWORD"):
     env[key] = "fixture-only-not-a-credential"
+
 for args in (("infra", "generate"), ("infra", "backups", "install")):
     subprocess.run([str(binary), *args], cwd=root, env=env, check=True)
 print(json.dumps({"binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),

@@ -200,27 +200,33 @@ impl ThemeConfig {
 			if let Err(reason) = validate_theme_color_name(name) {
 				return Some(format!("colors.{name}: {reason}"));
 			}
+
 			if let Err(reason) = validate_theme_color_value(value) {
 				return Some(format!("colors.{name}: {reason}"));
 			}
 		}
+
 		for (name, value) in &self.lengths {
 			if let Err(reason) = validate_theme_color_name(name) {
 				return Some(format!("lengths.{name}: {reason}"));
 			}
+
 			if let Err(reason) = validate_theme_length_value(value) {
 				return Some(format!("lengths.{name}: {reason}"));
 			}
 		}
+
 		None
 	}
 }
 
 fn validate_theme_color_name(name: &str) -> Result<(), String> {
 	let name = name.trim().trim_start_matches('-');
+
 	if name.is_empty() {
 		return Err("name a custom property such as `brand` or `--brand`".to_owned());
 	}
+
 	if name
 		.chars()
 		.any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')))
@@ -232,8 +238,10 @@ fn validate_theme_color_name(name: &str) -> Result<(), String> {
 
 fn validate_theme_color_value(value: &str) -> Result<(), String> {
 	let value = value.trim();
+
 	match value {
 		"transparent" | "black" | "white" => Ok(()),
+
 		value if value.starts_with('#') => {
 			let digits = &value[1..];
 			let hex = matches!(digits.len(), 3 | 4 | 6 | 8)
@@ -246,6 +254,7 @@ fn validate_theme_color_value(value: &str) -> Result<(), String> {
 				))
 			}
 		}
+
 		value => {
 			Err(format!(
 				"unsupported color `{value}`; use hex, black, white, or transparent"
@@ -268,12 +277,15 @@ fn validate_theme_length_value(value: &str) -> Result<(), String> {
 		.trim()
 		.parse()
 		.map_err(|_| format!("invalid number in length `{value}`"))?;
+
 	if !number.is_finite() || number.abs() > 1_000_000.0 {
 		return Err(format!(
 			"length `{value}` must be finite with magnitude at most 1000000"
 		));
 	}
+
 	let _ = unit;
+
 	Ok(())
 }
 
@@ -2921,6 +2933,7 @@ impl LeptoskitConfig {
 		}
 
 		self.validate_app()?;
+
 		if self.build.backend == Some(false)
 			&& (self.app.render.renders_on_server() || self.serve.probes)
 		{
@@ -2932,7 +2945,9 @@ impl LeptoskitConfig {
 		self.validate_native()?;
 		self.validate_rpc()?;
 		self.validate_paths()?;
+
 		self.validate_db()?;
+
 		if let Some(problem) = self.infra.as_ref().and_then(infra::InfraConfig::problem) {
 			return Err(ConfigError::InvalidInfra(problem));
 		}
@@ -2976,11 +2991,13 @@ impl LeptoskitConfig {
 		let required = self.build.backend == Some(true)
 			|| self.app.render.renders_on_server()
 			|| self.serve.probes;
+
 		if self.build.backend == Some(false) && required {
 			return Err(ConfigError::InvalidBackend(
 				"build.backend = false cannot serve SSR/islands or backend health probes".into(),
 			));
 		}
+
 		if required && !has_binary {
 			return Err(ConfigError::InvalidBackend(format!(
 				"app.name `{}` must name a package with a backend binary; add src/main.rs or a \
@@ -2988,6 +3005,7 @@ impl LeptoskitConfig {
 				self.app.name
 			)));
 		}
+
 		Ok(self.build.backend.unwrap_or(has_binary))
 	}
 

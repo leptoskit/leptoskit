@@ -41,6 +41,7 @@ fn watch_targets_refuse_phone_project_generation() {
 	std::fs::create_dir_all(&root).unwrap();
 	let registry = metadata_registry(&root, &[]);
 	let config = leptoskit_config::LeptoskitConfig::default();
+
 	for target in [Target::Wearos, Target::Watchos] {
 		let error = generate(&root, &config, &registry, target, false)
 			.unwrap_err()
@@ -50,6 +51,7 @@ fn watch_targets_refuse_phone_project_generation() {
 			"{target:?}: {error}"
 		);
 	}
+
 	std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -197,6 +199,7 @@ fn android_emits_selected_maven_dependencies_once_and_removes_stale_entries() {
 	);
 	assert!(manifest.contains("org.khronos.openxr.permission.OPENXR"));
 	android(&root, &config, &registry, "arm64-v8a").unwrap();
+
 	let manifest =
 		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
 	assert!(!manifest.contains("com.oculus"), "{manifest}");
@@ -630,6 +633,7 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 		"clipboard_crate",
 	);
 	clipboard_plugin.experimental_rust_plugins = true;
+
 	registry.plugins.push(clipboard_plugin);
 
 	let mut config = leptoskit_config::LeptoskitConfig::default();

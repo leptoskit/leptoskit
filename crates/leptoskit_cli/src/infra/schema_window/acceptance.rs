@@ -17,6 +17,7 @@ fn boot(host: &str, image: &str, configuration: &str) {
 		 a05-window-web-v1 --security-opt label=disable --network host --env \
 		 DATABASE_URL=postgres://postgres@127.0.0.1:54320/a05?sslmode=disable",
 	);
+
 	for (key, value) in config["env"]["clear"].as_object().unwrap() {
 		write!(
 			command,
@@ -25,12 +26,15 @@ fn boot(host: &str, image: &str, configuration: &str) {
 		)
 		.unwrap();
 	}
+
 	if let Some(volumes) = config["volumes"].as_array() {
 		for volume in volumes {
 			write!(command, " -v {}", remote::quote(volume.as_str().unwrap())).unwrap();
 		}
 	}
+
 	write!(command, " {}", remote::quote(image)).unwrap();
+
 	remote(host, &command);
 	remote(
 		host,
@@ -50,6 +54,7 @@ fn real_managed_window_delivery_and_recovery() {
 	let bytes = fs::read(&descriptor_path).unwrap();
 	let descriptor =
 		super::super::verified::read(&descriptor_path, &super::super::digest(&bytes)).unwrap();
+
 	let authorization: super::super::approvals::Evidence =
 		serde_json::from_slice(&fs::read(directory.join("backend-authorization.json")).unwrap())
 			.unwrap();

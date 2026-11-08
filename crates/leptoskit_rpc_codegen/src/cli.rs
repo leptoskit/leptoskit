@@ -237,6 +237,7 @@ pub(crate) fn generate(context: &Context<'_>) -> Generated {
 			} else {
 				format!("Option<Json<{}>>", field.type_name)
 			};
+
 			out.push_str(&format!("\t\t#[arg(long)]\n\t\t{ident}: {field_type},\n"));
 		}
 
@@ -305,6 +306,7 @@ fn argument_names(function: &ApiFunction) -> Vec<String> {
 	} else {
 		RUST_CLI_RESERVED_ARGUMENTS
 	});
+
 	function
 		.params
 		.iter()
@@ -415,6 +417,7 @@ fn main_source(context: &Context<'_>, sign_in: bool, channels: &[ChannelCommand<
 					bindings.join(", "),
 				));
 			}
+
 			_ => {
 				arms.push_str(&format!(
 					"\t\tCommand::{variant} {{ {} }} => \
@@ -436,6 +439,7 @@ fn main_source(context: &Context<'_>, sign_in: bool, channels: &[ChannelCommand<
 				} else {
 					format!("{ident}.map(|json| wire(&json.0))")
 				};
+
 				format!("({}, {value})", rust_string(&field.wire))
 			})
 			.collect();
@@ -444,6 +448,7 @@ fn main_source(context: &Context<'_>, sign_in: bool, channels: &[ChannelCommand<
 		} else {
 			format!("vec![{}]", values.join(", "))
 		};
+
 		let mut bindings = command.arguments.clone();
 		bindings.push("presence".to_owned());
 		arms.push_str(&format!(

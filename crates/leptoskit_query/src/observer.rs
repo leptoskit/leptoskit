@@ -434,6 +434,7 @@ where
 				if crate::time::try_sleep(interval).await.is_err() {
 					return;
 				}
+
 				let Some(observer) = observer.upgrade() else {
 					break;
 				};

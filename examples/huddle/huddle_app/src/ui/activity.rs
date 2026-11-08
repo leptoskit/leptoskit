@@ -59,6 +59,7 @@ fn Invites(huddle: &Huddle) -> Element {
 				"sent" => "Email sent",
 				_ => "Couldn't send",
 			};
+
 			view! {
 				<View class="flex-row gap-2 items-center">
 					<Text class="flex-1 text-sm">{invite.email}</Text>
@@ -184,6 +185,7 @@ fn Tips(huddle: &Huddle) -> Element {
 			} else {
 				format!("{} coins from {}", tip.amount, tip.from)
 			};
+
 			let id = tip.id;
 			let retry = (sent && tip.status == "failed").then(|| {
 				view! {
@@ -237,6 +239,7 @@ fn People(huddle: &Huddle) -> Element {
 	let members = huddle.members.data().unwrap_or_default();
 	let everyone = huddle.people.data().unwrap_or_default();
 	let channel = huddle.selected.get();
+
 	let rows: Fragment = everyone
 		.into_iter()
 		.filter(|person| owned || members.iter().any(|member| member.id == person.id))

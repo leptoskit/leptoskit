@@ -64,36 +64,46 @@ enum WidgetStyle {
     private static func applyControl(_ props: WidgetProps, to widget: UIView) {
         let tint = props.color.map(color) ?? .systemBlue
         (widget as? UIControl)?.isEnabled = props.enabled ?? true
+
         if let control = widget as? UISwitch {
             control.isOn = props.checked ?? false
             control.onTintColor = tint
         }
+
         if let button = widget as? ChoiceButton {
             button.isSelected = props.checked ?? false
             button.tintColor = tint
+
             button.setImage(UIImage(systemName: button.radio ? "circle" : "square"), for: .normal)
             button.setImage(UIImage(systemName: button.radio ? "largecircle.fill.circle" : "checkmark.square.fill"),
                 for: .selected)
             button.accessibilityValue = button.isSelected ? "1" : "0"
             button.accessibilityTraits = [.button]
+
             if button.isSelected { button.accessibilityTraits.insert(.selected) }
+
             if !button.isEnabled { button.accessibilityTraits.insert(.notEnabled) }
         }
+
         if let slider = widget as? UISlider {
             let state = props.slider ?? .initial
             slider.value = state.coordinate
             slider.minimumTrackTintColor = tint
             slider.accessibilityValue = props.aria?.valueText ?? String(state.value)
         }
+
         if let progress = widget as? LinearProgressView { progress.apply(props) }
+
         if let spinner = widget as? UIActivityIndicatorView {
             spinner.color = tint
             spinner.hidesWhenStopped = false
+
             if props.running != false && props.hidden != true {
                 spinner.startAnimating()
             } else { spinner.stopAnimating() }
             spinner.isAccessibilityElement = props.accessibilityLabel != nil
         }
+
         if widget is UISwitch || widget is ChoiceButton || widget is UISlider
             || widget is LinearProgressView || widget is UIActivityIndicatorView {
             widget.accessibilityElementsHidden = props.aria?.ariaHidden ?? false
@@ -189,10 +199,12 @@ final class LinearProgressView: UIView {
         bar.transform = .identity
         bar.frame = bounds
         let height = bar.bounds.height
+
         if height > 0 { bar.transform = CGAffineTransform(scaleX: 1, y: bounds.height / height) }
         bar.center = CGPoint(x: bounds.midX, y: bounds.midY)
         sweep.frame = CGRect(x: -bounds.width / 3, y: 0, width: bounds.width / 3, height: bounds.height)
         sweep.removeAnimation(forKey: "progress")
+
         if indeterminate && window != nil && !isHidden && bounds.width > 0 {
             let animation = CABasicAnimation(keyPath: "transform.translation.x")
             animation.fromValue = 0
@@ -206,6 +218,7 @@ final class LinearProgressView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         setNeedsLayout()
+
         if window == nil { sweep.removeAllAnimations() }
     }
 }

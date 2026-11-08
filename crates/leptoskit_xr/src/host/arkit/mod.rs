@@ -233,6 +233,7 @@ impl ArKitBackend {
 		};
 		let projection = Fov::from_matrix(&projection.to_array())
 			.map_or(Projection::Matrix(projection.to_array()), Projection::Fov);
+
 		let display = self.display_transform(frame);
 
 		XrFrame {
@@ -317,6 +318,7 @@ impl ArKitBackend {
 		let local = Pose::new(center, Quat::from_axis_angle(Vec3::Y, turn));
 		let pose = transform.then(local);
 		let normal = pose.transform_vector(Vec3::Y);
+
 		let orientation = if alignment == ARPlaneAnchorAlignment::Vertical {
 			PlaneOrientation::Vertical
 		} else if normal.y >= 0.0 {
@@ -359,6 +361,7 @@ impl ArKitBackend {
 			RAYCAST_INFINITE => HitKind::InfinitePlane,
 			_ => HitKind::Estimated,
 		};
+
 		// SAFETY: Allocates and initialises a query, then raycasts it; the
 		// query is released when `query` drops.
 		let results = unsafe {

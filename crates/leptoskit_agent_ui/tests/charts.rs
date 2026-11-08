@@ -66,6 +66,7 @@ fn many_bars_thin_their_labels() {
 #[test]
 fn a_tall_chart_is_capped_and_a_short_one_raised() {
 	let ui = AgentUi::new();
+
 	for height in [10, 1000] {
 		let source: &'static str = Box::leak(
 			format!("<Chart labels={{[\"A\"]}} values={{[1]}} height={{{height}}} />\n")
@@ -117,6 +118,7 @@ fn a_line_without_labels_still_draws() {
 #[test]
 fn pies_and_donuts_split_a_whole() {
 	let ui = AgentUi::new();
+
 	for kind in ["pie", "donut"] {
 		let source: &'static str = Box::leak(
 			format!(
@@ -213,6 +215,7 @@ fn a_chart_explains_every_thing_it_cannot_draw() {
 			"cannot show negative values",
 		),
 	];
+
 	for (source, expected) in cases {
 		let messages = messages(&ui, source);
 		assert!(
@@ -297,6 +300,7 @@ fn a_series_outside_a_chart_says_where_it_belongs() {
 #[test]
 fn charts_format_percent_and_plain_axes() {
 	let ui = AgentUi::new();
+
 	for format in ["percent", "number"] {
 		let source: &'static str = Box::leak(
 			format!(

@@ -18,6 +18,7 @@ def run(*args, env=None, input=None):
     )
     print(r.stdout, flush=True)
     assert r.returncode == 0, args
+
     return r.stdout.strip()
 
 
@@ -38,6 +39,7 @@ source = (
 assert "ready-v2" in source
 blob = run("git", "hash-object", "-w", "--stdin", input=source)
 run("git", "update-index", "--cacheinfo", "100644," + blob + ",src/main.rs", env=index)
+
 tree = run("git", "write-tree", env=index)
 recipe["commit"] = run(
     "git", "commit-tree", "-S", tree, "-m", "test: changed website serving fixture"

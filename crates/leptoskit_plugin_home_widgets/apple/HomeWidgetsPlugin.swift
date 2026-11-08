@@ -126,6 +126,7 @@ public final class HomeWidgetsPlugin: NativePlugin {
 
         var data = Data(count: 4)
         withUnsafeBytes(of: flags.littleEndian) { data.replaceSubrange(0..<4, with: $0) }
+
         return data
     }
 }
@@ -177,6 +178,7 @@ private struct Reader {
         guard bytes.count - offset >= 4 else { throw PluginError.invalidArgument }
         let value = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
         offset += 4
+
         return value
     }
 
@@ -186,6 +188,7 @@ private struct Reader {
             (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
                 || [45, 46, 95].contains($0)
         }) else { throw PluginError.invalidArgument }
+
         return value
     }
 
@@ -206,6 +209,7 @@ private struct Reader {
                   ($0.value <= 31 || (127...159).contains($0.value))
                       && !(multiline && ($0.value == 10 || $0.value == 9))
               }) else { throw PluginError.invalidArgument }
+
         return value
     }
 
@@ -226,6 +230,7 @@ private func isAllowedURL(_ url: String) -> Bool {
     else { return false }
 
     let scheme = String(url[..<separator]).lowercased()
+
     guard let first = scheme.unicodeScalars.first,
           (97...122).contains(first.value)
     else { return false }

@@ -21,11 +21,13 @@ pub fn Layout(children: Children, navigation: &Navigation) -> Element {
 	) {
 		return view! { <View class=ui::PAGE>{children}</View> };
 	}
+
 	let body = match session {
 		Session::Checking => view! { <ui::Loading what="your library" /> },
 		Session::SignedOut => view! { <crate::sign_in::Form store=&store /> },
 		Session::SignedIn => view! { <View class="gap-4">{children}</View> },
 	};
+
 	let header = view! {
 		<View class="flex-row items-center justify-between border-b border-stone-200 px-6 py-3 \
 			 dark:border-stone-800">

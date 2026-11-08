@@ -202,6 +202,7 @@ pub(crate) async fn make_ahead(
 	)
 	.await?
 	.unwrap_or(1);
+
 	let grew = match growth.last {
 		Some((at, before)) => {
 			let elapsed = at.elapsed().as_secs_f64().max(1.0);
@@ -210,6 +211,7 @@ pub(crate) async fn make_ahead(
 		}
 		None => None,
 	};
+
 	growth.last = Some((std::time::Instant::now(), current));
 
 	let chunk = grew.map_or(MIN_CHUNK, |(_, per_second)| {

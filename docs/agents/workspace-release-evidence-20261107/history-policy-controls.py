@@ -28,6 +28,7 @@ def run(*args, env=env, ok=True):
     )
     print(r.stdout, flush=True)
     assert (r.returncode == 0) == ok, (args, r.returncode)
+
     return r.stdout
 
 
@@ -37,6 +38,7 @@ def sha(p):
 
 def snapshot():
     result = {}
+
     for app in ["accounts", "website"]:
         name = "workspace-" + app
         fmt = '{"container":{{json .Id}},"image":{{json .Image}},"started":{{json .State.StartedAt}}}'
@@ -95,10 +97,12 @@ for name, field, value, expected in [
 ]:
     original = run(ssh, "root@127.0.0.1", "cat " + base + name)
     changed = json.loads(original)
+
     if name == "releases.json":
         changed[-1].pop(field)
     else:
         changed[field] = value
+
     try:
         write_remote(base + name, changed)
         assert expected in deploy(False)
@@ -152,9 +156,11 @@ for seq, kind in [(7, "expired"), (9, "revoked")]:
     try:
         policy(seq, kind)
         out = deploy(False)
+
         assert any(word in out for word in ["expired", "policy", "authorize"])
     finally:
         policy(seq + 1, "valid")
     assert snapshot() == before
     assert "Revalidated current release" in deploy()
+
 print("LEGACY HISTORY, INCOMPLETE PHASE, EXPIRY AND REVOCATION PASSED")

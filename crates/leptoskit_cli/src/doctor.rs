@@ -192,6 +192,7 @@ fn selected_platforms(all: bool, config: Option<&LeptoskitConfig>) -> Vec<Platfo
 		// on every platform but this one.
 		let apple = cfg!(target_os = "macos");
 		let linux = cfg!(target_os = "linux");
+
 		return ORDER
 			.into_iter()
 			.filter(|platform| {

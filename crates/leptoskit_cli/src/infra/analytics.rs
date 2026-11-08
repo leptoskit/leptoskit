@@ -62,6 +62,7 @@ fn fetch(url: &str, key: &str) -> Result<Evidence> {
 		evidence.snapshot.format_version == 1,
 		"unsupported analytics format version"
 	);
+
 	ensure!(
 		!evidence.infrastructure_changes_authorized,
 		"analytics cannot authorize infrastructure changes"
@@ -94,8 +95,10 @@ mod tests {
 				if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
 					break;
 				}
+
 				request.push_str(&line);
 			}
+
 			let request = request.to_ascii_lowercase();
 			assert!(request.contains(&format!("authorization: bearer {key}")));
 			socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://must-not-follow.example/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();

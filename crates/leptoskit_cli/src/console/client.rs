@@ -39,6 +39,7 @@ impl Connection {
 		if std::env::var("LEPTOSKIT_CONTROL_LOCAL").as_deref() == Ok("1") {
 			return Ok(None);
 		}
+
 		let (config, root) = LeptoskitConfig::load()?;
 		let Some(infra) = config.infra else {
 			return Ok(None);
@@ -47,6 +48,7 @@ impl Connection {
 			return Ok(None);
 		};
 		let url = origin(&url)?;
+
 		let key = key(&url, &infra.name)?;
 		Ok(Some(Self {
 			url,
@@ -75,19 +77,23 @@ impl Connection {
 				.header("Authorization", format!("Bearer {}", self.key))
 				.call()
 		};
+
 		let mut response = response.map_err(|_| {
 			anyhow::anyhow!(
 				"deployment service request failed; check the connection and scoped credential"
 			)
 		})?;
 		let status = response.status();
+
 		let text = response
 			.body_mut()
 			.with_config()
 			.limit(16 * 1024 * 1024)
 			.read_to_string()?;
+
 		if !status.is_success() {
 			let problem = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+
 			let code = match problem["error"].as_str() {
 				Some("revision_conflict") => "revision_conflict",
 				Some("operation_in_progress") => "operation_in_progress",
@@ -97,8 +103,10 @@ impl Connection {
 				Some("scope_or_origin_denied") => "scope_or_origin_denied",
 				_ => "request_rejected",
 			};
+
 			return Err(Rejected(code).into());
 		}
+
 		if text.is_empty() {
 			Ok(serde_json::Value::Null)
 		} else {
@@ -130,6 +138,7 @@ fn credential_path(url: &str, project: &str) -> Result<PathBuf> {
 				.join(".config")
 		}
 	};
+
 	Ok(root.join("leptoskit/control").join(format!(
 		"{:x}.json",
 		sha2::Sha256::digest(format!("{url}/{project}").as_bytes())
@@ -160,6 +169,7 @@ fn key(url: &str, project: &str) -> Result<String> {
 		)?
 		.key
 	};
+
 	ensure!(
 		(32..=256).contains(&key.len()) && key.bytes().all(|b| (33..127).contains(&b)),
 		"invalid deployment service credential"
@@ -179,6 +189,7 @@ pub(super) fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
 	let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
 	temporary.write_all(bytes)?;
 	temporary.as_file().sync_all()?;
+
 	temporary.persist(path)?;
 	Ok(())
 }
@@ -205,6 +216,7 @@ pub fn connect(url: &str) -> Result<()> {
 		})?,
 	)?;
 	let path = root.join(leptoskit_config::CONFIG_FILE);
+
 	let mut document = std::fs::read_to_string(&path)?.parse::<toml_edit::DocumentMut>()?;
 	document["infra"]["control_url"] = toml_edit::value(&url);
 	let text = document.to_string();
@@ -281,12 +293,14 @@ pub fn deploy(connection: &Connection, args: &crate::infra::ReleaseArgs) -> Resu
 			);
 			String::from_utf8(output.stdout)?.trim().to_owned()
 		};
+
 		Action::Deploy {
 			version,
 			setup: args.setup,
 			maintenance: args.maintenance,
 		}
 	};
+
 	submit(connection, action)?;
 	Ok(())
 }
@@ -350,10 +364,12 @@ fn submit(connection: &Connection, action: Action) -> Result<Operation> {
 		)?;
 		intent
 	};
+
 	let response = connection.request(
 		&format!("/api/v1/projects/{}/operations", connection.project),
 		Some(&serde_json::to_value(intent)?),
 	);
+
 	if response
 		.as_ref()
 		.is_err_and(|error| error.downcast_ref::<Rejected>().is_some())
@@ -362,12 +378,14 @@ fn submit(connection: &Connection, action: Action) -> Result<Operation> {
 	}
 	let mut operation: Operation = serde_json::from_value(response?)?;
 	println!("Operation {} · {}", operation.id, connection.url);
+
 	while matches!(operation.phase, Phase::Queued | Phase::Running) {
 		std::thread::sleep(std::time::Duration::from_secs(1));
 		operation = serde_json::from_value(
 			connection.request(&format!("/api/v1/operations/{}", operation.id), None)?,
 		)?;
 	}
+
 	std::fs::remove_file(pending_path)?;
 	println!("{}", serde_json::to_string_pretty(&operation)?);
 	ensure!(

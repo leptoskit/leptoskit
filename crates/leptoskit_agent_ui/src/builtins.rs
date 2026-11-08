@@ -84,6 +84,7 @@ pub(crate) fn shown(number: f64, format: &str) -> String {
 			} else {
 				2
 			};
+
 			grouped(number, places)
 		}
 	}
@@ -226,6 +227,7 @@ fn row() -> Component {
 			} else {
 				"flex-1 min-w-0"
 			};
+
 			let children = cx.take_children().into_iter().map(|child| {
 				if equal {
 					child.class(child_class)
@@ -438,6 +440,7 @@ fn stat() -> Component {
 						}
 					}
 				};
+
 				let good_when_rising = props.text_or("good", "up") != "down";
 				let mut shown = shown_value(delta, &props.text_or("format", "number"));
 				if let (Some(false), Value::Number(_)) = (falling, delta) {
@@ -455,6 +458,7 @@ fn stat() -> Component {
 					Some(_) => "positive",
 					None => "muted",
 				};
+
 				tile = tile.child(text.class(theme.class("text", role)));
 			}
 
@@ -498,6 +502,7 @@ fn progress() -> Component {
 			} else {
 				tone(&props.text_or("tone", "accent"))
 			};
+
 			let fraction = (value / max).clamp(0.0, 1.0) as f32;
 			let amount = format!("{} of {}", shown(value, &format), shown(max, &format));
 
@@ -505,6 +510,7 @@ fn progress() -> Component {
 			if props.has("label") {
 				header = header.child(Text(props.text("label")?).class("flex-1 min-w-0 text-sm"));
 			}
+
 			header = header.child(
 				Text(amount)
 					.class("text-sm")
@@ -594,6 +600,7 @@ fn data_table() -> Component {
 					}
 				}
 			};
+
 			let headers = props.texts("headers")?;
 			let money_columns = props.texts("money")?;
 			let shown_rows = rows.len().min(MAX_TABLE_ROWS);
@@ -621,6 +628,7 @@ fn data_table() -> Component {
 						(Value::Number(number), true) => money(*number, "$"),
 						(value, _) => display(value),
 					};
+
 					View()
 						.class("flex-1 min-w-0 px-2 py-1.5")
 						.child(Text(text).class("text-sm"))
@@ -677,6 +685,7 @@ fn press(
 	} else {
 		None
 	};
+
 	if setter.is_none() && action.is_none() {
 		return Ok(None);
 	}
@@ -761,6 +770,7 @@ fn pressable() -> Component {
 				if label.trim().is_empty() {
 					return Err("needs a `label` that says what pressing it does".to_owned());
 				}
+
 				let pressed = press(props, cx, &label)?;
 				let usable = pressed.is_some();
 				let on_press = move || {
@@ -835,10 +845,12 @@ fn slider() -> Component {
 			if min >= max {
 				return Err("`max` must be more than `min`".to_owned());
 			}
+
 			let step = optional_number(props, "step")?.map(f64::abs);
 			if step.is_some_and(|step| step <= 0.0 || step > max - min) {
 				return Err("`step` must be more than 0 and at most `max - min`".to_owned());
 			}
+
 			let format = props.text_or("format", "number");
 			let current = props.get("bind.value").as_number().unwrap_or(min);
 			let value = snap(current, min, max, step);
@@ -898,6 +910,7 @@ fn track(
 	format: &str,
 ) -> Element {
 	let fine = step.unwrap_or((max - min) / 100.0);
+
 	let count = match step {
 		Some(step) => (((max - min) / step).floor() as usize + 1).min(MAX_TRACK_STOPS),
 		None => MAX_TRACK_STOPS,
@@ -1110,6 +1123,7 @@ fn choice() -> Component {
 						return Err(format!("lists {} twice", display(option)));
 					}
 				}
+
 				let group = radio_group();
 				let rows = options.into_iter().enumerate().map(|(index, option)| {
 					let text = text(index, &option);
@@ -1139,6 +1153,7 @@ fn choice() -> Component {
 				} else {
 					quiet(&theme, button)
 				};
+
 				let input = input.clone();
 				button.on_press(move || input.set(option.clone()))
 			});

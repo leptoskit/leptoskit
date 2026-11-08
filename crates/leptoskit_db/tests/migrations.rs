@@ -62,6 +62,7 @@ async fn reversible_history(db: &Db) {
 		.unwrap();
 	assert_eq!(rows[0][0], leptoskit_db::Value::Text("kept".into()));
 	assert_eq!(db.migrate(&migrations).await.unwrap(), ["second"]);
+
 	assert_eq!(
 		db.rollback(&migrations, 2).await.unwrap(),
 		["second", "first"]
@@ -90,6 +91,7 @@ async fn rejected_reversals(db: &Db, migrations: &mut [Migration]) {
 	})
 	.await
 	.unwrap();
+
 	assert_eq!(db.applied_migrations().await.unwrap().len(), 2);
 	migrations[1] = migrations[1]
 		.clone()
@@ -563,6 +565,7 @@ async fn consolidated_rollback_is_refused(db: &Db) {
 	assert_eq!(db.migrate(&registry).await.unwrap(), ["combined"]);
 	let history = db.applied_migrations().await.unwrap();
 	assert_eq!(history.len(), 3);
+
 	for steps in [1, 3] {
 		assert!(matches!(
 			db.rollback(&registry, steps).await,
@@ -584,6 +587,7 @@ async fn consolidated_rollback_is_refused(db: &Db) {
 			]]
 		);
 	}
+
 	// Refusal must leave the connection and migration lock usable.
 	assert_eq!(db.migrate(&registry).await.unwrap(), Vec::<String>::new());
 }

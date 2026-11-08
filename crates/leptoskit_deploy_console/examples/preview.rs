@@ -16,6 +16,7 @@ fn render(model: &Model, sheets: &mut BTreeSet<String>) -> String {
 	let mut html = leptoskit::web::render(view::screen(model))
 		.to_html()
 		.replace("<!>", "");
+
 	while let Some(start) = html.find("<style") {
 		let end = start
 			+ html[start..]
@@ -25,6 +26,7 @@ fn render(model: &Model, sheets: &mut BTreeSet<String>) -> String {
 		sheets.insert(html[start..end].to_owned());
 		html.replace_range(start..end, "");
 	}
+
 	html
 }
 
@@ -34,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		.unwrap_or_else(|| "target/deploy-console.html".into());
 	let mut templates = String::new();
 	let mut sheets = BTreeSet::new();
+
 	for (t, target) in [Target::SingleVm, Target::RedundantVm, Target::Kubernetes]
 		.into_iter()
 		.enumerate()
@@ -51,9 +54,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				.enumerate()
 			{
 				let mut model = Model::new(target, Tab::Deployments, schema);
+
 				if let Some(intent) = intent {
 					model.preview(intent);
 				}
+
 				write!(
 					templates,
 					"<template id=\"d-{t}-{s}-{i}\">{}</template>",
@@ -68,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			render(&model, &mut sheets)
 		)?;
 	}
+
 	for (id, self_hosted) in [(0, false), (1, true)] {
 		let mut model = Model::new(Target::SingleVm, Tab::Agents, SchemaChange::Unchanged);
 		model.self_hosted = self_hosted;
@@ -77,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			render(&model, &mut sheets)
 		)?;
 	}
+
 	let mut initial_sheets = BTreeSet::new();
 	let initial = render(&Model::default(), &mut initial_sheets);
 	let styles = initial_sheets.into_iter().collect::<String>();
@@ -108,9 +115,11 @@ document.addEventListener('click',async event=>{{
 }});
 </script></body></html>"#
 	);
+
 	if let Some(parent) = std::path::Path::new(&path).parent() {
 		std::fs::create_dir_all(parent)?;
 	}
+
 	std::fs::write(&path, html)?;
 	println!("{path}");
 	Ok(())

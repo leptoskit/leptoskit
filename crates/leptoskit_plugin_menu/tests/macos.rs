@@ -85,6 +85,7 @@ fn application_menu_events_updates_and_lease_restoration() {
 	menu.set_enabled("file", true).unwrap();
 	menu.set_enabled("save", false).unwrap();
 	assert!(menu.handle_event(&event).is_none());
+
 	menu.set_enabled("save", true).unwrap();
 	menu.set_checked("toggle", true).unwrap();
 	assert!(menu.is_checked("toggle").unwrap());

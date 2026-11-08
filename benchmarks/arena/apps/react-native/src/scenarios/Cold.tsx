@@ -26,6 +26,7 @@ export function Cold() {
 			if (cancelled) {
 				return;
 			}
+
 			const list = rows.current;
 			const count = list?.children.length ?? 0;
 			const first = list?.children.item(0)?.textContent;

@@ -52,6 +52,7 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 		crate::server::backend_package(&config, &metadata, leptoskit_config::Platform::Web)?
 			.is_some()
 	};
+
 	let ip: IpAddr = config.serve.address.parse().with_context(|| {
 		format!(
 			"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
@@ -66,6 +67,7 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 		let metadata = crate::wasm::cargo_metadata(root.as_std_path())?;
 		BuiltServices::load(&metadata.target_directory, root.as_std_path())?
 	};
+
 	let routes = Routes::of(&services.services);
 	let app_address = if routes.is_empty() {
 		address
@@ -74,6 +76,7 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 			.context("could not find a free port for the app behind the services' proxy")?;
 		free.local_addr()?
 	};
+
 	let (running, app_env) = start_services(&config, &root, &services, address, app_address)?;
 
 	if !routes.is_empty() {
@@ -121,12 +124,14 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 			crate::ui::BOLD.render(),
 			crate::ui::BOLD.render_reset()
 		));
+
 		runtime.block_on(async {
 			leptoskit_axum::serve(options)
 				.await
 				.map_err(|error| anyhow::anyhow!("{error}"))
 		})
 	};
+
 	drop(running);
 	result
 }
@@ -208,12 +213,14 @@ fn run_app_server(
 			.context("could not wait for the app server")?
 		{
 			anyhow::ensure!(status.success(), "the app server exited with {status}");
+
 			return Ok(());
 		}
 
 		if stop.load(std::sync::atomic::Ordering::Relaxed) {
 			// It drains the way it would in a deploy, then the services stop.
 			crate::server::stop_gracefully(&mut [&mut child], crate::server::SERVE_STOP_GRACE);
+
 			return Ok(());
 		}
 

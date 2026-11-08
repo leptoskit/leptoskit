@@ -111,6 +111,7 @@ final class TrackingTransparencyTests: XCTestCase {
             _ = try await call(first)
             XCTFail("Duplicate old callback released the replacement gate")
         } catch { XCTAssertEqual(error as? PluginError, .busy) }
+
         provider.value = 3
         provider.completion?()
         let result = try await replacement.value

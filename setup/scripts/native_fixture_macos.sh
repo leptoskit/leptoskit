@@ -10,6 +10,7 @@ source_dir="$root/crates/leptoskit_testing/fixtures/macos"
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS"
 cp "$source_dir/Info.plist" "$out/Contents/Info.plist"
+
 xcrun swiftc -target "$(uname -m)-apple-macos13.0" "$source_dir/main.swift" -o "$out/Contents/MacOS/CaptureLab"
 printf 'Leptoskit native file chooser evidence\n' >"$out_dir/evidence.txt"
 printf '%s\n' "$out"

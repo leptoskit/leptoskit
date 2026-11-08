@@ -166,6 +166,7 @@ impl DepthImage {
 		let offset = (y as usize)
 			.checked_mul(self.row_stride as usize)?
 			.checked_add(x as usize * self.format.bytes() as usize)?;
+
 		let meters = match self.format {
 			DepthFormat::Meters32 => {
 				f32::from_le_bytes(self.data.get(offset..offset + 4)?.try_into().ok()?)

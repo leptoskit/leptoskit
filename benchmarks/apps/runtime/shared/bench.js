@@ -120,8 +120,10 @@
 			if (await isDone()) {
 				return performance.now() - start;
 			}
+
 			await nextTask();
 		}
+
 		throw new Error(`${what} did not finish within 30s`);
 	};
 
@@ -188,6 +190,7 @@
 			for (const entry of performance.getEntriesByType("resource")) {
 				total += entry.encodedBodySize || 0;
 			}
+
 			const navigation = performance.getEntriesByType("navigation")[0];
 			if (navigation) {
 				total += navigation.encodedBodySize || 0;
@@ -200,6 +203,7 @@
 			if (!button) {
 				throw new Error(`missing scenario button #${buttonId}`);
 			}
+
 			await frameStart();
 			const start = performance.now();
 			button.click();
@@ -211,6 +215,7 @@
 			if (!button) {
 				throw new Error("missing #increment button");
 			}
+
 			await frameStart();
 			const start = performance.now();
 			const click = new MouseEvent("click", { bubbles: true, cancelable: true });

@@ -334,12 +334,15 @@ fn grid_cols_gap_and_span_match_css_grid_geometry() {
 		resolve("grid grid-cols-3 grid-rows-2 w-[400px] h-[200px] p-4 gap-4").0,
 	);
 	let mut cells = Vec::new();
+
 	for _ in 0..6 {
 		let cell = yoga.create_node();
 		yoga.set_style(cell, Style::default());
 		yoga.insert_child(root, cell, cells.len());
+
 		cells.push(cell);
 	}
+
 	yoga.calculate_layout(
 		root,
 		Size::new(
@@ -367,6 +370,7 @@ fn grid_cols_gap_and_span_match_css_grid_geometry() {
 	span.insert_child(container, wide, 0);
 	let start = span.create_node();
 	span.set_style(start, resolve("col-start-3").0);
+
 	span.insert_child(container, start, 1);
 	span.calculate_layout(
 		container,
@@ -872,6 +876,7 @@ fn edge_borders_and_italics_resolve_for_native() {
 	close(style.border.right, 0.0);
 	assert_eq!(props.italic, Some(true));
 	assert_eq!(props.border_edges(), edges);
+
 	// Per-edge widths need a stroke color the same way a uniform `border`
 	// does, so backends that paint `border_edges` can see the ink.
 	assert_eq!(props.border_color, Some(Color::rgba(0, 0, 0, 255)));
@@ -1351,6 +1356,7 @@ fn border_radius_and_placement_utilities_resolve() {
 		resolve("rounded-[var(--radius,4px)]").1.corner_radius,
 		Some(4.0)
 	);
+
 	assert_eq!(
 		resolve("border-[length:var(--stroke,2px)]").1.border_width,
 		Some(2.0)
@@ -1409,6 +1415,7 @@ fn theme_lengths_parse_and_install_without_losing_their_unit() {
 	] {
 		assert_eq!(ThemeLength::parse(text).unwrap().css(), css, "{text}");
 	}
+
 	for invalid in ["2em", "xrem", "NaNpx", "2000000px"] {
 		assert!(ThemeLength::parse(invalid).is_err(), "{invalid}");
 	}
@@ -1425,6 +1432,7 @@ fn theme_lengths_parse_and_install_without_losing_their_unit() {
 	assert!(css.contains("--transparent:#00000000;"), "{css}");
 	assert!(css.contains("--ink:#aabbccff;"), "{css}");
 	assert!(css.contains("--paper:#aabbccdd;"), "{css}");
+
 	assert!(css.contains("--gap:0.5rem;"), "{css}");
 	assert_eq!(
 		resolve("gap-[var(--gap)]").0.gap.top,

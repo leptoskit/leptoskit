@@ -139,6 +139,7 @@ int32_t lk_app_enable_timers(lk_app *app);
 int32_t lk_app_poll_timers(lk_app *app);
 // Next owner-thread timer pump in milliseconds, rounded up; -1 when idle.
 int64_t lk_app_timer_delay_ms(lk_app *app);
+
 /* 1 when lk_app_render has changes, a new root or a failure to send, else 0:
  * call it first and skip rendering when nothing changed. */
 int32_t lk_app_render_pending(lk_app *app);
@@ -373,6 +374,7 @@ int32_t lk_guest_has_rive(const lk_guest *guest);
  * come back from lk_guest_take_rive_frame: premultiplied RGBA, or empty. */
 int32_t lk_guest_rive_tick(const lk_guest *guest, double elapsed, float scale,
                            uint32_t flags, const size_t *visible, size_t count);
+
 lk_buffer lk_guest_take_rive_frame(const lk_guest *guest, size_t *node,
                                    uint32_t *width, uint32_t *height);
 /* 1 once the guest has failed; lk_guest_error copies why. Then stop it. */

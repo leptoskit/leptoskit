@@ -14,6 +14,7 @@ pub mod routes;
 pub mod session;
 mod sign_in;
 pub mod store;
+
 pub mod tasks;
 pub mod transport;
 pub mod ui;
@@ -76,6 +77,7 @@ pub extern "C" fn leptoskit_main() {
 		leptoskit::devtools::track_router(&navigation);
 		store::Store::current().expose();
 	}
+
 	leptoskit::guest::mount(move || navigation.render());
 	// After mounting: a finished task renders again.
 	tasks::spawn(async {

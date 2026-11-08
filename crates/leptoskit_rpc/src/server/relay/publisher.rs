@@ -155,6 +155,7 @@ async fn run(relay: Relay, db: Db, stats: Arc<Stats>, mut stopped: watch::Receiv
 			Err(error) if error.kind() == kv::CreateErrorKind::AlreadyExists => {
 				pause(&mut stopped, relay.settings().lease / 3).await;
 			}
+
 			Err(_) => pause(&mut stopped, RETRY).await,
 		}
 	}
@@ -267,7 +268,9 @@ impl Leading<'_> {
 			let sequence = stream.info().await.ok()?.state.last_sequence;
 			(sequence, self.db.live_version().await.ok()?)
 		};
+
 		let log = self.db.change_log(Some(version)).await.ok()?;
+
 		self.stats.version.store(version, Ordering::Relaxed);
 		self.stats.following.store(true, Ordering::Relaxed);
 		Some((sequence, version, log))
@@ -282,6 +285,7 @@ impl Leading<'_> {
 		loop {
 			let next = tokio::select! {
 				biased;
+
 				_ = self.stopped.changed() => return Ended::Stopped,
 				_ = self.renew.tick() => {
 					if self.lease.renew().await {
@@ -312,6 +316,7 @@ impl Leading<'_> {
 					.commits
 					.fetch_add(count as u64, Ordering::Relaxed);
 				self.stats.messages.fetch_add(1, Ordering::Relaxed);
+
 				self.stats.version.store(version, Ordering::Relaxed);
 			}
 		}

@@ -58,6 +58,7 @@ fn screen(overview: Option<&Overview>, store: &Store) -> Element {
 				.child(Button("Sign in").class(BUTTON).test_id("login")),
 		);
 	};
+
 	if overview.projects.is_empty() {
 		page = page.child(
 			Text(
@@ -67,17 +68,20 @@ fn screen(overview: Option<&Overview>, store: &Store) -> Element {
 			.class(QUIET),
 		);
 	}
+
 	for project in &overview.projects {
 		let operations: Vec<_> = overview
 			.operations
 			.iter()
 			.filter(|o| o.project == project.id)
 			.collect();
+
 		let fleet = store
 			.fleet(&project.id, now().saturating_sub(3600), now())
 			.ok();
 		page = page.child(project_card(project, &operations, fleet.as_ref()));
 	}
+
 	page
 }
 
@@ -151,6 +155,7 @@ fn project_card(project: &Project, operations: &[&Operation], fleet: Option<&Fle
 					),
 			),
 	);
+
 	if let Some(plan) = operations
 		.iter()
 		.find(|o| matches!(o.intent.action, Action::Plan))
@@ -192,7 +197,9 @@ fn project_card(project: &Project, operations: &[&Operation], fleet: Option<&Fle
 		);
 	}
 	card = card.child(measurements(fleet));
+
 	card = card.child(Heading(3, "Recent operations").class("font-semibold"));
+
 	for operation in operations.iter().take(10) {
 		card = card.child(
 			View()
@@ -216,6 +223,7 @@ fn project_card(project: &Project, operations: &[&Operation], fleet: Option<&Fle
 				),
 		);
 	}
+
 	card
 }
 
@@ -231,6 +239,7 @@ fn action_name(action: &Action) -> String {
 }
 fn age(at: u64) -> String {
 	let seconds = now().saturating_sub(at);
+
 	if seconds < 60 {
 		"Just now".into()
 	} else if seconds < 3600 {
@@ -244,6 +253,7 @@ fn measurements(fleet: Option<&Fleet>) -> Element {
 	let mut card = View()
 		.class("gap-2")
 		.child(Heading(3, "Last hour").class("font-semibold"));
+
 	if let Some(fleet) = fleet
 		&& fleet.instances > 0
 	{
@@ -254,6 +264,7 @@ fn measurements(fleet: Option<&Fleet>) -> Element {
 			))
 			.class(QUIET),
 		);
+
 		for report in &fleet.hosts {
 			if let Some(host) = &report.host {
 				let memory = host
@@ -267,6 +278,7 @@ fn measurements(fleet: Option<&Fleet>) -> Element {
 					|| "unavailable".into(),
 					|n| format!("{:.1} GiB", n as f64 / 1_073_741_824.0),
 				);
+
 				card = card.child(
 					Text(format!(
 						"{} · memory {} · filesystem available {}",
@@ -276,6 +288,7 @@ fn measurements(fleet: Option<&Fleet>) -> Element {
 				);
 			}
 		}
+
 		for series in fleet.series.iter().take(20) {
 			let count = series.windows.iter().map(|w| w.count).sum::<u64>();
 			let duration = series

@@ -147,6 +147,7 @@ mod web {
 			for line in lines.split('\n') {
 				web_sys::console::log_1(&JsValue::from_str(line));
 			}
+
 			Ok(())
 		}
 

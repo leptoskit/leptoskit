@@ -317,13 +317,17 @@ fn write_frames(
 		frame.x, frame.y, frame.width, frame.height
 	);
 	let children = surface.children(id);
+
 	for (index, child) in children.iter().enumerate() {
 		write_frames(out, surface, *child, depth + 1);
+
 		if index + 1 != children.len() {
 			out.push(',');
 		}
+
 		out.push('\n');
 	}
+
 	let _ = write!(out, "{indent}]}}");
 }
 
@@ -354,10 +358,13 @@ h2{margin:0 0 12px;font-size:16px;}
 		surface.set_viewport(fixture.width, fixture.height);
 		surface.set_root(&fixture.tree);
 		let root = surface.root().expect("root");
+
 		if fixture_index > 0 {
 			native.push_str(",\n");
 		}
+
 		let _ = write!(native, "  {:?}: ", fixture.name);
+
 		write_frames(&mut native, &surface, root, 1);
 
 		let html = render(fixture.tree).to_html();

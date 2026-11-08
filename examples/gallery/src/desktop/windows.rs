@@ -53,6 +53,7 @@ impl Host {
 			if !gallery.is_pressable(node) {
 				return false;
 			}
+
 			gallery.surface.backend().control(node)
 		};
 		let Some(button) = control else {
@@ -73,11 +74,13 @@ fn remount(window: &WindowsWindow, session: &Session, mounted: &Cell<Option<Node
 	if !window.is_open() {
 		return;
 	}
+
 	let gallery = session.borrow();
 	let root = gallery
 		.surface
 		.root()
 		.expect("a reconciled gallery screen has a root");
+
 	if mounted.replace(Some(root)) != Some(root) {
 		window
 			.mount(gallery.surface.backend(), root)
@@ -112,6 +115,7 @@ pub fn open(slug: &str, assets: Assets) -> Result<Host, String> {
 		.surface
 		.root()
 		.ok_or("the screen committed no root")?;
+
 	window
 		.mount(session.borrow().surface.backend(), root)
 		.map_err(|error| error.to_string())?;
@@ -146,6 +150,7 @@ pub fn open(slug: &str, assets: Assets) -> Result<Host, String> {
 					gallery.surface.backend_mut().set_dpi(new_dpi);
 					gallery.surface.refresh_text_measurer();
 				}
+
 				gallery.surface.set_viewport(width, height);
 			}
 			remount(&window, &session, &mounted);
@@ -175,6 +180,7 @@ pub fn snapshot(out_dir: &Path) -> Result<Vec<PathBuf>, String> {
 	let assets = default_assets()?;
 	std::fs::create_dir_all(out_dir)
 		.map_err(|error| format!("could not create {}: {error}", out_dir.display()))?;
+
 	for screen in &SCREENS {
 		let host = open(screen.slug, assets.clone())?;
 		// The capture reads screen pixels, so keep the window above any
@@ -197,9 +203,11 @@ pub fn snapshot(out_dir: &Path) -> Result<Vec<PathBuf>, String> {
 			.snapshot_png()
 			.map_err(|error| format!("could not snapshot `{}`: {error}", screen.slug))?;
 		let path = out_dir.join(format!("{}.png", screen.slug));
+
 		std::fs::write(&path, png)
 			.map_err(|error| format!("could not write {}: {error}", path.display()))?;
 		written.push(path);
 	}
+
 	Ok(written)
 }

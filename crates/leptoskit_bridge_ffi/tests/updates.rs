@@ -507,6 +507,7 @@ fn a_provenance_policy_reaches_the_update_store_and_must_be_valid() {
 	let unreachable = serde_json::to_vec(&configuration).unwrap();
 	let mut wasm = MaybeUninit::uninit();
 	let mut metadata = MaybeUninit::uninit();
+
 	let mut error = MaybeUninit::uninit();
 
 	// SAFETY: Inputs outlive the calls, the owner stays on this thread, and

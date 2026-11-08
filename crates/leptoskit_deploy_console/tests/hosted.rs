@@ -35,9 +35,11 @@ fn setup() -> (tempfile::TempDir, Hosted, Billing, String, String) {
 	.unwrap();
 	let a = host.accounts().create("alice", "cus_alice").unwrap();
 	let b = host.accounts().create("bob", "cus_bob").unwrap();
+
 	for account in ["alice", "bob"] {
 		activate(&billing, &host, account, "active");
 	}
+
 	(dir, host, billing, a, b)
 }
 fn activate(billing: &Billing, host: &Hosted, account: &str, status: &str) {
@@ -54,9 +56,11 @@ async fn call(
 		.method(method)
 		.uri(path)
 		.header("content-type", "application/json");
+
 	if let Some(key) = key {
 		request = request.header("authorization", format!("Bearer {key}"));
 	}
+
 	let response = app
 		.clone()
 		.oneshot(
@@ -100,10 +104,12 @@ async fn pair(app: &Router, host: &Hosted, account: &str, project: &str) -> Stri
 #[tokio::test]
 async fn tenants_pair_scoped_workers_and_use_the_standard_cli_contract() {
 	let (_dir, host, billing, alice, bob) = setup();
+
 	for account in ["alice", "bob"] {
 		host.register(account, "notes", "production", Ownership::Customer)
 			.unwrap();
 	}
+
 	let app = host.router();
 	let worker = pair(&app, &host, "alice", "notes").await;
 	let intent =
@@ -116,6 +122,7 @@ async fn tenants_pair_scoped_workers_and_use_the_standard_cli_contract() {
 		Some(intent.clone()),
 	)
 	.await;
+
 	assert_eq!(status, StatusCode::OK);
 	let (_, again) = call(
 		&app,
@@ -189,15 +196,18 @@ async fn tenants_pair_scoped_workers_and_use_the_standard_cli_contract() {
 #[tokio::test]
 async fn hosted_state_is_encrypted_locked_versioned_and_tenant_scoped() {
 	let (dir, host, _billing, _alice, _bob) = setup();
+
 	for account in ["alice", "bob"] {
 		host.register(account, "notes", "production", Ownership::Customer)
 			.unwrap();
 	}
+
 	let app = host.router();
 	let worker = pair(&app, &host, "alice", "notes").await;
 	let path = "/api/v1/state/notes";
 	let lock = json!({"ID":"lock-1","Operation":"OperationTypeApply"});
 	let state = json!({"version":4,"serial":1,"lineage":"fixture-lineage","secret":"sensitive-provider-output"});
+
 	assert_eq!(
 		call(
 			&app,
@@ -362,6 +372,7 @@ async fn check_agent_scopes(
 		.0,
 		StatusCode::FORBIDDEN
 	);
+
 	assert_eq!(
 		call(app, "GET", path, Some(alice), None).await.0,
 		StatusCode::OK
@@ -406,6 +417,7 @@ async fn offline_restore_verifies_encrypted_state_and_revokes_restored_access() 
 	host.state_lock("alice", "notes", &lock, false).unwrap();
 	let body =
 		serde_json::to_vec(&json!({"version":4,"serial":1,"lineage":"restore-lineage"})).unwrap();
+
 	host.state_write("alice", "notes", "restore-test", &body)
 		.unwrap();
 	host.backup(&dir.path().join("backup")).unwrap();

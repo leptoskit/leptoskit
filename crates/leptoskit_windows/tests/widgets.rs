@@ -218,6 +218,7 @@ fn rive_uploads_copy_premultiplied_rgba_and_preserve_paused_native_images() {
 	);
 	window.pump_messages();
 	near(pixel(&window, view, 16.0, 16.0), [0, 0, 255, 255]);
+
 	assert!(surface.backend().image_error(id).is_none());
 	surface.set_root(&View());
 	assert!(surface.backend().view(id).is_none());
@@ -488,6 +489,7 @@ fn native_controls_reject_proposals_without_losing_identity() {
 		surface.backend().control(child(&surface, 0)),
 		Some(checkbox)
 	);
+
 	assert_eq!(surface.backend().control(child(&surface, 1)), Some(slider));
 }
 
@@ -662,6 +664,7 @@ fn password_accessibility_names_preserve_values_and_keyboard_events() {
 			.count(),
 		3
 	);
+
 	assert!(events.borrow().contains(&NativeEvent::Submit {
 		value: "fixture only".to_owned()
 	}));
@@ -917,6 +920,7 @@ fn clipping_opacity_animation_and_teardown_use_real_native_state() {
 	assert!(!surface.backend().is_animating(progress));
 	let root = surface.backend().view(surface.root().unwrap()).unwrap();
 	drop(surface);
+
 	window.pump_messages();
 	// SAFETY: IsWindow handles destroyed HWNDs without dereferencing them.
 	unsafe {
@@ -1554,6 +1558,7 @@ fn held_buttons_follow_the_native_pushed_state_with_active_styles() {
 		surface.borrow().props(button_id).accessible_name(),
 		Some("Hold")
 	);
+
 	assert_eq!(surface.borrow().backend().control(button_id), Some(control));
 	release(control);
 	assert_eq!(surface.borrow().pressed(), None);

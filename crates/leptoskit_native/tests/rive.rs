@@ -400,6 +400,7 @@ fn controlled_inputs_update_a_retained_player_and_invalid_updates_can_be_correct
 	);
 	assert_eq!(presenter.uploads.len(), 2);
 	surface.set_root(&widget(content));
+
 	assert!(
 		!surface
 			.tick_rive_with(Duration::ZERO, environment, &mut presenter)

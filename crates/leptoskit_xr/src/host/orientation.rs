@@ -210,6 +210,7 @@ mod tests {
 		let first = backend.update(0.0).unwrap().unwrap();
 		assert!(close(first.viewer.forward(), Vec3::FORWARD));
 		let second = backend.update(0.0).unwrap().unwrap();
+
 		let expected = Quat::from_axis_angle(Vec3::Y, 0.5).rotate(Vec3::FORWARD);
 		assert!(close(second.viewer.forward(), expected));
 		assert!(backend.update(0.0).unwrap().is_none());

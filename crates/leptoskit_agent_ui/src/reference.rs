@@ -90,11 +90,13 @@ pub(crate) fn write(ui: &Inner) -> String {
 		 `{formula}` in text shows its value: `Rent is {money(rent)} a month.`\n- Links show as \
 		 text and cannot be opened; to offer the user a next step, use a `<Button>`.\n",
 	);
+
 	if ui.images.is_some() {
 		out.push_str("- Images show only from addresses this application allows.\n");
 	} else {
 		out.push_str("- Images are not shown; describe what you would have shown.\n");
 	}
+
 	out.push('\n');
 
 	out.push_str(
@@ -109,14 +111,17 @@ pub(crate) fn write(ui: &Inner) -> String {
 	);
 
 	let data = ui.store.data_summary();
+
 	if data.is_empty() {
 		out.push_str("- The application shares no data right now.\n");
 	} else {
 		out.push_str("- The application shares this data, which you can read and cannot change:\n");
+
 		for (name, value) in data {
 			let _ = writeln!(out, "  - `{name}`: {}", describe_value(&value));
 		}
 	}
+
 	out.push('\n');
 
 	out.push_str(
@@ -129,9 +134,11 @@ pub(crate) fn write(ui: &Inner) -> String {
 		 by zero gives `null`, which shows as nothing.\n\n| Function | What it does |\n| --- | \
 		 --- |\n",
 	);
+
 	for function in FUNCTIONS {
 		let _ = writeln!(out, "| `{}` | {} |", function.signature, function.summary);
 	}
+
 	out.push('\n');
 
 	out.push_str(
@@ -143,20 +150,26 @@ pub(crate) fn write(ui: &Inner) -> String {
 	);
 
 	out.push_str("## Components\n\n");
+
 	for component in ui.components.values() {
 		let _ = writeln!(out, "### `<{}>`\n\n{}\n", component.name, component.summary);
+
 		for prop in &component.props {
 			let _ = writeln!(out, "- {}", prop.describe());
 		}
+
 		if let Some(children) = &component.children {
 			let _ = writeln!(out, "- Content: {children}");
 		}
+
 		if component.props.is_empty() && component.children.is_none() {
 			out.push_str("- No props.\n");
 		}
+
 		if let Some(example) = &component.example {
 			let _ = writeln!(out, "\n```mdx\n{example}\n```");
 		}
+
 		out.push('\n');
 	}
 
@@ -175,9 +188,11 @@ pub(crate) fn write(ui: &Inner) -> String {
 		 `overflow-scroll`) are refused, so your content stays in its own box.\n\n| Role | For \
 		 |\n| --- | --- |\n",
 	);
+
 	for (role, token) in ui.theme.roles() {
 		let _ = writeln!(out, "| `{role}` | {} |", token.summary);
 	}
+
 	out.push('\n');
 
 	let _ = write!(

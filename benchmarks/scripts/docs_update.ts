@@ -26,6 +26,7 @@ const BUILD_BEGIN = "<!-- BEGIN GENERATED: benchmarks-build -->";
 const BUILD_END = "<!-- END GENERATED: benchmarks-build -->";
 const NATIVE_BEGIN = "<!-- BEGIN GENERATED: benchmarks-native -->";
 const NATIVE_END = "<!-- END GENERATED: benchmarks-native -->";
+
 const SIZES_BEGIN = "<!-- BEGIN GENERATED: benchmarks-sizes -->";
 const SIZES_END = "<!-- END GENERATED: benchmarks-sizes -->";
 const RESULTS_DIR = new URL("../results/", import.meta.url).pathname;
@@ -37,6 +38,7 @@ function readRunSync(path: string): BenchmarkRun {
 /** `leptoskit.table.create-1000` → app `leptoskit`, metric `table.create-1000`. */
 function splitMetricId(id: string): { app: string; metric: string } | null {
 	const separator = id.indexOf(".");
+
 	if (separator === -1) return null;
 	return { app: id.slice(0, separator), metric: id.slice(separator + 1) };
 }
@@ -55,14 +57,18 @@ function provenance(run: BenchmarkRun, includeBrowser: boolean): string {
 	const sampling = includeBrowser
 		? `${run.runs} runs per app, medians`
 		: "hyperfine wall-clock medians, tools interleaved per round";
+
 	return `_Measured ${date} on ${run.environment.platform}${cores}${browserNote}; ${sampling}._`;
 }
 
 function renderRuntimeTable(run: BenchmarkRun): string {
 	const apps = new Map<string, Map<string, { median: number; unit: string }>>();
+
 	for (const [id, metric] of Object.entries(run.metrics)) {
 		const parts = splitMetricId(id);
+
 		if (!parts) continue;
+
 		if (!apps.has(parts.app)) apps.set(parts.app, new Map());
 		apps.get(parts.app)!.set(parts.metric, {
 			median: metric.median,
@@ -90,28 +96,36 @@ function renderRuntimeTable(run: BenchmarkRun): string {
 		`| ${header.join(" | ")} |`,
 		`| ${header.map(() => "---:").join(" | ")} |`,
 	];
+
 	for (const [app, metrics] of apps) {
 		const cells = [app];
+
 		for (const column of metricColumns) {
 			const metric = metrics.get(column.id);
 			cells.push(
 				metric ? formatMetric(metric.median, metric.unit as "ms") : "—",
 			);
 		}
+
 		lines.push(`| ${cells.join(" | ")} |`);
 	}
+
 	lines.push("", provenance(run, true));
+
 	return lines.join("\n");
 }
 
 function renderBuildTable(run: BenchmarkRun): string {
 	const tools = new Map<string, Map<string, { median: number }>>();
+
 	for (const [id, metric] of Object.entries(run.metrics)) {
 		// build.<scenario>.<tool>
 		const parts = id.split(".");
+
 		if (parts.length < 3 || parts[0] !== "build") continue;
 		const scenario = parts[1];
 		const tool = parts.slice(2).join(".");
+
 		if (!tools.has(tool)) tools.set(tool, new Map());
 		tools.get(tool)!.set(scenario, { median: metric.median });
 	}
@@ -120,6 +134,7 @@ function renderBuildTable(run: BenchmarkRun): string {
 		"| tool | warm rebuild | incremental rebuild | cold build |",
 		"| --- | ---: | ---: | ---: |",
 	];
+
 	for (const [tool, scenarios] of tools) {
 		const cell = (scenario: string) =>
 			scenarios.has(scenario)
@@ -131,7 +146,9 @@ function renderBuildTable(run: BenchmarkRun): string {
 			} |`,
 		);
 	}
+
 	lines.push("", provenance(run, false));
+
 	return lines.join("\n");
 }
 
@@ -144,9 +161,11 @@ function renderNativeTable(
 ): string {
 	const order = ["native.", "yoga.", "wasm.", "js."];
 	const ids = new Set<string>();
+
 	for (const { run } of runs) {
 		for (const id of Object.keys(run.metrics)) ids.add(id);
 	}
+
 	const sorted = [...ids].sort((left, right) => {
 		const rank = (id: string) =>
 			order.findIndex((prefix) => id.startsWith(prefix));
@@ -157,6 +176,7 @@ function renderNativeTable(
 		`| ${header.join(" | ")} |`,
 		`| --- | ${runs.map(() => "---:").join(" | ")} |`,
 	];
+
 	for (const id of sorted) {
 		const label = runs.map(({ run }) => run.metrics[id]?.label).find(Boolean) ??
 			id;
@@ -166,6 +186,7 @@ function renderNativeTable(
 		});
 		lines.push(`| ${label} | ${cells.join(" | ")} |`);
 	}
+
 	// Each platform's column comes from its own result file, measured on its
 	// own day, so each one names its date and sample count; one date for the
 	// table would misdate every column refreshed separately.
@@ -181,6 +202,7 @@ function renderNativeTable(
 			.join("; ");
 		lines.push("", `_Measured per platform — ${where}; medians._`);
 	}
+
 	return lines.join("\n");
 }
 
@@ -236,6 +258,7 @@ function renderSizesTable(run: BenchmarkRun): string {
 		`| ${header.join(" | ")} |`,
 		`| ${header.map(() => "---:").join(" | ")} |`,
 	];
+
 	for (const [label, host, wasm, baseline, total] of rows) {
 		lines.push(
 			`| ${label} | ${cell(host)} | ${cell(wasm)} | ${
@@ -243,8 +266,11 @@ function renderSizesTable(run: BenchmarkRun): string {
 			} | ${cell(total)} |`,
 		);
 	}
+
 	const notes = run.notes ?? [];
+
 	for (const note of notes) lines.push("", `_${note}._`);
+
 	lines.push(
 		"",
 		`_Measured ${
@@ -252,6 +278,7 @@ function renderSizesTable(run: BenchmarkRun): string {
 		} on ${run.environment.platform}; the \
 scaffolded app, release builds, default plugins._`,
 	);
+
 	return lines.join("\n");
 }
 
@@ -261,6 +288,7 @@ function nativeRuns(): { platform: string; run: BenchmarkRun }[] {
 	try {
 		for (const entry of Deno.readDirSync(RESULTS_DIR)) {
 			const match = entry.name.match(/^native-([a-z0-9]+)\.json$/);
+
 			if (match) {
 				found.push({
 					platform: match[1],
@@ -286,9 +314,11 @@ function splice(
 ): string {
 	const startIndex = content.indexOf(begin);
 	const endIndex = content.indexOf(end);
+
 	if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
 		throw new Error(`docs markers missing or out of order: ${begin} … ${end}`);
 	}
+
 	return content.slice(0, startIndex + begin.length) + "\n" + replacement +
 		"\n" +
 		content.slice(endIndex);
@@ -301,12 +331,14 @@ function splice(
  */
 async function formatWithDprint(content: string): Promise<string> {
 	const which = new Deno.Command("which", { args: ["dprint"] }).outputSync();
+
 	if (!which.success) return content;
 	const temp = await Deno.makeTempFile({ suffix: ".md" });
 	try {
 		await Deno.writeTextFile(temp, content);
 		const formatted = new Deno.Command("dprint", { args: ["fmt", temp] })
 			.outputSync();
+
 		if (!formatted.success) return content;
 		return await Deno.readTextFile(temp);
 	} finally {
@@ -328,6 +360,7 @@ async function main(): Promise<void> {
 		RUNTIME_END,
 		renderRuntimeTable(runtimeRun),
 	);
+
 	if (buildPath) {
 		const buildRun = readRunSync(buildPath);
 		updated = splice(
@@ -337,7 +370,9 @@ async function main(): Promise<void> {
 			renderBuildTable(buildRun),
 		);
 	}
+
 	const native = nativeRuns();
+
 	if (native.length > 0 && updated.includes(NATIVE_BEGIN)) {
 		updated = splice(
 			updated,
@@ -346,6 +381,7 @@ async function main(): Promise<void> {
 			renderNativeTable(native),
 		);
 	}
+
 	if (sizesPath && updated.includes(SIZES_BEGIN)) {
 		updated = splice(
 			updated,
@@ -354,20 +390,26 @@ async function main(): Promise<void> {
 			renderSizesTable(readRunSync(sizesPath)),
 		);
 	}
+
 	updated = await formatWithDprint(updated);
 
 	const current = Deno.readTextFileSync(DOCS_PATH);
+
 	if (updated === current) {
 		log("docs already up to date");
+
 		return;
 	}
+
 	if (check) {
 		console.error(
 			"docs/src/benchmarks.md is out of date; rerun `devenv shell -- benchmark:docs` and commit the result",
 		);
 		Deno.exit(1);
 	}
+
 	await Deno.writeTextFile(DOCS_PATH, updated);
+
 	log(`rewrote generated tables in ${DOCS_PATH}`);
 }
 

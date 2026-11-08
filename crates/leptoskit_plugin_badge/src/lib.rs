@@ -119,6 +119,7 @@ impl leptoskit_bridge::Plugin for Counter {
 
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		validate(method, &payload)?;
+
 		if method == GET {
 			Ok(Bytes::copy_from_slice(&encode_count(self.count)?))
 		} else if method == SET {
@@ -189,6 +190,7 @@ pub mod linux {
 			if count > MAX_COUNT {
 				return Err(Error::InvalidArgument);
 			}
+
 			self.publish(count, count > 0);
 			self.count = count;
 			Ok(())
@@ -216,6 +218,7 @@ pub mod linux {
 			properties.insert("count-visible", Variant(Box::new(visible)));
 			let signal = dbus::message::Message::signal(&path, &interface, &member)
 				.append2(format!("application://{}", self.desktop_id), properties);
+
 			// Launcher hosts that ignore the signal are common; treat send as
 			// best-effort once the message is well-formed.
 			let _ = self.connection.send(signal);
@@ -380,6 +383,7 @@ mod tests {
 		);
 		assert_eq!(plugin.get(), 7);
 		assert!(plugin.invoke(CLEAR, Bytes::new()).unwrap().is_empty());
+
 		assert_eq!(plugin.get(), 0);
 		assert_eq!(
 			plugin.invoke(MethodId(99), Bytes::new()),

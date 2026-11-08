@@ -510,6 +510,7 @@ async fn a_channel_on_screen(clients: &LiveClients) {
 		})
 		.await;
 	}
+
 	eventually("the 101st signal", || {
 		room.signals()
 			.get()
@@ -520,6 +521,7 @@ async fn a_channel_on_screen(clients: &LiveClients) {
 	.await;
 	let signals = room.signals().get();
 	assert_eq!(signals[0].from, "1", "the oldest was dropped");
+
 	assert_eq!(signals[99].from, "100");
 
 	room.signal(Wave { from: "me".into() });
@@ -529,6 +531,7 @@ async fn a_channel_on_screen(clients: &LiveClients) {
 				return message;
 			}
 		}
+
 		panic!("the channel closed");
 	})
 	.await

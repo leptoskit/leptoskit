@@ -155,6 +155,7 @@ async fn sequences_number_rows_in_order() {
 		"{}",
 		migration.sql()
 	);
+
 	db.run_script(&migration.statements.join(";\n"))
 		.await
 		.unwrap();
@@ -175,9 +176,11 @@ async fn sequences_number_rows_in_order() {
 		})
 		.await
 		.unwrap();
+
 	let (first, second) = match (insert[0][0].clone(), second_insert[0][0].clone()) {
 		(Value::Int(first), Value::Int(second)) => (first, second),
 		other => panic!("numbers came back as {other:?}"),
 	};
+
 	assert_eq!((first, second), (1, 2), "numbered from 1, in order");
 }

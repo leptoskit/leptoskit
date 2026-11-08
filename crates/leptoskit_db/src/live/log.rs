@@ -284,10 +284,12 @@ mod reading {
 		/// the log again: `None` when there's none to hand.
 		pub(crate) fn next_ready(&mut self) -> Option<RawEntry> {
 			let entry = self.ready.pop_front()?;
+
 			self.version = match &entry {
 				RawEntry::Commit(commit) => commit.version,
 				RawEntry::Pruned { through } => *through,
 			};
+
 			Some(entry)
 		}
 
@@ -1024,6 +1026,7 @@ mod reading {
 			assert_eq!(change.key, [serde_json::json!("a"), serde_json::json!(2)]);
 			assert_eq!(change.old.as_ref().unwrap()["body"], "hi");
 			assert_eq!(change.new.as_ref().unwrap()["body"], "bye");
+
 			assert_eq!(change.changed, ["body"]);
 
 			// An insert with no changed names keeps an empty list.

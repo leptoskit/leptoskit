@@ -509,6 +509,7 @@ mod tests {
 		registry
 			.select(Target::Harmonyos, leptoskit_config::MissingPlugins::Warn)
 			.unwrap();
+
 		assert_eq!(
 			registry
 				.plugins

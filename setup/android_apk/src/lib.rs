@@ -56,6 +56,7 @@ const NDK_HOST: &str = if cfg!(target_os = "macos") {
 } else {
 	"linux-x86_64"
 };
+
 /// The store and key password of the generated debug keystore.
 const DEBUG_PASSWORD: &str = "android";
 
@@ -299,10 +300,12 @@ impl Toolchain {
 			purpose: "the Android SDK",
 		})?;
 		let abi = settings.abi.parse()?;
+
 		let java_home = match settings.java_home {
 			Some(java_home) => java_home,
 			None => java_home(&settings.programs.java)?,
 		};
+
 		Ok(Self {
 			ndk: settings
 				.ndk
@@ -391,6 +394,7 @@ impl Toolchain {
 		)?;
 		let stdlib = self.kotlin_stdlib(output)?;
 		let jar = output.join(format!("{}.jar", apk.name));
+
 		run(self
 			.command(&self.programs.kotlinc)
 			.args(apk.sources)
@@ -430,6 +434,7 @@ impl Toolchain {
 			.arg(&unsigned)
 			.arg(&aligned))?;
 		let keystore = output.join("debug.keystore");
+
 		if !keystore.exists() {
 			run(self
 				.command(&tools.keytool)
@@ -450,6 +455,7 @@ impl Toolchain {
 					"10000",
 				]))?;
 		}
+
 		let signed = output.join(format!("{}.apk", apk.name));
 		run(self
 			.command(&tools.apksigner)
@@ -496,6 +502,7 @@ impl Toolchain {
 	/// it on every build.
 	fn kotlin_stdlib(&self, directory: &Path) -> Result<PathBuf> {
 		let stdlib = directory.join(self.kotlin_stdlib.file_name());
+
 		if !stdlib.exists() {
 			run(self
 				.command(&self.programs.curl)
@@ -509,11 +516,15 @@ impl Toolchain {
 				])
 				.arg(&stdlib))?;
 		}
+
 		let hash = format!("{:x}", Sha256::digest(fs::read(&stdlib)?));
+
 		if hash != self.kotlin_stdlib.sha256 {
 			fs::remove_file(&stdlib)?;
+
 			return Err(Error::Checksum { path: stdlib });
 		}
+
 		Ok(stdlib)
 	}
 
@@ -527,9 +538,11 @@ impl Toolchain {
 		stdlib: &Path,
 	) -> Result<Vec<PathBuf>> {
 		let directory = output.join("dex");
+
 		if directory.exists() {
 			fs::remove_dir_all(&directory)?;
 		}
+
 		fs::create_dir_all(&directory)?;
 		run(self
 			.command(&tools.d8)
@@ -544,9 +557,11 @@ impl Toolchain {
 			.collect::<io::Result<Vec<_>>>()?;
 		files.retain(|path| path.extension().is_some_and(|value| value == "dex"));
 		files.sort();
+
 		if files.is_empty() {
 			return Err(Error::NoDex { directory });
 		}
+
 		Ok(files)
 	}
 }
@@ -605,6 +620,7 @@ impl Device {
 			}
 			thread::sleep(interval);
 		}
+
 		Ok(false)
 	}
 
@@ -616,6 +632,7 @@ impl Device {
 			self.adb()
 				.args(["exec-out", "run-as", package, "cat", path]),
 		)?;
+
 		if !output.status.success() || output.stdout.is_empty() {
 			return Err(Error::MissingAppFile {
 				package: package.into(),
@@ -623,6 +640,7 @@ impl Device {
 				stderr: String::from_utf8_lossy(&output.stderr).trim().into(),
 			});
 		}
+
 		Ok(output.stdout)
 	}
 }
@@ -635,12 +653,14 @@ pub fn run(command: &mut Command) -> Result<()> {
 			source,
 		}
 	})?;
+
 	if !status.success() {
 		return Err(Error::Failed {
 			command: describe(command),
 			status,
 		});
 	}
+
 	Ok(())
 }
 
@@ -666,10 +686,12 @@ pub fn absolute(root: &Path, path: PathBuf) -> PathBuf {
 /// The program and arguments of `command`, as a shell would show them.
 fn describe(command: &Command) -> String {
 	let mut text = command.get_program().to_string_lossy().into_owned();
+
 	for argument in command.get_args() {
 		text.push(' ');
 		text.push_str(&argument.to_string_lossy());
 	}
+
 	text
 }
 
@@ -690,12 +712,14 @@ fn java_home(java: &OsStr) -> Result<PathBuf> {
 	let mut command = Command::new(java);
 	command.args(["-XshowSettings:properties", "-version"]);
 	let output = capture(&mut command)?;
+
 	if !output.status.success() {
 		return Err(Error::Failed {
 			command: describe(&command),
 			status: output.status,
 		});
 	}
+
 	String::from_utf8_lossy(&output.stderr)
 		.lines()
 		.find_map(|line| line.trim().strip_prefix("java.home = "))

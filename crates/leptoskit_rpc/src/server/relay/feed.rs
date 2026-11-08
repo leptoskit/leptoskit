@@ -229,6 +229,7 @@ impl Feed {
 
 		if newest <= self.queued {
 			self.behind_since = None;
+
 			return Ok(());
 		}
 

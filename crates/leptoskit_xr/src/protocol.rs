@@ -199,6 +199,7 @@ mod tests {
 		let mut longer = bytes.clone();
 		longer.push(0);
 		assert_eq!(decode::<T>(&longer), Err(Error::InvalidArgument));
+
 		if !bytes.is_empty() {
 			assert_eq!(
 				decode::<T>(&bytes[..bytes.len() - 1]),
@@ -301,6 +302,7 @@ mod tests {
 			pose: Pose::IDENTITY,
 			plane: Some(5),
 		});
+
 		round_trip(&HitTestRequest::screen(0.5, 0.25).max_results(4));
 		round_trip(&HitTestRequest::ray(
 			Ray::new(Vec3::ZERO, Vec3::FORWARD).unwrap(),

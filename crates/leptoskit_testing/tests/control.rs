@@ -233,6 +233,7 @@ fn a_web_journey_navigates_taps_and_keeps_its_screenshot() {
 		capabilities["goog:chromeOptions"]["args"],
 		json!(["--headless=new"])
 	);
+
 	assert_eq!(requests[3]["url"], "https://example.com/journey");
 	// The css locator reached the driver as a css selector, not an xpath:
 	// the tap's element search, after the earlier steps' polls.
@@ -480,6 +481,7 @@ fn device_steps_report_tool_failures_per_step() {
 			label: "nothing".to_owned(),
 		},
 	);
+
 	run_one(android, "bogus-serial", Step::DeviceTap { x: 1, y: 1 });
 	run_one(
 		android,

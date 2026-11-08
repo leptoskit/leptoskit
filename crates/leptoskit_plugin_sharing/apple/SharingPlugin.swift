@@ -38,6 +38,7 @@ public final class SharingPlugin: NSObject, NativePlugin {
     private var preparing = false
     private var currentInvocation: UUID?
     private var closed = false
+
     #if canImport(UIKit)
     private var activity: UIActivityViewController?
     #elseif canImport(AppKit)

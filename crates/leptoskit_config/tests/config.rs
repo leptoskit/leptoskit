@@ -268,6 +268,7 @@ optional-capabilities = ["host.plugin.native.android"]
 		assert!(serialized.contains(&format!("{key} =")), "{serialized}");
 	}
 	let roundtrip: LeptoskitConfig = toml::from_str(&serialized).unwrap();
+
 	assert_eq!(roundtrip, config);
 
 	for (raw, message) in [
@@ -424,6 +425,7 @@ fn codepush_provenance_policies_are_validated() {
 	let config = load("provenance", &valid).expect("valid policy");
 	let provenance = config.codepush.provenance.expect("policy");
 	assert_eq!(provenance.repository, "https://github.com/example/app");
+
 	assert_eq!(provenance.approvers, [approver.clone(), other.clone()]);
 	assert_eq!(provenance.threshold, 2);
 	assert!(
@@ -1442,6 +1444,7 @@ fn backend_selection_is_independent_of_client_rendering() {
 	assert!(config.backend_enabled(true).unwrap());
 	assert!(config.backend_enabled(false).is_err());
 	config.build.backend = Some(false);
+
 	assert!(!config.backend_enabled(true).unwrap());
 	config.app.render = RenderMode::Ssr;
 	assert!(config.validate().is_err());

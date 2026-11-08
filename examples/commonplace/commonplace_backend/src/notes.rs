@@ -18,9 +18,11 @@ use crate::error::Failure;
 
 fn body(input: NoteInput) -> Result<String, Failure> {
 	let body = input.body.trim().to_owned();
+
 	if body.is_empty() {
 		return Err(Failure::invalid("A note can't be empty."));
 	}
+
 	Ok(body)
 }
 
@@ -70,8 +72,10 @@ pub async fn remove(
 		.filter(|note| note.id.eq(id))
 		.destroy(&db)
 		.await?;
+
 	if removed == 0 {
 		return Err(Failure::not_found("note"));
 	}
+
 	Ok(StatusCode::NO_CONTENT)
 }

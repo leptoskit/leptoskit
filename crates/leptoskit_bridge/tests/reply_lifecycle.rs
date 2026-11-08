@@ -85,6 +85,7 @@ fn ready_cancel_rejection_overflow_and_app_drop_release_resource_once() {
 	let id = pending(&mut bridge);
 	bridge.complete_reply(id, Ok(reply(&discarded))).unwrap();
 	assert_eq!(bridge.take_result(id).unwrap(), Some(Err(Error::TooLarge)));
+
 	assert_eq!(discarded.load(Ordering::SeqCst), 4);
 }
 #[cfg(all(feature = "async-host", not(target_arch = "wasm32")))]

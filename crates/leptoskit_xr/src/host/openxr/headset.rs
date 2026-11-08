@@ -184,6 +184,7 @@ impl Input {
 			Button {
 				pressed,
 				touched: pressed,
+
 				value: if pressed { 1.0 } else { 0.0 },
 			}
 		};
@@ -263,6 +264,7 @@ impl<G: xr::Graphics> HeadsetSession<G> {
 		} else {
 			Vec::new()
 		};
+
 		let (passthrough, blend_mode) = passthrough(&system, &session, config.mode)?;
 
 		Ok(Self {
@@ -345,6 +347,7 @@ impl<G: xr::Graphics> HeadsetSession<G> {
 			}
 		});
 		let time = state.predicted_display_time;
+
 		let result = match &passthrough {
 			Some(passthrough) => {
 				// SAFETY: `CompositionLayerBase` is a transparent wrapper over
@@ -371,6 +374,7 @@ impl<G: xr::Graphics> HeadsetSession<G> {
 			{
 				None => return Ok(()),
 				Some(xr::Event::SessionStateChanged(change)) => change.state(),
+
 				Some(xr::Event::InstanceLossPending(_)) => return Err(Error::Cancelled),
 				Some(_) => continue,
 			};
@@ -522,11 +526,14 @@ fn reference_space<G>(
 	} else {
 		xr::ReferenceSpaceType::STAGE
 	};
+
 	let kind = match space {
 		ReferenceSpace::LocalFloor if available.contains(&floor) => floor,
+
 		ReferenceSpace::World if available.contains(&xr::ReferenceSpaceType::STAGE) => {
 			xr::ReferenceSpaceType::STAGE
 		}
+
 		_ => xr::ReferenceSpaceType::LOCAL,
 	};
 

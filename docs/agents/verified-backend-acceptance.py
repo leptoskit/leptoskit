@@ -40,6 +40,7 @@ def check_rpc_compatibility(package, temp, env):
     run(*checked, "--out", str(descriptor), env=env)
     evidence = json.loads(descriptor.read_text())
     assert evidence["format_version"] == 3
+
     contract = evidence["rpc_contract"]
     compatibility = contract["compatibility"]["checked"]
     assert compatibility["algorithm"] == "leptoskit-rpc-structural-v1"
@@ -63,6 +64,7 @@ def check_rpc_compatibility(package, temp, env):
     run(*incompatible, "--reuse-existing", "--out", str(failed), env=env, success=False)
     assert not failed.exists()
     baseline.write_bytes(baseline_bytes)
+
     failed = temp / "rpc-no-api.json"
     run(*checked, "--no-rpc", "--out", str(failed), env=env, success=False)
     assert not failed.exists()
@@ -76,6 +78,7 @@ def check_rpc_compatibility(package, temp, env):
     statement = json.loads(approval["statement"])
     assert statement["descriptor_sha256"] == digest(descriptor.read_bytes())
     public = temp / "rpc-reviewer.der"
+
     public.write_bytes(bytes.fromhex("302a300506032b6570032100" + approval["public_key"]))
     signature = temp / "rpc-signature.bin"
     signature.write_bytes(bytes.fromhex(approval["signature"]))
@@ -96,12 +99,16 @@ tree = run("git", "rev-parse", "HEAD:crates/leptoskit_cli/tests/fixtures/verifie
 commit = run("git", "commit-tree", "-S", tree, "-m", "test: committed backend acceptance fixture")
 env = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=f"url.file://{root}.insteadOf", GIT_CONFIG_VALUE_0="https://github.com/leptoskit/leptoskit")
 images = json.loads(run("podman", "image", "inspect", "rust:1.85-alpine", "alpine:3.21"))
+
 builder, runtime = [item["RepoDigests"][0] for item in images]
 runtime_pin = digest(json.dumps(images[1]["Config"], sort_keys=True, separators=(",", ":")).encode())
+
 print(json.dumps(dict(commit=commit, builder=builder, runtime=runtime, runtime_config=runtime_pin)))
 evidence_dir = os.environ.get("LEPTOSKIT_ACCEPTANCE_EVIDENCE")
+
 if evidence_dir:
     Path(evidence_dir).mkdir(parents=True, exist_ok=False)
+
 with (nullcontext(evidence_dir) if evidence_dir else tempfile.TemporaryDirectory(prefix="a04-acceptance-")) as temp:
     temp = Path(temp)
     recipe = temp / "recipe.json"
@@ -130,6 +137,7 @@ with (nullcontext(evidence_dir) if evidence_dir else tempfile.TemporaryDirectory
             run("podman", "rm", container)
         run(*package, "--reuse-existing", "--out", str(temp / "reuse.json"), env=env)
         check_rpc_compatibility(package, temp, env)
+
         for relative in ["artifacts/backend", "source/src/main.rs", "source/migrations/registry.txt", "source/leptoskit.toml", "build.json"]:
             path = out / "bundle" / relative
             original = path.read_bytes()

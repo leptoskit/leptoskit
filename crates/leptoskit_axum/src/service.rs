@@ -194,6 +194,7 @@ impl ServiceEnv {
 		let mut database_url = None;
 		let mut database_pool = None;
 		let mut drain_delay = None;
+
 		let mut volumes = BTreeMap::new();
 
 		for (key, value) in vars {
@@ -387,6 +388,7 @@ impl ServiceEnv {
 			Some(delay) => GracefulShutdown::new().drain_delay(delay),
 			None => GracefulShutdown::new(),
 		};
+
 		self.serve_with(router, shutdown).await
 	}
 
@@ -589,6 +591,7 @@ where
 		.build()
 	{
 		Ok(runtime) => runtime,
+
 		Err(error) => {
 			eprintln!("could not start the async runtime: {error}");
 			return ExitCode::FAILURE;
@@ -603,6 +606,7 @@ where
 				return ExitCode::FAILURE;
 			}
 		};
+
 		let name = env.name().to_owned();
 		let router = match run(env.clone()).await {
 			Ok(router) => router,
@@ -703,6 +707,7 @@ mod tests {
 		assert_eq!(env.database_url(), Some("sqlite://event-log.sqlite3"));
 		assert_eq!(env.database_pool(), Some(4));
 		assert_eq!(env.drain_delay, Some(Duration::ZERO));
+
 		assert_eq!(env.public_prefix(), "/_leptoskit/services/event-log");
 		assert_eq!(env.volume("exports"), Some(Path::new("/data/exports")));
 		assert_eq!(env.volume("EXPORTS"), Some(Path::new("/data/exports")));

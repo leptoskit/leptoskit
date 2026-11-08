@@ -222,12 +222,15 @@ mod stored {
 		// each index and each value, big-endian.
 		let sparse = SparseVector::<10>::new([(7, 2.5), (1, -1.0)]).unwrap();
 		let mut expected = Vec::new();
+
 		for word in [10_u32, 2, 0, 1, 7] {
 			expected.extend_from_slice(&word.to_be_bytes());
 		}
+
 		for value in [-1.0_f32, 2.5] {
 			expected.extend_from_slice(&value.to_be_bytes());
 		}
+
 		assert_eq!(round_trip(&sparse), expected);
 		assert_eq!(round_trip(&SparseVector::<10>::new([]).unwrap()).len(), 12);
 	}

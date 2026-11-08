@@ -1050,6 +1050,7 @@ mod tests {
 		plugin.directory = plugin_directory;
 		plugin.package_name = "leptoskit_plugin_firebase".into();
 		std::fs::create_dir_all(root.join("bridge")).unwrap();
+
 		std::fs::write(root.join("bridge/Package.swift"), "// bridge").unwrap();
 
 		Registry {
@@ -1133,6 +1134,7 @@ mod tests {
 				.unwrap();
 		assert!(project.contains("FirebasePlugin.swift"));
 		assert!(project.contains("COMPILER_INDEX_STORE_ENABLE = NO"));
+
 		assert!(!project.contains("packages/leptoskit_plugin_firebase"));
 
 		// Dropping the pods removes the Podfile and the workspace it made, so

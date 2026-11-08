@@ -22,6 +22,7 @@ pub fn validate(config: &LeptoskitConfig) -> Result<()> {
 /// `hosts/{wearos|watchos}`.
 pub fn scaffold(root: &Path, config: &LeptoskitConfig, target: NativeTarget) -> Result<()> {
 	validate(config)?;
+
 	match target {
 		NativeTarget::Wearos => scaffold_wearos(root, config),
 		NativeTarget::Watchos => scaffold_watchos(root, config),
@@ -99,6 +100,7 @@ pub fn build(target: Target) -> Result<()> {
 		Target::Watchos => "watchOS",
 		other => anyhow::bail!("{other:?} is not a watch target"),
 	};
+
 	anyhow::bail!(
 		"{name} support is experimental: the host stubs and watch API are ready, but packaging \
 		 and device install are not implemented yet. See the {name} platform page in the docs."
@@ -201,6 +203,7 @@ mod tests {
 			.unwrap_err()
 			.to_string();
 		assert!(error.contains("could not create"), "{error}");
+
 		let root_error = write(Path::new("/"), "fn").unwrap_err().to_string();
 		assert!(
 			root_error.contains("could not create parent"),

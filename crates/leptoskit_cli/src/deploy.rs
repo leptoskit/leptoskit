@@ -186,6 +186,7 @@ impl Project {
 		if app_root.join("Cargo.toml").is_file() {
 			read_manifest(&app_root.join("Cargo.toml"))?;
 		}
+
 		if !has_manifest_in_ancestors(&app_root) {
 			anyhow::bail!("there's no Cargo.toml at {}", root.display());
 		}
@@ -218,6 +219,7 @@ impl Project {
 				workspace_root.join("Cargo.toml").display()
 			)
 		})?;
+
 		package_directory(&workspace_root, &app, &package.manifest_path)?;
 		let binary = binary(package)?;
 
@@ -265,6 +267,7 @@ impl Project {
 		} else {
 			workspace_dockerignore(&workspace_root, &app_root, &app_dir)?
 		};
+
 		// Container builds deliberately override host target-directory
 		// settings.
 		let target_dir = "/src/target".to_owned();
@@ -351,6 +354,7 @@ impl Project {
 		} else {
 			format!("/{}", self.app_dir)
 		};
+
 		[format!("{root}/infra"), format!("{root}/.kamal")]
 	}
 
@@ -745,6 +749,7 @@ fn validate_local_dependencies(root: &Path, metadata: &crate::wasm::CargoMetadat
 		.map(|package| package.manifest_path.clone())
 		.collect();
 	let mut pending = metadata.packages.clone();
+
 	while let Some(package) = pending.pop() {
 		for dependency in package.dependencies {
 			let Some(path) = dependency.path else {
@@ -758,15 +763,19 @@ fn validate_local_dependencies(root: &Path, metadata: &crate::wasm::CargoMetadat
 				 released leptoskit version that matches this CLI)"
 					.to_owned()
 			})?;
+
 			if seen.insert(manifest) {
 				let local = crate::wasm::cargo_metadata(&path)?;
+
 				for member in &local.packages {
 					seen.insert(member.manifest_path.clone());
 				}
+
 				pending.extend(local.packages);
 			}
 		}
 	}
+
 	Ok(())
 }
 
@@ -803,6 +812,7 @@ fn find_toolchain(app_root: &Path, workspace_root: &Path) -> Option<PathBuf> {
 	while let Some(dir) = current {
 		for name in ["rust-toolchain.toml", "rust-toolchain"] {
 			let file = dir.join(name);
+
 			if file.is_file() {
 				return Some(file);
 			}
@@ -845,6 +855,7 @@ fn workspace_dockerignore(workspace_root: &Path, app_root: &Path, app_dir: &str)
 fn read_optional_ignore(path: &Path) -> Result<Option<String>> {
 	match std::fs::read_to_string(path) {
 		Ok(text) => Ok(Some(text)),
+
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
 		Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
 	}
@@ -859,6 +870,7 @@ fn append_ignore(out: &mut String, owner: &str, text: &str, prefix: &str) {
 			if line.is_empty() || line.starts_with('#') {
 				return None;
 			}
+
 			Some(rebase_ignore(line, prefix))
 		})
 		.collect();
@@ -890,6 +902,7 @@ fn rebase_ignore(pattern: &str, prefix: &str) -> String {
 		Some(rest) => ("!", rest),
 		None => ("", pattern),
 	};
+
 	let rest = rest.trim_start_matches('/');
 	format!("{negation}{prefix}/{rest}")
 }
@@ -1116,6 +1129,7 @@ fn dockerfile(project: &Project) -> String {
 			project.docker_build_command()
 		)
 	};
+
 	let mut out = format!(
 		"# syntax=docker/dockerfile:1
 #
@@ -1229,6 +1243,7 @@ WORKDIR /src
 			Some(rest) if !project.app_dir.is_empty() => format!("{}/{rest}", project.target_dir),
 			_ => path.to_owned(),
 		};
+
 		let _ = write!(
 			out,
 			" \\\n && install -D {} /usr/local/lib/leptoskit/services/{}",
@@ -1246,6 +1261,7 @@ WORKDIR /src
 			 {SERVICES_DIR}\n"
 		)
 	};
+
 	if project.app_dir.is_empty() {
 		let _ = write!(
 			out,
@@ -1340,6 +1356,7 @@ RUN apt-get update \\
 		} else {
 			"mkdir -p"
 		};
+
 		let _ = write!(
 			out,
 			" \\\n && {make} {directories} \\\n && chown app:app {directories}"
@@ -1351,6 +1368,7 @@ RUN apt-get update \\
 	} else {
 		format!("/src/{}", project.app_dir)
 	};
+
 	let server_copy = docker_copy_from("build", &format!("/usr/local/bin/{binary}"), "/app/server");
 	let dist_copy = docker_copy_from("build", &format!("{build_dir}/{DIST_DIR}"), "/app/dist");
 	let _ = write!(
@@ -1408,6 +1426,7 @@ VOLUME {DATA_DIR}
 			 \"http://127.0.0.1:{port}/healthz\"]"
 		)
 	};
+
 	let _ = write!(
 		out,
 		"USER app
@@ -1454,6 +1473,7 @@ fn compose(project: &Project) -> String {
 	} else {
 		"Dockerfile.dockerignore"
 	};
+
 	let mut out = format!(
 		"# {app} with Docker Compose, written by `leptoskit generate deploy`. It's
 # yours to edit: running the generator again keeps your changes unless you
@@ -1500,6 +1520,7 @@ fn compose(project: &Project) -> String {
 			yaml_string(&project.dockerfile)
 		)
 	};
+
 	let _ = write!(
 		out,
 		"
@@ -1546,6 +1567,7 @@ services:
 			(None, Some(port)) => format!("http://{}:{port}", service.name),
 			(None, None) => continue,
 		};
+
 		let token = service.token_env();
 		environment.push(format!("{token}: ${{{token}:?set {token}}}"));
 
@@ -1751,6 +1773,7 @@ fn compose_value(value: &str, interpolate: bool) -> String {
 	} else {
 		value.replace('$', "$$")
 	};
+
 	serde_json::to_string(&value).unwrap_or_default()
 }
 
@@ -1773,6 +1796,7 @@ fn compose_service(out: &mut String, project: &Project, service: &DeployService)
 			format!("      dockerfile: {}", yaml_string(&project.dockerfile)),
 		]
 	};
+
 	// One line per call: a literal spanning several YAML lines would be
 	// rewrapped by the formatter with `\` continuations, which swallow the
 	// newlines between them.
@@ -1978,6 +2002,7 @@ fn fly(project: &Project) -> String {
 			shell_quote(&config)
 		)
 	};
+
 	let dockerfile = toml::Value::String(project.dockerfile.clone()).to_string();
 	let mut out = format!(
 		"# {app} on Fly.io, written by `leptoskit generate deploy`. It's yours to
@@ -2093,6 +2118,7 @@ fn docker_next(project: &Project) -> Vec<String> {
 			project.docker_build_command()
 		)]
 	};
+
 	let mut secrets = project.runtime_secrets();
 
 	for service in project.processes() {
@@ -2267,6 +2293,7 @@ fn compose_next(project: &Project) -> Vec<String> {
 			shell_quote(&project.in_context("compose.yaml"))
 		));
 	}
+
 	steps
 }
 
@@ -2330,6 +2357,7 @@ fn fly_next(project: &Project) -> Vec<String> {
 	} else {
 		"Deploy: `fly deploy`".to_owned()
 	});
+
 	steps
 }
 
@@ -2569,6 +2597,7 @@ fn kubernetes_split(project: &Project) -> String {
 			"live" => format!(" `{resource}-live`"),
 			_ => String::new(),
 		};
+
 		let _ = writeln!(
 			out,
 			"#   {resource}-{role}: {replicas} replica{plural}, {what}{service}",

@@ -210,23 +210,28 @@ impl TextQuote {
 		}
 
 		let mut best: Option<(usize, usize)> = None;
+
 		for (start, _) in text.match_indices(self.exact.as_str()) {
 			let end = start + self.exact.len();
 			let mut score = 0;
+
 			if let Some(prefix) = &self.prefix
 				&& text[..start].ends_with(prefix.as_str())
 			{
 				score += 1;
 			}
+
 			if let Some(suffix) = &self.suffix
 				&& text[end..].starts_with(suffix.as_str())
 			{
 				score += 1;
 			}
+
 			if best.is_none_or(|(_, best_score)| score > best_score) {
 				best = Some((start, score));
 			}
 		}
+
 		best.map(|(start, _)| start..start + self.exact.len())
 	}
 }

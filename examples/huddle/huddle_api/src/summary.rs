@@ -70,10 +70,12 @@ impl Summarizer for LocalSummarizer {
 			1 => "1 person".to_owned(),
 			count => format!("{count} people"),
 		};
+
 		let said = match messages.len() {
 			1 => "1 message".to_owned(),
 			count => format!("{count} messages"),
 		};
+
 		let busiest = &speakers[0];
 		let mut summary = format!(
 			"{said} from {people} in #{name}. {} said the most ({}).",
@@ -95,6 +97,7 @@ impl Summarizer for LocalSummarizer {
 		} else {
 			""
 		};
+
 		let _ = write!(
 			summary,
 			" Latest, from {}: “{excerpt}{ellipsis}”",

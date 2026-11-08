@@ -19,6 +19,7 @@ def run(*args):
     )
     print(r.stdout, flush=True)
     assert r.returncode == 0, args
+
     return r.stdout
 
 
@@ -79,6 +80,7 @@ for name, extra, expected in [
     )
     print(result.stdout, flush=True)
     assert result.returncode != 0
+
     assert not target.exists()
     assert expected.lower() in result.stdout.lower()
 run(

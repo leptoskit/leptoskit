@@ -147,6 +147,7 @@ pub(crate) fn enforce_required(
 		} else {
 			"required-capabilities"
 		};
+
 		let Some((state, detail)) = descriptor.state_of(id) else {
 			anyhow::bail!(
 				"native.{declared} declares `{id}`, but the {} {} does not describe the \
@@ -260,12 +261,14 @@ pub(crate) fn documentation_table() -> String {
 
 	for target in TARGETS {
 		let host = HostCapabilities::of(target);
+
 		let native = match host.native {
 			Some(NativeKind::Apple) => "apple",
 			Some(NativeKind::Android) => "android",
 			Some(NativeKind::ArkTs) => "arkts",
 			None => "—",
 		};
+
 		let _ = writeln!(
 			out,
 			"| `{}` | `{}` | {} | {} | {} | {} | {} | {} | {} | {} |",
@@ -390,11 +393,13 @@ fn host_capabilities(target: Target, host: HostCapabilities) -> Vec<CapabilityEn
 fn entry(id: &str, available: bool, detail: &str) -> CapabilityEntry {
 	CapabilityEntry {
 		id: id.into(),
+
 		state: if available {
 			CapabilityState::Available
 		} else {
 			CapabilityState::Unsupported
 		},
+
 		detail: (!available).then(|| detail.into()),
 	}
 }

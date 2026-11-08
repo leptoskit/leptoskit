@@ -50,6 +50,7 @@ export function Autoscroll() {
 						start = timestamp;
 						last = timestamp;
 					}
+
 					offset += SPEED_PT_PER_MS * (timestamp - last);
 					last = timestamp;
 					frames += 1;
@@ -62,6 +63,7 @@ export function Autoscroll() {
 					if (frames === 1) {
 						setPhase("running");
 					}
+
 					requestAnimationFrame(onFrame);
 				};
 				requestAnimationFrame(onFrame);
@@ -79,6 +81,7 @@ export function Autoscroll() {
 					`scrolled to ${reportedOffset.current}, expected ${offset}`,
 				);
 			}
+
 			writeReport({
 				scenario: "autoscroll",
 				lane: "idiomatic",

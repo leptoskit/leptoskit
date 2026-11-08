@@ -25,6 +25,7 @@ class MainActivity : Activity() {
 		val container = FrameLayout(this)
 		container.setBackgroundColor(0xFFFFFFFF.toInt())
 		container.setOnApplyWindowInsetsListener { view, insets ->
+
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
 				val safe = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
 				view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
@@ -37,6 +38,7 @@ class MainActivity : Activity() {
 					insets.systemWindowInsetBottom,
 				)
 			}
+
 			insets
 		}
 
@@ -51,6 +53,7 @@ class MainActivity : Activity() {
 			view,
 			FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
 		)
+
 		setContentView(container)
 		lynxView = view
 		view.renderTemplateUrl(BUNDLE, "")
@@ -71,6 +74,7 @@ class MainActivity : Activity() {
 		)
 		intent.getStringExtra("scenario")?.let { props["scenario"] = it }
 		intent.getStringExtra("lane")?.let { props["lane"] = it }
+
 		return props
 	}
 
@@ -85,6 +89,7 @@ class MainActivity : Activity() {
 	/** The process start as a Unix timestamp in milliseconds, comparable with Lynx's timing entries. */
 	private fun processStartUnixMs(): Double {
 		val sinceStart = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
+
 		return (System.currentTimeMillis() - sinceStart).toDouble()
 	}
 

@@ -151,6 +151,7 @@ pub(crate) fn live_methods(context: &Context<'_>) -> LiveMethods {
 				ApiKind::Mutation => "live",
 				_ => return None,
 			};
+
 			Some(scope.bind(&rust_identifier(&format!("{}_{suffix}", function.name))))
 		})
 		.collect();
@@ -631,12 +632,14 @@ pub(crate) fn api_module(context: &Context<'_>, types: &mut RustTypes) -> String
 	);
 	// The CLI always speaks live, so it has no `live` feature to gate on.
 	let client = client_file(context, types, false);
+
 	for line in client.lines() {
 		if line.trim() != LIVE_FEATURE {
 			out.push_str(line);
 			out.push('\n');
 		}
 	}
+
 	out
 }
 
@@ -702,6 +705,7 @@ pub(crate) fn channel_fields(
 			)
 		}
 	};
+
 	let Shape::Object(object) = analyze(schema).shape else {
 		return Vec::new();
 	};
@@ -712,11 +716,13 @@ pub(crate) fn channel_fields(
 		.map(String::as_str)
 		.filter(|wire| object.properties.iter().any(|(name, _)| name == wire))
 		.collect();
+
 	for (wire, _) in &object.properties {
 		if !wires.contains(wire) {
 			wires.push(*wire);
 		}
 	}
+
 	wires
 		.into_iter()
 		.filter_map(|wire| {
@@ -735,6 +741,7 @@ pub(crate) fn channel_fields(
 					.and_then(|inner| inner.strip_suffix('>'))
 					.map_or(rendered.clone(), str::to_owned)
 			};
+
 			Some(ChannelField {
 				wire: wire.to_owned(),
 				type_name,

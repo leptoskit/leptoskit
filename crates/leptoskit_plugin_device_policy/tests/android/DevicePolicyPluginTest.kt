@@ -104,6 +104,7 @@ class DevicePolicyPluginTest {
 
     private fun explanation(text: String): ByteBuffer {
         val bytes = text.toByteArray(Charsets.UTF_8)
+
         return ByteBuffer.allocate(4 + bytes.size).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(bytes.size)
             put(bytes)

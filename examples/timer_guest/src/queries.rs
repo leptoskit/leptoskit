@@ -75,6 +75,7 @@ pub async fn with_timer() {
 	assert_eq!(attempts.load(Ordering::SeqCst), 3);
 	assert!(now_ms() >= start + 20, "two retries really waited");
 	assert_eq!(client.get_query_data(&scope, &()), Some(3));
+
 	try_sleep(Duration::from_millis(50)).await.expect("GC wait");
 	assert!(client.query_infos().is_empty(), "unobserved entry expired");
 	intervals(&client).await;
@@ -97,6 +98,7 @@ async fn intervals(client: &QueryClient) {
 		owner.with(|| use_query_in(client.clone(), scope, || (), QueryObserverOptions::new()));
 	wait_for_calls(&calls, 3).await;
 	assert!(query.data().is_some());
+
 	FocusManager::set_focused(Some(false));
 	let background = calls.load(Ordering::SeqCst);
 	try_sleep(Duration::from_millis(35))
@@ -126,9 +128,11 @@ async fn wait_for_calls(calls: &AtomicU32, minimum: u32) {
 		if calls.load(Ordering::SeqCst) >= minimum {
 			return;
 		}
+
 		try_sleep(Duration::from_millis(5))
 			.await
 			.expect("interval wait");
 	}
+
 	panic!("interval made no progress");
 }

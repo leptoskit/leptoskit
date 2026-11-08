@@ -111,14 +111,18 @@ impl Window {
 		if self.count == 0 {
 			return None;
 		}
+
 		let rank = self.count - self.count / 20;
 		let mut total = 0;
+
 		for (i, count) in self.latency.iter().enumerate() {
 			total += count;
+
 			if total >= rank {
 				return LATENCY_BOUNDS.get(i).copied();
 			}
 		}
+
 		None
 	}
 }

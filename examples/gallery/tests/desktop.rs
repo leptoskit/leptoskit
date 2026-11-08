@@ -63,9 +63,11 @@ mod scenario {
 	/// The first node under `node` whose text is `expected`.
 	fn find(session: &Session, node: NodeId, expected: &str) -> Option<NodeId> {
 		let gallery = session.borrow();
+
 		if gallery.surface.props(node).text.as_deref() == Some(expected) {
 			return Some(node);
 		}
+
 		let children = gallery.surface.children(node).to_vec();
 		drop(gallery);
 		children

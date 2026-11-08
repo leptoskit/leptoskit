@@ -244,6 +244,7 @@ async fn status_operation_runs_the_child_and_records_private_logs() {
 	);
 	let stdout = fixture.log(&operation, "run", "out");
 	let stderr = fixture.log(&operation, "run", "err");
+
 	assert_eq!(
 		std::fs::read_to_string(&stdout).unwrap(),
 		"hello from the child\n"
@@ -540,6 +541,7 @@ fn hook_repository_settings_do_not_escape_into_deployment_git_commands() {
 		.output()
 		.unwrap();
 	let stdout = String::from_utf8_lossy(&output.stdout);
+
 	assert!(
 		output.status.success() && stdout.contains("2 passed;"),
 		"{stdout}\n{}",
@@ -747,6 +749,7 @@ fn repository(config: &str) -> (TempDir, String) {
 		.output()
 		.unwrap();
 	assert!(output.status.success());
+
 	let commit = String::from_utf8(output.stdout).unwrap().trim().to_owned();
 	(root, commit)
 }
@@ -895,6 +898,7 @@ async fn a_workspace_left_by_a_previous_run_is_removed() {
 			.unwrap()
 			.success()
 	);
+
 	assert!(workspace.exists());
 	let cli = FakeCli::new("exit 0\n");
 	let result = fixture

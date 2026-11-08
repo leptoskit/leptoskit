@@ -125,6 +125,7 @@ async fn round(db: &Db, retention: Duration, rounds: &mut Rounds) -> Result<u64>
 
 		super::partitions::make_ahead(db, Log::Commits, retention, &mut rounds.commits).await?;
 		super::partitions::make_ahead(db, Log::Changes, retention, &mut rounds.changes).await?;
+
 		return super::partitions::prune(db, retention).await;
 	}
 

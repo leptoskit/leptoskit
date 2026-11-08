@@ -59,6 +59,7 @@ fn project() -> tempfile::TempDir {
 	);
 	write(root, "analytics/src/lib.rs", "");
 	write(root, "analytics/src/main.rs", "fn main() {}\n");
+
 	write(
 		root,
 		"leptoskit.toml",
@@ -84,6 +85,7 @@ fn resolves_and_lists_services_without_secrets() {
 
 	assert_eq!(services.len(), 2);
 	let analytics = &services[0];
+
 	assert!(matches!(&analytics.code, Code::Workspace { package, .. } if package == "analytics"));
 	assert_eq!(analytics.settings.port, Some(3100));
 	assert_eq!(analytics.settings.features, ["service"]);
@@ -231,6 +233,7 @@ fn built(name: &str, raw: &str, manifest: Option<&ServiceManifest>, binary: bool
 	} else {
 		Code::Remote
 	};
+
 	BuiltService {
 		service: Service { settings, code },
 		binary: binary.then(|| format!("/bin/{name}").into()),
@@ -281,6 +284,7 @@ fn prepares_each_service_and_the_app() {
 	assert_eq!(env["LEPTOSKIT_SERVICE_TOKEN"], "secret");
 	assert_eq!(env["LEPTOSKIT_PUBLIC_ORIGIN"], "http://127.0.0.1:3000");
 	assert_eq!(env["LEPTOSKIT_APP_URL"], "http://127.0.0.1:41000");
+
 	assert_eq!(env["LEPTOSKIT_SERVICE_DATABASE_POOL"], "4");
 	assert_eq!(env["RETENTION_DAYS"], "90");
 	let database = sqlite_path(root, "analytics");
@@ -557,6 +561,7 @@ async fn the_proxy_streams_bodies_as_they_arrive() {
 		started.elapsed() < Duration::from_millis(250),
 		"the first chunk waited for the second"
 	);
+
 	let second = body.frame().await.unwrap().unwrap().into_data().unwrap();
 	assert_eq!(&second[..], b"second");
 }
@@ -716,6 +721,7 @@ fn stopping_sends_sigterm_then_sigkill() {
 		Duration::from_millis(500),
 	);
 	let elapsed = started.elapsed();
+
 	assert!(marker.exists(), "the trap ran, so SIGTERM arrived");
 	assert!(elapsed >= Duration::from_millis(500), "{elapsed:?}");
 	assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");

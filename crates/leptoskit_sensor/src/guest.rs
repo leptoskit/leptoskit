@@ -98,10 +98,12 @@ impl<R: Sample> Watch<R> {
 				cursor: self.cursor,
 			}
 			.encode();
+
 			let payload = match self.kind {
 				Some(kind) => kind.prefix(&request),
 				None => request.to_vec(),
 			};
+
 			self.pending = Some(self.client.call(WATCH, &payload)?);
 		}
 

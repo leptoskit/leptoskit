@@ -286,6 +286,7 @@ impl Backend for MemoryBackend {
 	fn download(&mut self) -> Result<Status, Error> {
 		let Some((version, _)) = &self.available else {
 			self.status = Status::UpToDate;
+
 			return Ok(self.status.clone());
 		};
 		self.downloaded = true;
@@ -521,6 +522,7 @@ mod tests {
 			Status::decode(&downloading_unknown.encode().unwrap()).unwrap(),
 			downloading_unknown
 		);
+
 		let failed = Status::Failed {
 			message: "boom".into(),
 		};

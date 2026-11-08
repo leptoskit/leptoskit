@@ -65,6 +65,7 @@ pub fn start() {
 		.and_then(|window| window.location().search().ok())
 		.and_then(|query| language_in_query(&query))
 		.and_then(|tag| leptoskit_l10n::Locale::new(&tag).ok());
+
 	let preferred = match named {
 		Some(locale) => vec![locale],
 		None => leptoskit_l10n::browser_locales(),

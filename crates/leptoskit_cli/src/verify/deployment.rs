@@ -212,6 +212,7 @@ pub(crate) fn validate(policy: &Policy) -> Result<()> {
 			policy.format_version == 2 || release.backend.is_none(),
 			"legacy policies cannot bind backend evidence"
 		);
+
 		if let Some(binding) = &release.backend {
 			ensure!(
 				super::digest_is_valid(&binding.descriptor_sha256)
@@ -222,6 +223,7 @@ pub(crate) fn validate(policy: &Policy) -> Result<()> {
 				"invalid backend binding"
 			);
 		}
+
 		ensure!(
 			super::is_commit(&release.commit)
 				&& super::digest_is_valid(&release.inventory_sha256)
@@ -472,6 +474,7 @@ pub(super) fn deployment(args: &DeploymentArgs) -> Result<()> {
 				.with_context(|| format!("{key:?} is not an ed25519 public key in hex"))
 		})
 		.collect::<Result<Vec<_>>>()?;
+
 	let envelope = match &args.policy {
 		Some(path) => {
 			let bytes = std::fs::read(path)?;
@@ -483,6 +486,7 @@ pub(super) fn deployment(args: &DeploymentArgs) -> Result<()> {
 		}
 		None => fetch(&origin)?,
 	};
+
 	let now = SystemTime::now()
 		.duration_since(SystemTime::UNIX_EPOCH)?
 		.as_secs();
@@ -510,6 +514,7 @@ pub(super) fn deployment(args: &DeploymentArgs) -> Result<()> {
 			"  commit {}  inventory SHA-256 {}  executable SHA-256 {}",
 			release.commit, release.inventory_sha256, release.executable_sha256
 		);
+
 		match &release.backend {
 			Some(binding) => {
 				println!(

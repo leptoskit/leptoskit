@@ -64,11 +64,13 @@ impl Hosted {
 				|r| Ok((r.get(0)?, r.get(1)?)),
 			)
 			.optional()?;
+
 		if let Some((old_id, old_body)) = &old
 			&& old_id != id
 		{
 			return Ok(Some(serde_json::from_str(old_body)?));
 		}
+
 		if unlock {
 			ensure!(old.is_some(), "lock_missing");
 			tx.execute(
@@ -81,6 +83,7 @@ impl Hosted {
 				params![account, project, id, serde_json::to_string(body)?],
 			)?;
 		}
+
 		tx.commit()?;
 		Ok(None)
 	}
@@ -100,6 +103,7 @@ impl Hosted {
 			params![account, project],
 			|r| r.get(0),
 		)?;
+
 		ensure!(holder == lock, "state_lock_conflict");
 		let old: Option<(i64, Vec<u8>)> = tx
 			.query_row(
@@ -110,6 +114,7 @@ impl Hosted {
 			)
 			.optional()?;
 		let mut version = 1;
+
 		if let Some((previous, envelope)) = old {
 			ensure!(envelope.len() >= 12, "invalid state envelope");
 			let clear = self
@@ -128,12 +133,16 @@ impl Hosted {
 					&& old["serial"].as_u64().is_some_and(|s| serial >= s),
 				"state lineage or serial conflict"
 			);
+
 			if old["serial"].as_u64() == Some(serial) {
 				ensure!(clear == body, "state serial reused with different content");
+
 				return Ok(());
 			}
+
 			version = previous + 1;
 		}
+
 		let mut nonce = [0u8; 12];
 		getrandom::fill(&mut nonce).map_err(|_| anyhow::anyhow!("randomness unavailable"))?;
 		let encrypted = self

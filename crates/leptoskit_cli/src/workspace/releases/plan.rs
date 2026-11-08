@@ -72,6 +72,7 @@ pub(super) fn create(manifest: &Path, releases: ReleaseSet) -> Result<Plan> {
 		.context("workspace manifest needs parent")?;
 	let report = super::super::inspect(manifest)?;
 	let mut applications = BTreeMap::new();
+
 	for (name, target) in releases.applications {
 		let declared = report
 			.applications
@@ -92,6 +93,7 @@ pub(super) fn create(manifest: &Path, releases: ReleaseSet) -> Result<Plan> {
 			},
 		);
 	}
+
 	let plan = Plan {
 		format_version: 1,
 		workspace_sha256: hash(&read(manifest, MAX_DOCUMENT)?),
@@ -126,12 +128,14 @@ pub(super) fn validate(manifest: &Path, plan: &Plan) -> Result<()> {
 		plan.startup_order == expected && expected.len() == plan.applications.len(),
 		"plan applications or readiness order differ from workspace"
 	);
+
 	for (name, application) in &plan.applications {
 		let declared = &report.applications[name];
 		ensure!(
 			application.path == declared.path,
 			"application {name} path changed"
 		);
+
 		for dependency in &declared.depends_on {
 			ensure!(
 				plan.applications.contains_key(dependency),
@@ -139,6 +143,7 @@ pub(super) fn validate(manifest: &Path, plan: &Plan) -> Result<()> {
 				 so readiness is rechecked"
 			);
 		}
+
 		let root = manifest.parent().context("workspace needs parent")?;
 		let app_root = within(root, &application.path)?;
 		let config = configuration(&app_root, &application.configuration_sha256)?;
@@ -157,6 +162,7 @@ pub(super) fn validate(manifest: &Path, plan: &Plan) -> Result<()> {
 			&application.descriptor_sha256,
 		)?;
 	}
+
 	ensure!(
 		hash(&read(manifest, MAX_DOCUMENT)?) == plan.workspace_sha256,
 		"workspace changed during validation"
@@ -231,6 +237,7 @@ fn variables(application: &Application, config: &LeptoskitConfig) -> Result<()> 
 			"LEPTOSKIT_ANALYTICS_WRITE_KEY",
 		])
 		.collect();
+
 	for (destination, source) in &application.environment {
 		ensure!(
 			allowed.contains(destination.as_str())
@@ -241,6 +248,7 @@ fn variables(application: &Application, config: &LeptoskitConfig) -> Result<()> 
 			 provider credentials"
 		);
 	}
+
 	Ok(())
 }
 
@@ -262,6 +270,7 @@ fn reserved(name: &str) -> bool {
 
 pub(super) fn stage(root: &Path, plan: &Plan, destination: &Path) -> Result<()> {
 	let mut total = 0_usize;
+
 	for (name, application) in &plan.applications {
 		let bytes = read(&within(root, &application.descriptor)?, MAX_DESCRIPTOR)?;
 		total = total
@@ -277,5 +286,6 @@ pub(super) fn stage(root: &Path, plan: &Plan, destination: &Path) -> Result<()> 
 		);
 		fs::write(destination.join(format!("{name}.json")), bytes)?;
 	}
+
 	Ok(())
 }

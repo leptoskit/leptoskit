@@ -105,6 +105,7 @@ fn every_language_counts_the_days_its_own_way() {
 	for (tag, counts) in cases {
 		let app = PostcardApp::new(&[locale(tag)]);
 		let l10n = app.l10n();
+
 		for &(days, expected) in counts {
 			assert_eq!(l10n.days_away(days), expected, "{tag} at {days}");
 		}
@@ -202,6 +203,7 @@ fn the_days_slider_rewrites_the_card_and_moves_the_gauge() -> Result<(), TestErr
 	for tag in ["en", "ar", "ja", "pl", "pt-BR"] {
 		tester.find(&Finder::aria_role(Role::Cell, tag))?;
 	}
+
 	assert_eq!(
 		(
 			chips(&tester, "few"),

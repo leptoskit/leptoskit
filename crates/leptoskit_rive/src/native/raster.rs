@@ -496,6 +496,7 @@ mod tests {
 		assert!(raster.pixels().data().iter().all(|byte| *byte == 0));
 		raster.clip(&path, &[], &[]).unwrap();
 		let mut other = rectangle();
+
 		other.id = 2;
 		raster
 			.draw(&other, VERBS, POINTS, &paint(), &[], &[])
@@ -529,6 +530,7 @@ mod tests {
 		assert_eq!(raster.finish(), Err(Error::UnsupportedFeature));
 		raster.begin(16, 16).unwrap();
 		raster.opacity(0.5).unwrap();
+
 		raster
 			.draw(&rectangle(), VERBS, POINTS, &paint(), &[], &[])
 			.unwrap();

@@ -1357,6 +1357,7 @@ fn migration_schema_tracks_the_registry_and_only_its_final_snapshot() {
 	let text = tokens.to_string();
 	assert!(text.contains("registry.txt"));
 	assert!(text.contains("second/schema.json"));
+
 	assert!(!text.contains("first/schema.json"));
 	assert!(text.contains("Option :: Some"));
 	std::fs::remove_file(directory.path().join("second/schema.json")).unwrap();

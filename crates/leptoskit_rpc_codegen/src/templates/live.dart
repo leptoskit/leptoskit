@@ -206,16 +206,22 @@ String channelKey(List<String> fields, Object? args) {
   if (args is! Map) {
     return jsonEncode(args);
   }
+
   final ordered = <String, Object?>{};
+
   for (final field in fields) {
     ordered[field] = args[field];
   }
+
   for (final entry in args.entries) {
     final field = '${entry.key}';
+
     if (!ordered.containsKey(field)) {
+
       ordered[field] = entry.value;
     }
   }
+
   return jsonEncode(ordered);
 }
 
@@ -224,6 +230,7 @@ String channelKey(List<String> fields, Object? args) {
 Uri liveUrl(String? serverUrl, String path) {
   if (serverUrl == null || serverUrl.isEmpty) {
     final base = Uri.base;
+
     if (base.scheme != 'http' && base.scheme != 'https') {
       throw LiveError(
           0, 'a live connection needs a server URL outside a browser');
@@ -235,7 +242,9 @@ Uri liveUrl(String? serverUrl, String path) {
       path: path,
     );
   }
+
   final origin = serverUrl.replaceFirst(RegExp(r'/+$'), '');
+
   return Uri.parse(origin.replaceFirst(RegExp('^http'), 'ws') + path);
 }
 
@@ -293,6 +302,7 @@ class LiveConnection {
         controller.close();
         return;
       }
+
       final id = _nextId++;
       final query = _present(args);
       // Values go out synchronously, before a mutation waiting on the same
@@ -339,6 +349,7 @@ class LiveConnection {
       return Future<Object?>.error(
           LiveError(0, 'the live connection is closed'));
     }
+
     final request = _nextId++;
     final frame = <String, Object?>{
       'type': 'mutate',
@@ -351,6 +362,7 @@ class LiveConnection {
     _pending[request] = _Pending(frame, completer);
     _send(frame);
     _ensure();
+
     return completer.future;
   }
 
@@ -371,6 +383,7 @@ class LiveConnection {
     if (_closed) {
       throw LiveError(0, 'the live connection is closed');
     }
+
     final key = channelKey(fields, args);
     final joined = _Joined<M, P>(
       name: name,
@@ -385,12 +398,14 @@ class LiveConnection {
     _channels[key] = joined;
     _send(joined.frame(key));
     _ensure();
+
     return ChannelHandle<M, P>._(this, key, joined);
   }
 
   /// Sends the token again, such as after signing in.
   Future<void> reauthenticate() async {
     final token = await options.token?.call();
+
     if (token != null && token.isNotEmpty) {
       _send(<String, Object?>{'type': 'auth', 'token': token});
     }
@@ -402,32 +417,43 @@ class LiveConnection {
     if (_closed) {
       return;
     }
+
     _closed = true;
     _clearTimers();
     final socket = _socket;
     _socket = null;
     _ready = false;
     _listening?.cancel();
+
     _listening = null;
+
     if (socket != null) {
       _quietly(socket.sink.close(1000, 'closed'));
     }
+
     for (final pending in _pending.values) {
       pending.completer
           .completeError(LiveError(0, 'the live connection closed'));
     }
+
     _pending.clear();
+
     for (final waiter in _waiters) {
       waiter.finish();
     }
+
     _waiters.clear();
+
     for (final subscription in _subscriptions.values) {
       subscription.onClose();
     }
+
     _subscriptions.clear();
+
     for (final joined in _channels.values) {
       joined.shutDown();
     }
+
     _channels.clear();
     _setStatus(const LiveStatus._(LiveState.offline));
     _statuses.close();
@@ -435,6 +461,7 @@ class LiveConnection {
 
   void _send(Map<String, Object?> frame) {
     final socket = _socket;
+
     if (_ready && socket != null) {
       _write(socket, frame);
     }
@@ -467,6 +494,7 @@ class LiveConnection {
       socket = connect(url, const <String>[liveSubprotocol]);
     } catch (_) {
       _lost();
+
       return;
     }
     _socket = socket;
@@ -476,6 +504,7 @@ class LiveConnection {
         if (_socket != socket) {
           return;
         }
+
         _lastHeard = DateTime.now();
         final Object? frame;
         try {
@@ -512,6 +541,7 @@ class LiveConnection {
     if (_socket != socket) {
       return;
     }
+
     _write(
       socket,
       _version > 0
@@ -527,12 +557,15 @@ class LiveConnection {
     } catch (_) {
       token = null;
     }
+
     if (_socket != socket) {
       return;
     }
+
     if (token != null && token.isNotEmpty) {
       _write(socket, <String, Object?>{'type': 'auth', 'token': token});
     }
+
     for (final entry in _subscriptions.entries) {
       _write(socket, <String, Object?>{
         'type': 'sub',
@@ -541,14 +574,18 @@ class LiveConnection {
         'args': entry.value.args,
       });
     }
+
     for (final entry in _channels.entries) {
       _write(socket, entry.value.frame(entry.key));
     }
+
     // The same request id and key: the server's receipt answers a call that
     // already ran with its first result.
     for (final pending in _pending.values) {
+
       _write(socket, pending.frame);
     }
+
     _ready = true;
   }
 
@@ -581,6 +618,7 @@ class LiveConnection {
             ?.receiveSignal(frame['message'], from is String ? from : null);
       case 'presence':
         final members = frame['members'];
+
         if (members is List) {
           _channels['${frame['channel']}']?.receivePresence(members);
         }
@@ -600,14 +638,19 @@ class LiveConnection {
     final updates = frame['updates'];
     final changed = <(_Subscription, Object?)>[];
     final failed = <(_Subscription, LiveError)>[];
+
     for (final update in updates is List ? updates : const <Object?>[]) {
       if (update is! Map) {
         continue;
       }
+
       final subscription = _subscriptions[_int(update['id'], -1)];
+
       if (subscription == null) {
+
         continue;
       }
+
       if (update.containsKey('ok')) {
         changed.add((subscription, update['ok']));
       } else if (update.containsKey('patch')) {
@@ -617,17 +660,22 @@ class LiveConnection {
         failed.add((subscription, _wireError(update['err'])));
       }
     }
+
     final to = _int(frame['to'], _version);
     _version = math.max(_version, to);
+
     for (final (subscription, value) in changed) {
       subscription.value = value;
     }
+
     for (final (subscription, value) in changed) {
       subscription.onValue(value);
     }
+
     for (final (subscription, error) in failed) {
       subscription.onError(error);
     }
+
     _reached(to);
   }
 
@@ -635,17 +683,24 @@ class LiveConnection {
     final request = _int(frame['request'], 0);
     final version = _int(frame['version'], 0);
     final pending = _pending.remove(request);
+
     if (pending != null) {
       final err = frame['err'];
+
       if (err != null) {
         pending.completer.completeError(_wireError(err));
+
         return;
       }
+
       final value = frame['ok'];
+
       if (_subscriptions.isEmpty || _version >= version) {
         pending.completer.complete(value);
+
         return;
       }
+
       late final _Waiter waiter;
       waiter = _Waiter(
         version,
@@ -657,17 +712,24 @@ class LiveConnection {
         }),
       );
       _waiters.add(waiter);
+
       return;
     }
+
     final subscription = _subscriptions[request];
+
     if (subscription == null) {
       return;
     }
+
     final err = frame['err'];
+
     if (err != null) {
       subscription.onError(_wireError(err));
+
       return;
     }
+
     subscription.value = frame['ok'];
     subscription.onValue(subscription.value);
     // A fresh first value reflects every write the server had committed.
@@ -677,10 +739,13 @@ class LiveConnection {
   void _reached(int version) {
     final ready =
         _waiters.where((waiter) => waiter.version <= version).toList();
+
     if (ready.isEmpty) {
       return;
     }
+
     _waiters.removeWhere((waiter) => waiter.version <= version);
+
     for (final waiter in ready) {
       waiter.finish();
     }
@@ -694,6 +759,7 @@ class LiveConnection {
       if (socket == null) {
         return;
       }
+
       final silence = DateTime.now().difference(_lastHeard);
       if (silence > _heartbeatInterval * 2 + const Duration(seconds: 5)) {
         // Two missed heartbeats: the connection is gone without saying so.
@@ -701,6 +767,7 @@ class LiveConnection {
         _lost();
         return;
       }
+
       _send(<String, Object?>{'type': 'ping'});
     });
   }
@@ -719,16 +786,22 @@ class LiveConnection {
     _listening?.cancel();
     _listening = null;
     _clearTimers();
+
     if (_closed) {
       return;
     }
+
     if (!_busy) {
+
       _reconnectAfter = null;
       _setStatus(const LiveStatus._(LiveState.offline));
+
       return;
     }
+
     final Duration delay;
     final after = _reconnectAfter;
+
     if (after != null) {
       delay = after;
       _reconnectAfter = null;
@@ -740,6 +813,7 @@ class LiveConnection {
       );
       delay = Duration(microseconds: (_random.nextDouble() * ceiling).floor());
     }
+
     _attempt += 1;
     _setStatus(
         LiveStatus._(LiveState.reconnecting, attempt: _attempt, nextIn: delay));
@@ -753,6 +827,7 @@ class LiveConnection {
 
   void _setStatus(LiveStatus status) {
     _status = status;
+
     if (!_statuses.isClosed) {
       _statuses.add(status);
     }
@@ -795,6 +870,7 @@ class _Waiter {
 
   void finish() {
     timer.cancel();
+
     if (!completer.isCompleted) {
       completer.complete(value);
     }
@@ -853,8 +929,10 @@ class _Joined<M, P> implements _Channel {
       decoded = decodeMessage(message);
     } catch (error) {
       _report(LiveError(0, 'a signal on `$name` did not decode: $error'));
+
       return;
     }
+
     if (!signals.isClosed) {
       signals.add(ChannelSignal<M>(decoded, from));
     }
@@ -863,10 +941,12 @@ class _Joined<M, P> implements _Channel {
   @override
   void receivePresence(List<Object?> members) {
     final decoded = <PresenceMember<P>>[];
+
     for (final member in members) {
       if (member is! Map) {
         continue;
       }
+
       try {
         decoded.add(PresenceMember<P>(
             '${member['id']}', decodePresence(member['state'])));
@@ -876,7 +956,9 @@ class _Joined<M, P> implements _Channel {
             'the presence of `${member['id']}` on `$name` did not decode: $error'));
       }
     }
+
     this.members = List<PresenceMember<P>>.unmodifiable(decoded);
+
     if (!presence.isClosed) {
       presence.add(this.members);
     }
@@ -908,6 +990,7 @@ Stream<T> _withLatest<T>(Stream<T> stream, T Function() latest,
     if (isEmpty == null || !isEmpty(value)) {
       controller.add(value);
     }
+
     final subscription = stream.listen(
       controller.add,
       onError: controller.addError,
@@ -925,21 +1008,28 @@ Object? _applyPatch(Object? value, Object? patch) {
   if (patch is! Map) {
     return value;
   }
+
   final field = patch['field'];
+
   if (field is String) {
     if (value is! Map) {
       return value;
     }
+
     final fields = Map<String, Object?>.from(value);
     final changed = patch['set'];
+
     if (changed is Map) {
       fields.addAll(Map<String, Object?>.from(changed));
     }
+
     if (fields.containsKey(field)) {
       fields[field] = _applyRows(fields[field], patch);
     }
+
     return fields;
   }
+
   return _applyRows(value, patch);
 }
 
@@ -948,6 +1038,7 @@ Object? _applyRows(Object? value, Map<dynamic, dynamic> patch) {
   if (value is! List) {
     return value;
   }
+
   final removals = patch['remove'];
   final remove = removals is List ? removals.toSet() : const <Object?>{};
   final items = <Object?>[
@@ -956,20 +1047,25 @@ Object? _applyRows(Object? value, Map<dynamic, dynamic> patch) {
         item,
   ];
   final upserts = patch['upsert'];
+
   for (final upsert in upserts is List ? upserts : const <Object?>[]) {
     if (upsert is! Map) {
+
       continue;
     }
+
     final at = _int(upsert['at'], items.length).clamp(0, items.length).toInt();
     final row = upsert['value'];
     final id = row is Map ? row['id'] : null;
     final previous = at < items.length ? items[at] : null;
+
     if (id is String && previous is Map && previous['id'] == id) {
       items[at] = row;
     } else {
       items.insert(at, row);
     }
   }
+
   return items;
 }
 
@@ -988,6 +1084,7 @@ Object? _present(Object? args) {
   if (args is! Map) {
     return args;
   }
+
   return <String, Object?>{
     for (final entry in args.entries) '${entry.key}': entry.value,
   };
@@ -1013,6 +1110,7 @@ String _randomKey() {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   final hex =
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+
   return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-'
       '${hex.substring(16, 20)}-${hex.substring(20)}';
 }

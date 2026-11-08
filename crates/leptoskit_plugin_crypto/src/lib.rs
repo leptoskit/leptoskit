@@ -371,6 +371,7 @@ mod random_tests {
 		invalid[6] = 0x10;
 		assert_eq!(UuidV4::from_bytes(invalid), Err(Error::InvalidArgument));
 		invalid = expected;
+
 		invalid[8] = 0xc0;
 		assert_eq!(UuidV4::from_bytes(invalid), Err(Error::InvalidArgument));
 	}

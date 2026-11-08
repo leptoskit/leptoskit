@@ -368,6 +368,7 @@ backend=true
 	.unwrap();
 	let build = leptoskit(root, &["build"]);
 	assert!(build.status.success(), "{}", text(&build.stderr));
+
 	let deploy = leptoskit(root, &["generate", "deploy", "--target", "docker"]);
 	assert!(deploy.status.success(), "{}", text(&deploy.stderr));
 	let serve = leptoskit(root, &["serve"]);
@@ -397,6 +398,7 @@ fn static_build_does_not_compile_an_unrelated_binary() {
 		"[app]\nname='site'\nrender='csr'\nplatforms=['web']\n[build]\nbackend=false\n",
 	)
 	.unwrap();
+
 	let build = leptoskit(root, &["build"]);
 	assert!(build.status.success(), "{}", text(&build.stderr));
 	assert_eq!(
@@ -420,6 +422,7 @@ fn serving_declared_static_files_needs_no_cargo_manifest() {
 	let port = listener.local_addr().unwrap().port().to_string();
 	let serve = leptoskit(root, &["serve", "--port", &port]);
 	assert!(!serve.status.success());
+
 	assert!(
 		text(&serve.stderr).contains("could not bind"),
 		"{}",

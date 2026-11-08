@@ -124,6 +124,7 @@ fn rpc_contract(
 			declaration: "operator_declares_no_rpc".into(),
 		});
 	}
+
 	RpcContract::exported(
 		export_document(
 			engine,
@@ -193,12 +194,14 @@ fn export_document(
 				);
 				break;
 			}
+
 			ensure!(
 				std::time::Instant::now() < deadline,
 				"{kind} export timed out; export before database/auth startup"
 			);
 			std::thread::sleep(std::time::Duration::from_millis(100));
 		}
+
 		let path = dir.path().join(filename);
 		let metadata = fs::symlink_metadata(&path)
 			.with_context(|| format!("executable did not export {kind}; export first in main"))?;
@@ -238,7 +241,9 @@ fn remote_config_matches(config: &Value, expected: &str) -> Result<bool> {
 	if hash_json(config)? == expected {
 		return Ok(true);
 	}
+
 	let mut sparse = config.clone();
+
 	if let Some(object) = sparse.as_object_mut() {
 		for key in ["Cmd", "OnBuild", "Volumes"] {
 			if object.get(key).is_some_and(Value::is_null) {
@@ -246,6 +251,7 @@ fn remote_config_matches(config: &Value, expected: &str) -> Result<bool> {
 			}
 		}
 	}
+
 	Ok(hash_json(&sparse)? == expected)
 }
 
@@ -318,6 +324,7 @@ fn executable(bytes: &[u8], expected: &str) -> Result<()> {
 		"image executable bytes differ"
 	);
 	drop(entry);
+
 	ensure!(
 		entries.next().is_none(),
 		"unexpected extra image executable entries"
@@ -336,11 +343,13 @@ fn validate_image(image: &Value, platform: &str, config: &Value) -> Result<()> {
 	);
 	let mut actual = image["Config"].clone();
 	let mut expected = config.clone();
+
 	for value in [&mut actual, &mut expected] {
 		if value["Cmd"].is_null() {
 			value["Cmd"] = json!([]);
 		}
 	}
+
 	ensure!(actual == expected, "produced image configuration differs");
 	Ok(())
 }
@@ -348,6 +357,7 @@ fn validate_image(image: &Value, platform: &str, config: &Value) -> Result<()> {
 fn source_schema(bundle: &build::ReproducedBundle) -> Result<String> {
 	let source = bundle.root().join("source");
 	let config = LeptoskitConfig::load_from(&source)?;
+
 	match &bundle.recipe.website {
 		Some(website) => {
 			no_application_services(&source)?;
@@ -355,6 +365,7 @@ fn source_schema(bundle: &build::ReproducedBundle) -> Result<String> {
 		}
 		None => backend_only(&source, &config)?,
 	}
+
 	ensure!(
 		bundle.recipe.package == config.app.name,
 		"recipe package differs from managed backend"
@@ -388,6 +399,7 @@ fn validate_arguments(args: &Args) -> Result<()> {
 		!args.tag.starts_with('-') && !args.tag.is_empty(),
 		"invalid local image tag"
 	);
+
 	if let Some(service) = &args.service {
 		ensure!(
 			!service.is_empty()
@@ -398,6 +410,7 @@ fn validate_arguments(args: &Args) -> Result<()> {
 			"invalid managed service name"
 		);
 	}
+
 	Ok(())
 }
 
@@ -413,6 +426,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	let migrations = source_schema(&bundle)?;
 	let engine = Engine::detect(args.reproduction.engine)?;
 	let platform = build::platform(&bundle.recipe.target)?;
+
 	output(
 		engine,
 		&["pull", "--platform", platform, &args.runtime_image],
@@ -448,6 +462,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	let backend = fs::read(bundle.root().join("artifacts/backend"))?;
 	let backend_hash = digest(&backend);
 	fs::write(context.path().join("backend"), &backend)?;
+
 	let assets = match &bundle.recipe.website {
 		Some(website) => {
 			Assets::Reproduced {
@@ -467,6 +482,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	} else {
 		""
 	};
+
 	let dockerfile = format!(
 		"FROM {}\nCOPY --chmod=0755 backend /app/backend\n{website_copy}WORKDIR /app\nUSER \
 		 65532:65532\nENTRYPOINT [\"/app/backend\"]\nCMD []\n",
@@ -478,17 +494,21 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	expected["Entrypoint"] = json!(["/app/backend"]);
 	expected["Cmd"] = json!([]);
 	let label = format!("{}={migrations}", super::build::SCHEMA_LABEL);
+
 	if expected["Labels"].is_null() {
 		expected["Labels"] = json!({});
 	}
+
 	expected["Labels"][super::build::SCHEMA_LABEL] = json!(migrations);
 	let service_label = args
 		.service
 		.as_ref()
 		.map(|service| format!("service={service}"));
+
 	if let Some(service) = &args.service {
 		expected["Labels"]["service"] = json!(service);
 	}
+
 	if !args.reuse_existing {
 		let mut arguments = vec![
 			"build",
@@ -500,9 +520,11 @@ pub(super) fn run(args: &Args) -> Result<()> {
 			"--tag",
 			&args.tag,
 		];
+
 		if let Some(service_label) = &service_label {
 			arguments.extend(["--label", service_label]);
 		}
+
 		arguments.push(
 			context
 				.path()
@@ -511,6 +533,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		);
 		output(engine, &arguments)?;
 	}
+
 	let image = inspect(engine, &args.tag)?;
 	validate_image(&image, platform, &expected)?;
 	let id = image["Id"].as_str().context("missing image ID")?;
@@ -530,6 +553,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		} else {
 			1
 		},
+
 		kind: "leptoskit-verified-backend-image".into(),
 		inventory_sha256: bundle.inventory_sha256.clone(),
 		recipe: bundle.recipe.clone(),
@@ -591,6 +615,7 @@ fn check_contents(
 		)?;
 		Ok(())
 	})();
+
 	let removed = output(engine, &["rm", &container]);
 	checked?;
 	removed?;
@@ -653,9 +678,11 @@ impl Descriptor {
 			ensure!(valid_digest(value), "invalid descriptor SHA-256");
 		}
 		self.rpc_contract.validate()?;
+
 		if let Some(window) = &self.schema_window {
 			window.validate(&self.migrations)?;
 		}
+
 		ensure!(
 			(self.format_version
 				== if self.schema_window.is_some() {
@@ -674,6 +701,7 @@ impl Descriptor {
 				&& self.executable_mode == 0o755,
 			"unsupported release evidence"
 		);
+
 		match (&self.recipe.website, &self.assets) {
 			(None, Assets::NotApplicable) => {}
 			(
@@ -697,6 +725,7 @@ impl Descriptor {
 				)
 			}
 		}
+
 		ensure!(
 			self.engine_image_id
 				.strip_prefix("sha256:")
@@ -713,6 +742,7 @@ impl Descriptor {
 	pub(super) fn application(&self, source: &Path, config: &LeptoskitConfig) -> Result<()> {
 		self.validate()?;
 		no_application_services(source)?;
+
 		match &self.recipe.website {
 			Some(_) => crate::verify::website::Recipe::configuration(config),
 			None => backend_only(source, config),
@@ -795,11 +825,14 @@ mod tests {
 			json!({"Labels":{"service":"accounts"},"Env":["SAFE=1"],"Entrypoint":["/app/backend"]});
 		let pin = hash_json(&original).unwrap();
 		let mut docker = original.clone();
+
 		for key in ["Cmd", "OnBuild", "Volumes"] {
 			docker[key] = Value::Null;
 		}
+
 		assert!(remote_config_matches(&docker, &pin).unwrap());
 		assert!(remote_config_matches(&docker, &hash_json(&docker).unwrap()).unwrap());
+
 		for (key, value) in [
 			("Cmd", json!(["other"])),
 			("OnBuild", json!(["RUN true"])),
@@ -884,6 +917,7 @@ mod tests {
 		fs::create_dir(dir.path().join("services")).unwrap();
 		assert!(backend_only(dir.path(), &config).is_err());
 		fs::remove_dir(dir.path().join("services")).unwrap();
+
 		fs::write(
 			dir.path().join("leptoskit.toml"),
 			format!("{raw}\n[services.worker]\npackage='worker'\n"),

@@ -179,6 +179,7 @@ impl ExtensionDev {
 		dev.rebuild_or_fail()?;
 		let profile = root.join(super::OUTPUT).join("profile");
 		std::fs::create_dir_all(&profile)?;
+
 		if browser == ExtensionBrowser::Firefox {
 			let driver = Driver::launch(browser, &dev.dir, &profile, false)?;
 			let page = [
@@ -197,8 +198,10 @@ impl ExtensionDev {
 				"[extension] loaded {} into Firefox; it reloads after each rebuild",
 				dev.dir.display()
 			);
+
 			return Ok(dev);
 		}
+
 		let chrome = chrome().context("Chrome for Testing is missing")?;
 		let child = Command::new(&chrome)
 			.arg(format!("--user-data-dir={}", profile.display()))
@@ -232,11 +235,14 @@ impl ExtensionDev {
 			.next()
 			.context("the development build made no package")?;
 		self.dir = package.dir.canonicalize().unwrap_or(package.dir);
+
 		if let Some(driver) = &mut self.firefox {
 			driver.reinstall(&self.dir)?;
 		}
+
 		self.generation += 1;
 		let _ = self.builds.send(self.generation.to_string());
+
 		Ok(())
 	}
 

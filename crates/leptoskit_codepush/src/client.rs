@@ -315,6 +315,7 @@ impl<T: Transport> CodePushClient<T> {
 			.fetch_within(&index_url, ObjectKind::Index.max_bytes())
 		{
 			Ok(body) => body,
+
 			Err(CodePushError::NotFound(_)) => return Ok(UpdatePlan::UpToDate),
 			Err(error) => return Err(error),
 		};

@@ -26,6 +26,7 @@ function renderRow(row) {
 	label.addEventListener("click", () => select(row.id));
 
 	tr.append(id, label);
+
 	return tr;
 }
 
@@ -33,6 +34,7 @@ function syncSelected() {
 	for (const tr of tbody.children) {
 		tr.classList.toggle("selected", Number(tr.dataset.id) === state.selected);
 	}
+
 	document.getElementById("selected-label").textContent = `selected: ${
 		state.rows.find((row) => row.id === state.selected)?.label ?? "none"
 	}`;
@@ -40,9 +42,11 @@ function syncSelected() {
 
 function buildRows(start, total) {
 	const rows = [];
+
 	for (let id = start; id < start + total; id += 1) {
 		rows.push({ id, label: window.__bench.labelFor(id) });
 	}
+
 	return rows;
 }
 
@@ -87,6 +91,7 @@ controls.append(
 			tbody.append(renderRow(row));
 			state.rows.push(row);
 		}
+
 		state.nextId += 1000;
 	}),
 	button("update-every-10th", "update every 10th", () => {

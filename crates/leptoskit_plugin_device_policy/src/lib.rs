@@ -748,6 +748,7 @@ mod tests {
 			WipeRequest::decode(&flags(&[1, WIPE_CONFIRMATION_TOKEN, 2])),
 			Err(Error::InvalidArgument)
 		);
+
 		assert_eq!(
 			WipeRequest::decode(&flags(&[2, WIPE_CONFIRMATION_TOKEN, 0])),
 			Err(Error::InvalidArgument)
@@ -788,6 +789,7 @@ mod tests {
 			decode_password_minimum_length(&u32::MAX.to_le_bytes()),
 			Err(Error::InvalidArgument)
 		);
+
 		assert_eq!(validate_empty(STATUS, &[]), Ok(()));
 		assert_eq!(validate_empty(LOCK_NOW, &[0]), Err(Error::InvalidArgument));
 

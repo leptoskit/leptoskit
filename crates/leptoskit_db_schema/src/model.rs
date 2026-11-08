@@ -136,6 +136,7 @@ impl Schema {
 		for pack in &mut packs {
 			pack.tables.sort();
 		}
+
 		packs.sort_by(|left, right| left.name.cmp(&right.name));
 		self.packs = Some(packs);
 		self

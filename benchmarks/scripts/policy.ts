@@ -75,6 +75,7 @@ export function classify(
 			status: "missing",
 		};
 	}
+
 	const worse = higherIsBetter(metricClass, unit) ? head < base : head > base;
 	const delta = head - base;
 	const percent = base === 0 ? null : (delta / base) * 100;
@@ -92,13 +93,16 @@ export function classify(
 			: magnitude >= threshold.percent && Math.abs(delta) >= threshold.absolute;
 
 	const measured = { id, label, unit, base, head, delta, percent, direction };
+
 	if (!worse) {
 		return {
 			...measured,
 			status: crossed(thresholds.warn) ? "improved" : "ok",
 		};
 	}
+
 	if (crossed(thresholds.fail)) return { ...measured, status: "fail" };
+
 	if (crossed(thresholds.warn)) return { ...measured, status: "warn" };
 	return { ...measured, status: "ok" };
 }

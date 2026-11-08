@@ -10,9 +10,11 @@ let nextId = 1;
 
 function buildRows(start, total) {
 	const rows = [];
+
 	for (let id = start; id < start + total; id += 1) {
 		rows.push({ id, label: window.__bench.labelFor(id) });
 	}
+
 	return rows;
 }
 

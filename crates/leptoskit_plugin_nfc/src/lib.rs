@@ -185,6 +185,7 @@ impl leptoskit_bridge::Plugin for Unsupported {
 
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		validate(method, &payload)?;
+
 		if method == AVAILABILITY {
 			Ok(Bytes::copy_from_slice(&Availability::Unsupported.encode()))
 		} else {
@@ -264,6 +265,7 @@ mod tests {
 		assert_eq!(uri.kind(), Kind::Uri);
 		assert_eq!(uri.value(), "https://example.test/a");
 		assert_eq!(Record::decode(&uri.encode().unwrap()).unwrap(), uri);
+
 		assert!(Record::uri("ftp://example.test").is_err());
 		assert!(Record::text("").is_err());
 		assert!(Record::text("bad\u{7}control").is_err());

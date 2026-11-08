@@ -200,6 +200,7 @@ impl TuiHost {
 			}
 
 			let timeout = self.options.tick.saturating_sub(last_tick.elapsed());
+
 			let timeout = match app.deadline() {
 				Some(deadline) => timeout.min(deadline),
 				None => timeout,

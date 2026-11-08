@@ -39,21 +39,25 @@ class _ColdScenarioState extends State<ColdScenario> {
 
   Future<void> _report() async {
     double? firstFrameMs;
+
     if (widget.fromLaunch) {
       await firstFrameShown();
       final sinceFirstFrame = Stopwatch()..start();
       final uptimeMs = await processUptimeMs();
+
       if (uptimeMs != null) {
         firstFrameMs = uptimeMs - sinceFirstFrame.elapsedMicroseconds / 1000;
       }
     } else {
       await WidgetsBinding.instance.endOfFrame;
     }
+
     if (!mounted) return;
 
     final expected = [for (var row = 1; row <= rowCount; row += 1) 'Row $row'];
     final shown = shownTexts(_rows.currentContext! as Element);
     final ok = listEquals(shown, expected);
+
     if (!ok) setState(() => _phase = Phase.failed);
     await publishReport(
       ArenaReport(

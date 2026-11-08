@@ -19,6 +19,7 @@ fn cli(directory: &Path, args: &[&std::ffi::OsStr]) -> std::process::Output {
 fn record_and_check_use_an_independent_pin_and_make_no_runtime_claim() {
 	let scratch = tempfile::tempdir().unwrap();
 	let bundle = scratch.path().join("bundle");
+
 	for directory in ["source", "dependencies", "infra", "artifacts"] {
 		std::fs::create_dir_all(bundle.join(directory)).unwrap();
 	}
@@ -58,6 +59,7 @@ fn record_and_check_use_an_independent_pin_and_make_no_runtime_claim() {
 			manifest.as_os_str(),
 		],
 	);
+
 	assert!(
 		recorded.status.success(),
 		"{}",
@@ -134,6 +136,7 @@ fn verification_never_probes_the_current_projects_plugin_programs() {
 	// Check the fixture is an active plugin declaration, not a config parse
 	// failure that would make the verification assertion pass vacuously.
 	assert!(cli(scratch.path(), &["--help".as_ref()]).status.success());
+
 	assert!(marker.exists());
 	std::fs::remove_file(&marker).unwrap();
 	assert!(
@@ -182,9 +185,11 @@ fn git(directory: &Path, args: &[&str]) -> String {
 
 fn copy_tree(from: &Path, to: &Path) {
 	std::fs::create_dir_all(to).unwrap();
+
 	for entry in std::fs::read_dir(from).unwrap() {
 		let entry = entry.unwrap();
 		let target = to.join(entry.file_name());
+
 		if entry.file_type().unwrap().is_dir() {
 			copy_tree(&entry.path(), &target);
 		} else {
@@ -280,6 +285,7 @@ fn a_commit_builds_reproducibly_and_tampering_fails_the_rebuild() {
 		"fn main() {\n\tprintln!(\"{}\", itoa::Buffer::new().format(42));\n}\n",
 	)
 	.unwrap();
+
 	std::fs::write(repository.join("deploy/service.toml"), "port = 8080\n").unwrap();
 	git(&repository, &["init", "--quiet"]);
 	let lock = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
@@ -296,6 +302,7 @@ fn a_commit_builds_reproducibly_and_tampering_fails_the_rebuild() {
 	} else {
 		"x86_64-unknown-linux-gnu"
 	};
+
 	let recipe = scratch.join("recipe.json");
 	std::fs::write(
 		&recipe,
@@ -344,6 +351,7 @@ fn a_commit_builds_reproducibly_and_tampering_fails_the_rebuild() {
 		std::fs::read_to_string(bundle.join("infra/service.toml")).unwrap(),
 		"port = 8080\n"
 	);
+
 	assert!(bundle.join("dependencies/itoa-1.0.15/Cargo.toml").is_file());
 	let provenance: serde_json::Value =
 		serde_json::from_slice(&std::fs::read(release.join("provenance.json")).unwrap()).unwrap();

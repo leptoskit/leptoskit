@@ -17,8 +17,10 @@ def run(*args, cwd=W, env=None, ok=True):
         stderr=subprocess.STDOUT,
     )
     print(r.stdout, flush=True)
+
     if (r.returncode == 0) != ok:
         raise RuntimeError(args)
+
     return r.stdout.strip()
 
 
@@ -106,6 +108,7 @@ for app in ["accounts", "website"]:
         "root@127.0.0.1",
         f"for i in $(seq 1 60); do docker exec {name}-db pg_isready -U leptoskit >/dev/null && break; sleep 1; done; docker exec {name}-db psql -U leptoskit -d leptoskit -c 'CREATE TABLE IF NOT EXISTS _leptoskit_migrations (name text, checksum text);'",
     )
+
 (W / "leptoskit.workspace.toml").write_text(
     'format_version=1\n[applications.accounts]\npath="accounts"\n[applications.website]\npath="website"\ndepends-on=["accounts"]\n'
 )

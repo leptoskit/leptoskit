@@ -32,6 +32,7 @@ pub async fn kept() -> Option<String> {
 
 		let key = Key::new(SERVICE, KEY).ok()?;
 		let secret = SecureStore::new().ok()?.get(key).await.ok()??;
+
 		return String::from_utf8(secret.to_vec()).ok();
 	}
 	#[allow(unreachable_code)]
@@ -54,6 +55,7 @@ pub async fn keep(token: Option<String>) {
 					.await
 			}
 		};
+
 		// The other surfaces and the worker hold their own copy.
 		let _ = leptoskit::extension::runtime::send::<_, commonplace_shared::ExtensionReply>(
 			&commonplace_shared::ExtensionMessage::SessionChanged,
@@ -68,6 +70,7 @@ pub async fn keep(token: Option<String>) {
 		let (Ok(key), Ok(store)) = (Key::new(SERVICE, KEY), SecureStore::new()) else {
 			return;
 		};
+
 		let _ = match token {
 			Some(token) => store.set(key, token.as_bytes()).await,
 			None => store.delete(key).await,

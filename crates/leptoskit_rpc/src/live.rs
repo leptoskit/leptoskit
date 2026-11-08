@@ -384,10 +384,12 @@ impl EndReason {
 	#[must_use]
 	pub fn frame(self, stream: u32) -> ServerFrame {
 		let reason = self.as_str().to_owned();
+
 		let err = match self {
 			Self::Failed(error) => Some(error),
 			Self::Done | Self::Interrupted => None,
 		};
+
 		ServerFrame::End {
 			stream,
 			reason,
@@ -691,6 +693,7 @@ pub fn apply(value: &mut Value, update: &Update) {
 				}
 				None => Some(value),
 			};
+
 			let Some(items) = list.and_then(Value::as_array_mut) else {
 				return;
 			};
@@ -710,6 +713,7 @@ pub fn apply(value: &mut Value, update: &Update) {
 					Some(slot) if id.is_some() && slot.get("id").and_then(Value::as_str) == id => {
 						*slot = upsert.value.clone();
 					}
+
 					_ => items.insert(at, upsert.value.clone()),
 				}
 			}

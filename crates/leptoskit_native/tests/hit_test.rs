@@ -390,6 +390,7 @@ fn a_rounded_clip_at_a_fractional_offset_is_hit() {
 	let layout = surface.layout(dot);
 	assert_eq!((layout.x, layout.width), (0.1, 2.0));
 	let left = std::hint::black_box(layout.x);
+
 	assert!(
 		left + 1.0 > left + 2.0 - 1.0,
 		"the bounds this test needs to cross"

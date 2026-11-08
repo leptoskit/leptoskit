@@ -229,6 +229,7 @@ mod platform;
 	target_os = "macos",
 	target_os = "windows"
 )))]
+
 mod platform {
 	use super::Autostart;
 	use super::Error;

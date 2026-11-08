@@ -68,6 +68,7 @@ mod http;
 mod idp;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod jwt;
+
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod keys;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]

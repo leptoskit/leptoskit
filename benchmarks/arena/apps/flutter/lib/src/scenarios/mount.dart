@@ -69,6 +69,7 @@ class _MountScenarioState extends State<MountScenario> {
       await publishReport(
         ArenaReport(scenario: Scenario.mount, ok: false, error: failure.reason),
       );
+
       return;
     }
 
@@ -117,19 +118,23 @@ class _MountScenarioState extends State<MountScenario> {
     _check(expected);
     setState(() => _phase = Phase.idle);
     await SchedulerBinding.instance.endOfFrame;
+
     return elapsedMs;
   }
 
   void _check(({int count, String? first, String? last}) expected) {
     final cards = descendantsOfType<_Card>(_cards.currentContext! as Element);
+
     if (cards.length != expected.count) {
       throw _CheckFailed(
         'rendered ${cards.length} cards, not ${expected.count}',
       );
     }
+
     if (cards.isEmpty) return;
     final first = shownTexts(cards.first).first;
     final last = shownTexts(cards.last).first;
+
     if (first != expected.first || last != expected.last) {
       throw _CheckFailed(
         'first and last cards read "$first" and "$last", '

@@ -144,6 +144,7 @@ impl Api {
 		} else {
 			bytes
 		};
+
 		serde_json::from_slice(&bytes).map_err(|_| {
 			Problem::new("The server answered in a way Commonplace doesn't understand.")
 		})
@@ -166,9 +167,11 @@ impl Api {
 		if response.status == 401 && self.refresh().await {
 			response = self.request(method, &path, body).await?;
 		}
+
 		if (200..300).contains(&response.status) {
 			return Ok(response.body);
 		}
+
 		let message = serde_json::from_slice::<ApiError>(&response.body)
 			.map(|error| error.message)
 			.unwrap_or_else(|_| format!("The server answered {}.", response.status));
@@ -220,6 +223,7 @@ impl Api {
 		// again rather than retrying it.
 		*self.tokens.borrow_mut() = tokens;
 		crate::session::keep(self.session()).await;
+
 		renewed
 	}
 
@@ -248,6 +252,7 @@ impl Api {
 		} else {
 			"cookie"
 		};
+
 		let verified: Verified = self
 			.call(
 				"POST",
@@ -255,9 +260,11 @@ impl Api {
 				Some(&serde_json::json!({ "email": email, "code": code, "transport": transport })),
 			)
 			.await?;
+
 		if self.uses_bearer() {
 			*self.tokens.borrow_mut() = verified.tokens;
 		}
+
 		Ok(self.session())
 	}
 
@@ -335,6 +342,7 @@ impl Api {
 /// Percent-encodes a query value.
 fn encode(value: &str) -> String {
 	let mut encoded = String::with_capacity(value.len());
+
 	for byte in value.bytes() {
 		if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
 			encoded.push(char::from(byte));
@@ -342,6 +350,7 @@ fn encode(value: &str) -> String {
 			encoded.push_str(&format!("%{byte:02X}"));
 		}
 	}
+
 	encoded
 }
 

@@ -43,9 +43,11 @@ impl FromStr for Percent {
 	fn from_str(value: &str) -> Result<Self, Self::Err> {
 		let invalid = || format!("`{value}` is not a percentage with at most two decimals");
 		let (whole, fraction) = value.trim().split_once('.').unwrap_or((value.trim(), ""));
+
 		if whole.is_empty() || fraction.len() > 2 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
 			return Err(invalid());
 		}
+
 		let whole: u32 = whole.parse().map_err(|_| invalid())?;
 		let fraction: u32 = format!("{fraction:0<2}").parse().map_err(|_| invalid())?;
 		let hundredths = whole
@@ -74,6 +76,7 @@ impl Lines {
 
 	fn add(&mut self, hits: u64) {
 		self.total += 1;
+
 		if hits > 0 {
 			self.covered += 1;
 		}
@@ -161,8 +164,10 @@ impl Report {
 		};
 		let mut packages: BTreeMap<String, Lines> = BTreeMap::new();
 		let mut total = Lines::default();
+
 		for (path, lines) in coverage.files().filter(|(path, _)| measured(path)) {
 			let package = packages.entry(package_of(path)).or_default();
+
 			for hits in lines.values() {
 				package.add(*hits);
 				total.add(*hits);
@@ -185,12 +190,14 @@ impl Report {
 					if hits > 0 {
 						continue;
 					}
+
 					// Uncovered lines separated only by uninstrumented ones
 					// (blank lines, comments, signatures) read as one range.
 					match uncovered.last_mut() {
 						Some((_, end)) if lines.range(*end + 1..number).next().is_none() => {
 							*end = number;
 						}
+
 						_ => uncovered.push((number, number)),
 					}
 				}
@@ -198,6 +205,7 @@ impl Report {
 					patch.uncovered.insert(path.clone(), uncovered);
 				}
 			}
+
 			patch
 		});
 
@@ -214,16 +222,20 @@ impl Report {
 	/// Every way this report misses `policy`.
 	pub fn failures(&self, policy: Policy) -> Vec<Failure> {
 		let mut failures = Vec::new();
+
 		match self.total.percent() {
 			None => failures.push(Failure::NothingMeasured),
+
 			Some(total) if total < policy.floor => {
 				failures.push(Failure::BelowFloor {
 					total,
 					floor: policy.floor,
 				});
 			}
+
 			Some(_) => {}
 		}
+
 		if let Some(patch) = self.patch.as_ref().and_then(|patch| patch.lines.percent())
 			&& patch < policy.patch_minimum
 		{
@@ -239,6 +251,7 @@ impl Report {
 	pub fn markdown(&self, policy: Policy) -> String {
 		let mut out = String::from("## Coverage\n\n");
 		out.push_str("| Package | Lines | Covered |\n| --- | ---: | ---: |\n");
+
 		for package in &self.packages {
 			let _ = writeln!(
 				out,
@@ -248,6 +261,7 @@ impl Report {
 				display(package.lines.percent())
 			);
 		}
+
 		let _ = writeln!(
 			out,
 			"| **Total** | {} | **{}** (floor {}) |",
@@ -258,6 +272,7 @@ impl Report {
 
 		if let Some(patch) = &self.patch {
 			out.push_str("\n### Patch coverage\n\n");
+
 			match patch.lines.percent() {
 				Some(percent) => {
 					let _ = writeln!(
@@ -268,19 +283,24 @@ impl Report {
 				}
 				None => out.push_str("The change has no instrumented lines.\n"),
 			}
+
 			if !patch.uncovered.is_empty() {
 				out.push_str("\nUncovered changed lines:\n\n");
+
 				for (path, ranges) in &patch.uncovered {
 					let ranges: Vec<String> =
 						ranges.iter().map(|range| format_range(*range)).collect();
+
 					let _ = writeln!(out, "- `{path}`: {}", ranges.join(", "));
 				}
 			}
+
 			if !patch.unmeasured.is_empty() {
 				out.push_str(
 					"\nChanged files without a coverage record, because they hold no executable \
 					 code or were not compiled on this runner (not counted):\n\n",
 				);
+
 				for (path, count) in &patch.unmeasured {
 					let _ = writeln!(out, "- `{path}` ({count} changed lines)");
 				}
@@ -289,6 +309,7 @@ impl Report {
 
 		let failures = self.failures(policy);
 		out.push('\n');
+
 		if failures.is_empty() {
 			out.push_str("**Result:** passed.\n");
 		} else {
@@ -296,6 +317,7 @@ impl Report {
 				let _ = writeln!(out, "**Failed:** {failure}.");
 			}
 		}
+
 		out
 	}
 
@@ -303,6 +325,7 @@ impl Report {
 	/// pull request diff.
 	pub fn annotations(&self) -> String {
 		let mut out = String::new();
+
 		for (path, ranges) in self.patch.iter().flat_map(|patch| &patch.uncovered) {
 			for (start, end) in ranges {
 				let _ = writeln!(
@@ -317,6 +340,7 @@ impl Report {
 				);
 			}
 		}
+
 		out
 	}
 }
@@ -356,6 +380,7 @@ impl fmt::Display for Failure {
 /// `crates/leptoskit_cli`, or the file itself at the top level.
 fn package_of(path: &str) -> String {
 	let mut components = path.splitn(3, '/');
+
 	match (components.next(), components.next(), components.next()) {
 		(Some(first), Some(second), Some(_)) => format!("{first}/{second}"),
 		(Some(first), Some(_), None) => first.to_owned(),
@@ -459,6 +484,7 @@ mod tests {
 		assert!(is_measured("examples/gallery/src/lib.rs"));
 		assert!(!is_measured("examples/gallery/tests/desktop.rs"));
 		assert!(!is_measured("examples/gallery/examples/snapshot.rs"));
+
 		assert!(!is_measured("benchmarks/native/src/main.rs"));
 		assert!(!is_measured("target/debug/build/a-1234/out/bindings.rs"));
 		assert!(!is_measured("crates/a/src/view.swift"));

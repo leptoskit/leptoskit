@@ -329,6 +329,7 @@ impl Jobs {
 			Scope::Set(service) => service,
 			Scope::Installed => crate::server::installed().and_then(|server| server.service_name()),
 		};
+
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let wake = Arc::new(Notify::new());
 		let mut tasks = Vec::with_capacity(self.workers + 2);
@@ -1131,6 +1132,7 @@ mod tests {
 		waiting.as_mut().enable();
 		let task = tokio::spawn(waker(db, Arc::clone(&wake), Arc::clone(&shutdown)));
 		let result = tokio::time::timeout(Duration::from_secs(2), waiting).await;
+
 		shutdown.store(true, Ordering::SeqCst);
 		task.await.unwrap();
 		assert!(

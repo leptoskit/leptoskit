@@ -35,6 +35,7 @@ fn main() {
 				)
 				.expect("write to String");
 			}
+
 			_ => {
 				writeln!(generated, "pub const {constant}: Option<&[u8]> = None;")
 					.expect("write to String");

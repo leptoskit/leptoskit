@@ -191,6 +191,7 @@ pub(crate) fn analyze(schema: &Value) -> Analyzed<'_> {
 		&& let [single] = parts.as_slice()
 	{
 		let inner = analyze(single);
+
 		return analyzed(inner.shape, nullable || inner.nullable, inner.unsupported);
 	}
 
@@ -264,6 +265,7 @@ fn unsupported<'a>(object: &'a Map<String, Value>, kinds: &[&'a str]) -> Option<
 	{
 		return Some(Unsupported::ExternalReference(reference));
 	}
+
 	if let Some(value) = object.get("allOf") {
 		return Some(match value.as_array() {
 			Some(parts) => {
@@ -640,6 +642,7 @@ mod tests {
 		assert_eq!(analyze(&json!({ "type": "null" })).shape, Shape::Null);
 		assert_eq!(analyze(&json!(true)).shape, Shape::Any);
 		assert_eq!(analyze(&json!({})).shape, Shape::Any);
+
 		assert_eq!(
 			analyze(&json!(true)).unsupported,
 			None,
