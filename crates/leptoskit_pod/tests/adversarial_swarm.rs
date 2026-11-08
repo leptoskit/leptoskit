@@ -1,5 +1,8 @@
 //! Adversarial probes (swarm eval); keep regressions here.
 
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+
 use leptoskit_pod::Error;
 use leptoskit_pod::MessageType;
 use leptoskit_pod::PodDecode;
@@ -50,7 +53,6 @@ fn envelope_body_len_shorter_than_trailing() {
 #[test]
 fn nested_option_some_with_bad_tag() {
 	// Option<Option<u8>>: outer Some (01), inner invalid tag 02
-	assert_eq!(Reader::new(&[0x01, 0x02]).option_tag().unwrap(), true);
 	let mut r = Reader::new(&[0x01, 0x02]);
 	assert!(r.option_tag().unwrap());
 	assert_eq!(r.option_tag().unwrap_err(), Error::InvalidTag(2));

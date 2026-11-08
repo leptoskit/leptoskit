@@ -160,12 +160,20 @@ def test_conformance_malformed(corpus: dict) -> None:
     for m in corpus["malformed"]:
         data = hex_decode(m["hex"])
         with pytest.raises(PodError) as exc:
+            name = m["name"]
             if m.get("envelope"):
                 unwrap(data)
-            elif "utf8" in m["name"]:
+            elif "utf8" in name:
                 Reader(data).string()
-            elif "bool" in m["name"]:
-                Reader(data).bool()
+            elif "bool" in name or "option" in name or "result" in name:
+                if "option" in name:
+                    Reader(data).option_tag()
+                elif "result" in name:
+                    Reader(data).result_tag()
+                else:
+                    Reader(data).bool()
+            elif "huge_len" in name or "vec_u8" in name:
+                Reader(data).bytes()
             else:
                 Reader(data).u16()
         assert exc.value.__class__.__name__ == m["expect"], m["name"]

@@ -1,5 +1,7 @@
 //! `#[pod::data]` derive coverage.
 
+#![allow(clippy::format_collect)]
+
 use leptoskit_pod::PodDecode;
 use leptoskit_pod::PodEncode;
 use leptoskit_pod::pod;

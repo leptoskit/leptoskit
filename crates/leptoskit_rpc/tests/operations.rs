@@ -371,7 +371,12 @@ async fn pod_round_trips_notes_query() {
 		.pod(encoded)
 		.send_pod(&router)
 		.await;
-	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"{}",
+		String::from_utf8_lossy(&bytes)
+	);
 	let titles: Vec<String> = Vec::from_pod_bytes(&bytes).unwrap();
 	assert_eq!(titles, ["pod-note"]);
 }

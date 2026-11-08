@@ -11,6 +11,7 @@ use crate::Writer;
 /// One adjacent rewrite: `from` → `from + 1`.
 pub trait Transition {
 	/// Source version this step consumes.
+	#[allow(clippy::wrong_self_convention)]
 	fn from_version(&self) -> u8;
 
 	/// Rewrites payload bytes for `from_version` into `from_version + 1`.

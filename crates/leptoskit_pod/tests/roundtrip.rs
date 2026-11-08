@@ -1,5 +1,10 @@
 //! Round-trips, snapshots, and conformance vectors for LK Pod.
 
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::format_collect)]
+#![allow(clippy::format_push_string)]
+#![allow(clippy::redundant_closure)]
+
 use leptoskit_pod::Error;
 use leptoskit_pod::MessageType;
 use leptoskit_pod::PodDecode;
