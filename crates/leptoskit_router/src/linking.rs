@@ -81,11 +81,7 @@ pub fn route_path_from_link(input: &str) -> Option<String> {
 			}
 			let url_path = parsed.path();
 			if url_path != "/" && !url_path.is_empty() {
-				if path.is_empty() {
-					path.push_str(url_path);
-				} else {
-					path.push_str(url_path);
-				}
+				path.push_str(url_path);
 			} else if path.is_empty() {
 				path.push('/');
 			}
@@ -126,7 +122,7 @@ where
 }
 
 /// A borrowed deep-link activation, so this crate does not depend on the
-/// deep_link plugin at compile time.
+/// `deep_link` plugin at compile time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivationRef<'a> {
 	/// An inbound URL.

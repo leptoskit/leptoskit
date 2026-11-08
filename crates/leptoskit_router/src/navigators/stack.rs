@@ -96,8 +96,7 @@ where
 		self.presentations
 			.iter()
 			.find(|(_, matches)| matches(route))
-			.map(|(presentation, _)| *presentation)
-			.unwrap_or(Presentation::Push)
+			.map_or(Presentation::Push, |(presentation, _)| *presentation)
 	}
 
 	/// Wraps `children` with overlay chrome when the route is modal/sheet, and
@@ -171,6 +170,6 @@ where
 				.on_press(move || {
 					back.back();
 				})
-				.child(Text("".to_owned())),
+				.child(Text(String::new())),
 		)
 }
