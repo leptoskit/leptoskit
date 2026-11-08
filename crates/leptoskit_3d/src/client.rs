@@ -303,10 +303,12 @@ impl Scene {
 					.collect::<Result<Vec<_>, _>>(),
 			)
 		};
+
 		async move {
 			for call in sent.transpose()?.into_iter().flatten() {
 				call.await?;
 			}
+
 			Ok(())
 		}
 	}
@@ -345,6 +347,7 @@ mod tests {
 		scene.play(node, Play::new("idle"));
 		let request = scene.raycast_screen(0.5, 0.5);
 		assert_eq!(scene.pending(), 6);
+
 		assert_ne!(asset.0, node.0);
 		assert_ne!(node, group);
 		assert_eq!(request.0, 4);

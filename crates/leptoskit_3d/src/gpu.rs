@@ -146,6 +146,7 @@ fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
 	} else {
 		wgpu::Limits::downlevel_defaults()
 	};
+
 	base.using_resolution(adapter.limits())
 }
 
@@ -282,6 +283,7 @@ impl Gpu {
 			.adapter
 			.get_texture_format_features(crate::upload::DEPTH_FORMAT)
 			.flags;
+
 		if flags.sample_count_supported(4) && depth.sample_count_supported(4) {
 			4
 		} else {
@@ -430,6 +432,7 @@ fn bake_environment(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture
 		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
 		view_formats: &[],
 	});
+
 	for (mip, texels) in environment::bake_cubemap().into_iter().enumerate() {
 		let size = (environment::SIZE >> mip).max(1);
 		let bytes: Vec<u8> = texels
@@ -457,6 +460,7 @@ fn bake_environment(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture
 			},
 		);
 	}
+
 	texture.create_view(&wgpu::TextureViewDescriptor {
 		label: Some("leptoskit_3d environment"),
 		dimension: Some(wgpu::TextureViewDimension::Cube),
@@ -521,6 +525,7 @@ impl Shared {
 			bind_group_layouts: &[Some(&globals_layout)],
 			immediate_size: 0,
 		});
+
 		let background_pipeline_layout =
 			device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 				label: Some("leptoskit_3d background"),
@@ -627,6 +632,7 @@ impl Shared {
 			.assets
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
+
 		if let Some((weak, uploaded)) = assets.get(&key)
 			&& weak.upgrade().is_some_and(|live| Arc::ptr_eq(&live, asset))
 		{
@@ -695,6 +701,7 @@ impl Shared {
 			})
 		};
 		let mut meshes = HashMap::new();
+
 		for skinned in [false, true] {
 			for blend in [false, true] {
 				for double_sided in [false, true] {
@@ -707,6 +714,7 @@ impl Shared {
 					} else {
 						vec![Some(vertex_buffer.clone()), Some(instance_buffer.clone())]
 					};
+
 					let targets = [Some(wgpu::ColorTargetState {
 						format,
 						blend: if blend { premultiplied } else { None },
@@ -738,6 +746,7 @@ impl Shared {
 						multiview_mask: None,
 						cache: None,
 					});
+
 					meshes.insert(
 						Variant {
 							skinned,
@@ -749,6 +758,7 @@ impl Shared {
 				}
 			}
 		}
+
 		let shadow_attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
 		let blended = [Some(wgpu::ColorTargetState {
 			format,

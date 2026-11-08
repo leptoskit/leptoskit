@@ -98,6 +98,7 @@ fn with_scene<T>(id: SceneId, action: impl FnOnce(&mut PageScene) -> T) -> Optio
 		if !page.scenes.contains_key(&id) && page.scenes.len() >= MAX_SCENES {
 			return None;
 		}
+
 		let scene = page.scenes.entry(id).or_insert_with(|| {
 			PageScene {
 				world: Some(World::new()),
@@ -124,13 +125,16 @@ fn notify(id: SceneId) {
 		} else {
 			Vec::new()
 		};
+
 		scene.canvases.retain(|canvas| canvas.strong_count() > 0);
 		let canvases: Vec<Rc<Canvas>> = scene.canvases.iter().filter_map(Weak::upgrade).collect();
 		(waiters, canvases)
 	});
+
 	for waiter in waiters {
 		waiter.wake();
 	}
+
 	for canvas in canvases {
 		request_frame(&canvas);
 	}
@@ -178,6 +182,7 @@ fn rescan() {
 				dropped.push(attachment);
 			}
 		}
+
 		observed.canvases = kept;
 		for index in 0..found.length() {
 			let Some(canvas) = found
@@ -192,6 +197,7 @@ fn rescan() {
 			if observed.canvases.iter().any(|(known, ..)| *known == canvas) {
 				continue;
 			}
+
 			let attachment = attach(canvas.clone(), scene);
 			observed.canvases.push((canvas, scene, attachment));
 		}
@@ -204,9 +210,11 @@ fn rescan() {
 /// first ops does this; call it to draw scenes made elsewhere.
 pub fn observe() {
 	let started = OBSERVED.with_borrow(Option::is_some);
+
 	if started {
 		return;
 	}
+
 	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
 		return;
 	};
@@ -214,11 +222,13 @@ pub fn observe() {
 	let Ok(observer) = web_sys::MutationObserver::new(callback.as_ref().unchecked_ref()) else {
 		return;
 	};
+
 	let options = web_sys::MutationObserverInit::new();
 	options.set_child_list(true);
 	options.set_subtree(true);
 	options.set_attributes(true);
 	options.set_attribute_filter(&js_sys::Array::of1(&"data-lk-scene3d".into()));
+
 	if let Some(root) = document.document_element()
 		&& observer.observe_with_options(&root, &options).is_ok()
 	{
@@ -241,9 +251,11 @@ pub fn apply(id: SceneId, ops: Vec<Op>) {
 		world.apply(ops);
 		world.take_loads()
 	});
+
 	for (asset, path) in loads.unwrap_or_default() {
 		wasm_bindgen_futures::spawn_local(load(id, asset, path));
 	}
+
 	notify(id);
 }
 
@@ -255,6 +267,7 @@ pub fn close(id: SceneId) {
 			.map(|scene| scene.waiters)
 			.unwrap_or_default()
 	});
+
 	for waiter in waiters {
 		waiter.wake();
 	}
@@ -293,9 +306,11 @@ async fn fetch(url: &str) -> Result<Vec<u8>, String> {
 	let response: web_sys::Response = response
 		.dyn_into()
 		.map_err(|_| "the fetch did not return a response".to_owned())?;
+
 	if !response.ok() {
 		return Err(format!("{url} answered {}", response.status()));
 	}
+
 	let buffer = response
 		.array_buffer()
 		.map_err(|error| format!("{url} has no body: {error:?}"))?;
@@ -303,9 +318,11 @@ async fn fetch(url: &str) -> Result<Vec<u8>, String> {
 		.await
 		.map_err(|error| format!("{url} could not be read: {error:?}"))?;
 	let bytes = js_sys::Uint8Array::new(&buffer);
+
 	if bytes.length() as usize > MAX_ASSET_BYTES {
 		return Err(format!("{url} is larger than 128 MiB"));
 	}
+
 	Ok(bytes.to_vec())
 }
 
@@ -326,12 +343,14 @@ async fn load(id: SceneId, asset: AssetId, path: String) {
 				.map_err(|error| format!("{path}: {error}"))
 		})
 	};
+
 	if let Ok(asset) = &result {
 		PAGE.with_borrow_mut(|page| {
 			page.cache.retain(|_, asset| asset.strong_count() > 0);
 			page.cache.insert(path.clone(), Arc::downgrade(asset));
 		});
 	}
+
 	PAGE.with_borrow_mut(|page| {
 		if let Some(scene) = page.scenes.get_mut(&id) {
 			scene.world_mut().asset_loaded(asset, result);
@@ -361,9 +380,11 @@ pub struct Attachment(Rc<Canvas>);
 impl Drop for Attachment {
 	fn drop(&mut self) {
 		self.0.closed.set(true);
+
 		if let Some((observer, _)) = self.0.observer.borrow_mut().take() {
 			observer.disconnect();
 		}
+
 		self.0.callback.borrow_mut().take();
 		self.0.surface.borrow_mut().take();
 	}
@@ -388,18 +409,22 @@ pub fn attach(element: web_sys::HtmlCanvasElement, scene: SceneId) -> Attachment
 			request_frame(&canvas);
 		}
 	});
+
 	if let Ok(observer) = web_sys::ResizeObserver::new(resized.as_ref().unchecked_ref()) {
 		observer.observe(&canvas.element);
 		*canvas.observer.borrow_mut() = Some((observer, resized));
 	}
+
 	let pending = canvas.clone();
 	wasm_bindgen_futures::spawn_local(async move {
 		if let Err(error) = connect(&pending).await {
 			web_sys::console::error_1(&format!("leptoskit_3d: {error}").into());
 			return;
 		}
+
 		request_frame(&pending);
 	});
+
 	Attachment(canvas)
 }
 
@@ -413,9 +438,11 @@ async fn connect(canvas: &Rc<Canvas>) -> Result<(), String> {
 		let instance = Gpu::instance(backend).await;
 		PAGE.with_borrow_mut(|page| page.instance.get_or_insert(instance).clone())
 	};
+
 	let surface = instance
 		.create_surface(wgpu::SurfaceTarget::Canvas(canvas.element.clone()))
 		.map_err(|error| error.to_string())?;
+
 	let shared = PAGE.with_borrow(|page| page.gpu.clone());
 	let gpu = if let Some(gpu) = shared {
 		gpu
@@ -423,12 +450,14 @@ async fn connect(canvas: &Rc<Canvas>) -> Result<(), String> {
 		let gpu = Gpu::request_on(instance, Some(&surface))
 			.await
 			.map_err(|error| error.to_string())?;
+
 		if gpu.backend() == wgpu::Backend::Gl {
 			gpu
 		} else {
 			PAGE.with_borrow_mut(|page| page.gpu.get_or_insert(gpu.clone()).clone())
 		}
 	};
+
 	let capabilities = surface.get_capabilities(gpu.adapter());
 	let format = capabilities
 		.formats
@@ -456,9 +485,11 @@ async fn connect(canvas: &Rc<Canvas>) -> Result<(), String> {
 		view_formats: Vec::new(),
 		color_space: wgpu::SurfaceColorSpace::Auto,
 	};
+
 	if !canvas.closed.get() {
 		*canvas.surface.borrow_mut() = Some((surface, config, gpu));
 	}
+
 	Ok(())
 }
 
@@ -466,6 +497,7 @@ fn request_frame(canvas: &Rc<Canvas>) {
 	if canvas.closed.get() || canvas.scheduled.get() || canvas.surface.borrow().is_none() {
 		return;
 	}
+
 	let Some(window) = web_sys::window() else {
 		return;
 	};
@@ -478,6 +510,7 @@ fn request_frame(canvas: &Rc<Canvas>) {
 			}
 		}
 	});
+
 	if window
 		.request_animation_frame(callback.as_ref().unchecked_ref())
 		.is_ok()
@@ -499,13 +532,16 @@ fn fit(
 	let limit = gpu.device().limits().max_texture_dimension_2d;
 	let width = ((f64::from(canvas.element.client_width()) * ratio).round() as u32).min(limit);
 	let height = ((f64::from(canvas.element.client_height()) * ratio).round() as u32).min(limit);
+
 	if width > 0 && height > 0 && (width != config.width || height != config.height) {
 		canvas.element.set_width(width);
 		canvas.element.set_height(height);
 		config.width = width;
+
 		config.height = height;
 		surface.configure(gpu.device(), config);
 	}
+
 	(width, height)
 }
 
@@ -516,9 +552,11 @@ fn frame(canvas: &Rc<Canvas>, time: f64) -> bool {
 		return false;
 	};
 	let (width, height) = fit(canvas, config, surface, gpu);
+
 	if width == 0 || height == 0 {
 		return false;
 	}
+
 	let texture = match surface.get_current_texture() {
 		wgpu::CurrentSurfaceTexture::Success(texture)
 		| wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -528,9 +566,11 @@ fn frame(canvas: &Rc<Canvas>, time: f64) -> bool {
 		}
 		_ => return true,
 	};
+
 	let view = texture
 		.texture
 		.create_view(&wgpu::TextureViewDescriptor::default());
+
 	let target = RenderTarget::new(&view, config.format, config.width, config.height);
 	let outcome = with_scene(canvas.scene, |scene| {
 		if scene.renderer.is_none() {
@@ -541,20 +581,24 @@ fn frame(canvas: &Rc<Canvas>, time: f64) -> bool {
 			Some(last) if time > last => (time - last) as f32,
 			_ => 0.0,
 		};
+
 		let renderer = scene.renderer.as_mut().expect("the renderer was created");
 		if scene.time.is_none_or(|last| time > last) {
 			scene.time = Some(time);
 			renderer.advance(elapsed);
 		}
+
 		// A renderer is bound to the device it was made on; under WebGL2 only
 		// the first canvas showing a scene can draw it.
 		if !renderer.gpu().same_device(gpu) {
 			return Ok(false);
 		}
+
 		renderer.render(&target)?;
 		Ok::<_, crate::Error>(renderer.world().needs_frame())
 	});
 	gpu.queue().present(texture);
+
 	match outcome {
 		Some(Ok(more)) => {
 			// Finished clips and raycasts queue events while drawing.
@@ -579,6 +623,7 @@ fn notify_events(id: SceneId) {
 			.map(|scene| std::mem::take(&mut scene.waiters))
 			.unwrap_or_default()
 	});
+
 	for waiter in waiters {
 		waiter.wake();
 	}

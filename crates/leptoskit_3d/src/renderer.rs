@@ -269,6 +269,129 @@ struct Draw {
 	instances: std::ops::Range<u32>,
 }
 
+/// What every view can see, and the first view's eye for sorting.
+struct Sight {
+	frustums: Vec<Frustum>,
+	eye: Mat4,
+}
+
+impl Sight {
+	fn sees(&self, bounds: &Aabb) -> bool {
+		self.frustums.iter().any(|frustum| frustum.sees(bounds))
+	}
+}
+
+/// One model instance's state for a frame, copied out of the world.
+struct ModelState {
+	asset: Arc<crate::asset::Asset>,
+	weights: Vec<Vec<f32>>,
+	overrides: Vec<crate::world::Overrides>,
+	hidden: Vec<bool>,
+	worlds: Vec<Mat4>,
+	/// Per node: a skinned part's joint matrices and posed bounds.
+	skins: Vec<Option<(Vec<Mat4>, Aabb)>>,
+	cast_shadow: bool,
+	/// The height of the instance's origin, where its shadow falls.
+	ground: f32,
+}
+
+impl ModelState {
+	/// The state of the node `id`, if it is a visible, loaded model.
+	fn of(world: &World, id: crate::protocol::NodeId) -> Option<Self> {
+		let node = &world.nodes[&id];
+		let instance = node.instance.as_ref().filter(|_| !node.hidden)?;
+		let asset = instance.asset.clone()?;
+		let pose = instance.pose.as_ref()?;
+		let skins = (0..asset.nodes.len())
+			.map(|index| {
+				raycast::joint_matrices(&asset, instance, index)
+					.zip(raycast::skinned_bounds(&asset, instance, index))
+			})
+			.collect();
+
+		Some(Self {
+			weights: pose.weights.clone(),
+			overrides: instance.overrides.clone(),
+			hidden: instance.hidden.clone(),
+			worlds: instance.world.clone(),
+			skins,
+			cast_shadow: instance.cast_shadow,
+			ground: node.world.w_axis.y,
+			asset,
+		})
+	}
+}
+
+/// A mesh node of a model: which one, its asset's slot, and its joints.
+struct Part<'a> {
+	model: &'a ModelState,
+	index: usize,
+	slot: usize,
+	joints: u32,
+}
+
+/// A primitive's instance attributes: its matrix, its part's overrides,
+/// and where its joints and morph weights start (`[joints, morph]`).
+fn instance_record(
+	part: &crate::world::Overrides,
+	material: &crate::asset::Material,
+	model: Mat4,
+	[joints, morph]: [u32; 2],
+) -> InstanceRecord {
+	let emissive = match (part.emissive, part.emissive_strength) {
+		(None, None) => [0.0, 0.0, 0.0, -1.0],
+		(color, strength) => {
+			let color = color.unwrap_or(material.emissive);
+			let strength = strength.unwrap_or(material.emissive_strength);
+			[color[0], color[1], color[2], strength]
+		}
+	};
+	let rim = part.rim;
+
+	InstanceRecord {
+		model: model.to_cols_array_2d(),
+		tint: [
+			part.color[0],
+			part.color[1],
+			part.color[2],
+			part.color[3] * part.opacity,
+		],
+		emissive,
+		rim: [rim.color[0], rim.color[1], rim.color[2], rim.strength],
+		params: [joints, morph, rim.power.to_bits(), 0],
+	}
+}
+
+/// How much wider than its footprint a model's shadow is, so the soft edge
+/// shows past the model.
+const SHADOW_SPREAD: f32 = 1.3;
+/// The smallest half-width a shadow has, in metres.
+const SHADOW_MIN_RADIUS: f32 = 0.05;
+
+/// The soft shadow under a model with `bounds` standing at `ground`, if it
+/// casts one any view sees. It fades as the model rises.
+fn shadow_record(bounds: Aabb, ground: f32, opacity: f32, sight: &Sight) -> Option<ShadowRecord> {
+	if opacity <= 0.0 || bounds.is_empty() {
+		return None;
+	}
+
+	let extent = (bounds.max - bounds.min) * 0.5;
+	let radius_x = extent.x.max(SHADOW_MIN_RADIUS) * SHADOW_SPREAD;
+	let radius_z = extent.z.max(SHADOW_MIN_RADIUS) * SHADOW_SPREAD;
+	let height = (bounds.min.y - ground).max(0.0);
+	let fade = (1.0 - height / (2.0 * radius_x.max(radius_z))).clamp(0.0, 1.0);
+	let center = bounds.center();
+	let area = Aabb {
+		min: Vec3::new(center.x - radius_x, ground, center.z - radius_z),
+		max: Vec3::new(center.x + radius_x, ground, center.z + radius_z),
+	};
+
+	(fade > 0.0 && sight.sees(&area)).then_some(ShadowRecord {
+		center: [center.x, ground, center.z, opacity * fade],
+		radii: [radius_x, radius_z, 0.0, 0.0],
+	})
+}
+
 struct Attachments {
 	key: (u32, u32, wgpu::TextureFormat, u32),
 	color: Option<wgpu::TextureView>,
@@ -361,10 +484,13 @@ impl Renderer {
 	/// Draws the scene into `target`, replacing what it held.
 	pub fn render(&mut self, target: &RenderTarget<'_>) -> Result<FrameStats, Error> {
 		let [width, height] = target.size;
+
 		if width == 0 || height == 0 {
 			return Ok(FrameStats::default());
 		}
+
 		let limit = self.gpu.device().limits().max_texture_dimension_2d;
+
 		if width > limit || height > limit {
 			return Err(Error::TooLarge {
 				width,
@@ -372,7 +498,9 @@ impl Renderer {
 				limit,
 			});
 		}
+
 		let views = self.views(target)?;
+
 		if let TargetColor::Layers(layers) = target.color
 			&& layers.len() != views.len()
 		{
@@ -400,6 +528,7 @@ impl Renderer {
 					label: Some("leptoskit_3d"),
 				});
 		let clear = self.clear_color(target);
+
 		let passes: Vec<(&wgpu::TextureView, std::ops::Range<usize>)> = match target.color {
 			TargetColor::View(view) => vec![(view, 0..views.len())],
 			TargetColor::Layers(layers) => {
@@ -410,15 +539,18 @@ impl Renderer {
 					.collect()
 			}
 		};
+
 		for (view, range) in passes {
 			let attachments = self
 				.attachments
 				.as_ref()
 				.expect("attachments were prepared");
+
 			let (color_view, resolve) = match &attachments.color {
 				Some(msaa) => (msaa, Some(view)),
 				None => (view, None),
 			};
+
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("leptoskit_3d"),
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -444,19 +576,23 @@ impl Renderer {
 				}),
 				..wgpu::RenderPassDescriptor::default()
 			});
+
 			for index in range {
 				let [x, y, w, h] = views[index].viewport;
 				pass.set_viewport(x, y, w, h, 0.0, 1.0);
+
 				if let Some(background) = &background {
 					pass.set_pipeline(&pipelines.background);
 					pass.set_bind_group(0, background, &[]);
 					pass.draw(0..3, 0..1);
 				}
+
 				let offset = (index as u64 * GLOBALS_STRIDE) as u32;
 				pass.set_bind_group(0, &globals, &[offset]);
 				self.draw_meshes(&mut pass, &pipelines, &assets, &draws, |draw| {
 					!draw.variant.blend
 				});
+
 				if shadow_count > 0
 					&& let Some(buffer) = &self.shadows.buffer
 				{
@@ -469,6 +605,7 @@ impl Renderer {
 				});
 			}
 		}
+
 		self.gpu.queue().submit([encoder.finish()]);
 		self.assets = assets;
 		let instances = draws.iter().map(|draw| draw.instances.len() as u32).sum();
@@ -489,9 +626,11 @@ impl Renderer {
 		if target.views.len() > MAX_VIEWS {
 			return Err(Error::Target("a target has more views than the limit"));
 		}
+
 		if !target.views.is_empty() {
 			return Ok(target.views.to_vec());
 		}
+
 		let [width, height] = target.size;
 		let (view, projection) = self.world.camera.matrices(width as f32 / height as f32);
 		Ok(vec![ViewParams {
@@ -507,9 +646,11 @@ impl Renderer {
 	/// the device has no copy.
 	fn asset_slot(&mut self, asset: &Arc<crate::asset::Asset>) -> usize {
 		let key = Arc::as_ptr(asset) as usize;
+
 		if let Some(index) = self.asset_index.get(&key) {
 			return *index;
 		}
+
 		let uploaded = self
 			.shared
 			.asset(self.gpu.device(), self.gpu.queue(), asset);
@@ -521,11 +662,13 @@ impl Renderer {
 	/// Writes `matrices` as three rows each, returning the first texel.
 	fn push_joints(&mut self, matrices: &[Mat4]) -> u32 {
 		let first = self.texels.len() as u32;
+
 		for matrix in matrices {
 			for index in 0..3 {
 				self.texels.push(matrix.row(index).to_array());
 			}
 		}
+
 		first
 	}
 
@@ -538,23 +681,26 @@ impl Renderer {
 			.enumerate()
 			.filter(|(_, weight)| *weight != 0.0)
 			.collect();
+
 		if active.is_empty() {
 			return NONE;
 		}
+
 		let header = self.texels.len() as u32;
 		self.texels
 			.push([base as f32, vertex_count as f32, active.len() as f32, 0.0]);
+
 		for pair in active.chunks(2) {
 			let second = pair.get(1).copied().unwrap_or((0, 0.0));
 			self.texels
 				.push([pair[0].0 as f32, pair[0].1, second.0 as f32, second.1]);
 		}
+
 		header
 	}
 
 	/// Collects every visible primitive of every instance, with its instance
 	/// record, culling what no view sees.
-	#[allow(clippy::too_many_lines)]
 	fn build(&mut self, views: &[ViewParams]) {
 		self.items.clear();
 		self.texels.clear();
@@ -563,158 +709,133 @@ impl Renderer {
 		self.asset_index.clear();
 		// Texel 0 is never a valid offset, so a zeroed record reads nothing.
 		self.texels.push([0.0; 4]);
-		let frustums: Vec<Frustum> = views
-			.iter()
-			.map(|view| Frustum::new(&(view.projection * view.view)))
-			.collect();
-		let eye_view = views[0].view;
+		let sight = Sight {
+			frustums: views
+				.iter()
+				.map(|view| Frustum::new(&(view.projection * view.view)))
+				.collect(),
+			eye: views[0].view,
+		};
 		let shadow = self.world.settings.light.shadow;
-		let mut culled = 0;
 		let mut ids: Vec<_> = self.world.nodes.keys().copied().collect();
 		ids.sort_unstable();
+		self.stats.culled = 0;
+
 		for id in ids {
-			let node = &self.world.nodes[&id];
-			let (Some(instance), false) = (&node.instance, node.hidden) else {
+			let Some(model) = ModelState::of(&self.world, id) else {
 				continue;
 			};
-			let Some(asset) = instance.asset.clone() else {
-				continue;
-			};
-			let (Some(pose), ground) = (&instance.pose, node.world.w_axis.y) else {
-				continue;
-			};
-			let pose_weights: Vec<Vec<f32>> = pose.weights.clone();
-			let overrides = instance.overrides.clone();
-			let hidden = instance.hidden.clone();
-			let worlds = instance.world.clone();
-			let cast_shadow = instance.cast_shadow;
-			let skins: Vec<Option<(Vec<Mat4>, Aabb)>> = asset
-				.nodes
-				.iter()
-				.enumerate()
-				.map(|(index, _)| {
-					raycast::joint_matrices(&asset, instance, index)
-						.zip(raycast::skinned_bounds(&asset, instance, index))
-				})
-				.collect();
-			let slot = self.asset_slot(&asset);
-			let mut instance_bounds = Aabb::EMPTY;
-			for (index, asset_node) in asset.nodes.iter().enumerate() {
-				let Some(mesh) = asset_node.mesh else {
-					continue;
-				};
-				let part = overrides[index];
-				if hidden[index] || part.opacity <= 0.0 {
-					continue;
-				}
-				// A skinned part's joints, written once for all its primitives.
-				let joint_offset = match &skins[index] {
-					Some((matrices, _)) => self.push_joints(matrices),
-					None => NONE,
-				};
-				for primitive in &asset.meshes[mesh].primitives {
-					let skinned = primitive.skin_base.is_some() && skins[index].is_some();
-					let bounds = match (&skins[index], skinned) {
-						(Some((_, bounds)), true) => *bounds,
-						_ => primitive.bounds.transformed(&worlds[index]),
-					};
-					instance_bounds = instance_bounds.union(bounds);
-					let weights = &pose_weights[index];
-					let unusual_weights =
-						weights.iter().any(|weight| !(0.0..=1.0).contains(weight));
-					if !unusual_weights && !frustums.iter().any(|frustum| frustum.sees(&bounds)) {
-						culled += 1;
-						continue;
-					}
-					let material = &asset.materials[primitive.material];
-					let tint = [
-						part.color[0],
-						part.color[1],
-						part.color[2],
-						part.color[3] * part.opacity,
-					];
-					let blend = material.alpha == AlphaMode::Blend || tint[3] < 1.0;
-					let joints = if skinned { joint_offset } else { NONE };
-					let morph = match primitive.morph {
-						Some(range) if self.assets[slot].morphs.is_some() => {
-							self.push_morphs(
-								range.base / 2,
-								primitive.vertex_count,
-								&weights[..weights.len().min(range.targets as usize)],
-							)
-						}
-						_ => NONE,
-					};
-					let emissive = match (part.emissive, part.emissive_strength) {
-						(None, None) => [0.0, 0.0, 0.0, -1.0],
-						(color, strength) => {
-							let color = color.unwrap_or(material.emissive);
-							let strength = strength.unwrap_or(material.emissive_strength);
-							[color[0], color[1], color[2], strength]
-						}
-					};
-					let model = if skinned {
-						Mat4::IDENTITY
-					} else {
-						worlds[index]
-					};
-					let depth = -(eye_view * bounds.center().extend(1.0)).z;
-					self.items.push(Item {
-						variant: Variant {
-							skinned,
-							blend,
-							double_sided: material.double_sided,
-						},
-						asset: slot,
-						material: primitive.material,
-						first_index: primitive.first_index,
-						index_count: primitive.index_count,
-						vertex_offset: u64::from(primitive.base_vertex)
-							* size_of::<crate::asset::Vertex>() as u64,
-						skin_offset: primitive.skin_base.filter(|_| skinned).map(|base| {
-							u64::from(base) * size_of::<crate::asset::SkinVertex>() as u64
-						}),
-						morphed: morph != NONE,
-						batchable: !skinned && morph == NONE,
-						depth,
-						record: InstanceRecord {
-							model: model.to_cols_array_2d(),
-							tint,
-							emissive,
-							rim: [
-								part.rim.color[0],
-								part.rim.color[1],
-								part.rim.color[2],
-								part.rim.strength,
-							],
-							params: [joints, morph, part.rim.power.to_bits(), 0],
-						},
-					});
-				}
-			}
-			if cast_shadow && shadow > 0.0 && !instance_bounds.is_empty() {
-				let extent = (instance_bounds.max - instance_bounds.min) * 0.5;
-				// Wider than the footprint, so the soft edge shows past the
-				// model.
-				let radius_x = extent.x.max(0.05) * 1.3;
-				let radius_z = extent.z.max(0.05) * 1.3;
-				let height = (instance_bounds.min.y - ground).max(0.0);
-				let fade = (1.0 - height / (2.0 * radius_x.max(radius_z))).clamp(0.0, 1.0);
-				let center = instance_bounds.center();
-				let record = ShadowRecord {
-					center: [center.x, ground, center.z, shadow * fade],
-					radii: [radius_x, radius_z, 0.0, 0.0],
-				};
-				let bounds = Aabb {
-					min: Vec3::new(center.x - radius_x, ground, center.z - radius_z),
-					max: Vec3::new(center.x + radius_x, ground + 0.01, center.z + radius_z),
-				};
-				if fade > 0.0 && frustums.iter().any(|frustum| frustum.sees(&bounds)) {
-					self.shadow_records.push(record);
-				}
+			let bounds = self.build_model(&model, &sight);
+
+			if model.cast_shadow
+				&& let Some(record) = shadow_record(bounds, model.ground, shadow, &sight)
+			{
+				self.shadow_records.push(record);
 			}
 		}
-		self.stats.culled = culled;
+	}
+
+	/// Adds a model's visible parts, returning its bounds in this pose.
+	fn build_model(&mut self, model: &ModelState, sight: &Sight) -> Aabb {
+		let slot = self.asset_slot(&model.asset);
+		let mut bounds = Aabb::EMPTY;
+
+		for (index, node) in model.asset.nodes.iter().enumerate() {
+			let Some(mesh) = node.mesh else {
+				continue;
+			};
+
+			if model.hidden[index] || model.overrides[index].opacity <= 0.0 {
+				continue;
+			}
+
+			// A skinned part's joints, written once for all its primitives.
+			let joints = match &model.skins[index] {
+				Some((matrices, _)) => self.push_joints(matrices),
+				None => NONE,
+			};
+
+			for primitive in &model.asset.meshes[mesh].primitives {
+				let part = Part {
+					model,
+					index,
+					slot,
+					joints,
+				};
+				bounds = bounds.union(self.build_primitive(&part, primitive, sight));
+			}
+		}
+
+		bounds
+	}
+
+	/// Adds one primitive's draw unless no view sees it, returning its bounds.
+	fn build_primitive(
+		&mut self,
+		part: &Part<'_>,
+		primitive: &crate::asset::Primitive,
+		sight: &Sight,
+	) -> Aabb {
+		let model = part.model;
+		let index = part.index;
+		let skinned = primitive.skin_base.is_some() && model.skins[index].is_some();
+		let bounds = match (&model.skins[index], skinned) {
+			(Some((_, bounds)), true) => *bounds,
+			_ => primitive.bounds.transformed(&model.worlds[index]),
+		};
+		let weights = &model.weights[index];
+		// Weights outside 0 to 1 can push vertices past the bounds the loader
+		// measured, so such parts are never culled.
+		let unusual = weights.iter().any(|weight| !(0.0..=1.0).contains(weight));
+
+		if !unusual && !sight.sees(&bounds) {
+			self.stats.culled += 1;
+
+			return bounds;
+		}
+
+		let morph = match primitive.morph {
+			Some(range) if self.assets[part.slot].morphs.is_some() => {
+				let active = &weights[..weights.len().min(range.targets as usize)];
+				self.push_morphs(range.base / 2, primitive.vertex_count, active)
+			}
+			_ => NONE,
+		};
+		let material = &model.asset.materials[primitive.material];
+		let record = instance_record(
+			&model.overrides[index],
+			material,
+			if skinned {
+				Mat4::IDENTITY
+			} else {
+				model.worlds[index]
+			},
+			[if skinned { part.joints } else { NONE }, morph],
+		);
+		let vertex_size = size_of::<crate::asset::Vertex>() as u64;
+		let skin_size = size_of::<crate::asset::SkinVertex>() as u64;
+		self.items.push(Item {
+			variant: Variant {
+				skinned,
+				blend: material.alpha == AlphaMode::Blend || record.tint[3] < 1.0,
+				double_sided: material.double_sided,
+			},
+			asset: part.slot,
+			material: primitive.material,
+			first_index: primitive.first_index,
+			index_count: primitive.index_count,
+			vertex_offset: u64::from(primitive.base_vertex) * vertex_size,
+			skin_offset: primitive
+				.skin_base
+				.filter(|_| skinned)
+				.map(|base| u64::from(base) * skin_size),
+			morphed: morph != NONE,
+			batchable: !skinned && morph == NONE,
+			depth: -(sight.eye * bounds.center().extend(1.0)).z,
+			record,
+		});
+
+		bounds
 	}
 
 	/// Sorts the items and merges identical opaque ones into instanced
@@ -732,9 +853,12 @@ impl Renderer {
 		transparent.sort_by(|a, b| b.depth.total_cmp(&a.depth));
 		let mut records = Vec::with_capacity(opaque.len() + transparent.len());
 		let mut draws: Vec<Draw> = Vec::new();
+
 		for item in opaque.into_iter().chain(transparent) {
 			let index = records.len() as u32;
+
 			records.push(item.record);
+
 			if let Some(last) = draws.last_mut()
 				&& item.batchable
 				&& !last.variant.blend
@@ -762,6 +886,7 @@ impl Renderer {
 				instances: index..index + 1,
 			});
 		}
+
 		self.instances.upload(
 			self.gpu.device(),
 			self.gpu.queue(),
@@ -778,6 +903,7 @@ impl Renderer {
 			.data
 			.as_ref()
 			.is_none_or(|(_, _, capacity)| *capacity < rows);
+
 		if replace {
 			let capacity = rows.next_power_of_two();
 			let texture = self.gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -797,6 +923,7 @@ impl Renderer {
 			let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 			self.data = Some((texture, view, capacity));
 		}
+
 		if let Some((texture, ..)) = &self.data {
 			self.gpu.queue().write_texture(
 				texture.as_image_copy(),
@@ -831,6 +958,7 @@ impl Renderer {
 		let settings = &self.world.settings;
 		let light = settings.light;
 		let toward = -Vec3::from(light.direction).normalize_or(Vec3::NEG_Y);
+
 		let (occlusion_x, occlusion_y, occlusion_params, occluding) = match &target.occlusion {
 			Some(occlusion) => {
 				(
@@ -842,7 +970,9 @@ impl Renderer {
 			}
 			None => ([0.0; 4], [0.0; 4], [0.0; 4], 0.0),
 		};
+
 		let mut bytes = vec![0_u8; GLOBALS_STRIDE as usize * views.len()];
+
 		for (index, view) in views.iter().enumerate() {
 			let camera = view.view.inverse().w_axis;
 			let uniform = GlobalsUniform {
@@ -868,10 +998,12 @@ impl Renderer {
 				occlusion_y,
 				occlusion_params,
 			};
+
 			let start = index * GLOBALS_STRIDE as usize;
 			bytes[start..start + size_of::<GlobalsUniform>()]
 				.copy_from_slice(bytemuck::bytes_of(&uniform));
 		}
+
 		self.gpu.queue().write_buffer(&self.globals, 0, &bytes);
 	}
 
@@ -883,6 +1015,7 @@ impl Renderer {
 		samples: u32,
 	) {
 		let key = (width, height, format, samples);
+
 		if self
 			.attachments
 			.as_ref()
@@ -957,10 +1090,12 @@ impl Renderer {
 		let Background::Camera(image) = target.background else {
 			return None;
 		};
+
 		let (mode, first, second) = match image.planes {
 			CameraPlanes::YCbCr { y, cbcr } => (1.0, y, cbcr),
 			CameraPlanes::Rgba(rgba) => (0.0, rgba, rgba),
 		};
+
 		let uniform = BackgroundUniform {
 			transform_x: row(&image.transform, 0),
 			transform_y: row(&image.transform, 1),
@@ -1017,6 +1152,7 @@ impl Renderer {
 				}
 			}
 		};
+
 		let encode = |value: f32| {
 			let value = value.clamp(0.0, 1.0);
 			f64::from(if target.format.is_srgb() {
@@ -1046,12 +1182,15 @@ impl Renderer {
 			return;
 		};
 		let mut current: Option<Variant> = None;
+
 		for draw in draws.iter().filter(|draw| include(draw)) {
 			if current != Some(draw.variant) {
 				pass.set_pipeline(&pipelines.meshes[&draw.variant]);
 				current = Some(draw.variant);
 			}
+
 			let asset = &assets[draw.asset];
+
 			pass.set_bind_group(1, &asset.materials[draw.material].bind_group, &[]);
 			pass.set_bind_group(
 				2,
@@ -1060,9 +1199,11 @@ impl Renderer {
 			);
 			pass.set_vertex_buffer(0, asset.vertices.slice(draw.vertex_offset..));
 			pass.set_vertex_buffer(1, instances.slice(..));
+
 			if let (Some(offset), Some(skin)) = (draw.skin_offset, &asset.skin) {
 				pass.set_vertex_buffer(2, skin.slice(offset..));
 			}
+
 			pass.set_index_buffer(asset.indices.slice(..), wgpu::IndexFormat::Uint32);
 			pass.draw_indexed(
 				draw.first_index..draw.first_index + draw.index_count,
@@ -1091,6 +1232,7 @@ impl Renderer {
 	/// `height`.
 	pub fn offscreen(&self, width: u32, height: u32) -> Result<wgpu::Texture, Error> {
 		let limit = self.gpu.device().limits().max_texture_dimension_2d;
+
 		if width == 0 || height == 0 || width > limit || height > limit {
 			return Err(Error::TooLarge {
 				width,
@@ -1098,6 +1240,7 @@ impl Renderer {
 				limit,
 			});
 		}
+
 		Ok(self.gpu.device().create_texture(&wgpu::TextureDescriptor {
 			label: Some("leptoskit_3d offscreen"),
 			size: wgpu::Extent3d {
@@ -1120,11 +1263,13 @@ impl Renderer {
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn read_back(&self, texture: &wgpu::Texture) -> Result<Vec<u8>, Error> {
 		use wgpu::TextureFormat as F;
+
 		let swap = match texture.format() {
 			F::Rgba8Unorm | F::Rgba8UnormSrgb => false,
 			F::Bgra8Unorm | F::Bgra8UnormSrgb => true,
 			format => return Err(Error::UnsupportedFormat(format)),
 		};
+
 		let (width, height) = (texture.width(), texture.height());
 		let device = self.gpu.device();
 		let row = width as usize * 4;
@@ -1154,6 +1299,7 @@ impl Renderer {
 				depth_or_array_layers: 1,
 			},
 		);
+
 		self.gpu.queue().submit([encoder.finish()]);
 		let (sender, receiver) = std::sync::mpsc::channel();
 		buffer.map_async(wgpu::MapMode::Read, .., move |result| {
@@ -1170,16 +1316,20 @@ impl Renderer {
 			.get_mapped_range(..)
 			.map_err(|error| Error::Readback(error.to_string()))?;
 		let mut pixels = Vec::with_capacity(row * height as usize);
+
 		for line in mapped.chunks(padded) {
 			pixels.extend_from_slice(&line[..row]);
 		}
+
 		drop(mapped);
 		buffer.unmap();
+
 		if swap {
 			for pixel in pixels.as_chunks_mut::<4>().0 {
 				pixel.swap(0, 2);
 			}
 		}
+
 		Ok(pixels)
 	}
 }

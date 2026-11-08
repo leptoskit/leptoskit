@@ -48,6 +48,7 @@ impl Pose {
 		self.translation.copy_from_slice(&other.translation);
 		self.rotation.copy_from_slice(&other.rotation);
 		self.scale.copy_from_slice(&other.scale);
+
 		for (weights, source) in self.weights.iter_mut().zip(&other.weights) {
 			weights.copy_from_slice(source);
 		}
@@ -91,6 +92,7 @@ fn local_time(time: f32, duration: f32, mode: LoopMode) -> f32 {
 	if duration <= 0.0 {
 		return 0.0;
 	}
+
 	match mode {
 		LoopMode::Once => time.clamp(0.0, duration),
 		LoopMode::Loop => time.rem_euclid(duration),
@@ -122,13 +124,16 @@ impl Animator {
 		} else {
 			0.0
 		};
+
 		if fade <= 0.0 || self.tracks.is_empty() || self.master <= 0.0 {
 			self.tracks.clear();
 		}
+
 		let fading = !self.tracks.is_empty();
 		// A stop in progress is cancelled: what is still showing fades into
 		// the new clip.
 		self.master = 1.0;
+
 		self.master_rate = 0.0;
 		self.tracks.push(Track {
 			clip,
@@ -157,15 +162,19 @@ impl Animator {
 	/// Moves time forward by `elapsed` seconds.
 	pub fn advance(&mut self, asset: &Asset, elapsed: f32) -> Advance {
 		let mut advance = Advance::default();
+
 		for track in &mut self.tracks {
 			let duration = asset.clips[track.clip].duration;
+
 			if !track.finished {
 				track.time += elapsed * track.speed;
+
 				if track.mode == LoopMode::Once
 					&& ((track.speed > 0.0 && track.time >= duration)
 						|| (track.speed < 0.0 && track.time <= 0.0))
 				{
 					track.time = track.time.clamp(0.0, duration);
+
 					track.finished = true;
 					advance.finished.push(track.clip);
 				}
@@ -174,24 +183,30 @@ impl Animator {
 					track.time = track.time.rem_euclid(duration * 2.0);
 				}
 			}
+
 			if track.fade_rate != 0.0 {
 				track.weight = (track.weight + track.fade_rate * elapsed).min(1.0);
+
 				if track.weight >= 1.0 {
 					track.fade_rate = 0.0;
 				}
 			}
 		}
+
 		if let Some(position) = self.tracks.iter().rposition(|track| track.weight >= 1.0) {
 			self.tracks.drain(..position);
 		}
+
 		if self.master_rate != 0.0 {
 			self.master += self.master_rate * elapsed;
+
 			if self.master <= 0.0 {
 				self.tracks.clear();
 				self.master = 1.0;
 				self.master_rate = 0.0;
 			}
 		}
+
 		advance
 	}
 
@@ -199,24 +214,30 @@ impl Animator {
 	pub fn sample(&self, asset: &Asset, rest: &Pose, pose: &mut Pose, touched: &mut Vec<usize>) {
 		pose.copy_from(rest);
 		touched.clear();
+
 		for (index, track) in self.tracks.iter().enumerate() {
 			let clip = &asset.clips[track.clip];
 			let time = local_time(track.time, clip.duration, track.mode);
 			let weight = if index == 0 { 1.0 } else { track.weight };
+
 			for channel in &clip.channels {
 				apply_channel(channel, time, weight, pose);
+
 				touched.push(channel.node);
 			}
 		}
+
 		if self.master < 1.0 {
 			let master = self.master.max(0.0);
 			touched.sort_unstable();
 			touched.dedup();
+
 			for &node in touched.iter() {
 				pose.translation[node] =
 					rest.translation[node].lerp(pose.translation[node], master);
 				pose.rotation[node] = rest.rotation[node].slerp(pose.rotation[node], master);
 				pose.scale[node] = rest.scale[node].lerp(pose.scale[node], master);
+
 				for (value, rest) in pose.weights[node].iter_mut().zip(&rest.weights[node]) {
 					*value = rest + (*value - rest) * master;
 				}
@@ -228,31 +249,39 @@ impl Animator {
 /// The keys around `time` and how far between them it is.
 fn keys(times: &[f32], time: f32) -> (usize, usize, f32, f32) {
 	let last = times.len() - 1;
+
 	if time <= times[0] {
 		return (0, 0, 0.0, 0.0);
 	}
+
 	if time >= times[last] {
 		return (last, last, 0.0, 0.0);
 	}
+
 	let next = times.partition_point(|key| *key <= time).min(last);
 	let previous = next - 1;
 	let span = times[next] - times[previous];
+
 	let t = if span > 0.0 {
 		(time - times[previous]) / span
 	} else {
 		0.0
 	};
+
 	(previous, next, t, span)
 }
 
 /// Samples `width` values from a channel at `time` into `output`.
 fn sample(channel: &Channel, time: f32, output: &mut [f32]) {
 	let width = channel.width;
+
 	if channel.times.is_empty() {
 		return;
 	}
+
 	let (previous, next, t, span) = keys(&channel.times, time);
 	let values = &channel.values;
+
 	match channel.interpolation {
 		Interpolation::Step => {
 			output.copy_from_slice(&values[previous * width..previous * width + width]);
@@ -288,6 +317,7 @@ fn sample(channel: &Channel, time: f32, output: &mut [f32]) {
 
 fn apply_channel(channel: &Channel, time: f32, weight: f32, pose: &mut Pose) {
 	let node = channel.node;
+
 	match channel.path {
 		ChannelPath::Translation | ChannelPath::Scale => {
 			let mut value = [0.0; 3];
@@ -314,6 +344,7 @@ fn apply_channel(channel: &Channel, time: f32, weight: f32, pose: &mut Pose) {
 				sample(channel, time, &mut value);
 				Quat::from_array(value)
 			};
+
 			let rotation = rotation.try_normalize().unwrap_or(Quat::IDENTITY);
 			let slot = &mut pose.rotation[node];
 			*slot = if weight >= 1.0 {
@@ -327,6 +358,7 @@ fn apply_channel(channel: &Channel, time: f32, weight: f32, pose: &mut Pose) {
 			if weights.len() != channel.width {
 				return;
 			}
+
 			let mut value = [0.0; crate::sanitize::MAX_MORPH_TARGETS];
 			let value = &mut value[..channel.width.min(crate::sanitize::MAX_MORPH_TARGETS)];
 			sample(channel, time, value);
@@ -404,6 +436,7 @@ mod tests {
 		);
 		sample(&cubic, 0.5, &mut out);
 		assert!((out[0] - 2.0).abs() < 1.0e-6);
+
 		sample(&cubic, 1.0, &mut out);
 		assert!((out[0] - 3.0).abs() < 1.0e-6);
 	}

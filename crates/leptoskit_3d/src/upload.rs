@@ -57,20 +57,24 @@ fn half_size(image: &Image) -> Image {
 	let width = (image.width / 2).max(1);
 	let height = (image.height / 2).max(1);
 	let mut pixels = vec![0; (width * height * 4) as usize];
+
 	for y in 0..height {
 		for x in 0..width {
 			for channel in 0..4 {
 				let mut sum = 0_u32;
+
 				for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
 					let sx = (x * 2 + dx).min(image.width - 1);
 					let sy = (y * 2 + dy).min(image.height - 1);
 					sum +=
 						u32::from(image.pixels[((sy * image.width + sx) * 4 + channel) as usize]);
 				}
+
 				pixels[((y * width + x) * 4 + channel) as usize] = (sum / 4) as u8;
 			}
 		}
 	}
+
 	Image {
 		width,
 		height,
@@ -95,6 +99,7 @@ fn upload_image(device: &wgpu::Device, queue: &wgpu::Queue, image: &Image) -> wg
 		view_formats: &[],
 	});
 	let mut level = image.clone();
+
 	for mip in 0..mips {
 		queue.write_texture(
 			wgpu::TexelCopyTextureInfo {
@@ -115,10 +120,12 @@ fn upload_image(device: &wgpu::Device, queue: &wgpu::Queue, image: &Image) -> wg
 				depth_or_array_layers: 1,
 			},
 		);
+
 		if mip + 1 < mips {
 			level = half_size(&level);
 		}
 	}
+
 	texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
@@ -162,12 +169,15 @@ fn upload_morphs(
 	if asset.morph_deltas.is_empty() {
 		return None;
 	}
+
 	let mut texels = pack_morphs(&asset.morph_deltas);
 	let rows = (texels.len() as u32).div_ceil(MORPH_WIDTH);
+
 	if rows > device.limits().max_texture_dimension_2d {
 		// The device cannot hold this many targets; the meshes draw unmorphed.
 		return None;
 	}
+
 	texels.resize((rows * MORPH_WIDTH) as usize, [0; 4]);
 	let texture = device.create_texture_with_data(
 		queue,
@@ -211,6 +221,7 @@ impl GpuAsset {
 				} else {
 					contents
 				},
+
 				usage,
 			})
 		};
@@ -249,6 +260,7 @@ impl GpuAsset {
 			}
 		};
 		let mut materials = Vec::with_capacity(asset.materials.len());
+
 		for material in &asset.materials {
 			let slots = [
 				material.base_color_texture,
@@ -257,16 +269,19 @@ impl GpuAsset {
 				material.occlusion_texture,
 				material.emissive_texture,
 			];
+
 			let mask = slots
 				.iter()
 				.enumerate()
 				.filter(|(_, slot)| slot.is_some())
 				.fold(0_u32, |mask, (index, _)| mask | (1 << index));
+
 			let (mode, cutoff) = match material.alpha {
 				AlphaMode::Opaque => (0, 0.0),
 				AlphaMode::Mask(cutoff) => (1, cutoff),
 				AlphaMode::Blend => (2, 0.0),
 			};
+
 			let uniform = MaterialUniform {
 				base_color: material.base_color,
 				emissive: [
@@ -302,6 +317,7 @@ impl GpuAsset {
 					} else {
 						wgpu::FilterMode::Linear
 					};
+
 					device.create_sampler(&wgpu::SamplerDescriptor {
 						label: Some("leptoskit_3d material"),
 						address_mode_u: address(sampler_desc.repeat_u),
@@ -324,12 +340,14 @@ impl GpuAsset {
 				binding: 0,
 				resource: uniform.as_entire_binding(),
 			}];
+
 			for (index, view) in views.iter().enumerate() {
 				entries.push(wgpu::BindGroupEntry {
 					binding: index as u32 + 1,
 					resource: wgpu::BindingResource::TextureView(view),
 				});
 			}
+
 			entries.push(wgpu::BindGroupEntry {
 				binding: 6,
 				resource: wgpu::BindingResource::Sampler(&sampler),
@@ -342,6 +360,7 @@ impl GpuAsset {
 				}),
 			});
 		}
+
 		Self {
 			vertices,
 			skin,
@@ -373,11 +392,13 @@ impl Growable {
 		if data.is_empty() {
 			return false;
 		}
+
 		let size = data.len() as u64;
 		let replaced = self
 			.buffer
 			.as_ref()
 			.is_none_or(|buffer| buffer.size() < size);
+
 		if replaced {
 			self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some(self.label),
@@ -386,9 +407,11 @@ impl Growable {
 				mapped_at_creation: false,
 			}));
 		}
+
 		if let Some(buffer) = &self.buffer {
 			queue.write_buffer(buffer, 0, data);
 		}
+
 		replaced
 	}
 }

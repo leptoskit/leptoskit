@@ -496,6 +496,7 @@ const SET_TRANSFORM: u8 = 5;
 const SET_VISIBLE: u8 = 6;
 const SET_PART_VISIBLE: u8 = 7;
 const PLAY: u8 = 8;
+
 const STOP: u8 = 9;
 const SET_MORPH_WEIGHT: u8 = 10;
 const SET_MATERIAL: u8 = 11;
@@ -547,9 +548,11 @@ impl Writer {
 	/// A string, cut at a character boundary to what a u16 length holds.
 	fn str(&mut self, value: &str) {
 		let mut end = value.len().min(usize::from(u16::MAX));
+
 		while !value.is_char_boundary(end) {
 			end -= 1;
 		}
+
 		self.u16(end as u16);
 		self.0.extend_from_slice(&value.as_bytes()[..end]);
 	}
@@ -580,6 +583,7 @@ impl<'a> Reader<'a> {
 		if self.bytes.len() < count {
 			return Err(DecodeError("it ends early"));
 		}
+
 		let (taken, rest) = self.bytes.split_at(count);
 		self.bytes = rest;
 		Ok(taken)
@@ -609,9 +613,11 @@ impl<'a> Reader<'a> {
 
 	fn floats<const N: usize>(&mut self) -> Result<[f32; N], DecodeError> {
 		let mut values = [0.0; N];
+
 		for value in &mut values {
 			*value = self.f32()?;
 		}
+
 		Ok(values)
 	}
 
@@ -625,9 +631,11 @@ impl<'a> Reader<'a> {
 
 	fn str(&mut self, limit: usize) -> Result<String, DecodeError> {
 		let length = usize::from(self.u16()?);
+
 		if length > limit {
 			return Err(DecodeError("a string is longer than its limit"));
 		}
+
 		std::str::from_utf8(self.take(length)?)
 			.map(str::to_owned)
 			.map_err(|_| DecodeError("a string is not UTF-8"))
@@ -656,13 +664,17 @@ impl<'a> Reader<'a> {
 		if self.take(4)? != magic {
 			return Err(DecodeError("it does not start with the expected magic"));
 		}
+
 		if self.u8()? != VERSION {
 			return Err(DecodeError("its version is not supported"));
 		}
+
 		let count = self.u32()? as usize;
+
 		if count > crate::MAX_OPS {
 			return Err(DecodeError("it holds more entries than the limit"));
 		}
+
 		Ok(count)
 	}
 }
@@ -902,6 +914,7 @@ impl Op {
 							2 => LoopMode::PingPong,
 							_ => return Err(DecodeError("an unknown loop mode")),
 						},
+
 						fade: reader.f32()?,
 					},
 				}
@@ -1035,9 +1048,11 @@ impl Event {
 		use crate::MAX_NAME_BYTES as NAME;
 		let count = |reader: &mut Reader<'_>| {
 			let count = reader.u32()? as usize;
+
 			if count > crate::MAX_OPS {
 				return Err(DecodeError("a list is longer than the limit"));
 			}
+
 			Ok(count)
 		};
 		Ok(match reader.u8()? {
@@ -1086,9 +1101,11 @@ pub fn encode_ops(ops: &[Op]) -> Vec<u8> {
 	writer.0.extend_from_slice(OPS_MAGIC);
 	writer.u8(VERSION);
 	writer.u32(ops.len() as u32);
+
 	for op in ops {
 		op.write(&mut writer);
 	}
+
 	writer.0
 }
 
@@ -1098,6 +1115,7 @@ pub fn decode_ops(bytes: &[u8]) -> Result<Vec<Op>, DecodeError> {
 	if bytes.len() > crate::MAX_BATCH_BYTES {
 		return Err(DecodeError("it is larger than the limit"));
 	}
+
 	let mut reader = Reader { bytes };
 	let count = reader.header(*OPS_MAGIC)?;
 	// Every op takes at least five bytes, so a count the bytes cannot hold
@@ -1105,13 +1123,17 @@ pub fn decode_ops(bytes: &[u8]) -> Result<Vec<Op>, DecodeError> {
 	if count > reader.bytes.len() / 5 + 1 {
 		return Err(DecodeError("it ends early"));
 	}
+
 	let mut ops = Vec::with_capacity(count);
+
 	for _ in 0..count {
 		ops.push(Op::read(&mut reader)?);
 	}
+
 	if !reader.bytes.is_empty() {
 		return Err(DecodeError("bytes are left over"));
 	}
+
 	Ok(ops)
 }
 
@@ -1121,9 +1143,11 @@ pub fn encode_events(events: &[Event]) -> Vec<u8> {
 	writer.0.extend_from_slice(EVENTS_MAGIC);
 	writer.u8(VERSION);
 	writer.u32(events.len() as u32);
+
 	for event in events {
 		event.write(&mut writer);
 	}
+
 	writer.0
 }
 
@@ -1131,15 +1155,20 @@ pub fn encode_events(events: &[Event]) -> Vec<u8> {
 pub fn decode_events(bytes: &[u8]) -> Result<Vec<Event>, DecodeError> {
 	let mut reader = Reader { bytes };
 	let count = reader.header(*EVENTS_MAGIC)?;
+
 	if count > reader.bytes.len() / 5 + 1 {
 		return Err(DecodeError("it ends early"));
 	}
+
 	let mut events = Vec::with_capacity(count);
+
 	for _ in 0..count {
 		events.push(Event::read(&mut reader)?);
 	}
+
 	if !reader.bytes.is_empty() {
 		return Err(DecodeError("bytes are left over"));
 	}
+
 	Ok(events)
 }

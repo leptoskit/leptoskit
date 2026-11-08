@@ -59,21 +59,26 @@ fn container(bytes: &[u8]) -> Result<(&[u8], Option<&[u8]>), LoadError> {
 	if !bytes.starts_with(b"glTF") {
 		return Ok((bytes, None));
 	}
+
 	let word = |offset: usize| -> Result<usize, LoadError> {
 		bytes
 			.get(offset..offset + 4)
 			.map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]) as usize)
 			.ok_or_else(|| LoadError::Format("the binary header ends early".into()))
 	};
+
 	if word(4)? != 2 {
 		return Err(LoadError::Format(
 			"only glTF 2 binaries are supported".into(),
 		));
 	}
+
 	let length = word(8)?.min(bytes.len());
 	let mut offset = 12;
 	let mut json = None;
+
 	let mut bin = None;
+
 	while offset + 8 <= length {
 		let size = word(offset)?;
 		let kind = word(offset + 4)?;
@@ -82,13 +87,17 @@ fn container(bytes: &[u8]) -> Result<(&[u8], Option<&[u8]>), LoadError> {
 			.checked_add(size)
 			.filter(|end| *end <= length)
 			.ok_or_else(|| LoadError::Format("a chunk runs past the end of the file".into()))?;
+
 		match kind {
 			0x4E4F_534A if json.is_none() => json = Some(&bytes[start..end]),
+
 			0x004E_4942 if bin.is_none() => bin = Some(&bytes[start..end]),
 			_ => {}
 		}
+
 		offset = end.next_multiple_of(4);
 	}
+
 	let json = json.ok_or_else(|| LoadError::Format("the binary has no JSON chunk".into()))?;
 	Ok((json, bin))
 }
@@ -109,15 +118,19 @@ fn decode_base64(text: &str) -> Result<Vec<u8>, LoadError> {
 		.filter(|byte| !byte.is_ascii_whitespace() && *byte != b'=')
 		.collect();
 	let mut output = Vec::with_capacity(digits.len() * 3 / 4);
+
 	for chunk in digits.chunks(4) {
 		let mut word = 0;
+
 		for (index, byte) in chunk.iter().enumerate() {
 			word |= value(*byte).ok_or_else(|| malformed("a data URI is not base64"))?
 				<< (18 - index * 6);
 		}
+
 		let bytes = word.to_be_bytes();
 		output.extend_from_slice(&bytes[1..chunk.len()]);
 	}
+
 	Ok(output)
 }
 
@@ -131,17 +144,22 @@ fn read_uri(
 		let (header, payload) = data
 			.split_once(',')
 			.ok_or_else(|| malformed("a data URI has no comma"))?;
+
 		if !header.ends_with(";base64") {
 			return Err(malformed("only base64 data URIs are supported"));
 		}
+
 		return decode_base64(payload);
 	}
+
 	let path = percent_decode(uri);
+
 	if !is_safe_asset_path(&path) {
 		return Err(LoadError::Resource(format!(
 			"the file refers to {path:?}, which is outside its folder"
 		)));
 	}
+
 	resolve(&path).map_err(LoadError::Resource)
 }
 
@@ -149,6 +167,7 @@ fn percent_decode(uri: &str) -> String {
 	let bytes = uri.as_bytes();
 	let mut output = Vec::with_capacity(bytes.len());
 	let mut index = 0;
+
 	while index < bytes.len() {
 		if bytes[index] == b'%'
 			&& let Some(hex) = uri.get(index + 1..index + 3)
@@ -161,6 +180,7 @@ fn percent_decode(uri: &str) -> String {
 			index += 1;
 		}
 	}
+
 	String::from_utf8_lossy(&output).into_owned()
 }
 
@@ -227,12 +247,15 @@ impl<'a> Document<'a> {
 		if bytes.len() > MAX_ASSET_BYTES {
 			return Err(LoadError::TooLarge("the file is larger than 128 MiB"));
 		}
+
 		let (json, bin) = container(bytes)?;
 		let root: json::Root =
 			serde_json::from_slice(json).map_err(|error| LoadError::Format(error.to_string()))?;
+
 		if !root.asset.version.starts_with('2') {
 			return Err(LoadError::Format("only glTF 2.0 is supported".into()));
 		}
+
 		if let Some(extension) = root
 			.extensions_required
 			.iter()
@@ -240,28 +263,37 @@ impl<'a> Document<'a> {
 		{
 			return Err(LoadError::Extension(extension.clone()));
 		}
+
 		if root.nodes.len() > MAX_ASSET_NODES {
 			return Err(LoadError::TooLarge("the file has too many nodes"));
 		}
+
 		if root.animations.len() > MAX_CLIPS {
 			return Err(LoadError::TooLarge("the file has too many animations"));
 		}
+
 		let mut buffers = Vec::with_capacity(root.buffers.len());
 		let mut total = 0_usize;
+
 		for (index, buffer) in root.buffers.iter().enumerate() {
 			let data: Cow<'a, [u8]> = match (&buffer.uri, bin) {
 				(Some(uri), _) => Cow::Owned(read_uri(uri, resolve)?),
+
 				(None, Some(bin)) if index == 0 => Cow::Borrowed(bin),
 				// A buffer with neither is a meshopt fallback, which the
 				// compressed views replace.
 				(None, _) => Cow::Borrowed(&[]),
 			};
+
 			total = total.saturating_add(data.len());
+
 			if total > MAX_ASSET_BYTES {
 				return Err(LoadError::TooLarge("the buffers are larger than 128 MiB"));
 			}
+
 			buffers.push(data);
 		}
+
 		let views = (0..root.buffer_views.len()).map(|_| None).collect();
 		let mut document = Self {
 			root,
@@ -275,6 +307,7 @@ impl<'a> Document<'a> {
 	/// Decodes every meshopt-compressed buffer view up front.
 	fn decompress(&mut self) -> Result<(), LoadError> {
 		let mut total = 0_usize;
+
 		for (index, view) in self.root.buffer_views.iter().enumerate() {
 			let Some(compressed) = view
 				.extensions
@@ -298,15 +331,18 @@ impl<'a> Document<'a> {
 				.checked_mul(compressed.byte_stride)
 				.ok_or(LoadError::TooLarge("a compressed view is too large"))?;
 			total = total.saturating_add(size);
+
 			if total > MAX_ASSET_BYTES * 2 {
 				return Err(LoadError::TooLarge("the decompressed views are too large"));
 			}
+
 			let mode = match compressed.mode.as_str() {
 				"ATTRIBUTES" => meshopt::Mode::Attributes,
 				"TRIANGLES" => meshopt::Mode::Triangles,
 				"INDICES" => meshopt::Mode::Indices,
 				_ => return Err(malformed("an unknown meshopt mode")),
 			};
+
 			let filter = match compressed.filter.as_deref().unwrap_or("NONE") {
 				"NONE" => meshopt::Filter::None,
 				"OCTAHEDRAL" => meshopt::Filter::Octahedral,
@@ -314,6 +350,7 @@ impl<'a> Document<'a> {
 				"EXPONENTIAL" => meshopt::Filter::Exponential,
 				_ => return Err(malformed("an unknown meshopt filter")),
 			};
+
 			let decoded = meshopt::decode(
 				source,
 				compressed.count,
@@ -323,6 +360,7 @@ impl<'a> Document<'a> {
 			)?;
 			self.views[index] = Some(decoded);
 		}
+
 		Ok(())
 	}
 
@@ -332,9 +370,11 @@ impl<'a> Document<'a> {
 			.buffer_views
 			.get(index)
 			.ok_or_else(|| malformed("an accessor names a missing buffer view"))?;
+
 		if let Some(decoded) = &self.views[index] {
 			return Ok((decoded, view.byte_stride));
 		}
+
 		let buffer = self
 			.buffers
 			.get(view.buffer)
@@ -367,38 +407,47 @@ impl<'a> Document<'a> {
 		let width = components(&accessor.kind)?;
 		let size = component_size(accessor.component_type)?;
 		let element = width * size;
+
 		if accessor.count > MAX_ASSET_INDICES {
 			return Err(LoadError::TooLarge("an accessor has too many elements"));
 		}
+
 		if let Some(view) = accessor.buffer_view {
 			let (bytes, stride) = self.view(view)?;
 			let stride = stride.unwrap_or(element).max(element);
+
 			if accessor.count > 0 {
 				let last = accessor
 					.byte_offset
 					.checked_add(stride * (accessor.count - 1) + element)
 					.ok_or_else(|| malformed("an accessor overflows"))?;
+
 				if last > bytes.len() {
 					return Err(malformed("an accessor runs past its buffer view"));
 				}
 			}
+
 			for item in 0..accessor.count {
 				let start = accessor.byte_offset + item * stride;
 				each(item, &bytes[start..start + element]);
 			}
 		} else {
 			let zeros = vec![0; element];
+
 			for item in 0..accessor.count {
 				each(item, &zeros);
 			}
 		}
+
 		if let Some(sparse) = &accessor.sparse {
 			if sparse.count > accessor.count {
 				return Err(malformed("a sparse accessor replaces more than it holds"));
 			}
+
 			let (indices, _) = self.view(sparse.indices.buffer_view)?;
 			let (values, _) = self.view(sparse.values.buffer_view)?;
 			let index_size = component_size(sparse.indices.component_type)?;
+
 			for item in 0..sparse.count {
 				let at = sparse.indices.byte_offset + item * index_size;
 				let target = indices
@@ -413,6 +462,7 @@ impl<'a> Document<'a> {
 				each(target, value);
 			}
 		}
+
 		Ok((width, accessor))
 	}
 
@@ -440,9 +490,11 @@ impl<'a> Document<'a> {
 		let width = components(&accessor.kind)?;
 		let size = component_size(accessor.component_type)?;
 		let component_type = accessor.component_type;
+
 		if component_type == 5126 {
 			return Err(malformed("indices or joints must be integers"));
 		}
+
 		let mut values = vec![0; accessor.count * width];
 		self.elements(index, |item, bytes| {
 			for (slot, chunk) in values[item * width..(item + 1) * width]
@@ -452,6 +504,7 @@ impl<'a> Document<'a> {
 				*slot = integer(chunk, component_type);
 			}
 		})?;
+
 		Ok((values, width))
 	}
 
@@ -481,16 +534,19 @@ pub(crate) fn load(
 fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadError> {
 	let root = &document.root;
 	let mut parents = vec![None; root.nodes.len()];
+
 	for (index, node) in root.nodes.iter().enumerate() {
 		for &child in &node.children {
 			if child >= root.nodes.len() || child == index {
 				return Err(malformed("a node has a missing child"));
 			}
+
 			if parents[child].replace(index).is_some() {
 				return Err(malformed("a node has two parents"));
 			}
 		}
 	}
+
 	for (index, node) in root.nodes.iter().enumerate() {
 		let (scale, rotation, translation) = match node.matrix {
 			Some(matrix) => Mat4::from_cols_array(&matrix).to_scale_rotation_translation(),
@@ -502,6 +558,7 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				)
 			}
 		};
+
 		if node.mesh.is_some_and(|mesh| mesh >= root.meshes.len())
 			|| node.skin.is_some_and(|skin| skin >= root.skins.len())
 		{
@@ -519,17 +576,20 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 			} else {
 				Quat::IDENTITY
 			},
+
 			scale,
 			mesh: node.mesh,
 			skin: node.skin,
 			weights: node.weights.clone(),
 		});
 	}
+
 	// A cycle leaves nodes with parents but never reached from a root.
 	let scene = root
 		.scene
 		.and_then(|scene| root.scenes.get(scene))
 		.or(root.scenes.first());
+
 	asset.roots = match scene {
 		Some(scene) => scene.nodes.clone(),
 		None => {
@@ -538,6 +598,7 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				.collect()
 		}
 	};
+
 	if asset
 		.roots
 		.iter()
@@ -547,12 +608,15 @@ fn load_nodes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 	}
 	let mut reached = vec![false; asset.nodes.len()];
 	let mut stack = asset.roots.clone();
+
 	while let Some(index) = stack.pop() {
 		if std::mem::replace(&mut reached[index], true) {
 			return Err(malformed("the node tree has a cycle"));
 		}
+
 		stack.extend(asset.nodes[index].children.iter().copied());
 	}
+
 	Ok(())
 }
 
@@ -565,6 +629,7 @@ fn texture_ref(
 		// Only the first texture coordinate set is read.
 		return Ok(None);
 	}
+
 	let texture = document
 		.root
 		.textures
@@ -573,9 +638,11 @@ fn texture_ref(
 	let Some(image) = texture.source else {
 		return Ok(None);
 	};
+
 	if image >= document.root.images.len() {
 		return Err(malformed("a texture names a missing image"));
 	}
+
 	let sampler = texture
 		.sampler
 		.and_then(|sampler| document.root.samplers.get(sampler));
@@ -602,6 +669,7 @@ fn load_materials(
 	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<(), LoadError> {
 	let mut used = vec![false; document.root.images.len()];
+
 	for material in &document.root.materials {
 		let pbr = &material.pbr_metallic_roughness;
 		let mut slot = |info: Option<(usize, u32)>| -> Result<Option<TextureRef>, LoadError> {
@@ -609,9 +677,11 @@ fn load_materials(
 				return Ok(None);
 			};
 			let texture = texture_ref(document, index, tex_coord)?;
+
 			if let Some(texture) = texture {
 				used[texture.image] = true;
 			}
+
 			Ok(texture)
 		};
 		let finite = |value: f32, fallback: f32| if value.is_finite() { value } else { fallback };
@@ -673,12 +743,15 @@ fn load_materials(
 				"BLEND" => AlphaMode::Blend,
 				_ => AlphaMode::Opaque,
 			},
+
 			double_sided: material.double_sided,
 			unlit: material.extensions.unlit.is_some(),
 		});
 	}
+
 	// The default material, for primitives that name none.
 	asset.materials.push(Material::default());
+
 	for (index, image) in document.root.images.iter().enumerate() {
 		asset.images.push(if used[index] {
 			load_image(document, image, resolve)?
@@ -690,6 +763,7 @@ fn load_materials(
 			}
 		});
 	}
+
 	Ok(())
 }
 
@@ -699,6 +773,7 @@ fn load_image(
 	resolve: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Image, LoadError> {
 	let owned;
+
 	let bytes: &[u8] = match (&image.uri, image.buffer_view) {
 		(_, Some(view)) => document.view(view)?.0,
 		(Some(uri), None) => {
@@ -707,6 +782,7 @@ fn load_image(
 		}
 		(None, None) => return Err(malformed("an image has neither a URI nor a buffer view")),
 	};
+
 	crate::image::decode(bytes).map_err(LoadError::Image)
 }
 
@@ -752,13 +828,16 @@ fn triangle_list(mode: u32, indices: Vec<u32>) -> Vec<u32> {
 /// Smooth normals weighted by triangle area, for meshes that have none.
 fn computed_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
 	let mut normals = vec![Vec3::ZERO; positions.len()];
+
 	for triangle in indices.as_chunks::<3>().0 {
 		let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|index| index as usize);
 		let normal = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
+
 		for index in [a, b, c] {
 			normals[index] += normal;
 		}
 	}
+
 	normals
 		.into_iter()
 		.map(|normal| normal.try_normalize().unwrap_or(Vec3::Y))
@@ -773,20 +852,26 @@ fn load_primitive(
 	target_count: usize,
 ) -> Result<Option<Primitive>, LoadError> {
 	let mode = primitive.mode.unwrap_or(4);
+
 	if !matches!(mode, 4..=6) {
 		// Points and lines are not drawn.
 		return Ok(None);
 	}
+
 	let count = primitive_vertices(document, primitive)?;
+
 	if asset.vertices.len() + count > MAX_ASSET_VERTICES {
 		return Err(LoadError::TooLarge("the meshes have too many vertices"));
 	}
+
 	let attribute = |name: &str| primitive.attributes.get(name).copied();
 	let read = |index: usize, width: usize| -> Result<Vec<f32>, LoadError> {
 		let (values, actual) = document.floats(index)?;
+
 		if values.len() / actual.max(1) != count || actual < width {
 			return Err(malformed("an attribute's count or type does not match"));
 		}
+
 		Ok(values
 			.chunks_exact(actual)
 			.flat_map(|chunk| chunk[..width].to_vec())
@@ -801,17 +886,22 @@ fn load_primitive(
 			if point.is_finite() { point } else { Vec3::ZERO }
 		})
 		.collect();
+
 	let indices = match primitive.indices {
 		Some(index) => document.integers(index)?.0,
 		None => (0..count as u32).collect(),
 	};
+
 	if indices.iter().any(|index| *index as usize >= count) {
 		return Err(malformed("an index is past the end of its vertices"));
 	}
+
 	let indices = triangle_list(mode, indices);
+
 	if asset.indices.len() + indices.len() > MAX_ASSET_INDICES {
 		return Err(LoadError::TooLarge("the meshes have too many indices"));
 	}
+
 	let normals: Vec<Vec3> = match attribute("NORMAL") {
 		Some(index) => {
 			read(index, 3)?
@@ -823,16 +913,19 @@ fn load_primitive(
 		}
 		None => computed_normals(&positions, &indices),
 	};
+
 	let uvs = match attribute("TEXCOORD_0") {
 		Some(index) => read(index, 2)?,
 		None => vec![0.0; count * 2],
 	};
+
 	let colors: Vec<[u8; 4]> = match attribute("COLOR_0") {
 		Some(index) => {
 			let (values, width) = document.floats(index)?;
 			if values.len() / width.max(1) != count || !(3..=4).contains(&width) {
 				return Err(malformed("COLOR_0 must be VEC3 or VEC4 per vertex"));
 			}
+
 			values
 				.chunks_exact(width)
 				.map(|chunk| {
@@ -846,11 +939,15 @@ fn load_primitive(
 		}
 		None => vec![[255; 4]; count],
 	};
+
 	let mut bounds = Aabb::EMPTY;
+
 	for point in &positions {
 		bounds.grow(*point);
 	}
+
 	let base_vertex = asset.vertices.len() as u32;
+
 	for index in 0..count {
 		asset.vertices.push(Vertex {
 			position: positions[index].to_array(),
@@ -859,6 +956,7 @@ fn load_primitive(
 			color: colors[index],
 		});
 	}
+
 	let skin_base = match (attribute("JOINTS_0"), attribute("WEIGHTS_0")) {
 		(Some(joints), Some(weights)) => {
 			let (joints, joint_width) = document.integers(joints)?;
@@ -866,6 +964,7 @@ fn load_primitive(
 			if joint_width != 4 || joints.len() != count * 4 {
 				return Err(malformed("JOINTS_0 must be VEC4 per vertex"));
 			}
+
 			let base = asset.skin_vertices.len() as u32;
 			for index in 0..count {
 				let mut weight: [f32; 4] = weights[index * 4..index * 4 + 4]
@@ -884,12 +983,14 @@ fn load_primitive(
 				} else {
 					[1.0, 0.0, 0.0, 0.0]
 				};
+
 				asset.skin_vertices.push(SkinVertex {
 					joints: [0, 1, 2, 3]
 						.map(|slot| joints[index * 4 + slot].min(u32::from(u16::MAX)) as u16),
 					weights: weight.map(|value| (value * 65535.0).round() as u16),
 				});
 			}
+
 			Some(base)
 		}
 		_ => None,
@@ -901,38 +1002,47 @@ fn load_primitive(
 			.targets
 			.len()
 			.min(target_count.max(primitive.targets.len()));
+
 		if targets > MAX_MORPH_TARGETS {
 			return Err(LoadError::TooLarge("a mesh has too many morph targets"));
 		}
+
 		let base = asset.morph_deltas.len() as u32;
 		let size = targets * count * 2;
+
 		if asset.morph_deltas.len() + size > MAX_ASSET_VERTICES * 4 {
 			return Err(LoadError::TooLarge("the morph targets are too large"));
 		}
+
 		asset
 			.morph_deltas
 			.resize(asset.morph_deltas.len() + size, [0.0; 4]);
+
 		for (target, attributes) in primitive.targets.iter().enumerate() {
 			for (slot, name) in [(0, "POSITION"), (1, "NORMAL")] {
 				let Some(&index) = attributes.get(name) else {
 					continue;
 				};
 				let deltas = read(index, 3)?;
+
 				for vertex in 0..count {
 					let at = base as usize + (target * count + vertex) * 2 + slot;
 					let delta = &deltas[vertex * 3..vertex * 3 + 3];
 					asset.morph_deltas[at] = [delta[0], delta[1], delta[2], 0.0];
+
 					if slot == 0 {
 						bounds.grow(positions[vertex] + Vec3::from_slice(delta));
 					}
 				}
 			}
 		}
+
 		Some(MorphRange {
 			base,
 			targets: targets as u32,
 		})
 	};
+
 	let first_index = asset.indices.len() as u32;
 	asset.indices.extend_from_slice(&indices);
 	let default_material = asset.materials.len() - 1;
@@ -960,17 +1070,20 @@ fn load_meshes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErr
 			.max()
 			.unwrap_or(0);
 		let mut primitives = Vec::with_capacity(mesh.primitives.len());
+
 		for primitive in &mesh.primitives {
 			if let Some(primitive) = load_primitive(document, asset, primitive, target_count)? {
 				primitives.push(primitive);
 			}
 		}
+
 		let mut target_names = mesh
 			.extras
 			.as_ref()
 			.map(|extras| extras.target_names.clone())
 			.unwrap_or_default();
 		target_names.resize_with(target_count, String::new);
+
 		let mut weights = mesh.weights.clone().unwrap_or_default();
 		weights.resize(target_count, 0.0);
 		asset.meshes.push(Mesh {
@@ -979,6 +1092,7 @@ fn load_meshes(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErr
 			weights,
 		});
 	}
+
 	Ok(())
 }
 
@@ -987,9 +1101,11 @@ fn load_skins(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 		if skin.joints.len() > MAX_JOINTS {
 			return Err(LoadError::TooLarge("a skin has too many joints"));
 		}
+
 		if skin.joints.iter().any(|joint| *joint >= asset.nodes.len()) {
 			return Err(malformed("a skin names a missing joint"));
 		}
+
 		let inverse_bind = match skin.inverse_bind_matrices {
 			Some(index) => {
 				let (values, width) = document.floats(index)?;
@@ -998,6 +1114,7 @@ fn load_skins(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 						"a skin's inverse bind matrices do not match its joints",
 					));
 				}
+
 				values
 					.as_chunks::<16>()
 					.0
@@ -1007,53 +1124,65 @@ fn load_skins(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 			}
 			None => vec![Mat4::IDENTITY; skin.joints.len()],
 		};
+
 		asset.skins.push(Skin {
 			joint_radius: vec![0.0; skin.joints.len()],
 			joints: skin.joints.clone(),
 			inverse_bind,
 		});
 	}
+
 	// Each joint's reach: how far the vertices it moves lie from it.
 	for node in &asset.nodes {
 		let (Some(mesh), Some(skin)) = (node.mesh, node.skin) else {
 			continue;
 		};
 		let skin = &mut asset.skins[skin];
+
 		for primitive in &asset.meshes[mesh].primitives {
 			let Some(skin_base) = primitive.skin_base else {
 				continue;
 			};
+
 			for vertex in 0..primitive.vertex_count as usize {
 				let position =
 					Vec3::from(asset.vertices[primitive.base_vertex as usize + vertex].position);
 				let influence = asset.skin_vertices[skin_base as usize + vertex];
+
 				for slot in 0..4 {
 					let joint = usize::from(influence.joints[slot]);
+
 					if influence.weights[slot] == 0 || joint >= skin.joints.len() {
 						continue;
 					}
+
 					let local = skin.inverse_bind[joint].transform_point3(position);
 					skin.joint_radius[joint] = skin.joint_radius[joint].max(local.length());
 				}
 			}
 		}
 	}
+
 	Ok(())
 }
 
 fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadError> {
 	let mut keyframes = 0_usize;
 	let mut cache: HashMap<usize, Vec<f32>> = HashMap::new();
+
 	for (index, animation) in document.root.animations.iter().enumerate() {
 		let mut channels = Vec::with_capacity(animation.channels.len());
 		let mut duration = 0.0_f32;
+
 		for channel in &animation.channels {
 			let Some(node) = channel.target.node else {
 				continue;
 			};
+
 			if node >= asset.nodes.len() {
 				return Err(malformed("an animation targets a missing node"));
 			}
+
 			let path = match channel.target.path.as_str() {
 				"translation" => ChannelPath::Translation,
 				"rotation" => ChannelPath::Rotation,
@@ -1061,10 +1190,12 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				"weights" => ChannelPath::Weights,
 				_ => continue,
 			};
+
 			let sampler = animation
 				.samplers
 				.get(channel.sampler)
 				.ok_or_else(|| malformed("an animation channel names a missing sampler"))?;
+
 			let interpolation = match sampler.interpolation.as_deref() {
 				Some("STEP") => Interpolation::Step,
 				Some("CUBICSPLINE") => Interpolation::CubicSpline,
@@ -1077,6 +1208,7 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				cache.insert(sampler.input, times.clone());
 				times
 			};
+
 			if times.iter().any(|time| !time.is_finite())
 				|| times.windows(2).any(|pair| pair[1] < pair[0])
 			{
@@ -1085,6 +1217,7 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				));
 			}
 			let (values, _) = document.floats(sampler.output)?;
+
 			let width = match path {
 				ChannelPath::Rotation => 4,
 				ChannelPath::Weights => {
@@ -1100,15 +1233,19 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 			} else {
 				width
 			};
+
 			if values.len() != times.len() * per_key {
 				return Err(malformed("an animation's outputs do not match its inputs"));
 			}
+
 			keyframes += times.len();
+
 			if keyframes > MAX_KEYFRAMES {
 				return Err(LoadError::TooLarge(
 					"the animations have too many keyframes",
 				));
 			}
+
 			duration = duration.max(times.last().copied().unwrap_or(0.0));
 			channels.push(Channel {
 				node,
@@ -1119,6 +1256,7 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 				width,
 			});
 		}
+
 		asset.clips.push(Clip {
 			name: animation
 				.name
@@ -1128,6 +1266,7 @@ fn load_clips(document: &Document<'_>, asset: &mut Asset) -> Result<(), LoadErro
 			channels,
 		});
 	}
+
 	Ok(())
 }
 
@@ -1139,6 +1278,7 @@ mod tests {
 	/// file declares, returning how many it checked.
 	fn check_positions(name: &str, document: &Document<'_>) -> usize {
 		let mut checked = 0;
+
 		for primitive in document
 			.root
 			.meshes
@@ -1151,6 +1291,7 @@ mod tests {
 				continue;
 			};
 			let (values, width) = document.floats(position).unwrap();
+
 			for (axis, value) in values
 				.chunks_exact(width)
 				.flat_map(|point| point[..3].iter().enumerate())
@@ -1177,6 +1318,7 @@ mod tests {
 			.iter()
 			.flat_map(|clip| &clip.channels)
 			.filter(|channel| channel.path == ChannelPath::Rotation);
+
 		for quaternion in rotations.flat_map(|channel| channel.values.as_chunks::<4>().0) {
 			let length = quaternion
 				.iter()
@@ -1198,6 +1340,7 @@ mod tests {
 	fn models_in_a_folder_decode_within_their_declared_bounds() {
 		let Ok(folder) = std::env::var("LEPTOSKIT_3D_MODELS") else {
 			eprintln!("skipping: LEPTOSKIT_3D_MODELS is not set");
+
 			return;
 		};
 		let mut paths: Vec<_> = std::fs::read_dir(&folder)
@@ -1207,9 +1350,11 @@ mod tests {
 			.collect();
 		paths.sort();
 		assert!(!paths.is_empty(), "no .glb files in {folder}");
+
 		for path in paths {
 			let name = path.file_name().unwrap().to_string_lossy().into_owned();
 			let bytes = std::fs::read(&path).unwrap();
+
 			let start = std::time::Instant::now();
 			let asset = load(&bytes, &mut |_| Err("none".into()))
 				.unwrap_or_else(|error| panic!("{name}: {error}"));

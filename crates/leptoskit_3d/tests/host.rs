@@ -137,6 +137,7 @@ fn failures_come_back_as_events() {
 	while events.len() < 2 && Instant::now() < deadline {
 		events.extend(next_events(plugin, 1));
 	}
+
 	assert!(
 		matches!(&events[0], Event::AssetFailed { asset: AssetId(1), message } if message.contains("does not exist")),
 		"{events:?}"
@@ -233,6 +234,7 @@ fn a_process_holds_a_bounded_number_of_scenes() {
 	for scene in 0..MAX_SCENES as u32 {
 		hub.apply_ops(SceneId(scene), Vec::new()).unwrap();
 	}
+
 	assert!(hub.apply_ops(SceneId(999), Vec::new()).is_err());
 	hub.close(SceneId(0));
 	assert!(hub.apply_ops(SceneId(999), Vec::new()).is_ok());

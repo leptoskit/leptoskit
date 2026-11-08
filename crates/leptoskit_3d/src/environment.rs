@@ -27,6 +27,7 @@ pub(crate) fn radiance(direction: Vec3) -> Vec3 {
 	} else {
 		horizon.lerp(ground, (-y).powf(0.35))
 	};
+
 	let key = Vec3::new(-0.45, 0.75, 0.48).normalize();
 	let lobe = direction.dot(key).max(0.0).powf(48.0) * 6.0;
 	sky + Vec3::splat(lobe)
@@ -37,6 +38,7 @@ pub(crate) fn radiance(direction: Vec3) -> Vec3 {
 pub(crate) fn face_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
 	let u = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
 	let v = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+
 	let direction = match face {
 		0 => Vec3::new(1.0, -v, -u),
 		1 => Vec3::new(-1.0, -v, u),
@@ -45,6 +47,7 @@ pub(crate) fn face_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
 		4 => Vec3::new(u, -v, 1.0),
 		_ => Vec3::new(-u, -v, -1.0),
 	};
+
 	direction.normalize()
 }
 
@@ -61,16 +64,20 @@ fn prefiltered(normal: Vec3, roughness: f32) -> Vec3 {
 	if roughness <= 0.0 {
 		return radiance(normal);
 	}
+
 	let alpha = roughness * roughness;
 	let up = if normal.y.abs() < 0.999 {
 		Vec3::Y
 	} else {
 		Vec3::X
 	};
+
 	let tangent = up.cross(normal).normalize();
+
 	let bitangent = normal.cross(tangent);
 	let mut sum = Vec3::ZERO;
 	let mut weight = 0.0;
+
 	for index in 0..SAMPLES {
 		let (u, v) = hammersley(index, SAMPLES);
 		let phi = 2.0 * std::f32::consts::PI * u;
@@ -81,11 +88,13 @@ fn prefiltered(normal: Vec3, roughness: f32) -> Vec3 {
 			+ normal * cos_theta;
 		let light = 2.0 * normal.dot(half) * half - normal;
 		let n_dot_l = normal.dot(light);
+
 		if n_dot_l > 0.0 {
 			sum += radiance(light) * n_dot_l;
 			weight += n_dot_l;
 		}
 	}
+
 	if weight > 0.0 {
 		sum / weight
 	} else {
@@ -108,6 +117,7 @@ pub(crate) fn bake_cubemap() -> Vec<Vec<[f32; 4]>> {
 					}
 				}
 			}
+
 			texels
 		})
 		.collect()
@@ -120,11 +130,14 @@ pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 	let mut coefficients = [Vec3::ZERO; 9];
 	let (rows, columns) = (64, 128);
 	let mut total = 0.0;
+
 	for row in 0..rows {
 		let theta = (row as f32 + 0.5) / rows as f32 * std::f32::consts::PI;
 		let solid = theta.sin();
+
 		for column in 0..columns {
 			let phi = (column as f32 + 0.5) / columns as f32 * 2.0 * std::f32::consts::PI;
+
 			let direction = Vec3::new(
 				theta.sin() * phi.cos(),
 				theta.cos(),
@@ -143,12 +156,15 @@ pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 				1.092_548 * x * z,
 				0.546_274 * (x * x - y * y),
 			];
+
 			for (coefficient, basis) in coefficients.iter_mut().zip(basis) {
 				*coefficient += color * basis * solid;
 			}
+
 			total += solid;
 		}
 	}
+
 	let scale = 4.0 * std::f32::consts::PI / total;
 	// The cosine lobe's band factors, over π for Lambert.
 	let band = [
@@ -167,10 +183,12 @@ pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 		0.546_274,
 	];
 	let mut out = [[0.0; 4]; 9];
+
 	for index in 0..9 {
 		let value = coefficients[index] * scale * band[index] * constants[index];
 		out[index] = [value.x, value.y, value.z, 0.0];
 	}
+
 	out
 }
 

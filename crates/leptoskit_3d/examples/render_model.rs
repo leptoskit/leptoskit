@@ -35,6 +35,7 @@ mod native {
 		let seconds: f32 = arguments.next().map_or(Ok(0.5), |value| value.parse())?;
 		let asset = Arc::new(Asset::from_slice(&std::fs::read(&input)?)?);
 		let gpu = Gpu::headless()?;
+
 		let mut renderer = Renderer::new(&gpu);
 		let world = renderer.world_mut();
 		world.apply([
@@ -61,6 +62,7 @@ mod native {
 			near: 0.05,
 			far: 50.0,
 		}]);
+
 		for part in std::env::var("HIDE")
 			.unwrap_or_default()
 			.split(',')
@@ -72,16 +74,20 @@ mod native {
 				visible: false,
 			}]);
 		}
+
 		if let Some(clip) = &clip {
 			world.apply([Op::Play {
 				node: NodeId(1),
 				play: Play::new(clip.clone()),
 			}]);
 		}
+
 		let steps = (seconds * 60.0) as usize;
+
 		for _ in 0..steps.max(1) {
 			renderer.advance(1.0 / 60.0);
 		}
+
 		let (width, height) = (720, 960);
 		let pixels = renderer.render_to_rgba(width, height)?;
 		let file = std::fs::File::create(&output)?;

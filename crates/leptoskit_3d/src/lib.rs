@@ -33,6 +33,7 @@ mod asset;
 mod environment;
 #[cfg(feature = "renderer")]
 pub mod gltf;
+
 #[cfg(feature = "renderer")]
 mod gpu;
 #[cfg(all(feature = "host", not(target_arch = "wasm32")))]

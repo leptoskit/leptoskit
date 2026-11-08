@@ -49,15 +49,19 @@ impl Overrides {
 		if let Some(color) = change.color {
 			self.color = color;
 		}
+
 		if change.emissive.is_some() {
 			self.emissive = change.emissive;
 		}
+
 		if change.emissive_strength.is_some() {
 			self.emissive_strength = change.emissive_strength;
 		}
+
 		if let Some(opacity) = change.opacity {
 			self.opacity = opacity;
 		}
+
 		if let Some(rim) = change.rim {
 			self.rim = rim;
 		}
@@ -126,6 +130,7 @@ impl Instance {
 		self.resolve_visibility();
 		self.resolve_materials();
 		self.resolve_morphs();
+
 		if let Some(play) = self.pending_play.take() {
 			self.play(&play);
 		}
@@ -138,12 +143,15 @@ impl Instance {
 			None => asset.roots.clone(),
 			Some(name) => asset.node_named(name).into_iter().collect(),
 		};
+
 		let mut nodes = Vec::new();
 		let mut stack = starts;
+
 		while let Some(node) = stack.pop() {
 			nodes.push(node);
 			stack.extend(asset.nodes[node].children.iter().copied());
 		}
+
 		nodes
 	}
 
@@ -152,10 +160,12 @@ impl Instance {
 			return;
 		};
 		self.hidden = vec![false; asset.nodes.len()];
+
 		for (part, visible) in &self.parts_visible {
 			if *visible {
 				continue;
 			}
+
 			for node in Self::subtree(asset, Some(part)) {
 				self.hidden[node] = true;
 			}
@@ -167,6 +177,7 @@ impl Instance {
 			return;
 		};
 		self.overrides = vec![Overrides::default(); asset.nodes.len()];
+
 		for (part, change) in &self.materials {
 			for node in Self::subtree(asset, part.as_deref()) {
 				self.overrides[node].apply(change);
@@ -187,15 +198,11 @@ impl Instance {
 					.unwrap_or_default()
 			})
 			.collect();
+
 		for ((part, target), weight) in &self.morphs {
 			for node in Self::subtree(asset, part.as_deref()) {
-				let Some(mesh) = asset.nodes[node].mesh else {
-					continue;
-				};
-				for (index, name) in asset.meshes[mesh].target_names.iter().enumerate() {
-					if name == target {
-						self.manual_weights[node][index] = Some(*weight);
-					}
+				for index in target_indices(asset, node, target) {
+					self.manual_weights[node][index] = Some(*weight);
 				}
 			}
 		}
@@ -204,13 +211,54 @@ impl Instance {
 	fn play(&mut self, play: &Play) {
 		let Some(asset) = &self.asset else {
 			self.pending_play = Some(play.clone());
+
 			return;
 		};
+
 		if let Some(index) = asset.clips.iter().position(|clip| clip.name == play.clip) {
 			let duration = asset.clips[index].duration;
 			self.animator
 				.play(index, play.speed, play.mode, play.fade, duration);
 		}
+	}
+
+	fn set_part_visible(&mut self, part: String, visible: bool) {
+		if self.parts_visible.len() < MAX_SETTINGS || self.parts_visible.contains_key(&part) {
+			self.parts_visible.insert(part, visible);
+			self.resolve_visibility();
+		}
+	}
+
+	fn stop(&mut self, fade: f32) {
+		self.pending_play = None;
+		self.animator.stop(fade);
+	}
+
+	fn set_morph(&mut self, part: Option<String>, target: String, weight: f32) {
+		let key = (part, target);
+
+		if self.morphs.len() < MAX_SETTINGS || self.morphs.contains_key(&key) {
+			self.morphs.insert(key, weight);
+			self.resolve_morphs();
+		}
+	}
+
+	/// Merges a material change into the one already set for `part`, or adds
+	/// it while there is room.
+	fn set_material(&mut self, part: Option<String>, material: &MaterialOverride) {
+		let full = self.materials.len() >= MAX_SETTINGS;
+		let existing = self
+			.materials
+			.iter_mut()
+			.find(|(existing, _)| *existing == part);
+
+		match existing {
+			Some((_, existing)) => merge(existing, material),
+			None if !full => self.materials.push((part, *material)),
+			None => return,
+		}
+
+		self.resolve_materials();
 	}
 
 	/// Advances the animation and samples the pose. Returns the clips played
@@ -221,16 +269,20 @@ impl Instance {
 			return Vec::new();
 		};
 		let advance = self.animator.advance(asset, elapsed);
+
 		if self.animator.is_active() {
 			self.animator.sample(asset, rest, pose, &mut self.touched);
 		} else {
 			pose.translation.copy_from_slice(&rest.translation);
+
 			pose.rotation.copy_from_slice(&rest.rotation);
 			pose.scale.copy_from_slice(&rest.scale);
+
 			for (weights, rest) in pose.weights.iter_mut().zip(&rest.weights) {
 				weights.copy_from_slice(rest);
 			}
 		}
+
 		for (weights, manual) in pose.weights.iter_mut().zip(&self.manual_weights) {
 			for (weight, manual) in weights.iter_mut().zip(manual) {
 				if let Some(manual) = manual {
@@ -238,6 +290,7 @@ impl Instance {
 				}
 			}
 		}
+
 		advance
 			.finished
 			.into_iter()
@@ -251,6 +304,7 @@ impl Instance {
 			return;
 		};
 		let mut stack: Vec<(usize, Mat4)> = asset.roots.iter().map(|node| (*node, root)).collect();
+
 		while let Some((node, parent)) = stack.pop() {
 			let local = Mat4::from_scale_rotation_translation(
 				pose.scale[node],
@@ -259,6 +313,7 @@ impl Instance {
 			);
 			let world = parent * local;
 			self.world[node] = world;
+
 			for child in &asset.nodes[node].children {
 				stack.push((*child, world));
 			}
@@ -269,6 +324,20 @@ impl Instance {
 	fn is_moving(&self) -> bool {
 		self.animator.is_moving()
 	}
+}
+
+/// The indices of the morph targets named `target` on `node`'s mesh.
+fn target_indices<'a>(
+	asset: &'a Asset,
+	node: usize,
+	target: &'a str,
+) -> impl Iterator<Item = usize> + 'a {
+	asset.nodes[node]
+		.mesh
+		.into_iter()
+		.flat_map(|mesh| asset.meshes[mesh].target_names.iter().enumerate())
+		.filter(move |(_, name)| *name == target)
+		.map(|(index, _)| index)
 }
 
 /// A node of the guest's scene.
@@ -400,6 +469,7 @@ impl World {
 	/// Applies a batch of ops, sanitizing each first.
 	pub fn apply(&mut self, ops: impl IntoIterator<Item = Op>) {
 		self.raycasts = 0;
+
 		for op in ops {
 			// A raycast reads the scene without changing what it shows.
 			self.changed |= !matches!(op, Op::Raycast { .. } | Op::RaycastScreen { .. });
@@ -418,17 +488,20 @@ impl World {
 		if !matches!(self.assets.get(&id), Some(Slot::Loading)) {
 			return;
 		}
+
 		match result {
 			Ok(asset) => {
 				let clips = asset.clip_names().map(str::to_owned).collect();
-				for node in self.nodes.values_mut() {
-					if let Some(instance) = &mut node.instance
-						&& instance.asset_id == id
-						&& instance.asset.is_none()
-					{
-						instance.bind(asset.clone());
-					}
+				let waiting = self
+					.nodes
+					.values_mut()
+					.filter_map(|node| node.instance.as_mut())
+					.filter(|instance| instance.asset_id == id && instance.asset.is_none());
+
+				for instance in waiting {
+					instance.bind(asset.clone());
 				}
+
 				self.assets.insert(id, Slot::Ready(asset));
 				self.push_event(Event::AssetLoaded { asset: id, clips });
 			}
@@ -437,6 +510,7 @@ impl World {
 				self.push_event(Event::AssetFailed { asset: id, message });
 			}
 		}
+
 		self.changed = true;
 	}
 
@@ -492,6 +566,7 @@ impl World {
 			self.events.pop_front();
 			self.dropped_events += 1;
 		}
+
 		self.events.push_back(event);
 	}
 
@@ -502,17 +577,21 @@ impl World {
 	/// Whether `node` is `ancestor` or under it.
 	fn is_within(&self, node: NodeId, ancestor: NodeId) -> bool {
 		let mut current = Some(node);
+
 		while let Some(id) = current {
 			if id == ancestor {
 				return true;
 			}
+
 			current = self.nodes.get(&id).and_then(|node| node.parent);
 		}
+
 		false
 	}
 
 	fn detach(&mut self, id: NodeId) {
 		let parent = self.nodes.get(&id).and_then(|node| node.parent);
+
 		match parent {
 			Some(parent) => {
 				if let Some(parent) = self.nodes.get_mut(&parent) {
@@ -528,6 +607,7 @@ impl World {
 			node.parent = parent;
 			node.bone = bone;
 		}
+
 		match parent.and_then(|parent| self.nodes.get_mut(&parent)) {
 			Some(parent) => parent.children.push(id),
 			None => self.roots.push(id),
@@ -538,17 +618,23 @@ impl World {
 		if self.assets.contains_key(&asset) {
 			return;
 		}
-		if self.assets.len() >= MAX_ASSETS || !is_safe_asset_path(&path) {
-			self.push_event(Event::AssetFailed {
-				asset,
-				message: if is_safe_asset_path(&path) {
-					"the scene already refers to the most assets it may".into()
-				} else {
-					format!("{path:?} is not a relative path inside the app's assets")
-				},
-			});
+
+		let refusal = if !is_safe_asset_path(&path) {
+			Some(format!(
+				"{path:?} is not a relative path inside the app's assets"
+			))
+		} else if self.assets.len() >= MAX_ASSETS {
+			Some("the scene already refers to the most assets it may".to_owned())
+		} else {
+			None
+		};
+
+		if let Some(message) = refusal {
+			self.push_event(Event::AssetFailed { asset, message });
+
 			return;
 		}
+
 		self.assets.insert(asset, Slot::Loading);
 		self.loads.push((asset, path));
 	}
@@ -557,11 +643,13 @@ impl World {
 		if self.nodes.contains_key(&node) || self.nodes.len() >= MAX_NODES {
 			return;
 		}
+
 		let instance = asset.map(|id| {
 			let mut instance = Instance::new(id);
 			if let Some(Slot::Ready(asset)) = self.assets.get(&id) {
 				instance.bind(asset.clone());
 			}
+
 			instance
 		});
 		self.nodes.insert(
@@ -585,8 +673,10 @@ impl World {
 		if !self.nodes.contains_key(&id) {
 			return;
 		}
+
 		self.detach(id);
 		let mut stack = vec![id];
+
 		while let Some(id) = stack.pop() {
 			if let Some(node) = self.nodes.remove(&id) {
 				stack.extend(node.children);
@@ -622,75 +712,24 @@ impl World {
 				node,
 				part,
 				visible,
-			} => {
-				if let Some(instance) = self.instance_mut(node)
-					&& (instance.parts_visible.len() < MAX_SETTINGS
-						|| instance.parts_visible.contains_key(&part))
-				{
-					instance.parts_visible.insert(part, visible);
-					instance.resolve_visibility();
-				}
-			}
-			Op::Play { node, play } => {
-				if let Some(instance) = self.instance_mut(node) {
-					instance.play(&play);
-				}
-			}
-			Op::Stop { node, fade } => {
-				if let Some(instance) = self.instance_mut(node) {
-					instance.pending_play = None;
-					instance.animator.stop(fade);
-				}
-			}
+			} => self.with_instance(node, |instance| instance.set_part_visible(part, visible)),
+			Op::Play { node, play } => self.with_instance(node, |instance| instance.play(&play)),
+			Op::Stop { node, fade } => self.with_instance(node, |instance| instance.stop(fade)),
 			Op::SetMorphWeight {
 				node,
 				part,
 				target,
 				weight,
-			} => {
-				if let Some(instance) = self.instance_mut(node) {
-					let key = (part, target);
-					if instance.morphs.len() < MAX_SETTINGS || instance.morphs.contains_key(&key) {
-						instance.morphs.insert(key, weight);
-						instance.resolve_morphs();
-					}
-				}
-			}
+			} => self.with_instance(node, |instance| instance.set_morph(part, target, weight)),
 			Op::SetMaterial {
 				node,
 				part,
 				material,
-			} => {
-				if let Some(instance) = self.instance_mut(node) {
-					let full = instance.materials.len() >= MAX_SETTINGS;
-					match instance
-						.materials
-						.iter_mut()
-						.find(|(existing, _)| *existing == part)
-					{
-						Some((_, existing)) => merge(existing, &material),
-						None if !full => instance.materials.push((part, material)),
-						None => return,
-					}
-					instance.resolve_materials();
-				}
-			}
+			} => self.with_instance(node, |instance| instance.set_material(part, &material)),
 			Op::SetShadow { node, cast } => {
-				if let Some(instance) = self.instance_mut(node) {
-					instance.cast_shadow = cast;
-				}
+				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}
-			Op::Attach { node, target, bone } => {
-				if node == target
-					|| !self.nodes.contains_key(&node)
-					|| !self.nodes.contains_key(&target)
-					|| self.is_within(target, node)
-				{
-					return;
-				}
-				self.detach(node);
-				self.adopt(node, Some(target), (!bone.is_empty()).then_some(bone));
-			}
+			Op::Attach { node, target, bone } => self.attach(node, target, bone),
 			Op::SetCamera {
 				transform,
 				fov_y,
@@ -724,27 +763,57 @@ impl World {
 				self.push_event(Event::RaycastHits { request, hits });
 			}
 			Op::RaycastScreen { request, x, y } => {
-				let (view, projection) = self.camera.matrices(self.aspect);
-				let inverse = (projection * view).inverse();
-				let ndc = Vec3::new(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0);
-				let near = inverse.project_point3(ndc);
-				let far = inverse.project_point3(ndc.with_z(1.0));
-				let hits = match (far - near).try_normalize() {
-					Some(direction) if near.is_finite() => {
-						self.limited_raycast(near, direction, near.distance(far))
-					}
-					_ => Vec::new(),
-				};
+				let hits = self.raycast_screen(x, y);
 				self.push_event(Event::RaycastHits { request, hits });
 			}
 		}
 	}
 
+	/// Runs `change` on the model instance at `node`, if there is one.
+	fn with_instance(&mut self, node: NodeId, change: impl FnOnce(&mut Instance)) {
+		if let Some(instance) = self.instance_mut(node) {
+			change(instance);
+		}
+	}
+
+	/// Moves `node` under `target`'s part `bone`, unless that would put a
+	/// node under itself.
+	fn attach(&mut self, node: NodeId, target: NodeId, bone: String) {
+		if node == target
+			|| !self.nodes.contains_key(&node)
+			|| !self.nodes.contains_key(&target)
+			|| self.is_within(target, node)
+		{
+			return;
+		}
+
+		self.detach(node);
+		self.adopt(node, Some(target), (!bone.is_empty()).then_some(bone));
+	}
+
+	/// Casts a ray from the camera through a point of the view.
+	fn raycast_screen(&mut self, x: f32, y: f32) -> Vec<Hit> {
+		let (view, projection) = self.camera.matrices(self.aspect);
+		let inverse = (projection * view).inverse();
+		let ndc = Vec3::new(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0);
+		let near = inverse.project_point3(ndc);
+		let far = inverse.project_point3(ndc.with_z(1.0));
+
+		match (far - near).try_normalize() {
+			Some(direction) if near.is_finite() => {
+				self.limited_raycast(near, direction, near.distance(far))
+			}
+			_ => Vec::new(),
+		}
+	}
+
 	fn limited_raycast(&mut self, origin: Vec3, direction: Vec3, max_distance: f32) -> Vec<Hit> {
 		self.raycasts += 1;
+
 		if self.raycasts > MAX_RAYCASTS_PER_BATCH {
 			return Vec::new();
 		}
+
 		// The ray needs the current pose, which the last advance computed;
 		// bring transforms up to date for ops earlier in this batch.
 		self.update_transforms();
@@ -759,7 +828,9 @@ impl World {
 		} else {
 			0.0
 		};
+
 		let mut finished = Vec::new();
+
 		for (id, node) in &mut self.nodes {
 			if let Some(instance) = &mut node.instance {
 				for clip in instance.advance(elapsed) {
@@ -767,15 +838,18 @@ impl World {
 				}
 			}
 		}
+
 		finished.sort_by_key(|event| {
 			match event {
 				Event::AnimationFinished { node, .. } => *node,
 				_ => NodeId(0),
 			}
 		});
+
 		for event in finished {
 			self.push_event(event);
 		}
+
 		self.update_transforms();
 		self.changed = false;
 	}
@@ -789,6 +863,7 @@ impl World {
 			.rev()
 			.map(|root| (*root, Mat4::IDENTITY, false))
 			.collect();
+
 		while let Some((id, parent_world, parent_hidden)) = stack.pop() {
 			let Some(node) = self.nodes.get(&id) else {
 				continue;
@@ -801,12 +876,15 @@ impl World {
 			let world = parent_world * local;
 			let hidden = parent_hidden || !node.visible;
 			let children = node.children.clone();
+
 			let node = self.nodes.get_mut(&id).expect("the node exists");
 			node.world = world;
 			node.hidden = hidden;
+
 			if let Some(instance) = &mut node.instance {
 				instance.update_world(world);
 			}
+
 			for child in children.into_iter().rev() {
 				let bone = self
 					.nodes
