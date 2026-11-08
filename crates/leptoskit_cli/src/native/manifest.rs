@@ -2,6 +2,7 @@
 mod queries;
 #[cfg(test)]
 mod scheme_tests;
+pub mod services;
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

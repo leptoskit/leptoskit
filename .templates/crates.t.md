@@ -363,6 +363,17 @@ and mobile, browser, and unsupported desktops return `Unavailable`.
 
 <!-- {/p_autostartSummary} -->
 
+<!-- {@p_backgroundSummary} -->
+
+Add `{{ plugin_background.package.name }}` as a direct dependency and select the `{{ plugin_background.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
+Android runs a foreground service with a persistent notification and wakes the app's
+`AppService` on a schedule, with a `WorkManager` fallback and an opt-in boot receiver; iOS
+registers `BGTaskScheduler` tasks that wake the `AppService`. iOS gives no guarantee of
+continuous execution, and macOS, desktop, and the browser report `Unavailable`.
+
+<!-- {/p_backgroundSummary} -->
+
 <!-- {@p_barometerSummary} -->
 
 Add `{{ plugin_barometer.package.name }}` as a direct dependency and select the `{{ plugin_barometer.package.metadata.leptoskit.runtime.name }}` plugin

@@ -93,6 +93,9 @@ object NativeApp {
 
     @JvmStatic external fun guestWake(guest: Long): Int
 
+    /** Runs a guest step for a platform background tick, marking the wake reason. */
+    @JvmStatic external fun guestWakeBackground(guest: Long): Int
+
     @JvmStatic external fun guestComplete(
         guest: Long,
         id: Long,

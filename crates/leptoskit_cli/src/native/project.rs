@@ -264,6 +264,11 @@ fn android_host(
 
 	let mut manifest =
 		super::manifest::merge(&manifest, &permissions, &query_actions, &query_intents)?;
+	manifest = super::manifest::services::app_components(
+		&manifest,
+		&android_services(registry),
+		&android_receivers(registry),
+	)?;
 	// `app.icon` becomes the launcher icons, in resources only leptoskit
 	// writes.
 	let res = dir.join("res");
@@ -317,6 +322,36 @@ fn android_dependencies(registry: &Registry) -> String {
 	}
 
 	output
+}
+
+fn android_services(registry: &Registry) -> Vec<super::manifest::services::ServiceComponent> {
+	registry
+		.plugins
+		.iter()
+		.flat_map(|plugin| &plugin.android_services)
+		.map(|service| {
+			super::manifest::services::ServiceComponent {
+				name: service.name.clone(),
+				foreground_service_type: service.foreground_service_type.clone(),
+				exported: service.exported,
+			}
+		})
+		.collect()
+}
+
+fn android_receivers(registry: &Registry) -> Vec<super::manifest::services::ReceiverComponent> {
+	registry
+		.plugins
+		.iter()
+		.flat_map(|plugin| &plugin.android_receivers)
+		.map(|receiver| {
+			super::manifest::services::ReceiverComponent {
+				name: receiver.name.clone(),
+				exported: receiver.exported,
+				actions: receiver.actions.clone(),
+			}
+		})
+		.collect()
 }
 
 fn copy_kotlin(package: &Path, destination: &Path, prefix: &str) -> Result<()> {

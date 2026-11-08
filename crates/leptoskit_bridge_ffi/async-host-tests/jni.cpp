@@ -22,6 +22,7 @@ extern "C" int32_t lk_guest_event(const lk_guest*, size_t, uint32_t, const uint8
 extern "C" int32_t lk_guest_frame(const lk_guest*, uint64_t, uint64_t) { std::abort(); }
 extern "C" int32_t lk_guest_frame_requested(const lk_guest*) { std::abort(); }
 extern "C" int32_t lk_guest_wake(const lk_guest*) { std::abort(); }
+extern "C" int32_t lk_guest_wake_background(const lk_guest*) { std::abort(); }
 extern "C" int32_t lk_guest_complete(const lk_guest*, uint64_t, int32_t, const uint8_t*, size_t) {
     std::abort();
 }

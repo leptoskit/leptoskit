@@ -61,6 +61,7 @@ pub use services::ServiceClose;
 pub use services::ServiceInstaller;
 use services::ServiceState;
 pub use services::ServiceWake;
+pub use services::ServiceWakeReason;
 pub use services::ServiceWork;
 pub use services::lk_app_activate_service;
 pub use services::lk_app_begin_close;
@@ -68,6 +69,7 @@ pub use services::lk_app_close_poll;
 pub use services::lk_app_close_release;
 pub use services::lk_app_next_cancelled;
 pub use services::lk_app_poll_service;
+pub use services::lk_app_set_service_wake_reason;
 pub use text::NativeTextMeasurer;
 pub use text::lk_app_set_text_measurer;
 
@@ -194,6 +196,9 @@ pub unsafe fn create_with_context(
 pub struct App {
 	host: Option<WasmHost<HeadlessBackend>>,
 	service: Option<ServiceState>,
+	/// The reason for the next service poll, set by the host before it wakes
+	/// the guest. Consumed by [`Self::poll_service`].
+	service_wake_reason: ServiceWakeReason,
 	close_scheduler: Option<CloseScheduler>,
 	close_wake: Option<ServiceWake>,
 	routed_requests: VecDeque<leptoskit_bridge::Request>,
@@ -250,6 +255,7 @@ impl App {
 		let mut app = Self {
 			host: Some(host),
 			service: None,
+			service_wake_reason: ServiceWakeReason::App,
 			close_scheduler: None,
 			close_wake: None,
 			routed_requests: VecDeque::new(),
@@ -360,6 +366,13 @@ impl App {
 		Ok(())
 	}
 
+	/// Records the reason for the next service poll. A host that polls on its
+	/// own thread (the Apple path) calls this before [`Self::poll_service`];
+	/// the guest-thread host sets it through its wake command instead.
+	pub fn set_service_wake_reason(&mut self, reason: ServiceWakeReason) {
+		self.service_wake_reason = reason;
+	}
+
 	/// Polls on a guest entry or a real service wake, never on an idle timer.
 	/// Unrelated work remains owned until the existing platform router takes
 	/// it.
@@ -372,7 +385,9 @@ impl App {
 			.as_mut()
 			.expect("live applications own an interpreter");
 
-		let work = match service.poll(host) {
+		let reason = self.service_wake_reason;
+		self.service_wake_reason = ServiceWakeReason::App;
+		let work = match service.poll(host, reason) {
 			Ok(work) => work,
 			Err(error) => {
 				self.error = format!("application service: {error:?}");

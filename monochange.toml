@@ -114,6 +114,7 @@ packages = [
 	"leptoskit_plugin_app_shortcuts",
 	"leptoskit_plugin_audio",
 	"leptoskit_plugin_autostart",
+	"leptoskit_plugin_background",
 	"leptoskit_plugin_badge",
 	"leptoskit_plugin_barometer",
 	"leptoskit_plugin_brightness",
@@ -405,6 +406,9 @@ path = "crates/leptoskit_plugin_audio"
 
 [package.leptoskit_plugin_autostart]
 path = "crates/leptoskit_plugin_autostart"
+
+[package.leptoskit_plugin_background]
+path = "crates/leptoskit_plugin_background"
 
 [package.leptoskit_plugin_badge]
 path = "crates/leptoskit_plugin_badge"

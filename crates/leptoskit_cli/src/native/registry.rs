@@ -123,6 +123,13 @@ pub struct Plugin {
 	/// builds with Swift Package Manager, which cannot integrate pods.
 	#[serde(default)]
 	pub apple_pods: Vec<ApplePod>,
+	/// `UIBackgroundModes` entries the plugin needs, such as `fetch` and
+	/// `processing`. Merged into the generated iOS `Info.plist`.
+	#[serde(default)]
+	pub apple_background_modes: Vec<String>,
+	/// `BGTaskSchedulerPermittedIdentifiers` entries the plugin registers.
+	#[serde(default)]
+	pub apple_bg_task_identifiers: Vec<String>,
 	pub android_type: Option<String>,
 	#[serde(default)]
 	pub android_context: bool,
@@ -142,6 +149,12 @@ pub struct Plugin {
 	/// Explicit Maven coordinates, never Gradle expressions or version ranges.
 	#[serde(default)]
 	pub android_dependencies: Vec<String>,
+	/// Plugin-declared Android `<service>` entries merged into the manifest.
+	#[serde(default)]
+	pub android_services: Vec<AndroidService>,
+	/// Plugin-declared Android `<receiver>` entries merged into the manifest.
+	#[serde(default)]
+	pub android_receivers: Vec<AndroidReceiver>,
 	/// Exported ArkTS class in `harmonyos/<type>.ts`, constructed by the
 	/// generated HarmonyOS registrant.
 	pub harmonyos_type: Option<String>,
@@ -173,6 +186,31 @@ pub struct Plugin {
 pub struct AndroidIntentQuery {
 	pub action: String,
 	pub scheme: String,
+}
+
+/// A plugin-declared Android manifest `<service>`, with the
+/// `foregroundServiceType` the app may start from the background. Both fields
+/// are written into generated XML, so they are validated down to XML-safe
+/// identifiers before generation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AndroidService {
+	pub name: String,
+	pub foreground_service_type: String,
+	#[serde(default)]
+	pub exported: bool,
+}
+
+/// A plugin-declared Android manifest `<receiver>` with its intent-filter
+/// actions, such as `android.intent.action.BOOT_COMPLETED`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AndroidReceiver {
+	pub name: String,
+	#[serde(default)]
+	pub exported: bool,
+	#[serde(default)]
+	pub actions: Vec<String>,
 }
 
 /// A `CocoaPod` the generated iOS Podfile installs, with an optional
@@ -662,6 +700,10 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 
 	validate_android_paths(plugin)?;
 
+	validate_android_components(plugin)?;
+
+	validate_apple_background(plugin)?;
+
 	if let Some(name) = &plugin.harmonyos_type {
 		anyhow::ensure!(identifier(name, "_"), "invalid ArkTS plugin type");
 	}
@@ -778,6 +820,74 @@ fn validate_frameworks(plugin: &Plugin) -> Result<()> {
 		anyhow::ensure!(
 			identifier(framework, ""),
 			"invalid Apple framework name in plugin {}: {framework}",
+			plugin.name
+		);
+	}
+
+	Ok(())
+}
+
+/// A foreground service type list is pipe-separated identifiers such as
+/// `dataSync|health`, or the single `none` value on Android 14+.
+fn foreground_service_type(value: &str) -> bool {
+	!value.is_empty() && value.split('|').all(|segment| identifier(segment, ""))
+}
+
+fn validate_android_components(plugin: &Plugin) -> Result<()> {
+	for service in &plugin.android_services {
+		anyhow::ensure!(
+			type_path(&service.name, "."),
+			"invalid Android service type in plugin {}",
+			plugin.name
+		);
+		anyhow::ensure!(
+			foreground_service_type(&service.foreground_service_type),
+			"invalid Android foreground service type in plugin {}: {}",
+			plugin.name,
+			service.foreground_service_type
+		);
+	}
+
+	for receiver in &plugin.android_receivers {
+		anyhow::ensure!(
+			type_path(&receiver.name, "."),
+			"invalid Android receiver type in plugin {}",
+			plugin.name
+		);
+
+		for action in &receiver.actions {
+			anyhow::ensure!(
+				action.contains('.') && type_path(action, "."),
+				"invalid fully qualified Android receiver action in plugin {}",
+				plugin.name
+			);
+		}
+	}
+
+	Ok(())
+}
+
+/// A `UIBackgroundModes` value is a simple hyphenated identifier, and a
+/// `BGTaskSchedulerPermittedIdentifiers` value is a reverse-DNS identifier.
+fn background_mode(value: &str) -> bool {
+	let mut bytes = value.bytes();
+	bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+		&& bytes.all(|byte| byte.is_ascii_alphanumeric() || b"-".contains(&byte))
+}
+
+fn validate_apple_background(plugin: &Plugin) -> Result<()> {
+	for mode in &plugin.apple_background_modes {
+		anyhow::ensure!(
+			background_mode(mode),
+			"invalid Apple background mode in plugin {}: {mode}",
+			plugin.name
+		);
+	}
+
+	for identifier in &plugin.apple_bg_task_identifiers {
+		anyhow::ensure!(
+			identifier.contains('.') && type_path(identifier, "."),
+			"invalid Apple background-task identifier in plugin {}: {identifier}",
 			plugin.name
 		);
 	}

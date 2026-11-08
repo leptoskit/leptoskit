@@ -16,6 +16,7 @@ final class NativeAppRuntime {
     private let requests = NativeRequestExecutor()
     private var pumpScheduled = false
     private var started = false
+    private var wakeReason: Int32 = 0
     private var lastSize = CGSize.zero
     private var lastDark = false
     private lazy var frames = NativeFrameLink { [weak self] timestamp, period in
@@ -55,6 +56,7 @@ final class NativeAppRuntime {
         // 3D scenes, when the app was built with them (`lk_app_enable_scene3d` answers 0 otherwise).
         if lk_app_enable_scene3d(app.raw) < 0 { NSLog("LeptosKit: 3D scenes unavailable") }
         app.onWake = { [weak self] in self?.schedulePump() }
+        NativeServiceWakeBroker.install { [weak self] in self?.backgroundWake() }
         requests.onCapacity = { [weak self] in self?.schedulePump() }
         requests.onCompletion = { [weak self] id, result in self?.finishRequest(id: id, result: result) }
 
@@ -92,6 +94,7 @@ final class NativeAppRuntime {
     func close() {
         guard !closeStarted else { return }
         closeStarted = true
+        NativeServiceWakeBroker.install(nil)
         frames.invalidate()
         requests.close()
         pluginContext.invalidate()
@@ -117,6 +120,8 @@ final class NativeAppRuntime {
     private func pump() throws {
         guard let app else { return }
         try check(lk_app_poll_timers(app.raw))
+        try check(lk_app_set_service_wake_reason(app.raw, wakeReason))
+        wakeReason = 0
         try check(lk_app_poll_service(app.raw))
         try drainCancellations(app)
         let more = try drainRequests(app)
@@ -178,6 +183,14 @@ final class NativeAppRuntime {
 
             do { try self?.pump() } catch { self?.onFailure?(error) }
         }
+    }
+
+    /// A platform background tick: mark the reason and schedule a pump so the
+    /// app's service can tell this poll from an ordinary app call.
+    private func backgroundWake() {
+        guard app != nil, started else { return }
+        wakeReason = 1
+        schedulePump()
     }
 
     /// Ignore cancelled or closed delivery, preserving invalid-call cancellation semantics.

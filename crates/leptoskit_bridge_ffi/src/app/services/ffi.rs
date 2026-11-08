@@ -114,6 +114,26 @@ pub unsafe extern "C" fn lk_app_poll_service(app: *mut App) -> i32 {
 	)
 }
 
+/// Records the reason for the next service poll before [`lk_app_poll_service`].
+/// A host that polls on its own thread (the Apple path) calls this so the
+/// service can tell a background tick from an app call.
+///
+/// # Safety
+/// App is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_set_service_wake_reason(app: *mut App, reason: i32) -> i32 {
+	let reason = super::ServiceWakeReason::decode(reason);
+	// SAFETY: The caller lends a live app for this operation.
+	crate::status(
+		unsafe { app.as_mut() }
+			.ok_or(Error::InvalidArgument)
+			.and_then(|app| {
+				app.set_service_wake_reason(reason?);
+				Ok(())
+			}),
+	)
+}
+
 /// Takes cancellation after polling services, preserving unrelated plugin work.
 ///
 /// # Safety
