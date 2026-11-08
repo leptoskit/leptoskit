@@ -113,6 +113,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             (widget as? NativeVideoView)?.close()
             (widget as? NativeCameraView)?.close()
             (widget as? NativeMapView)?.close()
+            (widget as? NativeLivePhotoView)?.close()
         }
 
         widgets.removeAll()
@@ -230,12 +231,14 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         case "video", "Video": widget = NativeVideoView()
         case "camera", "Camera": widget = NativeCameraView()
         case "map", "Map": widget = NativeMapView()
+        case "live_photo", "LivePhoto": widget = NativeLivePhotoView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
         (widget as? NativeVideoView)?.show(player: item.props.video)
         (widget as? NativeCameraView)?.show(session: item.props.camera)
         (widget as? NativeMapView)?.show(session: item.props.map)
+        (widget as? NativeLivePhotoView)?.show(session: item.props.livePhoto)
         widget.identifier = NSUserInterfaceItemIdentifier(String(item.id))
         widgets[item.id] = widget
         properties[item.id] = item.props
@@ -266,6 +269,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             (widget as? NativeVideoView)?.show(player: item.props.video)
             (widget as? NativeCameraView)?.show(session: item.props.camera)
             (widget as? NativeMapView)?.show(session: item.props.map)
+        (widget as? NativeLivePhotoView)?.show(session: item.props.livePhoto)
         }
 
         if let item = change.updateLayout, let widget = widgets[item.id] {

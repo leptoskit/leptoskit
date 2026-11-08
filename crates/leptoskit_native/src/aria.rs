@@ -390,7 +390,8 @@ impl Role {
 			| NativeKind::Scene3d
 			| NativeKind::Video
 			| NativeKind::Camera
-			| NativeKind::Map => Some(Self::Img),
+			| NativeKind::Map
+			| NativeKind::LivePhoto => Some(Self::Img),
 			NativeKind::TextInput | NativeKind::PasswordInput => Some(Self::TextBox),
 			NativeKind::Button | NativeKind::Pressable => Some(Self::Button),
 			NativeKind::Switch => Some(Self::Switch),

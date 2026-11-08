@@ -150,6 +150,7 @@ fn implied_role(kind: NativeKind, tag: Tag) -> Option<Role> {
 		| NativeKind::Video
 		| NativeKind::Camera
 		| NativeKind::Map
+		| NativeKind::LivePhoto
 		| NativeKind::Vector => None,
 		NativeKind::View | NativeKind::ScrollView | NativeKind::Text | NativeKind::TextRun => {
 			tag.implied_role()
@@ -186,6 +187,7 @@ pub(super) fn attributes(
 						| NativeKind::Video
 						| NativeKind::Camera
 						| NativeKind::Map
+						| NativeKind::LivePhoto
 				)
 				.then_some(Role::Img)
 			})

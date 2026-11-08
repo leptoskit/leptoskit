@@ -681,6 +681,7 @@ fn kind_code(kind: NativeKind) -> i32 {
 		NativeKind::Video => 18,
 		NativeKind::Camera => 19,
 		NativeKind::Map => 20,
+		NativeKind::LivePhoto => 21,
 		NativeKind::Custom(name) => panic!("custom widget `{name}` has no native guest ABI code"),
 	}
 }

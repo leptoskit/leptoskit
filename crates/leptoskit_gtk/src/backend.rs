@@ -530,7 +530,8 @@ impl NativeBackend for GtkBackend {
 			| NativeKind::Scene3d
 			| NativeKind::Video
 			| NativeKind::Camera
-			| NativeKind::Map => content.clone().upcast(),
+			| NativeKind::Map
+			| NativeKind::LivePhoto => content.clone().upcast(),
 			NativeKind::Text | NativeKind::TextRun => {
 				gtk::Label::builder()
 					.wrap(true)

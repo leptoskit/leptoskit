@@ -1280,6 +1280,19 @@ Add `leptoskit_plugin_live_activities` as a direct dependency and select the `li
 
 <!-- {/p_live_activitiesSummary} -->
 
+<!-- {@p_live_photoSummary} -->
+
+Add `{{ plugin_live_photo.package.name }}` as a direct dependency and select the
+`{{ plugin_live_photo.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::LivePhoto` rather than resolving the plugin on every call. Create a session from a
+`ph://` asset id, bind it with `LivePhoto(session)`, then start or stop playback. Editing remains later scope.
+
+<!-- {/p_live_photoSummary} -->
+
+
+
 <!-- {@p_nfcSummary} -->
 
 Add `leptoskit_plugin_nfc` as a direct dependency and select the `nfc` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Nfc` rather than resolving the plugin on every call. A successful read returns one bounded NDEF text or URI record; it never writes tags or claims background tag delivery.

@@ -113,6 +113,7 @@ internal class NativeWidgetRenderer(
             (it as? NativeVideoView)?.close()
             (it as? NativeCameraView)?.close()
             (it as? NativeMapView)?.close()
+            (it as? NativeLivePhotoView)?.close()
         }
         riveBitmaps.clear()
         movedScrolls.clear()
@@ -245,6 +246,7 @@ internal class NativeWidgetRenderer(
                 (view as? NativeVideoView)?.show(change.props.video)
                 (view as? NativeCameraView)?.show(change.props.camera)
                 (view as? NativeMapView)?.show(change.props.map)
+                (view as? NativeLivePhotoView)?.show(change.props.livePhoto)
             }
 
             is RenderMutation.UpdateLayout -> {
@@ -273,6 +275,7 @@ internal class NativeWidgetRenderer(
                 if (view is NativeVideoView) view.close()
                 if (view is NativeCameraView) view.close()
                 if (view is NativeMapView) view.close()
+                if (view is NativeLivePhotoView) view.close()
                 val exiting = motion.exiting(view)
                 motion.forget(change.id, view)
 
@@ -416,6 +419,10 @@ internal class NativeWidgetRenderer(
                     NativeMapView(context)
                 }
 
+                "live_photo", "LivePhoto" -> {
+                    NativeLivePhotoView(context)
+                }
+
                 else -> {
                     error("Unsupported widget: $kind")
                 }
@@ -431,6 +438,7 @@ internal class NativeWidgetRenderer(
         (widget as? NativeVideoView)?.show(item.props.video)
         (widget as? NativeCameraView)?.show(item.props.camera)
         (widget as? NativeMapView)?.show(item.props.map)
+        (widget as? NativeLivePhotoView)?.show(item.props.livePhoto)
     }
 
     private fun rememberControl(

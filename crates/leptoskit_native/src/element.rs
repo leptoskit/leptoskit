@@ -362,6 +362,18 @@ impl Element {
 			return Err(ControlTreeError::InvalidMap);
 		}
 
+		if (self.kind == NativeKind::LivePhoto) != self.props.live_photo.is_some()
+			|| (self.kind == NativeKind::LivePhoto
+				&& self
+					.props
+					.accessibility_label
+					.as_deref()
+					.is_none_or(|label| label.trim().is_empty())
+				&& self.props.aria().hidden != Some(true))
+		{
+			return Err(ControlTreeError::InvalidLivePhoto);
+		}
+
 		if self.kind == NativeKind::Rive
 			&& (self.props.rive.is_none()
 				|| self.props.source.is_some()
@@ -383,6 +395,7 @@ impl Element {
 				| NativeKind::Video
 				| NativeKind::Camera
 				| NativeKind::Map
+				| NativeKind::LivePhoto
 				| NativeKind::TextInput
 				| NativeKind::PasswordInput
 				| NativeKind::Switch
@@ -688,6 +701,24 @@ impl Element {
 	#[must_use]
 	pub fn map_session(mut self, session: u32) -> Self {
 		self.props.map = Some(session);
+		self
+	}
+
+	/// A Live Photo surface the host owns, by session id. Give it an explicit
+	/// size and an accessible label, or mark it decorative with `aria_hidden`.
+	/// The guest changes the session through the `live-photo` plugin, never by
+	/// re-rendering this element.
+	#[track_caller]
+	pub fn live_photo(session: u32) -> Self {
+		let mut element = Self::new(NativeKind::LivePhoto);
+		element.props.live_photo = Some(session);
+		element
+	}
+
+	/// Sets the session a `LivePhoto` view tag shows.
+	#[must_use]
+	pub fn live_photo_session(mut self, session: u32) -> Self {
+		self.props.live_photo = Some(session);
 		self
 	}
 
