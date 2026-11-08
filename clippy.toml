@@ -32,6 +32,10 @@ doc-valid-idents = [
 	"LinkedIn",
 	"GitLab",
 	"TikTok",
+	"ARKit",
+	"ARCore",
+	"OpenXR",
+	"WebXR",
 	"..",
 ]
 

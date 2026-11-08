@@ -312,6 +312,7 @@ leptoskit_watch = { path = "crates/leptoskit_watch", version = "0.3.0" }
 leptoskit_watchos = { path = "crates/leptoskit_watchos", version = "0.3.0" }
 leptoskit_wearos = { path = "crates/leptoskit_wearos", version = "0.3.0" }
 leptoskit_windows = { path = "crates/leptoskit_windows", version = "0.3.0" }
+leptoskit_xr = { path = "crates/leptoskit_xr", version = "0.3.0" }
 leptoskit_yoga = { path = "crates/leptoskit_yoga", version = "0.3.0" }
 
 # internal and unpublished
