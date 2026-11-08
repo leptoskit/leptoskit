@@ -192,6 +192,7 @@ versioned_files = [
 	# would leave them unable to resolve the crates they sit beside.
 	{ path = "examples/file_routes/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "examples/commonplace/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
+	{ path = "examples/huddle/linux/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	# The DevTools interface is versioned with the CLI that downloads it.
 	{ path = "devtools/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "benchmarks/arena/apps/leptoskit/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },

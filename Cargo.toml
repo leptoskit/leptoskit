@@ -44,13 +44,20 @@ members = [
 default-members = ["crates/*"]
 resolver = "2"
 # file_routes and commonplace are standalone workspaces in the scaffold's
-# shape, and opencode's terminal runner is a generated runner: all compile
-# only after `leptoskit build` generates `.leptoskit/`, so none can join this
-# repository's workspace. The DevTools interface in devtools/ is the same kind
+# shape, and huddle's Linux runner and opencode's terminal runner are
+# generated runners: all compile only after `leptoskit build` generates
+# `.leptoskit/`, so none can join this repository's workspace. The DevTools interface in devtools/ is the same kind
 # of standalone project, built with `devenv shell devtools:build`. huddle's
-# crates are members one by one (see `members`), its native hosts included:
-# they build empty until `leptoskit build` generates their registrants.
-exclude = ["devtools", "examples/commonplace", "examples/file_routes", "examples/opencode/tui"]
+# crates are members one by one (see `members`), its iOS and macOS hosts
+# included: they build empty until `leptoskit build` generates their
+# registrants.
+exclude = [
+	"devtools",
+	"examples/commonplace",
+	"examples/file_routes",
+	"examples/huddle/linux",
+	"examples/opencode/tui",
+]
 
 [workspace.package]
 version = "0.3.0"

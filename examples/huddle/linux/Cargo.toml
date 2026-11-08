@@ -1,0 +1,35 @@
+# The Linux app: the GTK runner, and the runtime plugins leptoskit.toml
+# grants. `leptoskit build --platform linux` generates the registrant under
+# .leptoskit/linux/ and builds this crate there. Like the runner `leptoskit
+# new` writes, it compiles only after that, so it's a workspace of its own,
+# outside the repository's.
+[package]
+name = "huddle_linux"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+name = "leptoskit_app"
+crate-type = ["staticlib"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+leptoskit_bridge_ffi = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_bridge_ffi", features = ["app"] }
+leptoskit_plugin_crypto = { version = "=0.3.0", path = "../../../crates/leptoskit_plugin_crypto" }
+leptoskit_plugin_http = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_http" }
+leptoskit_plugin_passkeys = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_passkeys" }
+leptoskit_plugin_secure_store = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_secure_store" }
+leptoskit_plugin_web_auth = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_web_auth" }
+leptoskit_plugin_websocket = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_websocket" }
+leptoskit = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit", features = ["wasm", "rive", "gtk", "codepush-http"] }
+
+[[bin]]
+name = "huddle-linux"
+path = "src/main.rs"
+
+# The runner exports the generated registrant's C entry points, which are
+# `unsafe` by nature, so it does not take the app's `unsafe_code` denial.
+[lints.rust]
+unsafe_code = "allow"

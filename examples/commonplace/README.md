@@ -8,7 +8,7 @@ It is one product on every surface leptoskit builds, and the worked example for 
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | Server (`src/main.rs`)                                 | The JSON API, sign-in with emailed codes, and the built website, on SQLite.                                |
 | Website                                                | The library in the browser, rendered client-side.                                                          |
-| Native apps (`ios/`, `android/`, `macos/`)             | The same screens as native widgets.                                                                        |
+| Native apps (`ios/`, `android/`, `macos/`, `linux/`)   | The same screens as native widgets.                                                                        |
 | Browser extension (`commonplace_app/src/extension.rs`) | Clipping from any page, a side panel, highlights, and an offline queue, for Chromium, Firefox, and Safari. |
 
 ## Where things live
@@ -41,6 +41,13 @@ To run the macOS app against that server:
 ```bash
 leptoskit native build macos
 open .leptoskit/macos/App.app
+```
+
+On Linux, with GTK 4 and its development files installed, the app is a GTK window. It keeps your session in the desktop's keyring through the Secret Service, so it needs one running, such as GNOME Keyring or KWallet:
+
+```bash
+leptoskit build --platform linux
+.leptoskit/linux/app/commonplace
 ```
 
 The native apps reach `http://127.0.0.1:3000` by default. To use another server, set `COMMONPLACE_SERVER` when you build, and add its origin to `[native.plugin-options.http]` in `leptoskit.toml`. An Android emulator reaches this machine's server after `adb reverse tcp:3000 tcp:3000`.
