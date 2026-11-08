@@ -55,14 +55,19 @@ leptoskit build --platform macos
 leptoskit native build ios-simulator
 ```
 
-| Flag                          | Default                | Meaning                                      |
-| ----------------------------- | ---------------------- | -------------------------------------------- |
-| `--release`                   | off                    | An optimised build, with `wasm-opt`.         |
-| `--platform <PLATFORM>`       | `app.default_platform` | The platform to build, from `app.platforms`. |
-| `--optimize <fast\|smallest>` | `bundle.optimize`      | How hard to optimize a release client.       |
-| `--out <DIR>`                 | `dist`                 | Where the built web site goes.               |
+| Flag                          | Default                    | Meaning                                                                              |
+| ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------ |
+| `--release`                   | off                        | An optimised build, with `wasm-opt`.                                                 |
+| `--platform <PLATFORM>`       | `app.default_platform`     | The platform to build, from `app.platforms`.                                         |
+| `--optimize <fast\|smallest>` | `bundle.optimize`          | How hard to optimize a release client.                                               |
+| `--out <DIR>`                 | `dist`                     | Where the built web site goes.                                                       |
+| `--build-number <N>`          | none                       | A release's Android `versionCode` and iOS `CFBundleVersion`.                         |
+| `--export-method <METHOD>`    | `native.ios.export-method` | Who an iOS release's `.ipa` is for: `app-store-connect`, `ad-hoc`, or `development`. |
+| `--unsigned`                  | off                        | An Android, Quest, or iOS release built without signing it, which no store takes.    |
 
-The platforms are `web`, `ios`, `android`, `macos`, `windows`, and `linux`, plus the experimental `harmonyos`. A native build compiles your app to WebAssembly, runs the platform's own build tools (Xcode, Gradle, Cargo), and writes into `.leptoskit/<platform>/`. `leptoskit native build` also takes simulator and architecture variants such as `ios-simulator` and `android-x86_64`. See [platforms](../platforms/readme.md) for what each needs. The rest of this section is about web builds.
+The platforms are `web`, `ios`, `android`, `macos`, `windows`, and `linux`, plus the experimental `harmonyos`. A native build compiles your app to WebAssembly, runs the platform's own build tools (Xcode, Gradle, Cargo), and writes into `.leptoskit/<platform>/`. `leptoskit native build` also takes simulator and architecture variants such as `ios-simulator` and `android-x86_64`. See [platforms](../platforms/readme.md) for what each needs.
+
+A release for Android, Meta Quest, or an iOS device is signed for its store, with the keys from the environment: a signed App Bundle and APK, or an `.ipa`, in `.leptoskit/release/`. Without the keys it stops before compiling and names the variables it needs; see [Signing a release](24-signing.md). The rest of this section is about web builds.
 
 A web build:
 

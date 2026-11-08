@@ -53,6 +53,7 @@ fn terminal(config: &LeptoskitConfig, root: &Path) -> Result<()> {
 	crate::native::run(crate::native::NativeCommand::Build {
 		target: crate::native::Target::Tui,
 		release: false,
+		options: crate::native::signing::ReleaseOptions::default(),
 	})?;
 
 	let application = crate::native::application(root, config, crate::native::Target::Tui);

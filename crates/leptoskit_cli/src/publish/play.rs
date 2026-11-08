@@ -26,10 +26,10 @@ pub const HOW: &str = "create a Google Cloud service account with a JSON key, tu
                        Play Android Developer API in its project, then invite its email in Play \
                        Console under Users and permissions, with permission to release the app";
 /// The upload key, which Gradle signs the bundle with.
-pub const KEYSTORE: &str = "LEPTOSKIT_ANDROID_KEYSTORE";
-pub const KEYSTORE_PASSWORD: &str = "LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD";
-pub const KEY_ALIAS: &str = "LEPTOSKIT_ANDROID_KEY_ALIAS";
-pub const KEY_PASSWORD: &str = "LEPTOSKIT_ANDROID_KEY_PASSWORD";
+pub const KEYSTORE: &str = crate::native::signing::ANDROID_KEYSTORE;
+pub const KEYSTORE_PASSWORD: &str = crate::native::signing::ANDROID_KEYSTORE_PASSWORD;
+pub const KEY_ALIAS: &str = crate::native::signing::ANDROID_KEY_ALIAS;
+pub const KEY_PASSWORD: &str = crate::native::signing::ANDROID_KEY_PASSWORD;
 /// Where to make it.
 pub const KEYSTORE_HOW: &str = "make an upload key once with `keytool -genkeypair -keystore \
                                 upload.jks -alias upload -keyalg RSA -keysize 2048 -validity \

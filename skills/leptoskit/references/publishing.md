@@ -25,6 +25,10 @@ Publishing has two halves on every store:
 5. **Run it again.** `leptoskit publish <stores>` again uploads the same version (or tells you it must be newer) and prints what is still left.
 6. **Submit, when told to.** Ask the person whether to release. Only with their yes, run `leptoskit publish <stores> --submit`. In a terminal it asks once more; `--yes` skips that for scripts.
 
+## Signed builds without publishing
+
+`leptoskit build --release --platform android|quest|ios` makes the signed artifacts a store takes, without uploading them: an App Bundle and APK, or an `.ipa`, in `.leptoskit/release/<platform>/`. It reads the signing material only from the environment (`LEPTOSKIT_ANDROID_KEYSTORE` or `LEPTOSKIT_ANDROID_KEYSTORE_BASE64` and its passwords and alias; `LEPTOSKIT_IOS_TEAM_ID` and either the App Store Connect key variables or, for manual signing, `LEPTOSKIT_IOS_CODE_SIGN_IDENTITY` and `LEPTOSKIT_IOS_PROVISIONING_PROFILE`), and stops, naming what's missing, rather than build unsigned or with the debug key. Ask the person to supply the values through their secret manager for that one command, such as `monosecret run --profile release -- leptoskit build --release --platform android`. Never write a key into the project, and never pass `--unsigned` for a build meant for a store.
+
 ## Listings and screenshots
 
 - Listing text lives in `store/`: `listing.toml` (name, keywords, addresses, category), `en-US/summary.md`, `en-US/description.md`, and `en-US/release_notes.md`. Each upload sends what the store's API takes; a step asks for the rest. When a step's value says `(write it in …)`, ask the person for the text and add it to that file rather than typing it into the dashboard, so the next upload carries it.

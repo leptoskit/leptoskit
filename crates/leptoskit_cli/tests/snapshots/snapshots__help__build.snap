@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 229
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Builds the project for a platform
@@ -7,9 +8,12 @@ Builds the project for a platform
 Usage: leptoskit build [OPTIONS]
 
 Options:
-      --release              Build in release mode
-      --platform <PLATFORM>  The platform to build; defaults to the configuration's
-      --optimize <OPTIMIZE>  How hard to optimize a release client for size, `fast` or `smallest`; defaults to `bundle.optimize`. Needs `--release`
-      --out <OUT>            The output directory, relative to the project root [default: dist]
-  -h, --help                 Print help
-  -V, --version              Print version
+      --release                        Build in release mode
+      --platform <PLATFORM>            The platform to build; defaults to the configuration's
+      --optimize <OPTIMIZE>            How hard to optimize a release client for size, `fast` or `smallest`; defaults to `bundle.optimize`. Needs `--release`
+      --out <OUT>                      The output directory, relative to the project root [default: dist]
+      --unsigned                       Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built
+      --export-method <EXPORT_METHOD>  Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or development. Defaults to `native.ios.export-method`
+      --build-number <BUILD_NUMBER>    The release's build number: Android's `versionCode`, and iOS's `CFBundleVersion`. Each store upload needs a higher one
+  -h, --help                           Print help
+  -V, --version                        Print version

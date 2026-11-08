@@ -27,6 +27,7 @@ mod project;
 mod quest;
 
 mod registry;
+pub mod signing;
 mod watch;
 
 mod rust_desktop;
@@ -59,11 +60,16 @@ pub enum NativeCommand {
 	},
 	/// Produces an Apple, Windows, or Linux application, Android APK, or
 	/// HarmonyOS HAP.
+	///
+	/// A release for Android, Meta Quest, or an iOS device is signed for its
+	/// store, with the signing material from the environment.
 	Build {
 		#[arg(value_enum)]
 		target: Target,
 		#[arg(long)]
 		release: bool,
+		#[command(flatten)]
+		options: signing::ReleaseOptions,
 	},
 	/// Lists and scaffolds in-tree platform extensions.
 	Platform {
@@ -264,11 +270,17 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 
 /// Runs native generation and optionally the platform build tool.
 pub fn run(command: NativeCommand) -> Result<()> {
-	let (target, release, build) = match command {
+	let (target, release, build, options) = match command {
 		NativeCommand::Bundle { out, target } => return run_bundle(&out, target),
 		NativeCommand::Platform { command } => return platforms::run(command),
-		NativeCommand::Prepare { target, release } => (target, release, false),
-		NativeCommand::Build { target, release } => (target, release, true),
+		NativeCommand::Prepare { target, release } => {
+			(target, release, false, signing::ReleaseOptions::default())
+		}
+		NativeCommand::Build {
+			target,
+			release,
+			options,
+		} => (target, release, true, options),
 	};
 
 	let (config, root) = LeptoskitConfig::load()?;
@@ -311,6 +323,17 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	}
 
 	let ohos_ndk = check_host(&config, target, release)?;
+	// A store release's signing material is read before anything compiles,
+	// so a missing variable fails in seconds, not after the build.
+	let signing = if build && release {
+		signing::resolve(&root, &config, target, &options, &signing::process_env)?
+	} else {
+		None
+	};
+
+	if let Some(signing::Signing::Android(_)) = &signing {
+		signing::check_android_script(&host_dir(&root, target))?;
+	}
 	let _guard = lock::acquire(&root)?;
 	let plugins = crate::build::resolve_plugins(&config)?;
 	plugins.generate(&root, target.platform(), release)?;
@@ -370,9 +393,69 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	}
 
 	if build {
-		build_application(&root, &config, target, release)?;
+		match &signing {
+			Some(signing) => build_signed(&root, &config, target, signing, &options)?,
+			None => build_application(&root, &config, target, release, options.build_number)?,
+		}
 
-		report_application_size(&root, target, release);
+		if !matches!(signing, Some(signing::Signing::Ios(_))) {
+			report_application_size(&root, target, release);
+		}
+	}
+
+	Ok(())
+}
+
+/// Builds a release signed for its store, and checks that it is.
+fn build_signed(
+	root: &Path,
+	config: &LeptoskitConfig,
+	target: Target,
+	signing: &signing::Signing,
+	options: &signing::ReleaseOptions,
+) -> Result<()> {
+	use crate::publish::tools::Runner as _;
+
+	match signing {
+		signing::Signing::Android(key) => {
+			let android = host_dir(root, target);
+			signing::clear_android_outputs(&android)?;
+			crate::publish::tools::System.run(&signing::gradle_release(
+				&android,
+				key,
+				options.build_number,
+			))?;
+			let (apk, bundle) = signing::signed_android_outputs(&android)?;
+			let collected = signing::collect(root, config, target, &[&bundle, &apk])?;
+
+			for artifact in collected {
+				crate::ui::success(format_args!(
+					"signed {}",
+					artifact.strip_prefix(root).unwrap_or(&artifact).display()
+				));
+			}
+		}
+		signing::Signing::Ios(ios) => {
+			install_ios_pods(root)?;
+			signing::clear_ios_output(root)?;
+			let out = signing::ios_output(root);
+			std::fs::write(
+				out.join("ExportOptions.plist"),
+				signing::export_options(ios)?,
+			)?;
+			crate::publish::tools::System.run(&signing::ios_archive(
+				root,
+				ios,
+				options.build_number,
+			))?;
+			crate::publish::tools::System.run(&signing::ios_export(root, ios))?;
+			let ipa = signing::exported_ipa(root, config)?;
+			crate::ui::success(format_args!(
+				"signed {} for {}",
+				ipa.strip_prefix(root).unwrap_or(&ipa).display(),
+				ios.method
+			));
+		}
 	}
 
 	Ok(())
@@ -621,6 +704,7 @@ fn build_application(
 	config: &LeptoskitConfig,
 	target: Target,
 	release: bool,
+	build_number: Option<u64>,
 ) -> Result<()> {
 	match target {
 		Target::Macos => desktop::build(root, config, release),
@@ -629,10 +713,10 @@ fn build_application(
 		Target::Wearos | Target::Watchos => watch::build(target),
 		Target::Ios | Target::IosSimulator => {
 			install_ios_pods(root)?;
-			run_tool(&mut ios_build(root, target, release))
+			run_tool(&mut ios_build(root, target, release, build_number))
 		}
 		Target::Android | Target::AndroidX86_64 | Target::Quest => {
-			run_tool(&mut gradle_build(root, target, release))
+			run_tool(&mut gradle_build(root, target, release, build_number))
 		}
 	}
 }
@@ -682,8 +766,8 @@ pub(crate) fn install_ios_pods(root: &Path) -> Result<()> {
 }
 
 /// The Gradle wrapper invocation that assembles the generated Android host,
-/// and for a release, its App Bundle too.
-fn gradle_build(root: &Path, target: Target, release: bool) -> Command {
+/// and for an unsigned release, its App Bundle too.
+fn gradle_build(root: &Path, target: Target, release: bool, build_number: Option<u64>) -> Command {
 	let android = host_dir(root, target);
 	let mut command = Command::new(android.join(if cfg!(windows) {
 		"gradlew.bat"
@@ -702,12 +786,18 @@ fn gradle_build(root: &Path, target: Target, release: bool) -> Command {
 		command.arg("assembleDebug");
 	}
 
+	if let Some(build_number) = build_number {
+		command.arg(format!("-Pleptoskit.versionCode={build_number}"));
+	}
+
 	command
 }
 
-/// The `xcodebuild` invocation that builds the generated iOS host project.
-/// `-quiet` leaves warnings and errors only; the rest is build chatter.
-fn ios_build(root: &Path, target: Target, release: bool) -> Command {
+/// The `xcodebuild` invocation that builds the generated iOS host project,
+/// unsigned for a device: a signed release is archived and exported
+/// instead. `-quiet` leaves warnings and errors only; the rest is build
+/// chatter.
+fn ios_build(root: &Path, target: Target, release: bool, build_number: Option<u64>) -> Command {
 	let architecture = if matches!(target, Target::IosSimulator) && cfg!(target_arch = "x86_64") {
 		"ARCHS=x86_64"
 	} else {
@@ -759,6 +849,10 @@ fn ios_build(root: &Path, target: Target, release: bool) -> Command {
 		command.args(["CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-"]);
 	} else {
 		command.arg("CODE_SIGNING_ALLOWED=NO");
+	}
+
+	if let Some(build_number) = build_number {
+		command.arg(format!("CURRENT_PROJECT_VERSION={build_number}"));
 	}
 
 	command
@@ -2066,7 +2160,7 @@ mod tests {
 	fn android_hosts_assemble_with_the_gradle_wrapper() {
 		let root = Path::new("project");
 		let android = host_dir(root, Target::Android);
-		let release = gradle_build(root, Target::Android, true);
+		let release = gradle_build(root, Target::Android, true, None);
 		let wrapper = Path::new(release.get_program());
 		assert_eq!(wrapper.parent(), Some(android.as_path()));
 		assert_eq!(wrapper.file_stem(), Some("gradlew".as_ref()));
@@ -2082,7 +2176,7 @@ mod tests {
 			]
 		);
 
-		let debug = gradle_build(root, Target::AndroidX86_64, false);
+		let debug = gradle_build(root, Target::AndroidX86_64, false, None);
 		assert_eq!(
 			arguments(&debug),
 			["--no-daemon", "--console=plain", "--quiet", "assembleDebug"]
@@ -2150,7 +2244,7 @@ mod tests {
 				.map(|pair| pair[1].clone())
 		};
 
-		let simulator = ios_build(root, Target::IosSimulator, false);
+		let simulator = ios_build(root, Target::IosSimulator, false, None);
 		assert_eq!(simulator.get_program(), "xcodebuild");
 		assert_eq!(simulator.get_current_dir(), Some(root));
 		let simulator = arguments(&simulator);
@@ -2168,7 +2262,7 @@ mod tests {
 			"ad-hoc signed for the simulator's keychain: {simulator:?}"
 		);
 
-		let device = arguments(&ios_build(root, Target::Ios, true));
+		let device = arguments(&ios_build(root, Target::Ios, true, None));
 		assert_eq!(
 			pair(&device, "-destination").as_deref(),
 			Some("generic/platform=iOS")
@@ -2184,13 +2278,13 @@ mod tests {
 		let root = temporary.path();
 		std::fs::create_dir_all(root.join(".leptoskit/ios")).unwrap();
 
-		let plain = arguments(&ios_build(root, Target::IosSimulator, false));
+		let plain = arguments(&ios_build(root, Target::IosSimulator, false, None));
 		assert!(plain.contains(&"-quiet".to_owned()));
 		assert!(plain.contains(&"-project".to_owned()));
 		assert!(!plain.contains(&"-workspace".to_owned()));
 
 		std::fs::write(root.join(".leptoskit/ios/Podfile"), "# pods").unwrap();
-		let pods = arguments(&ios_build(root, Target::IosSimulator, false));
+		let pods = arguments(&ios_build(root, Target::IosSimulator, false, None));
 		assert!(pods.contains(&"-quiet".to_owned()));
 		assert!(pods.contains(&"-workspace".to_owned()));
 		assert!(!pods.contains(&"-project".to_owned()));
@@ -2682,6 +2776,7 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 						run(NativeCommand::Build {
 							target: Target::Macos,
 							release: true,
+							options: signing::ReleaseOptions::default(),
 						}),
 						"macos",
 					);
@@ -2875,13 +2970,15 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			let build_error = run(NativeCommand::Build {
 				target,
 				release: false,
+				options: signing::ReleaseOptions::default(),
 			})
 			.unwrap_err()
 			.to_string();
 			assert!(build_error.contains("experimental"), "{build_error}");
-			let packaging = build_application(&root, &LeptoskitConfig::default(), target, false)
-				.unwrap_err()
-				.to_string();
+			let packaging =
+				build_application(&root, &LeptoskitConfig::default(), target, false, None)
+					.unwrap_err()
+					.to_string();
 			assert!(packaging.contains("experimental"), "{packaging}");
 			std::env::set_current_dir(&previous).unwrap();
 			let _ = std::fs::remove_dir_all(&root);

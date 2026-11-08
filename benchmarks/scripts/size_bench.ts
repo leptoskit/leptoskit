@@ -333,7 +333,11 @@ async function main(): Promise<void> {
 					platformEnvironment,
 				);
 				run(
-					`"${cli}" native build ${target} --release`,
+					// The measurement needs no upload key: an Android release is
+					// signed for a store unless it is asked not to be.
+					`"${cli}" native build ${target} --release${
+						target.startsWith("android") ? " --unsigned" : ""
+					}`,
 					project,
 					platformEnvironment,
 				);

@@ -855,6 +855,7 @@ impl Session<'_> {
 			crate::native::run(crate::native::NativeCommand::Build {
 				target: crate::native::Target::Macos,
 				release: true,
+				options: crate::native::signing::ReleaseOptions::default(),
 			})?;
 			std::fs::create_dir_all(&out)?;
 

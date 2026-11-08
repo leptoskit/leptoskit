@@ -118,7 +118,7 @@ An upload:
 2. builds the App Bundle with Gradle, signed with your upload key. Google Play keeps the key that signs what people install (Play App Signing), so the upload key never reaches users.
 3. uploads it, sets the store listing from `store/` (the text, the icon from `app.icon` at 512×512, the feature graphic, and the screenshots, replacing the ones there), and puts the bundle on the track as a draft. With `--submit`, the release goes to everyone on the track, or, on production with `rollout`, to that fraction of users first.
 
-The Gradle script reads the upload key from the four `LEPTOSKIT_ANDROID_*` variables, so the keystore and its passwords stay out of the project; without them, `leptoskit native build android --release` still builds, unsigned. Release builds now make the App Bundle (`app-release.aab`) next to the APK. The app's `versionName` is `app.version`.
+The Gradle script reads the upload key from the four `LEPTOSKIT_ANDROID_*` variables, so the keystore and its passwords stay out of the project. `leptoskit build --release --platform android` signs with the same key, and stops without it: see [Signing a release](24-signing.md). The app's `versionName` is `app.version`.
 
 Before it uploads, the command checks the Gradle script: it must read the version code leptoskit gives it, sign with the upload key, and target API 36, the lowest Google Play takes for new apps and updates. Projects made by an earlier `leptoskit new` get the lines to add in the error.
 

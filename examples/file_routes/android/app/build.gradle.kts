@@ -26,6 +26,22 @@ android {
         manifest.srcFile("../../.leptoskit/android/AndroidManifest.xml")
     }
     externalNativeBuild { cmake { path = file("../../.leptoskit/android/CMakeLists.txt") } }
+
+    signingConfigs {
+        // The upload key, from the environment, so the keystore's path and
+        // passwords stay out of the project. `leptoskit build --release`
+        // stops without them rather than build an unsigned release.
+        val keystore = providers.environmentVariable("LEPTOSKIT_ANDROID_KEYSTORE").orNull
+
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = providers.environmentVariable("LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("LEPTOSKIT_ANDROID_KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("LEPTOSKIT_ANDROID_KEY_PASSWORD").orNull
+            }
+        }
+    }
     buildTypes {
         // Release shrinks to the code the app reaches: the unminified dex of
         // the Kotlin stdlib and coroutines alone is megabytes. The CLI writes
@@ -33,6 +49,7 @@ android {
         // .leptoskit/android on every build; proguard-rules.pro next to this
         // file is for the app's own rules.
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

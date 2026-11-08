@@ -11,7 +11,10 @@ Meta Quest headsets run Horizon OS, which is Android. A leptoskit app's Android 
 ```sh
 leptoskit build --platform quest      # an APK in hosts/android/app/build/outputs/apk
 leptoskit dev --platform quest        # install and run on a connected headset
+leptoskit build --release --platform quest  # a signed APK in .leptoskit/release/quest
 ```
+
+A release is signed with your Android upload key, from the same variables as an Android release; see [Signing a release](../guide/24-signing.md#android-and-meta-quest).
 
 Add `"quest"` to `app.platforms` next to `"android"`. The Quest build uses the app's `hosts/android` project, so build one platform at a time: each build regenerates `.leptoskit/android` for its own destination.
 
@@ -56,6 +59,7 @@ The [`xr` plugin](../guide/35-headsets.md) brings the Khronos OpenXR loader with
 | Building an APK with the Quest manifest                                 | Running it on a headset hasn't been verified                                                                   |
 | Installing onto a connected headset with `leptoskit dev`                | Drawing the app's 2D interface inside an immersive session: immersive mode shows only what the app draws in 3D |
 | Every runtime plugin the Android build has                              | Publishing to the Horizon Store with `leptoskit publish`                                                       |
-| The `xr` plugin's headset sessions, controllers, hands, and passthrough | Release signing for the Horizon Store beyond the Android upload key                                            |
+| A release APK signed with your upload key                               |                                                                                                                |
+| The `xr` plugin's headset sessions, controllers, hands, and passthrough | Uploading the signed APK to the Horizon Store: use Meta's own tools                                            |
 
 In immersive mode the headset shows only what the app draws through OpenXR, so a Quest game draws its world, and its menus, with the 3D renderer. Set `immersive = false` for an app whose interface is its ordinary screens: it runs in a window in the player's space.

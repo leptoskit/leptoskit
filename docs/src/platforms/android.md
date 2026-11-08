@@ -33,7 +33,7 @@ This builds an arm64 debug APK, for phones and for emulators on Apple silicon, a
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-For an x86-64 emulator, build `leptoskit native build android-x86_64` instead. Add `--release` for a release APK, and an App Bundle beside it for Google Play. Release builds are signed with your upload key when the `LEPTOSKIT_ANDROID_KEYSTORE`, `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, and `LEPTOSKIT_ANDROID_KEY_PASSWORD` variables are set, and unsigned when they aren't. `leptoskit publish play` uploads to Google Play; see [Publishing to the stores](../guide/24-publishing.md#google-play).
+For an x86-64 emulator, build `leptoskit native build android-x86_64` instead. Add `--release` for a release APK, and an App Bundle beside it for Google Play, both signed with your upload key from the `LEPTOSKIT_ANDROID_KEYSTORE` (or `LEPTOSKIT_ANDROID_KEYSTORE_BASE64`), `LEPTOSKIT_ANDROID_KEYSTORE_PASSWORD`, `LEPTOSKIT_ANDROID_KEY_ALIAS`, and `LEPTOSKIT_ANDROID_KEY_PASSWORD` variables, and copied to `.leptoskit/release/android/`. Without them, a release build stops and names what is missing; `--unsigned` builds one unsigned on purpose. See [Signing a release](../guide/24-signing.md). `leptoskit publish play` uploads to Google Play; see [Publishing to the stores](../guide/24-publishing.md#google-play).
 
 You can also open the `android/` folder in Android Studio and run it from there. Build once with the CLI first, and again after you change your app or its plugins: `leptoskit native prepare android` regenerates the Rust inputs without running Gradle.
 
