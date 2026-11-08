@@ -72,7 +72,7 @@ wasm_library=(
 	leptoskit_plugin_location leptoskit_plugin_logging leptoskit_plugin_network
 	leptoskit_plugin_notifications leptoskit_plugin_permissions
 	leptoskit_plugin_screen_orientation leptoskit_plugin_speech leptoskit_sensor
-	leptoskit_testing leptoskit_use
+	leptoskit_testing leptoskit_use leptoskit_xr
 )
 # Default features, the library only: some of their features need the host.
 wasm_default_library=(
