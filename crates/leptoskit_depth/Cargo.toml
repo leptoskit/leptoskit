@@ -1,0 +1,24 @@
+[package]
+name = "leptoskit_depth"
+version = "0.3.0"
+authors.workspace = true
+categories = ["computer-vision", "game-development", "multimedia"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["depth", "ar", "onnx", "monocular", "camera"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Metric depth from one camera picture, on the device: Depth Anything V2 run in pure Rust, for AR on phones whose platform measures no depth."
+
+[dependencies]
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tract-onnx = { workspace = true }
+
+[dev-dependencies]
+zune-jpeg = { workspace = true }
+
+[lints]
+workspace = true
