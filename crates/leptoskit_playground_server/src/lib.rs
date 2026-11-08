@@ -364,6 +364,7 @@ fn client_ip(
 			.and_then(|v| v.parse().ok())
 			.unwrap_or(peer);
 	}
+
 	peer
 }
 
@@ -530,6 +531,7 @@ pub async fn run(config: &Config, digest: &str, source: &str) -> anyhow::Result<
 		let _ = child.kill().await;
 		let _ = child.wait().await;
 	}
+
 	// A killed runtime client does not necessarily kill its container.
 	let cleanup = config.command().args(["rm", "-f", &name]).output();
 	let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
@@ -573,6 +575,7 @@ mod tests {
 	#[ignore = "requires Docker-compatible socket and the built toolchain image"]
 	async fn container_compile_error_timeout_and_network_boundary() -> anyhow::Result<()> {
 		let config = Config::from_env()?;
+
 		let source = "use leptoskit::prelude::*; pub fn app() -> impl Fn() -> Element { || \
 		              View().child(Text(\"Hello\")) }";
 		let result = run(&config, &config.image, source).await?;

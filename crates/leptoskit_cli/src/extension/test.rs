@@ -94,6 +94,7 @@ pub fn run(browser: ExtensionBrowser) -> Result<()> {
 				.unwrap_or_else(|_| package.dir.clone())
 		})
 		.context("the build made no package")?;
+
 	let profile = tempfile::tempdir()?;
 
 	let driver = Driver::launch(browser, &dir, profile.path(), true)?;

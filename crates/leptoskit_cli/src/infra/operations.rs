@@ -26,6 +26,7 @@ pub(super) fn backups(dir: &Path, c: &InfraConfig, command: BackupCommand) -> Re
 	let ip = server_ip(dir)?;
 	let _local = lock(dir)?;
 	let reservation = remote::Reservation::acquire(&ip, &c.name)?;
+
 	let result = match command {
 		BackupCommand::Install => {
 			recovery::install(&ip, c, &output(dir, "backup_endpoint")?, &reservation)?;
@@ -51,10 +52,13 @@ pub(super) fn backups(dir: &Path, c: &InfraConfig, command: BackupCommand) -> Re
 			recovery::invoke(&ip, c, "status", "latest", false, Some(&reservation.owner))?
 		}
 	};
+
 	println!("{}", serde_json::to_string_pretty(&result)?);
+
 	if matches!(result.get("healthy"), Some(Value::Bool(false))) {
 		anyhow::bail!("backup is unhealthy");
 	}
+
 	Ok(())
 }
 
@@ -75,6 +79,7 @@ pub(super) fn restore(dir: &Path, c: &InfraConfig, snapshot: &str, yes: bool) ->
 	// swap.
 	recovery::invoke(&ip, c, "verify", snapshot, false, Some(&reservation.owner))?;
 	releases::stop(&releases::hosts(dir)?, c)?;
+
 	let result = recovery::invoke(&ip, c, "restore", snapshot, true, Some(&reservation.owner))?;
 	println!("{}", serde_json::to_string_pretty(&result)?);
 	println!(
@@ -87,6 +92,7 @@ pub(super) fn restore(dir: &Path, c: &InfraConfig, snapshot: &str, yes: bool) ->
 pub(super) fn status(dir: &Path, c: &InfraConfig) -> Result<()> {
 	let hosts = releases::hosts(dir)?;
 	let mut reports = Vec::new();
+
 	for ip in &hosts {
 		let services = if ip == &hosts[0] {
 			format!(
@@ -97,12 +103,14 @@ pub(super) fn status(dir: &Path, c: &InfraConfig) -> Result<()> {
 		} else {
 			String::new()
 		};
+
 		let command = format!(
 			"python3 -c {} {} {}",
 			remote::quote(include_str!("status.py")),
 			remote::quote(&c.name),
 			services
 		);
+
 		let report: Value = match remote::execute(ip, &command, None)
 			.and_then(|bytes| Ok(serde_json::from_slice(&bytes)?))
 		{
@@ -111,6 +119,7 @@ pub(super) fn status(dir: &Path, c: &InfraConfig) -> Result<()> {
 		};
 		reports.push(json!({"ip": ip, "health": report}));
 	}
+
 	let ip = &hosts[0];
 	let backups = if c.backups.enabled {
 		recovery::invoke(ip, c, "status", "latest", false, None)
@@ -118,6 +127,7 @@ pub(super) fn status(dir: &Path, c: &InfraConfig) -> Result<()> {
 	} else {
 		json!({"enabled": false})
 	};
+
 	let operation: Value = serde_json::from_slice(&remote::read(ip, &c.name, "operation.json")?)?;
 	let owner = remote::execute(
 		ip,

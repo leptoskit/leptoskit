@@ -64,6 +64,7 @@ pub async fn run(host: Host, arena: Arena, scenario: Scenario) {
 		Scenario::Autoscroll => scroll::autoscroll(host, &arena).await,
 		Scenario::Busy => scroll::busy(host, &arena).await,
 	};
+
 	let report = report.unwrap_or_else(|error| {
 		let reason = error.clone();
 		arena.update(move |model| {
@@ -190,6 +191,7 @@ async fn step(
 			Screen::Cards(cards) => *cards,
 			_ => return Err("mount lost its cards".to_owned()),
 		};
+
 		arena.read().phase.set(Phase::Done);
 		// Marking writes each card's own signal, so the bound titles follow
 		// and the list is not replaced. Creating or clearing replaces the
@@ -213,6 +215,7 @@ async fn step(
 	for _ in 0..DONE_FRAMES {
 		host.next_frame().await?;
 	}
+
 	arena.set_phase(Phase::Idle);
 	host.next_frame().await?;
 
@@ -232,6 +235,7 @@ fn check_cards(arena: &Arena) -> Result<(), String> {
 		}
 		_ => return Err("mount lost its cards".to_owned()),
 	};
+
 	let titles: Vec<String> = texts(&routes::screen(arena))
 		.into_iter()
 		.filter(|text| text.starts_with("Card "))
@@ -264,6 +268,7 @@ fn texts(element: &Element) -> Vec<String> {
 		if let Some(text) = &element.props.text {
 			found.push(text.clone());
 		}
+
 		stack.extend(element.children.iter().rev());
 	}
 

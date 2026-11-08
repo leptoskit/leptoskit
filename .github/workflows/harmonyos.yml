@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+
 concurrency:
   group: harmonyos-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

@@ -25,6 +25,7 @@ pub fn run(report: &mut Report, config: Config, guest: Option<&[u8]>) {
 		report.note(
 			"screen layer skipped: no guest embedded (build with LEPTOSKIT_BENCH_SCREEN_WASM set)",
 		);
+
 		return;
 	};
 

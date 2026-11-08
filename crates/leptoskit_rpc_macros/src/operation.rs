@@ -986,6 +986,7 @@ pub(crate) fn expand(
 	} else {
 		None
 	};
+
 	let output = stream
 		.as_ref()
 		.map_or(&signature.output, |stream| &stream.item);
@@ -995,6 +996,7 @@ pub(crate) fn expand(
 	} else {
 		TokenStream::new()
 	};
+
 	let variant = kind.variant();
 	let options = if kind == OperationKind::Job {
 		job_options(&args, &signature, &krate)?
@@ -1042,6 +1044,7 @@ pub(crate) fn expand(
 			&name,
 			server,
 		)?);
+
 		return Ok(out);
 	}
 
@@ -1210,6 +1213,7 @@ pub(crate) fn stream_shape(signature: &Signature, resumable: bool) -> syn::Resul
 					GenericArgument::AssocType(assoc) if assoc.ident == "Item" => {
 						Some(assoc.ty.clone())
 					}
+
 					_ => None,
 				}
 			})
@@ -1354,12 +1358,14 @@ fn stream_items(
 		.map(|argument| &argument.ident)
 		.collect();
 	let fn_ident = &function.sig.ident;
+
 	let encode = match (resumable, stream.fallible) {
 		(false, false) => quote!(#krate::__private::stream_plain::<#item>),
 		(false, true) => quote!(#krate::__private::stream_fallible::<#item>),
 		(true, false) => quote!(#krate::__private::stream_resumable::<#item>),
 		(true, true) => quote!(#krate::__private::stream_resumable_fallible::<#item>),
 	};
+
 	let call = quote_spanned! {signature.output_span=>
 		#fn_ident(&cx, #(#bindings),*)
 	};
@@ -1390,6 +1396,7 @@ fn stream_items(
 			) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
 				async move {
 					let Self { #(#bindings),* } = self;
+
 					match #call.await {
 						::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
 						::core::result::Result::Err(error) => sink.fail(&error),

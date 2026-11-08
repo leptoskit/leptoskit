@@ -232,6 +232,7 @@ impl Iterator for Lexer<'_> {
 			b'\'' => self.character_or_lifetime(),
 			b'(' | b'[' | b'{' => Token::Open(byte),
 			b')' | b']' | b'}' => Token::Close(byte),
+
 			byte if is_ident_byte(byte) => self.identifier(start),
 			byte => Token::Punct(byte),
 		};

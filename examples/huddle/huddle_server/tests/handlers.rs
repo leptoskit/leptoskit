@@ -50,6 +50,7 @@ impl Server {
 		options.site_root = site_root;
 		options.mail_delay = Duration::from_millis(1);
 		options.settlement.delay = Duration::from_millis(1);
+
 		options.jobs = leptoskit_rpc::server::Jobs::new(db.clone())
 			.poll(Duration::from_millis(20))
 			.queue("mail", 2)
@@ -71,6 +72,7 @@ impl Server {
 
 	async fn stop(mut self) {
 		self.serving.abort();
+
 		if let Some(huddle) = self.huddle.take() {
 			huddle.shutdown().await;
 		}
@@ -238,6 +240,7 @@ async fn strangers_get_only_what_needs_no_session() {
 	let (status, body) = anonymous(&server.base, "people", "{}").await;
 	assert_eq!(status, 200, "{body}");
 	assert_eq!(body, "[]");
+
 	let (status, body) = anonymous(&server.base, "whoami", "{}").await;
 	assert_eq!(status, 200, "{body}");
 	assert_eq!(body, "null");
@@ -349,6 +352,7 @@ async fn the_sidebar_history_members_and_read_markers_follow_the_rules() {
 			.iter()
 			.any(|card| card["id"] == design_id)
 	);
+
 	assert_eq!(
 		grace
 			.ok("messages", json!({ "channel": design_id, "limit": 10 }))
@@ -397,6 +401,7 @@ async fn the_sidebar_history_members_and_read_markers_follow_the_rules() {
 	let history = ada
 		.ok("messages", json!({ "channel": general, "limit": 2 }))
 		.await;
+
 	assert_eq!(history.as_array().unwrap().len(), 2);
 	assert_eq!(history[1]["id"], third);
 	assert_eq!(history[1]["body"], "and the review");
@@ -495,6 +500,7 @@ async fn the_board_keeps_every_column_contiguous() {
 	assert_eq!(board[0]["id"], third);
 	assert_eq!(board[1]["id"], first);
 	assert_eq!(board[2]["id"], second);
+
 	for index in 0..3 {
 		assert_eq!(board[index]["position"], index);
 	}
@@ -528,6 +534,7 @@ async fn the_board_keeps_every_column_contiguous() {
 	assert_eq!(order, [&third, &second, &first]);
 	assert_eq!(board[1]["column"], "doing");
 	assert_eq!(board[1]["position"], 0);
+
 	assert_eq!(board[2]["position"], 1);
 
 	// Every column is reachable, and an unknown one is named in the refusal.
@@ -573,8 +580,10 @@ async fn invitations_check_the_address_reach_the_mailbox_and_sign_people_up() {
 	let marked = "ann<tag>@huddle.test";
 	ada.ok("invite", json!({ "channel": general, "email": marked }))
 		.await;
+
 	for _ in 0..500 {
 		let latest = ada.ok("invites", json!({ "channel": general })).await;
+
 		if latest
 			.as_array()
 			.unwrap()
@@ -585,6 +594,7 @@ async fn invitations_check_the_address_reach_the_mailbox_and_sign_people_up() {
 		}
 		tokio::time::sleep(Duration::from_millis(20)).await;
 	}
+
 	let latest = ada.ok("invites", json!({ "channel": general })).await;
 	assert_eq!(latest[0]["status"], "sent", "{latest}");
 	let mail = Client::new()
@@ -672,14 +682,19 @@ async fn tips_settle_and_only_a_real_attempt_may_be_retried() {
 		.ok("send_tip", json!({ "to": grace_id, "amount": 5 }))
 		.await;
 	let tip_id = tip.clone();
+
 	for _ in 0..500 {
 		let tips = ada.ok("tips", json!({})).await;
+
 		if tips[0]["status"] == "confirmed" {
 			break;
 		}
+
 		tokio::time::sleep(Duration::from_millis(20)).await;
 	}
+
 	let tips = ada.ok("tips", json!({})).await;
+
 	assert_eq!(tips[0]["status"], "confirmed", "{tips}");
 	assert_eq!(tips[0]["from"], "Ada");
 	assert_eq!(tips[0]["to"], "Grace Hopper");
@@ -723,6 +738,7 @@ async fn reminders_take_a_minute_to_a_day() {
 			.contains("pick between a minute and a day")
 		);
 	}
+
 	let job = ada
 		.ok("remind_me", json!({ "channel": general, "minutes": 10 }))
 		.await;
@@ -772,6 +788,7 @@ async fn summaries_count_speakers_pin_and_truncate() {
 	let summary = summary.as_str().unwrap().to_owned();
 	assert!(summary.starts_with("3 messages from 2 people in #general. Ada said the most (2)."));
 	assert!(summary.contains("Came up most:"), "{summary}");
+
 	assert!(
 		summary.contains("…"),
 		"the latest message is cut at eighty characters: {summary}"
@@ -904,6 +921,7 @@ async fn static_files_serve_the_built_site_and_its_spa_routes() {
 		.await
 		.unwrap();
 	assert_eq!(route.status(), 200);
+
 	assert_eq!(route.text().await.unwrap(), "huddle home");
 
 	server.stop().await;

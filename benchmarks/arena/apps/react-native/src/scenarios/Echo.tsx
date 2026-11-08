@@ -49,17 +49,21 @@ function sameBytes(buffer: ArrayBuffer): boolean {
 	if (buffer.byteLength !== BYTES_64K.byteLength) {
 		return false;
 	}
+
 	const words = new Uint32Array(buffer);
+
 	for (let index = 0; index < words.length; index += 1) {
 		if (words[index] !== WORDS_64K[index]) {
 			return false;
 		}
 	}
+
 	return true;
 }
 
 function sameObject(value: object): boolean {
 	const entries: Array<[string, unknown]> = Object.entries(value);
+
 	return entries.length === 100 &&
 		entries.every(([key, field]) => OBJECT_100[key] === field);
 }
@@ -67,18 +71,22 @@ function sameObject(value: object): boolean {
 /** Encodes bytes for the string bridge, chunked so `fromCharCode` never sees 64 Ki arguments. */
 function toBase64(bytes: Uint8Array): string {
 	let binary = "";
+
 	for (let offset = 0; offset < bytes.length; offset += 8192) {
 		binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
 	}
+
 	return btoa(binary);
 }
 
 function fromBase64(text: string): ArrayBuffer {
 	const binary = atob(text);
 	const bytes = new Uint8Array(binary.length);
+
 	for (let index = 0; index < binary.length; index += 1) {
 		bytes[index] = binary.charCodeAt(index);
 	}
+
 	return bytes.buffer;
 }
 
@@ -156,18 +164,23 @@ async function timeAsync(probe: Probe<Promise<unknown>>): Promise<Timing> {
 			throw new Error(`async ${probe.payload}: wrong result during warm-up`);
 		}
 	}
+
 	const durationsUs: number[] = [];
 	let totalMs = 0;
+
 	for (let index = 0; index < TIMED_CALLS; index += 1) {
 		const start = performance.now();
 		const result = await probe.call();
+
 		const elapsed = performance.now() - start;
 		totalMs += elapsed;
 		durationsUs.push(elapsed * 1000);
+
 		if (!probe.verify(result)) {
 			throw new Error(`async ${probe.payload}: wrong result on call ${index}`);
 		}
 	}
+
 	return { durationsUs, totalMs };
 }
 
@@ -177,18 +190,23 @@ function timeSync(probe: Probe<unknown>): Timing {
 			throw new Error(`sync ${probe.payload}: wrong result during warm-up`);
 		}
 	}
+
 	const durationsUs: number[] = [];
 	let totalMs = 0;
+
 	for (let index = 0; index < TIMED_CALLS; index += 1) {
 		const start = performance.now();
 		const result = probe.call();
+
 		const elapsed = performance.now() - start;
 		totalMs += elapsed;
 		durationsUs.push(elapsed * 1000);
+
 		if (!probe.verify(result)) {
 			throw new Error(`sync ${probe.payload}: wrong result on call ${index}`);
 		}
 	}
+
 	return { durationsUs, totalMs };
 }
 
@@ -199,13 +217,17 @@ function timeSync(probe: Probe<unknown>): Timing {
 function clockResolutionMs(): number {
 	let smallest = Number.POSITIVE_INFINITY;
 	let previous = performance.now();
+
 	for (let index = 0; index < 10000; index += 1) {
 		const now = performance.now();
+
 		if (now > previous) {
 			smallest = Math.min(smallest, now - previous);
 		}
+
 		previous = now;
 	}
+
 	return smallest;
 }
 
@@ -222,12 +244,14 @@ function summarise(
 	metrics[`${key}_p99_us`] = round3(percentile(durationsUs, 99));
 	metrics[`${key}_per_s`] = Math.round((TIMED_CALLS / totalMs) * 1000);
 	const batches: number[] = [];
+
 	for (let offset = 0; offset < durationsUs.length; offset += BATCH_SIZE) {
 		const batch = durationsUs.slice(offset, offset + BATCH_SIZE);
 		batches.push(
 			round3(batch.reduce((sum, value) => sum + value, 0) / batch.length),
 		);
 	}
+
 	samples[`${key}_p50_us`] = batches;
 }
 
@@ -245,6 +269,7 @@ export function Echo() {
 			if (echoModule === null) {
 				throw new Error("no native layer on the web");
 			}
+
 			setPhase("running");
 			await nextFrame();
 			const metrics: Record<string, number> = {};
@@ -266,6 +291,7 @@ export function Echo() {
 				await nextFrame();
 				summarise("sync", probe.payload, timeSync(probe), metrics, samples);
 			}
+
 			setProgress("");
 			setPhase("done");
 			writeReport({

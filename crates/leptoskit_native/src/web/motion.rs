@@ -68,6 +68,7 @@ pub(super) fn css(props: &MotionProps, offset: Duration) -> MotionCss {
 	} else {
 		"backwards"
 	};
+
 	match motion.trigger() {
 		Trigger::Appear => {
 			write!(
@@ -160,6 +161,7 @@ fn keyframes(motion: &Motion) -> Option<(String, String)> {
 	}
 
 	let mut body = String::new();
+
 	for (at, pose) in motion.poses() {
 		let declarations = declarations(pose, animated);
 
@@ -191,6 +193,7 @@ fn keyframes(motion: &Motion) -> Option<(String, String)> {
 
 	let digest = Sha256::digest(body.as_bytes());
 	let mut name = String::from("lk-m-");
+
 	for byte in &digest[..6] {
 		write!(name, "{byte:02x}").expect("write to String");
 	}
@@ -332,6 +335,7 @@ fn spring_easing(spring: Spring) -> String {
 	}
 
 	let mut points = String::from("linear(0");
+
 	for sample in 1..SPRING_SAMPLES {
 		let at = settle * sample as f32 / SPRING_SAMPLES as f32;
 		write!(points, ",{}", number(spring.position(at))).expect("write to String");

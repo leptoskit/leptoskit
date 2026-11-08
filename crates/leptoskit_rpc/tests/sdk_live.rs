@@ -224,6 +224,7 @@ impl RecoveryProbe {
 		else {
 			return;
 		};
+
 		match stage {
 			1 => self.before.store(resume.version, Ordering::SeqCst),
 			2 => self.after.store(resume.version, Ordering::SeqCst),
@@ -235,9 +236,11 @@ impl RecoveryProbe {
 		if stage != 1 {
 			return false;
 		}
+
 		let Message::Text(text) = message else {
 			return false;
 		};
+
 		match serde_json::from_str::<rpc::live::ServerFrame>(text) {
 			Ok(rpc::live::ServerFrame::Welcome { version, .. }) => {
 				self.welcome.store(version, Ordering::SeqCst);
@@ -376,6 +379,7 @@ async fn relay(
 	let up = async move {
 		while let Some(Ok(message)) = client_stream.next().await {
 			upstream_recovery.hello(recovery_stage, &message);
+
 			if let Message::Text(text) = &message
 				&& text.contains("\"mutate\"")
 				&& text.contains("drop-me")
@@ -393,8 +397,10 @@ async fn relay(
 		while let Some(Ok(message)) = server_stream.next().await {
 			if recovery.cut_before_recovery(recovery_stage, &message) {
 				cuts.fetch_add(1, Ordering::SeqCst);
+
 				return;
 			}
+
 			if cutting.load(Ordering::SeqCst)
 				&& let Message::Text(text) = &message
 				&& text.contains("\"done\"")
@@ -419,6 +425,7 @@ async fn relay(
 				let prefix =
 					serde_json::to_string(&rpc::live::ServerFrame::Transition(transition.clone()))
 						.unwrap();
+
 				if client_sink
 					.send(Message::Text(prefix.into()))
 					.await
@@ -430,6 +437,7 @@ async fn relay(
 				transition.updates.clear();
 				let final_frame =
 					serde_json::to_string(&rpc::live::ServerFrame::Transition(transition)).unwrap();
+
 				if client_sink
 					.send(Message::Text(final_frame.into()))
 					.await
@@ -439,6 +447,7 @@ async fn relay(
 				}
 				continue;
 			}
+
 			if client_sink.send(message).await.is_err() {
 				return;
 			}
@@ -797,6 +806,7 @@ async fn rust_sdk_runs_live() {
 		"\n[dev-dependencies]\ntokio = { version = \"1\", features = [\"macros\", \
 		 \"rt-multi-thread\"] }\n",
 	);
+
 	std::fs::write(&manifest, toml).unwrap();
 	cargo_build(dir.path(), &["--example", "live"]);
 

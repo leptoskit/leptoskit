@@ -414,6 +414,7 @@ mod tests {
 		send(&mut raster, &command);
 		command.operation = 6;
 		send(&mut raster, &command);
+
 		assert!(
 			raster
 				.finish()

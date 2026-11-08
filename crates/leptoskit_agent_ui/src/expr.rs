@@ -160,6 +160,7 @@ fn tokenize(source: &str) -> Result<Vec<Token>, FormulaError> {
 			let number = digits
 				.parse()
 				.map_err(|_| FormulaError(format!("`{}` is not a number", &rest[..end])))?;
+
 			tokens.push(Token::Number(number));
 			rest = &rest[end..];
 		} else if character == '"' || character == '\'' {
@@ -252,6 +253,7 @@ impl Parser {
 		parse: impl FnOnce(&mut Self) -> Result<T, FormulaError>,
 	) -> Result<T, FormulaError> {
 		self.depth += 1;
+
 		if self.depth > MAX_DEPTH {
 			return error("the formula nests too deeply");
 		}
@@ -281,17 +283,21 @@ impl Parser {
 
 	fn or(&mut self) -> Result<Expr, FormulaError> {
 		let mut left = self.and()?;
+
 		while self.eat("||") {
 			left = Expr::Or(Box::new(left), Box::new(self.and()?));
 		}
+
 		Ok(left)
 	}
 
 	fn and(&mut self) -> Result<Expr, FormulaError> {
 		let mut left = self.binary(0)?;
+
 		while self.eat("&&") {
 			left = Expr::And(Box::new(left), Box::new(self.binary(0)?));
 		}
+
 		Ok(left)
 	}
 
@@ -319,6 +325,7 @@ impl Parser {
 		};
 
 		let mut left = self.binary(level + 1)?;
+
 		'operators: loop {
 			for (symbol, op) in *operators {
 				if self.eat(symbol) {
@@ -406,6 +413,7 @@ impl Parser {
 
 		while !self.eat(close) {
 			items.push(self.expression()?);
+
 			if !self.eat(",") {
 				self.expect(close)?;
 				break;
@@ -518,9 +526,11 @@ impl Expr {
 			Self::Field(inner, field) => {
 				match inner.eval(scope, budget)? {
 					Value::Record(mut fields) => Ok(fields.remove(field).unwrap_or_default()),
+
 					Value::List(items) if field == "length" => {
 						Ok(Value::Number(items.len() as f64))
 					}
+
 					other => error(format!("a {} has no field `{field}`", other.kind())),
 				}
 			}
@@ -626,6 +636,7 @@ fn binary(
 	{
 		let joined = format!("{left}{right}");
 		budget.spend(joined.len() / 64)?;
+
 		return Ok(Value::Text(joined));
 	}
 
@@ -637,6 +648,7 @@ fn binary(
 		BinaryOp::Remainder => "`%`",
 		_ => "a comparison",
 	};
+
 	let a = number(left, symbol)?;
 	let b = number(right, symbol)?;
 
@@ -840,6 +852,7 @@ struct Arguments {
 impl Arguments {
 	fn count(&self, min: usize, max: usize) -> Result<(), FormulaError> {
 		let count = self.values.len();
+
 		if count < min || count > max {
 			let expected = if min == max {
 				format!("{min}")
@@ -900,6 +913,7 @@ impl Arguments {
 
 	fn count_argument(&self, index: usize, budget: &Budget) -> Result<usize, FormulaError> {
 		let count = self.number(index)?;
+
 		if !(0.0..=budget.max_list as f64).contains(&count) {
 			return error(format!(
 				"`{}` makes at most {} items",
@@ -1022,6 +1036,7 @@ fn formatting(arguments: &Arguments) -> Result<Value, FormulaError> {
 				Value::Null => "$".to_owned(),
 				other => other.to_string(),
 			};
+
 			Ok(Value::Text(money(arguments.number(0)?, &symbol)))
 		}
 		"percent" => {
@@ -1098,10 +1113,12 @@ fn lists(arguments: &Arguments, budget: &mut Budget) -> Result<Value, FormulaErr
 			} else {
 				(arguments.number(0)?, arguments.number(1)?)
 			};
+
 			let count = (end - start).max(0.0).ceil();
 			if count > budget.max_list as f64 {
 				return error(format!("`range` makes at most {} items", budget.max_list));
 			}
+
 			budget.list(
 				(0..count as usize)
 					.map(|offset| Value::Number(start + offset as f64))
@@ -1181,6 +1198,7 @@ fn more_lists(arguments: &Arguments, budget: &mut Budget) -> Result<Value, Formu
 				Value::Null => ", ".to_owned(),
 				other => other.to_string(),
 			};
+
 			let parts: Vec<String> = arguments.list(0)?.iter().map(ToString::to_string).collect();
 			Ok(Value::Text(parts.join(&separator)))
 		}
@@ -1242,6 +1260,7 @@ mod tests {
 			BTreeMap::from([("a".to_owned(), Value::Number(3.0))]),
 		];
 		scope.0.insert("rows".to_owned(), Value::from(rows));
+
 		scope
 	}
 
@@ -1517,6 +1536,7 @@ mod tests {
 		assert_eq!(eval("pow(2, 10)").unwrap(), Value::Number(1024.0));
 		// A result that cannot be shown is nothing, not infinity.
 		assert_eq!(eval("pow(10, 400)").unwrap(), Value::Null);
+
 		assert_eq!(error("round(1, 9)"), "digits must be between 0 and 6");
 		assert_eq!(error("pow(1)"), "`pow` takes 2 arguments, not 1");
 		assert_eq!(
@@ -1535,6 +1555,7 @@ mod tests {
 		assert_eq!(eval("money(1, \"€\")").unwrap(), Value::from("€1"));
 		assert_eq!(eval("money(1, 2)").unwrap(), Value::from("21"));
 		assert_eq!(eval("format(1234.5)").unwrap(), Value::from("1,234"));
+
 		assert_eq!(error("percent(0.5, 9)"), "digits must be between 0 and 6");
 		assert_eq!(error("text()"), "`text` takes 1 arguments, not 0");
 	}
@@ -1559,6 +1580,7 @@ mod tests {
 		let Value::List(growth) = eval("growth(100, 0.1, 2)").unwrap() else {
 			panic!("expected a list");
 		};
+
 		assert!((growth[0].as_number().unwrap() - 100.0).abs() < 1e-9);
 		assert!((growth[1].as_number().unwrap() - 110.0).abs() < 1e-9);
 		assert_eq!(
@@ -1589,6 +1611,7 @@ mod tests {
 			Value::Bool(true)
 		);
 		assert_eq!(eval("contains(1, 2)").unwrap(), Value::Bool(false));
+
 		assert_eq!(eval("join(names)").unwrap(), Value::from("a, b"));
 		assert_eq!(eval("join(names, \"-\")").unwrap(), Value::from("a-b"));
 		assert_eq!(eval("reverse(names)").unwrap(), Value::from(vec!["b", "a"]));

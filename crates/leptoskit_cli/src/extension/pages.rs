@@ -508,6 +508,7 @@ mod tests {
 		let connect = background_js(&module, Some(&["runtime.connect".into()]), None);
 		assert!(connect.contains("globalThis.__leptoskit_port_post"));
 		assert!(connect.contains("runtime.port.message"));
+
 		assert!(connect.contains("runtime.port.disconnect"));
 		assert!(connect.contains("leptoskit-page:"));
 		let content = content_js("clipper", "/overlay/clipper");

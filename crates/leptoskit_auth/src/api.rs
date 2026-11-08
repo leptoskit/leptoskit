@@ -1229,6 +1229,7 @@ mod tests {
 			device_name: None,
 		};
 		let printed = format!("{password:?}");
+
 		assert!(!printed.contains("secret-token"), "{printed}");
 		assert!(printed.contains("ada@example.com"), "{printed}");
 		let set = SetPassword {

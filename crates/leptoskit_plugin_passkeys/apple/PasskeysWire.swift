@@ -12,6 +12,7 @@ enum Base64URL {
         var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         base64 = base64.trimmingCharacters(in: CharacterSet(charactersIn: "="))
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+
         return Data(base64Encoded: base64)
     }
 

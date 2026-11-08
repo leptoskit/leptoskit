@@ -46,6 +46,7 @@ impl From<DbError> for Failure {
 			DbError::Conflict { .. } | DbError::Stale { .. } => (StatusCode::CONFLICT, "conflict"),
 			_ => (StatusCode::INTERNAL_SERVER_ERROR, "server"),
 		};
+
 		// A database error names the table and column, never the values, so
 		// its text is safe to show; anything else stays on the server.
 		let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -54,6 +55,7 @@ impl From<DbError> for Failure {
 		} else {
 			error.to_string()
 		};
+
 		Self {
 			status,
 			code,

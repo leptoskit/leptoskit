@@ -28,6 +28,7 @@ def run(*args, env=env, ok=True):
     )
     print(r.stdout, flush=True)
     assert (r.returncode == 0) == ok, (args, r.returncode)
+
     return r.stdout
 
 
@@ -37,6 +38,7 @@ def sha(p):
 
 def snapshot():
     result = {}
+
     for app in ["accounts", "website"]:
         name = "workspace-" + app
         fmt = '{"container":{{json .Id}},"image":{{json .Image}},"started":{{json .State.StartedAt}}}'
@@ -83,6 +85,7 @@ operator = W / "website/infra/workspace-website"
         )
     )
 )
+
 policy = json.loads((W / "website-managed-policy.json").read_text())
 policy["sequence"] = 3
 policy["releases"].append(
@@ -120,6 +123,7 @@ releases = releases[:start] + releases[start:].replace(
 )
 (W / "update-releases.toml").write_text(releases)
 plan = W / "update-plan.json"
+
 run(cli, "workspace", "plan", "--releases", "update-releases.toml", "--out", str(plan))
 out = run(cli, "workspace", "deploy", "--plan", str(plan), "--sha256", sha(plan))
 assert "Revalidated current release v1" in out

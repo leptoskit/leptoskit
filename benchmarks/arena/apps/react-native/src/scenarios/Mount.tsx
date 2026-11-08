@@ -75,6 +75,7 @@ export function Mount() {
 		if (want === null) {
 			return;
 		}
+
 		expected.current = null;
 		const rows = list.current?.children;
 		const count = rows?.length ?? 0;
@@ -101,6 +102,7 @@ export function Mount() {
 			if (stepsRun > 0) {
 				await commit(() => setPhase("idle"));
 			}
+
 			stepsRun += 1;
 			await commit(() => setPhase("running"));
 			expected.current = expectation(next);
@@ -122,6 +124,7 @@ export function Mount() {
 				await step("update", updateCards(created));
 				await step("clear", []);
 			}
+
 			writeReport({
 				scenario: "mount",
 				lane: "idiomatic",

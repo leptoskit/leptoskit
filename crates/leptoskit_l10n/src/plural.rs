@@ -284,6 +284,7 @@ mod tests {
 		assert_eq!(english.category(1.5_f64), PluralCategory::Other);
 		assert_eq!(english.category(f64::NAN), PluralCategory::Other);
 		assert_eq!(english.category(f64::INFINITY), PluralCategory::Other);
+
 		assert_eq!(rules("fr").category(1.5), PluralCategory::One);
 	}
 }

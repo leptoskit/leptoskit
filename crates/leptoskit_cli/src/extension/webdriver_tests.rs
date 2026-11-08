@@ -40,6 +40,7 @@ fn firefox_installs_reloads_and_stops() {
 	driver
 		.wait("document.title === 'Installed'", Duration::from_secs(5))
 		.unwrap();
+
 	std::fs::write(
 		extension.path().join("probe.html"),
 		"<!doctype html><title>Reloaded</title>",
@@ -67,6 +68,7 @@ fn firefox_session_installs_retries_and_tears_down() {
 	let path = extension.path().to_path_buf();
 	let web_socket = std::thread::spawn(move || fake_extension_socket(&ws, &path));
 	let requests = std::thread::spawn(move || fake_webdriver(&http, &socket));
+
 	let mut driver = Driver {
 		process: None,
 		isolated: false,
@@ -126,12 +128,14 @@ fn fake_extension_socket(listener: &std::net::TcpListener, path: &Path) {
 		} else {
 			json!({"extensionData": {"type": "path", "path": path}})
 		};
+
 		assert_eq!(request["params"], params);
 		let response = if index == 2 {
 			json!({"id":request["id"], "type":"error", "error":"invalid web extension", "message":"invalid manifest"})
 		} else {
 			json!({"id":request["id"], "type":"success", "result":{"extension":"test@example.com"}})
 		};
+
 		socket
 			.send(tungstenite::Message::Text(response.to_string().into()))
 			.unwrap();
@@ -153,6 +157,7 @@ fn fake_webdriver(listener: &std::net::TcpListener, socket: &str) {
 			.unwrap();
 		let (line, request) = read_request(&mut stream);
 		assert_eq!(line.trim(), expected);
+
 		let result = match expected {
 			"POST /session HTTP/1.1" => {
 				let caps = &request["capabilities"]["alwaysMatch"];
@@ -192,6 +197,7 @@ fn fake_webdriver(listener: &std::net::TcpListener, socket: &str) {
 
 			_ => Value::Null,
 		};
+
 		let body = json!({"value": result}).to_string();
 		write!(
 			stream,
@@ -354,6 +360,7 @@ fn wait_reports_the_condition_it_gave_up_on() {
 				Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
 					std::thread::sleep(Duration::from_millis(2));
 				}
+
 				Err(_) => break,
 			}
 		}
@@ -422,6 +429,7 @@ fn fake_chromedriver(port_file: &Path, requests: &std::sync::Mutex<Vec<(String, 
 	use std::time::Instant;
 
 	let deadline = Instant::now() + Duration::from_secs(10);
+
 	let port = loop {
 		if let Ok(text) = std::fs::read_to_string(port_file)
 			&& let Ok(port) = text.trim().parse::<u16>()
@@ -435,6 +443,7 @@ fn fake_chromedriver(port_file: &Path, requests: &std::sync::Mutex<Vec<(String, 
 		);
 		std::thread::sleep(Duration::from_millis(10));
 	};
+
 	let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
 
 	loop {
@@ -456,6 +465,7 @@ fn fake_chromedriver(port_file: &Path, requests: &std::sync::Mutex<Vec<(String, 
 			json!({"sessionId": "chrome-session", "capabilities": {}})
 		} else if path.ends_with("/execute/async") {
 			let script = body["script"].as_str().unwrap_or_default();
+
 			if script.contains("document.title") {
 				json!(true)
 			} else {
@@ -464,6 +474,7 @@ fn fake_chromedriver(port_file: &Path, requests: &std::sync::Mutex<Vec<(String, 
 		} else {
 			Value::Null
 		};
+
 		let body = json!({"value": value}).to_string();
 		write!(
 			stream,
@@ -503,6 +514,7 @@ fn the_installer_cache_is_searched_for_chromedriver() {
 	} else {
 		"chromedriver"
 	};
+
 	let linux = install.path().join("chromedriver-linux64");
 	std::fs::create_dir_all(&linux).unwrap();
 	std::fs::write(linux.join(executable), "").unwrap();
@@ -528,12 +540,16 @@ fn chromedriver_resolution_prefers_the_environment_and_finds_the_cache() {
 	} else {
 		"chromedriver"
 	};
+
 	let install = root.path().join(".cache/puppeteer/chromedriver");
+
 	for version in ["1.0", "2.0"] {
 		let directory = install.join(version).join("chromedriver-linux64");
+
 		std::fs::create_dir_all(&directory).unwrap();
 		std::fs::write(directory.join(executable), "").unwrap();
 	}
+
 	let output = Command::new(std::env::current_exe().unwrap())
 		.args([
 			"--ignored",
@@ -628,6 +644,7 @@ fn a_chromium_session_is_negotiated_through_the_stub_driver() {
 	let profile = root.path().join("profile");
 	std::fs::create_dir_all(&profile).unwrap();
 	let chrome = root.path().join("chrome");
+
 	executable(&chrome, "#!/bin/sh\nexit 0\n");
 	let (script, port_file) = stub_driver(root.path());
 
@@ -674,6 +691,7 @@ fn chromium_session_fixture() {
 	};
 	let driver = Driver::launch(ExtensionBrowser::Chromium, &extension, &profile, true).unwrap();
 	let canonical = extension.canonicalize().unwrap();
+
 	assert_eq!(
 		driver.extension_base,
 		format!(
@@ -710,6 +728,7 @@ fn chromium_session_fixture() {
 		.iter()
 		.map(|value| value.as_str().unwrap().to_owned())
 		.collect::<Vec<_>>();
+
 	for expected in [
 		format!("--load-extension={}", canonical.display()),
 		format!("--disable-extensions-except={}", canonical.display()),
@@ -756,6 +775,7 @@ fn dropping_a_non_isolated_driver_kills_its_process() {
 			assert!(Instant::now() < deadline, "the stub driver never started");
 			std::thread::sleep(Duration::from_millis(10));
 		};
+
 		let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
 		let (mut stream, _) = listener.accept().unwrap();
 		let _ = read_request(&mut stream);

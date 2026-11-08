@@ -51,6 +51,7 @@ impl Drop for StoreServer {
 	fn drop(&mut self) {
 		let _ = self.shutdown.take().unwrap().send(());
 		let result = self.thread.take().unwrap().join();
+
 		if !std::thread::panicking() {
 			result.unwrap();
 		}
@@ -109,6 +110,7 @@ fn store(answer: Answer) -> (String, StoreServer) {
 			}
 		});
 	});
+
 	(
 		format!("http://{address}"),
 		StoreServer {
@@ -1754,6 +1756,7 @@ fn edge_answer(submit: bool) -> Answer {
 			("GET", "/v1/products/prod-1/submissions/operations/op-submit") if submit => {
 				json(serde_json::json!({ "status": "Succeeded" }))
 			}
+
 			_ => StatusCode::NOT_FOUND.into_response(),
 		}
 	})
@@ -1784,6 +1787,7 @@ fn chrome_session_uploads_a_draft_and_submits_only_when_asked() {
 				path if path.ends_with(":publish") => {
 					json(serde_json::json!({ "state": "PENDING_REVIEW" }))
 				}
+
 				_ => StatusCode::NOT_FOUND.into_response(),
 			}
 		})
@@ -2142,11 +2146,13 @@ fn session_child(scenario: &str) {
 			error.contains("the build made no firefox package"),
 			"{error}"
 		);
+
 		return;
 	}
 
 	if scenario.ends_with("-error") || scenario == "firefox-submit-refused" {
 		let error = result.unwrap_err().to_string();
+
 		let expected = match scenario {
 			"chrome-error" => "manifest version must be newer",
 			"edge-error" => "72 days",
@@ -2154,11 +2160,14 @@ fn session_child(scenario: &str) {
 			"firefox-submit-refused" => "the version is not newer",
 			other => panic!("no expected error for {other}"),
 		};
+
 		assert!(error.contains(expected), "{error}");
+
 		return;
 	}
 
 	let (summary, steps) = result.unwrap();
+
 	let expected = match scenario {
 		"chrome-draft" | "edge-draft" => "Notes 1.4.0 is uploaded as a draft.",
 		"chrome-submit" => "Notes 1.4.0 is submitted for review (PENDING_REVIEW).",
@@ -2177,6 +2186,7 @@ fn session_child(scenario: &str) {
 		"firefox-unlisted" => "Notes 1.4.0 is built and checked; nothing was uploaded.",
 		other => panic!("no expected summary for {other}"),
 	};
+
 	assert_eq!(summary, expected);
 	assert!(steps.iter().all(|step| step.store == store_name));
 	assert_eq!(
@@ -2217,11 +2227,13 @@ fn session_child(scenario: &str) {
 fn run_child(scenario: &str) {
 	if scenario.starts_with("run-macos") {
 		run_macos_child(scenario);
+
 		return;
 	}
 
 	if scenario == "run-confirm-skipped" {
 		confirm_child();
+
 		return;
 	}
 
@@ -2237,6 +2249,7 @@ fn run_child(scenario: &str) {
 			build_number: super::BuildNumber::Auto,
 		}
 	};
+
 	let error = match scenario {
 		"run-no-store" => super::run(&args(Vec::new(), None)).unwrap_err(),
 		"run-unknown-store" => super::run(&args(vec!["play".to_owned()], None)).unwrap_err(),
@@ -2254,7 +2267,9 @@ fn run_child(scenario: &str) {
 		}
 		other => panic!("unknown run scenario {other}"),
 	};
+
 	let text = format!("{error:#}");
+
 	let expected = match scenario {
 		"run-no-store" => "no store is configured",
 		"run-unknown-store" => "`play` isn't configured",
@@ -2263,6 +2278,7 @@ fn run_child(scenario: &str) {
 		"run-existing-workflow" => "remove it first",
 		other => panic!("no expected error for {other}"),
 	};
+
 	assert!(text.contains(expected), "{text}");
 }
 
@@ -2553,6 +2569,7 @@ fn app_store_text_carries_the_versions_fields() {
 	let text = super::app_store_text(&store);
 	assert_eq!(text.len(), 5);
 	assert_eq!(text["description"], "Keep notes, everywhere.");
+
 	assert_eq!(text["keywords"], "notes,research");
 	assert_eq!(text["promotionalText"], "Keep notes.");
 	assert_eq!(text["supportUrl"], "https://example.com/support");
@@ -2632,6 +2649,7 @@ fn app_store_steps_report_what_is_still_left() {
 			.value
 			.contains("Missing export compliance")
 	);
+
 	assert!(
 		steps[1]
 			.what
@@ -2690,6 +2708,7 @@ fn app_store_steps_report_what_is_still_left() {
 		.iter()
 		.find(|step| step.what.contains("Choose the category"))
 		.expect("a category step");
+
 	assert!(
 		category
 			.enter
@@ -2785,6 +2804,7 @@ fn app_store_page_counts_screenshot_folders() {
 		.iter()
 		.find(|field| field.label == "iPad screenshots")
 		.expect("an iPad ask");
+
 	assert!(
 		ipad.value.contains("add the ipad-13 size"),
 		"{}",
@@ -2883,6 +2903,7 @@ fn firefox_steps_differ_by_channel_existence_and_submission() {
 			.iter()
 			.any(|field| field.label == "Screenshots")
 	);
+
 	assert!(
 		steps
 			.last()
@@ -3066,6 +3087,7 @@ fn edge_steps_ask_for_properties_then_the_release() {
 	assert!(steps[0].enter.iter().any(|field| {
 		field.label == "Description" && field.value == "(write it in store/en-US/description.md)"
 	}));
+
 	assert!(steps[1].what.contains("Decide to release it"));
 
 	let steps = super::edge_steps(root.path(), &config, &store, true);
@@ -3466,6 +3488,7 @@ fn the_play_listing_sends_nothing_without_text_an_icon_or_images() {
 			("POST", path) if path == format!("{app}/edits") => {
 				json(serde_json::json!({ "id": "e1" }))
 			}
+
 			_ => StatusCode::NOT_FOUND.into_response(),
 		}
 	}));
@@ -3506,6 +3529,7 @@ fn the_play_listing_sends_nothing_without_text_an_icon_or_images() {
 	)
 	.unwrap();
 	let edit = play.edit().unwrap().unwrap();
+
 	session.play_listing(&edit, &[], None).unwrap();
 
 	// Only the sign-in and the edit: nothing to upload was uploaded.
@@ -3591,6 +3615,7 @@ fn the_play_listing_sends_text_images_and_the_icon() {
 	let edit = play.edit().unwrap().unwrap();
 	let icon = crate::icons::Icon::load(&root.path().join("icon.svg")).unwrap();
 	let screenshots = super::images::load(root.path(), "play").unwrap();
+
 	assert_eq!(screenshots.len(), 1);
 	session
 		.play_listing(&edit, &screenshots, Some(&icon))
@@ -3648,6 +3673,7 @@ fn run_macos_child(scenario: &str) {
 	super::run(&args).unwrap();
 
 	let output = std::env::current_dir().unwrap().join(super::OUTPUT);
+
 	if json {
 		let json = std::fs::read_to_string(output.join("next-steps.json")).unwrap();
 		let report: serde_json::Value = serde_json::from_str(&json).unwrap();

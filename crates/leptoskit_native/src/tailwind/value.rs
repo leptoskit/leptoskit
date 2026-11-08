@@ -54,6 +54,7 @@ impl Length {
 			if negative {
 				return Err("negative var() lengths are not supported".to_owned());
 			}
+
 			return Ok(variable);
 		}
 
@@ -156,6 +157,7 @@ impl Length {
 				if let Some(length) = super::Theme::length(name) {
 					return Some(length_from_theme(length));
 				}
+
 				fallback.as_ref().and_then(|length| length.resolve())
 			}
 			other => Some(other.clone()),
@@ -349,10 +351,12 @@ pub(super) fn color(value: &str) -> Result<PaintColor, String> {
 	if let Some(mut variable) = parse_var(value, MAX_VAR_DEPTH)? {
 		if let Some(alpha) = alpha {
 			let alpha = parse_opacity(alpha)?;
+
 			if let PaintColor::Var { alpha: slot, .. } = &mut variable {
 				*slot = Some(alpha);
 			}
 		}
+
 		return Ok(variable);
 	}
 
@@ -389,6 +393,7 @@ fn solid_color(value: &str) -> Result<Color, String> {
 		"transparent" => Ok(Color::rgba(0, 0, 0, 0)),
 		"black" => Ok(Color::rgba(0, 0, 0, 255)),
 		"white" => Ok(Color::rgba(255, 255, 255, 255)),
+
 		value if value.starts_with('#') => hex_color(value),
 		value => {
 			super::palette::lookup(value).ok_or_else(|| format!("unsupported color `{value}`"))
@@ -418,6 +423,7 @@ fn parse_var(value: &str, depth: u8) -> Result<Option<PaintColor>, String> {
 	};
 
 	let inner = inner.trim();
+
 	let (name, fallback) = match split_var_args(inner) {
 		Some((name, fallback)) => (name.trim(), Some(fallback.trim())),
 		None => (inner, None),
@@ -427,11 +433,13 @@ fn parse_var(value: &str, depth: u8) -> Result<Option<PaintColor>, String> {
 
 	let fallback = match fallback {
 		None => None,
+
 		Some(fallback) if fallback.starts_with("var(") => {
 			Some(Box::new(parse_var(fallback, depth - 1)?.ok_or_else(
 				|| "malformed nested var() fallback".to_owned(),
 			)?))
 		}
+
 		Some(fallback) => Some(Box::new(PaintColor::Solid(solid_color(fallback)?))),
 	};
 
@@ -461,6 +469,7 @@ fn parse_length_var(value: &str, depth: u8) -> Result<Option<Length>, String> {
 	};
 
 	let inner = inner.trim();
+
 	let (name, fallback) = match split_var_args(inner) {
 		Some((name, fallback)) => (name.trim(), Some(fallback.trim())),
 		None => (inner, None),
@@ -470,12 +479,14 @@ fn parse_length_var(value: &str, depth: u8) -> Result<Option<Length>, String> {
 
 	let fallback = match fallback {
 		None => None,
+
 		Some(fallback) if fallback.starts_with("var(") => {
 			Some(Box::new(
 				parse_length_var(fallback, depth - 1)?
 					.ok_or_else(|| "malformed nested var() fallback".to_owned())?,
 			))
 		}
+
 		Some(fallback) => Some(Box::new(Length::parse(fallback, false, false)?)),
 	};
 
@@ -489,6 +500,7 @@ fn parse_length_var(value: &str, depth: u8) -> Result<Option<Length>, String> {
 /// parentheses, so `var(--a, var(--b, #fff))` keeps the nested call intact.
 fn split_var_args(inner: &str) -> Option<(&str, &str)> {
 	let mut depth = 0_i32;
+
 	for (index, character) in inner.char_indices() {
 		match character {
 			'(' => depth += 1,
@@ -497,6 +509,7 @@ fn split_var_args(inner: &str) -> Option<(&str, &str)> {
 			_ => {}
 		}
 	}
+
 	None
 }
 

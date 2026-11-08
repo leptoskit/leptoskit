@@ -273,6 +273,7 @@ fn apple_owner_resolver_dispatches_attached_and_presentation_queries() {
 		)
 	};
 	assert!(!app.is_null());
+
 	// SAFETY: The create call returned the unique app handle.
 	unsafe { leptoskit_bridge_ffi::app::lk_app_destroy(app) };
 }

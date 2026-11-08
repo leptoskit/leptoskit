@@ -41,15 +41,19 @@ int Scale(int source, double scale_factor) {
 // This API is only needed for PerMonitor V1 awareness mode.
 void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   HMODULE user32_module = LoadLibraryA("User32.dll");
+
   if (!user32_module) {
     return;
   }
+
   auto enable_non_client_dpi_scaling =
       reinterpret_cast<EnableNonClientDpiScaling*>(
           GetProcAddress(user32_module, "EnableNonClientDpiScaling"));
+
   if (enable_non_client_dpi_scaling != nullptr) {
     enable_non_client_dpi_scaling(hwnd);
   }
+
   FreeLibrary(user32_module);
 }
 
@@ -65,6 +69,7 @@ class WindowClassRegistrar {
     if (!instance_) {
       instance_ = new WindowClassRegistrar();
     }
+
     return instance_;
   }
 
@@ -94,6 +99,7 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.cbClsExtra = 0;
     window_class.cbWndExtra = 0;
+
     window_class.hInstance = GetModuleHandle(nullptr);
     window_class.hIcon =
         LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
@@ -103,6 +109,7 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     RegisterClass(&window_class);
     class_registered_ = true;
   }
+
   return kWindowClassName;
 }
 
@@ -182,6 +189,7 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
+
       if (quit_on_close_) {
         PostQuitMessage(0);
       }
@@ -199,6 +207,7 @@ Win32Window::MessageHandler(HWND hwnd,
     }
     case WM_SIZE: {
       RECT rect = GetClientArea();
+
       if (child_content_ != nullptr) {
         // Size and position the child window.
         MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
@@ -228,6 +237,7 @@ void Win32Window::Destroy() {
     DestroyWindow(window_handle_);
     window_handle_ = nullptr;
   }
+
   if (g_active_window_count == 0) {
     WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
   }
@@ -252,6 +262,7 @@ void Win32Window::SetChildContent(HWND content) {
 RECT Win32Window::GetClientArea() {
   RECT frame;
   GetClientRect(window_handle_, &frame);
+
   return frame;
 }
 

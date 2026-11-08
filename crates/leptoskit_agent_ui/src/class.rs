@@ -48,23 +48,28 @@ pub(crate) fn check(classes: &str) -> Result<(), String> {
 	}
 
 	let mut count = 0;
+
 	for class in classes.split_whitespace() {
 		count += 1;
+
 		if count > MAX_CLASSES {
 			return Err(format!("an element is limited to {MAX_CLASSES} classes"));
 		}
 
 		let utility = class.rsplit(':').next().unwrap_or(class);
 		let utility = utility.strip_prefix('!').unwrap_or(utility);
+
 		if let Some(prefix) = REFUSED_PREFIXES
 			.iter()
 			.find(|prefix| utility.starts_with(**prefix))
 		{
 			let what = match *prefix {
 				"-" => "negative offsets",
+
 				prefix if prefix.starts_with("overflow-") && prefix != "overflow-visible" => {
 					"scrolling"
 				}
+
 				prefix => prefix.trim_end_matches('-'),
 			};
 			return Err(format!(

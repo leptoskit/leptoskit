@@ -19,8 +19,10 @@ export function install({ route, enabled = true } = {}) {
 		if (!active || !operation) return;
 		if (pending.length >= 32) {
 			dropped++;
+
 			return;
 		}
+
 		pending.push({ kind, route: operation, duration_ms, traceparent });
 	};
 	const flush = async () => {
@@ -36,6 +38,7 @@ export function install({ route, enabled = true } = {}) {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ events }),
 			});
+
 			if (!response.ok) dropped += events.length;
 		} catch {
 			dropped += events.length;
@@ -66,17 +69,21 @@ export function install({ route, enabled = true } = {}) {
 	};
 	let interval;
 	let loadTimer;
+
 	if (active) {
 		emit("page_view");
 		addEventListener("error", error);
 		addEventListener("unhandledrejection", error);
 		addEventListener("load", loaded, { once: true });
 		document.addEventListener("visibilitychange", visible);
+
 		if (document.readyState === "complete") {
 			loaded();
 		}
+
 		interval = setInterval(flush, 10000);
 	}
+
 	return {
 		// Call from the app router with its route template, e.g. /notes/{id}.
 		pageView(next) {
@@ -95,11 +102,15 @@ export function install({ route, enabled = true } = {}) {
 				input instanceof Request ? input : new URL(input, location.origin),
 				init,
 			);
+
 			if (!active || new URL(request.url).origin !== location.origin) {
 				return fetch(request);
 			}
+
 			const bytes = crypto.getRandomValues(new Uint8Array(24));
+
 			if (bytes.slice(0, 16).every((b) => b === 0)) bytes[0] = 1;
+
 			if (bytes.slice(16).every((b) => b === 0)) bytes[16] = 1;
 			const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(
 				"",
@@ -124,6 +135,7 @@ export function install({ route, enabled = true } = {}) {
 					new Request(request, { redirect: "error" }),
 				);
 				record(response.ok ? "request" : "request_failed");
+
 				return response;
 			} catch (failure) {
 				record("request_failed");
@@ -132,6 +144,7 @@ export function install({ route, enabled = true } = {}) {
 		},
 		stop() {
 			active = false;
+
 			pending = [];
 			clearInterval(interval);
 			clearTimeout(loadTimer);

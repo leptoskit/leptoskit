@@ -12,10 +12,13 @@ pub(crate) fn development(arguments: &[String], disabled: bool) -> anyhow::Resul
 	if disabled || std::env::var_os(RESOLVED).is_some() {
 		return Ok(None);
 	}
+
 	let (_, root) = leptoskit_config::LeptoskitConfig::load()?;
+
 	if !root.join("monosecret.toml").is_file() {
 		return Ok(None);
 	}
+
 	let executable = std::env::current_exe().context("locate the leptoskit executable")?;
 	let status = Command::new("monosecret")
 		.arg("--file")

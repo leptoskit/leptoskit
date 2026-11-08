@@ -26,10 +26,13 @@ thread_local! {
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let _ = navigation;
+
 	if !browser::IN_EXTENSION {
 		return view! { <ui::ExtensionOnly /> };
 	}
+
 	let store = Store::current();
+
 	if !READ_TAB.swap(true, Ordering::Relaxed) {
 		let store = store.clone();
 		crate::tasks::spawn(async move {
@@ -155,12 +158,14 @@ pub fn Page(navigation: &Navigation) -> Element {
 						if matches!(reply, ExtensionReply::Saved(_) | ExtensionReply::Queued) {
 							store.clip().set(crate::store::ClipDraft::default());
 						}
+
 						store
 							.extension()
 							.update(|extension| extension.status = Some(browser::status(&reply)));
 					});
 				}
 			/>
+
 			{match status {
 				Some(status) => {
 					view! { <Status class="text-sm">{status}</Status> }

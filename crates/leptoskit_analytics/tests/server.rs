@@ -90,11 +90,14 @@ async fn api_requires_a_key_and_http_uses_templates_and_correlates_explicit_time
 		TraceContext::parse(CONTEXT).unwrap().span_id()
 	);
 	assert!(continued.as_str().ends_with("-00"));
+
 	for authorization in [None, Some("Bearer wrong"), Some(KEY)] {
 		let mut request = Request::get("/_leptoskit/analytics");
+
 		if let Some(value) = authorization {
 			request = request.header("authorization", value);
 		}
+
 		let response = app
 			.clone()
 			.oneshot(request.body(Body::empty()).unwrap())
@@ -103,6 +106,7 @@ async fn api_requires_a_key_and_http_uses_templates_and_correlates_explicit_time
 		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 		assert_eq!(response.headers()["cache-control"], "no-store");
 	}
+
 	let response = app
 		.clone()
 		.oneshot(
@@ -116,9 +120,11 @@ async fn api_requires_a_key_and_http_uses_templates_and_correlates_explicit_time
 	assert_eq!(response.status(), StatusCode::OK);
 	let evidence = json(response).await;
 	let encoded = evidence.to_string();
+
 	for secret in [KEY, "private-id", "private-query", "cookie-value"] {
 		assert!(!encoded.contains(secret));
 	}
+
 	assert_eq!(evidence["snapshot"]["resource"]["release"], "a1");
 	assert_eq!(evidence["snapshot"]["recent"].as_array().unwrap().len(), 2);
 	assert_eq!(analytics.snapshot().series.len(), 2);
@@ -172,6 +178,7 @@ async fn ingestion_is_atomic_allowlisted_origin_checked_and_never_backend_eviden
 		app.clone().oneshot(wrong).await.unwrap().status(),
 		StatusCode::BAD_REQUEST
 	);
+
 	let mut bad = good.clone();
 	bad["route"] = serde_json::json!("/notes/private-user-id");
 	assert_eq!(
@@ -239,6 +246,7 @@ async fn ingestion_is_atomic_allowlisted_origin_checked_and_never_backend_eviden
 #[tokio::test]
 async fn ingest_has_a_process_budget_and_timers_finish_once() {
 	let (app, analytics) = app();
+
 	for _ in 0..30 {
 		assert_eq!(
 			app.clone()
@@ -251,6 +259,7 @@ async fn ingest_has_a_process_budget_and_timers_finish_once() {
 			StatusCode::NO_CONTENT
 		);
 	}
+
 	assert_eq!(
 		app.oneshot(browser(
 			&serde_json::json!({"events":[{"kind":"error","route":"/notes/{id}","duration_ms":0}]})
@@ -264,6 +273,7 @@ async fn ingest_has_a_process_budget_and_timers_finish_once() {
 	Timer::new(analytics.clone(), Signal::Job, "refresh", None).finish(Outcome::Ok);
 	drop(Timer::new(analytics.clone(), Signal::Job, "refresh", None));
 	let snapshot = analytics.snapshot();
+
 	let jobs: Vec<_> = snapshot
 		.series
 		.iter()

@@ -108,6 +108,7 @@ fn base_path(window: &web_sys::Window) -> BasePath {
 	let Some(document) = window.document() else {
 		return BasePath::root();
 	};
+
 	if !matches!(document.query_selector("base[href]"), Ok(Some(_))) {
 		return BasePath::root();
 	}

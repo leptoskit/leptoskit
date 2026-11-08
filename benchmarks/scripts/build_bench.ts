@@ -62,6 +62,7 @@ function parseHyperfineResult(raw: Record<string, unknown>): HyperfineResult {
 		? raw.name
 		: String(raw.command ?? "");
 	let seconds: number[] = [];
+
 	if (Array.isArray(raw.times)) {
 		seconds = raw.times as number[];
 	} else if (Array.isArray(raw.measurements)) {
@@ -69,6 +70,7 @@ function parseHyperfineResult(raw: Record<string, unknown>): HyperfineResult {
 			.map((measurement) => measurement.time_wall_clock?.value)
 			.filter((value): value is number => typeof value === "number");
 	}
+
 	return { name, timesMs: seconds.map((value) => value * 1000) };
 }
 
@@ -103,9 +105,11 @@ function fixtureDir(fixture: string): string {
 
 function parseTool(specifier: string): Tool {
 	const [name, fixture, command] = specifier.split("|");
+
 	if (!name || !fixture || !command) {
 		fail(`--tool expects "name|fixture|command", got: ${specifier}`);
 	}
+
 	return { name, fixture, command };
 }
 
@@ -131,24 +135,30 @@ async function hyperfineOnce(
 		"--export-json",
 		exportPath,
 	];
+
 	if (prepare) {
 		args.push("--prepare", `cd ${quote(command.cwd)} && ${prepare}`);
 	}
+
 	args.push("--command-name", command.name);
 	args.push(`cd ${quote(command.cwd)} && ${command.command}`);
 	const status = new Deno.Command("hyperfine", { args, stdin: "inherit" })
 		.outputSync();
+
 	if (!status.success) {
 		fail(`hyperfine failed: ${new TextDecoder().decode(status.stderr)}`);
 	}
+
 	const exported = JSON.parse(await Deno.readTextFile(exportPath)) as {
 		results: Record<string, unknown>[];
 	};
 	await Deno.remove(exportPath);
 	const result = exported.results.map(parseHyperfineResult)[0];
+
 	if (!result || result.timesMs.length === 0) {
 		fail(`hyperfine recorded no wall-clock sample for ${command.name}`);
 	}
+
 	return result.timesMs[0];
 }
 
@@ -166,15 +176,18 @@ async function runHyperfine(
 			await hyperfineOnce(command, options.prepare);
 		}
 	}
+
 	const samples = new Map<string, number[]>(
 		commands.map((command) => [command.name, []]),
 	);
+
 	for (let round = 0; round < options.runs; round += 1) {
 		for (const command of commands) {
 			samples.get(command.name)!.push(
 				await hyperfineOnce(command, options.prepare),
 			);
 		}
+
 		log(`sampled round ${round + 1}/${options.runs}`);
 	}
 	return new Map(
@@ -195,6 +208,7 @@ function prime(tools: Tool[], cli: string | undefined): void {
 			args: ["-c", command],
 			cwd,
 		}).outputSync();
+
 		if (!status.success) {
 			fail(
 				`priming ${tool.name} failed:\n${
@@ -207,10 +221,13 @@ function prime(tools: Tool[], cli: string | undefined): void {
 
 async function verifySharedSources(tools: Tool[]): Promise<void> {
 	const fixtures = [...new Set(tools.map((tool) => tool.fixture))];
+
 	if (fixtures.length < 2) return;
 	const sources = ["client/src/lib.rs", "src/main.rs"];
+
 	for (const source of sources) {
 		const contents: string[] = [];
+
 		for (const fixture of fixtures) {
 			try {
 				contents.push(
@@ -220,6 +237,7 @@ async function verifySharedSources(tools: Tool[]): Promise<void> {
 				fail(`fixture ${fixture} is missing ${source}`);
 			}
 		}
+
 		if (new Set(contents).size !== 1) {
 			fail(
 				`${source} differs between fixtures ${
@@ -243,22 +261,28 @@ async function main(): Promise<void> {
 
 	let tools: Tool[] = [];
 	const manifestPath = optionalString(args, "manifest");
+
 	if (manifestPath) {
 		const manifest = JSON.parse(
 			await Deno.readTextFile(manifestPath),
 		) as ExternalManifest;
 		tools = manifest.tools;
 	}
+
 	const toolSpecifiers = args.flags.get("tool");
+
 	if (typeof toolSpecifiers !== "undefined") {
 		const specifiers = Array.isArray(toolSpecifiers)
 			? toolSpecifiers
 			: [String(toolSpecifiers)];
+
 		tools.push(...specifiers.map((specifier) => parseTool(specifier)));
 	}
+
 	if (tools.length === 0) {
 		fail("no tools: pass --tool or --manifest");
 	}
+
 	await verifySharedSources(tools);
 	await prime(tools, cli);
 
@@ -267,6 +291,7 @@ async function main(): Promise<void> {
 	globalThis.addEventListener("unload", () => resetStamps(tools));
 
 	const metrics: Record<string, ReturnType<typeof emptyMetric>> = {};
+
 	for (const scenario of scenarioNames) {
 		const commands = tools.map((tool) => ({
 			name: `${tool.name} · ${scenario}`,
@@ -281,24 +306,31 @@ async function main(): Promise<void> {
 			: scenario === "incremental"
 			? { prepare: STAMP_PREPARE, runs }
 			: { runs };
+
 		if (scenario === "cold") {
 			// A cold run needs a warm priming state for its `--prepare` to be
 			// the only difference between runs.
 			await prime(tools, cli);
 		}
+
 		const results = await runHyperfine(commands, options);
+
 		for (const tool of tools) {
 			const result = results.get(`${tool.name} · ${scenario}`);
+
 			if (!result) {
 				fail(`hyperfine produced no result for ${tool.name} · ${scenario}`);
 			}
+
 			const id = `build.${scenario}.${tool.name}`;
 			metrics[id] = emptyMetric("ms", "build", `${scenario} build`);
+
 			if (result.timesMs.length === 0) {
 				fail(
 					`hyperfine recorded no wall-clock samples for ${tool.name} · ${scenario}`,
 				);
 			}
+
 			metrics[id].values.push(...result.timesMs);
 		}
 	}
@@ -314,6 +346,7 @@ async function main(): Promise<void> {
 		metrics,
 	});
 	await Deno.writeTextFile(out, JSON.stringify(run, null, "\t") + "\n");
+
 	for (const [id, metric] of Object.entries(run.metrics)) {
 		log(`${id}: ${metric.median.toFixed(0)} ms`);
 	}

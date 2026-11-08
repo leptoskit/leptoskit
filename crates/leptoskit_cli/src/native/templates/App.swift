@@ -44,9 +44,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
 
         #if canImport(LeptosKitAppShortcuts)
+
         if let shortcut = options.shortcutItem {
             AppShortcutsPlugin.noteLaunchIfPresent(id: shortcut.type)
         }
+
         #endif
     }
 

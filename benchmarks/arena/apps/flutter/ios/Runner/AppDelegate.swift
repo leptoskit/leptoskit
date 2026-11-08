@@ -45,6 +45,7 @@ enum ArenaHost {
           result(FlutterError(code: "bad_argument", message: "addOne takes an integer", details: nil))
           return
         }
+
         result(value + 1)
       default:
         result(FlutterMethodNotImplemented)
@@ -57,10 +58,12 @@ enum ArenaHost {
     var info = kinfo_proc()
     var size = MemoryLayout<kinfo_proc>.stride
     var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+
     guard sysctl(&name, u_int(name.count), &info, &size, nil, 0) == 0 else { return nil }
     let start = info.kp_proc.p_starttime
     var now = timeval()
     gettimeofday(&now, nil)
+
     return Double(now.tv_sec - start.tv_sec) * 1000 + Double(now.tv_usec - start.tv_usec) / 1000
   }
 }

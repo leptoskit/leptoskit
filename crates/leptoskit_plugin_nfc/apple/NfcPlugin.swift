@@ -42,6 +42,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
         guard continuation == nil else { throw PluginError.busy }
 
         guard NFCNDEFReaderSession.readingAvailable else { throw PluginError.unavailable }
+
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             let session = NFCNDEFReaderSession(delegate: self, queue: nil, invalidateAfterFirstRead: true)
@@ -57,6 +58,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
     func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
         guard let record = messages.first?.records.first else {
             finish(.failure(PluginError.unavailable))
+
             return
         }
 
@@ -76,6 +78,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
         if nfc.domain == NFCErrorDomain, nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
             return .cancelled
         }
+
         return .native
     }
 
@@ -86,6 +89,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
                 let uri = record.wellKnownTypeURIPayload()?.absoluteString ?? ""
 
                 guard !uri.isEmpty, uri.utf8.count <= 4096 else { throw PluginError.invalidArgument }
+
                 return NfcRecord(kind: 1, value: uri)
             }
 
@@ -93,6 +97,7 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
                 let text = record.wellKnownTypeTextPayload().0 ?? ""
 
                 guard !text.isEmpty, text.utf8.count <= 4096 else { throw PluginError.invalidArgument }
+
                 return NfcRecord(kind: 0, value: text)
             }
 
@@ -140,10 +145,12 @@ public final class NfcPlugin: NativePlugin {
 
         if method == 0 {
             var value = reader.availability().rawValue.littleEndian
+
             return withUnsafeBytes(of: &value) { Data($0) }
         }
 
         let record = try await reader.read()
+
         return try Self.encode(record)
     }
 
@@ -162,6 +169,7 @@ public final class NfcPlugin: NativePlugin {
         var length = UInt32(record.value.utf8.count).littleEndian
         withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
         data.append(contentsOf: record.value.utf8)
+
         return data
     }
 }

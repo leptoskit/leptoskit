@@ -75,6 +75,7 @@ private func request(_ milliseconds: UInt32) -> Data {
 private func watch(_ milliseconds: UInt32, after cursor: UInt64) -> Data {
     var bytes = request(milliseconds)
     withUnsafeBytes(of: cursor.littleEndian) { bytes.append(contentsOf: $0) }
+
     return bytes
 }
 
@@ -338,6 +339,7 @@ func ringNumbersKeepCountingAcrossRestarts() throws {
     #expect(ring.batch(after: 2) == nil)
     ring.append(Data([3]))
     let bytes = try #require(ring.batch(after: 2))
+
     #expect(bytes.count == 17)
     #expect(bytes.last == 3)
     #expect(ring.lastSequence == 3)

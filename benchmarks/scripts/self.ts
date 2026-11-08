@@ -32,6 +32,7 @@ function run(command: string, cwd?: string): void {
 		stdout: "inherit",
 		stderr: "inherit",
 	}).outputSync();
+
 	if (!status.success) {
 		fail(`command failed: ${command}`);
 	}
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
 		args: ["worktree", "add", "--detach", worktree, baseRef],
 		cwd: REPO_ROOT,
 	}).outputSync();
+
 	if (!add.success) {
 		fail(`could not create the base worktree at ${baseRef}`);
 	}
@@ -133,6 +135,7 @@ async function main(): Promise<void> {
 		const baseHasBench = await Deno.stat(
 			`${worktree}/benchmarks/native/Cargo.toml`,
 		).then(() => true, () => false);
+
 		if (baseHasBench) {
 			await run(
 				`deno run -A ${BENCHMARKS_ROOT}/scripts/native_bench.ts --out ${outDir}/head-native.json --subject head --base-repo ${worktree} --base-out ${outDir}/base-native.json`,

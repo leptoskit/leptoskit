@@ -122,6 +122,7 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 					revision: 0,
 				})?;
 			}
+
 			let key = std::env::var("LEPTOSKIT_CONTROL_KEY").map_err(|_| {
 				anyhow::anyhow!(
 					"set LEPTOSKIT_CONTROL_KEY to a random owner credential of at least 32 \
@@ -166,6 +167,7 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 				},
 			)
 		}
+
 		ConsoleCommand::Backup { data, out } => {
 			let data = data_directory(data)?;
 			Store::open(&data.join("console.sqlite3"))?.backup(&out)
@@ -206,6 +208,7 @@ fn data_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
 	if let Some(path) = explicit {
 		return Ok(path);
 	}
+
 	Ok(
 		PathBuf::from(std::env::var_os("HOME").context("set HOME or pass --data")?)
 			.join(".local/share/leptoskit/console"),
@@ -219,9 +222,11 @@ fn directory_lock(path: &Path) -> Result<std::fs::File> {
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt as _;
+
 		if !existed {
 			std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
 		}
+
 		ensure!(
 			std::fs::metadata(path)?
 				.permissions()
@@ -231,6 +236,7 @@ fn directory_lock(path: &Path) -> Result<std::fs::File> {
 			"use a dedicated private management data directory"
 		);
 	}
+
 	let file = std::fs::OpenOptions::new()
 		.create(true)
 		.truncate(false)
@@ -245,6 +251,7 @@ pub fn deploy(args: &crate::infra::ReleaseArgs) -> Result<()> {
 	if let Some(connection) = client::Connection::for_project()? {
 		return client::deploy(&connection, args);
 	}
+
 	crate::infra::release(args)
 }
 

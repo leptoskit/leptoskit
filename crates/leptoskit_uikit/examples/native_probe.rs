@@ -418,6 +418,7 @@ mod probe {
 		);
 		let parent = UIView::new(mtm);
 		parent.setFrame(CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(32.0, 32.0)));
+
 		parent.setClipsToBounds(true);
 		window.addSubview(&parent);
 		parent.addSubview(&view);
@@ -492,6 +493,7 @@ mod probe {
 		);
 		passed.push(checks.border_boxes().into());
 		passed.push(checks.text_metrics().into());
+
 		passed.push(checks.boolean_controls().into());
 		passed.push(checks.radio_keyboard().into());
 		passed.push(checks.accepted_controls().into());
@@ -619,6 +621,7 @@ mod probe {
 			assert!(file_url.contains("%20"));
 			modify(surface, "image", |props| props.source = Some(file_url));
 			assert!(image.image().is_some(), "encoded file URL loads");
+
 			modify(surface, "image", |props| {
 				props.source = Some("https://invalid.example/image.png".into());
 			});
@@ -720,6 +723,7 @@ mod probe {
 			})
 			.join()
 			.expect("Core Text background operation");
+
 			assert!(measured_thread.width > 0.0);
 			"PASS\tCore Text metrics match UILabel and measure off UI thread"
 		}
@@ -910,6 +914,7 @@ mod probe {
 				// SAFETY: UIKit exports immutable content-type strings.
 				unsafe { UITextContentTypeNewPassword }.to_string()
 			);
+
 			for (name, no) in [
 				("autocorrectionType", 1),
 				("spellCheckingType", 1),
@@ -946,6 +951,7 @@ mod probe {
 				props.text = Some("text-only initial".into());
 			});
 			input.setText(Some(&NSString::from_str("rejected text-only edit")));
+
 			input.sendActionsForControlEvents(UIControlEvents::EditingChanged);
 			assert_eq!(
 				input.text().expect("text fallback").to_string(),
@@ -1014,6 +1020,7 @@ mod probe {
 			modify(surface, "button", |props| props.hidden = Some(false));
 			button.sendActionsForControlEvents(UIControlEvents::PrimaryActionTriggered);
 			assert_eq!(events.borrow().len(), before + 1);
+
 			let root_props = surface.borrow().props(root).clone();
 			let mut disabled = root_props.clone();
 			disabled.enabled = Some(false);
@@ -1126,6 +1133,7 @@ mod probe {
 					.hitTest_withEvent(CGPoint::new(-1.0, 20.0), None)
 					.is_none()
 			);
+
 			// A view that stops being modal releases VoiceOver again.
 			modify(self.surface, "button", |props| {
 				props.aria_mut().modal = Some(true);
@@ -1161,6 +1169,7 @@ mod probe {
 			assert!(activity.isHidden());
 			assert!(activity.accessibilityElementsHidden(mtm));
 			modify(surface, "activity", |props| props.running = Some(true));
+
 			assert!(activity.isAnimating());
 			assert!(!activity.isHidden());
 			let mut hidden = root_props.clone();
@@ -1536,6 +1545,7 @@ mod probe {
 			changed.load(Ordering::SeqCst),
 			"controller retains host after Rust handle drops"
 		);
+
 		assert!(button.superview().is_none());
 		let replaced = container.subviews().objectAtIndex(0);
 		assert_eq!(

@@ -44,6 +44,7 @@ fn setup() -> (tempfile::TempDir, Store) {
 		std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
 	}
 	let store = Store::open(&root.path().join("console.sqlite3")).unwrap();
+
 	for id in ["notes", "other"] {
 		store
 			.register(&Project {
@@ -54,6 +55,7 @@ fn setup() -> (tempfile::TempDir, Store) {
 			})
 			.unwrap();
 	}
+
 	(root, store)
 }
 
@@ -96,11 +98,13 @@ async fn call(
 	body: Option<Value>,
 ) -> (StatusCode, Value) {
 	let mut request = request(method, path, body);
+
 	if let Some(bearer) = bearer {
 		request
 			.headers_mut()
 			.insert("authorization", format!("Bearer {bearer}").parse().unwrap());
 	}
+
 	let (status, _, value) = send(app, request).await;
 	(status, value)
 }
@@ -120,6 +124,7 @@ fn finish(store: &Store, id: &str, succeeded: bool) {
 				} else {
 					"Failed".into()
 				},
+
 				details: json!({"code":"test"}),
 			},
 		)
@@ -135,6 +140,7 @@ fn run(store: &Store, project: &str, revision: u64, key: &str, action: Action) -
 	} else {
 		json!({"code":"test"})
 	};
+
 	let operation = store
 		.enqueue(project, &intent(revision, key, action))
 		.unwrap();
@@ -157,6 +163,7 @@ fn service_configuration_rejects_unsafe_keys_and_origins() {
 	let (_root, store) = setup();
 	let short = "x".repeat(31);
 	let spaced = "word with space ".repeat(3);
+
 	for key in [String::new(), "short".to_owned(), short, spaced] {
 		assert!(Service::new(store.clone(), &key, ORIGIN).is_err());
 	}
@@ -173,8 +180,10 @@ fn service_configuration_rejects_unsafe_keys_and_origins() {
 			"{origin}"
 		);
 	}
+
 	for origin in ["https://deploy.example.com", ORIGIN] {
 		let service = Service::new(store.clone(), OWNER, origin).unwrap();
+
 		assert_eq!(
 			service.origin(),
 			if origin == ORIGIN {
@@ -221,6 +230,7 @@ async fn unauthenticated_requests_receive_security_headers_and_json_errors() {
 		if path == "/api/v1/login" {
 			continue;
 		}
+
 		let (status, value) = call(&app, method, path, None, body).await;
 		assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
 		assert_eq!(value["error"], "authentication_required");
@@ -235,11 +245,14 @@ async fn unauthenticated_requests_receive_security_headers_and_json_errors() {
 	.await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 	assert_eq!(value["error"], "scope_or_origin_denied");
+
 	for bearer in ["short", &"a".repeat(64)] {
 		let (status, _) = call(&app, "GET", "/api/v1/overview", Some(bearer), None).await;
 		assert_eq!(status, StatusCode::UNAUTHORIZED);
 	}
+
 	let (status, ..) = send(&app, request("GET", "/healthz", None)).await;
+
 	assert_eq!(status, StatusCode::OK);
 	let (_, headers, _) = send(&app, request("GET", "/healthz", None)).await;
 	assert_eq!(headers["cache-control"], "no-store");
@@ -282,6 +295,7 @@ async fn login_issues_origin_bound_sessions_and_logout_revokes_them() {
 		.headers_mut()
 		.insert("origin", ORIGIN.parse().unwrap());
 	assert_eq!(send(&app, oversized).await.0, StatusCode::FORBIDDEN);
+
 	let mut unknown = request("POST", "/api/v1/login", Some(json!({"key":"a".repeat(64)})));
 	unknown
 		.headers_mut()
@@ -368,6 +382,7 @@ async fn issued_tokens_are_scoped_to_projects_and_cannot_escalate() {
 	let read = issued["key"].as_str().unwrap();
 	assert_eq!(read.len(), 64);
 	let (_, overview) = call(&app, "GET", "/api/v1/overview", Some(read), None).await;
+
 	let projects: Vec<&str> = overview["projects"]
 		.as_array()
 		.unwrap()
@@ -558,6 +573,7 @@ async fn operation_errors_are_reported_with_stable_codes() {
 			"operation_in_progress_placeholder",
 		),
 	];
+
 	for (project, revision, key, action, expected) in cases {
 		let (status, value) = call(
 			&app,
@@ -567,14 +583,18 @@ async fn operation_errors_are_reported_with_stable_codes() {
 			Some(json!(intent(revision, key, action))),
 		)
 		.await;
+
 		if expected == "operation_in_progress_placeholder" {
 			assert_eq!(status, StatusCode::OK);
 			assert_eq!(value["phase"], "queued");
+
 			continue;
 		}
+
 		assert_eq!(status, StatusCode::CONFLICT, "{key}");
 		assert_eq!(value["error"], expected, "{key}");
 	}
+
 	assert_eq!(
 		call(
 			&app,
@@ -697,6 +717,7 @@ async fn analytics_ingest_and_fleet_queries_enforce_scopes_and_ranges() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(fleet["instances"], 1);
+
 	let to = clock();
 	let (status, fleet) = call(
 		&app,
@@ -708,6 +729,7 @@ async fn analytics_ingest_and_fleet_queries_enforce_scopes_and_ranges() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(fleet["series"][0]["windows"][0]["count"], 2);
+
 	for query in ["?from=0&to=1", "?from=0&to=999999999999"] {
 		assert_eq!(
 			call(
@@ -723,6 +745,7 @@ async fn analytics_ingest_and_fleet_queries_enforce_scopes_and_ranges() {
 			"{query}"
 		);
 	}
+
 	let read = store
 		.issue(Scope::Read, Some("notes"), 3600, false)
 		.unwrap();
@@ -805,6 +828,7 @@ async fn managed_app_keys_are_deterministic_and_revocation_blocks_reissue() {
 	let ingest = service.managed_app_key("notes", true).unwrap();
 	assert_eq!(service.managed_app_key("notes", true).unwrap(), ingest);
 	assert_ne!(read, ingest);
+
 	assert!(service.managed_app_key("bad/project", false).is_err());
 	assert_eq!(
 		call(
@@ -864,6 +888,7 @@ async fn worker_executes_queued_operations_and_reports_progress() {
 	let second = store
 		.enqueue("other", &intent(0, "worker-2", Action::Backup))
 		.unwrap();
+
 	for id in [&first.id, &second.id] {
 		tokio::time::timeout(std::time::Duration::from_secs(10), async {
 			loop {
@@ -873,12 +898,14 @@ async fn worker_executes_queued_operations_and_reports_progress() {
 					assert_eq!(operation.result["project"], operation.project);
 					break;
 				}
+
 				tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 			}
 		})
 		.await
 		.unwrap();
 	}
+
 	assert_eq!(seen.lock().unwrap().len(), 2);
 	handle.abort();
 }
@@ -920,6 +947,7 @@ async fn dashboard_assembles_history_plans_and_measurements() {
 	);
 	run(&store, "notes", 4, "status", Action::Status);
 	run(&store, "notes", 5, "backup", Action::Backup);
+
 	store
 		.enqueue("notes", &intent(6, "queued", Action::Status))
 		.unwrap();
@@ -951,14 +979,17 @@ async fn dashboard_assembles_history_plans_and_measurements() {
 	for window in &mut recent.series[0].windows {
 		window.start_unix_seconds = recent.observed_unix_seconds.saturating_sub(60) / 60 * 60;
 	}
+
 	store.ingest("notes", &recent).unwrap();
 	let mut old = snapshot("notes", "two", 1);
 	old.series[0].key.outcome = Outcome::ServerError;
 	old.observed_unix_seconds = clock().saturating_sub(300);
 	old.started_unix_seconds = old.observed_unix_seconds;
+
 	for window in &mut old.series[0].windows {
 		window.start_unix_seconds = old.observed_unix_seconds / 60 * 60;
 	}
+
 	old.host = Some(HostSample {
 		process_resident_bytes: Some(1024 * 1024),
 		filesystem_available_bytes: Some(2 * 1024 * 1024 * 1024),
@@ -1060,6 +1091,7 @@ fn snapshot_with_host(project: &str, instance: &str, count: usize, host: HostSam
 		clock,
 	)
 	.unwrap();
+
 	for _ in 0..count {
 		analytics.record(
 			SeriesKey {
@@ -1072,6 +1104,7 @@ fn snapshot_with_host(project: &str, instance: &str, count: usize, host: HostSam
 			None,
 		);
 	}
+
 	let mut snapshot = analytics.snapshot();
 	snapshot.host = Some(host);
 	snapshot

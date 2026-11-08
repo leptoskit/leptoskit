@@ -72,6 +72,7 @@ function list(screen: ListScreen, withMenu: boolean): string {
 			quoted(row.subtitle)
 		}).class("text-sm"),\n\t\t\t\t]),`
 	).join("\n");
+
 	return `${HEADER}
 use leptoskit::prelude::*;
 ${withMenu ? "\nuse super::Route;\nuse crate::Store;\n" : ""}
@@ -107,6 +108,7 @@ function form(screen: FormScreen, withMenu: boolean): string {
 		}.to_owned());
 			}`
 	).join("\n");
+
 	return `${HEADER}
 use leptoskit::prelude::*;
 
@@ -152,6 +154,7 @@ function detail(screen: DetailScreen, withMenu: boolean): string {
 	const paragraphs = screen.paragraphs.map((paragraph) =>
 		`\t\t\t\tText(${quoted(paragraph)}),`
 	).join("\n");
+
 	return `${HEADER}
 use leptoskit::prelude::*;
 ${withMenu ? "\nuse super::Route;\nuse crate::Store;\n" : ""}
@@ -195,8 +198,10 @@ function navigator(app: TierApp): string {
 		`\tpub ${screen.id}: ${screen.id}::State,`
 	)
 		.join("\n");
+
 	if (!withMenu) {
 		const [only] = app.screens;
+
 		return `${HEADER}//!
 //! A single screen, rendered directly.
 
@@ -231,6 +236,7 @@ pub fn screen(app: &Store) -> Element {
 			quoted(screen.title)
 		}).class("h-11 px-4").on_press(app.navigator(Route::${variant(screen)})),`
 	).join("\n");
+
 	return `${HEADER}//!
 //! The navigator: the current route is state, with no routing library.
 
@@ -293,6 +299,7 @@ export const emitter: TierEmitter = {
 			`${projectDir}/tier_app/src/routes.rs`,
 			navigator(app),
 		);
+
 		for (const screen of app.screens) {
 			await Deno.writeTextFile(
 				`${routes}/${screen.id}.rs`,

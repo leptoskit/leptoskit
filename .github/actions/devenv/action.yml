@@ -6,6 +6,7 @@ inputs:
     required: true
   nix-cache:
     description: The location of the nix cache
+
     required: true
   install-tools:
     description: Install workspace Cargo tools and prefetch dependencies
@@ -101,6 +102,7 @@ runs:
 
     - name: install dependencies
       if: inputs.install-tools == 'true'
+
       run: install:all
       shell: bash
       env:

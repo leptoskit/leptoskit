@@ -37,9 +37,11 @@ const STRING_1K = Array.from(
 
 function bytes64k(): ArrayBuffer {
 	const bytes = new Uint8Array(65_536);
+
 	for (let index = 0; index < bytes.length; index += 1) {
 		bytes[index] = index % 251;
 	}
+
 	return bytes.buffer;
 }
 
@@ -52,9 +54,11 @@ function sameBytes(result: ArrayBuffer): boolean {
 		result.byteLength !== BYTES_64K.byteLength
 	) return false;
 	const words = new Uint32Array(result);
+
 	for (let index = 0; index < words.length; index += 1) {
 		if (words[index] !== BYTES_64K_WORDS[index]) return false;
 	}
+
 	return true;
 }
 
@@ -64,9 +68,11 @@ const OBJECT_100: EchoObject = Object.fromEntries(
 
 function sameObject(result: EchoObject): boolean {
 	if (typeof result !== "object" || result === null) return false;
+
 	for (let index = 0; index < 100; index += 1) {
 		if (result[`f${index}`] !== index) return false;
 	}
+
 	return Object.keys(result).length === 100;
 }
 
@@ -137,10 +143,12 @@ interface Measured {
 function clockOverheadMs(): number {
 	if (!CLOCK_IS_NATIVE_CALL) return 0;
 	const gaps: number[] = [];
+
 	for (let sample = 0; sample < 1000; sample += 1) {
 		const start = now();
 		gaps.push(now() - start);
 	}
+
 	return median(gaps);
 }
 
@@ -166,14 +174,18 @@ async function measure<Value, Result>(
 		if (!payload.verify(result)) throw new Error(`${label}: wrong result`);
 		return Math.max(0, elapsed - overheadMs);
 	};
+
 	for (let call = 0; call < WARMUP_CALLS; call += 1) await once();
 	const durationsUs: number[] = [];
 	let totalMs = 0;
+
 	for (let call = 0; call < TIMED_CALLS; call += 1) {
 		const elapsed = await once();
+
 		durationsUs.push(elapsed * 1000);
 		totalMs += elapsed;
 	}
+
 	return { durationsUs, totalMs };
 }
 
@@ -195,6 +207,7 @@ export function Echo(props: ScenarioProps) {
 			if (module === undefined || readLaunch().platform === "web") {
 				throw new Error("no native layer on the web");
 			}
+
 			await nextFrame();
 			setPhase("running");
 			const metrics: Record<string, number> = {};
@@ -243,9 +256,11 @@ export function Echo(props: ScenarioProps) {
 							),
 						);
 					}
+
 					samples[`${key}_p50_us`] = batches;
 				}
 			}
+
 			const notes = [
 				"64 KiB bytes cross as an ArrayBuffer (NSData on iOS, byte[] on Android)",
 				"async tier: a native module method with a callback; sync tier: a method returning its result, called on the background thread",
@@ -262,6 +277,7 @@ export function Echo(props: ScenarioProps) {
 			if (!HAS_HIGH_RESOLUTION_CLOCK) {
 				notes.push("Date.now has 1 ms resolution");
 			}
+
 			setProgress("finished");
 			finish({ ok: true, metrics, samples, notes });
 		}

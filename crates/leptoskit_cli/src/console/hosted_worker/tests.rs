@@ -32,9 +32,11 @@ registry = 'ghcr.io'
 registry_username = 'team'
 "
 	.to_owned();
+
 	if hosted_state {
 		text.push_str("hosted_state = true\n");
 	}
+
 	text
 }
 
@@ -59,9 +61,11 @@ registry_username = 'team'
 compute = '{compute}'
 "
 	);
+
 	if budget {
 		text.push_str("\n[infra.budget]\ncurrency = 'USD'\nmonthly_compute = 20.0\n");
 	}
+
 	let config = LeptoskitConfig::from_toml(&text, Path::new("fixture")).unwrap();
 	config.infra.unwrap()
 }
@@ -132,6 +136,7 @@ fn request_posts_json_and_reports_rejections() {
 			"hosted worker request rejected; check account, pairing and subscription"
 		);
 	}
+
 	assert!(
 		request(
 			server.origin(),

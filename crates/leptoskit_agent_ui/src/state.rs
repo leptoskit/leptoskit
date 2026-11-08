@@ -80,6 +80,7 @@ impl Store {
 					*declared = initial.clone();
 					signal.set(initial);
 				}
+
 				Declare::Ok
 			}
 			Some(Variable::Data(_)) => {
@@ -94,6 +95,7 @@ impl Store {
 				};
 				Declare::Ok
 			}
+
 			None if full => Declare::Refused(format!("a document is limited to {max} variables")),
 			None => {
 				variables.insert(
@@ -118,9 +120,11 @@ impl Store {
 					"`{name}` is the application's data and cannot be redeclared"
 				))
 			}
+
 			None if variables.len() >= max => {
 				Declare::Refused(format!("a document is limited to {max} variables"))
 			}
+
 			_ => {
 				variables.insert(name.to_owned(), Variable::Formula(Arc::new(expr)));
 				Declare::Ok

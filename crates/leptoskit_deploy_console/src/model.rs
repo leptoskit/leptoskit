@@ -120,6 +120,7 @@ impl Model {
 				maintenance: false,
 			};
 		}
+
 		match (intent, self.schema) {
 			(_, SchemaChange::Reverse) => {
 				Review {

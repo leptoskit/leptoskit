@@ -57,6 +57,7 @@ async function browse({ path, blocked = [], shown, check }) {
 	let page;
 	try {
 		page = await Page.connect(chrome.endpoint);
+
 		page.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
 			errors.push(
 				exceptionDetails.exception?.description ?? exceptionDetails.text,
@@ -79,6 +80,7 @@ async function browse({ path, blocked = [], shown, check }) {
 				(m) => page.send(m),
 			),
 		);
+
 		if (blocked.length > 0) {
 			await page.send("Network.setBlockedURLs", { urls: blocked });
 		}

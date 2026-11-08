@@ -502,6 +502,7 @@ impl Toaster {
 		opts: ToastOptions,
 	) -> String {
 		let title = title.into();
+
 		if opts.id.is_none()
 			&& opts.action.is_none()
 			&& opts.secondary.is_none()
@@ -514,6 +515,7 @@ impl Toaster {
 		{
 			let id = dup.id.clone();
 			self.bump(&id);
+
 			return id;
 		}
 
@@ -532,9 +534,11 @@ impl Toaster {
 		{
 			self.live.insert(id.clone(), cur.clone());
 			self.owner.insert(cur.clone(), id.clone());
+
 			if let Some(toast) = self.find_mut(&cur) {
 				toast.count = 1;
 			}
+
 			self.apply(
 				&cur,
 				ToastPatch {
@@ -548,6 +552,7 @@ impl Toaster {
 					meta: Some(opts.meta),
 				},
 			);
+
 			return id;
 		}
 
@@ -589,6 +594,7 @@ impl Toaster {
 			.get(caller_id)
 			.cloned()
 			.unwrap_or_else(|| caller_id.to_owned());
+
 		if self.owner.get(&id).map(String::as_str) == Some(caller_id) {
 			self.apply(&id, patch);
 		}
@@ -608,6 +614,7 @@ impl Toaster {
 		let Some(action) = action else {
 			return;
 		};
+
 		match (action.on_press)() {
 			Some(patch) => {
 				self.apply(
@@ -634,29 +641,36 @@ impl Toaster {
 				.iter()
 				.map(|toast| toast.id.clone())
 				.collect();
+
 			for id in ids {
 				self.dismiss(Some(&id), immediate);
 			}
+
 			return;
 		};
 		let id = self.resolve(id);
 		let Some(toast) = self.find(&id) else {
 			return;
 		};
+
 		if toast.phase == ToastPhase::Exit || (toast.phase == ToastPhase::Closing && !immediate) {
 			return;
 		}
+
 		let Some(entry) = self.entries.get_mut(&id) else {
 			return;
 		};
 		entry.phase_at = None;
 		entry.life_started = None;
+
 		if immediate {
 			if let Some(toast) = self.find_mut(&id) {
 				toast.phase = ToastPhase::Exit;
 			}
+
 			return;
 		}
+
 		if let Some(toast) = self.find_mut(&id) {
 			toast.phase = ToastPhase::Closing;
 		}
@@ -666,19 +680,24 @@ impl Toaster {
 	pub fn pause(&mut self, id: Option<&str>, now: Instant) {
 		let Some(id) = id else {
 			let ids: Vec<_> = self.entries.keys().cloned().collect();
+
 			for id in ids {
 				self.pause(Some(&id), now);
 			}
+
 			return;
 		};
 		let id = self.resolve(id);
 		let Some(entry) = self.entries.get_mut(&id) else {
 			return;
 		};
+
 		if entry.paused {
 			return;
 		}
+
 		entry.paused = true;
+
 		if let Some(started) = entry.life_started.take() {
 			let elapsed = now.saturating_duration_since(started);
 			entry.remaining = entry.remaining.saturating_sub(elapsed);
@@ -689,12 +708,15 @@ impl Toaster {
 	pub fn resume(&mut self, id: Option<&str>) {
 		let Some(id) = id else {
 			let ids: Vec<_> = self.entries.keys().cloned().collect();
+
 			for id in ids {
 				self.resume(Some(&id));
 			}
+
 			return;
 		};
 		let id = self.resolve(id);
+
 		if let Some(entry) = self.entries.get_mut(&id) {
 			entry.paused = false;
 		}
@@ -711,6 +733,7 @@ impl Toaster {
 			.iter()
 			.map(|toast| toast.id.clone())
 			.collect();
+
 		for id in ids {
 			self.poll_one(&id, now);
 		}
@@ -729,6 +752,7 @@ impl Toaster {
 			let Some(entry) = self.entries.get_mut(id) else {
 				return;
 			};
+
 			match phase {
 				ToastPhase::Enter => {
 					let due = *entry.phase_at.get_or_insert(now + OPEN_DELAY);
@@ -740,6 +764,7 @@ impl Toaster {
 				ToastPhase::Open => {
 					if !entry.paused && !entry.remaining.is_zero() {
 						let started = *entry.life_started.get_or_insert(now);
+
 						if now.saturating_duration_since(started) >= entry.remaining {
 							entry.life_started = None;
 							life_due = true;
@@ -765,12 +790,15 @@ impl Toaster {
 		if open_due && let Some(toast) = self.find_mut(id) {
 			toast.phase = ToastPhase::Open;
 		}
+
 		if life_due {
 			self.dismiss(Some(id), false);
 		}
+
 		if close_due && let Some(toast) = self.find_mut(id) {
 			toast.phase = ToastPhase::Exit;
 		}
+
 		if exit_due {
 			self.forget(id);
 		}
@@ -780,6 +808,7 @@ impl Toaster {
 		if let Some(toast) = self.find_mut(id) {
 			toast.count = toast.count.saturating_add(1);
 		}
+
 		if let Some(entry) = self.entries.get_mut(id) {
 			entry.remaining = entry.base;
 			entry.life_started = None;
@@ -803,9 +832,11 @@ impl Toaster {
 		let previous_kind = toast.kind;
 		let previous_title = toast.title.clone();
 		let previous_description = toast.description.clone();
+
 		if let Some(title) = patch.title {
 			toast.title = title;
 		}
+
 		if let Some(description) = patch.description {
 			toast.description = if description.is_empty() {
 				None
@@ -813,18 +844,23 @@ impl Toaster {
 				Some(description)
 			};
 		}
+
 		if let Some(kind) = patch.kind {
 			toast.kind = kind;
 		}
+
 		if let Some(progress) = patch.progress {
 			toast.progress = progress;
 		}
+
 		if let Some(action) = patch.action {
 			toast.action = action;
 		}
+
 		if let Some(secondary) = patch.secondary {
 			toast.secondary = secondary;
 		}
+
 		if let Some(meta) = patch.meta {
 			toast.meta = meta;
 		}
@@ -835,18 +871,22 @@ impl Toaster {
 		let has_action = toast.action.is_some() || toast.secondary.is_some();
 
 		let mut next_duration = None;
+
 		if let Some(entry) = self.entries.get_mut(id) {
 			if let Some(duration) = duration_patch {
 				entry.remaining = duration;
 			} else if duration_touched {
 				entry.remaining = auto_duration(kind, has_action);
 			}
+
 			if duration_touched {
 				entry.base = entry.remaining;
+
 				entry.life_started = None;
 				next_duration = Some(entry.remaining);
 			}
 		}
+
 		if let Some(duration) = next_duration
 			&& let Some(toast) = self.find_mut(id)
 		{
@@ -854,6 +894,7 @@ impl Toaster {
 		}
 
 		let quiet = progress_touched && !kind_touched;
+
 		if !quiet
 			&& (title_touched
 				|| description_touched
@@ -868,13 +909,16 @@ impl Toaster {
 
 	fn announce(&mut self, kind: ToastKind, title: &str, description: Option<&str>) {
 		self.announce_flip = !self.announce_flip;
+
 		let mut text = match description {
 			Some(description) if !description.is_empty() => format!("{title}. {description}"),
 			_ => title.to_owned(),
 		};
+
 		if self.announce_flip {
 			text.push('\u{00a0}');
 		}
+
 		if kind == ToastKind::Error {
 			self.state.alert = text;
 		} else {
@@ -934,6 +978,7 @@ pub fn toast_exiting(position: ToastPosition) -> Presence {
 #[must_use]
 pub fn toast_icon_paths(kind: ToastKind) -> &'static [&'static str] {
 	const RING: &str = "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18";
+
 	match kind {
 		ToastKind::Success => &[RING, "M7.9 12.4l3 3 5.3-6"],
 		ToastKind::Error => &[RING, "M9.3 9.3l5.4 5.4", "M14.7 9.3l-5.4 5.4"],
@@ -951,13 +996,16 @@ pub fn ToastIcon(kind: ToastKind) -> Element {
 	let mut icon = Vector(ViewBox::new(0.0, 0.0, 24.0, 24.0).expect("view box"))
 		.class("w-[22px] h-[22px]")
 		.aria_hidden(true);
+
 	for path in toast_icon_paths(kind) {
 		let data = PathData::parse(path).expect("ding icon path");
 		icon = icon.path(VectorPath::new(data).stroke(stroke.clone()));
 	}
+
 	if kind == ToastKind::Loading {
 		icon = icon.keyframes(leptoskit_animation::Keyframes::spin());
 	}
+
 	icon
 }
 
@@ -1065,6 +1113,7 @@ pub fn Toast(
 			);
 		});
 		title_row = title_row.child(Text(item.title.clone()).font(14.0, FontWeight::Medium));
+
 		if item.count > 1 {
 			title_row = title_row.child(
 				Text(format!("×{}", item.count))
@@ -1072,6 +1121,7 @@ pub fn Toast(
 					.opacity(0.7),
 			);
 		}
+
 		if let Some(meta) = &item.meta {
 			title_row = title_row.child(
 				Text(meta.clone())
@@ -1092,6 +1142,7 @@ pub fn Toast(
 				);
 			})
 			.child(title_row);
+
 		if let Some(description) = &item.description {
 			copy = copy.child(
 				Text(description.clone())
@@ -1105,6 +1156,7 @@ pub fn Toast(
 					),
 			);
 		}
+
 		body = body.child(copy);
 
 		if let Some(secondary) = &item.secondary {
@@ -1115,6 +1167,7 @@ pub fn Toast(
 					.on_press(move || on_action(true)),
 			);
 		}
+
 		if let Some(action) = &item.action {
 			let on_action = Arc::clone(&on_action);
 			body = body.child(
@@ -1126,8 +1179,10 @@ pub fn Toast(
 					.on_press(move || on_action(false)),
 			);
 		}
+
 		let sticky =
 			item.duration.is_zero() && item.kind != ToastKind::Loading && item.secondary.is_none();
+
 		if sticky {
 			let on_dismiss = Arc::clone(&on_dismiss);
 			body = body.child(
@@ -1212,6 +1267,7 @@ pub fn ToastViewport(
 	);
 
 	let count = state.toasts.len();
+
 	for (index, item) in state.toasts.iter().enumerate() {
 		let stack_i = count - 1 - index;
 		let offset = stack_i as f32 * 10.0;
@@ -1334,6 +1390,7 @@ mod tests {
 		assert_eq!(toaster.state().toasts[0].phase, ToastPhase::Open);
 		toaster.poll(start + OPEN_DELAY + Duration::from_secs(60));
 		assert_eq!(toaster.state().toasts[0].phase, ToastPhase::Open);
+
 		assert!(toaster.state().toasts[0].duration.is_zero());
 	}
 
@@ -1362,6 +1419,7 @@ mod tests {
 		);
 		assert_eq!(toaster.state().toasts.len(), 1);
 		assert_eq!(toaster.state().toasts[0].kind, ToastKind::Success);
+
 		assert_eq!(toaster.state().toasts[0].title, "Uploaded");
 	}
 
@@ -1375,6 +1433,7 @@ mod tests {
 		let second = toaster.loading("Two", ToastOptions::new().id("b"));
 		assert_eq!(second, "b");
 		toaster.update(&first, ToastPatch::new().title("Stale"));
+
 		assert_eq!(toaster.state().toasts[0].title, "Two");
 		toaster.update(&second, ToastPatch::new().title("Fresh"));
 		assert_eq!(toaster.state().toasts[0].title, "Fresh");
@@ -1395,6 +1454,7 @@ mod tests {
 		let id = toaster.state().toasts[0].id.clone();
 		toaster.act(&id, false);
 		assert_eq!(toaster.state().toasts[0].kind, ToastKind::Info);
+
 		assert_eq!(toaster.state().toasts[0].title, "Restored");
 		assert!(toaster.state().toasts[0].action.is_none());
 	}
@@ -1412,6 +1472,7 @@ mod tests {
 		toaster.poll(open_at);
 		assert_eq!(toaster.state().toasts[0].phase, ToastPhase::Open);
 		toaster.poll(open_at); // arm life
+
 		let paused_at = open_at + Duration::from_millis(200);
 		toaster.pause(None, paused_at);
 		toaster.poll(open_at + Duration::from_secs(10));
@@ -1452,6 +1513,7 @@ mod tests {
 			for path in toast_icon_paths(kind) {
 				PathData::parse(path).expect(path);
 			}
+
 			let _ = ToastIcon(kind);
 		}
 	}
@@ -1542,6 +1604,7 @@ mod tests {
 		assert!(!ToastPhase::Closing.is_live());
 		assert!(ToastPhase::Open.shows_body());
 		assert!(ToastKind::Error.sticky_by_default());
+
 		assert!(!ToastKind::Success.sticky_by_default());
 		let _ = ToastKind::Warning.accent();
 		let _ = ToastKind::Info.accent();

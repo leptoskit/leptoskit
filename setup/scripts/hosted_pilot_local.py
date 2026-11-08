@@ -136,6 +136,7 @@ def check(binary, site):
         backup = root / "backup"
         restored = root / "restored"
         run(binary, data, environment, "backup", "--out", str(backup))
+
         run(binary, restored, environment, "restore", "--from", str(backup))
         with serve(binary, site, restored, environment) as origin:
             if request(origin, "/api/v1/account", key=key)[0] != 401:

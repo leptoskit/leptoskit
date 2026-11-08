@@ -11,9 +11,11 @@ fn fixture() -> (tempfile::TempDir, PathBuf, plan::Plan) {
 	)
 	.unwrap();
 	let mut applications = serde_json::Map::new();
+
 	for name in ["api", "web"] {
 		let app = root.join("apps").join(name);
 		fs::create_dir_all(app.join("migrations")).unwrap();
+
 		fs::write(app.join("migrations/registry.txt"), "").unwrap();
 		fs::write(
 			app.join("leptoskit.toml"),
@@ -61,11 +63,13 @@ secrets = ["API_TOKEN", "PATH"]
 		fs::write(app.join("descriptor.json"), &bytes).unwrap();
 		applications.insert(name.into(), serde_json::json!({"version":"v1","descriptor":format!("apps/{name}/descriptor.json"),"descriptor-sha256":hash(&bytes),"setup":true}));
 	}
+
 	let releases =
 		serde_json::from_value(serde_json::json!({"format_version":1,"applications":applications}))
 			.unwrap();
 	let manifest = manifest.canonicalize().unwrap();
 	let plan = plan::create(&manifest, releases).unwrap();
+
 	(directory, manifest, plan)
 }
 
@@ -93,6 +97,7 @@ fn changed_manifest_descriptor_and_escaping_path_fail() {
 	fs::write(directory.path().join("apps/web/descriptor.json"), "{}").unwrap();
 	assert!(plan::validate(&manifest, &plan).is_err());
 	fs::write(&manifest, "format_version=2").unwrap();
+
 	assert!(plan::unchanged(&manifest, &plan, "api").is_err());
 }
 
@@ -158,6 +163,7 @@ fn journal_retains_interrupted_progress_but_rejects_another_plan() {
 		recovered.applications["api"].state,
 		State::Running
 	));
+
 	assert_eq!(recovered.applications["api"].attempts, 1);
 	assert!(journal(&path, &plan, "other").is_err());
 }
@@ -188,6 +194,7 @@ fn command_preserves_pins_app_directory_and_explicit_environment() {
 	.unwrap();
 	let app = directory.path().join("apps/api");
 	let args = fs::read_to_string(app.join("arguments")).unwrap();
+
 	assert!(args.contains("--reuse-current\n"));
 	assert!(args.contains(&format!(
 		"--configuration-sha256\n{}\n",
@@ -253,6 +260,7 @@ fn batch_stops_after_failure_and_retry_rechecks_completed_apps() {
 	let bytes = serde_json::to_vec(&plan).unwrap();
 	let pin = hash(&bytes);
 	let plan_path = root.join("plan.json");
+
 	fs::write(&plan_path, &bytes).unwrap();
 	let args = DeployArgs {
 		manifest: Some(manifest),

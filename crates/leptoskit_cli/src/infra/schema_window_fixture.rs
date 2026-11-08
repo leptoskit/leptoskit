@@ -50,6 +50,7 @@ pub(super) fn evidence() -> (Value, String) {
 			.collect(),
 	)
 	.unwrap();
+
 	let contract = contract.to_json();
 	(
 		json!({"format_version": 1, "window_sha256": checksum(&window), "window": window,

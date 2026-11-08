@@ -175,6 +175,7 @@ fn the_first_render_is_a_snapshot_and_later_ones_patch_it() {
 	assert_eq!(heading.text.as_deref(), Some("Hello"));
 	assert_eq!(heading.parent, Some(NodeRef::Native(1)));
 	assert_eq!(heading.classes, ["text-lg"]);
+
 	assert_eq!(heading.source.as_ref().map(|source| source.line), Some(11));
 	assert_eq!(heading.frame, Some(frame(16.0, 24.0, 100.0, 20.0)));
 	assert_ne!(root.key, heading.key);

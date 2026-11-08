@@ -544,6 +544,7 @@ where
 		let page = fetch_page(param.clone(), Some(direction)).await?;
 		let mut data = current;
 		params.add_page(&mut data, page, param, backward);
+
 		return Ok(data);
 	}
 
@@ -552,6 +553,7 @@ where
 	let remaining = ctx.pages.unwrap_or(current.len()).max(1);
 	let mut data = InfiniteData::default();
 	let mut index = 0;
+
 	loop {
 		let param = if index == 0 {
 			current
@@ -569,6 +571,7 @@ where
 		let page = fetch_page(param.clone(), None).await?;
 		params.add_page(&mut data, page, param, false);
 		index += 1;
+
 		if index >= remaining {
 			break;
 		}
@@ -768,6 +771,7 @@ where
 	R: IntoMaybeKey<K>,
 {
 	let client = use_query_client();
+
 	let handle = use_query_in(client, scope.scope.clone(), key, options);
 	InfiniteQueryHandle {
 		handle,
@@ -810,6 +814,7 @@ impl QueryClient {
 			.signals
 			.data
 			.with_untracked(|data| data.as_ref().map_or(0, InfiniteData::len));
+
 		if loaded >= pages
 			&& !query.is_stale_for(query.options.stale_time)
 			&& let Some(data) = query.signals.data.get_untracked()

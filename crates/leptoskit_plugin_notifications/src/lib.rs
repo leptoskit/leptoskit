@@ -410,6 +410,7 @@ mod tests {
 			Notification::decode(&[0; 4497]),
 			Err(Error::InvalidArgument)
 		);
+
 		let mut bad_channel = Encoder::default();
 
 		for value in ["job", "Title", "", "no/slash"] {

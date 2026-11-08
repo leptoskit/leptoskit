@@ -337,6 +337,7 @@ impl UIKitBackend {
 				if kind == NativeKind::PasswordInput {
 					apply_password_traits(&field);
 				}
+
 				let target = target();
 				field.setDelegate(Some(ProtocolObject::from_ref(&*target)));
 				connect(
@@ -664,6 +665,7 @@ fn sync_progress(
 		animating.set(true);
 	} else if (!available || !indeterminate) && animating.get() {
 		fill.layer().removeAllAnimations();
+
 		animating.set(false);
 	}
 }
@@ -999,6 +1001,7 @@ fn apply_input_props(
 			std::mem::transmute(objc2::ffi::objc_msgSend as unsafe extern "C-unwind" fn());
 		send(field, selector, content_type(props.text_content()));
 	}
+
 	field.setFont(Some(font));
 	field.setTextColor(Some(foreground));
 
@@ -1238,6 +1241,7 @@ impl NativeBackend for UIKitBackend {
 				ty: 0.0,
 			});
 			progress.setFrame(widget.view.bounds());
+
 			let native_height = progress.bounds().size.height;
 
 			if native_height > 0.0 {

@@ -99,6 +99,7 @@ fn walk(
 			max: budget.max_depth,
 		});
 	}
+
 	measure.depth = measure.depth.max(depth);
 
 	let next_nodes = measure
@@ -108,29 +109,34 @@ fn walk(
 			nodes: u16::MAX,
 			max: budget.max_nodes,
 		})?;
+
 	if next_nodes > budget.max_nodes {
 		return Err(WatchError::TooManyNodes {
 			nodes: next_nodes,
 			max: budget.max_nodes,
 		});
 	}
+
 	measure.nodes = next_nodes;
 
 	if let Some(text) = element.props.text.as_deref() {
 		let added = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
 		let next = measure.text_chars.saturating_add(added);
+
 		if next > budget.max_text_chars {
 			return Err(WatchError::TooMuchText {
 				chars: next,
 				max: budget.max_text_chars,
 			});
 		}
+
 		measure.text_chars = next;
 	}
 
 	for child in &element.children {
 		walk(child, depth.saturating_add(1), budget, measure)?;
 	}
+
 	Ok(())
 }
 

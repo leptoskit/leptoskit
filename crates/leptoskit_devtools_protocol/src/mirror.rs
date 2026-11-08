@@ -188,6 +188,7 @@ fn insert_node(tree: &mut Tree, node: &Node) {
 	let Some(parent) = &node.parent else {
 		tree.root = node.id.clone();
 		tree.nodes.push(node.clone());
+
 		return;
 	};
 	// A node whose parent isn't in the tree yet is dropped, not parked: a
@@ -198,6 +199,7 @@ fn insert_node(tree: &mut Tree, node: &Node) {
 	} else {
 		return;
 	}
+
 	tree.nodes.push(node.clone());
 }
 
@@ -223,6 +225,7 @@ fn descendants(tree: &Tree, root: &NodeRef) -> Vec<NodeRef> {
 	while index < found.len() {
 		let current = found[index].clone();
 		let mut children = Vec::new();
+
 		for node in &tree.nodes {
 			// The guard keeps the walk finite whatever the tree says: an
 			// update can point a parent chain into a cycle, and without
@@ -232,6 +235,7 @@ fn descendants(tree: &Tree, root: &NodeRef) -> Vec<NodeRef> {
 				children.push(node.id.clone());
 			}
 		}
+
 		found.extend(children);
 		index += 1;
 	}

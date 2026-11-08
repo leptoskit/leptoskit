@@ -98,18 +98,23 @@ impl Harbour {
 	/// The harbour as every run starts: the same week, the same log.
 	pub fn new() -> Self {
 		let mut sailings = Vec::new();
+
 		for day in 1..=DAYS {
 			for (index, &(route, departs, seats)) in ROUTES.iter().enumerate() {
 				let id = u32::from(day) * 100 + index as u32;
+
 				let status = match (day, index) {
 					(1, 0) => SailingStatus::Departed,
+
 					(_, 3) if day % 2 == 0 => {
 						SailingStatus::Delayed {
 							minutes: 10 * u32::from(day),
 						}
 					}
+
 					_ => SailingStatus::OnTime,
 				};
+
 				sailings.push((
 					day,
 					Sailing {
@@ -122,6 +127,7 @@ impl Harbour {
 				));
 			}
 		}
+
 		let log = [
 			"Harbour opens for the season.",
 			"Fog horn tested and loud.",
@@ -162,9 +168,11 @@ impl Harbour {
 			.iter_mut()
 			.find(|(_, candidate)| candidate.id == sailing)
 			.ok_or(BookingError::Unknown)?;
+
 		if found.status == SailingStatus::Departed {
 			return Err(BookingError::Departed);
 		}
+
 		found.seats_left = found
 			.seats_left
 			.checked_sub(1)
@@ -180,6 +188,7 @@ impl Harbour {
 		} else {
 			(cursor as usize - 1).min(self.log.len())
 		};
+
 		let start = end.saturating_sub(LOG_PAGE as usize);
 		let entries: Vec<LogEntry> = self.log[start..end].iter().rev().cloned().collect();
 		let next = (start > 0).then(|| self.log[start].id);

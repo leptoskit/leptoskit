@@ -347,6 +347,7 @@ impl Idp {
 
 			if used == 0 {
 				raced.store(true, std::sync::atomic::Ordering::Relaxed);
+
 				return Err(IdpError::invalid_grant("that code was already used"));
 			}
 

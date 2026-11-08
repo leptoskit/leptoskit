@@ -3,6 +3,7 @@ double percentile(List<double> values, double percent) {
   if (values.isEmpty) throw ArgumentError('percentile of no values');
   final sorted = [...values]..sort();
   final rank = (percent / 100 * sorted.length).ceil().clamp(1, sorted.length);
+
   return sorted[rank - 1];
 }
 
@@ -11,6 +12,7 @@ double median(List<double> values) {
   if (values.isEmpty) throw ArgumentError('median of no values');
   final sorted = [...values]..sort();
   final middle = sorted.length ~/ 2;
+
   return sorted.length.isOdd
       ? sorted[middle]
       : (sorted[middle - 1] + sorted[middle]) / 2;

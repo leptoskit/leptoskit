@@ -251,6 +251,7 @@ impl Relay {
 						Some(name) => name.clone(),
 						None => database_name(db).await?,
 					};
+
 					Ok(Names::new(&name))
 				}
 			})
@@ -303,6 +304,7 @@ fn connection(input: &str) -> Result<(String, async_nats::ConnectOptions), Relay
 	} else {
 		async_nats::ConnectOptions::with_token(decode(address.username())?)
 	};
+
 	address
 		.set_username("")
 		.map_err(|()| RelayError::new("invalid relay address"))?;

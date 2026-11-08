@@ -159,6 +159,7 @@ async fn compose_accepts_edits_and_keeps_the_draft_across_history() {
 		.unwrap();
 	reply.click();
 	tick().await;
+
 	let input = parent
 		.query_selector("input")
 		.unwrap()

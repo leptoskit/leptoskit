@@ -454,6 +454,7 @@ fn queries_refetch_invalidate_and_take_new_data() {
 	};
 	assert_eq!(key, "projects");
 	assert_eq!(value.type_name, "QueryState<Vec<Project>>");
+
 	assert_eq!(value.json["data"], serde_json::json!([]));
 	tester.tap(&Finder::text("Dismiss")).unwrap();
 	assert!(store::peek(|model| model.notice.clone()).is_none());
@@ -489,6 +490,7 @@ fn named_state_is_edited_unless_truncated() {
 	tester
 		.enter_text(&Finder::label("cart.count as JSON"), "5")
 		.unwrap();
+
 	tester.tap(&Finder::text("Save")).unwrap();
 	let sent = hub::take_sent();
 	assert_eq!(
@@ -553,6 +555,7 @@ fn calls_and_commits_show_guest_reloads() {
 			"at 0.120 s · 60 ms · 96 B sent, 4.2 KiB back",
 		))
 		.unwrap();
+
 	tester_calls
 		.find(&Finder::text("list_projects (attempt 2)"))
 		.unwrap();
@@ -578,6 +581,7 @@ fn a_node_on_several_platforms_is_compared_and_highlighted_everywhere() {
 	assert_eq!(tester.find_all(&Finder::text("iOS · iPhone 17")).len(), 2);
 	tester.tap(&Finder::text("Highlight everywhere")).unwrap();
 	let key = MatchKey::new("src/screen.rs:3:5#0");
+
 	assert_eq!(
 		hub::take_sent(),
 		[

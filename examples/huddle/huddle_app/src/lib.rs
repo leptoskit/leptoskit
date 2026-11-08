@@ -61,6 +61,7 @@ pub fn provide() -> Shell {
 				shell.huddle.set(Some(child.with(Huddle::new)));
 				signed_in.set_value(Some(child));
 			}
+
 			Some(false) => {
 				if let Some(child) = signed_in.try_update_value(Option::take).flatten() {
 					shell.huddle.set(None);
@@ -102,6 +103,7 @@ pub fn provide() -> Shell {
 #[component]
 pub fn Screen(shell: &Shell) -> Element {
 	let shell = *shell;
+
 	if let Some(huddle) = shell.huddle.get().filter(|_| shell.sign_in.is_signed_in()) {
 		leptoskit::view! { <ui::Screen shell=&shell huddle=&huddle /> }
 	} else {

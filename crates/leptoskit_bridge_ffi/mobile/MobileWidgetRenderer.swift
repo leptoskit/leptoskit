@@ -83,6 +83,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
     }
     func close() {
         open = false
+
         if let dismissTap { view.removeGestureRecognizer(dismissTap) }
         dismissTap = nil
         view.endEditing(true)
@@ -90,12 +91,14 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         focusRequests.removeAll()
         devtools?.close()
         devtools = nil
+
         onRiveViewportChange = nil
 
         for widget in widgets.values {
             (widget as? UIImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
         }
+
         widgets.removeAll()
         radii.removeAll()
         childCounts.removeAll()
@@ -148,6 +151,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         updateCanvas(transaction.root)
         let requests = focusRequests
         focusRequests.removeAll()
+
         for (id, focused) in requests {
             if focused { widgets[id]?.becomeFirstResponder() } else { widgets[id]?.resignFirstResponder() }
         }
@@ -208,6 +212,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         focusRequests[item.id] = item.props.focused
         properties[item.id] = item.props
         radii[item.id] = item.props.cornerRadius
+
         try WidgetStyle.apply(item.props, to: widget)
         scrolls.receive(item.props.scrollOffset, for: item.id)
         motion.created(item.id, item.props)
@@ -229,11 +234,13 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             if item.props.focused != properties[item.id]?.focused {
                 focusRequests[item.id] = item.props.focused
             }
+
             motion.willChange(item.id, widget.layer, from: properties[item.id], to: item.props)
             properties[item.id] = item.props
             radii[item.id] = item.props.cornerRadius
             try WidgetStyle.apply(item.props, to: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
+
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
         }
 
@@ -301,6 +308,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
 
             return
         }
+
         parent.bringSubviewToFront(child)
         child.isUserInteractionEnabled = false
         exits.keep(child, props)
@@ -308,13 +316,16 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
 
     func event(_ node: Int, _ kind: UInt32, _ text: String = "") {
         guard open, !applying, let widget = widgets[node] else { return }
+
         if kind != 4 {
             var ancestor: UIView? = widget
+
             while let current = ancestor {
                 if current.isHidden || !current.isUserInteractionEnabled { return }
                 ancestor = current.superview
             }
         }
+
         onEvent?(node, kind, text)
     }
 
@@ -359,6 +370,7 @@ extension MobileWidgetRenderer {
     fileprivate func updateScrollSizes() {
         for scroll in widgets.values.compactMap({ $0 as? UIScrollView }) {
             let size = scroll.subviews.reduce(CGSize.zero) { size, child in
+
                 guard !exits.contains(child) else { return size }
 
                 return CGSize(

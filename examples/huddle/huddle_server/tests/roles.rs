@@ -19,6 +19,7 @@ async fn serve(roles: Roles) -> (Huddle, String) {
 	let auth = Auth::builder(&db, Keys::single("test", [5; 32])).origin(&base);
 	let huddle = huddle_server::start(&db, auth, options).unwrap();
 	let router = huddle.router.clone();
+
 	tokio::spawn(async move {
 		leptoskit::server::serve_listener(listener, router)
 			.await

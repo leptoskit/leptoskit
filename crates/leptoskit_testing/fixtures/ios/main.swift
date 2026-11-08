@@ -29,6 +29,7 @@ final class CaptureViewController: UIViewController {
         let stack = UIStackView(arrangedSubviews: [title, subtitle, name, greet, increment, permission, status])
         stack.axis = .vertical
         stack.spacing = 24
+
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         NSLayoutConstraint.activate([

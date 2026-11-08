@@ -108,14 +108,17 @@ private final class SystemLiveActivityService: LiveActivityService {
         if let existing = latestTokens.removeValue(forKey: id) { return existing }
 
         guard activity(id: id) != nil else { throw PluginError.unavailable }
+
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
+
                 if let displaced = waiters.updateValue(continuation, forKey: id) {
                     displaced.resume(throwing: PluginError.cancelled)
                 }
             }
         } onCancel: {
             Task { @MainActor [weak self] in
+
                 guard let self else { return }
 
                 if let waiter = self.waiters.removeValue(forKey: id) {
@@ -173,6 +176,7 @@ public final class LiveActivitiesPlugin: NativePlugin {
 
         if #available(iOS 16.1, *) {
             self.init(service: SystemLiveActivityService())
+
             return
         }
 
@@ -290,6 +294,7 @@ public final class LiveActivitiesPlugin: NativePlugin {
     private func encodeIdentifier(_ id: String) throws -> Data {
         var data = Data()
         try append(id, to: &data)
+
         return data
     }
 
@@ -298,6 +303,7 @@ public final class LiveActivitiesPlugin: NativePlugin {
         var length = UInt32(bytes.count).littleEndian
         withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
         data.append(bytes)
+
         return data
     }
 
@@ -308,6 +314,7 @@ public final class LiveActivitiesPlugin: NativePlugin {
         withUnsafeBytes(of: &count) { data.append(contentsOf: $0) }
 
         for id in ids { try append(id, to: &data) }
+
         return data
     }
 
@@ -399,6 +406,7 @@ private struct Reader {
         guard bytes.count - offset >= 4 else { throw PluginError.invalidArgument }
         let value = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
         offset += 4
+
         return value
     }
 
@@ -408,6 +416,7 @@ private struct Reader {
             (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
                 || [45, 46, 95].contains($0)
         }) else { throw PluginError.invalidArgument }
+
         return value
     }
 
@@ -425,6 +434,7 @@ private struct Reader {
 
               !value.unicodeScalars.contains(where: { $0.value <= 31 || (127...159).contains($0.value) })
         else { throw PluginError.invalidArgument }
+
         return value
     }
 
@@ -442,6 +452,7 @@ private struct Reader {
                 throw PluginError.invalidArgument
             }
         }
+
         return fields
     }
 

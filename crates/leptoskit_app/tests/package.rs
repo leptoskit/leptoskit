@@ -59,6 +59,7 @@ fn a_complete_artifact_can_be_repackaged_for_the_public_domain() {
 	// landing page offers it beside the real book.
 	let console = std::fs::read_to_string(out.join("console/index.html")).unwrap();
 	assert!(console.contains("<title>built</title>"));
+
 	let landing = std::fs::read_to_string(out.join("index.html")).unwrap();
 	assert!(landing.contains("href=\"/console/\""));
 	assert!(landing.contains("https://deploy.example.test/"));
@@ -140,6 +141,7 @@ fn a_failed_or_missing_build_is_not_packaged() {
 /// the book's played examples.
 fn broken_cli(directory: &Path, failure: &str) -> std::path::PathBuf {
 	let cli = directory.join("broken-lk");
+
 	let body = match failure {
 		"play" => {
 			"case \"$out\" in *play*) echo 'the example build failed' >&2; exit 1;; esac\nprintf \
@@ -150,6 +152,7 @@ fn broken_cli(directory: &Path, failure: &str) -> std::path::PathBuf {
 			 '<!doctype html><base href=\"/\" />' > \"$out/index.html\";;\nesac\n"
 		}
 	};
+
 	std::fs::write(
 		&cli,
 		format!(
@@ -184,6 +187,7 @@ fn a_relative_cli_is_resolved_and_a_release_build_is_asked_for() {
 		.arg(&relative)
 		.output()
 		.unwrap();
+
 	assert!(
 		output.status.success(),
 		"{} {}",
@@ -250,6 +254,7 @@ fn a_console_entrypoint_that_cannot_be_removed_stops_public_packaging() {
 		.unwrap();
 	assert!(!output.status.success());
 	let report = String::from_utf8_lossy(&output.stderr);
+
 	assert!(report.contains("os error"), "{report}");
 }
 

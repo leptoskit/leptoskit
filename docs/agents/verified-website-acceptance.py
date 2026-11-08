@@ -39,6 +39,7 @@ def tree(root):
         else:
             data = path.read_bytes()
             result[path.relative_to(root).as_posix()] = dict(kind="file", mode=mode, size=len(data), sha256=digest(data))
+
     return result
 
 
@@ -53,6 +54,7 @@ def check_approval(cli, descriptor, temp, env):
     assert statement["descriptor_sha256"] == digest(descriptor.read_bytes())
     public = temp / "reviewer.der"
     public.write_bytes(bytes.fromhex("302a300506032b6570032100" + approval["public_key"]))
+
     signature = temp / "signature.bin"
     signature.write_bytes(bytes.fromhex(approval["signature"]))
     message = temp / "approval-message.bin"
@@ -64,6 +66,7 @@ def check_approval(cli, descriptor, temp, env):
     message.write_bytes(domain + json.dumps(statement, separators=(",", ":")).encode())
     run(*verify, success=False)
     print("ACTUAL WEBSITE DESCRIPTOR APPROVAL VERIFIED INDEPENDENTLY; replacement digest rejected")
+
     return approval
 
 
@@ -75,6 +78,7 @@ assert "@sha256:" in builder and "@sha256:" in runtime
 fixture = root / "crates/leptoskit_cli/tests/fixtures/verified-website"
 source_tree = run("git", "rev-parse", f"{fixture_revision}:crates/leptoskit_cli/tests/fixtures/verified-website")
 commit = run("git", "commit-tree", "-S", source_tree, "-m", "test: committed website acceptance fixture")
+
 env = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0=f"url.file://{root}.insteadOf", GIT_CONFIG_VALUE_0="https://github.com/leptoskit/leptoskit")
 report = b""
 
@@ -86,6 +90,7 @@ runtime_pin = digest(json.dumps(image["Config"], sort_keys=True, separators=(","
 print(json.dumps(dict(commit=commit, builder=builder, runtime=runtime, runtime_config=runtime_pin, toolchain=report.decode())))
 with tempfile.TemporaryDirectory(prefix="a04-website-acceptance-") as temporary:
     temp = Path(temporary)
+
     recipe = dict(repository="https://github.com/leptoskit/leptoskit", commit=commit, builder_image=builder,
                   target="aarch64-unknown-linux-gnu", package="verified-website", binary="verified-website",
                   features=[], no_default_features=False, rustflags=[], website=dict(profile="leptoskit-web-v1",
@@ -154,6 +159,7 @@ with tempfile.TemporaryDirectory(prefix="a04-website-acceptance-") as temporary:
                 asset.chmod(0o755)
             failed = temp / "failed.json"
             run(*package, "--out", str(failed), env=env, success=False)
+
             assert not failed.exists()
 
             if mutation == "add":
@@ -166,6 +172,7 @@ with tempfile.TemporaryDirectory(prefix="a04-website-acceptance-") as temporary:
         report_path = out / "bundle/artifacts/website-toolchain.txt"
         original_report = report_path.read_bytes()
         build_recipe = out / "bundle/build.json"
+
         original_recipe = build_recipe.read_bytes()
         changed_recipe = json.loads(original_recipe)
         report_path.write_bytes(b"substituted toolchain")

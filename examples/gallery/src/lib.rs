@@ -162,9 +162,11 @@ impl ScreenState {
 				.switches
 				.write()
 				.unwrap_or_else(PoisonError::into_inner);
+
 			if !switches.remove(switch) {
 				switches.insert(switch);
 			}
+
 			drop(switches);
 			state.notify();
 		}
@@ -178,11 +180,13 @@ impl ScreenState {
 				.switches
 				.write()
 				.unwrap_or_else(PoisonError::into_inner);
+
 			if checked {
 				switches.insert(switch);
 			} else {
 				switches.remove(switch);
 			}
+
 			drop(switches);
 			state.notify();
 		}
@@ -408,6 +412,7 @@ pub fn start() {
 				leptoskit::web::render(web_preview(screen, &state))
 			}
 		});
+
 		return;
 	}
 

@@ -78,6 +78,7 @@ extension UIKitControls {
         record(!reentered && elapsedTimes.first == 0, "display callback avoids reentry and starts without elapsed time")
         try await Task.sleep(for: .milliseconds(80))
         record(frames == 2, "idle Rive display link stops scheduling")
+
         animator.setPresented(false)
         let suspendedQueries = queries
         animator.requestFrame()

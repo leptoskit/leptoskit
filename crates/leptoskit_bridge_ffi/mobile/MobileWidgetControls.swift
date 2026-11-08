@@ -31,6 +31,7 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
     func makeTextField(_ id: Int, secure: Bool) -> UITextField {
         let field = UITextField()
         field.delegate = self
+
         if secure { field.maskEntry() }
         field.addAction(
             UIAction { [weak self, weak field] _ in
@@ -51,6 +52,7 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
         default:
             throw NativeAppError(message: "Unsupported native widget: \(item.kind ?? "missing kind")")
         }
+
         return widget
     }
 
@@ -61,6 +63,7 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
             self.event(id, 6, "{\"checked\":\(control.isOn)}")
             control.isOn = self.properties[id]?.checked ?? false
         }, for: .valueChanged)
+
         return control
     }
 
@@ -73,12 +76,14 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
             self.event(id, 6, "{\"checked\":\(checked)}")
             button.isSelected = self.properties[id]?.checked ?? false
         }, for: .touchUpInside)
+
         return button
     }
 
     func makeSlider(_ id: Int) -> UISlider {
         let slider = ValueSlider()
         slider.onStep = { [weak self, weak slider] increment in
+
             guard let self, let slider else { return }
             let state = self.properties[id]?.slider ?? .initial
             let step = state.step ?? (state.max - state.min) / 100
@@ -92,6 +97,7 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
             self.event(id, 7, "{\"value\":\(state.proposal(slider.value))}")
             slider.value = (self.properties[id]?.slider ?? .initial).coordinate
         }, for: .valueChanged)
+
         return slider
     }
 
@@ -104,10 +110,12 @@ extension MobileWidgetRenderer: UITextFieldDelegate, UIGestureRecognizerDelegate
     /// Keep text selection and moving between fields under UIKit's control.
     func acceptsDismissal(from touched: UIView?) -> Bool {
         var ancestor = touched
+
         while let current = ancestor {
             if current is UITextField || current is UITextView { return false }
             ancestor = current.superview
         }
+
         return true
     }
 

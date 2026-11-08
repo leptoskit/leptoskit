@@ -86,9 +86,11 @@ async fn main() -> Result<()> {
 		"set LEPTOSKIT_HOSTED_KEY to a persistent random 32+ character encryption key; back it up \
 		 separately",
 	)?;
+
 	if let Command::Restore { from } = &args.command {
 		return Hosted::restore_new(from, &args.data, secret);
 	}
+
 	let billing = match std::env::var("STRIPE_SECRET_KEY") {
 		Ok(key) => {
 			Some(Billing::new(
@@ -100,13 +102,16 @@ async fn main() -> Result<()> {
 		}
 		Err(_) => None,
 	};
+
 	if matches!(args.command, Command::Serve { .. }) {
 		ensure!(
 			billing.is_some(),
 			"configure Stripe keys and both recurring prices before serving hosted subscriptions"
 		);
 	}
+
 	let host = Hosted::open(&args.data, secret, &args.url, billing)?;
+
 	// One broker process per data directory; SQLite handles request-level
 	// serialization.
 	let lock = std::fs::OpenOptions::new()
@@ -181,6 +186,7 @@ async fn main() -> Result<()> {
 		}
 		Command::Restore { .. } => unreachable!("restore handled before opening data"),
 	}
+
 	drop(lock);
 	Ok(())
 }

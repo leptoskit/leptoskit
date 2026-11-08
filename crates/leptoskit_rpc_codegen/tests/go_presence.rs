@@ -71,12 +71,14 @@ fn go_distinguishes_omitted_values_from_explicit_zero_values() {
 		});
 	}
 	let dir = tempfile::tempdir().unwrap();
+
 	for file in spec
 		.generate(&GenerateOptions::new(TargetLanguage::Go, "presence"))
 		.files
 	{
 		std::fs::write(dir.path().join(file.path), file.contents).unwrap();
 	}
+
 	std::fs::write(
 		dir.path().join("presence_test.go"),
 		include_str!("fixtures/presence_test.go"),

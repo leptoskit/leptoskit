@@ -247,6 +247,7 @@ async fn listen(
 		let Ok(wire) = serde_json::from_slice::<Wire>(&message.payload) else {
 			continue;
 		};
+
 		let instance = match &wire {
 			Wire::Signal { instance, .. }
 			| Wire::Presence { instance, .. }

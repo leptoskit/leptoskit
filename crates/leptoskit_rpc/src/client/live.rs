@@ -1003,13 +1003,17 @@ async fn run(inner: Arc<Inner>, commands: UnboundedReceiver<Command>) {
 			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
 				return;
 			}
+
 			continue;
 		};
+
 		if !handshake(inner.as_ref(), connection.as_ref()).await {
 			inner.disconnected();
+
 			if !retry_after(&inner, &mut commands, &mut attempt, &mut backoff).await {
 				return;
 			}
+
 			continue;
 		}
 
@@ -1086,6 +1090,7 @@ async fn connected(
 			Either::Right((..)) => break,
 		}
 	}
+
 	at_once
 }
 
@@ -1108,6 +1113,7 @@ async fn retry_after(
 	if let Err(error) = leptoskit_query::try_sleep(delay).await {
 		leptos::logging::warn!("leptoskit_rpc: reconnect paused: {error}");
 		inner.set_state(LiveState::Offline);
+
 		return wait_for_retry_command(commands).await;
 	}
 
@@ -1171,12 +1177,14 @@ async fn handshake(inner: &Inner, connection: &dyn Connection) -> bool {
 	let epoch = inner.connection.fetch_add(1, Ordering::SeqCst) + 1;
 	let changed = inner.reauthenticate.swap(false, Ordering::SeqCst);
 	let unfinished = inner.auth_pending.swap(0, Ordering::SeqCst) > 0;
+
 	if changed || unfinished {
 		inner.forget_results();
 	}
 
 	if let Some(token) = token(inner).await {
 		inner.auth_pending.fetch_add(1, Ordering::SeqCst);
+
 		if !send(connection, &ClientFrame::Auth { token }).await {
 			return false;
 		}
@@ -1228,6 +1236,7 @@ async fn send_command(inner: &Inner, connection: &dyn Connection, command: Comma
 						args: subscriber.args.clone(),
 					}
 				}
+
 				// The handshake already sent it on this connection, or the
 				// screen that wanted it is gone.
 				_ => return true,
@@ -1368,6 +1377,7 @@ fn dispatch(inner: &Inner, text: &str) {
 							Some(pending.saturating_sub(1))
 						});
 			}
+
 			refuse(inner, refused);
 			if refused || expiring {
 				let _ = inner
@@ -1428,6 +1438,7 @@ fn end_stream(inner: &Inner, stream: u32, reason: EndReason) {
 	{
 		open.opened = false;
 		let _ = inner.commands.unbounded_send(Command::Stream(stream));
+
 		return;
 	}
 
@@ -1507,6 +1518,7 @@ fn finish(inner: &Inner, request: u32, ok: Option<Value>, err: Option<WireError>
 				answer,
 			});
 		}
+
 		answer => {
 			let _ = sender.send(answer);
 		}
@@ -1529,12 +1541,15 @@ fn refuse(inner: &Inner, refused: bool) {
 	inner.actions().clear();
 	inner.queue().clear();
 	inner.queue_changed(None);
+
 	for (_, pending) in inner.pending().drain() {
 		let _ = pending.send(Err(error.clone()));
 	}
+
 	for waiting in inner.waiting().drain(..) {
 		let _ = waiting.sender.send(Err(error.clone()));
 	}
+
 	let subscribers = inner.subscribers();
 
 	for subscriber in subscribers.values() {
@@ -1779,6 +1794,7 @@ fn transport(config: &ClientConfig, service: Option<&str>) -> Option<Arc<dyn Tra
 		Some(service) => super::services::service_origin(Some(&origin), service),
 		None => origin,
 	};
+
 	let socket = Arc::new(Socket {
 		url: socket_url(&origin),
 	});
@@ -2230,6 +2246,7 @@ mod events {
 		});
 		source.set_onmessage(Some(message.as_ref().unchecked_ref()));
 		source.set_onerror(Some(error.as_ref().unchecked_ref()));
+
 		let source = Source {
 			events: source,
 			_message: message,
@@ -2242,6 +2259,7 @@ mod events {
 			Some(Err(error)) => return Err(error),
 			None => return Err("the event stream closed".to_owned()),
 		};
+
 		let Ok(ServerFrame::Welcome { connection, .. }) = serde_json::from_str(&welcome) else {
 			return Err("the event stream didn't start with a welcome".to_owned());
 		};
@@ -2302,6 +2320,7 @@ mod events {
 		init.set_headers(&headers);
 		init.set_body(&JsValue::from_str(&format!("[{frame}]")));
 		let window = web_sys::window().ok_or_else(|| "no window to post from".to_owned())?;
+
 		let response: web_sys::Response =
 			JsFuture::from(window.fetch_with_str_and_init(url, &init))
 				.await
@@ -2600,6 +2619,7 @@ fn send_live<M: Operation>(op: M) -> BoxFuture<'static, Result<M::Output, FnErro
 	let Some(live) = client_for(M::SERVICE) else {
 		return Box::pin(super::call(op));
 	};
+
 	let arguments = match serde_json::to_value(&op) {
 		Ok(arguments) => arguments,
 		Err(error) => {
@@ -2608,6 +2628,7 @@ fn send_live<M: Operation>(op: M) -> BoxFuture<'static, Result<M::Output, FnErro
 			)))));
 		}
 	};
+
 	let work = async move {
 		let value = if M::KIND == crate::Kind::Action {
 			live.act(M::NAME, arguments).await?
@@ -2615,6 +2636,7 @@ fn send_live<M: Operation>(op: M) -> BoxFuture<'static, Result<M::Output, FnErro
 			let key = super::keys::new_key().await;
 			live.mutate(M::NAME, arguments, Some(key)).await?
 		};
+
 		serde_json::from_value(value)
 			.map_err(|error| FnError::Decode(format!("the result of `{}`: {error}", M::NAME)))
 	};
@@ -2646,6 +2668,7 @@ mod tests {
 		sender.unbounded_send(Command::Unsubscribe(1)).unwrap();
 		sender.unbounded_send(Command::Cancel(1)).unwrap();
 		assert!(waiting.as_mut().now_or_never().is_none());
+
 		sender.unbounded_send(Command::Subscribe(2)).unwrap();
 		assert!(waiting.await);
 	}
@@ -3618,6 +3641,7 @@ mod service_urls {
 			Some("ws://127.0.0.1:3000")
 		);
 		assert_eq!(url_origin("wss://app.example"), Some("wss://app.example"));
+
 		assert_eq!(url_origin("/live"), None);
 		assert_eq!(url_origin("wss:///live"), None);
 	}

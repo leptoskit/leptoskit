@@ -60,6 +60,7 @@ fn reverse_generation_preserves_renames_and_marks_data_loss() {
 		after.tables[0].columns[1].name = "username".into();
 		after.tables[0].columns[1].renamed_from = Some("handle".into());
 		let forward = leptoskit_db_schema::diff(&before, &after, &mut RequireHints).unwrap();
+
 		let down = super::reverse_sql(&before, &after, &forward, false).unwrap();
 		assert!(down.contains("RENAME TO \"users\""), "{down}");
 		assert!(
@@ -663,6 +664,7 @@ fn the_push_and_branch_commands_say_what_they_did() {
 		&[],
 	)
 	.unwrap_err();
+
 	assert!(
 		refused.to_string().contains("nothing was pushed"),
 		"{refused}"
@@ -1045,6 +1047,7 @@ fn postgres_live_check_reports_changed_and_missing_catalog_objects() {
 			std::env::var_os("LEPTOSKIT_REQUIRE_POSTGRES").is_none(),
 			"Postgres is required for this test"
 		);
+
 		return;
 	};
 	let runtime = super::runtime().unwrap();
@@ -1109,6 +1112,7 @@ fn postgres_live_check_reports_changed_and_missing_catalog_objects() {
 			.contains("has changed")
 	);
 	execute("DROP TRIGGER live_notes_insert ON notes;");
+
 	assert!(
 		check(&schema)
 			.unwrap_err()
@@ -1182,6 +1186,7 @@ fn scalar(url: &str, sql: &str) -> i64 {
 				.await
 		})
 		.unwrap();
+
 	match rows.first().and_then(|row| row.first()) {
 		Some(leptoskit_db::Value::Int(count)) => *count,
 		other => panic!("{sql} returned {other:?}; expected one integer"),
@@ -1473,6 +1478,7 @@ esac
 		};
 		let url = || std::env::var("LEPTOSKIT_TEST_DB_URL").ok();
 		let yes = std::env::var("LEPTOSKIT_TEST_DB_YES").as_deref() == Ok("1");
+
 		let command = match command.as_str() {
 			"migrate" => DbCommand::Migrate { url: url() },
 			"rollback" => {
@@ -2180,6 +2186,7 @@ fn consolidation_refuses_hand_edits_and_keeps_the_newest() {
 		"the kept migration owns the final column addition"
 	);
 	let migrations = leptoskit_db::load_migrations(&project.migrations_dir()).unwrap();
+
 	super::runtime().unwrap().block_on(async {
 		let db = leptoskit_db::Db::connect("sqlite::memory:").await.unwrap();
 		db.migrate(&migrations).await.unwrap();
@@ -2199,6 +2206,7 @@ fn consolidation_rejects_excess_keep_names_and_leaves_all_kept_history_unchanged
 	create(&project, "bio", &second, &options(), &mut RequireHints).unwrap();
 	let before = History::read(&project.migrations_dir(), project.dialect()).unwrap();
 	let mut too_many = before.names.clone();
+
 	too_many.push("extra".into());
 	let error = super::consolidate(&project, &second, &too_many, &[], &mut RequireHints)
 		.unwrap_err()
@@ -2431,6 +2439,7 @@ fn consolidation_says_when_there_is_nothing_and_keeps_only_the_newest() {
 		.columns
 		.push(Column::new("motto", ColumnType::TEXT).nullable());
 	std::thread::sleep(std::time::Duration::from_secs(1));
+
 	create(&project, "motto", &fourth, &options(), &mut RequireHints).unwrap();
 	super::consolidate(&project, &fourth, &[], &[], &mut RequireHints).unwrap();
 	let history = History::read(&project.migrations_dir(), project.dialect()).unwrap();
@@ -2473,6 +2482,7 @@ fn live_checks_name_the_tables_and_columns_they_warn_about() {
 			events: vec![TriggerEvent::Insert],
 			deferred: false,
 			columns,
+
 			action: if capture {
 				TriggerAction::Function {
 					function: leptoskit_db_schema::live::capture_function(),
@@ -2644,6 +2654,7 @@ fn the_check_command_warns_about_searched_vectors_grown_past_the_limit() {
 		vec![Column::new("id", ColumnType::Uuid)],
 		vec!["id".into()],
 	));
+
 	let schema = Schema::new(Dialect::Sqlite, tables);
 	let latest = fixture
 		.migrations()
@@ -2807,6 +2818,7 @@ fn the_release_and_consolidate_commands_report_their_work() {
 		.columns
 		.push(Column::new("motto", ColumnType::TEXT).nullable());
 	std::thread::sleep(std::time::Duration::from_secs(1));
+
 	let export = fixture.export_environment_for(&third);
 	let environment: Vec<(&str, &str)> = export
 		.iter()
@@ -2823,6 +2835,7 @@ fn the_release_and_consolidate_commands_report_their_work() {
 	let stdout = fixture.run_ok("consolidate", environment);
 	assert!(stdout.contains("nothing to consolidate"), "{stdout}");
 	let history = History::read(&fixture.migrations(), Dialect::Sqlite).unwrap();
+
 	assert_eq!(
 		history.names.len(),
 		3,
@@ -2857,6 +2870,7 @@ fn the_push_command_applies_the_tables_and_says_when_nothing_changed() {
 	let stdout = fixture.run_ok("push", &environment);
 	assert!(stdout.contains("karma"), "{stdout}");
 	let stdout = fixture.run_ok("push", &environment);
+
 	assert!(
 		stdout.contains("the database already has the tables"),
 		"{stdout}"
@@ -3031,6 +3045,7 @@ fn the_manifest_names_a_package_the_workspace_lacks() {
 	let mut project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
 	project.package = "absent_db".into();
 	let error = project.manifest().unwrap_err().to_string();
+
 	assert!(
 		error.contains("no package in the workspace is named"),
 		"{error}"
@@ -3116,9 +3131,11 @@ fn resetting_deletes_sqlite_sidecars_too() {
 	)
 	.unwrap();
 	let url = format!("sqlite://{}", root.path().join("reset.sqlite3").display());
+
 	for suffix in ["", "-wal", "-shm"] {
 		std::fs::write(root.path().join(format!("reset.sqlite3{suffix}")), "stale").unwrap();
 	}
+
 	super::reset(&project, Some(url), true).unwrap();
 	assert_eq!(
 		scalar(
@@ -3358,6 +3375,7 @@ fn watch_reports_a_missing_pack_before_writing() {
 	let change = classify(&history, &Schema::new(dialect, Vec::new()));
 	assert_eq!(change, Change::MissingPacks(vec!["sample".into()]));
 	let message = change.message(leptoskit_config::DbWatch::Migrate).unwrap();
+
 	assert!(message.contains("--drop-pack sample"), "{message}");
 }
 
@@ -3456,6 +3474,7 @@ fn pushed_schema(url: &str) -> Schema {
 #[test]
 fn push_preserves_membership_without_sql_changes_and_accepts_explicit_removal() {
 	let root = tempfile::tempdir().unwrap();
+
 	for (project, url, _server) in push_databases(root.path()) {
 		let baseline = users(project.dialect(), Vec::new());
 		create(&project, "users", &baseline, &options(), &mut RequireHints).unwrap();
@@ -3463,6 +3482,7 @@ fn push_preserves_membership_without_sql_changes_and_accepts_explicit_removal() 
 		let packed = sample_pack(&baseline);
 		let result = super::push::push(&project, &url, &packed, false, &[]).unwrap();
 		assert!(matches!(result, super::push::Pushed::Applied(_)));
+
 		assert_eq!(
 			pushed_schema(&url).pack_membership(),
 			packed.pack_membership()
@@ -3488,6 +3508,7 @@ fn push_preserves_membership_without_sql_changes_and_accepts_explicit_removal() 
 #[test]
 fn squashing_accepts_removal_of_a_pack_known_only_to_push_state() {
 	let root = tempfile::tempdir().unwrap();
+
 	for (project, url, _server) in push_databases(root.path()) {
 		let baseline = users(project.dialect(), Vec::new());
 		create(&project, "users", &baseline, &options(), &mut RequireHints).unwrap();
@@ -3507,6 +3528,7 @@ fn squashing_accepts_removal_of_a_pack_known_only_to_push_state() {
 		.unwrap_err()
 		.to_string();
 		assert!(error.contains("--drop-pack sample"), "{error}");
+
 		assert!(pushed_schema(&url).pack("sample").is_some());
 		let explicit = CreateOptions {
 			drop_packs: vec!["sample".into()],
@@ -3552,6 +3574,7 @@ fn amending_cannot_forget_a_pack_introduced_in_the_current_draft() {
 		&mut RequireHints,
 	)
 	.unwrap();
+
 	let error = create(
 		&project,
 		"remove pack",
@@ -3593,6 +3616,7 @@ fn consolidating_checks_the_release_and_latest_membership_together() {
 		vec![Column::new("bio", ColumnType::TEXT).nullable()],
 	);
 	create(&project, "bio", &second, &explicit, &mut RequireHints).unwrap();
+
 	let third = users(
 		project.dialect(),
 		vec![

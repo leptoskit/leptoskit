@@ -1282,6 +1282,7 @@ mod tests {
 		)
 		.unwrap();
 		std::fs::create_dir_all(root.join("public")).unwrap();
+
 		let config = LeptoskitConfig::load_from(root).unwrap();
 		let (events, _received) = mpsc::channel();
 		let (mut watcher, heard, scope) = start_watcher(&config, root, events, None).unwrap();
@@ -1431,6 +1432,7 @@ mod tests {
 					.unwrap(),
 			),
 		};
+
 		running.stop_app_server();
 		assert!(running.app_server.is_none());
 		assert_eq!(running.env.len(), 1);
@@ -1455,6 +1457,7 @@ mod tests {
 			env: Vec::new(),
 			app_server: Some(created),
 		};
+
 		drop(doomed);
 	}
 
@@ -1487,6 +1490,7 @@ mod tests {
 		)
 		.unwrap();
 		let config = LeptoskitConfig::load_from(root).unwrap();
+
 		(temporary, config)
 	}
 
@@ -1579,6 +1583,7 @@ mod tests {
 			&[("DATABASE_URL".into(), "sqlite::memory:".into())],
 		)
 		.unwrap();
+
 		assert!(child.wait().unwrap().success());
 	}
 

@@ -263,6 +263,7 @@ impl Spring {
 		} else {
 			0.0
 		};
+
 		let natural = (f64::from(self.stiffness) / f64::from(self.mass)).sqrt();
 		let ratio = damping / (2.0 * (f64::from(self.stiffness) * f64::from(self.mass)).sqrt());
 
@@ -275,6 +276,7 @@ impl Spring {
 		} else {
 			let spread = (ratio * ratio - 1.0).sqrt();
 			let fast = -natural * (ratio + spread);
+
 			let slow = -natural * (ratio - spread);
 			(fast * (slow * t).exp() - slow * (fast * t).exp()) / (fast - slow)
 		};
@@ -294,6 +296,7 @@ impl Spring {
 			if (1.0 - self.position(at.as_secs_f32())).abs() > Self::SETTLED {
 				settled = at + step;
 			}
+
 			at += step;
 		}
 

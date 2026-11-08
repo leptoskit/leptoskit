@@ -73,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			huddle_db::MIGRATIONS,
 		)
 	};
+
 	let db = db.with_replicas_from_env(
 		&config
 			.db

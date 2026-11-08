@@ -40,12 +40,15 @@ pub async fn create(
 		.project
 		.ok_or_else(|| Failure::invalid("Choose a project for the clip."))?;
 	let url = input.page.url.trim().to_owned();
+
 	if !(url.starts_with("https://") || url.starts_with("http://")) {
 		return Err(Failure::invalid("A clip needs the address of a web page."));
 	}
+
 	if input.quote.exact.trim().is_empty() {
 		return Err(Failure::invalid("A clip needs a quote."));
 	}
+
 	Project::find(&db, project_id)
 		.await?
 		.ok_or_else(|| Failure::not_found("project"))?;
@@ -54,6 +57,7 @@ pub async fn create(
 		.filter(|source| source.project_id.eq(project_id) & source.url.eq(url.clone()))
 		.first(&db)
 		.await?;
+
 	let source = match source {
 		Some(source) => source,
 		None => {
@@ -61,11 +65,13 @@ pub async fn create(
 			NewSource {
 				owner_id: me.account,
 				project_id,
+
 				title: if title.is_empty() {
 					url.clone()
 				} else {
 					title.to_owned()
 				},
+
 				url,
 				author: optional(input.page.author),
 				site: optional(input.page.site),
@@ -75,6 +81,7 @@ pub async fn create(
 			.await?
 		}
 	};
+
 	let clip = NewClip {
 		owner_id: me.account,
 		project_id,
@@ -101,12 +108,15 @@ pub async fn update(
 	let mut clip = Clip::find(&db, id)
 		.await?
 		.ok_or_else(|| Failure::not_found("clip"))?;
+
 	if let Some(note) = changes.note {
 		clip.note = optional(note);
 	}
+
 	if let Some(tags) = changes.tags {
 		clip.tags = tags::normalize(&tags);
 	}
+
 	clip.save(&db).await?;
 	Ok(Json(clip.into()))
 }
@@ -121,9 +131,11 @@ pub async fn remove(
 		.filter(|clip| clip.id.eq(id))
 		.destroy(&db)
 		.await?;
+
 	if removed == 0 {
 		return Err(Failure::not_found("clip"));
 	}
+
 	Ok(StatusCode::NO_CONTENT)
 }
 
@@ -145,6 +157,7 @@ pub async fn on_page(
 		.all(&db)
 		.await?;
 	let mut clips = Vec::new();
+
 	for source in sources {
 		let project = Project::find(&db, source.project_id)
 			.await?
@@ -165,5 +178,6 @@ pub async fn on_page(
 			}
 		}));
 	}
+
 	Ok(Json(clips))
 }

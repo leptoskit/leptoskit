@@ -32,9 +32,11 @@ impl Store {
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::PermissionsExt as _;
+
 			if !existed {
 				std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
 			}
+
 			ensure!(
 				std::fs::metadata(parent)?
 					.permissions()
@@ -76,6 +78,7 @@ impl Store {
 			)
 			.optional()?;
 		let checksum = format!("{:x}", sha2::Sha256::digest(UP.as_bytes()));
+
 		if let Some((version, applied)) = current {
 			ensure!(
 				version == 1 && applied == checksum,
@@ -85,6 +88,7 @@ impl Store {
 			tx.execute_batch(UP)?;
 			tx.execute("INSERT INTO _lk_migrations VALUES(1, ?1)", [&checksum])?;
 		}
+
 		tx.commit()?;
 		Ok(Self(Arc::new(Mutex::new(db))))
 	}
@@ -120,6 +124,7 @@ impl Store {
 			.root
 			.to_str()
 			.context("repository path must be UTF-8")?;
+
 		if let Some((old, environment)) = existing {
 			ensure!(
 				old == root && environment == project.environment,
@@ -131,6 +136,7 @@ impl Store {
 				params![project.id, project.environment, root],
 			)?;
 		}
+
 		tx.commit()?;
 		Ok(())
 	}
@@ -166,10 +172,13 @@ impl Store {
 				|r| Ok((r.get(0)?, r.get(1)?)),
 			)
 			.optional()?;
+
 		if let Some((id, previous)) = duplicate {
 			ensure!(previous == request, "idempotency_conflict");
+
 			return operation(&tx, &id)?.context("operation missing");
 		}
+
 		let revision: i64 = tx
 			.query_row(
 				"SELECT revision FROM projects WHERE id=?1",
@@ -188,6 +197,7 @@ impl Store {
 			|r| r.get(0),
 		)?;
 		ensure!(!busy, "operation_in_progress");
+
 		if let Action::Apply { plan_id } = &intent.action {
 			let plan: Option<(String, String)> = tx
 				.query_row(
@@ -209,6 +219,7 @@ impl Store {
 			)?;
 			ensure!(!used, "plan_already_consumed");
 		}
+
 		let id = random_key()?;
 		let at = now() as i64;
 		tx.execute(
@@ -285,6 +296,7 @@ impl Store {
 		)?;
 		let result = operation(&tx, &id)?;
 		tx.commit()?;
+
 		Ok(result)
 	}
 
@@ -377,6 +389,7 @@ impl Store {
 		if key.len() != 64 {
 			return Ok(None);
 		}
+
 		self.db()?
 			.query_row(
 				"SELECT scope,project,session FROM tokens WHERE hash=?1 AND expires>?2 AND \
@@ -455,6 +468,7 @@ impl Store {
 			"DELETE FROM producers WHERE seen<?1",
 			[now().saturating_sub(RETENTION) as i64],
 		)?;
+
 		tx.execute("DELETE FROM tokens WHERE expires<?1", [now() as i64])?;
 		let count: i64 = tx.query_row(
 			"SELECT COUNT(*) FROM producers WHERE project=?1",
@@ -501,8 +515,10 @@ impl Store {
 				sample
 			],
 		)?;
+
 		for series in &snapshot.series {
 			let key = serde_json::to_string(&series.key)?;
+
 			for window in &series.windows {
 				tx.execute(
 					"INSERT INTO metric_windows VALUES(?1,?2,?3,?4,?5,?6,?7) ON \
@@ -521,11 +537,13 @@ impl Store {
 				)?;
 			}
 		}
+
 		let rows: i64 = tx.query_row(
 			"SELECT COUNT(*) FROM metric_windows WHERE project=?1",
 			[project],
 			|r| r.get(0),
 		)?;
+
 		if rows > 100_000 {
 			tx.execute(
 				"DELETE FROM metric_windows WHERE rowid IN (SELECT rowid FROM metric_windows \
@@ -533,6 +551,7 @@ impl Store {
 				params![project, rows - 100_000],
 			)?;
 		}
+
 		tx.commit()?;
 		Ok(())
 	}
@@ -557,6 +576,7 @@ impl Store {
 			.collect::<rusqlite::Result<Vec<_>>>()?;
 		ensure!(rows.len() <= 100_000, "analytics_query_limit");
 		let mut groups: BTreeMap<(String, String), BTreeMap<u64, Window>> = BTreeMap::new();
+
 		for (release, key, payload) in rows {
 			let window: Window = serde_json::from_str(&payload)?;
 			let target = groups
@@ -572,10 +592,12 @@ impl Store {
 			target.count = target.count.saturating_add(window.count);
 			target.duration_sum_ms += window.duration_sum_ms;
 			target.duration_max_ms = target.duration_max_ms.max(window.duration_max_ms);
+
 			for (total, value) in target.latency.iter_mut().zip(window.latency) {
 				*total = total.saturating_add(value);
 			}
 		}
+
 		let series = groups
 			.into_iter()
 			.map(|((release, key), windows)| {
@@ -671,6 +693,7 @@ impl Store {
 			let restored = Self::open(candidate.path())?;
 			let db = restored.db()?;
 			let check: String = db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+
 			ensure!(
 				check == "ok",
 				"management backup failed integrity verification"
@@ -686,15 +709,19 @@ impl Store {
 			);
 			db.execute("UPDATE tokens SET revoked=1", [])?;
 		}
+
 		if database.exists() {
 			Self::open(database)?.backup(previous)?;
 		}
+
 		for suffix in ["-wal", "-shm"] {
 			let sidecar = std::path::PathBuf::from(format!("{}{suffix}", database.display()));
+
 			if sidecar.exists() {
 				std::fs::remove_file(sidecar)?;
 			}
 		}
+
 		candidate.as_file().sync_all()?;
 		candidate.persist(database)?;
 		Ok(())
@@ -792,6 +819,7 @@ fn validate(snapshot: &Snapshot) -> Result<()> {
 			"invalid_analytics_identity"
 		);
 	}
+
 	for series in &snapshot.series {
 		ensure!(
 			series.key.operation.len() <= 128
@@ -804,6 +832,7 @@ fn validate(snapshot: &Snapshot) -> Result<()> {
 				&& series.windows.len() <= 60,
 			"invalid_analytics_series"
 		);
+
 		for window in &series.windows {
 			ensure!(
 				window.start_unix_seconds % 60 == 0
@@ -811,6 +840,7 @@ fn validate(snapshot: &Snapshot) -> Result<()> {
 					&& window.start_unix_seconds <= snapshot.observed_unix_seconds,
 				"invalid_analytics_window"
 			);
+
 			ensure!(
 				window.count <= 1_000_000_000_000
 					&& window
@@ -828,5 +858,6 @@ fn validate(snapshot: &Snapshot) -> Result<()> {
 			);
 		}
 	}
+
 	Ok(())
 }

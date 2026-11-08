@@ -4,6 +4,7 @@
 
 fn main() {
 	let failures = platform_probe::run_all();
+
 	if failures == 0 {
 		println!(
 			"platform probe: all probes passed on {}",
@@ -15,5 +16,6 @@ fn main() {
 			std::env::consts::OS
 		);
 	}
+
 	std::process::exit(i32::try_from(failures).unwrap_or(1));
 }

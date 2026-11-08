@@ -24,12 +24,14 @@ impl Connection {
 			address.scheme() == "ws",
 			"WebDriver BiDi needs a local ws URL"
 		);
+
 		let ip: std::net::IpAddr = match address.host().context("BiDi URL has no host")? {
 			url::Host::Ipv4(ip) => ip.into(),
 			url::Host::Ipv6(ip) => ip.into(),
 			url::Host::Domain("localhost") => std::net::Ipv4Addr::LOCALHOST.into(),
 			url::Host::Domain(_) => anyhow::bail!("BiDi host must be loopback"),
 		};
+
 		anyhow::ensure!(ip.is_loopback(), "BiDi host must be loopback");
 		let stream = TcpStream::connect_timeout(
 			&std::net::SocketAddr::new(ip, address.port().unwrap_or(80)),
@@ -38,6 +40,7 @@ impl Connection {
 		stream.set_read_timeout(Some(TIMEOUT))?;
 		stream.set_write_timeout(Some(TIMEOUT))?;
 		let (socket, _) = tungstenite::client(url, stream)?;
+
 		Ok(Self { socket, next: 0 })
 	}
 
@@ -70,6 +73,7 @@ impl Connection {
 					value["error"],
 					value["message"]
 				);
+
 				return Ok(value["result"].clone());
 			}
 		}
@@ -108,6 +112,7 @@ mod tests {
 						json!({"type": "path", "path": "/tmp/test extension"})
 					);
 				}
+
 				// Events and unrelated responses must not be mistaken for our
 				// reply.
 				socket
@@ -122,6 +127,7 @@ mod tests {
 				} else {
 					json!({"type":"success", "id":id, "result":{"extension":"test@example.com"}})
 				};
+
 				socket
 					.send(Message::Text(reply.to_string().into()))
 					.unwrap();

@@ -33,6 +33,7 @@ fn numbers_become_finite_and_bounded() {
 	assert_eq!(*rect, Rect::new(0.0, 0.0, 0.0, 40.0));
 	assert_eq!(*radii, CornerRadii::all(0.0));
 	assert_eq!(*paint, Paint::Solid(Color::rgba(0.0, 1.0, 0.0, 0.5)));
+
 	assert_eq!(border.map(|border| border.width), Some(0.0));
 	let Command::StrokePath { path, stroke, .. } = &scene.commands[1] else {
 		panic!("a stroke");
@@ -60,6 +61,7 @@ fn gradient_stops_are_ordered_and_capped() {
 	};
 	assert_eq!(radius, 0.0);
 	assert_eq!(stops.len(), MAX_GRADIENT_STOPS);
+
 	let offsets: Vec<f32> = stops.iter().take(4).map(|stop| stop.offset).collect();
 	assert_eq!(offsets, [0.5, 0.5, 0.5, 1.0]);
 	let empty = Paint::LinearGradient {
@@ -100,19 +102,24 @@ fn pops_match_pushes_and_open_pushes_close() {
 #[test]
 fn deep_nesting_is_dropped_with_its_pops() {
 	let mut scene = Scene::new();
+
 	for _ in 0..MAX_DEPTH + 10 {
 		scene = scene.push_transform(Affine::IDENTITY);
 	}
+
 	for _ in 0..MAX_DEPTH + 10 {
 		scene = scene.pop_transform();
 	}
+
 	let kept = scene.sanitized().commands;
 	assert_eq!(kept.len(), MAX_DEPTH * 2);
 
 	let mut layers = Scene::new();
+
 	for _ in 0..MAX_LAYER_DEPTH + 3 {
 		layers = layers.push_layer(1.0);
 	}
+
 	let pushes = layers
 		.sanitized()
 		.commands
@@ -125,19 +132,25 @@ fn deep_nesting_is_dropped_with_its_pops() {
 #[test]
 fn command_and_path_counts_are_capped() {
 	let mut scene = Scene::new();
+
 	for _ in 0..MAX_COMMANDS + 5 {
 		scene = scene.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), Color::BLACK);
 	}
+
 	assert_eq!(scene.sanitized().commands.len(), MAX_COMMANDS);
 
 	let mut path = Path::new();
+
 	for i in 0..MAX_PATH_COMMANDS + 5 {
 		path = path.line_to(i as f32, 0.0);
 	}
+
 	let mut scene = Scene::new();
+
 	for _ in 0..20 {
 		scene = scene.fill_path(path.clone(), FillRule::NonZero, Color::BLACK);
 	}
+
 	let total: usize = scene
 		.sanitized()
 		.commands
@@ -160,9 +173,11 @@ fn gradients_past_the_limit_become_their_first_colour() {
 		stops: vec![GradientStop::new(0.0, Color::WHITE)],
 	};
 	let mut scene = Scene::new();
+
 	for _ in 0..=MAX_GRADIENTS {
 		scene = scene.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), gradient.clone());
 	}
+
 	let scene = scene.sanitized();
 	let Some(Command::FillRect { paint, .. }) = scene.commands.last() else {
 		panic!("a rect");
@@ -211,6 +226,7 @@ fn shadows_and_clip_paths_come_out_bounded() {
 		(0.0, 0.0, 0.0),
 		"an infinity or NaN becomes the bound closest to zero"
 	);
+
 	assert_eq!(shadow.color, Color::rgba(1.0, 0.0, 0.0, 0.5));
 	let Command::PushClipPath { path, rule } = &scene.commands[1] else {
 		panic!("a clip path");
@@ -244,9 +260,11 @@ fn a_clip_left_open_is_closed_at_the_end() {
 #[test]
 fn clip_paths_past_the_depth_are_dropped() {
 	let mut scene = Scene::new();
+
 	for _ in 0..MAX_DEPTH + 5 {
 		scene = scene.push_clip_path(Path::new().circle(1.0, 1.0, 1.0), FillRule::NonZero);
 	}
+
 	let commands = scene.sanitized().commands;
 	assert_eq!(
 		commands.len(),

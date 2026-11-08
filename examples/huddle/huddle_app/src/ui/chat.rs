@@ -41,6 +41,7 @@ pub fn Panel(huddle: &Huddle) -> Element {
 			}
 		})
 		.collect();
+
 	let waiting: Fragment = pending
 		.into_iter()
 		.map(|message| view! { <PendingRow huddle=&huddle message=message /> })
@@ -68,6 +69,7 @@ pub fn Panel(huddle: &Huddle) -> Element {
 					test_id="composer"
 					on:change=move |text: &str| {
 						huddle.draft.set(text.to_owned());
+
 						if text.is_empty() {
 							huddle.room.stopped_typing();
 						} else {

@@ -1195,6 +1195,7 @@ mod boundary_tests {
 		let (first, second) = (label(&mut yoga, 20), label(&mut yoga, 30));
 		yoga.set_children(tile, [first.node, second.node]);
 		yoga.set_children(row, [tile]);
+
 		yoga.calculate_layout(row, SPACE);
 
 		relabel(&mut yoga, &first, 40);
@@ -1207,6 +1208,7 @@ mod boundary_tests {
 		yoga.calculate_layout(row, SPACE);
 		assert!(!yoga.is_dirty(tile));
 		assert_eq!(yoga.layout(first.node).width, 40.0);
+
 		assert_eq!(yoga.layout(first.node).x, 130.0);
 		assert_eq!(yoga.layout(second.node).width, 100.0);
 		assert_eq!(yoga.layout(second.node).x, 100.0);

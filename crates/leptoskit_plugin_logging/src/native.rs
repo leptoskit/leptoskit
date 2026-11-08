@@ -535,6 +535,7 @@ mod tests {
 	#[test]
 	fn concurrent_writers_are_rejected_until_the_owner_closes() {
 		let root = tempfile::tempdir().unwrap();
+
 		let mut first = Logger::new(root.path(), Config::default()).unwrap();
 		first.write(&record(0)).unwrap();
 		let mut second = Logger::new(root.path(), Config::default()).unwrap();
@@ -624,6 +625,7 @@ mod tests {
 		logger.write(&record(0)).unwrap();
 		let directory = root.path().join("logs");
 		let before = std::fs::read(directory.join(ACTIVE)).unwrap();
+
 		// A directory where an archive belongs fails rotation on every
 		// platform.
 		std::fs::create_dir(directory.join(filename(1))).unwrap();
@@ -696,6 +698,7 @@ mod tests {
 	fn filtering_limits_and_message_escaping_do_not_create_extra_lines() {
 		let root = tempfile::tempdir().unwrap();
 		let mut logger = Logger::new(root.path(), Config::default()).unwrap();
+
 		let mut input = record(0);
 		input.level = Level::Debug;
 		assert_eq!(logger.write(&input), Ok(false));

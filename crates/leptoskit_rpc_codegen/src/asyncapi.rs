@@ -331,6 +331,7 @@ mod tests {
 		assert_eq!(document["servers"]["live"]["pathname"], "/realtime");
 		assert_eq!(document["channels"]["chat"]["address"], "chat");
 		assert_eq!(document["operations"]["chat.join"]["action"], "send");
+
 		assert_eq!(document["operations"]["chat.signals"]["action"], "receive");
 		assert_eq!(
 			document["components"]["messages"]["chat.signal"]["payload"],

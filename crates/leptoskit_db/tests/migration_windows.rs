@@ -45,6 +45,7 @@ impl Fixture {
 			)],
 		);
 		let mut schemas = vec![baseline];
+
 		for name in ["extra", "later"] {
 			let mut next = schemas.last().unwrap().clone();
 			next.tables[0]
@@ -52,6 +53,7 @@ impl Fixture {
 				.push(Column::new(name, ColumnType::TEXT).nullable());
 			schemas.push(next);
 		}
+
 		let mut before = Schema::empty(Dialect::Postgres);
 		let migrations: Vec<_> = schemas
 			.iter()
@@ -66,6 +68,7 @@ impl Fixture {
 				migration
 			})
 			.collect();
+
 		let snapshots: Vec<_> = schemas.iter().map(Schema::to_json).collect();
 		let window = MigrationWindow::new(
 			&migrations[..1],
@@ -113,6 +116,7 @@ async fn old_build_restarts_and_writes_after_new_build_expands() {
 		.await
 		.unwrap();
 	assert_eq!(fixture.start(&db, 3).await.unwrap(), ["step_1", "step_2"]);
+
 	let restarted = Db::connect(&url).await.unwrap();
 	assert!(restarted.migrate(&fixture.migrations[..1]).await.is_err());
 	assert_eq!(
@@ -157,6 +161,7 @@ async fn later_failure_rolls_back_all_expansions_and_their_history() {
 		.unwrap();
 	assert!(fixture.start(&db, 3).await.is_err());
 	assert_eq!(db.applied_migrations().await.unwrap(), ["step_0"]);
+
 	assert!(
 		db.fetch(statement("SELECT extra FROM notes"))
 			.await
@@ -203,6 +208,7 @@ async fn lock_contention_has_a_deadline_and_does_not_advance_history() {
 		.await
 		.unwrap();
 	let started = Instant::now();
+
 	assert!(
 		tokio::time::timeout(Duration::from_secs(15), fixture.start(&db, 3))
 			.await
@@ -228,6 +234,7 @@ async fn cancelled_wait_does_not_leave_a_pooled_connection_holding_the_lock() {
 	let fixture = Fixture::new();
 	control.migrate(&fixture.migrations[..1]).await.unwrap();
 	let holder = control.begin().await.unwrap();
+
 	holder
 		.execute(statement(
 			"SELECT pg_advisory_xact_lock(7812448352509454194)",
@@ -248,6 +255,7 @@ async fn cancelled_wait_does_not_leave_a_pooled_connection_holding_the_lock() {
 			if rows == vec![vec![Value::Bool(true)]] {
 				break;
 			}
+
 			tokio::time::sleep(Duration::from_millis(10)).await;
 		}
 	})
@@ -304,6 +312,7 @@ async fn cancelling_an_ordinary_migration_discards_its_locked_session() {
 	let fixture = Fixture::new();
 	control.migrate(&fixture.migrations[..1]).await.unwrap();
 	let holder = control.begin().await.unwrap();
+
 	holder
 		.execute(statement("LOCK TABLE notes IN ACCESS EXCLUSIVE MODE"))
 		.await
@@ -322,6 +331,7 @@ async fn cancelling_an_ordinary_migration_discards_its_locked_session() {
 			if rows == vec![vec![Value::Bool(true)]] {
 				break;
 			}
+
 			tokio::time::sleep(Duration::from_millis(10)).await;
 		}
 	})
@@ -367,6 +377,7 @@ async fn cancellation_after_first_expansion_rolls_back_sql_and_history() {
 		))
 		.await
 		.unwrap();
+
 	control
 		.execute(statement(
 			"CREATE EVENT TRIGGER pause_expansion ON ddl_command_start EXECUTE FUNCTION \
@@ -393,6 +404,7 @@ async fn cancellation_after_first_expansion_rolls_back_sql_and_history() {
 			if rows == vec![vec![Value::Bool(true)]] {
 				break;
 			}
+
 			tokio::time::sleep(Duration::from_millis(10)).await;
 		}
 	})

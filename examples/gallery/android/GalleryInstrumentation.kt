@@ -54,6 +54,7 @@ class GalleryInstrumentation : Instrumentation() {
                 painted(activity)
 
                 if (screen == "counter") verifyCounter(activity)
+
                 if (screen == "components") verifyStudio(activity)
 
                 onMain {
@@ -105,9 +106,11 @@ class GalleryInstrumentation : Instrumentation() {
 
         fun visit(view: View) {
             result.add(view)
+
             if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
         }
         visit(activity.findViewById(android.R.id.content))
+
         return result
     }
 
@@ -129,6 +132,7 @@ class GalleryInstrumentation : Instrumentation() {
             }
         }
         resize(activity, true)
+
         onMain {
             check(views(activity).any { it === button }) { "Rotation replaced the live native button" }
             check(views(activity).filterIsInstance<TextView>().any { it.text.toString() == "13" }) {
@@ -179,6 +183,7 @@ class GalleryInstrumentation : Instrumentation() {
             check(editor.requestFocus())
         }
         val heading = views(activity).filterIsInstance<TextView>().first { it.text.toString() == "Shared by design" }
+
         tap(heading)
         painted(activity)
         onMain {
@@ -218,6 +223,7 @@ class GalleryInstrumentation : Instrumentation() {
             image.recycle()
         }
         resize(activity, true)
+
         onMain {
             check(views(activity).any { it === editor }) { "Phone rotation replaced the native studio editor" }
             check(editor.text.toString() == "Gallery value") { "Phone rotation lost the controlled editor value" }
@@ -260,6 +266,7 @@ class GalleryInstrumentation : Instrumentation() {
 
             listener =
                 View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+
                     if (matches()) {
                         content.removeOnLayoutChangeListener(listener)
                         resized.countDown()

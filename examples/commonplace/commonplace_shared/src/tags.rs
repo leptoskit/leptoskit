@@ -5,6 +5,7 @@
 #[must_use]
 pub fn parse(input: &str) -> Vec<String> {
 	let mut tags: Vec<String> = Vec::new();
+
 	for tag in input.split([',', '#']) {
 		let tag = tag
 			.trim()
@@ -12,10 +13,12 @@ pub fn parse(input: &str) -> Vec<String> {
 			.split_whitespace()
 			.collect::<Vec<_>>()
 			.join("-");
+
 		if !tag.is_empty() && !tags.contains(&tag) {
 			tags.push(tag);
 		}
 	}
+
 	tags
 }
 

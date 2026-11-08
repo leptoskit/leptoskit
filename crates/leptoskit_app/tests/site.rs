@@ -59,6 +59,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		leptoskit_app::site::router(api, directory.path(), &docs, "https://deploy.example.test")
 			.unwrap();
 	assert_playground_policy(&app).await;
+
 	for path in [
 		"/",
 		"/play/",
@@ -91,6 +92,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
 			.await
 			.unwrap();
+
 		if path == "/" {
 			let html = String::from_utf8(body.to_vec()).unwrap();
 			assert!(html.contains("One tree."));
@@ -144,6 +146,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		assert!(policy.contains("img-src 'self' data:"), "{path}: {policy}");
 		assert_eq!(response.headers()["access-control-allow-origin"], "*");
 	}
+
 	for path in ["/docs/", "/console/", "/"] {
 		let response = app
 			.clone()
@@ -164,6 +167,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 			"{path}"
 		);
 	}
+
 	for path in ["/docs", "/console"] {
 		let response = app
 			.clone()
@@ -173,6 +177,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
 		assert_eq!(response.headers()["location"], format!("{path}/"));
 	}
+
 	let owner = reactive_graph::owner::Owner::new();
 	owner.with(|| check_documentation_links(&leptoskit_app::landing::screen(Mode::Hosted), &docs));
 	// The public tree offers the same sections, and its documentation links
@@ -186,6 +191,7 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 		"the strict CSP permits only external scripts"
 	);
 	assert!(html.contains("https://deploy.example.test/docs/"));
+
 	for url in include_str!("../web/landing.css").split("url(\"").skip(1) {
 		let path = url
 			.split('"')
@@ -252,6 +258,7 @@ fn check_documentation_links(element: &leptoskit::prelude::Element, docs: &Path)
 			"public link {href} must reach the real book"
 		);
 	}
+
 	for child in &element.children {
 		check_documentation_links(child, docs);
 	}
@@ -294,6 +301,7 @@ fn the_public_landing_html_offers_documentation_without_account_actions() {
 		demo_button.contains("disabled"),
 		"the static button waits for its interactive Wasm replacement"
 	);
+
 	// The polished page keeps its drawing style, responsive assets, and the
 	// real interactive example's mount point.
 	for kept in [
@@ -422,6 +430,7 @@ fn an_unreadable_split_manifest_cannot_be_served() {
 		if std::fs::read(&manifest).is_ok() {
 			return;
 		}
+
 		let result = leptoskit_app::site::router(
 			Router::new(),
 			directory.path(),

@@ -208,6 +208,7 @@ impl AsyncPlugin for XrPlugin {
 pub fn from_context(context: &AppContext, options_json: &str) -> Result<XrPlugin, Error> {
 	let options: Options =
 		serde_json::from_str(options_json).map_err(|_| Error::InvalidArgument)?;
+
 	let runtime = match &options.replay {
 		Some(path) => XrRuntime::new(replay(&context.data_dir, path, options.replay_loop)?),
 		None => XrRuntime::new(platform_backend(context)),

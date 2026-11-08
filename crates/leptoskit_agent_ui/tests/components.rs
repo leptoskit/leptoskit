@@ -42,6 +42,7 @@ fn layouts_space_and_align_their_content() {
 
 	let ui = AgentUi::new();
 	let mut source = String::from("<Var name=\"x\" value={1} />\n\n");
+
 	for gap in [0, 1, 2, 3, 4, 5, 6, 7, 8, 20] {
 		writeln!(
 			source,
@@ -49,6 +50,7 @@ fn layouts_space_and_align_their_content() {
 		)
 		.unwrap();
 	}
+
 	for align in ["start", "center", "end", "stretch", "else"] {
 		writeln!(
 			source,
@@ -56,6 +58,7 @@ fn layouts_space_and_align_their_content() {
 		)
 		.unwrap();
 	}
+
 	for justify in ["start", "center", "end", "between", "else"] {
 		writeln!(
 			source,
@@ -63,6 +66,7 @@ fn layouts_space_and_align_their_content() {
 		)
 		.unwrap();
 	}
+
 	source.push_str(
 		"<Row wrap={false} equal><Text>fixed</Text><Text>widths</Text></Row>\n\n<Row \
 		 equal><Text>equal</Text><Text>items</Text></Row>\n",
@@ -89,6 +93,7 @@ fn cards_and_callouts_group_their_content() {
 	tester.get_by_text("A quieter line").unwrap();
 	tester.get_by_text("Tip").unwrap();
 	tester.get_by_text("Warning").unwrap();
+
 	tester.get_by_text("Careful").unwrap();
 	assert!(tester.get_all_by_text("Note").unwrap().len() >= 2);
 }
@@ -122,6 +127,7 @@ fn stats_show_their_change_in_both_directions() {
 	tester.get_by_text("▲ +120").unwrap();
 	tester.get_by_text("1.50").unwrap();
 	tester.get_by_text("25%").unwrap();
+
 	tester.get_by_text("a lot").unwrap();
 	tester.get_by_text("Lower is better").unwrap();
 	tester.get_by_text("▼ -4% vs May").unwrap();
@@ -684,6 +690,7 @@ fn props_read_the_values_they_were_given() {
 	assert_eq!(lines[1], "Err(\"`missing` is required\")");
 	assert_eq!(lines[2], "Err(\"`s` must be a number, not text\")");
 	assert_eq!(lines[3], "Ok(1.0)");
+
 	assert_eq!(lines[4], "Ok(4.0)");
 	assert_eq!(lines[5], "Err(\"`missing` is required\")");
 	assert_eq!(lines[6], "\"false\"");

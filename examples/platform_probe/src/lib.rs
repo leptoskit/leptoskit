@@ -153,6 +153,7 @@ fn probe(name: &str, body: Probe) -> bool {
 			.unwrap_or_else(|| "non-string panic payload".to_owned());
 		Err(format!("panicked: {message}"))
 	});
+
 	match outcome {
 		Ok(()) => {
 			println!("PASS {name}");
@@ -187,6 +188,7 @@ fn yoga_flexbox() -> Result<(), String> {
 			..Style::default()
 		},
 	);
+
 	for grow in [1.0, 3.0] {
 		let child = tree.create_node();
 		tree.set_style(
@@ -198,6 +200,7 @@ fn yoga_flexbox() -> Result<(), String> {
 		);
 		tree.insert_child(root, child, tree.children(root).len());
 	}
+
 	tree.calculate_layout(
 		root,
 		Size {
@@ -205,14 +208,17 @@ fn yoga_flexbox() -> Result<(), String> {
 			height: AvailableSpace::Definite(50.0),
 		},
 	);
+
 	let first = tree.layout(nth_child(tree.children(root), 0, "flex root")?);
 	let second = tree.layout(nth_child(tree.children(root), 1, "flex root")?);
+
 	if first.width != 25.0 || second.width != 75.0 || second.x != 25.0 {
 		return Err(format!(
 			"flex grow split wrong: {}@{}, {} wide",
 			first.width, second.x, second.width
 		));
 	}
+
 	Ok(())
 }
 
@@ -232,11 +238,14 @@ fn yoga_grid() -> Result<(), String> {
 		..leptoskit_yoga::GridStyle::default()
 	});
 	tree.set_style(root, style);
+
 	for _ in 0..2 {
 		let child = tree.create_node();
 		tree.set_style(child, Style::default());
+
 		tree.insert_child(root, child, tree.children(root).len());
 	}
+
 	tree.calculate_layout(
 		root,
 		Size {
@@ -245,12 +254,14 @@ fn yoga_grid() -> Result<(), String> {
 		},
 	);
 	let second = tree.layout(nth_child(tree.children(root), 1, "grid root")?);
+
 	if second.x != 100.0 || second.width != 200.0 {
 		return Err(format!(
 			"fr tracks wrong: x={}, w={}",
 			second.x, second.width
 		));
 	}
+
 	Ok(())
 }
 
@@ -281,6 +292,7 @@ fn native_diff_and_events() -> Result<(), String> {
 		.iter()
 		.filter(|mutation| matches!(mutation, leptoskit_native::Mutation::Create { .. }))
 		.count();
+
 	if creates != 0 {
 		return Err(format!("rebuild recreated {creates} widgets; diff failed"));
 	}
@@ -288,12 +300,15 @@ fn native_diff_and_events() -> Result<(), String> {
 	let root = surface.root().ok_or("no root committed")?;
 	let button = nth_child(surface.children(root), 1, "native root")?;
 	let outcome = surface.dispatch_event(button, &NativeEvent::Press);
+
 	if outcome != EventOutcome::Handled {
 		return Err("press event was not handled".to_owned());
 	}
+
 	if presses.load(AtomicOrdering::SeqCst) != 1 {
 		return Err("press handler did not run".to_owned());
 	}
+
 	Ok(())
 }
 
@@ -311,6 +326,7 @@ fn wasm_abi_runtime() -> Result<(), String> {
 		surface.root().ok_or("no root after start")?
 	};
 	let label = nth_child(host.surface().children(root), 0, "wasm root")?;
+
 	if host.surface().props(label).text.as_deref() != Some("Count: 0") {
 		return Err("initial label wrong".to_owned());
 	}
@@ -318,6 +334,7 @@ fn wasm_abi_runtime() -> Result<(), String> {
 	let outcome = host
 		.dispatch(label, &NativeEvent::Press)
 		.map_err(|error| format!("dispatch: {error}"))?;
+
 	if outcome != EventOutcome::Unhandled {
 		return Err("the label must not consume a press".to_owned());
 	}
@@ -325,15 +342,19 @@ fn wasm_abi_runtime() -> Result<(), String> {
 	let outcome = host
 		.dispatch_wire(3, EventKind::Press, None)
 		.map_err(|error| format!("dispatch_wire: {error}"))?;
+
 	if outcome != EventOutcome::Handled {
 		return Err("the module did not handle the button press".to_owned());
 	}
+
 	if host.commits() != 2 {
 		return Err(format!("expected 2 commits, saw {}", host.commits()));
 	}
+
 	if host.surface().props(label).text.as_deref() != Some("Count: 1") {
 		return Err("label did not update after the wasm-side rebuild".to_owned());
 	}
+
 	Ok(())
 }
 
@@ -384,6 +405,7 @@ impl Transport for RouterTransport {
 						if !status.is_success() {
 							return Err(CodePushError::Transport(format!("{url}: {status}")));
 						}
+
 						Ok(bytes.to_vec())
 					})
 				})
@@ -469,12 +491,15 @@ fn codepush_delta_update() -> Result<(), String> {
 	let report = client
 		.sync(&state.join("staged"))
 		.map_err(|error| format!("sync: {error}"))?;
+
 	if !report.updated {
 		return Err("the update did not install".to_owned());
 	}
+
 	if !report.used_delta {
 		return Err("the update arrived as a full bundle, not a delta".to_owned());
 	}
+
 	if report.version != Some(Version::new(1, 0, 0)) {
 		return Err(format!(
 			"updated to the wrong version: {:?}",
@@ -483,8 +508,10 @@ fn codepush_delta_update() -> Result<(), String> {
 	}
 
 	let staged = std::fs::read(state.join("staged").join("app.wasm")).map_err(|e| e.to_string())?;
+
 	if !staged.starts_with(b"probe-next-marker-with-changes") {
 		return Err("the staged bytes are not the v1.0.0 bundle".to_owned());
 	}
+
 	Ok(())
 }

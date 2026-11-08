@@ -66,14 +66,17 @@ pub fn workspace(id: &str) -> Schema {
 	properties["format_version"]["const"] = serde_json::json!(crate::workspace::WORKSPACE_VERSION);
 	properties["applications"]["minProperties"] = serde_json::json!(1);
 	properties["applications"]["maxProperties"] = serde_json::json!(256);
+
 	properties["applications"]["propertyNames"] =
 		serde_json::json!({"pattern": "^[a-z][a-z0-9-]{0,62}$"});
 	let definitions = object.get_mut("$defs").expect("workspace definitions");
 	definitions["Application"]["properties"]["depends-on"]["uniqueItems"] = serde_json::json!(true);
+
 	for name in ["url-env", "token-env"] {
 		definitions["Binding"]["properties"][name]["pattern"] =
 			serde_json::json!("^[A-Z_][A-Z0-9_]*$");
 	}
+
 	schema
 }
 

@@ -77,6 +77,7 @@ export function Cold(props: ScenarioProps) {
 					"first_frame_ms is the loadBundle pipeline's paintEnd minus the process start time",
 				);
 			}
+
 			finish({ ok: true, metrics, notes });
 		});
 	}, []);

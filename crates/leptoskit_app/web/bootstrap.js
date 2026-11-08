@@ -9,8 +9,10 @@
 // download surfaces where it is awaited below, so mark each handled until
 // then.
 const client = fetch("/pkg/leptoskit_app_bg.wasm", { priority: "low" });
+
 client.catch(() => {});
 const glue = import("/pkg/leptoskit_app.js");
+
 glue.catch(() => {});
 
 try {
@@ -31,10 +33,12 @@ try {
 			document.head.append(script);
 		});
 	}
+
 	const { default: init } = await glue;
 	await init({ module_or_path: client });
 } catch {
 	const note = document.getElementById("preview-note");
+
 	if (note) {
 		note.textContent =
 			"The interactive example could not load. The guides and the rest of the site are still available.";

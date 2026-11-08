@@ -287,6 +287,7 @@ pub(crate) async fn call<T: DeserializeOwned>(
 	if let Some(value) = CALL_OVERRIDE.with(|slot| slot.borrow().clone()) {
 		return serde_json::from_value(value).map_err(|error| Error::Json(error.to_string()));
 	}
+
 	Err(Error::Unavailable(path.to_owned()))
 }
 

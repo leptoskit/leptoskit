@@ -48,6 +48,7 @@ impl Host {
 			if !gallery.is_pressable(node) {
 				return false;
 			}
+
 			gallery.surface.backend().view(node).map(Message::retain)
 		};
 		let Some(button) = view.and_then(|view| view.downcast::<NSButton>().ok()) else {
@@ -101,6 +102,7 @@ pub fn snapshot(out_dir: &Path) -> Result<Vec<PathBuf>, String> {
 	let assets = default_assets()?;
 	std::fs::create_dir_all(out_dir)
 		.map_err(|error| format!("could not create {}: {error}", out_dir.display()))?;
+
 	for screen in &SCREENS {
 		let host = open(screen.slug, assets.clone())?;
 		let gallery = host.session.borrow();
@@ -113,11 +115,13 @@ pub fn snapshot(out_dir: &Path) -> Result<Vec<PathBuf>, String> {
 			.backend()
 			.snapshot_png(root, SNAPSHOT_SCALE)
 			.map_err(|error| format!("could not snapshot `{}`: {error}", screen.slug))?;
+
 		let path = out_dir.join(format!("{}.png", screen.slug));
 		std::fs::write(&path, png)
 			.map_err(|error| format!("could not write {}: {error}", path.display()))?;
 		written.push(path);
 	}
+
 	Ok(written)
 }
 

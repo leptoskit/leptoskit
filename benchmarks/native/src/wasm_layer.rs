@@ -28,6 +28,7 @@ pub fn run(report: &mut Report, config: Config, guest: Option<&[u8]>) -> Result<
 		report.note(
 			"wasm layer skipped: no guest embedded (build with LEPTOSKIT_BENCH_GUEST_WASM set)",
 		);
+
 		return Ok(());
 	};
 
@@ -117,11 +118,13 @@ fn verify_rows(
 	let surface = host.surface();
 	let root = surface.root().ok_or("wasm guest committed no root")?;
 	let rows = surface.children(root).len();
+
 	if rows != expected {
 		return Err(format!(
 			"wasm guest committed {rows} rows, expected {expected}"
 		));
 	}
+
 	Ok(())
 }
 
@@ -141,10 +144,12 @@ fn verify_label(
 		.first()
 		.ok_or_else(|| format!("wasm row {row} has no label"))?;
 	let text = surface.props(label).text.clone().unwrap_or_default();
+
 	if text != expected {
 		return Err(format!(
 			"wasm row {row} reads {text:?}, expected {expected:?}"
 		));
 	}
+
 	Ok(())
 }

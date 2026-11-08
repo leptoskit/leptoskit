@@ -77,6 +77,7 @@ fn every_file_is_a_route() {
 			}),
 		),
 	];
+
 	for (url, expected) in cases {
 		let route = parse(url);
 		assert_eq!(route, expected, "{url}");
@@ -205,6 +206,7 @@ fn values_a_path_cannot_hold_never_link_to_another_site() {
 			"/",
 		),
 	];
+
 	for (route, href) in cases {
 		assert_eq!(route.href().as_str(), href, "{route:?}");
 	}

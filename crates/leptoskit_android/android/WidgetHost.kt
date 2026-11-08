@@ -1297,6 +1297,7 @@ class WidgetHost(
                     } else {
                         min(frameWidth / boxWidth, frameHeight / boxHeight)
                     }
+
                 // Omitted when centred on both axes.
                 val align = drawing.optJSONObject("align")
                 scaleX = scale

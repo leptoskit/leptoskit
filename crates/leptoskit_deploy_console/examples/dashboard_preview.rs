@@ -41,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		},
 	)?;
 	store.claim()?;
+
 	store.progress(&operation.id, "Verified the example image and schema")?;
 	store.finish(
 		&operation.id,
@@ -60,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Limits::default(),
 		clock,
 	)?;
+
 	for index in 0..120 {
 		analytics.record(
 			SeriesKey {
@@ -76,6 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			None,
 		);
 	}
+
 	store.ingest("fieldnotes-preview", &analytics.snapshot())?;
 	let key = "example-only-dashboard-render-key-0123456789";
 	let service = Service::new(store, key, "http://localhost:4700")?;

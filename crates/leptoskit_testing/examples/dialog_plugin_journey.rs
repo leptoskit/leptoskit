@@ -74,6 +74,7 @@ mod journey {
 				"linux" => Platform::Linux,
 				_ => return Err("expected windows, macos or linux".into()),
 			};
+
 			let accept = match args[3].as_str() {
 				"accept" => true,
 				"decline" => false,
@@ -97,6 +98,7 @@ mod journey {
 		/// needs for its `XCTest` runner.
 		fn options(&self) -> Options {
 			let verdict = if self.accept { "accept" } else { "decline" };
+
 			let platform = match self.platform {
 				Platform::Windows => "windows",
 				Platform::Macos => "macos",
@@ -104,6 +106,7 @@ mod journey {
 				Platform::Ios => "ios",
 				Platform::Android => "android",
 			};
+
 			let mut options = Options::new(&self.endpoint, self.platform, self.application.clone());
 			options.artifacts =
 				format!("target/native-ui/reports/dialog-plugin-{platform}-{verdict}").into();
@@ -135,6 +138,7 @@ mod journey {
 		} else {
 			tester.tap(&Locator::text("Choose evidence"))?;
 		}
+
 		let choice = dialog_button(
 			platform,
 			"Choose evidence",

@@ -61,6 +61,7 @@ pub(super) async fn events(State(live): State<Live>, request: axum::extract::Req
 			"a service can't hold a live connection to the app: call its operations instead",
 		));
 	}
+
 	let Some(secret) = secret() else {
 		return StatusCode::SERVICE_UNAVAILABLE.into_response();
 	};
@@ -151,6 +152,7 @@ pub(super) async fn frames(State(live): State<Live>, request: axum::extract::Req
 			&format!("post at most {MAX_FRAME_BYTES} bytes of frames at a time"),
 		);
 	};
+
 	let frames: Vec<ClientFrame> = match serde_json::from_slice(&bytes) {
 		Ok(frames) => frames,
 		Err(error) => {

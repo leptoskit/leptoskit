@@ -16,10 +16,13 @@ static READ_SITES: AtomicBool = AtomicBool::new(false);
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let _ = navigation;
+
 	if !browser::IN_EXTENSION {
 		return view! { <ui::ExtensionOnly /> };
 	}
+
 	let store = Store::current();
+
 	if !READ_SITES.swap(true, Ordering::Relaxed) {
 		crate::tasks::spawn(async {
 			let sites = highlights::registered().await;
@@ -28,6 +31,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 				.update(|extension| extension.sites = sites);
 		});
 	}
+
 	let (projects, chosen, sites, site, status) = store.with(|state| {
 		(
 			state.library.ready().cloned().unwrap_or_default(),
@@ -161,14 +165,19 @@ mod highlights {
 			let granted = permissions::request(std::slice::from_ref(&pattern))
 				.await
 				.map_err(|error| error.to_string())?;
+
 			if !granted {
 				return Err("Commonplace needs your permission to highlight on that site.".into());
 			}
+
 			let mut sites = registered().await;
+
 			if !sites.contains(&pattern) {
 				sites.push(pattern);
 			}
+
 			register(&sites).await?;
+
 			return Ok(sites);
 		}
 		#[allow(unreachable_code)]
@@ -192,9 +201,11 @@ mod highlights {
 	#[cfg(feature = "extension")]
 	async fn register(sites: &[String]) -> Result<(), String> {
 		let _ = scripting::unregister(SCRIPT).await;
+
 		if sites.is_empty() {
 			return Ok(());
 		}
+
 		scripting::register(SCRIPT, sites)
 			.await
 			.map_err(|error| error.to_string())

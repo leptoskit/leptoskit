@@ -177,6 +177,7 @@ impl FrameTextures {
 				.write(queue, &cbcr.data, cbcr.row_stride);
 				Some((true, image.display_transform))
 			}
+
 			CameraPixels::Rgba(rgba) if rgba.is_complete(4) => {
 				let size = (rgba.width, rgba.height);
 				Slot::ensure(
@@ -189,6 +190,7 @@ impl FrameTextures {
 				.write(queue, &rgba.data, rgba.row_stride);
 				Some((false, image.display_transform))
 			}
+
 			#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 			CameraPixels::Native(NativeImage::PixelBuffer(buffer)) => {
 				let (y, cbcr) = buffer.planes()?;

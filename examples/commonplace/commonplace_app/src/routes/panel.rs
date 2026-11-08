@@ -13,9 +13,11 @@ use crate::ui;
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let _ = navigation;
+
 	if !browser::IN_EXTENSION {
 		return view! { <ui::ExtensionOnly /> };
 	}
+
 	let store = Store::current();
 	let (projects, chosen) = store.with(|state| {
 		(
@@ -24,6 +26,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 		)
 	});
 	let chosen = chosen.or_else(|| projects.first().map(|summary| summary.project.id));
+
 	let clips = match chosen {
 		Some(id) => {
 			store.open_project(id);
@@ -31,12 +34,14 @@ pub fn Page(navigation: &Navigation) -> Element {
 				Some((open, Load::Ready(detail))) if open == id => {
 					view! { <Clips detail=&detail /> }
 				}
+
 				Some((_, Load::Failed(message))) => view! { <ui::Problem message=&message /> },
 				_ => view! { <ui::Loading what="the project" /> },
 			}
 		}
 		None => view! { <View /> },
 	};
+
 	view! {
 		<View class="gap-3">
 			<ui::Title text="Your research" />
@@ -60,6 +65,7 @@ fn Clips(detail: &ProjectDetail) -> Element {
 	if detail.clips.is_empty() {
 		return view! { <Text class=ui::QUIET>"Nothing clipped into this project yet."</Text> };
 	}
+
 	view! {
 		<View class="gap-2">
 			{detail

@@ -52,6 +52,7 @@ fn project() -> tempfile::TempDir {
 	)
 	.unwrap();
 	fs::write(root.path().join("migrations/registry.txt"), "").unwrap();
+
 	project_tools(root.path());
 	root
 }
@@ -365,6 +366,7 @@ fn the_management_service_runs_existing_releases_after_the_request_client_discon
 	drop(listener);
 	let url = format!("http://{address}");
 	let owner = "test-service-owner-key-01234567890123456789";
+
 	let paths = std::iter::once(root.path().join("bin"))
 		.chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))
 		.collect::<Vec<_>>();
@@ -403,6 +405,7 @@ fn the_management_service_runs_existing_releases_after_the_request_client_discon
 		.build()
 		.into();
 	let deadline = Instant::now() + Duration::from_secs(20);
+
 	while agent.get(format!("{url}/healthz")).call().is_err() {
 		assert!(
 			Instant::now() < deadline,
@@ -410,6 +413,7 @@ fn the_management_service_runs_existing_releases_after_the_request_client_discon
 		);
 		std::thread::sleep(Duration::from_millis(25));
 	}
+
 	let post = |revision: u64, key: &str, action: serde_json::Value| {
 		let mut response = agent
 			.post(format!("{url}/api/v1/projects/notes-production/operations"))
@@ -423,6 +427,7 @@ fn the_management_service_runs_existing_releases_after_the_request_client_discon
 	};
 	let follow = |id: &str| {
 		let deadline = Instant::now() + Duration::from_secs(20);
+
 		loop {
 			let mut response = agent
 				.get(format!("{url}/api/v1/operations/{id}"))
@@ -431,9 +436,11 @@ fn the_management_service_runs_existing_releases_after_the_request_client_discon
 				.unwrap();
 			let operation: serde_json::Value =
 				serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+
 			if operation["phase"] == "succeeded" {
 				break operation;
 			}
+
 			assert!(
 				operation["phase"] != "failed" && operation["phase"] != "interrupted",
 				"{operation}"
@@ -521,6 +528,7 @@ fn analytics_plugin_binds_release_identity_through_deploy_and_rollback() {
 	assert_eq!(manifest["plugins"][0]["enabled"], true);
 	assert!(!root.path().join("tofu-calls").exists());
 	succeeds(&cli(root.path(), &["infra", "generate"], &[]));
+
 	let key = "fixture-analytics-read-key-0123456789";
 	for args in [
 		vec!["deploy", "--setup", "--version", "v1"],
@@ -558,6 +566,7 @@ fn saved_plan_is_consumed_and_public_output_omits_the_tunnel_token() {
 		"tampered",
 	)
 	.unwrap();
+
 	assert!(!cli(root.path(), &["infra", "apply"], &[]).status.success());
 	let output = cli(root.path(), &["infra", "output"], &[]);
 	succeeds(&output);
@@ -593,6 +602,7 @@ fn releases_record_success_and_check_the_actual_database_before_rollback() {
 		&["deploy", "--rollback", "v1"],
 		&[("MOCK_HISTORY", "[[\"unknown\",\"checksum\"]]")],
 	);
+
 	assert!(!changed.status.success());
 	succeeds(&cli(root.path(), &["deploy", "--rollback", "v1"], &[]));
 	succeeds(&cli(root.path(), &["infra", "stop"], &[]));
@@ -658,6 +668,7 @@ fn shared_history_and_owner_locks_survive_changing_operator_workspaces() {
 	succeeds(&history);
 	assert!(String::from_utf8_lossy(&history.stdout).contains("sha256:"));
 	succeeds(&cli(root.path(), &["deploy", "--version", "v2"], &[]));
+
 	let owner = "163e4567-e89b-42d3-a456-426614174000";
 	let path = root
 		.path()
@@ -708,7 +719,9 @@ fn backup_units_are_validated_before_repository_initialization_and_timer_enablem
 		} else {
 			vec![]
 		};
+
 		let output = cli(root.path(), &["infra", "backups", "install"], &env);
+
 		assert_eq!(output.status.success(), !reject);
 		let remote = root.path().join("remote");
 		let units = remote.join("etc/systemd/system");
@@ -723,6 +736,7 @@ fn backup_units_are_validated_before_repository_initialization_and_timer_enablem
 		let verification = calls.find("systemd-analyze verify --man=no").unwrap();
 		let initialization = calls.find("/recovery.py init ");
 		let enablement = calls.find("systemctl enable --now ");
+
 		if reject {
 			assert!(initialization.is_none());
 			assert!(enablement.is_none());
@@ -799,6 +813,7 @@ fn rollback_refuses_a_changed_registry_tag_before_booting_it() {
 	let calls = fs::read_to_string(root.path().join("infra/notes-production/kamal-calls")).unwrap();
 	assert!(calls.contains("build pull --version v1"));
 	assert_eq!(calls.matches("app boot").count(), 1);
+
 	let history = cli(root.path(), &["infra", "releases"], &[]);
 	succeeds(&history);
 	assert_eq!(
@@ -837,6 +852,7 @@ region='eu-west-1'
 	);
 	assert!(text.contains("lk deploy --version"));
 	assert!(!text.contains("fixture-password"));
+
 	assert!(!text.contains("tofu apply"));
 	fs::write(&path, "edited").unwrap();
 	assert!(!cli(root.path(), &["infra", "ci"], &[]).status.success());
@@ -867,6 +883,7 @@ fn managed_images_are_built_with_schema_metadata_and_failed_builds_never_push() 
 		.status
 		.success()
 	);
+
 	assert!(
 		!fs::read_to_string(root.path().join("docker-calls"))
 			.unwrap()
@@ -925,6 +942,7 @@ fn existing_registry_tags_are_reused_explicitly_and_never_rebuilt() {
 	let calls = fs::read_to_string(root.path().join("docker-calls")).unwrap();
 	assert!(calls.contains("pull ghcr.io/team/notes:v1"));
 	assert!(!calls.contains("build --platform") && !calls.contains("push ghcr.io"));
+
 	assert!(
 		!cli(
 			root.path(),
@@ -1003,6 +1021,7 @@ fn lost_primary_recovery_requires_confirmation_and_preparation_never_overwrites_
 	succeeds(&cli(root.path(), &["infra", "prepare"], &[]));
 	let calls = fs::read_to_string(root.path().join("infra/notes-production/kamal-calls")).unwrap();
 	assert!(calls.contains("server bootstrap"));
+
 	assert!(!calls.contains("app boot"));
 	assert!(
 		!root
@@ -1050,6 +1069,7 @@ relay_url_env = 'NATS_URL'
 	assert!(
 		references.contains("NATS_URL=$NATS_URL") && references.contains("VALKEY_URL=$VALKEY_URL")
 	);
+
 	assert!(!references.contains("fixture-relay-token"));
 	fs::write(directory.join("kamal-calls"), "").unwrap();
 	assert!(
@@ -1104,6 +1124,7 @@ async fn a_paired_outbound_worker_executes_a_hosted_plan_with_private_state_bind
 		.unwrap()
 		.as_secs()
 		+ 3600;
+
 	billing.apply_subscription(&host,"pilot",&json!({"id":"sub_pilot","customer":"cus_pilot","status":"active","items":{"data":[{"quantity":1,"price":{"id":"price_control"},"current_period_end":until}]}})).unwrap();
 	host.register(
 		"pilot",
@@ -1196,6 +1217,7 @@ fn releases_validate_shared_history_and_hosts_before_mutating_anything() {
 	let root = project();
 	succeeds(&cli(root.path(), &["infra", "generate"], &[]));
 	let too_many = serde_json::to_string(&vec!["192.0.2.1"; 17]).unwrap();
+
 	for hosts in ["[]", "[\"not-an-ip\"]", too_many.as_str()] {
 		fails_with(
 			&cli(
@@ -1206,6 +1228,7 @@ fn releases_validate_shared_history_and_hosts_before_mutating_anything() {
 			"invalid applied application hosts",
 		);
 	}
+
 	fails_with(
 		&cli(
 			root.path(),
@@ -1230,6 +1253,7 @@ fn releases_validate_shared_history_and_hosts_before_mutating_anything() {
 		),
 		"invalid server_ip output",
 	);
+
 	succeeds(&cli(
 		root.path(),
 		&["deploy", "--setup", "--version", "v1"],
@@ -1278,6 +1302,7 @@ fn release_tags_require_setup_recorded_versions_and_maintenance_for_new_schema()
 		&["deploy", "--setup", "--version", "v1"],
 		&[],
 	));
+
 	fails_with(
 		&cli(root.path(), &["deploy", "--version", "v1"], &[]),
 		"tag already recorded",
@@ -1493,6 +1518,7 @@ fn verification_failures_stop_the_app_and_keep_the_recorded_history() {
 		operation(root.path())["phase"],
 		"verification-failed-app-stopped"
 	);
+
 	assert_eq!(release_count(root.path()), 1);
 
 	let rollback = project();
@@ -1554,6 +1580,7 @@ fn preparing_services_validates_hosts_and_reuses_running_accessories() {
 		!calls.contains("accessory boot") && !calls.contains("accessory start"),
 		"running accessories are left alone: {calls}"
 	);
+
 	assert!(!calls.contains("app boot"));
 }
 
@@ -1597,6 +1624,7 @@ enabled = false
 	let output = cli(root.path(), &["infra", "output"], &[]);
 	succeeds(&output);
 	let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
 	assert_eq!(value["runtime"], "external");
 	assert_eq!(value["backup_bucket"], "notes-backups");
 	assert!(value["updates_bucket"].is_null());
@@ -1674,6 +1702,7 @@ fn backups_validate_uploads_and_require_a_postgres_archive() {
 		&["infra", "backup", "--out", "artifacts/db.dump"],
 		&[],
 	));
+
 	assert!(artifacts.join("db.dump").is_file());
 
 	// A B2 backup endpoint is the region's S3 host, not R2's.
@@ -1728,6 +1757,7 @@ fn saved_plans_reject_untrusted_metadata_and_never_apply_it() {
 	);
 	fs::remove_dir(directory.join("plan.sha256")).unwrap();
 	succeeds(&cli(root.path(), &["infra", "plan"], &[]));
+
 	fails_with(
 		&cli(
 			root.path(),
@@ -1849,6 +1879,7 @@ fn releases_prefix_the_configured_registry_once() {
 	assert!(calls.contains("build pull --version v1"));
 	let remote = fs::read_to_string(root.path().join("remote/ssh-calls")).unwrap();
 	assert!(remote.contains("ghcr.io/team/notes:v1"), "{remote}");
+
 	assert!(!remote.contains("ghcr.io/ghcr.io/"), "{remote}");
 }
 
@@ -1923,6 +1954,7 @@ fn recovery_stops_the_app_when_the_history_no_longer_matches() {
 		!calls.contains("app boot --version v1"),
 		"a drifted database must not be handed the previous release: {calls}"
 	);
+
 	assert_eq!(release_count(root.path()), 1);
 }
 
@@ -2169,6 +2201,7 @@ fn verified_current_release_is_rechecked_without_boot_or_history_changes() {
 	let before = fs::read(&history).unwrap();
 	let boots = root.path().join("infra/notes-production/boot-versions");
 	let booted = fs::read(&boots).unwrap();
+
 	args.push("--reuse-current");
 	succeeds(&cli(root.path(), &args, &[]));
 	assert_eq!(fs::read(&history).unwrap(), before);
@@ -2281,6 +2314,7 @@ fn website_descriptor(root: &Path) -> (String, String) {
 	value["format_version"] = serde_json::json!(2);
 	value["recipe"]["target"] = serde_json::json!("aarch64-unknown-linux-gnu");
 	value["recipe"]["website"] = serde_json::json!({"profile":"leptoskit-web-v1", "config_sha256":leptoskit_db::checksum(&config), "toolchain_sha256":"b".repeat(64), "output_name":"site"});
+
 	value["assets"] = serde_json::json!({"reproduced": {"profile":"leptoskit-web-v1", "toolchain_sha256":"b".repeat(64), "entries": {
 		"pkg": {"kind":"directory","mode":493},
 		"pkg/site.js": {"kind":"file","mode":420,"size":1,"sha256":"c".repeat(64)},
@@ -2299,6 +2333,7 @@ fn verified_release_lifecycle(website: bool) {
 	} else {
 		verified_descriptor(root.path())
 	};
+
 	with_infrastructure_cache(root.path());
 	let args = [
 		"deploy",
@@ -2314,6 +2349,7 @@ fn verified_release_lifecycle(website: bool) {
 		&cli(root.path(), &args, &[("MOCK_IMAGE_MISMATCH", "all")]),
 		"remote image differs",
 	);
+
 	let calls = fs::read_to_string(root.path().join("infra/notes-production/kamal-calls")).unwrap();
 	assert!(!calls.contains("proxy boot"));
 	assert!(!calls.contains("app boot"));
@@ -2405,6 +2441,7 @@ fn assert_verified_history(root: &Path) {
 	legacy["version"] = "legacy".into();
 	legacy.as_object_mut().unwrap().remove("evidence");
 	let mixed = serde_json::json!([legacy, history[0]]);
+
 	fs::write(&history_path, serde_json::to_vec(&mixed).unwrap()).unwrap();
 	for flags in [
 		vec!["deploy", "--rollback", "legacy"],
@@ -2546,6 +2583,7 @@ fn backend_authorization(root: &Path, descriptor: &str, pin: &str) {
 	));
 	let approval: serde_json::Value =
 		serde_json::from_slice(&fs::read(root.join("approval.json")).unwrap()).unwrap();
+
 	let bytes = fs::read_to_string(descriptor).unwrap();
 	let parsed: serde_json::Value = serde_json::from_str(&bytes).unwrap();
 	let trust = serde_json::json!({"format_version":1,"repository":"https://github.com/example/backend","deployment":"production","publisher":public(3),"approvers":[public(1)],"threshold":1,"deployment_keys":[public(2)]});
@@ -2609,6 +2647,7 @@ fn backend_approvals_gate_release_reuse_rollback_and_recovery() {
 	];
 	succeeds(&cli(root.path(), &flags, &[]));
 	let policy = fs::read(dir.join("backend-deployment.json")).unwrap();
+
 	for flags in [
 		vec![
 			"deploy",
@@ -2660,6 +2699,7 @@ fn backend_approvals_gate_release_reuse_rollback_and_recovery() {
 		),
 		"Automatic recovery did not complete",
 	);
+
 	let calls = fs::read_to_string(root.path().join("remote/ssh-calls")).unwrap();
 	assert!(calls.contains("docker stop"));
 	fs::remove_file(dir.join("backend-trust.json")).unwrap();
@@ -2685,6 +2725,7 @@ fn operator_rpc_window_gates_release_reuse_rollback_and_recovery() {
 	descriptor["rpc_contract"] = serde_json::json!({"state":"exported","sha256":contract_pin,
 		"compatibility":{"checked":{"algorithm":"leptoskit-rpc-structural-v1","specification":specification,
 		"baselines":[{"sha256":contract_pin,"specification":specification}]}}});
+
 	let text = serde_json::to_string(&descriptor).unwrap();
 	let pin = leptoskit_db::checksum(&text);
 	fs::write(&path, text).unwrap();
@@ -2774,6 +2815,7 @@ fn managed_registry_port_does_not_allow_tags_or_other_authorities() {
 		);
 		let root = configured(&config);
 		let output = cli(root.path(), &["infra", "generate"], &[]);
+
 		if valid {
 			succeeds(&output);
 		} else {

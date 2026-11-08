@@ -56,6 +56,7 @@ fn diagnostic(message: &markdown::message::Message) -> Diagnostic {
 /// with the tags it left open closed.
 pub(crate) fn parse(source: &str) -> Result<Parsed, Diagnostic> {
 	let options = options();
+
 	let first_error = match markdown::to_mdast(source, &options) {
 		Ok(root) => {
 			return Ok(Parsed {
@@ -67,8 +68,10 @@ pub(crate) fn parse(source: &str) -> Result<Parsed, Diagnostic> {
 	};
 
 	let mut end = source.len();
+
 	for _ in 0..MAX_REPAIRS {
 		let repaired = close_open_tags(&source[..end]);
+
 		if let Ok(root) = markdown::to_mdast(&repaired, &options) {
 			return Ok(Parsed {
 				root,
@@ -93,17 +96,21 @@ fn close_open_tags(prefix: &str) -> String {
 
 	for line in prefix.lines() {
 		let line = line.trim();
+
 		if let Some(name) = line.strip_prefix("</") {
 			let name = tag_name(name);
+
 			if let Some(position) = open.iter().rposition(|candidate| *candidate == name) {
 				open.truncate(position);
 			}
 		} else if let Some(rest) = line.strip_prefix('<') {
 			let name = tag_name(rest);
+
 			let opens_block = !name.is_empty()
 				&& line.ends_with('>')
 				&& !line.ends_with("/>")
 				&& !line.contains(&format!("</{name}>"));
+
 			if opens_block {
 				open.push(name);
 			}
@@ -111,11 +118,13 @@ fn close_open_tags(prefix: &str) -> String {
 	}
 
 	let mut repaired = prefix.to_owned();
+
 	for name in open.iter().rev() {
 		repaired.push_str("\n\n</");
 		repaired.push_str(name);
 		repaired.push('>');
 	}
+
 	repaired.push('\n');
 	repaired
 }

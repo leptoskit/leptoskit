@@ -82,10 +82,12 @@ impl Report {
 	/// The JSON document, `benchmarks/scripts/common.ts`'s `BenchmarkRun`.
 	pub fn to_json(&self, subject: &str, config: Config) -> serde_json::Value {
 		let mut metrics = serde_json::Map::new();
+
 		for (id, metric) in &self.metrics {
 			if metric.values.is_empty() {
 				continue;
 			}
+
 			let mut sorted = metric.values.clone();
 			sorted.sort_by(f64::total_cmp);
 			let middle = sorted.len() / 2;
@@ -94,6 +96,7 @@ impl Report {
 			} else {
 				f64::midpoint(sorted[middle - 1], sorted[middle])
 			};
+
 			metrics.insert(
 				id.clone(),
 				serde_json::json!({
@@ -107,6 +110,7 @@ impl Report {
 				}),
 			);
 		}
+
 		serde_json::json!({
 			"schema": 1,
 			"subject": subject,
@@ -133,16 +137,19 @@ pub fn sample<S>(
 	mut timed: impl FnMut(&mut S),
 ) -> Vec<f64> {
 	let mut samples = Vec::with_capacity(config.runs);
+
 	for iteration in 0..(config.warmup + config.runs) {
 		let mut state = setup();
 		let start = Instant::now();
 		timed(&mut state);
 		let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 		drop(state);
+
 		if iteration >= config.warmup {
 			samples.push(elapsed);
 		}
 	}
+
 	samples
 }
 
@@ -160,6 +167,7 @@ fn timestamp() -> String {
 	let day_of_era = z.rem_euclid(146_097);
 	let year_of_era =
 		(day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+
 	let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
 	let mp = (5 * day_of_year + 2) / 153;
 	let day = day_of_year - (153 * mp + 2) / 5 + 1;

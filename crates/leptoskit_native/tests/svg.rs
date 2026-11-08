@@ -264,6 +264,7 @@ fn malformed_values_and_unsupported_properties_are_errors() {
 		.vector_scaling(),
 		VectorScaling::Stretch
 	);
+
 	for value in ["xMidYMidX", "xMidYMid stretch"] {
 		let document = format!(
 			r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" preserveAspectRatio="{value}"><rect width="1" height="1"/></svg>"#

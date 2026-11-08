@@ -486,9 +486,11 @@ mod tests {
 			"{:x}",
 			<sha2::Sha256 as sha2::Digest>::digest(b"auth/token")
 		);
+
 		for alias in [digest.clone(), format!("sha256-{digest}")] {
 			assert_eq!(block_on(storage.get_async(alias)).unwrap(), None);
 		}
+
 		assert_eq!(
 			block_on(storage.get_async("auth/token".into())).unwrap(),
 			Some(Session {

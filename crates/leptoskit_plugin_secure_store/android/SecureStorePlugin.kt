@@ -84,6 +84,7 @@ class SecureStorePlugin(
         if (maxBytes !in MIN_BYTES..MAX_BYTES || maxEntries !in 0..MAX_ENTRIES) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         val file = AtomicFile(File(directory, STORE_FILE))
         val identity = "leptoskit.secure-store-v2:$application".toByteArray(Charsets.UTF_8)
         val archive =

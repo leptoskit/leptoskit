@@ -137,10 +137,12 @@ fn take_result(
 	capacity: i32,
 ) -> Result<i64, wasmi::Error> {
 	let id = CallId(id as u64);
+
 	let reply = match caller.data().plugins.result(id) {
 		Ok(Some(Ok(bytes))) if bytes.len() <= capacity as u32 as usize => bytes.len(),
 		_ => 0,
 	};
+
 	charge_copy(&mut caller, reply)?;
 	let memory = memory(&mut caller)?;
 	// Split the interpreter's memory and host state so output can borrow the

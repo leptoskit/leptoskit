@@ -302,6 +302,7 @@ impl Inner {
 	/// call then goes without one.
 	async fn ask(&self, generation: u64) -> Option<String> {
 		let asked = leptoskit_query::now_ms();
+
 		let answer = match (self.app)()
 			.call(
 				crate::service::SERVICE_TOKEN_OPERATION,
@@ -355,6 +356,7 @@ impl Inner {
 				(None, wait)
 			}
 		};
+
 		state.held = Some(Held {
 			generation,
 			authorization: authorization.clone(),
@@ -572,6 +574,7 @@ impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 		} else {
 			None
 		};
+
 		let origin = service_origin(Some(&url), self.service);
 
 		#[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -586,6 +589,7 @@ impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 					Some(parts) => forwarded(service, &parts, &*lookup).await,
 					None => None,
 				};
+
 				let config = ClientConfig {
 					origin: Some(origin),
 					credentials,

@@ -790,6 +790,7 @@ fn compile_server_and_services(
 			}
 			.save(&metadata.target_directory, root.as_std_path())?;
 		}
+
 		Ok(())
 	};
 
@@ -812,7 +813,9 @@ fn compile_server_and_services(
 		} else {
 			None
 		};
+
 		save(&binary)?;
+
 		return Ok((binary, Vec::new()));
 	}
 

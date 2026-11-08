@@ -117,11 +117,13 @@ impl Hosted {
 			.backup(&destination.join("accounts.sqlite3"))?;
 		let db = self.accounts().meta.db()?;
 		let mut q = db.prepare("SELECT id FROM hosted_accounts")?;
+
 		let ids = q
 			.query_map([], |r| r.get::<_, String>(0))?
 			.collect::<rusqlite::Result<Vec<_>>>()?;
 		drop(q);
 		drop(db);
+
 		for id in ids {
 			let (store, _) = self.tenant(&id)?;
 			std::fs::create_dir(destination.join(&id))?;
@@ -135,6 +137,7 @@ impl Hosted {
 			}
 			store.backup(&destination.join(id).join("journal.sqlite3"))?;
 		}
+
 		Ok(())
 	}
 
@@ -171,6 +174,7 @@ impl Hosted {
 			source.join("accounts.sqlite3"),
 			candidate.path().join("accounts.sqlite3"),
 		)?;
+
 		let host = Self::open(candidate.path(), secret, "http://localhost:4701", None)?;
 		let ids = {
 			let db = host.accounts().meta.db()?;
@@ -178,6 +182,7 @@ impl Hosted {
 			q.query_map([], |r| r.get::<_, String>(0))?
 				.collect::<rusqlite::Result<Vec<_>>>()?
 		};
+
 		for account in ids {
 			ensure!(control::identifier(&account), "invalid restored account");
 			let dir = candidate.path().join(&account);
@@ -196,12 +201,14 @@ impl Hosted {
 			store.interrupt_running()?;
 			store.db()?.execute("UPDATE tokens SET revoked=1", [])?;
 			host.accounts().rotate(&account)?;
+
 			for installation in host.accounts().installations(&account)? {
 				host.state_read(&account, &installation.project)?;
 				host.accounts()
 					.revoke_worker(&account, &installation.project)?;
 			}
 		}
+
 		verify_store(&host.accounts().meta)?;
 		drop(host);
 		std::fs::rename(candidate.path(), destination)?;
@@ -265,6 +272,7 @@ impl Hosted {
 		action: &Action,
 	) -> Result<()> {
 		let installation = self.0.accounts.installation(account, project)?;
+
 		if matches!(installation.ownership, Ownership::LeptoskitDigitalocean) {
 			// Paid resources are quoted/configured on the dedicated operator
 			// worker.
@@ -293,9 +301,11 @@ fn sql_now() -> i64 {
 fn hex(bytes: &[u8]) -> String {
 	use std::fmt::Write as _;
 	let mut out = String::with_capacity(bytes.len() * 2);
+
 	for byte in bytes {
 		write!(&mut out, "{byte:02x}").expect("formatting to String");
 	}
+
 	out
 }
 

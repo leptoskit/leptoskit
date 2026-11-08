@@ -232,6 +232,7 @@ impl<T: Table> Query<T> {
 	/// How many rows match.
 	pub async fn count(self, connection: &impl Read) -> Result<u64> {
 		let mut sql = Sql::new(connection.dialect());
+
 		if self.distinct {
 			// Counting the rows after `distinct` read them once each.
 			sql.push("SELECT count(*) FROM (SELECT DISTINCT ");

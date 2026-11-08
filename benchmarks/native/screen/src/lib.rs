@@ -58,6 +58,7 @@ fn screen() -> Element {
 			Screen::Ticker(frame) => ticker(*frame),
 			Screen::Cards(cards) => cards_list(cards),
 		};
+
 		View()
 			.class("h-screen bg-[#ffffff] text-[#111111]")
 			.children([header(), body])

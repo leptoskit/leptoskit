@@ -148,11 +148,13 @@ class HomeWidgetsPluginTest {
             append(title)
             append(body)
             append(url)
+
             return out.toByteArray()
         }
 
         fun lengthPrefixed(value: String): ByteArray {
             val utf8 = value.toByteArray(Charsets.UTF_8)
+
             return ByteBuffer
                 .allocate(4 + utf8.size)
                 .order(ByteOrder.LITTLE_ENDIAN)

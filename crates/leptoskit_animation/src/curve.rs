@@ -229,6 +229,7 @@ impl Spring {
 			(-natural * t).exp() * (1.0 + natural * t)
 		} else {
 			let root = (ratio * ratio - 1.0).sqrt();
+
 			let fast = -natural * (ratio + root);
 			let slow = -natural * (ratio - root);
 			(slow * (fast * t).exp() - fast * (slow * t).exp()) / (slow - fast)
@@ -399,6 +400,7 @@ impl Curve {
 					} else {
 						spring.progress(fraction * duration)
 					};
+
 					css.push(',');
 					css.push_str(&format_fraction(value));
 				}

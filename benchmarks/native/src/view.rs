@@ -51,6 +51,7 @@ pub fn rows_tree(rows: usize, generation: u32, skip: Option<usize>) -> Element {
 	let mut root = Element::view().with_style(|style| {
 		style.flex_direction = FlexDirection::Column;
 	});
+
 	for row in 0..rows {
 		if skip == Some(row) {
 			continue;
@@ -60,12 +61,14 @@ pub fn rows_tree(rows: usize, generation: u32, skip: Option<usize>) -> Element {
 		} else {
 			format!("Row {row}")
 		};
+
 		root = root.child(
 			Element::view()
 				.with_style(row_style)
 				.child(Element::text(label).font(14.0, leptoskit_native::FontWeight::Regular)),
 		);
 	}
+
 	root
 }
 
@@ -73,6 +76,7 @@ pub fn rows_tree(rows: usize, generation: u32, skip: Option<usize>) -> Element {
 /// resolver has real work per node.
 fn classed_rows_tree(rows: usize) -> Element {
 	let mut root = Element::view().class("flex-col");
+
 	for row in 0..rows {
 		root = root.child(
 			Element::view()
@@ -80,6 +84,7 @@ fn classed_rows_tree(rows: usize) -> Element {
 				.child(Element::text(format!("Row {row}")).class("text-sm font-medium")),
 		);
 	}
+
 	root
 }
 
@@ -264,6 +269,7 @@ fn hit_probe_x(surface: &NativeSurface<HeadlessBackend>) -> Result<f32, String> 
 /// so the timed loop measures hits rather than the root's rejection.
 fn verify_hits(surface: &NativeSurface<HeadlessBackend>, x: f32) -> Result<(), String> {
 	let root = surface.root().ok_or("the hit-test surface has no root")?;
+
 	for index in 0..HIT_TESTS {
 		let y = hit_test_y(index);
 		let hit = surface
@@ -273,6 +279,7 @@ fn verify_hits(surface: &NativeSurface<HeadlessBackend>, x: f32) -> Result<(), S
 		let is_row = parent == Some(root);
 		let is_label = surface.kind(hit) == NativeKind::Text
 			&& parent.and_then(|row| surface.parent(row)) == Some(root);
+
 		if !is_row && !is_label {
 			return Err(format!(
 				"hit test at ({x}, {y}) found {:?}, not a row or its label",
@@ -280,6 +287,7 @@ fn verify_hits(surface: &NativeSurface<HeadlessBackend>, x: f32) -> Result<(), S
 			));
 		}
 	}
+
 	Ok(())
 }
 
@@ -293,6 +301,7 @@ fn flat_tree(rows: usize) -> (Yoga, leptoskit_yoga::NodeId) {
 			..Style::default()
 		},
 	);
+
 	for index in 0..rows {
 		let row = yoga.create_node();
 		yoga.set_style(
@@ -305,6 +314,7 @@ fn flat_tree(rows: usize) -> (Yoga, leptoskit_yoga::NodeId) {
 		);
 		yoga.insert_child(root, row, index);
 	}
+
 	(yoga, root)
 }
 
@@ -352,6 +362,7 @@ fn run_yoga(report: &mut Report, config: Config) {
 				);
 				yoga.insert_child(root, cell, index);
 			}
+
 			(yoga, root)
 		},
 		|(yoga, root)| yoga.calculate_layout(*root, available()),

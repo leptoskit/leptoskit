@@ -87,6 +87,7 @@ async fn fixture(db: &Db) -> (Writer, Writer) {
 	.insert(db)
 	.await
 	.unwrap();
+
 	for (author, title) in [(&ada, "Engines"), (&grace, "Compilers")] {
 		NewStory {
 			author_id: author.id,
@@ -97,6 +98,7 @@ async fn fixture(db: &Db) -> (Writer, Writer) {
 		.await
 		.unwrap();
 	}
+
 	NewStory {
 		author_id: grace.id,
 		editor_id: Some(ada.id),

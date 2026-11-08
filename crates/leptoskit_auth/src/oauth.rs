@@ -2583,6 +2583,7 @@ mod tests {
 			],
 			Some(stub.clone() as Arc<dyn ProviderHttp>),
 		);
+
 		let provider = providers.get("company").unwrap();
 
 		let refused = providers.endpoints(provider).await.unwrap_err();
@@ -2680,6 +2681,7 @@ mod tests {
 		);
 		stub.answer(200, "{}");
 		stub.answer(503, "{}");
+
 		let providers = Providers::new(
 			vec![
 				Provider::google("client", "secret"),
@@ -2718,6 +2720,7 @@ mod tests {
 			.await
 			.unwrap()
 			.unwrap();
+
 		assert_eq!(grant.access_token, "a");
 		assert_eq!(grant.refresh_token.as_deref(), Some("r"));
 		assert_eq!(grant.expires_in, Some(60));
@@ -2929,6 +2932,7 @@ mod tests {
 			serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
 		assert_eq!(claims["iss"], "TEAM1");
 		assert_eq!(claims["sub"], "com.notes.web");
+
 		assert_eq!(claims["aud"], "https://appleid.apple.com");
 
 		let signed = format!("{}.{}", parts[0], parts[1]);
@@ -2974,6 +2978,7 @@ mod tests {
 			assert!(verify_signature(&jws(alg), &rfc_key()).is_err(), "{alg}");
 			assert!(verify_signature(&jws(alg), &ec).is_err(), "{alg}");
 		}
+
 		// ES384 needs a P-384 key.
 		assert!(verify_signature(&jws("ES384"), &ec).is_err());
 		// EdDSA needs an Ed25519 key.
@@ -2989,6 +2994,7 @@ mod tests {
 			x: None,
 			..ec.clone()
 		};
+
 		assert!(verify_signature(&jws("ES256"), &incomplete).is_err());
 	}
 
@@ -3050,6 +3056,7 @@ mod tests {
 		empty["team"] = "".into();
 		assert!(scoped_subject(&rules, &claims(empty)).is_err());
 		let mut colon = base.clone();
+
 		colon["team"] = "a:b".into();
 		assert!(scoped_subject(&rules, &claims(colon)).is_err());
 		let mut long = base.clone();
@@ -3185,6 +3192,7 @@ mod tests {
 		)
 		.await
 		.unwrap_err();
+
 		assert!(
 			refused.to_string().contains("claims are malformed"),
 			"{refused}"
@@ -3224,6 +3232,7 @@ mod tests {
 		let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"EdDSA"}"#);
 		let payload = URL_SAFE_NO_PAD.encode("{}");
 		let signed = format!("{header}.{payload}");
+
 		let token = format!(
 			"{signed}.{}",
 			URL_SAFE_NO_PAD.encode(other.sign(signed.as_bytes()).as_ref())

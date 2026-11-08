@@ -166,6 +166,7 @@ fn Delta(#[prop(optional)] up: bool, colors: &Palette, children: Children) -> El
 	} else {
 		(colors.down, colors.down_soft)
 	};
+
 	view! {
 		<View class="py-0.5 px-2" background=background class="rounded-[10px]">
 			<Text class="font-semibold text-[12px]" color=tint>{children}</Text>
@@ -448,6 +449,7 @@ fn RangePicker(state: &ScreenState, colors: &Palette) -> Element {
 			} else {
 				FontWeight::Medium
 			};
+
 			let button = view! {
 				<Button
 					font=(13.0, weight)

@@ -573,6 +573,7 @@ fn dart_nullable_model_fields_are_wrapped_once() {
 		"{}",
 		models.contents
 	);
+
 	assert!(
 		models
 			.contents
@@ -1068,6 +1069,7 @@ fn generate_colliding(language: TargetLanguage, package: &str) -> String {
 			file.contents
 		);
 	}
+
 	out
 }
 

@@ -437,13 +437,16 @@ fn a_measurement_equal_to_its_estimate_resolves_nothing_again() {
 	let mut virtualizer = Virtualizer::new(options);
 	virtualizer.set_viewport(400.0);
 	virtualizer.items().unwrap();
+
 	assert_eq!(calls.load(Ordering::Relaxed), 100_000);
 
 	// Scrolling to the middle measures the rows that come into view.
 	virtualizer.scroll_to(2_500_000.0);
+
 	for index in 50_000..50_008 {
 		virtualizer.measure(index, 50.0).unwrap();
 	}
+
 	virtualizer.items().unwrap();
 	assert_eq!(calls.load(Ordering::Relaxed), 100_000, "no item moved");
 

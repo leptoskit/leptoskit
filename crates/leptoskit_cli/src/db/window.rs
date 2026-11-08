@@ -34,6 +34,7 @@ pub(super) fn prepare(
 			"invalid migration name in registry.txt"
 		);
 	}
+
 	let history = History::read(directory, dialect)?;
 	let end = history
 		.names
@@ -109,10 +110,12 @@ mod tests {
 			)],
 		);
 		let mut before = Schema::empty(Dialect::Postgres);
+
 		for name in ["initial", "expanded"] {
 			let folder = directory.join(name);
 			fs::create_dir(&folder).unwrap();
 			let plan = leptoskit_db_schema::diff(&before, &schema, &mut RequireHints).unwrap();
+
 			fs::write(
 				folder.join("migration.sql"),
 				leptoskit_db_schema::render(&plan, &before, &schema).sql(),
@@ -124,6 +127,7 @@ mod tests {
 				.columns
 				.push(Column::new("extra", ColumnType::TEXT).nullable());
 		}
+
 		fs::write(directory.join("registry.txt"), "initial\nexpanded\n").unwrap();
 		directory
 	}
@@ -138,6 +142,7 @@ mod tests {
 		let pin = prepare(&directory, Dialect::Postgres, "initial", &out).unwrap();
 		let json = fs::read_to_string(&out).unwrap();
 		MigrationWindow::from_json_pinned(&json, &pin).unwrap();
+
 		assert_eq!(fs::read(migration_path).unwrap(), sql);
 		assert!(prepare(&directory, Dialect::Postgres, "initial", &out).is_err());
 		assert_eq!(fs::read_to_string(out).unwrap(), json);
@@ -148,12 +153,15 @@ mod tests {
 		let root = tempfile::tempdir().unwrap();
 		let directory = fixture(root.path());
 		let out = root.path().join("window.json");
+
 		for baseline in ["missing", "expanded"] {
 			assert!(prepare(&directory, Dialect::Postgres, baseline, &out).is_err());
 			assert!(!out.exists());
 		}
+
 		fs::write(directory.join("expanded/migration.sql"), "SELECT 1;").unwrap();
 		assert!(prepare(&directory, Dialect::Postgres, "initial", &out).is_err());
+
 		assert!(!out.exists());
 	}
 }

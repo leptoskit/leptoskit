@@ -75,6 +75,7 @@ async fn insert_lsn(db: &Db) -> i64 {
 		})
 		.await
 		.unwrap();
+
 	match rows[0][0] {
 		Value::Int(lsn) => lsn,
 		ref other => panic!("not a position: {other:?}"),
@@ -184,6 +185,7 @@ async fn commits_carry_a_position_replicas_must_reach(capture: LiveCapture) {
 	};
 	let system = db.system("the test reads the change log");
 	let capture = (capture == LiveCapture::Replication).then(|| db.capture_changes());
+
 	if let Some(capture) = &capture {
 		// The slot captures only commits made after it exists. Starting the
 		// background task alone does not guarantee the slot is ready.
@@ -195,6 +197,7 @@ async fn commits_carry_a_position_replicas_must_reach(capture: LiveCapture) {
 		.await
 		.expect("replication capture creates its slot before the write");
 	}
+
 	let mut log = system.change_log(None).await.unwrap();
 
 	standby.pause_replay();
@@ -204,6 +207,7 @@ async fn commits_carry_a_position_replicas_must_reach(capture: LiveCapture) {
 	.insert(&db)
 	.await
 	.unwrap();
+
 	let commit = loop {
 		match tokio::time::timeout(Duration::from_secs(30), log.next())
 			.await
@@ -214,7 +218,9 @@ async fn commits_carry_a_position_replicas_must_reach(capture: LiveCapture) {
 			LogEntry::Pruned { .. } => {}
 		}
 	};
+
 	assert_eq!(commit.changes[0].key, [note.id.to_string()]);
+
 	let lsn = commit.lsn.expect("Postgres commits carry a position");
 
 	assert!(

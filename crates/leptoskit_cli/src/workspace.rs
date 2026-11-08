@@ -136,6 +136,7 @@ pub fn inspect(manifest: &Path) -> Result<Report> {
 	let mut applications = BTreeMap::new();
 	let mut configs = BTreeSet::new();
 	let mut identities = BTreeMap::new();
+
 	for (name, application) in workspace.applications {
 		let app_root = root
 			.join(&application.path)
@@ -182,6 +183,7 @@ pub fn inspect(manifest: &Path) -> Result<Report> {
 			},
 		);
 	}
+
 	Ok(Report {
 		format_version: 1,
 		startup_order,
@@ -235,6 +237,7 @@ fn check_identities(
 		if value.is_empty() {
 			continue;
 		}
+
 		if let Some(previous) =
 			seen.insert((namespace, value), format!("applications.{name}.{field}"))
 		{
@@ -257,16 +260,20 @@ pub fn run(command: WorkspaceCommand) -> Result<()> {
 		WorkspaceCommand::Deploy(args) => return releases::deploy(&args),
 		command => command,
 	};
+
 	let (options, explain) = match command {
 		WorkspaceCommand::Explain(options) => (options, true),
 		WorkspaceCommand::Check(options) => (options, false),
 		WorkspaceCommand::Plan(_) | WorkspaceCommand::Deploy(_) => unreachable!("handled above"),
 	};
+
 	let manifest = match options.manifest {
 		Some(path) => path,
 		None => find_manifest(&std::env::current_dir()?)?,
 	};
+
 	let report = inspect(&manifest)?;
+
 	if options.json {
 		println!("{}", serde_json::to_string_pretty(&report)?);
 	} else {
@@ -274,10 +281,13 @@ pub fn run(command: WorkspaceCommand) -> Result<()> {
 			"Workspace configuration passed: {} applications",
 			report.applications.len()
 		);
+
 		println!("Startup order: {}", report.startup_order.join(" -> "));
+
 		if explain {
 			for (name, app) in &report.applications {
 				println!("  {name}: {} ({})", app.path.display(), app.package);
+
 				for (binding, target) in &app.bindings {
 					println!(
 						"    {binding} -> {}: {}, {}",
@@ -286,21 +296,25 @@ pub fn run(command: WorkspaceCommand) -> Result<()> {
 				}
 			}
 		}
+
 		println!(
 			"Not checked: artifacts, API compatibility, database ownership, service identity, \
 			 deployment."
 		);
 	}
+
 	Ok(())
 }
 
 fn find_manifest(directory: &Path) -> Result<PathBuf> {
 	for parent in directory.ancestors() {
 		let candidate = parent.join(WORKSPACE_FILE);
+
 		if candidate.is_file() {
 			return Ok(candidate);
 		}
 	}
+
 	anyhow::bail!(
 		"no {WORKSPACE_FILE} in this directory or its parents; use --manifest to name one"
 	)

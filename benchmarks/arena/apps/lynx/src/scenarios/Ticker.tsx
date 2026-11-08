@@ -21,6 +21,7 @@ export const TICKER_DURATION_MS = 5000;
 /** Reads what tile 0 shows, on the main thread. */
 export function readTileZero(grid: MainThread.Element | null): string {
 	"main thread";
+
 	if (grid === null) return "";
 	return textOf(grid.querySelector(".tile"));
 }
@@ -57,6 +58,7 @@ export function Ticker(props: ScenarioProps) {
 				if (frames === 1) setPhase("running");
 				if (finished) setPhase("done");
 			}
+
 			await nextFrame();
 			await nextFrame();
 			const shown = await runOnMainThread((): string => {
@@ -68,6 +70,7 @@ export function Ticker(props: ScenarioProps) {
 					`tile 0 shows ${JSON.stringify(shown)}, expected ${frames}`,
 				);
 			}
+
 			finish({
 				ok: true,
 				metrics: {

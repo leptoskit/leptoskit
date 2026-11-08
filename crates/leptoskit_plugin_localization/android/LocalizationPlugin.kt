@@ -46,6 +46,7 @@ class LocalizationPlugin(
 
         output.text(if (calendar.type == "gregorian") "gregory" else calendar.type)
         output.text(TimeZone.getDefault().id)
+
         output.integer(if (DateFormat.is24HourFormat(context)) CLOCK_24H else CLOCK_12H)
         output.integer(weekStart(calendar.firstDayOfWeek))
 

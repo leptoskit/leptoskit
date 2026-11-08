@@ -97,6 +97,7 @@ fn swatch(index: usize) -> Color {
 	let (lightness, saturation) = (0.5, 0.6);
 	let chroma = (1.0 - (2.0 * lightness - 1.0_f64).abs()) * saturation;
 	let second = chroma * (1.0 - (hue % 2.0 - 1.0).abs());
+
 	let (red, green, blue) = match hue as u32 {
 		0 => (chroma, second, 0.0),
 		1 => (second, chroma, 0.0),
@@ -105,6 +106,7 @@ fn swatch(index: usize) -> Color {
 		4 => (second, 0.0, chroma),
 		_ => (chroma, 0.0, second),
 	};
+
 	let base = lightness - chroma / 2.0;
 	let channel = |value: f64| ((value + base) * 255.0).round() as u8;
 

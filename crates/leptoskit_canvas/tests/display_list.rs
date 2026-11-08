@@ -32,6 +32,7 @@ fn colors_convert_from_8_bit_channels_and_opacity() {
 	assert_eq!(translucent.with_opacity(0.5).b, translucent.b);
 	assert_eq!(Color::WHITE.premultiplied(), [1.0, 1.0, 1.0, 1.0]);
 	assert_eq!(Color::TRANSPARENT.premultiplied(), [0.0; 4]);
+
 	assert_eq!(translucent.premultiplied()[3], translucent.a);
 }
 
@@ -72,6 +73,7 @@ fn paths_and_scenes_build_from_their_builders() {
 		circle.commands[0],
 		PathCommand::MoveTo(Point::new(11.0, 5.0))
 	);
+
 	assert!(matches!(circle.commands[1], PathCommand::CubicTo(_, _, _)));
 	let scene = Scene::new()
 		.push_clip(rect, radius)

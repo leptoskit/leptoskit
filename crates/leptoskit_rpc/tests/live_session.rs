@@ -274,6 +274,7 @@ impl rpc::server::Identify for Lease {
 				});
 			}
 		};
+
 		Box::pin(std::future::ready(lease))
 	}
 }
@@ -540,6 +541,7 @@ async fn resuming_an_unknown_query_answers_it_as_an_error() {
 		panic!("the resume answers in one transition");
 	};
 	assert_eq!(transition.updates.len(), 1);
+
 	match &transition.updates[0].update {
 		Update::Err(error) => {
 			assert!(
@@ -742,6 +744,7 @@ async fn authentication_rereads_subscriptions_and_channels() {
 	.await;
 	let mut seen_who = None;
 	let mut seen_presence = None;
+
 	loop {
 		match next(&mut socket).await {
 			ServerFrame::Transition(transition) => {
@@ -766,6 +769,7 @@ async fn authentication_rereads_subscriptions_and_channels() {
 			other => panic!("unexpected frame: {other:?}"),
 		}
 	}
+
 	assert_eq!(seen_who, Some(json!("ada")));
 	assert_eq!(seen_presence, Some(vec!["ada".to_owned()]));
 
@@ -784,6 +788,7 @@ async fn authentication_rereads_subscriptions_and_channels() {
 	.await;
 	let mut seen_refusal = false;
 	let mut seen_channel_error = false;
+
 	loop {
 		match next(&mut socket).await {
 			ServerFrame::Transition(transition) => {
@@ -810,6 +815,7 @@ async fn authentication_rereads_subscriptions_and_channels() {
 			other => panic!("unexpected frame: {other:?}"),
 		}
 	}
+
 	assert!(seen_refusal, "the private query was read as eve");
 	assert!(seen_channel_error, "the room was checked as eve");
 
@@ -824,6 +830,7 @@ async fn authentication_rereads_subscriptions_and_channels() {
 		},
 	)
 	.await;
+
 	loop {
 		if matches!(next(&mut socket).await, ServerFrame::AuthStatus { .. }) {
 			break;
@@ -923,6 +930,7 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 	let (_server, mut socket) = large_transition().await;
 
 	let mut transitions = Vec::new();
+
 	while transitions.len() < 2 {
 		if let ServerFrame::Transition(transition) = next(&mut socket).await {
 			transitions.push(transition);
@@ -939,11 +947,14 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 		transitions[1].to > from,
 		"the last chunk reaches the commit"
 	);
+
 	for transition in &transitions {
 		assert_eq!(transition.from, from);
 		ids.extend(transition.updates.iter().map(|update| update.id));
 	}
+
 	ids.sort_unstable();
+
 	assert_eq!(ids, [1, 2, 3]);
 	assert!(
 		transitions
@@ -957,11 +968,13 @@ async fn a_large_transition_is_split_under_the_frame_limit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disconnecting_between_transition_chunks_does_not_skip_results() {
 	let (server, mut socket) = large_transition().await;
+
 	let first = loop {
 		if let ServerFrame::Transition(transition) = next(&mut socket).await {
 			break transition;
 		}
 	};
+
 	assert!(first.updates.len() < 3);
 	// The client has consumed only this prefix. Discard the transport
 	// without reading its remaining frames, then resume its actual cursor.
@@ -985,18 +998,22 @@ async fn disconnecting_between_transition_chunks_does_not_skip_results() {
 		},
 	)
 	.await;
+
 	let mut ids = Vec::new();
+
 	let reached = loop {
 		if let ServerFrame::Transition(transition) = next(&mut socket).await {
 			for update in transition.updates {
 				assert_eq!(update.update, Update::Ok(json!("b".repeat(400_100))));
 				ids.push(update.id);
 			}
+
 			if ids.len() >= 3 {
 				break transition.to;
 			}
 		}
 	};
+
 	ids.sort_unstable();
 	assert_eq!(ids, [1, 2, 3]);
 	assert!(reached > first.to);
@@ -1047,11 +1064,13 @@ async fn a_slow_reader_gets_a_full_transition() {
 		.await
 		.expect("each commit produces a transition");
 	}
+
 	tokio::time::sleep(Duration::from_millis(300)).await;
 
 	// Drain what queued, then change the value once more: the replay says
 	// it is full and repeats the subscription.
 	let mut full = None;
+
 	for _ in 0..256 {
 		match next_within(&mut socket, Duration::from_millis(200)).await {
 			Some(ServerFrame::Transition(transition)) => {
@@ -1063,6 +1082,7 @@ async fn a_slow_reader_gets_a_full_transition() {
 			None => break,
 		}
 	}
+
 	if full.is_none() {
 		Doc::update()
 			.filter(move |doc| doc.id.eq(doc_id))
@@ -1240,6 +1260,7 @@ async fn a_lease_refused_after_signing_in_closes_the_connection() {
 	)
 	.await;
 	let mut member = None;
+
 	loop {
 		match next(&mut socket).await {
 			ServerFrame::Presence { members, .. } => {
@@ -1257,6 +1278,7 @@ async fn a_lease_refused_after_signing_in_closes_the_connection() {
 			other => panic!("unexpected frame: {other:?}"),
 		}
 	}
+
 	assert_eq!(member, Some(vec!["live-1".to_owned()]));
 
 	deny.store(true, Ordering::SeqCst);
@@ -1289,15 +1311,18 @@ pub async fn mailbox_gate(_cx: &rpc::QueryCx) -> rpc::Result<()> {
 		MAILBOX_ENTERED.notify_one();
 		MAILBOX_RELEASE.notified().await;
 	}
+
 	Ok(())
 }
 
 #[rpc::query]
 pub async fn mailbox_error(cx: &rpc::QueryCx) -> rpc::Result<usize> {
 	let count = Note::query().all(cx.db()).await?.len();
+
 	if count > 0 {
 		return Err(rpc::Error::invalid(format!("round {count}")));
 	}
+
 	Ok(count)
 }
 
@@ -1307,16 +1332,20 @@ async fn blocked_session_coalesces_many_hub_rounds_without_another_write() {
 	let server = serve(db.clone(), Caller).await;
 	let mut blocked = connect(&server, None).await;
 	let mut neighbor = connect(&server, None).await;
+
 	for socket in [&mut blocked, &mut neighbor] {
 		send(socket, subscribe(1, "session_bodies")).await;
 		answer(socket, 1).await.unwrap();
 	}
+
 	send(&mut blocked, subscribe(2, "mailbox_error")).await;
+
 	answer(&mut blocked, 2).await.unwrap();
 	send(&mut blocked, subscribe(3, "mailbox_gate")).await;
 	tokio::time::timeout(Duration::from_secs(5), MAILBOX_ENTERED.notified())
 		.await
 		.unwrap();
+
 	for round in 1..=40 {
 		NewNote {
 			body: format!("{round:02}"),
@@ -1334,6 +1363,7 @@ async fn blocked_session_coalesces_many_hub_rounds_without_another_write() {
 			}
 		}
 	}
+
 	MAILBOX_RELEASE.notify_one();
 	let mut latest = false;
 	let mut error = false;

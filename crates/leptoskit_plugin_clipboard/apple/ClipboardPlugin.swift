@@ -37,8 +37,10 @@ public final class ClipboardPlugin: NativePlugin {
     /// The clipboard's text, as bytes.
     private static func read() throws -> Data {
         #if os(iOS)
+
         return Data((UIPasteboard.general.string ?? "").utf8)
         #elseif os(macOS)
+
         return Data((NSPasteboard.general.string(forType: .string) ?? "").utf8)
         #else
         throw PluginError.unavailable
@@ -55,6 +57,7 @@ public final class ClipboardPlugin: NativePlugin {
         guard NSPasteboard.general.setString(text, forType: .string) else {
             throw PluginError.native
         }
+
         #else
         throw PluginError.unavailable
         #endif

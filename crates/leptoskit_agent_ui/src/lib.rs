@@ -76,6 +76,7 @@ mod parse;
 mod reference;
 mod registry;
 mod render;
+
 mod state;
 mod theme;
 mod value;
@@ -325,6 +326,7 @@ impl AgentUi {
 			edit(&mut copy);
 			self.inner = Arc::new(copy);
 		}
+
 		self
 	}
 

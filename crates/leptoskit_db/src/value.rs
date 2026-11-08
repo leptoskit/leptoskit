@@ -503,12 +503,15 @@ impl Column for Duration {
 /// `PT5400S` or `-PT2.5S`.
 fn parse_iso_duration(text: &str) -> Result<Duration, DecodeError> {
 	let error = || DecodeError::custom(format!("`{text}` isn't ISO 8601 duration text"));
+
 	let (negative, body) = match text.strip_prefix('-') {
 		Some(rest) => (true, rest),
 		None => (false, text),
 	};
+
 	let body = body.strip_prefix("PT").ok_or_else(error)?;
 	let body = body.strip_suffix('S').ok_or_else(error)?;
+
 	let (seconds, nanos) = match body.split_once('.') {
 		Some((seconds, fraction)) => {
 			let digits = fraction.len();
@@ -528,6 +531,7 @@ fn parse_iso_duration(text: &str) -> Result<Duration, DecodeError> {
 	};
 
 	let duration = Duration::seconds(seconds) + Duration::nanoseconds(i64::from(nanos));
+
 	Ok(if negative { -duration } else { duration })
 }
 
@@ -538,6 +542,7 @@ pub(crate) fn write_iso_duration(duration: &Duration) -> String {
 	} else {
 		""
 	};
+
 	let magnitude = duration.abs();
 	let seconds = magnitude.num_seconds();
 	let nanos = magnitude.subsec_nanos();

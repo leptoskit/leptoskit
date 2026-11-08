@@ -167,6 +167,7 @@ public final class PedometerPlugin: NativePlugin {
 
             for _ in 0..<ticks {
                 guard let self else { return }
+
                 guard await self.tick(request, identifier: identifier) else { return }
             }
 

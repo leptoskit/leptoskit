@@ -25,6 +25,7 @@ pub fn Page(route: &Search) -> Element {
 	} else {
 		format!("Notes matching “{}”", route.q)
 	};
+
 	let tags = route
 		.tag
 		.iter()

@@ -57,18 +57,22 @@ impl Server {
 		body: Option<Value>,
 	) -> (StatusCode, Vec<u8>) {
 		let mut request = Request::builder().method(method).uri(path);
+
 		if let Some(token) = token {
 			request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
 		}
+
 		if body.is_some() {
 			request = request.header(header::CONTENT_TYPE, "application/json");
 		}
+
 		let request = request
 			.body(body.map_or_else(Body::empty, |body| Body::from(body.to_string())))
 			.unwrap();
 		let response = self.router.clone().oneshot(request).await.unwrap();
 		let status = response.status();
 		let bytes = response.into_body().collect().await.unwrap().to_bytes();
+
 		(status, bytes.to_vec())
 	}
 
@@ -316,6 +320,7 @@ async fn people_see_only_their_own_research() {
 			None::<()>,
 		)
 		.await;
+
 	assert!(on_page.is_empty());
 }
 

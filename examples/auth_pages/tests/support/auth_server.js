@@ -6,6 +6,7 @@ let walletBehavior;
 let walletListener;
 let credentialMethods;
 let conditionalMethod;
+
 let passkeyBehavior;
 
 export function install(initiallySignedIn) {
@@ -30,6 +31,7 @@ export function install(initiallySignedIn) {
 	};
 	const mfa = { totp: false, recovery_codes: 0, passkeys: 0, required: false };
 	let stepped = false;
+
 	globalThis.fetch = async (input, init) => {
 		const request = new Request(input, init);
 		const path = new URL(request.url).pathname;
@@ -59,6 +61,7 @@ export function install(initiallySignedIn) {
 					status = 400;
 					value = { error: "invalid_code", message: "that code was refused" };
 				}
+
 				break;
 			case "POST /auth/second-factor":
 				if (parsed.code === "654321") {
@@ -68,6 +71,7 @@ export function install(initiallySignedIn) {
 					status = 400;
 					value = { error: "sign_in_expired", message: "sign-in expired" };
 				}
+
 				break;
 			case "GET /auth/mfa":
 				value = mfa;
@@ -105,6 +109,7 @@ export function install(initiallySignedIn) {
 						nonce: "fixture-nonce",
 					},
 				};
+
 				if (parsed?.address) value.input.address = parsed.address;
 				break;
 			case "POST /auth/wallets/link": {
@@ -119,6 +124,7 @@ export function install(initiallySignedIn) {
 					verified_at: session.created_at,
 					last_proved_at: session.created_at,
 				};
+
 				if (!existing) fixtures.linked.push(wallet);
 				value = {
 					outcome: existing ? "already_linked" : "linked",
@@ -171,6 +177,7 @@ export function install(initiallySignedIn) {
 					mfa.totp = false;
 					mfa.recovery_codes = 0;
 				}
+
 				break;
 			case "POST /auth/step-up":
 				if (parsed.code === "654321") {
@@ -180,6 +187,7 @@ export function install(initiallySignedIn) {
 					status = 403;
 					value = { error: "invalid_code", message: "that code was refused" };
 				}
+
 				break;
 			case "POST /auth/passkey/register/options":
 				value = {
@@ -226,6 +234,7 @@ export function install(initiallySignedIn) {
 						},
 						token: null,
 					};}
+
 				break;
 			case "POST /auth/passkey/sign-in":
 			case "POST /auth/passkey/second-factor":
@@ -251,17 +260,22 @@ export function calls() {
 }
 export function restore() {
 	globalThis.fetch = original;
+
 	if (walletListener) {
 		window.removeEventListener("wallet-standard:app-ready", walletListener);
 	}
+
 	walletListener = undefined;
+
 	if (credentialMethods) {
 		for (const method of ["get", "create"]) {
 			const descriptor = credentialMethods[method];
+
 			if (descriptor) {
 				Object.defineProperty(navigator.credentials, method, descriptor);
 			} else delete navigator.credentials[method];
 		}
+
 		Object.defineProperty(
 			PublicKeyCredential,
 			"isConditionalMediationAvailable",
@@ -328,6 +342,7 @@ export function enable_wallets() {
 	};
 	const register = (api) => api.register(text, siws, siws, wrong);
 	walletListener = (event) => register(event.detail);
+
 	window.addEventListener("wallet-standard:app-ready", walletListener);
 	window.dispatchEvent(
 		new CustomEvent("wallet-standard:register-wallet", { detail: register }),
@@ -359,6 +374,7 @@ export function enable_passkeys() {
 		"isConditionalMediationAvailable",
 		{ configurable: true, value: async () => false },
 	);
+
 	for (const method of ["get", "create"]) {
 		Object.defineProperty(navigator.credentials, method, {
 			configurable: true,
@@ -369,6 +385,7 @@ export function enable_passkeys() {
 				if (options.signal.aborted) {
 					throw new DOMException("aborted", "AbortError");
 				}
+
 				const credential = Object.create(PublicKeyCredential.prototype);
 				Object.defineProperties(credential, {
 					rawId: { value: new Uint8Array([1, 2, 3]).buffer },

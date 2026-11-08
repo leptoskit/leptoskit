@@ -7,12 +7,14 @@ set -euo pipefail
 device="${1:?simulator udid}"
 derived_data="${2:?derived data directory}"
 project=setup/native-ui/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj
+
 if [ ! -d "$project" ]; then
 	echo "WebDriverAgent project not found at $project; install setup/native-ui first" >&2
 	exit 1
 fi
 runtime="$(xcrun simctl list devices --json | jq -er --arg udid "$device" '
 	.devices | to_entries[] | select(any(.value[]; .udid == $udid)) | .key')"
+
 # The driver targets the device's own major.minor iOS version.
 deployment_target="$(xcrun simctl list runtimes --json | jq -er --arg runtime "$runtime" '
 	.runtimes[] | select(.identifier == $runtime) | .version | split(".")[:2] | join(".")')"
@@ -30,11 +32,14 @@ deployment_target="$(xcrun simctl list runtimes --json | jq -er --arg runtime "$
 # which is why the build runs here rather than inside the first test session.
 destination_timeout="${NATIVE_WDA_DESTINATION_TIMEOUT:-600}"
 wait_started=$SECONDS
+
 while :; do
 	destinations="$(xcodebuild -showdestinations -project "$project" -scheme WebDriverAgentRunner 2>&1 || true)"
+
 	if grep -Fq "id:$device" <<<"$destinations"; then
 		break
 	fi
+
 	if [ "$((SECONDS - wait_started))" -ge "$destination_timeout" ]; then
 		echo "xcodebuild did not list simulator $device as a destination within ${destination_timeout} seconds" >&2
 		echo "xcodebuild: $(xcodebuild -version | tr '\n' ' ')" >&2

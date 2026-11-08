@@ -77,6 +77,7 @@ class KeepAwakePlugin(
         val activity = visibleActivity()
 
         return suspendCancellableCoroutine { continuation ->
+
             if (!continuation.isActive) return@suspendCancellableCoroutine
 
             hold(activity)

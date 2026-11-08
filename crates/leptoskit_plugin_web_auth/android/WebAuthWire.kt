@@ -52,6 +52,7 @@ internal class WebAuthRequest(
             if (bytes.remaining() !in MIN_REQUEST_BYTES..MAX_REQUEST_BYTES) {
                 throw PluginException(PluginException.INVALID_ARGUMENT)
             }
+
             val session = bytes.int
 
             return WebAuthRequest(session, providerPage(utf8(bytes)))

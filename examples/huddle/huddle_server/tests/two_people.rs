@@ -163,6 +163,7 @@ impl Socket {
 				assert_eq!(err, None, "{query}");
 				let value = ok.unwrap();
 				self.results.insert(id, value.clone());
+
 				return value;
 			}
 		}
@@ -218,6 +219,7 @@ async fn two_people_huddle() {
 	options.settlement.delay = Duration::from_millis(200);
 	// Every tip is declined, until the test changes its mind.
 	options.settlement.failure_rate = 1.0;
+
 	options.jobs = leptoskit_rpc::server::Jobs::new(db.clone())
 		.poll(Duration::from_millis(100))
 		.queue("mail", 2)
@@ -333,12 +335,15 @@ async fn two_people_huddle() {
 	)
 	.await;
 	let reordered = grace.ok("board", json!({ "channel": general })).await;
+
 	assert_eq!(reordered[0]["id"], third);
 	assert_eq!(reordered[1]["title"], "First card");
 	assert_eq!(reordered[2]["id"], second);
+
 	for index in 0..3 {
 		assert_eq!(reordered[index]["position"], index);
 	}
+
 	ada.ok(
 		"move_task",
 		json!({ "task": first, "column": "doing", "index": 99 }),
@@ -439,6 +444,7 @@ async fn two_people_huddle() {
 				ServerFrame::Presence { members, .. } if members.len() == 2 => {
 					Some(members.clone())
 				}
+
 				_ => None,
 			}
 		})
@@ -527,6 +533,7 @@ async fn two_people_huddle() {
 		.unwrap()
 		.clone();
 	assert_eq!(notice["action"]["label"], "Retry");
+
 	assert_eq!(notice["action"]["operation"], "retry_tip");
 
 	// The service recovers; Retry runs the notice's own action.
@@ -570,6 +577,7 @@ async fn two_people_huddle() {
 	);
 	ada.ok("sign_out_everywhere", json!({ "user": grace_id }))
 		.await;
+
 	loop {
 		if matches!(
 			grace_live.next().await,
@@ -578,6 +586,7 @@ async fn two_people_huddle() {
 			break;
 		}
 	}
+
 	assert_eq!(grace.ok("whoami", json!({})).await, Value::Null);
 
 	server.abort();

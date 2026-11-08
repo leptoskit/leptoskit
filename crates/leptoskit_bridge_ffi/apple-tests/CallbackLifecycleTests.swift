@@ -40,6 +40,7 @@ struct CallbackLifecycleTests {
         waiter.cancel()
         test_service_wakes(callbacks, Self.wakeCount)
         await nextMainTurn()
+
         precondition(polls == 1, "worker wakes did not coalesce")
         precondition(releases == 0, "cancelled waiter released pending cleanup")
         ready = true

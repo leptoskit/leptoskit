@@ -92,6 +92,7 @@ async fn refresh(host: &Hosted, account: &str) -> Api<()> {
 			.await
 			.map_err(|_| Error(StatusCode::SERVICE_UNAVAILABLE, "billing_unavailable"))?;
 	}
+
 	Ok(())
 }
 async fn account(State(host): State<Hosted>, headers: HeaderMap) -> Api<Json<AccountView>> {
@@ -122,6 +123,7 @@ async fn install(
 			"request_managed_capacity_from_operator",
 		));
 	}
+
 	Ok(Json(
 		host.register(&account, &body.project, &body.environment, body.ownership)
 			.map_err(bad)?,
@@ -137,12 +139,14 @@ async fn pair(
 		.accounts()
 		.installation(&account, &project)
 		.map_err(bad)?;
+
 	if !matches!(installation.ownership, Ownership::Customer) {
 		return Err(Error(
 			StatusCode::FORBIDDEN,
 			"managed_worker_is_operator_owned",
 		));
 	}
+
 	Ok(Json(
 		json!({"code":host.accounts().pairing(&account,&project).map_err(bad)?,"expires_in":600}),
 	))
@@ -178,6 +182,7 @@ async fn claim(State(host): State<Hosted>, headers: HeaderMap) -> Api<Json<Optio
 	let operation = store
 		.claim_project(Some(&installation.project))
 		.map_err(bad)?;
+
 	if let Some(operation) = operation {
 		if host
 			.check_job_policy(&account, &installation.project, &operation.intent.action)
@@ -193,6 +198,7 @@ async fn claim(State(host): State<Hosted>, headers: HeaderMap) -> Api<Json<Optio
 					},
 				)
 				.map_err(bad)?;
+
 			return Ok(Json(None));
 		}
 		let read = service
@@ -229,6 +235,7 @@ async fn finish(
 		.operation(&body.id)
 		.map_err(bad)?
 		.ok_or(Error(StatusCode::NOT_FOUND, "operation_not_found"))?;
+
 	if operation.project != installation.project {
 		return Err(Error(StatusCode::FORBIDDEN, "scope_or_origin_denied"));
 	}
@@ -237,6 +244,7 @@ async fn finish(
 	} else {
 		Phase::Failed
 	};
+
 	if operation.phase == phase
 		&& operation.message == body.message
 		&& operation.result == body.details
@@ -266,6 +274,7 @@ async fn billing(
 		StatusCode::SERVICE_UNAVAILABLE,
 		"billing_not_configured",
 	))?;
+
 	let url = match action.as_str() {
 		"checkout" => {
 			b.checkout(&host, &account, body["plan"].as_str().unwrap_or_default())
@@ -277,6 +286,7 @@ async fn billing(
 	.map_err(bad)?;
 	Ok(Json(json!({"url":url})))
 }
+
 async fn webhook(State(host): State<Hosted>, headers: HeaderMap, body: Bytes) -> Api<StatusCode> {
 	let b = host.0.billing.as_ref().ok_or(Error(
 		StatusCode::SERVICE_UNAVAILABLE,
@@ -330,9 +340,11 @@ async fn state(
 	} else {
 		host.accounts().worker(&key).map_err(denied)?
 	};
+
 	if installation.project != project {
 		return Err(Error(StatusCode::FORBIDDEN, "scope_or_origin_denied"));
 	}
+
 	let response = tokio::task::spawn_blocking(move || -> Result<Response> {
 		match method.as_str() {
 			"GET" => {
@@ -379,16 +391,22 @@ async fn proxy(State(host): State<Hosted>, mut request: Request) -> Api<Response
 			.ok_or(Error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
 		host.accounts().view(account).map_err(denied)?;
 		let (store, _) = host.tenant(account).map_err(bad)?;
+
 		if store.authenticate(token, false).map_err(bad)?.is_none() {
 			return Err(Error(StatusCode::UNAUTHORIZED, "authentication_required"));
 		}
+
 		(account.to_owned(), token.to_owned())
 	};
+
 	let path = request.uri().path().to_owned();
+
 	if path == "/api/v1/login" || path == "/api/v1/logout" {
 		return Err(Error(StatusCode::NOT_FOUND, "not_found"));
 	}
+
 	let issuing = path == "/api/v1/tokens";
+
 	if request.method() == Method::POST && path.ends_with("/operations") {
 		refresh(&host, &account).await?;
 		let project = path
@@ -405,6 +423,7 @@ async fn proxy(State(host): State<Hosted>, mut request: Request) -> Api<Response
 			.map_err(denied)?;
 		request = Request::from_parts(parts, Body::from(bytes));
 	}
+
 	if path == "/api/v1/tokens/revoke" {
 		let (parts, body) = request.into_parts();
 		let bytes = to_bytes(body, 4096)
@@ -412,6 +431,7 @@ async fn proxy(State(host): State<Hosted>, mut request: Request) -> Api<Response
 			.map_err(|_| Error(StatusCode::BAD_REQUEST, "invalid_key"))?;
 		let mut value: Value = serde_json::from_slice(&bytes)
 			.map_err(|_| Error(StatusCode::BAD_REQUEST, "invalid_key"))?;
+
 		if let Some(token) = value["key"]
 			.as_str()
 			.and_then(|s| s.strip_prefix(&format!("{account}.")))
@@ -426,6 +446,7 @@ async fn proxy(State(host): State<Hosted>, mut request: Request) -> Api<Response
 			),
 		);
 	}
+
 	request.headers_mut().insert(
 		"authorization",
 		HeaderValue::from_str(&format!("Bearer {forward}"))
@@ -438,6 +459,7 @@ async fn proxy(State(host): State<Hosted>, mut request: Request) -> Api<Response
 		.oneshot(request)
 		.await
 		.expect("infallible router");
+
 	if issuing && response.status().is_success() {
 		let bytes = to_bytes(response.into_body(), 4096)
 			.await

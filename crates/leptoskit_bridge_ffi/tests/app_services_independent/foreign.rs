@@ -257,6 +257,7 @@ fn a_timer_can_wake_a_no_service_host_activated_before_timers() {
 		let mut request = std::mem::MaybeUninit::uninit();
 		assert_eq!(lk_app_next_request(app, request.as_mut_ptr()), 0);
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+
 		while callbacks_owner.notified.load(Ordering::Acquire) == 0
 			&& std::time::Instant::now() < deadline
 		{

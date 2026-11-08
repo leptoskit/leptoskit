@@ -46,6 +46,7 @@ impl NatsServer {
 				"skipping: no nats-server found (run in `devenv shell`, or set \
 				 LEPTOSKIT_NATS_SERVER)"
 			);
+
 			return None;
 		};
 
@@ -83,9 +84,11 @@ impl NatsServer {
 	pub fn restart(&mut self) {
 		self.stop();
 		let mut command = Command::new(&self.binary);
+
 		if let Some(token) = &self.token {
 			command.args(["--auth", token]);
 		}
+
 		let child = command
 			.args(["-js", "-a", "127.0.0.1", "-p"])
 			.arg(self.port.to_string())

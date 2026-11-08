@@ -259,6 +259,7 @@ impl Store {
 	/// Puts a failure on screen. A signed-out failure returns to sign-in.
 	fn failed(&self, problem: &Problem) {
 		self.busy().set(false);
+
 		if problem.signed_out {
 			self.session().set(Session::SignedOut);
 		} else {
@@ -275,6 +276,7 @@ impl Store {
 				store.session().set(Session::SignedOut);
 				return;
 			}
+
 			api.set_session(token);
 			match api.signed_in().await {
 				Ok(true) => {
@@ -295,11 +297,14 @@ impl Store {
 	/// Sends a sign-in code to the address in the form.
 	pub fn send_code(&self) {
 		let email = self.peek(|state| state.sign_in.email.trim().to_owned());
+
 		if email.is_empty() {
 			self.sign_in()
 				.update(|form| form.error = Some("Enter your email address.".into()));
+
 			return;
 		}
+
 		self.sign_in().update(|form| {
 			form.busy = true;
 			form.error = None;
@@ -391,9 +396,11 @@ impl Store {
 	/// this while rendering, so it only starts work that isn't under way.
 	pub fn open_project(&self, id: ProjectId) {
 		let open = self.peek(|state| matches!(&state.project, Some((open, _)) if *open == id));
+
 		if open {
 			return;
 		}
+
 		self.reload_project(id);
 	}
 
@@ -409,6 +416,7 @@ impl Store {
 			if !keep {
 				store.project().set(Some((id, Load::Loading)));
 			}
+
 			let result = api().project(id).await;
 			store.project().set(Some((
 				id,
@@ -423,10 +431,13 @@ impl Store {
 	/// Creates a project from the form, then opens it with `then`.
 	pub fn create_project(&self, then: impl FnOnce(ProjectId) + 'static) {
 		let input = self.peek(|state| state.new_project.clone());
+
 		if input.title.trim().is_empty() {
 			self.notice().set(Some("Give the project a title.".into()));
+
 			return;
 		}
+
 		self.busy().set(true);
 		let store = self.clone();
 		spawn(async move {
@@ -535,9 +546,11 @@ impl Store {
 	/// Adds the note in the form to a project.
 	pub fn add_note(&self, project: ProjectId) {
 		let body = self.peek(|state| state.note.trim().to_owned());
+
 		if body.is_empty() {
 			return;
 		}
+
 		let store = self.clone();
 		spawn(async move {
 			match api().create_note(project, &body).await {

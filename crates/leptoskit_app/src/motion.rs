@@ -29,12 +29,14 @@ pub fn mark() -> Element {
 	return Image("/docs/assets/mark.svg")
 		.class("w-12 h-12")
 		.aria_hidden(true);
+
 	#[cfg(all(target_arch = "wasm32", feature = "web", not(feature = "native")))]
 	if leptos::prelude::use_context::<MotionReady>().is_none() {
 		return Image("/docs/assets/mark.svg")
 			.class("w-12 h-12")
 			.aria_hidden(true);
 	}
+
 	#[cfg(target_arch = "wasm32")]
 	Rive(brand_playback())
 		.class("w-12 h-12")

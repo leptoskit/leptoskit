@@ -46,6 +46,7 @@ fn chromedriver_in(install: &Path) -> Option<PathBuf> {
 	} else {
 		"chromedriver"
 	};
+
 	[
 		"chromedriver-mac-arm64",
 		"chromedriver-mac-x64",
@@ -108,6 +109,7 @@ impl Driver {
 		if isolated {
 			crate::testing::isolate(&mut command);
 		}
+
 		let process = command
 			.arg(format!("--port={port}"))
 			.stdout(Stdio::null())
@@ -135,6 +137,7 @@ impl Driver {
 			addon: None,
 			agent,
 		};
+
 		let deadline = Instant::now() + Duration::from_secs(20);
 
 		loop {
@@ -226,11 +229,13 @@ impl Drop for Driver {
 		let Some(process) = &mut self.process else {
 			return;
 		};
+
 		if self.isolated {
 			let _ = crate::testing::terminate(process);
 		} else {
 			let _ = process.kill();
 		}
+
 		let deadline = Instant::now() + Duration::from_secs(2);
 
 		while matches!(process.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -249,6 +254,7 @@ impl Driver {
 		let extension = extension
 			.canonicalize()
 			.context("extension package directory is missing")?;
+
 		match browser {
 			ExtensionBrowser::Chromium => {
 				let chrome = super::dev::chrome().context("Chrome for Testing is missing")?;

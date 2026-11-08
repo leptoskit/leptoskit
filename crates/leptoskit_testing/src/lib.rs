@@ -626,6 +626,7 @@ impl<B: NativeBackend> WidgetTester<B> {
 			}
 			_ => None,
 		});
+
 		let value = aria.value_now.or_else(|| {
 			(kind == NativeKind::Slider).then(|| props.slider.unwrap_or_default().value())
 		});

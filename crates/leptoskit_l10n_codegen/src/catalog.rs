@@ -670,6 +670,7 @@ fn type_of(
 	} else {
 		PlaceholderType::Str
 	});
+
 	let mut valid = true;
 
 	if counted && !ty.is_number() {
@@ -700,6 +701,7 @@ fn placeholder(
 	report: &mut impl FnMut(String),
 ) -> Option<Placeholder> {
 	let snake = name.to_snake_case();
+
 	let ident = match identifier(&snake) {
 		Ok(ident) => ident,
 		Err(not) => {
@@ -810,6 +812,7 @@ fn check_usage(
 	else {
 		return true;
 	};
+
 	let allowed = match usage {
 		Usage::Shown => true,
 		Usage::Counted => placeholder.ty.is_number(),

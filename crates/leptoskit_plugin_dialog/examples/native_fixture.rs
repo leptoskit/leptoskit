@@ -619,6 +619,7 @@ mod fixture {
 		));
 		content.addSubview(&status);
 		STATUS.with(|cell| cell.set(status).expect("the status label is set once"));
+
 		window.center();
 		window.makeKeyAndOrderFront(None);
 		#[allow(deprecated)]

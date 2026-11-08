@@ -493,6 +493,7 @@ mod tests {
 		assert_eq!(sent["hook"], "after_build");
 		assert_eq!(sent["context"]["output_dir"], "/tmp/dist");
 		assert_eq!(sent["context"]["wasm_bundle"], "/tmp/dist/app.wasm");
+
 		assert_eq!(sent["context"]["release"], true);
 		assert_eq!(sent["context"]["options"]["level"], 2);
 

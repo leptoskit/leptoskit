@@ -20,12 +20,15 @@ static CONNECTED: AtomicBool = AtomicBool::new(false);
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let _ = navigation;
+
 	if !browser::IN_EXTENSION {
 		return view! { <ui::ExtensionOnly /> };
 	}
+
 	if !CONNECTED.swap(true, Ordering::Relaxed) {
 		crate::tasks::spawn(frame::connect());
 	}
+
 	let store = Store::current();
 	let (quote, page, projects, chosen, draft, status) = store.with(|state| {
 		(
@@ -105,6 +108,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 							if matches!(reply, ExtensionReply::Saved(_) | ExtensionReply::Queued) {
 								store.clip().set(crate::store::ClipDraft::default());
 							}
+
 							store.extension().update(|extension| {
 								extension.status = Some(browser::status(&reply))
 							});
@@ -113,6 +117,7 @@ pub fn Page(navigation: &Navigation) -> Element {
 				/>
 				{close}
 			</View>
+
 			{match status {
 				Some(status) => {
 					view! { <Status class="text-sm">{status}</Status> }
@@ -202,6 +207,7 @@ mod frame {
 		#[cfg(feature = "extension")]
 		{
 			let page = PAGE.with_borrow_mut(Option::take);
+
 			if let Some(page) = page {
 				let _ = page.close().await;
 			}

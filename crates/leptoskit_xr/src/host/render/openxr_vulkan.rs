@@ -265,6 +265,7 @@ fn create_device(system: &System) -> Result<(Gpu, VulkanHandles), Error> {
 		}
 		.map_err(native)? as u64,
 	);
+
 	let adapter = hal_instance
 		.expose_adapter(physical)
 		.ok_or(Error::Unavailable)?;

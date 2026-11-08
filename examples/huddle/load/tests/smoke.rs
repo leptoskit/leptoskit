@@ -14,6 +14,7 @@ async fn simulated_clients_receive_every_committed_message() {
 		.origin(&base);
 	let huddle = huddle_server::start(&db, auth, options).unwrap();
 	let router = huddle.router.clone();
+
 	let server = tokio::spawn(async move {
 		axum::serve(listener, router).await.unwrap();
 	});

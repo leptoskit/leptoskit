@@ -17,6 +17,7 @@ pub(super) fn fixture() -> (Vec<Migration>, Vec<Schema>, MigrationWindow) {
 		)],
 	);
 	let mut snapshots = vec![baseline];
+
 	for column in ["body", "extra"] {
 		let mut next = snapshots.last().unwrap().clone();
 		next.tables[0]
@@ -24,6 +25,7 @@ pub(super) fn fixture() -> (Vec<Migration>, Vec<Schema>, MigrationWindow) {
 			.push(Column::new(column, ColumnType::TEXT).nullable());
 		snapshots.push(next);
 	}
+
 	let mut previous = Schema::empty(Dialect::Postgres);
 	let migrations: Vec<_> = snapshots
 		.iter()
@@ -35,6 +37,7 @@ pub(super) fn fixture() -> (Vec<Migration>, Vec<Schema>, MigrationWindow) {
 			Migration::new(format!("migration_{index}"), sql)
 		})
 		.collect();
+
 	let window = MigrationWindow::new(
 		&migrations[..1],
 		&snapshots[0].to_json(),
@@ -58,10 +61,12 @@ fn applied(migrations: &[Migration]) -> Vec<(String, String)> {
 fn every_build_checks_its_own_checkpoint_and_history() {
 	let (migrations, schemas, window) = fixture();
 	let window = MigrationWindow::from_json(&window.to_json()).unwrap();
+
 	for length in 1..=3 {
 		let checked = window
 			.checked(&migrations[..length], &schemas[length - 1].to_json())
 			.unwrap();
+
 		for installed in 1..=3 {
 			let mut history = applied(&migrations[..installed]);
 			history.reverse(); // Database row ordering is irrelevant.
@@ -71,6 +76,7 @@ fn every_build_checks_its_own_checkpoint_and_history() {
 			);
 		}
 	}
+
 	assert!(
 		window
 			.check_build(&migrations[..1], &schemas[2].to_json())
@@ -95,10 +101,12 @@ fn unknown_missing_duplicate_and_modified_history_are_refused() {
 	outside.push(("not_in_window".into(), "0".repeat(64)));
 	let mut duplicate = applied(&migrations[..1]);
 	duplicate.extend(duplicate.clone());
+
 	let missing_middle = vec![
 		applied(&migrations)[0].clone(),
 		applied(&migrations)[2].clone(),
 	];
+
 	for history in [vec![], wrong_checksum, outside, duplicate, missing_middle] {
 		assert!(matches!(
 			checked.pending(&history, &migrations[..1]),
@@ -142,6 +150,7 @@ fn stored_documents_are_revalidated_without_trusting_flags() {
 	variants.push(changed);
 	let mut changed = original.clone();
 	changed["format_version"] = 2.into();
+
 	variants.push(changed);
 	let mut changed = original.clone();
 	changed["algorithm"] = "trusted".into();
@@ -155,9 +164,11 @@ fn stored_documents_are_revalidated_without_trusting_flags() {
 	let mut changed = original;
 	changed["expansions"] = serde_json::json!([]);
 	variants.push(changed);
+
 	for document in variants {
 		assert!(MigrationWindow::from_json(&document.to_string()).is_err());
 	}
+
 	assert!(MigrationWindow::from_json(&" ".repeat(MAX_BYTES + 1)).is_err());
 }
 
@@ -172,6 +183,7 @@ fn an_independent_pin_rejects_replacement_even_when_both_documents_are_valid() {
 	let replacement = replacement.to_string();
 	// Structural validity is not authority to replace the operator's input.
 	MigrationWindow::from_json(&replacement).unwrap();
+
 	assert!(matches!(
 		MigrationWindow::from_json_pinned(&replacement, &pin),
 		Err(MigrationWindowError::DigestMismatch)

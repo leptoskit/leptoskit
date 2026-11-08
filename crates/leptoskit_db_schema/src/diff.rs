@@ -711,6 +711,7 @@ fn altered_publication(
 	for table in &to.tables {
 		match from.table(&table.table) {
 			None => write!(f, " +{}", table.table)?,
+
 			Some(old) if old != table => write!(f, " ~{}", table.table)?,
 			Some(_) => {}
 		}

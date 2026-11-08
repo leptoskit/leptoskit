@@ -61,6 +61,7 @@ impl Transport for Fetch {
 					.map_err(failed)?;
 				init.set_body(&js_sys::Uint8Array::from(body.as_slice()).into());
 			}
+
 			init.set_headers(&headers.into());
 			let window = web_sys::window().ok_or("no window")?;
 			let response = JsFuture::from(window.fetch_with_str_and_init(&request.path, &init))
@@ -121,6 +122,7 @@ impl Transport for Plugin {
 				"DELETE" => Method::Delete,
 				_ => Method::Get,
 			};
+
 			let response = client
 				.execute(leptoskit_plugin_http::Request {
 					method,
@@ -176,6 +178,7 @@ impl Transport for ExtensionFetch {
 					.map_err(failed)?;
 				init.set_body(&js_sys::Uint8Array::from(body.as_slice()).into());
 			}
+
 			init.set_headers(&headers.into());
 			let global = js_sys::global();
 			let fetch: js_sys::Function = Reflect::get(&global, &JsValue::from_str("fetch"))

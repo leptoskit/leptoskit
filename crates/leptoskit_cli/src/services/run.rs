@@ -400,6 +400,7 @@ pub fn start(prepared: &Prepared, env: &[(String, String)], grace: Duration) -> 
 			crate::server::ensure_port_free(launch.address, &format!("services.{}", launch.name))
 		{
 			running.stop();
+
 			return Err(error);
 		}
 
@@ -434,6 +435,7 @@ pub fn start(prepared: &Prepared, env: &[(String, String)], grace: Duration) -> 
 
 		if let Err(error) = ready {
 			running.stop();
+
 			return Err(error.context(format!("services.{} didn't start", launch.name)));
 		}
 

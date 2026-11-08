@@ -511,6 +511,7 @@ async fn a_browser_or_native_app_calls_a_service_on_the_apps_origin() {
 	assert!(service.offline_store.is_none());
 	let script = Script::default().answer(401, "\"who are you?\"");
 	let native = remote(&script, service);
+
 	let _ = native.call("capture", json!({}), Key::None).await;
 	assert_eq!(
 		script.sent()[0].url,

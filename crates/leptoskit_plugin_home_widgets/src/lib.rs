@@ -514,6 +514,7 @@ mod tests {
 		for installed in [Installed::Unknown, Installed::None, Installed::Some] {
 			assert_eq!(Installed::decode(&installed.encode()).unwrap(), installed);
 		}
+
 		for value in [&[][..], &[3], &[3, 0, 0, 0], &[2, 0, 0, 0, 0]] {
 			assert!(Installed::decode(value).is_err());
 		}
@@ -532,6 +533,7 @@ mod tests {
 		assert_eq!(encode_reload(None).unwrap(), Bytes::new());
 		assert_eq!(kind.as_str(), "counter.v1");
 		let snapshot = Snapshot::new(kind, Family::System, "Count", "12", "myapp://x").unwrap();
+
 		assert_eq!(snapshot.kind().as_str(), "counter.v1");
 		assert_eq!(snapshot.family(), Family::System);
 		assert_eq!(snapshot.title(), "Count");

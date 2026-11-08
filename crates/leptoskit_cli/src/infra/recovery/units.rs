@@ -40,8 +40,10 @@ mod tests {
 	fn directive<'a>(text: &'a str, section: &str, key: &str) -> &'a str {
 		let mut current = "";
 		let mut value = None;
+
 		for line in text.lines() {
 			assert!(!line.ends_with('\\'), "unexpected continuation: {line}");
+
 			if line.starts_with('[') {
 				assert!(line.ends_with(']'), "invalid section: {line}");
 				current = line;
@@ -54,6 +56,7 @@ mod tests {
 				panic!("invalid directive: {line}");
 			}
 		}
+
 		value.unwrap_or_else(|| panic!("missing {section} {key}"))
 	}
 

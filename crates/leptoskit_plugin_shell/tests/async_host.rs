@@ -145,6 +145,7 @@ async fn typed_rpc_preserves_binary_nonzero_status_and_limits() {
 	assert_eq!(output.finish, Finish::StdoutLimit);
 	assert_eq!(output.stdout.len(), 128);
 	assert!(!output.success);
+
 	let fixture = Fixture::new("sleep", 1024, 30);
 	let reply = fixture
 		.plugin

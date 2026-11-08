@@ -51,6 +51,7 @@ function compress(body, encoding) {
 			params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
 		});
 	}
+
 	return gzipSync(body, { level: 9 });
 }
 
@@ -69,6 +70,7 @@ export function serve(root, { encoding, playgroundService, port = 0 } = {}) {
 			if (path.split("/").includes("..")) {
 				return new Response("Bad request", { status: 400 });
 			}
+
 			let file = `${root}${path}`;
 			if (path.endsWith("/")) file += "index.html";
 			let body;
@@ -78,6 +80,7 @@ export function serve(root, { encoding, playgroundService, port = 0 } = {}) {
 				if (error instanceof Deno.errors.NotFound) {
 					return new Response("Not found", { status: 404 });
 				}
+
 				throw error;
 			}
 			const extension = file.slice(file.lastIndexOf(".") + 1);
@@ -101,6 +104,7 @@ export function serve(root, { encoding, playgroundService, port = 0 } = {}) {
 			if (path === "/play/frame.mjs") {
 				headers["access-control-allow-origin"] = "*";
 			}
+
 			const accepted = (request.headers.get("accept-encoding") ?? "")
 				.split(",")
 				.map((name) => name.trim().split(";")[0]);
@@ -121,6 +125,7 @@ export function serve(root, { encoding, playgroundService, port = 0 } = {}) {
 
 function chromeExecutable() {
 	const configured = Deno.env.get("CHROME");
+
 	if (configured) return configured;
 	const candidates = Deno.build.os === "darwin"
 		? [
@@ -141,6 +146,7 @@ function chromeExecutable() {
 		}
 	});
 	assert(found, "Chrome was not found; set CHROME to its executable");
+
 	return found;
 }
 
@@ -169,11 +175,14 @@ export async function launch(profile) {
 	try {
 		for (;;) {
 			const { value, done } = await reader.read();
+
 			if (done) {
 				throw new Error(`Chrome exited before DevTools started:\n${output}`);
 			}
+
 			output += value;
 			const endpoint = output.match(/DevTools listening on (ws:\/\/\S+)/)?.[1];
+
 			if (endpoint) return { process, endpoint };
 		}
 	} finally {
@@ -198,6 +207,7 @@ export class Page {
 			socket.onopen = resolve;
 			socket.onerror = () => reject(new Error("could not connect to Chrome"));
 		});
+
 		return new Page(socket);
 	}
 
@@ -209,8 +219,10 @@ export class Page {
 				for (const listener of this.#listeners.get(message.method) ?? []) {
 					listener(message.params, message.sessionId);
 				}
+
 				return;
 			}
+
 			const pending = this.#pending.get(message.id);
 			this.#pending.delete(message.id);
 			if (message.error) pending.reject(new Error(message.error.message));
@@ -248,11 +260,13 @@ export class Page {
 			awaitPromise: true,
 			returnByValue: true,
 		});
+
 		if (exceptionDetails) {
 			throw new Error(
 				exceptionDetails.exception?.description ?? exceptionDetails.text,
 			);
 		}
+
 		return result.value;
 	}
 
@@ -326,9 +340,11 @@ export async function removeProfile(profile) {
 	for (let attempt = 1;; attempt++) {
 		try {
 			await Deno.remove(profile, { recursive: true });
+
 			return;
 		} catch (error) {
 			if (error instanceof Deno.errors.NotFound) return;
+
 			if (attempt === 20) throw error;
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}

@@ -17,6 +17,7 @@ struct NativeLaunchBundle: Sendable {
 
 struct NativeSyncReport: Decodable, Sendable {
     enum Status: String, Decodable, Sendable { case current, staged }
+
     enum Contract: String, Decodable, Sendable { case verified, incomplete, legacy }
     let status: Status
     let version: String

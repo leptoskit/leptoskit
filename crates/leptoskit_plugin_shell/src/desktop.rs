@@ -366,6 +366,7 @@ async fn run(
 				let count = match result { Ok(count) => count, Err(error) => { tree.stop().await?; return Err(error.into()); } };
 				err_open = count != 0;
 				let remaining = limits.stderr_bytes - err.len();
+
 				err.extend_from_slice(&err_buffer[..count.min(remaining)]);
 				if count > remaining { break Finish::StderrLimit; }
 			}

@@ -1248,6 +1248,7 @@ impl Security {
 
 		if let Some(problem) = new_password_problem(&password, self.password_settings.data()) {
 			self.problem.set(Some(problem));
+
 			return;
 		}
 

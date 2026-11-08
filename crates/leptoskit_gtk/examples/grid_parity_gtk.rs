@@ -318,6 +318,7 @@ mod probe {
 
 	fn pump_until(condition: impl Fn() -> bool) {
 		let deadline = std::time::Instant::now() + Duration::from_secs(5);
+
 		while !condition() {
 			assert!(
 				std::time::Instant::now() < deadline,
@@ -349,6 +350,7 @@ mod probe {
 		let height = view.height();
 		let expect_w = layout.width.round() as i32;
 		let expect_h = layout.height.round() as i32;
+
 		if width != expect_w || height != expect_h {
 			out.push(Mismatch {
 				fixture: fixture.to_owned(),
@@ -358,6 +360,7 @@ mod probe {
 				gtk: format!("{width}x{height}"),
 			});
 		}
+
 		// Yoga frames are parent-relative; compare GTK bounds against the
 		// parent.
 		if let Some(bounds) = view.compute_bounds(parent_view)
@@ -371,6 +374,7 @@ mod probe {
 				gtk: format!("{},{}", bounds.x(), bounds.y()),
 			});
 		}
+
 		for child in surface.children(id) {
 			collect_mismatches(surface, *child, &view, fixture, out);
 		}
@@ -393,13 +397,17 @@ mod probe {
 			layout.x, layout.y, layout.width, layout.height
 		);
 		let children = surface.children(id);
+
 		for (index, child) in children.iter().enumerate() {
 			write_frames(out, surface, *child, depth + 1);
+
 			if index + 1 != children.len() {
 				out.push(',');
 			}
+
 			out.push('\n');
 		}
+
 		let _ = write!(out, "{indent}]}}");
 	}
 
@@ -433,11 +441,13 @@ mod probe {
 				)
 				.expect("window");
 			let root_view = surface.backend().view(root).expect("root view");
+
 			pump_until(|| window.is_mapped() && root_view.width() > 0);
 
 			// Root is parented by the window content; check size only, then
 			// walk children with parent-relative origins.
 			let layout = surface.layout(root);
+
 			if root_view.width() != layout.width.round() as i32
 				|| root_view.height() != layout.height.round() as i32
 			{
@@ -453,6 +463,7 @@ mod probe {
 					gtk: format!("{}x{}", root_view.width(), root_view.height()),
 				});
 			}
+
 			for child in surface.children(root) {
 				collect_mismatches(&surface, *child, &root_view, fixture.name, &mut mismatches);
 			}
@@ -460,6 +471,7 @@ mod probe {
 			if index > 0 {
 				frames.push_str(",\n");
 			}
+
 			use std::fmt::Write as _;
 			let _ = write!(frames, "  {:?}: ", fixture.name);
 			write_frames(&mut frames, &surface, root, 1);
@@ -490,6 +502,7 @@ mod probe {
 			out.display(),
 			mismatches.len()
 		);
+
 		if !mismatches.is_empty() {
 			for item in &mismatches {
 				eprintln!(
@@ -497,6 +510,7 @@ mod probe {
 					item.fixture, item.test_id, item.kind, item.yoga, item.gtk
 				);
 			}
+
 			std::process::exit(1);
 		}
 	}
@@ -505,6 +519,7 @@ mod probe {
 		use std::fmt::Write as _;
 		let mut out = String::from("{\n  \"count\": ");
 		let _ = write!(out, "{},\n  \"mismatches\": [\n", mismatches.len());
+
 		for (index, item) in mismatches.iter().enumerate() {
 			let _ = writeln!(
 				out,
@@ -522,6 +537,7 @@ mod probe {
 				}
 			);
 		}
+
 		out.push_str("  ]\n}\n");
 		out
 	}

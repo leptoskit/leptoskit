@@ -77,6 +77,7 @@ pub async fn my_session(cx: &rpc::QueryCx) -> rpc::Result<SessionState> {
 		.first(&cx.system("huddle: does this session still hold"))
 		.await?;
 	let revoked = row.is_none_or(|row| row.revoked_at.is_some());
+
 	Ok(SessionState {
 		active: !ended_by_admin && !revoked,
 	})

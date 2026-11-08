@@ -53,14 +53,17 @@ function run(
 		env: options.env,
 		stderr: "inherit",
 	}).outputSync();
+
 	if (!output.success) {
 		fail(`command failed: ${command.join(" ")}`);
 	}
+
 	return new TextDecoder().decode(output.stdout);
 }
 
 function which(binary: string): string | undefined {
 	const output = new Deno.Command("which", { args: [binary] }).outputSync();
+
 	return output.success
 		? new TextDecoder().decode(output.stdout).trim()
 		: undefined;
@@ -73,6 +76,7 @@ function xcrun(args: string[]): string {
 /** Where bindgen finds libclang: an override, then Xcode, then the system LLVM. */
 function libclangPath(): string | undefined {
 	const override = Deno.env.get("LIBCLANG_PATH");
+
 	if (override) return override;
 	const xcode =
 		"/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib";
@@ -82,9 +86,11 @@ function libclangPath(): string | undefined {
 		// not macOS, or no Xcode
 	}
 	const config = which("llvm-config");
+
 	if (config) {
 		const output = new Deno.Command(config, { args: ["--libdir"] })
 			.outputSync();
+
 		if (output.success) return new TextDecoder().decode(output.stdout).trim();
 	}
 	for (
@@ -96,11 +102,13 @@ function libclangPath(): string | undefined {
 	) {
 		try {
 			Deno.statSync(candidate);
+
 			return candidate;
 		} catch {
 			// next
 		}
 	}
+
 	return undefined;
 }
 
@@ -121,7 +129,9 @@ function iosTarget(): Target {
 			`-C link-arg=-isysroot${simulatorSdk}`,
 	};
 	const libclang = libclangPath();
+
 	if (libclang) env.LIBCLANG_PATH = libclang;
+
 	return { triple: "aarch64-apple-ios-sim", env };
 }
 
@@ -139,7 +149,9 @@ function androidTarget(ndk: string, arch: "aarch64" | "x86_64"): Target {
 			`--sysroot=${toolchain}/sysroot --target=${triple}24`,
 	};
 	const libclang = libclangPath();
+
 	if (libclang) env.LIBCLANG_PATH = libclang;
+
 	return { triple, env };
 }
 
@@ -147,6 +159,7 @@ function findNdk(explicit: string | undefined): string {
 	if (explicit) return explicit;
 	const home = Deno.env.get("ANDROID_NDK_HOME") ??
 		Deno.env.get("ANDROID_NDK_ROOT");
+
 	if (home) return home;
 	const sdk = Deno.env.get("ANDROID_HOME") ??
 		Deno.env.get("ANDROID_SDK_ROOT") ??
@@ -162,6 +175,7 @@ function findNdk(explicit: string | undefined): string {
 	versions.sort((left, right) =>
 		left.localeCompare(right, undefined, { numeric: true })
 	);
+
 	return `${sdk}/ndk/${versions[versions.length - 1]}`;
 }
 
@@ -177,7 +191,9 @@ function build(repo: string, target: Target, targetDir: string): string {
 	const hasCounter = existsSync(`${repo}/benchmarks/native/counter/Cargo.toml`);
 	const hasScreen = existsSync(`${repo}/benchmarks/native/screen/Cargo.toml`);
 	const guests = ["--package", "leptoskit_bench_guest"];
+
 	if (hasCounter) guests.push("--package", "leptoskit_bench_counter");
+
 	if (hasScreen) guests.push("--package", "leptoskit_bench_screen");
 	run(
 		[
@@ -191,18 +207,22 @@ function build(repo: string, target: Target, targetDir: string): string {
 		{ cwd: repo, env: cargoEnv },
 	);
 	const wasmDir = `${targetDir}/wasm32-unknown-unknown/release`;
+
 	const guest = `${wasmDir}/leptoskit_bench_guest.wasm`;
 	const embedded: Record<string, string> = {
 		LEPTOSKIT_BENCH_GUEST_WASM: guest,
 	};
+
 	if (hasCounter) {
 		embedded.LEPTOSKIT_BENCH_COUNTER_WASM =
 			`${wasmDir}/leptoskit_bench_counter.wasm`;
 	}
+
 	if (hasScreen) {
 		embedded.LEPTOSKIT_BENCH_SCREEN_WASM =
 			`${wasmDir}/leptoskit_bench_screen.wasm`;
 	}
+
 	const command = [
 		"cargo",
 		"build",
@@ -210,6 +230,7 @@ function build(repo: string, target: Target, targetDir: string): string {
 		"--package",
 		"leptoskit_bench",
 	];
+
 	if (target.triple) command.push("--target", target.triple);
 	run(command, {
 		cwd: repo,
@@ -218,6 +239,7 @@ function build(repo: string, target: Target, targetDir: string): string {
 	const profileDir = target.triple
 		? `${targetDir}/${target.triple}/release`
 		: `${targetDir}/release`;
+
 	return `${profileDir}/leptoskit_bench`;
 }
 
@@ -227,15 +249,18 @@ const JSON_END = "LEPTOSKIT_BENCH_JSON_END";
 function extractJson(stdout: string): string {
 	const begin = stdout.indexOf(JSON_BEGIN);
 	const end = stdout.indexOf(JSON_END);
+
 	if (begin === -1 || end === -1 || end < begin) {
 		fail("the benchmark binary printed no JSON report");
 	}
+
 	return stdout.slice(begin + JSON_BEGIN.length, end).trim();
 }
 
 /** Joins the samples of several runs of one binary into one run. */
 function joinRuns(runs: BenchmarkRun[]): BenchmarkRun {
 	const metrics: Parameters<typeof aggregate>[0]["metrics"] = {};
+
 	for (const run of runs) {
 		for (const [id, metric] of Object.entries(run.metrics)) {
 			metrics[id] ??= {
@@ -247,7 +272,9 @@ function joinRuns(runs: BenchmarkRun[]): BenchmarkRun {
 			metrics[id].values.push(...metric.values);
 		}
 	}
+
 	const [first] = runs;
+
 	return {
 		...aggregate({
 			subject: first.subject,
@@ -274,8 +301,10 @@ async function compare(
 	const perRound = Math.ceil(runs / rounds);
 	const collected = sides.map((): BenchmarkRun[] => []);
 	const scratch = await Deno.makeTempDir({ prefix: "leptoskit-bench-pair-" });
+
 	for (let round = 0; round < rounds; round += 1) {
 		const order = round % 2 === 0 ? [0, 1] : [1, 0];
+
 		for (const index of order) {
 			const side = sides[index];
 			const out = `${scratch}/${side.subject}-${round}.json`;
@@ -293,6 +322,7 @@ async function compare(
 			collected[index].push(JSON.parse(await Deno.readTextFile(out)));
 		}
 	}
+
 	for (const [index, side] of sides.entries()) {
 		await Deno.writeTextFile(
 			side.out,
@@ -300,6 +330,7 @@ async function compare(
 		);
 		log(`wrote ${side.out} (${rounds} interleaved rounds)`);
 	}
+
 	await Deno.remove(scratch, { recursive: true });
 }
 
@@ -312,9 +343,11 @@ async function main(): Promise<void> {
 	const warmup = optionalNumber(args, "warmup") ?? 2;
 	const subject = optionalString(args, "subject") ?? `native-${platform}`;
 	const device = optionalString(args, "device");
+
 	const cli = optionalString(args, "cli") ??
 		`${REPO_ROOT}/target/release/leptoskit`;
 	const targetDir = optionalString(args, "target-dir") ?? `${repo}/target`;
+
 	if (platform !== "host" && optionalString(args, "base-repo")) {
 		fail("--base-repo compares on the host only");
 	}
@@ -342,6 +375,7 @@ async function main(): Promise<void> {
 
 	if (platform === "host") {
 		const baseRepo = optionalString(args, "base-repo");
+
 		if (baseRepo) {
 			const baseBinary = build(
 				baseRepo,
@@ -361,16 +395,20 @@ async function main(): Promise<void> {
 				warmup,
 				optionalNumber(args, "rounds") ?? 5,
 			);
+
 			return;
 		}
+
 		run([binary, ...benchArgs, "--out", out]);
 		log(`wrote ${out}`);
+
 		return;
 	}
 
 	if (!device) {
 		fail(`--device is required for --platform ${platform}`);
 	}
+
 	const artifacts = await Deno.makeTempDir({
 		prefix: "leptoskit-bench-device-",
 	});
@@ -391,6 +429,7 @@ async function main(): Promise<void> {
 	]);
 	// The runner writes one directory per run with the test step's stdout log.
 	let stdout = "";
+
 	for (const runDir of Deno.readDirSync(artifacts)) {
 		for (const entry of Deno.readDirSync(`${artifacts}/${runDir.name}`)) {
 			if (entry.name.endsWith("-test.stdout.log")) {
@@ -400,6 +439,7 @@ async function main(): Promise<void> {
 			}
 		}
 	}
+
 	await Deno.writeTextFile(out, extractJson(stdout) + "\n");
 	await Deno.remove(artifacts, { recursive: true });
 	log(`wrote ${out} (${platform}, device ${device})`);

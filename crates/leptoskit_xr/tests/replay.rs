@@ -73,6 +73,7 @@ fn recordings_survive_the_file_format() {
 	assert_eq!(read.capabilities, recording.capabilities);
 	assert!(Recording::from_bytes(&bytes[..bytes.len() - 1]).is_err());
 	let mut wrong = bytes.clone();
+
 	wrong[0] = b'X';
 	assert!(Recording::from_bytes(&wrong).is_err());
 }
@@ -149,6 +150,7 @@ fn planes_are_sent_only_when_they_change() {
 		let sent = frame.planes.len();
 		after = frame.sequence;
 		cache.merge(&mut frame);
+
 		revisions.push((frame.planes_revision, sent, frame.planes.len()));
 	}
 
@@ -174,6 +176,7 @@ fn hit_tests_find_the_floor_under_a_tap() {
 	assert_eq!(hits.len(), 1);
 	assert_eq!(hits[0].plane, Some(1));
 	assert!(hits[0].pose.position.y.abs() < 1e-4);
+
 	// The camera is 1.4 m up, looking 45° down.
 	assert!((hits[0].distance - 1.4 * std::f32::consts::SQRT_2).abs() < 1e-3);
 }
@@ -188,6 +191,7 @@ fn runtime_anchors_ride_along_in_every_frame() {
 	assert_eq!(frame.anchors[0].id, id);
 	assert_eq!(frame.anchors[0].pose, pose);
 	runtime.remove_anchor(id).unwrap();
+
 	assert_eq!(runtime.remove_anchor(id), Err(Error::InvalidArgument));
 	let frame = runtime.update(1.0 / RATE).unwrap().unwrap();
 	assert_eq!(frame.anchors, []);
@@ -207,6 +211,7 @@ fn stopping_cancels_waiting_frames_and_frees_the_session() {
 	// A request from the old session can't see the new one's frames.
 	let stale = runtime.next_frame(NextFrame::default());
 	runtime.start(SessionConfig::new(Mode::PhoneAr)).unwrap();
+
 	runtime.update(0.0).unwrap();
 	assert_eq!(poll_once(stale), Poll::Ready(Err(Error::Cancelled)));
 }

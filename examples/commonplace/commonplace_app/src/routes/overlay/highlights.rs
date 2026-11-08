@@ -16,26 +16,32 @@ static CONNECTED: AtomicBool = AtomicBool::new(false);
 #[component]
 pub fn Page(navigation: &Navigation) -> Element {
 	let _ = navigation;
+
 	if !browser::IN_EXTENSION {
 		return view! { <ui::ExtensionOnly /> };
 	}
+
 	if !CONNECTED.swap(true, Ordering::Relaxed) {
 		crate::tasks::spawn(frame::connect());
 	}
+
 	let pressed = Store::current().with(|state| state.extension.pressed.clone());
 	let Some(pressed) = pressed else {
 		return view! { <View /> };
 	};
+
 	view! {
 		<View class="gap-2 p-3 bg-white dark:bg-stone-900">
 			<Text class=ui::QUIET>{format!("From {}", pressed.project.title)}</Text>
 			<Text class="italic">{format!("\u{201c}{}\u{201d}", pressed.clip.quote)}</Text>
+
 			{match pressed.clip.note {
 				Some(note) => {
 					view! { <Text>{note}</Text> }
 				}
 				None => view! { <View /> },
 			}}
+
 			<ui::Secondary label="Close" on_press=|| crate::tasks::spawn(frame::hide()) />
 		</View>
 	}
@@ -71,6 +77,7 @@ mod frame {
 				return;
 			};
 			let _ = page.place(Placement::Hidden).await;
+
 			let Ok(info) = page.info().await else { return };
 			let reply = crate::browser::ask(ExtensionMessage::ClipsOnPage { url: info.url }).await;
 			let ExtensionReply::Clips(clips) = reply else {
@@ -87,6 +94,7 @@ mod frame {
 					}
 				})
 				.collect();
+
 			let _ = page.highlight(&quotes).await;
 			Store::current()
 				.extension()
@@ -125,6 +133,7 @@ mod frame {
 		#[cfg(all(feature = "extension", target_arch = "wasm32"))]
 		{
 			let page = PAGE.with_borrow(Clone::clone);
+
 			if let Some(page) = page {
 				let _ = page
 					.place(leptoskit::extension::page::Placement::Hidden)

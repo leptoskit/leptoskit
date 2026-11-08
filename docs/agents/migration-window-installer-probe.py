@@ -23,6 +23,7 @@ def quote(value):
 
 def script(directory, file, old=False):
     text = template.replace('{directory}', quote(directory)).replace('{file}', quote(file)).replace('{pin}', quote(pin))
+
     return text.replace('ln -T -- "$temporary" "$file"', 'ln "$temporary" "$file"') if old else text
 
 
@@ -38,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix='lk-a05-installer-') as temporary:
     assert result.returncode != 0 and list(directory.iterdir()) == []
     checks.append('changed input rejected; no successful file or temporary residue')
     result = run(directory, path)
+
     assert result.returncode == 0, result.stderr.decode()
     assert result.stdout == pin.encode() and path.read_bytes() == payload
     assert stat.S_IMODE(path.stat().st_mode) == 0o444
@@ -74,6 +76,7 @@ with tempfile.TemporaryDirectory(prefix='lk-a05-installer-') as temporary:
     path.unlink()
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: run(directory, path), range(2)))
+
     assert all(result.returncode == 0 for result in results)
     assert path.read_bytes() == payload
     assert not list(directory.glob('.incoming.*'))
@@ -82,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='lk-a05-installer-') as temporary:
     linked.symlink_to(directory, target_is_directory=True)
     assert run(linked, linked / 'rejected.json').returncode != 0
     assert not (directory / 'rejected.json').exists()
+
     checks.append('symlink directory refused before file installation')
 
 print(json.dumps({'status':'passed','host':platform.platform(),'source':str(source_path),

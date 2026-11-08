@@ -131,6 +131,7 @@ mod fake {
 	} else {
 		"linux-x86_64"
 	};
+
 	/// Writes `$3` to the file after flag `$1` (with suffix `$2`).
 	const WRITE_AFTER: &str = r#"write_after() {
 	flag=$1; suffix=$2; content=$3; shift 3
@@ -179,6 +180,7 @@ mod fake {
 			);
 			fixture.tool("bin/curl", r#"write_after -o "" "kotlin stdlib" "$@""#);
 			fixture.tool("bin/kotlinc", r#"write_after -d "" jar "$@""#);
+
 			fixture.tool("bin/zip", "");
 			fixture.tool(
 				"sdk/build-tools/36.0.0/d8",
@@ -311,6 +313,7 @@ mod fake {
 			!log.iter().any(|line| line.starts_with("keytool ")),
 			"{log:?}"
 		);
+
 		assert!(
 			log.contains(&"zip -q -j -u <tmp>/out/unsigned.apk <tmp>/out/dex/classes.dex".into()),
 			"a stale dex file was packaged: {log:?}"
@@ -322,6 +325,7 @@ mod fake {
 		let fixture = Fixture::new();
 		fs::remove_file(fixture.path("sdk/build-tools/36.0.0/apksigner")).unwrap();
 		let error = fixture.package().unwrap_err();
+
 		assert!(matches!(&error, Error::MissingTool { tool, .. } if tool == "apksigner"));
 		assert_eq!(
 			error.to_string(),
@@ -348,6 +352,7 @@ mod fake {
 		let fixture = Fixture::new();
 		fs::remove_file(fixture.path("jdk/bin/keytool")).unwrap();
 		let error = fixture.package().unwrap_err();
+
 		assert!(matches!(&error, Error::MissingTool { tool, .. } if tool == "keytool"));
 	}
 
@@ -356,6 +361,7 @@ mod fake {
 		let fixture = Fixture::new();
 		fixture.file("out/kotlin-stdlib-test.jar", "tampered");
 		let error = fixture.package().unwrap_err();
+
 		assert!(matches!(&error, Error::Checksum { path } if !path.exists()));
 		assert!(fixture.log().is_empty(), "{:?}", fixture.log());
 	}
@@ -365,6 +371,7 @@ mod fake {
 		let fixture = Fixture::new();
 		fixture.tool("sdk/build-tools/36.0.0/d8", "");
 		let error = fixture.package().unwrap_err();
+
 		assert!(matches!(&error, Error::NoDex { directory } if directory.ends_with("out/dex")));
 	}
 
@@ -427,6 +434,7 @@ mod fake {
 			"sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/{HOST}/bin/\
 			 aarch64-linux-android28-clang"
 		));
+
 		assert!(envs.contains(&(
 			"CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
 			Some(linker.as_path())
@@ -451,6 +459,7 @@ mod fake {
 				.any(|(key, _)| key == "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER")
 		);
 		assert!(cargo.get_args().any(|arg| arg == "x86_64-linux-android"));
+
 		let output = fixture.path("out");
 		toolchain
 			.package(&Apk {
@@ -553,6 +562,7 @@ mod fake {
 		let fixture = Fixture::new();
 		fs::remove_file(fixture.path("sdk/platform-tools/adb")).unwrap();
 		let error = fixture.toolchain().device().unwrap_err();
+
 		assert!(matches!(&error, Error::MissingTool { tool, .. } if tool == "adb"));
 	}
 

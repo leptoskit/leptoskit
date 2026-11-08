@@ -195,6 +195,7 @@ impl TableArgs {
 		let mut is_view = false;
 		let mut view = ViewOptions::default();
 		let mut search_language = None;
+
 		let mut extends = None;
 
 		let parser = syn::meta::parser(|meta| {
@@ -828,10 +829,13 @@ impl FieldArgs {
 	fn option(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
 		if meta.path.is_ident("index") {
 			self.index = true;
+
 			return Ok(());
 		}
+
 		if meta.path.is_ident("sequence") {
 			self.sequence = true;
+
 			return Ok(());
 		}
 

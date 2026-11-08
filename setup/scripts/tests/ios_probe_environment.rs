@@ -38,6 +38,7 @@ impl Fixture {
     *) printf 'simulator command was reached\n' > simulator-called; exit 98 ;;
 esac"#,
 		);
+
 		fixture.executable(
 			"selected/bin/rustc",
 			r#"printf 'rustc=%s\ntoolchain=%s\n' "$0" "$RUSTUP_TOOLCHAIN" >> receipt
@@ -174,6 +175,7 @@ fn respects_explicit_compiler_outside_the_cargo_directory() {
 	assert_eq!(output.status.code(), Some(71));
 	let receipt = fixture.receipt();
 	println!("explicit-compiler receipt:\n{receipt}");
+
 	assert!(receipt.contains(&format!("rustc={}\n", compiler.display())));
 	assert!(receipt.contains(&format!("rustc_env={}\n", compiler.display())));
 }

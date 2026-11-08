@@ -133,6 +133,7 @@ fn notifications_permissions_and_the_runtime_name_their_apis() {
 		block_on(permissions::get_all()),
 		Err(unavailable("permissions.getAll"))
 	);
+
 	assert!(matches!(
 		permissions::on_added(|_| {}),
 		Err(error) if error == unavailable("permissions.onAdded")

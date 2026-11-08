@@ -294,6 +294,7 @@ fn check_manifest_name(name: &str, manifest: &ServiceManifest) -> Result<(), Str
 				 declared with"
 			))
 		}
+
 		Some(declared) if declared != name => {
 			Err(format!(
 				"services.{name}: the package's [package.metadata.leptoskit.service] names the \
@@ -301,6 +302,7 @@ fn check_manifest_name(name: &str, manifest: &ServiceManifest) -> Result<(), Str
 				 [services.{declared}]"
 			))
 		}
+
 		Some(_) => Ok(()),
 	}
 }
@@ -324,6 +326,7 @@ impl ResolvedService {
 			ServiceSource::Package { .. } => ServiceTrust::FirstParty,
 			_ => ServiceTrust::Isolated,
 		});
+
 		if let Some(manifest) = manifest {
 			check_manifest_name(name, manifest)?;
 		}
@@ -965,6 +968,7 @@ mod tests {
 		assert_eq!(merged.features, ["service"]);
 		assert_eq!(merged.env["A"], "manifest");
 		assert_eq!(merged.env["B"], "table");
+
 		assert_eq!(merged.bind["X"], "{url}");
 		assert_eq!(merged.public_prefixes(), ["/_leptoskit/services/analytics"]);
 	}
@@ -1003,6 +1007,7 @@ mod tests {
 				.unwrap()
 				.contains("overlaps a path the app serves")
 		);
+
 		assert!(
 			check("[a]\npackage = 'a'\nroutes = ['/']")
 				.unwrap()
@@ -1142,6 +1147,7 @@ mod tests {
 		assert!(wrong.contains("[services.analytics]"), "{wrong}");
 		let missing = ResolvedService::merge("analytics", &config, Some(&named(None))).unwrap_err();
 		assert!(missing.contains("has no `name`"), "{missing}");
+
 		// A service without a manifest, such as a remote one, has nothing to
 		// match.
 		assert!(

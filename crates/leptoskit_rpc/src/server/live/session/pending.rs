@@ -32,6 +32,7 @@ impl PendingTransition {
 	/// between constructing it and handing it to that slot.
 	pub(super) fn frame(&mut self) -> Option<(Outbound, bool)> {
 		let mut chunk = Vec::new();
+
 		while let Some(update) = self.updates.pop_front() {
 			chunk.push(update);
 			let preview = ServerFrame::Transition(Transition {
@@ -40,12 +41,15 @@ impl PendingTransition {
 				updates: chunk.clone(),
 				full: self.full,
 			});
+
 			if serde_json::to_string(&preview).ok()?.len() > MAX_FRAME_BYTES && chunk.len() > 1 {
 				self.updates.push_front(chunk.pop().expect("just pushed"));
 				break;
 			}
 		}
+
 		let complete = self.updates.is_empty();
+
 		let to = if complete { self.to } else { self.from };
 		let frame = Outbound::frame(
 			&ServerFrame::Transition(Transition {

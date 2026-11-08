@@ -13,6 +13,7 @@ String get arenaPlatform => 'web';
 /// arguments the other platforms receive.
 Future<List<String>> launchArguments(List<String> mainArguments) async {
   final scenario = Uri.base.queryParameters['scenario'];
+
   return scenario == null ? const [] : ['--scenario', scenario];
 }
 

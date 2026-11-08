@@ -30,6 +30,7 @@ fn nullable_expansion_is_exact_and_does_not_rewrite_its_sql() {
 		.push(Column::new("extra", ColumnType::TEXT).nullable());
 	let generated = sql(&before, &after);
 	verify_expansion(&before, &after, &generated).unwrap();
+
 	for suffix in ["\n", "\nSELECT 1;", "\nDROP TABLE notes;"] {
 		assert!(matches!(
 			verify_expansion(&before, &after, &format!("{generated}{suffix}")),
@@ -69,7 +70,9 @@ fn data_preserving_defaults_constraints_and_indexes_are_not_online_evidence() {
 	let mut changed = before.clone();
 	changed.tables[0].columns[1].nullable = true;
 	let mut dropped = before.clone();
+
 	dropped.tables[0].columns.pop();
+
 	for after in [default, index, changed, dropped] {
 		assert!(matches!(
 			verify_expansion(&before, &after, &sql(&before, &after)),
@@ -88,6 +91,7 @@ fn pack_membership_cannot_be_removed_or_downgraded_to_unknown() {
 	legacy.packs = None;
 	assert!(verify_expansion(&legacy, &before, "").is_err());
 	let mut future = before.clone();
+
 	future.format += 1;
 	assert!(verify_expansion(&before, &future, "").is_err());
 }

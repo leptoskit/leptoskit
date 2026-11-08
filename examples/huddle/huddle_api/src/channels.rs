@@ -53,6 +53,7 @@ pub async fn channels(cx: &rpc::QueryCx) -> rpc::Result<Vec<ChannelCard>> {
 			.iter()
 			.find(|member| member.channel_id == channel.id)
 			.map(|member| member.last_read_at);
+
 		let unread = match read {
 			Some(read) => {
 				let id = channel.id;
@@ -67,6 +68,7 @@ pub async fn channels(cx: &rpc::QueryCx) -> rpc::Result<Vec<ChannelCard>> {
 			}
 			None => 0,
 		};
+
 		cards.push(ChannelCard {
 			id: channel.id,
 			owned: channel.created_by == me,

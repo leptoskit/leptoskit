@@ -108,6 +108,7 @@ internal class NativeWidgetProps(
                         arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
                         intArrayOf(tint.defaultColor, if (dark) 0xffbbbbbb.toInt() else 0xff616161.toInt()),
                     )
+
                 if (widget is Switch) {
                     widget.thumbTintList = checkedTint
                     widget.trackTintList = checkedTint
@@ -123,6 +124,7 @@ internal class NativeWidgetProps(
                     widget.step = if (slider.isNull("step")) null else slider.getDouble("step")
                     val value = slider.getDouble("value")
                     widget.progress = (((value - widget.minimum) / (widget.maximum - widget.minimum)) * widget.max).toInt()
+
                     if (android.os.Build.VERSION.SDK_INT >= 30) widget.stateDescription = value.toString()
                 }
                 widget.progressTintList = tint
@@ -133,9 +135,11 @@ internal class NativeWidgetProps(
                 val progress = rest?.optJSONObject("progress")
                 widget.isIndeterminate = progress == null || !progress.has("determinate")
                 widget.max = 10000
+
                 if (!widget.isIndeterminate) widget.progress = (progress!!.getDouble("determinate") * widget.max).toInt()
                 widget.progressTintList = tint
                 widget.indeterminateTintList = tint
+
                 if (rest?.optBoolean("running", true) == false) widget.visibility = View.INVISIBLE
             }
         }
@@ -203,6 +207,7 @@ internal class NativeWidgetProps(
             } else {
                 View.IMPORTANT_FOR_ACCESSIBILITY_YES
             }
+
         val rest = props.rest
         widget.drawing =
             if (rest == null || rest.isNull("drawing")) null else NativeVectorDrawing.decode(rest.getJSONObject("drawing"))
@@ -220,6 +225,7 @@ internal class NativeWidgetProps(
         val hint = props.placeholder
 
         if (widget.hint?.toString() != hint) widget.hint = hint
+
         if (widget is EditText) applyAutofill(widget, props)
 
         val weight =
@@ -582,8 +588,11 @@ internal data class MotionTransform(
     /** Which of [TRANSLATE], [SCALE], and [ROTATE] differ from no transform. */
     val parts: Int
         get() =
+
             (if (translateX != MotionOffset.ZERO || translateY != MotionOffset.ZERO) TRANSLATE else 0) or
+
                 (if (scaleX != 1f || scaleY != 1f) SCALE else 0) or
+
                 (if (rotate != 0f) ROTATE else 0)
 
     fun lerp(
@@ -672,6 +681,7 @@ internal data class MotionEasing(
 
         repeat(SOLVE_STEPS) {
             val x = bezier(x1, x2, s)
+
             if (x < t) low = s else high = s
             s = (low + high) / 2
         }
@@ -732,6 +742,7 @@ internal sealed interface MotionCurve {
                 val damped = natural * sqrt(1 - ratio * ratio)
                 val amplitude = sqrt(1 + (ratio * natural / damped).let { it * it })
                 val decay = ratio * natural
+
                 if (decay <= 0f) return LIMIT_MS
 
                 return (ln(amplitude / THRESHOLD) / decay * 1000f).coerceIn(0f, LIMIT_MS)
@@ -739,10 +750,12 @@ internal sealed interface MotionCurve {
 
             var low = 0f
             var high = LIMIT_MS / 1000f
+
             if (displacement(high) > THRESHOLD) return LIMIT_MS
 
             repeat(SETTLE_STEPS) {
                 val middle = (low + high) / 2
+
                 if (displacement(middle) > THRESHOLD) low = middle else high = middle
             }
 
@@ -840,11 +853,14 @@ internal data class MotionKeyframes(
         own: MotionVisual,
     ): MotionVisual? {
         val elapsed = elapsedMs - delayMs
+
         if (elapsed < 0f || durationMs <= 0f) return own
         val passes = elapsed / durationMs
+
         if (passes >= iterations) return null
         val pass = floor(passes)
         var progress = passes - pass
+
         if (alternate && pass.toLong() % 2 == 1L) progress = 1 - progress
 
         val base = own.transform ?: MotionTransform.IDENTITY
@@ -874,6 +890,7 @@ internal data class MotionKeyframes(
 
             if (frame.offset >= progress) {
                 val span = frame.offset - previousOffset
+
                 if (span <= 0f) return value
 
                 return mix(previousValue, value, previousEasing.sample((progress - previousOffset) / span))
@@ -885,6 +902,7 @@ internal data class MotionKeyframes(
         }
 
         val span = 1 - previousOffset
+
         if (span <= 0f) return previousValue
 
         return mix(previousValue, own, previousEasing.sample((progress - previousOffset) / span))

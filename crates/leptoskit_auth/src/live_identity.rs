@@ -37,6 +37,7 @@ pub(crate) async fn lease(auth: &Auth, identity: &Identity) -> Result<IdentityLe
 		.await
 		.map_err(|_| Error::server("the account could not be checked"))?;
 	let now = leptoskit_db::now();
+
 	if session.revoked_at.is_some()
 		|| session.token_hash != credential.0
 		|| session.account_id != me.account

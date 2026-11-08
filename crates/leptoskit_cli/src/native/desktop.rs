@@ -193,6 +193,7 @@ fn assemble(root: &Path, config: &LeptoskitConfig, binary: &Path) -> Result<std:
 			.insert("CFBundleIconFile".into(), "AppIcon".into());
 		let mut xml = Vec::new();
 		plist.to_writer_xml(&mut xml)?;
+
 		String::from_utf8(xml)?
 	} else {
 		info

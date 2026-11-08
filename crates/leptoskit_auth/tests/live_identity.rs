@@ -52,11 +52,13 @@ const WAIT: Duration = Duration::from_secs(5);
 
 async fn databases(cluster: Option<&PostgresCluster>) -> Vec<Db> {
 	let mut databases = vec![leptoskit_db::testing::sqlite().await];
+
 	if let Some(cluster) = cluster {
 		let db = Db::connect(&cluster.database()).await.unwrap();
 		leptoskit_db::testing::create_tables(&db).await.unwrap();
 		databases.push(db);
 	}
+
 	databases
 }
 
@@ -65,6 +67,7 @@ async fn set<T>(db: &Db, table: &str, column: &str, value: Value, id: Id<T>) {
 		Dialect::Postgres => (format!("auth.{table}"), "$1", "$2"),
 		Dialect::Sqlite => (format!("auth_{table}"), "?1", "?2"),
 	};
+
 	db.system("test: change authentication state")
 		.execute(Statement {
 			sql: format!("UPDATE {table} SET {column} = {first} WHERE id = {second}"),
@@ -136,12 +139,16 @@ async fn next_event(body: &mut Body, buffered: &mut String) -> Option<ServerFram
 	loop {
 		if let Some(end) = buffered.find("\n\n") {
 			let event: String = buffered.drain(..end + 2).collect();
+
 			if let Some(data) = event.lines().find_map(|line| line.strip_prefix("data: ")) {
 				return Some(serde_json::from_str(data).unwrap());
 			}
+
 			continue;
 		}
+
 		let frame = body.frame().await?.unwrap();
+
 		if let Ok(bytes) = frame.into_data() {
 			buffered.push_str(std::str::from_utf8(&bytes).unwrap());
 		}
@@ -164,6 +171,7 @@ impl Connection {
 			request
 				.headers_mut()
 				.insert("origin", ORIGIN.parse().unwrap());
+
 			request.headers_mut().insert(name, value.parse().unwrap());
 			let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 			Self::Socket {
@@ -187,6 +195,7 @@ impl Connection {
 				buffered: String::new(),
 			}
 		};
+
 		assert!(matches!(
 			connection.next().await,
 			Some(ServerFrame::Welcome { .. })
@@ -230,6 +239,7 @@ impl Connection {
 				frame => panic!("unexpected frame: {frame:?}"),
 			}
 		}
+
 		assert!(self.next().await.is_none(), "refused connections close");
 	}
 }
@@ -237,13 +247,16 @@ impl Connection {
 #[tokio::test]
 async fn sign_out_ends_idle_cookie_and_bearer_connections_on_both_transports() {
 	let cluster = PostgresCluster::start();
+
 	for db in databases(cluster.as_ref()).await {
 		let auth = auth(&db);
 		let live = Live::new(db.clone()).identify(auth.clone()).origin(ORIGIN);
+
 		for socket in [false, true] {
 			for bearer in [false, true] {
 				let sign_in = sign_in(&auth, bearer).await;
 				let mut connection = Connection::open(&live, &auth, &sign_in, bearer, socket).await;
+
 				auth.sign_out(&sign_in.token, &RequestInfo::default())
 					.await
 					.unwrap();
@@ -256,6 +269,7 @@ async fn sign_out_ends_idle_cookie_and_bearer_connections_on_both_transports() {
 #[tokio::test]
 async fn disabling_an_account_ends_its_open_connections() {
 	let cluster = PostgresCluster::start();
+
 	for db in databases(cluster.as_ref()).await {
 		for socket in [false, true] {
 			let auth = auth(&db);
@@ -270,6 +284,7 @@ async fn disabling_an_account_ends_its_open_connections() {
 				sign_in.session.account_id,
 			)
 			.await;
+
 			connection.refused().await;
 			auth.enable(sign_in.session.account_id).await.unwrap();
 		}
@@ -279,13 +294,16 @@ async fn disabling_an_account_ends_its_open_connections() {
 #[tokio::test]
 async fn expiration_ends_an_idle_connection_without_another_write() {
 	let cluster = PostgresCluster::start();
+
 	for db in databases(cluster.as_ref()).await {
 		let auth = auth(&db);
 		let live = Live::new(db.clone()).identify(auth.clone()).origin(ORIGIN);
+
 		for socket in [false, true] {
 			for bearer in [false, true] {
 				let sign_in = sign_in(&auth, bearer).await;
 				let mut connection = Connection::open(&live, &auth, &sign_in, bearer, socket).await;
+
 				let expires = leptoskit_db::now() + chrono::TimeDelta::milliseconds(300);
 				set(
 					&db,
@@ -312,6 +330,7 @@ async fn an_invalid_reauthentication_closes_the_previous_identity() {
 	let Connection::Socket { socket, .. } = &mut connection else {
 		unreachable!()
 	};
+
 	socket
 		.send(Message::Text(
 			serde_json::to_string(&ClientFrame::Auth {
@@ -340,6 +359,7 @@ async fn a_revoked_session_cannot_get_a_new_lease_but_another_device_can() {
 	auth.revoke(&two.signed_in(), one.session.id, &RequestInfo::default())
 		.await
 		.unwrap();
+
 	assert!(auth.lease(&identity).await.is_err());
 	assert!(auth.identify_token(one.token.expose()).await.is_err());
 	assert!(auth.lease(&other).await.is_ok());
@@ -404,6 +424,7 @@ async fn an_old_identitys_action_result_is_not_sent_to_the_new_identity() {
 		))
 		.await
 		.unwrap();
+
 	loop {
 		if let Some(ServerFrame::AuthStatus {
 			refused: false,
@@ -413,7 +434,9 @@ async fn an_old_identitys_action_result_is_not_sent_to_the_new_identity() {
 			break;
 		}
 	}
+
 	ACTION_RELEASE.add_permits(1);
+
 	loop {
 		if let Some(ServerFrame::Done {
 			request: 7,
@@ -432,6 +455,7 @@ async fn an_old_identitys_action_result_is_not_sent_to_the_new_identity() {
 #[tokio::test]
 async fn session_revocations_reach_relay_consumers_without_database_fallback() {
 	let cluster = PostgresCluster::start();
+
 	for db in databases(cluster.as_ref()).await {
 		let Some(nats) = nats::NatsServer::start() else {
 			return;
@@ -445,6 +469,7 @@ async fn session_revocations_reach_relay_consumers_without_database_fallback() {
 		let relay = leptoskit_rpc::server::Relay::connect_with(&nats.url(), settings)
 			.await
 			.unwrap();
+
 		let publisher = relay.publish(&db);
 		tokio::time::timeout(WAIT, async {
 			while !publisher.stats().following {
@@ -471,6 +496,7 @@ async fn session_revocations_reach_relay_consumers_without_database_fallback() {
 			))
 			.await
 			.unwrap();
+
 		loop {
 			if let Some(ServerFrame::AuthStatus {
 				refused: false,
@@ -480,6 +506,7 @@ async fn session_revocations_reach_relay_consumers_without_database_fallback() {
 				break;
 			}
 		}
+
 		auth.sign_out_everywhere(sign_in.session.account_id, &RequestInfo::default())
 			.await
 			.unwrap();
@@ -506,6 +533,7 @@ async fn short_token_lifetimes_warn_in_the_future_and_absolute_expiry_cannot_loo
 	let refresh = lease.refresh_at.unwrap();
 	assert!(refresh > std::time::SystemTime::now());
 	assert!(refresh < lease.expires_at.unwrap());
+
 	set(
 		&db,
 		"sessions",
@@ -572,6 +600,7 @@ async fn reauthenticating_the_same_identity_keeps_its_pending_action() {
 	let Connection::Socket { socket, .. } = &mut connection else {
 		unreachable!()
 	};
+
 	socket
 		.send(Message::Text(
 			serde_json::to_string(&ClientFrame::Act {
@@ -597,6 +626,7 @@ async fn reauthenticating_the_same_identity_keeps_its_pending_action() {
 		))
 		.await
 		.unwrap();
+
 	loop {
 		if let Some(ServerFrame::AuthStatus {
 			refused: false,
@@ -606,7 +636,9 @@ async fn reauthenticating_the_same_identity_keeps_its_pending_action() {
 			break;
 		}
 	}
+
 	ACTION_RELEASE.add_permits(1);
+
 	loop {
 		if let Some(ServerFrame::Done {
 			request: 7,
@@ -688,6 +720,7 @@ async fn role(connection: &mut Connection) -> String {
 		))
 		.await
 		.unwrap();
+
 	loop {
 		if let Some(ServerFrame::Done {
 			request: 1,
@@ -697,6 +730,7 @@ async fn role(connection: &mut Connection) -> String {
 		}) = connection.next().await
 		{
 			assert!(err.is_none());
+
 			return ok.unwrap().as_str().unwrap().to_owned();
 		}
 	}
@@ -716,5 +750,6 @@ async fn the_same_caller_with_different_policy_revisions_does_not_share_results(
 	let mut first = Connection::open(&live, &auth, &one, true, true).await;
 	let mut second = Connection::open(&live, &auth, &two, true, true).await;
 	assert_eq!(role(&mut first).await, "one");
+
 	assert_eq!(role(&mut second).await, "two");
 }

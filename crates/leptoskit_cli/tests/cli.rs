@@ -254,6 +254,7 @@ fn scaffolds_a_project_with_config_and_source() {
 		config.lint.rules.component_attribute,
 		leptoskit_config::LintLevel::Deny
 	);
+
 	assert_eq!(config.build.client_package.as_deref(), Some("counter_app"));
 	assert_eq!(
 		config.native.package_id,
@@ -339,6 +340,7 @@ fn native_bundle_compiles_and_optimizes_the_guest() {
 		runtime.contains("\"abi\""),
 		"the descriptor names the ABI: {runtime}"
 	);
+
 	let runtime: leptoskit_codepush::installed::RuntimeContract =
 		serde_json::from_str(&runtime).expect("versioned guest runtime");
 	assert_eq!(
@@ -1224,6 +1226,7 @@ fn codepush_approve_signs_only_a_byte_identical_rebuild() {
 	.expect("parse");
 	let (signer, statement) = approval.open().expect("verifies");
 	assert_eq!(signer, approver_key.public_key());
+
 	assert_eq!(statement.app, "pushed");
 	assert_eq!(statement.channel, "production");
 	assert_eq!(statement.version.to_string(), "0.2.0");
@@ -3127,6 +3130,7 @@ fn dev_resolves_the_project_manifest_and_preserves_failure_status() {
 		.env_remove("LEPTOSKIT_SECRETS_RESOLVED")
 		.output()
 		.unwrap();
+
 	assert_eq!(output.status.code(), Some(42), "{}", stderr(&output));
 }
 
@@ -3138,9 +3142,11 @@ fn capability_workspace(scratch: &Scratch) {
 	let plugin = scratch.path.join("echo");
 	let app = scratch.path.join("app_guest");
 	let tui = scratch.path.join("tui");
+
 	for directory in [&plugin, &app, &tui] {
 		std::fs::create_dir_all(directory.join("src")).unwrap();
 	}
+
 	std::fs::create_dir_all(scratch.path.join("src")).unwrap();
 	std::fs::write(
 		scratch.path.join("Cargo.toml"),
@@ -3153,6 +3159,7 @@ fn capability_workspace(scratch: &Scratch) {
 		),
 	)
 	.unwrap();
+
 	std::fs::write(scratch.path.join("src/lib.rs"), "").unwrap();
 	std::fs::write(
 		plugin.join("Cargo.toml"),
@@ -3196,6 +3203,7 @@ fn real_host_metadata_keeps_unclassified_grants_incomplete_and_required_grants_f
 	config.app.platforms = vec![leptoskit_config::Platform::Tui];
 	config.build.client_package = Some("app_guest".into());
 	config.native.plugins = vec!["echo".into()];
+
 	config.native.required_plugins = vec!["echo".into()];
 	std::fs::write(
 		scratch.path.join("leptoskit.toml"),
@@ -3247,6 +3255,7 @@ fn real_host_metadata_keeps_unclassified_grants_incomplete_and_required_grants_f
 		&std::fs::read(scratch.path.join("unclassified/runtime.json")).unwrap(),
 	)
 	.unwrap();
+
 	let host: leptoskit_codepush::installed::RuntimeContract =
 		serde_json::from_value(serde_json::json!({
 			"abi": guest.abi,

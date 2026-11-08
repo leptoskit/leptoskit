@@ -313,6 +313,7 @@ function main(app: TierApp): string {
 		"  }",
 		"}",
 	];
+
 	if (app.screens.length === 1) return lines(head);
 
 	return lines(

@@ -295,6 +295,7 @@ async fn the_apps_live_connection_refuses_a_service() {
 	request
 		.headers_mut()
 		.insert("authorization", "Bearer svc".parse().unwrap());
+
 	match connect_async(request).await {
 		Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), 403),
 		other => panic!("the socket opened for a service: {:?}", other.map(|_| ())),
@@ -345,6 +346,7 @@ async fn the_apps_live_connection_refuses_a_service_signing_in_after_it_opens() 
 				return refused;
 			}
 		}
+
 		false
 	})
 	.await

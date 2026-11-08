@@ -235,6 +235,7 @@ mod linux {
 			[0, 0, 128, 128],
 			"GDK owns premultiplied pixels in native BGRA download order"
 		);
+
 		mounted
 			.surface
 			.borrow_mut()
@@ -644,6 +645,7 @@ mod linux {
 					surface.backend_mut().update_props(id, &props);
 				}
 			});
+
 		checkbox.set_active(true);
 		assert!(checkbox.is_active());
 		assert_eq!(native::<gtk::CheckButton>(&mounted, checkbox_id), checkbox);
@@ -691,6 +693,7 @@ mod linux {
 		radio.grab_focus();
 		pump();
 		key("Right");
+
 		assert!(
 			events
 				.borrow()
@@ -752,6 +755,7 @@ mod linux {
 		let root = surface.root().unwrap();
 		assert!(first.parent().is_none());
 		assert!(surface.backend().view(root).unwrap().is_mapped());
+
 		window.destroy();
 		pump();
 	}
@@ -993,6 +997,7 @@ mod linux {
 		surface.borrow_mut().set_dark_mode(true);
 		surface.borrow_mut().set_dark_mode(false);
 		surface.borrow().backend().clear_event_listener();
+
 		window.destroy();
 		pump();
 	}
@@ -1063,6 +1068,7 @@ mod linux {
 			}
 		)));
 		mounted.surface.borrow_mut().set_dark_mode(true);
+
 		assert!(
 			GtkWindowExt::focus(&mounted.window)
 				.is_some_and(|focus| focus == entry || focus.is_ancestor(&entry)),
@@ -1128,6 +1134,7 @@ mod linux {
 		let button = native::<gtk::Button>(&mounted, disabled);
 		button.emit_clicked();
 		assert!(!button.is_sensitive());
+
 		assert!(!events.borrow().iter().any(|(id, _)| *id == disabled));
 	}
 
@@ -1190,6 +1197,7 @@ mod linux {
 		};
 		// Texture.download uses native-endian Cairo ARGB32 (BGRA on Linux).
 		let left = pixel(16, 40);
+
 		assert!(
 			left[0] > 150 && left[2] < 80,
 			"left border paints blue: {left:?}"
@@ -1266,6 +1274,7 @@ mod linux {
 			.snapshot_png(root)
 			.unwrap();
 		std::fs::write(artifact_path("paint.png"), &png).unwrap();
+
 		assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
 		let texture = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
 		let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
@@ -1633,6 +1642,7 @@ mod linux {
 			native::<gtk::Button>(&mounted, front).has_focus(),
 			"native Tab order follows insertion order"
 		);
+
 		let png = mounted
 			.surface
 			.borrow()
@@ -2187,6 +2197,7 @@ mod linux {
 		assert_ne!(new_root, old_root);
 		let new = mounted.surface.borrow().backend().view(new_root).unwrap();
 		assert!(new.is_mapped());
+
 		assert_eq!((new.width(), new.height()), (160, 40));
 		assert!(old.parent().is_none());
 	}
@@ -2266,6 +2277,7 @@ mod linux {
 		assert!((EntryExt::alignment(&entry) - 0.5).abs() < f32::EPSILON);
 		let label = native::<gtk::Label>(&mounted, child(&mounted, 3));
 		assert_eq!(label.justify(), gtk::Justification::Center);
+
 		let root = mounted.surface.borrow().root().unwrap();
 		let png = mounted
 			.surface
@@ -2448,6 +2460,7 @@ mod linux {
 		}
 		let stretched = child(&mounted, 0);
 		let decorative = native::<gtk::Widget>(&mounted, stretched);
+
 		assert_eq!(decorative.accessible_role(), gtk::AccessibleRole::None);
 		assert_eq!(
 			native::<gtk::Widget>(&mounted, child(&mounted, 1)).accessible_role(),

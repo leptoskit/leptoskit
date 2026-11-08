@@ -90,6 +90,7 @@ const PLAYS = {
 		async play(player) {
 			await player.press(this.target);
 			await player.type("See you at six");
+
 			await player.until(
 				`${this.target}?.value === "See you at six"`,
 				"the composer showing the typed message",
@@ -170,6 +171,7 @@ const PLAYS = {
 			);
 			await pressToolbar(page, back);
 			await player.until(shown("Today"), "Field going back to today");
+
 			await page.until(
 				`() => document.querySelector(${JSON.stringify(back)}).disabled`,
 				"the toolbar's back button resting at the first page",
@@ -186,18 +188,22 @@ const PLAYS = {
 async function waitFor(check, description, timeout = 20_000) {
 	const deadline = Date.now() + timeout;
 	let failure;
+
 	for (;;) {
 		try {
 			const value = await check();
+
 			if (value) return value;
 		} catch (error) {
 			failure = error;
 		}
+
 		if (Date.now() > deadline) {
 			throw new Error(
 				`timed out: ${description}${failure ? ` (${failure.message})` : ""}`,
 			);
 		}
+
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 }
@@ -243,6 +249,7 @@ class Frames {
 					),
 				);
 			}
+
 			await page.send("Runtime.runIfWaitingForDebugger", {}, sessionId);
 		});
 	}
@@ -276,23 +283,27 @@ class Frames {
 			objectId: result.objectId,
 		});
 		assert(node.frameId, `${selector} shows no frame`);
+
 		return node.frameId;
 	}
 
 	// Evaluates `expression` in the frame `frameId` and returns its value.
 	async evaluate(frameId, expression) {
 		const context = this.#contexts.get(frameId);
+
 		if (!context) throw new Error("the frame has no document yet");
 		const { result, exceptionDetails } = await this.#page.send(
 			"Runtime.evaluate",
 			{ expression, contextId: context.contextId, returnByValue: true },
 			context.sessionId,
 		);
+
 		if (exceptionDetails) {
 			throw new Error(
 				exceptionDetails.exception?.description ?? exceptionDetails.text,
 			);
 		}
+
 		return result.value;
 	}
 }
@@ -361,6 +372,7 @@ class Player {
 				await this.page.evaluate(`scrollBy(0, ${frame.y} - innerHeight / 2)`);
 				return null;
 			}
+
 			const key = `${inside.box} ${frame.box}`;
 			const settled = key === last;
 			last = key;
@@ -376,6 +388,7 @@ class Player {
 			x,
 			y,
 		});
+
 		for (const [type, buttons] of [["mousePressed", 1], ["mouseReleased", 0]]) {
 			await this.page.send("Input.dispatchMouseEvent", {
 				type,
@@ -441,6 +454,7 @@ async function browse(path, check) {
 	let page;
 	try {
 		page = await Page.connect(chrome.endpoint);
+
 		const frames = new Frames(page);
 		page.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
 			errors.push(
@@ -478,6 +492,7 @@ async function browse(path, check) {
 		});
 	} finally {
 		await page?.close();
+
 		chrome.process.kill();
 		await chrome.process.status;
 		await server.shutdown();

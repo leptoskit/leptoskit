@@ -67,6 +67,7 @@ export function aggregate(run: {
 	>;
 }): BenchmarkRun {
 	const metrics: Record<string, Metric> = {};
+
 	for (const [id, metric] of Object.entries(run.metrics)) {
 		if (metric.values.length === 0) continue;
 		const sorted = [...metric.values].sort((left, right) => left - right);
@@ -81,6 +82,7 @@ export function aggregate(run: {
 			max: sorted[sorted.length - 1],
 		};
 	}
+
 	return {
 		schema: 1,
 		subject: run.subject,
@@ -98,6 +100,7 @@ export function currentCommit(): string | null {
 			args: ["rev-parse", "HEAD"],
 			cwd: REPO_ROOT,
 		}).outputSync();
+
 		return output.success
 			? new TextDecoder().decode(output.stdout).trim()
 			: null;
@@ -109,6 +112,7 @@ export function currentCommit(): string | null {
 /** Copies the shared `bench.js` into every runtime app that serves it. */
 export async function syncBenchGlue(appDirs: string[]): Promise<void> {
 	const glue = await Deno.readTextFile(SHARED_BENCH_JS);
+
 	for (const dir of appDirs) {
 		await Deno.writeTextFile(`${dir}/bench.js`, glue);
 	}
@@ -152,8 +156,10 @@ export interface CliArguments {
 export function parseArguments(argv: string[]): CliArguments {
 	const flags = new Map<string, string | boolean | string[]>();
 	const positional: string[] = [];
+
 	for (let index = 0; index < argv.length; index += 1) {
 		const argument = argv[index];
+
 		if (argument.startsWith("--")) {
 			const [name, inline] = argument.slice(2).split("=", 2);
 			const value = inline !== undefined
@@ -161,8 +167,10 @@ export function parseArguments(argv: string[]): CliArguments {
 				: argv[index + 1] && !argv[index + 1].startsWith("--")
 				? argv[index + 1]
 				: true;
+
 			if (inline === undefined && value !== true) index += 1;
 			const existing = flags.get(name);
+
 			if (existing === undefined) {
 				flags.set(name, value);
 			} else if (Array.isArray(existing)) {
@@ -174,14 +182,17 @@ export function parseArguments(argv: string[]): CliArguments {
 			positional.push(argument);
 		}
 	}
+
 	return { flags, positional };
 }
 
 export function requireString(arguments_: CliArguments, name: string): string {
 	const value = arguments_.flags.get(name);
+
 	if (typeof value !== "string" || value.length === 0) {
 		fail(`missing required flag --${name}`);
 	}
+
 	return value;
 }
 
@@ -190,6 +201,7 @@ export function optionalString(
 	name: string,
 ): string | undefined {
 	const value = arguments_.flags.get(name);
+
 	return typeof value === "string" ? value : undefined;
 }
 
@@ -198,7 +210,9 @@ export function optionalNumber(
 	name: string,
 ): number | undefined {
 	const value = arguments_.flags.get(name);
+
 	if (value === undefined) return undefined;
 	const parsed = Number(value);
+
 	return Number.isFinite(parsed) ? parsed : undefined;
 }

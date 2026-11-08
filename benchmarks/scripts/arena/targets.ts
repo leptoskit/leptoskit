@@ -100,6 +100,7 @@ async function run(
 		stderr: "piped",
 	}).output();
 	const stdout = new TextDecoder().decode(result.stdout);
+
 	if (!result.success && !allowFailure) {
 		throw new Error(
 			`${command} ${args.join(" ")} failed:\n${
@@ -107,6 +108,7 @@ async function run(
 			}`,
 		);
 	}
+
 	return stdout;
 }
 
@@ -132,6 +134,7 @@ async function waitForReport(
 ): Promise<string> {
 	const deadline = Date.now() + timeoutMs;
 	let text = "";
+
 	while (Date.now() < deadline) {
 		text = await read();
 		try {
@@ -141,6 +144,7 @@ async function waitForReport(
 		}
 		await sleep(250);
 	}
+
 	return text;
 }
 
@@ -159,14 +163,17 @@ export function iosSimulator(udid: string): Target {
 		),
 	) as { devices: Record<string, { udid: string; name: string }[]> };
 	let name = udid;
+
 	for (const [runtime, devices] of Object.entries(listing.devices)) {
 		const device = devices.find((candidate) => candidate.udid === udid);
+
 		if (device) {
 			name = `${device.name}, ${
 				runtime.replace(/.*SimRuntime\./, "").replaceAll("-", ".")
 			} simulator`;
 		}
 	}
+
 	return {
 		// The simulator presents at 60 Hz regardless of the modelled device.
 		info: {
@@ -181,6 +188,7 @@ export function iosSimulator(udid: string): Target {
 		},
 		async run(launch) {
 			await run("xcrun", ["simctl", "terminate", udid, launch.app], true);
+
 			const stream = new Deno.Command("xcrun", {
 				args: [
 					"simctl",
@@ -204,6 +212,7 @@ export function iosSimulator(udid: string): Target {
 			let recorder: Deno.ChildProcess | undefined;
 			let recorderOutput: OutputTail | undefined;
 			const video = launch.record ? scratchFile(".mp4") : undefined;
+
 			if (video) {
 				recorder = new Deno.Command("xcrun", {
 					args: [
@@ -224,6 +233,7 @@ export function iosSimulator(udid: string): Target {
 					!/Recording started/i.test(recorderOutput.text) &&
 					Date.now() < deadline
 				) await sleep(50);
+
 				// Leave the screen still before the launch (see launchToReady).
 				await sleep(LEAD_IN_MS);
 			}
@@ -252,20 +262,25 @@ export function iosSimulator(udid: string): Target {
 				recorder.kill("SIGINT");
 				await recorder.status;
 			}
+
 			await run("xcrun", ["simctl", "terminate", udid, launch.app], true);
+
 			for (const child of [app, stream]) {
 				try {
 					child.kill("SIGTERM");
 				} catch {
 					// already exited
 				}
+
 				await child.status;
 			}
+
 			// The console and the system log usually both carry the report;
 			// prefer the console, which never truncates.
 			const reports = safeReports(console.text).length > 0
 				? safeReports(console.text)
 				: safeReports(streamed.text);
+
 			return {
 				reports,
 				log: text,
@@ -321,6 +336,7 @@ export async function android(serial: string): Promise<Target> {
 	const release = await property("ro.build.version.release");
 	const emulator = (await property("ro.kernel.qemu")) === "1" ||
 		serial.startsWith("emulator-");
+
 	// SurfaceFlinger lists the display's modes, each with its vsync rate.
 	// Modes under 60 Hz are for static content and power saving (1, 10, 24,
 	// 30 Hz on some panels); an app animating below 60 is stuttering, not
@@ -334,6 +350,7 @@ export async function android(serial: string): Promise<Target> {
 		? [...new Set(modes)].sort((left, right) => left - right)
 		: [60];
 	const refreshHz = Math.max(...refreshRatesHz);
+
 	return {
 		info: {
 			platform: "android",
@@ -355,6 +372,7 @@ export async function android(serial: string): Promise<Target> {
 			await adb("logcat", "-c");
 			const remote = "/data/local/tmp/arena.mp4";
 			let recorder: Deno.ChildProcess | undefined;
+
 			if (launch.record) {
 				recorder = new Deno.Command(ADB, {
 					args: [
@@ -374,12 +392,15 @@ export async function android(serial: string): Promise<Target> {
 				// content area once it is capturing.
 				const output = new OutputTail(recorder.stdout);
 				const deadline = Date.now() + 10_000;
+
 				while (!/Content area/.test(output.text) && Date.now() < deadline) {
 					await sleep(50);
 				}
+
 				// Leave the screen still before the launch (see launchToReady).
 				await sleep(LEAD_IN_MS);
 			}
+
 			const extras = launch.lane ? ["--es", "lane", launch.lane] : [];
 			const started = await adb(
 				"shell",
@@ -402,6 +423,7 @@ export async function android(serial: string): Promise<Target> {
 			await sleep(SETTLE_MS);
 
 			let video: string | undefined;
+
 			if (recorder) {
 				await adb("shell", "pkill", "-INT", "screenrecord").catch(() => "");
 				await recorder.status;
@@ -410,7 +432,9 @@ export async function android(serial: string): Promise<Target> {
 				video = scratchFile(".mp4");
 				await adb("pull", remote, video);
 			}
+
 			await adb("shell", "am", "force-stop", packageName);
+
 			return {
 				reports: safeReports(text),
 				log: text,
@@ -441,7 +465,9 @@ async function mainScreenIndex(): Promise<string> {
 	}).output();
 	const listing = new TextDecoder().decode(result.stderr);
 	const match = listing.match(/\[(\d+)\] Capture screen 0/);
+
 	if (!match) throw new Error(`no screen to capture:\n${listing}`);
+
 	return match[1];
 }
 
@@ -494,8 +520,10 @@ function osName(platform: "macos" | "windows" | "linux"): string {
 			new Deno.Command("sw_vers", { args: ["-productVersion"] }).outputSync()
 				.stdout,
 		).trim();
+
 		return `macOS ${version}`;
 	}
+
 	return `${platform === "windows" ? "Windows" : "Linux"} ${Deno.osRelease()}`;
 }
 
@@ -514,6 +542,7 @@ export function desktop(platform: "macos" | "windows" | "linux"): Target {
 		async run(launch) {
 			let recorder: Deno.ChildProcess | undefined;
 			const video = launch.record ? scratchFile(".mkv") : undefined;
+
 			if (video) {
 				// A lossless constant-rate capture; mpdecimate later keeps only
 				// changed frames. 60 fps matches the display, so a frame the
@@ -539,6 +568,7 @@ export function desktop(platform: "macos" | "windows" | "linux"): Target {
 				// Leave the screen still before the launch (see launchToReady).
 				await sleep(LEAD_IN_MS);
 			}
+
 			const app = new Deno.Command(launch.app, {
 				args: argv(launch),
 				stdout: "piped",
@@ -546,7 +576,9 @@ export function desktop(platform: "macos" | "windows" | "linux"): Target {
 			}).spawn();
 			const output = new OutputTail(app.stdout, app.stderr);
 			const text = await waitForReport(() => output.text, launch.timeoutMs);
+
 			await sleep(SETTLE_MS);
+
 			if (recorder) {
 				// ffmpeg finishes the file cleanly on `q`.
 				const writer = recorder.stdin.getWriter();
@@ -554,12 +586,14 @@ export function desktop(platform: "macos" | "windows" | "linux"): Target {
 				await writer.close();
 				await recorder.status;
 			}
+
 			try {
 				app.kill("SIGTERM");
 			} catch {
 				// already exited
 			}
 			await app.status;
+
 			return {
 				reports: safeReports(text),
 				log: text,
@@ -609,10 +643,12 @@ export function browser(): Target {
 					() => page.consoleText(),
 					launch.timeoutMs,
 				);
+
 				await sleep(SETTLE_MS);
 				const frames = screencast
 					? screencastFrames(await screencast.stop())
 					: undefined;
+
 				return {
 					reports: safeReports(text),
 					log: text,
@@ -637,6 +673,7 @@ function lastBeacon(captured: ScreencastFrame[]): Box {
 			// Not finished in this frame; try the one before.
 		}
 	}
+
 	throw new Error(
 		"no done or failed beacon in the screencast's last 30 frames",
 	);
@@ -647,6 +684,7 @@ function screencastFrames(captured: ScreencastFrame[]): PresentedFrame[] {
 	if (captured.length === 0) {
 		throw new Error("the screencast captured no frames");
 	}
+
 	const beacon = lastBeacon(captured);
 	const origin = captured[0].timestamp;
 	log(`read ${captured.length} screencast frames`);

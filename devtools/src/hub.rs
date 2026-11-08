@@ -125,11 +125,13 @@ mod imp {
 	async fn load() {
 		if LOADING.replace(true) {
 			RELOAD.set(true);
+
 			return;
 		}
 
 		loop {
 			RELOAD.set(false);
+
 			match sessions().await {
 				Ok((hub, states)) => {
 					store::update(|model| {
@@ -174,6 +176,7 @@ mod imp {
 	fn follow() {
 		let Ok(source) = web_sys::EventSource::new("/api/stream") else {
 			store::problem("This browser can't follow the hub's changes.");
+
 			return;
 		};
 
@@ -275,6 +278,7 @@ mod imp {
 		init.set_headers(&headers);
 		let body = serde_json::to_string(body).map_err(|error| error.to_string())?;
 		init.set_body(&JsValue::from_str(&body));
+
 		let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(describe)?;
 		finish(JsFuture::from(window.fetch_with_request(&request)).await)
 			.await

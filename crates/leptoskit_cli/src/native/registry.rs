@@ -21,6 +21,7 @@ pub(crate) use capability::documentation_table;
 pub(crate) use capability::enforce_required;
 pub(crate) use capability::optional_warnings;
 pub(crate) use capability::requirements;
+
 mod implementation;
 pub use implementation::Capability;
 pub use implementation::Constructor;
@@ -686,6 +687,7 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 		!plugin.experimental || plugin.rust_type.is_some() || plugin.rust_factory.is_some(),
 		"experimental requires rust-type or rust-factory"
 	);
+
 	anyhow::ensure!(
 		!plugin.apple_context || (plugin.apple_type.is_some() && plugin.apple_module.is_some()),
 		"apple-context requires apple-type and apple-module"

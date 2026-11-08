@@ -29,6 +29,7 @@ pub mod cargo_messages;
 pub mod cli;
 pub mod codepush;
 pub mod compress;
+
 pub mod console;
 pub mod db;
 
@@ -40,6 +41,7 @@ pub mod doctor;
 pub mod extension;
 pub mod generate;
 mod git;
+
 pub mod infra;
 
 pub mod icons;
@@ -50,6 +52,7 @@ pub mod mcp;
 pub mod migrate;
 pub mod native;
 pub mod new_project;
+
 pub mod plugin_command;
 pub mod publish;
 pub mod render;

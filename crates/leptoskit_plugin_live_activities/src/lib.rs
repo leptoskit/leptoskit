@@ -815,6 +815,7 @@ mod tests {
 		let mut duplicate = Encoder::with_capacity(32);
 		duplicate.u32(2);
 		duplicate.bytes(b"eta").unwrap();
+
 		duplicate.bytes(b"4").unwrap();
 		duplicate.bytes(b"eta").unwrap();
 		duplicate.bytes(b"2").unwrap();
@@ -900,6 +901,7 @@ mod tests {
 			plugin.invoke(FREQUENT_UPDATES_ENABLED, Bytes::new()),
 			Err(Error::Unavailable)
 		);
+
 		assert_eq!(plugin.invoke(LIST, Bytes::new()), Err(Error::Unavailable));
 	}
 
@@ -941,6 +943,7 @@ mod tests {
 		bad_immediate.u32(1);
 		bad_immediate.u32(1);
 		assert!(DismissalPolicy::decode(&mut Decoder::new(&bad_immediate.finish())).is_err());
+
 		let mut unknown = Encoder::with_capacity(8);
 		unknown.u32(9);
 		unknown.u32(0);

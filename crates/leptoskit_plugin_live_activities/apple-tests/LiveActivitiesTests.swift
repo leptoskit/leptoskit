@@ -62,14 +62,17 @@ private final class FakeLiveActivities: LiveActivityService {
         if let existing = tokens.removeValue(forKey: id) { return existing }
 
         guard activities[id] != nil else { throw PluginError.unavailable }
+
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
+
                 if let displaced = tokenWaiters.updateValue(continuation, forKey: id) {
                     displaced.resume(throwing: PluginError.cancelled)
                 }
             }
         } onCancel: {
             Task { @MainActor [weak self] in
+
                 guard let self else { return }
 
                 if let waiter = self.tokenWaiters.removeValue(forKey: id) {
@@ -132,6 +135,7 @@ final class LiveActivitiesTests: XCTestCase {
         let waiting = Task {
             try await plugin.invoke(method: 5, payload: idPayload("ride-1"))
         }
+
         await Task.yield()
         service.deliverToken("ride-1", Data([0xDE, 0xAD]))
         let token = try await waiting.value
@@ -163,6 +167,7 @@ final class LiveActivitiesTests: XCTestCase {
         let waiting = Task {
             try await plugin.invoke(method: 5, payload: idPayload("ride-1"))
         }
+
         await Task.yield()
         waiting.cancel()
 
@@ -189,6 +194,7 @@ final class LiveActivitiesTests: XCTestCase {
         append(UInt32(0), to: &data)
         append(UInt32(2), to: &data)
         try? append("eta", to: &data)
+
         try? append("4", to: &data)
         try? append("eta", to: &data)
         try? append("2", to: &data)
@@ -204,6 +210,7 @@ final class LiveActivitiesTests: XCTestCase {
     private func flag(_ plugin: LiveActivitiesPlugin, method: UInt32) async throws -> UInt8 {
         let data = try await plugin.invoke(method: method, payload: NativeBuffer(taking: lk_buffer()))
         XCTAssertEqual(data.count, 4)
+
         return data[0]
     }
 
@@ -226,6 +233,7 @@ final class LiveActivitiesTests: XCTestCase {
         append(UInt32(1), to: &data)
         try append("eta", to: &data)
         try append("2", to: &data)
+
         return buffer(data)
     }
 
@@ -235,12 +243,14 @@ final class LiveActivitiesTests: XCTestCase {
         append(UInt32(1), to: &data) // immediate
         append(UInt32(0), to: &data)
         append(UInt32(0), to: &data) // no final content
+
         return buffer(data)
     }
 
     private func idPayload(_ id: String) throws -> NativeBuffer {
         var data = Data()
         try append(id, to: &data)
+
         return buffer(data)
     }
 
@@ -252,6 +262,7 @@ final class LiveActivitiesTests: XCTestCase {
             buffer.data = pointer
             buffer.len = data.count
             buffer.capacity = data.count
+
             return NativeBuffer(taking: buffer)
         }
     }
@@ -283,6 +294,7 @@ final class LiveActivitiesTests: XCTestCase {
             ids.append(next.value)
             offset = next.next
         }
+
         return ids
     }
 
@@ -290,6 +302,7 @@ final class LiveActivitiesTests: XCTestCase {
         let length = Int(UInt32(littleEndian: data.prefix(4).withUnsafeBytes {
             $0.loadUnaligned(as: UInt32.self)
         }))
+
         return data.subdata(in: 4..<(4 + length))
     }
 
@@ -303,6 +316,7 @@ final class LiveActivitiesTests: XCTestCase {
         guard let value = String(data: data.subdata(in: start..<end), encoding: .utf8) else {
             throw PluginError.invalidArgument
         }
+
         return (value, end)
     }
 }

@@ -1135,6 +1135,7 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_dev_leptoskit_mobile_NativeScene3d_attach(JNIEnv* env, jclass owner, jint scene, jobject surface,
     jint width, jint height, jobject target) {
 #ifdef __ANDROID__
+
     if (!surface || !target || width <= 0 || height <= 0) return 0;
     ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
 
@@ -1175,6 +1176,7 @@ Java_dev_leptoskit_mobile_NativeScene3d_attach(JNIEnv* env, jclass owner, jint s
     (void)surface;
     (void)width;
     (void)height;
+
     (void)target;
 
     return 0;

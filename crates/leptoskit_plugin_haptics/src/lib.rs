@@ -206,6 +206,7 @@ pub fn perform(effect: Effect) -> Result<(), Error> {
 				Impact::Rigid => UIImpactFeedbackStyle::Rigid,
 				Impact::Soft => UIImpactFeedbackStyle::Soft,
 			};
+
 			// `initWithStyle:` is the view-independent initializer available on
 			// iOS 10+ before `feedbackGeneratorWithStyle:forView:` (iOS 17.5+).
 			#[allow(deprecated)]
@@ -218,6 +219,7 @@ pub fn perform(effect: Effect) -> Result<(), Error> {
 				Notification::Warning => UINotificationFeedbackType::Warning,
 				Notification::Error => UINotificationFeedbackType::Error,
 			};
+
 			let generator = UINotificationFeedbackGenerator::new(main);
 			generator.notificationOccurred(feedback);
 		}
@@ -379,6 +381,7 @@ mod android {
 	fn resolve_constant(method: MethodId, payload: &[u8], sdk_int: i32) -> Result<i32, Error> {
 		if method == ANDROID_FEEDBACK {
 			let raw = i32::from_le_bytes(payload.try_into().map_err(|_| Error::InvalidArgument)?);
+
 			let minimum = match raw {
 				LONG_PRESS | VIRTUAL_KEY | KEYBOARD_TAP | CLOCK_TICK | CONTEXT_CLICK => 26,
 				KEYBOARD_RELEASE | VIRTUAL_KEY_RELEASE | TEXT_HANDLE_MOVE => 27,

@@ -285,6 +285,7 @@ mod android {
 
 				if let Some(event) = events[..read].last() {
 					let [x, y, z, w] = [event.data[0], event.data[1], event.data[2], event.data[3]];
+
 					if let Some(quat) = Quat::new(x, y, z, w).normalized() {
 						self.latest = Some((event.timestamp as f64 / 1e9, quat));
 					}

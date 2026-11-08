@@ -482,6 +482,7 @@ async fn channel_errors_and_events_reach_the_app() {
 					break members;
 				}
 			};
+
 			assert_eq!(presence.len(), 2, "{presence:?}");
 
 			other.signal::<ClientRoom>(
@@ -500,6 +501,7 @@ async fn channel_errors_and_events_reach_the_app() {
 					None => panic!("the channel closed"),
 				}
 			};
+
 			assert_eq!(signal, json!({ "from": "grace" }));
 			client.leave(&key);
 		})
@@ -629,6 +631,7 @@ async fn a_transition_error_reaches_its_subscriber() {
 					None => panic!("the subscription ended"),
 				}
 			};
+
 			assert_eq!(error.status, 403, "{error:?}");
 		})
 		.await;

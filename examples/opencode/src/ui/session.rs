@@ -320,6 +320,7 @@ fn thousands(value: u32) -> String {
 		if index > 0 && (digits.len() - index) % 3 == 0 {
 			grouped.push(',');
 		}
+
 		grouped.push(digit);
 	}
 

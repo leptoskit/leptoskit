@@ -283,6 +283,7 @@ impl Wire for Projection {
 				for value in &mut matrix {
 					*value = reader.f32()?;
 				}
+
 				Ok(Self::Matrix(matrix))
 			}
 			_ => Err(Error::InvalidArgument),
@@ -332,9 +333,11 @@ impl Wire for Capabilities {
 
 			if word & SUPPORTED != 0 {
 				let features = Features::from_bits(word & !SUPPORTED);
+
 				if features.bits() != word & !SUPPORTED {
 					return Err(Error::InvalidArgument);
 				}
+
 				capabilities = capabilities.with(mode, features);
 			} else if word != 0 {
 				return Err(Error::InvalidArgument);
@@ -640,6 +643,7 @@ impl Wire for Frame {
 		writer.u64(self.planes_revision);
 		write_list(writer, &self.planes, Self::MAX_PLANES);
 		write_list(writer, &self.anchors, Self::MAX_ANCHORS);
+
 		write_option(writer, self.light.as_ref(), |w, v| v.write(w));
 		write_list(writer, &self.inputs, Self::MAX_INPUTS);
 		writer.u32(u32::from(self.depth));
@@ -675,6 +679,7 @@ impl Wire for HitTestRequest {
 				writer.f32(y);
 			}
 		}
+
 		writer.u32(self.targets.bits());
 		writer.u32(self.max_results);
 	}
@@ -687,10 +692,12 @@ impl Wire for HitTestRequest {
 				if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
 					return Err(Error::InvalidArgument);
 				}
+
 				HitOrigin::Screen { x, y }
 			}
 			_ => return Err(Error::InvalidArgument),
 		};
+
 		let bits = reader.u32()?;
 		let targets = HitTargets::from_bits(bits);
 		let max_results = reader.u32()?;

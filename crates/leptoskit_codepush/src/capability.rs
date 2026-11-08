@@ -236,6 +236,7 @@ impl HostCapabilityDescriptor {
 					"host plugin grant `{name}` must be a unique stable identifier"
 				)));
 			}
+
 			if !self.plugins.iter().any(|plugin| plugin.name == *name) {
 				return Err(invalid(format!(
 					"host plugin grant `{name}` has no resolved plugin entry"
@@ -260,6 +261,7 @@ impl HostCapabilityDescriptor {
 				)));
 			}
 		}
+
 		Ok(())
 	}
 
@@ -363,6 +365,7 @@ impl RuntimeContract {
 	/// configuration. Downloaded code never supplies the host descriptor.
 	pub fn verify_guest(&self, host: &Self) -> Result<ContractCompatibility, CodePushError> {
 		host.validate_host()?;
+
 		if self.abi != host.abi
 			|| self.shell != host.shell
 			|| self

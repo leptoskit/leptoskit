@@ -39,6 +39,7 @@ export function TickerTuned(props: ScenarioProps) {
 				});
 				return;
 			}
+
 			finish({
 				ok: true,
 				metrics: {
@@ -72,11 +73,13 @@ export function TickerTuned(props: ScenarioProps) {
 					} else if (at - previous > 1.5 * vsync) {
 						skipped += 1;
 					}
+
 					previous = at;
 					frames += 1;
 					for (let index = 0; index < tiles.length; index += 1) {
 						tiles[index].setAttribute("text", String(frames + index));
 					}
+
 					const finished = at - start >= durationMs;
 					if (frames === 1) {
 						beacon.setStyleProperty("background-color", running);
@@ -93,6 +96,7 @@ export function TickerTuned(props: ScenarioProps) {
 						});
 						return;
 					}
+
 					requestAnimationFrame(tick);
 				};
 				requestAnimationFrame(tick);

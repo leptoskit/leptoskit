@@ -49,6 +49,7 @@ fn svg(paths: &RoughSvgPaths, width: f64, height: f64, color: &str) -> String {
 /// Names and seeds are stable, and the source tree stays read-only.
 pub fn files() -> Vec<(String, Vec<u8>)> {
 	let mut files = Vec::new();
+
 	for variant in 1..=4 {
 		for (name, width, height) in [
 			("box", 240.0, 120.0),
@@ -59,6 +60,7 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
 			("underline", 200.0, 40.0),
 		] {
 			let mut pen = generator(variant * 101, FillStyle::None);
+
 			let drawing = match name {
 				"circle" => pen.ellipse(60.0, 60.0, 112.0, 112.0),
 				"rule" => pen.line(4.0, 6.0, 596.0, 6.0),
@@ -73,6 +75,7 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
 				}
 				_ => pen.rectangle(4.0, 4.0, width - 8.0, height - 8.0),
 			};
+
 			let paths = RoughSvgPaths::from_drawable(&drawing);
 			files.push((
 				format!("{name}-{variant}.svg"),
@@ -90,6 +93,7 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
 		let frame = RoughSvgPaths::from_drawable(
 			&generator(variant * 101 + 7, FillStyle::None).rectangle(4.0, 4.0, 312.0, 192.0),
 		);
+
 		for (theme, color) in [("light", "#34283f"), ("dark", "#f3ebdf")] {
 			files.push((
 				format!("frame-{variant}-{theme}.svg"),

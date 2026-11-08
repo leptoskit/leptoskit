@@ -570,6 +570,7 @@ async fn a_socket_whose_token_is_refused_is_closed() {
 	});
 	let url = format!("ws://{address}/live");
 	let (mut socket, _) = connect_async(&url).await.unwrap();
+
 	let _ = next(&mut socket).await;
 
 	// A refused token is answered once and the connection ends, so a
@@ -667,6 +668,7 @@ async fn flood(
 				_ => {}
 			}
 		}
+
 		Err("the socket ended without a close".to_owned())
 	})
 	.await;
@@ -694,10 +696,12 @@ async fn a_client_that_stops_reading_is_disconnected() {
 		axum::serve(listener, app).await.unwrap();
 	});
 	let (mut socket, _) = connect_async(format!("ws://{address}/live")).await.unwrap();
+
 	let _ = next(&mut socket).await;
 
 	// Far more than the sockets' buffers hold, sent without reading any.
 	let subscriptions: u32 = 200;
+
 	for id in 1..=subscriptions {
 		send(
 			&mut socket,
@@ -709,6 +713,7 @@ async fn a_client_that_stops_reading_is_disconnected() {
 		)
 		.await;
 	}
+
 	tokio::time::sleep(Duration::from_secs(2)).await;
 
 	let mut answered = 0;
@@ -823,6 +828,7 @@ async fn frames_the_server_cannot_serve_are_answered_and_the_socket_stays_open()
 		},
 	)
 	.await;
+
 	match next(&mut socket).await {
 		ServerFrame::ChannelError { channel, err } => {
 			assert_eq!(channel, "lobby");
@@ -852,6 +858,7 @@ async fn a_connection_runs_only_so_many_actions_at_once() {
 	let _ = next(&mut socket).await;
 
 	let running = u32::try_from(rpc::live::MAX_ACTIONS).unwrap();
+
 	for request in 1..=running + 1 {
 		send(
 			&mut socket,

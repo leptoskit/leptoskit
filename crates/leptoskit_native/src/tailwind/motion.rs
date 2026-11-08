@@ -294,6 +294,7 @@ impl Motion {
 					Length::Percent(fraction) => Offset::percent(fraction * 100.0),
 					length => Offset::points(length.points(context)),
 				};
+
 				let transform = props.transform.get_or_insert(Transform::IDENTITY);
 
 				match axis {
@@ -322,6 +323,7 @@ impl Motion {
 					Curve::Timing { easing, .. } => easing,
 					Curve::Spring(_) => Easing::EASE_IN_OUT,
 				};
+
 				transition.curve = Curve::timing(*duration_ms, easing);
 			}
 			Self::Ease(easing) => {
@@ -330,6 +332,7 @@ impl Motion {
 					Curve::Timing { duration_ms, .. } => duration_ms,
 					Curve::Spring(_) => 150.0,
 				};
+
 				transition.curve = Curve::timing(duration_ms, *easing);
 			}
 			Self::Delay(delay_ms) => transition(props).delay_ms = *delay_ms,

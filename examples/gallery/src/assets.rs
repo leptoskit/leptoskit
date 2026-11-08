@@ -48,14 +48,17 @@ impl Assets {
 		let dir = dir.into();
 		fs::create_dir_all(&dir)?;
 		let assets = Self::at(dir);
+
 		for index in 0..PHOTO_COUNT {
 			let image = landscape(index, 480, 480);
 			image.write_bmp(Path::new(&assets.photo(index)))?;
 		}
+
 		for index in 0..AVATAR_COUNT {
 			let image = avatar(index, 240);
 			image.write_bmp(Path::new(&assets.avatar(index)))?;
 		}
+
 		landscape(7, 1170, 420).write_bmp(Path::new(&assets.cover()))?;
 		Ok(assets)
 	}
@@ -138,6 +141,7 @@ struct Image {
 impl Image {
 	fn paint(width: usize, height: usize, shade: impl Fn(f32, f32) -> Rgb) -> Self {
 		let mut pixels = Vec::with_capacity(width * height);
+
 		for y in 0..height {
 			for x in 0..width {
 				pixels.push(shade(
@@ -146,6 +150,7 @@ impl Image {
 				));
 			}
 		}
+
 		Self {
 			width,
 			height,
@@ -175,6 +180,7 @@ impl Image {
 		bytes.extend_from_slice(&40u32.to_le_bytes());
 		bytes.extend_from_slice(&width.to_le_bytes());
 		bytes.extend_from_slice(&height.to_le_bytes());
+
 		bytes.extend_from_slice(&1u16.to_le_bytes());
 		bytes.extend_from_slice(&24u16.to_le_bytes());
 		bytes.extend_from_slice(&0u32.to_le_bytes());
@@ -185,12 +191,15 @@ impl Image {
 		bytes.extend_from_slice(&0u32.to_le_bytes());
 		bytes.extend_from_slice(&0u32.to_le_bytes());
 		let to_byte = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
+
 		for row in self.pixels.chunks(self.width).rev() {
 			for pixel in row {
 				bytes.extend_from_slice(&[to_byte(pixel.2), to_byte(pixel.1), to_byte(pixel.0)]);
 			}
+
 			bytes.resize(bytes.len() + row_bytes - self.width * 3, 0);
 		}
+
 		Ok(bytes)
 	}
 }

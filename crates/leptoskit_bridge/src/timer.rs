@@ -359,6 +359,7 @@ pub mod host {
 						.unwrap_or_else(PoisonError::into_inner)
 				}
 			};
+
 			drop(state);
 		}
 	}

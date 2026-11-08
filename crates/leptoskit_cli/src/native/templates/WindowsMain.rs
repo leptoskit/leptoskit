@@ -155,6 +155,7 @@ mod application {
 			}
 
 			let wait = pending.then(|| deadline.saturating_duration_since(Instant::now()));
+
 			let wait = match (wait, host.borrow().next_timer_deadline()) {
 				(Some(frame), Some(timer)) => Some(frame.min(timer)),
 				(Some(frame), None) => Some(frame),

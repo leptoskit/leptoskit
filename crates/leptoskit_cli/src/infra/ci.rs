@@ -36,9 +36,11 @@ pub(super) fn workflow(
 		.cloned()
 		.collect();
 	names.remove(&config.db.as_ref().expect("validated Postgres").url_env);
+
 	if let Some(relay) = &config.rpc.live.relay_url_env {
 		names.remove(relay);
 	}
+
 	names.extend(
 		[
 			"POSTGRES_PASSWORD",
@@ -57,18 +59,23 @@ pub(super) fn workflow(
 		}
 		.into(),
 	);
+
 	if c.services.cache {
 		names.insert("VALKEY_PASSWORD".into());
 	}
+
 	if c.services.relay {
 		names.insert("NATS_TOKEN".into());
 	}
+
 	if let Some(plugin) = &c.plugins.analytics {
 		names.insert("LEPTOSKIT_ANALYTICS_READ_KEY".into());
+
 		if plugin.otlp_endpoint.is_some() {
 			names.insert("LEPTOSKIT_ANALYTICS_WRITE_KEY".into());
 		}
 	}
+
 	if c.backups.enabled {
 		names.extend(
 			[
@@ -79,10 +86,13 @@ pub(super) fn workflow(
 			.map(str::to_owned),
 		);
 	}
+
 	let mut env = serde_json::Map::new();
+
 	for name in names {
 		env.insert(name.clone(), json!(format!("${{{{ secrets.{name} }}}}")));
 	}
+
 	env.insert(
 		"KAMAL_REGISTRY_PASSWORD".into(),
 		json!("${{ secrets.KAMAL_REGISTRY_PASSWORD }}"),
@@ -92,6 +102,7 @@ pub(super) fn workflow(
 		"MAINTENANCE".into(),
 		json!("${{ inputs.maintenance || false }}"),
 	);
+
 	if c.control_url.is_some() {
 		env.clear();
 		env.insert(
@@ -118,6 +129,7 @@ pub(super) fn workflow(
 			c.name
 		)
 	};
+
 	Ok(json!({"name": format!("Deploy {}", c.name),
 		"on": {"push": {"branches": ["main"]}, "workflow_dispatch": {"inputs": {
 			"setup": {"description": "First release: bootstrap accessories and verified backups", "type": "boolean", "default": false},
@@ -139,12 +151,14 @@ pub(super) fn generate(root: &Path, config: &LeptoskitConfig, force: bool) -> Re
 	let project = crate::deploy::Project::read(root, config)?;
 	let text = serde_json::to_string_pretty(&workflow(config, &project)?)? + "\n";
 	let path = root.join(".github/workflows/leptoskit-deploy.yml");
+
 	if path.exists() {
 		ensure!(
 			force || fs::read_to_string(&path)? == text,
 			"workflow differs; review before regenerating with --force"
 		);
 	}
+
 	fs::create_dir_all(path.parent().expect("workflow parent"))?;
 	fs::write(&path, text)?;
 	println!(
@@ -152,5 +166,6 @@ pub(super) fn generate(root: &Path, config: &LeptoskitConfig, force: bool) -> Re
 		 before enabling it. Infrastructure apply remains an explicit reviewed operation.",
 		path.display()
 	);
+
 	Ok(())
 }

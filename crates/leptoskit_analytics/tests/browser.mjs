@@ -38,6 +38,7 @@ check(
 	!requests[1].request.headers.has("traceparent"),
 	"no cross-origin trace context",
 );
+
 listeners.get("error")({
 	message: "private-error-message",
 	filename: "private-source",
@@ -60,6 +61,7 @@ check(
 	!/private-/.test(batch.options.body),
 	"no URLs or error messages retained",
 );
+
 for (let i = 0; i < 50; i++) analytics.pageView("/notes/{id}");
 check(analytics.dropped === 18, "bounded queue with visible loss");
 await analytics.flush();
@@ -77,8 +79,10 @@ for (const preference of ["globalPrivacyControl", "doNotTrack"]) {
 	await optedOut.flush();
 	check(requests.length === before, "privacy preference prevents collection");
 	optedOut.stop();
+
 	navigator[preference] = preference === "globalPrivacyControl" ? false : "0";
 }
+
 const disabled = install({ route: "/notes/{id}", enabled: false });
 await disabled.flush();
 disabled.stop();

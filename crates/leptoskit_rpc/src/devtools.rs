@@ -80,6 +80,7 @@ pub fn now_ms() -> u64 {
 /// becomes `app::api::clips`.
 fn function_name(type_name: &'static str) -> &'static str {
 	let mut name = type_name;
+
 	while let Some(trimmed) = name.strip_suffix("::{{closure}}") {
 		name = trimmed;
 	}

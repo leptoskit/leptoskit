@@ -55,6 +55,7 @@ pub async fn active_tab() -> Option<(i64, Option<i64>, Option<PageInput>)> {
 					..PageInput::default()
 				}
 			});
+
 		return Some((tab.id?, tab.window_id, page));
 	}
 	#[allow(unreachable_code)]
@@ -91,6 +92,7 @@ pub fn close_window() {
 	#[cfg(all(feature = "extension", target_arch = "wasm32"))]
 	{
 		let global = js_sys::global();
+
 		if let Ok(close) = js_sys::Reflect::get(&global, &"close".into())
 			&& let Ok(close) = wasm_bindgen::JsCast::dyn_into::<js_sys::Function>(close)
 		{

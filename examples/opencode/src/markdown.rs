@@ -23,18 +23,23 @@ pub fn blocks(source: &str) -> Vec<Vec<Element>> {
 
 		if let Some(language) = line.strip_prefix("```") {
 			let mut code = Vec::new();
+
 			for line in lines.by_ref() {
 				if line.starts_with("```") {
 					break;
 				}
+
 				code.push(view! { <CodeLine language=language line=line /> });
 			}
+
 			blocks.push(code);
 		} else if line.starts_with("- ") {
 			let mut items = vec![view! { <Bullet line=line /> }];
+
 			while let Some(next) = lines.next_if(|next| next.starts_with("- ")) {
 				items.push(view! { <Bullet line=next /> });
 			}
+
 			blocks.push(items);
 		} else {
 			let mut paragraph = line.to_owned();
@@ -44,6 +49,7 @@ pub fn blocks(source: &str) -> Vec<Vec<Element>> {
 				paragraph.push(' ');
 				paragraph.push_str(next.trim());
 			}
+
 			blocks.push(vec![view! { <Text spans=inline(&paragraph) /> }]);
 		}
 	}
@@ -65,6 +71,7 @@ fn CodeLine(language: &str, line: &str) -> Element {
 	} else {
 		vec![TextSpan::new(line.replace(' ', &crate::NBSP.to_string()))]
 	};
+
 	view! { <Text spans=spans /> }
 }
 
@@ -76,6 +83,7 @@ pub fn inline(text: &str) -> Vec<TextSpan> {
 	while !rest.is_empty() {
 		let code = rest.find('`');
 		let bold = rest.find("**");
+
 		let (start, marker) = match (code, bold) {
 			(Some(code), Some(bold)) if bold < code => (bold, "**"),
 			(Some(code), _) => (code, "`"),
@@ -104,6 +112,7 @@ pub fn inline(text: &str) -> Vec<TextSpan> {
 				.color(theme::WARNING)
 				.weight(FontWeight::Bold)
 		});
+
 		rest = &after[end + marker.len()..];
 	}
 

@@ -1353,6 +1353,7 @@ impl Widget {
 			});
 		let full = [width - border * 2, height - border * 2];
 		let mut bars = [false; 2];
+
 		// SAFETY: System metrics use the same monitor DPI as native allocation.
 		let scrollbar = unsafe {
 			[

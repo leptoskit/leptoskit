@@ -19,9 +19,11 @@ fn list_prints_every_screen_with_its_viewport() {
 	let stdout = String::from_utf8(output.stdout).unwrap();
 	let lines: Vec<_> = stdout.lines().collect();
 	assert_eq!(lines.len(), SCREENS.len());
+
 	for (line, screen) in lines.iter().zip(&SCREENS) {
 		let (width, height) = screen.viewport;
 		assert!(line.starts_with(screen.slug), "{line}");
+
 		assert!(line.contains(screen.title), "{line}");
 		assert!(line.ends_with(&format!("({width}×{height})")), "{line}");
 	}
@@ -53,19 +55,24 @@ fn window_rejects_an_unknown_screen_before_opening_one() {
 #[test]
 fn snapshot_renders_every_screen_with_native_widgets() {
 	let out = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gallery-snapshot");
+
 	if out.exists() {
 		std::fs::remove_dir_all(&out).unwrap();
 	}
+
 	let output = gallery(&["snapshot", out.to_str().unwrap()]);
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(output.status.success(), "{stderr}");
 	let stdout = String::from_utf8(output.stdout).unwrap();
 	let printed: Vec<_> = stdout.lines().collect();
+
 	assert_eq!(printed.len(), SCREENS.len(), "{stdout}");
+
 	for (line, screen) in printed.iter().zip(&SCREENS) {
 		let path = out.join(format!("{}.png", screen.slug));
 		assert_eq!(*line, path.display().to_string());
 		let png = std::fs::read(&path).unwrap();
+
 		if let Err(error) = gallery_verify::check_rendered(&png) {
 			panic!("`{}`: {error}", screen.slug);
 		}

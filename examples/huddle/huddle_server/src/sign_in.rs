@@ -35,6 +35,7 @@ pub fn builder(db: &Db) -> Result<AuthBuilder, AuthError> {
 		.auth
 		.as_ref()
 		.ok_or_else(|| AuthError::Config("add an [auth] table to leptoskit.toml".into()))?;
+
 	let keys = match Keys::from_env(&auth.keys_env) {
 		Ok(keys) => keys,
 		#[cfg(debug_assertions)]
@@ -42,6 +43,7 @@ pub fn builder(db: &Db) -> Result<AuthBuilder, AuthError> {
 		#[cfg(not(debug_assertions))]
 		Err(error) => return Err(error),
 	};
+
 	let mut builder = Auth::builder(db, keys).sessions(SessionLifetimes {
 		idle: Duration::from_secs(u64::from(auth.idle_days) * DAY),
 		absolute: Duration::from_secs(u64::from(auth.absolute_days) * DAY),

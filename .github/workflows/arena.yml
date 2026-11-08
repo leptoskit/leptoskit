@@ -37,6 +37,7 @@ jobs:
       matrix:
         include:
           - platform: linux
+
             os: ubuntu-22.04
           - platform: windows
             os: windows-latest

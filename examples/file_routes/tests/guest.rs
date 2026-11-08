@@ -21,6 +21,7 @@ fn find_text<B: NativeBackend>(
 	if surface.props(node).text.as_deref() == Some(wanted) {
 		return Some(node);
 	}
+
 	surface
 		.children(node)
 		.iter()
@@ -35,9 +36,11 @@ fn pressable_of<B: NativeBackend>(
 	label: &str,
 ) -> Option<NodeId> {
 	let mut current = find_text(surface, node, label)?;
+
 	while surface.kind(current) != NativeKind::Pressable {
 		current = surface.parent(current)?;
 	}
+
 	Some(current)
 }
 
@@ -84,6 +87,7 @@ fn pressing_a_tab_navigates_to_its_screen() {
 	let outcome = host
 		.dispatch(tab, &NativeEvent::Press)
 		.expect("the press dispatches");
+
 	assert_eq!(outcome, EventOutcome::Handled);
 
 	let surface = host.surface();

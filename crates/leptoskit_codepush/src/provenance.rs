@@ -553,6 +553,7 @@ impl ProvenancePolicy {
 						second: statement.commit,
 					});
 				}
+
 				Some(_) => {}
 				None => commit = Some(statement.commit),
 			}
@@ -744,6 +745,7 @@ mod tests {
 		let mut other_files = manifest.clone();
 		other_files.mandatory = true;
 		let mut other_channel = manifest.clone();
+
 		other_channel.channel = "beta".to_owned();
 
 		for other in [other_build, other_version, other_files, other_channel] {
@@ -797,6 +799,7 @@ mod tests {
 		} else {
 			"0"
 		};
+
 		signature.signature.replace_range(..1, flipped);
 		assert!(signature.open().is_err());
 
@@ -881,6 +884,7 @@ mod tests {
 		let mut many = ReleaseApprovals::empty();
 		let approval = approve(1, &manifest(), COMMIT);
 		many.approvals = vec![approval; MAX_APPROVALS + 1];
+
 		let bytes = serde_json::to_vec(&many).expect("bytes");
 		assert!(ReleaseApprovals::from_slice(&bytes).is_err());
 		assert!(policy(1).verify(&manifest(), &many.approvals).is_err());

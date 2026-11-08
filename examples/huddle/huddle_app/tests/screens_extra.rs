@@ -53,6 +53,7 @@ fn the_board_moves_cards_in_every_direction() {
 		.get(&Finder::label("Move Fix sign-in to Done"))
 		.unwrap();
 	screen.get(&Finder::label("Move Ship it to Doing")).unwrap();
+
 	assert!(
 		screen
 			.query_by_label("Move Ship it down")
@@ -120,6 +121,7 @@ fn the_activity_panel_shows_every_invitation_tip_and_membership_state() {
 	screen
 		.get(&Finder::text("Submitted, waiting for confirmation"))
 		.unwrap();
+
 	// Only the sender of a failed tip may retry it.
 	screen
 		.get(&Finder::label("Retry the tip to Grace Hopper"))
@@ -217,6 +219,7 @@ fn the_activity_panel_shows_every_invitation_tip_and_membership_state() {
 		.tap(&Finder::label("Sign Grace Hopper out everywhere"))
 		.unwrap();
 	settle();
+
 	screen.pump();
 
 	drop(screen);
@@ -280,6 +283,7 @@ fn the_sidebar_switches_channels_and_creates_new_ones() {
 	screen
 		.enter_text(&Finder::label("New channel name"), "secret")
 		.unwrap();
+
 	screen
 		.tap(&Finder::label("Create a private channel"))
 		.unwrap();
@@ -408,6 +412,7 @@ fn the_bell_lists_notices_and_runs_their_action() {
 	let huddle = fixture.huddle();
 	huddle.show_inbox.set(true);
 	settle();
+
 	let mut screen = fixture.mount(1280.0, 2200.0);
 
 	// The bell says how many are unread, in words and in the label.
@@ -515,6 +520,7 @@ fn the_channel_header_shows_the_private_badge_summary_and_problem() {
 	settle();
 	screen.pump();
 	screen.get(&Finder::text("Invite by email")).unwrap();
+
 	screen.tap(&Finder::text("Chat")).unwrap();
 	settle();
 	screen.pump();

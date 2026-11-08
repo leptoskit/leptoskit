@@ -7,10 +7,13 @@ fixture="$(mktemp -d)"
 unit=leptoskit-notes-production-backup
 systemctl --version
 mkdir -p "$fixture/old" "$fixture/fixed/etc/systemd/system"
+
 for kind in service timer; do
 	cp "$artifacts/old.$kind" "$fixture/old/$unit.$kind"
+
 	cp "$artifacts/fixed.$kind" "$fixture/fixed/etc/systemd/system/$unit.$kind"
 done
+
 if systemd-analyze verify --man=no "$fixture/old/$unit.service" "$fixture/old/$unit.timer"; then
 	echo 'FAIL: malformed negative control accepted' >&2
 	exit 1

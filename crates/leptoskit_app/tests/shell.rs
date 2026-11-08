@@ -64,6 +64,7 @@ fn a_request_says_when_it_cannot_reach_a_service() {
 	assert_eq!(shell.notice.get_untracked(), "Working…");
 	assert_eq!(shell.output.get_untracked(), "");
 	settle();
+
 	assert!(!shell.busy.get_untracked());
 	assert_eq!(
 		shell.notice.get_untracked(),
@@ -127,6 +128,7 @@ fn signing_out_clears_everything_the_screen_holds() {
 	shell.overview.set(json!({"projects": []}));
 	shell.measurement.set(json!({"instances": 1}));
 	shell.measured_project.set("notes".into());
+
 	shell.logout();
 	assert_eq!(shell.key.get_untracked(), "");
 	assert_eq!(shell.output.get_untracked(), "");
@@ -147,6 +149,7 @@ fn a_default_shell_starts_empty() {
 	assert_eq!(shell.notice.get_untracked(), "");
 	assert_eq!(shell.output.get_untracked(), "");
 	assert!(shell.measurement.get_untracked().is_null());
+
 	assert_eq!(shell.measured_project.get_untracked(), "");
 	assert_eq!(shell.project.get_untracked(), "");
 	assert_eq!(shell.version.get_untracked(), "");

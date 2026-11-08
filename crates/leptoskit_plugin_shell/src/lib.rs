@@ -363,6 +363,7 @@ mod tests {
 			stdout: Bytes::from_static(&[0xff, 0]),
 			stderr: Bytes::from_static(b"error"),
 		};
+
 		assert_eq!(Output::decode(&output.encode().unwrap()).unwrap(), output);
 		let mut invalid = output;
 		invalid.success = true;

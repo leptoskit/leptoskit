@@ -42,8 +42,10 @@ fn parse_arguments() -> Result<Arguments, String> {
 		only: None,
 	};
 	let mut raw = std::env::args().skip(1);
+
 	while let Some(flag) = raw.next() {
 		let mut value = || raw.next().ok_or_else(|| format!("{flag} needs a value"));
+
 		match flag.as_str() {
 			"--out" => arguments.out = Some(value()?),
 			"--runs" => {
@@ -61,6 +63,7 @@ fn parse_arguments() -> Result<Arguments, String> {
 			other => return Err(format!("unknown argument {other}")),
 		}
 	}
+
 	Ok(arguments)
 }
 
@@ -81,18 +84,23 @@ fn run() -> Result<(), String> {
 		eprintln!("[bench] view layer");
 		view::run(&mut report, config)?;
 	}
+
 	if wants(only, "wasm") {
 		eprintln!("[bench] wasm layer");
 		wasm_layer::run(&mut report, config, GUEST_WASM)?;
 	}
+
 	if wants(only, "screen") {
 		eprintln!("[bench] screen layer");
+
 		screen::run(&mut report, config, SCREEN_WASM);
 	}
+
 	if wants(only, "tap") {
 		eprintln!("[bench] tap");
 		tap::run(&mut report, config, COUNTER_WASM)?;
 	}
+
 	if wants(only, "js") {
 		eprintln!("[bench] javascript layer");
 		#[cfg(feature = "js")]
@@ -109,15 +117,18 @@ fn run() -> Result<(), String> {
 		.serialize(&mut serializer)
 		.map_err(|error| format!("serialize report: {error}"))?;
 	let json = String::from_utf8(json).map_err(|error| format!("serialize report: {error}"))?;
+
 	if let Some(path) = arguments.out {
 		std::fs::write(&path, format!("{json}\n"))
 			.map_err(|error| format!("write {path}: {error}"))?;
+
 		eprintln!("[bench] wrote {path}");
 	} else {
 		println!("LEPTOSKIT_BENCH_JSON_BEGIN");
 		println!("{json}");
 		println!("LEPTOSKIT_BENCH_JSON_END");
 	}
+
 	Ok(())
 }
 

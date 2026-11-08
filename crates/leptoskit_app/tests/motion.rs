@@ -40,6 +40,7 @@ fn the_original_brand_scene_renders_moves_and_stops_for_reduced_motion() {
 	assert_ne!(initial, moved);
 	player.set_reduced_motion(true);
 	assert!(!player.needs_frame());
+
 	assert!(
 		player
 			.render(Duration::from_millis(100), 128, 128)
@@ -47,9 +48,11 @@ fn the_original_brand_scene_renders_moves_and_stops_for_reduced_motion() {
 			.is_none()
 	);
 	player.set_reduced_motion(false);
+
 	for _ in 0..10 {
 		let _ = player.render(Duration::from_millis(100), 128, 128).unwrap();
 	}
+
 	assert!(
 		!player.needs_frame(),
 		"the one-shot timeline must not keep requesting frames"

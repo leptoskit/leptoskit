@@ -173,7 +173,9 @@ async def asynchronous() -> None:
             await ada.add_sdk_note.live(body=f"{prefix}three")
             check(count(notes.value, f"{prefix}three") == 1, f"the async write: {notes.value}")
             check(count(notes.value, f"{prefix}two") == 1, "an async insertion preserves the next row")
+
             async for value in notes:
+
                 if count(value, f"{prefix}three") == 1:
                     break
     say("async")
@@ -182,6 +184,7 @@ async def asynchronous() -> None:
 try:
     synchronous()
     asyncio.run(asynchronous())
+
 except BaseException:
     traceback.print_exc()
     sys.stdout.flush()

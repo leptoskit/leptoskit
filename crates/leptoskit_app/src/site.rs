@@ -51,6 +51,7 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 			"missing website asset {file}; build the complete site first"
 		);
 	}
+
 	for file in split_chunks(assets)? {
 		ensure!(
 			assets.join(&file).is_file(),
@@ -158,6 +159,7 @@ const PLAYED_EXAMPLE_POLICY: &str =
 async fn played_example_headers(request: Request, next: Next) -> Response {
 	let played = request.uri().path().starts_with(PLAYED_EXAMPLES);
 	let mut response = next.run(request).await;
+
 	if played {
 		let headers = response.headers_mut();
 		headers.insert(
@@ -166,6 +168,7 @@ async fn played_example_headers(request: Request, next: Next) -> Response {
 		);
 		headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
 	}
+
 	response
 }
 

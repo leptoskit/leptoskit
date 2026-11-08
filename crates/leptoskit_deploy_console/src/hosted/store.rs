@@ -29,6 +29,7 @@ impl Accounts {
 				.optional()?;
 			let up = include_str!("migrations/001.up.sql");
 			let checksum = digest(up);
+
 			if let Some((version, old)) = current {
 				ensure!(
 					version == 1 && old == checksum,
@@ -38,6 +39,7 @@ impl Accounts {
 				tx.execute_batch(up)?;
 				tx.execute("INSERT INTO _hosted_migrations VALUES(1,?1)", [checksum])?;
 			}
+
 			tx.commit()?;
 		}
 		Ok(Self {
@@ -258,6 +260,7 @@ impl Accounts {
 		)?;
 		tx.commit()?;
 		drop(db);
+
 		let installation = self.installation(&account, &project)?;
 		Ok((account, installation, key))
 	}

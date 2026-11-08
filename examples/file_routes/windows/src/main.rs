@@ -76,12 +76,16 @@ mod application {
 		let mut deadline = Instant::now();
 		let mut previous = None;
 		let mut pending = false;
+
 		while window.is_open() {
 			window.pump_messages();
+
 			if !window.is_open() {
 				break;
 			}
+
 			let now = Instant::now();
+
 			if !pending || now >= deadline {
 				let elapsed =
 					previous.map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
@@ -96,10 +100,12 @@ mod application {
 				previous = pending.then_some(now);
 				deadline = now + interval;
 			}
+
 			window.wait_for_messages(
 				pending.then(|| deadline.saturating_duration_since(Instant::now())),
 			)?;
 		}
+
 		Ok(())
 	}
 

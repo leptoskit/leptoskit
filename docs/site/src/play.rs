@@ -91,6 +91,7 @@ pub fn frame_document(index: &str, base: &str) -> Result<String, String> {
 			 {base}"
 		));
 	}
+
 	let frame = format!(r#"<base href="{base}" /><script src="{FRAME_SCRIPT}"></script>"#);
 	Ok(index.replacen(ROOT_BASE, &frame, 1))
 }
@@ -132,6 +133,7 @@ mod tests {
 	#[test]
 	fn every_played_page_can_move_to_its_frame() {
 		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+
 		for example in EXAMPLES {
 			let index =
 				std::fs::read_to_string(root.join(example.directory).join("web/index.html"))
@@ -145,6 +147,7 @@ mod tests {
 				"{} keeps its scripts external, within the site's policy",
 				example.name
 			);
+
 			assert!(
 				!framed.contains("\"/pkg/") && !framed.contains("\"/assets/"),
 				"{} loads its files relative to its base",

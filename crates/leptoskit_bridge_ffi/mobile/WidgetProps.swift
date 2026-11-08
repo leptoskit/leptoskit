@@ -80,11 +80,13 @@ struct WidgetSlider: Decodable {
 
     func proposal(_ coordinate: Float) -> Double {
         let value = min + Double(Swift.max(0, Swift.min(1, coordinate))) * (max - min)
+
         return snapped(value)
     }
 
     func snapped(_ proposal: Double) -> Double {
         let value = Swift.max(min, Swift.min(max, proposal))
+
         guard let step else { return value }
         let candidate = ((max - min) / step).rounded()
         let boundary = min + candidate * step
@@ -92,6 +94,7 @@ struct WidgetSlider: Decodable {
         let last = boundary <= max || abs(boundary - max) <= tolerance
             ? candidate : Swift.max(candidate - 1, 0)
         let index = Swift.max(0, Swift.min(last, ((value - min) / step).rounded()))
+
         return Swift.max(min, Swift.min(max, min + index * step))
     }
 }

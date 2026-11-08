@@ -996,6 +996,7 @@ async fn the_other_accounts_passkey_is_what_proves_it() {
 		)
 		.await;
 	assert_eq!(registered.status(), StatusCode::OK);
+
 	let options = survivor
 		.post(&app, "/auth/merge/passkey/options", json!({}))
 		.await;

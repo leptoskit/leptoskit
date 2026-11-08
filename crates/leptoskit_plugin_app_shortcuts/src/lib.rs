@@ -293,6 +293,7 @@ impl leptoskit_bridge::Plugin for Registry {
 
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		validate(method, &payload)?;
+
 		if method == SET {
 			self.set(ShortcutList::decode(&payload)?);
 			Ok(Bytes::new())
@@ -375,6 +376,7 @@ mod tests {
 			ShortcutList::new([shortcut, Shortcut::new("search", "Search", "").unwrap()]).unwrap();
 		assert_eq!(list.items().len(), 2);
 		let bytes = list.encode().unwrap();
+
 		assert_eq!(ShortcutList::decode(&bytes).unwrap(), list);
 
 		assert!(Shortcut::new("", "x", "").is_err());
@@ -423,6 +425,7 @@ mod tests {
 		assert_eq!(plugin.items().len(), 1);
 		plugin.note_launch("inbox").unwrap();
 		let reply = plugin.invoke(CONSUME_LAUNCH, Bytes::new()).unwrap();
+
 		assert_eq!(decode_launch_id(&reply).unwrap().as_deref(), Some("inbox"));
 
 		let reply = plugin.invoke(CONSUME_LAUNCH, Bytes::new()).unwrap();

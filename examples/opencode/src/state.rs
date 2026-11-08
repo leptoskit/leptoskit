@@ -249,6 +249,7 @@ impl Opencode {
 			Action::MoveSelection(step) => {
 				if let Some(palette) = &mut self.palette {
 					let count = palette::matching_commands(&palette.query).len();
+
 					if count > 0 {
 						let next = palette.selected as i64 + i64::from(step);
 						palette.selected = next.rem_euclid(count as i64) as usize;

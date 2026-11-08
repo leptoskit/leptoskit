@@ -30,6 +30,7 @@ final class CaptureController: NSObject {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
+
         stack.edgeInsets = NSEdgeInsets(top: 32, left: 24, bottom: 32, right: 24)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()

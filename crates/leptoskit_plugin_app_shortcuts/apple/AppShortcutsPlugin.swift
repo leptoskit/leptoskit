@@ -144,6 +144,7 @@ public final class AppShortcutsPlugin: NativePlugin {
             }
 
             guard offset == bytes.count else { throw PluginError.invalidArgument }
+
             return items
         }
     }
@@ -155,6 +156,7 @@ public final class AppShortcutsPlugin: NativePlugin {
         var length = UInt32(value.utf8.count).littleEndian
         withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
         data.append(contentsOf: value.utf8)
+
         return data
     }
 
@@ -181,6 +183,7 @@ public final class AppShortcutsPlugin: NativePlugin {
         guard offset + 4 <= bytes.count else { throw PluginError.invalidArgument }
         let value = bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self).littleEndian
         offset += 4
+
         return value
     }
 
@@ -196,6 +199,7 @@ public final class AppShortcutsPlugin: NativePlugin {
         offset += length
 
         guard let value = String(bytes: slice, encoding: .utf8) else { throw PluginError.invalidArgument }
+
         return value
     }
 }

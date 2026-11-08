@@ -55,9 +55,11 @@ impl Pool {
 			.map(|row| (row.get(0), row.get(1)))
 			.collect::<Vec<_>>();
 		let pending = window.pending(&applied, migrations)?;
+
 		if has_pushes(&transaction).await? {
 			return Err(MigrationWindowError::PushedState.into());
 		}
+
 		transaction
 			.query_one(
 				"SELECT set_config($1, 'on', true)",
@@ -66,10 +68,12 @@ impl Pool {
 			.await
 			.map_err(error)?;
 		let mut names = Vec::with_capacity(pending.len());
+
 		for migration in pending {
 			apply(&transaction, migration).await?;
 			names.push(migration.name.to_string());
 		}
+
 		transaction.commit().await.map_err(error)?;
 		session.release();
 		Ok(names)

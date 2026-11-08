@@ -263,9 +263,11 @@ fn run_clippy(
 		"--all-targets",
 		"--message-format=json-diagnostic-rendered-ansi",
 	]);
+
 	for package in excludes {
 		command.args(["--exclude", package]);
 	}
+
 	let mut child = command
 		.args(
 			deny_warnings
@@ -370,6 +372,7 @@ mod tests {
 		assert!(excludes.contains(&"my_notes_tui".to_owned()));
 		assert!(!excludes.iter().any(|name| name == "my_notes_ios"));
 		let missing = dir.path().join("missing");
+
 		assert_eq!(clippy_host_excludes(&missing), Vec::<String>::new());
 	}
 

@@ -31,6 +31,7 @@ async fn session() -> (
 	let (acts, finished) = mpsc::channel(super::super::OUTGOING);
 	let (stream_out, stream_frames) = mpsc::channel(super::super::OUTGOING);
 	live.hub().connect(1, events);
+
 	let applied = live.hub().watch();
 	let session = Session {
 		live,
@@ -115,6 +116,7 @@ async fn the_final_pending_update_arrives_without_a_later_database_commit() {
 	assert_eq!(next(&mut out).await.to, 1);
 	let final_update = next(&mut out).await;
 	assert_eq!(final_update.to, 2);
+
 	assert_eq!(final_update.updates[0].update, Update::Ok(json!("after")));
 	running.abort();
 }
@@ -141,6 +143,7 @@ async fn changes_while_blocked_coalesce_into_the_latest_error_snapshot() {
 	);
 	let running = run(session, incoming);
 	assert_eq!(next(&mut out).await.to, 1);
+
 	assert_eq!(next(&mut out).await.to, 2);
 	let latest = next(&mut out).await;
 	assert!(latest.full);
@@ -160,6 +163,7 @@ async fn a_transition_larger_than_the_transport_queue_keeps_progressing() {
 			}
 		})
 		.collect();
+
 	for update in &updates {
 		if let Update::Ok(value) = &update.update {
 			session.keep(
@@ -170,6 +174,7 @@ async fn a_transition_larger_than_the_transport_queue_keeps_progressing() {
 			);
 		}
 	}
+
 	session.send_transition(0, updates, 9, true);
 	let error = WireError::invalid("changed during snapshot");
 	let update = session
@@ -177,29 +182,37 @@ async fn a_transition_larger_than_the_transport_queue_keeps_progressing() {
 		.get_mut(&1)
 		.unwrap()
 		.apply(Changed::Failed(error.clone()));
+
 	session.send_transition(0, vec![SubscriptionUpdate { id: 1, update }], 10, false);
 	let running = run(session, incoming);
 	let mut ids = Vec::new();
 	let mut chunks = 0;
+
 	while ids.len() < 70 {
 		let chunk = next(&mut out).await;
 		chunks += 1;
 		ids.extend(chunk.updates.iter().map(|update| update.id));
+
 		assert_eq!(chunk.to, if ids.len() == 70 { 9 } else { 0 });
 	}
+
 	assert!(chunks > super::super::OUTGOING);
 	ids.sort_unstable();
 	assert_eq!(ids, (0..70).collect::<Vec<_>>());
 	let mut recovered = Vec::new();
+
 	loop {
 		let chunk = next(&mut out).await;
 		assert!(chunk.full);
 		recovered.extend(chunk.updates);
+
 		if chunk.to == 10 {
 			break;
 		}
+
 		assert_eq!(chunk.to, 9);
 	}
+
 	assert_eq!(recovered.len(), 70);
 	assert!(
 		recovered
@@ -238,6 +251,7 @@ async fn removing_a_subscription_discards_its_unsent_result() {
 	assert_eq!(next(&mut out).await.to, 1);
 	let final_update = next(&mut out).await;
 	assert_eq!(final_update.to, 2);
+
 	assert_eq!(final_update.updates, []);
 	running.abort();
 }
@@ -257,6 +271,7 @@ async fn replacing_a_subscription_discards_its_unsent_result() {
 	assert_eq!(next(&mut out).await.to, 1);
 	let final_update = next(&mut out).await;
 	assert_eq!(final_update.to, 2);
+
 	assert!(
 		final_update.updates.is_empty(),
 		"the replacement is answered by its own Done"
@@ -282,6 +297,7 @@ async fn a_resume_failure_survives_coalescing_without_a_subscription() {
 	let running = run(session, incoming);
 	assert_eq!(next(&mut out).await.to, 1);
 	assert_eq!(next(&mut out).await.to, 2);
+
 	let recovery = next(&mut out).await;
 	assert_eq!(recovery.to, 3);
 	assert!(recovery.full);
@@ -331,6 +347,7 @@ async fn a_new_identity_discards_the_previous_identitys_unsent_snapshot() {
 	assert_eq!(next(&mut out).await.to, 1);
 	let recovery = next(&mut out).await;
 	assert!(recovery.full);
+
 	assert_eq!(recovery.updates.len(), 1);
 	assert!(matches!(recovery.updates[0].update, Update::Err(_)));
 	running.abort();
@@ -368,6 +385,7 @@ async fn reauthentication_starts_a_fresh_pending_stall_budget() {
 	assert!(authentication.as_mut().now_or_never().is_none());
 	assert!(matches!(out.try_recv().unwrap(), Outbound::Heartbeat));
 	assert_eq!(authentication.as_mut().now_or_never(), Some(true));
+
 	drop(authentication);
 	assert!(session.full_next);
 	assert!(session.pending_deadline().unwrap() > tokio::time::Instant::now());
@@ -433,6 +451,7 @@ async fn reused_stream_id_discards_old_items_and_terminal_without_retiring_repla
 	);
 	produced(&session).await;
 	assert_eq!(session.stream_frames.len(), 4);
+
 	for _ in 0..2 {
 		let frame = session.stream_frames.recv().await.unwrap();
 		assert!(session.forward_stream(frame).await);
@@ -445,6 +464,7 @@ async fn reused_stream_id_discards_old_items_and_terminal_without_retiring_repla
 			"old end cannot retire replacement"
 		);
 	}
+
 	for terminal in [false, true] {
 		let frame = session.stream_frames.recv().await.unwrap();
 		assert_eq!(frame.terminal, terminal);
@@ -453,18 +473,21 @@ async fn reused_stream_id_discards_old_items_and_terminal_without_retiring_repla
 			panic!("frame");
 		};
 		let frame: ServerFrame = serde_json::from_str(&text).unwrap();
+
 		if terminal {
 			assert!(matches!(frame, ServerFrame::End { err: None, .. }));
 		} else {
 			assert!(matches!(frame, ServerFrame::Item { value, .. } if value == json!("new")));
 		}
 	}
+
 	assert!(session.streams.is_empty());
 }
 
 #[tokio::test]
 async fn returned_failed_and_panicking_producers_keep_admission_until_terminal() {
 	let (mut session, mut out, _input, _incoming) = session().await;
+
 	for mode in ["return", "fail", "panic"] {
 		assert!(
 			session
@@ -476,6 +499,7 @@ async fn returned_failed_and_panicking_producers_keep_admission_until_terminal()
 		let frame = session.stream_frames.recv().await.unwrap();
 		assert!(frame.terminal);
 		assert!(session.forward_stream(frame).await);
+
 		assert!(session.streams.is_empty());
 		let Outbound::Frame { text, .. } = out.recv().await.unwrap() else {
 			panic!("frame");
@@ -555,6 +579,7 @@ async fn terminal_delivery_cancels_a_producer_that_keeps_running() {
 	);
 	assert!(matches!(out.recv().await, Some(Outbound::Frame { .. })));
 	assert!(session.streams.is_empty());
+
 	tokio::time::timeout(Duration::from_secs(1), stopped)
 		.await
 		.expect("a terminal frame must not detach a still-running producer")

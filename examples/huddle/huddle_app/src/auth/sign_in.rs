@@ -188,6 +188,7 @@ impl SignIn {
 	/// The whole screen: a card with the step the person is on.
 	pub fn screen(&self) -> Element {
 		let session = self.mounted.get().then(|| self.session.data()).flatten();
+
 		let step = match session {
 			Some(Some(_)) => self.signed_in(),
 			Some(None) => {
@@ -221,6 +222,7 @@ impl SignIn {
 		let this = *self;
 		let email = self.email;
 		let sending = self.send.is_pending();
+
 		let label = match self.wait.get() {
 			0 if sending => "Sending a code…".to_owned(),
 			0 => "Email me a code".to_owned(),
@@ -397,6 +399,7 @@ impl SignIn {
 		let this = *self;
 		let code = self.code;
 		let verifying = self.verify.is_pending();
+
 		let label = match self.wait.get() {
 			0 if verifying => "Signing in…".to_owned(),
 			0 => "Sign in".to_owned(),
@@ -453,11 +456,13 @@ impl SignIn {
 		let this = *self;
 		let code = self.factor_code;
 		let finishing = self.finish.is_pending();
+
 		let label = match self.wait.get() {
 			0 if finishing => "Checking…".to_owned(),
 			0 => "Continue".to_owned(),
 			seconds => format!("Try again in {seconds} s"),
 		};
+
 		let passkey = prompt.factors.contains(&Factor::Passkey);
 		let using_passkey = self.passkey_second.is_pending();
 		let hint = if !prompt.factors.contains(&Factor::Totp) {
@@ -560,6 +565,7 @@ impl SignIn {
 			(None, Some(error)) if retry_after(&error).is_some() && self.wait.get() == 0 => {
 				return None;
 			}
+
 			(None, Some(error)) => sentence(&error.message),
 			(None, None) => return None,
 		};
@@ -609,6 +615,7 @@ impl SignIn {
 			self.problem.set(Some(
 				"Enter an email address, such as ada@example.com.".into(),
 			));
+
 			return;
 		}
 
@@ -633,6 +640,7 @@ impl SignIn {
 		if code.is_empty() {
 			self.problem
 				.set(Some("Enter the code from the email.".into()));
+
 			return;
 		}
 
@@ -662,6 +670,7 @@ impl SignIn {
 		if code.is_empty() {
 			self.problem
 				.set(Some("Enter the code from your authenticator app.".into()));
+
 			return;
 		}
 
@@ -696,6 +705,7 @@ impl SignIn {
 		self.outcome.set(None);
 		self.send.reset();
 		self.verify.reset();
+
 		self.finish.reset();
 		self.passkey_second.reset();
 	}

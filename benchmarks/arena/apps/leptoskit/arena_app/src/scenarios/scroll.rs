@@ -151,6 +151,7 @@ async fn settle(host: Host, arena: &Arena, offset: f64) -> Result<(), String> {
 		if (reported(arena)? - offset).abs() <= 1.0 {
 			return Ok(());
 		}
+
 		host.next_frame().await?;
 	}
 

@@ -26,6 +26,7 @@ impl Coverage {
 	pub fn merge(&mut self, other: Self) {
 		for (path, lines) in other.files {
 			let merged = self.files.entry(path).or_default();
+
 			for (number, hits) in lines {
 				let total = merged.entry(number).or_default();
 				*total = total.saturating_add(hits);
@@ -91,6 +92,7 @@ pub fn parse(input: &str, root: &str) -> Result<Coverage, ParseError> {
 			if current.is_some() {
 				return Err(error("`SF` before the previous record ended".into()));
 			}
+
 			let path = normalize(path);
 			let relative = if is_absolute(&path) {
 				path.strip_prefix(root)
@@ -99,9 +101,11 @@ pub fn parse(input: &str, root: &str) -> Result<Coverage, ParseError> {
 			} else {
 				Some(path)
 			};
+
 			if let Some(relative) = &relative {
 				coverage.files.entry(relative.clone()).or_default();
 			}
+
 			current = Some(relative);
 		} else if let Some(record) = entry.strip_prefix("DA:") {
 			let Some(file) = &current else {
@@ -113,6 +117,7 @@ pub fn parse(input: &str, root: &str) -> Result<Coverage, ParseError> {
 			let (Some(number), Some(hits)) = (number, hits) else {
 				return Err(error(format!("malformed `DA:{record}`")));
 			};
+
 			if let Some(file) = file {
 				let lines = coverage.files.entry(file.clone()).or_default();
 				let total = lines.entry(number).or_default();

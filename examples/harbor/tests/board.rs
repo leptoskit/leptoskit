@@ -40,13 +40,17 @@ async fn tick(tester: &mut WidgetTester) {
 /// takes a while to answer, so this waits on the board rather than a guess.
 async fn settle(board: &Board, tester: &mut WidgetTester) {
 	tick(tester).await;
+
 	for _ in 0..400 {
 		if board.is_settled() {
 			tick(tester).await;
+
 			return;
 		}
+
 		tick(tester).await;
 	}
+
 	panic!("the board did not settle");
 }
 
@@ -113,6 +117,7 @@ async fn a_booking_takes_a_seat_at_once_and_keeps_it() -> Result<(), TestError> 
 	for _ in 0..3 {
 		tester.tap(&Finder::aria_role(Role::Button, "Next day"))?;
 	}
+
 	settle(&board, &mut tester).await;
 	tester.find(&Finder::text("Day 4"))?;
 	let before: u32 = seat_count(&seats(&tester, "Mainland"));

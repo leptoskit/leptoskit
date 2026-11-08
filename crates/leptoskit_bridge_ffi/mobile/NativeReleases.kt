@@ -60,6 +60,7 @@ internal data class NativeSync(
                     NativeContract.LEGACY -> "Legacy compatibility checks only."
                     null -> "Compatibility not reported."
                 }
+
             return "$release. $evidence"
         }
 }
@@ -73,6 +74,7 @@ internal enum class NativeContract {
     companion object {
         fun parse(metadata: JSONObject): NativeContract? {
             if (!metadata.has("contract") || metadata.isNull("contract")) return null
+
             return when (val value = metadata.getString("contract")) {
                 "verified" -> VERIFIED
                 "incomplete" -> INCOMPLETE

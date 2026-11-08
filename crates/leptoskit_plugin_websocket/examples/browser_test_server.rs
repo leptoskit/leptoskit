@@ -170,6 +170,7 @@ async fn echo(mut socket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStre
 				let _ = socket.flush().await;
 				break;
 			}
+
 			Ok(message) if message.is_text() || message.is_binary() => {
 				if socket.send(message).await.is_err() {
 					break;

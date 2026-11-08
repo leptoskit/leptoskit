@@ -28,6 +28,7 @@ mod operations;
 mod plugins;
 mod pricing;
 mod recovery;
+
 mod releases;
 mod remote;
 mod resources;
@@ -247,9 +248,11 @@ pub fn run(command: InfraCommand) -> Result<()> {
 	if let InfraCommand::BuildVerified(args) = &command {
 		return verified::run(args);
 	}
+
 	if let InfraCommand::Offers { min_memory_gb } = &command {
 		return pricing::print(*min_memory_gb);
 	}
+
 	let (config, root) = LeptoskitConfig::load()?;
 	let infra = settings(&config)?;
 	ensure!(
@@ -258,6 +261,7 @@ pub fn run(command: InfraCommand) -> Result<()> {
 		 backup procedures"
 	);
 	let dir = directory(&root, infra);
+
 	match command {
 		InfraCommand::BuildVerified(args) => verified::run(&args),
 		InfraCommand::Analytics => analytics::query(infra),
@@ -278,6 +282,7 @@ pub fn run(command: InfraCommand) -> Result<()> {
 			if infra.external.is_none() {
 				services::check(infra, &crate::deploy::Project::read(&root, &config)?)?;
 			}
+
 			generate(&dir, infra, false)?;
 			let _lock = lock(&dir)?;
 			// A failed new plan must never leave an older plan applyable.
@@ -397,13 +402,16 @@ fn generate_project(
 	force: bool,
 ) -> Result<()> {
 	generate(dir, infra, force)?;
+
 	if infra.external.is_some() {
 		println!(
 			"Infrastructure written to {}; run `lk infra plan`.",
 			dir.display()
 		);
+
 		return Ok(());
 	}
+
 	// Reuse the existing container recipe rather than another build
 	// system.
 	let report = crate::deploy::generate(root, config, crate::deploy::Target::Docker, false)?;
@@ -418,6 +426,7 @@ fn generate_project(
 				text.push_str("\n# Managed state, plans, and runtime secret bindings\n");
 				changed = true;
 			}
+
 			text.push_str(&pattern);
 			text.push('\n');
 		}
@@ -426,6 +435,7 @@ fn generate_project(
 	if changed {
 		fs::write(ignore, text)?;
 	}
+
 	println!("{report}\nInfrastructure written to {}", dir.display());
 	Ok(())
 }
@@ -435,18 +445,23 @@ fn print_output(dir: &Path, infra: &InfraConfig) -> Result<()> {
 		let mut value = json!({"server_ip": server_ip(dir)?,
 			"server_ips": releases::hosts(dir)?, "app_url": output(dir, "app_url")?,
 			"runtime": "external"});
+
 		if !infra.backup_bucket.is_empty() {
 			value["backup_bucket"] = json!(output(dir, "backup_bucket")?);
 			value["backup_endpoint"] = json!(output(dir, "backup_endpoint")?);
 		}
+
 		println!("{}", serde_json::to_string_pretty(&value)?);
+
 		return Ok(());
 	}
+
 	let output = json!({"server_ip": server_ip(dir)?,
 		"server_ips": releases::hosts(dir)?,
 		"app_url": output(dir, "app_url")?, "updates_url": output(dir, "updates_url")?,
 		"updates_bucket": output(dir, "updates_bucket")?, "backup_bucket": output(dir, "backup_bucket")?,
 		"s3_endpoint": output(dir, "s3_endpoint")?, "backup_endpoint": output(dir, "backup_endpoint")?});
+
 	println!("{}", serde_json::to_string_pretty(&output)?);
 	Ok(())
 }
@@ -513,6 +528,7 @@ fn backup(dir: &Path, infra: &InfraConfig, out: &Path, upload: bool) -> Result<(
 	use std::io::Read as _;
 	use std::io::Seek as _;
 	temporary.as_file_mut().rewind()?;
+
 	let mut magic = [0; 5];
 	temporary.as_file_mut().read_exact(&mut magic)?;
 	ensure!(
@@ -522,6 +538,7 @@ fn backup(dir: &Path, infra: &InfraConfig, out: &Path, upload: bool) -> Result<(
 	temporary
 		.persist_noclobber(out)
 		.context("couldn't save backup without overwriting")?;
+
 	if let Some(bucket) = bucket {
 		let name = format!(
 			"{}-{}.dump",
@@ -531,6 +548,7 @@ fn backup(dir: &Path, infra: &InfraConfig, out: &Path, upload: bool) -> Result<(
 		bucket.upload_backup(&name, out)?;
 		println!("Uploaded backup to private bucket {}", infra.backup_bucket);
 	}
+
 	println!(
 		"Backup saved to {}. Store it off-site with encryption and verify a restore.",
 		out.display()
@@ -543,12 +561,15 @@ fn settings(config: &LeptoskitConfig) -> Result<&InfraConfig> {
 		.infra
 		.as_ref()
 		.context("add [infra] to leptoskit.toml; see the managed deployment guide")?;
+
 	if let Some(problem) = infra.problem() {
 		anyhow::bail!(problem);
 	}
+
 	if infra.external.is_some() {
 		return Ok(infra);
 	}
+
 	ensure!(
 		config
 			.db
@@ -637,12 +658,14 @@ fn applied_primary(dir: &Path) -> Result<Option<String>> {
 		.get("server_ip")
 		.map(|v| v["value"].as_str().context("invalid primary output"))
 		.transpose()?;
+
 	if let Some(ip) = ip {
 		ensure!(
 			ip.parse::<std::net::Ipv4Addr>().is_ok(),
 			"invalid primary IP in applied state"
 		);
 	}
+
 	Ok(ip.map(str::to_owned))
 }
 
@@ -662,6 +685,7 @@ fn protect_plan(dir: &Path) -> Result<()> {
 			.is_some_and(|s| s.starts_with("1.")),
 		"unsupported plan JSON format"
 	);
+
 	for change in plan["resource_changes"].as_array().into_iter().flatten() {
 		let kind = change["type"]
 			.as_str()
@@ -674,6 +698,7 @@ fn protect_plan(dir: &Path) -> Result<()> {
 			"cloudflare_r2_bucket" | "b2_bucket" | "hcloud_network"
 		) || (name == "app"
 			&& matches!(kind, "hcloud_server" | "digitalocean_droplet"));
+
 		let actions = change["change"]["actions"]
 			.as_array()
 			.context("invalid planned resource actions")?;
@@ -683,6 +708,7 @@ fn protect_plan(dir: &Path) -> Result<()> {
 			 a separate environment, or migrate resources/state explicitly before continuing"
 		);
 	}
+
 	Ok(())
 }
 
@@ -727,6 +753,7 @@ fn plan_fingerprint(dir: &Path) -> Result<String> {
 		".terraform.lock.hcl".into(),
 		"leptoskit.plan".into(),
 	];
+
 	for entry in fs::read_dir(dir)? {
 		let name = entry?.file_name().to_string_lossy().into_owned();
 		if [
@@ -744,7 +771,9 @@ fn plan_fingerprint(dir: &Path) -> Result<String> {
 			files.push(name);
 		}
 	}
+
 	files.sort();
+
 	for file in files {
 		hash.update(file.as_bytes());
 		hash.update([0]);
@@ -752,6 +781,7 @@ fn plan_fingerprint(dir: &Path) -> Result<String> {
 			fs::read(dir.join(&file)).with_context(|| format!("missing {file}; plan again"))?,
 		);
 	}
+
 	Ok(hex::encode(hash.finalize()))
 }
 
@@ -761,6 +791,7 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 	if let Some(problem) = config.problem() {
 		anyhow::bail!(problem);
 	}
+
 	let text = serde_json::to_string_pretty(&resources(config))? + "\n";
 	fs::create_dir_all(dir)?;
 	#[cfg(unix)]
@@ -769,10 +800,12 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 		fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
 	}
 	let plugin_text = serde_json::to_string_pretty(&plugins::manifest(config))? + "\n";
+
 	// Check both before writing either, so an edited manifest cannot leave a
 	// partially updated resource configuration.
 	for (name, content) in [("main.tf.json", &text), ("plugins.json", &plugin_text)] {
 		let path = dir.join(name);
+
 		if path.exists() {
 			ensure!(
 				fs::read_to_string(&path)? == *content || force,
@@ -781,9 +814,11 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 			);
 		}
 	}
+
 	fs::write(dir.join("main.tf.json"), text)?;
 	fs::write(dir.join("plugins.json"), plugin_text)?;
 	let ignore = dir.join(".gitignore");
+
 	if !ignore.exists() {
 		fs::write(
 			ignore,
@@ -791,6 +826,7 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 			 yml\n.kamal/\n",
 		)?;
 	}
+
 	Ok(())
 }
 

@@ -37,6 +37,7 @@ class _AutoscrollScenarioState extends State<AutoscrollScenario>
 
   Future<void> _start() async {
     await settle();
+
     if (mounted) _ticker.start();
   }
 
@@ -49,7 +50,9 @@ class _AutoscrollScenarioState extends State<AutoscrollScenario>
 
     final finished = elapsed >= runFor;
     final phase = finished ? Phase.done : Phase.running;
+
     if (phase != _phase) setState(() => _phase = phase);
+
     if (finished) {
       _ticker.stop();
       _finish();
@@ -60,6 +63,7 @@ class _AutoscrollScenarioState extends State<AutoscrollScenario>
     await SchedulerBinding.instance.endOfFrame;
     final shown = _controller.offset;
     final ok = (shown - _offset).abs() < 0.01;
+
     if (!ok) setState(() => _phase = Phase.failed);
     await publishReport(
       ArenaReport(

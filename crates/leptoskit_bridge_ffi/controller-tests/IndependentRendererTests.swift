@@ -56,6 +56,7 @@ struct IndependentRendererTests {
         #expect(widget.image === image)
         #expect(!widget.isAccessibilityElement())
         renderer.close()
+
         #expect(widget.image == nil)
     }
 

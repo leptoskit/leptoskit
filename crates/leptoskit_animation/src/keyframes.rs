@@ -252,10 +252,12 @@ impl Keyframes {
 			frames,
 			duration_ms: sanitize_ms(self.duration_ms),
 			delay_ms: sanitize_ms(self.delay_ms),
+
 			iterations: match self.iterations {
 				Iterations::Infinite => Iterations::Infinite,
 				Iterations::Count(_) => Iterations::Count(self.iterations.count()),
 			},
+
 			alternate: self.alternate,
 			easing: self.easing.sanitized(),
 		}
@@ -361,6 +363,7 @@ impl Keyframes {
 				}
 
 				let t = previous.2.sample((progress - previous.0) / span);
+
 				return mix(previous.1, value, t);
 			}
 
@@ -413,6 +416,7 @@ impl Keyframes {
 			Iterations::Infinite => "infinite".to_owned(),
 			Iterations::Count(count) => count.to_string(),
 		};
+
 		let animation = format!(
 			"{name} {}ms {} {}ms {iterations}{}",
 			sequence.duration_ms,

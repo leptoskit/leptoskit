@@ -65,6 +65,7 @@ async fn a_service_serves_its_prefix_health_and_private_routes() {
 		if TcpStream::connect(&address).await.is_ok() {
 			break;
 		}
+
 		tokio::time::sleep(Duration::from_millis(20)).await;
 	}
 

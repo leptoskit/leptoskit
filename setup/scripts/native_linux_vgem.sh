@@ -24,21 +24,26 @@ attempts="${NATIVE_APT_ATTEMPTS:-3}"
 # so the update is attempted again after a pause.
 ensure_package_known() {
 	local attempt
+
 	apt-cache show "$package" >/dev/null 2>&1 && return 0
+
 	for attempt in $(seq 1 "$attempts"); do
 		if sudo apt-get -o Acquire::Retries=5 update; then
 			if apt-cache show "$package" >/dev/null 2>&1; then
 				return 0
 			fi
 			echo "Kernel $kernel has no $package package; this runner image cannot provide vgem" >&2
+
 			return 1
 		fi
+
 		if [ "$attempt" -lt "$attempts" ]; then
 			echo "apt update attempt $attempt of $attempts failed; retrying" >&2
 			sleep $((attempt * ${NATIVE_APT_RETRY_DELAY:-30}))
 		fi
 	done
 	echo "Could not update apt's lists to find $package after $attempts attempts" >&2
+
 	return 1
 }
 
@@ -48,8 +53,10 @@ ensure_package_known() {
 # mirror. Every Ubuntu mirror serves the package at the same `pool/` path.
 candidate_urls() {
 	local uri="$1" path list base _
+
 	if [[ "$uri" != */pool/* ]]; then
 		echo "apt's address for $package has no pool path: $uri" >&2
+
 		return 1
 	fi
 	path="pool/${uri#*/pool/}"
@@ -79,20 +86,25 @@ candidate_urls() {
 download_package() {
 	local deb="$1" uri="" hash="" algorithm digest tool url round urls
 	read -r uri _ _ hash < <(apt-get download --print-uris "$package" | tr -d "'")
+
 	if [ -z "$uri" ] || [ -z "$hash" ]; then
 		echo "apt gave no download address and hash for $package" >&2
+
 		return 1
 	fi
 	algorithm="${hash%%:*}"
 	digest="${hash#*:}"
 	tool="$(checksum_tool "$algorithm")"
 	mapfile -t urls < <(candidate_urls "$uri" | awk '!seen[$0]++')
+
 	if [ "${#urls[@]}" -eq 0 ]; then
 		return 1
 	fi
+
 	for round in 1 2; do
 		for url in "${urls[@]}"; do
 			echo "Fetching $package from $url (round $round)" >&2
+
 			if curl --fail --location --silent --show-error --connect-timeout 15 \
 				--speed-limit 1048576 --speed-time 20 --output "$deb" "$url"; then
 				if echo "$digest  $deb" | "$tool" --check --status; then
@@ -103,6 +115,7 @@ download_package() {
 		done
 	done
 	echo "No mirror delivered $package for kernel $kernel" >&2
+
 	return 1
 }
 
@@ -113,6 +126,7 @@ checksum_tool() {
 	SHA256) echo sha256sum ;;
 	*)
 		echo "apt recorded an unexpected $1 hash for $package" >&2
+
 		return 1
 		;;
 	esac
@@ -123,17 +137,21 @@ checksum_tool() {
 collect_modules() {
 	local tree="$1/lib/modules/$kernel" pending=(vgem) name file dependency dependencies
 	mkdir -p "$modules"
+
 	while [ "${#pending[@]}" -gt 0 ]; do
 		name="${pending[0]}"
 		pending=("${pending[@]:1}")
 		# Module names use underscores; some of their files use dashes.
 		file="$(find "$tree" \( -name "$name.ko*" -o -name "${name//_/-}.ko*" \) -print -quit)"
+
 		if [ -z "$file" ]; then
 			echo "$package has no $name module" >&2
+
 			return 1
 		fi
 		cp "$file" "$modules/"
 		IFS=',' read -r -a dependencies <<<"$(modinfo -F depends "$file")"
+
 		for dependency in "${dependencies[@]}"; do
 			if [ -n "$dependency" ] && ! modinfo "$dependency" >/dev/null 2>&1 &&
 				[ -z "$(find "$modules" \( -name "$dependency.ko*" -o -name "${dependency//_/-}.ko*" \) -print -quit)" ]; then
@@ -156,6 +174,7 @@ if ! modinfo vgem >/dev/null 2>&1; then
 	shopt -s nullglob
 	kept=("$modules"/vgem.ko*)
 	shopt -u nullglob
+
 	if [ "${#kept[@]}" -eq 0 ]; then
 		work="$(mktemp -d)"
 		trap 'rm -rf "$work"' EXIT
@@ -165,21 +184,25 @@ if ! modinfo vgem >/dev/null 2>&1; then
 			echo "fetched=true" >>"$GITHUB_OUTPUT"
 		fi
 	else
+
 		echo "Using the vgem modules kept for kernel $kernel" >&2
 	fi
 	sudo install -D --mode=0644 --target-directory="/lib/modules/$kernel/updates/leptoskit-vgem" "$modules"/*
 	sudo depmod "$kernel"
 fi
+
 if ! sudo modprobe vgem; then
 	echo "Could not load the vgem module on kernel $kernel" >&2
 	exit 1
 fi
+
 if ! sudo udevadm settle --timeout=60; then
 	echo "udev did not settle within 60 seconds after loading vgem" >&2
 	exit 1
 fi
 shopt -s nullglob
 devices=(/dev/dri/*)
+
 if [ "${#devices[@]}" -eq 0 ]; then
 	echo "vgem loaded on kernel $kernel but created no /dev/dri device" >&2
 	exit 1

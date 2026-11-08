@@ -16,13 +16,16 @@ fn finished(request: u32, permit: tokio::sync::OwnedSemaphorePermit) -> Finished
 async fn queued_and_current_replies_still_occupy_the_action_limit() {
 	let admission = Arc::new(tokio::sync::Semaphore::new(MAX_ACTIONS));
 	let (sender, mut receiver) = mpsc::channel(MAX_ACTIONS);
+
 	for request in 0..MAX_ACTIONS as u32 {
 		let permit = Arc::clone(&admission).try_acquire_owned().unwrap();
 		assert!(sender.send(finished(request, permit)).await.is_ok());
 	}
+
 	assert!(Arc::clone(&admission).try_acquire_owned().is_err());
 	let current = receiver.recv().await.unwrap();
 	assert!(Arc::clone(&admission).try_acquire_owned().is_err());
+
 	drop(current);
 	assert_eq!(admission.available_permits(), 1);
 	drop(receiver);

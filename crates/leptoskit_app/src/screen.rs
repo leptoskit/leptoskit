@@ -80,9 +80,11 @@ pub fn screen(shell: Shell) -> Element {
 				),
 		)
 		.child(billing(shell));
+
 	for installation in account.installations {
 		page = page.child(installation_card(shell, &installation));
 	}
+
 	page.child(View().class(CARD)
         .child(Heading(2,"Connect customer-owned infrastructure").class("text-xl font-semibold"))
         .child(TextInput().placeholder("Project ID from infra.name").accessibility_label("Project ID").test_id("project").on_change(move|value|shell.project.set(value.into())))
@@ -149,6 +151,7 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 	let plan_project = project.clone();
 	let read_project = project.clone();
 	let token_project = project.clone();
+
 	let metrics_project = project.clone();
 	let mut card = View()
 		.class(CARD)
@@ -172,6 +175,7 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 			})
 			.class(QUIET),
 		);
+
 	if matches!(i.ownership, Ownership::Customer) {
 		card = card.child(
 			View()
@@ -190,6 +194,7 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 				})),
 		);
 	}
+
 	card=card.child(TextInput().placeholder("Image tag or Git commit").accessibility_label("Release version").on_change(move|v|shell.version.set(v.into())))
         .child(View().class("flex-row items-center gap-2").child(Checkbox(shell.setup.get()).accessibility_label("First release").on_toggle(move|value|shell.setup.set(value))).child(Text("First release")).child(Checkbox(shell.maintenance.get()).accessibility_label("Maintenance").on_toggle(move|value|shell.maintenance.set(value))).child(Text("Maintenance")))
         .child(View().class("flex-row flex-wrap gap-2")
@@ -203,6 +208,7 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 		.as_array()
 		.map(Vec::as_slice)
 		.unwrap_or_default();
+
 	if let Some(plan) = operations
 		.iter()
 		.find(|o| o["project"] == project && o["intent"]["action"]["kind"] == "plan")
@@ -220,6 +226,7 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 					}),
 			);
 	}
+
 	for operation in operations
 		.iter()
 		.filter(|o| o["project"] == project)
@@ -240,9 +247,11 @@ fn installation_card(shell: Shell, i: &Installation) -> Element {
 fn measurements(shell: Shell) -> Element {
 	let value = shell.measurement.get();
 	let mut view = View().class("gap-2");
+
 	if value.is_null() {
 		return view;
 	}
+
 	view = view.child(
 		Text(format!(
 			"Reporting instances: {} · stale: {}",
@@ -250,6 +259,7 @@ fn measurements(shell: Shell) -> Element {
 		))
 		.class(QUIET),
 	);
+
 	for series in value["series"]
 		.as_array()
 		.map(Vec::as_slice)
@@ -264,6 +274,7 @@ fn measurements(shell: Shell) -> Element {
 			.iter()
 			.filter_map(|w| w["count"].as_u64())
 			.fold(0u64, u64::saturating_add);
+
 		view = view.child(
 			Text(format!(
 				"{} · {} · {} · {} samples · {}",

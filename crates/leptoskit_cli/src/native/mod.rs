@@ -25,6 +25,7 @@ mod manifest;
 mod platforms;
 mod project;
 mod quest;
+
 mod registry;
 mod watch;
 
@@ -271,6 +272,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	};
 
 	let (config, root) = LeptoskitConfig::load()?;
+
 	if matches!(target, Target::Wearos | Target::Watchos) {
 		ensure_target_enabled(&config, target)?;
 		registry::enforce_required(&config, target, &[], &[])?;
@@ -281,6 +283,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		} else {
 			leptoskit_config::NativeTarget::Watchos
 		};
+
 		watch::scaffold(&root, &config, native)?;
 		write_capabilities(
 			&root
@@ -289,19 +292,24 @@ pub fn run(command: NativeCommand) -> Result<()> {
 				.join("capabilities.json"),
 			&contract,
 		)?;
+
 		for warning in registry::optional_warnings(&config, target, &[], &[]) {
 			eprintln!("{warning}");
 		}
+
 		if build {
 			return watch::build(target);
 		}
+
 		println!(
 			"prepared experimental {} host stubs under hosts/{}",
 			target.platform(),
 			target.platform()
 		);
+
 		return Ok(());
 	}
+
 	let ohos_ndk = check_host(&config, target, release)?;
 	let _guard = lock::acquire(&root)?;
 	let plugins = crate::build::resolve_plugins(&config)?;
@@ -393,8 +401,10 @@ fn run_bundle(out: &str, target: Option<Target>) -> Result<()> {
 		(Vec::new(), Vec::new())
 	} else {
 		let registry = registry::resolve(&root, &config, target)?;
+
 		(registry.plugins, registry.missing)
 	};
+
 	let output = root.join(out);
 	let contract = bundle(
 		&root, &config, &plugins, &missing, target, true, None, &output,
@@ -661,6 +671,7 @@ pub(crate) fn install_ios_pods(root: &Path) -> Result<()> {
 			 https://cocoapods.org and run `leptoskit doctor`"
 		)
 		}
+
 		Err(error) => {
 			return Err(error).context("could not run `pod install`");
 		}
@@ -702,6 +713,7 @@ fn ios_build(root: &Path, target: Target, release: bool) -> Command {
 	} else {
 		"ARCHS=arm64"
 	};
+
 	// Pods integrate the project into a workspace, which the build uses
 	// instead of the project itself.
 	let container: [&str; 2] = if ios_podfile(root).is_some() {
@@ -709,6 +721,7 @@ fn ios_build(root: &Path, target: Target, release: bool) -> Command {
 	} else {
 		["-project", ".leptoskit/ios/Host.xcodeproj"]
 	};
+
 	// Naming the destination keeps xcodebuild from printing every one it
 	// knows when the scheme leaves the choice open.
 	let destination = if matches!(target, Target::Ios) {
@@ -953,6 +966,7 @@ fn write_assets(
 	if let Some(provenance) = &config.codepush.provenance {
 		update_config["provenance"] = serde_json::to_value(provenance)?;
 	}
+
 	std::fs::write(
 		assets.join("codepush.json"),
 		serde_json::to_vec_pretty(&update_config)?,
@@ -1360,6 +1374,7 @@ mod tests {
 			ContractCompatibility::Incomplete
 		);
 		config.native.required_plugins.push("http".into());
+
 		assert!(guest(&config).verify_guest(&host).is_err());
 		config.native.required_plugins.clear();
 		config.native.optional_plugins.push("http".into());
@@ -1385,6 +1400,7 @@ mod tests {
 			required.optional,
 			vec!["plugin.clipboard", "plugin.haptics"]
 		);
+
 		assert_eq!(required.protocol.bridge, leptoskit_bridge::VERSION);
 	}
 
@@ -1418,6 +1434,7 @@ mod tests {
 		)
 		.unwrap();
 		assert_ne!(ios.shell, android.shell);
+
 		assert_ne!(
 			ios.host.as_ref().unwrap().platform,
 			android.host.as_ref().unwrap().platform
@@ -1891,6 +1908,7 @@ mod tests {
 		);
 		let updates: serde_json::Value =
 			serde_json::from_slice(&std::fs::read(mobile.join("codepush.json")).unwrap()).unwrap();
+
 		assert_eq!(updates["enabled"], true);
 		assert_eq!(updates["app"], "demo");
 		assert!(updates.get("provenance").is_none(), "no policy, no table");
@@ -2455,6 +2473,7 @@ mod tests {
 
 		config.native.targets = Vec::new();
 		let inferred = legacy_target(root, &config);
+
 		if cfg!(target_os = "macos") {
 			assert_eq!(inferred, Target::IosSimulator);
 			std::fs::create_dir_all(root.join("macos")).unwrap();
@@ -2763,6 +2782,7 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 		);
 
 		let sdk = fixture.directory.path().join("sdk");
+
 		for version in ["25.0.0", "27.1.1"] {
 			let ndk = sdk.join("ndk").join(version);
 			std::fs::create_dir_all(&ndk).unwrap();
@@ -2793,6 +2813,7 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			host_dir(root, Target::Android)
 		);
 		assert_eq!(Platform::Quest.feature(), Some("android"));
+
 		let mut config = LeptoskitConfig::default();
 		config.native.targets = vec![leptoskit_config::NativeTarget::Quest];
 		assert_eq!(legacy_target(root, &config), Target::Quest);
@@ -2821,6 +2842,7 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 		config.native.targets = vec![leptoskit_config::NativeTarget::Wearos];
 		assert_eq!(legacy_target(&root, &config), Target::Wearos);
 		config.native.targets = vec![leptoskit_config::NativeTarget::Watchos];
+
 		assert_eq!(legacy_target(&root, &config), Target::Watchos);
 		let _ = std::fs::remove_dir_all(&root);
 	}

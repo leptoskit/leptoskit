@@ -33,6 +33,7 @@ public final class CaptureActivity extends Activity {
         EditText name = new EditText(this);
         name.setSingleLine(true);
         name.setHint("Your name");
+
         name.setContentDescription("name");
         layout.addView(name);
         status = new TextView(this);

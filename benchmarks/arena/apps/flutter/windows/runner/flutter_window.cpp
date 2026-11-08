@@ -26,6 +26,7 @@ bool FlutterWindow::OnCreate() {
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
+
   RegisterPlugins(flutter_controller_->engine());
 
   echo_channel_ =
@@ -50,9 +51,11 @@ bool FlutterWindow::OnCreate() {
             result->Success(flutter::EncodableValue(*value + 1));
             return;
           }
+
           result->Error("bad_argument", "addOne takes an integer");
           return;
         }
+
         result->NotImplemented();
       });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
@@ -71,6 +74,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   echo_channel_ = nullptr;
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -87,6 +91,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
                                                       lparam);
+
     if (result) {
       return *result;
     }

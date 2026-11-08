@@ -341,6 +341,7 @@ mod tests {
 		assert_eq!(record.validate(), Err(Error::TooLarge));
 		record.target = "tests".into();
 		record.message = "x".repeat(MAX_MESSAGE_BYTES + 1);
+
 		assert_eq!(record.validate(), Err(Error::TooLarge));
 		record.message.clear();
 		record.fields = (0..=MAX_FIELDS)

@@ -80,6 +80,7 @@ struct MacMotionTests {
         let animation = try #require(layer.animation(forKey: "lk.keyframes.transform") as? CAKeyframeAnimation)
         #expect(animation.repeatCount == .infinity)
         #expect(layer.animation(forKey: "lk.keyframes.opacity") == nil)
+
         // Halfway through, the widget has turned half a turn about its center.
         let values = try #require(animation.values as? [NSValue])
         let half = apply(values[values.count / 2].caTransform3DValue, .zero)
@@ -104,6 +105,7 @@ struct MacMotionTests {
         #expect(opacity.fromValue as? Float == 0)
         #expect(opacity.toValue as? Float == 0.8)
         #expect(opacity.fillMode == .backwards)
+
         #expect(layer.animation(forKey: "lk.presence.transform") == nil)
     }
 

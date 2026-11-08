@@ -24,6 +24,7 @@ const TIMEOUT_MS = 15000;
 /** Busy-waits on the JS thread, the thread React Native runs app logic on. */
 function block(ms: number): void {
 	const end = performance.now() + ms;
+
 	while (performance.now() < end) {
 		// Spin.
 	}
@@ -65,8 +66,10 @@ export function Busy() {
 						`the scroll stopped at ${reportedOffset.current}, expected ${TARGET_OFFSET}`,
 					);
 				}
+
 				await nextFrame();
 			}
+
 			clearInterval(interval);
 			interval = null;
 			setPhase("done");

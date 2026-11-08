@@ -130,6 +130,7 @@ pub fn navigate() {
 
 	if href.is_empty() {
 		problem("Enter a route to navigate to, such as /settings.");
+
 		return;
 	}
 

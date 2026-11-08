@@ -1151,6 +1151,7 @@ fn expand_channel(
 		Meta::List(list) => channel::krate(list.tokens.clone())?,
 		_ => None,
 	};
+
 	let krate = args
 		.krate
 		.clone()
@@ -1175,6 +1176,7 @@ fn expand_channel(
 			continue;
 		};
 		let ident = ident.unraw().to_string();
+
 		let default_name = match &rename_all {
 			Some(case) => {
 				Converter::new()
@@ -1184,6 +1186,7 @@ fn expand_channel(
 			}
 			None => ident.clone(),
 		};
+
 		let (wire_name, _) = serde_field(&field.attrs, &default_name)?;
 		fields.push(LitStr::new(&wire_name, Span::call_site()));
 	}
@@ -1249,6 +1252,7 @@ fn serde_rename_all(attrs: &[Attribute]) -> syn::Result<Option<Case<'static>>> {
 			}
 
 			let value = string_value(&pair.value, "rename_all")?;
+
 			let case = match value.value().as_str() {
 				"lowercase" => Case::Flat,
 				"UPPERCASE" => Case::UpperFlat,
@@ -1266,6 +1270,7 @@ fn serde_rename_all(attrs: &[Attribute]) -> syn::Result<Option<Case<'static>>> {
 					));
 				}
 			};
+
 			return Ok(Some(case));
 		}
 	}

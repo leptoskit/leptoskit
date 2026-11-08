@@ -34,18 +34,22 @@ class NativeControlsTest {
                 control.performClick()
                 assertEquals(listOf(6 to "{\"checked\":true}"), events)
                 assertFalse("Unacknowledged changes must not override guest state", control.isChecked)
+
                 events.clear()
                 renderer.render(RenderBatch(null, listOf(RenderMutation.UpdateProps(1, props("{\"checked\":true}")))))
                 assertTrue(events.isEmpty())
                 control.performClick()
+
                 if (kind == "radio") {
                     assertTrue(control.isChecked)
                     assertTrue(events.isEmpty())
                 } else {
                     assertEquals(listOf(6 to "{\"checked\":false}"), events)
                 }
+
                 renderer.render(RenderBatch(null, listOf(RenderMutation.UpdateProps(1, props("{\"checked\":false,\"enabled\":false}")))))
                 assertFalse(control.isEnabled)
+
                 if (kind != "switch") {
                     control.layout(0, 0, 40, 40)
                     val bitmap = android.graphics.Bitmap.createBitmap(40, 40, android.graphics.Bitmap.Config.ARGB_8888)

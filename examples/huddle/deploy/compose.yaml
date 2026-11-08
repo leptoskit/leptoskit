@@ -23,6 +23,7 @@ services:
     # in front of it.
     ports:
       - "127.0.0.1:3000:3000"
+
     environment:
       AUTH_ENCRYPTION_KEYS: ${AUTH_ENCRYPTION_KEYS:?set AUTH_ENCRYPTION_KEYS}
     # Nothing in the image changes while it runs; the database lives on a volume.

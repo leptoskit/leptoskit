@@ -129,6 +129,7 @@ pub(crate) mod loopback {
 	impl Drop for Server {
 		fn drop(&mut self) {
 			self.stop.store(true, Ordering::SeqCst);
+
 			if let Some(thread) = self.thread.take() {
 				let _ = thread.join();
 			}
@@ -143,6 +144,7 @@ pub(crate) mod loopback {
 		deadline: Instant,
 	) {
 		let mut next = replies.next();
+
 		while !stop.load(Ordering::SeqCst) {
 			let Some(reply) = next.take() else {
 				break;
@@ -168,8 +170,10 @@ pub(crate) mod loopback {
 			if stop.load(Ordering::SeqCst) || Instant::now() > deadline {
 				return None;
 			}
+
 			match listener.accept() {
 				Ok((stream, _)) => return Some(stream),
+
 				Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
 					std::thread::sleep(Duration::from_millis(2));
 				}
@@ -182,16 +186,21 @@ pub(crate) mod loopback {
 		stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
 		let mut buffer = Vec::new();
 		let mut chunk = [0_u8; 4096];
+
 		let header_end = loop {
 			let read = stream.read(&mut chunk).ok()?;
+
 			if read == 0 {
 				return None;
 			}
+
 			buffer.extend_from_slice(&chunk[..read]);
+
 			if let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
 				break position;
 			}
 		};
+
 		let head = String::from_utf8_lossy(&buffer[..header_end]);
 		let mut lines = head.split("\r\n");
 		let mut request = lines.next()?.split(' ');
@@ -207,13 +216,17 @@ pub(crate) mod loopback {
 			.and_then(|(_, value)| value.parse::<usize>().ok())
 			.unwrap_or_default();
 		let mut body = buffer[header_end + 4..].to_vec();
+
 		while body.len() < expected {
 			let read = stream.read(&mut chunk).ok()?;
+
 			if read == 0 {
 				break;
 			}
+
 			body.extend_from_slice(&chunk[..read]);
 		}
+
 		Some(Request {
 			method,
 			path,
@@ -236,6 +249,7 @@ pub(crate) mod loopback {
 			500 => "Internal Server Error",
 			_ => "Status",
 		};
+
 		let mut head = format!(
 			"HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: \
 			 {}\r\nConnection: close\r\n",
@@ -243,9 +257,11 @@ pub(crate) mod loopback {
 			reason,
 			reply.body.len()
 		);
+
 		for (name, value) in reply.headers {
 			let _ = write!(head, "{name}: {value}\r\n");
 		}
+
 		head.push_str("\r\n");
 		let _ = stream.write_all(head.as_bytes());
 		let _ = stream.write_all(reply.body.as_bytes());

@@ -115,6 +115,7 @@ fn replacing_the_guest_drops_old_timers_and_keeps_the_capability() {
 	assert!(host.next_timer_deadline().is_none());
 	std::thread::sleep(Duration::from_millis(30));
 	assert!(!host.pump_timers().expect("pump"));
+
 	assert!(
 		host.plugins().take_result(old).is_err(),
 		"the old call cannot be revived"
@@ -184,6 +185,7 @@ fn a_rejected_timer_wakes_the_guest_without_waiting_for_a_deadline() {
 	});
 	host.start(100.0, 100.0).expect("start");
 	let timer = host.plugins().resolve(TIMER_PLUGIN).expect("timer plugin");
+
 	let id = host
 		.plugins()
 		.submit(timer, SLEEP, Bytes::new())
@@ -273,6 +275,7 @@ fn compiled_rust_guest_reports_missing_timer_as_an_error() {
 		EventOutcome::Handled
 	);
 	assert!(host.plugins().next_request().is_none());
+
 	assert!(host.next_timer_deadline().is_none());
 }
 
@@ -302,9 +305,11 @@ fn guest_result<T>(
 #[test]
 fn a_full_request_batch_does_not_delay_later_short_timers() {
 	let mut host = host();
+
 	for _ in 0..99 {
 		submit(&mut host, 60_000);
 	}
+
 	let short = submit(&mut host, 0);
 	let woke = host.pump_timers().expect("route all admitted timers");
 	assert!(
@@ -316,12 +321,14 @@ fn a_full_request_batch_does_not_delay_later_short_timers() {
 			.next_timer_deadline()
 			.is_some_and(|delay| delay <= Duration::from_millis(10))
 	);
+
 	if !woke {
 		assert!(pump_until_due(
 			&mut host,
 			Instant::now() + Duration::from_secs(1)
 		));
 	}
+
 	assert!(
 		host.plugins()
 			.take_result(short)
@@ -336,9 +343,11 @@ fn a_full_cancellation_batch_does_not_leave_long_timers_waiting() {
 	let mut host = host();
 	let calls: Vec<_> = (0..100).map(|_| submit(&mut host, 60_000)).collect();
 	host.pump_timers().expect("route");
+
 	for id in calls {
 		host.plugins().cancel(id).expect("cancel");
 	}
+
 	host.pump_timers().expect("drain every cancellation");
 	assert!(host.next_timer_deadline().is_none());
 	assert!(host.plugins().next_cancelled().is_none());
@@ -354,11 +363,14 @@ fn exhausting_the_pump_budget_requests_one_more_turn_then_returns_to_the_deadlin
 	host.enable_timers().expect("timers");
 	host.start(100.0, 100.0).expect("start");
 	let mut last = None;
+
 	for _ in 0..600 {
 		last = Some(submit(&mut host, 60_000));
 	}
+
 	host.pump_timers().expect("bounded first turn");
 	assert_eq!(host.next_timer_deadline(), Some(Duration::ZERO));
+
 	host.pump_timers().expect("remaining queued work");
 	assert!(host.plugins().next_request().is_none());
 	assert!(
@@ -385,13 +397,17 @@ fn cancelled_timers_release_capacity_before_replacements_are_admitted() {
 	host.start(100.0, 100.0).expect("start");
 	let old: Vec<_> = (0..256).map(|_| submit(&mut host, 60_000)).collect();
 	host.pump_timers().expect("fill the scheduler");
+
 	for id in old {
 		host.plugins().cancel(id).expect("cancel old timer");
 	}
+
 	let replacements: Vec<_> = (0..256).map(|_| submit(&mut host, 60_000)).collect();
+
 	host.pump_timers().expect("cancel before replacing");
 	// A full final batch may request one extra bounded turn.
 	host.pump_timers().expect("settle remaining routing");
+
 	for id in replacements {
 		assert!(
 			host.plugins()
@@ -402,5 +418,6 @@ fn cancelled_timers_release_capacity_before_replacements_are_admitted() {
 		);
 		assert!(host.cancel_timer(id), "every replacement was scheduled");
 	}
+
 	assert!(host.next_timer_deadline().is_none());
 }

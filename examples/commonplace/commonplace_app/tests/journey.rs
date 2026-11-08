@@ -39,6 +39,7 @@ impl Transport for InProcess {
 			if request.body.is_some() {
 				builder = builder.header("content-type", "application/json");
 			}
+
 			let body = request.body.map_or_else(Body::empty, Body::from);
 			let response = router
 				.oneshot(builder.body(body).map_err(|error| error.to_string())?)
@@ -80,10 +81,12 @@ async fn until(tester: &mut WidgetTester, finder: &Finder) {
 	for _ in 0..400 {
 		tokio::time::sleep(Duration::from_millis(5)).await;
 		tester.pump();
+
 		if tester.find(finder).is_ok() {
 			return;
 		}
 	}
+
 	panic!("{finder:?} never appeared:\n{}", tester.tree());
 }
 

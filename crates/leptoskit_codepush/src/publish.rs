@@ -237,10 +237,12 @@ fn merge_approvals(
 ) -> Result<bool, CodePushError> {
 	let key = ObjectKey::approvals_of(manifest);
 	let conflict = || CodePushError::RegistryConflict(key.as_str().to_owned());
+
 	let remote = match bucket.get(&key)? {
 		Some(bytes) => Some(ReleaseApprovals::from_slice(&bytes).map_err(|_| conflict())?),
 		None => None,
 	};
+
 	let present = remote.is_some();
 	let mut merged = remote.unwrap_or_else(ReleaseApprovals::empty);
 

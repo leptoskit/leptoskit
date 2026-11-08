@@ -187,6 +187,7 @@ impl Tailwind {
 		}
 
 		let parsed = Self::parse_uncached(classes)?;
+
 		if classes.len() > PARSED_MAX_BYTES {
 			return Ok(parsed);
 		}

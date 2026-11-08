@@ -32,6 +32,7 @@ const STATIC_APPS = ["react", "react-native-web", "vanilla-js"];
 async function pathExists(path: string): Promise<boolean> {
 	try {
 		await Deno.stat(path);
+
 		return true;
 	} catch {
 		return false;
@@ -46,6 +47,7 @@ async function buildLeptoskitApp(cli: string, out: string): Promise<void> {
 		args: ["-c", `"${cli}" build --release --platform web --out dist`],
 		cwd: fixture,
 	}).outputSync();
+
 	if (!status.success) {
 		fail(
 			`leptoskit fixture build failed:\n${
@@ -53,27 +55,33 @@ async function buildLeptoskitApp(cli: string, out: string): Promise<void> {
 			}`,
 		);
 	}
+
 	void out;
 }
 
 async function buildFlutterApp(): Promise<boolean> {
 	const fixture = `${RUNTIME_APPS_ROOT}/flutter`;
 	const which = new Deno.Command("which", { args: ["flutter"] }).outputSync();
+
 	if (!which.success) {
 		log("flutter not found; skipping the flutter web app");
+
 		return false;
 	}
+
 	await syncBenchGlue([`${fixture}/web`]);
 	log("building the flutter web app");
 	const status = new Deno.Command("flutter", {
 		args: ["build", "web", "--release"],
 		cwd: fixture,
 	}).outputSync();
+
 	if (!status.success) {
 		fail(
 			`flutter web build failed:\n${new TextDecoder().decode(status.stderr)}`,
 		);
 	}
+
 	return true;
 }
 
@@ -99,11 +107,14 @@ function runRuntimeBench(
 			String(runs),
 		],
 	}).outputSync();
+
 	if (!command.success) {
 		console.log(new TextDecoder().decode(command.stdout));
 		console.error(new TextDecoder().decode(command.stderr));
+
 		return false;
 	}
+
 	return true;
 }
 
@@ -126,12 +137,14 @@ async function main(): Promise<void> {
 			: await Deno.stat(`${RUNTIME_APPS_ROOT}/${app}/vendor`)
 				.then(() => true)
 				.catch(() => false);
+
 		if (!vendor) {
 			log(
 				`${app} has no vendor bundle; run scripts/vendor.sh first (skipping)`,
 			);
 			continue;
 		}
+
 		const out = await Deno.makeTempFile({ suffix: ".json" });
 		if (
 			await runRuntimeBench(app, `${RUNTIME_APPS_ROOT}/${app}`, out, runs)
@@ -146,6 +159,7 @@ async function main(): Promise<void> {
 	if (!skipBuild) {
 		await buildLeptoskitApp(cli, `${RUNTIME_APPS_ROOT}/leptoskit/dist`);
 	}
+
 	const out = await Deno.makeTempFile({ suffix: ".json" });
 	if (
 		await runRuntimeBench(
@@ -184,6 +198,7 @@ async function main(): Promise<void> {
 	if (runtimeRuns.length === 0) {
 		fail("no runtime benchmark completed");
 	}
+
 	const merged: BenchmarkRun = {
 		schema: 1,
 		subject: "external-runtime",
@@ -224,6 +239,7 @@ async function main(): Promise<void> {
 				cli,
 			],
 		}).outputSync();
+
 		if (!buildCommand.success) {
 			fail(
 				`build benchmark failed:\n${
@@ -231,6 +247,7 @@ async function main(): Promise<void> {
 				}`,
 			);
 		}
+
 		log(`wrote ${buildOut}`);
 	}
 
@@ -247,12 +264,15 @@ async function main(): Promise<void> {
 		// The size table refreshes alongside the rest when its results exist,
 		// so `benchmark:docs` regenerates every committed table in one pass.
 		const sizes = `${BENCHMARKS_ROOT}/results/sizes.json`;
+
 		if (existsSync(sizes)) {
 			docsArguments.push("--sizes", sizes);
 		}
+
 		const docs = new Deno.Command(Deno.execPath(), {
 			args: docsArguments,
 		}).outputSync();
+
 		if (!docs.success) {
 			fail(
 				`docs update failed:\n${new TextDecoder().decode(docs.stderr)}`,

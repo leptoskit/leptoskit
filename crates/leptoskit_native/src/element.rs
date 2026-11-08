@@ -257,6 +257,7 @@ impl Element {
 				} else {
 					button_ancestor
 				};
+
 			pending.extend(
 				element
 					.children

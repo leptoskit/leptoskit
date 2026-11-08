@@ -166,6 +166,7 @@ pub fn load(directory: &Path) -> Result<Vec<Migration>, MigrationError> {
 				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 				Err(source) => return Err(MigrationError::Read { path, source }),
 			}
+
 			let path = directory.join(name).join("replaces.json");
 			match std::fs::read_to_string(&path) {
 				Ok(replaces) => {
@@ -181,6 +182,7 @@ pub fn load(directory: &Path) -> Result<Vec<Migration>, MigrationError> {
 				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 				Err(source) => return Err(MigrationError::Read { path, source }),
 			}
+
 			Ok(migration)
 		})
 		.collect()
@@ -215,12 +217,15 @@ pub struct Release<'a> {
 pub fn parse_release(line: &str) -> Option<Release<'_>> {
 	let rest = line.strip_prefix("# release ")?;
 	let (rest, snapshot) = rest.split_once(" snapshot ")?;
+
 	let (version, source) = match rest.split_once(" (") {
 		Some((version, source)) if source.ends_with(')') => {
 			(version, Some(&source[..source.len() - 1]))
 		}
+
 		_ => (rest, None),
 	};
+
 	(!version.is_empty() && !snapshot.is_empty()).then_some(Release {
 		version,
 		source,
@@ -278,6 +283,7 @@ pub(crate) fn pending<'a>(
 					return Err(MigrationError::Changed { name: name.clone() });
 				}
 			}
+
 			None if consolidated.is_some() => {}
 			None => return Err(MigrationError::Unknown { name: name.clone() }),
 		}
@@ -332,6 +338,7 @@ pub(crate) fn reversing(
 	steps: usize,
 ) -> Result<Vec<Migration>, MigrationError> {
 	let _ = pending(applied, migrations)?;
+
 	if steps == 0
 		|| steps > applied.len()
 		|| applied.len() > migrations.len()

@@ -94,12 +94,14 @@ fn render(props: &Props, cx: &mut Context) -> Result<Element, String> {
 	let height = props.number_or("height", 180.0)?.clamp(80.0, 480.0) as f32;
 
 	let mut series = Vec::new();
+
 	if props.has("values") {
 		series.push(Series {
 			name: props.text_or("name", ""),
 			values: props.numbers("values")?,
 		});
 	}
+
 	for data in props.data("Series") {
 		series.push(Series {
 			name: data.text_or("name", ""),
@@ -110,6 +112,7 @@ fn render(props: &Props, cx: &mut Context) -> Result<Element, String> {
 	check(&series, &labels, cx)?;
 
 	let theme = cx.theme().clone();
+
 	let plot = match kind.as_str() {
 		"bar" => bars(cx, &theme, &series, &labels, &format, height)?,
 		// Without vector paths, change over time still reads as columns, and
@@ -135,9 +138,11 @@ fn render(props: &Props, cx: &mut Context) -> Result<Element, String> {
 		.class("flex-col gap-2 min-w-0")
 		.role(Role::Img)
 		.aria_label(summary(props, &series, &labels, &format));
+
 	if props.has("title") {
 		chart = chart.child(Text(props.text("title")?).class("text-base font-semibold"));
 	}
+
 	if series.len() > 1 && !matches!(kind.as_str(), "pie" | "donut") {
 		chart = chart.child(legend(&theme, &series));
 	}
@@ -149,18 +154,22 @@ fn check(series: &[Series], labels: &[String], cx: &Context) -> Result<(), Strin
 	let Some(first) = series.first() else {
 		return Err("needs `values`, or <Series> tags inside it".to_owned());
 	};
+
 	if series.len() > 8 {
 		return Err("draws at most 8 series; fold the rest into one, such as \"Other\"".to_owned());
 	}
+
 	if series
 		.iter()
 		.any(|series| series.values.len() != first.values.len())
 	{
 		return Err("every series needs the same number of values".to_owned());
 	}
+
 	if first.values.is_empty() {
 		return Err("has no values".to_owned());
 	}
+
 	if !labels.is_empty() && labels.len() != first.values.len() {
 		return Err(format!(
 			"has {} labels for {} values",
@@ -168,6 +177,7 @@ fn check(series: &[Series], labels: &[String], cx: &Context) -> Result<(), Strin
 			first.values.len()
 		));
 	}
+
 	if series
 		.iter()
 		.flat_map(|series| &series.values)
@@ -178,6 +188,7 @@ fn check(series: &[Series], labels: &[String], cx: &Context) -> Result<(), Strin
 
 	let points: usize = series.iter().map(|series| series.values.len()).sum();
 	let limit = cx.ui.limits.max_chart_points;
+
 	if points > limit {
 		return Err(format!("draws at most {limit} points; this has {points}"));
 	}
@@ -188,12 +199,15 @@ fn check(series: &[Series], labels: &[String], cx: &Context) -> Result<(), Strin
 /// What the chart shows, for screen readers.
 fn summary(props: &Props, series: &[Series], labels: &[String], format: &str) -> String {
 	let mut text = props.text_or("title", "Chart");
+
 	for series in series {
 		text.push_str(". ");
+
 		if !series.name.is_empty() {
 			text.push_str(&series.name);
 			text.push_str(": ");
 		}
+
 		let items = series
 			.values
 			.iter()
@@ -207,10 +221,12 @@ fn summary(props: &Props, series: &[Series], labels: &[String], format: &str) ->
 			})
 			.collect::<Vec<_>>();
 		text.push_str(&items.join(", "));
+
 		if series.values.len() > 24 {
 			text.push_str(", …");
 		}
 	}
+
 	text
 }
 
@@ -226,6 +242,7 @@ fn compact(value: f64, format: &str) -> String {
 	} else {
 		return shown(value, format);
 	};
+
 	let number = format_number((scaled * 10.0).round() / 10.0);
 
 	match format {
@@ -271,6 +288,7 @@ fn layer(view_box: ViewBox, theme: &Theme, role: &str, opacity: Option<u8>) -> E
 		Some(opacity) => theme.expand(&format!("text-{role}/{opacity}")),
 		None => theme.class("text", role),
 	};
+
 	Vector(view_box)
 		.scaling(VectorScaling::Stretch)
 		.class("absolute inset-0")
@@ -295,6 +313,7 @@ fn domain(series: &[Series]) -> (f64, f64) {
 	let (low, high) = values.fold((0.0_f64, 0.0_f64), |(low, high), value| {
 		(low.min(value), high.max(value))
 	});
+
 	if high - low <= 0.0 {
 		(0.0, 1.0)
 	} else {
@@ -314,6 +333,7 @@ fn axis_labels(theme: &Theme, labels: &[String], count: usize, align: &'static s
 			} else {
 				String::new()
 			};
+
 			View().class("flex-1 min-w-0").child(
 				Text(text)
 					.class("text-xs")
@@ -366,6 +386,7 @@ fn bars(
 					(true, true) if low < 0.0 => value / low,
 					_ => 0.0,
 				};
+
 				let bar = View()
 					.class("flex-1 max-w-[24px] min-w-[3px]")
 					.class("rounded-[3px]")
@@ -403,6 +424,7 @@ fn bars(
 					);
 				return group;
 			}
+
 			group = group.children(bars);
 			group
 		});
@@ -413,6 +435,7 @@ fn bars(
 		.class("flex-col min-w-0")
 		.child(percent_height(side(false), high / range))
 		.child(View().class("h-px w-full").class(theme.class("bg", "line")));
+
 	if low < 0.0 {
 		plot = plot.child(percent_height(side(true), -low / range));
 	}
@@ -456,6 +479,7 @@ fn lines(
 	let view_box = ViewBox::new(0.0, -3.0, 100.0, 106.0).map_err(error)?;
 
 	let mut layers = Vec::new();
+
 	if low < 0.0 {
 		let zero = y(0.0);
 		layers.push(
@@ -496,6 +520,7 @@ fn lines(
 		} else {
 			PathData::polyline(points).map_err(error)?
 		};
+
 		layers.push(
 			layer(view_box, theme, &role, None).path(
 				VectorPath::new(line).stroke(
@@ -513,6 +538,7 @@ fn lines(
 	} else {
 		String::new()
 	};
+
 	let muted = theme.class("text", "muted");
 	let ends = View()
 		.class("flex-row justify-between gap-2 min-w-0")
@@ -550,6 +576,7 @@ fn slice(start: f32, end: f32, outer: f32, inner: f32) -> String {
 		let middle = start + 180.0;
 		let first = slice(start, middle, outer, inner);
 		let second = slice(middle, end, outer, inner);
+
 		return format!("{first} {second}");
 	}
 
@@ -589,8 +616,10 @@ fn pie(
 	let gap = if series.values.len() > 1 { 1.2 } else { 0.0 };
 	let mut start = 0.0_f32;
 	let mut slices = Vec::new();
+
 	for (index, value) in series.values.iter().enumerate() {
 		let sweep = (*value / total * 360.0) as f32;
+
 		if sweep > gap {
 			let path = slice(
 				start + gap / 2.0,
@@ -602,8 +631,10 @@ fn pie(
 				VectorPath::new(PathData::parse(&path).map_err(error)?).fill(Paint::CurrentColor),
 			));
 		}
+
 		start += sweep;
 	}
+
 	let drawing = View()
 		.class("relative")
 		.with_style(|style| {
@@ -648,13 +679,17 @@ fn whole(series: &Series) -> Result<f64, String> {
 				.to_owned(),
 		);
 	}
+
 	if series.values.iter().any(|value| *value < 0.0) {
 		return Err("a pie cannot show negative values; use a bar chart".to_owned());
 	}
+
 	let total: f64 = series.values.iter().sum();
+
 	if total <= 0.0 {
 		return Err("a pie needs a total above zero".to_owned());
 	}
+
 	Ok(total)
 }
 

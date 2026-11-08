@@ -24,8 +24,11 @@ struct WidgetTransform: Equatable {
     /// The parts that differ from no transform.
     var parts: WidgetTransformParts {
         var parts: WidgetTransformParts = []
+
         if translateX != WidgetOffset() || translateY != WidgetOffset() { parts.insert(.translate) }
+
         if scaleX != 1 || scaleY != 1 { parts.insert(.scale) }
+
         if rotate != 0 { parts.insert(.rotate) }
 
         return parts
@@ -34,8 +37,11 @@ struct WidgetTransform: Equatable {
     /// This transform with `parts` taken from `other`, as one CSS transform property overrides another.
     func with(_ other: Self, parts: WidgetTransformParts) -> Self {
         var result = self
+
         if parts.contains(.translate) { (result.translateX, result.translateY) = (other.translateX, other.translateY) }
+
         if parts.contains(.scale) { (result.scaleX, result.scaleY) = (other.scaleX, other.scaleY) }
+
         if parts.contains(.rotate) { result.rotate = other.rotate }
 
         return result
@@ -90,6 +96,7 @@ enum WidgetEasing: Equatable {
 
         // The curve's x rises monotonically, so bisection finds the point along it at `time`.
         var (low, high, along) = (CGFloat(0), CGFloat(1), time)
+
         for _ in 0..<24 {
             if bezier(along, x1, x2) < time { low = along } else { high = along }
             along = (low + high) / 2
@@ -164,14 +171,17 @@ struct WidgetKeyframes: Equatable {
 
             if frame.offset >= progress {
                 let span = frame.offset - previous.offset
+
                 guard span > 0 else { return value }
 
                 return mix(previous.value, value, previous.easing.sample((progress - previous.offset) / span))
             }
+
             previous = (frame.offset, value, frame.easing ?? easing)
         }
 
         let span = 1 - previous.offset
+
         guard span > 0 else { return previous.value }
 
         return mix(previous.value, own, previous.easing.sample((progress - previous.offset) / span))
@@ -241,12 +251,15 @@ extension WidgetEasing: Decodable {
 
             return
         }
+
         let keys = try decoder.container(keyedBy: MotionKeys.self)
         let points = try keys.decode([CGFloat].self, forKey: .cubicBezier)
+
         guard points.count == 4 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .cubicBezier, in: keys, debugDescription: "A cubic Bézier has four numbers")
         }
+
         self = .cubicBezier(points[0], points[1], points[2], points[3])
     }
 }
@@ -255,6 +268,7 @@ extension WidgetEasing: Decodable {
 extension WidgetCurve: Decodable {
     init(from decoder: Decoder) throws {
         let keys = try decoder.container(keyedBy: MotionKeys.self)
+
         if keys.contains(.spring) {
             let spring = try keys.nestedContainer(keyedBy: MotionKeys.self, forKey: .spring)
             self = .spring(
@@ -288,6 +302,7 @@ extension WidgetIterations: Decodable {
 
             return
         }
+
         self = .count(try decoder.container(keyedBy: MotionKeys.self).decode(CGFloat.self, forKey: .count))
     }
 }

@@ -46,6 +46,7 @@ fi
 # Target installation belongs to toolchain setup, not a hidden best-effort
 # network operation. Fail before any simulator work if setup is incomplete.
 target_libdir="$("$RUSTC" --print target-libdir --target aarch64-apple-ios-sim)"
+
 if ! compgen -G "$target_libdir/libcore-*.rlib" >/dev/null; then
 	echo "iOS probe requires the installed aarch64-apple-ios-sim Rust target" >&2
 	exit 1
@@ -97,6 +98,7 @@ xcrun simctl install "$udid" "$app"
 # a launch without a verdict is retried; a verdict, pass or fail, is final.
 log="$(mktemp)"
 verdict=""
+
 for attempt in 1 2 3; do
 	# SpringBoard can also deny the launch request after the probe has run
 	# and printed its verdict, so the launch's exit status must not end the
@@ -107,6 +109,7 @@ for attempt in 1 2 3; do
 	verdict="$(tr -d '\r' <"$log" | grep -m1 '^platform probe: ' || true)"
 	[ -n "$verdict" ] && break
 	echo "launch $attempt produced no verdict; relaunching" >&2
+
 	sleep 5
 done
 
@@ -114,6 +117,7 @@ if [ -z "$verdict" ]; then
 	echo "the platform probe never reported a verdict on the iOS simulator" >&2
 	exit 1
 fi
+
 if [ "$verdict" != "platform probe: all probes passed on ios" ]; then
 	echo "a probe failed on the iOS simulator" >&2
 	exit 1

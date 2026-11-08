@@ -950,6 +950,7 @@ fn live_readme(context: &Context<'_>, names: &Names) -> String {
 		} else {
 			"result, err"
 		};
+
 		lines.push(format!(
 			"{result} := client.{live}(ctx{})",
 			arguments(function)

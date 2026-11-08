@@ -762,6 +762,7 @@ mod tests {
 		assert_eq!(report["platform"], "host");
 		assert!(report["error"].is_null());
 		assert_eq!(report["steps"][0]["name"], "test");
+
 		assert_eq!(report["steps"][0]["exit_code"], 0);
 	}
 
@@ -971,6 +972,7 @@ mod tests {
 		args.platform = TestPlatform::Ios;
 		args.device = Some("some-udid".into());
 		let error = run_binary(&args).unwrap_err().to_string();
+
 		if cfg!(target_os = "macos") {
 			assert!(
 				error.contains("--avd is only supported for Android"),
@@ -987,6 +989,7 @@ mod tests {
 		let mut args = host_args(&parent.path().join("artifacts"), &[]);
 		args.platform = TestPlatform::Ios;
 		let error = run_binary(&args).unwrap_err().to_string();
+
 		if cfg!(target_os = "macos") {
 			assert!(error.contains("--device is required"), "{error}");
 		} else {

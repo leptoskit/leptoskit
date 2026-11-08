@@ -37,6 +37,7 @@ impl ArCoreBackend {
 			.then(|| light(session))
 			.flatten();
 		let anchors = self.anchors_of();
+
 		let planes = self.planes_of();
 
 		XrFrame {
@@ -179,6 +180,7 @@ impl ArCoreBackend {
 		let plane = self.planes.get(&(trackable as usize)).map(|known| known.id);
 		// SAFETY: Releases the trackable just acquired.
 		unsafe { (api.ArTrackable_release)(trackable) };
+
 		let (kind, wanted) = match kind {
 			ffi::TRACKABLE_PLANE => (HitKind::Plane, HitTargets::PLANES),
 			ffi::TRACKABLE_DEPTH_POINT => (HitKind::Depth, HitTargets::DEPTH),
@@ -207,6 +209,7 @@ fn remember(
 	if let Some(plane) = known.get(&(trackable as usize)) {
 		// SAFETY: Releases the extra reference; the kept one remains.
 		unsafe { (api.ArTrackable_release)(trackable) };
+
 		return plane.id;
 	}
 
@@ -235,6 +238,7 @@ fn plane(session: &Session, trackable: *mut ffi::Trackable) -> Option<Plane> {
 	if !subsumed.is_null() {
 		// SAFETY: Releases the plane that took this one over.
 		unsafe { (api.ArTrackable_release)(subsumed) };
+
 		return None;
 	}
 
@@ -263,6 +267,7 @@ fn plane(session: &Session, trackable: *mut ffi::Trackable) -> Option<Plane> {
 			ffi::PLANE_HORIZONTAL_DOWNWARD_FACING => PlaneOrientation::HorizontalDown,
 			_ => PlaneOrientation::Vertical,
 		},
+
 		label: PlaneLabel::Unknown,
 		pose: scratch.read(),
 		extent: [width, depth],

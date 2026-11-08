@@ -20,15 +20,18 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 	if [ "$state" = device ]; then
 		probe="$(adb -s "$device" shell 'getprop sys.boot_completed; getprop init.svc.bootanim; cmd package path android' 2>/dev/null | tr -d '\r' || true)"
 	fi
+
 	if [ "$(sed -n 1p <<<"$probe")" = 1 ] &&
 		[ "$(sed -n 2p <<<"$probe")" = stopped ] &&
 		[[ "$(sed -n 3p <<<"$probe")" == package:* ]]; then
+
 		healthy_since="${healthy_since:-$SECONDS}"
 		if [ $((SECONDS - healthy_since)) -ge "$settle_seconds" ]; then
 			echo "Android device $device settled after ${SECONDS}s"
 			exit 0
 		fi
 	else
+
 		if [ -n "$healthy_since" ]; then
 			echo "Android device $device dropped (state: ${state:-none}) after $((SECONDS - healthy_since))s healthy; waiting again" >&2
 		fi

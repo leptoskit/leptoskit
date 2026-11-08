@@ -335,6 +335,7 @@ pub(crate) fn image_tree(reader: impl std::io::Read, expected: Option<&Tree>) ->
 				"image assets contain a link or special file"
 			);
 			let mut hasher = Sha256::new();
+
 			let size = std::io::copy(&mut entry, &mut hasher)?;
 			Member::File {
 				mode,
@@ -390,6 +391,7 @@ mod tests {
 		let website = recipe.website.as_ref().unwrap();
 		assert!(super::super::validate(&recipe).is_ok());
 		assert!(website.source(dir.path(), &config).is_ok());
+
 		let mut changed = recipe.clone();
 		changed.features.push("ignored-override".into());
 		assert!(super::super::validate(&changed).is_err());
@@ -439,6 +441,7 @@ mod tests {
 		fs::write(dir.path().join("pkg/site.js"), b"generated JavaScript").unwrap();
 		fs::write(dir.path().join("pkg/site_bg.wasm"), b"\0asm").unwrap();
 		fs::write(dir.path().join("style.css"), b"body {}").unwrap();
+
 		dir
 	}
 
@@ -554,6 +557,7 @@ mod tests {
 		fs::set_permissions(dir.path().join("pkg"), fs::Permissions::from_mode(0o777)).unwrap();
 		assert!(tree(dir.path(), "site").is_err());
 		fs::set_permissions(dir.path().join("pkg"), fs::Permissions::from_mode(0o755)).unwrap();
+
 		symlink("/etc/passwd", dir.path().join("link")).unwrap();
 		assert!(tree(dir.path(), "site").is_err());
 	}

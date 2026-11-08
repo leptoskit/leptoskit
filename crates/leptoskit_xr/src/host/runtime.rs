@@ -129,6 +129,7 @@ impl XrRuntime {
 
 		if let Err(error) = accept(&mut info, &config, started) {
 			state.backend.stop();
+
 			return Err(error);
 		}
 
@@ -383,6 +384,7 @@ fn drive(runtime: &Weak<XrRuntime>, stop: &AtomicBool) {
 		}
 
 		drop(runtime);
+
 		std::thread::sleep(if active { DRIVE_PERIOD } else { IDLE_PERIOD });
 	}
 }
@@ -430,6 +432,7 @@ impl Future for NextGuestFrame {
 			&& *sequence > self.request.after
 		{
 			let include_planes = frame.planes_revision != self.request.planes_revision;
+
 			return Poll::Ready(Ok(frame.to_guest(*sequence, include_planes)));
 		}
 

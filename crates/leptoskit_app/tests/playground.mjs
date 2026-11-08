@@ -61,6 +61,7 @@ async function assertPreviewSandbox(page, contexts) {
 		await evaluate("self.origin === 'null'"),
 		"preview origin must be opaque",
 	);
+
 	assert(
 		await evaluate(`new Promise((resolve) => {
 		let bundles = 0;
@@ -174,6 +175,7 @@ Deno.test({
 					Uint8Array.from(atob(data), (character) => character.charCodeAt(0)),
 				);
 			}
+
 			await assertCompilerError(page);
 			await assertHangRecovery(page);
 			assert(

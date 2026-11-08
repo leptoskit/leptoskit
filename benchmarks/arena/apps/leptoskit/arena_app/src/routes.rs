@@ -20,6 +20,7 @@ pub const READY_ROWS: usize = 20;
 /// The whole screen for the current model.
 pub fn screen(arena: &Arena) -> Element {
 	let model = arena.read();
+
 	let body = match &model.screen {
 		Screen::Starting => View(),
 		Screen::Home => home::HomeScreen(arena),

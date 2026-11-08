@@ -155,6 +155,7 @@ async fn signed_in_api() -> Api {
 async fn save(input: NewClipInput) -> ExtensionReply {
 	match signed_in_api().await.create_clip(&input).await {
 		Ok(clip) => ExtensionReply::Saved(clip),
+
 		Err(problem) if problem.unreachable => {
 			let mut queue: Vec<NewClipInput> = storage::LOCAL
 				.get(QUEUE)
@@ -168,11 +169,13 @@ async fn save(input: NewClipInput) -> ExtensionReply {
 				Err(error) => ExtensionReply::Failed(error.to_string()),
 			}
 		}
+
 		Err(problem) if problem.signed_out => {
 			ExtensionReply::Failed(
 				"Sign in to Commonplace in the extension's options first.".into(),
 			)
 		}
+
 		Err(problem) => ExtensionReply::Failed(problem.message),
 	}
 }
@@ -185,11 +188,14 @@ async fn send_queued() {
 		.ok()
 		.flatten()
 		.unwrap_or_default();
+
 	if queue.is_empty() {
 		return;
 	}
+
 	let api = signed_in_api().await;
 	let mut kept = Vec::new();
+
 	for input in queue {
 		match api.create_clip(&input).await {
 			Ok(_) => {}
@@ -217,5 +223,6 @@ async fn badge(tab: i64, url: &str) {
 	} else {
 		count.to_string()
 	};
+
 	let _ = action::set_badge(&text, Some(tab)).await;
 }

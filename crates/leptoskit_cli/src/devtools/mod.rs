@@ -438,10 +438,12 @@ async fn send_command(
 	let id = SessionId(id);
 	let mut sessions = state.sessions.write().await;
 	let session = sessions.get_mut(&id).ok_or_else(ApiError::not_found)?;
+
 	if session.commands.len() == MAX_QUEUED_COMMANDS {
 		session.commands.pop_front();
 		session.commands_dropped += 1;
 	}
+
 	session.commands.push_back(command.clone());
 	session.notify.notify_waiters();
 	state.broadcast(Change::Command {

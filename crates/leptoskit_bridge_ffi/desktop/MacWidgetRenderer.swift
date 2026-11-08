@@ -111,6 +111,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             (widget as? NSImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
         }
+
         widgets.removeAll()
         properties.removeAll()
         scrolls.removeAll()
@@ -231,6 +232,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         properties[item.id] = item.props
         try MacWidgetStyle.apply(item.props, to: widget)
         scrolls.receive(item.props.scrollOffset, for: item.id)
+
         motion.created(item.id, item.props)
     }
 
@@ -258,6 +260,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             if let layer = widget.layer {
                 motion.willChange(item.id, layer, from: properties[item.id], to: properties[item.id])
             }
+
             widget.frame = CGRect(
                 x: item.offsetX, y: item.offsetY, width: item.width, height: item.height
             )
@@ -288,6 +291,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
     /// where it stays until the animation, started after the transaction, ends.
     private func remove(_ child: NSView, _ id: Int) {
         let props = properties[id]
+
         guard props?.animation?.exiting != nil, child.window != nil, let parent = child.superview,
               !exits.contains(child)
         else {

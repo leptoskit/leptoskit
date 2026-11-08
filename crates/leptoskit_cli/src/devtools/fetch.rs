@@ -700,6 +700,7 @@ mod tests {
 		header.as_mut_bytes()[..1].copy_from_slice(b".");
 		header.set_cksum();
 		builder.append(&header, &b""[..]).unwrap();
+
 		builder
 			.append_data(
 				&mut {
@@ -785,6 +786,7 @@ mod tests {
 		builder
 			.append_data(&mut header, "index.html", &b"nope"[..])
 			.unwrap();
+
 		let bytes = builder.into_inner().unwrap().finish().unwrap();
 		let (base, _) = server(vec![(
 			"/releases/download/v0.4.0/leptoskit-devtools-0.4.0.tar.gz".into(),

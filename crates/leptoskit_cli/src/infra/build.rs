@@ -57,9 +57,11 @@ pub(super) fn validate_version(version: &str) -> Result<()> {
 fn docker(root: &Path, private: Option<&tempfile::TempDir>) -> Command {
 	let mut command = Command::new("docker");
 	command.current_dir(root);
+
 	if let Some(directory) = private {
 		command.env("DOCKER_CONFIG", directory.path());
 	}
+
 	command
 }
 
@@ -99,9 +101,11 @@ fn exists(root: &Path, private: Option<&tempfile::TempDir>, tag: &str) -> Result
 	let result = docker(root, private)
 		.args(["manifest", "inspect", tag])
 		.output()?;
+
 	if result.status.success() {
 		return Ok(true);
 	}
+
 	let error = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
 	ensure!(
 		error.contains("manifest unknown") || error.contains("no such manifest"),
@@ -130,10 +134,12 @@ pub(super) fn run(
 	} else {
 		format!("{}/{}", c.registry, c.image)
 	};
+
 	let tag = format!("{image}:{version}");
 	let schema = fingerprint(root, config)?;
 	let services = services_fingerprint(root, config)?;
 	let private = if push { credentials(root, c)? } else { None };
+
 	if push && exists(root, private.as_ref(), &tag)? {
 		ensure!(
 			reuse_existing,
@@ -177,8 +183,10 @@ pub(super) fn run(
 			);
 		}
 		println!("Reused existing artifact {tag}; no image was rebuilt or overwritten");
+
 		return Ok(());
 	}
+
 	let label = format!("{SCHEMA_LABEL}={schema}");
 	let project = crate::deploy::Project::read(root, config)?;
 	let mut build = docker(project.build_context(), private.as_ref());
@@ -197,6 +205,7 @@ pub(super) fn run(
 		fingerprint(root, config)? == schema && services_fingerprint(root, config)? == services,
 		"migration files changed during the build; rebuild before pushing"
 	);
+
 	if push {
 		ensure!(
 			!exists(root, private.as_ref(), &tag)?,
@@ -210,6 +219,7 @@ pub(super) fn run(
 			"managed image push failed"
 		);
 	}
+
 	println!("Built {tag} with migration metadata");
 	Ok(())
 }

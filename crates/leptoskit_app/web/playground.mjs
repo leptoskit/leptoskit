@@ -52,6 +52,7 @@ function mount() {
 	lastHeartbeat = Date.now();
 	status.textContent = "Starting preview…";
 }
+
 addEventListener("message", (event) => {
 	if (
 		!frame || event.source !== frame.contentWindow || event.origin !== "null"
@@ -196,6 +197,7 @@ if (location.hash.length > 1 && location.hash.length <= 200000) {
 		status.textContent = "This share link could not be read";
 	}
 }
+
 addEventListener("keydown", (event) => {
 	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
 		event.preventDefault();

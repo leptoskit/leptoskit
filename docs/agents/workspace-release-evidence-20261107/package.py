@@ -11,8 +11,10 @@ def run(*args, env=None):
         args, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
     print(result.stdout, flush=True)
+
     if result.returncode:
         raise RuntimeError(args)
+
     return result.stdout.strip()
 
 

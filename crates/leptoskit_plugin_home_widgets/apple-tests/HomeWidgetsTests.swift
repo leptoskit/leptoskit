@@ -48,6 +48,7 @@ private func payload(_ bytes: [UInt8] = []) throws -> NativeBuffer {
     #expect(call > 0)
     var request = lk_request()
     #expect(lk_bridge_next_request(bridge, &request) == 1)
+
     return NativeBuffer(taking: request.payload)
 }
 
@@ -57,6 +58,7 @@ private func lengthPrefixed(_ value: String) -> [UInt8] {
     let length = UInt32(utf8.count).littleEndian
     withUnsafeBytes(of: length) { bytes.append(contentsOf: $0) }
     bytes.append(contentsOf: utf8)
+
     return bytes
 }
 
@@ -72,6 +74,7 @@ private func encodeSnapshot(
     bytes += lengthPrefixed(title)
     bytes += lengthPrefixed(body)
     bytes += lengthPrefixed(url)
+
     return bytes
 }
 

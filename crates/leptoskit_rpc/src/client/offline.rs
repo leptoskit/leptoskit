@@ -197,6 +197,7 @@ mod native {
 						Err(_) => return,
 					}
 				};
+
 				let _ = store.apply(&[change], Save::Commit).await;
 			}))
 		}

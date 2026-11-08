@@ -299,6 +299,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			if let Some(index) = siblings.iter().rposition(|&child| child == id) {
 				siblings.remove(index);
 			}
+
 			self.yoga.detach(id);
 			out.push(Mutation::RemoveChild { parent, child: id });
 		}

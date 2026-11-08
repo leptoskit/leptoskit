@@ -38,6 +38,7 @@ fn real_confined_exports_reject_missing_failed_and_nonregular_outputs() {
 			"invalid migration contract export file",
 		),
 	];
+
 	for (index, (script, expected)) in scripts.iter().enumerate() {
 		let context = tempfile::tempdir().unwrap();
 		fs::write(
@@ -96,13 +97,16 @@ fn real_exported_schema_and_history_substitutions_fail_source_binding() {
 		descriptor["schema_window"]["window"].as_str().unwrap(),
 	)
 	.unwrap();
+
 	for field in ["schema", "history"] {
 		let mut changed: Value = serde_json::from_str(&expected.to_json()).unwrap();
+
 		if field == "schema" {
 			changed["schema"]["tables"][0]["comment"] = json!("another source checkpoint");
 		} else {
 			changed["migrations"][0]["sha256"] = json!("0".repeat(64));
 		}
+
 		let json = serde_json::to_string(&changed).unwrap();
 		let other_source = leptoskit_db::MigrationContract::from_json(&json).unwrap();
 		let context = tempfile::tempdir().unwrap();

@@ -72,17 +72,20 @@ export function classify(
 ): BeaconPhase {
 	let best: BeaconPhase = "other";
 	let bestDistance = COLOUR_TOLERANCE;
+
 	for (const [phase, [r, g, b]] of BEACON_COLOURS) {
 		const distance = Math.max(
 			Math.abs(red - r),
 			Math.abs(green - g),
 			Math.abs(blue - b),
 		);
+
 		if (distance <= bestDistance) {
 			best = phase;
 			bestDistance = distance;
 		}
 	}
+
 	return best;
 }
 
@@ -96,11 +99,13 @@ async function output(
 		stderr: "piped",
 	}).output();
 	const stderr = new TextDecoder().decode(result.stderr);
+
 	if (!result.success) {
 		throw new Error(
 			`${command} ${args.join(" ")} failed:\n${stderr.slice(-2000)}`,
 		);
 	}
+
 	return { stdout: result.stdout, stderr };
 }
 
@@ -143,6 +148,7 @@ export async function locateBeacon(video: string): Promise<Box> {
 	const scaledWidth = Math.round((width * scale) / 2) * 2;
 	const scaledHeight = Math.round((height * scale) / 2) * 2;
 	const minimum = Math.max(4, Math.floor(MINIMUM_BEACON_PX * scale));
+
 	for (const window of [["-sseof", "-6"], []]) {
 		const { stdout } = await output("ffmpeg", [
 			"-v",
@@ -169,8 +175,10 @@ export async function locateBeacon(video: string): Promise<Box> {
 				height: scaledHeight,
 				pixels: stdout.subarray(index * frameBytes, (index + 1) * frameBytes),
 			};
+
 			for (const phase of ["done", "failed"] as const) {
 				const box = largestComponent(image, phase, minimum);
+
 				if (box) {
 					return {
 						x: Math.round(box.x / scale),
@@ -182,6 +190,7 @@ export async function locateBeacon(video: string): Promise<Box> {
 			}
 		}
 	}
+
 	throw new Error(`no done or failed beacon in ${video}`);
 }
 
@@ -189,8 +198,10 @@ export async function locateBeacon(video: string): Promise<Box> {
 export function beaconIn(image: Pixmap, source: string): Box {
 	for (const phase of ["done", "failed"] as const) {
 		const box = largestComponent(image, phase);
+
 		if (box) return box;
 	}
+
 	throw new Error(`no done or failed beacon in the last frame of ${source}`);
 }
 
@@ -205,15 +216,19 @@ export function phaseIn(image: Pixmap, beacon: Box): BeaconPhase {
 		Math.max(1, Math.floor(beacon.height / 2)),
 	];
 	const totals = [0, 0, 0];
+
 	for (let y = y0; y < y0 + height; y += 1) {
 		for (let x = x0; x < x0 + width; x += 1) {
 			const base = (y * image.width + x) * 3;
+
 			for (let channel = 0; channel < 3; channel += 1) {
 				totals[channel] += image.pixels[base + channel];
 			}
 		}
 	}
+
 	const count = width * height;
+
 	return classify(totals[0] / count, totals[1] / count, totals[2] / count);
 }
 
@@ -228,15 +243,18 @@ export function decodePng(bytes: Uint8Array): Pixmap {
 	let height = 0;
 	let channels = 0;
 	const compressed: Uint8Array[] = [];
+
 	while (offset < bytes.length) {
 		const length = view.getUint32(offset);
 		const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
 		const data = bytes.subarray(offset + 8, offset + 8 + length);
+
 		if (type === "IHDR") {
 			width = view.getUint32(offset + 8);
 			height = view.getUint32(offset + 12);
 			const [depth, colour, , , interlace] = data.subarray(8, 13);
 			channels = colour === 2 ? 3 : colour === 6 ? 4 : 0;
+
 			if (depth !== 8 || channels === 0 || interlace !== 0) {
 				throw new Error(
 					`unsupported PNG: depth ${depth}, colour type ${colour}, interlace ${interlace}`,
@@ -247,29 +265,37 @@ export function decodePng(bytes: Uint8Array): Pixmap {
 		} else if (type === "IEND") {
 			break;
 		}
+
 		offset += 12 + length;
 	}
+
 	const joined = new Uint8Array(
 		compressed.reduce((sum, part) => sum + part.length, 0),
 	);
 	let at = 0;
+
 	for (const part of compressed) {
 		joined.set(part, at);
 		at += part.length;
 	}
+
 	const raw = inflateSync(joined);
 	const stride = width * channels;
+
 	const current = new Uint8Array(stride);
 	const previous = new Uint8Array(stride);
 	const pixels = new Uint8Array(width * height * 3);
+
 	for (let y = 0; y < height; y += 1) {
 		const filter = raw[y * (stride + 1)];
 		const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+
 		for (let index = 0; index < stride; index += 1) {
 			const left = index >= channels ? current[index - channels] : 0;
 			const up = previous[index];
 			const upLeft = index >= channels ? previous[index - channels] : 0;
 			let predictor = 0;
+
 			if (filter === 1) predictor = left;
 			else if (filter === 2) predictor = up;
 			else if (filter === 3) predictor = (left + up) >> 1;
@@ -286,16 +312,20 @@ export function decodePng(bytes: Uint8Array): Pixmap {
 					? up
 					: upLeft;
 			}
+
 			current[index] = (line[index] + predictor) & 0xff;
 		}
+
 		for (let x = 0; x < width; x += 1) {
 			pixels.set(
 				current.subarray(x * channels, x * channels + 3),
 				(y * width + x) * 3,
 			);
 		}
+
 		previous.set(current);
 	}
+
 	return { width, height, pixels };
 }
 
@@ -310,20 +340,25 @@ function largestComponent(
 ): Box | null {
 	const { width, height, pixels } = image;
 	const mask = new Uint8Array(width * height);
+
 	for (let index = 0; index < width * height; index += 1) {
 		const base = index * 3;
+
 		if (classify(pixels[base], pixels[base + 1], pixels[base + 2]) === phase) {
 			mask[index] = 1;
 		}
 	}
+
 	let best: Box | null = null;
 	let bestArea = 0;
 	const stack: number[] = [];
+
 	for (let start = 0; start < mask.length; start += 1) {
 		if (mask[start] !== 1) continue;
 		mask[start] = 2;
 		stack.push(start);
 		let [minX, minY, maxX, maxY, area] = [width, height, 0, 0, 0];
+
 		while (stack.length > 0) {
 			const index = stack.pop()!;
 			const x = index % width;
@@ -333,6 +368,7 @@ function largestComponent(
 			maxX = Math.max(maxX, x);
 			minY = Math.min(minY, y);
 			maxY = Math.max(maxY, y);
+
 			for (const next of [index - 1, index + 1, index - width, index + width]) {
 				if (next < 0 || next >= mask.length || mask[next] !== 1) continue;
 				// Do not wrap from one row's end to the next row's start.
@@ -341,6 +377,7 @@ function largestComponent(
 				stack.push(next);
 			}
 		}
+
 		const box = {
 			x: minX,
 			y: minY,
@@ -355,6 +392,7 @@ function largestComponent(
 			bestArea = area;
 		}
 	}
+
 	return best;
 }
 
@@ -400,6 +438,7 @@ export async function presentedFrames(
 	]);
 	const times = [...stderr.matchAll(/Parsed_showinfo.*?pts_time:\s*([0-9.]+)/g)]
 		.map((match) => Number(match[1]));
+
 	if (times.length * 3 !== stdout.length) {
 		throw new Error(
 			`ffmpeg reported ${times.length} frames but wrote ${
@@ -429,6 +468,7 @@ export async function presentedFrames(
 export function phaseWindows(frames: PresentedFrame[]): PhaseWindow[] {
 	const windows: PhaseWindow[] = [];
 	let start: number | null = null;
+
 	for (const frame of frames) {
 		if (frame.phase === "idle") {
 			start = null;
@@ -437,10 +477,12 @@ export function phaseWindows(frames: PresentedFrame[]): PhaseWindow[] {
 		} else if (frame.phase === "done" || frame.phase === "failed") {
 			if (start !== null) {
 				windows.push({ start, end: frame.pts, outcome: frame.phase });
+
 				start = null;
 			}
 		}
 	}
+
 	return windows;
 }
 
@@ -450,6 +492,7 @@ function percentile(sorted: number[], fraction: number): number {
 		sorted.length - 1,
 		Math.ceil(fraction * sorted.length) - 1,
 	);
+
 	return sorted[Math.max(0, index)];
 }
 
@@ -470,6 +513,7 @@ export function effectiveRefreshHz(
 		.map((frame) => frame.pts * 1000);
 	const intervals = times.slice(1).map((time, index) => time - times[index])
 		.sort((left, right) => left - right);
+
 	if (intervals.length === 0) return Math.max(...ratesHz);
 	const median = intervals[Math.floor(intervals.length / 2)];
 	return ratesHz.reduce((best, rate) =>
@@ -495,6 +539,7 @@ export function frameStats(
 	const hitchMs = intervals.filter((interval) => interval > period * 1.5)
 		.reduce((sum, interval) => sum + interval - period, 0);
 	const sorted = [...intervals].sort((left, right) => left - right);
+
 	return {
 		window_ms: windowMs,
 		frames_count: times.length,
@@ -532,18 +577,24 @@ export function launchToReady(
 	stillLeadIn: boolean,
 ): number | null {
 	const ready = frames.findIndex((frame) => frame.phase === "done");
+
 	if (ready === -1) return null;
 	let reaction = 0;
+
 	if (stillLeadIn) {
 		let longest = 0;
+
 		for (let index = 1; index <= ready; index += 1) {
 			const gap = frames[index].pts - frames[index - 1].pts;
+
 			if (gap > longest) {
 				longest = gap;
 				reaction = index;
 			}
 		}
+
 		if (longest < STILLNESS_S) return null;
 	}
+
 	return (frames[ready].pts - frames[reaction].pts) * 1000;
 }

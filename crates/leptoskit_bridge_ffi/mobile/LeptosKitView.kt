@@ -193,6 +193,7 @@ class LeptosKitView(
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
         dismissEditorOutside(this, event)
+
         return super.dispatchTouchEvent(event)
     }
 

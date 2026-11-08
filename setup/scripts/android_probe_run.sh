@@ -15,8 +15,9 @@ if [ -z "${LEPTOSKIT_CLEAN_BUILD_ENV:-}" ]; then
 		USER="${USER:-$(id -un)}" \
 		TERM="${TERM:-dumb}" \
 		ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \
-		${ANDROID_NDK_HOME:+"ANDROID_NDK_HOME=$ANDROID_NDK_HOME"} \
-		${ANDROID_NDK_VERSION:+"ANDROID_NDK_VERSION=$ANDROID_NDK_VERSION"} \
+		${ANDROID_NDK_HOME:+"ANDROID_NDK_HOME=$ANDROID_NDK_HOME"}
+
+	${ANDROID_NDK_VERSION:+"ANDROID_NDK_VERSION=$ANDROID_NDK_VERSION"} \
 		PATH="$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
 		bash "${BASH_SOURCE[0]}"
 fi
@@ -32,8 +33,10 @@ else
 	ndk_version="${ANDROID_NDK_VERSION:-$(ls "$ndk_versions" | sort -V | tail -1)}"
 	ndk="$ndk_versions/$ndk_version"
 fi
+
 if [ ! -d "$ndk/toolchains/llvm/prebuilt" ]; then
 	echo "no Android NDK at $ndk; set ANDROID_NDK_HOME to the NDK directory" >&2
+
 	exit 1
 fi
 prebuilt="$(ls "$ndk/toolchains/llvm/prebuilt" | head -1)"

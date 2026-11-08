@@ -77,6 +77,7 @@ private object StartMessage {
             0, 1 -> Unit
             else -> throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         reader.fields()
         reader.finish()
     }
@@ -109,6 +110,7 @@ private object EndMessage {
             1 -> reader.fields()
             else -> throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         reader.finish()
     }
 }
@@ -126,6 +128,7 @@ private class Reader(
 
     fun u32(): Int {
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return buffer.int
     }
 
@@ -135,6 +138,7 @@ private class Reader(
         if (!value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return value
     }
 
@@ -168,6 +172,7 @@ private class Reader(
         if (value.any { it.code <= 31 || it.code in 127..159 }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return value
     }
 

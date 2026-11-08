@@ -176,6 +176,7 @@ pub(super) fn kamal(
 			(None, Some(port)) => format!("http://{}:{port}", alias(c, service)),
 			(None, None) => continue,
 		};
+
 		let token = service.token_env();
 		app_secret(config, &token);
 		secrets.names.insert(token.clone());

@@ -668,6 +668,7 @@ async fn auth_reports_its_name_origin_and_keys() {
 	assert!(builder.contains(r#"ids: ["test"]"#), "{builder}");
 	let printed = format!("{auth:?}");
 	assert!(printed.contains("Notes"), "{printed}");
+
 	assert!(!printed.contains("[7, 7"), "the keys stay out: {printed}");
 }
 

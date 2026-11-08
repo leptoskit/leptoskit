@@ -35,9 +35,11 @@ class MainActivity : FlutterActivity() {
                 "echo" -> result.success(call.arguments)
                 "addOne" -> {
                     val value = call.arguments as? Number
+
                     if (value == null) {
                         result.error("bad_argument", "addOne takes an integer", null)
                     } else {
+
                         result.success(value.toLong() + 1)
                     }
                 }

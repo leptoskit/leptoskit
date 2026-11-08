@@ -210,6 +210,7 @@ pub mod server;
 mod service;
 #[cfg(feature = "ssr")]
 pub mod spec;
+
 mod stream;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub mod testing;

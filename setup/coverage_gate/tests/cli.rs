@@ -31,9 +31,11 @@ const INHERITED_GIT_ENV: [&str; 10] = [
 /// A command for `program` that inherits none of [`INHERITED_GIT_ENV`].
 fn isolated(program: impl AsRef<std::ffi::OsStr>) -> Command {
 	let mut command = Command::new(program);
+
 	for variable in INHERITED_GIT_ENV {
 		command.env_remove(variable);
 	}
+
 	command
 }
 
@@ -107,13 +109,17 @@ impl Repo {
 	fn tracefile(&self, records: &[(&str, &[(u32, u64)])]) {
 		let root = self.root();
 		let mut lcov = String::new();
+
 		for (path, lines) in records {
 			writeln!(lcov, "SF:{root}/{path}").unwrap();
+
 			for (line, hits) in *lines {
 				writeln!(lcov, "DA:{line},{hits}").unwrap();
 			}
+
 			lcov.push_str("end_of_record\n");
 		}
+
 		self.write("lcov.info", &lcov);
 	}
 

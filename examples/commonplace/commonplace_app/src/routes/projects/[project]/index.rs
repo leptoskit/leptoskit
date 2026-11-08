@@ -32,6 +32,7 @@ pub fn Page(route: &Project, navigation: &Navigation) -> Element {
 			_ => Load::Loading,
 		}
 	});
+
 	match loaded {
 		Load::Idle | Load::Loading => view! { <ui::Loading what="the project" /> },
 		Load::Failed(message) => view! { <ui::Problem message=&message /> },
@@ -46,12 +47,14 @@ fn ProjectView(detail: &ProjectDetail, navigation: &Navigation) -> Element {
 	let header = view! {
 		<View class="gap-1">
 			<ui::Title text=detail.project.title.clone() />
+
 			{match &detail.project.question {
 				Some(question) => {
 					view! { <Text class="italic">{question.clone()}</Text> }
 				}
 				None => view! { <View /> },
 			}}
+
 			<View class="flex-row gap-2 mt-2">
 				{navigation
 					.link(

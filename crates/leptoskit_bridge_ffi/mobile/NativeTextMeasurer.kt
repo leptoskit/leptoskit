@@ -77,6 +77,7 @@ internal class NativeTextMeasurer(
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                     .build()
             }
+
         var widest = 0f
         repeat(measured.lineCount) { widest = max(widest, measured.getLineWidth(it)) }
         val pixels = ceil(widest.coerceAtMost(limit.coerceAtLeast(0f)).toDouble()).toFloat()

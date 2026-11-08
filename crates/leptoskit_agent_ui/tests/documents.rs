@@ -91,6 +91,7 @@ and the text after it.
 	);
 	tester.get_by_text("☑").unwrap();
 	tester.get_by_text("☐").unwrap();
+
 	tester.get_by_text("1.").unwrap();
 	tester.get_by_text("2.").unwrap();
 }
@@ -161,9 +162,11 @@ fn the_number_of_diagnostics_is_capped() {
 	use std::fmt::Write as _;
 
 	let mut source = String::new();
+
 	for index in 0..105 {
 		write!(source, "<Missing{index} />\n\n").unwrap();
 	}
+
 	let diagnostics = ui.check(&source);
 	assert_eq!(diagnostics.len(), 100);
 }

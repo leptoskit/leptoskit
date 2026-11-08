@@ -28,6 +28,7 @@ def run(*args, env=env, ok=True):
     )
     print(r.stdout, flush=True)
     assert (r.returncode == 0) == ok, (args, r.returncode)
+
     return r.stdout
 
 
@@ -37,6 +38,7 @@ def sha(p):
 
 def snapshot():
     result = {}
+
     for app in ["accounts", "website"]:
         name = "workspace-" + app
         fmt = '{"container":{{json .Id}},"image":{{json .Image}},"started":{{json .State.StartedAt}}}'
@@ -95,6 +97,7 @@ for path in [
         )
 
         out = deploy(False)
+
         assert any(word in out for word in ["changed", "differs", "pin", "hash"])
 
     finally:
@@ -105,6 +108,7 @@ original = policy.read_bytes()
 try:
     policy.write_text("{}")
     assert "policy" in deploy(False)
+
 finally:
     policy.write_bytes(original)
 assert snapshot() == before

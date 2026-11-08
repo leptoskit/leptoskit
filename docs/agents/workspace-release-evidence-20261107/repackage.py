@@ -19,6 +19,7 @@ def run(*args):
     )
     print(r.stdout, flush=True)
     assert r.returncode == 0, args
+
     return r.stdout
 
 
@@ -27,11 +28,13 @@ runtime = images[0]["RepoDigests"][0]
 runtime_pin = hashlib.sha256(
     json.dumps(images[0]["Config"], sort_keys=True, separators=(",", ":")).encode()
 ).hexdigest()
+
 for app, version in [("accounts", "v1"), ("website", "v1"), ("website", "v2")]:
     out = W / ("build-v2" if version == "v2" else "build")
     pin = hashlib.sha256((out / "inventory.json").read_bytes()).hexdigest()
     desc = W / f"{app}-{version}.json"
     desc.rename(W / f"{app}-{version}-before-service.json")
+
     tag = f"127.0.0.1:5000/{app}:{version}"
     run(
         cli,
@@ -101,6 +104,7 @@ for app in ["accounts", "website"]:
         )
     ]
     policyfile = W / (app + "-managed-policy.json")
+
     policyfile.write_text(json.dumps(policy))
     run(
         cli,

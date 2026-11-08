@@ -34,6 +34,7 @@ fn real_capture_preserves_pixels_and_metadata_and_rejects_corruption() {
 	assert!(Screenshot::from_png(missing_end).is_err());
 	let mut corrupt_end = bytes.clone();
 	*corrupt_end.last_mut().unwrap() ^= 1;
+
 	assert!(Screenshot::from_png(corrupt_end).is_err());
 	bytes.truncate(bytes.len() / 2);
 	assert!(Screenshot::from_png(bytes).is_err());

@@ -63,6 +63,7 @@ export interface LaunchInfo {
 /** Reads the launch data the host passed as global props. Safe on both threads. */
 export function readLaunch(): LaunchInfo {
 	const props = lynx.__globalProps;
+
 	return {
 		scenario: isScenario(props.scenario) ? props.scenario : undefined,
 		lane: props.lane === "tuned" ? "tuned" : "idiomatic",
@@ -87,6 +88,7 @@ function isClock(candidate: unknown): candidate is HighResolutionClock {
 /** A global function returning a number, looked up without assuming it exists on this thread. */
 function globalFunction(name: string): (() => number) | undefined {
 	const candidate: unknown = Reflect.get(globalThis, name);
+
 	if (typeof candidate !== "function") return undefined;
 	return () => {
 		const value: unknown = Reflect.apply(candidate, undefined, []);
@@ -100,8 +102,10 @@ function nativeClock(): (() => number) | undefined {
 	// keeps this safe where the main thread evaluates the module too.
 	if (typeof NativeModules === "undefined") return undefined;
 	const module: unknown = Reflect.get(NativeModules, "ArenaClock");
+
 	if (typeof module !== "object" || module === null) return undefined;
 	const nowUs: unknown = Reflect.get(module, "nowUs");
+
 	if (typeof nowUs !== "function") return undefined;
 	return () => {
 		const value: unknown = Reflect.apply(nowUs, module, []);
@@ -146,7 +150,9 @@ export const CLOCK_IS_NATIVE_CALL = CLOCK_SOURCE === "ArenaClock.nowUs";
 /** Milliseconds on the background thread, with sub-millisecond resolution where the runtime has it. */
 export function now(): number {
 	if (performanceClock !== undefined) return performanceClock.now();
+
 	if (dateClock !== undefined) return dateClock() / 1000;
+
 	if (hostClock !== undefined) return hostClock() / 1000;
 	return Date.now();
 }
@@ -178,6 +184,7 @@ const REPORT_CHUNK_BYTES = 800;
 
 function writeLine(line: string): void {
 	const logger = NativeModules.ArenaLog;
+
 	if (logger !== undefined) {
 		logger.log(line);
 	} else {
@@ -192,11 +199,15 @@ function writeLine(line: string): void {
  */
 export function emitReport(report: ArenaReport): void {
 	const json = JSON.stringify(report);
+
 	if (json.length <= REPORT_CHUNK_BYTES) {
 		writeLine(`ARENA ${json}`);
+
 		return;
 	}
+
 	const count = Math.ceil(json.length / REPORT_CHUNK_BYTES);
+
 	for (let index = 0; index < count; index += 1) {
 		const chunk = json.slice(
 			index * REPORT_CHUNK_BYTES,
@@ -212,6 +223,7 @@ export function percentile(sorted: number[], fraction: number): number {
 		sorted.length - 1,
 		Math.max(0, Math.ceil(fraction * sorted.length) - 1),
 	);
+
 	return sorted[index];
 }
 
@@ -268,8 +280,10 @@ export class PipelineWatcher {
 
 	waitFor(identifier: string, timeoutMs: number): Promise<PipelineEntry> {
 		const early = this.arrived.get(identifier);
+
 		if (early !== undefined) {
 			this.arrived.delete(identifier);
+
 			return Promise.resolve(early);
 		}
 		return new Promise((resolve, reject) => {

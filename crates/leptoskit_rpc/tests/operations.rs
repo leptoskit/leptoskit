@@ -146,8 +146,10 @@ async fn after_both_read(name: &str, reads: &AtomicU32) {
 	if name != RACED {
 		return;
 	}
+
 	reads.fetch_add(1, Ordering::SeqCst);
 	let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
 	while reads.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline {
 		tokio::time::sleep(Duration::from_millis(5)).await;
 	}
@@ -674,6 +676,7 @@ async fn postgres_routes_receipts_retries_and_calls() {
 	};
 	let (a, b) = tokio::join!(bump(), bump());
 	let mut values = vec![a.unwrap(), b.unwrap()];
+
 	values.sort_unstable();
 	assert_eq!(values, [1, 2]);
 

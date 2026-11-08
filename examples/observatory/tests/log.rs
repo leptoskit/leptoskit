@@ -33,6 +33,7 @@ fn committed(tester: &WidgetTester, prefix: &str) -> Vec<String> {
 	let surface = tester.surface();
 	let mut pending: Vec<_> = surface.root().into_iter().collect();
 	let mut names = Vec::new();
+
 	while let Some(id) = pending.pop() {
 		if let Some(name) = surface.props(id).accessible_name()
 			&& name.starts_with(prefix)
@@ -41,6 +42,7 @@ fn committed(tester: &WidgetTester, prefix: &str) -> Vec<String> {
 		}
 		pending.extend(surface.children(id).iter().rev().copied());
 	}
+
 	names
 }
 
@@ -146,6 +148,7 @@ fn the_ribbon_narrows_the_log_to_one_night_and_back() -> Result<(), TestError> {
 			.all(|name| name.starts_with("Night 3,"))
 	);
 	let card = tester.find(&Finder::label("Night 3"))?;
+
 	assert_eq!(card.props.aria().pressed, Some(true.into()));
 
 	// Pressing the chosen night again, or All nights, shows every night.

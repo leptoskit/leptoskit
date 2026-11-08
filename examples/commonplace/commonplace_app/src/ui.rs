@@ -120,6 +120,7 @@ pub fn ProjectPicker(
 	if projects.is_empty() {
 		return view! { <Text class=QUIET>"Start a project in Commonplace first."</Text> };
 	}
+
 	view! {
 		<View class="flex-row flex-wrap gap-2">
 			{projects
@@ -133,6 +134,7 @@ pub fn ProjectPicker(
 					} else {
 						summary.project.title.clone()
 					};
+
 					view! {
 						<Button
 							class=if selected {

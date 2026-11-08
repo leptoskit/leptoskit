@@ -248,18 +248,21 @@ fn chapters_can_use_local_fonts_and_external_scripts_under_a_same_origin_csp() {
 		.external_fonts(false)
 		.build(out.path())
 		.unwrap();
+
 	for path in ["index.html", "guide/install.html", "404.html"] {
 		let html = read(out.path().join(path));
 		assert!(!html.contains("fonts.googleapis.com"), "{path}");
 		assert!(!html.contains("fonts.gstatic.com"), "{path}");
 		assert!(!html.contains("<script>"), "{path}");
 		let theme = html.find("_leptoskit/theme.js").unwrap();
+
 		let stylesheet = html.find("_leptoskit/site.css").unwrap();
 		assert!(
 			theme < stylesheet,
 			"choose the theme before the first styled paint"
 		);
 	}
+
 	assert!(read(out.path().join("_leptoskit/theme.js")).contains("localStorage"));
 }
 
@@ -391,6 +394,7 @@ fn the_logo_leads_to_the_books_first_page_or_the_sites_home() {
 	// A book inside a larger site leads back to that site's own home.
 	let nested = tempfile::tempdir().unwrap();
 	site(fixture()).home("/").build(nested.path()).unwrap();
+
 	for page in ["index.html", "guide/install.html", "404.html"] {
 		let html = read(nested.path().join(page));
 		assert!(

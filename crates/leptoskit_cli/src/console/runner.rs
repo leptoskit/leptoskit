@@ -58,6 +58,7 @@ impl Executor for CommandRunner {
 					))
 				}
 			};
+
 			let workspace = data.join("workspaces").join(&operation.id);
 			if workspace.exists() {
 				let _ = tokio::process::Command::from(crate::git::command(&project.root))
@@ -117,6 +118,7 @@ async fn execute(
 			"--reuse-existing".into(),
 		];
 		let built = run(environment, project, &prebuilt, &args, "build").await?;
+
 		if !built.succeeded {
 			return Ok(built);
 		}
@@ -166,6 +168,7 @@ async fn run(
 		.args(args)
 		.current_dir(&project.root)
 		.env("LEPTOSKIT_CONTROL_ORIGIN", service.origin());
+
 	if let Some((address, key)) = backend {
 		command
 			.env("TF_HTTP_ADDRESS", address)
@@ -176,6 +179,7 @@ async fn run(
 			.env("TF_HTTP_LOCK_METHOD", "LOCK")
 			.env("TF_HTTP_UNLOCK_METHOD", "UNLOCK");
 	}
+
 	if let Some(plugin) = plugin {
 		command.env(
 			"LEPTOSKIT_ANALYTICS_READ_KEY",
@@ -183,6 +187,7 @@ async fn run(
 				.map(|b| b.0.clone())
 				.map_or_else(|| service.managed_app_key(&project.id, false), Ok)?,
 		);
+
 		if plugin.otlp_endpoint.is_none() {
 			command.env(
 				"LEPTOSKIT_ANALYTICS_WRITE_KEY",
@@ -192,6 +197,7 @@ async fn run(
 			);
 		}
 	}
+
 	command
 		.env_remove("LEPTOSKIT_PAIRING_CODE")
 		.env_remove("LEPTOSKIT_HOSTED_KEY");
@@ -221,7 +227,9 @@ async fn run(
 	out?;
 	err?;
 	let succeeded = status?.success();
+
 	let mut details = serde_json::json!({"code":if succeeded{"completed"}else{"command_failed"}});
+
 	if succeeded && matches!(operation.intent.action, Action::Plan) {
 		let config = leptoskit_config::LeptoskitConfig::load_from(&project.root)?;
 		let infra = config
@@ -237,6 +245,7 @@ async fn run(
 			output.status.success() && output.stdout.len() <= 32 * 1024 * 1024,
 			"could not inspect the saved plan"
 		);
+
 		let plan: serde_json::Value = serde_json::from_slice(&output.stdout)?;
 		let changes = plan["resource_changes"]
 			.as_array()
@@ -249,6 +258,7 @@ async fn run(
 			.collect::<Vec<_>>();
 		details["changes"] = serde_json::json!(changes);
 	}
+
 	Ok(RunResult {
 		succeeded,
 		message: if succeeded {
@@ -274,15 +284,18 @@ async fn checkout(
 	let Action::Deploy { version, .. } = &operation.intent.action else {
 		return Ok(None);
 	};
+
 	if !git_commit(version) {
 		return Ok(None);
 	}
+
 	let exists = tokio::process::Command::from(crate::git::command(&project.root))
 		.args(["cat-file", "-e", &format!("{version}^{{commit}}")])
 		.stdout(std::process::Stdio::null())
 		.stderr(std::process::Stdio::null())
 		.status()
 		.await?;
+
 	if !exists.success() {
 		let fetched = tokio::process::Command::from(crate::git::command(&project.root))
 			.args(["fetch", "--no-tags", "origin", version])
@@ -295,6 +308,7 @@ async fn checkout(
 			"selected commit is unavailable in the registered repository"
 		);
 	}
+
 	let workspaces = data.join("workspaces");
 	std::fs::create_dir_all(&workspaces)?;
 	let path = workspaces.join(&operation.id);
@@ -318,12 +332,15 @@ async fn checkout(
 		.ok_or_else(|| anyhow::anyhow!("source has no managed infrastructure"))?;
 	let mut proposed = config.infra.clone();
 	let mut policy = original.infra.clone();
+
 	if let Some(infra) = &mut proposed {
 		infra.control_url = None;
 	}
+
 	if let Some(infra) = &mut policy {
 		infra.control_url = None;
 	}
+
 	anyhow::ensure!(
 		infra.name == project.id && proposed == policy,
 		"source infrastructure differs from the registered policy; update and re-plan the trusted \
@@ -334,12 +351,15 @@ async fn checkout(
 	let parent = path.join("infra");
 	std::fs::create_dir_all(&parent)?;
 	let destination = parent.join(&project.id);
+
 	if destination.exists() {
 		std::fs::remove_dir_all(&destination)?;
 	}
+
 	#[cfg(unix)]
 	{
 		std::os::unix::fs::symlink(shared, destination)?;
+
 		Ok(Some(Project {
 			root: path,
 			..project.clone()
@@ -365,12 +385,14 @@ fn arguments(action: &Action) -> Vec<String> {
 			if *maintenance {
 				args.push("--maintenance");
 			}
+
 			args
 		}
 		Action::Rollback { version } => vec!["deploy", "--rollback", version.as_str()],
 		Action::Status => vec!["infra", "status"],
 		Action::Backup => vec!["infra", "backups", "verify"],
 	};
+
 	text.into_iter().map(str::to_owned).collect()
 }
 
@@ -392,19 +414,25 @@ async fn capture(
 	let mut remaining = 4 * 1024 * 1024;
 	let mut truncated = false;
 	let mut buffer = vec![0; 8192];
+
 	loop {
 		let length = stream.read(&mut buffer).await?;
+
 		if length == 0 {
 			break;
 		}
+
 		let saved = remaining.min(length);
 		file.write_all(&buffer[..saved]).await?;
 		remaining -= saved;
+
 		if saved < length && !truncated {
 			file.write_all(b"\n[output truncated at 4 MiB]\n").await?;
+
 			truncated = true;
 		}
 	}
+
 	file.flush().await?;
 	Ok(())
 }
@@ -421,9 +449,11 @@ fn prune_logs(directory: &std::path::Path) -> anyhow::Result<()> {
 		.map(|entry| Ok((entry.metadata()?.modified()?, entry.path())))
 		.collect::<anyhow::Result<Vec<_>>>()?;
 	files.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+
 	for (_, path) in files.into_iter().skip(64) {
 		std::fs::remove_file(path)?;
 	}
+
 	Ok(())
 }
 

@@ -63,12 +63,15 @@ fn hetzner(types: &[Value], pricing: &Value) -> Result<Vec<Offer>> {
 		.find(|v| v["type"] == "ipv4")
 		.context("missing primary IPv4 prices")?;
 	let mut offers = Vec::new();
+
 	for size in types {
 		if size["architecture"] != "x86" || size["deprecated"] == true {
 			continue;
 		}
+
 		for price in array(size, "prices")? {
 			let location = price["location"].as_str().context("missing location")?;
+
 			if let Some(locations) = size["locations"].as_array()
 				&& !locations.iter().any(|v| {
 					v["name"] == location && v["available"] == true && v["deprecation"].is_null()
@@ -90,15 +93,18 @@ fn hetzner(types: &[Value], pricing: &Value) -> Result<Vec<Offer>> {
 			});
 		}
 	}
+
 	Ok(offers)
 }
 
 fn digitalocean(sizes: &[Value]) -> Result<Vec<Offer>> {
 	let mut offers = Vec::new();
+
 	for size in sizes {
 		if size["available"] != true {
 			continue;
 		}
+
 		for region in array(size, "regions")? {
 			offers.push(Offer {
 				provider: "digitalocean".into(),
@@ -110,6 +116,7 @@ fn digitalocean(sizes: &[Value]) -> Result<Vec<Offer>> {
 			});
 		}
 	}
+
 	Ok(offers)
 }
 
@@ -130,13 +137,16 @@ fn fetch(provider: ComputeProvider) -> Result<Vec<Offer>> {
 			)
 		}
 	};
+
 	let token =
 		std::env::var(key).with_context(|| format!("set {key} to read current provider offers"))?;
 	let mut items = Vec::new();
+
 	for page in 1..=100 {
 		let response = get(&format!("{base}/{list}?per_page=50&page={page}"), &token)?;
 		let values = array(&response, list)?;
 		items.extend(values.iter().cloned());
+
 		if values.len() < 50 {
 			return match provider {
 				ComputeProvider::Hetzner => {
@@ -146,6 +156,7 @@ fn fetch(provider: ComputeProvider) -> Result<Vec<Offer>> {
 			};
 		}
 	}
+
 	anyhow::bail!("provider catalog exceeded 100 pages")
 }
 
@@ -182,6 +193,7 @@ pub(super) fn print(minimum: f64) -> Result<()> {
 		"excludes": ["tax", "storage", "egress over allowance", "domains", "other services"], "currency_conversion": false})
 		)?
 	);
+
 	Ok(())
 }
 
@@ -211,6 +223,7 @@ pub(super) fn guard(c: &InfraConfig) -> Result<()> {
 		 traffic, and other services",
 		selected.currency
 	);
+
 	Ok(())
 }
 
@@ -225,6 +238,7 @@ mod tests {
 		assert!((offers[0].monthly_compute_ipv4 - 3.99).abs() < 0.0001);
 		assert_eq!(offers[0].currency, "EUR");
 		let mut unavailable = size.clone();
+
 		unavailable["locations"][0]["available"] = json!(false);
 		let mut arm = size;
 		arm["architecture"] = json!("arm");
@@ -310,6 +324,7 @@ mod tests {
 				.contains("missing regional IPv4 price")
 		);
 		let mut unnamed = size();
+
 		unnamed.as_object_mut().unwrap().remove("name");
 		assert!(
 			hetzner(&[unnamed], &prices())

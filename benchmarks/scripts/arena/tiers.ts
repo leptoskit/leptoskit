@@ -119,6 +119,7 @@ const WORDS = [
 /** mulberry32: a small, well-mixed 32-bit generator with a fixed seed. */
 function random(seed: number): () => number {
 	let state = seed >>> 0;
+
 	return () => {
 		state = (state + 0x6d2b79f5) >>> 0;
 		let value = state;
@@ -134,14 +135,17 @@ function capitalise(word: string): string {
 
 function phrase(next: () => number, words: number): string {
 	const picked: string[] = [];
+
 	for (let index = 0; index < words; index += 1) {
 		picked.push(WORDS[Math.floor(next() * WORDS.length)]);
 	}
+
 	return picked.join(" ");
 }
 
 function sentence(next: () => number, words: number): string {
 	const text = phrase(next, words);
+
 	return `${capitalise(text)}.`;
 }
 
@@ -242,8 +246,10 @@ export interface TierEmitter {
  */
 export function quoted(text: string): string {
 	const control = [...text].some((character) => character.charCodeAt(0) < 0x20);
+
 	if (control || /[$\\]/.test(text)) {
 		throw new Error(`tier text needs language-specific escaping: ${text}`);
 	}
+
 	return JSON.stringify(text);
 }

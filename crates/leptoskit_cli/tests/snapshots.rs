@@ -358,6 +358,7 @@ fn database_scaffold_is_pinned() {
 	assert!(read("postgres_shared/Cargo.toml").contains(
 		"server = [\"postgres_db/server\", \"leptoskit/rpc-ssr\", \"leptoskit/db-postgres\"]"
 	));
+
 	assert!(
 		read("postgres_backend/Cargo.toml")
 			.contains("features = [\"server\", \"rpc-ssr\", \"db-postgres\"]")

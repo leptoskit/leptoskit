@@ -157,6 +157,7 @@ impl ArCoreBackend {
 		self.apply(&session, features)?;
 		// SAFETY: Resumes the configured session.
 		status_to_error(unsafe { (api.ArSession_resume)(session.handle) })?;
+
 		Ok(session)
 	}
 
@@ -183,6 +184,7 @@ impl ArCoreBackend {
 		} else {
 			ffi::LIGHT_ESTIMATION_DISABLED
 		};
+
 		let mut config = std::ptr::null_mut();
 		// SAFETY: Builds a configuration, applies it, and frees it.
 		let status = unsafe {
@@ -390,6 +392,7 @@ impl Backend for ArCoreBackend {
 			}
 			Some(ffi::AVAILABILITY_UNKNOWN_CHECKING) => return Availability::Checking,
 			Some(ffi::AVAILABILITY_SUPPORTED_INSTALLED) => {}
+
 			Some(_) if install && java::request_install(platform) == Some(true) => {}
 			Some(_) => return Availability::NeedsInstall,
 		}
@@ -415,6 +418,7 @@ impl Backend for ArCoreBackend {
 			ReferenceSpace::Local => ReferenceSpace::Local,
 			_ => ReferenceSpace::World,
 		};
+
 		Ok(Started::new(space, self.features))
 	}
 
@@ -422,10 +426,12 @@ impl Backend for ArCoreBackend {
 		let session = self.session.as_ref().ok_or(Error::Unavailable)?;
 		self.apply(session, features)?;
 		self.features = Self::granted(features, session);
+
 		let space = match config.reference_space {
 			ReferenceSpace::Local => ReferenceSpace::Local,
 			_ => ReferenceSpace::World,
 		};
+
 		Ok(Started::new(space, self.features))
 	}
 
@@ -502,6 +508,7 @@ impl Backend for ArCoreBackend {
 		status_to_error(status)?;
 		self.next_anchor += 1;
 		self.anchors.insert(self.next_anchor, anchor);
+
 		Ok(self.next_anchor)
 	}
 

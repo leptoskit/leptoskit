@@ -87,6 +87,7 @@ fn mount_commit() {
 		let start = Instant::now();
 		surface.set_root(&empty);
 		clear += start.elapsed().as_secs_f64();
+
 		surface.backend_mut().clear();
 	}
 

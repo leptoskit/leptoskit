@@ -274,6 +274,7 @@ async fn positions(db: &Db) -> Vec<(i64, Option<i64>, String)> {
 			Some(Value::Text(origin)) => origin,
 			other => panic!("{other:?}"),
 		};
+
 		(version, lsn, origin)
 	})
 	.collect()
@@ -379,6 +380,7 @@ async fn the_slot_never_moves_past_what_the_log_holds() {
 	let first = note("first").insert(&db).await.unwrap();
 	let commits = commits_since(&db, start).await;
 	assert_eq!(commits.len(), 1);
+
 	assert_eq!(commits[0].changes[0].key, [first.id.to_string()]);
 	capture.shutdown().await;
 
@@ -427,6 +429,7 @@ async fn one_server_captures_and_another_takes_over() {
 	let elsewhere = Db::connect(&url).await.unwrap();
 	let here = db.capture_changes_with(settings());
 	let there = elsewhere.capture_changes_with(settings());
+
 	eventually("one captures", async || {
 		here.stats().capturing || there.stats().capturing
 	})
@@ -442,6 +445,7 @@ async fn one_server_captures_and_another_takes_over() {
 	} else {
 		(there, here)
 	};
+
 	let start = db.live_version().await.unwrap();
 	let first = note("first").insert(&db).await.unwrap();
 	assert_eq!(commits_since(&db, start).await.len(), 1);
@@ -498,6 +502,7 @@ async fn migrations_switch_between_triggers_and_replication() {
 		Migration::new("20261101T0002_triggers", switch(&replication, &triggers)),
 	];
 	db.migrate(&migrations[..1]).await.unwrap();
+
 	let capture = db.capture_changes_with(settings());
 	let system = db.system("writing");
 
@@ -603,6 +608,7 @@ async fn prunes_by_dropping_partitions(db: &Db, mode: LiveCapture) {
 		LiveCapture::Triggers => None,
 		LiveCapture::Replication => Some(capturing(db, settings()).await),
 	};
+
 	let system = db.system("writing");
 
 	// Written before maintenance first runs, so into the default partition.
@@ -690,6 +696,7 @@ async fn readers_hear_the_marker(
 	loop {
 		match next(&mut behind).await {
 			Invalidation::Everything => heard_everything = true,
+
 			rows if rows == expected => break,
 			Invalidation::Rows(_) => assert!(!heard_everything, "nothing older after the marker"),
 		}
@@ -757,6 +764,7 @@ async fn full_ranges_below_the_marker_are_dropped() {
 		1,
 		"only the newest commit's change"
 	);
+
 	assert_eq!(
 		count(
 			&db,
@@ -911,6 +919,7 @@ async fn a_commit_waits_for_the_version_capture_gives_it() {
 	assert_eq!(version, db.live_version().await.unwrap());
 	let commits = commits_since(&db, version - 1).await;
 	assert_eq!(commits[0].version, version);
+
 	assert_eq!(commits[0].changes[0].key, [written.id.to_string()]);
 	assert_eq!(
 		(commits[0].actor, commits[0].origin.as_str()),

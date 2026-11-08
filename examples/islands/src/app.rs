@@ -147,6 +147,7 @@ fn oklch_to_hex(lightness: f64, chroma: f64, hue_degrees: f64) -> String {
 		} else {
 			1.055 * channel.powf(1.0 / 2.4) - 0.055
 		};
+
 		(encoded.clamp(0.0, 1.0) * 255.0).round() as u8
 	});
 	format!("#{red:02x}{green:02x}{blue:02x}")
@@ -193,9 +194,11 @@ mod tests {
 		let start = oklch_to_hex(0.68, 0.17, 28.0);
 		assert!(html.contains(&format!("<code>{start}</code>")), "{html}");
 		assert!(html.contains(&format!("background:{start}")), "{html}");
+
 		for label in ["Lightness", "Chroma", "Hue"] {
 			assert!(html.contains(&format!("<span>{label}</span>")), "{html}");
 		}
+
 		assert_eq!(html.matches(r#"type="range""#).count(), 3, "{html}");
 	}
 

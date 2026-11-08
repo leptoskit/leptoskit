@@ -46,13 +46,16 @@ fn fixed_histograms_expire_and_handle_clock_steps() {
 		..Limits::default()
 	});
 	let key = key(Source::Backend, "/notes/{id}", Outcome::Ok);
+
 	for value in [0.0, 5.0, 5.1, 10000.0, 10001.0] {
 		assert!(analytics.record(key.clone(), value, None));
 	}
+
 	let snapshot = analytics.snapshot();
 	let window = &snapshot.series[0].windows[0];
 	assert_eq!(window.latency[0], 2);
 	assert_eq!(window.latency[1], 1);
+
 	assert_eq!(window.latency[10], 1);
 	assert_eq!(window.latency[11], 1);
 	assert_eq!(window.p95_upper_ms(), None);
@@ -83,6 +86,7 @@ fn browsers_cannot_exhaust_backend_capacity_or_create_backend_findings() {
 		None
 	));
 	assert!(!analytics.record(key(Source::Browser, "/another", Outcome::Ok), 1.0, None));
+
 	for _ in 0..200 {
 		analytics.record(
 			key(Source::Browser, "/forged", Outcome::ServerError),
@@ -90,6 +94,7 @@ fn browsers_cannot_exhaust_backend_capacity_or_create_backend_findings() {
 			None,
 		);
 	}
+
 	assert!(analytics.record(key(Source::Backend, "/first", Outcome::Ok), 1.0, None));
 	assert!(analytics.record(key(Source::Backend, "/second", Outcome::Ok), 1.0, None));
 	assert!(
@@ -99,6 +104,7 @@ fn browsers_cannot_exhaust_backend_capacity_or_create_backend_findings() {
 			.iter()
 			.all(|s| s.key.source == Source::Backend)
 	);
+
 	assert!(!analytics.record(key(Source::Backend, "/third", Outcome::Ok), 1.0, None));
 	NOW.store(180, Ordering::Relaxed);
 	assert!(analytics.evidence().findings.is_empty());
@@ -110,6 +116,7 @@ fn browsers_cannot_exhaust_backend_capacity_or_create_backend_findings() {
 #[test]
 fn findings_use_completed_backend_windows_and_actual_sample_counts() {
 	let (_clock, analytics) = collector(Limits::default());
+
 	for i in 0..100 {
 		analytics.record(
 			key(
@@ -125,11 +132,13 @@ fn findings_use_completed_backend_windows_and_actual_sample_counts() {
 			None,
 		);
 	}
+
 	assert!(analytics.evidence().findings.is_empty()); // current window
 	NOW.store(180, Ordering::Relaxed);
 	let evidence = analytics.evidence();
 	assert_eq!(evidence.findings.len(), 1);
 	assert_eq!(evidence.findings[0].samples, 100);
+
 	assert_eq!(evidence.findings[0].failures, 5);
 	assert!(!evidence.infrastructure_changes_authorized);
 	assert!(
@@ -150,12 +159,15 @@ fn invalid_records_and_correlations_are_bounded_and_validated() {
 	let key = key(Source::Backend, "/notes/{id}", Outcome::Ok);
 	let context =
 		TraceContext::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").unwrap();
+
 	for _ in 0..5 {
 		analytics.record(key.clone(), 10.0, Some(context.clone()));
 	}
+
 	for duration in [f64::NAN, f64::INFINITY, -1.0, 86_400_001.0] {
 		assert!(!analytics.record(key.clone(), duration, None));
 	}
+
 	assert!(!analytics.record(super_key("/notes?email=private@example.com"), 1.0, None));
 	let snapshot = analytics.snapshot();
 	assert_eq!(snapshot.invalid_observations, 5);

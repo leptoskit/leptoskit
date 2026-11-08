@@ -142,9 +142,11 @@ async fn call(
 		.method(method)
 		.uri(path)
 		.header("content-type", "application/json");
+
 	if let Some(key) = key {
 		request = request.header("authorization", format!("Bearer {key}"));
 	}
+
 	let request = request
 		.body(body.map_or_else(Body::empty, |value| {
 			Body::from(serde_json::to_vec(&value).unwrap())
@@ -276,6 +278,7 @@ async fn a_running_operation_is_reconciled_once_its_worker_is_gone() {
 	assert_eq!(status, StatusCode::OK, "{claimed}");
 	assert_eq!(claimed["operation"]["phase"], "running");
 	host.accounts().revoke_worker("alice", "notes").unwrap();
+
 	drop(host);
 
 	let output = operator(&data)
@@ -372,6 +375,7 @@ fn website(assets: &Path, docs: &Path) {
 /// Reads one HTTP response from the serving broker.
 fn get(address: std::net::SocketAddr) -> String {
 	let mut response = String::new();
+
 	for attempt in 0..100 {
 		match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
 			Ok(mut stream) => {
@@ -384,10 +388,12 @@ fn get(address: std::net::SocketAddr) -> String {
 				stream.read_to_string(&mut response).unwrap();
 				break;
 			}
+
 			Err(_) if attempt < 99 => std::thread::sleep(Duration::from_millis(100)),
 			Err(error) => panic!("the broker never accepted: {error}"),
 		}
 	}
+
 	response
 }
 
@@ -399,14 +405,19 @@ fn stop(mut child: std::process::Child) {
 		.status()
 		.unwrap();
 	assert!(killed.success());
+
 	for _ in 0..100 {
 		if let Some(status) = child.try_wait().unwrap() {
 			assert!(status.success(), "{status}");
+
 			return;
 		}
+
 		std::thread::sleep(Duration::from_millis(100));
 	}
+
 	child.kill().unwrap();
+
 	panic!("the broker ignored SIGTERM");
 }
 

@@ -75,11 +75,13 @@ public final class BadgePlugin: NativePlugin {
         let count = payload.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)) }
 
         guard count <= maxCount else { throw PluginError.invalidArgument }
+
         return count
     }
 
     private static func encode(_ count: UInt32) -> Data {
         var value = count.littleEndian
+
         return withUnsafeBytes(of: &value) { Data($0) }
     }
 }

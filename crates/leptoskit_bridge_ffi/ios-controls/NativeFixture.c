@@ -177,6 +177,7 @@ lk_buffer lk_app_render_binary(lk_app *app) {
         put_u32(&out, (1u << 0) | (1u << 4) | (painted ? (1u << 6) | (1u << 11) : 0));
         char text[32], label[32];
         snprintf(text, sizeof(text), "Guest %d", app->identifier);
+
         snprintf(label, sizeof(label), "guest-%d", app->identifier);
         put_text(&out, text);
         put_text(&out, label);

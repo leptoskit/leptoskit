@@ -233,6 +233,7 @@ impl Site {
 	/// `out` must be missing, empty, or an earlier build.
 	pub fn build(&self, out: impl AsRef<Path>) -> Result<Build, Error> {
 		let out = out.as_ref();
+
 		for name in self.generated_assets.keys() {
 			if !name
 				.as_bytes()
@@ -252,6 +253,7 @@ impl Site {
 				});
 			}
 		}
+
 		let root = fs::canonicalize(&self.root).map_err(Error::io("read", &self.root))?;
 		let summary_path = self.root.join("SUMMARY.md");
 		let summary_source =
@@ -348,10 +350,12 @@ impl Site {
 		)?;
 
 		let mut files = self.copy_files(out)?;
+
 		for (name, contents) in &self.generated_assets {
 			write(&out.join(ASSETS).join("generated").join(name), contents)?;
 			files += 1;
 		}
+
 		write(
 			&out.join(ASSETS).join("site.css"),
 			include_bytes!("../assets/site.css"),

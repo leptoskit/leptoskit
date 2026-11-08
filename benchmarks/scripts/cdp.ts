@@ -67,15 +67,21 @@ const BROWSER_CANDIDATES = [
 
 function findBrowserBinary(): string {
 	const override = Deno.env.get("LEPTOSKIT_BENCH_BROWSER");
+
 	if (override) return override;
+
 	for (const candidate of BROWSER_CANDIDATES) {
 		const which = new Deno.Command("which", { args: [candidate] }).outputSync();
+
 		if (which.success) {
 			return new TextDecoder().decode(which.stdout).trim();
 		}
 	}
+
 	const mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
 	if (Deno.statSync(mac).isFile) return mac;
+
 	throw new Error(
 		"no Chromium found; set LEPTOSKIT_BENCH_BROWSER to a Chromium binary",
 	);
@@ -115,12 +121,16 @@ class PageConnection {
 	private handle(message: CdpMessage): void {
 		if (message.id !== undefined) {
 			const entry = this.pending.get(message.id);
+
 			if (!entry) return;
 			this.pending.delete(message.id);
+
 			if (message.error) entry.reject(new Error(message.error.message));
 			else entry.resolve(message.result);
+
 			return;
 		}
+
 		if (message.method) {
 			this.eventHandlers.get(message.method)?.(message.params);
 		}
@@ -144,6 +154,7 @@ class PageConnection {
 		for (const entry of this.pending.values()) {
 			entry.reject(new Error("connection closed"));
 		}
+
 		this.pending.clear();
 		this.socket.close();
 	}
@@ -227,6 +238,7 @@ class CdpPage implements Page {
 			format: "png",
 			everyNthFrame: 1,
 		});
+
 		return {
 			stop: async () => {
 				await this.connection.send("Page.stopScreencast");
@@ -244,11 +256,13 @@ class CdpPage implements Page {
 			result?: { value?: T };
 			exceptionDetails?: { exception?: { description?: string }; text: string };
 		};
+
 		if (result.exceptionDetails) {
 			const detail = result.exceptionDetails.exception?.description ??
 				result.exceptionDetails.text;
 			throw new Error(`page evaluation failed: ${detail}`);
 		}
+
 		return result.result?.value as T;
 	}
 
@@ -332,6 +346,7 @@ class StderrTail {
 					}
 				}
 			}
+
 			found(undefined);
 		})();
 	}
@@ -419,9 +434,11 @@ export async function launchBrowser(
 		}),
 	]);
 	clearTimeout(timer);
+
 	if (endpoint === undefined) {
 		throw await failure("exited before exposing a DevTools endpoint");
 	}
+
 	if (endpoint === null) {
 		throw await failure("did not expose a DevTools endpoint");
 	}

@@ -169,6 +169,7 @@ fn confirmed_candidate_survives_offline_restart_with_original_signature() {
 	installed
 		.confirm(&candidate.metadata.receipt)
 		.expect("idempotent confirmation");
+
 	drop(installed);
 
 	let mut offline =
@@ -363,6 +364,7 @@ fn explicit_rejection_preserves_last_confirmed_download_and_stale_callbacks_fail
 	let fallback = installed.launch().expect("working fallback");
 	assert_eq!(fallback.wasm, REPLACEMENT);
 	assert_eq!(fallback.metadata.build, 1);
+
 	assert!(!fallback.metadata.candidate);
 	assert!(
 		installed.reject(&fallback.metadata.receipt).is_err(),
@@ -436,10 +438,12 @@ fn an_incompatible_release_is_downloaded_once() {
 		let report = installed.sync_with(&mut registry).expect("current");
 		assert_eq!(report.status, UpdateStatus::Current);
 	}
+
 	drop(installed);
 	let mut reopened =
 		InstalledBundles::open(directory.path(), &baseline, configuration()).expect("reopen");
 	reopened.sync_with(&mut registry).expect("current");
+
 	let downloads = registry
 		.fetched
 		.iter()
@@ -528,6 +532,7 @@ fn offline_tampering_and_unknown_selector_recover_with_diagnostic() {
 	assert!(recovered.recovery_diagnostic().is_some());
 	assert_eq!(recovered.launch().expect("baseline").wasm, BASELINE);
 	drop(recovered);
+
 	fs::write(directory.path().join("state.json"), br#"{"format":123}"#).expect("unknown selector");
 	let mut recovered = InstalledBundles::open(directory.path(), &baseline, configuration())
 		.expect("selector recovery");
@@ -673,6 +678,7 @@ async fn real_axum_tcp_download_activation_and_offline_restart() {
 	})
 	.await
 	.expect("worker");
+
 	server.abort();
 	let mut offline =
 		InstalledBundles::open(&temporary.path().join("installed"), &baseline, config)
@@ -944,6 +950,7 @@ fn an_older_layout_derives_its_floor_from_the_confirmed_release() {
 		serde_json::from_slice(&fs::read(directory.path().join("floor.json")).expect("floor"))
 			.expect("floor json");
 	assert_eq!(floor["build"], 2);
+
 	let report = installed
 		.sync_with(&mut Registry::new(native_bundle(1, BASELINE)))
 		.expect("validly signed older release");
@@ -1015,6 +1022,7 @@ fn a_corrupt_version_floor_still_refuses_downgrades() {
 	});
 	let mut installed =
 		InstalledBundles::open(directory.path(), &baseline, configuration()).expect("reopen");
+
 	assert!(
 		installed
 			.recovery_diagnostic()
@@ -1609,13 +1617,16 @@ fn every_download_is_bounded_by_its_own_object_limit() {
 	// without a configured cap, a delta or release can never be larger than
 	// the biggest container a client reads.
 	let bounds = &transport.bounds;
+
 	assert_eq!(bounds.len(), 3, "{bounds:?}");
+
 	for (url, max_bytes) in bounds {
 		let expected = if url.ends_with("/index.json") {
 			2 * 1024 * 1024
 		} else {
 			MAX_BUNDLE_BYTES
 		};
+
 		assert_eq!(*max_bytes, expected, "{url}");
 	}
 }
@@ -1930,6 +1941,7 @@ fn releases_without_enough_trusted_approvals_never_download() {
 		COMMIT,
 	);
 	assert_unapproved(&refused(1, with(vec![other_build, other_files])), 0, 1);
+
 	// Statement bytes changed after signing.
 	let mut tampered = approval(&approver(31), &release, REPOSITORY, COMMIT);
 	tampered.statement = tampered.statement.replace(COMMIT, OTHER_COMMIT);
@@ -1986,6 +1998,7 @@ fn approval_files_inside_the_bundle_count_for_nothing() {
 		approval(&approver(32), &approved, REPOSITORY, COMMIT),
 	]);
 	fs::write(source.join("approvals.json"), &inside).expect("approvals");
+
 	fs::write(source.join("approvals/release.json"), &inside).expect("approvals");
 	let output = temporary.path().join("app.lkb");
 	bundle_directory_as(
@@ -2064,6 +2077,7 @@ fn a_staged_release_whose_stored_approvals_change_never_launches() {
 	installed.confirm(&trial.metadata.receipt).expect("confirm");
 	drop(installed);
 	let path = stored_approvals(directory.path(), &release);
+
 	let mut approvals =
 		ReleaseApprovals::from_slice(&fs::read(&path).expect("approvals")).expect("parse");
 	approvals.approvals.pop();
@@ -2116,6 +2130,7 @@ fn without_a_policy_no_approvals_are_fetched_or_stored() {
 		"{:?}",
 		registry.fetched
 	);
+
 	assert!(!stored_approvals(directory.path(), &release).exists());
 	assert_eq!(installed.launch().expect("trial").wasm, REPLACEMENT);
 }
@@ -2411,9 +2426,11 @@ fn a_host_descriptor_with_the_wrong_abi_or_version_is_rejected() {
 	));
 
 	let mut future = host_runtime();
+
 	if let Some(host) = &mut future.host {
 		host.format_version = CAPABILITY_CONTRACT_VERSION + 1;
 	}
+
 	assert!(matches!(
 		future.validate_host(),
 		Err(CodePushError::UnsupportedContractVersion(_))
@@ -2451,12 +2468,14 @@ fn a_signed_guest_with_a_different_bridge_protocol_keeps_the_working_baseline() 
 	assert!(
 		matches!(error, CodePushError::InvalidCapabilityContract(message) if message.contains("protocols"))
 	);
+
 	assert_eq!(installed.launch().unwrap().wasm, BASELINE);
 }
 
 #[test]
 fn contract_verification_also_enforces_legacy_abi_shell_and_plugin_requirements() {
 	let host = host_runtime();
+
 	for original in [contract(), guest_runtime(Vec::new(), Vec::new())] {
 		assert!(original.verify_guest(&host).is_ok());
 		let mut changed = original.clone();
@@ -2464,6 +2483,7 @@ fn contract_verification_also_enforces_legacy_abi_shell_and_plugin_requirements(
 		assert!(changed.verify_guest(&host).is_err());
 		changed = original.clone();
 		changed.shell.push_str("-incompatible");
+
 		assert!(changed.verify_guest(&host).is_err());
 		changed = original;
 		changed.plugins.push("missing-plugin".into());
@@ -2485,6 +2505,7 @@ fn unclassified_plugin_grants_do_not_prove_plugin_availability() {
 		);
 		// A grant alone never satisfies an explicit availability requirement.
 		let required = guest_runtime(vec!["plugin.clipboard"], Vec::new());
+
 		assert!(required.verify_guest(&host).is_err());
 		// Explicit optionality declares a fallback and removes the old grant
 		// requirement. It does not pretend the plugin is available.
@@ -2495,6 +2516,7 @@ fn unclassified_plugin_grants_do_not_prove_plugin_availability() {
 			ContractCompatibility::Verified
 		);
 	}
+
 	assert_eq!(
 		guest_runtime(Vec::new(), Vec::new())
 			.verify_guest(&host_runtime())
@@ -2513,6 +2535,7 @@ fn a_signed_release_with_unclassified_missing_plugins_reports_incomplete() {
 	let plugin = &mut host.host.as_mut().unwrap().plugins[0];
 	plugin.state = CapabilityState::Unsupported;
 	plugin.implementation = None;
+
 	let mut installed =
 		InstalledBundles::open(directory.path(), &baseline, configuration_with(host)).unwrap();
 	let report = installed

@@ -42,6 +42,7 @@ class SceneDelegate: RCTDefaultReactNativeFactoryDelegate, UIWindowSceneDelegate
     guard let flag = arguments.firstIndex(of: "--scenario"), flag + 1 < arguments.count else {
       return [:]
     }
+
     return ["scenario": arguments[flag + 1]]
   }
 

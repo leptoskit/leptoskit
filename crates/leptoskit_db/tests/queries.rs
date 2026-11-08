@@ -782,6 +782,7 @@ async fn postgres_reads_what_it_knows_and_names_types_it_doesnt() {
 		})
 		.await
 		.unwrap();
+
 	match rows[0][0] {
 		Value::LocalTimestamp(read) => assert_eq!(read, at.naive_utc()),
 		ref other => panic!("expected a local timestamp, found {other:?}"),

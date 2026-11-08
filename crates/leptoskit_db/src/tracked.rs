@@ -123,6 +123,7 @@ impl ReadEntry {
 		if old.as_ref().is_some_and(Result::is_err) || new.as_ref().is_some_and(Result::is_err) {
 			return true;
 		}
+
 		let may =
 			|row: &std::collections::HashMap<String, Value>| self.condition.eval(row).may_match();
 

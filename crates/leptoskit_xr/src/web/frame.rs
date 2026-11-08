@@ -109,6 +109,7 @@ pub(super) async fn start(
 
 	if !features.contains(config.required) {
 		let _ = js::call(&session, "end", &[]);
+
 		return Err(Error::Unavailable);
 	}
 
@@ -242,9 +243,11 @@ fn read(state: &Rc<RefCell<State>>, time: f64, xr_frame: &JsValue) {
 	} else {
 		TrackingState::Normal
 	};
+
 	let viewer = js::pose(&js::get(&pose, "transform")).unwrap_or(Pose::IDENTITY);
 	let planes = planes(&mut state.borrow_mut(), xr_frame, &space);
 	let anchors = anchors(&state.borrow(), xr_frame, &space);
+
 	let inputs = super::inputs::inputs(&session, xr_frame, &space);
 	let depth = if features.contains(Features::DEPTH) {
 		js::items(&js::get(&pose, "views"))
@@ -254,6 +257,7 @@ fn read(state: &Rc<RefCell<State>>, time: f64, xr_frame: &JsValue) {
 	} else {
 		None
 	};
+
 	resolve_hits(&mut state.borrow_mut(), xr_frame, &space);
 	let mut state = state.borrow_mut();
 	let has_depth = depth.is_some();
@@ -341,6 +345,7 @@ fn planes(state: &mut State, xr_frame: &JsValue, space: &JsValue) -> Vec<Plane> 
 				} else {
 					PlaneOrientation::HorizontalDown
 				},
+
 				label: label(js::get(&plane, "semanticLabel").as_string().as_deref()),
 				pose,
 				extent: [(max[0] - min[0]).max(0.0), (max[1] - min[1]).max(0.0)],
@@ -435,6 +440,7 @@ fn depth(xr_frame: &JsValue, view: &JsValue) -> Option<DepthImage> {
 				.flat_map(|raw| (f32::from(u16::from_le_bytes(*raw)) * scale).to_le_bytes())
 				.collect()
 		};
+
 		(DepthFormat::Meters32, meters)
 	};
 
@@ -544,6 +550,7 @@ pub(super) async fn add_anchor(state: &Rc<RefCell<State>>, pose: Pose) -> Result
 			pose,
 			tracking: TrackingState::Normal,
 		});
+
 		return Ok(id);
 	}
 

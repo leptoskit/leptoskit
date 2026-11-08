@@ -113,6 +113,7 @@ fn paint_and_text_setters_reach_the_props() {
 	assert_eq!(element.props.border_color, Some(Color::rgba(9, 10, 11, 12)));
 	assert_eq!(element.props.font_size, Some(18.0));
 	assert_eq!(element.props.font_weight, Some(FontWeight::Semibold));
+
 	assert_eq!(element.props.text_align, Some(TextAlign::Center));
 }
 

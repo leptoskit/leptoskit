@@ -90,6 +90,7 @@ final class DevtoolsOverlay: DevtoolsView {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         backgroundColor = .clear
         accessibilityElementsHidden = true
+
         outline.isUserInteractionEnabled = false
         outline.layer.borderWidth = 2
         outline.layer.borderColor = UIColor(red: red, green: green, blue: blue, alpha: 1).cgColor

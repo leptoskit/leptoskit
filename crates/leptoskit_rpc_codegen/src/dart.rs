@@ -428,6 +428,7 @@ fn from_json(name: &str, fields: &[Field]) -> String {
 					} else {
 						field.ty.clone().optional()
 					};
+
 					format!("\t\t{}: {},", field.dart, ty.decode(&source))
 				}
 			})
@@ -609,6 +610,7 @@ pub(crate) fn generate(context: &Context<'_>) -> Generated {
 	if library.contains("_encodeNullable(") || client.contains("_encodeNullable(") {
 		library.push_str(NULLABLE_ENCODER);
 	}
+
 	library.push_str(RUNTIME);
 	library.push_str(&client);
 	let mut live = context.banner("//");
@@ -704,6 +706,7 @@ impl Signature {
 				payload.push(format!("\t\t\t\t{key}: {},", ty.encode(identifier)));
 			} else {
 				parameters.push(format!("{} {}", ty.clone().optional().render(), identifier));
+
 				payload.push(format!(
 					"\t\t\t\tif ({identifier} != null) {key}: {},",
 					ty.clone().optional().encode(identifier)
@@ -765,6 +768,7 @@ impl Signature {
 				format!("\n\t\treturn {};", self.output.decode("result")),
 			)
 		};
+
 		format!(
 			"\t{} {name}({}) async {{\n\t\t{binding}await {send}{}{});{decode}\n\t}}\n",
 			self.future(),
@@ -862,6 +866,7 @@ fn client_class(
 		} else {
 			"Mutation"
 		};
+
 		let class = types.reserve(&format!("{}{suffix}", type_name(&function.name)));
 		out.push_str(&format!("\tlate final {class} {name} = {class}._(this);\n"));
 		members.push_str(&live_class(function, &class, &signature, &invoke));
@@ -918,6 +923,7 @@ fn live_class(function: &ApiFunction, class: &str, signature: &Signature, invoke
 				format!("(result) => {}", signature.output.decode("result")),
 			)
 		};
+
 		out.push_str(&format!(
 			"\t/// Watches the result over the live connection: the stream gets the first\n\t/// \
 			 value and each new one, ready for a `StreamBuilder`. A failure arrives as\n\t/// a \

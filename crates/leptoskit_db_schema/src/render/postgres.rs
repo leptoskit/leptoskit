@@ -858,11 +858,13 @@ fn create_publication(publication: &Publication) -> Vec<String> {
 	} else {
 		format!(" FOR TABLE {}", tables.join(", "))
 	};
+
 	statements.push(format!(
 		"CREATE PUBLICATION {}{scope}",
 		ident(&publication.name)
 	));
 	statements.push(publication_comment(publication));
+
 	statements
 }
 

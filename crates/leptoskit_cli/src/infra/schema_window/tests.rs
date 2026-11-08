@@ -35,6 +35,7 @@ fn runtime_configuration_binds_one_window_without_discarding_app_settings() {
 	assert_eq!(value["env"]["clear"][PIN_ENV], window.pin);
 	assert_eq!(value["env"]["clear"]["APP_SETTING"], "keep");
 	assert_eq!(value["env"]["secret"], json!(["DATABASE_URL"]));
+
 	assert_eq!(value["volumes"].as_array().unwrap().len(), 2);
 	assert_eq!(
 		value["volumes"][0],
@@ -76,6 +77,7 @@ fn recovery_selects_the_previous_window_instead_of_the_failed_candidates_pin() {
 #[test]
 fn unapproved_secret_overrides_and_unknown_mounts_are_refused() {
 	let window = fixture();
+
 	for name in [PATH_ENV, PIN_ENV] {
 		let mut value: Value = serde_json::from_str(&config()).unwrap();
 		value["env"]["secret"]
@@ -93,9 +95,11 @@ fn unapproved_secret_overrides_and_unknown_mounts_are_refused() {
 		value["volumes"].as_array_mut().unwrap().push(json!(mount));
 		assert!(configure(&value.to_string(), "notes", Some(&window)).is_err());
 	}
+
 	for name in ["../escape", "", "-option", "name/child", "name'quote"] {
 		assert!(configure(&config(), name, Some(&window)).is_err());
 	}
+
 	assert!(configure(&config(), "App_2", Some(&window)).is_ok());
 }
 
@@ -137,6 +141,7 @@ fn running_container_requires_the_exact_pin_and_read_only_bind_source() {
 		changed["Mounts"][0][key] = value;
 		assert!(window.check_container("notes", &changed).is_err());
 	}
+
 	let mut duplicated = original.clone();
 	duplicated["Mounts"]
 		.as_array_mut()
@@ -178,6 +183,7 @@ fn installation_is_atomic_nonreplacing_and_rejects_changed_files() {
 	};
 	assert!(!run(b"substitution").status.success());
 	assert!(!path.exists());
+
 	assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 	let installed = run(window.json.as_bytes());
 	assert!(

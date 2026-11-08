@@ -118,14 +118,17 @@ impl Lab {
 			.env_clear()
 			.env("PATH", self.bin())
 			.env("HOME", self.path());
+
 		for (key, value) in env {
 			command.env(key, value);
 		}
+
 		// `env_clear` would otherwise drop the coverage profile path, and the
 		// checks this test drives would never be recorded.
 		if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
 			command.env("LLVM_PROFILE_FILE", profile);
 		}
+
 		command.output().expect("run leptoskit doctor")
 	}
 }
@@ -183,6 +186,7 @@ fn everything() -> Lab {
 	lab.android_sdk();
 	let hvigorw = lab.path().join("hvigorw");
 	fs::write(&hvigorw, "#!/bin/sh\n").expect("hvigorw");
+
 	for file in ["chrome", "firefox", "geckodriver"] {
 		fs::write(lab.path().join(file), "#!/bin/sh\n").expect("browser stub");
 	}
@@ -195,6 +199,7 @@ fn everything() -> Lab {
 	] {
 		lab.rust_target(target);
 	}
+
 	lab.reports("cargo", "cargo 1.90.0 (fixture)");
 	lab.rustc();
 	lab.reports("wasm-opt", "wasm-opt version 123 (fixture)");
@@ -234,6 +239,7 @@ fn every_check_passes_with_the_tools_a_full_project_needs() {
 		],
 	);
 	succeeds(&output);
+
 	for row in [
 		"✔ cargo",
 		"✔ rustc",
@@ -277,6 +283,7 @@ fn one_required_failure_reports_the_singular_restart_condition() {
 	let output = lab.doctor(&[], &[]);
 	fails(&output);
 	carries(&output, "✖ macOS: swift");
+
 	complains(
 		&output,
 		"1 required check failed; builds will not work until it passes\n",
@@ -293,6 +300,7 @@ fn optional_tools_warn_without_failing_the_run() {
 	let output = lab.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "▲ wasm-opt");
+
 	carries(
 		&output,
 		"release builds need it unless `bundle.wasm_opt = false`",
@@ -309,6 +317,7 @@ fn android_reports_missing_sdk_platform_ndk_and_cmake_before_any_build() {
 	lab.rustc();
 	lab.tool("java", "printf '%s\\n' 'openjdk version \"21.0.2\"' >&2");
 	let output = lab.doctor(&[], &[]);
+
 	fails(&output);
 	carries(&output, "✖ Android: SDK");
 	carries(
@@ -333,6 +342,7 @@ fn an_android_sdk_without_a_platform_or_cmake_versions_is_reported() {
 	lab.reports("cargo", "cargo 1.90.0 (fixture)");
 	lab.rustc();
 	lab.tool("java", "printf '%s\\n' 'openjdk version \"21.0.2\"' >&2");
+
 	let sdk = lab.path().join("sdk");
 	fs::create_dir_all(sdk.join("cmake")).expect("empty cmake");
 	fs::create_dir_all(sdk.join("ndk/27.0.0")).expect("ndk");
@@ -357,6 +367,7 @@ fn an_old_java_and_gtk_are_named_with_their_required_versions() {
 	lab.reports("cargo", "cargo 1.90.0 (fixture)");
 	lab.rustc();
 	let sdk = lab.android_sdk();
+
 	lab.tool("java", "printf '%s\\n' 'openjdk version \"1.8.0_392\"' >&2");
 	lab.reports("pkg-config", "4.4.0");
 	let output = lab.doctor(&[], &[("ANDROID_HOME", sdk.to_str().unwrap())]);
@@ -376,6 +387,7 @@ fn a_java_probe_that_exits_nonzero_is_reported_with_its_status() {
 	lab.reports("cargo", "cargo 1.90.0 (fixture)");
 	lab.rustc();
 	let sdk = lab.android_sdk();
+
 	lab.tool(
 		"java",
 		"printf '%s\\n' 'openjdk version \"21.0.2\"' >&2; exit 1",
@@ -395,6 +407,7 @@ fn linux_reports_a_missing_or_failing_gtk_pkg_config() {
 	let output = missing.doctor(&[], &[]);
 	fails(&output);
 	carries(&output, "✖ Linux: pkg-config");
+
 	carries(&output, "✖ Linux: GTK 4");
 
 	let broken = Lab::new();
@@ -405,6 +418,7 @@ fn linux_reports_a_missing_or_failing_gtk_pkg_config() {
 	broken.tool("pkg-config", "exit 1");
 	let output = broken.doctor(&[], &[]);
 	fails(&output);
+
 	carries(
 		&output,
 		"not found; install the GTK 4 development packages (libgtk-4-dev on Debian and Ubuntu)",
@@ -425,6 +439,7 @@ fn ios_reports_a_missing_toolchain_runtime_and_targets() {
 		"if [ \"$1\" = simctl ]; then printf '%s\\n' '-- No runtimes installed --'; fi",
 	);
 	let output = lab.doctor(&[], &[]);
+
 	fails(&output);
 	carries(&output, "`xcodebuild -version` exited with");
 	carries(
@@ -441,6 +456,7 @@ fn ios_reports_a_missing_toolchain_runtime_and_targets() {
 	broken.reports("xcodebuild", "Xcode 18.0");
 	broken.tool("xcrun", "exit 1");
 	let output = broken.doctor(&[], &[]);
+
 	fails(&output);
 	carries(&output, "`xcrun simctl list runtimes` exited with");
 
@@ -452,6 +468,7 @@ fn ios_reports_a_missing_toolchain_runtime_and_targets() {
 	absent.reports("xcodebuild", "Xcode 18.0");
 	let output = absent.doctor(&[], &[]);
 	fails(&output);
+
 	carries(&output, "could not run xcrun");
 }
 
@@ -466,6 +483,7 @@ fn ios_requires_macos_and_xcode() {
 	let output = lab.doctor(&[], &[]);
 	fails(&output);
 	carries(&output, "✖ iOS: Xcode");
+
 	carries(&output, "iOS applications require macOS and Xcode");
 }
 
@@ -493,6 +511,7 @@ fn harmonyos_reports_a_missing_or_invalid_hvigorw_and_ohpm() {
 	let output = missing.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "▲ HarmonyOS: hvigorw");
+
 	carries(
 		&output,
 		"missing: install DevEco Studio and put hvigorw on PATH or in HVIGORW",
@@ -507,6 +526,7 @@ fn harmonyos_reports_a_missing_or_invalid_hvigorw_and_ohpm() {
 	let absent = invalid.path().join("absent-hvigorw");
 	let output = invalid.doctor(&[], &[("HVIGORW", absent.to_str().unwrap())]);
 	succeeds(&output);
+
 	carries(&output, "does not exist");
 
 	let installed = Lab::new();
@@ -517,6 +537,7 @@ fn harmonyos_reports_a_missing_or_invalid_hvigorw_and_ohpm() {
 	installed.reports("hvigorw", "hvigor 5.0.0");
 	installed.reports("ohpm", "ohpm 5.0.0");
 	let output = installed.doctor(&[], &[]);
+
 	succeeds(&output);
 	carries(&output, "✔ HarmonyOS: hvigorw");
 	carries(&output, "✔ HarmonyOS: ohpm");
@@ -540,6 +561,7 @@ fn project_checks_report_configuration_and_lockfile_problems() {
 	quiet.rustc();
 	let output = quiet.doctor(&[], &[]);
 	succeeds(&output);
+
 	carries(&output, "no wasm-bindgen in Cargo.lock");
 
 	let mismatched = Lab::new();
@@ -572,6 +594,7 @@ fn extension_checks_name_the_browser_tools_that_are_missing() {
 	let output = lab.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "▲ Chrome for Testing");
+
 	carries(&output, "extensions run in Chrome for Testing");
 	// Firefox is also searched for under `/Applications`, so its row depends
 	// on the host; the other browser tools are only found through PATH.
@@ -593,6 +616,7 @@ fn devtools_reports_whether_the_client_declares_the_feature() {
 	let output = declared.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "✔ devtools");
+
 	carries(&output, "app declares `devtools`");
 
 	let missing = Lab::new();
@@ -603,6 +627,7 @@ fn devtools_reports_whether_the_client_declares_the_feature() {
 	let output = missing.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "▲ devtools");
+
 	carries(
 		&output,
 		"add `devtools = [\"leptoskit/devtools\"]` to app's [features]",
@@ -619,6 +644,7 @@ fn all_checks_every_platform_the_machine_can_build() {
 	lab.rustc();
 	lab.tool("java", "printf '%s\\n' 'openjdk version \"21.0.2\"' >&2");
 	let sdk = lab.android_sdk();
+
 	let output = lab.doctor(&["--all"], &[("ANDROID_HOME", sdk.to_str().unwrap())]);
 	carries(&output, "✔ Android: Java");
 	carries(&output, "✔ Android: SDK");

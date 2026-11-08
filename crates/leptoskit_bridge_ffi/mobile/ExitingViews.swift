@@ -65,6 +65,7 @@ final class ExitingViews<View: AnyObject> {
         for (view, props) in removed where ghosts[ObjectIdentifier(view)] === view {
             guard let layer = layer(view) else { continue }
             _ = motion.exit(layer, props) { [weak self, weak view] in
+
                 guard let self, let view, ghosts.removeValue(forKey: ObjectIdentifier(view)) != nil else { return }
                 remove(view)
             }

@@ -592,10 +592,12 @@ async fn reconnects_and_catches_up(url: &str, capture: LiveCapture) {
 	let url = url.to_string();
 	let db = Db::connect(&url).await.unwrap();
 	create_schema_capturing(&db, capture).await;
+
 	let _capture = match capture {
 		LiveCapture::Triggers => None,
 		LiveCapture::Replication => Some(start_capture(&db).await),
 	};
+
 	let system = db.system("a live test");
 	let mut feed = system.changes().await.unwrap();
 

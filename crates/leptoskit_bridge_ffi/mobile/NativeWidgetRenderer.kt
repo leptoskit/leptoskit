@@ -115,6 +115,7 @@ internal class NativeWidgetRenderer(
         movedScrolls.clear()
         retargeted.clear()
         motion.clear()
+
         widgets.clear()
         controlProps.clear()
 
@@ -265,6 +266,7 @@ internal class NativeWidgetRenderer(
                 if (view is NativeScene3dView) view.close()
                 val exiting = motion.exiting(view)
                 motion.forget(change.id, view)
+
                 if (exiting) return
                 motion.finishExits(view)
                 detach(view)
@@ -436,6 +438,7 @@ internal class NativeWidgetRenderer(
         fun visit(view: View) {
             if (!view.isEnabled || view.visibility != View.VISIBLE) return
             if (view is EditText) editors.add(view)
+
             if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
         }
         visit(root)
@@ -454,6 +457,7 @@ internal class NativeWidgetRenderer(
         control.minimumWidth = 0
         control.minimumHeight = 0
         val original = control.buttonDrawable
+
         if (control !is Switch && original != null) {
             // Android's themed glyph can be wider than Yoga's 20dp checkbox/radio frame.
             // Let the native stateful drawable scale into that frame rather than clipping it.
@@ -471,12 +475,15 @@ internal class NativeWidgetRenderer(
                     override fun getIntrinsicHeight(): Int = extent()
                 }
         }
+
         control.setOnCheckedChangeListener { _, checked ->
+
             if (!applying && control.isEnabled && (control !is RadioButton || checked)) {
                 restoreControl(id, control)
                 event(id, 6, "{\"checked\":$checked}")
             }
         }
+
         return control
     }
 
@@ -493,6 +500,7 @@ internal class NativeWidgetRenderer(
             input.inputType =
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
+
         input.addTextChangedListener(InputWatcher(id, event))
         input.imeOptions = EditorInfo.IME_ACTION_DONE
         input.setOnEditorActionListener { _, action, key ->
@@ -771,6 +779,7 @@ internal class NativeVectorView(
                     NativeVectorFrame.map(path, matrix, if (path.stroke?.scalesWithDrawing == true) drawingScale else density)
                 }
             }
+
         invalidate()
     }
 }
@@ -985,9 +994,11 @@ internal class NativeSlider(
 
     fun proposedValue(progress: Int): Double {
         val value = minimum + progress.toDouble() / max * (maximum - minimum)
+
         val increment = step ?: return value.coerceIn(minimum, maximum)
         val last = floor((maximum - minimum) / increment + 1e-10)
         val index = floor((value - minimum) / increment + 0.5).coerceIn(0.0, last)
+
         return (minimum + index * increment).coerceIn(minimum, maximum)
     }
 }
@@ -1012,6 +1023,7 @@ internal fun dismissEditorOutside(
     if (event.actionMasked != MotionEvent.ACTION_DOWN) return
     val editor = root.findFocus() as? EditText ?: return
     val bounds = Rect()
+
     if (!editor.getGlobalVisibleRect(bounds) || !bounds.contains(event.rawX.toInt(), event.rawY.toInt())) {
         dismissEditor(root, editor)
     }
@@ -1121,14 +1133,17 @@ internal class NativeMotion(
             mask: Int,
         ) {
             if (mask and ALPHA != 0) view.alpha = alpha
+
             if (mask and parts(MotionTransform.TRANSLATE) != 0) {
                 view.translationX = translationX
                 view.translationY = translationY
             }
+
             if (mask and parts(MotionTransform.SCALE) != 0) {
                 view.scaleX = scaleX
                 view.scaleY = scaleY
             }
+
             if (mask and parts(MotionTransform.ROTATE) != 0) view.rotation = rotation
         }
 
@@ -1156,6 +1171,7 @@ internal class NativeMotion(
         val current = states.getValue(id)
 
         if (isNew) created.add(id)
+
         if (!touched.containsKey(id)) current.colorBefore = (view.background as? GradientDrawable)?.color?.defaultColor
         touched[id] = view
     }
@@ -1166,6 +1182,7 @@ internal class NativeMotion(
             val state = states[id] ?: continue
             update(id, view, state, id in created)
         }
+
         touched.clear()
         created.clear()
     }
@@ -1188,6 +1205,7 @@ internal class NativeMotion(
             stop(id, view)
             states.remove(id)
             target.applyTo(view, ALL)
+
             return
         }
 
@@ -1225,6 +1243,7 @@ internal class NativeMotion(
         var changed = 0
 
         if (previous != null && previous.opacity != own.opacity) changed = changed or ALPHA
+
         if (previous != null && previous.transform != own.transform) changed = changed or TRANSFORM
         val animate =
             changed and
@@ -1235,11 +1254,13 @@ internal class NativeMotion(
         val colorAfter = (view.background as? GradientDrawable)?.color?.defaultColor
         val colorBefore = state.colorBefore ?: Color.TRANSPARENT
         val colors =
+
             if (covers and MotionTransition.COLORS != 0 && colorAfter != null && colorBefore != colorAfter) {
                 colorBefore to colorAfter
             } else {
                 null
             }
+
         val running = state.transition?.takeIf { it.animator.isStarted }
         val keep = running?.mask?.and(changed.inv()) ?: 0
         val free = ALL and state.keyframesMask.inv()
@@ -1248,13 +1269,16 @@ internal class NativeMotion(
             // Values that changed without a transition jump; a running
             // transition keeps moving the rest, toward their new targets.
             target.applyTo(view, free and keep.inv())
+
             if (running == null) return
             running.mask = keep
+
             if (keep != 0 && running.to != target) {
                 restart(state, view, target, keep, null, running.curve, 0f)
             } else if (keep == 0) {
                 running.animator.cancel()
             }
+
             return
         }
 
@@ -1285,8 +1309,10 @@ internal class NativeMotion(
         state.keyframesAnimator?.cancel()
         state.keyframesAnimator = null
         state.keyframes = keyframes
+
         if (keyframes == null) {
             state.own?.let { look(it, size(view)).applyTo(view, ALL) }
+
             return
         }
 
@@ -1341,6 +1367,7 @@ internal class NativeMotion(
         view.left = from.left
         view.top = from.top
         view.right = from.right
+
         view.bottom = from.bottom
     }
 
@@ -1391,6 +1418,7 @@ internal class NativeMotion(
         exit.animator.removeAllListeners()
         exit.animator.cancel()
         exit.parent.endViewTransition(view)
+
         val id = view.tag as? Long ?: return
         val state = states[id] ?: return
         state.own?.let { look(it, size(view)).applyTo(view, ALL) }
@@ -1434,6 +1462,7 @@ internal class NativeMotion(
         state.keyframesAnimator = null
         state.keyframes = null
         state.layout = null
+
         view.translationX = 0f
         view.translationY = 0f
         view.scaleX = 1f
@@ -1443,11 +1472,13 @@ internal class NativeMotion(
 
     fun clear() {
         exits.keys.toList().forEach(::finishExit)
+
         for (state in states.values) {
             state.transition?.animator?.cancel()
             state.keyframesAnimator?.cancel()
             state.layout?.cancel()
         }
+
         states.clear()
         touched.clear()
         created.clear()

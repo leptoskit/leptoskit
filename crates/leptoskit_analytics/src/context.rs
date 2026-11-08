@@ -11,9 +11,11 @@ impl TraceContext {
 	#[must_use]
 	pub fn parse(value: &str) -> Option<Self> {
 		let bytes = value.as_bytes();
+
 		if bytes.len() != 55 || &bytes[..3] != b"00-" || bytes[35] != b'-' || bytes[52] != b'-' {
 			return None;
 		}
+
 		let hex = |slice: &[u8]| {
 			slice
 				.iter()
@@ -47,13 +49,17 @@ impl TraceContext {
 	pub(crate) fn child(parent: Option<&Self>) -> Result<Self, getrandom::Error> {
 		use std::fmt::Write as _;
 		let mut random = [0; 24];
+
 		loop {
 			getrandom::fill(&mut random)?;
+
 			if random[..16].iter().any(|b| *b != 0) && random[16..].iter().any(|b| *b != 0) {
 				break;
 			}
 		}
+
 		let mut value = String::from("00-");
+
 		if let Some(parent) = parent {
 			value.push_str(parent.trace_id());
 		} else {
@@ -61,10 +67,13 @@ impl TraceContext {
 				let _ = write!(value, "{b:02x}");
 			}
 		}
+
 		value.push('-');
+
 		for b in &random[16..] {
 			let _ = write!(value, "{b:02x}");
 		}
+
 		// This buffer is not an OTel trace exporter; do not claim it sampled a
 		// distributed trace. Consumers can still use the correlation ID.
 		value.push_str("-00");

@@ -820,6 +820,7 @@ fn shape_key(segments: &[Segment]) -> (Vec<u8>, Vec<String>) {
 			}
 		})
 		.unzip();
+
 	if segments
 		.iter()
 		.any(|segment| matches!(segment, Segment::Rest(_) | Segment::OptionalRest(_)))

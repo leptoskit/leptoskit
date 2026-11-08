@@ -118,6 +118,7 @@ crates=()
 if [[ ${#selected[@]} -gt 0 ]]; then
 	crates=("${selected[@]}")
 else
+
 	while IFS= read -r crate; do
 		[[ -n "$crate" ]] && crates+=("$crate")
 	done < <(
@@ -159,6 +160,7 @@ failures=""
 
 echo "Trusted publisher: ${owner}/${repo}, workflow ${workflow}, environment ${environment}"
 echo "Crates: ${#crates[@]}"
+
 if [[ "$dry_run" == true ]]; then
 	echo "Mode: dry run"
 fi

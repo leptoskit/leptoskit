@@ -135,6 +135,7 @@ impl Reader<'_> {
 					f32::INFINITY => Iterations::Infinite,
 					count => Iterations::Count(count),
 				};
+
 				let alternate = self.u8() != 0;
 				let easing = self.easing();
 				let frames = (0..self.u8())

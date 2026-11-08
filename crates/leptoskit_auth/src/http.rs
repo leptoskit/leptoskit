@@ -2121,6 +2121,7 @@ impl leptoskit_rpc::Identify for Auth {
 					.await
 					.map_err(|error| rpc_error(&error))?
 			};
+
 			let caller = current.signed_in.as_ref().map(|me| me.session.to_string());
 			let mut context = crate::context(current.signed_in);
 			if caller.is_some()
@@ -2366,6 +2367,7 @@ mod tests {
 			body.message,
 			"signing in with that account didn't work; try again"
 		);
+
 		let (_, body) =
 			AuthError::MergeConflict("posts.author_id: duplicate key".into()).describe();
 		assert!(body.message.contains("couldn't move here"), "{body:?}");

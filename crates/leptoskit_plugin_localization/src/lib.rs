@@ -344,6 +344,7 @@ mod tests {
 			.encode(),
 			Err(Error::InvalidArgument)
 		);
+
 		let mut count = Snapshot::default().encode().unwrap().to_vec();
 		count[4] = 65;
 		assert_eq!(Snapshot::decode(&count), Err(Error::TooLarge));
@@ -414,7 +415,9 @@ mod tests {
 		let reply = host.invoke(SNAPSHOT, Bytes::new()).unwrap();
 		let result = Snapshot::decode(&reply).unwrap();
 		assert!(result.time_zone.is_none_or(|zone| !zone.is_empty()));
+
 		assert_eq!(result.hour_24, None);
+
 		for locale in &result.locales {
 			assert_ne!(locale.tag, "");
 		}

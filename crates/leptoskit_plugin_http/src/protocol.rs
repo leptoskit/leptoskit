@@ -189,6 +189,7 @@ mod tests {
 		let mut frame = Encoder::default();
 		frame.u32(0);
 		frame.bytes(long.url.as_bytes()).unwrap();
+
 		assert_eq!(
 			decode_request(&frame.finish()).unwrap_err(),
 			Error::TooLarge

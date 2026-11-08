@@ -579,6 +579,7 @@ pub(crate) fn visit_schema(schema: &Value, visit: &mut impl FnMut(&Value)) {
 			visit_schema(items, visit);
 		}
 	}
+
 	for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
 		if let Some(variants) = object.get(key).and_then(Value::as_array) {
 			for variant in variants {
@@ -599,6 +600,7 @@ pub(crate) fn visit_schema(schema: &Value, visit: &mut impl FnMut(&Value)) {
 			}
 		}
 	}
+
 	if let Some(dependencies) = object.get("dependencies").and_then(Value::as_object) {
 		for dependency in dependencies
 			.values()
@@ -806,6 +808,7 @@ mod tests {
 		assert!(!ApiKind::Action.is_idempotent_with_key());
 		assert_eq!(ApiKind::Stream.as_str(), "stream");
 		assert!(!ApiKind::Stream.is_callable_over_http());
+
 		assert!(ApiKind::Query.is_callable_over_http());
 		assert!(ApiKind::Mutation.is_idempotent_with_key());
 		assert!(!ApiKind::Query.is_idempotent_with_key());

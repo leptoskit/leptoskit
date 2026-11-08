@@ -779,6 +779,7 @@ impl Shared {
 				} else {
 					"vs_static"
 				}),
+
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 				buffers: &buffers,
 			},

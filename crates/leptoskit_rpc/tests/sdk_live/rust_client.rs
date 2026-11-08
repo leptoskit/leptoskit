@@ -103,6 +103,7 @@ impl Person {
 						Some(Err(error)) => eprintln!("{}: {error}", self.name),
 						None => return Err(format!("{}: the subscription ended", self.name).into()),
 					},
+
 					next = self.page.next() => match next {
 						Some(Ok(page)) => self.latest_page = Some(page),
 						Some(Err(error)) => eprintln!("{}: {error}", self.name),

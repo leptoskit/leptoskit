@@ -47,6 +47,7 @@ class ArenaPlugin(
             12 -> bytes(payload).toString(Charsets.UTF_8).toByteArray(Charsets.UTF_8)
             13 -> bytes(payload)
             14 -> JSONObject(bytes(payload).toString(Charsets.UTF_8)).toString().toByteArray(Charsets.UTF_8)
+
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
 
@@ -60,6 +61,7 @@ class ArenaPlugin(
                 Choreographer.getInstance().postFrameCallback(callback)
                 continuation.invokeOnCancellation { Choreographer.getInstance().removeFrameCallback(callback) }
             }
+
         return ByteBuffer
             .allocate(16)
             .order(ByteOrder.LITTLE_ENDIAN)
@@ -76,6 +78,7 @@ class ArenaPlugin(
                 @Suppress("DEPRECATION")
                 (context as? Activity)?.windowManager?.defaultDisplay
             }
+
         return display?.refreshRate?.takeIf { it > 0f } ?: 60f
     }
 

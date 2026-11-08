@@ -71,11 +71,13 @@ impl Shown {
 		// an effect, which then fetches. Idle ends it; the deadline only
 		// bounds a busy machine, where a fetch can outlast a fixed count.
 		let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
 		for round in 0.. {
 			any_spawner::Executor::tick().await;
 			tokio::time::sleep(Duration::from_millis(2)).await;
 			self.tester.pump();
 			let idle = self.cache.fetching_count() == 0 && self.cache.mutating_count() == 0;
+
 			if (round >= 5 && idle) || tokio::time::Instant::now() >= deadline {
 				break;
 			}
@@ -679,6 +681,7 @@ async fn security_lists_sign_in_methods_and_preserves_them_when_changes_fail() {
 			shown.tap(&Finder::text(button)).await;
 			assert!(shown.has(ALERT), "{}", shown.text());
 		}
+
 		assert!(shown.has("Laptop") && shown.has("Security key") && shown.has("Ada"));
 	}).await;
 }
@@ -841,6 +844,7 @@ async fn linked_wallet_controls_explain_visibility_and_report_refused_changes() 
 		for label in ["Hide Treasury on your profile", "Show 1111…1112 on your profile", "Stop signing in with Treasury", "Allow signing in with 1111…1112", "Unlink Treasury", "Unlink 1111…1112"] {
 			shown.tap(&Finder::label(label)).await;
 		}
+
 		shown.tap(&Finder::text("Link a wallet with Phantom")).await;
 		assert!(shown.has(ALERT), "{}", shown.text());
 		assert!(shown.has("Treasury"));
@@ -903,6 +907,7 @@ async fn the_device_list_marks_this_device_and_reports_failed_sign_outs() {
 				shown.tap(&Finder::text(button)).await;
 				assert!(shown.has(ALERT));
 			}
+
 			assert!(shown.has("Lost phone"));
 		}
 	})

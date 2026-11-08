@@ -23,6 +23,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		.file("src/native/runtime.cpp")
 		.warnings_into_errors(true);
 
+	// Nix's hardened glibc defines `_FORTIFY_SOURCE`. cc-rs still passes `-O0`
+	// for debug builds, and glibc's `#warning` about fortify without
+	// optimisation becomes a hard error under `-Werror`. Keep fortify and
+	// `-Werror` by compiling this small adapter at `-O1` outside release.
+	if env::var("PROFILE").as_deref() != Ok("release") {
+		adapter.opt_level(1);
+	}
+
 	// Ignore warnings only inside unmodified upstream headers; our adapter
 	// retains the compiler's full warning set with warnings treated as errors.
 	if adapter.get_compiler().is_like_msvc() {

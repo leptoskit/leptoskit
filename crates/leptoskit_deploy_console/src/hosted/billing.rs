@@ -54,6 +54,7 @@ impl Billing {
 		);
 		let mut response = response;
 		let mut body = Vec::new();
+
 		while let Some(chunk) = response.chunk().await? {
 			ensure!(
 				body.len() + chunk.len() <= 1024 * 1024,
@@ -61,6 +62,7 @@ impl Billing {
 			);
 			body.extend_from_slice(&chunk);
 		}
+
 		Ok(serde_json::from_slice(&body)?)
 	}
 
@@ -75,6 +77,7 @@ impl Billing {
 			"team" => &self.team_price,
 			_ => anyhow::bail!("unknown plan"),
 		};
+
 		let _guard = self.serial.lock().await;
 		let customer = host.accounts().customer(account)?;
 
@@ -104,13 +107,16 @@ impl Billing {
 				pending_plan.as_deref() == Some(plan) && started + 23 * 3600 > sql_now(),
 				"reconcile the existing checkout before creating another"
 			);
+
 			if let Some(url) = cached {
 				ensure!(
 					expires > sql_now(),
 					"checkout expired; operator reconciliation required"
 				);
+
 				return checked_url(&url, "checkout.stripe.com");
 			}
+
 			nonce
 		} else {
 			let nonce = control::random_key()?;
@@ -119,8 +125,10 @@ impl Billing {
 				 checkout_nonce=?1,checkout_plan=?2,checkout_started=?3 WHERE id=?4",
 				params![nonce, plan, sql_now(), account],
 			)?;
+
 			nonce
 		};
+
 		let fields = [
 			("mode", "subscription".to_owned()),
 			("client_reference_id", nonce.clone()),
@@ -185,12 +193,15 @@ impl Billing {
 			[account],
 			|r| Ok((r.get(0)?, r.get(1)?)),
 		)?;
+
 		if !force && synced + 300 > sql_now() {
 			return Ok(());
 		}
+
 		if let Some(subscription) = subscription {
 			self.sync_subscription(host, account, &subscription).await?;
 		}
+
 		Ok(())
 	}
 
@@ -245,6 +256,7 @@ impl Billing {
 		} else {
 			anyhow::bail!("unknown price")
 		};
+
 		let status = value["status"].as_str().context("missing status")?;
 		let until = items[0]["current_period_end"]
 			.as_u64()
@@ -289,12 +301,14 @@ impl Billing {
 				if hex.len() != 64 || !hex.is_ascii() {
 					return false;
 				}
+
 				let decoded = (0..32)
 					.map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16))
 					.collect::<std::result::Result<Vec<_>, _>>();
 				decoded.is_ok_and(|signature| mac.clone().verify_slice(&signature).is_ok())
 			});
 		ensure!(valid, "invalid signature");
+
 		Ok(())
 	}
 
@@ -308,6 +322,7 @@ impl Billing {
 		let event: serde_json::Value = serde_json::from_slice(body)?;
 		let id = event["id"].as_str().context("missing event ID")?;
 		let _guard = self.serial.lock().await;
+
 		if host
 			.accounts()
 			.meta
@@ -323,6 +338,7 @@ impl Billing {
 			return Ok(());
 		}
 		let kind = event["type"].as_str().unwrap_or_default();
+
 		if kind.starts_with("customer.subscription.") || kind == "checkout.session.completed" {
 			let object = &event["data"]["object"];
 			let customer = object["customer"].as_str().context("missing customer")?;
@@ -336,6 +352,7 @@ impl Billing {
 					|r| r.get(0),
 				)
 				.optional()?;
+
 			if let Some(account) = account {
 				let subscription = if kind == "checkout.session.completed" {
 					object["subscription"].as_str()
@@ -355,6 +372,7 @@ impl Billing {
 					&& pending
 						.as_deref()
 						.is_some_and(|nonce| object["client_reference_id"].as_str() == Some(nonce));
+
 				if current.as_deref().is_none_or(|s| s == subscription) || replacement {
 					// Only the matching new Checkout can replace a canceled
 					// subscription. Other old deliveries are acknowledged
@@ -364,6 +382,7 @@ impl Billing {
 				}
 			}
 		}
+
 		host.accounts().meta.db()?.execute(
 			"INSERT INTO hosted_billing_events VALUES(?1,?2)",
 			params![id, sql_now()],
@@ -420,6 +439,7 @@ mod tests {
 			.redirect(reqwest::redirect::Policy::none())
 			.build()
 			.unwrap();
+
 		tokio::spawn(async move {
 			axum::serve(listener, app).await.unwrap();
 		})
@@ -586,6 +606,7 @@ mod tests {
 				"id":"sub_old","customer":"cus_alice"}}}),
 		)
 		.await;
+
 		assert_eq!(host.accounts().view("alice").unwrap().status, "canceled");
 		let pending: Option<String> = host
 			.accounts()

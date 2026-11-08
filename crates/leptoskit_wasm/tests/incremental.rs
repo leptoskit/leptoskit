@@ -176,6 +176,7 @@ fn incremental_and_complete_commits_build_the_same_interface() {
 	// The same final state, reached through patches and through a fresh
 	// guest that commits it whole, renders identical props.
 	let mut patched = started();
+
 	for wire in [11, 12, 10] {
 		send(&mut patched, wire);
 	}

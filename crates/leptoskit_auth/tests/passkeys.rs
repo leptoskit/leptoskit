@@ -866,6 +866,7 @@ async fn starting_again_retires_the_earlier_ceremony() {
 	let mut device = SoftPasskey::new(ORIGIN);
 	let first = auth.begin_passkey_registration(&me).await.unwrap();
 	let credential = device.register(&first);
+
 	let _second = auth.begin_passkey_registration(&me).await.unwrap();
 
 	assert!(matches!(
@@ -912,12 +913,15 @@ async fn ceremonies_without_state_or_a_subject_expire() {
 	let auth = auth(&db, &mailbox);
 	let mut device = SoftPasskey::new(ORIGIN);
 	with_passkey(&auth, &mailbox, "ada@example.com", &mut device).await;
+
 	let table = match db.system("test").dialect() {
 		Dialect::Postgres => "auth.challenges",
 		Dialect::Sqlite => "auth_challenges",
 	};
+
 	// A sign-in whose ceremony was never sealed is no sign-in.
 	let challenge = auth.begin_passkey_sign_in(&request()).await.unwrap();
+
 	db.system("test")
 		.execute(Statement {
 			sql: format!("UPDATE {table} SET state = NULL WHERE used_at IS NULL"),
@@ -986,6 +990,7 @@ async fn an_origin_with_a_port_also_allows_its_https_origin() {
 		.signed_in();
 	let mut device = SoftPasskey::new(origin);
 	let options = auth.begin_passkey_registration(&me).await.unwrap();
+
 	let json = serde_json::to_value(&options).unwrap();
 	assert_eq!(json["publicKey"]["rp"]["id"], "notes.example");
 	let added = auth

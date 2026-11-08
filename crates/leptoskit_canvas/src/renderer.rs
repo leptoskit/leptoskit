@@ -66,11 +66,13 @@ impl Growable {
 		if data.is_empty() {
 			return false;
 		}
+
 		let size = data.len() as u64;
 		let replaced = self
 			.buffer
 			.as_ref()
 			.is_none_or(|buffer| buffer.size() < size);
+
 		if replaced {
 			self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some(self.label),
@@ -79,9 +81,11 @@ impl Growable {
 				mapped_at_creation: false,
 			}));
 		}
+
 		if let Some(buffer) = &self.buffer {
 			queue.write_buffer(buffer, 0, data);
 		}
+
 		replaced
 	}
 
@@ -306,6 +310,7 @@ impl Renderer {
 			step_mode: wgpu::VertexStepMode::Vertex,
 			attributes: &mesh_attributes,
 		};
+
 		let keep = wgpu::StencilOperation::Keep;
 		let equal = wgpu::CompareFunction::Equal;
 		let pipeline = |spec| create_pipeline(device, &shader, format, spec);
@@ -328,6 +333,7 @@ impl Renderer {
 				label,
 				layout: &layout,
 				vertex: "vs_mesh",
+
 				fragment: if color { "fs_mesh" } else { "fs_clip" },
 				buffer: mesh_buffer.clone(),
 				topology: wgpu::PrimitiveTopology::TriangleList,
@@ -422,7 +428,9 @@ impl Renderer {
 		if width == 0 || height == 0 {
 			return Ok(());
 		}
+
 		let limit = self.device.limits().max_texture_dimension_2d;
+
 		if width > limit || height > limit {
 			return Err(Error::TooLarge {
 				width,
@@ -435,6 +443,7 @@ impl Renderer {
 		} else {
 			1.0
 		};
+
 		let frame = encode(&scene.sanitized(), width, height, scale);
 		self.prepare(&frame, width, height);
 		let mut encoder = self
@@ -463,17 +472,21 @@ impl Renderer {
 			.upload(device, queue, bytemuck::cast_slice(&frame.mesh.indices));
 		self.opacities
 			.upload(device, queue, bytemuck::cast_slice(&frame.opacities));
+
 		let mut stale = self
 			.paints
 			.upload(device, queue, bytemuck::cast_slice(&frame.paints));
 		stale |= self.upload_ramps(frame);
+
 		if stale || self.bind_group.is_none() {
 			self.bind_group = self.globals_bind_group();
 		}
+
 		if self.size != (width, height) {
 			self.levels.clear();
 			self.size = (width, height);
 		}
+
 		while self.levels.len() < frame.levels {
 			let level = self.level(self.levels.len());
 			self.levels.push(level);
@@ -488,6 +501,7 @@ impl Renderer {
 			.ramps
 			.as_ref()
 			.is_none_or(|(_, capacity)| *capacity < rows);
+
 		if replaced {
 			let capacity = rows.next_power_of_two();
 			let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -506,6 +520,7 @@ impl Renderer {
 			});
 			self.ramps = Some((texture, capacity));
 		}
+
 		if let Some((texture, _)) = &self.ramps
 			&& !frame.ramps.is_empty()
 		{
@@ -616,6 +631,7 @@ impl Renderer {
 		let Some(bind_group) = &self.bind_group else {
 			return;
 		};
+
 		for segment in &frame.segments {
 			let level = &self.levels[segment.level];
 			let resolve = level.resolve.as_ref().map_or(target, |(view, _)| view);
@@ -631,6 +647,7 @@ impl Renderer {
 						} else {
 							wgpu::LoadOp::Load
 						},
+
 						store: wgpu::StoreOp::Store,
 					},
 				})],
@@ -643,12 +660,14 @@ impl Renderer {
 						} else {
 							wgpu::LoadOp::Load
 						},
+
 						store: wgpu::StoreOp::Store,
 					}),
 				}),
 				..wgpu::RenderPassDescriptor::default()
 			});
 			pass.set_bind_group(0, bind_group, &[]);
+
 			for step in &frame.steps[segment.steps.clone()] {
 				pass.set_stencil_reference(step.stencil);
 				self.draw(&mut pass, &step.draw);
@@ -678,6 +697,7 @@ impl Renderer {
 					Draw::ClipPop(_) => &self.clip_pop,
 					_ => &self.mesh,
 				});
+
 				pass.set_vertex_buffer(0, vertices);
 				pass.set_index_buffer(indices, wgpu::IndexFormat::Uint32);
 				pass.draw_indexed(range.clone(), 0, 0..1);
@@ -708,20 +728,24 @@ impl Renderer {
 		scale: f32,
 	) -> Result<Vec<u8>, Error> {
 		use wgpu::TextureFormat as F;
+
 		let swap = match self.format {
 			F::Rgba8Unorm | F::Rgba8UnormSrgb => false,
 			F::Bgra8Unorm | F::Bgra8UnormSrgb => true,
 			format => return Err(Error::UnsupportedFormat(format)),
 		};
+
 		if width == 0 || height == 0 {
 			return Ok(Vec::new());
 		}
+
 		let size = wgpu::Extent3d {
 			width,
 			height,
 			depth_or_array_layers: 1,
 		};
 		let limit = self.device.limits().max_texture_dimension_2d;
+
 		if width > limit || height > limit {
 			return Err(Error::TooLarge {
 				width,
@@ -729,6 +753,7 @@ impl Renderer {
 				limit,
 			});
 		}
+
 		let texture = self.device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("leptoskit_canvas offscreen"),
 			size,
@@ -782,16 +807,20 @@ impl Renderer {
 			.get_mapped_range(..)
 			.map_err(|error| Error::Readback(error.to_string()))?;
 		let mut pixels = Vec::with_capacity(row * height as usize);
+
 		for line in mapped.chunks(padded) {
 			pixels.extend_from_slice(&line[..row]);
 		}
+
 		drop(mapped);
 		buffer.unmap();
+
 		if swap {
 			for pixel in pixels.as_chunks_mut::<4>().0 {
 				pixel.swap(0, 2);
 			}
 		}
+
 		Ok(pixels)
 	}
 }
@@ -877,6 +906,7 @@ mod tests {
 			}
 			.is_unavailable()
 		);
+
 		assert!(!Error::UnsupportedFormat(wgpu::TextureFormat::Rg16Float).is_unavailable());
 		assert!(!Error::Readback("lost".into()).is_unavailable());
 	}

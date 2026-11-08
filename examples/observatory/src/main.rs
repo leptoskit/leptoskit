@@ -15,6 +15,7 @@ use observatory_example::VIEWPORT;
 
 fn main() -> ExitCode {
 	let mut args = std::env::args().skip(1);
+
 	let result = match args.next().as_deref() {
 		None => show(),
 		Some("summary") => print_summary(),
@@ -230,6 +231,7 @@ mod window {
 				if result.borrow().is_some() {
 					return;
 				}
+
 				let surface = surface.borrow();
 				let png = surface
 					.root()
@@ -251,13 +253,17 @@ mod window {
 			move || timed_out.set(true)
 		});
 		let context = gtk::glib::MainContext::default();
+
 		while result.borrow().is_none() && !timed_out.get() {
 			context.iteration(true);
 		}
+
 		clock.disconnect(painted);
+
 		if !timed_out.get() {
 			timeout.remove();
 		}
+
 		result.take().unwrap_or_else(|| {
 			Err(format!(
 				"the window did not paint within {} seconds",

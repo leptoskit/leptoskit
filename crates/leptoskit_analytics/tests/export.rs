@@ -33,6 +33,7 @@ fn otlp_histograms_export_completed_delta_windows_with_standard_json_encoding() 
 	snapshot.observed_unix_seconds = 180;
 	let payload = export::otlp_metrics(&snapshot, 0);
 	let histogram = &payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["histogram"];
+
 	assert_eq!(histogram["aggregationTemporality"], 1);
 	assert_eq!(histogram["dataPoints"][0]["count"], "1");
 	assert_eq!(

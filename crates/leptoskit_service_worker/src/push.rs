@@ -323,6 +323,7 @@ mod tests {
 		assert_eq!(base64_decode("YQ==").unwrap(), b"a");
 		assert_eq!(base64_decode("YWI=").unwrap(), b"ab");
 		assert_eq!(base64_decode("YWJj").unwrap(), b"abc");
+
 		// Standard alphabet digits '+' and '/'.
 		assert_eq!(base64_decode("+/+/").unwrap(), [0xfb, 0xff, 0xbf]);
 		assert_eq!(base64_decode("ab").unwrap_err(), "invalid base64 length");

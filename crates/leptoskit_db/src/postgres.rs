@@ -206,6 +206,7 @@ impl Transaction {
 				args: Vec::new(),
 			})
 			.await;
+
 		let (txid, replicating, database) = match rows {
 			Ok(rows) => {
 				let mut row = rows.into_iter().next().unwrap_or_default().into_iter();
@@ -215,6 +216,7 @@ impl Transaction {
 							Value::Int(txid) => Some(txid),
 							_ => None,
 						};
+
 						(txid, replicating, database)
 					}
 					_ => (None, false, String::new()),
@@ -225,12 +227,14 @@ impl Transaction {
 				return Err(error);
 			}
 		};
+
 		let client = self.client.take().expect("a transaction finishes once");
 		let commit = if described {
 			format!("{}; COMMIT", crate::live::describe_commit())
 		} else {
 			"COMMIT".to_string()
 		};
+
 		client.batch_execute(&commit).await.map_err(error)?;
 		let Some(txid) = txid else {
 			return Ok(None);
@@ -739,11 +743,13 @@ impl Pool {
 			if has_pushes(client).await? {
 				return Err(MigrationError::RollbackHistory);
 			}
+
 			let mut names = Vec::new();
 			for migration in reverse {
 				apply_one(client, &migration, &Record::Reverted).await?;
 				names.push(migration.name.to_string());
 			}
+
 			Ok(names)
 		})
 		.await
@@ -793,9 +799,11 @@ impl Pool {
 			.query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK])
 			.await
 			.is_ok_and(|row| row.get::<_, bool>(0));
+
 		if unlocked {
 			session.release();
 		}
+
 		result
 	}
 }
@@ -843,6 +851,7 @@ async fn apply_migrations(
 		} else {
 			&Record::Applied
 		};
+
 		apply_one(client, still.migration, record).await?;
 		names.push(still.migration.name.to_string());
 	}
@@ -911,6 +920,7 @@ async fn apply_one(
 						"migration history changed during rollback",
 					)));
 				}
+
 				client.batch_execute("COMMIT").await.map_err(error)?;
 				return Ok(false);
 			}

@@ -140,6 +140,7 @@ fn wanted_extensions(available: &xr::ExtensionSet) -> xr::ExtensionSet {
 	extensions.fb_display_refresh_rate = available.fb_display_refresh_rate;
 	extensions.khr_composition_layer_depth = available.khr_composition_layer_depth;
 	extensions.ext_local_floor = available.ext_local_floor;
+
 	#[cfg(target_os = "android")]
 	{
 		extensions.khr_android_create_instance = available.khr_android_create_instance;
@@ -287,10 +288,12 @@ impl Backend for OpenXrBackend {
 		let system = self.system().ok_or(Error::Unavailable)?;
 		let factory = self.factory.as_mut().ok_or(Error::Unavailable)?;
 		self.headset = Some(factory(&system, config, features)?);
+
 		let space = match config.reference_space {
 			ReferenceSpace::LocalFloor | ReferenceSpace::World => config.reference_space,
 			ReferenceSpace::Local => ReferenceSpace::Local,
 		};
+
 		Ok(Started::new(space, features))
 	}
 

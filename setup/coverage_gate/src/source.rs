@@ -18,18 +18,24 @@ pub fn test_modules(source: &str) -> Vec<RangeInclusive<u32>> {
 	let lines: Vec<&str> = source.lines().collect();
 	let mut ranges = Vec::new();
 	let mut index = 0;
+
 	while index < lines.len() {
 		let line = lines[index];
 		let indent = &line[..line.len() - line.trim_start().len()];
+
 		if line.trim() != "#[cfg(test)]" {
 			index += 1;
+
 			continue;
 		}
+
 		// Further attributes may sit between `#[cfg(test)]` and the module.
 		let mut item = index + 1;
+
 		while item < lines.len() && lines[item].trim_start().starts_with("#[") {
 			item += 1;
 		}
+
 		let Some(header) = lines.get(item) else {
 			break;
 		};
@@ -38,10 +44,12 @@ pub fn test_modules(source: &str) -> Vec<RangeInclusive<u32>> {
 			.filter(|rest| !rest.starts_with(char::is_whitespace))
 			.and_then(|rest| rest.strip_prefix("pub ").or(Some(rest)))
 			.is_some_and(|rest| rest.starts_with("mod ") && rest.trim_end().ends_with('{'));
+
 		if !opens_module {
 			index = item;
 			continue;
 		}
+
 		let closing = format!("{indent}}}");
 		let end = lines[item + 1..]
 			.iter()
@@ -50,6 +58,7 @@ pub fn test_modules(source: &str) -> Vec<RangeInclusive<u32>> {
 		ranges.push(line_number(index)..=line_number(end));
 		index = end + 1;
 	}
+
 	ranges
 }
 

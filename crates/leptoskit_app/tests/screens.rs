@@ -103,6 +103,7 @@ fn shared_screens_render_on_phone_and_web_without_exposing_account_keys() {
 		tester.get_by_text("Connect your account").unwrap();
 		tester.get_by_text("Documentation ↗").unwrap();
 		let owner = Owner::new();
+
 		let shell = owner.with(Shell::new);
 		shell.key.set("never-render-the-account-secret".into());
 		shell.account.set(Some(AccountView {
@@ -134,6 +135,7 @@ fn shared_screens_render_on_phone_and_web_without_exposing_account_keys() {
 fn the_public_example_uses_working_shared_components() {
 	use leptoskit_testing::Finder;
 	use reactive_graph::signal::RwSignal;
+
 	for width in [390.0, 1024.0] {
 		let owner = Owner::new();
 		let count = owner.with(|| RwSignal::new(0));
@@ -147,6 +149,7 @@ fn the_public_example_uses_working_shared_components() {
 		tester.tap(&Finder::test_id("demo-increment")).unwrap();
 		tester.get_by_text("1 ideas shipped").unwrap();
 		tester.tap(&Finder::test_id("demo-increment")).unwrap();
+
 		tester.get_by_text("2 ideas shipped").unwrap();
 	}
 }
@@ -304,6 +307,7 @@ fn the_console_buttons_send_their_requests_and_report_refusals() {
 	tester.tap(&Finder::test_id("add-installation")).unwrap();
 	settle(&mut tester);
 	assert!(shell.setup.get_untracked());
+
 	assert!(shell.maintenance.get_untracked());
 	assert_eq!(shell.version.get_untracked(), "sha-0123456789abcdef");
 	assert_eq!(shell.project.get_untracked(), "notes");

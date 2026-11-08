@@ -29,6 +29,7 @@ async fn opfs_roundtrip_and_boundaries() {
 	);
 	assert_eq!(web::read(&path).await.unwrap().as_ref(), &[0, 1, 255]);
 	let moved = format!("{directory}/moved");
+
 	web::rename(&path, &moved).await.unwrap();
 	assert!(web::read(&path).await.is_err());
 	assert_eq!(web::read(&moved).await.unwrap().as_ref(), &[0, 1, 255]);

@@ -324,6 +324,7 @@ fn Departures(board: &Board) -> Element {
 			</View>
 		};
 	}
+
 	if let Some(error) = board.departures.error() {
 		return view! {
 			<View class=DEPARTURES_CLASS>
@@ -382,11 +383,13 @@ fn Departure(board: &Board, sailing: &Sailing, pinned: bool) -> Element {
 		SailingStatus::Delayed { minutes } => format!("Delayed {minutes} min"),
 		SailingStatus::Departed => "Departed".to_owned(),
 	};
+
 	let seats = match sailing.seats_left {
 		0 => "Full".to_owned(),
 		1 => "1 seat".to_owned(),
 		seats => format!("{seats} seats"),
 	};
+
 	let bookable = sailing.seats_left > 0
 		&& sailing.status != SailingStatus::Departed
 		&& !board.book.is_pending();

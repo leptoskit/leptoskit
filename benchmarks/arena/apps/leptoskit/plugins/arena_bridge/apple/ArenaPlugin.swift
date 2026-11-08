@@ -36,6 +36,7 @@ public final class ArenaPlugin: NativePlugin {
         case 13: return payload.withUnsafeBytes { Data($0) }
         case 14:
             let object = try payload.withUnsafeBytes { try JSONSerialization.jsonObject(with: Data($0)) }
+
             guard let fields = object as? [String: Any] else { throw PluginError.invalidArgument }
             return try JSONSerialization.data(withJSONObject: fields)
         default: throw PluginError.unavailable
@@ -47,6 +48,7 @@ public final class ArenaPlugin: NativePlugin {
     /// `--scenario <id>` from the process arguments.
     private static func scenario() -> String {
         let arguments = ProcessInfo.processInfo.arguments
+
         guard let flag = arguments.firstIndex(of: "--scenario"), flag + 1 < arguments.count else { return "" }
         return arguments[flag + 1]
     }
@@ -71,19 +73,24 @@ private final class FrameClock: NSObject {
         link = nil
         let pending = waiting
         waiting.removeAll()
+
         for continuation in pending { continuation.resume(returning: Data()) }
     }
 
     private func start() {
         if let link {
             link.isPaused = false
+
             return
         }
+
         #if os(iOS)
         let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
         #else
+
         guard let screen = NSScreen.main else { return }
         let link = screen.displayLink(target: self, selector: #selector(tick(_:)))
+
         #endif
         link.add(to: .main, forMode: .common)
         self.link = link
@@ -98,6 +105,7 @@ private final class FrameClock: NSObject {
         let pending = waiting
         waiting.removeAll()
         link.isPaused = true
+
         for continuation in pending { continuation.resume(returning: reply) }
     }
 }

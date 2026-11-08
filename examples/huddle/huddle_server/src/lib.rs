@@ -152,14 +152,17 @@ pub fn start(db: &Db, auth: AuthBuilder, options: Options) -> Result<Huddle, Aut
 
 	let roles = options.roles;
 	let rpc = leptoskit_rpc::server::Server::new(db.clone()).identify(auth.clone());
+
 	let live = match &options.origin {
 		Some(origin) => rpc.live().origin(origin),
 		None => rpc.live(),
 	};
+
 	let live = match &options.relay {
 		Some(relay) => live.relay(relay),
 		None => live,
 	};
+
 	// The workers run capture themselves, unless this process doesn't
 	// capture.
 	let jobs = roles

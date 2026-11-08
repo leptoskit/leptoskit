@@ -25,6 +25,7 @@ fn changing_policy_invalidates_the_old_request() {
 		model.review(Intent::Deploy).title,
 		"Cluster adapter required"
 	);
+
 	model.target(Target::RedundantVm);
 	model.schema(SchemaChange::ExpandUnverified);
 	assert!(model.review(Intent::Rollback).maintenance);
@@ -68,6 +69,7 @@ fn interface_controls_change_the_same_model_an_agent_request_reads() {
 	assert!(store::read(|m| m.request.is_none()));
 	tester.tap(&Finder::text("Infrastructure")).unwrap();
 	tester.tap(&Finder::text("Kubernetes")).unwrap();
+
 	assert_eq!(store::read(|m| m.target), Target::Kubernetes);
 	let serialized = store::read(|m| {
 		let mut model = m.clone();

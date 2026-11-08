@@ -35,9 +35,12 @@ records = json.loads(result.stdout)
 require(len(records) == 1)
 record = records[0]
 require(record["Name"] == "/" + container)
+
 require(record["State"]["Running"] is True)
 require(record["State"].get("Restarting", False) is False)
+
 environment = dict(entry.split("=", 1) for entry in record["Config"]["Env"])
+
 require(all(environment.get(name) == value for name, value in request["environment"].items()))
 address = str(ipaddress.IPv4Address(record["NetworkSettings"]["Networks"]["kamal"]["IPAddress"]))
 connection = http.client.HTTPConnection(address, port, timeout=5)

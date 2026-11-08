@@ -11,6 +11,7 @@ const EXTERNAL_CLOUD_INIT: &str =
 
 fn external(value: &mut Value, c: &InfraConfig) {
 	let Some(external) = &c.external else { return };
+
 	for kind in ["hcloud_server", "digitalocean_droplet"] {
 		if let Some(servers) = value["resource"]
 			.get_mut(kind)
@@ -21,6 +22,7 @@ fn external(value: &mut Value, c: &InfraConfig) {
 			}
 		}
 	}
+
 	if let Some(rules) = value["resource"]
 		.get_mut("digitalocean_firewall")
 		.and_then(|firewall| firewall.get_mut("app"))
@@ -39,16 +41,21 @@ fn external(value: &mut Value, c: &InfraConfig) {
 		.as_object_mut()
 		.unwrap();
 	buckets.remove("updates");
+
 	if c.backup_bucket.is_empty() {
 		buckets.remove("backups");
 	}
+
 	if buckets.is_empty() {
 		resources.remove("cloudflare_r2_bucket");
 	}
+
 	let outputs = value["output"].as_object_mut().unwrap();
+
 	for name in ["updates_url", "updates_bucket"] {
 		outputs.remove(name);
 	}
+
 	if c.backup_bucket.is_empty() {
 		for name in ["backup_bucket", "backup_endpoint", "s3_endpoint"] {
 			outputs.remove(name);
@@ -69,6 +76,7 @@ fn extend(value: &mut Value, c: &InfraConfig) {
 		"  - unattended-upgrades\n  - restic\n  - python3\n"
 	));
 	let cloud_init = server["user_data"].clone();
+
 	if c.compute == ComputeProvider::Hetzner {
 		let zone = match c.location.as_str() {
 			"ash" => "us-east",
@@ -76,8 +84,10 @@ fn extend(value: &mut Value, c: &InfraConfig) {
 			"sin" => "ap-southeast",
 			_ => "eu-central",
 		};
+
 		value["resource"]["hcloud_network"] = json!({"app": {"name": format!("{}-private", c.name), "ip_range": "10.42.0.0/16", "lifecycle": {"prevent_destroy": true}}});
 		value["resource"]["hcloud_network_subnet"] = json!({"app": {"network_id": "${hcloud_network.app.id}", "type": "cloud", "network_zone": zone, "ip_range": "10.42.0.0/24"}});
+
 		value["resource"]["hcloud_server"]["app"]["network"] =
 			json!([{"network_id": "${hcloud_network.app.id}", "ip": "10.42.0.10"}]);
 		value["resource"]["hcloud_server"]["app"]["depends_on"] =
@@ -133,6 +143,7 @@ fn extend(value: &mut Value, c: &InfraConfig) {
 		value["output"]["private_ip"] =
 			json!({"value": "${digitalocean_droplet.app.ipv4_address_private}"});
 	}
+
 	if let Some(b2) = &c.b2 {
 		value["resource"]["cloudflare_r2_bucket"]
 			.as_object_mut()
@@ -193,13 +204,16 @@ pub(super) fn resources(c: &InfraConfig) -> Value {
 			"s3_endpoint": {"value": format!("https://{}.r2.cloudflarestorage.com", c.account_id)},
 			"tunnel_token": {"value": "${data.cloudflare_zero_trust_tunnel_cloudflared_token.app.token}", "sensitive": true}}
 	});
+
 	if let Some(state) = &c.state {
 		value["terraform"]["backend"] = json!({"s3": {"bucket": state.bucket, "key": state.key,
 			"region": state.region, "encrypt": true, "use_lockfile": true}});
 	}
+
 	if c.hosted_state {
 		value["terraform"]["backend"] = json!({"http":{}});
 	}
+
 	extend(&mut value, c);
 	external(&mut value, c);
 	value

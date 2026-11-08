@@ -86,6 +86,7 @@ async function browse({ scripts = true, width = 1280, check }) {
 	let page;
 	try {
 		page = await Page.connect(chrome.endpoint);
+
 		page.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
 			errors.push(
 				exceptionDetails.exception?.description ?? exceptionDetails.text,
@@ -110,6 +111,7 @@ async function browse({ scripts = true, width = 1280, check }) {
 			deviceScaleFactor: 1,
 			mobile: width < 700,
 		});
+
 		if (scripts) {
 			await page.send("Page.addScriptToEvaluateOnNewDocument", {
 				source: RECORD_STYLE,
@@ -155,6 +157,7 @@ async function browse({ scripts = true, width = 1280, check }) {
 		await page?.close();
 		chrome.process.kill();
 		await chrome.process.status;
+
 		await server.shutdown();
 		await removeProfile(profile);
 	}

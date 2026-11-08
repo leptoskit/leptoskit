@@ -132,13 +132,16 @@ async function readBefore(page: Page): Promise<BeforeState> {
 
 async function waitForReady(page: Page): Promise<void> {
 	const deadline = Date.now() + 30_000;
+
 	while (Date.now() < deadline) {
 		const ready = await page.evaluate<boolean>(
 			`Boolean(window.__bench && window.__bench.ready)`,
 		);
+
 		if (ready) return;
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
+
 	throw new Error("the app never signalled mount within 30s");
 }
 
@@ -174,9 +177,11 @@ function newMetrics(): Record<string, ReturnType<typeof emptyMetric>> {
 			"JS heap after creating 10,000 rows",
 		),
 	};
+
 	for (const scenario of SCENARIOS) {
 		metrics[scenario.id] = emptyMetric("ms", "duration", scenario.id);
 	}
+
 	return metrics;
 }
 
@@ -242,9 +247,11 @@ async function measureIteration(
 	}
 
 	const errors = page.pageErrors();
+
 	if (errors.length > 0) {
 		fail(`page errors during ${subject.name} run: ${errors.join("; ")}`);
 	}
+
 	return userAgent;
 }
 
@@ -254,9 +261,11 @@ function parseSubjects(
 	app: string,
 ): { name: string; dist: string }[] {
 	const raw = args.flags.get("dist");
+
 	if (raw === undefined || raw === true) {
 		fail("missing required flag --dist");
 	}
+
 	const values = Array.isArray(raw) ? raw : [String(raw)];
 	return values.map((value) => {
 		const separator = value.indexOf("=");
@@ -275,9 +284,11 @@ async function main(): Promise<void> {
 	const subjectSpecs = parseSubjects(args, app);
 	const out = optionalString(args, "out");
 	const outDir = optionalString(args, "out-dir");
+
 	if (subjectSpecs.length === 1 && !out && !outDir) {
 		fail("pass --out <file> (one subject) or --out-dir <dir>");
 	}
+
 	if (subjectSpecs.length > 1 && !outDir) {
 		fail("several --dist subjects need --out-dir <dir>");
 	}
@@ -298,12 +309,14 @@ async function main(): Promise<void> {
 	// so measuring several pages at once would stall all but the foreground.
 	const page = await browser.newPage();
 	const subjects: Subject[] = [];
+
 	for (const spec of subjectSpecs) {
 		await syncBenchGlue([spec.dist]);
 		const server = serveStatic(spec.dist);
 		subjects.push({ ...spec, server, metrics: newMetrics() });
 		log(`${spec.name}: serving ${spec.dist} at ${server.url}`);
 	}
+
 	log(
 		`${runs} runs, domScenarios=${domScenarios}, subjects interleaved per run`,
 	);
@@ -325,6 +338,7 @@ async function main(): Promise<void> {
 				domScenarios,
 			);
 		}
+
 		// Subjects alternate within every iteration so machine drift (thermal
 		// state, background load) lands on all of them evenly instead of
 		// skewing whichever ran last.
@@ -332,13 +346,16 @@ async function main(): Promise<void> {
 			for (const subject of subjects) {
 				userAgent = await measureIteration(page, subject, domScenarios);
 			}
+
 			log(`run ${iteration + 1}/${runs} complete`);
 		}
 	} finally {
 		await page.close();
+
 		for (const subject of subjects) {
 			await subject.server.close();
 		}
+
 		await browser.close();
 	}
 
@@ -355,6 +372,7 @@ async function main(): Promise<void> {
 		});
 		const target = outDir ? `${outDir}/${subject.name}-runtime.json` : out!;
 		await Deno.writeTextFile(target, JSON.stringify(run, null, "\t") + "\n");
+
 		for (const [id, metric] of Object.entries(run.metrics)) {
 			log(`${subject.name} ${id}: ${formatMetric(metric.median, metric.unit)}`);
 		}

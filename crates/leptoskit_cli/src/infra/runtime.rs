@@ -19,9 +19,11 @@ pub(super) fn kamal(
 	let mut names: BTreeSet<String> = project.secrets.iter().chain(&c.secrets).cloned().collect();
 	names.extend(project.urls.iter().cloned());
 	names.insert(database.url_env.clone());
+
 	if c.services.cache {
 		names.insert("VALKEY_URL".into());
 	}
+
 	if c.services.relay {
 		names.insert(
 			project
@@ -31,9 +33,11 @@ pub(super) fn kamal(
 				.unwrap_or_else(|| "NATS_URL".into()),
 		);
 	}
+
 	if let Some(plugin) = &c.plugins.analytics {
 		names.insert("LEPTOSKIT_ANALYTICS_READ_KEY".into());
 		names.insert("LEPTOSKIT_RELEASE".into());
+
 		if plugin.otlp_endpoint.is_none()
 			&& (c.control_url.is_some() || std::env::var_os("LEPTOSKIT_CONTROL_ORIGIN").is_some())
 			|| std::env::var_os("LEPTOSKIT_ANALYTICS_WRITE_KEY").is_some()
@@ -41,12 +45,14 @@ pub(super) fn kamal(
 			names.insert("LEPTOSKIT_ANALYTICS_WRITE_KEY".into());
 		}
 	}
+
 	for name in &names {
 		ensure!(
 			leptoskit_config::infra::env_name(name),
 			"invalid secret name {name}"
 		);
 	}
+
 	let image = c
 		.image
 		.strip_prefix(&format!("{}/", c.registry))
@@ -68,8 +74,10 @@ pub(super) fn kamal(
 		"tunnel": {"image": "cloudflare/cloudflared:latest", "hosts": hosts, "cmd": "tunnel --no-autoupdate run",
 			"env": {"secret": ["TUNNEL_TOKEN"]}, "options": {"network": "kamal"}}
 	}});
+
 	if let Some(plugin) = &c.plugins.analytics {
 		let sink = analytics_sink(c, std::env::var("LEPTOSKIT_CONTROL_ORIGIN").ok().as_deref());
+
 		if let Some((endpoint, protocol)) = sink {
 			config["env"]["clear"]["LEPTOSKIT_ANALYTICS_EXPORT_ENDPOINT"] = json!(endpoint);
 			config["env"]["clear"]["LEPTOSKIT_ANALYTICS_EXPORT_PROTOCOL"] = json!(protocol);
@@ -101,12 +109,14 @@ pub(super) fn kamal(
 			config["env"]["clear"][name] = json!(value);
 		}
 	}
+
 	if c.services.cache {
 		config["accessories"]["cache"] = json!({"image": "valkey/valkey:8-alpine", "host": primary,
 			"port": format!("{private}:6379:6379"), "cmd": "sh -ec 'exec valkey-server --requirepass \"$VALKEY_PASSWORD\" --maxmemory 128mb --maxmemory-policy allkeys-lru --save \"\"'",
 			"env": {"secret": ["VALKEY_PASSWORD"]}, "options": {"network": "kamal"}});
 		names.insert("VALKEY_PASSWORD".into());
 	}
+
 	if c.services.relay {
 		config["accessories"]["relay"] = json!({"image": "nats:2-alpine", "host": primary, "port": format!("{private}:4222:4222"),
 			"cmd": "-c /etc/nats/leptoskit.conf", "env": {"secret": ["NATS_TOKEN"]},
@@ -114,6 +124,7 @@ pub(super) fn kamal(
 			"directories": [format!("/var/lib/leptoskit/{}/nats:/data", c.name)], "options": {"network": "kamal", "user": "1000:1000"}});
 		names.insert("NATS_TOKEN".into());
 	}
+
 	if c.postgres.max_connections != leptoskit_config::infra::InfraPostgres::DEFAULT_MAX_CONNECTIONS
 	{
 		config["accessories"]["db"]["cmd"] = json!(format!(
@@ -136,16 +147,20 @@ pub(super) fn kamal(
 		"TUNNEL_TOKEN".into(),
 	]);
 	let mut secrets = String::new();
+
 	for name in names.iter().filter(|name| !custom.contains(name.as_str())) {
 		writeln!(secrets, "{name}=${name}")?;
 	}
+
 	for (name, value) in &services.lines {
 		ensure!(
 			leptoskit_config::infra::env_name(name),
 			"invalid secret name {name}"
 		);
+
 		writeln!(secrets, "{name}={value}")?;
 	}
+
 	// JSON is a YAML subset understood by Kamal, avoiding hand-escaped YAML.
 	Ok((serde_json::to_string_pretty(&config)? + "\n", secrets))
 }
@@ -155,9 +170,11 @@ pub(super) fn analytics_sink(
 	worker_origin: Option<&str>,
 ) -> Option<(String, &'static str)> {
 	let plugin = c.plugins.analytics.as_ref()?;
+
 	if let Some(endpoint) = &plugin.otlp_endpoint {
 		return Some((endpoint.clone(), "otlp"));
 	}
+
 	let origin = worker_origin.or(c.control_url.as_deref())?;
 	Some((
 		format!(

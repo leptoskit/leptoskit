@@ -307,6 +307,7 @@ impl Filesystem {
 		#[cfg(unix)]
 		{
 			use cap_std::fs::OpenOptionsExt as _;
+
 			options.mode(0o600);
 		}
 		let mut file = parent.open_with(&temporary, &options).map_err(failure)?;
@@ -515,6 +516,7 @@ mod tests {
 		let fs = Filesystem::open(root.path()).unwrap().with_quota(quota);
 		assert_eq!(fs.mkdir("dir/new/deeper"), Err(Error::TooLarge));
 		assert!(fs.stat("dir/new").is_err());
+
 		fs.remove("dir/a").unwrap();
 		fs.write("c", b"12").unwrap();
 		fs.rename("c", "b").unwrap();
@@ -644,6 +646,7 @@ mod tests {
 		);
 		assert_eq!(fs.read("notes/item").unwrap().as_ref(), b"old");
 		fs.write("notes/item", b"new\0binary").unwrap();
+
 		fs.rename("notes/item", "notes/drafts/item").unwrap();
 		assert_eq!(
 			fs.stat("notes/drafts/item").unwrap(),
@@ -754,6 +757,7 @@ mod tests {
 		let root = tempfile::tempdir().unwrap();
 		let fs = Filesystem::open(root.path()).unwrap();
 		fs.write("kept", b"data").unwrap();
+
 		let name = std::ffi::OsString::from_wide(&[u16::from(b'a'), 0xD800]);
 		std::fs::write(root.path().join(name), b"host").unwrap();
 		assert_eq!(fs.list("").unwrap(), ["kept"]);

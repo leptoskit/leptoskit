@@ -284,6 +284,7 @@ fn a_published_stream_joins_the_spec() {
 	assert_eq!(answer.docs, "A model's answer, a word at a time.");
 	assert!(spec.to_openapi()["paths"].get("/api/l6_answer").is_none());
 	let asyncapi = spec.to_asyncapi();
+
 	assert_eq!(
 		asyncapi["operations"]["l6_answer.open"]["action"],
 		"receive"
@@ -464,6 +465,7 @@ async fn streams_wait_for_credits(db: Db) {
 
 	// Cancelled, it stops, and its body is dropped.
 	send(&mut socket, ClientFrame::Cancel { stream: 1 }).await;
+
 	for _ in 0..100 {
 		if progress(&run, |_| {}).dropped {
 			break;
@@ -471,6 +473,7 @@ async fn streams_wait_for_credits(db: Db) {
 
 		tokio::time::sleep(Duration::from_millis(10)).await;
 	}
+
 	assert!(
 		progress(&run, |_| {}).dropped,
 		"the cancelled body is dropped"
@@ -560,6 +563,7 @@ async fn streams_over_server_sent_events(db: Db) {
 	events
 		.post(&server, &[ClientFrame::Credit { stream: 1, n: 5 }])
 		.await;
+
 	assert_eq!(item(&events.next().await), Some((1, &json!(2))));
 	assert_eq!(end(&events.next().await), Some((1, EndReason::Done)));
 }
@@ -714,6 +718,7 @@ async fn changed(socket: &mut Socket, id: u32, value: &mut Value) -> Transition 
 
 		if let Some(update) = seen.updates.iter().find(|update| update.id == id) {
 			rpc::live::apply(value, &update.update);
+
 			return seen;
 		}
 	}
@@ -798,6 +803,7 @@ async fn pages_stay_put(db: Db) {
 		},
 	)
 	.await;
+
 	let error = loop {
 		match next(&mut socket).await {
 			ServerFrame::Done {
@@ -807,6 +813,7 @@ async fn pages_stay_put(db: Db) {
 			other => panic!("a bad cursor fails, not {other:?}"),
 		}
 	};
+
 	assert_eq!(error.status, 400);
 }
 
@@ -1168,6 +1175,7 @@ async fn draining_interrupts_open_streams() {
 
 	live.drain();
 	let mut interrupted = false;
+
 	loop {
 		let frame = next(&mut socket).await;
 
@@ -1202,6 +1210,7 @@ async fn a_connection_holds_a_bounded_number_of_streams() {
 		)
 		.await;
 	}
+
 	send(&mut socket, open(64, "l6_ticks", json!({ "run": run }), 0)).await;
 	send(&mut socket, open(65, "l6_ticks", json!({ "run": run }), 0)).await;
 
@@ -1225,6 +1234,7 @@ async fn a_page_reads_at_most_so_many_rows(db: Db) {
 			.insert(tx)
 			.await?;
 		}
+
 		Ok::<_, leptoskit_db::DbError>(())
 	})
 	.await

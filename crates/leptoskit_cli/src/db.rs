@@ -398,6 +398,7 @@ pub fn run(command: DbCommand, service: Option<&str>) -> Result<()> {
 			for name in reverted {
 				println!("reverted {name}");
 			}
+
 			Ok(())
 		}
 		DbCommand::Push {
@@ -979,6 +980,7 @@ impl History {
 				if !line.is_empty() && !line.starts_with('#') {
 					names.push(line.to_owned());
 				}
+
 				continue;
 			}
 
@@ -1348,6 +1350,7 @@ fn reverse_sql(
 	use leptoskit_db_schema::Step;
 	let current = target.without_rename_hints();
 	let mut desired = previous.without_rename_hints();
+
 	for step in &forward.steps {
 		if let Step::RenameTable { from, to } = step
 			&& let Some(table) = desired.tables.iter_mut().find(|table| &table.name == from)
@@ -1355,6 +1358,7 @@ fn reverse_sql(
 			table.renamed_from = Some(to.clone());
 		}
 	}
+
 	for step in &forward.steps {
 		if let Step::RenameColumn { table, from, to } = step
 			&& let Some(table) = desired
@@ -1366,8 +1370,10 @@ fn reverse_sql(
 			column.renamed_from = Some(to.clone());
 		}
 	}
+
 	let reverse = match leptoskit_db_schema::diff(&current, &desired, &mut NoRenames) {
 		Ok(reverse) => reverse,
+
 		Err(error) if data || forward.destructive_steps().next().is_some() => {
 			return Ok(format!(
 				"-- leptoskit: irreversible\n-- Write and review reverse SQL and data recovery \
@@ -1377,7 +1383,9 @@ fn reverse_sql(
 		}
 		Err(error) => return Err(error.into()),
 	};
+
 	let sql = leptoskit_db_schema::render(&reverse, &current, &desired).sql();
+
 	if data || forward.destructive_steps().next().is_some() {
 		Ok(format!(
 			"-- leptoskit: irreversible\n-- Implement and review data recovery before removing \
@@ -1895,9 +1903,11 @@ fn check_replication(url: &str, target: &Schema) -> Result<()> {
 				 `Db::capture_changes`"
 			);
 		}
+
 		Some(lag) if stats.slot_active => {
 			println!("replication capture is running, {lag} bytes behind the write-ahead log");
 		}
+
 		Some(lag) => {
 			println!(
 				"warning: no server is capturing changes, and Postgres is keeping {lag} bytes of \
@@ -2009,6 +2019,7 @@ fn run_consolidate(
 	} else {
 		&mut RequireHints
 	};
+
 	consolidate(project, &target, keep, drop_packs, renames)
 }
 
@@ -2040,6 +2051,7 @@ fn consolidate(
 				.last()
 				.map_or("the start", |release| release.version.as_str()),
 		);
+
 		return Ok(());
 	}
 
@@ -2064,10 +2076,13 @@ fn consolidate(
 		);
 		keep.len()
 	};
+
 	let folded = &unreleased[..unreleased.len() - kept];
+
 	if folded.is_empty() {
 		check_packs(&history.latest, target, drop_packs)?;
 		println!("all unreleased migrations are kept — nothing to consolidate");
+
 		return Ok(());
 	}
 
@@ -2095,6 +2110,7 @@ fn consolidate(
 	// snapshots generates carries hand-written statements; folding it would
 	// silently discard them.
 	let mut previous = baseline.clone();
+
 	for name in folded {
 		let path = directory.join(name).join("schema.json");
 		let json = fs::read_to_string(&path)
@@ -2142,6 +2158,7 @@ fn consolidate(
 		migration_dir.join("replaces.json"),
 		serde_json::to_string_pretty(folded)?,
 	)?;
+
 	for name in folded {
 		fs::remove_dir_all(directory.join(name))
 			.with_context(|| format!("couldn't remove {}", directory.join(name).display()))?;
@@ -2153,6 +2170,7 @@ fn consolidate(
 	let original = fs::read_to_string(&registry)?;
 	let mut text = String::new();
 	let mut placed = false;
+
 	for line in original.lines() {
 		if folded.iter().any(|folded| folded == line.trim()) {
 			if !placed {
@@ -2160,15 +2178,19 @@ fn consolidate(
 				text.push('\n');
 				placed = true;
 			}
+
 			continue;
 		}
+
 		text.push_str(line);
 		text.push('\n');
 	}
+
 	if !placed {
 		text.push_str(&name);
 		text.push('\n');
 	}
+
 	fs::write(&registry, text)?;
 
 	println!(
@@ -2194,6 +2216,7 @@ fn record_release(project: &Project, version: &str, id: Option<&str>) -> Result<
 				.any(|character| character.is_whitespace() || "()<#".contains(character)),
 		"a version can't be empty or contain whitespace, parentheses, or a `#`"
 	);
+
 	if let Some(id) = id {
 		ensure!(
 			!id.is_empty() && !id.chars().any(|character| "()<#\n".contains(character)),
@@ -2224,6 +2247,7 @@ fn record_release(project: &Project, version: &str, id: Option<&str>) -> Result<
 				let _ = write!(hex, "{byte:02x}");
 				hex
 			});
+
 	let marker = match id {
 		Some(id) => format!("# release {version} ({id}) snapshot {snapshot}"),
 		None => format!("# release {version} snapshot {snapshot}"),

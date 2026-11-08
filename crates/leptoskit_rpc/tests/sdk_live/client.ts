@@ -32,9 +32,11 @@ const budget = setTimeout(() => {
 
 function exit(code: number): never {
 	const deno = (globalThis as { Deno?: { exit(code: number): never } }).Deno;
+
 	if (deno !== undefined) {
 		deno.exit(code);
 	}
+
 	(globalThis as unknown as { process: { exit(code: number): never } }).process
 		.exit(code);
 	throw new Error("unreachable");
@@ -92,6 +94,7 @@ function person(token: string) {
 			listener();
 		}
 	});
+
 	return {
 		api,
 		statuses,

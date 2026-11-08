@@ -41,6 +41,7 @@ export function Ticker() {
 		if (want === null) {
 			return;
 		}
+
 		const shown = firstTile.current?.textContent;
 		if (shown !== String(want)) {
 			failure.current = `tile 0 shows ${shown}, expected ${want}`;
@@ -60,6 +61,7 @@ export function Ticker() {
 				idle.push(now - previous);
 				previous = now;
 			}
+
 			const vsyncMs = median(idle);
 
 			const intervals: number[] = [];
@@ -76,6 +78,7 @@ export function Ticker() {
 					} else {
 						intervals.push(timestamp - last);
 					}
+
 					last = timestamp;
 					frame += 1;
 					if (timestamp - start >= DURATION_MS) {
@@ -85,6 +88,7 @@ export function Ticker() {
 						);
 						return;
 					}
+
 					setTick({ frame, phase: "running" });
 					requestAnimationFrame(onFrame);
 				};
@@ -94,6 +98,7 @@ export function Ticker() {
 			if (failure.current !== null) {
 				throw new Error(failure.current);
 			}
+
 			const skipped = intervals.filter((interval) =>
 				interval > vsyncMs * 1.5
 			).length;

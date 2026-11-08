@@ -100,11 +100,13 @@ async fn call(
 		path,
 		body.map(|value| serde_json::to_vec(&value).unwrap()),
 	);
+
 	if let Some(key) = key {
 		request
 			.headers_mut()
 			.insert("authorization", format!("Bearer {key}").parse().unwrap());
 	}
+
 	let (status, _, value) = send(app, request).await;
 	(status, value)
 }
@@ -166,9 +168,11 @@ fn signed(secret: &str, event: &Value) -> (String, Vec<u8>) {
 	mac.update(format!("{timestamp}.").as_bytes());
 	mac.update(&bytes);
 	let mut hex = String::new();
+
 	for byte in mac.finalize().into_bytes() {
 		write!(&mut hex, "{byte:02x}").unwrap();
 	}
+
 	(format!("t={timestamp},v1={hex}"), bytes)
 }
 
@@ -196,6 +200,7 @@ async fn accounts_install_plans_only_after_entitlement_and_within_plan_limits() 
 	assert_eq!(headers["cache-control"], "no-store");
 	assert_eq!(headers["x-content-type-options"], "nosniff");
 	assert_eq!(headers["referrer-policy"], "no-referrer");
+
 	assert_eq!(
 		call(&app, "GET", "/api/v1/account", None, None).await.0,
 		StatusCode::UNAUTHORIZED
@@ -366,6 +371,7 @@ async fn pairing_is_single_use_and_workers_only_finish_their_own_project() {
 		None,
 	)
 	.await;
+
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(value["expires_in"], 600);
 	assert_eq!(value["code"].as_str().unwrap().len(), 70);
@@ -644,6 +650,7 @@ async fn expired_pairing_grants_and_missing_installations_are_rejected() {
 		[],
 	)
 	.unwrap();
+
 	drop(db);
 	assert_eq!(
 		call(
@@ -713,6 +720,7 @@ async fn billing_endpoints_degrade_without_configuration_and_reject_bad_webhooks
 	let (_dir, host, billing, alice, _bob) = setup(true);
 	let billing = billing.unwrap();
 	activate(&billing, &host, "alice", "active", "price_control");
+
 	let app = host.router();
 	assert_eq!(
 		call(
@@ -810,13 +818,16 @@ async fn state_endpoint_accepts_basic_and_bearer_credentials() {
 	let (dir, host, billing, alice, _bob) = setup(true);
 	let billing = billing.unwrap();
 	activate(&billing, &host, "alice", "active", "price_team");
+
 	for project in ["notes", "other"] {
 		host.register("alice", project, "production", Ownership::Customer)
 			.unwrap();
 	}
+
 	let app = host.router();
 	let worker = pair(&app, &host, "alice", "notes").await;
 	let path = "/api/v1/state/notes";
+
 	assert_eq!(
 		call(&app, "GET", path, None, None).await.0,
 		StatusCode::UNAUTHORIZED
@@ -1097,6 +1108,7 @@ async fn proxy_enforces_tenant_tokens_and_operation_policy() {
 			.0,
 		StatusCode::UNAUTHORIZED
 	);
+
 	assert_eq!(
 		call(
 			&app,
@@ -1121,6 +1133,7 @@ async fn proxy_enforces_tenant_tokens_and_operation_policy() {
 		.0,
 		StatusCode::UNAUTHORIZED
 	);
+
 	for path in ["/api/v1/login", "/api/v1/logout"] {
 		assert_eq!(
 			call(&app, "POST", path, Some(&alice), Some(json!({})))
@@ -1130,6 +1143,7 @@ async fn proxy_enforces_tenant_tokens_and_operation_policy() {
 			"{path}"
 		);
 	}
+
 	assert_eq!(
 		call(
 			&app,
@@ -1368,6 +1382,7 @@ async fn claims_finish_operations_when_the_subscription_or_capacity_changed() {
 		},
 	)
 	.await;
+
 	activate(&billing, &host, "alice", "past_due", "price_team");
 	assert!(
 		call(
@@ -1470,6 +1485,7 @@ async fn operator_reconciliation_requires_a_stopped_worker() {
 		host.interrupt("alice", operation["id"].as_str().unwrap())
 			.is_err()
 	);
+
 	assert!(host.interrupt("alice", "missing").is_err());
 	let (_, claimed) = call(
 		&app,

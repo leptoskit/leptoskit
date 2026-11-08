@@ -306,6 +306,7 @@ class PictureInPicturePlugin(
 
         val listener =
             Consumer<PictureInPictureModeChangedInfo> { info ->
+
                 if (!info.isInPictureInPictureMode) {
                     finishPip(PluginException.CANCELLED)
                     clearPipModeListener(activity)
@@ -333,6 +334,7 @@ class PictureInPicturePlugin(
         if (!observing) return
 
         observing = false
+
         val activity = context as? Activity ?: return
 
         clearPipModeListener(activity)

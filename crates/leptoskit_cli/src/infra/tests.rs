@@ -43,6 +43,7 @@ fn external_config() -> InfraConfig {
 	config.backups.enabled = false;
 	config.updates_domain.clear();
 	config.updates_bucket.clear();
+
 	config.backup_bucket.clear();
 	config.image.clear();
 	config.registry.clear();
@@ -72,6 +73,7 @@ fn external_hosts_reuse_the_provider_and_edge_resources_without_a_managed_databa
 	);
 	assert!(value["resource"]["cloudflare_r2_bucket"].is_null());
 	assert!(value["resource"]["cloudflare_r2_custom_domain"].is_null());
+
 	assert!(value["output"]["updates_bucket"].is_null());
 	assert!(value["output"]["backup_bucket"].is_null());
 	assert_eq!(
@@ -113,6 +115,7 @@ fn external_hosts_reject_runtime_features_instead_of_silently_ignoring_them() {
 	assert!(config.problem().is_some());
 	config.backups.enabled = false;
 	config.services.cache = true;
+
 	assert!(config.problem().is_some());
 	config.services.cache = false;
 	config.image = "ghcr.io/team/app".into();
@@ -142,6 +145,7 @@ fn external_hetzner_hosts_do_not_emit_empty_digitalocean_resource_blocks() {
 	let value = resources(&config);
 	let resources = value["resource"].as_object().unwrap();
 	assert!(!resources.contains_key("digitalocean_firewall"));
+
 	assert!(!resources.contains_key("digitalocean_droplet"));
 	assert!(resources.values().all(serde_json::Value::is_object));
 	assert_eq!(
@@ -188,6 +192,7 @@ fn digitalocean_and_b2_preserve_data_and_use_the_selected_providers() {
 		region: "us-west-004".into(),
 	});
 	let value = resources(&c);
+
 	assert!(value["resource"]["hcloud_server"].is_null());
 	assert_eq!(
 		value["resource"]["digitalocean_droplet"]["app"]["lifecycle"]["prevent_destroy"],
@@ -224,6 +229,7 @@ fn multi_host_runtime_has_shared_services_and_sequential_rollouts() {
 	let project = crate::deploy::Project::read(root.path(), &config).unwrap();
 	let mut c = self::config();
 	c.instances = 2;
+
 	c.services.relay = true;
 	c.services.cache = true;
 	let (text, secrets) = runtime::kamal(
@@ -277,6 +283,7 @@ fn ci_workflow_builds_before_deploying_and_uses_shared_state() {
 		region: "eu-west-1".into(),
 	});
 	config.infra = Some(infra);
+
 	let project = crate::deploy::Project::read(root.path(), &config).unwrap();
 	insta::assert_json_snapshot!("managed_ci", ci::workflow(&config, &project).unwrap());
 	config.infra.as_mut().unwrap().plugins.analytics =
@@ -299,6 +306,7 @@ fn unsafe_access_and_shared_storage_are_rejected() {
 	c.ssh_cidrs = vec!["2001:db8::/64".into()];
 	assert!(c.problem().is_none());
 	c.updates_bucket.clone_from(&c.backup_bucket);
+
 	assert!(c.problem().is_some());
 }
 
@@ -312,6 +320,7 @@ fn generated_edits_are_never_silently_overwritten() {
 	fs::write(dir.join("main.tf.json"), "edited").unwrap();
 	assert!(generate(dir, &c, false).is_err());
 	generate(dir, &c, true).unwrap();
+
 	let resources_before = fs::read(dir.join("main.tf.json")).unwrap();
 	fs::write(dir.join("plugins.json"), "edited").unwrap();
 	assert!(generate(dir, &c, false).is_err());
@@ -341,6 +350,7 @@ fn saved_plans_detect_tampering_and_configuration_changes() {
 	let first = plan_fingerprint(root.path()).unwrap();
 	fs::write(root.path().join("plugins.json"), "edited plugin bindings").unwrap();
 	assert_ne!(first, plan_fingerprint(root.path()).unwrap());
+
 	fs::write(root.path().join("leptoskit.plan"), "modified").unwrap();
 	assert_ne!(first, plan_fingerprint(root.path()).unwrap());
 	let _held = lock(root.path()).unwrap();
@@ -375,6 +385,7 @@ fn release_configuration_uses_private_services_and_secret_references() {
 	)
 	.unwrap();
 	insta::assert_snapshot!("managed_kamal", yaml);
+
 	insta::assert_snapshot!("managed_secret_references", secrets);
 	assert!(yaml.contains("10.42.0.10:5432:5432"));
 	assert!(secrets.contains("DATABASE_URL=$DATABASE_URL"));
@@ -414,6 +425,7 @@ async fn database_bootstrap_gives_the_app_ownership_without_superuser() {
 	url.set_path("/leptoskit");
 	let directory = tempfile::tempdir().unwrap();
 	let script = directory.path().join("init.sh");
+
 	fs::write(&script, runtime::DATABASE_INIT).unwrap();
 	let result = Command::new("bash")
 		.arg(script)
@@ -476,14 +488,17 @@ fn encrypted_archives_restore_real_postgres_and_preserve_the_previous_database()
 			std::env::var_os("LEPTOSKIT_REQUIRE_RESTIC").is_none(),
 			"install restic to run required recovery tests"
 		);
+
 		return;
 	}
+
 	let Some(cluster) = postgres::PostgresCluster::start() else {
 		return;
 	};
 	let directory = tempfile::tempdir().unwrap();
 	fs::create_dir(directory.path().join("control")).unwrap();
 	let worker = directory.path().join("control/recovery.py");
+
 	let test = directory.path().join("test.py");
 	fs::write(&worker, include_bytes!("recovery.py")).unwrap();
 	fs::write(&test, include_bytes!("recovery_tests.py")).unwrap();
@@ -559,6 +574,7 @@ fn managed_services_run_as_roles_with_their_own_secrets() {
 		])
 	);
 	let cards = &value["servers"]["service-cards"];
+
 	assert!(cards.get("proxy").is_none());
 	assert_eq!(cards["options"]["network-alias"], "notes-production-cards");
 
@@ -675,6 +691,7 @@ async fn service_databases_are_their_roles_alone() {
 			String::from_utf8_lossy(&output.stderr)
 		);
 	};
+
 	admin_sql("CREATE ROLE leptoskit LOGIN PASSWORD 'app'");
 	admin_sql("CREATE DATABASE leptoskit OWNER leptoskit");
 	let sql = crate::deploy::services::postgres_setup_sql(&project.services, "leptoskit");
@@ -789,6 +806,7 @@ fn the_compose_database_script_gives_each_service_its_database() {
 			.replace(&format!("\"{}\"", "notes"), &format!("\"{database}\"")),
 	)
 	.unwrap();
+
 	let parsed = url::Url::parse(&url).unwrap();
 	let output = Command::new("bash")
 		.arg(&script)

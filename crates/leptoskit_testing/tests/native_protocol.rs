@@ -58,6 +58,7 @@ fn server(replies: Vec<Reply>) -> (Options, std::thread::JoinHandle<Vec<Value>>)
 			} else {
 				serde_json::from_slice(&body).unwrap()
 			});
+
 			respond(&stream, &expected);
 		}
 
@@ -197,6 +198,7 @@ fn ambiguous_controls_are_not_clicked_and_failure_report_embeds_real_png() {
 	assert!(html.contains("<img src=\"capture-001.png\""));
 	assert!(html.contains("&lt;Open&gt;"));
 	assert!(!html.contains("<Open>"));
+
 	std::fs::remove_dir_all(directory).unwrap();
 }
 

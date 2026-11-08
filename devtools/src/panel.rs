@@ -165,11 +165,13 @@ pub fn look_again() {
 /// shows nothing.
 pub fn main(surface: Surface) -> impl Fn() -> Element + Send + Sync + 'static {
 	let panel = surface.route() == PANEL_ROUTE;
+
 	if panel {
 		browser::start_panel();
 	} else {
 		browser::add_panel();
 	}
+
 	move || if panel { page() } else { View() }
 }
 
@@ -290,10 +292,13 @@ mod browser {
 		if let Ok(frame) = HubFrame::new(FRAME_TOP) {
 			FRAME.with_borrow_mut(|slot| *slot = Some(frame));
 		}
+
 		let inspecting = devtools::inspected_tab().is_ok();
+
 		if !inspecting {
 			update(|shell| shell.inspecting = false);
 		}
+
 		if inspecting
 			&& let Ok(watch) = devtools::watch_session(|session| {
 				FRAME.with_borrow(|frame| {
@@ -322,6 +327,7 @@ mod browser {
 					LOOK_EVERY_MS,
 				);
 			}
+
 			// The panel looks for as long as it's open.
 			again.forget();
 		});
@@ -344,14 +350,17 @@ mod browser {
 		let port = peek(|shell| shell.port);
 		let hub = ask(port).await;
 		let (current, changed) = peek(|shell| (shell.port == port, shell.hub != hub));
+
 		if !current {
 			return;
 		}
+
 		// Unchanged answers leave the panel alone, so typing in the port field
 		// isn't interrupted every two seconds.
 		if changed {
 			update(|shell| shell.hub = hub.clone());
 		}
+
 		FRAME.with_borrow(|frame| {
 			if let Some(frame) = frame {
 				match hub {
@@ -377,12 +386,15 @@ mod browser {
 		let Ok(response) = JsFuture::from(window.fetch_with_str_and_init(&url, &init)).await else {
 			return Hub::Missing;
 		};
+
 		let Ok(response) = response.dyn_into::<web_sys::Response>() else {
 			return Hub::Missing;
 		};
+
 		if !response.ok() {
 			return Hub::Missing;
 		}
+
 		let Ok(text) = response.text() else {
 			return Hub::Missing;
 		};

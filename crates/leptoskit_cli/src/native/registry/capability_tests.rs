@@ -205,6 +205,7 @@ fn the_descriptor_never_contains_plugin_option_values_or_paths() {
 	assert!(!json.contains("secret.example"), "{json}");
 	assert!(!json.contains("/sdk/echo"), "{json}");
 	assert_eq!(contract.plugins[0].option_keys, ["origins"]);
+
 	assert!(contract.plugins[0].options_sha256.is_some());
 }
 

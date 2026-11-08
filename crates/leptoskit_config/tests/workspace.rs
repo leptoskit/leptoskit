@@ -99,6 +99,7 @@ fn bindings_require_distinct_environment_names_and_known_peers() {
 		.bindings
 		.get_mut("accounts")
 		.unwrap();
+
 	binding.token_env = "ACCOUNTS_TOKEN".into();
 	binding.application = "web".into();
 	assert!(
@@ -129,6 +130,7 @@ fn versions_paths_and_unknown_fields_fail_before_building() {
 	workspace.format_version = 2;
 	assert!(workspace.validate().unwrap_err().contains("format_version"));
 	workspace.format_version = 1;
+
 	for path in ["", "../outside", "/outside"] {
 		workspace.applications.get_mut("web").unwrap().path = path.into();
 		assert!(
@@ -138,7 +140,9 @@ fn versions_paths_and_unknown_fields_fail_before_building() {
 				.contains("applications.web.path")
 		);
 	}
+
 	assert!(toml::from_str::<Workspace>("format_version=1\nunknown=true\n[applications]").is_err());
+
 	workspace.applications.clear();
 	assert!(
 		workspace

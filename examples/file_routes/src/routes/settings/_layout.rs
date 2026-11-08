@@ -29,6 +29,7 @@ pub fn Layout(children: Children, route: &Route) -> Element {
 		Route::Section(section) => format!("Settings › {}", section.section),
 		_ => "Settings".to_owned(),
 	};
+
 	view! {
 		<View class="flex-1">
 			<Text class="p-6 text-2xl font-semibold">{heading}</Text>

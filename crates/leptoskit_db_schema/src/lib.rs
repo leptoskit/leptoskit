@@ -58,6 +58,7 @@ mod model;
 mod publications;
 mod render;
 mod triggers;
+
 mod validate;
 
 use sha2::Digest;

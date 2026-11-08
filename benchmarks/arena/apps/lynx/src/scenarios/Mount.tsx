@@ -62,8 +62,10 @@ function clearCards(): Card[] {
 /** Reads the rendered titles back from the element tree on the main thread. */
 function readRendered(container: MainThread.Element | null): RenderedCards {
 	"main thread";
+
 	if (container === null) return { count: -1, first: "", last: "" };
 	const titles = container.querySelectorAll(".card-title");
+
 	return {
 		count: titles.length,
 		first: textOf(titles[0]),
@@ -153,6 +155,7 @@ export function Mount(props: ScenarioProps) {
 				await mainThreadFrame();
 				elapsed = now() - start;
 			}
+
 			const seen = await rendered();
 			const want = expected(name);
 			if (
@@ -180,6 +183,7 @@ export function Mount(props: ScenarioProps) {
 				update.push(await step("update", round, updateEveryTenth));
 				clear.push(await step("clear", round, clearCards));
 			}
+
 			const notes = watcher !== undefined
 				? [
 					`each step is timed from the state change (Unix time from ${UNIX_CLOCK_SOURCE}) to the pipelineEnd of the PipelineEntry for the step's __lynx_timing_flag`,

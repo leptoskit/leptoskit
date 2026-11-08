@@ -95,6 +95,7 @@ final class LayerMotion {
 
             if let before = before[id] {
                 if let transition = props.animation?.transition { animate(layer, from: before, transition) }
+
                 if let curve = props.animation?.layout { relayout(layer, from: before, curve) }
             }
 
@@ -103,6 +104,7 @@ final class LayerMotion {
                 let (opacity, transform) = entering.visual.over(opacity: own.0, transform: own.1)
                 add(layer, opacity: (opacity, own.0), transform: (transform, own.1), entering, fill: .backwards)
             }
+
             play(id, layer, props)
         }
     }
@@ -127,6 +129,7 @@ final class LayerMotion {
 
             return true
         }
+
         layer.removeAnimation(forKey: Self.keyframesKey + ".opacity")
         layer.removeAnimation(forKey: Self.keyframesKey + ".transform")
 
@@ -134,11 +137,13 @@ final class LayerMotion {
             animation.beginTime = delay
             animation.fillMode = .both
         }
+
         let group = CAAnimationGroup()
         group.animations = animations
         group.duration = delay + longest
         group.fillMode = .forwards
         group.isRemovedOnCompletion = false
+
         group.delegate = MotionCompletion(done)
         layer.add(group, forKey: "lk.exit")
 
@@ -277,6 +282,7 @@ final class LayerMotion {
             if keyframes.delayMs > 0 {
                 animation.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + keyframes.delayMs / 1000
             }
+
             // Kept through the app moving to the background, which removes finished-on-completion animations.
             animation.isRemovedOnCompletion = false
             layer.add(animation, forKey: Self.keyframesKey + "." + keyPath)
@@ -318,6 +324,7 @@ final class LayerMotion {
     private static func value(_ value: Any) -> Any {
         switch value {
         case let transform as CATransform3D: NSValue(caTransform3D: transform)
+
         #if canImport(UIKit)
         case let point as CGPoint: NSValue(cgPoint: point)
         case let size as CGSize: NSValue(cgSize: size)

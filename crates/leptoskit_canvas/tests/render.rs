@@ -39,10 +39,12 @@ fn render_scaled(scene: &Scene, width: u32, height: u32, scale: f32) -> Option<I
 			assert_eq!(pixels.len(), (width * height * 4) as usize);
 			Some(Image { pixels, width })
 		}
+
 		Err(error) if error.is_unavailable() => {
 			eprintln!("skipping: {error}");
 			None
 		}
+
 		Err(error) => panic!("{error}"),
 	}
 }
@@ -65,6 +67,7 @@ fn solid_rect_covers_exactly_its_pixels() {
 	assert_eq!(image.at(29, 29), [255, 0, 0, 255]);
 	assert_eq!(image.at(9, 20), [0; 4]);
 	assert_eq!(image.at(30, 20), [0; 4]);
+
 	assert_eq!(image.at(0, 0), [0; 4]);
 }
 
@@ -79,6 +82,7 @@ fn rounded_corners_are_transparent_and_smooth() {
 	assert_eq!(image.alpha(1, 1), 0);
 	assert_eq!(image.alpha(38, 38), 0);
 	assert_eq!(image.alpha(4, 4), 0);
+
 	let partial = (0..40).any(|x| (1..255).contains(&image.alpha(x, 3)));
 	assert!(partial, "the curved edge has partly covered pixels");
 }
@@ -187,6 +191,7 @@ fn box_shadow_falls_off_outside_the_box() {
 		"half covered at the edge: {edge}"
 	);
 	let row: Vec<u8> = (60..100).map(|x| image.alpha(x, 50)).collect();
+
 	assert!(row.windows(2).all(|pair| pair[0] >= pair[1]), "{row:?}");
 	assert!(image.alpha(99, 50) <= 2, "{}", image.alpha(99, 50));
 	assert!(image.alpha(80, 50) > 10, "{}", image.alpha(80, 50));
@@ -227,6 +232,7 @@ fn even_odd_fill_cuts_a_hole() {
 		return;
 	};
 	assert_eq!(even_odd.at(50, 50), [0; 4]);
+
 	assert_eq!(even_odd.at(20, 50), [255, 0, 0, 255]);
 	assert_eq!(even_odd.at(5, 50), [0; 4]);
 	assert_eq!(non_zero.at(50, 50), [255, 0, 0, 255]);
@@ -258,6 +264,7 @@ fn stroke_covers_its_width_and_caps() {
 	assert_eq!(butt.at(50, 45), [255, 0, 0, 255]);
 	assert_eq!(butt.at(50, 54), [255, 0, 0, 255]);
 	assert_eq!(butt.at(50, 44), [0; 4]);
+
 	assert_eq!(butt.at(50, 55), [0; 4]);
 	assert_eq!(butt.at(92, 50), [0; 4]);
 	assert_eq!(round.at(92, 50), [255, 0, 0, 255]);
@@ -279,6 +286,7 @@ fn clips_limit_drawing_and_pop_restores_it() {
 	assert_eq!(image.at(20, 20), [255, 0, 0, 255]);
 	assert_eq!(image.at(59, 59), [255, 0, 0, 255]);
 	assert_eq!(image.at(60, 40), [0; 4]);
+
 	assert_eq!(image.at(85, 85), [0, 0, 255, 255]);
 }
 
@@ -310,6 +318,7 @@ fn layer_fades_its_contents_as_one() {
 	let Some(image) = render(&scene, 40, 40) else {
 		return;
 	};
+
 	for x in [5, 20, 35] {
 		let [r, g, b, a] = image.at(x, 10);
 		assert!(
@@ -318,6 +327,7 @@ fn layer_fades_its_contents_as_one() {
 			image.at(x, 10)
 		);
 	}
+
 	assert_eq!(image.at(5, 35), [0, 0, 255, 255]);
 }
 
@@ -402,11 +412,13 @@ fn hostile_scenes_render_without_panicking() {
 		)
 		.pop_layer()
 		.pop_clip();
+
 	for _ in 0..100 {
 		scene = scene
 			.push_layer(0.5)
 			.push_clip(Rect::new(0.0, 0.0, 10.0, 10.0), 99.0);
 	}
+
 	let scene = scene.box_shadow(
 		Rect::new(0.0, 0.0, 10.0, 10.0),
 		1e9,
@@ -423,6 +435,7 @@ fn hostile_scenes_render_without_panicking() {
 fn renderer_draws_repeatedly_into_a_bgra_target() {
 	let Ok((device, queue)) = headless_device() else {
 		eprintln!("skipping: no GPU");
+
 		return;
 	};
 	let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
@@ -439,6 +452,7 @@ fn renderer_draws_repeatedly_into_a_bgra_target() {
 	let second = renderer
 		.render_to_rgba(&gradient, 16, 16, 1.0)
 		.expect("render");
+
 	assert_eq!(&first[..4], &[255, 0, 0, 255]);
 	assert_eq!(&second[..4], &[0, 0, 255, 255]);
 	assert_eq!(&second[(9 * 4)..(9 * 4 + 4)], &[0; 4]);

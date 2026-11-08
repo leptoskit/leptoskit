@@ -375,6 +375,7 @@ pub fn document(command: DeviceCommand) -> Result<Document> {
 	} else {
 		inventory::Inventory::empty()
 	};
+
 	document_with(command, &inventory)
 }
 
@@ -698,6 +699,7 @@ mod tests {
 			target: target_args(None, Some("https://example.com")),
 			label: "page".to_owned(),
 		}));
+
 		assert_eq!(inventory::Inventory::empty().devices, Vec::new());
 	}
 

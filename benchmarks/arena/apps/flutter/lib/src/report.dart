@@ -35,6 +35,7 @@ final class ArenaReport {
         throw ArgumentError('samples[$key] holds ${value.length} values');
       }
     }
+
     return {
       'v': 1,
       'framework': 'flutter',
@@ -55,9 +56,11 @@ final class ArenaReport {
 /// defines it, so a missing value means the build was not made by the tool.
 String get frameworkVersion {
   final version = FlutterVersion.version;
+
   if (version == null) {
     throw StateError('FLUTTER_VERSION is not defined; build with `flutter`');
   }
+
   return version;
 }
 
@@ -72,6 +75,7 @@ List<String> reportLines(String json) {
   if (json.codeUnits.any((unit) => unit > 0x7f)) {
     throw ArgumentError('report JSON must be ASCII to split by bytes');
   }
+
   if (json.length <= maxReportChunk) return ['ARENA $json'];
 
   final count = (json.length / maxReportChunk).ceil();

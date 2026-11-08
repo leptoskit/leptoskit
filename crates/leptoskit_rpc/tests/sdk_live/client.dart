@@ -8,9 +8,11 @@ import 'package:sdk_live/sdk_live.dart';
 
 String env(String name) {
   final value = Platform.environment[name];
+
   if (value == null) {
     throw StateError('$name is not set');
   }
+
   return value;
 }
 

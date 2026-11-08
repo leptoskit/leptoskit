@@ -58,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let live_ready = roles.live().then(|| readiness.check("live"));
 	// The database, migrated before the first request.
 	let url = __DATABASE_URL__;
+
 	let db = leptoskit::db::Db::connect(&url).await?;
 
 	for name in db
@@ -80,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// `[auth] origin` names the site, the socket refuses pages from anywhere
 	// else; native apps, which send no `Origin`, sign in with a token.
 	let operations = __CRATE___backend::operations(db.clone()).identify(auth.clone());
+
 	let live = match auth.origin() {
 		Some(origin) => operations.live().origin(origin),
 		None => operations.live(),

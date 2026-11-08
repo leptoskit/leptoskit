@@ -48,8 +48,10 @@ trap cleanup EXIT
 ) >target/native-ui/appium-macos.log 2>&1 &
 server_pid=$!
 deadline=$((SECONDS + 60))
+
 until curl -fsS "http://127.0.0.1:$driver_port/status" 2>/dev/null | jq -e '.value.ready == true' >/dev/null; do
 	kill -0 "$server_pid"
+
 	if [ "$SECONDS" -ge "$deadline" ]; then
 		echo "Native driver startup timed out" >&2
 		exit 1
@@ -57,9 +59,12 @@ until curl -fsS "http://127.0.0.1:$driver_port/status" 2>/dev/null | jq -e '.val
 	sleep 0.1
 done
 endpoint="http://127.0.0.1:$driver_port"
+
 for decision in deny allow; do
+
 	target/debug/examples/native_conformance macos "$endpoint" "$lab" desktop "$decision"
 done
+
 for decision in decline accept; do
 	target/debug/examples/dialog_plugin_journey macos "$endpoint" "$dialog" "$decision"
 done

@@ -20,6 +20,7 @@ pub(super) type Trackable = c_void;
 pub(super) type TrackableList = c_void;
 pub(super) type Anchor = c_void;
 pub(super) type HitResult = c_void;
+
 pub(super) type HitResultList = c_void;
 pub(super) type LightEstimate = c_void;
 pub(super) type Image = c_void;

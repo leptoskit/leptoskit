@@ -77,6 +77,7 @@ class HomeWidgetsPlugin(
                 if (!prefs.edit().remove(PREFIX + kind).commit()) {
                     throw PluginException(PluginException.NATIVE)
                 }
+
                 byteArrayOf()
             }
 
@@ -100,6 +101,7 @@ class HomeWidgetsPlugin(
     private fun capability(): ByteArray {
         // supported | can_reload | can_query_installed | shared_store
         val flags = 1 or (1 shl 1) or (1 shl 2) or (1 shl 3)
+
         return ByteBuffer
             .allocate(4)
             .order(ByteOrder.LITTLE_ENDIAN)
@@ -171,6 +173,7 @@ class HomeWidgetsPlugin(
             } else {
                 null
             }
+
         val resolved =
             if (flags != null) {
                 context.packageManager.queryBroadcastReceivers(intent, flags)
@@ -241,6 +244,7 @@ private object Kind {
         val reader = Reader(payload, 68)
         val kind = reader.identifier()
         reader.finish()
+
         return kind
     }
 }
@@ -276,6 +280,7 @@ private class Snapshot(
                 it.limit(end)
                 it.get(raw)
             }
+
             return Snapshot(kind, raw)
         }
 
@@ -297,6 +302,7 @@ private class Reader(
 
     fun u32(): Int {
         if (buffer.remaining() < 4) throw PluginException(PluginException.INVALID_ARGUMENT)
+
         return buffer.int
     }
 
@@ -306,6 +312,7 @@ private class Reader(
         if (!value.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return value
     }
 
@@ -343,6 +350,7 @@ private class Reader(
         ) {
             throw PluginException(PluginException.INVALID_ARGUMENT)
         }
+
         return value
     }
 

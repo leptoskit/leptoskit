@@ -47,6 +47,7 @@ pub fn Avatar(name: &str) -> Element {
 pub fn Screen(shell: &Shell, huddle: &Huddle) -> Element {
 	let huddle = *huddle;
 	let shell = *shell;
+
 	let body = match huddle.tab.get() {
 		Tab::Chat => view! { <chat::Panel huddle=&huddle /> },
 		Tab::Board => view! { <board::Panel huddle=&huddle /> },
@@ -87,6 +88,7 @@ fn TopBar(shell: &Shell, huddle: &Huddle) -> Element {
 	} else {
 		format!("Notices ({unread})")
 	};
+
 	let me = huddle
 		.me
 		.data()
