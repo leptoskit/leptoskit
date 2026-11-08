@@ -382,6 +382,9 @@ pub enum Platform {
 	Wearos,
 	/// An Apple watchOS application (experimental).
 	Watchos,
+	/// A Meta Quest (Horizon OS) application: the Android app, packaged for
+	/// the headset and configured in `[native.quest]`.
+	Quest,
 	/// A terminal application: the shared tree in an interactive cell grid.
 	Tui,
 	/// A browser extension for Chromium, Firefox, and Safari, built from the
@@ -410,7 +413,8 @@ impl Platform {
 		match self {
 			Self::Web => Some("web"),
 			Self::Ios => Some("ios"),
-			Self::Android => Some("android"),
+			// Horizon OS is Android: the app's Android code runs there as is.
+			Self::Android | Self::Quest => Some("android"),
 			Self::Macos => Some("macos"),
 			Self::Windows => Some("windows"),
 			Self::Linux => Some("linux"),
@@ -436,6 +440,7 @@ impl Platform {
 				| Self::Harmonyos
 				| Self::Wearos
 				| Self::Watchos
+				| Self::Quest
 				| Self::Tui
 		)
 	}
@@ -453,6 +458,7 @@ impl fmt::Display for Platform {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
+			Self::Quest => f.write_str("quest"),
 			Self::Tui => f.write_str("tui"),
 			Self::Extension => f.write_str("extension"),
 			Self::Native => f.write_str("native"),
@@ -475,6 +481,7 @@ impl std::str::FromStr for Platform {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
+			"quest" => Ok(Self::Quest),
 			"tui" => Ok(Self::Tui),
 			"extension" => Ok(Self::Extension),
 			"native" => Ok(Self::Native),
@@ -924,6 +931,9 @@ pub struct NativeConfig {
 	/// Legacy native target selection. New projects use `app.platforms`.
 	#[serde(skip_serializing_if = "NativeConfig::legacy_default_targets")]
 	pub targets: Vec<NativeTarget>,
+	/// The Meta Quest build's settings.
+	#[serde(skip_serializing_if = "QuestConfig::is_default")]
+	pub quest: QuestConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -946,10 +956,92 @@ impl Default for NativeConfig {
 				NativeTarget::Ios,
 				NativeTarget::Android,
 			],
+			quest: QuestConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
 		}
 	}
+}
+
+/// How the Meta Quest build (`--platform quest`) packages the Android app
+/// for Horizon OS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct QuestConfig {
+	/// Launches straight into the headset's immersive mode, where only what
+	/// the app draws through OpenXR is shown. With `false`, the app opens as
+	/// a 2D panel showing its ordinary interface.
+	pub immersive: bool,
+	/// The headsets the Horizon Store offers the app on.
+	pub supported_devices: Vec<QuestDevice>,
+	/// Whether the app uses hand tracking, and whether it needs it.
+	pub hand_tracking: Requirement,
+	/// Whether the app shows the room through the headset's cameras
+	/// (passthrough).
+	pub passthrough: bool,
+}
+
+impl Default for QuestConfig {
+	fn default() -> Self {
+		Self {
+			immersive: true,
+			supported_devices: vec![
+				QuestDevice::Quest2,
+				QuestDevice::Questpro,
+				QuestDevice::Quest3,
+				QuestDevice::Quest3s,
+			],
+			hand_tracking: Requirement::Optional,
+			passthrough: true,
+		}
+	}
+}
+
+impl QuestConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// A Meta Quest headset model, as `com.oculus.supportedDevices` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum QuestDevice {
+	/// Meta Quest 2.
+	Quest2,
+	/// Meta Quest Pro.
+	Questpro,
+	/// Meta Quest 3.
+	Quest3,
+	/// Meta Quest 3S.
+	Quest3s,
+}
+
+impl fmt::Display for QuestDevice {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(match self {
+			Self::Quest2 => "quest2",
+			Self::Questpro => "questpro",
+			Self::Quest3 => "quest3",
+			Self::Quest3s => "quest3s",
+		})
+	}
+}
+
+/// Whether an app uses a feature, and whether it can run without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum Requirement {
+	/// Not used.
+	Off,
+	/// Used where the device has it.
+	#[default]
+	Optional,
+	/// The app needs it; stores hide the app from devices without it.
+	Required,
 }
 
 /// The path on the server a native app's system-browser sign-in returns to.
@@ -1015,6 +1107,8 @@ pub enum NativeTarget {
 	Wearos,
 	/// Apple watchOS (experimental watch host).
 	Watchos,
+	/// Meta Quest (Horizon OS), from the Android host.
+	Quest,
 	/// Windows.
 	Windows,
 	/// Linux.
@@ -1030,6 +1124,7 @@ impl fmt::Display for NativeTarget {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
+			Self::Quest => f.write_str("quest"),
 			Self::Windows => f.write_str("windows"),
 			Self::Linux => f.write_str("linux"),
 		}
@@ -1047,6 +1142,7 @@ impl std::str::FromStr for NativeTarget {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
+			"quest" => Ok(Self::Quest),
 			"windows" => Ok(Self::Windows),
 			"linux" => Ok(Self::Linux),
 			other => Err(ConfigError::UnknownPlatform(other.to_owned())),

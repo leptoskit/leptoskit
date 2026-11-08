@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 pub(super) use ios::apple_plugins;
+#[cfg(test)]
+pub(super) use ios::linked_frameworks as ios_linked_frameworks;
 
 use super::Target;
 use super::registry::Constructor;
@@ -37,7 +39,7 @@ pub fn generate(
 	}
 
 	if release
-		&& matches!(target, Target::Android | Target::AndroidX86_64)
+		&& target.is_android()
 		&& let Some(warning) = android_keep_rules_warning(root)
 	{
 		crate::ui::warning(warning);
@@ -64,6 +66,15 @@ pub fn generate(
 		Target::Ios | Target::IosSimulator => ios::generate(root, config, registry),
 		Target::Android => android(root, config, registry, "arm64-v8a"),
 		Target::AndroidX86_64 => android(root, config, registry, "x86_64"),
+		Target::Quest => {
+			android_host(
+				root,
+				config,
+				registry,
+				"arm64-v8a",
+				Some(&config.native.quest),
+			)
+		}
 		Target::Harmonyos | Target::HarmonyosX86_64 => {
 			super::harmonyos::generate(root, config, registry, target)
 		}
@@ -200,6 +211,18 @@ fn android(
 	registry: &Registry,
 	abi: &str,
 ) -> Result<()> {
+	android_host(root, config, registry, abi, None)
+}
+
+/// The generated half of the Android host, for a phone or, with `quest`, for
+/// a Meta Quest headset.
+fn android_host(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+	abi: &str,
+	quest: Option<&leptoskit_config::QuestConfig>,
+) -> Result<()> {
 	let dir = root.join(".leptoskit/android");
 	write(&dir.join("version.properties"), &android_version(config))?;
 	write(
@@ -255,6 +278,11 @@ fn android(
 		if let Some(warning) = android_icon_warning(root) {
 			crate::ui::warning(warning);
 		}
+	}
+
+	// Quest packages the same host for the headset: its manifest says so.
+	if let Some(quest) = quest {
+		manifest = super::quest::manifest(&manifest, quest)?;
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;

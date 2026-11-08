@@ -36,6 +36,7 @@ pub fn run_for_target(
 		Some(NativeTarget::Watchos) => return watch(path, name, sdk, NativeTarget::Watchos),
 		Some(NativeTarget::Ios) => Platform::Ios,
 		Some(NativeTarget::Android) => Platform::Android,
+		Some(NativeTarget::Quest) => Platform::Quest,
 		Some(NativeTarget::Macos) => Platform::Macos,
 		Some(NativeTarget::Windows) => Platform::Windows,
 		Some(NativeTarget::Linux) => Platform::Linux,
