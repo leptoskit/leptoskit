@@ -124,17 +124,18 @@ fn overlay<R>(children: Element, navigation: &Router<R>, presentation: Presentat
 where
 	R: Routable + Clone + PartialEq + Send + Sync + Render + 'static,
 {
-	let layer_class = match presentation {
-		Presentation::Modal => "absolute inset-0 bg-white dark:bg-slate-950",
+	// `shell` only calls this for Modal and Sheet; Push shares Modal chrome if
+	// it ever reaches here so both arms stay reachable from tests.
+	let (layer_class, layer_id) = match presentation {
 		Presentation::Sheet => {
-			"absolute left-0 right-0 bottom-0 top-16 rounded-xl bg-white dark:bg-slate-950"
+			(
+				"absolute left-0 right-0 bottom-0 top-16 rounded-xl bg-white dark:bg-slate-950",
+				"stack-sheet",
+			)
 		}
-		Presentation::Push => "flex-1",
-	};
-	let layer_id = match presentation {
-		Presentation::Modal => "stack-modal",
-		Presentation::Sheet => "stack-sheet",
-		Presentation::Push => "stack-push",
+		Presentation::Modal | Presentation::Push => {
+			("absolute inset-0 bg-white dark:bg-slate-950", "stack-modal")
+		}
 	};
 	let layer = View().class(layer_class).test_id(layer_id).child(children);
 

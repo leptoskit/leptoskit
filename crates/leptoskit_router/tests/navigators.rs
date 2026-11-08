@@ -25,10 +25,12 @@ use leptoskit_router::dispatch_system_back;
 use leptoskit_router::navigators::Drawer;
 use leptoskit_router::navigators::DrawerItem;
 use leptoskit_router::navigators::IntoNavigator;
+use leptoskit_router::navigators::Navigator;
 use leptoskit_router::navigators::Presentation;
 use leptoskit_router::navigators::Stack;
 use leptoskit_router::navigators::StackGesture;
 use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::TabPlacement;
 use leptoskit_router::navigators::Tabs;
 use leptoskit_router::navigators::href_matches_root;
 use leptoskit_router::route_path_from_link;
@@ -291,6 +293,134 @@ fn previous_peeks_memory_history() {
 	assert_eq!(router.previous(), Some(Screen::Home));
 	assert!(router.back());
 	assert_eq!(router.previous(), None);
+}
+
+#[test]
+fn route_path_covers_https_query_and_hostless_schemes() {
+	assert_eq!(
+		route_path_from_link("https://example.com/?q=1").as_deref(),
+		Some("/?q=1")
+	);
+	assert_eq!(
+		route_path_from_link("https://example.com?q=2").as_deref(),
+		Some("/?q=2")
+	);
+	// No host and only `/` → the synthetic app root.
+	assert_eq!(route_path_from_link("myapp:///").as_deref(), Some("/"));
+	assert_eq!(route_path_from_link("myapp:").as_deref(), Some("/"));
+	assert!(route_path_from_link("not a url").is_none());
+	assert!(route_path_from_link("https://example.com/\u{0001}").is_none());
+}
+
+#[test]
+fn stack_default_debug_push_sheet_and_edge_swipe() {
+	let defaulted = Stack::<Screen>::default();
+	assert_eq!(
+		defaulted.presentation_for(&Screen::Home),
+		Presentation::Push
+	);
+	assert!(format!("{defaulted:?}").contains("Stack"));
+
+	let stack = Stack::new()
+		.gesture(StackGesture::None)
+		.present(Presentation::Sheet, |route| {
+			matches!(route, Screen::Compose)
+		});
+
+	// Push shell with no gesture chrome.
+	let router = Router::<Screen>::new(Screen::Home);
+	let push = stack.shell(Text("home".to_owned()), &router, &Screen::Home);
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&push);
+	assert!(
+		find_test_id(&surface, surface.root().unwrap(), "stack-edge-hit").is_none(),
+		"no history means no edge hit"
+	);
+
+	// Edge swipe with nothing to pop returns the children unchanged.
+	let idle_swipe = Stack::new().gesture(StackGesture::EdgeSwipe);
+	let idle = idle_swipe.shell(Text("home".to_owned()), &router, &Screen::Home);
+	surface.set_root(&idle);
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-edge-hit").is_none());
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-edge-swipe").is_none());
+
+	// Stack::into_navigator (not only Navigator::into_navigator).
+	let _ = Stack::<Screen>::new().into_navigator();
+
+	// Sheet with history underneath.
+	router.navigate(Screen::Compose);
+	let sheet = stack.shell(Text("compose".to_owned()), &router, &Screen::Compose);
+	surface.set_root(&sheet);
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-sheet").is_some());
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-overlay").is_some());
+
+	// Sheet with no previous route (cold open).
+	let cold = Router::<Screen>::new(Screen::Compose);
+	let cold_sheet = stack.shell(Text("compose".to_owned()), &cold, &Screen::Compose);
+	surface.set_root(&cold_sheet);
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-sheet").is_some());
+	assert!(find_test_id(&surface, surface.root().unwrap(), "stack-overlay").is_none());
+
+	// Edge swipe pops when history exists.
+	let swipe = Stack::new().gesture(StackGesture::EdgeSwipe);
+	let router = Router::<Screen>::new(Screen::Home);
+	router.navigate(Screen::Notes);
+	let shell = swipe.shell(Text("notes".to_owned()), &router, &Screen::Notes);
+	surface.set_root(&shell);
+	let hit = find_test_id(&surface, surface.root().unwrap(), "stack-edge-hit").unwrap();
+	surface.dispatch_event(hit, &NativeEvent::Press);
+	assert_eq!(router.current(), Screen::Home);
+}
+
+#[test]
+fn navigator_enum_shells_every_variant() {
+	let router = Router::<Screen>::new(Screen::Home);
+	let body = Text("body".to_owned());
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+
+	let stack = Navigator::Stack(Stack::new()).into_navigator();
+	surface.set_root(&stack.shell(body.clone(), &router, &Screen::Home));
+	assert!(surface.root().is_some());
+
+	let tabs = Tabs::new([Tab::root(Screen::Home).title("Home")]).placement(TabPlacement::Top);
+	assert_eq!(tabs.items().len(), 1);
+	assert_eq!(tabs.items()[0].route(), &Screen::Home);
+	assert_eq!(tabs.items()[0].label(), "Home");
+	let top = tabs
+		.clone()
+		.into_navigator()
+		.shell(body.clone(), &router, &Screen::Home);
+	surface.set_root(&top);
+	assert!(find_test_id(&surface, surface.root().unwrap(), "tabs-shell").is_some());
+
+	let drawer = Navigator::Drawer(Drawer::new([DrawerItem::root(Screen::Home).title("Home")]));
+	surface.set_root(&drawer.shell(body, &router, &Screen::Home));
+	assert!(find_test_id(&surface, surface.root().unwrap(), "drawer-shell").is_some());
+}
+
+#[test]
+fn drawer_accessors_and_selected_row() {
+	let item = DrawerItem::root(Screen::Settings).title("Settings");
+	assert_eq!(item.route(), &Screen::Settings);
+	assert_eq!(item.label(), "Settings");
+
+	let drawer = Drawer::new([DrawerItem::root(Screen::Home).title("Home"), item]);
+	assert_eq!(drawer.items().len(), 2);
+	assert_eq!(
+		drawer.selected(&Screen::Settings).map(DrawerItem::label),
+		Some("Settings")
+	);
+	assert!(drawer.selected(&Screen::You).is_none());
+
+	let _ = drawer.into_navigator();
+}
+
+#[test]
+fn href_root_matches_query_only_home() {
+	assert!(href_matches_root(
+		&Screen::parse("/?x=1").unwrap().href(),
+		&Screen::Home.href()
+	));
 }
 
 fn find_test_id(

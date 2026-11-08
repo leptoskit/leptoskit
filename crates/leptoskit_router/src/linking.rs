@@ -63,10 +63,8 @@ pub fn route_path_from_link(input: &str) -> Option<String> {
 	let parsed = url::Url::parse(input).ok()?;
 	let path = match parsed.scheme() {
 		"http" | "https" => {
+			// WHATWG http(s) URLs always have a path of at least `/`.
 			let mut path = parsed.path().to_owned();
-			if path.is_empty() {
-				path.push('/');
-			}
 			if let Some(query) = parsed.query() {
 				path.push('?');
 				path.push_str(query);
