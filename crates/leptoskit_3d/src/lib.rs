@@ -12,6 +12,7 @@
 // limit.
 #![recursion_limit = "256"]
 
+pub mod client;
 mod protocol;
 mod sanitize;
 
@@ -25,6 +26,8 @@ mod environment;
 pub mod gltf;
 #[cfg(feature = "renderer")]
 mod gpu;
+#[cfg(all(feature = "host", not(target_arch = "wasm32")))]
+pub mod host;
 #[cfg(feature = "renderer")]
 mod image;
 #[cfg(feature = "renderer")]
@@ -33,6 +36,8 @@ mod raycast;
 mod renderer;
 #[cfg(feature = "renderer")]
 mod upload;
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+pub mod web;
 #[cfg(feature = "renderer")]
 mod world;
 

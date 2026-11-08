@@ -12,6 +12,8 @@ pub const MAX_OPS: usize = 16_384;
 pub const MAX_NAME_BYTES: usize = 256;
 /// The longest asset path, in bytes.
 pub const MAX_PATH_BYTES: usize = 1024;
+/// The most scenes one app holds at once.
+pub const MAX_SCENES: usize = 16;
 /// The most nodes a scene holds; later spawns are ignored.
 pub const MAX_NODES: usize = 4096;
 /// The most assets one scene refers to at once.
