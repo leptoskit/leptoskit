@@ -4,6 +4,7 @@ pub mod components;
 pub mod routes;
 pub mod services;
 
+pub use __CRATE___shared::Health;
 pub use services::Counter;
 
 /// Renders the portable application tree for any host.
