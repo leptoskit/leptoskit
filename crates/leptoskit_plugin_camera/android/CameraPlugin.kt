@@ -2,8 +2,8 @@ package dev.leptoskit.plugins.camera
 
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Rect
@@ -25,6 +25,7 @@ import androidx.lifecycle.LifecycleOwner
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import dev.leptoskit.mobile.NativeCameraBinding
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
@@ -34,7 +35,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Host-owned CameraX registry. Surfaces attach through [NativeCameraBinding]
@@ -81,17 +81,25 @@ class CameraPlugin(
         if (closed) throw PluginException(PluginException.CANCELLED)
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
         return when (method) {
-            0 -> create(CameraWire.create(payload))
+            0 -> {
+                create(CameraWire.create(payload))
+            }
+
             1 -> {
                 val (id, enabled) = CameraWire.torch(payload)
                 setTorch(id, enabled)
                 ByteArray(0)
             }
+
             2 -> {
                 val (id, maxBytes) = CameraWire.takePicture(payload)
                 takePicture(id, maxBytes)
             }
-            3 -> status(CameraWire.session(payload))
+
+            3 -> {
+                status(CameraWire.session(payload))
+            }
+
             else -> {
                 release(CameraWire.session(payload))
                 ByteArray(0)

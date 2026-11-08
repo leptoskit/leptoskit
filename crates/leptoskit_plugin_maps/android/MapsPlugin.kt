@@ -16,8 +16,8 @@ import com.google.android.gms.maps.model.MarkerOptions
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import dev.leptoskit.mobile.NativeMapBinding
-import java.nio.ByteBuffer
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.nio.ByteBuffer
 import kotlin.coroutines.resume
 
 /** Host-owned [MapView] registry. Surfaces attach through [NativeMapBinding]. */
@@ -56,22 +56,31 @@ class MapsPlugin(
                 MapsWire.create(payload)
                 create()
             }
+
             1 -> {
                 val (id, camera) = MapsWire.setCamera(payload)
                 setCamera(id, camera)
                 ByteArray(0)
             }
+
             2 -> {
                 val (id, markers) = MapsWire.setMarkers(payload)
                 setMarkers(id, markers)
                 ByteArray(0)
             }
-            3 -> status(MapsWire.session(payload))
+
+            3 -> {
+                status(MapsWire.session(payload))
+            }
+
             4 -> {
                 release(MapsWire.session(payload))
                 ByteArray(0)
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 

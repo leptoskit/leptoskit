@@ -26,11 +26,15 @@ class AppIntegrityPlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 AppIntegrityWire.capability(Capability.Unavailable)
             }
+
             1 -> {
                 AppIntegrityWire.challenge(payload)
                 AppIntegrityWire.attestationUnavailable()
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 

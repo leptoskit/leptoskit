@@ -270,6 +270,7 @@ impl Element {
 	}
 
 	/// The control and accessibility checks for one element.
+	#[allow(clippy::too_many_lines)]
 	fn check<'a>(
 		&'a self,
 		button_ancestor: Option<NativeKind>,

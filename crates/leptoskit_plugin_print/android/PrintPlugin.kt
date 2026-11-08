@@ -56,7 +56,9 @@ class PrintPlugin(
                 encode(availability())
             }
 
-            else -> print(PrintJob.decode(payload))
+            else -> {
+                print(PrintJob.decode(payload))
+            }
         }
     }
 
@@ -182,8 +184,7 @@ class PrintPlugin(
         manager.print("leptoskit-print-$parsed", adapter, PrintAttributes.Builder().build())
     }
 
-    private fun printManager(): PrintManager? =
-        context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
+    private fun printManager(): PrintManager? = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
 
     private fun activeOwner(): Activity? =
         (context as? Activity)?.takeIf {
@@ -191,7 +192,11 @@ class PrintPlugin(
         }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private fun checkMain() {
         check(Looper.myLooper() == Looper.getMainLooper())

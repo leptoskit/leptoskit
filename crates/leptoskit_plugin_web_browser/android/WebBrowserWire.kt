@@ -65,8 +65,7 @@ internal data class WebBrowserOpen(
             }
         }
 
-        private fun isHex(value: Char): Boolean =
-            value in '0'..'9' || value in 'a'..'f' || value in 'A'..'F'
+        private fun isHex(value: Char): Boolean = value in '0'..'9' || value in 'a'..'f' || value in 'A'..'F'
 
         private fun parse(value: String): URI =
             try {

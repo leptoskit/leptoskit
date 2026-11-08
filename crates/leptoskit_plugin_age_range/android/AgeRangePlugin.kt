@@ -26,11 +26,15 @@ class AgeRangePlugin(
                 if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
                 AgeRangeWire.capability(Capability.Unavailable)
             }
+
             1 -> {
                 AgeRangeWire.threshold(payload)
                 AgeRangeWire.responseUnavailable()
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 

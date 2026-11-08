@@ -24,8 +24,7 @@ internal object DeviceMotionWire {
         return interval
     }
 
-    fun encodeAvailability(available: Boolean): ByteArray =
-        byteArrayOf(if (available) 1 else 0, 0, 0, 0)
+    fun encodeAvailability(available: Boolean): ByteArray = byteArrayOf(if (available) 1 else 0, 0, 0, 0)
 
     fun encodeReading(
         timestampNanos: Long,

@@ -421,6 +421,11 @@ pub mod guest {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
 pub mod web;
 
+// A guest build leaves the browser module out, and with it every use of
+// `web-sys`.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "guest"))]
+use web_sys as _;
+
 #[cfg(test)]
 mod tests {
 	use leptoskit_bridge::codec::Encoder;

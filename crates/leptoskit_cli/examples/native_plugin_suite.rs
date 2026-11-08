@@ -87,6 +87,11 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("maps", "leptoskit_plugin_maps"),
 	("live-photo", "leptoskit_plugin_live_photo"),
 	("web-browser", "leptoskit_plugin_web_browser"),
+	("app-integrity", "leptoskit_plugin_app_integrity"),
+	("blob", "leptoskit_plugin_blob"),
+	("diagnostics", "leptoskit_plugin_diagnostics"),
+	("asset", "leptoskit_plugin_asset"),
+	("age-range", "leptoskit_plugin_age_range"),
 	("audio", "leptoskit_plugin_audio"),
 	(
 		"android_alarm_manager",
@@ -147,6 +152,65 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
+	"leptoskit_plugin_app_integrity/tests/android/AppIntegrityWireTest.kt",
+	"leptoskit_plugin_blob/tests/android/BlobWireTest.kt",
+	"leptoskit_plugin_diagnostics/tests/android/DiagnosticsWireTest.kt",
+	"leptoskit_plugin_asset/tests/android/AssetWireTest.kt",
+	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
+];
+
+/// Instrumentation wrappers that call each plugin test file's `main`.
+const WRAPPERS: &[(&str, &str)] = &[
+	(
+		"DocumentEncodingInstrumentationTest.kt",
+		DOCUMENT_ENCODING_TEST,
+	),
+	("SmsWireInstrumentationTest.kt", SMS_WIRE_TEST),
+	(
+		"MailComposerWireInstrumentationTest.kt",
+		MAIL_COMPOSER_WIRE_TEST,
+	),
+	(
+		"WebBrowserWireInstrumentationTest.kt",
+		WEB_BROWSER_WIRE_TEST,
+	),
+	(
+		"ImagePickerEncodingInstrumentationTest.kt",
+		IMAGE_PICKER_ENCODING_TEST,
+	),
+	("PrintWireInstrumentationTest.kt", PRINT_WIRE_TEST),
+	(
+		"DeviceMotionWireInstrumentationTest.kt",
+		DEVICE_MOTION_WIRE_TEST,
+	),
+	("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
+	("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
+	("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
+	(
+		"MediaLibraryWireInstrumentationTest.kt",
+		MEDIA_LIBRARY_WIRE_TEST,
+	),
+	("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
+	(
+		"BackgroundTaskWireInstrumentationTest.kt",
+		BACKGROUND_TASK_WIRE_TEST,
+	),
+	("LivePhotoWireInstrumentationTest.kt", LIVE_PHOTO_WIRE_TEST),
+	(
+		"VideoThumbnailsWireInstrumentationTest.kt",
+		VIDEO_THUMBNAILS_WIRE_TEST,
+	),
+	(
+		"AppIntegrityWireInstrumentationTest.kt",
+		APP_INTEGRITY_WIRE_TEST,
+	),
+	("BlobWireInstrumentationTest.kt", BLOB_WIRE_TEST),
+	(
+		"DiagnosticsWireInstrumentationTest.kt",
+		DIAGNOSTICS_WIRE_TEST,
+	),
+	("AssetWireInstrumentationTest.kt", ASSET_WIRE_TEST),
+	("AgeRangeWireInstrumentationTest.kt", AGE_RANGE_WIRE_TEST),
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker
@@ -574,47 +638,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		tests.join("LoggingFileTest.kt"),
 		include_str!("../tests/fixtures/native_plugin_suite/LoggingFileTest.kt"),
 	)?;
-	for (name, source) in [
-		(
-			"DocumentEncodingInstrumentationTest.kt",
-			DOCUMENT_ENCODING_TEST,
-		),
-		("SmsWireInstrumentationTest.kt", SMS_WIRE_TEST),
-		(
-			"MailComposerWireInstrumentationTest.kt",
-			MAIL_COMPOSER_WIRE_TEST,
-		),
-		(
-			"WebBrowserWireInstrumentationTest.kt",
-			WEB_BROWSER_WIRE_TEST,
-		),
-		(
-			"ImagePickerEncodingInstrumentationTest.kt",
-			IMAGE_PICKER_ENCODING_TEST,
-		),
-		("PrintWireInstrumentationTest.kt", PRINT_WIRE_TEST),
-		(
-			"DeviceMotionWireInstrumentationTest.kt",
-			DEVICE_MOTION_WIRE_TEST,
-		),
-		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
-		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
-		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
-		(
-			"MediaLibraryWireInstrumentationTest.kt",
-			MEDIA_LIBRARY_WIRE_TEST,
-		),
-		("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
-		(
-			"BackgroundTaskWireInstrumentationTest.kt",
-			BACKGROUND_TASK_WIRE_TEST,
-		),
-		("LivePhotoWireInstrumentationTest.kt", LIVE_PHOTO_WIRE_TEST),
-		(
-			"VideoThumbnailsWireInstrumentationTest.kt",
-			VIDEO_THUMBNAILS_WIRE_TEST,
-		),
-	] {
+	for &(name, source) in WRAPPERS {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(
 			!wrapper.exists(),

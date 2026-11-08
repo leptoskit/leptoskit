@@ -9,7 +9,11 @@ fun main() {
     require(status.contentEquals(byteArrayOf(2, 0, 0, 0)))
 
     val threshold =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(18).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(18)
+            .array()
     require(AgeRangeWire.threshold(ByteBuffer.wrap(threshold)) == 18)
     require(AgeRangeWire.responseUnavailable().contentEquals(byteArrayOf(1, 0, 0, 0)))
 

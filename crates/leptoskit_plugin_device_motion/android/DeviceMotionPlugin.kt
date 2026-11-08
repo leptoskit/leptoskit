@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
 /**
  * One fused device-motion sample per `NEXT` call from linear acceleration,
  * gravity, gyroscope and rotation-vector sensors. Cancellation, close and

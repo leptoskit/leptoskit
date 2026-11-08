@@ -49,7 +49,9 @@ class MailComposerPlugin(
                 encode(availability())
             }
 
-            else -> present(MailCompose.decode(payload))
+            else -> {
+                present(MailCompose.decode(payload))
+            }
         }
     }
 
@@ -111,7 +113,11 @@ class MailComposerPlugin(
         }
 
     private fun encode(status: Int): ByteArray =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(status).array()
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(status)
+            .array()
 
     private fun checkMain() {
         check(Looper.myLooper() == Looper.getMainLooper())

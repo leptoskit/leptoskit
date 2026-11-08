@@ -6,7 +6,9 @@ import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 
-internal enum class MediaKind(val code: Int) {
+internal enum class MediaKind(
+    val code: Int,
+) {
     Images(0),
     Videos(1),
     All(2),

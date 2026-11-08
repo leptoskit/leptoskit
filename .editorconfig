@@ -5,3 +5,11 @@ indent_style = space
 indent_size = 4
 insert_final_newline = true
 ktlint_code_style = ktlint_official
+
+# A plugin's wire file holds its request types, whatever the first one is called.
+[crates/leptoskit_plugin_*/android/*Wire.kt]
+ktlint_standard_filename = disabled
+
+# The CLI replaces the placeholder package with the app's own.
+[crates/leptoskit_platform_oculus/templates/*.kt]
+ktlint_standard_package-name = disabled

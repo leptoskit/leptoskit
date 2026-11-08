@@ -341,9 +341,6 @@ type = "cargo"
 path = "crates/leptoskit_platform_harmonyos"
 type = "cargo"
 
-[package.leptoskit_platform_harmonyos]
-path = "crates/leptoskit_platform_harmonyos"
-
 [package.leptoskit_platform_oculus]
 path = "crates/leptoskit_platform_oculus"
 type = "cargo"
@@ -567,6 +564,7 @@ path = "crates/leptoskit_plugin_sensors"
 
 [package.leptoskit_plugin_sms]
 path = "crates/leptoskit_plugin_sms"
+
 [package.leptoskit_plugin_mail_composer]
 path = "crates/leptoskit_plugin_mail_composer"
 
@@ -575,6 +573,7 @@ path = "crates/leptoskit_plugin_maps"
 
 [package.leptoskit_plugin_media_library]
 path = "crates/leptoskit_plugin_media_library"
+
 [package.leptoskit_plugin_web_browser]
 path = "crates/leptoskit_plugin_web_browser"
 

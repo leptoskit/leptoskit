@@ -415,6 +415,7 @@ internal class NativeWidgetRenderer(
                 "camera", "Camera" -> {
                     NativeCameraView(context)
                 }
+
                 "map", "Map" -> {
                     NativeMapView(context)
                 }
