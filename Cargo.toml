@@ -181,6 +181,9 @@ toml = "0.9"
 toml_edit = "0.25"
 tower = "0.5"
 tower-http = "0.6"
+# Pure Rust ONNX inference for `leptoskit_depth`; see its readme for why not
+# ONNX Runtime.
+tract-onnx = { version = "0.23.9", default-features = false }
 trybuild = "1"
 unic-langid = "0.9"
 unicode-width = "0.2"
@@ -226,6 +229,7 @@ leptoskit_db = { path = "crates/leptoskit_db", version = "0.3.0" }
 leptoskit_db_macros = { path = "crates/leptoskit_db_macros", version = "0.3.0" }
 leptoskit_db_schema = { path = "crates/leptoskit_db_schema", version = "0.3.0" }
 leptoskit_deploy_console = { path = "crates/leptoskit_deploy_console", version = "0.3.0" }
+leptoskit_depth = { path = "crates/leptoskit_depth", version = "0.3.0" }
 leptoskit_devtools = { path = "crates/leptoskit_devtools", version = "0.3.0", default-features = false }
 leptoskit_devtools_protocol = { path = "crates/leptoskit_devtools_protocol", version = "0.3.0" }
 leptoskit_docs = { path = "crates/leptoskit_docs", version = "0.3.0" }
@@ -367,6 +371,18 @@ leptoskit_docs_site = { path = "docs/site" }
 
 # Distribution profile for release builds.
 # Use `cargo build --profile dist` for optimized, stripped binaries.
+# The depth model runs a vision transformer through tract: unoptimised, one
+# picture takes 19 s instead of a quarter of one, so `leptoskit_depth`'s tests
+# and debug apps would crawl. Only these crates are optimised.
+[profile.dev.package.tract-core]
+opt-level = 3
+
+[profile.dev.package.tract-data]
+opt-level = 3
+
+[profile.dev.package.tract-linalg]
+opt-level = 3
+
 [profile.dist]
 inherits = "release"
 lto = true

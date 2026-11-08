@@ -118,6 +118,15 @@ turning, and a recording plays back the same frames for tests and simulators.
 
 <!-- {/xrSummary} -->
 
+<!-- {@depthSummary} -->
+
+It turns one camera picture into depth in metres, on the device, for AR on phones whose
+platform measures none: the Solana Seeker and other phones without ARCore, ARCore phones
+without its Depth API, and iPhones without LiDAR. The model is Depth Anything V2 Small,
+fine-tuned for rooms, and it runs in pure Rust on the CPU in about a quarter of a second.
+
+<!-- {/depthSummary} -->
+
 <!-- {@canvasSummary} -->
 
 It is the drawing model for custom graphics that native widgets cannot express: a

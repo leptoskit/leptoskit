@@ -54,6 +54,113 @@ The `3d` feature (`wgpu`, `leptoskit_3d` with its renderer, and `glam`) adds `ho
 
 Native hosts don't call it yet: the iOS and Android hosts draw a `Scene3d` without the camera picture behind it, and handing a session's frame to the scene's renderer is the next step there.
 
+## Estimated depth
+
+Phones without platform depth (the Solana Seeker, which has no ARCore; ARCore phones without the Depth API; iPhones without LiDAR) can still have depth: [`leptoskit_depth`](../../crates/leptoskit_depth) reads it from one camera picture with Depth Anything V2 Small, the authors' metric indoor fine-tune, run through tract. The crate does not depend on `leptoskit_xr`, so `leptoskit_xr` can depend on it.
+
+### What the crate gives
+
+- `DepthModel::from_bytes(&[u8])` loads the ONNX file (0.5 s on an M4); `estimate(&Picture) -> DepthMap`. A `Picture` is `Pixels` (`Rgb8`, `Rgba8`, `Bgra8`, or `YCbCr` NV12 planes holding `Arc<[u8]>`, so `ImagePlane` data passes without a copy), an `Orientation` (the clockwise quarter turns to upright; `Orientation::from_display_transform` reads it from a view-to-picture affine), and optional `Intrinsics { focal, principal, size }`, the same fields as `host::Intrinsics` on the camera branch.
+- The `DepthMap` lies the way the picture did and covers all of it at the model's resolution (a 4:3 sensor picture gives 448 × 336), zero outside the 9:16 upright crop the model reads. Values are metres along the camera's forward axis, the convention `DepthImage` documents, so `to_le_bytes()` is `DepthFormat::Meters32` with `row_stride = width * 4`, and the picture's own display transform serves it unchanged.
+- The model reads a 252-pixel-wide picture about 45% long; `estimate` divides out Reapers' fitted curve, `overreach(f) = 1.026 · (579 / f)^0.48` for the focal length `f` in input pixels (1.39 on the Seeker). Without intrinsics it assumes 68° across the longer side.
+- `DepthWorker<T>` is the seam: `max_side()` (896: twice the model's long side), `ready()`, `submit(Frame { picture, time, context: T })` (drops the frame unless idle and a period, 1 s by default, has passed since the last accepted one), `latest() -> Option<Arc<Estimate<T>>>` (with a `sequence` that counts up), `last_error()`, and `reset()`, which also discards the picture in flight. None of them wait on the model; it runs on one `leptoskit-depth` thread, single-threaded.
+
+### Why tract
+
+Measured on an Apple M4 with the pinned file (`examples/benchmark.rs`, and a scratch harness for ONNX Runtime through `ort` 2.0.0-rc.15), warm medians of 7 runs on a 252 × 448 picture with the machine lightly loaded (load average about 5):
+
+| Runtime                         | 1 thread | 2 threads | 4 threads | Load  |
+| ------------------------------- | -------- | --------- | --------- | ----- |
+| tract 0.23.9                    | 264 ms   | 258 ms    | 247 ms    | 0.5 s |
+| ONNX Runtime, optimisations off | 252 ms   | 191 ms    | 170 ms    | 3.7 s |
+
+ONNX Runtime with its default graph optimisations (any level from basic up) returned a near-constant map on Apple silicon: wrong, not slow. With them off it agrees with tract to the centimetre on the fixtures. tract is 1.05× ONNX Runtime on one thread and 1.35× on two, inside the 2× budget, and needs no native library: `ort` downloads a prebuilt static ONNX Runtime per target (97 MB for `aarch64-apple-ios`, 136 MB for `aarch64-linux-android`, from pyke's CDN). tract's own threading barely helps this quantised model, so the crate doesn't enable it. tract-linalg compiles assembly kernels with the target's C compiler: `cargo build --target aarch64-linux-android` needs the NDK's clang (as `setup/scripts/clippy.sh` already exports), and with Apple's clang standing in it built a static library for both `aarch64-linux-android` and `aarch64-apple-ios`. Neither has run on a phone. With other agents' builds running (load average 15 to 20) every runtime read 450 ms to 1 s and their order was not stable, so compare numbers taken together.
+
+### The weights
+
+The 27 MB file is not committed here (see the image rule: binaries are hosted). `MODEL` pins its SHA-256 (`b81c4fae…`) and size, and its `url` is the `depth-model-v1` release asset on `pina-rs/reapers`, where the Reapers game, which first shipped the file, keeps it beside its licence. Moving it (to the `leptoskit` B2 bucket, say) only changes `MODEL.url`; the digest stays the same. `MODEL_LICENSE` is the Apache-2.0 text, which ships with the file. Apps put the file in `assets/` and the host reads its bytes through the app's asset source, as `leptoskit_3d` does. The CLI does not fetch it; a `leptoskit build` step that downloads `MODEL.url` into the build's assets and checks the digest would be the next step if apps should not carry it themselves.
+
+### Wiring it into `leptoskit_xr`
+
+`feat/xr-native-camera` adds the `host::DepthEstimator` trait, `host::CameraFrame` (an RGB `ImagePlane` shrunk to `max_side`, the viewer's `pose`, `Intrinsics`, the picture's `display_transform`, and `time`), and `XrRuntime::set_depth_estimator`. Its runtime already asks, for every frame of a session that wanted `DEPTH` and whose backend has none: `ready()`, then `submit(Arc<CameraFrame>)`, then sets `frame.depth = latest()`. Once that branch is on `main`, the follow-up is:
+
+1. In `leptoskit_xr/Cargo.toml`, a `depth-estimation = ["host", "dep:leptoskit_depth"]` feature with `leptoskit_depth = { workspace = true, optional = true }`.
+2. A `host/estimated_depth.rs` that adapts the worker, about forty lines:
+
+   ```rust
+   pub struct EstimatedDepth {
+   	worker: leptoskit_depth::DepthWorker<Captured>,
+   	converted: Option<(u64, DepthImage)>,
+   }
+
+   struct Captured {
+   	pose: Pose,
+   	display_transform: Affine2,
+   }
+
+   impl DepthEstimator for EstimatedDepth {
+   	fn max_side(&self) -> u32 {
+   		self.worker.max_side()
+   	}
+
+   	fn ready(&self) -> bool {
+   		self.worker.ready()
+   	}
+
+   	fn submit(&mut self, frame: Arc<CameraFrame>) {
+   		let rgb = &frame.rgb;
+   		let plane = leptoskit_depth::Plane {
+   			width: rgb.width,
+   			height: rgb.height,
+   			row_stride: rgb.row_stride,
+   			data: Arc::clone(&rgb.data),
+   		};
+   		let picture = leptoskit_depth::Picture::new(leptoskit_depth::Pixels::Rgb8(plane))
+   			.with_orientation(leptoskit_depth::Orientation::from_display_transform(&frame.display_transform))
+   			.with_intrinsics(leptoskit_depth::Intrinsics {
+   				focal: frame.intrinsics.focal,
+   				principal: frame.intrinsics.principal,
+   				size: frame.intrinsics.size,
+   			});
+   		self.worker.submit(leptoskit_depth::Frame {
+   			picture,
+   			time: frame.time,
+   			context: Captured { pose: frame.pose, display_transform: frame.display_transform },
+   		});
+   	}
+
+   	fn latest(&mut self) -> Option<DepthImage> {
+   		let estimate = self.worker.latest()?;
+   		if self.converted.as_ref().map(|(sequence, _)| *sequence) != Some(estimate.sequence) {
+   			let map = &estimate.depth;
+   			let image = DepthImage {
+   				width: map.width,
+   				height: map.height,
+   				format: DepthFormat::Meters32,
+   				data: map.to_le_bytes().into(),
+   				row_stride: map.width * 4,
+   				confidence: None,
+   				display_transform: estimate.context.display_transform,
+   			};
+   			self.converted = Some((estimate.sequence, image));
+   		}
+   		self.converted.as_ref().map(|(_, image)| image.clone())
+   	}
+
+   	fn reset(&mut self) {
+   		self.worker.reset();
+   		self.converted = None;
+   	}
+   }
+   ```
+
+   Converting once per `sequence` keeps the per-frame cost to an `Arc` clone.
+3. In `host::from_context`, a `[native.plugin-options.xr] depth-model = "depth/depth_anything_v2_metric_indoor_small.onnx"` option (an asset path; the schema and `leptoskit_config` gain it). When it is set, read the bytes through the app's asset source on a background thread (loading takes 0.5–1.5 s; plugin creation must not wait), `MODEL.verify` them when the file is meant to be the pinned one, `DepthModel::from_bytes`, `DepthWorker::spawn`, and `runtime.set_depth_estimator(Some(Box::new(EstimatedDepth::new(worker))))`. Until it lands, `capabilities()` doesn't offer estimated `DEPTH`, which is honest.
+4. The depth is up to a second and a model run old, and the runtime hands it out with the current frame's views, so `hit_test::hit_depth` would cast against the room as seen from where the phone is now. Keep the capture pose (`Captured::pose`) and test against a `View { pose: captured_pose, projection: <the frame's view projection> }`: in an orientation session the projection never changes, and in 3DoF the viewer never moves, so that is exact up to tracking drift. The cleanest way is an `XrFrame::depth_view: Option<View>` that `Backend::hit_test`'s default and `scene3d::draw` prefer over `views[0]` when set; occlusion can then reproject the stale depth by rotation alone.
+5. Tests: a replay frame with a camera picture of a fixture and a stub `Estimator` (the trait `leptoskit_depth` exports for tests) through `XrRuntime`, checking that `frame.depth` appears, that `DEPTH` hit tests land at the stub's distance from the capture pose, and that `stop` resets the worker. The real model belongs in `leptoskit_depth`'s own tests.
+
+On a device, first check: the time per picture on the Seeker's cores (the Flutter game measured 0.5 s with ONNX Runtime on two), that the game still draws smoothly while the worker runs, and the scale against a measured floor.
+
 ## Not covered
 
 Apple Vision Pro, image and object tracking, room meshes (ARKit scene reconstruction, Quest's scene API), shared or persistent anchors, the light probe's environment map, ARCore's environmental HDR main light, and zero-copy camera import on Apple (`CVMetalTextureCache`) and Android (`AHardwareBuffer`). `FrameTextures` copies ARKit's pixel buffer planes today.
