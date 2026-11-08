@@ -822,6 +822,16 @@ this MVP. Outbound `mailto:` URLs remain `leptoskit_plugin_linking`.
 
 <!-- {/p_mail_composerSummary} -->
 
+<!-- {@p_printSummary} -->
+
+Add `{{ plugin_print.package.name }}` as a direct dependency and select the `{{ plugin_print.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Print` rather than resolving the plugin on every call. Completion means the print
+dialog finished or the platform accepted a job; it never confirms paper left a printer.
+
+<!-- {/p_printSummary} -->
+
 <!-- {@p_shellSummary} -->
 
 Generated desktop hosts select `{{ plugin_shell.package.metadata.leptoskit.runtime.name }}` in `native.plugins` with explicit command policies;

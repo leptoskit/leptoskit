@@ -47,6 +47,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("image-picker", "leptoskit_plugin_image_picker"),
 	("screen-orientation", "leptoskit_plugin_screen_orientation"),
 	("posture", "leptoskit_plugin_posture"),
+	("print", "leptoskit_plugin_print"),
 	("brightness", "leptoskit_plugin_brightness"),
 	("home-widgets", "leptoskit_plugin_home_widgets"),
 	("picture-in-picture", "leptoskit_plugin_picture_in_picture"),
@@ -119,6 +120,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_sms/tests/android/SmsWireTest.kt",
 	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
+	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker
@@ -181,6 +183,19 @@ import org.junit.Test
 class ImagePickerEncodingInstrumentationTest {
     @Test
     fun replyFramingRoundTrip() {
+        main()
+    }
+}
+";
+
+const PRINT_WIRE_TEST: &str = r"package dev.leptoskit.plugins.print
+
+import org.junit.Test
+
+/** Validates synthetic print job framing without opening PrintManager. */
+class PrintWireInstrumentationTest {
+    @Test
+    fun boundedHtmlAndPdfUris() {
         main()
     }
 }
@@ -385,6 +400,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 			"ImagePickerEncodingInstrumentationTest.kt",
 			IMAGE_PICKER_ENCODING_TEST,
 		),
+		("PrintWireInstrumentationTest.kt", PRINT_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(
@@ -491,6 +507,7 @@ mod tests {
 				"sms",
 				"mail-composer",
 				"web-browser",
+				"print",
 			] {
 				assert!(plugins.iter().any(|value| value.as_str() == Some(name)));
 			}

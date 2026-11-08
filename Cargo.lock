@@ -3582,6 +3582,7 @@ dependencies = [
  "leptoskit_plugin_picture_in_picture",
  "leptoskit_plugin_posture",
  "leptoskit_plugin_power_monitor",
+ "leptoskit_plugin_print",
  "leptoskit_plugin_screen_capture",
  "leptoskit_plugin_screen_orientation",
  "leptoskit_plugin_secure_store",
@@ -6477,6 +6478,13 @@ dependencies = [
  "leptoskit_bridge",
  "thiserror 2.0.21",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "leptoskit_plugin_print"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]
