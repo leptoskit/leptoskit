@@ -62,6 +62,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 	// which is the safe default.
 	let NativeProps {
 		rive,
+		scene3d,
 		text,
 		source,
 		placeholder,
@@ -105,6 +106,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 	} = props;
 
 	rive.is_none()
+		&& scene3d.is_none()
 		&& text.is_none()
 		&& source.is_none()
 		&& placeholder.is_none()

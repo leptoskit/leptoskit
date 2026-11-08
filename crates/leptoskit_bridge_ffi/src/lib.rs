@@ -11,6 +11,9 @@
 //! The only unsafe code translates borrowed C pointers and transfers explicit
 //! ownership handles. Plugin and protocol logic remains in `leptoskit_bridge`.
 #![allow(unsafe_code)]
+// Proving that the 3D plugin is `Send` walks wgpu's deep types past the
+// default limit.
+#![recursion_limit = "256"]
 
 use std::ptr;
 use std::slice;
@@ -29,6 +32,8 @@ pub mod app;
 pub mod development;
 #[cfg(feature = "app")]
 pub mod devtools;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod scene3d;
 #[cfg(feature = "app")]
 pub mod updates;
 

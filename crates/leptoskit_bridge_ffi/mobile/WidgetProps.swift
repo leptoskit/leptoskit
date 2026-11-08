@@ -31,6 +31,8 @@ struct WidgetProps: Decodable {
     let scrollOffset: ScrollOffset?
     let transform: WidgetTransform?
     let animation: WidgetAnimation?
+    /// The scene a `Scene3d` shows; Rust draws it, see `NativeScene3dView`.
+    let scene3d: UInt32?
 }
 
 extension WidgetProps {

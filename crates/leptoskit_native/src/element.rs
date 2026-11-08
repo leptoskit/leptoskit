@@ -313,6 +313,18 @@ impl Element {
 			return Err(ControlTreeError::InvalidRive);
 		}
 
+		if (self.kind == NativeKind::Scene3d) != self.props.scene3d.is_some()
+			|| (self.kind == NativeKind::Scene3d
+				&& self
+					.props
+					.accessibility_label
+					.as_deref()
+					.is_none_or(|label| label.trim().is_empty())
+				&& self.props.aria().hidden != Some(true))
+		{
+			return Err(ControlTreeError::InvalidScene3d);
+		}
+
 		if self.kind == NativeKind::Rive
 			&& (self.props.rive.is_none()
 				|| self.props.source.is_some()
@@ -330,6 +342,7 @@ impl Element {
 			self.kind,
 			NativeKind::Image
 				| NativeKind::Rive
+				| NativeKind::Scene3d
 				| NativeKind::TextInput
 				| NativeKind::PasswordInput
 				| NativeKind::Switch
@@ -564,6 +577,24 @@ impl Element {
 		let mut element = Self::new(NativeKind::Rive);
 		element.props.rive = Some(Box::new(playback));
 		element
+	}
+
+	/// A 3D scene the host owns and draws on the GPU, by its id. Give it an
+	/// explicit size and an accessible label, or mark it decorative with
+	/// `aria_hidden`. The guest changes the scene with ops (see
+	/// `leptoskit_3d::client::Scene`), never by re-rendering this element.
+	#[track_caller]
+	pub fn scene3d(scene: leptoskit_3d::SceneId) -> Self {
+		let mut element = Self::new(NativeKind::Scene3d);
+		element.props.scene3d = Some(scene.0);
+		element
+	}
+
+	/// Sets the scene a `Scene3d` view tag shows.
+	#[must_use]
+	pub fn scene(mut self, scene: leptoskit_3d::SceneId) -> Self {
+		self.props.scene3d = Some(scene.0);
+		self
 	}
 
 	/// Sets the content of a `Rive` view tag. Parsed players are retained when

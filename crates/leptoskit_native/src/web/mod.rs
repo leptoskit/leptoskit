@@ -635,6 +635,15 @@ impl NodePath {
 	}
 }
 
+/// A `Scene3d`'s canvas. `leptoskit_3d`'s web host finds it by its scene and
+/// draws into it, so apps without 3D never link a renderer.
+fn scene3d_canvas(scene: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
+	html::canvas()
+		.attr("data-lk-scene3d", scene.map(|scene| scene.to_string()))
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -732,6 +741,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 			#[cfg(not(feature = "rive"))]
 			panic!("enable leptoskit_native's rive feature before rendering a Rive element")
 		}
+		NativeKind::Scene3d => scene3d_canvas(props.scene3d, attrs),
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}

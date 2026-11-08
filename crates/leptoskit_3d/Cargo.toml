@@ -1,0 +1,86 @@
+[package]
+name = "leptoskit_3d"
+version = "0.3.0"
+authors.workspace = true
+categories = ["gui", "graphics", "rendering", "game-development"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["3d", "gltf", "wgpu", "gpu", "scene"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "GPU 3D scenes for leptoskit: a host-owned scene of glTF models, animation, and lights, driven by compact ops and drawn with wgpu."
+
+[dependencies]
+bytemuck = { workspace = true, optional = true, features = ["derive"] }
+glam = { workspace = true, optional = true, features = ["bytemuck"] }
+half = { workspace = true, optional = true }
+leptoskit_bridge = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+zune-jpeg = { workspace = true, optional = true }
+
+# Each platform compiles only the graphics backends it uses: Metal on Apple
+# platforms, Direct3D 12 on Windows, Vulkan on Linux, Vulkan and OpenGL ES on
+# Android (OpenGL ES is the default there, see `Backend`), and WebGPU with a
+# WebGL2 fallback in the browser.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["metal", "std", "wgsl"] }
+
+[target.'cfg(windows)'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["dx12", "std", "wgsl"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["gles", "std", "vulkan", "wgsl"] }
+
+[target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android"), not(target_arch = "wasm32")))'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["std", "vulkan", "wgsl"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["std", "webgl", "webgpu", "wgsl"] }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["console", "Document", "Element", "HtmlCanvasElement", "MutationObserver", "MutationObserverInit", "Node", "NodeList", "ResizeObserver", "Response", "Window"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = { workspace = true, optional = true }
+
+[dev-dependencies]
+divan = { version = "0.1", default-features = false }
+
+[features]
+default = ["renderer"]
+# The glTF loader, the retained scene, and the wgpu renderer. Without it the
+# crate is only the ops and events a Wasm guest sends and receives.
+renderer = [
+	"dep:bytemuck",
+	"dep:glam",
+	"dep:half",
+	"dep:png",
+	"dep:pollster",
+	"dep:serde",
+	"dep:serde_json",
+	"dep:thiserror",
+	"dep:wgpu",
+	"dep:zune-jpeg",
+]
+# The guest's client, which sends a scene's ops through the
+# `leptoskit.scene3d` plugin. Only for Wasm guests of native apps.
+guest = ["dep:leptoskit_bridge", "leptoskit_bridge/guest"]
+# Scenes drawn in the browser's `<canvas>` elements, with WebGPU or WebGL2.
+web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys", "renderer"]
+# The `leptoskit.scene3d` plugin and the hub a native host shows scenes
+# with.
+host = ["dep:leptoskit_bridge", "leptoskit_bridge/async-host", "renderer"]
+
+[[bench]]
+name = "frame"
+harness = false
+required-features = ["renderer"]
+
+[lints]
+workspace = true

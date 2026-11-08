@@ -15,6 +15,7 @@ description = "The leptoskit native renderer: shadow tree, diffing, and platform
 [dependencies]
 futures = { workspace = true, optional = true, features = ["executor"] }
 leptos = { workspace = true, optional = true }
+leptoskit_3d = { workspace = true }
 leptoskit_animation = { workspace = true }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
 leptoskit_rive = { workspace = true }

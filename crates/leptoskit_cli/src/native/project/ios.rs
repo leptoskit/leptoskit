@@ -54,9 +54,28 @@ pub(super) fn generate(
 		Extras::default()
 	};
 
+	// An app that shows 3D scenes reads its models from the bundle's
+	// `assets` folder, a copy of the app's own.
+	let mut resources = String::new();
+
+	if registry.scene3d {
+		writeln!(
+			objects,
+			"{} = {{isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = {}; \
+			 sourceTree = \"<absolute>\"; }};\n{} = {{isa = PBXBuildFile; fileRef = {}; }};",
+			id(SCENE_ASSETS_FILE),
+			quote(&mobile.join("assets"))?,
+			id(SCENE_ASSETS_BUILD),
+			id(SCENE_ASSETS_FILE)
+		)?;
+		write!(extras.group, "{},", id(SCENE_ASSETS_FILE))?;
+		write!(resources, ",{}", id(SCENE_ASSETS_BUILD))?;
+	}
+
 	// `app.icon` becomes the app's asset catalog, with its AppIcon set.
 	let icon = crate::icons::write(root, config, crate::icons::Platform::Ios, &dir)?;
-	let resources = if icon {
+
+	if icon {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = {}; \
@@ -67,10 +86,8 @@ pub(super) fn generate(
 			id(ICON_FILE)
 		)?;
 		write!(extras.group, "{},", id(ICON_FILE))?;
-		format!(",{}", id(ICON_BUILD))
-	} else {
-		String::new()
-	};
+		write!(resources, ",{}", id(ICON_BUILD))?;
+	}
 
 	build_phases(
 		&mut objects,
@@ -467,6 +484,9 @@ const UPDATE_FILE: usize = 34;
 const UPDATE_BUILD: usize = 35;
 const ICON_FILE: usize = 36;
 const ICON_BUILD: usize = 37;
+
+const SCENE_ASSETS_FILE: usize = 38;
+const SCENE_ASSETS_BUILD: usize = 39;
 
 const PROJECT_DEBUG: usize = 40;
 const PROJECT_RELEASE: usize = 41;
@@ -936,6 +956,7 @@ mod tests {
 			host_features: Vec::new(),
 			devtools_feature: None,
 			missing: Vec::new(),
+			scene3d: false,
 		}
 	}
 
@@ -963,6 +984,28 @@ mod tests {
 				plugin.join("apple/Shared/Wire.swift"),
 			]
 		);
+	}
+
+	#[test]
+	fn apps_that_draw_scenes_bundle_their_assets_folder() {
+		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+		let temporary = tempfile::Builder::new()
+			.prefix("leptoskit-ios-scene3d-")
+			.tempdir_in(base)
+			.unwrap();
+		let root = temporary.path();
+		let mut registry = pods_registry(root);
+		let project = |registry: &Registry| {
+			super::generate(root, &pods_config(), registry).unwrap();
+			std::fs::read_to_string(root.join(".leptoskit/ios/Host.xcodeproj/project.pbxproj"))
+				.unwrap()
+		};
+		assert!(!project(&registry).contains("name = assets"));
+		registry.scene3d = true;
+		let project = project(&registry);
+
+		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
+		assert!(project.contains("mobile/assets"));
 	}
 
 	#[test]

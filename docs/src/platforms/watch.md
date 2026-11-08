@@ -84,7 +84,7 @@ leptoskit new steps --platform watchos
 
 ## What is refused on purpose
 
-Watch surfaces reject phone-oriented widgets such as `ScrollView`, `TextInput`, `PasswordInput`, `Checkbox`, `Radio`, `Slider`, and `Rive`. Deep or wordy trees fail validation against the surface budget. That is intentional: a complication is not a settings screen.
+Watch surfaces reject phone-oriented widgets such as `ScrollView`, `TextInput`, `PasswordInput`, `Checkbox`, `Radio`, `Slider`, `Rive`, and `Scene3d`. Deep or wordy trees fail validation against the surface budget. That is intentional: a complication is not a settings screen.
 
 ## Permissions and entitlements
 

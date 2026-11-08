@@ -4,6 +4,8 @@ On Windows, your screens are drawn with Win32 common controls: `BUTTON`, `EDIT`,
 
 The [shell plugin](plugin-inventory.md) cleans up command descendants before another invocation can take their capacity slot. Windows uses a Job Object attached before execution starts and retains capacity if any member's termination cannot be confirmed. Linux uses a process group; commands that deliberately leave it need additional containment from the host, such as a cgroup. Hosts that register plugins themselves can also use `power_monitor`, `deep_link`, `updater`, and single-instance handoff; see [Electron concepts](electron.md).
 
+[3D scenes](../guide/33-3d-scenes.md) are not drawn on Windows and Linux yet: a `Scene3d` leaves an empty space the size of the view.
+
 [Rive vector animations](../guide/20-rive.md) use a reusable Win32 bitmap or a GTK memory texture. Generated hosts stop frame work when idle or inactive and follow Windows client-area animation settings or GTK's animation preference. Native playback rejects text, images, layout, scripts, audio, view models, and drawing features it cannot reproduce. Native builds require a C++17 compiler in addition to the platform tools.
 
 ## Build and run

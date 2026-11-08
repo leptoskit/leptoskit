@@ -38,6 +38,12 @@ app = [
 	"leptoskit_wasm/rive",
 ]
 async-host = ["app", "leptoskit_bridge/async-host", "dep:tokio", "dep:futures"]
+# Shows 3D scenes (`leptoskit_3d`) in native surfaces: the
+# `leptoskit.scene3d` plugin and the `lk_scene3d_*` functions the Swift and
+# Kotlin renderers call. Without it those functions exist but attach
+# nothing. `leptoskit build` turns it on when the app depends on
+# `leptoskit_3d`.
+scene3d = ["async-host", "dep:leptoskit_3d", "leptoskit_3d/host"]
 # Reports the running app to the DevTools hub. `leptoskit dev` turns this on
 # for debug hosts; `leptoskit build` never does, and release builds refuse to
 # report even with it.
@@ -55,6 +61,7 @@ devtools = [
 ]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+leptoskit_3d = { workspace = true, optional = true }
 leptoskit_devtools = { workspace = true, optional = true, default-features = false, features = ["host"] }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
 leptoskit_plugin_devtools = { workspace = true, optional = true }

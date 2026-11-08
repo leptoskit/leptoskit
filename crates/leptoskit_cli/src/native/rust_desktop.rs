@@ -236,6 +236,7 @@ mod tests {
 			host_features: vec![],
 			devtools_feature: None,
 			missing: Vec::new(),
+			scene3d: false,
 		}
 	}
 
@@ -274,6 +275,7 @@ mod tests {
 		let mut strict = Registry {
 			plugins: Vec::new(),
 			missing: Vec::new(),
+			scene3d: false,
 			..registry
 		};
 		strict.plugins.push(plugin(

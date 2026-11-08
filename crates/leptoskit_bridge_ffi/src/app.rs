@@ -580,6 +580,13 @@ impl App {
 		self.async_host.install(host.plugins(), plugin)
 	}
 
+	/// Installs the `leptoskit.scene3d` plugin, through which the guest's
+	/// ops reach the process's 3D scenes.
+	#[cfg(feature = "scene3d")]
+	pub fn enable_scene3d(&mut self) -> Result<PluginId, Error> {
+		self.install_async(Arc::new(leptoskit_3d::host::Scene3dPlugin::new()))
+	}
+
 	fn record(&mut self, result: Result<(), leptoskit_wasm::WasmError>) -> i32 {
 		if self.render_failed {
 			return -1;
@@ -1223,6 +1230,32 @@ pub unsafe extern "C" fn lk_app_enable_timers(app: *mut App) -> i32 {
 	match app.enable_timers() {
 		Ok(()) => 0,
 		Err(_) => -1,
+	}
+}
+
+/// Lets the guest show 3D scenes by installing the `leptoskit.scene3d`
+/// plugin. Call before [`lk_app_start`]. Returns 1 when installed, 0 in a
+/// build without the bridge's `scene3d` feature, and -1 on failure.
+///
+/// # Safety
+/// `app` is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_enable_scene3d(app: *mut App) -> i32 {
+	// SAFETY: The embedding host owns the app.
+	let Some(app) = (unsafe { app.as_mut() }) else {
+		return -1;
+	};
+	#[cfg(feature = "scene3d")]
+	{
+		match app.enable_scene3d() {
+			Ok(_) => 1,
+			Err(_) => -1,
+		}
+	}
+	#[cfg(not(feature = "scene3d"))]
+	{
+		let _ = app;
+		0
 	}
 }
 

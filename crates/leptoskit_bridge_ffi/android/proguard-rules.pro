@@ -23,3 +23,11 @@
 -keepclassmembers class dev.leptoskit.mobile.GuestNotifier {
     void notified();
 }
+# app.cpp calls the 3D view's waker and asset reader, static members of
+# NativeScene3d; the waker's signature names NativeScene3dView, so that name
+# stays too.
+-keepclassmembers class dev.leptoskit.mobile.NativeScene3d {
+    static void wake(dev.leptoskit.mobile.NativeScene3dView);
+    static byte[] readAsset(android.content.res.AssetManager, byte[]);
+}
+-keepnames class dev.leptoskit.mobile.NativeScene3dView

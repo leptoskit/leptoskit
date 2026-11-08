@@ -28,6 +28,7 @@ fn metadata_registry(root: &Path, metadata: &[serde_json::Value]) -> Registry {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 
@@ -208,6 +209,7 @@ fn ios_passes_presentation_context_only_to_plugins_that_request_it() {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	};
 	ios::generate(
 		&root,
@@ -458,6 +460,7 @@ fn host_registry(root: &Path) -> Registry {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 
