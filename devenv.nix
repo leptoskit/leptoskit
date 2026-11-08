@@ -60,6 +60,7 @@ in
       taplo
       unzip
       uv
+      xpkgs.mbx
       xpkgs.mdt
       xpkgs.monochange
       xpkgs.monostyle
@@ -85,7 +86,15 @@ in
   enterShell = ''
     # Keep shell entry fast. Only bootstrap missing toolchains here; explicit
     # updates happen via install/update tasks instead of every shell.
-    export PATH="$DEVENV_PROFILE/bin:$PATH"
+    # Builds share one content-addressed cache across checkouts; `mbx` places
+    # `target/` under `~/Library/Caches/mbx/targets`, so reclaim space with
+    # `mbx gc`, never by deleting `target/`. CI keeps plain Cargo: rust-cache
+    # restores `target/` itself and a managed target directory would defeat it.
+    if [ -z "''${CI:-}" ]; then
+      export PATH="${xpkgs.mbx}/libexec/mbx:$DEVENV_PROFILE/bin:$PATH"
+    else
+      export PATH="$DEVENV_PROFILE/bin:$PATH"
+    fi
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
