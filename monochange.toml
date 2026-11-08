@@ -79,6 +79,7 @@ packages = [
 	"leptoskit_deploy_console",
 	"leptoskit_form",
 	"leptoskit_config",
+	"leptoskit_platform",
 	"leptoskit_plugin",
 	"leptoskit_bridge",
 	"leptoskit_bridge_ffi",
@@ -302,6 +303,9 @@ type = "cargo"
 [package.leptoskit_config]
 path = "crates/leptoskit_config"
 type = "cargo"
+
+[package.leptoskit_platform]
+path = "crates/leptoskit_platform"
 
 [package.leptoskit_plugin]
 path = "crates/leptoskit_plugin"

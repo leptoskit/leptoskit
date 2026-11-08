@@ -22,6 +22,7 @@ mod guest_profile;
 mod harmonyos;
 mod lock;
 mod manifest;
+mod platforms;
 mod project;
 mod quest;
 mod registry;
@@ -62,6 +63,11 @@ pub enum NativeCommand {
 		target: Target,
 		#[arg(long)]
 		release: bool,
+	},
+	/// Lists and scaffolds in-tree platform extensions.
+	Platform {
+		#[command(subcommand)]
+		command: platforms::PlatformCommand,
 	},
 }
 
@@ -259,6 +265,7 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 pub fn run(command: NativeCommand) -> Result<()> {
 	let (target, release, build) = match command {
 		NativeCommand::Bundle { out, target } => return run_bundle(&out, target),
+		NativeCommand::Platform { command } => return platforms::run(command),
 		NativeCommand::Prepare { target, release } => (target, release, false),
 		NativeCommand::Build { target, release } => (target, release, true),
 	};

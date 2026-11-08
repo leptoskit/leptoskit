@@ -237,6 +237,7 @@ leptoskit_l10n_codegen = { path = "crates/leptoskit_l10n_codegen", version = "0.
 leptoskit_lint = { path = "crates/leptoskit_lint", version = "0.3.0" }
 leptoskit_macros = { path = "crates/leptoskit_macros", version = "0.3.0" }
 leptoskit_native = { path = "crates/leptoskit_native", version = "0.3.0" }
+leptoskit_platform = { path = "crates/leptoskit_platform", version = "0.3.0" }
 leptoskit_plugin = { path = "crates/leptoskit_plugin", version = "0.3.0" }
 leptoskit_plugin_accelerometer = { path = "crates/leptoskit_plugin_accelerometer", version = "0.3.0" }
 leptoskit_plugin_app_shortcuts = { path = "crates/leptoskit_plugin_app_shortcuts", version = "0.3.0" }
