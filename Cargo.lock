@@ -3542,6 +3542,7 @@ dependencies = [
  "leptoskit_plugin_app_shortcuts",
  "leptoskit_plugin_application",
  "leptoskit_plugin_arguments",
+ "leptoskit_plugin_asset",
  "leptoskit_plugin_audio",
  "leptoskit_plugin_autostart",
  "leptoskit_plugin_background_task",
@@ -5967,6 +5968,13 @@ dependencies = [
  "clap",
  "leptoskit_bridge",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "leptoskit_plugin_asset"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]

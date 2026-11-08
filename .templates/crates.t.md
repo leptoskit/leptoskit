@@ -407,6 +407,14 @@ Add `{{ plugin_app_integrity.package.name }}` as a direct dependency and select 
 
 <!-- {/p_app_integritySummary} -->
 
+<!-- {@p_assetSummary} -->
+
+Add `{{ plugin_asset.package.name }}` as a direct dependency and select the `{{ plugin_asset.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Asset` rather than resolving the plugin on every call. Query whether packaged-asset resolution is available, then resolve a logical asset name to a local URI. This MVP returns Unavailable on every host until packaged-asset ownership wiring lands. Never invents a file URI for a missing asset.
+
+<!-- {/p_assetSummary} -->
+
+
+
 
 
 <!-- {@p_background_taskSummary} -->
