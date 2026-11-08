@@ -118,6 +118,9 @@ impl Animator {
 				.any(|track| track.fade_rate != 0.0 || (!track.finished && track.speed != 0.0))
 	}
 
+	/// Starts a clip. With a fade and something showing, the clip fades in
+	/// over what plays; otherwise it cuts. A clip played backwards once
+	/// starts from its end.
 	pub fn play(&mut self, clip: usize, speed: f32, mode: LoopMode, fade: f32, duration: f32) {
 		let start = if speed < 0.0 && mode == LoopMode::Once {
 			duration
@@ -315,6 +318,10 @@ fn sample(channel: &Channel, time: f32, output: &mut [f32]) {
 	}
 }
 
+/// Blends one channel's sample at `time` into the pose by `weight`:
+/// translations, scales, and morph weights by lerping, rotations by
+/// slerping. Linear rotation keys slerp between keys, as glTF requires,
+/// rather than lerping their components.
 fn apply_channel(channel: &Channel, time: f32, weight: f32, pose: &mut Pose) {
 	let node = channel.node;
 

@@ -118,6 +118,7 @@ impl Builder {
 		glb.extend_from_slice(&0x4E4F_534A_u32.to_le_bytes());
 		glb.extend_from_slice(&json);
 		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+
 		glb.extend_from_slice(&0x004E_4942_u32.to_le_bytes());
 		glb.extend_from_slice(&bin);
 		glb
@@ -356,6 +357,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 	let index = builder.u16s(&indices, 1);
 	let wide = builder.floats(&wide, 3, true);
 	let tall = builder.floats(&tall, 3, true);
+
 	let spacing = height / joints as f32;
 	let inverse_bind: Vec<f32> = (0..joints)
 		.flat_map(|joint| {
@@ -397,6 +399,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 				[0.0, 0.0, half.sin(), half.cos()]
 			})
 			.collect();
+
 		let output = builder.floats(&rotations, 4, false);
 		samplers.push(format!(r#"{{"input":{times},"output":{output}}}"#));
 		channels.push(format!(

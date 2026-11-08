@@ -346,6 +346,7 @@ fn instance_record(
 			[color[0], color[1], color[2], strength]
 		}
 	};
+
 	let rim = part.rim;
 
 	InstanceRecord {
@@ -512,6 +513,7 @@ impl Renderer {
 		let draws = self.batch();
 		self.upload_data();
 		let shadow_count = self.upload_shadows(&views);
+
 		self.write_globals(target, &views);
 		let samples = self.gpu.samples(target.format);
 		let pipelines = self
@@ -717,6 +719,7 @@ impl Renderer {
 			eye: views[0].view,
 		};
 		let shadow = self.world.settings.light.shadow;
+
 		let mut ids: Vec<_> = self.world.nodes.keys().copied().collect();
 		ids.sort_unstable();
 		self.stats.culled = 0;
@@ -779,10 +782,12 @@ impl Renderer {
 		let model = part.model;
 		let index = part.index;
 		let skinned = primitive.skin_base.is_some() && model.skins[index].is_some();
+
 		let bounds = match (&model.skins[index], skinned) {
 			(Some((_, bounds)), true) => *bounds,
 			_ => primitive.bounds.transformed(&model.worlds[index]),
 		};
+
 		let weights = &model.weights[index];
 		// Weights outside 0 to 1 can push vertices past the bounds the loader
 		// measured, so such parts are never culled.
@@ -799,8 +804,10 @@ impl Renderer {
 				let active = &weights[..weights.len().min(range.targets as usize)];
 				self.push_morphs(range.base / 2, primitive.vertex_count, active)
 			}
+
 			_ => NONE,
 		};
+
 		let material = &model.asset.materials[primitive.material];
 		let record = instance_record(
 			&model.overrides[index],

@@ -505,6 +505,7 @@ const ATTACH: u8 = 13;
 const SET_CAMERA: u8 = 14;
 const SET_CAMERA_MATRICES: u8 = 15;
 const SET_LIGHT: u8 = 16;
+
 const SET_BACKDROP: u8 = 17;
 const SET_EXPOSURE: u8 = 18;
 const RAYCAST: u8 = 19;
@@ -1009,6 +1010,7 @@ impl Op {
 }
 
 impl Event {
+	/// Writes the event as its tag, then its fields in declaration order.
 	fn write(&self, writer: &mut Writer) {
 		match self {
 			Self::AssetLoaded { asset, clips } => {

@@ -13,39 +13,63 @@ pub(crate) const SIZE: u32 = 64;
 /// Its mips, from mirror-sharp to fully rough.
 pub(crate) const MIPS: u32 = 6;
 const SAMPLES: u32 = 48;
+const CUBE_FACES: u32 = 6;
+/// Past this height a normal is too near the pole to build a tangent frame
+/// from the vertical.
+const POLE: f32 = 0.999;
+
+const ZENITH: Vec3 = Vec3::new(0.50, 0.56, 0.66);
+const HORIZON: Vec3 = Vec3::new(0.92, 0.92, 0.95);
+const GROUND: Vec3 = Vec3::new(0.22, 0.21, 0.20);
+/// How quickly the sky turns from horizon to zenith, and the floor from
+/// horizon to ground: below one, most of the change is near the horizon.
+const SKY_FALLOFF: f32 = 0.6;
+const GROUND_FALLOFF: f32 = 0.35;
+/// The key light's direction (not normalized), the tightness of its lobe,
+/// and its brightness at the centre.
+const KEY: Vec3 = Vec3::new(-0.45, 0.75, 0.48);
+const KEY_SHARPNESS: f32 = 48.0;
+const KEY_STRENGTH: f32 = 6.0;
+
+/// The real spherical harmonics' constants for bands 0 to 2, in the order
+/// of `sh_terms`.
+const SH_BASIS: [f32; 9] = [
+	0.282_095, 0.488_603, 0.488_603, 0.488_603, 1.092_548, 1.092_548, 0.315_392, 1.092_548,
+	0.546_274,
+];
+/// The irradiance integral's grid over the sphere, in latitude rows and
+/// longitude columns.
+const IRRADIANCE_ROWS: u32 = 64;
+const IRRADIANCE_COLUMNS: u32 = 128;
 
 /// The sky's radiance in a direction: a cool zenith, a bright horizon, a
 /// darker floor, and a soft key light up and to one side, so glossy parts
 /// show a highlight.
 pub(crate) fn radiance(direction: Vec3) -> Vec3 {
-	let zenith = Vec3::new(0.50, 0.56, 0.66);
-	let horizon = Vec3::new(0.92, 0.92, 0.95);
-	let ground = Vec3::new(0.22, 0.21, 0.20);
-	let y = direction.y;
-	let sky = if y >= 0.0 {
-		horizon.lerp(zenith, y.powf(0.6))
+	let height = direction.y;
+	let sky = if height >= 0.0 {
+		HORIZON.lerp(ZENITH, height.powf(SKY_FALLOFF))
 	} else {
-		horizon.lerp(ground, (-y).powf(0.35))
+		HORIZON.lerp(GROUND, (-height).powf(GROUND_FALLOFF))
 	};
 
-	let key = Vec3::new(-0.45, 0.75, 0.48).normalize();
-	let lobe = direction.dot(key).max(0.0).powf(48.0) * 6.0;
+	let lobe = direction.dot(KEY.normalize()).max(0.0).powf(KEY_SHARPNESS) * KEY_STRENGTH;
 	sky + Vec3::splat(lobe)
 }
 
 /// The direction through texel (`x`, `y`) of `face`, in the order wgpu
 /// reads cube faces: +x, -x, +y, -y, +z, -z.
 pub(crate) fn face_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
-	let u = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
-	let v = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+	let across = (x as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+	let down = (y as f32 + 0.5) / size as f32 * 2.0 - 1.0;
 
 	let direction = match face {
-		0 => Vec3::new(1.0, -v, -u),
-		1 => Vec3::new(-1.0, -v, u),
-		2 => Vec3::new(u, 1.0, v),
-		3 => Vec3::new(u, -1.0, -v),
-		4 => Vec3::new(u, -v, 1.0),
-		_ => Vec3::new(-u, -v, -1.0),
+		0 => Vec3::new(1.0, -down, -across),
+		1 => Vec3::new(-1.0, -down, across),
+		2 => Vec3::new(across, 1.0, down),
+		3 => Vec3::new(across, -1.0, -down),
+		4 => Vec3::new(across, -down, 1.0),
+		_ => Vec3::new(-across, -down, -1.0),
 	};
 
 	direction.normalize()
@@ -66,22 +90,20 @@ fn prefiltered(normal: Vec3, roughness: f32) -> Vec3 {
 	}
 
 	let alpha = roughness * roughness;
-	let up = if normal.y.abs() < 0.999 {
+	let up = if normal.y.abs() < POLE {
 		Vec3::Y
 	} else {
 		Vec3::X
 	};
-
 	let tangent = up.cross(normal).normalize();
-
 	let bitangent = normal.cross(tangent);
 	let mut sum = Vec3::ZERO;
 	let mut weight = 0.0;
 
 	for index in 0..SAMPLES {
-		let (u, v) = hammersley(index, SAMPLES);
-		let phi = 2.0 * std::f32::consts::PI * u;
-		let cos_theta = ((1.0 - v) / (1.0 + (alpha * alpha - 1.0) * v)).sqrt();
+		let (spin, height) = hammersley(index, SAMPLES);
+		let phi = 2.0 * std::f32::consts::PI * spin;
+		let cos_theta = ((1.0 - height) / (1.0 + (alpha * alpha - 1.0) * height)).sqrt();
 		let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 		let half = tangent * (sin_theta * phi.cos())
 			+ bitangent * (sin_theta * phi.sin())
@@ -108,17 +130,14 @@ pub(crate) fn bake_cubemap() -> Vec<Vec<[f32; 4]>> {
 		.map(|mip| {
 			let size = (SIZE >> mip).max(1);
 			let roughness = mip as f32 / (MIPS - 1) as f32;
-			let mut texels = Vec::with_capacity((size * size * 6) as usize);
-			for face in 0..6 {
-				for y in 0..size {
-					for x in 0..size {
-						let color = prefiltered(face_direction(face, x, y, size), roughness);
-						texels.push([color.x, color.y, color.z, 1.0]);
-					}
-				}
-			}
+			let texels = (0..CUBE_FACES).flat_map(move |face| {
+				(0..size * size)
+					.map(move |texel| face_direction(face, texel % size, texel / size, size))
+			});
 
 			texels
+				.map(|direction| prefiltered(direction, roughness).extend(1.0).to_array())
+				.collect()
 		})
 		.collect()
 }
@@ -128,7 +147,7 @@ pub(crate) fn bake_cubemap() -> Vec<Vec<[f32; 4]>> {
 /// the shader only multiplies by the polynomial terms.
 pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 	let mut coefficients = [Vec3::ZERO; 9];
-	let (rows, columns) = (64, 128);
+	let (rows, columns) = (IRRADIANCE_ROWS, IRRADIANCE_COLUMNS);
 	let mut total = 0.0;
 
 	for row in 0..rows {
@@ -144,21 +163,11 @@ pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 				theta.sin() * phi.sin(),
 			);
 			let color = radiance(direction);
-			let (x, y, z) = (direction.x, direction.y, direction.z);
-			let basis = [
-				0.282_095,
-				0.488_603 * y,
-				0.488_603 * z,
-				0.488_603 * x,
-				1.092_548 * x * y,
-				1.092_548 * y * z,
-				0.315_392 * (3.0 * z * z - 1.0),
-				1.092_548 * x * z,
-				0.546_274 * (x * x - y * y),
-			];
+			let terms = sh_terms(direction);
 
-			for (coefficient, basis) in coefficients.iter_mut().zip(basis) {
-				*coefficient += color * basis * solid;
+			for index in 0..SH_BASIS.len() {
+				let basis = SH_BASIS[index] * terms[index];
+				coefficients[index] += color * basis * solid;
 			}
 
 			total += solid;
@@ -178,18 +187,30 @@ pub(crate) fn irradiance_sh() -> [[f32; 4]; 9] {
 		0.25,
 		0.25,
 	];
-	let constants = [
-		0.282_095, 0.488_603, 0.488_603, 0.488_603, 1.092_548, 1.092_548, 0.315_392, 1.092_548,
-		0.546_274,
-	];
 	let mut out = [[0.0; 4]; 9];
 
 	for index in 0..9 {
-		let value = coefficients[index] * scale * band[index] * constants[index];
+		let value = coefficients[index] * scale * band[index] * SH_BASIS[index];
 		out[index] = [value.x, value.y, value.z, 0.0];
 	}
 
 	out
+}
+
+/// The spherical harmonics' polynomial terms for bands 0 to 2, in the order
+/// the shader evaluates them.
+fn sh_terms(Vec3 { x, y, z }: Vec3) -> [f32; 9] {
+	[
+		1.0,
+		y,
+		z,
+		x,
+		x * y,
+		y * z,
+		3.0 * z * z - 1.0,
+		x * z,
+		x * x - y * y,
+	]
 }
 
 #[cfg(test)]
@@ -230,9 +251,8 @@ mod tests {
 
 	#[test]
 	fn rougher_mips_are_smoother() {
-		let key = Vec3::new(-0.45, 0.75, 0.48).normalize();
-		let sharp = prefiltered(key, 0.0);
-		let rough = prefiltered(key, 1.0);
+		let sharp = prefiltered(KEY.normalize(), 0.0);
+		let rough = prefiltered(KEY.normalize(), 1.0);
 		assert!(sharp.x > rough.x, "the key light spreads out");
 	}
 }

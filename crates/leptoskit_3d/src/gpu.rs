@@ -58,19 +58,7 @@ impl Backend {
 	/// The wgpu backends this choice allows on the current platform.
 	pub fn backends(self) -> wgpu::Backends {
 		match self {
-			Self::Auto => {
-				if cfg!(target_arch = "wasm32") {
-					wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
-				} else if cfg!(target_vendor = "apple") {
-					wgpu::Backends::METAL
-				} else if cfg!(windows) {
-					wgpu::Backends::DX12
-				} else if cfg!(target_os = "android") {
-					wgpu::Backends::GL
-				} else {
-					wgpu::Backends::VULKAN
-				}
-			}
+			Self::Auto => AUTO_BACKENDS,
 			Self::Metal => wgpu::Backends::METAL,
 			Self::Vulkan => wgpu::Backends::VULKAN,
 			Self::Gl => wgpu::Backends::GL,
@@ -292,6 +280,21 @@ impl Gpu {
 	}
 }
 
+/// What `Backend::Auto` allows: WebGPU with a WebGL2 fallback in the
+/// browser, OpenGL ES on Android (some Vulkan drivers reset the GPU when the
+/// camera closes), and each other platform's native API.
+const AUTO_BACKENDS: wgpu::Backends = if cfg!(target_arch = "wasm32") {
+	wgpu::Backends::BROWSER_WEBGPU.union(wgpu::Backends::GL)
+} else if cfg!(target_vendor = "apple") {
+	wgpu::Backends::METAL
+} else if cfg!(windows) {
+	wgpu::Backends::DX12
+} else if cfg!(target_os = "android") {
+	wgpu::Backends::GL
+} else {
+	wgpu::Backends::VULKAN
+};
+
 /// A render pipeline's variant: how the mesh is skinned and blended, and
 /// whether back faces are culled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -299,6 +302,53 @@ pub(crate) struct Variant {
 	pub skinned: bool,
 	pub blend: bool,
 	pub double_sided: bool,
+}
+
+impl Variant {
+	/// Every variant.
+	fn all() -> impl Iterator<Item = Self> {
+		let flags = [false, true];
+		flags.into_iter().flat_map(move |skinned| {
+			flags.into_iter().flat_map(move |blend| {
+				flags.map(move |double_sided| {
+					Self {
+						skinned,
+						blend,
+						double_sided,
+					}
+				})
+			})
+		})
+	}
+}
+
+fn buffer_layout<T>(
+	step_mode: wgpu::VertexStepMode,
+	attributes: &[wgpu::VertexAttribute],
+) -> wgpu::VertexBufferLayout<'_> {
+	wgpu::VertexBufferLayout {
+		array_stride: size_of::<T>() as u64,
+		step_mode,
+		attributes,
+	}
+}
+
+fn depth_state(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
+	wgpu::DepthStencilState {
+		format: crate::upload::DEPTH_FORMAT,
+		depth_write_enabled: Some(write),
+		depth_compare: Some(compare),
+		stencil: wgpu::StencilState::default(),
+		bias: wgpu::DepthBiasState::default(),
+	}
+}
+
+fn color_target(format: wgpu::TextureFormat, blend: bool) -> [Option<wgpu::ColorTargetState>; 1] {
+	[Some(wgpu::ColorTargetState {
+		format,
+		blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+		write_mask: wgpu::ColorWrites::ALL,
+	})]
 }
 
 /// Every pipeline for one target format and sample count.
@@ -657,13 +707,41 @@ impl Shared {
 			.count()
 	}
 
-	#[allow(clippy::too_many_lines)]
+	/// Compiles every pipeline for one target format and sample count. Each
+	/// mesh variant has its own pipeline, so a draw picks one by its skin
+	/// and material rather than branching in the shader.
 	fn compile(
 		&self,
 		device: &wgpu::Device,
 		format: wgpu::TextureFormat,
 		samples: u32,
 	) -> Pipelines {
+		let multisample = wgpu::MultisampleState {
+			count: samples,
+			..wgpu::MultisampleState::default()
+		};
+
+		Pipelines {
+			meshes: Variant::all()
+				.map(|variant| {
+					(
+						variant,
+						self.mesh_pipeline(device, format, multisample, variant),
+					)
+				})
+				.collect(),
+			shadow: self.shadow_pipeline(device, format, multisample),
+			background: self.background_pipeline(device, format, multisample),
+		}
+	}
+
+	fn mesh_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+		variant: Variant,
+	) -> wgpu::RenderPipeline {
 		let vertex =
 			wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Unorm8x4];
 		let instance = wgpu::vertex_attr_array![
@@ -671,134 +749,113 @@ impl Shared {
 			8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Uint32x4,
 		];
 		let skin = wgpu::vertex_attr_array![12 => Uint16x4, 13 => Unorm16x4];
-		let vertex_buffer = wgpu::VertexBufferLayout {
-			array_stride: size_of::<crate::asset::Vertex>() as u64,
-			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &vertex,
-		};
-		let instance_buffer = wgpu::VertexBufferLayout {
-			array_stride: size_of::<crate::upload::InstanceRecord>() as u64,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &instance,
-		};
-		let skin_buffer = wgpu::VertexBufferLayout {
-			array_stride: size_of::<crate::asset::SkinVertex>() as u64,
-			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &skin,
-		};
-		let multisample = wgpu::MultisampleState {
-			count: samples,
-			..wgpu::MultisampleState::default()
-		};
-		let premultiplied = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-		let depth = |write: bool| {
-			Some(wgpu::DepthStencilState {
-				format: crate::upload::DEPTH_FORMAT,
-				depth_write_enabled: Some(write),
-				depth_compare: Some(wgpu::CompareFunction::LessEqual),
-				stencil: wgpu::StencilState::default(),
-				bias: wgpu::DepthBiasState::default(),
-			})
-		};
-		let mut meshes = HashMap::new();
+		let mut buffers = vec![
+			Some(buffer_layout::<crate::asset::Vertex>(
+				wgpu::VertexStepMode::Vertex,
+				&vertex,
+			)),
+			Some(buffer_layout::<crate::upload::InstanceRecord>(
+				wgpu::VertexStepMode::Instance,
+				&instance,
+			)),
+		];
 
-		for skinned in [false, true] {
-			for blend in [false, true] {
-				for double_sided in [false, true] {
-					let buffers = if skinned {
-						vec![
-							Some(vertex_buffer.clone()),
-							Some(instance_buffer.clone()),
-							Some(skin_buffer.clone()),
-						]
-					} else {
-						vec![Some(vertex_buffer.clone()), Some(instance_buffer.clone())]
-					};
-
-					let targets = [Some(wgpu::ColorTargetState {
-						format,
-						blend: if blend { premultiplied } else { None },
-						write_mask: wgpu::ColorWrites::ALL,
-					})];
-					let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-						label: Some("leptoskit_3d mesh"),
-						layout: Some(&self.mesh_layout),
-						vertex: wgpu::VertexState {
-							module: &self.mesh_shader,
-							entry_point: Some(if skinned { "vs_skinned" } else { "vs_static" }),
-							compilation_options: wgpu::PipelineCompilationOptions::default(),
-							buffers: &buffers,
-						},
-						primitive: wgpu::PrimitiveState {
-							topology: wgpu::PrimitiveTopology::TriangleList,
-							front_face: wgpu::FrontFace::Ccw,
-							cull_mode: (!double_sided).then_some(wgpu::Face::Back),
-							..wgpu::PrimitiveState::default()
-						},
-						depth_stencil: depth(!blend),
-						multisample,
-						fragment: Some(wgpu::FragmentState {
-							module: &self.mesh_shader,
-							entry_point: Some("fs_mesh"),
-							compilation_options: wgpu::PipelineCompilationOptions::default(),
-							targets: &targets,
-						}),
-						multiview_mask: None,
-						cache: None,
-					});
-
-					meshes.insert(
-						Variant {
-							skinned,
-							blend,
-							double_sided,
-						},
-						pipeline,
-					);
-				}
-			}
+		if variant.skinned {
+			buffers.push(Some(buffer_layout::<crate::asset::SkinVertex>(
+				wgpu::VertexStepMode::Vertex,
+				&skin,
+			)));
 		}
 
-		let shadow_attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
-		let blended = [Some(wgpu::ColorTargetState {
-			format,
-			blend: premultiplied,
-			write_mask: wgpu::ColorWrites::ALL,
-		})];
-		let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+		let targets = color_target(format, variant.blend);
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("leptoskit_3d mesh"),
+			layout: Some(&self.mesh_layout),
+			vertex: wgpu::VertexState {
+				module: &self.mesh_shader,
+				entry_point: Some(if variant.skinned {
+					"vs_skinned"
+				} else {
+					"vs_static"
+				}),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				buffers: &buffers,
+			},
+			primitive: wgpu::PrimitiveState {
+				topology: wgpu::PrimitiveTopology::TriangleList,
+				front_face: wgpu::FrontFace::Ccw,
+				cull_mode: (!variant.double_sided).then_some(wgpu::Face::Back),
+				..wgpu::PrimitiveState::default()
+			},
+			// Blended draws test depth but do not write it, so what is
+			// behind them still blends in.
+			depth_stencil: Some(depth_state(
+				!variant.blend,
+				wgpu::CompareFunction::LessEqual,
+			)),
+			multisample,
+			fragment: Some(wgpu::FragmentState {
+				module: &self.mesh_shader,
+				entry_point: Some("fs_mesh"),
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+				targets: &targets,
+			}),
+			multiview_mask: None,
+			cache: None,
+		})
+	}
+
+	/// The soft disc under each model: one instanced quad per shadow.
+	fn shadow_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+	) -> wgpu::RenderPipeline {
+		let attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+		let targets = color_target(format, true);
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some("leptoskit_3d shadow"),
 			layout: Some(&self.shadow_layout),
 			vertex: wgpu::VertexState {
 				module: &self.mesh_shader,
 				entry_point: Some("vs_shadow"),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
-				buffers: &[Some(wgpu::VertexBufferLayout {
-					array_stride: 32,
-					step_mode: wgpu::VertexStepMode::Instance,
-					attributes: &shadow_attributes,
-				})],
+				buffers: &[Some(buffer_layout::<[[f32; 4]; 2]>(
+					wgpu::VertexStepMode::Instance,
+					&attributes,
+				))],
 			},
 			primitive: wgpu::PrimitiveState {
 				topology: wgpu::PrimitiveTopology::TriangleStrip,
 				..wgpu::PrimitiveState::default()
 			},
-			depth_stencil: depth(false),
+			depth_stencil: Some(depth_state(false, wgpu::CompareFunction::LessEqual)),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.mesh_shader,
 				entry_point: Some("fs_shadow"),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
-				targets: &blended,
+				targets: &targets,
 			}),
 			multiview_mask: None,
 			cache: None,
-		});
-		let opaque = [Some(wgpu::ColorTargetState {
-			format,
-			blend: None,
-			write_mask: wgpu::ColorWrites::ALL,
-		})];
-		let background = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+		})
+	}
+
+	/// The full-screen background: a colour or the camera image, drawn
+	/// behind everything.
+	fn background_pipeline(
+		&self,
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		multisample: wgpu::MultisampleState,
+	) -> wgpu::RenderPipeline {
+		let targets = color_target(format, false);
+
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some("leptoskit_3d background"),
 			layout: Some(&self.background_pipeline_layout),
 			vertex: wgpu::VertexState {
@@ -808,27 +865,16 @@ impl Shared {
 				buffers: &[],
 			},
 			primitive: wgpu::PrimitiveState::default(),
-			depth_stencil: Some(wgpu::DepthStencilState {
-				format: crate::upload::DEPTH_FORMAT,
-				depth_write_enabled: Some(false),
-				depth_compare: Some(wgpu::CompareFunction::Always),
-				stencil: wgpu::StencilState::default(),
-				bias: wgpu::DepthBiasState::default(),
-			}),
+			depth_stencil: Some(depth_state(false, wgpu::CompareFunction::Always)),
 			multisample,
 			fragment: Some(wgpu::FragmentState {
 				module: &self.background_shader,
 				entry_point: Some("fs_background"),
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
-				targets: &opaque,
+				targets: &targets,
 			}),
 			multiview_mask: None,
 			cache: None,
-		});
-		Pipelines {
-			meshes,
-			shadow,
-			background,
-		}
+		})
 	}
 }

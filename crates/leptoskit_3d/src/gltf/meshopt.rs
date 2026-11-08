@@ -103,24 +103,16 @@ impl Cursor<'_> {
 		self.bytes.len() - self.position
 	}
 
-	/// A LEB128 integer of at most five bytes.
+	/// A LEB128 integer of at most five bytes: seven bits a byte, low bits
+	/// first, the high bit set on every byte but the last.
 	fn vbyte(&mut self) -> Result<u32> {
-		let lead = self.byte()?;
+		let mut result = 0;
 
-		if lead < 128 {
-			return Ok(u32::from(lead));
-		}
-
-		let mut result = u32::from(lead & 127);
-		let mut shift = 7;
-
-		for _ in 0..4 {
+		for shift in (0..u32::BITS).step_by(VBYTE_BITS) {
 			let group = self.byte()?;
-			result |= u32::from(group & 127) << shift;
+			result |= u32::from(group & !VBYTE_MORE) << shift;
 
-			shift += 7;
-
-			if group < 128 {
+			if group & VBYTE_MORE == 0 {
 				break;
 			}
 		}
@@ -129,7 +121,11 @@ impl Cursor<'_> {
 	}
 }
 
+const VBYTE_MORE: u8 = 0x80;
+const VBYTE_BITS: usize = 7;
+
 const VERTEX_HEADER: u8 = 0xa0;
+const MAX_VERTEX_STRIDE: usize = 256;
 const VERTEX_BLOCK_BYTES: usize = 8192;
 const VERTEX_BLOCK_MAX: usize = 256;
 const BYTE_GROUP: usize = 16;
@@ -148,27 +144,8 @@ fn unzigzag32(value: u32) -> u32 {
 fn decode_group(cursor: &mut Cursor<'_>, output: &mut [u8; BYTE_GROUP], mode: u8) -> Result<()> {
 	match mode {
 		0 => output.fill(0),
-		1 | 2 => {
-			let bits = if mode == 1 { 2 } else { 4 };
-			let packed = BYTE_GROUP * bits / 8;
-			let start = cursor.position;
-			if cursor.remaining() < packed {
-				return Err(MeshoptError("the data ends early"));
-			}
-
-			cursor.position += packed;
-			let sentinel = (1_u8 << bits) - 1;
-			for (index, value) in output.iter_mut().enumerate() {
-				let byte = cursor.bytes[start + index * bits / 8];
-				let shift = 8 - bits - (index * bits) % 8;
-				let encoded = (byte >> shift) & sentinel;
-				*value = if encoded == sentinel {
-					cursor.byte()?
-				} else {
-					encoded
-				};
-			}
-		}
+		1 => decode_packed(cursor, output, 2)?,
+		2 => decode_packed(cursor, output, 4)?,
 		_ => {
 			for value in output.iter_mut() {
 				*value = cursor.byte()?;
@@ -179,8 +156,44 @@ fn decode_group(cursor: &mut Cursor<'_>, output: &mut [u8; BYTE_GROUP], mode: u8
 	Ok(())
 }
 
+/// Sixteen `bits`-bit values packed high bits first; the all-ones value
+/// escapes to a full byte after the packed ones.
+fn decode_packed(
+	cursor: &mut Cursor<'_>,
+	output: &mut [u8; BYTE_GROUP],
+	bits: usize,
+) -> Result<()> {
+	let packed = BYTE_GROUP * bits / u8::BITS as usize;
+	let start = cursor.position;
+
+	if cursor.remaining() < packed {
+		return Err(MeshoptError("the data ends early"));
+	}
+
+	cursor.position += packed;
+	let sentinel = (1_u8 << bits) - 1;
+
+	for (index, value) in output.iter_mut().enumerate() {
+		let bit = index * bits;
+		let byte = cursor.bytes[start + bit / u8::BITS as usize];
+		let encoded = (byte >> (u8::BITS as usize - bits - bit % u8::BITS as usize)) & sentinel;
+		*value = if encoded == sentinel {
+			cursor.byte()?
+		} else {
+			encoded
+		};
+	}
+
+	Ok(())
+}
+
+/// Decodes vertex codec version 0. Vertices come in blocks; within a block
+/// each byte of the stride is a column of deltas from the previous vertex,
+/// zigzagged and packed in groups of sixteen at 0, 2, 4, or 8 bits as a
+/// two-bit header per group says. The first vertex's bytes are deltas from
+/// the tail at the end of the data.
 fn decode_vertices(output: &mut [u8], count: usize, stride: usize, source: &[u8]) -> Result<()> {
-	if stride == 0 || stride > 256 || stride % 4 != 0 {
+	if stride == 0 || stride > MAX_VERTEX_STRIDE || stride % 4 != 0 {
 		return Err(MeshoptError(
 			"a vertex stride must be a multiple of 4 up to 256",
 		));
@@ -208,7 +221,7 @@ fn decode_vertices(output: &mut [u8], count: usize, stride: usize, source: &[u8]
 		return Err(MeshoptError("the vertex data is too short"));
 	}
 
-	let mut last = [0_u8; 256];
+	let mut last = [0_u8; MAX_VERTEX_STRIDE];
 	last[..stride].copy_from_slice(&source[source.len() - stride..]);
 	let mut cursor = Cursor {
 		bytes: &source[..source.len() - tail],
@@ -274,35 +287,188 @@ fn write_index(output: &mut [u8], index: usize, size: usize, value: u32) {
 	}
 }
 
+/// Entries in each of the decoder's FIFOs.
+const FIFO_SIZE: usize = 16;
+const FIFO_MASK: usize = FIFO_SIZE - 1;
+/// Bytes of auxiliary codes at the end of the index data.
+const AUX_BYTES: usize = 16;
+/// A vertex code that reads an index explicitly from the data.
+const EXPLICIT: u8 = 15;
+/// Vertex codes that step the last explicit index back or forward by one.
+const STEP_BACK: u8 = 13;
+const STEP_FORWARD: u8 = 14;
+/// Triangle codes: below this one reuses an edge, below `FREE` takes its
+/// vertices' codes from the auxiliary bytes, and the rest read them from
+/// the data.
+const AUX_CODES: u8 = 0xf0;
+const FREE: u8 = 0xfe;
+const LOW_NIBBLE: u8 = 0x0f;
+
 /// The decoder's two FIFOs of recent edges and vertices.
 struct Fifos {
-	edges: [[u32; 2]; 16],
+	edges: [[u32; 2]; FIFO_SIZE],
 	edge_offset: usize,
-	vertices: [u32; 16],
+	vertices: [u32; FIFO_SIZE],
 	vertex_offset: usize,
 }
 
 impl Fifos {
-	fn push_edge(&mut self, a: u32, b: u32) {
-		self.edges[self.edge_offset] = [a, b];
-		self.edge_offset = (self.edge_offset + 1) & 15;
+	fn push_edge(&mut self, from: u32, to: u32) {
+		self.edges[self.edge_offset] = [from, to];
+		self.edge_offset = (self.edge_offset + 1) & FIFO_MASK;
 	}
 
 	fn push_vertex(&mut self, vertex: u32, advance: bool) {
 		self.vertices[self.vertex_offset] = vertex;
-		self.vertex_offset = (self.vertex_offset + usize::from(advance)) & 15;
+		self.vertex_offset = (self.vertex_offset + usize::from(advance)) & FIFO_MASK;
 	}
 
 	fn edge(&self, back: usize) -> [u32; 2] {
-		self.edges[(self.edge_offset.wrapping_sub(1 + back)) & 15]
+		self.edges[(self.edge_offset.wrapping_sub(1 + back)) & FIFO_MASK]
 	}
 
 	fn vertex(&self, back: usize) -> u32 {
-		self.vertices[(self.vertex_offset.wrapping_sub(back)) & 15]
+		self.vertices[(self.vertex_offset.wrapping_sub(back)) & FIFO_MASK]
+	}
+
+	/// Remembers a whole triangle's edges.
+	fn push_edges(&mut self, [first, second, third]: [u32; 3]) {
+		self.push_edge(second, first);
+		self.push_edge(third, second);
+		self.push_edge(first, third);
 	}
 }
 
-#[allow(clippy::too_many_lines)]
+/// The index codec's state between triangles: the FIFOs, the next vertex
+/// never seen before, and the last index encoded explicitly.
+struct TriangleDecoder<'a> {
+	data: Cursor<'a>,
+	aux: &'a [u8],
+	fifos: Fifos,
+	next: u32,
+	last: u32,
+	/// Version 1 spends vertex codes 13 and 14 on steps; version 0 reads
+	/// every code below 15 from the FIFO.
+	fifo_codes: u8,
+}
+
+impl TriangleDecoder<'_> {
+	fn decode(&mut self, code: u8) -> Result<[u32; 3]> {
+		match code {
+			0..AUX_CODES => self.edge_triangle(code),
+			AUX_CODES..FREE => Ok(self.aux_triangle(code)),
+			_ => self.free_triangle(code),
+		}
+	}
+
+	/// A triangle on a recent edge; its third vertex is new, recent, or
+	/// encoded explicitly.
+	fn edge_triangle(&mut self, code: u8) -> Result<[u32; 3]> {
+		let [first, second] = self.fifos.edge(usize::from(code >> 4));
+		let third_code = code & LOW_NIBBLE;
+		let fresh = third_code == 0;
+		let third = if third_code >= self.fifo_codes {
+			self.explicit(third_code)?
+		} else if fresh {
+			self.next
+		} else {
+			self.fifos.vertex(usize::from(third_code) + 1)
+		};
+
+		self.next += u32::from(fresh);
+		self.fifos
+			.push_vertex(third, fresh || third_code >= self.fifo_codes);
+		self.fifos.push_edge(third, second);
+		self.fifos.push_edge(first, third);
+		Ok([first, second, third])
+	}
+
+	/// A triangle starting at a new vertex, whose other two are new or
+	/// recent as an auxiliary byte says.
+	fn aux_triangle(&mut self, code: u8) -> [u32; 3] {
+		let codes = self.aux[usize::from(code & LOW_NIBBLE)];
+		let (second_code, third_code) = (codes >> 4, codes & LOW_NIBBLE);
+		let first = self.take_next();
+		let second = self.recent_or_next(second_code);
+		let third = self.recent_or_next(third_code);
+		self.fifos.push_vertex(first, true);
+		self.fifos.push_vertex(second, second_code == 0);
+		self.fifos.push_vertex(third, third_code == 0);
+		self.fifos.push_edges([first, second, third]);
+		[first, second, third]
+	}
+
+	/// A triangle whose vertices' codes follow in the data: each new,
+	/// recent, or explicit. A zero byte restarts the new vertices at zero.
+	fn free_triangle(&mut self, code: u8) -> Result<[u32; 3]> {
+		let codes = self.data.byte()?;
+		let (second_code, third_code) = (codes >> 4, codes & LOW_NIBBLE);
+
+		if codes == 0 {
+			self.next = 0;
+		}
+
+		let first_explicit = code != FREE;
+		let first = if first_explicit { 0 } else { self.take_next() };
+		let second = self.recent_or_next(second_code);
+		let third = self.recent_or_next(third_code);
+
+		// Explicit indices follow in the order of the vertices.
+		let first = if first_explicit {
+			self.explicit(EXPLICIT)?
+		} else {
+			first
+		};
+		let second = if second_code == EXPLICIT {
+			self.explicit(EXPLICIT)?
+		} else {
+			second
+		};
+		let third = if third_code == EXPLICIT {
+			self.explicit(EXPLICIT)?
+		} else {
+			third
+		};
+
+		self.fifos.push_vertex(first, true);
+		self.fifos
+			.push_vertex(second, second_code == 0 || second_code == EXPLICIT);
+		self.fifos
+			.push_vertex(third, third_code == 0 || third_code == EXPLICIT);
+		self.fifos.push_edges([first, second, third]);
+		Ok([first, second, third])
+	}
+
+	fn take_next(&mut self) -> u32 {
+		self.next += 1;
+		self.next - 1
+	}
+
+	/// Code 0 is the next new vertex; others count back through the FIFO.
+	fn recent_or_next(&mut self, code: u8) -> u32 {
+		if code == 0 {
+			self.take_next()
+		} else {
+			self.fifos.vertex(usize::from(code))
+		}
+	}
+
+	/// An index relative to the last explicit one: read from the data, or
+	/// one step from it.
+	fn explicit(&mut self, code: u8) -> Result<u32> {
+		self.last = match code {
+			STEP_BACK => self.last.wrapping_sub(1),
+			STEP_FORWARD => self.last.wrapping_add(1),
+			_ => self.last.wrapping_add(unzigzag32(self.data.vbyte()?)),
+		};
+		Ok(self.last)
+	}
+}
+
+/// Decodes index codec versions 0 and 1: a code byte per triangle up
+/// front, then the variable-length data they read from, then sixteen
+/// auxiliary codes. Most triangles share an edge with a recent one, which
+/// is what makes the codes small.
 fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8]) -> Result<()> {
 	if count % 3 != 0 {
 		return Err(MeshoptError(
@@ -316,7 +482,7 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 
 	let triangles = count / 3;
 
-	if source.len() < 1 + triangles + 16 {
+	if source.len() < 1 + triangles + AUX_BYTES {
 		return Err(MeshoptError("the index data is too short"));
 	}
 
@@ -324,7 +490,7 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 		return Err(MeshoptError("the index data has the wrong header"));
 	}
 
-	let version = source[0] & 0x0f;
+	let version = source[0] & LOW_NIBBLE;
 
 	if version > 1 {
 		return Err(MeshoptError(
@@ -333,135 +499,40 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 	}
 
 	let codes = &source[1..=triangles];
-	let aux = &source[source.len() - 16..];
-	let mut data = Cursor {
-		bytes: &source[..source.len() - 16],
-		position: 1 + triangles,
-	};
-	let mut fifos = Fifos {
-		edges: [[u32::MAX; 2]; 16],
-		edge_offset: 0,
-		vertices: [u32::MAX; 16],
-		vertex_offset: 0,
-	};
-	let fec_max = if version >= 1 { 13 } else { 15 };
-	let mut next = 0_u32;
-	let mut last = 0_u32;
-	let decode_index = |data: &mut Cursor<'_>, last: &mut u32| -> Result<u32> {
-		let value = last.wrapping_add(unzigzag32(data.vbyte()?));
-		*last = value;
-		Ok(value)
+	let mut decoder = TriangleDecoder {
+		data: Cursor {
+			bytes: &source[..source.len() - AUX_BYTES],
+			position: 1 + triangles,
+		},
+		aux: &source[source.len() - AUX_BYTES..],
+		fifos: Fifos {
+			edges: [[u32::MAX; 2]; FIFO_SIZE],
+			edge_offset: 0,
+			vertices: [u32::MAX; FIFO_SIZE],
+			vertex_offset: 0,
+		},
+		next: 0,
+		last: 0,
+		fifo_codes: if version >= 1 { STEP_BACK } else { EXPLICIT },
 	};
 
 	for (triangle, &code) in codes.iter().enumerate() {
-		let (a, b, c);
+		let indices = decoder.decode(code)?;
 
-		if code < 0xf0 {
-			let fe = usize::from(code >> 4);
-			[a, b] = fifos.edge(fe);
-			let fec = code & 15;
-
-			if fec < fec_max {
-				c = if fec == 0 {
-					next
-				} else {
-					fifos.vertex(usize::from(fec) + 1)
-				};
-
-				let fresh = fec == 0;
-				next += u32::from(fresh);
-				fifos.push_vertex(c, fresh);
-			} else {
-				c = if fec == 15 {
-					decode_index(&mut data, &mut last)?
-				} else {
-					// 13 and 14 step the last free index by -1 and +1.
-					last = last.wrapping_add(if fec == 13 { u32::MAX } else { 1 });
-					last
-				};
-
-				fifos.push_vertex(c, true);
-			}
-
-			fifos.push_edge(c, b);
-			fifos.push_edge(a, c);
-		} else if code < 0xfe {
-			let codeaux = aux[usize::from(code & 15)];
-			let feb = usize::from(codeaux >> 4);
-			let fec = usize::from(codeaux & 15);
-			a = next;
-			next += 1;
-			b = if feb == 0 { next } else { fifos.vertex(feb) };
-			next += u32::from(feb == 0);
-			c = if fec == 0 { next } else { fifos.vertex(fec) };
-			next += u32::from(fec == 0);
-			fifos.push_vertex(a, true);
-			fifos.push_vertex(b, feb == 0);
-			fifos.push_vertex(c, fec == 0);
-			fifos.push_edge(b, a);
-			fifos.push_edge(c, b);
-			fifos.push_edge(a, c);
-		} else {
-			let codeaux = data.byte()?;
-			let fea = if code == 0xfe { 0 } else { 15 };
-			let feb = usize::from(codeaux >> 4);
-			let fec = usize::from(codeaux & 15);
-
-			if codeaux == 0 {
-				next = 0;
-			}
-			let mut va = if fea == 0 {
-				next += 1;
-				next - 1
-			} else {
-				0
-			};
-			let mut vb = if feb == 0 {
-				next += 1;
-				next - 1
-			} else {
-				fifos.vertex(feb)
-			};
-			let mut vc = if fec == 0 {
-				next += 1;
-				next - 1
-			} else {
-				fifos.vertex(fec)
-			};
-
-			if fea == 15 {
-				va = decode_index(&mut data, &mut last)?;
-			}
-
-			if feb == 15 {
-				vb = decode_index(&mut data, &mut last)?;
-			}
-
-			if fec == 15 {
-				vc = decode_index(&mut data, &mut last)?;
-			}
-
-			(a, b, c) = (va, vb, vc);
-			fifos.push_vertex(a, true);
-			fifos.push_vertex(b, feb == 0 || feb == 15);
-			fifos.push_vertex(c, fec == 0 || fec == 15);
-			fifos.push_edge(b, a);
-			fifos.push_edge(c, b);
-			fifos.push_edge(a, c);
+		for (corner, index) in indices.into_iter().enumerate() {
+			write_index(output, triangle * 3 + corner, size, index);
 		}
-
-		write_index(output, triangle * 3, size, a);
-		write_index(output, triangle * 3 + 1, size, b);
-		write_index(output, triangle * 3 + 2, size, c);
 	}
 
-	if data.remaining() != 0 {
+	if decoder.data.remaining() != 0 {
 		return Err(MeshoptError("the index data has bytes left over"));
 	}
 
 	Ok(())
 }
 
+/// Decodes an index sequence: each index is a delta from one of the last
+/// two, the low bit saying which.
 fn decode_index_sequence(
 	output: &mut [u8],
 	count: usize,
@@ -505,87 +576,48 @@ fn round(value: f32) -> i32 {
 	(value + if value >= 0.0 { 0.5 } else { -0.5 }) as i32
 }
 
+/// Undoes an attribute filter in place. Each filter needs a stride that
+/// fits its encoding, which a malformed file may not have.
 fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) -> Result<()> {
-	match filter {
-		Filter::None => {}
-
-		Filter::Octahedral if stride == 4 => {
-			for element in data.as_chunks_mut::<4>().0.iter_mut().take(count) {
-				let values = [element[0] as i8, element[1] as i8, element[2] as i8];
-				let [x, y, z] = octahedral(values.map(f32::from), 127.0);
-				element[0] = x as i8 as u8;
-				element[1] = y as i8 as u8;
-				element[2] = z as i8 as u8;
-			}
+	match (filter, stride) {
+		(Filter::None, _) => {}
+		(Filter::Octahedral, 4) => {
+			data.as_chunks_mut::<4>()
+				.0
+				.iter_mut()
+				.take(count)
+				.for_each(octahedral_bytes);
 		}
-
-		Filter::Octahedral if stride == 8 => {
-			for element in data.as_chunks_mut::<8>().0.iter_mut().take(count) {
-				let values = [0, 1, 2].map(|index| {
-					f32::from(i16::from_le_bytes([
-						element[index * 2],
-						element[index * 2 + 1],
-					]))
-				});
-				let decoded = octahedral(values, 32767.0);
-
-				for (index, value) in decoded.into_iter().enumerate() {
-					element[index * 2..index * 2 + 2]
-						.copy_from_slice(&(value as i16).to_le_bytes());
-				}
-			}
+		(Filter::Octahedral, 8) => {
+			data.as_chunks_mut::<8>()
+				.0
+				.iter_mut()
+				.take(count)
+				.for_each(octahedral_shorts);
 		}
-
-		Filter::Octahedral => {
+		(Filter::Octahedral, _) => {
 			return Err(MeshoptError(
 				"the octahedral filter needs a stride of 4 or 8",
 			));
 		}
-
-		Filter::Quaternion if stride == 8 => {
-			for element in data.as_chunks_mut::<8>().0.iter_mut().take(count) {
-				let read =
-					|index: usize| i16::from_le_bytes([element[index * 2], element[index * 2 + 1]]);
-				let (x, y, z, w) = (read(0), read(1), read(2), read(3));
-				let scale = std::f32::consts::FRAC_1_SQRT_2 / f32::from(w | 3);
-				let [x, y, z] = [x, y, z].map(|value| f32::from(value) * scale);
-				let ww = 1.0 - x * x - y * y - z * z;
-				let w_value = ww.max(0.0).sqrt();
-				let [xf, yf, zf, wf] =
-					[x, y, z, w_value].map(|value| round(value * 32767.0) as i16);
-				let qc = (w & 3) as usize;
-				let mut out = [0_i16; 4];
-				out[(qc + 1) & 3] = xf;
-				out[(qc + 2) & 3] = yf;
-				out[(qc + 3) & 3] = zf;
-				out[qc] = wf;
-
-				for (index, value) in out.into_iter().enumerate() {
-					element[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
-				}
-			}
+		(Filter::Quaternion, 8) => {
+			data.as_chunks_mut::<8>()
+				.0
+				.iter_mut()
+				.take(count)
+				.for_each(quaternion);
 		}
-
-		Filter::Quaternion => {
+		(Filter::Quaternion, _) => {
 			return Err(MeshoptError("the quaternion filter needs a stride of 8"));
 		}
-
-		Filter::Exponential if stride % 4 == 0 => {
-			for word in data
-				.as_chunks_mut::<4>()
+		(Filter::Exponential, _) if stride % 4 == 0 => {
+			data.as_chunks_mut::<4>()
 				.0
 				.iter_mut()
 				.take(count * stride / 4)
-			{
-				let value = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
-				let mantissa = ((value << 8) as i32) >> 8;
-				let exponent = (value as i32) >> 24;
-				let decoded = mantissa as f32 * 2.0_f32.powi(exponent);
-				word.copy_from_slice(&decoded.to_bits().to_le_bytes());
-			}
+				.for_each(exponential);
 		}
-
-		Filter::Exponential => {
+		(Filter::Exponential, _) => {
 			return Err(MeshoptError(
 				"the exponential filter needs a stride that divides by 4",
 			));
@@ -593,6 +625,68 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 	}
 
 	Ok(())
+}
+
+fn read_i16(bytes: &[u8], index: usize) -> i16 {
+	i16::from_le_bytes([bytes[index * 2], bytes[index * 2 + 1]])
+}
+
+fn write_i16(bytes: &mut [u8], index: usize, value: i16) {
+	bytes[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+/// An octahedral unit vector in three signed bytes, the fourth untouched.
+fn octahedral_bytes(element: &mut [u8; 4]) {
+	let values = [element[0] as i8, element[1] as i8, element[2] as i8];
+	let decoded = octahedral(values.map(f32::from), f32::from(i8::MAX));
+
+	for (byte, value) in element.iter_mut().zip(decoded) {
+		*byte = value as i8 as u8;
+	}
+}
+
+/// An octahedral unit vector in three signed shorts, the fourth untouched.
+fn octahedral_shorts(element: &mut [u8; 8]) {
+	let values = [0, 1, 2].map(|index| f32::from(read_i16(element, index)));
+	let decoded = octahedral(values, f32::from(i16::MAX));
+
+	for (index, value) in decoded.into_iter().enumerate() {
+		write_i16(element, index, value as i16);
+	}
+}
+
+/// A unit quaternion stored as its three smallest components; the last
+/// short's low two bits say which component was dropped, and its other
+/// bits the scale.
+fn quaternion(element: &mut [u8; 8]) {
+	let [first, second, third, last] = [0, 1, 2, 3].map(|index| read_i16(element, index));
+	let scale = std::f32::consts::FRAC_1_SQRT_2 / f32::from(last | 3);
+	let kept = [first, second, third].map(|value| f32::from(value) * scale);
+	let dropped = (1.0 - kept.iter().map(|value| value * value).sum::<f32>())
+		.max(0.0)
+		.sqrt();
+	let max = f32::from(i16::MAX);
+	let dropped_slot = (last & 3) as usize;
+	let mut quaternion = [0_i16; 4];
+
+	for (offset, value) in kept.into_iter().enumerate() {
+		quaternion[(dropped_slot + offset + 1) & 3] = round(value * max) as i16;
+	}
+
+	quaternion[dropped_slot] = round(dropped * max) as i16;
+
+	for (index, value) in quaternion.into_iter().enumerate() {
+		write_i16(element, index, value);
+	}
+}
+
+/// A float as a 24-bit signed mantissa and an 8-bit signed exponent.
+fn exponential(word: &mut [u8; 4]) {
+	let value = u32::from_le_bytes(*word);
+	let mantissa = ((value << 8) as i32) >> 8;
+	let exponent = (value as i32) >> 24;
+	let decoded = mantissa as f32 * 2.0_f32.powi(exponent);
+	*word = decoded.to_bits().to_le_bytes();
 }
 
 /// Rebuilds a unit vector from two octahedral coordinates; the third

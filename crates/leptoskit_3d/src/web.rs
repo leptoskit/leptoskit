@@ -493,6 +493,9 @@ async fn connect(canvas: &Rc<Canvas>) -> Result<(), String> {
 	Ok(())
 }
 
+/// Asks the browser for a frame for this canvas, unless one is already
+/// asked for or the canvas has closed. Each frame asks for the next while
+/// the scene animates, so an idle scene schedules nothing.
 fn request_frame(canvas: &Rc<Canvas>) {
 	if canvas.closed.get() || canvas.scheduled.get() || canvas.surface.borrow().is_none() {
 		return;
