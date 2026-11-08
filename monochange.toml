@@ -96,6 +96,7 @@ packages = [
 	"leptoskit_plugin_deep_link",
 	"leptoskit_plugin_device",
 	"leptoskit_plugin_device_policy",
+	"leptoskit_plugin_device_keys",
 	"leptoskit_plugin_android_intent",
 	"leptoskit_plugin_secure_store",
 	"leptoskit_plugin_linking",
@@ -368,6 +369,9 @@ path = "crates/leptoskit_plugin_device"
 
 [package.leptoskit_plugin_device_policy]
 path = "crates/leptoskit_plugin_device_policy"
+
+[package.leptoskit_plugin_device_keys]
+path = "crates/leptoskit_plugin_device_keys"
 
 [package.leptoskit_plugin_android_intent]
 path = "crates/leptoskit_plugin_android_intent"
