@@ -22,6 +22,10 @@ mod runtime;
 #[cfg(feature = "async-host")]
 mod plugin;
 
+#[cfg(any(target_os = "ios", target_os = "android"))]
+#[allow(unsafe_code)]
+mod sensors;
+
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
@@ -39,6 +43,8 @@ pub use replay::ReplayBackend;
 pub use runtime::Driver;
 pub use runtime::NextGuestFrame;
 pub use runtime::XrRuntime;
+#[cfg(any(target_os = "ios", target_os = "android"))]
+pub use sensors::DeviceRotation;
 
 /// The screen a phone backend projects for: its size in pixels and how far
 /// the interface is turned from the device's natural orientation.
