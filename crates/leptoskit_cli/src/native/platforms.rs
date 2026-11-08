@@ -2,12 +2,11 @@
 
 use leptoskit_platform::PlatformExtension;
 use leptoskit_platform_harmonyos::HarmonyOs;
-use leptoskit_platform_oculus::Oculus;
 
 /// Builtin platform extensions shipped in this workspace.
 #[must_use]
-pub fn builtin() -> [&'static dyn PlatformExtension; 2] {
-	[&HarmonyOs, &Oculus]
+pub fn builtin() -> [&'static dyn PlatformExtension; 1] {
+	[&HarmonyOs]
 }
 
 /// Looks up a builtin extension by destination id.
@@ -15,7 +14,6 @@ pub fn builtin() -> [&'static dyn PlatformExtension; 2] {
 pub fn find(id: &str) -> Option<&'static dyn PlatformExtension> {
 	match id {
 		HarmonyOs::ID => Some(&HarmonyOs),
-		Oculus::ID => Some(&Oculus),
 		_ => None,
 	}
 }
@@ -25,11 +23,12 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn registers_harmonyos_and_oculus() {
+	fn registers_harmonyos() {
 		let extensions = builtin();
-		assert_eq!(extensions.len(), 2);
+		assert_eq!(extensions.len(), 1);
 		assert_eq!(find("harmonyos").unwrap().display_name(), "HarmonyOS");
-		assert_eq!(find("oculus").unwrap().display_name(), "Meta Quest");
+		assert!(find("oculus").is_none());
+		assert!(find("quest").is_none());
 		assert!(find("web").is_none());
 		for extension in extensions {
 			extension.manifest().validate().unwrap();

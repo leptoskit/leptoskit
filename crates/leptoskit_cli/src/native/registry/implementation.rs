@@ -265,6 +265,9 @@ pub struct HostCapabilities {
 	pub asynchronous: bool,
 	pub service: bool,
 	pub native: Option<NativeKind>,
+	/// Whether the generated host enables the reserved `leptoskit.timer`
+	/// plugin. The watch stubs run no guest, so they promise no timer.
+	pub timer: bool,
 }
 
 impl HostCapabilities {
@@ -276,14 +279,17 @@ impl HostCapabilities {
 				asynchronous: true,
 				service: true,
 				native: Some(native),
+				timer: true,
 			}
 		};
 
 		match target {
 			Target::Ios | Target::IosSimulator | Target::Macos => everything(NativeKind::Apple),
-			Target::Android | Target::AndroidX86_64 => everything(NativeKind::Android),
-			// `bridge.cpp` dispatches synchronous Rust calls and ArkTS plugins
-			// only.
+			Target::Android | Target::AndroidX86_64 | Target::Quest => {
+				everything(NativeKind::Android)
+			}
+			// `bridge.cpp` enables the reserved timer and dispatches
+			// synchronous Rust calls and ArkTS plugins only.
 			Target::Harmonyos | Target::HarmonyosX86_64 => {
 				Self {
 					sync: true,
@@ -291,22 +297,43 @@ impl HostCapabilities {
 					asynchronous: false,
 					service: false,
 					native: Some(NativeKind::ArkTs),
+					timer: true,
 				}
 			}
-			// Experimental watch hosts and the app-owned runners don't
-			// register plugins yet.
-			Target::Windows
-			| Target::Linux
-			| Target::Tui
-			| Target::Wearos
-			| Target::Watchos
-			| Target::Oculus => {
+			// The Linux runner pumps a `PluginHost`, which has no plugin
+			// services, and enables the reserved timer.
+			Target::Linux => {
+				Self {
+					sync: true,
+					worker: true,
+					asynchronous: true,
+					service: false,
+					native: None,
+					timer: true,
+				}
+			}
+			// The Windows and terminal runners enable the reserved timer but
+			// don't register runtime plugins yet.
+			Target::Windows | Target::Tui => {
 				Self {
 					sync: false,
 					worker: false,
 					asynchronous: false,
 					service: false,
 					native: None,
+					timer: true,
+				}
+			}
+			// The experimental watch hosts are stubs: they run no guest and
+			// therefore promise neither plugins nor a timer.
+			Target::Wearos | Target::Watchos => {
+				Self {
+					sync: false,
+					worker: false,
+					asynchronous: false,
+					service: false,
+					native: None,
+					timer: false,
 				}
 			}
 		}
@@ -402,6 +429,26 @@ impl Plugin {
 		!experimental || self.experimental_rust_plugins
 	}
 
+	/// Whether the implementation this destination runs came from a Rust
+	/// registration the project opted into as experimental. A native or
+	/// service fallback is not experimental even when it sits beside one.
+	pub fn uses_experimental_rust(&self, target: Target) -> bool {
+		let table = self.platform_table(target);
+		let selected = table
+			.and_then(|table| table.rust().map(|rust| (rust, table.experimental)))
+			.filter(|&(_, experimental)| self.rust_enabled(experimental))
+			.or_else(|| self.shared_rust().map(|rust| (rust, self.experimental)))
+			.filter(|&(_, experimental)| self.rust_enabled(experimental));
+		let Some((_, experimental)) = selected else {
+			return false;
+		};
+
+		experimental
+			&& self
+				.implementation(target, HostCapabilities::of(target))
+				.is_ok_and(|implementation| implementation.rust().is_some())
+	}
+
 	/// Whether any active registration of the plugin runs on the async host,
 	/// which needs host-owned options.
 	pub(super) fn declares_async(&self) -> bool {
@@ -431,13 +478,15 @@ impl Plugin {
 		match target {
 			Target::Ios | Target::IosSimulator => self.ios.as_ref(),
 			Target::Macos => self.macos.as_ref(),
-			Target::Android | Target::AndroidX86_64 | Target::Wearos => self.android.as_ref(),
+			Target::Android | Target::AndroidX86_64 | Target::Wearos | Target::Quest => {
+				self.android.as_ref()
+			}
 			Target::Harmonyos | Target::HarmonyosX86_64 => self.harmonyos.as_ref(),
 			Target::Windows => self.windows.as_ref(),
 			Target::Linux => self.linux.as_ref(),
 			Target::Tui => self.tui.as_ref(),
-			// watchOS and Oculus have no plugin registration table yet.
-			Target::Watchos | Target::Oculus => None,
+			// watchOS has no plugin registration table yet.
+			Target::Watchos => None,
 		}
 	}
 
@@ -458,7 +507,7 @@ impl Plugin {
 					ty: self.apple_type.as_deref()?,
 				})
 			}
-			Target::Android | Target::AndroidX86_64 => {
+			Target::Android | Target::AndroidX86_64 | Target::Quest => {
 				Some(Implementation::Android {
 					ty: self.android_type.as_deref()?,
 				})
@@ -468,12 +517,9 @@ impl Plugin {
 					ty: self.harmonyos_type.as_deref()?,
 				})
 			}
-			Target::Windows
-			| Target::Linux
-			| Target::Tui
-			| Target::Wearos
-			| Target::Watchos
-			| Target::Oculus => None,
+			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos => {
+				None
+			}
 		}
 	}
 }
@@ -498,8 +544,8 @@ impl MissingPlugin {
 			Target::Android | Target::AndroidX86_64 => ("Android", "Android"),
 			Target::Harmonyos | Target::HarmonyosX86_64 => ("HarmonyOS", "HarmonyOS"),
 			Target::Wearos => ("Wear OS", "Wear OS"),
+			Target::Quest => ("Meta Quest", "Quest"),
 			Target::Watchos => ("watchOS", "watchOS"),
-			Target::Oculus => ("Meta Quest", "Meta Quest"),
 			Target::Windows => ("Windows", "Windows"),
 			Target::Linux => ("Linux", "Linux"),
 			Target::Tui => ("the terminal", "terminal"),
@@ -542,11 +588,13 @@ impl MissingPlugin {
 }
 
 /// Keep the plugins `target` can run and record the rest. With
-/// `native.missing-plugins = "error"`, any plugin left out fails the build.
+/// `native.missing-plugins = "error"`, a plugin left out fails the build
+/// unless the app explicitly listed it as optional.
 pub(super) fn select_for_target(
 	plugins: Vec<Plugin>,
 	target: Target,
 	policy: MissingPlugins,
+	optional: &[String],
 ) -> Result<(Vec<Plugin>, Vec<MissingPlugin>)> {
 	let host = HostCapabilities::of(target);
 	let mut kept = Vec::new();
@@ -565,12 +613,19 @@ pub(super) fn select_for_target(
 		}
 	}
 
-	if policy == MissingPlugins::Error && !missing.is_empty() {
-		let reasons: Vec<_> = missing.iter().map(MissingPlugin::describe).collect();
-		anyhow::bail!(
-			"native.missing-plugins = \"error\" stops the build: {}",
-			reasons.join("; ")
-		);
+	if policy == MissingPlugins::Error {
+		let reasons: Vec<_> = missing
+			.iter()
+			.filter(|missing| !optional.contains(&missing.name))
+			.map(MissingPlugin::describe)
+			.collect();
+
+		if !reasons.is_empty() {
+			anyhow::bail!(
+				"native.missing-plugins = \"error\" stops the build: {}",
+				reasons.join("; ")
+			);
+		}
 	}
 
 	Ok((kept, missing))
@@ -643,7 +698,7 @@ impl Registry {
 	#[cfg(test)]
 	pub fn select(&mut self, target: Target, policy: MissingPlugins) -> Result<()> {
 		let (plugins, missing) =
-			select_for_target(std::mem::take(&mut self.plugins), target, policy)?;
+			select_for_target(std::mem::take(&mut self.plugins), target, policy, &[])?;
 		self.plugins = plugins;
 		self.missing.extend(missing);
 		Ok(())

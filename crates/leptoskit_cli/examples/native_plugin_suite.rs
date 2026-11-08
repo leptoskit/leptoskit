@@ -68,6 +68,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	),
 	("passkeys", "leptoskit_plugin_passkeys"),
 	("web-auth", "leptoskit_plugin_web_auth"),
+	("audio", "leptoskit_plugin_audio"),
 ];
 
 const ANDROID_TESTS: &[&str] = &[

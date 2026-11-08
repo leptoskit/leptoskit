@@ -1,0 +1,27 @@
+[package]
+name = "commonplace_linux"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "leptoskit_app"
+crate-type = ["staticlib"]
+
+# The Linux app's native side: the GTK runner, and the runtime plugins
+# leptoskit.toml grants: HTTP to reach the server, and the secure store to keep
+# the session token between launches, in the desktop's Secret Service keyring.
+[target.'cfg(target_os = "linux")'.dependencies]
+leptoskit_bridge_ffi = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_bridge_ffi", features = ["app"] }
+leptoskit_plugin_http = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_http" }
+leptoskit_plugin_secure_store = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit_plugin_secure_store" }
+leptoskit = { version = "=0.3.0", default-features = false, path = "../../../crates/leptoskit", features = ["wasm", "rive", "gtk", "codepush-http"] }
+
+[[bin]]
+name = "commonplace-linux"
+path = "src/main.rs"
+
+# The runner exports the generated registrant's C entry points, which are
+# `unsafe` by nature, so it does not take the app's `unsafe_code` denial.
+[lints.rust]
+unsafe_code = "allow"

@@ -3,6 +3,30 @@ import UIKit
 /// Exercises the production renderer through wire transactions and real UIKit controls.
 /// Touch and navigation gestures still need separate end-to-end simulator journeys.
 extension UIKitControls {
+    func updateContractReports() throws {
+        let cases: [(String?, String)] = [
+            ("verified", "Host requirements checked."),
+            ("incomplete", "Plugin availability not fully checked."),
+            ("legacy", "Legacy compatibility checks only."),
+            (nil, "Compatibility not reported.")
+        ]
+        for (wire, message) in cases {
+            var object: [String: Any] = ["status": "staged", "version": "1.2.3", "build": 7]
+            object["contract"] = wire
+            let bytes = try JSONSerialization.data(withJSONObject: object)
+            let report = try JSONDecoder().decode(NativeSyncReport.self, from: bytes)
+            record(report.contract?.rawValue == wire, "update contract decodes \(wire ?? "absent")")
+            record(report.message.contains(message), "update control explains \(wire ?? "absent")")
+        }
+        let future = Data(#"{"status":"current","version":"1","build":1,"contract":"future"}"#.utf8)
+        do {
+            _ = try JSONDecoder().decode(NativeSyncReport.self, from: future)
+            record(false, "unknown update contract must fail decoding")
+        } catch is DecodingError {
+            record(true, "unknown update contract is not silently verified")
+        }
+    }
+
     func interactionControls() throws {
         let host = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         window?.rootViewController?.view.addSubview(host)

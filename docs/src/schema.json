@@ -2245,6 +2245,20 @@
 					"description": "What a build does when a selected plugin has no implementation the\nplatform's host can run. `warn` (the default) leaves it out with a\nwarning, so its calls fail with `Unavailable`; `error` stops the build.",
 					"$ref": "#/$defs/MissingPlugins"
 				},
+				"optional-capabilities": {
+					"description": "Capability identifiers the app can run without. A missing one produces\na warning instead of failing the build.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"optional-plugins": {
+					"description": "Granted plugins this app can run without. A destination that cannot\nregister one leaves it out with an actionable warning. An unlisted\ngrant keeps following `missing-plugins`, so existing projects are\nunchanged.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
 				"package_id": {
 					"description": "The reverse-domain application id used by platform shells, such as\n`com.example.counter`.\n\nIt must have at least two dot-separated segments, each an ASCII letter\nfollowed by ASCII letters or digits: the only form both iOS bundle ids\n(no `_`) and Android package names (no `-`) accept. When unset it\ndefaults to [`default_package_id`] of the app name.",
 					"type": "string",
@@ -2260,6 +2274,24 @@
 				},
 				"plugins": {
 					"description": "Runtime plugins explicitly granted to the generated native app.\nEach name must match metadata on a direct Cargo dependency.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"quest": {
+					"description": "The Meta Quest build's settings.",
+					"$ref": "#/$defs/QuestConfig"
+				},
+				"required-capabilities": {
+					"description": "Stable capability identifiers this app cannot run without, such as\n`host.plugin.rust.async` or `plugin.http`. An unknown or unsupported\nidentifier fails the native build before packaging.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"required-plugins": {
+					"description": "Granted plugins this app cannot run without. A destination that cannot\nregister one fails before packaging, whatever `missing-plugins` says.",
 					"type": "array",
 					"items": {
 						"type": "string"
@@ -2326,9 +2358,9 @@
 					"const": "watchos"
 				},
 				{
-					"description": "Meta Quest / Oculus (experimental platform extension).",
+					"description": "Meta Quest (Horizon OS), from the Android host.",
 					"type": "string",
-					"const": "oculus"
+					"const": "quest"
 				},
 				{
 					"description": "Windows.",
@@ -2406,9 +2438,9 @@
 					"const": "watchos"
 				},
 				{
-					"description": "A Meta Quest / Oculus application (experimental platform extension).",
+					"description": "A Meta Quest (Horizon OS) application: the Android app, packaged for\nthe headset and configured in `[native.quest]`.",
 					"type": "string",
-					"const": "oculus"
+					"const": "quest"
 				},
 				{
 					"description": "A terminal application: the shared tree in an interactive cell grid.",
@@ -2564,6 +2596,66 @@
 			},
 			"additionalProperties": false
 		},
+		"QuestConfig": {
+			"description": "How the Meta Quest build (`--platform quest`) packages the Android app\nfor Horizon OS.",
+			"type": "object",
+			"properties": {
+				"hand-tracking": {
+					"description": "Whether the app uses hand tracking, and whether it needs it.",
+					"$ref": "#/$defs/Requirement",
+					"default": "optional"
+				},
+				"immersive": {
+					"description": "Launches straight into the headset's immersive mode, where only what\nthe app draws through OpenXR is shown. With `false`, the app opens as\na 2D panel showing its ordinary interface.",
+					"type": "boolean",
+					"default": true
+				},
+				"passthrough": {
+					"description": "Whether the app shows the room through the headset's cameras\n(passthrough).",
+					"type": "boolean",
+					"default": true
+				},
+				"supported-devices": {
+					"description": "The headsets the Horizon Store offers the app on.",
+					"type": "array",
+					"default": [
+						"quest2",
+						"questpro",
+						"quest3",
+						"quest3s"
+					],
+					"items": {
+						"$ref": "#/$defs/QuestDevice"
+					}
+				}
+			},
+			"additionalProperties": false
+		},
+		"QuestDevice": {
+			"description": "A Meta Quest headset model, as `com.oculus.supportedDevices` names it.",
+			"oneOf": [
+				{
+					"description": "Meta Quest 2.",
+					"type": "string",
+					"const": "quest2"
+				},
+				{
+					"description": "Meta Quest Pro.",
+					"type": "string",
+					"const": "questpro"
+				},
+				{
+					"description": "Meta Quest 3.",
+					"type": "string",
+					"const": "quest3"
+				},
+				{
+					"description": "Meta Quest 3S.",
+					"type": "string",
+					"const": "quest3s"
+				}
+			]
+		},
 		"RenderMode": {
 			"description": "How a web build renders its interface.\n\nThe mode decides which cargo features each side of the build gets, which\nfollows the leptos convention: the server package is built with its `ssr`\nfeature and the wasm client with its `hydrate` feature.",
 			"oneOf": [
@@ -2581,6 +2673,26 @@
 					"description": "Server-side rendering with islands: the server renders every page,\nand the client hydrates only the `#[island]` components. Both sides\nalso get `leptos/islands`, so the wasm bundle carries nothing but the\nislands.",
 					"type": "string",
 					"const": "islands"
+				}
+			]
+		},
+		"Requirement": {
+			"description": "Whether an app uses a feature, and whether it can run without it.",
+			"oneOf": [
+				{
+					"description": "Not used.",
+					"type": "string",
+					"const": "off"
+				},
+				{
+					"description": "Used where the device has it.",
+					"type": "string",
+					"const": "optional"
+				},
+				{
+					"description": "The app needs it; stores hide the app from devices without it.",
+					"type": "string",
+					"const": "required"
 				}
 			]
 		},

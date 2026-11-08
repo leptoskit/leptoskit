@@ -59,6 +59,8 @@ packages = [
 	"leptoskit_testing_library",
 	"leptoskit_yoga",
 	"leptoskit_canvas",
+	"leptoskit_3d",
+	"leptoskit_xr",
 	"leptoskit_animation",
 	"leptoskit_use",
 	"leptoskit_native",
@@ -74,7 +76,6 @@ packages = [
 	"leptoskit_wearos",
 	"leptoskit_platform",
 	"leptoskit_platform_harmonyos",
-	"leptoskit_platform_oculus",
 	"leptoskit_aria",
 	"leptoskit_analytics",
 	"leptoskit_deploy_console",
@@ -111,6 +112,7 @@ packages = [
 	"leptoskit_plugin_accelerometer",
 	"leptoskit_plugin_application",
 	"leptoskit_plugin_app_shortcuts",
+	"leptoskit_plugin_audio",
 	"leptoskit_plugin_autostart",
 	"leptoskit_plugin_badge",
 	"leptoskit_plugin_barometer",
@@ -195,6 +197,7 @@ versioned_files = [
 	# would leave them unable to resolve the crates they sit beside.
 	{ path = "examples/file_routes/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "examples/commonplace/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
+	{ path = "examples/huddle/linux/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	# The DevTools interface is versioned with the CLI that downloads it.
 	{ path = "devtools/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
 	{ path = "benchmarks/arena/apps/leptoskit/**/Cargo.toml", regex = 'leptoskit\w* = \{ version = "=(?<version>\d+\.\d+\.\d+)"' },
@@ -228,6 +231,14 @@ type = "cargo"
 
 [package.leptoskit_canvas]
 path = "crates/leptoskit_canvas"
+type = "cargo"
+
+[package.leptoskit_3d]
+path = "crates/leptoskit_3d"
+type = "cargo"
+
+[package.leptoskit_xr]
+path = "crates/leptoskit_xr"
 type = "cargo"
 
 [package.leptoskit_animation]
@@ -282,8 +293,6 @@ type = "cargo"
 path = "crates/leptoskit_platform_harmonyos"
 type = "cargo"
 
-[package.leptoskit_platform_oculus]
-path = "crates/leptoskit_platform_oculus"
 type = "cargo"
 
 [package.leptoskit_aria]
@@ -393,6 +402,9 @@ path = "crates/leptoskit_plugin_application"
 
 [package.leptoskit_plugin_app_shortcuts]
 path = "crates/leptoskit_plugin_app_shortcuts"
+
+[package.leptoskit_plugin_audio]
+path = "crates/leptoskit_plugin_audio"
 
 [package.leptoskit_plugin_autostart]
 path = "crates/leptoskit_plugin_autostart"

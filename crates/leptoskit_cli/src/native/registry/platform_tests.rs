@@ -24,6 +24,7 @@ const RUNS_RUST: HostCapabilities = HostCapabilities {
 	asynchronous: true,
 	service: true,
 	native: None,
+	timer: true,
 };
 
 #[test]
@@ -67,10 +68,18 @@ fn a_platform_table_wins_over_shared_rust_and_shared_rust_wins_over_native_types
 			Flavour::Worker
 		)
 	);
-	// The Linux runner doesn't run plugins yet.
+	// The Linux runner runs worker plugins; the Windows runner doesn't run
+	// plugins yet.
 	assert_eq!(
 		plugin.implementation(Target::Linux, HostCapabilities::of(Target::Linux)),
-		Err(Missing::HostCannotRun(Capability::Worker))
+		rust(
+			Constructor::Factory("desktop::from_context"),
+			Flavour::Worker
+		)
+	);
+	assert_eq!(
+		plugin.implementation(Target::Windows, HostCapabilities::of(Target::Windows)),
+		Err(Missing::HostCannotRun(Capability::Sync))
 	);
 
 	// Without shared Rust fields, a platform's native type is next.
@@ -379,4 +388,54 @@ fn missing_plugin_messages_name_wear_and_watch_hosts() {
 			missing.warning()
 		);
 	}
+}
+
+#[test]
+fn rust_plugins_name_the_apple_frameworks_ios_links() {
+	let runtime = json!({
+		"name": "echo",
+		"rust-type": "Echo",
+		"apple-frameworks": ["ARKit", "CoreMotion"]
+	});
+	let registry = resolve_for_target(
+		runtime_metadata(&runtime),
+		&echo_config(),
+		Some(Target::Ios),
+	)
+	.unwrap();
+	assert_eq!(
+		registry.plugins[0].apple_frameworks,
+		["ARKit", "CoreMotion"]
+	);
+	assert_eq!(
+		crate::native::project::ios_linked_frameworks(&registry).unwrap(),
+		" OTHER_LDFLAGS = \
+		 (\"$(inherited)\",\"-framework\",\"ARKit\",\"-framework\",\"CoreMotion\");"
+	);
+
+	let invalid = json!({"name": "echo", "rust-type": "Echo", "apple-frameworks": ["AR Kit"]});
+	assert!(resolve_metadata(runtime_metadata(&invalid), &echo_config()).is_err());
+}
+
+#[test]
+fn quest_resolves_like_android() {
+	let runtime = json!({
+		"name": "echo",
+		"android-type": "dev.example.Echo",
+		"android": {"rust-type": "Echo"}
+	});
+	let registry = resolve_for_target(
+		runtime_metadata(&runtime),
+		&echo_config(),
+		Some(Target::Quest),
+	)
+	.unwrap();
+	let capabilities = HostCapabilities::of(Target::Quest);
+	assert!(
+		registry.plugins[0]
+			.implementation(Target::Quest, capabilities)
+			.unwrap()
+			.rust()
+			.is_some()
+	);
 }

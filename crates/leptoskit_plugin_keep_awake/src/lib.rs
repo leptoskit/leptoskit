@@ -2,10 +2,11 @@
 //!
 //! Add `leptoskit_plugin_keep_awake` as a direct dependency and select the
 //! `keep-awake` plugin in `native.plugins`; supported generated hosts discover
-//! it from Cargo metadata. Generated Windows, Linux, and terminal hosts
-//! currently omit runtime plugins; use explicit registration in a custom host
-//! there. Guests enable the `guest` feature and reuse `guest::KeepAwake` rather
-//! than resolving the plugin on every call. iOS preserves and restores the idle
+//! it from Cargo metadata. Generated Linux hosts register it where it has a
+//! Linux Rust implementation; generated Windows and terminal hosts currently
+//! omit runtime plugins, so use explicit registration in a custom host there.
+//! Guests enable the `guest` feature and reuse `guest::KeepAwake` rather than
+//! resolving the plugin on every call. iOS preserves and restores the idle
 //! timer, Android uses the activity's keep-screen-on flag, desktop uses OS
 //! assertions, and the browser uses the Screen Wake Lock API; none of them
 //! promise background execution.

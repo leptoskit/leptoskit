@@ -59,7 +59,7 @@ The desktop test uses the real system clipboard (CI runs Linux under Xvfb) and r
 
 <!-- {=p_clipboardSummary} -->
 
-Add `leptoskit_plugin_clipboard` as a direct dependency and select the `clipboard` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Clipboard` rather than resolving the plugin on every call. Only plain text is supported; browser operations need a secure context and may need a user gesture.
+Add `leptoskit_plugin_clipboard` as a direct dependency and select the `clipboard` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Clipboard` rather than resolving the plugin on every call. Only plain text is supported; browser operations need a secure context and may need a user gesture.
 
 <!-- {/p_clipboardSummary} -->
 

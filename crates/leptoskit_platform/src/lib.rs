@@ -1,8 +1,8 @@
 //! <!-- {=platformSummary|trim|linePrefix:"//! ":true} -->
 //!
 //! Contracts for platform extension crates: a versioned manifest, a capability
-//! matrix, and scaffold file lists. HarmonyOS and Oculus implement these so the
-//! CLI can grow destinations without baking every OS into `leptoskit_config`.
+//! matrix, and scaffold file lists. HarmonyOS implements these so the CLI can
+//! grow destinations without baking every OS into `leptoskit_config`.
 //!
 //! <!-- {/platformSummary} -->
 //!
@@ -12,8 +12,8 @@
 //! and declared widget/plugin support. It is not a runtime capability plugin
 //! (`leptoskit_bridge::Plugin`) and not a build-time `LeptoskitPlugin`.
 //!
-//! In-tree crates (`leptoskit_platform_harmonyos`, `leptoskit_platform_oculus`)
-//! implement [`PlatformExtension`]. Out-of-tree providers will reuse the same
+//! The in-tree crate `leptoskit_platform_harmonyos` implements
+//! [`PlatformExtension`]. Out-of-tree providers will reuse the same
 //! [`Manifest`] shape over a CLI sidecar protocol later.
 
 #![forbid(unsafe_code)]

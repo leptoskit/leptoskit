@@ -45,10 +45,12 @@ host() {
 #
 # Every feature, every target.
 wasm_full=(
-	gallery leptoskit_bench_counter leptoskit_bench_guest leptoskit_bridge leptoskit_canvas
+	gallery leptoskit_3d leptoskit_bench_counter leptoskit_bench_guest leptoskit_bridge
+	leptoskit_canvas
 	leptoskit_extension
 	leptoskit_l10n
-	leptoskit_plugin_accelerometer leptoskit_plugin_application leptoskit_plugin_autostart
+	leptoskit_plugin_accelerometer leptoskit_plugin_application leptoskit_plugin_audio
+	leptoskit_plugin_autostart
 	leptoskit_plugin_barometer leptoskit_plugin_battery leptoskit_plugin_brightness
 	leptoskit_plugin_crypto leptoskit_plugin_dialog leptoskit_plugin_document_picker
 	leptoskit_plugin_global_shortcut leptoskit_plugin_gyroscope leptoskit_plugin_home_widgets
@@ -70,12 +72,12 @@ wasm_library=(
 	leptoskit_plugin_location leptoskit_plugin_logging leptoskit_plugin_network
 	leptoskit_plugin_notifications leptoskit_plugin_permissions
 	leptoskit_plugin_screen_orientation leptoskit_plugin_speech leptoskit_sensor
-	leptoskit_testing leptoskit_use
+	leptoskit_testing leptoskit_use leptoskit_xr
 )
 # Default features, the library only: some of their features need the host.
 wasm_default_library=(
 	hooks_guest_probe islands_example leptoskit leptoskit_auth leptoskit_codepush leptoskit_db
-	leptoskit_plugin_store leptoskit_tui
+	leptoskit_plugin_store leptoskit_tui soundboard_example
 )
 # Default features, every target: posture's `guest` feature leaves out the
 # browser module, and with it the only use of the browser dependencies, and

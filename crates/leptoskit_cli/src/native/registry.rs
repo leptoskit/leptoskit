@@ -14,16 +14,22 @@ use async_plugins::bridge_feature;
 use async_plugins::configure_plugin;
 use async_plugins::host_features;
 use async_plugins::validate_async;
-mod implementation;
+mod capability;
+pub(crate) use capability::descriptor;
 #[cfg(test)]
+pub(crate) use capability::documentation_table;
+pub(crate) use capability::enforce_required;
+pub(crate) use capability::optional_warnings;
+pub(crate) use capability::requirements;
+mod implementation;
 pub use implementation::Capability;
 pub use implementation::Constructor;
 pub use implementation::Flavour;
 pub use implementation::HostCapabilities;
 pub use implementation::Implementation;
-#[cfg(test)]
 pub use implementation::Missing;
 pub use implementation::MissingPlugin;
+pub use implementation::NativeKind;
 pub use implementation::PlatformRegistration;
 pub use implementation::RustRegistration;
 use implementation::select_for_target;
@@ -58,6 +64,8 @@ struct Resolve {
 struct Node {
 	id: String,
 	deps: Vec<Dependency>,
+	#[serde(default)]
+	features: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 struct Dependency {
@@ -107,6 +115,10 @@ pub struct Plugin {
 	/// Required key names only; the app owns the corresponding consent text.
 	#[serde(default)]
 	pub apple_usage_descriptions: Vec<String>,
+	/// System frameworks the app's iOS target links for a Rust plugin, whose
+	/// static library can't tell Xcode which frameworks it calls.
+	#[serde(default)]
+	pub apple_frameworks: Vec<String>,
 	/// `CocoaPods` the app's iOS target installs. iOS only: the macOS host
 	/// builds with Swift Package Manager, which cannot integrate pods.
 	#[serde(default)]
@@ -200,6 +212,10 @@ pub struct Registry {
 	pub devtools_feature: Option<String>,
 	/// Selected plugins this destination leaves out, and why.
 	pub missing: Vec<MissingPlugin>,
+	/// Whether the app shows 3D scenes: it builds `leptoskit_3d` with more
+	/// than its protocol, so the host gets the bridge's `scene3d` feature and
+	/// the app's `assets/` folder.
+	pub scene3d: bool,
 }
 
 impl Plugin {
@@ -297,17 +313,20 @@ pub fn resolve(
 	resolve_for_target(metadata, &host_config, Some(target))
 }
 
-/// The Rust desktop runners (Linux, Windows, and the terminal) can't host
-/// runtime plugins yet. Rather than refuse to build an app that grants some
-/// for its other platforms, they build it without them: its configuration
-/// with no plugins, and the names left out. `None` for other targets, or
-/// when nothing is granted.
+/// The Windows and terminal runners can't host runtime plugins yet. Rather than
+/// refuse to build an app that grants some for its other platforms, they build
+/// it without them: its configuration with no plugins, and the names left out.
+/// `None` for other targets, or when nothing is granted.
 fn without_plugins(
 	config: &leptoskit_config::LeptoskitConfig,
 	target: Target,
 ) -> Option<(leptoskit_config::LeptoskitConfig, String)> {
-	if !matches!(target, Target::Linux | Target::Windows | Target::Tui)
+	if !matches!(target, Target::Windows | Target::Tui)
 		|| config.native.plugins.is_empty()
+		// Required entries must fail through the ordinary resolution so their
+		// diagnostic names the plugin and the missing host capability.
+		|| !config.native.required_plugins.is_empty()
+		|| !config.native.required_capabilities.is_empty()
 	{
 		return None;
 	}
@@ -315,6 +334,7 @@ fn without_plugins(
 	let skipped = config.native.plugins.join(", ");
 	let mut config = config.clone();
 	config.native.plugins.clear();
+	config.native.optional_plugins.clear();
 	config.native.plugin_options.clear();
 	Some((config, skipped))
 }
@@ -391,13 +411,30 @@ fn resolve_for_target(
 	let plugins = selected_plugins(available, config)?;
 
 	let (plugins, missing) = match target {
-		Some(target) => select_for_target(plugins, target, config.native.missing_plugins)?,
+		Some(target) => {
+			let (plugins, missing) = select_for_target(
+				plugins,
+				target,
+				config.native.missing_plugins,
+				&config.native.optional_plugins,
+			)?;
+			// Required capabilities fail before a host project, bundle, or
+			// package is written. Optional ones only produce diagnostics.
+			enforce_required(config, target, &plugins, &missing)?;
+			(plugins, missing)
+		}
 		None => (plugins, Vec::new()),
 	};
 
 	let bridge = bridge.context("native apps need a direct leptoskit_bridge_ffi dependency")?;
 	let support = resolve_support(&metadata, &plugins, &bridge)?;
-	let host_features = host_features(app, node, &packages, &plugins, target)?;
+	let mut host_features = host_features(app, node, &packages, &plugins, target)?;
+	let scene3d = uses_scene3d(&metadata.resolve, &packages);
+
+	if scene3d {
+		host_features.push(bridge_feature(app, node, &packages, "scene3d")?);
+	}
+
 	let devtools_feature = bridge_feature(app, node, &packages, "devtools").ok();
 	Ok(Registry {
 		package: app.name.clone(),
@@ -408,6 +445,22 @@ fn resolve_for_target(
 		host_features,
 		devtools_feature,
 		missing,
+		scene3d,
+	})
+}
+
+/// Whether the dependency graph builds `leptoskit_3d` with more than its
+/// protocol. Every app has the protocol (the `Scene3d` element names a
+/// scene), so only a feature beyond it means the app draws scenes.
+fn uses_scene3d(resolve: &Resolve, packages: &BTreeMap<&String, &Package>) -> bool {
+	resolve.nodes.iter().any(|node| {
+		packages
+			.get(&node.id)
+			.is_some_and(|package| package.name == "leptoskit_3d")
+			&& node
+				.features
+				.iter()
+				.any(|feature| matches!(feature.as_str(), "guest" | "renderer" | "web" | "host"))
 	})
 }
 
@@ -619,6 +672,7 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 	);
 
 	validate_usage_descriptions(plugin)?;
+	validate_frameworks(plugin)?;
 
 	for dependency in &plugin.android_dependencies {
 		anyhow::ensure!(
@@ -713,6 +767,18 @@ fn validate_android_paths(plugin: &Plugin) -> Result<()> {
 			bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
 				&& bytes.all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte)),
 			"invalid Android query URI scheme"
+		);
+	}
+
+	Ok(())
+}
+
+fn validate_frameworks(plugin: &Plugin) -> Result<()> {
+	for framework in &plugin.apple_frameworks {
+		anyhow::ensure!(
+			identifier(framework, ""),
+			"invalid Apple framework name in plugin {}: {framework}",
+			plugin.name
 		);
 	}
 

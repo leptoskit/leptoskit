@@ -2,11 +2,12 @@
 //!
 //! Add `leptoskit_plugin_image_manipulator` as a direct dependency and select
 //! the `image_manipulator` plugin in `native.plugins`; supported generated
-//! hosts discover it from Cargo metadata. Generated Windows, Linux, and
-//! terminal hosts currently omit runtime plugins; use explicit registration in
-//! a custom host there. Native calls run on the Rust worker so a batch takes
-//! one bridge round trip; browser calls use the same engine compiled
-//! to Wasm, and large jobs belong in a Web Worker.
+//! hosts discover it from Cargo metadata. Generated Linux hosts register it
+//! where it has a Linux Rust implementation; generated Windows and terminal
+//! hosts currently omit runtime plugins, so use explicit registration in a
+//! custom host there. Native calls run on the Rust worker so a batch takes one
+//! bridge round trip; browser calls use the same engine compiled to Wasm, and
+//! large jobs belong in a Web Worker.
 //!
 //! <!-- {/p_image_manipulatorSummary} -->
 //!

@@ -48,7 +48,40 @@ internal data class NativeSync(
     val staged: Boolean,
     val version: String,
     val build: Long,
-)
+    val contract: NativeContract?,
+) {
+    val message: String
+        get() {
+            val release = if (staged) "Update $version ($build) downloaded" else "Up to date"
+            val evidence =
+                when (contract) {
+                    NativeContract.VERIFIED -> "Host requirements checked."
+                    NativeContract.INCOMPLETE -> "Plugin availability not fully checked."
+                    NativeContract.LEGACY -> "Legacy compatibility checks only."
+                    null -> "Compatibility not reported."
+                }
+            return "$release. $evidence"
+        }
+}
+
+internal enum class NativeContract {
+    VERIFIED,
+    INCOMPLETE,
+    LEGACY,
+    ;
+
+    companion object {
+        fun parse(metadata: JSONObject): NativeContract? {
+            if (!metadata.has("contract") || metadata.isNull("contract")) return null
+            return when (val value = metadata.getString("contract")) {
+                "verified" -> VERIFIED
+                "incomplete" -> INCOMPLETE
+                "legacy" -> LEGACY
+                else -> error("Invalid compatibility state: $value")
+            }
+        }
+    }
+}
 
 /**
  * Owns the update manager on one process-wide worker. Close is queued after any
@@ -103,7 +136,12 @@ internal class NativeReleases(
             val metadata = JSONObject(NativeUpdates.sync(requireHandle()).toString(Charsets.UTF_8))
             val status = metadata.getString("status")
             check(status == "staged" || status == "current") { "Invalid update status: $status" }
-            NativeSync(status == "staged", metadata.getString("version"), metadata.getLong("build"))
+            NativeSync(
+                status == "staged",
+                metadata.getString("version"),
+                metadata.getLong("build"),
+                NativeContract.parse(metadata),
+            )
         }
 
     fun confirm(

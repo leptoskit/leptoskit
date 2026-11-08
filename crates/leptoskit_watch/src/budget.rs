@@ -153,6 +153,7 @@ fn refuse_kind(kind: NativeKind) -> Result<(), WatchError> {
 		NativeKind::Radio => Err(WatchError::UnsupportedKind("Radio")),
 		NativeKind::Slider => Err(WatchError::UnsupportedKind("Slider")),
 		NativeKind::Rive => Err(WatchError::UnsupportedKind("Rive")),
+		NativeKind::Scene3d => Err(WatchError::UnsupportedKind("Scene3d")),
 		NativeKind::Custom(name) => Err(WatchError::UnsupportedKind(name)),
 	}
 }

@@ -2,9 +2,10 @@
 //!
 //! Add `leptoskit_plugin_websocket` as a direct dependency and select the
 //! `websocket` plugin in `native.plugins`; supported generated hosts discover
-//! it from Cargo metadata. Generated Windows, Linux, and terminal hosts
-//! currently omit runtime plugins; use explicit registration in a custom host
-//! there. Native connections use tokio-tungstenite with rustls and need a Tokio
+//! it from Cargo metadata. Generated Linux hosts register it where it has a
+//! Linux Rust implementation; generated Windows and terminal hosts currently
+//! omit runtime plugins, so use explicit registration in a custom host there.
+//! Native connections use tokio-tungstenite with rustls and need a Tokio
 //! runtime; browser connections own their socket and event callbacks. Every
 //! destination origin is explicit.
 //!

@@ -56,7 +56,7 @@ Random-byte and UUID request decoders reject truncated or trailing data. All out
 
 <!-- {=p_cryptoSummary} -->
 
-Add `leptoskit_plugin_crypto` as a direct dependency and select the `crypto` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Native hashing and entropy run on the Rust worker, and browsers use the same Rust implementation compiled to Wasm.
+Add `leptoskit_plugin_crypto` as a direct dependency and select the `crypto` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native hashing and entropy run on the Rust worker, and browsers use the same Rust implementation compiled to Wasm.
 
 <!-- {/p_cryptoSummary} -->
 

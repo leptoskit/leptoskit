@@ -39,10 +39,16 @@ mod render;
 #[cfg(not(target_arch = "wasm32"))]
 mod rive;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod plugin_host;
 mod services;
 mod text;
 #[cfg(not(target_arch = "wasm32"))]
 pub use guest::*;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin_host::PluginHost;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin_host::desktop_context;
 #[cfg(not(target_arch = "wasm32"))]
 pub use rive::lk_app_has_rive;
 #[cfg(not(target_arch = "wasm32"))]
@@ -574,6 +580,13 @@ impl App {
 		self.async_host.install(host.plugins(), plugin)
 	}
 
+	/// Installs the `leptoskit.scene3d` plugin, through which the guest's
+	/// ops reach the process's 3D scenes.
+	#[cfg(feature = "scene3d")]
+	pub fn enable_scene3d(&mut self) -> Result<PluginId, Error> {
+		self.install_async(Arc::new(leptoskit_3d::host::Scene3dPlugin::new()))
+	}
+
 	fn record(&mut self, result: Result<(), leptoskit_wasm::WasmError>) -> i32 {
 		if self.render_failed {
 			return -1;
@@ -895,22 +908,39 @@ pub unsafe extern "C" fn lk_worker_execute(worker: *mut RustWorker) -> *mut Work
 
 	// SAFETY: The caller transfers the exact allocation returned above.
 	let worker = unsafe { Box::from_raw(worker) };
-	let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-		if worker.cancelled.load(Ordering::Acquire) {
+	let result = run_worker(
+		&worker.plugin,
+		worker.method,
+		worker.payload,
+		&worker.cancelled,
+	);
+	Box::into_raw(Box::new(WorkerReply(result.map(Reply::from))))
+}
+
+/// Runs one worker call unless it was cancelled first. A panic becomes a
+/// native error and poisons the plugin's mutex, so later calls fail rather
+/// than use damaged state.
+fn run_worker(
+	plugin: &Mutex<Box<dyn Plugin + Send>>,
+	method: MethodId,
+	payload: Bytes,
+	cancelled: &AtomicBool,
+) -> Result<Bytes, Error> {
+	std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		if cancelled.load(Ordering::Acquire) {
 			return Err(Error::Cancelled);
 		}
 
-		let mut plugin = worker.plugin.lock().map_err(|_| Error::Native)?;
+		let mut plugin = plugin.lock().map_err(|_| Error::Native)?;
 		// A worker can spend time waiting for another invocation. Cancellation
 		// during that wait must not begin a new filesystem/database operation.
-		if worker.cancelled.load(Ordering::Acquire) {
+		if cancelled.load(Ordering::Acquire) {
 			return Err(Error::Cancelled);
 		}
 
-		plugin.invoke(worker.method, worker.payload)
+		plugin.invoke(method, payload)
 	}))
-	.unwrap_or(Err(Error::Native));
-	Box::into_raw(Box::new(WorkerReply(result.map(Reply::from))))
+	.unwrap_or(Err(Error::Native))
 }
 
 /// Releases work that has not started, without invoking the plugin.
@@ -1200,6 +1230,32 @@ pub unsafe extern "C" fn lk_app_enable_timers(app: *mut App) -> i32 {
 	match app.enable_timers() {
 		Ok(()) => 0,
 		Err(_) => -1,
+	}
+}
+
+/// Lets the guest show 3D scenes by installing the `leptoskit.scene3d`
+/// plugin. Call before [`lk_app_start`]. Returns 1 when installed, 0 in a
+/// build without the bridge's `scene3d` feature, and -1 on failure.
+///
+/// # Safety
+/// `app` is exclusively borrowed on its owning thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_app_enable_scene3d(app: *mut App) -> i32 {
+	// SAFETY: The embedding host owns the app.
+	let Some(app) = (unsafe { app.as_mut() }) else {
+		return -1;
+	};
+	#[cfg(feature = "scene3d")]
+	{
+		match app.enable_scene3d() {
+			Ok(_) => 1,
+			Err(_) => -1,
+		}
+	}
+	#[cfg(not(feature = "scene3d"))]
+	{
+		let _ = app;
+		0
 	}
 }
 

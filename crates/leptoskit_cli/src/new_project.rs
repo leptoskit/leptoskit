@@ -133,24 +133,6 @@ pub fn run_with_options(
 		};
 		return crate::native::scaffold::run_for_target(path, name, sdk, Some(target));
 	}
-	if platform == Platform::Oculus {
-		anyhow::ensure!(
-			database.is_none() && !auth,
-			"the Meta Quest starter has no server; create a standard workspace for a database or \
-			 sign-in"
-		);
-		anyhow::ensure!(
-			!extension,
-			"the Meta Quest starter has no web client; create a standard workspace for an \
-			 extension"
-		);
-		return crate::native::scaffold::run_for_target(
-			path,
-			name,
-			sdk,
-			Some(NativeTarget::Oculus),
-		);
-	}
 
 	let database = database.or(auth.then_some(DbDialect::Sqlite));
 	let sdk = sdk.map(resolve_sdk).transpose()?;
@@ -301,7 +283,7 @@ pub(crate) const AUTH_DEV_ORIGINS: [&str; 2] = ["http://localhost:3000", "http:/
 
 /// The platforms whose hosts run runtime plugins, and so depend on the
 /// sign-in client's.
-pub(crate) const PLUGIN_PLATFORMS: [&str; 3] = ["ios", "android", "macos"];
+pub(crate) const PLUGIN_PLATFORMS: [&str; 4] = ["ios", "android", "macos", "linux"];
 
 /// `[native]` for a new app with sign-in: the plugins granted, and the
 /// development server as the HTTP plugin's only origins.
@@ -1620,13 +1602,13 @@ mod tests {
 		assert!(
 			windows.contains("features = [\"wasm\", \"rive\", \"windows\", \"codepush-http\"]")
 		);
-		// Desktop runners can't host plugins, so they don't link sign-in's.
+		// The Windows runner can't host plugins, so it doesn't link sign-in's.
 		assert!(!windows.contains("leptoskit_plugin_http"), "{windows}");
 	}
 
 	#[test]
 	fn plugin_hosts_depend_on_the_sign_in_plugins_only_with_sign_in() {
-		for platform in ["ios", "android", "macos"] {
+		for platform in ["ios", "android", "macos", "linux"] {
 			let with = host_manifest("demo", platform, None, true, true).unwrap();
 			assert!(
 				with.contains("leptoskit_plugin_http = { version = "),
@@ -1644,7 +1626,7 @@ mod tests {
 
 	#[test]
 	fn database_hosts_depend_on_the_http_plugin() {
-		for platform in ["ios", "android", "macos"] {
+		for platform in ["ios", "android", "macos", "linux"] {
 			let with = host_manifest("demo", platform, None, false, true).unwrap();
 			assert!(
 				with.contains("leptoskit_plugin_http = { version = "),

@@ -1,6 +1,6 @@
 # Huddle
 
-A team chat with a task board, built to show every real-time primitive in leptoskit at once: live queries, channels with presence, background jobs, actions, and the inbox. One server, one database, and one interface that renders in the browser and as native widgets on macOS and iOS.
+A team chat with a task board, built to show every real-time primitive in leptoskit at once: live queries, channels with presence, background jobs, actions, and the inbox. One server, one database, and one interface that renders in the browser and as native widgets on macOS, iOS, and Linux.
 
 Open it in two windows, sign in as two people, and type in one: the other sees the message, the unread count, and "Ada is typing…" as they happen.
 
@@ -28,7 +28,7 @@ Sign-in is the screen `leptoskit generate auth` writes, with emailed codes. Ever
 
 ```text
 examples/huddle/
-├── leptoskit.toml   # web, iOS, and macOS; client-rendered; SQLite; [auth]; [rpc.jobs]
+├── leptoskit.toml   # web, iOS, macOS, and Linux; client-rendered; SQLite; [auth]; [rpc.jobs]
 ├── huddle_db/       # the tables, their policies, the auth and rpc packs, and the sign-up hook
 ├── huddle_api/      # queries, mutations, the room, jobs, and actions, shared by the server and every client
 ├── huddle_app/      # one interface for the browser and the native guest, in view! markup
@@ -36,7 +36,7 @@ examples/huddle/
 ├── load/            # huddle-load: thousands of simulated clients over the live protocol
 ├── migrations/      # written by `leptoskit db migration create`
 ├── deploy/          # written by `leptoskit generate deploy` for Fly and Compose
-├── ios/, macos/     # the native hosts
+├── ios/, macos/, linux/ # the native hosts
 └── web/index.html
 ```
 
@@ -57,14 +57,17 @@ leptoskit dev
 
 `leptoskit dev` builds the web client and the server, migrates `huddle.sqlite3`, and serves both at `http://127.0.0.1:3000`. Open it in two windows (one private, so they keep separate cookies), press **Ada** in one and **Grace** in the other, and talk. The board, invitations, reminders, and tips are under **Board** and **Activity**; notices are under **Notices**.
 
-### On macOS and the iOS simulator
+### On macOS, the iOS simulator, and Linux
 
 With the server from `leptoskit dev` running:
 
 ```bash
 leptoskit dev --platform macos
 leptoskit dev --platform ios     # the iOS simulator
+leptoskit dev --platform linux   # on Linux, with GTK 4
 ```
+
+The Linux app keeps the session in the desktop's keyring through the Secret Service, such as GNOME Keyring or KWallet, and has no passkeys.
 
 The native apps reach `http://127.0.0.1:3000` through the HTTP and WebSocket plugins. They sign in with an emailed code, since dev sign-in sets a browser cookie: type an address, open `http://127.0.0.1:3000/_leptoskit/mail` for the code, and type it in. A native app that was already signed in when it opened goes live at once; one that signs in while open shows the data and goes live the next time it starts (see the gaps below).
 
@@ -146,5 +149,5 @@ Ending a first-party session now refuses its open connections through the shared
 - **Optimistic messages use an app-made key.** Mutation hooks use the live connection while available and HTTP otherwise. Each pending message carries a key the sender made, and the screen keeps its grey copy until the live list has that key.
 - **History is a page.** `messages` takes `before` for older pages, but the screen shows the latest fifty; `use_live_paginated` is available, but this screen does not use it yet.
 - **Deployment files use the repository root.** The generator accepts this client-rendered app because `app.name` names the backend and `build.client_package` names the browser client. The committed `deploy/` files are adapted to build from the repository root.
-- **Only web, macOS, and iOS.** The same guest would run on Android, Windows, and Linux, but their hosts aren't set up here. The browser client and the guest are linted for wasm in CI. The macOS app has been built with `leptoskit build --platform macos` and opened against a local server, where it connected over HTTP and the live socket; signing in on it, and the iOS build, haven't been driven yet.
-- **The hosts are workspace members.** `leptoskit build` builds a host as a member of the app's workspace, and Huddle's crates are members of the repository's, so `ios/` and `macos/` are too. Their build scripts copy the generated registrant only into the CLI's own build of them (`target/leptoskit-native/`), so the workspace builds and lints without one.
+- **Only web, macOS, iOS, and Linux.** The same guest would run on Android and Windows, but their hosts aren't set up here. The browser client and the guest are linted for wasm in CI. The macOS app has been built with `leptoskit build --platform macos` and opened against a local server, where it connected over HTTP and the live socket; signing in on it, and the iOS build, haven't been driven yet.
+- **The hosts are workspace members.** `leptoskit build` builds a host as a member of the app's workspace, and Huddle's crates are members of the repository's, so `ios/` and `macos/` are too. Their build scripts copy the generated registrant only into the CLI's own build of them (`target/leptoskit-native/`), so the workspace builds and lints without one. The Linux runner is the one `leptoskit new` writes, which compiles only once `leptoskit build` has generated its registrant, so `linux/` is a workspace of its own, with its own `Cargo.lock`.

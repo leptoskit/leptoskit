@@ -3,14 +3,14 @@
 schema_version = 0
 
 # Commonplace is a research notebook: a server with the API and sign-in, a
-# website, native apps for iOS, Android, and macOS, and (as the extension
+# website, native apps for iOS, Android, macOS, and Linux, and (as the extension
 # platform lands) a browser extension that clips quotes from the web.
 
 [app]
 name = "commonplace"
 version = "0.1.0"
 default_platform = "web"
-platforms = ["web", "ios", "android", "macos", "extension"]
+platforms = ["web", "ios", "android", "macos", "linux", "extension"]
 # The website renders in the browser, like every other client, and reaches
 # the server through the same JSON API.
 render = "csr"

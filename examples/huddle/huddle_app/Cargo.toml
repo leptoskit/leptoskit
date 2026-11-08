@@ -40,6 +40,7 @@ csr = ["web", "leptos/csr"]
 native = ["leptoskit/guest", "huddle_api/guest"]
 ios = ["native"]
 macos = ["native"]
+linux = ["native"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 

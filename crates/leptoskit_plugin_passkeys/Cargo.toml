@@ -21,6 +21,11 @@ android-dependencies = [
 	"androidx.credentials:credentials-play-services-auth:1.5.0",
 ]
 
+# Linux has no platform passkeys: the sign-in client offers providers and
+# emailed codes there instead.
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 

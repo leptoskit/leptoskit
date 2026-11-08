@@ -57,7 +57,7 @@ Wire methods: `0` writes a binary record and returns a `u32` accepted flag (`0` 
 
 <!-- {=p_loggingSummary} -->
 
-Add `leptoskit_plugin_logging` as a direct dependency and select the `logging` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. There is no global logger or remote backend; the host chooses the log directory and limits, and the guest protocol stays bounded independently of JSON-lines output.
+Add `leptoskit_plugin_logging` as a direct dependency and select the `logging` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. There is no global logger or remote backend; the host chooses the log directory and limits, and the guest protocol stays bounded independently of JSON-lines output.
 
 <!-- {/p_loggingSummary} -->
 

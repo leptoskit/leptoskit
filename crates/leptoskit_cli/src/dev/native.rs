@@ -164,6 +164,12 @@ fn succeeds(command: &mut Command) -> bool {
 		.is_ok_and(|status| status.success())
 }
 
+/// Whether `maker`, a device's `ro.product.manufacturer`, makes Quest
+/// headsets: Oculus on Quest 2 and Pro, Meta on later ones.
+fn is_headset_maker(maker: &str) -> bool {
+	matches!(maker.trim(), "Oculus" | "Meta")
+}
+
 /// Where one platform's app runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Device {
@@ -392,7 +398,9 @@ impl Tools {
 				Err("the iOS Simulator needs Xcode's command-line tools".to_owned())
 			}
 
-			Platform::Android if !succeeds(Command::new(&self.adb).arg("version")) => {
+			Platform::Android | Platform::Quest
+				if !succeeds(Command::new(&self.adb).arg("version")) =>
+			{
 				Err("set ANDROID_HOME to an Android SDK with platform-tools installed".to_owned())
 			}
 
@@ -423,13 +431,6 @@ impl Tools {
 						.to_owned(),
 				)
 			}
-			Platform::Oculus => {
-				Err(
-					"`leptoskit dev` does not run Meta Quest apps yet; Oculus support is \
-					 experimental — see the Oculus platform page"
-						.to_owned(),
-				)
-			}
 			Platform::Extension => self.extension_browser.support(),
 			_ => Ok(()),
 		}
@@ -447,6 +448,7 @@ impl Tools {
 			Platform::Linux => Ok(vec![Device::Local(Target::Linux)]),
 			Platform::Ios => self.simulators(wanted),
 			Platform::Android => self.android_devices(wanted),
+			Platform::Quest => self.headsets(wanted),
 			other => anyhow::bail!("`leptoskit dev` has no devices for {other}"),
 		}
 	}
@@ -582,6 +584,43 @@ impl Tools {
 			.collect();
 		anyhow::ensure!(!devices.is_empty(), "no attached Android device is ready");
 		Ok(devices)
+	}
+
+	/// The attached Meta Quest headsets, by adb serial. There is no headset
+	/// emulator to start, so none attached is an error.
+	fn headsets(&self, wanted: &[String]) -> Result<Vec<Device>> {
+		let mut serials = self.adb_serials()?;
+
+		if !wanted.is_empty() {
+			serials.retain(|serial| wanted.contains(serial));
+		}
+
+		let headsets: Vec<Device> = serials
+			.into_iter()
+			.filter(|serial| {
+				self.adb_shell(serial, "getprop ro.product.manufacturer")
+					.is_ok_and(|maker| is_headset_maker(&maker))
+			})
+			.filter_map(|serial| {
+				match self.android_device(&serial) {
+					Ok(Device::Android {
+						serial,
+						target: Target::Android,
+					}) => {
+						Some(Device::Android {
+							serial,
+							target: Target::Quest,
+						})
+					}
+					_ => None,
+				}
+			})
+			.collect();
+		anyhow::ensure!(
+			!headsets.is_empty() || !wanted.is_empty(),
+			"no Meta Quest is attached; connect one with USB debugging on (Developer Mode in the 			 Meta Horizon app)"
+		);
+		Ok(headsets)
 	}
 
 	/// Waits for `serial` to finish booting, then reads which build it runs.
@@ -1444,6 +1483,13 @@ esac"#,
 		)
 		.unwrap();
 		assert!(native.is_empty(), "no attached device matches --device");
+	}
+
+	#[test]
+	fn quest_headsets_are_told_by_their_maker() {
+		assert!(is_headset_maker("Oculus\n"));
+		assert!(is_headset_maker("Meta"));
+		assert!(!is_headset_maker("samsung"));
 	}
 
 	#[cfg(unix)]

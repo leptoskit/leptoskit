@@ -1,3 +1,6 @@
+mod capability_tests {
+	include!("capability_tests.rs");
+}
 mod service_tests {
 	include!("service_tests.rs");
 }
@@ -51,6 +54,41 @@ fn registers_selected_direct_dependencies_using_their_cargo_alias() {
 	assert!(resolve_metadata(metadata("Plugin"), &config).is_err());
 	config.native.plugins = vec!["echo".into(), "echo".into()];
 	assert!(resolve_metadata(metadata("Plugin"), &config).is_err());
+}
+
+/// The test app, depending on `leptoskit_3d` built with `features`.
+fn scene_metadata(features: &[&str]) -> Metadata {
+	let mut metadata = metadata("Plugin");
+	metadata.packages.push(
+		serde_json::from_value(json!({
+			"id": "scene3d", "name": "leptoskit_3d", "manifest_path": "/sdk/3d/Cargo.toml",
+			"metadata": {}
+		}))
+		.unwrap(),
+	);
+	metadata.resolve.nodes.push(
+		serde_json::from_value(json!({"id": "scene3d", "deps": [], "features": features})).unwrap(),
+	);
+	metadata
+}
+
+#[test]
+fn apps_that_draw_scenes_get_the_bridge_s_scene3d_feature() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	// Every app has the protocol, through the `Scene3d` element.
+	let registry = resolve_metadata(scene_metadata(&[]), &config).unwrap();
+	assert!(!registry.scene3d);
+	assert_eq!(registry.host_features, [] as [String; 0]);
+	for feature in ["guest", "web", "renderer"] {
+		let registry = resolve_metadata(scene_metadata(&[feature]), &config).unwrap();
+		assert!(registry.scene3d, "{feature}");
+		assert_eq!(
+			registry.host_features,
+			["ffi/scene3d"],
+			"the bridge's alias"
+		);
+	}
 }
 
 #[test]
@@ -453,19 +491,21 @@ fn desktop_runners_build_without_the_plugins_they_cannot_host() {
 		.plugin_options
 		.insert("http".into(), toml::Table::new());
 
-	for target in [Target::Linux, Target::Windows, Target::Tui] {
+	for target in [Target::Windows, Target::Tui] {
 		let (desktop, skipped) = without_plugins(&config, target).unwrap();
 		assert_eq!(desktop.native.plugins, [] as [String; 0]);
 		assert!(desktop.native.plugin_options.is_empty());
 		assert_eq!(skipped, "http, secure-store");
 	}
 
-	for target in [Target::Ios, Target::Android, Target::Macos] {
+	// The Linux runner hosts plugins, so it resolves them like the mobile
+	// hosts do.
+	for target in [Target::Ios, Target::Android, Target::Macos, Target::Linux] {
 		assert!(without_plugins(&config, target).is_none());
 	}
 
 	config.native.plugins.clear();
-	assert!(without_plugins(&config, Target::Linux).is_none());
+	assert!(without_plugins(&config, Target::Windows).is_none());
 }
 
 /// A registry with `plugins` and nothing else, for helpers that only read
@@ -480,6 +520,7 @@ fn pod_registry(plugins: Vec<Plugin>) -> Registry {
 		host_features: Vec::new(),
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 

@@ -54,7 +54,7 @@ This ports the basic information surface of [Expo Device](https://docs.expo.dev/
 
 <!-- {=p_deviceSummary} -->
 
-Add `leptoskit_plugin_device` as a direct dependency and select the `device` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Device` rather than resolving the plugin on every call. Native guests, Rust desktop hosts, and browsers each return a validated binary snapshot with the fields that platform can actually provide.
+Add `leptoskit_plugin_device` as a direct dependency and select the `device` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Device` rather than resolving the plugin on every call. Native guests, Rust desktop hosts, and browsers each return a validated binary snapshot with the fields that platform can actually provide.
 
 <!-- {/p_deviceSummary} -->
 

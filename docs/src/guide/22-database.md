@@ -23,7 +23,7 @@ Next to the usual crates, the scaffold adds:
 - a server that applies pending migrations before it serves the first request;
 - a `notes` query and an `add_note` mutation in `my_app_shared`, which every platform calls by name, and which the server answers at `POST /api/notes` and `POST /api/add_note` and over its live socket. They're published, so `leptoskit rpc generate` writes clients for them; [Sharing the RPC](13-sharing-the-rpc.md#in-a-new-app) shows one.
 
-The app's home screen is a small notes screen built from those two operations. It shows loading, empty, failed, and loaded states, checks the body before it sends it, reports the save result, and has a Refresh button. In the browser it follows the live socket; native apps use the HTTP plugin and Refresh, and the Linux, Windows, and terminal hosts report that they can't reach the server because they don't host plugins yet.
+The app's home screen is a small notes screen built from those two operations. It shows loading, empty, failed, and loaded states, checks the body before it sends it, reports the save result, and has a Refresh button. In the browser it follows the live socket; native apps, Linux's included, use the HTTP plugin and Refresh, and the Windows and terminal hosts report that they can't reach the server because they don't host plugins yet.
 
 An app created by an earlier leptoskit served `GET /api/notes` and `POST /api/notes` from handlers in its backend instead, and keeps them until you change them.
 

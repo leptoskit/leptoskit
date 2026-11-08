@@ -42,6 +42,9 @@ object NativeApp {
     /** Offers the guest real sleeps; call before [guestSpawn]. */
     @JvmStatic external fun enableTimers(app: Long): Int
 
+    /** Installs the `leptoskit.scene3d` plugin: 1, or 0 when the app was built without 3D. */
+    @JvmStatic external fun enableScene3d(app: Long): Int
+
     @JvmStatic external fun error(app: Long): ByteArray
 
     /**

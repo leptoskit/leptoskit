@@ -61,7 +61,7 @@ References: [Tauri HTTP plugin](https://v2.tauri.app/plugin/http/), [reqwest](ht
 
 <!-- {=p_httpSummary} -->
 
-Add `leptoskit_plugin_http` as a direct dependency and select the `http` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Native requests use reqwest with rustls and need a Tokio runtime; the browser uses fetch with incremental body reading. Redirects are not followed, and every destination origin is explicit.
+Add `leptoskit_plugin_http` as a direct dependency and select the `http` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native requests use reqwest with rustls and need a Tokio runtime; the browser uses fetch with incremental body reading. Redirects are not followed, and every destination origin is explicit.
 
 <!-- {/p_httpSummary} -->
 

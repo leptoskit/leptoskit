@@ -46,6 +46,8 @@
 //!   feature).
 //! - `rive` — bounded assets and native/browser Rive playback (the `rive`
 //!   feature; rendering also needs `web`).
+//! - `scene3d` — GPU 3D scenes of glTF models that the host owns and animates,
+//!   shown by a `Scene3d` view (the `3d` feature).
 //! - `l10n` — typed translations in the style of Flutter's `gen_l10n`: the
 //!   runtime behind the module `leptoskit l10n` writes from ARB files (the
 //!   `l10n` feature).
@@ -416,6 +418,14 @@ pub mod agent_ui {
 	//! Interfaces an AI agent writes as text while the app runs: Markdown with
 	//! components, variables, formulas, charts, and actions.
 	pub use leptoskit_agent_ui::*;
+}
+
+#[cfg(feature = "3d")]
+pub mod scene3d {
+	//! GPU 3D scenes: glTF models, animation, lights, and a camera, owned and
+	//! drawn by the host. Build one with [`client::Scene`] and show it with a
+	//! `Scene3d` view.
+	pub use leptoskit_3d::*;
 }
 
 #[cfg(feature = "rive")]

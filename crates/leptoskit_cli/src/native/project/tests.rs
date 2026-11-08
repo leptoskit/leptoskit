@@ -28,6 +28,7 @@ fn metadata_registry(root: &Path, metadata: &[serde_json::Value]) -> Registry {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 
@@ -170,6 +171,35 @@ fn android_emits_selected_maven_dependencies_once_and_removes_stale_entries() {
 	)
 	.unwrap();
 	assert_eq!(std::fs::read(&path).unwrap(), [] as [u8; 0]);
+
+	// The Quest build writes the same host with the headset's manifest.
+	write(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		&include_str!("../templates/AndroidManifest.xml")
+			.replace("__NAME__", "app")
+			.replace("__PACKAGE__", "dev.example.app"),
+	)
+	.unwrap();
+	let config = leptoskit_config::LeptoskitConfig::default();
+	android_host(
+		&root,
+		&config,
+		&registry,
+		"arm64-v8a",
+		Some(&config.native.quest),
+	)
+	.unwrap();
+	let manifest =
+		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
+	assert!(
+		manifest.contains("com.oculus.intent.category.VR"),
+		"{manifest}"
+	);
+	assert!(manifest.contains("org.khronos.openxr.permission.OPENXR"));
+	android(&root, &config, &registry, "arm64-v8a").unwrap();
+	let manifest =
+		std::fs::read_to_string(root.join(".leptoskit/android/AndroidManifest.xml")).unwrap();
+	assert!(!manifest.contains("com.oculus"), "{manifest}");
 	std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -208,6 +238,7 @@ fn ios_passes_presentation_context_only_to_plugins_that_request_it() {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	};
 	ios::generate(
 		&root,
@@ -458,6 +489,7 @@ fn host_registry(root: &Path) -> Registry {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
 

@@ -2,7 +2,7 @@
 
 On iOS, Android, and the other native platforms, your app's code runs as WebAssembly inside the host. That keeps it portable and lets [code push](../guide/05-code-push.md) replace it, but WebAssembly can't call UIKit, Android's Java APIs, or any other operating system library directly. A **runtime plugin** bridges that gap: a crate with a Rust API your app calls, and a native implementation that the host runs on its behalf.
 
-leptoskit ships plugins for the clipboard, device and app information, battery and network state, how a foldable is folded, haptics, links, permissions, secure storage, files, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, six sensors, cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
+leptoskit ships plugins for the clipboard, device and app information, battery and network state, how a foldable is folded, haptics, sound playback, links, permissions, secure storage, files, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, six sensors, cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
 
 Runtime plugins are different from the `[[plugins]]` table in `leptoskit.toml`, which turns on build plugins.
 
@@ -46,7 +46,7 @@ plugins = ["clipboard"]
 
 The next native build registers the plugin with the host and grants your app its methods. A plugin that is a host dependency but isn't listed stays unregistered, and one that is listed but missing from the host stops the build. A plugin with no implementation for the platform being built, such as `haptics` on Linux, is left out with a warning, and calls to it fail with `Unavailable` there; [plugins a platform can't run](host-projects.md#plugins-a-platform-cant-run) lists what each platform leaves out. [Host projects](host-projects.md#automatic-plugin-registration) covers the details.
 
-The generated Linux, Windows, and terminal runners can't host plugins yet. A build for one of them leaves out everything in `native.plugins` and warns that it did, so the same `leptoskit.toml` still builds there; your app's calls to those plugins fail as unavailable, which each plugin's client reports as an error.
+The generated Linux app registers the plugins written in Rust, such as `os`, `crypto`, `store`, and `http`, the same way the mobile and macOS hosts do. The generated Windows and terminal runners can't host plugins yet. A build for one of them leaves out everything in `native.plugins` and warns that it did, so the same `leptoskit.toml` still builds there; your app's calls to those plugins fail as unavailable, which each plugin's client reports as an error.
 
 Granting a plugin doesn't grant operating-system permissions. Plugins that need one, such as location or the camera, say which `Info.plist` strings, manifest permissions, or entitlements to add, and your app still asks the user at run time.
 

@@ -2,8 +2,9 @@
 //!
 //! Add `leptoskit_plugin_secure_store` as a direct dependency and select the
 //! `secure-store` plugin in `native.plugins`; supported generated hosts
-//! discover it from Cargo metadata. Generated Windows, Linux, and terminal
-//! hosts currently omit runtime plugins; use explicit registration in a custom
+//! discover it from Cargo metadata. Generated Linux hosts register it where it
+//! has a Linux Rust implementation; generated Windows and terminal hosts
+//! currently omit runtime plugins, so use explicit registration in a custom
 //! host there. Guests enable the `guest` feature and reuse `guest::SecureStore`
 //! rather than resolving the plugin on every call. Native mobile handlers ship
 //! with the crate; desktop hosts construct the store over their own credential
@@ -597,6 +598,23 @@ mod desktop {
 ))]
 pub use desktop::SecureStore;
 
+/// The store for a generated desktop app, named by its application ID. The
+/// generated hosts name the app's data directory after `native.package_id`, so
+/// that directory's name is the ID.
+///
+/// # Errors
+/// [`Error::InvalidArgument`] when the data directory's name isn't a valid
+/// application ID.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+pub fn from_context(context: &leptoskit_bridge::AppContext) -> Result<SecureStore, Error> {
+	let application = context
+		.data_dir
+		.file_name()
+		.and_then(std::ffi::OsStr::to_str)
+		.ok_or(Error::InvalidArgument)?;
+	SecureStore::new(application)
+}
+
 /// Browser environments have no supported OS credential-store backend.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
 #[expect(
@@ -739,6 +757,23 @@ mod tests {
 		let request = Request::decode(SET, &payload).unwrap();
 		assert_eq!(request.key, key);
 		assert_eq!(request.secret, Some([0, 255, 128].as_slice()));
+	}
+
+	#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+	#[test]
+	fn a_desktop_context_names_the_store_after_its_data_directory() {
+		let context = |name: &str| {
+			leptoskit_bridge::AppContext::new(
+				std::path::Path::new("/home/someone/.local/share").join(name),
+				std::path::Path::new("/home/someone/.cache").join(name),
+			)
+		};
+
+		assert!(from_context(&context("dev.example.notes")).is_ok());
+		assert!(matches!(
+			from_context(&context("not an id")),
+			Err(Error::InvalidArgument)
+		));
 	}
 	#[test]
 	fn framing_rejects_truncation_trailers_and_wrong_method() {

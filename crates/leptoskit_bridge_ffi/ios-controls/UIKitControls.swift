@@ -284,6 +284,7 @@ final class UIKitControls: UIResponder, UIApplicationDelegate {
     private func run() async {
         do {
             try "".write(to: output, atomically: true, encoding: .utf8)
+            try updateContractReports()
             initialErrorBeforeLayout()
             try labelledTextAccessibility()
             try interactionControls()

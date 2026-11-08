@@ -35,6 +35,9 @@ internal class WidgetProps(
     /** What a text field holds, as HTML's `autocomplete`; it travels in [rest]. */
     val autocomplete: String? = rest?.takeUnless { it.isNull("autocomplete") }?.getString("autocomplete")
 
+    /** The scene a `Scene3d` shows; it travels in [rest]. */
+    val scene3d: Long? = rest?.takeUnless { it.isNull("scene3d") }?.getLong("scene3d")
+
     /** Where a scroll view's content is scrolled to; it travels in [rest]. */
     val scrollOffset: ScrollOffset? = rest?.optJSONObject("scroll_offset")?.let(ScrollOffset::fromJson)
 

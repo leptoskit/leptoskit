@@ -8,6 +8,8 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Subcommand;
 use clap::ValueEnum;
+use leptoskit_codepush::capability::HostCapabilityDescriptor;
+use leptoskit_codepush::capability::RUNTIME_CONTRACT_VERSION;
 use leptoskit_config::LeptoskitConfig;
 use leptoskit_config::Optimize;
 use leptoskit_config::Platform;
@@ -20,9 +22,9 @@ mod guest_profile;
 mod harmonyos;
 mod lock;
 mod manifest;
-mod oculus;
 mod platforms;
 mod project;
+mod quest;
 mod registry;
 mod watch;
 
@@ -84,8 +86,9 @@ pub enum Target {
 	Wearos,
 	/// Experimental Apple watchOS watch host.
 	Watchos,
-	/// Experimental Meta Quest / Oculus host (platform extension crate).
-	Oculus,
+	/// Meta Quest headsets (Horizon OS): the Android host, packaged as a VR
+	/// app.
+	Quest,
 	/// A native Windows application for this machine's architecture.
 	Windows,
 	/// A native GTK application for this machine's architecture.
@@ -103,16 +106,13 @@ impl Target {
 			Self::IosSimulator if cfg!(target_arch = "x86_64") => "x86_64-apple-ios",
 			Self::IosSimulator => "aarch64-apple-ios-sim",
 			Self::Ios => "aarch64-apple-ios",
-			Self::Android | Self::Wearos => "aarch64-linux-android",
+			Self::Android | Self::Wearos | Self::Quest => "aarch64-linux-android",
 			Self::AndroidX86_64 => "x86_64-linux-android",
 			Self::Harmonyos => "aarch64-unknown-linux-ohos",
 			Self::HarmonyosX86_64 => "x86_64-unknown-linux-ohos",
 			// watchOS packaging is experimental; the stub guest still targets
 			// the device arm64 watchOS triple for future hosts.
 			Self::Watchos => "aarch64-apple-watchos",
-			// Quest is Android-derived; the stub guest targets the device arm64
-			// Android triple until an OpenXR-specific triple is required.
-			Self::Oculus => "aarch64-linux-android",
 
 			Self::Windows if cfg!(target_arch = "aarch64") => "aarch64-pc-windows-msvc",
 			Self::Windows => "x86_64-pc-windows-msvc",
@@ -124,6 +124,33 @@ impl Target {
 		}
 	}
 
+	/// The stable destination flavour a capability contract names.
+	pub(crate) fn flavor(self) -> &'static str {
+		match self {
+			Self::Macos => "macos",
+			Self::IosSimulator => "ios-simulator",
+			Self::Ios => "ios",
+			Self::Android => "android",
+			Self::AndroidX86_64 => "android-x86_64",
+			Self::Harmonyos => "harmonyos",
+			Self::HarmonyosX86_64 => "harmonyos-x86_64",
+			Self::Wearos => "wearos",
+			Self::Watchos => "watchos",
+			Self::Quest => "quest",
+			Self::Windows => "windows",
+			Self::Linux => "linux",
+			Self::Tui => "tui",
+		}
+	}
+
+	/// Whether the destination itself is experimental.
+	pub(crate) fn experimental(self) -> bool {
+		matches!(
+			self,
+			Self::Harmonyos | Self::HarmonyosX86_64 | Self::Wearos | Self::Watchos
+		)
+	}
+
 	pub(crate) fn platform(self) -> Platform {
 		match self {
 			Self::Macos => Platform::Macos,
@@ -132,7 +159,7 @@ impl Target {
 			Self::Harmonyos | Self::HarmonyosX86_64 => Platform::Harmonyos,
 			Self::Wearos => Platform::Wearos,
 			Self::Watchos => Platform::Watchos,
-			Self::Oculus => Platform::Oculus,
+			Self::Quest => Platform::Quest,
 			Self::Windows => Platform::Windows,
 			Self::Linux => Platform::Linux,
 			Self::Tui => Platform::Tui,
@@ -149,8 +176,27 @@ impl Target {
 	pub(crate) fn reports_to_devtools(self) -> bool {
 		matches!(
 			self,
-			Self::Macos | Self::Ios | Self::IosSimulator | Self::Android | Self::AndroidX86_64
+			Self::Macos
+				| Self::Ios
+				| Self::IosSimulator
+				| Self::Android
+				| Self::AndroidX86_64
+				| Self::Quest
 		)
+	}
+
+	/// Whether this target builds the Android host: the phones, and Quest.
+	pub(crate) fn is_android(self) -> bool {
+		matches!(self, Self::Android | Self::AndroidX86_64 | Self::Quest)
+	}
+
+	/// The platform whose host directory this target builds. Quest packages
+	/// the Android host rather than keeping a project of its own.
+	fn host_platform(self) -> Platform {
+		match self {
+			Self::Quest => Platform::Android,
+			other => other.platform(),
+		}
 	}
 
 	pub(crate) fn from_platform(platform: Platform) -> Result<Self> {
@@ -163,7 +209,7 @@ impl Target {
 			Platform::Harmonyos => Ok(Self::Harmonyos),
 			Platform::Wearos => Ok(Self::Wearos),
 			Platform::Watchos => Ok(Self::Watchos),
-			Platform::Oculus => Ok(Self::Oculus),
+			Platform::Quest => Ok(Self::Quest),
 			Platform::Tui => Ok(Self::Tui),
 			_ => anyhow::bail!("{platform} is not a concrete native platform"),
 		}
@@ -185,7 +231,7 @@ fn host_triple() -> &'static str {
 
 /// App-owned platform integration, with support for existing native projects.
 pub(crate) fn host_dir(root: &Path, target: Target) -> PathBuf {
-	let platform = target.platform().to_string();
+	let platform = target.host_platform().to_string();
 	let directory = root.join(&platform);
 
 	if directory.join("Cargo.toml").is_file() {
@@ -200,11 +246,11 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	let generated = root.join(".leptoskit");
 
 	if root
-		.join(target.platform().to_string())
+		.join(target.host_platform().to_string())
 		.join("Cargo.toml")
 		.is_file()
 	{
-		return generated.join(target.platform().to_string());
+		return generated.join(target.host_platform().to_string());
 	}
 
 	generated
@@ -221,27 +267,27 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	if matches!(target, Target::Wearos | Target::Watchos) {
 		ensure_target_enabled(&config, target)?;
+		registry::enforce_required(&config, target, &[], &[])?;
+		let contract = registry::descriptor(&config, target, &[], &[]);
+		contract.validate()?;
 		let native = if target == Target::Wearos {
 			leptoskit_config::NativeTarget::Wearos
 		} else {
 			leptoskit_config::NativeTarget::Watchos
 		};
 		watch::scaffold(&root, &config, native)?;
+		write_capabilities(
+			&root
+				.join(".leptoskit")
+				.join(target.platform().to_string())
+				.join("capabilities.json"),
+			&contract,
+		)?;
+		for warning in registry::optional_warnings(&config, target, &[], &[]) {
+			eprintln!("{warning}");
+		}
 		if build {
 			return watch::build(target);
-		}
-		println!(
-			"prepared experimental {} host stubs under hosts/{}",
-			target.platform(),
-			target.platform()
-		);
-		return Ok(());
-	}
-	if matches!(target, Target::Oculus) {
-		ensure_target_enabled(&config, target)?;
-		oculus::scaffold(&root, &config)?;
-		if build {
-			return oculus::build(target);
 		}
 		println!(
 			"prepared experimental {} host stubs under hosts/{}",
@@ -266,18 +312,21 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	project::generate(&root, &config, &registry, target, release)?;
 	let generated = generated_dir(&root, target);
 	let bundle_dir = generated.join("bundle");
-	bundle(
+	let contract = bundle(
 		&root,
 		&config,
+		&registry.plugins,
+		&registry.missing,
 		target,
 		release,
 		Some(&build_dir),
 		&bundle_dir,
 	)?;
+	write_capabilities(&generated.join("capabilities.json"), &contract)?;
 
 	if matches!(target, Target::Linux | Target::Windows | Target::Tui) {
-		write_assets(&root, &config, target, &bundle_dir, release)?;
-		rust_desktop::build(&root, &config, target, release)?;
+		write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
+		rust_desktop::build(&root, &config, target, release, &registry.host_features)?;
 
 		return Ok(());
 	}
@@ -300,7 +349,11 @@ pub fn run(command: NativeCommand) -> Result<()> {
 			.join("libleptoskit_app.a"),
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
-	write_assets(&root, &config, target, &bundle_dir, release)?;
+	write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
+
+	if registry.scene3d {
+		stage_scene_assets(&root, target)?;
+	}
 
 	if build {
 		build_application(&root, &config, target, release)?;
@@ -327,7 +380,35 @@ fn run_bundle(out: &str, target: Option<Target>) -> Result<()> {
 		)
 		.context("native bundle requires --target when app.default_platform is web or server")?;
 	ensure_target_enabled(&config, target)?;
-	bundle(&root, &config, target, true, None, &root.join(out))
+	// A guest with no runtime plugins needs no dependency resolution; the
+	// host descriptor still covers the destination's built-in capabilities.
+	let (plugins, missing) = if config.native.plugins.is_empty() {
+		registry::enforce_required(&config, target, &[], &[])?;
+		(Vec::new(), Vec::new())
+	} else {
+		let registry = registry::resolve(&root, &config, target)?;
+		(registry.plugins, registry.missing)
+	};
+	let output = root.join(out);
+	let contract = bundle(
+		&root, &config, &plugins, &missing, target, true, None, &output,
+	)?;
+	write_capabilities(&output.with_extension("capabilities.json"), &contract)?;
+	Ok(())
+}
+
+/// Saves the resolved host contract next to the guest, never inside the signed
+/// guest bundle: the host descriptor is local build evidence, not a guest
+/// claim.
+fn write_capabilities(path: &Path, contract: &HostCapabilityDescriptor) -> Result<()> {
+	contract.validate()?;
+
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+
+	std::fs::write(path, serde_json::to_vec_pretty(contract)?)?;
+	Ok(())
 }
 
 /// Rejects a destination this machine or configuration cannot build, before
@@ -412,7 +493,7 @@ fn host_library_command(
 		host.args(["--features", &features.join(",")]);
 	}
 
-	if matches!(target, Target::Android | Target::AndroidX86_64) {
+	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
 	} else if matches!(target, Target::Ios | Target::IosSimulator | Target::Macos) {
 		for (key, value) in apple_cc_environment(target) {
@@ -469,10 +550,10 @@ fn configure_android_toolchain(
 	target: Target,
 	ndk: &Path,
 ) -> Result<()> {
-	let architecture = if matches!(target, Target::Android) {
-		"aarch64"
-	} else {
+	let architecture = if matches!(target, Target::AndroidX86_64) {
 		"x86_64"
+	} else {
+		"aarch64"
 	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
@@ -530,12 +611,11 @@ fn build_application(
 		Target::Windows | Target::Linux | Target::Tui => unreachable!("desktop hosts built above"),
 		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, release),
 		Target::Wearos | Target::Watchos => watch::build(target),
-		Target::Oculus => oculus::build(target),
 		Target::Ios | Target::IosSimulator => {
 			install_ios_pods(root)?;
 			run_tool(&mut ios_build(root, target, release))
 		}
-		Target::Android | Target::AndroidX86_64 => {
+		Target::Android | Target::AndroidX86_64 | Target::Quest => {
 			run_tool(&mut gradle_build(root, target, release))
 		}
 	}
@@ -679,8 +759,19 @@ pub(crate) fn rebuild_guest(
 	crate::l10n::sync(root, config)?;
 	let registry = registry::resolve(root, config, target)?;
 	let build_dir = native_build_directory(root, &registry.target, target.rust())?;
-	let bundle_dir = generated_dir(root, target).join("bundle");
-	bundle(root, config, target, false, Some(&build_dir), &bundle_dir)?;
+	let generated = generated_dir(root, target);
+	let bundle_dir = generated.join("bundle");
+	let contract = bundle(
+		root,
+		config,
+		&registry.plugins,
+		&registry.missing,
+		target,
+		false,
+		Some(&build_dir),
+		&bundle_dir,
+	)?;
+	write_capabilities(&generated.join("capabilities.json"), &contract)?;
 	built_guest(root, target)
 }
 
@@ -698,7 +789,7 @@ pub(crate) fn legacy_target(root: &Path, config: &LeptoskitConfig) -> Target {
 		[NativeTarget::Harmonyos] => Target::Harmonyos,
 		[NativeTarget::Wearos] => Target::Wearos,
 		[NativeTarget::Watchos] => Target::Watchos,
-		[NativeTarget::Oculus] => Target::Oculus,
+		[NativeTarget::Quest] => Target::Quest,
 		[NativeTarget::Macos] => Target::Macos,
 		[NativeTarget::Ios] => Target::IosSimulator,
 		[NativeTarget::Android] => Target::Android,
@@ -720,7 +811,7 @@ fn report_application_size(root: &Path, target: Target, release: bool) {
 	let report = match target {
 		Target::Macos => size::macos(root).map(Some),
 		Target::Ios | Target::IosSimulator => size::ios(root, release),
-		Target::Android | Target::AndroidX86_64 => size::android(root, release),
+		Target::Android | Target::AndroidX86_64 | Target::Quest => size::android(root, release),
 		// The desktop hosts and the harmonyos packaging report through their
 		// own tools; a measurement for them is a follow-up.
 		Target::Windows
@@ -729,7 +820,6 @@ fn report_application_size(root: &Path, target: Target, release: bool) {
 		| Target::HarmonyosX86_64
 		| Target::Wearos
 		| Target::Watchos
-		| Target::Oculus
 		| Target::Tui => Ok(None),
 	};
 
@@ -772,12 +862,49 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 /// the raw Wasm. Mobile gets the guest inside its store container, which the
 /// update store verifies, and the update configuration, but never the Wasm a
 /// second time.
+/// Copies the app's `assets/` folder to where the native app bundles it
+/// for 3D scenes: the generated `mobile/assets`, which Android packs into
+/// the APK's assets, iOS references as the bundle's `assets` folder, and
+/// the macOS app copies into its resources.
+fn stage_scene_assets(root: &Path, target: Target) -> Result<()> {
+	let destination = generated_dir(root, target).join("mobile/assets");
+
+	match std::fs::remove_dir_all(&destination) {
+		Ok(()) => {}
+
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+		Err(error) => return Err(error).context("clear the staged 3D assets"),
+	}
+
+	std::fs::create_dir_all(&destination)?;
+	let source = root.join("assets");
+
+	if !source.is_dir() {
+		return Ok(());
+	}
+
+	for entry in walkdir::WalkDir::new(&source).follow_links(false) {
+		let entry = entry?;
+
+		let relative = entry.path().strip_prefix(&source)?;
+
+		if entry.file_type().is_dir() {
+			std::fs::create_dir_all(destination.join(relative))?;
+		} else if entry.file_type().is_file() {
+			project::copy(entry.path(), &destination.join(relative))?;
+		}
+	}
+
+	Ok(())
+}
+
 fn write_assets(
 	root: &Path,
 	config: &LeptoskitConfig,
 	target: Target,
 	bundle_dir: &Path,
 	release: bool,
+	contract: &HostCapabilityDescriptor,
 ) -> Result<()> {
 	let generated = generated_dir(root, target);
 	if matches!(
@@ -811,7 +938,8 @@ fn write_assets(
 	let mut update_config = serde_json::json!({
 		"enabled": config.codepush.enabled, "app": config.app.name,
 		"channel": channel, "server": config.codepush.server,
-		"public_keys": config.codepush.public_keys, "runtime": runtime_descriptor(root, config, target),
+		"public_keys": config.codepush.public_keys,
+		"runtime": host_runtime_descriptor(root, config, target, contract),
 		"allow_http": config.codepush.allow_http && !release,
 	});
 	// The host's own trust policy: shipped with the store build, never with a
@@ -833,19 +961,30 @@ fn write_assets(
 /// only when the enclosing build is a release build, like the web client, and
 /// warns rather than fails when binaryen is missing: a machine that only
 /// builds for devices still prepares, bundles, and debugs native apps.
+#[allow(clippy::too_many_arguments)]
 fn bundle(
 	root: &Path,
 	config: &LeptoskitConfig,
+	plugins: &[registry::Plugin],
+	missing: &[registry::MissingPlugin],
 	target: Target,
 	release: bool,
 	// Isolates same-named applications that share a Cargo target directory.
 	target_dir: Option<&Path>,
 	out: &Path,
-) -> Result<()> {
+) -> Result<HostCapabilityDescriptor> {
 	anyhow::ensure!(
 		!config.native.update_contract.trim().is_empty(),
 		"native.update_contract cannot be empty"
 	);
+	let contract = registry::descriptor(config, target, plugins, missing);
+	contract.validate()?;
+	registry::requirements(config).validate()?;
+
+	for warning in registry::optional_warnings(config, target, plugins, missing) {
+		eprintln!("{warning}");
+	}
+
 	let metadata = crate::wasm::cargo_metadata(root)?;
 	let portable = root
 		.join(target.platform().to_string())
@@ -923,7 +1062,7 @@ fn bundle(
 
 	std::fs::write(
 		out.join("runtime.json"),
-		serde_json::to_vec_pretty(&runtime_descriptor(root, config, target))?,
+		serde_json::to_vec_pretty(&guest_runtime_descriptor(root, config, target))?,
 	)?;
 	plugins.after_build(&mut leptoskit_plugin::PluginPostBuildContext {
 		config: config.clone(),
@@ -932,8 +1071,12 @@ fn bundle(
 		output_dir: out.to_path_buf(),
 		wasm_bundle: Some(out.join("app.wasm")),
 	})?;
-	crate::ui::success(format_args!("native Wasm bundle: {}", out.display()));
-	Ok(())
+	crate::ui::success(format_args!(
+		"native Wasm bundle: {} (capability contract {})",
+		out.display(),
+		contract.digest()
+	));
+	Ok(contract)
 }
 
 /// What a debug host build adds to cargo's default profile: its dependencies,
@@ -1016,13 +1159,51 @@ fn profile_directory(config: &LeptoskitConfig, host: bool, release: bool) -> Str
 }
 
 /// The ordinary bundled file makes compatibility part of the signed content.
-fn runtime_descriptor(root: &Path, config: &LeptoskitConfig, target: Target) -> serde_json::Value {
+/// A guest carries requirements only; it never declares what the host can do.
+fn guest_runtime_descriptor(
+	root: &Path,
+	config: &LeptoskitConfig,
+	target: Target,
+) -> serde_json::Value {
+	let shell = config::shell(root, config, target.platform());
+	let requirements = registry::requirements(config);
+	// Optional plugins must not become mandatory through the legacy list.
+	let plugins: Vec<_> = config
+		.native
+		.plugins
+		.iter()
+		.filter(|name| {
+			!requirements
+				.optional
+				.contains(&leptoskit_codepush::capability::plugin_capability(name))
+		})
+		.collect();
+
+	serde_json::json!({
+		"abi": leptoskit_wasm::ABI_VERSION,
+		"shell": shell,
+		"plugins": plugins,
+		"format_version": RUNTIME_CONTRACT_VERSION,
+		"requirements": requirements,
+	})
+}
+
+/// The store build's `codepush.json` carries the host descriptor; it is never
+/// read from a download.
+fn host_runtime_descriptor(
+	root: &Path,
+	config: &LeptoskitConfig,
+	target: Target,
+	contract: &HostCapabilityDescriptor,
+) -> serde_json::Value {
 	let shell = config::shell(root, config, target.platform());
 
 	serde_json::json!({
 		"abi": leptoskit_wasm::ABI_VERSION,
 		"shell": shell,
 		"plugins": config.native.plugins,
+		"format_version": RUNTIME_CONTRACT_VERSION,
+		"host": contract,
 	})
 }
 
@@ -1150,6 +1331,58 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn generated_contract_reports_unresolved_grants_without_claiming_support() {
+		use leptoskit_codepush::capability::ContractCompatibility;
+		use leptoskit_codepush::installed::RuntimeContract;
+
+		let root = Path::new(".");
+		let mut config = LeptoskitConfig::default();
+		config.native.plugins = vec!["http".into()];
+		let descriptor = registry::descriptor(&config, Target::Ios, &[], &[]);
+		let host: RuntimeContract = serde_json::from_value(host_runtime_descriptor(
+			root,
+			&config,
+			Target::Ios,
+			&descriptor,
+		))
+		.unwrap();
+		let guest = |config: &LeptoskitConfig| -> RuntimeContract {
+			serde_json::from_value(guest_runtime_descriptor(root, config, Target::Ios)).unwrap()
+		};
+		assert_eq!(
+			guest(&config).verify_guest(&host).unwrap(),
+			ContractCompatibility::Incomplete
+		);
+		config.native.required_plugins.push("http".into());
+		assert!(guest(&config).verify_guest(&host).is_err());
+		config.native.required_plugins.clear();
+		config.native.optional_plugins.push("http".into());
+		assert_eq!(
+			guest(&config).verify_guest(&host).unwrap(),
+			ContractCompatibility::Verified
+		);
+	}
+
+	#[test]
+	fn optional_plugins_do_not_become_legacy_update_requirements() {
+		let mut config = LeptoskitConfig::default();
+		config.native.plugins = vec!["http".into(), "haptics".into(), "clipboard".into()];
+		config.native.optional_plugins = vec!["haptics".into()];
+		config.native.optional_capabilities = vec!["plugin.clipboard".into()];
+		let runtime: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			guest_runtime_descriptor(Path::new("."), &config, Target::Ios),
+		)
+		.unwrap();
+		assert_eq!(runtime.plugins, vec!["http"]);
+		let required = runtime.requirements.unwrap();
+		assert_eq!(
+			required.optional,
+			vec!["plugin.clipboard", "plugin.haptics"]
+		);
+		assert_eq!(required.protocol.bridge, leptoskit_bridge::VERSION);
+	}
+
+	#[test]
 	fn universal_platforms_isolate_generated_state_and_update_contracts() {
 		let root =
 			std::env::temp_dir().join(format!("leptoskit-platform-state-{}", std::process::id()));
@@ -1168,24 +1401,37 @@ mod tests {
 			generated_dir(&root, Target::Ios),
 			generated_dir(&root, Target::IosSimulator)
 		);
-		let ios: leptoskit_codepush::installed::RuntimeContract =
-			serde_json::from_value(runtime_descriptor(&root, &config, Target::Ios)).unwrap();
-		let android: leptoskit_codepush::installed::RuntimeContract =
-			serde_json::from_value(runtime_descriptor(&root, &config, Target::Android)).unwrap();
+		let ios_contract = registry::descriptor(&config, Target::Ios, &[], &[]);
+		let android_contract = registry::descriptor(&config, Target::Android, &[], &[]);
+		let ios: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			host_runtime_descriptor(&root, &config, Target::Ios, &ios_contract),
+		)
+		.unwrap();
+		let android: leptoskit_codepush::installed::RuntimeContract = serde_json::from_value(
+			host_runtime_descriptor(&root, &config, Target::Android, &android_contract),
+		)
+		.unwrap();
 		assert_ne!(ios.shell, android.shell);
+		assert_ne!(
+			ios.host.as_ref().unwrap().platform,
+			android.host.as_ref().unwrap().platform
+		);
 
 		let bundle = root.join("bundle");
 		std::fs::create_dir_all(&bundle).unwrap();
 		std::fs::write(bundle.join("app.wasm"), b"\0asm\x01\0\0\0").unwrap();
 		config.app.name = "platform_app".into();
 
-		for target in [Target::Ios, Target::Android] {
+		for (target, contract) in [
+			(Target::Ios, &ios_contract),
+			(Target::Android, &android_contract),
+		] {
 			std::fs::write(
 				bundle.join("runtime.json"),
-				serde_json::to_vec(&runtime_descriptor(&root, &config, target)).unwrap(),
+				serde_json::to_vec(&guest_runtime_descriptor(&root, &config, target)).unwrap(),
 			)
 			.unwrap();
-			write_assets(&root, &config, target, &bundle, false).unwrap();
+			write_assets(&root, &config, target, &bundle, false, contract).unwrap();
 			let mobile = generated_dir(&root, target).join("mobile");
 			let container = std::fs::read(mobile.join("app.lkb")).unwrap();
 			let manifest = leptoskit_codepush::read_container(&container)
@@ -1574,6 +1820,34 @@ mod tests {
 	}
 
 	#[test]
+	fn scene_assets_are_staged_fresh_for_the_native_bundle() {
+		// Generated files are never written through a symlink, and macOS's
+		// temporary directory sits behind one.
+		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+		let root = tempfile::tempdir_in(base).unwrap();
+		let root = root.path();
+		std::fs::create_dir_all(root.join("assets/models")).unwrap();
+		std::fs::write(root.join("assets/models/rig.glb"), b"glTF").unwrap();
+		let staged = generated_dir(root, Target::Android).join("mobile/assets");
+		std::fs::create_dir_all(&staged).unwrap();
+		std::fs::write(staged.join("stale.glb"), b"old").unwrap();
+
+		stage_scene_assets(root, Target::Android).unwrap();
+
+		assert_eq!(
+			std::fs::read(staged.join("models/rig.glb")).unwrap(),
+			b"glTF"
+		);
+		assert!(
+			!staged.join("stale.glb").exists(),
+			"a removed asset is not shipped"
+		);
+		std::fs::remove_dir_all(root.join("assets")).unwrap();
+		stage_scene_assets(root, Target::Android).unwrap();
+		assert!(staged.is_dir() && std::fs::read_dir(&staged).unwrap().next().is_none());
+	}
+
+	#[test]
 	fn desktop_bundles_raw_wasm_and_mobile_only_the_verified_container() {
 		// Generated paths refuse symlinks, and the macOS temporary directory is
 		// one.
@@ -1592,7 +1866,17 @@ mod tests {
 		config.codepush.enabled = true;
 		config.codepush.allow_http = true;
 
-		write_assets(&root, &config, Target::Android, &bundle, true).unwrap();
+		let android_contract = registry::descriptor(&config, Target::Android, &[], &[]);
+		let macos_contract = registry::descriptor(&config, Target::Macos, &[], &[]);
+		write_assets(
+			&root,
+			&config,
+			Target::Android,
+			&bundle,
+			true,
+			&android_contract,
+		)
+		.unwrap();
 		let mobile = root.join(".leptoskit/mobile");
 		let container = std::fs::read(mobile.join("app.lkb")).unwrap();
 		assert_eq!(
@@ -1612,7 +1896,15 @@ mod tests {
 		);
 		assert!(!root.join(".leptoskit/assets/app.wasm").exists());
 
-		write_assets(&root, &config, Target::Macos, &bundle, false).unwrap();
+		write_assets(
+			&root,
+			&config,
+			Target::Macos,
+			&bundle,
+			false,
+			&macos_contract,
+		)
+		.unwrap();
 		assert_eq!(
 			std::fs::read(root.join(".leptoskit/assets/app.wasm")).unwrap(),
 			wasm
@@ -1625,7 +1917,15 @@ mod tests {
 			approvers: vec!["b".repeat(64)],
 			threshold: 1,
 		});
-		write_assets(&root, &config, Target::Android, &bundle, true).unwrap();
+		write_assets(
+			&root,
+			&config,
+			Target::Android,
+			&bundle,
+			true,
+			&android_contract,
+		)
+		.unwrap();
 		let updates: leptoskit_codepush::installed::UpdateConfiguration =
 			serde_json::from_slice(&std::fs::read(mobile.join("codepush.json")).unwrap()).unwrap();
 		assert_eq!(
@@ -1776,6 +2076,7 @@ mod tests {
 			host_features: vec!["leptoskit_bridge_ffi/async-host".into()],
 			devtools_feature: Some("leptoskit_bridge_ffi/devtools".into()),
 			missing: Vec::new(),
+			scene3d: false,
 		};
 		let features =
 			|target, release, devtools| host_features(&registry, target, release, devtools);
@@ -2011,6 +2312,7 @@ mod tests {
 			host_features: vec!["leptoskit_bridge_ffi/async-host".into()],
 			devtools_feature: Some("leptoskit_bridge_ffi/devtools".into()),
 			missing: Vec::new(),
+			scene3d: false,
 		}
 	}
 
@@ -2165,6 +2467,8 @@ mod tests {
 		let error = bundle(
 			temporary.path(),
 			&config,
+			&[],
+			&[],
 			Target::Macos,
 			false,
 			None,
@@ -2197,6 +2501,8 @@ mod tests {
 		let error = bundle(
 			root,
 			&LeptoskitConfig::default(),
+			&[],
+			&[],
 			Target::Macos,
 			false,
 			None,
@@ -2463,6 +2769,27 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			"ndk-newest",
 			&[("ANDROID_HOME", &sdk.display().to_string())],
 		);
+	}
+
+	#[test]
+	fn quest_builds_the_android_host_for_the_headset() {
+		assert_eq!(Target::Quest.rust(), "aarch64-linux-android");
+		assert_eq!(Target::Quest.platform(), Platform::Quest);
+		assert_eq!(
+			Target::from_platform(Platform::Quest).unwrap(),
+			Target::Quest
+		);
+		assert!(Target::Quest.is_android());
+		assert!(Target::Quest.reports_to_devtools());
+		let root = Path::new("/project");
+		assert_eq!(
+			host_dir(root, Target::Quest),
+			host_dir(root, Target::Android)
+		);
+		assert_eq!(Platform::Quest.feature(), Some("android"));
+		let mut config = LeptoskitConfig::default();
+		config.native.targets = vec![leptoskit_config::NativeTarget::Quest];
+		assert_eq!(legacy_target(root, &config), Target::Quest);
 	}
 
 	#[test]

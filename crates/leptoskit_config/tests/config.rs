@@ -136,7 +136,6 @@ fn concrete_platforms_round_trip_and_select_distinct_features() {
 		Platform::Harmonyos,
 		Platform::Wearos,
 		Platform::Watchos,
-		Platform::Oculus,
 		Platform::Tui,
 	]) {
 		let name = platform.to_string();
@@ -243,6 +242,65 @@ fn experimental_rust_plugins_are_off_by_default_and_round_trip_when_enabled() {
 			.unwrap()
 			.contains("experimental-rust-plugins = true")
 	);
+}
+
+#[test]
+fn native_required_and_optional_capabilities_are_explicit_and_round_trip() {
+	let input = r#"
+[native]
+plugins = ["http", "haptics"]
+required-plugins = ["http"]
+optional-plugins = ["haptics"]
+required-capabilities = ["host.plugin.rust.async", "plugin.http"]
+optional-capabilities = ["host.plugin.native.android"]
+"#;
+	let config: LeptoskitConfig = toml::from_str(input).unwrap();
+	config.validate().unwrap();
+	assert_eq!(config.native.required_plugins, ["http"]);
+	assert_eq!(config.native.optional_plugins, ["haptics"]);
+	let serialized = config.to_toml_string().unwrap();
+	for key in [
+		"required-plugins",
+		"optional-plugins",
+		"required-capabilities",
+		"optional-capabilities",
+	] {
+		assert!(serialized.contains(&format!("{key} =")), "{serialized}");
+	}
+	let roundtrip: LeptoskitConfig = toml::from_str(&serialized).unwrap();
+	assert_eq!(roundtrip, config);
+
+	for (raw, message) in [
+		(
+			"[native]\nplugins = ['http']\nrequired-plugins = ['haptics']\n",
+			"not granted",
+		),
+		(
+			"[native]\nplugins = ['http']\nrequired-plugins = ['http', 'http']\n",
+			"more than once",
+		),
+		(
+			"[native]\nplugins = ['http']\nrequired-plugins = ['http']\noptional-plugins = \
+			 ['http']\n",
+			"both required and optional",
+		),
+		(
+			"[native]\nrequired-capabilities = ['Host.Plugin']\n",
+			"not a stable capability identifier",
+		),
+		(
+			"[native]\nrequired-capabilities = ['plugin.http']\noptional-capabilities = \
+			 ['plugin.http']\n",
+			"both required and optional",
+		),
+	] {
+		let config: LeptoskitConfig = toml::from_str(raw).unwrap();
+		let error = config.validate().unwrap_err();
+		assert!(
+			matches!(&error, ConfigError::InvalidNativeRequirement(reason) if reason.contains(message)),
+			"{raw}: {error}"
+		);
+	}
 }
 
 #[test]

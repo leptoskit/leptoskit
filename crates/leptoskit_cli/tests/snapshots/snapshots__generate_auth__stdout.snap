@@ -12,6 +12,7 @@ updated leptoskit.toml: added [auth]
 updated ios/Cargo.toml: added leptoskit_plugin_secure_store, leptoskit_plugin_passkeys, and leptoskit_plugin_web_auth
 updated android/Cargo.toml: added leptoskit_plugin_secure_store, leptoskit_plugin_passkeys, and leptoskit_plugin_web_auth
 updated macos/Cargo.toml: added leptoskit_plugin_secure_store, leptoskit_plugin_passkeys, and leptoskit_plugin_web_auth
+updated linux/Cargo.toml: added leptoskit_plugin_secure_store, leptoskit_plugin_passkeys, and leptoskit_plugin_web_auth
 updated leptoskit.toml: granted secure-store, granted passkeys, granted web-auth
 created src/sign_in.rs
 updated src/main.rs: declared `mod sign_in;`

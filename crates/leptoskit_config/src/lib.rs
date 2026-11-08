@@ -13,6 +13,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -382,8 +383,9 @@ pub enum Platform {
 	Wearos,
 	/// An Apple watchOS application (experimental).
 	Watchos,
-	/// A Meta Quest / Oculus application (experimental platform extension).
-	Oculus,
+	/// A Meta Quest (Horizon OS) application: the Android app, packaged for
+	/// the headset and configured in `[native.quest]`.
+	Quest,
 	/// A terminal application: the shared tree in an interactive cell grid.
 	Tui,
 	/// A browser extension for Chromium, Firefox, and Safari, built from the
@@ -412,14 +414,14 @@ impl Platform {
 		match self {
 			Self::Web => Some("web"),
 			Self::Ios => Some("ios"),
-			Self::Android => Some("android"),
+			// Horizon OS is Android: the app's Android code runs there as is.
+			Self::Android | Self::Quest => Some("android"),
 			Self::Macos => Some("macos"),
 			Self::Windows => Some("windows"),
 			Self::Linux => Some("linux"),
 			Self::Harmonyos => Some("harmonyos"),
 			Self::Wearos => Some("wearos"),
 			Self::Watchos => Some("watchos"),
-			Self::Oculus => Some("oculus"),
 			Self::Tui => Some("tui"),
 			Self::Extension => Some("extension"),
 			Self::Native | Self::Server => None,
@@ -439,7 +441,7 @@ impl Platform {
 				| Self::Harmonyos
 				| Self::Wearos
 				| Self::Watchos
-				| Self::Oculus
+				| Self::Quest
 				| Self::Tui
 		)
 	}
@@ -457,7 +459,7 @@ impl fmt::Display for Platform {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
-			Self::Oculus => f.write_str("oculus"),
+			Self::Quest => f.write_str("quest"),
 			Self::Tui => f.write_str("tui"),
 			Self::Extension => f.write_str("extension"),
 			Self::Native => f.write_str("native"),
@@ -480,7 +482,7 @@ impl std::str::FromStr for Platform {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
-			"oculus" => Ok(Self::Oculus),
+			"quest" => Ok(Self::Quest),
 			"tui" => Ok(Self::Tui),
 			"extension" => Ok(Self::Extension),
 			"native" => Ok(Self::Native),
@@ -880,6 +882,31 @@ pub struct NativeConfig {
 	/// Each name must match metadata on a direct Cargo dependency.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub plugins: Vec<String>,
+	/// Granted plugins this app cannot run without. A destination that cannot
+	/// register one fails before packaging, whatever `missing-plugins` says.
+	#[serde(rename = "required-plugins", skip_serializing_if = "Vec::is_empty")]
+	pub required_plugins: Vec<String>,
+	/// Granted plugins this app can run without. A destination that cannot
+	/// register one leaves it out with an actionable warning. An unlisted
+	/// grant keeps following `missing-plugins`, so existing projects are
+	/// unchanged.
+	#[serde(rename = "optional-plugins", skip_serializing_if = "Vec::is_empty")]
+	pub optional_plugins: Vec<String>,
+	/// Stable capability identifiers this app cannot run without, such as
+	/// `host.plugin.rust.async` or `plugin.http`. An unknown or unsupported
+	/// identifier fails the native build before packaging.
+	#[serde(
+		rename = "required-capabilities",
+		skip_serializing_if = "Vec::is_empty"
+	)]
+	pub required_capabilities: Vec<String>,
+	/// Capability identifiers the app can run without. A missing one produces
+	/// a warning instead of failing the build.
+	#[serde(
+		rename = "optional-capabilities",
+		skip_serializing_if = "Vec::is_empty"
+	)]
+	pub optional_capabilities: Vec<String>,
 	/// Host-owned options for explicitly selected runtime plugins. These values
 	/// are embedded in native registration, never read from guest requests.
 	#[serde(rename = "plugin-options", skip_serializing_if = "BTreeMap::is_empty")]
@@ -930,6 +957,9 @@ pub struct NativeConfig {
 	/// Legacy native target selection. New projects use `app.platforms`.
 	#[serde(skip_serializing_if = "NativeConfig::legacy_default_targets")]
 	pub targets: Vec<NativeTarget>,
+	/// The Meta Quest build's settings.
+	#[serde(skip_serializing_if = "QuestConfig::is_default")]
+	pub quest: QuestConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -941,6 +971,10 @@ impl Default for NativeConfig {
 		Self {
 			update_contract: "mobile-v1".into(),
 			plugins: Vec::new(),
+			required_plugins: Vec::new(),
+			optional_plugins: Vec::new(),
+			required_capabilities: Vec::new(),
+			optional_capabilities: Vec::new(),
 			plugin_options: BTreeMap::new(),
 			missing_plugins: MissingPlugins::default(),
 			experimental_rust_plugins: false,
@@ -952,10 +986,92 @@ impl Default for NativeConfig {
 				NativeTarget::Ios,
 				NativeTarget::Android,
 			],
+			quest: QuestConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
 		}
 	}
+}
+
+/// How the Meta Quest build (`--platform quest`) packages the Android app
+/// for Horizon OS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct QuestConfig {
+	/// Launches straight into the headset's immersive mode, where only what
+	/// the app draws through OpenXR is shown. With `false`, the app opens as
+	/// a 2D panel showing its ordinary interface.
+	pub immersive: bool,
+	/// The headsets the Horizon Store offers the app on.
+	pub supported_devices: Vec<QuestDevice>,
+	/// Whether the app uses hand tracking, and whether it needs it.
+	pub hand_tracking: Requirement,
+	/// Whether the app shows the room through the headset's cameras
+	/// (passthrough).
+	pub passthrough: bool,
+}
+
+impl Default for QuestConfig {
+	fn default() -> Self {
+		Self {
+			immersive: true,
+			supported_devices: vec![
+				QuestDevice::Quest2,
+				QuestDevice::Questpro,
+				QuestDevice::Quest3,
+				QuestDevice::Quest3s,
+			],
+			hand_tracking: Requirement::Optional,
+			passthrough: true,
+		}
+	}
+}
+
+impl QuestConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// A Meta Quest headset model, as `com.oculus.supportedDevices` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum QuestDevice {
+	/// Meta Quest 2.
+	Quest2,
+	/// Meta Quest Pro.
+	Questpro,
+	/// Meta Quest 3.
+	Quest3,
+	/// Meta Quest 3S.
+	Quest3s,
+}
+
+impl fmt::Display for QuestDevice {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(match self {
+			Self::Quest2 => "quest2",
+			Self::Questpro => "questpro",
+			Self::Quest3 => "quest3",
+			Self::Quest3s => "quest3s",
+		})
+	}
+}
+
+/// Whether an app uses a feature, and whether it can run without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum Requirement {
+	/// Not used.
+	Off,
+	/// Used where the device has it.
+	#[default]
+	Optional,
+	/// The app needs it; stores hide the app from devices without it.
+	Required,
 }
 
 /// The path on the server a native app's system-browser sign-in returns to.
@@ -981,6 +1097,103 @@ impl NativeConfig {
 				NativeTarget::Android,
 			]
 	}
+
+	/// Required and optional capability/plugin declarations must be unique,
+	/// not both required and optional, and refer only to granted plugins.
+	fn validate_requirements(&self) -> Result<(), ConfigError> {
+		unique_requirements("required-plugins", &self.required_plugins)?;
+		unique_requirements("optional-plugins", &self.optional_plugins)?;
+		unique_requirements("required-capabilities", &self.required_capabilities)?;
+		unique_requirements("optional-capabilities", &self.optional_capabilities)?;
+
+		granted_requirements("required-plugins", &self.required_plugins, &self.plugins)?;
+		granted_requirements("optional-plugins", &self.optional_plugins, &self.plugins)?;
+
+		disjoint_requirements(&self.required_plugins, &self.optional_plugins)?;
+		disjoint_requirements(&self.required_capabilities, &self.optional_capabilities)?;
+
+		for name in self
+			.required_capabilities
+			.iter()
+			.chain(&self.optional_capabilities)
+		{
+			stable_capability_identifier(name)?;
+		}
+
+		Ok(())
+	}
+}
+
+fn unique_requirements(kind: &str, names: &[String]) -> Result<(), ConfigError> {
+	let mut seen = BTreeSet::new();
+
+	for name in names {
+		if !seen.insert(name.as_str()) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}` more than once"
+			)));
+		}
+
+		if name.trim().is_empty() {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} contains an empty entry"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn granted_requirements(
+	kind: &str,
+	names: &[String],
+	granted: &[String],
+) -> Result<(), ConfigError> {
+	for name in names {
+		if !granted.contains(name) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}`, which is not granted in native.plugins"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn disjoint_requirements(left: &[String], right: &[String]) -> Result<(), ConfigError> {
+	if let Some(name) = left.iter().find(|name| right.contains(name)) {
+		return Err(ConfigError::InvalidNativeRequirement(format!(
+			"`{name}` is both required and optional; list it in one place"
+		)));
+	}
+
+	Ok(())
+}
+
+fn stable_capability_identifier(name: &str) -> Result<(), ConfigError> {
+	if capability_identifier(name) {
+		return Ok(());
+	}
+
+	Err(ConfigError::InvalidNativeRequirement(format!(
+		"`{name}` is not a stable capability identifier: use lowercase ASCII letters, digits, \
+		 `-`, `_`, and `.`, starting with a letter or digit"
+	)))
+}
+
+/// Stable capability identifiers are dot-separated words. Plugin names may
+/// carry `_`, so the character set allows it inside a segment.
+fn capability_identifier(value: &str) -> bool {
+	let mut chars = value.chars();
+	chars
+		.next()
+		.is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+		&& chars.all(|character| {
+			character.is_ascii_lowercase()
+				|| character.is_ascii_digit()
+				|| matches!(character, '-' | '_' | '.')
+		})
+		&& !value.split('.').any(str::is_empty)
 }
 
 /// What a native build does with a selected plugin that has no
@@ -1021,8 +1234,8 @@ pub enum NativeTarget {
 	Wearos,
 	/// Apple watchOS (experimental watch host).
 	Watchos,
-	/// Meta Quest / Oculus (experimental platform extension).
-	Oculus,
+	/// Meta Quest (Horizon OS), from the Android host.
+	Quest,
 	/// Windows.
 	Windows,
 	/// Linux.
@@ -1038,7 +1251,7 @@ impl fmt::Display for NativeTarget {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
-			Self::Oculus => f.write_str("oculus"),
+			Self::Quest => f.write_str("quest"),
 			Self::Windows => f.write_str("windows"),
 			Self::Linux => f.write_str("linux"),
 		}
@@ -1056,7 +1269,7 @@ impl std::str::FromStr for NativeTarget {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
-			"oculus" => Ok(Self::Oculus),
+			"quest" => Ok(Self::Quest),
 			"windows" => Ok(Self::Windows),
 			"linux" => Ok(Self::Linux),
 			other => Err(ConfigError::UnknownPlatform(other.to_owned())),
@@ -2841,6 +3054,8 @@ impl LeptoskitConfig {
 			}
 		}
 
+		self.native.validate_requirements()?;
+
 		if !package_id.is_empty()
 			&& let Some(reason) = package_id_problem(package_id)
 		{
@@ -3086,6 +3301,9 @@ pub enum ConfigError {
 	/// Native options were supplied without granting the corresponding plugin.
 	#[error("native.plugin-options.{0} requires `{0}` in native.plugins")]
 	UnselectedPluginOptions(String),
+	/// A required/optional native capability or plugin declaration is invalid.
+	#[error("invalid native capability requirement: {0}")]
+	InvalidNativeRequirement(String),
 	/// No `leptoskit.toml` in this directory or any ancestor.
 	#[error("no {CONFIG_FILE} found in this directory or any ancestor")]
 	NotFound,
@@ -3121,7 +3339,7 @@ pub enum ConfigError {
 	/// An unknown platform was requested.
 	#[error(
 		"unknown platform `{0}`; expected web, ios, android, macos, windows, linux, harmonyos, \
-		 wearos, watchos, oculus, tui, extension, native, or server"
+		 wearos, watchos, quest, tui, extension, native, or server"
 	)]
 	UnknownPlatform(String),
 	/// An unknown database dialect was requested.

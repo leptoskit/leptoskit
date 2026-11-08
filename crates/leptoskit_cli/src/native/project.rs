@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 pub(super) use ios::apple_plugins;
+#[cfg(test)]
+pub(super) use ios::linked_frameworks as ios_linked_frameworks;
 
 use super::Target;
 use super::registry::Constructor;
@@ -37,7 +39,7 @@ pub fn generate(
 	}
 
 	if release
-		&& matches!(target, Target::Android | Target::AndroidX86_64)
+		&& target.is_android()
 		&& let Some(warning) = android_keep_rules_warning(root)
 	{
 		crate::ui::warning(warning);
@@ -64,14 +66,20 @@ pub fn generate(
 		Target::Ios | Target::IosSimulator => ios::generate(root, config, registry),
 		Target::Android => android(root, config, registry, "arm64-v8a"),
 		Target::AndroidX86_64 => android(root, config, registry, "x86_64"),
+		Target::Quest => {
+			android_host(
+				root,
+				config,
+				registry,
+				"arm64-v8a",
+				Some(&config.native.quest),
+			)
+		}
 		Target::Harmonyos | Target::HarmonyosX86_64 => {
 			super::harmonyos::generate(root, config, registry, target)
 		}
 		Target::Wearos | Target::Watchos => {
 			anyhow::bail!("watch hosts are scaffolded before project::generate")
-		}
-		Target::Oculus => {
-			anyhow::bail!("Oculus hosts are scaffolded before project::generate")
 		}
 	}
 }
@@ -203,6 +211,18 @@ fn android(
 	registry: &Registry,
 	abi: &str,
 ) -> Result<()> {
+	android_host(root, config, registry, abi, None)
+}
+
+/// The generated half of the Android host, for a phone or, with `quest`, for
+/// a Meta Quest headset.
+fn android_host(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+	abi: &str,
+	quest: Option<&leptoskit_config::QuestConfig>,
+) -> Result<()> {
 	let dir = root.join(".leptoskit/android");
 	write(&dir.join("version.properties"), &android_version(config))?;
 	write(
@@ -258,6 +278,11 @@ fn android(
 		if let Some(warning) = android_icon_warning(root) {
 			crate::ui::warning(warning);
 		}
+	}
+
+	// Quest packages the same host for the headset: its manifest says so.
+	if let Some(quest) = quest {
+		manifest = super::quest::manifest(&manifest, quest)?;
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;
@@ -402,21 +427,70 @@ pub(super) fn rust_registrant(registry: &Registry, target: Target) -> Result<Str
 	rust.push_str(", _context| {\n");
 
 	for (_, plugin, implementation) in &implementations {
-		register_rust_plugin(plugin, implementation, &mut rust)?;
+		register_rust_plugin(plugin, implementation, &Installer::MOBILE, &mut rust)?;
 	}
 
 	rust.push_str("                Ok(())\n            },\n        )\n    }\n}\n");
 	Ok(rust)
 }
 
+/// How a registrant spells the calls that install one plugin.
+pub(super) struct Installer {
+	/// The receiver and leading arguments of every install call.
+	call: &'static str,
+	/// The `&AppContext` that context factories take.
+	context: &'static str,
+	/// The same context, as a place whose directories can be borrowed.
+	directories: &'static str,
+	indent: &'static str,
+	/// Whether the host runs plugin services.
+	services: bool,
+}
+
+impl Installer {
+	/// Inside a desktop runner's generated `plugins` function.
+	pub(super) const DESKTOP: Self = Self {
+		call: "plugins.{install}(host, ",
+		context: "&context",
+		directories: "context",
+		indent: "    ",
+		services: false,
+	};
+	/// Inside the mobile and macOS registrant's `create_with_context`
+	/// closure.
+	const MOBILE: Self = Self {
+		call: "app.{install}(",
+		context: "_context",
+		directories: "_context",
+		indent: "                ",
+		services: true,
+	};
+
+	fn install(&self, install: &str) -> String {
+		format!("{}{}", self.indent, self.call.replace("{install}", install))
+	}
+}
+
 /// Keep synchronous plugin ownership separate from deferred asynchronous
 /// service ownership.
-fn register_rust_plugin(
+pub(super) fn register_rust_plugin(
 	plugin: &super::registry::Plugin,
 	implementation: &Implementation<'_>,
+	installer: &Installer,
 	rust: &mut String,
 ) -> Result<()> {
+	let Installer {
+		context,
+		directories,
+		..
+	} = installer;
+
 	if let Some(factory) = implementation.service() {
+		anyhow::ensure!(
+			installer.services,
+			"{} declares a plugin service, which this host can't run",
+			plugin.name
+		);
 		writeln!(
 			rust,
 			"                app.defer_service({}::{factory}(\n                    \
@@ -440,12 +514,14 @@ fn register_rust_plugin(
 		Flavour::Sync | Flavour::Async => "install",
 	};
 
+	let crate_name = &plugin.crate_name;
+
 	match constructor {
 		Constructor::Type(kind) => {
 			writeln!(
 				rust,
-				"                app.{install}(Box::new({}::{kind}::default()))?;",
-				plugin.crate_name
+				"{}Box::new({crate_name}::{kind}::default()))?;",
+				installer.install(install)
 			)?;
 		}
 
@@ -456,9 +532,8 @@ fn register_rust_plugin(
 				.context("validated async plugin options missing")?;
 			writeln!(
 				rust,
-				"                \
-				 app.install_async(std::sync::Arc::new({}::{factory}({options:?})?))?;",
-				plugin.crate_name
+				"{}std::sync::Arc::new({crate_name}::{factory}({options:?})?))?;",
+				installer.install("install_async")
 			)?;
 		}
 
@@ -469,26 +544,25 @@ fn register_rust_plugin(
 				.context("validated async plugin options missing")?;
 			writeln!(
 				rust,
-				"                app.install_async(std::sync::Arc::new({}::{factory}(_context, \
-				 {options:?})?))?;",
-				plugin.crate_name
+				"{}std::sync::Arc::new({crate_name}::{factory}({context}, {options:?})?))?;",
+				installer.install("install_async")
 			)?;
 		}
 
 		Constructor::Factory(factory) => {
 			writeln!(
 				rust,
-				"                app.{install}(Box::new({}::{factory}(&_context.data_dir, \
-				 &_context.cache_dir)?))?;",
-				plugin.crate_name
+				"{}Box::new({crate_name}::{factory}(&{directories}.data_dir, \
+				 &{directories}.cache_dir)?))?;",
+				installer.install(install)
 			)?;
 		}
 
 		Constructor::ContextFactory(factory) => {
 			writeln!(
 				rust,
-				"                app.{install}(Box::new({}::{factory}(_context)?))?;",
-				plugin.crate_name
+				"{}Box::new({crate_name}::{factory}({context})?))?;",
+				installer.install(install)
 			)?;
 		}
 	}

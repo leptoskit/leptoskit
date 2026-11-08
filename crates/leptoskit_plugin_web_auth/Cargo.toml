@@ -20,6 +20,12 @@ android-context = true
 android-query-actions = ["android.support.customtabs.action.CustomTabsService"]
 android-dependencies = ["androidx.browser:browser:1.9.0"]
 
+# The generated Linux app signs in through the default browser and a loopback
+# address, on a worker: waiting for the browser blocks.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::WebAuth"
+rust-worker = true
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 

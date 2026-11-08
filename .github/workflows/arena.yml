@@ -62,7 +62,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtk-3-dev pkg-config ninja-build clang cmake xvfb ffmpeg jq
+          sudo apt-get install -y libgtk-4-dev libasound2-dev libgtk-3-dev pkg-config ninja-build clang cmake xvfb ffmpeg jq
       - name: install the Windows capture tools
         if: matrix.platform == 'windows'
         run: choco install ffmpeg jq -y --no-progress

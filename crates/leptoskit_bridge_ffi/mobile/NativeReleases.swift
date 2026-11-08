@@ -17,9 +17,21 @@ struct NativeLaunchBundle: Sendable {
 
 struct NativeSyncReport: Decodable, Sendable {
     enum Status: String, Decodable, Sendable { case current, staged }
+    enum Contract: String, Decodable, Sendable { case verified, incomplete, legacy }
     let status: Status
     let version: String
     let build: UInt64
+    let contract: Contract?
+
+    var message: String {
+        let release = status == .staged ? "Update \(version) (\(build)) downloaded" : "Up to date"
+        switch contract {
+        case .verified: return release + ". Host requirements checked."
+        case .incomplete: return release + ". Plugin availability not fully checked."
+        case .legacy: return release + ". Legacy compatibility checks only."
+        case nil: return release + ". Compatibility not reported."
+        }
+    }
 }
 
 private struct ReleaseFailure: Error, LocalizedError {

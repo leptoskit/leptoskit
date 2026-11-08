@@ -30,6 +30,10 @@ client_package = "my_app_client"
 
 Transforms, transitions, keyframes, and entering [animations](../guide/32-animations.md) become CSS, so the browser runs them. Springs become a `linear()` easing sampled from the spring. `exiting` and `layout_transition` don't run in the browser yet: a removed element disappears at once, and a moved one jumps.
 
+## 3D scenes
+
+[3D scenes](../guide/33-3d-scenes.md) draw into a `<canvas>` with WebGPU, or WebGL2 where the browser has no WebGPU, sized to the canvas's CSS box at the display's pixel ratio and drawn with `requestAnimationFrame` only while the scene changes or animates. Models load from `/assets/`. The renderer starts with a scene's first ops; a page that sends none never starts it. Its code is in the app's Wasm only when the app uses `leptoskit`'s `3d` feature.
+
 ## Rive animations
 
 [Rive animations](../guide/20-rive.md) can run on a browser canvas through `leptoskit_rive`. It uses an app-supplied official runtime, suspends hidden and offscreen rendering, and releases resources when the player is dropped. Keep its meaningful content accessible in HTML beside the canvas.

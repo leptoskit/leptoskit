@@ -522,7 +522,12 @@ impl NativeBackend for GtkBackend {
 		};
 
 		let control: gtk::Widget = match kind {
-			NativeKind::View | NativeKind::Custom(_) => content.clone().upcast(),
+			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers (not
+			// GTK yet);
+			// this backend holds its place as an empty view.
+			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d => {
+				content.clone().upcast()
+			}
 			NativeKind::Text | NativeKind::TextRun => {
 				gtk::Label::builder()
 					.wrap(true)

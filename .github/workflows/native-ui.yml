@@ -228,7 +228,7 @@ jobs:
           echo "user=$(id -u)-$(id -g)" >> "$GITHUB_OUTPUT"
           echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
       - name: install the GTK4 dialog fixture's development libraries
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config
       - run: cargo build --locked -p leptoskit_testing --features native-ui --example native_conformance --example dialog_plugin_journey
       - run: cargo build --locked -p leptoskit_plugin_dialog --example native_fixture
       # vgem comes from the kernel's 71 MB extra-modules package, which the

@@ -11,7 +11,7 @@ schema_version = 0
 name = "huddle"
 version = "0.1.0"
 default_platform = "web"
-platforms = ["web", "ios", "macos"]
+platforms = ["web", "ios", "macos", "linux"]
 # The website renders in the browser, like every other client, and reaches
 # the server through the same API and live socket.
 render = "csr"
