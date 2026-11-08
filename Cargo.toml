@@ -94,6 +94,7 @@ geo-traits = "0.3"
 geo-types = { version = "0.7", default-features = false, features = ["std"] }
 geojson = { version = "1", default-features = false }
 getrandom = "0.4"
+glam = { version = "0.34", default-features = false, features = ["std"] }
 globset = "0.4"
 half = { version = "2", default-features = false }
 heck = "0.5"
@@ -189,10 +190,12 @@ web-sys = "0.3"
 webpki-roots = "1"
 wgpu = { version = "30", default-features = false }
 wkb = "0.9"
+zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
 
 # internal: every publishable crate, so members depend on them with
 # `workspace = true` instead of their own relative paths
 leptoskit = { path = "crates/leptoskit", version = "0.3.0" }
+leptoskit_3d = { path = "crates/leptoskit_3d", version = "0.3.0", default-features = false }
 leptoskit_agent_ui = { path = "crates/leptoskit_agent_ui", version = "0.3.0" }
 leptoskit_analytics = { path = "crates/leptoskit_analytics", version = "0.3.0" }
 leptoskit_android = { path = "crates/leptoskit_android", version = "0.3.0" }

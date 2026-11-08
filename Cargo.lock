@@ -4898,6 +4898,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_3d"
+version = "0.3.0"
+
+[[package]]
 name = "leptoskit_agent_ui"
 version = "0.3.0"
 dependencies = [
