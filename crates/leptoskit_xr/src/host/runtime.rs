@@ -1,0 +1,433 @@
+//! The session runtime: one backend, one session, and the guest's bounded
+//! frame stream.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::PoisonError;
+use std::sync::Weak;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::task::Context;
+use std::task::Poll;
+use std::task::Waker;
+use std::time::Duration;
+use std::time::Instant;
+
+use leptoskit_bridge::Error;
+
+use super::Backend;
+use super::Viewport;
+use super::XrFrame;
+use crate::math::Pose;
+use crate::protocol::NextFrame;
+use crate::types::*;
+
+/// Anchor ids the runtime keeps itself, for backends without anchors of their
+/// own, have the top bit set so they never clash with a backend's.
+const RUNTIME_ANCHOR: u64 = 1 << 63;
+/// How often the built-in driver polls a running session: often enough not
+/// to miss a 60 Hz camera frame.
+const DRIVE_PERIOD: Duration = Duration::from_micros(16_667);
+/// How often the built-in driver checks for a session while none runs.
+const IDLE_PERIOD: Duration = Duration::from_millis(50);
+/// Frames arriving this much early still count as due, so a 60 Hz source
+/// delivering at 59.9 Hz does not halve a 60 Hz guest rate.
+const RATE_SLACK: f64 = 0.002;
+
+/// One backend and at most one session, shared by the plugin that serves the
+/// guest and the renderer that draws the frames.
+///
+/// Something must call [`XrRuntime::update`] once per display frame while a
+/// session runs: the renderer's frame loop, or the [`Driver`] thread from
+/// [`XrRuntime::drive`] when nothing renders.
+pub struct XrRuntime {
+	state: Mutex<State>,
+	external_driver: AtomicBool,
+	clock: Instant,
+}
+
+impl std::fmt::Debug for XrRuntime {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("XrRuntime").finish_non_exhaustive()
+	}
+}
+
+struct State {
+	backend: Box<dyn Backend>,
+	session: Option<Session>,
+	generation: u64,
+	waiters: Vec<Waker>,
+}
+
+struct Session {
+	generation: u64,
+	config: SessionConfig,
+	info: SessionInfo,
+	latest: Option<Arc<XrFrame>>,
+	published: Option<(u64, Arc<XrFrame>)>,
+	sequence: u64,
+	last_publish: Option<f64>,
+	planes: Arc<[Plane]>,
+	planes_revision: u64,
+	anchors: Vec<Anchor>,
+	next_anchor: u64,
+}
+
+impl Session {
+	fn due(&self, time: f64) -> bool {
+		let period = 1.0 / f64::from(self.config.frame_rate);
+		self.last_publish
+			.is_none_or(|last| time - last >= period - RATE_SLACK || time < last)
+	}
+}
+
+impl XrRuntime {
+	/// A runtime over `backend`, with no session running.
+	pub fn new(backend: impl Backend + 'static) -> Arc<Self> {
+		Arc::new(Self {
+			state: Mutex::new(State {
+				backend: Box::new(backend),
+				session: None,
+				generation: 0,
+				waiters: Vec::new(),
+			}),
+			external_driver: AtomicBool::new(false),
+			clock: Instant::now(),
+		})
+	}
+
+	fn lock(&self) -> MutexGuard<'_, State> {
+		self.state.lock().unwrap_or_else(PoisonError::into_inner)
+	}
+
+	/// What the device can do.
+	pub fn capabilities(&self) -> Capabilities {
+		self.lock().backend.capabilities()
+	}
+
+	/// Whether `mode` can start now; with `install`, opens the store for a
+	/// missing AR service.
+	pub fn prepare(&self, mode: Mode, install: bool) -> Availability {
+		self.lock().backend.prepare(mode, install)
+	}
+
+	/// Starts a session. Fails with `Busy` while one runs, and `Unavailable`
+	/// when the device lacks the mode or a required feature.
+	pub fn start(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
+		let mut state = self.lock();
+
+		if state.session.is_some() {
+			return Err(Error::Busy);
+		}
+
+		let info = negotiate(&state.backend.capabilities(), &config)?;
+		state.backend.start(&config, info.features)?;
+		state.generation += 1;
+		state.session = Some(Session {
+			generation: state.generation,
+			config,
+			info,
+			latest: None,
+			published: None,
+			sequence: 0,
+			last_publish: None,
+			planes: Arc::from([]),
+			planes_revision: 0,
+			anchors: Vec::new(),
+			next_anchor: 1,
+		});
+		Ok(info)
+	}
+
+	/// Changes the running session's features, reference space, or frame
+	/// rate. The mode can't change: stop and start again for that.
+	pub fn configure(&self, config: SessionConfig) -> Result<SessionInfo, Error> {
+		let mut state = self.lock();
+		let state = &mut *state;
+		let session = state.session.as_mut().ok_or(Error::Unavailable)?;
+
+		if session.config.mode != config.mode {
+			return Err(Error::InvalidArgument);
+		}
+
+		let info = negotiate(&state.backend.capabilities(), &config)?;
+		state.backend.configure(&config, info.features)?;
+		session.config = config;
+		session.info = info;
+		Ok(info)
+	}
+
+	/// The running session, if any.
+	pub fn session(&self) -> Option<SessionInfo> {
+		self.lock().session.as_ref().map(|session| session.info)
+	}
+
+	/// Polls the backend for a new frame and hands it to the guest when its
+	/// frame rate allows. Returns the new frame for the renderer, or `None`
+	/// when nothing changed or no session runs. `time` is the caller's
+	/// monotonic clock in seconds.
+	pub fn update(&self, time: f64) -> Result<Option<Arc<XrFrame>>, Error> {
+		let mut state = self.lock();
+		let state = &mut *state;
+		let Some(session) = state.session.as_mut() else {
+			return Ok(None);
+		};
+		let Some(mut frame) = state.backend.update(time)? else {
+			return Ok(None);
+		};
+
+		if *frame.planes != *session.planes {
+			session.planes = Arc::clone(&frame.planes);
+			session.planes_revision += 1;
+		}
+
+		frame.planes_revision = session.planes_revision;
+		frame.anchors.extend(session.anchors.iter().copied());
+		session.sequence += 1;
+		let frame = Arc::new(frame);
+		session.latest = Some(Arc::clone(&frame));
+
+		if session.due(frame.time) {
+			session.last_publish = Some(frame.time);
+			session.published = Some((session.sequence, Arc::clone(&frame)));
+			wake(&mut state.waiters);
+		}
+
+		Ok(Some(frame))
+	}
+
+	/// The newest frame, for a renderer that draws on its own schedule.
+	pub fn latest_frame(&self) -> Option<Arc<XrFrame>> {
+		self.lock()
+			.session
+			.as_ref()
+			.and_then(|session| session.latest.clone())
+	}
+
+	/// Waits for a frame newer than `request.after`, as the guest receives it.
+	/// Resolves with `Cancelled` when the session stops first.
+	pub fn next_frame(self: &Arc<Self>, request: NextFrame) -> NextGuestFrame {
+		let generation = self
+			.lock()
+			.session
+			.as_ref()
+			.map(|session| session.generation);
+
+		NextGuestFrame {
+			runtime: Arc::clone(self),
+			request,
+			generation,
+		}
+	}
+
+	/// Casts a ray against the real world as of the newest frame.
+	pub fn hit_test(&self, request: &HitTestRequest) -> Result<Vec<Hit>, Error> {
+		let mut state = self.lock();
+		let state = &mut *state;
+		let session = state.session.as_ref().ok_or(Error::Unavailable)?;
+		let Some(frame) = session.latest.clone() else {
+			return Ok(Vec::new());
+		};
+		let mut hits = state.backend.hit_test(request, &frame);
+		crate::hit_test::sort_and_truncate(&mut hits, request.max_results as usize);
+		Ok(hits)
+	}
+
+	/// Pins a point to the real world, with the platform's anchors where it
+	/// has them and a fixed point otherwise.
+	pub fn add_anchor(&self, pose: Pose, plane: Option<u64>) -> Result<u64, Error> {
+		let mut state = self.lock();
+		let state = &mut *state;
+		let session = state.session.as_mut().ok_or(Error::Unavailable)?;
+
+		match state.backend.add_anchor(pose, plane) {
+			Err(Error::Unavailable) => {}
+			result => return result,
+		}
+
+		if session.anchors.len() >= Frame::MAX_ANCHORS {
+			return Err(Error::Busy);
+		}
+
+		let id = RUNTIME_ANCHOR | session.next_anchor;
+		session.next_anchor += 1;
+		session.anchors.push(Anchor {
+			id,
+			pose,
+			tracking: TrackingState::Normal,
+		});
+		Ok(id)
+	}
+
+	/// Releases an anchor.
+	pub fn remove_anchor(&self, id: u64) -> Result<(), Error> {
+		let mut state = self.lock();
+		let state = &mut *state;
+		let session = state.session.as_mut().ok_or(Error::Unavailable)?;
+
+		if id & RUNTIME_ANCHOR == 0 {
+			return state.backend.remove_anchor(id);
+		}
+
+		let before = session.anchors.len();
+		session.anchors.retain(|anchor| anchor.id != id);
+
+		if session.anchors.len() == before {
+			Err(Error::InvalidArgument)
+		} else {
+			Ok(())
+		}
+	}
+
+	/// Tells a phone backend the screen it projects for.
+	pub fn set_viewport(&self, viewport: Viewport) {
+		self.lock().backend.set_viewport(viewport);
+	}
+
+	/// Ends the session. Waiting frame requests resolve with `Cancelled`.
+	pub fn stop(&self) {
+		let mut state = self.lock();
+
+		if state.session.take().is_some() {
+			state.backend.stop();
+		}
+
+		wake(&mut state.waiters);
+	}
+
+	/// Whether a renderer calls [`XrRuntime::update`] itself. While it does,
+	/// the built-in [`Driver`] leaves the session alone.
+	pub fn set_external_driver(&self, external: bool) {
+		self.external_driver.store(external, Ordering::Release);
+	}
+
+	/// Seconds since this runtime was made, on a monotonic clock.
+	pub fn now(&self) -> f64 {
+		self.clock.elapsed().as_secs_f64()
+	}
+
+	/// Starts a thread that updates running sessions about 60 times a second,
+	/// for hosts where nothing renders the session (the guest still receives
+	/// frames). It stops when the [`Driver`] is dropped.
+	pub fn drive(self: &Arc<Self>) -> std::io::Result<Driver> {
+		let stop = Arc::new(AtomicBool::new(false));
+		let runtime = Arc::downgrade(self);
+		let flag = Arc::clone(&stop);
+		let thread = std::thread::Builder::new()
+			.name("leptoskit-xr".into())
+			.spawn(move || drive(&runtime, &flag))?;
+
+		Ok(Driver {
+			stop,
+			thread: Some(thread),
+		})
+	}
+}
+
+fn negotiate(capabilities: &Capabilities, config: &SessionConfig) -> Result<SessionInfo, Error> {
+	if !SessionConfig::FRAME_RATES.contains(&config.frame_rate) {
+		return Err(Error::InvalidArgument);
+	}
+
+	let offered = capabilities
+		.features(config.mode)
+		.ok_or(Error::Unavailable)?;
+	let features = config.negotiate(offered).ok_or(Error::Unavailable)?;
+	// Orientation knows no position, so only its starting point means
+	// anything.
+	let reference_space = if config.mode.tracks_position() {
+		config.reference_space
+	} else {
+		ReferenceSpace::Local
+	};
+
+	Ok(SessionInfo {
+		mode: config.mode,
+		features,
+		reference_space,
+	})
+}
+
+fn wake(waiters: &mut Vec<Waker>) {
+	for waiter in waiters.drain(..) {
+		waiter.wake();
+	}
+}
+
+fn drive(runtime: &Weak<XrRuntime>, stop: &AtomicBool) {
+	while !stop.load(Ordering::Acquire) {
+		let Some(runtime) = runtime.upgrade() else {
+			return;
+		};
+		let active =
+			!runtime.external_driver.load(Ordering::Acquire) && runtime.session().is_some();
+
+		if active && runtime.update(runtime.now()).is_err() {
+			runtime.stop();
+		}
+
+		drop(runtime);
+		std::thread::sleep(if active { DRIVE_PERIOD } else { IDLE_PERIOD });
+	}
+}
+
+/// The thread [`XrRuntime::drive`] started. Dropping it stops the thread.
+#[derive(Debug)]
+pub struct Driver {
+	stop: Arc<AtomicBool>,
+	thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Driver {
+	fn drop(&mut self) {
+		self.stop.store(true, Ordering::Release);
+
+		if let Some(thread) = self.thread.take() {
+			let _ = thread.join();
+		}
+	}
+}
+
+/// A wait for the guest's next frame; see [`XrRuntime::next_frame`].
+#[derive(Debug)]
+pub struct NextGuestFrame {
+	runtime: Arc<XrRuntime>,
+	request: NextFrame,
+	generation: Option<u64>,
+}
+
+impl Future for NextGuestFrame {
+	type Output = Result<Frame, Error>;
+
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		let mut state = self.runtime.lock();
+		let state = &mut *state;
+		let Some(session) = state
+			.session
+			.as_ref()
+			.filter(|session| Some(session.generation) == self.generation)
+		else {
+			return Poll::Ready(Err(Error::Cancelled));
+		};
+
+		if let Some((sequence, frame)) = &session.published
+			&& *sequence > self.request.after
+		{
+			let include_planes = frame.planes_revision != self.request.planes_revision;
+			return Poll::Ready(Ok(frame.to_guest(*sequence, include_planes)));
+		}
+
+		if !state
+			.waiters
+			.iter()
+			.any(|waiter| waiter.will_wake(context.waker()))
+		{
+			state.waiters.push(context.waker().clone());
+		}
+
+		Poll::Pending
+	}
+}
