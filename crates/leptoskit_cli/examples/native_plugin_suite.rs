@@ -87,6 +87,11 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("maps", "leptoskit_plugin_maps"),
 	("live-photo", "leptoskit_plugin_live_photo"),
 	("web-browser", "leptoskit_plugin_web_browser"),
+	("app-integrity", "leptoskit_plugin_app_integrity"),
+	("blob", "leptoskit_plugin_blob"),
+	("diagnostics", "leptoskit_plugin_diagnostics"),
+	("asset", "leptoskit_plugin_asset"),
+	("age-range", "leptoskit_plugin_age_range"),
 	("audio", "leptoskit_plugin_audio"),
 	(
 		"android_alarm_manager",
@@ -147,6 +152,11 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
+	"leptoskit_plugin_app_integrity/tests/android/AppIntegrityWireTest.kt",
+	"leptoskit_plugin_blob/tests/android/BlobWireTest.kt",
+	"leptoskit_plugin_diagnostics/tests/android/DiagnosticsWireTest.kt",
+	"leptoskit_plugin_asset/tests/android/AssetWireTest.kt",
+	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker
@@ -614,6 +624,17 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 			"VideoThumbnailsWireInstrumentationTest.kt",
 			VIDEO_THUMBNAILS_WIRE_TEST,
 		),
+		(
+			"AppIntegrityWireInstrumentationTest.kt",
+			APP_INTEGRITY_WIRE_TEST,
+		),
+		("BlobWireInstrumentationTest.kt", BLOB_WIRE_TEST),
+		(
+			"DiagnosticsWireInstrumentationTest.kt",
+			DIAGNOSTICS_WIRE_TEST,
+		),
+		("AssetWireInstrumentationTest.kt", ASSET_WIRE_TEST),
+		("AgeRangeWireInstrumentationTest.kt", AGE_RANGE_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

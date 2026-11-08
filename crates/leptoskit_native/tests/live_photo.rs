@@ -62,7 +62,9 @@ fn the_live_photo_is_an_image_to_assistive_technology() {
 	);
 	assert_eq!(NativeKind::LivePhoto.wire_name(), "live_photo");
 	assert!(is_layout_only(NativeKind::View, &NativeProps::default()));
-	let mut props = NativeProps::default();
-	props.live_photo = Some(1);
+	let props = NativeProps {
+		live_photo: Some(1),
+		..NativeProps::default()
+	};
 	assert!(!is_layout_only(NativeKind::View, &props));
 }

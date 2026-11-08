@@ -63,8 +63,10 @@ fn the_map_is_an_image_to_assistive_technology() {
 	);
 	assert_eq!(NativeKind::Map.wire_name(), "map");
 	assert!(is_layout_only(NativeKind::View, &NativeProps::default()));
-	let mut props = NativeProps::default();
-	props.map = Some(1);
+	let props = NativeProps {
+		map: Some(1),
+		..NativeProps::default()
+	};
 	assert!(!is_layout_only(NativeKind::View, &props));
 }
 
@@ -74,8 +76,8 @@ fn the_session_travels_in_the_props() {
 	let props = Map(9).aria_hidden(true).props;
 	let json = serde_json::to_value(&props).unwrap();
 	assert_eq!(json["map"], 9);
-	let back: leptoskit_native::NativeProps = serde_json::from_value(json).unwrap();
+	let back: NativeProps = serde_json::from_value(json).unwrap();
 	assert_eq!(back.map, Some(9));
-	let empty = serde_json::to_value(leptoskit_native::NativeProps::default()).unwrap();
+	let empty = serde_json::to_value(NativeProps::default()).unwrap();
 	assert!(empty.get("map").is_none());
 }

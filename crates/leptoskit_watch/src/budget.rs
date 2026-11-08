@@ -162,6 +162,8 @@ fn refuse_kind(kind: NativeKind) -> Result<(), WatchError> {
 		NativeKind::Scene3d => Err(WatchError::UnsupportedKind("Scene3d")),
 		NativeKind::Video => Err(WatchError::UnsupportedKind("Video")),
 		NativeKind::Camera => Err(WatchError::UnsupportedKind("Camera")),
+		NativeKind::Map => Err(WatchError::UnsupportedKind("Map")),
+		NativeKind::LivePhoto => Err(WatchError::UnsupportedKind("LivePhoto")),
 		NativeKind::Custom(name) => Err(WatchError::UnsupportedKind(name)),
 	}
 }
