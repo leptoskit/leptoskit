@@ -37,6 +37,8 @@ A separate Rust crate for outbound system links and application settings, with S
 
 Enable the crate's `guest` feature for an interpreted Wasm application and select `linking` in `native.plugins`. The default policy permits `http`, `https`, `mailto`, `tel` and `sms`. Custom schemes, local files and executable schemes are rejected. Destinations must be ASCII (percent-encode Unicode text), at most 8192 bytes, and contain no whitespace, control characters, escaped controls, malformed escapes, credentials or backslashes. Payloads are revalidated at native trust boundaries.
 
+Outbound `sms:` and `mailto:` opens stay here as fire-and-forget scheme launches. Prefilling and waiting on the system SMS or mail composer belongs to `leptoskit_plugin_sms` and `leptoskit_plugin_mail_composer`. Waiting for an in-app HTTP(S) browser dismiss belongs to `leptoskit_plugin_web_browser`; OAuth return sessions belong to `leptoskit_plugin_web_auth`.
+
 | Operation    | iOS   | Android              | macOS                        | Windows/Linux      | Web           |
 | ------------ | ----- | -------------------- | ---------------------------- | ------------------ | ------------- |
 | Open URL     | UIKit | `ACTION_VIEW`        | AppKit or Rust system opener | Rust system opener | `window.open` |

@@ -70,6 +70,9 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	),
 	("passkeys", "leptoskit_plugin_passkeys"),
 	("web-auth", "leptoskit_plugin_web_auth"),
+	("sms", "leptoskit_plugin_sms"),
+	("mail-composer", "leptoskit_plugin_mail_composer"),
+	("web-browser", "leptoskit_plugin_web_browser"),
 	("audio", "leptoskit_plugin_audio"),
 	("android_intent", "leptoskit_plugin_android_intent"),
 ];
@@ -108,6 +111,9 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_web_auth/tests/android/WebAuthPluginTest.kt",
 	"leptoskit_plugin_android_intent/tests/android/AndroidIntentWireTest.kt",
 	"leptoskit_plugin_android_intent/tests/android/AndroidIntentPluginTest.kt",
+	"leptoskit_plugin_sms/tests/android/SmsWireTest.kt",
+	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
+	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker
@@ -118,6 +124,45 @@ import org.junit.Test
 class DocumentEncodingInstrumentationTest {
     @Test
     fun boundedReadsAndCancellation() {
+        main()
+    }
+}
+";
+
+const SMS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.sms
+
+import org.junit.Test
+
+/** Validates synthetic SMS compose framing without opening a messenger. */
+class SmsWireInstrumentationTest {
+    @Test
+    fun boundedRecipientsAndBodies() {
+        main()
+    }
+}
+";
+
+const MAIL_COMPOSER_WIRE_TEST: &str = r"package dev.leptoskit.plugins.mailcomposer
+
+import org.junit.Test
+
+/** Validates synthetic mail compose framing without opening a mail client. */
+class MailComposerWireInstrumentationTest {
+    @Test
+    fun boundedAddressesAndFields() {
+        main()
+    }
+}
+";
+
+const WEB_BROWSER_WIRE_TEST: &str = r"package dev.leptoskit.plugins.webbrowser
+
+import org.junit.Test
+
+/** Validates synthetic browser URL framing without opening Custom Tabs. */
+class WebBrowserWireInstrumentationTest {
+    @Test
+    fun boundedHttpUrls() {
         main()
     }
 }
@@ -304,13 +349,29 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		tests.join("LoggingFileTest.kt"),
 		include_str!("../tests/fixtures/native_plugin_suite/LoggingFileTest.kt"),
 	)?;
-	let wrapper = tests.join("DocumentEncodingInstrumentationTest.kt");
-	anyhow::ensure!(
-		!wrapper.exists(),
-		"duplicate test file {}",
-		wrapper.display()
-	);
-	std::fs::write(wrapper, DOCUMENT_ENCODING_TEST)?;
+	for (name, source) in [
+		(
+			"DocumentEncodingInstrumentationTest.kt",
+			DOCUMENT_ENCODING_TEST,
+		),
+		("SmsWireInstrumentationTest.kt", SMS_WIRE_TEST),
+		(
+			"MailComposerWireInstrumentationTest.kt",
+			MAIL_COMPOSER_WIRE_TEST,
+		),
+		(
+			"WebBrowserWireInstrumentationTest.kt",
+			WEB_BROWSER_WIRE_TEST,
+		),
+	] {
+		let wrapper = tests.join(name);
+		anyhow::ensure!(
+			!wrapper.exists(),
+			"duplicate test file {}",
+			wrapper.display()
+		);
+		std::fs::write(wrapper, source)?;
+	}
 	Ok(())
 }
 
@@ -401,12 +462,28 @@ mod tests {
 				destination.join("leptoskit.toml"),
 			)?)?;
 			let plugins = config["native"]["plugins"].as_array().unwrap();
-			for name in ["sharing", "store-review", "tracking-transparency"] {
+			for name in [
+				"sharing",
+				"store-review",
+				"tracking-transparency",
+				"sms",
+				"mail-composer",
+				"web-browser",
+			] {
 				assert!(plugins.iter().any(|value| value.as_str() == Some(name)));
 			}
 
 			let tests = destination.join("android/app/src/androidTest/java");
-			for name in ["StoreReviewPluginTest.kt", "SharingTest.kt"] {
+			for name in [
+				"StoreReviewPluginTest.kt",
+				"SharingTest.kt",
+				"SmsWireTest.kt",
+				"SmsWireInstrumentationTest.kt",
+				"MailComposerWireTest.kt",
+				"MailComposerWireInstrumentationTest.kt",
+				"WebBrowserWireTest.kt",
+				"WebBrowserWireInstrumentationTest.kt",
+			] {
 				assert!(tests.join(name).is_file(), "missing {name}");
 			}
 			Ok(())
