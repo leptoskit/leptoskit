@@ -12,6 +12,8 @@ use crate::math::Pose;
 use crate::math::Projection;
 use crate::math::Quat;
 use crate::math::Vec3;
+use crate::math::attitude_to_viewer;
+use crate::math::heading;
 use crate::types::*;
 
 /// The vertical field of view an orientation session renders with: a
@@ -33,38 +35,6 @@ pub trait OrientationSource: Send {
 	fn latest(&mut self) -> Option<(f64, Quat)>;
 	/// Stops reporting.
 	fn stop(&mut self);
-}
-
-/// Turns a device rotation in a +Z-up world into the viewer's orientation in
-/// this crate's +Y-up world, looking out of the back of the phone, for an
-/// interface turned `quarter_turns` clockwise from the device's natural
-/// orientation.
-#[must_use]
-pub fn attitude_to_viewer(device: Quat, quarter_turns: u32) -> Quat {
-	// The +Z-up world is the +Y-up world turned a quarter about +X.
-	let world = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -std::f32::consts::FRAC_PI_2);
-	// Turning the interface clockwise turns its frame about the screen's
-	// normal, the opposite way.
-	let screen = Quat::from_axis_angle(
-		Vec3::new(0.0, 0.0, 1.0),
-		-((quarter_turns % 4) as f32) * std::f32::consts::FRAC_PI_2,
-	);
-
-	(world * device * screen)
-		.normalized()
-		.unwrap_or(Quat::IDENTITY)
-}
-
-/// The heading of a viewer orientation: the rotation about +Y that points
-/// −Z the way it looks, ignoring pitch and roll.
-fn heading(orientation: Quat) -> f32 {
-	let forward = orientation.rotate(Vec3::FORWARD);
-
-	if forward.x.abs() < 1e-4 && forward.z.abs() < 1e-4 {
-		return 0.0;
-	}
-
-	(-forward.x).atan2(-forward.z)
 }
 
 /// Orientation-only sessions from an [`OrientationSource`].

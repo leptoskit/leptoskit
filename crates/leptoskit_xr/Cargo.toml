@@ -76,7 +76,7 @@ openxr = { version = "0.22", default-features = false, features = ["loaded"], op
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { workspace = true, optional = true, features = ["DeviceOrientationEvent", "Navigator", "Screen", "ScreenOrientation", "Window"] }
+web-sys = { workspace = true, optional = true, features = ["Document", "Event", "EventTarget", "Navigator", "Window"] }
 
 [dev-dependencies]
 pollster = { workspace = true }

@@ -549,6 +549,51 @@ impl Projection {
 	}
 }
 
+/// Turns a device rotation in a +Z-up world into the viewer's orientation in
+/// this crate's +Y-up world, looking out of the back of the phone, for an
+/// interface turned `quarter_turns` clockwise from the device's natural
+/// orientation.
+#[must_use]
+pub fn attitude_to_viewer(device: Quat, quarter_turns: u32) -> Quat {
+	// The +Z-up world is the +Y-up world turned a quarter about +X.
+	let world = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -std::f32::consts::FRAC_PI_2);
+	// Turning the interface clockwise turns its frame about the screen's
+	// normal, the opposite way.
+	let screen = Quat::from_axis_angle(
+		Vec3::new(0.0, 0.0, 1.0),
+		-((quarter_turns % 4) as f32) * std::f32::consts::FRAC_PI_2,
+	);
+
+	(world * device * screen)
+		.normalized()
+		.unwrap_or(Quat::IDENTITY)
+}
+
+/// The heading of a viewer orientation: the rotation about +Y that points
+/// −Z the way it looks, ignoring pitch and roll.
+pub fn heading(orientation: Quat) -> f32 {
+	let forward = orientation.rotate(Vec3::FORWARD);
+
+	if forward.x.abs() < 1e-4 && forward.z.abs() < 1e-4 {
+		return 0.0;
+	}
+
+	(-forward.x).atan2(-forward.z)
+}
+
+/// A device rotation from the W3C `deviceorientation` angles in degrees:
+/// `alpha` about +Z, then `beta` about the new +X, then `gamma` about the new
+/// +Y, in the same device and +Z-up world frames as
+/// [`attitude_to_viewer`] takes.
+#[must_use]
+pub fn device_orientation(alpha: f32, beta: f32, gamma: f32) -> Quat {
+	let z = Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), alpha.to_radians());
+	let x = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), beta.to_radians());
+	let y = Quat::from_axis_angle(Vec3::Y, gamma.to_radians());
+
+	(z * x * y).normalized().unwrap_or(Quat::IDENTITY)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -616,6 +661,14 @@ mod tests {
 		let depth = |z: f32| (projection[10] * z + projection[14]) / -z;
 		assert!(depth(-0.1).abs() < 1e-5);
 		assert!((depth(-100.0) - 1.0).abs() < 1e-4);
+	}
+
+	#[test]
+	fn an_upright_phone_in_the_browser_looks_at_the_horizon() {
+		// `beta` = 90: the phone stands upright in portrait.
+		let viewer = attitude_to_viewer(device_orientation(0.0, 90.0, 0.0), 0);
+		assert!(close(viewer.rotate(Vec3::Y), Vec3::Y));
+		assert!(viewer.rotate(Vec3::FORWARD).y.abs() < 1e-4);
 	}
 
 	#[test]

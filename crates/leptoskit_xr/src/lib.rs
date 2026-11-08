@@ -40,6 +40,16 @@ pub mod guest;
 #[cfg(all(feature = "host", not(target_arch = "wasm32")))]
 pub mod host;
 
+#[cfg(all(feature = "web", target_arch = "wasm32", target_os = "unknown"))]
+pub mod web;
+
+/// The session API for the side this build runs on: an interpreter guest
+/// (`guest`) or the browser (`web`). Both have the same methods, so shared
+/// app code reads the same on either.
+#[cfg(all(feature = "guest", target_arch = "wasm32"))]
+pub use guest::Session;
+#[cfg(all(feature = "guest", target_arch = "wasm32"))]
+pub use guest::Xr;
 pub use leptoskit_bridge::Error;
 pub use math::Fov;
 pub use math::Pose;
@@ -49,3 +59,17 @@ pub use math::Ray;
 pub use math::Vec3;
 pub use protocol::NAME;
 pub use types::*;
+#[cfg(all(
+	feature = "web",
+	not(feature = "guest"),
+	target_arch = "wasm32",
+	target_os = "unknown"
+))]
+pub use web::Session;
+#[cfg(all(
+	feature = "web",
+	not(feature = "guest"),
+	target_arch = "wasm32",
+	target_os = "unknown"
+))]
+pub use web::Xr;
