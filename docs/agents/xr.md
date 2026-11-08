@@ -67,14 +67,14 @@ Phones without platform depth (the Solana Seeker, which has no ARCore; ARCore ph
 
 ### Why tract
 
-Measured on an Apple M4 with the pinned file (`examples/benchmark.rs`, and a scratch harness for ONNX Runtime through `ort` 2.0.0-rc.15), warm medians on a 252 × 448 picture while the machine was otherwise quiet:
+Measured on an Apple M4 with the pinned file (`examples/benchmark.rs`, and a scratch harness for ONNX Runtime through `ort` 2.0.0-rc.15), warm medians of 7 runs on a 252 × 448 picture with the machine lightly loaded (load average about 5):
 
 | Runtime                         | 1 thread | 2 threads | 4 threads | Load  |
 | ------------------------------- | -------- | --------- | --------- | ----- |
 | tract 0.23.9                    | 264 ms   | 258 ms    | 247 ms    | 0.5 s |
 | ONNX Runtime, optimisations off | 252 ms   | 191 ms    | 170 ms    | 3.7 s |
 
-ONNX Runtime with its default graph optimisations (any level from basic up) returned a near-constant map on Apple silicon: wrong, not slow. With them off it agrees with tract to the centimetre on the fixtures. tract is 1.05× ONNX Runtime on one thread and 1.35× on two, inside the 2× budget, and needs no native library: `ort` downloads a prebuilt static ONNX Runtime per target (97 MB for `aarch64-apple-ios`, 136 MB for `aarch64-linux-android`, from pyke's CDN). tract's own threading barely helps this quantised model, so the crate doesn't enable it. tract-linalg compiles assembly kernels with the target's C compiler: `cargo build --target aarch64-linux-android` needs the NDK's clang (as `setup/scripts/clippy.sh` already exports), and with Apple's clang standing in it built a static library for both `aarch64-linux-android` and `aarch64-apple-ios`. Neither has run on a phone. Under load from other builds the same benchmark read 650–830 ms, so compare numbers taken together.
+ONNX Runtime with its default graph optimisations (any level from basic up) returned a near-constant map on Apple silicon: wrong, not slow. With them off it agrees with tract to the centimetre on the fixtures. tract is 1.05× ONNX Runtime on one thread and 1.35× on two, inside the 2× budget, and needs no native library: `ort` downloads a prebuilt static ONNX Runtime per target (97 MB for `aarch64-apple-ios`, 136 MB for `aarch64-linux-android`, from pyke's CDN). tract's own threading barely helps this quantised model, so the crate doesn't enable it. tract-linalg compiles assembly kernels with the target's C compiler: `cargo build --target aarch64-linux-android` needs the NDK's clang (as `setup/scripts/clippy.sh` already exports), and with Apple's clang standing in it built a static library for both `aarch64-linux-android` and `aarch64-apple-ios`. Neither has run on a phone. With other agents' builds running (load average 15 to 20) every runtime read 450 ms to 1 s and their order was not stable, so compare numbers taken together.
 
 ### The weights
 

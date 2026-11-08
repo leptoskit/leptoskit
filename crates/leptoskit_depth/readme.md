@@ -114,7 +114,7 @@ A `DepthMap` holds metres along the camera's forward axis (not along each ray), 
 
 ## Speed
 
-On an Apple M4 (10 cores), the pinned model on a 252 × 448 picture, warm, measured while the machine was otherwise quiet:
+On an Apple M4 (10 cores), the pinned model on a 252 × 448 picture, warm medians of 7 runs, measured while the machine was lightly loaded (load average about 5). With other builds running (load average 15 to 20) every runtime read 450 ms to 1 s and their order was not stable, so compare numbers taken together:
 
 | Runtime                                                 | 1 thread | 2 threads | 4 threads | Load  | Output                     |
 | ------------------------------------------------------- | -------- | --------- | --------- | ----- | -------------------------- |
