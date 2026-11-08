@@ -214,7 +214,7 @@ serde_json = "1"
 		("guest/Cargo.toml", guest),
 		(
 			"guest/src/lib.rs",
-			include_str!("templates/harmonyos/guest.rs").into(),
+			leptoskit_platform_harmonyos::templates::GUEST_RS.into(),
 		),
 		(
 			"src/lib.rs",
@@ -227,7 +227,7 @@ serde_json = "1"
 		(".gitignore", "/target\n/.leptoskit\n".into()),
 		(
 			"readme.md",
-			include_str!("templates/harmonyos/readme.md").into(),
+			leptoskit_platform_harmonyos::templates::README.into(),
 		),
 	];
 	std::fs::create_dir_all(destination)?;

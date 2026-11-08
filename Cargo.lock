@@ -5372,6 +5372,7 @@ dependencies = [
  "leptoskit_lint",
  "leptoskit_native",
  "leptoskit_platform",
+ "leptoskit_platform_harmonyos",
  "leptoskit_plugin",
  "leptoskit_plugin_http",
  "leptoskit_plugin_router",
@@ -5844,6 +5845,14 @@ name = "leptoskit_platform"
 version = "0.3.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "leptoskit_platform_harmonyos"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_platform",
  "serde_json",
 ]
 

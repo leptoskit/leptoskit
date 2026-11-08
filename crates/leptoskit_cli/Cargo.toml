@@ -78,6 +78,7 @@ leptoskit_idp = { workspace = true }
 leptoskit_l10n_codegen = { workspace = true }
 leptoskit_lint = { workspace = true }
 leptoskit_platform = { workspace = true }
+leptoskit_platform_harmonyos = { workspace = true }
 leptoskit_plugin = { workspace = true }
 leptoskit_plugin_router = { workspace = true }
 leptoskit_router_codegen = { workspace = true }
