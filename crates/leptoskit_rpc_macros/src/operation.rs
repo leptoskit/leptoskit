@@ -1598,9 +1598,13 @@ fn server_items(
 		_ => quote!(),
 	};
 
-	// JSON always works; Pod replies require the output type to implement Pod
-	// codecs too. Prefer `handle` until return types are universally Pod-ready.
-	let handler = quote!(#krate::__private::handle::<#struct_ident>);
+	// Generated arg structs carry `#[pod::data]`; wire them with `handle_pod`.
+	// Jobs keep `handle` until background payloads are Pod-first everywhere.
+	let handler = if kind == OperationKind::Job {
+		quote!(#krate::__private::handle::<#struct_ident>)
+	} else {
+		quote!(#krate::__private::handle_pod::<#struct_ident>)
+	};
 	let service = service_const(args.service.as_ref());
 	let call = quote_spanned! {signature.output_span=>
 		#fn_ident(cx, #(#bindings),*)

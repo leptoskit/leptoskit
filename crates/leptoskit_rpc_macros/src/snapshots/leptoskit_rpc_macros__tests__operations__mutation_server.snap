@@ -52,6 +52,6 @@ const _: () = {
         leptoskit::rpc::Operation > ::NAME, kind : < SendMessage as
         leptoskit::rpc::Operation > ::KIND, module_path : ::core::module_path!(), service
         : < SendMessage as leptoskit::rpc::Operation > ::SERVICE, handler :
-        leptoskit::rpc::__private::handle:: < SendMessage >, }
+        leptoskit::rpc::__private::handle_pod:: < SendMessage >, }
     }
 };
