@@ -16,6 +16,7 @@ use anyhow::Result;
 use leptoskit_config::LeptoskitConfig;
 
 mod layout;
+mod source;
 
 /// The screens, relative to the client crate's `src/`, and whether each is
 /// only for `--idp`. The templates hold every optional part; [`render`]
@@ -354,10 +355,11 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 	let entry = &layout.client.entry;
 	let source = entry.parent().context("client target directory")?;
 	anyhow::ensure!(
-		!source.join("auth.rs").exists(),
+		!source.join("auth.rs").try_exists()?,
 		"{} already exists; the screens go in src/auth/, so rename it first",
 		relative(root, &source.join("auth.rs"))
 	);
+	let client_source = source::preflight(&layout, config.db.is_some())?;
 
 	for (path, contents) in pages(mode) {
 		let file = Template {
@@ -388,7 +390,7 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 	}
 
 	let granted = native_plugins(root, &mut report)?;
-	let wired = std::fs::read_to_string(entry)?.contains("auth::provide(");
+	let wired = client_source.calls.provide && client_source.calls.gate;
 
 	if !wired {
 		report.next.push(format!(
@@ -410,7 +412,7 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 		});
 	}
 
-	if idp && !std::fs::read_to_string(entry)?.contains("navigate_with(") {
+	if idp && !client_source.calls.navigate {
 		report.next.push(format!(
 			"In {}, after `auth::provide()`, say how the screens leave the app, such as back to \
 			 an app asking for consent: `auth::screens().navigate_with(|address| ...)`, with \
@@ -505,9 +507,9 @@ fn server(
 		);
 	}
 
-	let main_source = std::fs::read_to_string(main)?;
+	let main_source = source::Source::read(main)?;
 
-	if idp && !main_source.contains("sign_in::provider") {
+	if idp && !main_source.calls.provider {
 		report.next.push(format!(
 			"In {shown}, build the provider next to the sign-in service, with your scopes and \
 			 claims: `let idp = sign_in::provider(&db, \
@@ -518,7 +520,7 @@ fn server(
 		));
 	}
 
-	if !main_source.contains("sign_in::service") {
+	if !main_source.calls.service {
 		report.next.push(format!(
 			"In {shown}, build the service once the database is migrated, with your user table: \
 			 `let auth = sign_in::service::<User>(&db)?;`. Then add `.merge(auth.router())` and \
@@ -937,17 +939,7 @@ fn write_owned(
 /// Appends `pub mod <name>;` to a crate root that doesn't declare the module.
 fn declare_module(root: &Path, entry: &Path, name: &str, report: &mut Report) -> Result<()> {
 	let mut contents = std::fs::read_to_string(entry)?;
-	let declared = contents.lines().any(|line| {
-		let line = line.trim();
-		[
-			format!("mod {name};"),
-			format!("pub mod {name};"),
-			format!("pub(crate) mod {name};"),
-		]
-		.contains(&line.to_owned())
-	});
-
-	if declared {
+	if source::Source::read(entry)?.module(name)? {
 		return Ok(());
 	}
 

@@ -7,6 +7,8 @@ use super::*;
 
 const LIB: &str = "//! The app.\n\npub mod routes;\n";
 
+mod preflight;
+
 /// Neither `--idp` nor passwords.
 const PLAIN: Mode = Mode {
 	idp: false,
@@ -232,7 +234,7 @@ fn a_server_with_a_database_gets_its_sign_in_module() {
 		root.path().join("src/main.rs"),
 		main.replace(
 			"fn main() {}",
-			"fn main() { let _ = sign_in::service::<()>; }",
+			"fn main() { let _ = sign_in::service::<()>(&db); }",
 		),
 	)
 	.unwrap();
@@ -405,7 +407,7 @@ fn a_single_crate_app_is_its_own_client() {
 	fs::create_dir_all(path.join("src")).unwrap();
 	fs::write(
 		path.join("src/main.rs"),
-		"mod auth;\nfn main() { auth::provide(); }",
+		"mod auth;\nfn main() { auth::provide(); auth::screens().gate(|| home); }",
 	)
 	.unwrap();
 
@@ -857,14 +859,16 @@ fn idp_adds_its_screens_routes_config_and_features() {
 	fs::write(
 		path.join("app_app/src/lib.rs"),
 		format!(
-			"{}\nfn start() {{ auth::provide(); auth::screens().navigate_with(|_| ()); }}\n",
+			"{}\nfn start() {{ auth::provide(); auth::screens().gate(|| home); \
+			 auth::screens().navigate_with(|_| ()); }}\n",
 			read(path, "app_app/src/lib.rs")
 		),
 	)
 	.unwrap();
 	fs::write(
 		path.join("src/main.rs"),
-		"mod sign_in;\nfn main() { let _ = (sign_in::service::<()>, sign_in::provider); }\n",
+		"mod sign_in;\nfn main() { let _ = (sign_in::service::<()>(&db), sign_in::provider(&db, \
+		 &auth)); }\n",
 	)
 	.unwrap();
 	let again = run_idp(path, false);
