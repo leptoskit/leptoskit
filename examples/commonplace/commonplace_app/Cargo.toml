@@ -38,6 +38,7 @@ devtools = ["leptoskit/devtools"]
 ios = ["native", "leptoskit/ios"]
 android = ["native", "leptoskit/android"]
 macos = ["native", "leptoskit/macos"]
+linux = ["native", "leptoskit/linux"]
 
 [dependencies]
 commonplace_db = { path = "../commonplace_db" }

@@ -6,7 +6,16 @@ publish = false
 
 [workspace]
 resolver = "2"
-members = ["android", "commonplace_app", "commonplace_backend", "commonplace_db", "commonplace_shared", "ios", "macos"]
+members = [
+	"android",
+	"commonplace_app",
+	"commonplace_backend",
+	"commonplace_db",
+	"commonplace_shared",
+	"ios",
+	"linux",
+	"macos",
+]
 default-members = ["."]
 
 [dependencies]
