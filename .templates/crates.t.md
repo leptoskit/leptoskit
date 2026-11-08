@@ -382,6 +382,25 @@ continuous execution, and macOS, desktop, and the browser report `Unavailable`.
 
 <!-- {/p_backgroundSummary} -->
 
+
+<!-- {@p_age_rangeSummary} -->
+
+Add `{{ plugin_age_range.package.name }}` as a direct dependency and select the
+`{{ plugin_age_range.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts
+discover it from Cargo metadata. Generated Linux hosts register it where it
+has a Linux Rust implementation; generated Windows and terminal hosts
+currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse
+`guest::AgeRange` rather than resolving the plugin on every call.
+Query whether the host can ask, then request a declared age band around a
+threshold. Responses are Declined, Unavailable, or Shared with inclusive
+lower/upper bounds (`upper == 0` means open-ended). iOS uses Declared Age
+Range where the OS exposes it; Android, desktop, and the browser return
+`Unavailable` in this MVP. Never invents an age band when the OS declines
+or withholds one.
+
+<!-- {/p_age_rangeSummary} -->
+
 <!-- {@p_background_taskSummary} -->
 
 Add `{{ plugin_background_task.package.name }}` as a direct dependency and select the

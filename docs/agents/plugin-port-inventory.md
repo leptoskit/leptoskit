@@ -96,7 +96,7 @@ The tables cover every entry under **Expo SDK** in the reference sidebar at the 
 
 | Expo entry                      | Rust destination                           | Status / acceptance scope                                                                                                                                |
 | ------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AgeRange                        | `age_range`                                | Planned; explicit unavailable/declined states and platform-specific age-range semantics                                                                  |
+| AgeRange                        | `age_range`                                | Partial; capability status + threshold request; Declined/Unavailable/Shared bounds; Android/desktop/browser Unavailable; live OS prompts remain          |
 | AppIntegrity                    | `app_integrity`                            | Planned; platform attestation with a server-verification contract                                                                                        |
 | AppleAuthentication             | `passkeys`                                 | Partial; Sign in with Apple ID tokens for the sign-in client; credential-state changes remain                                                            |
 | Application                     | `application`                              | Partial; ID/name/version/build, signing digest, installer store, install/update times (`package_info_plus`); referrer remains                            |
