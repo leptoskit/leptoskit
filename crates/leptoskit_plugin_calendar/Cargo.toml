@@ -1,0 +1,39 @@
+[package]
+name = "leptoskit_plugin_calendar"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded calendar permission, calendars, and events for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "calendar"
+apple-module = "LeptosKitCalendar"
+apple-type = "CalendarPlugin"
+apple-context = true
+apple-usage-descriptions = ["NSCalendarsFullAccessUsageDescription", "NSCalendarsUsageDescription"]
+android-type = "dev.leptoskit.plugins.calendar.CalendarPlugin"
+android-context = true
+android-permissions = ["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"]
+
+[package.metadata.leptoskit.runtime.windows]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.tui]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true
