@@ -21,6 +21,7 @@ mod harmonyos;
 mod lock;
 mod manifest;
 mod project;
+mod quest;
 mod registry;
 mod watch;
 
@@ -82,6 +83,9 @@ pub enum Target {
 	Wearos,
 	/// Experimental Apple watchOS watch host.
 	Watchos,
+	/// Meta Quest headsets (Horizon OS): the Android host, packaged as a VR
+	/// app.
+	Quest,
 	/// A native Windows application for this machine's architecture.
 	Windows,
 	/// A native GTK application for this machine's architecture.
@@ -99,7 +103,7 @@ impl Target {
 			Self::IosSimulator if cfg!(target_arch = "x86_64") => "x86_64-apple-ios",
 			Self::IosSimulator => "aarch64-apple-ios-sim",
 			Self::Ios => "aarch64-apple-ios",
-			Self::Android | Self::Wearos => "aarch64-linux-android",
+			Self::Android | Self::Wearos | Self::Quest => "aarch64-linux-android",
 			Self::AndroidX86_64 => "x86_64-linux-android",
 			Self::Harmonyos => "aarch64-unknown-linux-ohos",
 			Self::HarmonyosX86_64 => "x86_64-unknown-linux-ohos",
@@ -125,6 +129,7 @@ impl Target {
 			Self::Harmonyos | Self::HarmonyosX86_64 => Platform::Harmonyos,
 			Self::Wearos => Platform::Wearos,
 			Self::Watchos => Platform::Watchos,
+			Self::Quest => Platform::Quest,
 			Self::Windows => Platform::Windows,
 			Self::Linux => Platform::Linux,
 			Self::Tui => Platform::Tui,
@@ -141,8 +146,27 @@ impl Target {
 	pub(crate) fn reports_to_devtools(self) -> bool {
 		matches!(
 			self,
-			Self::Macos | Self::Ios | Self::IosSimulator | Self::Android | Self::AndroidX86_64
+			Self::Macos
+				| Self::Ios
+				| Self::IosSimulator
+				| Self::Android
+				| Self::AndroidX86_64
+				| Self::Quest
 		)
+	}
+
+	/// Whether this target builds the Android host: the phones, and Quest.
+	pub(crate) fn is_android(self) -> bool {
+		matches!(self, Self::Android | Self::AndroidX86_64 | Self::Quest)
+	}
+
+	/// The platform whose host directory this target builds. Quest packages
+	/// the Android host rather than keeping a project of its own.
+	fn host_platform(self) -> Platform {
+		match self {
+			Self::Quest => Platform::Android,
+			other => other.platform(),
+		}
 	}
 
 	pub(crate) fn from_platform(platform: Platform) -> Result<Self> {
@@ -155,6 +179,7 @@ impl Target {
 			Platform::Harmonyos => Ok(Self::Harmonyos),
 			Platform::Wearos => Ok(Self::Wearos),
 			Platform::Watchos => Ok(Self::Watchos),
+			Platform::Quest => Ok(Self::Quest),
 			Platform::Tui => Ok(Self::Tui),
 			_ => anyhow::bail!("{platform} is not a concrete native platform"),
 		}
@@ -176,7 +201,7 @@ fn host_triple() -> &'static str {
 
 /// App-owned platform integration, with support for existing native projects.
 pub(crate) fn host_dir(root: &Path, target: Target) -> PathBuf {
-	let platform = target.platform().to_string();
+	let platform = target.host_platform().to_string();
 	let directory = root.join(&platform);
 
 	if directory.join("Cargo.toml").is_file() {
@@ -191,11 +216,11 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	let generated = root.join(".leptoskit");
 
 	if root
-		.join(target.platform().to_string())
+		.join(target.host_platform().to_string())
 		.join("Cargo.toml")
 		.is_file()
 	{
-		return generated.join(target.platform().to_string());
+		return generated.join(target.host_platform().to_string());
 	}
 
 	generated
@@ -394,7 +419,7 @@ fn host_library_command(
 		host.args(["--features", &features.join(",")]);
 	}
 
-	if matches!(target, Target::Android | Target::AndroidX86_64) {
+	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
 	} else if matches!(target, Target::Ios | Target::IosSimulator | Target::Macos) {
 		for (key, value) in apple_cc_environment(target) {
@@ -451,10 +476,10 @@ fn configure_android_toolchain(
 	target: Target,
 	ndk: &Path,
 ) -> Result<()> {
-	let architecture = if matches!(target, Target::Android) {
-		"aarch64"
-	} else {
+	let architecture = if matches!(target, Target::AndroidX86_64) {
 		"x86_64"
+	} else {
+		"aarch64"
 	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
@@ -516,7 +541,7 @@ fn build_application(
 			install_ios_pods(root)?;
 			run_tool(&mut ios_build(root, target, release))
 		}
-		Target::Android | Target::AndroidX86_64 => {
+		Target::Android | Target::AndroidX86_64 | Target::Quest => {
 			run_tool(&mut gradle_build(root, target, release))
 		}
 	}
@@ -679,6 +704,7 @@ pub(crate) fn legacy_target(root: &Path, config: &LeptoskitConfig) -> Target {
 		[NativeTarget::Harmonyos] => Target::Harmonyos,
 		[NativeTarget::Wearos] => Target::Wearos,
 		[NativeTarget::Watchos] => Target::Watchos,
+		[NativeTarget::Quest] => Target::Quest,
 		[NativeTarget::Macos] => Target::Macos,
 		[NativeTarget::Ios] => Target::IosSimulator,
 		[NativeTarget::Android] => Target::Android,
@@ -700,7 +726,7 @@ fn report_application_size(root: &Path, target: Target, release: bool) {
 	let report = match target {
 		Target::Macos => size::macos(root).map(Some),
 		Target::Ios | Target::IosSimulator => size::ios(root, release),
-		Target::Android | Target::AndroidX86_64 => size::android(root, release),
+		Target::Android | Target::AndroidX86_64 | Target::Quest => size::android(root, release),
 		// The desktop hosts and the harmonyos packaging report through their
 		// own tools; a measurement for them is a follow-up.
 		Target::Windows
@@ -2508,6 +2534,27 @@ exit "${LEPTOSKIT_TEST_POD_STATUS:-0}"
 			"ndk-newest",
 			&[("ANDROID_HOME", &sdk.display().to_string())],
 		);
+	}
+
+	#[test]
+	fn quest_builds_the_android_host_for_the_headset() {
+		assert_eq!(Target::Quest.rust(), "aarch64-linux-android");
+		assert_eq!(Target::Quest.platform(), Platform::Quest);
+		assert_eq!(
+			Target::from_platform(Platform::Quest).unwrap(),
+			Target::Quest
+		);
+		assert!(Target::Quest.is_android());
+		assert!(Target::Quest.reports_to_devtools());
+		let root = Path::new("/project");
+		assert_eq!(
+			host_dir(root, Target::Quest),
+			host_dir(root, Target::Android)
+		);
+		assert_eq!(Platform::Quest.feature(), Some("android"));
+		let mut config = LeptoskitConfig::default();
+		config.native.targets = vec![leptoskit_config::NativeTarget::Quest];
+		assert_eq!(legacy_target(root, &config), Target::Quest);
 	}
 
 	#[test]

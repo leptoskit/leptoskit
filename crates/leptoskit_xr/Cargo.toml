@@ -1,0 +1,117 @@
+[package]
+name = "leptoskit_xr"
+version = "0.3.0"
+authors.workspace = true
+categories = ["game-development", "graphics", "multimedia"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["ar", "vr", "xr", "openxr", "arkit"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Augmented and virtual reality for LeptosKit: ARKit, ARCore, OpenXR (Meta Quest, Android XR), WebXR, a rotation-sensor fallback, and deterministic replay."
+
+[package.metadata.leptoskit.runtime]
+name = "xr"
+rust-factory = "host::from_context"
+rust-context = true
+rust-async = true
+android-permissions = ["android.permission.CAMERA"]
+# The ARCore client library ships `libarcore_sdk_c.so`, and the Khronos
+# loader ships `libopenxr_loader.so`; both are opened at run time, so a
+# device without them still starts the app.
+android-dependencies = [
+	"com.google.ar:core:1.47.0",
+	"org.khronos.openxr:openxr_loader_for_android:1.1.49",
+]
+apple-usage-descriptions = ["NSCameraUsageDescription"]
+apple-frameworks = ["ARKit", "AVFoundation", "CoreMotion", "CoreVideo", "Metal"]
+
+[package.metadata.leptoskit.runtime.macos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+# The runtime and the platform backends.
+host = []
+# The plugin generated hosts register; turns on `host`.
+async-host = ["host", "leptoskit_bridge/async-host", "dep:serde", "dep:serde_json"]
+# The OpenXR backend, for Meta Quest, Android XR, and PC headsets.
+openxr = ["host", "dep:openxr"]
+# Camera and depth textures and headset swapchains for a wgpu renderer.
+wgpu = ["host", "dep:wgpu", "dep:ash"]
+# The WebXR backend for the browser build.
+web = [
+	"dep:js-sys",
+	"dep:wasm-bindgen",
+	"dep:wasm-bindgen-futures",
+	"dep:web-sys",
+]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { workspace = true }
+objc2-ar-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-av-foundation", "objc2-core-foundation", "objc2-core-video", "objc2-foundation", "objc2-ui-kit", "ARPlaneDetectionTypes", "ARAnchor", "ARCamera", "ARConfiguration", "ARDepthData", "ARFrame", "ARLightEstimate", "ARPlaneAnchor", "ARPlaneGeometry", "ARRaycastQuery", "ARRaycastResult", "ARSession", "ARTrackingStatusTypes"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat"] }
+objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes"] }
+objc2-core-motion = { version = "0.3.2", default-features = false, features = ["std", "CMAttitude", "CMDeviceMotion", "CMLogItem", "CMMotionManager"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSData", "NSEnumerator", "NSString", "NSUUID"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "UIApplication", "UIOrientation"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+libloading = "0.8"
+
+[target.'cfg(any(target_os = "android", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+ash = { version = "0.38", optional = true }
+openxr = { version = "0.22", default-features = false, features = ["loaded"], optional = true }
+
+# The graphics backends each platform's renderer uses: Metal on Apple
+# platforms, OpenGL ES and Vulkan on Android, Direct3D 12 and Vulkan on
+# Windows, and Vulkan on Linux.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["metal", "std"] }
+
+[target.'cfg(target_os = "android")'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["gles", "std", "vulkan"]
+
+[target.'cfg(windows)'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["dx12", "std", "vulkan"]
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies.wgpu]
+workspace = true
+optional = true
+features = ["std", "vulkan"]
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { workspace = true, optional = true, features = ["Document", "Event", "EventTarget", "Navigator", "Window"] }
+
+[dev-dependencies]
+pollster = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "replay"
+required-features = ["host"]
+
+[[test]]
+name = "plugin"
+required-features = ["async-host"]

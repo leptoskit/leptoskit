@@ -109,6 +109,10 @@ pub struct Plugin {
 	/// Required key names only; the app owns the corresponding consent text.
 	#[serde(default)]
 	pub apple_usage_descriptions: Vec<String>,
+	/// System frameworks the app's iOS target links for a Rust plugin, whose
+	/// static library can't tell Xcode which frameworks it calls.
+	#[serde(default)]
+	pub apple_frameworks: Vec<String>,
 	/// `CocoaPods` the app's iOS target installs. iOS only: the macOS host
 	/// builds with Swift Package Manager, which cannot integrate pods.
 	#[serde(default)]
@@ -647,6 +651,7 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 	);
 
 	validate_usage_descriptions(plugin)?;
+	validate_frameworks(plugin)?;
 
 	for dependency in &plugin.android_dependencies {
 		anyhow::ensure!(
@@ -741,6 +746,18 @@ fn validate_android_paths(plugin: &Plugin) -> Result<()> {
 			bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
 				&& bytes.all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte)),
 			"invalid Android query URI scheme"
+		);
+	}
+
+	Ok(())
+}
+
+fn validate_frameworks(plugin: &Plugin) -> Result<()> {
+	for framework in &plugin.apple_frameworks {
+		anyhow::ensure!(
+			identifier(framework, ""),
+			"invalid Apple framework name in plugin {}: {framework}",
+			plugin.name
 		);
 	}
 

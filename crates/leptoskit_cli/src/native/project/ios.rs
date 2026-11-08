@@ -98,7 +98,14 @@ pub(super) fn generate(
 		&frameworks,
 		&resources,
 	)?;
-	ios_configurations(&mut objects, root, config, &package_root, icon)?;
+	ios_configurations(
+		&mut objects,
+		root,
+		config,
+		&package_root,
+		icon,
+		&linked_frameworks(registry)?,
+	)?;
 	targets(&mut objects, &products, &package_refs, &extras)?;
 	write(
 		&dir.join("Host.xcodeproj/project.pbxproj"),
@@ -380,12 +387,37 @@ fn podfile(pods: &std::collections::BTreeMap<String, Option<String>>) -> Result<
 	)?;
 	Ok(ruby)
 }
+/// `OTHER_LDFLAGS` linking the system frameworks the selected iOS Rust
+/// plugins call, or nothing when none do.
+pub(in crate::native) fn linked_frameworks(registry: &Registry) -> Result<String> {
+	let frameworks: std::collections::BTreeSet<&str> = registry
+		.implementations(Target::Ios)?
+		.into_iter()
+		.filter(|(_, _, implementation)| implementation.rust().is_some())
+		.flat_map(|(_, plugin, _)| plugin.apple_frameworks.iter().map(String::as_str))
+		.collect();
+
+	if frameworks.is_empty() {
+		return Ok(String::new());
+	}
+
+	let flags: Vec<String> = frameworks
+		.into_iter()
+		.map(|framework| format!("\"-framework\",\"{framework}\""))
+		.collect();
+	Ok(format!(
+		" OTHER_LDFLAGS = (\"$(inherited)\",{});",
+		flags.join(",")
+	))
+}
+
 fn ios_configurations(
 	objects: &mut String,
 	root: &Path,
 	config: &leptoskit_config::LeptoskitConfig,
 	package_root: &Path,
 	icon: bool,
+	frameworks: &str,
 ) -> Result<()> {
 	let info = versioned_info_plist(root)?;
 	let version = marketing_version(config);
@@ -419,7 +451,7 @@ fn ios_configurations(
 			 (\"$(inherited)\",{}); SWIFT_INCLUDE_PATHS = {}; OTHER_SWIFT_FLAGS = \
 			 (\"$(inherited)\",\"-I\",{}); LD_RUNPATH_SEARCH_PATHS = \
 			 (\"$(inherited)\",\"@executable_path/Frameworks\"); MARKETING_VERSION = {version}; \
-			 CURRENT_PROJECT_VERSION = 1;{icon}{release_strip} }}; }};",
+			 CURRENT_PROJECT_VERSION = 1;{icon}{frameworks}{release_strip} }}; }};",
 			id(APP_DEBUG + offset),
 			config.native.package_id,
 			quote(&info)?,
