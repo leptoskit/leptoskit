@@ -121,19 +121,6 @@ class DocumentEncodingInstrumentationTest {
 }
 ";
 
-const SHARING_WIRE_TEST: &str = r"package dev.leptoskit.plugins.sharing
-
-import org.junit.Test
-
-/** Validates synthetic content without opening a share destination. */
-class SharingWireInstrumentationTest {
-    @Test
-    fun boundedContentAndInvalidUrls() {
-        main()
-    }
-}
-";
-
 #[derive(Parser)]
 struct Args {
 	/// Built `LeptosKit` CLI binary; its SDK and templates must match this
@@ -315,21 +302,13 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		tests.join("LoggingFileTest.kt"),
 		include_str!("../tests/fixtures/native_plugin_suite/LoggingFileTest.kt"),
 	)?;
-	for (name, source) in [
-		(
-			"DocumentEncodingInstrumentationTest.kt",
-			DOCUMENT_ENCODING_TEST,
-		),
-		("SharingWireInstrumentationTest.kt", SHARING_WIRE_TEST),
-	] {
-		let wrapper = tests.join(name);
-		anyhow::ensure!(
-			!wrapper.exists(),
-			"duplicate test file {}",
-			wrapper.display()
-		);
-		std::fs::write(wrapper, source)?;
-	}
+	let wrapper = tests.join("DocumentEncodingInstrumentationTest.kt");
+	anyhow::ensure!(
+		!wrapper.exists(),
+		"duplicate test file {}",
+		wrapper.display()
+	);
+	std::fs::write(wrapper, DOCUMENT_ENCODING_TEST)?;
 	Ok(())
 }
 
@@ -425,11 +404,7 @@ mod tests {
 			}
 
 			let tests = destination.join("android/app/src/androidTest/java");
-			for name in [
-				"StoreReviewPluginTest.kt",
-				"SharingTest.kt",
-				"SharingWireInstrumentationTest.kt",
-			] {
+			for name in ["StoreReviewPluginTest.kt", "SharingTest.kt"] {
 				assert!(tests.join(name).is_file(), "missing {name}");
 			}
 			Ok(())

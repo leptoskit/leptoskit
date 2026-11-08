@@ -57,6 +57,8 @@ file("../../../.leptoskit/android/plugin-dependencies.txt").readLines().forEach 
 }
 ```
 
+`android-file-providers = [{ class = "…", authority-suffix = "…", paths = "…" }]` declares `FileProvider` subclasses a plugin ships. The class must be a qualified Kotlin/Java name, the suffix lower-case dotted segments, and `paths` a resource name whose `android/res/xml/<paths>.xml` in the plugin crate is a regular `<paths>` document. Preparation copies that XML into `.leptoskit/android/res/xml` and inserts an unexported `<provider>` with `grantUriPermissions="true"` and authority `${applicationId}.<suffix>` into the generated manifest, unless the app-owned manifest already declares that class.
+
 ## It is also the cargo-leptos replacement
 
 `leptoskit build` runs the whole web pipeline cargo-leptos runs — server compile, wasm client compile, wasm-bindgen glue, optional `wasm-opt`, asset layout:

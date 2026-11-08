@@ -665,3 +665,40 @@ fn merged_pods_agree_or_reject_conflicting_requirements() {
 	]);
 	assert!(conflicting.apple_pods().is_err());
 }
+
+#[test]
+fn validates_android_file_providers_before_generating_xml() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	let valid = json!({"class": "dev.example.Provider", "authority-suffix": "example.share", "paths": "example_paths"});
+	for (field, value, accepted) in [
+		("class", "dev.example.Provider", true),
+		("class", "Provider", false),
+		("class", "dev.example.\"Provider", false),
+		("authority-suffix", "example.share_2", true),
+		("authority-suffix", "Example", false),
+		("authority-suffix", "example..share", false),
+		("authority-suffix", "example\"/>", false),
+		("paths", "example_paths", true),
+		("paths", "../paths", false),
+		("paths", "Paths", false),
+		("paths", "", false),
+	] {
+		let mut provider = valid.clone();
+		provider[field] = json!(value);
+		let mut metadata = metadata("Plugin");
+		metadata.packages[2]
+			.metadata
+			.pointer_mut("/leptoskit/runtime")
+			.unwrap()
+			.as_object_mut()
+			.unwrap()
+			.insert("android-file-providers".into(), json!([provider]));
+		assert_eq!(
+			resolve_metadata(metadata, &config).is_ok(),
+			accepted,
+			"{field} = {value}"
+		);
+	}
+}

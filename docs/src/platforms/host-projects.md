@@ -212,6 +212,16 @@ On Android, `android-dependencies` names Maven libraries the generated Gradle bu
 android-dependencies = ["com.google.android.play:review:2.0.2"]
 ```
 
+A plugin that hands files to other apps declares an Android `FileProvider` with `android-file-providers`. The generated manifest declares each one inside `<application>`, unexported and granting access only through the intents that name a file, with the authority `<application id>.<authority-suffix>`; `paths` names the plugin's `android/res/xml/<paths>.xml`, which the build copies into the app's resources:
+
+```toml
+android-file-providers = [
+	{ class = "dev.leptoskit.plugins.sharing.SharingFileProvider", authority-suffix = "leptoskit.sharing", paths = "leptoskit_sharing_paths" },
+]
+```
+
+A provider class your own manifest already declares is left as you wrote it.
+
 ### Per-platform registration
 
 A plugin often has a Swift and a Kotlin implementation for phones and a Rust one for the desktop. Say which platform uses which in a table named after the platform:

@@ -14,14 +14,16 @@ final class ShareServiceDelegate: NSObject, NSSharingServiceDelegate {
         self.completed = completed
     }
 
+    /// The service's title is the only identifier AppKit exposes for it.
     func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
-        completed(.success(Data()))
+        completed(.success(ShareReply.success(sharingService.title).encoded()))
     }
 
+    /// Cancelling the service's own UI is a dismissal, not a failure.
     func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: any Error) {
         let error = error as NSError
-        completed(.failure(error.domain == NSCocoaErrorDomain && error.code == NSUserCancelledError
-                           ? PluginError.cancelled : PluginError.native))
+        completed(error.domain == NSCocoaErrorDomain && error.code == NSUserCancelledError
+                  ? .success(ShareReply.dismissed.encoded()) : .failure(PluginError.native))
     }
 
     func sharingService(_ sharingService: NSSharingService, sourceWindowForShareItems items: [Any],

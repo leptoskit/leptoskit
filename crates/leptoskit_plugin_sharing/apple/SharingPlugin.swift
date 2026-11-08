@@ -12,13 +12,30 @@ private enum Wire {
     static let share: UInt32 = 0
 }
 
-/// Shares one validated text or URL through the platform's own UI.
+/// Places the popover anchor inside the presenting view.
+enum ShareAnchor {
+    /// The guest's rectangle, clipped to `bounds`, or a point at the middle without one.
+    /// An origin outside the view is refused rather than silently moved.
+    static func rect(_ anchor: CGRect?, in bounds: CGRect) throws -> CGRect {
+        guard let anchor else { return CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1) }
+
+        guard (bounds.minX...bounds.maxX).contains(anchor.minX), (bounds.minY...bounds.maxY).contains(anchor.minY)
+        else { throw PluginError.invalidArgument }
+
+        return CGRect(x: anchor.minX, y: anchor.minY, width: min(anchor.width, bounds.maxX - anchor.minX),
+                      height: min(anchor.height, bounds.maxY - anchor.minY))
+    }
+}
+
+/// Shares text, a web URL, or files through the platform's own UI, and reports the choice.
 @MainActor
 public final class SharingPlugin: NSObject, NativePlugin {
     public let name = "sharing"
     public let methods: [UInt32] = [Wire.share]
     private let context: NativePluginContext
+    private let staging: () throws -> ShareStaging
     private var session: ShareSession?
+    private var preparing = false
     private var currentInvocation: UUID?
     private var closed = false
     #if canImport(UIKit)
@@ -27,9 +44,17 @@ public final class SharingPlugin: NSObject, NativePlugin {
     private var picker: NSSharingServicePicker?
     private var service: NSSharingService?
     private var serviceDelegate: ShareServiceDelegate?
+    private var subject: String?
     #endif
 
-    public init(context: NativePluginContext) { self.context = context }
+    public convenience init(context: NativePluginContext) {
+        self.init(context: context, staging: ShareStaging.standard)
+    }
+
+    init(context: NativePluginContext, staging: @escaping () throws -> ShareStaging) {
+        self.context = context
+        self.staging = staging
+    }
 
     public func close() {
         closed = true
@@ -39,28 +64,55 @@ public final class SharingPlugin: NSObject, NativePlugin {
         finish(.failure(PluginError.cancelled))
     }
 
-    /// Presents the share UI for one caller's content, and answers when it ends.
+    /// Presents the share UI for one caller's content, and answers how it ended.
     public func invoke(method: UInt32, payload: NativeBuffer) async throws -> Data {
         guard !closed else { throw PluginError.cancelled }
 
         guard method == Wire.share else { throw PluginError.unavailable }
 
-        guard session == nil else { throw PluginError.busy }
+        guard session == nil, !preparing else { throw PluginError.busy }
 
         let content = try payload.withUnsafeBytes(ShareContent.decode)
-        let owner = try context.requirePresentationOwner()
+        _ = try context.requirePresentationOwner()
 
         try Task.checkCancellation()
         let invocation = UUID()
         currentInvocation = invocation
 
         return try await withTaskCancellationHandler {
-            try await present(content, owner: owner)
+            let items = try await prepare(content)
+            let owner = try context.requirePresentationOwner()
+
+            guard !closed, !Task.isCancelled else { throw PluginError.cancelled }
+
+            return try await present(content, items: items, owner: owner)
         } onCancel: {
             Task { @MainActor [weak self] in
                 self?.cancel(invocation: invocation)
             }
         }
+    }
+
+    /// Copies files into the private share cache off the main actor, then lists the sheet's items.
+    private func prepare(_ content: ShareContent) async throws -> [Any] {
+        var files: [URL] = []
+
+        if !content.files.isEmpty {
+            preparing = true
+            defer { preparing = false }
+
+            let staging = try staging()
+            let task = Task.detached { try staging.stage(content.files) }
+            files = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        }
+
+        var items: [Any] = []
+
+        if let text = content.text { items.append(text) }
+
+        if let url = content.url { items.append(url) }
+
+        return items + files.map { $0 as Any }
     }
 
     /// Cancels the presentation only while this call still owns it.
@@ -84,17 +136,17 @@ public final class SharingPlugin: NSObject, NativePlugin {
 
     #if canImport(UIKit)
     /// Presents the activity sheet and answers when it completes.
-    private func present(_ content: ShareContent, owner: NativePresentationOwner) async throws -> Data {
+    private func present(_ content: ShareContent, items: [Any], owner: NativePresentationOwner) async throws -> Data {
         guard isIdle(owner) else { throw PluginError.busy }
 
-        let activity = makeActivity(content, owner: owner)
+        let activity = try makeActivity(content, items: items, owner: owner)
         self.activity = activity
 
         return try await withCheckedThrowingContinuation { continuation in
             let session = ShareSession(continuation)
             self.session = session
-            activity.completionWithItemsHandler = { [weak self] _, completed, _, error in
-                self?.completed(session, completed: completed, error: error)
+            activity.completionWithItemsHandler = { [weak self] type, completed, _, error in
+                self?.completed(session, type: type?.rawValue, completed: completed, error: error)
             }
             owner.present(activity, animated: true)
             activity.presentationController?.delegate = self
@@ -107,29 +159,31 @@ public final class SharingPlugin: NSObject, NativePlugin {
             && owner.transitionCoordinator == nil
     }
 
-    /// Anchors the sheet to the middle of its presenter, as a popover requires.
-    private func makeActivity(_ content: ShareContent, owner: NativePresentationOwner) -> UIActivityViewController {
-        let activity = UIActivityViewController(activityItems: [content.item], applicationActivities: nil)
-        let bounds = owner.view.bounds
-        let centre = CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+    /// Builds the sheet; only iPad presents it as a popover, anchored where the guest asked.
+    private func makeActivity(
+        _ content: ShareContent, items: [Any], owner: NativePresentationOwner
+    ) throws -> UIActivityViewController {
+        let sources = items.enumerated().map { index, item in
+            ShareItemSource(item: item, subject: content.subject, title: index == 0 ? content.title : nil)
+        }
+        let activity = UIActivityViewController(activityItems: sources, applicationActivities: nil)
+        activity.excludedActivityTypes = ShareActivities.types(content.excluded)
 
-        activity.popoverPresentationController?.sourceView = owner.view
-        activity.popoverPresentationController?.sourceRect = centre
+        // On iPhone the controller can expose a non-popover presentation controller;
+        // configuring it would push the sheet onto the anchored path.
+        if owner.traitCollection.userInterfaceIdiom == .pad, let popover = activity.popoverPresentationController {
+            popover.sourceView = owner.view
+            popover.sourceRect = try ShareAnchor.rect(content.anchor, in: owner.view.bounds)
+        }
 
         return activity
     }
 
     /// Answers the one session the sheet belongs to.
-    private func completed(_ session: ShareSession, completed: Bool, error: (any Error)?) {
+    private func completed(_ session: ShareSession, type: String?, completed: Bool, error: (any Error)?) {
         guard self.session?.id == session.id else { return }
 
-        if error != nil {
-            finish(.failure(PluginError.native))
-        } else if completed {
-            finish(.success(Data()))
-        } else {
-            finish(.failure(PluginError.cancelled))
-        }
+        finish(Result { try ShareReply.activity(type: type, completed: completed, failed: error != nil).encoded() })
     }
 
     private func dismissChooser() {
@@ -142,23 +196,23 @@ public final class SharingPlugin: NSObject, NativePlugin {
         activity = nil
     }
     #elseif canImport(AppKit)
-    /// Presents the sharing picker beside the window's centre.
-    private func present(_ content: ShareContent, owner: NativePresentationOwner) async throws -> Data {
+    /// Presents the sharing picker at the anchor, or beside the view's centre.
+    private func present(_ content: ShareContent, items: [Any], owner: NativePresentationOwner) async throws -> Data {
         guard let window = owner.view.window, window.attachedSheet == nil else { throw PluginError.busy }
 
-        guard !NSSharingService.sharingServices(forItems: [content.item]).isEmpty else {
+        guard !NSSharingService.sharingServices(forItems: items).isEmpty else {
             throw PluginError.unavailable
         }
 
-        let picker = NSSharingServicePicker(items: [content.item])
+        let anchor = try ShareAnchor.rect(content.anchor, in: owner.view.bounds)
+        let picker = NSSharingServicePicker(items: items)
         picker.delegate = self
         self.picker = picker
+        // macOS services have one subject field; a title stands in when there is no subject.
+        subject = content.subject ?? content.title
 
         return try await withCheckedThrowingContinuation { continuation in
             session = ShareSession(continuation)
-            let bounds = owner.view.bounds
-            let anchor = NSRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
-
             picker.show(relativeTo: anchor, of: owner.view, preferredEdge: .minY)
         }
     }
@@ -183,9 +237,10 @@ public final class SharingPlugin: NSObject, NativePlugin {
         service?.delegate = nil
         service = nil
         serviceDelegate = nil
+        subject = nil
     }
     #else
-    private func present(_ content: ShareContent, owner: NativePresentationOwner) async throws -> Data {
+    private func present(_ content: ShareContent, items: [Any], owner: NativePresentationOwner) async throws -> Data {
         throw PluginError.unavailable
     }
 
@@ -200,7 +255,7 @@ extension SharingPlugin: UIAdaptivePresentationControllerDelegate {
     public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         guard presentationController.presentedViewController === activity else { return }
 
-        finish(.failure(PluginError.cancelled))
+        finish(.success(ShareReply.dismissed.encoded()))
     }
 }
 #elseif canImport(AppKit)
@@ -214,6 +269,9 @@ extension SharingPlugin: @preconcurrency NSSharingServicePickerDelegate {
         guard sharingServicePicker === picker, let id = session?.id else { return nil }
 
         service = sharingService
+
+        if let subject { sharingService.subject = subject }
+
         let delegate = ShareServiceDelegate(context: context) { [weak self] result in
             self?.serviceEnded(id, result: result)
         }
@@ -235,7 +293,7 @@ extension SharingPlugin: @preconcurrency NSSharingServicePickerDelegate {
     ) {
         guard sharingServicePicker === picker else { return }
 
-        if sharingService == nil { finish(.failure(PluginError.cancelled)) }
+        if sharingService == nil { finish(.success(ShareReply.dismissed.encoded())) }
     }
 }
 #endif
