@@ -17,6 +17,10 @@ apple-type = "LocalizationPlugin"
 android-type = "dev.leptoskit.plugins.localization.LocalizationPlugin"
 android-context = true
 
+# The generated Linux app answers from the Rust snapshot.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::Localization"
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 

@@ -17,6 +17,12 @@ apple-type = "BatteryPlugin"
 android-type = "dev.leptoskit.plugins.battery.BatteryPlugin"
 android-context = true
 
+# The generated Linux app answers snapshots on a worker; waiting for a change is
+# unavailable there.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::Battery"
+rust-worker = true
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 hooks = ["dep:reactive_graph"]

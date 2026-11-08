@@ -20,7 +20,7 @@ export AUTH_ENCRYPTION_KEYS="$(date +%Y-%m):$(openssl rand 32 | basenc --base64u
 leptoskit dev
 ```
 
-The app opens on a sign-in screen. Type any address, then open `/_leptoskit/mail` to read the code, which a debug build keeps instead of sending. Once you're signed in, the bar at the top lists where you're signed in, opens the security screen for [passkeys](#passkeys), [two-step verification](#two-step-verification), and [connected accounts](#sign-in-with-other-sites), and signs you out. The home screen under it is a notes screen that calls the shared `Notes` and `AddNote` operations: it shows loading, empty, failed, and loaded states, validates the body, and reports the save result. Signing out drops it, and signing in as someone else clears the previous account's cached list before loading theirs; each account sees only its own notes because the server runs every operation as the caller. The browser keeps the list current over `/live`; native apps use the HTTP plugin and Refresh, and the Linux, Windows, and terminal hosts report that they can't reach the server because they don't host plugins yet. The project has a SQLite database unless `--db postgres` picks Postgres, a `User` table that gets a row for each new account, and the server's routes and layer.
+The app opens on a sign-in screen. Type any address, then open `/_leptoskit/mail` to read the code, which a debug build keeps instead of sending. Once you're signed in, the bar at the top lists where you're signed in, opens the security screen for [passkeys](#passkeys), [two-step verification](#two-step-verification), and [connected accounts](#sign-in-with-other-sites), and signs you out. The home screen under it is a notes screen that calls the shared `Notes` and `AddNote` operations: it shows loading, empty, failed, and loaded states, validates the body, and reports the save result. Signing out drops it, and signing in as someone else clears the previous account's cached list before loading theirs; each account sees only its own notes because the server runs every operation as the caller. The browser keeps the list current over `/live`; native apps use the HTTP plugin and Refresh, and the Windows and terminal hosts report that they can't reach the server because they don't host plugins yet. The project has a SQLite database unless `--db postgres` picks Postgres, a `User` table that gets a row for each new account, and the server's routes and layer.
 
 For an app you already have, generate the screens:
 
@@ -45,7 +45,8 @@ What happens on each platform:
 
 - **Web:** signing in works as soon as the server runs.
 - **iOS, Android, and macOS:** the generated apps register the plugins, so signing in works once the app can reach `SERVER`.
-- **Windows, Linux, and the terminal:** these runners can't host plugins yet. They build without them, `leptoskit build` says so, and the screens show that sign-in isn't set up: every client call answers the error code `config`.
+- **Linux:** the generated app registers `http`, `secure-store`, and `web-auth`, so signing in works once the app can reach `SERVER`. Sessions are kept in the desktop's Secret Service keyring, such as GNOME Keyring or KWallet. Linux has no platform passkeys, so passkey calls answer `unsupported` and people sign in with an emailed code or a provider.
+- **Windows and the terminal:** these runners can't host plugins yet. They build without them, `leptoskit build` says so, and the screens show that sign-in isn't set up: every client call answers the error code `config`.
 
 ## Add the auth tables
 
@@ -279,7 +280,7 @@ configure(
   origins = ["https://myapp.com", "http://localhost:3000"]
   ```
 
-  The generated iOS, Android, and macOS hosts register the plugins. The Linux, Windows, and terminal runners can't host plugins yet: they build without them, with a warning, and the client answers `config` there. An app with its own Windows or Linux host can register them by hand; see the [plugin support matrix](../platforms/plugin-inventory.md#storage-and-networking).
+  The generated iOS, Android, macOS, and Linux hosts register the plugins; Linux leaves out `passkeys`, which it doesn't have. The Windows and terminal runners can't host plugins yet: they build without them, with a warning, and the client answers `config` there. An app with its own Windows host can register them by hand; see the [plugin support matrix](../platforms/plugin-inventory.md#storage-and-networking).
 
 Then build the screen:
 
@@ -554,7 +555,8 @@ sign_in.mutate(EmailPassword { email, password });   // SignInStep, as `verify_c
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Web                      | Everything above, with the session in the `HttpOnly` cookie                                                                                         |
 | iOS, Android, and macOS  | Everything above, with the session's tokens in the secure store                                                                                     |
-| Windows and Linux        | Everything above, for a host that registers the `http` and `secure-store` plugins; the generated runners can't host plugins yet and answer `config` |
+| Linux                    | Everything above                                                                                                                                    |
+| Windows                  | Everything above, for a host that registers the `http` and `secure-store` plugins; the generated runner can't host plugins yet and answers `config` |
 | HarmonyOS (experimental) | Everything above, as for emailed codes                                                                                                              |
 | Server rendering         | `password_settings()` reads in process; the others run in the browser and answer `server`                                                           |
 
@@ -696,7 +698,8 @@ let repositories = client
 | Web                      | Everything above                                                                                                                                       |
 | iOS and macOS apps       | Everything above, in an `ASWebAuthenticationSession`; Apple through Sign in with Apple's own sheet                                                     |
 | Android apps             | Everything above, in Chrome's Auth Tab (Chrome 137 or later as the default browser); with another browser the outcome is `Failed("unsupported")`       |
-| Windows and Linux apps   | Everything above in the default browser, for a host that registers `web-auth` itself; the generated runners can't host plugins yet and answer `config` |
+| Linux apps               | Everything above in the default browser, which comes back to the app on a loopback address                                                             |
+| Windows apps             | Everything above in the default browser, for a host that registers `web-auth` itself; the generated runner can't host plugins yet and answers `config` |
 | HarmonyOS (experimental) | `sign_in_with_provider()` and `link_provider()` answer `config`; listing and disconnecting work                                                        |
 
 Your providers need no extra setup for apps: the provider sends the browser back to your site's `/auth/callback/…` address, as for the web, and your site sends it on to the app.
@@ -743,7 +746,8 @@ On each platform:
 
 - **iOS and macOS:** add the associated domain `webcredentials:myapp.com` (your site's host) to the app in Xcode, and the Sign in with Apple capability if you offer Apple. The generated Xcode projects don't add entitlements yet. Without the domain, passkey calls fail with `passkey_failed`; providers still work.
 - **Android:** list the certificate of every key that signs the app: your upload key, and Google Play's app signing key if Play signs your releases. Provider sign-in needs Chrome 137 or later as the default browser; on another browser it ends with `Failed("unsupported")`, and people can still sign in with an emailed code or a passkey.
-- **Windows and Linux:** the generated runners can't host plugins yet, so sign-in answers `config`. A host that registers plugins itself can register `leptoskit_plugin_web_auth::desktop::WebAuth` on a worker thread, for providers in the default browser. There are no native passkeys there: passkey calls answer `unsupported`.
+- **Linux:** the generated app signs in with providers in the default browser, which comes back to the app on a loopback address. There are no native passkeys: passkey calls answer `unsupported`.
+- **Windows:** the generated runner can't host plugins yet, so sign-in answers `config`. A host that registers plugins itself can register `leptoskit_plugin_web_auth::desktop::WebAuth` on a worker thread, for providers in the default browser. There are no native passkeys there: passkey calls answer `unsupported`.
 
 ## Solana wallets
 

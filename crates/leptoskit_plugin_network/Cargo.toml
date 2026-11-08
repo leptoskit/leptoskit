@@ -18,6 +18,10 @@ android-type = "dev.leptoskit.plugins.network.NetworkPlugin"
 android-context = true
 android-permissions = ["android.permission.ACCESS_NETWORK_STATE"]
 
+# The generated Linux app answers snapshots; waiting for a change is unavailable there.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::Network"
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 hooks = ["dep:reactive_graph"]

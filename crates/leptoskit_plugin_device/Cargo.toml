@@ -17,6 +17,10 @@ apple-type = "DevicePlugin"
 android-type = "dev.leptoskit.plugins.device.DevicePlugin"
 android-context = true
 
+# The generated Linux app answers from the Rust snapshot.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::Device"
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 

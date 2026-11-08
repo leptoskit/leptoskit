@@ -17,6 +17,13 @@ apple-type = "SecureStorePlugin"
 android-type = "dev.leptoskit.plugins.securestore.SecureStorePlugin"
 android-context = true
 
+# The generated Linux app keeps secrets in the Secret Service, on a worker:
+# the keyring can block.
+[package.metadata.leptoskit.runtime.linux]
+rust-factory = "from_context"
+rust-context = true
+rust-worker = true
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 async-storage = [
