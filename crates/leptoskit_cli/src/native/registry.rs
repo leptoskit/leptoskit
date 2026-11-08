@@ -426,9 +426,11 @@ fn resolve_for_target(
 	let support = resolve_support(&metadata, &plugins, &bridge)?;
 	let mut host_features = host_features(app, node, &packages, &plugins, target)?;
 	let scene3d = uses_scene3d(&metadata.resolve, &packages);
+
 	if scene3d {
 		host_features.push(bridge_feature(app, node, &packages, "scene3d")?);
 	}
+
 	let devtools_feature = bridge_feature(app, node, &packages, "devtools").ok();
 	Ok(Registry {
 		package: app.name.clone(),

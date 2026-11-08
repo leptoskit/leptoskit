@@ -261,6 +261,7 @@ internal class NativeWidgetRenderer(
 
                 val view = widgets.remove(change.id) ?: return
                 if (view is NativeRiveImage) view.setImageDrawable(null)
+
                 if (view is NativeScene3dView) view.close()
                 val exiting = motion.exiting(view)
                 motion.forget(change.id, view)
@@ -403,6 +404,7 @@ internal class NativeWidgetRenderer(
         motion.touch(id, widget, item.props, isNew = true)
         props.apply(widget, item.props)
         retarget(widget, item.props.scrollOffset)
+
         (widget as? NativeScene3dView)?.show(item.props.scene3d)
     }
 

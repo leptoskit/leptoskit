@@ -53,9 +53,11 @@ pub(super) fn generate(
 	} else {
 		Extras::default()
 	};
+
 	// An app that shows 3D scenes reads its models from the bundle's
 	// `assets` folder, a copy of the app's own.
 	let mut resources = String::new();
+
 	if registry.scene3d {
 		writeln!(
 			objects,
@@ -72,6 +74,7 @@ pub(super) fn generate(
 
 	// `app.icon` becomes the app's asset catalog, with its AppIcon set.
 	let icon = crate::icons::write(root, config, crate::icons::Platform::Ios, &dir)?;
+
 	if icon {
 		writeln!(
 			objects,
@@ -481,6 +484,7 @@ const UPDATE_FILE: usize = 34;
 const UPDATE_BUILD: usize = 35;
 const ICON_FILE: usize = 36;
 const ICON_BUILD: usize = 37;
+
 const SCENE_ASSETS_FILE: usize = 38;
 const SCENE_ASSETS_BUILD: usize = 39;
 
@@ -999,6 +1003,7 @@ mod tests {
 		assert!(!project(&registry).contains("name = assets"));
 		registry.scene3d = true;
 		let project = project(&registry);
+
 		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
 		assert!(project.contains("mobile/assets"));
 	}

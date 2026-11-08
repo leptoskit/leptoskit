@@ -1004,7 +1004,6 @@ Java_dev_leptoskit_mobile_NativeApp_guestError(JNIEnv* env, jclass, jlong handle
 
 // 3D scenes. A view owns an acquired ANativeWindow, which it releases only
 // after Rust has let the surface go.
-
 namespace {
 struct Scene3dView {
     lk_scene3d_view* view;
@@ -1115,6 +1114,7 @@ Java_dev_leptoskit_mobile_NativeScene3d_setAssetReader(JNIEnv* env, jclass owner
 
         return -1;
     }
+
     // The class is cached here: FindClass on the asset thread would not see app classes.
     reader->owner = static_cast<jclass>(env->NewGlobalRef(owner));
     reader->read = env->GetStaticMethodID(owner, "readAsset", "(Landroid/content/res/AssetManager;[B)[B");
@@ -1142,6 +1142,7 @@ Java_dev_leptoskit_mobile_NativeScene3d_attach(JNIEnv* env, jclass owner, jint s
 
         return 0;
     }
+
     view->window = window;
     view->owner = static_cast<jclass>(env->NewGlobalRef(owner));
     view->wake = env->GetStaticMethodID(owner, "wake", "(Ldev/leptoskit/mobile/NativeScene3dView;)V");
@@ -1158,6 +1159,7 @@ Java_dev_leptoskit_mobile_NativeScene3d_attach(JNIEnv* env, jclass owner, jint s
 
         return 0;
     }
+
     lk_scene3d_view_set_waker(view->view, view, scene3d_wake);
 
     return static_cast<jlong>(reinterpret_cast<uintptr_t>(view));

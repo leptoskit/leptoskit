@@ -41,10 +41,12 @@ final class NativeScene3dView: NativeScene3dBase {
         metal.isOpaque = false
         metal.framebufferOnly = true
         metal.contentsGravity = .resize
+
         #if os(macOS)
         wantsLayer = true
         layer?.addSublayer(metal)
         setAccessibilityElement(true)
+
         setAccessibilityRole(.image)
         #else
         layer.addSublayer(metal)
@@ -81,6 +83,7 @@ final class NativeScene3dView: NativeScene3dBase {
 
     private var pixels: (UInt32, UInt32) {
         let size = bounds.size
+
         return (UInt32(max(0, (size.width * scale).rounded())), UInt32(max(0, (size.height * scale).rounded())))
     }
 
@@ -156,6 +159,7 @@ final class NativeScene3dView: NativeScene3dBase {
 
     private func detach() {
         stop()
+
         if let handle { lk_scene3d_view_detach(handle) }
         handle = nil
         attachedScene = nil
@@ -191,6 +195,7 @@ final class NativeScene3dView: NativeScene3dBase {
     }
 
     private nonisolated static let wakeCallback: lk_scene3d_wake_fn = { context in
+
         guard let context else { return }
         let box = Unmanaged<NativeScene3dWake>.fromOpaque(context).takeUnretainedValue()
         DispatchQueue.main.async { MainActor.assumeIsolated { box.view?.requestFrame() } }

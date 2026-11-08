@@ -147,9 +147,11 @@ fn assemble(root: &Path, config: &LeptoskitConfig, binary: &Path) -> Result<std:
 	)?;
 	// An app that shows 3D scenes has its `assets/` staged for the bundle.
 	let scene_assets = super::generated_dir(root, Target::Macos).join("mobile/assets");
+
 	if scene_assets.is_dir() {
 		for entry in walkdir::WalkDir::new(&scene_assets).follow_links(false) {
 			let entry = entry?;
+
 			if entry.file_type().is_file() {
 				let relative = entry.path().strip_prefix(&scene_assets)?;
 				copy(
@@ -159,6 +161,7 @@ fn assemble(root: &Path, config: &LeptoskitConfig, binary: &Path) -> Result<std:
 			}
 		}
 	}
+
 	let info =
 		match std::fs::read_to_string(super::host_dir(root, Target::Macos).join("Info.plist")) {
 			Ok(info) => info,
