@@ -874,3 +874,7 @@ Source: [docs: https://posthog.com/docs/web-analytics/dashboard].
 - **Replay.** Ingest rrweb batches into Snappy/zstd blocks appended to object storage (or local files) with byte-range indexes, plus a per-session metadata row with retention TTL.
 - **Experiments v1.** Use Bayesian Beta-Binomial / Gamma-Poisson with Monte Carlo or closed-form chance-to-win, a Welch t-test option, and SRM chi-square (p<0.001) from day one.
 - **Day-one answers to known pain points.** Per-project event retention/TTL (#17031), tagged releases with migrations and CVEs, first-party proxying (same-origin endpoint) for ad-block resilience, and flag `bootstrap` for SSR.
+
+## Per-event properties in posthog-js (checked 8 November 2026)
+
+`getEventProperties` in `packages/browser-common/src/utils/event-utils.ts` adds these 24 properties to every event: `$browser`, `$browser_language`, `$browser_language_prefix`, `$browser_version`, `$current_url`, `$device`, `$device_type`, `$host`, `$insert_id`, `$lib`, `$lib_version`, `$os`, `$os_version`, `$pathname`, `$raw_user_agent`, `$screen_height`, `$screen_width`, `$time`, `$timezone`, `$timezone_offset`, `$viewport_height`, `$viewport_width`, `$webview_app`, `$webview_app_version`. `calculateEventProperties` in `packages/browser/src/posthog-core.ts` then adds `$session_id`, `$window_id`, `$referrer`, `$referring_domain`, `$groups`, and others, plus registered and persisted properties. This is the repetition that §6's contexts remove.
