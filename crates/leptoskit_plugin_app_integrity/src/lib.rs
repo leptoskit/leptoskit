@@ -260,6 +260,7 @@ mod tests {
 			Err(Error::InvalidArgument)
 		);
 		let challenge = Challenge::new(b"nonce".as_slice()).unwrap();
+		assert_eq!(challenge.bytes(), b"nonce");
 		assert_eq!(
 			Challenge::decode(&challenge.encode().unwrap()),
 			Ok(challenge)
@@ -273,6 +274,17 @@ mod tests {
 		assert_eq!(Attestation::decode(&token.encode().unwrap()), Ok(token));
 		assert_eq!(
 			Attestation::decode(&u32::to_le_bytes(3)),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Attestation::Token(Bytes::from(vec![0; MAX_TOKEN_BYTES + 1])).encode(),
+			Err(Error::InvalidArgument)
+		);
+		let mut empty_token = Encoder::with_capacity(8);
+		empty_token.u32(1);
+		empty_token.bytes(&[]).unwrap();
+		assert_eq!(
+			Attestation::decode(&empty_token.finish()),
 			Err(Error::InvalidArgument)
 		);
 	}
@@ -290,6 +302,8 @@ mod tests {
 		assert_eq!(validate(MethodId(9), &[]), Err(Error::Unavailable));
 
 		let mut plugin = Unsupported;
+		assert_eq!(plugin.name(), NAME);
+		assert_eq!(plugin.methods(), METHODS);
 		assert_eq!(
 			Capability::decode(&plugin.invoke(STATUS, Bytes::new()).unwrap()).unwrap(),
 			Capability::Unavailable
