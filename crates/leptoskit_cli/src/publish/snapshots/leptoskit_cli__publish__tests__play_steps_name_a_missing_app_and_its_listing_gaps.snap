@@ -1,0 +1,38 @@
+---
+source: crates/leptoskit_cli/src/publish/tests.rs
+expression: report.text()
+---
+What to do next
+
+play: Notes 1.4.0 (versionCode 42) is built.
+
+  1. Create the app com.example.notes in Play Console, and upload its first App Bundle to the internal track.
+     Open   https://play.google.com/console
+     App Bundle: android/app/build/outputs/bundle/release/app-release.aab
+     Why by hand: Google Play's API publishes to an app only after Play Console has its first bundle
+     Done when: `leptoskit publish play` uploads instead
+
+  2. Add what the main store listing is missing to the project, and upload again.
+     Open   https://play.google.com/console
+     Icon: (set app.icon in leptoskit.toml; each upload sends it at 512×512)
+     Feature graphic: (put one 1024×500 image in store/screenshots/play-feature-graphic/)
+     Phone screenshots: (add the android-phone size to store/screenshots/screenshots.toml, and run `leptoskit publish screenshots`; Google Play asks for at least two)
+     Short description: (write it in store/en-US/summary.md, 80 characters at most)
+     Full description: (write it in store/en-US/description.md)
+     Why by hand: leptoskit uploads the listing's text, icon, and images from store/ with each upload, and these aren't there yet
+     Done when: Play Console's dashboard no longer lists the store listing as a task
+
+  3. Set the privacy policy, under App content.
+     Open   https://play.google.com/console
+     Privacy policy: (add privacy_policy to store/listing.toml)
+     Why by hand: the Play Developer API has no App content endpoint
+     Done when: App content shows the privacy policy as done
+
+  4. Answer App content's declarations: data safety, the content rating questionnaire, the target audience, and ads. (you, the account holder)
+     Open   https://play.google.com/console
+     Why by hand: they are legal declarations about the app, which only the account holder can make
+     Done when: App content shows no task left
+
+  5. Decide to release it, then run `leptoskit publish play --submit`, which releases the internal track (a staged rollout on production when `rollout` is set). (you, the account holder)
+     Why by hand: releasing reaches the track's users, which is the account holder's decision
+     Done when: the track's release shows as available or in progress

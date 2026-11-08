@@ -1,0 +1,55 @@
+---
+source: crates/leptoskit_cli/src/publish/tests.rs
+expression: report.text()
+---
+What to do next
+
+app_store: Notes 1.4.0 (build 42) is in TestFlight.
+
+  1. Submit build 42 for TestFlight's beta review, so external testers get it.
+     Open   https://appstoreconnect.apple.com/apps/1234567890/testflight/ios
+     App Store Connect said: Missing export compliance
+     Why by hand: App Store Connect refused it through the API, usually until export compliance is answered
+     Done when: the build shows as waiting for beta review
+
+  2. Answer the export compliance question for build 42 in TestFlight. (you, the account holder)
+     Open   https://appstoreconnect.apple.com/apps/1234567890/testflight/ios
+     To answer it once: set ITSAppUsesNonExemptEncryption in ios/Info.plist, and every later build carries the answer
+     Why by hand: it is a legal declaration about the app's encryption
+     Done when: the build no longer shows Missing Compliance
+
+  3. Add what version 1.4.0's App Store page is missing to store/, and upload again.
+     Open   https://appstoreconnect.apple.com/apps/1234567890/distribution/ios/version/inflight
+     iPhone screenshots: (add the iphone-6.3 size, which App Store Connect asks for, to store/screenshots/screenshots.toml, and run `leptoskit publish screenshots`)
+     iPad screenshots: (the app runs on iPad: add the ipad-13 size to store/screenshots/screenshots.toml, and run `leptoskit publish screenshots`)
+     Description: (write it in store/en-US/description.md)
+     Keywords: (add keywords to store/listing.toml)
+     Support URL: (add support to store/listing.toml)
+     Why by hand: leptoskit uploads the version's text and screenshots from store/ with each upload, and these aren't there yet
+     Done when: `leptoskit publish app_store --submit` succeeds; App Review refuses a page without screenshots
+
+  4. Choose the category, in App Information.
+     Open   https://appstoreconnect.apple.com/apps/1234567890/distribution/info
+     Category: (choose one, and add category to store/listing.toml)
+     Privacy Policy URL: (add privacy_policy to store/listing.toml)
+     Why by hand: the category is chosen from App Store Connect's list; leptoskit uploads the privacy policy's address
+     Done when: a submit succeeds
+
+  5. Answer the App Privacy questions: which data the app collects, and what for. (you, the account holder)
+     Open   https://appstoreconnect.apple.com/apps/1234567890/distribution/privacy
+     Why by hand: they are a legal declaration about the app's data, which the API can't make
+     Done when: a submit succeeds
+
+  6. Answer the age rating questions, in App Information. (you, the account holder)
+     Open   https://appstoreconnect.apple.com/apps/1234567890/distribution/info
+     Why by hand: a content rating's answers are the account holder's declaration
+     Done when: a submit succeeds
+
+  7. Give App Review a contact, and a demo account if the app needs signing in, on the version's page. (you, the account holder)
+     Open   https://appstoreconnect.apple.com/apps/1234567890/distribution/ios/version/inflight
+     Why by hand: the contact details and the account are the account holder's own
+     Done when: a submit succeeds
+
+  8. Decide to release it, then run `leptoskit publish app_store --submit`. (you, the account holder)
+     Why by hand: submitting sends it to App Review and then to users
+     Done when: App Store Connect shows the version waiting for review

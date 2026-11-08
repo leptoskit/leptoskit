@@ -1,0 +1,32 @@
+---
+source: crates/leptoskit_cli/src/publish/tests.rs
+expression: report.text()
+---
+What to do next
+
+firefox: Notes 1.4.0 passed validation.
+
+  1. Submit the add-on's first version on the site, uploading the package and its source.
+     Open   https://addons.mozilla.org/developers/addon/submit/distribution
+     Package: firefox.zip
+     Source code: firefox-source.zip
+     Build instructions: BUILD.md, inside the source archive
+     Why by hand: the API publishes versions of an add-on that exists; creating one asks for a license and categories
+     Done when: `leptoskit publish firefox --submit` creates versions instead
+
+  2. Choose the add-on's license on that page. (you, the account holder)
+     Why by hand: a license is a legal choice for the account holder
+     Done when: the first submission is done
+
+  3. Add the listing's privacy policy.
+     Open   https://addons.mozilla.org/developers/addon/notes@example.com/edit
+     Privacy policy: (add privacy_policy to store/listing.toml)
+     Screenshots: (add the chrome-1280x800 size to store/screenshots/screenshots.toml, and run `leptoskit publish screenshots`; each upload sends them)
+     Summary: (write it in store/en-US/summary.md, 250 characters at most)
+     Description: (write it in store/en-US/description.md)
+     Why by hand: leptoskit uploads the name, summary, description, and screenshots with each upload, but the API doesn't set the privacy policy
+     Done when: the listing page shows it
+
+  4. Decide to release it, then run `leptoskit publish firefox --submit`. (you, the account holder)
+     Why by hand: a listed version goes to review and then to users
+     Done when: addons.mozilla.org shows the version awaiting review

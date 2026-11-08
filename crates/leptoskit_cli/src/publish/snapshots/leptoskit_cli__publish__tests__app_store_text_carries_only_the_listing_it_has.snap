@@ -1,0 +1,11 @@
+---
+source: crates/leptoskit_cli/src/publish/tests.rs
+expression: "serde_json::to_string_pretty(&super::app_store_text(&store)).unwrap()"
+---
+{
+  "description": "Keep notes.",
+  "keywords": "notes,research",
+  "marketingUrl": "https://example.com",
+  "promotionalText": "A notebook for everything.",
+  "supportUrl": "https://example.com/support"
+}

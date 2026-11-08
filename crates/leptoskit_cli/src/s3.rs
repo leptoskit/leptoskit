@@ -300,7 +300,17 @@ mod tests {
 	use std::io::BufRead;
 	use std::io::Write;
 	use std::net::TcpListener;
+	use std::path::Path;
+	use std::sync::Arc;
+	use std::sync::Mutex;
 
+	use axum::body::Bytes;
+	use axum::http::Method;
+	use axum::http::StatusCode;
+	use axum::http::Uri;
+	use axum::http::header;
+	use axum::response::IntoResponse;
+	use axum::response::Response;
 	use leptoskit_codepush::ReleaseSigningKey;
 	use leptoskit_codepush::ReleaseStore;
 	use leptoskit_codepush::publish_channel;
@@ -399,8 +409,138 @@ mod tests {
 		}
 	}
 
+	/// An S3-compatible bucket on loopback, without a store behind it: a PUT
+	/// keeps its body, a GET serves it back or answers 404, and a DELETE
+	/// forgets it. `fail_with` makes every request answer that status, as a
+	/// refused or failing bucket does.
+	struct FakeBucket {
+		address: String,
+		objects: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+		requests: Arc<Mutex<Vec<(String, String)>>>,
+		shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+		thread: Option<std::thread::JoinHandle<()>>,
+	}
+
+	impl FakeBucket {
+		fn new(fail_with: Option<StatusCode>) -> Self {
+			let objects: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>> = Arc::default();
+			let requests: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+			let kept = Arc::clone(&objects);
+			let seen = Arc::clone(&requests);
+			let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+			let address = listener.local_addr().expect("address");
+			listener.set_nonblocking(true).expect("nonblocking");
+			let (shutdown, stopped) = tokio::sync::oneshot::channel();
+			let thread = std::thread::spawn(move || {
+				let runtime = tokio::runtime::Builder::new_current_thread()
+					.enable_all()
+					.build()
+					.expect("runtime");
+				runtime.block_on(serve(listener, kept, seen, stopped, fail_with));
+			});
+			Self {
+				address: format!("http://{address}"),
+				objects,
+				requests,
+				shutdown: Some(shutdown),
+				thread: Some(thread),
+			}
+		}
+
+		fn location(&self) -> S3Location {
+			S3Location {
+				endpoint: self.address.clone(),
+				bucket: "test".to_owned(),
+				region: "local".to_owned(),
+				prefix: Some("/codepush/v1/".to_owned()),
+				path_style: true,
+			}
+		}
+
+		fn bucket(&self) -> S3Bucket {
+			S3Bucket::new(&self.location(), Credentials::new("key", "secret")).expect("bucket")
+		}
+	}
+
+	impl Drop for FakeBucket {
+		fn drop(&mut self) {
+			let _ = self.shutdown.take().expect("shutdown").send(());
+			let result = self.thread.take().expect("thread").join();
+
+			if !std::thread::panicking() {
+				result.expect("server");
+			}
+		}
+	}
+
+	/// Answers the fake bucket's requests until the test drops it.
+	async fn serve(
+		listener: TcpListener,
+		objects: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+		requests: Arc<Mutex<Vec<(String, String)>>>,
+		stopped: tokio::sync::oneshot::Receiver<()>,
+		fail_with: Option<StatusCode>,
+	) {
+		let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+		let router = axum::Router::new().fallback(move |method: Method, uri: Uri, body: Bytes| {
+			let objects = Arc::clone(&objects);
+			let requests = Arc::clone(&requests);
+			async move { answer(objects, requests, fail_with, method, uri, body) }
+		});
+		tokio::select! {
+			() = async { axum::serve(listener, router).await.expect("serve"); } => {},
+			_ = stopped => {},
+		}
+	}
+
+	/// One request to the fake bucket: PUT stores the body, GET serves it or
+	/// answers 404, DELETE forgets it, and any other method is refused.
+	#[allow(
+		clippy::needless_pass_by_value,
+		reason = "the fallback handler owns each request's parts"
+	)]
+	fn answer(
+		objects: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+		requests: Arc<Mutex<Vec<(String, String)>>>,
+		fail_with: Option<StatusCode>,
+		method: Method,
+		uri: Uri,
+		body: Bytes,
+	) -> Response {
+		let path = uri.path().to_owned();
+		requests
+			.lock()
+			.unwrap()
+			.push((method.to_string(), path.clone()));
+
+		if let Some(status) = fail_with {
+			return status.into_response();
+		}
+
+		match method {
+			Method::PUT => {
+				objects.lock().unwrap().insert(path, body.to_vec());
+				StatusCode::OK.into_response()
+			}
+			Method::GET => {
+				match objects.lock().unwrap().get(&path).cloned() {
+					Some(bytes) => {
+						([(header::CONTENT_TYPE, "application/octet-stream")], bytes)
+							.into_response()
+					}
+					None => StatusCode::NOT_FOUND.into_response(),
+				}
+			}
+			Method::DELETE => {
+				objects.lock().unwrap().remove(&path);
+				StatusCode::NO_CONTENT.into_response()
+			}
+			_ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+		}
+	}
+
 	impl S3Bucket {
-		/// Deletes an object, so the real-bucket test leaves nothing behind.
+		/// Deletes an object, as the real-bucket test leaves nothing behind.
 		fn delete(&mut self, key: &ObjectKey) {
 			let name = self.object_name(key);
 			let url = self
@@ -412,34 +552,10 @@ mod tests {
 		}
 	}
 
-	/// Publishes two releases to a real bucket under a fresh prefix, reads
-	/// every file back, and deletes them again.
-	///
-	/// ```bash
-	/// LEPTOSKIT_S3_TEST_ENDPOINT=https://s3.us-west-004.backblazeb2.com \
-	/// LEPTOSKIT_S3_TEST_BUCKET=my-bucket LEPTOSKIT_S3_TEST_REGION=us-west-004 \
-	/// AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-	/// cargo test -p leptoskit_cli publishes_to_a_real_bucket -- --ignored
-	/// ```
-	#[test]
-	#[ignore = "needs a real S3-compatible bucket: set LEPTOSKIT_S3_TEST_ENDPOINT, \
-	            LEPTOSKIT_S3_TEST_BUCKET, and the AWS_* credentials"]
-	fn publishes_to_a_real_bucket() {
-		let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-		let unique = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.expect("clock")
-			.as_nanos();
-		let location = S3Location {
-			endpoint: variable("LEPTOSKIT_S3_TEST_ENDPOINT").expect("LEPTOSKIT_S3_TEST_ENDPOINT"),
-			bucket: variable("LEPTOSKIT_S3_TEST_BUCKET").expect("LEPTOSKIT_S3_TEST_BUCKET"),
-			region: variable("LEPTOSKIT_S3_TEST_REGION").unwrap_or_else(|| "auto".to_owned()),
-			prefix: Some(format!("leptoskit-test-{unique}")),
-			path_style: variable("LEPTOSKIT_S3_TEST_PATH_STYLE").is_some(),
-		};
-		let mut bucket = S3Bucket::from_env(&location).expect("credentials");
-
-		let scratch = std::env::temp_dir().join(format!("leptoskit_s3_test_{unique}"));
+	/// Publishes two releases through `bucket`, reads every file back,
+	/// deletes them, and checks they are gone. A real bucket and the fake one
+	/// run the same path.
+	fn publish_read_back_delete(bucket: &mut S3Bucket, scratch: &Path) {
 		let store = ReleaseStore::open(scratch.join("releases")).expect("store");
 		let signer = ReleaseSigningKey::from_seed(&[0x5a; 32]);
 
@@ -463,7 +579,7 @@ mod tests {
 				.expect("ingest");
 		}
 
-		let report = publish_channel(&store, "app", "production", &mut bucket).expect("publish");
+		let report = publish_channel(&store, "app", "production", bucket).expect("publish");
 		assert_eq!(report.releases, ["1.0.0+1", "1.0.0+2"]);
 
 		let index = ObjectKey::index("app", "production");
@@ -491,7 +607,228 @@ mod tests {
 			bucket.delete(&object.key);
 		}
 
-		let _ = std::fs::remove_dir_all(&scratch);
+		for object in &objects {
+			assert!(
+				bucket.get(&object.key).expect("get after delete").is_none(),
+				"{} still exists",
+				object.key.as_str()
+			);
+		}
+	}
+
+	#[test]
+	fn publishes_reads_back_and_deletes_through_a_bucket() {
+		let server = FakeBucket::new(None);
+		let mut bucket = server.bucket();
+		let scratch = tempfile::tempdir().expect("scratch");
+		publish_read_back_delete(&mut bucket, scratch.path());
+
+		let requests = server.requests.lock().unwrap();
+		let puts: Vec<&str> = requests
+			.iter()
+			.filter(|(method, _)| method == "PUT")
+			.map(|(_, path)| path.as_str())
+			.collect();
+		// Everything lives under the configured prefix.
+		assert!(
+			puts.iter()
+				.all(|path| path.starts_with("/test/codepush/v1/")),
+			"{requests:?}"
+		);
+		// The index goes last, so a reader sees a release only once it is
+		// whole.
+		assert!(
+			puts.last()
+				.is_some_and(|path| path.ends_with(ObjectKey::index("app", "production").as_str())),
+			"{puts:?}"
+		);
+	}
+
+	#[test]
+	fn backups_upload_and_refuse_unsafe_names() {
+		let server = FakeBucket::new(None);
+		let bucket = server.bucket();
+		let scratch = tempfile::tempdir().expect("scratch");
+		let file = scratch.path().join("app.db");
+		std::fs::write(&file, b"sqlite bytes").expect("backup");
+
+		for name in ["", "a/b", "with space", "backup?x"] {
+			assert!(bucket.upload_backup(name, &file).is_err(), "{name:?}");
+		}
+
+		bucket.upload_backup("2026-11-08", &file).expect("upload");
+		let objects = server.objects.lock().unwrap();
+		// Backups live in their own `backups/` folder, outside the registry's
+		// prefix.
+		assert_eq!(
+			objects.get("/test/backups/2026-11-08").map(Vec::as_slice),
+			Some(b"sqlite bytes".as_slice())
+		);
+	}
+
+	#[test]
+	fn a_failed_backup_upload_reports_its_status() {
+		let server = FakeBucket::new(Some(StatusCode::INTERNAL_SERVER_ERROR));
+		let bucket = server.bucket();
+		let scratch = tempfile::tempdir().expect("scratch");
+		let file = scratch.path().join("app.db");
+		std::fs::write(&file, b"sqlite bytes").expect("backup");
+
+		let error = bucket
+			.upload_backup("2026-11-08", &file)
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("backup upload failed: HTTP 500"), "{error}");
+	}
+
+	#[test]
+	fn a_missing_object_reads_as_none() {
+		let server = FakeBucket::new(None);
+		let mut bucket = server.bucket();
+		assert!(
+			bucket
+				.get(&ObjectKey::index("app", "production"))
+				.expect("get")
+				.is_none()
+		);
+	}
+
+	#[test]
+	fn refused_objects_name_the_credentials_but_never_the_url() {
+		let server = FakeBucket::new(Some(StatusCode::FORBIDDEN));
+		let mut bucket = server.bucket();
+		let key = ObjectKey::index("app", "production");
+		let error = bucket.get(&key).unwrap_err().to_string();
+		assert!(error.contains("HTTP 403"), "{error}");
+		assert!(error.contains("check the credentials"), "{error}");
+		assert!(!error.contains("X-Amz-Signature"), "{error}");
+
+		let object = StaticObject {
+			key: ObjectKey::signature("app", "production", &Version::new(1, 0, 0), 1),
+			bytes: b"signature".to_vec(),
+		};
+		let error = bucket.put(&object).unwrap_err().to_string();
+		assert!(error.contains("HTTP 403"), "{error}");
+		assert!(error.contains("check the credentials"), "{error}");
+		assert!(!error.contains("X-Amz-Signature"), "{error}");
+	}
+
+	#[test]
+	fn a_server_error_on_put_has_no_credential_hint() {
+		let server = FakeBucket::new(Some(StatusCode::INTERNAL_SERVER_ERROR));
+		let mut bucket = server.bucket();
+		let object = StaticObject {
+			key: ObjectKey::index("app", "production"),
+			bytes: b"index".to_vec(),
+		};
+		let error = bucket.put(&object).unwrap_err().to_string();
+		assert!(error.contains("HTTP 500"), "{error}");
+		assert!(!error.contains("check the credentials"), "{error}");
+	}
+
+	#[test]
+	fn a_refused_connection_is_a_transport_error_without_the_url() {
+		let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+		let address = listener.local_addr().expect("address");
+		drop(listener);
+		let location = S3Location {
+			endpoint: format!("http://{address}"),
+			bucket: "test".to_owned(),
+			region: "local".to_owned(),
+			prefix: None,
+			path_style: true,
+		};
+		let mut bucket =
+			S3Bucket::new(&location, Credentials::new("key", "secret")).expect("bucket");
+		let error = bucket
+			.get(&ObjectKey::index("app", "production"))
+			.unwrap_err()
+			.to_string();
+		assert!(error.contains("transport error"), "{error}");
+		assert!(!error.contains("X-Amz-Signature"), "{error}");
+
+		let object = StaticObject {
+			key: ObjectKey::index("app", "production"),
+			bytes: b"index".to_vec(),
+		};
+		let error = bucket.put(&object).unwrap_err().to_string();
+		assert!(error.contains("transport error"), "{error}");
+		assert!(!error.contains("X-Amz-Signature"), "{error}");
+	}
+
+	#[test]
+	fn transport_errors_name_their_cause() {
+		let refused = ureq::Error::Io(std::io::Error::new(
+			std::io::ErrorKind::ConnectionRefused,
+			"connection refused",
+		));
+		let cases = [
+			(
+				ureq::Error::Timeout(ureq::Timeout::Global),
+				"the request timed out",
+			),
+			(ureq::Error::HostNotFound, "the endpoint host was not found"),
+			(ureq::Error::ConnectionFailed, "the connection failed"),
+			(ureq::Error::BodyExceedsLimit(10), "the object is too large"),
+			(
+				ureq::Error::Tls("bad certificate"),
+				"TLS failed: bad certificate",
+			),
+			(ureq::Error::StatusCode(500), "the request failed"),
+			(refused, "connection refused"),
+		];
+
+		for (error, reason) in cases {
+			let message = request_error("GET", "codepush/index.json", &error).to_string();
+			assert!(message.contains(reason), "{message}");
+		}
+
+		assert!(
+			status_error("GET", "codepush/index.json", 401)
+				.to_string()
+				.contains("check the credentials")
+		);
+		assert_eq!(
+			status_error("GET", "codepush/index.json", 500).to_string(),
+			"transport error: GET codepush/index.json: HTTP 500"
+		);
+	}
+
+	#[test]
+	fn endpoints_must_be_urls_and_buckets_must_be_addressable() {
+		let credentials = || Credentials::new("key", "secret");
+		let location = |endpoint: &str, path_style: bool| {
+			S3Location {
+				endpoint: endpoint.to_owned(),
+				bucket: "test".to_owned(),
+				region: "auto".to_owned(),
+				prefix: None,
+				path_style,
+			}
+		};
+
+		let error = S3Bucket::new(&location("not a url", true), credentials())
+			.err()
+			.expect("invalid endpoint")
+			.to_string();
+		assert!(error.contains("is not a valid endpoint URL"), "{error}");
+
+		let error = S3Bucket::new(&location("ftp://example.com", true), credentials())
+			.err()
+			.expect("unaddressable bucket")
+			.to_string();
+		assert!(error.contains("could not address bucket test"), "{error}");
+
+		// Both addressing styles work; a plain-http endpoint only warns.
+		let virtual_host = S3Bucket::new(&location("https://s3.example.com", false), credentials())
+			.expect("virtual host");
+		assert_eq!(
+			virtual_host.bucket.base_url().host_str().expect("host"),
+			"test.s3.example.com"
+		);
+		let path_style = S3Bucket::new(&location("http://127.0.0.1:1", true), credentials())
+			.expect("path style");
+		assert_eq!(path_style.bucket.base_url().path(), "/test/");
 	}
 
 	#[test]
@@ -506,5 +843,230 @@ mod tests {
 		for prefix in ["a//b", "../a", "a/./b"] {
 			assert!(normalize_prefix(Some(prefix)).is_err(), "{prefix:?}");
 		}
+	}
+
+	#[test]
+	fn a_refused_backup_upload_is_a_transport_error() {
+		let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+		let address = listener.local_addr().expect("address");
+		drop(listener);
+		let location = S3Location {
+			endpoint: format!("http://{address}"),
+			bucket: "test".to_owned(),
+			region: "local".to_owned(),
+			prefix: None,
+			path_style: true,
+		};
+		let bucket = S3Bucket::new(&location, Credentials::new("key", "secret")).expect("bucket");
+		let scratch = tempfile::tempdir().expect("scratch");
+		let file = scratch.path().join("app.db");
+		std::fs::write(&file, b"sqlite bytes").expect("backup");
+
+		let error = bucket.upload_backup("app", &file).unwrap_err().to_string();
+		assert!(error.contains("transport error"), "{error}");
+		assert!(!error.contains("X-Amz-Signature"), "{error}");
+	}
+
+	#[test]
+	fn a_response_that_ends_early_is_a_transport_error() {
+		let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+		let address = listener.local_addr().expect("address");
+		let server = std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().expect("accept");
+			let mut reader = std::io::BufReader::new(&mut stream);
+			let mut line = String::new();
+
+			loop {
+				line.clear();
+				let read = reader.read_line(&mut line).expect("request");
+
+				if read == 0 || line == "\r\n" {
+					break;
+				}
+			}
+
+			stream
+				.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 10\r\n\r\nabc")
+				.expect("response");
+		});
+		let location = S3Location {
+			endpoint: format!("http://{address}"),
+			bucket: "test".to_owned(),
+			region: "local".to_owned(),
+			prefix: None,
+			path_style: true,
+		};
+		let mut bucket =
+			S3Bucket::new(&location, Credentials::new("key", "secret")).expect("bucket");
+		let error = bucket
+			.get(&ObjectKey::index("app", "production"))
+			.unwrap_err()
+			.to_string();
+		server.join().expect("server");
+		assert!(error.contains("transport error"), "{error}");
+	}
+
+	#[test]
+	fn the_fake_bucket_refuses_methods_publishing_never_uses() {
+		let server = FakeBucket::new(None);
+		let bucket = server.bucket();
+		let response = bucket
+			.agent
+			.head(format!("{}/test/anything", server.address))
+			.call()
+			.expect("head");
+		assert_eq!(response.status().as_u16(), 405);
+	}
+
+	const ENV_HELPER: &str = "s3::tests::env_helper";
+
+	/// Runs [`env_helper`] in a child process with only the environment the
+	/// scenario needs, so the `AWS_*` variables a machine or another test
+	/// sets never reach a bucket.
+	fn spawn_env(scenario: &str, variables: &[(&str, &str)]) {
+		let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+		command
+			.args(["--exact", ENV_HELPER, "--nocapture", "--test-threads=1"])
+			.env_clear()
+			.env("LEPTOSKIT_S3_SCENARIO", scenario)
+			.env("PATH", std::env::var_os("PATH").unwrap_or_default())
+			.stdin(std::process::Stdio::null());
+
+		// Winsock loads its providers relative to SystemRoot on Windows.
+		if let Some(system_root) = std::env::var_os("SystemRoot") {
+			command.env("SystemRoot", system_root);
+		}
+
+		if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+			command.env("LLVM_PROFILE_FILE", profile);
+		}
+
+		for (name, value) in variables {
+			command.env(name, value);
+		}
+
+		let output = command.output().expect("run helper");
+		assert!(
+			output.status.success(),
+			"scenario {scenario} failed\nstdout:\n{}\nstderr:\n{}",
+			String::from_utf8_lossy(&output.stdout),
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+
+	#[test]
+	fn credentials_come_from_the_environment_or_name_the_missing_ones() {
+		spawn_env("missing", &[]);
+		spawn_env(
+			"plain",
+			&[
+				(ACCESS_KEY_ID_ENV, "key"),
+				(SECRET_ACCESS_KEY_ENV, "secret"),
+			],
+		);
+		spawn_env(
+			"session",
+			&[
+				(ACCESS_KEY_ID_ENV, "key"),
+				(SECRET_ACCESS_KEY_ENV, "secret"),
+				(SESSION_TOKEN_ENV, "token"),
+			],
+		);
+		spawn_env(
+			"test-location",
+			&[
+				("LEPTOSKIT_S3_TEST_ENDPOINT", "https://s3.example.com"),
+				("LEPTOSKIT_S3_TEST_BUCKET", "my-bucket"),
+				("LEPTOSKIT_S3_TEST_PATH_STYLE", "1"),
+			],
+		);
+	}
+
+	#[test]
+	fn env_helper() {
+		let Ok(scenario) = std::env::var("LEPTOSKIT_S3_SCENARIO") else {
+			return;
+		};
+		let location = S3Location {
+			endpoint: "https://s3.example.com".to_owned(),
+			bucket: "test".to_owned(),
+			region: "auto".to_owned(),
+			prefix: None,
+			path_style: true,
+		};
+
+		match scenario.as_str() {
+			"missing" => {
+				let error = S3Bucket::from_env(&location)
+					.err()
+					.expect("no credentials")
+					.to_string();
+				assert!(error.contains(ACCESS_KEY_ID_ENV), "{error}");
+				assert!(error.contains(SECRET_ACCESS_KEY_ENV), "{error}");
+			}
+			"plain" | "session" => {
+				S3Bucket::from_env(&location).expect("credentials");
+			}
+			"test-location" => {
+				let location = real_bucket_location();
+				assert_eq!(location.endpoint, "https://s3.example.com");
+				assert_eq!(location.bucket, "my-bucket");
+				assert_eq!(location.region, "auto");
+				assert!(location.path_style);
+				assert!(
+					location
+						.prefix
+						.as_deref()
+						.is_some_and(|prefix| prefix.starts_with("leptoskit-test-")),
+					"{:?}",
+					location.prefix
+				);
+			}
+			other => panic!("unknown s3 scenario {other}"),
+		}
+	}
+
+	/// Publishes two releases to a real bucket under a fresh prefix, reads
+	/// every file back, and deletes them again.
+	///
+	/// ```bash
+	/// LEPTOSKIT_S3_TEST_ENDPOINT=https://s3.us-west-004.backblazeb2.com \
+	/// LEPTOSKIT_S3_TEST_BUCKET=my-bucket LEPTOSKIT_S3_TEST_REGION=us-west-004 \
+	/// AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+	/// cargo test -p leptoskit_cli publishes_to_a_real_bucket -- --ignored
+	/// ```
+	/// The bucket the ignored test uses, from the variables its doc comment
+	/// names. A fresh prefix keeps concurrent runs apart.
+	fn real_bucket_location() -> S3Location {
+		let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		S3Location {
+			endpoint: variable("LEPTOSKIT_S3_TEST_ENDPOINT").expect("LEPTOSKIT_S3_TEST_ENDPOINT"),
+			bucket: variable("LEPTOSKIT_S3_TEST_BUCKET").expect("LEPTOSKIT_S3_TEST_BUCKET"),
+			region: variable("LEPTOSKIT_S3_TEST_REGION").unwrap_or_else(|| "auto".to_owned()),
+			prefix: Some(format!("leptoskit-test-{unique}")),
+			path_style: variable("LEPTOSKIT_S3_TEST_PATH_STYLE").is_some(),
+		}
+	}
+
+	#[test]
+	#[ignore = "needs a real S3-compatible bucket: set LEPTOSKIT_S3_TEST_ENDPOINT, \
+	            LEPTOSKIT_S3_TEST_BUCKET, and the AWS_* credentials"]
+	fn publishes_to_a_real_bucket() {
+		let location = real_bucket_location();
+		let mut bucket = S3Bucket::from_env(&location).expect("credentials");
+		let scratch = std::env::temp_dir().join(
+			location
+				.prefix
+				.clone()
+				.expect("a disjoint prefix for the test's objects"),
+		);
+
+		publish_read_back_delete(&mut bucket, &scratch);
+
+		let _ = std::fs::remove_dir_all(&scratch);
 	}
 }
