@@ -306,6 +306,7 @@ type = "cargo"
 
 [package.leptoskit_platform]
 path = "crates/leptoskit_platform"
+type = "cargo"
 
 [package.leptoskit_plugin]
 path = "crates/leptoskit_plugin"
