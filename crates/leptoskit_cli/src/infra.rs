@@ -32,6 +32,9 @@ mod releases;
 mod remote;
 mod resources;
 mod runtime;
+mod schema_window;
+#[cfg(test)]
+mod schema_window_fixture;
 mod services;
 mod verified;
 use resources::resources;

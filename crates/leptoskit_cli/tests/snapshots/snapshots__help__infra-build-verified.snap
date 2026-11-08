@@ -53,6 +53,12 @@ Options:
       --rpc-baseline-sha256 <RPC_BASELINE_SHA256>
           Independently selected SHA-256 for each RPC baseline, in the same order
 
+      --migration-window <MIGRATION_WINDOW>
+          Checked expansion window to bind to this exact executable and descriptor. This prepares evidence; deployment still enforces its rollout rules
+
+      --migration-window-sha256 <MIGRATION_WINDOW_SHA256>
+          Independent SHA-256 of the migration window's exact bytes
+
       --out <OUT>
           New descriptor file, written only after image extraction succeeds
 

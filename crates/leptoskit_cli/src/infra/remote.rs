@@ -8,6 +8,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 
+pub(super) const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
 pub(super) fn base(name: &str) -> String {
 	format!("/var/lib/leptoskit/{name}/control")
 }
@@ -60,7 +62,7 @@ pub(super) fn execute(ip: &str, script: &str, input: Option<&[u8]>) -> Result<Ve
 		result.status
 	);
 	ensure!(
-		result.stdout.len() <= 4 * 1024 * 1024,
+		result.stdout.len() <= MAX_RESPONSE_BYTES,
 		"remote control response exceeds 4 MiB"
 	);
 	Ok(result.stdout)

@@ -119,7 +119,11 @@ fn digest(ip: &str, c: &InfraConfig, version: &str) -> Result<String> {
 	let values: Vec<String> = serde_json::from_slice(&remote::execute(ip, &script, None)?)?;
 	values
 		.into_iter()
-		.find(|value| value.starts_with(&format!("{}@sha256:", image(c))))
+		.find(|value| {
+			value
+				.strip_prefix(&format!("{}@sha256:", image(c)))
+				.is_some_and(super::verified::valid_digest)
+		})
 		.context("running container has no verified registry digest")
 }
 
@@ -133,7 +137,11 @@ fn cached_digest(ip: &str, c: &InfraConfig, version: &str) -> Result<String> {
 	let values: Vec<String> = serde_json::from_slice(&bytes)?;
 	values
 		.into_iter()
-		.find(|v| v.starts_with(&format!("{}@sha256:", image(c))))
+		.find(|value| {
+			value
+				.strip_prefix(&format!("{}@sha256:", image(c)))
+				.is_some_and(super::verified::valid_digest)
+		})
 		.context("pulled image lacks a registry digest")
 }
 
@@ -317,9 +325,9 @@ struct Flight<'a> {
 }
 
 impl Flight<'_> {
-	fn checked(&self, result: Result<String>, hosts: &[String]) -> Result<String> {
+	fn checked<T>(&self, result: Result<T>, hosts: &[String]) -> Result<T> {
 		match result {
-			Ok(image) => Ok(image),
+			Ok(value) => Ok(value),
 			Err(error) => {
 				stop(hosts, self.config)?;
 				record(
@@ -507,6 +515,13 @@ fn recover_previous(
 			"automatic recovery cannot downgrade verified evidence"
 		);
 		prepare_recorded(dir, c, hosts, previous, env, reservation)?;
+		let window = previous
+			.evidence
+			.as_ref()
+			.map(super::verified::Descriptor::migration_window)
+			.transpose()?
+			.flatten();
+		super::schema_window::prepare(dir, c, hosts, window.as_ref(), reservation)?;
 		execute(
 			dir,
 			&["app", "boot", "--version", &previous.version],
@@ -520,6 +535,9 @@ fn recover_previous(
 			&previous.migrations,
 			Some(previous),
 		)?;
+		if let Some(window) = &window {
+			window.verify_running(hosts, &c.name, &previous.version)?;
+		}
 		record(
 			ip,
 			c,
@@ -722,7 +740,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	);
 	let reservation = Reservation::acquire(ip, &c.name)?;
 	ensure_restore_ready(ip, &c.name)?;
-	let mut history = history(ip, c)?;
+	let history = history(ip, c)?;
 	let local_schema = schema(&root, &config)?;
 	let local_hash = history_fingerprint(local_schema.clone())?;
 	if args.reuse_current
@@ -744,11 +762,20 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	}
 	let target = target_release(args, &history, version, &local_hash)?;
 	let evidence = release_evidence(args, target.as_ref(), &history, &local_hash)?;
+	let window = release_window(args, evidence.as_ref())?;
 	if let Some(evidence) = &evidence {
 		evidence.application(&root, &config)?;
 	}
 	let authorization =
 		authorize_release(&dir, c, args, evidence.as_ref(), target.as_ref(), &history)?;
+	let expected = target
+		.as_ref()
+		.map_or(&local_hash, |target| &target.migrations);
+	let mut proposed =
+		proposed_release(&config, version, target.as_ref(), local_schema, &local_hash)?;
+	proposed.evidence = evidence;
+	proposed.authorization = authorization;
+	encoded_history(&history, &proposed)?;
 	let (env, project) = runtime_files(&dir, c, &root, &config, &hosts, &private)?;
 	if c.backups.enabled && args.setup {
 		super::recovery::credentials()?;
@@ -777,10 +804,13 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		verify_schema_labels(&hosts, c, version, &local_hash)?;
 	}
 	check_evidence(
-		evidence.as_ref(),
+		proposed.evidence.as_ref(),
 		&hosts,
 		&format!("{}:{version}", image(c)),
 	)?;
+	// Only checked image evidence may configure the startup window. Install
+	// it before stopping writers or starting any application container.
+	super::schema_window::prepare(&dir, c, &hosts, window.as_ref(), &reservation)?;
 	execute(&dir, &["proxy", "boot"], &env, &reservation)?;
 	if !args.setup && target.is_none() {
 		let actual = remote_history(ip, &c.name)?;
@@ -808,33 +838,25 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	}
 	super::services::prepare(ip, c, &project)?;
 	boot_application(&dir, c, &hosts, &history, &env, &reservation, version)?;
-	let expected = target
-		.as_ref()
-		.map_or(&local_hash, |target| &target.migrations);
 	let verified = (|| {
-		super::approvals::authorize(&dir, &c.domain, evidence.as_ref(), authorization.as_ref())?;
+		super::approvals::authorize(
+			&dir,
+			&c.domain,
+			proposed.evidence.as_ref(),
+			proposed.authorization.as_ref(),
+		)?;
 		let digest = verify_release(&hosts, c, version, expected, target.as_ref())?;
-		check_evidence(evidence.as_ref(), &hosts, &digest)?;
+		check_evidence(proposed.evidence.as_ref(), &hosts, &digest)?;
+		if let Some(window) = &window {
+			window.verify_running(&hosts, &c.name, version)?;
+		}
 		anyhow::Ok(digest)
 	})();
 	let image = flight.checked(verified, &hosts)?;
-	history.push(Release {
-		configuration_sha256: Some(super::digest(&serde_json::to_vec(&config)?)),
-		authorization,
-		evidence,
-		version: version.clone(),
-		migrations: expected.clone(),
-		schema: target.as_ref().map_or(local_schema, |t| t.schema.clone()),
-		image_digest: Some(image),
-		completed_at: Some(chrono::Utc::now().to_rfc3339()),
-	});
-	let bytes = serde_json::to_vec_pretty(&history)?;
-	remote::write(
-		ip,
-		&format!("{}/releases.json", remote::base(&c.name)),
-		&bytes,
-	)?;
-	fs::write(dir.join("releases.json"), &bytes)?;
+	proposed.image_digest = Some(image);
+	proposed.completed_at = Some(chrono::Utc::now().to_rfc3339());
+	let bytes = flight.checked(encoded_history(&history, &proposed), &hosts)?;
+	write_history(ip, c, &dir, &bytes)?;
 	if args.setup && c.backups.enabled {
 		super::recovery::install(ip, c, &output(&dir, "backup_endpoint")?, &reservation)?;
 		super::recovery::invoke(ip, c, "backup", "latest", false, Some(&reservation.owner))?;
@@ -848,6 +870,69 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	);
 	flight.finished = true;
 	Ok(())
+}
+
+fn write_history(ip: &str, config: &InfraConfig, directory: &Path, bytes: &[u8]) -> Result<()> {
+	remote::write(
+		ip,
+		&format!("{}/releases.json", remote::base(&config.name)),
+		bytes,
+	)?;
+	fs::write(directory.join("releases.json"), bytes)?;
+	Ok(())
+}
+
+fn proposed_release(
+	config: &LeptoskitConfig,
+	version: &str,
+	target: Option<&Release>,
+	local_schema: Vec<(String, String)>,
+	local_hash: &str,
+) -> Result<Release> {
+	let c = managed_settings(config)?;
+	Ok(Release {
+		configuration_sha256: Some(super::digest(&serde_json::to_vec(config)?)),
+		authorization: None,
+		evidence: None,
+		version: version.into(),
+		migrations: target
+			.map_or(local_hash, |target| &target.migrations)
+			.into(),
+		schema: target.map_or(local_schema, |target| target.schema.clone()),
+		// Exact registry digests bound the image reference. Reserve enough
+		// timestamp bytes for RFC3339 extended years and fractions too.
+		image_digest: Some(format!("{}@sha256:{}", image(c), "0".repeat(64))),
+		completed_at: Some("0".repeat(64)),
+	})
+}
+
+fn release_window(
+	args: &ReleaseArgs,
+	evidence: Option<&super::verified::Descriptor>,
+) -> Result<Option<super::schema_window::Window>> {
+	let window = evidence
+		.map(super::verified::Descriptor::migration_window)
+		.transpose()?
+		.flatten();
+	ensure!(
+		!args.setup || window.is_none(),
+		"a migration window requires an installed baseline; deploy the initial release without a \
+		 window first"
+	);
+	Ok(window)
+}
+
+/// A successful release must not make the next history read fail. Keep the
+/// bound shared with the reader and check before boot, then before writing.
+fn encoded_history(history: &[Release], proposed: &Release) -> Result<Vec<u8>> {
+	let records: Vec<_> = history.iter().chain(std::iter::once(proposed)).collect();
+	let bytes = serde_json::to_vec_pretty(&records)?;
+	ensure!(
+		bytes.len() <= remote::MAX_RESPONSE_BYTES,
+		"release history would exceed the managed 4 MiB read limit; refusing to record unreadable \
+		 shared state"
+	);
+	Ok(bytes)
 }
 
 pub(super) fn prepare() -> Result<()> {

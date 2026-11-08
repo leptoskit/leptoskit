@@ -937,20 +937,21 @@ async fn dashboard_assembles_history_plans_and_measurements() {
 	)
 	.unwrap();
 	drop(db);
-	store
-		.ingest(
-			"notes",
-			&snapshot_with_host(
-				"notes",
-				"one",
-				2,
-				HostSample {
-					cgroup_memory_bytes: Some(2 * 1024 * 1024),
-					..HostSample::default()
-				},
-			),
-		)
-		.unwrap();
+	let mut recent = snapshot_with_host(
+		"notes",
+		"one",
+		2,
+		HostSample {
+			cgroup_memory_bytes: Some(2 * 1024 * 1024),
+			..HostSample::default()
+		},
+	);
+	// The dashboard's range ends exclusively at now. Use a completed minute
+	// so this assertion also holds at the exact start of a wall-clock minute.
+	for window in &mut recent.series[0].windows {
+		window.start_unix_seconds = recent.observed_unix_seconds.saturating_sub(60) / 60 * 60;
+	}
+	store.ingest("notes", &recent).unwrap();
 	let mut old = snapshot("notes", "two", 1);
 	old.series[0].key.outcome = Outcome::ServerError;
 	old.observed_unix_seconds = clock().saturating_sub(300);

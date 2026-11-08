@@ -84,11 +84,15 @@ pub(super) fn current(args: &ReleaseArgs, current: Current<'_>) -> Result<bool> 
 		project.has_probes,
 		"release reuse requires declared readiness probes"
 	);
-	let environment = environment(config, &project, hosts, private, version)?;
+	let window = descriptor.migration_window()?;
+	let environment = environment(config, &project, hosts, private, version, window.as_ref())?;
 	let image = super::verify_release(hosts, c, version, local_hash, Some(release))?;
 	for host in hosts {
 		descriptor.check_remote(host, &image, local_hash)?;
 		ready(host, &c.name, version, project.port, &environment)?;
+	}
+	if let Some(window) = &window {
+		window.verify_running(hosts, &c.name, version)?;
 	}
 	// Approval expiry and policy changes during observations are not ignored.
 	super::super::approvals::authorize(dir, &c.domain, Some(&descriptor), authorization.as_ref())?;
@@ -125,9 +129,11 @@ fn environment(
 	hosts: &[String],
 	private: &str,
 	version: &str,
+	window: Option<&super::super::schema_window::Window>,
 ) -> Result<BTreeMap<String, String>> {
 	let c = config.infra.as_ref().context("missing infrastructure")?;
 	let (raw, _) = super::runtime::kamal(c, project, hosts, private)?;
+	let raw = super::super::schema_window::configure(&raw, &c.name, window)?;
 	let runtime: serde_json::Value = serde_json::from_str(&raw)?;
 	let mut environment: BTreeMap<String, String> =
 		serde_json::from_value(runtime["env"]["clear"].clone())?;

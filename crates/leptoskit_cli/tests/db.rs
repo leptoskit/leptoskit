@@ -371,6 +371,59 @@ fn exports_without_the_environment(root: &Path, operations: &[&str], client: &Pa
 	spec
 }
 
+/// The built executable must export its own checkpoint even when every
+/// normal startup input is unusable. An existing export is not replaced.
+fn exports_migration_checkpoint_without_startup(root: &Path, target: &Path) {
+	let directory = tempfile::tempdir().unwrap();
+	let out = directory.path().join("contract.json");
+	let database = directory.path().join("must-not-exist.sqlite3");
+	let mut command = Command::new(target.join("debug/notes"));
+	command
+		.current_dir(root)
+		.env("LEPTOSKIT_DB_CONTRACT_OUT", &out)
+		.env("DATABASE_URL", format!("sqlite:{}", database.display()))
+		.env("LEPTOS_SITE_ADDR", "not-a-socket")
+		.env("LEPTOSKIT_MIGRATION_WINDOW", "missing-window.json")
+		.env_remove("LEPTOSKIT_MIGRATION_WINDOW_SHA256")
+		.env_remove("LEPTOSKIT_RPC_SPEC_OUT")
+		.env_remove("AUTH_ENCRYPTION_KEYS")
+		.stdout(std::process::Stdio::null())
+		.stderr(std::process::Stdio::null());
+	let run = |command: &mut Command| {
+		let mut server = Server {
+			child: command.spawn().unwrap(),
+		};
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+		loop {
+			if let Some(status) = server.child.try_wait().unwrap() {
+				break status;
+			}
+			assert!(
+				std::time::Instant::now() < deadline,
+				"migration export entered normal startup"
+			);
+			std::thread::sleep(std::time::Duration::from_millis(20));
+		}
+	};
+	assert!(run(&mut command).success());
+	let json = fs::read_to_string(&out).unwrap();
+	let exported = leptoskit_db::MigrationContract::from_json(&json).unwrap();
+	let migrations = leptoskit_db::load_migrations(&root.join("migrations")).unwrap();
+	let snapshot = fs::read_to_string(
+		root.join("migrations")
+			.join(migrations.last().unwrap().name.as_ref())
+			.join("schema.json"),
+	)
+	.unwrap();
+	assert_eq!(
+		exported,
+		leptoskit_db::MigrationContract::new(&migrations, Some(&snapshot)).unwrap()
+	);
+	assert!(!database.exists(), "migration export created a database");
+	assert!(!run(&mut command).success());
+	assert_eq!(fs::read_to_string(out).unwrap(), json);
+}
+
 /// The generated notes screen really uses the shared typed operations, keeps
 /// the browser and native paths apart, and, with sign-in, only shows one
 /// account's notes.
@@ -495,6 +548,7 @@ fn the_database_scaffold_migrates_and_serves() {
 	let address = free_address();
 	point_native_at(&root, &format!("http://{address}"));
 	cargo(&["build", "--locked", "--package", "notes"]);
+	exports_migration_checkpoint_without_startup(&root, &target);
 	// The shared contracts build for the browser without the server's
 	// driver.
 	cargo(&[
@@ -761,6 +815,7 @@ fn the_auth_scaffold_signs_people_in() {
 	let address = free_address();
 	point_native_at(&root, &format!("http://{address}"));
 	cargo(&["build", "--locked", "--package", "notes"]);
+	exports_migration_checkpoint_without_startup(&root, &target);
 	cargo(&["test", "--locked", "--package", "notes_app"]);
 	cargo(&[
 		"check",

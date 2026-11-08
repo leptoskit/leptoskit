@@ -103,6 +103,50 @@ pub(crate) fn expand(
 	})
 }
 
+/// Reuse the registry validation from `migrations!`, then track both the
+/// registry and its final snapshot as compiler inputs.
+pub(crate) fn snapshot(
+	path: &LitStr,
+	manifest_dir: &Path,
+	krate: &TokenStream,
+) -> syn::Result<TokenStream> {
+	let _ = expand(path, manifest_dir, krate)?;
+	let registry_path = manifest_dir.join(path.value()).join("registry.txt");
+	let registry = fs::read_to_string(&registry_path)
+		.map_err(|error| syn::Error::new(path.span(), error.to_string()))?;
+	let last = registry
+		.lines()
+		.map(str::trim)
+		.rfind(|line| !line.is_empty() && !line.starts_with('#'));
+	let expression = if let Some(last) = last {
+		let file = manifest_dir
+			.join(path.value())
+			.join(last)
+			.join("schema.json");
+		let json = fs::read_to_string(&file).map_err(|error| {
+			syn::Error::new(
+				path.span(),
+				format!("couldn't read {}: {error}", file.display()),
+			)
+		})?;
+		serde_json::from_str::<serde_json::Value>(&json).map_err(|error| {
+			syn::Error::new(
+				path.span(),
+				format!("invalid schema snapshot {}: {error}", file.display()),
+			)
+		})?;
+		let file = file.to_string_lossy().to_string();
+		quote! { ::core::option::Option::Some(::core::include_str!(#file)) }
+	} else {
+		quote! { ::core::option::Option::None }
+	};
+	let registry_path = registry_path.to_string_lossy().to_string();
+	Ok(quote! {{
+		const _: &str = ::core::include_str!(#registry_path);
+		#expression
+	}})
+}
+
 /// The same checksum as `leptoskit_db::checksum`.
 fn checksum(sql: &str) -> String {
 	Sha256::digest(sql.as_bytes())
