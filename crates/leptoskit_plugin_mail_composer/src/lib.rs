@@ -452,10 +452,37 @@ mod tests {
 		assert_eq!(validate(MethodId(9), &[]), Err(Error::Unavailable));
 
 		let mut plugin = Unsupported;
+		assert_eq!(plugin.name(), NAME);
+		assert_eq!(plugin.methods(), METHODS);
 		assert_eq!(
 			Availability::decode(&plugin.invoke(AVAILABILITY, Bytes::new()).unwrap()).unwrap(),
 			Availability::Unsupported
 		);
 		assert_eq!(plugin.invoke(PRESENT, payload), Err(Error::Unavailable));
+	}
+
+	#[test]
+	fn decode_rejects_oversized_frames_lists_and_nul_text() {
+		let oversized = vec![
+			0_u8;
+			MAX_BODY_BYTES
+				+ MAX_SUBJECT_BYTES
+				+ 3 * MAX_ADDRESSES * (MAX_ADDRESS_BYTES + 4)
+				+ 21
+		];
+		assert_eq!(Compose::decode(&oversized), Err(Error::TooLarge));
+
+		let mut too_many = (MAX_ADDRESSES as u32 + 1).to_le_bytes().to_vec();
+		too_many.extend_from_slice(&0_u32.to_le_bytes());
+		assert_eq!(Compose::decode(&too_many), Err(Error::TooLarge));
+
+		assert_eq!(
+			Compose::new(None::<String>, None::<String>, None::<String>, "a\0b", ""),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Compose::new(None::<String>, None::<String>, None::<String>, "", "a\0b"),
+			Err(Error::InvalidArgument)
+		);
 	}
 }

@@ -82,15 +82,9 @@ impl Open {
 		require_authority(&url)?;
 		require_graphic(&url)?;
 		require_escapes(&url)?;
-		let parsed = url::Url::parse(&url).map_err(|_| Error::InvalidArgument)?;
-
-		if parsed.host_str().is_none()
-			|| !parsed.username().is_empty()
-			|| parsed.password().is_some()
-		{
-			return Err(Error::InvalidArgument);
-		}
-
+		// Reject malformed hosts (for example invalid IPv6). Credentialed
+		// authorities are already refused by `require_authority`.
+		url::Url::parse(&url).map_err(|_| Error::InvalidArgument)?;
 		Ok(Self { url })
 	}
 
@@ -336,10 +330,21 @@ mod tests {
 		assert_eq!(validate(MethodId(9), &[]), Err(Error::Unavailable));
 
 		let mut plugin = Unsupported;
+		assert_eq!(plugin.name(), NAME);
+		assert_eq!(plugin.methods(), METHODS);
 		assert_eq!(
 			Availability::decode(&plugin.invoke(AVAILABILITY, Bytes::new()).unwrap()).unwrap(),
 			Availability::Unsupported
 		);
 		assert_eq!(plugin.invoke(OPEN, payload), Err(Error::Unavailable));
+	}
+
+	#[test]
+	fn decode_rejects_oversized_frames_and_malformed_hosts() {
+		let oversized = vec![0_u8; MAX_URL_BYTES + 5];
+		assert_eq!(Open::decode(&oversized), Err(Error::TooLarge));
+
+		// Authority shape passes; Url refuses the invalid IPv6 host.
+		assert_eq!(Open::url("https://[v1.local]"), Err(Error::InvalidArgument));
 	}
 }
