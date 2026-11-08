@@ -519,6 +519,7 @@ fn platform_label(target: Target) -> &'static str {
 		Target::Harmonyos | Target::HarmonyosX86_64 => "HarmonyOS",
 		Target::Wearos => "Wear OS",
 		Target::Watchos => "watchOS",
+		Target::Quest => "Meta Quest",
 		Target::Windows => "Windows",
 		Target::Linux => "Linux",
 		Target::Tui => "terminal",

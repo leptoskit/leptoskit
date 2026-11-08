@@ -389,3 +389,53 @@ fn missing_plugin_messages_name_wear_and_watch_hosts() {
 		);
 	}
 }
+
+#[test]
+fn rust_plugins_name_the_apple_frameworks_ios_links() {
+	let runtime = json!({
+		"name": "echo",
+		"rust-type": "Echo",
+		"apple-frameworks": ["ARKit", "CoreMotion"]
+	});
+	let registry = resolve_for_target(
+		runtime_metadata(&runtime),
+		&echo_config(),
+		Some(Target::Ios),
+	)
+	.unwrap();
+	assert_eq!(
+		registry.plugins[0].apple_frameworks,
+		["ARKit", "CoreMotion"]
+	);
+	assert_eq!(
+		crate::native::project::ios_linked_frameworks(&registry).unwrap(),
+		" OTHER_LDFLAGS = \
+		 (\"$(inherited)\",\"-framework\",\"ARKit\",\"-framework\",\"CoreMotion\");"
+	);
+
+	let invalid = json!({"name": "echo", "rust-type": "Echo", "apple-frameworks": ["AR Kit"]});
+	assert!(resolve_metadata(runtime_metadata(&invalid), &echo_config()).is_err());
+}
+
+#[test]
+fn quest_resolves_like_android() {
+	let runtime = json!({
+		"name": "echo",
+		"android-type": "dev.example.Echo",
+		"android": {"rust-type": "Echo"}
+	});
+	let registry = resolve_for_target(
+		runtime_metadata(&runtime),
+		&echo_config(),
+		Some(Target::Quest),
+	)
+	.unwrap();
+	let capabilities = HostCapabilities::of(Target::Quest);
+	assert!(
+		registry.plugins[0]
+			.implementation(Target::Quest, capabilities)
+			.unwrap()
+			.rust()
+			.is_some()
+	);
+}
