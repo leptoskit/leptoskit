@@ -257,6 +257,7 @@ leptoskit_plugin_barometer = { path = "crates/leptoskit_plugin_barometer", versi
 leptoskit_plugin_battery = { path = "crates/leptoskit_plugin_battery", version = "0.3.0" }
 leptoskit_plugin_brightness = { path = "crates/leptoskit_plugin_brightness", version = "0.3.0" }
 leptoskit_plugin_calendar = { path = "crates/leptoskit_plugin_calendar", version = "0.3.0" }
+leptoskit_plugin_camera = { path = "crates/leptoskit_plugin_camera", version = "0.3.0" }
 leptoskit_plugin_cellular = { path = "crates/leptoskit_plugin_cellular", version = "0.3.0" }
 leptoskit_plugin_clipboard = { path = "crates/leptoskit_plugin_clipboard", version = "0.3.0" }
 leptoskit_plugin_contacts = { path = "crates/leptoskit_plugin_contacts", version = "0.3.0" }

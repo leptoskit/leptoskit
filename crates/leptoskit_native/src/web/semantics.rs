@@ -143,9 +143,13 @@ pub(super) fn custom_control(kind: NativeKind, aria: &Aria) -> bool {
 /// role is not repeated as an attribute.
 fn implied_role(kind: NativeKind, tag: Tag) -> Option<Role> {
 	match kind {
-		// Rive, Scene3d, Video, and Vector need explicit image roles in their web
+		// Rive, Scene3d, Video, Camera, and Vector need explicit image roles in their web
 		// wrappers.
-		NativeKind::Rive | NativeKind::Scene3d | NativeKind::Video | NativeKind::Vector => None,
+		NativeKind::Rive
+		| NativeKind::Scene3d
+		| NativeKind::Video
+		| NativeKind::Camera
+		| NativeKind::Vector => None,
 		NativeKind::View | NativeKind::ScrollView | NativeKind::Text | NativeKind::TextRun => {
 			tag.implied_role()
 		}
@@ -176,7 +180,7 @@ pub(super) fn attributes(
 			.or_else(|| {
 				matches!(
 					kind,
-					NativeKind::Rive | NativeKind::Scene3d | NativeKind::Video
+					NativeKind::Rive | NativeKind::Scene3d | NativeKind::Video | NativeKind::Camera
 				)
 				.then_some(Role::Img)
 			})

@@ -658,6 +658,17 @@ fn video_element(player: Option<u32>, attrs: impl Attribute + 'static) -> AnyVie
 		.into_any()
 }
 
+/// A `Camera` surface. The `camera` plugin binds a host session by id.
+fn camera_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
+	html::video()
+		.attr("data-lk-camera", session.map(|session| session.to_string()))
+		.attr("playsinline", true)
+		.attr("muted", true)
+		.attr("autoplay", true)
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -757,6 +768,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		}
 		NativeKind::Scene3d => scene3d_canvas(props.scene3d, attrs),
 		NativeKind::Video => video_element(props.video, attrs),
+		NativeKind::Camera => camera_element(props.camera, attrs),
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}

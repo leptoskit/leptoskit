@@ -263,6 +263,19 @@ pub fn Video(player: u32) -> Element {
 
 tag!(Video => Element::new(crate::NativeKind::Video));
 
+/// A host-owned camera preview surface.
+///
+/// The element only says where the session shows. Create and control the
+/// session with `leptoskit_plugin_camera` (`guest::Camera` from a Wasm guest).
+/// Give it a size, such as `w-full h-64`, and an accessible label, or mark it
+/// decorative with `aria_hidden(true)`.
+#[track_caller]
+pub fn Camera(session: u32) -> Element {
+	Element::camera(session)
+}
+
+tag!(Camera => Element::new(crate::NativeKind::Camera));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {

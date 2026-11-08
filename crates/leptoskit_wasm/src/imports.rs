@@ -34,6 +34,7 @@ const NATIVE_KINDS: &[NativeKind] = &[
 	NativeKind::Rive,
 	NativeKind::Scene3d,
 	NativeKind::Video,
+	NativeKind::Camera,
 ];
 
 pub(super) fn link(linker: &mut Linker<HostState>) -> Result<(), wasmi::errors::LinkerError> {

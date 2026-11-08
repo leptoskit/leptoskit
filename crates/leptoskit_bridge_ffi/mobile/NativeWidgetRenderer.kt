@@ -111,6 +111,7 @@ internal class NativeWidgetRenderer(
             (it as? ImageView)?.setImageDrawable(null)
             (it as? NativeScene3dView)?.close()
             (it as? NativeVideoView)?.close()
+            (it as? NativeCameraView)?.close()
         }
         riveBitmaps.clear()
         movedScrolls.clear()
@@ -241,6 +242,7 @@ internal class NativeWidgetRenderer(
                 retarget(view, change.props.scrollOffset)
                 (view as? NativeScene3dView)?.show(change.props.scene3d)
                 (view as? NativeVideoView)?.show(change.props.video)
+                (view as? NativeCameraView)?.show(change.props.camera)
             }
 
             is RenderMutation.UpdateLayout -> {
@@ -267,6 +269,7 @@ internal class NativeWidgetRenderer(
 
                 if (view is NativeScene3dView) view.close()
                 if (view is NativeVideoView) view.close()
+                if (view is NativeCameraView) view.close()
                 val exiting = motion.exiting(view)
                 motion.forget(change.id, view)
 
@@ -403,6 +406,10 @@ internal class NativeWidgetRenderer(
                     NativeVideoView(context)
                 }
 
+                "camera", "Camera" -> {
+                    NativeCameraView(context)
+                }
+
                 else -> {
                     error("Unsupported widget: $kind")
                 }
@@ -416,6 +423,7 @@ internal class NativeWidgetRenderer(
 
         (widget as? NativeScene3dView)?.show(item.props.scene3d)
         (widget as? NativeVideoView)?.show(item.props.video)
+        (widget as? NativeCameraView)?.show(item.props.camera)
     }
 
     private fun rememberControl(

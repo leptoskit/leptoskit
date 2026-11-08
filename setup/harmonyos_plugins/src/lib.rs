@@ -15,6 +15,7 @@ pub use leptoskit_plugin_barometer;
 pub use leptoskit_plugin_battery;
 pub use leptoskit_plugin_brightness;
 pub use leptoskit_plugin_calendar;
+pub use leptoskit_plugin_camera;
 pub use leptoskit_plugin_cellular;
 pub use leptoskit_plugin_clipboard;
 pub use leptoskit_plugin_contacts;

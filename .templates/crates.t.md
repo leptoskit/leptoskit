@@ -928,6 +928,22 @@ surface, Android uses Media3 `ExoPlayer` with a `PlayerView`, and the browser us
 
 <!-- {/p_videoSummary} -->
 
+<!-- {@p_cameraSummary} -->
+
+Add `{{ plugin_camera.package.name }}` as a direct dependency and select the `{{ plugin_camera.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and
+terminal hosts currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse `guest::Camera` rather than
+resolving the plugin on every call. Ask for camera access through the `permissions`
+plugin; this plugin returns `PermissionDenied` or `Unavailable` when capture lacks a
+grant. iOS and macOS use `AVCaptureSession` with an `AVCaptureVideoPreviewLayer` surface,
+Android uses CameraX with a `PreviewView`, and the browser uses `getUserMedia` into an
+HTML `<video>` element; Windows, Linux, and HarmonyOS return `Unavailable`. Video
+recording is not in this MVP.
+
+<!-- {/p_cameraSummary} -->
+
 <!-- {@p_sqliteSummary} -->
 
 Add `{{ plugin_sqlite.package.name }}` as a direct dependency and select the `{{ plugin_sqlite.package.metadata.leptoskit.runtime.name }}` plugin in

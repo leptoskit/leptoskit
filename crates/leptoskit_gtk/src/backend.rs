@@ -525,9 +525,11 @@ impl NativeBackend for GtkBackend {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers (not
 			// GTK yet);
 			// this backend holds its place as an empty view.
-			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d | NativeKind::Video => {
-				content.clone().upcast()
-			}
+			NativeKind::View
+			| NativeKind::Custom(_)
+			| NativeKind::Scene3d
+			| NativeKind::Video
+			| NativeKind::Camera => content.clone().upcast(),
 			NativeKind::Text | NativeKind::TextRun => {
 				gtk::Label::builder()
 					.wrap(true)

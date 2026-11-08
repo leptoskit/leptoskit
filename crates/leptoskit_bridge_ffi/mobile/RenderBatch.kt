@@ -41,6 +41,9 @@ internal class WidgetProps(
     /** The player a `Video` shows; it travels in [rest]. */
     val video: Long? = rest?.takeUnless { it.isNull("video") }?.getLong("video")
 
+    /** The session a `Camera` shows; it travels in [rest]. */
+    val camera: Long? = rest?.takeUnless { it.isNull("camera") }?.getLong("camera")
+
     /** Where a scroll view's content is scrolled to; it travels in [rest]. */
     val scrollOffset: ScrollOffset? = rest?.optJSONObject("scroll_offset")?.let(ScrollOffset::fromJson)
 

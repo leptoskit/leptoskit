@@ -414,7 +414,11 @@ impl UIKitBackend {
 			}
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
 			// this backend holds its place as an empty view.
-			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d | NativeKind::Video => {
+			NativeKind::View
+			| NativeKind::Custom(_)
+			| NativeKind::Scene3d
+			| NativeKind::Video
+			| NativeKind::Camera => {
 				(
 					UIView::initWithFrame(UIView::alloc(self.mtm), frame),
 					Control::Plain,
