@@ -1,0 +1,28 @@
+[package]
+name = "leptoskit_plugin_device_keys"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Hardware-bound signing keys gated by biometrics or the device passcode for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "device-keys"
+apple-module = "LeptosKitDeviceKeys"
+apple-type = "DeviceKeysPlugin"
+android-type = "dev.leptoskit.plugins.devicekeys.DeviceKeysPlugin"
+android-context = true
+android-permissions = ["android.permission.USE_BIOMETRIC"]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

@@ -6087,6 +6087,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_device_keys"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_device_policy"
 version = "0.3.0"
 dependencies = [

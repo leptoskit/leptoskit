@@ -451,6 +451,12 @@ person gave the device; those come only from the separate `identifiers` call.
 
 <!-- {/p_deviceSummary} -->
 
+<!-- {@p_device_keysSummary} -->
+
+Add `{{ plugin_device_keys.package.name }}` as a direct dependency and select the `{{ plugin_device_keys.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Apple generates a P-256 key in the Secure Enclave and signs through `LAContext`; Android generates in `AndroidKeyStore` and signs through `BiometricPrompt`. Every signature is fresh proof that the device owner authenticated on this device just now; the key can never be copied off the device. Desktop hosts without a native handler, and browsers, report `Unavailable`.
+
+<!-- {/p_device_keysSummary} -->
+
 <!-- {@p_devtoolsSummary} -->
 
 Apps never select it. The shared runtime installs it in `leptoskit dev` builds, and the
