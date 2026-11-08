@@ -37,8 +37,7 @@ pub const STATUS: MethodId = MethodId(3);
 /// Session → empty reply; drops the host session.
 pub const RELEASE: MethodId = MethodId(4);
 /// Supported wire operations.
-pub const METHODS: &[MethodId] =
-	&[CREATE, START_PLAYBACK, STOP_PLAYBACK, STATUS, RELEASE];
+pub const METHODS: &[MethodId] = &[CREATE, START_PLAYBACK, STOP_PLAYBACK, STATUS, RELEASE];
 
 const WIRE_VERSION: u32 = 1;
 /// Maximum UTF-8 bytes for the source URI.
@@ -375,10 +374,7 @@ mod tests {
 		assert_eq!(PlaybackStyle::from_code(0), Some(PlaybackStyle::Hint));
 		assert_eq!(PlaybackStyle::from_code(2), None);
 
-		assert_eq!(
-			SessionId::decode(&SessionId(7).encode()),
-			Ok(SessionId(7))
-		);
+		assert_eq!(SessionId::decode(&SessionId(7).encode()), Ok(SessionId(7)));
 		assert_eq!(
 			SessionCommand::decode(
 				&SessionCommand {

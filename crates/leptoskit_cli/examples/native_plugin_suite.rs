@@ -83,6 +83,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("sms", "leptoskit_plugin_sms"),
 	("mail-composer", "leptoskit_plugin_mail_composer"),
 	("media-library", "leptoskit_plugin_media_library"),
+	("background-task", "leptoskit_plugin_background_task"),
 	("maps", "leptoskit_plugin_maps"),
 	("live-photo", "leptoskit_plugin_live_photo"),
 	("web-browser", "leptoskit_plugin_web_browser"),
@@ -117,6 +118,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_speech/tests/android/SpeechPluginTest.kt",
 	"leptoskit_plugin_video/tests/android/VideoPluginTest.kt",
 	"leptoskit_plugin_video_thumbnails/tests/android/VideoThumbnailsWireTest.kt",
+	"leptoskit_plugin_background_task/tests/android/BackgroundTaskWireTest.kt",
 	"leptoskit_plugin_location/android-tests/LocationPluginTest.kt",
 	"leptoskit_plugin_local_authentication/tests/android/LocalAuthenticationPluginTest.kt",
 	"leptoskit_plugin_device_keys/tests/android/DeviceKeysPluginTest.kt",
@@ -277,7 +279,6 @@ class CalendarWireInstrumentationTest {
 }
 ";
 
-
 const MEDIA_LIBRARY_WIRE_TEST: &str = r"package dev.leptoskit.plugins.medialibrary
 
 import org.junit.Test
@@ -317,6 +318,19 @@ class LivePhotoWireInstrumentationTest {
 }
 ";
 
+const BACKGROUND_TASK_WIRE_TEST: &str = r"package dev.leptoskit.plugins.backgroundtask
+
+import org.junit.Test
+
+/** Validates synthetic background-task framing without scheduling WorkManager. */
+class BackgroundTaskWireInstrumentationTest {
+    @Test
+    fun boundedRegisterAndStatus() {
+        main()
+    }
+}
+";
+
 const MAPS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.maps
 
 import org.junit.Test
@@ -329,7 +343,6 @@ class MapsWireInstrumentationTest {
     }
 }
 ";
-
 
 #[derive(Parser)]
 struct Args {
@@ -522,10 +535,20 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
 		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
 		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
-		("MediaLibraryWireInstrumentationTest.kt", MEDIA_LIBRARY_WIRE_TEST),
+		(
+			"MediaLibraryWireInstrumentationTest.kt",
+			MEDIA_LIBRARY_WIRE_TEST,
+		),
 		("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
+		(
+			"BackgroundTaskWireInstrumentationTest.kt",
+			BACKGROUND_TASK_WIRE_TEST,
+		),
 		("LivePhotoWireInstrumentationTest.kt", LIVE_PHOTO_WIRE_TEST),
-		("VideoThumbnailsWireInstrumentationTest.kt", VIDEO_THUMBNAILS_WIRE_TEST),
+		(
+			"VideoThumbnailsWireInstrumentationTest.kt",
+			VIDEO_THUMBNAILS_WIRE_TEST,
+		),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

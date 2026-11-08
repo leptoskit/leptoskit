@@ -30,7 +30,11 @@ fn a_map_needs_a_label_or_to_be_hidden() {
 		Map(4).aria_label("  ").validate(),
 		Err(ControlTreeError::InvalidMap)
 	);
-	assert!(ControlTreeError::InvalidMap.to_string().contains("aria_hidden"));
+	assert!(
+		ControlTreeError::InvalidMap
+			.to_string()
+			.contains("aria_hidden")
+	);
 }
 
 #[test]

@@ -21,7 +21,8 @@ use leptoskit_bridge::codec::Encoder;
 pub const NAME: &str = "print";
 /// Empty request; exact four-byte [`Availability`] response.
 pub const AVAILABILITY: MethodId = MethodId(0);
-/// [`Job`] request; empty reply after the dialog finishes or the job is accepted.
+/// [`Job`] request; empty reply after the dialog finishes or the job is
+/// accepted.
 pub const PRINT: MethodId = MethodId(1);
 /// Independently grantable methods.
 pub const METHODS: &[MethodId] = &[AVAILABILITY, PRINT];
@@ -74,9 +75,11 @@ enum JobKind {
 /// One print job: HTML markup or a PDF URI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Job {
-	/// UTF-8 HTML document fragment or full document for the system print formatter.
+	/// UTF-8 HTML document fragment or full document for the system print
+	/// formatter.
 	Html(String),
-	/// Absolute `http(s)` or `file` URI pointing at a PDF. Credentials are refused.
+	/// Absolute `http(s)` or `file` URI pointing at a PDF. Credentials are
+	/// refused.
 	PdfUri(String),
 }
 
@@ -93,8 +96,9 @@ impl Job {
 		Ok(Self::Html(html))
 	}
 
-	/// Accepts absolute HTTP(S) or `file` PDF URIs without credentials, controls,
-	/// whitespace, or backslashes. Percent-encode Unicode before calling.
+	/// Accepts absolute HTTP(S) or `file` PDF URIs without credentials,
+	/// controls, whitespace, or backslashes. Percent-encode Unicode before
+	/// calling.
 	pub fn pdf_uri(value: impl Into<String>) -> Result<Self, Error> {
 		let uri = value.into();
 		if uri.len() > MAX_URI_BYTES {
@@ -115,7 +119,8 @@ impl Job {
 	fn encode_kind(kind: JobKind, body: &[u8]) -> Bytes {
 		let mut encoder = Encoder::with_capacity(8 + body.len());
 		encoder.u32(kind as u32);
-		// Length was validated by the constructors; u32::MAX is unreachable here.
+		// Length was validated by the constructors; u32::MAX is unreachable
+		// here.
 		encoder.bytes(body).unwrap_or_else(|_| unreachable!());
 		encoder.finish()
 	}
@@ -143,9 +148,7 @@ fn require_pdf_uri(value: &str) -> Result<(), Error> {
 	require_graphic(value)?;
 	require_escapes(value)?;
 
-	let (scheme, rest) = value
-		.split_once("://")
-		.ok_or(Error::InvalidArgument)?;
+	let (scheme, rest) = value.split_once("://").ok_or(Error::InvalidArgument)?;
 
 	match scheme {
 		"https" | "http" => {
@@ -264,8 +267,8 @@ pub mod guest {
 	}
 }
 
-/// Browser builds: HTML uses `window.print` after a transient document; PDF URIs
-/// stay Unavailable. Dialog cancellation is not observable on the web.
+/// Browser builds: HTML uses `window.print` after a transient document; PDF
+/// URIs stay Unavailable. Dialog cancellation is not observable on the web.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
 pub mod web {
 	use super::*;
@@ -339,7 +342,10 @@ mod tests {
 		}
 
 		assert_eq!(
-			Job::pdf_uri(format!("https://example.test/{}", "a".repeat(MAX_URI_BYTES))),
+			Job::pdf_uri(format!(
+				"https://example.test/{}",
+				"a".repeat(MAX_URI_BYTES)
+			)),
 			Err(Error::TooLarge)
 		);
 	}
@@ -357,10 +363,7 @@ mod tests {
 		let mut unknown = Encoder::with_capacity(12);
 		unknown.u32(9);
 		unknown.bytes(b"x").unwrap();
-		assert_eq!(
-			Job::decode(&unknown.finish()),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(Job::decode(&unknown.finish()), Err(Error::InvalidArgument));
 
 		assert_eq!(
 			Job::decode(&vec![0_u8; MAX_HTML_BYTES + 9]),

@@ -416,9 +416,7 @@ impl leptoskit_bridge::Plugin for Unsupported {
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		validate(method, &payload)?;
 		match method {
-			STATUS | REQUEST_PERMISSION => {
-				Ok(Bytes::copy_from_slice(&Status::Unknown.encode()))
-			}
+			STATUS | REQUEST_PERMISSION => Ok(Bytes::copy_from_slice(&Status::Unknown.encode())),
 			_ => Err(Error::Unavailable),
 		}
 	}
@@ -550,7 +548,10 @@ mod tests {
 			SaveRequest::new("file:///tmp/a.jpg", MediaKind::All),
 			Err(Error::InvalidArgument)
 		);
-		assert_eq!(SaveRequest::new("", MediaKind::Videos), Err(Error::InvalidArgument));
+		assert_eq!(
+			SaveRequest::new("", MediaKind::Videos),
+			Err(Error::InvalidArgument)
+		);
 		assert_eq!(
 			SaveRequest::new("a\0b", MediaKind::Videos),
 			Err(Error::InvalidArgument)
@@ -576,8 +577,7 @@ mod tests {
 		assert_eq!(asset.height(), Some(200));
 		assert_eq!(asset.creation_time_ms(), Some(1_700_000_000_000));
 
-		let minimal =
-			Asset::new("a", MediaKind::Videos, "file:///v", None, None, None).unwrap();
+		let minimal = Asset::new("a", MediaKind::Videos, "file:///v", None, None, None).unwrap();
 		assert_eq!(Asset::decode(&minimal.encode().unwrap()).unwrap(), minimal);
 
 		assert_eq!(
@@ -589,19 +589,47 @@ mod tests {
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
-			Asset::new("a", MediaKind::Images, "file:///x", Some(u32::MAX), None, None),
+			Asset::new(
+				"a",
+				MediaKind::Images,
+				"file:///x",
+				Some(u32::MAX),
+				None,
+				None
+			),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
-			Asset::new("a", MediaKind::Images, "file:///x", None, Some(u32::MAX), None),
+			Asset::new(
+				"a",
+				MediaKind::Images,
+				"file:///x",
+				None,
+				Some(u32::MAX),
+				None
+			),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
-			Asset::new("a", MediaKind::Images, "file:///x", None, None, Some(u64::MAX)),
+			Asset::new(
+				"a",
+				MediaKind::Images,
+				"file:///x",
+				None,
+				None,
+				Some(u64::MAX)
+			),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
-			Asset::new("x".repeat(MAX_ID_BYTES + 1), MediaKind::Images, "file:///x", None, None, None),
+			Asset::new(
+				"x".repeat(MAX_ID_BYTES + 1),
+				MediaKind::Images,
+				"file:///x",
+				None,
+				None,
+				None
+			),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
@@ -620,8 +648,15 @@ mod tests {
 		}
 		let too_many = (0..=MAX_LIST)
 			.map(|index| {
-				Asset::new(index.to_string(), MediaKind::Images, "file:///x", None, None, None)
-					.unwrap()
+				Asset::new(
+					index.to_string(),
+					MediaKind::Images,
+					"file:///x",
+					None,
+					None,
+					None,
+				)
+				.unwrap()
 			})
 			.collect::<Vec<_>>();
 		assert_eq!(encode_assets(&too_many), Err(Error::TooLarge));
@@ -653,7 +688,10 @@ mod tests {
 			Status::decode(&plugin.invoke(STATUS, Bytes::new()).unwrap()).unwrap(),
 			Status::Unknown
 		);
-		assert_eq!(plugin.invoke(LIST_ASSETS, Bytes::copy_from_slice(&options)), Err(Error::Unavailable));
+		assert_eq!(
+			plugin.invoke(LIST_ASSETS, Bytes::copy_from_slice(&options)),
+			Err(Error::Unavailable)
+		);
 		assert_eq!(plugin.invoke(SAVE, save), Err(Error::Unavailable));
 	}
 }

@@ -24,6 +24,7 @@ leptoskit_plugin_application = { path = "../../crates/leptoskit_plugin_applicati
 leptoskit_plugin_arguments = { path = "../../crates/leptoskit_plugin_arguments" }
 leptoskit_plugin_audio = { path = "../../crates/leptoskit_plugin_audio" }
 leptoskit_plugin_autostart = { path = "../../crates/leptoskit_plugin_autostart" }
+leptoskit_plugin_background_task = { path = "../../crates/leptoskit_plugin_background_task" }
 leptoskit_plugin_badge = { path = "../../crates/leptoskit_plugin_badge" }
 leptoskit_plugin_barometer = { path = "../../crates/leptoskit_plugin_barometer" }
 leptoskit_plugin_battery = { path = "../../crates/leptoskit_plugin_battery" }

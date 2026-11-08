@@ -681,7 +681,10 @@ fn map_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView
 /// A `LivePhoto` surface placeholder until a browser host lands.
 fn live_photo_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
 	html::div()
-		.attr("data-lk-live-photo", session.map(|session| session.to_string()))
+		.attr(
+			"data-lk-live-photo",
+			session.map(|session| session.to_string()),
+		)
 		.add_any_attr(attrs)
 		.into_any()
 }

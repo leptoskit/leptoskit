@@ -57,6 +57,6 @@ See the [plugin support matrix](https://leptoskit.dev/platforms/plugin-inventory
 
 <!-- {=p_printSummary} -->
 
-Add `leptoskit_plugin_print` as a direct dependency and select the `print` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Guests enable the `guest` feature and reuse `guest::Print`. Completion means the print dialog finished or the platform accepted a job; it never confirms paper left a printer.
+Add `leptoskit_plugin_print` as a direct dependency and select the `print` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Print` rather than resolving the plugin on every call. Completion means the print dialog finished or the platform accepted a job; it never confirms paper left a printer.
 
 <!-- {/p_printSummary} -->

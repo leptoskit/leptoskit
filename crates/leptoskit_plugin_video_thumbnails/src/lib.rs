@@ -1,7 +1,7 @@
 //! <!-- {=p_video_thumbnailsSummary|trim|linePrefix:"//! ":true} -->
 //!
-//! Add `leptoskit_plugin_video_thumbnails` as a direct dependency and select the
-//! `video-thumbnails` plugin in `native.plugins`; supported generated hosts
+//! Add `leptoskit_plugin_video_thumbnails` as a direct dependency and select
+//! the `video-thumbnails` plugin in `native.plugins`; supported generated hosts
 //! discover it from Cargo metadata. Generated Linux hosts register it where it
 //! has a Linux Rust implementation; generated Windows and terminal hosts
 //! currently omit runtime plugins, so use explicit registration in a custom
@@ -50,7 +50,8 @@ pub struct GetThumbnail {
 }
 
 impl GetThumbnail {
-	/// Rejects empty/NUL/oversized URIs, `u64::MAX` time, and out-of-range quality.
+	/// Rejects empty/NUL/oversized URIs, `u64::MAX` time, and out-of-range
+	/// quality.
 	pub fn new(uri: impl Into<String>, time_ms: u64, quality: u32) -> Result<Self, Error> {
 		let uri = uri.into();
 		if uri.is_empty() || uri.contains('\0') || uri.len() > MAX_URI_BYTES {
@@ -128,11 +129,7 @@ impl Thumbnail {
 		if width == u32::MAX || height == u32::MAX || width == 0 || height == 0 {
 			return Err(Error::InvalidArgument);
 		}
-		Ok(Self {
-			uri,
-			width,
-			height,
-		})
+		Ok(Self { uri, width, height })
 	}
 
 	/// Temporary JPEG URI.
@@ -261,10 +258,7 @@ mod tests {
 			GetThumbnail::decode(&request.encode().unwrap()),
 			Ok(request)
 		);
-		assert_eq!(
-			GetThumbnail::new("", 0, 50),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(GetThumbnail::new("", 0, 50), Err(Error::InvalidArgument));
 		assert_eq!(
 			GetThumbnail::new("a\0b", 0, 50),
 			Err(Error::InvalidArgument)
@@ -291,20 +285,14 @@ mod tests {
 			.unwrap()
 			.to_vec();
 		trailing.push(0);
-		assert_eq!(
-			GetThumbnail::decode(&trailing),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(GetThumbnail::decode(&trailing), Err(Error::InvalidArgument));
 
 		let thumb = Thumbnail::new("file:///tmp/t.jpg", 320, 180).unwrap();
 		assert_eq!(thumb.uri(), "file:///tmp/t.jpg");
 		assert_eq!(thumb.width(), 320);
 		assert_eq!(thumb.height(), 180);
 		assert_eq!(Thumbnail::decode(&thumb.encode().unwrap()), Ok(thumb));
-		assert_eq!(
-			Thumbnail::new("", 1, 1),
-			Err(Error::InvalidArgument)
-		);
+		assert_eq!(Thumbnail::new("", 1, 1), Err(Error::InvalidArgument));
 		assert_eq!(
 			Thumbnail::new("file:///a", 0, 1),
 			Err(Error::InvalidArgument)
