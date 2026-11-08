@@ -40,6 +40,8 @@ pub struct DeployService {
 	pub public_prefixes: Vec<String>,
 	/// How far the app trusts it with its origin.
 	pub trust: ServiceTrust,
+	/// Whether the app tells it who is signed in.
+	pub forward_identity: bool,
 	/// Whether it has a database of its own.
 	pub database: bool,
 	/// Its database pool size, when set.
@@ -114,8 +116,9 @@ impl DeployService {
 			.collect()
 	}
 
-	/// The app's variables for this service: its URL, then its `bind`
-	/// entries with `{url}`, `{token}`, and `{public_path}` filled in.
+	/// The app's variables for this service: its URL, whether the app
+	/// forwards identity to it, then its `bind` entries with `{url}`,
+	/// `{token}`, and `{public_path}` filled in.
 	/// `token` is the target's way of writing the token's value, such as
 	/// `${LEPTOSKIT_SERVICE_ANALYTICS_TOKEN}`.
 	///
@@ -131,6 +134,13 @@ impl DeployService {
 	) -> Vec<(String, String)> {
 		let public_path = leptoskit_config::services::public_path(&self.name);
 		let mut variables = vec![(self.url_env(), url.to_owned())];
+
+		if self.forward_identity {
+			variables.push((
+				env::identity(&self.name),
+				env::IDENTITY_FORWARDED.to_owned(),
+			));
+		}
 
 		for (name, value) in &self.bind {
 			variables.push((
@@ -230,6 +240,7 @@ pub fn read(root: &Path, config: &LeptoskitConfig) -> Result<Vec<DeployService>>
 			url,
 			public_prefixes: settings.public_prefixes(),
 			trust: settings.trust,
+			forward_identity: settings.forward_identity,
 			database: settings.database,
 			pool: settings.pool,
 			volumes: settings.volumes.clone(),

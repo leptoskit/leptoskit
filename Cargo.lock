@@ -160,6 +160,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "uuid",
 ]
 
 [[package]]
@@ -6736,9 +6737,11 @@ dependencies = [
  "any_spawner",
  "async-nats",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "getrandom 0.4.3",
+ "hmac 0.12.1",
  "http",
  "http-body-util",
  "insta",
@@ -6769,6 +6772,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tower",
  "trybuild",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
