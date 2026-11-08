@@ -45,7 +45,7 @@ fn only_a_scene_names_a_scene_and_it_has_no_children() {
 	view.props.scene3d = Some(1);
 	assert_eq!(view.validate(), Err(ControlTreeError::InvalidScene3d));
 	// The `view!` tag starts without a scene until `scene` sets one.
-	let tag = leptoskit_native::components::Scene3d::builder().aria_hidden(true);
+	let tag = Scene3d::builder().aria_hidden(true);
 	assert_eq!(tag.validate(), Err(ControlTreeError::InvalidScene3d));
 	tag.scene(SceneId(2)).validate().unwrap();
 	let parent = Scene3d(SceneId(1)).aria_hidden(true).child(Text("no"));
