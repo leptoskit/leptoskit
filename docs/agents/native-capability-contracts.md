@@ -110,7 +110,7 @@ The `host.update.codepush` capability is `available` only for iOS, iOS Simulator
 
 This foundation does not close all of A06. Concrete gaps, all visible in the resolved model:
 
-- Windows, Linux, and the terminal runner still register no runtime plugins; their descriptors correctly report every plugin unsupported.
+- Windows and the terminal runner still register no runtime plugins; their descriptors correctly report every plugin unsupported. The Linux runner now hosts synchronous, worker, and async Rust plugins, but not app-owned services.
 - HarmonyOS runs synchronous Rust and ArkTS plugins only: no worker, async, service, or code push.
 - Wear OS and watchOS are experimental stubs with no plugin registration or code push.
 - macOS has no automatic update checks, so `host.update.codepush` is unsupported there.
@@ -124,7 +124,7 @@ Unit tests live in `leptoskit_codepush::capability` (determinism, versions, dupl
 
 ## Acceptance evidence, 7 November 2026
 
-Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `0c66c581` (#628, including merged #609 timers, #615 stores, #619 plugin hardening, and #621 rollback safety), plus the acceptance fixes in the same pull request. Full logs live outside the repository in the audit state's `a06-execution-evidence/`.
+Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `790ca64e` (#662, including merged #609 timers, #615 stores, #619 plugin hardening, #621 rollback safety, #628 badge/shortcut support, and #662 generated Linux runtime plugins), plus the acceptance fixes in the same pull request. The shared audit state and its full logs were removed by another owner during the run; this table is the retained record, and the final checks were rerun with the repository-pinned `nightly-2026-10-21` compiler recovered into a read-only Nix store.
 
 | Check                                                                   | Result                                                                                                      |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -152,7 +152,7 @@ Honest gaps from that run:
 
 - The Android host build was not run: this machine has no Android SDK/NDK. Only the Android guest bundle and descriptor were produced.
 - `lk native build ios-simulator` could not run: `xcodebuild` failed to load `IDESimulatorFoundation`/`CoreSimulator` on this host. That is an environment failure, not a code pass; no simulator or device UI claim is made.
-- Linux, Windows, HarmonyOS, Wear OS, and watchOS generated host builds were not run on macOS. Their descriptors come from the same tested registry model and unit tests; the platform checks reject Linux/Windows here and the watch stubs have no guest.
+- Linux, Windows, HarmonyOS, Wear OS, and watchOS generated host builds were not run on macOS. Linux's new synchronous, worker, and async Rust plugin support comes from #662's generated `PluginHost` wiring, not from a Linux run here; Windows/HarmonyOS/watch descriptors come from the same tested registry model and unit tests, and the watch stubs have no guest.
 - No device or simulator executed a timer sleep. `host.timer` describes the generated host's wiring only.
 - Kotlin was linted, not compiled: no Android toolchain. Swift production sources were compiled by the macOS host build, and the C ABI ran under `swift test`.
 - The broader A06 gaps in the previous section remain open.

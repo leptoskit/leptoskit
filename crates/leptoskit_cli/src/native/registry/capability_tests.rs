@@ -47,18 +47,18 @@ fn registry(config: &LeptoskitConfig, target: Target) -> Registry {
 fn required_missing_capability_fails_but_an_optional_omission_only_warns() {
 	let mut config = echo_config();
 	config.native.required_plugins = vec!["echo".into()];
-	let registry = registry(&config, Target::Linux);
+	let registry = registry(&config, Target::Tui);
 
-	let error = enforce_required(&config, Target::Linux, &registry.plugins, &registry.missing)
-		.expect_err("Linux cannot run plugins");
+	let error = enforce_required(&config, Target::Tui, &registry.plugins, &registry.missing)
+		.expect_err("the terminal cannot run plugins");
 	assert!(error.to_string().contains("plugin.echo"), "{error}");
 
 	config.native.required_plugins.clear();
 	config.native.optional_plugins = vec!["echo".into()];
-	let warnings = optional_warnings(&config, Target::Linux, &registry.plugins, &registry.missing);
+	let warnings = optional_warnings(&config, Target::Tui, &registry.plugins, &registry.missing);
 	assert_eq!(warnings.len(), 1, "{warnings:?}");
 	assert!(
-		warnings[0].contains("optional runtime plugin `echo`") && warnings[0].contains("Linux"),
+		warnings[0].contains("optional runtime plugin `echo`") && warnings[0].contains("terminal"),
 		"{warnings:?}"
 	);
 }
@@ -72,7 +72,7 @@ fn an_optional_plugin_never_turns_missing_plugins_error_into_a_failure() {
 
 	let (kept, missing) = select_for_target(
 		registry.plugins,
-		Target::Linux,
+		Target::Tui,
 		MissingPlugins::Error,
 		&config.native.optional_plugins,
 	)
@@ -85,7 +85,7 @@ fn an_optional_plugin_never_turns_missing_plugins_error_into_a_failure() {
 			resolve_metadata(metadata("Plugin"), &echo_config())
 				.expect("registry")
 				.plugins,
-			Target::Linux,
+			Target::Tui,
 			MissingPlugins::Error,
 			&[],
 		)

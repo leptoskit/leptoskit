@@ -14,5 +14,5 @@ Generated from the same host support model as `capabilities.json`; do not edit b
 | `wearos`           | `wearos`    | yes          | no        | no          | no         | no      | no    | —       | no        |
 | `watchos`          | `watchos`   | yes          | no        | no          | no         | no      | no    | —       | no        |
 | `windows`          | `windows`   | no           | no        | no          | no         | no      | yes   | —       | no        |
-| `linux`            | `linux`     | no           | no        | no          | no         | no      | yes   | —       | no        |
+| `linux`            | `linux`     | no           | yes       | yes         | yes        | no      | yes   | —       | no        |
 | `tui`              | `tui`       | no           | no        | no          | no         | no      | yes   | —       | no        |
