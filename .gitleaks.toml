@@ -11,7 +11,3 @@ paths = ['''(^|/)Podfile\.lock$''']
 [[allowlists]]
 description = "A throwaway RSA key the IdP tests sign RS256 ID tokens with; it signs nothing outside the test suite"
 paths = ['''^crates/leptoskit_idp/tests/fixtures/test-only-[a-z-]+\.pem$''']
-
-[[allowlists]]
-description = "The local deep-audit ledger and checkpoint evidence quote git SHAs, thread ids, and acceptance prose, which the generic-api-key entropy rule misreads; they record no credentials"
-paths = ['''^\.audit/deep-audit-[0-9]{4}-[0-9]{2}-[0-9]{2}/''']

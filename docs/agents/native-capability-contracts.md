@@ -126,7 +126,7 @@ Unit tests live in `leptoskit_codepush::capability` (determinism, versions, dupl
 
 Final checks used the repository-pinned `nightly-2026-10-21` (`rustc 1.101.0-nightly (19833af72 2026-10-20)`) in an isolated rustup home with its `wasm32-unknown-unknown` std; the moving shared toolchain was not used.
 
-Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `794f7adb` (#665, including merged #609 timers, #615 stores, #619 plugin hardening, #621 rollback safety, #628 badge/shortcut support, #662 generated Linux runtime plugins, and #665 Linux examples), plus the acceptance fixes in the same pull request. The shared audit state and its full logs were removed by another owner during the run; this table is the retained record, and the final checks were rerun with an isolated copy of the repository-pinned `nightly-2026-10-21` toolchain whose host files match the recovered read-only Nix store.
+Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `794f7adb` (#665, including merged #609 timers, #615 stores, #619 plugin hardening, #621 rollback safety, #628 badge/shortcut support, #662 generated Linux runtime plugins, and #665 Linux examples), plus the acceptance fixes in the same pull request. The shared audit state and its full logs disappeared during the run; the deleting actor was not established; this table is the retained record, and the final checks were rerun with an isolated copy of the repository-pinned `nightly-2026-10-21` toolchain whose host files match the recovered read-only Nix store.
 
 | Check                                                                   | Result                                                                                                      |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -137,7 +137,7 @@ Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2
 | `swift test` in `crates/leptoskit_bridge_ffi` against the built C ABI   | 16 passed                                                                                                   |
 | Exact-source `NativeSyncReport` Foundation probe                        | 9 decode/message cases passed                                                                               |
 | `devenv shell schema:update`                                            | regenerated `docs/src/schema.json` and both published schemas                                               |
-| `devenv shell test:cargo`                                               | 5654 passed, 55 skipped, across the workspace, file routes, and DevTools                                    |
+| `devenv shell test:cargo`                                               | final run: 5789 workspace passed, 58 skipped; file routes 16; DevTools 43                                   |
 | `devenv shell lint:clippy`, `lint:clippy:wasm` for `leptoskit_codepush` | passed with warnings denied                                                                                 |
 | `devenv shell lint:push`                                                | passed: gitleaks, clippy, monostyle, leptoskit, docs, format, kotlin, tests, zizmor, releases, schema, deny |
 
@@ -158,3 +158,9 @@ Honest gaps from that run:
 - No device or simulator executed a timer sleep. `host.timer` describes the generated host's wiring only.
 - Kotlin was linted, not compiled: no Android toolchain. Swift production sources were compiled by the macOS host build, and the C ABI ran under `swift test`.
 - The broader A06 gaps in the previous section remain open.
+
+## Parent review, 8 November 2026
+
+The parent review removed the directory-wide Gitleaks exception for dated audit directories. `.gitleaksignore` now lists only 177 exact, commit-specific historical findings: existing Git object IDs, independently matched source SHA-256 digests, and reviewed acceptance prose. The complete history scan passes with this list. Synthetic credential fixtures added to an existing audit checkpoint and a new audit directory are both detected; the previous directory exception missed both. New findings in these paths remain subject to the normal secret scan.
+
+The twelve Python files reformatted during gate repairs have identical parsed syntax trees before and after this pull request. This comparison establishes that those formatting edits do not change their Python statements.
