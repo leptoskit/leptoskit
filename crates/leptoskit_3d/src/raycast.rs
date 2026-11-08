@@ -72,6 +72,9 @@ struct Poser<'a> {
 }
 
 impl Poser<'_> {
+	/// A vertex where the pose puts it, on the CPU as the shader does on
+	/// the GPU: morph targets first, then the skin. A raycast tests the
+	/// triangles the player sees, not the bind pose.
 	fn position(&self, index: u32) -> Vec3 {
 		let vertex = (self.primitive.base_vertex + index) as usize;
 		let mut position = Vec3::from(self.asset.vertices[vertex].position);
@@ -144,6 +147,9 @@ pub(crate) fn skinned_bounds(asset: &Asset, instance: &Instance, node: usize) ->
 	Some(bounds)
 }
 
+/// Adds an instance's nearest hit per part. Each part is tested against
+/// its bounds first and then triangle by triangle, posed, so a raycast
+/// costs little for the parts it misses.
 fn instance_hits(
 	id: NodeId,
 	instance: &Instance,

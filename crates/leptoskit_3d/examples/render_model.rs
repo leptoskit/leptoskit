@@ -96,6 +96,7 @@ mod native {
 		encoder.set_depth(png::BitDepth::Eight);
 		encoder.write_header()?.write_image_data(&pixels)?;
 		let stats = renderer.stats();
+
 		println!(
 			"{output}: {} draws, {} instances, {} triangles, clips {:?}",
 			stats.draws,

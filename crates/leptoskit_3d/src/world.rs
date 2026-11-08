@@ -45,6 +45,7 @@ impl Default for Overrides {
 }
 
 impl Overrides {
+	/// Applies the fields an override sets, leaving the others as they were.
 	fn apply(&mut self, change: &MaterialOverride) {
 		if let Some(color) = change.color {
 			self.color = color;
@@ -185,6 +186,8 @@ impl Instance {
 		}
 	}
 
+	/// Applies morph weights set by name before the asset loaded, now that
+	/// its meshes say which target each name is.
 	fn resolve_morphs(&mut self) {
 		let Some(asset) = &self.asset else {
 			return;
@@ -254,6 +257,7 @@ impl Instance {
 
 		match existing {
 			Some((_, existing)) => merge(existing, material),
+
 			None if !full => self.materials.push((part, *material)),
 			None => return,
 		}
@@ -614,6 +618,8 @@ impl World {
 		}
 	}
 
+	/// Queues an asset to load, or reports at once why it will not: a path
+	/// outside the assets, or a scene that already refers to its most.
 	fn load(&mut self, asset: AssetId, path: String) {
 		if self.assets.contains_key(&asset) {
 			return;
@@ -684,6 +690,7 @@ impl World {
 		}
 	}
 
+	/// Applies one sanitized op. Ops for nodes that are gone do nothing.
 	#[allow(clippy::too_many_lines)]
 	fn apply_one(&mut self, op: Op) {
 		match op {
@@ -803,6 +810,7 @@ impl World {
 			Some(direction) if near.is_finite() => {
 				self.limited_raycast(near, direction, near.distance(far))
 			}
+
 			_ => Vec::new(),
 		}
 	}

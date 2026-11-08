@@ -210,6 +210,11 @@ fn upload_morphs(
 }
 
 impl GpuAsset {
+	/// Uploads an asset: one buffer each for its vertices, skins, and
+	/// indices, a texture of its morph deltas, and a bind group per
+	/// material. Images are uploaded once however many materials use them,
+	/// and a material's missing textures bind shared white or flat ones,
+	/// so every material binds the same layout.
 	#[allow(clippy::too_many_lines)]
 	pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, shared: &Shared, asset: &Asset) -> Self {
 		let buffer = |label, contents: &[u8], usage| {
