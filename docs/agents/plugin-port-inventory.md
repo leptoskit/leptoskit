@@ -133,7 +133,7 @@ The [Battery API](https://docs.expo.dev/versions/latest/sdk/battery/) informs sn
 | ------------- | -------------------------- | -------------------------------------------------------------------------------------------- |
 | Accelerometer | `accelerometer`            | Partial; timestamped SI readings and requested interval; one fresh sample per call           |
 | Barometer     | `barometer`                | Partial; timestamped hPa readings and hardware availability; no altitude estimate            |
-| DeviceMotion  | `device_motion`            | Planned; coordinate frames and sensor-fusion semantics                                       |
+| DeviceMotion  | `device_motion`            | Partial; fused attitude, user acceleration and rotation-rate sample; streaming remains       |
 | Gyroscope     | `gyroscope`                | Partial; timestamped rad/s readings and requested interval                                   |
 | Hinge         | `hinge`                    | Planned; foldable hardware availability and posture/angle semantics                          |
 | LightSensor   | `light_sensor`             | Partial; one fresh lux sample on Android/supported browsers; unavailable elsewhere           |
