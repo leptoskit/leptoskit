@@ -48,7 +48,6 @@ pub mod openxr;
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
-pub use orientation::attitude_to_viewer;
 #[cfg(feature = "async-host")]
 pub use plugin::Options;
 #[cfg(feature = "async-host")]
@@ -64,6 +63,8 @@ pub use runtime::NextGuestFrame;
 pub use runtime::XrRuntime;
 #[cfg(any(target_os = "ios", target_os = "android"))]
 pub use sensors::DeviceRotation;
+
+pub use crate::math::attitude_to_viewer;
 
 /// The screen a phone backend projects for: its size in pixels and how far
 /// the interface is turned from the device's natural orientation.
