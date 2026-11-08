@@ -24,6 +24,7 @@ const BASE_PLUGINS: &[(&str, &str)] = &[
 	("clipboard", "leptoskit_plugin_clipboard"),
 	("haptics", "leptoskit_plugin_haptics"),
 	("battery", "leptoskit_plugin_battery"),
+	("cellular", "leptoskit_plugin_cellular"),
 	("device", "leptoskit_plugin_device"),
 	("secure-store", "leptoskit_plugin_secure_store"),
 	("filesystem", "leptoskit_plugin_filesystem"),
@@ -43,6 +44,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("light_sensor", "leptoskit_plugin_light_sensor"),
 	("pedometer", "leptoskit_plugin_pedometer"),
 	("document-picker", "leptoskit_plugin_document_picker"),
+	("image-picker", "leptoskit_plugin_image_picker"),
 	("screen-orientation", "leptoskit_plugin_screen_orientation"),
 	("posture", "leptoskit_plugin_posture"),
 	("brightness", "leptoskit_plugin_brightness"),
@@ -105,6 +107,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_screen_orientation/tests/android/ScreenOrientationPluginTest.kt",
 	"leptoskit_plugin_posture/tests/android/PosturePluginTest.kt",
 	"leptoskit_plugin_document_picker/tests/android/DocumentEncodingTest.kt",
+	"leptoskit_plugin_image_picker/tests/android/ImagePickerEncodingTest.kt",
 	"leptoskit_plugin_store_review/tests/android/StoreReviewPluginTest.kt",
 	"leptoskit_plugin_sharing/tests/android/SharingTest.kt",
 	"leptoskit_plugin_passkeys/tests/android/PasskeysPluginTest.kt",
@@ -163,6 +166,19 @@ import org.junit.Test
 class WebBrowserWireInstrumentationTest {
     @Test
     fun boundedHttpUrls() {
+        main()
+    }
+}
+";
+
+const IMAGE_PICKER_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.imagepicker
+
+import org.junit.Test
+
+/** Runs the shared reply-framing fixture without presenting a picker. */
+class ImagePickerEncodingInstrumentationTest {
+    @Test
+    fun replyFramingRoundTrip() {
         main()
     }
 }
@@ -362,6 +378,10 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		(
 			"WebBrowserWireInstrumentationTest.kt",
 			WEB_BROWSER_WIRE_TEST,
+		),
+		(
+			"ImagePickerEncodingInstrumentationTest.kt",
+			IMAGE_PICKER_ENCODING_TEST,
 		),
 	] {
 		let wrapper = tests.join(name);

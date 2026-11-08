@@ -1097,6 +1097,8 @@ in
             --package leptoskit_plugin_device \
             --package leptoskit_plugin_dialog \
             --package leptoskit_plugin_document_picker \
+            --package leptoskit_plugin_cellular \
+            --package leptoskit_plugin_image_picker \
             --package leptoskit_plugin_screen_orientation \
             --package leptoskit_plugin_sharing \
             --package leptoskit_plugin_filesystem \
