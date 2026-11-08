@@ -6,8 +6,8 @@ Observatory, a desktop app for a year of stargazing, and the worked example for 
 - **Sky log:** a year of observations, about twenty thousand rows, under a ribbon of 365 nights with the moon's phase. Both are `VirtualList`s, so only what is on screen exists. Rows with a note are taller, a pressed row opens to show its star and pushes the rest down, the ribbon narrows the log to one night, and recorded observations arrive without disturbing rows already measured.
 
 ```bash
-cargo run -p observatory_example                          # a window on macOS
-cargo run -p observatory_example -- snapshot sky.png      # the window as a PNG, on macOS
+cargo run -p observatory_example                          # a window on macOS or Linux
+cargo run -p observatory_example -- snapshot sky.png      # the window as a PNG, on macOS or Linux
 cargo run -p observatory_example -- summary               # the accessibility tree, anywhere
 cargo test -p observatory_example
 ```
