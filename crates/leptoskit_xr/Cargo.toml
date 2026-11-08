@@ -44,6 +44,9 @@ async-host = ["host", "leptoskit_bridge/async-host", "dep:serde", "dep:serde_jso
 openxr = ["host", "dep:openxr"]
 # Camera and depth textures and headset swapchains for a wgpu renderer.
 wgpu = ["host", "dep:wgpu", "dep:ash"]
+# Draws a `leptoskit_3d` scene into a session: the camera picture behind it,
+# real-world depth in front of it, one view per eye.
+3d = ["wgpu", "dep:leptoskit_3d", "dep:glam"]
 # The WebXR backend for the browser build.
 web = [
 	"dep:js-sys",
@@ -53,6 +56,8 @@ web = [
 ]
 
 [dependencies]
+glam = { workspace = true, optional = true }
+leptoskit_3d = { workspace = true, optional = true, features = ["renderer"] }
 leptoskit_bridge = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }

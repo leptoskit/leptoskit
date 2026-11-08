@@ -48,56 +48,11 @@ Android XR would be a small delta (its own `uses-feature` and activity property)
 
 ## With `leptoskit_3d`
 
-`leptoskit_3d` (branch `feat/scene3d`) draws a `RenderTarget`: texture views, views with `Mat4` view and projection matrices, a `Background::Camera(CameraImage { planes, transform: Mat3 })`, and an `Occlusion { depth, transform, scale, tolerance }` reading an `R32Float` or `R16Float` texture. The `wgpu` feature produces exactly those inputs: `render::FrameTextures` uploads camera planes as `R8Unorm`/`Rg8Unorm` (or `Rgba8UnormSrgb`) and depth as `R32Float` metres, and `render::affine_matrix` turns a display transform into the column-major 3 × 3 matrix `Mat3::from_cols_array` takes. The mapping, once both branches are on `main` and `leptoskit_xr` gains `leptoskit_3d = { workspace = true, optional = true, features = ["renderer"] }`, `glam = { workspace = true, optional = true }`, and `3d = ["wgpu", "dep:leptoskit_3d", "dep:glam"]` (inside the crate, `leptoskit_xr::` becomes `crate::`):
+`leptoskit_3d` draws a `RenderTarget`: texture views, views with `Mat4` view and projection matrices, a `Background::Camera(CameraImage { planes, transform: Mat3 })`, and an `Occlusion { depth, transform, scale, tolerance }` reading an `R32Float` or `R16Float` texture. The `wgpu` feature produces exactly those inputs: `render::FrameTextures` uploads camera planes as `R8Unorm`/`Rg8Unorm` (or `Rgba8UnormSrgb`) and depth as `R32Float` metres, and `render::affine_matrix` turns a display transform into the column-major 3 × 3 matrix `Mat3::from_cols_array` takes.
 
-```rust
-use glam::{Mat3, Mat4};
-use leptoskit_3d::{Background, CameraImage, CameraPlanes, Occlusion, RenderTarget, TargetColor, ViewParams};
-use leptoskit_xr::host::render::{CameraViews, FrameTextures, affine_matrix, view_matrices};
+The `3d` feature (`wgpu`, `leptoskit_3d` with its renderer, and `glam`) adds `host::scene3d::draw`, which does that mapping: the frame's views become `ViewParams` with a 5 cm near plane and a 100 m far plane, the camera picture becomes the background (or `Background::Scene` when there is none), and real-world depth becomes an `Occlusion` with 5 cm of tolerance for the sensor's noise. On a phone, `color` is `TargetColor::View` of the surface texture; on a headset it is `TargetColor::Layers` of the two eye views `VulkanHeadset::render` passes, with each view's viewport the eye's full size.
 
-fn draw(
-	renderer: &mut leptoskit_3d::Renderer,
-	frame: &leptoskit_xr::host::XrFrame,
-	textures: &FrameTextures,
-	color: TargetColor<'_>,
-	format: wgpu::TextureFormat,
-	size: [u32; 2],
-) -> Result<(), leptoskit_3d::Error> {
-	let views: Vec<ViewParams> = frame
-		.views
-		.iter()
-		.map(|view| {
-			let (view_matrix, projection) = view_matrices(view, 0.05, 100.0);
-			ViewParams {
-				view: Mat4::from_cols_array(&view_matrix),
-				projection: Mat4::from_cols_array(&projection),
-				viewport: [0.0, 0.0, size[0] as f32, size[1] as f32],
-			}
-		})
-		.collect();
-	let background = match textures.camera() {
-		Some((CameraViews::YCbCr { y, cbcr }, transform)) => Background::Camera(CameraImage {
-			planes: CameraPlanes::YCbCr { y, cbcr },
-			transform: Mat3::from_cols_array(&affine_matrix(&transform)),
-		}),
-		Some((CameraViews::Rgba(rgba), transform)) => Background::Camera(CameraImage {
-			planes: CameraPlanes::Rgba(rgba),
-			transform: Mat3::from_cols_array(&affine_matrix(&transform)),
-		}),
-		None => Background::Scene,
-	};
-	let occlusion = textures.depth().map(|(depth, transform)| Occlusion {
-		depth,
-		transform: Mat3::from_cols_array(&affine_matrix(&transform)),
-		scale: 1.0,
-		tolerance: 0.05,
-	});
-	renderer.render(&RenderTarget { color, format, size, views: &views, background, occlusion })?;
-	Ok(())
-}
-```
-
-On a phone, `color` is `TargetColor::View` of the surface texture; on a headset it is `TargetColor::Layers` of the two eye views `VulkanHeadset::render` passes, with each view's viewport the eye's full size. The feature is not declared on this branch because a path dependency on a crate that doesn't exist yet breaks `cargo metadata` for the whole workspace. This function was compiled, as written, inside a copy of `feat/scene3d` (`54b1c4d1`) with this crate added, for the host (Metal) and for `aarch64-linux-android` with `openxr`.
+Native hosts don't call it yet: the iOS and Android hosts draw a `Scene3d` without the camera picture behind it, and handing a session's frame to the scene's renderer is the next step there.
 
 ## Not covered
 

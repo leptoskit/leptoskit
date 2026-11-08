@@ -24,6 +24,8 @@ mod plugin;
 
 #[cfg(feature = "wgpu")]
 pub mod render;
+#[cfg(feature = "3d")]
+pub mod scene3d;
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
 #[allow(unsafe_code)]

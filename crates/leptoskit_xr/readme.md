@@ -54,14 +54,16 @@ It gives an app the real world to play in: camera passthrough, the device's posi
 
 Add the crate as a direct dependency of the app and select `"xr"` in `native.plugins`; the generated iOS, Android, and Quest hosts register it. It is an async plugin, so `[native.plugin-options.xr]` configures the host: `max-frame-rate` caps how many frames a second the guest receives, and `replay` plays a recording instead of the device, for simulators. Guests enable `guest` and use `leptoskit_xr::Xr`; the browser build enables `web` and uses the same type over WebXR.
 
-| Feature      | What it adds                                                                                                   |
-| ------------ | -------------------------------------------------------------------------------------------------------------- |
-| _(none)_     | The types, the binary protocol, and software hit tests. Builds anywhere.                                       |
-| `guest`      | `guest::Xr`, the client for interpreter guests.                                                                |
-| `host`       | `host::XrRuntime`, the backends, recordings, and the `Backend` trait for your own.                             |
-| `async-host` | The plugin generated hosts register (the CLI turns it on).                                                     |
-| `openxr`     | The OpenXR backend. A renderer supplies each session's graphics device through `OpenXrBackend::with_renderer`. |
-| `web`        | `web::Xr` over WebXR, with a `deviceorientation` fallback.                                                     |
+| Feature      | What it adds                                                                                                           |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| _(none)_     | The types, the binary protocol, and software hit tests. Builds anywhere.                                               |
+| `guest`      | `guest::Xr`, the client for interpreter guests.                                                                        |
+| `host`       | `host::XrRuntime`, the backends, recordings, and the `Backend` trait for your own.                                     |
+| `async-host` | The plugin generated hosts register (the CLI turns it on).                                                             |
+| `openxr`     | The OpenXR backend. A renderer supplies each session's graphics device through `OpenXrBackend::with_renderer`.         |
+| `web`        | `web::Xr` over WebXR, with a `deviceorientation` fallback.                                                             |
+| `wgpu`       | `host::render`: camera and depth textures, view matrices, and headset swapchains for a wgpu renderer.                  |
+| `3d`         | `host::scene3d::draw`, which draws a `leptoskit_3d` scene over the camera picture, hidden behind real things by depth. |
 
 ## Use it
 
