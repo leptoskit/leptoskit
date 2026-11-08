@@ -285,7 +285,9 @@ impl HostCapabilities {
 
 		match target {
 			Target::Ios | Target::IosSimulator | Target::Macos => everything(NativeKind::Apple),
-			Target::Android | Target::AndroidX86_64 => everything(NativeKind::Android),
+			Target::Android | Target::AndroidX86_64 | Target::Quest => {
+				everything(NativeKind::Android)
+			}
 			// `bridge.cpp` enables the reserved timer and dispatches
 			// synchronous Rust calls and ArkTS plugins only.
 			Target::Harmonyos | Target::HarmonyosX86_64 => {
@@ -476,7 +478,9 @@ impl Plugin {
 		match target {
 			Target::Ios | Target::IosSimulator => self.ios.as_ref(),
 			Target::Macos => self.macos.as_ref(),
-			Target::Android | Target::AndroidX86_64 | Target::Wearos => self.android.as_ref(),
+			Target::Android | Target::AndroidX86_64 | Target::Wearos | Target::Quest => {
+				self.android.as_ref()
+			}
 			Target::Harmonyos | Target::HarmonyosX86_64 => self.harmonyos.as_ref(),
 			Target::Windows => self.windows.as_ref(),
 			Target::Linux => self.linux.as_ref(),
@@ -503,7 +507,7 @@ impl Plugin {
 					ty: self.apple_type.as_deref()?,
 				})
 			}
-			Target::Android | Target::AndroidX86_64 => {
+			Target::Android | Target::AndroidX86_64 | Target::Quest => {
 				Some(Implementation::Android {
 					ty: self.android_type.as_deref()?,
 				})
@@ -540,6 +544,7 @@ impl MissingPlugin {
 			Target::Android | Target::AndroidX86_64 => ("Android", "Android"),
 			Target::Harmonyos | Target::HarmonyosX86_64 => ("HarmonyOS", "HarmonyOS"),
 			Target::Wearos => ("Wear OS", "Wear OS"),
+			Target::Quest => ("Meta Quest", "Quest"),
 			Target::Watchos => ("watchOS", "watchOS"),
 			Target::Windows => ("Windows", "Windows"),
 			Target::Linux => ("Linux", "Linux"),
