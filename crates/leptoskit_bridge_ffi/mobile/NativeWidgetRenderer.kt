@@ -107,7 +107,10 @@ internal class NativeWidgetRenderer(
         devtools?.let(root::removeView)
         devtools = null
         onRiveViewportChange = null
-        widgets.values.forEach { (it as? ImageView)?.setImageDrawable(null) }
+        widgets.values.forEach {
+            (it as? ImageView)?.setImageDrawable(null)
+            (it as? NativeScene3dView)?.close()
+        }
         riveBitmaps.clear()
         movedScrolls.clear()
         retargeted.clear()
@@ -234,6 +237,7 @@ internal class NativeWidgetRenderer(
                 motion.touch(change.id, view, change.props)
                 props.apply(view, change.props)
                 retarget(view, change.props.scrollOffset)
+                (view as? NativeScene3dView)?.show(change.props.scene3d)
             }
 
             is RenderMutation.UpdateLayout -> {
@@ -257,6 +261,7 @@ internal class NativeWidgetRenderer(
 
                 val view = widgets.remove(change.id) ?: return
                 if (view is NativeRiveImage) view.setImageDrawable(null)
+                if (view is NativeScene3dView) view.close()
                 val exiting = motion.exiting(view)
                 motion.forget(change.id, view)
                 if (exiting) return
@@ -384,6 +389,10 @@ internal class NativeWidgetRenderer(
                     NativeRiveImage(context)
                 }
 
+                "scene3d", "Scene3d" -> {
+                    NativeScene3dView(context)
+                }
+
                 else -> {
                     error("Unsupported widget: $kind")
                 }
@@ -394,6 +403,7 @@ internal class NativeWidgetRenderer(
         motion.touch(id, widget, item.props, isNew = true)
         props.apply(widget, item.props)
         retarget(widget, item.props.scrollOffset)
+        (widget as? NativeScene3dView)?.show(item.props.scene3d)
     }
 
     private fun rememberControl(

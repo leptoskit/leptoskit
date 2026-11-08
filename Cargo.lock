@@ -5209,6 +5209,7 @@ version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "futures",
+ "leptoskit_3d",
  "leptoskit_appkit",
  "leptoskit_bridge",
  "leptoskit_codepush",
