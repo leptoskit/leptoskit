@@ -128,6 +128,7 @@ packages = [
 	"leptoskit_plugin_barometer",
 	"leptoskit_plugin_brightness",
 	"leptoskit_plugin_calendar",
+	"leptoskit_plugin_camera",
 	"leptoskit_plugin_gyroscope",
 	"leptoskit_plugin_http",
 	"leptoskit_plugin_image_picker",
@@ -466,6 +467,9 @@ path = "crates/leptoskit_plugin_brightness"
 
 [package.leptoskit_plugin_calendar]
 path = "crates/leptoskit_plugin_calendar"
+
+[package.leptoskit_plugin_camera]
+path = "crates/leptoskit_plugin_camera"
 
 [package.leptoskit_plugin_gyroscope]
 path = "crates/leptoskit_plugin_gyroscope"

@@ -388,7 +388,8 @@ impl Role {
 			| NativeKind::Vector
 			| NativeKind::Rive
 			| NativeKind::Scene3d
-			| NativeKind::Video => Some(Self::Img),
+			| NativeKind::Video
+			| NativeKind::Camera => Some(Self::Img),
 			NativeKind::TextInput | NativeKind::PasswordInput => Some(Self::TextBox),
 			NativeKind::Button | NativeKind::Pressable => Some(Self::Button),
 			NativeKind::Switch => Some(Self::Switch),

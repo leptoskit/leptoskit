@@ -2,7 +2,7 @@
 
 Leptoskit's primary components are native primitive builders exported by `leptoskit::components` and `leptoskit::prelude`. Each returns an `Element` and understands Tailwind. `View`, `Text`, `Image`, `ScrollView`, editable inputs, buttons, and native controls provide the building blocks for shared screens.
 
-The primary API has 17 primitive builders, including optional `Rive` and `Video`. Another 31 layout and presentation builders are optional helpers under `leptoskit::components::helpers`. Import them explicitly when useful. They compose the same primitives and introduce no native widget kinds. New primitive behavior follows React Native and Lynx; the contracts below do not reproduce every upstream property.
+The primary API has 18 primitive builders, including optional `Rive`, `Video`, and `Camera`. Another 31 layout and presentation builders are optional helpers under `leptoskit::components::helpers`. Import them explicitly when useful. They compose the same primitives and introduce no native widget kinds. New primitive behavior follows React Native and Lynx; the contracts below do not reproduce every upstream property.
 
 `View()` is a column container, `Text(content)` displays inherited system-font text, `Image(source)` displays a host-resolvable image, `Vector(view_box)` draws filled and stroked paths, and `ScrollView()` contains scrolling children. The controls section lists the other primitives.
 
@@ -19,6 +19,7 @@ Use `View` plus Tailwind for rows, grids, and layered content. Helpers remain av
 | `Image(source)`                        | An image from a host-resolvable source. AppKit accepts local paths and file URLs. Web accepts browser URLs.                                                          |
 | `Rive(playback)`                       | An owned [Rive vector animation](../guide/20-rive.md), behind the `rive` feature. Requires an explicit size and accessible label or decorative hiding.               |
 | `Video(player)`                        | A host-owned video surface by player id from the `video` plugin. Requires an explicit size and accessible label or decorative hiding.                                |
+| `Camera(session)`                      | A host-owned camera preview by session id from the `camera` plugin. Requires an explicit size and accessible label or decorative hiding.                             |
 | `Row()`, `Column()`, `Flex(direction)` | Flex containers. Children do not shrink by default. `FlexDirection` includes reversed directions.                                                                    |
 | `Wrap()`                               | A horizontal flex container with wrapping and start-aligned runs. Tailwind controls direction, gaps, and alignment.                                                  |
 | `Grid(columns)`                        | Equal-width `minmax(0, 1fr)` columns and automatic rows. The count is `NonZeroU8`.                                                                                   |
@@ -200,7 +201,7 @@ Lynx separates its small [built-in element vocabulary](https://lynxjs.org/guide/
 | `frame`                                | Not implemented.                                                                                                                                                                                       |
 | Extended `input`                       | Single-line `TextInput` and `PasswordInput`; no multiline textarea contract yet.                                                                                                                       |
 | `svg`                                  | `Vector` draws paths and basic shapes with fills, strokes, dashes, and transforms, and imports SVG documents. Gradients, text, clipping, and masks are not supported.                                  |
-| Other extended elements                | Overlays, refresh gestures, pagers, blur, and embedded web views require additional native contracts. They are not supplied by a styled `View`. Inline URL video uses `Video` plus the `video` plugin. |
+| Other extended elements                | Overlays, refresh gestures, pagers, blur, and embedded web views require additional native contracts. They are not supplied by a styled `View`. Inline URL video uses `Video` plus the `video` plugin; live camera preview uses `Camera` plus the `camera` plugin. |
 
 ## Optional Flutter-inspired helpers
 
@@ -230,6 +231,6 @@ The table groups the [Flutter widget index](https://docs.flutter.dev/reference/w
 
 Web renders semantic DOM controls through Leptos, including server rendering and hydration. macOS renders real AppKit widgets, iOS renders UIKit views, Android renders Android views, Linux renders GTK 4 widgets, and Windows renders Win32 common controls. The headless backend verifies the shared tree and layout without OS widgets.
 
-Every backend crate renders every primitive above, and each is checked in CI on a simulator, an emulator, or a desktop runner. The apps `leptoskit new` generates for macOS, iOS, and Android draw `View`, `Text`, `Button`, `Pressable`, `TextInput`, `PasswordInput`, `ScrollView`, `Image`, `Vector`, `Rive`, `Scene3d`, and `Video` for now (3D and video need their plugins). HarmonyOS draws neither `Pressable` nor `Vector`. [Platforms](../platforms/readme.md#what-each-platform-doesnt-do-yet) lists each platform's gaps.
+Every backend crate renders every primitive above, and each is checked in CI on a simulator, an emulator, or a desktop runner. The apps `leptoskit new` generates for macOS, iOS, and Android draw `View`, `Text`, `Button`, `Pressable`, `TextInput`, `PasswordInput`, `ScrollView`, `Image`, `Vector`, `Rive`, `Scene3d`, `Video`, and `Camera` for now (3D, video, and camera need their plugins). HarmonyOS draws neither `Pressable` nor `Vector`. [Platforms](../platforms/readme.md#what-each-platform-doesnt-do-yet) lists each platform's gaps.
 
 The [CSS coverage reference](css-coverage.md) records engine and utility limits. In particular, the grid engine does not yet implement full right-to-left grid placement. Flex cross-axis alignment does follow its direction.
