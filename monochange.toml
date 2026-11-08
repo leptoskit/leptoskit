@@ -116,6 +116,7 @@ packages = [
 	"leptoskit_plugin_light_sensor",
 	"leptoskit_plugin_pedometer",
 	"leptoskit_plugin_accelerometer",
+	"leptoskit_plugin_device_motion",
 	"leptoskit_plugin_application",
 	"leptoskit_plugin_app_shortcuts",
 	"leptoskit_plugin_audio",
@@ -426,6 +427,9 @@ path = "crates/leptoskit_plugin_pedometer"
 
 [package.leptoskit_plugin_accelerometer]
 path = "crates/leptoskit_plugin_accelerometer"
+
+[package.leptoskit_plugin_device_motion]
+path = "crates/leptoskit_plugin_device_motion"
 
 [package.leptoskit_plugin_application]
 path = "crates/leptoskit_plugin_application"

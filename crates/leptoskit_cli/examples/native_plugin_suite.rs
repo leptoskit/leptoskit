@@ -37,6 +37,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("application", "leptoskit_plugin_application"),
 	("localization", "leptoskit_plugin_localization"),
 	("accelerometer", "leptoskit_plugin_accelerometer"),
+	("device_motion", "leptoskit_plugin_device_motion"),
 	("gyroscope", "leptoskit_plugin_gyroscope"),
 	("magnetometer", "leptoskit_plugin_magnetometer"),
 	("barometer", "leptoskit_plugin_barometer"),
@@ -123,6 +124,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
+	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
 ];
 
 const DOCUMENT_ENCODING_TEST: &str = r"package dev.leptoskit.plugins.documentpicker
@@ -198,6 +200,19 @@ import org.junit.Test
 class PrintWireInstrumentationTest {
     @Test
     fun boundedHtmlAndPdfUris() {
+        main()
+    }
+}
+";
+
+const DEVICE_MOTION_WIRE_TEST: &str = r"package dev.leptoskit.plugins.devicemotion
+
+import org.junit.Test
+
+/** Validates synthetic fused reading framing without opening SensorManager. */
+class DeviceMotionWireInstrumentationTest {
+    @Test
+    fun fusedReadingRoundTrip() {
         main()
     }
 }
@@ -403,6 +418,10 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 			IMAGE_PICKER_ENCODING_TEST,
 		),
 		("PrintWireInstrumentationTest.kt", PRINT_WIRE_TEST),
+		(
+			"DeviceMotionWireInstrumentationTest.kt",
+			DEVICE_MOTION_WIRE_TEST,
+		),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

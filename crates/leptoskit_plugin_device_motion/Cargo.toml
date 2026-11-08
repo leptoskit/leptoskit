@@ -1,0 +1,36 @@
+[package]
+name = "leptoskit_plugin_device_motion"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Fused device-motion attitude, user acceleration, and rotation-rate readings for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "device_motion"
+apple-module = "LeptosKitDeviceMotion"
+apple-type = "DeviceMotionPlugin"
+android-type = "dev.leptoskit.plugins.devicemotion.DeviceMotionPlugin"
+android-context = true
+
+[features]
+guest = ["leptoskit_bridge/guest", "leptoskit_sensor/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+leptoskit_sensor = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+futures = { workspace = true }
+gloo-events = "0.2"
+js-sys = "0.3"
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = "0.4"
+web-sys = { workspace = true, features = ["Window", "EventTarget", "Event", "DomException"] }
+
+[lints]
+workspace = true

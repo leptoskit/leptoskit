@@ -457,6 +457,18 @@ Add `{{ plugin_device_keys.package.name }}` as a direct dependency and select th
 
 <!-- {/p_device_keysSummary} -->
 
+<!-- {@p_device_motionSummary} -->
+
+Add `{{ plugin_device_motion.package.name }}` as a direct dependency and select the `{{ plugin_device_motion.package.metadata.leptoskit.runtime.name }}`
+plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::DeviceMotion` rather than resolving the plugin on every call. iOS uses `CoreMotion`
+device motion, Android fuses accelerometer, gravity, gyroscope and rotation-vector sensors,
+desktop has no sensor, and the browser uses `DeviceMotionEvent` with
+`DeviceOrientationEvent` for attitude.
+
+<!-- {/p_device_motionSummary} -->
+
 <!-- {@p_devtoolsSummary} -->
 
 Apps never select it. The shared runtime installs it in `leptoskit dev` builds, and the

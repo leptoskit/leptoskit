@@ -3550,6 +3550,7 @@ dependencies = [
  "leptoskit_plugin_crypto",
  "leptoskit_plugin_deep_link",
  "leptoskit_plugin_device",
+ "leptoskit_plugin_device_motion",
  "leptoskit_plugin_device_policy",
  "leptoskit_plugin_dialog",
  "leptoskit_plugin_document_picker",
@@ -6092,6 +6093,20 @@ name = "leptoskit_plugin_device_keys"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_device_motion"
+version = "0.3.0"
+dependencies = [
+ "futures",
+ "gloo-events",
+ "js-sys",
+ "leptoskit_bridge",
+ "leptoskit_sensor",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
