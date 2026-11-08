@@ -60,5 +60,6 @@ fn registry(root: &Path) -> Registry {
 		host_features: vec![],
 		devtools_feature: None,
 		missing: Vec::new(),
+		scene3d: false,
 	}
 }
