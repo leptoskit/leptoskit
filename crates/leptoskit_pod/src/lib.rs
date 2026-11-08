@@ -11,21 +11,21 @@ mod reader;
 mod traits;
 mod writer;
 
-pub use envelope::wrap;
-pub use envelope::unwrap;
 pub use envelope::CODEC_VERSION;
 pub use envelope::CONTENT_TYPE;
 pub use envelope::Envelope;
 pub use envelope::MAGIC;
 pub use envelope::MessageType;
+pub use envelope::unwrap;
+pub use envelope::wrap;
 pub use error::Error;
 pub use error::Result;
 pub use reader::Reader;
-pub use traits::decode_struct_version;
-pub use traits::encode_struct_v0;
 pub use traits::ByteBuf;
 pub use traits::PodDecode;
 pub use traits::PodEncode;
+pub use traits::decode_struct_version;
+pub use traits::encode_struct_v0;
 pub use writer::Writer;
 
 /// Attribute macros for Pod types.

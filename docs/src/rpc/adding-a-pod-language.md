@@ -1,7 +1,6 @@
 # Adding a language to `leptoskit_pod`
 
-Use this when implementing LK Pod for a language that does not yet have a
-runtime under `packages/leptoskit-pod-*`.
+Use this when implementing LK Pod for a language that does not yet have a runtime under `packages/leptoskit-pod-*`.
 
 ## Agent prompt (copy-paste)
 
@@ -38,13 +37,13 @@ against the Rust fixture server.
 
 ## Checklist
 
-| Step | Done when |
-| --- | --- |
+| Step             | Done when                                                          |
+| ---------------- | ------------------------------------------------------------------ |
 | Package scaffold | Manifest + license + readme under `packages/leptoskit-pod-<lang>/` |
-| Reader/Writer | Primitives match the Rust API |
-| Struct/enum | Version envelope + discriminator |
-| Envelope | `LK01` framing |
-| Conformance | All vectors encode/decode; malformed set rejected |
-| Codegen hook | `leptoskit_rpc_codegen` emits imports of the package |
-| CI | `scripts/pod-conformance.sh` lists the language |
-| Docs | Language row added to `lk-pod.md` |
+| Reader/Writer    | Primitives match the Rust API                                      |
+| Struct/enum      | Version envelope + discriminator                                   |
+| Envelope         | `LK01` framing                                                     |
+| Conformance      | All vectors encode/decode; malformed set rejected                  |
+| Codegen hook     | `leptoskit_rpc_codegen` emits imports of the package               |
+| CI               | `scripts/pod-conformance.sh` lists the language                    |
+| Docs             | Language row added to `lk-pod.md`                                  |

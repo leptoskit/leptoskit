@@ -1,8 +1,8 @@
 //! `#[pod::data]` derive coverage.
 
-use leptoskit_pod::pod;
 use leptoskit_pod::PodDecode;
 use leptoskit_pod::PodEncode;
+use leptoskit_pod::pod;
 
 #[pod::data]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,10 +29,7 @@ fn derived_note_matches_hand_written() {
 	};
 	let bytes = note.to_pod_bytes().unwrap();
 	assert_eq!(
-		bytes
-			.iter()
-			.map(|b| format!("{b:02x}"))
-			.collect::<String>(),
+		bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
 		"00000701020000006869"
 	);
 	assert_eq!(Note::from_pod_bytes(&bytes).unwrap(), note);
@@ -41,7 +38,10 @@ fn derived_note_matches_hand_written() {
 #[test]
 fn derived_enum_variants() {
 	let ready = Status::Ready;
-	assert_eq!(Status::from_pod_bytes(&ready.to_pod_bytes().unwrap()).unwrap(), ready);
+	assert_eq!(
+		Status::from_pod_bytes(&ready.to_pod_bytes().unwrap()).unwrap(),
+		ready
+	);
 
 	let failed = Status::Failed {
 		code: 404,
@@ -53,5 +53,8 @@ fn derived_enum_variants() {
 	);
 
 	let retry = Status::Retry(3);
-	assert_eq!(Status::from_pod_bytes(&retry.to_pod_bytes().unwrap()).unwrap(), retry);
+	assert_eq!(
+		Status::from_pod_bytes(&retry.to_pod_bytes().unwrap()).unwrap(),
+		retry
+	);
 }

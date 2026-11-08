@@ -186,7 +186,10 @@ impl<'a> PodDecode<'a> for () {
 }
 
 /// Dense named-field struct helper: version + flags then fields in order.
-pub fn encode_struct_v0(w: &mut Writer, encode_fields: impl FnOnce(&mut Writer) -> Result<()>) -> Result<()> {
+pub fn encode_struct_v0(
+	w: &mut Writer,
+	encode_fields: impl FnOnce(&mut Writer) -> Result<()>,
+) -> Result<()> {
 	w.struct_header(0, 0);
 	encode_fields(w)
 }

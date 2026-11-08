@@ -2,13 +2,13 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse_macro_input;
 use syn::Data;
 use syn::DataEnum;
 use syn::DataStruct;
 use syn::DeriveInput;
 use syn::Fields;
 use syn::Index;
+use syn::parse_macro_input;
 
 /// Derives [`leptoskit_pod::PodEncode`] and [`leptoskit_pod::PodDecode`].
 ///
@@ -82,9 +82,11 @@ fn encode_struct(data: &DataStruct) -> proc_macro2::TokenStream {
 				})
 			}
 		}
-		Fields::Unit => quote! {
-			::leptoskit_pod::encode_struct_v0(w, |_w| ::core::result::Result::Ok(()))
-		},
+		Fields::Unit => {
+			quote! {
+				::leptoskit_pod::encode_struct_v0(w, |_w| ::core::result::Result::Ok(()))
+			}
+		}
 	}
 }
 
@@ -117,11 +119,13 @@ fn decode_struct(data: &DataStruct) -> proc_macro2::TokenStream {
 				})
 			}
 		}
-		Fields::Unit => quote! {
-			::leptoskit_pod::decode_struct_version(r, 0, |_r| {
-				::core::result::Result::Ok(Self)
-			})
-		},
+		Fields::Unit => {
+			quote! {
+				::leptoskit_pod::decode_struct_version(r, 0, |_r| {
+					::core::result::Result::Ok(Self)
+				})
+			}
+		}
 	}
 }
 
@@ -130,12 +134,14 @@ fn encode_enum(data: &DataEnum) -> proc_macro2::TokenStream {
 		let ident = &v.ident;
 		let disc = disc as u16;
 		match &v.fields {
-			Fields::Unit => quote! {
-				Self::#ident => {
-					w.variant(#disc);
-					::core::result::Result::Ok(())
+			Fields::Unit => {
+				quote! {
+					Self::#ident => {
+						w.variant(#disc);
+						::core::result::Result::Ok(())
+					}
 				}
-			},
+			}
 			Fields::Unnamed(fields) => {
 				let bindings: Vec<_> = (0..fields.unnamed.len())
 					.map(|i| syn::Ident::new(&format!("f{i}"), proc_macro2::Span::call_site()))
@@ -184,9 +190,11 @@ fn decode_enum(data: &DataEnum) -> proc_macro2::TokenStream {
 		let ident = &v.ident;
 		let disc = disc as u16;
 		match &v.fields {
-			Fields::Unit => quote! {
-				#disc => ::core::result::Result::Ok(Self::#ident)
-			},
+			Fields::Unit => {
+				quote! {
+					#disc => ::core::result::Result::Ok(Self::#ident)
+				}
+			}
 			Fields::Unnamed(fields) => {
 				let reads = fields.unnamed.iter().map(|_| {
 					quote! { ::leptoskit_pod::PodDecode::decode(r)?, }

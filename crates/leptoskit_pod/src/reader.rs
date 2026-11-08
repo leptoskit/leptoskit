@@ -46,7 +46,9 @@ impl<'a> Reader<'a> {
 	/// Reads a little-endian `u64`.
 	pub fn u64(&mut self) -> Result<u64> {
 		let bytes = self.take(8)?;
-		Ok(u64::from_le_bytes(bytes.try_into().map_err(|_| Error::Truncated)?))
+		Ok(u64::from_le_bytes(
+			bytes.try_into().map_err(|_| Error::Truncated)?,
+		))
 	}
 
 	/// Reads an `i8`.

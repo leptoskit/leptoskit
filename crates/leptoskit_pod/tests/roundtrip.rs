@@ -1,15 +1,15 @@
 //! Round-trips, snapshots, and conformance vectors for LK Pod.
 
-use leptoskit_pod::decode_struct_version;
-use leptoskit_pod::encode_struct_v0;
-use leptoskit_pod::unwrap;
-use leptoskit_pod::wrap;
 use leptoskit_pod::Error;
 use leptoskit_pod::MessageType;
 use leptoskit_pod::PodDecode;
 use leptoskit_pod::PodEncode;
 use leptoskit_pod::Reader;
 use leptoskit_pod::Writer;
+use leptoskit_pod::decode_struct_version;
+use leptoskit_pod::encode_struct_v0;
+use leptoskit_pod::unwrap;
+use leptoskit_pod::wrap;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,12 +71,14 @@ impl<'a> PodDecode<'a> for LiveUpdate {
 	fn decode(r: &mut Reader<'a>) -> leptoskit_pod::Result<Self> {
 		match r.variant()? {
 			0 => Ok(Self::Ok),
-			1 => decode_struct_version(r, 0, |r| {
-				Ok(Self::Patch {
-					priority: u8::decode(r)?,
-					title: String::decode(r)?,
+			1 => {
+				decode_struct_version(r, 0, |r| {
+					Ok(Self::Patch {
+						priority: u8::decode(r)?,
+						title: String::decode(r)?,
+					})
 				})
-			}),
+			}
 			other => Err(Error::InvalidTag(other)),
 		}
 	}
@@ -155,7 +157,10 @@ fn primitives_round_trip() {
 #[test]
 fn enum_round_trip() {
 	let ok = LiveUpdate::Ok;
-	assert_eq!(LiveUpdate::from_pod_bytes(&ok.to_pod_bytes().unwrap()).unwrap(), ok);
+	assert_eq!(
+		LiveUpdate::from_pod_bytes(&ok.to_pod_bytes().unwrap()).unwrap(),
+		ok
+	);
 	let patch = LiveUpdate::Patch {
 		priority: 7,
 		title: "abc".into(),
@@ -182,10 +187,7 @@ fn envelope_round_trip() {
 
 #[test]
 fn rejects_trailing_and_truncation() {
-	assert_eq!(
-		u8::from_pod_bytes(&[1, 2]).unwrap_err(),
-		Error::Trailing
-	);
+	assert_eq!(u8::from_pod_bytes(&[1, 2]).unwrap_err(), Error::Trailing);
 	assert_eq!(Reader::new(&[1]).u16().unwrap_err(), Error::Truncated);
 	assert_eq!(
 		Reader::new(&[1, 0, 0, 0, 0xff]).string().unwrap_err(),
