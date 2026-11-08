@@ -32,21 +32,27 @@ fn the_model_has_a_skin_and_the_clip_the_scene_plays() {
 fn a_frame_of_the_turntable_draws_the_character() {
 	let gpu = match leptoskit_3d::Gpu::headless() {
 		Ok(gpu) => gpu,
+
 		Err(error) if error.is_unavailable() => return eprintln!("skipping: {error}"),
 		Err(error) => panic!("{error}"),
 	};
+
 	let scene = Scene::new(SCENE);
 	scene3d_example::build(&scene);
 	let mut renderer = Renderer::new(&gpu);
 	let world = renderer.world_mut();
 	world.apply(scene.take_ops());
+
 	for (asset, path) in world.take_loads() {
 		assert_eq!(path, MODEL);
+
 		world.asset_loaded(asset, Ok(model()));
 	}
+
 	for _ in 0..30 {
 		renderer.advance(1.0 / 60.0);
 	}
+
 	let (width, height) = (96, 128);
 	let pixels = renderer.render_to_rgba(width, height).unwrap();
 	let centre = ((height / 2 * width + width / 2) * 4) as usize;

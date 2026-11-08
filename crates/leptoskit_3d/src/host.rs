@@ -72,13 +72,16 @@ impl AssetSource for Directory {
 				"{path:?} is not a relative path inside the app's assets"
 			));
 		}
+
 		let full = self.0.join(path);
 		let size = std::fs::metadata(&full)
 			.map_err(|error| format!("{path} could not be read: {error}"))?
 			.len();
+
 		if size > MAX_ASSET_BYTES as u64 {
 			return Err(format!("{path} is larger than 128 MiB"));
 		}
+
 		std::fs::read(&full).map_err(|error| format!("{path} could not be read: {error}"))
 	}
 }
@@ -133,6 +136,7 @@ impl SceneState {
 				waiter.wake();
 			}
 		}
+
 		for view in self.views.values() {
 			view();
 		}
@@ -220,9 +224,11 @@ impl Hub {
 	/// `surface`.
 	pub fn gpu(&self, surface: Option<&wgpu::Surface<'_>>) -> Result<Gpu, Error> {
 		let mut gpu = lock(&self.gpu);
+
 		if let Some(gpu) = &*gpu {
 			return Ok(gpu.clone());
 		}
+
 		let created = pollster::block_on(Gpu::request_on(self.instance().clone(), surface))?;
 		*gpu = Some(created.clone());
 		Ok(created)
@@ -230,12 +236,15 @@ impl Hub {
 
 	fn scene(&self, id: SceneId) -> Option<Arc<Scene>> {
 		let mut scenes = lock(&self.scenes);
+
 		if let Some(scene) = scenes.get(&id) {
 			return Some(scene.clone());
 		}
+
 		if scenes.len() >= MAX_SCENES {
 			return None;
 		}
+
 		let scene = Arc::new(Scene(Mutex::new(SceneState {
 			world: Some(World::new()),
 			renderer: None,
@@ -282,10 +291,13 @@ impl Hub {
 			return Poll::Ready(Vec::new());
 		};
 		let mut state = scene.lock();
+
 		if state.closed {
 			return Poll::Ready(Vec::new());
 		}
+
 		let events = state.world_mut().take_events();
+
 		if events.is_empty() {
 			if !state
 				.waiters
@@ -306,6 +318,7 @@ impl Hub {
 		if let Some(scene) = lock(&self.scenes).remove(&id) {
 			let mut state = scene.lock();
 			state.closed = true;
+
 			for waiter in state.waiters.drain(..) {
 				waiter.wake();
 			}
@@ -323,13 +336,16 @@ impl Hub {
 		if loads.is_empty() {
 			return;
 		}
+
 		let source = lock(&self.source).clone();
 		let mut loader = lock(&self.loader);
+
 		for (asset, path) in loads {
 			let Some(source) = source.clone() else {
 				world.asset_loaded(asset, Err("the host has no asset source".into()));
 				continue;
 			};
+
 			let job = Job {
 				scene: Arc::downgrade(scene),
 				asset,
@@ -337,6 +353,7 @@ impl Hub {
 				source,
 			};
 			let sender = loader.get_or_insert_with(spawn_loader);
+
 			if let Err(mpsc::SendError(job)) = sender.send(job) {
 				// The loader thread is gone; start another.
 				let sender = loader.insert(spawn_loader());
@@ -420,6 +437,7 @@ fn load_asset(path: &str, source: &dyn AssetSource) -> Result<Arc<Asset>, String
 	if let Some(asset) = lock(cache()).get(path).and_then(Weak::upgrade) {
 		return Ok(asset);
 	}
+
 	let bytes = source.read(path)?;
 	let folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
 	let asset = Asset::from_slice_with(&bytes, |relative| {
@@ -428,12 +446,14 @@ fn load_asset(path: &str, source: &dyn AssetSource) -> Result<Arc<Asset>, String
 		} else {
 			format!("{folder}/{relative}")
 		};
+
 		source.read(&full)
 	})
 	.map_err(|error| format!("{path}: {error}"))?;
 	let asset = Arc::new(asset);
 	let mut cache = lock(cache());
 	cache.retain(|_, asset| asset.strong_count() > 0);
+
 	cache.insert(path.to_owned(), Arc::downgrade(&asset));
 	Ok(asset)
 }
@@ -454,16 +474,20 @@ fn spawn_loader() -> mpsc::Sender<Job> {
 				if state.closed {
 					continue;
 				}
+
 				state.world_mut().asset_loaded(job.asset, result);
 				state.notify();
 			}
 		});
+
 	if spawned.is_err() {
 		// Without a thread, jobs are dropped and their scenes keep waiting;
 		// the next load tries to start one again.
 		let (sender, _) = mpsc::channel();
+
 		return sender;
 	}
+
 	sender
 }
 
@@ -495,6 +519,7 @@ impl View {
 	pub fn set_waker(&mut self, wake: impl Fn() + Send + Sync + 'static) {
 		let wake: FrameWaker = Arc::new(wake);
 		self.waker = Some(wake.clone());
+
 		if let Some(scene) = self.hub.scene(self.scene) {
 			scene.lock().views.insert(self.id, wake);
 		}
@@ -504,13 +529,16 @@ impl View {
 	pub fn resize(&mut self, width: u32, height: u32) {
 		if width == 0 || height == 0 {
 			self.configured = false;
+
 			return;
 		}
+
 		let limit = self.gpu.device().limits().max_texture_dimension_2d;
 		self.config.width = width.min(limit);
 		self.config.height = height.min(limit);
 		self.surface.configure(self.gpu.device(), &self.config);
 		self.configured = true;
+
 		if let Some(wake) = &self.waker {
 			wake();
 		}
@@ -524,23 +552,29 @@ impl View {
 			return Ok(false);
 		};
 		let mut state = scene.lock();
+
 		if state.closed || !self.configured {
 			return Ok(false);
 		}
+
 		if state.renderer.is_none() {
 			let world = state.world.take().unwrap_or_default();
 			state.renderer = Some(Renderer::with_world(&self.gpu, world));
 		}
+
 		let elapsed = match state.time {
 			Some(last) if time > last => (time - last) as f32,
 			_ => 0.0,
 		};
+
 		if state.time.is_none_or(|last| time > last) {
 			state.time = Some(time);
+
 			if let Some(renderer) = &mut state.renderer {
 				renderer.advance(elapsed);
 			}
 		}
+
 		let texture = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(texture)
 			| wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -550,6 +584,7 @@ impl View {
 			}
 			_ => return Ok(true),
 		};
+
 		let view = texture
 			.texture
 			.create_view(&wgpu::TextureViewDescriptor::default());
@@ -563,11 +598,13 @@ impl View {
 		renderer.render(&target)?;
 		self.gpu.queue().present(texture);
 		let more = renderer.world().needs_frame();
+
 		if renderer.world().has_events() {
 			for waiter in state.waiters.drain(..) {
 				waiter.wake();
 			}
 		}
+
 		Ok(more)
 	}
 
@@ -609,6 +646,7 @@ impl Future for NextEvents {
 		if self.cancelled.as_mut().poll(context).is_ready() {
 			return Poll::Ready(Err(leptoskit_bridge::Error::Cancelled));
 		}
+
 		self.hub.poll_events(self.scene, context).map(|mut events| {
 			// Keep the reply within its limit; the rest wait for the next call.
 			let mut bytes = encode_events(&events);
@@ -618,6 +656,7 @@ impl Future for NextEvents {
 				self.hub.requeue(self.scene, rest);
 				bytes = encode_events(&events);
 			}
+
 			Ok(Reply::from(Bytes::from(bytes)))
 		})
 	}
@@ -685,6 +724,7 @@ impl AsyncPlugin for Scene3dPlugin {
 			Box::pin(std::future::ready(result))
 		};
 		let empty = || Ok(Reply::from(Bytes::new()));
+
 		match method {
 			APPLY => {
 				let result = scene_id(&payload).and_then(|(scene, batch)| {

@@ -59,6 +59,7 @@ pub fn decode(
 		.checked_mul(stride)
 		.ok_or(MeshoptError("the decoded size overflows"))?;
 	let mut output = vec![0; size];
+
 	match mode {
 		Mode::Attributes => {
 			decode_vertices(&mut output, count, stride, source)?;
@@ -68,15 +69,18 @@ pub fn decode(
 			if filter != Filter::None {
 				return Err(MeshoptError("only attributes take a filter"));
 			}
+
 			decode_triangles(&mut output, count, stride, source)?;
 		}
 		Mode::Indices => {
 			if filter != Filter::None {
 				return Err(MeshoptError("only attributes take a filter"));
 			}
+
 			decode_index_sequence(&mut output, count, stride, source)?;
 		}
 	}
+
 	Ok(output)
 }
 
@@ -102,19 +106,25 @@ impl Cursor<'_> {
 	/// A LEB128 integer of at most five bytes.
 	fn vbyte(&mut self) -> Result<u32> {
 		let lead = self.byte()?;
+
 		if lead < 128 {
 			return Ok(u32::from(lead));
 		}
+
 		let mut result = u32::from(lead & 127);
 		let mut shift = 7;
+
 		for _ in 0..4 {
 			let group = self.byte()?;
 			result |= u32::from(group & 127) << shift;
+
 			shift += 7;
+
 			if group < 128 {
 				break;
 			}
 		}
+
 		Ok(result)
 	}
 }
@@ -145,6 +155,7 @@ fn decode_group(cursor: &mut Cursor<'_>, output: &mut [u8; BYTE_GROUP], mode: u8
 			if cursor.remaining() < packed {
 				return Err(MeshoptError("the data ends early"));
 			}
+
 			cursor.position += packed;
 			let sentinel = (1_u8 << bits) - 1;
 			for (index, value) in output.iter_mut().enumerate() {
@@ -164,6 +175,7 @@ fn decode_group(cursor: &mut Cursor<'_>, output: &mut [u8; BYTE_GROUP], mode: u8
 			}
 		}
 	}
+
 	Ok(())
 }
 
@@ -173,22 +185,29 @@ fn decode_vertices(output: &mut [u8], count: usize, stride: usize, source: &[u8]
 			"a vertex stride must be a multiple of 4 up to 256",
 		));
 	}
+
 	if source.len() < 1 + stride {
 		return Err(MeshoptError("the vertex data is too short"));
 	}
+
 	let header = source[0];
+
 	if header & 0xf0 != VERTEX_HEADER {
 		return Err(MeshoptError("the vertex data has the wrong header"));
 	}
+
 	if header & 0x0f != 0 {
 		return Err(MeshoptError(
 			"only version 0 of the vertex codec is supported",
 		));
 	}
+
 	let tail = stride.max(TAIL_MAX);
+
 	if source.len() < 1 + tail {
 		return Err(MeshoptError("the vertex data is too short"));
 	}
+
 	let mut last = [0_u8; 256];
 	last[..stride].copy_from_slice(&source[source.len() - stride..]);
 	let mut cursor = Cursor {
@@ -198,16 +217,21 @@ fn decode_vertices(output: &mut [u8], count: usize, stride: usize, source: &[u8]
 	let block = ((VERTEX_BLOCK_BYTES / stride) & !(BYTE_GROUP - 1)).min(VERTEX_BLOCK_MAX);
 	let mut encoded = [0_u8; VERTEX_BLOCK_MAX];
 	let mut offset = 0;
+
 	while offset < count {
 		let size = block.min(count - offset);
 		let groups = size.div_ceil(BYTE_GROUP);
+
 		for byte in 0..stride {
 			let header_size = groups.div_ceil(4);
+
 			if cursor.remaining() < header_size {
 				return Err(MeshoptError("the vertex data ends early"));
 			}
+
 			let headers = cursor.position;
 			cursor.position += header_size;
+
 			for group in 0..groups {
 				let mode = (cursor.bytes[headers + group / 4] >> ((group % 4) * 2)) & 3;
 				let slot: &mut [u8; BYTE_GROUP] = (&mut encoded
@@ -216,18 +240,24 @@ fn decode_vertices(output: &mut [u8], count: usize, stride: usize, source: &[u8]
 					.map_err(|_| MeshoptError("a group is misaligned"))?;
 				decode_group(&mut cursor, slot, mode)?;
 			}
+
 			let mut previous = last[byte];
+
 			for (vertex, value) in encoded[..size].iter().enumerate() {
 				previous = previous.wrapping_add(unzigzag8(*value));
 				output[(offset + vertex) * stride + byte] = previous;
 			}
+
 			last[byte] = previous;
 		}
+
 		offset += size;
 	}
+
 	if cursor.remaining() != 0 {
 		return Err(MeshoptError("the vertex data has bytes left over"));
 	}
+
 	Ok(())
 }
 
@@ -236,6 +266,7 @@ const SEQUENCE_HEADER: u8 = 0xd0;
 
 fn write_index(output: &mut [u8], index: usize, size: usize, value: u32) {
 	let start = index * size;
+
 	if size == 2 {
 		output[start..start + 2].copy_from_slice(&(value as u16).to_le_bytes());
 	} else {
@@ -278,22 +309,29 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 			"a triangle list's index count must divide by 3",
 		));
 	}
+
 	if size != 2 && size != 4 {
 		return Err(MeshoptError("indices must be 2 or 4 bytes"));
 	}
+
 	let triangles = count / 3;
+
 	if source.len() < 1 + triangles + 16 {
 		return Err(MeshoptError("the index data is too short"));
 	}
+
 	if source[0] & 0xf0 != INDEX_HEADER {
 		return Err(MeshoptError("the index data has the wrong header"));
 	}
+
 	let version = source[0] & 0x0f;
+
 	if version > 1 {
 		return Err(MeshoptError(
 			"only versions 0 and 1 of the index codec are supported",
 		));
 	}
+
 	let codes = &source[1..=triangles];
 	let aux = &source[source.len() - 16..];
 	let mut data = Cursor {
@@ -314,18 +352,22 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 		*last = value;
 		Ok(value)
 	};
+
 	for (triangle, &code) in codes.iter().enumerate() {
 		let (a, b, c);
+
 		if code < 0xf0 {
 			let fe = usize::from(code >> 4);
 			[a, b] = fifos.edge(fe);
 			let fec = code & 15;
+
 			if fec < fec_max {
 				c = if fec == 0 {
 					next
 				} else {
 					fifos.vertex(usize::from(fec) + 1)
 				};
+
 				let fresh = fec == 0;
 				next += u32::from(fresh);
 				fifos.push_vertex(c, fresh);
@@ -337,8 +379,10 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 					last = last.wrapping_add(if fec == 13 { u32::MAX } else { 1 });
 					last
 				};
+
 				fifos.push_vertex(c, true);
 			}
+
 			fifos.push_edge(c, b);
 			fifos.push_edge(a, c);
 		} else if code < 0xfe {
@@ -362,6 +406,7 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 			let fea = if code == 0xfe { 0 } else { 15 };
 			let feb = usize::from(codeaux >> 4);
 			let fec = usize::from(codeaux & 15);
+
 			if codeaux == 0 {
 				next = 0;
 			}
@@ -383,15 +428,19 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 			} else {
 				fifos.vertex(fec)
 			};
+
 			if fea == 15 {
 				va = decode_index(&mut data, &mut last)?;
 			}
+
 			if feb == 15 {
 				vb = decode_index(&mut data, &mut last)?;
 			}
+
 			if fec == 15 {
 				vc = decode_index(&mut data, &mut last)?;
 			}
+
 			(a, b, c) = (va, vb, vc);
 			fifos.push_vertex(a, true);
 			fifos.push_vertex(b, feb == 0 || feb == 15);
@@ -400,13 +449,16 @@ fn decode_triangles(output: &mut [u8], count: usize, size: usize, source: &[u8])
 			fifos.push_edge(c, b);
 			fifos.push_edge(a, c);
 		}
+
 		write_index(output, triangle * 3, size, a);
 		write_index(output, triangle * 3 + 1, size, b);
 		write_index(output, triangle * 3 + 2, size, c);
 	}
+
 	if data.remaining() != 0 {
 		return Err(MeshoptError("the index data has bytes left over"));
 	}
+
 	Ok(())
 }
 
@@ -419,17 +471,21 @@ fn decode_index_sequence(
 	if size != 2 && size != 4 {
 		return Err(MeshoptError("indices must be 2 or 4 bytes"));
 	}
+
 	if source.len() < 1 + 4 {
 		return Err(MeshoptError("the index data is too short"));
 	}
+
 	if source[0] & 0xf0 != SEQUENCE_HEADER || source[0] & 0x0f > 1 {
 		return Err(MeshoptError("the index sequence has the wrong header"));
 	}
+
 	let mut data = Cursor {
 		bytes: &source[..source.len() - 4],
 		position: 1,
 	};
 	let mut last = [0_u32; 2];
+
 	for index in 0..count {
 		let value = data.vbyte()?;
 		let current = (value & 1) as usize;
@@ -437,9 +493,11 @@ fn decode_index_sequence(
 		last[current] = decoded;
 		write_index(output, index, size, decoded);
 	}
+
 	if data.remaining() != 0 {
 		return Err(MeshoptError("the index data has bytes left over"));
 	}
+
 	Ok(())
 }
 
@@ -450,6 +508,7 @@ fn round(value: f32) -> i32 {
 fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) -> Result<()> {
 	match filter {
 		Filter::None => {}
+
 		Filter::Octahedral if stride == 4 => {
 			for element in data.as_chunks_mut::<4>().0.iter_mut().take(count) {
 				let values = [element[0] as i8, element[1] as i8, element[2] as i8];
@@ -459,6 +518,7 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 				element[2] = z as i8 as u8;
 			}
 		}
+
 		Filter::Octahedral if stride == 8 => {
 			for element in data.as_chunks_mut::<8>().0.iter_mut().take(count) {
 				let values = [0, 1, 2].map(|index| {
@@ -468,17 +528,20 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 					]))
 				});
 				let decoded = octahedral(values, 32767.0);
+
 				for (index, value) in decoded.into_iter().enumerate() {
 					element[index * 2..index * 2 + 2]
 						.copy_from_slice(&(value as i16).to_le_bytes());
 				}
 			}
 		}
+
 		Filter::Octahedral => {
 			return Err(MeshoptError(
 				"the octahedral filter needs a stride of 4 or 8",
 			));
 		}
+
 		Filter::Quaternion if stride == 8 => {
 			for element in data.as_chunks_mut::<8>().0.iter_mut().take(count) {
 				let read =
@@ -496,14 +559,17 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 				out[(qc + 2) & 3] = yf;
 				out[(qc + 3) & 3] = zf;
 				out[qc] = wf;
+
 				for (index, value) in out.into_iter().enumerate() {
 					element[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
 				}
 			}
 		}
+
 		Filter::Quaternion => {
 			return Err(MeshoptError("the quaternion filter needs a stride of 8"));
 		}
+
 		Filter::Exponential if stride % 4 == 0 => {
 			for word in data
 				.as_chunks_mut::<4>()
@@ -518,12 +584,14 @@ fn apply_filter(data: &mut [u8], count: usize, stride: usize, filter: Filter) ->
 				word.copy_from_slice(&decoded.to_bits().to_le_bytes());
 			}
 		}
+
 		Filter::Exponential => {
 			return Err(MeshoptError(
 				"the exponential filter needs a stride that divides by 4",
 			));
 		}
 	}
+
 	Ok(())
 }
 
@@ -600,14 +668,18 @@ mod tests {
 			state ^= state << 5;
 			state
 		};
+
 		for round in 0..2000 {
 			let length = (next() % 200) as usize;
 			let mut bytes: Vec<u8> = (0..length).map(|_| next() as u8).collect();
+
 			if let Some(first) = bytes.first_mut() {
 				*first = [0xa0, 0xe0, 0xe1, 0xd1][round % 4];
 			}
+
 			let count = (next() % 64) as usize;
 			let _ = decode(&bytes, count, 4, Mode::Attributes, Filter::Exponential);
+
 			let _ = decode(&bytes, count * 3, 2, Mode::Triangles, Filter::None);
 			let _ = decode(&bytes, count, 4, Mode::Indices, Filter::None);
 			let _ = decode(&bytes, count, 8, Mode::Attributes, Filter::Quaternion);

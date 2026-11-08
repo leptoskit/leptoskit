@@ -95,6 +95,7 @@ fn color<const N: usize>(values: [f32; N]) -> [f32; N] {
 fn direction(values: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
 	let values = coordinates(values);
 	let length = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+
 	if length > 1.0e-12 && length.is_finite() {
 		values.map(|value| value / length)
 	} else {
@@ -106,11 +107,14 @@ fn direction(values: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
 fn name(mut name: String, limit: usize) -> String {
 	if name.len() > limit {
 		let mut end = limit;
+
 		while !name.is_char_boundary(end) {
 			end -= 1;
 		}
+
 		name.truncate(end);
 	}
+
 	name
 }
 
@@ -121,9 +125,11 @@ fn matrix(values: [f32; 16]) -> [f32; 16] {
 		values.map(|value| value.clamp(-MAX_COORDINATE, MAX_COORDINATE))
 	} else {
 		let mut identity = [0.0; 16];
+
 		for index in 0..4 {
 			identity[index * 5] = 1.0;
 		}
+
 		identity
 	}
 }
@@ -141,11 +147,13 @@ impl Transform {
 			.sqrt();
 		Self {
 			translation: coordinates(self.translation),
+
 			rotation: if length > 1.0e-12 {
 				rotation.map(|value| value / length)
 			} else {
 				Self::IDENTITY.rotation
 			},
+
 			scale: self
 				.scale
 				.map(|value| bounded(value, -MAX_SCALE, MAX_SCALE)),
@@ -277,12 +285,15 @@ impl Op {
 				let near = bounded(near, MIN_NEAR, MAX_FAR / 2.0);
 				Self::SetCamera {
 					transform: transform.sanitized(),
+
 					fov_y: if fov_y.is_finite() {
 						fov_y.clamp(FOV_RANGE.0, FOV_RANGE.1)
 					} else {
 						1.0
 					},
+
 					near,
+
 					far: if far.is_finite() {
 						far.clamp(near * 2.0, MAX_FAR)
 					} else {

@@ -18,5 +18,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let bytes = fixture::character(joints.clamp(2, 64));
 	std::fs::write(&output, &bytes)?;
 	println!("{output}: {} bytes", bytes.len());
+
 	Ok(())
 }

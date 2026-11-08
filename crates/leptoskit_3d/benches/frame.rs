@@ -48,12 +48,14 @@ mod native {
 			near: 0.1,
 			far: 100.0,
 		}];
+
 		for (index, _) in assets.iter().enumerate() {
 			ops.push(Op::LoadAsset {
 				asset: AssetId(index as u32),
 				path: format!("models/{index}.glb"),
 			});
 		}
+
 		for node in 0..6_u32 {
 			let asset = AssetId(node % assets.len() as u32);
 			ops.push(Op::Spawn {
@@ -70,6 +72,7 @@ mod native {
 					-((node / 3) as f32) * 2.0,
 				),
 			});
+
 			for part in hide {
 				ops.push(Op::SetPartVisible {
 					node: NodeId(node),
@@ -77,16 +80,20 @@ mod native {
 					visible: false,
 				});
 			}
+
 			ops.push(Op::Play {
 				node: NodeId(node),
 				play: Play::new(clip),
 			});
 		}
+
 		world.apply(ops);
 		world.take_loads();
+
 		for (index, asset) in assets.iter().enumerate() {
 			world.asset_loaded(AssetId(index as u32), Ok(asset.clone()));
 		}
+
 		world.take_events();
 		world.advance(0.0);
 		world
@@ -134,6 +141,7 @@ mod native {
 	fn advance_six_reapers(bencher: divan::Bencher<'_, '_>) {
 		let Some(mut world) = reapers() else {
 			eprintln!("skipping: LEPTOSKIT_3D_MODELS is not set");
+
 			return;
 		};
 		bencher.bench_local(|| world.advance(1.0 / 60.0));
@@ -170,6 +178,7 @@ mod native {
 				renderer.advance(1.0 / 60.0);
 				renderer.render(&target).unwrap()
 			});
+
 		let stats = renderer.stats();
 		eprintln!("{stats:?}");
 	}
@@ -183,6 +192,7 @@ mod native {
 	fn frame_six_reapers(bencher: divan::Bencher<'_, '_>) {
 		let Some(world) = reapers() else {
 			eprintln!("skipping: LEPTOSKIT_3D_MODELS is not set");
+
 			return;
 		};
 		frame(bencher, world);
@@ -195,6 +205,7 @@ mod native {
 			.and_then(|folder| std::fs::read(format!("{folder}/reaper_chooser.glb")).ok())
 		else {
 			eprintln!("skipping: LEPTOSKIT_3D_MODELS is not set");
+
 			return;
 		};
 		bencher.bench_local(|| Asset::from_slice(&bytes).unwrap());

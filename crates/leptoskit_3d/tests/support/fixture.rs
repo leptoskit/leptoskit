@@ -21,6 +21,7 @@ impl Builder {
 		while self.bin.len() % 4 != 0 {
 			self.bin.push(0);
 		}
+
 		let offset = self.bin.len();
 		self.bin.extend_from_slice(bytes);
 		let target = target.map_or(String::new(), |target| format!(r#","target":{target}"#));
@@ -38,6 +39,7 @@ impl Builder {
 			.flat_map(|value| value.to_le_bytes())
 			.collect();
 		let view = self.view(&bytes, None);
+
 		let kind = match width {
 			1 => "SCALAR",
 			2 => "VEC2",
@@ -46,18 +48,23 @@ impl Builder {
 			16 => "MAT4",
 			_ => unreachable!(),
 		};
+
 		let mut extra = String::new();
+
 		if bounds {
 			let mut min = vec![f32::INFINITY; width];
 			let mut max = vec![f32::NEG_INFINITY; width];
+
 			for chunk in values.chunks_exact(width) {
 				for axis in 0..width {
 					min[axis] = min[axis].min(chunk[axis]);
 					max[axis] = max[axis].max(chunk[axis]);
 				}
 			}
+
 			write!(extra, r#","min":{min:?},"max":{max:?}"#).unwrap();
 		}
+
 		self.accessors.push(format!(
 			r#"{{"bufferView":{view},"componentType":5126,"count":{},"type":"{kind}"{extra}}}"#,
 			values.len() / width
@@ -90,14 +97,19 @@ impl Builder {
 			self.accessors.join(","),
 		);
 		let mut json = json.into_bytes();
+
 		while json.len() % 4 != 0 {
 			json.push(b' ');
 		}
+
 		let mut bin = self.bin;
+
 		while bin.len() % 4 != 0 {
 			bin.push(0);
 		}
+
 		let total = 12 + 8 + json.len() + 8 + bin.len();
+
 		let mut glb = Vec::with_capacity(total);
 		glb.extend_from_slice(b"glTF");
 		glb.extend_from_slice(&2_u32.to_le_bytes());
@@ -126,6 +138,7 @@ pub fn cuboid(min: [f32; 3], max: [f32; 3]) -> (Vec<f32>, Vec<f32>, Vec<u16>) {
 		([0.0, 0.0, 1.0], [2, 0, 1]),
 		([0.0, 0.0, -1.0], [2, 1, 0]),
 	];
+
 	for (normal, [axis, u, v]) in faces {
 		let side = normal[axis];
 		let base = (positions.len() / 3) as u16;
@@ -136,12 +149,15 @@ pub fn cuboid(min: [f32; 3], max: [f32; 3]) -> (Vec<f32>, Vec<f32>, Vec<u16>) {
 			point[v] = if b > 0.0 { max[v] } else { min[v] };
 			point
 		};
+
 		for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
 			positions.extend_from_slice(&corner(a, b));
 			normals.extend_from_slice(&normal);
 		}
+
 		indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 	}
+
 	(positions, normals, indices)
 }
 
@@ -165,11 +181,13 @@ pub fn rig() -> Vec<u8> {
 	let vertices = body_positions.len() / 3;
 	let mut joints = Vec::new();
 	let mut weights = Vec::new();
+
 	for vertex in 0..vertices {
 		let upper = body_positions[vertex * 3 + 1] > 0.8;
 		joints.extend_from_slice(&[u16::from(upper), 0, 0, 0]);
 		weights.extend_from_slice(&[1.0, 0.0, 0.0, 0.0]);
 	}
+
 	let body_joints = builder.u16s(&joints, 4);
 	let body_weights = builder.floats(&weights, 4, false);
 	// The joints' inverse bind matrices: hip at the origin, arm at y = 0.8.
@@ -203,6 +221,7 @@ pub fn rig() -> Vec<u8> {
 	let sin = (std::f32::consts::FRAC_PI_8).sin();
 	let cos = (std::f32::consts::FRAC_PI_8).cos();
 	#[rustfmt::skip]
+
 	let nod = builder.floats(&[
 		0.0, 0.0, 0.0, 0.0,  0.0, 0.0, 0.0, 1.0,  0.0, 0.0, 0.0, 0.0,
 		0.0, 0.0, 0.0, 0.0,  sin, 0.0, 0.0, cos,  0.0, 0.0, 0.0, 0.0,
@@ -291,13 +310,16 @@ pub fn character(joints: usize) -> Vec<u8> {
 	let mut normals = Vec::new();
 	let mut joint_indices = Vec::new();
 	let mut weights = Vec::new();
+
 	let mut wide = Vec::new();
+
 	for ring in 0..rings {
 		let y = ring as f32 / (rings - 1) as f32 * height;
 		let radius = 0.25 + 0.05 * (y * 6.0).sin();
 		let segment = (ring * joints / rings).min(joints - 1);
 		let next = (segment + 1).min(joints - 1);
 		let blend = (ring * joints) as f32 / rings as f32 - segment as f32;
+
 		for step in 0..around {
 			let angle = step as f32 / around as f32 * std::f32::consts::TAU;
 			let (sin, cos) = angle.sin_cos();
@@ -308,7 +330,9 @@ pub fn character(joints: usize) -> Vec<u8> {
 			wide.extend_from_slice(&[cos * 0.1, 0.0, sin * 0.1]);
 		}
 	}
+
 	let mut indices = Vec::new();
+
 	for ring in 0..rings - 1 {
 		for step in 0..around {
 			let a = (ring * around + step) as u16;
@@ -318,6 +342,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 			indices.extend_from_slice(&[a, c, b, b, c, d]);
 		}
 	}
+
 	let tall: Vec<f32> = positions
 		.as_chunks::<3>()
 		.0
@@ -354,6 +379,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 	];
 	let mut channels = Vec::new();
 	let mut samplers = Vec::new();
+
 	for joint in 0..joints {
 		let children = if joint + 1 < joints {
 			format!(r#","children":[{}]"#, joint + 3)
@@ -378,6 +404,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 			joint + 2
 		));
 	}
+
 	// `spin` turns the whole character once around +y every four seconds while
 	// it sways, so one clip shows both: clips replace each other rather than
 	// layer.
@@ -394,6 +421,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 	let mut spin_channels =
 		vec![r#"{"sampler":0,"target":{"node":0,"path":"rotation"}}"#.to_owned()];
 	let mut spin_samplers = vec![format!(r#"{{"input":{spin_times},"output":{turn}}}"#)];
+
 	for joint in 0..joints {
 		let rotations: Vec<f32> = (0..spin_keys)
 			.flat_map(|key| {
@@ -410,6 +438,7 @@ pub fn character(joints: usize) -> Vec<u8> {
 			joint + 2
 		));
 	}
+
 	let joint_nodes: Vec<String> = (0..joints).map(|joint| (joint + 2).to_string()).collect();
 	let json = format!(
 		r#""asset":{{"version":"2.0"}},

@@ -170,13 +170,16 @@ fn an_empty_batch_round_trips() {
 #[test]
 fn every_truncation_is_an_error_not_a_panic() {
 	let bytes = encode_ops(&every_op());
+
 	for length in 0..bytes.len() {
 		assert!(
 			decode_ops(&bytes[..length]).is_err(),
 			"a batch cut at {length} decoded"
 		);
 	}
+
 	let bytes = encode_events(&every_event());
+
 	for length in 0..bytes.len() {
 		assert!(decode_events(&bytes[..length]).is_err());
 	}
@@ -278,23 +281,29 @@ fn random_and_mutated_batches_never_panic() {
 		state
 	};
 	let valid = encode_ops(&every_op());
+
 	for _ in 0..20_000 {
 		let mut bytes = valid.clone();
+
 		for _ in 0..=(next() % 4) {
 			let index = next() as usize % bytes.len();
 			bytes[index] = next() as u8;
 		}
+
 		if let Ok(ops) = decode_ops(&bytes) {
 			let sanitized: Vec<Op> = ops.iter().cloned().map(Op::sanitized).collect();
 			assert_eq!(decode_ops(&encode_ops(&ops)).unwrap().len(), ops.len());
 			assert_eq!(sanitized.len(), ops.len());
 		}
+
 		let length = next() as usize % 64;
 		let mut noise: Vec<u8> = (0..length).map(|_| next() as u8).collect();
+
 		if noise.len() >= 5 && next() % 2 == 0 {
 			noise[..4].copy_from_slice(OPS_MAGIC);
 			noise[4] = VERSION;
 		}
+
 		let _ = decode_ops(&noise);
 		let _ = decode_events(&noise);
 	}
@@ -307,6 +316,7 @@ fn finite(values: &[f32]) -> bool {
 #[test]
 fn sanitizing_bounds_every_number() {
 	let hostile = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30];
+
 	for value in hostile {
 		let transform = Transform {
 			translation: [value; 3],
@@ -324,6 +334,7 @@ fn sanitizing_bounds_every_number() {
 				.iter()
 				.all(|value| value.abs() <= MAX_COORDINATE)
 		);
+
 		assert!(transform.scale.iter().all(|value| value.abs() <= MAX_SCALE));
 
 		let Op::Play { play, .. } = (Op::Play {
@@ -449,6 +460,7 @@ fn sanitizing_bounds_every_number() {
 fn sanitizing_keeps_reasonable_values() {
 	for op in every_op() {
 		let sanitized = op.clone().sanitized();
+
 		match (&op, &sanitized) {
 			// Matrices and the camera's planes are kept; the test values are
 			// already within bounds.

@@ -30,14 +30,18 @@ fn png_rgba(bytes: &[u8]) -> Result<Image, String> {
 	decoder.set_transformations(png::Transformations::normalize_to_color8());
 	let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
 	let (width, height) = (reader.info().width, reader.info().height);
+
 	if width == 0 || height == 0 || width > MAX_TEXTURE_SIZE || height > MAX_TEXTURE_SIZE {
 		return Err(format!("a {width}×{height} texture is outside the limits"));
 	}
+
 	let mut buffer = vec![0; reader.output_buffer_size()];
+
 	let info = reader
 		.next_frame(&mut buffer)
 		.map_err(|error| error.to_string())?;
 	buffer.truncate(info.buffer_size());
+
 	let pixels = match info.color_type {
 		png::ColorType::Rgba => buffer,
 		png::ColorType::Rgb => {
@@ -64,6 +68,7 @@ fn png_rgba(bytes: &[u8]) -> Result<Image, String> {
 		}
 		png::ColorType::Indexed => return Err("an indexed PNG did not expand".into()),
 	};
+
 	Ok(Image {
 		width,
 		height,
@@ -81,9 +86,11 @@ fn jpeg_rgba(bytes: &[u8]) -> Result<Image, String> {
 	let pixels = decoder.decode().map_err(|error| error.to_string())?;
 	let info = decoder.info().ok_or("the JPEG has no header")?;
 	let (width, height) = (u32::from(info.width), u32::from(info.height));
+
 	if pixels.len() != (width * height * 4) as usize {
 		return Err("the JPEG decoded to the wrong size".into());
 	}
+
 	Ok(Image {
 		width,
 		height,

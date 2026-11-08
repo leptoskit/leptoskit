@@ -42,6 +42,7 @@ fn hits(world: &mut World, x: f32, y: f32) -> Vec<Hit> {
 		direction: [0.0, 0.0, -1.0],
 		max_distance: 100.0,
 	}]);
+
 	match world.take_events().pop() {
 		Some(Event::RaycastHits { request, hits }) => {
 			assert_eq!(request, RequestId(1));
@@ -55,6 +56,7 @@ fn hits(world: &mut World, x: f32, y: f32) -> Vec<Hit> {
 /// quarter of a second, so a suspended app does not jump.
 fn run(world: &mut World, seconds: f32) {
 	let mut left = seconds;
+
 	while left > 0.0 {
 		let step = left.min(1.0 / 60.0);
 		world.advance(step);
@@ -82,6 +84,7 @@ fn the_fixture_loads_with_its_names_clips_and_targets() {
 	assert_eq!(asset.mesh_count(), (2, 2));
 	assert_eq!(asset.vertex_count(), 48);
 	assert_eq!(asset.triangle_count(), 24);
+
 	assert_eq!(asset.clip_duration("raise"), Some(1.0));
 }
 
@@ -122,6 +125,7 @@ fn loading_reports_the_clips_and_instances_appear() {
 			clips: vec!["raise".into(), "bob".into(), "swell".into(), "nod".into()],
 		}]
 	);
+
 	run(&mut world, 2.0);
 	assert!(world.take_events().contains(&Event::AnimationFinished {
 		node: FIGURE,
@@ -211,6 +215,7 @@ fn hidden_parts_and_nodes_are_not_hit() {
 		part: "tail".into(),
 		visible: false,
 	}]);
+
 	assert_eq!(parts(&hits(&mut world, 0.0, 1.0)), ["body"]);
 }
 
@@ -253,6 +258,7 @@ fn skinning_follows_the_joints_and_once_clips_finish() {
 			clip: "raise".into(),
 		}]
 	);
+
 	assert_eq!(parts(&hits(&mut world, -0.65, 0.8)), ["body"]);
 	// It holds its last pose and asks for no more frames.
 	run(&mut world, 0.1);
@@ -280,6 +286,7 @@ fn step_keys_hold_and_loops_keep_asking_for_frames() {
 		play: Play::new("bob"),
 	}]);
 	run(&mut world, 3.0);
+
 	assert!(world.needs_frame(), "a loop never settles");
 	assert_eq!(parts(&hits(&mut world, 0.0, 0.1)), ["body"]);
 	world.apply([Op::Stop {
@@ -308,6 +315,7 @@ fn crossfades_blend_and_fading_stops_settle() {
 	run(&mut world, 0.5);
 	assert!(world.needs_frame());
 	run(&mut world, 0.6);
+
 	world.apply([Op::Stop {
 		node: FIGURE,
 		fade: 0.5,
@@ -339,6 +347,7 @@ fn morph_weights_change_the_shape() {
 	}]);
 	world.advance(0.0);
 	assert_eq!(parts(&hits(&mut world, 0.25, 1.8)), ["head"]);
+
 	world.apply([Op::SetMorphWeight {
 		node: FIGURE,
 		part: Some("head".into()),
@@ -401,6 +410,7 @@ fn attached_nodes_follow_their_part() {
 	world.take_events();
 	// The socket is at (0.5, 1); the cube is 0.2 m across around it.
 	let hits = hits(&mut world, 0.55, 1.0);
+
 	assert_eq!(hits.len(), 1);
 	assert_eq!(hits[0].node, sword);
 	assert_eq!(hits[0].part, "cube");
@@ -466,6 +476,7 @@ fn attaching_refuses_cycles_and_removing_takes_the_subtree() {
 		bone: "socket".into(),
 	}]);
 	world.advance(0.0);
+
 	assert_eq!(world.node_count(), 1);
 }
 
@@ -530,6 +541,7 @@ fn screen_raycasts_go_through_the_camera() {
 		panic!("{events:?}")
 	};
 	assert_eq!(*request, RequestId(7));
+
 	assert_eq!(parts(hits), ["body"]);
 	// The ray starts on the near plane, 0.1 m in front of the camera.
 	assert!((hits[0].distance - 4.7).abs() < 1.0e-3, "{:?}", hits[0]);

@@ -65,12 +65,14 @@ impl Aabb {
 		if self.is_empty() {
 			return *self;
 		}
+
 		let center = matrix.transform_point3(self.center());
 		let extent = (self.max - self.min) * 0.5;
 		let x = matrix.x_axis.truncate().abs() * extent.x;
 		let y = matrix.y_axis.truncate().abs() * extent.y;
 		let z = matrix.z_axis.truncate().abs() * extent.z;
 		let half = x + y + z;
+
 		Self {
 			min: center - half,
 			max: center + half,

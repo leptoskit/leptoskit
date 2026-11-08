@@ -32,9 +32,11 @@ unsafe fn text<'a>(bytes: *const u8, len: usize) -> Option<&'a str> {
 	if len == 0 {
 		return Some("");
 	}
+
 	if bytes.is_null() || len > 64 * 1024 {
 		return None;
 	}
+
 	// SAFETY: The caller lends `len` readable bytes.
 	std::str::from_utf8(unsafe { std::slice::from_raw_parts(bytes, len) }).ok()
 }
@@ -71,8 +73,10 @@ pub unsafe extern "C" fn lk_scene3d_sink_write(sink: *mut c_void, bytes: *const 
 	if sink.is_null() || (bytes.is_null() && len > 0) {
 		return;
 	}
+
 	// SAFETY: The read callback lends the sink, a `Vec<u8>`, for its call.
 	let sink = unsafe { &mut *sink.cast::<Vec<u8>>() };
+
 	if len > 0 {
 		// SAFETY: The caller lends `len` readable bytes.
 		sink.extend_from_slice(unsafe { std::slice::from_raw_parts(bytes, len) });
@@ -123,6 +127,7 @@ mod enabled {
 					ptr::from_mut(&mut bytes).cast(),
 				)
 			};
+
 			if found == 1 {
 				Ok(bytes)
 			} else {
@@ -190,6 +195,7 @@ mod enabled {
 				return ptr::null_mut();
 			}
 		};
+
 		match hub.attach(SceneId(scene), surface, width, height) {
 			Ok(view) => Box::into_raw(Box::new(ViewHandle(view))),
 			Err(error) => {

@@ -26,6 +26,7 @@ fn gpu() -> Option<&'static Gpu> {
 				eprintln!("skipping: {error}");
 				None
 			}
+
 			Err(error) => panic!("{error}"),
 		}
 	})
@@ -63,13 +64,16 @@ fn displayed(color: [f32; 3]) -> [u8; 4] {
 	let offset = if x < 0.08 { x - 6.25 * x * x } else { 0.04 };
 	let mut mapped = color.map(|value| value - offset);
 	let peak = mapped[0].max(mapped[1]).max(mapped[2]);
+
 	if peak >= 0.76 {
 		let d = 1.0 - 0.76;
 		let new_peak = 1.0 - d * d / (peak + d - 0.76);
 		mapped = mapped.map(|value| value * new_peak / peak);
+
 		let g = 1.0 - 1.0 / (0.15 * (peak - new_peak) + 1.0);
 		mapped = mapped.map(|value| value + (new_peak - value) * g);
 	}
+
 	let encode = |value: f32| {
 		let value = value.clamp(0.0, 1.0);
 		let srgb = if value <= 0.003_130_8 {
@@ -77,6 +81,7 @@ fn displayed(color: [f32; 3]) -> [u8; 4] {
 		} else {
 			1.055 * value.powf(1.0 / 2.4) - 0.055
 		};
+
 		(srgb * 255.0).round() as u8
 	};
 	[encode(mapped[0]), encode(mapped[1]), encode(mapped[2]), 255]
@@ -143,6 +148,7 @@ fn an_unlit_cube_draws_its_colour_and_nothing_else() {
 	);
 	assert_eq!(image.at(1, 1), [0; 4], "the background is transparent");
 	let stats = renderer.stats();
+
 	assert_eq!((stats.draws, stats.instances, stats.triangles), (1, 1, 12));
 }
 
@@ -187,6 +193,7 @@ fn lit_faces_turned_to_the_light_are_brighter() {
 	let top = image.at(32, 20);
 	let front = image.at(32, 46);
 	assert_eq!(top[3], 255);
+
 	assert_eq!(front[3], 255);
 	assert!(top[0] > front[0] + 40, "top {top:?} front {front:?}");
 	assert!(front[0] > 10, "the environment lights the front: {front:?}");
@@ -248,6 +255,7 @@ fn material_overrides_tint_glow_and_rim() {
 		},
 	}]);
 	let glowing = draw(&mut renderer).at(32, 32);
+
 	assert!(near(glowing, displayed([0.0, 0.5, 0.5]), 2), "{glowing:?}");
 }
 
@@ -280,6 +288,7 @@ fn repeated_static_meshes_draw_instanced() {
 	let mut renderer = renderer(gpu);
 	spawn(&mut renderer, 1, 0, &fixture::unlit_cube([1.0; 4], false));
 	let mut ops = Vec::new();
+
 	for index in 1..=99_u32 {
 		ops.push(Op::Spawn {
 			node: NodeId(index),
@@ -296,7 +305,9 @@ fn repeated_static_meshes_draw_instanced() {
 			.with_scale(0.1),
 		});
 	}
+
 	renderer.world_mut().apply(ops);
+
 	draw(&mut renderer);
 	let stats = renderer.stats();
 	assert_eq!(stats.instances, 100);
@@ -352,14 +363,17 @@ fn skinned_meshes_follow_their_animation() {
 	let (x, y) = probe(&renderer);
 	let image = draw(&mut renderer);
 	assert_eq!(image.at(x, y)[3], 0, "nothing there at rest");
+
 	assert_eq!(image.at(32, 40)[3], 255, "the body is drawn");
 	renderer.world_mut().apply([Op::Play {
 		node: NodeId(1),
 		play: Play::new("raise").once(),
 	}]);
+
 	for _ in 0..70 {
 		renderer.advance(1.0 / 60.0);
 	}
+
 	let pixels = renderer.render_to_rgba(SIZE, SIZE).unwrap();
 	let image = Image {
 		pixels,
@@ -402,6 +416,7 @@ fn morph_targets_reshape_meshes() {
 		weight: 1.0,
 	}]);
 	let grown = width(&draw(&mut renderer));
+
 	assert!(
 		grown as f32 > rest as f32 * 1.35,
 		"rest {rest} grown {grown}"
@@ -445,6 +460,7 @@ fn models_cast_a_soft_shadow_on_their_ground() {
 		edge.is_some_and(|pixel| pixel[0] == 0),
 		"a dark, soft edge: {edge:?}"
 	);
+
 	assert_eq!(renderer.stats().shadows, 1);
 	renderer.world_mut().apply([Op::SetShadow {
 		node: NodeId(1),
@@ -557,6 +573,7 @@ fn real_world_depth_hides_what_is_behind_it() {
 	let near_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &1.0_f32.to_le_bytes());
 	let far_wall = solid_texture(gpu, wgpu::TextureFormat::R32Float, &10.0_f32.to_le_bytes());
 	let unknown = solid_texture(gpu, wgpu::TextureFormat::R32Float, &0.0_f32.to_le_bytes());
+
 	for (depth, visible) in [(&near_wall, false), (&far_wall, true), (&unknown, true)] {
 		let occlusion = Occlusion {
 			depth,
@@ -564,6 +581,7 @@ fn real_world_depth_hides_what_is_behind_it() {
 			scale: 1.0,
 			tolerance: 0.05,
 		};
+
 		let image = render_with(&mut renderer, &[], Background::Scene, Some(occlusion));
 		assert_eq!(image.at(32, 32)[3] == 255, visible);
 	}
@@ -595,6 +613,7 @@ fn stereo_views_draw_side_by_side_or_into_layers() {
 		eye(0.03, [32.0, 0.0, 32.0, 64.0]),
 	];
 	let image = render_with(&mut renderer, &views, Background::Scene, None);
+
 	assert_eq!(image.at(16, 32)[3], 255, "the left eye");
 	assert_eq!(image.at(48, 32)[3], 255, "the right eye");
 	assert_eq!(image.at(31, 32)[3], 0, "between them");
@@ -620,12 +639,14 @@ fn stereo_views_draw_side_by_side_or_into_layers() {
 		occlusion: None,
 	};
 	renderer.render(&target).unwrap();
+
 	for texture in [&left, &right] {
 		let pixels = renderer.read_back(texture).unwrap();
 		let image = Image { pixels, width: 32 };
 		assert_eq!(image.at(16, 32)[3], 255);
 		assert_eq!(image.at(0, 0), [255, 0, 0, 255]);
 	}
+
 	let mismatched = RenderTarget {
 		views: &full[..1],
 		..target
@@ -674,6 +695,7 @@ fn srgb_targets_show_the_same_colours() {
 		pixels: renderer.read_back(&texture).unwrap(),
 		width: SIZE,
 	};
+
 	assert!(
 		near(image.at(32, 32), displayed([0.5, 0.25, 0.1]), 2),
 		"{:?}",
@@ -686,13 +708,16 @@ fn renderers_on_one_device_share_uploaded_assets() {
 	// A device of its own, so other tests' uploads do not count.
 	let gpu = match Gpu::headless() {
 		Ok(gpu) => gpu,
+
 		Err(error) if error.is_unavailable() => return eprintln!("skipping: {error}"),
 		Err(error) => panic!("{error}"),
 	};
+
 	let gpu = &gpu;
 	let asset = Arc::new(Asset::from_slice(&fixture::rig()).unwrap());
 	let mut first = renderer(gpu);
 	let mut second = renderer(gpu);
+
 	for renderer in [&mut first, &mut second] {
 		let world = renderer.world_mut();
 		world.apply([
@@ -706,10 +731,12 @@ fn renderers_on_one_device_share_uploaded_assets() {
 				parent: None,
 			},
 		]);
+
 		world.take_loads();
 		world.asset_loaded(AssetId(1), Ok(asset.clone()));
 		draw(renderer);
 	}
+
 	assert_eq!(gpu.uploaded_assets(), 1, "both scenes draw one copy");
 	draw(&mut first);
 	draw(&mut second);
@@ -731,6 +758,7 @@ fn degenerate_targets_are_refused_or_skipped() {
 		renderer.render(&huge),
 		Err(Error::TooLarge { .. })
 	));
+
 	let views = [ViewParams {
 		view: Mat4::IDENTITY,
 		projection: Mat4::IDENTITY,
