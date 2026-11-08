@@ -318,6 +318,19 @@ class LivePhotoWireInstrumentationTest {
 }
 ";
 
+const APP_INTEGRITY_WIRE_TEST: &str = r"package dev.leptoskit.plugins.appintegrity
+
+import org.junit.Test
+
+/** Validates synthetic app-integrity framing without OS attestation. */
+class AppIntegrityWireInstrumentationTest {
+    @Test
+    fun boundedChallengeAndStatus() {
+        main()
+    }
+}
+";
+
 const AGE_RANGE_WIRE_TEST: &str = r"package dev.leptoskit.plugins.agerange
 
 import org.junit.Test
