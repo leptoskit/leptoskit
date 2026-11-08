@@ -237,6 +237,7 @@ leptoskit_plugin_accelerometer = { path = "crates/leptoskit_plugin_accelerometer
 leptoskit_plugin_app_shortcuts = { path = "crates/leptoskit_plugin_app_shortcuts", version = "0.3.0" }
 leptoskit_plugin_application = { path = "crates/leptoskit_plugin_application", version = "0.3.0" }
 leptoskit_plugin_arguments = { path = "crates/leptoskit_plugin_arguments", version = "0.3.0" }
+leptoskit_plugin_audio = { path = "crates/leptoskit_plugin_audio", version = "0.3.0", default-features = false }
 leptoskit_plugin_autostart = { path = "crates/leptoskit_plugin_autostart", version = "0.3.0" }
 leptoskit_plugin_badge = { path = "crates/leptoskit_plugin_badge", version = "0.3.0" }
 leptoskit_plugin_barometer = { path = "crates/leptoskit_plugin_barometer", version = "0.3.0" }

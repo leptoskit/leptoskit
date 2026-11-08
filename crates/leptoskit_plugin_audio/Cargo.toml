@@ -1,0 +1,70 @@
+[package]
+name = "leptoskit_plugin_audio"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Sound playback for LeptosKit applications: looping music, effects, fades and filters."
+
+[package.metadata.leptoskit.runtime]
+name = "audio"
+rust-factory = "from_context"
+rust-context = true
+rust-worker = true
+
+# The HarmonyOS host runs no worker plugins, and the engine has no ArkTS output.
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
+
+[features]
+default = ["host", "browser"]
+# The Rust engine for native hosts: decoding, the mixer and the device output.
+host = [
+	"dep:cpal",
+	"dep:rtrb",
+	"dep:symphonia",
+	"dep:jni",
+	"dep:ndk-context",
+	"dep:objc2",
+	"dep:objc2-avf-audio",
+	"dep:objc2-foundation",
+	"dep:block2",
+]
+# Web Audio for browser apps.
+browser = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+# HarmonyOS reports `target_os = "linux"`; it has no device output here.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_env = "ohos")))'.dependencies]
+cpal = { version = "0.18.2", optional = true }
+rtrb = { version = "0.4.1", optional = true }
+symphonia = { version = "0.6.1", default-features = false, features = ["aac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav", "flac"], optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21.1", optional = true }
+ndk-context = { version = "0.1.1", optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2 = { version = "0.6", optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioSessionTypes"], optional = true }
+objc2-foundation = { workspace = true, features = ["std", "block2", "NSDictionary", "NSNotification", "NSOperation", "NSString", "NSValue"], optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, features = ["AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "BiquadFilterNode", "BiquadFilterType", "Document", "Element", "EventTarget", "GainNode", "Headers", "HtmlAudioElement", "HtmlElement", "HtmlMediaElement", "MediaElementAudioSourceNode", "Node", "Response", "StereoPannerNode", "Window"], optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[lints]
+workspace = true

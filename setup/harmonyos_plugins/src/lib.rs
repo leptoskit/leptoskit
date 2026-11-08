@@ -6,6 +6,7 @@ pub use leptoskit_plugin_accelerometer;
 pub use leptoskit_plugin_app_shortcuts;
 pub use leptoskit_plugin_application;
 pub use leptoskit_plugin_arguments;
+pub use leptoskit_plugin_audio;
 pub use leptoskit_plugin_autostart;
 pub use leptoskit_plugin_badge;
 pub use leptoskit_plugin_barometer;
