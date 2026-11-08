@@ -166,6 +166,8 @@ fn insertion_order_cannot_change_startup_order() {
 
 #[test]
 fn optional_kind_names_frontend_roles() {
+	use std::str::FromStr as _;
+
 	use leptoskit_config::workspace::ApplicationKind;
 
 	let workspace: Workspace = toml::from_str(
@@ -209,8 +211,42 @@ kind = "server"
 		)
 		.is_err()
 	);
-	assert_eq!(ApplicationKind::Landing.as_str(), "landing");
+
+	for kind in [
+		ApplicationKind::Landing,
+		ApplicationKind::Product,
+		ApplicationKind::Admin,
+		ApplicationKind::Server,
+	] {
+		assert_eq!(ApplicationKind::from_str(kind.as_str()).unwrap(), kind);
+		assert_eq!(kind.to_string(), kind.as_str());
+		assert!(!kind.role_label().is_empty());
+	}
+	assert_eq!(
+		ApplicationKind::from_str("app").unwrap(),
+		ApplicationKind::Product
+	);
+	assert!(
+		ApplicationKind::from_str("website")
+			.unwrap_err()
+			.contains("server")
+	);
+
 	assert!(ApplicationKind::Landing.is_web_frontend());
+	assert!(ApplicationKind::Product.is_web_frontend());
+	assert!(ApplicationKind::Admin.is_web_frontend());
+	assert!(!ApplicationKind::Server.is_web_frontend());
 	assert!(ApplicationKind::Product.includes_native());
+	assert!(!ApplicationKind::Landing.includes_native());
 	assert!(!ApplicationKind::Admin.includes_native());
+	assert!(!ApplicationKind::Server.includes_native());
+	assert_eq!(ApplicationKind::Landing.default_port(), 3000);
+	assert_eq!(ApplicationKind::Product.default_port(), 3001);
+	assert_eq!(ApplicationKind::Admin.default_port(), 3002);
+	assert_eq!(ApplicationKind::Server.default_port(), 3003);
+	assert_eq!(ApplicationKind::Server.application_id(), "api");
+	assert_eq!(
+		ApplicationKind::parse_frontend_list(&[]).unwrap(),
+		ApplicationKind::DEFAULT_FRONTENDS
+	);
 }

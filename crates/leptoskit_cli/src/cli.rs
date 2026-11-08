@@ -265,12 +265,13 @@ pub enum Command {
 		/// `--db` picks one.
 		#[arg(long)]
 		auth: bool,
-		/// Scaffold several frontend apps in one workspace (`landing`, `app`,
-		/// `admin`). Creates `leptoskit.workspace.toml` and `apps/<name>/`.
-		/// Incompatible with `--db`, `--auth`, `--extension`, and standalone
-		/// HarmonyOS / watch starters.
-		#[arg(long, value_delimiter = ',', num_args = 1..)]
-		frontends: Vec<String>,
+		/// Scaffold several frontend apps in one workspace. Pass values
+		/// (`landing`, `app`, `admin`) or the flag alone for all three.
+		/// Creates `leptoskit.workspace.toml` and `apps/<name>/`. Incompatible
+		/// with `--db`, `--auth`, `--extension`, and standalone HarmonyOS /
+		/// watch starters.
+		#[arg(long, value_delimiter = ',', num_args = 0..)]
+		frontends: Option<Vec<String>>,
 	},
 	/// Runs every platform you have set up, and rebuilds them on change.
 	///
@@ -476,10 +477,10 @@ pub enum GenerateCommand {
 		/// `--db` picks one.
 		#[arg(long)]
 		auth: bool,
-		/// Scaffold several frontend apps in one workspace (`landing`, `app`,
-		/// `admin`). Creates `leptoskit.workspace.toml` and `apps/<name>/`.
-		#[arg(long, value_delimiter = ',', num_args = 1..)]
-		frontends: Vec<String>,
+		/// Scaffold several frontend apps in one workspace. Pass values
+		/// (`landing`, `app`, `admin`) or the flag alone for all three.
+		#[arg(long, value_delimiter = ',', num_args = 0..)]
+		frontends: Option<Vec<String>>,
 	},
 	/// Generates an independently publishable runtime plugin with an echo
 	/// method.
@@ -900,7 +901,7 @@ fn generate_command(kind: GenerateCommand) -> anyhow::Result<()> {
 			auth,
 			frontends,
 		} => {
-			if !frontends.is_empty() {
+			if let Some(frontends) = frontends {
 				anyhow::ensure!(
 					native_target.is_none() && db.is_none() && !auth && !extension,
 					"--frontends cannot combine with --native-target, --db, --auth, or --extension"
