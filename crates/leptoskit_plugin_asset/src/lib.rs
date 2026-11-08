@@ -214,10 +214,13 @@ mod tests {
 
 	#[test]
 	fn codecs_and_bounds() {
-		assert_eq!(
-			Capability::decode(&Capability::Available.encode()),
-			Ok(Capability::Available)
-		);
+		for (value, expected) in [
+			(0, Capability::Restricted),
+			(1, Capability::Available),
+			(2, Capability::Unavailable),
+		] {
+			assert_eq!(Capability::decode(&u32::to_le_bytes(value)), Ok(expected));
+		}
 		assert_eq!(
 			Capability::decode(&[3, 0, 0, 0]),
 			Err(Error::InvalidArgument)
@@ -243,6 +246,13 @@ mod tests {
 		);
 		assert_eq!(
 			Resolved::decode(&u32::to_le_bytes(3)),
+			Err(Error::InvalidArgument)
+		);
+		let mut empty_uri = Encoder::with_capacity(8);
+		empty_uri.u32(1);
+		empty_uri.bytes(&[]).unwrap();
+		assert_eq!(
+			Resolved::decode(&empty_uri.finish()),
 			Err(Error::InvalidArgument)
 		);
 	}
