@@ -336,15 +336,23 @@ impl Backend for ReplayBackend {
 		}
 	}
 
-	fn start(&mut self, _config: &SessionConfig, _features: Features) -> Result<(), Error> {
+	fn start(
+		&mut self,
+		config: &SessionConfig,
+		_features: Features,
+	) -> Result<ReferenceSpace, Error> {
 		self.running = true;
 		self.started = None;
 		self.shown = None;
-		Ok(())
+		Ok(config.reference_space)
 	}
 
-	fn configure(&mut self, _config: &SessionConfig, _features: Features) -> Result<(), Error> {
-		Ok(())
+	fn configure(
+		&mut self,
+		config: &SessionConfig,
+		_features: Features,
+	) -> Result<ReferenceSpace, Error> {
+		Ok(config.reference_space)
 	}
 
 	fn update(&mut self, time: f64) -> Result<Option<XrFrame>, Error> {

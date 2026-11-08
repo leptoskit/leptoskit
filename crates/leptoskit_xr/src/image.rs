@@ -19,6 +19,30 @@ pub fn apply_affine(transform: &Affine2, u: f32, v: f32) -> (f32, f32) {
 	(xx * u + yx * v + tx, xy * u + yy * v + ty)
 }
 
+/// The transform that undoes `transform`, or `None` when it flattens the
+/// plane.
+#[must_use]
+pub fn invert_affine(transform: &Affine2) -> Option<Affine2> {
+	let [xx, xy, yx, yy, tx, ty] = *transform;
+	let determinant = xx * yy - xy * yx;
+
+	if determinant.abs() < f32::EPSILON {
+		return None;
+	}
+
+	let scale = 1.0 / determinant;
+	let (ixx, ixy, iyx, iyy) = (yy * scale, -xy * scale, -yx * scale, xx * scale);
+
+	Some([
+		ixx,
+		ixy,
+		iyx,
+		iyy,
+		-(ixx * tx + iyx * ty),
+		-(ixy * tx + iyy * ty),
+	])
+}
+
 /// One plane of pixels in CPU memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImagePlane {
@@ -64,7 +88,12 @@ pub enum CameraPixels {
 /// that imports it without a copy.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum NativeImage {}
+pub enum NativeImage {
+	/// ARKit's `CVPixelBuffer` (bi-planar 4:2:0 YCbCr, full range), which the
+	/// renderer wraps in Metal textures through a `CVMetalTextureCache`.
+	#[cfg(all(feature = "host", target_os = "ios", target_arch = "aarch64"))]
+	PixelBuffer(crate::host::arkit::PixelBuffer),
+}
 
 /// The camera picture for one frame.
 #[derive(Debug, Clone)]
@@ -163,6 +192,16 @@ impl DepthImage {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn an_inverted_transform_undoes_the_original() {
+		let transform = [0.0, 1.0, -1.0, 0.0, 1.0, 0.0];
+		let inverse = invert_affine(&transform).unwrap();
+		let (u, v) = apply_affine(&transform, 0.25, 0.75);
+		let (x, y) = apply_affine(&inverse, u, v);
+		assert!((x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6);
+		assert_eq!(invert_affine(&[1.0, 1.0, 1.0, 1.0, 0.0, 0.0]), None);
+	}
 
 	#[test]
 	fn depth_samples_both_formats_and_rejects_unknowns() {

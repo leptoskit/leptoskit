@@ -26,6 +26,10 @@ mod plugin;
 #[allow(unsafe_code)]
 mod sensors;
 
+#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
+#[allow(unsafe_code)]
+pub mod arkit;
+
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
@@ -165,12 +169,21 @@ pub trait Backend: Send {
 	fn prepare(&mut self, mode: Mode, install: bool) -> Availability;
 
 	/// Starts a session with `features`, which the runtime already checked
-	/// against [`Backend::capabilities`].
-	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<(), Error>;
+	/// against [`Backend::capabilities`], and returns the reference space it
+	/// provides: the one asked for, or the nearest the platform has.
+	fn start(
+		&mut self,
+		config: &SessionConfig,
+		features: Features,
+	) -> Result<ReferenceSpace, Error>;
 
 	/// Changes the running session's features or reference space. The
 	/// default stops and starts again.
-	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<(), Error> {
+	fn configure(
+		&mut self,
+		config: &SessionConfig,
+		features: Features,
+	) -> Result<ReferenceSpace, Error> {
 		self.stop();
 		self.start(config, features)
 	}
