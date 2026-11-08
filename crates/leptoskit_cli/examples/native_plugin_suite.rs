@@ -44,6 +44,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("sensors", "leptoskit_plugin_sensors"),
 	("light_sensor", "leptoskit_plugin_light_sensor"),
 	("pedometer", "leptoskit_plugin_pedometer"),
+	("contacts", "leptoskit_plugin_contacts"),
 	("document-picker", "leptoskit_plugin_document_picker"),
 	("image-picker", "leptoskit_plugin_image_picker"),
 	("screen-orientation", "leptoskit_plugin_screen_orientation"),
@@ -112,6 +113,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_screen_capture/tests/android/ScreenCapturePluginTest.kt",
 	"leptoskit_plugin_screen_orientation/tests/android/ScreenOrientationPluginTest.kt",
 	"leptoskit_plugin_posture/tests/android/PosturePluginTest.kt",
+	"leptoskit_plugin_contacts/tests/android/ContactsWireTest.kt",
 	"leptoskit_plugin_document_picker/tests/android/DocumentEncodingTest.kt",
 	"leptoskit_plugin_image_picker/tests/android/ImagePickerEncodingTest.kt",
 	"leptoskit_plugin_store_review/tests/android/StoreReviewPluginTest.kt",
@@ -213,6 +215,19 @@ import org.junit.Test
 class DeviceMotionWireInstrumentationTest {
     @Test
     fun fusedReadingRoundTrip() {
+        main()
+    }
+}
+";
+
+const CONTACTS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.contacts
+
+import org.junit.Test
+
+/** Validates synthetic contact framing without opening the address book. */
+class ContactsWireInstrumentationTest {
+    @Test
+    fun boundedContactFields() {
         main()
     }
 }
@@ -422,6 +437,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 			"DeviceMotionWireInstrumentationTest.kt",
 			DEVICE_MOTION_WIRE_TEST,
 		),
+		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

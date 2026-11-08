@@ -430,6 +430,20 @@ supported; browser operations need a secure context and may need a user gesture.
 
 <!-- {/p_clipboardSummary} -->
 
+<!-- {@p_contactsSummary} -->
+
+Add `{{ plugin_contacts.package.name }}` as a direct dependency and select the `{{ plugin_contacts.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Contacts` rather than resolving the plugin on every call. Status never prompts;
+request permission only after the user chooses. Pick presents the system contact picker for
+one bounded contact. Query returns at most 32 contacts with id, display name, and optional
+primary phone/email. Purpose strings and manifest permissions stay app-owned; denied access
+never invents contacts. Browsers report unavailable; the Contacts Picker API remains later
+scope.
+
+<!-- {/p_contactsSummary} -->
+
 <!-- {@p_cryptoSummary} -->
 
 Add `{{ plugin_crypto.package.name }}` as a direct dependency and select the `{{ plugin_crypto.package.metadata.leptoskit.runtime.name }}` plugin in
