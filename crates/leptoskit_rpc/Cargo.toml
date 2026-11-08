@@ -145,6 +145,7 @@ db = [
 	"dep:hmac",
 	"dep:leptoskit_config",
 	"dep:leptoskit_db",
+	"leptoskit_db/pod",
 	"leptoskit_db/server",
 	"dep:sha2",
 	"dep:uuid",
