@@ -82,6 +82,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("sms", "leptoskit_plugin_sms"),
 	("mail-composer", "leptoskit_plugin_mail_composer"),
 	("media-library", "leptoskit_plugin_media_library"),
+	("maps", "leptoskit_plugin_maps"),
 	("web-browser", "leptoskit_plugin_web_browser"),
 	("audio", "leptoskit_plugin_audio"),
 	(
@@ -136,6 +137,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_sms/tests/android/SmsWireTest.kt",
 	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
 	"leptoskit_plugin_media_library/tests/android/MediaLibraryWireTest.kt",
+	"leptoskit_plugin_maps/tests/android/MapsWireTest.kt",
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
@@ -280,6 +282,19 @@ import org.junit.Test
 class MediaLibraryWireInstrumentationTest {
     @Test
     fun boundedListAndSave() {
+        main()
+    }
+}
+";
+
+const MAPS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.maps
+
+import org.junit.Test
+
+/** Validates synthetic maps framing without creating a Google Map. */
+class MapsWireInstrumentationTest {
+    @Test
+    fun boundedCameraAndMarkers() {
         main()
     }
 }
@@ -478,6 +493,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
 		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
 		("MediaLibraryWireInstrumentationTest.kt", MEDIA_LIBRARY_WIRE_TEST),
+		("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

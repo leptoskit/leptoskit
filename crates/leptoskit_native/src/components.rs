@@ -276,6 +276,19 @@ pub fn Camera(session: u32) -> Element {
 
 tag!(Camera => Element::new(crate::NativeKind::Camera));
 
+/// A host-owned map surface.
+///
+/// The element only says where the map shows. Create and control the session
+/// with `leptoskit_plugin_maps` (`guest::Maps` from a Wasm guest). Give it a
+/// size, such as `w-full h-64`, and an accessible label, or mark it decorative
+/// with `aria_hidden(true)`.
+#[track_caller]
+pub fn Map(session: u32) -> Element {
+	Element::map(session)
+}
+
+tag!(Map => Element::new(crate::NativeKind::Map));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {

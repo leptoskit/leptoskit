@@ -690,6 +690,18 @@ no sensor.
 
 <!-- {/p_magnetometerSummary} -->
 
+
+<!-- {@p_mapsSummary} -->
+
+Add `{{ plugin_maps.package.name }}` as a direct dependency and select the
+`{{ plugin_maps.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Maps` rather than resolving the plugin on every call. Create a session, bind it with
+`Map(session)`, then set the camera and a bounded marker list. User location remains later scope.
+
+<!-- {/p_mapsSummary} -->
+
 <!-- {@p_media_librarySummary} -->
 
 Add `{{ plugin_media_library.package.name }}` as a direct dependency and select the

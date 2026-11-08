@@ -350,6 +350,18 @@ impl Element {
 			return Err(ControlTreeError::InvalidCamera);
 		}
 
+		if (self.kind == NativeKind::Map) != self.props.map.is_some()
+			|| (self.kind == NativeKind::Map
+				&& self
+					.props
+					.accessibility_label
+					.as_deref()
+					.is_none_or(|label| label.trim().is_empty())
+				&& self.props.aria().hidden != Some(true))
+		{
+			return Err(ControlTreeError::InvalidMap);
+		}
+
 		if self.kind == NativeKind::Rive
 			&& (self.props.rive.is_none()
 				|| self.props.source.is_some()
@@ -370,6 +382,7 @@ impl Element {
 				| NativeKind::Scene3d
 				| NativeKind::Video
 				| NativeKind::Camera
+				| NativeKind::Map
 				| NativeKind::TextInput
 				| NativeKind::PasswordInput
 				| NativeKind::Switch
@@ -657,6 +670,24 @@ impl Element {
 	#[must_use]
 	pub fn session(mut self, session: u32) -> Self {
 		self.props.camera = Some(session);
+		self
+	}
+
+	/// A map surface the host owns, by session id. Give it an explicit size
+	/// and an accessible label, or mark it decorative with `aria_hidden`. The
+	/// guest changes the session through the `maps` plugin, never by
+	/// re-rendering this element.
+	#[track_caller]
+	pub fn map(session: u32) -> Self {
+		let mut element = Self::new(NativeKind::Map);
+		element.props.map = Some(session);
+		element
+	}
+
+	/// Sets the session a `Map` view tag shows.
+	#[must_use]
+	pub fn map_session(mut self, session: u32) -> Self {
+		self.props.map = Some(session);
 		self
 	}
 

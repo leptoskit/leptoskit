@@ -51,6 +51,7 @@ private struct WidgetExtras: Decodable {
     let scene3d: UInt32?
     let video: UInt32?
     let camera: UInt32?
+    let map: UInt32?
 }
 
 /// A cursor over one binary transaction; every read checks it stays in bounds.
@@ -164,7 +165,7 @@ private struct BinaryReader {
             fontSize: fontSize, fontWeight: fontWeight, textAlign: textAlign,
             drawing: extras?.drawing, aria: extras?.aria, scrollOffset: extras?.scrollOffset,
             transform: transform, animation: animation, scene3d: extras?.scene3d, video: extras?.video,
-            camera: extras?.camera)
+            camera: extras?.camera, map: extras?.map)
     }
 
     private mutating func transform() throws -> WidgetTransform {

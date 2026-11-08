@@ -64,6 +64,8 @@ pub enum NativeKind {
 	/// A host-owned camera preview surface; the session comes from the
 	/// `camera` prop.
 	Camera,
+	/// A host-owned map surface; the session comes from the `map` prop.
+	Map,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
 }
@@ -102,6 +104,7 @@ impl NativeKind {
 			Self::Scene3d => "scene3d",
 			Self::Video => "video",
 			Self::Camera => "camera",
+			Self::Map => "map",
 			Self::Custom(name) => name,
 		}
 	}
@@ -141,6 +144,7 @@ impl<'de> serde::de::Visitor<'de> for NativeKindVisitor {
 			"scene3d" | "Scene3d" => Ok(NativeKind::Scene3d),
 			"video" | "Video" => Ok(NativeKind::Video),
 			"camera" | "Camera" => Ok(NativeKind::Camera),
+			"map" | "Map" => Ok(NativeKind::Map),
 			"scroll_view" | "ScrollView" => Ok(NativeKind::ScrollView),
 			"text_input" | "TextInput" => Ok(NativeKind::TextInput),
 			"button" | "Button" => Ok(NativeKind::Button),
@@ -321,6 +325,10 @@ pub struct NativeProps {
 	/// guest changes it through the `camera` plugin, never through props.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub camera: Option<u32>,
+	/// The session a `Map` shows, by its id. The host owns the session; the
+	/// guest changes it through the `maps` plugin, never through props.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub map: Option<u32>,
 	/// The text content of `Text`, `TextRun`, `TextInput`, and `Button`.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub text: Option<String>,

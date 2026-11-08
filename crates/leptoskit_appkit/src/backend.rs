@@ -328,7 +328,8 @@ impl AppKitBackend {
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video
-			| NativeKind::Camera => {
+			| NativeKind::Camera
+			| NativeKind::Map => {
 				(
 					Retained::into_super(FlippedView::new(mtm)),
 					Control::Container,

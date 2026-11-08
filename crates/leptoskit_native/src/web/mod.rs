@@ -669,6 +669,15 @@ fn camera_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyV
 		.into_any()
 }
 
+/// A `Map` surface. The `maps` plugin binds a host session by id; browsers
+/// leave a placeholder until a web map host lands.
+fn map_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
+	html::div()
+		.attr("data-lk-map", session.map(|session| session.to_string()))
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -769,6 +778,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		NativeKind::Scene3d => scene3d_canvas(props.scene3d, attrs),
 		NativeKind::Video => video_element(props.video, attrs),
 		NativeKind::Camera => camera_element(props.camera, attrs),
+		NativeKind::Map => map_element(props.map, attrs),
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}

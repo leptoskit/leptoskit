@@ -44,6 +44,7 @@ pub use leptoskit_plugin_location;
 pub use leptoskit_plugin_logging;
 pub use leptoskit_plugin_magnetometer;
 pub use leptoskit_plugin_mail_composer;
+pub use leptoskit_plugin_maps;
 pub use leptoskit_plugin_media_library;
 pub use leptoskit_plugin_menu;
 pub use leptoskit_plugin_network;
