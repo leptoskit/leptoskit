@@ -27,6 +27,7 @@ leptoskit_plugin_badge = { path = "../../crates/leptoskit_plugin_badge" }
 leptoskit_plugin_barometer = { path = "../../crates/leptoskit_plugin_barometer" }
 leptoskit_plugin_battery = { path = "../../crates/leptoskit_plugin_battery" }
 leptoskit_plugin_brightness = { path = "../../crates/leptoskit_plugin_brightness" }
+leptoskit_plugin_cellular = { path = "../../crates/leptoskit_plugin_cellular" }
 leptoskit_plugin_clipboard = { path = "../../crates/leptoskit_plugin_clipboard" }
 leptoskit_plugin_crypto = { path = "../../crates/leptoskit_plugin_crypto" }
 leptoskit_plugin_deep_link = { path = "../../crates/leptoskit_plugin_deep_link" }
@@ -41,6 +42,7 @@ leptoskit_plugin_haptics = { path = "../../crates/leptoskit_plugin_haptics" }
 leptoskit_plugin_home_widgets = { path = "../../crates/leptoskit_plugin_home_widgets" }
 leptoskit_plugin_http = { path = "../../crates/leptoskit_plugin_http" }
 leptoskit_plugin_image_manipulator = { path = "../../crates/leptoskit_plugin_image_manipulator" }
+leptoskit_plugin_image_picker = { path = "../../crates/leptoskit_plugin_image_picker" }
 leptoskit_plugin_keep_awake = { path = "../../crates/leptoskit_plugin_keep_awake" }
 leptoskit_plugin_light_sensor = { path = "../../crates/leptoskit_plugin_light_sensor" }
 leptoskit_plugin_linking = { path = "../../crates/leptoskit_plugin_linking" }

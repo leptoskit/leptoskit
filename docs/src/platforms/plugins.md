@@ -2,7 +2,7 @@
 
 On iOS, Android, and the other native platforms, your app's code runs as WebAssembly inside the host. That keeps it portable and lets [code push](../guide/05-code-push.md) replace it, but WebAssembly can't call UIKit, Android's Java APIs, or any other operating system library directly. A **runtime plugin** bridges that gap: a crate with a Rust API your app calls, and a native implementation that the host runs on its behalf.
 
-leptoskit ships plugins for the clipboard, device and app information, battery and network state, how a foldable is folded, haptics, sound playback, links, permissions, secure storage, files, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, motion and environment sensors (together through `sensors`, or one at a time), cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, SMS and mail composers, in-app web browsing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
+leptoskit ships plugins for the clipboard, device and app information, battery, cellular, and network state, how a foldable is folded, haptics, sound playback, links, permissions, secure storage, files, document and image pickers, SQLite, settings, localization, speech, keeping the screen awake, brightness, orientation, picture-in-picture and Android system overlays, motion and environment sensors (together through `sensors`, or one at a time), cryptography, logging, biometric authentication, location, notifications, home-screen widgets, sharing, SMS and mail composers, in-app web browsing, store review, tracking transparency, app shortcuts, icon badges, NFC reads, HTTP, WebSockets, and desktop services such as dialogs, menus, and the tray. The [plugin support matrix](plugin-inventory.md) says what each one does on each platform.
 
 Runtime plugins are different from the `[[plugins]]` table in `leptoskit.toml`, which turns on build plugins.
 
@@ -117,6 +117,7 @@ Most runtime names match the crate's suffix: `leptoskit_plugin_clipboard` is `cl
 | `leptoskit_plugin_device_policy`         | `device-policy`         |
 | `leptoskit_plugin_document_picker`       | `document-picker`       |
 | `leptoskit_plugin_home_widgets`          | `home-widgets`          |
+| `leptoskit_plugin_image_picker`          | `image-picker`          |
 | `leptoskit_plugin_keep_awake`            | `keep-awake`            |
 | `leptoskit_plugin_live_activities`       | `live-activities`       |
 | `leptoskit_plugin_network_info`          | `network-info`          |
