@@ -10,6 +10,7 @@ pub use leptoskit_plugin_app_integrity;
 pub use leptoskit_plugin_app_shortcuts;
 pub use leptoskit_plugin_application;
 pub use leptoskit_plugin_arguments;
+pub use leptoskit_plugin_asset;
 pub use leptoskit_plugin_audio;
 pub use leptoskit_plugin_autostart;
 pub use leptoskit_plugin_background_task;

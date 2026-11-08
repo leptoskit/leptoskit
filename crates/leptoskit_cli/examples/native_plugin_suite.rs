@@ -331,6 +331,19 @@ class AppIntegrityWireInstrumentationTest {
 }
 ";
 
+const ASSET_WIRE_TEST: &str = r"package dev.leptoskit.plugins.asset
+
+import org.junit.Test
+
+/** Validates synthetic asset framing. */
+class AssetWireInstrumentationTest {
+    @Test
+    fun smoke() {
+        main()
+    }
+}
+";
+
 const AGE_RANGE_WIRE_TEST: &str = r"package dev.leptoskit.plugins.agerange
 
 import org.junit.Test
