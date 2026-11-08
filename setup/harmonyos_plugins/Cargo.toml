@@ -79,6 +79,7 @@ leptoskit_plugin_store_review = { path = "../../crates/leptoskit_plugin_store_re
 leptoskit_plugin_tracking_transparency = { path = "../../crates/leptoskit_plugin_tracking_transparency" }
 leptoskit_plugin_tray = { path = "../../crates/leptoskit_plugin_tray" }
 leptoskit_plugin_updater = { path = "../../crates/leptoskit_plugin_updater" }
+leptoskit_plugin_video = { path = "../../crates/leptoskit_plugin_video" }
 leptoskit_plugin_web_browser = { path = "../../crates/leptoskit_plugin_web_browser" }
 leptoskit_plugin_websocket = { path = "../../crates/leptoskit_plugin_websocket" }
 leptoskit_plugin_window_state = { path = "../../crates/leptoskit_plugin_window_state" }

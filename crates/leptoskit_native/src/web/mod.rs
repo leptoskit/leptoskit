@@ -649,6 +649,15 @@ fn scene3d_canvas(scene: Option<u32>, attrs: impl Attribute + 'static) -> AnyVie
 		.into_any()
 }
 
+/// A `Video` surface. The `video` plugin binds a host player by id.
+fn video_element(player: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
+	html::video()
+		.attr("data-lk-video", player.map(|player| player.to_string()))
+		.attr("playsinline", true)
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -747,6 +756,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 			panic!("enable leptoskit_native's rive feature before rendering a Rive element")
 		}
 		NativeKind::Scene3d => scene3d_canvas(props.scene3d, attrs),
+		NativeKind::Video => video_element(props.video, attrs),
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}

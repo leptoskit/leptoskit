@@ -65,6 +65,7 @@ pub use leptoskit_plugin_store_review;
 pub use leptoskit_plugin_tracking_transparency;
 pub use leptoskit_plugin_tray;
 pub use leptoskit_plugin_updater;
+pub use leptoskit_plugin_video;
 pub use leptoskit_plugin_web_browser;
 pub use leptoskit_plugin_websocket;
 pub use leptoskit_plugin_window_state;

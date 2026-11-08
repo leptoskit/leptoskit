@@ -13,6 +13,8 @@ pub enum ControlTreeError {
 	RiveNotEnabled,
 	/// A scene and an accessible label or decorative state are required.
 	InvalidScene3d,
+	/// A video player and an accessible label or decorative state are required.
+	InvalidVideo,
 	/// A leaf widget cannot contain child widgets.
 	Children { kind: NativeKind },
 	/// Radio options require an explicit named group.
@@ -56,6 +58,12 @@ impl fmt::Display for ControlTreeError {
 			Self::InvalidScene3d => {
 				formatter.write_str(
 					"use a Scene3d element with a scene and an accessible label or \
+					 aria_hidden(true)",
+				)
+			}
+			Self::InvalidVideo => {
+				formatter.write_str(
+					"use a Video element with a player and an accessible label or \
 					 aria_hidden(true)",
 				)
 			}

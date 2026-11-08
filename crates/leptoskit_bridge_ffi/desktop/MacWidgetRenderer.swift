@@ -107,9 +107,10 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         devtools?.close()
         devtools = nil
 
-        for widget in widgets.values {
+		for widget in widgets.values {
             (widget as? NSImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
+            (widget as? NativeVideoView)?.close()
         }
 
         widgets.removeAll()
@@ -224,9 +225,11 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         case "vector", "Vector": widget = MacVectorView()
         case "rive", "Rive": widget = NativeRiveImageView()
         case "scene3d", "Scene3d": widget = NativeScene3dView()
+        case "video", "Video": widget = NativeVideoView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
+        (widget as? NativeVideoView)?.show(player: item.props.video)
         widget.identifier = NSUserInterfaceItemIdentifier(String(item.id))
         widgets[item.id] = widget
         properties[item.id] = item.props
@@ -254,6 +257,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             try MacWidgetStyle.apply(item.props, to: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
+            (widget as? NativeVideoView)?.show(player: item.props.video)
         }
 
         if let item = change.updateLayout, let widget = widgets[item.id] {

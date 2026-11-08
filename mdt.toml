@@ -55,6 +55,7 @@ plugin_sensors = "crates/leptoskit_plugin_sensors/Cargo.toml"plugin_sms = "crate
 plugin_mail_composer = "crates/leptoskit_plugin_mail_composer/Cargo.toml"
 plugin_shell = "crates/leptoskit_plugin_shell/Cargo.toml"
 plugin_speech = "crates/leptoskit_plugin_speech/Cargo.toml"
+plugin_video = "crates/leptoskit_plugin_video/Cargo.toml"
 plugin_sqlite = "crates/leptoskit_plugin_sqlite/Cargo.toml"
 plugin_store = "crates/leptoskit_plugin_store/Cargo.toml"
 plugin_store_review = "crates/leptoskit_plugin_store_review/Cargo.toml"

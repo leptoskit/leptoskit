@@ -310,6 +310,7 @@ leptoskit_plugin_store_review = { path = "crates/leptoskit_plugin_store_review",
 leptoskit_plugin_tracking_transparency = { path = "crates/leptoskit_plugin_tracking_transparency", version = "0.3.0" }
 leptoskit_plugin_tray = { path = "crates/leptoskit_plugin_tray", version = "0.3.0" }
 leptoskit_plugin_updater = { path = "crates/leptoskit_plugin_updater", version = "0.3.0" }
+leptoskit_plugin_video = { path = "crates/leptoskit_plugin_video", version = "0.3.0" }
 leptoskit_plugin_web_auth = { path = "crates/leptoskit_plugin_web_auth", version = "0.3.0" }
 leptoskit_plugin_web_browser = { path = "crates/leptoskit_plugin_web_browser", version = "0.3.0" }
 leptoskit_plugin_websocket = { path = "crates/leptoskit_plugin_websocket", version = "0.3.0", default-features = false }

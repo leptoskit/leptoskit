@@ -54,6 +54,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("sqlite", "leptoskit_plugin_sqlite"),
 	("store", "leptoskit_plugin_store"),
 	("speech", "leptoskit_plugin_speech"),
+	("video", "leptoskit_plugin_video"),
 	("logging", "leptoskit_plugin_logging"),
 	("location", "leptoskit_plugin_location"),
 	(
@@ -100,6 +101,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_picture_in_picture/tests/android/PictureInPicturePluginTest.kt",
 	"leptoskit_plugin_keep_awake/tests/android/KeepAwakePluginTest.kt",
 	"leptoskit_plugin_speech/tests/android/SpeechPluginTest.kt",
+	"leptoskit_plugin_video/tests/android/VideoPluginTest.kt",
 	"leptoskit_plugin_location/android-tests/LocationPluginTest.kt",
 	"leptoskit_plugin_local_authentication/tests/android/LocalAuthenticationPluginTest.kt",
 	"leptoskit_plugin_notifications/tests/android/NotificationsPluginTest.kt",

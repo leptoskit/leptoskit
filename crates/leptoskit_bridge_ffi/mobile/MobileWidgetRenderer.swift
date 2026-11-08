@@ -97,6 +97,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         for widget in widgets.values {
             (widget as? UIImageView)?.image = nil
             (widget as? NativeScene3dView)?.close()
+            (widget as? NativeVideoView)?.close()
         }
 
         widgets.removeAll()
@@ -204,9 +205,11 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         case "vector", "Vector": widget = VectorView()
         case "rive", "Rive": widget = NativeRiveImageView()
         case "scene3d", "Scene3d": widget = NativeScene3dView()
+        case "video", "Video": widget = NativeVideoView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
+        (widget as? NativeVideoView)?.show(player: item.props.video)
         widget.tag = item.id
         widgets[item.id] = widget
         focusRequests[item.id] = item.props.focused
@@ -242,6 +245,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             scrolls.receive(item.props.scrollOffset, for: item.id)
 
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
+            (widget as? NativeVideoView)?.show(player: item.props.video)
         }
 
         if let item = change.updateLayout, let widget = widgets[item.id] {

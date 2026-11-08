@@ -324,7 +324,7 @@ impl AppKitBackend {
 		let (view, control): (Retained<NSView>, Control) = match kind {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers;
 			// this backend holds its place as an empty view.
-			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d => {
+			NativeKind::View | NativeKind::Custom(_) | NativeKind::Scene3d | NativeKind::Video => {
 				(
 					Retained::into_super(FlippedView::new(mtm)),
 					Control::Container,
