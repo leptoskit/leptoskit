@@ -413,6 +413,22 @@ Add `{{ plugin_asset.package.name }}` as a direct dependency and select the `{{ 
 
 <!-- {/p_assetSummary} -->
 
+<!-- {@p_diagnosticsSummary} -->
+
+Add `{{ plugin_diagnostics.package.name }}` as a direct dependency and select the `{{ plugin_diagnostics.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Diagnostics` rather than resolving the plugin on every call. Start and end named spans, and record one-shot events, for startup and interaction timing. This MVP returns Unavailable from every host until a diagnostics backend is chosen; wire validation is complete so exporters can attach later.
+
+<!-- {/p_diagnosticsSummary} -->
+
+
+
+<!-- {@p_blobSummary} -->
+
+Add `{{ plugin_blob.package.name }}` as a direct dependency and select the `{{ plugin_blob.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Blob` rather than resolving the plugin on every call. Create an owned byte blob, read a bounded slice, and release it without copying the whole payload through every control message. This MVP returns Unavailable from every host until a durable resource protocol lands; codecs and validation are complete so later hosts can fill in storage.
+
+<!-- {/p_blobSummary} -->
+
+
+
 
 
 

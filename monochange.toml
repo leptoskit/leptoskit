@@ -123,6 +123,8 @@ packages = [
 	"leptoskit_plugin_age_range",
 	"leptoskit_plugin_app_integrity",
 	"leptoskit_plugin_asset",
+	"leptoskit_plugin_diagnostics",
+	"leptoskit_plugin_blob",
 	"leptoskit_plugin_application",
 	"leptoskit_plugin_app_shortcuts",
 	"leptoskit_plugin_audio",
@@ -460,6 +462,12 @@ path = "crates/leptoskit_plugin_app_integrity"
 
 [package.leptoskit_plugin_asset]
 path = "crates/leptoskit_plugin_asset"
+
+[package.leptoskit_plugin_diagnostics]
+path = "crates/leptoskit_plugin_diagnostics"
+
+[package.leptoskit_plugin_blob]
+path = "crates/leptoskit_plugin_blob"
 
 [package.leptoskit_plugin_application]
 path = "crates/leptoskit_plugin_application"

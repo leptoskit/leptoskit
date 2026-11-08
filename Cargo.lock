@@ -3549,6 +3549,7 @@ dependencies = [
  "leptoskit_plugin_badge",
  "leptoskit_plugin_barometer",
  "leptoskit_plugin_battery",
+ "leptoskit_plugin_blob",
  "leptoskit_plugin_brightness",
  "leptoskit_plugin_calendar",
  "leptoskit_plugin_camera",
@@ -3560,6 +3561,7 @@ dependencies = [
  "leptoskit_plugin_device",
  "leptoskit_plugin_device_motion",
  "leptoskit_plugin_device_policy",
+ "leptoskit_plugin_diagnostics",
  "leptoskit_plugin_dialog",
  "leptoskit_plugin_document_picker",
  "leptoskit_plugin_filesystem",
@@ -6067,6 +6069,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_blob"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_brightness"
 version = "0.3.0"
 dependencies = [
@@ -6198,6 +6207,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "leptoskit_plugin_diagnostics"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]

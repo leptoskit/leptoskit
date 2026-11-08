@@ -1,0 +1,37 @@
+[package]
+name = "leptoskit_plugin_diagnostics"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Startup and interaction diagnostic spans for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "diagnostics"
+apple-module = "LeptosKitDiagnostics"
+apple-type = "DiagnosticsPlugin"
+apple-context = true
+android-type = "dev.leptoskit.plugins.diagnostics.DiagnosticsPlugin"
+android-context = true
+
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.windows]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.linux]
+unavailable = true
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true
