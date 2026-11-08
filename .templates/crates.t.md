@@ -690,6 +690,17 @@ no sensor.
 
 <!-- {/p_magnetometerSummary} -->
 
+<!-- {@p_media_librarySummary} -->
+
+Add `{{ plugin_media_library.package.name }}` as a direct dependency and select the
+`{{ plugin_media_library.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::MediaLibrary` rather than resolving the plugin on every call. Status never prompts;
+list and save stay bounded; change observation remains later scope.
+
+<!-- {/p_media_librarySummary} -->
+
 <!-- {@p_menuSummary} -->
 
 Native hosts construct it explicitly; it is not a guest plugin and installs nothing by

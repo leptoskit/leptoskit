@@ -81,6 +81,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("web-auth", "leptoskit_plugin_web_auth"),
 	("sms", "leptoskit_plugin_sms"),
 	("mail-composer", "leptoskit_plugin_mail_composer"),
+	("media-library", "leptoskit_plugin_media_library"),
 	("web-browser", "leptoskit_plugin_web_browser"),
 	("audio", "leptoskit_plugin_audio"),
 	(
@@ -134,6 +135,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_android_intent/tests/android/AndroidIntentPluginTest.kt",
 	"leptoskit_plugin_sms/tests/android/SmsWireTest.kt",
 	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
+	"leptoskit_plugin_media_library/tests/android/MediaLibraryWireTest.kt",
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
@@ -268,6 +270,21 @@ class CalendarWireInstrumentationTest {
     }
 }
 ";
+
+
+const MEDIA_LIBRARY_WIRE_TEST: &str = r"package dev.leptoskit.plugins.medialibrary
+
+import org.junit.Test
+
+/** Validates synthetic media-library framing without touching MediaStore. */
+class MediaLibraryWireInstrumentationTest {
+    @Test
+    fun boundedListAndSave() {
+        main()
+    }
+}
+";
+
 
 #[derive(Parser)]
 struct Args {
@@ -460,6 +477,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
 		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
 		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
+		("MediaLibraryWireInstrumentationTest.kt", MEDIA_LIBRARY_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(
