@@ -51,6 +51,7 @@ pub const BUILT_IN_COMPONENTS: &[&str] = &[
 	"Radio",
 	"Rive",
 	"Row",
+	"Scene3d",
 	"ScrollView",
 	"Slider",
 	"Spacer",
