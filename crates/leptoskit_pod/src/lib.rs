@@ -7,6 +7,9 @@
 
 mod envelope;
 mod error;
+mod migrate;
+#[cfg(kani)]
+mod proofs;
 mod reader;
 mod traits;
 mod writer;
@@ -20,6 +23,8 @@ pub use envelope::unwrap;
 pub use envelope::wrap;
 pub use error::Error;
 pub use error::Result;
+pub use migrate::Transition;
+pub use migrate::climb;
 pub use reader::Reader;
 pub use traits::ByteBuf;
 pub use traits::PodDecode;

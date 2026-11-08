@@ -1,0 +1,7 @@
+# Scoped mutation testing for leptoskit_pod.
+# Run: scripts/pod-mutants.sh  (or `cargo mutants -p leptoskit_pod`)
+
+build_command = ["cargo", "test", "--locked", "--package", "leptoskit_pod"]
+test_tool = "cargo"
+timeout_multiplier = 2.0
+min_test_timeout = 60
