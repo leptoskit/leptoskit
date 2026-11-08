@@ -289,6 +289,19 @@ pub fn Map(session: u32) -> Element {
 
 tag!(Map => Element::new(crate::NativeKind::Map));
 
+/// A host-owned Live Photo surface.
+///
+/// The element only says where the Live Photo shows. Create and control the
+/// session with `leptoskit_plugin_live_photo` (`guest::LivePhoto` from a Wasm
+/// guest). Give it a size, such as `w-full h-64`, and an accessible label, or
+/// mark it decorative with `aria_hidden(true)`.
+#[track_caller]
+pub fn LivePhoto(session: u32) -> Element {
+	Element::live_photo(session)
+}
+
+tag!(LivePhoto => Element::new(crate::NativeKind::LivePhoto));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {

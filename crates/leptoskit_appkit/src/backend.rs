@@ -329,7 +329,8 @@ impl AppKitBackend {
 			| NativeKind::Scene3d
 			| NativeKind::Video
 			| NativeKind::Camera
-			| NativeKind::Map => {
+			| NativeKind::Map
+			| NativeKind::LivePhoto => {
 				(
 					Retained::into_super(FlippedView::new(mtm)),
 					Control::Container,

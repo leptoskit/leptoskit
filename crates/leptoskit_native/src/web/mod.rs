@@ -678,6 +678,14 @@ fn map_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView
 		.into_any()
 }
 
+/// A `LivePhoto` surface placeholder until a browser host lands.
+fn live_photo_element(session: Option<u32>, attrs: impl Attribute + 'static) -> AnyView {
+	html::div()
+		.attr("data-lk-live-photo", session.map(|session| session.to_string()))
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -779,6 +787,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		NativeKind::Video => video_element(props.video, attrs),
 		NativeKind::Camera => camera_element(props.camera, attrs),
 		NativeKind::Map => map_element(props.map, attrs),
+		NativeKind::LivePhoto => live_photo_element(props.live_photo, attrs),
 		NativeKind::TextInput | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}

@@ -83,6 +83,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("mail-composer", "leptoskit_plugin_mail_composer"),
 	("media-library", "leptoskit_plugin_media_library"),
 	("maps", "leptoskit_plugin_maps"),
+	("live-photo", "leptoskit_plugin_live_photo"),
 	("web-browser", "leptoskit_plugin_web_browser"),
 	("audio", "leptoskit_plugin_audio"),
 	(
@@ -138,6 +139,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_mail_composer/tests/android/MailComposerWireTest.kt",
 	"leptoskit_plugin_media_library/tests/android/MediaLibraryWireTest.kt",
 	"leptoskit_plugin_maps/tests/android/MapsWireTest.kt",
+	"leptoskit_plugin_live_photo/tests/android/LivePhotoWireTest.kt",
 	"leptoskit_plugin_web_browser/tests/android/WebBrowserWireTest.kt",
 	"leptoskit_plugin_print/tests/android/PrintWireTest.kt",
 	"leptoskit_plugin_device_motion/tests/android/DeviceMotionWireTest.kt",
@@ -282,6 +284,19 @@ import org.junit.Test
 class MediaLibraryWireInstrumentationTest {
     @Test
     fun boundedListAndSave() {
+        main()
+    }
+}
+";
+
+const LIVE_PHOTO_WIRE_TEST: &str = r"package dev.leptoskit.plugins.livephoto
+
+import org.junit.Test
+
+/** Validates synthetic live-photo framing without loading a Live Photo. */
+class LivePhotoWireInstrumentationTest {
+    @Test
+    fun boundedCreateAndPlayback() {
         main()
     }
 }
@@ -494,6 +509,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
 		("MediaLibraryWireInstrumentationTest.kt", MEDIA_LIBRARY_WIRE_TEST),
 		("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
+		("LivePhotoWireInstrumentationTest.kt", LIVE_PHOTO_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

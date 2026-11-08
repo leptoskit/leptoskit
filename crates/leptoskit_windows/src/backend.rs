@@ -1946,7 +1946,8 @@ fn msaa_role(role: Option<Role>, kind: NativeKind) -> u32 {
 				| NativeKind::Scene3d
 				| NativeKind::Video
 				| NativeKind::Camera
-			| NativeKind::Map => ROLE_SYSTEM_GRAPHIC,
+			| NativeKind::Map
+			| NativeKind::LivePhoto => ROLE_SYSTEM_GRAPHIC,
 				NativeKind::ActivityIndicator => ROLE_SYSTEM_ANIMATION,
 				_ => ROLE_SYSTEM_GROUPING,
 			}
