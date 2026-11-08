@@ -331,6 +331,32 @@ class AppIntegrityWireInstrumentationTest {
 }
 ";
 
+const BLOB_WIRE_TEST: &str = r"package dev.leptoskit.plugins.blob
+
+import org.junit.Test
+
+/** Validates synthetic blob framing. */
+class BlobWireInstrumentationTest {
+    @Test
+    fun smoke() {
+        main()
+    }
+}
+";
+
+const DIAGNOSTICS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.diagnostics
+
+import org.junit.Test
+
+/** Validates synthetic diagnostics framing. */
+class DiagnosticsWireInstrumentationTest {
+    @Test
+    fun smoke() {
+        main()
+    }
+}
+";
+
 const ASSET_WIRE_TEST: &str = r"package dev.leptoskit.plugins.asset
 
 import org.junit.Test
