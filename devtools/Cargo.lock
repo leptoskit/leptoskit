@@ -1610,6 +1610,7 @@ dependencies = [
  "leptoskit_router_macros",
  "reactive_graph",
  "thiserror",
+ "url",
 ]
 
 [[package]]
