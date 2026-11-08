@@ -326,6 +326,19 @@ pub mod web {
 	pub fn snapshot() -> Snapshot {
 		Snapshot::unavailable()
 	}
+
+	#[cfg(test)]
+	mod tests {
+		use wasm_bindgen_test::wasm_bindgen_test;
+
+		use super::*;
+		wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+		#[wasm_bindgen_test]
+		fn browser_snapshot_stays_unavailable() {
+			assert_eq!(snapshot(), Snapshot::unavailable());
+		}
+	}
 }
 
 /// Cached guest client using the binary bridge.
@@ -447,6 +460,92 @@ mod tests {
 		assert_eq!(Voip::from_bool(None), Voip::Unknown);
 		assert_eq!(Voip::from_bool(Some(false)), Voip::False);
 		assert_eq!(Voip::from_bool(Some(true)), Voip::True);
+	}
+
+	#[test]
+	fn field_accessors_and_status_mapping() {
+		assert_eq!(Field::<u16>::Unknown.value(), None);
+		assert_eq!(Field::Value(42_u16).value(), Some(&42));
+		assert_eq!(
+			Field::<u16>::from_status(FieldStatus::Ready),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Field::<u16>::from_status(FieldStatus::Unknown).unwrap(),
+			Field::Unknown
+		);
+		assert_eq!(FieldStatus::from_code(99), None);
+		assert_eq!(RadioGeneration::from_code(99), None);
+		assert_eq!(Voip::from_code(99), None);
+	}
+
+	#[test]
+	fn decode_rejects_inconsistent_and_oversized_wire() {
+		let valid = Snapshot {
+			carrier_name: Field::Value("Carrier".into()),
+			mcc: Field::Value(310),
+			mnc: Field::Value(260),
+			generation: RadioGeneration::FourG,
+			allows_voip: Voip::False,
+		}
+		.encode()
+		.unwrap();
+
+		let mut bad_status = valid.to_vec();
+		// Carrier status follows generation, voip, mcc×2, mnc×2 (6×u32 = 24).
+		bad_status[24] = 99;
+		assert_eq!(Snapshot::decode(&bad_status), Err(Error::InvalidArgument));
+
+		let mut bad_voip = valid.to_vec();
+		bad_voip[4] = 99;
+		assert_eq!(Snapshot::decode(&bad_voip), Err(Error::InvalidArgument));
+
+		let mut empty_ready = Encoder::with_capacity(64);
+		empty_ready.u32(RadioGeneration::TwoG as u32);
+		empty_ready.u32(Voip::True as u32);
+		encode_code(&mut empty_ready, &Field::Unavailable);
+		encode_code(&mut empty_ready, &Field::Unavailable);
+		empty_ready.u32(FieldStatus::Ready as u32);
+		empty_ready.bytes(b"").unwrap();
+		assert_eq!(
+			Snapshot::decode(&empty_ready.finish()),
+			Err(Error::InvalidArgument)
+		);
+
+		let mut named_unknown = Encoder::with_capacity(64);
+		named_unknown.u32(RadioGeneration::ThreeG as u32);
+		named_unknown.u32(Voip::Unknown as u32);
+		encode_code(&mut named_unknown, &Field::Unknown);
+		encode_code(&mut named_unknown, &Field::Unknown);
+		named_unknown.u32(FieldStatus::Unknown as u32);
+		named_unknown.bytes(b"leak").unwrap();
+		assert_eq!(
+			Snapshot::decode(&named_unknown.finish()),
+			Err(Error::InvalidArgument)
+		);
+
+		let oversized = "a".repeat(MAX_CARRIER_BYTES + 1);
+		let mut too_large = Encoder::with_capacity(64);
+		too_large.u32(RadioGeneration::FiveG as u32);
+		too_large.u32(Voip::Restricted as u32);
+		encode_code(&mut too_large, &Field::Restricted);
+		encode_code(&mut too_large, &Field::Restricted);
+		too_large.u32(FieldStatus::Ready as u32);
+		too_large.bytes(oversized.as_bytes()).unwrap();
+		assert_eq!(Snapshot::decode(&too_large.finish()), Err(Error::TooLarge));
+
+		let mut nonzero_unknown = Encoder::with_capacity(32);
+		nonzero_unknown.u32(RadioGeneration::Unknown as u32);
+		nonzero_unknown.u32(Voip::Unavailable as u32);
+		nonzero_unknown.u32(FieldStatus::Unknown as u32);
+		nonzero_unknown.u32(7);
+		encode_code(&mut nonzero_unknown, &Field::Unavailable);
+		nonzero_unknown.u32(FieldStatus::Unavailable as u32);
+		nonzero_unknown.bytes(b"").unwrap();
+		assert_eq!(
+			Snapshot::decode(&nonzero_unknown.finish()),
+			Err(Error::InvalidArgument)
+		);
 	}
 
 	#[cfg(any(

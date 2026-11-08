@@ -11,7 +11,6 @@ use futures::channel::oneshot;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
-use wasm_bindgen_futures::JsFuture;
 
 use crate::Asset;
 use crate::Error;
@@ -138,18 +137,14 @@ async fn image_size(uri: &str, mime: &str) -> (Option<u32>, Option<u32>) {
 	if !mime.starts_with("image/") {
 		return (None, None);
 	}
-	let document = match web_sys::window().and_then(|window| window.document()) {
-		Some(document) => document,
-		None => return (None, None),
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return (None, None);
 	};
-	let image = match document.create_element("img") {
-		Ok(element) => {
-			match element.dyn_into::<web_sys::HtmlImageElement>() {
-				Ok(image) => image,
-				Err(_) => return (None, None),
-			}
-		}
-		Err(_) => return (None, None),
+	let Ok(element) = document.create_element("img") else {
+		return (None, None);
+	};
+	let Ok(image) = element.dyn_into::<web_sys::HtmlImageElement>() else {
+		return (None, None);
 	};
 	let (sender, receiver) = oneshot::channel::<Result<(u32, u32), ()>>();
 	let sender = Rc::new(RefCell::new(Some(sender)));
@@ -199,12 +194,11 @@ mod tests {
 	async fn synthetic_image_file_is_bounded() {
 		let parts = js_sys::Array::new();
 		parts.push(&js_sys::Uint8Array::from(&[0xff_u8, 0xd8, 0xff][..]));
-		let file = web_sys::File::new_with_u8_array_sequence_and_options(
-			&parts,
-			"fixture.jpg",
-			web_sys::FilePropertyBag::new().type_("image/jpeg"),
-		)
-		.unwrap();
+		let props = web_sys::FilePropertyBag::new();
+		props.set_type("image/jpeg");
+		let file =
+			web_sys::File::new_with_u8_array_sequence_and_options(&parts, "fixture.jpg", &props)
+				.unwrap();
 		assert_eq!(
 			from_file(&file, Options::new(MediaKind::Images, 2).unwrap()).await,
 			Err(Error::TooLarge)
@@ -222,12 +216,40 @@ mod tests {
 	fn native_browser_failures_remain_distinct() {
 		for (name, expected) in [
 			("NotAllowedError", Error::PermissionDenied),
+			("SecurityError", Error::PermissionDenied),
 			("AbortError", Error::Cancelled),
+			("NotSupportedError", Error::Unavailable),
 			("NotReadableError", Error::Native),
 		] {
 			let error =
 				web_sys::DomException::new_with_message_and_name("synthetic", name).unwrap();
 			assert_eq!(failure(error.as_ref()), expected);
 		}
+	}
+
+	#[wasm_bindgen_test]
+	fn accept_covers_each_media_kind() {
+		assert_eq!(accept(MediaKind::Images), "image/*");
+		assert_eq!(accept(MediaKind::Videos), "video/*");
+		assert_eq!(accept(MediaKind::All), "image/*,video/*");
+	}
+
+	#[wasm_bindgen_test]
+	async fn video_mime_skips_dimension_probe() {
+		let parts = js_sys::Array::new();
+		parts.push(&js_sys::Uint8Array::from(&[0_u8, 1, 2, 3][..]));
+		let props = web_sys::FilePropertyBag::new();
+		props.set_type("video/mp4");
+		let file =
+			web_sys::File::new_with_u8_array_sequence_and_options(&parts, "fixture.mp4", &props)
+				.unwrap();
+		let asset = from_file(&file, Options::new(MediaKind::Videos, 4).unwrap())
+			.await
+			.unwrap();
+		assert_eq!(asset.mime_type.as_deref(), Some("video/mp4"));
+		assert_eq!(asset.width, None);
+		assert_eq!(asset.height, None);
+		assert_eq!(asset.size_bytes, Some(4));
+		web_sys::Url::revoke_object_url(&asset.uri).unwrap();
 	}
 }

@@ -206,6 +206,8 @@ pub mod web;
 
 #[cfg(test)]
 mod tests {
+	use leptoskit_bridge::codec::Encoder;
+
 	use super::*;
 
 	#[test]
@@ -214,14 +216,20 @@ mod tests {
 			Options::new(MediaKind::All, MAX_BYTES + 1),
 			Err(Error::TooLarge)
 		);
-		let options = Options::new(MediaKind::Videos, 1024).unwrap();
-		assert_eq!(Options::decode(&options.encode()), Ok(options));
+		for media in [MediaKind::Images, MediaKind::Videos, MediaKind::All] {
+			let options = Options::new(media, 1024).unwrap();
+			assert_eq!(Options::decode(&options.encode()), Ok(options));
+			assert_eq!(options.media(), media);
+			assert_eq!(options.max_bytes(), 1024);
+		}
 		assert_eq!(Options::default().media(), MediaKind::Images);
 		assert_eq!(Options::default().max_bytes(), MAX_BYTES);
+		assert_eq!(Options::images(), Options::default());
+		assert_eq!(MediaKind::from_code(9), None);
 		assert!(Options::decode(&[1, 2, 3]).is_err());
 		assert!(
 			Options::decode(&{
-				let mut bad = options.encode().to_vec();
+				let mut bad = Options::images().encode().to_vec();
 				bad[0] = 9;
 				bad
 			})
@@ -296,6 +304,17 @@ mod tests {
 				uri: "file:///a".into(),
 				mime_type: None,
 				width: None,
+				height: Some(u32::MAX),
+				size_bytes: None,
+			}
+			.encode(),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Asset {
+				uri: "file:///a".into(),
+				mime_type: None,
+				width: None,
 				height: None,
 				size_bytes: Some(u64::MAX),
 			}
@@ -311,6 +330,61 @@ mod tests {
 				size_bytes: None,
 			}
 			.encode(),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Asset {
+				uri: "file:///a".into(),
+				mime_type: Some("m".repeat(MAX_MIME_BYTES + 1)),
+				width: None,
+				height: None,
+				size_bytes: None,
+			}
+			.encode(),
+			Err(Error::InvalidArgument)
+		);
+	}
+
+	#[test]
+	fn decode_rejects_empty_or_oversized_uri_and_mime() {
+		let options = Options::default();
+		let mut empty_uri = Encoder::with_capacity(32);
+		empty_uri.bytes(b"").unwrap();
+		empty_uri.bytes(b"image/png").unwrap();
+		empty_uri.u32(u32::MAX);
+		empty_uri.u32(u32::MAX);
+		empty_uri.u32(u32::MAX);
+		empty_uri.u32(u32::MAX);
+		assert_eq!(
+			Asset::decode(&empty_uri.finish(), options),
+			Err(Error::InvalidArgument)
+		);
+
+		let mut long_uri = Encoder::with_capacity(64);
+		long_uri
+			.bytes("u".repeat(MAX_URI_BYTES + 1).as_bytes())
+			.unwrap();
+		long_uri.bytes(b"").unwrap();
+		long_uri.u32(1);
+		long_uri.u32(1);
+		long_uri.u32(0);
+		long_uri.u32(0);
+		assert_eq!(
+			Asset::decode(&long_uri.finish(), options),
+			Err(Error::InvalidArgument)
+		);
+
+		let mut long_mime = Encoder::with_capacity(64);
+		long_mime.bytes(b"file:///ok").unwrap();
+		long_mime
+			.bytes("m".repeat(MAX_MIME_BYTES + 1).as_bytes())
+			.unwrap();
+		long_mime.u32(1);
+		long_mime.u32(1);
+		long_mime.u32(0);
+		long_mime.u32(0);
+		assert_eq!(
+			Asset::decode(&long_mime.finish(), options),
 			Err(Error::InvalidArgument)
 		);
 	}
