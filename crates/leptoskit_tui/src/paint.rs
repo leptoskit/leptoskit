@@ -130,7 +130,8 @@ impl Painter<'_> {
 			| NativeKind::Rive
 			| NativeKind::Scene3d
 			| NativeKind::Video
-			| NativeKind::Camera => {
+			| NativeKind::Camera
+			| NativeKind::Map => {
 				self.image(rect, bg, dim);
 			}
 		}

@@ -418,7 +418,8 @@ impl UIKitBackend {
 			| NativeKind::Custom(_)
 			| NativeKind::Scene3d
 			| NativeKind::Video
-			| NativeKind::Camera => {
+			| NativeKind::Camera
+			| NativeKind::Map => {
 				(
 					UIView::initWithFrame(UIView::alloc(self.mtm), frame),
 					Control::Plain,

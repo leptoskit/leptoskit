@@ -65,6 +65,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		scene3d,
 		video,
 		camera,
+		map,
 		text,
 		source,
 		placeholder,
@@ -111,6 +112,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		&& scene3d.is_none()
 		&& video.is_none()
 		&& camera.is_none()
+		&& map.is_none()
 		&& text.is_none()
 		&& source.is_none()
 		&& placeholder.is_none()

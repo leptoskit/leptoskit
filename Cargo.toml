@@ -288,6 +288,7 @@ leptoskit_plugin_location = { path = "crates/leptoskit_plugin_location", version
 leptoskit_plugin_logging = { path = "crates/leptoskit_plugin_logging", version = "0.3.0" }
 leptoskit_plugin_magnetometer = { path = "crates/leptoskit_plugin_magnetometer", version = "0.3.0" }
 leptoskit_plugin_mail_composer = { path = "crates/leptoskit_plugin_mail_composer", version = "0.3.0" }
+leptoskit_plugin_maps = { path = "crates/leptoskit_plugin_maps", version = "0.3.0" }
 leptoskit_plugin_media_library = { path = "crates/leptoskit_plugin_media_library", version = "0.3.0" }
 leptoskit_plugin_menu = { path = "crates/leptoskit_plugin_menu", version = "0.3.0" }
 leptoskit_plugin_network = { path = "crates/leptoskit_plugin_network", version = "0.3.0" }

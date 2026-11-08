@@ -99,6 +99,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             (widget as? NativeScene3dView)?.close()
             (widget as? NativeVideoView)?.close()
             (widget as? NativeCameraView)?.close()
+            (widget as? NativeMapView)?.close()
         }
 
         widgets.removeAll()
@@ -208,11 +209,13 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
         case "scene3d", "Scene3d": widget = NativeScene3dView()
         case "video", "Video": widget = NativeVideoView()
         case "camera", "Camera": widget = NativeCameraView()
+        case "map", "Map": widget = NativeMapView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
         (widget as? NativeVideoView)?.show(player: item.props.video)
         (widget as? NativeCameraView)?.show(session: item.props.camera)
+        (widget as? NativeMapView)?.show(session: item.props.map)
         widget.tag = item.id
         widgets[item.id] = widget
         focusRequests[item.id] = item.props.focused
@@ -250,6 +253,7 @@ final class MobileWidgetRenderer: NSObject, UIScrollViewDelegate, NativeRiveSink
             (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
             (widget as? NativeVideoView)?.show(player: item.props.video)
             (widget as? NativeCameraView)?.show(session: item.props.camera)
+            (widget as? NativeMapView)?.show(session: item.props.map)
         }
 
         if let item = change.updateLayout, let widget = widgets[item.id] {

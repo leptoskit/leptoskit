@@ -18,6 +18,8 @@ pub enum ControlTreeError {
 	/// A camera session and an accessible label or decorative state are
 	/// required.
 	InvalidCamera,
+	/// A map session and an accessible label or decorative state are required.
+	InvalidMap,
 	/// A leaf widget cannot contain child widgets.
 	Children { kind: NativeKind },
 	/// Radio options require an explicit named group.
@@ -73,6 +75,12 @@ impl fmt::Display for ControlTreeError {
 			Self::InvalidCamera => {
 				formatter.write_str(
 					"use a Camera element with a session and an accessible label or \
+					 aria_hidden(true)",
+				)
+			}
+			Self::InvalidMap => {
+				formatter.write_str(
+					"use a Map element with a session and an accessible label or \
 					 aria_hidden(true)",
 				)
 			}

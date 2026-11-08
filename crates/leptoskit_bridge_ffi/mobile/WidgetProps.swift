@@ -37,6 +37,8 @@ struct WidgetProps: Decodable {
     let video: UInt32?
     /// The session a `Camera` shows; the `camera` plugin owns it.
     let camera: UInt32?
+    /// The session a `Map` shows; the `maps` plugin owns it.
+    let map: UInt32?
 }
 
 extension WidgetProps {
