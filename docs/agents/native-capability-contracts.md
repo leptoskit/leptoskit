@@ -124,7 +124,9 @@ Unit tests live in `leptoskit_codepush::capability` (determinism, versions, dupl
 
 ## Acceptance evidence, 7 November 2026
 
-Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `790ca64e` (#662, including merged #609 timers, #615 stores, #619 plugin hardening, #621 rollback safety, #628 badge/shortcut support, and #662 generated Linux runtime plugins), plus the acceptance fixes in the same pull request. The shared audit state and its full logs were removed by another owner during the run; this table is the retained record, and the final checks were rerun with the repository-pinned `nightly-2026-10-21` compiler recovered into a read-only Nix store.
+Final checks used the repository-pinned `nightly-2026-10-21` (`rustc 1.101.0-nightly (19833af72 2026-10-20)`) in an isolated rustup home with its `wasm32-unknown-unknown` std; the moving shared toolchain was not used.
+
+Tested tree: the four A06 commits from `5730b1c0e30c63da3740ff2595ee093f8977e8d2` rebased onto `origin/main` at `794f7adb` (#665, including merged #609 timers, #615 stores, #619 plugin hardening, #621 rollback safety, #628 badge/shortcut support, #662 generated Linux runtime plugins, and #665 Linux examples), plus the acceptance fixes in the same pull request. The shared audit state and its full logs were removed by another owner during the run; this table is the retained record, and the final checks were rerun with an isolated copy of the repository-pinned `nightly-2026-10-21` toolchain whose host files match the recovered read-only Nix store.
 
 | Check                                                                   | Result                                                                                                      |
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
