@@ -326,6 +326,18 @@ impl Element {
 			return Err(ControlTreeError::InvalidScene3d);
 		}
 
+		if (self.kind == NativeKind::Video) != self.props.video.is_some()
+			|| (self.kind == NativeKind::Video
+				&& self
+					.props
+					.accessibility_label
+					.as_deref()
+					.is_none_or(|label| label.trim().is_empty())
+				&& self.props.aria().hidden != Some(true))
+		{
+			return Err(ControlTreeError::InvalidVideo);
+		}
+
 		if self.kind == NativeKind::Rive
 			&& (self.props.rive.is_none()
 				|| self.props.source.is_some()
@@ -344,6 +356,7 @@ impl Element {
 			NativeKind::Image
 				| NativeKind::Rive
 				| NativeKind::Scene3d
+				| NativeKind::Video
 				| NativeKind::TextInput
 				| NativeKind::PasswordInput
 				| NativeKind::Switch
@@ -595,6 +608,24 @@ impl Element {
 	#[must_use]
 	pub fn scene(mut self, scene: leptoskit_3d::SceneId) -> Self {
 		self.props.scene3d = Some(scene.0);
+		self
+	}
+
+	/// A video surface the host owns, by player id. Give it an explicit size
+	/// and an accessible label, or mark it decorative with `aria_hidden`. The
+	/// guest changes the player through the `video` plugin, never by
+	/// re-rendering this element.
+	#[track_caller]
+	pub fn video(player: u32) -> Self {
+		let mut element = Self::new(NativeKind::Video);
+		element.props.video = Some(player);
+		element
+	}
+
+	/// Sets the player a `Video` view tag shows.
+	#[must_use]
+	pub fn player(mut self, player: u32) -> Self {
+		self.props.video = Some(player);
 		self
 	}
 

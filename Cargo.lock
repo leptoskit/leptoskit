@@ -3597,6 +3597,7 @@ dependencies = [
  "leptoskit_plugin_tracking_transparency",
  "leptoskit_plugin_tray",
  "leptoskit_plugin_updater",
+ "leptoskit_plugin_video",
  "leptoskit_plugin_web_browser",
  "leptoskit_plugin_websocket",
  "leptoskit_plugin_window_state",
@@ -6670,6 +6671,17 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "leptoskit_plugin_video"
+version = "0.3.0"
+dependencies = [
+ "js-sys",
+ "leptoskit_bridge",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

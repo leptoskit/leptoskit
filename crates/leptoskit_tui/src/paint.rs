@@ -125,7 +125,11 @@ impl Painter<'_> {
 			NativeKind::ActivityIndicator => self.activity(id, rect, fg, bg, attrs),
 			// Image and vector pixels, including Rive frames and 3D scenes, do
 			// not resolve to cells.
-			NativeKind::Image | NativeKind::Vector | NativeKind::Rive | NativeKind::Scene3d => {
+			NativeKind::Image
+			| NativeKind::Vector
+			| NativeKind::Rive
+			| NativeKind::Scene3d
+			| NativeKind::Video => {
 				self.image(rect, bg, dim);
 			}
 		}
