@@ -257,6 +257,7 @@ leptoskit_plugin_battery = { path = "crates/leptoskit_plugin_battery", version =
 leptoskit_plugin_brightness = { path = "crates/leptoskit_plugin_brightness", version = "0.3.0" }
 leptoskit_plugin_cellular = { path = "crates/leptoskit_plugin_cellular", version = "0.3.0" }
 leptoskit_plugin_clipboard = { path = "crates/leptoskit_plugin_clipboard", version = "0.3.0" }
+leptoskit_plugin_contacts = { path = "crates/leptoskit_plugin_contacts", version = "0.3.0" }
 leptoskit_plugin_crypto = { path = "crates/leptoskit_plugin_crypto", version = "0.3.0" }
 leptoskit_plugin_deep_link = { path = "crates/leptoskit_plugin_deep_link", version = "0.3.0" }
 leptoskit_plugin_device = { path = "crates/leptoskit_plugin_device", version = "0.3.0" }

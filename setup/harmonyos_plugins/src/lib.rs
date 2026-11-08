@@ -15,6 +15,7 @@ pub use leptoskit_plugin_battery;
 pub use leptoskit_plugin_brightness;
 pub use leptoskit_plugin_cellular;
 pub use leptoskit_plugin_clipboard;
+pub use leptoskit_plugin_contacts;
 pub use leptoskit_plugin_crypto;
 pub use leptoskit_plugin_deep_link;
 pub use leptoskit_plugin_device;

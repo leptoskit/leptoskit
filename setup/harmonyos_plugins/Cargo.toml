@@ -29,6 +29,7 @@ leptoskit_plugin_battery = { path = "../../crates/leptoskit_plugin_battery" }
 leptoskit_plugin_brightness = { path = "../../crates/leptoskit_plugin_brightness" }
 leptoskit_plugin_cellular = { path = "../../crates/leptoskit_plugin_cellular" }
 leptoskit_plugin_clipboard = { path = "../../crates/leptoskit_plugin_clipboard" }
+leptoskit_plugin_contacts = { path = "../../crates/leptoskit_plugin_contacts" }
 leptoskit_plugin_crypto = { path = "../../crates/leptoskit_plugin_crypto" }
 leptoskit_plugin_deep_link = { path = "../../crates/leptoskit_plugin_deep_link" }
 leptoskit_plugin_device = { path = "../../crates/leptoskit_plugin_device" }
@@ -64,8 +65,8 @@ leptoskit_plugin_pedometer = { path = "../../crates/leptoskit_plugin_pedometer" 
 leptoskit_plugin_permissions = { path = "../../crates/leptoskit_plugin_permissions" }
 leptoskit_plugin_picture_in_picture = { path = "../../crates/leptoskit_plugin_picture_in_picture" }
 leptoskit_plugin_posture = { path = "../../crates/leptoskit_plugin_posture" }
-leptoskit_plugin_print = { path = "../../crates/leptoskit_plugin_print" }
 leptoskit_plugin_power_monitor = { path = "../../crates/leptoskit_plugin_power_monitor" }
+leptoskit_plugin_print = { path = "../../crates/leptoskit_plugin_print" }
 leptoskit_plugin_screen_capture = { path = "../../crates/leptoskit_plugin_screen_capture" }
 leptoskit_plugin_screen_orientation = { path = "../../crates/leptoskit_plugin_screen_orientation" }
 leptoskit_plugin_secure_store = { path = "../../crates/leptoskit_plugin_secure_store" }

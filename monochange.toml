@@ -89,6 +89,7 @@ packages = [
 	"leptoskit_plugin_crypto",
 	"leptoskit_plugin_os",
 	"leptoskit_plugin_clipboard",
+	"leptoskit_plugin_contacts",
 	"leptoskit_plugin_haptics",
 	"leptoskit_plugin_home_widgets",
 	"leptoskit_plugin_battery",
@@ -352,6 +353,9 @@ path = "crates/leptoskit_plugin_os"
 
 [package.leptoskit_plugin_clipboard]
 path = "crates/leptoskit_plugin_clipboard"
+
+[package.leptoskit_plugin_contacts]
+path = "crates/leptoskit_plugin_contacts"
 
 [package.leptoskit_plugin_haptics]
 path = "crates/leptoskit_plugin_haptics"

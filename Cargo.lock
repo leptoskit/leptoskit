@@ -3547,6 +3547,7 @@ dependencies = [
  "leptoskit_plugin_brightness",
  "leptoskit_plugin_cellular",
  "leptoskit_plugin_clipboard",
+ "leptoskit_plugin_contacts",
  "leptoskit_plugin_crypto",
  "leptoskit_plugin_deep_link",
  "leptoskit_plugin_device",
@@ -6049,6 +6050,13 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_plugin_contacts"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]
