@@ -138,6 +138,10 @@ enum Command {
 	},
 	/// A service or async plugin has work: run a step for it.
 	Wake,
+	/// A platform background tick (an Android foreground-service interval or an
+	/// iOS background task): run a step so the service can poll, and mark the
+	/// reason so the service can tell it from an app call.
+	BackgroundWake,
 	RiveTick {
 		elapsed: Duration,
 		environment: RiveEnvironment,
@@ -268,7 +272,8 @@ impl Shared {
 				}
 			}
 
-			(Command::Wake, Some(Command::Wake)) => {}
+			(Command::Wake, Some(Command::Wake))
+			| (Command::BackgroundWake, Some(Command::BackgroundWake)) => {}
 			_ => state.commands.push_back(command),
 		}
 
@@ -519,6 +524,17 @@ pub unsafe extern "C" fn lk_guest_frame_requested(guest: *const Guest) -> i32 {
 pub unsafe extern "C" fn lk_guest_wake(guest: *const Guest) -> i32 {
 	// SAFETY: The caller lends a live guest.
 	unsafe { post(guest, Command::Wake) }
+}
+
+/// Runs a guest step for a platform background tick, marking the wake reason so
+/// the app's service can tell it from an ordinary app call.
+///
+/// # Safety
+/// `guest` is null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_guest_wake_background(guest: *const Guest) -> i32 {
+	// SAFETY: The caller lends a live guest.
+	unsafe { post(guest, Command::BackgroundWake) }
 }
 
 /// Completes a platform plugin call, as `lk_bridge_complete` does: `error` 0
@@ -874,6 +890,10 @@ fn step(
 			Command::Complete { id, reply } => complete(app, id, reply),
 			Command::CompleteWorker { id, reply } => complete_worker(app, id, *reply),
 			Command::Wake => 0,
+			Command::BackgroundWake => {
+				app.set_service_wake_reason(super::ServiceWakeReason::Background);
+				0
+			}
 			Command::RiveTick {
 				elapsed,
 				environment,
@@ -1126,6 +1146,7 @@ mod tests {
 			} => format!("scroll {node} {offset_y}"),
 			Command::Event { node, .. } => format!("event {node}"),
 			Command::Wake => "wake".into(),
+			Command::BackgroundWake => "background wake".into(),
 			_ => "other".into(),
 		}
 	}

@@ -93,6 +93,8 @@ void lk_app_destroy(lk_app *app);
  * All callbacks must be nonnull; invalid tables retain caller ownership. */
 int32_t lk_app_activate_service(lk_app *app, lk_service_callbacks callbacks);
 int32_t lk_app_poll_service(lk_app *app);
+/* 0 is an ordinary app entry; 1 is a platform background tick. */
+int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason);
 /* Host text measurement. measure lays out len UTF-8 bytes at font_size logical
  * points, CSS font_weight (400-700), and rtl direction within width logical
  * points (-1 unbounded, -2 the widest word), writes the logical width and
@@ -351,6 +353,7 @@ int32_t lk_guest_frame_requested(const lk_guest *guest);
 
 /* For a service or async plugin wake. */
 int32_t lk_guest_wake(const lk_guest *guest);
+int32_t lk_guest_wake_background(const lk_guest *guest);
 /* lk_bridge_complete's arguments; the bytes are copied. */
 int32_t lk_guest_complete(const lk_guest *guest, uint64_t id, int32_t error,
                           const uint8_t *data, size_t len);

@@ -1,0 +1,57 @@
+[package]
+name = "leptoskit_plugin_background"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Keep an app working in the background for LeptosKit."
+
+[package.metadata.leptoskit.runtime]
+name = "background"
+apple-module = "LeptosKitBackground"
+apple-type = "BackgroundPlugin"
+android-type = "dev.leptoskit.plugins.background.BackgroundPlugin"
+android-context = true
+android-permissions = [
+	"android.permission.POST_NOTIFICATIONS",
+	"android.permission.RECEIVE_BOOT_COMPLETED",
+	"android.permission.FOREGROUND_SERVICE",
+	"android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+	"android.permission.FOREGROUND_SERVICE_HEALTH",
+	"android.permission.FOREGROUND_SERVICE_MICROPHONE",
+	"android.permission.FOREGROUND_SERVICE_LOCATION",
+	"android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+	"android.permission.WAKE_LOCK",
+	"android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+]
+android-services = [
+	{ name = "dev.leptoskit.plugins.background.BackgroundService", foreground-service-type = "dataSync|health|microphone|location|connectedDevice" },
+]
+android-receivers = [
+	{ name = "dev.leptoskit.plugins.background.BootReceiver", exported = false, actions = ["android.intent.action.BOOT_COMPLETED"] },
+]
+android-dependencies = ["androidx.work:work-runtime-ktx:2.9.1"]
+apple-background-modes = ["fetch", "processing"]
+apple-bg-task-identifiers = ["dev.leptoskit.background.refresh", "dev.leptoskit.background.processing"]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+
+[dev-dependencies]
+libtest-mimic = { workspace = true }
+
+[lints]
+workspace = true

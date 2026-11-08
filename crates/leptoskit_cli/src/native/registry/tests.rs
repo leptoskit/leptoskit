@@ -366,6 +366,75 @@ fn validates_android_intent_schemes_and_complete_metadata_before_generating_xml(
 }
 
 #[test]
+fn validates_android_components_and_apple_background_keys() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+
+	let runtime = |extra: serde_json::Value| {
+		let mut metadata = metadata("Plugin");
+		let object = metadata.packages[2]
+			.metadata
+			.pointer_mut("/leptoskit/runtime")
+			.unwrap()
+			.as_object_mut()
+			.unwrap();
+
+		for (key, value) in extra.as_object().unwrap() {
+			object.insert(key.clone(), value.clone());
+		}
+
+		metadata
+	};
+
+	// Valid service and receiver declarations.
+	let valid = json!({
+		"android-services": [{"name":"dev.leptoskit.plugins.background.BackgroundService",
+			"foreground-service-type":"dataSync|health"}],
+		"android-receivers": [{"name":"dev.leptoskit.plugins.background.BootReceiver",
+			"exported":false, "actions":["android.intent.action.BOOT_COMPLETED"]}],
+		"apple-background-modes": ["fetch", "processing"],
+		"apple-bg-task-identifiers": ["dev.leptoskit.background.refresh"]
+	});
+	assert!(resolve_metadata(runtime(valid), &config).is_ok());
+
+	for (key, value, ok) in [
+		(
+			"android-services",
+			json!([{"name":"no-dots", "foreground-service-type":"dataSync"}]),
+			false,
+		),
+		(
+			"android-services",
+			json!([{"name":"dev.Bad", "foreground-service-type":"data sync"}]),
+			false,
+		),
+		(
+			"android-services",
+			json!([{"name":"dev.Bad", "foreground-service-type":"dataSync|"}]),
+			false,
+		),
+		(
+			"android-receivers",
+			json!([{"name":"dev.Bad", "actions":["single"]}]),
+			false,
+		),
+		("apple-background-modes", json!(["fetch mode"]), false),
+		("apple-bg-task-identifiers", json!(["no-dots"]), false),
+	] {
+		let mut metadata = metadata("Plugin");
+		metadata.packages[2]
+			.metadata
+			.pointer_mut("/leptoskit/runtime")
+			.unwrap()
+			.as_object_mut()
+			.unwrap()
+			.insert(key.into(), value);
+		assert_eq!(resolve_metadata(metadata, &config).is_ok(), ok, "{key}");
+	}
+}
+
+#[test]
 fn validates_required_apple_keys_and_maven_coordinates_before_generation() {
 	let mut config = LeptoskitConfig::default();
 	config.app.name = "app".into();

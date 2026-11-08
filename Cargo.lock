@@ -5929,6 +5929,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_background"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+ "libtest-mimic",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "leptoskit_plugin_badge"
 version = "0.3.0"
 dependencies = [

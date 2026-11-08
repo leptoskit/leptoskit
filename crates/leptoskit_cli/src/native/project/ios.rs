@@ -105,6 +105,8 @@ pub(super) fn generate(
 		&package_root,
 		icon,
 		&linked_frameworks(registry)?,
+		&background_modes(registry),
+		&bg_task_identifiers(registry),
 	)?;
 	targets(&mut objects, &products, &package_refs, &extras)?;
 	write(
@@ -411,6 +413,7 @@ pub(in crate::native) fn linked_frameworks(registry: &Registry) -> Result<String
 	))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ios_configurations(
 	objects: &mut String,
 	root: &Path,
@@ -418,8 +421,10 @@ fn ios_configurations(
 	package_root: &Path,
 	icon: bool,
 	frameworks: &str,
+	background_modes: &[String],
+	bg_task_identifiers: &[String],
 ) -> Result<()> {
-	let info = versioned_info_plist(root)?;
+	let info = versioned_info_plist(root, background_modes, bg_task_identifiers)?;
 	let version = marketing_version(config);
 	let icon = if icon {
 		" ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;"
@@ -473,8 +478,13 @@ fn marketing_version(config: &leptoskit_config::LeptoskitConfig) -> String {
 /// The app-owned `Info.plist` with its two version keys read from the build
 /// settings, so `app.version` and the build number `leptoskit publish`
 /// chooses reach the app: `.leptoskit/ios/Info.plist`. Without an app-owned
-/// plist, Xcode is pointed at the missing file and says so.
-fn versioned_info_plist(root: &Path) -> Result<std::path::PathBuf> {
+/// plist, Xcode is pointed at the missing file and says so. Selected plugins
+/// contribute `UIBackgroundModes` and `BGTaskSchedulerPermittedIdentifiers`.
+fn versioned_info_plist(
+	root: &Path,
+	background_modes: &[String],
+	bg_task_identifiers: &[String],
+) -> Result<std::path::PathBuf> {
 	let owned = super::super::host_dir(root, Target::Ios).join("Info.plist");
 	let Ok(mut plist) = plist::Value::from_file(&owned) else {
 		return Ok(owned);
@@ -490,12 +500,75 @@ fn versioned_info_plist(root: &Path) -> Result<std::path::PathBuf> {
 		"CFBundleVersion".into(),
 		"$(CURRENT_PROJECT_VERSION)".into(),
 	);
+	merge_string_array(dictionary, "UIBackgroundModes", background_modes);
+	merge_string_array(
+		dictionary,
+		"BGTaskSchedulerPermittedIdentifiers",
+		bg_task_identifiers,
+	);
 	let mut xml = Vec::new();
 	plist.to_writer_xml(&mut xml)?;
 
 	let generated = root.join(".leptoskit/ios/Info.plist");
 	write(&generated, &String::from_utf8(xml)?)?;
 	Ok(generated)
+}
+
+/// Unions plugin-declared string values into an existing array key, preserving
+/// the app's own entries and dropping duplicates.
+fn merge_string_array(dictionary: &mut plist::Dictionary, key: &str, values: &[String]) {
+	if values.is_empty() {
+		return;
+	}
+
+	let mut merged: Vec<String> = dictionary
+		.get(key)
+		.and_then(plist::Value::as_array)
+		.into_iter()
+		.flatten()
+		.filter_map(|value| value.as_string().map(str::to_owned))
+		.collect();
+
+	for value in values {
+		if !merged.iter().any(|existing| existing == value) {
+			merged.push(value.clone());
+		}
+	}
+
+	dictionary.insert(
+		key.to_owned(),
+		plist::Value::Array(merged.into_iter().map(plist::Value::String).collect()),
+	);
+}
+
+fn background_modes(registry: &Registry) -> Vec<String> {
+	let mut seen = std::collections::BTreeSet::new();
+	let mut output = Vec::new();
+
+	for plugin in &registry.plugins {
+		for mode in &plugin.apple_background_modes {
+			if seen.insert(mode.clone()) {
+				output.push(mode.clone());
+			}
+		}
+	}
+
+	output
+}
+
+fn bg_task_identifiers(registry: &Registry) -> Vec<String> {
+	let mut seen = std::collections::BTreeSet::new();
+	let mut output = Vec::new();
+
+	for plugin in &registry.plugins {
+		for identifier in &plugin.apple_bg_task_identifiers {
+			if seen.insert(identifier.clone()) {
+				output.push(identifier.clone());
+			}
+		}
+	}
+
+	output
 }
 fn id(number: usize) -> String {
 	format!("{number:024X}")
@@ -905,7 +978,7 @@ mod tests {
 				.replace("__NAME__", "notes"),
 		)
 		.unwrap();
-		let generated = super::versioned_info_plist(root).unwrap();
+		let generated = super::versioned_info_plist(root, &[], &[]).unwrap();
 		assert_eq!(generated, root.join(".leptoskit/ios/Info.plist"));
 		let plist = plist::Value::from_file(&generated).unwrap();
 

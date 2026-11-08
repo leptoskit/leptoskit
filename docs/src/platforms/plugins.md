@@ -189,3 +189,14 @@ The metadata `name` selects the package in `native.plugins`; it does not rename 
 A service runs when the host wakes it or your app calls in; never poll on an idle timer or detach native tasks. Closing joins its native work. Registration code is generated for macOS, iOS, and Android; the Windows and Linux hosts don't run services yet.
 
 For example, a Solana client belongs in a service like this, as ordinary off-chain Rust; leptoskit itself has no Solana dependency.
+
+## Android background work
+
+The `background` plugin keeps an app's process alive on Android with a foreground `Service` and wakes the app's `AppService` on a schedule. Android's background limits still apply, and they are stricter on newer versions:
+
+- **Foreground service types.** Android 14 (API 34) requires every foreground service to declare a `foregroundServiceType`, and each type needs its matching `FOREGROUND_SERVICE_*` permission. The plugin declares `dataSync`, `health`, `microphone`, `location`, and `connectedDevice` and the permissions for each.
+- **Background starts are restricted.** Android 14 limits which service types may be started while the app is in the background: `dataSync` and `health` are generally disallowed unless the app meets a narrow exemption (for example, a media or location use case), while `connectedDevice` and `location` have additional runtime requirements. Starting the service from the foreground activity works; restarting it from the background, after a reboot, or from WorkManager can be blocked for those types.
+- **Battery optimisation.** Doze and app standby can defer or kill background work. The plugin can ask the user to exempt the app (`request_ignore_battery_optimizations`), which the user can always refuse.
+- **No fixed cadence is promised.** The foreground service wakes the app on the configured interval while it is allowed to run; the WorkManager fallback runs at most every 15 minutes and only when the system permits it. The system can still kill a service it judges abusive.
+
+On iOS, the same plugin registers `BGTaskScheduler` app-refresh and processing tasks. iOS gives no guarantee of continuous execution: the system schedules those tasks at its own discretion, so an app cannot promise a fixed wake interval there.

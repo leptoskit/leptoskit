@@ -39,6 +39,33 @@ pub struct ServiceWork {
 /// Ready, including an error, means all service-owned work has actually joined.
 pub type ServiceClose = Pin<Box<dyn Future<Output = Result<(), Error>>>>;
 
+/// Why the host is polling the service right now.
+///
+/// A background tick comes from the platform's background machinery (an Android
+/// foreground service interval or an iOS background task). An app call is any
+/// ordinary guest entry point. The host sets this before each poll, and it is
+/// consumed after the poll returns, so a service that wants the value must
+/// retain it in [`AppService::set_wake_reason`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServiceWakeReason {
+	/// An ordinary guest entry point or the service's own async completion.
+	#[default]
+	App,
+	/// A platform background tick.
+	Background,
+}
+impl ServiceWakeReason {
+	/// Decodes the reason from the FFI boundary: 0 is [`Self::App`], 1 is
+	/// [`Self::Background`].
+	pub fn decode(value: i32) -> Result<Self, Error> {
+		match value {
+			0 => Ok(Self::App),
+			1 => Ok(Self::Background),
+			_ => Err(Error::InvalidArgument),
+		}
+	}
+}
+
 /// One application-selected service may register several explicit capabilities.
 ///
 /// Poll only borrows the actual interpreter synchronously. Native I/O futures
@@ -52,6 +79,11 @@ pub trait AppService {
 		host: &mut WasmHost<HeadlessBackend>,
 		context: &mut Context<'_>,
 	) -> Result<ServiceWork, Error>;
+
+	/// Receives the reason for the imminent [`Self::poll`]. The default ignores
+	/// it; a service that distinguishes a background tick from an app call
+	/// overrides this to retain the value until the next poll.
+	fn set_wake_reason(&mut self, _reason: ServiceWakeReason) {}
 
 	/// Stops admission and invalidates delivery synchronously, then returns the
 	/// owned future that cancels and joins all service work.
@@ -136,10 +168,12 @@ impl ServiceState {
 	pub(super) fn poll(
 		&mut self,
 		host: &mut WasmHost<HeadlessBackend>,
+		reason: ServiceWakeReason,
 	) -> Result<ServiceWork, Error> {
 		let Self::Active { service, wake } = self else {
 			return Err(Error::Unavailable);
 		};
+		service.set_wake_reason(reason);
 		let waker = wake.waker();
 		service.poll(host, &mut Context::from_waker(&waker))
 	}

@@ -105,6 +105,8 @@ class LeptosKitView(
             NativeApp.enableScene3d(app)
             guest = NativeApp.guestSpawn(app, GuestNotifier(handler) { runUi { drain() } })
             check(guest != 0L) { "Cannot start the guest thread" }
+            // A background plugin wakes the service through this host hook.
+            NativeServiceWakeBroker.install { if (guest != 0L) NativeApp.guestWakeBackground(guest) }
             riveAnimator =
                 NativeRiveAnimator(
                     this,
@@ -136,6 +138,7 @@ class LeptosKitView(
 
         if (closeStarted) return
         closeStarted = true
+        NativeServiceWakeBroker.install(null)
         riveAnimator?.close()
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         frameScheduled = false
