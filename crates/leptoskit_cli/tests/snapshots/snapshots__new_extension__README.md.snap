@@ -20,15 +20,11 @@ All six destinations are enabled in `leptoskit.toml`. Each build activates exact
 
 `src/main.rs` starts the SSR server and serves browser files. The backend's `health` server function answers `GET /api/health`, and `#[api]` publishes it: `leptoskit rpc spec` prints the published API, and `leptoskit rpc generate --target typescript` writes a typed client for it. Shared assets live in `assets/`. `web/index.html` supplies the document for CSR mode (`app.render = "csr"`); SSR uses the shared app's `shell` function.
 
-## Platform overrides
+## File routes
 
-`snapshotted_app/src/routes.rs` declares the home module once:
+Screens live under `snapshotted_app/src/routes/`. The `router` plugin regenerates `snapshotted_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
 
-```rust
-leptoskit::platform_module!(pub mod home = "routes/home");
-```
-
-The module path is relative to the app crate's `src/` directory. Add `routes/home.ios.rs`, `routes/home.android.rs`, `routes/home.web.rs`, `routes/home.macos.rs`, `routes/home.windows.rs`, or `routes/home.linux.rs` to replace `routes/home.rs` on that platform. Imports stay `crate::routes::home`. The shared file is the fallback; replacements must expose the same interface. Use this declaration for any module that needs platform overrides. The build helper watches additions and removals of override files.
+For a module that is not a route — a reusable component, for example — `leptoskit::platform_module!` still picks a per-platform file (`thing.ios.rs`, `thing.android.rs`, …) beside the shared one. Per-platform *route* files are not supported yet; use `cfg!(feature = "…")` inside a route when one platform must differ.
 
 `ios/`, `android/`, `macos/`, `windows/`, and `linux/` are app-owned platform runners. Install the matching SDK when building a destination. All generated registrants, SDK integration files, and build intermediates stay under `.leptoskit/<platform>/`, which is ignored by Git. Prepare a native target before opening its generated Xcode project or the app-owned `android/` Gradle project.
 

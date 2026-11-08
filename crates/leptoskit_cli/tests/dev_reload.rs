@@ -129,7 +129,7 @@ fn scaffold(platform: &str) -> PathBuf {
 }
 
 fn edit(app: &Path, from: &str, to: &str) {
-	let screen = app.join("reload_app/src/routes/home.rs");
+	let screen = app.join("reload_app/src/routes/index.rs");
 	let source = std::fs::read_to_string(&screen).unwrap();
 	assert!(source.contains(from), "the scaffold's screen changed");
 	std::fs::write(&screen, source.replace(from, to)).unwrap();

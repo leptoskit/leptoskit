@@ -468,7 +468,13 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 	);
 
 	let lib = fs::read_to_string(app.join("lib.rs")).expect("the app lib exists");
-	let home = fs::read_to_string(app.join("routes/home.rs")).expect("the home route exists");
+	let home = fs::read_to_string(app.join("routes/index.rs")).expect("the home route exists");
+	let routes = fs::read_to_string(app.join("routes.rs")).expect("the generated routes exist");
+
+	assert!(
+		routes.contains("@generated") && routes.contains("Navigation"),
+		"the scaffold must commit a generated file-router module: {routes}"
+	);
 
 	if auth {
 		assert!(

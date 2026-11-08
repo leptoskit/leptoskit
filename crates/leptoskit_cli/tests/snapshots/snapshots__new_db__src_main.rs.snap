@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// The database, migrated before the first request.
 	let url = std::env::var("DATABASE_URL")
 		.unwrap_or_else(|_| "sqlite://snapshotted.sqlite3".to_owned());
+
 	let db = leptoskit::db::Db::connect(&url).await?;
 
 	for name in db

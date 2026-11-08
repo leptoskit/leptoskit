@@ -13,7 +13,7 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-web = ["leptoskit/web", "dep:leptos", "dep:wasm-bindgen"]
+web = ["leptoskit/web", "leptoskit_router/web", "dep:leptos", "dep:wasm-bindgen"]
 native = ["leptoskit/guest"]
 ios = ["native", "leptoskit/ios"]
 android = ["native", "leptoskit/android"]
@@ -30,6 +30,9 @@ devtools = ["leptoskit/devtools"]
 [dependencies]
 snapshotted_shared = { path = "../snapshotted_shared" }
 leptoskit = { version = "=[version]", default-features = false }
+leptoskit_router = { version = "=[version]", default-features = false }
+# Holds app state the file-router pages read through context.
+reactive_graph = "0.3.0-rc0"
 leptos = { version = "0.9.0-rc0", default-features = false, optional = true }
 # The embedded wasm-bindgen CLI accepts exactly its matching library version.
 wasm-bindgen = { version = "=0.2.129", optional = true }

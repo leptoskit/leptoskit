@@ -381,12 +381,37 @@ fn generated_application_shares_behavior_and_selects_platform_overrides() {
 		);
 	}
 
-	let shared = fs::read_to_string(project.join("counter_app/src/routes/home.rs"))
-		.expect("shared home screen");
-	let override_file = project.join("counter_app/src/routes/home.ios.rs");
+	// File routes reject per-platform route files; platform_module still
+	// selects overrides for non-route modules such as components.
+	let components = project.join("counter_app/src/components");
+	fs::write(
+		components.join("mod.rs"),
+		"//! Reusable application components shared by all \
+		 platforms.\n\nleptoskit::platform_module!(pub mod heading = \"heading\");\n",
+	)
+	.expect("declare a platform_module heading");
+	fs::write(
+		components.join("heading.rs"),
+		"//! The home screen's greeting.\n\npub fn text() -> &'static str { \"Hello, leptoskit\" \
+		 }\n",
+	)
+	.expect("shared heading");
+	let index = project.join("counter_app/src/routes/index.rs");
+	let source = fs::read_to_string(&index).expect("home route");
+	fs::write(
+		&index,
+		source.replace(
+			"Text(\"Hello, leptoskit\")",
+			"Text(crate::components::heading::text())",
+		),
+	)
+	.expect("route uses the heading module");
+	assert_counter(&compile_guest(&project, "ios"), "Hello, leptoskit");
+
+	let override_file = components.join("heading.ios.rs");
 	fs::write(
 		&override_file,
-		shared.replace("Text(\"Hello, leptoskit\")", "Text(ios_probe::heading())"),
+		"//! iOS greeting.\n\npub fn text() -> &'static str { ios_probe::heading() }\n",
 	)
 	.expect("add iOS override after first build");
 	assert_counter(&compile_guest(&project, "ios"), "Hello from iOS");

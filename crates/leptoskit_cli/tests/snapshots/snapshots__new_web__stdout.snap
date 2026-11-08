@@ -2,7 +2,7 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-✔ created [ROOT]/snapshotted (all platforms; default: web)
+✔ created [ROOT]/snapshotted (platforms: web, ios, android, macos, windows, linux; default: web)
   next: cd [ROOT]/snapshotted && leptoskit build
   then: leptoskit doctor checks every tool your platforms build with
 working with a coding agent? give it leptoskit's skill: leptoskit skill install

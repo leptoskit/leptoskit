@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// The database, migrated before the first request.
 	let url = std::env::var("DATABASE_URL")
 		.unwrap_or_else(|_| "sqlite://snapshotted.sqlite3".to_owned());
+
 	let db = leptoskit::db::Db::connect(&url).await?;
 
 	for name in db
@@ -85,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// `[auth] origin` names the site, the socket refuses pages from anywhere
 	// else; native apps, which send no `Origin`, sign in with a token.
 	let operations = snapshotted_backend::operations(db.clone()).identify(auth.clone());
+
 	let live = match auth.origin() {
 		Some(origin) => operations.live().origin(origin),
 		None => operations.live(),

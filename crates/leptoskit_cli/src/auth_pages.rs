@@ -203,7 +203,7 @@ pub(crate) fn pages(mode: Mode) -> Vec<(&'static str, String)> {
 }
 
 /// The route files, relative to the routes directory, in `mode`.
-fn routes(mode: Mode) -> Vec<(&'static str, String)> {
+pub(crate) fn routes(mode: Mode) -> Vec<(&'static str, String)> {
 	ROUTES
 		.iter()
 		.filter_map(|(file, base, with_idp)| {

@@ -23,8 +23,8 @@ The `leptoskit` command (or `lk`) does the work. Run it from the project root. `
 ## Working rules
 
 - Read `leptoskit.toml` first: `[app].platforms`, `[extension]`, `[publish]`, and `[db]` decide what the commands do.
-- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). `--platform` only picks the default destination; there is no frontend-only flag. For a web-only app, set `platforms = ["web"]` (and `default_platform = "web"`) in `leptoskit.toml` after scaffolding and keep `render = "ssr"`. For separate marketing / product / admin deployments, use `leptoskit new shop --frontends landing,app,admin` (see the workspaces guide). `leptoskit lint` then skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare just to get a green deny-warnings run. You may also drop unused host crates from `[workspace].members` to keep the tree lean. Keep `plugins = []` and Cargo `default-features = false` until you need a feature; see the small-bundles guide before turning on islands, split budgets, or extra plugins.
-- Default screens live under the app crate's `src/routes/` and are declared by hand in `src/routes.rs` with `leptoskit::platform_module!`. That file is yours to edit. File routes that regenerate `routes.rs` are optional: enable the `router` plugin in `leptoskit.toml`, then let `leptoskit` regenerate the module (see the file-routes guide).
+- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), the file router (`[[plugins]] name = "router"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). `--platform` only picks the default destination; there is no frontend-only flag. For a web-only app, set `platforms = ["web"]` (and `default_platform = "web"`) in `leptoskit.toml` after scaffolding and keep `render = "ssr"`. For separate marketing / product / admin deployments, use `leptoskit new shop --frontends landing,app,admin` (see the workspaces guide). `leptoskit lint` then skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare just to get a green deny-warnings run. You may also drop unused host crates from `[workspace].members` to keep the tree lean. Keep Cargo `default-features = false` until you need a feature; leave the router plugin on unless the app truly has no screens. See the small-bundles guide before turning on islands, split budgets, or extra plugins.
+- Default screens live under the app crate's `src/routes/` (`index.rs`, `_layout.rs`, …). The router plugin regenerates `src/routes.rs` on `leptoskit dev` / `build` (or `leptoskit plugin:router routes`); do not edit that generated module by hand. For non-route modules that need a different file per platform, use `leptoskit::platform_module!` (see the creating guide).
 - New projects pin a `rust-toolchain.toml` so `edition = "2024"` builds even when rustup's default toolchain is older. Prefer that pin (or the matching SDK channel when using `--sdk-path`) over a stale global default.
 - Tailwind classes are checked when a screen renders: an unsupported class panics with its name. Use the ones the project already uses, or check the CSS coverage page of the docs.
 - Generated output lives in `.leptoskit/` and `dist/`; never edit it.
@@ -50,7 +50,7 @@ When you write leptoskit code, write builder calls, not `view!` markup:
 
 ### Enforce it in the projects you work on
 
-`leptoskit lint` checks the markup style from `leptoskit.toml`. `leptoskit new` already writes builder lint for new apps (the starter home screen is builders):
+`leptoskit lint` checks the markup style from `leptoskit.toml`. `leptoskit new` already writes builder lint for new apps (the starter file-router screens are builders, with `#[component]` on each `Page` / `Layout`):
 
 ```toml
 [lint]

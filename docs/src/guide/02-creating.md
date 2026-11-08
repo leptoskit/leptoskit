@@ -1,6 +1,6 @@
 # Creating a project
 
-`leptoskit new` creates one app that runs in the browser and as a native app on iOS, Android, macOS, Windows, and Linux. You write the screens once; each platform draws them with its own widgets. The starter uses server-side rendering (`app.render = "ssr"`), writes builder-mode `[lint]` to match the starter screens, and pins a `rust-toolchain.toml` so the `edition = "2024"` workspace builds even when rustup's default toolchain is older.
+`leptoskit new` creates one app that runs in the browser and as a native app on iOS, Android, macOS, Windows, and Linux. You write the screens once; each platform draws them with its own widgets. The starter uses server-side rendering (`app.render = "ssr"`), turns on the file router (`[[plugins]] name = "router"`), writes builder-mode `[lint]` to match the starter screens, and pins a `rust-toolchain.toml` so the `edition = "2024"` workspace builds even when rustup's default toolchain is older.
 
 ```bash
 leptoskit new water
@@ -22,15 +22,18 @@ That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/`. See [App
 
 ```text
 water/
-├── leptoskit.toml        app name, enabled platforms, build settings
+├── leptoskit.toml        app name, platforms, file router, lint
 ├── Cargo.toml            the web server package and the workspace
 ├── src/main.rs           the web server: renders pages and mounts the backend
 ├── water_app/            your app: screens, components, state
 │   ├── build.rs          turns on per-platform files (see below)
 │   └── src/
 │       ├── lib.rs        entry points for the browser, the server, and native apps
-│       ├── routes.rs     declares the home screen module
-│       ├── routes/home.rs  the home screen
+│       ├── routes.rs     generated from routes/; do not edit by hand
+│       ├── routes/
+│       │   ├── index.rs       `/` — the home screen
+│       │   ├── _layout.rs     chrome around every screen
+│       │   └── +not-found.rs  unmatched URLs
 │       ├── components/   reusable pieces of UI
 │       └── services/     app state, such as the counter
 ├── water_backend/        server-only code, such as the `health` check at `GET /api/health`
@@ -42,22 +45,30 @@ water/
                           one small native app per platform, which runs water_app
 ```
 
-Most of your work happens in `water_app`. The platform folders hold what only that platform needs: its permissions, its startup code, and its native dependencies. Build output goes into `.leptoskit/`, which is ignored by Git.
+Most of your work happens in `water_app`. Screens are files under `routes/`; the router plugin regenerates `routes.rs` when you build. The platform folders hold what only that platform needs: its permissions, its startup code, and its native dependencies. Build output goes into `.leptoskit/`, which is ignored by Git.
 
 ## Make it yours
 
-The starter counter is deliberately plain. Here is a screen that shows what leptoskit is for: one function, drawn by six different toolkits, that tells you which one is drawing it. Replace `water_app/src/routes/home.rs` with:
+The starter counter is deliberately plain. Here is a screen that shows what leptoskit is for: one page, drawn by six different toolkits, that tells you which one is drawing it. Replace `water_app/src/routes/index.rs` with:
 
 ```rust
 use leptoskit::prelude::*;
+use leptoskit_router::Route;
 
 use crate::Counter;
 
 /// Glasses of water in a day's goal.
 const GOAL: i32 = 8;
 
+/// Names the route `Home` instead of `Index`.
+#[derive(Route, Clone, Debug, PartialEq)]
+pub struct Home;
+
 /// Builds the same screen for the browser and every native app.
-pub fn screen(state: &Counter) -> Element {
+#[component]
+pub fn Page() -> Element {
+	let state = reactive_graph::owner::use_context::<Counter>()
+		.expect("the app entry provides Counter before rendering routes");
 	let glasses = state.value();
 	let filled = glasses.clamp(0, GOAL) as f32 / GOAL as f32;
 	let counter = state.clone();
@@ -112,8 +123,10 @@ Save, and the page reloads with a progress bar that fills as you tap. Here is wh
 
 - **`View`, `Text`, and `Button`** are leptoskit's built-in components. In the browser they become HTML elements. In a native app they become that platform's real controls: `Button` is a `UIButton` on iOS, an `NSButton` on macOS, an Android `Button`, a GTK button, or a Win32 `BUTTON`. Nothing runs in a web view.
 - **`.class(...)`** takes Tailwind classes. They are built in: there is no Tailwind install and no CSS build step. In the browser they become CSS; on native, leptoskit's own layout engine applies them, so `items-center`, `gap-6`, and `w-64` lay the screen out the same way everywhere. `with_style` sets a style from a value instead, here the bar's width as a fraction of its track.
-- **`Counter`** is the starter's state, in `water_app/src/services/`. `on_press` calls `increment`, and the screen is rebuilt from the new value: the browser re-renders it, and a native app commits only the widgets that changed.
+- **`Counter`** is the starter's state, in `water_app/src/services/`. The app entry provides it before the router renders; `Page` reads it from context. `on_press` calls `increment`, and the screen is rebuilt from the new value: the browser re-renders it, and a native app commits only the widgets that changed.
 - **`cfg!(feature = "ios")`** picks a value per platform. The CLI builds your app with one platform feature turned on: `web`, `ios`, `android`, `macos`, `windows`, or `linux`. Use the feature, not `target_os`: native apps run your code as WebAssembly, so `target_os` is the same on every native platform.
+
+The starter's `[lint]` asks for builder calls (`markup = "builder"`). The example above uses `view!` because the guides show markup; rewrite it with builders, or set `markup = "view"` / `"any"`, before `leptoskit lint --deny-warnings`.
 
 ## Run it as a native app
 
@@ -150,47 +163,31 @@ HarmonyOS is not part of this project layout yet. It has its own experimental st
 
 ## Use a different file on one platform
 
-Sometimes one screen should differ on one platform. Say your iOS app should use iOS's larger title style, while every other platform keeps the shared screen. Rather than filling the screen with `cfg!` checks, give iOS its own copy of the file.
+Sometimes one piece of UI should differ on one platform. Say a greeting component should use iOS's larger title style, while every other platform keeps the shared version. Rather than filling the shared code with `cfg!` checks, give iOS its own copy of that module.
 
-The starter is already set up for this. `water_app/src/routes.rs` declares the home module with `platform_module!` instead of a plain `mod home;`:
+Route files under `src/routes/` cannot use per-platform names yet (`index.ios.rs` is rejected). For reusable modules — components, helpers, services — declare them with `platform_module!` instead of a plain `mod`:
 
 ```rust
-leptoskit::platform_module!(pub mod home = "routes/home");
+leptoskit::platform_module!(pub mod heading = "heading");
 ```
 
-`"routes/home"` is the module's path inside `water_app/src`, without the `.rs`. Next to the shared file, add one named for the platform:
+`"heading"` is the module's path inside `water_app/src/components`, without the `.rs`. Next to the shared file, add one named for the platform:
 
 ```text
-water_app/src/routes/
-├── home.rs       used by web, Android, macOS, Windows, and Linux
-└── home.ios.rs   used by iOS builds only
+water_app/src/components/
+├── heading.rs       used by web, Android, macOS, Windows, and Linux
+└── heading.ios.rs   used by iOS builds only
 ```
 
-The starter calls `screen` directly, so this entry point keeps its name; reusable components should use `#[component]` and PascalCase.
-
-`home.ios.rs` must provide everything callers use from `home.rs`. Here, that is `pub fn screen(state: &Counter) -> Element`:
+`heading.ios.rs` must provide everything callers use from `heading.rs`. Here, that is `pub fn text() -> &'static str`:
 
 ```rust
-use leptoskit::prelude::*;
-
-use crate::Counter;
-
-pub fn screen(state: &Counter) -> Element {
-	let counter = state.clone();
-
-	view! {
-		<View class="min-h-screen gap-4 px-4 pt-safe-offset-4 bg-white">
-			<Text class="text-3xl font-bold text-slate-900">"Water"</Text>
-			<Text class="text-lg text-slate-500">
-				{format!("{} glasses today", state.value())}
-			</Text>
-			<Button on:press=move || counter.increment()>"Drink a glass"</Button>
-		</View>
-	}
+pub fn text() -> &'static str {
+	"Water"
 }
 ```
 
-Now `leptoskit build --platform ios` compiles `home.ios.rs`, and every other platform compiles `home.rs`. Code elsewhere keeps calling `crate::routes::home::screen`; it never knows which file it got. The suffixes are `.web.rs`, `.ios.rs`, `.android.rs`, `.macos.rs`, `.windows.rs`, and `.linux.rs`.
+Now `leptoskit build --platform ios` compiles `heading.ios.rs`, and every other platform compiles `heading.rs`. Code elsewhere keeps calling `crate::components::heading::text`; it never knows which file it got. The suffixes are `.web.rs`, `.ios.rs`, `.android.rs`, `.macos.rs`, `.windows.rs`, and `.linux.rs`. For a one-off difference inside a route file, use `cfg!(feature = "ios")` instead.
 
 Two pieces make this work. `water_app/build.rs` calls `leptoskit_build::platforms()`, which reads the platform feature the CLI turned on and watches `src/`, so adding or removing an override file triggers a rebuild. And `platform_module!` picks the file for that platform, falling back to the shared one. A module declared with a plain `mod` never looks for overrides, so use `platform_module!` for each module that needs them.
 

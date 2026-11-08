@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 520
 expression: contents
 ---
 //! The sign-in screen: an email address, then the code emailed to it. The
@@ -727,6 +726,7 @@ impl SignIn {
 		// and the next refusal starts a fresh one.
 		self.wait.set(0);
 		self.manual.set(false);
+
 		let _ = self
 			.countdown
 			.try_update(|countdown| *countdown = countdown.wrapping_add(1));
@@ -806,6 +806,7 @@ async fn count_down(
 				let _ = wait.try_set(0);
 				let _ = manual.try_set(true);
 			}
+
 			return;
 		}
 

@@ -20,12 +20,15 @@ src/
     └── (auth)/sign-in.rs     /sign-in
 ```
 
-Turn the router on with a `[router]` table in `leptoskit.toml`:
+`leptoskit new` turns the router on for you. Fresh apps declare the plugin and point it at the app crate's routes directory:
 
 ```toml
-[router]
-dir = "src/routes" # the default
+[[plugins]]
+name = "router"
+options = { dir = "water_app/src/routes" }
 ```
+
+A single-crate app (or an older project) can use the default directory, `src/routes`, by omitting `options`, or keep a legacy `[router]` table until you run `leptoskit migrate`. Without the plugin (or the table), leptoskit leaves the routes directory alone.
 
 The generated module calls `leptoskit_router` by name, so the app depends on it directly. Turn on its `web` feature in web builds, so the router follows the address bar:
 
@@ -43,7 +46,7 @@ Then declare the generated module in `lib.rs`:
 mod routes;
 ```
 
-[`examples/file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes) is a complete app built this way.
+[`examples/file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes) is a complete app built this way — the shape `leptoskit new` produces.
 
 ## Names are URLs
 

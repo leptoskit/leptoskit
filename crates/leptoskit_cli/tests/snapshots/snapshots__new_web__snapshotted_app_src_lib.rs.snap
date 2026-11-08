@@ -13,7 +13,8 @@ pub use services::Counter;
 
 /// Renders the portable application tree for any host.
 pub fn screen(state: &Counter) -> leptoskit::prelude::Element {
-	routes::home::screen(state)
+	reactive_graph::owner::provide_context(state.clone());
+	routes::Navigation::new(routes::Route::Home).render()
 }
 
 /// The browser and server adapter for the same application tree.
@@ -25,10 +26,16 @@ pub fn App() -> impl leptos::prelude::IntoView {
 	let changed = RwSignal::new(0_u32);
 	let state = Counter::default()
 		.on_change(move || changed.update(|value| *value = value.wrapping_add(1)));
+	reactive_graph::owner::provide_context(state.clone());
+	#[cfg(target_arch = "wasm32")]
+	let navigation = routes::Navigation::from_browser()
+		.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home));
+	#[cfg(not(target_arch = "wasm32"))]
+	let navigation = routes::Navigation::new(routes::Route::Home);
 
 	move || {
 		changed.get();
-		leptoskit::web::render(screen(&state))
+		leptoskit::web::render(navigation.render())
 	}
 }
 
@@ -78,7 +85,23 @@ pub fn start() {
 #[unsafe(no_mangle)]
 pub extern "C" fn leptoskit_main() {
 	let state = Counter::default();
-	leptoskit::guest::mount(move || screen(&state));
+	let navigation = routes::Navigation::new(routes::Route::Home);
+	navigation.bind_system_back();
+	leptoskit::guest::mount(move || {
+		reactive_graph::owner::provide_context(state.clone());
+		navigation.render()
+	});
+}
+
+/// Android system Back and similar host signals: 1 when the router popped a
+/// route, 0 when the host should leave the app.
+#[cfg(all(target_arch = "wasm32", feature = "native"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn leptoskit_system_back() -> i32 {
+	match leptoskit_router::dispatch_system_back() {
+		leptoskit_router::SystemBack::Consumed => 1,
+		leptoskit_router::SystemBack::Propagate => 0,
+	}
 }
 
 /// Forwards platform-neutral events to the shared tree's handlers.
