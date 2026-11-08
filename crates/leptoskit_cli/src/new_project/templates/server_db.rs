@@ -16,6 +16,15 @@ use leptoskit::server::tokio;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+	// Release verification reads this executable's checkpoint without starting
+	// the application. No database URL, sign-in keys, or port is needed.
+	if leptoskit::db::export_migration_contract_if_requested(
+		__CRATE___db::MIGRATIONS,
+		__CRATE___db::MIGRATION_SCHEMA,
+	)? {
+		return Ok(());
+	}
+
 	// `leptoskit rpc spec` and `leptoskit rpc generate` run this binary with
 	// `LEPTOSKIT_RPC_SPEC_OUT` set to read the published API: this writes it
 	// there and exits, before anything below reads configuration, opens the
@@ -49,7 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let url = __DATABASE_URL__;
 	let db = leptoskit::db::Db::connect(&url).await?;
 
-	for name in db.migrate(__CRATE___db::MIGRATIONS).await? {
+	for name in db
+		.migrate_startup(__CRATE___db::MIGRATIONS, __CRATE___db::MIGRATION_SCHEMA)
+		.await?
+	{
 		println!("applied migration {name}");
 	}
 

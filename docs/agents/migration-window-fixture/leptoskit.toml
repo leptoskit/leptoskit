@@ -1,0 +1,8 @@
+[app]
+name = "migration-window-fixture"
+platforms = ["server"]
+default_platform = "server"
+render = "ssr"
+[db]
+dialect = "postgres"
+migrations = "fixtures/new"

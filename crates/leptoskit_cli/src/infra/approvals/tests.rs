@@ -46,7 +46,10 @@ fn fixture_contract(
 		value["format_version"] = serde_json::json!(3);
 		value["rpc_contract"] = contract;
 	}
-	let descriptor: Descriptor = serde_json::from_value(value).unwrap();
+	signed_fixture(serde_json::from_value(value).unwrap())
+}
+
+fn signed_fixture(descriptor: Descriptor) -> (Evidence, Descriptor, Trust) {
 	let bytes = serde_json::to_string_pretty(&descriptor).unwrap();
 	let policy = serde_json::json!({
 "format_version":2,"kind":"leptoskit-deployment-policy","repository":descriptor.recipe.repository,
@@ -98,6 +101,76 @@ fn independent_approvals_and_exact_policy_pass() {
 			.check_pin(&hash(format!("{} ", evidence.descriptor).as_bytes()))
 			.is_err()
 	);
+}
+
+fn window_fixture(website: bool) -> (Evidence, Descriptor, Trust) {
+	let (_, descriptor, _) = fixture_for(website);
+	let mut value = serde_json::to_value(descriptor).unwrap();
+	let (window, fingerprint) = super::super::schema_window_fixture::evidence();
+	value["format_version"] = serde_json::json!(4);
+	value["schema_window"] = window;
+	value["migrations"] = serde_json::json!(fingerprint);
+	signed_fixture(serde_json::from_value(value).unwrap())
+}
+
+#[test]
+fn backend_and_website_windows_require_exact_descriptor_approval_and_policy() {
+	for website in [false, true] {
+		let (evidence, descriptor, trust) = window_fixture(website);
+		check(&evidence, &descriptor, &trust).unwrap();
+		for field in ["window", "contract"] {
+			let mut value = serde_json::to_value(&descriptor).unwrap();
+			let text = format!("{}\n", value["schema_window"][field].as_str().unwrap());
+			value["schema_window"][format!("{field}_sha256")] =
+				serde_json::json!(hash(text.as_bytes()));
+			value["schema_window"][field] = serde_json::json!(text);
+			let replacement: Descriptor = serde_json::from_value(value).unwrap();
+			// These are valid, semantically identical inputs with different
+			// exact bytes. Internal digest checks cannot replace authorization.
+			replacement.validate().unwrap();
+			let mut changed = evidence.clone();
+			changed.descriptor = serde_json::to_string_pretty(&replacement).unwrap();
+			assert!(
+				check(&changed, &replacement, &trust)
+					.unwrap_err()
+					.to_string()
+					.contains("approval descriptor digest differs")
+			);
+			changed.approvals = vec![
+				sign(changed.descriptor.as_bytes(), &signing(1)).unwrap(),
+				sign(changed.descriptor.as_bytes(), &signing(2)).unwrap(),
+			];
+			assert!(
+				check(&changed, &replacement, &trust)
+					.unwrap_err()
+					.to_string()
+					.contains("policy lacks exact backend descriptor/image authorization")
+			);
+			let (approved, replacement, trust) = signed_fixture(replacement);
+			check(&approved, &replacement, &trust).unwrap();
+		}
+	}
+}
+
+#[test]
+fn window_history_cannot_downgrade_or_discard_approved_evidence() {
+	for website in [false, true] {
+		let (evidence, descriptor, trust) = window_fixture(website);
+		let mut value = serde_json::to_value(&descriptor).unwrap();
+		value["format_version"] = serde_json::json!(if website { 2 } else { 1 });
+		let downgraded: Descriptor = serde_json::from_value(value.clone()).unwrap();
+		assert!(downgraded.validate().is_err());
+		value["schema_window"] = serde_json::Value::Null;
+		let stripped: Descriptor = serde_json::from_value(value).unwrap();
+		stripped.validate().unwrap();
+		let mut changed = evidence;
+		changed.descriptor = serde_json::to_string_pretty(&stripped).unwrap();
+		assert!(check(&changed, &stripped, &trust).is_err());
+		let mut invalid = serde_json::to_value(descriptor).unwrap();
+		invalid["schema_window"] = serde_json::Value::Null;
+		let invalid: Descriptor = serde_json::from_value(invalid).unwrap();
+		assert!(invalid.validate().is_err());
+	}
 }
 
 fn rpc_fixture(website: bool) -> (Evidence, Descriptor, Trust) {

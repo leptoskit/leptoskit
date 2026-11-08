@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::Command;
 use std::process::Output;
 
+#[path = "infra/window.rs"]
+mod window;
+
 const CONFIG: &str = r#"
 [app]
 name = "notes"
@@ -54,6 +57,11 @@ fn project() -> tempfile::TempDir {
 }
 
 fn project_tools(root: &Path) {
+	fs::write(
+		root.join("window_ssh.py"),
+		include_str!("infra/window_ssh.py"),
+	)
+	.unwrap();
 	tool(
 		root,
 		"tofu",
@@ -100,6 +108,7 @@ printf '%s\n' "$*" >> kamal-calls
 if [ "$1" = prune ] && [ "${MOCK_KAMAL_FAIL_PRUNE:-0}" = 1 ]; then exit 1; fi
 if [ "$1" = app ] && [ "$2" = boot ]; then
   printf '%s\n' "${LEPTOSKIT_RELEASE:-missing}" >> boot-versions
+  cp release.yml "boot-window-${LEPTOSKIT_RELEASE}.json"
   if [ -n "${MOCK_KAMAL_FAIL_VERSION:-}" ] && [ "${LEPTOSKIT_RELEASE:-}" = "$MOCK_KAMAL_FAIL_VERSION" ]; then exit 1; fi
 fi
 exit "${MOCK_KAMAL_EXIT:-0}"
@@ -151,6 +160,9 @@ elif "json .RepoDigests" in script:
 elif script.startswith("docker image inspect") and "--format" not in script:
     changed = os.environ.get("MOCK_IMAGE_MISMATCH") == "all" or (os.environ.get("MOCK_IMAGE_MISMATCH") == "postboot" and "@sha256:" in script)
     print(json.dumps([{"Id": "sha256:" + ("b" if changed else "a") * 64, "Config": {}, "Os": "linux", "Architecture": "arm64"}]))
+elif "/schema-windows/" in script or script.startswith("docker inspect 'notes-production-web-"):
+    helper = root.parent / "window_ssh.py"
+    sys.exit(subprocess.run([sys.executable, str(helper), script]).returncode)
 elif script.startswith("docker exec") and "_leptoskit_migrations" in script:
     if os.environ.get("MOCK_HISTORY_FAIL"):
         sys.exit(1)
@@ -163,8 +175,11 @@ elif "leptoskit-current-release-readiness-v1" in script:
     request = json.load(sys.stdin)
     if os.environ.get("MOCK_REUSE_UNREADY"):
         sys.exit(1)
-    if request["container"] != "notes-production-web-v1" or request["port"] != 3000:
+    if request["container"] != os.environ.get("MOCK_REUSE_CONTAINER", "notes-production-web-v1") or request["port"] != 3000:
         sys.exit(1)
+    if os.environ.get("MOCK_REUSE_WINDOW_PIN"):
+        assert request["environment"]["LEPTOSKIT_MIGRATION_WINDOW_SHA256"] == os.environ["MOCK_REUSE_WINDOW_PIN"]
+        assert request["environment"]["LEPTOSKIT_MIGRATION_WINDOW"] == "/run/leptoskit/migration-window.json"
     print(json.dumps({"ready": True}))
 elif script.startswith("python3 "):
     print(json.dumps({"healthy": True, "verified": True, "snapshot": "a" * 64}))

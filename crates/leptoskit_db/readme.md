@@ -104,6 +104,8 @@ Each migration runs in its own transaction and is recorded, with a SHA-256 of it
 
 For tests, `db::testing::sqlite()` is an in-memory database with every table created from the code, and `db::testing::sqlite_migrated(MIGRATIONS)` applies the real migrations instead.
 
+For an explicit PostgreSQL expansion protocol, `MigrationWindow` checks exact generated SQL between committed schema checkpoints. `Db::migrate_in_window` accepts an older build against later history only when both belong to that window; each build supplies its own embedded snapshot and migrations. All pending expansions and their history commit together, with bounded waits. Both builds must already support this protocol. It does not make arbitrary SQL or application behavior compatible, and managed deployment still requires maintenance for schema changes. See [migration windows](https://leptoskit.dev/docs/guide/22-database.html#explicit-expansion-windows) for the current scope.
+
 New migrations also have a `down.sql`; `migrations!` embeds it when present. With all writers stopped and a verified backup, `db.rollback(MIGRATIONS, 1).await?` or `lk db rollback --steps 1 --yes` reverses the newest migration. Each reverse and its history deletion share a transaction. All selected reverses are checked first; failed later reverses leave earlier successful ones committed. Old migrations without a reverse and generated data-loss stubs are refused. A reverse schema does not restore deleted data: destructive and data migrations need authored recovery SQL before their `-- leptoskit: irreversible` marker can be removed.
 
 ## How it fits

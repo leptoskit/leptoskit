@@ -646,7 +646,70 @@ fn table_from_message(message: &str) -> Option<String> {
 /// (`lkdbmigr` in ASCII).
 const MIGRATION_LOCK: i64 = 0x6c6b_6462_6d69_6772;
 
+mod expansion;
+
+/// Raw migration transactions and session locks must not return to the pool
+/// after a cancelled future. Detaching and cancelling disposes of the client;
+/// only a completed unlock makes the connection reusable.
+struct MigrationSession {
+	client: Option<Object>,
+	ssl_disabled: bool,
+}
+
+impl MigrationSession {
+	fn client(&self) -> &Object {
+		self.client
+			.as_ref()
+			.expect("migration session owns its client")
+	}
+
+	fn client_mut(&mut self) -> &mut Object {
+		self.client
+			.as_mut()
+			.expect("migration session owns its client")
+	}
+
+	fn release(mut self) {
+		drop(self.client.take());
+	}
+}
+
+impl Drop for MigrationSession {
+	fn drop(&mut self) {
+		if let Some(client) = self.client.take() {
+			let client = Object::take(client);
+			let token = client.cancel_token();
+			let ssl_disabled = self.ssl_disabled;
+			// Closing a socket alone does not interrupt a backend blocked on
+			// a lock. Cancel explicitly while this detached client cannot be
+			// reused, then close it even if cancellation fails or times out.
+			let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+				return;
+			};
+			runtime.spawn(async move {
+				let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+					if ssl_disabled {
+						let _ = token.cancel_query(tokio_postgres::NoTls).await;
+					} else if let Ok(tls) = tls() {
+						let _ = token.cancel_query(tls).await;
+					}
+				})
+				.await;
+				drop(client);
+			});
+		}
+	}
+}
+
 impl Pool {
+	async fn migration_session(&self) -> Result<MigrationSession> {
+		let config: tokio_postgres::Config = self.url.parse().map_err(DbError::connection)?;
+		Ok(MigrationSession {
+			client: Some(self.client().await?),
+			ssl_disabled: config.get_ssl_mode() == SslMode::Disable,
+		})
+	}
+
 	/// Applies the pending migrations while holding the advisory lock, each in
 	/// its own transaction, and returns their names.
 	pub(crate) async fn migrate(
@@ -719,17 +782,20 @@ impl Pool {
 		&self,
 		work: impl AsyncFnOnce(&Object) -> std::result::Result<T, MigrationError>,
 	) -> std::result::Result<T, MigrationError> {
-		let client = self.client().await?;
+		let session = self.migration_session().await?;
+		let client = session.client();
 		client
 			.execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK])
 			.await
 			.map_err(error)?;
-		let result = work(&client).await;
-		// The lock also ends with the session, so a failed unlock changes
-		// nothing.
-		let _ = client
-			.execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK])
-			.await;
+		let result = work(client).await;
+		let unlocked = client
+			.query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK])
+			.await
+			.is_ok_and(|row| row.get::<_, bool>(0));
+		if unlocked {
+			session.release();
+		}
 		result
 	}
 }
@@ -785,7 +851,9 @@ async fn apply_migrations(
 }
 
 /// Whether the database holds pushed changes no migration records.
-async fn has_pushes(client: &Object) -> std::result::Result<bool, MigrationError> {
+async fn has_pushes(
+	client: &impl deadpool_postgres::GenericClient,
+) -> std::result::Result<bool, MigrationError> {
 	let exists: bool = client
 		.query_one("SELECT to_regclass('\"_leptoskit_push\"') IS NOT NULL", &[])
 		.await

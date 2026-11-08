@@ -20,6 +20,7 @@ use crate::verify::build::Engine;
 use crate::verify::build::{self};
 
 mod rpc;
+mod schema_window;
 use rpc::Contract as RpcContract;
 
 #[derive(Debug, clap::Args)]
@@ -52,6 +53,14 @@ pub struct Args {
 	/// Independently selected SHA-256 for each RPC baseline, in the same order.
 	#[arg(long, requires = "rpc_baseline", conflicts_with = "no_rpc")]
 	rpc_baseline_sha256: Vec<String>,
+	/// Checked expansion window to bind to this exact executable and
+	/// descriptor. This prepares evidence; deployment still enforces its
+	/// rollout rules.
+	#[arg(long, requires = "migration_window_sha256")]
+	migration_window: Option<PathBuf>,
+	/// Independent SHA-256 of the migration window's exact bytes.
+	#[arg(long, requires = "migration_window")]
+	migration_window_sha256: Option<String>,
 	/// New descriptor file, written only after image extraction succeeds.
 	#[arg(long)]
 	out: PathBuf,
@@ -85,6 +94,8 @@ pub(super) struct Descriptor {
 	assets: Assets,
 	services: CheckState,
 	rpc_contract: RpcContract,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	schema_window: Option<schema_window::Evidence>,
 	native_guest_compatibility: CheckState,
 	runtime_attestation: CheckState,
 }
@@ -113,6 +124,27 @@ fn rpc_contract(
 			declaration: "operator_declares_no_rpc".into(),
 		});
 	}
+	RpcContract::exported(
+		export_document(
+			engine,
+			image,
+			"LEPTOSKIT_RPC_SPEC_OUT",
+			"rpc.json",
+			"RPC",
+			16 * 1024 * 1024,
+		)?,
+		baselines,
+	)
+}
+
+fn export_document(
+	engine: Engine,
+	image: &str,
+	variable: &str,
+	filename: &str,
+	kind: &str,
+	max_bytes: u64,
+) -> Result<Vec<u8>> {
 	let dir = tempfile::tempdir()?;
 	#[cfg(unix)]
 	{
@@ -120,6 +152,7 @@ fn rpc_contract(
 		fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777))?;
 	}
 	let mount = format!("type=bind,source={},target=/spec", dir.path().display());
+	let environment = format!("{variable}=/spec/{filename}");
 	ensure!(
 		!dir.path().to_string_lossy().contains(','),
 		"invalid export mount"
@@ -139,14 +172,14 @@ fn rpc_contract(
 			"--mount",
 			&mount,
 			"--env",
-			"LEPTOSKIT_RPC_SPEC_OUT=/spec/rpc.json",
+			&environment,
 			"--entrypoint=/app/backend",
 			image,
 		],
 	)?)?
 	.trim()
 	.to_owned();
-	let checked = (|| -> Result<RpcContract> {
+	let checked = (|| -> Result<Vec<u8>> {
 		output(engine, &["start", &container])?;
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 		loop {
@@ -156,26 +189,24 @@ fn rpc_contract(
 			if state["Running"] == false {
 				ensure!(
 					state["ExitCode"] == 0,
-					"RPC export failed before successful exit"
+					"{kind} export failed before successful exit"
 				);
 				break;
 			}
 			ensure!(
 				std::time::Instant::now() < deadline,
-				"RPC export timed out; call export_if_requested before database/auth startup"
+				"{kind} export timed out; export before database/auth startup"
 			);
 			std::thread::sleep(std::time::Duration::from_millis(100));
 		}
-		let path = dir.path().join("rpc.json");
-		let metadata = fs::symlink_metadata(&path).context(
-			"executable did not export RPC spec; call export_if_requested first in main",
-		)?;
+		let path = dir.path().join(filename);
+		let metadata = fs::symlink_metadata(&path)
+			.with_context(|| format!("executable did not export {kind}; export first in main"))?;
 		ensure!(
-			metadata.is_file() && metadata.len() <= 16 * 1024 * 1024,
-			"invalid RPC export file"
+			metadata.is_file() && metadata.len() <= max_bytes,
+			"invalid {kind} export file"
 		);
-		let bytes = fs::read(path)?;
-		RpcContract::exported(bytes, baselines)
+		Ok(fs::read(path)?)
 	})();
 	let removed = output(engine, &["rm", "--force", &container]);
 	let contract = checked?;
@@ -194,6 +225,15 @@ fn hash_json(value: &Value) -> Result<String> {
 
 // Docker materializes these absent OCI fields as null when inspecting a
 // Podman-built image. The content-addressed image ID must still match exactly.
+// Docker includes the algorithm prefix; Podman's inspect reports the same
+// content address without it. Both must match all 64 lowercase hex digits.
+fn image_id_matches(actual: &str, expected: &str) -> bool {
+	let Some(expected) = expected.strip_prefix("sha256:") else {
+		return false;
+	};
+	valid_digest(expected) && actual.strip_prefix("sha256:").unwrap_or(actual) == expected
+}
+
 fn remote_config_matches(config: &Value, expected: &str) -> Result<bool> {
 	if hash_json(config)? == expected {
 		return Ok(true);
@@ -228,7 +268,7 @@ fn inspect(engine: Engine, image: &str) -> Result<Value> {
 		.context("image inspection returned no image")
 }
 
-fn valid_digest(value: &str) -> bool {
+pub(super) fn valid_digest(value: &str) -> bool {
 	value.len() == 64
 		&& value
 			.bytes()
@@ -362,6 +402,10 @@ fn validate_arguments(args: &Args) -> Result<()> {
 }
 
 pub(super) fn run(args: &Args) -> Result<()> {
+	let window = schema_window::Input::read(
+		args.migration_window.as_deref(),
+		args.migration_window_sha256.as_deref(),
+	)?;
 	validate_arguments(args)?;
 	let baselines = rpc::baselines(&args.rpc_baseline, &args.rpc_baseline_sha256)?;
 	let bundle = build::reproduce(&args.reproduction)?;
@@ -473,8 +517,13 @@ pub(super) fn run(args: &Args) -> Result<()> {
 	check_contents(engine, id, context.path(), &backend_hash, &assets)?;
 	let rpc_contract = rpc_contract(engine, id, args.no_rpc, &baselines)?;
 	let checked_rpc = rpc_contract.checked();
+	let schema_window = window
+		.map(|window| window.package(engine, id, &bundle))
+		.transpose()?;
 	let descriptor = Descriptor {
-		format_version: if checked_rpc {
+		format_version: if schema_window.is_some() {
+			4
+		} else if checked_rpc {
 			3
 		} else if bundle.recipe.website.is_some() {
 			2
@@ -495,6 +544,7 @@ pub(super) fn run(args: &Args) -> Result<()> {
 		assets,
 		services: CheckState::Unsupported,
 		rpc_contract,
+		schema_window,
 		native_guest_compatibility: CheckState::NotApplicable,
 		runtime_attestation: CheckState::Absent,
 	};
@@ -571,6 +621,14 @@ pub(super) fn read(path: &Path, pin: &str) -> Result<Descriptor> {
 }
 
 impl Descriptor {
+	pub(super) fn migration_window(&self) -> Result<Option<super::schema_window::Window>> {
+		self.validate()?;
+		self.schema_window
+			.as_ref()
+			.map(schema_window::Evidence::runtime)
+			.transpose()
+	}
+
 	pub(super) fn require_rpc(&self, pins: &[String]) -> Result<()> {
 		self.rpc_contract.require(pins)
 	}
@@ -595,9 +653,14 @@ impl Descriptor {
 			ensure!(valid_digest(value), "invalid descriptor SHA-256");
 		}
 		self.rpc_contract.validate()?;
+		if let Some(window) = &self.schema_window {
+			window.validate(&self.migrations)?;
+		}
 		ensure!(
 			(self.format_version
-				== if self.rpc_contract.checked() {
+				== if self.schema_window.is_some() {
+					4
+				} else if self.rpc_contract.checked() {
 					3
 				} else if self.recipe.website.is_some() {
 					2
@@ -670,7 +733,9 @@ impl Descriptor {
 		let images: Vec<Value> = serde_json::from_slice(&bytes)?;
 		let image = images.first().context("remote image absent")?;
 		ensure!(
-			image["Id"].as_str() == Some(&self.engine_image_id)
+			image["Id"]
+				.as_str()
+				.is_some_and(|id| image_id_matches(id, &self.engine_image_id))
 				&& remote_config_matches(&image["Config"], &self.image_config_sha256)?,
 			"remote image differs from reproduced packaging evidence"
 		);
@@ -704,6 +769,24 @@ mod tests {
 			.append_data(&mut header, "backend", content)
 			.unwrap();
 		builder.into_inner().unwrap()
+	}
+
+	#[test]
+	fn engine_image_ids_accept_only_exact_digest_spelling() {
+		let digest = "a".repeat(64);
+		let pinned = format!("sha256:{digest}");
+		assert!(image_id_matches(&digest, &pinned));
+		assert!(image_id_matches(&pinned, &pinned));
+		for actual in [
+			"a".repeat(63),
+			"A".repeat(64),
+			"b".repeat(64),
+			format!("sha512:{digest}"),
+			format!("{pinned}extra"),
+		] {
+			assert!(!image_id_matches(&actual, &pinned));
+		}
+		assert!(!image_id_matches("bad", "sha256:bad"));
 	}
 
 	#[test]
@@ -830,3 +913,6 @@ mod tests {
 		assert!(read(&path, &digest(b"{}")).is_err());
 	}
 }
+
+#[cfg(test)]
+mod acceptance;

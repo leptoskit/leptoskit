@@ -32,3 +32,7 @@ leptoskit_db::export_schema!();
 /// Every migration, embedded for the server to apply at startup.
 #[cfg(feature = "server")]
 pub static MIGRATIONS: &[leptoskit_db::Migration] = leptoskit_db::migrations!("../migrations");
+
+/// This build's final committed schema; an empty registry has no checkpoint.
+#[cfg(feature = "server")]
+pub static MIGRATION_SCHEMA: Option<&str> = leptoskit_db::migration_schema!("../migrations");

@@ -1,0 +1,25 @@
+{
+	"status": "passed",
+	"host": "macOS with devenv GNU coreutils 9.11",
+	"source": "crates/leptoskit_cli/src/infra/schema_window.rs",
+	"source_sha256": "960da61fa1ebd7f40df0ef3036e2e9a76e7155dcfc0e9dca6fd78a274c34e3b1",
+	"template_sha256": "e4562861e92f55d0cb8987c87e7cc4b6f71a361c12134ae2b73e35348fab1d63",
+	"checks": [
+		"changed input rejected; no successful file or temporary residue",
+		"exact bytes, pin and mode; spaces and single quotes round trip",
+		"reuse preserves existing inode",
+		"wrong existing mode refused without repair",
+		"conflicting file refused without overwrite",
+		"existing directory refused without creating links inside it",
+		"negative control reproduced old directory side effect",
+		"dangling symlink refused",
+		"directory symlink refused without target writes",
+		"two concurrent installs retain one correct file and clean temporaries",
+		"symlink directory refused before file installation"
+	],
+	"limits": [
+		"literal shell template only; Rust not compiled",
+		"not Linux/container acceptance",
+		"no Window constructor, SSH, Kamal, database, release or attestation proof"
+	]
+}

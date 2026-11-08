@@ -1552,6 +1552,41 @@ geopackage = false # SQLite: keep GeoPackage metadata for GIS tools
 
 An empty `[db]` table uses every default. `dev_server` picks the development database when `DATABASE_URL` isn't set: `auto` uses devenv's `services.postgres` when `devenv.nix` turns it on and the embedded server otherwise, `devenv` and `embedded` choose one, and `off` starts none. `watch` says what `leptoskit dev` does when the tables change.
 
+## Explicit expansion windows
+
+An older server normally refuses to start after a newer server applies a migration it does not know. For an application that deliberately supports overlapping versions, a migration window records the exact schema checkpoints those versions can share.
+
+This protocol is for PostgreSQL servers. It does not run in browser or native clients, and SQLite rejects it. Managed deployment still requires maintenance for a schema change; preparing a window does not enable an automatic online deployment.
+
+For example, after generating an expansion that adds a nullable column without a default, prepare a window from the last migration in the older build through the current registry:
+
+```sh
+lk db migration window --baseline 20261107T1200_initial --out expansion-window.json
+```
+
+The command reads the committed snapshots and SQL, writes a new file, and prints its SHA-256. It does not connect to a database, change migration checksums, or overwrite an existing file. Keep the digest in your approved release inputs separately from the file being delivered.
+
+New database scaffolds embed their checkpoint and call `Db::migrate_startup`. With neither window variable set, startup uses ordinary strict migrations. To use a reviewed window, deliver its file and set both `LEPTOSKIT_MIGRATION_WINDOW` to its path and `LEPTOSKIT_MIGRATION_WINDOW_SHA256` to the independently approved digest. An incomplete configuration, changed file, or checkpoint outside the window stops startup. Existing applications need the startup integration before either version participates.
+
+Both builds must already use the window protocol. At startup, each supplies its own embedded migrations and the snapshot beside its own last migration:
+
+```rust
+use leptoskit::db::MigrationWindow;
+
+let window = MigrationWindow::from_json_pinned(&window_json, &approved_sha256)?;
+db.migrate_in_window(MIGRATIONS, EMBEDDED_SCHEMA, &window).await?;
+```
+
+`EMBEDDED_SCHEMA` is the contents of that build's committed `schema.json`, included when it is compiled. Do not take it from the supplied window. Install the baseline using ordinary migrations before starting an expansion window. The older build can restart after the expansion; it leaves the new columns and history intact. A build outside the window, changed SQL, missing or unknown history, and unrecorded development pushes all fail.
+
+For an existing server, `migration_schema!("../migrations")` embeds the latest snapshot as `Option<&'static str>`; pass it with your embedded `MIGRATIONS` to `Db::migrate_startup`. A server can also call `export_migration_contract_if_requested` before reading configuration or connecting to its database, returning immediately when it reports an export. Verified packaging uses this executable export to compare the checkpoint with the reproduced source. Exporting metadata alone does not authorize a release or prove the running server's behavior.
+
+When a verified managed release descriptor includes a window, deployment delivers its exact file and startup pin automatically. The file is mounted read-only and checked before success is recorded. A conflicting host file stops deployment instead of being overwritten. First deploy the baseline without a window; window-bearing releases require that baseline to exist. Schema changes still require `--maintenance`, even when their window has been prepared.
+
+The supported structural changes are plain new tables, nullable columns without defaults or generated expressions, and comments. Every SQL byte must match the supported generator. Custom SQL, changed constraints, indexes, renames, and dropped objects require a separately reviewed rollout. Your application must name columns in reads and writes and tolerate the new shape; a window does not prove business logic, positional inserts, `SELECT *`, or trigger behavior compatible.
+
+All pending expansions and their history entries share one PostgreSQL transaction. Lock waits are limited to five seconds, statements to thirty seconds, and the attempt to sixty seconds. On timeout or a lost connection, inspect history before retrying: a commit may have reached the server. A digest binds the document's bytes; release approval and verifying the physical database remain separate responsibilities.
+
 ## Rolling back a migration
 
 If a release changed the schema, restarting its previous image can fail because that image does not know the newer migrations. New `lk db migration create` migrations include `migration.sql` (up), `down.sql` (reverse), and `schema.json`. Existing migration directories remain valid; they need an authored, reviewed `down.sql` before they can be reversed.

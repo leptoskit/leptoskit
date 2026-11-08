@@ -51,6 +51,7 @@
 )]
 
 mod diff;
+mod expansion;
 pub mod live;
 mod merge;
 mod model;
@@ -63,6 +64,8 @@ use sha2::Digest;
 use sha2::Sha256;
 
 pub use crate::diff::*;
+pub use crate::expansion::ExpansionError;
+pub use crate::expansion::verify_expansion;
 pub use crate::merge::*;
 pub use crate::model::*;
 pub use crate::publications::*;

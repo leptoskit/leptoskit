@@ -1,0 +1,31 @@
+{
+  "format": 2,
+  "dialect": "postgres",
+  "packs": [],
+  "tables": [
+    {
+      "name": {
+        "name": "notes"
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ]
+    }
+  ]
+}
