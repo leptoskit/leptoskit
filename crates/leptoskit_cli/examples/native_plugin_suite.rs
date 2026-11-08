@@ -60,6 +60,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("store", "leptoskit_plugin_store"),
 	("speech", "leptoskit_plugin_speech"),
 	("video", "leptoskit_plugin_video"),
+	("video-thumbnails", "leptoskit_plugin_video_thumbnails"),
 	("logging", "leptoskit_plugin_logging"),
 	("location", "leptoskit_plugin_location"),
 	(
@@ -115,6 +116,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_keep_awake/tests/android/KeepAwakePluginTest.kt",
 	"leptoskit_plugin_speech/tests/android/SpeechPluginTest.kt",
 	"leptoskit_plugin_video/tests/android/VideoPluginTest.kt",
+	"leptoskit_plugin_video_thumbnails/tests/android/VideoThumbnailsWireTest.kt",
 	"leptoskit_plugin_location/android-tests/LocationPluginTest.kt",
 	"leptoskit_plugin_local_authentication/tests/android/LocalAuthenticationPluginTest.kt",
 	"leptoskit_plugin_device_keys/tests/android/DeviceKeysPluginTest.kt",
@@ -284,6 +286,19 @@ import org.junit.Test
 class MediaLibraryWireInstrumentationTest {
     @Test
     fun boundedListAndSave() {
+        main()
+    }
+}
+";
+
+const VIDEO_THUMBNAILS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.videothumbnails
+
+import org.junit.Test
+
+/** Validates synthetic video-thumbnail framing without decoding a video. */
+class VideoThumbnailsWireInstrumentationTest {
+    @Test
+    fun boundedGetThumbnail() {
         main()
     }
 }
@@ -510,6 +525,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		("MediaLibraryWireInstrumentationTest.kt", MEDIA_LIBRARY_WIRE_TEST),
 		("MapsWireInstrumentationTest.kt", MAPS_WIRE_TEST),
 		("LivePhotoWireInstrumentationTest.kt", LIVE_PHOTO_WIRE_TEST),
+		("VideoThumbnailsWireInstrumentationTest.kt", VIDEO_THUMBNAILS_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(
