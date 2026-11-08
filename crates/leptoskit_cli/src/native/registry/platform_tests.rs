@@ -24,6 +24,7 @@ const RUNS_RUST: HostCapabilities = HostCapabilities {
 	asynchronous: true,
 	service: true,
 	native: None,
+	timer: true,
 };
 
 #[test]

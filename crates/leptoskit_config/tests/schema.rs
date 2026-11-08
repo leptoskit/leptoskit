@@ -69,6 +69,12 @@ fn validates_defaults_and_every_project_configuration() {
 			"b".repeat(64)
 		)))
 		.expect("provenance policy");
+	validator
+		.validate(&document(
+			"[native]\nplugins = ['http']\nrequired-plugins = ['http']\nrequired-capabilities = \
+			 ['host.plugin.rust.async']\noptional-capabilities = ['host.plugin.native.android']\n",
+		))
+		.expect("native capability requirements");
 
 	fn visit(path: &Path, validator: &jsonschema::Validator) -> usize {
 		let mut count = 0;
@@ -115,6 +121,8 @@ fn rejects_unknown_keys_enums_versions_and_out_of_range_numbers() {
 		"[build]\nwasm_opt = true",
 		"[native]\ntargets = ['fitbit']",
 		"[native]\npackage_id = 'bad'",
+		"[native]\nrequired-plugins = 'http'",
+		"[native]\nrequired-capabilities = [1]",
 		"[codepush]\nenabled = true",
 		"[codepush]\npublic_keys = ['bad']",
 		"[codepush.provenance]\nrepository = 'https://github.com/example/app'",

@@ -122,7 +122,7 @@ public final class LeptosKitApplicationController: UIViewController {
     private func didSync(_ report: NativeSyncReport) {
         guard !closed, !Task.isCancelled else { return }
         staged = report.status == .staged
-        chrome.status.text = staged ? "Update \(report.version) (\(report.build)) downloaded" : "Up to date"
+        chrome.status.text = report.message
         chrome.update.setTitle(staged ? "Activate update" : "Check for update", for: .normal)
         chrome.update.isEnabled = true
         operation = nil

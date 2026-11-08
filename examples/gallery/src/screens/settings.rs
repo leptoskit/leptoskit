@@ -44,12 +44,14 @@ enum Accessory {
 #[component]
 fn Tile(color: Color, glyph: Glyph) -> Element {
 	let white = hex("#ffffff");
+
 	let mark = match glyph {
 		Glyph::Dot => view! { <Circle diameter=12.0 color=white /> },
 		Glyph::Ring => view! { <View class="w-3.5 h-3.5 rounded-[7px]" border=(2.5, white) /> },
 		Glyph::Bar => view! { <View class="w-3.5 h-1 rounded-[2px]" background=white /> },
 		Glyph::Square => view! { <View class="w-3 h-3 rounded-[3px]" background=white /> },
 	};
+
 	view! {
 		<View
 			class="w-[30px] h-[30px]"
@@ -106,6 +108,7 @@ fn Row(
 			}
 		}
 	};
+
 	view! {
 		<View class="flex-row gap-3 items-center py-0 px-4 h-[46px]">
 			{icon} <Label style=type_scale::BODY color=colors.ink class="flex-1">{title}</Label>

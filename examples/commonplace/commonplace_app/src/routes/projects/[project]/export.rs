@@ -32,6 +32,7 @@ pub fn Page(route: &Export, navigation: &Navigation) -> Element {
 			_ => Load::Loading,
 		}
 	});
+
 	let detail = match loaded {
 		Load::Ready(detail) => detail,
 		Load::Failed(message) => return view! { <ui::Problem message=&message /> },
@@ -48,6 +49,7 @@ pub fn Page(route: &Export, navigation: &Navigation) -> Element {
 					} else {
 						style.label().to_owned()
 					};
+
 					navigation
 						.link(Export { project: id, style }, label.clone())
 						.child(view! {
@@ -71,6 +73,7 @@ pub fn Page(route: &Export, navigation: &Navigation) -> Element {
 				.link(Project { project: id }, "Back to the project")
 				.child(view! { <Text class="text-amber-700">"Back to the project"</Text> })}
 			{styles}
+
 			{if text.is_empty() {
 				view! { <Text class=ui::QUIET>"No sources yet."</Text> }
 			} else {

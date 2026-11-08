@@ -56,6 +56,7 @@ fn Action(colors: &Palette, #[prop(optional)] filled: bool, children: Children) 
 			{children}
 		</Button>
 	};
+
 	if filled {
 		button.background(colors.ink).color(colors.surface)
 	} else {

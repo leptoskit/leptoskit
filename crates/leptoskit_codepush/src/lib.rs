@@ -49,6 +49,7 @@
 pub use ed25519_dalek;
 pub use semver;
 
+pub mod capability;
 pub mod client;
 pub mod delta;
 pub mod dev;
@@ -156,6 +157,14 @@ pub enum CodePushError {
 	/// A container's manifest uses a format version this crate cannot read.
 	#[error("unsupported manifest format version {0}")]
 	UnsupportedFormatVersion(u32),
+	/// A native capability descriptor or runtime contract uses a version this
+	/// build cannot read.
+	#[error("unsupported native capability contract version {0}")]
+	UnsupportedContractVersion(u32),
+	/// A native capability descriptor or signed guest requirements are
+	/// malformed, duplicated, conflicting, or unsatisfied.
+	#[error("invalid native capability contract: {0}")]
+	InvalidCapabilityContract(String),
 	/// A manifest file path is empty, absolute, or escapes the bundle root.
 	#[error("invalid bundle file path {0:?}")]
 	InvalidPath(String),

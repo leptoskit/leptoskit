@@ -13,6 +13,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -874,6 +875,31 @@ pub struct NativeConfig {
 	/// Each name must match metadata on a direct Cargo dependency.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub plugins: Vec<String>,
+	/// Granted plugins this app cannot run without. A destination that cannot
+	/// register one fails before packaging, whatever `missing-plugins` says.
+	#[serde(rename = "required-plugins", skip_serializing_if = "Vec::is_empty")]
+	pub required_plugins: Vec<String>,
+	/// Granted plugins this app can run without. A destination that cannot
+	/// register one leaves it out with an actionable warning. An unlisted
+	/// grant keeps following `missing-plugins`, so existing projects are
+	/// unchanged.
+	#[serde(rename = "optional-plugins", skip_serializing_if = "Vec::is_empty")]
+	pub optional_plugins: Vec<String>,
+	/// Stable capability identifiers this app cannot run without, such as
+	/// `host.plugin.rust.async` or `plugin.http`. An unknown or unsupported
+	/// identifier fails the native build before packaging.
+	#[serde(
+		rename = "required-capabilities",
+		skip_serializing_if = "Vec::is_empty"
+	)]
+	pub required_capabilities: Vec<String>,
+	/// Capability identifiers the app can run without. A missing one produces
+	/// a warning instead of failing the build.
+	#[serde(
+		rename = "optional-capabilities",
+		skip_serializing_if = "Vec::is_empty"
+	)]
+	pub optional_capabilities: Vec<String>,
 	/// Host-owned options for explicitly selected runtime plugins. These values
 	/// are embedded in native registration, never read from guest requests.
 	#[serde(rename = "plugin-options", skip_serializing_if = "BTreeMap::is_empty")]
@@ -935,6 +961,10 @@ impl Default for NativeConfig {
 		Self {
 			update_contract: "mobile-v1".into(),
 			plugins: Vec::new(),
+			required_plugins: Vec::new(),
+			optional_plugins: Vec::new(),
+			required_capabilities: Vec::new(),
+			optional_capabilities: Vec::new(),
 			plugin_options: BTreeMap::new(),
 			missing_plugins: MissingPlugins::default(),
 			experimental_rust_plugins: false,
@@ -975,6 +1005,103 @@ impl NativeConfig {
 				NativeTarget::Android,
 			]
 	}
+
+	/// Required and optional capability/plugin declarations must be unique,
+	/// not both required and optional, and refer only to granted plugins.
+	fn validate_requirements(&self) -> Result<(), ConfigError> {
+		unique_requirements("required-plugins", &self.required_plugins)?;
+		unique_requirements("optional-plugins", &self.optional_plugins)?;
+		unique_requirements("required-capabilities", &self.required_capabilities)?;
+		unique_requirements("optional-capabilities", &self.optional_capabilities)?;
+
+		granted_requirements("required-plugins", &self.required_plugins, &self.plugins)?;
+		granted_requirements("optional-plugins", &self.optional_plugins, &self.plugins)?;
+
+		disjoint_requirements(&self.required_plugins, &self.optional_plugins)?;
+		disjoint_requirements(&self.required_capabilities, &self.optional_capabilities)?;
+
+		for name in self
+			.required_capabilities
+			.iter()
+			.chain(&self.optional_capabilities)
+		{
+			stable_capability_identifier(name)?;
+		}
+
+		Ok(())
+	}
+}
+
+fn unique_requirements(kind: &str, names: &[String]) -> Result<(), ConfigError> {
+	let mut seen = BTreeSet::new();
+
+	for name in names {
+		if !seen.insert(name.as_str()) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}` more than once"
+			)));
+		}
+
+		if name.trim().is_empty() {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} contains an empty entry"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn granted_requirements(
+	kind: &str,
+	names: &[String],
+	granted: &[String],
+) -> Result<(), ConfigError> {
+	for name in names {
+		if !granted.contains(name) {
+			return Err(ConfigError::InvalidNativeRequirement(format!(
+				"native.{kind} names `{name}`, which is not granted in native.plugins"
+			)));
+		}
+	}
+
+	Ok(())
+}
+
+fn disjoint_requirements(left: &[String], right: &[String]) -> Result<(), ConfigError> {
+	if let Some(name) = left.iter().find(|name| right.contains(name)) {
+		return Err(ConfigError::InvalidNativeRequirement(format!(
+			"`{name}` is both required and optional; list it in one place"
+		)));
+	}
+
+	Ok(())
+}
+
+fn stable_capability_identifier(name: &str) -> Result<(), ConfigError> {
+	if capability_identifier(name) {
+		return Ok(());
+	}
+
+	Err(ConfigError::InvalidNativeRequirement(format!(
+		"`{name}` is not a stable capability identifier: use lowercase ASCII letters, digits, \
+		 `-`, `_`, and `.`, starting with a letter or digit"
+	)))
+}
+
+/// Stable capability identifiers are dot-separated words. Plugin names may
+/// carry `_`, so the character set allows it inside a segment.
+fn capability_identifier(value: &str) -> bool {
+	let mut chars = value.chars();
+	chars
+		.next()
+		.is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+		&& chars.all(|character| {
+			character.is_ascii_lowercase()
+				|| character.is_ascii_digit()
+				|| matches!(character, '-' | '_' | '.')
+		})
+		&& !value.split('.').any(str::is_empty)
 }
 
 /// What a native build does with a selected plugin that has no
@@ -2831,6 +2958,8 @@ impl LeptoskitConfig {
 			}
 		}
 
+		self.native.validate_requirements()?;
+
 		if !package_id.is_empty()
 			&& let Some(reason) = package_id_problem(package_id)
 		{
@@ -3076,6 +3205,9 @@ pub enum ConfigError {
 	/// Native options were supplied without granting the corresponding plugin.
 	#[error("native.plugin-options.{0} requires `{0}` in native.plugins")]
 	UnselectedPluginOptions(String),
+	/// A required/optional native capability or plugin declaration is invalid.
+	#[error("invalid native capability requirement: {0}")]
+	InvalidNativeRequirement(String),
 	/// No `leptoskit.toml` in this directory or any ancestor.
 	#[error("no {CONFIG_FILE} found in this directory or any ancestor")]
 	NotFound,

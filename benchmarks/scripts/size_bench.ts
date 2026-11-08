@@ -58,6 +58,7 @@ function pinnedToolchain(): string | null {
 	try {
 		const file = new URL("../../rust-toolchain.toml", import.meta.url).pathname;
 		const match = Deno.readTextFileSync(file).match(/channel\s*=\s*"([^"]+)"/);
+
 		return match?.[1] ?? null;
 	} catch {
 		return null;
@@ -77,6 +78,7 @@ function run(
 		stdout: "inherit",
 		stderr: "inherit",
 	}).outputSync();
+
 	if (!status.success) {
 		fail(`command failed: ${command}`);
 	}
@@ -94,6 +96,7 @@ function walkFiles(directory: string): [string, number][] {
 	function visit(path: string, prefix: string) {
 		for (const entry of Deno.readDirSync(path)) {
 			const child = `${path}/${entry.name}`;
+
 			if (entry.isDirectory) visit(child, `${prefix}${entry.name}/`);
 			else if (entry.isFile) {
 				files.push([`${prefix}${entry.name}`, Deno.statSync(child).size]);
@@ -101,6 +104,7 @@ function walkFiles(directory: string): [string, number][] {
 		}
 	}
 	visit(directory, "");
+
 	return files;
 }
 
@@ -112,6 +116,7 @@ function add(
 ): void {
 	const existing = metrics[id] ??
 		{ unit: "bytes" as const, class: "bytes" as const, label, values: [] };
+
 	if (existing.values.length === 0) existing.values.push(value);
 	metrics[id] = existing;
 }
@@ -136,14 +141,17 @@ function measureWeb(dist: string, metrics: Record<string, MetricDraft>): void {
 	).sort();
 	let initialRaw = 0;
 	let initialBrotli = 0;
+
 	for (const [path, raw] of files) {
 		const brotli = brotliSize(`${pkg}/${path}`);
 		initialRaw += raw;
 		initialBrotli += brotli;
 		const kind = path.endsWith(".wasm") ? "wasm" : "js";
 		add(metrics, `web.${kind}`, `web client ${kind}, raw`, raw);
+
 		add(metrics, `web.${kind}.brotli`, `web client ${kind}, brotli`, brotli);
 	}
+
 	add(metrics, "web.initial.raw", "web initial load, raw", initialRaw);
 	add(
 		metrics,
@@ -160,8 +168,10 @@ function measureAppBundle(
 ): number {
 	const files = walkFiles(appDir);
 	let total = 0;
+
 	for (const [path, bytes] of files) {
 		total += bytes;
+
 		if ((path === "App" || path === "Contents/MacOS/App")) {
 			add(metrics, `${prefix}.binary`, `${prefix} application binary`, bytes);
 		} else if (path.endsWith("app.wasm")) {
@@ -170,7 +180,9 @@ function measureAppBundle(
 			add(metrics, `${prefix}.lkb`, `${prefix} code push baseline`, bytes);
 		}
 	}
+
 	add(metrics, `${prefix}.total`, `${prefix} application total`, total);
+
 	return total;
 }
 
@@ -185,15 +197,20 @@ function measureApk(
 	);
 	let nativeLib = 0;
 	let assets = 0;
+
 	for (const line of listing.split("\n")) {
 		// `unzip -l` prints "  <length>  <MM-DD-YYYY>  <HH:MM>   <name>".
 		const match = line.match(/^\s*(\d+)\s+\S+\s+\S+\s+(.+?)\s*$/);
+
 		if (!match) continue;
 		const [, length, name] = match;
 		const size = Number(length);
+
 		if (name.startsWith("lib/") && name.endsWith(".so")) nativeLib += size;
+
 		if (name.startsWith("assets/")) {
 			assets += size;
+
 			if (name === "assets/app.wasm") {
 				add(metrics, `${prefix}.wasm`, `${prefix} guest wasm asset`, size);
 			} else if (name === "assets/app.lkb") {
@@ -201,12 +218,14 @@ function measureApk(
 			}
 		}
 	}
+
 	add(
 		metrics,
 		`${prefix}.apk`,
 		`${prefix} APK, as downloaded`,
 		Deno.statSync(apk).size,
 	);
+
 	if (nativeLib > 0) {
 		add(
 			metrics,
@@ -215,6 +234,7 @@ function measureApk(
 			nativeLib,
 		);
 	}
+
 	if (assets > 0) {
 		add(
 			metrics,
@@ -223,6 +243,7 @@ function measureApk(
 			assets,
 		);
 	}
+
 	return Deno.statSync(apk).size;
 }
 
@@ -235,6 +256,7 @@ function newestApp(products: string): string | null {
 			const app = `${products}/${entry.name}/App.app`;
 			try {
 				const modified = Deno.statSync(app).mtime?.getTime() ?? 0;
+
 				if (!newest || modified > newest.modified) {
 					newest = { path: app, modified };
 				}
@@ -243,6 +265,7 @@ function newestApp(products: string): string | null {
 	} catch {
 		return null;
 	}
+
 	return newest?.path ?? null;
 }
 
@@ -262,12 +285,14 @@ async function main(): Promise<void> {
 	const sdk = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 	const environment: Record<string, string> = {};
 	const toolchain = pinnedToolchain();
+
 	if (toolchain) environment.RUSTUP_TOOLCHAIN = toolchain;
 
 	try {
 		for (const platform of platforms) {
 			log(`scaffolding and building ${platform}`);
 			const project = `${workDir}/${platform.replace(/-/g, "_")}`;
+
 			if (platform === "web") {
 				run(
 					`"${cli}" new --platform web "${project}" --sdk-path "${sdk}"`,
@@ -283,13 +308,16 @@ async function main(): Promise<void> {
 			} else if (platform in NATIVE_TARGETS) {
 				const target = NATIVE_TARGETS[platform];
 				const platformEnvironment = { ...environment };
+
 				if (platform.startsWith("android")) {
 					const home = Deno.env.get("ANDROID_HOME") ??
 						Deno.env.get("ANDROID_SDK_ROOT");
+
 					if (!home) {
 						notes.push("android skipped: ANDROID_HOME is not set");
 						continue;
 					}
+
 					platformEnvironment.ANDROID_HOME = home;
 				}
 				if (
@@ -309,6 +337,7 @@ async function main(): Promise<void> {
 					project,
 					platformEnvironment,
 				);
+
 				if (platform === "macos") {
 					measureAppBundle(
 						`${project}/.leptoskit/macos/App.app`,
@@ -319,6 +348,7 @@ async function main(): Promise<void> {
 					const app = newestApp(
 						`${project}/.leptoskit/ios/build/Build/Products`,
 					);
+
 					if (app) measureAppBundle(app, "ios", metrics);
 					else notes.push("ios-simulator: no .app found to measure");
 				} else {
@@ -327,10 +357,12 @@ async function main(): Promise<void> {
 					const apks = walkFiles(outputs).filter(([path]) =>
 						path.endsWith(".apk")
 					);
+
 					if (apks.length === 0) {
 						notes.push(`${platform}: no APK found to measure`);
 						continue;
 					}
+
 					measureApk(`${outputs}/${apks[0][0]}`, "android", metrics);
 				}
 			} else {
@@ -353,13 +385,16 @@ async function main(): Promise<void> {
 		metrics,
 	};
 	const aggregated: BenchmarkRun = { ...aggregate(draft), notes };
+
 	if (out) {
 		await Deno.writeTextFile(out, JSON.stringify(aggregated, null, "\t"));
 		log(`wrote ${out}`);
 	}
+
 	for (const [id, metric] of Object.entries(aggregated.metrics)) {
 		log(`${id}: ${(metric as Metric).median} bytes`);
 	}
+
 	for (const note of notes) log(note);
 }
 

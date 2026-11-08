@@ -348,6 +348,7 @@ class WidgetHost(
      */
     private fun borderEdges(props: JSONObject): FloatArray {
         val edges = props.optJSONObject("border_widths")
+
         return if (edges != null) {
             floatArrayOf(
                 px(edges.number("top")),
@@ -410,6 +411,7 @@ class WidgetHost(
                             } else {
                                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
                             }
+
                         imeOptions = EditorInfo.IME_ACTION_DONE
                         setPadding(0, 0, 0, 0)
                         includeFontPadding = false
@@ -768,6 +770,7 @@ class WidgetHost(
         val label = props.string("accessibility_label")
         val target = control ?: outer
         target.contentDescription = label
+
         applyAccessibility(target, props)
         // A labelled drawing is an image; an unlabelled one is decoration.
         if (control is VectorView && !props.optBoolean("aria_hidden")) {
@@ -810,6 +813,7 @@ class WidgetHost(
                     "bold" -> 700
                     else -> 400
                 }
+
             val italic = props.optBoolean("italic")
             control.typeface = Typeface.create(Typeface.DEFAULT, weight, italic)
             control.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(props.number("font_size", 14.0)))
@@ -836,6 +840,7 @@ class WidgetHost(
                 control.hint = props.string("placeholder")
 
                 autofill(control, node.kind, props.string("autocomplete"))
+
                 control.setHintTextColor(if (dark) 0xffa0a0a0.toInt() else 0xff707070.toInt())
             } else if (control !is CompoundButton) {
                 control.text = props.string("text") ?: ""
@@ -1129,10 +1134,12 @@ class WidgetHost(
             val bottom = edges[2]
             val left = edges[3]
             val uniform = top > 0f && top == right && top == bottom && top == left
+
             if (uniform) {
                 // Match the previous rounded stroke for a full `border`.
                 val stroke = top
                 val strokeRect = RectF(rect)
+
                 strokeRect.inset(stroke / 2, stroke / 2)
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = stroke
@@ -1148,18 +1155,22 @@ class WidgetHost(
                 // `border-t` / `border-l-2` match the web and terminal.
                 paint.style = Paint.Style.STROKE
                 paint.color = border
+
                 if (top > 0f) {
                     paint.strokeWidth = top
                     canvas.drawLine(rect.left, rect.top + top / 2, rect.right, rect.top + top / 2, paint)
                 }
+
                 if (bottom > 0f) {
                     paint.strokeWidth = bottom
                     canvas.drawLine(rect.left, rect.bottom - bottom / 2, rect.right, rect.bottom - bottom / 2, paint)
                 }
+
                 if (left > 0f) {
                     paint.strokeWidth = left
                     canvas.drawLine(rect.left + left / 2, rect.top, rect.left + left / 2, rect.bottom, paint)
                 }
+
                 if (right > 0f) {
                     paint.strokeWidth = right
                     canvas.drawLine(rect.right - right / 2, rect.top, rect.right - right / 2, rect.bottom, paint)
@@ -1403,17 +1414,21 @@ class WidgetHost(
         override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
             if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
                 val editor = findFocus() as? EditText
+
                 if (editor != null) {
                     val bounds = Rect()
+
                     if (!editor.getGlobalVisibleRect(bounds) || !bounds.contains(event.rawX.toInt(), event.rawY.toInt())) {
                         isFocusableInTouchMode = true
                         requestFocus()
                         editor.clearFocus()
+
                         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                             .hideSoftInputFromWindow(editor.windowToken, 0)
                     }
                 }
             }
+
             return super.dispatchTouchEvent(event)
         }
 

@@ -28,6 +28,7 @@ use crate::ReleaseSignature;
 use crate::Transport;
 use crate::TrustedKeys;
 use crate::UpdatePlan;
+use crate::capability::ContractCompatibility;
 use crate::durable::is_temporary;
 use crate::durable::sync_directory;
 use crate::durable::write_atomically;
@@ -45,17 +46,7 @@ pub const MAX_BUNDLE_BYTES: u64 = crate::manifest::MAX_CONTAINER_BYTES;
 /// policy. It lives outside the bundle's files, which are never consulted.
 const APPROVALS_FILE: &str = "approvals.json";
 
-/// Authenticated native requirements in the bundle's `runtime.json`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeContract {
-	/// Native guest ABI revision.
-	pub abi: u32,
-	/// Shell compatibility identity, changed when native capabilities change.
-	pub shell: String,
-	/// Required plugin names; the host may support additional plugins.
-	pub plugins: Vec<String>,
-}
+pub use crate::capability::RuntimeContract;
 
 /// Store-shell configuration. Downloaded code cannot replace these trust pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +104,10 @@ pub struct UpdateReport {
 	pub version: Version,
 	/// Current or staged release build.
 	pub build: u64,
+	/// Whether the release's signed capability contract was verified against
+	/// this host, has unresolved legacy plugin availability, or predates
+	/// versioned contracts. This does not attest to runtime behavior.
+	pub contract: ContractCompatibility,
 }
 
 /// Serialized as `current` or `staged` for both mobile hosts.
@@ -249,57 +244,23 @@ impl InstalledBundles {
 		};
 		let provenance = provenance_policy(&config, keys.as_ref())?;
 
-		let baseline = validate_container(embedded, &config)?;
+		let baseline = validate_container(embedded, &config)?.container;
 		let baseline_hash = baseline.manifest.bundle_hash();
 		let directory_lock = ownership::acquire(directory)?;
 		fs::create_dir_all(directory.join("releases"))?;
-		let initial = || {
-			State {
-				format: 1,
-				embedded: baseline_hash.clone(),
-				confirmed: None,
-				candidate: None,
-				generation: 0,
-				rejected: Vec::new(),
-				launch: None,
-				floor: None,
-			}
-		};
-		let mut recovery = None;
 
-		let state = match fs::read(directory.join("state.json")) {
-			Ok(bytes) => {
-				match serde_json::from_slice::<State>(&bytes) {
-					Ok(state) if state.format == 1 => state,
-					parsed => {
-						recovery =
-							Some(format!("discarded invalid installed selector: {parsed:?}"));
-						initial()
-					}
-				}
-			}
-
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => initial(),
-			Err(error) => return Err(error.into()),
-		};
+		let (state, state_recovery) = read_state(directory)?;
+		let state = state.unwrap_or_else(|| initial_state(&baseline_hash));
+		let mut recovery = state_recovery;
 
 		// A floor that can't be read is unknown, not absent: opening fails
 		// rather than accept a release below it. A damaged one falls back to
 		// the copy in the selector and the confirmed release.
-		let stored_floor = match fs::read(directory.join(FLOOR_FILE)) {
-			Ok(bytes) => {
-				match serde_json::from_slice::<Floor>(&bytes) {
-					Ok(floor) if floor.format == 1 => Some(floor),
-					parsed => {
-						recovery = Some(format!("discarded invalid version floor: {parsed:?}"));
-						None
-					}
-				}
-			}
+		let (stored_floor, floor_recovery) = read_floor(directory)?;
 
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-			Err(error) => return Err(error.into()),
-		};
+		if floor_recovery.is_some() {
+			recovery = floor_recovery;
+		}
 		// Floors recorded for another store build no longer apply.
 		let recorded: Vec<Floor> = stored_floor
 			.iter()
@@ -426,7 +387,7 @@ impl InstalledBundles {
 			return Ok(());
 		}
 
-		let (_, parsed) = self.load(launch.release.as_deref())?;
+		let (_, parsed, _) = self.load(launch.release.as_deref())?;
 		let release = launch.release.clone();
 		let confirms_trial = self.state.candidate.as_ref().is_some_and(|candidate| {
 			matches!(candidate, Candidate::Trying { .. })
@@ -531,15 +492,20 @@ impl InstalledBundles {
 		self.just_confirmed = None;
 
 		if let Some(Candidate::Ready { release }) = &self.state.candidate {
-			let (_, parsed) = self.load(Some(release))?;
+			let (_, parsed, contract) = self.load(Some(release))?;
 
-			return Ok(report(UpdateStatus::Staged, parsed.manifest));
+			return Ok(report(UpdateStatus::Staged, parsed.manifest, contract));
 		}
 
-		let (current_bytes, current) = self.load(self.state.confirmed.as_deref())?;
+		let (current_bytes, current, current_contract) =
+			self.load(self.state.confirmed.as_deref())?;
 
 		if !self.config.enabled {
-			return Ok(report(UpdateStatus::Current, current.manifest));
+			return Ok(report(
+				UpdateStatus::Current,
+				current.manifest,
+				current_contract,
+			));
 		}
 
 		if matches!(self.state.candidate, Some(Candidate::Trying { .. })) {
@@ -571,23 +537,35 @@ impl InstalledBundles {
 		}
 
 		let UpdatePlan::Available(offer) = client.check()? else {
-			return Ok(report(UpdateStatus::Current, current.manifest));
+			return Ok(report(
+				UpdateStatus::Current,
+				current.manifest,
+				current_contract,
+			));
 		};
 		// The client compared the offer with the release that runs, which is
 		// the store baseline when the confirmed release couldn't be read.
 		if release_order(&offer.manifest) <= self.floor.order() {
-			return Ok(report(UpdateStatus::Current, current.manifest));
+			return Ok(report(
+				UpdateStatus::Current,
+				current.manifest,
+				current_contract,
+			));
 		}
 		// The container must carry exactly the offered manifest, so its hash
 		// is the release's identifier before a byte of it is downloaded.
 		if self.state.rejected.contains(&offer.manifest.bundle_hash()) {
-			return Ok(report(UpdateStatus::Current, current.manifest));
+			return Ok(report(
+				UpdateStatus::Current,
+				current.manifest,
+				current_contract,
+			));
 		}
 
 		let offered = offer.manifest.bundle_hash();
 		let download = client.download_offer(*offer)?;
-		let parsed = match validate_container(&download.container, &self.config) {
-			Ok(parsed) => parsed,
+		let validated = match validate_container(&download.container, &self.config) {
+			Ok(validated) => validated,
 			Err(error) => {
 				// The signed container fails the same way on every check, and
 				// would be downloaded again each time while it stays the
@@ -597,6 +575,8 @@ impl InstalledBundles {
 				return Err(error);
 			}
 		};
+		let parsed = validated.container;
+		let contract = validated.contract;
 		let id = parsed.manifest.bundle_hash();
 
 		let release_dir = self.release_directory(&id)?;
@@ -615,7 +595,7 @@ impl InstalledBundles {
 		self.state.candidate = Some(Candidate::Ready { release: id });
 		self.persist()?;
 
-		Ok(report(UpdateStatus::Staged, parsed.manifest))
+		Ok(report(UpdateStatus::Staged, parsed.manifest, contract))
 	}
 
 	fn receipt(&self, id: &str, resolution: Resolution) -> Result<&Receipt, CodePushError> {
@@ -680,7 +660,7 @@ impl InstalledBundles {
 
 		if let Some(id) = self.state.confirmed.clone() {
 			match self.load(Some(&id)) {
-				Ok((_, parsed)) if release_order(&parsed.manifest) > release_order(baseline) => {
+				Ok((_, parsed, _)) if release_order(&parsed.manifest) > release_order(baseline) => {
 					working = parsed.manifest;
 				}
 
@@ -710,7 +690,7 @@ impl InstalledBundles {
 
 		if let Some(candidate) = self.state.candidate.clone() {
 			match self.load(Some(candidate.release())) {
-				Ok((_, parsed)) if release_order(&parsed.manifest) > self.floor.order() => {}
+				Ok((_, parsed, _)) if release_order(&parsed.manifest) > self.floor.order() => {}
 				Ok(_) => self.state.candidate = None,
 				Err(error) => {
 					self.recovery = Some(format!("staged release rejected: {error}"));
@@ -728,16 +708,23 @@ impl InstalledBundles {
 		Ok(self.directory.join("releases").join(id))
 	}
 
-	fn load(&self, id: Option<&str>) -> Result<(Vec<u8>, Container), CodePushError> {
+	fn load(
+		&self,
+		id: Option<&str>,
+	) -> Result<(Vec<u8>, Container, ContractCompatibility), CodePushError> {
 		let Some(id) = id else {
+			let validated = validate_container(&self.embedded, &self.config)?;
 			return Ok((
 				self.embedded.clone(),
-				validate_container(&self.embedded, &self.config)?,
+				validated.container,
+				validated.contract,
 			));
 		};
 		let directory = self.release_directory(id)?;
 		let bytes = fs::read(directory.join("release.lkb"))?;
-		let parsed = validate_container(&bytes, &self.config)?;
+		let validated = validate_container(&bytes, &self.config)?;
+		let parsed = validated.container;
+		let contract = validated.contract;
 		let signature: ReleaseSignature =
 			serde_json::from_slice(&fs::read(directory.join("release.sig"))?)?;
 		self.keys
@@ -759,7 +746,7 @@ impl InstalledBundles {
 			policy.verify(&parsed.manifest, &approvals.approvals)?;
 		}
 
-		Ok((bytes, parsed))
+		Ok((bytes, parsed, contract))
 	}
 
 	/// Removes stored releases that can never run again: everything except the
@@ -877,19 +864,75 @@ fn provenance_policy(
 	Ok(Some(policy))
 }
 
+fn initial_state(embedded: &str) -> State {
+	State {
+		format: 1,
+		embedded: embedded.to_owned(),
+		confirmed: None,
+		candidate: None,
+		generation: 0,
+		rejected: Vec::new(),
+		launch: None,
+		floor: None,
+	}
+}
+
+fn read_state(directory: &Path) -> Result<(Option<State>, Option<String>), CodePushError> {
+	match fs::read(directory.join("state.json")) {
+		Ok(bytes) => {
+			Ok(match serde_json::from_slice::<State>(&bytes) {
+				Ok(state) if state.format == 1 => (Some(state), None),
+				parsed => {
+					(
+						None,
+						Some(format!("discarded invalid installed selector: {parsed:?}")),
+					)
+				}
+			})
+		}
+
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn read_floor(directory: &Path) -> Result<(Option<Floor>, Option<String>), CodePushError> {
+	match fs::read(directory.join(FLOOR_FILE)) {
+		Ok(bytes) => {
+			Ok(match serde_json::from_slice::<Floor>(&bytes) {
+				Ok(floor) if floor.format == 1 => (Some(floor), None),
+				parsed => {
+					(
+						None,
+						Some(format!("discarded invalid version floor: {parsed:?}")),
+					)
+				}
+			})
+		}
+
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+		Err(error) => Err(error.into()),
+	}
+}
+
 fn release_order(manifest: &BundleManifest) -> (&Version, u64) {
 	(&manifest.version, manifest.build)
 }
 
-fn report(status: UpdateStatus, manifest: BundleManifest) -> UpdateReport {
+fn report(
+	status: UpdateStatus,
+	manifest: BundleManifest,
+	contract: ContractCompatibility,
+) -> UpdateReport {
 	UpdateReport {
 		status,
 		version: manifest.version,
 		build: manifest.build,
+		contract,
 	}
 }
 
-fn activation(message: impl Into<String>) -> CodePushError {
+pub(crate) fn activation(message: impl Into<String>) -> CodePushError {
 	CodePushError::Activation(message.into())
 }
 
@@ -940,10 +983,17 @@ fn entry_of(parsed: &Container) -> Result<&[u8], CodePushError> {
 	Ok(&entry.1)
 }
 
+/// A container that passed its target and native contract checks.
+struct ValidatedBundle {
+	container: Container,
+	contract: ContractCompatibility,
+}
+
 fn validate_container(
 	bytes: &[u8],
 	config: &UpdateConfiguration,
-) -> Result<Container, CodePushError> {
+) -> Result<ValidatedBundle, CodePushError> {
+	config.runtime.validate_host()?;
 	let parsed = parse_bounded(bytes)?;
 
 	if parsed.manifest.app != config.app || parsed.manifest.channel != config.channel {
@@ -960,20 +1010,15 @@ fn validate_container(
 		.ok_or_else(|| activation("native bundle is missing runtime.json"))?;
 	let runtime: RuntimeContract = serde_json::from_slice(&descriptor.1)?;
 
-	if runtime.abi != config.runtime.abi
-		|| runtime.shell != config.runtime.shell
-		|| runtime
-			.plugins
-			.iter()
-			.any(|plugin| !config.runtime.plugins.contains(plugin))
-	{
-		return Err(activation(
-			"bundle requires an incompatible native ABI, shell, or plugin",
-		));
-	}
-
+	// The guest's requirements are signed with the bundle. The host
+	// descriptor comes only from this store build's configuration; any
+	// capability fields in the downloaded descriptor are rejected.
+	let contract = runtime.verify_guest(&config.runtime)?;
 	entry_of(&parsed)?;
-	Ok(parsed)
+	Ok(ValidatedBundle {
+		container: parsed,
+		contract,
+	})
 }
 
 /// Blocking HTTP transport with no redirects and bodies capped at

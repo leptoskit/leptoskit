@@ -36,6 +36,9 @@ fn contract() -> RuntimeContract {
 		abi: 1,
 		shell: "counter-shell-v1".to_owned(),
 		plugins: vec!["clipboard".to_owned()],
+		format_version: None,
+		requirements: None,
+		host: None,
 	}
 }
 
@@ -2169,5 +2172,407 @@ fn policies_must_be_valid_and_independent_of_the_publisher() {
 			.expect("null policy")
 			.provenance
 			.is_none()
+	);
+}
+
+// Versioned capability contracts: a guest's requirements are signed with its
+// bundle and checked against the installed host's own descriptor before the
+// release is staged or activated.
+
+use leptoskit_codepush::capability::CAP_HOST_PLUGIN_RUST_ASYNC;
+use leptoskit_codepush::capability::CAP_HOST_PLUGIN_RUST_SYNC;
+use leptoskit_codepush::capability::CAPABILITY_CONTRACT_VERSION;
+use leptoskit_codepush::capability::CapabilityEntry;
+use leptoskit_codepush::capability::CapabilityState;
+use leptoskit_codepush::capability::ContractCompatibility;
+use leptoskit_codepush::capability::HostCapabilityDescriptor;
+use leptoskit_codepush::capability::PluginCapability;
+use leptoskit_codepush::capability::ProtocolVersions;
+use leptoskit_codepush::capability::RUNTIME_CONTRACT_VERSION;
+use leptoskit_codepush::capability::RuntimeRequirements;
+
+fn host_descriptor() -> HostCapabilityDescriptor {
+	HostCapabilityDescriptor {
+		format_version: CAPABILITY_CONTRACT_VERSION,
+		platform: "ios".to_owned(),
+		flavor: "ios".to_owned(),
+		experimental: false,
+		protocol: ProtocolVersions {
+			guest_abi: 1,
+			bridge: 1,
+		},
+		capabilities: vec![
+			CapabilityEntry {
+				id: CAP_HOST_PLUGIN_RUST_SYNC.to_owned(),
+				state: CapabilityState::Available,
+				detail: None,
+			},
+			CapabilityEntry {
+				id: CAP_HOST_PLUGIN_RUST_ASYNC.to_owned(),
+				state: CapabilityState::Available,
+				detail: None,
+			},
+			CapabilityEntry {
+				id: "host.plugin.native.android".to_owned(),
+				state: CapabilityState::Unsupported,
+				detail: Some("an iOS host has no Android plugin dispatcher".to_owned()),
+			},
+		],
+		plugins: vec![PluginCapability {
+			name: "clipboard".to_owned(),
+			state: CapabilityState::Available,
+			implementation: Some("rust.sync".to_owned()),
+			option_keys: Vec::new(),
+			options_sha256: None,
+			detail: None,
+		}],
+	}
+}
+
+fn host_runtime() -> RuntimeContract {
+	RuntimeContract {
+		abi: 1,
+		shell: "counter-shell-v1".to_owned(),
+		plugins: vec!["clipboard".to_owned()],
+		format_version: Some(RUNTIME_CONTRACT_VERSION),
+		requirements: None,
+		host: Some(host_descriptor()),
+	}
+}
+
+fn guest_runtime(required: Vec<&str>, optional: Vec<&str>) -> RuntimeContract {
+	RuntimeContract {
+		abi: 1,
+		shell: "counter-shell-v1".to_owned(),
+		plugins: vec!["clipboard".to_owned()],
+		format_version: Some(RUNTIME_CONTRACT_VERSION),
+		requirements: Some(RuntimeRequirements {
+			format_version: CAPABILITY_CONTRACT_VERSION,
+			protocol: ProtocolVersions {
+				guest_abi: 1,
+				bridge: 1,
+			},
+			required: required.into_iter().map(str::to_owned).collect(),
+			optional: optional.into_iter().map(str::to_owned).collect(),
+		}),
+		host: None,
+	}
+}
+
+fn configuration_with(runtime: RuntimeContract) -> UpdateConfiguration {
+	let mut configuration = configuration();
+	configuration.runtime = runtime;
+	configuration
+}
+
+fn guest_bundle(build: u64, wasm: &[u8], runtime: &RuntimeContract) -> Vec<u8> {
+	bundle(
+		build,
+		Some(wasm),
+		Some(&serde_json::to_vec(runtime).expect("runtime")),
+	)
+}
+
+#[test]
+fn versioned_guest_requirements_are_verified_against_the_host_descriptor() {
+	let directory = tempfile::tempdir().expect("installed");
+	let baseline = native_bundle(0, BASELINE);
+	let guest = guest_runtime(
+		vec!["plugin.clipboard", CAP_HOST_PLUGIN_RUST_ASYNC],
+		vec!["plugin.optional-not-built"],
+	);
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.expect("open");
+
+	let report = installed
+		.sync_with(&mut Registry::new(replacement))
+		.expect("compatible guest");
+	assert_eq!(report.status, UpdateStatus::Staged);
+	assert_eq!(report.contract, ContractCompatibility::Verified);
+	// Optional omissions never block staging.
+	installed.launch().expect("trial");
+}
+
+#[test]
+fn a_missing_required_capability_rejects_a_release_before_it_is_stored() {
+	let directory = tempfile::tempdir().expect("installed");
+	let baseline = native_bundle(0, BASELINE);
+	let guest = guest_runtime(vec!["plugin.haptics"], Vec::new());
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.expect("open");
+
+	let error = installed
+		.sync_with(&mut Registry::new(replacement))
+		.expect_err("unsupported required capability");
+	assert!(
+		matches!(&error, CodePushError::InvalidCapabilityContract(message)
+			if message.contains("plugin.haptics") && message.contains("does not describe")),
+		"{error}"
+	);
+	// The failed release is remembered and the working baseline still runs.
+	assert_eq!(installed.launch().expect("baseline").wasm, BASELINE);
+	assert!(installed.recovery_diagnostic().is_none());
+}
+
+#[test]
+fn an_unsupported_required_capability_names_the_host_state() {
+	let directory = tempfile::tempdir().expect("installed");
+	let baseline = native_bundle(0, BASELINE);
+	let guest = guest_runtime(vec!["host.plugin.native.android"], Vec::new());
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.expect("open");
+
+	let error = installed
+		.sync_with(&mut Registry::new(replacement))
+		.expect_err("unsupported host capability");
+	assert!(
+		matches!(&error, CodePushError::InvalidCapabilityContract(message)
+			if message.contains("host.plugin.native.android") && message.contains("Unsupported")),
+		"{error}"
+	);
+}
+
+#[test]
+fn a_guest_cannot_declare_host_capabilities_or_an_unknown_contract_version() {
+	let host = host_runtime();
+	let legacy = contract();
+	let mut guessed_host = guest_runtime(Vec::new(), Vec::new());
+	guessed_host.host = Some(host_descriptor());
+	assert!(
+		guessed_host
+			.verify_guest(&host)
+			.expect_err("a guest cannot describe the host")
+			.to_string()
+			.contains("cannot declare host capabilities")
+	);
+
+	let mut future = guest_runtime(Vec::new(), Vec::new());
+	future.format_version = Some(RUNTIME_CONTRACT_VERSION + 1);
+	assert!(matches!(
+		future.verify_guest(&host),
+		Err(CodePushError::UnsupportedContractVersion(_))
+	));
+
+	// A legacy host cannot verify a versioned guest, and a legacy guest is
+	// decoded as legacy rather than claimed compatible.
+	assert!(
+		guest_runtime(Vec::new(), Vec::new())
+			.verify_guest(&legacy)
+			.expect_err("no host descriptor")
+			.to_string()
+			.contains("no capability descriptor")
+	);
+	assert_eq!(
+		legacy.verify_guest(&host).expect("legacy guest"),
+		ContractCompatibility::Legacy
+	);
+}
+
+#[test]
+fn a_legacy_release_reports_legacy_compatibility_not_verified() {
+	let directory = tempfile::tempdir().expect("installed");
+	let baseline = native_bundle(0, BASELINE);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.expect("open");
+
+	let report = installed
+		.sync_with(&mut Registry::new(native_bundle(1, REPLACEMENT)))
+		.expect("legacy guest");
+	assert_eq!(report.status, UpdateStatus::Staged);
+	assert_eq!(report.contract, ContractCompatibility::Legacy);
+}
+
+#[test]
+fn a_host_descriptor_with_the_wrong_abi_or_version_is_rejected() {
+	let mut wrong_abi = host_runtime();
+	wrong_abi.host.as_mut().unwrap().protocol.guest_abi = 2;
+	assert!(matches!(
+		wrong_abi.validate_host(),
+		Err(CodePushError::InvalidCapabilityContract(message)) if message.contains("ABI")
+	));
+
+	let mut future = host_runtime();
+	if let Some(host) = &mut future.host {
+		host.format_version = CAPABILITY_CONTRACT_VERSION + 1;
+	}
+	assert!(matches!(
+		future.validate_host(),
+		Err(CodePushError::UnsupportedContractVersion(_))
+	));
+
+	let mut requirements = host_runtime();
+	requirements.requirements = Some(RuntimeRequirements {
+		format_version: CAPABILITY_CONTRACT_VERSION,
+		protocol: ProtocolVersions {
+			guest_abi: 1,
+			bridge: 1,
+		},
+		required: Vec::new(),
+		optional: Vec::new(),
+	});
+	assert!(requirements.validate_host().is_err());
+}
+
+#[test]
+fn a_signed_guest_with_a_different_bridge_protocol_keeps_the_working_baseline() {
+	let directory = tempfile::tempdir().unwrap();
+	let baseline = native_bundle(0, BASELINE);
+	let mut guest = guest_runtime(Vec::new(), Vec::new());
+	guest.requirements.as_mut().unwrap().protocol.bridge += 1;
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut installed = InstalledBundles::open(
+		directory.path(),
+		&baseline,
+		configuration_with(host_runtime()),
+	)
+	.unwrap();
+	let error = installed
+		.sync_with(&mut Registry::new(replacement))
+		.unwrap_err();
+	assert!(
+		matches!(error, CodePushError::InvalidCapabilityContract(message) if message.contains("protocols"))
+	);
+	assert_eq!(installed.launch().unwrap().wasm, BASELINE);
+}
+
+#[test]
+fn contract_verification_also_enforces_legacy_abi_shell_and_plugin_requirements() {
+	let host = host_runtime();
+	for original in [contract(), guest_runtime(Vec::new(), Vec::new())] {
+		assert!(original.verify_guest(&host).is_ok());
+		let mut changed = original.clone();
+		changed.abi += 1;
+		assert!(changed.verify_guest(&host).is_err());
+		changed = original.clone();
+		changed.shell.push_str("-incompatible");
+		assert!(changed.verify_guest(&host).is_err());
+		changed = original;
+		changed.plugins.push("missing-plugin".into());
+		assert!(changed.verify_guest(&host).is_err());
+	}
+}
+
+#[test]
+fn unclassified_plugin_grants_do_not_prove_plugin_availability() {
+	for state in [CapabilityState::Unsupported, CapabilityState::Unknown] {
+		let mut host = host_runtime();
+		let plugin = &mut host.host.as_mut().unwrap().plugins[0];
+		plugin.state = state;
+		plugin.implementation = None;
+		let guest = guest_runtime(Vec::new(), Vec::new());
+		assert_eq!(
+			guest.verify_guest(&host).unwrap(),
+			ContractCompatibility::Incomplete
+		);
+		// A grant alone never satisfies an explicit availability requirement.
+		let required = guest_runtime(vec!["plugin.clipboard"], Vec::new());
+		assert!(required.verify_guest(&host).is_err());
+		// Explicit optionality declares a fallback and removes the old grant
+		// requirement. It does not pretend the plugin is available.
+		let mut optional = guest_runtime(Vec::new(), vec!["plugin.clipboard"]);
+		optional.plugins.clear();
+		assert_eq!(
+			optional.verify_guest(&host).unwrap(),
+			ContractCompatibility::Verified
+		);
+	}
+	assert_eq!(
+		guest_runtime(Vec::new(), Vec::new())
+			.verify_guest(&host_runtime())
+			.unwrap(),
+		ContractCompatibility::Verified
+	);
+}
+
+#[test]
+fn a_signed_release_with_unclassified_missing_plugins_reports_incomplete() {
+	let directory = tempfile::tempdir().unwrap();
+	let baseline = native_bundle(0, BASELINE);
+	let guest = guest_runtime(Vec::new(), Vec::new());
+	let replacement = guest_bundle(1, REPLACEMENT, &guest);
+	let mut host = host_runtime();
+	let plugin = &mut host.host.as_mut().unwrap().plugins[0];
+	plugin.state = CapabilityState::Unsupported;
+	plugin.implementation = None;
+	let mut installed =
+		InstalledBundles::open(directory.path(), &baseline, configuration_with(host)).unwrap();
+	let report = installed
+		.sync_with(&mut Registry::new(replacement))
+		.unwrap();
+	assert_eq!(report.status, UpdateStatus::Staged);
+	assert_eq!(report.contract, ContractCompatibility::Incomplete);
+	assert_eq!(
+		serde_json::to_value(&report).unwrap()["contract"],
+		"incomplete"
+	);
+	// Preserve the old missing-plugin policy while reporting its evidence
+	// accurately. Explicit required plugins would have rejected this release.
+	assert_eq!(installed.launch().unwrap().wasm, REPLACEMENT);
+}
+
+#[test]
+fn a_versioned_host_cannot_confuse_plugin_grants_with_resolved_support() {
+	let mut missing_entry = host_runtime();
+	missing_entry.host.as_mut().unwrap().plugins.clear();
+	assert!(missing_entry.validate_host().is_err());
+
+	let mut ungranted_entry = host_runtime();
+	ungranted_entry.plugins.clear();
+	assert!(ungranted_entry.validate_host().is_err());
+
+	let mut duplicate_grant = host_runtime();
+	duplicate_grant.plugins.push("clipboard".into());
+	assert!(duplicate_grant.validate_host().is_err());
+
+	let mut invalid_grant = host_runtime();
+	invalid_grant.plugins[0] = "Clipboard".into();
+	invalid_grant.host.as_mut().unwrap().plugins[0].name = "Clipboard".into();
+	assert!(invalid_grant.validate_host().is_err());
+
+	let mut guessed_plugin = host_runtime();
+	guessed_plugin
+		.host
+		.as_mut()
+		.unwrap()
+		.capabilities
+		.push(CapabilityEntry {
+			id: "plugin.guessed".into(),
+			state: CapabilityState::Available,
+			detail: None,
+		});
+	assert!(guessed_plugin.validate_host().is_err());
+	// An unresolved declaration may be recorded, but cannot satisfy a guest.
+	guessed_plugin
+		.host
+		.as_mut()
+		.unwrap()
+		.capabilities
+		.last_mut()
+		.unwrap()
+		.state = CapabilityState::Unknown;
+	guessed_plugin.validate_host().unwrap();
+	assert!(
+		guest_runtime(vec!["plugin.guessed"], Vec::new())
+			.verify_guest(&guessed_plugin)
+			.is_err()
 	);
 }

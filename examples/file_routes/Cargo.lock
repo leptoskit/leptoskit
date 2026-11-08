@@ -2237,6 +2237,7 @@ dependencies = [
  "leptoskit_appkit",
  "leptoskit_auth",
  "leptoskit_bridge",
+ "leptoskit_codepush",
  "leptoskit_config",
  "leptoskit_devtools",
  "leptoskit_gtk",
