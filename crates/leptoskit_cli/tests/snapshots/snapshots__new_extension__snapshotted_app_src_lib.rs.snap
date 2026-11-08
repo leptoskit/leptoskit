@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 253
 expression: contents
 ---
 //! One application shared by the browser, server, and native runners.
@@ -11,6 +10,7 @@ pub mod services;
 #[cfg(feature = "extension")]
 mod extension;
 
+pub use snapshotted_shared::Health;
 pub use services::Counter;
 
 /// Renders the portable application tree for any host.
