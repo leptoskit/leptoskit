@@ -50,7 +50,7 @@ use leptoskit::native::animation::Transition;
 use leptoskit::prelude::*;
 
 #[component]
-fn Toast(message: String) -> Element {
+fn Banner(message: String) -> Element {
 	view! {
 		<View
 			class="px-4 py-3 rounded-lg bg-slate-900"
@@ -72,7 +72,7 @@ fn Toast(message: String) -> Element {
 - `keyframes` plays a sequence, such as `Keyframes::spin()`. Build your own from `Keyframe::at(offset)` steps with `Keyframes::new`, then `.forever()`, `.repeat(n)`, `.alternate()`, or `.delay(ms)`.
 - `transform` sets a `Transform` directly, such as `Transform::rotate(-3.0).scaled(1.05, 1.05)`.
 
-Springs come with presets (`Spring::DEFAULT`, `GENTLE`, `SNAPPY`, `STIFF`, `WOBBLY`). You can also give `Spring::new(stiffness, damping)`, or `Spring::with_duration(ms, bounce)` to describe it as SwiftUI does.
+Springs come with presets (`Spring::DEFAULT`, `GENTLE`, `SNAPPY`, `STIFF`, `WOBBLY`). You can also give `Spring::new(stiffness, damping)`, or `Spring::with_duration(ms, bounce)` to describe it as SwiftUI does. For Ding-style status pills that morph in place, use the built-in [toasts](33-toasts.md) API, whose enter / morph / stack springs match Ding's 320 / 26, 340 / 27, and 400 / 36 tunings.
 
 If you know Reanimated, the pieces map like this:
 

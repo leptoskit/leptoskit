@@ -44,6 +44,10 @@ Use `View` plus Tailwind for rows, grids, and layered content. Helpers remain av
 | `ScrollView()`                         | A scroll container. `scroll_offset` scrolls it from code; see [programmatic scrolling](../guide/17-virtualized-lists.md#programmatic-scrolling).                     |
 | `ListView()`, `GridView(columns)`      | Eager scrolling collections that fill the available height in a bounded column. Every item is constructed and laid out.                                              |
 
+### Toasts
+
+Ding-inspired status pills live under `leptoskit::components::toast` (also re-exported from `leptoskit::components`). Hold a `Toaster`, call `success` / `error` / `warning` / `info` / `loading`, rebuild from `toaster.state()`, and advance phases with `poll`. `ToastViewport` draws the stack; `Toast` draws one pill. Springs match Ding (enter 320 / 26, morph 340 / 27, stack 400 / 36). See [Toasts](../guide/33-toasts.md).
+
 `BoxConstraints::new(min_width, max_width, min_height, max_height)` accepts finite nonnegative minima and optional finite maxima. A maximum cannot be smaller than its minimum. `BoxConstraints::tight(width, height)` fixes both dimensions. These constraints apply to the CSS box, rather than Flutter's parent-to-child constraint protocol.
 
 `AspectRatio`, `ClipRRect`, and `Opacity` return `Result<Element, LayoutError>`. Ratios range from `1e-6` through `1e6`. Radii must be finite and nonnegative. Opacity must be finite and between zero and one.

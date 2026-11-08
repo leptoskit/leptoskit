@@ -53,7 +53,23 @@ mod controls;
 /// kinds.
 pub mod helpers;
 
+/// Ding-inspired toast notifications: morphing pills with spring motion.
+pub mod toast;
+
 pub use controls::*;
+pub use toast::Toast;
+pub use toast::ToastAction;
+pub use toast::ToastIcon;
+pub use toast::ToastItem;
+pub use toast::ToastKind;
+pub use toast::ToastOptions;
+pub use toast::ToastPatch;
+pub use toast::ToastPhase;
+pub use toast::ToastPosition;
+pub use toast::ToastViewport;
+pub use toast::Toaster;
+pub use toast::ToasterState;
+pub use toast::WithToasts;
 
 pub use crate::reactive::For;
 pub use crate::reactive::Show;
