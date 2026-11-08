@@ -175,6 +175,47 @@ impl SceneState {
 		}
 	}
 
+	/// The scene's renderer on `gpu`, made on first use. A scene drawn on
+	/// another device (a headset's, then a view's again) moves to this one.
+	fn renderer_on(&mut self, gpu: &Gpu) -> &mut Renderer {
+		if self
+			.renderer
+			.as_ref()
+			.is_some_and(|renderer| !renderer.gpu().same_device(gpu))
+			&& let Some(renderer) = self.renderer.take()
+		{
+			self.world = Some(renderer.into_world());
+		}
+
+		let renderer = match self.renderer.take() {
+			Some(renderer) => renderer,
+			None => Renderer::with_world(gpu, self.world.take().unwrap_or_default()),
+		};
+
+		self.renderer.insert(renderer)
+	}
+
+	/// Moves the scene's time forward to the display time `time`, once per
+	/// display frame however many views draw it. A clock that jumps back by
+	/// more than a second (another display's) starts counting from there.
+	fn advance_to(&mut self, time: f64) {
+		match self.time {
+			Some(last) if time <= last => {
+				if last - time > 1.0 {
+					self.time = Some(time);
+				}
+			}
+			last => {
+				let elapsed = last.map_or(0.0, |last| (time - last) as f32);
+				self.time = Some(time);
+
+				if let Some(renderer) = &mut self.renderer {
+					renderer.advance(elapsed);
+				}
+			}
+		}
+	}
+
 	/// Wakes event waiters if events are waiting, and every view.
 	fn notify(&mut self) {
 		if self.world().has_events() {
@@ -274,6 +315,60 @@ impl Hub {
 		for scene in scenes {
 			for view in scene.lock().views.values() {
 				view();
+			}
+		}
+	}
+
+	/// Draws `scene` with a renderer on `gpu`, such as a headset's device,
+	/// after moving it forward to the display time `time` (seconds) as a view
+	/// does. The scene moves to `gpu` while it is drawn there, and back to a
+	/// view's device when a view draws it next. `None`, having drawn
+	/// nothing, when no such scene is open.
+	pub fn draw_scene<R>(
+		&self,
+		scene: SceneId,
+		gpu: &Gpu,
+		time: f64,
+		draw: impl FnOnce(&mut Renderer) -> R,
+	) -> Option<R> {
+		let scene = lock(&self.scenes).get(&scene).cloned()?;
+		let mut state = scene.lock();
+
+		if state.closed {
+			return None;
+		}
+
+		state.renderer_on(gpu);
+		state.advance_to(time);
+		let renderer = state.renderer.as_mut()?;
+		let result = draw(renderer);
+
+		if renderer.world().has_events() {
+			for waiter in state.waiters.drain(..) {
+				waiter.wake();
+			}
+		}
+
+		Some(result)
+	}
+
+	/// Moves every scene drawn on `gpu` off it, before that device goes away,
+	/// as a headset's does when its session ends. The next view that draws
+	/// each scene uploads it to its own device, and is asked to.
+	pub fn forget_device(&self, gpu: &Gpu) {
+		let scenes: Vec<Arc<Scene>> = lock(&self.scenes).values().cloned().collect();
+
+		for scene in scenes {
+			let mut state = scene.lock();
+
+			if state
+				.renderer
+				.as_ref()
+				.is_some_and(|renderer| renderer.gpu().same_device(gpu))
+				&& let Some(renderer) = state.renderer.take()
+			{
+				state.world = Some(renderer.into_world());
+				state.notify();
 			}
 		}
 	}
@@ -670,23 +765,8 @@ impl View {
 			return Ok(false);
 		}
 
-		if state.renderer.is_none() {
-			let world = state.world.take().unwrap_or_default();
-			state.renderer = Some(Renderer::with_world(&self.gpu, world));
-		}
-
-		let elapsed = match state.time {
-			Some(last) if time > last => (time - last) as f32,
-			_ => 0.0,
-		};
-
-		if state.time.is_none_or(|last| time > last) {
-			state.time = Some(time);
-
-			if let Some(renderer) = &mut state.renderer {
-				renderer.advance(elapsed);
-			}
-		}
+		state.renderer_on(&self.gpu);
+		state.advance_to(time);
 
 		let texture = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(texture)

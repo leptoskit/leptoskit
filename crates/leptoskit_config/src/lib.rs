@@ -1228,7 +1228,9 @@ impl std::str::FromStr for ExportMethod {
 pub struct QuestConfig {
 	/// Launches straight into the headset's immersive mode, where only what
 	/// the app draws through OpenXR is shown. With `false`, the app opens as
-	/// a 2D panel showing its ordinary interface.
+	/// a 2D panel showing its ordinary interface, which can still open an
+	/// immersive session: the `xr` plugin draws it from an immersive activity
+	/// and returns to the panel when it ends.
 	pub immersive: bool,
 	/// The headsets the Horizon Store offers the app on.
 	pub supported_devices: Vec<QuestDevice>,

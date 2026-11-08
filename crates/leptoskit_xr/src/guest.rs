@@ -105,6 +105,15 @@ impl Session {
 		call(self.client, REMOVE_ANCHOR, &id).await
 	}
 
+	/// Draws the `leptoskit_3d` scene whose `Scene3d` view uses the id
+	/// `scene` into a headset session, or nothing with `None`. A phone's
+	/// session shows the scene in its own `Scene3d` view instead, so this only
+	/// matters on headsets. On Meta Quest, a panel app's immersive session
+	/// opens over the panel and draws this scene.
+	pub async fn present(&self, scene: Option<u32>) -> Result<(), Error> {
+		call(self.client, PRESENT, &Present { scene }).await
+	}
+
 	/// Ends the session and releases the camera.
 	pub async fn stop(self) -> Result<(), Error> {
 		call(self.client, STOP, &()).await

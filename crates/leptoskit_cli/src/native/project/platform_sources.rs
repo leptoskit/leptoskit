@@ -61,6 +61,7 @@ pub(crate) const ANDROID: &[&str] = &[
 	"mobile/NativeRiveAnimator.kt",
 	"mobile/NativeScene3d.kt",
 	"mobile/NativeVideo.kt",
+	"mobile/NativeImmersive.kt",
 	"android/NativePermissionHost.kt",
 	"android/NativeActivityResultHost.kt",
 	"mobile/NativeApp.kt",

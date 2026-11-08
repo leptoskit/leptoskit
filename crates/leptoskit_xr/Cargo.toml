@@ -51,6 +51,10 @@ wgpu = ["host", "dep:wgpu", "dep:ash"]
 # so a scene with the camera backdrop draws over the session's frames.
 # `leptoskit build` turns it on when the app shows 3D scenes.
 scene3d = ["3d", "async-host", "leptoskit_3d/host"]
+# Meta Quest: headset sessions through OpenXR, drawn with the app's scenes,
+# from a panel app through an immersive activity. `leptoskit build --platform
+# quest` turns it on.
+quest = ["openxr", "scene3d"]
 # The WebXR backend for the browser build.
 web = [
 	"dep:js-sys",

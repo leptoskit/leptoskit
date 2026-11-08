@@ -472,6 +472,12 @@ impl Renderer {
 		&self.gpu
 	}
 
+	/// Gives the scene back, to draw it on another device. Its assets upload
+	/// again to the new renderer's device.
+	pub fn into_world(self) -> World {
+		self.world
+	}
+
 	/// What the last frame drew.
 	pub fn stats(&self) -> FrameStats {
 		self.stats

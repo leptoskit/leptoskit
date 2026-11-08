@@ -421,6 +421,15 @@ impl Session {
 		}
 	}
 
+	/// Matches the native API. In the browser the page draws the session
+	/// itself through [`Session::xr_session`], so there is no scene to
+	/// choose. It returns a future, as the guest client's does, so shared code
+	/// awaits it on either.
+	pub fn present(&self, scene: Option<u32>) -> std::future::Ready<Result<(), Error>> {
+		let _ = scene;
+		std::future::ready(Ok(()))
+	}
+
 	/// Ends the session.
 	pub async fn stop(self) -> Result<(), Error> {
 		let session = self.state.borrow().session.clone();

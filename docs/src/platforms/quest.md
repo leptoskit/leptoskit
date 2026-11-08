@@ -2,7 +2,7 @@
 
 <Callout kind="warning" title="Experimental">
 
-The Quest build is new. It produces an APK with everything Horizon OS asks of a VR app, but it hasn't been installed on a headset yet. What the headset shows depends on the app drawing through OpenXR; see below.
+The Quest build is new. It produces an APK with everything Horizon OS asks of a VR app and draws the app's 3D scene into the headset, but it hasn't been installed on a headset yet.
 
 </Callout>
 
@@ -32,12 +32,12 @@ hand-tracking = "optional"
 passthrough = true
 ```
 
-| Setting             | Default             | What it does                                                                                                                                   |
-| ------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `immersive`         | `true`              | Launches into the headset's immersive mode. With `false`, the app opens as a 2D panel showing its ordinary interface, as any Android app does. |
-| `supported-devices` | every current Quest | The headsets the Horizon Store offers the app on.                                                                                              |
-| `hand-tracking`     | `"optional"`        | `"optional"` uses hands where the player has them on, `"required"` hides the app from players without hand tracking, `"off"` leaves hands out. |
-| `passthrough`       | `true`              | Declares passthrough, so `ImmersiveAr` sessions can show the room.                                                                             |
+| Setting             | Default             | What it does                                                                                                                                                                                    |
+| ------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `immersive`         | `true`              | Launches into the headset's immersive mode. With `false`, the app opens as a 2D panel showing its ordinary interface, as any Android app does, and can still open an immersive session (below). |
+| `supported-devices` | every current Quest | The headsets the Horizon Store offers the app on.                                                                                                                                               |
+| `hand-tracking`     | `"optional"`        | `"optional"` uses hands where the player has them on, `"required"` hides the app from players without hand tracking, `"off"` leaves hands out.                                                  |
+| `passthrough`       | `true`              | Declares passthrough, so `ImmersiveAr` sessions can show the room.                                                                                                                              |
 
 ## What the build adds
 
@@ -48,9 +48,37 @@ On top of the app's own manifest, the Quest build declares:
 - hand tracking (`oculus.software.handtracking` and its permission) and passthrough (`com.oculus.feature.PASSTHROUGH`), as configured;
 - the supported headsets (`com.oculus.supportedDevices`);
 - for immersive apps, the `com.oculus.intent.category.VR` and OpenXR `IMMERSIVE_HMD` launcher categories;
-- a full-screen, landscape activity with no title or status bar and no picture-in-picture, that handles every configuration change itself so a session survives it.
+- a full-screen, landscape activity with no title or status bar and no picture-in-picture, that handles every configuration change itself so a session survives it;
+- the immersive activity the `xr` plugin opens for a headset session;
+- for panel apps, the `com.oculus.intent.category.2D` launcher category and Horizon OS v69 as the target, which lets a panel open an immersive activity.
 
 The [`xr` plugin](../guide/35-headsets.md) brings the Khronos OpenXR loader with it.
+
+## Immersive sessions from a panel
+
+A panel app keeps its ordinary screens and opens the headset for one part of it: a game whose menus are a panel and whose hunts fill the room. Start an `ImmersiveAr` or `ImmersiveVr` session from your code as on any headset, and choose the 3D scene it shows with `present`:
+
+```rust
+use leptoskit_xr::Features;
+use leptoskit_xr::Mode;
+use leptoskit_xr::ReferenceSpace;
+use leptoskit_xr::SessionConfig;
+use leptoskit_xr::Xr;
+
+async fn enter_the_hunt(scene: u32) -> Result<leptoskit_xr::Session, leptoskit_xr::Error> {
+	let session = Xr::new()?
+		.start(
+			SessionConfig::new(Mode::ImmersiveAr)
+				.reference_space(ReferenceSpace::LocalFloor)
+				.prefer(Features::CONTROLLERS | Features::HANDS | Features::PASSTHROUGH),
+		)
+		.await?;
+	session.present(Some(scene)).await?;
+	Ok(session)
+}
+```
+
+The headset leaves the panel for an immersive view of the scene, with the room showing through where the scene draws nothing. Your code keeps running and receives the session's frames, controllers, and hands as usual. When you `stop` the session, or the player leaves it, the immersive view closes and the panel comes back in Home. The scene needs `leptoskit`'s `3d` feature; `leptoskit build --platform quest` draws it.
 
 ## What works and what doesn't
 
@@ -61,5 +89,6 @@ The [`xr` plugin](../guide/35-headsets.md) brings the Khronos OpenXR loader with
 | Every runtime plugin the Android build has                              | Publishing to the Horizon Store with `leptoskit publish`                                                       |
 | A release APK signed with your upload key                               |                                                                                                                |
 | The `xr` plugin's headset sessions, controllers, hands, and passthrough | Uploading the signed APK to the Horizon Store: use Meta's own tools                                            |
+| Drawing a 3D scene into the headset, from a panel app too               | Running the immersive switch and the return to the panel on a headset hasn't been verified                     |
 
 In immersive mode the headset shows only what the app draws through OpenXR, so a Quest game draws its world, and its menus, with the 3D renderer. Set `immersive = false` for an app whose interface is its ordinary screens: it runs in a window in the player's space.

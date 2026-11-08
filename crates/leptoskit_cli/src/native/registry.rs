@@ -272,7 +272,8 @@ pub struct Registry {
 	/// Whether the app shows 3D scenes: it builds `leptoskit_3d` with more
 	/// than its protocol, so the host gets the bridge's `scene3d` feature, the
 	/// `scene3d` feature of every async plugin that has one (`xr`, whose
-	/// sessions the scenes draw over), and the app's `assets/` folder.
+	/// sessions the scenes draw over), and the app's `assets/` folder. A Quest
+	/// host also gets every async plugin's `quest` feature.
 	pub scene3d: bool,
 }
 
@@ -490,8 +491,13 @@ fn resolve_for_target(
 	let scene3d = uses_scene3d(&metadata.resolve, &packages);
 
 	if scene3d {
-		let plugin_features = scene3d_features(&host_features, &plugins, &packages);
+		let plugin_features = plugin_features(&host_features, &plugins, &packages, "scene3d");
 		host_features.push(bridge_feature(app, node, &packages, "scene3d")?);
+		host_features.extend(plugin_features);
+	}
+
+	if target == Some(Target::Quest) {
+		let plugin_features = plugin_features(&host_features, &plugins, &packages, "quest");
 		host_features.extend(plugin_features);
 	}
 
@@ -509,13 +515,16 @@ fn resolve_for_target(
 	})
 }
 
-/// `<key>/scene3d` for each async plugin the host builds whose package has
-/// a `scene3d` feature, such as `leptoskit_xr`'s, which hands its sessions to
-/// the scenes. `host_features` holds the plugins' `<key>/async-host`.
-fn scene3d_features(
+/// `<key>/<feature>` for each async plugin the host builds whose package has
+/// that feature: `scene3d` when the app shows 3D scenes (`leptoskit_xr`'s
+/// hands its sessions to them), and `quest` on Meta Quest (`leptoskit_xr`'s
+/// draws headset sessions). `host_features` holds the plugins'
+/// `<key>/async-host`.
+fn plugin_features(
 	host_features: &[String],
 	plugins: &[Plugin],
 	packages: &BTreeMap<&String, &Package>,
+	feature: &str,
 ) -> Vec<String> {
 	host_features
 		.iter()
@@ -523,11 +532,11 @@ fn scene3d_features(
 		.filter(|key| {
 			plugins.iter().any(|plugin| {
 				packages.values().any(|package| {
-					package.name == plugin.package_name && package.features.contains_key("scene3d")
+					package.name == plugin.package_name && package.features.contains_key(feature)
 				}) && key.replace('-', "_") == plugin.crate_name
 			})
 		})
-		.map(|key| format!("{key}/scene3d"))
+		.map(|key| format!("{key}/{feature}"))
 		.collect()
 }
 
