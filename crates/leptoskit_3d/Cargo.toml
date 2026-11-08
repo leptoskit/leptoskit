@@ -1,0 +1,16 @@
+[package]
+name = "leptoskit_3d"
+version = "0.3.0"
+authors.workspace = true
+categories = ["gui", "graphics", "rendering", "game-development"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["3d", "gltf", "wgpu", "gpu", "scene"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "GPU 3D scenes for leptoskit: a host-owned scene of glTF models, animation, and lights, driven by compact ops and drawn with wgpu."
+
+[lints]
+workspace = true
