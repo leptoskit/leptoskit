@@ -210,9 +210,16 @@ fn selected_platforms(all: bool, config: Option<&LeptoskitConfig>) -> Vec<Platfo
 		return Vec::new();
 	};
 
+	let harmonyos_opt_in = config.native.targets == [leptoskit_config::NativeTarget::Harmonyos]
+		&& config.app.default_platform == Platform::Native
+		&& config.app.platforms == Platform::APPLICATION;
+
 	ORDER
 		.into_iter()
-		.filter(|platform| config.app.platforms.contains(platform))
+		.filter(|platform| {
+			config.app.platforms.contains(platform)
+				|| (*platform == Platform::Harmonyos && harmonyos_opt_in)
+		})
 		.collect()
 }
 
@@ -757,6 +764,15 @@ mod tests {
 			cfg!(target_os = "macos"),
 			"iOS checks only run where Xcode can"
 		);
+	}
+
+	#[test]
+	fn a_legacy_harmonyos_opt_in_is_checked_by_doctor() {
+		let mut config = LeptoskitConfig::default();
+		config.app.default_platform = Platform::Native;
+		config.app.platforms = Platform::APPLICATION.to_vec();
+		config.native.targets = vec![leptoskit_config::NativeTarget::Harmonyos];
+		assert!(selected_platforms(false, Some(&config)).contains(&Platform::Harmonyos));
 	}
 
 	#[test]

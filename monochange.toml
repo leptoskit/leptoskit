@@ -315,6 +315,7 @@ type = "cargo"
 
 [package.leptoskit_platform_harmonyos]
 path = "crates/leptoskit_platform_harmonyos"
+type = "cargo"
 
 [package.leptoskit_plugin]
 path = "crates/leptoskit_plugin"
