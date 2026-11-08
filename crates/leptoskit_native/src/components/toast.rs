@@ -617,7 +617,7 @@ impl Toaster {
 						secondary: Some(None),
 						..patch
 					},
-				)
+				);
 			}
 			None => self.dismiss(Some(&id), false),
 		}

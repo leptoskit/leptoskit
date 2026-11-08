@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 520
 expression: contents
 ---
 #:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
@@ -79,6 +78,20 @@ dialect = "sqlite"
 features = ["server"]
 migrations = "migrations"
 url_env = "DATABASE_URL"
+
+[lint]
+markup = "builder"
+clippy = true
+exclude = []
+
+[lint.rules]
+component_attribute = "deny"
+markup_style = "deny"
+redundant_view = "warn"
+spacer_view = "warn"
+children_last = "warn"
+image_label = "warn"
+color_literal = "allow"
 
 # Sign-in. Secrets stay in the environment: AUTH_ENCRYPTION_KEYS holds the
 # server's keys, as `id:key` pairs.
