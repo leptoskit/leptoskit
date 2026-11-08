@@ -70,6 +70,9 @@ pub fn generate(
 		Target::Wearos | Target::Watchos => {
 			anyhow::bail!("watch hosts are scaffolded before project::generate")
 		}
+		Target::Oculus => {
+			anyhow::bail!("Oculus hosts are scaffolded before project::generate")
+		}
 	}
 }
 

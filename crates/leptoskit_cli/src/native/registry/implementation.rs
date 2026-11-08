@@ -295,7 +295,12 @@ impl HostCapabilities {
 			}
 			// Experimental watch hosts and the app-owned runners don't
 			// register plugins yet.
-			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos => {
+			Target::Windows
+			| Target::Linux
+			| Target::Tui
+			| Target::Wearos
+			| Target::Watchos
+			| Target::Oculus => {
 				Self {
 					sync: false,
 					worker: false,
@@ -431,8 +436,8 @@ impl Plugin {
 			Target::Windows => self.windows.as_ref(),
 			Target::Linux => self.linux.as_ref(),
 			Target::Tui => self.tui.as_ref(),
-			// watchOS has no plugin registration table yet.
-			Target::Watchos => None,
+			// watchOS and Oculus have no plugin registration table yet.
+			Target::Watchos | Target::Oculus => None,
 		}
 	}
 
@@ -463,9 +468,12 @@ impl Plugin {
 					ty: self.harmonyos_type.as_deref()?,
 				})
 			}
-			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos => {
-				None
-			}
+			Target::Windows
+			| Target::Linux
+			| Target::Tui
+			| Target::Wearos
+			| Target::Watchos
+			| Target::Oculus => None,
 		}
 	}
 }
@@ -491,6 +499,7 @@ impl MissingPlugin {
 			Target::Harmonyos | Target::HarmonyosX86_64 => ("HarmonyOS", "HarmonyOS"),
 			Target::Wearos => ("Wear OS", "Wear OS"),
 			Target::Watchos => ("watchOS", "watchOS"),
+			Target::Oculus => ("Meta Quest", "Meta Quest"),
 			Target::Windows => ("Windows", "Windows"),
 			Target::Linux => ("Linux", "Linux"),
 			Target::Tui => ("the terminal", "terminal"),

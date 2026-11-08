@@ -423,6 +423,13 @@ impl Tools {
 						.to_owned(),
 				)
 			}
+			Platform::Oculus => {
+				Err(
+					"`leptoskit dev` does not run Meta Quest apps yet; Oculus support is \
+					 experimental — see the Oculus platform page"
+						.to_owned(),
+				)
+			}
 			Platform::Extension => self.extension_browser.support(),
 			_ => Ok(()),
 		}

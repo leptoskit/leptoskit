@@ -1,4 +1,7 @@
 //! HarmonyOS Stage-model projects, Rust cross compilation, and HAP packaging.
+//!
+//! Host templates and the capability manifest live in
+//! `leptoskit_platform_harmonyos`; this module orchestrates prepare/build.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,6 +10,10 @@ use std::process::Command;
 use anyhow::Context;
 use anyhow::Result;
 use leptoskit_config::LeptoskitConfig;
+use leptoskit_platform::PlatformExtension;
+use leptoskit_platform::ScaffoldContext;
+use leptoskit_platform_harmonyos::HarmonyOs;
+use leptoskit_platform_harmonyos::templates;
 
 use super::Target;
 use super::project;
@@ -47,10 +54,7 @@ fn generate_plugins(host: &Path, registry: &Registry) -> Result<()> {
 		std::fs::remove_dir_all(&generated)?;
 	}
 
-	project::write(
-		&generated.join("plugins.ts"),
-		include_str!("templates/harmonyos/plugins.ts"),
-	)?;
+	project::write(&generated.join("plugins.ts"), templates::PLUGINS_TS)?;
 	let selected: Vec<_> = registry
 		.implementations(Target::Harmonyos)?
 		.into_iter()
@@ -227,8 +231,7 @@ pub(super) fn generate(
 		"arm64-v8a"
 	};
 
-	let profile =
-		include_str!("templates/harmonyos/entry-build-profile.json5").replace("__ABI__", abi);
+	let profile = HarmonyOs::entry_build_profile(abi);
 	project::write(
 		&root.join("hosts/harmonyos/entry/build-profile.json5"),
 		&profile,
@@ -256,136 +259,26 @@ pub(super) fn generate(
 
 /// The app shell is owned by the application, just like hosts/android.
 pub(super) fn scaffold(root: &Path, config: &LeptoskitConfig) -> Result<()> {
-	let host = root.join("hosts/harmonyos");
+	let host = root.join("hosts").join(HarmonyOs::ID);
 	let package = if config.native.package_id.is_empty() {
 		leptoskit_config::default_package_id(&config.app.name)
 	} else {
 		config.native.package_id.clone()
 	};
+	let version = config.app.version.to_string();
+	let context = ScaffoldContext {
+		app_name: &config.app.name,
+		package_id: &package,
+		version: &version,
+	};
 
-	let app = serde_json::json!({"app": {
-		"bundleName": package, "vendor": "leptoskit", "versionCode": 1,
-		"versionName": config.app.version.to_string(), "icon": "$media:app_icon", "label": "$string:app_name"
-	}});
-	let resources = serde_json::json!({"string": [{"name":"app_name", "value": config.app.name}]});
-	let files = [
-		("AppScope/app.json5", serde_json::to_string_pretty(&app)?),
-		(
-			"AppScope/resources/base/element/string.json",
-			serde_json::to_string_pretty(&resources)?,
-		),
-		(
-			"AppScope/resources/base/media/app_icon.svg",
-			include_str!("templates/harmonyos/app_icon.svg").into(),
-		),
-		(
-			"build-profile.json5",
-			include_str!("templates/harmonyos/build-profile.json5").into(),
-		),
-		(
-			"oh-package.json5",
-			include_str!("templates/harmonyos/oh-package.json5").into(),
-		),
-		(
-			"TESTING.md",
-			include_str!("templates/harmonyos/testing.md").replace("__BUNDLE_NAME__", &package),
-		),
-		(
-			"entry/src/ohosTest/module.json5",
-			include_str!("templates/harmonyos/test-module.json5").into(),
-		),
-		(
-			"entry/src/ohosTest/ets/testrunner/OpenHarmonyTestRunner.ets",
-			include_str!("templates/harmonyos/OpenHarmonyTestRunner.ets").into(),
-		),
-		(
-			"entry/src/ohosTest/ets/test/Counter.test.ets",
-			include_str!("templates/harmonyos/Counter.test.ets")
-				.replace("__BUNDLE_NAME__", &package),
-		),
-		(
-			"hvigorfile.ts",
-			"import { appTasks } from '@ohos/hvigor-ohos-plugin';\nexport default { system: \
-			 appTasks, plugins: [] };\n"
-				.into(),
-		),
-		(
-			"hvigor/hvigor-config.json5",
-			"{\"modelVersion\": \"5.0.0\", \"dependencies\": {}, \"execution\": {}, \"logging\": \
-			 {}, \"debugging\": {}, \"nodeOptions\": {}}\n"
-				.into(),
-		),
-		(
-			"entry/hvigorfile.ts",
-			"import { hapTasks } from '@ohos/hvigor-ohos-plugin';\nexport default { system: \
-			 hapTasks, plugins: [] };\n"
-				.into(),
-		),
-		(
-			"entry/oh-package.json5",
-			"{\"name\": \"entry\", \"version\": \"1.0.0\", \"dependencies\": \
-			 {\"libleptoskit.so\": \"file:./src/main/cpp/types/libleptoskit\"}}\n"
-				.into(),
-		),
-		(
-			"entry/build-profile.json5",
-			include_str!("templates/harmonyos/entry-build-profile.json5")
-				.replace("__ABI__", "arm64-v8a"),
-		),
-		(
-			"entry/src/main/module.json5",
-			include_str!("templates/harmonyos/module.json5").into(),
-		),
-		(
-			"entry/src/main/resources/base/profile/main_pages.json",
-			"{\"src\": [\"pages/Index\"]}\n".into(),
-		),
-		(
-			"entry/src/main/resources/base/element/color.json",
-			"{\"color\": [{\"name\": \"start_window_background\", \"value\": \"#FFFFFF\"}]}\n"
-				.into(),
-		),
-		(
-			"entry/src/main/ets/entryability/EntryAbility.ets",
-			include_str!("templates/harmonyos/EntryAbility.ets").into(),
-		),
-		(
-			"entry/src/main/ets/pages/Index.ets",
-			include_str!("templates/harmonyos/Index.ets").into(),
-		),
-		(
-			"entry/src/main/ets/scene.ts",
-			include_str!("templates/harmonyos/scene.ts").into(),
-		),
-		(
-			"entry/src/main/cpp/CMakeLists.txt",
-			include_str!("templates/harmonyos/CMakeLists.txt").into(),
-		),
-		(
-			"entry/src/main/cpp/types/libleptoskit/index.d.ts",
-			include_str!("templates/harmonyos/index.d.ts").into(),
-		),
-		(
-			"entry/src/main/cpp/types/libleptoskit/oh-package.json5",
-			"{\"name\":\"libleptoskit.so\",\"version\":\"1.0.0\",\"types\":\"./index.d.ts\"}\n"
-				.into(),
-		),
-		(
-			".gitignore",
-			"/.hvigor\n/oh_modules\n/entry/oh_modules\n/entry/build\n/entry/.test\n/entry/.cxx\n/\
-			 entry/build-profile.json5\n/entry/src/main/ets/leptoskit\n/local.properties\n/entry/\
-			 src/main/resources/rawfile/app.wasm\n"
-				.into(),
-		),
-	];
-
-	for (name, content) in files {
-		let path = host.join(name);
+	for file in HarmonyOs.scaffold_files(context) {
+		let path = host.join(&file.relative_path);
 
 		if !path.try_exists()? {
 			let path = camino::Utf8Path::from_path(&path)
 				.context("HarmonyOS project path is not UTF-8")?;
-			crate::new_project::write_new(path, &content)?;
+			crate::new_project::write_new(path, &file.contents)?;
 		}
 	}
 
@@ -584,7 +477,7 @@ mod tests {
 		assert!(rust.contains("Counter") && !rust.contains("Posture"));
 		assert_eq!(
 			std::fs::read_to_string(generated.join("plugins.ts")).unwrap(),
-			include_str!("templates/harmonyos/plugins.ts")
+			templates::PLUGINS_TS
 		);
 		assert!(generated.join("plugin_1/PosturePlugin.ts").is_file());
 

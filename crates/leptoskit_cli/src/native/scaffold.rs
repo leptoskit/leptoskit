@@ -34,6 +34,7 @@ pub fn run_for_target(
 		Some(NativeTarget::Harmonyos) => return harmonyos(path, name, sdk),
 		Some(NativeTarget::Wearos) => return watch(path, name, sdk, NativeTarget::Wearos),
 		Some(NativeTarget::Watchos) => return watch(path, name, sdk, NativeTarget::Watchos),
+		Some(NativeTarget::Oculus) => return oculus(path, name, sdk),
 		Some(NativeTarget::Ios) => Platform::Ios,
 		Some(NativeTarget::Android) => Platform::Android,
 		Some(NativeTarget::Macos) => Platform::Macos,
@@ -210,7 +211,7 @@ serde_json = "1"
 		("guest/Cargo.toml", guest),
 		(
 			"guest/src/lib.rs",
-			include_str!("templates/harmonyos/guest.rs").into(),
+			leptoskit_platform_harmonyos::templates::GUEST_RS.into(),
 		),
 		(
 			"src/lib.rs",
@@ -223,7 +224,7 @@ serde_json = "1"
 		(".gitignore", "/target\n/.leptoskit\n".into()),
 		(
 			"readme.md",
-			include_str!("templates/harmonyos/readme.md").into(),
+			leptoskit_platform_harmonyos::templates::README.into(),
 		),
 	];
 	std::fs::create_dir_all(destination)?;
@@ -238,6 +239,75 @@ serde_json = "1"
 	println!(
 		"created HarmonyOS native app in {root}\nnext: cd {root} && leptoskit native build \
 		 harmonyos"
+	);
+	Ok(())
+}
+
+/// Experimental Meta Quest starter from `leptoskit_platform_oculus`.
+fn oculus(path: &str, name: Option<&str>, sdk: Option<&str>) -> Result<()> {
+	let destination = std::path::Path::new(path);
+	let name = name
+		.or_else(|| destination.file_name().and_then(|name| name.to_str()))
+		.context("pass --name when the destination has no package name")?;
+	crate::new_project::ensure_package_name(name)?;
+	anyhow::ensure!(
+		name.bytes().all(|byte| {
+			byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+		}),
+		"native application names must be lowercase"
+	);
+	anyhow::ensure!(
+		!destination.exists(),
+		"{} already exists",
+		destination.display()
+	);
+	let sdk = sdk.map(crate::new_project::resolve_sdk).transpose()?;
+	let platform = Platform::Oculus;
+	let config = LeptoskitConfig {
+		app: AppConfig {
+			name: name.into(),
+			default_platform: platform,
+			platforms: vec![platform],
+			..AppConfig::default()
+		},
+		native: NativeConfig {
+			package_id: leptoskit_config::default_package_id(name),
+			targets: vec![NativeTarget::Oculus],
+			..NativeConfig::default()
+		},
+		..LeptoskitConfig::default()
+	};
+	super::oculus::validate(&config)?;
+	let native_dep = crate::new_project::sdk_dependency("leptoskit_native", sdk.as_deref(), &[])?;
+	let platform_dep =
+		crate::new_project::sdk_dependency("leptoskit_platform_oculus", sdk.as_deref(), &[])?;
+	let manifest = format!(
+		r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+leptoskit_native = {native_dep}
+leptoskit_platform_oculus = {platform_dep}
+"#
+	);
+	let root = Utf8PathBuf::from(path);
+	std::fs::create_dir_all(root.as_std_path())?;
+	let root = root.canonicalize_utf8()?;
+	crate::new_project::write_new(&root.join("Cargo.toml"), &manifest)?;
+	crate::new_project::write_new(&root.join("leptoskit.toml"), &config.to_toml_string()?)?;
+	crate::new_project::write_new(&root.join(".gitignore"), "/target\n/.leptoskit\n")?;
+	crate::new_project::write_new(
+		&root.join("src/lib.rs"),
+		"//! Experimental Meta Quest starter. Host stubs live under hosts/oculus.\npub use \
+		 leptoskit_platform_oculus::Oculus;\n",
+	)?;
+	super::oculus::scaffold(root.as_std_path(), &config)?;
+	println!(
+		"created experimental oculus app in {root}\nnext: cd {root} && leptoskit native prepare \
+		 oculus"
 	);
 	Ok(())
 }
@@ -266,6 +336,26 @@ mod tests {
 			assert!(root.join("Cargo.toml").is_file());
 			let _ = std::fs::remove_dir_all(&root);
 		}
+	}
+
+	#[test]
+	fn oculus_starter_writes_quest_host_stubs() {
+		let root =
+			std::env::temp_dir().join(format!("leptoskit-scaffold-oculus-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&root);
+		run_for_target(
+			root.to_str().unwrap(),
+			Some("arena"),
+			None,
+			Some(NativeTarget::Oculus),
+		)
+		.unwrap();
+		assert!(root.join("hosts/oculus/android/QuestActivity.kt").is_file());
+		assert!(root.join("hosts/oculus/guest.rs").is_file());
+		assert!(root.join("leptoskit.toml").is_file());
+		let toml = std::fs::read_to_string(root.join("leptoskit.toml")).unwrap();
+		assert!(toml.contains("oculus"));
+		let _ = std::fs::remove_dir_all(&root);
 	}
 
 	#[test]

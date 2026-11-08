@@ -133,6 +133,24 @@ pub fn run_with_options(
 		};
 		return crate::native::scaffold::run_for_target(path, name, sdk, Some(target));
 	}
+	if platform == Platform::Oculus {
+		anyhow::ensure!(
+			database.is_none() && !auth,
+			"the Meta Quest starter has no server; create a standard workspace for a database or \
+			 sign-in"
+		);
+		anyhow::ensure!(
+			!extension,
+			"the Meta Quest starter has no web client; create a standard workspace for an \
+			 extension"
+		);
+		return crate::native::scaffold::run_for_target(
+			path,
+			name,
+			sdk,
+			Some(NativeTarget::Oculus),
+		);
+	}
 
 	let database = database.or(auth.then_some(DbDialect::Sqlite));
 	let sdk = sdk.map(resolve_sdk).transpose()?;

@@ -136,6 +136,7 @@ fn concrete_platforms_round_trip_and_select_distinct_features() {
 		Platform::Harmonyos,
 		Platform::Wearos,
 		Platform::Watchos,
+		Platform::Oculus,
 		Platform::Tui,
 	]) {
 		let name = platform.to_string();

@@ -382,6 +382,8 @@ pub enum Platform {
 	Wearos,
 	/// An Apple watchOS application (experimental).
 	Watchos,
+	/// A Meta Quest / Oculus application (experimental platform extension).
+	Oculus,
 	/// A terminal application: the shared tree in an interactive cell grid.
 	Tui,
 	/// A browser extension for Chromium, Firefox, and Safari, built from the
@@ -417,6 +419,7 @@ impl Platform {
 			Self::Harmonyos => Some("harmonyos"),
 			Self::Wearos => Some("wearos"),
 			Self::Watchos => Some("watchos"),
+			Self::Oculus => Some("oculus"),
 			Self::Tui => Some("tui"),
 			Self::Extension => Some("extension"),
 			Self::Native | Self::Server => None,
@@ -436,6 +439,7 @@ impl Platform {
 				| Self::Harmonyos
 				| Self::Wearos
 				| Self::Watchos
+				| Self::Oculus
 				| Self::Tui
 		)
 	}
@@ -453,6 +457,7 @@ impl fmt::Display for Platform {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
+			Self::Oculus => f.write_str("oculus"),
 			Self::Tui => f.write_str("tui"),
 			Self::Extension => f.write_str("extension"),
 			Self::Native => f.write_str("native"),
@@ -475,6 +480,7 @@ impl std::str::FromStr for Platform {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
+			"oculus" => Ok(Self::Oculus),
 			"tui" => Ok(Self::Tui),
 			"extension" => Ok(Self::Extension),
 			"native" => Ok(Self::Native),
@@ -1015,6 +1021,8 @@ pub enum NativeTarget {
 	Wearos,
 	/// Apple watchOS (experimental watch host).
 	Watchos,
+	/// Meta Quest / Oculus (experimental platform extension).
+	Oculus,
 	/// Windows.
 	Windows,
 	/// Linux.
@@ -1030,6 +1038,7 @@ impl fmt::Display for NativeTarget {
 			Self::Harmonyos => f.write_str("harmonyos"),
 			Self::Wearos => f.write_str("wearos"),
 			Self::Watchos => f.write_str("watchos"),
+			Self::Oculus => f.write_str("oculus"),
 			Self::Windows => f.write_str("windows"),
 			Self::Linux => f.write_str("linux"),
 		}
@@ -1047,6 +1056,7 @@ impl std::str::FromStr for NativeTarget {
 			"harmonyos" => Ok(Self::Harmonyos),
 			"wearos" => Ok(Self::Wearos),
 			"watchos" => Ok(Self::Watchos),
+			"oculus" => Ok(Self::Oculus),
 			"windows" => Ok(Self::Windows),
 			"linux" => Ok(Self::Linux),
 			other => Err(ConfigError::UnknownPlatform(other.to_owned())),
@@ -3111,7 +3121,7 @@ pub enum ConfigError {
 	/// An unknown platform was requested.
 	#[error(
 		"unknown platform `{0}`; expected web, ios, android, macos, windows, linux, harmonyos, \
-		 tui, extension, native, or server"
+		 wearos, watchos, oculus, tui, extension, native, or server"
 	)]
 	UnknownPlatform(String),
 	/// An unknown database dialect was requested.

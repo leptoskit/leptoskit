@@ -32,7 +32,7 @@ leptoskit new my_app --platform harmonyos
 cd my_app
 ```
 
-The starter is a counter. Its Rust code is in `guest/src/lib.rs`, and the ArkUI app that hosts it is in `hosts/harmonyos`, which you can open and edit in DevEco Studio.
+The starter is a counter. Its Rust code is in `guest/src/lib.rs`, and the ArkUI app that hosts it is in `hosts/harmonyos`, which you can open and edit in DevEco Studio. Host templates and the capability manifest ship in the `leptoskit_platform_harmonyos` platform-extension crate; the CLI still runs prepare, NDK cross-compilation, and HAP packaging.
 
 ## Build and run
 

@@ -20,6 +20,8 @@ mod guest_profile;
 mod harmonyos;
 mod lock;
 mod manifest;
+mod oculus;
+mod platforms;
 mod project;
 mod registry;
 mod watch;
@@ -82,6 +84,8 @@ pub enum Target {
 	Wearos,
 	/// Experimental Apple watchOS watch host.
 	Watchos,
+	/// Experimental Meta Quest / Oculus host (platform extension crate).
+	Oculus,
 	/// A native Windows application for this machine's architecture.
 	Windows,
 	/// A native GTK application for this machine's architecture.
@@ -106,6 +110,9 @@ impl Target {
 			// watchOS packaging is experimental; the stub guest still targets
 			// the device arm64 watchOS triple for future hosts.
 			Self::Watchos => "aarch64-apple-watchos",
+			// Quest is Android-derived; the stub guest targets the device arm64
+			// Android triple until an OpenXR-specific triple is required.
+			Self::Oculus => "aarch64-linux-android",
 
 			Self::Windows if cfg!(target_arch = "aarch64") => "aarch64-pc-windows-msvc",
 			Self::Windows => "x86_64-pc-windows-msvc",
@@ -125,6 +132,7 @@ impl Target {
 			Self::Harmonyos | Self::HarmonyosX86_64 => Platform::Harmonyos,
 			Self::Wearos => Platform::Wearos,
 			Self::Watchos => Platform::Watchos,
+			Self::Oculus => Platform::Oculus,
 			Self::Windows => Platform::Windows,
 			Self::Linux => Platform::Linux,
 			Self::Tui => Platform::Tui,
@@ -155,6 +163,7 @@ impl Target {
 			Platform::Harmonyos => Ok(Self::Harmonyos),
 			Platform::Wearos => Ok(Self::Wearos),
 			Platform::Watchos => Ok(Self::Watchos),
+			Platform::Oculus => Ok(Self::Oculus),
 			Platform::Tui => Ok(Self::Tui),
 			_ => anyhow::bail!("{platform} is not a concrete native platform"),
 		}
@@ -220,6 +229,19 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		watch::scaffold(&root, &config, native)?;
 		if build {
 			return watch::build(target);
+		}
+		println!(
+			"prepared experimental {} host stubs under hosts/{}",
+			target.platform(),
+			target.platform()
+		);
+		return Ok(());
+	}
+	if matches!(target, Target::Oculus) {
+		ensure_target_enabled(&config, target)?;
+		oculus::scaffold(&root, &config)?;
+		if build {
+			return oculus::build(target);
 		}
 		println!(
 			"prepared experimental {} host stubs under hosts/{}",
@@ -508,6 +530,7 @@ fn build_application(
 		Target::Windows | Target::Linux | Target::Tui => unreachable!("desktop hosts built above"),
 		Target::Harmonyos | Target::HarmonyosX86_64 => harmonyos::build(root, release),
 		Target::Wearos | Target::Watchos => watch::build(target),
+		Target::Oculus => oculus::build(target),
 		Target::Ios | Target::IosSimulator => {
 			install_ios_pods(root)?;
 			run_tool(&mut ios_build(root, target, release))
@@ -675,6 +698,7 @@ pub(crate) fn legacy_target(root: &Path, config: &LeptoskitConfig) -> Target {
 		[NativeTarget::Harmonyos] => Target::Harmonyos,
 		[NativeTarget::Wearos] => Target::Wearos,
 		[NativeTarget::Watchos] => Target::Watchos,
+		[NativeTarget::Oculus] => Target::Oculus,
 		[NativeTarget::Macos] => Target::Macos,
 		[NativeTarget::Ios] => Target::IosSimulator,
 		[NativeTarget::Android] => Target::Android,
@@ -705,6 +729,7 @@ fn report_application_size(root: &Path, target: Target, release: bool) {
 		| Target::HarmonyosX86_64
 		| Target::Wearos
 		| Target::Watchos
+		| Target::Oculus
 		| Target::Tui => Ok(None),
 	};
 
