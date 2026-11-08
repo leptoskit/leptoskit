@@ -66,6 +66,20 @@ WebXR is reached through `Reflect` rather than `web-sys`'s WebXR bindings, which
 
 Android XR would be a small delta (its own `uses-feature` and activity property) but has no target yet. In immersive mode the Android view hierarchy is not composited, so the guest's 2D interface isn't visible; `immersive = false` gives a panel app.
 
+### Immersive sessions from a panel
+
+Horizon OS shows an OpenXR session only from an activity in the `com.oculus.intent.category.VR` category, and Meta's route for an app that is both (a "hybrid app", Horizon OS v69 and later) is two activities: a 2D panel launcher in `com.oculus.intent.category.2D`, and an immersive activity the panel starts with an explicit `ACTION_MAIN` intent and `FLAG_ACTIVITY_NEW_TASK`. Going back, the immersive activity sends a `CATEGORY_HOME` intent carrying a `PendingIntent` for the panel in `extra_launch_in_home_pending_intent`, so the panel opens in Home, and finishes. Meta's Spatial SDK `HybridSample` does exactly this, and `quest.rs` follows its manifest: every Quest build declares `dev.leptoskit.mobile.NativeImmersiveActivity` (`mobile/NativeImmersive.kt`) in the VR category, not exported and not a launcher; a panel app's launcher also gets the `2D` and `DEFAULT` categories and `<horizonos:uses-horizonos-sdk>` at 69. Unlike the sample, the panel is not finished when the immersive activity opens, because the guest runs in it.
+
+The `quest` feature (`openxr` and `scene3d`; `leptoskit build --platform quest` turns on every async plugin's `quest` feature, `registry::plugin_features`) gives the OpenXR backend `host::immersive::Immersive::factory` as its renderer. Starting an `ImmersiveVr` or `ImmersiveAr` session then:
+
+1. calls `NativeImmersive.open` through the app's class loader (the render thread's own can't see app classes), which fails the start with `Unavailable` where the activity isn't declared;
+2. returns a `Pending` headset, so `start` answers at once and the guest's frame requests simply wait;
+3. on its own thread, waits up to ten seconds for the activity, makes the Vulkan device and session with `openxr_vulkan::factory` on the instance the backend already loaded (with the panel's activity: OpenXR allows one instance, and which activity it names has not been checked on a headset), hands the real session to `Pending`, and becomes the runtime's driver (`set_external_driver`);
+4. each frame, `XrRuntime::update` (which waits for the headset) and `VulkanHeadset::render`, which no longer holds the session's lock while drawing, so drawing may lock the runtime and the scene; it draws the scene the guest chose with `Session::present` through `Hub::draw_scene` and `scene3d::draw` into both eye layers, and clears them to transparent (passthrough, or black) when there is none;
+5. ends when the guest stops the session, the session ends (the runtime is then stopped, so the guest's frame requests fail with `Cancelled`), or the activity is gone; it moves the scenes off the headset's device (`Hub::forget_device`), drops the session before the device, and calls `NativeImmersive.close`.
+
+A scene lives in one renderer at a time; `Hub::draw_scene` and a view's frame move it to their own device when it is on another, and its assets upload again there.
+
 ## With `leptoskit_3d`
 
 `leptoskit_3d` draws a `RenderTarget`: texture views, views with `Mat4` view and projection matrices, a `Background::Camera(CameraImage { planes, transform: Mat3 })`, and an `Occlusion { depth, transform, scale, tolerance }` reading an `R32Float` or `R16Float` texture. The `wgpu` feature produces exactly those inputs: `render::FrameTextures` uploads camera planes as `R8Unorm`/`Rg8Unorm` (or `Rgba8UnormSrgb`) and depth as `R32Float` metres, and `render::affine_matrix` turns a display transform into the column-major 3 × 3 matrix `Mat3::from_cols_array` takes.
@@ -194,4 +208,4 @@ On a device, first check: the time per picture on the Seeker's cores (the Flutte
 
 ## Not covered
 
-Apple Vision Pro, image and object tracking, room meshes (ARKit scene reconstruction, Quest's scene API), shared or persistent anchors, the light probe's environment map, ARCore's environmental HDR main light, and zero-copy camera import on Apple (`CVMetalTextureCache`) and Android (`AHardwareBuffer`). `FrameTextures` copies ARKit's pixel buffer planes today. A depth model is not part of this crate; `DepthEstimator` is where one plugs in. Two `Scene3d` views of different sizes showing the camera at once share one viewport, the last one drawn.
+Running any of the Quest path on a headset: the hybrid manifest, the activity switch and the return to Home, the session on the panel's OpenXR instance, and whether the guest keeps receiving frames while its panel is stopped. Apple Vision Pro, image and object tracking, room meshes (ARKit scene reconstruction, Quest's scene API), shared or persistent anchors, the light probe's environment map, ARCore's environmental HDR main light, and zero-copy camera import on Apple (`CVMetalTextureCache`) and Android (`AHardwareBuffer`). `FrameTextures` copies ARKit's pixel buffer planes today. A depth model is not part of this crate; `DepthEstimator` is where one plugs in. Two `Scene3d` views of different sizes showing the camera at once share one viewport, the last one drawn.

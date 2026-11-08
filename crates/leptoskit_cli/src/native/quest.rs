@@ -5,7 +5,11 @@
 //! runtime queries, head tracking, hand tracking and passthrough as
 //! configured, the headsets it supports, a full-screen landscape activity
 //! with no phone chrome, and, for immersive apps, the categories that launch
-//! the app in the headset rather than in a panel.
+//! the app in the headset rather than in a panel. Every Quest app also gets
+//! `NativeImmersiveActivity`, the immersive activity the `xr` plugin opens to
+//! draw a headset session; a panel app's launcher is marked a 2D panel, and
+//! the app targets Horizon OS v69, which lets a panel open an immersive
+//! activity.
 
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -24,6 +28,12 @@ const CONFIG_CHANGES: &str =
 	"density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode";
 /// The OpenXR loader's broker providers and services, which Android 11's
 /// package visibility hides unless the app declares them.
+/// Horizon OS's manifest namespace.
+const HORIZONOS: &str = "http://schemas.horizonos/sdk";
+/// The Horizon OS version that lets a panel app open an immersive activity.
+const HYBRID_VERSION: &str = "69";
+/// The immersive activity the `xr` plugin opens for a headset session.
+const IMMERSIVE_ACTIVITY: &str = "dev.leptoskit.mobile.NativeImmersiveActivity";
 const OPENXR_QUERIES: &str = "<provider {p}:authorities=\"org.khronos.openxr.runtime_broker;org.\
                               khronos.openxr.system_runtime_broker\"/><intent><action \
                               {p}:name=\"org.khronos.openxr.OpenXRRuntimeService\"/></\
@@ -59,9 +69,13 @@ pub fn manifest(source: &str, quest: &QuestConfig) -> Result<String> {
 	edits.push((at..at, declarations(root, prefix, quest)?));
 	edits.push(application_metadata(application, prefix, quest)?);
 	edits.extend(activity_attributes(source, activity, prefix));
+	edits.push(immersive_activity(source, application, prefix)?);
 
 	if quest.immersive {
 		edits.push(immersive_categories(activity, prefix)?);
+	} else {
+		edits.push(panel_categories(activity, prefix)?);
+		edits.extend(horizon_sdk(root));
 	}
 
 	edits.sort_by_key(|edit| std::cmp::Reverse((edit.0.start, edit.0.end)));
@@ -259,6 +273,84 @@ fn activity_attributes(source: &str, activity: roxmltree::Node<'_, '_>, prefix: 
 	edits
 }
 
+/// The immersive activity the `xr` plugin opens, last in the application.
+fn immersive_activity(
+	source: &str,
+	application: roxmltree::Node<'_, '_>,
+	prefix: &str,
+) -> Result<Edit> {
+	let end = application.range().end;
+	let close = source[..end]
+		.rfind("</application>")
+		.filter(|close| *close > application.range().start)
+		.context("the Android manifest's application element must not be self-closing")?;
+
+	Ok((
+		close..close,
+		format!(
+			"<activity {prefix}:name=\"{IMMERSIVE_ACTIVITY}\" {prefix}:exported=\"false\" \
+			 {prefix}:theme=\"{THEME}\" {prefix}:screenOrientation=\"landscape\" \
+			 {prefix}:configChanges=\"{CONFIG_CHANGES}\" {prefix}:launchMode=\"singleTask\" \
+			 {prefix}:resizeableActivity=\"false\" \
+			 {prefix}:excludeFromRecents=\"false\">\n<intent-filter>\n<action \
+			 {prefix}:name=\"android.intent.action.MAIN\"/>\n<category \
+			 {prefix}:name=\"com.oculus.intent.category.VR\"/>\n<category \
+			 {prefix}:name=\"android.intent.category.DEFAULT\"/>\n</intent-filter>\n</activity>\n"
+		),
+	))
+}
+
+/// The categories that mark a panel app's launcher a 2D panel, which
+/// Horizon OS opens in Home next to the immersive activity.
+fn panel_categories(activity: roxmltree::Node<'_, '_>, prefix: &str) -> Result<Edit> {
+	let at = launcher_category(activity)
+		.context("the launcher activity lost its category")?
+		.range()
+		.end;
+
+	Ok((
+		at..at,
+		format!(
+			"\n<category {prefix}:name=\"android.intent.category.DEFAULT\"/>\n<category \
+			 {prefix}:name=\"com.oculus.intent.category.2D\"/>"
+		),
+	))
+}
+
+/// Targets the Horizon OS version that lets a panel open an immersive
+/// activity, declaring the namespace on the manifest when it isn't. `None`
+/// when the app already declares it.
+fn horizon_sdk(root: roxmltree::Node<'_, '_>) -> Vec<Edit> {
+	if root
+		.children()
+		.any(|node| node.tag_name().name() == "uses-horizonos-sdk")
+	{
+		return Vec::new();
+	}
+
+	let (horizon, mut edits) = if let Some(horizon) = root.lookup_prefix(HORIZONOS) {
+		(horizon.to_owned(), Vec::new())
+	} else {
+		let at = root.range().start + "<manifest".len();
+		(
+			"horizonos".to_owned(),
+			vec![(at..at, format!(" xmlns:horizonos=\"{HORIZONOS}\""))],
+		)
+	};
+	let at = root
+		.children()
+		.find(|node| node.has_tag_name("application"))
+		.map_or(root.range().end, |application| application.range().start);
+	edits.push((
+		at..at,
+		format!(
+			"<{horizon}:uses-horizonos-sdk {horizon}:minSdkVersion=\"{HYBRID_VERSION}\" \
+			 {horizon}:targetSdkVersion=\"{HYBRID_VERSION}\"/>\n"
+		),
+	));
+	edits
+}
+
 /// The categories that launch the activity in the headset.
 fn immersive_categories(activity: roxmltree::Node<'_, '_>, prefix: &str) -> Result<Edit> {
 	let at = launcher_category(activity)
@@ -308,7 +400,35 @@ mod tests {
 			passthrough: false,
 		};
 		let manifest = manifest(&android(), &quest).unwrap();
-		assert!(!manifest.contains("com.oculus.intent.category.VR"));
+		insta::assert_snapshot!(manifest);
+		let document = roxmltree::Document::parse(&manifest).unwrap();
+		let categories = |activity: &str| -> Vec<&str> {
+			document
+				.descendants()
+				.find(|node| {
+					node.has_tag_name("activity")
+						&& node
+							.attribute((ANDROID, "name"))
+							.is_some_and(|name| name.ends_with(activity))
+				})
+				.unwrap()
+				.descendants()
+				.filter(|node| node.has_tag_name("category"))
+				.filter_map(|node| node.attribute((ANDROID, "name")))
+				.collect()
+		};
+		// The launcher is a 2D panel; the immersive activity is the only VR
+		// one, and isn't a launcher.
+		assert!(categories(".MainActivity").contains(&"com.oculus.intent.category.2D"));
+		assert!(!categories(".MainActivity").contains(&"com.oculus.intent.category.VR"));
+		assert_eq!(
+			categories(".NativeImmersiveActivity"),
+			[
+				"com.oculus.intent.category.VR",
+				"android.intent.category.DEFAULT"
+			]
+		);
+		assert!(manifest.contains("horizonos:minSdkVersion=\"69\""));
 		assert!(!manifest.contains("HAND_TRACKING"));
 		assert!(!manifest.contains("PASSTHROUGH"));
 		assert!(manifest.contains("android:value=\"quest3\""));
@@ -344,6 +464,14 @@ mod tests {
 		);
 		assert_eq!(manifest.matches("<queries>").count(), 1);
 		assert!(manifest.contains("<package android:name=\"com.example\"/><provider"));
+	}
+
+	#[test]
+	fn immersive_apps_also_get_the_immersive_activity_but_target_no_horizon_version() {
+		let manifest = manifest(&android(), &QuestConfig::default()).unwrap();
+		assert!(manifest.contains("dev.leptoskit.mobile.NativeImmersiveActivity"));
+		assert!(!manifest.contains("uses-horizonos-sdk"));
+		assert!(!manifest.contains("category.2D"));
 	}
 
 	#[test]

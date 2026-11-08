@@ -144,3 +144,35 @@ fn apps_that_draw_scenes_turn_on_async_plugins_scene3d_features() {
 		["renamed_echo/async-host", "ffi/async-host"]
 	);
 }
+
+#[test]
+fn quest_hosts_turn_on_async_plugins_quest_features() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	config
+		.native
+		.plugin_options
+		.insert("echo".into(), toml::Table::new());
+	let quest_metadata = || {
+		let mut metadata = async_metadata();
+		metadata.packages[2].features =
+			serde_json::from_value(json!({"async-host": [], "quest": ["async-host"]})).unwrap();
+		metadata
+	};
+
+	let registry = resolve_for_target(quest_metadata(), &config, Some(Target::Quest)).unwrap();
+	assert_eq!(
+		registry.host_features,
+		[
+			"renamed_echo/async-host",
+			"ffi/async-host",
+			"renamed_echo/quest"
+		]
+	);
+	let registry = resolve_for_target(quest_metadata(), &config, Some(Target::Android)).unwrap();
+	assert_eq!(
+		registry.host_features,
+		["renamed_echo/async-host", "ffi/async-host"]
+	);
+}

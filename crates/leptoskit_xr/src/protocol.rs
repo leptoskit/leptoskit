@@ -40,6 +40,9 @@ pub const ADD_ANCHOR: MethodId = MethodId(6);
 pub const REMOVE_ANCHOR: MethodId = MethodId(7);
 /// Empty request; empty reply. Pending frame requests fail with `Cancelled`.
 pub const STOP: MethodId = MethodId(8);
+/// [`Present`] request; empty reply. Chooses the `leptoskit_3d` scene a
+/// headset session shows.
+pub const PRESENT: MethodId = MethodId(9);
 
 /// Every method, in id order.
 pub const METHODS: &[MethodId] = &[
@@ -52,6 +55,7 @@ pub const METHODS: &[MethodId] = &[
 	ADD_ANCHOR,
 	REMOVE_ANCHOR,
 	STOP,
+	PRESENT,
 ];
 
 /// Asks whether `mode` can start, optionally fixing what can be fixed.
@@ -131,6 +135,34 @@ impl Wire for AddAnchor {
 		Ok(Self {
 			pose,
 			plane: has_plane.then_some(plane),
+		})
+	}
+}
+
+/// Chooses the `leptoskit_3d` scene a headset session draws into the
+/// headset, by the id its `Scene3d` view uses, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Present {
+	/// The scene, or `None` to draw nothing but passthrough or black.
+	pub scene: Option<u32>,
+}
+
+impl Wire for Present {
+	fn write(&self, writer: &mut Writer) {
+		writer.u32(u32::from(self.scene.is_some()));
+		writer.u32(self.scene.unwrap_or(0));
+	}
+
+	fn read(reader: &mut Reader<'_>) -> Result<Self, Error> {
+		let has_scene = reader.bool()?;
+		let scene = reader.u32()?;
+
+		if !has_scene && scene != 0 {
+			return Err(Error::InvalidArgument);
+		}
+
+		Ok(Self {
+			scene: has_scene.then_some(scene),
 		})
 	}
 }
@@ -290,6 +322,9 @@ mod tests {
 				.with(Mode::PhoneAr, Features::ALL),
 		);
 		round_trip(&Availability::NeedsInstall);
+		round_trip(&Present { scene: Some(7) });
+		round_trip(&Present { scene: None });
+		assert!(decode::<Present>(&[0, 0, 0, 0, 7, 0, 0, 0]).is_err());
 		round_trip(&Prepare {
 			mode: Mode::PhoneAr,
 			install: true,

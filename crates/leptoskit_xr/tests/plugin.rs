@@ -86,8 +86,11 @@ fn a_guest_session_from_start_to_stop() {
 	)
 	.unwrap();
 	invoke(&plugin, REMOVE_ANCHOR, &id).unwrap();
-
+	// The scene a headset would draw holds until the session stops.
+	invoke(&plugin, PRESENT, &Present { scene: Some(7) }).unwrap();
+	assert_eq!(plugin.runtime().presented(), Some(7));
 	invoke(&plugin, STOP, &()).unwrap();
+	assert_eq!(plugin.runtime().presented(), None);
 	assert_eq!(
 		invoke(&plugin, NEXT_FRAME, &NextFrame::default()),
 		Err(Error::Cancelled)

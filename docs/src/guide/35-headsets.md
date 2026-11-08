@@ -2,7 +2,7 @@
 
 <Callout kind="warning" title="Experimental">
 
-Headset support is new and has not yet run on a headset. The Quest build produces an APK with the manifest Horizon OS expects, and the OpenXR backend builds for Android, Windows, and Linux; drawing into the headset needs a renderer that creates the OpenXR session, which the 3D renderer provides.
+Headset support is new and has not yet run on a headset. The Quest build produces an APK with the manifest Horizon OS expects and draws your 3D scene into the headset, and the OpenXR backend builds for Android, Windows, and Linux. None of it has been checked on a Quest yet.
 
 </Callout>
 
@@ -44,6 +44,22 @@ async fn enter_the_room() -> Result<leptoskit_xr::Session, leptoskit_xr::Error> 
 
 On a headset, `LocalFloor` puts y = 0 on the floor from the first frame, and `World` uses the play area the player set up.
 
+## Show a scene in the headset
+
+The headset shows a [3D scene](33-3d-scenes.md): tell the session which one with `present`, by the id its `Scene3d` view uses. Each eye sees it from where the player's eye is, and in `ImmersiveAr` the room shows through wherever the scene draws nothing:
+
+```rust
+use leptoskit::scene3d::SceneId;
+
+const ROOM: SceneId = SceneId(1);
+
+async fn show_the_room(session: &leptoskit_xr::Session) -> Result<(), leptoskit_xr::Error> {
+	session.present(Some(ROOM.0)).await
+}
+```
+
+Place models in the session's world coordinates, the same ones the frames' `viewer` and `inputs` use; the session's eyes replace the scene's own camera. On a phone `present` changes nothing, since the phone shows the scene in its `Scene3d` view; in the browser the page draws the WebXR session itself.
+
 ## Controllers and hands
 
 Each frame's `inputs` lists what the player holds or shows:
@@ -59,11 +75,11 @@ Aim a hit test from a controller with `HitTestRequest::ray(input_ray)`, where `i
 
 ## On each platform
 
-| Platform                                  | What it does                                                                                                                                               |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Meta Quest                                | OpenXR through the Khronos loader: both eyes, Touch controllers, hand tracking, and passthrough through `XR_FB_passthrough`.                               |
-| Android XR                                | The same OpenXR backend, through the system runtime. There is no `--platform` for Android XR yet; the Android build carries the loader.                    |
-| Windows, Linux                            | OpenXR with the `openxr` feature, in a host that registers runtime plugins itself; the generated Windows and Linux apps don't register plugins yet.        |
-| Web                                       | WebXR's `immersive-vr` and `immersive-ar`, with controllers and hands, in the Meta Quest browser and other WebXR browsers. Start the session from a click. |
-| iOS, macOS                                | No headset support. Apple Vision Pro is not covered.                                                                                                       |
-| The terminal, HarmonyOS, Wear OS, watchOS | Not supported.                                                                                                                                             |
+| Platform                                  | What it does                                                                                                                                                                                          |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Meta Quest                                | OpenXR through the Khronos loader: both eyes, Touch controllers, hand tracking, and passthrough through `XR_FB_passthrough`. A panel app opens an immersive session over its panel and returns to it. |
+| Android XR                                | The same OpenXR backend, through the system runtime. There is no `--platform` for Android XR yet; the Android build carries the loader.                                                               |
+| Windows, Linux                            | OpenXR with the `openxr` feature, in a host that registers runtime plugins itself; the generated Windows and Linux apps don't register plugins yet.                                                   |
+| Web                                       | WebXR's `immersive-vr` and `immersive-ar`, with controllers and hands, in the Meta Quest browser and other WebXR browsers. Start the session from a click.                                            |
+| iOS, macOS                                | No headset support. Apple Vision Pro is not covered.                                                                                                                                                  |
+| The terminal, HarmonyOS, Wear OS, watchOS | Not supported.                                                                                                                                                                                        |

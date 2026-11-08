@@ -25,7 +25,7 @@ use crate::types::*;
 /// The Vulkan version asked of the runtime.
 const VULKAN_VERSION: u32 = vk::make_api_version(0, 1, 1, 0);
 /// The swapchain's colour format; sRGB so the compositor blends correctly.
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 fn native<T>(_: T) -> Error {
 	Error::Native
@@ -68,20 +68,23 @@ impl VulkanHeadset {
 	}
 
 	/// Renders the frame the last update began: `draw` gets one texture view
-	/// per eye, in the order of the frame's views, and the views are shown
-	/// with the session's passthrough beneath them. Does nothing when the
-	/// runtime says not to render.
-	pub fn render(&mut self, draw: impl FnOnce(&[wgpu::TextureView])) -> Result<(), Error> {
-		let mut session = self
-			.session
-			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner);
-		let Some(state) = session.frame_state() else {
-			return Ok(());
+	/// per eye ([`FORMAT`], [`VulkanHeadset::size`]), in the order of the
+	/// frame's views, and the views are shown with the session's passthrough
+	/// beneath them. Does nothing when the runtime says not to render, and
+	/// returns whether a frame was under way. The session is not locked while
+	/// `draw` runs, so it may lock the runtime or a scene.
+	pub fn render(&mut self, draw: impl FnOnce(&[wgpu::TextureView])) -> Result<bool, Error> {
+		let lock = || {
+			self.session
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner)
+		};
+		let Some(state) = lock().frame_state() else {
+			return Ok(false);
 		};
 
 		if !state.should_render {
-			return session.end_frame(&[]);
+			return lock().end_frame(&[]).map(|()| true);
 		}
 
 		let index = self.swapchain.acquire_image().map_err(native)? as usize;
@@ -100,7 +103,12 @@ impl VulkanHeadset {
 			.collect();
 		draw(&eyes);
 		self.swapchain.release_image().map_err(native)?;
+		let mut session = self
+			.session
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 		self.submit(&mut session, state.predicted_display_time)
+			.map(|()| true)
 	}
 
 	fn submit(

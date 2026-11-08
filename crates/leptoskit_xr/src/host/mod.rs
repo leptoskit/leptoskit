@@ -44,6 +44,10 @@ pub mod arcore;
 #[allow(unsafe_code)]
 pub mod camera2;
 
+#[cfg(all(target_os = "android", feature = "quest"))]
+#[allow(unsafe_code)]
+pub mod immersive;
+
 #[cfg(all(
 	feature = "openxr",
 	any(

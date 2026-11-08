@@ -68,6 +68,7 @@ struct State {
 	generation: u64,
 	waiters: Vec<Waker>,
 	estimator: Option<Box<dyn DepthEstimator>>,
+	presented: Option<u32>,
 }
 
 struct Session {
@@ -104,6 +105,7 @@ impl XrRuntime {
 				generation: 0,
 				waiters: Vec::new(),
 				estimator: None,
+				presented: None,
 			}),
 			external_driver: AtomicBool::new(false),
 			clock: Instant::now(),
@@ -350,6 +352,17 @@ impl XrRuntime {
 		}
 	}
 
+	/// Chooses the `leptoskit_3d` scene a headset renderer draws, by its id,
+	/// or none. It holds until the session stops.
+	pub fn present(&self, scene: Option<u32>) {
+		self.lock().presented = scene;
+	}
+
+	/// The scene a headset renderer draws, if any.
+	pub fn presented(&self) -> Option<u32> {
+		self.lock().presented
+	}
+
 	/// Tells a phone backend the screen it projects for.
 	pub fn set_viewport(&self, viewport: Viewport) {
 		self.lock().backend.set_viewport(viewport);
@@ -362,6 +375,7 @@ impl XrRuntime {
 
 		if stopped {
 			state.backend.stop();
+			state.presented = None;
 
 			if let Some(estimator) = state.estimator.as_mut() {
 				estimator.reset();

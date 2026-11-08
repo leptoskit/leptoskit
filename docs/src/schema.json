@@ -2693,7 +2693,7 @@
 					"default": "optional"
 				},
 				"immersive": {
-					"description": "Launches straight into the headset's immersive mode, where only what\nthe app draws through OpenXR is shown. With `false`, the app opens as\na 2D panel showing its ordinary interface.",
+					"description": "Launches straight into the headset's immersive mode, where only what\nthe app draws through OpenXR is shown. With `false`, the app opens as\na 2D panel showing its ordinary interface, which can still open an\nimmersive session: the `xr` plugin draws it from an immersive activity\nand returns to the panel when it ends.",
 					"type": "boolean",
 					"default": true
 				},

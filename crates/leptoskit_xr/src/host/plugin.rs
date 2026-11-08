@@ -127,6 +127,10 @@ impl XrPlugin {
 				runtime.stop();
 				Vec::new()
 			}
+			PRESENT => {
+				runtime.present(decode::<Present>(payload)?.scene);
+				Vec::new()
+			}
 			_ => return Err(Error::Unavailable),
 		})
 	}
@@ -208,14 +212,27 @@ impl AsyncPlugin for XrPlugin {
 pub fn from_context(context: &AppContext, options_json: &str) -> Result<XrPlugin, Error> {
 	let options: Options =
 		serde_json::from_str(options_json).map_err(|_| Error::InvalidArgument)?;
+	// On Quest, headset sessions draw the app's scenes, from an immersive
+	// activity when the app is a panel.
+	#[cfg(all(target_os = "android", feature = "quest"))]
+	let immersive = context.platform().cloned().map(|platform| {
+		super::immersive::Immersive::new(platform, leptoskit_3d::host::Hub::global())
+	});
+	#[cfg(not(all(target_os = "android", feature = "quest")))]
+	let immersive = None;
 
 	let runtime = match &options.replay {
 		Some(path) => XrRuntime::new(replay(&context.data_dir, path, options.replay_loop)?),
-		None => XrRuntime::new(platform_backend(context)),
+		None => XrRuntime::new(platform_backend(context, immersive.as_ref())),
 	};
 
 	// A depth crate's estimator, installed before or after.
 	super::camera::adopt(&runtime);
+
+	#[cfg(all(target_os = "android", feature = "quest"))]
+	if let Some(immersive) = &immersive {
+		immersive.bind(&runtime);
+	}
 
 	// Scenes that ask for the camera backdrop draw over this runtime's
 	// sessions.
@@ -232,8 +249,17 @@ fn replay(data_dir: &Path, path: &Path, looping: bool) -> Result<ReplayBackend, 
 	Ok(ReplayBackend::new(recording).looping(looping))
 }
 
-/// Every backend this platform has, richest first.
-pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
+#[cfg(all(target_os = "android", feature = "quest"))]
+type Immersive = super::immersive::Immersive;
+/// Nothing makes headset sessions outside Quest builds.
+#[cfg(not(all(target_os = "android", feature = "quest")))]
+#[derive(Debug)]
+enum Immersive {}
+
+/// Every backend this platform has, richest first, with headset sessions
+/// made by `immersive` where there is one.
+fn platform_backend(context: &AppContext, immersive: Option<&Immersive>) -> impl Backend + 'static {
+	let _ = immersive;
 	let backends = Composite::new();
 
 	#[cfg(all(target_os = "ios", target_arch = "aarch64"))]
@@ -254,9 +280,17 @@ pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
 			all(target_os = "linux", not(target_env = "ohos"))
 		)
 	))]
-	let backends = backends.with(super::openxr::OpenXrBackend::new(
-		context.platform().cloned(),
-	));
+	let backends = backends.with({
+		let backend = super::openxr::OpenXrBackend::new(context.platform().cloned());
+
+		#[cfg(all(target_os = "android", feature = "quest"))]
+		let backend = match immersive {
+			Some(immersive) => backend.with_renderer(immersive.factory()),
+			None => backend,
+		};
+
+		backend
+	});
 
 	// Phones without AR look around by turning. Android's also show the back
 	// camera through Camera2; every iPhone that runs current iOS has ARKit.

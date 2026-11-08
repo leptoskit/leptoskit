@@ -276,3 +276,40 @@ fn backends_parse_from_configuration_names() {
 	let hub: &'static Hub = Box::leak(Box::new(Hub::new()));
 	assert!(hub.set_backend(Backend::Gl));
 }
+
+#[test]
+fn scenes_draw_on_another_device_and_move_back() {
+	let (Ok(first), Ok(second)) = (Gpu::headless(), Gpu::headless()) else {
+		eprintln!("skipping: no GPU adapter");
+		return;
+	};
+	let hub: &'static Hub = Box::leak(Box::new(Hub::new()));
+	assert!(hub.draw_scene(SceneId(1), &first, 0.0, |_| ()).is_none());
+	hub.apply_ops(SceneId(1), Vec::new()).unwrap();
+
+	let draw = |gpu: &Gpu, time: f64| {
+		hub.draw_scene(SceneId(1), gpu, time, |renderer| {
+			let texture = renderer.offscreen(8, 8).unwrap();
+			let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+			renderer
+				.render(&RenderTarget::new(
+					&view,
+					wgpu::TextureFormat::Rgba8Unorm,
+					8,
+					8,
+				))
+				.unwrap();
+			renderer.gpu().clone()
+		})
+		.unwrap()
+	};
+	assert!(draw(&first, 1.0).same_device(&first));
+	assert!(draw(&second, 1.1).same_device(&second));
+	assert!(draw(&first, 1.2).same_device(&first));
+	assert!(draw(&second, 1.3).same_device(&second));
+	hub.forget_device(&second);
+	assert!(draw(&first, 1.4).same_device(&first));
+
+	hub.close(SceneId(1));
+	assert!(hub.draw_scene(SceneId(1), &first, 2.0, |_| ()).is_none());
+}

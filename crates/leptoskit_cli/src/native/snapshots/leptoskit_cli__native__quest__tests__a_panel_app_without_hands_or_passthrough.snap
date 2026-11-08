@@ -1,0 +1,32 @@
+---
+source: crates/leptoskit_cli/src/native/quest.rs
+expression: manifest
+---
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:horizonos="http://schemas.horizonos/sdk" xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
+<horizonos:uses-horizonos-sdk horizonos:minSdkVersion="69" horizonos:targetSdkVersion="69"/>
+<uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1"/>
+<uses-permission android:name="org.khronos.openxr.permission.OPENXR"/>
+<uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM"/>
+<queries><provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker"/><intent><action android:name="org.khronos.openxr.OpenXRRuntimeService"/></intent><intent><action android:name="org.khronos.openxr.OpenXRApiLayerService"/></intent></queries>
+<application android:label="Reapers" android:theme="@style/LeptosKitTheme">
+<meta-data android:name="com.oculus.supportedDevices" android:value="quest3"/>
+        <activity android:excludeFromRecents="false" android:screenOrientation="landscape" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" android:name="dev.reapers.app.MainActivity" android:exported="true" android:launchMode="singleTask" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode" android:resizeableActivity="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+<category android:name="android.intent.category.DEFAULT"/>
+<category android:name="com.oculus.intent.category.2D"/>
+            </intent-filter>
+        </activity>
+    <activity android:name="dev.leptoskit.mobile.NativeImmersiveActivity" android:exported="false" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" android:screenOrientation="landscape" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode" android:launchMode="singleTask" android:resizeableActivity="false" android:excludeFromRecents="false">
+<intent-filter>
+<action android:name="android.intent.action.MAIN"/>
+<category android:name="com.oculus.intent.category.VR"/>
+<category android:name="android.intent.category.DEFAULT"/>
+</intent-filter>
+</activity>
+</application>
+</manifest>
