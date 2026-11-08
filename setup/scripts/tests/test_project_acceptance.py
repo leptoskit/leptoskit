@@ -24,6 +24,8 @@ if name == "rustc":
     print(os.environ["TEST_TARGET_LIBDIR"])
 elif name == "node":
     sys.exit(int(os.environ.get("TEST_NODE_FAILURE", "0")))
+elif name == "python3":
+    sys.exit(int(os.environ.get("TEST_SQLITE_FAILURE", "0")))
 elif name == "cargo" and args[:2] == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("TEST_NEXTEST_FAILURE", "0")))
 elif name == "cargo":
@@ -50,7 +52,7 @@ class ProjectAcceptance(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
 
-        for name in ["cargo", "rustc", "node", "wasm-opt"]:
+        for name in ["cargo", "rustc", "node", "wasm-opt", "python3"]:
             path = self.bin / name
             path.write_text(TOOL.format(python=sys.executable))
             path.chmod(0o755)
@@ -83,7 +85,7 @@ class ProjectAcceptance(unittest.TestCase):
         return json.loads(self.log.read_text()) if self.log.exists() else []
 
     def test_each_missing_tool_fails_before_running_a_journey(self):
-        for tool in ["cargo", "rustc", "node", "wasm-opt"]:
+        for tool in ["cargo", "rustc", "node", "wasm-opt", "python3"]:
             with self.subTest(tool=tool):
                 path = self.bin / tool
                 saved = path.read_bytes()
@@ -98,7 +100,7 @@ class ProjectAcceptance(unittest.TestCase):
                 path.chmod(0o755)
 
     def test_unusable_nextest_or_node_fails_before_builds(self):
-        for setting in ["TEST_NEXTEST_FAILURE", "TEST_NODE_FAILURE"]:
+        for setting in ["TEST_NEXTEST_FAILURE", "TEST_NODE_FAILURE", "TEST_SQLITE_FAILURE"]:
             with self.subTest(setting=setting):
                 result = self.run_gate(**{setting: "12"})
                 self.assertEqual(result.returncode, 12)

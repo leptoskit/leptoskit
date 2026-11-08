@@ -6,7 +6,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-for tool in cargo rustc node wasm-opt; do
+for tool in cargo rustc node wasm-opt python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "Project acceptance requires $tool; run through devenv shell test:projects" >&2
 		exit 1
@@ -15,6 +15,7 @@ done
 
 cargo nextest --version >/dev/null
 wasm-opt --version >/dev/null
+python3 -c 'import sqlite3' >/dev/null
 node --experimental-strip-types --no-warnings -e '
 if (Number(process.versions.node.split(".")[0]) < 22 || typeof WebSocket !== "function") {
   throw new Error("Project acceptance requires Node 22+ with WebSocket and TypeScript stripping");

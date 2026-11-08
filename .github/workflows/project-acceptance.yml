@@ -38,7 +38,9 @@ jobs:
       - uses: ./.github/actions/rust
 
       - name: validate acceptance command failures
-        run: python3 -m unittest discover -s setup/scripts/tests -p 'test_project_acceptance.py'
+        run: |
+          python3 -m unittest discover -s setup/scripts/tests -p 'test_project_acceptance.py'
+          python3 -m unittest discover -s setup/scripts/tests -p 'test_schema_pack_state.py'
 
       - name: exercise generated applications
         run: test:projects
