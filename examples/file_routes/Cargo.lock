@@ -2872,6 +2872,7 @@ dependencies = [
  "reactive_graph",
  "send_wrapper",
  "thiserror 2.0.21",
+ "url",
  "wasm-bindgen",
  "web-sys",
 ]

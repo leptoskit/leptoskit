@@ -6668,9 +6668,11 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_native",
  "leptoskit_router_macros",
+ "leptoskit_yoga",
  "reactive_graph",
  "send_wrapper",
  "thiserror 2.0.21",
+ "url",
  "wasm-bindgen",
  "web-sys",
 ]

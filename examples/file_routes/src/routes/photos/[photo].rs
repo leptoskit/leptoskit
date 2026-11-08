@@ -1,4 +1,5 @@
-//! `/photos/:photo`: one photo, presented as a modal once navigators land.
+//! `/photos/:photo`: one photo, presented as a modal by the root stack
+//! navigator.
 
 use leptoskit::prelude::*;
 use leptoskit_router::Route;

@@ -39,14 +39,22 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
+mod linking;
+pub mod navigators;
 mod params;
 mod pattern;
 mod router;
+mod system_back;
 mod url;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 mod web;
 
 pub use leptoskit_router_macros::Route;
+pub use linking::ActivationRef;
+pub use linking::OpenError;
+pub use linking::OpenMode;
+pub use linking::apply_activations;
+pub use linking::route_path_from_link;
 pub use params::NotFound;
 pub use params::ParamError;
 pub use params::ParamSink;
@@ -56,6 +64,9 @@ pub use pattern::Pattern;
 pub use pattern::Segment;
 pub use router::Render;
 pub use router::Router;
+pub use system_back::SystemBack;
+pub use system_back::clear_system_back_handler;
+pub use system_back::dispatch_system_back;
 pub use url::Href;
 pub use url::RouteUrl;
 

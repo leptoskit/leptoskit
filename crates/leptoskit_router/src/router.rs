@@ -40,6 +40,8 @@ pub struct Router<R: 'static> {
 struct Inner<R: 'static> {
 	current: ArcRwSignal<R>,
 	history: History<R>,
+	/// Shared by [`crate::navigators::Drawer`] shells across re-renders.
+	drawer_open: ArcRwSignal<bool>,
 }
 
 enum History<R> {
@@ -86,6 +88,7 @@ where
 			inner: Arc::new(Inner {
 				current,
 				history: History::Browser(browser),
+				drawer_open: ArcRwSignal::new(false),
 			}),
 		}
 	}
@@ -95,6 +98,7 @@ where
 			inner: Arc::new(Inner {
 				current: ArcRwSignal::new(initial),
 				history,
+				drawer_open: ArcRwSignal::new(false),
 			}),
 		}
 	}
@@ -173,6 +177,32 @@ where
 		}
 	}
 
+	/// The route [`back`](Self::back) would return to, without popping it.
+	/// Memory history only; the browser session does not expose this.
+	pub fn previous(&self) -> Option<R> {
+		match &self.inner.history {
+			History::Memory(earlier) => {
+				earlier
+					.lock()
+					.unwrap_or_else(PoisonError::into_inner)
+					.last()
+					.cloned()
+			}
+			#[cfg(all(feature = "web", target_arch = "wasm32"))]
+			History::Browser(_) => None,
+		}
+	}
+
+	/// Whether a [`crate::navigators::Drawer`] shell is open.
+	pub fn drawer_open(&self) -> ArcRwSignal<bool> {
+		self.inner.drawer_open.clone()
+	}
+
+	/// Opens or closes the drawer chrome.
+	pub fn set_drawer_open(&self, open: bool) {
+		self.inner.drawer_open.set(open);
+	}
+
 	/// A link to `to`: a [`Pressable`] named `label` that navigates when
 	/// pressed. On the web it renders as an `<a href>`, so it can also open in
 	/// a new tab. Add its content with `child`.
@@ -183,6 +213,17 @@ where
 		Pressable(label)
 			.href(href)
 			.on_press(move || router.navigate(to.clone()))
+	}
+
+	/// Like [`link`](Self::link), but [`replace`](Self::replace)s. Tab and
+	/// drawer roots use this so switching sections does not stack roots.
+	pub fn link_replace(&self, to: impl Into<R>, label: impl Into<String>) -> Element {
+		let to = to.into();
+		let href = self.page_url(&to.href());
+		let router = self.clone();
+		Pressable(label)
+			.href(href)
+			.on_press(move || router.replace(to.clone()))
 	}
 
 	/// Where `href` is on the page: under the browser's base path, or as it

@@ -17,6 +17,7 @@ leptoskit_native = { workspace = true }
 leptoskit_router_macros = { workspace = true }
 reactive_graph = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 send_wrapper = { workspace = true, optional = true }
@@ -28,6 +29,9 @@ default = []
 # Keep the browser's address bar, back button and history in step with the
 # router. Only takes effect in wasm builds that run in a browser.
 web = ["dep:send_wrapper", "dep:wasm-bindgen", "dep:web-sys"]
+
+[dev-dependencies]
+leptoskit_yoga = { workspace = true }
 
 [lints]
 workspace = true

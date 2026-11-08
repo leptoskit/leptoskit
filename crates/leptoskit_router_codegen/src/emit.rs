@@ -346,14 +346,27 @@ fn render_code(table: &Table) -> Result<TokenStream, String> {
 		let mut outermost = page;
 
 		for layout in route.layouts.iter().rev() {
-			let layout = call(layout, |by_ref| {
+			uses_navigation |= layout.navigator;
+			let layout_call = call(layout, |by_ref| {
 				if by_ref {
 					quote!(self)
 				} else {
 					quote!(::core::clone::Clone::clone(self))
 				}
 			})?;
-			inner.push(std::mem::replace(&mut outermost, layout));
+			let wrapped = if layout.navigator {
+				let modules = idents(&layout.modules)?;
+				quote! {{
+					let view = #private::IntoView::into_view(#layout_call);
+					::leptoskit_router::navigators::IntoNavigator::into_navigator(
+						#(#modules)::*::navigator(),
+					)
+					.shell(view, navigation, self)
+				}}
+			} else {
+				layout_call
+			};
+			inner.push(std::mem::replace(&mut outermost, wrapped));
 		}
 
 		arms.push(quote! {

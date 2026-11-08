@@ -77,6 +77,8 @@ pub(crate) struct Call {
 	/// The function's name as written: `page` or `Page`.
 	pub(crate) function: String,
 	pub(crate) props: Vec<Prop>,
+	/// Whether this layout exports `navigator()` for Stack / Tabs / Drawer.
+	pub(crate) navigator: bool,
 }
 
 /// A router prop, in the order the function declares its parameters.
@@ -292,6 +294,10 @@ fn directory_layout(
 		modules,
 		function: export.name.clone(),
 		props,
+		navigator: file
+			.exports
+			.as_ref()
+			.is_some_and(|exports| exports.hooks.contains_key(&Hook::Navigator)),
 	})
 }
 
@@ -343,6 +349,7 @@ fn page_call(
 		modules,
 		function: export.name.clone(),
 		props,
+		navigator: false,
 	}
 }
 

@@ -473,6 +473,13 @@ class LeptosKitApplicationView(
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 
+    /**
+     * Asks the active guest to handle Android system Back through the file
+     * router (`leptoskit_system_back`). Returns true when the guest popped a
+     * route. Hosts without the guest export return false so the activity finishes.
+     */
+    fun offerSystemBack(): Boolean = current?.offerSystemBack() == true
+
     override fun close() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Application close requires the main thread" }
 
