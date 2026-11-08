@@ -484,6 +484,7 @@ mod tests {
 	#[test]
 	fn source_round_trip_and_bounds() {
 		let source = Source::url(SAMPLE_URL).unwrap();
+		assert_eq!(source.as_str(), SAMPLE_URL);
 		assert_eq!(
 			Source::decode(&source.encode().unwrap()),
 			Ok(source.clone())
@@ -503,6 +504,13 @@ mod tests {
 		let mut bad_version = encoded.to_vec();
 		bad_version[0] = 2;
 		assert_eq!(Source::decode(&bad_version), Err(Error::InvalidArgument));
+
+		// Oversized wire that bypasses Source::url construction.
+		let oversized = "x".repeat(MAX_URL_BYTES + 1);
+		let mut wire = Encoder::with_capacity(8 + oversized.len());
+		wire.u32(WIRE_VERSION);
+		wire.bytes(oversized.as_bytes()).unwrap();
+		assert_eq!(Source::decode(&wire.finish()), Err(Error::TooLarge));
 	}
 
 	#[test]
@@ -517,6 +525,20 @@ mod tests {
 			Err(Error::InvalidArgument)
 		);
 		assert!(Source::decode_replace(&encoded[..encoded.len() - 1]).is_err());
+
+		let mut bad_version = encoded.to_vec();
+		bad_version[4] = 9;
+		assert_eq!(
+			Source::decode_replace(&bad_version),
+			Err(Error::InvalidArgument)
+		);
+
+		let oversized = "x".repeat(MAX_URL_BYTES + 1);
+		let mut wire = Encoder::with_capacity(12 + oversized.len());
+		wire.u32(3);
+		wire.u32(WIRE_VERSION);
+		wire.bytes(oversized.as_bytes()).unwrap();
+		assert_eq!(Source::decode_replace(&wire.finish()), Err(Error::TooLarge));
 	}
 
 	#[test]
