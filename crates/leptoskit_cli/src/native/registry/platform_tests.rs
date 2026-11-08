@@ -67,10 +67,18 @@ fn a_platform_table_wins_over_shared_rust_and_shared_rust_wins_over_native_types
 			Flavour::Worker
 		)
 	);
-	// The Linux runner doesn't run plugins yet.
+	// The Linux runner runs worker plugins; the Windows runner doesn't run
+	// plugins yet.
 	assert_eq!(
 		plugin.implementation(Target::Linux, HostCapabilities::of(Target::Linux)),
-		Err(Missing::HostCannotRun(Capability::Worker))
+		rust(
+			Constructor::Factory("desktop::from_context"),
+			Flavour::Worker
+		)
+	);
+	assert_eq!(
+		plugin.implementation(Target::Windows, HostCapabilities::of(Target::Windows)),
+		Err(Missing::HostCannotRun(Capability::Sync))
 	);
 
 	// Without shared Rust fields, a platform's native type is next.

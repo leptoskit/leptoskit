@@ -89,6 +89,42 @@ impl AsyncHost {
 		self.plugins.insert(id.0, plugin);
 		Ok(id)
 	}
+
+	/// Retains the job for call `id` when `plugin` is an installed async
+	/// plugin, admitting it against the shared limits. A call the bridge no
+	/// longer permits, or one over the limits, still makes a job: starting it
+	/// answers the error.
+	pub(super) fn job(
+		&self,
+		bridge: &Bridge,
+		id: CallId,
+		plugin: u32,
+		method: MethodId,
+		payload: &Bytes,
+	) -> Option<AsyncJob> {
+		let plugin = self.plugins.get(&plugin)?;
+		let permission = bridge.permission(id);
+		let admission = permission
+			.as_ref()
+			.map_err(|e| *e)
+			.and_then(|_| plugin.reply_limit(method))
+			.and_then(|limit| admit(&self.state, payload.len(), limit));
+		let permission = permission.unwrap_or_else(|_| {
+			let token = CancellationToken::new();
+			token.cancel();
+			token
+		});
+		let cancellation = permission.child_token();
+		Some(AsyncJob {
+			plugin: Arc::clone(plugin),
+			method,
+			payload: payload.clone(),
+			cancellation,
+			permission,
+			app_closed: self.state.closed.clone(),
+			admission,
+		})
+	}
 }
 
 impl Drop for AsyncHost {
@@ -182,40 +218,24 @@ pub unsafe extern "C" fn lk_app_async(
 	let (Some(app), Some(request)) = (unsafe { app.as_mut() }, unsafe { request.as_ref() }) else {
 		return ptr::null_mut();
 	};
-	let Some(plugin) = app.async_host.plugins.get(&request.plugin) else {
-		return ptr::null_mut();
-	};
 	// SAFETY: The request contract lends its live Bytes owner.
 	let Some(payload) = (unsafe { request.payload.owner.as_ref() }) else {
 		return ptr::null_mut();
 	};
-	let method = MethodId(request.method);
-	let permission = app
+	let bridge = app
 		.host
 		.as_mut()
 		.expect("live applications own an interpreter")
-		.plugins()
-		.permission(CallId(request.id));
-	let admission = permission
-		.as_ref()
-		.map_err(|e| *e)
-		.and_then(|_| plugin.reply_limit(method))
-		.and_then(|limit| admit(&app.async_host.state, payload.len(), limit));
-	let permission = permission.unwrap_or_else(|_| {
-		let token = CancellationToken::new();
-		token.cancel();
-		token
-	});
-	let cancellation = permission.child_token();
-	Box::into_raw(Box::new(AsyncJob {
-		plugin: Arc::clone(plugin),
-		method,
-		payload: payload.clone(),
-		cancellation,
-		permission,
-		app_closed: app.async_host.state.closed.clone(),
-		admission,
-	}))
+		.plugins();
+	app.async_host
+		.job(
+			bridge,
+			CallId(request.id),
+			request.plugin,
+			MethodId(request.method),
+			payload,
+		)
+		.map_or(ptr::null_mut(), |job| Box::into_raw(Box::new(job)))
 }
 
 /// Retains cancellation before starting the job.
@@ -308,18 +328,31 @@ pub unsafe extern "C" fn lk_async_start(
 
 	// SAFETY: start consumes the unique job allocation.
 	let job = unsafe { Box::from_raw(job) };
+	spawn(*job, move |result| completion.finish(result));
+}
+
+impl AsyncJob {
+	/// The token that cancels this job once it has started.
+	pub(super) fn cancellation(&self) -> CancellationToken {
+		self.cancellation.clone()
+	}
+}
+
+/// Runs `job` on the shared runtime and hands its result to `finish` exactly
+/// once, possibly before this returns or on a runtime thread.
+pub(super) fn spawn(job: AsyncJob, finish: impl FnOnce(Result<Reply, Error>) + Send + 'static) {
 	let Ok(runtime) = runtime() else {
 		drop(job);
-		completion.finish(Err(Error::Native));
+		finish(Err(Error::Native));
 
 		return;
 	};
 	runtime.spawn(async move {
-		let result = std::panic::AssertUnwindSafe(execute(*job))
+		let result = std::panic::AssertUnwindSafe(execute(job))
 			.catch_unwind()
 			.await
 			.unwrap_or(Err(Error::Native));
-		completion.finish(result);
+		finish(result);
 	});
 }
 

@@ -293,9 +293,20 @@ impl HostCapabilities {
 					native: Some(NativeKind::ArkTs),
 				}
 			}
-			// Experimental watch hosts and the app-owned runners don't
+			// The Linux runner pumps a `PluginHost`, which has no plugin
+			// services.
+			Target::Linux => {
+				Self {
+					sync: true,
+					worker: true,
+					asynchronous: true,
+					service: false,
+					native: None,
+				}
+			}
+			// Experimental watch hosts and the other app-owned runners don't
 			// register plugins yet.
-			Target::Windows | Target::Linux | Target::Tui | Target::Wearos | Target::Watchos => {
+			Target::Windows | Target::Tui | Target::Wearos | Target::Watchos => {
 				Self {
 					sync: false,
 					worker: false,

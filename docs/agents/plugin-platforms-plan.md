@@ -235,6 +235,8 @@ After 1.2 merges, the Windows/Linux track (2, 4) and the HarmonyOS track (3) tou
 
 ### Phase 2: Windows, Linux and the terminal run plugins
 
+**Status (Linux done):** 2.1 and the Linux half of 2.2 landed differently from the plan below. Every desktop runner already depends on `leptoskit_bridge_ffi` with `app`, so instead of a new crate the safe host is `leptoskit_bridge_ffi::app::PluginHost` (`app/plugin_host.rs`), generic over the backend. It reuses the FFI crate's worker body (`run_worker`) and async admission (`AsyncHost::job`, `async_jobs::spawn`), so iOS, Android, macOS and Linux share one implementation. Main-thread plugins run inline, because the runner's thread is the UI thread. The Linux runner's wake is `glib::idle_add_once`, not `MainContext::invoke`: `invoke` runs at once on the owning thread, inside the pump's borrow of the host. App folders come from `desktop_context` (XDG data and cache directories, named by `native.package_id`). Windows and the terminal still report `HostCannotRun`; wiring them is the same template change with a Win32 or TUI wake.
+
 #### 2.1 `refactor/plugin-host-crate`: move the Rust plugin host out of the FFI crate
 
 - Create `crates/leptoskit_plugin_host` (P4) and move the worker execution and `async_jobs.rs` logic into it, with a safe Rust API.

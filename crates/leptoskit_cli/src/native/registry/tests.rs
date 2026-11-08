@@ -453,19 +453,21 @@ fn desktop_runners_build_without_the_plugins_they_cannot_host() {
 		.plugin_options
 		.insert("http".into(), toml::Table::new());
 
-	for target in [Target::Linux, Target::Windows, Target::Tui] {
+	for target in [Target::Windows, Target::Tui] {
 		let (desktop, skipped) = without_plugins(&config, target).unwrap();
 		assert_eq!(desktop.native.plugins, [] as [String; 0]);
 		assert!(desktop.native.plugin_options.is_empty());
 		assert_eq!(skipped, "http, secure-store");
 	}
 
-	for target in [Target::Ios, Target::Android, Target::Macos] {
+	// The Linux runner hosts plugins, so it resolves them like the mobile
+	// hosts do.
+	for target in [Target::Ios, Target::Android, Target::Macos, Target::Linux] {
 		assert!(without_plugins(&config, target).is_none());
 	}
 
 	config.native.plugins.clear();
-	assert!(without_plugins(&config, Target::Linux).is_none());
+	assert!(without_plugins(&config, Target::Windows).is_none());
 }
 
 /// A registry with `plugins` and nothing else, for helpers that only read

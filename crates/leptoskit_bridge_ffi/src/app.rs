@@ -39,10 +39,16 @@ mod render;
 #[cfg(not(target_arch = "wasm32"))]
 mod rive;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod plugin_host;
 mod services;
 mod text;
 #[cfg(not(target_arch = "wasm32"))]
 pub use guest::*;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin_host::PluginHost;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin_host::desktop_context;
 #[cfg(not(target_arch = "wasm32"))]
 pub use rive::lk_app_has_rive;
 #[cfg(not(target_arch = "wasm32"))]
@@ -895,22 +901,39 @@ pub unsafe extern "C" fn lk_worker_execute(worker: *mut RustWorker) -> *mut Work
 
 	// SAFETY: The caller transfers the exact allocation returned above.
 	let worker = unsafe { Box::from_raw(worker) };
-	let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-		if worker.cancelled.load(Ordering::Acquire) {
+	let result = run_worker(
+		&worker.plugin,
+		worker.method,
+		worker.payload,
+		&worker.cancelled,
+	);
+	Box::into_raw(Box::new(WorkerReply(result.map(Reply::from))))
+}
+
+/// Runs one worker call unless it was cancelled first. A panic becomes a
+/// native error and poisons the plugin's mutex, so later calls fail rather
+/// than use damaged state.
+fn run_worker(
+	plugin: &Mutex<Box<dyn Plugin + Send>>,
+	method: MethodId,
+	payload: Bytes,
+	cancelled: &AtomicBool,
+) -> Result<Bytes, Error> {
+	std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		if cancelled.load(Ordering::Acquire) {
 			return Err(Error::Cancelled);
 		}
 
-		let mut plugin = worker.plugin.lock().map_err(|_| Error::Native)?;
+		let mut plugin = plugin.lock().map_err(|_| Error::Native)?;
 		// A worker can spend time waiting for another invocation. Cancellation
 		// during that wait must not begin a new filesystem/database operation.
-		if worker.cancelled.load(Ordering::Acquire) {
+		if cancelled.load(Ordering::Acquire) {
 			return Err(Error::Cancelled);
 		}
 
-		plugin.invoke(worker.method, worker.payload)
+		plugin.invoke(method, payload)
 	}))
-	.unwrap_or(Err(Error::Native));
-	Box::into_raw(Box::new(WorkerReply(result.map(Reply::from))))
+	.unwrap_or(Err(Error::Native))
 }
 
 /// Releases work that has not started, without invoking the plugin.

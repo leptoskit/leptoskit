@@ -297,18 +297,15 @@ pub fn resolve(
 	resolve_for_target(metadata, &host_config, Some(target))
 }
 
-/// The Rust desktop runners (Linux, Windows, and the terminal) can't host
-/// runtime plugins yet. Rather than refuse to build an app that grants some
-/// for its other platforms, they build it without them: its configuration
-/// with no plugins, and the names left out. `None` for other targets, or
-/// when nothing is granted.
+/// The Windows and terminal runners can't host runtime plugins yet. Rather than
+/// refuse to build an app that grants some for its other platforms, they build
+/// it without them: its configuration with no plugins, and the names left out.
+/// `None` for other targets, or when nothing is granted.
 fn without_plugins(
 	config: &leptoskit_config::LeptoskitConfig,
 	target: Target,
 ) -> Option<(leptoskit_config::LeptoskitConfig, String)> {
-	if !matches!(target, Target::Linux | Target::Windows | Target::Tui)
-		|| config.native.plugins.is_empty()
-	{
+	if !matches!(target, Target::Windows | Target::Tui) || config.native.plugins.is_empty() {
 		return None;
 	}
 

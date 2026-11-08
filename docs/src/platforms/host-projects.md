@@ -80,7 +80,8 @@ warning: haptics has no Linux implementation; calls fail with Unavailable
 
 The app still builds. On that platform, creating the plugin's client or calling it fails with `Error::Unavailable`, the same error a plugin returns for anything else the device can't do, so handle it where you call the plugin. Today:
 
-- the generated Windows, Linux, and terminal apps leave every runtime plugin out;
+- the generated Linux app runs plugins written in Rust: ones that answer at once, on a worker thread, or on the async host. It leaves out app-owned services, and plugins whose only implementation is Swift, Kotlin, or ArkTS;
+- the generated Windows and terminal apps leave every runtime plugin out;
 - HarmonyOS apps run synchronous Rust plugins, such as `os`, and ArkTS plugins, such as `posture`. They leave out plugins that run on a worker thread or on the async host, such as `crypto`, `http`, `shell`, and `websocket`, and app-owned services;
 - iOS, Android, and macOS leave out only plugins that have no implementation for them.
 
