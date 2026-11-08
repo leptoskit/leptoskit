@@ -279,6 +279,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
 	write_assets(&root, &config, target, &bundle_dir, release)?;
+
 	if registry.scene3d {
 		stage_scene_assets(&root, target)?;
 	}
@@ -756,25 +757,33 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 /// the macOS app copies into its resources.
 fn stage_scene_assets(root: &Path, target: Target) -> Result<()> {
 	let destination = generated_dir(root, target).join("mobile/assets");
+
 	match std::fs::remove_dir_all(&destination) {
 		Ok(()) => {}
+
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 		Err(error) => return Err(error).context("clear the staged 3D assets"),
 	}
+
 	std::fs::create_dir_all(&destination)?;
 	let source = root.join("assets");
+
 	if !source.is_dir() {
 		return Ok(());
 	}
+
 	for entry in walkdir::WalkDir::new(&source).follow_links(false) {
 		let entry = entry?;
+
 		let relative = entry.path().strip_prefix(&source)?;
+
 		if entry.file_type().is_dir() {
 			std::fs::create_dir_all(destination.join(relative))?;
 		} else if entry.file_type().is_file() {
 			project::copy(entry.path(), &destination.join(relative))?;
 		}
 	}
+
 	Ok(())
 }
 

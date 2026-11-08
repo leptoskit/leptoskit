@@ -68,6 +68,7 @@ internal class NativeScene3dView(
         surface = holder.surface
         surfaceWidth = width
         surfaceHeight = height
+
         if (handle == 0L) reattach() else NativeScene3d.resize(handle, width, height)
         requestFrame()
     }
@@ -80,20 +81,25 @@ internal class NativeScene3dView(
 
     private fun reattach() {
         detach()
+
         val scene = scene ?: return
         val surface = surface ?: return
         if (!open || surfaceWidth <= 0 || surfaceHeight <= 0 || !NativeScene3d.available()) return
         handle = NativeScene3d.attach(scene, surface, surfaceWidth, surfaceHeight, this)
+
         if (handle == 0L) {
             Log.w("LeptosKit", "a 3D scene could not attach: ${NativeScene3d.error()}")
+
             return
         }
+
         requestFrame()
     }
 
     private fun detach() {
         if (scheduled) Choreographer.getInstance().removeFrameCallback(this)
         scheduled = false
+
         if (handle != 0L) NativeScene3d.detach(handle)
         handle = 0L
     }
@@ -107,6 +113,7 @@ internal class NativeScene3dView(
 
     override fun doFrame(frameTimeNanos: Long) {
         scheduled = false
+
         if (handle == 0L) return
         if (NativeScene3d.frame(handle, frameTimeNanos / 1_000_000_000.0) == 1) requestFrame()
     }
