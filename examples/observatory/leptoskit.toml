@@ -3,8 +3,8 @@
 schema_version = 0
 
 # `leptoskit dev` here serves the observatory in the browser: the library's
-# Wasm client, built with `csr`, mounted by `web/index.html`. The macOS
-# window and the summary run with cargo.
+# Wasm client, built with `csr`, mounted by `web/index.html`. The macOS and
+# Linux windows and the summary run with cargo.
 [app]
 name = "observatory_web"
 

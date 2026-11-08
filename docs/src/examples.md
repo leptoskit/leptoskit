@@ -53,11 +53,11 @@ Every example lives in the leptoskit repository, most under `examples/`:
 | Example                                                                                                                         | What it shows                                                                                                                                                                              | Where it runs                                                                               |
 | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
 | [`file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes)                                          | Field, a notes app whose screens are files: the file router, layouts, typed links, and the whole build pipeline                                                                            | Web and every native destination, through the same commands as an app you scaffold yourself |
-| [`gallery`](https://github.com/leptoskit/leptoskit/tree/main/examples/gallery)                                                  | Seven screens on every platform: flexbox, grid, forms, charts, chat bubbles                                                                                                                | Every native backend and the browser; `window` and `snapshot` need macOS                    |
+| [`gallery`](https://github.com/leptoskit/leptoskit/tree/main/examples/gallery)                                                  | Seven screens on every platform: flexbox, grid, forms, charts, chat bubbles                                                                                                                | Every native backend and the browser; `window` and `snapshot` need macOS, Linux, or Windows |
 | [`islands`](https://github.com/leptoskit/leptoskit/tree/main/examples/islands)                                                  | Server rendering with leptos islands, one lazy chunk, and an 80 KiB initial-load budget                                                                                                    | Web                                                                                         |
 | [`counter`](https://github.com/leptoskit/leptoskit/tree/main/examples/counter)                                                  | The element tree, layout, mutation diffing, and a code push release, written with builder calls                                                                                            | The host, headlessly                                                                        |
-| [`observatory`](https://github.com/leptoskit/leptoskit/tree/main/examples/observatory)                                          | A star catalogue and a year of sky observations: [tables](guide/18-tables.md) and [virtualized lists](guide/17-virtualized-lists.md)                                                       | A macOS window, or headlessly on any platform                                               |
-| [`postcard`](https://github.com/leptoskit/leptoskit/tree/main/examples/postcard)                                                | A postcard in five languages: [typed translations](guide/19-localization.md) with plurals, selects, fallback, and right-to-left layout                                                     | A macOS window, or headlessly on any platform                                               |
+| [`observatory`](https://github.com/leptoskit/leptoskit/tree/main/examples/observatory)                                          | A star catalogue and a year of sky observations: [tables](guide/18-tables.md) and [virtualized lists](guide/17-virtualized-lists.md)                                                       | A macOS or Linux window, or headlessly on any platform                                      |
+| [`postcard`](https://github.com/leptoskit/leptoskit/tree/main/examples/postcard)                                                | A postcard in five languages: [typed translations](guide/19-localization.md) with plurals, selects, fallback, and right-to-left layout                                                     | A macOS or Linux window, or headlessly on any platform                                      |
 | [`harbor`](https://github.com/leptoskit/leptoskit/tree/main/examples/harbor)                                                    | A departure board: [queries](guide/11-fetching-data.md), hooks, and [server functions](guide/06-server-functions.md) with a [generated client](guide/13-sharing-the-rpc.md)                | The host, headlessly                                                                        |
 | [`huddle`](https://github.com/leptoskit/leptoskit/tree/main/examples/huddle)                                                    | A team chat and task board: [live queries, channels, and presence](guide/24-real-time.md), [jobs, actions, and the inbox](guide/24-background-work.md), and [sign-in](guide/23-sign-in.md) | The browser, macOS, and iOS, against its own server; Fly or Compose to deploy               |
 | [`release_lifecycle`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_codepush/examples/release_lifecycle.rs) | A [code push](guide/05-code-push.md) release from signing to a device that confirms it, a delta, a rollback, and a mirrored bucket                                                         | The host, headlessly                                                                        |
@@ -92,11 +92,11 @@ Its screens are files under `src/routes/`; the [file routes guide](guide/10-file
 
 ```bash
 cargo run -p gallery -- list                  # the screen names
-cargo run -p gallery -- window dashboard      # open one in a real macOS window
-cargo run -p gallery -- snapshot screenshots  # render every screen to PNG at 2x
+cargo run -p gallery -- window dashboard      # open one in a real native window
+cargo run -p gallery -- snapshot screenshots  # render every screen to PNG
 ```
 
-`window` and `snapshot` need macOS. On other platforms they say so and exit with an error.
+`window` and `snapshot` draw with AppKit on macOS, GTK 4 on Linux, and Win32 controls on Windows. On macOS the snapshots are at 2x. On other platforms they say so and exit with an error.
 
 The browser version renders the same seven screens, with working controls. The leptoskit CLI builds and serves it, and rebuilds when a file changes:
 
@@ -118,13 +118,13 @@ leptoskit dev --platform tui    # in this terminal
 ### observatory and postcard
 
 ```bash
-cargo run -p observatory_example                       # open it in a macOS window
-cargo run -p observatory_example -- snapshot sky.png   # render it to PNG at 2x on macOS
+cargo run -p observatory_example                       # open it in a macOS or Linux window
+cargo run -p observatory_example -- snapshot sky.png   # render it to PNG on macOS or Linux
 cargo run -p observatory_example -- summary            # print what a screen reader would read, anywhere
 cargo run -p postcard_example -- summary ar            # the postcard, in Arabic
 ```
 
-The postcard opens in the language your `LANG` names when it has a translation, and in English otherwise. `summary` and `snapshot` take a tag, such as `pl` or `ja`, to choose one.
+On macOS the window draws with AppKit and the snapshot is at 2x; on Linux both draw with GTK 4. On other platforms the window prints the summary instead, and `snapshot` exits with an error. The postcard opens in the language your `LANG` names when it has a translation, and in English otherwise. `summary` and `snapshot` take a tag, such as `pl` or `ja`, to choose one.
 
 ### harbor
 

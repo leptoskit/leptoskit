@@ -25,9 +25,13 @@ parking_lot = { workspace = true }
 reactive_graph = { workspace = true }
 wasm-bindgen = { workspace = true, optional = true }
 
-# A real window on macOS, through the AppKit backend.
+# A real window on macOS, through the AppKit backend, and on Linux, through
+# GTK 4.
 [target.'cfg(target_os = "macos")'.dependencies]
 leptoskit = { workspace = true, features = ["appkit", "table", "virtual"] }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+leptoskit = { workspace = true, features = ["gtk", "table", "virtual"] }
 
 [features]
 # The browser: leptos renders the same screen, which `web/index.html` loads.

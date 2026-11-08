@@ -27,9 +27,13 @@ reactive_graph = { workspace = true }
 wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["Location", "Window"] }
 
-# A real window on macOS, through the AppKit backend.
+# A real window on macOS, through the AppKit backend, and on Linux, through
+# GTK 4.
 [target.'cfg(target_os = "macos")'.dependencies]
 leptoskit = { workspace = true, features = ["appkit"] }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+leptoskit = { workspace = true, features = ["gtk"] }
 
 [dev-dependencies]
 leptoskit_l10n_codegen = { workspace = true }
