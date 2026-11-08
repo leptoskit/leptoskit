@@ -121,6 +121,7 @@ Most runtime names match the crate's suffix: `leptoskit_plugin_clipboard` is `cl
 | `leptoskit_plugin_live_activities`       | `live-activities`       |
 | `leptoskit_plugin_network_info`          | `network-info`          |
 | `leptoskit_plugin_mail_composer`         | `mail-composer`         |
+| `leptoskit_plugin_sms`                   | `sms`                   |
 | `leptoskit_plugin_local_authentication`  | `local-authentication`  |
 | `leptoskit_plugin_picture_in_picture`    | `picture-in-picture`    |
 | `leptoskit_plugin_screen_capture`        | `screen-capture`        |
