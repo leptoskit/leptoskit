@@ -678,6 +678,7 @@ fn kind_code(kind: NativeKind) -> i32 {
 		NativeKind::Vector => 15,
 		NativeKind::Rive => 16,
 		NativeKind::Scene3d => 17,
+		NativeKind::Video => 18,
 		NativeKind::Custom(name) => panic!("custom widget `{name}` has no native guest ABI code"),
 	}
 }

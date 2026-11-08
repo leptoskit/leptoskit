@@ -127,6 +127,7 @@ packages = [
 	"leptoskit_plugin_tray",
 	"leptoskit_plugin_updater",
 	"leptoskit_plugin_speech",
+	"leptoskit_plugin_video",
 	"leptoskit_plugin_sqlite",
 	"leptoskit_plugin_store",
 	"leptoskit_plugin_image_manipulator",
@@ -444,6 +445,9 @@ path = "crates/leptoskit_plugin_updater"
 
 [package.leptoskit_plugin_speech]
 path = "crates/leptoskit_plugin_speech"
+
+[package.leptoskit_plugin_video]
+path = "crates/leptoskit_plugin_video"
 
 [package.leptoskit_plugin_sqlite]
 path = "crates/leptoskit_plugin_sqlite"

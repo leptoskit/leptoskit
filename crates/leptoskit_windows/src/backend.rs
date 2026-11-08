@@ -1939,9 +1939,11 @@ fn msaa_role(role: Option<Role>, kind: NativeKind) -> u32 {
 		Some(Role::Img) => ROLE_SYSTEM_GRAPHIC,
 		_ => {
 			match kind {
-				NativeKind::Image | NativeKind::Vector | NativeKind::Rive | NativeKind::Scene3d => {
-					ROLE_SYSTEM_GRAPHIC
-				}
+				NativeKind::Image
+				| NativeKind::Vector
+				| NativeKind::Rive
+				| NativeKind::Scene3d
+				| NativeKind::Video => ROLE_SYSTEM_GRAPHIC,
 				NativeKind::ActivityIndicator => ROLE_SYSTEM_ANIMATION,
 				_ => ROLE_SYSTEM_GROUPING,
 			}

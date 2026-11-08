@@ -63,6 +63,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 	let NativeProps {
 		rive,
 		scene3d,
+		video,
 		text,
 		source,
 		placeholder,
@@ -107,6 +108,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 
 	rive.is_none()
 		&& scene3d.is_none()
+		&& video.is_none()
 		&& text.is_none()
 		&& source.is_none()
 		&& placeholder.is_none()

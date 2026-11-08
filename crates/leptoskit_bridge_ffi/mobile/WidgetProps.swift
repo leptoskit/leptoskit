@@ -33,6 +33,8 @@ struct WidgetProps: Decodable {
     let animation: WidgetAnimation?
     /// The scene a `Scene3d` shows; Rust draws it, see `NativeScene3dView`.
     let scene3d: UInt32?
+    /// The player a `Video` shows; the `video` plugin owns it.
+    let video: UInt32?
 }
 
 extension WidgetProps {

@@ -250,6 +250,19 @@ pub fn Scene3d(scene: leptoskit_3d::SceneId) -> Element {
 
 tag!(Scene3d => Element::new(crate::NativeKind::Scene3d));
 
+/// A host-owned video player surface.
+///
+/// The element only says where the player shows. Create and control the player
+/// with `leptoskit_plugin_video` (`guest::Video` from a Wasm guest). Give it a
+/// size, such as `w-full h-64`, and an accessible label, or mark it decorative
+/// with `aria_hidden(true)`.
+#[track_caller]
+pub fn Video(player: u32) -> Element {
+	Element::video(player)
+}
+
+tag!(Video => Element::new(crate::NativeKind::Video));
+
 /// A container whose overflowing children can scroll.
 #[track_caller]
 pub fn ScrollView() -> Element {
