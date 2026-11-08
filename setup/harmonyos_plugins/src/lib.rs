@@ -48,6 +48,7 @@ pub use leptoskit_plugin_power_monitor;
 pub use leptoskit_plugin_screen_capture;
 pub use leptoskit_plugin_screen_orientation;
 pub use leptoskit_plugin_secure_store;
+pub use leptoskit_plugin_sensors;
 pub use leptoskit_plugin_sharing;
 pub use leptoskit_plugin_shell;
 pub use leptoskit_plugin_single_instance;
