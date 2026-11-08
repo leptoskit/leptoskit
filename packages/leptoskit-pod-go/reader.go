@@ -164,17 +164,9 @@ func (r *Reader) ResultTag() (bool, error) {
 	}
 }
 
-// StructHeader reads disc + version (both little-endian u16).
-func (r *Reader) StructHeader() (uint16, uint16, error) {
-	disc, err := r.U16()
-	if err != nil {
-		return 0, 0, err
-	}
-	version, err := r.U16()
-	if err != nil {
-		return 0, 0, err
-	}
-	return disc, version, nil
+// StructHeader reads layout version (little-endian u16).
+func (r *Reader) StructHeader() (uint16, error) {
+	return r.U16()
 }
 
 // Variant reads enum discriminator.

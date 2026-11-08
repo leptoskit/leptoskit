@@ -106,11 +106,11 @@ final class ConformanceTests: XCTestCase {
 
 	func testEncodeNoteMatchesVector() throws {
 		var w = Writer()
-		w.structHeader(disc: 0, version: 0)
+		w.structHeader(version: 0)
 		w.u8(7)
 		try w.bool(true)
 		try w.string("hi")
-		XCTAssertEqual(hexEncode(w.asSlice()), "000000000701020000006869")
+		XCTAssertEqual(hexEncode(w.asSlice()), "00000701020000006869")
 	}
 
 	func testEnvelopeRpcEmpty() throws {

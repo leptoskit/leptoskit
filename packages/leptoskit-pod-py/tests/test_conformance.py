@@ -39,7 +39,7 @@ def encode_note(priority: int, archived: bool, title: str) -> bytes:
         w.bool(archived)
         w.string(title)
 
-    return encode_struct_v0(0, fields)
+    return encode_struct_v0(fields)
 
 
 def decode_note(r: Reader) -> None:
@@ -48,12 +48,12 @@ def decode_note(r: Reader) -> None:
         inner.bool()
         inner.string()
 
-    decode_struct_version(r, 0, 0, fields)
+    decode_struct_version(r, 0, fields)
 
 
 def encode_vector(name: str) -> bytes:
     if name == "empty_struct_v0":
-        return encode_struct_v0(0, lambda w: None)
+        return encode_struct_v0(lambda w: None)
     if name == "note_hi":
         return encode_note(7, True, "hi")
     if name == "option_none_u8":
@@ -93,7 +93,7 @@ def encode_vector(name: str) -> bytes:
     if name == "enum_struct_variant":
         w = Writer.new()
         w.variant(1)
-        w.struct_header(0, 0)
+        w.struct_header(0)
         w.u8(7)
         w.string("abc")
         return w.finish()
@@ -108,8 +108,7 @@ def decode_vector(name: str, data: bytes) -> None:
         return
     r = Reader(data)
     if name == "empty_struct_v0":
-        disc, version = r.struct_header()
-        assert disc == 0 and version == 0
+        assert r.struct_header() == 0
     elif name == "note_hi":
         decode_note(r)
     elif name == "option_none_u8":
@@ -137,7 +136,7 @@ def decode_vector(name: str, data: bytes) -> None:
             inner.u8()
             inner.string()
 
-        decode_struct_version(r, 0, 0, fields)
+        decode_struct_version(r, 0, fields)
     else:
         raise AssertionError(f"no decoder for {name}")
     r.finish()

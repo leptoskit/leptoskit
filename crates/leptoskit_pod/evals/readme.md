@@ -10,19 +10,18 @@ Adversarial scenarios for agent swarms and binding generators that must not pani
 
 ## Prompt catalogue
 
-| ID   | Scenario                                          | Expected outcome                                  |
-| ---- | ------------------------------------------------- | ------------------------------------------------- |
-| E01  | Envelope missing `LK01` magic                     | `InvalidEnvelope`                                 |
-| E02  | Envelope `codec_version` mismatch                 | `InvalidEnvelope` or version-specific reject      |
-| E03  | Struct `version` unknown to decoder               | `UnknownVersion`                                  |
-| E03b | Struct `discriminator` unknown to decoder         | `UnknownDiscriminator`                            |
-| E04  | `u32` length larger than remaining bytes          | `Truncated`                                       |
-| E05  | String payload not UTF-8                          | `InvalidUtf8`                                     |
-| E06  | Enum / option / result tag ∉ {0, 1}               | `InvalidTag`                                      |
-| E07  | Valid payload + trailing slack bytes              | `Trailing` on whole-buffer decode                 |
-| E08  | `0xFFFFFFFF` length on 16-byte buffer             | `Truncated`; no huge allocation                   |
-| E09  | Rust v0 struct, binding expecting v1 extra field  | Typed version / layout error (not silent misread) |
-| E10  | Round-trip Rust → TS/Python/Go using vectors.json | Bit-identical hex                                 |
+| ID  | Scenario                                          | Expected outcome                                  |
+| --- | ------------------------------------------------- | ------------------------------------------------- |
+| E01 | Envelope missing `LK01` magic                     | `InvalidEnvelope`                                 |
+| E02 | Envelope `codec_version` mismatch                 | `InvalidEnvelope` or version-specific reject      |
+| E03 | Struct `version` unknown to decoder               | `UnknownVersion`                                  |
+| E04 | `u32` length larger than remaining bytes          | `Truncated`                                       |
+| E05 | String payload not UTF-8                          | `InvalidUtf8`                                     |
+| E06 | Enum / option / result tag ∉ {0, 1}               | `InvalidTag`                                      |
+| E07 | Valid payload + trailing slack bytes              | `Trailing` on whole-buffer decode                 |
+| E08 | `0xFFFFFFFF` length on 16-byte buffer             | `Truncated`; no huge allocation                   |
+| E09 | Rust v0 struct, binding expecting v1 extra field  | Typed version / layout error (not silent misread) |
+| E10 | Round-trip Rust → TS/Python/Go using vectors.json | Bit-identical hex                                 |
 
 ## Running checks
 

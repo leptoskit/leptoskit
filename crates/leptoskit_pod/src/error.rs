@@ -23,9 +23,6 @@ pub enum Error {
 	/// The transport envelope magic or version was wrong.
 	#[error("invalid pod envelope")]
 	InvalidEnvelope,
-	/// A struct discriminator is not known to this decoder.
-	#[error("unknown pod struct discriminator {0}")]
-	UnknownDiscriminator(u16),
 	/// A struct version is not known to this decoder.
 	#[error("unknown pod struct version {0}")]
 	UnknownVersion(u16),

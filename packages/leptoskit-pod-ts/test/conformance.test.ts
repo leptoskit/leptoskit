@@ -54,7 +54,7 @@ function encodeNote(
 	archived: boolean,
 	title: string,
 ): Uint8Array {
-	return encodeStructV0(0, (w) => {
+	return encodeStructV0((w) => {
 		w.u8(priority);
 		w.bool(archived);
 		w.string(title);
@@ -64,7 +64,7 @@ function encodeNote(
 function decodeNote(
 	r: Reader,
 ): { priority: number; archived: boolean; title: string } {
-	return decodeStructVersion(r, 0, 0, (inner) => ({
+	return decodeStructVersion(r, 0, (inner) => ({
 		priority: inner.u8(),
 		archived: inner.bool(),
 		title: inner.string(),
@@ -82,7 +82,7 @@ function encodeLiveUpdate(
 		return w.finish();
 	}
 	w.variant(1);
-	w.structHeader(0, 0);
+	w.structHeader(0);
 	w.u8(priority!);
 	w.string(title!);
 	return w.finish();
@@ -91,7 +91,7 @@ function encodeLiveUpdate(
 function encodeVector(name: string): Uint8Array {
 	switch (name) {
 		case "empty_struct_v0":
-			return encodeStructV0(0, () => {});
+			return encodeStructV0(() => {});
 		case "note_hi":
 			return encodeNote(7, true, "hi");
 		case "option_none_u8": {
@@ -145,9 +145,7 @@ function decodeVector(name: string, bytes: Uint8Array): void {
 	const r = new Reader(bytes);
 	switch (name) {
 		case "empty_struct_v0": {
-			const [disc, version] = r.structHeader();
-			assert.equal(disc, 0);
-			assert.equal(version, 0);
+			assert.equal(r.structHeader(), 0);
 			r.finish();
 			break;
 		}
@@ -191,7 +189,7 @@ function decodeVector(name: string, bytes: Uint8Array): void {
 			break;
 		case "enum_struct_variant": {
 			assert.equal(r.variant(), 1);
-			decodeStructVersion(r, 0, 0, (inner) => ({
+			decodeStructVersion(r, 0, (inner) => ({
 				priority: inner.u8(),
 				title: inner.string(),
 			}));

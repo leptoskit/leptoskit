@@ -57,8 +57,7 @@ class Writer(capacity: Int = 0) {
 
 	fun resultTag(ok: Boolean) = u8(if (ok) 0u else 1u)
 
-	fun structHeader(disc: UShort, version: UShort) {
-		u16(disc)
+	fun structHeader(version: UShort) {
 		u16(version)
 	}
 

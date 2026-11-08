@@ -64,7 +64,7 @@ func hexDecode(t *testing.T, s string) []byte {
 }
 
 func encodeNote(priority uint8, archived bool, title string) ([]byte, error) {
-	return EncodeStructV0(0, func(w *Writer) error {
+	return EncodeStructV0(func(w *Writer) error {
 		w.U8(priority)
 		w.Bool(archived)
 		return w.String(title)
@@ -73,7 +73,7 @@ func encodeNote(priority uint8, archived bool, title string) ([]byte, error) {
 
 func decodeNote(t *testing.T, r *Reader) {
 	t.Helper()
-	err := DecodeStructVersion(r, 0, 0, func(inner *Reader) error {
+	err := DecodeStructVersion(r, 0, func(inner *Reader) error {
 		if _, err := inner.U8(); err != nil {
 			return err
 		}
@@ -94,7 +94,7 @@ func encodeVector(t *testing.T, name string) []byte {
 	t.Helper()
 	switch name {
 	case "empty_struct_v0":
-		b, err := EncodeStructV0(0, func(w *Writer) error { return nil })
+		b, err := EncodeStructV0(func(w *Writer) error { return nil })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +146,7 @@ func encodeVector(t *testing.T, name string) []byte {
 	case "enum_struct_variant":
 		w := NewWriter()
 		w.Variant(1)
-		w.StructHeader(0, 0)
+		w.StructHeader(0)
 		w.U8(7)
 		if err := w.String("abc"); err != nil {
 			t.Fatal(err)
@@ -175,8 +175,8 @@ func decodeVector(t *testing.T, name string, bytes []byte) {
 	r := NewReader(bytes)
 	switch name {
 	case "empty_struct_v0":
-		disc, version, err := r.StructHeader()
-		if err != nil || disc != 0 || version != 0 {
+		version, err := r.StructHeader()
+		if err != nil || version != 0 {
 			t.Fatal(err)
 		}
 	case "note_hi":
@@ -235,7 +235,7 @@ func decodeVector(t *testing.T, name string, bytes []byte) {
 		if err != nil || d != 1 {
 			t.Fatal(err)
 		}
-		err = DecodeStructVersion(r, 0, 0, func(inner *Reader) error {
+		err = DecodeStructVersion(r, 0, func(inner *Reader) error {
 			if _, err := inner.U8(); err != nil {
 				return err
 			}

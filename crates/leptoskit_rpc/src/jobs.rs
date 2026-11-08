@@ -173,7 +173,7 @@ pub struct Failed<J> {
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 impl<J: leptoskit_pod::PodEncode> leptoskit_pod::PodEncode for Failed<J> {
 	fn encode(&self, w: &mut leptoskit_pod::Writer) -> leptoskit_pod::Result<()> {
-		leptoskit_pod::encode_struct_v0(w, 0, |w| {
+		leptoskit_pod::encode_struct_v0(w, |w| {
 			self.id.encode(w)?;
 			self.job.encode(w)?;
 			self.error.encode(w)?;
@@ -186,7 +186,7 @@ impl<J: leptoskit_pod::PodEncode> leptoskit_pod::PodEncode for Failed<J> {
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 impl<'a, J: leptoskit_pod::PodDecode<'a>> leptoskit_pod::PodDecode<'a> for Failed<J> {
 	fn decode(r: &mut leptoskit_pod::Reader<'a>) -> leptoskit_pod::Result<Self> {
-		leptoskit_pod::decode_struct_version(r, 0, 0, |r| {
+		leptoskit_pod::decode_struct_version(r, 0, |r| {
 			Ok(Self {
 				id: leptoskit_pod::PodDecode::decode(r)?,
 				job: J::decode(r)?,

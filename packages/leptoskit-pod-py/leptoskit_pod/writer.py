@@ -81,8 +81,7 @@ class Writer:
     def result_tag(self, ok: bool) -> None:
         self.u8(0 if ok else 1)
 
-    def struct_header(self, disc: int, version: int) -> None:
-        self.u16(disc)
+    def struct_header(self, version: int) -> None:
         self.u16(version)
 
     def variant(self, disc: int) -> None:

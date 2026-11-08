@@ -100,8 +100,8 @@ export class Reader {
 		throw PodError.invalidTag(tag);
 	}
 
-	structHeader(): [number, number] {
-		return [this.u16(), this.u16()];
+	structHeader(): number {
+		return this.u16();
 	}
 
 	variant(): number {

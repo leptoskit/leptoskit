@@ -89,8 +89,8 @@ class Reader:
             return False
         raise InvalidTag(tag)
 
-    def struct_header(self) -> tuple[int, int]:
-        return self.u16(), self.u16()
+    def struct_header(self) -> int:
+        return self.u16()
 
     def variant(self) -> int:
         return self.u16()

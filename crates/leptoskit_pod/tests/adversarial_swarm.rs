@@ -102,24 +102,24 @@ fn climb_unknown_version_when_target_ahead() {
 	}
 
 	let mut w = Writer::new();
-	w.struct_header(0, 0);
+	w.struct_header(0);
 	w.u8(7);
 	let v0 = w.finish();
 	assert_eq!(
-		climb(&v0, 0, 2, &[&V0ToV1]).unwrap_err(),
+		climb(&v0, 2, &[&V0ToV1]).unwrap_err(),
 		Error::UnknownVersion(1)
 	);
 }
 
 #[test]
-fn struct_wrong_discriminator_rejected() {
+fn struct_unknown_version_rejected() {
 	use leptoskit_pod::decode_struct_version;
 	let mut w = leptoskit_pod::Writer::new();
-	w.struct_header(1, 0);
+	w.struct_header(1);
 	w.u8(1);
 	let bytes = w.finish();
 	assert_eq!(
-		decode_struct_version(&mut Reader::new(&bytes), 0, 0, |r| r.u8()).unwrap_err(),
-		Error::UnknownDiscriminator(1)
+		decode_struct_version(&mut Reader::new(&bytes), 0, |r| r.u8()).unwrap_err(),
+		Error::UnknownVersion(1)
 	);
 }

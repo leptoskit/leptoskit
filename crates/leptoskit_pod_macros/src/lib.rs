@@ -20,11 +20,10 @@ use syn::parse_macro_input;
 /// Optional arguments:
 /// - path to the `leptoskit_pod` crate (positional or `crate = …`); defaults to
 ///   `::leptoskit_pod`
-/// - `disc = N` — stable type discriminator (`u16`, default `0`)
 /// - `version = N` — layout version (`u16`, default `0`)
 ///
-/// Example: `#[pod::data(disc = 7, version = 1)]` or
-/// `#[pod::data(::leptoskit_rpc::__private::leptoskit_pod, disc = 1)]`.
+/// Example: `#[pod::data(version = 1)]` or
+/// `#[pod::data(::leptoskit_rpc::__private::leptoskit_pod, version = 1)]`.
 #[proc_macro_attribute]
 pub fn data(attr: TokenStream, item: TokenStream) -> TokenStream {
 	let attrs = match syn::parse::<PodAttrs>(attr) {
@@ -35,11 +34,10 @@ pub fn data(attr: TokenStream, item: TokenStream) -> TokenStream {
 	let name = &input.ident;
 	let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 	let pod = &attrs.pod_path;
-	let disc = attrs.disc;
 	let version = attrs.version;
 
 	let encode_body = match &input.data {
-		Data::Struct(data) => encode_struct(data, pod, disc, version),
+		Data::Struct(data) => encode_struct(data, pod, version),
 		Data::Enum(data) => encode_enum(data, pod),
 		Data::Union(_) => {
 			return syn::Error::new_spanned(&input.ident, "#[pod::data] does not support unions")
@@ -49,7 +47,7 @@ pub fn data(attr: TokenStream, item: TokenStream) -> TokenStream {
 	};
 
 	let decode_body = match &input.data {
-		Data::Struct(data) => decode_struct(data, pod, disc, version),
+		Data::Struct(data) => decode_struct(data, pod, version),
 		Data::Enum(data) => decode_enum(data, pod),
 		Data::Union(_) => unreachable!(),
 	};
@@ -75,26 +73,21 @@ pub fn data(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 struct PodAttrs {
 	pod_path: Path,
-	disc: u16,
 	version: u16,
 }
 
 impl Parse for PodAttrs {
 	fn parse(input: ParseStream) -> syn::Result<Self> {
 		let mut pod_path: Option<Path> = None;
-		let mut disc = 0u16;
 		let mut version = 0u16;
 
 		if input.is_empty() {
 			return Ok(Self {
 				pod_path: syn::parse_quote!(::leptoskit_pod),
-				disc,
 				version,
 			});
 		}
 
-		// Positional crate path: `#[pod::data(::some::path)]` or with trailing
-		// commas/keys.
 		if !input.peek(syn::Ident) || input.peek2(Token![::]) || input.peek(Token![::]) {
 			if input.peek(Token![crate]) && input.peek2(Token![=]) {
 				// fall through to key parsing
@@ -113,10 +106,6 @@ impl Parse for PodAttrs {
 				"crate" => {
 					pod_path = Some(input.parse()?);
 				}
-				"disc" => {
-					let lit: LitInt = input.parse()?;
-					disc = lit.base10_parse()?;
-				}
 				"version" => {
 					let lit: LitInt = input.parse()?;
 					version = lit.base10_parse()?;
@@ -124,9 +113,7 @@ impl Parse for PodAttrs {
 				other => {
 					return Err(syn::Error::new(
 						key.span(),
-						format!(
-							"unknown #[pod::data] key `{other}`; expected crate, disc, version"
-						),
+						format!("unknown #[pod::data] key `{other}`; expected crate, version"),
 					));
 				}
 			}
@@ -137,7 +124,6 @@ impl Parse for PodAttrs {
 
 		Ok(Self {
 			pod_path: pod_path.unwrap_or_else(|| syn::parse_quote!(::leptoskit_pod)),
-			disc,
 			version,
 		})
 	}
@@ -149,12 +135,7 @@ fn looks_like_path(input: ParseStream) -> bool {
 		|| (input.peek(syn::Ident) && input.peek2(Token![::]))
 }
 
-fn encode_struct(
-	data: &DataStruct,
-	pod: &Path,
-	disc: u16,
-	version: u16,
-) -> proc_macro2::TokenStream {
+fn encode_struct(data: &DataStruct, pod: &Path, version: u16) -> proc_macro2::TokenStream {
 	match &data.fields {
 		Fields::Named(fields) => {
 			let writes = fields.named.iter().map(|f| {
@@ -162,7 +143,7 @@ fn encode_struct(
 				quote! { #pod::PodEncode::encode(&self.#ident, w)?; }
 			});
 			quote! {
-				#pod::encode_struct(w, #disc, #version, |w| {
+				#pod::encode_struct(w, #version, |w| {
 					#(#writes)*
 					::core::result::Result::Ok(())
 				})
@@ -174,7 +155,7 @@ fn encode_struct(
 				quote! { #pod::PodEncode::encode(&self.#index, w)?; }
 			});
 			quote! {
-				#pod::encode_struct(w, #disc, #version, |w| {
+				#pod::encode_struct(w, #version, |w| {
 					#(#writes)*
 					::core::result::Result::Ok(())
 				})
@@ -182,18 +163,13 @@ fn encode_struct(
 		}
 		Fields::Unit => {
 			quote! {
-				#pod::encode_struct(w, #disc, #version, |_w| ::core::result::Result::Ok(()))
+				#pod::encode_struct(w, #version, |_w| ::core::result::Result::Ok(()))
 			}
 		}
 	}
 }
 
-fn decode_struct(
-	data: &DataStruct,
-	pod: &Path,
-	disc: u16,
-	version: u16,
-) -> proc_macro2::TokenStream {
+fn decode_struct(data: &DataStruct, pod: &Path, version: u16) -> proc_macro2::TokenStream {
 	match &data.fields {
 		Fields::Named(fields) => {
 			let idents: Vec<_> = fields
@@ -205,7 +181,7 @@ fn decode_struct(
 				quote! { #ident: #pod::PodDecode::decode(r)?, }
 			});
 			quote! {
-				#pod::decode_struct_version(r, #disc, #version, |r| {
+				#pod::decode_struct_version(r, #version, |r| {
 					::core::result::Result::Ok(Self {
 						#(#reads)*
 					})
@@ -217,14 +193,14 @@ fn decode_struct(
 				quote! { #pod::PodDecode::decode(r)?, }
 			});
 			quote! {
-				#pod::decode_struct_version(r, #disc, #version, |r| {
+				#pod::decode_struct_version(r, #version, |r| {
 					::core::result::Result::Ok(Self(#(#reads)*))
 				})
 			}
 		}
 		Fields::Unit => {
 			quote! {
-				#pod::decode_struct_version(r, #disc, #version, |_r| {
+				#pod::decode_struct_version(r, #version, |_r| {
 					::core::result::Result::Ok(Self)
 				})
 			}
@@ -269,12 +245,10 @@ fn encode_enum(data: &DataEnum, pod: &Path) -> proc_macro2::TokenStream {
 				let writes = idents.iter().map(|ident| {
 					quote! { #pod::PodEncode::encode(#ident, w)?; }
 				});
-				// Anonymous variant bodies use disc 0 / version 0 until schema
-				// assignment mints a stable id for the payload layout.
 				quote! {
 					Self::#ident { #(#idents),* } => {
 						w.variant(#disc);
-						#pod::encode_struct_v0(w, 0, |w| {
+						#pod::encode_struct_v0(w, |w| {
 							#(#writes)*
 							::core::result::Result::Ok(())
 						})
@@ -318,7 +292,7 @@ fn decode_enum(data: &DataEnum, pod: &Path) -> proc_macro2::TokenStream {
 					quote! { #ident: #pod::PodDecode::decode(r)?, }
 				});
 				quote! {
-					#disc => #pod::decode_struct_version(r, 0, 0, |r| {
+					#disc => #pod::decode_struct_version(r, 0, |r| {
 						::core::result::Result::Ok(Self::#ident {
 							#(#reads)*
 						})

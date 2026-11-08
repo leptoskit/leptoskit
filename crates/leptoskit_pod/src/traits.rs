@@ -198,40 +198,34 @@ impl<'a> PodDecode<'a> for () {
 	}
 }
 
-/// Dense named-field struct: `[disc:u16][version:u16][fields…]`.
+/// Dense named-field struct: `[version:u16][fields…]`.
 pub fn encode_struct(
 	w: &mut Writer,
-	disc: u16,
 	version: u16,
 	encode_fields: impl FnOnce(&mut Writer) -> Result<()>,
 ) -> Result<()> {
-	w.struct_header(disc, version);
+	w.struct_header(version);
 	encode_fields(w)
 }
 
 /// Encodes a dense struct at layout version `0`.
 pub fn encode_struct_v0(
 	w: &mut Writer,
-	disc: u16,
 	encode_fields: impl FnOnce(&mut Writer) -> Result<()>,
 ) -> Result<()> {
-	encode_struct(w, disc, 0, encode_fields)
+	encode_struct(w, 0, encode_fields)
 }
 
-/// Decodes a dense struct; requires matching discriminator and version.
+/// Decodes a dense struct; requires matching version.
 ///
 /// For inbound RPC / jobs that may arrive at an older version, call
 /// [`crate::climb`] first, then decode at the current version.
 pub fn decode_struct_version<'a, T>(
 	r: &mut Reader<'a>,
-	expected_disc: u16,
 	expected_version: u16,
 	decode_fields: impl FnOnce(&mut Reader<'a>) -> Result<T>,
 ) -> Result<T> {
-	let (disc, version) = r.struct_header()?;
-	if disc != expected_disc {
-		return Err(Error::UnknownDiscriminator(disc));
-	}
+	let version = r.struct_header()?;
 	if version != expected_version {
 		return Err(Error::UnknownVersion(version));
 	}

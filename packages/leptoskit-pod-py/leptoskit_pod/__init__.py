@@ -16,7 +16,6 @@ from leptoskit_pod.errors import (
     TooLarge,
     Trailing,
     Truncated,
-    UnknownDiscriminator,
     UnknownVersion,
 )
 from leptoskit_pod.reader import Reader
@@ -39,7 +38,6 @@ __all__ = [
     "InvalidUtf8",
     "InvalidTag",
     "InvalidEnvelope",
-    "UnknownDiscriminator",
     "UnknownVersion",
     "encode_struct",
     "encode_struct_v0",

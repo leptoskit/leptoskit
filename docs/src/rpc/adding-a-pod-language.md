@@ -24,7 +24,7 @@ Deliverables:
 - Wire codegen in crates/leptoskit_rpc_codegen MUST import this package
 
 Closed type grammar:
-  struct (disc:u16 + version:u16 + dense fields)
+  struct (version:u16 + dense fields)
   enum (variant_disc:u16 + payload)
   Option/Result (u8 tag), Vec (u32 count), String/bytes (u32 len),
   bool/u8..u64/i8..i64 little-endian, nested structs/enums
@@ -33,7 +33,7 @@ Transport envelope: magic LK01 | codec_ver:u16 | msg_type:u16 | flags:u16 |
 body_len:u32 | body. Content-Type: application/vnd.leptoskit.rpc.v1+bin
 
 Migrations: servers climb inbound struct versions to current; clients encode
-current. Live/events do not climb. Reject UnknownDiscriminator / UnknownVersion.
+current. Live/events do not climb. Reject UnknownVersion.
 
 Done when: conformance script green; generated client smoke test round-trips
 against the Rust fixture server.
@@ -45,7 +45,7 @@ against the Rust fixture server.
 | ---------------- | ------------------------------------------------------------------ |
 | Package scaffold | Manifest + license + readme under `packages/leptoskit-pod-<lang>/` |
 | Reader/Writer    | Primitives match the Rust API                                      |
-| Struct/enum      | `disc:u16` + `version:u16` envelope; enum variant disc             |
+| Struct/enum      | `version:u16` envelope; enum variant disc                          |
 | Envelope         | `LK01` framing                                                     |
 | Conformance      | All vectors encode/decode; malformed set rejected                  |
 | Codegen hook     | `leptoskit_rpc_codegen` emits imports of the package               |

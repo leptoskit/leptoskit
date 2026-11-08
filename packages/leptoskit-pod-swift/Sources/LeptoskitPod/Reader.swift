@@ -92,8 +92,8 @@ public struct Reader: Sendable {
 		}
 	}
 
-	public mutating func structHeader() throws -> (UInt16, UInt16) {
-		(try u16(), try u16())
+	public mutating func structHeader() throws -> UInt16 {
+		try u16()
 	}
 
 	public mutating func variant() throws -> UInt16 {

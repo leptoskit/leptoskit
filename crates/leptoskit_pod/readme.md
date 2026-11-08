@@ -4,7 +4,7 @@ LK Pod is leptoskit’s portable little-endian TLV wire format for RPC and live 
 
 - Content-Type: `application/vnd.leptoskit.rpc.v1+bin`
 - Envelope magic: `LK01`
-- Structs carry `[discriminator:u16][version:u16][payload…]`; enums carry a `u16` variant discriminator
+- Structs carry `[version:u16][payload…]`; enums carry a `u16` variant discriminator
 - `Vec` / `String` use unbounded `u32` length prefixes
 - Inbound RPC / jobs **climb** adjacent version transitions to current; responses encode current; live events do not migrate
 

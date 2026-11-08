@@ -12,7 +12,7 @@ use crate::Reader;
 use crate::Result;
 use crate::Writer;
 
-/// One adjacent rewrite: `from` → `from + 1` for a single discriminator.
+/// One adjacent rewrite: `from` → `from + 1`.
 pub trait Transition {
 	/// Source version this step consumes.
 	#[allow(clippy::wrong_self_convention)]
@@ -20,27 +20,18 @@ pub trait Transition {
 
 	/// Rewrites payload bytes for `from_version` into `from_version + 1`.
 	///
-	/// `old` is the struct **payload only** — no `[disc][version]` header.
+	/// `old` is the struct **payload only** — no version header.
 	fn migrate(&self, old: &[u8]) -> Result<Vec<u8>>;
 }
 
-/// Climbs a full struct (`[disc:u16][version:u16][payload…]`) from its on-wire
-/// version up to `current` using adjacent `steps`.
+/// Climbs a full struct (`[version:u16][payload…]`) from its on-wire version
+/// up to `current` using adjacent `steps`.
 ///
-/// Rejects a mismatched discriminator, a version ahead of `current`, or a gap
-/// in the transition table. Identity when the on-wire version already equals
-/// `current`.
-pub fn climb(
-	bytes: &[u8],
-	expected_disc: u16,
-	current: u16,
-	steps: &[&dyn Transition],
-) -> Result<Vec<u8>> {
+/// Rejects a version ahead of `current` or a gap in the transition table.
+/// Identity when the on-wire version already equals `current`.
+pub fn climb(bytes: &[u8], current: u16, steps: &[&dyn Transition]) -> Result<Vec<u8>> {
 	let mut r = Reader::new(bytes);
-	let (disc, mut version) = r.struct_header()?;
-	if disc != expected_disc {
-		return Err(Error::UnknownDiscriminator(disc));
-	}
+	let mut version = r.struct_header()?;
 	let mut payload = r.remaining().to_vec();
 	while version < current {
 		let step = steps
@@ -53,8 +44,8 @@ pub fn climb(
 	if version != current {
 		return Err(Error::UnknownVersion(version));
 	}
-	let mut out = Writer::with_capacity(4 + payload.len());
-	out.struct_header(expected_disc, current);
+	let mut out = Writer::with_capacity(2 + payload.len());
+	out.struct_header(current);
 	out.raw(&payload);
 	Ok(out.finish())
 }
@@ -85,36 +76,24 @@ mod tests {
 	#[test]
 	fn climbs_one_step() {
 		let mut w = Writer::new();
-		w.struct_header(7, 0);
+		w.struct_header(0);
 		w.u8(7);
 		let old = w.finish();
-		let next = climb(&old, 7, 1, &[&V0ToV1]).unwrap();
+		let next = climb(&old, 1, &[&V0ToV1]).unwrap();
 		let mut r = Reader::new(&next);
-		assert_eq!(r.struct_header().unwrap(), (7, 1));
+		assert_eq!(r.struct_header().unwrap(), 1);
 		assert_eq!(r.u8().unwrap(), 7);
 		assert!(!r.bool().unwrap());
 		r.finish().unwrap();
 	}
 
 	#[test]
-	fn rejects_wrong_discriminator() {
-		let mut w = Writer::new();
-		w.struct_header(1, 0);
-		w.u8(7);
-		let old = w.finish();
-		assert_eq!(
-			climb(&old, 7, 1, &[&V0ToV1]).unwrap_err(),
-			Error::UnknownDiscriminator(1)
-		);
-	}
-
-	#[test]
 	fn identity_when_already_current() {
 		let mut w = Writer::new();
-		w.struct_header(7, 1);
+		w.struct_header(1);
 		w.u8(3);
 		w.bool(true);
 		let current = w.finish();
-		assert_eq!(climb(&current, 7, 1, &[&V0ToV1]).unwrap(), current);
+		assert_eq!(climb(&current, 1, &[&V0ToV1]).unwrap(), current);
 	}
 }

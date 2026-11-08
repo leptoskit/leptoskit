@@ -50,14 +50,6 @@ class InvalidEnvelope(PodError):
         super().__init__("invalid pod envelope")
 
 
-class UnknownDiscriminator(PodError):
-    code = "UnknownDiscriminator"
-
-    def __init__(self, disc: int) -> None:
-        self.disc = disc
-        super().__init__(f"unknown pod struct discriminator {disc}")
-
-
 class UnknownVersion(PodError):
     code = "UnknownVersion"
 

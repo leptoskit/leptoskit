@@ -26,7 +26,7 @@ struct Note {
 
 impl PodEncode for Note {
 	fn encode(&self, w: &mut Writer) -> leptoskit_pod::Result<()> {
-		encode_struct_v0(w, 0, |w| {
+		encode_struct_v0(w, |w| {
 			self.priority.encode(w)?;
 			self.archived.encode(w)?;
 			self.title.encode(w)?;
@@ -37,7 +37,7 @@ impl PodEncode for Note {
 
 impl<'a> PodDecode<'a> for Note {
 	fn decode(r: &mut Reader<'a>) -> leptoskit_pod::Result<Self> {
-		decode_struct_version(r, 0, 0, |r| {
+		decode_struct_version(r, 0, |r| {
 			Ok(Self {
 				priority: u8::decode(r)?,
 				archived: bool::decode(r)?,
@@ -62,7 +62,7 @@ impl PodEncode for LiveUpdate {
 			}
 			Self::Patch { priority, title } => {
 				w.variant(1);
-				encode_struct_v0(w, 0, |w| {
+				encode_struct_v0(w, |w| {
 					priority.encode(w)?;
 					title.encode(w)?;
 					Ok(())
@@ -77,7 +77,7 @@ impl<'a> PodDecode<'a> for LiveUpdate {
 		match r.variant()? {
 			0 => Ok(Self::Ok),
 			1 => {
-				decode_struct_version(r, 0, 0, |r| {
+				decode_struct_version(r, 0, |r| {
 					Ok(Self::Patch {
 						priority: u8::decode(r)?,
 						title: String::decode(r)?,
@@ -108,7 +108,7 @@ fn note_matches_design_bytes() {
 		title: "hi".into(),
 	};
 	let bytes = note.to_pod_bytes().unwrap();
-	assert_eq!(hex_encode(&bytes), "000000000701020000006869");
+	assert_eq!(hex_encode(&bytes), "00000701020000006869");
 	assert_eq!(Note::from_pod_bytes(&bytes).unwrap(), note);
 }
 
@@ -119,7 +119,7 @@ fn note_snapshot() {
 		archived: true,
 		title: "hi".into(),
 	};
-	insta::assert_snapshot!(hex_encode(&note.to_pod_bytes().unwrap()), @"000000000701020000006869");
+	insta::assert_snapshot!(hex_encode(&note.to_pod_bytes().unwrap()), @"00000701020000006869");
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn enum_round_trip() {
 	};
 	assert_eq!(
 		hex_encode(&patch.to_pod_bytes().unwrap()),
-		"0100000000000703000000616263"
+		"010000000703000000616263"
 	);
 	assert_eq!(
 		LiveUpdate::from_pod_bytes(&patch.to_pod_bytes().unwrap()).unwrap(),
@@ -182,7 +182,7 @@ fn enum_round_trip() {
 
 #[test]
 fn envelope_round_trip() {
-	let body = hex_decode("000000000701020000006869");
+	let body = hex_decode("00000701020000006869");
 	let framed = wrap(MessageType::Rpc, 0, &body).unwrap();
 	assert_eq!(&framed[..4], b"LK01");
 	let env = unwrap(&framed).unwrap();
@@ -294,19 +294,9 @@ fn writer_helpers_cover_signed() {
 #[test]
 fn unknown_struct_version_fails() {
 	let mut w = Writer::new();
-	w.struct_header(0, 9);
+	w.struct_header(9);
 	w.u8(1);
 	let bytes = w.finish();
-	let err = decode_struct_version(&mut Reader::new(&bytes), 0, 0, |r| u8::decode(r)).unwrap_err();
+	let err = decode_struct_version(&mut Reader::new(&bytes), 0, |r| u8::decode(r)).unwrap_err();
 	assert_eq!(err, Error::UnknownVersion(9));
-}
-
-#[test]
-fn unknown_struct_discriminator_fails() {
-	let mut w = Writer::new();
-	w.struct_header(42, 0);
-	w.u8(1);
-	let bytes = w.finish();
-	let err = decode_struct_version(&mut Reader::new(&bytes), 0, 0, |r| u8::decode(r)).unwrap_err();
-	assert_eq!(err, Error::UnknownDiscriminator(42));
 }

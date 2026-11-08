@@ -6,7 +6,6 @@ public enum PodError: Error, Equatable, Sendable {
 	case invalidUtf8
 	case invalidTag(UInt16)
 	case invalidEnvelope
-	case unknownDiscriminator(UInt16)
 	case unknownVersion(UInt16)
 }
 
@@ -19,7 +18,6 @@ extension PodError: CustomDebugStringConvertible {
 		case .invalidUtf8: "InvalidUtf8"
 		case .invalidTag(let tag): "InvalidTag(\(tag))"
 		case .invalidEnvelope: "InvalidEnvelope"
-		case .unknownDiscriminator(let d): "UnknownDiscriminator(\(d))"
 		case .unknownVersion(let v): "UnknownVersion(\(v))"
 		}
 	}

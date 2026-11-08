@@ -131,9 +131,8 @@ func (w *Writer) ResultTag(ok bool) {
 	}
 }
 
-// StructHeader writes disc + version (both little-endian u16).
-func (w *Writer) StructHeader(disc, version uint16) {
-	w.U16(disc)
+// StructHeader writes layout version (little-endian u16).
+func (w *Writer) StructHeader(version uint16) {
 	w.U16(version)
 }
 

@@ -112,10 +112,8 @@ impl Writer {
 		self.u8(u8::from(!ok));
 	}
 
-	/// Struct header: stable type discriminator + layout version (both `u16`
-	/// LE).
-	pub fn struct_header(&mut self, disc: u16, version: u16) {
-		self.u16(disc);
+	/// Struct layout version (little-endian `u16`).
+	pub fn struct_header(&mut self, version: u16) {
 		self.u16(version);
 	}
 

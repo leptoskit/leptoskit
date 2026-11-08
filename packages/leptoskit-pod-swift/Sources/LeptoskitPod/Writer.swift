@@ -69,8 +69,7 @@ public struct Writer: Sendable {
 		u8(ok ? 0 : 1)
 	}
 
-	public mutating func structHeader(disc: UInt16, version: UInt16) {
-		u16(disc)
+	public mutating func structHeader(version: UInt16) {
 		u16(version)
 	}
 

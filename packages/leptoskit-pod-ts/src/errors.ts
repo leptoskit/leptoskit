@@ -5,25 +5,22 @@ export type PodErrorCode =
 	| "InvalidUtf8"
 	| "InvalidTag"
 	| "InvalidEnvelope"
-	| "UnknownDiscriminator"
 	| "UnknownVersion";
 
 export class PodError extends Error {
 	readonly code: PodErrorCode;
 	readonly tag?: number;
-	readonly disc?: number;
 	readonly version?: number;
 
 	constructor(
 		code: PodErrorCode,
 		message?: string,
-		extra?: { tag?: number; disc?: number; version?: number },
+		extra?: { tag?: number; version?: number },
 	) {
 		super(message ?? code);
 		this.name = code;
 		this.code = code;
 		this.tag = extra?.tag;
-		this.disc = extra?.disc;
 		this.version = extra?.version;
 	}
 
@@ -49,14 +46,6 @@ export class PodError extends Error {
 
 	static invalidEnvelope(): PodError {
 		return new PodError("InvalidEnvelope", "invalid pod envelope");
-	}
-
-	static unknownDiscriminator(disc: number): PodError {
-		return new PodError(
-			"UnknownDiscriminator",
-			`unknown pod struct discriminator ${disc}`,
-			{ disc },
-		);
 	}
 
 	static unknownVersion(version: number): PodError {
