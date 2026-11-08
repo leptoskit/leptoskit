@@ -3546,6 +3546,7 @@ dependencies = [
  "leptoskit_plugin_barometer",
  "leptoskit_plugin_battery",
  "leptoskit_plugin_brightness",
+ "leptoskit_plugin_calendar",
  "leptoskit_plugin_cellular",
  "leptoskit_plugin_clipboard",
  "leptoskit_plugin_contacts",
@@ -6030,6 +6031,13 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_brightness"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_calendar"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",

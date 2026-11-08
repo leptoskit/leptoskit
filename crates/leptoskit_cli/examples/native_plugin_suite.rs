@@ -44,6 +44,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("sensors", "leptoskit_plugin_sensors"),
 	("light_sensor", "leptoskit_plugin_light_sensor"),
 	("pedometer", "leptoskit_plugin_pedometer"),
+	("calendar", "leptoskit_plugin_calendar"),
 	("contacts", "leptoskit_plugin_contacts"),
 	("document-picker", "leptoskit_plugin_document_picker"),
 	("image-picker", "leptoskit_plugin_image_picker"),
@@ -117,6 +118,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_screen_capture/tests/android/ScreenCapturePluginTest.kt",
 	"leptoskit_plugin_screen_orientation/tests/android/ScreenOrientationPluginTest.kt",
 	"leptoskit_plugin_posture/tests/android/PosturePluginTest.kt",
+	"leptoskit_plugin_calendar/tests/android/CalendarWireTest.kt",
 	"leptoskit_plugin_contacts/tests/android/ContactsWireTest.kt",
 	"leptoskit_plugin_document_picker/tests/android/DocumentEncodingTest.kt",
 	"leptoskit_plugin_image_picker/tests/android/ImagePickerEncodingTest.kt",
@@ -247,6 +249,19 @@ import org.junit.Test
 class AlarmWireInstrumentationTest {
     @Test
     fun wireStoreAndTiming() {
+        main()
+    }
+}
+";
+
+const CALENDAR_WIRE_TEST: &str = r"package dev.leptoskit.plugins.calendar
+
+import org.junit.Test
+
+/** Validates synthetic calendar framing without opening the calendar store. */
+class CalendarWireInstrumentationTest {
+    @Test
+    fun boundedCalendarFields() {
         main()
     }
 }
@@ -442,6 +457,7 @@ fn configure(destination: &Path, sdk: &Path) -> Result<()> {
 		),
 		("ContactsWireInstrumentationTest.kt", CONTACTS_WIRE_TEST),
 		("AlarmWireInstrumentationTest.kt", ALARM_WIRE_TEST),
+		("CalendarWireInstrumentationTest.kt", CALENDAR_WIRE_TEST),
 	] {
 		let wrapper = tests.join(name);
 		anyhow::ensure!(

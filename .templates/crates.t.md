@@ -426,6 +426,20 @@ and the browser return `Unavailable`.
 
 <!-- {/p_brightnessSummary} -->
 
+<!-- {@p_calendarSummary} -->
+
+Add `{{ plugin_calendar.package.name }}` as a direct dependency and select the `{{ plugin_calendar.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::Calendar` rather than resolving the plugin on every call. Status never prompts;
+request permission only after the user chooses. List calendars (max 64), create an event, get
+one event by id, or list events in a time window (max 64). Purpose strings and
+manifest permissions stay app-owned; denied access never invents calendars or events.
+Browsers and desktop hosts report unavailable; legacy Expo Calendar APIs remain out of
+scope.
+
+<!-- {/p_calendarSummary} -->
+
 <!-- {@p_clipboardSummary} -->
 
 Add `{{ plugin_clipboard.package.name }}` as a direct dependency and select the `{{ plugin_clipboard.package.metadata.leptoskit.runtime.name }}` plugin
