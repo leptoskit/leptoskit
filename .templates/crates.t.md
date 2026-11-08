@@ -762,7 +762,7 @@ Linux hosts register it where it has a Linux Rust implementation; generated Wind
 terminal hosts currently omit runtime plugins, so use explicit registration in a custom
 host there. Guests enable the `guest` feature and reuse `guest::Video` rather than
 resolving the plugin on every call. iOS and macOS use `AVPlayer` with an `AVPlayerLayer`
-surface, Android uses Media3 ExoPlayer with a `PlayerView`, and the browser uses an HTML
+surface, Android uses Media3 `ExoPlayer` with a `PlayerView`, and the browser uses an HTML
 `<video>` element; Windows, Linux, and HarmonyOS return `Unavailable`.
 
 <!-- {/p_videoSummary} -->

@@ -7,8 +7,8 @@
 //! plugins, so use explicit registration in a custom host there. Guests enable
 //! the `guest` feature and reuse `guest::Video` rather than resolving the
 //! plugin on every call. iOS and macOS use `AVPlayer` with an `AVPlayerLayer`
-//! surface, Android uses Media3 ExoPlayer with a `PlayerView`, and the browser
-//! uses an HTML `<video>` element; Windows, Linux, and HarmonyOS return
+//! surface, Android uses Media3 `ExoPlayer` with a `PlayerView`, and the
+//! browser uses an HTML `<video>` element; Windows, Linux, and HarmonyOS return
 //! `Unavailable`.
 //!
 //! <!-- {/p_videoSummary} -->
@@ -341,10 +341,6 @@ fn decode_flag(value: u32) -> Result<bool, Error> {
 	}
 }
 
-fn empty(bytes: &[u8]) -> Result<(), Error> {
-	Decoder::new(bytes).finish()
-}
-
 /// Cached native guest client.
 #[cfg(all(target_arch = "wasm32", feature = "guest"))]
 pub mod guest {
@@ -471,7 +467,7 @@ pub mod guest {
 	}
 
 	fn require_empty(bytes: &[u8]) -> Result<(), Error> {
-		super::empty(bytes)
+		Decoder::new(bytes).finish()
 	}
 }
 
@@ -613,7 +609,7 @@ mod tests {
 
 	#[test]
 	fn empty_reply_helper_rejects_trailing() {
-		assert!(empty(&[]).is_ok());
-		assert_eq!(empty(&[0]), Err(Error::InvalidArgument));
+		assert!(Decoder::new(&[]).finish().is_ok());
+		assert_eq!(Decoder::new(&[0]).finish(), Err(Error::InvalidArgument));
 	}
 }
