@@ -130,6 +130,6 @@ audio
 
 ## Where your sound files go
 
-`Source::Asset("music/hunt.ogg")` names a file in your app's `assets/` folder. The browser build serves that folder already. Native builds don't copy it into the app yet, so for now put the files in the host project yourself: in the iOS and macOS app's resources as a folder named `assets`, in `android/app/src/main/assets/`, or in an `assets` folder beside the Windows or Linux executable. Or embed a sound in your app with `Source::Bytes(include_bytes!("../assets/swing.wav"))`, up to 8 MiB.
+`Source::Asset("music/hunt.ogg")` names a file in your app's `assets/` folder. The browser build serves that folder, and `leptoskit build` copies it into every native app (see [images and other assets](36-assets.md)). Or embed a sound in your app with `Source::Bytes(include_bytes!("../assets/swing.wav"))`, up to 8 MiB.
 
 `Source::Data` and `Source::Cache` read a file you downloaded into the app's data or cache folder.

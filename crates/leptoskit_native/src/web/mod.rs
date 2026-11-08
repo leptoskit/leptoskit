@@ -767,7 +767,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		}
 		NativeKind::Image => {
 			html::img()
-				.src(props.source.unwrap_or_default())
+				.src(crate::asset::web_url(&props.source.unwrap_or_default()).into_owned())
 				.alt(label.unwrap_or_default())
 				.add_any_attr(attrs)
 				.into_any()

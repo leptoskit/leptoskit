@@ -70,7 +70,7 @@ The screen tree is shared. The host still owns its window, run loop, viewport, a
 
 `NativeKind::Custom` and `NativeProps::extra` belong to platform integrations. The web renderer rejects custom native widgets. It also rejects children of `Image` and `TextInput`, which map to void HTML controls.
 
-`Image` takes a source each platform must be able to load: a local path or `file://` URL on native platforms, a URL in the browser. A small function that picks the source per platform keeps screens shared.
+`Image` takes a source each platform must be able to load. An [`asset://` source](../guide/36-assets.md) names a file in your `assets/` folder and loads on every platform. Beyond that, native platforms load a local path or `file://` URL and the browser a URL, so a small function that picks the source per platform keeps those screens shared.
 
 ## Shared layers
 

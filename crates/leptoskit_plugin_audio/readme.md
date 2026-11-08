@@ -43,7 +43,7 @@ The audio session is the app's to choose with `configure`. On iOS, `Category::Am
 
 Rust plugins cannot push events to the guest yet, so a voice that plays to its end, and an interruption, are queued and read with `events()`, typically once per frame. At most 64 voices play at once; more return `Busy`. A sound decoded into memory holds at most 16 Mi samples (about three minutes of stereo at 48 kHz); longer ones must stream.
 
-Native hosts do not yet copy the app's `assets/` folder into the app bundle, so `Source::Asset` reads `assets/` beside the executable (macOS: `Contents/Resources/assets`, Android: the APK's assets), which you fill from the host project for now, or use `Source::Bytes`. HarmonyOS has no output yet and reports `Unavailable`.
+`leptoskit build` copies the app's `assets/` folder into every native app, and `Source::Asset` reads that copy: the `assets` folder beside the executable (iOS: the app bundle's, macOS: `Contents/Resources/assets`) or, on Android, `assets/` inside the APK's assets. HarmonyOS has no output yet and reports `Unavailable`.
 
 Verification covers the wire format, the mixer and filters rendered offline into buffers (a 500 Hz low-pass takes a 5 kHz tone down by 40 dB, ramps and loops have no steps larger than the signal's own, pauses resume where they stopped), decoding of every format from small committed fixtures, streaming across loop points, and the plugin's requests end to end against an offline mixer. The crate builds for iOS, Android and the browser. Playback on a real device was checked on macOS only.
 

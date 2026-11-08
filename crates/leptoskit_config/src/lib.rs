@@ -313,6 +313,10 @@ pub struct AppConfig {
 	/// extension's 16 to 128 pixel icons.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub icon: Option<PathBuf>,
+	/// What iOS and Android show while the app starts: a background colour
+	/// and, centered on it, an image.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub launch_screen: Option<LaunchScreen>,
 }
 
 impl Default for AppConfig {
@@ -324,7 +328,105 @@ impl Default for AppConfig {
 			platforms: Platform::APPLICATION.to_vec(),
 			render: RenderMode::Csr,
 			icon: None,
+			launch_screen: None,
 		}
+	}
+}
+
+/// The screen iOS and Android show from the moment the app is opened until
+/// its first screen is drawn: the iOS `UILaunchScreen`, and Android's
+/// splash screen (Android 12 and later) or starting window (before).
+///
+/// ```toml
+/// [app.launch_screen]
+/// background = "#0b0c10"
+/// image = "assets/branding/mark.svg"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LaunchScreen {
+	/// The background colour, as `#rrggbb` or `#rgb`.
+	pub background: String,
+	/// The background colour while the system is dark, as `#rrggbb` or
+	/// `#rgb`; `background` when left out.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub background_dark: Option<String>,
+	/// One square PNG or SVG, 1024×1024 or larger, relative to this file,
+	/// drawn in the middle of the screen. Android 12 and later show it inside
+	/// a circle, so keep what matters in the middle two thirds.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub image: Option<PathBuf>,
+	/// The image's width and height: in points on iOS, and in dp on Android
+	/// before 12. Android 12 and later size it themselves.
+	#[serde(default = "LaunchScreen::default_image_size")]
+	pub image_size: u32,
+}
+
+impl LaunchScreen {
+	/// The image's side when `image_size` is left out.
+	pub const DEFAULT_IMAGE_SIZE: u32 = 160;
+
+	const fn default_image_size() -> u32 {
+		Self::DEFAULT_IMAGE_SIZE
+	}
+
+	/// A human-readable problem with the launch screen, if any.
+	#[must_use]
+	pub fn problem(&self) -> Option<String> {
+		for (key, colour) in [
+			("background", Some(&self.background)),
+			("background_dark", self.background_dark.as_ref()),
+		] {
+			if let Some(colour) = colour
+				&& launch_colour(colour).is_none()
+			{
+				return Some(format!(
+					"{key} `{colour}` must be an opaque hex colour such as \"#0b0c10\" or \"#fff\""
+				));
+			}
+		}
+
+		if !(16..=512).contains(&self.image_size) {
+			return Some(format!(
+				"image_size {} must be between 16 and 512",
+				self.image_size
+			));
+		}
+
+		None
+	}
+}
+
+/// The red, green, and blue of an opaque `#rrggbb` or `#rgb` colour.
+#[must_use]
+pub fn launch_colour(colour: &str) -> Option<[u8; 3]> {
+	let digits = colour.trim().strip_prefix('#')?;
+
+	if !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
+		return None;
+	}
+
+	let channel = |text: &str| u8::from_str_radix(text, 16).ok();
+
+	match digits.len() {
+		6 => {
+			Some([
+				channel(&digits[0..2])?,
+				channel(&digits[2..4])?,
+				channel(&digits[4..6])?,
+			])
+		}
+		3 => {
+			let mut rgb = [0; 3];
+
+			for (index, digit) in digits.chars().enumerate() {
+				rgb[index] = channel(&format!("{digit}{digit}"))?;
+			}
+
+			Some(rgb)
+		}
+		_ => None,
 	}
 }
 
@@ -2998,6 +3100,8 @@ impl LeptoskitConfig {
 	///
 	/// # Errors
 	///
+	/// - [`ConfigError::InvalidLaunchScreen`] when `[app.launch_screen]` has a
+	///   colour that isn't opaque hex, or an `image_size` outside 16 to 512.
 	/// - [`ConfigError::CodePushServerMissing`] when code push is enabled
 	///   without a `server`.
 	/// - [`ConfigError::UnknownRpcTarget`] when a `rpc.targets` entry names a
@@ -3133,6 +3237,15 @@ impl LeptoskitConfig {
 			if self.app.platforms[..index].contains(platform) {
 				return Err(ConfigError::DuplicatePlatform(*platform));
 			}
+		}
+
+		if let Some(problem) = self
+			.app
+			.launch_screen
+			.as_ref()
+			.and_then(LaunchScreen::problem)
+		{
+			return Err(ConfigError::InvalidLaunchScreen(problem));
 		}
 
 		self.ensure_platform_enabled(self.app.default_platform)
@@ -3587,6 +3700,9 @@ pub enum ConfigError {
 	/// `[theme]` can't work as written.
 	#[error("invalid [theme]: {0}")]
 	InvalidTheme(String),
+	/// `[app.launch_screen]` can't work as written.
+	#[error("invalid [app.launch_screen]: {0}")]
+	InvalidLaunchScreen(String),
 	/// `[extension]` can't work as written.
 	#[error("invalid [extension]: {0}")]
 	InvalidExtension(String),

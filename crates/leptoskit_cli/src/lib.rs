@@ -47,6 +47,7 @@ pub mod infra;
 pub mod icons;
 pub mod jobs;
 pub mod l10n;
+pub mod launch;
 pub mod lint;
 pub mod mcp;
 pub mod migrate;

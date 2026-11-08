@@ -54,11 +54,11 @@ pub(super) fn generate(
 		Extras::default()
 	};
 
-	// An app that shows 3D scenes reads its models from the bundle's
-	// `assets` folder, a copy of the app's own.
+	// `asset://` images, 3D models, and sounds read the bundle's `assets`
+	// folder, a copy of the app's own.
 	let mut resources = String::new();
 
-	if registry.scene3d {
+	if registry.scene3d || root.join(super::super::ASSETS).is_dir() {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = {}; \
@@ -72,10 +72,27 @@ pub(super) fn generate(
 		write!(resources, ",{}", id(SCENE_ASSETS_BUILD))?;
 	}
 
-	// `app.icon` becomes the app's asset catalog, with its AppIcon set.
+	// `app.icon` becomes the app's asset catalog, with its AppIcon set, and
+	// `app.launch_screen` adds the colour and image `UILaunchScreen` names.
 	let icon = crate::icons::write(root, config, crate::icons::Platform::Ios, &dir)?;
+	let launch = crate::launch::Launch::load(root, config)?;
 
-	if icon {
+	for set in [
+		crate::launch::IOS_COLOR.to_owned() + ".colorset",
+		crate::launch::IOS_IMAGE.to_owned() + ".imageset",
+	] {
+		let path = dir.join("Assets.xcassets").join(set);
+
+		if path.is_dir() {
+			std::fs::remove_dir_all(&path)?;
+		}
+	}
+
+	if let Some(launch) = &launch {
+		crate::launch::write_files(&dir, launch.ios_files()?)?;
+	}
+
+	if icon || launch.is_some() {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = {}; \
@@ -104,6 +121,7 @@ pub(super) fn generate(
 		config,
 		&package_root,
 		icon,
+		launch.as_ref().map(crate::launch::Launch::ios_plist),
 		&linked_frameworks(registry)?,
 		&background_modes(registry),
 		&bg_task_identifiers(registry),
@@ -420,11 +438,12 @@ fn ios_configurations(
 	config: &leptoskit_config::LeptoskitConfig,
 	package_root: &Path,
 	icon: bool,
+	launch_screen: Option<plist::Dictionary>,
 	frameworks: &str,
 	background_modes: &[String],
 	bg_task_identifiers: &[String],
 ) -> Result<()> {
-	let info = versioned_info_plist(root, background_modes, bg_task_identifiers)?;
+	let info = versioned_info_plist(root, background_modes, bg_task_identifiers, launch_screen)?;
 	let version = marketing_version(config);
 	let icon = if icon {
 		" ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;"
@@ -479,11 +498,13 @@ fn marketing_version(config: &leptoskit_config::LeptoskitConfig) -> String {
 /// settings, so `app.version` and the build number `leptoskit publish`
 /// chooses reach the app: `.leptoskit/ios/Info.plist`. Without an app-owned
 /// plist, Xcode is pointed at the missing file and says so. Selected plugins
-/// contribute `UIBackgroundModes` and `BGTaskSchedulerPermittedIdentifiers`.
+/// contribute `UIBackgroundModes` and `BGTaskSchedulerPermittedIdentifiers`,
+/// and a `launch_screen` replaces its `UILaunchScreen`.
 fn versioned_info_plist(
 	root: &Path,
 	background_modes: &[String],
 	bg_task_identifiers: &[String],
+	launch_screen: Option<plist::Dictionary>,
 ) -> Result<std::path::PathBuf> {
 	let owned = super::super::host_dir(root, Target::Ios).join("Info.plist");
 	let Ok(mut plist) = plist::Value::from_file(&owned) else {
@@ -506,6 +527,10 @@ fn versioned_info_plist(
 		"BGTaskSchedulerPermittedIdentifiers",
 		bg_task_identifiers,
 	);
+
+	if let Some(screen) = launch_screen {
+		dictionary.insert("UILaunchScreen".into(), screen.into());
+	}
 	let mut xml = Vec::new();
 	plist.to_writer_xml(&mut xml)?;
 
@@ -978,7 +1003,7 @@ mod tests {
 				.replace("__NAME__", "notes"),
 		)
 		.unwrap();
-		let generated = super::versioned_info_plist(root, &[], &[]).unwrap();
+		let generated = super::versioned_info_plist(root, &[], &[], None).unwrap();
 		assert_eq!(generated, root.join(".leptoskit/ios/Info.plist"));
 		let plist = plist::Value::from_file(&generated).unwrap();
 
@@ -988,6 +1013,28 @@ mod tests {
 		assert_eq!(get("CFBundleVersion"), "$(CURRENT_PROJECT_VERSION)");
 		assert_eq!(get("CFBundleIdentifier"), "com.example.notes");
 		assert_eq!(super::marketing_version(&config()), "1.2.3");
+		// The template's empty launch screen stays until one is configured.
+		assert!(
+			plist
+				.get("UILaunchScreen")
+				.and_then(plist::Value::as_dictionary)
+				.unwrap()
+				.is_empty()
+		);
+
+		let mut screen = plist::Dictionary::new();
+		screen.insert("UIColorName".into(), "LaunchBackground".into());
+		let generated = super::versioned_info_plist(root, &[], &[], Some(screen)).unwrap();
+		let plist = plist::Value::from_file(&generated).unwrap();
+		assert_eq!(
+			plist
+				.as_dictionary()
+				.and_then(|plist| plist.get("UILaunchScreen"))
+				.and_then(plist::Value::as_dictionary)
+				.and_then(|screen| screen.get("UIColorName"))
+				.and_then(plist::Value::as_string),
+			Some("LaunchBackground")
+		);
 	}
 
 	#[test]
@@ -1112,6 +1159,49 @@ mod tests {
 
 		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
 		assert!(project.contains("mobile/assets"));
+	}
+
+	#[test]
+	fn an_assets_folder_is_bundled_and_a_launch_screen_joins_the_catalog() {
+		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+		let temporary = tempfile::Builder::new()
+			.prefix("leptoskit-ios-assets-")
+			.tempdir_in(base)
+			.unwrap();
+		let root = temporary.path();
+		let registry = pods_registry(root);
+		std::fs::create_dir_all(root.join("assets/nfts")).unwrap();
+		std::fs::write(root.join("assets/nfts/ada.webp"), b"RIFF").unwrap();
+		let mut config = pods_config();
+		config.app.launch_screen = Some(leptoskit_config::LaunchScreen {
+			background: "#0b0c10".into(),
+			background_dark: None,
+			image: None,
+			image_size: leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE,
+		});
+		super::generate(root, &config, &registry).unwrap();
+		let project =
+			std::fs::read_to_string(root.join(".leptoskit/ios/Host.xcodeproj/project.pbxproj"))
+				.unwrap();
+
+		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
+		// Without app.icon, the launch screen's colour still needs the catalog,
+		// but no AppIcon set.
+		assert!(project.contains("folder.assetcatalog"));
+		assert!(!project.contains("ASSETCATALOG_COMPILER_APPICON_NAME"));
+		assert!(
+			root.join(".leptoskit/ios/Assets.xcassets/LaunchBackground.colorset/Contents.json")
+				.is_file()
+		);
+
+		// A launch screen that's gone takes its sets with it.
+		config.app.launch_screen = None;
+		super::generate(root, &config, &registry).unwrap();
+		assert!(
+			!root
+				.join(".leptoskit/ios/Assets.xcassets/LaunchBackground.colorset")
+				.exists()
+		);
 	}
 
 	#[test]

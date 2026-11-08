@@ -1,8 +1,18 @@
 import { NativeRequest, Runtime, RenderBatch, RiveFrame } from 'libleptoskit.so';
 import { NativePlugin, NativePlugins } from '../leptoskit/plugins';
 import { nativePlugins } from '../leptoskit/registrant';
-import { Widget, Scene, BorderEdges, borderEdges, color, isItalic, textContent } from '../scene';
+import { Widget, Scene, BorderEdges, assetRawfile, borderEdges, color, isItalic, textContent } from '../scene';
 import { displaySync } from '@kit.ArkGraphics2D';
+import { image } from '@kit.ImageKit';
+
+/** `asset://` pictures, decoded once from the HAP's `rawfile/assets` and kept by rawfile path. */
+const assetImages: Map<string, image.PixelMap> = new Map();
+
+/** What an `Image` shows for `source`: a decoded asset, or the source itself. */
+function imageSource(source: string): image.PixelMap | string {
+  const rawfile = assetRawfile(source);
+  return rawfile === undefined ? source : assetImages.get(rawfile) ?? '';
+}
 
 class RiveTarget {
   context: CanvasRenderingContext2D;
@@ -123,7 +133,7 @@ struct NativeWidget {
           .onFocus(() => this.onEvent(this.node.id, 3, ''))
           .onBlur(() => this.onEvent(this.node.id, 4, ''))
       } else if (this.node.kind === 'image') {
-        Image(this.node.props.source ?? '').width('100%').height('100%').objectFit(ImageFit.Contain)
+        Image(imageSource(this.node.props.source ?? '')).width('100%').height('100%').objectFit(ImageFit.Contain)
       } else if (this.node.kind === 'rive') {
         RiveCanvas({ node: this.node, register: this.registerRive, visible: this.riveVisible })
       } else if (this.node.kind === 'scroll_view') {
@@ -263,8 +273,35 @@ struct Index {
     this.failure = error.message;
   }
 
+  /**
+   * Decodes the `asset://` pictures the scene shows before it is drawn. A missing or undecodable
+   * asset throws, and the caller shows the failure.
+   */
+  loadAssets(): void {
+    this.scene.nodes.forEach((node: Widget) => {
+      const rawfile = node.kind === 'image' ? assetRawfile(node.props.source ?? '') : undefined;
+      if (rawfile === undefined || assetImages.has(rawfile)) {
+        return;
+      }
+      const context = this.getUIContext().getHostContext();
+      if (context === undefined) {
+        throw new Error('Missing ability context');
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = context.resourceManager.getRawFileContentSync(rawfile);
+      } catch (error) {
+        throw new Error(`Image ${node.props.source} is not in the app (looked for rawfile ${rawfile})`);
+      }
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      assetImages.set(rawfile, image.createImageSource(buffer).createPixelMapSync());
+    });
+  }
+
   publish(batch: RenderBatch): void {
-    this.root = this.scene.apply(batch.render);
+    const root = this.scene.apply(batch.render);
+    this.loadAssets();
+    this.root = root;
     const plugins = this.plugins;
     if (plugins !== undefined) {
       batch.cancelled.forEach((id: number) => plugins.cancel(id));

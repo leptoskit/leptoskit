@@ -1041,10 +1041,18 @@ fn content_type(content: Option<TextContent>) -> Option<&'static UITextContentTy
 	})
 }
 
-/// Loads an image from a bundle `resource://` name, a local `file:` URL, or a
-/// plain path. Other URL schemes, and file URLs naming a remote host, load
-/// nothing.
+/// Loads an image from the app's bundled `asset://` folder, a bundle
+/// `resource://` name, a local `file:` URL, or a plain path. Other URL
+/// schemes, and file URLs naming a remote host, load nothing. A bundled
+/// asset that is missing is reported through
+/// [`leptoskit_native::asset::report_missing`].
 fn load_image(source: &str) -> Option<Retained<UIImage>> {
+	if let Some(loaded) = leptoskit_native::asset::load_bundled(source, |path| {
+		UIImage::imageWithContentsOfFile(&NSString::from_str(&path.to_string_lossy()))
+	}) {
+		return loaded;
+	}
+
 	if let Some(name) = source.strip_prefix("resource://") {
 		return UIImage::imageNamed(&NSString::from_str(name));
 	}

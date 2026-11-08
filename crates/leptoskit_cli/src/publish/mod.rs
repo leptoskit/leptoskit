@@ -946,7 +946,12 @@ impl Session<'_> {
 		let screenshots = images::load(self.root, "play")?;
 		// Google Play's listing icon: 512 pixels, from app.icon.
 		let icon = match &self.config.app.icon {
-			Some(path) => Some(crate::icons::Icon::load(&self.root.join(path))?),
+			Some(path) => {
+				Some(
+					crate::icons::Icon::load(&self.root.join(path))
+						.with_context(|| format!("app.icon {}", path.display()))?,
+				)
+			}
 			None => None,
 		};
 

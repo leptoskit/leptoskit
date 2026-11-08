@@ -56,6 +56,9 @@ class LeptosKitApplicationView(
 
     @Suppress("DEPRECATION")
     private val themeBars = window?.let { SystemBars(it.statusBarColor, it.navigationBarColor) }
+
+    /** Whether the window's launch screen background has been replaced. */
+    private var launchScreenEnded = false
     private var pending: LeptosKitView? = null
     private val retiring = mutableSetOf<LeptosKitView>()
     private var closed = false
@@ -321,11 +324,33 @@ class LeptosKitApplicationView(
 
         view.bringToFront()
         staged = false
+        endLaunchScreen()
         val warning = recoveryFailure?.let { NativeApplicationTeardown.retain(it, cleanup) } ?: cleanup
         recoveryFailure = null
         val running = "Running ${launch.version} (${launch.build})"
 
         if (warning == null) setBusy(false, running) else showError("$running; cleanup reported", warning)
+    }
+
+    /**
+     * Before Android 12 the launch screen leptoskit makes from `app.launch_screen` is the window's
+     * background. Once the app has drawn, the theme's own background colour replaces it, so it
+     * never shows through a transparent screen. Android 12 and later remove their splash screen
+     * themselves.
+     */
+    private fun endLaunchScreen() {
+        if (launchScreenEnded) return
+        launchScreenEnded = true
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return
+        val window = window ?: return
+
+        @Suppress("DiscouragedApi")
+        if (resources.getIdentifier("leptoskit_launch", "drawable", context.packageName) == 0) return
+        val value = android.util.TypedValue()
+        val background =
+            if (context.theme.resolveAttribute(android.R.attr.colorBackground, value, true)) value.data else Color.WHITE
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(background))
     }
 
     private fun recover(

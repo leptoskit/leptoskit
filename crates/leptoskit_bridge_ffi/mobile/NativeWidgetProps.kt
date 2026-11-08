@@ -298,6 +298,8 @@ internal class NativeWidgetProps(
 
         if (source == null) {
             widget.setImageDrawable(null)
+        } else if (BundledAsset.isAsset(source)) {
+            widget.setImageBitmap(BundledAsset.bitmap(widget.context, source))
         } else {
             val uri = android.net.Uri.parse(source)
             require(uri.scheme == "file") { "Image requires a readable file URL: $source" }
@@ -973,3 +975,50 @@ internal fun mix(
     to: Float,
     t: Float,
 ) = from + (to - from) * t
+
+/**
+ * `asset://<path>`: a file in the app's `assets/` folder, which `leptoskit build` packs under the
+ * APK's `assets/`. Android decodes PNG, JPEG, and WebP.
+ */
+internal object BundledAsset {
+    private const val SCHEME = "asset://"
+
+    fun isAsset(source: String): Boolean = source.startsWith(SCHEME)
+
+    /** The asset's path inside the APK, or an error when it would leave the assets folder. */
+    fun path(source: String): String {
+        val path = source.removePrefix(SCHEME)
+        require(
+            path.isNotEmpty() && '\\' !in path && '\u0000' !in path &&
+                path.split('/').none { it.isEmpty() || it == "." || it == ".." },
+        ) { "$source is not an asset path inside the app's assets folder" }
+
+        return "assets/$path"
+    }
+
+    /**
+     * The decoded picture. A debuggable build stops on a missing asset; a release build logs it
+     * and shows nothing.
+     */
+    fun bitmap(
+        context: android.content.Context,
+        source: String,
+    ): android.graphics.Bitmap? {
+        val path = path(source)
+        val bitmap =
+            try {
+                context.assets.open(path).use(android.graphics.BitmapFactory::decodeStream)
+            } catch (_: java.io.IOException) {
+                null
+            }
+
+        if (bitmap == null) {
+            val message = "Image $source is not in the app, or is not a PNG, JPEG, or WebP (looked for $path in the APK's assets)"
+            val debuggable = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+            check(!debuggable) { message }
+            android.util.Log.e("leptoskit", message)
+        }
+
+        return bitmap
+    }
+}

@@ -46,7 +46,7 @@ impl Icon {
 
 		anyhow::ensure!(
 			image.width() == image.height(),
-			"app.icon {} is {}×{}; it must be square",
+			"{} is {}×{}; it must be square",
 			path.display(),
 			image.width(),
 			image.height()
@@ -54,8 +54,8 @@ impl Icon {
 
 		anyhow::ensure!(
 			image.width() >= MINIMUM,
-			"app.icon {} is {}×{}; the App Store needs {MINIMUM}×{MINIMUM}, so make it at least \
-			 that, or an SVG",
+			"{} is {}×{}; the App Store needs {MINIMUM}×{MINIMUM}, so make it at least that, or \
+			 an SVG",
 			path.display(),
 			image.width(),
 			image.height()
@@ -237,7 +237,7 @@ const ICNS: [(&str, u32); 10] = [
 	("ic10", 1024),
 ];
 
-const CATALOG: &str =
+pub(crate) const CATALOG: &str =
 	"{\n  \"info\" : {\n    \"author\" : \"leptoskit\",\n    \"version\" : 1\n  }\n}\n";
 
 const APP_ICON_SET: &str = r#"{
@@ -326,7 +326,8 @@ pub fn write(
 	let Some(source) = &config.app.icon else {
 		return Ok(false);
 	};
-	let icon = Icon::load(&root.join(source))?;
+	let icon =
+		Icon::load(&root.join(source)).with_context(|| format!("app.icon {}", source.display()))?;
 
 	for (name, bytes) in icon.files(platform)? {
 		let path = dir.join(name);

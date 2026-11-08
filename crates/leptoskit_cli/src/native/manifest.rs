@@ -115,6 +115,63 @@ pub fn with_file_providers(source: &str, providers: &[FileProvider<'_>]) -> Resu
 	Ok(output)
 }
 
+/// The application's theme, as the manifest names it (`@style/…`), when it
+/// names one.
+///
+/// # Errors
+///
+/// When the manifest isn't valid XML or has no application element.
+pub fn application_theme(source: &str) -> Result<Option<String>> {
+	let document = roxmltree::Document::parse(source).context("invalid AndroidManifest.xml")?;
+	let application = document
+		.root_element()
+		.children()
+		.find(|node| node.has_tag_name("application"))
+		.context("Android manifest has no application element")?;
+	Ok(application.attribute((ANDROID, "theme")).map(str::to_owned))
+}
+
+/// Gives the launcher activity the `theme` leptoskit makes from
+/// `app.launch_screen`, unless the app-owned manifest gives it its own.
+/// Returns the manifest, and whether the theme was set.
+///
+/// # Errors
+///
+/// When the manifest isn't valid XML.
+pub fn with_launch_theme(source: &str, theme: &str) -> Result<(String, bool)> {
+	let document = roxmltree::Document::parse(source).context("invalid AndroidManifest.xml")?;
+	let root = document.root_element();
+	let prefix = root
+		.lookup_prefix(ANDROID)
+		.context("Android manifest must declare the Android attribute namespace")?;
+	let launcher = root
+		.descendants()
+		.filter(|node| node.has_tag_name("activity") || node.has_tag_name("activity-alias"))
+		.find(|activity| {
+			activity
+				.children()
+				.filter(|node| node.has_tag_name("intent-filter"))
+				.any(|filter| {
+					filter.children().any(|node| {
+						node.has_tag_name("category")
+							&& node.attribute((ANDROID, "name"))
+								== Some("android.intent.category.LAUNCHER")
+					})
+				})
+		});
+	let Some(launcher) = launcher.filter(|activity| {
+		activity.has_tag_name("activity") && !activity.has_attribute((ANDROID, "theme"))
+	}) else {
+		return Ok((source.to_owned(), false));
+	};
+
+	let at = launcher.range().start + "<activity".len();
+	let mut output = source.to_owned();
+	output.insert_str(at, &format!(" {prefix}:theme=\"@style/{theme}\""));
+	roxmltree::Document::parse(&output).context("generated Android manifest is invalid")?;
+	Ok((output, true))
+}
+
 pub fn merge(
 	source: &str,
 	permissions: &BTreeSet<&str>,
@@ -194,6 +251,40 @@ fn missing_permissions(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_launcher_activity_starts_in_the_launch_theme() {
+		let template = include_str!("templates/AndroidManifest.xml")
+			.replace("__NAME__", "demo")
+			.replace("__PACKAGE__", "com.example.demo");
+		assert_eq!(
+			application_theme(&template).unwrap().as_deref(),
+			Some("@style/LeptosKitTheme")
+		);
+		let (output, set) = with_launch_theme(&template, "LeptosKitLaunchTheme").unwrap();
+		assert!(set);
+		assert!(
+			output.contains(
+				"<activity android:theme=\"@style/LeptosKitLaunchTheme\" \
+				 android:name=\"com.example.demo.MainActivity\""
+			),
+			"{output}"
+		);
+		// The application keeps its own theme for every other activity.
+		assert!(output.contains("android:theme=\"@style/LeptosKitTheme\""));
+
+		// An activity with its own theme keeps it.
+		let (again, set) = with_launch_theme(&output, "LeptosKitLaunchTheme").unwrap();
+		assert!(!set);
+		assert_eq!(again, output);
+
+		let bare = r#"<manifest xmlns:a="http://schemas.android.com/apk/res/android"><application><activity a:name=".Settings"/></application></manifest>"#;
+		assert_eq!(application_theme(bare).unwrap(), None);
+		assert_eq!(
+			with_launch_theme(bare, "LeptosKitLaunchTheme").unwrap(),
+			(bare.to_owned(), false)
+		);
+	}
 
 	#[test]
 	fn preserves_queries_comments_and_existing_permission_without_duplicates() {
