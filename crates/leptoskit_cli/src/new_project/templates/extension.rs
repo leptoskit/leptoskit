@@ -18,10 +18,12 @@ pub fn main(_surface: Surface) -> impl Fn() -> Element + Send + Sync + 'static {
 	let changed = RwSignal::new(0_u32);
 	let state = Counter::default()
 		.on_change(move || changed.update(|value| *value = value.wrapping_add(1)));
+	let navigation = crate::routes::Navigation::new(crate::routes::Route::Home);
 
 	move || {
 		changed.get();
-		crate::screen(&state)
+		reactive_graph::owner::provide_context(state.clone());
+		navigation.render()
 	}
 }
 

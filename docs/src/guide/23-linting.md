@@ -127,7 +127,7 @@ let row = View().class("flex-row").child(icon);
 
 Markup is for people: it reads like the interface it builds, which is why these docs and leptoskit's examples use it. A coding agent is better served by builder calls. The compiler reports errors on the exact call, there is no macro between the code and the diagnostic, and trees build faster without a proc macro to expand them.
 
-`leptoskit new` already writes that rule for new apps (starter screens are builders). When an agent takes over an older project, or one that still defaults to `"view"`, make builders the rule and markup an error for portable UI:
+`leptoskit new` already writes that rule for new apps (starter file-router `Page` and `Layout` screens are builders, with `component_attribute` denied so each keeps `#[component]`). When an agent takes over an older project, or one that still defaults to `"view"`, make builders the rule and markup an error for portable UI:
 
 ```toml
 [lint]
@@ -135,6 +135,7 @@ markup = "builder"
 
 [lint.rules]
 markup_style = "deny"
+component_attribute = "deny"
 ```
 
 The SSR document `shell` (`leptos::view!` with `<html>`, `<head>`, `<body>`, and hydration scripts) is ordinary HTML, not a leptoskit component tree. Builder mode does not report those tags; keep rewriting only leptoskit components (`View`, `Text`, your `#[component]` helpers, and the like).

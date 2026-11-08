@@ -87,6 +87,7 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         edit.addItem(
             withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"
         )
+
         editItem.submenu = edit
         NSApp.mainMenu = menu
     }
@@ -94,8 +95,10 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         #if canImport(LeptosKitAppShortcuts)
         let items = DockShortcutStore.items
+
         guard !items.isEmpty else { return nil }
         let menu = NSMenu()
+
         for item in items {
             let entry = NSMenuItem(
                 title: item.title,
@@ -104,18 +107,23 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             )
             entry.representedObject = item.id
             entry.target = self
+
             if !item.subtitle.isEmpty {
                 entry.toolTip = item.subtitle
             }
+
             menu.addItem(entry)
         }
+
         return menu
         #else
+
         return nil
         #endif
     }
 
     #if canImport(LeptosKitAppShortcuts)
+
     @objc private func activateDockShortcut(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         AppShortcutsPlugin.noteLaunchIfPresent(id: id)

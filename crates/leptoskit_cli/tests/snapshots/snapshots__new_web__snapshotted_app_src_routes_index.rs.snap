@@ -2,18 +2,27 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: contents
 ---
-//! The home screen, shared across every platform.
+//! `/`: the home screen, shared across every platform.
 
 use leptoskit::prelude::Button;
 use leptoskit::prelude::Element;
 use leptoskit::prelude::Get;
 use leptoskit::prelude::Text;
 use leptoskit::prelude::View;
+use leptoskit::prelude::component;
+use leptoskit_router::Route;
 
 use crate::Counter;
 
+/// Names the route `Home` instead of `Index`.
+#[derive(Route, Clone, Debug, PartialEq)]
+pub struct Home;
+
 /// Builds the shared counter screen with a platform-neutral event handler.
-pub fn screen(state: &Counter) -> Element {
+#[component]
+pub fn Page() -> Element {
+	let state = reactive_graph::owner::use_context::<Counter>()
+		.expect("the app entry provides Counter before rendering routes");
 	let counter = state.clone();
 	let value = state.signal();
 

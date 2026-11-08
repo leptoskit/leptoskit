@@ -260,17 +260,41 @@ fn scaffolds_a_project_with_config_and_source() {
 		config.native.package_id,
 		leptoskit_config::default_package_id("counter")
 	);
-	assert!(
-		config.plugins.is_empty(),
-		"the template enables no plugin whose cargo feature it lacks"
+	assert_eq!(
+		config.plugins.len(),
+		1,
+		"the starter enables only the file router"
+	);
+	assert_eq!(config.plugins[0].name, "router");
+	assert_eq!(
+		config.plugins[0]
+			.options
+			.get("dir")
+			.and_then(toml::Value::as_str),
+		Some("counter_app/src/routes")
 	);
 
 	let client = std::fs::read_to_string(project.join("counter_app/Cargo.toml")).expect("app");
 	assert!(client.contains("cdylib"));
+	assert!(client.contains("leptoskit_router"));
+	assert!(client.contains("leptoskit_router/web"));
 	assert!(client.contains(&format!(
 		"wasm-bindgen = {{ version = \"={}\"",
 		leptoskit_cli::wasm::embedded_wasm_bindgen()
 	)));
+	let routes =
+		std::fs::read_to_string(project.join("counter_app/src/routes.rs")).expect("routes");
+	assert!(
+		routes.contains("@generated") && routes.contains("Navigation"),
+		"the starter commits a generated file-router module: {routes}"
+	);
+	assert!(
+		project.join("counter_app/src/routes/index.rs").is_file()
+			&& project.join("counter_app/src/routes/_layout.rs").is_file()
+			&& project
+				.join("counter_app/src/routes/+not-found.rs")
+				.is_file()
+	);
 	let index = std::fs::read_to_string(project.join("web/index.html")).expect("index");
 	assert!(index.contains("/pkg/counter_app.js"));
 	assert!(index.contains("href=\"/assets/app.css\""));

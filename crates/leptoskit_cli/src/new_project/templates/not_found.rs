@@ -1,0 +1,14 @@
+//! Unmatched URLs.
+
+use leptoskit::prelude::Element;
+use leptoskit::prelude::Text;
+use leptoskit::prelude::View;
+use leptoskit::prelude::component;
+
+/// Anything the router does not match.
+#[component]
+pub fn Page() -> Element {
+	View()
+		.class("min-h-screen items-center justify-center p-6 bg-slate-950 text-white")
+		.child(Text("Not found").class("text-2xl font-semibold"))
+}

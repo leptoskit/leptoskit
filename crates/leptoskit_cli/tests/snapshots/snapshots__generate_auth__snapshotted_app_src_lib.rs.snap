@@ -21,8 +21,14 @@ pub const SERVER: &str = "http://localhost:3000";
 #[leptos::component]
 pub fn App() -> impl leptos::prelude::IntoView {
 	let notes = provide();
+	reactive_graph::owner::provide_context(notes.clone());
+	#[cfg(target_arch = "wasm32")]
+	let navigation = routes::Navigation::from_browser()
+		.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home));
+	#[cfg(not(target_arch = "wasm32"))]
+	let navigation = routes::Navigation::new(routes::Route::Home);
 
-	move || leptoskit::web::render(screen(&notes))
+	move || leptoskit::web::render(navigation.render())
 }
 
 /// Starts the app's shared state in the current reactive owner: the query
@@ -38,7 +44,8 @@ pub fn provide() -> Notes {
 
 /// Renders the portable application tree for any host.
 pub fn screen(notes: &Notes) -> leptoskit::prelude::Element {
-	routes::home::screen(notes)
+	reactive_graph::owner::provide_context(notes.clone());
+	routes::Navigation::new(routes::Route::Home).render()
 }
 
 /// The complete HTML document sent by the SSR server.
@@ -100,8 +107,26 @@ pub extern "C" fn leptoskit_main() {
 	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new().origin(SERVER));
 	let owner = leptoskit::leptos::prelude::Owner::new();
 	let notes = owner.with(provide);
-	leptoskit::guest::mount(move || owner.with(|| screen(&notes)));
+	let navigation = routes::Navigation::new(routes::Route::Home);
+	navigation.bind_system_back();
+	leptoskit::guest::mount(move || {
+		owner.with(|| {
+			reactive_graph::owner::provide_context(notes.clone());
+			navigation.render()
+		})
+	});
 	tasks::poll();
+}
+
+/// Android system Back and similar host signals: 1 when the router popped a
+/// route, 0 when the host should leave the app.
+#[cfg(all(target_arch = "wasm32", feature = "native"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn leptoskit_system_back() -> i32 {
+	match leptoskit_router::dispatch_system_back() {
+		leptoskit_router::SystemBack::Consumed => 1,
+		leptoskit_router::SystemBack::Propagate => 0,
+	}
 }
 
 /// Forwards platform-neutral events to the shared tree's handlers, then runs

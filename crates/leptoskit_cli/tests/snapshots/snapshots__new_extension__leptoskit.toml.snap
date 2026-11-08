@@ -5,7 +5,6 @@ expression: contents
 #:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
 
 schema_version = 0
-plugins = []
 
 [app]
 name = "snapshotted"
@@ -83,6 +82,13 @@ events = ["runtime.message"]
 [extension.firefox]
 id = "snapshotted@example.com"
 data_collection = ["none"]
+
+[[plugins]]
+name = "router"
+leptos = false
+
+[plugins.options]
+dir = "snapshotted_app/src/routes"
 
 [lint]
 markup = "builder"

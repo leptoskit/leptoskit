@@ -22,6 +22,7 @@ use leptoskit_config::MarkupStyle;
 use leptoskit_config::NativeConfig;
 use leptoskit_config::NativeTarget;
 use leptoskit_config::Platform;
+use leptoskit_config::PluginSpec;
 use leptoskit_config::RenderMode;
 const NATIVE_PLATFORMS: [&str; 6] = ["ios", "android", "macos", "windows", "linux", "tui"];
 
@@ -244,6 +245,9 @@ pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
 			port: serve_port.unwrap_or(3000),
 			..leptoskit_config::ServeConfig::default()
 		},
+		// File routes are on by default: `dev` / `build` regenerate
+		// `{name}_app/src/routes.rs` from `{name}_app/src/routes/`.
+		plugins: vec![router_plugin(name)],
 		// Starter screens use builders; match lint so a fresh project is clean
 		// under `leptoskit lint --deny-warnings` without a post-scaffold edit.
 		lint: LintConfig {
@@ -402,6 +406,43 @@ fn http_plugin_options() -> toml::Table {
 		toml::Value::Array(AUTH_DEV_ORIGINS.map(toml::Value::from).to_vec()),
 	);
 	http
+}
+
+/// The file-router plugin for a new app: routes live in the app crate.
+fn router_plugin(name: &str) -> PluginSpec {
+	let mut options = toml::Table::new();
+	options.insert(
+		"dir".into(),
+		toml::Value::String(format!("{name}_app/src/routes")),
+	);
+	PluginSpec {
+		name: "router".to_owned(),
+		options,
+		..PluginSpec::default()
+	}
+}
+
+/// Writes the starter route files into a temp directory and returns the
+/// generated `routes.rs` the file router commits beside them.
+fn generated_routes_module(files: &[(&str, &str)]) -> Result<String> {
+	let dir = tempfile::tempdir().context("create a temporary routes directory")?;
+	let routes = dir.path().join("routes");
+	std::fs::create_dir_all(&routes)
+		.with_context(|| format!("could not create {}", routes.display()))?;
+
+	for (relative, contents) in files {
+		let path = routes.join(relative);
+		if let Some(parent) = path.parent() {
+			std::fs::create_dir_all(parent)
+				.with_context(|| format!("could not create {}", parent.display()))?;
+		}
+		std::fs::write(&path, contents)
+			.with_context(|| format!("could not write {}", path.display()))?;
+	}
+
+	let generated = leptoskit_router_codegen::generate(&routes)
+		.map_err(|error| anyhow::anyhow!("the starter routes failed to generate:\n{error}"))?;
+	Ok(generated.source)
 }
 
 /// Rejects existing files and redirected parents before writing the workspace.
@@ -573,13 +614,29 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		),
 		(
 			format!("{app}/src/routes.rs"),
-			"//! App routes with automatic platform overrides.\n\nleptoskit::platform_module!(pub \
-			 mod home = \"routes/home\");\n"
-				.into(),
+			generated_routes_module(&[
+				("index.rs", include_str!("new_project/templates/index.rs")),
+				(
+					"_layout.rs",
+					include_str!("new_project/templates/layout.rs"),
+				),
+				(
+					"+not-found.rs",
+					include_str!("new_project/templates/not_found.rs"),
+				),
+			])?,
 		),
 		(
-			format!("{app}/src/routes/home.rs"),
-			include_str!("new_project/templates/home.rs").into(),
+			format!("{app}/src/routes/index.rs"),
+			include_str!("new_project/templates/index.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/_layout.rs"),
+			include_str!("new_project/templates/layout.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/+not-found.rs"),
+			include_str!("new_project/templates/not_found.rs").into(),
 		),
 		(
 			format!("{app}/src/components/mod.rs"),
@@ -625,7 +682,7 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		database_files(&mut files, name, db, sdk, config.auth.is_some())?;
 
 		if config.auth.is_some() {
-			auth_files(&mut files, name);
+			auth_files(&mut files, name)?;
 		}
 	}
 
@@ -827,11 +884,11 @@ fn database_files(
 		include_str!("new_project/templates/tasks.rs").into(),
 	);
 	replace(
-		format!("{app}/src/routes/home.rs"),
+		format!("{app}/src/routes/index.rs"),
 		if auth {
-			include_str!("new_project/templates/home_auth.rs").into()
+			include_str!("new_project/templates/index_auth.rs").into()
 		} else {
-			include_str!("new_project/templates/home_notes.rs").into()
+			include_str!("new_project/templates/index_notes.rs").into()
 		},
 	);
 	replace(
@@ -910,8 +967,10 @@ fn database_files(
 }
 
 /// Puts the sign-in screens in front of the app, and gives the server its
-/// sign-in module.
-fn auth_files(files: &mut Vec<(String, String)>, name: &str) {
+/// sign-in module. With the file router on, also writes `/sign-in`,
+/// `/devices`, and `/security` under `src/routes/` so `generate auth` finds
+/// nothing left to do.
+fn auth_files(files: &mut Vec<(String, String)>, name: &str) -> Result<()> {
 	let app = format!("{name}_app");
 	let lib = format!("{app}/src/lib.rs");
 	let source = include_str!("new_project/templates/app_auth.rs").replace("__NAME__", name);
@@ -925,12 +984,47 @@ fn auth_files(files: &mut Vec<(String, String)>, name: &str) {
 		files.push((format!("{app}/src/{path}"), contents));
 	}
 
-	let home = format!("{app}/src/routes/home.rs");
-	let contents = include_str!("new_project/templates/home_auth.rs").into();
+	let index = format!("{app}/src/routes/index.rs");
+	let contents = include_str!("new_project/templates/index_auth.rs").into();
 
-	match files.iter_mut().find(|(path, _)| *path == home) {
+	match files.iter_mut().find(|(path, _)| *path == index) {
 		Some(entry) => entry.1 = contents,
-		None => files.push((home, contents)),
+		None => files.push((index, contents)),
+	}
+
+	for (file, contents) in crate::auth_pages::routes(crate::auth_pages::Mode::default()) {
+		files.push((format!("{app}/src/routes/{file}"), contents));
+	}
+
+	let prefix = format!("{app}/src/routes/");
+	let route_files: Vec<(String, String)> = files
+		.iter()
+		.filter(|(path, _)| {
+			path.starts_with(&prefix)
+				&& Path::new(path)
+					.extension()
+					.is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+		})
+		.map(|(path, contents)| {
+			(
+				path.strip_prefix(&prefix)
+					.expect("filtered to the routes prefix")
+					.to_owned(),
+				contents.clone(),
+			)
+		})
+		.collect();
+	let generated = generated_routes_module(
+		&route_files
+			.iter()
+			.map(|(path, contents)| (path.as_str(), contents.as_str()))
+			.collect::<Vec<_>>(),
+	)?;
+	let routes_module = format!("{app}/src/routes.rs");
+
+	match files.iter_mut().find(|(path, _)| *path == routes_module) {
+		Some(entry) => entry.1 = generated,
+		None => files.push((routes_module, generated)),
 	}
 
 	files.push((
@@ -941,6 +1035,8 @@ fn auth_files(files: &mut Vec<(String, String)>, name: &str) {
 	if let Some(readme) = files.iter_mut().find(|(path, _)| path == "README.md") {
 		readme.1.push_str(&auth_readme(name));
 	}
+
+	Ok(())
 }
 
 fn auth_readme(name: &str) -> String {
@@ -1162,6 +1258,7 @@ fn app_manifest(name: &str, sdk: Option<&Utf8Path>, auth: bool, database: bool) 
 	};
 
 	let dependency = sdk_dependency("leptoskit", sdk, features)?;
+	let router = sdk_dependency("leptoskit_router", sdk, &[])?;
 	let (native, executor) = if auth || database {
 		(
 			"\"leptoskit/guest\", \"dep:any_spawner\", \"dep:futures\"",
@@ -1188,7 +1285,7 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-web = ["leptoskit/web", "dep:leptos", "dep:wasm-bindgen"]
+web = ["leptoskit/web", "leptoskit_router/web", "dep:leptos", "dep:wasm-bindgen"]
 native = [{native}]
 ios = ["native", "leptoskit/ios"]
 android = ["native", "leptoskit/android"]
@@ -1205,6 +1302,9 @@ devtools = ["leptoskit/devtools"]
 [dependencies]
 {name}_shared = {{ path = "../{name}_shared" }}
 leptoskit = {dependency}
+leptoskit_router = {router}
+# Holds app state the file-router pages read through context.
+reactive_graph = "0.3.0-rc0"
 leptos = {{ version = "0.9.0-rc0", default-features = false, optional = true }}
 # The embedded wasm-bindgen CLI accepts exactly its matching library version.
 wasm-bindgen = {{ version = "={wasm_bindgen}", optional = true }}
@@ -1496,15 +1596,11 @@ All six destinations are enabled in `leptoskit.toml`. Each build activates exact
 
 `src/main.rs` starts the SSR server and serves browser files. The backend's `health` server function answers `GET /api/health`, and `#[api]` publishes it: `leptoskit rpc spec` prints the published API, and `leptoskit rpc generate --target typescript` writes a typed client for it. Shared assets live in `assets/`. `web/index.html` supplies the document for CSR mode (`app.render = "csr"`); SSR uses the shared app's `shell` function.
 
-## Platform overrides
+## File routes
 
-`{name}_app/src/routes.rs` declares the home module once:
+Screens live under `{name}_app/src/routes/`. The `router` plugin regenerates `{name}_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
 
-```rust
-leptoskit::platform_module!(pub mod home = "routes/home");
-```
-
-The module path is relative to the app crate's `src/` directory. Add `routes/home.ios.rs`, `routes/home.android.rs`, `routes/home.web.rs`, `routes/home.macos.rs`, `routes/home.windows.rs`, or `routes/home.linux.rs` to replace `routes/home.rs` on that platform. Imports stay `crate::routes::home`. The shared file is the fallback; replacements must expose the same interface. Use this declaration for any module that needs platform overrides. The build helper watches additions and removals of override files.
+For a module that is not a route — a reusable component, for example — `leptoskit::platform_module!` still picks a per-platform file (`thing.ios.rs`, `thing.android.rs`, …) beside the shared one. Per-platform *route* files are not supported yet; use `cfg!(feature = "…")` inside a route when one platform must differ.
 
 `ios/`, `android/`, `macos/`, `windows/`, and `linux/` are app-owned platform runners. Install the matching SDK when building a destination. All generated registrants, SDK integration files, and build intermediates stay under `.leptoskit/<platform>/`, which is ignored by Git. Prepare a native target before opening its generated Xcode project or the app-owned `android/` Gradle project.
 
@@ -1565,7 +1661,10 @@ pub fn verify_scaffold(dir: &Path) -> Result<()> {
 
 	for file in [
 		format!("{name}_app/src/lib.rs"),
-		format!("{name}_app/src/routes/home.rs"),
+		format!("{name}_app/src/routes.rs"),
+		format!("{name}_app/src/routes/index.rs"),
+		format!("{name}_app/src/routes/_layout.rs"),
+		format!("{name}_app/src/routes/+not-found.rs"),
 		format!("{name}_backend/src/rpc/mod.rs"),
 		format!("{name}_shared/src/lib.rs"),
 	] {
@@ -1637,6 +1736,36 @@ mod tests {
 	use super::host_manifest;
 
 	#[test]
+	fn the_router_plugin_points_at_the_app_crate_routes() {
+		let plugin = super::router_plugin("water");
+		assert_eq!(plugin.name, "router");
+		assert_eq!(
+			plugin.options.get("dir").and_then(toml::Value::as_str),
+			Some("water_app/src/routes")
+		);
+	}
+
+	#[test]
+	fn the_starter_routes_generate_a_home_navigation_module() {
+		let source = super::generated_routes_module(&[
+			("index.rs", include_str!("new_project/templates/index.rs")),
+			(
+				"_layout.rs",
+				include_str!("new_project/templates/layout.rs"),
+			),
+			(
+				"+not-found.rs",
+				include_str!("new_project/templates/not_found.rs"),
+			),
+		])
+		.expect("generate starter routes");
+		assert!(source.contains("@generated"), "{source}");
+		assert!(source.contains("pub type Navigation"), "{source}");
+		assert!(source.contains("Route::Home"), "{source}");
+		assert!(source.contains("NotFound"), "{source}");
+	}
+
+	#[test]
 	fn the_generated_notes_screen_uses_the_shared_operations() {
 		let notes = include_str!("new_project/templates/notes.rs");
 		assert!(notes.contains("use __CRATE___shared::AddNote;"), "{notes}");
@@ -1662,8 +1791,12 @@ mod tests {
 		assert!(database.contains("Notes::shared()"), "{database}");
 		assert!(database.contains("origin(SERVER)"), "{database}");
 
-		let home = include_str!("new_project/templates/home_auth.rs");
+		let home = include_str!("new_project/templates/index_auth.rs");
 		assert!(home.contains("shell.notes()"), "{home}");
+		assert!(
+			auth.contains("routes::Navigation::") && database.contains("routes::Navigation::"),
+			"database and auth scaffolds must render through the file router"
+		);
 	}
 
 	#[test]
