@@ -580,9 +580,9 @@ in
     "test:harmonyos" = {
       exec = ''
         set -euo pipefail
-        deno test --config crates/leptoskit_cli/src/native/templates/harmonyos/deno.json \
-          crates/leptoskit_cli/src/native/templates/harmonyos/scene_test.ts \
-          crates/leptoskit_cli/src/native/templates/harmonyos/plugins_test.ts
+        deno test --config crates/leptoskit_platform_harmonyos/templates/deno.json \
+          crates/leptoskit_platform_harmonyos/templates/scene_test.ts \
+          crates/leptoskit_platform_harmonyos/templates/plugins_test.ts
         deno test --config crates/leptoskit_plugin_posture/harmonyos/deno.json \
           crates/leptoskit_plugin_posture/harmonyos/posture_test.ts
       '';

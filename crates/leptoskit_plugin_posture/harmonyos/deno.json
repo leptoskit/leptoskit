@@ -1,6 +1,6 @@
 {
 	"imports": {
-		"../plugins": "../../leptoskit_cli/src/native/templates/harmonyos/plugins.ts",
+		"../plugins": "../../leptoskit_platform_harmonyos/templates/plugins.ts",
 		"@kit.ArkUI": "./testing/arkui.ts",
 		"@kit.AbilityKit": "./testing/abilitykit.ts"
 	}

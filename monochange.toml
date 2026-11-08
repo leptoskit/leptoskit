@@ -80,6 +80,7 @@ packages = [
 	"leptoskit_form",
 	"leptoskit_config",
 	"leptoskit_platform",
+	"leptoskit_platform_harmonyos",
 	"leptoskit_plugin",
 	"leptoskit_bridge",
 	"leptoskit_bridge_ffi",
@@ -310,6 +311,10 @@ type = "cargo"
 
 [package.leptoskit_platform]
 path = "crates/leptoskit_platform"
+type = "cargo"
+
+[package.leptoskit_platform_harmonyos]
+path = "crates/leptoskit_platform_harmonyos"
 type = "cargo"
 
 [package.leptoskit_plugin]

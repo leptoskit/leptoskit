@@ -84,7 +84,7 @@ jobs:
           echo "HVIGORW=$GITHUB_WORKSPACE/setup/harmonyos/hvigorw" >> "$GITHUB_ENV"
       - name: test render mutations, ArkTS plugin dispatch, and fold posture
         run: |
-          deno test --config crates/leptoskit_cli/src/native/templates/harmonyos/deno.json crates/leptoskit_cli/src/native/templates/harmonyos/scene_test.ts crates/leptoskit_cli/src/native/templates/harmonyos/plugins_test.ts
+          deno test --config crates/leptoskit_platform_harmonyos/templates/deno.json crates/leptoskit_platform_harmonyos/templates/scene_test.ts crates/leptoskit_platform_harmonyos/templates/plugins_test.ts
           deno test --config crates/leptoskit_plugin_posture/harmonyos/deno.json crates/leptoskit_plugin_posture/harmonyos/posture_test.ts
       - name: test host contracts and compiled Wasm counter
         run: |
