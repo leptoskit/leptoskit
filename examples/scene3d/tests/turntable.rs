@@ -4,11 +4,13 @@
 
 use std::sync::Arc;
 
+use leptoskit::prelude::*;
 use leptoskit::scene3d::client::Scene;
 use leptoskit_3d::Asset;
 use leptoskit_3d::Renderer;
 use scene3d_example::MODEL;
 use scene3d_example::SCENE;
+use scene3d_example::Turntable;
 
 fn model() -> Arc<Asset> {
 	let bytes = std::fs::read(format!("{}/assets/{MODEL}", env!("CARGO_MANIFEST_DIR"))).unwrap();
@@ -17,7 +19,8 @@ fn model() -> Arc<Asset> {
 
 #[test]
 fn the_screen_is_valid() {
-	scene3d_example::Turntable().validate().unwrap();
+	let screen: Element = view! { <Turntable /> };
+	screen.validate().unwrap();
 }
 
 #[test]
