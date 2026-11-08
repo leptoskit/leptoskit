@@ -5817,6 +5817,8 @@ dependencies = [
  "jni 0.21.1",
  "js-sys",
  "leptoskit_bridge",
+ "leptoskit_native",
+ "leptoskit_wasm",
  "ndk-context",
  "objc2",
  "objc2-avf-audio",
@@ -10151,6 +10153,15 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "soundboard_example"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+ "leptoskit_plugin_audio",
+ "reactive_graph",
 ]
 
 [[package]]

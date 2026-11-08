@@ -1028,6 +1028,11 @@ in
         cargo build --locked --target wasm32-unknown-unknown --package agent_ui_guest_probe
         LEPTOSKIT_AGENT_UI_GUEST="$guest_target/wasm32-unknown-unknown/debug/agent_ui_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test agent_ui_guest -- --ignored
+        # The soundboard example presses its way through the audio engine:
+        # a load, a play the mixer renders, and the end of the voice.
+        cargo build --locked --target wasm32-unknown-unknown --package soundboard_example
+        LEPTOSKIT_SOUNDBOARD_GUEST="$guest_target/wasm32-unknown-unknown/debug/soundboard_example.wasm" \
+          cargo test --locked --package leptoskit_plugin_audio --test soundboard_guest -- --ignored
         # The same guest with DevTools, in a real app reporting to a fake
         # hub. Its own target directory keeps the build above as it is.
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe \
@@ -1035,7 +1040,7 @@ in
         LEPTOSKIT_DEVTOOLS_GUEST="$guest_target/devtools-guest/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_bridge_ffi --features devtools --test devtools_guest -- --ignored
       '';
-      description = "Run compiled Rust plugin, hooks, and agent UI guests through the interpreter.";
+      description = "Run compiled Rust plugin, hooks, agent UI, and soundboard guests through the interpreter.";
       binary = "bash";
     };
     "test:plugins:guest-isolation" = {

@@ -63,8 +63,17 @@ wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 web-sys = { workspace = true, features = ["AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "BiquadFilterNode", "BiquadFilterType", "Document", "Element", "EventTarget", "GainNode", "Headers", "HtmlAudioElement", "HtmlElement", "HtmlMediaElement", "MediaElementAudioSourceNode", "Node", "Response", "StereoPannerNode", "Window"], optional = true }
 
+# The soundboard example's guest runs in the real interpreter against the engine.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+leptoskit_native = { workspace = true }
+leptoskit_wasm = { workspace = true }
+
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
+
+[[test]]
+name = "soundboard_guest"
+required-features = ["host"]
 
 [lints]
 workspace = true
