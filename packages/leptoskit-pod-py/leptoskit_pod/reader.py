@@ -90,7 +90,7 @@ class Reader:
         raise InvalidTag(tag)
 
     def struct_header(self) -> tuple[int, int]:
-        return self.u8(), self.u8()
+        return self.u16(), self.u16()
 
     def variant(self) -> int:
         return self.u16()

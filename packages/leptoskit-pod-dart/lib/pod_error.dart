@@ -40,6 +40,13 @@ class PodInvalidEnvelope extends PodError {
   String toString() => 'InvalidEnvelope';
 }
 
+class PodUnknownDiscriminator extends PodError {
+  const PodUnknownDiscriminator(this.disc);
+  final int disc;
+  @override
+  String toString() => 'UnknownDiscriminator($disc)';
+}
+
 class PodUnknownVersion extends PodError {
   const PodUnknownVersion(this.version);
   final int version;

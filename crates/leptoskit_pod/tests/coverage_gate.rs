@@ -53,19 +53,19 @@ fn wrap_live_and_flags() {
 }
 
 #[test]
-fn migrate_rejects_bad_flags_and_version_gaps() {
+fn migrate_rejects_wrong_disc_and_version_gaps() {
 	let mut w = Writer::new();
-	w.struct_header(0, 2);
+	w.struct_header(9, 0);
 	w.u8(1);
-	let flagged = w.finish();
+	let wrong_disc = w.finish();
 	assert_eq!(
-		climb(&flagged, 1, &[] as &[&dyn Transition]).unwrap_err(),
-		Error::InvalidTag(2)
+		climb(&wrong_disc, 0, 1, &[] as &[&dyn Transition]).unwrap_err(),
+		Error::UnknownDiscriminator(9)
 	);
 
 	struct V0ToV1;
 	impl Transition for V0ToV1 {
-		fn from_version(&self) -> u8 {
+		fn from_version(&self) -> u16 {
 			0
 		}
 
@@ -81,11 +81,11 @@ fn migrate_rejects_bad_flags_and_version_gaps() {
 	}
 
 	let mut w = Writer::new();
-	w.struct_header(2, 0);
+	w.struct_header(0, 2);
 	w.u8(1);
 	let ahead = w.finish();
 	assert_eq!(
-		climb(&ahead, 1, &[&V0ToV1]).unwrap_err(),
+		climb(&ahead, 0, 1, &[&V0ToV1]).unwrap_err(),
 		Error::UnknownVersion(2)
 	);
 }

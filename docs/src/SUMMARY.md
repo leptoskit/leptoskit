@@ -87,6 +87,9 @@
 - [`view!` and `#[component]`](reference/view.md)
 - [CSS and Tailwind coverage](reference/css-coverage.md)
 - [Nightly feature](reference/nightly.md)
+- [LK Pod](rpc/lk-pod.md)
+  - [Pod migrations](rpc/migrations.md)
+  - [Adding a Pod language](rpc/adding-a-pod-language.md)
 
 # Platforms
 

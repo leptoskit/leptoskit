@@ -101,7 +101,7 @@ class Reader {
     }
   }
 
-  (int, int) structHeader() => (u8(), u8());
+  (int, int) structHeader() => (u16(), u16());
 
   int variant() => u16();
 

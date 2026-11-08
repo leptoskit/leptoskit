@@ -4,13 +4,13 @@
 	"vectors": [
 		{
 			"name": "empty_struct_v0",
-			"hex": "0000",
-			"description": "struct version 0, flags 0, no fields"
+			"hex": "00000000",
+			"description": "struct disc 0, version 0, no fields"
 		},
 		{
 			"name": "note_hi",
-			"hex": "00000701020000006869",
-			"description": "Note { priority:7, archived:true, title:\"hi\" } dense v0"
+			"hex": "000000000701020000006869",
+			"description": "Note { priority:7, archived:true, title:\"hi\" } disc 0 dense v0"
 		},
 		{
 			"name": "option_none_u8",
@@ -49,8 +49,8 @@
 		},
 		{
 			"name": "enum_struct_variant",
-			"hex": "010000000703000000616263",
-			"description": "disc 1 + struct v0 { priority:7, title:\"abc\" }"
+			"hex": "0100000000000703000000616263",
+			"description": "disc 1 + struct disc 0 v0 { priority:7, title:\"abc\" }"
 		},
 		{
 			"name": "envelope_rpc_empty",

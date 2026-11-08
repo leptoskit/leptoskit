@@ -1,26 +1,31 @@
 package pod
 
-// EncodeStructV0 writes version 0 dense struct header then fields.
-func EncodeStructV0(encodeFields func(*Writer) error) ([]byte, error) {
+// EncodeStruct writes disc + version then fields.
+func EncodeStruct(disc, version uint16, encodeFields func(*Writer) error) ([]byte, error) {
 	w := NewWriter()
-	w.StructHeader(0, 0)
+	w.StructHeader(disc, version)
 	if err := encodeFields(w); err != nil {
 		return nil, err
 	}
 	return w.Finish(), nil
 }
 
-// DecodeStructVersion decodes a dense struct at expectedVersion.
-func DecodeStructVersion(r *Reader, expectedVersion uint8, decodeFields func(*Reader) error) error {
-	version, flags, err := r.StructHeader()
+// EncodeStructV0 writes disc + version 0 dense struct header then fields.
+func EncodeStructV0(disc uint16, encodeFields func(*Writer) error) ([]byte, error) {
+	return EncodeStruct(disc, 0, encodeFields)
+}
+
+// DecodeStructVersion decodes a dense struct at expectedDisc + expectedVersion.
+func DecodeStructVersion(r *Reader, expectedDisc, expectedVersion uint16, decodeFields func(*Reader) error) error {
+	disc, version, err := r.StructHeader()
 	if err != nil {
 		return err
 	}
-	if version != expectedVersion {
-		return errUnknownVersion(uint16(version))
+	if disc != expectedDisc {
+		return errUnknownDiscriminator(disc)
 	}
-	if flags != 0 {
-		return errInvalidTag(uint16(flags))
+	if version != expectedVersion {
+		return errUnknownVersion(version)
 	}
 	return decodeFields(r)
 }

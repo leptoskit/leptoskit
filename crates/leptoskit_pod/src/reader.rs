@@ -114,9 +114,9 @@ impl<'a> Reader<'a> {
 		}
 	}
 
-	/// Struct version + flags.
-	pub fn struct_header(&mut self) -> Result<(u8, u8)> {
-		Ok((self.u8()?, self.u8()?))
+	/// Struct discriminator + version (both little-endian `u16`).
+	pub fn struct_header(&mut self) -> Result<(u16, u16)> {
+		Ok((self.u16()?, self.u16()?))
 	}
 
 	/// Enum variant discriminator.

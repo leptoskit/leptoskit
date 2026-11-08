@@ -42,7 +42,7 @@ fn both_functions_share_one_route() {
 		.iter()
 		.map(|descriptor| descriptor.path)
 		.collect();
-	assert_eq!(paths, ["/rpc/list", "/rpc/list"]);
+	assert_eq!(paths, ["/api/list", "/api/list"]);
 	let error = spec::check().expect_err("a duplicate");
 	assert!(
 		matches!(error, spec::SpecError::DuplicateName { ref name, .. } if name == "list"),

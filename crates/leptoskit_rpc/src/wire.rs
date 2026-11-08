@@ -100,7 +100,7 @@ pub enum WireBody {
 
 fn empty_pod_struct() -> Vec<u8> {
 	let mut writer = leptoskit_pod::Writer::new();
-	let _ = leptoskit_pod::encode_struct_v0(&mut writer, |_| Ok(()));
+	let _ = leptoskit_pod::encode_struct_v0(&mut writer, 0, |_| Ok(()));
 	writer.finish()
 }
 

@@ -6,6 +6,6 @@ LK Pod is the default wire format for leptoskit RPC: a portable little-endian TL
 - **HTTP entrypoint:** `POST /rpc/<op>` (override with `[rpc].path`)
 - **JSON fallback:** opt in with `transports = ["pod", "json"]`
 
-Authors mark types with `#[pod::data]` (or `#[rpc::data]` once re-exported). Structs carry an implicit version byte; enums use a `u16` discriminator. Migrations freeze layouts — you never write field ids.
+Authors mark types with `#[pod::data]` (or `#[rpc::data]` once re-exported). Every data **struct** carries an implicit **discriminator** and **version** (both little-endian `u16` by default). Enums use a `u16` variant discriminator. You never write field ids — [migrations](./migrations.md) own evolution.
 
 See [Adding a Pod language](./adding-a-pod-language.md) for the conformance prompt used when bringing up a new runtime.

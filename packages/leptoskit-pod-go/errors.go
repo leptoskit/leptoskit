@@ -11,14 +11,16 @@ const (
 	ErrTooLarge         ErrorCode = "TooLarge"
 	ErrInvalidUtf8      ErrorCode = "InvalidUtf8"
 	ErrInvalidTag       ErrorCode = "InvalidTag"
-	ErrInvalidEnvelope  ErrorCode = "InvalidEnvelope"
-	ErrUnknownVersion   ErrorCode = "UnknownVersion"
+	ErrInvalidEnvelope      ErrorCode = "InvalidEnvelope"
+	ErrUnknownDiscriminator ErrorCode = "UnknownDiscriminator"
+	ErrUnknownVersion       ErrorCode = "UnknownVersion"
 )
 
 // Error is a codec failure with a stable conceptual class name.
 type Error struct {
 	Code    ErrorCode
 	Tag     uint16
+	Disc    uint16
 	Version uint16
 	msg     string
 }
@@ -52,6 +54,10 @@ func errInvalidTag(tag uint16) *Error {
 
 func errInvalidEnvelope() *Error {
 	return &Error{Code: ErrInvalidEnvelope, msg: "invalid pod envelope"}
+}
+
+func errUnknownDiscriminator(disc uint16) *Error {
+	return &Error{Code: ErrUnknownDiscriminator, Disc: disc, msg: fmt.Sprintf("unknown pod struct discriminator %d", disc)}
 }
 
 func errUnknownVersion(v uint16) *Error {

@@ -103,9 +103,9 @@ export class Writer {
 		this.u8(ok ? 0 : 1);
 	}
 
-	structHeader(version: number, flags: number): void {
-		this.u8(version);
-		this.u8(flags);
+	structHeader(disc: number, version: number): void {
+		this.u16(disc);
+		this.u16(version);
 	}
 
 	variant(disc: number): void {

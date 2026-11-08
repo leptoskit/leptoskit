@@ -131,10 +131,10 @@ func (w *Writer) ResultTag(ok bool) {
 	}
 }
 
-// StructHeader writes version + flags.
-func (w *Writer) StructHeader(version, flags uint8) {
-	w.U8(version)
-	w.U8(flags)
+// StructHeader writes disc + version (both little-endian u16).
+func (w *Writer) StructHeader(disc, version uint16) {
+	w.U16(disc)
+	w.U16(version)
 }
 
 // Variant writes enum discriminator u16.

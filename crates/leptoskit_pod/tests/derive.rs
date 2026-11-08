@@ -32,7 +32,7 @@ fn derived_note_matches_hand_written() {
 	let bytes = note.to_pod_bytes().unwrap();
 	assert_eq!(
 		bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-		"00000701020000006869"
+		"000000000701020000006869"
 	);
 	assert_eq!(Note::from_pod_bytes(&bytes).unwrap(), note);
 }

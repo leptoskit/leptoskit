@@ -86,10 +86,10 @@ class Reader(input: ByteArray) {
 		}
 	}
 
-	fun structHeader(): PodResult<Pair<UByte, UByte>> {
-		val v = u8().getOrElse { return Result.failure(it) }
-		val f = u8().getOrElse { return Result.failure(it) }
-		return Result.success(v to f)
+	fun structHeader(): PodResult<Pair<UShort, UShort>> {
+		val disc = u16().getOrElse { return Result.failure(it) }
+		val version = u16().getOrElse { return Result.failure(it) }
+		return Result.success(disc to version)
 	}
 
 	fun variant(): PodResult<UShort> = u16()

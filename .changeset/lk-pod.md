@@ -9,4 +9,4 @@
 
 # LK Pod wire format
 
-Portable little-endian TLV codec for RPC (`application/vnd.leptoskit.rpc.v1+bin`), with language runtimes under `packages/leptoskit-pod-*`, optional JSON transport on the same `/rpc` routes, and a prompt/spec for adding further languages.
+Portable little-endian TLV codec for RPC (`application/vnd.leptoskit.rpc.v1+bin`). Every data struct carries an implicit `u16` discriminator and `u16` version (PinaPod-shaped); inbound RPC/jobs climb adjacent migrations to current while responses encode current. Language runtimes live under `packages/leptoskit-pod-*`, with optional JSON transport on the same `/rpc` routes.

@@ -54,9 +54,9 @@ class Writer {
 
   void resultTag({required bool ok}) => u8(ok ? 0 : 1);
 
-  void structHeader(int version, int flags) {
-    u8(version);
-    u8(flags);
+  void structHeader(int disc, int version) {
+    u16(disc);
+    u16(version);
   }
 
   void variant(int disc) => u16(disc);

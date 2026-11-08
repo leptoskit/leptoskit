@@ -112,10 +112,11 @@ impl Writer {
 		self.u8(u8::from(!ok));
 	}
 
-	/// Struct header: version + flags (dense when flags bit0 is clear).
-	pub fn struct_header(&mut self, version: u8, flags: u8) {
-		self.u8(version);
-		self.u8(flags);
+	/// Struct header: stable type discriminator + layout version (both `u16`
+	/// LE).
+	pub fn struct_header(&mut self, disc: u16, version: u16) {
+		self.u16(disc);
+		self.u16(version);
 	}
 
 	/// Enum variant discriminator.

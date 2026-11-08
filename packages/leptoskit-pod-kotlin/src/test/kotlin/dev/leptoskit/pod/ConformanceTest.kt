@@ -86,7 +86,7 @@ class ConformanceTest {
 	@Test
 	fun encodeNoteMatchesVector() {
 		val w = Writer()
-		w.structHeader(0u, 0u)
+		w.structHeader(0u, 0u) // disc 0, version 0
 		w.u8(7u)
 		w.bool(true)
 		w.string("hi").getOrElse { fail(it.toString()) }

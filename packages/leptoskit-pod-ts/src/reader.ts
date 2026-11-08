@@ -101,7 +101,7 @@ export class Reader {
 	}
 
 	structHeader(): [number, number] {
-		return [this.u8(), this.u8()];
+		return [this.u16(), this.u16()];
 	}
 
 	variant(): number {

@@ -15,24 +15,36 @@ export { PodError, type PodErrorCode } from "./errors.js";
 export { Reader } from "./reader.js";
 export { Writer } from "./writer.js";
 
-export function encodeStructV0(encodeFields: (w: Writer) => void): Uint8Array {
+export function encodeStruct(
+	disc: number,
+	version: number,
+	encodeFields: (w: Writer) => void,
+): Uint8Array {
 	const w = Writer.new();
-	w.structHeader(0, 0);
+	w.structHeader(disc, version);
 	encodeFields(w);
 	return w.finish();
 }
 
+export function encodeStructV0(
+	disc: number,
+	encodeFields: (w: Writer) => void,
+): Uint8Array {
+	return encodeStruct(disc, 0, encodeFields);
+}
+
 export function decodeStructVersion<T>(
 	r: Reader,
+	expectedDisc: number,
 	expectedVersion: number,
 	decodeFields: (r: Reader) => T,
 ): T {
-	const [version, flags] = r.structHeader();
+	const [disc, version] = r.structHeader();
+	if (disc !== expectedDisc) {
+		throw PodError.unknownDiscriminator(disc);
+	}
 	if (version !== expectedVersion) {
 		throw PodError.unknownVersion(version);
-	}
-	if (flags !== 0) {
-		throw PodError.invalidTag(flags);
 	}
 	return decodeFields(r);
 }

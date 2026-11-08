@@ -106,7 +106,7 @@ final class ConformanceTests: XCTestCase {
 
 	func testEncodeNoteMatchesVector() throws {
 		var w = Writer()
-		w.structHeader(version: 0, flags: 0)
+		w.structHeader(disc: 0, version: 0)
 		w.u8(7)
 		try w.bool(true)
 		try w.string("hi")

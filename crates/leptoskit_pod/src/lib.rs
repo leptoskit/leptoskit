@@ -30,6 +30,7 @@ pub use traits::ByteBuf;
 pub use traits::PodDecode;
 pub use traits::PodEncode;
 pub use traits::decode_struct_version;
+pub use traits::encode_struct;
 pub use traits::encode_struct_v0;
 pub use writer::Writer;
 

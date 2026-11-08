@@ -4,10 +4,11 @@ LK Pod is leptoskit’s portable little-endian TLV wire format for RPC and live 
 
 - Content-Type: `application/vnd.leptoskit.rpc.v1+bin`
 - Envelope magic: `LK01`
-- Structs carry an implicit version byte; enums carry a `u16` discriminator
+- Structs carry `[discriminator:u16][version:u16][payload…]`; enums carry a `u16` variant discriminator
 - `Vec` / `String` use unbounded `u32` length prefixes
+- Inbound RPC / jobs **climb** adjacent version transitions to current; responses encode current; live events do not migrate
 
-See `docs/src/rpc/lk-pod.md` and `docs/src/rpc/adding-a-pod-language.md`. Conformance vectors live in `conformance/vectors.json`.
+See `docs/src/rpc/lk-pod.md`, `docs/src/rpc/migrations.md`, and `docs/src/rpc/adding-a-pod-language.md`. Conformance vectors live in `conformance/vectors.json`.
 
 ## Verification
 

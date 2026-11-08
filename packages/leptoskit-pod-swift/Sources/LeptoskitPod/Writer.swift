@@ -69,9 +69,9 @@ public struct Writer: Sendable {
 		u8(ok ? 0 : 1)
 	}
 
-	public mutating func structHeader(version: UInt8, flags: UInt8) {
-		u8(version)
-		u8(flags)
+	public mutating func structHeader(disc: UInt16, version: UInt16) {
+		u16(disc)
+		u16(version)
 	}
 
 	public mutating func variant(_ disc: UInt16) {
