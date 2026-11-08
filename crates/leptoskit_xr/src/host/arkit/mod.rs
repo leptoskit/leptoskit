@@ -23,6 +23,7 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_ui_kit::UIInterfaceOrientation;
 
 use super::Backend;
+use super::Started;
 use super::Viewport;
 use super::XrFrame;
 use crate::hit_test;
@@ -361,6 +362,15 @@ impl ArKitBackend {
 	}
 }
 
+/// ARKit's origin is where the session started, gravity-aligned; it has no
+/// floor-relative origin, so a floor request gets world space.
+fn space(config: &SessionConfig) -> ReferenceSpace {
+	match config.reference_space {
+		ReferenceSpace::Local => ReferenceSpace::Local,
+		ReferenceSpace::LocalFloor | ReferenceSpace::World => ReferenceSpace::World,
+	}
+}
+
 fn camera_allowed() -> Option<bool> {
 	// SAFETY: Reads the app's camera authorization, never prompting.
 	let status = unsafe {
@@ -573,11 +583,7 @@ impl Backend for ArKitBackend {
 		}
 	}
 
-	fn start(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		if camera_allowed() == Some(false) {
 			return Err(Error::PermissionDenied);
 		}
@@ -589,28 +595,16 @@ impl Backend for ArKitBackend {
 		self.session = Some(session);
 		self.features = features;
 		self.last_time = f64::NAN;
-		// ARKit's origin is where the session started, gravity-aligned; it
-		// has no floor-relative origin, so a floor request gets world space.
-		Ok(match config.reference_space {
-			ReferenceSpace::Local => ReferenceSpace::Local,
-			ReferenceSpace::LocalFloor | ReferenceSpace::World => ReferenceSpace::World,
-		})
+		Ok(Started::new(space(config), features))
 	}
 
-	fn configure(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		let session = self.session.as_ref().ok_or(Error::Unavailable)?;
 		// SAFETY: Running a new configuration on a live session keeps its
 		// map and anchors.
 		unsafe { session.runWithConfiguration(&Self::configuration(features)) };
 		self.features = features;
-		Ok(match config.reference_space {
-			ReferenceSpace::Local => ReferenceSpace::Local,
-			_ => ReferenceSpace::World,
-		})
+		Ok(Started::new(space(config), features))
 	}
 
 	fn update(&mut self, _time: f64) -> Result<Option<XrFrame>, Error> {

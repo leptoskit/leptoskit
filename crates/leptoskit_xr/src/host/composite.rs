@@ -5,6 +5,7 @@
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::Started;
 use super::Viewport;
 use super::XrFrame;
 use crate::math::Pose;
@@ -80,22 +81,14 @@ impl Backend for Composite {
 		}
 	}
 
-	fn start(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		let index = self.owner(config.mode).ok_or(Error::Unavailable)?;
-		let space = self.backends[index].start(config, features)?;
+		let started = self.backends[index].start(config, features)?;
 		self.active = Some(index);
-		Ok(space)
+		Ok(started)
 	}
 
-	fn configure(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		self.active()?.configure(config, features)
 	}
 

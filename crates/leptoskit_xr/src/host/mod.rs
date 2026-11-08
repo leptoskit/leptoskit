@@ -30,6 +30,10 @@ mod sensors;
 #[allow(unsafe_code)]
 pub mod arkit;
 
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+pub mod arcore;
+
 pub use composite::Composite;
 pub use orientation::OrientationBackend;
 pub use orientation::OrientationSource;
@@ -79,6 +83,26 @@ impl Viewport {
 	#[must_use]
 	pub fn aspect(self) -> f32 {
 		self.width.max(1) as f32 / self.height.max(1) as f32
+	}
+}
+
+/// What a backend started: see [`Backend::start`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Started {
+	/// The reference space the session uses.
+	pub reference_space: ReferenceSpace,
+	/// The features it runs with, at most the ones asked for.
+	pub features: Features,
+}
+
+impl Started {
+	/// A session with `reference_space` and `features`.
+	#[must_use]
+	pub fn new(reference_space: ReferenceSpace, features: Features) -> Self {
+		Self {
+			reference_space,
+			features,
+		}
 	}
 }
 
@@ -169,21 +193,14 @@ pub trait Backend: Send {
 	fn prepare(&mut self, mode: Mode, install: bool) -> Availability;
 
 	/// Starts a session with `features`, which the runtime already checked
-	/// against [`Backend::capabilities`], and returns the reference space it
-	/// provides: the one asked for, or the nearest the platform has.
-	fn start(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error>;
+	/// against [`Backend::capabilities`], and returns what it provides: the
+	/// reference space asked for or the nearest the platform has, and the
+	/// features that turned out to work.
+	fn start(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error>;
 
 	/// Changes the running session's features or reference space. The
 	/// default stops and starts again.
-	fn configure(
-		&mut self,
-		config: &SessionConfig,
-		features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn configure(&mut self, config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		self.stop();
 		self.start(config, features)
 	}

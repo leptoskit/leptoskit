@@ -4,6 +4,7 @@
 use leptoskit_bridge::Error;
 
 use super::Backend;
+use super::Started;
 use super::Viewport;
 use super::XrFrame;
 use crate::math::Fov;
@@ -128,24 +129,16 @@ impl<S: OrientationSource> Backend for OrientationBackend<S> {
 		}
 	}
 
-	fn start(
-		&mut self,
-		_config: &SessionConfig,
-		_features: Features,
-	) -> Result<ReferenceSpace, Error> {
+	fn start(&mut self, _config: &SessionConfig, features: Features) -> Result<Started, Error> {
 		self.source.start()?;
 		self.running = true;
 		self.recentre = None;
 		self.last_time = None;
-		Ok(ReferenceSpace::Local)
+		Ok(Started::new(ReferenceSpace::Local, features))
 	}
 
-	fn configure(
-		&mut self,
-		_config: &SessionConfig,
-		_features: Features,
-	) -> Result<ReferenceSpace, Error> {
-		Ok(ReferenceSpace::Local)
+	fn configure(&mut self, _config: &SessionConfig, features: Features) -> Result<Started, Error> {
+		Ok(Started::new(ReferenceSpace::Local, features))
 	}
 
 	fn update(&mut self, _time: f64) -> Result<Option<XrFrame>, Error> {
