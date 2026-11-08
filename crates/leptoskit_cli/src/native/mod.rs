@@ -255,7 +255,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 
 	if matches!(target, Target::Linux | Target::Windows | Target::Tui) {
 		write_assets(&root, &config, target, &bundle_dir, release)?;
-		rust_desktop::build(&root, &config, target, release)?;
+		rust_desktop::build(&root, &config, target, release, &registry.host_features)?;
 
 		return Ok(());
 	}

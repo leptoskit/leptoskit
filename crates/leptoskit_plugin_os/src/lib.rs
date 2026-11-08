@@ -2,10 +2,11 @@
 //!
 //! Add `leptoskit_plugin_os` as a direct dependency and select the `os` plugin
 //! in `native.plugins`; supported generated hosts discover it from Cargo
-//! metadata. Generated Windows, Linux, and terminal hosts currently omit
-//! runtime plugins; use explicit registration in a custom host there. The
-//! values come from compile-time constants of the host build, so the guest sees
-//! the real platform even though its own target is wasm32.
+//! metadata. Generated Linux hosts register it where it has a Linux Rust
+//! implementation; generated Windows and terminal hosts currently omit runtime
+//! plugins, so use explicit registration in a custom host there. The values
+//! come from compile-time constants of the host build, so the guest sees the
+//! real platform even though its own target is wasm32.
 //!
 //! <!-- {/p_osSummary} -->
 //!

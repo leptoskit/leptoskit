@@ -2,10 +2,11 @@
 //!
 //! Add `leptoskit_plugin_linking` as a direct dependency and select the
 //! `linking` plugin in `native.plugins`; supported generated hosts discover it
-//! from Cargo metadata. Generated Windows, Linux, and terminal hosts currently
-//! omit runtime plugins; use explicit registration in a custom host there.
-//! Guests enable the `guest` feature and reuse `guest::Linking` rather than
-//! resolving the plugin on every call. Incoming deep links need host lifecycle
+//! from Cargo metadata. Generated Linux hosts register it where it has a Linux
+//! Rust implementation; generated Windows and terminal hosts currently omit
+//! runtime plugins, so use explicit registration in a custom host there. Guests
+//! enable the `guest` feature and reuse `guest::Linking` rather than resolving
+//! the plugin on every call. Incoming deep links need host lifecycle
 //! integration and are not handled by this crate.
 //!
 //! <!-- {/p_linkingSummary} -->

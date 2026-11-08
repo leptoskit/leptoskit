@@ -282,8 +282,7 @@ bridge instead; this is the build-time half.
 
 Add `{{ plugin_accelerometer.package.name }}` as a direct dependency and select the `{{ plugin_accelerometer.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Accelerometer` rather than resolving the plugin on every call. iOS and Android use
 real system sensors, desktop has no sensor, and the browser uses Generic Sensor or
 `DeviceMotion`.
@@ -294,8 +293,7 @@ real system sensors, desktop has no sensor, and the browser uses Generic Sensor 
 
 Add `{{ plugin_application.package.name }}` as a direct dependency and select the `{{ plugin_application.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Application` rather than resolving the plugin on every call. Apple reads
 `Bundle.main`, Android reads the running package record, and a Rust desktop host supplies
 its own packaging metadata; browsers have no equivalent installed-app identity.
@@ -325,8 +323,7 @@ and mobile, browser, and unsupported desktops return `Unavailable`.
 
 Add `{{ plugin_barometer.package.name }}` as a direct dependency and select the `{{ plugin_barometer.package.metadata.leptoskit.runtime.name }}` plugin
 in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Barometer` rather than resolving the plugin on every call. iOS and Android use
 real pressure sensors, desktop has no sensor, and no relative altitude estimate is
 fabricated.
@@ -337,8 +334,7 @@ fabricated.
 
 Add `{{ plugin_battery.package.name }}` as a direct dependency and select the `{{ plugin_battery.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Battery` rather than resolving the plugin on every call. Unknown readings stay
 unknown instead of being reported as a full battery, and a simulator is never presented as
 physical hardware.
@@ -349,8 +345,7 @@ physical hardware.
 
 Add `{{ plugin_brightness.package.name }}` as a direct dependency and select the `{{ plugin_brightness.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Brightness` rather than resolving the plugin on every call. Android changes only
 the activity window, iOS changes the screen and restores the previous value, and desktop
 and the browser return `Unavailable`.
@@ -361,8 +356,7 @@ and the browser return `Unavailable`.
 
 Add `{{ plugin_clipboard.package.name }}` as a direct dependency and select the `{{ plugin_clipboard.package.metadata.leptoskit.runtime.name }}` plugin
 in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Clipboard` rather than resolving the plugin on every call. Only plain text is
 supported; browser operations need a secure context and may need a user gesture.
 
@@ -372,8 +366,7 @@ supported; browser operations need a secure context and may need a user gesture.
 
 Add `{{ plugin_crypto.package.name }}` as a direct dependency and select the `{{ plugin_crypto.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Native hashing and entropy run on the Rust worker,
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native hashing and entropy run on the Rust worker,
 and browsers use the same Rust implementation compiled to Wasm.
 
 <!-- {/p_cryptoSummary} -->
@@ -382,8 +375,7 @@ and browsers use the same Rust implementation compiled to Wasm.
 
 Add `{{ plugin_device.package.name }}` as a direct dependency and select the `{{ plugin_device.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Device` rather than resolving the plugin on every call. Native guests, Rust
 desktop hosts, and browsers each return a validated binary snapshot with the fields that
 platform can actually provide.
@@ -411,8 +403,7 @@ an explicit byte limit.
 
 Add `{{ plugin_document_picker.package.name }}` as a direct dependency and select the
 `{{ plugin_document_picker.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from
-Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. The user picks the document;
+Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The user picks the document;
 the app receives owned bytes under a size limit and never gets a reusable path into the
 document provider.
 
@@ -422,8 +413,7 @@ document provider.
 
 Add `{{ plugin_filesystem.package.name }}` as a direct dependency and select the `{{ plugin_filesystem.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Filesystem` rather than resolving the plugin on every call. Every native path
 stays inside the application-owned data directory; guests cannot select an arbitrary
 filesystem root.
@@ -443,8 +433,7 @@ return `Unavailable`, with no `XWayland` fallback or fake browser shortcut.
 
 Add `{{ plugin_gyroscope.package.name }}` as a direct dependency and select the `{{ plugin_gyroscope.package.metadata.leptoskit.runtime.name }}` plugin
 in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Gyroscope` rather than resolving the plugin on every call. iOS and Android use
 real system sensors, desktop has no sensor, and the browser converts `DeviceMotion` degrees
 to radians.
@@ -455,8 +444,7 @@ to radians.
 
 Add `{{ plugin_haptics.package.name }}` as a direct dependency and select the `{{ plugin_haptics.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Haptics` rather than resolving the plugin on every call. iOS uses UIKit feedback
 generators, Android uses platform haptic feedback, and macOS approximates the mobile
 styles with its trackpad performer; browsers use the Vibration API where allowed.
@@ -467,8 +455,7 @@ styles with its trackpad performer; browsers use the Vibration API where allowed
 
 Add `{{ plugin_http.package.name }}` as a direct dependency and select the `{{ plugin_http.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Native requests use reqwest with rustls and need a
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native requests use reqwest with rustls and need a
 Tokio runtime; the browser uses fetch with incremental body reading. Redirects are not
 followed, and every destination origin is explicit.
 
@@ -478,8 +465,7 @@ followed, and every destination origin is explicit.
 
 Add `{{ plugin_image_manipulator.package.name }}` as a direct dependency and select the
 `{{ plugin_image_manipulator.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it
-from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. Native calls run on the Rust
+from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native calls run on the Rust
 worker so a batch takes one bridge round trip; browser calls use the same engine compiled
 to Wasm, and large jobs belong in a Web Worker.
 
@@ -489,8 +475,7 @@ to Wasm, and large jobs belong in a Web Worker.
 
 Add `{{ plugin_keep_awake.package.name }}` as a direct dependency and select the `{{ plugin_keep_awake.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::KeepAwake` rather than resolving the plugin on every call. iOS preserves and
 restores the idle timer, Android uses the activity's keep-screen-on flag, desktop uses OS
 assertions, and the browser uses the Screen Wake Lock API; none of them promise background
@@ -502,8 +487,7 @@ execution.
 
 Add `{{ plugin_light_sensor.package.name }}` as a direct dependency and select the `{{ plugin_light_sensor.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::LightSensor` rather than resolving the plugin on every call. iOS, macOS, and
 desktop have no supported public ambient-light API and return `Unavailable`; display
 brightness is never substituted for illumination.
@@ -514,8 +498,7 @@ brightness is never substituted for illumination.
 
 Add `{{ plugin_linking.package.name }}` as a direct dependency and select the `{{ plugin_linking.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Linking` rather than resolving the plugin on every call. Incoming deep links need
 host lifecycle integration and are not handled by this crate.
 
@@ -525,8 +508,7 @@ host lifecycle integration and are not handled by this crate.
 
 Add `{{ plugin_local_authentication.package.name }}` as a direct dependency and select the
 `{{ plugin_local_authentication.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it
-from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. Guests enable the `guest`
+from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest`
 feature and reuse `guest::LocalAuthentication` rather than resolving the plugin on every
 call. This is not account identity or server authorization; the plugin reports explicit
 terminal outcomes and never invents a success.
@@ -537,8 +519,7 @@ terminal outcomes and never invents a success.
 
 Add `{{ plugin_localization.package.name }}` as a direct dependency and select the `{{ plugin_localization.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Localization` rather than resolving the plugin on every call. Each snapshot
 reflects current platform state, no global locale is mutated, and a host should re-query
 after the application resumes.
@@ -549,8 +530,7 @@ after the application resumes.
 
 Add `{{ plugin_location.package.name }}` as a direct dependency and select the `{{ plugin_location.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Location` rather than resolving the plugin on every call. Native reads never
 prompt; request permission as a separate, intentional action, and the app supplies its
 usage description and manifest permissions.
@@ -561,8 +541,7 @@ usage description and manifest permissions.
 
 Add `{{ plugin_logging.package.name }}` as a direct dependency and select the `{{ plugin_logging.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. There is no global logger or remote backend; the host
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. There is no global logger or remote backend; the host
 chooses the log directory and limits, and the guest protocol stays bounded independently
 of JSON-lines output.
 
@@ -572,8 +551,7 @@ of JSON-lines output.
 
 Add `{{ plugin_magnetometer.package.name }}` as a direct dependency and select the `{{ plugin_magnetometer.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Magnetometer` rather than resolving the plugin on every call. This is a magnetic
 sensor measurement, not a compass heading; platform calibration differs, and desktop has
 no sensor.
@@ -592,8 +570,7 @@ are validated before any native allocation, and mobile and the browser expose no
 
 Add `{{ plugin_network.package.name }}` as a direct dependency and select the `{{ plugin_network.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Network` rather than resolving the plugin on every call. Apple uses
 `NWPathMonitor`, Android uses `ConnectivityManager`, desktop reports interface state,
 and the browser uses `navigator.onLine` plus `NetworkInformation`; an active connection
@@ -605,8 +582,7 @@ never claims a server is reachable.
 
 Add `{{ plugin_notifications.package.name }}` as a direct dependency and select the `{{ plugin_notifications.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Notifications` rather than resolving the plugin on every call. A successful call
 means the OS accepted the request, not that a banner appeared; focus modes and user
 settings can still suppress it.
@@ -617,8 +593,7 @@ settings can still suppress it.
 
 Add `{{ plugin_os.package.name }}` as a direct dependency and select the `{{ plugin_os.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. The values come from compile-time constants of the
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The values come from compile-time constants of the
 host build, so the guest sees the real platform even though its own target is wasm32.
 
 <!-- {/p_osSummary} -->
@@ -627,8 +602,7 @@ host build, so the guest sees the real platform even though its own target is wa
 
 Add `{{ plugin_passkeys.package.name }}` as a direct dependency and select the `{{ plugin_passkeys.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Passkeys` rather than resolving the plugin on every call. Apple platforms use
 `ASAuthorization` and Android uses Credential Manager; WebAuthn JSON crosses the bridge
 unchanged.
@@ -639,8 +613,7 @@ unchanged.
 
 Add `{{ plugin_pedometer.package.name }}` as a direct dependency and select the `{{ plugin_pedometer.package.metadata.leptoskit.runtime.name }}` plugin
 in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Pedometer` rather than resolving the plugin on every call. iOS uses `CoreMotion` and
 Android uses its step counter; the app supplies the motion usage description or
 activity-recognition permission.
@@ -651,8 +624,7 @@ activity-recognition permission.
 
 Add `{{ plugin_permissions.package.name }}` as a direct dependency and select the `{{ plugin_permissions.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Permissions` rather than resolving the plugin on every call. Querying status never
 shows a prompt; request only after the user chooses, and use the dedicated location,
 notification, and photo APIs for permissions with different OS flows.
@@ -663,8 +635,7 @@ notification, and photo APIs for permissions with different OS flows.
 
 Add `{{ plugin_posture.package.name }}` as a direct dependency and select the `{{ plugin_posture.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::DevicePosture` rather than resolving the plugin on every call. A posture describes
 the device the app is running on and every hinge that crosses its window; desktop reports
 a rigid device; supporting browsers use Device Posture and Viewport Segments, with a rigid
@@ -683,8 +654,7 @@ The runtime and derive live in `leptoskit_router`; this crate only owns the buil
 
 Add `{{ plugin_screen_capture.package.name }}` as a direct dependency and select the
 `{{ plugin_screen_capture.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from
-Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. Guests enable the `guest`
+Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest`
 feature and reuse `guest::ScreenCapture` rather than resolving the plugin on every call.
 The plugin never captures pixels or reads screenshots; Android can protect its owned
 window, while iOS can observe scene capture and app screenshots without prevention.
@@ -695,8 +665,7 @@ window, while iOS can observe scene capture and app screenshots without preventi
 
 Add `{{ plugin_screen_orientation.package.name }}` as a direct dependency and select the
 `{{ plugin_screen_orientation.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it
-from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. Guests enable the `guest`
+from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest`
 feature and reuse `guest::ScreenOrientation` rather than resolving the plugin on every
 call. A pending hold is not an acknowledgement that the OS rotated; the snapshot reports
 the presented interface, not accelerometer orientation.
@@ -707,8 +676,7 @@ the presented interface, not accelerometer orientation.
 
 Add `{{ plugin_secure_store.package.name }}` as a direct dependency and select the `{{ plugin_secure_store.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::SecureStore` rather than resolving the plugin on every call. Native mobile
 handlers ship with the crate; desktop hosts construct the store over their own credential
 backend, and secrets never become a guest-selected filesystem path.
@@ -719,8 +687,7 @@ backend, and secrets never become a guest-selected filesystem path.
 
 Add `{{ plugin_sharing.package.name }}` as a direct dependency and select the `{{ plugin_sharing.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. The app supplies the content, the user picks the
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. The app supplies the content, the user picks the
 destination, and completion only means the platform finished its API callback.
 
 <!-- {/p_sharingSummary} -->
@@ -749,8 +716,7 @@ crash.
 
 Add `{{ plugin_speech.package.name }}` as a direct dependency and select the `{{ plugin_speech.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Speech` rather than resolving the plugin on every call. iOS and macOS use
 `AVSpeechSynthesizer`, Android uses `TextToSpeech`, and the browser uses
 `speechSynthesis`; overlapping speech returns `Busy`.
@@ -761,8 +727,7 @@ registration in a custom host there. Guests enable the `guest` feature and reuse
 
 Add `{{ plugin_sqlite.package.name }}` as a direct dependency and select the `{{ plugin_sqlite.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Sqlite` rather than resolving the plugin on every call. The database lives in
 Rust, not a platform channel or JavaScript engine, with native implementations for iOS,
 Android, macOS, Windows, and Linux. Generated Windows and Linux hosts do not yet register
@@ -775,8 +740,7 @@ plugin.
 
 Add `{{ plugin_store.package.name }}` as a direct dependency and select the `{{ plugin_store.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Store` rather than resolving the plugin on every call. Each application gets one
 store, values are JSON over a binary envelope, and guests cannot choose filesystem paths.
 
@@ -786,8 +750,7 @@ store, values are JSON over a binary envelope, and guests cannot choose filesyst
 
 Add `{{ plugin_store_review.package.name }}` as a direct dependency and select the `{{ plugin_store_review.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
-Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::StoreReview` rather than resolving the plugin on every call. Acceptance never
 proves a dialog appeared or a review was submitted, and the plugin never substitutes
 another application's scene.
@@ -798,8 +761,7 @@ another application's scene.
 
 Add `{{ plugin_tracking_transparency.package.name }}` as a direct dependency and select the
 `{{ plugin_tracking_transparency.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it
-from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime
-plugins; use explicit registration in a custom host there. Guests enable the `guest`
+from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest`
 feature and reuse `guest::TrackingTransparency` rather than resolving the plugin on every
 call. It never reads advertising identifiers or starts tracking; iOS returns the system
 status, and other platforms return `Unavailable`.
@@ -818,8 +780,7 @@ Linux uses the GTK-free KSNI backend, and mobile and the browser have no tray.
 
 Add `{{ plugin_web_auth.package.name }}` as a direct dependency and select the `{{ plugin_web_auth.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::WebAuth` rather than resolving the plugin on every call. It follows RFC 8252: the
 provider page never loads in a web view inside the app.
 
@@ -829,8 +790,7 @@ provider page never loads in a web view inside the app.
 
 Add `{{ plugin_websocket.package.name }}` as a direct dependency and select the `{{ plugin_websocket.package.metadata.leptoskit.runtime.name }}` plugin
 in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Native connections use tokio-tungstenite with rustls
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Native connections use tokio-tungstenite with rustls
 and need a Tokio runtime; browser connections own their socket and event callbacks. Every
 destination origin is explicit.
 
@@ -1030,13 +990,13 @@ grid implementation without a browser.
 
 <!-- {@p_app_shortcutsSummary} -->
 
-Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
+Add `leptoskit_plugin_app_shortcuts` as a direct dependency and select the `app-shortcuts` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppShortcuts` rather than resolving the plugin on every call. The plugin publishes a bounded static shortcut list to the OS launcher or dock; generated iOS, Android, and macOS hosts call `noteLaunch` when the OS activates one. It never invents icons or deep-link handlers.
 
 <!-- {/p_app_shortcutsSummary} -->
 
 <!-- {@p_badgeSummary} -->
 
-Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Browser pages without a native host call `web::set` / `web::clear` over the Badging API. Setting a count asks the OS or browser to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
+Add `leptoskit_plugin_badge` as a direct dependency and select the `badge` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Badge` rather than resolving the plugin on every call. Browser pages without a native host call `web::set` / `web::clear` over the Badging API. Setting a count asks the OS or browser to show an app-icon badge; it never proves the badge is visible under the user's focus or notification settings.
 
 <!-- {/p_badgeSummary} -->
 
@@ -1048,31 +1008,31 @@ Native hosts construct `DeepLinks` with the schemes and file types they claim, p
 
 <!-- {@p_device_policySummary} -->
 
-Add `leptoskit_plugin_device_policy` as a direct dependency and select the `device-policy` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::DevicePolicy` rather than resolving the plugin on every call. Only Android implements Device Admin / Device Policy Manager capabilities; every other platform returns `Unavailable`. Status never prompts. Privileged actions require an active device admin the user enabled, and wipe requires an explicit confirmation token.
+Add `leptoskit_plugin_device_policy` as a direct dependency and select the `device-policy` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::DevicePolicy` rather than resolving the plugin on every call. Only Android implements Device Admin / Device Policy Manager capabilities; every other platform returns `Unavailable`. Status never prompts. Privileged actions require an active device admin the user enabled, and wipe requires an explicit confirmation token.
 
 <!-- {/p_device_policySummary} -->
 
 <!-- {@p_home_widgetsSummary} -->
 
-Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for `WidgetKit` and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
+Add `leptoskit_plugin_home_widgets` as a direct dependency and select the `home-widgets` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::HomeWidgets` rather than resolving the plugin on every call. The plugin publishes bounded snapshot text for `WidgetKit` and Android App Widgets and asks the OS to reload them; it does not draw the widget UI or scaffold the extension target.
 
 <!-- {/p_home_widgetsSummary} -->
 
 <!-- {@p_live_activitiesSummary} -->
 
-Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
+Add `leptoskit_plugin_live_activities` as a direct dependency and select the `live-activities` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::LiveActivities` rather than resolving the plugin on every call. Only iOS implements `ActivityKit`; other platforms return `Unavailable`. Starting an activity does not prove Lock Screen or Dynamic Island UI appeared: the app must ship a Widget Extension that renders `LeptosKitLiveActivityAttributes`.
 
 <!-- {/p_live_activitiesSummary} -->
 
 <!-- {@p_nfcSummary} -->
 
-Add `leptoskit_plugin_nfc` as a direct dependency and select the `nfc` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Nfc` rather than resolving the plugin on every call. A successful read returns one bounded NDEF text or URI record; it never writes tags or claims background tag delivery.
+Add `leptoskit_plugin_nfc` as a direct dependency and select the `nfc` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Nfc` rather than resolving the plugin on every call. A successful read returns one bounded NDEF text or URI record; it never writes tags or claims background tag delivery.
 
 <!-- {/p_nfcSummary} -->
 
 <!-- {@p_picture_in_pictureSummary} -->
 
-Add `leptoskit_plugin_picture_in_picture` as a direct dependency and select the `picture-in-picture` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::PictureInPicture` rather than resolving the plugin on every call. Android can enter activity picture-in-picture and, with `SYSTEM_ALERT_WINDOW`, hold a system overlay window. iOS reports whether system picture-in-picture is supported but does not yet enter it without an attached video player, and has no draw-over-apps overlay. Desktop and the browser return `Unavailable`.
+Add `leptoskit_plugin_picture_in_picture` as a direct dependency and select the `picture-in-picture` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::PictureInPicture` rather than resolving the plugin on every call. Android can enter activity picture-in-picture and, with `SYSTEM_ALERT_WINDOW`, hold a system overlay window. iOS reports whether system picture-in-picture is supported but does not yet enter it without an attached video player, and has no draw-over-apps overlay. Desktop and the browser return `Unavailable`.
 
 <!-- {/p_picture_in_pictureSummary} -->
 

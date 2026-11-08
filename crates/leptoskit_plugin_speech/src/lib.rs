@@ -2,12 +2,13 @@
 //!
 //! Add `leptoskit_plugin_speech` as a direct dependency and select the `speech`
 //! plugin in `native.plugins`; supported generated hosts discover it from Cargo
-//! metadata. Generated Windows, Linux, and terminal hosts currently omit
-//! runtime plugins; use explicit registration in a custom host there. Guests
-//! enable the `guest` feature and reuse `guest::Speech` rather than resolving
-//! the plugin on every call. iOS and macOS use `AVSpeechSynthesizer`, Android
-//! uses `TextToSpeech`, and the browser uses `speechSynthesis`; overlapping
-//! speech returns `Busy`.
+//! metadata. Generated Linux hosts register it where it has a Linux Rust
+//! implementation; generated Windows and terminal hosts currently omit runtime
+//! plugins, so use explicit registration in a custom host there. Guests enable
+//! the `guest` feature and reuse `guest::Speech` rather than resolving the
+//! plugin on every call. iOS and macOS use `AVSpeechSynthesizer`, Android uses
+//! `TextToSpeech`, and the browser uses `speechSynthesis`; overlapping speech
+//! returns `Busy`.
 //!
 //! <!-- {/p_speechSummary} -->
 //!

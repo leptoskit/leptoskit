@@ -69,7 +69,7 @@ References: [Apple capture authorization](https://developer.apple.com/documentat
 
 <!-- {=p_permissionsSummary} -->
 
-Add `leptoskit_plugin_permissions` as a direct dependency and select the `permissions` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Permissions` rather than resolving the plugin on every call. Querying status never shows a prompt; request only after the user chooses, and use the dedicated location, notification, and photo APIs for permissions with different OS flows.
+Add `leptoskit_plugin_permissions` as a direct dependency and select the `permissions` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Permissions` rather than resolving the plugin on every call. Querying status never shows a prompt; request only after the user chooses, and use the dedicated location, notification, and photo APIs for permissions with different OS flows.
 
 <!-- {/p_permissionsSummary} -->
 

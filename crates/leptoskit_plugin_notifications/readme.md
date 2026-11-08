@@ -93,7 +93,7 @@ API scope is informed by [Expo Notifications](https://docs.expo.dev/versions/lat
 
 <!-- {=p_notificationsSummary} -->
 
-Add `leptoskit_plugin_notifications` as a direct dependency and select the `notifications` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Notifications` rather than resolving the plugin on every call. A successful call means the OS accepted the request, not that a banner appeared; focus modes and user settings can still suppress it.
+Add `leptoskit_plugin_notifications` as a direct dependency and select the `notifications` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Notifications` rather than resolving the plugin on every call. A successful call means the OS accepted the request, not that a banner appeared; focus modes and user settings can still suppress it.
 
 <!-- {/p_notificationsSummary} -->
 
