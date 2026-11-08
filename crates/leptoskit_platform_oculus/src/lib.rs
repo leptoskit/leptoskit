@@ -126,6 +126,13 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn packaging_message_points_authors_at_quest() {
+		let message = Oculus::packaging_unavailable_message();
+		assert!(message.contains("quest"));
+		assert!(message.contains("experimental"));
+	}
+
+	#[test]
 	fn manifest_is_valid_and_experimental() {
 		let manifest = Oculus.manifest();
 		manifest.validate().unwrap();
