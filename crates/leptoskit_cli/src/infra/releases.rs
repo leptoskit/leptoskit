@@ -86,6 +86,21 @@ fn stop_services(ip: &str, c: &InfraConfig, project: &crate::deploy::Project) ->
 /// `history`, which a new release follows, without `--maintenance`.
 /// Services new since then aren't checked. `None` for a rollback or a
 /// recovery, which follows nothing.
+/// Records the services' schemas a release brings, and checks a new release's
+/// changes to them against the history. Returns this checkout's schemas.
+fn release_services(
+	args: &ReleaseArgs,
+	history: &[Release],
+	target: Option<&Release>,
+	project: &crate::deploy::Project,
+	proposed: &mut Release,
+) -> Result<BTreeMap<String, ServiceSchema>> {
+	let local = super::service_schemas(&project.services)?;
+	proposed.services = target.map_or_else(|| local.clone(), |target| target.services.clone());
+	check_service_changes(args, target.map_or(Some(history), |_| None), &local)?;
+	Ok(local)
+}
+
 fn check_service_changes(
 	args: &ReleaseArgs,
 	history: Option<&[Release]>,
@@ -333,10 +348,11 @@ fn pull_new(
 	c: &InfraConfig,
 	hosts: &[String],
 	version: &str,
-	(schema, services): (&str, Option<&str>),
+	(schema, services): (&str, &BTreeMap<String, ServiceSchema>),
 	env: &BTreeMap<String, String>,
 	reservation: &Reservation,
 ) -> Result<()> {
+	let services = super::services_fingerprint(services)?;
 	execute(dir, &["registry", "login"], env, reservation)?;
 	execute(
 		dir,
@@ -344,7 +360,7 @@ fn pull_new(
 		env,
 		reservation,
 	)?;
-	verify_schema_labels(hosts, c, version, schema, services)
+	verify_schema_labels(hosts, c, version, schema, services.as_deref())
 }
 
 fn verify_schema_labels(
@@ -745,17 +761,6 @@ fn recover_previous(
 
 /// Writes the release history to the primary host, where it's shared, and
 /// to the operator's workspace.
-fn save_history(ip: &str, c: &InfraConfig, dir: &Path, history: &[Release]) -> Result<()> {
-	let bytes = serde_json::to_vec_pretty(history)?;
-	remote::write(
-		ip,
-		&format!("{}/releases.json", remote::base(&c.name)),
-		&bytes,
-	)?;
-	fs::write(dir.join("releases.json"), &bytes)?;
-	Ok(())
-}
-
 fn release_version(args: &ReleaseArgs) -> Result<&String> {
 	let version = args
 		.version
@@ -998,16 +1003,9 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	proposed.evidence = evidence;
 	proposed.authorization = authorization;
 	let (env, project) = runtime_files(&dir, c, &root, &config, &hosts, &private)?;
-	let local_services = super::service_schemas(&project.services)?;
-	proposed.services = target
-		.as_ref()
-		.map_or_else(|| local_services.clone(), |target| target.services.clone());
+	let local_services =
+		release_services(args, &history, target.as_ref(), &project, &mut proposed)?;
 	encoded_history(&history, &proposed)?;
-	check_service_changes(
-		args,
-		target.as_ref().map_or(Some(&history[..]), |_| None),
-		&local_services,
-	)?;
 	if c.backups.enabled && args.setup {
 		super::recovery::credentials()?;
 	}
@@ -1025,16 +1023,8 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	if let Some(target) = &target {
 		prepare_recorded(&dir, c, &hosts, target, &env, &reservation)?;
 	} else {
-		let services = super::services_fingerprint(&local_services)?;
-		pull_new(
-			&dir,
-			c,
-			&hosts,
-			version,
-			(&local_hash, services.as_deref()),
-			&env,
-			&reservation,
-		)?;
+		let schemas = (local_hash.as_str(), &local_services);
+		pull_new(&dir, c, &hosts, version, schemas, &env, &reservation)?;
 	}
 	check_evidence(
 		proposed.evidence.as_ref(),
