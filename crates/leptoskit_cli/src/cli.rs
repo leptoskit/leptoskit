@@ -265,6 +265,12 @@ pub enum Command {
 		/// `--db` picks one.
 		#[arg(long)]
 		auth: bool,
+		/// Scaffold several frontend apps in one workspace (`landing`, `app`,
+		/// `admin`). Creates `leptoskit.workspace.toml` and `apps/<name>/`.
+		/// Incompatible with `--db`, `--auth`, `--extension`, and standalone
+		/// HarmonyOS / watch starters.
+		#[arg(long, value_delimiter = ',', num_args = 1..)]
+		frontends: Vec<String>,
 	},
 	/// Runs every platform you have set up, and rebuilds them on change.
 	///
@@ -470,6 +476,10 @@ pub enum GenerateCommand {
 		/// `--db` picks one.
 		#[arg(long)]
 		auth: bool,
+		/// Scaffold several frontend apps in one workspace (`landing`, `app`,
+		/// `admin`). Creates `leptoskit.workspace.toml` and `apps/<name>/`.
+		#[arg(long, value_delimiter = ',', num_args = 1..)]
+		frontends: Vec<String>,
 	},
 	/// Generates an independently publishable runtime plugin with an echo
 	/// method.
@@ -801,6 +811,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			db,
 			extension,
 			auth,
+			frontends,
 		} => {
 			run(Cli {
 				command: Command::Generate {
@@ -813,6 +824,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 						db,
 						extension,
 						auth,
+						frontends,
 					},
 				},
 			})
@@ -886,7 +898,25 @@ fn generate_command(kind: GenerateCommand) -> anyhow::Result<()> {
 			db,
 			extension,
 			auth,
+			frontends,
 		} => {
+			if !frontends.is_empty() {
+				anyhow::ensure!(
+					native_target.is_none() && db.is_none() && !auth && !extension,
+					"--frontends cannot combine with --native-target, --db, --auth, or --extension"
+				);
+				anyhow::ensure!(
+					platform == leptoskit_config::Platform::Web,
+					"--frontends scaffolds web frontends; leave --platform at its web default"
+				);
+				return new_project::run_frontends(
+					&path,
+					&frontends,
+					name.as_deref(),
+					sdk_path.as_deref(),
+				);
+			}
+
 			if let Some(target) = native_target {
 				anyhow::ensure!(
 					platform == leptoskit_config::Platform::Native,

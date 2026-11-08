@@ -17,5 +17,6 @@ Options:
       --db [<postgres|sqlite>]         Add a database: a crate of tables, migrations, and an example `Note` table the backend serves. Postgres unless you name SQLite
       --extension                      Add a browser extension: the `extension` platform, a popup and a background worker in `[extension]`, and the app's entry points
       --auth                           Start with sign-in wired up: email codes, a user table, and the sign-in screens in front of the app. Adds a SQLite database unless `--db` picks one
+      --frontends <FRONTENDS>...       Scaffold several frontend apps in one workspace (`landing`, `app`, `admin`). Creates `leptoskit.workspace.toml` and `apps/<name>/`
   -h, --help                           Print help
   -V, --version                        Print version

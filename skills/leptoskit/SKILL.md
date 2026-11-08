@@ -9,21 +9,21 @@ A leptoskit app is one tree of components (`View`, `Text`, `Button`, …) styled
 
 The `leptoskit` command (or `lk`) does the work. Run it from the project root. `leptoskit --help` and `leptoskit <command> --help` describe every flag.
 
-| Task                        | Command                                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------ |
-| Start a project             | `leptoskit new my_app` (`--db postgres` / `sqlite`, `--extension`, `--auth`)               |
-| Check the machine           | `leptoskit doctor` (per-platform tools; `--all` for every platform this machine can build) |
-| Run every platform, live    | `leptoskit dev` (`--platform web`, `ios`, `extension`, …)                                  |
-| Build one platform          | `leptoskit build --platform <platform> [--release]`                                        |
-| Test a browser extension    | `leptoskit test extension`                                                                 |
-| Database migrations         | `leptoskit db migration create <name>`, `leptoskit db check`                               |
-| Release to the stores       | `leptoskit publish [stores] [--dry-run] [--submit]`                                        |
-| Update screens over the air | `leptoskit codepush release --platform ios`                                                |
+| Task                        | Command                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Start a project             | `leptoskit new my_app` (`--db postgres` / `sqlite`, `--extension`, `--auth`, `--frontends landing,app,admin`) |
+| Check the machine           | `leptoskit doctor` (per-platform tools; `--all` for every platform this machine can build)                    |
+| Run every platform, live    | `leptoskit dev` (`--platform web`, `ios`, `extension`, …)                                                     |
+| Build one platform          | `leptoskit build --platform <platform> [--release]`                                                           |
+| Test a browser extension    | `leptoskit test extension`                                                                                    |
+| Database migrations         | `leptoskit db migration create <name>`, `leptoskit db check`                                                  |
+| Release to the stores       | `leptoskit publish [stores] [--dry-run] [--submit]`                                                           |
+| Update screens over the air | `leptoskit codepush release --platform ios`                                                                   |
 
 ## Working rules
 
 - Read `leptoskit.toml` first: `[app].platforms`, `[extension]`, `[publish]`, and `[db]` decide what the commands do.
-- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). `--platform` only picks the default destination; there is no frontend-only flag. For a web-only app, set `platforms = ["web"]` (and `default_platform = "web"`) in `leptoskit.toml` after scaffolding and keep `render = "ssr"`. `leptoskit lint` then skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare just to get a green deny-warnings run. You may also drop unused host crates from `[workspace].members` to keep the tree lean. Keep `plugins = []` and Cargo `default-features = false` until you need a feature; see the small-bundles guide before turning on islands, split budgets, or extra plugins.
+- `leptoskit new` writes a full-stack app: SSR by default (`app.render = "ssr"`), a web server, and native app runners (iOS, Android, macOS, Windows, Linux, terminal). `--platform` only picks the default destination; there is no frontend-only flag. For a web-only app, set `platforms = ["web"]` (and `default_platform = "web"`) in `leptoskit.toml` after scaffolding and keep `render = "ssr"`. For separate marketing / product / admin deployments, use `leptoskit new shop --frontends landing,app,admin` (see the workspaces guide). `leptoskit lint` then skips clippy on host crates that are not in `app.platforms`, so you do not need GTK or native prepare just to get a green deny-warnings run. You may also drop unused host crates from `[workspace].members` to keep the tree lean. Keep `plugins = []` and Cargo `default-features = false` until you need a feature; see the small-bundles guide before turning on islands, split budgets, or extra plugins.
 - Default screens live under the app crate's `src/routes/` and are declared by hand in `src/routes.rs` with `leptoskit::platform_module!`. That file is yours to edit. File routes that regenerate `routes.rs` are optional: enable the `router` plugin in `leptoskit.toml`, then let `leptoskit` regenerate the module (see the file-routes guide).
 - New projects pin a `rust-toolchain.toml` so `edition = "2024"` builds even when rustup's default toolchain is older. Prefer that pin (or the matching SDK channel when using `--sdk-path`) over a stale global default.
 - Tailwind classes are checked when a screen renders: an unsupported class panics with its name. Use the ones the project already uses, or check the CSS coverage page of the docs.

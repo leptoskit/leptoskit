@@ -90,6 +90,9 @@ pub struct Checks {
 pub struct ApplicationReport {
 	/// App directory relative to the workspace manifest.
 	pub path: PathBuf,
+	/// Optional role from `leptoskit.workspace.toml` (`landing`, `product`, …).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub kind: Option<leptoskit_config::workspace::ApplicationKind>,
 	/// The app's Cargo package name.
 	pub package: String,
 	/// Enabled platform declarations; availability is not inferred here.
@@ -166,6 +169,7 @@ pub fn inspect(manifest: &Path) -> Result<Report> {
 			name,
 			ApplicationReport {
 				path: application.path,
+				kind: application.kind,
 				package: config.app.name,
 				platforms: config.app.platforms,
 				render: config.app.render,

@@ -29,6 +29,78 @@ pub struct Workspace {
 	pub applications: BTreeMap<String, Application>,
 }
 
+/// Role of an application in a multi-frontend workspace.
+///
+/// Scaffold and docs use this to choose platforms and ports. Omission keeps
+/// older workspace manifests valid; names like `applications.landing` still
+/// work without a `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ApplicationKind {
+	/// Public marketing site: web only.
+	Landing,
+	/// Signed-in product: web plus native hosts.
+	Product,
+	/// Operator console: web only.
+	Admin,
+	/// API or accounts backend without a browser UI.
+	Server,
+}
+
+impl ApplicationKind {
+	/// The kebab/lowercase spelling written in `leptoskit.workspace.toml`.
+	#[must_use]
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Landing => "landing",
+			Self::Product => "product",
+			Self::Admin => "admin",
+			Self::Server => "server",
+		}
+	}
+
+	/// Whether this role is a browser frontend (not a server-only app).
+	#[must_use]
+	pub const fn is_web_frontend(self) -> bool {
+		matches!(self, Self::Landing | Self::Product | Self::Admin)
+	}
+
+	/// Whether scaffold should include native host crates.
+	#[must_use]
+	pub const fn includes_native(self) -> bool {
+		matches!(self, Self::Product)
+	}
+
+	/// Parse a frontend list entry (`landing`, `app`/`product`, `admin`).
+	///
+	/// # Errors
+	/// Unknown names.
+	pub fn parse_frontend(name: &str) -> Result<Self, String> {
+		match name {
+			"landing" => Ok(Self::Landing),
+			"app" | "product" => Ok(Self::Product),
+			"admin" => Ok(Self::Admin),
+			other => {
+				Err(format!(
+					"unknown frontend `{other}`; use landing, app, or admin"
+				))
+			}
+		}
+	}
+
+	/// Default workspace application id for this kind.
+	#[must_use]
+	pub const fn application_id(self) -> &'static str {
+		match self {
+			Self::Landing => "landing",
+			Self::Product => "app",
+			Self::Admin => "admin",
+			Self::Server => "api",
+		}
+	}
+}
+
 /// One app directory containing its own `leptoskit.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -36,6 +108,10 @@ pub struct Workspace {
 pub struct Application {
 	/// Directory relative to the workspace manifest. Paths cannot escape it.
 	pub path: PathBuf,
+	/// Optional role hint for tooling and scaffolds (`landing`, `product`,
+	/// `admin`, `server`). Does not change runtime behaviour by itself.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<ApplicationKind>,
 	/// Applications that must become ready before this application starts.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub depends_on: Vec<String>,

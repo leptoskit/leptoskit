@@ -23,7 +23,6 @@ use leptoskit_config::NativeConfig;
 use leptoskit_config::NativeTarget;
 use leptoskit_config::Platform;
 use leptoskit_config::RenderMode;
-
 const NATIVE_PLATFORMS: [&str; 6] = ["ios", "android", "macos", "windows", "linux", "tui"];
 
 /// Rustup channel new apps pin. Keep aligned with the repository
@@ -98,6 +97,65 @@ pub fn run_with_options(
 	extension: bool,
 	auth: bool,
 ) -> Result<()> {
+	run_configured(NewAppOptions {
+		path,
+		platform,
+		name,
+		sdk,
+		database,
+		extension,
+		auth,
+		platforms: None,
+		serve_port: None,
+		quiet: false,
+	})
+}
+
+pub use frontends::run_frontends;
+
+mod frontends;
+
+/// Options for scaffolding one leptoskit application directory.
+pub(crate) struct NewAppOptions<'a> {
+	pub(crate) path: &'a str,
+	pub(crate) platform: Platform,
+	pub(crate) name: Option<&'a str>,
+	pub(crate) sdk: Option<&'a str>,
+	pub(crate) database: Option<DbDialect>,
+	pub(crate) extension: bool,
+	pub(crate) auth: bool,
+	/// When set, replaces the default platform list (then the default platform
+	/// is added if missing).
+	pub(crate) platforms: Option<Vec<Platform>>,
+	pub(crate) serve_port: Option<u16>,
+	/// Skip the success banner (multi-frontend prints one summary).
+	pub(crate) quiet: bool,
+}
+
+/// Scaffolds one application with the given options.
+///
+/// # Errors
+///
+/// Returns an error for an invalid package name, SDK checkout, conflicting
+/// file, or unsupported platform combination.
+#[expect(
+	clippy::too_many_lines,
+	reason = "one scaffold path with early platform starters reads better than split writers"
+)]
+pub(crate) fn run_configured(options: NewAppOptions<'_>) -> Result<()> {
+	let NewAppOptions {
+		path,
+		platform,
+		name,
+		sdk,
+		database,
+		extension,
+		auth,
+		platforms,
+		serve_port,
+		quiet,
+	} = options;
+
 	if platform == Platform::Harmonyos {
 		anyhow::ensure!(
 			database.is_none() && !auth,
@@ -107,6 +165,10 @@ pub fn run_with_options(
 		anyhow::ensure!(
 			!extension,
 			"the HarmonyOS starter has no web client; create a standard workspace for an extension"
+		);
+		anyhow::ensure!(
+			platforms.is_none(),
+			"HarmonyOS uses its standalone starter; leave out custom platforms"
 		);
 		return crate::native::scaffold::run_for_target(
 			path,
@@ -126,6 +188,10 @@ pub fn run_with_options(
 			!extension,
 			"the Wear OS and watchOS starters have no web client; create a standard workspace for \
 			 an extension"
+		);
+		anyhow::ensure!(
+			platforms.is_none(),
+			"Wear OS and watchOS use their standalone starters; leave out custom platforms"
 		);
 		let target = if platform == Platform::Wearos {
 			NativeTarget::Wearos
@@ -154,6 +220,7 @@ pub fn run_with_options(
 		name: name.to_owned(),
 		default_platform: platform,
 		render: RenderMode::Ssr,
+		platforms: platforms.unwrap_or_else(|| Platform::APPLICATION.to_vec()),
 		..AppConfig::default()
 	};
 
@@ -174,6 +241,7 @@ pub fn run_with_options(
 		},
 		serve: leptoskit_config::ServeConfig {
 			probes: true,
+			port: serve_port.unwrap_or(3000),
 			..leptoskit_config::ServeConfig::default()
 		},
 		// Starter screens use builders; match lint so a fresh project is clean
@@ -218,54 +286,72 @@ pub fn run_with_options(
 		write_new_bytes(&dir.join(relative), contents)?;
 	}
 
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt as _;
-		std::fs::set_permissions(
-			dir.join("android/gradlew"),
-			std::fs::Permissions::from_mode(0o755),
-		)?;
+	if wants_native_hosts(&config) {
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt as _;
+			std::fs::set_permissions(
+				dir.join("android/gradlew"),
+				std::fs::Permissions::from_mode(0o755),
+			)?;
+		}
 	}
 
-	let name = crate::cli::invoked_name();
-	crate::ui::success(format_args!(
-		"created {dir} (all platforms; default: {platform})"
-	));
-	crate::ui::hint("next", format_args!("cd {dir} && {name} build"));
+	if !quiet {
+		let cli = crate::cli::invoked_name();
+		crate::ui::success(format_args!(
+			"created {dir} (platforms: {}; default: {platform})",
+			config
+				.app
+				.platforms
+				.iter()
+				.map(ToString::to_string)
+				.collect::<Vec<_>>()
+				.join(", ")
+		));
+		crate::ui::hint("next", format_args!("cd {dir} && {cli} build"));
 
-	if database.is_some() {
-		crate::ui::hint("then", format_args!("{name} db migration create init"));
-	}
+		if database.is_some() {
+			crate::ui::hint("then", format_args!("{cli} db migration create init"));
+		}
 
-	crate::ui::hint(
-		"then",
-		format_args!(
-			"{} doctor checks every tool your platforms build with",
-			crate::cli::invoked_name()
-		),
-	);
-
-	if extension {
-		println!(
-			"build the extension with: {} build --platform extension",
-			crate::cli::invoked_name()
+		crate::ui::hint(
+			"then",
+			format_args!("{cli} doctor checks every tool your platforms build with"),
 		);
-	}
 
-	println!(
-		"working with a coding agent? give it leptoskit's skill: {} skill install",
-		crate::cli::invoked_name()
-	);
+		if extension {
+			println!("build the extension with: {cli} build --platform extension");
+		}
 
-	if auth {
-		println!(
-			"before starting the server, store AUTH_ENCRYPTION_KEYS with Monosecret: monosecret \
-			 set AUTH_ENCRYPTION_KEYS --provider keyring \"$(date +%Y-%m):$(openssl rand 32 | \
-			 basenc --base64url | tr -d =)\""
-		);
+		println!("working with a coding agent? give it leptoskit's skill: {cli} skill install");
+
+		if auth {
+			println!(
+				"before starting the server, store AUTH_ENCRYPTION_KEYS with Monosecret: \
+				 monosecret set AUTH_ENCRYPTION_KEYS --provider keyring \"$(date \
+				 +%Y-%m):$(openssl rand 32 | basenc --base64url | tr -d =)\""
+			);
+		}
 	}
 
 	Ok(())
+}
+
+/// Whether the scaffold should write ios/android/… host crates.
+fn wants_native_hosts(config: &LeptoskitConfig) -> bool {
+	config.app.platforms.iter().any(|platform| {
+		matches!(
+			platform,
+			Platform::Ios
+				| Platform::Android
+				| Platform::Macos
+				| Platform::Windows
+				| Platform::Linux
+				| Platform::Tui
+				| Platform::Native
+		)
+	})
 }
 
 /// The runtime plugins the sign-in client needs in a native app: `http` to
@@ -319,7 +405,7 @@ fn http_plugin_options() -> toml::Table {
 }
 
 /// Rejects existing files and redirected parents before writing the workspace.
-fn preflight_file(root: &Utf8Path, path: &Utf8Path) -> Result<()> {
+pub(crate) fn preflight_file(root: &Utf8Path, path: &Utf8Path) -> Result<()> {
 	for entry in path.ancestors().take_while(|entry| *entry != root) {
 		let metadata = match std::fs::symlink_metadata(entry) {
 			Ok(metadata) => metadata,
@@ -357,7 +443,7 @@ pub(crate) fn write_new(path: &Utf8Path, contents: &str) -> Result<()> {
 }
 
 /// Creates a template file, including bundled binary assets.
-fn write_new_bytes(path: &Utf8Path, contents: &[u8]) -> Result<()> {
+pub(crate) fn write_new_bytes(path: &Utf8Path, contents: &[u8]) -> Result<()> {
 	if let Some(parent) = path.parent() {
 		std::fs::create_dir_all(parent).with_context(|| format!("could not create {parent}"))?;
 	}
@@ -453,7 +539,13 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		),
 		(
 			"Cargo.toml".into(),
-			server_manifest(name, sdk, config.db.as_ref(), config.auth.is_some())?,
+			server_manifest(
+				name,
+				sdk,
+				config.db.as_ref(),
+				config.auth.is_some(),
+				wants_native_hosts(config),
+			)?,
 		),
 		(
 			"src/main.rs".into(),
@@ -541,15 +633,19 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		extension_files(&mut files, name, config.db.is_some())?;
 	}
 
-	files.extend(platform_files(config, sdk)?);
+	if wants_native_hosts(config) {
+		files.extend(platform_files(config, sdk)?);
+	}
 	let mut files: Vec<_> = files
 		.into_iter()
 		.map(|(path, source)| (path, source.into_bytes()))
 		.collect();
-	files.push((
-		"android/gradle/wrapper/gradle-wrapper.jar".into(),
-		include_bytes!("native/templates/gradle/gradle-wrapper.jar").to_vec(),
-	));
+	if wants_native_hosts(config) {
+		files.push((
+			"android/gradle/wrapper/gradle-wrapper.jar".into(),
+			include_bytes!("native/templates/gradle/gradle-wrapper.jar").to_vec(),
+		));
+	}
 	Ok(files)
 }
 
@@ -989,6 +1085,7 @@ fn server_manifest(
 	sdk: Option<&Utf8Path>,
 	db: Option<&DbConfig>,
 	auth: bool,
+	native_hosts: bool,
 ) -> Result<String> {
 	// `rpc-ssr` exports the published API: `leptoskit::rpc::spec`.
 	let mut features = vec!["server", "rpc-ssr"];
@@ -1014,6 +1111,11 @@ fn server_manifest(
 		}
 		None => (String::new(), String::new()),
 	};
+	let native_members = if native_hosts {
+		", \"ios\", \"android\", \"macos\", \"windows\", \"linux\", \"tui\""
+	} else {
+		""
+	};
 
 	Ok(format!(
 		r#"[package]
@@ -1024,7 +1126,7 @@ publish = false
 
 [workspace]
 resolver = "2"
-members = ["{name}_app", "{name}_backend", "{name}_shared"{database_member}, "ios", "android", "macos", "windows", "linux", "tui"]
+members = ["{name}_app", "{name}_backend", "{name}_shared"{database_member}{native_members}]
 default-members = ["."]
 
 [features]

@@ -1,8 +1,60 @@
 # Applications in one workspace
 
-Keep a website and an accounts API in the same repository while giving each its own application configuration. A `leptoskit.workspace.toml` file describes those boundaries and checks how the apps depend on one another before a build starts.
+Keep several applications in the same repository while giving each its own configuration, build, and deploy. A `leptoskit.workspace.toml` file describes those boundaries and checks how the apps depend on one another before a build starts.
+
+Use this when a **marketing site**, the **signed-in product**, and an **admin console** should ship as separate frontends (different domains, bundles, and release records), or when a website and an accounts API share a repo. Prefer separate frontends over stuffing landing and product into one route tree; same-deploy route groups stay an escape hatch for a thin splash on the product origin.
 
 Inspection runs on the development machine and reads configuration for web, server, and native apps. The release commands below run on a managed deployment operator's machine and deploy already built server or supported website images. They do not build native hosts or publish code-push bundles.
+
+## Multiple frontends
+
+Scaffold landing, product, and admin in one go:
+
+```bash
+leptoskit new shop --frontends landing,app,admin
+```
+
+That writes:
+
+```text
+shop/
+├── leptoskit.workspace.toml
+├── README.md
+└── apps/
+    ├── landing/    # web only — marketing
+    ├── app/        # web + native hosts — product
+    └── admin/      # web only — admin console
+```
+
+Each `apps/<name>` is a full leptoskit app with its own `leptoskit.toml`, ports (`3000`, `3001`, `3002`), routes, and Cargo workspace. Landing and admin omit native host crates. Build and develop from inside one app:
+
+```bash
+cd shop/apps/landing
+leptoskit build
+leptoskit dev
+```
+
+The workspace file names each application's role with optional `kind`:
+
+```toml
+format_version = 1
+
+[applications.landing]
+path = "apps/landing"
+kind = "landing"
+
+[applications.app]
+path = "apps/app"
+kind = "product"
+
+[applications.admin]
+path = "apps/admin"
+kind = "admin"
+```
+
+`kind` is a hint for tooling and docs (`landing`, `product`, `admin`, `server`). It does not change runtime by itself; platforms still come from each app's `leptoskit.toml`. Cross-frontend links are ordinary URLs between deployments. Shared sign-in across frontends is not part of this scaffold.
+
+## Website and API
 
 ```toml
 format_version = 1

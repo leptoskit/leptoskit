@@ -10,6 +10,14 @@ leptoskit dev
 
 `leptoskit dev` builds the app, starts a server at `http://127.0.0.1:3000`, and rebuilds when you save. Open that address and you get a counter with an **Add one** button. The server renders the page as HTML first, and the browser then takes it over, so the button works. The same screen is what every native app shows: `dev` also opens it in the iOS Simulator, on an Android emulator, and as a desktop app, on every platform this machine can run, and updates them all when you save. [Building and serving](04-building.md#leptoskit-dev) lists what runs where.
 
+For a **marketing site**, **product app**, and **admin console** as separate deployments in one repository:
+
+```bash
+leptoskit new shop --frontends landing,app,admin
+```
+
+That writes `leptoskit.workspace.toml` and `apps/{landing,app,admin}/`. See [Applications in one workspace](33-workspaces.md#multiple-frontends).
+
 ## What's in the project
 
 ```text

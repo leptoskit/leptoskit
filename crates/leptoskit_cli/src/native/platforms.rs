@@ -21,6 +21,10 @@ pub fn builtin() -> [&'static dyn PlatformExtension; 2] {
 
 /// Looks up a builtin extension by destination id.
 #[must_use]
+#[cfg_attr(
+	not(test),
+	expect(dead_code, reason = "public registry lookup; tests cover it")
+)]
 pub fn find(id: &str) -> Option<&'static dyn PlatformExtension> {
 	find_in(&builtin(), id)
 }
