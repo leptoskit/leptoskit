@@ -47,7 +47,8 @@ pub struct Snapshot {
 	pub locales: Vec<Locale>,
 	/// Platform calendar identifier, normalized to `gregory` for Gregorian.
 	pub calendar: Option<String>,
-	/// Current timezone identifier from the platform's timezone database.
+	/// Current timezone identifier from the platform's timezone database, or
+	/// `None` when the platform has no zone configured.
 	pub time_zone: Option<String>,
 	/// Preferred 24-hour clock, if exposed.
 	pub hour_24: Option<bool>,
@@ -196,9 +197,11 @@ pub mod desktop {
 				}
 			})
 			.collect();
+		// Containers and minimal Linux systems often have no zone configured:
+		// the zone is unknown there, and the locales still answer.
 		let result = Snapshot {
 			locales,
-			time_zone: Some(iana_time_zone::get_timezone().map_err(|_| Error::Native)?),
+			time_zone: iana_time_zone::get_timezone().ok(),
 			..Snapshot::default()
 		};
 		Ok(result)
@@ -406,22 +409,14 @@ mod tests {
 			host.invoke(MethodId(9), Bytes::new()),
 			Err(Error::Unavailable)
 		);
-		// A host without a configured zone (some minimal CI images) reports a
-		// native failure rather than an invented zone; every other host must
-		// return a well-formed snapshot.
-		match host.invoke(SNAPSHOT, Bytes::new()) {
-			Ok(reply) => {
-				let result = Snapshot::decode(&reply).unwrap();
-				assert!(result.time_zone.is_some_and(|zone| !zone.is_empty()));
-				assert_eq!(result.hour_24, None);
-				for locale in &result.locales {
-					assert_ne!(locale.tag, "");
-				}
-			}
-			Err(error) => {
-				assert_eq!(error, Error::Native);
-				assert!(iana_time_zone::get_timezone().is_err());
-			}
+		// A host without a configured zone (some minimal CI images) reports
+		// no zone rather than an invented one, and still answers its locales.
+		let reply = host.invoke(SNAPSHOT, Bytes::new()).unwrap();
+		let result = Snapshot::decode(&reply).unwrap();
+		assert!(result.time_zone.is_none_or(|zone| !zone.is_empty()));
+		assert_eq!(result.hour_24, None);
+		for locale in &result.locales {
+			assert_ne!(locale.tag, "");
 		}
 	}
 }

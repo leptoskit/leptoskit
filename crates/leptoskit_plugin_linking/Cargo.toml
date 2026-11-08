@@ -17,6 +17,11 @@ apple-type = "LinkingPlugin"
 android-type = "dev.leptoskit.plugins.linking.LinkingPlugin"
 android-context = true
 
+# The generated Linux app opens links on a worker: the opener can block.
+[package.metadata.leptoskit.runtime.linux]
+rust-type = "desktop::Linking"
+rust-worker = true
+
 [features]
 guest = ["leptoskit_bridge/guest"]
 

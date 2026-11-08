@@ -598,7 +598,7 @@ fn add_routes(
 }
 
 /// Gives the native apps the plugins the sign-in client needs: each host
-/// that registers plugins (iOS, Android, and macOS) depends on them, and
+/// that registers plugins (iOS, Android, macOS, and Linux) depends on them, and
 /// `leptoskit.toml` grants them. Returns whether the app has such a host.
 fn native_plugins(root: &Path, report: &mut Report) -> Result<bool> {
 	let hosts: Vec<PathBuf> = crate::new_project::PLUGIN_PLATFORMS
