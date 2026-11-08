@@ -418,12 +418,47 @@ enum MacWidgetStyle {
 
         guard let source else { image.image = nil; return }
 
+        if let asset = try assetURL(source) {
+            image.image = try NSImage(contentsOf: asset) ?? missingAsset(source, at: asset)
+            return
+        }
+
         guard let url = URL(string: source), url.isFileURL,
               let loaded = NSImage(contentsOf: url) else {
             throw NativeAppError(message: "Image requires a readable file URL: \(source)")
         }
 
         image.image = loaded
+    }
+
+    /// `asset://<path>`: a file in the app's `assets/` folder, which `leptoskit build` copies into
+    /// `Contents/Resources/assets`. macOS 11 and later decode PNG, JPEG, and WebP.
+    private static func assetURL(_ source: String) throws -> URL? {
+        let scheme = "asset://"
+        guard source.hasPrefix(scheme) else { return nil }
+        let path = String(source.dropFirst(scheme.count))
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+
+        guard !path.isEmpty, !path.contains("\\"), !path.contains("\0"),
+              segments.allSatisfy({ $0 != "" && $0 != "." && $0 != ".." }) else {
+            throw NativeAppError(message: "\(source) is not an asset path inside the app's assets folder")
+        }
+        guard let resources = Bundle.main.resourceURL else {
+            throw NativeAppError(message: "The app bundle has no resources for \(source)")
+        }
+
+        return resources.appendingPathComponent("assets").appendingPathComponent(path)
+    }
+
+    /// A debug build stops on a missing asset; a release build logs it and shows nothing.
+    private static func missingAsset(_ source: String, at url: URL) throws -> NSImage? {
+        let message = "Image \(source) is not in the app bundle, or is not a PNG, JPEG, or WebP (looked at \(url.path))"
+        #if DEBUG
+        throw NativeAppError(message: message)
+        #else
+        NSLog("leptoskit: %@", message)
+        return nil
+        #endif
     }
 
     private static func font(_ props: WidgetProps) -> NSFont {

@@ -1435,6 +1435,56 @@ fn theme_rejects_bad_colors_and_lengths() {
 }
 
 #[test]
+fn launch_screens_take_opaque_colours_and_a_sized_image() {
+	let config = load(
+		"launch_screen",
+		"[app.launch_screen]\nbackground = \"#0b0c10\"\nbackground_dark = \"#000\"\nimage = \
+		 \"assets/mark.svg\"\n",
+	)
+	.expect("launch screen");
+	let launch = config.app.launch_screen.expect("launch screen table");
+	assert_eq!(launch.background, "#0b0c10");
+	assert_eq!(launch.image, Some(PathBuf::from("assets/mark.svg")));
+	assert_eq!(
+		launch.image_size,
+		leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE
+	);
+	assert_eq!(leptoskit_config::launch_colour("#000"), Some([0, 0, 0]));
+	assert_eq!(
+		leptoskit_config::launch_colour("#0B0c10"),
+		Some([0x0b, 0x0c, 0x10])
+	);
+
+	for (name, table, problem) in [
+		("launch_alpha", "background = \"#0b0c1080\"", "opaque hex"),
+		(
+			"launch_dark",
+			"background = \"#fff\"\nbackground_dark = \"black\"",
+			"background_dark",
+		),
+		(
+			"launch_size",
+			"background = \"#fff\"\nimage_size = 4",
+			"between 16",
+		),
+	] {
+		let error = load(name, &format!("[app.launch_screen]\n{table}\n")).expect_err(name);
+		assert!(
+			matches!(error, ConfigError::InvalidLaunchScreen(_)),
+			"{error}"
+		);
+		assert!(error.to_string().contains(problem), "{error}");
+	}
+
+	let error = load(
+		"launch_unknown",
+		"[app.launch_screen]\nbackground = \"#fff\"\ncolour = \"#000\"\n",
+	)
+	.expect_err("unknown key");
+	assert!(matches!(error, ConfigError::Parse { .. }), "{error}");
+}
+
+#[test]
 fn backend_selection_is_independent_of_client_rendering() {
 	let mut config = LeptoskitConfig::default();
 	config.app.render = RenderMode::Csr;

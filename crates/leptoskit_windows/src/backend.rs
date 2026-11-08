@@ -1978,6 +1978,14 @@ pub(crate) fn window_text(hwnd: HWND) -> String {
 }
 
 fn load_image(source: &str) -> Result<image::RgbaImage, String> {
+	// `asset://` names a file in the `assets` folder beside the executable,
+	// which `leptoskit build` fills from the app's own.
+	if let Some(loaded) = leptoskit_native::asset::load_bundled(source, |path| {
+		image::open(path).ok().map(image::DynamicImage::into_rgba8)
+	}) {
+		return loaded.ok_or_else(|| format!("{source} is not among the app's assets"));
+	}
+
 	let path = if source.starts_with("file:") {
 		let mut path = vec![0_u16; 32_768];
 		let mut length = path.len() as u32;

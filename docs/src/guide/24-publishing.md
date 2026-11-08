@@ -235,6 +235,28 @@ Projects made before `app.icon` add one line to `android/app/build.gradle.kts`, 
 res.directories += "../../.leptoskit/android/res"
 ```
 
+## A launch screen
+
+Between the tap on the icon and the app's first screen, iOS and Android show a launch screen. Without one, it's blank: a white flash before a dark app, or the system's default. Give `app.launch_screen` a background colour and, if you like, an image to center on it:
+
+```toml
+[app.launch_screen]
+background = "#0b0c10"
+background_dark = "#000000" # optional: while the system is dark
+image = "assets/branding/mark.svg" # optional: a square PNG or SVG, 1024×1024 or larger
+image_size = 160 # optional: the image's side, in points and dp
+```
+
+| Platform          | What the build makes                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS               | A `LaunchBackground` colour and a `LaunchImage` at 1×, 2×, and 3× in the app's asset catalog, named by `UILaunchScreen` in the generated `Info.plist`      |
+| Android 12 and up | A launch theme for the launcher activity with the splash screen's background and icon; Android draws the image inside a circle and sizes it itself         |
+| Android 8 to 11   | The same theme's window background: the colour with the image centered at `image_size` dp, replaced by your theme's background once the first screen draws |
+
+The image is read like `app.icon`: an SVG is drawn at 1024 pixels, so turn its text into shapes. Android 12 and later crop it to a circle two thirds the size of its canvas, so keep what matters in the middle. Without `image`, iOS shows the colour alone and Android 12 shows your app icon on it. macOS, Windows, Linux, and the browser have no launch screen, and HarmonyOS's is not generated yet.
+
+The launch theme extends your application's own theme, from `android:theme` on `<application>` in `android/app/src/main/AndroidManifest.xml`, and only the launcher activity uses it. If that activity sets a theme of its own, the build warns and leaves it alone. Projects made before `app.icon` need the `res.directories` line above for the launch screen too.
+
 ## Screenshots from the app
 
 Every store wants screenshots at its own sizes, and they go stale with every design change. `leptoskit publish screenshots` captures them from the app, into `store/screenshots/<size>/`, replacing the ones it made before. Name the sizes and the screens in `store/screenshots/screenshots.toml`:

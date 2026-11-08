@@ -899,10 +899,12 @@ class WidgetHost(
                     node.imageSource = source
                     control.setImageDrawable(null)
 
-                    if (source != null) {
+                    if (source != null && source.startsWith(ASSET_SCHEME)) {
+                        control.setImageBitmap(assetBitmap(source))
+                    } else if (source != null) {
                         val uri = Uri.parse(source)
                         require(uri.scheme == null || uri.scheme == "file" || uri.scheme == "android.resource") {
-                            "Images require a local file or android.resource URI"
+                            "Images require an asset://, local file, or android.resource URI"
                         }
 
                         control.setImageURI(if (uri.scheme == null) Uri.fromFile(java.io.File(source)) else uri)
@@ -916,6 +918,33 @@ class WidgetHost(
         }
 
         outer.invalidate()
+    }
+
+    /**
+     * `asset://<path>`: a file in the app's `assets/` folder, packed under the APK's `assets/`.
+     * A debuggable build stops on a missing asset; a release build logs it and shows nothing.
+     */
+    private fun assetBitmap(source: String): Bitmap? {
+        val relative = source.removePrefix(ASSET_SCHEME)
+        require(
+            relative.isNotEmpty() && '\\' !in relative && '\u0000' !in relative &&
+                relative.split('/').none { it.isEmpty() || it == "." || it == ".." },
+        ) { "$source is not an asset path inside the app's assets folder" }
+        val path = "assets/$relative"
+        val bitmap =
+            try {
+                context.assets.open(path).use(android.graphics.BitmapFactory::decodeStream)
+            } catch (_: java.io.IOException) {
+                null
+            }
+
+        if (bitmap == null) {
+            val message = "Image $source is not in the app, or is not a PNG, JPEG, or WebP (looked for $path in the APK's assets)"
+            check(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) { message }
+            android.util.Log.e("leptoskit", message)
+        }
+
+        return bitmap
     }
 
     private fun enabled(node: Node): Boolean {
@@ -1586,6 +1615,7 @@ class WidgetHost(
 
     companion object {
         const val SLIDER_STEPS = 1_000_000
+        private const val ASSET_SCHEME = "asset://"
         private val RADIO_KEYS =
             setOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)
 

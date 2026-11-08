@@ -31,6 +31,7 @@
 )]
 
 pub mod aria;
+pub mod asset;
 pub mod backend;
 pub mod components;
 pub mod controls;

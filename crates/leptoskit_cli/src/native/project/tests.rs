@@ -424,6 +424,47 @@ fn release_android_builds_name_a_gradle_script_without_the_generated_keep_rules(
 }
 
 #[test]
+fn the_android_launcher_activity_starts_in_the_launch_theme() {
+	let directory = tempfile::tempdir().unwrap();
+	let root = directory.path().canonicalize().unwrap();
+	let registry = host_registry(&root);
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	config.app.launch_screen = Some(leptoskit_config::LaunchScreen {
+		background: "#0b0c10".into(),
+		background_dark: None,
+		image: None,
+		image_size: leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE,
+	});
+	let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
+	fixture(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		&include_str!("../templates/AndroidManifest.xml")
+			.replace("__NAME__", "demo")
+			.replace("__PACKAGE__", "com.example.demo"),
+	);
+
+	generate(&root, &config, &registry, Target::Android, false).unwrap();
+	assert!(
+		read(".leptoskit/android/AndroidManifest.xml")
+			.contains("android:theme=\"@style/LeptosKitLaunchTheme\"")
+	);
+	// The launch theme extends the application's own theme.
+	assert!(
+		read(".leptoskit/android/res/values/leptoskit_launch.xml")
+			.contains("parent=\"@style/LeptosKitTheme\"")
+	);
+
+	config.app.launch_screen = None;
+	generate(&root, &config, &registry, Target::Android, false).unwrap();
+	assert!(!read(".leptoskit/android/AndroidManifest.xml").contains("LeptosKitLaunchTheme"));
+	assert!(
+		!root
+			.join(".leptoskit/android/res/values/leptoskit_launch.xml")
+			.exists()
+	);
+}
+
+#[test]
 fn android_rejects_a_bridge_without_keep_rules() {
 	let directory = tempfile::tempdir().unwrap();
 	let root = directory.path().canonicalize().unwrap();

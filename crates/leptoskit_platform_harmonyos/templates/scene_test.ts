@@ -1,5 +1,12 @@
 import { deepStrictEqual, equal, throws } from "node:assert/strict";
-import { borderEdges, color, isItalic, Scene, textContent } from "./scene.ts";
+import {
+	assetRawfile,
+	borderEdges,
+	color,
+	isItalic,
+	Scene,
+	textContent,
+} from "./scene.ts";
 
 Deno.test("native mutations preserve layout, child order, and controlled text", () => {
 	const scene = new Scene();
@@ -105,6 +112,31 @@ Deno.test("unsupported widgets, protocol versions, and remote images fail visibl
 				},
 			],
 		}), /file URL/);
+});
+
+Deno.test("asset sources name the bundled rawfile and never leave its folder", () => {
+	equal(assetRawfile("asset://nfts/ada.webp"), "assets/nfts/ada.webp");
+	equal(assetRawfile("file:///data/ada.webp"), undefined);
+	for (
+		const source of [
+			"asset://",
+			"asset://../x.png",
+			"asset://a//b.png",
+			"asset://a\\b.png",
+		]
+	) {
+		throws(() => assetRawfile(source), /not an asset path/);
+	}
+	const scene = new Scene().apply({
+		version: 1,
+		root: 0,
+		mutations: [
+			{
+				Create: { id: 0, kind: "image", props: { source: "asset://ada.png" } },
+			},
+		],
+	});
+	equal(scene?.props.source, "asset://ada.png");
 });
 
 Deno.test("packed RGBA becomes unsigned ArkUI ARGB, including transparent colors", () => {

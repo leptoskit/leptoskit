@@ -300,7 +300,10 @@ mod android {
 	}
 
 	/// Reads a whole APK asset; the engine streams from these bytes.
+	/// `leptoskit build` packs the app's `assets/` folder under the APK's
+	/// own `assets/`, so `music/hunt.ogg` is `assets/music/hunt.ogg` there.
 	pub fn asset(context: &AppContext, path: &str) -> Result<Encoded, Error> {
+		let path = format!("assets/{path}");
 		let (vm, platform) = handles(context)?;
 		let mut env = vm
 			.attach_current_thread_permanently()
@@ -308,7 +311,7 @@ mod android {
 		let object = context_object(platform)?;
 		let bytes = env
 			.with_local_frame(16, |env| -> jni::errors::Result<Result<Vec<u8>, Error>> {
-				Ok(read_asset(env, &object, path))
+				Ok(read_asset(env, &object, &path))
 			})
 			.map_err(|_| Error::Native)??;
 		Ok(Encoded::Bytes(bytes.into()))

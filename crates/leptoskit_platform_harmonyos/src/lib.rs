@@ -207,7 +207,8 @@ impl PlatformExtension for HarmonyOs {
 				".gitignore",
 				"/.hvigor\n/oh_modules\n/entry/oh_modules\n/entry/build\n/entry/.test\n/entry/.\
 				 cxx\n/entry/build-profile.json5\n/entry/src/main/ets/leptoskit\n/local.\
-				 properties\n/entry/src/main/resources/rawfile/app.wasm\n",
+				 properties\n/entry/src/main/resources/rawfile/app.wasm\n/entry/src/main/\
+				 resources/rawfile/assets\n",
 			),
 		]
 	}

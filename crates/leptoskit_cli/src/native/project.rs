@@ -142,14 +142,14 @@ fn android_keep_rules_warning(root: &Path) -> Option<String> {
 
 /// Apps scaffolded before `app.icon` don't add the generated resources to
 /// their Gradle script, so the launcher icons wouldn't reach the app.
-fn android_icon_warning(root: &Path) -> Option<String> {
+fn android_res_warning(root: &Path) -> Option<String> {
 	let path = super::host_dir(root, Target::Android).join("app/build.gradle.kts");
 	let script = std::fs::read_to_string(&path).ok()?;
 	(!script.contains(".leptoskit/android/res")).then(|| {
 		format!(
 			"warning: {} doesn't add .leptoskit/android/res to the main source set's res \
-			 directories, so app.icon's launcher icons won't reach the app. Add it next to the \
-			 assets line, as `leptoskit new` writes it.",
+			 directories, so app.icon's launcher icons and app.launch_screen won't reach the app. \
+			 Add it next to the assets line, as `leptoskit new` writes it.",
 			path.display()
 		)
 	})
@@ -277,12 +277,42 @@ fn android_host(
 		std::fs::remove_dir_all(&res)?;
 	}
 
-	if crate::icons::write(root, config, crate::icons::Platform::Android, &res)? {
-		manifest = super::manifest::with_icon(&manifest)?;
+	let icon = crate::icons::write(root, config, crate::icons::Platform::Android, &res)?;
 
-		if let Some(warning) = android_icon_warning(root) {
-			crate::ui::warning(warning);
+	if icon {
+		manifest = super::manifest::with_icon(&manifest)?;
+	}
+
+	// `app.launch_screen` becomes a theme for the launcher activity, which
+	// extends the application's own.
+	let launch = crate::launch::Launch::load(root, config)?;
+
+	if let Some(launch) = &launch {
+		let parent = super::manifest::application_theme(&manifest)?
+			.unwrap_or_else(|| "@android:style/Theme.Material.Light.NoActionBar".to_owned());
+		crate::launch::write_files(&res, launch.android_files(&parent)?)?;
+		let (themed, set) =
+			super::manifest::with_launch_theme(&manifest, crate::launch::ANDROID_THEME)?;
+
+		if !set {
+			crate::ui::warning(format!(
+				"warning: the launcher activity in {} has a theme of its own, so 				 \
+				 app.launch_screen isn't shown. Remove its android:theme, or extend @style/{} 				 \
+				 from it.",
+				super::host_dir(root, Target::Android)
+					.join("app/src/main/AndroidManifest.xml")
+					.display(),
+				crate::launch::ANDROID_THEME
+			));
 		}
+
+		manifest = themed;
+	}
+
+	if (icon || launch.is_some())
+		&& let Some(warning) = android_res_warning(root)
+	{
+		crate::ui::warning(warning);
 	}
 
 	manifest = android_file_providers(registry, &res, &manifest)?;

@@ -363,6 +363,12 @@ pub fn run(command: NativeCommand) -> Result<()> {
 
 	if matches!(target, Target::Linux | Target::Windows | Target::Tui) {
 		write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
+
+		// The terminal shows no pictures, so it ships none.
+		if target != Target::Tui {
+			stage_assets(&root, &assets_destination(&root, target))?;
+		}
+
 		rust_desktop::build(&root, &config, target, release, &registry.host_features)?;
 
 		return Ok(());
@@ -387,10 +393,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
 	write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
-
-	if registry.scene3d {
-		stage_scene_assets(&root, target)?;
-	}
+	stage_assets(&root, &assets_destination(&root, target))?;
 
 	if build {
 		match &signing {
@@ -971,46 +974,116 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 	environment
 }
 
-/// Writes what the target's shell bundles from the built guest. Desktop gets
-/// the raw Wasm. Mobile gets the guest inside its store container, which the
-/// update store verifies, and the update configuration, but never the Wasm a
-/// second time.
-/// Copies the app's `assets/` folder to where the native app bundles it
-/// for 3D scenes: the generated `mobile/assets`, which Android packs into
-/// the APK's assets, iOS references as the bundle's `assets` folder, and
-/// the macOS app copies into its resources.
-fn stage_scene_assets(root: &Path, target: Target) -> Result<()> {
-	let destination = generated_dir(root, target).join("mobile/assets");
+/// Copies the app's `assets/` folder to `destination`, where the native app
+/// bundles it, so `asset://` images, 3D models, and sounds read the same
+/// files on every platform. The copy follows the folder: a file whose size
+/// and modification time match is left alone, a changed one is copied
+/// again, and one the app removed is removed from the copy. Hidden files,
+/// such as `.DS_Store`, and symbolic links stay behind.
+///
+/// Assets ship with the store build. A code push update carries the guest
+/// alone, so a release that shows a new asset needs a new store build.
+fn stage_assets(root: &Path, destination: &Path) -> Result<()> {
+	sync_folder(&root.join(ASSETS), destination)
+}
 
-	match std::fs::remove_dir_all(&destination) {
-		Ok(()) => {}
+/// Makes `destination` a copy of `source`'s ordinary, visible files, as
+/// [`stage_assets`] describes; a missing `source` leaves it empty.
+pub(crate) fn sync_folder(source: &Path, destination: &Path) -> Result<()> {
+	let wanted: Vec<(PathBuf, std::fs::Metadata)> = if source.is_dir() {
+		walkdir::WalkDir::new(source)
+			.follow_links(false)
+			.into_iter()
+			.filter_entry(|entry| entry.depth() == 0 || !hidden(entry.file_name()))
+			.filter_map(|entry| {
+				entry
+					.map_err(anyhow::Error::from)
+					.and_then(|entry| {
+						if entry.file_type().is_file() {
+							let relative = entry.path().strip_prefix(source)?.to_path_buf();
+							Ok(Some((relative, entry.metadata()?)))
+						} else {
+							Ok(None)
+						}
+					})
+					.transpose()
+			})
+			.collect::<Result<_>>()?
+	} else {
+		Vec::new()
+	};
 
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-		Err(error) => return Err(error).context("clear the staged 3D assets"),
-	}
+	std::fs::create_dir_all(destination)
+		.with_context(|| format!("create {}", destination.display()))?;
+	let keep: std::collections::BTreeSet<&Path> =
+		wanted.iter().map(|(path, _)| path.as_path()).collect();
 
-	std::fs::create_dir_all(&destination)?;
-	let source = root.join("assets");
-
-	if !source.is_dir() {
-		return Ok(());
-	}
-
-	for entry in walkdir::WalkDir::new(&source).follow_links(false) {
+	// What the app no longer has leaves the copy, deepest first, so emptied
+	// folders go too.
+	for entry in walkdir::WalkDir::new(destination)
+		.min_depth(1)
+		.contents_first(true)
+	{
 		let entry = entry?;
-
-		let relative = entry.path().strip_prefix(&source)?;
+		let relative = entry.path().strip_prefix(destination)?;
 
 		if entry.file_type().is_dir() {
-			std::fs::create_dir_all(destination.join(relative))?;
-		} else if entry.file_type().is_file() {
-			project::copy(entry.path(), &destination.join(relative))?;
+			if std::fs::read_dir(entry.path())?.next().is_none() {
+				std::fs::remove_dir(entry.path())?;
+			}
+		} else if !keep.contains(relative) {
+			std::fs::remove_file(entry.path())
+				.with_context(|| format!("remove {}", entry.path().display()))?;
+		}
+	}
+
+	for (relative, metadata) in wanted {
+		let target = destination.join(&relative);
+		let current = std::fs::metadata(&target).ok();
+		let fresh = current.is_some_and(|current| {
+			current.len() == metadata.len()
+				&& matches!(
+					(metadata.modified(), current.modified()),
+					(Ok(source), Ok(copy)) if source <= copy
+				)
+		});
+
+		if !fresh {
+			project::copy(&source.join(&relative), &target)?;
 		}
 	}
 
 	Ok(())
 }
 
+/// The folder in the app's project, the web build, and each native bundle
+/// that holds the files the app ships: `leptoskit_native::asset::FOLDER`.
+pub(crate) const ASSETS: &str = "assets";
+
+fn hidden(name: &std::ffi::OsStr) -> bool {
+	name.to_str().is_some_and(|name| name.starts_with('.'))
+}
+
+/// Where `target`'s app bundles the staged `assets/` folder: the generated
+/// `mobile/assets`, which Android packs under the APK's `assets/`, iOS
+/// references as the bundle's `assets` folder, and the macOS app copies
+/// into `Contents/Resources/assets`; the folder beside the Linux and Windows
+/// executable; and HarmonyOS's `rawfile/assets`.
+fn assets_destination(root: &Path, target: Target) -> PathBuf {
+	match target {
+		Target::Linux | Target::Windows => generated_dir(root, target).join("app").join(ASSETS),
+		Target::Harmonyos | Target::HarmonyosX86_64 => {
+			root.join("hosts/harmonyos/entry/src/main/resources/rawfile")
+				.join(ASSETS)
+		}
+		_ => generated_dir(root, target).join("mobile").join(ASSETS),
+	}
+}
+
+/// Writes what the target's shell bundles from the built guest. Desktop gets
+/// the raw Wasm. Mobile gets the guest inside its store container, which the
+/// update store verifies, and the update configuration, but never the Wasm a
+/// second time.
 fn write_assets(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -1937,31 +2010,76 @@ mod tests {
 	}
 
 	#[test]
-	fn scene_assets_are_staged_fresh_for_the_native_bundle() {
+	fn assets_are_staged_fresh_for_the_native_bundle() {
 		// Generated files are never written through a symlink, and macOS's
 		// temporary directory sits behind one.
 		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
 		let root = tempfile::tempdir_in(base).unwrap();
 		let root = root.path();
 		std::fs::create_dir_all(root.join("assets/models")).unwrap();
+		std::fs::create_dir_all(root.join("assets/nfts")).unwrap();
+		std::fs::create_dir_all(root.join("assets/.cache")).unwrap();
 		std::fs::write(root.join("assets/models/rig.glb"), b"glTF").unwrap();
-		let staged = generated_dir(root, Target::Android).join("mobile/assets");
-		std::fs::create_dir_all(&staged).unwrap();
-		std::fs::write(staged.join("stale.glb"), b"old").unwrap();
+		std::fs::write(root.join("assets/nfts/ada.webp"), b"RIFF").unwrap();
+		std::fs::write(root.join("assets/.DS_Store"), b"finder").unwrap();
+		std::fs::write(root.join("assets/.cache/blob"), b"cache").unwrap();
+		let staged = assets_destination(root, Target::Android);
+		assert_eq!(staged, root.join(".leptoskit/mobile/assets"));
+		std::fs::create_dir_all(staged.join("gone")).unwrap();
+		std::fs::write(staged.join("gone/stale.glb"), b"old").unwrap();
 
-		stage_scene_assets(root, Target::Android).unwrap();
+		stage_assets(root, &staged).unwrap();
 
 		assert_eq!(
 			std::fs::read(staged.join("models/rig.glb")).unwrap(),
 			b"glTF"
 		);
-		assert!(
-			!staged.join("stale.glb").exists(),
-			"a removed asset is not shipped"
+		assert_eq!(
+			std::fs::read(staged.join("nfts/ada.webp")).unwrap(),
+			b"RIFF"
 		);
+		assert!(
+			!staged.join("gone").exists(),
+			"a removed asset, and its emptied folder, are not shipped"
+		);
+		assert!(
+			!staged.join(".DS_Store").exists() && !staged.join(".cache").exists(),
+			"hidden files stay behind"
+		);
+
+		// A changed file is copied again; an unchanged one is left alone.
+		std::fs::write(root.join("assets/nfts/ada.webp"), b"RIFF-changed").unwrap();
+		stage_assets(root, &staged).unwrap();
+		assert_eq!(
+			std::fs::read(staged.join("nfts/ada.webp")).unwrap(),
+			b"RIFF-changed"
+		);
+
 		std::fs::remove_dir_all(root.join("assets")).unwrap();
-		stage_scene_assets(root, Target::Android).unwrap();
+		stage_assets(root, &staged).unwrap();
 		assert!(staged.is_dir() && std::fs::read_dir(&staged).unwrap().next().is_none());
+	}
+
+	#[test]
+	fn every_native_bundle_has_its_assets_folder() {
+		let root = Path::new("/app");
+		assert_eq!(
+			assets_destination(root, Target::Ios),
+			root.join(".leptoskit/mobile/assets")
+		);
+		assert_eq!(
+			assets_destination(root, Target::Macos),
+			root.join(".leptoskit/mobile/assets")
+		);
+		// Beside the executable, `.leptoskit/app/<name>`.
+		assert_eq!(
+			assets_destination(root, Target::Linux),
+			root.join(".leptoskit/app/assets")
+		);
+		assert_eq!(
+			assets_destination(root, Target::Harmonyos),
+			root.join("hosts/harmonyos/entry/src/main/resources/rawfile/assets")
+		);
 	}
 
 	#[test]

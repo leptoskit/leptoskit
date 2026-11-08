@@ -41,6 +41,7 @@
 - [Animations](guide/32-animations.md)
 - [Motion](guide/32-motion.md)
 - [Toasts](guide/33-toasts.md)
+- [Images and other assets](guide/36-assets.md)
 - [Rive animations](guide/20-rive.md)
 - [Playing sound](guide/34-audio.md)
 - [3D scenes](guide/33-3d-scenes.md)

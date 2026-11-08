@@ -224,6 +224,17 @@
 						"null"
 					]
 				},
+				"launch_screen": {
+					"description": "What iOS and Android show while the app starts: a background colour\nand, centered on it, an image.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LaunchScreen"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"name": {
 					"description": "The package name; defaults to the directory name.",
 					"type": "string",
@@ -2090,6 +2101,41 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"LaunchScreen": {
+			"description": "The screen iOS and Android show from the moment the app is opened until\nits first screen is drawn: the iOS `UILaunchScreen`, and Android's\nsplash screen (Android 12 and later) or starting window (before).\n\n```toml\n[app.launch_screen]\nbackground = \"#0b0c10\"\nimage = \"assets/branding/mark.svg\"\n```",
+			"type": "object",
+			"properties": {
+				"background": {
+					"description": "The background colour, as `#rrggbb` or `#rgb`.",
+					"type": "string"
+				},
+				"background_dark": {
+					"description": "The background colour while the system is dark, as `#rrggbb` or\n`#rgb`; `background` when left out.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"image": {
+					"description": "One square PNG or SVG, 1024×1024 or larger, relative to this file,\ndrawn in the middle of the screen. Android 12 and later show it inside\na circle, so keep what matters in the middle two thirds.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"image_size": {
+					"description": "The image's width and height: in points on iOS, and in dp on Android\nbefore 12. Android 12 and later size it themselves.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 160,
+					"minimum": 0
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"background"
+			]
 		},
 		"LintConfig": {
 			"description": "What `leptoskit lint` checks, from the `[lint]` table.\n\n```toml\n[lint]\nmarkup = \"view\"\nexclude = [\"tests/fixtures/**\"]\n\n[lint.rules]\ncomponent_attribute = \"deny\"\n```",

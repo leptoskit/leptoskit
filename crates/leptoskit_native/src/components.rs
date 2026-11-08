@@ -185,6 +185,12 @@ pub fn Button(label: impl Into<String>) -> Element {
 }
 
 /// An image from a source understood by the platform backend.
+///
+/// `asset://<path>` names a PNG, JPEG, or WebP in the app's `assets/`
+/// folder, and shows it on every platform: the browser loads
+/// `/assets/<path>`, and the native apps read the copy `leptoskit build`
+/// bundles with them (see [`crate::asset`]). A local `file://` URL also
+/// works on the native hosts.
 #[track_caller]
 pub fn Image(source: impl Into<String>) -> Element {
 	Element::image(source)

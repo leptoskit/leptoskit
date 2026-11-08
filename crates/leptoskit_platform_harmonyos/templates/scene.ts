@@ -110,9 +110,13 @@ export class Scene {
 			}
 		});
 		this.nodes.forEach((node: Widget) => {
-			if (node.props.source && !node.props.source.startsWith("file://")) {
+			const source = node.props.source;
+			if (
+				source && !source.startsWith("file://") &&
+				assetRawfile(source) === undefined
+			) {
 				throw new Error(
-					"HarmonyOS images require an application-private file URL",
+					"HarmonyOS images require an asset:// source or an application-private file URL",
 				);
 			}
 		});
@@ -121,6 +125,31 @@ export class Scene {
 			? undefined
 			: this.snapshot(this.node(transaction.root));
 	}
+}
+
+const ASSET_SCHEME = "asset://";
+
+/**
+ * The rawfile an `asset://<path>` source names: `leptoskit build` copies the
+ * app's `assets/` folder into the HAP's `rawfile/assets`. `undefined` for any
+ * other source; an error for a path that would leave the folder.
+ */
+export function assetRawfile(source: string): string | undefined {
+	if (!source.startsWith(ASSET_SCHEME)) {
+		return undefined;
+	}
+	const path = source.slice(ASSET_SCHEME.length);
+	if (
+		path.length === 0 || path.includes("\\") || path.includes("\0") ||
+		path.split("/").some((segment: string) =>
+			segment === "" || segment === "." || segment === ".."
+		)
+	) {
+		throw new Error(
+			`${source} is not an asset path inside the app's assets folder`,
+		);
+	}
+	return `assets/${path}`;
 }
 
 /** Convert the renderer's packed RGBA to ArkUI's ARGB value. */

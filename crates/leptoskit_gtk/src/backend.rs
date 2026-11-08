@@ -1117,12 +1117,20 @@ fn configure_scale(scale: &gtk::Scale, props: &NativeProps) {
 }
 
 fn configure_picture(picture: &gtk::Picture, props: &NativeProps) {
-	let file = props.source.as_deref().map(|source| {
-		if source.starts_with("file://") {
+	let file = props.source.as_deref().and_then(|source| {
+		// `asset://` names a file in the `assets` folder beside the
+		// executable, which `leptoskit build` fills from the app's own.
+		if let Some(file) = leptoskit_native::asset::load_bundled(source, |path| {
+			path.is_file().then(|| gtk::gio::File::for_path(path))
+		}) {
+			return file;
+		}
+
+		Some(if source.starts_with("file://") {
 			gtk::gio::File::for_uri(source)
 		} else {
 			gtk::gio::File::for_path(source)
-		}
+		})
 	});
 
 	let unchanged = match (picture.file(), file.as_ref()) {

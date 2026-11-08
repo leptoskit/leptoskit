@@ -936,11 +936,23 @@ fn apply_control(control: &mut Control, props: &NativeProps) {
 	}
 }
 
-/// Loads an image from a `source`: a plain file path or a `file://` URL.
+/// Loads an image from a `source`: an `asset://` file in the bundle's
+/// `Contents/Resources/assets`, a plain file path, or a `file://` URL.
 ///
-/// Other schemes (`https://`, `asset://`, …) are not loaded and leave the
-/// image view empty, as does a file that is missing or not an image.
+/// Other schemes (`https://`, …) are not loaded and leave the image view
+/// empty, as does a file that is missing or not an image. A bundled asset
+/// that is missing is reported through
+/// [`leptoskit_native::asset::report_missing`].
 fn load_image(source: &str) -> Option<Retained<NSImage>> {
+	if let Some(loaded) = leptoskit_native::asset::load_bundled(source, |path| {
+		NSImage::initWithContentsOfFile(
+			NSImage::alloc(),
+			&NSString::from_str(&path.to_string_lossy()),
+		)
+	}) {
+		return loaded;
+	}
+
 	let path = match source.split_once("://") {
 		Some(("file", path)) => path,
 		Some(_) => return None,
