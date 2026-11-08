@@ -49,6 +49,13 @@ impl Aabb {
 		self.max = self.max.max(point);
 	}
 
+	pub fn union(self, other: Self) -> Self {
+		Self {
+			min: self.min.min(other.min),
+			max: self.max.max(other.max),
+		}
+	}
+
 	pub fn center(&self) -> Vec3 {
 		(self.min + self.max) * 0.5
 	}

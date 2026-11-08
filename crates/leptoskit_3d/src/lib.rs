@@ -2,11 +2,15 @@
 //!
 //! A guest describes a scene with [`Op`]s and the host owns it: models loaded
 //! from glTF, their animation, lights, and the camera all live with the host,
-//! never in the guest's frame loop.
+//! which draws them with wgpu on the display link, never in the guest's frame
+//! loop.
 //!
 //! Without the default `renderer` feature, the crate is only the ops and
 //! events and their binary form, and builds for any target, Wasm guests
 //! included.
+// Proving that `Gpu` is `Send` walks wgpu's deep types past the default
+// limit.
+#![recursion_limit = "256"]
 
 mod protocol;
 mod sanitize;
@@ -16,23 +20,43 @@ mod animation;
 #[cfg(feature = "renderer")]
 mod asset;
 #[cfg(feature = "renderer")]
+mod environment;
+#[cfg(feature = "renderer")]
 pub mod gltf;
+#[cfg(feature = "renderer")]
+mod gpu;
 #[cfg(feature = "renderer")]
 mod image;
 #[cfg(feature = "renderer")]
 mod raycast;
 #[cfg(feature = "renderer")]
+mod renderer;
+#[cfg(feature = "renderer")]
+mod upload;
+#[cfg(feature = "renderer")]
 mod world;
 
 #[cfg(feature = "renderer")]
 pub use asset::Asset;
-/// The math types the scene's API takes, so hosts use the same version.
+/// The math types the renderer's API takes, so hosts use the same version.
 #[cfg(feature = "renderer")]
 pub use glam;
 #[cfg(feature = "renderer")]
 pub use gltf::LoadError;
+#[cfg(feature = "renderer")]
+pub use gpu::Backend;
+#[cfg(feature = "renderer")]
+pub use gpu::Error;
+#[cfg(feature = "renderer")]
+pub use gpu::Gpu;
 pub use protocol::*;
+#[cfg(feature = "renderer")]
+pub use renderer::*;
 pub use sanitize::*;
+/// The wgpu the renderer is built on, so hosts create devices, surfaces, and
+/// textures with the same version.
+#[cfg(feature = "renderer")]
+pub use wgpu;
 #[cfg(feature = "renderer")]
 pub use world::World;
 
