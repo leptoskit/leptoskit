@@ -1,8 +1,8 @@
 //! In-tree platform extension crates registered with the CLI.
 //!
 //! Every `native platform` subcommand goes through [`builtin`] / [`find`] so
-//! the registry stays live. HarmonyOS registers here; prepare/build for the
-//! first-party `harmonyos` destination still lives in `harmonyos.rs`.
+//! the registry stays live. HarmonyOS and the experimental Oculus stubs
+//! register here; first-party `quest` packaging stays outside this table.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -11,11 +11,12 @@ use leptoskit_config::LeptoskitConfig;
 use leptoskit_platform::PlatformExtension;
 use leptoskit_platform::ScaffoldContext;
 use leptoskit_platform_harmonyos::HarmonyOs;
+use leptoskit_platform_oculus::Oculus;
 
 /// Builtin platform extensions shipped in this workspace.
 #[must_use]
-pub fn builtin() -> [&'static dyn PlatformExtension; 1] {
-	[&HarmonyOs]
+pub fn builtin() -> [&'static dyn PlatformExtension; 2] {
+	[&HarmonyOs, &Oculus]
 }
 
 /// Looks up a builtin extension by destination id.
@@ -154,11 +155,11 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn registers_harmonyos() {
+	fn registers_harmonyos_and_oculus() {
 		let extensions = builtin();
-		assert_eq!(extensions.len(), 1);
+		assert_eq!(extensions.len(), 2);
 		assert_eq!(find("harmonyos").unwrap().display_name(), "HarmonyOS");
-		assert!(find("oculus").is_none());
+		assert_eq!(find("oculus").unwrap().display_name(), "Meta Quest");
 		assert!(find("quest").is_none());
 		assert!(find("web").is_none());
 		for extension in extensions {
@@ -174,21 +175,22 @@ mod tests {
 		};
 		assert!(error.contains("missing"));
 		assert!(error.contains("harmonyos"));
+		assert!(error.contains("oculus"));
 	}
 
 	#[test]
-	fn list_and_capabilities_use_the_builtin_registry() {
+	fn list_and_capabilities_include_oculus() {
 		run(PlatformCommand::List).unwrap();
 		run(PlatformCommand::Capabilities {
-			id: "harmonyos".into(),
+			id: "oculus".into(),
 		})
 		.unwrap();
 	}
 
 	#[test]
-	fn scaffold_harmonyos_writes_host_files() {
+	fn scaffold_oculus_writes_host_stubs() {
 		let root = std::env::temp_dir().join(format!(
-			"leptoskit-harmonyos-platform-scaffold-{}-{}",
+			"leptoskit-oculus-platform-scaffold-{}-{}",
 			std::process::id(),
 			std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
@@ -201,7 +203,7 @@ mod tests {
 			root.join("leptoskit.toml"),
 			r#"
 [app]
-name = "harmony_probe"
+name = "oculus_probe"
 "#,
 		)
 		.unwrap();
@@ -209,10 +211,11 @@ name = "harmony_probe"
 		std::env::set_current_dir(&root).unwrap();
 		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 			run(PlatformCommand::Scaffold {
-				id: "harmonyos".into(),
+				id: "oculus".into(),
 			})
 			.unwrap();
-			assert!(root.join("hosts/harmonyos").is_dir());
+			assert!(root.join("hosts/oculus/android/QuestActivity.kt").is_file());
+			assert!(root.join("hosts/oculus/guest.rs").is_file());
 		}));
 		let _ = std::env::set_current_dir(previous);
 		let _ = std::fs::remove_dir_all(&root);
