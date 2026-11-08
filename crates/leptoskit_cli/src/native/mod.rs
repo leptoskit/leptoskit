@@ -279,6 +279,9 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
 	write_assets(&root, &config, target, &bundle_dir, release)?;
+	if registry.scene3d {
+		stage_scene_assets(&root, target)?;
+	}
 
 	if build {
 		build_application(&root, &config, target, release)?;
@@ -747,6 +750,34 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 /// the raw Wasm. Mobile gets the guest inside its store container, which the
 /// update store verifies, and the update configuration, but never the Wasm a
 /// second time.
+/// Copies the app's `assets/` folder to where the native app bundles it
+/// for 3D scenes: the generated `mobile/assets`, which Android packs into
+/// the APK's assets, iOS references as the bundle's `assets` folder, and
+/// the macOS app copies into its resources.
+fn stage_scene_assets(root: &Path, target: Target) -> Result<()> {
+	let destination = generated_dir(root, target).join("mobile/assets");
+	match std::fs::remove_dir_all(&destination) {
+		Ok(()) => {}
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+		Err(error) => return Err(error).context("clear the staged 3D assets"),
+	}
+	std::fs::create_dir_all(&destination)?;
+	let source = root.join("assets");
+	if !source.is_dir() {
+		return Ok(());
+	}
+	for entry in walkdir::WalkDir::new(&source).follow_links(false) {
+		let entry = entry?;
+		let relative = entry.path().strip_prefix(&source)?;
+		if entry.file_type().is_dir() {
+			std::fs::create_dir_all(destination.join(relative))?;
+		} else if entry.file_type().is_file() {
+			project::copy(entry.path(), &destination.join(relative))?;
+		}
+	}
+	Ok(())
+}
+
 fn write_assets(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -1549,6 +1580,34 @@ mod tests {
 	}
 
 	#[test]
+	fn scene_assets_are_staged_fresh_for_the_native_bundle() {
+		// Generated files are never written through a symlink, and macOS's
+		// temporary directory sits behind one.
+		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+		let root = tempfile::tempdir_in(base).unwrap();
+		let root = root.path();
+		std::fs::create_dir_all(root.join("assets/models")).unwrap();
+		std::fs::write(root.join("assets/models/rig.glb"), b"glTF").unwrap();
+		let staged = generated_dir(root, Target::Android).join("mobile/assets");
+		std::fs::create_dir_all(&staged).unwrap();
+		std::fs::write(staged.join("stale.glb"), b"old").unwrap();
+
+		stage_scene_assets(root, Target::Android).unwrap();
+
+		assert_eq!(
+			std::fs::read(staged.join("models/rig.glb")).unwrap(),
+			b"glTF"
+		);
+		assert!(
+			!staged.join("stale.glb").exists(),
+			"a removed asset is not shipped"
+		);
+		std::fs::remove_dir_all(root.join("assets")).unwrap();
+		stage_scene_assets(root, Target::Android).unwrap();
+		assert!(staged.is_dir() && std::fs::read_dir(&staged).unwrap().next().is_none());
+	}
+
+	#[test]
 	fn desktop_bundles_raw_wasm_and_mobile_only_the_verified_container() {
 		// Generated paths refuse symlinks, and the macOS temporary directory is
 		// one.
@@ -1751,6 +1810,7 @@ mod tests {
 			host_features: vec!["leptoskit_bridge_ffi/async-host".into()],
 			devtools_feature: Some("leptoskit_bridge_ffi/devtools".into()),
 			missing: Vec::new(),
+			scene3d: false,
 		};
 		let features =
 			|target, release, devtools| host_features(&registry, target, release, devtools);
@@ -1986,6 +2046,7 @@ mod tests {
 			host_features: vec!["leptoskit_bridge_ffi/async-host".into()],
 			devtools_feature: Some("leptoskit_bridge_ffi/devtools".into()),
 			missing: Vec::new(),
+			scene3d: false,
 		}
 	}
 
