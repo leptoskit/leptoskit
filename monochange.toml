@@ -89,6 +89,7 @@ packages = [
 	"leptoskit_plugin_haptics",
 	"leptoskit_plugin_home_widgets",
 	"leptoskit_plugin_battery",
+	"leptoskit_plugin_cellular",
 	"leptoskit_plugin_deep_link",
 	"leptoskit_plugin_device",
 	"leptoskit_plugin_device_policy",
@@ -117,6 +118,7 @@ packages = [
 	"leptoskit_plugin_brightness",
 	"leptoskit_plugin_gyroscope",
 	"leptoskit_plugin_http",
+	"leptoskit_plugin_image_picker",
 	"leptoskit_plugin_keep_awake",
 	"leptoskit_plugin_localization",
 	"leptoskit_plugin_magnetometer",
@@ -330,6 +332,9 @@ path = "crates/leptoskit_plugin_home_widgets"
 
 [package.leptoskit_plugin_battery]
 path = "crates/leptoskit_plugin_battery"
+
+[package.leptoskit_plugin_cellular]
+path = "crates/leptoskit_plugin_cellular"
 
 [package.leptoskit_plugin_deep_link]
 path = "crates/leptoskit_plugin_deep_link"
@@ -638,6 +643,9 @@ type = "cargo"
 
 [package.leptoskit_plugin_image_manipulator]
 path = "crates/leptoskit_plugin_image_manipulator"
+
+[package.leptoskit_plugin_image_picker]
+path = "crates/leptoskit_plugin_image_picker"
 type = "cargo"
 
 [package.leptoskit_plugin_screen_capture]

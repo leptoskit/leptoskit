@@ -248,6 +248,7 @@ leptoskit_plugin_badge = { path = "crates/leptoskit_plugin_badge", version = "0.
 leptoskit_plugin_barometer = { path = "crates/leptoskit_plugin_barometer", version = "0.3.0" }
 leptoskit_plugin_battery = { path = "crates/leptoskit_plugin_battery", version = "0.3.0" }
 leptoskit_plugin_brightness = { path = "crates/leptoskit_plugin_brightness", version = "0.3.0" }
+leptoskit_plugin_cellular = { path = "crates/leptoskit_plugin_cellular", version = "0.3.0" }
 leptoskit_plugin_clipboard = { path = "crates/leptoskit_plugin_clipboard", version = "0.3.0" }
 leptoskit_plugin_crypto = { path = "crates/leptoskit_plugin_crypto", version = "0.3.0" }
 leptoskit_plugin_deep_link = { path = "crates/leptoskit_plugin_deep_link", version = "0.3.0" }
@@ -263,6 +264,7 @@ leptoskit_plugin_haptics = { path = "crates/leptoskit_plugin_haptics", version =
 leptoskit_plugin_home_widgets = { path = "crates/leptoskit_plugin_home_widgets", version = "0.3.0" }
 leptoskit_plugin_http = { path = "crates/leptoskit_plugin_http", version = "0.3.0", default-features = false }
 leptoskit_plugin_image_manipulator = { path = "crates/leptoskit_plugin_image_manipulator", version = "0.3.0" }
+leptoskit_plugin_image_picker = { path = "crates/leptoskit_plugin_image_picker", version = "0.3.0" }
 leptoskit_plugin_keep_awake = { path = "crates/leptoskit_plugin_keep_awake", version = "0.3.0" }
 leptoskit_plugin_light_sensor = { path = "crates/leptoskit_plugin_light_sensor", version = "0.3.0" }
 leptoskit_plugin_linking = { path = "crates/leptoskit_plugin_linking", version = "0.3.0" }
