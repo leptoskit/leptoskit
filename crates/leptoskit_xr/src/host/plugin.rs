@@ -235,6 +235,20 @@ pub fn platform_backend(context: &AppContext) -> impl Backend + 'static {
 		context.platform().cloned(),
 	));
 
+	// Headsets come before the rotation sensor; on a phone without an OpenXR
+	// runtime this backend offers nothing and the sensor answers.
+	#[cfg(all(
+		feature = "openxr",
+		any(
+			target_os = "android",
+			target_os = "windows",
+			all(target_os = "linux", not(target_env = "ohos"))
+		)
+	))]
+	let backends = backends.with(super::openxr::OpenXrBackend::new(
+		context.platform().cloned(),
+	));
+
 	#[cfg(any(target_os = "ios", target_os = "android"))]
 	let backends = backends.with(super::OrientationBackend::new(super::DeviceRotation::new()));
 
