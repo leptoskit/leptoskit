@@ -445,6 +445,15 @@ impl World {
 		self.events.drain(..).collect()
 	}
 
+	/// Puts events back at the front of the queue, in order, for a guest
+	/// that could not take them all at once.
+	#[cfg(all(feature = "host", not(target_arch = "wasm32")))]
+	pub(crate) fn requeue_events(&mut self, events: Vec<Event>) {
+		for event in events.into_iter().rev() {
+			self.events.push_front(event);
+		}
+	}
+
 	/// Whether events are waiting.
 	pub fn has_events(&self) -> bool {
 		!self.events.is_empty()

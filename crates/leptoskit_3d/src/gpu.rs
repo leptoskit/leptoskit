@@ -251,6 +251,11 @@ impl Gpu {
 		&self.0.queue
 	}
 
+	/// Whether `other` is this same device.
+	pub fn same_device(&self, other: &Self) -> bool {
+		Arc::ptr_eq(&self.0, &other.0)
+	}
+
 	/// The graphics API the device runs on.
 	pub fn backend(&self) -> wgpu::Backend {
 		self.0.adapter.get_info().backend
