@@ -183,10 +183,10 @@ impl leptoskit_bridge::Plugin for Unsupported {
 
 	fn invoke(&mut self, method: MethodId, payload: Bytes) -> Result<Bytes, Error> {
 		validate(method, &payload)?;
-		match method {
-			STATUS => Ok(Bytes::copy_from_slice(&Capability::Unavailable.encode())),
-			REQUEST => Ok(Response::Unavailable.encode()),
-			_ => Err(Error::Unavailable),
+		if method == STATUS {
+			Ok(Bytes::copy_from_slice(&Capability::Unavailable.encode()))
+		} else {
+			Ok(Response::Unavailable.encode())
 		}
 	}
 }
@@ -283,6 +283,10 @@ mod tests {
 				bad.u32(10);
 				bad.finish()
 			}),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Response::decode(&u32::to_le_bytes(3)),
 			Err(Error::InvalidArgument)
 		);
 	}
