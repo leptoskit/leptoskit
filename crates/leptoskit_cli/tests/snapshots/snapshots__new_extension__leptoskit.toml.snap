@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 298
 expression: contents
 ---
 #:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
@@ -84,3 +83,17 @@ events = ["runtime.message"]
 [extension.firefox]
 id = "snapshotted@example.com"
 data_collection = ["none"]
+
+[lint]
+markup = "builder"
+clippy = true
+exclude = []
+
+[lint.rules]
+component_attribute = "deny"
+markup_style = "deny"
+redundant_view = "warn"
+spacer_view = "warn"
+children_last = "warn"
+image_label = "warn"
+color_literal = "allow"

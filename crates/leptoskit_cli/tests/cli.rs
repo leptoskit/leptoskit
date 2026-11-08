@@ -241,6 +241,19 @@ fn scaffolds_a_project_with_config_and_source() {
 		leptoskit_config::Platform::APPLICATION
 	);
 	assert_eq!(config.app.render, leptoskit_config::RenderMode::Ssr);
+	assert_eq!(
+		config.lint.markup,
+		leptoskit_config::MarkupStyle::Builder,
+		"starter screens use builders; lint must match so a fresh project is clean"
+	);
+	assert_eq!(
+		config.lint.rules.markup_style,
+		leptoskit_config::LintLevel::Deny
+	);
+	assert_eq!(
+		config.lint.rules.component_attribute,
+		leptoskit_config::LintLevel::Deny
+	);
 	assert_eq!(config.build.client_package.as_deref(), Some("counter_app"));
 	assert_eq!(
 		config.native.package_id,

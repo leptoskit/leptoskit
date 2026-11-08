@@ -15,7 +15,7 @@ render = "islands"
 | `"ssr"`     | the server renders every page, the browser hydrates all of it   | every component                 |
 | `"islands"` | the server renders every page, the browser hydrates the islands | only the `#[island]` components |
 
-`csr` is the default, so nothing changes until you opt in. The two server-rendering modes follow the convention every leptos app already uses: leptoskit builds the server package with its `ssr` feature and the wasm client with its `hydrate` feature, and in islands mode turns on `leptos/islands` for both. Since the mode is set in one place, the server and the client can't disagree about it.
+When `render` is omitted from `leptoskit.toml`, the config default is `"csr"`. New projects from `leptoskit new` set `"ssr"` explicitly; leave that alone unless you intend a client-only build. The two server-rendering modes follow the convention every leptos app already uses: leptoskit builds the server package with its `ssr` feature and the wasm client with its `hydrate` feature, and in islands mode turns on `leptos/islands` for both. Since the mode is set in one place, the server and the client can't disagree about it.
 
 ## An islands app
 

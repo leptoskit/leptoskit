@@ -50,7 +50,7 @@ When you write leptoskit code, write builder calls, not `view!` markup:
 
 ### Enforce it in the projects you work on
 
-`leptoskit lint` checks the markup style from `leptoskit.toml`. In a project you create, or one whose owner asks you to work this way, make builders the rule and a `view!` an error for **portable UI** (screens and reusable components):
+`leptoskit lint` checks the markup style from `leptoskit.toml`. `leptoskit new` already writes builder lint for new apps (the starter home screen is builders):
 
 ```toml
 [lint]
@@ -61,7 +61,7 @@ markup_style = "deny"
 component_attribute = "deny"
 ```
 
-Rewrite any leptoskit component `view!` the lint reports (the starter home screen already uses builders). The SSR document `shell` in `*_app/src/lib.rs` stays as `leptos::view!` HTML (`<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, hydration scripts)—that is not a leptoskit component tree, and builder-mode lint does not ask you to rewrite it. Keep `leptoskit lint --deny-warnings` passing. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
+In a project you create that somehow lacks that table, or one whose owner asks you to work this way, add it. Rewrite any leptoskit component `view!` the lint reports. The SSR document `shell` in `*_app/src/lib.rs` stays as `leptos::view!` HTML (`<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, hydration scripts)—that is not a leptoskit component tree, and builder-mode lint does not ask you to rewrite it. Keep `leptoskit lint --deny-warnings` passing. Don't change an existing project's `markup` without the owner's say-so: a project that chose `"view"` or `"any"` keeps it.
 
 ### Match the CLI to the crates
 

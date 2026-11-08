@@ -15,6 +15,10 @@ use leptoskit_config::BuildConfig;
 use leptoskit_config::DbConfig;
 use leptoskit_config::DbDialect;
 use leptoskit_config::LeptoskitConfig;
+use leptoskit_config::LintConfig;
+use leptoskit_config::LintLevel;
+use leptoskit_config::LintRules;
+use leptoskit_config::MarkupStyle;
 use leptoskit_config::NativeConfig;
 use leptoskit_config::NativeTarget;
 use leptoskit_config::Platform;
@@ -169,6 +173,17 @@ pub fn run_with_options(
 		serve: leptoskit_config::ServeConfig {
 			probes: true,
 			..leptoskit_config::ServeConfig::default()
+		},
+		// Starter screens use builders; match lint so a fresh project is clean
+		// under `leptoskit lint --deny-warnings` without a post-scaffold edit.
+		lint: LintConfig {
+			markup: MarkupStyle::Builder,
+			rules: LintRules {
+				markup_style: LintLevel::Deny,
+				component_attribute: LintLevel::Deny,
+				..LintRules::default()
+			},
+			..LintConfig::default()
 		},
 		native: NativeConfig {
 			package_id: leptoskit_config::default_package_id(name),
