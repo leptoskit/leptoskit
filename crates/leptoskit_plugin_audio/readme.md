@@ -51,7 +51,7 @@ Verification covers the wire format, the mixer and filters rendered offline into
 
 <!-- {=p_audioSummary} -->
 
-Add `leptoskit_plugin_audio` as a direct dependency and select the `audio` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Audio` rather than resolving the plugin on every call. iOS, Android, and macOS play through one Rust engine that decodes with symphonia and outputs with cpal; the browser uses `web::Audio` over Web Audio. HarmonyOS has no audio output yet.
+Add `leptoskit_plugin_audio` as a direct dependency and select the `audio` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it too; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Audio` rather than resolving the plugin on every call. iOS, Android, macOS, and Linux play through one Rust engine that decodes with symphonia and outputs with cpal; the browser uses `web::Audio` over Web Audio. HarmonyOS has no audio output yet.
 
 <!-- {/p_audioSummary} -->
 

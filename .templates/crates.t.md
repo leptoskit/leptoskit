@@ -314,10 +314,10 @@ host chooses which arguments to disclose; mobile and browser process capture ret
 
 Add `{{ plugin_audio.package.name }}` as a direct dependency and select the `{{ plugin_audio.package.metadata.leptoskit.runtime.name }}` plugin in
 `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
-Windows, Linux, and terminal hosts currently omit runtime plugins; use explicit
-registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::Audio` rather than resolving the plugin on every call. iOS, Android, and macOS
-play through one Rust engine that decodes with symphonia and outputs with cpal; the
+Linux hosts register it too; generated Windows and terminal hosts currently omit runtime
+plugins, so use explicit registration in a custom host there. Guests enable the `guest`
+feature and reuse `guest::Audio` rather than resolving the plugin on every call. iOS,
+Android, macOS, and Linux play through one Rust engine that decodes with symphonia and outputs with cpal; the
 browser uses `web::Audio` over Web Audio. HarmonyOS has no audio output yet.
 
 <!-- {/p_audioSummary} -->
