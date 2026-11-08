@@ -342,22 +342,24 @@ pub mod guest {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn system_idle_time() -> Result<u32, Error> {
 	use std::mem::size_of;
 
 	use windows_sys::Win32::System::SystemInformation::GetTickCount;
-	use windows_sys::Win32::UI::Input::GetLastInputInfo;
-	use windows_sys::Win32::UI::Input::LASTINPUTINFO;
+	use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
+	use windows_sys::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO;
 
 	let mut info = LASTINPUTINFO {
 		cbSize: size_of::<LASTINPUTINFO>() as u32,
 		dwTime: 0,
 	};
 	// SAFETY: `info` is correctly sized and writable for the Win32 API.
-	if unsafe { GetLastInputInfo(&mut info) } == 0 {
+	if unsafe { GetLastInputInfo(&raw mut info) } == 0 {
 		return Err(Error::Unavailable);
 	}
 
+	// SAFETY: `GetTickCount` takes no arguments and cannot fail.
 	let ticks = unsafe { GetTickCount() };
 	Ok(ticks.wrapping_sub(info.dwTime))
 }

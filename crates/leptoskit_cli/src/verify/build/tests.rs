@@ -1,7 +1,10 @@
 use super::*;
 
+#[cfg(unix)]
 const VENDOR_OUTPUT: &str = "[source.crates-io]\nreplace-with = \"vendored-sources\"\n";
+#[cfg(unix)]
 const COMPILED_OUTPUT: &str = "compiled server\n";
+#[cfg(unix)]
 const EXECUTABLE_RELATIVE: &str = "target/x86_64-unknown-linux-gnu/release/server";
 
 fn run_git(repository: &Path, args: &[&str]) -> String {
