@@ -99,6 +99,16 @@ the app.
 
 <!-- {/buildSummary} -->
 
+<!-- {@xrSummary} -->
+
+It gives an app the real world to play in: camera passthrough, the device's position
+and rotation, floors and walls, depth for hiding things behind real furniture, and hit
+tests, through ARKit on iOS, ARCore on Android, OpenXR on Meta Quest and Android XR
+headsets, and WebXR in the browser. Phones without AR fall back to looking around by
+turning, and a recording plays back the same frames for tests and simulators.
+
+<!-- {/xrSummary} -->
+
 <!-- {@canvasSummary} -->
 
 It is the drawing model for custom graphics that native widgets cannot express: a

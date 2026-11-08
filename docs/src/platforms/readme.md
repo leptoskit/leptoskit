@@ -13,6 +13,7 @@ A leptoskit app is one tree of components. The web renders it as HTML through le
 | HarmonyOS          | ArkUI components                    | `leptoskit native build harmonyos`     | Eight, experimental                             |
 | Wear OS            | Watch surfaces (`leptoskit::watch`) | `leptoskit native prepare wearos`      | Experimental stubs (no APK yet)                 |
 | watchOS            | Watch surfaces (`leptoskit::watch`) | `leptoskit native prepare watchos`     | Experimental stubs (no app yet)                 |
+| Meta Quest         | Android views, or OpenXR in 3D      | `leptoskit build --platform quest`     | Android's, in panel mode; experimental          |
 | Terminal           | Characters in the terminal's cells  | `leptoskit build --platform tui`       | All except `Rive`                               |
 | Browser extensions | HTML and CSS, through leptos        | `leptoskit build --platform extension` | All                                             |
 
