@@ -163,3 +163,54 @@ fn insertion_order_cannot_change_startup_order() {
 		.clear();
 	assert_eq!(workspace.startup_order().unwrap(), ["accounts", "web"]);
 }
+
+#[test]
+fn optional_kind_names_frontend_roles() {
+	use leptoskit_config::workspace::ApplicationKind;
+
+	let workspace: Workspace = toml::from_str(
+		r#"
+format_version = 1
+[applications.landing]
+path = "apps/landing"
+kind = "landing"
+[applications.app]
+path = "apps/app"
+kind = "product"
+[applications.admin]
+path = "apps/admin"
+kind = "admin"
+[applications.api]
+path = "apps/api"
+kind = "server"
+"#,
+	)
+	.unwrap();
+	workspace.validate().unwrap();
+	assert_eq!(
+		workspace.applications["landing"].kind,
+		Some(ApplicationKind::Landing)
+	);
+	assert_eq!(
+		workspace.applications["app"].kind,
+		Some(ApplicationKind::Product)
+	);
+	assert_eq!(
+		workspace.applications["admin"].kind,
+		Some(ApplicationKind::Admin)
+	);
+	assert_eq!(
+		workspace.applications["api"].kind,
+		Some(ApplicationKind::Server)
+	);
+	assert!(
+		toml::from_str::<Workspace>(
+			"format_version=1\n[applications.web]\npath='apps/web'\nkind='website'\n"
+		)
+		.is_err()
+	);
+	assert_eq!(ApplicationKind::Landing.as_str(), "landing");
+	assert!(ApplicationKind::Landing.is_web_frontend());
+	assert!(ApplicationKind::Product.includes_native());
+	assert!(!ApplicationKind::Admin.includes_native());
+}

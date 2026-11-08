@@ -50,6 +50,17 @@
 					},
 					"uniqueItems": true
 				},
+				"kind": {
+					"description": "Optional role hint for tooling and scaffolds (`landing`, `product`,\n`admin`, `server`). Does not change runtime behaviour by itself.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ApplicationKind"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"path": {
 					"description": "Directory relative to the workspace manifest. Paths cannot escape it.",
 					"type": "string"
@@ -58,6 +69,31 @@
 			"additionalProperties": false,
 			"required": [
 				"path"
+			]
+		},
+		"ApplicationKind": {
+			"description": "Role of an application in a multi-frontend workspace.\n\nScaffold and docs use this to choose platforms and ports. Omission keeps\nolder workspace manifests valid; names like `applications.landing` still\nwork without a `kind`.",
+			"oneOf": [
+				{
+					"description": "Public marketing site: web only.",
+					"type": "string",
+					"const": "landing"
+				},
+				{
+					"description": "Signed-in product: web plus native hosts.",
+					"type": "string",
+					"const": "product"
+				},
+				{
+					"description": "Operator console: web only.",
+					"type": "string",
+					"const": "admin"
+				},
+				{
+					"description": "API or accounts backend without a browser UI.",
+					"type": "string",
+					"const": "server"
+				}
 			]
 		},
 		"Binding": {
