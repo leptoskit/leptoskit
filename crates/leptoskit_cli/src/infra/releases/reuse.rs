@@ -98,13 +98,16 @@ pub(super) fn current(args: &ReleaseArgs, current: Current<'_>) -> Result<bool> 
 		&release.services,
 		Some(release),
 	)?;
+
 	for host in hosts {
 		descriptor.check_remote(host, &image, local_hash)?;
 		ready(host, &c.name, version, project.port, &environment)?;
 	}
+
 	if let Some(window) = &window {
 		window.verify_running(hosts, &c.name, version)?;
 	}
+
 	// Approval expiry and policy changes during observations are not ignored.
 	super::super::approvals::authorize(dir, &c.domain, Some(&descriptor), authorization.as_ref())?;
 	Ok(true)
@@ -118,6 +121,7 @@ fn selected<'a>(
 	if !history.iter().any(|release| release.version == version) {
 		return Ok(None);
 	}
+
 	let current = history.last().context("missing current release")?;
 	ensure!(
 		current.version == version,
@@ -150,6 +154,7 @@ fn environment(
 		serde_json::from_value(runtime["env"]["clear"].clone())?;
 	let mut resolved = super::secrets(config, private)?;
 	resolved.insert("LEPTOSKIT_RELEASE".into(), version.into());
+
 	for name in runtime["env"]["secret"]
 		.as_array()
 		.context("invalid generated runtime environment")?
@@ -217,6 +222,7 @@ mod tests {
 		history[1].completed_at = None;
 		assert!(selected(&history, "current", "schema").is_err());
 		history[1].completed_at = Some("completed".into());
+
 		history[1].image_digest = None;
 		assert!(selected(&history, "current", "schema").is_err());
 	}

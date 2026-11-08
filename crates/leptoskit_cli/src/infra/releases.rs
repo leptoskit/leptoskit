@@ -36,12 +36,14 @@ pub(super) fn history(ip: &str, c: &InfraConfig) -> Result<Vec<Release>> {
 			.context("invalid shared release history; refusing to overwrite")?;
 	let mut verified = false;
 	let mut approved = false;
+
 	for release in &history {
 		ensure!(
 			!approved || release.authorization.is_some(),
 			"shared history discarded backend authorization"
 		);
 		approved |= release.authorization.is_some();
+
 		if let Some(evidence) = &release.evidence {
 			evidence.validate()?;
 			ensure!(
@@ -56,6 +58,7 @@ pub(super) fn history(ip: &str, c: &InfraConfig) -> Result<Vec<Release>> {
 			);
 		}
 	}
+
 	Ok(history)
 }
 
@@ -121,6 +124,7 @@ fn check_service_changes(
 			previous.version
 		));
 	}
+
 	for (name, schema) in local {
 		if let Some(recorded) = previous.services.get(name) {
 			ensure!(
@@ -129,6 +133,7 @@ fn check_service_changes(
 			);
 		}
 	}
+
 	Ok(())
 }
 
@@ -147,6 +152,7 @@ fn check_drift(
 		actual == previous.migrations || (args.maintenance && actual == local_hash),
 		"database drifted from shared history; investigate before a new release"
 	);
+
 	for (name, recorded) in &previous.services {
 		// A service this checkout dropped, or no longer gives a database, keeps
 		// its database untouched; nothing here migrates it anymore.
@@ -166,6 +172,7 @@ fn check_drift(
 			 release"
 		);
 	}
+
 	Ok(())
 }
 
@@ -179,6 +186,7 @@ fn reach_service_schemas(ip: &str, c: &InfraConfig, target: &Release) -> Result<
 			 the newer migration files, or recover explicitly"
 		);
 	}
+
 	Ok(())
 }
 
@@ -198,6 +206,7 @@ fn services_match(
 			return Ok(false);
 		}
 	}
+
 	Ok(true)
 }
 
@@ -213,6 +222,7 @@ pub(super) fn stop(hosts: &[String], c: &InfraConfig) -> Result<()> {
 			None,
 		)?;
 	}
+
 	Ok(())
 }
 
@@ -315,6 +325,7 @@ fn prepare_recorded(
 		env,
 		reservation,
 	)?;
+
 	for host in hosts {
 		ensure!(
 			&cached_digest(host, c, &release.version)? == expected,
@@ -322,6 +333,7 @@ fn prepare_recorded(
 			 or traffic changes"
 		);
 	}
+
 	verify_schema_labels(
 		hosts,
 		c,
@@ -329,6 +341,7 @@ fn prepare_recorded(
 		&release.migrations,
 		super::services_fingerprint(&release.services)?.as_deref(),
 	)?;
+
 	if let Some(evidence) = &release.evidence {
 		for host in hosts {
 			evidence.check_remote(
@@ -338,6 +351,7 @@ fn prepare_recorded(
 			)?;
 		}
 	}
+
 	Ok(())
 }
 
@@ -371,6 +385,7 @@ fn verify_schema_labels(
 	services: Option<&str>,
 ) -> Result<()> {
 	let first = cached_digest(&hosts[0], c, version)?;
+
 	for host in hosts {
 		ensure!(
 			cached_digest(host, c, version)? == first,
@@ -387,6 +402,7 @@ fn verify_schema_labels(
 			"image migration metadata differs from the expected schema; build this checkout with \
 			 `lk infra build --version <tag> --push` before releasing"
 		);
+
 		if let Some(services) = services {
 			let script = format!(
 				"docker image inspect --format '{{{{index .Config.Labels \"{}\"}}}}' {}",
@@ -401,6 +417,7 @@ fn verify_schema_labels(
 			);
 		}
 	}
+
 	Ok(())
 }
 
@@ -424,6 +441,7 @@ fn secrets(config: &LeptoskitConfig, private: &str) -> Result<BTreeMap<String, S
 	db.set_password(Some(&password))
 		.map_err(|()| anyhow::anyhow!("couldn't bind database password"))?;
 	let mut values = BTreeMap::new();
+
 	if c.plugins.analytics.is_some() {
 		let key = required("LEPTOSKIT_ANALYTICS_READ_KEY")?;
 		ensure!(
@@ -432,13 +450,16 @@ fn secrets(config: &LeptoskitConfig, private: &str) -> Result<BTreeMap<String, S
 		);
 		values.insert("LEPTOSKIT_ANALYTICS_READ_KEY".into(), key);
 	}
+
 	values.insert(config.db.as_ref().unwrap().url_env.clone(), db.to_string());
+
 	if c.services.cache {
 		let mut url = url::Url::parse(&format!("redis://{private}:6379"))?;
 		url.set_password(Some(&required("VALKEY_PASSWORD")?))
 			.map_err(|()| anyhow::anyhow!("couldn't bind cache password"))?;
 		values.insert("VALKEY_URL".into(), url.to_string());
 	}
+
 	if c.services.relay {
 		let mut url = url::Url::parse(&format!("nats://{private}:4222"))?;
 		url.set_username(&required("NATS_TOKEN")?)
@@ -453,6 +474,7 @@ fn secrets(config: &LeptoskitConfig, private: &str) -> Result<BTreeMap<String, S
 			url.to_string(),
 		);
 	}
+
 	for name in c
 		.secrets
 		.iter()
@@ -535,6 +557,7 @@ impl Drop for Flight<'_> {
 		if self.finished {
 			return;
 		}
+
 		let phase = remote::read(self.ip, &self.config.name, "operation.json")
 			.ok()
 			.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
@@ -557,6 +580,7 @@ fn bootstrap(
 	reservation: &Reservation,
 ) -> Result<()> {
 	let ip = &hosts[0];
+
 	if c.services.relay {
 		remote::execute(
 			ip,
@@ -571,6 +595,7 @@ fn bootstrap(
 	for host in hosts {
 		remote::execute(host, "cloud-init status --wait >/dev/null", None)?;
 	}
+
 	execute(dir, &["server", "bootstrap"], env, reservation)?;
 	for accessory in [
 		Some("db"),
@@ -586,6 +611,7 @@ fn bootstrap(
 		} else {
 			&hosts[..1]
 		};
+
 		for host in accessory_hosts {
 			let inspect = remote::execute(
 				host,
@@ -595,9 +621,11 @@ fn bootstrap(
 				),
 				None,
 			);
+
 			if inspect.as_ref().is_ok_and(|v| v == b"running\n") {
 				continue;
 			}
+
 			let action = if inspect.is_ok() { "start" } else { "boot" };
 			execute(
 				dir,
@@ -637,37 +665,45 @@ fn verify_release(
 	for (name, schema) in services {
 		let database = service_database(name);
 		let mut actual = remote_service_history(&hosts[0], &c.name, &database)?;
+
 		for _ in 0..30 {
 			if actual == schema.migrations {
 				break;
 			}
+
 			std::thread::sleep(std::time::Duration::from_secs(2));
 			actual = remote_service_history(&hosts[0], &c.name, &database)?;
 		}
+
 		ensure!(
 			actual == schema.migrations,
 			"services.{name}: its database does not match the release; shared history was not \
 			 advanced"
 		);
 	}
+
 	let image = digest(&hosts[0], c, version)?;
+
 	for host in hosts {
 		ensure!(
 			digest(host, c, version)? == image,
 			"hosts are running different image digests"
 		);
 	}
+
 	if let Some(target) = target {
 		if let Some(evidence) = &target.evidence {
 			for host in hosts {
 				evidence.check_remote(host, &image, expected)?;
 			}
 		}
+
 		ensure!(
 			target.image_digest.as_ref() == Some(&image),
 			"running image differs from recorded digest"
 		);
 	}
+
 	Ok(image)
 }
 
@@ -692,12 +728,14 @@ fn runtime_files(
 	fs::create_dir_all(dir.join(".kamal"))?;
 	fs::write(dir.join(".kamal/secrets"), references)?;
 	let mut env = secrets(config, private)?;
+
 	for name in project.secrets.iter().chain(&project.urls) {
 		ensure!(
 			env.contains_key(name) || std::env::var(name).is_ok_and(|v| !v.is_empty()),
 			"set required application secret {name}"
 		);
 	}
+
 	env.extend(super::services::values(&project, private)?);
 	env.insert("TUNNEL_TOKEN".into(), output(dir, "tunnel_token")?);
 	Ok((env, project))
@@ -713,6 +751,7 @@ fn recover_previous(
 ) -> Result<()> {
 	let ip = &hosts[0];
 	let actual = remote_history(ip, &c.name)?;
+
 	if let Some(previous) = history.last()
 		&& actual == previous.migrations
 		&& services_match(ip, c, &previous.services)?
@@ -743,9 +782,11 @@ fn recover_previous(
 			&previous.services,
 			Some(previous),
 		)?;
+
 		if let Some(window) = &window {
 			window.verify_running(hosts, &c.name, &previous.version)?;
 		}
+
 		record(
 			ip,
 			c,
@@ -788,6 +829,7 @@ fn target_release(
 	} else {
 		None
 	};
+
 	if target.is_none() {
 		ensure!(
 			!history.iter().any(|r| r.version == version),
@@ -797,6 +839,7 @@ fn target_release(
 			!history.is_empty() || args.setup,
 			"first release requires --setup"
 		);
+
 		if let Some(previous) = history.last() {
 			ensure!(
 				previous.migrations == local_hash || args.maintenance,
@@ -804,6 +847,7 @@ fn target_release(
 			);
 		}
 	}
+
 	Ok(target)
 }
 
@@ -824,10 +868,12 @@ fn release_evidence(
 		(None, None) => target.and_then(|r| r.evidence.clone()),
 		_ => anyhow::bail!("descriptor and independent pin are both required"),
 	};
+
 	ensure!(
 		!history.iter().any(|r| r.evidence.is_some()) || evidence.is_some(),
 		"verified release history cannot downgrade to legacy evidence"
 	);
+
 	if let Some(evidence) = &evidence {
 		evidence.validate()?;
 		ensure!(
@@ -835,6 +881,7 @@ fn release_evidence(
 			"verified source schema differs from release schema"
 		);
 	}
+
 	Ok(evidence)
 }
 
@@ -859,6 +906,7 @@ fn check_evidence(
 			evidence.check_remote(host, image, &evidence.migrations)?;
 		}
 	}
+
 	Ok(())
 }
 
@@ -883,9 +931,11 @@ fn authorize_release(
 			|| authorization.is_some(),
 		"approved history cannot downgrade to operator pin mode"
 	);
+
 	if let (Some(authorization), Some(pin)) = (&authorization, &args.descriptor_sha256) {
 		authorization.check_pin(pin)?;
 	}
+
 	Ok(authorization)
 }
 
@@ -904,8 +954,10 @@ fn boot_application(
 		env,
 		reservation,
 	);
+
 	if let Err(error) = result {
 		record(&hosts[0], c, &reservation.owner, "failed", version)?;
+
 		if recover_previous(dir, c, hosts, history, env, reservation).is_err() {
 			stop(hosts, c).context("automatic recovery failed and application stop failed")?;
 			eprintln!(
@@ -913,8 +965,10 @@ fn boot_application(
 				 explicitly."
 			);
 		}
+
 		return Err(error);
 	}
+
 	Ok(())
 }
 
@@ -925,6 +979,7 @@ fn check_configuration(config: &LeptoskitConfig, pin: Option<&String>) -> Result
 			"application configuration differs from the selected plan"
 		);
 	}
+
 	Ok(())
 }
 
@@ -939,9 +994,11 @@ fn stop_for_maintenance(
 ) -> Result<()> {
 	stop(hosts, c)?;
 	stop_services(&hosts[0], c, project)?;
+
 	if !history.is_empty() && c.backups.enabled {
 		super::recovery::invoke(&hosts[0], c, "backup", "latest", false, Some(owner))?;
 	}
+
 	Ok(())
 }
 
@@ -954,6 +1011,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	generate(&dir, c, false)?;
 	let _local = lock(&dir)?;
 	let hosts = hosts(&dir)?;
+
 	ensure!(
 		hosts.len() == usize::from(c.instances),
 		"apply the configured host count before release"
@@ -970,6 +1028,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let history = history(ip, c)?;
 	let local_schema = schema(&root, &config)?;
 	let local_hash = history_fingerprint(local_schema.clone())?;
+
 	if args.reuse_current
 		&& reuse::current(
 			args,
@@ -985,14 +1044,17 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		)? {
 		reservation.check()?;
 		println!("Revalidated current release {version}; no application was restarted.");
+
 		return Ok(());
 	}
 	let target = target_release(args, &history, version, &local_hash)?;
 	let evidence = release_evidence(args, target.as_ref(), &history, &local_hash)?;
 	let window = release_window(args, evidence.as_ref())?;
+
 	if let Some(evidence) = &evidence {
 		evidence.application(&root, &config)?;
 	}
+
 	let authorization =
 		authorize_release(&dir, c, args, evidence.as_ref(), target.as_ref(), &history)?;
 	let expected = target
@@ -1006,9 +1068,11 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	let local_services =
 		release_services(args, &history, target.as_ref(), &project, &mut proposed)?;
 	encoded_history(&history, &proposed)?;
+
 	if c.backups.enabled && args.setup {
 		super::recovery::credentials()?;
 	}
+
 	record(ip, c, &reservation.owner, "preparing", version)?;
 	let mut flight = Flight {
 		ip,
@@ -1017,15 +1081,18 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		version,
 		finished: false,
 	};
+
 	if args.setup {
 		bootstrap(&dir, c, &hosts, &env, &reservation)?;
 	}
+
 	if let Some(target) = &target {
 		prepare_recorded(&dir, c, &hosts, target, &env, &reservation)?;
 	} else {
 		let schemas = (local_hash.as_str(), &local_services);
 		pull_new(&dir, c, &hosts, version, schemas, &env, &reservation)?;
 	}
+
 	check_evidence(
 		proposed.evidence.as_ref(),
 		&hosts,
@@ -1035,17 +1102,21 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	// it before stopping writers or starting any application container.
 	super::schema_window::prepare(&dir, c, &hosts, window.as_ref(), &reservation)?;
 	execute(&dir, &["proxy", "boot"], &env, &reservation)?;
+
 	if !args.setup && target.is_none() {
 		let previous = history.last().context("no previous release")?;
 		check_drift(ip, c, args, previous, (&local_hash, &local_services))?;
 	}
+
 	if args.maintenance || args.rollback_schema {
 		stop_for_maintenance(&hosts, c, &project, &history, &reservation.owner)?;
 	}
+
 	if let Some(target) = &target {
 		if args.rollback_schema {
 			roll_back(ip, &private, c, (&root, &config, &project), target)?;
 		}
+
 		ensure!(
 			remote_history(ip, &c.name)? == target.migrations,
 			"database differs from target; use --rollback-schema --yes with the newer migration \
@@ -1053,6 +1124,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		);
 		reach_service_schemas(ip, c, target)?;
 	}
+
 	super::services::prepare(ip, c, &project)?;
 	boot_application(&dir, c, &hosts, &history, &env, &reservation, version)?;
 	let verified = (|| {
@@ -1074,6 +1146,7 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 		if let Some(window) = &window {
 			window.verify_running(&hosts, &c.name, version)?;
 		}
+
 		anyhow::Ok(digest)
 	})();
 	let image = flight.checked(verified, &hosts)?;
@@ -1081,10 +1154,12 @@ pub(super) fn run(args: &ReleaseArgs) -> Result<()> {
 	proposed.completed_at = Some(chrono::Utc::now().to_rfc3339());
 	let bytes = flight.checked(encoded_history(&history, &proposed), &hosts)?;
 	write_history(ip, c, &dir, &bytes)?;
+
 	if args.setup && c.backups.enabled {
 		super::recovery::install(ip, c, &output(&dir, "backup_endpoint")?, &reservation)?;
 		super::recovery::invoke(ip, c, "backup", "latest", false, Some(&reservation.owner))?;
 	}
+
 	execute(&dir, &["prune", "all"], &env, &reservation)?;
 	record(ip, c, &reservation.owner, "complete", version)?;
 	println!(
@@ -1172,6 +1247,7 @@ pub(super) fn prepare() -> Result<()> {
 		hosts.len() == usize::from(c.instances),
 		"apply the configured hosts before preparing services"
 	);
+
 	let private = output(&dir, "private_ip")?;
 	ensure!(
 		private.parse::<std::net::Ipv4Addr>().is_ok(),
@@ -1191,9 +1267,11 @@ pub(super) fn prepare() -> Result<()> {
 	bootstrap(&dir, c, &hosts, &env, &reservation)?;
 	super::services::prepare(ip, c, &project)?;
 	execute(&dir, &["proxy", "boot"], &env, &reservation)?;
+
 	if c.backups.enabled {
 		super::recovery::install(ip, c, &output(&dir, "backup_endpoint")?, &reservation)?;
 	}
+
 	record(ip, c, &reservation.owner, "services-ready", "services")?;
 	flight.finished = true;
 	println!(
@@ -1219,12 +1297,15 @@ fn roll_back(
 	let plans = plan_rollbacks(root, config, project, target, |name| {
 		std::env::var(name).ok()
 	})?;
+
 	for plan in &plans {
 		plan.check_remote(ip, &c.name)?;
 	}
+
 	for plan in &plans {
 		plan.run(ip, private)?;
 	}
+
 	Ok(())
 }
 
@@ -1259,6 +1340,7 @@ pub(super) fn plan_rollbacks(
 		leptoskit_db::load_migrations(&root.join(&db_config.migrations))?,
 		&target.schema,
 	)?];
+
 	for (name, schema) in &target.services {
 		let service = project
 			.services
@@ -1279,6 +1361,7 @@ pub(super) fn plan_rollbacks(
 		} else {
 			Vec::new()
 		};
+
 		plans.push(Rollback::checked(
 			&service.postgres_name(APP_DATABASE),
 			required(&service.database_password_env())?,
@@ -1286,6 +1369,7 @@ pub(super) fn plan_rollbacks(
 			&schema.schema,
 		)?);
 	}
+
 	Ok(plans)
 }
 
@@ -1397,6 +1481,7 @@ impl Rollback {
 					Err(_) => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
 				}
 			}
+
 			let db = connection.context("database tunnel did not become ready")?;
 			let applied = db.applied_migrations().await?;
 			ensure!(
@@ -1407,6 +1492,7 @@ impl Rollback {
 				db.rollback(&self.migrations, applied.len() - self.target.len())
 					.await?;
 			}
+
 			anyhow::Ok(())
 		})
 	}
@@ -1466,6 +1552,7 @@ mod tests {
 		let mut verified = recorded("verified", &"a".repeat(64));
 		verified.evidence = Some(serde_json::from_value(descriptor).unwrap());
 		let legacy = recorded("legacy", &"a".repeat(64));
+
 		for recover in [false, true] {
 			let mut options = args();
 			options.recover = recover;
@@ -1478,6 +1565,7 @@ mod tests {
 				)
 				.is_err()
 			);
+
 			assert!(
 				release_evidence(
 					&options,
@@ -1498,6 +1586,7 @@ mod tests {
 				.is_err()
 			);
 		}
+
 		assert!(
 			release_evidence(
 				&args(),
@@ -1543,6 +1632,7 @@ mod tests {
 				.to_string()
 				.contains("pass --version or --rollback")
 		);
+
 		flags.version = Some("latest".into());
 		assert!(
 			release_version(&flags)
@@ -1612,6 +1702,7 @@ mod tests {
 				.contains("version is absent from shared release history")
 		);
 		flags.rollback = None;
+
 		flags.recover = true;
 		flags.version = Some("v1".into());
 		assert_eq!(
