@@ -10,13 +10,13 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::async_host::AsyncPlugin;
 use leptoskit_bridge::async_host::CancellationToken;
 use leptoskit_xr::host::CameraFrame;
+use leptoskit_xr::host::DepthEstimate;
 use leptoskit_xr::host::DepthEstimator;
 use leptoskit_xr::host::ReplayBackend;
 use leptoskit_xr::host::XrPlugin;
 use leptoskit_xr::host::XrRuntime;
 use leptoskit_xr::host::from_context;
 use leptoskit_xr::host::install_depth_estimator;
-use leptoskit_xr::image::DepthImage;
 use leptoskit_xr::protocol::*;
 use leptoskit_xr::wire::Wire;
 use leptoskit_xr::wire::decode;
@@ -157,6 +157,13 @@ fn the_factory_plays_a_recording_named_in_the_options() {
 
 	assert!(from_context(&context, r#"{"replay": "missing.lkxr"}"#).is_err());
 	assert!(from_context(&context, r#"{"unknown": 1}"#).is_err());
+
+	// A depth model that isn't there, or a path that leaves the assets
+	// folder, is logged in the background and never stops the plugin.
+	for model in ["depth/missing.onnx", "../outside.onnx"] {
+		let options = format!(r#"{{"replay": "walk.lkxr", "depth-model": "{model}"}}"#);
+		assert!(from_context(&context, &options).is_ok(), "{model}");
+	}
 	let _ = std::fs::remove_dir_all(directory);
 }
 
@@ -181,7 +188,7 @@ impl DepthEstimator for Blind {
 
 	fn submit(&mut self, _frame: std::sync::Arc<CameraFrame>) {}
 
-	fn latest(&mut self) -> Option<DepthImage> {
+	fn latest(&mut self) -> Option<DepthEstimate> {
 		None
 	}
 }

@@ -6,9 +6,10 @@
 //!   with one draws the camera picture behind its scene, turned upright by
 //!   [`upright_transform`].
 //! - [`CameraFrame`] is one picture made small for reading on the CPU, with its
-//!   time, the viewer's pose, and its [`Intrinsics`]. A [`DepthEstimator`]
-//!   installed with [`XrRuntime::set_depth_estimator`] turns such frames into
-//!   depth pictures for sessions whose platform has no depth of its own.
+//!   time, the view it was seen from, and its [`Intrinsics`]. A
+//!   [`DepthEstimator`] installed with [`XrRuntime::set_depth_estimator`] turns
+//!   such frames into [`DepthEstimate`]s for sessions whose platform has no
+//!   depth of its own.
 //!
 //! None of these pictures reach the guest. A crate that estimates depth
 //! reaches the runtimes the generated hosts make through
@@ -29,7 +30,7 @@ use super::XrFrame;
 use super::XrRuntime;
 use crate::image::*;
 use crate::math::Fov;
-use crate::math::Pose;
+use crate::types::View;
 
 /// A pinhole camera's projection, in pixels of the image it describes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,29 +149,17 @@ pub fn upright_fov(intrinsics: &Intrinsics, sensor_quarter_turns: u32, viewport:
 	Fov::symmetric(vertical, viewport.aspect())
 }
 
-/// `outer` after `inner`.
-fn compose_affine(outer: &Affine2, inner: &Affine2) -> Affine2 {
-	let [oxx, oxy, oyx, oyy, otx, oty] = *outer;
-	let [ixx, ixy, iyx, iyy, itx, ity] = *inner;
-
-	[
-		oxx * ixx + oyx * ixy,
-		oxy * ixx + oyy * ixy,
-		oxx * iyx + oyx * iyy,
-		oxy * iyx + oyy * iyy,
-		oxx * itx + oyx * ity + otx,
-		oxy * itx + oyy * ity + oty,
-	]
-}
-
 /// One camera picture made small for reading on the CPU, such as by a depth
 /// estimator.
 #[derive(Debug, Clone)]
 pub struct CameraFrame {
 	/// When it was captured, in seconds on the clock of [`XrFrame::time`].
 	pub time: f64,
-	/// Where the viewer was when it was captured, in the session's world.
-	pub pose: Pose,
+	/// The frame's view when it was captured: where the camera was in the
+	/// session's world, and how the view projected. The picture's display
+	/// transform maps this view onto the picture, so depth read from it is
+	/// seen from here.
+	pub view: View,
 	/// sRGB pixels, three bytes each, in rows from the top as the sensor
 	/// reads them (not turned upright).
 	pub rgb: ImagePlane,
@@ -185,11 +174,12 @@ pub struct CameraFrame {
 impl CameraFrame {
 	/// `frame`'s camera picture, shrunk so its longer side is at most
 	/// `max_side` pixels. `None` when the frame has no camera picture, no
-	/// intrinsics, or pixels that can't be read on the CPU.
+	/// intrinsics, no view, or pixels that can't be read on the CPU.
 	#[must_use]
 	pub fn from_frame(frame: &XrFrame, max_side: u32) -> Option<Self> {
 		let image = frame.camera_image.as_ref()?;
 		let intrinsics = frame.camera_intrinsics?;
+		let view = *frame.views.first()?;
 		let longest = image.width.max(image.height).max(1);
 		let scale = (max_side.max(1) as f32 / longest as f32).min(1.0);
 		let width = ((image.width as f32 * scale).round() as u32).max(1);
@@ -198,12 +188,25 @@ impl CameraFrame {
 
 		Some(Self {
 			time: frame.time,
-			pose: frame.viewer,
+			view,
 			rgb,
 			intrinsics: intrinsics.scaled(width, height),
 			display_transform: image.display_transform,
 		})
 	}
+}
+
+/// Depth a [`DepthEstimator`] read from one [`CameraFrame`].
+#[derive(Debug, Clone)]
+pub struct DepthEstimate {
+	/// The depth picture: metres (or millimetres) along the camera's forward
+	/// axis, with the display transform of the frame it was read from.
+	pub depth: DepthImage,
+	/// That frame's [`CameraFrame::view`]: hit tests cast against the depth
+	/// from here, since the viewer may have moved since.
+	pub view: View,
+	/// That frame's capture time.
+	pub time: f64,
 }
 
 /// Turns camera pictures into depth for sessions whose platform has none,
@@ -228,10 +231,10 @@ pub trait DepthEstimator: Send {
 	/// Hands over a frame.
 	fn submit(&mut self, frame: Arc<CameraFrame>);
 
-	/// The newest depth picture it has finished, or `None` before the first.
-	/// Its distances are metres (or millimetres) along the camera's forward
-	/// axis, and its display transform is that of the frame it came from.
-	fn latest(&mut self) -> Option<DepthImage>;
+	/// The newest depth it has finished, or `None` before the first, with
+	/// the view and time of the frame it came from. Called every frame, so
+	/// keep it cheap: convert each estimate once and hand out clones.
+	fn latest(&mut self) -> Option<DepthEstimate>;
 
 	/// Forgets everything: the session stopped.
 	fn reset(&mut self) {}
@@ -475,6 +478,10 @@ mod tests {
 				principal: [2.0, 1.0],
 				size: [4, 2],
 			}),
+			views: vec![View {
+				pose: crate::math::Pose::IDENTITY,
+				projection: crate::math::Projection::Fov(Fov::symmetric(1.0, 2.0)),
+			}],
 			..XrFrame::default()
 		};
 		let small = CameraFrame::from_frame(&frame, 2).unwrap();
@@ -482,6 +489,12 @@ mod tests {
 		assert_eq!(&*small.rgb.data, &[255, 255, 255, 0, 0, 0]);
 		assert_eq!(small.intrinsics.focal, [2.0, 2.0]);
 		assert!((small.time - 2.0).abs() < f64::EPSILON);
+		assert_eq!(small.view, frame.views[0]);
 		assert!(CameraFrame::from_frame(&XrFrame::default(), 2).is_none());
+		let without_a_view = XrFrame {
+			views: Vec::new(),
+			..frame
+		};
+		assert!(CameraFrame::from_frame(&without_a_view, 2).is_none());
 	}
 }

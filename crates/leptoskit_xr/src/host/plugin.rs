@@ -47,6 +47,14 @@ pub struct Options {
 	pub replay: Option<PathBuf>,
 	/// Plays the recording over and over.
 	pub replay_loop: bool,
+	/// The depth model in the app's `assets/` folder, such as
+	/// `depth/depth_anything_v2_metric_indoor_small.onnx`: with it, sessions
+	/// on phones that measure no depth get depth estimated from the camera
+	/// picture. It must be `leptoskit_depth::MODEL`; a missing or different
+	/// file is logged and leaves depth off. Needs the crate's
+	/// `depth-estimation` feature, which `leptoskit build` turns on when this
+	/// is set.
+	pub depth_model: Option<String>,
 }
 
 impl Default for Options {
@@ -55,6 +63,7 @@ impl Default for Options {
 			max_frame_rate: 60,
 			replay: None,
 			replay_loop: true,
+			depth_model: None,
 		}
 	}
 }
@@ -234,6 +243,10 @@ pub fn from_context(context: &AppContext, options_json: &str) -> Result<XrPlugin
 		immersive.bind(&runtime);
 	}
 
+	if let Some(path) = &options.depth_model {
+		estimate_depth(context, path);
+	}
+
 	// Scenes that ask for the camera backdrop draw over this runtime's
 	// sessions.
 	#[cfg(feature = "scene3d")]
@@ -242,6 +255,21 @@ pub fn from_context(context: &AppContext, options_json: &str) -> Result<XrPlugin
 	XrPlugin::new(runtime, options.max_frame_rate)
 		.driven()
 		.map_err(|_| Error::Native)
+}
+
+/// Loads the depth model in the background and installs it once it loads.
+#[cfg(feature = "depth-estimation")]
+fn estimate_depth(context: &AppContext, path: &str) {
+	super::estimated_depth::load_in_background(context.platform().cloned(), path.to_owned());
+}
+
+#[cfg(not(feature = "depth-estimation"))]
+fn estimate_depth(_: &AppContext, path: &str) {
+	eprintln!(
+		"leptoskit-xr: warning: depth-model = {path:?} is set, but leptoskit_xr was built without \
+		 its `depth-estimation` feature, so phones that measure no depth get none. `leptoskit \
+		 build` turns it on; a host built another way must enable it."
+	);
 }
 
 fn replay(data_dir: &Path, path: &Path, looping: bool) -> Result<ReplayBackend, Error> {

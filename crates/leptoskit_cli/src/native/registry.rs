@@ -111,6 +111,15 @@ pub struct Plugin {
 	pub experimental_rust_plugins: bool,
 	#[serde(skip)]
 	pub options_json: Option<String>,
+	/// Cargo features of the plugin's crate that the build turns on when the
+	/// app's `[native.plugin-options.<name>]` sets an option: option name to
+	/// feature, such as `depth-model = "depth-estimation"`. Only async
+	/// plugins take options.
+	#[serde(default)]
+	pub option_features: BTreeMap<String, String>,
+	/// The features `option_features` turns on for this app's options.
+	#[serde(skip)]
+	pub enabled_features: Vec<String>,
 	pub apple_module: Option<String>,
 	pub apple_type: Option<String>,
 	#[serde(default)]
@@ -769,6 +778,7 @@ fn validate_plugin(plugin: &Plugin, alias: &str) -> Result<()> {
 
 	validate_usage_descriptions(plugin)?;
 	validate_frameworks(plugin)?;
+	validate_option_features(plugin)?;
 
 	for dependency in &plugin.android_dependencies {
 		anyhow::ensure!(
@@ -890,6 +900,31 @@ fn validate_android_paths(plugin: &Plugin) -> Result<()> {
 			bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
 				&& bytes.all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte)),
 			"invalid Android query URI scheme"
+		);
+	}
+
+	Ok(())
+}
+
+/// Option names are the kebab-case keys of an options table, and features
+/// Cargo feature names, which the build writes into a `--features` list.
+fn validate_option_features(plugin: &Plugin) -> Result<()> {
+	for (option, feature) in &plugin.option_features {
+		anyhow::ensure!(
+			!option.is_empty()
+				&& option
+					.bytes()
+					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
+			"invalid option name in plugin {}'s option-features: {option}",
+			plugin.name
+		);
+		anyhow::ensure!(
+			feature.starts_with(|character: char| character.is_ascii_alphanumeric())
+				&& feature
+					.bytes()
+					.all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte)),
+			"invalid Cargo feature in plugin {}'s option-features: {feature}",
+			plugin.name
 		);
 	}
 

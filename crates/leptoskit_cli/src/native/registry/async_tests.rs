@@ -176,3 +176,84 @@ fn quest_hosts_turn_on_async_plugins_quest_features() {
 		["renamed_echo/async-host", "ffi/async-host"]
 	);
 }
+
+#[test]
+fn options_turn_on_the_plugin_features_they_name() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	config
+		.native
+		.plugin_options
+		.insert("echo".into(), toml::Table::new());
+	let with_option_features = |features: serde_json::Value| {
+		let mut value = metadata("Plugin");
+		value.packages[2].metadata = json!({"leptoskit":{"runtime":{
+			"name":"echo", "rust-factory":"from_config", "rust-async":true,
+			"option-features": {"depth-model": "depth-estimation"}
+		}}});
+		value.packages[2].features = serde_json::from_value(features).unwrap();
+		value
+	};
+	let declared = json!({"async-host": [], "depth-estimation": []});
+
+	// Without the option, only the host.
+	let registry = resolve_metadata(with_option_features(declared.clone()), &config).unwrap();
+	assert_eq!(
+		registry.host_features,
+		["renamed_echo/async-host", "ffi/async-host"]
+	);
+
+	config
+		.native
+		.plugin_options
+		.get_mut("echo")
+		.unwrap()
+		.insert(
+			"depth-model".into(),
+			toml::Value::String("depth/model.onnx".into()),
+		);
+	let registry = resolve_metadata(with_option_features(declared), &config).unwrap();
+	assert_eq!(
+		registry.host_features,
+		[
+			"renamed_echo/async-host",
+			"renamed_echo/depth-estimation",
+			"ffi/async-host"
+		]
+	);
+
+	// A feature the package doesn't have is a mistake in its metadata.
+	let error = resolve_metadata(with_option_features(json!({"async-host": []})), &config)
+		.err()
+		.unwrap()
+		.to_string();
+	assert!(error.contains("depth-estimation"), "{error}");
+
+	for option_features in [
+		json!({"Depth Model": "depth-estimation"}),
+		json!({"depth-model": "depth estimation"}),
+		json!({"depth-model": "a/b"}),
+	] {
+		let mut value = metadata("Plugin");
+		value.packages[2].metadata = json!({"leptoskit":{"runtime":{
+			"name":"echo", "rust-factory":"from_config", "rust-async":true,
+			"option-features": option_features
+		}}});
+		assert!(resolve_metadata(value, &config).is_err());
+	}
+}
+
+#[test]
+fn only_plugins_that_take_options_map_them_to_features() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	let mut value = metadata("Plugin");
+	value.packages[2].metadata = json!({"leptoskit":{"runtime":{
+		"name":"echo", "rust-type":"Plugin",
+		"option-features": {"depth-model": "depth-estimation"}
+	}}});
+	let error = resolve_metadata(value, &config).err().unwrap().to_string();
+	assert!(error.contains("option-features"), "{error}");
+}

@@ -4,6 +4,7 @@
 //! own for planes and fall back to these; the replay, orientation, and
 //! headset backends use these alone.
 
+use crate::image::Affine2;
 use crate::image::DepthImage;
 use crate::math::Pose;
 use crate::math::Projection;
@@ -142,6 +143,46 @@ pub fn project(projection: Projection, point: Vec3) -> Option<(f32, f32)> {
 	};
 
 	Some((f32::midpoint(ndc_x, 1.0), f32::midpoint(-ndc_y, 1.0)))
+}
+
+/// The affine that takes a point on `from`'s view, `(0, 0)` top-left to
+/// `(1, 1)` bottom-right, to the point on `to`'s view that looks the same
+/// way, leaving out how far apart the two views stand: right for distant
+/// things, and for views that only turned, as in an orientation session.
+///
+/// Between views that turned, the true map is a perspective one; this is
+/// its tangent at the middle of `from`, exact there, and off towards the
+/// corners by more the further the view turned: on a portrait phone screen
+/// with a 60° vertical field, a 10° turn leaves the corners 3 to 6% of the
+/// screen's height out, where leaving the turn out entirely would be 18 to
+/// 23%. Depth estimated from an older camera picture is laid over the current
+/// view through it. `None` when the middle or an edge of `from` looks away
+/// from `to`.
+#[must_use]
+pub fn view_to_view(from: &View, to: &View) -> Option<Affine2> {
+	let land = |x: f32, y: f32| {
+		let world = from
+			.pose
+			.orientation
+			.rotate(from.projection.direction(x, y));
+		project(to.projection, to.pose.orientation.conjugate().rotate(world))
+	};
+	let (middle_x, middle_y) = land(0.5, 0.5)?;
+	let (left_x, left_y) = land(0.0, 0.5)?;
+	let (right_x, right_y) = land(1.0, 0.5)?;
+	let (top_x, top_y) = land(0.5, 0.0)?;
+	let (bottom_x, bottom_y) = land(0.5, 1.0)?;
+	let across = [right_x - left_x, right_y - left_y];
+	let down = [bottom_x - top_x, bottom_y - top_y];
+
+	Some([
+		across[0],
+		across[1],
+		down[0],
+		down[1],
+		middle_x - f32::midpoint(across[0], down[0]),
+		middle_y - f32::midpoint(across[1], down[1]),
+	])
 }
 
 /// The world point the depth picture shows at a point on the view.
@@ -290,6 +331,37 @@ mod tests {
 		let hit = hit_depth(ray, &view, &depth).unwrap();
 		assert!((hit.distance - 2.0).abs() < 0.03, "{}", hit.distance);
 		assert!(hit.pose.transform_vector(Vec3::Y).z > 0.99);
+	}
+
+	#[test]
+	fn a_view_maps_onto_itself_and_onto_a_turned_one() {
+		let view = camera();
+		let same = view_to_view(&view, &view).unwrap();
+		for (x, y) in [(0.0, 0.0), (0.5, 0.5), (1.0, 0.25)] {
+			let (u, v) = crate::image::apply_affine(&same, x, y);
+			assert!((u - x).abs() < 1e-5 && (v - y).abs() < 1e-5);
+		}
+
+		// Turned 0.2 rad to the left: what was straight ahead is now right
+		// of the middle, and its middle row stays level.
+		let mut turned = camera();
+		turned.pose.orientation = Quat::from_axis_angle(Vec3::Y, 0.2);
+		let map = view_to_view(&view, &turned).unwrap();
+		let (u, v) = crate::image::apply_affine(&map, 0.5, 0.5);
+		let Projection::Fov(fov) = view.projection else {
+			unreachable!()
+		};
+		let expected = (0.2_f32.tan() - fov.left.tan()) / (fov.right.tan() - fov.left.tan());
+		assert!((u - expected).abs() < 1e-4, "{u} vs {expected}");
+		assert!((v - 0.5).abs() < 1e-5);
+		// The middle row stays on the middle row.
+		let (_, v) = crate::image::apply_affine(&map, 0.0, 0.5);
+		assert!((v - 0.5).abs() < 1e-5);
+
+		// A view facing the other way sees none of it.
+		let mut behind = camera();
+		behind.pose.orientation = Quat::from_axis_angle(Vec3::Y, std::f32::consts::PI);
+		assert_eq!(view_to_view(&view, &behind), None);
 	}
 
 	#[test]

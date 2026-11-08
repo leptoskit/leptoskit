@@ -53,6 +53,7 @@ impl ArCoreBackend {
 			camera_image,
 			camera_intrinsics,
 			depth,
+			depth_view: None,
 			planes: planes.into(),
 			planes_revision: 0,
 			light,

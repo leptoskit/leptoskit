@@ -253,7 +253,10 @@ impl XrRuntime {
 				estimator.submit(Arc::new(camera));
 			}
 
-			frame.depth = estimator.latest();
+			if let Some(estimate) = estimator.latest() {
+				frame.depth = Some(estimate.depth);
+				frame.depth_view = Some(estimate.view);
+			}
 		}
 
 		session.sequence += 1;
@@ -294,6 +297,11 @@ impl XrRuntime {
 	}
 
 	/// Casts a ray against the real world as of the newest frame.
+	///
+	/// Depth an estimator read from an older picture is cast against from
+	/// the view it was seen from ([`XrFrame::depth_view`]), so a ray from
+	/// where the viewer is now meets the room where it was; the backend
+	/// answers the other targets.
 	pub fn hit_test(&self, request: &HitTestRequest) -> Result<Vec<Hit>, Error> {
 		let mut state = self.lock();
 		let state = &mut *state;
@@ -301,7 +309,30 @@ impl XrRuntime {
 		let Some(frame) = session.latest.clone() else {
 			return Ok(Vec::new());
 		};
-		let mut hits = state.backend.hit_test(request, &frame);
+		let estimated = frame
+			.depth
+			.as_ref()
+			.zip(frame.depth_view.as_ref())
+			.filter(|_| request.targets.contains(HitTargets::DEPTH));
+
+		let mut hits = match estimated {
+			Some((depth, seen)) => {
+				let others = HitTestRequest {
+					targets: HitTargets::from_bits(
+						request.targets.bits() & !HitTargets::DEPTH.bits(),
+					),
+					..*request
+				};
+				let mut hits = state.backend.hit_test(&others, &frame);
+
+				if let Some(ray) = crate::hit_test::request_ray(request.origin, &frame.views) {
+					hits.extend(crate::hit_test::hit_depth(ray, seen, depth));
+				}
+
+				hits
+			}
+			None => state.backend.hit_test(request, &frame),
+		};
 		crate::hit_test::sort_and_truncate(&mut hits, request.max_results as usize);
 		Ok(hits)
 	}
