@@ -44,7 +44,7 @@ wgpu = { workspace = true, optional = true, features = ["std", "webgl", "webgpu"
 js-sys = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true, features = ["console", "Element", "HtmlCanvasElement", "ResizeObserver", "Response", "Window"] }
+web-sys = { workspace = true, optional = true, features = ["console", "Document", "Element", "HtmlCanvasElement", "MutationObserver", "MutationObserverInit", "Node", "NodeList", "ResizeObserver", "Response", "Window"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = { workspace = true, optional = true }

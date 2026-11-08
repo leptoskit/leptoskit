@@ -2,6 +2,11 @@
 //! scene with WebGPU, or WebGL2 where the browser has no WebGPU, paced by
 //! `requestAnimationFrame` only while the scene changes or animates.
 //!
+//! A `Scene3d` view renders as `<canvas data-lk-scene3d="id">`. The first
+//! ops a scene applies start a `MutationObserver` that draws into such
+//! canvases as they appear and lets them go as they leave, so the page's
+//! interface code never links this module.
+//!
 //! Everything runs on the page's one thread. Assets are fetched relative to
 //! [`set_asset_base`] (`/assets/` by default, where `leptoskit build` copies
 //! the app's `assets/` folder) and must be `.glb` files or `.gltf` files with
@@ -131,8 +136,106 @@ fn notify(id: SceneId) {
 	}
 }
 
+/// The canvases `Scene3d` views rendered, and what draws into each.
+struct Observed {
+	_observer: web_sys::MutationObserver,
+	_callback: Closure<dyn FnMut()>,
+	canvases: Vec<(web_sys::HtmlCanvasElement, SceneId, Attachment)>,
+}
+
+thread_local! {
+	static OBSERVED: RefCell<Option<Observed>> = const { RefCell::new(None) };
+}
+
+/// The scene a canvas names, if it is a `Scene3d` view's.
+fn named_scene(canvas: &web_sys::HtmlCanvasElement) -> Option<SceneId> {
+	canvas
+		.get_attribute("data-lk-scene3d")?
+		.parse()
+		.ok()
+		.map(SceneId)
+}
+
+/// Attaches canvases that appeared and detaches ones that left the page or
+/// changed scene.
+fn rescan() {
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	let Ok(found) = document.query_selector_all("canvas[data-lk-scene3d]") else {
+		return;
+	};
+	let mut dropped = Vec::new();
+	OBSERVED.with_borrow_mut(|observed| {
+		let Some(observed) = observed else {
+			return;
+		};
+		let mut kept = Vec::with_capacity(observed.canvases.len());
+		for (canvas, scene, attachment) in observed.canvases.drain(..) {
+			if canvas.is_connected() && named_scene(&canvas) == Some(scene) {
+				kept.push((canvas, scene, attachment));
+			} else {
+				dropped.push(attachment);
+			}
+		}
+		observed.canvases = kept;
+		for index in 0..found.length() {
+			let Some(canvas) = found
+				.item(index)
+				.and_then(|node| node.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+			else {
+				continue;
+			};
+			let Some(scene) = named_scene(&canvas) else {
+				continue;
+			};
+			if observed.canvases.iter().any(|(known, ..)| *known == canvas) {
+				continue;
+			}
+			let attachment = attach(canvas.clone(), scene);
+			observed.canvases.push((canvas, scene, attachment));
+		}
+	});
+	// Dropping outside the borrow: a drop may wake work that rescans.
+	drop(dropped);
+}
+
+/// Starts watching the page for `Scene3d` canvases. Applying a scene's
+/// first ops does this; call it to draw scenes made elsewhere.
+pub fn observe() {
+	let started = OBSERVED.with_borrow(Option::is_some);
+	if started {
+		return;
+	}
+	let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+		return;
+	};
+	let callback = Closure::<dyn FnMut()>::new(rescan);
+	let Ok(observer) = web_sys::MutationObserver::new(callback.as_ref().unchecked_ref()) else {
+		return;
+	};
+	let options = web_sys::MutationObserverInit::new();
+	options.set_child_list(true);
+	options.set_subtree(true);
+	options.set_attributes(true);
+	options.set_attribute_filter(&js_sys::Array::of1(&"data-lk-scene3d".into()));
+	if let Some(root) = document.document_element()
+		&& observer.observe_with_options(&root, &options).is_ok()
+	{
+		OBSERVED.with_borrow_mut(|observed| {
+			*observed = Some(Observed {
+				_observer: observer,
+				_callback: callback,
+				canvases: Vec::new(),
+			});
+		});
+		rescan();
+	}
+}
+
 /// Applies ops to a scene, creating it on first use.
 pub fn apply(id: SceneId, ops: Vec<Op>) {
+	observe();
 	let loads = with_scene(id, |scene| {
 		let world = scene.world_mut();
 		world.apply(ops);

@@ -55,6 +55,9 @@ pub enum NativeKind {
 	Vector,
 	/// A native host-owned Rive player, displayed as an accessible image.
 	Rive,
+	/// A host-owned 3D scene drawn on the GPU, displayed as an accessible
+	/// image; the scene comes from the `scene3d` prop.
+	Scene3d,
 	/// A platform-defined widget referenced by registered name.
 	Custom(&'static str),
 }
@@ -90,6 +93,7 @@ impl NativeKind {
 			Self::PasswordInput => "password_input",
 			Self::Pressable => "pressable",
 			Self::Vector => "vector",
+			Self::Scene3d => "scene3d",
 			Self::Custom(name) => name,
 		}
 	}
@@ -126,6 +130,7 @@ impl<'de> serde::de::Visitor<'de> for NativeKindVisitor {
 			"text_run" | "TextRun" => Ok(NativeKind::TextRun),
 			"image" | "Image" => Ok(NativeKind::Image),
 			"rive" | "Rive" => Ok(NativeKind::Rive),
+			"scene3d" | "Scene3d" => Ok(NativeKind::Scene3d),
 			"scroll_view" | "ScrollView" => Ok(NativeKind::ScrollView),
 			"text_input" | "TextInput" => Ok(NativeKind::TextInput),
 			"button" | "Button" => Ok(NativeKind::Button),
@@ -294,6 +299,10 @@ pub struct NativeProps {
 	/// Rive content and controlled input updates. Rendering stays in the host.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub rive: Option<Box<leptoskit_rive::Playback>>,
+	/// The scene a `Scene3d` shows, by its id. The host owns the scene; the
+	/// guest changes it with ops, never through props.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub scene3d: Option<u32>,
 	/// The text content of `Text`, `TextRun`, `TextInput`, and `Button`.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub text: Option<String>,
