@@ -100,6 +100,7 @@ packages = [
 	"leptoskit_plugin_web_auth",
 	"leptoskit_plugin_filesystem",
 	"leptoskit_plugin_network",
+	"leptoskit_plugin_network_info",
 	"leptoskit_plugin_nfc",
 	"leptoskit_plugin_posture",
 	"leptoskit_plugin_power_monitor",
@@ -365,6 +366,9 @@ path = "crates/leptoskit_plugin_filesystem"
 
 [package.leptoskit_plugin_network]
 path = "crates/leptoskit_plugin_network"
+
+[package.leptoskit_plugin_network_info]
+path = "crates/leptoskit_plugin_network_info"
 
 [package.leptoskit_plugin_nfc]
 path = "crates/leptoskit_plugin_nfc"

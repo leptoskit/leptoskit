@@ -277,6 +277,7 @@ leptoskit_plugin_logging = { path = "crates/leptoskit_plugin_logging", version =
 leptoskit_plugin_magnetometer = { path = "crates/leptoskit_plugin_magnetometer", version = "0.3.0" }
 leptoskit_plugin_menu = { path = "crates/leptoskit_plugin_menu", version = "0.3.0" }
 leptoskit_plugin_network = { path = "crates/leptoskit_plugin_network", version = "0.3.0" }
+leptoskit_plugin_network_info = { path = "crates/leptoskit_plugin_network_info", version = "0.3.0" }
 leptoskit_plugin_nfc = { path = "crates/leptoskit_plugin_nfc", version = "0.3.0" }
 leptoskit_plugin_notifications = { path = "crates/leptoskit_plugin_notifications", version = "0.3.0" }
 leptoskit_plugin_os = { path = "crates/leptoskit_plugin_os", version = "0.3.0" }

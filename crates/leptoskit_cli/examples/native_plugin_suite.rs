@@ -32,6 +32,7 @@ const BASE_PLUGINS: &[(&str, &str)] = &[
 const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("permissions", "leptoskit_plugin_permissions"),
 	("network", "leptoskit_plugin_network"),
+	("network-info", "leptoskit_plugin_network_info"),
 	("application", "leptoskit_plugin_application"),
 	("localization", "leptoskit_plugin_localization"),
 	("accelerometer", "leptoskit_plugin_accelerometer"),
@@ -82,6 +83,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_secure_store/tests/android/SecureStorePluginTest.kt",
 	"leptoskit_plugin_permissions/tests/android/PermissionsPluginTest.kt",
 	"leptoskit_plugin_network/tests/android/NetworkPluginTest.kt",
+	"leptoskit_plugin_network_info/tests/android/NetworkInfoPluginTest.kt",
 	"leptoskit_plugin_application/tests/android/ApplicationPluginTest.kt",
 	"leptoskit_plugin_localization/tests/android/LocalizationPluginTest.kt",
 	"leptoskit_sensor/android-tests/MotionSensorTest.kt",

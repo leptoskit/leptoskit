@@ -33,7 +33,19 @@
 
 ## Overview
 
-Network state and demand-driven change observation for native and browser apps. Each state is a strict 32-byte binary message; the cached guest client resolves its plugin identifier once. Selecting `network` in `native.plugins` registers the Swift/Kotlin implementation automatically. Android adds the normal `android.permission.ACCESS_NETWORK_STATE` permission; no runtime prompt is needed.
+Network state and demand-driven change observation for native and browser apps, covering Flutter's [`connectivity_plus`](https://github.com/fluttercommunity/plus_plugins/tree/main/packages/connectivity_plus). Each state is a strict 36-byte binary message; the cached guest client resolves its plugin identifier once. Selecting `network` in `native.plugins` registers the Swift/Kotlin implementation automatically. Android adds the normal `android.permission.ACCESS_NETWORK_STATE` permission; no runtime prompt is needed.
+
+Each `Snapshot` names a primary `connection` and a `transports` set holding every transport the active network uses, the list `connectivity_plus` returns: Wi-Fi, cellular (`mobile` upstream), ethernet, Bluetooth, VPN, satellite and other. The set always holds the primary connection's transport and is empty with no connection. `Transports::iter` lists them in a fixed order.
+
+| Transport | iOS/macOS                                           | Android                                         | Desktop Rust | Browser                   |
+| --------- | --------------------------------------------------- | ----------------------------------------------- | ------------ | ------------------------- |
+| Wi-Fi     | `NWPath` uses `.wifi`                               | `TRANSPORT_WIFI`, `TRANSPORT_WIFI_AWARE`        | Not inferred | `type == "wifi"`          |
+| Cellular  | `NWPath` uses `.cellular`                           | `TRANSPORT_CELLULAR`                            | Not inferred | `type == "cellular"`      |
+| Ethernet  | `NWPath` uses `.wiredEthernet`                      | `TRANSPORT_ETHERNET`                            | Not inferred | `type == "ethernet"`      |
+| Bluetooth | Not reported (no `NWInterface` type)                | `TRANSPORT_BLUETOOTH`                           | Not inferred | `type == "bluetooth"`     |
+| VPN       | Not reported; a tunnel shows as other               | `TRANSPORT_VPN`, alongside the network under it | Not inferred | Not reported              |
+| Satellite | `isUltraConstrained` (iOS/macOS 26 and later)       | `TRANSPORT_SATELLITE` (Android 15 and later)    | Not inferred | Not reported              |
+| Other     | `NWPath` uses `.other`, or a satisfied untyped path | Any other transport (USB, Thread, LoWPAN)       | Not inferred | `other`, `mixed`, `wimax` |
 
 - iOS/macOS: `NWPathMonitor` reports route availability, transport, expensive connections, and low-data mode. A monitor starts per request, waits for its first actual callback, and is cancelled on completion, cancellation, or close.
 - Android: `ConnectivityManager` reports the default network, transport, metering, and OS-validated internet capability. Change callbacks register before sampling and unregister on completion, cancellation, or close.
@@ -42,7 +54,7 @@ Network state and demand-driven change observation for native and browser apps. 
 
 `guest::Network::wait_for_change(previous)` returns the first different latest snapshot. Reissue it with that snapshot to continue observing. Intermediate states can coalesce; this is not a transition log. Mobile/Apple handlers permit one outstanding observer; the Apple handler also returns `Busy` for a snapshot while another request owns its monitor. Dropping the guest call cancels native work through the bridge. The synchronous desktop Rust adapter supports snapshots only; desktop applications can choose their own refresh schedule or use the Apple native monitor on macOS.
 
-An active connection never proves that an application server is reachable. `internet_validated` is Android's OS assessment; on other platforms it remains unknown. Browser online hints can be wrong. No connectivity probe or third-party public-IP request occurs. This port does not yet expose Expo's airplane-mode query, SSID/MAC access, or a cross-platform local-IP RPC.
+An active connection never proves that an application server is reachable. `internet_validated` is Android's OS assessment; on other platforms it remains unknown. Browser online hints can be wrong. No connectivity probe or third-party public-IP request occurs. This port does not expose Expo's airplane-mode query. The Wi-Fi name, BSSID and local addresses live in the separate `leptoskit_plugin_network_info` crate, so apps that only check connectivity never declare Wi-Fi permissions.
 
 Reference APIs: [Expo Network](https://docs.expo.dev/versions/latest/sdk/network/), [Apple NWPathMonitor](https://developer.apple.com/documentation/network/nwpathmonitor), [Android network capabilities](https://developer.android.com/reference/android/net/NetworkCapabilities), [MDN navigator.onLine](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/onLine), [MDN NetworkInformation](https://developer.mozilla.org/en-US/docs/Web/API/NetworkInformation). Tauri's [plugin directory](https://tauri.app/plugin/) does not define an official network-state API to mirror; this crate exposes the operating systems' capabilities without adding a desktop webview dependency.
 
@@ -50,7 +62,7 @@ Reference APIs: [Expo Network](https://docs.expo.dev/versions/latest/sdk/network
 
 <!-- {=p_networkSummary} -->
 
-Add `leptoskit_plugin_network` as a direct dependency and select the `network` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Network` rather than resolving the plugin on every call. Apple uses `NWPathMonitor`, Android uses `ConnectivityManager`, desktop reports interface state, and the browser uses `navigator.onLine` plus `NetworkInformation`; an active connection never claims a server is reachable.
+Add `leptoskit_plugin_network` as a direct dependency and select the `network` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Network` rather than resolving the plugin on every call. Apple uses `NWPathMonitor`, Android uses `ConnectivityManager`, desktop reports interface state, and the browser uses `navigator.onLine` plus `NetworkInformation`. Each reading names a primary connection and the full set of transports in use (Wi-Fi, cellular, ethernet, Bluetooth, VPN, satellite, other), as Flutter's `connectivity_plus` lists them; an active connection never claims a server is reachable.
 
 <!-- {/p_networkSummary} -->
 
@@ -59,7 +71,7 @@ Add `leptoskit_plugin_network` as a direct dependency and select the `network` p
 ```toml
 # In a native host, select `network` in `native.plugins`.
 [dependencies]
-leptoskit_plugin_network = { version = "0.1", features = ["guest"] }
+leptoskit_plugin_network = { version = "0.3", features = ["guest"] }
 ```
 
 ## Learn more
