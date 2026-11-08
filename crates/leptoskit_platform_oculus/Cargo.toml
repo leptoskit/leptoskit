@@ -1,0 +1,22 @@
+[package]
+name = "leptoskit_platform_oculus"
+version = "0.3.0"
+authors.workspace = true
+categories = ["gui", "os", "rendering"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["oculus", "quest", "openxr", "meta", "leptoskit"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Experimental Meta Quest / Oculus platform extension for leptoskit: host stubs and capability manifest."
+
+[package.metadata.leptoskit.native-support]
+oculus = true
+
+[dependencies]
+leptoskit_platform = { workspace = true }
+
+[lints]
+workspace = true

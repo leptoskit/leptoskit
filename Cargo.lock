@@ -5376,6 +5376,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_platform",
  "leptoskit_platform_harmonyos",
+ "leptoskit_platform_oculus",
  "leptoskit_plugin",
  "leptoskit_plugin_http",
  "leptoskit_plugin_router",
@@ -5857,6 +5858,13 @@ version = "0.3.0"
 dependencies = [
  "leptoskit_platform",
  "serde_json",
+]
+
+[[package]]
+name = "leptoskit_platform_oculus"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_platform",
 ]
 
 [[package]]
