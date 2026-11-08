@@ -42,6 +42,7 @@ members = [
 	"setup/coverage_gate",
 	"setup/harmonyos_plugins",
 	"setup/markup_ui_tests",
+	"setup/services_echo",
 ]
 default-members = ["crates/*"]
 resolver = "2"

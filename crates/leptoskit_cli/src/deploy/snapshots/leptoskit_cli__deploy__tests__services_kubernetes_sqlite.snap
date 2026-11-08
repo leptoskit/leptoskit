@@ -67,11 +67,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 # curl answers the health check, and `app` is the unprivileged user the
-# server runs as.
+# server runs as, with uid and gid 10001.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --user-group --uid 10001 --no-create-home app \
+ && groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home app \
  && mkdir -p /data /volumes/exports \
  && chown app:app /data /volumes/exports
 WORKDIR /app
@@ -154,6 +155,12 @@ spec:
         app: notes
     spec:
       terminationGracePeriodSeconds: 30
+      # The image's `app` user by number, which the kubelet needs to check
+      # it isn't root; volumes are made writable to its group.
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: notes
           image: notes
@@ -253,6 +260,12 @@ spec:
         app: notes-analytics
     spec:
       terminationGracePeriodSeconds: 30
+      # The image's `app` user by number, which the kubelet needs to check
+      # it isn't root; volumes are made writable to its group.
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: analytics
           image: notes
@@ -358,6 +371,12 @@ spec:
         app: notes-cards
     spec:
       terminationGracePeriodSeconds: 30
+      # The image's `app` user by number, which the kubelet needs to check
+      # it isn't root; volumes are made writable to its group.
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: cards
           image: notes
