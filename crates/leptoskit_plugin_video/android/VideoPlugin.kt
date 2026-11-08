@@ -44,41 +44,54 @@ class VideoPlugin(
         if (closed) throw PluginException(PluginException.CANCELLED)
         if (method !in methods) throw PluginException(PluginException.UNAVAILABLE)
         return when (method) {
-            0 -> create(VideoWire.source(payload))
+            0 -> {
+                create(VideoWire.source(payload))
+            }
+
             1 -> {
                 val (id, url) = VideoWire.replace(payload)
                 replace(id, url)
                 ByteArray(0)
             }
+
             2 -> {
                 play(VideoWire.player(payload))
                 ByteArray(0)
             }
+
             3 -> {
                 pause(VideoWire.player(payload))
                 ByteArray(0)
             }
+
             4 -> {
                 val (id, position) = VideoWire.seek(payload)
                 seek(id, position.toLong() and 0xFFFF_FFFFL)
                 ByteArray(0)
             }
+
             5 -> {
                 val (id, muted) = VideoWire.flag(payload)
                 setMuted(id, muted)
                 ByteArray(0)
             }
+
             6 -> {
                 val (id, looping) = VideoWire.flag(payload)
                 setLoop(id, looping)
                 ByteArray(0)
             }
+
             7 -> {
                 val (id, thousandths) = VideoWire.rate(payload)
                 setRate(id, thousandths)
                 ByteArray(0)
             }
-            8 -> status(VideoWire.player(payload))
+
+            8 -> {
+                status(VideoWire.player(payload))
+            }
+
             else -> {
                 release(VideoWire.player(payload))
                 ByteArray(0)

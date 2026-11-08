@@ -3,13 +3,13 @@ package dev.leptoskit.plugins.video
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.leptoskit.bridge.PluginException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 @RunWith(AndroidJUnit4::class)
 class VideoPluginTest {
@@ -56,5 +56,9 @@ class VideoPluginTest {
     }
 
     private fun player(id: Int): ByteBuffer =
-        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(id).also { it.flip() }
+        ByteBuffer
+            .allocate(4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(id)
+            .also { it.flip() }
 }
