@@ -951,6 +951,19 @@ surface, Android uses Media3 `ExoPlayer` with a `PlayerView`, and the browser us
 
 <!-- {/p_videoSummary} -->
 
+<!-- {@p_video_thumbnailsSummary} -->
+
+Add `{{ plugin_video_thumbnails.package.name }}` as a direct dependency and select the
+`{{ plugin_video_thumbnails.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
+`guest::VideoThumbnails` rather than resolving the plugin on every call. Extract one JPEG
+frame at a time offset; multi-frame extraction remains later scope.
+
+<!-- {/p_video_thumbnailsSummary} -->
+
+
+
 <!-- {@p_cameraSummary} -->
 
 Add `{{ plugin_camera.package.name }}` as a direct dependency and select the `{{ plugin_camera.package.metadata.leptoskit.runtime.name }}` plugin in

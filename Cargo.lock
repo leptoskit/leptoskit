@@ -3607,6 +3607,7 @@ dependencies = [
  "leptoskit_plugin_tray",
  "leptoskit_plugin_updater",
  "leptoskit_plugin_video",
+ "leptoskit_plugin_video_thumbnails",
  "leptoskit_plugin_web_browser",
  "leptoskit_plugin_websocket",
  "leptoskit_plugin_window_state",
@@ -6773,6 +6774,13 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_plugin_video_thumbnails"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]
