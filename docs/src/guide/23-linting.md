@@ -10,7 +10,7 @@ leptoskit lint --no-clippy        # only the leptoskit rules, in milliseconds
 leptoskit lint -- -W clippy::nursery   # anything after `--` goes to clippy
 ```
 
-`lk lint` is the same command. Both checks run in parallel: the leptoskit rules read your source without building it, so they are done long before clippy, and every finding prints in rustc's layout once clippy finishes:
+`lk lint` is the same command. Both checks run in parallel: the leptoskit rules read your source without building it, so they are done long before clippy, and every finding prints in rustc's layout once clippy finishes. Clippy still uses `--workspace`, but it excludes host crates whose platforms are not listed in `app.platforms`, so a web-only project does not need native SDKs just to lint:
 
 ```text
 warning[leptoskit::markup_style]: `View(…)` builds this tree with builder calls

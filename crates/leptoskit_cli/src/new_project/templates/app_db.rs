@@ -16,8 +16,6 @@ pub const SERVER: &str = "http://localhost:3000";
 #[cfg(feature = "web")]
 #[leptos::component]
 pub fn App() -> impl leptos::prelude::IntoView {
-	use leptos::prelude::*;
-
 	let notes = provide();
 
 	move || leptoskit::web::render(screen(&notes))

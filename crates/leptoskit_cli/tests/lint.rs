@@ -219,6 +219,35 @@ mod clippy {
 	}
 
 	#[test]
+	fn clippy_excludes_host_crates_outside_app_platforms() {
+		let project = project(
+			"[app]\nname = \"notes_app\"\nplatforms = [\"web\"]\n",
+			"fn helper() -> u32 {\n\t1\n}\n",
+		);
+		let stand_in = tempfile::tempdir().expect("cargo directory");
+		let cargo = cargo(stand_in.path(), &[ARTIFACT], "", 0);
+		let output = lint(project.path(), &[], &cargo);
+		assert!(output.status.success(), "{}", text(&output.stdout));
+
+		let arguments = arguments(stand_in.path());
+		for host in [
+			"notes_app_ios",
+			"notes_app_android",
+			"notes_app_macos",
+			"notes_app_windows",
+			"notes_app_linux",
+			"notes_app_tui",
+		] {
+			assert!(
+				arguments
+					.windows(2)
+					.any(|pair| { pair[0] == "--exclude" && pair[1] == host }),
+				"missing --exclude {host} in {arguments:?}"
+			);
+		}
+	}
+
+	#[test]
 	fn clippy_warnings_pass_unless_warnings_are_denied() {
 		let project = project("", "fn helper() -> u32 {\n\t1\n}\n");
 		let stand_in = tempfile::tempdir().expect("cargo directory");
