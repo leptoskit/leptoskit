@@ -9,6 +9,10 @@
 
 #include <string>
 
+#ifdef __ANDROID__
+#include <android/native_window_jni.h>
+#endif
+
 jobject leptoskit_request(JNIEnv*, lk_bridge*, lk_request);
 
 namespace {
@@ -307,6 +311,11 @@ Java_dev_leptoskit_mobile_NativeApp_enableFrames(JNIEnv*, jclass, jlong handle) 
 extern "C" JNIEXPORT jint JNICALL
 Java_dev_leptoskit_mobile_NativeApp_enableTimers(JNIEnv*, jclass, jlong handle) {
     return lk_app_enable_timers(app(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_enableScene3d(JNIEnv*, jclass, jlong handle) {
+    return lk_app_enable_scene3d(app(handle));
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
@@ -991,4 +1000,205 @@ Java_dev_leptoskit_mobile_NativeApp_guestFailed(JNIEnv*, jclass, jlong handle) {
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_dev_leptoskit_mobile_NativeApp_guestError(JNIEnv* env, jclass, jlong handle) {
     return array(env, lk_guest_error(guest(handle)));
+}
+
+// 3D scenes. A view owns an acquired ANativeWindow, which it releases only
+// after Rust has let the surface go.
+
+namespace {
+struct Scene3dView {
+    lk_scene3d_view* view;
+    void* window;
+    JavaVM* java_vm;
+    jclass owner;
+    jmethodID wake;
+    jobject target;
+};
+
+#ifdef __ANDROID__
+// Rust calls this from any thread; it only posts to the view's looper.
+void scene3d_wake(void* opaque) {
+    auto* view = static_cast<Scene3dView*>(opaque);
+    CallbackEnv scope(view->java_vm);
+    JNIEnv* env = scope.get();
+    env->CallStaticVoidMethod(view->owner, view->wake, view->target);
+
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+    }
+}
+#endif
+
+struct Scene3dAssets {
+    JavaVM* java_vm;
+    jclass owner;
+    jmethodID read;
+    jobject assets;
+};
+
+// Rust's asset thread reads through the APK's AssetManager.
+int32_t scene3d_read(void* opaque, const uint8_t* path, size_t len, void* sink) {
+    auto* reader = static_cast<Scene3dAssets*>(opaque);
+    CallbackEnv scope(reader->java_vm);
+    JNIEnv* env = scope.get();
+    int32_t found = 0;
+    jbyteArray name = env->NewByteArray(static_cast<jsize>(len));
+
+    if (name) {
+        env->SetByteArrayRegion(name, 0, static_cast<jsize>(len), reinterpret_cast<const jbyte*>(path));
+        auto bytes = static_cast<jbyteArray>(
+            env->CallStaticObjectMethod(reader->owner, reader->read, reader->assets, name));
+
+        if (bytes && !env->ExceptionCheck()) {
+            const jsize count = env->GetArrayLength(bytes);
+            jbyte* data = env->GetByteArrayElements(bytes, nullptr);
+
+            if (data) {
+                lk_scene3d_sink_write(sink, reinterpret_cast<const uint8_t*>(data), static_cast<size_t>(count));
+                env->ReleaseByteArrayElements(bytes, data, JNI_ABORT);
+                found = 1;
+            }
+        }
+
+        if (bytes) env->DeleteLocalRef(bytes);
+        env->DeleteLocalRef(name);
+    }
+
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        found = 0;
+    }
+
+    return found;
+}
+
+Scene3dView* scene3d(jlong handle) {
+    return reinterpret_cast<Scene3dView*>(static_cast<uintptr_t>(handle));
+}
+}  // namespace
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_available(JNIEnv*, jclass) {
+    return lk_scene3d_available() == 1;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_error(JNIEnv* env, jclass) {
+    const auto error = lk_scene3d_error();
+    const std::string message(reinterpret_cast<const char*>(error.data), error.len);
+    lk_buffer_release(error);
+
+    return env->NewStringUTF(message.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_setBackend(JNIEnv* env, jclass, jstring name) {
+    if (!name) return -1;
+    const char* chars = env->GetStringUTFChars(name, nullptr);
+
+    if (!chars) return -1;
+    const std::string value(chars);
+    env->ReleaseStringUTFChars(name, chars);
+
+    return lk_scene3d_set_backend(reinterpret_cast<const uint8_t*>(value.data()), value.size());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_setAssetReader(JNIEnv* env, jclass owner, jobject assets) {
+    if (!assets || lk_scene3d_available() != 1) return -1;
+    auto* reader = new (std::nothrow) Scene3dAssets {};
+
+    if (!reader || env->GetJavaVM(&reader->java_vm) != JNI_OK) {
+        delete reader;
+
+        return -1;
+    }
+    // The class is cached here: FindClass on the asset thread would not see app classes.
+    reader->owner = static_cast<jclass>(env->NewGlobalRef(owner));
+    reader->read = env->GetStaticMethodID(owner, "readAsset", "(Landroid/content/res/AssetManager;[B)[B");
+    reader->assets = env->NewGlobalRef(assets);
+
+    if (!reader->owner || !reader->read || !reader->assets || env->ExceptionCheck()) return -1;
+
+    // The reader lives as long as the process, as lk_scene3d_set_asset_reader requires.
+    return lk_scene3d_set_asset_reader(reader, scene3d_read);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_attach(JNIEnv* env, jclass owner, jint scene, jobject surface,
+    jint width, jint height, jobject target) {
+#ifdef __ANDROID__
+    if (!surface || !target || width <= 0 || height <= 0) return 0;
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+
+    if (!window) return 0;
+    auto* view = new (std::nothrow) Scene3dView {};
+
+    if (!view || env->GetJavaVM(&view->java_vm) != JNI_OK) {
+        delete view;
+        ANativeWindow_release(window);
+
+        return 0;
+    }
+    view->window = window;
+    view->owner = static_cast<jclass>(env->NewGlobalRef(owner));
+    view->wake = env->GetStaticMethodID(owner, "wake", "(Ldev/leptoskit/mobile/NativeScene3dView;)V");
+    view->target = env->NewGlobalRef(target);
+    view->view = lk_scene3d_view_attach_window(static_cast<uint32_t>(scene), window,
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+
+    if (!view->view || !view->wake || env->ExceptionCheck()) {
+        if (view->view) lk_scene3d_view_detach(view->view);
+        env->DeleteGlobalRef(view->target);
+        env->DeleteGlobalRef(view->owner);
+        ANativeWindow_release(window);
+        delete view;
+
+        return 0;
+    }
+    lk_scene3d_view_set_waker(view->view, view, scene3d_wake);
+
+    return static_cast<jlong>(reinterpret_cast<uintptr_t>(view));
+#else
+    (void)env;
+    (void)owner;
+    (void)scene;
+    (void)surface;
+    (void)width;
+    (void)height;
+    (void)target;
+
+    return 0;
+#endif
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_resize(JNIEnv*, jclass, jlong handle, jint width, jint height) {
+    if (auto* view = scene3d(handle); view && width >= 0 && height >= 0) {
+        lk_scene3d_view_resize(view->view, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_frame(JNIEnv*, jclass, jlong handle, jdouble time) {
+    auto* view = scene3d(handle);
+
+    return view ? lk_scene3d_view_frame(view->view, time) : -1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_detach(JNIEnv* env, jclass, jlong handle) {
+    auto* view = scene3d(handle);
+
+    if (!view) return;
+    // Rust drops the surface and the waker before the window and the view go.
+    lk_scene3d_view_detach(view->view);
+#ifdef __ANDROID__
+    ANativeWindow_release(static_cast<ANativeWindow*>(view->window));
+#endif
+    env->DeleteGlobalRef(view->target);
+    env->DeleteGlobalRef(view->owner);
+    delete view;
 }

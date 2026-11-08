@@ -101,6 +101,8 @@ class LeptosKitView(
             // Timers are optional: an unavailable one stays `Unavailable` to
             // the guest instead of failing application startup.
             NativeApp.enableTimers(app)
+            // 3D scenes, when the app was built with them.
+            NativeApp.enableScene3d(app)
             guest = NativeApp.guestSpawn(app, GuestNotifier(handler) { runUi { drain() } })
             check(guest != 0L) { "Cannot start the guest thread" }
             riveAnimator =

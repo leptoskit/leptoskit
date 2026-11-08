@@ -19,7 +19,7 @@ let controllerTargets: [Target] = [
             "mobile/MobileApplicationChrome.swift", "desktop/LeptosKitMacViewController.swift",
             "mobile/NativeAppFactory.swift", "mobile/NativeAppRuntime.swift", "mobile/NativeGuestRuntime.swift",
             "mobile/NativeRustWorker.kt", "mobile/NativeRustAsync.kt", "mobile/NativeApp.kt",
-            "mobile/NativeRiveAnimator.kt", "mobile/NativeApplicationTeardown.kt", "mobile/NativePluginJobs.kt",
+            "mobile/NativeRiveAnimator.kt", "mobile/NativeScene3d.kt", "mobile/NativeApplicationTeardown.kt", "mobile/NativePluginJobs.kt",
             "mobile/NativeServiceOwner.kt", "mobile/NativeTextMeasurer.kt",
             "mobile/NativeWidgetProps.kt", "mobile/NativeWidgetRenderer.kt", "mobile/RenderBatch.kt",
             "mobile/LeptosKitApplicationController.swift", "mobile/app.cpp",
@@ -28,7 +28,7 @@ let controllerTargets: [Target] = [
             "mobile/MobileApplicationGuests.swift"
         ],
         sources: [
-            "mobile/NativeRive.swift", "mobile/DevtoolsOverlay.swift",
+            "mobile/NativeRive.swift", "mobile/NativeScene3d.swift", "mobile/DevtoolsOverlay.swift",
             "desktop/MacWidgetRenderer.swift", "desktop/MacWidgetControls.swift",
             "desktop/MacTextLabel.swift", "desktop/MacScrollView.swift",
             "mobile/RenderTransaction.swift", "mobile/BinaryTransaction.swift",

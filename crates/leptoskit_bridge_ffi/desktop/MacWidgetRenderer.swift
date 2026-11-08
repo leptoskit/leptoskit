@@ -107,7 +107,10 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         devtools?.close()
         devtools = nil
 
-        for widget in widgets.values { (widget as? NSImageView)?.image = nil }
+        for widget in widgets.values {
+            (widget as? NSImageView)?.image = nil
+            (widget as? NativeScene3dView)?.close()
+        }
         widgets.removeAll()
         properties.removeAll()
         scrolls.removeAll()
@@ -219,8 +222,10 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         case "image", "Image": widget = NSImageView()
         case "vector", "Vector": widget = MacVectorView()
         case "rive", "Rive": widget = NativeRiveImageView()
+        case "scene3d", "Scene3d": widget = NativeScene3dView()
         default: widget = try makeControl(item)
         }
+        (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
         widget.identifier = NSUserInterfaceItemIdentifier(String(item.id))
         widgets[item.id] = widget
         properties[item.id] = item.props
@@ -246,6 +251,7 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
             properties[item.id] = item.props
             try MacWidgetStyle.apply(item.props, to: widget)
             scrolls.receive(item.props.scrollOffset, for: item.id)
+            (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)
         }
 
         if let item = change.updateLayout, let widget = widgets[item.id] {

@@ -155,6 +155,33 @@ int32_t lk_app_has_rive(const lk_app *app);
 int32_t lk_app_rive_tick(lk_app *app, double elapsed, float scale, uint32_t flags,
     void *context, lk_rive_visible_fn visible, lk_rive_present_fn present);
 lk_buffer lk_app_error(lk_app *app);
+/* 3D scenes. 1 installs the scene3d plugin, 0 in a build without 3D. */
+int32_t lk_app_enable_scene3d(lk_app *app);
+/* Every lk_scene3d function exists in every build; without the bridge's
+ * scene3d feature lk_scene3d_available reports 0 and nothing attaches.
+ * Views draw on the thread that attached them, from the display link. */
+typedef struct lk_scene3d_view lk_scene3d_view;
+typedef void (*lk_scene3d_wake_fn)(void *context);
+typedef int32_t (*lk_scene3d_read_fn)(void *context, const uint8_t *path, size_t path_len,
+    void *sink);
+int32_t lk_scene3d_available(void);
+lk_buffer lk_scene3d_error(void);
+int32_t lk_scene3d_set_backend(const uint8_t *name, size_t len);
+int32_t lk_scene3d_set_asset_directory(const uint8_t *path, size_t len);
+/* The reader runs on the asset thread and writes bytes with sink_write. */
+int32_t lk_scene3d_set_asset_reader(void *context, lk_scene3d_read_fn read);
+void lk_scene3d_sink_write(void *sink, const uint8_t *bytes, size_t len);
+lk_scene3d_view *lk_scene3d_view_attach_layer(uint32_t scene, void *ca_metal_layer,
+    uint32_t width, uint32_t height);
+lk_scene3d_view *lk_scene3d_view_attach_window(uint32_t scene, void *a_native_window,
+    uint32_t width, uint32_t height);
+/* wake may run on any thread; it schedules a display link and never draws. */
+void lk_scene3d_view_set_waker(lk_scene3d_view *view, void *context, lk_scene3d_wake_fn wake);
+void lk_scene3d_view_resize(lk_scene3d_view *view, uint32_t width, uint32_t height);
+/* 1 wants another frame, 0 still, -1 failure. time is the display link's, in seconds. */
+int32_t lk_scene3d_view_frame(lk_scene3d_view *view, double time);
+int32_t lk_scene3d_view_needs_frame(const lk_scene3d_view *view);
+void lk_scene3d_view_detach(lk_scene3d_view *view);
 /* 1 native request, 0 idle, 2 yield to the next UI turn, negative failure. */
 int32_t lk_app_next_request(lk_app *app, lk_request *out);
 /* Worker handles own their plugin/payload independently of the app. The host

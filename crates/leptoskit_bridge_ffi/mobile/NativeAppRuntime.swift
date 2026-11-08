@@ -52,6 +52,8 @@ final class NativeAppRuntime {
         // Timers are optional: if the host cannot start one, the guest sees
         // `Unavailable` instead of the app failing to start.
         if lk_app_enable_timers(app.raw) != 0 { NSLog("LeptosKit: timers unavailable") }
+        // 3D scenes, when the app was built with them (`lk_app_enable_scene3d` answers 0 otherwise).
+        if lk_app_enable_scene3d(app.raw) < 0 { NSLog("LeptosKit: 3D scenes unavailable") }
         app.onWake = { [weak self] in self?.schedulePump() }
         requests.onCapacity = { [weak self] in self?.schedulePump() }
         requests.onCompletion = { [weak self] id, result in self?.finishRequest(id: id, result: result) }
