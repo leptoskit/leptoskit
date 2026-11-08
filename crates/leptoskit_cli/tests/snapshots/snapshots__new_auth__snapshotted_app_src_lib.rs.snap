@@ -105,8 +105,6 @@ pub fn provide() -> Shell {
 #[cfg(feature = "web")]
 #[leptos::component]
 pub fn App() -> impl leptos::prelude::IntoView {
-	use leptos::prelude::*;
-
 	let shell = provide();
 
 	move || leptoskit::web::render(screen(&shell))

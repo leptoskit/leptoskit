@@ -10,7 +10,7 @@ Usage: leptoskit lint [OPTIONS] [PATHS]... [-- <CLIPPY_ARGS>...]
 
 Arguments:
   [PATHS]...
-          Files or directories for the leptoskit rules; the whole project by default. clippy always checks the whole workspace
+          Files or directories for the leptoskit rules; the whole project by default. clippy checks the workspace, excluding host crates whose platforms are not listed in `app.platforms`
 
   [CLIPPY_ARGS]...
           Arguments passed on to clippy, such as `-- -W clippy::nursery`

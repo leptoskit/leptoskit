@@ -4,6 +4,11 @@
 //! The project rules read source and finish in milliseconds, while clippy
 //! compiles; clippy starts first and the rules run while it builds. Both
 //! print in rustc's diagnostic layout, followed by one summary.
+//!
+//! When `leptoskit.toml` lists platforms, clippy still uses `--workspace` but
+//! excludes host packages for destinations that are not enabled, so a
+//! web-only `platforms = ["web"]` project does not need GTK or missing
+//! `.leptoskit/*/registrant.rs` stubs just to pass lint.
 
 use std::io::BufRead as _;
 use std::io::BufReader;
@@ -16,16 +21,30 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::Context as _;
+use leptoskit_config::LeptoskitConfig;
 use leptoskit_config::LintConfig;
+use leptoskit_config::Platform;
 
 use crate::ui;
 use crate::ui::Outcome;
+
+/// Host packages the scaffold puts in `[workspace].members` that clippy should
+/// skip when their platform is not in `app.platforms`.
+const HOST_PLATFORMS: [Platform; 6] = [
+	Platform::Ios,
+	Platform::Android,
+	Platform::Macos,
+	Platform::Windows,
+	Platform::Linux,
+	Platform::Tui,
+];
 
 /// Checks the project with the leptoskit rules and clippy.
 #[derive(Debug, clap::Args)]
 pub struct LintArgs {
 	/// Files or directories for the leptoskit rules; the whole project by
-	/// default. clippy always checks the whole workspace.
+	/// default. clippy checks the workspace, excluding host crates whose
+	/// platforms are not listed in `app.platforms`.
 	pub paths: Vec<PathBuf>,
 	/// Run only the leptoskit rules.
 	#[arg(long)]
@@ -59,7 +78,7 @@ struct ClippyReport {
 /// or either check fails.
 pub fn run(args: &LintArgs) -> anyhow::Result<()> {
 	let cwd = std::env::current_dir().context("read the current directory")?;
-	let root = leptoskit_config::LeptoskitConfig::find_root().unwrap_or_else(|_| cwd.clone());
+	let root = LeptoskitConfig::find_root().unwrap_or_else(|_| cwd.clone());
 	let config_path = root.join(leptoskit_config::CONFIG_FILE);
 	let config = if config_path.is_file() {
 		LintConfig::load_from_file(&config_path)?
@@ -83,7 +102,8 @@ pub fn run(args: &LintArgs) -> anyhow::Result<()> {
 		let root = root.clone();
 		let extra = args.clippy_args.clone();
 		let deny_warnings = args.deny_warnings;
-		std::thread::spawn(move || run_clippy(&root, deny_warnings, &extra))
+		let excludes = clippy_host_excludes(&root);
+		std::thread::spawn(move || run_clippy(&root, deny_warnings, &extra, &excludes))
 	});
 
 	let started = Instant::now();
@@ -206,25 +226,47 @@ fn problems(errors: usize, warnings: usize) -> Option<String> {
 	(!parts.is_empty()).then(|| parts.join(" · "))
 }
 
+/// Host package names to `--exclude` from clippy for platforms that are not
+/// enabled in `app.platforms`. Missing or unreadable config yields no excludes.
+fn clippy_host_excludes(root: &Path) -> Vec<String> {
+	let Ok(config) = LeptoskitConfig::load_from(root) else {
+		return Vec::new();
+	};
+	let crate_name = config.app.name.replace('-', "_");
+	HOST_PLATFORMS
+		.into_iter()
+		.filter(|platform| !config.app.platforms.contains(platform))
+		.map(|platform| format!("{crate_name}_{platform}"))
+		.collect()
+}
+
 /// Runs clippy over the workspace at `root`, collecting its diagnostics
 /// from cargo's JSON messages and showing which crate it is on.
 ///
 /// Denying warnings goes through cargo's `build.warnings` rather than
 /// `-D warnings`, so cargo's own lints, such as an unused dependency, fail
 /// the run too, and the build cache survives the switch.
-fn run_clippy(root: &Path, deny_warnings: bool, extra: &[String]) -> anyhow::Result<ClippyReport> {
+fn run_clippy(
+	root: &Path,
+	deny_warnings: bool,
+	extra: &[String],
+	excludes: &[String],
+) -> anyhow::Result<ClippyReport> {
 	let started = Instant::now();
 	let cargo = std::env::var_os("CARGO")
 		.filter(|cargo| !cargo.is_empty())
 		.unwrap_or_else(|| "cargo".into());
-	let mut child = Command::new(cargo)
-		.current_dir(root)
-		.args([
-			"clippy",
-			"--workspace",
-			"--all-targets",
-			"--message-format=json-diagnostic-rendered-ansi",
-		])
+	let mut command = Command::new(cargo);
+	command.current_dir(root).args([
+		"clippy",
+		"--workspace",
+		"--all-targets",
+		"--message-format=json-diagnostic-rendered-ansi",
+	]);
+	for package in excludes {
+		command.args(["--exclude", package]);
+	}
+	let mut child = command
 		.args(
 			deny_warnings
 				.then_some(["--config", "build.warnings=\"deny\""])
@@ -312,6 +354,23 @@ mod tests {
 		assert_eq!(outcome(0, 2, false), Outcome::Warned);
 		assert_eq!(outcome(0, 2, true), Outcome::Failed);
 		assert_eq!(outcome(1, 0, false), Outcome::Failed);
+	}
+
+	#[test]
+	fn clippy_host_excludes_uses_app_name_and_platforms() {
+		let dir = tempfile::tempdir().expect("scratch");
+		std::fs::write(
+			dir.path().join("leptoskit.toml"),
+			"[app]\nname = \"my-notes\"\nplatforms = [\"web\", \"ios\"]\n",
+		)
+		.expect("write config");
+		let excludes = clippy_host_excludes(dir.path());
+		assert!(excludes.contains(&"my_notes_android".to_owned()));
+		assert!(excludes.contains(&"my_notes_linux".to_owned()));
+		assert!(excludes.contains(&"my_notes_tui".to_owned()));
+		assert!(!excludes.iter().any(|name| name == "my_notes_ios"));
+		let missing = dir.path().join("missing");
+		assert_eq!(clippy_host_excludes(&missing), Vec::<String>::new());
 	}
 
 	#[test]
