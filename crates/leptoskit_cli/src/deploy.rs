@@ -1151,9 +1151,11 @@ ARG LEPTOSKIT_VERSION
 	if web {
 		out.push_str(
 			"ARG BINARYEN_VERSION
-RUN curl --fail --silent --show-error --location \\
+RUN curl --fail --silent --show-error --location --retry 5 --retry-all-errors \\
+      --output /tmp/binaryen.tar.gz \\
       \"https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-$(uname -m)-linux.tar.gz\" \\
-    | tar -xz -C /opt \\
+ && tar -xzf /tmp/binaryen.tar.gz -C /opt \\
+ && rm /tmp/binaryen.tar.gz \\
  && ln -s \"/opt/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt\" /usr/local/bin/wasm-opt
 ",
 		);
