@@ -754,6 +754,19 @@ Linux hosts register it where it has a Linux Rust implementation; generated Wind
 
 <!-- {/p_speechSummary} -->
 
+<!-- {@p_videoSummary} -->
+
+Add `{{ plugin_video.package.name }}` as a direct dependency and select the `{{ plugin_video.package.metadata.leptoskit.runtime.name }}` plugin in
+`native.plugins`; supported generated hosts discover it from Cargo metadata. Generated
+Linux hosts register it where it has a Linux Rust implementation; generated Windows and
+terminal hosts currently omit runtime plugins, so use explicit registration in a custom
+host there. Guests enable the `guest` feature and reuse `guest::Video` rather than
+resolving the plugin on every call. iOS and macOS use `AVPlayer` with an `AVPlayerLayer`
+surface, Android uses Media3 ExoPlayer with a `PlayerView`, and the browser uses an HTML
+`<video>` element; Windows, Linux, and HarmonyOS return `Unavailable`.
+
+<!-- {/p_videoSummary} -->
+
 <!-- {@p_sqliteSummary} -->
 
 Add `{{ plugin_sqlite.package.name }}` as a direct dependency and select the `{{ plugin_sqlite.package.metadata.leptoskit.runtime.name }}` plugin in
