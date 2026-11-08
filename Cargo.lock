@@ -6974,6 +6974,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_pod"
+version = "0.3.0"
+dependencies = [
+ "insta",
+ "leptoskit_pod_macros",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "leptoskit_pod_macros"
+version = "0.3.0"
+dependencies = [
+ "insta",
+ "prettyplease 0.3.0",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "leptoskit_query"
 version = "0.3.0"
 dependencies = [

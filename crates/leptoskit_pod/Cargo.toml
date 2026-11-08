@@ -1,0 +1,30 @@
+[package]
+name = "leptoskit_pod"
+version = "0.3.0"
+authors.workspace = true
+categories = ["encoding", "network-programming", "wasm"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["leptoskit", "rpc", "codec", "binary", "pod"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "LK Pod: portable little-endian TLV wire codec for leptoskit RPC."
+
+[dependencies]
+leptoskit_pod_macros = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+leptoskit_pod_macros = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[features]
+default = ["derive"]
+derive = ["dep:leptoskit_pod_macros"]
+
+[lints]
+workspace = true

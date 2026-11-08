@@ -1,0 +1,20 @@
+---
+source: crates/leptoskit_pod/tests/roundtrip.rs
+expression: report
+---
+empty_struct_v0: 0000
+note_hi: 00000701020000006869
+option_none_u8: 00
+option_some_u8_9: 0109
+result_ok_u8_3: 0003
+result_err_u8_4: 0104
+vec_u8_empty: 00000000
+vec_u8_1_2_3: 03000000010203
+enum_unit_variant_0: 0000
+enum_struct_variant: 010000000703000000616263
+envelope_rpc_empty: 4c4b303101000100000000000000
+truncated_u16: Truncated
+bad_utf8_string: InvalidUtf8
+bad_bool: InvalidTag
+bad_magic: InvalidEnvelope
+envelope_short: Truncated

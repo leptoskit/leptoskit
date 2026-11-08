@@ -1,0 +1,91 @@
+{
+  "format": "leptoskit_pod_conformance_v1",
+  "codec_version": 1,
+  "vectors": [
+    {
+      "name": "empty_struct_v0",
+      "hex": "0000",
+      "description": "struct version 0, flags 0, no fields"
+    },
+    {
+      "name": "note_hi",
+      "hex": "00000701020000006869",
+      "description": "Note { priority:7, archived:true, title:\"hi\" } dense v0"
+    },
+    {
+      "name": "option_none_u8",
+      "hex": "00",
+      "description": "Option::<u8>::None"
+    },
+    {
+      "name": "option_some_u8_9",
+      "hex": "0109",
+      "description": "Option::<u8>::Some(9)"
+    },
+    {
+      "name": "result_ok_u8_3",
+      "hex": "0003",
+      "description": "Result::<u8,u8>::Ok(3)"
+    },
+    {
+      "name": "result_err_u8_4",
+      "hex": "0104",
+      "description": "Result::<u8,u8>::Err(4)"
+    },
+    {
+      "name": "vec_u8_empty",
+      "hex": "00000000",
+      "description": "Vec::<u8> empty count"
+    },
+    {
+      "name": "vec_u8_1_2_3",
+      "hex": "03000000010203",
+      "description": "Vec::<u8> [1,2,3]"
+    },
+    {
+      "name": "enum_unit_variant_0",
+      "hex": "0000",
+      "description": "enum disc 0, unit payload"
+    },
+    {
+      "name": "enum_struct_variant",
+      "hex": "010000000703000000616263",
+      "description": "disc 1 + struct v0 { priority:7, title:\"abc\" }"
+    },
+    {
+      "name": "envelope_rpc_empty",
+      "hex": "4c4b303101000100000000000000",
+      "description": "LK01 envelope Rpc empty body",
+      "envelope": true
+    }
+  ],
+  "malformed": [
+    {
+      "name": "truncated_u16",
+      "hex": "01",
+      "expect": "Truncated"
+    },
+    {
+      "name": "bad_utf8_string",
+      "hex": "01000000ff",
+      "expect": "InvalidUtf8"
+    },
+    {
+      "name": "bad_bool",
+      "hex": "02",
+      "expect": "InvalidTag"
+    },
+    {
+      "name": "bad_magic",
+      "hex": "0000000001000100000000000000",
+      "expect": "InvalidEnvelope",
+      "envelope": true
+    },
+    {
+      "name": "envelope_short",
+      "hex": "4c4b3031",
+      "expect": "Truncated",
+      "envelope": true
+    }
+  ]
+}
