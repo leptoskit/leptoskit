@@ -1,3 +1,12 @@
+//! <!-- {=scene3dSummary|trim|linePrefix:"//! ":true} -->
+//!
+//! It draws 3D scenes the host owns: glTF models with skins, morph targets, and
+//! animation, lit and shaded on the GPU with wgpu, in a `Scene3d` view. A guest
+//! describes a scene with compact ops and hears back through events; the host
+//! animates and draws it on the display link, never in the guest's frame loop.
+//!
+//! <!-- {/scene3dSummary} -->
+//!
 //! GPU 3D scenes for leptoskit.
 //!
 //! A guest describes a scene with [`Op`]s and the host owns it: models loaded

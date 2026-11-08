@@ -1244,6 +1244,7 @@ fn builtin(name: &str) -> Option<Start> {
 		"Pressable" => attribute("accessibility_label", None),
 		"Vector" => attribute("view_box", Some("ViewBox::UNIT")),
 		"Rive" => attribute("rive_playback", None),
+		"Scene3d" => attribute("scene", None),
 		"Radio" => Start::Radio,
 
 		_ => return None,
@@ -2790,6 +2791,21 @@ fn Badge(
 	#[test]
 	fn converts_a_view_returned_in_ok() {
 		insta::assert_snapshot!(convert_file(RIVE_STATUS));
+	}
+
+	#[test]
+	fn scenes_take_their_scene_as_the_argument() {
+		let source = r#"use leptoskit::prelude::*;
+use leptoskit::scene3d::SceneId;
+
+fn turntable() -> Element {
+	view! { <Scene3d scene=SceneId(1) aria_label="A turning character" class="w-full h-96" /> }
+}
+"#;
+		let converted = convert_file(source);
+		assert!(converted.contains("Scene3d(SceneId(1))"), "{converted}");
+		assert!(converted.contains(".aria_label(\"A turning character\")"));
+		assert!(!converted.contains(".scene("));
 	}
 
 	#[test]

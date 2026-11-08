@@ -9696,6 +9696,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scene3d_example"
+version = "0.3.0"
+dependencies = [
+ "leptos",
+ "leptoskit",
+ "leptoskit_3d",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"

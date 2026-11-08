@@ -43,6 +43,7 @@
 - [Toasts](guide/33-toasts.md)
 - [Rive animations](guide/20-rive.md)
 - [Playing sound](guide/34-audio.md)
+- [3D scenes](guide/33-3d-scenes.md)
 - [Foldable phones](guide/21-foldable-phones.md)
 - [The database](guide/22-database.md)
 - [Real-time screens](guide/24-real-time.md)

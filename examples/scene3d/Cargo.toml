@@ -1,0 +1,36 @@
+[package]
+name = "scene3d_example"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+description = "Turntable: a skinned character turning on a stand, the worked example for leptoskit's 3D scenes."
+
+# The library is also the browser's Wasm client, which `leptoskit dev` and
+# `leptoskit build` build with `csr`.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { workspace = true, features = ["csr"], optional = true }
+leptoskit = { workspace = true, features = ["3d"] }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The tests load the committed model and draw a frame of the turntable.
+leptoskit_3d = { workspace = true, features = ["renderer"] }
+
+[features]
+# The browser: leptos renders the screen and `leptoskit_3d` draws the scene
+# into its canvas, with WebGPU or WebGL2.
+web = ["dep:leptos", "leptoskit/web"]
+# Mount the turntable when the browser loads the Wasm client.
+csr = ["web", "dep:wasm-bindgen", "dep:wasm-bindgen-futures"]
+
+[lints]
+workspace = true

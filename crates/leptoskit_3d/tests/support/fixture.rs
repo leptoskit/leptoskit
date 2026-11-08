@@ -279,7 +279,9 @@ pub fn lit_cube() -> Vec<u8> {
 /// A skinned character standing in for a game's: a tube 2 m tall of
 /// `joints` rings of 64 vertices (with `joints = 40`, 10 240 vertices and
 /// 20 000 triangles), each ring bound to a chain of joints, two morph
-/// targets, and a looping `sway` clip that turns every joint.
+/// targets, a looping `sway` clip that turns every joint, and `spin`, which
+/// sways the same way while turning the whole character once every four
+/// seconds.
 pub fn character(joints: usize) -> Vec<u8> {
 	let mut builder = Builder::default();
 	let around = 64;
@@ -376,6 +378,38 @@ pub fn character(joints: usize) -> Vec<u8> {
 			joint + 2
 		));
 	}
+	// `spin` turns the whole character once around +y every four seconds while
+	// it sways, so one clip shows both: clips replace each other rather than
+	// layer.
+	let spin_keys = 121;
+	let spin_times: Vec<f32> = (0..spin_keys).map(|key| key as f32 / 30.0).collect();
+	let spin_times = builder.floats(&spin_times, 1, true);
+	let turn: Vec<f32> = (0..spin_keys)
+		.flat_map(|key| {
+			let half = key as f32 / 30.0 * std::f32::consts::FRAC_PI_4;
+			[0.0, half.sin(), 0.0, half.cos()]
+		})
+		.collect();
+	let turn = builder.floats(&turn, 4, false);
+	let mut spin_channels =
+		vec![r#"{"sampler":0,"target":{"node":0,"path":"rotation"}}"#.to_owned()];
+	let mut spin_samplers = vec![format!(r#"{{"input":{spin_times},"output":{turn}}}"#)];
+	for joint in 0..joints {
+		let rotations: Vec<f32> = (0..spin_keys)
+			.flat_map(|key| {
+				let phase = key as f32 / 30.0 * std::f32::consts::TAU + joint as f32 * 0.3;
+				let half = phase.sin() * 0.04;
+				[0.0, 0.0, half.sin(), half.cos()]
+			})
+			.collect();
+		let output = builder.floats(&rotations, 4, false);
+		spin_samplers.push(format!(r#"{{"input":{spin_times},"output":{output}}}"#));
+		spin_channels.push(format!(
+			r#"{{"sampler":{},"target":{{"node":{},"path":"rotation"}}}}"#,
+			joint + 1,
+			joint + 2
+		));
+	}
 	let joint_nodes: Vec<String> = (0..joints).map(|joint| (joint + 2).to_string()).collect();
 	let json = format!(
 		r#""asset":{{"version":"2.0"}},
@@ -385,11 +419,16 @@ pub fn character(joints: usize) -> Vec<u8> {
 "meshes":[{{"primitives":[{{"attributes":{{"POSITION":{position},"NORMAL":{normal},"JOINTS_0":{joint},"WEIGHTS_0":{weight}}},"indices":{index},"material":0,
   "targets":[{{"POSITION":{wide}}},{{"POSITION":{tall}}}]}}],"weights":[0.5,0],"extras":{{"targetNames":["wide","tall"]}}}}],
 "materials":[{{"pbrMetallicRoughness":{{"baseColorFactor":[0.6,0.5,0.4,1],"metallicFactor":0,"roughnessFactor":0.7}}}}],
-"animations":[{{"name":"sway","channels":[{}],"samplers":[{}]}}]"#,
+"animations":[
+ {{"name":"sway","channels":[{}],"samplers":[{}]}},
+ {{"name":"spin","channels":[{}],"samplers":[{}]}}
+]"#,
 		nodes.join(","),
 		joint_nodes.join(","),
 		channels.join(","),
 		samplers.join(","),
+		spin_channels.join(","),
+		spin_samplers.join(","),
 	);
 	builder.glb(&json)
 }

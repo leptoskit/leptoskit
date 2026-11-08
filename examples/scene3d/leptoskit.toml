@@ -1,0 +1,13 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# `leptoskit dev` here serves the turntable in the browser: the library's
+# Wasm client, built with `csr`, mounted by `web/index.html`, with
+# `assets/models/character.glb` served at `/assets/models/character.glb`.
+[app]
+name = "scene3d_web"
+
+[build]
+client_package = "scene3d_example"
+features = ["csr"]

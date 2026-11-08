@@ -35,6 +35,7 @@ members = [
 	"examples/plugin_guest",
 	"examples/plugin_replies",
 	"examples/postcard",
+	"examples/scene3d",
 	"examples/soundboard",
 	"examples/timer_guest",
 	"setup/android_apk",
