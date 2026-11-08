@@ -40,6 +40,7 @@
 - [Localization](guide/19-localization.md)
 - [Animations](guide/32-animations.md)
 - [Motion](guide/32-motion.md)
+- [Toasts](guide/33-toasts.md)
 - [Rive animations](guide/20-rive.md)
 - [Foldable phones](guide/21-foldable-phones.md)
 - [The database](guide/22-database.md)
