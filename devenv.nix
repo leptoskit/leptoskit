@@ -1094,6 +1094,7 @@ in
           cargo test --locked --target wasm32-unknown-unknown \
             --package leptoskit_plugin_audio \
             --package leptoskit_plugin_battery \
+            --package leptoskit_plugin_device \
             --package leptoskit_plugin_dialog \
             --package leptoskit_plugin_document_picker \
             --package leptoskit_plugin_screen_orientation \

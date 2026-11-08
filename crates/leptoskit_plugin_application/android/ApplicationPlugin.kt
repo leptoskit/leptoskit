@@ -6,34 +6,24 @@ import android.content.pm.PackageManager
 import android.os.Build
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
-class ApplicationPlugin(
-    private val context: Context,
+/**
+ * The installed application's identity, signing certificate, install source
+ * and install times. The byte layout is documented in the Rust crate and
+ * mirrored by [ApplicationWire].
+ */
+class ApplicationPlugin internal constructor(
+    private val readFacts: () -> ApplicationFacts,
 ) : NativePlugin {
+    constructor(context: Context) : this({ readFacts(context) })
+
     override val name = "application"
     override val methods = intArrayOf(STATUS)
 
     private companion object {
         /** Reports the installed application's identity and version. */
         const val STATUS = 0
-
-        /** The API level where package info takes flags rather than flags ints. */
-        const val FLAGS_API = 33
-
-        /** The API level where the version code grew to 64 bits. */
-        const val LONG_VERSION_API = 28
-
-        /** Longest string the wire format carries. */
-        const val MAX_TEXT_BYTES = 4096
-
-        /** Room for the header and this answer's four short strings. */
-        const val RESULT_CAPACITY = 128
-
-        /** Version-one success, which every reply starts with. */
-        val SUCCESS = byteArrayOf(1, 0, 0, 0)
     }
 
     override suspend fun invoke(
@@ -44,67 +34,99 @@ class ApplicationPlugin(
 
         if (payload.hasRemaining()) throw PluginException(PluginException.INVALID_ARGUMENT)
 
-        return encode()
+        return ApplicationWire.snapshot(readFacts())
     }
+}
 
-    /** Packs the identity this build reports: package, label, version, and code. */
-    private fun encode(): ByteArray {
-        val manager = context.packageManager
-        val info = packageInfo(manager)
-        val fields =
-            listOf(
-                context.packageName,
-                manager.getApplicationLabel(context.applicationInfo).toString(),
-                info.versionName,
-                versionCode(info).toString(),
-            )
-        val result = ByteArrayOutputStream(RESULT_CAPACITY)
-        result.write(SUCCESS)
+/** The API level where package info takes flags rather than flags ints. */
+private const val FLAGS_API = 33
 
-        for (value in fields) {
-            writeString(result, value ?: "")
-        }
+/** The API level where the version code grew to 64 bits and signing info arrived. */
+private const val SIGNING_API = 28
 
-        return result.toByteArray()
-    }
+/** The API level that added install source details. */
+private const val INSTALL_SOURCE_API = 30
 
-    /** The installed package's info, read the way its API level allows. */
-    private fun packageInfo(manager: PackageManager): PackageInfo =
-        try {
-            if (Build.VERSION.SDK_INT >= FLAGS_API) {
-                manager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                manager.getPackageInfo(context.packageName, 0)
-            }
-        } catch (error: PackageManager.NameNotFoundException) {
-            throw PluginException(PluginException.NATIVE, error)
-        }
+/** Reads the installed package's record. */
+internal fun readFacts(context: Context): ApplicationFacts {
+    val manager = context.packageManager
+    val info = packageInfo(context, 0)
 
-    /** The version code, which grew to a long in API 28. */
-    private fun versionCode(info: PackageInfo): Long =
-        if (Build.VERSION.SDK_INT >= LONG_VERSION_API) {
-            info.longVersionCode
+    return ApplicationFacts(
+        id = context.packageName,
+        name = manager.getApplicationLabel(context.applicationInfo).toString(),
+        version = info.versionName,
+        build = versionCode(info).toString(),
+        buildSignature = buildSignature(context),
+        installerStore = installerStore(context),
+        installTime = info.firstInstallTime.takeIf { it > 0 },
+        updateTime = info.lastUpdateTime.takeIf { it > 0 },
+    )
+}
+
+/** The installed package's info, read the way its API level allows. */
+private fun packageInfo(
+    context: Context,
+    flags: Int,
+): PackageInfo =
+    try {
+        if (Build.VERSION.SDK_INT >= FLAGS_API) {
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
         } else {
             @Suppress("DEPRECATION")
-            info.versionCode.toLong()
+            context.packageManager.getPackageInfo(context.packageName, flags)
+        }
+    } catch (error: PackageManager.NameNotFoundException) {
+        throw PluginException(PluginException.NATIVE, error)
+    }
+
+/** The version code, which grew to a long in API 28. */
+private fun versionCode(info: PackageInfo): Long =
+    if (Build.VERSION.SDK_INT >= SIGNING_API) {
+        info.longVersionCode
+    } else {
+        @Suppress("DEPRECATION")
+        info.versionCode.toLong()
+    }
+
+/**
+ * The SHA-256 digest of the certificate that signed this APK. After a key
+ * rotation `apkContentsSigners` holds the current certificate, not the
+ * original one at the start of the rotation history.
+ */
+@Suppress("PackageManagerGetSignatures")
+internal fun buildSignature(context: Context): String? {
+    val certificate =
+        if (Build.VERSION.SDK_INT >= SIGNING_API) {
+            packageInfo(context, PackageManager.GET_SIGNING_CERTIFICATES)
+                .signingInfo
+                ?.apkContentsSigners
+                ?.firstOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo(context, PackageManager.GET_SIGNATURES).signatures?.firstOrNull()
         }
 
-    /** Writes one length-prefixed UTF-8 string. */
-    private fun writeString(
-        result: ByteArrayOutputStream,
-        value: String,
-    ) {
-        val text = value.toByteArray(Charsets.UTF_8)
+    return certificate?.let { ApplicationWire.sha256(it.toByteArray()) }
+}
 
-        if (text.size > MAX_TEXT_BYTES) throw PluginException(PluginException.TOO_LARGE)
-        result.write(
-            ByteBuffer
-                .allocate(4)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(text.size)
-                .array(),
-        )
-        result.write(text)
+/**
+ * The package that initiated this app's install, such as Google Play's
+ * `com.android.vending`; `null` for `adb` and system installs.
+ */
+internal fun installerStore(context: Context): String? {
+    val manager = context.packageManager
+
+    return try {
+        if (Build.VERSION.SDK_INT >= INSTALL_SOURCE_API) {
+            manager.getInstallSourceInfo(context.packageName).initiatingPackageName
+        } else {
+            @Suppress("DEPRECATION")
+            manager.getInstallerPackageName(context.packageName)
+        }
+    } catch (error: PackageManager.NameNotFoundException) {
+        null
+    }?.takeIf {
+        it.isNotBlank() && it.toByteArray(Charsets.UTF_8).size <= ApplicationWire.MAX_INSTALLER_BYTES
     }
 }

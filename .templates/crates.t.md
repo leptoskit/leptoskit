@@ -328,7 +328,9 @@ plugin in `native.plugins`; supported generated hosts discover it from Cargo met
 Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Application` rather than resolving the plugin on every call. Apple reads
 `Bundle.main`, Android reads the running package record, and a Rust desktop host supplies
-its own packaging metadata; browsers have no equivalent installed-app identity.
+its own packaging metadata; browsers have no equivalent installed-app identity. Native
+snapshots also carry the install source, install and update times, and on Android the
+signing certificate's SHA-256 digest.
 
 <!-- {/p_applicationSummary} -->
 
@@ -433,7 +435,8 @@ Add `{{ plugin_device.package.name }}` as a direct dependency and select the `{{
 Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Device` rather than resolving the plugin on every call. Native guests, Rust
 desktop hosts, and browsers each return a validated binary snapshot with the fields that
-platform can actually provide.
+platform can actually provide. The snapshot never holds persistent identifiers or names a
+person gave the device; those come only from the separate `identifiers` call.
 
 <!-- {/p_deviceSummary} -->
 

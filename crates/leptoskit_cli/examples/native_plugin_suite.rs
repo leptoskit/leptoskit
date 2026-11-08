@@ -85,6 +85,8 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_network/tests/android/NetworkPluginTest.kt",
 	"leptoskit_plugin_network_info/tests/android/NetworkInfoPluginTest.kt",
 	"leptoskit_plugin_application/tests/android/ApplicationPluginTest.kt",
+	"leptoskit_plugin_device/tests/android/DevicePluginTest.kt",
+	"leptoskit_plugin_device/tests/android/DeviceWireFixtures.kt",
 	"leptoskit_plugin_localization/tests/android/LocalizationPluginTest.kt",
 	"leptoskit_sensor/android-tests/MotionSensorTest.kt",
 	"leptoskit_sensor/android-tests/SensorEncodingTest.kt",
