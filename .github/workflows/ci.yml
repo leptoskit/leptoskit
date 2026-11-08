@@ -660,7 +660,7 @@ jobs:
       - name: install Linux native widget dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev pkg-config xvfb dbus-x11 at-spi2-core fonts-dejavu-core xdotool
+          sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config xvfb dbus-x11 at-spi2-core fonts-dejavu-core xdotool
 
       # The canvas renderer's GPU tests skip when no Vulkan ICD is present, so
       # its paths go unmeasured. Mesa's lavapipe gives the coverage suite a

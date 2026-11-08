@@ -71,6 +71,8 @@ in
       pkgs.swiftlint
     ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+      # cpal, behind the audio plugin, plays through ALSA.
+      pkgs.alsa-lib
       pkgs.at-spi2-core
       pkgs.dbus
       pkgs.dejavu_fonts
