@@ -267,6 +267,47 @@ mod tests {
 	}
 
 	#[test]
+	fn rejects_empty_identity_fields() {
+		let mut manifest = sample_manifest();
+		manifest.id.clear();
+		assert_eq!(manifest.validate(), Err(ManifestError::EmptyId));
+		manifest = sample_manifest();
+		manifest.display_name.clear();
+		assert_eq!(manifest.validate(), Err(ManifestError::EmptyDisplayName));
+		manifest = sample_manifest();
+		manifest.version.clear();
+		assert_eq!(manifest.validate(), Err(ManifestError::EmptyVersion));
+	}
+
+	#[test]
+	fn manifest_errors_display_their_reason() {
+		assert_eq!(
+			ManifestError::Protocol {
+				got: 9,
+				expected: PROTOCOL
+			}
+			.to_string(),
+			format!("platform manifest protocol 9 is not {PROTOCOL}")
+		);
+		assert_eq!(
+			ManifestError::EmptyId.to_string(),
+			"platform manifest id is empty"
+		);
+		assert_eq!(
+			ManifestError::InvalidId("X".into()).to_string(),
+			"platform manifest id `X` must be lowercase ASCII with optional hyphens"
+		);
+		assert_eq!(
+			ManifestError::EmptyDisplayName.to_string(),
+			"platform manifest display_name is empty"
+		);
+		assert_eq!(
+			ManifestError::EmptyVersion.to_string(),
+			"platform manifest version is empty"
+		);
+	}
+
+	#[test]
 	fn find_returns_the_matching_extension() {
 		struct Stub;
 
