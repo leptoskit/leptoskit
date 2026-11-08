@@ -3538,6 +3538,7 @@ dependencies = [
  "leptoskit_plugin_age_range",
  "leptoskit_plugin_android_alarm_manager",
  "leptoskit_plugin_android_intent",
+ "leptoskit_plugin_app_integrity",
  "leptoskit_plugin_app_shortcuts",
  "leptoskit_plugin_application",
  "leptoskit_plugin_arguments",
@@ -5933,6 +5934,13 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_android_intent"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_app_integrity"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",

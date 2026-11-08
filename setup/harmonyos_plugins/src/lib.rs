@@ -6,6 +6,7 @@ pub use leptoskit_plugin_accelerometer;
 pub use leptoskit_plugin_age_range;
 pub use leptoskit_plugin_android_alarm_manager;
 pub use leptoskit_plugin_android_intent;
+pub use leptoskit_plugin_app_integrity;
 pub use leptoskit_plugin_app_shortcuts;
 pub use leptoskit_plugin_application;
 pub use leptoskit_plugin_arguments;

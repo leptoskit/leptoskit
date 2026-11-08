@@ -401,6 +401,14 @@ or withholds one.
 
 <!-- {/p_age_rangeSummary} -->
 
+<!-- {@p_app_integritySummary} -->
+
+Add `{{ plugin_app_integrity.package.name }}` as a direct dependency and select the `{{ plugin_app_integrity.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::AppIntegrity` rather than resolving the plugin on every call. Query whether attestation is available, then request a bounded token for an app-owned challenge. Tokens are opaque bytes for server verification; this MVP returns Unavailable on every host until App Attest / Play Integrity wiring lands. Never invents a passing attestation.
+
+<!-- {/p_app_integritySummary} -->
+
+
+
 <!-- {@p_background_taskSummary} -->
 
 Add `{{ plugin_background_task.package.name }}` as a direct dependency and select the
