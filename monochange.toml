@@ -109,6 +109,7 @@ packages = [
 	"leptoskit_plugin_nfc",
 	"leptoskit_plugin_posture",
 	"leptoskit_plugin_power_monitor",
+	"leptoskit_plugin_print",
 	"leptoskit_plugin_dialog",
 	"leptoskit_plugin_document_picker",
 	"leptoskit_plugin_screen_orientation",
@@ -143,7 +144,8 @@ packages = [
 	"leptoskit_plugin_screen_capture",
 	"leptoskit_plugin_store_review",
 	"leptoskit_plugin_sharing",
-	"leptoskit_plugin_sensors",	"leptoskit_plugin_sms",
+	"leptoskit_plugin_sensors",
+	"leptoskit_plugin_sms",
 	"leptoskit_plugin_mail_composer",
 	"leptoskit_plugin_web_browser",
 	"leptoskit_plugin_tracking_transparency",
@@ -473,6 +475,9 @@ path = "crates/leptoskit_plugin_picture_in_picture"
 [package.leptoskit_plugin_power_monitor]
 path = "crates/leptoskit_plugin_power_monitor"
 
+[package.leptoskit_plugin_print]
+path = "crates/leptoskit_plugin_print"
+
 [package.leptoskit_plugin_single_instance]
 path = "crates/leptoskit_plugin_single_instance"
 
@@ -504,7 +509,9 @@ path = "crates/leptoskit_plugin_store_review"
 path = "crates/leptoskit_plugin_sharing"
 
 [package.leptoskit_plugin_sensors]
-path = "crates/leptoskit_plugin_sensors"[package.leptoskit_plugin_sms]
+path = "crates/leptoskit_plugin_sensors"
+
+[package.leptoskit_plugin_sms]
 path = "crates/leptoskit_plugin_sms"
 [package.leptoskit_plugin_mail_composer]
 path = "crates/leptoskit_plugin_mail_composer"
