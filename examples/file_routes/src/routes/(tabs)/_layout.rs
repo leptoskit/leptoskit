@@ -1,29 +1,26 @@
-//! The tabbed part of the app: the selected tab above a bar of links to every
-//! tab. A `Tabs` navigator replaces this bar once navigators land.
+//! The tabbed part of the app. `navigator` owns the tab bar; this layout only
+//! frames the selected tab.
 
 use leptoskit::prelude::*;
+use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::Tabs;
 
 use crate::routes::Map;
-use crate::routes::Navigation;
 use crate::routes::Route;
 use crate::routes::Today;
 
-/// The tab bar under the selected tab.
+/// Four tabs whose roots are typed routes, not string names.
+pub fn navigator() -> Tabs<Route> {
+	Tabs::new([
+		Tab::root(Today).title("Today"),
+		Tab::root(Map { near: None }).title("Map"),
+		Tab::root(Route::Notes).title("Notes"),
+		Tab::root(Route::You).title("You"),
+	])
+}
+
+/// Frames the selected tab's page.
 #[component]
-pub fn Layout(children: Children, navigation: &Navigation) -> Element {
-	let tab = |to: Route, label: &str| {
-		navigation
-			.link(to, label)
-			.class("flex-1 items-center p-3")
-			.child(view! { <Text>{label.to_owned()}</Text> })
-	};
-	view! {
-		<View class="flex-1">
-			<View class="flex-1">{children}</View>
-			<View class="flex-row">
-				{tab(Today.into(), "Today")} {tab(Map { near: None }.into(), "Map")}
-				{tab(Route::Notes, "Notes")} {tab(Route::You, "You")}
-			</View>
-		</View>
-	}
+pub fn Layout(children: Children) -> Element {
+	view! { <View class="flex-1">{children}</View> }
 }

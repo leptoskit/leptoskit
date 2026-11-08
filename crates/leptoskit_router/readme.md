@@ -43,7 +43,8 @@ Routes are files. `leptoskit routes` reads `src/routes/` and writes `src/routes.
 - `#[derive(Route)]` — a route struct whose fields are the route's parameters, read from the path when a field is named after a `[segment]` and from the query string otherwise;
 - `RouteUrl`, `Href`, `Pattern` — URL decoding that reads any URL the way a browser does, href encoding that never writes an empty or dot segment, and matching with optional segments and catch-alls;
 - `NotFound` — the unmatched path, for a `+not-found.rs` route;
-- `Router` and `Render` — the app's current route and its history, rendered as the route's page inside its layouts, with links that render as `<a href>` on the web. The `web` feature keeps a browser router in step with the address bar and the back button.
+- `Router` and `Render` — the app's current route and its history, rendered as the route's page inside its layouts, with links that render as `<a href>` on the web. The `web` feature keeps a browser router in step with the address bar and the back button;
+- `navigators` — `Stack`, `Tabs`, and `Drawer` for `_layout.rs` `navigator()` exports, plus `open_url` and system Back for incoming deep links and Android Back.
 
 The [file routes guide](https://leptoskit.dev/docs/guide/10-file-routes.html) covers the naming conventions, and [`examples/file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes) is a complete app.
 

@@ -46,6 +46,22 @@ class MainActivity :
         requests.restoreState(state)
         content = applicationView(this)
         setContentView(content)
+        noteDeepLink(intent)
+    }
+
+    @Deprecated("Android platform callback; routed through the file router when possible")
+    override fun onBackPressed() {
+        if (offerSystemBack(content)) {
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        noteDeepLink(intent)
     }
 
     override fun onSaveInstanceState(state: Bundle) {
@@ -104,5 +120,31 @@ private fun applicationView(activity: Activity): LeptosKitApplicationView {
 
     return LeptosKitApplicationView(activity, embedded, configuration) { bridge, dispatcher ->
         GeneratedPlugins.register(activity, bridge, dispatcher)
+    }
+}
+
+/** Asks the guest's `leptoskit_system_back` export to pop the file router. */
+private fun offerSystemBack(content: LeptosKitApplicationView?): Boolean {
+    if (content == null) {
+        return false
+    }
+    return try {
+        val method = content.javaClass.getMethod("offerSystemBack")
+        method.invoke(content) as? Boolean == true
+    } catch (_: ReflectiveOperationException) {
+        false
+    }
+}
+
+/** Pushes an inbound VIEW intent into the deep-link plugin when registered. */
+private fun noteDeepLink(intent: Intent?) {
+    if (intent == null) {
+        return
+    }
+    try {
+        val plugin = Class.forName("dev.leptoskit.plugins.deeplink.DeepLinkPlugin")
+        plugin.getMethod("noteIntentIfPresent", Intent::class.java).invoke(null, intent)
+    } catch (_: ClassNotFoundException) {
+    } catch (_: ReflectiveOperationException) {
     }
 }

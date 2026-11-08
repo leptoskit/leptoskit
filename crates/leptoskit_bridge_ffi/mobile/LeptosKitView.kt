@@ -170,6 +170,27 @@ class LeptosKitView(
         closeFailure?.let { throw it }
     }
 
+    /**
+     * Invokes the guest's optional `leptoskit_system_back` export when the
+     * native runtime exposes `NativeApp.guestSystemBack`. Returns false when
+     * the export or guest is missing so the activity can finish.
+     */
+    fun offerSystemBack(): Boolean {
+        if (guest == 0L) return false
+        return try {
+            val method =
+                NativeApp::class.java.getMethod(
+                    "guestSystemBack",
+                    Long::class.javaPrimitiveType,
+                )
+            method.invoke(null, guest) as Int == 1
+        } catch (_: ReflectiveOperationException) {
+            false
+        } catch (_: UnsatisfiedLinkError) {
+            false
+        }
+    }
+
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
         dismissEditorOutside(this, event)
         return super.dispatchTouchEvent(event)

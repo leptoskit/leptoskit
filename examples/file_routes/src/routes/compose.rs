@@ -1,4 +1,4 @@
-//! `/compose`: a new note, presented as a sheet once navigators land.
+//! `/compose`: a new note, presented as a sheet by the root stack navigator.
 
 use leptoskit::prelude::*;
 use leptoskit_router::Route;

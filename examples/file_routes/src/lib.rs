@@ -49,10 +49,22 @@ pub fn start() {
 pub extern "C" fn leptoskit_main() {
 	let draft = Draft::default();
 	let navigation = routes::Navigation::new(routes::Route::Today);
+	navigation.bind_system_back();
 	leptoskit::guest::mount(move || {
 		reactive_graph::owner::provide_context(draft.clone());
 		navigation.render()
 	});
+}
+
+/// Android system Back and similar host signals: 1 when the router popped a
+/// route, 0 when the host should leave the app.
+#[cfg(all(target_arch = "wasm32", feature = "native"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn leptoskit_system_back() -> i32 {
+	match leptoskit_router::dispatch_system_back() {
+		leptoskit_router::SystemBack::Consumed => 1,
+		leptoskit_router::SystemBack::Propagate => 0,
+	}
 }
 
 /// Forwards platform-neutral events to the shared tree's handlers.

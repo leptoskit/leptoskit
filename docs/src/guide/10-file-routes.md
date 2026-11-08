@@ -97,7 +97,54 @@ The generator reads these names from each file without running it:
 | `load`, `prerender`                         | route files  | data and static parameters                   |
 | `navigator`, `redirect`                     | `_layout.rs` | the directory's navigator and guard          |
 
-Only `pub` items are exports: a private function is the file's own helper, whatever its name. A capitalised export without `#[component]`, both spellings in one file, or a `_layout.rs` without a `layout`, is an error. The router renders `page` and `layout` today; the other exports are recognised and checked now, and the router uses them as it gains data loading and navigators.
+Only `pub` items are exports: a private function is the file's own helper, whatever its name. A capitalised export without `#[component]`, both spellings in one file, or a `_layout.rs` without a `layout`, is an error. The router renders `page`, `layout`, and `navigator` today; `redirect`, `load`, and the other hooks are recognised and checked now, and the router uses them as it gains those features.
+
+## Navigators
+
+A `(tabs)/` folder only groups routes; it does not pick a tab bar by itself. Export `navigator` from that directory's `_layout.rs` to choose Stack, Tabs, or Drawer. Roots are typed routes, not string names:
+
+```rust
+use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::Tabs;
+
+use crate::routes::Map;
+use crate::routes::Route;
+use crate::routes::Today;
+
+pub fn navigator() -> Tabs<Route> {
+	Tabs::new([
+		Tab::root(Today).title("Today"),
+		Tab::root(Map { near: None }).title("Map"),
+		Tab::root(Route::Notes).title("Notes"),
+		Tab::root(Route::You).title("You"),
+	])
+}
+```
+
+The layout still wraps the page for theme and spacing; the navigator adds the chrome around that layout's output. Switching tabs `replace`s to the tab's root so nested history under another tab is not left on the stack. A tab root matches itself and routes under it by href; `/` matches only `/`, so a Today tab does not steal `/notes`.
+
+A stack at the root of the app presents some routes as a sheet or modal above the previous screen, and can offer an edge hit target for Back where a true UIKit interactive-pop gesture is not available yet:
+
+```rust
+use leptoskit_router::navigators::Presentation;
+use leptoskit_router::navigators::Stack;
+use leptoskit_router::navigators::StackGesture;
+
+pub fn navigator() -> Stack<Route> {
+	Stack::new()
+		.gesture(StackGesture::EdgeSwipe)
+		.present(Presentation::Sheet, |route| matches!(route, Route::Compose(_)))
+		.present(Presentation::Modal, |route| matches!(route, Route::Photo(_)))
+}
+```
+
+A drawer lists typed roots in a side panel. Open state lives on the router, so it survives re-renders. [`examples/file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes) uses Stack at the root, Tabs under `(tabs)/`, and a Drawer under `settings/`.
+
+### Deep links and system Back
+
+`Navigation::open_url` turns an incoming URL into a typed route: `myapp://notes/42` and `/notes/42` both reach `Route::Note`. Custom schemes treat the host as the first path segment; `http(s)` uses the URL path and query. Prefer `open_url_with(..., OpenMode::Replace)` on cold start so Back leaves the app. Drain a host deep-link queue with `apply_activations` and the same open modes.
+
+On native mounts, call `navigation.bind_system_back()` and export `leptoskit_system_back` so Android system Back can pop the router. Generated Android activities already ask the host view to offer system Back before finishing the activity. Packaging still has to declare URL schemes; mobile inbound handlers beyond the host push queue remain a platform gap (see the [plugin inventory](../platforms/plugin-inventory.md)).
 
 ### Props
 
