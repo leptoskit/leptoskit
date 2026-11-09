@@ -23,8 +23,6 @@ use leptoskit_db::Db;
 use leptoskit_db::Id;
 use leptoskit_db::policy;
 use leptoskit_db::table;
-use leptoskit_pod::PodDecode;
-use leptoskit_pod::PodEncode;
 use leptoskit_query::BoxFuture;
 use leptoskit_rpc as rpc;
 use leptoskit_rpc::Operation;
@@ -82,6 +80,13 @@ pub async fn notes(
 				.is_none_or(|prefix| title.starts_with(prefix))
 		})
 		.collect())
+}
+
+/// Same query as [`notes`], pulling the context instead of taking it.
+#[rpc::query]
+pub async fn notes_here(#[serde(default)] starting: Option<String>) -> rpc::Result<Vec<String>> {
+	let cx = rpc::cx()?;
+	notes(&cx, starting).await
 }
 
 /// What `after_commit` saw, in order.
@@ -357,103 +362,33 @@ async fn routes_answer_as_the_caller(db: &Db) {
 }
 
 #[tokio::test]
-async fn pod_round_trips_notes_query() {
+async fn ambient_query_cx_reads_notes() {
 	let db = sqlite().await;
 	let router = Server::new(db.clone()).identify(Header).router::<()>();
-	Call::new("add_note", &json!({ "title": "pod-note" }))
+	Call::new("add_note", &json!({ "title": "ambient" }))
 		.user("ada")
 		.send(&router)
 		.await;
-	let args = Notes { starting: None };
-	let encoded = PodEncode::to_pod_bytes(&args).unwrap();
-	let (status, bytes) = Call::new("notes", &json!({}))
-		.user("ada")
-		.pod(encoded)
-		.send_pod(&router)
-		.await;
-	assert_eq!(status, StatusCode::OK);
-	let titles: Vec<String> = Vec::from_pod_bytes(&bytes).unwrap();
-	assert_eq!(titles, ["pod-note"]);
-}
-
-#[tokio::test]
-async fn pod_mutation_round_trips_and_json_still_works() {
-	let db = sqlite().await;
-	let router = Server::new(db.clone()).identify(Header).router::<()>();
-
-	let args = AddNote {
-		title: "via-pod".into(),
-	};
-	let encoded = PodEncode::to_pod_bytes(&args).unwrap();
-	let (status, bytes) = Call::new("add_note", &json!({}))
-		.user("ada")
-		.pod(encoded)
-		.send_pod(&router)
-		.await;
-	assert_eq!(
-		status,
-		StatusCode::OK,
-		"{}",
-		String::from_utf8_lossy(&bytes)
-	);
-	let id = Id::<Note>::from_pod_bytes(&bytes).unwrap();
-
-	let (status, body) = Call::new("notes", &json!({}))
+	let (status, body) = Call::new("notes_here", &json!({}))
 		.user("ada")
 		.send(&router)
 		.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let titles: Vec<String> = serde_json::from_str(&body).unwrap();
-	assert_eq!(titles, ["via-pod"]);
-	assert_ne!(id.to_string(), "");
+	assert_eq!(body, r#"["ambient"]"#);
 }
 
 #[tokio::test]
-async fn pod_rejects_malformed_args_as_client_error() {
+async fn pod_content_type_is_rejected() {
 	let db = sqlite().await;
 	let router = Server::new(db.clone()).identify(Header).router::<()>();
 	let (status, bytes) = Call::new("notes", &json!({}))
 		.user("ada")
-		.pod(vec![0x01])
+		.pod(vec![0, 0])
 		.send_pod(&router)
 		.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	let body = String::from_utf8_lossy(&bytes);
-	assert!(
-		body.starts_with("Args|") || body.contains("pod") || body.contains("Truncated"),
-		"{body}"
-	);
-}
-
-#[tokio::test]
-async fn pod_and_json_negotiate_on_same_router() {
-	let db = sqlite().await;
-	let router = Server::new(db.clone()).identify(Header).router::<()>();
-	Call::new("add_note", &json!({ "title": "json-first" }))
-		.user("ada")
-		.send(&router)
-		.await;
-
-	let (status, body) = Call::new("notes", &json!({}))
-		.user("ada")
-		.send(&router)
-		.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body, r#"["json-first"]"#);
-
-	let encoded = Notes {
-		starting: Some("json".into()),
-	}
-	.to_pod_bytes()
-	.unwrap();
-	let (status, bytes) = Call::new("notes", &json!({}))
-		.user("ada")
-		.pod(encoded)
-		.send_pod(&router)
-		.await;
-	assert_eq!(status, StatusCode::OK);
-	let titles: Vec<String> = Vec::from_pod_bytes(&bytes).unwrap();
-	assert_eq!(titles, ["json-first"]);
+	assert!(body.contains("JSON"), "{body}");
 }
 
 async fn failures_arrive_classified(db: &Db) {
@@ -898,6 +833,7 @@ fn published_operations_join_the_spec_with_their_kind() {
 			"bump_once",
 			"note_count",
 			"notes",
+			"notes_here",
 			"rpc.cancel_job",
 			"rpc.inbox",
 			"rpc.job_status",

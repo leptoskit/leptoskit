@@ -2,6 +2,7 @@
 //! transaction, retries and receipt, and calling one from server code.
 
 use std::hash::BuildHasher;
+use std::sync::Arc;
 use std::time::Duration;
 
 use leptoskit_db::Db;
@@ -333,8 +334,11 @@ async fn run_once<M: Operation<Context = MutationCx>>(
 	let tx = db.begin_serializable().await?;
 	// The change log records the commit as this mutation's.
 	tx.set_origin(M::NAME).await?;
-	let cx = MutationCx::new(tx, identity.clone(), attempt);
-	let outcome = op.clone().run(&cx).await;
+	let cx = Arc::new(MutationCx::new(tx, identity.clone(), attempt));
+	let outcome = super::ambient::enter_mutation(Arc::clone(&cx), op.clone().run(&cx)).await;
+	let cx = Arc::try_unwrap(cx).unwrap_or_else(|_| {
+		panic!("a mutation stored rpc::mutation_cx() past the end of its body")
+	});
 	let (tx, after_commit) = cx.into_parts();
 
 	match outcome {

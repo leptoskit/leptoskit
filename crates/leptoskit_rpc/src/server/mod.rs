@@ -15,6 +15,8 @@
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod action;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+mod ambient;
 #[cfg(feature = "live")]
 pub mod channel;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -45,6 +47,10 @@ pub mod stream;
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use action::ActionCx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use ambient::cx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use ambient::mutation_cx;
 #[cfg(feature = "live")]
 pub use channel::ChannelRegistration;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]

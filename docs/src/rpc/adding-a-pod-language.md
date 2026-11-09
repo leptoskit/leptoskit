@@ -1,5 +1,7 @@
 # Adding a language to `leptoskit_pod`
 
+RPC speaks JSON through serde. This page is the old binary-codec checklist and is not how operations are encoded.
+
 Use this when implementing LK Pod for a language that does not yet have a runtime under `packages/leptoskit-pod-*`.
 
 ## Agent prompt (copy-paste)

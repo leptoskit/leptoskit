@@ -105,75 +105,36 @@ fn empty_pod_struct() -> Vec<u8> {
 }
 
 /// Parses `Content-Type` into a [`Transport`] the server allows.
+///
+/// The only transport is JSON through serde. A missing content type is JSON.
+/// LK Pod is rejected so an old client hears that immediately.
 pub(crate) fn request_transport(
 	content_type: Option<&str>,
 	allowed: TransportSet,
 ) -> Result<Transport, &'static str> {
-	let requested = content_type.map_or(POD_CONTENT_TYPE, media_type);
+	let _ = allowed;
+	let requested = content_type.map_or(JSON_CONTENT_TYPE, media_type);
 
 	if requested == POD_CONTENT_TYPE {
-		if allowed.pod {
-			return Ok(Transport::Pod);
-		}
-		return Err("this server does not accept LK Pod on this route");
+		return Err("this server speaks JSON; send application/json");
 	}
 
 	if requested == JSON_CONTENT_TYPE {
-		if allowed.json {
-			return Ok(Transport::Json);
-		}
-		return Err("this server does not accept JSON on this route");
+		return Ok(Transport::Json);
 	}
 
-	if allowed.pod {
-		Ok(Transport::Pod)
-	} else if allowed.json {
-		Ok(Transport::Json)
-	} else {
-		Err("no operation transport is enabled")
-	}
+	Err("send the arguments as application/json")
 }
 
-/// Picks the response encoding from `Accept` and what the server allows.
+/// Responses are JSON. `Accept` is ignored until another transport exists.
 #[must_use]
 pub(crate) fn response_transport(
 	accept: Option<&str>,
 	allowed: TransportSet,
 	request: Transport,
 ) -> Transport {
-	let Some(accept) = accept.map(str::trim) else {
-		return request;
-	};
-
-	if accept.is_empty() || accept == "*/*" {
-		if allowed.pod {
-			return Transport::Pod;
-		}
-		if allowed.json {
-			return Transport::Json;
-		}
-		return request;
-	}
-
-	for part in accept.split(',') {
-		if media_type(part.trim()) == POD_CONTENT_TYPE && allowed.pod {
-			return Transport::Pod;
-		}
-	}
-
-	for part in accept.split(',') {
-		if media_type(part.trim()) == JSON_CONTENT_TYPE && allowed.json {
-			return Transport::Json;
-		}
-	}
-
-	if allowed.pod {
-		Transport::Pod
-	} else if allowed.json {
-		Transport::Json
-	} else {
-		request
-	}
+	let _ = (accept, allowed, request);
+	Transport::Json
 }
 
 fn media_type(value: &str) -> &str {
@@ -201,24 +162,18 @@ mod tests {
 	#[test]
 	fn negotiate_request_and_response() {
 		let both = TransportSet::default();
-		assert_eq!(
-			request_transport(Some(POD_CONTENT_TYPE), both).unwrap(),
-			Transport::Pod
-		);
+		assert!(request_transport(Some(POD_CONTENT_TYPE), both).is_err());
 		assert_eq!(
 			request_transport(Some(JSON_CONTENT_TYPE), both).unwrap(),
 			Transport::Json
 		);
+		assert_eq!(request_transport(None, both).unwrap(), Transport::Json);
 		assert_eq!(
 			response_transport(
 				Some("application/json, application/vnd.leptoskit.rpc.v1+bin"),
 				both,
 				Transport::Json
 			),
-			Transport::Pod
-		);
-		assert_eq!(
-			response_transport(None, both, Transport::Json),
 			Transport::Json
 		);
 	}

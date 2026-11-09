@@ -1,11 +1,23 @@
-# LK Pod
+# RPC wire
 
-LK Pod is the default wire format for leptoskit RPC: a portable little-endian TLV encoding that keeps Rust ADTs intact across TypeScript, Swift, Kotlin, Go, Dart, and Python.
+Operations travel as JSON through serde.
 
-- **Content-Type:** `application/vnd.leptoskit.rpc.v1+bin`
+- **Content-Type:** `application/json`
 - **HTTP entrypoint:** `POST /rpc/<op>` (override with `[rpc].path`)
-- **JSON fallback:** opt in with `transports = ["pod", "json"]`
+- **Arguments** are one JSON object, the generated struct for the function. Field attributes `#[serde(...)]` and `#[schemars(...)]` on the function parameters land on that struct. `schemars::JsonSchema` is the validation and description library for those arguments.
+- **Results** are the `T` in `rpc::Result<T>`, encoded with serde. Annotate that type with `Serialize`, `Deserialize`, and whatever serde attributes it needs. It does not need a second codec.
 
-Authors mark types with `#[pod::data]` (or `#[rpc::data]` once re-exported). Every data **struct** carries an implicit layout **version** (little-endian `u16`). Enums use a `u16` variant discriminator. You never write field ids — [migrations](./migrations.md) own evolution.
+A query or mutation can take its context as the first argument, or omit it and read the same value from the task:
 
-See [Adding a Pod language](./adding-a-pod-language.md) for the conformance prompt used when bringing up a new runtime.
+```rust
+#[rpc::query]
+pub async fn notes(starting: Option<String>) -> rpc::Result<Vec<String>> {
+    let cx = rpc::cx()?;
+    let notes = Note::query().all(cx.db()).await?;
+    Ok(notes.into_iter().map(|note| note.title).collect())
+}
+```
+
+`rpc::cx()` is the query. `rpc::mutation_cx()` is the mutation. Hold the returned `Arc` for as long as you use it. Passing `cx: &rpc::QueryCx` still works, and nested `rpc::call` uses that reference.
+
+Another transport can be added later. This server does not speak LK Pod.

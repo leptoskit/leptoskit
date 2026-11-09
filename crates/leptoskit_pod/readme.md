@@ -8,7 +8,7 @@ LK Pod is leptoskit’s portable little-endian TLV wire format for RPC and live 
 - `Vec` / `String` use unbounded `u32` length prefixes
 - Inbound RPC / jobs **climb** adjacent version transitions to current; responses encode current; live events do not migrate
 
-See `docs/src/rpc/lk-pod.md`, `docs/src/rpc/migrations.md`, and `docs/src/rpc/adding-a-pod-language.md`. Conformance vectors live in `conformance/vectors.json`.
+RPC operations are JSON through serde (`docs/src/rpc/lk-pod.md`). This crate is not that wire. Conformance vectors live in `conformance/vectors.json`.
 
 ## Verification
 

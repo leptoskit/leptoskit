@@ -174,6 +174,8 @@ pub use server::call;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::cancel;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use server::cx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::inbox::Recipient;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::jobs::Enqueue;
@@ -183,6 +185,8 @@ pub use server::jobs::enqueue;
 pub use server::jobs::job_registration;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::jobs::job_registration_in;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use server::mutation_cx;
 pub use service::IDENTITY_FORWARDED;
 pub use service::SERVICES_PREFIX;
 pub use service::ServiceToken;

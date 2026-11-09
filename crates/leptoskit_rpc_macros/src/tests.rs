@@ -963,8 +963,8 @@ mod operations {
 				Query,
 				"",
 				"async fn f(cx: &Db) -> rpc::Result<()> {}",
-				"`cx: &rpc::QueryCx`",
-				"Db",
+				"they are owned",
+				"&Db",
 			),
 			(
 				Mutation,
