@@ -769,9 +769,8 @@ fn configure_android_toolchain(
 	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
-	let compiler = tools.join(format!(
-		"{architecture}-linux-android26-clang{NDK_LAUNCHER_SUFFIX}"
-	));
+	let clang_target = format!("{architecture}-linux-android26");
+	let compiler = tools.join(format!("{clang_target}-clang{NDK_LAUNCHER_SUFFIX}"));
 	anyhow::ensure!(
 		compiler.is_file(),
 		"selected NDK does not contain a compiler for this host: {}",
@@ -795,9 +794,7 @@ fn configure_android_toolchain(
 	.env(format!("CC_{target_key}"), compiler)
 	.env(
 		format!("CXX_{target_key}"),
-		tools.join(format!(
-			"{architecture}-linux-android26-clang++{NDK_LAUNCHER_SUFFIX}"
-		)),
+		tools.join(format!("{clang_target}-clang++{NDK_LAUNCHER_SUFFIX}")),
 	)
 	.env(
 		format!("AR_{target_key}"),
@@ -807,6 +804,21 @@ fn configure_android_toolchain(
 			"llvm-ar"
 		}),
 	);
+	// A compiler cache can hide the launcher's name from cc-rs, which then
+	// adds the Rust target without its API level. Keep the selected NDK API
+	// explicit in the final C and C++ flags, preserving the caller's flags.
+	for variable in ["CFLAGS", "CXXFLAGS"] {
+		let key = format!("{variable}_{}", target.rust());
+		let mut flags = match host.get_envs().find(|(name, _)| *name == key.as_str()) {
+			Some((_, value)) => value.unwrap_or_default().to_os_string(),
+			None => std::env::var_os(&key).unwrap_or_default(),
+		};
+		if !flags.is_empty() {
+			flags.push(" ");
+		}
+		flags.push(format!("--target={clang_target}"));
+		host.env(key, flags);
+	}
 	Ok(())
 }
 
@@ -2519,8 +2531,31 @@ mod tests {
 		std::fs::write(&clang, "").unwrap();
 
 		let mut host = Command::new("cargo");
+		host.env("CFLAGS", "-DGLOBAL_C=1")
+			.env("CFLAGS_aarch64_linux_android", "-DUNDERSCORE_C=1")
+			.env("CFLAGS_aarch64-linux-android", "-DLOCAL_C=1")
+			.env("CXXFLAGS_aarch64-linux-android", "-DLOCAL_CXX=1");
 		configure_android_toolchain(&mut host, &root, Target::Android, &ndk).unwrap();
 		let environment = environment(&host);
+		let flags = |name: &str| {
+			environment
+				.iter()
+				.find(|(key, _)| key == name)
+				.map(|(_, value)| value.as_str())
+		};
+		assert_eq!(flags("CFLAGS"), Some("-DGLOBAL_C=1"));
+		assert_eq!(
+			flags("CFLAGS_aarch64_linux_android"),
+			Some("-DUNDERSCORE_C=1")
+		);
+		assert_eq!(
+			flags("CFLAGS_aarch64-linux-android"),
+			Some("-DLOCAL_C=1 --target=aarch64-linux-android26")
+		);
+		assert_eq!(
+			flags("CXXFLAGS_aarch64-linux-android"),
+			Some("-DLOCAL_CXX=1 --target=aarch64-linux-android26")
+		);
 		let value = |name: &str| {
 			environment
 				.iter()
@@ -2561,6 +2596,29 @@ mod tests {
 			error.to_string().contains("does not contain a compiler"),
 			"{error}"
 		);
+		std::fs::write(
+			tools.join(format!("x86_64-linux-android26-clang{NDK_LAUNCHER_SUFFIX}")),
+			"",
+		)
+		.unwrap();
+		let mut emulator = Command::new("cargo");
+		emulator
+			.env("CFLAGS_x86_64-linux-android", "")
+			.env("CXXFLAGS_x86_64-linux-android", "");
+		configure_android_toolchain(&mut emulator, &root, Target::AndroidX86_64, &ndk).unwrap();
+		let emulator_env = self::environment(&emulator);
+		for name in [
+			"CFLAGS_x86_64-linux-android",
+			"CXXFLAGS_x86_64-linux-android",
+		] {
+			assert_eq!(
+				emulator_env
+					.iter()
+					.find(|(key, _)| key == name)
+					.map(|(_, value)| value.as_str()),
+				Some("--target=x86_64-linux-android26")
+			);
+		}
 		std::fs::remove_dir_all(&root).unwrap();
 	}
 
