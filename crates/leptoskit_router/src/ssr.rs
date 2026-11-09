@@ -34,15 +34,15 @@ where
 	let path = request.as_ref();
 	// `RequestUrl` may carry the full origin; the file router matches on path
 	// and query only.
-	let path = request
-		.parse()
-		.map(|url| {
+	let path = request.parse().map_or_else(
+		|_| path.to_owned(),
+		|url| {
 			if url.search().is_empty() {
 				url.path().to_owned()
 			} else {
 				format!("{}?{}", url.path(), url.search())
 			}
-		})
-		.unwrap_or_else(|_| path.to_owned());
+		},
+	);
 	Ok(Router::new(R::parse(&path)?))
 }

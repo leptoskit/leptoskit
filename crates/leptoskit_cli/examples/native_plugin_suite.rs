@@ -415,7 +415,7 @@ class BlobWireInstrumentationTest {
 }
 ";
 
-const DEV_CLIENT_WIRE_TEST: &str = r#"package dev.leptoskit.plugins.devclient
+const DEV_CLIENT_WIRE_TEST: &str = r"package dev.leptoskit.plugins.devclient
 
 import org.junit.Test
 
@@ -426,7 +426,7 @@ class DevClientWireInstrumentationTest {
         main()
     }
 }
-"#;
+";
 
 const DIAGNOSTICS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.diagnostics
 

@@ -128,8 +128,9 @@ impl Pattern {
 		for segment in self.segments {
 			match segment {
 				Segment::Static(text) => parts.push((*text).to_owned()),
-				Segment::Param(name) => parts.push(format!(":{name}")),
-				Segment::OptionalParam(name) => parts.push(format!(":{name}")),
+				Segment::Param(name) | Segment::OptionalParam(name) => {
+					parts.push(format!(":{name}"));
+				}
 				Segment::Rest(name) | Segment::OptionalRest(name) => {
 					return format!("/{{*{name}}}");
 				}

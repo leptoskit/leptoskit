@@ -1016,7 +1016,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::LongPress {
 			slop,
@@ -1033,7 +1033,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::Pan {
 			slop,
@@ -1052,7 +1052,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::Pinch { calls } => {
 			out.push(member(
@@ -1062,7 +1062,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::Rotation { calls } => {
 			out.push(member(
@@ -1072,7 +1072,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::Fling { min_speed, calls } => {
 			out.push(member(
@@ -1084,7 +1084,7 @@ fn flatten(
 					calls: calls.clone(),
 				},
 				inherited,
-			))
+			));
 		}
 		GestureNode::Native => {
 			out.push(member(
@@ -1094,7 +1094,7 @@ fn flatten(
 					calls: Calls::default(),
 				},
 				inherited,
-			))
+			));
 		}
 	}
 }
