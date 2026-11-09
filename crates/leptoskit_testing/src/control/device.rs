@@ -751,11 +751,51 @@ pub fn inject_pan(
 	run_plan(&plan, timeout).map(|_| ())
 }
 
-/// Pinches with `adb`. Linux's pointer tool has one pointer.
+/// Reads `wm size`. An override replaces the physical size, which is what
+/// the display is actually showing.
+pub(super) fn parse_display_size(text: &str) -> Option<(i64, i64)> {
+	let mut physical = None;
+	let mut override_size = None;
+	for line in text.lines() {
+		let line = line.trim();
+		if let Some(rest) = line.strip_prefix("Override size:") {
+			override_size = parse_size_pair(rest);
+		} else if let Some(rest) = line.strip_prefix("Physical size:") {
+			physical = parse_size_pair(rest);
+		}
+	}
+	override_size.or(physical)
+}
+
+fn parse_size_pair(text: &str) -> Option<(i64, i64)> {
+	let (width, height) = text.trim().split_once('x')?;
+	let width = width.trim().parse::<i64>().ok()?;
+	let height = height.trim().parse::<i64>().ok()?;
+	if width < 2 || height < 2 {
+		None
+	} else {
+		Some((width, height))
+	}
+}
+
+fn display_size(serial: &str, timeout: Duration) -> Result<(i64, i64), Error> {
+	let mut command = tools::adb(serial);
+	command.args(["shell", "wm", "size"]);
+	let output = super::tool(&mut command, timeout)?;
+	parse_display_size(&output.stdout).ok_or_else(|| {
+		Error::Configuration(format!(
+			"could not read the display size from {:?}",
+			output.stdout.trim()
+		))
+	})
+}
+
+/// Pinches with `uinput` on Android. Linux's pointer tool has one pointer.
 ///
 /// # Errors
 ///
-/// The target is not Android, or the tool fails.
+/// The target is not Android, the display size cannot be read, or the tool
+/// fails.
 pub fn inject_pinch(
 	target: &Target,
 	x: i64,
@@ -767,8 +807,11 @@ pub fn inject_pinch(
 ) -> Result<(), Error> {
 	let plan = match target.kind {
 		TargetKind::Android => {
+			let serial = device_id(target)?;
+			let (width, height) = display_size(serial, timeout)?;
 			super::gestures::android_pinch(
-				device_id(target)?,
+				serial,
+				(width, height),
 				x,
 				y,
 				start_span,
@@ -796,10 +839,22 @@ pub(super) fn run_plan(
 	timeout: Duration,
 ) -> Result<String, Error> {
 	match plan {
-		super::gestures::ToolPlan::Adb { device, args } => {
+		super::gestures::ToolPlan::Adb {
+			device,
+			args,
+			stdin,
+		} => {
 			let mut command = tools::adb(device);
 			command.args(args);
-			Ok(super::tool(&mut command, timeout)?.stdout)
+			let fed = stdin.as_deref().map(str::as_bytes);
+			let output = tools::run_feeding(&mut command, timeout, fed)?;
+			if !output.success() {
+				return Err(Error::Tool {
+					name: "adb".to_owned(),
+					detail: output.failure(),
+				});
+			}
+			Ok(output.stdout)
 		}
 		super::gestures::ToolPlan::Command {
 			program,
@@ -893,6 +948,7 @@ mod plan_tests {
 			&ToolPlan::Adb {
 				device: "no-such-serial".to_owned(),
 				args: vec!["get-state".to_owned()],
+				stdin: None,
 			},
 			Duration::from_secs(5),
 		);
@@ -1195,5 +1251,19 @@ mod plan_tests {
 			"waited {:?}",
 			started.elapsed()
 		);
+	}
+
+	#[test]
+	fn display_size_prefers_the_override() {
+		assert_eq!(
+			super::parse_display_size("Physical size: 320x640\n"),
+			Some((320, 640))
+		);
+		assert_eq!(
+			super::parse_display_size("Physical size: 1080x2400\nOverride size: 720x1280\n"),
+			Some((720, 1280))
+		);
+		assert_eq!(super::parse_display_size("Physical size: 1x640\n"), None);
+		assert_eq!(super::parse_display_size("no size here"), None);
 	}
 }
