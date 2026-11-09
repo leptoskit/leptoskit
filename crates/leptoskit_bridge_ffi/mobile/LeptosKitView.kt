@@ -13,6 +13,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.joinAll
 import java.nio.ByteBuffer
 
+/** [NativeApp.guestTakeSystemBack]'s answers, as `lk_guest_take_system_back` defines them. */
+private const val SYSTEM_BACK_NONE = 0
+private const val SYSTEM_BACK_WENT_BACK = 1
+private const val SYSTEM_BACK_LEAVE = 2
+
 internal class NativeApplicationInitializationFailure(
     cause: Exception,
     val join: suspend () -> Unit,
@@ -65,6 +70,9 @@ class LeptosKitView(
     private var closeFailure: Exception? = null
     private var closeStarted = false
     private var frameScheduled = false
+
+    /** Answers owed for system Back offers the guest has not answered yet, oldest first. */
+    private val systemBackAnswers = ArrayDeque<(Boolean) -> Unit>()
 
     /** The guest's frame clock: a display frame, posted only while the guest waits for one. */
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos -> deliverFrame(frameTimeNanos) }
@@ -142,6 +150,8 @@ class LeptosKitView(
         riveAnimator?.close()
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         frameScheduled = false
+        // The guest that could have gone back is gone; see offerSystemBack.
+        systemBackAnswers.clear()
         services.stop()
         // Waits only for the guest's step in progress, then the app is ours to close.
         val lent = guest
@@ -171,24 +181,28 @@ class LeptosKitView(
     }
 
     /**
-     * Invokes the guest's optional `leptoskit_system_back` export when the
-     * native runtime exposes `NativeApp.guestSystemBack`. Returns false when
-     * the export or guest is missing so the activity can finish.
+     * Offers Android system Back to the guest's optional `leptoskit_system_back`
+     * export, which pops the file router when it can. The guest answers on its
+     * own thread, so [answer] runs later, on the main thread: true when the
+     * guest went back, false when the activity should leave because there was
+     * nothing to go back to or the guest does not export `leptoskit_system_back`.
+     * Without a running guest, [answer] runs at once with false.
+     *
+     * Offers are answered in order, so a second Back while the guest is still
+     * answering the first waits its turn, as a second press would. An offer
+     * still unanswered when this view closes is never answered: the guest that
+     * could have gone back is gone, and the next Back reaches whatever replaced it.
      */
-    fun offerSystemBack(): Boolean {
-        if (guest == 0L) return false
-        return try {
-            val method =
-                NativeApp::class.java.getMethod(
-                    "guestSystemBack",
-                    Long::class.javaPrimitiveType,
-                )
-            method.invoke(null, guest) as Int == 1
-        } catch (_: ReflectiveOperationException) {
-            false
-        } catch (_: UnsatisfiedLinkError) {
-            false
+    fun offerSystemBack(answer: (Boolean) -> Unit) {
+        check(Looper.myLooper() == Looper.getMainLooper()) { "System Back requires the main thread" }
+
+        if (guest == 0L || NativeApp.guestSystemBack(guest) < 0) {
+            answer(false)
+
+            return
         }
+
+        systemBackAnswers.addLast(answer)
     }
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
@@ -331,6 +345,8 @@ class LeptosKitView(
             readyScheduled = true
             post { reportReady() }
         }
+
+        answerSystemBack()
     }
 
     private fun takeRequests() {
@@ -340,6 +356,25 @@ class LeptosKitView(
         while (jobs.canTakeRequest) {
             val request = NativeApp.guestNextRequest(guest, handles) ?: return
             jobs.launch(request, NativeRustWorker.adopt(handles[0]) ?: NativeRustAsync.adopt(handles[1]))
+        }
+    }
+
+    /**
+     * Answers system Back offers in order, last in a drain: the screen they
+     * changed is applied, and an answer that leaves the activity, or closes
+     * this view, has nothing of the drain left to run after it.
+     */
+    private fun answerSystemBack() {
+        while (guest != 0L) {
+            val wentBack =
+                when (NativeApp.guestTakeSystemBack(guest)) {
+                    SYSTEM_BACK_NONE -> return
+                    SYSTEM_BACK_WENT_BACK -> true
+                    SYSTEM_BACK_LEAVE -> false
+                    else -> error("Invalid system Back answer")
+                }
+            val answer = systemBackAnswers.removeFirstOrNull() ?: error("System Back answered without an offer")
+            answer(wentBack)
         }
     }
 

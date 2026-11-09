@@ -365,6 +365,13 @@ int32_t lk_guest_frame_requested(const lk_guest *guest);
 /* For a service or async plugin wake. */
 int32_t lk_guest_wake(const lk_guest *guest);
 int32_t lk_guest_wake_background(const lk_guest *guest);
+/* Offers the platform's Back to the guest's optional leptoskit_system_back
+ * export. The answer follows a notification; offers are answered in order,
+ * and a guest that fails or stops first never answers. */
+int32_t lk_guest_system_back(const lk_guest *guest);
+/* The oldest answer: 1 when the guest went back, 2 when the platform should
+ * leave as Back does when nothing handles it, 0 when none is waiting. */
+int32_t lk_guest_take_system_back(const lk_guest *guest);
 /* lk_bridge_complete's arguments; the bytes are copied. */
 int32_t lk_guest_complete(const lk_guest *guest, uint64_t id, int32_t error,
                           const uint8_t *data, size_t len);

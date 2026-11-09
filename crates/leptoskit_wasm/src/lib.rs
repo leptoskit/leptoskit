@@ -52,7 +52,13 @@
 //!   its own, so when this is present the host calls it with the wall clock, in
 //!   milliseconds since the Unix epoch, before every other entry point.
 //!   `leptoskit_query`'s `guest` feature exports it. Hosts and modules that
-//!   predate it skip it.
+//!   predate it skip it;
+//! - `leptoskit_system_back() -> i32` — *optional*. The platform's Back, such
+//!   as Android's Back gesture or button, reaches it through
+//!   [`WasmHost::system_back`]. It returns `1` when the module went back, so
+//!   the platform stays where it is, and `0` when there was nothing to go back
+//!   to, so the platform leaves. The host then calls `leptoskit_flush`, when
+//!   present, and commits what changed. A module without it never handles Back.
 //!
 //! Timers are a reserved bridge plugin, `leptoskit.timer`, rather than a new
 //! import. [`WasmHost::enable_timers`] registers it; [`WasmHost::pump_timers`]
@@ -506,6 +512,8 @@ pub struct WasmHost<B: NativeBackend> {
 	flush: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	viewport_fn: Option<TypedFunc<(f32, f32), ()>>,
 	clock_fn: Option<TypedFunc<i64, ()>>,
+	/// Takes the platform's Back; see [`Self::system_back`].
+	system_back_fn: Option<TypedFunc<(), i32>>,
 	/// The reserved timer plugin, registered only when the host offers real
 	/// sleeps; see [`Self::enable_timers`].
 	timer_plugin: Option<leptoskit_bridge::PluginId>,
@@ -573,6 +581,7 @@ struct Guest {
 	flush: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	viewport_fn: Option<TypedFunc<(f32, f32), ()>>,
 	clock_fn: Option<TypedFunc<i64, ()>>,
+	system_back_fn: Option<TypedFunc<(), i32>>,
 }
 
 impl Guest {
@@ -641,6 +650,16 @@ impl Guest {
 			.map_err(|_| {
 				WasmError::Compile("leptoskit_clock must take an i64 and return nothing".to_owned())
 			})?;
+		let system_back_fn = instance
+			.get_export(&store, "leptoskit_system_back")
+			.and_then(Extern::into_func)
+			.map(|function| function.typed(&store))
+			.transpose()
+			.map_err(|_| {
+				WasmError::Compile(
+					"leptoskit_system_back must take nothing and return an i32".to_owned(),
+				)
+			})?;
 
 		store.data_mut().memory = instance
 			.get_export(&store, "memory")
@@ -658,6 +677,7 @@ impl Guest {
 			flush,
 			viewport_fn,
 			clock_fn,
+			system_back_fn,
 		})
 	}
 }
@@ -686,6 +706,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			flush: guest.flush,
 			viewport_fn: guest.viewport_fn,
 			clock_fn: guest.clock_fn,
+			system_back_fn: guest.system_back_fn,
 			timer_plugin: None,
 			timer: None,
 			routed_replies_pending: false,
@@ -735,6 +756,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.flush = guest.flush;
 		self.viewport_fn = guest.viewport_fn;
 		self.clock_fn = guest.clock_fn;
+		self.system_back_fn = guest.system_back_fn;
 		self.deferred = None;
 
 		if timers {
@@ -1187,9 +1209,45 @@ impl<B: NativeBackend> WasmHost<B> {
 				.map_err(|error| in_export("leptoskit_poll", error))?;
 		}
 
-		// The guest's tasks may have written signals without rendering. Settle
-		// the values they bound before the commit is drained, so an application
-		// never has to flush them itself.
+		self.settle()
+	}
+
+	/// Offers the platform's Back, such as Android's Back gesture or button,
+	/// to the module's optional `leptoskit_system_back` export, then settles
+	/// and commits what it changed.
+	///
+	/// [`EventOutcome::Handled`] means the module went back, so the platform
+	/// stays where it is. [`EventOutcome::Unhandled`] means the platform
+	/// leaves, as Back does when nothing handles it: the module had nothing
+	/// to go back to, or does not export `leptoskit_system_back`.
+	pub fn system_back(&mut self) -> Result<EventOutcome, WasmError> {
+		if let Some(error) = self.deferred.take() {
+			return Err(error);
+		}
+
+		let Some(system_back) = self.system_back_fn else {
+			return Ok(EventOutcome::Unhandled);
+		};
+
+		if !self.allow_render(self.committed_nodes()) {
+			return Err(host_trap(self.render_error().expect("rendering was rejected")).into());
+		}
+
+		self.refuel()?;
+		let went_back = system_back.call(&mut self.store, ())?;
+		self.settle()?;
+		Ok(if went_back == 1 {
+			EventOutcome::Handled
+		} else {
+			EventOutcome::Unhandled
+		})
+	}
+
+	/// Settles the values the guest bound, then commits. A turn such as a
+	/// plugin poll or system Back may write signals without rendering; this
+	/// settles them before the commit is drained, so an application never has
+	/// to flush them itself.
+	fn settle(&mut self) -> Result<(), WasmError> {
 		if let Some(flush) = &self.flush {
 			flush
 				.as_ref()
@@ -1198,8 +1256,7 @@ impl<B: NativeBackend> WasmHost<B> {
 				.map_err(|error| in_export("leptoskit_flush", error))?;
 		}
 
-		self.drain_commit()?;
-		Ok(())
+		self.drain_commit()
 	}
 
 	/// The number of commits the module has made.

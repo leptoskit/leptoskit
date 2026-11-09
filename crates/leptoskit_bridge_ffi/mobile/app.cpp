@@ -922,6 +922,16 @@ Java_dev_leptoskit_mobile_NativeApp_guestWakeBackground(JNIEnv*, jclass, jlong h
 }
 
 extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_guestSystemBack(JNIEnv*, jclass, jlong handle) {
+    return lk_guest_system_back(guest(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_guestTakeSystemBack(JNIEnv*, jclass, jlong handle) {
+    return lk_guest_take_system_back(guest(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_dev_leptoskit_mobile_NativeApp_guestComplete(JNIEnv* env, jclass, jlong handle,
     jlong id, jint error, jbyteArray payload) {
     if (error != 0) return lk_guest_complete(guest(handle), static_cast<uint64_t>(id), error, nullptr, 0);

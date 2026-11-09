@@ -347,6 +347,52 @@ fn native_scaffold_carries_mobile_apps_and_does_not_overwrite_sources() {
 	);
 }
 
+/// Android 16 never calls `onBackPressed` for an app that targets it: Back
+/// arrives only through an `OnBackInvokedCallback`. Without one, every Back
+/// left the app instead of going back a route.
+#[test]
+fn the_generated_android_activity_offers_system_back_to_the_router() {
+	let scratch = Scratch::new("android-system-back");
+	let project = scratch.path.join("back_native");
+	new_project::run(
+		project.to_string_lossy().as_ref(),
+		leptoskit_config::Platform::Native,
+		None,
+	)
+	.expect("scaffold");
+	let read = |file: &str| std::fs::read_to_string(project.join(file)).expect(file);
+	let activity = read("android/app/src/main/java/MainActivity.kt");
+	let manifest = read("android/app/src/main/AndroidManifest.xml");
+	let guest = read("back_native_app/src/lib.rs");
+
+	assert!(
+		activity.contains("if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)")
+			&& activity.contains(
+				"onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.\
+				 PRIORITY_DEFAULT)"
+			),
+		"Android 13 and later need an OnBackInvokedCallback:\n{activity}"
+	);
+	assert!(
+		manifest.contains("android:enableOnBackInvokedCallback=\"true\""),
+		"Android 13 to 15 ignore the callback unless the manifest opts in:\n{manifest}"
+	);
+	assert!(
+		activity.contains("override fun onBackPressed() = offerSystemBack()"),
+		"Android 12 and earlier still deliver Back to onBackPressed:\n{activity}"
+	);
+	assert!(
+		activity.contains("view.offerSystemBack { wentBack -> if (!wentBack) leave() }")
+			&& !activity.contains("getMethod(\"offerSystemBack\")"),
+		"the activity asks the router directly and leaves only on its answer:\n{activity}"
+	);
+	assert!(
+		guest.contains("navigation.bind_system_back();")
+			&& guest.contains("pub extern \"C\" fn leptoskit_system_back() -> i32"),
+		"the guest binds its router to system Back and exports it:\n{guest}"
+	);
+}
+
 #[test]
 fn native_bundle_compiles_and_optimizes_the_guest() {
 	let scratch = fixture_project("native_guest");

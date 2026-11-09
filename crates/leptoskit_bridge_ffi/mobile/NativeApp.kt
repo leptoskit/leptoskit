@@ -103,6 +103,12 @@ object NativeApp {
     /** Runs a guest step for a platform background tick, marking the wake reason. */
     @JvmStatic external fun guestWakeBackground(guest: Long): Int
 
+    /** Offers system Back to the guest; its answer follows a notification. */
+    @JvmStatic external fun guestSystemBack(guest: Long): Int
+
+    /** The oldest answer to [guestSystemBack]: 1 went back, 2 leave, 0 none waiting. */
+    @JvmStatic external fun guestTakeSystemBack(guest: Long): Int
+
     @JvmStatic external fun guestComplete(
         guest: Long,
         id: Long,

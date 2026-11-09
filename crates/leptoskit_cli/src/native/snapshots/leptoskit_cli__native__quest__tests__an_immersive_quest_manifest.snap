@@ -13,7 +13,7 @@ expression: manifest
 <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM"/>
 <uses-permission android:name="com.oculus.permission.HAND_TRACKING"/>
 <queries><provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker"/><intent><action android:name="org.khronos.openxr.OpenXRRuntimeService"/></intent><intent><action android:name="org.khronos.openxr.OpenXRApiLayerService"/></intent></queries>
-<application android:label="Reapers" android:theme="@style/LeptosKitTheme">
+<application android:label="Reapers" android:theme="@style/LeptosKitTheme" android:enableOnBackInvokedCallback="true">
 <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s"/>
 <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0"/>
         <activity android:excludeFromRecents="false" android:screenOrientation="landscape" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" android:name="dev.reapers.app.MainActivity" android:exported="true" android:launchMode="singleTask" android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode" android:resizeableActivity="false">
