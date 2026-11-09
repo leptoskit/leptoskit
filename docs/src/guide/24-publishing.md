@@ -286,11 +286,11 @@ campaign = "winter"
 | iOS               | A `LaunchBackground` colour and a `LaunchImage` at 1×, 2×, and 3× in the app's asset catalog, named by `UILaunchScreen` in the generated `Info.plist`      |
 | Android 12 and up | A launch theme for the launcher activity with the splash screen's background and icon; optional `[android_12]` overrides                                   |
 | Android 8 to 11   | The same theme's window background: the colour with the image centered at `image_size` dp, replaced by your theme's background once the first screen draws |
-| Web               | Splash CSS/HTML under `/splash/`, injected into `index.html`, with `leptoskitDismissSplash()` for manual dismissal                                         |
+| Web               | Splash CSS/HTML under `/splash/`, injected into `index.html`, faded out once the app's first render is painted                                             |
 
 The image is read like `app.icon`: an SVG is drawn at 1024 pixels, so turn its text into shapes. Android 12 and later crop it to a circle two thirds the size of its canvas, so keep what matters in the middle. Without `image`, iOS shows the colour alone and Android 12 shows your app icon on it. Set `android`, `ios`, or `web` to `false` to skip a platform. macOS, Windows, and Linux have no cold-start splash; HarmonyOS's is not generated yet.
 
-When `animated.until = "manual"`, call `leptoskit::splash::hold()` before the first screen and `leptoskit::splash::dismiss()` once initialization finishes.
+When `animated.until = "manual"`, call `leptoskit::splash::hold()` before the first screen and `leptoskit::splash::dismiss()` once initialization finishes. On the web, a held splash also stays over the first render until `dismiss()`.
 
 The launch theme extends your application's own theme, from `android:theme` on `<application>` in `android/app/src/main/AndroidManifest.xml`, and only the launcher activity uses it. If that activity sets a theme of its own, the build warns and leaves it alone. Projects made before `app.icon` need the `res.directories` line above for the launch screen too.
 

@@ -91,7 +91,55 @@ pub fn render(element: Element) -> AnyView {
 		scroll_after_render();
 	}
 
+	lift_splash_after_render();
+
 	(html::style().child(css), root).into_any()
+}
+
+/// Lifts the HTML launch screen once a render is painted, unless the app
+/// holds it with [`crate::splash::hold`]: the web's `until = "first_frame"`.
+/// After it is gone, a render only looks it up.
+fn lift_splash_after_render() {
+	#[cfg(target_arch = "wasm32")]
+	{
+		if crate::splash::is_held() || splash_element().is_none() {
+			return;
+		}
+		// Scheduling fails only without a window, and then there is no splash.
+		let _ = request_animation_frame(|| {
+			if !crate::splash::is_held() {
+				lift_splash();
+			}
+		});
+	}
+}
+
+#[cfg(target_arch = "wasm32")]
+fn splash_element() -> Option<web_sys::Element> {
+	web_sys::window()?
+		.document()?
+		.get_element_by_id(crate::splash::HTML_ID)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+	/// The fade-out the injected splash defines, `crate::splash::HTML_DISMISS`
+	/// (a literal here, as wasm-bindgen needs). Throws when there is none.
+	#[wasm_bindgen(js_namespace = window, js_name = leptoskitDismissSplash, catch)]
+	fn dismiss_html_splash() -> Result<(), wasm_bindgen::JsValue>;
+}
+
+/// Lifts the HTML launch screen now: through the page's own
+/// `window.leptoskitDismissSplash`, which fades it out, or by removing it
+/// when the page defines none.
+pub(crate) fn lift_splash() {
+	#[cfg(target_arch = "wasm32")]
+	if dismiss_html_splash().is_err()
+		&& let Some(splash) = splash_element()
+	{
+		splash.remove();
+	}
 }
 
 /// Whether any element in the tree asks for keyboard focus.
