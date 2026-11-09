@@ -373,7 +373,7 @@ impl QueryClient {
 			.inner
 			.cache
 			.pending_hydration(scope.scope_id(), hash_key(key))?;
-		scope.codec()?.decode(waiting.data).ok()
+		scope.codec()?.decode(waiting.data?).ok()
 	}
 
 	/// The cached state for `key`, without subscribing.

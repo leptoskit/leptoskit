@@ -264,7 +264,7 @@ impl CacheInner {
 		// Older data never replaces newer, matching `Query::hydrate`.
 		if pending
 			.get(&id)
-			.is_some_and(|waiting| waiting.query.data_updated_at >= dehydrated.data_updated_at)
+			.is_some_and(|waiting| waiting.query.revision() >= dehydrated.revision())
 		{
 			return;
 		}

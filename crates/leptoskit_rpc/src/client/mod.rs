@@ -571,6 +571,7 @@ where
 	QueryScope::new(|args: Args<Q>| call(args.into_inner()))
 		.with_name(&scope_name(Q::SERVICE, Q::NAME))
 		.with_ssr()
+		.with_ssr_error()
 }
 
 /// A background job's state: live over the app's socket when it has one,

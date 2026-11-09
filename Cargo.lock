@@ -7028,6 +7028,7 @@ dependencies = [
  "send_wrapper",
  "serde",
  "serde_json",
+ "throw_error",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-test",

@@ -140,7 +140,7 @@ fn feed() -> InfiniteQueryScope<UserId, Cursor, FeedPage, ApiError> {
 
 ## Server rendering
 
-A plain query does not fetch during SSR; the browser fetches after hydration. Add `.with_ssr()` to a scope whose data is serializable and the server fetches it, streams it with the HTML, and the browser starts from that data, with no loading state. Read such queries inside `<Suspense>` with `query.await`, exactly as you would a leptos resource, so the server waits for the data before rendering the boundary.
+A plain query does not fetch during SSR; the browser fetches after hydration. Add `.with_ssr()` to a scope whose data is serializable and the server fetches it, streams it with the HTML, and the browser starts from that data, with no loading state. Add `.with_ssr_error()` when the error type is serializable too: a page the server rendered as an error then hydrates as that error, instead of a loading state that does not match the HTML. `use_rpc_query` does both. The browser refetches after that first render. Read such queries inside `<Suspense>` with `query.await`, exactly as you would a leptos resource, so the server waits for the data before rendering the boundary.
 
 Give those scopes a stale time, such as `.with_stale_time(Duration::from_secs(30))`. Data counts as stale the moment it is fetched unless a scope says otherwise, so without one the browser refetches it in the background right after hydrating. If you dehydrate the cache yourself with `client.dehydrate()` — to embed it in a page or save it to storage — name the scopes too: the browser, or the next build, is another program, and only a name identifies a scope in both.
 

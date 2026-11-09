@@ -210,6 +210,7 @@ pub struct QueryScope<K, T, E> {
 	pub(crate) options: QueryOptions<E>,
 	pub(crate) tags: Option<TagsFn<K>>,
 	pub(crate) codec: Option<DataCodec<T>>,
+	pub(crate) error_codec: Option<DataCodec<E>>,
 	pub(crate) data_eq: Option<DataEqFn<T>>,
 }
 
@@ -223,6 +224,7 @@ impl<K, T, E> Clone for QueryScope<K, T, E> {
 			options: self.options.clone(),
 			tags: self.tags.clone(),
 			codec: self.codec.clone(),
+			error_codec: self.error_codec.clone(),
 			data_eq: self.data_eq.clone(),
 		}
 	}
@@ -289,6 +291,7 @@ where
 			options: QueryOptions::default(),
 			tags: None,
 			codec: None,
+			error_codec: None,
 			data_eq: None,
 		}
 	}
@@ -379,6 +382,23 @@ where
 		T: Serialize + DeserializeOwned,
 	{
 		self.with_codec(DataCodec::json())
+	}
+
+	/// Also streams a settled error, so the browser's first render matches an
+	/// error the server already drew.
+	///
+	/// Without this the server can render the error while the resource
+	/// payload is `null`, and the browser starts from loading. Hydration then
+	/// stops. Call it next to [`with_ssr`](Self::with_ssr). The error type
+	/// has to be serializable. The browser still refetches after that first
+	/// render.
+	#[must_use]
+	pub fn with_ssr_error(mut self) -> Self
+	where
+		E: Serialize + DeserializeOwned,
+	{
+		self.error_codec = Some(DataCodec::json());
+		self
 	}
 
 	/// Like [`with_ssr`](Self::with_ssr) with a custom codec.

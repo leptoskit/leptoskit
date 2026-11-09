@@ -52,6 +52,21 @@ use crate::state::status_of;
 
 static NEXT_OBSERVER_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Yields once so the caller resumes after the current synchronous render.
+async fn yield_once() {
+	let mut yielded = false;
+	std::future::poll_fn(|context| {
+		if yielded {
+			std::task::Poll::Ready(())
+		} else {
+			yielded = true;
+			context.waker().wake_by_ref();
+			std::task::Poll::Pending
+		}
+	})
+	.await;
+}
+
 /// The key-erased face of a [`Query`], so an observer need not know `K`.
 pub(crate) trait QueryAccess<T, E>: Send + Sync {
 	fn signals(&self) -> &QuerySignals<T, E>;
@@ -362,11 +377,32 @@ where
 	/// refetch-on-mount policy. Client-only queries never fetch during SSR,
 	/// and a mount inside the dedupe window takes the fetch that just settled:
 	/// that mount is a rebuild of the screen the fetch's result changed.
-	fn fetch_on_mount(&self, query: &Access<T, E>) {
+	fn fetch_on_mount(self: &Arc<Self>, query: &Access<T, E>) {
 		if is_server() && !query.has_codec() {
 			return;
 		}
 
+		// The server has already rendered this query's settled state into the
+		// HTML. A refetch that starts now runs before that HTML is hydrated,
+		// and a refetch of an error with no data clears the error
+		// synchronously, so the browser's first tree is the loading state and
+		// hydration stops. Refetch on the next turn instead.
+		if Owner::current_shared_context()
+			.is_some_and(|context| context.is_browser() && context.during_hydration())
+		{
+			let observer = Arc::clone(self);
+			let query = Arc::clone(query);
+			spawn(async move {
+				yield_once().await;
+				observer.fetch_on_mount_now(&query);
+			});
+			return;
+		}
+
+		self.fetch_on_mount_now(query);
+	}
+
+	fn fetch_on_mount_now(&self, query: &Access<T, E>) {
 		let options = self.effective_options(query);
 
 		if query.settled_within(options.mount_dedupe) {

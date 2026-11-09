@@ -355,7 +355,7 @@ macro_rules! __remote_stream_pump {
 }
 
 /// One classified server-fn failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FnError {
 	/// The request never reached the server, or the connection dropped.
 	Network(String),

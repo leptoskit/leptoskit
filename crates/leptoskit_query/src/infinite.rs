@@ -432,6 +432,16 @@ where
 		self.with_codec(DataCodec::json())
 	}
 
+	/// See [`QueryScope::with_ssr_error`].
+	#[must_use]
+	pub fn with_ssr_error(mut self) -> Self
+	where
+		E: Serialize + DeserializeOwned,
+	{
+		self.scope = self.scope.with_ssr_error();
+		self
+	}
+
 	/// See [`QueryScope::with_codec`].
 	#[must_use]
 	pub fn with_codec(mut self, codec: DataCodec<InfiniteData<T, P>>) -> Self {

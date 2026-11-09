@@ -208,6 +208,7 @@ pub(crate) struct Query<K, T, E> {
 	pub(crate) options: ResolvedQueryOptions<E>,
 	pub(crate) signals: QuerySignals<T, E>,
 	pub(crate) codec: Option<DataCodec<T>>,
+	error_codec: Option<DataCodec<E>>,
 	data_eq: Option<DataEqFn<T>>,
 	observers: Mutex<Vec<ObserverEntry<E>>>,
 	in_flight: Mutex<Option<InFlight>>,
@@ -251,6 +252,7 @@ where
 				options,
 				signals: QuerySignals::new(),
 				codec: scope.codec.clone(),
+				error_codec: scope.error_codec.clone(),
 				data_eq: scope.data_eq.clone(),
 				observers: Mutex::new(Vec::new()),
 				in_flight: Mutex::new(None),
@@ -663,6 +665,16 @@ where
 	}
 
 	// ---- writing -----------------------------------------------------------
+	/// Writes an error as if a fetch had failed, without clearing data.
+	pub(crate) fn set_error(&self, error: E, updated_at: Option<u64>) {
+		self.signals.error.set(Some(error));
+		self.update_meta(|meta| {
+			meta.error_updated_at = Some(updated_at.unwrap_or_else(now_ms));
+			meta.error_update_count += 1;
+		});
+		self.emit(CacheEvent::Updated);
+	}
+
 	/// Writes data as if a fetch had succeeded.
 	pub(crate) fn set_data(&self, data: T, updated_at: Option<u64>) {
 		self.signals.data.set(Some(data));
@@ -961,45 +973,72 @@ where
 	}
 
 	fn dehydrate(&self) -> Option<DehydratedQuery> {
-		let codec = self.codec.as_ref()?;
+		self.codec.as_ref()?;
 
-		if self.status_untracked() != QueryStatus::Success {
+		let meta = self.signals.meta.get_untracked();
+		let error = self.error_codec.as_ref().and_then(|codec| {
+			self.signals
+				.error
+				.with_untracked(|error| error.as_ref().and_then(|error| codec.encode(error).ok()))
+		});
+		// An error with no error codec used to be omitted entirely, including
+		// any stale data, so the browser did not render a success the server
+		// had drawn as a failure. Keep that unless the error itself travels.
+		let data = if self.status_untracked() == QueryStatus::Success || error.is_some() {
+			self.codec.as_ref().and_then(|codec| {
+				self.signals
+					.data
+					.with_untracked(|data| data.as_ref().and_then(|data| codec.encode(data).ok()))
+			})
+		} else {
+			None
+		};
+
+		if data.is_none() && error.is_none() {
 			return None;
 		}
 
-		let data = self
-			.signals
-			.data
-			.with_untracked(|data| data.as_ref().map(|data| codec.encode(data)))?
-			.ok()?;
+		let data_updated_at = if data.is_some() {
+			meta.data_updated_at.unwrap_or_else(now_ms)
+		} else {
+			0
+		};
 		Some(DehydratedQuery {
 			scope: self.scope_id,
 			scope_name: self.scope_name.to_string(),
 			key: format!("{:?}", self.key),
 			key_hash: self.key_hash,
 			data,
-			data_updated_at: self
-				.signals
-				.meta
-				.get_untracked()
-				.data_updated_at
-				.unwrap_or_else(now_ms),
+			data_updated_at,
+			error,
+			error_updated_at: meta.error_updated_at,
 		})
 	}
 
 	fn hydrate(&self, dehydrated: &DehydratedQuery) {
-		let Some(codec) = self.codec.as_ref() else {
-			return;
-		};
-		// Fresher local data wins over what was dehydrated earlier.
-		let current = self.signals.meta.get_untracked().data_updated_at;
+		// Data first: `set_data` clears an error, and a carried error is
+		// written back afterwards so a failure with stale data stays a failure.
+		if let (Some(codec), Some(data)) = (self.codec.as_ref(), dehydrated.data.as_ref()) {
+			let current = self.signals.meta.get_untracked().data_updated_at;
 
-		if current.is_some_and(|current| current >= dehydrated.data_updated_at) {
-			return;
+			if current.is_none_or(|current| current < dehydrated.data_updated_at)
+				&& let Ok(data) = codec.decode(data.clone())
+			{
+				self.set_data(data, Some(dehydrated.data_updated_at));
+			}
 		}
 
-		if let Ok(data) = codec.decode(dehydrated.data.clone()) {
-			self.set_data(data, Some(dehydrated.data_updated_at));
+		if let (Some(codec), Some(error)) = (self.error_codec.as_ref(), dehydrated.error.as_ref()) {
+			let updated_at = dehydrated
+				.error_updated_at
+				.unwrap_or(dehydrated.data_updated_at);
+			let current = self.signals.meta.get_untracked().error_updated_at;
+
+			if current.is_none_or(|current| current < updated_at)
+				&& let Ok(error) = codec.decode(error.clone())
+			{
+				self.set_error(error, Some(updated_at));
+			}
 		}
 	}
 

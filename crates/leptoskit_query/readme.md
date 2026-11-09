@@ -57,7 +57,7 @@ Queries are cached and shared between every component that reads them, fetched o
 
 ## Server rendering
 
-A plain query does not fetch during SSR; the browser fetches after hydration, as TanStack does without prefetching. Add `.with_ssr()` to a scope whose data is serializable and the server fetches it, streams it alongside the HTML, and the browser hydrates the cache with it — the same `SharedContext` mechanism leptos resources use — so the first render shows the server's data. Read such queries inside `<Suspense>` with `query.await` so the server waits for the data before rendering the boundary.
+A plain query does not fetch during SSR; the browser fetches after hydration, as TanStack does without prefetching. Add `.with_ssr()` to a scope whose data is serializable and the server fetches it, streams it alongside the HTML, and the browser hydrates the cache with it — the same `SharedContext` mechanism leptos resources use — so the first render shows the server's data. Add `.with_ssr_error()` when the error type is serializable: a page the server rendered as an error then hydrates as that error, instead of a loading state that does not match the HTML. The browser refetches after that first render. Read such queries inside `<Suspense>` with `query.await` so the server waits for the data before rendering the boundary.
 
 Give those scopes a stale time. Data is stale the moment it is fetched by default, so without one the browser refetches in the background right after hydrating, as TanStack does. Scopes dehydrated by hand with `client.dehydrate()` must also be named with `.with_name(..)`: dehydrated data is matched by scope and key, and only a name (and the stable key hash) is the same in the server's binary and the browser's.
 
