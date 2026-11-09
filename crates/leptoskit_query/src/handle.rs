@@ -198,6 +198,14 @@ impl<T, E> QueryObserverOptions<T, E> {
 		self
 	}
 
+	/// How long after a fetch settles this observer's mount reuses it; see
+	/// [`DEFAULT_MOUNT_DEDUPE`](crate::DEFAULT_MOUNT_DEDUPE).
+	#[must_use]
+	pub fn with_mount_dedupe(mut self, window: std::time::Duration) -> Self {
+		self.overlay.mount_dedupe = Some(window);
+		self
+	}
+
 	/// Refetch policy when the window regains focus.
 	#[must_use]
 	pub fn with_refetch_on_window_focus(mut self, refetch: RefetchOn) -> Self {

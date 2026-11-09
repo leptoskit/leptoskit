@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use futures::StreamExt;
 use futures::channel::mpsc;
@@ -59,6 +60,7 @@ pub(crate) trait QueryAccess<T, E>: Send + Sync {
 	fn in_flight(&self) -> Option<FetchFuture>;
 	fn is_stale_for(&self, stale_time: StaleTime) -> bool;
 	fn is_stale_for_tracked(&self, stale_time: StaleTime) -> bool;
+	fn settled_within(&self, window: Duration) -> bool;
 	fn add_observer(&self, entry: ObserverEntry<E>);
 	fn remove_observer(&self, id: u64);
 	fn set_data(&self, data: T, updated_at: Option<u64>);
@@ -102,6 +104,10 @@ where
 
 	fn is_stale_for_tracked(&self, stale_time: StaleTime) -> bool {
 		Query::is_stale_for_tracked(self, stale_time)
+	}
+
+	fn settled_within(&self, window: Duration) -> bool {
+		Query::settled_within(self, window)
 	}
 
 	fn add_observer(&self, entry: ObserverEntry<E>) {
@@ -353,13 +359,20 @@ where
 
 	/// TanStack's `shouldFetchOnMount`: load when there is no data (unless the
 	/// last attempt failed and `retry_on_mount` is off), otherwise consult the
-	/// refetch-on-mount policy. Client-only queries never fetch during SSR.
+	/// refetch-on-mount policy. Client-only queries never fetch during SSR,
+	/// and a mount inside the dedupe window takes the fetch that just settled:
+	/// that mount is a rebuild of the screen the fetch's result changed.
 	fn fetch_on_mount(&self, query: &Access<T, E>) {
 		if is_server() && !query.has_codec() {
 			return;
 		}
 
 		let options = self.effective_options(query);
+
+		if query.settled_within(options.mount_dedupe) {
+			return;
+		}
+
 		let should_fetch = if query.has_data_untracked() {
 			match options.refetch_on_mount {
 				RefetchOn::Never => false,

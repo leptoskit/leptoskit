@@ -14,6 +14,7 @@ use super::tree::decode_event;
 use super::tree::invoke;
 use crate::Element;
 use crate::EventOutcome;
+use crate::remember::ScreenState;
 
 #[link(wasm_import_module = "leptoskit")]
 unsafe extern "C" {
@@ -26,6 +27,8 @@ unsafe extern "C" {
 
 struct Application {
 	view: Rc<dyn Fn() -> Element>,
+	/// What [`remember`](crate::remember::remember) keeps between builds.
+	state: ScreenState,
 	tree: Tree,
 	/// The view read a signal while it was built, outside a binding. The next
 	/// write of that signal rebuilds the view; a write it did not read does
@@ -74,20 +77,26 @@ pub fn set_viewport(width: f32, height: f32) {
 /// Create application state before this call and capture it in `view`. The
 /// closure runs again when it read a signal that has since changed; a write
 /// that only reaches a binding, [`For`](crate::reactive::For), or
-/// [`Show`](crate::reactive::Show) updates those and does not run it. The
-/// application must export the ABI entry points that forward to this module.
+/// [`Show`](crate::reactive::Show) updates those and does not run it. State
+/// a screen keeps for itself comes from
+/// [`remember`](crate::remember::remember), which hands each build the
+/// values the last one left. The application must export the ABI entry
+/// points that forward to this module.
 ///
 /// # Panics
 /// Panics for an invalid control tree, unsupported custom widget, or a tree
 /// deeper than the native ABI's 256-level limit.
 pub fn mount(view: impl Fn() -> Element + 'static) {
 	ensure_owner();
+	let state = ScreenState::new();
+	state.provide();
 	APPLICATION.with_borrow_mut(|application| {
 		let tree = application
 			.take()
 			.map_or_else(Tree::default, |app| app.tree);
 		*application = Some(Application {
 			view: Rc::new(view),
+			state,
 			tree,
 			root_tracked: false,
 		});
@@ -129,23 +138,28 @@ pub fn flush() {
 /// reply. Layout, responsive styles, and native text measurement stay on the
 /// host. Calling it before [`mount`] has no effect.
 pub fn render() {
-	let view = APPLICATION.with_borrow(|application| {
+	let mounted = APPLICATION.with_borrow(|application| {
 		application
 			.as_ref()
-			.map(|application| Rc::clone(&application.view))
+			.map(|application| (Rc::clone(&application.view), application.state.clone()))
 	});
 
-	let Some(view) = view else {
+	let Some((view, state)) = mounted else {
 		return;
 	};
-	let (element, tracked) = super::track::render_tracking(move || view());
 
-	APPLICATION.with_borrow_mut(|application| {
-		let application = application
-			.as_mut()
-			.expect("the application remains mounted while rendering");
-		application.root_tracked = tracked;
-		application.tree.update(element, &mut Imports);
+	// The tree evaluates new lists while it updates, so they are part of the
+	// build too.
+	state.build(|| {
+		let (element, tracked) = super::track::render_tracking(move || view());
+
+		APPLICATION.with_borrow_mut(|application| {
+			let application = application
+				.as_mut()
+				.expect("the application remains mounted while rendering");
+			application.root_tracked = tracked;
+			application.tree.update(element, &mut Imports);
+		});
 	});
 }
 

@@ -160,9 +160,37 @@ view! {
 
 The view function runs again when it reads a signal. `let n = count.get();` in the body rebuilds the screen, which is how a value chooses the shape of the tree, and it is the slow way to change a label. A read inside `Text`, `For`, or `Show` stays with that piece. A screen that stores its state in a plain value still rebuilds after a press, because that is how the new value reaches the screen.
 
-Keep a signal in application state rather than creating one inside a view function: a signal lives as long as the guest, so one created on every render is never freed.
+Keep a signal in application state, or in [`remember`](#keep-a-screens-own-state-across-rebuilds), rather than creating one inside a view function: a signal lives as long as the guest, so one created on every render is never freed.
 
 On the web the same tree shows the value read at build time, and leptos re-runs the screen when the signal changes, so nothing else is needed there. `leptoskit::prelude` exports leptos's own `RwSignal`, so a screen shared with the browser keeps one signal type.
+
+## Keep a screen's own state across rebuilds
+
+A chosen filter or a half-typed search belongs to one screen, not to the whole app, but `RwSignal::new(false)` inside the screen runs again on every rebuild, so the value resets the moment the screen redraws. `remember` hands back the same signal on every build instead:
+
+```rust
+use leptoskit::prelude::*;
+
+#[component]
+pub fn Tasks() -> Element {
+	// Created on the first build; every rebuild after it gets the same signal.
+	let open_only = remember(|| false);
+	let toggle = move || open_only.update(|open| *open = !*open);
+	let label = if open_only.get() { "Open tasks" } else { "All tasks" };
+	view! {
+		<View class="flex-col gap-2 p-4">
+			<Text class="text-xl font-bold">{label}</Text>
+			<Button on:press=move || toggle()>"Switch"</Button>
+		</View>
+	}
+}
+```
+
+This works the same on the web and on every native platform. Each `remember` call is named by where it is in your code and by how many times that line already ran in the build, so a component used twice keeps two values. Rows that can move, appear, or disappear name their value with `remember_keyed(&task.id, || …)` instead, so the value follows the row rather than its position.
+
+A value lives as long as the screen keeps asking for it. When a whole rebuild finishes without reaching a `remember` call — you navigated to another route, or a branch stopped rendering — its value is released, and coming back starts from the closure again. State that must outlive a screen, such as a signed-in user, still goes in a signal you create before mounting the app.
+
+`leptoskit::guest::mount` keeps the values for a native app. In the browser, render the screen with `leptoskit::web::screen(move || …)` where you would write `move || leptoskit::web::render(…)`: it rebuilds the same way and keeps the values. Outside both, as in a test that builds a screen once, `remember` is `RwSignal::new`.
 
 ## Group a state struct into a store
 

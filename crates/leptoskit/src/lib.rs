@@ -177,6 +177,13 @@ pub mod components {
 	pub use leptoskit_native::components::*;
 }
 
+pub mod remember {
+	//! State that survives a rebuild of the screen: [`remember`] and
+	//! [`remember_keyed`] hand each build the signals the last one left, and
+	//! release the ones a whole build no longer asks for.
+	pub use leptoskit_native::remember::*;
+}
+
 pub mod store {
 	//! Leptos stores: a state struct whose fields notify separately.
 	//!
@@ -524,6 +531,8 @@ pub mod prelude {
 	pub use leptoskit_native::reactive::Update;
 	pub use leptoskit_native::reactive::With;
 	pub use leptoskit_native::reactive::WithUntracked;
+	pub use leptoskit_native::remember::remember;
+	pub use leptoskit_native::remember::remember_keyed;
 	pub use leptoskit_native::tailwind::ClassError;
 	pub use leptoskit_native::tailwind::StyleContext;
 	pub use leptoskit_native::tailwind::Tailwind;

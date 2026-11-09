@@ -259,9 +259,11 @@ In the browser, turn on `leptoskit_router`'s `web` feature and start from the pa
 let navigation = Navigation::from_browser()?;
 leptos::mount::mount_to_body(move || {
 	let navigation = navigation.clone();
-	move || leptoskit::web::render(navigation.render())
+	leptoskit::web::screen(move || navigation.render())
 });
 ```
+
+`leptoskit::web::screen` renders the current route again whenever a signal it read changes, and keeps what each screen [remembers](07-shared-components.md#keep-a-screens-own-state-across-rebuilds) until you leave it.
 
 `from_browser` fails only when the page's URL matches no route, which can't happen with a root `+not-found.rs`.
 

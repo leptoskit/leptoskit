@@ -137,6 +137,7 @@ fn options_build_merge_and_print() {
 		.with_refetch_interval(Duration::from_secs(9))
 		.with_refetch_interval_in_background(true)
 		.with_refetch_on_mount(RefetchOn::Always)
+		.with_mount_dedupe(Duration::from_millis(250))
 		.with_refetch_on_window_focus(RefetchOn::Never)
 		.with_refetch_on_reconnect(RefetchOn::Never)
 		.with_network_mode(NetworkMode::OfflineFirst);
@@ -148,7 +149,12 @@ fn options_build_merge_and_print() {
 		Some(StaleTime::Duration(Duration::from_secs(1)))
 	);
 	assert_eq!(merged.network_mode, Some(NetworkMode::OfflineFirst));
-	assert!(format!("{merged:?}").contains("QueryOptions"));
+	assert_eq!(merged.mount_dedupe, Some(Duration::from_millis(250)));
+	assert!(format!("{merged:?}").contains("mount_dedupe"));
+	assert_eq!(
+		merged.clone().mount_dedupe,
+		Some(Duration::from_millis(250))
+	);
 
 	let defaults = QueryDefaults::new()
 		.with_stale_time(Duration::from_secs(2))
@@ -162,6 +168,7 @@ fn options_build_merge_and_print() {
 		.with_refetch_interval(Duration::from_secs(5))
 		.with_refetch_interval_in_background(true)
 		.with_refetch_on_mount(RefetchOn::Never)
+		.with_mount_dedupe(Duration::from_secs(1))
 		.with_refetch_on_window_focus(RefetchOn::Never)
 		.with_refetch_on_reconnect(RefetchOn::Never)
 		.with_network_mode(NetworkMode::Always);
@@ -169,7 +176,27 @@ fn options_build_merge_and_print() {
 	let resolved = ResolvedQueryOptions::resolve(&defaults, &QueryOptions::<Boom>::new(), false);
 	assert_eq!(resolved.gc_time, GcTime::Duration(Duration::from_secs(3)));
 	assert!(!resolved.retry_on_mount);
+	assert_eq!(resolved.mount_dedupe, Duration::from_secs(1));
+	assert_eq!(resolved.clone().mount_dedupe, Duration::from_secs(1));
 	assert!(format!("{:?}", resolved.clone()).contains("ResolvedQueryOptions"));
+	assert!(format!("{resolved:?}").contains("mount_dedupe"));
+	assert_eq!(
+		resolved.overlay(&base).mount_dedupe,
+		Duration::from_millis(250),
+		"an observer's window wins"
+	);
+	assert_eq!(
+		resolved.overlay(&QueryOptions::new()).mount_dedupe,
+		Duration::from_secs(1)
+	);
+	assert_eq!(
+		ResolvedQueryOptions::resolve(&QueryDefaults::new(), &QueryOptions::<Boom>::new(), false)
+			.mount_dedupe,
+		DEFAULT_MOUNT_DEDUPE,
+		"two seconds unless someone says otherwise"
+	);
+	assert!(format!("{defaults:?}").contains("mount_dedupe"));
+	assert_eq!(defaults.mount_dedupe, Some(Duration::from_secs(1)));
 
 	let on_server =
 		ResolvedQueryOptions::resolve(&QueryDefaults::new(), &QueryOptions::<Boom>::new(), true);

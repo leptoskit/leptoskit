@@ -1044,6 +1044,11 @@ in
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe
         LEPTOSKIT_HOOKS_GUEST="$guest_target/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test hooks_guest -- --ignored
+        # A screen's remembered state survives the runtime's rebuilds and
+        # leaves with the screen.
+        cargo build --locked --target wasm32-unknown-unknown --package rebuild_guest_probe
+        LEPTOSKIT_REBUILD_GUEST="$guest_target/wasm32-unknown-unknown/debug/rebuild_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test rebuild_guest -- --ignored
         # An agent's document, interpreted by an ordinary guest: what a
         # published app runs when an agent sends it interface as text.
         cargo build --locked --target wasm32-unknown-unknown --package agent_ui_guest_probe
