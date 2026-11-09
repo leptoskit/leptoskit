@@ -533,35 +533,37 @@ mod linux {
 	}
 
 	fn all_widgets_have_exact_yoga_frames() {
-		let tree = View().class("w-full h-full bg-white gap-2 p-4").children([
-			Text("GTK native primitives"),
-			Button("A button with a very long label").class("w-1 h-1"),
-			Switch(false).class("w-1 h-1"),
-			Checkbox(false).class("w-1 h-1"),
-			Radio(RadioGroup::new("all").unwrap(), false).class("w-1 h-1"),
-			Slider(SliderState::new(0.0, 100.0, 40.0, Some(5.0)).unwrap()).class("w-1 h-1"),
-			TextInput().aria_label("Editor").class("w-1 h-1"),
-			PasswordInput().aria_label("Password").class("w-1 h-1"),
-			LinearProgressIndicator(Progress::Determinate(ProgressValue::new(0.4).unwrap()))
-				.class("h-2"),
-			ActivityIndicator(true).class("w-6 h-6"),
-			Pressable("Add")
-				.class("h-10 w-32 bg-blue-600 rounded-lg")
-				.child(Text("Add preview").class("text-white")),
-			Image(artifact_path("image.png").to_string_lossy()).class("h-4 w-4"),
-			ScrollView()
-				.class("h-10")
-				.child(Text("Scrollable document")),
-			Element::new(NativeKind::TextRun)
-				.props(leptoskit_native::NativeProps::text("run"))
-				.class("h-5"),
-			Vector(ViewBox::new(0.0, 0.0, 10.0, 10.0).unwrap())
-				.path(
-					drawn("M 0 0 L 10 10")
-						.stroke(Stroke::new(Color::rgba(0, 0, 0, 255), 1.0).unwrap()),
-				)
-				.class("h-4 w-4"),
-		]);
+		let tree = View()
+			.class("w-full h-full bg-white gap-2 p-4")
+			.children(vec![
+				Text("GTK native primitives"),
+				Button("A button with a very long label").class("w-1 h-1"),
+				Switch(false).class("w-1 h-1"),
+				Checkbox(false).class("w-1 h-1"),
+				Radio(RadioGroup::new("all").unwrap(), false).class("w-1 h-1"),
+				Slider(SliderState::new(0.0, 100.0, 40.0, Some(5.0)).unwrap()).class("w-1 h-1"),
+				TextInput().aria_label("Editor").class("w-1 h-1"),
+				PasswordInput().aria_label("Password").class("w-1 h-1"),
+				LinearProgressIndicator(Progress::Determinate(ProgressValue::new(0.4).unwrap()))
+					.class("h-2"),
+				ActivityIndicator(true).class("w-6 h-6"),
+				Pressable("Add")
+					.class("h-10 w-32 bg-blue-600 rounded-lg")
+					.child(Text("Add preview").class("text-white")),
+				Image(artifact_path("image.png").to_string_lossy()).class("h-4 w-4"),
+				ScrollView()
+					.class("h-10")
+					.child(Text("Scrollable document")),
+				Element::new(NativeKind::TextRun)
+					.props(leptoskit_native::NativeProps::text("run"))
+					.class("h-5"),
+				Vector(ViewBox::new(0.0, 0.0, 10.0, 10.0).unwrap())
+					.path(
+						drawn("M 0 0 L 10 10")
+							.stroke(Stroke::new(Color::rgba(0, 0, 0, 255), 1.0).unwrap()),
+					)
+					.class("h-4 w-4"),
+			]);
 		let mounted = mounted(&tree);
 		let surface = mounted.surface.borrow();
 		let root = surface.root().unwrap();
