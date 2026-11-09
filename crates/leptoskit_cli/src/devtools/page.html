@@ -47,6 +47,10 @@
 	<section>
 		<h2>Node</h2>
 		<dl id="node"></dl>
+		<h2>Errors</h2>
+		<ul id="errors"></ul>
+		<h2>Commits</h2>
+		<ul id="commits"></ul>
 		<button id="snapshot" type="button">Request snapshot</button>
 		<button id="select" type="button" disabled>Select</button>
 		<button id="highlight" type="button" disabled>Highlight</button>
@@ -83,7 +87,45 @@
 		render(view);
 	}
 
+	function renderDiagnostics(view) {
+		const errors = document.getElementById('errors');
+		errors.textContent = '';
+		let count = 0;
+		for (const call of view.calls || []) {
+			if (call.status === 'error' || call.status === 'cancelled') {
+				count += 1;
+				const item = document.createElement('li');
+				item.textContent = `${call.plugin}.${call.method}: ${call.status}`;
+				errors.append(item);
+			}
+		}
+		for (const attempt of view.rpc || []) {
+			if (attempt.error) {
+				count += 1;
+				const item = document.createElement('li');
+				item.textContent = `${attempt.function}: ${attempt.error}`;
+				errors.append(item);
+			}
+		}
+		if (count === 0) errors.textContent = 'No runtime errors.';
+		const commits = document.getElementById('commits');
+		commits.textContent = '';
+		const list = view.commits || [];
+		if (list.length === 0) {
+			commits.textContent = 'No commits yet.';
+			return;
+		}
+		for (const commit of list.slice(-8)) {
+			const item = document.createElement('li');
+			const layout = commit.layout_us == null ? '' : ` layout ${commit.layout_us}µs`;
+			const draw = commit.apply_us == null ? '' : ` draw ${commit.apply_us}µs`;
+			item.textContent = `#${commit.seq} ${commit.mutations} changes${layout}${draw}`;
+			commits.append(item);
+		}
+	}
+
 	function render(view) {
+		renderDiagnostics(view);
 		document.getElementById('route').textContent = view.route ? `Route: ${view.route}` : '';
 		const tree = view.tree;
 		const root = document.getElementById('tree');

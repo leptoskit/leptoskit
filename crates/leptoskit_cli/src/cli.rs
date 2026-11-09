@@ -203,6 +203,12 @@ pub enum Command {
 		#[command(subcommand)]
 		command: DevtoolsCommand,
 	},
+	/// Prints how a running app's tree, errors, and commits look, from the
+	/// devtools hub. `open` prints the hub address for the inspector page.
+	Debug {
+		#[command(subcommand)]
+		command: Option<crate::debug::DebugCommand>,
+	},
 	/// Serves the device control API over the Model Context Protocol, on
 	/// standard input and output or over HTTP.
 	Mcp {
@@ -800,6 +806,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 		Command::Devtools {
 			command: DevtoolsCommand::Fetch { force },
 		} => crate::devtools::fetch::run(force),
+		Command::Debug { command } => crate::debug::run(command),
 		Command::Mcp { command } => crate::mcp::run(command),
 		Command::Rpc { command } => rpc::run(command),
 		Command::Publish(args) => crate::publish::run(&args),

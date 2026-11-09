@@ -26,7 +26,7 @@ use clap::Subcommand;
 use serde_json::Value;
 use serde_json::json;
 
-mod devtools;
+pub(crate) mod devtools;
 
 /// The protocol revisions this server speaks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -345,6 +345,22 @@ fn control_tools() -> Value {
 				application this captures the whole device screen.",
 			"inputSchema": document_schema_value()["properties"]["target"],
 		},
+		{
+			"name": "read_logs",
+			"description": "Reads recent system logs from an Android device or an iOS simulator. \
+				`kind` is android or ios_simulator, `device` is the adb serial or simulator UDID, \
+				and `tail` is how many lines to keep (500 when omitted).",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"kind": {"type": "string", "enum": ["android", "ios_simulator"]},
+					"device": {"type": "string"},
+					"tail": {"type": "integer", "minimum": 1},
+				},
+				"required": ["kind", "device"],
+				"additionalProperties": false,
+			},
+		},
 	])
 }
 
@@ -439,8 +455,56 @@ fn call_tool(params: Option<&Value>) -> Result<Value, String> {
 				"isError": !outcome.passed,
 			}))
 		}
+		"read_logs" => read_logs(&arguments),
 		other => Err(format!("unknown tool {other:?}")),
 	}
+}
+
+/// Recent device logs, as one control step.
+fn read_logs(arguments: &Value) -> Result<Value, String> {
+	let kind = arguments
+		.get("kind")
+		.and_then(Value::as_str)
+		.ok_or("read_logs needs kind")?;
+	let device = arguments
+		.get("device")
+		.and_then(Value::as_str)
+		.filter(|device| !device.trim().is_empty())
+		.ok_or("read_logs needs device")?
+		.to_owned();
+	let kind = match kind {
+		"android" => leptoskit_testing::control::TargetKind::Android,
+		"ios_simulator" => leptoskit_testing::control::TargetKind::IosSimulator,
+		other => return Err(format!("read_logs does not read {other:?} logs")),
+	};
+	let tail = arguments.get("tail").and_then(Value::as_u64);
+	let document = leptoskit_testing::control::Document {
+		schema_version: leptoskit_testing::control::SCHEMA_VERSION,
+		target: leptoskit_testing::control::Target {
+			kind,
+			device: Some(device),
+			application: None,
+			url: None,
+			browser: None,
+			endpoint: None,
+			capabilities: std::collections::BTreeMap::new(),
+			headless: true,
+			startup_seconds: 30,
+			command_seconds: 30,
+			wait_seconds: 15,
+			artifacts: std::path::PathBuf::from("target/leptoskit-control"),
+		},
+		steps: vec![leptoskit_testing::control::Step::Logs {
+			tail,
+			minutes: None,
+		}],
+	};
+	let outcome = leptoskit_testing::control::run(&document);
+	let passed = outcome.passed;
+	Ok(json!({
+		"content": [{"type": "text", "text": serde_json::to_string_pretty(&outcome).unwrap()}],
+		"isError": !passed,
+	}))
 }
 
 fn text_result(text: &str) -> Value {
@@ -510,6 +574,7 @@ mod tests {
 				"list_devices",
 				"control",
 				"screenshot",
+				"read_logs",
 				"devtools_sessions",
 				"inspect_tree",
 				"inspect_node",
@@ -518,6 +583,8 @@ mod tests {
 				"navigate",
 				"highlight",
 				"set_state",
+				"runtime_errors",
+				"performance",
 			]
 		);
 		// The control tool carries the document schema, so clients validate
@@ -938,6 +1005,56 @@ mod tests {
 		}))
 		.unwrap();
 		// The target is missing its url; parse fails before the run starts.
+		assert_eq!(response["error"]["code"], -32602);
+	}
+
+	#[test]
+	fn read_logs_rejects_a_browser_and_reports_a_missing_device() {
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 11,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"kind": "web", "device": "x"}},
+		}))
+		.unwrap();
+		assert_eq!(response["error"]["code"], -32602);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 12,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"device": "emulator-5554"}},
+		}))
+		.unwrap();
+		assert_eq!(response["error"]["code"], -32602);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 13,
+			"method": "tools/call",
+			"params": {
+				"name": "read_logs",
+				"arguments": {"kind": "android", "device": "no-such-serial", "tail": 5},
+			},
+		}))
+		.unwrap();
+		assert_eq!(response["result"]["isError"], true);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 14,
+			"method": "tools/call",
+			"params": {
+				"name": "read_logs",
+				"arguments": {"kind": "ios_simulator", "device": "UDID"},
+			},
+		}))
+		.unwrap();
+		assert_eq!(response["result"]["isError"], true);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 15,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"kind": "android", "device": " "}},
+		}))
+		.unwrap();
 		assert_eq!(response["error"]["code"], -32602);
 	}
 }

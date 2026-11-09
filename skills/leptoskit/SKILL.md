@@ -124,9 +124,12 @@ assert!(tester.query_by_text("Count: 0")?.is_none());
 When something looks wrong in an app running under `leptoskit dev`, read the app instead of guessing from the code. The `leptoskit mcp` server's devtools tools talk to the hub `leptoskit dev` starts:
 
 1. `devtools_sessions` lists the running apps and their platforms.
-2. `inspect_tree` (with `depth`, and `root` to look inside one node) shows each node's kind, text, classes, frame, and the source line that built it. Use the frame and the source line to find the code to change.
+2. `inspect_tree` (with `depth`, and `root` to look inside one node) shows each node's kind, text, classes, frame, and the source line that built it. Use the frame and the source line to find the code to change. `leptoskit debug` prints the same tree.
 3. `inspect_node` and `explain_styles` give one node's details and the Tailwind classes styling it.
 4. `query_cache` shows what data the screen has; `navigate` opens a route; `set_state` changes named state the app exposes to the devtools (with `leptoskit::devtools::expose`, which reports from web and native apps alike); `highlight` with `all_sessions` marks the same node on every platform.
+5. `runtime_errors` lists failed plugin calls and server attempts. `performance` lists render commits. `read_logs` reads Android or iOS simulator logs, and `screenshot` returns a capture where the platform allows one.
+
+`leptoskit device sanity` installs and opens a native app, then injects tap, long press, pan, and pinch where that target can. `leptoskit device install` and `leptoskit device open` do the two steps on their own.
 
 Pass `session` (an id, `web`, `ios`, … or the app name) when more than one app is running. "No hub is running" means start `leptoskit dev` first.
 

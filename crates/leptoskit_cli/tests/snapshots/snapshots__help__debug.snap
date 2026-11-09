@@ -1,0 +1,18 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Prints how a running app's tree, errors, and commits look, from the devtools hub. `open` prints the hub address for the inspector page
+
+Usage: leptoskit debug [COMMAND]
+
+Commands:
+  tree         Prints the element tree: kind, text, classes, frame, and source line
+  errors       Prints failed plugin calls and server attempts
+  performance  Prints render commits and, when the app was profiling, layout and draw time
+  open         Prints the hub address. Open it to use the inspector
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

@@ -712,6 +712,9 @@ mod tests {
 
 		assert!(page.contains("request_snapshot"));
 		assert!(page.contains("id=\"notice\""));
+		assert!(page.contains("id=\"errors\""));
+		assert!(page.contains("id=\"commits\""));
+		assert!(page.contains("renderDiagnostics"));
 	}
 
 	#[tokio::test]

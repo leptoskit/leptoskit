@@ -33,6 +33,7 @@ pub mod compress;
 pub mod console;
 pub mod db;
 
+pub mod debug;
 pub mod deploy;
 pub mod dev;
 pub mod device;
