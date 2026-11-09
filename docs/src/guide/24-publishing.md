@@ -213,21 +213,42 @@ A permission without a sentence shows up in the steps as one to write. Store rev
 
 ## One icon for every platform
 
-A missing icon size is the most common reason a store turns an app away, and every platform wants different ones. Point `app.icon` at one square image, and every build makes the rest:
+A missing icon size is the most common reason a store turns an app away, and every platform wants different ones. Point `app.icon` at one square image, and every build makes the rest — or use `[app.icons]` for Flutter-style per-platform images, adaptive layers, and a notification icon:
 
 ```toml
 [app]
 icon = "assets/icon.svg" # or a PNG, 1024×1024 or larger
+
+# Richer form (overrides `app.icon` when `image` is set):
+[app.icons]
+image = "assets/icon.svg"
+notification = "assets/notification.png"
+
+[app.icons.android]
+adaptive_background = "#FFFFFF"
+
+[app.icons.ios]
+dark = "assets/icon-dark.png"
+tinted = "assets/icon-tinted.png"
+
+[app.icons.web]
+maskable = "assets/maskable.png"
+
+[app.icons.extensions.my_tool]
+flavor = "beta"
 ```
 
-| Platform  | What the build makes                                                                                                                           |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS       | The app's asset catalog with a 1024×1024 icon, laid over white, since the App Store refuses transparency; Xcode makes the device sizes from it |
-| Android   | Launcher icons for every screen density, and an adaptive icon: your image inside the mask's safe zone, on its corner color                     |
-| macOS     | `AppIcon.icns`, from 16 to 1024 pixels, inside the app                                                                                         |
-| Extension | The 16, 32, 48, and 128 pixel icons, in the manifest                                                                                           |
+| Platform  | What the build makes                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS       | The app's asset catalog with a 1024×1024 icon, laid over white, since the App Store refuses transparency; optional dark / tinted appearances |
+| Android   | Launcher icons for every density, an adaptive icon, and optional `ic_notification` drawables for the status bar                              |
+| macOS     | `AppIcon.icns`, from 16 to 1024 pixels, inside the app                                                                                       |
+| Windows   | `AppIcon.ico` with common window sizes                                                                                                       |
+| Linux     | hicolor PNG sizes under `icons/hicolor/`                                                                                                     |
+| Web       | favicon, apple-touch, and maskable PNGs                                                                                                      |
+| Extension | The 16, 32, 48, and 128 pixel icons, in the manifest                                                                                         |
 
-An SVG is drawn at 1024 pixels; its text isn't, so turn text into shapes first. Design the image to work as a square: iOS rounds its corners, and Android crops it to a circle or another shape. Without `app.icon`, the steps after `leptoskit publish` ask for one.
+An SVG is drawn at 1024 pixels; its text isn't, so turn text into shapes first. Design the image to work as a square: iOS rounds its corners, and Android crops it to a circle or another shape. The notification image should be a white silhouette on transparent; when present, the notifications plugin uses `@drawable/ic_notification`. Without `app.icon` / `[app.icons]`, the steps after `leptoskit publish` ask for one.
 
 Projects made before `app.icon` add one line to `android/app/build.gradle.kts`, in the main source set, so the launcher icons reach the app; the Android build warns until it's there:
 
@@ -237,7 +258,7 @@ res.directories += "../../.leptoskit/android/res"
 
 ## A launch screen
 
-Between the tap on the icon and the app's first screen, iOS and Android show a launch screen. Without one, it's blank: a white flash before a dark app, or the system's default. Give `app.launch_screen` a background colour and, if you like, an image to center on it:
+Between the tap on the icon and the app's first screen, iOS and Android show a launch screen, and the web build can inject one into `index.html`. Without one, it's blank: a white flash before a dark app, or the system's default. Give `app.launch_screen` (also `[app.splash]`) a background colour and, if you like, an image to center on it:
 
 ```toml
 [app.launch_screen]
@@ -245,15 +266,31 @@ background = "#0b0c10"
 background_dark = "#000000" # optional: while the system is dark
 image = "assets/branding/mark.svg" # optional: a square PNG or SVG, 1024×1024 or larger
 image_size = 160 # optional: the image's side, in points and dp
+branding = "assets/branding/wordmark.svg" # optional
+fullscreen = true
+
+[app.launch_screen.android_12]
+background = "#0b0c10"
+icon_background = "#111111"
+
+[app.launch_screen.animated]
+rive = "assets/splash.riv"
+until = "manual" # or "first_frame"
+
+[app.launch_screen.extensions.my_tool]
+campaign = "winter"
 ```
 
 | Platform          | What the build makes                                                                                                                                       |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | iOS               | A `LaunchBackground` colour and a `LaunchImage` at 1×, 2×, and 3× in the app's asset catalog, named by `UILaunchScreen` in the generated `Info.plist`      |
-| Android 12 and up | A launch theme for the launcher activity with the splash screen's background and icon; Android draws the image inside a circle and sizes it itself         |
+| Android 12 and up | A launch theme for the launcher activity with the splash screen's background and icon; optional `[android_12]` overrides                                   |
 | Android 8 to 11   | The same theme's window background: the colour with the image centered at `image_size` dp, replaced by your theme's background once the first screen draws |
+| Web               | Splash CSS/HTML under `/splash/`, injected into `index.html`, with `leptoskitDismissSplash()` for manual dismissal                                         |
 
-The image is read like `app.icon`: an SVG is drawn at 1024 pixels, so turn its text into shapes. Android 12 and later crop it to a circle two thirds the size of its canvas, so keep what matters in the middle. Without `image`, iOS shows the colour alone and Android 12 shows your app icon on it. macOS, Windows, Linux, and the browser have no launch screen, and HarmonyOS's is not generated yet.
+The image is read like `app.icon`: an SVG is drawn at 1024 pixels, so turn its text into shapes. Android 12 and later crop it to a circle two thirds the size of its canvas, so keep what matters in the middle. Without `image`, iOS shows the colour alone and Android 12 shows your app icon on it. Set `android`, `ios`, or `web` to `false` to skip a platform. macOS, Windows, and Linux have no cold-start splash; HarmonyOS's is not generated yet.
+
+When `animated.until = "manual"`, call `leptoskit::splash::hold()` before the first screen and `leptoskit::splash::dismiss()` once initialization finishes.
 
 The launch theme extends your application's own theme, from `android:theme` on `<application>` in `android/app/src/main/AndroidManifest.xml`, and only the launcher activity uses it. If that activity sets a theme of its own, the build warns and leaves it alone. Projects made before `app.icon` need the `res.directories` line above for the launch screen too.
 

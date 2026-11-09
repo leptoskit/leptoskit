@@ -47,6 +47,10 @@ The same folder holds your sounds for the [audio plugin](34-audio.md) and your m
 
 Assets ship with the store build. A [code push](05-code-push.md) update carries your app's code, not the `assets/` folder, so an update that shows a picture the installed build doesn't have can't show it. Add new pictures in a store release first, and send updates that use them after it.
 
+## App icons and splash screens
+
+Launcher icons and the cold-start splash are not `asset://` images: they are declared in `leptoskit.toml` and generated into each platform's native resources. Use `app.icon` or `[app.icons]` for icons (including Android notification icons), and `[app.launch_screen]` / `[app.splash]` for splash screens, including an optional animated overlay dismissed with `leptoskit::splash::{hold, dismiss}`. See [Publishing](24-publishing.md#one-icon-for-every-platform).
+
 ## Paths
 
 The path after `asset://` is relative to `assets/`, separated by `/`, and must stay inside the folder: an empty segment, `.`, or `..` is refused. Paths are case-sensitive, as they are on Android, Linux, and the web, so match the file's name exactly.

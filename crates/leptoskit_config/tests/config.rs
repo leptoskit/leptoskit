@@ -1443,7 +1443,7 @@ fn launch_screens_take_opaque_colours_and_a_sized_image() {
 	)
 	.expect("launch screen");
 	let launch = config.app.launch_screen.expect("launch screen table");
-	assert_eq!(launch.background, "#0b0c10");
+	assert_eq!(launch.background.as_deref(), Some("#0b0c10"));
 	assert_eq!(launch.image, Some(PathBuf::from("assets/mark.svg")));
 	assert_eq!(
 		launch.image_size,
@@ -1482,6 +1482,35 @@ fn launch_screens_take_opaque_colours_and_a_sized_image() {
 	)
 	.expect_err("unknown key");
 	assert!(matches!(error, ConfigError::Parse { .. }), "{error}");
+
+	let splash =
+		load("splash_alias", "[app.splash]\nbackground = \"#abc\"\n").expect("splash alias");
+	assert_eq!(
+		splash.app.launch_screen.unwrap().background.as_deref(),
+		Some("#abc")
+	);
+
+	let icons = load(
+		"icons_table",
+		"[app.icons]\nimage = \"assets/icon.svg\"\nnotification = \
+		 \"assets/notification.png\"\n[app.icons.extensions.tool]\nflavor = \"beta\"\n",
+	)
+	.expect("icons");
+	let icons = icons.app.icons.expect("icons table");
+	assert_eq!(icons.image, Some(PathBuf::from("assets/icon.svg")));
+	assert_eq!(
+		icons.notification,
+		Some(PathBuf::from("assets/notification.png"))
+	);
+	assert!(icons.extensions.contains_key("tool"));
+
+	let error = load(
+		"icons_conflict",
+		"[app.icons.android]\nadaptive_background = \"#fff\"\nadaptive_background_image = \
+		 \"bg.png\"\n",
+	)
+	.expect_err("conflict");
+	assert!(matches!(error, ConfigError::InvalidIcons(_)), "{error}");
 }
 
 #[test]

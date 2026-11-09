@@ -430,10 +430,8 @@ fn the_android_launcher_activity_starts_in_the_launch_theme() {
 	let registry = host_registry(&root);
 	let mut config = leptoskit_config::LeptoskitConfig::default();
 	config.app.launch_screen = Some(leptoskit_config::LaunchScreen {
-		background: "#0b0c10".into(),
-		background_dark: None,
-		image: None,
-		image_size: leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE,
+		background: Some("#0b0c10".into()),
+		..leptoskit_config::LaunchScreen::default()
 	});
 	let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
 	fixture(

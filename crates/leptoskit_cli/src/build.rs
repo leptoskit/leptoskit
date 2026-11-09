@@ -253,6 +253,7 @@ pub fn run(
 
 	if platform == Platform::Web {
 		collect_assets(&root, &out_dir)?;
+		write_web_branding(&root, &config, out_dir.as_std_path())?;
 	}
 
 	let mut post = leptoskit_plugin::PluginPostBuildContext {
@@ -881,6 +882,38 @@ fn collect_assets(root: &Utf8PathBuf, out_dir: &Utf8PathBuf) -> Result<()> {
 		};
 
 		copy_assets(&root.join(directory), &destination)?;
+	}
+
+	Ok(())
+}
+
+/// Writes web favicons from `[app.icons]` / `app.icon`, and injects the HTML
+/// splash from `[app.launch_screen]` when enabled for the web.
+fn write_web_branding(root: &Utf8PathBuf, config: &LeptoskitConfig, out_dir: &Path) -> Result<()> {
+	crate::icons::write(
+		root.as_std_path(),
+		config,
+		crate::icons::Platform::Web,
+		out_dir,
+	)?;
+
+	if let Some(launch) = crate::launch::Launch::load(root.as_std_path(), config)?
+		&& launch.for_web()
+	{
+		let files = launch.web_files()?;
+		let snippet = files
+			.iter()
+			.find(|(name, _)| name == "splash/splash.html")
+			.map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+			.unwrap_or_default();
+		crate::launch::write_files(out_dir, files)?;
+		let index = out_dir.join("index.html");
+		if index.is_file() && !snippet.is_empty() {
+			let html = std::fs::read_to_string(&index)
+				.with_context(|| format!("read {}", index.display()))?;
+			std::fs::write(&index, crate::launch::inject_web_splash(&html, &snippet))
+				.with_context(|| format!("write {}", index.display()))?;
+		}
 	}
 
 	Ok(())

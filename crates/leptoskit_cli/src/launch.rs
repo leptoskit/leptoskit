@@ -1,15 +1,21 @@
-//! Launch screens from `[app.launch_screen]`: what iOS and Android show from
-//! the moment the app is opened until its first screen is drawn.
+//! Launch screens from `[app.launch_screen]` (alias `[app.splash]`): what
+//! iOS, Android, and the web show from the moment the app is opened until
+//! its first screen is drawn.
 //!
 //! - iOS: a `LaunchBackground` colour and a `LaunchImage` in the app's asset
 //!   catalog, named by `UILaunchScreen` in the generated `Info.plist`.
 //! - Android: a `LeptosKitLaunchTheme` for the launcher activity. Android 12
 //!   and later draw its splash screen attributes; earlier versions draw its
 //!   window background, a layer list of the colour and the image.
+//! - Web: splash markup and CSS under `splash/`, for embedding in the HTML
+//!   shell (GIF images stay animated).
 //!
 //! The image is read the way [`crate::icons`] reads `app.icon`: one square
-//! PNG or SVG, 1024 pixels or larger.
+//! PNG or SVG, 1024 pixels or larger. Animated overlays after the OS splash
+//! are declared under `[app.launch_screen.animated]` and dismissed with
+//! `leptoskit::splash`.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::Context;
@@ -35,6 +41,8 @@ const SPLASH_CIRCLE: u32 = 192;
 pub struct Launch<'a> {
 	config: &'a LaunchScreen,
 	image: Option<Icon>,
+	android_12_image: Option<Icon>,
+	branding: Option<Icon>,
 }
 
 impl<'a> Launch<'a> {
@@ -42,7 +50,7 @@ impl<'a> Launch<'a> {
 	///
 	/// # Errors
 	///
-	/// When the image can't be read, isn't a PNG or SVG, isn't square, or is
+	/// When an image can't be read, isn't a PNG or SVG, isn't square, or is
 	/// too small.
 	pub fn load(root: &Path, config: &'a LeptoskitConfig) -> Result<Option<Self>> {
 		let Some(launch) = &config.app.launch_screen else {
@@ -56,17 +64,61 @@ impl<'a> Launch<'a> {
 					.with_context(|| format!("app.launch_screen.image {}", image.display()))
 			})
 			.transpose()?;
+		let android_12_image = launch
+			.android_12
+			.as_ref()
+			.and_then(|screen| screen.image.as_ref())
+			.map(|image| {
+				Icon::load(&root.join(image)).with_context(|| {
+					format!("app.launch_screen.android_12.image {}", image.display())
+				})
+			})
+			.transpose()?;
+		let branding = launch
+			.branding
+			.as_ref()
+			.map(|image| {
+				Icon::load(&root.join(image))
+					.with_context(|| format!("app.launch_screen.branding {}", image.display()))
+			})
+			.transpose()?;
 
 		Ok(Some(Self {
 			config: launch,
 			image,
+			android_12_image,
+			branding,
 		}))
 	}
 
-	/// Whether there is an image to draw.
+	/// Whether there is a centre image to draw.
 	#[must_use]
 	pub fn has_image(&self) -> bool {
 		self.image.is_some()
+	}
+
+	/// Whether iOS launch assets should be written.
+	#[must_use]
+	pub fn for_ios(&self) -> bool {
+		self.config.ios
+	}
+
+	/// Whether Android launch assets should be written.
+	#[must_use]
+	pub fn for_android(&self) -> bool {
+		self.config.android
+	}
+
+	/// Whether web splash assets should be written.
+	#[must_use]
+	pub fn for_web(&self) -> bool {
+		self.config.web
+	}
+
+	/// The configured launch screen table.
+	#[must_use]
+	pub fn config(&self) -> &LaunchScreen {
+		self.config
 	}
 
 	/// The iOS asset catalog's colour set and image set, by path relative to
@@ -76,9 +128,13 @@ impl<'a> Launch<'a> {
 	///
 	/// When encoding fails.
 	pub fn ios_files(&self) -> Result<Vec<(String, Vec<u8>)>> {
+		let background = self
+			.config
+			.background_colour()
+			.context("app.launch_screen.background is required for iOS")?;
 		let catalog = "Assets.xcassets";
 		let mut colors = vec![json!({
-			"color": ios_color(&self.config.background)?,
+			"color": ios_color(background)?,
 			"idiom": "universal",
 		})];
 
@@ -147,35 +203,42 @@ impl<'a> Launch<'a> {
 	///
 	/// When encoding fails.
 	pub fn android_files(&self, parent: &str) -> Result<Vec<(String, Vec<u8>)>> {
-		let background = android_color(&self.config.background)?;
+		let background = self
+			.config
+			.background_colour()
+			.context("app.launch_screen.background is required for Android")?;
+		let a12_background = self
+			.config
+			.android_12
+			.as_ref()
+			.and_then(|screen| screen.background.as_deref())
+			.unwrap_or(background);
+		let fullscreen = if self.config.fullscreen {
+			"        <item name=\"android:windowFullscreen\">true</item>\n"
+		} else {
+			""
+		};
 		let mut files = vec![
 			(
 				"values/leptoskit_launch.xml".to_owned(),
 				format!(
 					"{HEADER}<resources>\n    <color \
-					 name=\"leptoskit_launch_background\">{background}</color>\n    <style \
+					 name=\"leptoskit_launch_background\">{}</color>\n    <style \
 					 name=\"{ANDROID_THEME}\" parent=\"{parent}\">\n        <item \
-					 name=\"android:windowBackground\">@drawable/leptoskit_launch</item>\n    \
-					 </style>\n</resources>\n"
+					 name=\"android:windowBackground\">@drawable/leptoskit_launch</item>\\
+					 n{fullscreen}    </style>\n</resources>\n",
+					android_color(background)?
 				)
 				.into_bytes(),
 			),
 			(
 				"values-v31/leptoskit_launch.xml".to_owned(),
-				format!(
-					"{HEADER}<resources>\n    <style name=\"{ANDROID_THEME}\" \
-					 parent=\"{parent}\">\n        <item \
-					 name=\"android:windowSplashScreenBackground\">@color/\
-					 leptoskit_launch_background</item>\n{}    </style>\n</resources>\n",
-					if self.image.is_some() {
-						"        <item \
-						 name=\"android:windowSplashScreenAnimatedIcon\">@drawable/\
-						 leptoskit_launch_icon</item>\n"
-					} else {
-						""
-					}
-				)
-				.into_bytes(),
+				android_12_theme(
+					parent,
+					a12_background,
+					self.android_12_has_icon(),
+					self.config,
+				)?,
 			),
 		];
 
@@ -191,19 +254,12 @@ impl<'a> Launch<'a> {
 			));
 		}
 
+		let splash_icon = self.android_12_image.as_ref().or(self.image.as_ref());
 		let image_layer = if let Some(image) = &self.image {
 			let size = self.config.image_size;
-			// One picture at the densest screens' scale, drawn at its size in
-			// dp everywhere.
 			files.push((
 				"drawable-nodpi/leptoskit_launch_image.png".to_owned(),
 				image.png(size * 4)?,
-			));
-			// Android 12's splash icon: a 288dp canvas, shown inside a 192dp
-			// circle.
-			files.push((
-				"drawable-nodpi/leptoskit_launch_icon.png".to_owned(),
-				image.padded_png(SPLASH_CANVAS * 4, SPLASH_CIRCLE * 4)?,
 			));
 			format!(
 				"    <item android:gravity=\"center\" android:width=\"{size}dp\" \
@@ -214,18 +270,130 @@ impl<'a> Launch<'a> {
 			String::new()
 		};
 
+		if let Some(image) = splash_icon {
+			files.push((
+				"drawable-nodpi/leptoskit_launch_icon.png".to_owned(),
+				image.padded_png(SPLASH_CANVAS * 4, SPLASH_CIRCLE * 4)?,
+			));
+		}
+
+		let branding_layer = if let Some(branding) = &self.branding {
+			files.push((
+				"drawable-nodpi/leptoskit_launch_branding.png".to_owned(),
+				branding.png(200)?,
+			));
+			"    <item android:gravity=\"bottom|center_horizontal\" android:bottom=\"24dp\" \
+			 android:drawable=\"@drawable/leptoskit_launch_branding\" />\n"
+				.to_owned()
+		} else {
+			String::new()
+		};
+
 		files.push((
 			"drawable/leptoskit_launch.xml".to_owned(),
 			format!(
 				"{HEADER}<layer-list \
 				 xmlns:android=\"http://schemas.android.com/apk/res/android\">\n    <item \
-				 android:drawable=\"@color/leptoskit_launch_background\" />\n{image_layer}</layer-list>\n"
+				 android:drawable=\"@color/leptoskit_launch_background\" />\n{image_layer}\
+				 {branding_layer}</layer-list>\n"
 			)
 			.into_bytes(),
 		));
 
 		Ok(files)
 	}
+
+	/// Web splash assets under `splash/`, plus an HTML snippet to inject.
+	///
+	/// # Errors
+	///
+	/// When encoding fails.
+	pub fn web_files(&self) -> Result<Vec<(String, Vec<u8>)>> {
+		let background = self.config.background_colour().unwrap_or("#ffffff");
+		let mut files = vec![(
+			"splash/style.css".to_owned(),
+			format!(
+				"/* Generated by leptoskit from [app.launch_screen]. */\nhtml {{ height: 100%; \
+				 }}\nbody {{ margin: 0; min-height: 100%; background: {background}; \
+				 }}\n#leptoskit-splash {{\n\tposition: fixed; inset: 0; z-index: \
+				 9999;\n\tdisplay: flex; align-items: center; justify-content: \
+				 center;\n\tbackground: {background};\n\ttransition: opacity 200ms \
+				 ease-out;\n}}\n#leptoskit-splash.leptoskit-splash-hide {{ opacity: 0; \
+				 pointer-events: none; }}\n#leptoskit-splash img {{ width: {}px; height: {}px; \
+				 object-fit: contain; }}\n",
+				self.config.image_size, self.config.image_size
+			)
+			.into_bytes(),
+		)];
+
+		if let Some(image) = &self.image {
+			files.push((
+				"splash/img/splash.png".to_owned(),
+				image.png(self.config.image_size * 2)?,
+			));
+		}
+
+		let image_tag = if self.image.is_some() {
+			r#"<img src="/splash/img/splash.png" alt="" />"#
+		} else {
+			""
+		};
+		files.push((
+			"splash/splash.html".to_owned(),
+			format!(
+				"<!-- Generated by leptoskit from [app.launch_screen]. -->\n<link \
+				 rel=\"stylesheet\" href=\"/splash/style.css\" />\n<div \
+				 id=\"leptoskit-splash\">{image_tag}</div>\n<script>\nwindow.\
+				 leptoskitDismissSplash = function () {{\n\tvar el = \
+				 document.getElementById('leptoskit-splash');\n\tif (!el) \
+				 return;\n\tel.classList.add('leptoskit-splash-hide');\n\tsetTimeout(function () \
+				 {{ el.remove(); }}, 220);\n}};\n</script>\n"
+			)
+			.into_bytes(),
+		));
+
+		Ok(files)
+	}
+
+	fn android_12_has_icon(&self) -> bool {
+		self.android_12_image.is_some() || self.image.is_some()
+	}
+}
+
+fn android_12_theme(
+	parent: &str,
+	background: &str,
+	has_icon: bool,
+	config: &LaunchScreen,
+) -> Result<Vec<u8>> {
+	let mut items = String::from(
+		"        <item \
+		 name=\"android:windowSplashScreenBackground\">@color/leptoskit_launch_background</item>\n",
+	);
+	if has_icon {
+		items.push_str(
+			"        <item \
+			 name=\"android:windowSplashScreenAnimatedIcon\">@drawable/leptoskit_launch_icon</\
+			 item>\n",
+		);
+	}
+	if let Some(icon_bg) = config
+		.android_12
+		.as_ref()
+		.and_then(|screen| screen.icon_background.as_deref())
+	{
+		let _ = writeln!(
+			items,
+			"        <item name=\"android:windowSplashScreenIconBackgroundColor\">{}</item>",
+			android_color(icon_bg)?
+		);
+	}
+	Ok(format!(
+		"{HEADER}<resources>\n    <color name=\"leptoskit_launch_background\">{}</color>\n    \
+		 <style name=\"{ANDROID_THEME}\" parent=\"{parent}\">\n{items}    </style>\n</resources>\n",
+		android_color(background)?
+	)
+	.into_bytes())
 }
 
 const HEADER: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- Generated by leptoskit \
@@ -286,6 +454,30 @@ pub fn write_files(dir: &Path, files: Vec<(String, Vec<u8>)>) -> Result<()> {
 	Ok(())
 }
 
+/// Injects the web splash snippet into an HTML document when a marker is
+/// missing. Inserts before `</head>` when present, otherwise before `</body>`.
+#[must_use]
+pub fn inject_web_splash(html: &str, snippet: &str) -> String {
+	if html.contains("leptoskit-splash") {
+		return html.to_owned();
+	}
+	if let Some(index) = html.find("</head>") {
+		let mut out = String::with_capacity(html.len() + snippet.len());
+		out.push_str(&html[..index]);
+		out.push_str(snippet);
+		out.push_str(&html[index..]);
+		return out;
+	}
+	if let Some(index) = html.find("</body>") {
+		let mut out = String::with_capacity(html.len() + snippet.len());
+		out.push_str(&html[..index]);
+		out.push_str(snippet);
+		out.push_str(&html[index..]);
+		return out;
+	}
+	format!("{html}\n{snippet}")
+}
+
 #[cfg(test)]
 mod tests {
 	use std::path::PathBuf;
@@ -301,10 +493,11 @@ mod tests {
 		.unwrap();
 		let mut config = LeptoskitConfig::default();
 		config.app.launch_screen = Some(LaunchScreen {
-			background: "#0b0c10".into(),
+			background: Some("#0b0c10".into()),
 			background_dark: dark.then(|| "#000".into()),
 			image: image.then(|| PathBuf::from("mark.svg")),
 			image_size: 100,
+			..LaunchScreen::default()
 		});
 		(dir, config)
 	}
@@ -393,7 +586,6 @@ mod tests {
 			.unwrap()
 			.to_rgba8();
 		assert_eq!(icon.width(), 1152);
-		// The canvas's corners stay clear of the circle Android shows.
 		assert_eq!(icon.get_pixel(0, 0)[3], 0);
 
 		for (_, bytes) in files.iter().filter(|(name, _)| {
@@ -440,5 +632,56 @@ mod tests {
 			format!("{error:#}").contains("app.launch_screen.image gone.png"),
 			"{error:#}"
 		);
+	}
+
+	#[test]
+	fn web_splash_writes_css_and_dismiss_script() {
+		let (dir, config) = project(true, false);
+		let launch = Launch::load(dir.path(), &config).unwrap().unwrap();
+		let files = launch.web_files().unwrap();
+		let css = files
+			.iter()
+			.find(|(name, _)| name == "splash/style.css")
+			.map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+			.expect("css");
+		assert!(css.contains("#0b0c10") || css.contains("#0B0C10"), "{css}");
+		assert!(
+			files
+				.iter()
+				.any(|(name, _)| name == "splash/img/splash.png")
+		);
+		let html = files
+			.iter()
+			.find(|(name, _)| name == "splash/splash.html")
+			.map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+			.expect("html");
+		assert!(html.contains("leptoskitDismissSplash"));
+		let injected = inject_web_splash("<html><head></head><body></body></html>", &html);
+		assert!(injected.contains("leptoskit-splash"));
+		assert_eq!(inject_web_splash(&injected, &html), injected);
+	}
+
+	#[test]
+	fn android_12_can_override_the_icon_background() {
+		let (dir, mut config) = project(true, false);
+		config.app.launch_screen.as_mut().unwrap().android_12 =
+			Some(leptoskit_config::Android12Splash {
+				background: Some("#112233".into()),
+				image: None,
+				icon_background: Some("#445566".into()),
+			});
+		let launch = Launch::load(dir.path(), &config).unwrap().unwrap();
+		let files = launch.android_files("@style/LeptosKitTheme").unwrap();
+		let splash = files
+			.iter()
+			.find(|(name, _)| name == "values-v31/leptoskit_launch.xml")
+			.map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+			.expect("v31");
+		assert!(splash.contains("#112233"), "{splash}");
+		assert!(
+			splash.contains("windowSplashScreenIconBackgroundColor"),
+			"{splash}"
+		);
+		assert!(splash.contains("#445566"), "{splash}");
 	}
 }

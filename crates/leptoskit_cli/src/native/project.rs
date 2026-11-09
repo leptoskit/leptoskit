@@ -287,7 +287,9 @@ fn android_host(
 	// extends the application's own.
 	let launch = crate::launch::Launch::load(root, config)?;
 
-	if let Some(launch) = &launch {
+	if let Some(launch) = &launch
+		&& launch.for_android()
+	{
 		let parent = super::manifest::application_theme(&manifest)?
 			.unwrap_or_else(|| "@android:style/Theme.Material.Light.NoActionBar".to_owned());
 		crate::launch::write_files(&res, launch.android_files(&parent)?)?;
@@ -309,7 +311,10 @@ fn android_host(
 		manifest = themed;
 	}
 
-	if (icon || launch.is_some())
+	let launch_assets = launch
+		.as_ref()
+		.is_some_and(crate::launch::Launch::for_android);
+	if (icon || launch_assets)
 		&& let Some(warning) = android_res_warning(root)
 	{
 		crate::ui::warning(warning);
