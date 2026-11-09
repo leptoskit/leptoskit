@@ -15,9 +15,10 @@ struct Args {
 	/// The deployment's public origin, for documentation canonical links.
 	#[arg(long, default_value = "http://localhost:4701")]
 	url: String,
-	/// An already-built `LeptosKit` CLI executable.
-	#[arg(long, default_value = "lk")]
-	cli: PathBuf,
+	/// An already-built `LeptosKit` CLI executable. Defaults to
+	/// `LEPTOSKIT_CLI` from a graph recipe, then lk on PATH.
+	#[arg(long)]
+	cli: Option<PathBuf>,
 	/// Destination for the complete website artifact.
 	#[arg(long, default_value = "dist")]
 	out: PathBuf,
@@ -33,19 +34,27 @@ struct Args {
 
 fn main() -> Result<()> {
 	let args = Args::parse();
+	let release = args.release
+		|| std::env::var("LEPTOSKIT_BUILD_PROFILE").is_ok_and(|profile| profile == "release");
 	let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 	let out = if args.out.is_absolute() {
 		args.out
 	} else {
 		root.join(args.out)
 	};
-	let cli = if args.cli.components().count() > 1 && !args.cli.is_absolute() {
-		std::env::current_dir()?.join(args.cli)
+
+	let cli = args
+		.cli
+		.or_else(|| std::env::var_os("LEPTOSKIT_CLI").map(PathBuf::from))
+		.unwrap_or_else(|| PathBuf::from("lk"));
+
+	let cli = if cli.components().count() > 1 && !cli.is_absolute() {
+		std::env::current_dir()?.join(cli)
 	} else {
-		args.cli
+		cli
 	};
 
-	web_build(&cli, &root, &out, args.release).context("could not build the website")?;
+	web_build(&cli, &root, &out, release).context("could not build the website")?;
 	let mode = if args.public_only {
 		Mode::Public
 	} else {
@@ -53,7 +62,7 @@ fn main() -> Result<()> {
 	};
 
 	let summary = assemble(&out, &args.url, mode)?;
-	play_examples(&cli, &root.join("../.."), &out, &args.url, args.release)?;
+	play_examples(&cli, &root.join("../.."), &out, &args.url, release)?;
 	println!("{summary}: {}", out.display());
 	Ok(())
 }

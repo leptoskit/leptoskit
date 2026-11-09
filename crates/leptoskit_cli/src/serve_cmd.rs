@@ -24,6 +24,7 @@ use crate::services::run::Running;
 /// Serves `dir` using the project configuration's address and port.
 pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 	let (config, root) = leptoskit_config::LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 	let root = Utf8PathBuf::from_path_buf(root)
 		.map_err(|_| anyhow::anyhow!("project path is not UTF-8"))?;
 	let dir_path = root.join(dir);

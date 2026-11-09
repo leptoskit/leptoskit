@@ -8,7 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use leptoskit_config::LeptoskitConfig;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 use serde_json::json;
 
 use super::Release;
@@ -422,7 +422,7 @@ fn verify_schema_labels(
 }
 
 fn secrets(config: &LeptoskitConfig, private: &str) -> Result<BTreeMap<String, String>> {
-	let c = config.infra.as_ref().context("missing infrastructure")?;
+	let c = config.managed_infra().context("missing infrastructure")?;
 	let required = |name: &str| {
 		std::env::var(name)
 			.ok()
@@ -1614,6 +1614,8 @@ mod tests {
 		LeptoskitConfig::from_toml(&raw, Path::new("."))
 			.unwrap()
 			.infra
+			.unwrap()
+			.into_managed()
 			.unwrap()
 	}
 

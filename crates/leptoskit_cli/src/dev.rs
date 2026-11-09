@@ -124,6 +124,7 @@ pub fn run(options: Options<'_>) -> Result<()> {
 		browser,
 	} = options;
 	let (config, root) = LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 
 	if terminal_only(&config, &root, platforms, open, port, devices, studio)? {
 		return Ok(());

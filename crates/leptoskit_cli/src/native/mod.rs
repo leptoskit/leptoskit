@@ -287,6 +287,7 @@ pub fn run(command: NativeCommand) -> Result<()> {
 	};
 
 	let (config, root) = LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 
 	if matches!(target, Target::Wearos | Target::Watchos) {
 		ensure_target_enabled(&config, target)?;
@@ -480,6 +481,7 @@ fn build_signed(
 /// `out`, for the destination `target` names or the project's default.
 fn run_bundle(out: &str, target: Option<Target>) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 	let target = target
 		.map_or_else(
 			|| {
@@ -2213,6 +2215,7 @@ mod tests {
 
 		assert_eq!(updates["enabled"], true);
 		assert_eq!(updates["app"], "demo");
+
 		assert!(updates.get("provenance").is_none(), "no policy, no table");
 
 		assert_eq!(updates["channel"], "production");

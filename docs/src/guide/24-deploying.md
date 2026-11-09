@@ -1,5 +1,24 @@
 # Deploying a server
 
+## Provision hosts for a deployment graph
+
+If your project already declares frontends, services and their hosts with `infra.mode = "graph"`, you can review and provision those hosts through the same CLI:
+
+```sh
+lk infra generate
+lk infra plan
+lk infra apply
+lk infra output
+```
+
+Run these commands from the project directory on macOS or Linux with stable OpenTofu 1.10 or later within major version 1. The declared hosts are Linux hosts. Graph mode does not require a database or an application server. Configure provider credentials and the declared state backend before planning. For Cloudflare HTTPS origins, provide the declared origin certificate requests before planning; certificate key creation and installation remain separate.
+
+Review the saved plan in `infra/<name>` before applying. Generated inputs, the project configuration, provider lock, backend identity, workspace, tool version and saved plan must still match. If a check fails, review the change and plan again. A failed or interrupted apply also requires a fresh plan. Host and network deletion or replacement is refused; migrate to a separately declared environment before retiring an old host. Keep state, plans and their receipts private.
+
+An optional graph compute budget covers every declared host, including a dedicated service host. Prices are fetched before both plan and apply, without implicit currency conversion. The estimate excludes tax, storage, traffic and other services. `infra output` returns only declared public host and domain information; it does not return tunnel tokens or establish that a host is reachable.
+
+This provisions infrastructure. Graph application installation, edge runtime and certificate installation, release activation and rollback are not yet available through this path. To deploy the currently supported application preset, use managed deployment below.
+
 ## Managed deployment
 
 To deploy the website, API, and live connections together, `lk infra` provisions Linux hosts behind a Cloudflare tunnel, a public R2 bucket for signed code-push artifacts, and a separate private backup bucket. Kamal runs the application and Postgres containers. Start with one Hetzner x86 VM; DigitalOcean and multiple application hosts are also supported. This managed preset requires Postgres. The deployment exporters below still support SQLite.

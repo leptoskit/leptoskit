@@ -87,6 +87,8 @@ The server-rendering modes need the server package to declare an `ssr` feature a
 
 ## `[serve]`
 
+For a graph frontend or service, `serve.address-env` names the variable its Linux backend reads for its complete listen address, such as `PLAY_BIND` or `LEPTOS_SITE_ADDR`. Graph executable releases require this explicit contract. The process receives a private loopback address; its health and readiness routes must answer there. This setting does not change how an existing standalone server binds its listener.
+
 | Key       | Default       | Meaning                                                                                                                                                   |
 | --------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `address` | `"127.0.0.1"` | The IP address to bind. Use `"0.0.0.0"` to listen on all of them.                                                                                         |

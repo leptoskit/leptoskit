@@ -4,7 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use leptoskit_config::infra::ComputeProvider;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -227,6 +227,67 @@ pub(super) fn guard(c: &InfraConfig) -> Result<()> {
 	Ok(())
 }
 
+/// A graph budget covers every declared host, including exclusive service
+/// hosts.
+pub(super) fn guard_graph(config: &leptoskit_config::deployment::InfraGraph) -> Result<()> {
+	let Some(budget) = &config.budget else {
+		return Ok(());
+	};
+	let mut offers = Vec::new();
+	for provider in [ComputeProvider::Hetzner, ComputeProvider::Digitalocean] {
+		if config.hosts.values().any(|host| host.compute == provider) {
+			offers.extend(fetch(provider)?);
+		}
+	}
+	let total = graph_total(config, &offers)?;
+	ensure!(
+		total <= budget.monthly_compute,
+		"graph base monthly compute + IPv4 estimate {total:.2} {} exceeds configured budget \
+		 {:.2}; no infrastructure mutation was attempted",
+		budget.currency,
+		budget.monthly_compute
+	);
+	println!(
+		"Graph base compute + IPv4 estimate: {total:.2} {}/month; excludes tax, storage, excess \
+		 traffic, and other services",
+		budget.currency
+	);
+	Ok(())
+}
+
+fn graph_total(config: &leptoskit_config::deployment::InfraGraph, offers: &[Offer]) -> Result<f64> {
+	let budget = config.budget.as_ref().context("graph budget required")?;
+	let mut total = 0.0;
+	for (name, host) in &config.hosts {
+		let provider = match host.compute {
+			ComputeProvider::Hetzner => "hetzner",
+			ComputeProvider::Digitalocean => "digitalocean",
+		};
+		let selected: Vec<_> = offers
+			.iter()
+			.filter(|offer| {
+				offer.provider == provider
+					&& offer.size == host.server_type
+					&& offer.location == host.location
+			})
+			.collect();
+		let [offer] = selected.as_slice() else {
+			anyhow::bail!("graph host {name:?} has no unique current provider offer");
+		};
+		ensure!(
+			offer.currency == budget.currency,
+			"graph host {name:?} uses a different currency; no automatic currency conversion"
+		);
+		ensure!(
+			offer.monthly_compute_ipv4.is_finite() && offer.monthly_compute_ipv4 >= 0.0,
+			"invalid graph compute price"
+		);
+		total += offer.monthly_compute_ipv4;
+		ensure!(total.is_finite(), "graph compute total overflowed");
+	}
+	Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -414,5 +475,50 @@ mod tests {
 			.unwrap()
 			.infra
 			.unwrap()
+			.into_managed()
+			.unwrap()
+	}
+	#[test]
+	fn graph_budget_sums_every_host_and_requires_matching_unique_offers() {
+		let config: leptoskit_config::LeptoskitConfig =
+			toml::from_str(include_str!("../../tests/fixtures/website-graph.toml")).unwrap();
+		let mut graph = config.infra.unwrap().as_graph().unwrap().clone();
+		graph.budget = Some(leptoskit_config::infra::InfraBudget {
+			currency: "EUR".into(),
+			monthly_compute: 20.0,
+		});
+		let mut offers = vec![
+			Offer {
+				provider: "hetzner".into(),
+				size: "cx23".into(),
+				location: "hel1".into(),
+				memory_gb: 4.0,
+				currency: "EUR".into(),
+				monthly_compute_ipv4: 4.0,
+			},
+			Offer {
+				provider: "hetzner".into(),
+				size: "cpx32".into(),
+				location: "hel1".into(),
+				memory_gb: 8.0,
+				currency: "EUR".into(),
+				monthly_compute_ipv4: 12.0,
+			},
+		];
+		assert!((graph_total(&graph, &offers).unwrap() - 16.0).abs() < f64::EPSILON);
+		offers[1].currency = "USD".into();
+		assert!(
+			graph_total(&graph, &offers)
+				.unwrap_err()
+				.to_string()
+				.contains("currency")
+		);
+		offers.pop();
+		assert!(
+			graph_total(&graph, &offers)
+				.unwrap_err()
+				.to_string()
+				.contains("unique")
+		);
 	}
 }

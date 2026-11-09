@@ -37,6 +37,14 @@ pub const BIND_PLACEHOLDERS: &[&str] = &["url", "token", "public_path"];
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct ServiceConfig {
+	/// Independent graph placement. Omitted services retain the existing
+	/// alongside-the-app lifecycle outside explicit graph mode.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub deploy: Option<crate::deployment::ServiceDeploy>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub serve: Option<crate::deployment::ServiceServe>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub runtime: Option<crate::deployment::ServiceRuntime>,
 	/// A package in this Cargo workspace.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub package: Option<String>,
@@ -504,7 +512,7 @@ impl ServiceConfig {
 	}
 
 	/// What's wrong with the table on its own, before its manifest is read.
-	fn problem(&self, name: &str) -> Option<String> {
+	pub(crate) fn problem(&self, name: &str) -> Option<String> {
 		if !is_service_name(name) {
 			return Some(format!(
 				"services.{name}: a service's name starts with a lowercase letter and holds only \

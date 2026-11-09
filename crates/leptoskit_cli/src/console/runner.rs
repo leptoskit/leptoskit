@@ -160,8 +160,7 @@ async fn run(
 	prune_logs(&directory)?;
 	let config = leptoskit_config::LeptoskitConfig::load_from(&project.root)?;
 	let plugin = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.and_then(|c| c.plugins.analytics.as_ref());
 	let mut command = tokio::process::Command::new(binary);
 	command
@@ -234,7 +233,8 @@ async fn run(
 		let config = leptoskit_config::LeptoskitConfig::load_from(&project.root)?;
 		let infra = config
 			.infra
-			.ok_or_else(|| anyhow::anyhow!("missing infra"))?;
+			.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+			.ok_or_else(|| anyhow::anyhow!("operation requires managed infrastructure"))?;
 		let output = tokio::process::Command::new("tofu")
 			.args(["show", "-json", "leptoskit.plan"])
 			.current_dir(project.root.join("infra").join(infra.name))
@@ -327,11 +327,10 @@ async fn checkout(
 	let config = leptoskit_config::LeptoskitConfig::load_from(&path)?;
 	let original = leptoskit_config::LeptoskitConfig::load_from(&project.root)?;
 	let infra = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.ok_or_else(|| anyhow::anyhow!("source has no managed infrastructure"))?;
-	let mut proposed = config.infra.clone();
-	let mut policy = original.infra.clone();
+	let mut proposed = config.managed_infra().cloned();
+	let mut policy = original.managed_infra().cloned();
 
 	if let Some(infra) = &mut proposed {
 		infra.control_url = None;
@@ -379,9 +378,11 @@ fn arguments(action: &Action) -> Vec<String> {
 			maintenance,
 		} => {
 			let mut args = vec!["deploy", "--version", version.as_str()];
+
 			if *setup {
 				args.push("--setup");
 			}
+
 			if *maintenance {
 				args.push("--maintenance");
 			}

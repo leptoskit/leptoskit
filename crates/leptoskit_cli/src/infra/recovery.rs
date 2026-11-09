@@ -3,7 +3,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 use serde_json::Value;
 use serde_json::json;
 

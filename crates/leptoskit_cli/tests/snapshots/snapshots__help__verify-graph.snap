@@ -1,0 +1,24 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 236
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Check a graph build's exact artifacts and configuration against an independently obtained digest. Optionally stage selected units
+
+Usage: leptoskit verify graph [OPTIONS] --bundle <BUNDLE> --sha256 <SHA256>
+
+Options:
+      --bundle <BUNDLE>
+          Directory produced by `lk build` in a graph project
+      --sha256 <SHA256>
+          SHA-256 of manifest.json, obtained independently of this directory
+      --unit <UNIT>
+          Unit to stage, such as frontends.docs; repeat for several units. Omit to select every unit recorded in the receipt
+      --out <OUT>
+          Existing parent directory for a new private staging child. A failed check publishes no staging child. Omit to check without copying
+      --linux-architecture <LINUX_ARCHITECTURE>
+          Inspect selected executables without running them. Does not check host libraries [possible values: x86_64, aarch64]
+  -h, --help
+          Print help
+  -V, --version
+          Print version

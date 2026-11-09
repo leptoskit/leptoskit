@@ -15,7 +15,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use leptoskit_config::LeptoskitConfig;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -24,9 +24,11 @@ mod analytics;
 pub(crate) mod approvals;
 mod build;
 mod ci;
+pub(crate) mod graph;
 mod operations;
 mod plugins;
 mod pricing;
+
 mod recovery;
 
 mod releases;
@@ -43,6 +45,19 @@ use resources::resources;
 /// Managed infrastructure operations. `lk tofu` is an alias.
 #[derive(Debug, clap::Subcommand)]
 pub enum InfraCommand {
+	/// Install checked graph artifacts on trusted Linux hosts.
+	Release {
+		#[command(subcommand)]
+		command: Box<graph::release::Command>,
+	},
+	/// Prints declared unit ownership, placement and release selection as JSON.
+	/// Does not build, provision, deploy or verify runtime capabilities.
+	Graph {
+		/// Select a release unit, such as frontends.docs or services.play-api.
+		/// Repeat to select several units. Omit to inspect the complete graph.
+		#[arg(long)]
+		unit: Vec<String>,
+	},
 	/// Reproduce and package a backend without rebuilding it in the image.
 	BuildVerified(Box<verified::Args>),
 	/// Queries read-only JSON evidence from one app instance, not a fleet
@@ -254,15 +269,46 @@ pub fn run(command: InfraCommand) -> Result<()> {
 	}
 
 	let (config, root) = LeptoskitConfig::load()?;
-	let infra = settings(&config)?;
+	if let InfraCommand::Release { command } = &command {
+		return graph::release::run(&root, &config, command);
+	}
+	if let InfraCommand::Graph { unit } = &command {
+		return graph::print(&config, unit);
+	}
+
+	if config
+		.infra
+		.as_ref()
+		.is_some_and(|infra| infra.as_graph().is_some())
+		&& let InfraCommand::Generate { force } = &command
+	{
+		return graph::generate(&root, &config, *force);
+	}
+	if config
+		.infra
+		.as_ref()
+		.is_some_and(|infra| infra.as_graph().is_some())
+		&& matches!(
+			&command,
+			InfraCommand::Plan | InfraCommand::Apply { .. } | InfraCommand::Output
+		) {
+		return graph::lifecycle::run(&root, &config, &command);
+	}
+	run_managed(command, &config, &root)
+}
+
+fn run_managed(command: InfraCommand, config: &LeptoskitConfig, root: &Path) -> Result<()> {
+	let infra = settings(config)?;
 	ensure!(
 		infra.external.is_none() || command.supports_external(),
 		"infra.external manages provisioning only; use the service's own build, release and \
 		 backup procedures"
 	);
-	let dir = directory(&root, infra);
+	let dir = directory(root, infra);
 
 	match command {
+		InfraCommand::Release { command } => graph::release::run(root, config, &command),
+		InfraCommand::Graph { unit } => graph::print(config, &unit),
 		InfraCommand::BuildVerified(args) => verified::run(&args),
 		InfraCommand::Analytics => analytics::query(infra),
 		InfraCommand::Plugins => {
@@ -272,15 +318,15 @@ pub fn run(command: InfraCommand) -> Result<()> {
 			);
 			Ok(())
 		}
-		InfraCommand::Generate { force } => generate_project(&root, &config, infra, &dir, force),
+		InfraCommand::Generate { force } => generate_project(root, config, infra, &dir, force),
 		InfraCommand::Build {
 			version,
 			push,
 			reuse_existing,
-		} => build::run(&root, &config, &version, push, reuse_existing),
+		} => build::run(root, config, &version, push, reuse_existing),
 		InfraCommand::Plan => {
 			if infra.external.is_none() {
-				services::check(infra, &crate::deploy::Project::read(&root, &config)?)?;
+				services::check(infra, &crate::deploy::Project::read(root, config)?)?;
 			}
 
 			generate(&dir, infra, false)?;
@@ -341,7 +387,7 @@ pub fn run(command: InfraCommand) -> Result<()> {
 		}
 		InfraCommand::Status => status(&dir, infra),
 		InfraCommand::Offers { min_memory_gb } => pricing::print(min_memory_gb),
-		InfraCommand::Ci { force } => ci::generate(&root, &config, force),
+		InfraCommand::Ci { force } => ci::generate(root, config, force),
 		InfraCommand::Backups { command } => operations::backups(&dir, infra, command),
 		InfraCommand::Restore { snapshot, yes } => operations::restore(&dir, infra, &snapshot, yes),
 		InfraCommand::Unlock { owner, yes } => {
@@ -557,9 +603,16 @@ fn backup(dir: &Path, infra: &InfraConfig, out: &Path, upload: bool) -> Result<(
 }
 
 fn settings(config: &LeptoskitConfig) -> Result<&InfraConfig> {
+	ensure!(
+		config
+			.infra
+			.as_ref()
+			.is_none_or(|infra| infra.as_graph().is_none()),
+		"this command requires the managed application preset; graph deployment integration is \
+		 not available yet"
+	);
 	let infra = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.context("add [infra] to leptoskit.toml; see the managed deployment guide")?;
 
 	if let Some(problem) = infra.problem() {
@@ -583,6 +636,7 @@ fn settings(config: &LeptoskitConfig) -> Result<&InfraConfig> {
 		"configure rpc.live.relay_url_env together with infra.services.relay; build the app with \
 		 rpc-relay when enabled"
 	);
+
 	Ok(infra)
 }
 
@@ -793,17 +847,24 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 	}
 
 	let text = serde_json::to_string_pretty(&resources(config))? + "\n";
+	let plugin_text = serde_json::to_string_pretty(&plugins::manifest(config))? + "\n";
+	write_generated(
+		dir,
+		&[("main.tf.json", text), ("plugins.json", plugin_text)],
+		force,
+	)
+}
+
+fn write_generated(dir: &Path, files: &[(&str, String)], force: bool) -> Result<()> {
 	fs::create_dir_all(dir)?;
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt as _;
 		fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
 	}
-	let plugin_text = serde_json::to_string_pretty(&plugins::manifest(config))? + "\n";
-
 	// Check both before writing either, so an edited manifest cannot leave a
 	// partially updated resource configuration.
-	for (name, content) in [("main.tf.json", &text), ("plugins.json", &plugin_text)] {
+	for (name, content) in files {
 		let path = dir.join(name);
 
 		if path.exists() {
@@ -815,8 +876,10 @@ pub fn generate(dir: &Path, config: &InfraConfig, force: bool) -> Result<()> {
 		}
 	}
 
-	fs::write(dir.join("main.tf.json"), text)?;
-	fs::write(dir.join("plugins.json"), plugin_text)?;
+	for (name, content) in files {
+		fs::write(dir.join(name), content)?;
+	}
+
 	let ignore = dir.join(".gitignore");
 
 	if !ignore.exists() {

@@ -287,3 +287,89 @@ This profile targets full-stack SSR or CSR websites with a Linux GNU backend on 
 Build and reproduce with the same commands as the backend example. Both clean builds must produce identical backend bytes and identical website paths, modes and file contents. Packaging copies these checked files to `/app/backend` and `/app/dist`, then checks the files extracted from the image. Website files must have mode 0644 and directories mode 0755; links are rejected. Keep generated `dist`, `target`, `.leptoskit`, `web/pkg` and `public/pkg` directories out of the source commit.
 
 The website descriptor includes the complete asset tree, configuration and builder inputs. Independent approvals and the deployment policy bind that entire descriptor and image. Missing website evidence blocks a verified release, including rollback or recovery. A hand-written inventory still proves only file integrity; supplied assets are never called reproduced until the source build has actually been repeated and compared. These checks do not certify API compatibility or attest what a running server executes.
+
+## Check a graph build before using its files
+
+When one project builds several frontends or services, check that the files you received are exactly the files recorded by its build. From the graph project directory, use the digest supplied through your trusted review or build channel:
+
+```sh
+lk verify graph \
+  --bundle .leptoskit/graph/builds/build-EXAMPLE \
+  --sha256 "$RECEIPT_SHA256"
+```
+
+This command runs on macOS and Linux and checks the receipt against the current project configuration. It checks complete file membership, contents and permissions, recipes, host placement, readiness declarations and any declared toolchain image pin. It does not execute the supplied application. The checksum delivered inside an unknown receipt is not an independent digest: replacing both files and their checksum must not change what you trust.
+
+To prepare just the docs files for a later packaging step, create an output parent and select that unit:
+
+```sh
+mkdir -p checked-builds
+lk verify graph \
+  --bundle .leptoskit/graph/builds/build-EXAMPLE \
+  --sha256 "$RECEIPT_SHA256" \
+  --unit frontends.docs \
+  --out checked-builds
+```
+
+The result names a new owner-only staging directory. Other units are not copied or restarted, and the original receipt's exact manifest remains attached. Inputs are checked again during copying; a failed check leaves no successful staging child. Readiness dependencies remain declarations that a deployment must check against the running services.
+
+These graph receipts come from ordinary local builds. Checking or staging them does not reproduce their source, approve a release, establish the executable's target platform or deploy it. Graph activation and its release-approval integration remain unavailable; the backend and website reproduction workflows above retain their separate requirements. Windows cannot perform these exact Unix file-mode checks.
+
+To catch a macOS executable or the wrong CPU architecture before preparing a Linux release, add an explicit format check:
+
+```sh
+lk verify graph \
+  --bundle .leptoskit/graph/builds/build-EXAMPLE \
+  --sha256 "$RECEIPT_SHA256" \
+  --linux-architecture x86_64
+```
+
+Use `aarch64` for an ARM64 Linux host. This inspection runs on macOS or Linux without executing the supplied application or its loader. It checks selected executables for supported ELF headers, architecture, file-backed entry points, and bounded program headers. It reports the requested interpreter and shared libraries. It rejects executable stacks, writable executable segments, and embedded library search paths. Static frontend assets need no executable format check.
+
+Produce compatible graph artifacts by running `lk build` from the same project on the intended Linux architecture, then transfer the complete receipt and obtain its digest through your trusted build channel. Packaging must consume those bytes rather than rebuild the executable. This is an ordinary build, not source reproduction. Format inspection does not prove that the target host has compatible libraries, that the program will start, or that its readiness endpoint works; those remain separate deployment checks.
+
+## Release a static frontend to Linux
+
+Use a static release to update documentation without installing or restarting your compiler service. Targets need Linux, systemd, Python 3, and an existing dedicated `leptoskit-edge` user and group. The operator command runs on Unix. Select static units explicitly:
+
+```sh
+lk infra release plan --unit frontends.docs --version docs-20261108 \
+  --bundle /absolute/docs-bundle --sha256 "$GRAPH_RECEIPT_SHA256" \
+  --trust /absolute/host-trust.json --trust-sha256 "$HOST_TRUST_SHA256" \
+  --caddy /absolute/caddy-linux --caddy-sha256 "$CADDY_SHA256" \
+  --plan /absolute/docs-release.json
+```
+
+Obtain digests independently of the bundle. The command checks typed infrastructure outputs and generated edge files; it does not provision hosts. Replace `plan` with `apply` and repeat the arguments to install and activate. Use `status` to inspect current pointers and journals; status does not claim public route health.
+
+The independently maintained host trust file has this shape:
+
+```json
+{
+	"hosts": {
+		"web": {
+			"ipv4": "203.0.113.10",
+			"port": 22,
+			"host_key": "ssh-ed25519 BASE64_PUBLIC_HOST_KEY",
+			"identity": "/absolute/private-ssh-key",
+			"architecture": "x86_64",
+			"prerequisites": {
+				"/etc/leptoskit/my-app/tls/docs.example.com.crt": "INDEPENDENT_CERTIFICATE_SHA256"
+			},
+			"tunnel": null
+		}
+	}
+}
+```
+
+Replace example values with independently checked pins and the applied address. SSH uses the explicit root identity and strict host-key checking. Keep that identity private. Caddy runs under the dedicated account. Install certificates and matching private keys at generated paths, readable by that account. Pin each public certificate in `prerequisites`; private key contents never belong in receipts.
+
+Tunnel ingress needs an already active cloudflared service. Set `tunnel` to an object with `unit`, `fragment` (absolute systemd unit file), and `sha256`; pin its configured input under `/etc/leptoskit/` in `prerequisites`. The release checks files and service activity but does not create the tunnel or establish external reachability. HTTPS origins retain TLS, with no HTTP fallback.
+
+Installation uses `/var/lib/leptoskit/<infra.name>/units/<unit>/releases/<version>` and atomic `current` pointers. The supplied Caddy and exact generated configuration are installed and checked. Selected routes must serve candidate index bytes before promotion and active bytes afterward. Existing shared edge configuration must match; changes need a separate migration. Unselected service files, processes and history remain untouched. Restarting the edge can briefly interrupt requests.
+
+For rollback, use `rollback` with the earlier release's original arguments, bundle and saved plan. Current configuration, provider bindings, host trust and runtime inputs must still pass. Retrying the same checked apply after an interrupted promotion restores previous pointers before trying again. Hosts commit separately: inspect every selected host after a transport failure.
+
+This initial transport accepts 64 MiB per host including Caddy. Selected SSR/service units and readiness dependencies without a runtime observer fail before installation. Declaring unselected services does not block a static release. `--policy strict` fails because operator-directed deployment is not independent graph approval, source reproduction or runtime attestation.
+
+For an SSR frontend, use an application that consumes the toolkit's `LEPTOS_SITE_ADDR` binding. A service uses `LEPTOSKIT_SERVICE_ADDR`; a plain Axum server must explicitly read that address when binding its listener. Setting `PORT` alone does not establish either contract. Executable graph releases are still unavailable: a declared address and a successful health response alone do not establish safe activation or rollback.

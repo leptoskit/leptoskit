@@ -1,0 +1,19 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 236
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Install checked graph artifacts on trusted Linux hosts
+
+Usage: leptoskit infra release <COMMAND>
+
+Commands:
+  plan      Save a release plan after checking independent artifact and host pins
+  apply     Prepare candidates, recheck inputs, then activate each host
+  status    Read journals and current pointers without claiming runtime readiness
+  rollback  Reactivate an installed release, rechecking its original inputs
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
