@@ -72,6 +72,7 @@ pub struct Post {
 }
 
 /// A post as a page shows it.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PostRow {
 	pub id: String,

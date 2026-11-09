@@ -34,6 +34,7 @@ pub struct Note {
 }
 
 /// One note, as the query returns it.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Title {
 	pub id: String,

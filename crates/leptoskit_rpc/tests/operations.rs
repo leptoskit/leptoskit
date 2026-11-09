@@ -365,7 +365,7 @@ async fn pod_round_trips_notes_query() {
 		.send(&router)
 		.await;
 	let args = Notes { starting: None };
-	let encoded = leptoskit_pod::PodEncode::to_pod_bytes(&args).unwrap();
+	let encoded = PodEncode::to_pod_bytes(&args).unwrap();
 	let (status, bytes) = Call::new("notes", &json!({}))
 		.user("ada")
 		.pod(encoded)
