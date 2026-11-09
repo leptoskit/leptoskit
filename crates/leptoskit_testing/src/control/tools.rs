@@ -52,14 +52,34 @@ impl ToolOutput {
 /// Runs one command to completion under a deadline, terminating its process
 /// group on expiry.
 pub fn run(command: &mut Command, timeout: Duration) -> Result<ToolOutput, Error> {
+	run_feeding(command, timeout, None)
+}
+
+/// Runs one command, writing `input` to its standard input and closing it.
+///
+/// `None` leaves standard input closed, which is what a tool with no program
+/// to read expects.
+pub fn run_feeding(
+	command: &mut Command,
+	timeout: Duration,
+	input: Option<&[u8]>,
+) -> Result<ToolOutput, Error> {
 	isolate(command);
-	command
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped());
+	if input.is_some() {
+		command.stdin(Stdio::piped());
+	} else {
+		command.stdin(Stdio::null());
+	}
+	command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
 	let name = command.get_program().to_string_lossy().into_owned();
 	let mut child = spawn(command, &name)?;
+	if let Some(bytes) = input
+		&& let Some(mut pipe) = child.stdin.take()
+	{
+		use std::io::Write;
+		let _ = pipe.write_all(bytes);
+	}
 	let (receiver, readers) = read_pipes(&mut child);
 	let timed_out = wait(&mut child, timeout, &name);
 
@@ -419,6 +439,15 @@ mod tests {
 			started.elapsed() < Duration::from_secs(4),
 			"the call waited for the background process"
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn feeding_stdin_reaches_the_command() {
+		let mut command = Command::new("sh");
+		command.args(["-c", "cat"]);
+		let output = run_feeding(&mut command, Duration::from_secs(5), Some(b"pinch\n")).unwrap();
+		assert_eq!(output.stdout, "pinch\n");
 	}
 
 	#[test]

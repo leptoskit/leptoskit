@@ -109,6 +109,8 @@ pub enum ToolPlan {
 		device: String,
 		/// Arguments after `-s <serial>`.
 		args: Vec<String>,
+		/// Bytes written to the tool's standard input, then closed.
+		stdin: Option<String>,
 	},
 	/// Any other program.
 	Command {
@@ -445,6 +447,7 @@ pub fn install_plan(kind: TargetKind, device: &str, path: &str) -> Result<ToolPl
 			Ok(ToolPlan::Adb {
 				device: device.to_owned(),
 				args: vec!["install".to_owned(), "-r".to_owned(), path.to_owned()],
+				stdin: None,
 			})
 		}
 		TargetKind::Macos | TargetKind::Linux | TargetKind::Windows => {
@@ -670,33 +673,171 @@ pub fn android_pan(
 	)
 }
 
-/// adb arguments for a pinch: two `input swipe`s in one shell, so they overlap.
+/// How long `uinput` waits after registering before the first touch.
 ///
-/// The numbers are formatted only after they are checked, so the shell sees
-/// digits and nothing else.
+/// The input stack attaches the new touchscreen a few hundred milliseconds
+/// after registration. Events sent earlier are dropped.
+const UINPUT_READY_MS: u64 = 500;
+
+/// adb arguments for a pinch.
+///
+/// Two `input swipe`s are two separate gestures. On API 35 the activity
+/// receives one of them, with a single pointer, and the step still exits
+/// successfully. `uinput` registers one direct touchscreen and reports both
+/// slots in the same frame, which is a real two-pointer pinch. The program
+/// is stdin, not a shell script: the only adb arguments are `uinput -`.
+///
+/// `width` and `height` are the display size in pixels (`wm size`). The
+/// touchscreen's axes use that size, so a pixel in the gesture is a pixel
+/// on screen.
 ///
 /// # Errors
 ///
-/// A coordinate or span is unusable, the duration is zero, or the serial is
+/// A coordinate or span is unusable, the pinch leaves the display, the
+/// duration is zero, the display is smaller than 2 pixels, or the serial is
 /// empty.
 pub fn android_pinch(
 	device: &str,
+	display: (i64, i64),
 	x: i64,
 	y: i64,
 	start_span: i64,
 	end_span: i64,
 	duration_ms: u64,
 ) -> Result<ToolPlan, Error> {
+	let program = android_pinch_program(display, x, y, start_span, end_span, duration_ms)?;
+	if device.trim().is_empty() {
+		return Err(Error::Configuration(
+			"android input needs a device serial".to_owned(),
+		));
+	}
+	Ok(ToolPlan::Adb {
+		device: device.to_owned(),
+		args: vec!["shell".to_owned(), "uinput".to_owned(), "-".to_owned()],
+		stdin: Some(program),
+	})
+}
+
+/// The `uinput` program for one pinch, as concatenated JSON commands.
+fn android_pinch_program(
+	display: (i64, i64),
+	x: i64,
+	y: i64,
+	start_span: i64,
+	end_span: i64,
+	duration_ms: u64,
+) -> Result<String, Error> {
+	let (width, height) = display;
+	if width < 2 || height < 2 {
+		return Err(Error::Configuration(
+			"a pinch needs the display size".to_owned(),
+		));
+	}
 	let (left_start, right_start, left_end, right_end) = pinch_points(x, y, start_span, end_span)?;
 	positive_duration(duration_ms)?;
-	let script = format!(
-		"input swipe {left_start} {y} {left_end} {y} {duration_ms} & input swipe {right_start} \
-		 {y} {right_end} {y} {duration_ms}; wait"
-	);
-	adb(
-		device,
-		vec!["shell".to_owned(), "sh".to_owned(), "-c".to_owned(), script],
+	for value in [left_start, right_start, left_end, right_end] {
+		if value >= width {
+			return Err(Error::Configuration(
+				"a pinch must stay on the screen".to_owned(),
+			));
+		}
+	}
+	if y >= height {
+		return Err(Error::Configuration(
+			"a pinch must stay on the screen".to_owned(),
+		));
+	}
+
+	// `type` has to be written before `data`. serde_json sorts object keys,
+	// which puts `data` first and uinput rejects the configuration.
+	let mut lines = vec![touchscreen(width, height)];
+	let mut commands = vec![
+		json!({ "id": 1, "command": "delay", "duration": UINPUT_READY_MS }),
+		inject(down_events(left_start, right_start, y)),
+	];
+	let steps = (duration_ms / 16).max(1);
+	let mut scheduled = 0u64;
+	for step in 1..=steps {
+		let slice = if step == steps {
+			duration_ms - scheduled
+		} else {
+			duration_ms / steps
+		};
+		scheduled += slice;
+		let left = along(left_start, left_end, step, steps);
+		let right = along(right_start, right_end, step, steps);
+		commands.push(json!({ "id": 1, "command": "delay", "duration": slice }));
+		commands.push(inject(move_events(left, right, y)));
+	}
+	commands.push(inject(lift_events()));
+	lines.extend(commands.iter().map(ToString::to_string));
+	Ok(lines.join("\n"))
+}
+
+fn along(start: i64, end: i64, step: u64, steps: u64) -> i64 {
+	start
+		+ (end - start) * i64::try_from(step).unwrap_or(i64::MAX)
+			/ i64::try_from(steps).unwrap_or(1)
+}
+
+fn touchscreen(width: i64, height: i64) -> String {
+	format!(
+		r#"{{"id":1,"command":"register","name":"leptoskit-pinch","vid":1,"pid":1,"bus":"usb","configuration":[{{"type":"UI_SET_EVBIT","data":["EV_ABS","EV_KEY"]}},{{"type":"UI_SET_KEYBIT","data":["BTN_TOUCH"]}},{{"type":"UI_SET_ABSBIT","data":["ABS_MT_SLOT","ABS_MT_TRACKING_ID","ABS_MT_POSITION_X","ABS_MT_POSITION_Y","ABS_MT_PRESSURE"]}},{{"type":"UI_SET_PROPBIT","data":["INPUT_PROP_DIRECT"]}}],"abs_info":[{{"code":"ABS_MT_SLOT","info":{{"minimum":0,"maximum":9,"fuzz":0,"flat":0,"resolution":0}}}},{{"code":"ABS_MT_TRACKING_ID","info":{{"minimum":0,"maximum":65535,"fuzz":0,"flat":0,"resolution":0}}}},{{"code":"ABS_MT_POSITION_X","info":{{"minimum":0,"maximum":{x_max},"fuzz":0,"flat":0,"resolution":0}}}},{{"code":"ABS_MT_POSITION_Y","info":{{"minimum":0,"maximum":{y_max},"fuzz":0,"flat":0,"resolution":0}}}},{{"code":"ABS_MT_PRESSURE","info":{{"minimum":0,"maximum":255,"fuzz":0,"flat":0,"resolution":0}}}}]}}"#,
+		x_max = width - 1,
+		y_max = height - 1,
 	)
+}
+
+fn inject(events: Vec<Value>) -> Value {
+	let mut command = json!({ "id": 1, "command": "inject" });
+	command["events"] = Value::Array(events);
+	command
+}
+
+fn down_events(left: i64, right: i64, y: i64) -> Vec<Value> {
+	let mut events = Vec::new();
+	contact(&mut events, 0, 1, left, y);
+	contact(&mut events, 1, 2, right, y);
+	event(&mut events, "EV_KEY", "BTN_TOUCH", 1);
+	event(&mut events, "EV_SYN", "SYN_REPORT", 0);
+	events
+}
+
+fn move_events(left: i64, right: i64, y: i64) -> Vec<Value> {
+	let mut events = Vec::new();
+	event(&mut events, "EV_ABS", "ABS_MT_SLOT", 0);
+	event(&mut events, "EV_ABS", "ABS_MT_POSITION_X", left);
+	event(&mut events, "EV_ABS", "ABS_MT_POSITION_Y", y);
+	event(&mut events, "EV_ABS", "ABS_MT_SLOT", 1);
+	event(&mut events, "EV_ABS", "ABS_MT_POSITION_X", right);
+	event(&mut events, "EV_ABS", "ABS_MT_POSITION_Y", y);
+	event(&mut events, "EV_SYN", "SYN_REPORT", 0);
+	events
+}
+
+fn lift_events() -> Vec<Value> {
+	let mut events = Vec::new();
+	event(&mut events, "EV_ABS", "ABS_MT_SLOT", 0);
+	event(&mut events, "EV_ABS", "ABS_MT_TRACKING_ID", -1);
+	event(&mut events, "EV_ABS", "ABS_MT_SLOT", 1);
+	event(&mut events, "EV_ABS", "ABS_MT_TRACKING_ID", -1);
+	event(&mut events, "EV_KEY", "BTN_TOUCH", 0);
+	event(&mut events, "EV_SYN", "SYN_REPORT", 0);
+	events
+}
+
+fn contact(events: &mut Vec<Value>, slot: i64, tracking: i64, x: i64, y: i64) {
+	event(events, "EV_ABS", "ABS_MT_SLOT", slot);
+	event(events, "EV_ABS", "ABS_MT_TRACKING_ID", tracking);
+	event(events, "EV_ABS", "ABS_MT_POSITION_X", x);
+	event(events, "EV_ABS", "ABS_MT_POSITION_Y", y);
+	event(events, "EV_ABS", "ABS_MT_PRESSURE", 80);
+}
+
+fn event(events: &mut Vec<Value>, kind: &str, code: &str, value: i64) {
+	events.push(json!(kind));
+	events.push(json!(code));
+	events.push(json!(value));
 }
 
 /// `xdotool` arguments for a tap.
@@ -788,6 +929,7 @@ fn adb(device: &str, args: Vec<String>) -> Result<ToolPlan, Error> {
 	Ok(ToolPlan::Adb {
 		device: device.to_owned(),
 		args,
+		stdin: None,
 	})
 }
 
@@ -1154,7 +1296,7 @@ mod tests {
 		let device = install_plan(TargetKind::IosDevice, "UDID", "App.ipa").unwrap();
 		assert!(matches!(device, ToolPlan::Command { args, .. } if args[2] == "install"));
 		let android = install_plan(TargetKind::Android, "emulator-5554", "app.apk").unwrap();
-		assert!(matches!(android, ToolPlan::Adb { device, args }
+		assert!(matches!(android, ToolPlan::Adb { device, args, .. }
 			if device == "emulator-5554" && args == ["install", "-r", "app.apk"]));
 		assert!(install_plan(TargetKind::Macos, "x", "y").is_err());
 		assert!(install_plan(TargetKind::Linux, "x", "y").is_err());
@@ -1242,22 +1384,57 @@ mod tests {
 		assert!(android_tap("serial", -1, 1).is_err());
 		assert!(android_long_press("serial", 1, 1, 0).is_err());
 		assert!(android_pan("serial", Point { x: 0, y: 0 }, Point { x: -1, y: 0 }, 10).is_err());
-		assert!(android_pinch("serial", 200, 400, 80, 160, 0).is_err());
+		assert!(android_pinch("serial", (320, 640), 200, 400, 80, 160, 0).is_err());
 	}
 
 	#[test]
-	fn a_pinch_script_contains_two_swipes_of_digits() {
-		let pinch = android_pinch("emulator-5554", 200, 400, 80, 160, 300).unwrap();
-		let ToolPlan::Adb { args, .. } = pinch else {
+	fn a_pinch_is_one_uinput_stream_with_two_pointers() {
+		// Two `input swipe`s each own one pointer. On API 35 they do not
+		// overlap, so the activity sees a single finger while the step
+		// reports success. A pinch has to be one uinput stream with both
+		// slots in the same report.
+		let pinch = android_pinch("emulator-5554", (320, 640), 200, 400, 80, 160, 300).unwrap();
+		let ToolPlan::Adb { args, stdin, .. } = pinch else {
 			panic!("pinch is an adb plan");
 		};
-		let script = &args[3];
-		assert!(script.contains("input swipe 160 400 120 400 300"));
-		assert!(script.contains("input swipe 240 400 280 400 300"));
-		assert!(script.contains(" & "));
-		assert!(!script.contains(|character: char| {
-			!(character.is_ascii_alphanumeric() || " &;".contains(character) || character == '-')
-		}));
+		assert_eq!(args, ["shell", "uinput", "-"]);
+		let script = stdin.expect("the uinput program is the tool's stdin");
+		assert!(
+			!script.contains("input swipe"),
+			"a backgrounded pair of swipes is one pointer"
+		);
+		let commands = json_commands(&script);
+		let injects: Vec<_> = commands
+			.iter()
+			.filter(|command| command["command"] == "inject")
+			.collect();
+		assert!(injects.len() >= 2, "down and the later positions");
+		let down = injects[0]["events"].as_array().expect("events");
+		assert!(event_has(down, "ABS_MT_SLOT", 0));
+		assert!(event_has(down, "ABS_MT_SLOT", 1));
+		assert!(event_has(down, "ABS_MT_POSITION_X", 160));
+		assert!(event_has(down, "ABS_MT_POSITION_X", 240));
+		let end = injects[injects.len() - 2]["events"]
+			.as_array()
+			.expect("last move");
+		assert!(event_has(end, "ABS_MT_SLOT", 0));
+		assert!(event_has(end, "ABS_MT_SLOT", 1));
+		assert!(event_has(end, "ABS_MT_POSITION_X", 120));
+		assert!(event_has(end, "ABS_MT_POSITION_X", 280));
+		let travel: u64 = commands
+			.iter()
+			.skip_while(|command| command["command"] != "inject")
+			.filter(|command| command["command"] == "delay")
+			.map(|command| command["duration"].as_u64().unwrap_or(0))
+			.sum();
+		assert_eq!(
+			travel, 300,
+			"the fingers take the requested duration to move"
+		);
+		assert!(android_pinch("emulator-5554", (100, 100), 200, 400, 80, 160, 300).is_err());
+		assert!(android_pinch("emulator-5554", (1000, 30), 200, 50, 20, 20, 300).is_err());
+		assert!(android_pinch("emulator-5554", (1, 640), 0, 0, 2, 2, 300).is_err());
+		assert!(android_pinch(" ", (320, 640), 200, 400, 80, 160, 300).is_err());
 	}
 
 	#[test]
@@ -1282,5 +1459,18 @@ mod tests {
 		assert!(xdotool_tap(-1, 0).is_err());
 		assert!(xdotool_long_press(0, 0, 0).is_err());
 		assert!(xdotool_pan(Point { x: 0, y: 0 }, Point { x: 1, y: 1 }, 0).is_err());
+	}
+
+	fn json_commands(script: &str) -> Vec<Value> {
+		serde_json::Deserializer::from_str(script)
+			.into_iter()
+			.collect::<Result<Vec<_>, _>>()
+			.expect("uinput program is concatenated JSON")
+	}
+
+	fn event_has(events: &[Value], code: &str, value: i64) -> bool {
+		events
+			.chunks(3)
+			.any(|triple| triple.len() == 3 && triple[1] == code && triple[2] == value)
 	}
 }
