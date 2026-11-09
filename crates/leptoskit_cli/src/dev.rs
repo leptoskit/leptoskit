@@ -82,7 +82,8 @@ fn start_studio(
 }
 
 /// Runs the dev loop: an initial build of every selected platform, then a
-/// watcher that rebuilds them once changes settle. `platforms` names the
+/// rebuild once changes settle after each change, including one made while
+/// the initial build ran. `platforms` names the
 /// platforms to run; empty means every enabled platform this machine can run.
 /// `devices` narrows the mobile platforms to the simulators and devices named.
 ///
@@ -140,28 +141,66 @@ pub fn run(options: Options<'_>) -> Result<()> {
 
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
-	let started = Started::start(Start {
-		config: &config,
-		root: &root,
-		port,
-		devices,
-		tools,
-		selection: &selection,
-		runtime: &runtime,
-		no_devtools,
-		devtools_port,
-		studio,
-	})?;
-	let watching = watch(
-		&config,
-		&root,
-		&runtime,
-		open,
-		started.web.as_ref(),
-		started.database.as_ref(),
-	)?;
+	let database = start_database(&config, &root)?;
+
+	develop(
+		database,
+		|database| watch(&config, &root, &runtime, database.as_ref()),
+		|database| {
+			Started::start(Start {
+				config: &config,
+				root: &root,
+				port,
+				devices,
+				tools,
+				selection: &selection,
+				runtime: &runtime,
+				no_devtools,
+				devtools_port,
+				studio,
+				database,
+			})
+		},
+		|started, watching| {
+			announce(&root, open, started.web.as_ref());
+			rebuild(started, watching);
+		},
+	)
+}
+
+/// Starts watching before anything builds, then starts the platforms, then
+/// rebuilds on every change. An edit made while the first build runs, which
+/// takes minutes on a fresh checkout, waits in the watcher's queue and
+/// rebuilds as soon as the platforms are up. Watching only afterwards lost
+/// it unless the platform's watcher happened to report it late, which
+/// inotify never does, leaving the server on the code from before the edit
+/// until the next one. The database, which the watcher follows, starts
+/// first.
+fn develop<D, W, S>(
+	database: D,
+	watch: impl FnOnce(&D) -> Result<W>,
+	start: impl FnOnce(D) -> Result<S>,
+	rebuild: impl FnOnce(S, &W),
+) -> Result<()> {
+	let watching = watch(&database)?;
+	let started = start(database)?;
 	rebuild(started, &watching);
 	Ok(())
+}
+
+/// Says what `dev` watches, and opens the web app when asked to.
+fn announce(root: &Path, open: bool, web: Option<&Web>) {
+	anstream::println!(
+		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
+		root.display()
+	);
+
+	if let Some(web) = web
+		&& open
+		&& let Err(error) = open_browser(&web.url())
+	{
+		ui::warning(format_args!("could not open the browser: {error:#}"));
+	}
 }
 
 fn terminal_only(
@@ -219,6 +258,9 @@ struct Start<'a> {
 	no_devtools: bool,
 	devtools_port: Option<u16>,
 	studio: bool,
+	/// The development database, started before the watcher, which follows
+	/// its tables.
+	database: Option<crate::db::DevDatabase>,
 }
 
 impl Started {
@@ -234,6 +276,7 @@ impl Started {
 			no_devtools,
 			devtools_port,
 			studio,
+			database,
 		} = start;
 		let devtools = if no_devtools {
 			None
@@ -248,7 +291,6 @@ impl Started {
 			Some(hub)
 		};
 
-		let database = start_database(config, root)?;
 		let studio = start_studio(studio, database.as_ref())?;
 		let web = selection
 			.web
@@ -306,8 +348,6 @@ fn watch(
 	config: &LeptoskitConfig,
 	root: &Path,
 	runtime: &tokio::runtime::Runtime,
-	open: bool,
-	web: Option<&Web>,
 	database: Option<&crate::db::DevDatabase>,
 ) -> Result<Watching> {
 	let (events_tx, events_rx) = mpsc::channel::<Wake>();
@@ -320,18 +360,6 @@ fn watch(
 	let (mut watcher, heard, scope) = start_watcher(config, root, events_tx, database)?;
 	watch_roots(&mut watcher, &scope)?;
 	heard.branch.watch(&mut watcher)?;
-
-	anstream::println!(
-		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
-		root.display()
-	);
-
-	if let Some(web) = web
-		&& open
-		&& let Err(error) = open_browser(&web.url())
-	{
-		ui::warning(format_args!("could not open the browser: {error:#}"));
-	}
 
 	Ok(Watching {
 		_watcher: watcher,
@@ -478,17 +506,7 @@ fn watch_roots(watcher: &mut notify::RecommendedWatcher, scope: &Watched) -> Res
 fn rebuild(mut started: Started, watching: &Watching) {
 	let Watching { events, heard, .. } = watching;
 
-	while let Ok(Wake::Changed) = events.recv() {
-		// Debounce: keep absorbing events until none arrives for a whole
-		// window, so an editor's burst of writes triggers one rebuild.
-		loop {
-			match events.recv_timeout(REBUILD_DEBOUNCE) {
-				Ok(Wake::Changed) => {}
-				Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-				Err(RecvTimeoutError::Timeout) => break,
-			}
-		}
-
+	on_changes(events, || {
 		// Before the rebuild, so the server starts on the branch's database
 		// and embeds a migration written now.
 		follow_database(
@@ -509,6 +527,24 @@ fn rebuild(mut started: Started, watching: &Watching) {
 		if let Some(native) = &started.native {
 			reload_native(native, &heard.config_changed);
 		}
+	});
+}
+
+/// Calls `rebuild` once changes settle after each change, until `dev` is
+/// asked to stop.
+fn on_changes(events: &mpsc::Receiver<Wake>, mut rebuild: impl FnMut()) {
+	while let Ok(Wake::Changed) = events.recv() {
+		// Debounce: keep absorbing events until none arrives for a whole
+		// window, so an editor's burst of writes triggers one rebuild.
+		loop {
+			match events.recv_timeout(REBUILD_DEBOUNCE) {
+				Ok(Wake::Changed) => {}
+				Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+				Err(RecvTimeoutError::Timeout) => break,
+			}
+		}
+
+		rebuild();
 	}
 }
 
@@ -1335,6 +1371,59 @@ mod tests {
 	}
 
 	#[test]
+	fn an_edit_during_the_first_build_rebuilds_once_the_platforms_start() {
+		let (temporary, config) = workspace();
+		let root = &temporary.path().canonicalize().unwrap();
+		let (events, received) = mpsc::channel();
+		let stop = events.clone();
+		// Ends the loop if the edit is never heard, so the test fails
+		// rather than hangs.
+		let deadline = events.clone();
+		std::thread::spawn(move || {
+			std::thread::sleep(std::time::Duration::from_secs(30));
+			let _ = deadline.send(Wake::Stop);
+		});
+		let mut order = Vec::new();
+		let mut rebuilds = 0;
+
+		develop(
+			(),
+			|()| {
+				let (mut watcher, _, scope) = start_watcher(&config, root, events, None)?;
+				watch_roots(&mut watcher, &scope)?;
+				Ok(watcher)
+			},
+			|()| {
+				// The first build, which takes long enough to edit the app
+				// during it.
+				std::fs::write(root.join("app/src/lib.rs"), "pub fn edited() {}\n").unwrap();
+				order.push("started");
+				Ok(())
+			},
+			|(), _watcher| {
+				on_changes(&received, || {
+					rebuilds += 1;
+					let _ = stop.send(Wake::Stop);
+				});
+			},
+		)
+		.unwrap();
+
+		assert_eq!(order, ["started"]);
+		assert_eq!(rebuilds, 1, "the edit made during the first build rebuilds");
+
+		// A platform that fails to start ends `dev` before it rebuilds.
+		let error = develop(
+			(),
+			|()| Ok(()),
+			|()| -> Result<()> { anyhow::bail!("could not build") },
+			|(), ()| unreachable!("nothing started"),
+		)
+		.unwrap_err();
+		assert_eq!(error.to_string(), "could not build");
+	}
+
+	#[test]
 	fn a_terminal_build_refuses_the_flags_meant_for_other_platforms() {
 		let temporary = tempfile::tempdir().unwrap();
 		let root = temporary.path();
@@ -1486,7 +1575,8 @@ mod tests {
 	fn watching_starts_the_dev_loop_and_stops_without_a_browser() {
 		let (root, config) = workspace();
 		let runtime = tokio::runtime::Runtime::new().unwrap();
-		let watching = watch(&config, root.path(), &runtime, false, None, None).unwrap();
+		let watching = watch(&config, root.path(), &runtime, None).unwrap();
+		announce(root.path(), false, None);
 		drop(watching);
 	}
 
