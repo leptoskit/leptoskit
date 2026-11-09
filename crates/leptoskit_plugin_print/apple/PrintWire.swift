@@ -24,15 +24,15 @@ enum PrintJob: Equatable {
 
         switch kind {
         case 0:
-            return try html(body)
+            return try makeHtml(body)
         case 1:
-            return try pdfUri(body)
+            return try makePdfUri(body)
         default:
             throw PluginError.invalidArgument
         }
     }
 
-    private static func html(_ value: String) throws -> PrintJob {
+    private static func makeHtml(_ value: String) throws -> PrintJob {
         guard value.utf8.count <= maxHtmlBytes else { throw PluginError.tooLarge }
 
         guard !value.contains("\0") else { throw PluginError.invalidArgument }
@@ -40,7 +40,7 @@ enum PrintJob: Equatable {
         return .html(value)
     }
 
-    private static func pdfUri(_ value: String) throws -> PrintJob {
+    private static func makePdfUri(_ value: String) throws -> PrintJob {
         guard value.utf8.count <= maxUriBytes else { throw PluginError.tooLarge }
 
         try requireGraphic(value)

@@ -28,8 +28,8 @@ struct CalendarRecord: Equatable {
     static let maxCalendars = 64
 
     init(id: String, title: String, allowsModifications: Bool) throws {
-        self.id = try Self.required(id, max: Self.maxIDBytes)
-        self.title = try Self.required(title, max: Self.maxTitleBytes)
+        self.id = try requiredString(id, max: Self.maxIDBytes)
+        self.title = try requiredString(title, max: Self.maxTitleBytes)
         self.allowsModifications = allowsModifications
     }
 
@@ -82,13 +82,13 @@ struct CalendarEventRecord: Equatable {
     ) throws {
         guard endMs >= startMs else { throw PluginError.invalidArgument }
 
-        self.id = try Self.required(id, max: Self.maxIDBytes)
-        self.calendarID = try Self.required(calendarID, max: Self.maxIDBytes)
-        self.title = try Self.required(title, max: Self.maxTitleBytes)
+        self.id = try requiredString(id, max: Self.maxIDBytes)
+        self.calendarID = try requiredString(calendarID, max: Self.maxIDBytes)
+        self.title = try requiredString(title, max: Self.maxTitleBytes)
         self.startMs = startMs
         self.endMs = endMs
-        self.notes = try Self.optional(notes, max: Self.maxNotesBytes)
-        self.location = try Self.optional(location, max: Self.maxLocationBytes)
+        self.notes = try optionalString(notes, max: Self.maxNotesBytes)
+        self.location = try optionalString(location, max: Self.maxLocationBytes)
     }
 
     func encode() throws -> Data {
@@ -125,14 +125,14 @@ struct CalendarEventRecord: Equatable {
         location: String?
     ) {
         var cursor = 0
-        let calendarID = try required(readString(bytes, cursor: &cursor), max: maxIDBytes)
-        let title = try required(readString(bytes, cursor: &cursor), max: maxTitleBytes)
+        let calendarID = try requiredString(readString(bytes, cursor: &cursor), max: maxIDBytes)
+        let title = try requiredString(readString(bytes, cursor: &cursor), max: maxTitleBytes)
         let startMs = try readI64(bytes, cursor: &cursor)
         let endMs = try readI64(bytes, cursor: &cursor)
         guard endMs >= startMs else { throw PluginError.invalidArgument }
 
-        let notes = try optional(readString(bytes, cursor: &cursor), max: maxNotesBytes)
-        let location = try optional(readString(bytes, cursor: &cursor), max: maxLocationBytes)
+        let notes = try optionalString(readString(bytes, cursor: &cursor), max: maxNotesBytes)
+        let location = try optionalString(readString(bytes, cursor: &cursor), max: maxLocationBytes)
         guard cursor == bytes.count else { throw PluginError.invalidArgument }
 
         return (calendarID, title, startMs, endMs, notes, location)
@@ -140,7 +140,7 @@ struct CalendarEventRecord: Equatable {
 
     static func decodeEventID(_ bytes: UnsafeRawBufferPointer) throws -> String {
         var cursor = 0
-        let id = try required(readString(bytes, cursor: &cursor), max: maxIDBytes)
+        let id = try requiredString(readString(bytes, cursor: &cursor), max: maxIDBytes)
         guard cursor == bytes.count else { throw PluginError.invalidArgument }
 
         return id
@@ -148,7 +148,7 @@ struct CalendarEventRecord: Equatable {
 
     static func encodeEventID(_ id: String) throws -> Data {
         var result = Data(capacity: 8 + id.utf8.count)
-        try write(&result, required(id, max: maxIDBytes))
+        try write(&result, requiredString(id, max: maxIDBytes))
 
         return result
     }
@@ -171,23 +171,23 @@ struct CalendarEventRecord: Equatable {
 
         return (startMs, endMs, limit)
     }
+}
 
-    private static func required(_ value: String, max: Int) throws -> String {
-        guard !value.isEmpty, value.utf8.count <= max, !value.contains("\0") else {
-            throw PluginError.invalidArgument
-        }
-
-        return value
+private func requiredString(_ value: String, max: Int) throws -> String {
+    guard !value.isEmpty, value.utf8.count <= max, !value.contains("\0") else {
+        throw PluginError.invalidArgument
     }
 
-    private static func optional(_ value: String, max: Int) throws -> String? {
-        if value.isEmpty { return nil }
-        guard value.utf8.count <= max, !value.contains("\0") else {
-            throw PluginError.invalidArgument
-        }
+    return value
+}
 
-        return value
+private func optionalString(_ value: String?, max: Int) throws -> String? {
+    guard let value, !value.isEmpty else { return nil }
+    guard value.utf8.count <= max, !value.contains("\0") else {
+        throw PluginError.invalidArgument
     }
+
+    return value
 }
 
 private func write(_ result: inout Data, _ value: UInt32) {

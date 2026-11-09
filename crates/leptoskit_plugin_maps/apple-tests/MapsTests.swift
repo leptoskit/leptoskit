@@ -1,7 +1,7 @@
 import CLeptosKitBridge
 import Foundation
 import LeptosKitBridge
-import LeptosKitMaps
+@testable import LeptosKitMaps
 import Testing
 
 private func buffer(_ bytes: Data = Data()) throws -> NativeBuffer {
@@ -52,7 +52,7 @@ struct MapsTests {
 
         let status = MapsWire.status(camera: .default, markerCount: 1, active: true)
         #expect(status.count == 36)
-        #expect(MapsWire.session(buffer(words(9))) == 9)
+        #expect(try MapsWire.session(buffer(words(9))) == 9)
     }
 
     @Test func rejectsBadCoordinatesAndOversizeMarkerLists() async throws {

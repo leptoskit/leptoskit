@@ -3,6 +3,11 @@ import Foundation
 import LeptosKitBridge
 @testable import LeptosKitMediaLibrary
 import Testing
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 private final class MediaLibrarySpy: MediaLibraryService {
@@ -75,7 +80,12 @@ private func listBytes(kind: UInt32, limit: UInt32) -> [UInt8] {
 @MainActor
 func injectedLibraryNeverInventsDeniedAssets() async throws {
     let spy = MediaLibrarySpy()
-    let plugin = MediaLibraryPlugin(context: NativePluginContext(owner: nil), service: spy)
+    #if canImport(AppKit)
+    let owner = NSViewController()
+    #elseif canImport(UIKit)
+    let owner = UIViewController()
+    #endif
+    let plugin = MediaLibraryPlugin(context: NativePluginContext(owner: owner), service: spy)
     defer { plugin.close() }
     #expect(try await plugin.invoke(method: 0, payload: payload([])) == Data([3, 0, 0, 0]))
     let listed = try await plugin.invoke(method: 2, payload: payload(listBytes(kind: 0, limit: 4)))

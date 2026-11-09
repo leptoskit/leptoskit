@@ -1162,21 +1162,23 @@ in
           --test jni_async_lifecycle -- --ignored
         cargo build --locked --package leptoskit_bridge_ffi
         mkdir -p target/plugin-jni
-        task_jdk="$(dirname "$(dirname "$(realpath "$(command -v javac)")")")"
+        task_jdk="''${JAVA_HOME:-$(dirname "$(dirname "$(realpath "$(command -v javac)")")")}"
         case "$(uname -s)" in
           Darwin)
             platform=darwin
             extension=dylib
             link_flags=(-dynamiclib)
+            cxx=(/usr/bin/xcrun --sdk macosx clang++)
             ;;
           Linux)
             platform=linux
             extension=so
             link_flags=(-shared -ldl -lpthread -lm)
+            cxx=("''${CXX:-c++}")
             ;;
           *) echo "JNI smoke tests require macOS or Linux" >&2; exit 1 ;;
         esac
-        c++ -std=c++20 -Wall -Wextra -Werror -fPIC \
+        "''${cxx[@]}" -std=c++20 -Wall -Wextra -Werror -fPIC \
           -I "$task_jdk/include" -I "$task_jdk/include/$platform" \
           crates/leptoskit_bridge_ffi/android/bridge.cpp \
           target/debug/libleptoskit_bridge_ffi.a \

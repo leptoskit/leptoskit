@@ -219,15 +219,17 @@ public final class CalendarPlugin: NSObject, NativePlugin {
     }
 
     fileprivate static func record(from event: EKEvent) throws -> CalendarEventRecord {
+        guard let identifier = event.eventIdentifier else { throw PluginError.native }
+
         let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let display = title.isEmpty ? event.eventIdentifier : title
+        let display = title.isEmpty ? identifier : title
         let startMs = Int64((event.startDate.timeIntervalSince1970 * 1000.0).rounded())
         let endMs = Int64((event.endDate.timeIntervalSince1970 * 1000.0).rounded())
         let notes = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return try CalendarEventRecord(
-            id: event.eventIdentifier,
+            id: identifier,
             calendarID: event.calendar.calendarIdentifier,
             title: display,
             startMs: startMs,

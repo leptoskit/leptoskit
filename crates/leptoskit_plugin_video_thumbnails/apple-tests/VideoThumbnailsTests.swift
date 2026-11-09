@@ -1,7 +1,7 @@
 import CLeptosKitBridge
 import Foundation
 import LeptosKitBridge
-import LeptosKitVideoThumbnails
+@testable import LeptosKitVideoThumbnails
 import Testing
 
 private func buffer(_ bytes: Data = Data()) throws -> NativeBuffer {

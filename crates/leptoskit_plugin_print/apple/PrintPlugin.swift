@@ -48,21 +48,21 @@ private final class SystemPrintService: PrintService {
         switch job {
         case let .html(html):
             let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
-            if let data = html.data(using: .utf8) {
-                text.replaceCharacters(
-                    in: NSRange(location: 0, length: 0),
-                    with: NSAttributedString(
-                        html: data,
-                        options: [.documentType: NSAttributedString.DocumentType.html],
-                        documentAttributes: nil
-                    ) ?? NSAttributedString(string: html)
-                )
+            if let data = html.data(using: .utf8),
+               let attributed = try? NSAttributedString(
+                   data: data,
+                   options: [.documentType: NSAttributedString.DocumentType.html],
+                   documentAttributes: nil
+               ) {
+                text.textStorage?.setAttributedString(attributed)
             } else {
                 text.string = html
             }
             view = text
         case let .pdfUri(uri):
-            guard let url = URL(string: uri), let pdf = NSPDFImageRep(contentsOf: url) else {
+            guard let url = URL(string: uri),
+                  let data = try? Data(contentsOf: url),
+                  let pdf = NSPDFImageRep(data: data) else {
                 throw PluginError.invalidArgument
             }
             let image = NSImage(size: pdf.size)
