@@ -1115,6 +1115,13 @@ Java_dev_leptoskit_mobile_NativeScene3d_available(JNIEnv*, jclass) {
     return lk_scene3d_available() == 1;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_pointer(JNIEnv*, jclass, jint scene, jint phase,
+    jfloat x, jfloat y, jfloat dx, jfloat dy) {
+    if (scene < 0 || phase < 0) return -1;
+    return lk_scene3d_pointer(static_cast<uint32_t>(scene), static_cast<uint32_t>(phase), x, y, dx, dy);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_leptoskit_mobile_NativeScene3d_error(JNIEnv* env, jclass) {
     const auto error = lk_scene3d_error();

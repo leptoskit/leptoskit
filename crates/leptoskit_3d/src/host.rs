@@ -57,6 +57,9 @@ pub const NEXT_EVENTS: MethodId = MethodId(2);
 /// Forgets a scene and everything in it: the scene's id. Replies with
 /// nothing.
 pub const CLOSE: MethodId = MethodId(3);
+/// Waits for one native pointer input, independently of asset events.
+/// Replies with `PointerInput::WIRE_SIZE` bytes, or nothing on scene close.
+pub const NEXT_POINTER: MethodId = MethodId(4);
 /// The largest reply to [`NEXT_EVENTS`], in bytes.
 pub const MAX_EVENTS_REPLY: usize = 1 << 20;
 
@@ -251,6 +254,7 @@ struct Job {
 /// Every scene in the process, the device they draw with, and the loader
 /// that reads their assets.
 pub struct Hub {
+	inputs: crate::pointer::host::Inputs,
 	scenes: Mutex<HashMap<SceneId, Arc<Scene>>>,
 	source: Mutex<Option<Arc<dyn AssetSource>>>,
 	backend: Mutex<Backend>,
@@ -271,6 +275,7 @@ impl Hub {
 	/// An empty hub. Apps use [`Hub::global`]; tests make their own.
 	pub fn new() -> Self {
 		Self {
+			inputs: crate::pointer::host::Inputs::default(),
 			scenes: Mutex::new(HashMap::new()),
 			source: Mutex::new(None),
 			backend: Mutex::new(Backend::Auto),
@@ -423,6 +428,7 @@ impl Hub {
 			closed: false,
 		})));
 		scenes.insert(id, scene.clone());
+		self.inputs.create(id);
 		Some(scene)
 	}
 
@@ -484,7 +490,12 @@ impl Hub {
 	/// Forgets a scene. Its views draw nothing from then on, and waiters
 	/// wake with no events.
 	pub fn close(&self, id: SceneId) {
-		if let Some(scene) = lock(&self.scenes).remove(&id) {
+		let scene = {
+			let mut scenes = lock(&self.scenes);
+			self.inputs.close(id);
+			scenes.remove(&id)
+		};
+		if let Some(scene) = scene {
 			let mut state = scene.lock();
 			state.closed = true;
 
@@ -889,7 +900,40 @@ impl Future for NextEvents {
 	}
 }
 
+/// Waits for input independently of the model-event subscriber.
+struct NextPointer {
+	hub: &'static Hub,
+	scene: SceneId,
+	waker: Option<Arc<Waker>>,
+	cancelled: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl Future for NextPointer {
+	type Output = Result<Reply, leptoskit_bridge::Error>;
+
+	fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		if self.cancelled.as_mut().poll(context).is_ready() {
+			return Poll::Ready(Err(leptoskit_bridge::Error::Cancelled));
+		}
+		self.waker = Some(Arc::new(context.waker().clone()));
+		self.hub
+			.inputs
+			.poll(self.scene, self.waker.as_ref().expect("waker set"))
+			.map(|input| {
+				Ok(Reply::from(Bytes::from(
+					input.map_or_else(Vec::new, crate::PointerInput::encode),
+				)))
+			})
+	}
+}
+
 impl Hub {
+	/// Offers native pointer input to a scene. Unknown scenes and invalid
+	/// coordinates are rejected; slow consumers receive coalesced movement.
+	pub fn pointer(&self, scene: SceneId, input: crate::PointerInput) -> bool {
+		self.inputs.push(scene, input)
+	}
+
 	/// Puts events back at the front of a scene's queue.
 	fn requeue(&self, id: SceneId, events: Vec<Event>) {
 		if let Some(scene) = lock(&self.scenes).get(&id) {
@@ -928,13 +972,14 @@ impl AsyncPlugin for Scene3dPlugin {
 	}
 
 	fn methods(&self) -> &'static [MethodId] {
-		&[APPLY, NEXT_EVENTS, CLOSE]
+		&[APPLY, NEXT_EVENTS, CLOSE, NEXT_POINTER]
 	}
 
 	fn reply_limit(&self, method: MethodId) -> Result<usize, leptoskit_bridge::Error> {
 		match method {
 			APPLY | CLOSE => Ok(0),
 			NEXT_EVENTS => Ok(MAX_EVENTS_REPLY),
+			NEXT_POINTER => Ok(crate::PointerInput::WIRE_SIZE),
 			_ => Err(leptoskit_bridge::Error::Unavailable),
 		}
 	}
@@ -953,6 +998,19 @@ impl AsyncPlugin for Scene3dPlugin {
 		let empty = || Ok(Reply::from(Bytes::new()));
 
 		match method {
+			NEXT_POINTER => {
+				match scene_id(&payload) {
+					Ok((scene, [])) => {
+						Box::pin(NextPointer {
+							hub: self.hub,
+							scene,
+							waker: None,
+							cancelled: Box::pin(cancellation.cancelled_owned()),
+						})
+					}
+					_ => ready(Err(leptoskit_bridge::Error::InvalidArgument)),
+				}
+			}
 			APPLY => {
 				let result = scene_id(&payload).and_then(|(scene, batch)| {
 					self.hub

@@ -5,8 +5,10 @@ import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.SurfaceTexture
 import android.view.Choreographer
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
+import android.view.ViewConfiguration
 import java.io.IOException
 
 /**
@@ -32,6 +34,13 @@ internal class NativeScene3dView(
     private var surfaceHeight = 0
     private var scheduled = false
     private var open = true
+    private var pointerId = -1
+    private var downX = 0f
+    private var downY = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var dragging = false
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     init {
         NativeScene3d.configure(context)
@@ -44,12 +53,14 @@ internal class NativeScene3dView(
     fun show(scene: Long?) {
         val wanted = scene?.toInt()
         if (!open || wanted == this.scene) return
+        cancelPointer()
         this.scene = wanted
         reattach()
     }
 
     fun close() {
         if (!open) return
+        cancelPointer()
         open = false
         detach()
         releaseSurface()
@@ -80,6 +91,7 @@ internal class NativeScene3dView(
     }
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+        cancelPointer()
         // Rust must let the window go before Android does.
         detach()
         releaseSurface()
@@ -87,6 +99,95 @@ internal class NativeScene3dView(
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) cancelPointer()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!open || scene == null || width <= 0 || height <= 0) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pointerId = event.getPointerId(0)
+                downX = event.x
+                downY = event.y
+                lastX = downX
+                lastY = downY
+                dragging = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                emitPointer(0, lastX, lastY)
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                val index = event.findPointerIndex(pointerId)
+                if (index < 0) {
+                    cancelPointer()
+
+                    return false
+                }
+                val x = event.getX(index)
+                val y = event.getY(index)
+                val across = x - downX
+                val down = y - downY
+                if (dragging || across * across + down * down > touchSlop * touchSlop) {
+                    dragging = true
+                    val density = resources.displayMetrics.density
+                    emitPointer(1, x, y, (x - lastX) / density, (y - lastY) / density)
+                    lastX = x
+                    lastY = y
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                if (pointerId >= 0) {
+                    emitPointer(2, event.x, event.y)
+                    if (!dragging) performClick()
+                }
+                pointerId = -1
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                cancelPointer()
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(event.actionIndex) == pointerId) cancelPointer()
+            }
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
+    private fun emitPointer(
+        phase: Int,
+        x: Float,
+        y: Float,
+        dx: Float = 0f,
+        dy: Float = 0f,
+    ) {
+        val scene = scene ?: return
+        NativeScene3d.pointer(
+            scene,
+            phase,
+            (x / width.coerceAtLeast(1)).coerceIn(0f, 1f),
+            (y / height.coerceAtLeast(1)).coerceIn(0f, 1f),
+            dx,
+            dy,
+        )
+    }
+
+    private fun cancelPointer() {
+        if (pointerId < 0) return
+        emitPointer(3, lastX, lastY)
+        pointerId = -1
+        parent?.requestDisallowInterceptTouchEvent(false)
+    }
 
     private fun releaseSurface() {
         surface?.release()
@@ -161,6 +262,15 @@ internal object NativeScene3d {
     @JvmStatic external fun available(): Boolean
 
     @JvmStatic external fun error(): String
+
+    @JvmStatic external fun pointer(
+        scene: Int,
+        phase: Int,
+        x: Float,
+        y: Float,
+        dx: Float,
+        dy: Float,
+    ): Int
 
     @JvmStatic external fun setBackend(name: String): Int
 
