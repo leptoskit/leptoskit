@@ -1,11 +1,14 @@
-//! App icons from one source image, `app.icon`: every size each platform
-//! asks for, so a store never refuses the app for a missing one.
+//! App icons from `app.icon` / `[app.icons]`: every size each platform asks
+//! for, so a store never refuses the app for a missing one.
 //!
-//! - iOS: an `AppIcon` set with a single opaque 1024×1024 image, which Xcode
-//!   turns into every size the devices use.
-//! - Android: launcher icons for each density, and an adaptive icon whose
-//!   foreground keeps the image inside the mask's safe zone.
+//! - iOS: an `AppIcon` set with a single opaque 1024×1024 image (optional dark
+//!   / tinted appearances from `[app.icons.ios]`).
+//! - Android: launcher icons for each density, an adaptive icon, and an
+//!   optional notification / status-bar icon.
 //! - macOS: an `.icns` with the 16 to 1024 pixel images.
+//! - Windows: a multi-size `.ico`.
+//! - Linux: hicolor PNG sizes for desktop entries.
+//! - Web: favicon and maskable PNGs.
 //! - The browser extension: 16, 32, 48, and 128 pixels.
 
 use std::path::Path;
@@ -120,50 +123,50 @@ impl Icon {
 	///
 	/// When encoding fails.
 	pub fn files(&self, platform: Platform) -> Result<Vec<(String, Vec<u8>)>> {
-		match platform {
-			Platform::Ios => {
-				Ok(vec![
-					(
-						"Assets.xcassets/Contents.json".to_owned(),
-						CATALOG.as_bytes().to_vec(),
-					),
-					(
-						"Assets.xcassets/AppIcon.appiconset/Contents.json".to_owned(),
-						APP_ICON_SET.as_bytes().to_vec(),
-					),
-					(
-						"Assets.xcassets/AppIcon.appiconset/icon-1024.png".to_owned(),
-						self.opaque_png(1024)?,
-					),
-				])
-			}
-			Platform::Android => {
-				let mut files = vec![
-					(
-						"mipmap-anydpi-v26/ic_launcher.xml".to_owned(),
-						ADAPTIVE.as_bytes().to_vec(),
-					),
-					(
-						"values/ic_launcher_background.xml".to_owned(),
-						background(&self.background()).into_bytes(),
-					),
-				];
-				for (density, scale) in ANDROID_DENSITIES {
-					let launcher = 48 * scale / 4;
-					files.push((
-						format!("mipmap-{density}/ic_launcher.png"),
-						self.png(launcher)?,
-					));
-					// 108dp, with the image in the 72dp safe zone's middle.
-					files.push((
-						format!("mipmap-{density}/ic_launcher_foreground.png"),
-						self.padded_png(108 * scale / 4, 66 * scale / 4)?,
-					));
-				}
+		self.files_with(platform, &IconOptions::default())
+	}
 
+	/// Like [`Self::files`], with adaptive background and notification options.
+	///
+	/// # Errors
+	///
+	/// When encoding fails.
+	pub fn files_with(
+		&self,
+		platform: Platform,
+		options: &IconOptions<'_>,
+	) -> Result<Vec<(String, Vec<u8>)>> {
+		match platform {
+			Platform::Ios => self.ios_files(options),
+			Platform::Android => self.android_files(options),
+			Platform::Macos => Ok(vec![("AppIcon.icns".to_owned(), self.icns()?)]),
+			Platform::Windows => Ok(vec![("AppIcon.ico".to_owned(), self.ico()?)]),
+			Platform::Linux => {
+				LINUX_SIZES
+					.into_iter()
+					.map(|size| {
+						Ok((
+							format!("icons/hicolor/{size}x{size}/apps/app.png"),
+							self.png(size)?,
+						))
+					})
+					.collect()
+			}
+			Platform::Web => {
+				let mut files = vec![
+					("favicon-32.png".to_owned(), self.png(32)?),
+					("favicon-16.png".to_owned(), self.png(16)?),
+					("apple-touch-icon.png".to_owned(), self.opaque_png(180)?),
+					("icon-192.png".to_owned(), self.png(192)?),
+					("icon-512.png".to_owned(), self.png(512)?),
+				];
+				if let Some(maskable) = options.maskable {
+					files.push(("maskable-512.png".to_owned(), maskable.png(512)?));
+				} else {
+					files.push(("maskable-512.png".to_owned(), self.padded_png(512, 410)?));
+				}
 				Ok(files)
 			}
-			Platform::Macos => Ok(vec![("AppIcon.icns".to_owned(), self.icns()?)]),
 			Platform::Extension => {
 				crate::extension::ICON_SIZES
 					.into_iter()
@@ -171,6 +174,123 @@ impl Icon {
 					.collect()
 			}
 		}
+	}
+
+	fn ios_files(&self, options: &IconOptions<'_>) -> Result<Vec<(String, Vec<u8>)>> {
+		let mut images = vec![json_icon("icon-1024.png", None)];
+		let mut files = vec![
+			(
+				"Assets.xcassets/Contents.json".to_owned(),
+				CATALOG.as_bytes().to_vec(),
+			),
+			(
+				"Assets.xcassets/AppIcon.appiconset/icon-1024.png".to_owned(),
+				self.opaque_png(1024)?,
+			),
+		];
+		if let Some(dark) = options.dark {
+			images.push(json_icon("icon-1024-dark.png", Some("dark")));
+			files.push((
+				"Assets.xcassets/AppIcon.appiconset/icon-1024-dark.png".to_owned(),
+				dark.opaque_png(1024)?,
+			));
+		}
+		if let Some(tinted) = options.tinted {
+			images.push(json_icon("icon-1024-tinted.png", Some("tinted")));
+			files.push((
+				"Assets.xcassets/AppIcon.appiconset/icon-1024-tinted.png".to_owned(),
+				tinted.opaque_png(1024)?,
+			));
+		}
+		files.insert(
+			1,
+			(
+				"Assets.xcassets/AppIcon.appiconset/Contents.json".to_owned(),
+				pretty_json(&serde_json::json!({
+					"images": images,
+					"info": { "author": "leptoskit", "version": 1 },
+				}))?,
+			),
+		);
+		Ok(files)
+	}
+
+	fn android_files(&self, options: &IconOptions<'_>) -> Result<Vec<(String, Vec<u8>)>> {
+		let foreground = options.foreground.unwrap_or(self);
+		let bg = options
+			.adaptive_background
+			.map_or_else(|| self.background(), str::to_owned);
+		let mut files = vec![
+			(
+				"mipmap-anydpi-v26/ic_launcher.xml".to_owned(),
+				ADAPTIVE.as_bytes().to_vec(),
+			),
+			(
+				"values/ic_launcher_background.xml".to_owned(),
+				background(&bg).into_bytes(),
+			),
+		];
+		if let Some(bg_image) = options.adaptive_background_image {
+			files.push((
+				"mipmap-anydpi-v26/ic_launcher_background.png".to_owned(),
+				bg_image.png(432)?,
+			));
+		}
+		for (density, scale) in ANDROID_DENSITIES {
+			let launcher = 48 * scale / 4;
+			files.push((
+				format!("mipmap-{density}/ic_launcher.png"),
+				self.png(launcher)?,
+			));
+			files.push((
+				format!("mipmap-{density}/ic_launcher_foreground.png"),
+				foreground.padded_png(108 * scale / 4, 66 * scale / 4)?,
+			));
+			if let Some(mono) = options.monochrome {
+				files.push((
+					format!("mipmap-{density}/ic_launcher_monochrome.png"),
+					mono.padded_png(108 * scale / 4, 66 * scale / 4)?,
+				));
+			}
+			if let Some(notification) = options.notification {
+				let size = 24 * scale / 4;
+				files.push((
+					format!("drawable-{density}/ic_notification.png"),
+					notification.png(size)?,
+				));
+			}
+		}
+		Ok(files)
+	}
+
+	/// A Windows multi-size ICO.
+	fn ico(&self) -> Result<Vec<u8>> {
+		let sizes = [16_u32, 32, 48, 64, 128, 256];
+		let mut images = Vec::new();
+		for size in sizes {
+			images.push(self.png(size)?);
+		}
+		let mut ico = Vec::new();
+		ico.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+		ico.extend_from_slice(&1_u16.to_le_bytes()); // type icon
+		ico.extend_from_slice(&(sizes.len() as u16).to_le_bytes());
+		let mut offset = 6 + sizes.len() * 16;
+		for (index, size) in sizes.iter().enumerate() {
+			let bytes = &images[index];
+			ico.push(if *size >= 256 { 0 } else { *size as u8 });
+			ico.push(if *size >= 256 { 0 } else { *size as u8 });
+			ico.push(0); // colors
+			ico.push(0); // reserved
+			ico.extend_from_slice(&1_u16.to_le_bytes()); // planes
+			ico.extend_from_slice(&32_u16.to_le_bytes()); // bit count
+			ico.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+			ico.extend_from_slice(&(offset as u32).to_le_bytes());
+			offset += bytes.len();
+		}
+		for bytes in images {
+			ico.extend_from_slice(&bytes);
+		}
+		Ok(ico)
 	}
 
 	/// The adaptive icon's background: the image's corner color when it is
@@ -205,13 +325,44 @@ impl Icon {
 	}
 }
 
+/// Optional layers and appearances layered on the default icon.
+#[derive(Clone, Default)]
+pub struct IconOptions<'a> {
+	/// Adaptive background colour (`#rrggbb`), overriding the corner sample.
+	pub adaptive_background: Option<&'a str>,
+	pub adaptive_background_image: Option<&'a Icon>,
+	pub foreground: Option<&'a Icon>,
+	pub monochrome: Option<&'a Icon>,
+	pub notification: Option<&'a Icon>,
+	pub dark: Option<&'a Icon>,
+	pub tinted: Option<&'a Icon>,
+	pub maskable: Option<&'a Icon>,
+}
+
 /// The platforms icons are made for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
 	Ios,
 	Android,
 	Macos,
+	Windows,
+	Linux,
+	Web,
 	Extension,
+}
+
+impl Platform {
+	fn config_platform(self) -> leptoskit_config::IconPlatform {
+		match self {
+			Self::Ios => leptoskit_config::IconPlatform::Ios,
+			Self::Android => leptoskit_config::IconPlatform::Android,
+			Self::Macos => leptoskit_config::IconPlatform::Macos,
+			Self::Windows => leptoskit_config::IconPlatform::Windows,
+			Self::Linux => leptoskit_config::IconPlatform::Linux,
+			Self::Web => leptoskit_config::IconPlatform::Web,
+			Self::Extension => leptoskit_config::IconPlatform::Extension,
+		}
+	}
 }
 
 /// Android's launcher densities, and their scale in quarters of `mdpi`.
@@ -222,6 +373,31 @@ const ANDROID_DENSITIES: [(&str, u32); 5] = [
 	("xxhdpi", 12),
 	("xxxhdpi", 16),
 ];
+
+/// Linux hicolor icon sizes.
+const LINUX_SIZES: [u32; 5] = [48, 64, 128, 256, 512];
+
+fn json_icon(filename: &str, appearance: Option<&str>) -> serde_json::Value {
+	let mut image = serde_json::json!({
+		"filename": filename,
+		"idiom": "universal",
+		"platform": "ios",
+		"size": "1024x1024",
+	});
+	if let Some(appearance) = appearance {
+		image["appearances"] = serde_json::json!([{
+			"appearance": "luminosity",
+			"value": appearance,
+		}]);
+	}
+	image
+}
+
+fn pretty_json(value: &serde_json::Value) -> Result<Vec<u8>> {
+	let mut bytes = serde_json::to_vec_pretty(value)?;
+	bytes.push(b'\n');
+	Ok(bytes)
+}
 
 /// The `.icns` image types: 16 to 512 points, at one and two pixels each.
 const ICNS: [(&str, u32); 10] = [
@@ -240,24 +416,8 @@ const ICNS: [(&str, u32); 10] = [
 pub(crate) const CATALOG: &str =
 	"{\n  \"info\" : {\n    \"author\" : \"leptoskit\",\n    \"version\" : 1\n  }\n}\n";
 
-const APP_ICON_SET: &str = r#"{
-  "images" : [
-    {
-      "filename" : "icon-1024.png",
-      "idiom" : "universal",
-      "platform" : "ios",
-      "size" : "1024x1024"
-    }
-  ],
-  "info" : {
-    "author" : "leptoskit",
-    "version" : 1
-  }
-}
-"#;
-
 const ADAPTIVE: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<!-- Generated by leptoskit from app.icon. -->
+<!-- Generated by leptoskit from app.icon / [app.icons]. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
@@ -311,8 +471,9 @@ fn draw_svg(bytes: &[u8]) -> Result<RgbaImage> {
 	Ok(image)
 }
 
-/// Writes `platform`'s icons into `dir` from `app.icon`, and returns
-/// whether there were any: `false` when the app has no icon.
+/// Writes `platform`'s icons into `dir` from `app.icon` / `[app.icons]`, and
+/// returns whether there were any: `false` when the app has no icon for that
+/// platform.
 ///
 /// # Errors
 ///
@@ -323,13 +484,93 @@ pub fn write(
 	platform: Platform,
 	dir: &Path,
 ) -> Result<bool> {
-	let Some(source) = &config.app.icon else {
+	let Some(source) = config.app.icon_image(platform.config_platform()) else {
 		return Ok(false);
 	};
-	let icon =
-		Icon::load(&root.join(source)).with_context(|| format!("app.icon {}", source.display()))?;
+	let icon = Icon::load(&root.join(&source))
+		.with_context(|| format!("app icon {}", source.display()))?;
 
-	for (name, bytes) in icon.files(platform)? {
+	let adaptive_background = config.app.icons.as_ref().and_then(|icons| {
+		icons
+			.android
+			.as_ref()
+			.and_then(|android| android.adaptive_background.as_deref())
+	});
+	let bg_image = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.android.as_ref())
+			.and_then(|android| android.adaptive_background_image.as_ref()),
+	)?;
+	let foreground = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.android.as_ref())
+			.and_then(|android| android.adaptive_foreground.as_ref()),
+	)?;
+	let monochrome = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.android.as_ref())
+			.and_then(|android| android.adaptive_monochrome.as_ref()),
+	)?;
+	let notification = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(leptoskit_config::IconsConfig::notification_image),
+	)?;
+	let dark = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.ios.as_ref())
+			.and_then(|ios| ios.dark.as_ref()),
+	)?;
+	let tinted = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.ios.as_ref())
+			.and_then(|ios| ios.tinted.as_ref()),
+	)?;
+	let maskable = load_optional_icon(
+		root,
+		config
+			.app
+			.icons
+			.as_ref()
+			.and_then(|icons| icons.web.as_ref())
+			.and_then(|web| web.maskable.as_ref().or(web.favicon.as_ref())),
+	)?;
+
+	let options = IconOptions {
+		adaptive_background,
+		adaptive_background_image: bg_image.as_ref(),
+		foreground: foreground.as_ref(),
+		monochrome: monochrome.as_ref(),
+		notification: notification.as_ref(),
+		dark: dark.as_ref(),
+		tinted: tinted.as_ref(),
+		maskable: maskable.as_ref(),
+	};
+
+	for (name, bytes) in icon.files_with(platform, &options)? {
 		let path = dir.join(name);
 
 		if let Some(parent) = path.parent() {
@@ -341,6 +582,13 @@ pub fn write(
 	}
 
 	Ok(true)
+}
+
+fn load_optional_icon(root: &Path, path: Option<&std::path::PathBuf>) -> Result<Option<Icon>> {
+	path.map(|path| {
+		Icon::load(&root.join(path)).with_context(|| format!("icon {}", path.display()))
+	})
+	.transpose()
 }
 
 #[cfg(test)]
@@ -435,6 +683,37 @@ mod tests {
 
 		assert_eq!(kinds.len(), 10);
 		assert_eq!(kinds.last().unwrap(), &("ic10".to_owned(), 1024));
+	}
+
+	#[test]
+	fn notification_web_windows_and_linux_sizes_are_written() {
+		let icon = circle();
+		let notification = circle();
+		let options = IconOptions {
+			notification: Some(&notification),
+			..IconOptions::default()
+		};
+		let android = icon.files_with(Platform::Android, &options).unwrap();
+		assert!(
+			android
+				.iter()
+				.any(|(name, _)| name == "drawable-mdpi/ic_notification.png")
+		);
+
+		let web = icon.files(Platform::Web).unwrap();
+		assert!(web.iter().any(|(name, _)| name == "favicon-32.png"));
+		assert!(web.iter().any(|(name, _)| name == "maskable-512.png"));
+
+		let windows = icon.files(Platform::Windows).unwrap();
+		assert_eq!(windows[0].0, "AppIcon.ico");
+		assert_eq!(&windows[0].1[..4], b"\0\0\x01\0");
+
+		let linux = icon.files(Platform::Linux).unwrap();
+		assert!(
+			linux
+				.iter()
+				.any(|(name, _)| name == "icons/hicolor/512x512/apps/app.png")
+		);
 	}
 
 	#[test]

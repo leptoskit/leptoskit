@@ -24,14 +24,25 @@ import java.nio.charset.CodingErrorAction
 /** Immediate notifications only. Posting never implicitly requests permission. */
 class NotificationsPlugin(
     private val context: Context,
-    private val smallIcon: Int = android.R.drawable.ic_dialog_info,
+    smallIcon: Int? = null,
 ) : NativePlugin {
+    private val smallIcon: Int = smallIcon ?: resolveSmallIcon(context)
+
     override val name = "notifications"
     override val methods = intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE)
 
     companion object {
         /** The notification tag and channel prefix the plugin owns. */
         internal const val PREFIX = "leptoskit.notifications."
+
+        /**
+         * Uses `@drawable/ic_notification` when `[app.icons]` generated one,
+         * otherwise the system information icon.
+         */
+        private fun resolveSmallIcon(context: Context): Int {
+            val id = context.resources.getIdentifier("ic_notification", "drawable", context.packageName)
+            return if (id != 0) id else android.R.drawable.ic_dialog_info
+        }
 
         /** The permission value that means notifications may be posted. */
         internal const val GRANTED = 3

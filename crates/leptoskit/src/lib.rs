@@ -161,6 +161,11 @@ pub mod native {
 	pub use leptoskit_native::*;
 }
 
+pub mod splash {
+	//! Hold and dismiss the launch overlay after the OS splash ends.
+	pub use leptoskit_native::splash::*;
+}
+
 pub mod components {
 	//! Built-in components shared by native and web screens.
 	pub use leptoskit_native::components::*;

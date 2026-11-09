@@ -39,6 +39,7 @@ pub mod controls;
 pub mod devtools;
 pub mod element;
 pub mod flatten;
+pub mod splash;
 
 mod hash;
 pub mod motion;

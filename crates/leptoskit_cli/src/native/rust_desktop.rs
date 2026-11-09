@@ -218,6 +218,14 @@ fn assemble(
 		&generated.join("assets/app.wasm"),
 		&bundle.join("assets/app.wasm"),
 	)?;
+	let icon_platform = match target {
+		Target::Windows => Some(crate::icons::Platform::Windows),
+		Target::Linux => Some(crate::icons::Platform::Linux),
+		_ => None,
+	};
+	if let Some(platform) = icon_platform {
+		crate::icons::write(root, config, platform, &bundle)?;
+	}
 	Ok(bundle)
 }
 

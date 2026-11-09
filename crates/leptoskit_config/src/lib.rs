@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod assets;
 pub mod extension;
 pub mod infra;
 pub mod migration;
@@ -30,6 +31,13 @@ pub mod schema;
 pub mod services;
 pub mod workspace;
 
+pub use assets::AndroidIcons;
+pub use assets::AppleIcons;
+pub use assets::AssetExtensions;
+pub use assets::IconPlatform;
+pub use assets::IconsConfig;
+pub use assets::PlatformIcons;
+pub use assets::WebIcons;
 pub use extension::Browser;
 pub use extension::ContentScript;
 pub use extension::ExtensionConfig;
@@ -310,12 +318,18 @@ pub struct AppConfig {
 	/// The app's icon: one square PNG or SVG, 1024×1024 or larger, relative
 	/// to this file. Every platform's icon sizes are made from it: the iOS
 	/// app icon, Android's launcher icons, the macOS `.icns`, and the
-	/// extension's 16 to 128 pixel icons.
+	/// extension's 16 to 128 pixel icons. Prefer `[app.icons]` when you need
+	/// per-platform images, notification icons, or extension metadata.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub icon: Option<PathBuf>,
-	/// What iOS and Android show while the app starts: a background colour
-	/// and, centered on it, an image.
+	/// Flutter-shaped icon declaration. When set, its `image` (or a
+	/// platform override) is used instead of [`Self::icon`] for that
+	/// platform. See [`IconsConfig`].
 	#[serde(skip_serializing_if = "Option::is_none")]
+	pub icons: Option<IconsConfig>,
+	/// What iOS, Android, and the web show while the app starts: a background
+	/// colour and, centered on it, an image. Also accepted as `[app.splash]`.
+	#[serde(alias = "splash", skip_serializing_if = "Option::is_none")]
 	pub launch_screen: Option<LaunchScreen>,
 }
 
@@ -328,39 +342,185 @@ impl Default for AppConfig {
 			platforms: Platform::APPLICATION.to_vec(),
 			render: RenderMode::Csr,
 			icon: None,
+			icons: None,
 			launch_screen: None,
 		}
 	}
 }
 
-/// The screen iOS and Android show from the moment the app is opened until
-/// its first screen is drawn: the iOS `UILaunchScreen`, and Android's
-/// splash screen (Android 12 and later) or starting window (before).
+impl AppConfig {
+	/// The icon image path for `platform`: `[app.icons]` override, then
+	/// `[app.icons].image`, then `app.icon`.
+	#[must_use]
+	pub fn icon_image(&self, platform: IconPlatform) -> Option<PathBuf> {
+		if let Some(icons) = &self.icons {
+			if !icons.enabled(platform) {
+				return None;
+			}
+			if let Some(path) = icons.image_for(platform) {
+				return Some(path.clone());
+			}
+		}
+		self.icon.clone()
+	}
+}
+
+/// The screen iOS, Android, and the web show from the moment the app is
+/// opened until its first screen is drawn: the iOS `UILaunchScreen`,
+/// Android's splash screen (Android 12 and later) or starting window
+/// (before), and an HTML overlay on the web. Also configured as
+/// `[app.splash]`.
 ///
 /// ```toml
 /// [app.launch_screen]
 /// background = "#0b0c10"
 /// image = "assets/branding/mark.svg"
+///
+/// [app.launch_screen.animated]
+/// rive = "assets/splash.riv"
+/// until = "manual"
+///
+/// [app.launch_screen.extensions.my_tool]
+/// campaign = "winter"
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
+#[allow(
+	clippy::struct_excessive_bools,
+	reason = "platform enable flags mirror Flutter's splash toggles"
+)]
 pub struct LaunchScreen {
-	/// The background colour, as `#rrggbb` or `#rgb`.
-	pub background: String,
+	/// The background colour, as `#rrggbb` or `#rgb`. Required unless
+	/// `background_image` is set.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub background: Option<String>,
 	/// The background colour while the system is dark, as `#rrggbb` or
 	/// `#rgb`; `background` when left out.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub background_dark: Option<String>,
+	/// Full-bleed background image instead of `background` (mutually
+	/// exclusive).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub background_image: Option<PathBuf>,
 	/// One square PNG or SVG, 1024×1024 or larger, relative to this file,
 	/// drawn in the middle of the screen. Android 12 and later show it inside
-	/// a circle, so keep what matters in the middle two thirds.
+	/// a circle, so keep what matters in the middle two thirds. A GIF is kept
+	/// as a GIF on the web splash.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub image: Option<PathBuf>,
+	/// Dark-mode centre image.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub image_dark: Option<PathBuf>,
 	/// The image's width and height: in points on iOS, and in dp on Android
 	/// before 12. Android 12 and later size it themselves.
 	#[serde(default = "LaunchScreen::default_image_size")]
 	pub image_size: u32,
+	/// Branding image shown near the bottom of the splash (Flutter-style).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub branding: Option<PathBuf>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub branding_dark: Option<PathBuf>,
+	/// Hide the status bar on Android while the splash shows.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub fullscreen: bool,
+	/// Generate the Android splash. Default true.
+	#[serde(default = "default_true")]
+	pub android: bool,
+	/// Generate the iOS splash. Default true.
+	#[serde(default = "default_true")]
+	pub ios: bool,
+	/// Generate the web splash. Default true.
+	#[serde(default = "default_true")]
+	pub web: bool,
+	/// Android 12+ splash overrides (colour, icon, icon background).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub android_12: Option<Android12Splash>,
+	/// Animated overlay after the native splash ends.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub animated: Option<AnimatedSplash>,
+	/// Named free-form tables for asset tooling extensions.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "serde_json::Map<String, serde_json::Value>")
+	)]
+	pub extensions: AssetExtensions,
+}
+
+/// Android 12 and later splash attributes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct Android12Splash {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub background: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub image: Option<PathBuf>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub icon_background: Option<String>,
+}
+
+/// Cross-platform motion after the OS launch screen ends.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct AnimatedSplash {
+	/// A Rive `.riv` asset path relative to the project (preferred).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub rive: Option<PathBuf>,
+	/// A GIF used on the web splash and as a fallback image source.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub gif: Option<PathBuf>,
+	/// When to dismiss the animated overlay.
+	#[serde(default, skip_serializing_if = "splash_until_is_first_frame")]
+	pub until: SplashUntil,
+}
+
+/// When the animated splash overlay is removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SplashUntil {
+	/// Remove when the first frame of the app is drawn (default).
+	#[default]
+	FirstFrame,
+	/// Keep until `leptoskit::splash::dismiss()` runs.
+	Manual,
+}
+
+#[allow(
+	clippy::trivially_copy_pass_by_ref,
+	reason = "serde skip_serializing_if passes a reference"
+)]
+const fn splash_until_is_first_frame(until: &SplashUntil) -> bool {
+	matches!(until, SplashUntil::FirstFrame)
+}
+
+const fn default_true() -> bool {
+	true
+}
+
+impl Default for LaunchScreen {
+	fn default() -> Self {
+		Self {
+			background: None,
+			background_dark: None,
+			background_image: None,
+			image: None,
+			image_dark: None,
+			image_size: Self::DEFAULT_IMAGE_SIZE,
+			branding: None,
+			branding_dark: None,
+			fullscreen: false,
+			android: true,
+			ios: true,
+			web: true,
+			android_12: None,
+			animated: None,
+			extensions: BTreeMap::new(),
+		}
+	}
 }
 
 impl LaunchScreen {
@@ -371,11 +531,30 @@ impl LaunchScreen {
 		Self::DEFAULT_IMAGE_SIZE
 	}
 
+	/// The opaque background colour used when no `background_image` is set.
+	#[must_use]
+	pub fn background_colour(&self) -> Option<&str> {
+		self.background.as_deref()
+	}
+
 	/// A human-readable problem with the launch screen, if any.
 	#[must_use]
 	pub fn problem(&self) -> Option<String> {
+		match (&self.background, &self.background_image) {
+			(None, None) => {
+				return Some(
+					"set background to an opaque hex colour, or background_image to a picture"
+						.into(),
+				);
+			}
+			(Some(_), Some(_)) => {
+				return Some("background and background_image can't both be set".into());
+			}
+			_ => {}
+		}
+
 		for (key, colour) in [
-			("background", Some(&self.background)),
+			("background", self.background.as_ref()),
 			("background_dark", self.background_dark.as_ref()),
 		] {
 			if let Some(colour) = colour
@@ -387,11 +566,36 @@ impl LaunchScreen {
 			}
 		}
 
+		if let Some(android_12) = &self.android_12 {
+			for (key, colour) in [
+				("android_12.background", android_12.background.as_ref()),
+				(
+					"android_12.icon_background",
+					android_12.icon_background.as_ref(),
+				),
+			] {
+				if let Some(colour) = colour
+					&& launch_colour(colour).is_none()
+				{
+					return Some(format!(
+						"{key} `{colour}` must be an opaque hex colour such as \"#0b0c10\""
+					));
+				}
+			}
+		}
+
 		if !(16..=512).contains(&self.image_size) {
 			return Some(format!(
 				"image_size {} must be between 16 and 512",
 				self.image_size
 			));
+		}
+
+		if let Some(animated) = &self.animated
+			&& animated.rive.is_none()
+			&& animated.gif.is_none()
+		{
+			return Some("animated needs rive or gif".into());
 		}
 
 		None
@@ -3250,6 +3454,10 @@ impl LeptoskitConfig {
 			return Err(ConfigError::InvalidLaunchScreen(problem));
 		}
 
+		if let Some(problem) = self.app.icons.as_ref().and_then(IconsConfig::problem) {
+			return Err(ConfigError::InvalidIcons(problem));
+		}
+
 		self.ensure_platform_enabled(self.app.default_platform)
 	}
 
@@ -3705,6 +3913,9 @@ pub enum ConfigError {
 	/// `[app.launch_screen]` can't work as written.
 	#[error("invalid [app.launch_screen]: {0}")]
 	InvalidLaunchScreen(String),
+	/// `[app.icons]` can't work as written.
+	#[error("invalid [app.icons]: {0}")]
+	InvalidIcons(String),
 	/// `[extension]` can't work as written.
 	#[error("invalid [extension]: {0}")]
 	InvalidExtension(String),
