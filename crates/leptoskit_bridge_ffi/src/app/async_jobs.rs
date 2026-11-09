@@ -67,6 +67,11 @@ impl Default for AsyncHost {
 }
 
 impl AsyncHost {
+	/// The async plugins installed here.
+	pub(super) fn plugins(&self) -> impl Iterator<Item = PluginId> + use<'_> {
+		self.plugins.keys().map(|id| PluginId(*id))
+	}
+
 	pub(super) fn install(
 		&mut self,
 		bridge: &mut Bridge,

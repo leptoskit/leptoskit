@@ -470,14 +470,42 @@ impl App {
 		}
 	}
 
+	/// The next request the service handed back or the guest queued. A
+	/// service drains the bridge itself, so what it hands back has not been
+	/// served yet: the interpreter's own plugins take theirs here, as
+	/// [`WasmHost::next_host_request`] does for the queue.
 	fn next_routed_or_queued_request(&mut self) -> Option<leptoskit_bridge::Request> {
 		while let Some(request) = self.routed_requests.pop_front() {
-			if matches!(self.host_mut().plugins().result(request.id), Ok(None)) {
+			if matches!(self.host_mut().plugins().result(request.id), Ok(None))
+				&& !self.host_mut().serve(&request)
+			{
 				return Some(request);
 			}
 		}
 
 		self.host_mut().next_host_request()
+	}
+
+	/// Every plugin answered in Rust, whose calls never reach the platform's
+	/// plugin router. The interpreter's own (its timer), the frame clock, and
+	/// each plugin [`Self::install`] took are answered in this app. Worker and
+	/// async plugins reach the platform only as the Rust job [`lk_app_worker`]
+	/// or `lk_app_async` makes of each call, for its executor to run.
+	pub fn rust_plugins(&self) -> Vec<PluginId> {
+		let host = self
+			.host
+			.as_ref()
+			.expect("live applications own an interpreter");
+		let plugins = host
+			.served_plugins()
+			.chain(self.frame_plugin)
+			.chain(self.plugins.keys().map(|id| PluginId(*id)))
+			.chain(self.workers.keys().map(|id| PluginId(*id)));
+
+		#[cfg(feature = "async-host")]
+		let plugins = plugins.chain(self.async_host.plugins());
+
+		plugins.collect()
 	}
 
 	/// Routes cancellation through the same service owner as native requests.

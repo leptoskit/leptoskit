@@ -976,8 +976,8 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.timer.as_ref().is_some_and(|timers| timers.cancel(id))
 	}
 
-	/// Takes the next plugin request for the host's own router, scheduling a
-	/// timer request instead of returning it.
+	/// Takes the next plugin request for the host's own router, serving a
+	/// request for one of [`Self::served_plugins`] instead of returning it.
 	///
 	/// Call this instead of `plugins().next_request()` on a host that enabled
 	/// timers, so a timer never reaches the platform.
@@ -985,10 +985,28 @@ impl<B: NativeBackend> WasmHost<B> {
 		loop {
 			let request = self.store.data_mut().plugins.next_request()?;
 
-			if !self.route_timer(&request) {
+			if !self.serve(&request) {
 				return Some(request);
 			}
 		}
+	}
+
+	/// The plugins this interpreter answers itself, never the platform: its
+	/// timer, once [`Self::enable_timers`] has run.
+	pub fn served_plugins(&self) -> impl Iterator<Item = leptoskit_bridge::PluginId> + use<B> {
+		self.timer_plugin.into_iter()
+	}
+
+	/// Serves `request` when it is for one of [`Self::served_plugins`],
+	/// returning whether it did.
+	///
+	/// An `AppService` may drain `plugins().next_request()` itself and hand
+	/// back every call it does not own. Its host passes each one through
+	/// here before the platform sees it, as [`Self::next_host_request`] does:
+	/// a timer handed back to the platform found no plugin there and failed
+	/// as `Unavailable`, so every guest sleep failed on Android.
+	pub fn serve(&mut self, request: &leptoskit_bridge::Request) -> bool {
+		self.route_timer(request)
 	}
 
 	/// Takes a non-timer request held by [`Self::pump_timers`].
@@ -1046,7 +1064,7 @@ impl<B: NativeBackend> WasmHost<B> {
 					break;
 				};
 
-				if self.route_timer(&request) {
+				if self.serve(&request) {
 					moved += 1;
 				} else if self.routed_requests.len() < MAX_ROUTED_REQUESTS {
 					self.routed_requests.push_back(request);
