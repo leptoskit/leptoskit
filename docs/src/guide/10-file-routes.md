@@ -141,6 +141,36 @@ pub fn navigator() -> Stack<Route> {
 }
 ```
 
+The built-in tab bar is a plain row of titles, and sheets sit on a plain white layer. Give them your app's look with `bar` and `surface`. `bar` receives every tab and whether it is selected; wrap what you draw for each tab in `bar.link`, which switches tabs the same way the built-in bar does:
+
+```rust
+use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::TabBar;
+use leptoskit_router::navigators::Tabs;
+
+pub fn navigator() -> Tabs<Route> {
+	Tabs::new([
+		Tab::root(Route::Today).title("Today"),
+		Tab::root(Route::Notes).title("Notes"),
+	])
+	.bar(|bar: &TabBar<'_, Route>| {
+		let tabs = bar.items().map(|(tab, selected)| {
+			let class = if selected { "font-bold" } else { "opacity-60" };
+			bar.link(tab, view! { <Text class=class>{tab.label().to_owned()}</Text> })
+		});
+		view! { <View class="flex-row justify-around border-t p-2">{tabs.collect::<Vec<_>>()}</View> }
+	})
+}
+```
+
+`surface` receives the presentation and the route's screen, and returns the whole layer:
+
+```rust
+Stack::new()
+	.present(Presentation::Sheet, |route| matches!(route, Route::Compose(_)))
+	.surface(|_, screen| view! { <View class="absolute inset-x-0 bottom-0 top-16 rounded-t-3xl bg-amber-50">{screen}</View> })
+```
+
 A drawer lists typed roots in a side panel. Open state lives on the router, so it survives re-renders. [`examples/file_routes`](https://github.com/leptoskit/leptoskit/tree/main/examples/file_routes) uses Stack at the root, Tabs under `(tabs)/`, and a Drawer under `settings/`.
 
 ### Deep links and system Back

@@ -5,6 +5,7 @@ use leptoskit_native::HeadlessBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeSurface;
 use leptoskit_native::components::Text;
+use leptoskit_native::components::View;
 use leptoskit_router::__private::decode;
 use leptoskit_router::ActivationRef;
 use leptoskit_router::Href;
@@ -30,6 +31,7 @@ use leptoskit_router::navigators::Presentation;
 use leptoskit_router::navigators::Stack;
 use leptoskit_router::navigators::StackGesture;
 use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::TabBar;
 use leptoskit_router::navigators::TabPlacement;
 use leptoskit_router::navigators::Tabs;
 use leptoskit_router::navigators::href_matches_root;
@@ -165,6 +167,61 @@ fn tabs_select_by_href_prefix_and_replace_on_press() {
 	assert_eq!(router.current(), Screen::Notes);
 	// Replace drops the note entry, so Back returns to Home — not the note.
 	assert_eq!(router.previous(), Some(Screen::Home));
+}
+
+#[test]
+fn tabs_draw_a_custom_bar_that_still_replaces() {
+	let tabs = Tabs::new([
+		Tab::root(Screen::Home).title("Today"),
+		Tab::root(Screen::Notes).title("Notes"),
+	])
+	.bar(|bar: &TabBar<'_, Screen>| {
+		let links = bar.items().map(|(tab, selected)| {
+			let mark = if selected { "selected" } else { "idle" };
+			bar.link(tab, Text(format!("{} {mark}", tab.label())))
+		});
+		View().test_id("custom-bar").children(links)
+	});
+	assert!(format!("{tabs:?}").contains("bar: true"));
+
+	let router = Router::<Screen>::new(Screen::Home);
+	router.navigate(Screen::Note(NoteRoute { note: 1 }));
+	let shell = tabs
+		.into_navigator()
+		.shell(Text("body".to_owned()), &router, &router.current());
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&shell);
+	let root = surface.root().unwrap();
+	assert!(find_test_id(&surface, root, "custom-bar").is_some());
+	assert!(find_test_id(&surface, root, "tabs-bar").is_none());
+	let notes = find_test_id(&surface, root, "tab-notes").expect("notes link");
+	surface.dispatch_event(notes, &NativeEvent::Press);
+	assert_eq!(router.current(), Screen::Notes);
+	assert_eq!(router.previous(), Some(Screen::Home));
+}
+
+#[test]
+fn stack_draws_a_custom_surface_for_sheets() {
+	let stack = Stack::new()
+		.present(Presentation::Sheet, |route| {
+			matches!(route, Screen::Compose)
+		})
+		.surface(|presentation, children| {
+			assert_eq!(presentation, Presentation::Sheet);
+			View().test_id("paper").child(children)
+		});
+	assert!(format!("{stack:?}").contains("surface: true"));
+
+	let router = Router::<Screen>::new(Screen::Home);
+	router.navigate(Screen::Compose);
+	let shell = stack.shell(Text("compose".to_owned()), &router, &Screen::Compose);
+	let mut surface = NativeSurface::new(HeadlessBackend::new());
+	surface.set_root(&shell);
+	let root = surface.root().unwrap();
+	// The layer keeps the stack's test id, so tests that find the sheet still
+	// do.
+	assert!(find_test_id(&surface, root, "stack-sheet").is_some());
+	assert!(find_test_id(&surface, root, "stack-overlay").is_some());
 }
 
 #[test]
