@@ -64,6 +64,7 @@ in
       xpkgs.mdt
       xpkgs.monochange
       xpkgs.monostyle
+      xpkgs.swift-format
       zip
       zizmor
     ]
@@ -95,6 +96,12 @@ in
     else
       export PATH="$DEVENV_PROFILE/bin:$PATH"
     fi
+  ''
+  + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+    # The native Rive runtime links libstdc++. Nix's dynamic linker does not
+    # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
+    # for `cargo nextest` and other linked test binaries.
+    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless

@@ -12,12 +12,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "The leptoskit AppKit backend: renders leptoskit element trees as real macOS views."
 
-[dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 leptoskit_native = { workspace = true }
 leptoskit_yoga = { workspace = true }
 thiserror = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core", "NSAccessibilityConstants", "NSAccessibilityProtocols", "NSActionCell", "NSApplication", "NSAppearance", "NSAttributedString", "NSBitmapImageRep", "NSButton", "NSButtonCell", "NSCell", "NSClipView", "NSColor", "NSColorSpace", "NSControl", "NSEvent", "NSFont", "NSFontDescriptor", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSImageView", "NSParagraphStyle", "NSProgressIndicator", "NSResponder", "NSRunningApplication", "NSScrollView", "NSSecureTextField", "NSSlider", "NSSwitch", "NSStringDrawing", "NSText", "NSTextContent", "NSTextField", "NSTextFieldCell", "NSView", "NSWindow"] }
 objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes"] }
