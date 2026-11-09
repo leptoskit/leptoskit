@@ -19,6 +19,7 @@ use serde::Serialize;
 pub const PAGE: u32 = 50;
 
 /// One message, as every screen shows it.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MessageView {
 	pub id: Id<huddle_db::Message>,

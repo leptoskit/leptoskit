@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::Person;
 
 /// A channel in the sidebar.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelCard {
 	pub id: Id<Channel>,

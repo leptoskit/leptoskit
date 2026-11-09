@@ -39,3 +39,6 @@ pub use writer::Writer;
 pub mod pod {
 	pub use leptoskit_pod_macros::data;
 }
+
+#[cfg(test)]
+mod lib_tests;

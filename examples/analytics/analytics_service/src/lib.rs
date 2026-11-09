@@ -101,6 +101,7 @@ pub static POSTGRES_MIGRATIONS: &[leptoskit_db::Migration] =
 	leptoskit_db::migrations!("migrations-postgres");
 
 /// How often each event happened in the period.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EventCount {
 	pub name: String,
@@ -108,6 +109,7 @@ pub struct EventCount {
 }
 
 /// One day's events and distinct visitors.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DayCount {
 	/// The day, as `YYYY-MM-DD` in UTC.
@@ -117,6 +119,7 @@ pub struct DayCount {
 }
 
 /// What happened over the last few days.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EventSummary {
 	/// How many days it covers, today included.
@@ -134,6 +137,7 @@ pub struct EventSummary {
 }
 
 /// One event, for the app's own screens.
+#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecentEvent {
 	pub name: String,

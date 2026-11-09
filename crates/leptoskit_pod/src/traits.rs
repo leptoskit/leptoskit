@@ -1,5 +1,7 @@
 //! Encode / decode traits for Pod types.
 
+use std::collections::BTreeMap;
+
 use crate::Error;
 use crate::Reader;
 use crate::Result;
@@ -64,14 +66,17 @@ impl_fixed! {
 
 impl PodEncode for usize {
 	fn encode(&self, w: &mut Writer) -> Result<()> {
-		u64::try_from(*self).map_err(|_| Error::TooLarge)?.encode(w)
+		// Pod lengths are `u64` on the wire; `usize` always fits on supported
+		// targets.
+		(*self as u64).encode(w)
 	}
 }
 
 impl<'a> PodDecode<'a> for usize {
 	fn decode(r: &mut Reader<'a>) -> Result<Self> {
-		let value = u64::decode(r)?;
-		usize::try_from(value).map_err(|_| Error::TooLarge)
+		// Pod lengths are `u64` on the wire; `usize` always fits on supported
+		// targets.
+		Ok(u64::decode(r)? as usize)
 	}
 }
 
@@ -181,6 +186,30 @@ impl<'a, T: PodDecode<'a>> PodDecode<'a> for Vec<T> {
 		let mut out = Vec::new();
 		for _ in 0..len {
 			out.push(T::decode(r)?);
+		}
+		Ok(out)
+	}
+}
+
+impl<K: PodEncode + Ord, V: PodEncode> PodEncode for BTreeMap<K, V> {
+	fn encode(&self, w: &mut Writer) -> Result<()> {
+		w.vec_len(self.len())?;
+		for (key, value) in self {
+			key.encode(w)?;
+			value.encode(w)?;
+		}
+		Ok(())
+	}
+}
+
+impl<'a, K: PodDecode<'a> + Ord, V: PodDecode<'a>> PodDecode<'a> for BTreeMap<K, V> {
+	fn decode(r: &mut Reader<'a>) -> Result<Self> {
+		let len = r.vec_len()?;
+		let mut out = BTreeMap::new();
+		for _ in 0..len {
+			let key = K::decode(r)?;
+			let value = V::decode(r)?;
+			out.insert(key, value);
 		}
 		Ok(out)
 	}

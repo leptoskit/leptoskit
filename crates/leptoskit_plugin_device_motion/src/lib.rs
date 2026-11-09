@@ -9,7 +9,8 @@
 //! `guest::DeviceMotion` rather than resolving the plugin on every call. iOS
 //! uses `CoreMotion` device motion, Android fuses accelerometer, gravity,
 //! gyroscope and rotation-vector sensors, desktop has no sensor, and the
-//! browser uses `DeviceMotionEvent` with `DeviceOrientationEvent` for attitude.
+//! browser uses `DeviceMotionEvent` with `DeviceOrientationEvent` for
+//! attitude.
 //!
 //! <!-- {/p_device_motionSummary} -->
 
