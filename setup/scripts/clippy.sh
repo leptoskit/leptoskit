@@ -34,6 +34,8 @@ host() {
 	cargo clippy "${deny[@]}" --workspace --all-features --all-targets
 	echo "clippy: examples/file_routes"
 	cargo clippy "${deny[@]}" --manifest-path examples/file_routes/Cargo.toml --all-targets
+	echo "clippy: examples/dev_client"
+	cargo clippy "${deny[@]}" --manifest-path examples/dev_client/Cargo.toml --all-targets
 	echo "clippy: devtools"
 	cargo clippy "${deny[@]}" --manifest-path devtools/Cargo.toml --all-targets
 }

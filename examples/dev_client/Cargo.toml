@@ -1,0 +1,79 @@
+[package]
+name = "dev_client"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The LeptosKit app: scan a dev QR code and run that guest on a phone."
+
+[workspace]
+members = ["android", "ios"]
+resolver = "2"
+
+[workspace.dependencies]
+leptos = { version = "0.9.0-rc0", default-features = false }
+leptoskit = { path = "../../crates/leptoskit" }
+leptoskit_plugin_dev_client = { path = "../../crates/leptoskit_plugin_dev_client" }
+leptoskit_router = { path = "../../crates/leptoskit_router" }
+leptoskit_testing = { path = "../../crates/leptoskit_testing" }
+wasm-bindgen = "0.2"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+leptos = { workspace = true, features = ["csr"], optional = true }
+leptoskit = { workspace = true }
+leptoskit_plugin_dev_client = { workspace = true }
+leptoskit_router = { workspace = true }
+reactive_graph = "0.3.0-rc0"
+wasm-bindgen = { workspace = true, optional = true }
+
+[features]
+default = []
+web = ["dep:leptos", "dep:wasm-bindgen", "leptoskit/web", "leptoskit_router/web"]
+native = ["leptoskit/guest", "leptoskit_plugin_dev_client/guest"]
+ios = ["native", "leptoskit/ios"]
+android = ["native", "leptoskit/android"]
+
+[dev-dependencies]
+leptoskit_testing = { workspace = true }
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+rust_2021_compatibility = { level = "deny", priority = -1 }
+rust_2024_compatibility = { level = "deny", priority = -1 }
+unsafe_code = "deny"
+unstable_features = "deny"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
+variant_size_differences = "warn"
+
+[workspace.lints.clippy]
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+blocks_in_conditions = "allow"
+cargo_common_metadata = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+expl_impl_clone_on_copy = "allow"
+items_after_statements = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+no_effect_underscore_binding = "allow"
+tabs_in_doc_comments = "allow"
+too_many_lines = "allow"
+wildcard_dependencies = "deny"
+wildcard_imports = "allow"

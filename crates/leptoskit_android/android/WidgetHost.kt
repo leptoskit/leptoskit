@@ -508,7 +508,9 @@ class WidgetHost(
                 }
 
                 else -> {
-                    error("Custom Android widgets require a registered native implementation: $kind")
+                    // Same as a plain view: an empty container. A custom kind
+                    // used to stop the host, which closed the app.
+                    null
                 }
             }
         val node = Node(id, kind, outer, control, content, props, scroll)

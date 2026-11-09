@@ -2,15 +2,35 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: contents
 ---
-//! The root layout: chrome around every screen.
+//! The root layout: a tab bar around every screen.
 
 use leptoskit::prelude::Children;
 use leptoskit::prelude::Element;
 use leptoskit::prelude::View;
 use leptoskit::prelude::component;
+use leptoskit_router::navigators::Tab;
+use leptoskit_router::navigators::TabPlacement;
+use leptoskit_router::navigators::Tabs;
+
+use crate::routes::Home;
+use crate::routes::Kit;
+use crate::routes::Platforms;
+use crate::routes::Route;
+
+/// Home, the control kit, and the platform list.
+pub fn navigator() -> Tabs<Route> {
+	Tabs::new([
+		Tab::root(Home).title("Home"),
+		Tab::root(Kit).title("Kit"),
+		Tab::root(Platforms).title("Platforms"),
+	])
+	.placement(TabPlacement::Bottom)
+}
 
 /// Wraps the matched route in the app's frame.
 #[component]
 pub fn Layout(children: Children) -> Element {
-	View().class("flex-1").children(children)
+	View()
+		.class("min-h-screen flex-1 bg-slate-950")
+		.children(children)
 }

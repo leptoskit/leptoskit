@@ -556,10 +556,12 @@ in
             cargo nextest run --workspace --all-features
           dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+          cargo nextest run --manifest-path examples/dev_client/Cargo.toml
           exec cargo nextest run --manifest-path devtools/Cargo.toml
         fi
         cargo nextest run --workspace --all-features
         cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        cargo nextest run --manifest-path examples/dev_client/Cargo.toml
         cargo nextest run --manifest-path devtools/Cargo.toml
       '';
       description = "Run cargo tests with nextest.";
@@ -574,6 +576,9 @@ in
         cargo test --manifest-path examples/file_routes/Cargo.toml \
           --test routes --test navigation --test pages
         cargo test --manifest-path examples/file_routes/Cargo.toml --doc
+        (cd examples/dev_client && cargo run --locked --manifest-path ../../Cargo.toml \
+          --package leptoskit_cli --bin leptoskit -- routes --check)
+        cargo test --manifest-path examples/dev_client/Cargo.toml
         # Huddle: its web client through the CLI, its screens, and two people
         # against its server.
         (cd examples/huddle && cargo run --locked --manifest-path ../../Cargo.toml \

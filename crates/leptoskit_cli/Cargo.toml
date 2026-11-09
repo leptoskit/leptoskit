@@ -81,6 +81,7 @@ leptoskit_platform = { workspace = true }
 leptoskit_platform_harmonyos = { workspace = true }
 leptoskit_platform_oculus = { workspace = true }
 leptoskit_plugin = { workspace = true }
+leptoskit_plugin_dev_client = { workspace = true }
 leptoskit_plugin_router = { workspace = true }
 leptoskit_router_codegen = { workspace = true }
 leptoskit_rpc_codegen = { workspace = true, features = ["generators"] }
@@ -94,6 +95,7 @@ plist = "1.10"
 # password itself never reaches Postgres or its logs.
 postgres-protocol = { workspace = true }
 postgresql_embedded = { workspace = true }
+qrcode = { workspace = true }
 rayon = { workspace = true }
 # Draws an SVG app icon; its text features are off, as icons are shapes.
 resvg = { version = "0.49", default-features = false }

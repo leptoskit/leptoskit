@@ -554,6 +554,10 @@ pub(crate) fn sdk_dependency(
 }
 
 /// Assembles every template before creating any destination files.
+#[expect(
+	clippy::too_many_lines,
+	reason = "the starter file list is one table, including the kit and platforms screens"
+)]
 fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(String, Vec<u8>)>> {
 	let name = &config.app.name;
 	let app = format!("{name}_app");
@@ -616,6 +620,11 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 			format!("{app}/src/routes.rs"),
 			generated_routes_module(&[
 				("index.rs", include_str!("new_project/templates/index.rs")),
+				("kit.rs", include_str!("new_project/templates/kit.rs")),
+				(
+					"platforms.rs",
+					include_str!("new_project/templates/platforms.rs"),
+				),
 				(
 					"_layout.rs",
 					include_str!("new_project/templates/layout.rs"),
@@ -629,6 +638,14 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		(
 			format!("{app}/src/routes/index.rs"),
 			include_str!("new_project/templates/index.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/kit.rs"),
+			include_str!("new_project/templates/kit.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/platforms.rs"),
+			include_str!("new_project/templates/platforms.rs").into(),
 		),
 		(
 			format!("{app}/src/routes/_layout.rs"),
@@ -1598,7 +1615,7 @@ All six destinations are enabled in `leptoskit.toml`. Each build activates exact
 
 ## File routes
 
-Screens live under `{name}_app/src/routes/`. The `router` plugin regenerates `{name}_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
+Screens live under `{name}_app/src/routes/`. The starter opens on Home, with Kit and Platforms beside it in the tab bar. The `router` plugin regenerates `{name}_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
 
 For a module that is not a route — a reusable component, for example — `leptoskit::platform_module!` still picks a per-platform file (`thing.ios.rs`, `thing.android.rs`, …) beside the shared one. Per-platform *route* files are not supported yet; use `cfg!(feature = "…")` inside a route when one platform must differ.
 
@@ -1663,6 +1680,8 @@ pub fn verify_scaffold(dir: &Path) -> Result<()> {
 		format!("{name}_app/src/lib.rs"),
 		format!("{name}_app/src/routes.rs"),
 		format!("{name}_app/src/routes/index.rs"),
+		format!("{name}_app/src/routes/kit.rs"),
+		format!("{name}_app/src/routes/platforms.rs"),
 		format!("{name}_app/src/routes/_layout.rs"),
 		format!("{name}_app/src/routes/+not-found.rs"),
 		format!("{name}_backend/src/rpc/mod.rs"),
@@ -1749,6 +1768,11 @@ mod tests {
 	fn the_starter_routes_generate_a_home_navigation_module() {
 		let source = super::generated_routes_module(&[
 			("index.rs", include_str!("new_project/templates/index.rs")),
+			("kit.rs", include_str!("new_project/templates/kit.rs")),
+			(
+				"platforms.rs",
+				include_str!("new_project/templates/platforms.rs"),
+			),
 			(
 				"_layout.rs",
 				include_str!("new_project/templates/layout.rs"),
@@ -1762,6 +1786,9 @@ mod tests {
 		assert!(source.contains("@generated"), "{source}");
 		assert!(source.contains("pub type Navigation"), "{source}");
 		assert!(source.contains("Route::Home"), "{source}");
+		assert!(source.contains("Route::Kit"), "{source}");
+		assert!(source.contains("Route::Platforms"), "{source}");
+		assert!(source.contains("navigator()"), "{source}");
 		assert!(source.contains("NotFound"), "{source}");
 	}
 
