@@ -73,7 +73,7 @@ Ops that name a part, a clip, or a morph target apply even when they arrive befo
 
 ## Models
 
-Scenes load glTF 2.0: `.glb` files, or `.gltf` files with their buffers and images beside them or embedded. Meshes may be compressed with meshopt (`EXT_meshopt_compression`) and quantized (`KHR_mesh_quantization`), as `gltfpack` writes them. Skins, morph targets, and animations of transforms and morph weights (step, linear, and cubic spline) play; metallic-roughness, unlit, and emissive materials draw, with opaque, masked, and blended alpha; textures are PNG or JPEG. A file that needs any other required extension, such as Draco, fails to load with an event that says which.
+Scenes load glTF 2.0: `.glb` files, or `.gltf` files with their buffers and images beside them or embedded. Meshes may be compressed with meshopt (`EXT_meshopt_compression`) and quantized (`KHR_mesh_quantization`), with texture coordinates scaled and offset by `KHR_texture_transform`, as `gltfpack` writes them. A material's textures share one transform: the first one found, starting from its base color texture. Skins, morph targets, and animations of transforms and morph weights (step, linear, and cubic spline) play; metallic-roughness, unlit, and emissive materials draw, with opaque, masked, and blended alpha; textures are PNG or JPEG. A file that needs any other required extension, such as Draco, fails to load with an event that says which.
 
 A model loaded by several scenes, or spawned many times, is read and uploaded to the GPU once. Identical static parts draw together in one call.
 
@@ -101,4 +101,4 @@ Native apps draw scenes in their own host, never in the app's Wasm code, so a bu
 
 A scene may hold 4,096 nodes and refer to 64 models; an app may hold 16 scenes. A model may be 128 MiB, 4 million vertices, and 16,384 nodes, with 64 morph targets per mesh, 256 joints per skin, and textures up to 4,096 pixels a side. Numbers in ops are bounded to finite, sensible ranges, and model paths must stay inside the app's assets.
 
-Not supported yet: shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, `KHR_texture_transform`, texture coordinates beyond the first set, and stereo through multiview.
+Not supported yet: shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, a different `KHR_texture_transform` for each texture of one material, texture coordinates beyond the first set, and stereo through multiview.

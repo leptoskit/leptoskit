@@ -1,6 +1,7 @@
 //! The glTF 2.0 loader: binary `.glb` and JSON `.gltf` files, with
 //! `EXT_meshopt_compression`, `KHR_mesh_quantization`,
-//! `KHR_materials_emissive_strength`, and `KHR_materials_unlit`.
+//! `KHR_materials_emissive_strength`, `KHR_materials_unlit`, and
+//! `KHR_texture_transform`.
 
 mod json;
 pub mod meshopt;
@@ -52,6 +53,7 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
 	"KHR_mesh_quantization",
 	"KHR_materials_emissive_strength",
 	"KHR_materials_unlit",
+	"KHR_texture_transform",
 ];
 
 /// glTF's accessor component types, which are OpenGL's type enums.
@@ -707,6 +709,85 @@ fn texture_ref(
 	}))
 }
 
+/// The texture coordinate set a texture reads: its own, unless its
+/// `KHR_texture_transform` names another.
+fn coordinate_set(tex_coord: u32, extensions: &json::TextureInfoExtensions) -> u32 {
+	extensions
+		.texture_transform
+		.as_ref()
+		.and_then(|transform| transform.tex_coord)
+		.unwrap_or(tex_coord)
+}
+
+/// A `KHR_texture_transform`, baked into a primitive's texture coordinates
+/// as they load. Every texture of a material samples the one set the
+/// loader reads, so one transform serves them all: that of the first
+/// texture reading the set, looking at the base color texture first, then
+/// the emissive, metallic-roughness, normal and occlusion ones. gltfpack
+/// gives every texture of a material the same one, the scale and offset
+/// that undo its quantization.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct UvTransform {
+	offset: [f32; 2],
+	rotation: f32,
+	scale: [f32; 2],
+}
+
+impl UvTransform {
+	fn of_primitive(document: &Document<'_>, primitive: &json::Primitive) -> Option<Self> {
+		let material = document.root.materials.get(primitive.material?)?;
+		let pbr = &material.pbr_metallic_roughness;
+		let infos = [
+			pbr.base_color_texture
+				.as_ref()
+				.map(|t| (t.tex_coord, &t.extensions)),
+			material
+				.emissive_texture
+				.as_ref()
+				.map(|t| (t.tex_coord, &t.extensions)),
+			pbr.metallic_roughness_texture
+				.as_ref()
+				.map(|t| (t.tex_coord, &t.extensions)),
+			material
+				.normal_texture
+				.as_ref()
+				.map(|t| (t.tex_coord, &t.extensions)),
+			material
+				.occlusion_texture
+				.as_ref()
+				.map(|t| (t.tex_coord, &t.extensions)),
+		];
+
+		infos
+			.into_iter()
+			.flatten()
+			.find(|(tex_coord, extensions)| coordinate_set(*tex_coord, extensions) == 0)
+			.and_then(|(_, extensions)| extensions.texture_transform.as_ref())
+			.map(Self::new)
+	}
+
+	fn new(transform: &json::TextureTransform) -> Self {
+		let finite = |value: f32, fallback: f32| if value.is_finite() { value } else { fallback };
+
+		Self {
+			offset: transform.offset.map(|value| finite(value, 0.0)),
+			rotation: finite(transform.rotation, 0.0),
+			scale: transform.scale.map(|value| finite(value, 1.0)),
+		}
+	}
+
+	/// The specification's matrix: translation, then rotation, then scale.
+	fn apply(self, [u, v]: [f32; 2]) -> [f32; 2] {
+		let (sin, cos) = self.rotation.sin_cos();
+		let (u, v) = (u * self.scale[0], v * self.scale[1]);
+
+		[
+			self.offset[0] + cos * u + sin * v,
+			self.offset[1] - sin * u + cos * v,
+		]
+	}
+}
+
 /// Reads the materials, then appends a default one for primitives that
 /// name none.
 fn load_materials(
@@ -739,20 +820,20 @@ fn load_materials(
 			base_color_texture: slot(
 				pbr.base_color_texture
 					.as_ref()
-					.map(|t| (t.index, t.tex_coord)),
+					.map(|t| (t.index, coordinate_set(t.tex_coord, &t.extensions))),
 			)?,
 			metallic: finite(pbr.metallic_factor, 1.0).clamp(0.0, 1.0),
 			roughness: finite(pbr.roughness_factor, 1.0).clamp(0.0, 1.0),
 			metallic_roughness_texture: slot(
 				pbr.metallic_roughness_texture
 					.as_ref()
-					.map(|t| (t.index, t.tex_coord)),
+					.map(|t| (t.index, coordinate_set(t.tex_coord, &t.extensions))),
 			)?,
 			normal_texture: slot(
 				material
 					.normal_texture
 					.as_ref()
-					.map(|t| (t.index, t.tex_coord)),
+					.map(|t| (t.index, coordinate_set(t.tex_coord, &t.extensions))),
 			)?,
 			normal_scale: material
 				.normal_texture
@@ -762,7 +843,7 @@ fn load_materials(
 				material
 					.occlusion_texture
 					.as_ref()
-					.map(|t| (t.index, t.tex_coord)),
+					.map(|t| (t.index, coordinate_set(t.tex_coord, &t.extensions))),
 			)?,
 			occlusion_strength: material
 				.occlusion_texture
@@ -775,7 +856,7 @@ fn load_materials(
 				material
 					.emissive_texture
 					.as_ref()
-					.map(|t| (t.index, t.tex_coord)),
+					.map(|t| (t.index, coordinate_set(t.tex_coord, &t.extensions))),
 			)?,
 			emissive_strength: material
 				.extensions
@@ -1011,10 +1092,16 @@ fn load_primitive(
 		None => computed_normals(&positions, &indices),
 	};
 
-	let uvs = match reader.attribute("TEXCOORD_0") {
+	let mut uvs = match reader.attribute("TEXCOORD_0") {
 		Some(index) => reader.read(index, 2)?,
 		None => vec![0.0; count * 2],
 	};
+
+	if let Some(transform) = UvTransform::of_primitive(document, primitive) {
+		for uv in uvs.as_chunks_mut::<2>().0 {
+			*uv = transform.apply(*uv);
+		}
+	}
 
 	let colors = reader.colors()?;
 
@@ -1528,6 +1615,57 @@ mod tests {
 		assert_eq!(component(&[0xff, 0x7f], 5122, true), 1.0);
 		assert_eq!(component(&[0xff, 0xff], 5123, true), 1.0);
 		assert_eq!(component(&[7], 5121, false), 7.0);
+	}
+
+	/// One triangle with texture coordinates (0, 0), (1, 0) and (0, 1), and
+	/// a material whose base color texture carries `transform`.
+	fn transformed_triangle(transform: &str) -> Asset {
+		let json = r#"{"asset":{"version":"2.0"},
+			"buffers":[{"byteLength":60,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/"}],
+			"bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24}],
+			"accessors":[
+				{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+				{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}],
+			"textures":[{}],
+			"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,
+				"extensions":{"KHR_texture_transform":TRANSFORM}}}}],
+			"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
+			"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0}"#
+			.replace("TRANSFORM", transform);
+
+		load(json.as_bytes(), &mut |_| Err("none".into())).unwrap()
+	}
+
+	fn uvs(asset: &Asset) -> Vec<[f32; 2]> {
+		asset.vertices.iter().map(|vertex| vertex.uv).collect()
+	}
+
+	#[test]
+	fn texture_transforms_are_baked_into_texture_coordinates() {
+		let asset = transformed_triangle(r#"{"offset":[0.25,0.5],"scale":[0.5,0.25]}"#);
+		assert_eq!(uvs(&asset), [[0.25, 0.5], [0.75, 0.5], [0.25, 0.75]]);
+
+		// A quarter turn carries u onto -v and v onto u.
+		let asset = transformed_triangle(r#"{"rotation":1.5707964}"#);
+		for (uv, expected) in uvs(&asset)
+			.iter()
+			.zip([[0.0, 0.0], [0.0, -1.0], [1.0, 0.0]])
+		{
+			assert!(
+				(uv[0] - expected[0]).abs() < 1.0e-6 && (uv[1] - expected[1]).abs() < 1.0e-6,
+				"{uv:?}"
+			);
+		}
+
+		// A transform that reads another set leaves this one alone.
+		let asset = transformed_triangle(r#"{"offset":[0.5,0.5],"texCoord":1}"#);
+		assert_eq!(uvs(&asset), [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+	}
+
+	#[test]
+	fn a_file_requiring_texture_transforms_loads() {
+		let json = br#"{"asset":{"version":"2.0"},"extensionsRequired":["KHR_texture_transform"]}"#;
+		assert!(load(json, &mut |_| Err("none".into())).is_ok());
 	}
 
 	#[test]

@@ -232,6 +232,7 @@ impl Default for Pbr {
 pub struct TextureInfo {
 	pub index: usize,
 	pub tex_coord: u32,
+	pub extensions: TextureInfoExtensions,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +241,7 @@ pub struct NormalTextureInfo {
 	pub index: usize,
 	pub tex_coord: u32,
 	pub scale: f32,
+	pub extensions: TextureInfoExtensions,
 }
 
 impl Default for NormalTextureInfo {
@@ -248,6 +250,7 @@ impl Default for NormalTextureInfo {
 			index: 0,
 			tex_coord: 0,
 			scale: 1.0,
+			extensions: TextureInfoExtensions::default(),
 		}
 	}
 }
@@ -258,6 +261,7 @@ pub struct OcclusionTextureInfo {
 	pub index: usize,
 	pub tex_coord: u32,
 	pub strength: f32,
+	pub extensions: TextureInfoExtensions,
 }
 
 impl Default for OcclusionTextureInfo {
@@ -266,6 +270,37 @@ impl Default for OcclusionTextureInfo {
 			index: 0,
 			tex_coord: 0,
 			strength: 1.0,
+			extensions: TextureInfoExtensions::default(),
+		}
+	}
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct TextureInfoExtensions {
+	#[serde(rename = "KHR_texture_transform")]
+	pub texture_transform: Option<TextureTransform>,
+}
+
+/// `KHR_texture_transform`: texture coordinates scaled, then rotated, then
+/// offset, and optionally read from another set. gltfpack writes one for
+/// every texture whose coordinates it quantizes.
+#[derive(Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TextureTransform {
+	pub offset: [f32; 2],
+	pub rotation: f32,
+	pub scale: [f32; 2],
+	pub tex_coord: Option<u32>,
+}
+
+impl Default for TextureTransform {
+	fn default() -> Self {
+		Self {
+			offset: [0.0; 2],
+			rotation: 0.0,
+			scale: [1.0; 2],
+			tex_coord: None,
 		}
 	}
 }
