@@ -197,6 +197,11 @@ pub fn suite(request: SuiteRequest<'_>) -> Result<Suite, Error> {
 			},
 		);
 	}
+	// `simctl install` refuses a simulator that is shut down. Booting one that
+	// is already up is still success: the boot step treats "Booted" as done.
+	if request.target.kind == TargetKind::IosSimulator && request.install.is_some() {
+		steps.insert(0, Step::Boot);
+	}
 
 	let mut target = request.target;
 	let mut notes = Vec::new();
@@ -525,14 +530,37 @@ pub fn open_plan(kind: TargetKind, identifier: &str) -> Result<ToolPlan, Error> 
 	}
 }
 
+/// The W3C pointer type a UI session should send for `kind`.
+///
+/// Mac2 accepts mouse actions only. The other drivers take touch, and the
+/// iOS driver rewrites every pointer to touch before it reaches the device.
+#[must_use]
+pub fn session_pointer_type(kind: TargetKind) -> &'static str {
+	if kind == TargetKind::Macos {
+		"mouse"
+	} else {
+		"touch"
+	}
+}
+
 /// W3C actions for a tap that does not move.
 ///
 /// # Errors
 ///
 /// A coordinate is negative.
 pub fn tap_actions(x: i64, y: i64) -> Result<Value, Error> {
+	tap_actions_with("touch", x, y)
+}
+
+/// [`tap_actions`] using `pointer_type` (`"touch"` or `"mouse"`).
+///
+/// # Errors
+///
+/// A coordinate is negative.
+pub fn tap_actions_with(pointer_type: &str, x: i64, y: i64) -> Result<Value, Error> {
 	point(x, y)?;
 	Ok(pointer(
+		pointer_type,
 		"leptoskit-tap",
 		&json!([
 			{"type": "pointerMove", "duration": 0, "x": x, "y": y},
@@ -549,9 +577,24 @@ pub fn tap_actions(x: i64, y: i64) -> Result<Value, Error> {
 ///
 /// A coordinate is negative, or the duration is zero.
 pub fn long_press_actions(x: i64, y: i64, duration_ms: u64) -> Result<Value, Error> {
+	long_press_actions_with("touch", x, y, duration_ms)
+}
+
+/// [`long_press_actions`] using `pointer_type`.
+///
+/// # Errors
+///
+/// A coordinate is negative, or the duration is zero.
+pub fn long_press_actions_with(
+	pointer_type: &str,
+	x: i64,
+	y: i64,
+	duration_ms: u64,
+) -> Result<Value, Error> {
 	point(x, y)?;
 	positive_duration(duration_ms)?;
 	Ok(pointer(
+		pointer_type,
 		"leptoskit-long-press",
 		&json!([
 			{"type": "pointerMove", "duration": 0, "x": x, "y": y},
@@ -568,10 +611,25 @@ pub fn long_press_actions(x: i64, y: i64, duration_ms: u64) -> Result<Value, Err
 ///
 /// A coordinate is negative, or the duration is zero.
 pub fn pan_actions(start: Point, end: Point, duration_ms: u64) -> Result<Value, Error> {
+	pan_actions_with("touch", start, end, duration_ms)
+}
+
+/// [`pan_actions`] using `pointer_type`.
+///
+/// # Errors
+///
+/// A coordinate is negative, or the duration is zero.
+pub fn pan_actions_with(
+	pointer_type: &str,
+	start: Point,
+	end: Point,
+	duration_ms: u64,
+) -> Result<Value, Error> {
 	point(start.x, start.y)?;
 	point(end.x, end.y)?;
 	positive_duration(duration_ms)?;
 	Ok(pointer(
+		pointer_type,
 		"leptoskit-pan",
 		&json!([
 			{"type": "pointerMove", "duration": 0, "x": start.x, "y": start.y},
@@ -594,10 +652,27 @@ pub fn pinch_actions(
 	end_span: i64,
 	duration_ms: u64,
 ) -> Result<Value, Error> {
+	pinch_actions_with("touch", x, y, start_span, end_span, duration_ms)
+}
+
+/// [`pinch_actions`] using `pointer_type`.
+///
+/// # Errors
+///
+/// A coordinate is negative, a span is under 2, or the duration is zero.
+pub fn pinch_actions_with(
+	pointer_type: &str,
+	x: i64,
+	y: i64,
+	start_span: i64,
+	end_span: i64,
+	duration_ms: u64,
+) -> Result<Value, Error> {
 	let points = pinch_points(x, y, start_span, end_span)?;
 	positive_duration(duration_ms)?;
 	Ok(json!([
 		pointer_source(
+			pointer_type,
 			"leptoskit-pinch-a",
 			&json!([
 				{"type": "pointerMove", "duration": 0, "x": points.0, "y": y},
@@ -607,6 +682,7 @@ pub fn pinch_actions(
 			])
 		),
 		pointer_source(
+			pointer_type,
 			"leptoskit-pinch-b",
 			&json!([
 				{"type": "pointerMove", "duration": 0, "x": points.1, "y": y},
@@ -616,6 +692,22 @@ pub fn pinch_actions(
 			])
 		),
 	]))
+}
+
+/// One pointer drag, the shape [`Step::Swipe`](super::Step::Swipe) sends.
+pub fn swipe_actions(pointer_type: &str, start: Point, end: Point, duration_ms: u64) -> Value {
+	pointer(
+		pointer_type,
+		"leptoskit-swipe",
+		&json!([
+			{"type": "pointerMove", "duration": 0, "x": start.x, "y": start.y},
+			{"type": "pointerDown", "button": 0},
+			{"type": "pause", "duration": duration_ms},
+			{"type": "pointerMove", "duration": duration_ms, "origin": "pointer",
+			 "x": end.x - start.x, "y": end.y - start.y},
+			{"type": "pointerUp", "button": 0}
+		]),
+	)
 }
 
 /// adb arguments for a tap.
@@ -941,15 +1033,15 @@ fn xdotool(args: Vec<String>) -> ToolPlan {
 	}
 }
 
-fn pointer(id: &str, actions: &Value) -> Value {
-	json!([pointer_source(id, actions)])
+fn pointer(pointer_type: &str, id: &str, actions: &Value) -> Value {
+	json!([pointer_source(pointer_type, id, actions)])
 }
 
-fn pointer_source(id: &str, actions: &Value) -> Value {
+fn pointer_source(pointer_type: &str, id: &str, actions: &Value) -> Value {
 	json!({
 		"type": "pointer",
 		"id": id,
-		"parameters": {"pointerType": "touch"},
+		"parameters": {"pointerType": pointer_type},
 		"actions": actions,
 	})
 }
@@ -1199,6 +1291,63 @@ mod tests {
 	}
 
 	#[test]
+	fn ios_simulator_sanity_boots_before_simctl_install() {
+		let installed = suite(request(
+			TargetKind::IosSimulator,
+			Some("UDID"),
+			"dev.example.app",
+			Some("/tmp/App.app"),
+			Injector::Driver,
+		))
+		.unwrap();
+		let names: Vec<_> = installed
+			.document
+			.steps
+			.iter()
+			.map(Step::action_name)
+			.collect();
+		assert_eq!(
+			&names[..2],
+			["boot", "install_app"],
+			"a shut-down simulator cannot take simctl install"
+		);
+
+		let running = suite(request(
+			TargetKind::IosSimulator,
+			Some("UDID"),
+			"dev.example.app",
+			None,
+			Injector::Driver,
+		))
+		.unwrap();
+		assert!(
+			running
+				.document
+				.steps
+				.iter()
+				.all(|step| step.action_name() != "boot"),
+			"sanity without an install does not boot"
+		);
+
+		let phone = suite(request(
+			TargetKind::IosDevice,
+			Some("UDID"),
+			"dev.example.app",
+			Some("/tmp/App.ipa"),
+			Injector::Driver,
+		))
+		.unwrap();
+		assert_eq!(phone.document.steps[0].action_name(), "install_app");
+		assert!(
+			phone
+				.document
+				.steps
+				.iter()
+				.all(|step| step.action_name() != "boot")
+		);
+	}
+
+	#[test]
 	fn linux_pointer_injection_skips_pinch_and_screenshots() {
 		let suite = suite(request(
 			TargetKind::Linux,
@@ -1337,7 +1486,18 @@ mod tests {
 	fn driver_actions_hold_drag_and_pinch_past_the_arena_thresholds() {
 		let tap = tap_actions(ORIGIN_X, ORIGIN_Y).unwrap();
 		assert_eq!(tap[0]["actions"][2]["duration"], 50);
-		let hold = long_press_actions(10, 20, HOLD_MS).unwrap();
+		assert_eq!(tap[0]["parameters"]["pointerType"], "touch");
+		let mac = tap_actions_with("mouse", ORIGIN_X, ORIGIN_Y).unwrap();
+		assert_eq!(mac[0]["parameters"]["pointerType"], "mouse");
+		assert_eq!(session_pointer_type(TargetKind::Macos), "mouse");
+		assert_eq!(session_pointer_type(TargetKind::IosSimulator), "touch");
+		assert_eq!(session_pointer_type(TargetKind::IosDevice), "touch");
+		assert_eq!(session_pointer_type(TargetKind::Windows), "touch");
+		assert_eq!(session_pointer_type(TargetKind::Linux), "touch");
+		assert_eq!(session_pointer_type(TargetKind::Android), "touch");
+		assert_eq!(session_pointer_type(TargetKind::Web), "touch");
+		let hold = long_press_actions_with("mouse", 10, 20, HOLD_MS).unwrap();
+		assert_eq!(hold[0]["parameters"]["pointerType"], "mouse");
 		assert_eq!(hold[0]["actions"][2]["duration"], HOLD_MS);
 		let pan = pan_actions(
 			Point { x: 10, y: 20 },
