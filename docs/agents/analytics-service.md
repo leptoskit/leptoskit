@@ -544,7 +544,7 @@ The figures are targets until step 1 measures the core; if one can't be met, the
 
 **The service and the app's server.** Big dependencies stay where they belong: DataFusion and `object_store` only with `columnar`, `sqlparser` only with `service`, and the flag evaluator only with `server-client`. `lk` builds the web client, the native guest, and each service with `--package`, so the service's features never reach the bundles through Cargo's feature unification ([services.md §5](services.md#5-operations-owned-by-a-service) describes how unified workspace builds behave). Step 1 checks the app's server build the same way, and the budget test builds the client on its own.
 
-**Identity on the server.** With [#566](https://github.com/leptoskit/leptoskit/pull/566), the app's server forwards the signed-in person to the service (`lkid1.` tokens), so a browser can watch per-person data ("my events") over the service's socket, and `identify` from the browser can be checked against the signed-in person instead of trusted (`identify = "verified"`). Until #566 lands, `identify` from clients is trusted, as it is in PostHog, and person-scoped reads go through the app's server with `call_as_app`.
+**Identity on the server.** With [#566](https://github.com/leptoskit/leptoskit/pull/566), the app's server forwards the signed-in person to the service (`lkid1.` tokens), so a browser can watch per-person data ("my events") over the service's socket, and `identify` from the browser can be checked against the signed-in person instead of trusted (`identify = "verified"`). Before step 2, `identify` from clients is trusted, as it is in PostHog, and person-scoped reads go through the app's server with `call_as_app`.
 
 ---
 
@@ -674,12 +674,7 @@ Each step is one pull request (or a short stack), with its own tests and a real 
 10. **Errors, pipelines and destinations, alerts and subscriptions, LLM observability, and revenue** (`feat/analytics-errors`, `feat/analytics-pipelines`, `feat/analytics-alerts`). §15.
 11. **PostHog adapter** (`feat/analytics-posthog`). §6's `posthog` feature: PostHog's capture and flags formats translated into the pipeline, PostHog's flag bucketing for imported flags, and an importer for PostHog's event exports.
 
-Dependencies on work in flight:
-
-- **#564** (job claims scoped to registered names, SQLite live feeds across processes): every service-owned job here (compaction, cohorts, retention, deletion, destinations) relies on scoped claims; live insights on SQLite rely on the feed waking across processes only if the service runs more than one process, which SQLite services don't. Step 1 doesn't need it; step 2's jobs do.
-- **#565** (`lk db --service`, Postgres in `lk dev`): step 1's migrations are generated with it; without it, with a temporary `leptoskit.toml`, as the services guide says today.
-- **#562** (Compose and Kamal deploys run in CI): the analytics service is deployed like any service; nothing here changes generators until the admin (step 6) and the `segments`/`replay` volumes, which generators already support.
-- **#566** (identity forwarding): verified `identify` and per-person live data (step 2), and the admin's scoped tokens (step 6). Those parts stay in draft, or stack on its branch, until it merges.
+The work this builds on has merged: #564 (job claims scoped to registered names, SQLite live feeds across processes), which every service-owned job here relies on; #565 (`lk db --service`, Postgres in `lk dev`), which generates step 1's migrations; #562 (Compose and Kamal deploys run in CI), so the service deploys like any other; and #566 (identity forwarding, `ServiceCallers::forwarded_identity` and `lkid1.` tokens), which step 2's verified `identify` and per-person live data and step 6's admin tokens use.
 
 ---
 
@@ -690,7 +685,7 @@ Dependencies on work in flight:
 | Route metrics, browser module, OTLP export (`leptoskit_analytics` today) | built; see [analytics-and-infra-plugins.md](analytics-and-infra-plugins.md#validation). Moves to `leptoskit_apm` in step 1                                                                                  |
 | Reference service (`examples/analytics/analytics_service`)               | built: `capture`, live `summary`, app-only `recent`, SQLite and Postgres migrations; 13 tests pass on `main` at `7e8a7c7b` (`cargo nextest run -p analytics_service -p leptoskit_analytics --all-features`) |
 | Deployment console (`leptoskit_deploy_console`, `lk console`)            | built: dashboard, `/api/v1`, owner key and scoped tokens, fleet analytics ingest; see [management-service.md](management-service.md)                                                                        |
-| Services runtime, service jobs, live layer, deploy generators            | built; see [services.md §11](services.md#11-status). Identity forwarding is #566, open                                                                                                                      |
+| Services runtime, service jobs, live layer, deploy generators            | built; see [services.md §11](services.md#11-status). Identity forwarding merged in #566                                                                                                                     |
 | Crate split, `leptoskit_apm`                                             | not started (step 1)                                                                                                                                                                                        |
 | Ingestion pipeline, binary batch format, JSON capture                    | not started (step 1)                                                                                                                                                                                        |
 | Rust clients, offline queue                                              | not started (step 1)                                                                                                                                                                                        |
