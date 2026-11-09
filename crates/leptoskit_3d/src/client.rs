@@ -273,6 +273,16 @@ impl Scene {
 		});
 	}
 
+	/// Sets how a part (or, with `None`, the whole instance) meets what is
+	/// behind it: [`Blend::Additive`] for light that adds to it.
+	pub fn set_blend(&self, node: NodeId, part: Option<&str>, blend: Blend) {
+		self.push(Op::SetBlend {
+			node,
+			part: part.map(str::to_owned),
+			blend,
+		});
+	}
+
 	/// Changes how a part (or, with `None`, the whole instance) draws.
 	pub fn set_material(&self, node: NodeId, part: Option<&str>, material: MaterialOverride) {
 		self.push(Op::SetMaterial {

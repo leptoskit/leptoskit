@@ -61,6 +61,7 @@ Everything that changes a scene is an op, sent with the next `flush`:
 | change a face or a robe's shape         | `set_morph_weight(node, "smile", 1.0)`, by the morph target's name                          |
 | turn a head or swing a leg yourself     | `set_part_offset(node, "head", Transform::IDENTITY.with_yaw(0.4), 0.1)`, by the part's name |
 | tint, light up, fade, or outline a part | `set_material(node, Some("robe"), MaterialOverride { … })` (colour, emissive, opacity, rim) |
+| make a part glow like light             | `set_blend(node, Some("flash"), Blend::Additive)`                                           |
 | put a sword in a hand                   | `attach(sword, character, "socket_weapon")`                                                 |
 | ask what is under a tap                 | `raycast_screen(x, y)`, answered by an `Event::RaycastHits`                                 |
 | remove a model                          | `remove(node)`                                                                              |
@@ -68,6 +69,8 @@ Everything that changes a scene is an op, sent with the next `flush`:
 Ops that name a part, a clip, or a morph target apply even when they arrive before the model has loaded, and ops for names a model does not have do nothing. A clip played with `once()` holds its last pose; the others loop. A new clip crossfades from the one playing; clips don't layer on top of each other.
 
 `set_part_offset` moves one named part of a model, a bone or any node, from where its rest pose or the playing clip puts it: the offset turns the part about its own origin and moves it along its own axes, and everything attached below it follows. Use it for what your app decides as it runs, such as a creature turning its head towards the camera while its walk clip plays, or a drum turning one chamber on each shot. The last argument is how many seconds the part takes to get there, in a straight line from where it is now, on the host's own clock. An app that works out a pose on every tick of its own clock and sends it with the tick's length is drawn smoothly between ticks, at the display's rate. Zero moves it at once; `Transform::IDENTITY` puts it back.
+
+`Blend::Additive` adds a part's colour to whatever is behind it instead of covering it, scaled by its opacity: a muzzle flash, a spark, or a halo stays bright over a camera picture of a dark room, and black adds nothing, so a soft round glow needs no cut-out. Light added to something already bright barely shows, so for a glow that must read over a white wall, put a darker, normally blended halo behind it. Additive parts draw with the transparent parts and hide nothing behind them.
 
 `next_events` waits for what the host has to say: a model loaded (with its clips' names) or failed to, a clip played once has finished, or what a raycast hit, nearest first, with the part's name, the distance, and the point.
 
