@@ -75,7 +75,8 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
     private func map(_ error: Error) -> PluginError {
         let nfc = error as NSError
 
-        if nfc.domain == NFCErrorDomain, nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
+        if nfc.domain == NFCErrorDomain,
+           nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
             return .cancelled
         }
 

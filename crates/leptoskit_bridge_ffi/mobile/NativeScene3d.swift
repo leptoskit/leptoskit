@@ -156,7 +156,8 @@ final class NativeScene3dView: NativeScene3dBase {
         else {
             let error = lk_scene3d_error()
             defer { lk_buffer_release(error) }
-            let message = String(decoding: UnsafeBufferPointer(start: error.data, count: error.len), as: UTF8.self)
+            let bytes = UnsafeBufferPointer(start: error.data, count: error.len)
+            let message = String(bytes: bytes, encoding: .utf8) ?? ""
             NSLog("leptoskit: a 3D scene could not attach: %@", message)
 
             return

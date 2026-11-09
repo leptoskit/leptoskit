@@ -89,10 +89,9 @@ public final class DeviceKeysPlugin: NSObject, NativePlugin {
         if status == errSecItemNotFound { return deviceKeysFields([1, KeyStatus.ok, 0]) }
         try Self.check(status)
 
-        guard let item else {
+        guard let item, let privateKey = item as? SecKey else {
             return deviceKeysFields([1, KeyStatus.failed])
         }
-        let privateKey = item as! SecKey
 
         return try publicKeyFields(privateKey: privateKey)
     }
@@ -115,10 +114,9 @@ public final class DeviceKeysPlugin: NSObject, NativePlugin {
         if status == errSecItemNotFound { return deviceKeysFields([1, KeyStatus.notFound]) }
         try Self.check(status)
 
-        guard let item else {
+        guard let item, let privateKey = item as? SecKey else {
             return deviceKeysFields([1, KeyStatus.failed])
         }
-        let privateKey = item as! SecKey
 
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(

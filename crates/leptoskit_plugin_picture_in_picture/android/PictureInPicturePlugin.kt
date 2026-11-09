@@ -2,6 +2,7 @@ package dev.leptoskit.plugins.pictureinpicture
 
 import android.app.Activity
 import android.app.Application
+import android.app.PictureInPictureModeChangedInfo
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
@@ -13,7 +14,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.util.PictureInPictureModeChangedInfo
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -275,11 +275,11 @@ class PictureInPicturePlugin(
             return false
         }
 
-        val activity = context as? Activity ?: return false
-
-        return activity.packageManager
-            .getActivityInfo(activity.componentName, 0)
-            .supportsPictureInPicture()
+        // ActivityInfo.supportsPictureInPicture() is @hide and missing from the
+        // public SDK stubs, so Kotlin cannot call it. Scaffolded hosts declare
+        // android:supportsPictureInPicture="true"; enterPictureInPictureMode
+        // still fails closed when a host omits the attribute.
+        return context is Activity
     }
 
     private fun requireActivity(): Activity {
@@ -306,7 +306,6 @@ class PictureInPicturePlugin(
 
         val listener =
             Consumer<PictureInPictureModeChangedInfo> { info ->
-
                 if (!info.isInPictureInPictureMode) {
                     finishPip(PluginException.CANCELLED)
                     clearPipModeListener(activity)

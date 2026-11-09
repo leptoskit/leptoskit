@@ -3,11 +3,22 @@ included:
 excluded:
   - "**/.build"
   - "**/target"
+# Wire codecs and host dispatch intentionally exceed the default metrics
+# (multi-field tuples, long method switches, larger Apple host files). Monostyle
+# already holds the Rust tree; keep SwiftLint on style and idioms instead.
+disabled_rules:
+  - cyclomatic_complexity
+  - file_length
+  - function_body_length
+  - function_parameter_count
+  - large_tuple
+  - type_body_length
 line_length:
   warning: 120
   error: 160
-
 identifier_name:
   min_length: 2
   excluded:
     - id
+type_name:
+  max_length: 50

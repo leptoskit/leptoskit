@@ -24,7 +24,7 @@ private final class MediaLibrarySpy: MediaLibraryService {
                 width: 10,
                 height: 20,
                 creationTimeMs: 1_700
-            ),
+            )
         ]
     }
 
