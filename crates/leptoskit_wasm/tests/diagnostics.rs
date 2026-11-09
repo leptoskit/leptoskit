@@ -79,14 +79,16 @@ fn a_style_value_of_the_wrong_type_names_the_node_field_and_bytes() {
 }
 
 #[test]
-fn a_flattened_widget_prop_of_the_wrong_type_names_its_field() {
+fn a_widget_prop_of_the_wrong_type_names_its_field_and_where_it_stopped() {
 	let records = leptoskit_log::capture::start();
 	let error = start_error(0, r#"{"corner_radius":"round 51b9"}"#);
 
 	assert!(error.contains("node 7 (view)"), "{error}");
 	assert!(error.contains("at `corner_radius`"), "{error}");
+	// The props are read without buffering, so the error has a position: the
+	// marker falls where decoding stopped, inside the value.
 	assert!(
-		around_marker(&error).contains(r#""corner_radius":"round 51b9""#),
+		around_marker(&error).contains(r#""corner_radius":"round 51b9<<HERE>>""#),
 		"{error}"
 	);
 	records.expect("leptoskit/render", "round 51b9");

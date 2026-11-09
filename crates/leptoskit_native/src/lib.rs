@@ -51,6 +51,8 @@ pub mod tailwind;
 pub mod vector;
 
 pub mod view;
+#[cfg(feature = "serde")]
+pub mod wire;
 
 #[cfg(feature = "guest")]
 pub mod guest;

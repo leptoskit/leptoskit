@@ -338,6 +338,13 @@ jobs:
 
         run: cargo test --locked --workspace --all-features -- --test-threads=1
 
+      # Apps on Solana's clients build serde_json with arbitrary_precision;
+      # the guest-to-host wire must read the same with it (devenv's test:wire).
+      - name: test the native wire under arbitrary_precision
+        run: |
+          cargo test --locked -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision --lib wire_tests -- --test-threads=1
+          cargo test --locked -p leptoskit_wasm --features serde_json/arbitrary_precision -- --test-threads=1
+
       - name: run the generated hybrid service constructor
         shell: bash
         env:

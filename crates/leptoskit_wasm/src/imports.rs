@@ -16,29 +16,6 @@ use super::caller_memory;
 use super::host_trap;
 use super::in_import;
 
-const NATIVE_KINDS: &[NativeKind] = &[
-	NativeKind::View,
-	NativeKind::Text,
-	NativeKind::TextRun,
-	NativeKind::Image,
-	NativeKind::ScrollView,
-	NativeKind::TextInput,
-	NativeKind::Button,
-	NativeKind::Switch,
-	NativeKind::Checkbox,
-	NativeKind::Radio,
-	NativeKind::Slider,
-	NativeKind::LinearProgressIndicator,
-	NativeKind::ActivityIndicator,
-	NativeKind::PasswordInput,
-	NativeKind::Pressable,
-	NativeKind::Vector,
-	NativeKind::Rive,
-	NativeKind::Scene3d,
-	NativeKind::Video,
-	NativeKind::Camera,
-];
-
 /// Links the rendering imports. Each names itself in front of its traps, so
 /// a failure reads `node_set_props: …` rather than only what went wrong.
 pub(super) fn link(linker: &mut Linker<HostState>) -> Result<(), wasmi::errors::LinkerError> {
@@ -88,10 +65,7 @@ fn node_create(mut caller: Caller<'_, HostState>, id: i64, kind: i32) -> Result<
 	let state = caller.data_mut();
 	state.budget.charge(256)?;
 	state.check_nodes(usize::from(!state.nodes.contains_key(&id)))?;
-	let kind = NATIVE_KINDS
-		.get(kind as u32 as usize)
-		.copied()
-		.unwrap_or(NativeKind::View);
+	let kind = leptoskit_native::wire::kind(kind).unwrap_or(NativeKind::View);
 	state.ensure_node(id);
 
 	// A different widget kind replaces the node and everything below it.
@@ -158,7 +132,7 @@ fn node_set_props(
 			.ok_or_else(|| host_trap(format!("props range {start}+{len} is out of bounds")))?
 	};
 
-	let mut wire: WireNode = serde_json::from_slice(bytes)
+	let mut wire = WireNode::from_json(bytes)
 		.map_err(|error| props_error(id, caller.data().kinds.get(&id).copied(), bytes, &error))?;
 	let mut rive_bytes = if wire.props.rive.is_some() { len } else { 0 };
 	let mut retained_bytes = len;
@@ -360,7 +334,7 @@ fn props_error(
 	let excerpt = if error.line() > 0 {
 		Excerpt::at_line_column(bytes, error.line(), error.column())
 	} else {
-		// A flattened field's error has no position: find its key instead.
+		// An error with no position: find its field's key instead.
 		let at = field
 			.as_deref()
 			.and_then(|field| field_offset(bytes, field))
@@ -375,9 +349,9 @@ fn props_error(
 	host_trap(message)
 }
 
-/// The path of the field `bytes` fail to decode at, such as `style.flex_grow`.
-/// The node's flattened widget props report no path of their own, so those
-/// are decoded on their own when the whole node names none.
+/// The path of the field `bytes` fail to decode at, such as `style.flex_grow`,
+/// found by repeating the two passes of [`WireNode::from_json`]: the widget
+/// props, then the keys beside them.
 fn failing_field(bytes: &[u8]) -> Option<String> {
 	fn path<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<String> {
 		let mut decoder = serde_json::Deserializer::from_slice(bytes);
@@ -388,7 +362,8 @@ fn failing_field(bytes: &[u8]) -> Option<String> {
 		(path != "." && path != "?").then_some(path)
 	}
 
-	path::<WireNode>(bytes).or_else(|| path::<leptoskit_native::NativeProps>(bytes))
+	path::<leptoskit_native::NativeProps>(bytes)
+		.or_else(|| path::<leptoskit_native::wire::Envelope>(bytes))
 }
 
 /// Where the key of the last segment of `field` appears in `bytes`.

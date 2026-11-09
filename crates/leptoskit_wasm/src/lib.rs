@@ -123,7 +123,6 @@ use leptoskit_native::HeadlessBackend;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
-use leptoskit_native::NativeProps;
 use leptoskit_native::NativeSurface;
 use leptoskit_yoga::NodeId;
 use wasmi::Caller;
@@ -161,32 +160,8 @@ use resource_limits::ResourceLimits;
 /// The ABI version this host speaks.
 pub const ABI_VERSION: u32 = 1;
 
-/// The wire form of a node's properties: the native props plus its style.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct WireNode {
-	/// The widget properties.
-	#[serde(flatten)]
-	pub props: NativeProps,
-	/// The layout style.
-	#[serde(default)]
-	pub style: leptoskit_yoga::Style,
-	/// Built-in Tailwind utilities, validated before a tree is committed.
-	#[serde(default)]
-	pub class: String,
-	/// Replaces inputs while reusing this node's existing Rive asset and scene.
-	/// Valid only without `props.rive`, after that same node received full
-	/// content.
-	#[serde(default)]
-	pub rive_inputs: Option<BTreeMap<leptoskit_rive::Name, leptoskit_rive::Update>>,
-	/// Where the guest created the node, as `file:line:column`. Only a guest
-	/// built with `DevTools` sends it, for the host's agent to report.
-	#[serde(default)]
-	pub source: Option<String>,
-	/// The `#[component]` whose body created the node. Only a guest built
-	/// with `DevTools` sends it.
-	#[serde(default)]
-	pub component: Option<String>,
-}
+/// A node's properties as the host reads them from the guest.
+pub use leptoskit_native::wire::WireNode;
 
 /// The payload delivered with a text-change or submit event.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
