@@ -754,6 +754,326 @@
 					"required": [
 						"action"
 					]
+				},
+				{
+					"description": "Tap a viewport point. The press does not move, so an arena reads a tap.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "tap_point"
+						},
+						"x": {
+							"description": "Horizontal offset from the left edge.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical offset from the top edge.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y"
+					]
+				},
+				{
+					"description": "Hold a viewport point. 600 milliseconds when unset, past a 500\nmillisecond long press.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "long_press"
+						},
+						"duration_ms": {
+							"description": "How long the pointer stays down.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"x": {
+							"description": "Horizontal offset from the left edge.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical offset from the top edge.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y"
+					]
+				},
+				{
+					"description": "Drag between two viewport points.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "pan"
+						},
+						"duration_ms": {
+							"description": "How long the move takes; 300 milliseconds when unset.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"end": {
+							"description": "Where the gesture ends.",
+							"$ref": "#/$defs/Point"
+						},
+						"start": {
+							"description": "Where the gesture starts.",
+							"$ref": "#/$defs/Point"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"start",
+						"end"
+					]
+				},
+				{
+					"description": "Move two pointers from `start_span` apart to `end_span` apart.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "pinch"
+						},
+						"duration_ms": {
+							"description": "How long the move takes; 300 milliseconds when unset.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"end_span": {
+							"description": "Distance between the pointers when they lift.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"start_span": {
+							"description": "Distance between the pointers when they go down.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"x": {
+							"description": "Horizontal focal point.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical focal point.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y",
+						"start_span",
+						"end_span"
+					]
+				},
+				{
+					"description": "Install a package, or check that a desktop path exists.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "install_app"
+						},
+						"path": {
+							"description": "The `.apk`, `.ipa`, `.app`, or desktop path.",
+							"type": "string"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"path"
+					]
+				},
+				{
+					"description": "Launch an installed app, or a desktop binary.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "open_app"
+						},
+						"identifier": {
+							"description": "Bundle id, package name, or path.",
+							"type": "string"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"identifier"
+					]
+				},
+				{
+					"description": "Tap with `adb` or `xdotool`, without a UI session.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "inject_tap"
+						},
+						"x": {
+							"description": "Horizontal offset from the left edge.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical offset from the top edge.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y"
+					]
+				},
+				{
+					"description": "Long-press with `adb` or `xdotool`, without a UI session.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "inject_long_press"
+						},
+						"duration_ms": {
+							"description": "How long the pointer stays down; 600 milliseconds when unset.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"x": {
+							"description": "Horizontal offset from the left edge.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical offset from the top edge.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y"
+					]
+				},
+				{
+					"description": "Pan with `adb` or `xdotool`, without a UI session.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "inject_pan"
+						},
+						"duration_ms": {
+							"description": "How long the move takes; 300 milliseconds when unset.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"end": {
+							"description": "Where the gesture ends.",
+							"$ref": "#/$defs/Point"
+						},
+						"start": {
+							"description": "Where the gesture starts.",
+							"$ref": "#/$defs/Point"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"start",
+						"end"
+					]
+				},
+				{
+					"description": "Pinch with `adb`, without a UI session. `xdotool` cannot do this.",
+					"type": "object",
+					"properties": {
+						"action": {
+							"type": "string",
+							"const": "inject_pinch"
+						},
+						"duration_ms": {
+							"description": "How long the move takes; 300 milliseconds when unset.",
+							"type": [
+								"integer",
+								"null"
+							],
+							"format": "uint64",
+							"minimum": 0
+						},
+						"end_span": {
+							"description": "Distance between the pointers when they lift.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"start_span": {
+							"description": "Distance between the pointers when they go down.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"x": {
+							"description": "Horizontal focal point.",
+							"type": "integer",
+							"format": "int64"
+						},
+						"y": {
+							"description": "Vertical focal point.",
+							"type": "integer",
+							"format": "int64"
+						}
+					},
+					"additionalProperties": false,
+					"required": [
+						"action",
+						"x",
+						"y",
+						"start_span",
+						"end_span"
+					]
 				}
 			]
 		},

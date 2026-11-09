@@ -169,6 +169,71 @@ fn run_reads_documents_from_stdin_shape() {
 }
 
 #[test]
+fn install_open_and_sanity_build_documents() {
+	let install = document(DeviceCommand::Install {
+		target: target(DeviceKindArg::Android, Some("emulator-5554")),
+		path: "app.apk".to_owned(),
+	})
+	.unwrap();
+	assert_eq!(install.steps[0].action_name(), "install_app");
+
+	let mut open_target = target(DeviceKindArg::Android, Some("emulator-5554"));
+	open_target.app = Some("dev.example.app".to_owned());
+	let open = document(DeviceCommand::Open {
+		target: open_target,
+		identifier: None,
+	})
+	.unwrap();
+	assert_eq!(open.steps[0].action_name(), "open_app");
+	assert!(
+		document(DeviceCommand::Open {
+			target: target(DeviceKindArg::Android, Some("emulator-5554")),
+			identifier: None,
+		})
+		.is_err()
+	);
+
+	let mut sanity_target = target(DeviceKindArg::Linux, None);
+	sanity_target.app = Some("/usr/bin/true".to_owned());
+	let sanity = document(DeviceCommand::Sanity {
+		target: sanity_target,
+		path: None,
+		driver: false,
+		pointer: false,
+	})
+	.unwrap();
+	let names: Vec<_> = sanity.steps.iter().map(Step::action_name).collect();
+	assert_eq!(
+		names,
+		["open_app", "inject_tap", "inject_long_press", "inject_pan"]
+	);
+	let mut driven_target = target(DeviceKindArg::Linux, None);
+	driven_target.app = Some("/usr/bin/true".to_owned());
+	let driven = document(DeviceCommand::Sanity {
+		target: driven_target,
+		path: Some("/usr/bin/true".to_owned()),
+		driver: true,
+		pointer: false,
+	})
+	.unwrap();
+	assert!(
+		driven
+			.steps
+			.iter()
+			.any(|step| step.action_name() == "pinch")
+	);
+	assert!(
+		document(DeviceCommand::Sanity {
+			target: target(DeviceKindArg::Android, Some("emulator-5554")),
+			path: None,
+			driver: false,
+			pointer: false,
+		})
+		.is_err()
+	);
+}
+
+#[test]
 fn boot_reports_unknown_devices() {
 	let error = document(DeviceCommand::Boot {
 		id: "leptoskit-no-such-device".to_owned(),

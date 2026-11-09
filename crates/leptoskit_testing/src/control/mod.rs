@@ -13,6 +13,7 @@
 //! server's tools, so agents compose journeys once and run them anywhere.
 
 mod device;
+mod gestures;
 pub mod inventory;
 mod tools;
 mod web;
@@ -25,6 +26,12 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+pub use gestures::Injector;
+pub use gestures::Suite;
+pub use gestures::SuiteRequest;
+pub use gestures::arena_fed;
+pub use gestures::default_injector;
+pub use gestures::suite;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -418,6 +425,100 @@ pub enum Step {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		minutes: Option<u64>,
 	},
+
+	/// Tap a viewport point. The press does not move, so an arena reads a tap.
+	TapPoint {
+		/// Horizontal offset from the left edge.
+		x: i64,
+		/// Vertical offset from the top edge.
+		y: i64,
+	},
+	/// Hold a viewport point. 600 milliseconds when unset, past a 500
+	/// millisecond long press.
+	LongPress {
+		/// Horizontal offset from the left edge.
+		x: i64,
+		/// Vertical offset from the top edge.
+		y: i64,
+		/// How long the pointer stays down.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
+	/// Drag between two viewport points.
+	Pan {
+		/// Where the gesture starts.
+		start: Point,
+		/// Where the gesture ends.
+		end: Point,
+		/// How long the move takes; 300 milliseconds when unset.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
+	/// Move two pointers from `start_span` apart to `end_span` apart.
+	Pinch {
+		/// Horizontal focal point.
+		x: i64,
+		/// Vertical focal point.
+		y: i64,
+		/// Distance between the pointers when they go down.
+		start_span: i64,
+		/// Distance between the pointers when they lift.
+		end_span: i64,
+		/// How long the move takes; 300 milliseconds when unset.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
+	/// Install a package, or check that a desktop path exists.
+	InstallApp {
+		/// The `.apk`, `.ipa`, `.app`, or desktop path.
+		path: String,
+	},
+	/// Launch an installed app, or a desktop binary.
+	OpenApp {
+		/// Bundle id, package name, or path.
+		identifier: String,
+	},
+	/// Tap with `adb` or `xdotool`, without a UI session.
+	InjectTap {
+		/// Horizontal offset from the left edge.
+		x: i64,
+		/// Vertical offset from the top edge.
+		y: i64,
+	},
+	/// Long-press with `adb` or `xdotool`, without a UI session.
+	InjectLongPress {
+		/// Horizontal offset from the left edge.
+		x: i64,
+		/// Vertical offset from the top edge.
+		y: i64,
+		/// How long the pointer stays down; 600 milliseconds when unset.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
+	/// Pan with `adb` or `xdotool`, without a UI session.
+	InjectPan {
+		/// Where the gesture starts.
+		start: Point,
+		/// Where the gesture ends.
+		end: Point,
+		/// How long the move takes; 300 milliseconds when unset.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
+	/// Pinch with `adb`, without a UI session. `xdotool` cannot do this.
+	InjectPinch {
+		/// Horizontal focal point.
+		x: i64,
+		/// Vertical focal point.
+		y: i64,
+		/// Distance between the pointers when they go down.
+		start_span: i64,
+		/// Distance between the pointers when they lift.
+		end_span: i64,
+		/// How long the move takes; 300 milliseconds when unset.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		duration_ms: Option<u64>,
+	},
 }
 
 impl Step {
@@ -449,6 +550,16 @@ impl Step {
 			Self::DeviceSwipe { .. } => "device_swipe",
 			Self::DeviceKey { .. } => "device_key",
 			Self::Logs { .. } => "logs",
+			Self::TapPoint { .. } => "tap_point",
+			Self::LongPress { .. } => "long_press",
+			Self::Pan { .. } => "pan",
+			Self::Pinch { .. } => "pinch",
+			Self::InstallApp { .. } => "install_app",
+			Self::OpenApp { .. } => "open_app",
+			Self::InjectTap { .. } => "inject_tap",
+			Self::InjectLongPress { .. } => "inject_long_press",
+			Self::InjectPan { .. } => "inject_pan",
+			Self::InjectPinch { .. } => "inject_pinch",
 		}
 	}
 }
@@ -584,6 +695,39 @@ pub trait ControlDriver {
 			]
 		}]);
 		self.perform_actions(&sources)
+	}
+
+	/// Taps one viewport point.
+	fn tap_at(&self, x: i64, y: i64) -> Result<(), Error> {
+		self.perform_actions(&gestures::tap_actions(x, y)?)
+	}
+
+	/// Holds one viewport point.
+	fn long_press_at(&self, x: i64, y: i64, duration_ms: u64) -> Result<(), Error> {
+		self.perform_actions(&gestures::long_press_actions(x, y, duration_ms)?)
+	}
+
+	/// Drags between two viewport points.
+	fn pan(&self, start: Point, end: Point, duration_ms: u64) -> Result<(), Error> {
+		self.perform_actions(&gestures::pan_actions(start, end, duration_ms)?)
+	}
+
+	/// Moves two pointers around a focal point.
+	fn pinch(
+		&self,
+		x: i64,
+		y: i64,
+		start_span: i64,
+		end_span: i64,
+		duration_ms: u64,
+	) -> Result<(), Error> {
+		self.perform_actions(&gestures::pinch_actions(
+			x,
+			y,
+			start_span,
+			end_span,
+			duration_ms,
+		)?)
 	}
 }
 
@@ -908,6 +1052,100 @@ impl ExecutionContext {
 					value: Some(Value::String(truncate_chars(&text, VALUE_TEXT_LIMIT))),
 					artifact: Some(path),
 				})
+			}
+			Step::TapPoint { x, y } => self.driver()?.tap_at(*x, *y).map(|()| StepValue::default()),
+			Step::LongPress { x, y, duration_ms } => {
+				self.driver()?
+					.long_press_at(*x, *y, duration_ms.unwrap_or(gestures::HOLD_MS))
+					.map(|()| StepValue::default())
+			}
+			Step::Pan {
+				start,
+				end,
+				duration_ms,
+			} => {
+				self.driver()?
+					.pan(*start, *end, duration_ms.unwrap_or(gestures::MOVE_MS))
+					.map(|()| StepValue::default())
+			}
+			Step::Pinch {
+				x,
+				y,
+				start_span,
+				end_span,
+				duration_ms,
+			} => {
+				self.driver()?
+					.pinch(
+						*x,
+						*y,
+						*start_span,
+						*end_span,
+						duration_ms.unwrap_or(gestures::MOVE_MS),
+					)
+					.map(|()| StepValue::default())
+			}
+			Step::InstallApp { path } => {
+				device::install_app(&self.target, path, self.tool_timeout()).map(|value| {
+					StepValue {
+						value: Some(Value::String(value)),
+						artifact: None,
+					}
+				})
+			}
+			Step::OpenApp { identifier } => {
+				device::open_app(&self.target, identifier, self.tool_timeout()).map(|value| {
+					StepValue {
+						value: Some(Value::String(value)),
+						artifact: None,
+					}
+				})
+			}
+			Step::InjectTap { x, y } => {
+				device::inject_tap(&self.target, *x, *y, self.tool_timeout())
+					.map(|()| StepValue::default())
+			}
+			Step::InjectLongPress { x, y, duration_ms } => {
+				device::inject_long_press(
+					&self.target,
+					*x,
+					*y,
+					duration_ms.unwrap_or(gestures::HOLD_MS),
+					self.tool_timeout(),
+				)
+				.map(|()| StepValue::default())
+			}
+			Step::InjectPan {
+				start,
+				end,
+				duration_ms,
+			} => {
+				device::inject_pan(
+					&self.target,
+					*start,
+					*end,
+					duration_ms.unwrap_or(gestures::MOVE_MS),
+					self.tool_timeout(),
+				)
+				.map(|()| StepValue::default())
+			}
+			Step::InjectPinch {
+				x,
+				y,
+				start_span,
+				end_span,
+				duration_ms,
+			} => {
+				device::inject_pinch(
+					&self.target,
+					*x,
+					*y,
+					*start_span,
+					*end_span,
+					duration_ms.unwrap_or(gestures::MOVE_MS),
+					self.tool_timeout(),
+				)
+				.map(|()| StepValue::default())
 			}
 		}
 	}

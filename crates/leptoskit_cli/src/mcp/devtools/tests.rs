@@ -422,6 +422,83 @@ fn several_apps_need_a_session_and_the_error_lists_them() {
 }
 
 #[test]
+fn errors_and_commits_come_back_from_the_hub() {
+	let mut info = session("app", "counter", "web", 1);
+	info["calls"] = json!([
+		{"id": 1, "plugin": "camera", "method": "shoot", "status": "error"},
+		{"id": 2, "plugin": "camera", "method": "preview", "status": "ok"},
+		{"id": 3, "plugin": "files", "method": "save", "status": "cancelled"},
+		{"status": "error"},
+	]);
+	info["rpc"] = json!([
+		{"id": 4, "function": "clips", "attempt": 2, "error": "Timeout"},
+		{"id": 5, "function": "clips", "attempt": 1},
+		{"error": "Boom"},
+	]);
+	info["commits"] = json!([
+		{"seq": 1, "mutations": 3},
+		{"seq": 2, "mutations": 1, "layout_us": 40, "apply_us": 12},
+		{"layout_us": 1},
+	]);
+	let harness = Harness::new(vec![info]);
+	let errors_result = harness.call("runtime_errors", json!({}));
+	let errors = text(&errors_result);
+	assert!(errors.contains("camera.shoot error"), "{errors}");
+	assert!(errors.contains("files.save cancelled"), "{errors}");
+	assert!(
+		errors.contains("rpc 4 clips attempt 2: Timeout"),
+		"{errors}"
+	);
+	assert!(errors.contains("?.?"), "{errors}");
+	assert!(errors.contains("attempt 0: Boom"), "{errors}");
+	assert!(!errors.contains("preview"));
+	let commits_result = harness.call("performance", json!({}));
+	let commits = text(&commits_result);
+	assert!(commits.contains("#1 3 changes"), "{commits}");
+	assert!(
+		commits.contains("#2 1 changes layout 40µs draw 12µs"),
+		"{commits}"
+	);
+	assert!(commits.contains("#0 0 changes layout 1µs"), "{commits}");
+	let tree = report(
+		harness.project.path(),
+		Report::Tree {
+			session: Some("web".to_owned()),
+			depth: Some(1),
+		},
+	)
+	.unwrap();
+	assert!(tree.contains("View") || tree.contains("Text"), "{tree}");
+	assert_eq!(
+		report(harness.project.path(), Report::Errors { session: None }).unwrap(),
+		errors
+	);
+	assert_eq!(
+		report(
+			harness.project.path(),
+			Report::Performance { session: None }
+		)
+		.unwrap(),
+		commits
+	);
+	assert!(
+		report(harness.project.path(), Report::Open)
+			.unwrap()
+			.starts_with("http://")
+	);
+
+	let quiet = Harness::new(vec![session("app", "counter", "web", 1)]);
+	assert_eq!(
+		text(&quiet.call("runtime_errors", json!({}))),
+		"no runtime errors"
+	);
+	assert_eq!(
+		text(&quiet.call("performance", json!({}))),
+		"no commits recorded"
+	);
+}
+
+#[test]
 fn a_hub_with_no_sessions_says_how_to_start_one() {
 	let harness = Harness::new(Vec::new());
 	assert!(text(&harness.call("devtools_sessions", json!({}))).contains("No app is reporting"));

@@ -48,7 +48,63 @@ pub(super) const NAMES: &[&str] = &[
 	"navigate",
 	"highlight",
 	"set_state",
+	"runtime_errors",
+	"performance",
 ];
+
+/// What `leptoskit debug` prints. The MCP tools use the same text.
+pub(crate) enum Report {
+	/// The element tree.
+	Tree {
+		/// Session selector.
+		session: Option<String>,
+		/// Printed depth.
+		depth: Option<u64>,
+	},
+	/// Failed calls and server attempts.
+	Errors {
+		/// Session selector.
+		session: Option<String>,
+	},
+	/// Render commits.
+	Performance {
+		/// Session selector.
+		session: Option<String>,
+	},
+	/// The hub's address.
+	Open,
+}
+
+/// One debug report, from the hub named in `start` or an ancestor.
+pub(crate) fn report(start: &Path, kind: Report) -> Result<String, String> {
+	let hub = Hub::find(start)?;
+
+	match kind {
+		Report::Open => Ok(hub.url),
+		Report::Tree { session, depth } => {
+			let mut arguments = serde_json::Map::new();
+
+			if let Some(session) = session {
+				arguments.insert("session".to_owned(), Value::String(session));
+			}
+
+			if let Some(depth) = depth {
+				arguments.insert("depth".to_owned(), Value::from(depth));
+			}
+
+			run(&hub, "inspect_tree", &Value::Object(arguments))
+		}
+		Report::Errors { session } => run(&hub, "runtime_errors", &session_argument(session)),
+		Report::Performance { session } => run(&hub, "performance", &session_argument(session)),
+	}
+}
+
+fn session_argument(session: Option<String>) -> Value {
+	match session {
+		Some(session) => json!({"session": session}),
+		None => json!({}),
+	}
+}
 
 /// The `session` argument every tool but `devtools_sessions` takes.
 fn session_property() -> Value {
@@ -191,6 +247,28 @@ pub(super) fn tools() -> Vec<Value> {
 				"additionalProperties": false,
 			},
 		}),
+		json!({
+			"name": "runtime_errors",
+			"description": "Lists runtime errors from a running app: plugin calls that failed or \
+				were cancelled, and server attempts that recorded an error. Empty when the app \
+				has not reported either.",
+			"inputSchema": {
+				"type": "object",
+				"properties": {"session": session_property()},
+				"additionalProperties": false,
+			},
+		}),
+		json!({
+			"name": "performance",
+			"description": "Lists render commits from a running app: how many changes each commit \
+				applied and, while profiling is on, how many microseconds layout and drawing \
+				took.",
+			"inputSchema": {
+				"type": "object",
+				"properties": {"session": session_property()},
+				"additionalProperties": false,
+			},
+		}),
 	]
 }
 
@@ -231,6 +309,8 @@ fn run(hub: &Hub, name: &str, arguments: &Value) -> Result<String, String> {
 		"navigate" => navigate(hub, &session, arguments),
 		"highlight" => highlight(hub, &session, arguments),
 		"set_state" => set_state(hub, &session, arguments),
+		"runtime_errors" => runtime_errors(hub, &session),
+		"performance" => performance(hub, &session),
 		other => Err(format!("unknown tool {other:?}")),
 	}
 }
@@ -912,6 +992,88 @@ fn set_state(hub: &Hub, session: &SessionInfo, arguments: &Value) -> Result<Stri
 		describe(session),
 		capability_warning(session, "editing")
 	))
+}
+
+fn runtime_errors(hub: &Hub, session: &SessionInfo) -> Result<String, String> {
+	Ok(format_errors(&hub.view(session)?))
+}
+
+fn performance(hub: &Hub, session: &SessionInfo) -> Result<String, String> {
+	Ok(format_performance(&hub.view(session)?))
+}
+
+/// Failed plugin calls and server attempts, one per line.
+fn format_errors(view: &Value) -> String {
+	let mut lines = Vec::new();
+
+	if let Some(calls) = view.get("calls").and_then(Value::as_array) {
+		for call in calls {
+			let status = call.get("status").and_then(Value::as_str).unwrap_or("");
+
+			if status == "error" || status == "cancelled" {
+				lines.push(format!(
+					"call {} {}.{} {status}",
+					call.get("id").and_then(Value::as_u64).unwrap_or(0),
+					call.get("plugin").and_then(Value::as_str).unwrap_or("?"),
+					call.get("method").and_then(Value::as_str).unwrap_or("?"),
+				));
+			}
+		}
+	}
+
+	if let Some(attempts) = view.get("rpc").and_then(Value::as_array) {
+		for attempt in attempts {
+			if let Some(error) = attempt.get("error").and_then(Value::as_str) {
+				lines.push(format!(
+					"rpc {} {} attempt {}: {error}",
+					attempt.get("id").and_then(Value::as_u64).unwrap_or(0),
+					attempt
+						.get("function")
+						.and_then(Value::as_str)
+						.unwrap_or("?"),
+					attempt.get("attempt").and_then(Value::as_u64).unwrap_or(0),
+				));
+			}
+		}
+	}
+
+	if lines.is_empty() {
+		"no runtime errors".to_owned()
+	} else {
+		lines.join("\n")
+	}
+}
+
+/// Commit timings. Layout and draw appear only while profiling is on.
+fn format_performance(view: &Value) -> String {
+	let Some(commits) = view
+		.get("commits")
+		.and_then(Value::as_array)
+		.filter(|commits| !commits.is_empty())
+	else {
+		return "no commits recorded".to_owned();
+	};
+	let mut lines = Vec::new();
+
+	for commit in commits {
+		let layout = commit
+			.get("layout_us")
+			.and_then(Value::as_u64)
+			.map(|micros| format!(" layout {micros}µs"))
+			.unwrap_or_default();
+		let draw = commit
+			.get("apply_us")
+			.and_then(Value::as_u64)
+			.map(|micros| format!(" draw {micros}µs"))
+			.unwrap_or_default();
+		lines.push(format!(
+			"#{} {} changes{layout}{draw}",
+			commit.get("seq").and_then(Value::as_u64).unwrap_or(0),
+			commit.get("mutations").and_then(Value::as_u64).unwrap_or(0),
+		));
+	}
+
+	lines.join("\n")
 }
 
 #[cfg(test)]
