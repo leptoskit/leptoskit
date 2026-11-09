@@ -328,6 +328,19 @@ fn android_host(
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;
+	write_android_cmake(root, registry, &[])
+}
+
+/// Writes the `CMake` project that builds the host's JNI library around the
+/// Rust archive. `native` is what rustc reports for that archive with
+/// `--print native-static-libs`: an archive carries no link directives, so the
+/// plugins' system libraries (`aaudio`, `OpenSLES`, `mediandk`, …) have to be
+/// named again here.
+pub(super) fn write_android_cmake(
+	root: &Path,
+	registry: &Registry,
+	native: &[String],
+) -> Result<()> {
 	let cmake = format!(
 		"cmake_minimum_required(VERSION 3.22)\nproject(leptoskit_app LANGUAGES \
 		 CXX)\nadd_library(runtime STATIC IMPORTED)\nset_target_properties(runtime PROPERTIES \
@@ -336,13 +349,37 @@ fn android_host(
 		 cxx_std_20)\ntarget_compile_options(leptoskit_bridge_jni PRIVATE -Wall -Wextra \
 		 -Werror)\ntarget_compile_options(leptoskit_bridge_jni PRIVATE -ffunction-sections \
 		 -fdata-sections)\ntarget_link_options(leptoskit_bridge_jni PRIVATE \
-		 -Wl,--gc-sections)\ntarget_link_libraries(leptoskit_bridge_jni PRIVATE runtime log \
-		 android dl m)\n",
+		 -Wl,--gc-sections)\ntarget_link_libraries(leptoskit_bridge_jni PRIVATE {})\n",
 		quote(&super::generated_dir(root, Target::Android).join("lib/libleptoskit_bridge_ffi.a"))?,
 		quote(&registry.bridge.join("android/bridge.cpp"))?,
-		quote(&registry.bridge.join("mobile/app.cpp"))?
+		quote(&registry.bridge.join("mobile/app.cpp"))?,
+		android_link_libraries(native)
 	);
-	write(&dir.join("CMakeLists.txt"), &cmake)
+	write(&root.join(".leptoskit/android/CMakeLists.txt"), &cmake)
+}
+
+/// The C++ runtime, which the host project owns: `CMake` compiles the JNI
+/// library's own C++ against the NDK's `c++_static`, so a dependency's
+/// preference for `c++_shared` would only add an `libc++_shared.so` the APK
+/// does not carry.
+const ANDROID_CPP_RUNTIMES: [&str; 4] = ["c++", "c++_shared", "c++_static", "stdc++"];
+
+/// The host's link line: the archive, the NDK libraries the JNI library already
+/// names, then every library rustc reported, in its order, without repeats.
+fn android_link_libraries(native: &[String]) -> String {
+	let mut libraries = vec!["runtime", "log", "android", "dl", "m"];
+
+	for library in native {
+		let library = library.as_str();
+
+		if libraries.contains(&library) || ANDROID_CPP_RUNTIMES.contains(&library) {
+			continue;
+		}
+
+		libraries.push(library);
+	}
+
+	libraries.join(" ")
 }
 
 /// Copies each selected plugin's `FileProvider` paths XML into the generated

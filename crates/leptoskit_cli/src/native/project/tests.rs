@@ -207,6 +207,57 @@ fn android_emits_selected_maven_dependencies_once_and_removes_stale_entries() {
 }
 
 #[test]
+fn android_cmake_links_the_libraries_rustc_reports_without_repeats() {
+	let root = std::env::temp_dir()
+		.canonicalize()
+		.unwrap()
+		.join(format!("leptoskit-android-cmake-{}", std::process::id()));
+	std::fs::create_dir_all(&root).unwrap();
+	let registry = metadata_registry(&root, &[]);
+	let path = root.join(".leptoskit/android/CMakeLists.txt");
+
+	// Generation alone names the archive and the NDK's own libraries; the host
+	// build then adds the ones rustc reports for the archive.
+	write_android_cmake(&root, &registry, &[]).unwrap();
+	let cmake = std::fs::read_to_string(&path).unwrap();
+	assert!(
+		cmake.contains(
+			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m)\n"
+		),
+		"{cmake}"
+	);
+
+	write_android_cmake(
+		&root,
+		&registry,
+		&[
+			"dl".to_owned(),
+			"aaudio".to_owned(),
+			"c++_shared".to_owned(),
+			"aaudio".to_owned(),
+			"OpenSLES".to_owned(),
+		],
+	)
+	.unwrap();
+	let cmake = std::fs::read_to_string(&path).unwrap();
+	assert!(
+		cmake.contains(
+			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m aaudio \
+			 OpenSLES)\n"
+		),
+		"{cmake}"
+	);
+	assert_eq!(cmake.matches("aaudio").count(), 1, "{cmake}");
+	assert!(
+		!cmake.contains("c++"),
+		"the host's C++ runtime is CMake's to link, and the APK carries no libc++_shared.so: \
+		 {cmake}"
+	);
+
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ios_passes_presentation_context_only_to_plugins_that_request_it() {
 	let root = std::env::temp_dir()
 		.canonicalize()
