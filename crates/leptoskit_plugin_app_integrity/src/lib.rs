@@ -120,7 +120,7 @@ impl Attestation {
 		match self {
 			Self::Unavailable => output.u32(0),
 			Self::Token(token) => {
-				if token.len() > MAX_TOKEN_BYTES {
+				if token.is_empty() || token.len() > MAX_TOKEN_BYTES {
 					return Err(Error::InvalidArgument);
 				}
 				output.u32(1);
@@ -249,10 +249,9 @@ mod tests {
 		] {
 			assert_eq!(Capability::decode(&u32::to_le_bytes(value)), Ok(expected));
 		}
-		assert_eq!(
-			Capability::decode(&[3, 0, 0, 0]),
-			Err(Error::InvalidArgument)
-		);
+		for bytes in [&[][..], &[1], &[1, 0, 0], &[1, 0, 0, 0, 0], &[3, 0, 0, 0]] {
+			assert_eq!(Capability::decode(bytes), Err(Error::InvalidArgument));
+		}
 
 		assert_eq!(Challenge::new(&[][..]), Err(Error::InvalidArgument));
 		assert_eq!(
@@ -265,6 +264,10 @@ mod tests {
 			Challenge::decode(&challenge.encode().unwrap()),
 			Ok(challenge)
 		);
+		assert_eq!(
+			Challenge::decode(&[5, 0, 0, 0, b'n', b'o', b'n', b'c', b'e', 0]),
+			Err(Error::InvalidArgument)
+		);
 
 		assert_eq!(
 			Attestation::decode(&Attestation::Unavailable.encode().unwrap()),
@@ -274,6 +277,10 @@ mod tests {
 		assert_eq!(Attestation::decode(&token.encode().unwrap()), Ok(token));
 		assert_eq!(
 			Attestation::decode(&u32::to_le_bytes(3)),
+			Err(Error::InvalidArgument)
+		);
+		assert_eq!(
+			Attestation::Token(Bytes::new()).encode(),
 			Err(Error::InvalidArgument)
 		);
 		assert_eq!(
@@ -292,6 +299,7 @@ mod tests {
 	#[test]
 	fn validate_and_unsupported_stay_honest() {
 		assert_eq!(validate(STATUS, &[]), Ok(()));
+		assert_eq!(validate(STATUS, &[0]), Err(Error::InvalidArgument));
 		assert_eq!(
 			validate(
 				ATTEST,
