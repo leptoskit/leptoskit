@@ -466,14 +466,7 @@ async fn connect(canvas: &Rc<Canvas>) -> Result<(), String> {
 		.find(|format| !format.is_srgb())
 		.or_else(|| capabilities.formats.first().copied())
 		.ok_or("the canvas supports no format")?;
-	let alpha_mode = if capabilities
-		.alpha_modes
-		.contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-	{
-		wgpu::CompositeAlphaMode::PreMultiplied
-	} else {
-		wgpu::CompositeAlphaMode::Auto
-	};
+	let alpha_mode = crate::gpu::surface_alpha_mode(gpu.backend(), &capabilities.alpha_modes);
 	let config = wgpu::SurfaceConfiguration {
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 		format,
