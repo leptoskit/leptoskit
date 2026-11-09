@@ -718,7 +718,8 @@ async fn analytics_ingest_and_fleet_queries_enforce_scopes_and_ranges() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(fleet["instances"], 1);
 
-	let to = clock();
+	// The query's upper bound is exclusive, including at a minute boundary.
+	let to = snapshot.observed_unix_seconds + 1;
 	let (status, fleet) = call(
 		&app,
 		"GET",
