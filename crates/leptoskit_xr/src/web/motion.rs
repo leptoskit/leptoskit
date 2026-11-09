@@ -120,7 +120,7 @@ fn listen(state: &Rc<RefCell<State>>) -> Result<(), Error> {
 			anchors: Vec::new(),
 			light: None,
 			inputs: Vec::new(),
-			depth: false,
+			depth: None,
 		});
 	});
 	window

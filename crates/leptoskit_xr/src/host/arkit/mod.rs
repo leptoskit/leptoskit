@@ -260,6 +260,7 @@ impl ArKitBackend {
 				.contains(Features::DEPTH)
 				.then(|| depth(frame, display))
 				.flatten(),
+			depth_source: DepthSource::Measured,
 			depth_view: None,
 			planes: self.planes_of(frame).into(),
 			planes_revision: 0,

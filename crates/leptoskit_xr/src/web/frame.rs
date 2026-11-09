@@ -273,7 +273,7 @@ fn read(state: &Rc<RefCell<State>>, time: f64, xr_frame: &JsValue) {
 		anchors,
 		light: None,
 		inputs,
-		depth: has_depth,
+		depth: has_depth.then_some(DepthSource::Measured),
 	});
 }
 

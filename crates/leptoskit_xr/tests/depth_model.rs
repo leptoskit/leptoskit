@@ -177,7 +177,10 @@ fn a_phone_without_depth_reaches_the_room_through_the_model() {
 	};
 	eprintln!("depth after {:?}", started.elapsed());
 	assert_eq!(frame.depth_view, Some(frame.views[0]));
-	assert!(frame.to_guest(frame.time as u64, false).depth);
+	assert_eq!(
+		frame.to_guest(frame.time as u64, false).depth,
+		Some(DepthSource::Estimated)
+	);
 
 	// The stone floor at the bottom of the picture is nearer than the boiler
 	// at the end of the corridor, and both are a corridor's metres away.
