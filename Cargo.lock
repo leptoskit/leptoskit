@@ -5334,6 +5334,7 @@ dependencies = [
 name = "leptoskit_axum"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "axum",
  "http-body-util",
  "hyper",
