@@ -554,13 +554,7 @@ impl Hub {
 			})
 			.or_else(|| capabilities.formats.first().copied())
 			.ok_or(Error::Target("the surface supports no format"))?;
-		let alpha_mode = [
-			wgpu::CompositeAlphaMode::PreMultiplied,
-			wgpu::CompositeAlphaMode::Inherit,
-		]
-		.into_iter()
-		.find(|mode| capabilities.alpha_modes.contains(mode))
-		.unwrap_or(wgpu::CompositeAlphaMode::Auto);
+		let alpha_mode = crate::gpu::surface_alpha_mode(gpu.backend(), &capabilities.alpha_modes);
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 			format,
