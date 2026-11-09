@@ -1,6 +1,7 @@
 //! The surface: owns the shadow tree, diffs new element trees against it,
 //! commits mutations to the backend, and dispatches events.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::RwLock;
 #[cfg(feature = "devtools")]
@@ -23,6 +24,7 @@ use crate::props::TextStyle;
 #[cfg(feature = "devtools")]
 mod devtools;
 mod events;
+mod gestures;
 mod layout;
 mod measurement;
 mod patch;
@@ -113,6 +115,7 @@ struct ShadowNode {
 	kind: NativeKind,
 	props: NativeProps,
 	handlers: Vec<HandlerEntry>,
+	gesture: Option<crate::gesture::Gesture>,
 	children: Vec<NodeId>,
 	parent: Option<NodeId>,
 	/// Live text content and font shared with the yoga measure function, so a
@@ -323,6 +326,9 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// The control the user is holding down, resolved with its `active:`
 	/// utilities until it is released or leaves the tree.
 	pressed: Option<NodeId>,
+	/// Recognizers for pointers currently down. Interior mutability lets a
+	/// gesture callback rebuild the tree without borrowing the session.
+	gestures: RefCell<crate::gesture::Session>,
 	#[cfg(feature = "devtools")]
 	devtools: Devtools,
 }
@@ -346,6 +352,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			dark: false,
 			safe_area: Rect::default(),
 			pressed: None,
+			gestures: RefCell::default(),
 			#[cfg(feature = "devtools")]
 			devtools: Devtools::default(),
 		}
