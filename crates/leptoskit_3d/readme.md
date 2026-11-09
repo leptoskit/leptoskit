@@ -52,7 +52,7 @@ It draws 3D scenes the host owns: glTF models with skins, morph targets, and ani
 
 <!-- {/scene3dSummary} -->
 
-Without the default `renderer` feature, the crate is only the ops, events, and limits, and builds for any target, Wasm guests included. `guest` adds the client a native app's Wasm guest sends ops with, through the `leptoskit.scene3d` plugin. `host` adds that plugin and the hub native hosts show scenes with; `leptoskit_bridge_ffi`'s `scene3d` feature hosts them in a `CAMetalLayer` on iOS and macOS and a `SurfaceView` on Android. `web` draws scenes into the page's `Scene3d` canvases with WebGPU, or WebGL2 where the browser has no WebGPU.
+Without the default `renderer` feature, the crate is only the ops, events, and limits, and builds for any target, Wasm guests included. `guest` adds the client a native app's Wasm guest sends ops with, through the `leptoskit.scene3d` plugin. `host` adds that plugin and the hub native hosts show scenes with; `leptoskit_bridge_ffi`'s `scene3d` feature hosts them in a `CAMetalLayer` on iOS and macOS and a transparent `TextureView` on Android. Android scenes take their place in the normal view hierarchy, so backgrounds stay behind their models and a HUD stays above them, including over the camera. `web` draws scenes into the page's `Scene3d` canvases with WebGPU, or WebGL2 where the browser has no WebGPU.
 
 Every op is bounded before it applies, and every model is decoded within limits, so a scene from untrusted code cannot make the host allocate or loop without limit.
 
