@@ -1,12 +1,11 @@
 //! Gesture coverage for the controller, and the sanity suite that exercises it.
 //!
-//! The gestures are the ones a widget arena recognizes: tap, long press, pan,
-//! and pinch. Holds last 600 milliseconds and drags travel 80 points, past a
-//! 500 millisecond long press and an 18 point pan, so a backend that feeds
-//! the arena accepts them. Android and Linux are those backends once the
-//! arena is linked. This revision does not link it: [`arena_fed`] stays
-//! false, and the controller still injects the gestures for the operating
-//! system.
+//! The gestures are the ones the widget arena recognizes: tap, long press,
+//! pan, and pinch. Holds last 600 milliseconds and drags travel 80 points,
+//! past a 500 millisecond long press and an 18 point pan, so a backend that
+//! feeds the arena accepts them. Android and Linux do. The other targets
+//! still deliver presses and clicks, and the controller injects the gestures
+//! for the operating system anyway.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -37,10 +36,6 @@ pub const PAN_DISTANCE: i64 = 80;
 /// Distance between the two pinch pointers at the start and at the end.
 pub const PINCH_START: i64 = 80;
 pub const PINCH_END: i64 = 160;
-
-/// The gesture arena is not part of this revision. Android and Linux feed it
-/// once it is linked; until then every backend delivers presses and clicks.
-const ARENA_LINKED: bool = false;
 
 /// A gesture the sanity suite can inject.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -134,11 +129,11 @@ pub fn arena_target(kind: TargetKind) -> bool {
 
 /// Whether this build's widget backend feeds the arena for `kind`.
 ///
-/// Android and Linux are the backends that will, and only once the arena is
-/// linked. It is not linked in this revision.
+/// Android and Linux deliver pointer samples into the gesture arena. The
+/// other targets still deliver presses and clicks.
 #[must_use]
 pub fn arena_fed(kind: TargetKind) -> bool {
-	arena_target(kind) && ARENA_LINKED
+	arena_target(kind)
 }
 
 /// The injector a sanity run uses when the caller does not pick one.
@@ -386,9 +381,8 @@ fn inject_steps(pinch: bool) -> Vec<Step> {
 }
 
 fn arena_note(kind: TargetKind) -> &'static str {
-	if arena_target(kind) {
-		"Android and Linux feed the gesture arena once it is linked; this build injects the \
-		 gestures for the operating system and the widgets still receive presses and clicks"
+	if arena_fed(kind) {
+		"Android and Linux feed these pointers into the gesture arena"
 	} else {
 		"this target's widgets receive presses and clicks; long press, pan, and pinch are injected \
 		 for the operating system"
@@ -913,26 +907,14 @@ mod tests {
 	}
 
 	#[test]
-	fn the_arena_is_not_linked_and_only_android_and_linux_will_feed_it() {
-		assert!(arena_target(TargetKind::Android));
-		assert!(arena_target(TargetKind::Linux));
-		assert!(!arena_target(TargetKind::IosSimulator));
-		assert!(!arena_target(TargetKind::IosDevice));
-		assert!(!arena_target(TargetKind::Macos));
-		assert!(!arena_target(TargetKind::Windows));
-		assert!(!arena_target(TargetKind::Web));
-
-		for kind in [
-			TargetKind::Android,
-			TargetKind::Linux,
-			TargetKind::IosSimulator,
-			TargetKind::Macos,
-			TargetKind::Windows,
-			TargetKind::Web,
-			TargetKind::IosDevice,
-		] {
-			assert!(!arena_fed(kind), "{kind:?}");
-		}
+	fn only_android_and_linux_feed_the_arena() {
+		assert!(arena_fed(TargetKind::Android));
+		assert!(arena_fed(TargetKind::Linux));
+		assert!(!arena_fed(TargetKind::IosSimulator));
+		assert!(!arena_fed(TargetKind::IosDevice));
+		assert!(!arena_fed(TargetKind::Macos));
+		assert!(!arena_fed(TargetKind::Windows));
+		assert!(!arena_fed(TargetKind::Web));
 	}
 
 	#[test]
@@ -974,7 +956,7 @@ mod tests {
 			Injector::Android,
 		))
 		.unwrap();
-		assert!(!suite.arena);
+		assert!(suite.arena);
 		assert_eq!(suite.omitted.as_slice(), []);
 		assert_eq!(
 			suite.gestures,

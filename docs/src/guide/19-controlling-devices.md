@@ -90,7 +90,7 @@ Device steps need no driver at all: `boot` and `shutdown` manage simulators and 
 
 `--driver` uses the UI session instead, which is how Linux pinches. A mouse session on macOS or Windows has one pointer, so pinch is reported as omitted rather than run. The reply is one JSON document: the step outcome, plus `gestures`, `omitted`, `arena`, and `notes`.
 
-Android and Linux are the widget backends that feed a gesture arena. This build injects the gestures for the operating system; the widgets on every target still receive presses and clicks until that arena is linked. The holds and drags are already past the arena's 500 millisecond and 18 point thresholds, so the same suite exercises it once it is.
+Android and Linux feed those pointers into the [gesture arena](38-gestures.md). A tap, a 600 millisecond hold, an 80 point drag, and a two-finger pinch are the same gestures `Gesture::tap`, `Gesture::long_press`, `Gesture::pan`, and `Gesture::pinch` recognize. On iOS, macOS, and Windows the widgets still receive presses and clicks; the controller injects the other gestures for the operating system.
 
 ### What each target needs
 
