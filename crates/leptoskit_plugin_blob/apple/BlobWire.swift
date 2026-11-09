@@ -1,9 +1,27 @@
 import Foundation
 import LeptosKitBridge
 
+enum BlobCapability: UInt32 {
+    case restricted = 0
+    case available = 1
+    case unavailable = 2
+}
+
 enum BlobWire {
     static let maxCreate = 65536
     static let maxRead: UInt32 = 8192
+
+    static func capability(_ value: BlobCapability) -> Data {
+        var little = value.rawValue.littleEndian
+        return withUnsafeBytes(of: &little) { Data($0) }
+    }
+
+    static func emptyPayload(_ payload: NativeBuffer) throws {
+        try payload.withUnsafeBytes { bytes in
+            var reader = WireReader(bytes)
+            try reader.finish()
+        }
+    }
 
     static func create(_ payload: NativeBuffer) throws -> Data {
         try payload.withUnsafeBytes { bytes in
@@ -34,6 +52,20 @@ enum BlobWire {
             try reader.finish()
             return id
         }
+    }
+
+    static func encodeId(_ id: UInt32) -> Data {
+        var little = id.littleEndian
+        return withUnsafeBytes(of: &little) { Data($0) }
+    }
+
+    static func encodeSlice(_ data: Data) throws -> Data {
+        guard data.count <= Int(maxRead) else { throw PluginError.invalidArgument }
+        var output = Data()
+        var count = UInt32(data.count).littleEndian
+        withUnsafeBytes(of: &count) { output.append(contentsOf: $0) }
+        output.append(data)
+        return output
     }
 }
 

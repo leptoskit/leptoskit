@@ -16,6 +16,6 @@
 
 <!-- {=p_blobSummary} -->
 
-Add `leptoskit_plugin_blob` as a direct dependency and select the `blob` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Blob` rather than resolving the plugin on every call. Create an owned byte blob, read a bounded slice, and release it without copying the whole payload through every control message. This MVP returns Unavailable from every host until a durable resource protocol lands; codecs and validation are complete so later hosts can fill in storage.
+Add `leptoskit_plugin_blob` as a direct dependency and select the `blob` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Blob` rather than resolving the plugin on every call. Query availability, create an owned byte blob, read a bounded slice, and release it without copying the whole payload through every control message. This MVP keeps blobs in process memory on Apple, Android, Linux, Windows, and the browser; durable shared-memory / object-URL backends remain later scope.
 
 <!-- {/p_blobSummary} -->

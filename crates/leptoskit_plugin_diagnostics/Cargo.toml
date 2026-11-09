@@ -22,10 +22,10 @@ android-context = true
 unavailable = true
 
 [package.metadata.leptoskit.runtime.windows]
-unavailable = true
+rust-type = "Diagnostics"
 
 [package.metadata.leptoskit.runtime.linux]
-unavailable = true
+rust-type = "Diagnostics"
 
 [features]
 guest = ["leptoskit_bridge/guest"]
