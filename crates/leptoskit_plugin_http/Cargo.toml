@@ -14,6 +14,9 @@ description = "Scoped, bounded asynchronous HTTP requests for LeptosKit hosts an
 name = "http"
 rust-factory = "from_config"
 rust-async = true
+# `leptoskit build` refuses an app whose options leave these out, which the
+# factory would reject at launch. `host::tests` holds the factory to the list.
+required-options = ["origins"]
 android-permissions = ["android.permission.INTERNET"]
 
 [features]
@@ -41,6 +44,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { workspace = true, features = ["macros", "time", "rt", "sync"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+toml = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time", "sync"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

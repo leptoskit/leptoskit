@@ -117,6 +117,13 @@ pub struct Plugin {
 	/// plugins take options.
 	#[serde(default)]
 	pub option_features: BTreeMap<String, String>,
+	/// Options the plugin's factory can't start without, such as the `http`
+	/// plugin's `origins`. `leptoskit build` stops when the app's
+	/// `[native.plugin-options.<name>]` leaves one out or empty, instead of
+	/// building an app whose factory fails at launch. Only async plugins
+	/// take options.
+	#[serde(default)]
+	pub required_options: Vec<String>,
 	/// The features `option_features` turns on for this app's options.
 	#[serde(skip)]
 	pub enabled_features: Vec<String>,
@@ -909,12 +916,17 @@ fn validate_android_paths(plugin: &Plugin) -> Result<()> {
 /// Option names are the kebab-case keys of an options table, and features
 /// Cargo feature names, which the build writes into a `--features` list.
 fn validate_option_features(plugin: &Plugin) -> Result<()> {
+	for option in &plugin.required_options {
+		anyhow::ensure!(
+			option_name(option),
+			"invalid option name in plugin {}'s required-options: {option}",
+			plugin.name
+		);
+	}
+
 	for (option, feature) in &plugin.option_features {
 		anyhow::ensure!(
-			!option.is_empty()
-				&& option
-					.bytes()
-					.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
+			option_name(option),
 			"invalid option name in plugin {}'s option-features: {option}",
 			plugin.name
 		);
@@ -929,6 +941,13 @@ fn validate_option_features(plugin: &Plugin) -> Result<()> {
 	}
 
 	Ok(())
+}
+
+fn option_name(option: &str) -> bool {
+	!option.is_empty()
+		&& option
+			.bytes()
+			.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn validate_frameworks(plugin: &Plugin) -> Result<()> {

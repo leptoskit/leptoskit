@@ -584,6 +584,30 @@ pub(super) fn rust_registrant(registry: &Registry, target: Target) -> Result<Str
 	Ok(rust)
 }
 
+/// Whether every plugin `registrant` installs goes through `App::register`,
+/// so that a factory that fails at launch is named in the app's error.
+#[cfg(test)]
+pub(crate) fn installs_only_named_plugins(registrant: &str) -> bool {
+	let lines: Vec<_> = registrant.lines().map(str::trim).collect();
+	let installs: Vec<_> = (0..lines.len())
+		.filter(|&index| {
+			lines[index].starts_with("app.install") || lines[index].starts_with("app.defer_service")
+		})
+		.collect();
+	!installs.is_empty()
+		&& installs.iter().all(|&index| {
+			index > 0
+				&& lines[index - 1].starts_with("app.register(\"")
+				&& lines[index - 1].ends_with("\", |app| {")
+		})
+		&& !registrant.lines().any(|line| {
+			let line = line.trim();
+			(line.contains("app.install") || line.contains("app.defer_service"))
+				&& !line.starts_with("app.install")
+				&& !line.starts_with("app.defer_service")
+		})
+}
+
 /// How a registrant spells the calls that install one plugin.
 pub(super) struct Installer {
 	/// The receiver and leading arguments of every install call.
@@ -595,6 +619,9 @@ pub(super) struct Installer {
 	indent: &'static str,
 	/// Whether the host runs plugin services.
 	services: bool,
+	/// Whether each plugin installs through `App::register`, which names the
+	/// plugin in the error when its factory or installation fails.
+	named: bool,
 }
 
 impl Installer {
@@ -605,6 +632,7 @@ impl Installer {
 		directories: "context",
 		indent: "    ",
 		services: false,
+		named: false,
 	};
 	/// Inside the mobile and macOS registrant's `create_with_context`
 	/// closure.
@@ -614,10 +642,28 @@ impl Installer {
 		directories: "_context",
 		indent: "                ",
 		services: true,
+		named: true,
 	};
 
 	fn install(&self, install: &str) -> String {
-		format!("{}{}", self.indent, self.call.replace("{install}", install))
+		self.call.replace("{install}", install)
+	}
+
+	/// Writes the statement that installs `plugin` with `expression`, an
+	/// install call that returns `Result<_, Error>`.
+	fn statement(&self, plugin: &str, expression: &str, rust: &mut String) -> Result<()> {
+		if self.named {
+			let indent = self.indent;
+			writeln!(
+				rust,
+				"{indent}app.register({plugin:?}, |app| {{\n{indent}    \
+				 {expression}\n{indent}}})?;"
+			)?;
+		} else {
+			writeln!(rust, "{}{expression}?;", self.indent)?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -641,11 +687,15 @@ pub(super) fn register_rust_plugin(
 			"{} declares a plugin service, which this host can't run",
 			plugin.name
 		);
-		writeln!(
+		installer.statement(
+			&plugin.name,
+			&format!(
+				"app.defer_service({}::{factory}(\n                        \
+				 &_context.data_dir,\n                        &_context.cache_dir,\n                    \
+				 )?)",
+				plugin.crate_name
+			),
 			rust,
-			"                app.defer_service({}::{factory}(\n                    \
-			 &_context.data_dir,\n                    &_context.cache_dir,\n                )?)?;",
-			plugin.crate_name
 		)?;
 
 		return Ok(());
@@ -667,13 +717,12 @@ pub(super) fn register_rust_plugin(
 
 	let crate_name = &plugin.crate_name;
 
-	match constructor {
+	let expression = match constructor {
 		Constructor::Type(kind) => {
-			writeln!(
-				rust,
-				"{}Box::new({crate_name}::{kind}::default()))?;",
+			format!(
+				"{}Box::new({crate_name}::{kind}::default()))",
 				installer.install(install)
-			)?;
+			)
 		}
 
 		Constructor::Factory(factory) if flavour == Flavour::Async => {
@@ -681,11 +730,10 @@ pub(super) fn register_rust_plugin(
 				.options_json
 				.as_ref()
 				.context("validated async plugin options missing")?;
-			writeln!(
-				rust,
-				"{}std::sync::Arc::new({crate_name}::{factory}({options:?})?))?;",
+			format!(
+				"{}std::sync::Arc::new({crate_name}::{factory}({options:?})?))",
 				installer.install("install_async")
-			)?;
+			)
 		}
 
 		Constructor::ContextFactory(factory) if flavour == Flavour::Async => {
@@ -693,32 +741,29 @@ pub(super) fn register_rust_plugin(
 				.options_json
 				.as_ref()
 				.context("validated async plugin options missing")?;
-			writeln!(
-				rust,
-				"{}std::sync::Arc::new({crate_name}::{factory}({context}, {options:?})?))?;",
+			format!(
+				"{}std::sync::Arc::new({crate_name}::{factory}({context}, {options:?})?))",
 				installer.install("install_async")
-			)?;
+			)
 		}
 
 		Constructor::Factory(factory) => {
-			writeln!(
-				rust,
+			format!(
 				"{}Box::new({crate_name}::{factory}(&{directories}.data_dir, \
-				 &{directories}.cache_dir)?))?;",
+				 &{directories}.cache_dir)?))",
 				installer.install(install)
-			)?;
+			)
 		}
 
 		Constructor::ContextFactory(factory) => {
-			writeln!(
-				rust,
-				"{}Box::new({crate_name}::{factory}({context})?))?;",
+			format!(
+				"{}Box::new({crate_name}::{factory}({context})?))",
 				installer.install(install)
-			)?;
+			)
 		}
-	}
+	};
 
-	Ok(())
+	installer.statement(&plugin.name, &expression, rust)
 }
 
 /// Native handlers retain order independently of Rust service installation.
