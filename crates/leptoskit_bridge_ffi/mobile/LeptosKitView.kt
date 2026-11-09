@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
+import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
 import dev.leptoskit.bridge.NativeBridge
@@ -22,6 +23,48 @@ internal class NativeApplicationInitializationFailure(
     cause: Exception,
     val join: suspend () -> Unit,
 ) : IllegalStateException(cause.message, cause)
+
+/**
+ * What a view shows once its app stops: why, readable on any app.
+ *
+ * Its colors are its own. A plain `TextView` took the theme's text color,
+ * which in a light system theme is dark: on an app with a dark background,
+ * a stopped app looked like a black screen with nothing to read.
+ */
+internal object NativeFailureView {
+    /** Near-black, so the message reads the same in either theme. */
+    const val BACKGROUND: Int = 0xFF1B1A1F.toInt()
+
+    /** White: 17:1 against [BACKGROUND]. */
+    const val TEXT: Int = 0xFFFFFFFF.toInt()
+
+    /** Identifies the view to tests and accessibility tools. */
+    const val DESCRIPTION = "leptoskit-error"
+
+    private const val PADDING_DP = 24
+    private const val TEXT_SP = 16f
+
+    fun create(
+        context: Context,
+        message: String,
+    ): TextView =
+        TextView(context).apply {
+            text = message
+            contentDescription = DESCRIPTION
+            setTextColor(TEXT)
+            setBackgroundColor(BACKGROUND)
+            textSize = TEXT_SP
+            gravity = Gravity.CENTER
+            setTextIsSelectable(true)
+            val padding = (PADDING_DP * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+            layoutParams =
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                )
+        }
+}
 
 /**
  * Called by JNI on the guest thread after it posts something; the view takes
@@ -302,12 +345,7 @@ class LeptosKitView(
                 return
             }
 
-            addView(
-                TextView(context).apply {
-                    text = error.message ?: error.javaClass.simpleName
-                    contentDescription = "leptoskit-error"
-                },
-            )
+            addView(NativeFailureView.create(context, error.message ?: error.javaClass.simpleName))
         }
     }
 
