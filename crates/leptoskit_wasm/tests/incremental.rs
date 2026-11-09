@@ -14,7 +14,9 @@ use leptoskit_wasm::WasmHost;
 /// - `11` creates label 5 at the front of box 3;
 /// - `12` gives box 3 a text color, which label 4 inherits;
 /// - `13` turns label 4 into a button;
-/// - `14` gives label 2 an id, a relationship that resolves tree-wide.
+/// - `14` gives label 2 an id, a relationship that resolves tree-wide;
+/// - `15` rewrites label 2 and creates label 5 at the front of box 3, two
+///   regions whose wire ids (3, then 2) run against the tree (2, then 3).
 const GUEST: &str = r#"
 (module
   (import "leptoskit" "node_create" (func $create (param i64 i32)))
@@ -29,6 +31,7 @@ const GUEST: &str = r#"
   (data (i32.const 160) "{\"class\":\"text-red-500\"}")
   (data (i32.const 200) "{\"text\":\"Go\"}")
   (data (i32.const 220) "{\"text\":\"a\",\"id\":\"x\"}")
+  (data (i32.const 260) "{\"text\":\"e\"}")
   (func (export "leptoskit_main")
     (call $create (i64.const 1) (i32.const 0))
     (call $create (i64.const 2) (i32.const 1))
@@ -57,6 +60,12 @@ const GUEST: &str = r#"
         (call $props (i64.const 4) (i32.const 200) (i32.const 13))))
     (if (i64.eq (local.get $id) (i64.const 14))
       (then (call $props (i64.const 2) (i32.const 220) (i32.const 21))))
+    (if (i64.eq (local.get $id) (i64.const 15))
+      (then
+        (call $props (i64.const 2) (i32.const 260) (i32.const 12))
+        (call $create (i64.const 5) (i32.const 1))
+        (call $props (i64.const 5) (i32.const 140) (i32.const 12))
+        (call $insert (i64.const 3) (i64.const 5) (i32.const 0))))
     (call $commit)
     (i32.const 1))
 )
@@ -72,7 +81,27 @@ fn started() -> WasmHost<HeadlessBackend> {
 fn send(host: &mut WasmHost<HeadlessBackend>, wire: i64) -> Vec<Mutation> {
 	host.dispatch_wire(wire, EventKind::Press, None)
 		.expect("dispatch");
+	assert_paired(host);
 	host.take_mutations()
+}
+
+/// Every widget pairs with the wire node it was built from: each one has
+/// one, and shows its text. Events reach the guest through this pairing.
+fn assert_paired(host: &WasmHost<HeadlessBackend>) {
+	let surface = host.surface();
+	let mut stack: Vec<_> = surface.root().into_iter().collect();
+
+	while let Some(node) = stack.pop() {
+		let wire = host
+			.wire_node(node)
+			.unwrap_or_else(|| panic!("widget {node:?} pairs with no wire node"));
+		assert_eq!(
+			wire.props.text,
+			surface.props(node).text,
+			"widget {node:?} pairs with another wire node"
+		);
+		stack.extend(surface.children(node).iter().rev());
+	}
 }
 
 /// The surface node of box 3's children, in order.
@@ -232,4 +261,26 @@ fn incremental_and_complete_commits_build_the_same_interface() {
 	}
 
 	assert_eq!(seen, expected);
+}
+
+#[test]
+fn regions_committed_together_keep_their_own_widgets() {
+	let mut host = started();
+	send(&mut host, 15);
+
+	let surface = host.surface();
+	let root = surface.root().expect("root");
+	assert_eq!(
+		text_of(&host, surface.children(root)[0]).as_deref(),
+		Some("e")
+	);
+	let labels: Vec<_> = box_children(&host)
+		.into_iter()
+		.map(|node| text_of(&host, node))
+		.collect();
+	assert_eq!(labels, [Some("d".to_owned()), Some("b".to_owned())]);
+
+	// The next commit patches through the same pairing.
+	send(&mut host, 10);
+	assert_eq!(text_of(&host, box_children(&host)[1]).as_deref(), Some("c"));
 }
