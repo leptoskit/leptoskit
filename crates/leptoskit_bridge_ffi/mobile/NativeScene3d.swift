@@ -36,12 +36,17 @@ final class NativeScene3dView: NativeScene3dBase {
     private var pointerTouch: UITouch?
     #endif
 
-    /// Read once, the first time any view attaches: the app bundle's `assets` folder.
+    /// Read once before the guest starts: the app bundle's `assets` folder.
     private static let assets: Void = {
         guard let folder = Bundle.main.resourceURL?.appendingPathComponent("assets").path else { return }
         let bytes = Array(folder.utf8)
         _ = bytes.withUnsafeBufferPointer { lk_scene3d_set_asset_directory($0.baseAddress, $0.count) }
     }()
+
+    /// Install the bundle reader before the guest queues its first model.
+    static func configure() {
+        if lk_scene3d_available() == 1 { _ = assets }
+    }
 
     init() {
         super.init(frame: .zero)

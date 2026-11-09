@@ -49,6 +49,7 @@ final class NativeAppRuntime {
             wasm: wasm, identifier: identifier, pluginContext: pluginContext
         )
         self.app = app
+        NativeScene3dView.configure()
         // This runtime drives the guest's frame clock from the display link.
         guard lk_app_enable_frames(app.raw) == 0 else { throw PluginError.native }
         // Timers are optional: if the host cannot start one, the guest sees

@@ -134,6 +134,8 @@ class LeptosKitView(
     init {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Application creation requires the main thread" }
         NativeBridge.load()
+        // The guest can queue its first model before a Scene3d view exists.
+        if (NativeScene3d.available()) NativeScene3d.configure(context)
         try {
             app =
                 NativeApp.create(
