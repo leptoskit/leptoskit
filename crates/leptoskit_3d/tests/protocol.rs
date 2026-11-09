@@ -56,6 +56,16 @@ fn every_op() -> Vec<Op> {
 			target: "joy".into(),
 			weight: 1.0,
 		},
+		Op::SetBlend {
+			node: NodeId(3),
+			part: Some("glow".into()),
+			blend: Blend::Additive,
+		},
+		Op::SetBlend {
+			node: NodeId(3),
+			part: None,
+			blend: Blend::Normal,
+		},
 		Op::SetPartOffset {
 			node: NodeId(3),
 			part: "head".into(),

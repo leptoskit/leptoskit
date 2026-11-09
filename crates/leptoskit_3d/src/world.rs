@@ -26,6 +26,7 @@ pub(crate) struct Overrides {
 	pub emissive_strength: Option<f32>,
 	pub opacity: f32,
 	pub rim: Rim,
+	pub blend: Blend,
 }
 
 impl Default for Overrides {
@@ -40,6 +41,7 @@ impl Default for Overrides {
 				strength: 0.0,
 				power: 2.0,
 			},
+			blend: Blend::Normal,
 		}
 	}
 }
@@ -149,6 +151,7 @@ pub(crate) struct Instance {
 	pub cast_shadow: bool,
 	parts_visible: BTreeMap<String, bool>,
 	materials: Vec<(Option<String>, MaterialOverride)>,
+	blends: Vec<(Option<String>, Blend)>,
 	morphs: BTreeMap<(Option<String>, String), f32>,
 	offsets: BTreeMap<String, PartOffset>,
 	pending_play: Option<Play>,
@@ -171,6 +174,7 @@ impl Instance {
 			cast_shadow: true,
 			parts_visible: BTreeMap::new(),
 			materials: Vec::new(),
+			blends: Vec::new(),
 			morphs: BTreeMap::new(),
 			offsets: BTreeMap::new(),
 			pending_play: None,
@@ -248,6 +252,24 @@ impl Instance {
 				self.overrides[node].apply(change);
 			}
 		}
+
+		for (part, blend) in &self.blends {
+			for node in Self::subtree(asset, part.as_deref()) {
+				self.overrides[node].blend = *blend;
+			}
+		}
+	}
+
+	/// Replaces the blend set for `part`, or adds it while there is room. A
+	/// later setting wins where parts overlap.
+	fn set_blend(&mut self, part: Option<String>, blend: Blend) {
+		self.blends.retain(|(existing, _)| *existing != part);
+
+		if self.blends.len() < MAX_SETTINGS {
+			self.blends.push((part, blend));
+		}
+
+		self.resolve_materials();
 	}
 
 	/// Applies morph weights set by name before the asset loaded, now that
@@ -885,6 +907,9 @@ impl World {
 				part,
 				material,
 			} => self.with_instance(node, |instance| instance.set_material(part, &material)),
+			Op::SetBlend { node, part, blend } => {
+				self.with_instance(node, |instance| instance.set_blend(part, blend));
+			}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}

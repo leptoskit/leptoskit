@@ -220,6 +220,18 @@ pub struct MaterialOverride {
 	pub rim: Option<Rim>,
 }
 
+/// How a part's colour meets what is drawn behind it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+	/// It covers what is behind it, as much as its opacity says.
+	#[default]
+	Normal,
+	/// It adds its light to what is behind it, scaled by its opacity, and
+	/// covers nothing: a glow, a flash, a spark, a beam. Black adds nothing.
+	/// It draws with the transparent parts and hides nothing behind it.
+	Additive,
+}
+
 /// The directional light, standing in for the sun or a room's key light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
@@ -378,6 +390,16 @@ pub enum Op {
 		/// What to change.
 		material: MaterialOverride,
 	},
+	/// Sets how a model instance's parts meet what is behind them.
+	SetBlend {
+		/// The model instance.
+		node: NodeId,
+		/// The part to change, with everything under it, or `None` for the
+		/// whole instance.
+		part: Option<String>,
+		/// How it blends.
+		blend: Blend,
+	},
 	/// Turns the soft shadow under a model instance on or off. Instances cast
 	/// one by default.
 	SetShadow {
@@ -532,6 +554,7 @@ const SET_EXPOSURE: u8 = 18;
 const RAYCAST: u8 = 19;
 const RAYCAST_SCREEN: u8 = 20;
 const SET_PART_OFFSET: u8 = 21;
+const SET_BLEND: u8 = 22;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -824,6 +847,15 @@ impl Op {
 				writer.option(part.as_deref(), Writer::str);
 				write_material(writer, material);
 			}
+			Self::SetBlend { node, part, blend } => {
+				writer.u8(SET_BLEND);
+				writer.u32(node.0);
+				writer.option(part.as_deref(), Writer::str);
+				writer.u8(match blend {
+					Blend::Normal => 0,
+					Blend::Additive => 1,
+				});
+			}
 			Self::SetShadow { node, cast } => {
 				writer.u8(SET_SHADOW);
 				writer.u32(node.0);
@@ -982,6 +1014,17 @@ impl Op {
 					node: NodeId(reader.u32()?),
 					part: reader.option(|reader| reader.str(NAME))?,
 					material: read_material(reader)?,
+				}
+			}
+			SET_BLEND => {
+				Self::SetBlend {
+					node: NodeId(reader.u32()?),
+					part: reader.option(|reader| reader.str(NAME))?,
+					blend: match reader.u8()? {
+						0 => Blend::Normal,
+						1 => Blend::Additive,
+						_ => return Err(DecodeError("an unknown blend")),
+					},
 				}
 			}
 			SET_SHADOW => {

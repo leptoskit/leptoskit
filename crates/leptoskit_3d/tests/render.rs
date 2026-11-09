@@ -227,6 +227,67 @@ fn blended_and_faded_parts_are_translucent() {
 }
 
 #[test]
+fn additive_parts_add_their_light_to_what_is_behind() {
+	let Some(gpu) = gpu() else { return };
+	let mut renderer = renderer(gpu);
+	renderer
+		.world_mut()
+		.apply([Op::SetBackdrop(Backdrop::Color([0.0, 0.0, 0.5, 1.0]))]);
+	spawn(
+		&mut renderer,
+		1,
+		1,
+		&fixture::unlit_cube([0.5, 0.0, 0.0, 1.0], false),
+	);
+	let backdrop = draw(&mut renderer).at(2, 2);
+	// Drawn normally, the red cube covers the blue.
+	let covered = draw(&mut renderer).at(32, 32);
+	assert!(covered[2] < 8, "{covered:?}");
+
+	renderer.world_mut().apply([Op::SetBlend {
+		node: NodeId(1),
+		part: None,
+		blend: Blend::Additive,
+	}]);
+	let added = draw(&mut renderer).at(32, 32);
+	assert!(
+		near(added, [covered[0], 0, backdrop[2], 255], 2),
+		"{added:?}"
+	);
+
+	// Its opacity scales the light it adds.
+	renderer.world_mut().apply([Op::SetMaterial {
+		node: NodeId(1),
+		part: None,
+		material: MaterialOverride {
+			opacity: Some(0.5),
+			..MaterialOverride::default()
+		},
+	}]);
+	let dimmer = draw(&mut renderer).at(32, 32);
+	assert!(dimmer[0] < added[0] && dimmer[0] > 8, "{dimmer:?}");
+	assert_eq!(dimmer[2], backdrop[2]);
+
+	// Over nothing it writes light with no alpha, for a premultiplied
+	// compositor to add; back to normal, it covers again.
+	let mut renderer = self::renderer(gpu);
+	spawn(&mut renderer, 1, 1, &fixture::unlit_cube([1.0; 4], false));
+	renderer.world_mut().apply([Op::SetBlend {
+		node: NodeId(1),
+		part: Some("cube".into()),
+		blend: Blend::Additive,
+	}]);
+	let light = draw(&mut renderer).at(32, 32);
+	assert!(light[0] > 200 && light[3] == 0, "{light:?}");
+	renderer.world_mut().apply([Op::SetBlend {
+		node: NodeId(1),
+		part: None,
+		blend: Blend::Normal,
+	}]);
+	assert_eq!(draw(&mut renderer).at(32, 32)[3], 255);
+}
+
+#[test]
 fn material_overrides_tint_glow_and_rim() {
 	let Some(gpu) = gpu() else { return };
 	let mut renderer = renderer(gpu);
