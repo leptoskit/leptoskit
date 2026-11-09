@@ -14,6 +14,25 @@ fn document(raw: &str) -> Value {
 }
 
 #[test]
+fn graph_schema_requires_explicit_mode_and_rejects_managed_defaults() {
+	let schema = serde_json::to_value(schema::configuration(&schema_url())).unwrap();
+	let validator = jsonschema::validator_for(&schema).unwrap();
+	let raw = include_str!("fixtures/website-graph.toml");
+	validator.validate(&document(raw)).unwrap();
+	for changed in [
+		raw.replace("mode = \"graph\"", ""),
+		raw.replace(
+			"mode = \"graph\"",
+			"mode = \"graph\"\nbackup_bucket = \"legacy\"",
+		),
+		raw.replace("engine = \"podman\"", "engine = \"unknown\""),
+		raw.replace("probes = true", "probes = \"true\""),
+	] {
+		assert!(validator.validate(&document(&changed)).is_err());
+	}
+}
+
+#[test]
 fn workspace_schema_rejects_unknown_versions_and_literal_credentials() {
 	let generated =
 		serde_json::to_value(schema::workspace("https://example.test/workspace.json")).unwrap();

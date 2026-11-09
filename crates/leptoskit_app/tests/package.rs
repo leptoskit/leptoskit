@@ -276,3 +276,24 @@ fn a_rive_runtime_that_cannot_be_written_stops_packaging() {
 	let report = String::from_utf8_lossy(&output.stderr);
 	assert!(report.contains("os error"), "{report}");
 }
+
+#[test]
+fn graph_environment_selects_cli_and_release_profile() {
+	let directory = tempfile::tempdir().unwrap();
+	let cli = fake_cli(directory.path(), 0);
+	let out = directory.path().join("output");
+	let output = packager()
+		.env("LEPTOSKIT_CLI", cli)
+		.env("LEPTOSKIT_BUILD_PROFILE", "release")
+		.arg("--out")
+		.arg(&out)
+		.output()
+		.unwrap();
+	assert!(
+		output.status.success(),
+		"{}",
+		String::from_utf8_lossy(&output.stderr)
+	);
+	let args = std::fs::read_to_string(out.join("args.txt")).unwrap();
+	assert!(args.contains("--release"), "{args}");
+}

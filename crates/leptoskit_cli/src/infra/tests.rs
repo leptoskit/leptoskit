@@ -96,7 +96,7 @@ fn external_hosts_reuse_the_provider_and_edge_resources_without_a_managed_databa
 	assert!(!cloud_init.contains("docker"));
 	assert!(cloud_init.contains("  - python3\n"));
 	let config = LeptoskitConfig {
-		infra: Some(infra),
+		infra: Some(infra.into()),
 		..LeptoskitConfig::default()
 	};
 	assert!(settings(&config).is_ok());
@@ -282,12 +282,18 @@ fn ci_workflow_builds_before_deploying_and_uses_shared_state() {
 		key: "production.tfstate".into(),
 		region: "eu-west-1".into(),
 	});
-	config.infra = Some(infra);
+	config.infra = Some(infra.into());
 
 	let project = crate::deploy::Project::read(root.path(), &config).unwrap();
 	insta::assert_json_snapshot!("managed_ci", ci::workflow(&config, &project).unwrap());
-	config.infra.as_mut().unwrap().plugins.analytics =
-		Some(leptoskit_config::infra::InfraAnalytics::default());
+	config
+		.infra
+		.as_mut()
+		.unwrap()
+		.as_managed_mut()
+		.unwrap()
+		.plugins
+		.analytics = Some(leptoskit_config::infra::InfraAnalytics::default());
 	let workflow = ci::workflow(&config, &project).unwrap();
 	assert_eq!(
 		workflow["jobs"]["deploy"]["steps"][1]["env"]["LEPTOSKIT_ANALYTICS_READ_KEY"],

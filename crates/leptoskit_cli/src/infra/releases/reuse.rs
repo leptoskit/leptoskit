@@ -68,8 +68,7 @@ pub(super) fn current(args: &ReleaseArgs, current: Current<'_>) -> Result<bool> 
 		"requested descriptor differs from the current release"
 	);
 	let c = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.context("missing managed infrastructure")?;
 	let phase: serde_json::Value =
 		serde_json::from_slice(&super::remote::read(&hosts[0], &c.name, "operation.json")?)?;
@@ -146,7 +145,7 @@ fn environment(
 	version: &str,
 	window: Option<&super::super::schema_window::Window>,
 ) -> Result<BTreeMap<String, String>> {
-	let c = config.infra.as_ref().context("missing infrastructure")?;
+	let c = config.managed_infra().context("missing infrastructure")?;
 	let (raw, _) = super::runtime::kamal(c, project, hosts, private)?;
 	let raw = super::super::schema_window::configure(&raw, &c.name, window)?;
 	let runtime: serde_json::Value = serde_json::from_str(&raw)?;

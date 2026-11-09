@@ -174,6 +174,7 @@ impl Project {
 	/// Returns an error when the app has no configured backend, or the
 	/// server package or its binary can't be found.
 	pub fn read(root: &Path, config: &LeptoskitConfig) -> Result<Self> {
+		config.ensure_application_root()?;
 		anyhow::ensure!(
 			config.backend_enabled(true)?,
 			"build.backend = false selects a static app; upload {DIST_DIR}/ to a CDN, or set \
