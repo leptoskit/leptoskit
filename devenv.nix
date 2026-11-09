@@ -958,7 +958,10 @@ in
 
         # Sibling scripts are addressed absolutely so the hook also works
         # outside `devenv shell`, where the profile bin dir is not on PATH.
-        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --verbose --redact
+        # Scan the branch's complete history, including every commit being
+        # pushed. Local tool checkpoint refs are not repository history and
+        # can contain audit reports or snapshots from unrelated worktrees.
+        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --log-opts=HEAD --verbose --redact
         run_step "lint:clippy" ${currentDir}/.devenv/profile/bin/lint:clippy
         run_step "lint:monostyle" ${currentDir}/.devenv/profile/bin/lint:monostyle
         run_step "lint:leptoskit" ${currentDir}/.devenv/profile/bin/lint:leptoskit
