@@ -27,6 +27,7 @@ use crate::cache::CacheEvent;
 use crate::cache::CacheInner;
 use crate::cancel::CancelToken;
 use crate::hydration::DehydratedQuery;
+use crate::hydration::Rendered;
 use crate::key::ScopeId;
 use crate::key::Tag;
 use crate::key::hash_key;
@@ -208,6 +209,7 @@ pub(crate) struct Query<K, T, E> {
 	pub(crate) options: ResolvedQueryOptions<E>,
 	pub(crate) signals: QuerySignals<T, E>,
 	pub(crate) codec: Option<DataCodec<T>>,
+	error_codec: Option<DataCodec<E>>,
 	data_eq: Option<DataEqFn<T>>,
 	observers: Mutex<Vec<ObserverEntry<E>>>,
 	in_flight: Mutex<Option<InFlight>>,
@@ -251,6 +253,7 @@ where
 				options,
 				signals: QuerySignals::new(),
 				codec: scope.codec.clone(),
+				error_codec: scope.error_codec.clone(),
 				data_eq: scope.data_eq.clone(),
 				observers: Mutex::new(Vec::new()),
 				in_flight: Mutex::new(None),
@@ -671,6 +674,69 @@ where
 			meta.data_updated_at = Some(updated_at.unwrap_or_else(now_ms));
 			meta.data_update_count += 1;
 			meta.is_invalidated = false;
+		});
+		self.emit(CacheEvent::Updated);
+	}
+
+	/// What the server's render streams: the data, or the error when there is
+	/// no data and the scope streams errors.
+	pub(crate) fn rendered(&self) -> Option<Rendered> {
+		if let Some(dehydrated) = AnyQuery::dehydrate(self) {
+			return Some(Rendered::Data(dehydrated));
+		}
+
+		let codec = self.error_codec.as_ref()?;
+		let meta = self.signals.meta.get_untracked();
+		let error = self
+			.signals
+			.error
+			.with_untracked(|error| error.as_ref().map(|error| codec.encode(error)))?
+			.ok()?;
+		Some(Rendered::Error {
+			error,
+			error_updated_at: meta.error_updated_at.unwrap_or_else(now_ms),
+			failure_count: meta.failure_count,
+		})
+	}
+
+	/// Seeds the query with what the server's render settled with.
+	pub(crate) fn hydrate_rendered(&self, rendered: &Rendered) {
+		match rendered {
+			Rendered::Data(dehydrated) => AnyQuery::hydrate(self, dehydrated),
+			Rendered::Error {
+				error,
+				error_updated_at,
+				failure_count,
+			} => self.hydrate_error(error, *error_updated_at, *failure_count),
+		}
+	}
+
+	/// Writes a server render's error, as if a fetch had just failed, unless
+	/// the query already has data or a newer error.
+	fn hydrate_error(&self, error: &serde_json::Value, updated_at: u64, failure_count: u32) {
+		let Some(codec) = self.error_codec.as_ref() else {
+			return;
+		};
+		let meta = self.signals.meta.get_untracked();
+
+		if self.has_data_untracked()
+			|| meta
+				.error_updated_at
+				.is_some_and(|current| current >= updated_at)
+		{
+			return;
+		}
+
+		let Ok(error) = codec.decode(error.clone()) else {
+			return;
+		};
+
+		Self::set_signal(&self.signals.failure_reason, Some(error.clone()));
+		self.signals.error.set(Some(error));
+		self.update_meta(|meta| {
+			meta.error_updated_at = Some(updated_at);
+			meta.error_update_count += 1;
+			meta.failure_count = failure_count;
 		});
 		self.emit(CacheEvent::Updated);
 	}

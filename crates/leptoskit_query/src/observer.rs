@@ -17,14 +17,16 @@ use std::time::Duration;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use leptos::prelude::*;
+use leptos::reactive::computed::suspense::SuspenseContext;
 use parking_lot::Mutex;
 
 use crate::client::QueryClient;
 use crate::handle::Placeholder;
 use crate::handle::QueryObserverOptions;
 use crate::handle::QueryResult;
-use crate::hydration::DehydratedQuery;
+use crate::hydration::Rendered;
 use crate::hydration::is_server;
+use crate::hydration::to_script_safe_json;
 use crate::listeners::Subscription;
 use crate::listeners::spawn;
 use crate::managers::FocusManager;
@@ -69,8 +71,8 @@ pub(crate) trait QueryAccess<T, E>: Send + Sync {
 	fn state_untracked(&self) -> QueryState<T, E>;
 	fn removed(&self) -> &ArcTrigger;
 	fn invalidate(&self);
-	fn dehydrate(&self) -> Option<DehydratedQuery>;
-	fn hydrate(&self, dehydrated: &DehydratedQuery);
+	fn rendered(&self) -> Option<Rendered>;
+	fn hydrate_rendered(&self, rendered: &Rendered);
 	fn has_codec(&self) -> bool;
 	fn info(&self) -> QueryInfo;
 	fn ptr_id(&self) -> usize;
@@ -142,12 +144,12 @@ where
 		Query::invalidate(self);
 	}
 
-	fn dehydrate(&self) -> Option<DehydratedQuery> {
-		crate::query::AnyQuery::dehydrate(self)
+	fn rendered(&self) -> Option<Rendered> {
+		Query::rendered(self)
 	}
 
-	fn hydrate(&self, dehydrated: &DehydratedQuery) {
-		crate::query::AnyQuery::hydrate(self, dehydrated);
+	fn hydrate_rendered(&self, rendered: &Rendered) {
+		Query::hydrate_rendered(self, rendered);
 	}
 
 	fn has_codec(&self) -> bool {
@@ -322,9 +324,11 @@ where
 		let meta = query.signals().meta.get_untracked();
 		self.bound_counts
 			.set((meta.data_update_count, meta.error_update_count));
-		Self::hook_up_ssr(scope, query);
+		let hydrated = Self::hook_up_ssr(scope, query);
 
-		if enabled {
+		if enabled && hydrated {
+			self.fetch_after_hydration(query);
+		} else if enabled {
 			self.fetch_on_mount(query);
 		}
 
@@ -388,15 +392,42 @@ where
 		}
 	}
 
-	/// Streams this query's data from the server to the browser, the way a
-	/// leptos `Resource` does, when the scope has a codec.
-	fn hook_up_ssr<K: QueryKey>(scope: &QueryScope<K, T, E>, query: &Access<T, E>) {
+	/// The mount fetch of a query the server's render seeded, run once
+	/// hydration has finished: hydration is synchronous and spawned tasks run
+	/// after it, so the browser's first render shows what the server rendered
+	/// rather than a refetch starting.
+	fn fetch_after_hydration(self: &Arc<Self>, query: &Access<T, E>) {
+		let observer = Arc::downgrade(self);
+		let query = Arc::clone(query);
+		spawn(async move {
+			let Some(observer) = observer.upgrade() else {
+				return;
+			};
+			// Unmounted, moved to another key, or disabled meanwhile: the
+			// fetch is no longer this observer's to start.
+			let still_bound = observer.registration.lock().is_some()
+				&& observer.current.with_untracked(|current| {
+					current
+						.as_ref()
+						.is_some_and(|current| current.ptr_id() == query.ptr_id())
+				});
+
+			if still_bound && observer.last_enabled.load(Ordering::SeqCst) {
+				observer.fetch_on_mount(&query);
+			}
+		});
+	}
+
+	/// Streams the outcome of this query's server fetch to the browser, the
+	/// way a leptos `Resource` does, when the scope has a codec. Returns
+	/// whether the browser hydrated the query from it.
+	fn hook_up_ssr<K: QueryKey>(scope: &QueryScope<K, T, E>, query: &Access<T, E>) -> bool {
 		if scope.codec.is_none() {
-			return;
+			return false;
 		}
 
 		let Some(context) = Owner::current_shared_context() else {
-			return;
+			return false;
 		};
 		// Ids are handed out in render order on both sides, so consuming one
 		// here only when the scope has a codec keeps server and browser in
@@ -404,13 +435,19 @@ where
 		let id = context.next_id();
 
 		if context.is_browser() {
-			if let Some(serialized) = context.read_data(&id)
-				&& let Ok(Some(dehydrated)) =
-					serde_json::from_str::<Option<DehydratedQuery>>(&serialized)
-			{
-				query.hydrate(&dehydrated);
+			let rendered = context
+				.read_data(&id)
+				.and_then(|serialized| serde_json::from_str::<Option<Rendered>>(&serialized).ok())
+				.flatten();
+
+			if let Some(rendered) = &rendered {
+				query.hydrate_rendered(rendered);
 			}
-		} else if context.get_is_hydrating() {
+
+			return rendered.is_some();
+		}
+
+		if context.get_is_hydrating() {
 			let settled = query
 				.in_flight()
 				.unwrap_or_else(|| query.fetch(FetchOptions::JOIN));
@@ -420,10 +457,33 @@ where
 				id,
 				Box::pin(async move {
 					settled.await;
-					serde_json::to_string(&query.dehydrate()).unwrap_or_else(|_| "null".to_owned())
+					to_script_safe_json(&query.rendered()).unwrap_or_else(|_| "null".to_owned())
 				}),
 			);
 		}
+
+		false
+	}
+
+	/// On the server, holds the enclosing `<Suspense>` until the fetch in
+	/// flight settles, as reading a leptos resource does, so the server
+	/// renders the outcome it streams and the browser hydrates with.
+	fn hold_suspense(query: &Access<T, E>) {
+		if !is_server() {
+			return;
+		}
+
+		let Some(suspense) = use_context::<SuspenseContext>() else {
+			return;
+		};
+		let Some(settled) = query.in_flight() else {
+			return;
+		};
+		let task = suspense.task_id();
+		spawn(async move {
+			settled.await;
+			drop(task);
+		});
 	}
 
 	fn start_interval(self: &Arc<Self>, query: &Access<T, E>) {
@@ -472,7 +532,13 @@ where
 
 	// ---- reading -----------------------------------------------------------
 	fn with_query<R>(&self, read: impl FnOnce(Option<&Access<T, E>>) -> R) -> R {
-		self.current.with(|query| read(query.as_ref()))
+		self.current.with(|query| {
+			if let Some(query) = query {
+				Self::hold_suspense(query);
+			}
+
+			read(query.as_ref())
+		})
 	}
 
 	fn own_data(&self) -> Option<T> {

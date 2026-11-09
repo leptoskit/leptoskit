@@ -103,6 +103,7 @@ fn scope<Q: Paginated>(page_size: u32) -> Scope<Q> {
 	})
 	.with_name(&format!("{}:pages", super::scope_name(Q::SERVICE, Q::NAME)))
 	.with_ssr()
+	.with_ssr_errors()
 }
 
 /// A paginated live query: its pages a `page_size` at a time, each one
