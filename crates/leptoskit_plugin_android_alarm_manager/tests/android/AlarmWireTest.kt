@@ -191,6 +191,14 @@ private fun goldenBytes() {
     check(encodeFlag(true).contentEquals(bytes(1)) && encodeFlag(false).contentEquals(bytes(0)))
     val list = encodeList(listOf(StoredAlarm(1, 0, 5, EXACT or WAKEUP, TIMING_EXACT, byteArrayOf())))
     check(list.contentEquals(bytes(1, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0) + ByteArray(8) + bytes(3, 0, 0, 0, 0, 0, 0, 0, 0)))
+    val two =
+        encodeList(
+            listOf(
+                StoredAlarm(1, 0, 5, EXACT or WAKEUP, TIMING_EXACT, "again".toByteArray()),
+                StoredAlarm(2, 0, 9, 0, TIMING_INEXACT, byteArrayOf()),
+            ),
+        )
+    check(alarmIds(two) == listOf(1, 2))
 
     check(decodeCancel(buffer(bytes(0xfe, 0xff, 0xff, 0xff))) == -2)
     check(decodeNext(buffer(long(Long.MAX_VALUE))) == Long.MAX_VALUE)
@@ -345,5 +353,18 @@ private fun persistence() {
         check(directory.resolve("nested").list()?.toList() == listOf("alarms.bin")) { "No temporary file is left" }
     } finally {
         directory.deleteRecursively()
+    }
+}
+
+/** The same cursor the instrumented list test uses: params length, then the bytes. */
+private fun alarmIds(encoded: ByteArray): List<Int> {
+    val list = ByteBuffer.wrap(encoded).order(ByteOrder.LITTLE_ENDIAN)
+
+    return List(list.int) {
+        val id = list.int
+        list.position(list.position() + 8 + 8 + 4 + 1)
+        val params = list.int
+        list.position(list.position() + params)
+        id
     }
 }

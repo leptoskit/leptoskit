@@ -57,7 +57,7 @@ It mirrors `android_intent_plus`'s API:
 Behaviour that differs from upstream on purpose:
 
 - `launch` never clears the package of an intent that does not resolve. Upstream retries such intents without their package, which can hand extras meant for one app to any app that matches.
-- `parse_and_launch` treats the URI the way a browser does: it refuses a `component=` or `SEL;` selector, refuses URI grant flags and `file:` data, and adds `CATEGORY_BROWSABLE`. Use `launch` with `Intent::component` for explicit components. `S.browser_fallback_url` is not followed; open it yourself with `leptoskit_plugin_linking` when the call returns `Unavailable`.
+- `parse_and_launch` treats the URI the way a browser does: it refuses a `component=` or `SEL;` selector, refuses URI grant flags and `file:` data, and adds `CATEGORY_BROWSABLE`. The link has to name a scheme, and the activity it resolves to has to declare that category on the filter that matched. An action-only URI such as `intent:#Intent;action=android.settings.SETTINGS;end` is `Unavailable`: API 35 marks that Settings activity browsable, so starting it would open Settings. Use `launch` with `Intent::component` for explicit components. `S.browser_fallback_url` is not followed; open it yourself with `leptoskit_plugin_linking` when the call returns `Unavailable`.
 - MIME types must be lowercase, because Android matches them case-sensitively.
 
 ### Android 11 package visibility
