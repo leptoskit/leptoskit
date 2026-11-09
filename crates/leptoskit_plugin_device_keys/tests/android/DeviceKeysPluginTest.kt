@@ -105,7 +105,7 @@ class DeviceKeysPluginTest {
         val alias = "payout.v2".toByteArray()
 
         return ByteBuffer
-            .allocate(8 + alias.size)
+            .allocate(12 + alias.size)
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(WIRE_VERSION)
             .putInt(POLICY_BIOMETRY)

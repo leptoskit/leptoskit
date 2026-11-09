@@ -812,6 +812,7 @@ name = "dev_client_android"
 version = "0.1.0"
 dependencies = [
  "leptoskit_bridge_ffi",
+ "leptoskit_plugin_dev_client",
 ]
 
 [[package]]
@@ -819,6 +820,7 @@ name = "dev_client_ios"
 version = "0.1.0"
 dependencies = [
  "leptoskit_bridge_ffi",
+ "leptoskit_plugin_dev_client",
 ]
 
 [[package]]

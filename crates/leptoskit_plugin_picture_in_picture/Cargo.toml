@@ -17,6 +17,7 @@ apple-type = "PictureInPicturePlugin"
 android-type = "dev.leptoskit.plugins.pictureinpicture.PictureInPicturePlugin"
 android-context = true
 android-permissions = ["android.permission.SYSTEM_ALERT_WINDOW"]
+android-dependencies = ["androidx.core:core:1.16.0"]
 
 [features]
 guest = ["leptoskit_bridge/guest"]

@@ -226,7 +226,7 @@ class CameraPlugin(
                         continuation.resume(value)
                     } catch (error: Exception) {
                         continuation.resumeWithException(
-                            PluginException(PluginException.UNAVAILABLE, error.message),
+                            PluginException(PluginException.UNAVAILABLE, error),
                         )
                     }
                 },
@@ -258,7 +258,7 @@ class CameraPlugin(
         if (!done.await(10, TimeUnit.SECONDS)) {
             throw PluginException(PluginException.UNAVAILABLE)
         }
-        error.get()?.let { throw PluginException(PluginException.UNAVAILABLE, it.message) }
+        error.get()?.let { throw PluginException(PluginException.UNAVAILABLE, it) }
         return result.get()
     }
 
@@ -272,7 +272,7 @@ class CameraPlugin(
                             continuation.resume(imageProxyToJpeg(image))
                         } catch (error: Exception) {
                             continuation.resumeWithException(
-                                PluginException(PluginException.NATIVE, error.message),
+                                PluginException(PluginException.NATIVE, error),
                             )
                         } finally {
                             image.close()
@@ -281,7 +281,7 @@ class CameraPlugin(
 
                     override fun onError(exception: ImageCaptureException) {
                         continuation.resumeWithException(
-                            PluginException(PluginException.NATIVE, exception.message),
+                            PluginException(PluginException.NATIVE, exception),
                         )
                     }
                 },

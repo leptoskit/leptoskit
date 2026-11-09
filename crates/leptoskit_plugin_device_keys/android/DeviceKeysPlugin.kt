@@ -249,9 +249,9 @@ class DeviceKeysPlugin(
         val entry =
             keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry
                 ?: return deviceKeysFields(WIRE_VERSION, STATUS_FAILED)
-        val publicKey =
-            entry.certificate.publicKey as? ECKey
-                ?: return deviceKeysFields(WIRE_VERSION, STATUS_FAILED)
+        val publicKey = entry.certificate.publicKey
+        // ECKey has no encoded form. Casting to it drops PublicKey.getEncoded.
+        if (publicKey !is ECKey) return deviceKeysFields(WIRE_VERSION, STATUS_FAILED)
         val spki = publicKey.encoded
         // The SPKI BIT STRING ends with the uncompressed 65-byte point.
         val sec1 = spki.copyOfRange(spki.size - SEC1_BYTES, spki.size)

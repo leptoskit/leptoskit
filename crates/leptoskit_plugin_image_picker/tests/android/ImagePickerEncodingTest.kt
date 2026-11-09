@@ -41,3 +41,8 @@ object ImagePickerEncodingTest {
         println("image-picker-encoding-ok")
     }
 }
+
+/** The instrumentation wrapper calls this, the same way the other wire fixtures do. */
+fun main() {
+    ImagePickerEncodingTest.main(emptyArray())
+}

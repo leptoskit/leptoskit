@@ -106,7 +106,12 @@ private fun readU32(bytes: ByteBuffer): Int {
 private fun readString(bytes: ByteBuffer): String {
     val size = readU32(bytes)
     if (bytes.remaining() < size) throw invalid()
-    val slice = bytes.slice().limit(size).order(ByteOrder.LITTLE_ENDIAN)
+    // Android's ByteBuffer.limit returns Buffer, which has no order().
+    val slice =
+        bytes.slice().apply {
+            limit(size)
+            order(ByteOrder.LITTLE_ENDIAN)
+        }
     bytes.position(bytes.position() + size)
     return try {
         Charsets.UTF_8
