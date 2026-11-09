@@ -25,17 +25,31 @@ private func buffer(_ bytes: Data = Data()) throws -> NativeBuffer {
     return NativeBuffer(taking: request.payload)
 }
 
+private func appendU32(_ data: inout Data, _ value: UInt32) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+}
+
 @MainActor
 struct AssetTests {
-    @Test func nameBounds() throws {
+    @Test func nameBoundsAndNul() throws {
         #expect(AssetWire.capability(.unavailable).count == 4)
         var name = Data()
         appendU32(&name, 4)
         name.append(contentsOf: Array("icon".utf8))
         #expect(try AssetWire.name(buffer(name)) == "icon")
+
+        var nul = Data()
+        appendU32(&nul, 3)
+        nul.append(contentsOf: [0x61, 0x00, 0x62])
+        #expect(throws: PluginError.invalidArgument) {
+            _ = try AssetWire.name(buffer(nul))
+        }
+
+        var trailing = name
+        trailing.append(0)
+        #expect(throws: PluginError.invalidArgument) {
+            _ = try AssetWire.name(buffer(trailing))
+        }
     }
-}
-private func appendU32(_ data: inout Data, _ value: UInt32) {
-    var little = value.littleEndian
-    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
 }

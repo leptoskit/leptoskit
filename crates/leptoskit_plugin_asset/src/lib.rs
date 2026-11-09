@@ -221,10 +221,9 @@ mod tests {
 		] {
 			assert_eq!(Capability::decode(&u32::to_le_bytes(value)), Ok(expected));
 		}
-		assert_eq!(
-			Capability::decode(&[3, 0, 0, 0]),
-			Err(Error::InvalidArgument)
-		);
+		for bytes in [&[][..], &[1], &[1, 0, 0], &[1, 0, 0, 0, 0], &[3, 0, 0, 0]] {
+			assert_eq!(Capability::decode(bytes), Err(Error::InvalidArgument));
+		}
 		assert_eq!(Name::new(""), Err(Error::InvalidArgument));
 		assert_eq!(Name::new("a\0b"), Err(Error::InvalidArgument));
 		assert_eq!(
@@ -234,6 +233,10 @@ mod tests {
 		let name = Name::new("icon.png").unwrap();
 		assert_eq!(name.as_str(), "icon.png");
 		assert_eq!(Name::decode(&name.encode().unwrap()), Ok(name));
+		assert_eq!(
+			Name::decode(&[4, 0, 0, 0, b'i', b'c', b'o', b'n', 0]),
+			Err(Error::InvalidArgument)
+		);
 		assert_eq!(
 			Resolved::decode(&Resolved::Unavailable.encode().unwrap()),
 			Ok(Resolved::Unavailable)
@@ -260,6 +263,7 @@ mod tests {
 	#[test]
 	fn unsupported_honest() {
 		assert_eq!(validate(STATUS, &[]), Ok(()));
+		assert_eq!(validate(STATUS, &[0]), Err(Error::InvalidArgument));
 		assert_eq!(
 			validate(RESOLVE, &Name::new("a").unwrap().encode().unwrap()),
 			Ok(())

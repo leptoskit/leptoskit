@@ -9,10 +9,10 @@
 //! `guest::AgeRange` rather than resolving the plugin on every call.
 //! Query whether the host can ask, then request a declared age band around a
 //! threshold. Responses are Declined, Unavailable, or Shared with inclusive
-//! lower/upper bounds (`upper == 0` means open-ended). iOS uses Declared Age
-//! Range where the OS exposes it; Android, desktop, and the browser return
-//! `Unavailable` in this MVP. Never invents an age band when the OS declines
-//! or withholds one.
+//! lower/upper bounds (`upper == 0` means open-ended). This MVP returns
+//! `Unavailable` on every host until Declared Age Range / Play Age Signals
+//! wiring lands. Never invents an age band when the OS declines or withholds
+//! one.
 //!
 //! <!-- {/p_age_rangeSummary} -->
 //!

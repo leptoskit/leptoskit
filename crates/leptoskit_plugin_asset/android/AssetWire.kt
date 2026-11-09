@@ -35,16 +35,19 @@ internal object AssetWire {
         if (length <= 0 || length > MAX_NAME || bytes.remaining() != length) throw invalid()
         val slice = ByteArray(length)
         bytes.get(slice)
-        return try {
-            Charsets.UTF_8
-                .newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(slice))
-                .toString()
-        } catch (_: CharacterCodingException) {
-            throw invalid()
-        }
+        val name =
+            try {
+                Charsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(slice))
+                    .toString()
+            } catch (_: CharacterCodingException) {
+                throw invalid()
+            }
+        if (name.isEmpty() || '\u0000' in name) throw invalid()
+        return name
     }
 }
 

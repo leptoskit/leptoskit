@@ -10,9 +10,10 @@
 //! Register and unregister named OS background tasks, query availability, and
 //! complete an in-flight invocation before the OS expiration window. This is
 //! distinct from `leptoskit_plugin_background`, which keeps an `AppService`
-//! awake with a foreground service / scheduled wake. iOS uses
-//! `BGTaskScheduler`; Android uses `WorkManager`; Windows, Linux, HarmonyOS,
-//! and the browser return `Unavailable`. Guaranteed cadence and in-guest Wasm
+//! awake with a foreground service / scheduled wake. Android uses
+//! `WorkManager`; Apple, Windows, Linux, HarmonyOS, and the browser return
+//! `Unavailable` until declared `BGTaskScheduler` identifiers and honest
+//! register/submit error handling land. Guaranteed cadence and in-guest Wasm
 //! execution while suspended remain later scope.
 //!
 //! <!-- {/p_background_taskSummary} -->
@@ -366,6 +367,14 @@ mod tests {
 				REGISTER,
 				Register::new("sync", 900).unwrap().encode().unwrap()
 			),
+			Err(Error::Unavailable)
+		);
+		assert_eq!(
+			plugin.invoke(UNREGISTER, TaskName::new("sync").unwrap().encode().unwrap()),
+			Err(Error::Unavailable)
+		);
+		assert_eq!(
+			plugin.invoke(COMPLETE, TaskName::new("sync").unwrap().encode().unwrap()),
 			Err(Error::Unavailable)
 		);
 	}

@@ -14,7 +14,6 @@ description = "Named OS background task registration for LeptosKit."
 name = "background-task"
 apple-module = "LeptosKitBackgroundTask"
 apple-type = "BackgroundTaskPlugin"
-apple-context = true
 android-type = "dev.leptoskit.plugins.backgroundtask.BackgroundTaskPlugin"
 android-context = true
 android-dependencies = ["androidx.work:work-runtime-ktx:2.9.1"]

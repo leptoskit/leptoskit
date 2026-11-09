@@ -8,4 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-#### leptoskit_plugin_asset: resolve logical packaged asset names to local URIs
+#### leptoskit_plugin_asset: packaged-asset resolve wire
+
+Status + resolve codecs for logical packaged-asset names. Every host returns typed Unavailable until packaged-asset ownership wiring lands; never invents a URI for a missing asset.
