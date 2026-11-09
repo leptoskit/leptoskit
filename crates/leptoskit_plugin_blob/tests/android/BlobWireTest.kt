@@ -36,8 +36,15 @@ fun main() {
     require(BlobWire.id(ByteBuffer.wrap(id)) == 9)
     require(BlobWire.encodeId(9).contentEquals(id))
     require(BlobWire.capability(Capability.Available).contentEquals(byteArrayOf(1, 0, 0, 0)))
-    require(BlobWire.encodeSlice("ab".toByteArray()).contentEquals(
-        ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).putInt(2).put("ab".toByteArray()).array(),
-    ))
+    require(
+        BlobWire.encodeSlice("ab".toByteArray()).contentEquals(
+            ByteBuffer
+                .allocate(6)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(2)
+                .put("ab".toByteArray())
+                .array(),
+        ),
+    )
     println("BlobWireTest ok")
 }

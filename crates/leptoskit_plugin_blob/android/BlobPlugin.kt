@@ -25,6 +25,7 @@ class BlobPlugin(
                 BlobWire.empty(payload)
                 BlobWire.capability(Capability.Available)
             }
+
             1 -> {
                 val bytes = BlobWire.create(payload)
                 if (entries.size >= maxLive) throw PluginException(PluginException.BUSY)
@@ -33,6 +34,7 @@ class BlobPlugin(
                 entries[nextId] = bytes
                 BlobWire.encodeId(nextId)
             }
+
             2 -> {
                 val (id, offset, length) = BlobWire.read(payload)
                 val entry = entries[id] ?: throw PluginException(PluginException.INVALID_ARGUMENT)
@@ -43,12 +45,16 @@ class BlobPlugin(
                     BlobWire.encodeSlice(entry.copyOfRange(offset, end))
                 }
             }
+
             3 -> {
                 val id = BlobWire.id(payload)
                 if (entries.remove(id) == null) throw PluginException(PluginException.INVALID_ARGUMENT)
                 ByteArray(0)
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 

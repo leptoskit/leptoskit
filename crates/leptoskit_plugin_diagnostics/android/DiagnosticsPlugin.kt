@@ -25,6 +25,7 @@ class DiagnosticsPlugin(
                 DiagnosticsWire.empty(payload)
                 DiagnosticsWire.capability(Capability.Available)
             }
+
             1 -> {
                 DiagnosticsWire.name(payload)
                 if (open.size >= maxOpen) throw PluginException(PluginException.BUSY)
@@ -33,16 +34,21 @@ class DiagnosticsPlugin(
                 open.add(nextId)
                 DiagnosticsWire.encodeId(nextId)
             }
+
             2 -> {
                 val id = DiagnosticsWire.id(payload)
                 if (!open.remove(id)) throw PluginException(PluginException.INVALID_ARGUMENT)
                 ByteArray(0)
             }
+
             3 -> {
                 DiagnosticsWire.name(payload)
                 ByteArray(0)
             }
-            else -> throw PluginException(PluginException.UNAVAILABLE)
+
+            else -> {
+                throw PluginException(PluginException.UNAVAILABLE)
+            }
         }
     }
 

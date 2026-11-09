@@ -14,6 +14,8 @@ description = "Contracts for leptoskit platform extension crates: manifests, cap
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
 serde_json = { workspace = true }
 
 [lints]
