@@ -507,11 +507,18 @@ class LeptosKitApplicationView(
     }
 
     /**
-     * Asks the active guest to handle Android system Back through the file
-     * router (`leptoskit_system_back`). Returns true when the guest popped a
-     * route. Hosts without the guest export return false so the activity finishes.
+     * Offers Android system Back to the running guest, which pops its file
+     * router through `leptoskit_system_back` when it can; see
+     * [LeptosKitView.offerSystemBack]. [answer] runs later, on the main thread:
+     * true when the guest went back, false when the activity should leave.
+     * With no guest running, such as while an update loads or an error shows,
+     * it runs at once with false.
      */
-    fun offerSystemBack(): Boolean = current?.offerSystemBack() == true
+    fun offerSystemBack(answer: (Boolean) -> Unit) {
+        val view = current
+
+        if (view == null) answer(false) else view.offerSystemBack(answer)
+    }
 
     override fun close() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Application close requires the main thread" }

@@ -22,6 +22,7 @@ use leptoskit_bridge::Plugin;
 use leptoskit_bridge::PluginId;
 use leptoskit_bridge::Reply;
 use leptoskit_log::target;
+use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_native::Mutation;
 use leptoskit_native::NativeEvent;
@@ -698,6 +699,26 @@ impl App {
 
 		let result = self.host_mut().dispatch(node, event).map(|_| ());
 		self.record(result)
+	}
+
+	/// Offers the platform's Back to the guest's `leptoskit_system_back`
+	/// export: 1 when the guest went back, 0 when the platform should leave,
+	/// as Back does when nothing handles it, or -1 when the guest failed.
+	/// Before the guest has started there is nothing to go back to. The guest
+	/// thread is the only caller.
+	#[cfg(not(target_arch = "wasm32"))]
+	fn system_back(&mut self) -> i32 {
+		if !self.started {
+			return 0;
+		}
+
+		let result = self.host_mut().system_back();
+		let went_back = matches!(result, Ok(EventOutcome::Handled));
+
+		match self.record(result.map(|_| ())) {
+			0 => i32::from(went_back),
+			failed => failed,
+		}
 	}
 
 	/// Delivers a display frame to the guest calls waiting for one, then lets
