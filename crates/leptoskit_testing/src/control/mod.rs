@@ -35,7 +35,6 @@ pub use gestures::suite;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use serde_json::json;
 pub use web::Browser;
 
 use crate::native::Application;
@@ -680,21 +679,7 @@ pub trait ControlDriver {
 	/// Drags between two points in one pointer gesture.
 	fn swipe(&self, start: Point, end: Point, duration_ms: Option<u64>) -> Result<(), Error> {
 		let duration = duration_ms.unwrap_or(250);
-		// The raw action sources: perform_actions adds the envelope.
-		let sources = json!([{
-			"type": "pointer",
-			"id": "leptoskit-swipe",
-			"parameters": {"pointerType": "touch"},
-			"actions": [
-				{"type": "pointerMove", "duration": 0, "x": start.x, "y": start.y},
-				{"type": "pointerDown", "button": 0},
-				{"type": "pause", "duration": duration},
-				{"type": "pointerMove", "duration": duration, "origin": "pointer",
-				 "x": end.x - start.x, "y": end.y - start.y},
-				{"type": "pointerUp", "button": 0}
-			]
-		}]);
-		self.perform_actions(&sources)
+		self.perform_actions(&gestures::swipe_actions("touch", start, end, duration))
 	}
 
 	/// Taps one viewport point.
@@ -1290,6 +1275,56 @@ impl ControlDriver for NativeTester {
 		NativeTester::perform_actions(self, sources).map_err(Error::from)
 	}
 
+	fn swipe(&self, start: Point, end: Point, duration_ms: Option<u64>) -> Result<(), Error> {
+		let duration = duration_ms.unwrap_or(250);
+		ControlDriver::perform_actions(
+			self,
+			&gestures::swipe_actions(native_pointer_type(self), start, end, duration),
+		)
+	}
+
+	fn tap_at(&self, x: i64, y: i64) -> Result<(), Error> {
+		ControlDriver::perform_actions(
+			self,
+			&gestures::tap_actions_with(native_pointer_type(self), x, y)?,
+		)
+	}
+
+	fn long_press_at(&self, x: i64, y: i64, duration_ms: u64) -> Result<(), Error> {
+		ControlDriver::perform_actions(
+			self,
+			&gestures::long_press_actions_with(native_pointer_type(self), x, y, duration_ms)?,
+		)
+	}
+
+	fn pan(&self, start: Point, end: Point, duration_ms: u64) -> Result<(), Error> {
+		ControlDriver::perform_actions(
+			self,
+			&gestures::pan_actions_with(native_pointer_type(self), start, end, duration_ms)?,
+		)
+	}
+
+	fn pinch(
+		&self,
+		x: i64,
+		y: i64,
+		start_span: i64,
+		end_span: i64,
+		duration_ms: u64,
+	) -> Result<(), Error> {
+		ControlDriver::perform_actions(
+			self,
+			&gestures::pinch_actions_with(
+				native_pointer_type(self),
+				x,
+				y,
+				start_span,
+				end_span,
+				duration_ms,
+			)?,
+		)
+	}
+
 	fn execute(&self, script: &str, arguments: &Value) -> Result<Value, Error> {
 		NativeTester::native_command(self, script, arguments).map_err(Error::from)
 	}
@@ -1316,6 +1351,18 @@ impl ControlDriver for NativeTester {
 			Err(error) => Err(Error::from(error)),
 		}
 	}
+}
+
+/// Mac2 is a mouse. Every other native driver takes touch.
+fn native_pointer_type(tester: &NativeTester) -> &'static str {
+	let kind = match tester.platform() {
+		Platform::Macos => TargetKind::Macos,
+		Platform::Ios => TargetKind::IosDevice,
+		Platform::Android => TargetKind::Android,
+		Platform::Windows => TargetKind::Windows,
+		Platform::Linux => TargetKind::Linux,
+	};
+	gestures::session_pointer_type(kind)
 }
 
 impl ControlDriver for web::WebSession {

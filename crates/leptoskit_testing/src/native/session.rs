@@ -78,6 +78,11 @@ impl NativeTester {
 		})
 	}
 
+	/// The platform this session was opened for.
+	pub(crate) fn platform(&self) -> Platform {
+		self.options.platform
+	}
+
 	/// Runs a scenario and always records failures and closes the session.
 	pub fn run<T>(
 		options: Options,
