@@ -7067,6 +7067,9 @@ dependencies = [
 name = "leptoskit_router"
 version = "0.3.0"
 dependencies = [
+ "leptos",
+ "leptos_axum",
+ "leptos_router",
  "leptoskit_native",
  "leptoskit_router_macros",
  "leptoskit_yoga",

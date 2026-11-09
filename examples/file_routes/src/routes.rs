@@ -422,6 +422,72 @@ impl ::leptoskit_router::Routable for Route {
 		}
 	}
 }
+/// Paths for [`leptos_axum::LeptosRoutes::leptos_routes`].
+pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
+	::std::vec![
+		::leptoskit_router::Pattern::new(&[]).axum_path().into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::OptionalParam("lang"),
+			::leptoskit_router::Segment::Static("about")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("compose")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("map")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("notes")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("search")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("settings")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("sign-in")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("you")])
+			.axum_path()
+			.into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("notes"),
+			::leptoskit_router::Segment::Param("note")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("photos"),
+			::leptoskit_router::Segment::Param("photo")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("settings"),
+			::leptoskit_router::Segment::Param("section")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("help"),
+			::leptoskit_router::Segment::Rest("topic")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("photos"),
+			::leptoskit_router::Segment::OptionalRest("path")
+		])
+		.axum_path()
+		.into(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::OptionalRest("path")])
+			.axum_path()
+			.into()
+	]
+}
 /// The app's router: pages and layouts that take a `navigation` prop
 /// receive it, to navigate with and to build links.
 pub type Navigation = ::leptoskit_router::Router<Route>;

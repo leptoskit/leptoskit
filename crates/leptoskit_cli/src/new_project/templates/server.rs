@@ -6,11 +6,11 @@
 //! depends on `leptoskit` alone.
 
 use __CRATE___app::App;
+use __CRATE___app::routes;
 use __CRATE___app::shell;
 use leptoskit::server::GracefulShutdown;
 use leptoskit::server::Readiness;
 use leptoskit::server::leptos_axum::LeptosRoutes;
-use leptoskit::server::leptos_axum::generate_route_list;
 use leptoskit::server::tokio;
 
 #[tokio::main]
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// sends traffic to an instance that can serve it. Add a check with
 	// `readiness.check("name")` for work that has to finish first.
 	let readiness = Readiness::new();
-	let routes = generate_route_list(App);
+	let routes = leptoskit_router::ssr::route_listings(routes::axum_route_list());
 	let app_options = options.clone();
 	// The built files are served with their precompressed brotli and gzip
 	// copies when the browser accepts them.
