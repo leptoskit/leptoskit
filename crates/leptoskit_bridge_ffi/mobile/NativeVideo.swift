@@ -26,12 +26,15 @@ final class NativeVideoView: NativeVideoBase {
         self.layer = created
         return created
         #else
-        return layer as! AVPlayerLayer
+        guard let player = layer as? AVPlayerLayer else {
+            preconditionFailure("NativeVideoView.layerClass is AVPlayerLayer")
+        }
+        return player
         #endif
     }
 
     #if !os(macOS)
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    override static var layerClass: AnyClass { AVPlayerLayer.self }
     #endif
 
     private var playerId: UInt32?

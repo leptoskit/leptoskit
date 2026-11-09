@@ -112,8 +112,7 @@ public final class CellularPlugin: NativePlugin {
         default:
             if #available(iOS 14.1, *) {
                 if technology == CTRadioAccessTechnologyNRNSA
-                    || technology == CTRadioAccessTechnologyNR
-                {
+                    || technology == CTRadioAccessTechnologyNR {
                     return Wire.fiveG
                 }
             }

@@ -123,7 +123,7 @@ public final class ContactsPlugin: NSObject, NativePlugin {
             CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactOrganizationNameKey as CNKeyDescriptor
         ]
         let request = CNContactFetchRequest(keysToFetch: keys)
         request.unifyResults = true
