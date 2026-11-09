@@ -27,6 +27,8 @@ warning[leptoskit::markup_style]: `View(…)` builds this tree with builder call
 
 The run fails when either check finds an error, or a warning with `--deny-warnings`.
 
+The macOS, iOS, Android, Windows, and Linux runners each include a file that native builds write under `.leptoskit/`, which Git ignores. When one of those files is missing, as on a fresh clone or in CI, `lk lint` writes it before clippy starts, so you don't need a native build first.
+
 ## The rules
 
 ### `component_attribute`

@@ -45,18 +45,7 @@ pub fn generate(
 		crate::ui::warning(warning);
 	}
 
-	let generated = super::generated_dir(root, target);
-
-	if let Ok(metadata) = std::fs::symlink_metadata(&generated) {
-		anyhow::ensure!(
-			metadata.is_dir() && !metadata.file_type().is_symlink(),
-			".leptoskit must be an ordinary generated directory"
-		);
-	}
-
-	std::fs::create_dir_all(&generated)?;
-	let rust = rust_registrant(registry, target)?;
-	write(&generated.join("registrant.rs"), &rust)?;
+	registrant(root, config, registry, target)?;
 
 	match target {
 		Target::Macos => super::desktop::generate(root, config, registry),
@@ -82,6 +71,32 @@ pub fn generate(
 			anyhow::bail!("watch hosts are scaffolded before project::generate")
 		}
 	}
+}
+
+/// Writes only the Rust registrant the app-owned host crate includes, which
+/// is all the workspace needs to compile, without the platform project.
+pub(super) fn registrant(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+	target: Target,
+) -> Result<()> {
+	if matches!(target, Target::Windows | Target::Linux | Target::Tui) {
+		return super::rust_desktop::generate(root, config, registry, target);
+	}
+
+	let generated = super::generated_dir(root, target);
+
+	if let Ok(metadata) = std::fs::symlink_metadata(&generated) {
+		anyhow::ensure!(
+			metadata.is_dir() && !metadata.file_type().is_symlink(),
+			".leptoskit must be an ordinary generated directory"
+		);
+	}
+
+	std::fs::create_dir_all(&generated)?;
+	let rust = rust_registrant(registry, target)?;
+	write(&generated.join("registrant.rs"), &rust)
 }
 
 fn validate_ios_usage_descriptions(root: &Path, registry: &Registry) -> Result<()> {
