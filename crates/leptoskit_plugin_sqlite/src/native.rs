@@ -162,11 +162,7 @@ impl Database {
 			return Err(Error::InvalidArgument.into());
 		}
 
-		let columns: Vec<String> = prepared
-			.column_names()
-			.into_iter()
-			.map(str::to_owned)
-			.collect();
+		let columns: Vec<String> = prepared.column_names().map(str::to_owned).collect();
 
 		let mut size = 8 + columns.iter().map(|name| 4 + name.len()).sum::<usize>();
 		check_size(size)?;
@@ -308,12 +304,12 @@ impl Database {
 		}
 
 		let data_dir = self.private_directory()?;
-		let connection = connect(&data_dir)?;
+		let mut connection = connect(&data_dir)?;
 
 		self.fits_page_budget(&connection)?;
 		apply_limits(&connection)?;
-		self.guard_sql(&connection)?;
-		self.guard_steps(&connection)?;
+		self.guard_sql(&mut connection)?;
+		self.guard_steps(&mut connection)?;
 		self.connection = Some(connection);
 
 		Ok(())
@@ -377,7 +373,7 @@ impl Database {
 
 	/// Installs the authorizer that keeps guests out of the filesystem and out
 	/// of transactions the host did not open.
-	fn guard_sql(&self, connection: &Connection) -> Result<(), DatabaseError> {
+	fn guard_sql(&self, connection: &mut Connection) -> Result<(), DatabaseError> {
 		let allowed = Arc::clone(&self.allow_transaction);
 		connection.authorizer(Some(move |context: AuthContext<'_>| {
 			match context.action {
@@ -427,7 +423,7 @@ impl Database {
 
 	/// Stops a call that runs for too many steps or grows `SQLite`'s heap by
 	/// more than [`MAX_CALL_MEMORY`].
-	fn guard_steps(&self, connection: &Connection) -> Result<(), DatabaseError> {
+	fn guard_steps(&self, connection: &mut Connection) -> Result<(), DatabaseError> {
 		let steps = Arc::clone(&self.remaining_steps);
 		let baseline = Arc::clone(&self.memory_baseline);
 		connection.progress_handler(

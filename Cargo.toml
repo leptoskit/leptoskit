@@ -156,7 +156,7 @@ roxmltree = "0.21"
 rquickjs = "0.14"
 rstest = "0.25"
 rstml = "0.13"
-rusqlite = { version = "0.40.2", default-features = false }
+rusqlite = { version = "0.41.1", default-features = false }
 rustix = "1"
 rustls = { version = "0.23", default-features = false }
 rusty-s3 = { version = "0.10", default-features = false }

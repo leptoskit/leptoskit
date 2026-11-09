@@ -657,7 +657,11 @@ impl Store {
 		let parent = path.parent().context("backup needs a parent directory")?;
 		let temporary = tempfile::NamedTempFile::new_in(parent)?;
 		let db = self.db()?;
-		db.backup(rusqlite::MAIN_DB, temporary.path(), None)?;
+		db.backup(
+			rusqlite::MAIN_DB,
+			temporary.path(),
+			rusqlite::backup::NO_PROGRESS,
+		)?;
 		temporary.as_file().sync_all()?;
 		temporary.persist_noclobber(path)?;
 		Ok(())
