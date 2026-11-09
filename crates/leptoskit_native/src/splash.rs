@@ -27,16 +27,15 @@ static DISMISSED: AtomicBool = AtomicBool::new(false);
 pub fn hold() {
 	HELD.store(true, Ordering::SeqCst);
 	DISMISSED.store(false, Ordering::SeqCst);
-	#[cfg(feature = "web")]
-	web_hold();
 }
 
 /// Remove the splash overlay. Safe to call more than once.
+///
+/// On the web, also call the injected `window.leptoskitDismissSplash()` from
+/// `[app.launch_screen]` so the HTML splash node is removed.
 pub fn dismiss() {
 	DISMISSED.store(true, Ordering::SeqCst);
 	HELD.store(false, Ordering::SeqCst);
-	#[cfg(feature = "web")]
-	web_dismiss();
 }
 
 /// Whether [`hold`] is active and [`dismiss`] has not run yet.
@@ -50,23 +49,6 @@ pub fn is_held() -> bool {
 #[must_use]
 pub fn visible() -> bool {
 	is_held()
-}
-
-#[cfg(feature = "web")]
-fn web_hold() {
-	// The HTML splash from `[app.launch_screen]` stays until dismiss calls the
-	// injected `leptoskitDismissSplash` helper.
-}
-
-#[cfg(feature = "web")]
-fn web_dismiss() {
-	#[cfg(target_arch = "wasm32")]
-	{
-		let _ = js_sys::eval(
-			"typeof window !== 'undefined' && typeof window.leptoskitDismissSplash === 'function' \
-			 && window.leptoskitDismissSplash()",
-		);
-	}
 }
 
 /// A full-bleed splash overlay for apps that compose their own animated
