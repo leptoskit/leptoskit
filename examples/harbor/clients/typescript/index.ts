@@ -136,28 +136,43 @@ type Encoding = "query" | "form" | "json";
 
 /**
  * Encodes a value the way `serde_qs` does: nested keys in brackets, arrays by
- * index, `null`/`undefined` omitted.
+ * index, `null` as a bare key and empty collections as `key=`. As in JSON, an
+ * `undefined` field is omitted and an `undefined` array element is `null`.
  */
 export function toQueryString(value: Record<string, unknown>): string {
-	const params = new URLSearchParams();
+	const params: string[] = [];
+	const scalar = (key: string, value: string): void => {
+		params.push(new URLSearchParams([[key, value]]).toString());
+	};
 	const append = (key: string, item: unknown): void => {
-		if (item === null || item === undefined) {
+		if (item === undefined) {
 			return;
 		}
-		if (Array.isArray(item)) {
-			item.forEach((entry, index) => append(`${key}[${index}]`, entry));
+		if (item === null) {
+			params.push(new URLSearchParams([[key, ""]]).toString().slice(0, -1));
+		} else if (Array.isArray(item)) {
+			if (item.length === 0) scalar(key, "");
+			// As in JSON, an undefined element or a hole is null, so indices
+			// stay contiguous.
+			for (let index = 0; index < item.length; index++) {
+				append(`${key}[${index}]`, item[index] === undefined ? null : item[index]);
+			}
 		} else if (typeof item === "object") {
-			for (const [field, entry] of Object.entries(item as Record<string, unknown>)) {
+			const fields = Object.entries(item as Record<string, unknown>).filter(
+				([, entry]) => entry !== undefined,
+			);
+			if (fields.length === 0) scalar(key, "");
+			for (const [field, entry] of fields) {
 				append(`${key}[${field}]`, entry);
 			}
 		} else {
-			params.append(key, String(item));
+			scalar(key, String(item));
 		}
 	};
 	for (const [key, item] of Object.entries(value)) {
 		append(key, item);
 	}
-	return params.toString();
+	return params.join("&");
 }
 
 /** The transport shared by every generated method. */
@@ -214,7 +229,7 @@ export class BaseClient {
 			// the server fills `#[server(default)]` arguments in, and `Option`
 			// arguments read a missing key as `None`.
 			const present = Object.fromEntries(
-				Object.entries(input).filter(([, item]) => item !== undefined && item !== null),
+				Object.entries(input).filter(([, item]) => item !== undefined),
 			);
 			body = JSON.stringify(present);
 		}

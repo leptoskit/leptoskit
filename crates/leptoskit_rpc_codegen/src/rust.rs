@@ -790,14 +790,14 @@ fn client_file(context: &Context<'_>, types: &mut RustTypes, models_import: bool
 				&format!("{hint}{}", type_name(&param.name)),
 				context.spec,
 			);
-			let param_type = wrap_option(&param_type, !param.is_required());
+			let param_type = wrap_option(&param_type, !param.required);
 			arguments.push((identifier.clone(), param_type.clone()));
 			fields.push(Field {
 				ident: identifier,
 				type_name: param_type,
 				wire: param.name.clone(),
 				docs: param.docs.lines().map(str::to_owned).collect(),
-				optional: !param.is_required(),
+				optional: !param.required,
 			});
 		}
 
@@ -1102,7 +1102,7 @@ futures-util = {{ version = \"0.3\", default-features = false, features = [\"sin
 reqwest = {{ version = \"0.12\", default-features = false, features = [\"json\", \"rustls-tls\"] }}
 serde = {{ version = \"1\", features = [\"derive\"] }}
 serde_json = \"1\"
-serde_qs = \"0.15\"
+serde_qs = \"1.1.3\"
 thiserror = \"2\"
 tokio = {{ version = \"1\", features = [\"macros\", \"rt\", \"sync\", \"time\"], optional = true }}
 tokio-tungstenite = {{ version = \"0.30\", default-features = false, features = [\"connect\", \
@@ -1309,6 +1309,39 @@ impl Default for Client {
 	}
 }
 
+// JSON null and Option::None share one wire meaning. serde_json::Value
+// otherwise serializes null as unit, which URL codecs encode as an empty string.
+struct QueryValue<'a>(&'a serde_json::Value);
+
+impl Serialize for QueryValue<'_> {
+	fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		use serde::ser::{SerializeMap, SerializeSeq};
+		match self.0 {
+			serde_json::Value::Null => serializer.serialize_none(),
+			serde_json::Value::Array(items) => {
+				let mut sequence = serializer.serialize_seq(Some(items.len()))?;
+				for item in items {
+					sequence.serialize_element(&QueryValue(item))?;
+				}
+				sequence.end()
+			}
+			serde_json::Value::Object(fields) => {
+				let mut map = serializer.serialize_map(Some(fields.len()))?;
+				for (key, value) in fields {
+					map.serialize_entry(key, &QueryValue(value))?;
+				}
+				map.end()
+			}
+			value => value.serialize(serializer),
+		}
+	}
+}
+
+fn query_string(payload: &impl Serialize) -> Result<String, String> {
+	let value = serde_json::to_value(payload).map_err(|error| error.to_string())?;
+	serde_qs::to_string(&QueryValue(&value)).map_err(|error| error.to_string())
+}
+
 impl Client {
 	/// A client for [`DEFAULT_SERVER_URL`].
 	pub fn new() -> Self {
@@ -1373,7 +1406,7 @@ impl Client {
 		let mut url = format!("{}{}", self.server_url, path);
 		let request = match encoding {
 			Encoding::Query => {
-				let query = serde_qs::to_string(payload)
+				let query = query_string(payload)
 					.map_err(|error| Error::Fn { kind: FnErrorKind::Invalid, message: error.to_string() })?;
 				if !query.is_empty() {
 					url.push(if url.contains('?') { '&' } else { '?' });
@@ -1382,7 +1415,7 @@ impl Client {
 				self.http.request(reqwest::Method::from_bytes(method.as_bytes()).expect("a known method"), &url)
 			}
 			Encoding::Form => {
-				let body = serde_qs::to_string(payload)
+				let body = query_string(payload)
 					.map_err(|error| Error::Fn { kind: FnErrorKind::Invalid, message: error.to_string() })?;
 				self.http
 					.request(reqwest::Method::from_bytes(method.as_bytes()).expect("a known method"), &url)
@@ -1390,20 +1423,9 @@ impl Client {
 					.body(body)
 			}
 			Encoding::Json => {
-				// Absent optional arguments are omitted, as `serde_qs` omits
-				// them: the server fills defaulted arguments in, and `Option`
-				// arguments read a missing key as `None`.
-				let encoded = serde_json::to_value(payload)
+				// The input's serde attributes omit absent fields, not explicit nulls.
+				let present = serde_json::to_value(payload)
 					.map_err(|error| Error::Fn { kind: FnErrorKind::Invalid, message: error.to_string() })?;
-				let present = match encoded {
-					serde_json::Value::Object(fields) => serde_json::Value::Object(
-						fields
-							.into_iter()
-							.filter(|(_, item)| !item.is_null())
-							.collect(),
-					),
-					other => other,
-				};
 				self.http
 					.request(reqwest::Method::from_bytes(method.as_bytes()).expect("a known method"), &url)
 					.header(reqwest::header::CONTENT_TYPE, "application/json")

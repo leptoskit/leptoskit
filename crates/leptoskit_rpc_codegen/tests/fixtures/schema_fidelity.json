@@ -1,5 +1,5 @@
 {
-	"leptoskit_rpc_spec": 3,
+	"leptoskit_rpc_spec": 4,
 	"title": "Fidelity",
 	"version": "1.0.0",
 	"description": "Schemas that exercise every generated representation.",

@@ -1292,25 +1292,28 @@ class FnError implements Exception {
 }
 
 /// Encodes a value the way `serde_qs` does: nested keys in brackets, lists by
-/// index, `null` omitted. Query-string and form encodings cannot send an
-/// explicit null; use JSON or the live connection when null is meaningful.
+/// index, `null` as a bare key and empty collections as `key=`.
 String toQueryString(Map<String, Object?> value) {
   final pairs = <String>[];
 
   void append(String key, Object? item) {
-    if (item == null) return;
-    if (item is bool) {
-      pairs.add('$key=${item ? 'true' : 'false'}');
+    final encodedKey = Uri.encodeQueryComponent(key);
+    if (item == null) {
+      pairs.add(encodedKey);
+    } else if (item is bool) {
+      pairs.add('$encodedKey=${item ? 'true' : 'false'}');
     } else if (item is List) {
+      if (item.isEmpty) pairs.add('$encodedKey=');
       for (var index = 0; index < item.length; index++) {
         append('$key[$index]', item[index]);
       }
     } else if (item is Map<String, Object?>) {
+      if (item.isEmpty) pairs.add('$encodedKey=');
       for (final entry in item.entries) {
         append('$key[${entry.key}]', entry.value);
       }
     } else {
-      pairs.add('$key=${Uri.encodeQueryComponent('$item')}');
+      pairs.add('$encodedKey=${Uri.encodeQueryComponent('$item')}');
     }
   }
 

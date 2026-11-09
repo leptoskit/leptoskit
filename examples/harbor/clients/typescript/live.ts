@@ -837,7 +837,7 @@ function present(args: unknown): unknown {
 	}
 	return Object.fromEntries(
 		Object.entries(args as Record<string, unknown>).filter(([, item]) =>
-			item !== undefined && item !== null
+			item !== undefined
 		),
 	);
 }

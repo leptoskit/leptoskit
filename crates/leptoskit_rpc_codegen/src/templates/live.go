@@ -290,10 +290,6 @@ func livePresent(args any) (json.RawMessage, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	for _, key := range keys {
-		if string(values[key]) == "null" {
-			continue
-		}
-
 		if out.Len() > 1 {
 			out.WriteByte(',')
 		}

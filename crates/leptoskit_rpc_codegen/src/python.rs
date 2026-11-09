@@ -439,13 +439,7 @@ fn signature(function: &ApiFunction, types: &mut PyTypes, spec: &ApiSpec) -> Sig
 		if param.is_required() {
 			parameters.push(format!("{identifier}: {rendered}"));
 		} else {
-			let rendered = if rendered.starts_with("Optional[") {
-				rendered
-			} else {
-				format!("Optional[{rendered}]")
-			};
-
-			parameters.push(format!("{identifier}: {rendered} = None"));
+			parameters.push(format!("{identifier}: {rendered} | UnsetType = UNSET"));
 		}
 
 		payload.push(format!("{}: {identifier}", py_string(&param.name)));
@@ -863,7 +857,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Mapping, Optional
 
-from .live import AsyncLiveConnection, AsyncWatch, Channel, LiveConnection, LiveError, LiveOptions, PresenceMember, Watch, channel_key, live_url
+from .live import AsyncLiveConnection, AsyncWatch, Channel, LiveConnection, LiveError, LiveOptions, PresenceMember, UNSET, UnsetType, Watch, channel_key, live_url
 ";
 
 /// `DEFAULT_SERVER_URL`'s docs, up to `LIVE_PATH`'s value.
@@ -1001,6 +995,8 @@ fn init_module(context: &Context<'_>, types: &PyTypes) -> String {
 			"LiveOptions",
 			"LiveStatus",
 			"PresenceMember",
+			"UNSET",
+			"UnsetType",
 			"Watch",
 			"channel_key",
 		]
@@ -1017,8 +1013,8 @@ fn init_module(context: &Context<'_>, types: &PyTypes) -> String {
 	format!(
 		"{}{docs}\n\nfrom .client import AsyncClient, Client, DEFAULT_SERVER_URL, FnError, \
 		 LIVE_PATH, to_query_string\nfrom .live import AsyncLiveConnection, AsyncWatch, Channel, \
-		 LiveConnection, LiveError, LiveOptions, LiveStatus, PresenceMember, Watch, \
-		 channel_key\n{model_imports}\n__all__ = [{}]\n",
+		 LiveConnection, LiveError, LiveOptions, LiveStatus, PresenceMember, UNSET, UnsetType, \
+		 Watch, channel_key\n{model_imports}\n__all__ = [{}]\n",
 		context.banner("#"),
 		quoted.join(", "),
 		docs = py_string(&format!(
@@ -1248,27 +1244,37 @@ _ERROR_KINDS = {
 def to_query_string(value: Mapping[str, Any]) -> str:
     """Encodes a value the way ``serde_qs`` does.
 
-    Nested keys go in brackets, lists by index, and ``None`` is omitted.
+    Nested keys go in brackets and lists by index. ``UNSET`` is omitted;
+    ``None`` is a bare key, and an empty collection is a key with ``=``.
     """
-    pairs: list[tuple[str, str]] = []
+    pairs: list[str] = []
+
+    def scalar(key: str, item: str) -> None:
+        pairs.append(urllib.parse.urlencode([(key, item)]))
 
     def append(key: str, item: Any) -> None:
-        if item is None:
+        if item is UNSET:
             return
-        if isinstance(item, bool):
-            pairs.append((key, "true" if item else "false"))
+        if item is None:
+            pairs.append(urllib.parse.quote_plus(key))
+        elif isinstance(item, bool):
+            scalar(key, "true" if item else "false")
         elif isinstance(item, (list, tuple)):
+            if not item:
+                scalar(key, "")
             for index, entry in enumerate(item):
                 append(f"{key}[{index}]", entry)
         elif isinstance(item, Mapping):
+            if not item:
+                scalar(key, "")
             for field, entry in item.items():
                 append(f"{key}[{field}]", entry)
         else:
-            pairs.append((key, str(item)))
+            scalar(key, str(item))
 
     for key, item in value.items():
         append(key, item)
-    return urllib.parse.urlencode(pairs)
+    return "&".join(pairs)
 
 
 def _decode(status: int, body: str) -> Any:
@@ -1320,7 +1326,7 @@ class _BaseClient:
         else:
             headers["Content-Type"] = "application/json"
             # Absent optional arguments are omitted, as `serde_qs` omits them.
-            present = {key: item for key, item in payload.items() if item is not None}
+            present = {key: item for key, item in payload.items() if item is not UNSET}
             data = json.dumps(present).encode("utf-8")
         return url, headers, data
 

@@ -13,10 +13,11 @@ pub const SPEC_MARKER: &str = "leptoskit_rpc_spec";
 
 /// The specification version this crate writes. Version 2 added
 /// [`ApiFunction::kind`]; version 3 added [`ApiSpec::channels`] and
-/// [`ApiSpec::live_path`]. This crate still reads versions 1 and 2, whose
-/// functions are all [`ApiKind::Call`] in version 1, and which publish no
-/// channels.
-pub const SPEC_VERSION: u32 = 3;
+/// [`ApiSpec::live_path`]; version 4 made [`ApiParam::required`] independent
+/// of nullability. This crate still reads versions 1 to 3, whose functions
+/// are all [`ApiKind::Call`] in version 1, which publish no channels before
+/// version 3, and whose nullable arguments are optional.
+pub const SPEC_VERSION: u32 = 4;
 
 /// Where a server serves the live socket by default, relative to its
 /// origin.
@@ -163,8 +164,8 @@ pub struct ApiParam {
 	pub docs: String,
 	/// The JSON Schema of the argument's type.
 	pub schema: Value,
-	/// Whether the argument must be sent. `#[server(default)]` arguments may
-	/// be omitted, as may ones whose type admits `null`.
+	/// Whether the argument must be sent. Nullability describes its value,
+	/// independently of whether its key may be omitted.
 	#[serde(default = "default_true")]
 	pub required: bool,
 }
@@ -173,7 +174,7 @@ impl ApiParam {
 	/// Whether a client must always send this argument.
 	#[must_use]
 	pub fn is_required(&self) -> bool {
-		self.required && !schema_is_nullable(&self.schema)
+		self.required
 	}
 }
 
@@ -370,6 +371,17 @@ impl ApiSpec {
 		}
 
 		let mut spec: Self = serde_json::from_value(value).map_err(CodegenError::Deserialize)?;
+		if found < 4 {
+			// Earlier servers marked `Option` arguments required, and clients
+			// treated every nullable argument as optional.
+			for param in spec
+				.functions
+				.iter_mut()
+				.flat_map(|function| &mut function.params)
+			{
+				param.required &= !schema_is_nullable(&param.schema);
+			}
+		}
 		spec.leptoskit_rpc_spec = SPEC_VERSION;
 		Ok(spec)
 	}
@@ -782,6 +794,31 @@ mod tests {
 	}
 
 	#[test]
+	fn version_three_nullable_arguments_stay_optional() {
+		let mut list = function("list", &[], false);
+		list.params = vec![ApiParam {
+			name: "limit".to_owned(),
+			docs: String::new(),
+			schema: serde_json::json!({ "type": ["integer", "null"] }),
+			required: true,
+		}];
+		let mut spec = ApiSpec::empty("demo", "1.2.3");
+		spec.functions = vec![list];
+		let mut json: Value =
+			serde_json::from_str(&spec.to_json().expect("serialize")).expect("json");
+
+		let current = ApiSpec::from_json(&json.to_string()).expect("current");
+		assert!(current.functions[0].params[0].is_required());
+
+		json[SPEC_MARKER] = Value::from(3);
+		let migrated = ApiSpec::from_json(&json.to_string()).expect("version 3 still reads");
+		assert!(
+			!migrated.functions[0].params[0].is_required(),
+			"an older server's `Option` argument may be omitted"
+		);
+	}
+
+	#[test]
 	fn reads_version_one_as_calls() {
 		let mut spec = ApiSpec::empty("demo", "1.2.3");
 		let mut query = function("search", &[], false);
@@ -873,14 +910,14 @@ mod tests {
 	}
 
 	#[test]
-	fn optional_parameters_are_not_required() {
+	fn requiredness_is_independent_of_nullability() {
 		let optional = ApiParam {
 			name: "limit".to_owned(),
 			docs: "How many.".to_owned(),
 			schema: serde_json::json!({ "type": ["integer", "null"] }),
 			required: true,
 		};
-		assert!(!optional.is_required());
+		assert!(optional.is_required());
 		let defaulted = ApiParam {
 			name: "tags".to_owned(),
 			docs: String::new(),
@@ -891,7 +928,7 @@ mod tests {
 		let mut list = function("list", &[], false);
 		list.params = vec![optional, defaulted];
 		let object = ApiSpec::params_object_schema(&list);
-		assert!(object.get("required").is_none(), "nothing is required");
+		assert_eq!(object["required"], serde_json::json!(["limit"]));
 		assert_eq!(
 			object["properties"]["limit"]["description"],
 			serde_json::json!("How many.")

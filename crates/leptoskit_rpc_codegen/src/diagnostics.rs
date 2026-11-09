@@ -23,7 +23,6 @@ use crate::schema::analyze;
 use crate::schema::has_default;
 use crate::schema::recognize_enum;
 use crate::spec::ApiSpec;
-use crate::spec::HttpInput;
 
 /// What kind of detail a target cannot carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,13 +116,29 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 		for param in &function.params {
 			let path = format!("functions.{}.params.{}", function.name, param.name);
 
-			// Query-string and form encodings omit nulls at every depth, so
-			// Dart cannot send an explicit null through them even though its
-			// generated API now keeps null distinct from absence.
-			if options.language == TargetLanguage::Dart
-				&& matches!(function.input, HttpInput::Query | HttpInput::Form)
-			{
-				walker.walk_omitted_null(&param.schema, &path, &mut Vec::new());
+			// Without a default, a server reads an omitted nullable argument
+			// as null, so only a declared default makes the two differ. A
+			// `#[server(default = "...")]` value is not in the schema, so it
+			// goes unreported; reporting every `Option` argument would fail
+			// `--strict` for nearly every Go and Rust client.
+			let collapsed = !param.required
+				&& has_default(&param.schema)
+				&& match options.language {
+					TargetLanguage::Go => walker.nullable_alias(&param.schema),
+					TargetLanguage::Rust | TargetLanguage::Cli => {
+						let analyzed = analyze(&param.schema);
+						analyzed.nullable && !matches!(analyzed.shape, Shape::Null)
+					}
+					_ => false,
+				};
+			if collapsed {
+				walker.loss(
+					&path,
+					DiagnosticKind::NullableCollapsed,
+					"the optional argument uses null for absence; explicit null and omission \
+					 cannot be sent separately"
+						.to_owned(),
+				);
 			}
 
 			walker.walk(&param.schema, &path);
@@ -322,10 +337,6 @@ impl Walker<'_> {
 			let collapses_null = match self.target {
 				TargetLanguage::Go => optional && self.nullable_alias(property_schema),
 				TargetLanguage::Rust | TargetLanguage::Cli => optional && analyzed.nullable,
-				// Dart models keep required and optional nullable fields
-				// distinct. A nullable value in a query-string or form
-				// argument is still lossy, and is reported by
-				// `walk_omitted_null` against the function's own encoding.
 				_ => false,
 			};
 
@@ -352,78 +363,6 @@ impl Walker<'_> {
 			}
 
 			self.walk(additional, &format!("{path}.additionalProperties"));
-		}
-	}
-
-	/// Walks a Dart query-string or form argument, reporting every place a
-	/// `null` value cannot survive encoding. References are followed so a
-	/// nullable field inside a named object is reported at its own path.
-	fn walk_omitted_null(&mut self, schema: &Value, path: &str, stack: &mut Vec<String>) {
-		let analyzed = analyze(schema);
-
-		// A required null-only value still needs a key. Intentional free-form
-		// JSON also permits null, even without a nullable type annotation.
-		if analyzed.nullable
-			|| (matches!(&analyzed.shape, Shape::Any) && analyzed.unsupported.is_none())
-		{
-			self.loss(
-				path,
-				DiagnosticKind::NullableCollapsed,
-				"query-string and form encodings omit `null`; an explicit null cannot be sent \
-				 separately from an absent value"
-					.to_owned(),
-			);
-		}
-
-		match analyzed.shape {
-			Shape::Ref(name) => {
-				if stack.iter().any(|seen| seen == name) {
-					return;
-				}
-				if let Some(target) = self.spec.schema(name) {
-					stack.push(name.to_owned());
-					self.walk_omitted_null(target, path, stack);
-					stack.pop();
-				}
-			}
-			Shape::Array { items } => {
-				self.walk_omitted_null(
-					items.unwrap_or(&Value::Bool(true)),
-					&format!("{path}.items"),
-					stack,
-				);
-			}
-			Shape::Tuple(items) => {
-				for (index, item) in items.iter().enumerate() {
-					self.walk_omitted_null(item, &format!("{path}.prefixItems[{index}]"), stack);
-				}
-			}
-			Shape::Object(object) => {
-				for (property, property_schema) in &object.properties {
-					self.walk_omitted_null(property_schema, &property_path(path, property), stack);
-				}
-				if let Some(additional) = object.additional {
-					self.walk_omitted_null(
-						additional,
-						&format!("{path}.additionalProperties"),
-						stack,
-					);
-				}
-			}
-			Shape::Map { values } => {
-				self.walk_omitted_null(
-					values.unwrap_or(&Value::Bool(true)),
-					&format!("{path}.additionalProperties"),
-					stack,
-				);
-			}
-			Shape::Null
-			| Shape::Boolean
-			| Shape::Integer { .. }
-			| Shape::Number { .. }
-			| Shape::String { .. }
-			| Shape::Union(_)
-			| Shape::Any => {}
 		}
 	}
 

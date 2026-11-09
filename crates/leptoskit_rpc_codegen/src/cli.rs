@@ -651,7 +651,7 @@ futures-util = {{ version = \"0.3\", default-features = false, features = [\"sin
 reqwest = {{ version = \"0.12\", default-features = false, features = [\"json\", \"rustls-tls\"] }}
 serde = {{ version = \"1\", features = [\"derive\"] }}
 serde_json = \"1\"
-serde_qs = \"0.15\"
+serde_qs = \"1.1.3\"
 thiserror = \"2\"
 tokio = {{ version = \"1\", features = [\"macros\", \"rt\", \"sync\", \"time\"] }}
 tokio-tungstenite = {{ version = \"0.30\", default-features = false, features = [\"connect\", \

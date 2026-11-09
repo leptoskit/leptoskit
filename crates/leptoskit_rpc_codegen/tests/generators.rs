@@ -379,7 +379,7 @@ fn functions() -> Vec<ApiFunction> {
 						"minimum": 0,
 						"type": ["integer", "null"]
 					}),
-					true,
+					false,
 				),
 			],
 			output_schema: json!({ "items": { "$ref": "#/components/schemas/Todo" }, "type": "array" }),
@@ -1222,7 +1222,7 @@ type numbers struct {
 	Nested struct {
 		N int64 `json:"n"`
 	} `json:"nested"`
-	Missing *string `json:"missing"`
+	Missing *string `json:"missing,omitempty"`
 }
 
 func sample() numbers {
@@ -1264,7 +1264,7 @@ func TestJSONBodiesKeepNumbers(t *testing.T) {
 	if err := NewClient(server.URL).call(context.Background(), "POST", "/api/x", "json", sample()); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"big":9007199254740993,"id":1234567,"labels":["a"],"nested":{"n":-42},"ratio":1.5}`
+	want := `{"id":1234567,"big":9007199254740993,"ratio":1.5,"labels":["a"],"nested":{"n":-42}}`
 	if body != want {
 		t.Errorf("body = %s, want %s", body, want)
 	}
