@@ -17,6 +17,9 @@ default = []
 analytics = ["dep:leptoskit_analytics"]
 
 [dependencies]
+# Set to tokio when serving, so leptos resources, queries, and anything else
+# that spawns through `any_spawner` work during server rendering.
+any_spawner = { workspace = true, features = ["tokio"] }
 axum = { workspace = true }
 # Serves connections directly, so it can time out a client that never
 # finishes its request headers; `axum::serve` sets no timer, which turns
