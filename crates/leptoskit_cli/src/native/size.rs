@@ -156,8 +156,10 @@ pub fn ios(root: &Path, release: bool) -> Result<Option<Report>> {
 /// Reports the APK Gradle produced, plus the assets it carries.
 pub fn android(root: &Path, release: bool) -> Result<Option<Report>> {
 	let variant = if release { "release" } else { "debug" };
-	let outputs = root
-		.join("hosts/android/app/build/outputs/apk")
+	// Current apps own `android/`. Older fixtures still live under
+	// `hosts/android`. `host_dir` picks the one that is actually there.
+	let outputs = super::host_dir(root, super::Target::Android)
+		.join("app/build/outputs/apk")
 		.join(variant);
 	let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
 
@@ -404,6 +406,32 @@ mod tests {
 		std::fs::remove_dir_all(root).unwrap();
 		std::fs::remove_dir_all(empty).unwrap();
 		std::fs::remove_dir_all(blocked).unwrap();
+	}
+
+	/// A current project owns `android/`, not `hosts/android`. The size report
+	/// has to find the APK Gradle wrote there.
+	#[test]
+	fn android_measures_the_apk_under_the_app_host() {
+		let root = scratch("android-app-host");
+		std::fs::create_dir_all(root.join("android")).unwrap();
+		std::fs::write(
+			root.join("android/Cargo.toml"),
+			b"[package]\nname = \"app\"\n",
+		)
+		.unwrap();
+		let outputs = root.join("android/app/build/outputs/apk/debug");
+		std::fs::create_dir_all(&outputs).unwrap();
+		std::fs::write(outputs.join("app-debug.apk"), vec![0_u8; 4096]).unwrap();
+
+		let report = android(&root, false)
+			.unwrap()
+			.expect("the debug APK next to android/Cargo.toml");
+		assert!(
+			report.entries.contains(&("app-debug.apk".to_owned(), 4096)),
+			"{:?}",
+			report.entries
+		);
+		std::fs::remove_dir_all(root).unwrap();
 	}
 
 	/// Sets a file's modification time, so newest-wins selection is
