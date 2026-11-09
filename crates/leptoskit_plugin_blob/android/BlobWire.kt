@@ -4,9 +4,27 @@ import dev.leptoskit.bridge.PluginException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+internal enum class Capability(
+    val code: Int,
+) {
+    Restricted(0),
+    Available(1),
+    Unavailable(2),
+}
+
 internal object BlobWire {
     const val MAX_CREATE = 65536
     const val MAX_READ = 8192
+
+    fun capability(value: Capability): ByteArray {
+        val buffer = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putInt(value.code)
+        return buffer.array()
+    }
+
+    fun empty(payload: ByteBuffer) {
+        if (payload.duplicate().remaining() != 0) throw invalid()
+    }
 
     fun create(payload: ByteBuffer): ByteArray {
         val bytes = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
@@ -32,6 +50,20 @@ internal object BlobWire {
         val bytes = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
         if (bytes.remaining() != 4) throw invalid()
         return bytes.int
+    }
+
+    fun encodeId(id: Int): ByteArray {
+        val buffer = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putInt(id)
+        return buffer.array()
+    }
+
+    fun encodeSlice(data: ByteArray): ByteArray {
+        if (data.size > MAX_READ) throw invalid()
+        val buffer = ByteBuffer.allocate(4 + data.size).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putInt(data.size)
+        buffer.put(data)
+        return buffer.array()
     }
 }
 

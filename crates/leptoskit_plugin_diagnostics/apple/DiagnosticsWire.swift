@@ -1,8 +1,26 @@
 import Foundation
 import LeptosKitBridge
 
+enum DiagnosticsCapability: UInt32 {
+    case restricted = 0
+    case available = 1
+    case unavailable = 2
+}
+
 enum DiagnosticsWire {
     static let maxName = 128
+
+    static func capability(_ value: DiagnosticsCapability) -> Data {
+        var little = value.rawValue.littleEndian
+        return withUnsafeBytes(of: &little) { Data($0) }
+    }
+
+    static func emptyPayload(_ payload: NativeBuffer) throws {
+        try payload.withUnsafeBytes { bytes in
+            var reader = WireReader(bytes)
+            try reader.finish()
+        }
+    }
 
     static func name(_ payload: NativeBuffer) throws -> String {
         try payload.withUnsafeBytes { bytes in
@@ -23,6 +41,11 @@ enum DiagnosticsWire {
             try reader.finish()
             return id
         }
+    }
+
+    static func encodeId(_ id: UInt32) -> Data {
+        var little = id.littleEndian
+        return withUnsafeBytes(of: &little) { Data($0) }
     }
 }
 
