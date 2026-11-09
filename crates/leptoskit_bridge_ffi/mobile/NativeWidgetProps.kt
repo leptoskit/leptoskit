@@ -220,8 +220,16 @@ internal class NativeWidgetProps(
         val value = textValue(widget, props)
 
         if (widget.text.toString() != value) widget.text = value
-        // NativeTextMeasurer sizes text without font padding, as layout expects.
+        // NativeTextMeasurer sizes text without font padding, as layout expects,
+        // and breaks its lines with its own strategy: a view that broke them
+        // differently could need a line more than its frame holds.
         if (widget.includeFontPadding) widget.includeFontPadding = false
+        if (widget.breakStrategy != NativeTextMeasurer.BREAK_STRATEGY) {
+            widget.breakStrategy = NativeTextMeasurer.BREAK_STRATEGY
+        }
+        if (widget.hyphenationFrequency != NativeTextMeasurer.HYPHENATION) {
+            widget.hyphenationFrequency = NativeTextMeasurer.HYPHENATION
+        }
         val hint = props.placeholder
 
         if (widget.hint?.toString() != hint) widget.hint = hint

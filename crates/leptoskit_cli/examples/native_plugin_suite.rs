@@ -105,6 +105,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_bridge_ffi/android-tests/ActivityResultBrokerTest.kt",
 	"leptoskit_bridge_ffi/android-tests/NativeVectorViewTest.kt",
 	"leptoskit_bridge_ffi/android-tests/NativeControlsTest.kt",
+	"leptoskit_bridge_ffi/android-tests/NativeTextMeasurerTest.kt",
 	"leptoskit_bridge_ffi/android-tests/RenderBatchTest.kt",
 	"leptoskit_bridge_ffi/android-tests/RenderBatchFixture.kt",
 	"leptoskit_plugin_secure_store/tests/android/SecureStorePluginTest.kt",
