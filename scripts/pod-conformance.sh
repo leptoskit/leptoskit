@@ -25,10 +25,15 @@ echo "==> Go leptoskit-pod-go"
 echo "==> Python leptoskit_pod"
 (
 	cd packages/leptoskit-pod-py
-	if ! python3 -c 'import pytest' 2>/dev/null; then
+	# devenv's python has no pip; prefer uv when present.
+	if command -v uv >/dev/null 2>&1; then
+		uv run --with pytest --with-editable . pytest -q
+	elif python3 -c 'import pytest' 2>/dev/null; then
+		python3 -m pytest -q
+	else
 		python3 -m pip install -q -e '.[dev]'
+		python3 -m pytest -q
 	fi
-	python3 -m pytest -q
 )
 
 # Optional sibling runtimes (no-op when toolchain missing).

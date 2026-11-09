@@ -49,7 +49,7 @@ pub struct Envelope<'a> {
 
 /// Wraps `body` in an `LK01` envelope.
 pub fn wrap(msg_type: MessageType, flags: u16, body: &[u8]) -> Result<Vec<u8>> {
-	let body_len = u32::try_from(body.len()).map_err(|_| Error::TooLarge)?;
+	let body_len = crate::writer::encode_len(body.len())?;
 	let mut w = Writer::with_capacity(14 + body.len());
 	w.raw(&MAGIC);
 	w.u16(CODEC_VERSION);

@@ -72,7 +72,11 @@ class ConformanceTest {
 				when {
 					m.envelope -> unwrap(bytes).exceptionOrNull()
 					m.name.contains("utf8") -> Reader(bytes).string().exceptionOrNull()
+					m.name.contains("option") -> Reader(bytes).optionTag().exceptionOrNull()
+					m.name.contains("result") -> Reader(bytes).resultTag().exceptionOrNull()
 					m.name.contains("bool") -> Reader(bytes).bool().exceptionOrNull()
+					m.name.contains("huge_len") || m.name.contains("vec_u8") ->
+						Reader(bytes).bytes().exceptionOrNull()
 					else -> Reader(bytes).u16().exceptionOrNull()
 				}
 			requireNotNull(err) { "${m.name}: expected error" }

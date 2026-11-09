@@ -680,8 +680,10 @@ in
       exec = ''
         set -euo pipefail
         mkdir -p target/coverage
-        cargo llvm-cov --package leptoskit_pod --all-features --tests \
-          --ignore-filename-regex '/tests/|/src/proofs\.rs|/crates/leptoskit_pod_macros/' \
+        # Drive the gate from library unit tests only. Merging multiple
+        # integration-test binaries under-counts inlined codec helpers here.
+        cargo llvm-cov --package leptoskit_pod --lib --all-features \
+          --ignore-filename-regex '/tests/|/src/proofs\.rs|/src/lib_tests\.rs|/crates/leptoskit_pod_macros/' \
           --fail-under-lines 100 \
           --lcov --output-path target/coverage/leptoskit-pod.lcov
       '';

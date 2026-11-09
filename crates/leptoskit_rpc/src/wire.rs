@@ -109,7 +109,7 @@ pub(crate) fn request_transport(
 	content_type: Option<&str>,
 	allowed: TransportSet,
 ) -> Result<Transport, &'static str> {
-	let requested = content_type.map(media_type).unwrap_or(POD_CONTENT_TYPE);
+	let requested = content_type.map_or(POD_CONTENT_TYPE, media_type);
 
 	if requested == POD_CONTENT_TYPE {
 		if allowed.pod {

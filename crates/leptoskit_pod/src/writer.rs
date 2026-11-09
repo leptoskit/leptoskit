@@ -84,8 +84,7 @@ impl Writer {
 
 	/// Appends a `u32` length then the bytes.
 	pub fn bytes(&mut self, value: &[u8]) -> Result<()> {
-		let len = u32::try_from(value.len()).map_err(|_| Error::TooLarge)?;
-		self.u32(len);
+		self.u32(encode_len(value.len())?);
 		self.bytes.extend_from_slice(value);
 		Ok(())
 	}
@@ -97,8 +96,7 @@ impl Writer {
 
 	/// Appends a vector element count (`u32`).
 	pub fn vec_len(&mut self, len: usize) -> Result<()> {
-		let len = u32::try_from(len).map_err(|_| Error::TooLarge)?;
-		self.u32(len);
+		self.u32(encode_len(len)?);
 		Ok(())
 	}
 
@@ -130,5 +128,19 @@ impl Writer {
 	/// Transfers ownership of the buffer.
 	pub fn finish(self) -> Vec<u8> {
 		self.bytes
+	}
+}
+
+pub(crate) fn encode_len(len: usize) -> Result<u32> {
+	u32::try_from(len).map_err(|_| Error::TooLarge)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn encode_len_rejects_oversized() {
+		assert_eq!(encode_len(usize::MAX).unwrap_err(), Error::TooLarge);
 	}
 }

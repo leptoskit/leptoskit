@@ -39,7 +39,8 @@ pub fn climb(bytes: &[u8], current: u16, steps: &[&dyn Transition]) -> Result<Ve
 			.find(|s| s.from_version() == version)
 			.ok_or(Error::UnknownVersion(version))?;
 		payload = step.migrate(&payload)?;
-		version = version.checked_add(1).ok_or(Error::TooLarge)?;
+		// `version < current` guarantees `version + 1` fits in `u16`.
+		version += 1;
 	}
 	if version != current {
 		return Err(Error::UnknownVersion(version));
@@ -95,5 +96,34 @@ mod tests {
 		w.bool(true);
 		let current = w.finish();
 		assert_eq!(climb(&current, 1, &[&V0ToV1]).unwrap(), current);
+	}
+
+	#[test]
+	fn rejects_version_ahead_of_current() {
+		let mut w = Writer::new();
+		w.struct_header(2);
+		w.u8(1);
+		let ahead = w.finish();
+		assert_eq!(
+			climb(&ahead, 1, &[&V0ToV1]).unwrap_err(),
+			Error::UnknownVersion(2)
+		);
+	}
+
+	#[test]
+	fn rejects_truncated_header() {
+		assert_eq!(climb(&[0], 0, &[]).unwrap_err(), Error::Truncated);
+	}
+
+	#[test]
+	fn rejects_missing_transition_step() {
+		let mut w = Writer::new();
+		w.struct_header(0);
+		w.u8(7);
+		let v0 = w.finish();
+		assert_eq!(
+			climb(&v0, 2, &[&V0ToV1]).unwrap_err(),
+			Error::UnknownVersion(1)
+		);
 	}
 }

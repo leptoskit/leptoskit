@@ -376,6 +376,86 @@ async fn pod_round_trips_notes_query() {
 	assert_eq!(titles, ["pod-note"]);
 }
 
+#[tokio::test]
+async fn pod_mutation_round_trips_and_json_still_works() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+
+	let args = AddNote {
+		title: "via-pod".into(),
+	};
+	let encoded = PodEncode::to_pod_bytes(&args).unwrap();
+	let (status, bytes) = Call::new("add_note", &json!({}))
+		.user("ada")
+		.pod(encoded)
+		.send_pod(&router)
+		.await;
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"{}",
+		String::from_utf8_lossy(&bytes)
+	);
+	let id = Id::<Note>::from_pod_bytes(&bytes).unwrap();
+
+	let (status, body) = Call::new("notes", &json!({}))
+		.user("ada")
+		.send(&router)
+		.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let titles: Vec<String> = serde_json::from_str(&body).unwrap();
+	assert_eq!(titles, ["via-pod"]);
+	assert_ne!(id.to_string(), "");
+}
+
+#[tokio::test]
+async fn pod_rejects_malformed_args_as_client_error() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+	let (status, bytes) = Call::new("notes", &json!({}))
+		.user("ada")
+		.pod(vec![0x01])
+		.send_pod(&router)
+		.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let body = String::from_utf8_lossy(&bytes);
+	assert!(
+		body.starts_with("Args|") || body.contains("pod") || body.contains("Truncated"),
+		"{body}"
+	);
+}
+
+#[tokio::test]
+async fn pod_and_json_negotiate_on_same_router() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+	Call::new("add_note", &json!({ "title": "json-first" }))
+		.user("ada")
+		.send(&router)
+		.await;
+
+	let (status, body) = Call::new("notes", &json!({}))
+		.user("ada")
+		.send(&router)
+		.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body, r#"["json-first"]"#);
+
+	let encoded = Notes {
+		starting: Some("json".into()),
+	}
+	.to_pod_bytes()
+	.unwrap();
+	let (status, bytes) = Call::new("notes", &json!({}))
+		.user("ada")
+		.pod(encoded)
+		.send_pod(&router)
+		.await;
+	assert_eq!(status, StatusCode::OK);
+	let titles: Vec<String> = Vec::from_pod_bytes(&bytes).unwrap();
+	assert_eq!(titles, ["json-first"]);
+}
+
 async fn failures_arrive_classified(db: &Db) {
 	let router = Server::new(db.clone()).identify(Header).router::<()>();
 

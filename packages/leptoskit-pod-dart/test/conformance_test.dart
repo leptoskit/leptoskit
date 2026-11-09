@@ -28,22 +28,30 @@ void main() {
       for (final m in corpus['malformed'] as List) {
         final bytes = _hexDecode(m['hex'] as String);
         final expected = m['expect'] as String;
+        final name = m['name'] as String;
         Object? err;
         try {
+          final r = Reader(Uint8List.fromList(bytes));
           if (m['envelope'] == true) {
             unwrap(Uint8List.fromList(bytes));
-          } else if ((m['name'] as String).contains('utf8')) {
-            Reader(Uint8List.fromList(bytes)).string();
-          } else if ((m['name'] as String).contains('bool')) {
-            Reader(Uint8List.fromList(bytes)).podBool();
+          } else if (name.contains('utf8')) {
+            r.string();
+          } else if (name.contains('option')) {
+            r.optionTag();
+          } else if (name.contains('result')) {
+            r.resultTag();
+          } else if (name.contains('bool')) {
+            r.podBool();
+          } else if (name.contains('huge_len') || name.contains('vec_u8')) {
+            r.bytes();
           } else {
-            Reader(Uint8List.fromList(bytes)).u16();
+            r.u16();
           }
         } catch (e) {
           err = e;
         }
-        expect(err, isNotNull, reason: m['name']);
-        expect(err.toString(), contains(expected), reason: m['name']);
+        expect(err, isNotNull, reason: name);
+        expect(err.toString(), contains(expected), reason: name);
       }
     });
   });

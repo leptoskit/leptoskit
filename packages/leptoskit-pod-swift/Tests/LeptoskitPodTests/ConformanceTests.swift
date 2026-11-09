@@ -78,10 +78,37 @@ final class ConformanceTests: XCTestCase {
 				} catch let e as PodError {
 					err = e
 				}
+			} else if m.name.contains("option") {
+				var r = Reader(input: bytes)
+				do {
+					_ = try r.optionTag()
+					XCTFail("\(m.name): expected error")
+					continue
+				} catch let e as PodError {
+					err = e
+				}
+			} else if m.name.contains("result") {
+				var r = Reader(input: bytes)
+				do {
+					_ = try r.resultTag()
+					XCTFail("\(m.name): expected error")
+					continue
+				} catch let e as PodError {
+					err = e
+				}
 			} else if m.name.contains("bool") {
 				var r = Reader(input: bytes)
 				do {
 					_ = try r.bool()
+					XCTFail("\(m.name): expected error")
+					continue
+				} catch let e as PodError {
+					err = e
+				}
+			} else if m.name.contains("huge_len") || m.name.contains("vec_u8") {
+				var r = Reader(input: bytes)
+				do {
+					_ = try r.bytes()
 					XCTFail("\(m.name): expected error")
 					continue
 				} catch let e as PodError {
