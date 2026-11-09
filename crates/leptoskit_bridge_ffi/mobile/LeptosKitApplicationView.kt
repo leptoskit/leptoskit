@@ -130,8 +130,17 @@ class LeptosKitApplicationView(
             val wasm = NativeUpdates.entry(embedded)
             runningGuest = wasm
 
-            current = adopt(LeptosKitView(context, wasm, register = register))
-            guests.addView(current, FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            try {
+                current = adopt(LeptosKitView(context, wasm, register = register))
+                guests.addView(current, FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            } catch (error: Exception) {
+                // A plugin that cannot start, or a guest that cannot load:
+                // say why on screen rather than close the app.
+                guests.addView(NativeFailureView.create(context, NativeApplicationTeardown.message(error)))
+
+                if (error is NativeApplicationInitializationFailure) transition { joinInitialization(error) }
+            }
+
             development = developmentUrl?.let { NativeDevelopmentGuests(it, wasm, ::reload) }
         }
     }
@@ -508,12 +517,7 @@ class LeptosKitApplicationView(
                 retire(view)
             }
         } else if (view === current) {
-            view.addView(
-                TextView(context).apply {
-                    text = NativeApplicationTeardown.message(error)
-                    contentDescription = "leptoskit-error"
-                },
-            )
+            view.addView(NativeFailureView.create(context, NativeApplicationTeardown.message(error)))
         }
     }
 
