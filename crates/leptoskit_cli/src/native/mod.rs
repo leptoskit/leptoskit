@@ -1,5 +1,6 @@
 //! Generated native hosts and dependency-driven plugin registration.
 
+use std::io::IsTerminal as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -383,7 +384,16 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&build_dir,
 		ohos_ndk.as_deref(),
 	)?;
-	run_tool(&mut host)?;
+	if target.is_android() {
+		// The archive is linked from CMake, which never sees Cargo's link
+		// directives, so the libraries rustc reports for it are written into
+		// the host's CMake project before Gradle links the JNI library.
+		let native_libraries = run_host_library(&mut host)?;
+		project::write_android_cmake(&root, &registry, &native_libraries)?;
+	} else {
+		run_tool(&mut host)?;
+	}
+
 	let profile = profile_directory(&config, true, release);
 	project::copy(
 		&build_dir
@@ -552,6 +562,11 @@ fn check_host(config: &LeptoskitConfig, target: Target, release: bool) -> Result
 /// The cargo invocation that compiles the host static library a mobile or
 /// macOS shell links, with the target's C toolchain configured for the
 /// host's C dependencies.
+///
+/// The Android hosts link that archive from `CMake`, outside Cargo, so the
+/// build asks rustc for the native libraries it needs: `cargo rustc` is `cargo
+/// build` plus a flag for the last crate, and the note it prints is the only
+/// place those libraries are named.
 fn host_library_command(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -563,7 +578,11 @@ fn host_library_command(
 ) -> Result<Command> {
 	let mut host = Command::new("cargo");
 	host.current_dir(root).args([
-		"build",
+		if target.is_android() {
+			"rustc"
+		} else {
+			"build"
+		},
 		"--package",
 		&registry.package,
 		"--lib",
@@ -597,6 +616,14 @@ fn host_library_command(
 
 	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
+
+		// `run_host_library` reads the build's stderr, so Cargo no longer sees
+		// a terminal; keep its colour when the build prints to one.
+		if std::io::stderr().is_terminal() {
+			host.args(["--color", "always"]);
+		}
+
+		host.args(["--", "--print", "native-static-libs"]);
 	} else if matches!(target, Target::Ios | Target::IosSimulator | Target::Macos) {
 		for (key, value) in apple_cc_environment(target) {
 			host.env(key, value);
@@ -1427,6 +1454,56 @@ pub(crate) fn run_tool(command: &mut Command) -> Result<()> {
 		.with_context(|| format!("could not execute {command:?}"))?;
 	anyhow::ensure!(status.success(), "{command:?} failed: {status}");
 	Ok(())
+}
+
+/// Runs the host library build, printing what it prints, and returns the native
+/// libraries rustc reported for the archive, in the order it reported them.
+fn run_host_library(command: &mut Command) -> Result<Vec<String>> {
+	use std::io::BufRead as _;
+
+	let mut child = command
+		.stdout(std::process::Stdio::inherit())
+		.stderr(std::process::Stdio::piped())
+		.spawn()
+		.with_context(|| format!("could not execute {command:?}"))?;
+	let stderr = child.stderr.take().context("host build has no stderr")?;
+	let mut output = String::new();
+
+	for line in std::io::BufReader::new(stderr).lines() {
+		let line = line?;
+		eprintln!("{line}");
+		output.push_str(&line);
+		output.push('\n');
+	}
+
+	let status = child.wait()?;
+	anyhow::ensure!(status.success(), "{command:?} failed: {status}");
+	Ok(native_static_libs(&output))
+}
+
+/// The libraries in rustc's `note: native-static-libs:` line, with `-l`
+/// stripped, in rustc's order and without the repeats it keeps for linkers that
+/// care about them. Anything that is not a `-l` entry is left to the C linker.
+fn native_static_libs(output: &str) -> Vec<String> {
+	let mut libraries: Vec<String> = Vec::new();
+
+	for line in output.lines() {
+		let Some(list) = line.trim().strip_prefix("note: native-static-libs:") else {
+			continue;
+		};
+
+		for entry in list.split_whitespace() {
+			let Some(name) = entry.strip_prefix("-l") else {
+				continue;
+			};
+
+			if !name.is_empty() && !libraries.iter().any(|known| known == name) {
+				libraries.push(name.to_owned());
+			}
+		}
+	}
+
+	libraries
 }
 
 /// The path of `tool` inside an SDK, from the `xcrun` on `PATH`: Xcode's own
@@ -2647,6 +2724,44 @@ mod tests {
 		let mut missing = Command::new("leptoskit-tool-that-does-not-exist");
 		let error = run_tool(&mut missing).unwrap_err().to_string();
 		assert!(error.contains("could not execute"), "{error}");
+	}
+
+	#[test]
+	fn rustcs_note_names_the_archives_libraries_once_in_its_order() {
+		let output = "   Compiling app v0.1.0\nnote: link against the following native \
+		              artifacts\n\nnote: native-static-libs: -ldl -llog -lunwind -ldl -lm -lc \
+		              -laaudio -lOpenSLES\n\n    Finished `dev` profile [unoptimized + debuginfo] \
+		              target(s) in 0.42s\n";
+
+		assert_eq!(
+			native_static_libs(output),
+			["dl", "log", "unwind", "m", "c", "aaudio", "OpenSLES"]
+		);
+		assert_eq!(
+			native_static_libs("nothing was printed"),
+			Vec::<String>::new()
+		);
+		assert_eq!(
+			native_static_libs("note: native-static-libs: -framework Security -lAudioToolbox"),
+			["AudioToolbox"],
+			"a framework is the C linker's to name, not a library to link"
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn a_host_build_reports_the_libraries_it_printed() {
+		let mut build = Command::new("sh");
+		build.args([
+			"-c",
+			"echo 'note: native-static-libs: -laaudio -ldl -laaudio' >&2; echo compiling",
+		]);
+		assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+
+		let mut failed = Command::new("sh");
+		failed.args(["-c", "exit 3"]);
+		let error = run_host_library(&mut failed).unwrap_err().to_string();
+		assert!(error.contains("failed"), "{error}");
 	}
 
 	#[test]
