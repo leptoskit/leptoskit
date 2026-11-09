@@ -32,6 +32,10 @@ internal object BackgroundState {
     @Volatile
     var running = false
 
+    /** The foreground-service type mask the running service was started with. */
+    @Volatile
+    var serviceTypes = 0
+
     @Volatile
     var lastWakeSecs = 0L
 

@@ -3680,6 +3680,7 @@ dependencies = [
  "leptoskit_plugin_posture",
  "leptoskit_plugin_power_monitor",
  "leptoskit_plugin_print",
+ "leptoskit_plugin_recorder",
  "leptoskit_plugin_screen_capture",
  "leptoskit_plugin_screen_orientation",
  "leptoskit_plugin_secure_store",
@@ -6727,6 +6728,13 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_print"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
+name = "leptoskit_plugin_recorder"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",

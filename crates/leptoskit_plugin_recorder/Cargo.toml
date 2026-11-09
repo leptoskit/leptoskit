@@ -1,0 +1,30 @@
+[package]
+name = "leptoskit_plugin_recorder"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Record the microphone continuously in the background as timed audio segments for LeptosKit apps."
+
+[package.metadata.leptoskit.runtime]
+name = "recorder"
+apple-module = "LeptosKitRecorder"
+apple-type = "RecorderPlugin"
+apple-usage-descriptions = ["NSMicrophoneUsageDescription"]
+apple-background-modes = ["audio"]
+android-type = "dev.leptoskit.plugins.recorder.RecorderPlugin"
+android-context = true
+android-permissions = ["android.permission.RECORD_AUDIO"]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true
