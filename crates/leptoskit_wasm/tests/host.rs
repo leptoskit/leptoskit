@@ -480,7 +480,7 @@ fn wire_classes_drive_native_layout_and_paint() {
 fn a_committed_node_names_the_wire_node_it_was_built_from() {
 	let guest = props_guest(&serde_json::json!({
 		"class": "p-2 gap-1",
-		"source": "src/screens/home.rs:12:5",
+		"source_location": "src/screens/home.rs:12:5",
 	}));
 	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile guest");
 	host.start(VIEWPORT_WIDTH, COMPACT_VIEWPORT_HEIGHT)
@@ -536,7 +536,7 @@ fn a_bound_value_changing_in_place_keeps_the_source_and_component() {
 	let guest = twice_props_guest(
 		&serde_json::json!({
 			"class": "p-2",
-			"source": "src/screens/home.rs:12:5",
+			"source_location": "src/screens/home.rs:12:5",
 			"component": "ClipCard",
 		}),
 		&serde_json::json!({ "class": "p-2", "props": { "text": "updated" } }),
@@ -552,8 +552,8 @@ fn a_bound_value_changing_in_place_keeps_the_source_and_component() {
 	// A full render names its own source and component, which replace the
 	// old ones, even when it has no component.
 	let guest = twice_props_guest(
-		&serde_json::json!({ "source": "a.rs:1:1", "component": "Old" }),
-		&serde_json::json!({ "source": "b.rs:2:2" }),
+		&serde_json::json!({ "source_location": "a.rs:1:1", "component": "Old" }),
+		&serde_json::json!({ "source_location": "b.rs:2:2" }),
 	);
 	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile guest");
 	host.start(VIEWPORT_WIDTH, COMPACT_VIEWPORT_HEIGHT)
@@ -788,4 +788,93 @@ fn a_viewport_trap_surfaces_at_the_next_dispatch() {
 		leptoskit_native::EventOutcome::Unhandled,
 		"the error is reported once"
 	);
+}
+
+/// A guest whose root is a node of the kind `code` names, with `props`.
+fn kind_guest(code: i32, props: &serde_json::Value) -> String {
+	use std::fmt::Write;
+
+	let json = props.to_string();
+	let mut escaped = String::new();
+
+	for byte in json.bytes() {
+		write!(escaped, "\\{byte:02x}").expect("write to String");
+	}
+
+	format!(
+		r#"(module
+  (import "leptoskit" "node_create" (func $create (param i64 i32)))
+  (import "leptoskit" "node_set_props" (func $props (param i64 i32 i32)))
+  (import "leptoskit" "commit" (func $commit))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "{escaped}")
+  (func (export "leptoskit_main")
+    (call $create (i64.const 1) (i32.const {code}))
+    (call $props (i64.const 1) (i32.const 0) (i32.const {length}))
+    (call $commit))
+  (func (export "leptoskit_event") (param i64 i32 i32 i32) (result i32)
+    (i32.const 0)))"#,
+		length = json.len()
+	)
+}
+
+#[test]
+fn every_kind_the_guest_creates_is_the_kind_the_host_shows() {
+	// The host's own table once stopped at Camera, so maps and live photos
+	// showed as plain views.
+	for (code, kind) in leptoskit_native::wire::KINDS.into_iter().enumerate() {
+		let code = i32::try_from(code).expect("a small code");
+		let content = match kind {
+			NativeKind::Image => serde_json::json!({ "source": "a.png" }),
+			NativeKind::Radio => serde_json::json!({ "radio_group": "g" }),
+			NativeKind::Scene3d => serde_json::json!({ "scene3d": 1 }),
+			NativeKind::Video => serde_json::json!({ "video": 1 }),
+			NativeKind::Camera => serde_json::json!({ "camera": 1 }),
+			NativeKind::Map => serde_json::json!({ "map": 1 }),
+			NativeKind::LivePhoto => serde_json::json!({ "live_photo": 1 }),
+			_ => serde_json::json!({}),
+		};
+		let mut props = serde_json::json!({ "accessibility_label": "A node", "opacity": 0.5 });
+		props
+			.as_object_mut()
+			.expect("an object")
+			.extend(content.as_object().expect("an object").clone());
+		if kind == NativeKind::Rive {
+			// Rive needs an asset this guest has no room for;
+			// leptoskit_native's wire tests hold its code.
+			continue;
+		}
+
+		let guest = kind_guest(code, &props);
+		let mut host = WasmHost::headless(guest.as_bytes()).expect("compile guest");
+		host.start(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
+			.unwrap_or_else(|error| panic!("{kind}: {error}"));
+		let root = host.surface().root().expect("root");
+		assert_eq!(host.surface().kind(root), kind, "code {code}");
+		assert_eq!(host.surface().props(root).opacity, Some(0.5), "{kind}");
+	}
+}
+
+#[test]
+fn a_fractional_number_in_the_props_reaches_the_surface() {
+	// What Reapers sent first on the Seeker, where serde_json's
+	// `arbitrary_precision` is on: `test:wire` runs this suite with it.
+	let guest = props_guest(&serde_json::json!({
+		"opacity": 0.5,
+		"corner_radius": 8.5,
+		"drawing": {
+			"view_box": { "min_x": 0.0, "min_y": 0.0, "width": 100.0, "height": 100.0 },
+			"scaling": "stretch",
+			"paths": [{ "data": "M 108 5 C 55 2 2 20 -6 52",
+				"stroke": { "color": 3_924_087_854_u32, "width": 1.4, "cap": "butt", "join": "miter" } }],
+		},
+		"class": "absolute inset-0",
+	}));
+	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile guest");
+	host.start(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
+		.expect("the host reads fractional numbers");
+	let root = host.surface().root().expect("root");
+	assert_eq!(host.surface().props(root).opacity, Some(0.5));
+	assert_eq!(host.surface().props(root).corner_radius, Some(8.5));
+	assert!(host.surface().props(root).drawing.is_some());
 }

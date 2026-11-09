@@ -73,9 +73,10 @@ struct WireNode<'a> {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	rive_inputs: Option<&'a BTreeMap<leptoskit_rive::Name, leptoskit_rive::Update>>,
 	/// Where the element was created, as `file:line:column`, so the host's
-	/// `DevTools` agent can name it and compute its match key.
+	/// `DevTools` agent can name it and compute its match key. Sent as
+	/// `source_location`: `source` is the props' own image source.
 	#[cfg(feature = "devtools")]
-	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(rename = "source_location", skip_serializing_if = "Option::is_none")]
 	source: Option<String>,
 	/// The `#[component]` whose body created the element.
 	#[cfg(feature = "devtools")]
@@ -659,32 +660,11 @@ fn depth_of(tree: &Tree, id: i64) -> usize {
 
 /// The codes of the native UI ABI, independent of enum declaration order.
 fn kind_code(kind: NativeKind) -> i32 {
-	match kind {
-		NativeKind::View => 0,
-		NativeKind::Text => 1,
-		NativeKind::TextRun => 2,
-		NativeKind::Image => 3,
-		NativeKind::ScrollView => 4,
-		NativeKind::TextInput => 5,
-		NativeKind::Button => 6,
-		NativeKind::Switch => 7,
-		NativeKind::Checkbox => 8,
-		NativeKind::Radio => 9,
-		NativeKind::Slider => 10,
-		NativeKind::LinearProgressIndicator => 11,
-		NativeKind::ActivityIndicator => 12,
-		NativeKind::PasswordInput => 13,
-		NativeKind::Pressable => 14,
-		NativeKind::Vector => 15,
-		NativeKind::Rive => 16,
-		NativeKind::Scene3d => 17,
-		NativeKind::Video => 18,
-		NativeKind::Camera => 19,
-		NativeKind::Map => 20,
-		NativeKind::LivePhoto => 21,
-		NativeKind::Custom(name) => panic!("custom widget `{name}` has no native guest ABI code"),
-	}
+	crate::wire::kind_code(kind)
+		.unwrap_or_else(|| panic!("custom widget `{kind}` has no native guest ABI code"))
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wire_tests;

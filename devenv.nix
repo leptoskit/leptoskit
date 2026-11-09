@@ -557,14 +557,31 @@ in
           dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
+          test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
         fi
         cargo nextest run --workspace --all-features
         cargo nextest run --manifest-path examples/file_routes/Cargo.toml
         cargo nextest run --manifest-path examples/dev_client/Cargo.toml
         cargo nextest run --manifest-path devtools/Cargo.toml
+        test:wire
       '';
       description = "Run cargo tests with nextest.";
+      binary = "bash";
+    };
+
+    "test:wire" = {
+      exec = ''
+        set -euo pipefail
+        # Apps that use Solana's clients build serde_json with
+        # `arbitrary_precision`, which turns a buffered number with a
+        # fraction into a map. The guest-to-host wire must read the same
+        # with it as without.
+        cargo nextest run -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision \
+          -E 'test(/wire_tests/)'
+        cargo nextest run -p leptoskit_wasm --features serde_json/arbitrary_precision
+      '';
+      description = "Run the native wire's tests under serde_json's arbitrary_precision.";
       binary = "bash";
     };
 

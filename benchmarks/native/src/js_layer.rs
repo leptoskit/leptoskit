@@ -94,28 +94,6 @@ struct JsonTreeHost {
 	error: Option<String>,
 }
 
-fn kind_from_code(code: i32) -> Option<NativeKind> {
-	Some(match code {
-		0 => NativeKind::View,
-		1 => NativeKind::Text,
-		2 => NativeKind::TextRun,
-		3 => NativeKind::Image,
-		4 => NativeKind::ScrollView,
-		5 => NativeKind::TextInput,
-		6 => NativeKind::Button,
-		7 => NativeKind::Switch,
-		8 => NativeKind::Checkbox,
-		9 => NativeKind::Radio,
-		10 => NativeKind::Slider,
-		11 => NativeKind::LinearProgressIndicator,
-		12 => NativeKind::ActivityIndicator,
-		13 => NativeKind::PasswordInput,
-		14 => NativeKind::Pressable,
-		15 => NativeKind::Vector,
-		_ => return None,
-	})
-}
-
 impl JsonTreeHost {
 	fn new() -> Self {
 		let mut surface = NativeSurface::new(HeadlessBackend::new());
@@ -137,7 +115,7 @@ impl JsonTreeHost {
 	}
 
 	fn node_create(&mut self, id: i64, kind: i32) {
-		match kind_from_code(kind) {
+		match leptoskit_native::wire::kind(kind) {
 			Some(kind) => {
 				self.nodes.insert(id, (kind, WireNode::default()));
 			}
@@ -150,7 +128,7 @@ impl JsonTreeHost {
 	}
 
 	fn node_set_props(&mut self, id: i64, json: &str) {
-		match serde_json::from_str::<WireNode>(json) {
+		match WireNode::from_json(json.as_bytes()) {
 			Ok(wire) => {
 				if let Some(node) = self.nodes.get_mut(&id) {
 					node.1 = wire;
