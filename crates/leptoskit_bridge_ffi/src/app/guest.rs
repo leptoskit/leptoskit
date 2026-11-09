@@ -1194,6 +1194,9 @@ fn raise_priority() {
 }
 
 #[cfg(test)]
+mod routing_tests;
+
+#[cfg(test)]
 mod tests {
 	use super::*;
 
