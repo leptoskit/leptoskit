@@ -12,6 +12,7 @@
 - [Configuration schema and migrations](reference/schemas.md)
 - [Building and serving](guide/04-building.md)
 - [Debugging with DevTools](guide/26-devtools.md)
+- [Reading the runtime's log](guide/37-reading-logs.md)
 - [Application performance](guide/27-analytics.md)
 - [Your deployment service](guide/28-deployment-service.md)
 - [Hosted deployment accounts](guide/29-hosted-deployments.md)

@@ -28,6 +28,7 @@ url = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
 jsonschema = { version = "0.55", default-features = false }
+log = { workspace = true }
 
 [[example]]
 name = "schema"

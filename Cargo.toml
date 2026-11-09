@@ -125,6 +125,7 @@ leptos_axum = "0.9.0-rc0"
 leptos_meta = "0.9.0-rc0"
 leptos_router = "0.9.0-rc0"
 libtest-mimic = "0.8"
+log = "0.4"
 lyon_tessellation = "1"
 markdown = "1"
 monosecret = { version = "0.5.0", default-features = false, features = ["client"] }
@@ -165,6 +166,7 @@ semver = { version = "1", features = ["serde"] }
 send_wrapper = "0.6"
 serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_path_to_error = "0.1"
 sha2 = "0.10"
 skribble_rough = { git = "https://github.com/openbudgetfun/skribble", rev = "00845d0d2a1c07a126079453de342811ee1cff64" }
 sqlite-vec = "0.1.9"
@@ -241,6 +243,7 @@ leptoskit_idp = { path = "crates/leptoskit_idp", version = "0.3.0" }
 leptoskit_l10n = { path = "crates/leptoskit_l10n", version = "0.3.0" }
 leptoskit_l10n_codegen = { path = "crates/leptoskit_l10n_codegen", version = "0.3.0" }
 leptoskit_lint = { path = "crates/leptoskit_lint", version = "0.3.0" }
+leptoskit_log = { path = "crates/leptoskit_log", version = "0.3.0" }
 leptoskit_macros = { path = "crates/leptoskit_macros", version = "0.3.0" }
 leptoskit_native = { path = "crates/leptoskit_native", version = "0.3.0" }
 leptoskit_platform = { path = "crates/leptoskit_platform", version = "0.3.0" }

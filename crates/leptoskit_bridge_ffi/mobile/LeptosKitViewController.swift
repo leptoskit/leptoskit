@@ -126,6 +126,8 @@ public final class LeptosKitViewController: UIViewController, UITextFieldDelegat
     }
 
     private func fail(_ error: Error) {
+        // Every build logs why the app stopped drawing, with its causes.
+        NativeLog.error(NativeLog.bridge, "the app stopped", error)
         let callback = onFailure
         close()
 

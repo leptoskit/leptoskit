@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import dev.leptoskit.bridge.NativeBridge
 
 /** Thread-only JNI boundary for `leptoskit dev`; each call may block for the server's wait. */
@@ -28,7 +27,6 @@ internal object NativeDevtools {
     /** The intent extras `leptoskit dev` passes the hub's URL and the app's name in. */
     private const val HUB_EXTRA = "leptoskit.devtools"
     private const val APP_EXTRA = "leptoskit.devtools_app"
-    private const val TAG = "LeptosKit"
 
     /** 0 once apps created afterwards report to [url]; -1 when this build can't. */
     @JvmStatic private external fun hub(
@@ -69,7 +67,7 @@ internal object NativeDevtools {
         val app = intent.getStringExtra(APP_EXTRA) ?: "app"
 
         if (hub(url.toByteArray(Charsets.UTF_8), app.toByteArray(Charsets.UTF_8)) != 0) {
-            Log.i(TAG, "leptoskit dev: this build does not report to DevTools")
+            NativeLog.info(NativeLog.BRIDGE, "leptoskit dev: this build does not report to DevTools")
         }
     }
 }
@@ -87,7 +85,6 @@ internal class NativeDevelopmentGuests(
     companion object {
         /** The intent extra `leptoskit dev` launches the Activity with. */
         private const val EXTRA = "leptoskit.dev_guest"
-        private const val TAG = "LeptosKit"
         private const val RETRY_MILLIS = 1000L
 
         /** The guest URL the Activity hosting [context] was launched with, if any. */
@@ -114,7 +111,7 @@ internal class NativeDevelopmentGuests(
                 NativeBridge.load()
                 NativeDevelopment.open(url.toByteArray(Charsets.UTF_8), running)
             } catch (error: IllegalStateException) {
-                Log.w(TAG, "leptoskit dev: ${error.message}")
+                NativeLog.warn(NativeLog.BRIDGE, "leptoskit dev", error)
 
                 return
             }
@@ -132,7 +129,8 @@ internal class NativeDevelopmentGuests(
 
             main.post { if (!closed) onGuest(guest) }
         } catch (error: IllegalStateException) {
-            Log.w(TAG, "leptoskit dev: ${error.message}")
+            // It retries, so the reason is enough: a stack each time would flood the log.
+            NativeLog.warn(NativeLog.BRIDGE, "leptoskit dev: ${error.message}")
             Thread.sleep(RETRY_MILLIS)
         }
     }

@@ -262,7 +262,11 @@ fn a_malformed_event_fails_the_guest_and_it_still_stops() {
 		wait("the first transaction", || transaction(guest));
 		assert_eq!(lk_guest_event(guest, 0, 77, ptr::null(), 0), -1);
 		assert_eq!(lk_guest_failed(guest), 1);
-		assert_eq!(take(lk_guest_error(guest)), b"unknown event kind");
+		// The guest's error names the event and the view it was for.
+		assert_eq!(
+			take(lk_guest_error(guest)),
+			b"event 77 for view 0: unknown event kind"
+		);
 
 		// A failed guest drops what it is sent.
 		assert_eq!(lk_guest_frame(guest, 2_000_000, 16_666_667), 0);

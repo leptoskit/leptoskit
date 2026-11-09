@@ -19,10 +19,15 @@ devtools = ["dep:leptoskit_devtools_protocol"]
 [dependencies]
 bytes = { workspace = true }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
+leptoskit_log = { workspace = true }
+log = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
+
+[dev-dependencies]
+leptoskit_log = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

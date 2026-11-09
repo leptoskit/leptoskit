@@ -151,6 +151,8 @@ pub fn build(
 		command.args(["--features", &features.join(",")]);
 	}
 
+	super::set_log_level(&mut command, config);
+
 	if release {
 		command.arg("--release");
 	} else {

@@ -466,6 +466,29 @@ fn host_trap(message: impl Into<String>) -> wasmi::Error {
 	wasmi::Error::host(HostTrap(message.into()))
 }
 
+/// Puts the import a host trap came from in front of its message. Other
+/// errors, such as running out of fuel, keep their kind.
+fn in_import(import: &str, error: wasmi::Error) -> wasmi::Error {
+	match error.downcast_ref::<HostTrap>() {
+		Some(HostTrap(message)) => host_trap(format!("{import}: {message}")),
+		None => error,
+	}
+}
+
+/// What a failed call into the guest's `export` becomes: a trap names the
+/// export in front of its message, so it reads `leptoskit_event:
+/// node_set_props: …`. The other kinds say nothing of where they happened, so
+/// that is logged.
+fn in_export(export: &str, error: wasmi::Error) -> WasmError {
+	match WasmError::from(error) {
+		WasmError::Trap(message) => WasmError::Trap(format!("{export}: {message}")),
+		other => {
+			log::error!(target: leptoskit_log::target::WASM, "{export}: {other}");
+			other
+		}
+	}
+}
+
 /// Runs one wasm app against a native backend.
 pub struct WasmHost<B: NativeBackend> {
 	identity: HostIdentity,
@@ -826,7 +849,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		viewport
 			.call(&mut self.store, (width, height))
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_viewport", error))?;
 		self.drain_commit()
 	}
 
@@ -1153,12 +1176,15 @@ impl<B: NativeBackend> WasmHost<B> {
 			.as_ref()
 			.map_err(|error| WasmError::Trap(error.to_string()))?;
 		self.refuel()?;
-		callback.call(&mut self.store, ())?;
+		callback
+			.call(&mut self.store, ())
+			.map_err(|error| in_export("leptoskit_plugins_ready", error))?;
 
 		if let Some(poll) = &self.plugins_poll {
 			poll.as_ref()
 				.map_err(|error| WasmError::Trap(error.to_string()))?
-				.call(&mut self.store, ())?;
+				.call(&mut self.store, ())
+				.map_err(|error| in_export("leptoskit_poll", error))?;
 		}
 
 		// The guest's tasks may have written signals without rendering. Settle
@@ -1168,7 +1194,8 @@ impl<B: NativeBackend> WasmHost<B> {
 			flush
 				.as_ref()
 				.map_err(|error| WasmError::Trap(error.to_string()))?
-				.call(&mut self.store, ())?;
+				.call(&mut self.store, ())
+				.map_err(|error| in_export("leptoskit_flush", error))?;
 		}
 
 		self.drain_commit()?;
@@ -1217,7 +1244,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		self.main_fn
 			.call(&mut self.store, &[], &mut [])
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_main", error))?;
 		self.drain_commit()?;
 		Ok(())
 	}
@@ -1316,7 +1343,7 @@ impl<B: NativeBackend> WasmHost<B> {
 				],
 				&mut results,
 			)
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_event", error))?;
 		self.drain_commit()?;
 		let handled = matches!(results[0], Val::I32(1));
 		Ok(if handled {
@@ -1400,7 +1427,9 @@ impl<B: NativeBackend> WasmHost<B> {
 			.map_err(WasmError::from)?;
 
 		if let Some(clock) = self.clock_fn {
-			clock.call(&mut self.store, unix_ms())?;
+			clock
+				.call(&mut self.store, unix_ms())
+				.map_err(|error| in_export("leptoskit_clock", error))?;
 		}
 
 		Ok(())
@@ -1418,7 +1447,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		alloc
 			.call(&mut self.store, &[Val::I32(len as i32)], &mut pointer)
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_alloc", error))?;
 		let Val::I32(ptr) = pointer[0] else {
 			return Err(WasmError::Trap("allocator returned no pointer".to_owned()));
 		};

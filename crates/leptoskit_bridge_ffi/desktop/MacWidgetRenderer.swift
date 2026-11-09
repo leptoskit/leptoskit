@@ -456,7 +456,7 @@ enum MacWidgetStyle {
         #if DEBUG
         throw NativeAppError(message: message)
         #else
-        NSLog("leptoskit: %@", message)
+        NativeLog.error(NativeLog.render, message)
         return nil
         #endif
     }

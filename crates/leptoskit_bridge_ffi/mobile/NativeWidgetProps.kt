@@ -1016,7 +1016,7 @@ internal object BundledAsset {
             val message = "Image $source is not in the app, or is not a PNG, JPEG, or WebP (looked for $path in the APK's assets)"
             val debuggable = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
             check(!debuggable) { message }
-            android.util.Log.e("leptoskit", message)
+            NativeLog.error(NativeLog.RENDER, message)
         }
 
         return bitmap

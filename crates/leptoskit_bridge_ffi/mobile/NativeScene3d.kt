@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.AssetManager
 import android.graphics.PixelFormat
-import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -94,7 +93,7 @@ internal class NativeScene3dView(
         handle = NativeScene3d.attach(scene, surface, surfaceWidth, surfaceHeight, this)
 
         if (handle == 0L) {
-            Log.w("LeptosKit", "a 3D scene could not attach: ${NativeScene3d.error()}")
+            NativeLog.warn(NativeLog.GPU, "a 3D scene could not attach: ${NativeScene3d.error()}")
 
             return
         }

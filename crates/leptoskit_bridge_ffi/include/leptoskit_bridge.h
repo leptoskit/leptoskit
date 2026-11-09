@@ -29,6 +29,12 @@ typedef struct {
     lk_buffer payload;
 } lk_request;
 
+/* Writes one record to the platform's log through leptoskit's logger:
+ * logcat, os_log, or stderr. Levels: 1 error, 2 warn, 3 info, 4 debug,
+ * 5 trace. `target` is the tag, such as "leptoskit/bridge". */
+void lk_log_write(uint32_t level, const uint8_t *target, size_t target_len,
+                  const uint8_t *message, size_t message_len);
+
 lk_bridge *lk_bridge_create(void);
 void lk_bridge_destroy(lk_bridge *bridge);
 void lk_buffer_release(lk_buffer buffer);

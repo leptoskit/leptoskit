@@ -127,6 +127,16 @@ fine-tuned for rooms, and it runs in pure Rust on the CPU in about a quarter of 
 
 <!-- {/depthSummary} -->
 
+<!-- {@logSummary} -->
+
+It sends leptoskit's own records to the platform's log: logcat on Android, the unified
+log (`os_log`) on iOS and macOS, standard error on Linux and Windows, and the console in
+a browser. The runtime installs it when an app starts, with a panic hook, so a failure on
+a device says which plugin, call, node, and payload it was about. Nothing leaves the
+device.
+
+<!-- {/logSummary} -->
+
 <!-- {@canvasSummary} -->
 
 It is the drawing model for custom graphics that native widgets cannot express: a

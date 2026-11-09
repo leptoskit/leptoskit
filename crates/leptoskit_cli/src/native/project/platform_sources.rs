@@ -74,6 +74,7 @@ pub(crate) const ANDROID: &[&str] = &[
 	"android/NativePermissionHost.kt",
 	"android/NativeActivityResultHost.kt",
 	"mobile/NativeApp.kt",
+	"mobile/NativeLog.kt",
 	"mobile/NativeRustWorker.kt",
 	"mobile/NativeRustAsync.kt",
 	"mobile/NativeReleases.kt",

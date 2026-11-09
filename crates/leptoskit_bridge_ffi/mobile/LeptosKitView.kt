@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.Choreographer
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -127,6 +126,7 @@ class LeptosKitView(
             // Creating the app starts its DevTools report when `leptoskit dev` named a hub.
             renderer.attachDevtools()
         } catch (error: Exception) {
+            NativeLog.error(NativeLog.BRIDGE, "cannot start the app", error)
             close()
             throw NativeApplicationInitializationFailure(error) { closeAndJoin() }
         }
@@ -147,7 +147,7 @@ class LeptosKitView(
         val lent = guest
         guest = 0L
 
-        if (lent != 0L && NativeApp.guestStop(lent) != 0) Log.w("LeptosKit", "The guest thread stopped abnormally")
+        if (lent != 0L && NativeApp.guestStop(lent) != 0) NativeLog.warn(NativeLog.BRIDGE, "the guest thread stopped abnormally")
         val owned = app
         app = 0L
         closingJobs = jobs.close()
@@ -277,6 +277,8 @@ class LeptosKitView(
         try {
             block()
         } catch (error: Exception) {
+            // Every build logs why the app stopped drawing, with its causes.
+            NativeLog.error(NativeLog.BRIDGE, "the app stopped", error)
             close()
             removeAllViews()
 

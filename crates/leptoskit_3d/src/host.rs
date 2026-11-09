@@ -765,7 +765,21 @@ impl View {
 		let texture = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(texture)
 			| wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-			wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+			wgpu::CurrentSurfaceTexture::Outdated => {
+				log::debug!(
+					target: leptoskit_log::target::GPU,
+					"the surface is outdated; configuring it again"
+				);
+				self.surface.configure(self.gpu.device(), &self.config);
+				return Ok(true);
+			}
+			wgpu::CurrentSurfaceTexture::Lost => {
+				log::warn!(
+					target: leptoskit_log::target::GPU,
+					"the surface was lost; restoring it at {}×{}",
+					self.config.width,
+					self.config.height
+				);
 				self.surface.configure(self.gpu.device(), &self.config);
 				return Ok(true);
 			}

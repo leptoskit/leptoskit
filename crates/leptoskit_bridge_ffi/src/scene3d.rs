@@ -20,8 +20,12 @@ thread_local! {
 	static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
+/// Records why a `lk_scene3d_*` call failed, for [`lk_scene3d_error`], and
+/// logs it.
 fn fail(message: impl Into<String>) {
-	ERROR.with_borrow_mut(|error| *error = message.into());
+	let message = message.into();
+	log::error!(target: leptoskit_log::target::GPU, "{message}");
+	ERROR.with_borrow_mut(|error| *error = message);
 }
 
 /// Borrows a UTF-8 string from C.
@@ -191,15 +195,23 @@ mod enabled {
 		let surface = match unsafe { hub.instance().create_surface_unsafe(target) } {
 			Ok(surface) => surface,
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!("scene {scene}: cannot create a surface: {error}"));
 				return ptr::null_mut();
 			}
 		};
 
 		match hub.attach(SceneId(scene), surface, width, height) {
-			Ok(view) => Box::into_raw(Box::new(ViewHandle(view))),
+			Ok(view) => {
+				log::info!(
+					target: leptoskit_log::target::GPU,
+					"scene {scene}: created a {width}×{height} surface"
+				);
+				Box::into_raw(Box::new(ViewHandle(view)))
+			}
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!(
+					"scene {scene}: cannot draw on a {width}×{height} surface: {error}"
+				));
 				ptr::null_mut()
 			}
 		}
@@ -246,6 +258,10 @@ mod enabled {
 	}
 
 	pub fn resize(view: &mut ViewHandle, width: u32, height: u32) {
+		log::debug!(
+			target: leptoskit_log::target::GPU,
+			"resized a surface to {width}×{height}"
+		);
 		view.0.resize(width, height);
 	}
 
@@ -261,7 +277,7 @@ mod enabled {
 		match view.0.frame(time) {
 			Ok(more) => i32::from(more),
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!("cannot draw a frame: {error}"));
 				-1
 			}
 		}
@@ -535,6 +551,7 @@ pub unsafe extern "C" fn lk_scene3d_view_needs_frame(view: *const ViewHandle) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lk_scene3d_view_detach(view: *mut ViewHandle) {
 	if !view.is_null() {
+		log::info!(target: leptoskit_log::target::GPU, "released a surface");
 		// SAFETY: The caller transfers the view back exactly once.
 		drop(unsafe { Box::from_raw(view) });
 	}
