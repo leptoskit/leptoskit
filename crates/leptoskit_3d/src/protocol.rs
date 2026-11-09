@@ -347,6 +347,27 @@ pub enum Op {
 		/// Usually between 0 and 1.
 		weight: f32,
 	},
+	/// Moves a named part of a model instance (a bone, a pivot, any node)
+	/// from where its rest pose or the playing clip puts it, such as a head
+	/// turned towards something or a leg swung by the game.
+	///
+	/// `offset` is applied in the part's own frame, after the pose: it turns
+	/// the part about its own origin and moves it along its own axes, and
+	/// everything under the part follows. It replaces the part's last
+	/// offset, and [`Transform::IDENTITY`] releases it. Over `seconds` the
+	/// part moves there in a straight line from where it is now, on the
+	/// host's own clock, so a guest that sends one offset per tick with the
+	/// tick's length is drawn smoothly between ticks. Zero jumps there.
+	SetPartOffset {
+		/// The model instance.
+		node: NodeId,
+		/// The part's node name in the model file.
+		part: String,
+		/// The move, in the part's own frame.
+		offset: Transform,
+		/// Seconds to get there; zero jumps.
+		seconds: f32,
+	},
 	/// Changes how a model instance's materials draw.
 	SetMaterial {
 		/// The model instance.
@@ -510,6 +531,7 @@ const SET_BACKDROP: u8 = 17;
 const SET_EXPOSURE: u8 = 18;
 const RAYCAST: u8 = 19;
 const RAYCAST_SCREEN: u8 = 20;
+const SET_PART_OFFSET: u8 = 21;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -709,6 +731,7 @@ fn read_material(reader: &mut Reader<'_>) -> Result<MaterialOverride, DecodeErro
 }
 
 impl Op {
+	#[allow(clippy::too_many_lines)]
 	fn write(&self, writer: &mut Writer) {
 		match self {
 			Self::LoadAsset { asset, path } => {
@@ -778,6 +801,18 @@ impl Op {
 				writer.option(part.as_deref(), Writer::str);
 				writer.str(target);
 				writer.f32(*weight);
+			}
+			Self::SetPartOffset {
+				node,
+				part,
+				offset,
+				seconds,
+			} => {
+				writer.u8(SET_PART_OFFSET);
+				writer.u32(node.0);
+				writer.str(part);
+				writer.transform(offset);
+				writer.f32(*seconds);
 			}
 			Self::SetMaterial {
 				node,
@@ -932,6 +967,14 @@ impl Op {
 					part: reader.option(|reader| reader.str(NAME))?,
 					target: reader.str(NAME)?,
 					weight: reader.f32()?,
+				}
+			}
+			SET_PART_OFFSET => {
+				Self::SetPartOffset {
+					node: NodeId(reader.u32()?),
+					part: reader.str(NAME)?,
+					offset: reader.transform()?,
+					seconds: reader.f32()?,
 				}
 			}
 			SET_MATERIAL => {
