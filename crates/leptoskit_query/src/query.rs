@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::Shared;
@@ -54,6 +55,7 @@ use crate::state::QueryState;
 use crate::state::QueryStatus;
 use crate::state::status_of;
 use crate::time::BoxFuture;
+use crate::time::millis;
 use crate::time::now_ms;
 use crate::time::try_sleep;
 
@@ -210,6 +212,9 @@ pub(crate) struct Query<K, T, E> {
 	observers: Mutex<Vec<ObserverEntry<E>>>,
 	in_flight: Mutex<Option<InFlight>>,
 	fetch_generation: AtomicU64,
+	/// When this client's last fetch settled, with data or an error, in
+	/// epoch milliseconds. Data written another way does not move it.
+	settled_at: Mutex<Option<u64>>,
 	/// Cancels the cleanup waiting to drop this query, so at most one is ever
 	/// pending.
 	pending_gc: Mutex<Option<CancelToken>>,
@@ -250,6 +255,7 @@ where
 				observers: Mutex::new(Vec::new()),
 				in_flight: Mutex::new(None),
 				fetch_generation: AtomicU64::new(0),
+				settled_at: Mutex::new(None),
 				pending_gc: Mutex::new(None),
 				cache: Arc::downgrade(cache),
 				removed: ArcTrigger::new(),
@@ -300,6 +306,18 @@ where
 			self.signals.meta.get(),
 			stale_time,
 		)
+	}
+
+	/// Whether a fetch of this query settled less than `window` ago and
+	/// nothing has invalidated it since.
+	pub(crate) fn settled_within(&self, window: Duration) -> bool {
+		if self.signals.meta.with_untracked(|meta| meta.is_invalidated) {
+			return false;
+		}
+
+		self.settled_at
+			.lock()
+			.is_some_and(|settled_at| now_ms().saturating_sub(settled_at) < millis(window))
 	}
 
 	fn stale(has_data: bool, meta: QueryMeta, stale_time: StaleTime) -> bool {
@@ -561,8 +579,14 @@ where
 
 		match settled {
 			_ if superseded => {}
-			Settled::Success(data) => self.on_success(data),
-			Settled::Error(error) => self.on_error(error, direction),
+			Settled::Success(data) => {
+				*self.settled_at.lock() = Some(now_ms());
+				self.on_success(data);
+			}
+			Settled::Error(error) => {
+				*self.settled_at.lock() = Some(now_ms());
+				self.on_error(error, direction);
+			}
 			Settled::Cancelled => {
 				Self::set_signal(&self.signals.error, revert.error);
 				Self::set_signal(&self.signals.failure_reason, revert.failure_reason);
@@ -663,6 +687,7 @@ where
 		// restore the state it saved nor be joined by the next fetch.
 		self.fetch_generation.fetch_add(1, Ordering::SeqCst);
 		*self.in_flight.lock() = None;
+		*self.settled_at.lock() = None;
 		Self::set_signal(&self.signals.data, None);
 		Self::set_signal(&self.signals.error, None);
 		Self::set_signal(&self.signals.failure_reason, None);

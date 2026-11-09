@@ -50,6 +50,37 @@ use semantics::Tag;
 
 type Handlers = Arc<[HandlerEntry]>;
 
+/// A screen that rebuilds whenever a signal `view` reads changes, keeping
+/// what it [remembers](crate::remember::remember) between builds.
+///
+/// Call it where the app's root component builds its view, with the function
+/// that builds the current screen:
+///
+/// ```ignore
+/// #[leptos::component]
+/// fn WebApp() -> impl leptos::prelude::IntoView {
+/// 	let navigation = Navigation::new(Route::Home);
+/// 	leptoskit::web::screen(move || navigation.render())
+/// }
+/// ```
+///
+/// It is `move || render(view())` with a [`ScreenState`] around each build,
+/// released with the component.
+///
+/// [`ScreenState`]: crate::remember::ScreenState
+pub fn screen(view: impl Fn() -> Element + Send + Sync + 'static) -> impl IntoView {
+	rebuilds(view)
+}
+
+/// The closure [`screen`] hands leptos: one build per call.
+fn rebuilds(
+	view: impl Fn() -> Element + Send + Sync + 'static,
+) -> impl Fn() -> AnyView + Send + Sync + 'static {
+	let state = crate::remember::ScreenState::new();
+	state.provide();
+	move || render(state.build(&view))
+}
+
 /// Converts a shared element tree into a Leptos view, including its stylesheet.
 ///
 /// This supports server rendering, hydration, and reactive client rendering.
@@ -1067,6 +1098,39 @@ fn spans_view(spans: Vec<crate::TextSpan>) -> AnyView {
 		})
 		.collect_view()
 		.into_any()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod screen_tests {
+	use super::*;
+	use crate::remember::remember;
+
+	#[test]
+	fn a_screen_keeps_what_it_remembers_from_build_to_build() {
+		Owner::new().with(|| {
+			let taps = Arc::new(std::sync::Mutex::new(Vec::new()));
+			let seen = Arc::clone(&taps);
+			let build = rebuilds(move || {
+				let count = remember(|| 0_u32);
+				count.update(|count| *count += 1);
+				seen.lock().unwrap().push(count.get_untracked());
+				Element::text(count.get_untracked().to_string())
+			});
+			let first = build().to_html();
+			let second = build().to_html();
+			assert_eq!(*taps.lock().unwrap(), [1, 2]);
+			assert!(first.contains(">1<"), "{first}");
+			assert!(second.contains(">2<"), "{second}");
+		});
+	}
+
+	#[test]
+	fn a_screen_renders_what_its_view_builds() {
+		Owner::new().with(|| {
+			let html = screen(|| Element::text("Home")).into_view().to_html();
+			assert!(html.contains("Home"), "{html}");
+		});
+	}
 }
 
 #[cfg(test)]

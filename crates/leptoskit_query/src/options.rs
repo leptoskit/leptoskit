@@ -79,6 +79,26 @@ pub enum RefetchOn {
 	Never,
 }
 
+/// How long after this client's own fetch of a query settles a newly
+/// mounted observer takes that result instead of fetching again: two
+/// seconds, like SWR's `dedupingInterval`.
+///
+/// leptoskit builds a screen again when a signal it read changes, and every
+/// `use_query` in the new build mounts a new observer. Under TanStack's
+/// defaults (`StaleTime::ZERO`, refetch on mount when stale) the data that
+/// just arrived would already be stale for that observer, so the result of
+/// each fetch would rebuild the screen and start the next one. Within the
+/// window a mount reuses the fetch that just settled, whether it brought data
+/// or an error, so a rebuild never fetches what it just fetched.
+///
+/// The window applies to mounts only: [`RefetchOn::Always`] and a
+/// failed query's `retry_on_mount` wait for it too, while an invalidation,
+/// `refetch()`, focus, reconnect, and interval refetching do not. Data that
+/// arrived another way — `set_query_data`, initial data, or hydration from
+/// the server — never counts as a fetch that just settled. Set
+/// [`Duration::ZERO`] with `with_mount_dedupe` for TanStack's behavior.
+pub const DEFAULT_MOUNT_DEDUPE: Duration = Duration::from_secs(2);
+
 /// Periodic background refetching while a query is observed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RefetchInterval {
@@ -126,6 +146,8 @@ pub struct QueryOptions<E> {
 	pub refetch_interval_in_background: Option<bool>,
 	/// Refetch policy when an observer mounts.
 	pub refetch_on_mount: Option<RefetchOn>,
+	/// See [`DEFAULT_MOUNT_DEDUPE`].
+	pub mount_dedupe: Option<Duration>,
 	/// Refetch policy when the window regains focus.
 	pub refetch_on_window_focus: Option<RefetchOn>,
 	/// Refetch policy when the network reconnects.
@@ -148,6 +170,7 @@ impl<E> std::fmt::Debug for QueryOptions<E> {
 				&self.refetch_interval_in_background,
 			)
 			.field("refetch_on_mount", &self.refetch_on_mount)
+			.field("mount_dedupe", &self.mount_dedupe)
 			.field("refetch_on_window_focus", &self.refetch_on_window_focus)
 			.field("refetch_on_reconnect", &self.refetch_on_reconnect)
 			.field("network_mode", &self.network_mode)
@@ -166,6 +189,7 @@ impl<E> Clone for QueryOptions<E> {
 			refetch_interval: self.refetch_interval,
 			refetch_interval_in_background: self.refetch_interval_in_background,
 			refetch_on_mount: self.refetch_on_mount,
+			mount_dedupe: self.mount_dedupe,
 			refetch_on_window_focus: self.refetch_on_window_focus,
 			refetch_on_reconnect: self.refetch_on_reconnect,
 			network_mode: self.network_mode,
@@ -184,6 +208,7 @@ impl<E> Default for QueryOptions<E> {
 			refetch_interval: None,
 			refetch_interval_in_background: None,
 			refetch_on_mount: None,
+			mount_dedupe: None,
 			refetch_on_window_focus: None,
 			refetch_on_reconnect: None,
 			network_mode: None,
@@ -254,6 +279,13 @@ impl<E> QueryOptions<E> {
 		self
 	}
 
+	/// See [`DEFAULT_MOUNT_DEDUPE`]. [`Duration::ZERO`] turns it off.
+	#[must_use]
+	pub fn with_mount_dedupe(mut self, window: Duration) -> Self {
+		self.mount_dedupe = Some(window);
+		self
+	}
+
 	/// Refetch policy when the window regains focus.
 	#[must_use]
 	pub fn with_refetch_on_window_focus(mut self, refetch: RefetchOn) -> Self {
@@ -294,6 +326,7 @@ impl<E> QueryOptions<E> {
 			refetch_interval,
 			refetch_interval_in_background,
 			refetch_on_mount,
+			mount_dedupe,
 			refetch_on_window_focus,
 			refetch_on_reconnect,
 			network_mode
@@ -324,6 +357,8 @@ pub struct QueryDefaults {
 	pub refetch_interval_in_background: Option<bool>,
 	/// Refetch policy when an observer mounts.
 	pub refetch_on_mount: Option<RefetchOn>,
+	/// See [`DEFAULT_MOUNT_DEDUPE`].
+	pub mount_dedupe: Option<Duration>,
 	/// Refetch policy when the window regains focus.
 	pub refetch_on_window_focus: Option<RefetchOn>,
 	/// Refetch policy when the network reconnects.
@@ -395,6 +430,13 @@ impl QueryDefaults {
 		self
 	}
 
+	/// See [`DEFAULT_MOUNT_DEDUPE`]. [`Duration::ZERO`] turns it off.
+	#[must_use]
+	pub fn with_mount_dedupe(mut self, window: Duration) -> Self {
+		self.mount_dedupe = Some(window);
+		self
+	}
+
 	/// Refetch policy when the window regains focus.
 	#[must_use]
 	pub fn with_refetch_on_window_focus(mut self, refetch: RefetchOn) -> Self {
@@ -435,6 +477,8 @@ pub struct ResolvedQueryOptions<E> {
 	pub refetch_interval_in_background: bool,
 	/// Refetch policy when an observer mounts.
 	pub refetch_on_mount: RefetchOn,
+	/// See [`DEFAULT_MOUNT_DEDUPE`].
+	pub mount_dedupe: Duration,
 	/// Refetch policy when the window regains focus.
 	pub refetch_on_window_focus: RefetchOn,
 	/// Refetch policy when the network reconnects.
@@ -457,6 +501,7 @@ impl<E> std::fmt::Debug for ResolvedQueryOptions<E> {
 				&self.refetch_interval_in_background,
 			)
 			.field("refetch_on_mount", &self.refetch_on_mount)
+			.field("mount_dedupe", &self.mount_dedupe)
 			.field("refetch_on_window_focus", &self.refetch_on_window_focus)
 			.field("refetch_on_reconnect", &self.refetch_on_reconnect)
 			.field("network_mode", &self.network_mode)
@@ -475,6 +520,7 @@ impl<E> Clone for ResolvedQueryOptions<E> {
 			refetch_interval: self.refetch_interval,
 			refetch_interval_in_background: self.refetch_interval_in_background,
 			refetch_on_mount: self.refetch_on_mount,
+			mount_dedupe: self.mount_dedupe,
 			refetch_on_window_focus: self.refetch_on_window_focus,
 			refetch_on_reconnect: self.refetch_on_reconnect,
 			network_mode: self.network_mode,
@@ -534,6 +580,10 @@ impl<E> ResolvedQueryOptions<E> {
 				.refetch_on_mount
 				.or(defaults.refetch_on_mount)
 				.unwrap_or_default(),
+			mount_dedupe: options
+				.mount_dedupe
+				.or(defaults.mount_dedupe)
+				.unwrap_or(DEFAULT_MOUNT_DEDUPE),
 			refetch_on_window_focus: options
 				.refetch_on_window_focus
 				.or(defaults.refetch_on_window_focus)
@@ -566,6 +616,7 @@ impl<E> ResolvedQueryOptions<E> {
 				.refetch_interval_in_background
 				.unwrap_or(self.refetch_interval_in_background),
 			refetch_on_mount: options.refetch_on_mount.unwrap_or(self.refetch_on_mount),
+			mount_dedupe: options.mount_dedupe.unwrap_or(self.mount_dedupe),
 			refetch_on_window_focus: options
 				.refetch_on_window_focus
 				.unwrap_or(self.refetch_on_window_focus),

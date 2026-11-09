@@ -77,6 +77,8 @@ fn TodoView(id: RwSignal<u32>) -> impl IntoView {
 }
 ```
 
+A leptoskit screen rebuilds when the data it read arrives, and the rebuild runs `use_query` again. That is fine: a query mounted within two seconds of its last fetch takes that fetch's data or error instead of fetching again, and a fetch already running is shared, so a screen fetches once rather than in a loop. Set the window with `with_mount_dedupe(Duration::from_millis(500))` on `QueryDefaults`, a scope's `QueryOptions`, or one `use_query_with`; `Duration::ZERO` turns it off. A stale time still decides when a later visit fetches again.
+
 A key closure may return `Option<K>`: `None` disables the query until the key is known, which is how dependent queries are written. `use_query_with` adds per-observer options such as `keep_previous_data()` for pagination, `with_enabled`, placeholder and initial data, or a different stale time.
 
 ## Write with a mutation
