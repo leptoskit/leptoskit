@@ -165,7 +165,25 @@ class PosturePlugin(
             else -> OPEN
         }
 
-    internal companion object {
+    /**
+     * One hinge as wire fields. Synthetic tests build these without a
+     * [FoldingFeature] instance. It sits on the plugin, not inside the
+     * companion: a class nested in the companion is not `PosturePlugin.EncodedHinge`
+     * to the instrumented tests.
+     */
+    data class EncodedHinge(
+        val fold: Int,
+        val axis: Int,
+        val occluding: Int,
+        val separating: Int,
+        val x: Float,
+        val y: Float,
+        val width: Float,
+        val height: Float,
+        val angle: Int,
+    )
+
+    companion object {
         const val MAX_HINGES = 4
 
         /** The angle field when the sensor cannot attribute one to this hinge. */
@@ -187,22 +205,6 @@ class PosturePlugin(
         const val UNKNOWN_FLAG = 0
         const val FALSE = 1
         const val TRUE = 2
-
-        /**
-         * One hinge as wire fields. Synthetic tests build these without a
-         * [FoldingFeature] instance.
-         */
-        data class EncodedHinge(
-            val fold: Int,
-            val axis: Int,
-            val occluding: Int,
-            val separating: Int,
-            val x: Float,
-            val y: Float,
-            val width: Float,
-            val height: Float,
-            val angle: Int,
-        )
 
         /** Encodes a posture header and hinges into the Rust wire format. */
         fun encodePosture(

@@ -187,7 +187,8 @@ class NativeControlsTest {
     fun anUnknownKindStaysInTheTree() =
         onMain {
             val root = FrameLayout(InstrumentationRegistry.getInstrumentation().targetContext)
-            val renderer = NativeWidgetRenderer(root) { _, _, _ -> }
+            // A trailing lambda binds canvasChanged, which left event missing.
+            val renderer = NativeWidgetRenderer(root, { _, _, _ -> })
             renderer.render(
                 RenderBatch(
                     1,

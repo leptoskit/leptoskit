@@ -27,6 +27,8 @@ mod platforms;
 mod project;
 mod quest;
 
+#[cfg(test)]
+mod dev_client_host;
 mod registry;
 pub mod signing;
 mod watch;
