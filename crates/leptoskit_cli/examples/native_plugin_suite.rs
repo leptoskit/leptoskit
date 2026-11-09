@@ -90,6 +90,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("app-integrity", "leptoskit_plugin_app_integrity"),
 	("blob", "leptoskit_plugin_blob"),
 	("diagnostics", "leptoskit_plugin_diagnostics"),
+	("dev-client", "leptoskit_plugin_dev_client"),
 	("asset", "leptoskit_plugin_asset"),
 	("age-range", "leptoskit_plugin_age_range"),
 	("audio", "leptoskit_plugin_audio"),
@@ -155,6 +156,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_app_integrity/tests/android/AppIntegrityWireTest.kt",
 	"leptoskit_plugin_blob/tests/android/BlobWireTest.kt",
 	"leptoskit_plugin_diagnostics/tests/android/DiagnosticsWireTest.kt",
+	"leptoskit_plugin_dev_client/tests/android/DevClientWireTest.kt",
 	"leptoskit_plugin_asset/tests/android/AssetWireTest.kt",
 	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
 ];
@@ -209,6 +211,7 @@ const WRAPPERS: &[(&str, &str)] = &[
 		"DiagnosticsWireInstrumentationTest.kt",
 		DIAGNOSTICS_WIRE_TEST,
 	),
+	("DevClientWireInstrumentationTest.kt", DEV_CLIENT_WIRE_TEST),
 	("AssetWireInstrumentationTest.kt", ASSET_WIRE_TEST),
 	("AgeRangeWireInstrumentationTest.kt", AGE_RANGE_WIRE_TEST),
 ];
@@ -407,6 +410,19 @@ class BlobWireInstrumentationTest {
     }
 }
 ";
+
+const DEV_CLIENT_WIRE_TEST: &str = r#"package dev.leptoskit.plugins.devclient
+
+import org.junit.Test
+
+/** Validates development-guest addresses without a camera. */
+class DevClientWireInstrumentationTest {
+    @Test
+    fun localAddressesMatchTheRustParser() {
+        main()
+    }
+}
+"#;
 
 const DIAGNOSTICS_WIRE_TEST: &str = r"package dev.leptoskit.plugins.diagnostics
 

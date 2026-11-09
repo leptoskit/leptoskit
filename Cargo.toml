@@ -57,6 +57,7 @@ resolver = "2"
 exclude = [
 	"devtools",
 	"examples/commonplace",
+	"examples/dev_client",
 	"examples/file_routes",
 	"examples/huddle/linux",
 	"examples/opencode/tui",
@@ -146,6 +147,7 @@ proc-macro-crate = "3"
 proc-macro2 = "1"
 proc-macro2-diagnostics = { version = "0.11", default-features = false }
 proptest = { version = "1", default-features = false, features = ["std"] }
+qrcode = { version = "0.14", default-features = false }
 quote = "1"
 rayon = "1"
 reactive_graph = "0.3.0-rc0"
@@ -275,6 +277,7 @@ leptoskit_plugin_clipboard = { path = "crates/leptoskit_plugin_clipboard", versi
 leptoskit_plugin_contacts = { path = "crates/leptoskit_plugin_contacts", version = "0.3.0" }
 leptoskit_plugin_crypto = { path = "crates/leptoskit_plugin_crypto", version = "0.3.0" }
 leptoskit_plugin_deep_link = { path = "crates/leptoskit_plugin_deep_link", version = "0.3.0" }
+leptoskit_plugin_dev_client = { path = "crates/leptoskit_plugin_dev_client", version = "0.3.0" }
 leptoskit_plugin_device = { path = "crates/leptoskit_plugin_device", version = "0.3.0" }
 leptoskit_plugin_device_keys = { path = "crates/leptoskit_plugin_device_keys", version = "0.3.0" }
 leptoskit_plugin_device_motion = { path = "crates/leptoskit_plugin_device_motion", version = "0.3.0" }

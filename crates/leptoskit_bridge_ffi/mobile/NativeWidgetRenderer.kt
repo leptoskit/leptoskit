@@ -425,7 +425,9 @@ internal class NativeWidgetRenderer(
                 }
 
                 else -> {
-                    error("Unsupported widget: $kind")
+                    // GTK draws an unknown or custom kind as an empty container.
+                    // Stopping the tree here took the whole activity down.
+                    FrameLayout(context)
                 }
             }
         widget.tag = id

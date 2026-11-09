@@ -183,5 +183,25 @@ class NativeControlsTest {
             assertFalse(events.contains(2))
         }
 
+    @Test
+    fun anUnknownKindStaysInTheTree() =
+        onMain {
+            val root = FrameLayout(InstrumentationRegistry.getInstrumentation().targetContext)
+            val renderer = NativeWidgetRenderer(root) { _, _, _ -> }
+            renderer.render(
+                RenderBatch(
+                    1,
+                    listOf(
+                        RenderMutation.Create(1, "view", WidgetProps()),
+                        RenderMutation.Create(2, "custom:chart", WidgetProps()),
+                        RenderMutation.InsertChild(1, 2, 0),
+                    ),
+                ),
+            )
+            assertEquals(1, root.childCount)
+            val parent = root.getChildAt(0) as android.view.ViewGroup
+            assertEquals(1, parent.childCount)
+        }
+
     private fun props(json: String) = WidgetProps.fromJson(JSONObject(json))
 }

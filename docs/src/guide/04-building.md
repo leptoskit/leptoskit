@@ -44,6 +44,8 @@ On the web, `app.render = "csr"` serves `dist/` itself. With `"ssr"` or `"island
 
 It checks it can bind `serve.address` before the first build, so a port that's already taken fails straight away instead of after a build.
 
+When the app includes Android or iOS, `dev` also serves those guests on every network interface and prints a QR code. The LeptosKit app (`examples/dev_client`) scans it, or you paste the address. The phone must be on the same network as the computer. An Android emulator uses `http://10.0.2.2:<port>/_leptoskit/dev` instead of the computer's own address. The guest is unsigned, so only a debug build of that app will run it. A phone that is plugged in over USB still uses `adb reverse`, which is what `dev` sets up when it launches the app itself.
+
 Only debug builds accept an interface from `dev`, because those interfaces are not signed the way [code push](05-code-push.md) releases are. A release build ignores it, so never ship a debug build.
 
 ## `leptoskit build`

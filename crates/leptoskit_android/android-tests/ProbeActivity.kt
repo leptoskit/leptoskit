@@ -173,6 +173,10 @@ class ProbeActivity : Activity() {
                 contract.getString("debug").startsWith("AndroidBackend"),
             "Single create, insert and layout mutations build native Views",
         )
+        assertion(
+            contract.getBoolean("customView") && contractHost.view(contract.getLong("custom")) != null,
+            "A custom kind is an empty container",
+        )
         control.performClick()
 
         assertion(nativeContractStep(0) == 1, "A directly driven backend delivers native presses")

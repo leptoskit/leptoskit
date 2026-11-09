@@ -544,6 +544,14 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeContractMo
 	backend.insert_child(root, button, 0);
 	backend.update_layout(root, 0.0, 0.0, 200.0, 80.0);
 	backend.update_layout(button, 10.0, 10.0, 120.0, 40.0);
+	let custom = arena.create_node();
+	backend.create(custom, NativeKind::Custom("chart"), &NativeProps::default());
+	backend.insert_child(root, custom, 1);
+	let custom_view = backend.view(&mut env, custom).expect("custom widget view");
+	assert!(
+		!custom_view.is_null(),
+		"a custom kind is an empty container, not a crash"
+	);
 	backend.create(rive, NativeKind::Rive, &NativeProps::default());
 	backend.update_layout(rive, 0.0, 0.0, 2.0, 1.0);
 	assert!(
@@ -570,6 +578,8 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeContractMo
 		"root": root.index(),
 		"button": button.index(),
 		"rive": rive.index(),
+		"custom": custom.index(),
+		"customView": !custom_view.is_null(),
 		"view": !view.is_null(),
 		"debug": format!("{backend:?}"),
 	})

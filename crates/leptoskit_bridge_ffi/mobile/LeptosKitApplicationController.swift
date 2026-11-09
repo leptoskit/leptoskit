@@ -322,6 +322,21 @@ extension LeptosKitApplicationController {
         } catch { chrome.showError(error, hasActive: active != nil) }
 
         if let url = NativeDevelopmentGuests.url { development = followDevelopment(url, running: running) }
+        DevelopmentSession.follow = { [weak self] url in
+            self?.openDevelopmentGuest(url) ?? false
+        }
+    }
+
+    /// Follows a guest the companion scanned or pasted. Release builds still
+    /// refuse the unsigned module inside the follower.
+    func openDevelopmentGuest(_ url: String) -> Bool {
+        guard !closed else { return false }
+        guard url.hasPrefix("http://") || url.hasPrefix("https://"),
+              !url.contains("?"), !url.contains("#"), !url.contains("@")
+        else { return false }
+        development?.close()
+        development = followDevelopment(url, running: Data())
+        return true
     }
 
     /// Paints the guest's root background behind the safe areas, like a browser canvas.

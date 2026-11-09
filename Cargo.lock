@@ -5487,6 +5487,7 @@ dependencies = [
  "leptoskit_platform_harmonyos",
  "leptoskit_platform_oculus",
  "leptoskit_plugin",
+ "leptoskit_plugin_dev_client",
  "leptoskit_plugin_http",
  "leptoskit_plugin_router",
  "leptoskit_router_codegen",
@@ -5501,6 +5502,7 @@ dependencies = [
  "png 0.17.16",
  "postgres-protocol",
  "postgresql_embedded",
+ "qrcode",
  "rayon",
  "resvg",
  "ring",
@@ -6266,6 +6268,13 @@ dependencies = [
  "leptoskit_bridge",
  "thiserror 2.0.21",
  "url",
+]
+
+[[package]]
+name = "leptoskit_plugin_dev_client"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]

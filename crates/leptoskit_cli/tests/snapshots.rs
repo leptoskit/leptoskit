@@ -253,6 +253,8 @@ fn web_scaffold_is_pinned_file_by_file() {
 			"snapshotted_app/src/lib.rs",
 			"snapshotted_app/src/routes.rs",
 			"snapshotted_app/src/routes/index.rs",
+			"snapshotted_app/src/routes/kit.rs",
+			"snapshotted_app/src/routes/platforms.rs",
 			"snapshotted_app/src/routes/_layout.rs",
 			"snapshotted_app/src/routes/+not-found.rs",
 			"snapshotted_app/src/services/mod.rs",

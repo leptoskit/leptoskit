@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowInsetsController
 import android.widget.Button
@@ -48,6 +49,7 @@ class LeptosKitApplicationView(
     private val action = Button(context)
     private var releases: NativeReleases? = null
     private var development: NativeDevelopmentGuests? = null
+    private var runningGuest = ByteArray(0)
     private var current: LeptosKitView? = null
         set(value) {
             field = value
@@ -126,6 +128,7 @@ class LeptosKitApplicationView(
             // Before the first app, so every guest `leptoskit dev` sends reports to its hub.
             NativeDevtools.configure(context)
             val wasm = NativeUpdates.entry(embedded)
+            runningGuest = wasm
 
             current = adopt(LeptosKitView(context, wasm, register = register))
             guests.addView(current, FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -416,12 +419,26 @@ class LeptosKitApplicationView(
     }
 
     /**
-     * Mounts a guest from `leptoskit dev` hidden behind the running one and swaps
-     * them once it renders, so a reload never shows an empty screen. A newer guest
-     * replaces a candidate that has not rendered yet.
+     * Follows a development guest the companion app scanned or pasted. Only a private http or https
+     * URL is accepted; release builds still refuse the unsigned module inside the follower.
+     */
+    fun followDevelopmentGuest(url: String): Boolean {
+        if (closed || Looper.myLooper() != Looper.getMainLooper()) return false
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+        if (url.any { it == '?' || it == '#' || it == '@' }) return false
+        development?.close()
+        development = NativeDevelopmentGuests(url, runningGuest, ::reload)
+        return true
+    }
+
+    /**
+     * Mounts a guest from leptoskit dev hidden behind the running one and swaps them once it
+     * renders, so a reload never shows an empty screen. A newer guest replaces a candidate that has
+     * not rendered yet.
      */
     private fun reload(wasm: ByteArray) {
         if (closed) return
+        runningGuest = wasm
         val token = ++generation
         pending?.let { stale ->
             pending = null
@@ -640,4 +657,28 @@ private class ActivityLifecycleLog(
     ) {}
 
     override fun onActivityDestroyed(destroyed: Activity) {}
+}
+
+/**
+ * The development companion asks the running activity to follow a guest URL.
+ * The application view registers itself by being in the activity's hierarchy.
+ */
+object DevelopmentSession {
+    fun follow(
+        context: Context,
+        url: String,
+    ): Boolean {
+        val activity = context as? Activity ?: return false
+        val root = activity.window?.decorView ?: return false
+        return find(root)?.followDevelopmentGuest(url) == true
+    }
+
+    private fun find(view: View): LeptosKitApplicationView? {
+        if (view is LeptosKitApplicationView) return view
+        if (view !is ViewGroup) return null
+        for (index in 0 until view.childCount) {
+            find(view.getChildAt(index))?.let { return it }
+        }
+        return null
+    }
 }

@@ -13,6 +13,7 @@
 
 mod guests;
 mod native;
+mod session;
 
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -259,11 +260,30 @@ impl Started {
 				crate::extension::dev::ExtensionDev::start(root, runtime, tools.extension_browser)
 			})
 			.transpose()?;
-		let native = if selection.native.is_empty() {
+		let phones = [Platform::Android, Platform::Ios]
+			.into_iter()
+			.filter(|platform| config.app.platforms.contains(platform))
+			.collect::<Vec<_>>();
+		let native = if selection.native.is_empty() && phones.is_empty() {
 			None
 		} else {
-			let native =
+			let mut native =
 				native::NativeDev::start(root, config, &selection.native, devices, tools, runtime)?;
+
+			for platform in phones {
+				if native.serves(platform) {
+					continue;
+				}
+
+				if let Err(error) = native.publish_phone_guest(config, platform) {
+					ui::tagged(
+						platform,
+						format_args!("the phone guest was not published: {error:#}"),
+					);
+				}
+			}
+
+			session::print_session(native.port());
 			anyhow::ensure!(
 				web.is_some() || extension.is_some() || !native.is_empty(),
 				"no platform started"
