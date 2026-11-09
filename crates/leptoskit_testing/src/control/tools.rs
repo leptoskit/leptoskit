@@ -347,11 +347,57 @@ pub fn simulator_list(timeout: Duration) -> Option<String> {
 	list(command, timeout)
 }
 
-/// Reads `xcrun devicectl list devices --json`, or [`None`] without Xcode.
+/// Reads `xcrun devicectl list devices --json-output <file>`, or [`None`]
+/// without Xcode.
+///
+/// devicectl writes the JSON document to the file named by `--json-output`.
+/// It does not print that document for `--json`.
 pub fn iphone_list(timeout: Duration) -> Option<String> {
+	let path = devicectl_listing_path();
+	let command = devicectl_list_command(&path);
+	let command_ok = list(command, timeout).is_some();
+	listing_body(command_ok, &path)
+}
+
+/// `xcrun devicectl list devices --json-output <path>`.
+fn devicectl_list_command(json_path: &std::path::Path) -> Command {
 	let mut command = Command::new("xcrun");
-	command.args(["devicectl", "list", "devices", "--json"]);
-	list(command, timeout)
+	command
+		.args(["devicectl", "list", "devices", "--json-output"])
+		.arg(json_path);
+	command
+}
+
+/// A private path for one `devicectl` listing.
+fn devicectl_listing_path() -> PathBuf {
+	static LISTINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let listing = LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let nanos = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |duration| duration.as_nanos());
+	std::env::temp_dir().join(format!(
+		"leptoskit-devicectl-{}-{nanos}-{listing}.json",
+		std::process::id()
+	))
+}
+
+/// The JSON file devicectl wrote, when it wrote one.
+fn read_listing(path: &std::path::Path) -> Option<String> {
+	let text = std::fs::read_to_string(path).ok()?;
+	if text.trim().is_empty() {
+		None
+	} else {
+		Some(text)
+	}
+}
+
+/// The JSON file devicectl wrote, when the command succeeded and the file
+/// has a document. The file is removed either way, so a failed command cannot
+/// return a stale document.
+fn listing_body(command_ok: bool, path: &std::path::Path) -> Option<String> {
+	let body = read_listing(path);
+	let _ = std::fs::remove_file(path);
+	if command_ok { body } else { None }
 }
 
 /// Reads `adb devices -l`, or [`None`] without an Android SDK.
@@ -489,6 +535,65 @@ mod tests {
 		assert_eq!(devicectl.get_program(), "xcrun");
 		let adb = android_tool("adb");
 		assert!(adb.get_program().to_string_lossy().ends_with("adb"));
+	}
+
+	#[test]
+	fn devicectl_list_writes_json_to_a_file() {
+		let path = PathBuf::from("/tmp/leptoskit-devices.json");
+		let command = devicectl_list_command(&path);
+		assert_eq!(command.get_program(), "xcrun");
+		let args: Vec<_> = command
+			.get_args()
+			.map(|arg| arg.to_string_lossy().into_owned())
+			.collect();
+		assert_eq!(
+			args,
+			[
+				"devicectl",
+				"list",
+				"devices",
+				"--json-output",
+				"/tmp/leptoskit-devices.json",
+			]
+		);
+	}
+
+	#[test]
+	fn a_listing_file_is_kept_only_when_it_has_json() {
+		let directory =
+			std::env::temp_dir().join(format!("leptoskit-listing-{}", std::process::id()));
+		std::fs::create_dir_all(&directory).unwrap();
+		let path = directory.join("devices.json");
+		std::fs::write(&path, " \n").unwrap();
+		assert!(read_listing(&path).is_none());
+		std::fs::write(&path, "{\"result\":{\"devices\":[]}}\n").unwrap();
+		assert_eq!(
+			read_listing(&path).as_deref(),
+			Some("{\"result\":{\"devices\":[]}}\n")
+		);
+		assert!(read_listing(directory.join("missing.json").as_path()).is_none());
+		std::fs::write(&path, "{\"ok\":true}\n").unwrap();
+		assert!(listing_body(false, &path).is_none());
+		assert!(!path.exists(), "a failed command must not leave the file");
+		std::fs::write(&path, "{\"ok\":true}\n").unwrap();
+		assert_eq!(
+			listing_body(true, &path).as_deref(),
+			Some("{\"ok\":true}\n")
+		);
+		assert!(!path.exists());
+		assert!(listing_body(true, &directory.join("missing.json")).is_none());
+		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn iphone_list_fails_closed_without_xcrun() {
+		// A machine with Xcode would actually talk to a phone. The Linux
+		// lanes have no `xcrun`, and that is the path this covers.
+		if find_in_path("xcrun").is_some() {
+			return;
+		}
+
+		assert!(iphone_list(Duration::from_secs(2)).is_none());
 	}
 
 	#[test]

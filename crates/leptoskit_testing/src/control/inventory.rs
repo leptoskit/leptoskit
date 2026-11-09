@@ -232,70 +232,121 @@ pub fn parse_simulators(output: &str) -> Vec<Device> {
 		.collect()
 }
 
-/// Parses `xcrun devicectl list devices --json`.
+/// Parses `xcrun devicectl list devices --json-output`.
+///
+/// Devices sit under `result.devices`. The id is the hardware UDID when
+/// devicectl has one, because `devicectl --device` and `appium:udid` both
+/// take that, and the Core Device `identifier` only when a UDID is absent.
+/// A watch, a television, a Mac, or a simulator in the same file is not an
+/// iPhone. The newer `properties` dictionary is read when the older property
+/// dictionaries are absent.
 pub fn parse_iphones(output: &str) -> Vec<Device> {
-	#[derive(Deserialize)]
-	struct Hardware {
-		#[serde(default)]
-		name: Option<String>,
-	}
-	#[derive(Deserialize)]
-	struct Connection {
-		#[serde(default, rename = "tunnelState")]
-		tunnel_state: Option<String>,
-	}
-	#[derive(Deserialize)]
-	struct Phone {
-		#[serde(default)]
-		name: Option<String>,
-		#[serde(default)]
-		identifier: Option<String>,
-		#[serde(default)]
-		udid: Option<String>,
-		#[serde(default)]
-		state: Option<String>,
-		#[serde(default, rename = "hardwareProperties")]
-		hardware_properties: Option<Hardware>,
-		#[serde(default, rename = "connectionProperties")]
-		connection: Option<Connection>,
-	}
-	#[derive(Deserialize)]
-	struct Listing {
-		#[serde(default)]
-		devices: Vec<Phone>,
-	}
-	let Ok(listing) = serde_json::from_str::<Listing>(output) else {
+	let Ok(document) = serde_json::from_str::<serde_json::Value>(output) else {
 		return Vec::new();
 	};
-	listing
-		.devices
-		.into_iter()
-		.filter_map(|phone| {
-			let id = phone.identifier.or(phone.udid)?;
-			if id.trim().is_empty() {
-				return None;
-			}
+	let Some(devices) = listed_devices(&document) else {
+		return Vec::new();
+	};
 
-			let name = phone
-				.name
-				.or_else(|| phone.hardware_properties.and_then(|hardware| hardware.name))
-				.unwrap_or_else(|| "iPhone".to_owned());
-			let state = phone
-				.state
-				.or_else(|| {
-					phone
-						.connection
-						.and_then(|connection| connection.tunnel_state)
-				})
-				.unwrap_or_else(|| "available".to_owned());
-			Some(Device {
-				id,
-				name,
-				kind: DeviceKind::IosDevice,
-				state,
-			})
+	devices.iter().filter_map(iphone_from_devicectl).collect()
+}
+
+/// `result.devices` from devicectl, or a top-level `devices` array.
+fn listed_devices(document: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+	document
+		.pointer("/result/devices")
+		.and_then(serde_json::Value::as_array)
+		.or_else(|| {
+			document
+				.get("devices")
+				.and_then(serde_json::Value::as_array)
 		})
-		.collect()
+}
+
+/// One physical iPhone or iPad, or nothing when this entry is another device.
+fn iphone_from_devicectl(device: &serde_json::Value) -> Option<Device> {
+	if !is_physical_ios(device) {
+		return None;
+	}
+
+	let id = first_text(
+		device,
+		&[
+			"/hardwareProperties/udid",
+			"/properties/hardware/udid",
+			"/udid",
+			"/identifier",
+		],
+	)?;
+	let name = first_text(
+		device,
+		&[
+			"/deviceProperties/name",
+			"/name",
+			"/hardwareProperties/name",
+			"/hardwareProperties/marketingName",
+			"/properties/hardware/marketingName",
+		],
+	)
+	.unwrap_or_else(|| "iPhone".to_owned());
+	let state = first_text(
+		device,
+		&[
+			"/state",
+			"/connectionProperties/tunnelState",
+			"/properties/connection/tunnelState",
+			"/connectionProperties/pairingState",
+			"/properties/connection/pairingState",
+		],
+	)
+	.unwrap_or_else(|| "available".to_owned());
+
+	Some(Device {
+		id,
+		name,
+		kind: DeviceKind::IosDevice,
+		state,
+	})
+}
+
+/// Whether this entry is a physical iOS device.
+///
+/// A missing platform or reality stays included: older listings, and the
+/// short fixtures, name an iPhone without those fields. A present platform
+/// other than iOS, or a present reality other than physical, is something else.
+fn is_physical_ios(device: &serde_json::Value) -> bool {
+	let platform = first_text(
+		device,
+		&[
+			"/hardwareProperties/platform",
+			"/properties/hardware/platform",
+		],
+	);
+	if platform.is_some_and(|platform| !platform.eq_ignore_ascii_case("ios")) {
+		return false;
+	}
+
+	let reality = first_text(
+		device,
+		&[
+			"/hardwareProperties/reality",
+			"/properties/hardware/reality",
+		],
+	);
+	reality.is_none_or(|reality| reality.eq_ignore_ascii_case("physical"))
+}
+
+/// The first non-empty string at any of `pointers`.
+fn first_text(device: &serde_json::Value, pointers: &[&str]) -> Option<String> {
+	pointers.iter().find_map(|pointer| {
+		device
+			.pointer(pointer)
+			.and_then(serde_json::Value::as_str)
+			.and_then(|text| {
+				let text = text.trim();
+				(!text.is_empty()).then(|| text.to_owned())
+			})
+	})
 }
 
 /// Parses `adb devices -l`.
@@ -387,6 +438,76 @@ mod tests {
 		assert_eq!(devices[1].name, "iPad");
 		assert_eq!(devices[1].state, "connected");
 		assert_eq!(devices[1].kind, DeviceKind::IosDevice);
+	}
+
+	#[test]
+	fn devicectl_json_lists_physical_iphones_by_hardware_udid() {
+		// Captured shape of `xcrun devicectl list devices --json-output`:
+		// devices live under `result`, the hardware UDID is not the CoreDevice
+		// identifier, and a watch or a simulator is not an iPhone target.
+		let devices = parse_iphones(
+			r#"{"info":{"commandType":"devicectl.list.devices","jsonVersion":2,"outcome":"success"},
+			"result":{"devices":[
+				{"identifier":"0097E500-40E1-4842-93ED-89C7D7E25655",
+				 "deviceProperties":{"name":"xx's iPhone "},
+				 "connectionProperties":{"pairingState":"paired","tunnelState":"unavailable"},
+				 "hardwareProperties":{"deviceType":"iPhone","platform":"iOS","reality":"physical",
+				  "marketingName":"iPhone 13 Pro Max","udid":"00008110-001C108C0132401E"}},
+				{"identifier":"35C5DE54-1D3E-4144-8E9A-FA6C38B0B2F1",
+				 "connectionProperties":{"pairingState":"paired","tunnelState":"unavailable"},
+				 "hardwareProperties":{"deviceType":"appleWatch","platform":"watchOS","reality":"physical",
+				  "marketingName":"Apple Watch Series 7","udid":"00008301-F0918DA12298C02E"}},
+				{"identifier":"SIM-CORE","deviceProperties":{"name":"iPhone 16"},
+				 "hardwareProperties":{"platform":"iOS","reality":"simulated","udid":"SIMULATOR-UDID"}},
+				{"identifier":"6986451F-A2FF-48DE-A70E-45E06E1F1446",
+				 "deviceProperties":{"name":"iPhone"},
+				 "connectionProperties":{"pairingState":"paired","tunnelState":"connected"},
+				 "hardwareProperties":{"platform":"iOS","reality":"physical","udid":"00008120-0014485601E3C01E"}}
+			]}}"#,
+		);
+		assert_eq!(devices.len(), 2, "{devices:?}");
+		assert_eq!(devices[0].id, "00008110-001C108C0132401E");
+		assert_eq!(devices[0].name, "xx's iPhone");
+		assert_eq!(devices[0].state, "unavailable");
+		assert_eq!(devices[0].kind, DeviceKind::IosDevice);
+		assert_eq!(devices[1].id, "00008120-0014485601E3C01E");
+		assert_eq!(devices[1].name, "iPhone");
+		assert_eq!(devices[1].state, "connected");
+	}
+
+	#[test]
+	fn devicectl_properties_dictionary_lists_a_physical_iphone() {
+		let devices = parse_iphones(
+			r#"{"result":{"devices":[{
+				"identifier":"CORE",
+				"properties":{
+					"hardware":{"platform":"iOS","reality":"physical","udid":"00008110-AAA","marketingName":"iPhone 16"},
+					"connection":{"pairingState":"paired","tunnelState":"connected"},
+					"state":{"bootState":"booted"}
+				}
+			}]}}"#,
+		);
+		assert_eq!(devices.len(), 1, "{devices:?}");
+		assert_eq!(devices[0].id, "00008110-AAA");
+		assert_eq!(devices[0].name, "iPhone 16");
+		assert_eq!(devices[0].state, "connected");
+		assert_eq!(devices[0].kind, DeviceKind::IosDevice);
+
+		let named_by_model = parse_iphones(
+			r#"{"result":{"devices":[
+				{"hardwareProperties":{"platform":"iOS","marketingName":"iPhone 15","udid":"UDID-15"},
+				 "connectionProperties":{"pairingState":"paired"}},
+				{"identifier":"   "},
+				{"identifier":"bare"}
+			]}}"#,
+		);
+		assert_eq!(named_by_model.len(), 2, "{named_by_model:?}");
+		assert_eq!(named_by_model[0].id, "UDID-15");
+		assert_eq!(named_by_model[0].name, "iPhone 15");
+		assert_eq!(named_by_model[0].state, "paired");
+		assert_eq!(named_by_model[1].id, "bare");
+		assert_eq!(named_by_model[1].name, "iPhone");
+		assert_eq!(named_by_model[1].state, "available");
 	}
 
 	#[test]
