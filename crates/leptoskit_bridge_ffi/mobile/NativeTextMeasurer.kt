@@ -18,8 +18,8 @@ import kotlin.math.max
  *
  * Every changed label is measured once per relayout, so a frame that rewrites a
  * screen of numbers measures hundreds of strings: the paint is reused per
- * size and weight, and one-line text takes `BoringLayout`, which skips line
- * breaking entirely.
+ * size and weight, and text that fits on one line takes `BoringLayout`, which
+ * skips line breaking entirely.
  */
 internal class NativeTextMeasurer(
     private val metrics: DisplayMetrics,
@@ -53,9 +53,11 @@ internal class NativeTextMeasurer(
             }
         val bound = ceil(limit.toDouble()).toInt().coerceAtLeast(1)
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
-        // One line of text without tabs or bidi overrides lays out as a single
-        // run; `BoringLayout` measures exactly that without a line breaker.
-        val boring = BoringLayout.isBoring(value, paint, direction, true, null)
+        // Text without tabs or bidi overrides that fits in the bound lays out
+        // as one run, which `BoringLayout` measures without a line breaker.
+        // It always lays out exactly one line, so text wider than the bound
+        // must wrap through `StaticLayout`, as `TextView` does.
+        val boring = BoringLayout.isBoring(value, paint, direction, true, null)?.takeIf { it.width <= bound }
         val measured =
             if (boring != null) {
                 BoringLayout.make(
@@ -73,8 +75,8 @@ internal class NativeTextMeasurer(
                     .obtain(value, 0, value.length, paint, bound)
                     .setIncludePad(false)
                     .setTextDirection(direction)
-                    .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
-                    .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+                    .setBreakStrategy(BREAK_STRATEGY)
+                    .setHyphenationFrequency(HYPHENATION)
                     .build()
             }
 
@@ -107,11 +109,17 @@ internal class NativeTextMeasurer(
         return paint
     }
 
-    private companion object {
-        const val UNBOUNDED = -1f
-        const val WIDEST_WORD = -2f
+    internal companion object {
+        /** How text breaks into lines, here and in the text views that draw it. */
+        const val BREAK_STRATEGY = Layout.BREAK_STRATEGY_SIMPLE
+
+        /** Whether text hyphenates, here and in the text views that draw it. */
+        const val HYPHENATION = Layout.HYPHENATION_FREQUENCY_NONE
+
+        private const val UNBOUNDED = -1f
+        private const val WIDEST_WORD = -2f
 
         // NativeWidgetProps draws semibold and bold with the bold typeface.
-        const val BOLD_WEIGHT = 600
+        private const val BOLD_WEIGHT = 600
     }
 }
