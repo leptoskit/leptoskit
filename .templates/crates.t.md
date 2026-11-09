@@ -401,6 +401,12 @@ continuous execution, and macOS, desktop, and the browser report `Unavailable`.
 
 <!-- {/p_backgroundSummary} -->
 
+<!-- {@p_recorderSummary} -->
+
+Add `{{ plugin_recorder.package.name }}` as a direct dependency and select the `{{ plugin_recorder.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Recorder` rather than resolving the plugin on every call. iOS records through `AVAudioEngine` and Android through `AudioRecord` with a `MediaCodec` AAC encoder; the app supplies its `NSMicrophoneUsageDescription` purpose string and, for Android background recording, runs the `background` plugin's microphone-typed foreground service.
+
+<!-- {/p_recorderSummary} -->
+
 
 <!-- {@p_age_rangeSummary} -->
 

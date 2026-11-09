@@ -50,6 +50,7 @@ class BackgroundService : Service() {
         }
 
         startAsForeground()
+        BackgroundState.serviceTypes = types
 
         if (!started) {
             started = true

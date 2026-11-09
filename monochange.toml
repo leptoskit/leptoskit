@@ -115,6 +115,7 @@ packages = [
 	"leptoskit_plugin_posture",
 	"leptoskit_plugin_power_monitor",
 	"leptoskit_plugin_print",
+	"leptoskit_plugin_recorder",
 	"leptoskit_plugin_dialog",
 	"leptoskit_plugin_document_picker",
 	"leptoskit_plugin_screen_orientation",
@@ -534,6 +535,8 @@ path = "crates/leptoskit_plugin_power_monitor"
 
 [package.leptoskit_plugin_print]
 path = "crates/leptoskit_plugin_print"
+[package.leptoskit_plugin_recorder]
+path = "crates/leptoskit_plugin_recorder"
 
 [package.leptoskit_plugin_single_instance]
 path = "crates/leptoskit_plugin_single_instance"

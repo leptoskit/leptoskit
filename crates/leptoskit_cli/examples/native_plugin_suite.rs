@@ -94,6 +94,7 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("asset", "leptoskit_plugin_asset"),
 	("age-range", "leptoskit_plugin_age_range"),
 	("audio", "leptoskit_plugin_audio"),
+	("recorder", "leptoskit_plugin_recorder"),
 	(
 		"android_alarm_manager",
 		"leptoskit_plugin_android_alarm_manager",
@@ -160,6 +161,7 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_dev_client/tests/android/DevClientWireTest.kt",
 	"leptoskit_plugin_asset/tests/android/AssetWireTest.kt",
 	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
+	"leptoskit_plugin_recorder/tests/android/RecorderWireTest.kt",
 ];
 
 /// Instrumentation wrappers that call each plugin test file's `main`.
