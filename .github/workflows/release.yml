@@ -372,7 +372,7 @@ jobs:
             echo "Created tag ${tag} at ${sha}."
           fi
 
-      - name: create the draft release
+      - name: create or refresh the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -382,16 +382,21 @@ jobs:
           tag="v${version}"
 
           # The draft exists so publish.yml can attach artifacts to it and flip it public only
-          # after every registry accepted every package.
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Draft release ${tag} already exists; continuing."
-          else
-            gh release create "$tag" \
-              --draft \
-              --title "v${version}" \
-              --generate-notes \
-              --repo "$GITHUB_REPOSITORY"
+          # after every registry accepted every package. monochange writes the body and title it
+          # rendered for the release record; `--generate-notes` would replace them with GitHub's
+          # pull-request summary.
+          #
+          # A published release is left alone: `publish-release` applies the configured draft
+          # flag, and a retry after publish.yml must not turn the live release back into a draft.
+          # A draft is refreshed, so a retry can replace notes written by an older workflow.
+          if is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$is_draft" != "true" ]; then
+              echo "Release ${tag} is already published; leaving it unchanged."
+              exit 0
+            fi
           fi
+
+          monochange step publish-release --from-ref "$tag" --draft
 
       - name: dispatch the publish workflow
         env:
