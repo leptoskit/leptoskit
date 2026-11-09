@@ -191,7 +191,12 @@ pub unsafe fn create_with_context(
 			.and_then(|context| context.decode())
 	};
 	// SAFETY: Input/output buffers obey the same contract as create.
-	unsafe { create(wasm, len, error, |app| install(app, &context?)) }
+	unsafe {
+		create_reporting(wasm, len, error, |app| {
+			let context = context.map_err(|error| format!("app context: {error:?}"))?;
+			install(app, &context).map_err(|error| app.registration_failure(error))
+		})
+	}
 }
 
 /// One loaded guest and its installed immediate and worker Rust plugins.
@@ -218,6 +223,9 @@ pub struct App {
 	flattener: leptoskit_native::flatten::Flattener,
 	nodes: BTreeMap<usize, NodeId>,
 	error: String,
+	/// The plugin whose [`Self::register`] failed, which app creation names
+	/// in its error.
+	failed_plugin: Option<&'static str>,
 	started: bool,
 	render_failed: bool,
 	/// The root the last transaction named, so an unchanged one needs no
@@ -270,6 +278,7 @@ impl App {
 			flattener: leptoskit_native::flatten::Flattener::default(),
 			nodes: BTreeMap::new(),
 			error: String::new(),
+			failed_plugin: None,
 			started: false,
 			render_failed: false,
 			rendered_root: None,
@@ -327,6 +336,36 @@ impl App {
 		self.host
 			.as_mut()
 			.expect("live applications own an interpreter")
+	}
+
+	/// Installs the plugin `name` with `install`, and remembers the name when
+	/// that fails, so that app creation's error says which plugin stopped the
+	/// app: ``register plugin `websocket`: InvalidArgument`` rather than
+	/// `register plugin: InvalidArgument`. Generated registrants install
+	/// every plugin through it.
+	///
+	/// # Errors
+	/// Whatever `install` returns.
+	pub fn register<T>(
+		&mut self,
+		name: &'static str,
+		install: impl FnOnce(&mut Self) -> Result<T, Error>,
+	) -> Result<T, Error> {
+		let result = install(self);
+
+		if result.is_err() {
+			self.failed_plugin = Some(name);
+		}
+
+		result
+	}
+
+	/// What app creation reports when installing plugins failed with `error`.
+	fn registration_failure(&self, error: Error) -> String {
+		match self.failed_plugin {
+			Some(name) => format!("register plugin `{name}`: {error:?}"),
+			None => format!("register plugin: {error:?}"),
+		}
 	}
 
 	/// Stores one inert installer. No service runs during synchronous creation.
@@ -1069,6 +1108,24 @@ pub unsafe fn create(
 	error: *mut Buffer,
 	install: impl FnOnce(&mut App) -> Result<(), Error>,
 ) -> *mut App {
+	// SAFETY: The caller upholds this function's contract.
+	unsafe {
+		create_reporting(wasm, len, error, |app| {
+			install(app).map_err(|error| app.registration_failure(error))
+		})
+	}
+}
+
+/// [`create`], with `install` describing its own failure.
+///
+/// # Safety
+/// As for [`create`].
+unsafe fn create_reporting(
+	wasm: *const u8,
+	len: usize,
+	error: *mut Buffer,
+	install: impl FnOnce(&mut App) -> Result<(), String>,
+) -> *mut App {
 	if error.is_null() {
 		return ptr::null_mut();
 	}
@@ -1079,7 +1136,7 @@ pub unsafe fn create(
 		App::new(unsafe { std::slice::from_raw_parts(wasm, len) })
 			.map_err(|error| error.to_string())
 			.and_then(|mut app| {
-				install(&mut app).map_err(|error| format!("register plugin: {error:?}"))?;
+				install(&mut app)?;
 				Ok(app)
 			})
 	};

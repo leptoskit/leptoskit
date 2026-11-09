@@ -155,7 +155,7 @@ origins = ["https://api.example.com"]
 origins = ["wss://live.example.com"]
 ```
 
-An origin allows every path on it. There is no wildcard: plain `http://` and `ws://` need their own entries, and redirects are not followed. An origin is not a firewall, and doesn't protect against DNS rebinding by a host you allowed. In the browser, the HTTP and WebSocket plugins use `fetch` and `WebSocket`, so CORS, CSP, and the browser's own rules apply instead.
+`leptoskit build` stops if either table is missing or has no `origins`: without them the plugin can't start, and the app would stop at launch. An origin allows every path on it. There is no wildcard: plain `http://` and `ws://` need their own entries, and redirects are not followed. An origin is not a firewall, and doesn't protect against DNS rebinding by a host you allowed. In the browser, the HTTP and WebSocket plugins use `fetch` and `WebSocket`, so CORS, CSP, and the browser's own rules apply instead.
 
 ## Notes on specific plugins
 
