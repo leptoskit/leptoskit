@@ -256,6 +256,23 @@ impl Scene {
 		});
 	}
 
+	/// Moves `part` of the model instance `node` by `offset`, in the part's
+	/// own frame, over `seconds` (see [`Op::SetPartOffset`]).
+	pub fn set_part_offset(
+		&self,
+		node: NodeId,
+		part: impl Into<String>,
+		offset: Transform,
+		seconds: f32,
+	) {
+		self.push(Op::SetPartOffset {
+			node,
+			part: part.into(),
+			offset,
+			seconds,
+		});
+	}
+
 	/// Changes how a part (or, with `None`, the whole instance) draws.
 	pub fn set_material(&self, node: NodeId, part: Option<&str>, material: MaterialOverride) {
 		self.push(Op::SetMaterial {

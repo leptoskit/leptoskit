@@ -228,6 +228,19 @@ impl Op {
 					visible,
 				}
 			}
+			Self::SetPartOffset {
+				node,
+				part,
+				offset,
+				seconds,
+			} => {
+				Self::SetPartOffset {
+					node,
+					part: name(part, MAX_NAME_BYTES),
+					offset: offset.sanitized(),
+					seconds: bounded(seconds, 0.0, MAX_FADE),
+				}
+			}
 			Self::Play { node, play } => {
 				Self::Play {
 					node,

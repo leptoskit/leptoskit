@@ -56,6 +56,12 @@ fn every_op() -> Vec<Op> {
 			target: "joy".into(),
 			weight: 1.0,
 		},
+		Op::SetPartOffset {
+			node: NodeId(3),
+			part: "head".into(),
+			offset: Transform::from_translation(0.0, 0.1, 0.0).with_yaw(0.3),
+			seconds: 0.033,
+		},
 		Op::SetMaterial {
 			node: NodeId(3),
 			part: Some("spirit_body".into()),
@@ -311,6 +317,30 @@ fn random_and_mutated_batches_never_panic() {
 
 fn finite(values: &[f32]) -> bool {
 	values.iter().all(|value| value.is_finite())
+}
+
+#[test]
+fn sanitizing_bounds_part_offsets() {
+	for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0e30, -1.0e30] {
+		let Op::SetPartOffset {
+			offset, seconds, ..
+		} = (Op::SetPartOffset {
+			node: NodeId(1),
+			part: "head".into(),
+			offset: Transform {
+				translation: [value; 3],
+				rotation: [value; 4],
+				scale: [value; 3],
+			},
+			seconds: value,
+		})
+		.sanitized()
+		else {
+			unreachable!()
+		};
+		assert!(finite(&offset.translation) && finite(&offset.rotation) && finite(&offset.scale));
+		assert!((0.0..=MAX_FADE).contains(&seconds));
+	}
 }
 
 #[test]
