@@ -570,7 +570,138 @@ class ProbeActivity : Activity() {
         )
         nativeConfigure(16)
         assertion((named("Editor") as EditText).text.toString() == "accepted", "A removed editor remounts from current controlled state")
+        verifyGestures()
         handler.postDelayed({ runCatching { captureHardwareWindow(spinner) }.onFailure(::failed) }, 150)
+    }
+
+    private fun verifyGestures() {
+        nativeExercisePointer()
+        val pad = named("Gesture pad")
+        val presses = count(0)
+        val button = named("Action")
+        dispatch(root, center(button), android.view.MotionEvent.ACTION_DOWN, 0)
+        dispatch(root, center(button), android.view.MotionEvent.ACTION_UP, 0)
+        assertion(count(0) == presses + 1, "A touch outside a gesture still clicks the button")
+
+        val taps = gestureCount(0)
+        dispatch(root, center(pad), android.view.MotionEvent.ACTION_DOWN, 0)
+        dispatch(root, center(pad), android.view.MotionEvent.ACTION_UP, 30)
+        assertion(gestureCount(0) == taps + 1, "A tap on the gesture pad is delivered")
+
+        val origin = center(pad)
+        val time = android.os.SystemClock.uptimeMillis()
+        dispatchAt(root, origin.first, origin.second, android.view.MotionEvent.ACTION_DOWN, time)
+        dispatchAt(root, origin.first + 80f, origin.second, android.view.MotionEvent.ACTION_MOVE, time + 30)
+        dispatchAt(root, origin.first + 120f, origin.second, android.view.MotionEvent.ACTION_UP, time + 60)
+        val status = org.json.JSONObject(nativeStatus())
+        assertion(gestureCount(1) > 0 && status.getDouble("pan_x") > 20.0, "A pan reports translation from the finger")
+
+        pinch(pad)
+        assertion(gestureCount(2) > 0 && org.json.JSONObject(nativeStatus()).getDouble("scale") > 1.4, "A pinch reports scale")
+
+        val before = gestureCount(0)
+        dispatch(root, center(pad), android.view.MotionEvent.ACTION_DOWN, 0)
+        dispatch(root, center(pad), android.view.MotionEvent.ACTION_UP, 20)
+        assertion(gestureCount(0) == before + 1, "A second tap is delivered after the pan and pinch")
+        assertion(count(0) == presses + 1, "The gesture pad does not click the button")
+    }
+
+    private fun gestureCount(index: Int): Int = org.json.JSONObject(nativeStatus()).getJSONArray("gestures").getInt(index)
+
+    private fun center(view: View): Pair<Float, Float> {
+        val child = IntArray(2)
+        val parent = IntArray(2)
+        view.getLocationOnScreen(child)
+        root.getLocationOnScreen(parent)
+        return (child[0] - parent[0] + view.width / 2f) to (child[1] - parent[1] + view.height / 2f)
+    }
+
+    private fun dispatch(
+        view: View,
+        point: Pair<Float, Float>,
+        action: Int,
+        delay: Long,
+    ) {
+        val time = android.os.SystemClock.uptimeMillis()
+        dispatchAt(view, point.first, point.second, action, time + delay)
+    }
+
+    private fun dispatchAt(
+        view: View,
+        x: Float,
+        y: Float,
+        action: Int,
+        time: Long,
+    ) {
+        val event = android.view.MotionEvent.obtain(time, time, action, x, y, 0)
+        view.dispatchTouchEvent(event)
+        event.recycle()
+    }
+
+    private fun pinch(pad: View) {
+        val (x, y) = center(pad)
+        val time = android.os.SystemClock.uptimeMillis()
+        val down = android.view.MotionEvent.obtain(time, time, android.view.MotionEvent.ACTION_DOWN, x - 30f, y, 0)
+        root.dispatchTouchEvent(down)
+        down.recycle()
+        val properties =
+            arrayOf(
+                android.view.MotionEvent.PointerProperties().apply { id = 0 },
+                android.view.MotionEvent.PointerProperties().apply { id = 1 },
+            )
+        val first = android.view.MotionEvent.PointerCoords().apply {
+            this.x = x - 30f
+            this.y = y
+        }
+        val second = android.view.MotionEvent.PointerCoords().apply {
+            this.x = x + 30f
+            this.y = y
+        }
+        val pointerDown =
+            android.view.MotionEvent.obtain(
+                time,
+                time + 10,
+                android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+                2,
+                properties,
+                arrayOf(first, second),
+                0,
+                0,
+                1f,
+                1f,
+                0,
+                0,
+                android.view.InputDevice.SOURCE_TOUCHSCREEN,
+                0,
+            )
+        root.dispatchTouchEvent(pointerDown)
+        pointerDown.recycle()
+        second.x = x + 90f
+        val move =
+            android.view.MotionEvent.obtain(
+                time,
+                time + 30,
+                android.view.MotionEvent.ACTION_MOVE,
+                2,
+                properties,
+                arrayOf(first, second),
+                0,
+                0,
+                1f,
+                1f,
+                0,
+                0,
+                android.view.InputDevice.SOURCE_TOUCHSCREEN,
+                0,
+            )
+        root.dispatchTouchEvent(move)
+        move.recycle()
+        val up = android.view.MotionEvent.obtain(time, time + 40, android.view.MotionEvent.ACTION_UP, x - 30f, y, 0)
+        root.dispatchTouchEvent(up)
+        up.recycle()
+        val cancel = android.view.MotionEvent.obtain(time, time + 50, android.view.MotionEvent.ACTION_CANCEL, x, y, 0)
+        root.dispatchTouchEvent(cancel)
+        cancel.recycle()
     }
 
     private fun captureHardwareWindow(spinner: ProgressBar) {
@@ -654,6 +785,8 @@ class ProbeActivity : Activity() {
         )
 
         @JvmStatic private external fun nativeStatus(): String
+
+        @JvmStatic private external fun nativeExercisePointer()
 
         @JvmStatic private external fun nativeDestroy()
 

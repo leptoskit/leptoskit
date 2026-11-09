@@ -162,14 +162,134 @@ class WidgetHost(
             val previous = mountedRoot
 
             if (previous?.view !== root?.outer || previous?.container !== container) {
-                previous?.let { (it.view.parent as? ViewGroup)?.removeView(it.view) }
+                previous?.let {
+                    it.view.routesPointers = false
+                    it.view.pointerRouter = null
+                    (it.view.parent as? ViewGroup)?.removeView(it.view)
+                }
                 mountedRoot = root?.let { RootMount(it.id, container, it.outer) }
 
-                if (root != null) container.addView(root.outer)
+                if (root != null) {
+                    root.outer.routesPointers = true
+                    root.outer.pointerRouter = { event -> routePointer(root.outer, event) }
+                    container.addView(root.outer)
+                }
             }
 
             refreshMountedRoot()
         }
+    }
+
+    private val gestureClock = android.os.Handler(android.os.Looper.getMainLooper())
+    private val gestureTick = Runnable { onGestureTick() }
+    private var routing = false
+
+    private fun routePointer(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+    ): Boolean {
+        if (routing || handle == 0L) return view.pass(event)
+        routing = true
+        try {
+            val packed = forwardPointers(view, event)
+            armDeadline(packed ushr 8)
+            if (event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+                return view.pass(event)
+            }
+            return when ((packed and 0xff).toInt()) {
+                2 -> {
+                    val cancel = android.view.MotionEvent.obtain(event)
+                    cancel.action = android.view.MotionEvent.ACTION_CANCEL
+                    view.pass(cancel)
+                    cancel.recycle()
+                    true
+                }
+                1 -> {
+                    view.pass(event)
+                    true
+                }
+                else -> view.pass(event)
+            }
+        } finally {
+            routing = false
+        }
+    }
+
+    private fun forwardPointers(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+    ): Long {
+        val phase =
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_POINTER_DOWN -> 0
+                android.view.MotionEvent.ACTION_MOVE -> 1
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> 2
+                else -> 3
+            }
+        if (phase == 1) {
+            var packed = 0L
+            for (index in 0 until event.pointerCount) {
+                packed = combinePointer(packed, sendPointer(view, event, index, phase))
+            }
+            return packed
+        }
+        return sendPointer(view, event, event.actionIndex, phase)
+    }
+
+    private fun sendPointer(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+        index: Int,
+        phase: Int,
+    ): Long {
+        val kind =
+            when (event.getToolType(index)) {
+                android.view.MotionEvent.TOOL_TYPE_MOUSE -> 1
+                android.view.MotionEvent.TOOL_TYPE_STYLUS -> 2
+                else -> 0
+            }
+        val x = (view.left + event.getX(index)) / density
+        val y = (view.top + event.getY(index)) / density
+        return nativePointer(handle, event.getPointerId(index).toLong(), phase, x, y, event.eventTime, kind)
+    }
+
+    private fun combinePointer(
+        left: Long,
+        right: Long,
+    ): Long {
+        val route = max(left and 0xff, right and 0xff)
+        val leftWait = left ushr 8
+        val rightWait = right ushr 8
+        val wait =
+            when {
+                leftWait == 0L -> rightWait
+                rightWait == 0L -> leftWait
+                else -> min(leftWait, rightWait)
+            }
+        return route or (wait shl 8)
+    }
+
+    private fun armDeadline(wait: Long) {
+        gestureClock.removeCallbacks(gestureTick)
+        if (wait > 0) gestureClock.postDelayed(gestureTick, wait)
+    }
+
+    private fun onGestureTick() {
+        if (handle == 0L || routing) return
+        val packed = nativeGestureAdvance(handle, android.os.SystemClock.uptimeMillis())
+        if ((packed and 0xff) == 2L) {
+            val root = mountedRoot?.view ?: return
+            val now = android.os.SystemClock.uptimeMillis()
+            val cancel = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            routing = true
+            try {
+                root.pass(cancel)
+            } finally {
+                routing = false
+            }
+            cancel.recycle()
+        }
+        armDeadline(packed ushr 8)
     }
 
     private fun refreshMountedRoot() {
@@ -1443,6 +1563,11 @@ class WidgetHost(
             clipToPadding = false
         }
 
+        var routesPointers = false
+        var pointerRouter: ((android.view.MotionEvent) -> Boolean)? = null
+
+        fun pass(event: android.view.MotionEvent): Boolean = super.dispatchTouchEvent(event)
+
         override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
             if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
                 val editor = findFocus() as? EditText
@@ -1461,7 +1586,12 @@ class WidgetHost(
                 }
             }
 
-            return super.dispatchTouchEvent(event)
+            val router = pointerRouter
+            if (!routesPointers || router == null) {
+                return super.dispatchTouchEvent(event)
+            }
+
+            return router(event)
         }
 
         // Like FrameLayout, a container that never scrolls shows a child's
@@ -1628,6 +1758,21 @@ class WidgetHost(
             value: Double,
             text: String,
         )
+
+        @JvmStatic private external fun nativePointer(
+            handle: Long,
+            pointer: Long,
+            phase: Int,
+            x: Float,
+            y: Float,
+            timeMs: Long,
+            kind: Int,
+        ): Long
+
+        @JvmStatic private external fun nativeGestureAdvance(
+            handle: Long,
+            timeMs: Long,
+        ): Long
 
         /** Pure per-call platform measurement; safe from an attached Rust worker. */
         @JvmStatic fun measureText(

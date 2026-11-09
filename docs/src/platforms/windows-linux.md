@@ -35,7 +35,7 @@ rustup target add wasm32-unknown-unknown
 leptoskit build --platform linux
 ```
 
-The build prints the path of the executable. The app runs in the GTK event loop and passes control events to your screens.
+The build prints the path of the executable. The app runs in the GTK event loop and passes control events to your screens. The GTK backend also feeds pointer motion into the shared [gesture arena](../guide/38-gestures.md), the same recognizers the Android widget backend uses. The generated Linux app's guest does not receive that stream yet, so a gesture in a `leptoskit new` Linux app does not run until the host forwards samples.
 
 </Tab>
 </Tabs>

@@ -24,12 +24,14 @@ use leptoskit_native::Color;
 use leptoskit_native::Element;
 use leptoskit_native::FillRule;
 use leptoskit_native::FontWeight;
+use leptoskit_native::Gesture;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
 use leptoskit_native::NativeSurface;
 use leptoskit_native::PathData;
+use leptoskit_native::PointerDecision;
 use leptoskit_native::Progress;
 use leptoskit_native::ProgressValue;
 use leptoskit_native::RadioGroup;
@@ -68,6 +70,9 @@ struct State {
 	root_fixed: bool,
 	editor_removed: bool,
 	vector_recolored: bool,
+	gestures: [usize; 4],
+	pan_x: f32,
+	scale: f32,
 }
 
 struct Probe {
@@ -91,7 +96,7 @@ thread_local! {
 	static CONTRACT: RefCell<Option<Contract>> = const { RefCell::new(None) };
 }
 
-fn fixture(state: &State) -> Element {
+fn fixture(state: &State, live: &Arc<Mutex<State>>) -> Element {
 	let group = RadioGroup::new("density").expect("valid fixture group");
 	let mut root =
 		View()
@@ -228,7 +233,8 @@ fn fixture(state: &State) -> Element {
 				Pressable("Rich action")
 					.class("w-48 h-10 bg-blue-600 rounded-lg")
 					.child(Text("Native pressable").class("text-white text-center")),
-			);
+			)
+			.child(gesture_pad(live));
 
 	if !state.removed {
 		root = root.child(
@@ -239,6 +245,54 @@ fn fixture(state: &State) -> Element {
 	}
 
 	root
+}
+
+fn arm_pointers(surface: &Rc<RefCell<NativeSurface<AndroidBackend>>>) {
+	let weak = Rc::downgrade(surface);
+	surface
+		.borrow()
+		.backend()
+		.set_pointer_listener(move |sample| {
+			weak.upgrade()
+				.map(|surface| surface.borrow().pointer(sample))
+				.unwrap_or_else(PointerDecision::platform)
+		});
+	let weak = Rc::downgrade(surface);
+	surface.borrow().backend().set_gesture_clock(move |now| {
+		weak.upgrade()
+			.map(|surface| surface.borrow().advance_gestures(now))
+			.unwrap_or_else(PointerDecision::platform)
+	});
+}
+
+fn gesture_pad(live: &Arc<Mutex<State>>) -> Element {
+	let tap = Arc::clone(live);
+	let pan = Arc::clone(live);
+	let pinch = Arc::clone(live);
+	let press = Arc::clone(live);
+	View()
+		.accessibility_label("Gesture pad")
+		.class("w-64 h-24 bg-blue-100")
+		.gesture(
+			Gesture::long_press()
+				.min_duration(std::time::Duration::from_millis(400))
+				.on_begin(move |_| {
+					press.lock().expect("gesture state").gestures[3] += 1;
+				})
+				.race(Gesture::tap().on_end(move |_| {
+					tap.lock().expect("gesture state").gestures[0] += 1;
+				}))
+				.simultaneous(Gesture::pan().on_update(move |event| {
+					let mut state = pan.lock().expect("gesture state");
+					state.gestures[1] += 1;
+					state.pan_x = event.translation_x;
+				}))
+				.simultaneous(Gesture::pinch().on_update(move |event| {
+					let mut state = pinch.lock().expect("gesture state");
+					state.gestures[2] += 1;
+					state.scale = event.scale;
+				})),
+		)
 }
 
 /// A labelled, filled square fitted into a wide frame, a decorative stroked
@@ -347,9 +401,12 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeMount(
 	}));
 	surface.borrow_mut().set_dark_mode(false);
 	surface.borrow_mut().set_viewport(width, height);
-	surface
-		.borrow_mut()
-		.set_root(&fixture(&state.lock().expect("fixture state")));
+	let element = {
+		let guard = state.lock().expect("fixture state");
+		fixture(&guard, &state)
+	};
+	surface.borrow_mut().set_root(&element);
+	arm_pointers(&surface);
 	let weak = Rc::downgrade(&surface);
 	let data = Arc::clone(&state);
 	surface
@@ -412,7 +469,10 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeMount(
 			}
 
 			surface.borrow().dispatch_event(id, event);
-			let element = fixture(&data.lock().expect("fixture state"));
+			let element = {
+				let guard = data.lock().expect("fixture state");
+				fixture(&guard, &data)
+			};
 			surface.borrow_mut().set_root(&element);
 		});
 	let root = surface.borrow().root().expect("mounted fixture").index() as i64;
@@ -438,7 +498,8 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeConfigure(
 	PROBE.with(|probe| {
 		let probe = probe.borrow();
 		let probe = probe.as_ref().expect("mounted fixture");
-		let mut state = probe.state.lock().expect("fixture state");
+		let live = Arc::clone(&probe.state);
+		let mut state = live.lock().expect("fixture state");
 		match mode {
 			0 => state.accept = false,
 			1 => state.accept = true,
@@ -472,7 +533,9 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeConfigure(
 			_ => panic!("unknown fixture mode"),
 		}
 
-		probe.surface.borrow_mut().set_root(&fixture(&state));
+		let element = fixture(&state, &live);
+		drop(state);
+		probe.surface.borrow_mut().set_root(&element);
 	});
 }
 
@@ -495,14 +558,71 @@ pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeResize(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeExercisePointer(
+	_env: JNIEnv<'_>,
+	_class: JClass<'_>,
+) {
+	PROBE.with(|probe| {
+		let probe = probe.borrow();
+		let probe = probe.as_ref().expect("mounted fixture");
+		let handle = probe.surface.borrow().backend().handle();
+		assert_eq!(crate::backend::route_pointer(0, 1, 0, 0.0, 0.0, 0, 0), 0);
+		assert_eq!(
+			crate::backend::route_pointer(handle, 1, 9, 1.0, 1.0, 1, 0),
+			0
+		);
+		assert_eq!(
+			crate::backend::route_pointer(handle, -1, 0, 1.0, 1.0, 1, 0),
+			0
+		);
+		assert_eq!(
+			crate::backend::route_pointer(handle, 1, 0, 1.0, 1.0, 1, 7),
+			0
+		);
+		assert_eq!(
+			crate::backend::route_pointer(handle, 1, 3, -20.0, -20.0, -1, 2),
+			0
+		);
+		assert_eq!(
+			crate::backend::route_pointer(handle, 1, 0, f32::NAN, 1.0, 1, 1),
+			0
+		);
+		assert_eq!(crate::backend::route_clock(handle, 5), 0);
+		assert_eq!(crate::backend::route_clock(0, 5), 0);
+		probe.surface.borrow().backend().clear_pointer_listener();
+		assert_eq!(
+			crate::backend::route_pointer(handle, 1, 0, 1.0, 1.0, 1, 0),
+			0
+		);
+		assert_eq!(crate::backend::route_clock(handle, 5), 0);
+		arm_pointers(&probe.surface);
+	});
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_leptoskit_widgets_ProbeActivity_nativeStatus(
 	env: JNIEnv<'_>,
 	_class: JClass<'_>,
 ) -> jstring {
 	let status = PROBE.with(|probe| {
 		let probe = probe.borrow();
-		let state = probe.as_ref().expect("mounted fixture").state.lock().expect("fixture state");
-		serde_json::json!({ "events": state.events, "checked": state.checked, "radio": state.radio, "slider": state.slider, "removed": state.removed }).to_string()
+		let state = probe
+			.as_ref()
+			.expect("mounted fixture")
+			.state
+			.lock()
+			.expect("fixture state");
+		serde_json::json!({
+			"events": state.events,
+			"checked": state.checked,
+			"radio": state.radio,
+			"slider": state.slider,
+			"removed": state.removed,
+			"gestures": state.gestures,
+			"pan_x": state.pan_x,
+			"scale": state.scale,
+		})
+		.to_string()
 	});
 	env.new_string(status).expect("fixture status").into_raw()
 }

@@ -41,6 +41,7 @@
 - [Localization](guide/19-localization.md)
 - [Animations](guide/32-animations.md)
 - [Motion](guide/32-motion.md)
+- [Gestures](guide/38-gestures.md)
 - [Toasts](guide/33-toasts.md)
 - [Images and other assets](guide/36-assets.md)
 - [Rive animations](guide/20-rive.md)

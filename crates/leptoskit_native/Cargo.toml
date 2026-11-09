@@ -53,6 +53,10 @@ web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "CanvasRend
 name = "vector"
 harness = false
 
+[[bench]]
+name = "gesture"
+harness = false
+
 [[example]]
 name = "grid_parity_probe"
 required-features = ["web"]
