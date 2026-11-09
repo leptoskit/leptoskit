@@ -1,0 +1,4 @@
+{
+	"name": "leptoskit",
+	"install": "[ ! -d /agent/repos/leptoskit ] || cd /agent/repos/leptoskit || exit $?; bash .cursor/install.sh"
+}

@@ -27,7 +27,7 @@ leptoskit is a Rust toolkit for writing an app's interface once, as a tree of co
 
 ## Before you change anything
 
-- Run `devenv shell -- true` first so the shell is current, then run commands through `devenv shell <script>` or `devenv shell -- <command>`. Use `CARGO_BUILD_JOBS=4`; full builds are large.
+- Run `devenv shell -- true` first so the shell is current, then run commands through `devenv shell <script>` or `devenv shell -- <command>`. Use `CARGO_BUILD_JOBS=4`; full builds are large. A Cursor cloud agent runs `.cursor/install.sh` first: single-user Nix with flakes, devenv, and the devenv and nix-community binary caches. macOS, iOS, Windows, Android emulators, and the HarmonyOS device SDK are not on that Linux VM.
 - Rust builds go through `mbx` (mr boxington): the shell puts its Cargo shim ahead of `cargo`, so dependency compilation is restored from a shared cache instead of being repeated in every checkout. `mbx` manages `target/` as a symlink under `~/Library/Caches/mbx/targets`; reclaim disk with `mbx gc` (`mbx gc --dry-run` first), never by deleting `target/` or setting `CARGO_TARGET_DIR`.
 - Formatting, lints, and tests: `devenv shell fix:all`, `devenv shell lint:all`, `devenv shell test:all`. The pre-push hook runs `lint:push`; it is slow enough to outlive git's SSH connection (exit 141), so run the checks yourself first rather than weakening them.
 - Generated output is snapshot-tested with insta. Review `.snap` diffs; never accept them blindly.
