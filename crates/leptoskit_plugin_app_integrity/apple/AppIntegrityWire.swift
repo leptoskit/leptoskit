@@ -25,7 +25,7 @@ enum AppIntegrityWire {
     static func challenge(_ payload: NativeBuffer) throws -> Data {
         try payload.withUnsafeBytes { bytes in
             var reader = WireReader(bytes)
-            let challenge = try reader.bytes()
+            let challenge = try reader.readBytes()
             try reader.finish()
             guard !challenge.isEmpty, challenge.count <= maxChallenge else {
                 throw PluginError.invalidArgument
@@ -51,7 +51,7 @@ private struct WireReader {
         return UInt32(littleEndian: value)
     }
 
-    mutating func bytes() throws -> [UInt8] {
+    mutating func readBytes() throws -> [UInt8] {
         let count = Int(try u32())
         guard count >= 0, offset + count <= bytes.count else { throw PluginError.invalidArgument }
         let slice = Array(bytes[offset ..< offset + count])

@@ -1,6 +1,6 @@
 import CLeptosKitBridge
 import Foundation
-import LeptosKitDiagnostics
+@testable import LeptosKitDiagnostics
 import LeptosKitBridge
 import Testing
 

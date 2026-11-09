@@ -13,7 +13,7 @@ protocol MailComposerService {
 
 #if canImport(MessageUI) && os(iOS)
 @MainActor
-private final class SystemMailComposer: NSObject, MailComposerService, MFMailComposeViewControllerDelegate {
+private final class SystemMailComposer: NSObject, MailComposerService {
     var canSend: Bool { MFMailComposeViewController.canSendMail() }
     private var continuation: CheckedContinuation<Void, Error>?
 
@@ -35,7 +35,9 @@ private final class SystemMailComposer: NSObject, MailComposerService, MFMailCom
             owner.present(controller, animated: true)
         }
     }
+}
 
+extension SystemMailComposer: @MainActor MFMailComposeViewControllerDelegate {
     func mailComposeController(
         _ controller: MFMailComposeViewController,
         didFinishWith result: MFMailComposeResult,

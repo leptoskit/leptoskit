@@ -36,6 +36,33 @@ fn tool_home(name: &str) -> PathBuf {
 		.to_owned()
 }
 
+fn java_home() -> PathBuf {
+	if let Some(home) = std::env::var_os("JAVA_HOME") {
+		let home = PathBuf::from(home);
+		if home.join("bin").join("javac").is_file() {
+			return home;
+		}
+	}
+	tool_home("javac")
+}
+
+fn cxx_command() -> Command {
+	#[cfg(target_os = "macos")]
+	{
+		let mut command = Command::new("/usr/bin/xcrun");
+		command.args(["--sdk", "macosx", "clang++"]);
+		command
+	}
+	#[cfg(not(target_os = "macos"))]
+	{
+		let compiler = std::env::var_os("CXX")
+			.map(PathBuf::from)
+			.filter(|path| path.is_file())
+			.unwrap_or_else(|| PathBuf::from("c++"));
+		Command::new(compiler)
+	}
+}
+
 fn retain_artifacts(directory: &Path) {
 	let Some(destination) = std::env::var_os("LEPTOSKIT_JNI_TEST_ARTIFACT_DIR") else {
 		return;
@@ -51,34 +78,34 @@ fn retain_artifacts(directory: &Path) {
 }
 
 fn build_native_library(root: &Path, directory: &Path) {
-	let jdk = tool_home("javac");
+	let jdk = java_home();
 	let (platform, library, linking) = if cfg!(target_os = "macos") {
 		("darwin", "libasync_host_test.dylib", "-dynamiclib")
 	} else {
 		("linux", "libasync_host_test.so", "-shared")
 	};
 
-	succeeds(
-		Command::new("c++")
-			.args([
-				"-std=c++17",
-				"-Wall",
-				"-Wextra",
-				"-Werror",
-				"-fPIC",
-				"-pthread",
-			])
-			.arg(linking)
-			.arg("-I")
-			.arg(jdk.join("include"))
-			.arg("-I")
-			.arg(jdk.join("include").join(platform))
-			.arg(root.join("mobile/app.cpp"))
-			.arg(root.join("async-host-tests/async.cpp"))
-			.arg(root.join("async-host-tests/jni.cpp"))
-			.arg("-o")
-			.arg(directory.join(library)),
-	);
+	let mut command = cxx_command();
+	command
+		.args([
+			"-std=c++17",
+			"-Wall",
+			"-Wextra",
+			"-Werror",
+			"-fPIC",
+			"-pthread",
+		])
+		.arg(linking)
+		.arg("-I")
+		.arg(jdk.join("include"))
+		.arg("-I")
+		.arg(jdk.join("include").join(platform))
+		.arg(root.join("mobile/app.cpp"))
+		.arg(root.join("async-host-tests/async.cpp"))
+		.arg(root.join("async-host-tests/jni.cpp"))
+		.arg("-o")
+		.arg(directory.join(library));
+	succeeds(&mut command);
 }
 
 fn build_kotlin_jar(root: &Path, directory: &Path, coroutines: &Path) -> PathBuf {
