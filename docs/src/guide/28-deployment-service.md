@@ -67,7 +67,7 @@ If the service restarts during an operation, the journal marks it interrupted. C
 
 ## Keep analytics together
 
-Enable the app's [analytics package](27-analytics.md) and its infrastructure plugin. Service-managed releases automatically receive a project-specific ingestion credential and exporter endpoint. These credentials grant no deployment access. Query the fleet with:
+Enable the app's [route metrics](27-analytics.md) and its infrastructure plugin. Service-managed releases automatically receive a project-specific ingestion credential and exporter endpoint. These credentials grant no deployment access. Query the fleet with:
 
 ```sh
 lk infra analytics

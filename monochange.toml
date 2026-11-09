@@ -76,7 +76,7 @@ packages = [
 	"leptoskit_watchos",
 	"leptoskit_wearos",
 	"leptoskit_aria",
-	"leptoskit_analytics",
+	"leptoskit_apm",
 	"leptoskit_deploy_console",
 	"leptoskit_form",
 	"leptoskit_config",
@@ -322,8 +322,8 @@ type = "cargo"
 path = "crates/leptoskit_aria"
 type = "cargo"
 
-[package.leptoskit_analytics]
-path = "crates/leptoskit_analytics"
+[package.leptoskit_apm]
+path = "crates/leptoskit_apm"
 type = "cargo"
 
 [package.leptoskit_deploy_console]

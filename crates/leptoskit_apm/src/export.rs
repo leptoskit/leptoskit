@@ -192,5 +192,5 @@ pub fn otlp_metrics(snapshot: &Snapshot, sent_through: u64) -> serde_json::Value
 	.into_iter()
 	.map(|(key, value)| json!({"key":key,"value":{"stringValue":value}}))
 	.collect::<Vec<_>>();
-	json!({"resourceMetrics":[{"resource":{"attributes":attributes},"scopeMetrics":[{"scope":{"name":"leptoskit_analytics","version":env!("CARGO_PKG_VERSION")},"metrics":[{"name":"leptoskit.operation.duration","unit":"ms","histogram":{"aggregationTemporality":1,"dataPoints":points}}]}]}]})
+	json!({"resourceMetrics":[{"resource":{"attributes":attributes},"scopeMetrics":[{"scope":{"name":"leptoskit_apm","version":env!("CARGO_PKG_VERSION")},"metrics":[{"name":"leptoskit.operation.duration","unit":"ms","histogram":{"aggregationTemporality":1,"dataPoints":points}}]}]}]})
 }

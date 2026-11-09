@@ -195,7 +195,7 @@ pub struct InfraPlugins {
 	pub analytics: Option<InfraAnalytics>,
 }
 
-/// Bounded, in-process analytics. Requires the application's `analytics`
+/// Bounded, in-process route metrics. Requires the application's `apm`
 /// feature and the `LeptosKit` server entrypoint (or an explicit Axum mount).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

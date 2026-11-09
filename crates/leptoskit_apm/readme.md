@@ -1,20 +1,20 @@
-# leptoskit_analytics
+# leptoskit_apm
 
-<!-- {=analyticsSummary} -->
+<!-- {=apmSummary} -->
 
 See which application routes are failing or slow. The app keeps bounded minute aggregates and a small correlation buffer in memory. Connect the optional deployment service for durable fleet history, or use the per-process endpoint without an extra observability service. Unexported in-memory data resets on restart.
 
-<!-- {/analyticsSummary} -->
+<!-- {/apmSummary} -->
 
 The dependency-free core works with a caller-provided Unix clock, including native hosts. The `server` feature adds Axum request instrumentation, a protected JSON evidence API, explicit backend timers, and a small browser module.
 
 ```rust,ignore
-let (app, analytics) = leptoskit::analytics::server::mount(app, config)?;
+let (app, analytics) = leptoskit::apm::server::mount(app, config)?;
 // Serve app normally. config contains the resource identity, limits,
 // public origin, browser route allowlist, and a server-only read key.
 ```
 
-Enable `analytics` alongside `server` on the `leptoskit` dependency. The managed infra plugin configures the environment; `leptoskit::server::serve_listener_with` installs it when `LEPTOSKIT_ANALYTICS=1`. For a custom Axum entrypoint call `mount` explicitly, and avoid also enabling the automatic environment mount.
+Enable `apm` alongside `server` on the `leptoskit` dependency. The managed infra plugin configures the environment; `leptoskit::server::serve_listener_with` installs it when `LEPTOSKIT_ANALYTICS=1`. For a custom Axum entrypoint call `mount` explicitly, and avoid also enabling the automatic environment mount.
 
 Query `GET /_leptoskit/analytics` with `Authorization: Bearer <read-key>` over HTTPS. The response includes release, environment, instance, window counts, fixed latency histograms, collection loss, bounded recent trace contexts, limitations, and advisory backend-error findings. It never authorizes a scale or deployment operation. Each replica has a separate snapshot; a request through a load balancer does **not** produce a fleet total.
 
@@ -36,7 +36,7 @@ Use `server::Timer` to measure a database/RPC/job/live operation with an applica
 
 W3C version-00 `traceparent` is validated and continued with a fresh server span ID; only the trace ID is shared. No baggage or remote sampling decision is trusted. This provides request correlation; the read API has its own format version. The server also supports deployment-service export, OTLP/HTTP JSON metrics, and platform-dependent host samples. The connected service supplies durable fleet history and a dashboard. Pool metrics, Web Vitals, session replay, funnels and full trace export remain separate capabilities.
 
-Validation: `cargo test -p leptoskit_analytics --all-features` and `deno run crates/leptoskit_analytics/tests/browser.mjs` through the repository's devenv shell. The browser test uses mocked browser APIs; it is not a real-browser performance test.
+Validation: `cargo test -p leptoskit_apm --all-features` and `deno run crates/leptoskit_apm/tests/browser.mjs` through the repository's devenv shell. The browser test uses mocked browser APIs; it is not a real-browser performance test.
 
 ## Export to the deployment service
 

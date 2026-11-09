@@ -140,11 +140,17 @@ pub mod secrets {
 	pub use monosecret::client::*;
 }
 
-/// Application observability and agent-readable evidence.
-#[cfg(feature = "analytics")]
-pub mod analytics {
-	pub use leptoskit_analytics::*;
+/// Route metrics, request correlation, and agent-readable evidence, kept
+/// inside the app's own process.
+#[cfg(feature = "apm")]
+pub mod apm {
+	pub use leptoskit_apm::*;
 }
+
+/// The old name of [`apm`], kept for one release.
+#[cfg(feature = "apm")]
+#[doc(hidden)]
+pub use apm as analytics;
 
 pub mod plugin {
 	//! The plugin system.

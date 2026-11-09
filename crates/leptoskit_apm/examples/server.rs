@@ -1,10 +1,10 @@
 //! Run locally with a separate read key; never embed it in browser code.
 use axum::Router;
 use axum::routing::get;
-use leptoskit_analytics::Limits;
-use leptoskit_analytics::Resource;
-use leptoskit_analytics::server::ServerConfig;
-use leptoskit_analytics::server::{self};
+use leptoskit_apm::Limits;
+use leptoskit_apm::Resource;
+use leptoskit_apm::server::ServerConfig;
+use leptoskit_apm::server::{self};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

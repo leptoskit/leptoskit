@@ -1,5 +1,5 @@
 [package]
-name = "leptoskit_analytics"
+name = "leptoskit_apm"
 version = "0.3.0"
 authors.workspace = true
 edition.workspace = true

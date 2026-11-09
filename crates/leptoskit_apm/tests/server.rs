@@ -7,10 +7,10 @@ use axum::extract::Extension;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::routing::get;
-use leptoskit_analytics::server::ServerConfig;
-use leptoskit_analytics::server::Timer;
-use leptoskit_analytics::server::{self};
-use leptoskit_analytics::*;
+use leptoskit_apm::server::ServerConfig;
+use leptoskit_apm::server::Timer;
+use leptoskit_apm::server::{self};
+use leptoskit_apm::*;
 use tower::ServiceExt as _;
 
 const KEY: &str = "server-only-test-read-key-0123456789";
