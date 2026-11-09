@@ -44,6 +44,8 @@ pub mod navigators;
 mod params;
 mod pattern;
 mod router;
+#[cfg(feature = "ssr")]
+pub mod ssr;
 mod system_back;
 mod url;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]

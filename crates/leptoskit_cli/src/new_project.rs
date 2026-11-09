@@ -1214,6 +1214,7 @@ fn server_manifest(
 	}
 
 	let dependency = sdk_dependency("leptoskit", sdk, &features)?;
+	let router = sdk_dependency("leptoskit_router", sdk, &[])?;
 
 	let (database_member, database_dependency) = match db {
 		Some(_) => {
@@ -1244,12 +1245,13 @@ default-members = ["."]
 
 [features]
 default = ["ssr"]
-ssr = ["{name}_app/web", "{name}_app/ssr", "leptoskit/ssr"]
+ssr = ["{name}_app/web", "{name}_app/ssr", "leptoskit/ssr", "leptoskit_router/ssr"]
 
 [dependencies]
 {name}_app = {{ path = "{name}_app", default-features = false }}
 {name}_backend = {{ path = "{name}_backend" }}
 {database_dependency}leptoskit = {dependency}
+leptoskit_router = {router}
 
 [profile.release]
 lto = "thin"
@@ -1312,7 +1314,7 @@ linux = ["native", "leptoskit/linux"]
 tui = ["native", "leptoskit/tui"]
 csr = ["web", "leptos/csr"]
 hydrate = ["web", "leptos/hydrate"]
-ssr = ["web", "leptos/ssr"]
+ssr = ["web", "leptos/ssr", "leptoskit_router/ssr"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 

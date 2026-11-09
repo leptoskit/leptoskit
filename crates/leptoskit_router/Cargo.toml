@@ -13,6 +13,9 @@ rust-version.workspace = true
 description = "Typed file routes for leptoskit: the runtime behind the generated `Route` enum."
 
 [dependencies]
+leptos = { workspace = true, optional = true }
+leptos_axum = { workspace = true, optional = true }
+leptos_router = { workspace = true, optional = true }
 leptoskit_native = { workspace = true }
 leptoskit_router_macros = { workspace = true }
 reactive_graph = { workspace = true }
@@ -29,6 +32,8 @@ default = []
 # Keep the browser's address bar, back button and history in step with the
 # router. Only takes effect in wasm builds that run in a browser.
 web = ["dep:send_wrapper", "dep:wasm-bindgen", "dep:web-sys"]
+# Register file routes with `leptos_axum` and read the request URL on the server.
+ssr = ["dep:leptos", "dep:leptos_axum", "dep:leptos_router"]
 
 [dev-dependencies]
 leptoskit_yoga = { workspace = true }
