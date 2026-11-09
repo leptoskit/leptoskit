@@ -120,26 +120,13 @@ configure_nix
 
 # Login shells source /etc/profile.d. Non-login shells find the binaries
 # through the /usr/local/bin links below; Nix still reads nix.conf from $HOME.
-# The ncurses line is filled in after the shell exists: this image's libncurses
-# has no versioned symbols, and Nix's bash/readline warns if it binds that one.
-# Clippy denies that warning.
-write_profile() {
-	local ncurses_lib="${1:-}"
-	local ncurses_line=""
-	if [ -n "$ncurses_lib" ]; then
-		ncurses_line="export LD_LIBRARY_PATH=\"${ncurses_lib}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\""
-	fi
-	if sudo -n true 2>/dev/null; then
-		sudo tee /etc/profile.d/nix-devenv.sh >/dev/null <<EOF
-if [ -f "\${HOME}/.nix-profile/etc/profile.d/nix.sh" ]; then
-	. "\${HOME}/.nix-profile/etc/profile.d/nix.sh"
+if sudo -n true 2>/dev/null; then
+	sudo tee /etc/profile.d/nix-devenv.sh >/dev/null <<'EOF'
+if [ -f "${HOME}/.nix-profile/etc/profile.d/nix.sh" ]; then
+	. "${HOME}/.nix-profile/etc/profile.d/nix.sh"
 fi
-${ncurses_line}
 EOF
-	fi
-}
-
-write_profile ""
+fi
 
 install_profile_tool devenv devenv
 install_profile_tool cachix cachix
@@ -155,12 +142,4 @@ link_tool cachix
 # Build the pinned shell (GTK, rustup, linters, drivers) and fetch crates.
 # The toolchain in rust-toolchain.toml installs on the first rustc call.
 devenv shell -- true
-# Nix's bash links readline against libncursesw. Take that library's directory
-# so a host libncurses earlier on the loader path cannot satisfy it.
-ncurses_so="$(devenv shell -- bash -c 'ldd "$(command -v bash)"' | awk '/libncursesw\.so/{print $3; exit}')"
-ncurses_lib=""
-if [ -n "$ncurses_so" ]; then
-	ncurses_lib="$(dirname "$ncurses_so")"
-fi
-write_profile "$ncurses_lib"
 devenv shell -- install:all
