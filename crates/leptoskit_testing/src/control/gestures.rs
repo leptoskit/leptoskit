@@ -706,14 +706,9 @@ pub fn android_pinch(
 /// A coordinate is negative.
 pub fn xdotool_tap(x: i64, y: i64) -> Result<ToolPlan, Error> {
 	point(x, y)?;
-	Ok(xdotool(vec![
-		"mousemove".to_owned(),
-		"--sync".to_owned(),
-		x.to_string(),
-		y.to_string(),
-		"click".to_owned(),
-		"1".to_owned(),
-	]))
+	let mut args = pointer_move(x, y);
+	args.extend(["click".to_owned(), "1".to_owned()]);
+	Ok(xdotool(args))
 }
 
 /// `xdotool` arguments for a long press.
@@ -724,18 +719,16 @@ pub fn xdotool_tap(x: i64, y: i64) -> Result<ToolPlan, Error> {
 pub fn xdotool_long_press(x: i64, y: i64, duration_ms: u64) -> Result<ToolPlan, Error> {
 	point(x, y)?;
 	positive_duration(duration_ms)?;
-	Ok(xdotool(vec![
-		"mousemove".to_owned(),
-		"--sync".to_owned(),
-		x.to_string(),
-		y.to_string(),
+	let mut args = pointer_move(x, y);
+	args.extend([
 		"mousedown".to_owned(),
 		"1".to_owned(),
 		"sleep".to_owned(),
 		seconds(duration_ms),
 		"mouseup".to_owned(),
 		"1".to_owned(),
-	]))
+	]);
+	Ok(xdotool(args))
 }
 
 /// `xdotool` arguments for a pan.
@@ -750,20 +743,26 @@ pub fn xdotool_pan(start: Point, end: Point, duration_ms: u64) -> Result<ToolPla
 	// xdotool's drag has no duration; the move is still one pointer traveling
 	// the pan distance, which is what the arena measures.
 	let _ = duration_ms;
-	Ok(xdotool(vec![
-		"mousemove".to_owned(),
-		"--sync".to_owned(),
-		start.x.to_string(),
-		start.y.to_string(),
+	let mut args = pointer_move(start.x, start.y);
+	args.extend([
 		"mousedown".to_owned(),
 		"1".to_owned(),
 		"mousemove".to_owned(),
-		"--sync".to_owned(),
 		end.x.to_string(),
 		end.y.to_string(),
 		"mouseup".to_owned(),
 		"1".to_owned(),
-	]))
+	]);
+	Ok(xdotool(args))
+}
+
+/// A pointer move without `--sync`.
+///
+/// `xdotool mousemove --sync` waits for a motion event. When the pointer is
+/// already at that point the event never arrives, and the wait is about
+/// fifteen seconds, so the next gesture at the same point stalls the run.
+fn pointer_move(x: i64, y: i64) -> Vec<String> {
+	vec!["mousemove".to_owned(), x.to_string(), y.to_string()]
 }
 
 fn swipe_args(x1: i64, y1: i64, x2: i64, y2: i64, duration_ms: u64) -> Vec<String> {
@@ -1262,18 +1261,24 @@ mod tests {
 	}
 
 	#[test]
-	fn xdotool_names_its_points() {
+	fn xdotool_names_its_points_without_a_sync_wait() {
+		// `--sync` waits for a motion event. When the pointer is already at
+		// the point, that event never comes and xdotool sits for about
+		// fifteen seconds, so a second gesture at the same point stalls.
 		let tool = xdotool_tap(3, 4).unwrap();
 		assert!(matches!(tool, ToolPlan::Command { program, args, .. }
-			if program == "xdotool" && args[4] == "click"));
+			if program == "xdotool"
+				&& args == ["mousemove", "3", "4", "click", "1"]
+				&& !args.contains(&"--sync".to_owned())));
 		let hold = xdotool_long_press(3, 4, 600).unwrap();
-		assert!(
-			matches!(hold, ToolPlan::Command { args, .. } if args.contains(&"0.600".to_owned()))
-		);
+		assert!(matches!(hold, ToolPlan::Command { args, .. }
+			if args == ["mousemove", "3", "4", "mousedown", "1", "sleep", "0.600", "mouseup", "1"]
+				&& !args.contains(&"--sync".to_owned())));
 		let pan = xdotool_pan(Point { x: 3, y: 4 }, Point { x: 83, y: 4 }, 300).unwrap();
-		assert!(
-			matches!(pan, ToolPlan::Command { args, .. } if args.iter().any(|arg| arg == "83"))
-		);
+		assert!(matches!(pan, ToolPlan::Command { args, .. }
+			if args == [
+				"mousemove", "3", "4", "mousedown", "1", "mousemove", "83", "4", "mouseup", "1"
+			] && !args.contains(&"--sync".to_owned())));
 		assert!(xdotool_tap(-1, 0).is_err());
 		assert!(xdotool_long_press(0, 0, 0).is_err());
 		assert!(xdotool_pan(Point { x: 0, y: 0 }, Point { x: 1, y: 1 }, 0).is_err());

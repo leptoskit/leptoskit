@@ -219,19 +219,19 @@ fn collect(
 /// Spawns a detached process that outlives this run, for emulators a control
 /// document boots but no process owns.
 pub fn spawn_detached(command: &mut Command) -> Result<(), Error> {
+	spawn_detached_child(command).map(|_| ())
+}
+
+/// Spawns a detached process and returns it, so the caller can wait until a
+/// window appears without blocking on the process exiting.
+pub fn spawn_detached_child(command: &mut Command) -> Result<Child, Error> {
 	isolate(command);
 	command
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.map(|_| ())
-		.map_err(|error| {
-			Error::Tool {
-				name: command.get_program().to_string_lossy().into_owned(),
-				detail: format!("starting: {error}"),
-			}
-		})
+		.stderr(Stdio::null());
+	let name = command.get_program().to_string_lossy().into_owned();
+	spawn(command, &name)
 }
 
 fn isolate(command: &mut Command) {
