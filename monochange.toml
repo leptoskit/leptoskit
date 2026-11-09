@@ -246,12 +246,6 @@ include = "all"
 [changelog.types]
 perf = { bump = "patch", section = "perf", description = "A faster path with no behaviour change" }
 
-# GitHub rejects a release body above 125,000 characters. The root changelog
-# keeps the package, owner, and review metadata for every entry; the hosted
-# release notes omit it so a large lockstep release still fits.
-[changelog.release_notes]
-metadata_style = "omit"
-
 # =============================================================================
 # Cargo crates
 # =============================================================================
