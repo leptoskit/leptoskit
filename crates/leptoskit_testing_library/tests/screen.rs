@@ -169,7 +169,7 @@ fn failed_queries_explain_themselves_with_the_markup() {
 	assert!(missing.tree.contains("Inbox</h1>"), "{}", missing.tree);
 	assert!(!missing.tree.contains("<style"), "stylesheets are noise");
 	assert!(
-		!missing.tree.contains("data-lk-style"),
+		!missing.tree.contains("data-lk-style") && !missing.tree.contains("data-lk-root"),
 		"style scopes are noise"
 	);
 	assert!(
