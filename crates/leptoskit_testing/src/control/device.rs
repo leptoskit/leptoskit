@@ -2,7 +2,11 @@
 //! session at all.
 
 use std::collections::BTreeMap;
+use std::process::Child;
+use std::process::Command;
+use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use super::Error;
 use super::Point;
@@ -136,15 +140,24 @@ pub fn start_emulator(
 		)));
 	}
 
+	for existing in serials.iter().filter(|item| item.starts_with("emulator-")) {
+		if emulator_avd_name(existing).as_deref() == Some(avd) {
+			return Err(Error::Configuration(format!(
+				"{avd} is already running as {existing}"
+			)));
+		}
+	}
+
 	let mut command = tools::android_tool("emulator");
 	command
 		.args(["-avd", avd, "-port", &port.to_string(), "-no-audio"])
 		// Full snapshots would make two runs of one journey diverge.
 		.arg("-no-snapshot-save");
-	tools::spawn_detached(&mut command)?;
-	let mut ready = tools::adb(&serial);
-	ready.arg("wait-for-device");
-	super::tool(&mut ready, timeout)?;
+	let mut child = tools::spawn_detached_child(&mut command)?;
+	// `adb wait-for-device` blocks for the whole deadline even when the
+	// emulator process has already exited, which is how a locked AVD turns
+	// into a five-minute hang.
+	wait_for_emulator(&serial, &mut child, timeout)?;
 	let boot = "until [ \"$(getprop sys.boot_completed)\" = 1 ]; do sleep 1; done";
 	let mut completed = tools::adb(&serial);
 	completed.args([
@@ -153,6 +166,119 @@ pub fn start_emulator(
 	]);
 	super::tool(&mut completed, timeout)?;
 	Ok(())
+}
+
+/// How long to wait for an Android activity to take focus after `am start`.
+const ANDROID_FOCUS_GRACE: Duration = Duration::from_secs(2);
+
+/// How long to keep waiting after the focus line updates. On an API 35
+/// emulator the activity is named as the focused window a few hundred
+/// milliseconds before it accepts a tap, so the first gesture is dropped.
+const ANDROID_FOCUS_SETTLE: Duration = Duration::from_millis(500);
+
+/// Polls until `serial` is online, or the emulator process exits.
+fn wait_for_emulator(serial: &str, child: &mut Child, timeout: Duration) -> Result<(), Error> {
+	let deadline = Instant::now() + timeout;
+	loop {
+		match child.try_wait() {
+			Ok(Some(status)) => {
+				return Err(Error::Tool {
+					name: "emulator".to_owned(),
+					detail: format!("exited ({status}) before {serial} was ready"),
+				});
+			}
+			Ok(None) => {}
+			Err(error) => {
+				return Err(Error::Tool {
+					name: "emulator".to_owned(),
+					detail: error.to_string(),
+				});
+			}
+		}
+
+		if emulator_ready(serial) {
+			return Ok(());
+		}
+
+		if Instant::now() >= deadline {
+			return Err(Error::Tool {
+				name: "emulator".to_owned(),
+				detail: format!(
+					"{serial} was not ready within {} seconds",
+					timeout.as_secs()
+				),
+			});
+		}
+
+		thread::sleep(Duration::from_millis(200));
+	}
+}
+
+fn emulator_ready(serial: &str) -> bool {
+	let mut command = tools::adb(serial);
+	command.arg("get-state");
+	match tools::run(&mut command, Duration::from_secs(2)) {
+		Ok(output) => output.success() && output.stdout.trim() == "device",
+		Err(_) => false,
+	}
+}
+
+/// The name `adb emu avd name` prints, before its trailing `OK`.
+fn parse_emulator_avd_name(stdout: &str) -> Option<&str> {
+	stdout
+		.lines()
+		.map(str::trim)
+		.find(|line| !line.is_empty() && *line != "OK")
+}
+
+fn emulator_avd_name(serial: &str) -> Option<String> {
+	let mut command = tools::adb(serial);
+	command.args(["emu", "avd", "name"]);
+	let output = tools::run(&mut command, Duration::from_secs(3)).ok()?;
+	parse_emulator_avd_name(&output.stdout).map(str::to_owned)
+}
+
+/// Waits until `package` is the focused window, or `grace` passes.
+fn wait_until_focused(serial: &str, package: &str, grace: Duration) {
+	let deadline = Instant::now() + grace;
+	loop {
+		if android_window_focused(serial, package) {
+			thread::sleep(ANDROID_FOCUS_SETTLE);
+			return;
+		}
+
+		if Instant::now() >= deadline {
+			return;
+		}
+
+		thread::sleep(Duration::from_millis(50));
+	}
+}
+
+fn android_window_focused(serial: &str, package: &str) -> bool {
+	let mut command = tools::adb(serial);
+	command.args(["shell", "dumpsys", "window"]);
+	let Ok(output) = tools::run(&mut command, Duration::from_secs(2)) else {
+		return false;
+	};
+	window_focus_contains(&output.stdout, package)
+}
+
+fn package_of(identifier: &str) -> &str {
+	identifier
+		.split('/')
+		.next()
+		.filter(|name| !name.is_empty())
+		.unwrap_or(identifier)
+}
+
+/// Whether `dump` from `dumpsys window` shows `package` as the focused window.
+fn window_focus_contains(dump: &str, package: &str) -> bool {
+	let marker = format!("{package}/");
+	dump.lines().any(|line| {
+		let line = line.trim();
+		line.starts_with("mCurrentFocus=") && line.contains(&marker)
+	})
 }
 
 /// Launches an installed app and returns the tool's output, which carries
@@ -205,7 +331,11 @@ pub fn start_app(
 			command
 				.args(["shell", "am", "start", "-n", &component])
 				.args(arguments);
-			Ok(super::tool(&mut command, timeout)?.stdout)
+			let launched = super::tool(&mut command, timeout)?.stdout;
+			// `am start -W` can return while the launcher is still focused.
+			// A gesture injected in that gap never reaches the app.
+			wait_until_focused(id, package_of(identifier), timeout.min(ANDROID_FOCUS_GRACE));
+			Ok(launched)
 		}
 		kind => {
 			Err(Error::Configuration(format!(
@@ -459,7 +589,8 @@ pub fn open_app(target: &Target, identifier: &str, timeout: Duration) -> Result<
 		TargetKind::IosSimulator | TargetKind::IosDevice | TargetKind::Android => {
 			start_app(target, identifier, &[], &BTreeMap::new(), timeout)
 		}
-		TargetKind::Macos | TargetKind::Linux | TargetKind::Windows => {
+		TargetKind::Linux => open_linux(identifier, timeout),
+		TargetKind::Macos | TargetKind::Windows => {
 			run_plan(
 				&super::gestures::open_plan(target.kind, identifier)?,
 				timeout,
@@ -471,6 +602,83 @@ pub fn open_app(target: &Target, identifier: &str, timeout: Duration) -> Result<
 			))
 		}
 	}
+}
+
+/// How long a Linux open waits for a visible window before gestures run.
+const LINUX_WINDOW_GRACE: Duration = Duration::from_secs(2);
+
+/// Launches a Linux binary and waits until one of its windows is visible, the
+/// process exits, or [`LINUX_WINDOW_GRACE`] passes.
+fn open_linux(identifier: &str, timeout: Duration) -> Result<String, Error> {
+	open_linux_waiting(identifier, timeout, LINUX_WINDOW_GRACE)
+}
+
+/// Launches a Linux binary. `grace` is how long to wait for a visible window
+/// when the process stays up. A process that exits has no window to wait for.
+fn open_linux_waiting(
+	identifier: &str,
+	timeout: Duration,
+	grace: Duration,
+) -> Result<String, Error> {
+	let plan = super::gestures::open_plan(TargetKind::Linux, identifier)?;
+	let super::gestures::ToolPlan::Command {
+		program,
+		args,
+		detach: true,
+	} = plan
+	else {
+		return Err(Error::Configuration(
+			"linux apps open as a detached path".to_owned(),
+		));
+	};
+	let mut command = Command::new(program);
+	command.args(args);
+	let mut child = tools::spawn_detached_child(&mut command)?;
+	let pid = child.id();
+	let deadline = Instant::now() + grace.min(timeout);
+	loop {
+		if linux_window_visible(pid) {
+			break;
+		}
+
+		match child.try_wait() {
+			Ok(Some(_)) => break,
+			Ok(None) if Instant::now() >= deadline => break,
+			Ok(None) => thread::sleep(Duration::from_millis(20)),
+			Err(error) => {
+				return Err(Error::Tool {
+					name: identifier.to_owned(),
+					detail: error.to_string(),
+				});
+			}
+		}
+	}
+
+	Ok(format!("pid {pid}"))
+}
+
+/// Whether `pid` has a visible window. Activates the first one so a following
+/// pointer gesture hits that app.
+fn linux_window_visible(pid: u32) -> bool {
+	let Ok(output) = Command::new("xdotool")
+		.args(["search", "--pid", &pid.to_string(), "--onlyvisible"])
+		.output()
+	else {
+		return false;
+	};
+	let text = String::from_utf8_lossy(&output.stdout);
+	let Some(id) = text.split_whitespace().next() else {
+		return false;
+	};
+
+	if id.is_empty() {
+		return false;
+	}
+
+	let _ = Command::new("xdotool")
+		.args(["windowactivate", id])
+		.status();
+	true
 }
 
 /// Taps with `adb` or `xdotool`.
@@ -598,7 +806,7 @@ pub(super) fn run_plan(
 			args,
 			detach: true,
 		} => {
-			let mut command = std::process::Command::new(program);
+			let mut command = Command::new(program);
 			command.args(args);
 			tools::spawn_detached(&mut command)?;
 			Ok(String::new())
@@ -608,7 +816,7 @@ pub(super) fn run_plan(
 			args,
 			detach: false,
 		} => {
-			let mut command = std::process::Command::new(program);
+			let mut command = Command::new(program);
 			command.args(args);
 			Ok(super::tool(&mut command, timeout)?.stdout)
 		}
@@ -817,6 +1025,40 @@ mod plan_tests {
 			)
 			.is_err()
 		);
+		// A program that stays up without a window must not return before the
+		// grace: gestures injected the moment `open` returns land on the
+		// desktop, because the window is not mapped yet.
+		#[cfg(unix)]
+		{
+			let directory =
+				std::env::temp_dir().join(format!("leptoskit-open-{}", std::process::id()));
+			std::fs::create_dir_all(&directory).unwrap();
+			let path = directory.join("stay");
+			std::fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::PermissionsExt;
+				std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+			}
+			let started = std::time::Instant::now();
+			let launched = super::open_linux_waiting(
+				&path.to_string_lossy(),
+				Duration::from_secs(5),
+				Duration::from_millis(200),
+			)
+			.unwrap();
+			let elapsed = started.elapsed();
+			if let Some(pid) = launched.strip_prefix("pid ") {
+				let _ = std::process::Command::new("kill").arg(pid).status();
+			}
+			assert!(
+				elapsed >= Duration::from_millis(150),
+				"open returned in {elapsed:?}, before a window could map"
+			);
+			assert!(elapsed < Duration::from_secs(1), "open waited {elapsed:?}");
+			let _ = std::fs::remove_dir_all(&directory);
+		}
+
 		// A program that exits immediately: spawning it is the launch itself.
 		let launched = open_app(
 			&target(TargetKind::Linux, None),
@@ -916,5 +1158,42 @@ mod plan_tests {
 		assert!(inject_pinch(&android, 40, 40, 20, 40, 300, timeout).is_err());
 		assert!(inject_tap(&target(TargetKind::Android, None), 1, 1, timeout).is_err());
 		assert!(inject_tap(&linux, -1, 1, timeout).is_err());
+	}
+
+	#[test]
+	fn window_focus_matches_the_package_component() {
+		let focused =
+			"mCurrentFocus=Window{abc u0 dev.leptoskit.sanity/dev.leptoskit.sanity.MainActivity}\n";
+		assert!(super::window_focus_contains(
+			focused,
+			"dev.leptoskit.sanity"
+		));
+		assert!(!super::window_focus_contains(focused, "dev.other"));
+		assert!(!super::window_focus_contains(
+			"mCurrentFocus=Window{abc u0 com.android.launcher3/com.android.launcher3.Launcher}\n",
+			"dev.leptoskit.sanity",
+		));
+		assert_eq!(super::parse_emulator_avd_name("api35\nOK\n"), Some("api35"));
+		assert_eq!(super::parse_emulator_avd_name("OK\n"), None);
+		assert_eq!(super::parse_emulator_avd_name(""), None);
+		assert_eq!(super::package_of("dev.app/.Main"), "dev.app");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn an_emulator_process_that_exits_is_not_waited_out() {
+		let mut child = std::process::Command::new("true").spawn().unwrap();
+		let give_up = std::time::Instant::now() + Duration::from_secs(2);
+		while child.try_wait().unwrap().is_none() && std::time::Instant::now() < give_up {
+			std::thread::sleep(Duration::from_millis(10));
+		}
+		let started = std::time::Instant::now();
+		let error = super::wait_for_emulator("emulator-5554", &mut child, Duration::from_secs(30));
+		assert!(error.is_err(), "{error:?}");
+		assert!(
+			started.elapsed() < Duration::from_secs(2),
+			"waited {:?}",
+			started.elapsed()
+		);
 	}
 }
