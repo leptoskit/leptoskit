@@ -1246,6 +1246,12 @@ pub struct NativeConfig {
 		skip_serializing_if = "std::ops::Not::not"
 	)]
 	pub experimental_rust_plugins: bool,
+	/// The most detailed records the runtime writes to the platform's log
+	/// (logcat, the unified log, standard error, or the browser console).
+	/// Unset, a debug build logs `info` and above and a release build `warn`
+	/// and above. Records never leave the device.
+	#[serde(rename = "log-level", skip_serializing_if = "Option::is_none")]
+	pub log_level: Option<LogLevel>,
 	/// The reverse-domain application id used by platform shells, such as
 	/// `com.example.counter`.
 	///
@@ -1299,6 +1305,7 @@ impl Default for NativeConfig {
 			plugin_options: BTreeMap::new(),
 			missing_plugins: MissingPlugins::default(),
 			experimental_rust_plugins: false,
+			log_level: None,
 			package_id: String::new(),
 			apple_team_id: None,
 			android_certificates: Vec::new(),
@@ -1647,6 +1654,45 @@ impl MissingPlugins {
 	#[allow(clippy::trivially_copy_pass_by_ref)]
 	fn is_default(&self) -> bool {
 		*self == Self::default()
+	}
+}
+
+/// The most detailed level of record the runtime writes to the platform's
+/// log, from `[native] log-level`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+	/// Nothing.
+	Off,
+	/// Failures only.
+	Error,
+	/// Failures, and what the runtime worked around.
+	Warn,
+	/// Also the app's lifecycle: creation, plugins, the first commit, pause
+	/// and resume.
+	Info,
+	/// Also routine detail, such as surface resizes and cancelled calls.
+	Debug,
+	/// Everything.
+	Trace,
+}
+
+impl LogLevel {
+	/// The compile-time variable `leptoskit_log` reads the level from, which
+	/// the CLI sets on every build of the runtime.
+	pub const VARIABLE: &str = "LEPTOSKIT_LOG_LEVEL";
+
+	/// The level's name, as `leptoskit.toml` and the `log` crate spell it.
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Off => "off",
+			Self::Error => "error",
+			Self::Warn => "warn",
+			Self::Info => "info",
+			Self::Debug => "debug",
+			Self::Trace => "trace",
+		}
 	}
 }
 

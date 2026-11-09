@@ -21,6 +21,7 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::Plugin;
 use leptoskit_bridge::PluginId;
 use leptoskit_bridge::Reply;
+use leptoskit_log::target;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_native::Mutation;
 use leptoskit_native::NativeEvent;
@@ -231,6 +232,7 @@ pub struct App {
 impl App {
 	/// Loads a guest without running it. Install plugins before starting.
 	pub fn new(wasm: &[u8]) -> Result<Self, leptoskit_wasm::WasmError> {
+		leptoskit_log::install();
 		let backend = HeadlessBackend::new();
 		// Layout measures text with the platform's own fonts so the boxes it
 		// gives labels and buttons match what the native views draw.
@@ -283,7 +285,10 @@ impl App {
 		if let Some(plugin) = app.devtools.as_ref().map(devtools::Devtools::plugin)
 			&& let Err(error) = app.install_async(plugin)
 		{
-			eprintln!("leptoskit devtools: the guest's values can't be reported: {error:?}");
+			log::warn!(
+				target: target::BRIDGE,
+				"DevTools can't report the guest's values: {error:?}"
+			);
 		}
 
 		Ok(app)
@@ -390,7 +395,7 @@ impl App {
 		let work = match service.poll(host, reason) {
 			Ok(work) => work,
 			Err(error) => {
-				self.error = format!("application service: {error:?}");
+				self.fail(format!("application service: {error:?}"));
 				return Err(error);
 			}
 		};
@@ -467,7 +472,7 @@ impl App {
 		match result {
 			Ok(()) => Ok(()),
 			Err(error) => {
-				self.error = format!("enable timers: {error}");
+				self.fail(format!("enable timers: {error}"));
 				Err(Error::Native)
 			}
 		}
@@ -602,13 +607,26 @@ impl App {
 		self.install_async(Arc::new(leptoskit_3d::host::Scene3dPlugin::new()))
 	}
 
+	/// Records why the app failed, for [`lk_app_error`] and the guest
+	/// thread's error, and logs it. The same failure reported again, as a
+	/// rejected render is on every later call, is logged once.
+	fn fail(&mut self, message: impl Into<String>) {
+		let message = message.into();
+
+		if message != self.error {
+			log::error!(target: target::BRIDGE, "{message}");
+		}
+
+		self.error = message;
+	}
+
 	fn record(&mut self, result: Result<(), leptoskit_wasm::WasmError>) -> i32 {
 		if self.render_failed {
 			return -1;
 		}
 
 		if let Some(error) = self.host_mut().render_error() {
-			self.error = error.into();
+			self.fail(error);
 
 			return -1;
 		}
@@ -619,7 +637,7 @@ impl App {
 				0
 			}
 			Err(error) => {
-				self.error = error.to_string();
+				self.fail(error.to_string());
 				-1
 			}
 		}
@@ -636,12 +654,13 @@ impl App {
 			)
 			|| !valid_viewport(width, height)
 		{
-			self.error = "invalid viewport or application already started".into();
+			self.fail("invalid viewport or application already started");
 
 			return -1;
 		}
 
 		self.started = true;
+		log::info!(target: target::BRIDGE, "starting the guest at {width}×{height}");
 		let result = self.host_mut().start(width, height);
 		self.record(result)
 	}
@@ -649,7 +668,7 @@ impl App {
 	/// Lays the screen out again for a new viewport or appearance.
 	fn resize(&mut self, width: f32, height: f32, dark: bool) -> i32 {
 		if !self.started || !valid_viewport(width, height) {
-			self.error = "cannot resize before start or with an invalid viewport".into();
+			self.fail("cannot resize before start or with an invalid viewport");
 
 			return -1;
 		}
@@ -685,7 +704,7 @@ impl App {
 	/// the guest run.
 	fn deliver_frame(&mut self, frame: leptoskit_bridge::frame::Frame) -> i32 {
 		if let Err(error) = self.frame(frame) {
-			self.error = format!("deliver a display frame: {error:?}");
+			self.fail(format!("deliver a display frame: {error:?}"));
 
 			return -1;
 		}
@@ -735,7 +754,14 @@ impl App {
 				// This runs on the platform's UI thread under an `extern "C"`
 				// entry point, where unwinding would abort the app. The
 				// plugin's state is unknown, so it answers no more calls,
-				// like a worker plugin whose mutex a panic poisoned.
+				// like a worker plugin whose mutex a panic poisoned. The panic
+				// hook has logged where it panicked.
+				log::error!(
+					target: &target::plugin(name),
+					"plugin `{name}` panicked in call #{} method {}; it answers no more calls",
+					request.id.0,
+					request.method.0,
+				);
 				let failed = self
 					.plugins
 					.insert(request.plugin.0, Box::new(FailedPlugin { name, methods }));
@@ -744,7 +770,7 @@ impl App {
 			});
 
 			if let Err(error) = self.host_mut().plugins().complete(request.id, reply) {
-				self.error = format!("complete Rust plugin: {error:?}");
+				self.fail(format!("complete Rust plugin: {error:?}"));
 
 				return Err(());
 			}
@@ -1038,8 +1064,13 @@ pub unsafe fn create(
 	};
 
 	match result {
-		Ok(app) => Box::into_raw(Box::new(app)),
+		Ok(app) => {
+			log::info!(target: target::BRIDGE, "created the app from {len} bytes of Wasm");
+			Box::into_raw(Box::new(app))
+		}
 		Err(message) => {
+			leptoskit_log::install();
+			log::error!(target: target::BRIDGE, "cannot create the app: {message}");
 			// SAFETY: Caller provides writable output storage.
 			unsafe {
 				error.write(Buffer::new(message.into()));
@@ -1121,7 +1152,7 @@ pub unsafe extern "C" fn lk_app_event(
 	match unsafe { decode_event(kind, text, len) } {
 		Ok(event) => app.dispatch_event(node, &event),
 		Err(error) => {
-			app.error = error.into();
+			app.fail(error);
 			-1
 		}
 	}
@@ -1326,7 +1357,7 @@ pub unsafe extern "C" fn lk_app_enable_frames(app: *mut App) -> i32 {
 	match app.enable_frames() {
 		Ok(()) => 0,
 		Err(error) => {
-			app.error = format!("enable the frame clock: {error:?}");
+			app.fail(format!("enable the frame clock: {error:?}"));
 			-1
 		}
 	}
@@ -1442,7 +1473,7 @@ impl App {
 		}
 
 		if let Some(error) = self.host_mut().render_error() {
-			self.error = error.into();
+			self.fail(error);
 			self.render_failed = true;
 
 			return None;
@@ -1466,10 +1497,20 @@ impl App {
 			Ok(bytes) => bytes,
 			Err(error) => {
 				self.render_failed = true;
-				self.error = error;
+				self.fail(format!("encode the render transaction: {error}"));
 				return None;
 			}
 		};
+
+		if self.rendered_root.is_none() && root.is_some() {
+			log::info!(
+				target: target::RENDER,
+				"first commit: {} bytes changing the native views {} time{}",
+				bytes.len(),
+				mutations.len(),
+				if mutations.len() == 1 { "" } else { "s" }
+			);
+		}
 
 		self.rendered_root = root;
 

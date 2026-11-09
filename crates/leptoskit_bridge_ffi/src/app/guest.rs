@@ -477,7 +477,9 @@ pub unsafe extern "C" fn lk_guest_event(
 			0
 		}
 		Err(error) => {
-			guest.shared.fail(error.into());
+			let message = format!("event {kind} for view {node}: {error}");
+			log::error!(target: leptoskit_log::target::BRIDGE, "{message}");
+			guest.shared.fail(message);
 			-1
 		}
 	}
@@ -849,8 +851,14 @@ fn run(app: &mut App, shared: &Shared) {
 				shared.fail(message);
 				false
 			}
-			Err(_) => {
-				shared.fail("the guest thread panicked".into());
+			Err(panic) => {
+				// The panic hook logged where; this says what it stopped.
+				let message = format!(
+					"the guest thread panicked: {}",
+					panic_message(panic.as_ref())
+				);
+				log::error!(target: leptoskit_log::target::BRIDGE, "{message}");
+				shared.fail(message);
 				false
 			}
 		};
@@ -860,6 +868,15 @@ fn run(app: &mut App, shared: &Shared) {
 	if let Some(host) = app.host.as_mut() {
 		let _ = std::panic::catch_unwind(AssertUnwindSafe(|| host.release_rive_players()));
 	}
+}
+
+/// What a caught panic said.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+	payload
+		.downcast_ref::<&str>()
+		.copied()
+		.or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+		.unwrap_or("a panic without a message")
 }
 
 /// Runs one batch of commands and the frame, then does what a UI-thread pump
@@ -913,7 +930,7 @@ fn step(
 						0
 					}
 					Err(error) => {
-						app.error = error.to_string();
+						app.fail(format!("Rive: {error}"));
 						-1
 					}
 				}
@@ -1035,7 +1052,7 @@ fn woken(app: &mut App, completed: Result<(), Error>) -> i32 {
 		}
 		Err(Error::InvalidCall) => 0,
 		Err(error) => {
-			app.error = format!("complete a platform plugin call: {error:?}");
+			app.fail(format!("complete a platform plugin call: {error:?}"));
 			-1
 		}
 	}

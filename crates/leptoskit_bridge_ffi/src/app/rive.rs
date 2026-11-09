@@ -107,7 +107,7 @@ pub unsafe extern "C" fn lk_app_rive_tick(
 		return -1;
 	};
 	let (Some(visible), Some(present)) = (visible, present) else {
-		app.error = "native Rive callbacks are required".into();
+		app.fail("native Rive callbacks are required");
 
 		return -1;
 	};
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn lk_app_rive_tick(
 		|| scale <= 0.0
 		|| flags & !3 != 0
 	{
-		app.error = "invalid native Rive display environment".into();
+		app.fail("invalid native Rive display environment");
 
 		return -1;
 	}
@@ -145,11 +145,11 @@ pub unsafe extern "C" fn lk_app_rive_tick(
 		}
 
 		Ok(_) => {
-			app.error = "native Rive visibility adapter failed".into();
+			app.fail("native Rive visibility adapter failed");
 			-1
 		}
 		Err(error) => {
-			app.error = error.to_string();
+			app.fail(format!("Rive: {error}"));
 			-1
 		}
 	}

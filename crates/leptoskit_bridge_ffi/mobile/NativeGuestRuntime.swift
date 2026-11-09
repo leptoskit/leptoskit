@@ -37,6 +37,7 @@ final class NativeGuestRuntime {
         wasm: Data, identifier: String?, owner: NativePresentationOwner,
         register: (OpaquePointer, NativeDispatcher, NativePluginContext) throws -> Void
     ) throws {
+        NativeLog.followLifecycle()
         pluginContext = NativePluginContext(owner: owner)
         let app = try NativeAppFactory.create(
             wasm: wasm, identifier: identifier, pluginContext: pluginContext
@@ -46,9 +47,9 @@ final class NativeGuestRuntime {
         guard lk_app_enable_frames(app.raw) == 0 else { throw PluginError.native }
         // Timers are optional: an unavailable timer leaves the guest with
         // `Unavailable` rather than failing the whole app.
-        if lk_app_enable_timers(app.raw) != 0 { NSLog("LeptosKit: timers unavailable") }
+        if lk_app_enable_timers(app.raw) != 0 { NativeLog.warn(NativeLog.bridge, "timers are unavailable") }
         // 3D scenes, when the app was built with them (`lk_app_enable_scene3d` answers 0 otherwise).
-        if lk_app_enable_scene3d(app.raw) < 0 { NSLog("LeptosKit: 3D scenes unavailable") }
+        if lk_app_enable_scene3d(app.raw) < 0 { NativeLog.warn(NativeLog.gpu, "3D scenes are unavailable") }
         app.onWake = { [weak self] in self?.wake() }
         requests.onCapacity = { [weak self] in self?.takeRequests() }
         requests.onCompletion = { [weak self] id, result in self?.finishRequest(id: id, result: result) }
@@ -102,7 +103,9 @@ final class NativeGuestRuntime {
         requests.close()
         pluginContext.invalidate()
 
-        if let guest, lk_guest_stop(guest) != 0 { NSLog("LeptosKit guest thread stopped abnormally") }
+        if let guest, lk_guest_stop(guest) != 0 {
+            NativeLog.warn(NativeLog.bridge, "the guest thread stopped abnormally")
+        }
 
         guest = nil
 
@@ -226,7 +229,9 @@ final class NativeGuestRuntime {
         case .native(.failure(let error)):
             let code = (error as? PluginError)?.rawValue ?? PluginError.native.rawValue
 
-            if !(error is PluginError) { NSLog("LeptosKit plugin: %@", error.localizedDescription) }
+            if !(error is PluginError) {
+                NativeLog.error(NativeLog.bridge, "call #\(id) to a native plugin threw", error)
+            }
             _ = lk_guest_complete(guest, id, code, nil, 0)
         }
     }

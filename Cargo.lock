@@ -5154,6 +5154,8 @@ dependencies = [
  "half",
  "js-sys",
  "leptoskit_bridge",
+ "leptoskit_log",
+ "log",
  "png 0.17.16",
  "pollster",
  "serde",
@@ -5388,6 +5390,8 @@ version = "0.3.0"
 dependencies = [
  "bytes",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
+ "log",
  "thiserror 2.0.21",
  "tokio-util",
 ]
@@ -5404,12 +5408,14 @@ dependencies = [
  "leptoskit_codepush",
  "leptoskit_devtools",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_plugin_devtools",
  "leptoskit_rive",
  "leptoskit_uikit",
  "leptoskit_wasm",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
@@ -5556,6 +5562,7 @@ version = "0.3.0"
 dependencies = [
  "insta",
  "jsonschema",
+ "log",
  "schemars",
  "semver",
  "serde",
@@ -5909,6 +5916,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_log"
+version = "0.3.0"
+dependencies = [
+ "cc",
+ "leptoskit_log",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "leptoskit_macros"
 version = "0.3.0"
 dependencies = [
@@ -5943,6 +5961,7 @@ dependencies = [
  "leptoskit_3d",
  "leptoskit_animation",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
@@ -7279,11 +7298,14 @@ name = "leptoskit_wasm"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_rive",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror 2.0.21",
  "wasmi",
  "wasmi_core",

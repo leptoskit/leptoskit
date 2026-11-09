@@ -73,6 +73,6 @@ final class NativeDevelopmentGuests: @unchecked Sendable {
     }
 
     private static func report(_ diagnostic: NativeBuffer) {
-        NSLog("leptoskit dev: %@", (try? diagnostic.utf8()) ?? "unreadable diagnostic")
+        NativeLog.warn(NativeLog.bridge, "leptoskit dev: \((try? diagnostic.utf8()) ?? "unreadable diagnostic")")
     }
 }

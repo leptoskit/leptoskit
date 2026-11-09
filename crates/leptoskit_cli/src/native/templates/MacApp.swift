@@ -54,6 +54,7 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.controller = controller
             window.contentViewController = controller
         } catch {
+            NativeLog.error(NativeLog.bridge, "cannot start the app", error)
             let label = NSTextField(wrappingLabelWithString: error.localizedDescription)
             label.setAccessibilityIdentifier("leptoskit-error")
             label.frame = window.contentLayoutRect

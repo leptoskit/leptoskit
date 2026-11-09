@@ -17,9 +17,11 @@ crate-type = ["rlib", "staticlib"]
 futures = { workspace = true, optional = true }
 leptoskit_bridge = { workspace = true }
 leptoskit_codepush = { workspace = true, features = ["http"], optional = true }
+leptoskit_log = { workspace = true }
 leptoskit_native = { workspace = true, features = ["serde"], optional = true }
 leptoskit_wasm = { workspace = true, optional = true }
 leptoskit_yoga = { workspace = true, optional = true }
+log = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"], optional = true }
@@ -74,6 +76,7 @@ leptoskit_uikit = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+leptoskit_log = { workspace = true, features = ["testing"] }
 leptoskit_rive = { workspace = true }
 tempfile = { workspace = true }
 

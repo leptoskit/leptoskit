@@ -614,6 +614,8 @@ fn host_library_command(
 		host.args(["--features", &features.join(",")]);
 	}
 
+	set_log_level(&mut host, config);
+
 	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
 
@@ -1311,6 +1313,15 @@ pub(crate) const DEBUG_HOST_ARGUMENTS: &[&str] = &[
 	"--config",
 	"profile.dev.package.wasmi.debug-assertions=false",
 ];
+
+/// Hands `[native] log-level` to the runtime's logger, which reads it when
+/// it is compiled. Unset, the runtime logs `info` in a debug build and
+/// `warn` in a release build.
+pub(crate) fn set_log_level(command: &mut Command, config: &LeptoskitConfig) {
+	if let Some(level) = config.native.log_level {
+		command.env(leptoskit_config::LogLevel::VARIABLE, level.as_str());
+	}
+}
 
 /// The profile arguments a release cargo build takes: `--release`, or
 /// `--profile <name>` with the `--config` entries defining the profile.
@@ -2705,6 +2716,37 @@ mod tests {
 			}),
 			"{harmony_environment:?}"
 		);
+	}
+
+	#[test]
+	fn host_library_builds_carry_the_configured_log_level() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let build_dir = root.join("target");
+		let registry = host_registry();
+		let level = |config: &LeptoskitConfig| {
+			let host = host_library_command(
+				root,
+				config,
+				&registry,
+				Target::Macos,
+				false,
+				&build_dir,
+				None,
+			)
+			.unwrap();
+			environment(&host)
+				.into_iter()
+				.find(|(key, _)| key == leptoskit_config::LogLevel::VARIABLE)
+				.map(|(_, value)| value)
+		};
+
+		// Unset, the runtime picks the level from the build.
+		assert_eq!(level(&LeptoskitConfig::default()), None);
+
+		let mut config = LeptoskitConfig::default();
+		config.native.log_level = Some(leptoskit_config::LogLevel::Debug);
+		assert_eq!(level(&config).as_deref(), Some("debug"));
 	}
 
 	#[test]

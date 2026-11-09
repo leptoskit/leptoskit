@@ -1,11 +1,12 @@
 package dev.leptoskit.mobile
 
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.graphics.Color
 import android.os.Build
+import android.os.Bundle
 import android.os.Looper
-import android.util.Log
 import android.view.View
 import android.view.Window
 import android.view.WindowInsetsController
@@ -69,6 +70,12 @@ class LeptosKitApplicationView(
     private val lifecycle = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val closeCompletion = CompletableDeferred<Unit>()
     private val transitions = mutableSetOf<Job>()
+
+    /** Breadcrumbs for the activity's pause and resume, for reading a failure's log. */
+    private val lifecycleLog =
+        (context as? Activity)?.let { activity ->
+            ActivityLifecycleLog(activity).also { activity.application.registerActivityLifecycleCallbacks(it) }
+        }
 
     private fun transition(block: suspend () -> Unit) {
         val task = lifecycle.launch { block() }
@@ -167,6 +174,7 @@ class LeptosKitApplicationView(
         prefix: String,
         error: Throwable,
     ) {
+        NativeLog.error(NativeLog.BRIDGE, prefix, error)
         setBusy(false, "$prefix: ${NativeApplicationTeardown.message(error)}")
     }
 
@@ -462,8 +470,8 @@ class LeptosKitApplicationView(
         view.alpha = 1f
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         view.bringToFront()
-        Log.i("LeptosKit", "leptoskit dev: reloaded")
-        cleanup?.let { Log.w("LeptosKit", "leptoskit dev: previous guest cleanup: ${NativeApplicationTeardown.message(it)}") }
+        NativeLog.info(NativeLog.BRIDGE, "leptoskit dev: reloaded")
+        cleanup?.let { NativeLog.warn(NativeLog.BRIDGE, "leptoskit dev: previous guest cleanup", it) }
     }
 
     /** A candidate that fails keeps the running guest; a running guest that fails shows why. */
@@ -494,7 +502,7 @@ class LeptosKitApplicationView(
 
     private fun reportDevelopment(error: Throwable) {
         val message = "leptoskit dev: ${NativeApplicationTeardown.message(error)}"
-        Log.w("LeptosKit", message)
+        NativeLog.error(NativeLog.BRIDGE, "leptoskit dev", error)
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 
@@ -510,6 +518,7 @@ class LeptosKitApplicationView(
 
         if (closed) return
         closed = true
+        lifecycleLog?.let { it.activity.application.unregisterActivityLifecycleCallbacks(it) }
         development?.close()
         development = null
         ++generation
@@ -595,4 +604,33 @@ private fun Window.useLightSystemBars(light: Boolean) {
     @Suppress("DEPRECATION")
     decorView.systemUiVisibility =
         if (light) decorView.systemUiVisibility or flags else decorView.systemUiVisibility and flags.inv()
+}
+
+/** Logs one activity's pause and resume at info level. */
+private class ActivityLifecycleLog(
+    val activity: Activity,
+) : Application.ActivityLifecycleCallbacks {
+    override fun onActivityResumed(resumed: Activity) {
+        if (resumed === activity) NativeLog.info(NativeLog.BRIDGE, "resumed")
+    }
+
+    override fun onActivityPaused(paused: Activity) {
+        if (paused === activity) NativeLog.info(NativeLog.BRIDGE, "paused")
+    }
+
+    override fun onActivityCreated(
+        created: Activity,
+        state: Bundle?,
+    ) {}
+
+    override fun onActivityStarted(started: Activity) {}
+
+    override fun onActivityStopped(stopped: Activity) {}
+
+    override fun onActivitySaveInstanceState(
+        saved: Activity,
+        state: Bundle,
+    ) {}
+
+    override fun onActivityDestroyed(destroyed: Activity) {}
 }

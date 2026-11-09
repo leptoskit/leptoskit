@@ -67,6 +67,11 @@ type Handlers = Arc<[HandlerEntry]>;
 /// Panics for platform-specific `Custom` widgets or an invalid control tree
 /// (see [`Element::validate`]).
 pub fn render(element: Element) -> AnyView {
+	// In a browser, leptoskit's records and panics go to the console. A
+	// server rendering the same tree keeps its own logger.
+	#[cfg(target_arch = "wasm32")]
+	leptoskit_log::install();
+
 	element
 		.validate()
 		.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));

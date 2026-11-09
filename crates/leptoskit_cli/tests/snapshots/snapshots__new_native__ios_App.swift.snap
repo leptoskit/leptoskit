@@ -71,6 +71,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         do {
             window.rootViewController = try applicationController()
         } catch {
+            NativeLog.error(NativeLog.bridge, "cannot start the app", error)
             let controller = UIViewController()
             let label = UILabel()
             label.text = error.localizedDescription

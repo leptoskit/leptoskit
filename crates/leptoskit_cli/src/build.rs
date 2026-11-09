@@ -400,6 +400,13 @@ fn platform_env(
 	platform: Platform,
 	mut env: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
+	if let Some(level) = config.native.log_level {
+		env.insert(
+			leptoskit_config::LogLevel::VARIABLE.to_owned(),
+			level.as_str().to_owned(),
+		);
+	}
+
 	if platform == Platform::Extension
 		&& let Some(server) = config
 			.extension
@@ -987,6 +994,18 @@ mod tests {
 		assert_eq!(spec.options["dir"], "app/ui".into());
 
 		assert!(router_spec(&LeptoskitConfig::default()).is_none());
+	}
+
+	#[test]
+	fn web_builds_carry_the_configured_log_level() {
+		let variable = leptoskit_config::LogLevel::VARIABLE;
+		let env = platform_env(&LeptoskitConfig::default(), Platform::Web, BTreeMap::new());
+		assert!(!env.contains_key(variable));
+
+		let mut config = LeptoskitConfig::default();
+		config.native.log_level = Some(leptoskit_config::LogLevel::Trace);
+		let env = platform_env(&config, Platform::Web, BTreeMap::new());
+		assert_eq!(env.get(variable).map(String::as_str), Some("trace"));
 	}
 
 	fn package(features: &[&str]) -> wasm::MetadataPackage {

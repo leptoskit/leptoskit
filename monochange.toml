@@ -86,6 +86,7 @@ packages = [
 	"leptoskit_plugin",
 	"leptoskit_bridge",
 	"leptoskit_bridge_ffi",
+	"leptoskit_log",
 	"leptoskit_build",
 	"leptoskit_plugin_crypto",
 	"leptoskit_plugin_os",
@@ -359,6 +360,9 @@ path = "crates/leptoskit_bridge"
 
 [package.leptoskit_bridge_ffi]
 path = "crates/leptoskit_bridge_ffi"
+
+[package.leptoskit_log]
+path = "crates/leptoskit_log"
 
 [package.leptoskit_plugin_crypto]
 path = "crates/leptoskit_plugin_crypto"
