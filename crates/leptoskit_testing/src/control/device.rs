@@ -224,7 +224,7 @@ fn emulator_ready(serial: &str) -> bool {
 }
 
 /// The name `adb emu avd name` prints, before its trailing `OK`.
-fn parse_emulator_avd_name(stdout: &str) -> Option<&str> {
+pub(super) fn parse_emulator_avd_name(stdout: &str) -> Option<&str> {
 	stdout
 		.lines()
 		.map(str::trim)
@@ -238,17 +238,27 @@ fn emulator_avd_name(serial: &str) -> Option<String> {
 	parse_emulator_avd_name(&output.stdout).map(str::to_owned)
 }
 
-/// Waits until `package` is the focused window, or `grace` passes.
-fn wait_until_focused(serial: &str, package: &str, grace: Duration) {
+/// Waits until `package` is the focused window.
+///
+/// Returning when the grace merely expires used to report the launch as a
+/// success while the launcher was still in front, and the gestures that
+/// followed never reached the app.
+fn wait_until_focused(serial: &str, package: &str, grace: Duration) -> Result<(), Error> {
 	let deadline = Instant::now() + grace;
 	loop {
 		if android_window_focused(serial, package) {
 			thread::sleep(ANDROID_FOCUS_SETTLE);
-			return;
+			return Ok(());
 		}
 
 		if Instant::now() >= deadline {
-			return;
+			return Err(Error::Tool {
+				name: "adb".to_owned(),
+				detail: format!(
+					"{package} never became the focused window; a gesture would hit whatever is \
+					 in front"
+				),
+			});
 		}
 
 		thread::sleep(Duration::from_millis(50));
@@ -334,7 +344,7 @@ pub fn start_app(
 			let launched = super::tool(&mut command, timeout)?.stdout;
 			// `am start -W` can return while the launcher is still focused.
 			// A gesture injected in that gap never reaches the app.
-			wait_until_focused(id, package_of(identifier), timeout.min(ANDROID_FOCUS_GRACE));
+			wait_until_focused(id, package_of(identifier), timeout.min(ANDROID_FOCUS_GRACE))?;
 			Ok(launched)
 		}
 		kind => {
@@ -450,7 +460,9 @@ pub fn screenshot(target: &Target, timeout: Duration) -> Result<Vec<u8>, Error> 
 /// Taps absolute screen pixels with Android's input tool.
 pub fn tap_point(target: &Target, x: i64, y: i64, timeout: Duration) -> Result<(), Error> {
 	only(target, TargetKind::Android, "coordinate taps")?;
-	let mut command = tools::adb(device_id(target)?);
+	let serial = device_id(target)?;
+	require_on_display(serial, &[(x, y)], timeout)?;
+	let mut command = tools::adb(serial);
 	command.args(["shell", "input", "tap", &x.to_string(), &y.to_string()]);
 	super::tool(&mut command, timeout)?;
 	Ok(())
@@ -465,8 +477,10 @@ pub fn swipe(
 	timeout: Duration,
 ) -> Result<(), Error> {
 	only(target, TargetKind::Android, "coordinate swipes")?;
+	let serial = device_id(target)?;
+	require_on_display(serial, &[(start.x, start.y), (end.x, end.y)], timeout)?;
 	let duration = duration_ms.unwrap_or(300);
-	let mut command = tools::adb(device_id(target)?);
+	let mut command = tools::adb(serial);
 	command.args([
 		"shell",
 		"input",
@@ -607,14 +621,18 @@ pub fn open_app(target: &Target, identifier: &str, timeout: Duration) -> Result<
 /// How long a Linux open waits for a visible window before gestures run.
 const LINUX_WINDOW_GRACE: Duration = Duration::from_secs(2);
 
-/// Launches a Linux binary and waits until one of its windows is visible, the
-/// process exits, or [`LINUX_WINDOW_GRACE`] passes.
+/// Launches a Linux binary and waits until one of its windows is visible.
+///
+/// A process that exits has nothing to show. A process that stays up without
+/// a window for [`LINUX_WINDOW_GRACE`] is an error: a gesture sent then hits
+/// the desktop.
 fn open_linux(identifier: &str, timeout: Duration) -> Result<String, Error> {
 	open_linux_waiting(identifier, timeout, LINUX_WINDOW_GRACE)
 }
 
 /// Launches a Linux binary. `grace` is how long to wait for a visible window
 /// when the process stays up. A process that exits has no window to wait for.
+/// A process that is still up with no window when `grace` ends is an error.
 fn open_linux_waiting(
 	identifier: &str,
 	timeout: Duration,
@@ -643,7 +661,14 @@ fn open_linux_waiting(
 
 		match child.try_wait() {
 			Ok(Some(_)) => break,
-			Ok(None) if Instant::now() >= deadline => break,
+			Ok(None) if Instant::now() >= deadline => {
+				let _ = child.kill();
+				let _ = child.wait();
+				return Err(Error::Tool {
+					name: identifier.to_owned(),
+					detail: format!("pid {pid} never showed a window"),
+				});
+			}
 			Ok(None) => thread::sleep(Duration::from_millis(20)),
 			Err(error) => {
 				return Err(Error::Tool {
@@ -688,7 +713,11 @@ fn linux_window_visible(pid: u32) -> bool {
 /// The target is not Android or Linux, or the tool fails.
 pub fn inject_tap(target: &Target, x: i64, y: i64, timeout: Duration) -> Result<(), Error> {
 	let plan = match target.kind {
-		TargetKind::Android => super::gestures::android_tap(device_id(target)?, x, y)?,
+		TargetKind::Android => {
+			let serial = device_id(target)?;
+			require_on_display(serial, &[(x, y)], timeout)?;
+			super::gestures::android_tap(serial, x, y)?
+		}
 		TargetKind::Linux => super::gestures::xdotool_tap(x, y)?,
 		kind => {
 			return Err(Error::Configuration(format!(
@@ -713,7 +742,9 @@ pub fn inject_long_press(
 ) -> Result<(), Error> {
 	let plan = match target.kind {
 		TargetKind::Android => {
-			super::gestures::android_long_press(device_id(target)?, x, y, duration_ms)?
+			let serial = device_id(target)?;
+			require_on_display(serial, &[(x, y)], timeout)?;
+			super::gestures::android_long_press(serial, x, y, duration_ms)?
 		}
 		TargetKind::Linux => super::gestures::xdotool_long_press(x, y, duration_ms)?,
 		kind => {
@@ -739,7 +770,9 @@ pub fn inject_pan(
 ) -> Result<(), Error> {
 	let plan = match target.kind {
 		TargetKind::Android => {
-			super::gestures::android_pan(device_id(target)?, start, end, duration_ms)?
+			let serial = device_id(target)?;
+			require_on_display(serial, &[(start.x, start.y), (end.x, end.y)], timeout)?;
+			super::gestures::android_pan(serial, start, end, duration_ms)?
 		}
 		TargetKind::Linux => super::gestures::xdotool_pan(start, end, duration_ms)?,
 		kind => {
@@ -765,6 +798,30 @@ pub(super) fn parse_display_size(text: &str) -> Option<(i64, i64)> {
 		}
 	}
 	override_size.or(physical)
+}
+
+/// Whether `(x, y)` is a pixel of a display `width` by `height`.
+///
+/// `input tap` exits 0 for a point past the panel and delivers nothing, so a
+/// gesture off the screen used to report success. Pixels run from 0 through
+/// one less than the size `wm size` prints.
+pub(super) fn point_on_display(x: i64, y: i64, width: i64, height: i64) -> Result<(), Error> {
+	if x < 0 || y < 0 || x >= width || y >= height {
+		Err(Error::Configuration(format!(
+			"point ({x}, {y}) is outside the {width}x{height} display"
+		)))
+	} else {
+		Ok(())
+	}
+}
+
+/// Reads the display once and rejects every point that is not on it.
+fn require_on_display(serial: &str, points: &[(i64, i64)], timeout: Duration) -> Result<(), Error> {
+	let (width, height) = display_size(serial, timeout)?;
+	for (x, y) in points {
+		point_on_display(*x, *y, width, height)?;
+	}
+	Ok(())
 }
 
 fn parse_size_pair(text: &str) -> Option<(i64, i64)> {
@@ -843,11 +900,30 @@ pub(super) fn run_plan(
 			device,
 			args,
 			stdin,
+			stdin_then,
 		} => {
 			let mut command = tools::adb(device);
 			command.args(args);
-			let fed = stdin.as_deref().map(str::as_bytes);
-			let output = tools::run_feeding(&mut command, timeout, fed)?;
+			let output = match (stdin, stdin_then) {
+				(Some(first), Some((pause_ms, second))) => {
+					tools::run_feeding_then(
+						&mut command,
+						timeout,
+						first.as_bytes(),
+						*pause_ms,
+						second.as_bytes(),
+					)?
+				}
+				(Some(body), None) => {
+					tools::run_feeding(&mut command, timeout, Some(body.as_bytes()))?
+				}
+				(None, None) => tools::run(&mut command, timeout)?,
+				(None, Some(_)) => {
+					return Err(Error::Configuration(
+						"a paced device command needs its first write".to_owned(),
+					));
+				}
+			};
 			if !output.success() {
 				return Err(Error::Tool {
 					name: "adb".to_owned(),
@@ -949,6 +1025,7 @@ mod plan_tests {
 				device: "no-such-serial".to_owned(),
 				args: vec!["get-state".to_owned()],
 				stdin: None,
+				stdin_then: None,
 			},
 			Duration::from_secs(5),
 		);
@@ -1101,17 +1178,25 @@ mod plan_tests {
 				&path.to_string_lossy(),
 				Duration::from_secs(5),
 				Duration::from_millis(200),
-			)
-			.unwrap();
+			);
 			let elapsed = started.elapsed();
-			if let Some(pid) = launched.strip_prefix("pid ") {
-				let _ = std::process::Command::new("kill").arg(pid).status();
-			}
 			assert!(
 				elapsed >= Duration::from_millis(150),
 				"open returned in {elapsed:?}, before a window could map"
 			);
 			assert!(elapsed < Duration::from_secs(1), "open waited {elapsed:?}");
+			// The process is still up and has no window. Returning ok here is
+			// how a following gesture lands on the desktop and the step still
+			// passes.
+			if let Ok(text) = &launched
+				&& let Some(pid) = text.strip_prefix("pid ")
+			{
+				let _ = std::process::Command::new("kill").arg(pid).status();
+			}
+			assert!(
+				launched.is_err(),
+				"a window that never maps is not an open: {launched:?}"
+			);
 			let _ = std::fs::remove_dir_all(&directory);
 		}
 
@@ -1230,6 +1315,10 @@ mod plan_tests {
 			"dev.leptoskit.sanity",
 		));
 		assert_eq!(super::parse_emulator_avd_name("api35\nOK\n"), Some("api35"));
+		assert_eq!(
+			super::parse_emulator_avd_name("api35\r\nOK\r\n"),
+			Some("api35")
+		);
 		assert_eq!(super::parse_emulator_avd_name("OK\n"), None);
 		assert_eq!(super::parse_emulator_avd_name(""), None);
 		assert_eq!(super::package_of("dev.app/.Main"), "dev.app");
@@ -1251,6 +1340,41 @@ mod plan_tests {
 			"waited {:?}",
 			started.elapsed()
 		);
+	}
+
+	#[test]
+	fn a_window_that_never_focuses_is_an_error() {
+		let started = std::time::Instant::now();
+		let message = super::wait_until_focused(
+			"no-such-serial",
+			"dev.leptoskit.sanity",
+			Duration::from_millis(200),
+		)
+		.expect_err("a missed window is not an open")
+		.to_string();
+		assert!(
+			message.contains("never became the focused window"),
+			"{message}"
+		);
+		assert!(
+			started.elapsed() < Duration::from_secs(2),
+			"waited {:?}",
+			started.elapsed()
+		);
+	}
+
+	#[test]
+	fn a_point_past_the_display_is_rejected() {
+		assert!(super::point_on_display(200, 400, 1080, 2400).is_ok());
+		assert!(super::point_on_display(1079, 2399, 1080, 2400).is_ok());
+		assert!(super::point_on_display(0, 0, 320, 320).is_ok());
+		let off = super::point_on_display(200, 400, 320, 320).unwrap_err();
+		assert!(
+			off.to_string().contains("outside the 320x320 display"),
+			"{off}"
+		);
+		assert!(super::point_on_display(1080, 10, 1080, 2400).is_err());
+		assert!(super::point_on_display(10, 2400, 1080, 2400).is_err());
 	}
 
 	#[test]

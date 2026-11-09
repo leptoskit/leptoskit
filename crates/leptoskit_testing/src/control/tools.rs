@@ -64,6 +64,37 @@ pub fn run_feeding(
 	timeout: Duration,
 	input: Option<&[u8]>,
 ) -> Result<ToolOutput, Error> {
+	feed(command, timeout, input, None)
+}
+
+/// Writes `first`, waits `pause_ms`, then writes `second` and closes input.
+///
+/// A `uinput` touchscreen is not attached at the moment it is registered.
+/// Sending the gesture in the same write, with a `delay` command for that
+/// wait, stamps the wait into the gesture's event timestamps. The pause is
+/// wall time between the two writes instead.
+pub fn run_feeding_then(
+	command: &mut Command,
+	timeout: Duration,
+	first: &[u8],
+	pause_ms: u64,
+	second: &[u8],
+) -> Result<ToolOutput, Error> {
+	feed(
+		command,
+		timeout,
+		Some(first),
+		Some((Duration::from_millis(pause_ms), second)),
+	)
+}
+
+/// Runs `command`, optionally writing standard input in one or two parts.
+fn feed(
+	command: &mut Command,
+	timeout: Duration,
+	input: Option<&[u8]>,
+	then: Option<(Duration, &[u8])>,
+) -> Result<ToolOutput, Error> {
 	isolate(command);
 	if input.is_some() {
 		command.stdin(Stdio::piped());
@@ -73,15 +104,38 @@ pub fn run_feeding(
 	command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
 	let name = command.get_program().to_string_lossy().into_owned();
+	let started = Instant::now();
 	let mut child = spawn(command, &name)?;
 	if let Some(bytes) = input
 		&& let Some(mut pipe) = child.stdin.take()
 	{
 		use std::io::Write;
 		let _ = pipe.write_all(bytes);
+		let _ = pipe.flush();
+		if let Some((pause, second)) = then {
+			let pause_started = Instant::now();
+			while pause_started.elapsed() < pause {
+				if started.elapsed() >= timeout {
+					let _ = terminate(&mut child);
+					let _ = child.wait();
+					return Err(Error::Tool {
+						name,
+						detail: format!("exceeded {} seconds", timeout.as_secs()),
+					});
+				}
+				if matches!(child.try_wait(), Ok(Some(_))) {
+					break;
+				}
+				let left = pause.saturating_sub(pause_started.elapsed());
+				std::thread::sleep(Duration::from_millis(20).min(left));
+			}
+			let _ = pipe.write_all(second);
+			let _ = pipe.flush();
+		}
 	}
 	let (receiver, readers) = read_pipes(&mut child);
-	let timed_out = wait(&mut child, timeout, &name);
+	let left = timeout.saturating_sub(started.elapsed());
+	let timed_out = wait(&mut child, left, &name);
 
 	// Reap the child in either case. After a kill this also lets the tool's
 	// own pipe ends close, so the readers usually finish inside the grace.

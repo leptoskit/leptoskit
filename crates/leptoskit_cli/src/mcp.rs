@@ -106,7 +106,12 @@ fn http_router(hosts: Option<Vec<String>>) -> axum::Router {
 	#[derive(Clone)]
 	struct Dispatcher(fn(&Value) -> Option<Value>);
 
-	async fn message(State(dispatcher): State<Dispatcher>, body: String) -> (StatusCode, String) {
+	async fn message(
+		State(dispatcher): State<Dispatcher>,
+		body: String,
+	) -> axum::response::Response {
+		use axum::response::IntoResponse;
+
 		match serde_json::from_str::<Value>(&body) {
 			Ok(request) => {
 				// The control executor blocks on drivers and platform tools;
@@ -115,16 +120,19 @@ fn http_router(hosts: Option<Vec<String>>) -> axum::Router {
 					.await
 					.expect("dispatch cannot panic");
 				match answer {
-					Some(response) => (StatusCode::OK, response.to_string()),
+					// `Json` sets `application/json`. A plain string is
+					// `text/plain`, which streamable HTTP clients reject.
+					Some(response) => (StatusCode::OK, axum::Json(response)).into_response(),
 					// A notification: accepted, with nothing to answer.
-					None => (StatusCode::ACCEPTED, String::new()),
+					None => StatusCode::ACCEPTED.into_response(),
 				}
 			}
 			Err(error) => {
 				(
 					StatusCode::BAD_REQUEST,
-					error_response(&Value::Null, -32700, &error.to_string()).to_string(),
+					axum::Json(error_response(&Value::Null, -32700, &error.to_string())),
 				)
+					.into_response()
 			}
 		}
 	}
@@ -343,7 +351,7 @@ fn control_tools() -> Value {
 			"description": "Captures one screenshot and returns it as image content, with the \
 				saved path. The target fields are the control document's; without an \
 				application this captures the whole device screen.",
-			"inputSchema": document_schema_value()["properties"]["target"],
+			"inputSchema": screenshot_input_schema(),
 		},
 		{
 			"name": "read_logs",
@@ -362,6 +370,31 @@ fn control_tools() -> Value {
 			},
 		},
 	])
+}
+
+/// The screenshot tool's arguments: the control target, plus `label`.
+///
+/// The target in the document schema is a `$ref`. Copying that ref alone
+/// leaves `#/$defs/Target` with nothing to point at, and a client that
+/// resolves the tool schema rejects the call.
+fn screenshot_input_schema() -> Value {
+	let document = document_schema_value();
+	let defs = document.get("$defs").cloned().unwrap_or_else(|| json!({}));
+	let mut schema = defs
+		.get("Target")
+		.cloned()
+		.unwrap_or_else(|| json!({"type": "object"}));
+	if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+		properties.insert(
+			"label".to_owned(),
+			json!({
+				"type": "string",
+				"description": "Names the saved screenshot.",
+			}),
+		);
+	}
+	schema["$defs"] = defs;
+	schema
 }
 
 /// The published control document schema, as plain JSON.
@@ -762,6 +795,15 @@ mod tests {
 			.await
 			.unwrap();
 		assert_eq!(ping.status(), StatusCode::OK);
+		// Streamable HTTP clients reject anything that is not JSON or an event
+		// stream. `(StatusCode, String)` is `text/plain`, so every tool call
+		// fails in those clients before the body is read.
+		assert_eq!(
+			ping.headers()
+				.get("content-type")
+				.and_then(|value| value.to_str().ok()),
+			Some("application/json")
+		);
 		let body = axum::body::to_bytes(ping.into_body(), 4096).await.unwrap();
 		assert!(
 			std::str::from_utf8(&body)
@@ -870,6 +912,54 @@ mod tests {
 			"[::1]:9000"
 		);
 		assert_eq!(allowed_hosts("0.0.0.0", 7331), None);
+	}
+
+	#[test]
+	fn the_screenshot_schema_resolves_every_ref() {
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 1,
+			"method": "tools/list",
+		}))
+		.unwrap();
+		let tools = response["result"]["tools"].as_array().unwrap();
+		let screenshot = tools
+			.iter()
+			.find(|tool| tool["name"] == "screenshot")
+			.expect("screenshot");
+		let schema = &screenshot["inputSchema"];
+		fn resolve(root: &Value, node: &Value) {
+			if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+				let mut cursor = root;
+				for part in reference.trim_start_matches("#/").split('/') {
+					cursor = cursor.get(part).unwrap_or(&Value::Null);
+				}
+				assert!(
+					!cursor.is_null(),
+					"{reference} does not resolve inside the screenshot schema"
+				);
+			}
+			match node {
+				Value::Array(items) => {
+					for item in items {
+						resolve(root, item);
+					}
+				}
+				Value::Object(fields) => {
+					for (key, value) in fields {
+						if key != "$ref" {
+							resolve(root, value);
+						}
+					}
+				}
+				_ => {}
+			}
+		}
+		resolve(schema, schema);
+		assert!(
+			schema.to_string().contains("label"),
+			"the capture's label has to be part of the tool schema"
+		);
 	}
 
 	#[test]
