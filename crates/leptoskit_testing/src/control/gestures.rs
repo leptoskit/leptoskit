@@ -110,7 +110,13 @@ pub enum ToolPlan {
 		/// Arguments after `-s <serial>`.
 		args: Vec<String>,
 		/// Bytes written to the tool's standard input, then closed.
+		///
+		/// When [`Self::Adb::stdin_then`] is set, this is only the first
+		/// write. The host waits, then writes the second program. One write
+		/// would let a `uinput` `delay` share the gesture's clock.
 		stdin: Option<String>,
+		/// Milliseconds to wait after `stdin`, then the rest of the program.
+		stdin_then: Option<(u64, String)>,
 	},
 	/// Any other program.
 	Command {
@@ -453,6 +459,7 @@ pub fn install_plan(kind: TargetKind, device: &str, path: &str) -> Result<ToolPl
 				device: device.to_owned(),
 				args: vec!["install".to_owned(), "-r".to_owned(), path.to_owned()],
 				stdin: None,
+				stdin_then: None,
 			})
 		}
 		TargetKind::Macos | TargetKind::Linux | TargetKind::Windows => {
@@ -765,10 +772,13 @@ pub fn android_pan(
 	)
 }
 
-/// How long `uinput` waits after registering before the first touch.
+/// How long the host waits after registering a `uinput` touchscreen.
 ///
-/// The input stack attaches the new touchscreen a few hundred milliseconds
-/// after registration. Events sent earlier are dropped.
+/// The input stack attaches the new device a few hundred milliseconds after
+/// registration, and events sent earlier are dropped. This is a pause between
+/// two writes, not a `delay` command. `delay` is scheduled from the time the
+/// device was registered, so putting the ready wait there stamps it between
+/// finger-down and the first move: a 300 ms pinch arrives as an 800 ms gesture.
 const UINPUT_READY_MS: u64 = 500;
 
 /// adb arguments for a pinch.
@@ -797,7 +807,8 @@ pub fn android_pinch(
 	end_span: i64,
 	duration_ms: u64,
 ) -> Result<ToolPlan, Error> {
-	let program = android_pinch_program(display, x, y, start_span, end_span, duration_ms)?;
+	let (register, gesture) =
+		android_pinch_program(display, x, y, start_span, end_span, duration_ms)?;
 	if device.trim().is_empty() {
 		return Err(Error::Configuration(
 			"android input needs a device serial".to_owned(),
@@ -806,11 +817,16 @@ pub fn android_pinch(
 	Ok(ToolPlan::Adb {
 		device: device.to_owned(),
 		args: vec!["shell".to_owned(), "uinput".to_owned(), "-".to_owned()],
-		stdin: Some(program),
+		stdin: Some(register),
+		stdin_then: Some((UINPUT_READY_MS, gesture)),
 	})
 }
 
-/// The `uinput` program for one pinch, as concatenated JSON commands.
+/// The register command, then the gesture.
+///
+/// The gesture starts with `updateTimeBase` so its delays are measured from
+/// the moment the fingers go down, after the host has waited for the
+/// touchscreen to attach.
 fn android_pinch_program(
 	display: (i64, i64),
 	x: i64,
@@ -818,7 +834,7 @@ fn android_pinch_program(
 	start_span: i64,
 	end_span: i64,
 	duration_ms: u64,
-) -> Result<String, Error> {
+) -> Result<(String, String), Error> {
 	let (width, height) = display;
 	if width < 2 || height < 2 {
 		return Err(Error::Configuration(
@@ -842,11 +858,15 @@ fn android_pinch_program(
 
 	// `type` has to be written before `data`. serde_json sorts object keys,
 	// which puts `data` first and uinput rejects the configuration.
-	let mut lines = vec![touchscreen(width, height)];
-	let mut commands = vec![
-		json!({ "id": 1, "command": "delay", "duration": UINPUT_READY_MS }),
-		inject(down_events(left_start, right_start, y)),
+	// `id` is written before `command` for the same reason: the lenient
+	// parser on API 35 accepts either order for this command, and the order
+	// here matches the program that was checked on a device.
+	let register = format!("{}\n", touchscreen(width, height));
+	let mut lines = vec![
+		r#"{"id":1,"command":"updateTimeBase"}"#.to_owned(),
+		inject(down_events(left_start, right_start, y)).to_string(),
 	];
+	let mut commands = Vec::new();
 	let steps = (duration_ms / 16).max(1);
 	let mut scheduled = 0u64;
 	for step in 1..=steps {
@@ -863,7 +883,7 @@ fn android_pinch_program(
 	}
 	commands.push(inject(lift_events()));
 	lines.extend(commands.iter().map(ToString::to_string));
-	Ok(lines.join("\n"))
+	Ok((register, lines.join("\n")))
 }
 
 fn along(start: i64, end: i64, step: u64, steps: u64) -> i64 {
@@ -1022,6 +1042,7 @@ fn adb(device: &str, args: Vec<String>) -> Result<ToolPlan, Error> {
 		device: device.to_owned(),
 		args,
 		stdin: None,
+		stdin_then: None,
 	})
 }
 
@@ -1554,11 +1575,24 @@ mod tests {
 		// reports success. A pinch has to be one uinput stream with both
 		// slots in the same report.
 		let pinch = android_pinch("emulator-5554", (320, 640), 200, 400, 80, 160, 300).unwrap();
-		let ToolPlan::Adb { args, stdin, .. } = pinch else {
+		let ToolPlan::Adb {
+			args,
+			stdin,
+			stdin_then,
+			..
+		} = pinch
+		else {
 			panic!("pinch is an adb plan");
 		};
 		assert_eq!(args, ["shell", "uinput", "-"]);
-		let script = stdin.expect("the uinput program is the tool's stdin");
+		let register = stdin.expect("register is written before the attach wait");
+		assert!(register.contains("\"command\":\"register\""));
+		assert!(
+			!register.contains("inject"),
+			"events sent before the touchscreen attaches are dropped"
+		);
+		let (pause, script) = stdin_then.expect("the gesture follows the attach wait");
+		assert_eq!(pause, UINPUT_READY_MS);
 		assert!(
 			!script.contains("input swipe"),
 			"a backgrounded pair of swipes is one pointer"
@@ -1590,6 +1624,25 @@ mod tests {
 		assert_eq!(
 			travel, 300,
 			"the fingers take the requested duration to move"
+		);
+		// `uinput` schedules every `delay` from registration. A 500 ms pause
+		// there is stamped between finger-down and the first move, so a 300 ms
+		// pinch is an 800 ms gesture and the step still exits 0. The attach
+		// wait has to end with a clock reset before the fingers go down.
+		let reset = commands
+			.iter()
+			.position(|command| command["command"] == "updateTimeBase")
+			.expect("updateTimeBase resets the gesture clock");
+		let down = commands
+			.iter()
+			.position(|command| command["command"] == "inject")
+			.expect("down");
+		assert!(reset < down, "reset the clock before the fingers go down");
+		assert!(
+			commands[reset + 1..down]
+				.iter()
+				.all(|command| command["command"] != "delay"),
+			"the attach wait is not a delay inside the gesture"
 		);
 		assert!(android_pinch("emulator-5554", (100, 100), 200, 400, 80, 160, 300).is_err());
 		assert!(android_pinch("emulator-5554", (1000, 30), 200, 50, 20, 20, 300).is_err());

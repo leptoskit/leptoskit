@@ -179,6 +179,11 @@ pub fn list() -> Inventory {
 		});
 	}
 
+	// `emulator -list-avds` has no state. Every AVD is recorded as shutdown,
+	// including the one whose emulator is already on this machine. Boot then
+	// looks like it has something to start.
+	note_running_avds(&mut devices, running_avd_name);
+
 	Inventory {
 		schema_version: SCHEMA_VERSION,
 		devices,
@@ -383,6 +388,35 @@ pub fn parse_android(output: &str) -> Vec<Device> {
 		.collect()
 }
 
+/// Marks an AVD `running` when some emulator serial is that AVD.
+///
+/// `avd_of` is `adb emu avd name` for one serial, or nothing when the
+/// emulator is not answering. An AVD with no matching serial stays shutdown.
+pub fn note_running_avds(devices: &mut [Device], avd_of: impl Fn(&str) -> Option<String>) {
+	let running: Vec<String> = devices
+		.iter()
+		.filter(|device| device.kind == DeviceKind::AndroidEmulator)
+		.filter_map(|device| avd_of(&device.id))
+		.collect();
+
+	for device in devices.iter_mut() {
+		if device.kind == DeviceKind::AndroidAvd && running.iter().any(|name| name == &device.id) {
+			"running".clone_into(&mut device.state);
+		}
+	}
+}
+
+/// The AVD name behind a running emulator, when the console answers.
+fn running_avd_name(serial: &str) -> Option<String> {
+	let mut command = tools::adb(serial);
+	command.args(["emu", "avd", "name"]);
+	let output = tools::run(&mut command, Duration::from_secs(3)).ok()?;
+	if !output.success() {
+		return None;
+	}
+	super::device::parse_emulator_avd_name(&output.stdout).map(str::to_owned)
+}
+
 /// Parses `emulator -list-avds`.
 pub fn parse_avds(output: &str) -> Vec<Device> {
 	output
@@ -548,6 +582,42 @@ mod tests {
 		assert_eq!(parse_iphones("nope"), [] as [Device; 0]);
 		assert_eq!(parse_android("List of devices attached"), [] as [Device; 0]);
 		assert_eq!(parse_avds("nonsense-not-a-real-avd").len(), 1);
+	}
+
+	#[test]
+	fn a_running_emulator_is_not_a_shutdown_avd() {
+		let mut devices = vec![
+			Device {
+				id: "emulator-5554".to_owned(),
+				name: "sdk".to_owned(),
+				kind: DeviceKind::AndroidEmulator,
+				state: "device".to_owned(),
+			},
+			Device {
+				id: "api35".to_owned(),
+				name: "api35".to_owned(),
+				kind: DeviceKind::AndroidAvd,
+				state: "shutdown".to_owned(),
+			},
+			Device {
+				id: "other".to_owned(),
+				name: "other".to_owned(),
+				kind: DeviceKind::AndroidAvd,
+				state: "shutdown".to_owned(),
+			},
+		];
+		// The console is not answering, which is how an emulator looks while
+		// it is still coming up. The AVD must stay listed as shutdown then:
+		// there is no name to match. Once the console names it, the same AVD
+		// is running.
+		note_running_avds(&mut devices, |_| None);
+		assert_eq!(devices[1].state, "shutdown");
+		note_running_avds(&mut devices, |serial| {
+			(serial == "emulator-5554").then(|| "api35".to_owned())
+		});
+		assert_eq!(devices[1].state, "running");
+		assert_eq!(devices[2].state, "shutdown");
+		assert_eq!(devices[0].state, "device");
 	}
 
 	#[test]
