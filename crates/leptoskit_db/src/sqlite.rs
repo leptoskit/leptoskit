@@ -162,6 +162,8 @@ impl Shared {
 			.map_err(DbError::connection)?;
 		#[cfg(feature = "geo")]
 		crate::geo::sqlite::register(&connection).map_err(DbError::connection)?;
+		#[cfg(feature = "vector")]
+		crate::vector::sqlite::register(&connection).map_err(DbError::connection)?;
 		Ok(connection)
 	}
 

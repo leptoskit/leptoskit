@@ -39,6 +39,7 @@ use crate::attrs::Visibility;
 use crate::attrs::doc_comment;
 use crate::attrs::is_db_attr;
 use crate::attrs::is_policy_attr;
+use crate::attrs::is_vector_type;
 
 /// Derives the generated code handles itself; deriving them as well would
 /// either collide or leak secrets.
@@ -166,6 +167,52 @@ fn refuse_misplaced_geo(fields: &[Field]) -> syn::Result<()> {
 	Ok(())
 }
 
+/// `vector` on a flattened mixin or on the key, and sources that aren't the
+/// table's own fields.
+fn refuse_misplaced_vector(fields: &[Field]) -> syn::Result<()> {
+	for field in fields {
+		let Some(vector) = &field.args.vector else {
+			continue;
+		};
+
+		if field.args.flatten {
+			return Err(syn::Error::new_spanned(
+				&field.ident,
+				"`vector` marks one vector column, and a mixin can't hold vectors; declare it on \
+				 the table",
+			));
+		}
+
+		if field.args.key {
+			return Err(syn::Error::new_spanned(
+				&field.ident,
+				"a vector can't be the key; key the table by an `Id`",
+			));
+		}
+
+		for source in &vector.sources {
+			if source == &field.ident {
+				return Err(syn::Error::new_spanned(
+					source,
+					"a vector is made from other fields, not itself",
+				));
+			}
+
+			if !fields
+				.iter()
+				.any(|other| &other.ident == source && !other.args.flatten)
+			{
+				return Err(syn::Error::new_spanned(
+					source,
+					format!("`{source}` isn't a field of this table; sources are its text fields"),
+				));
+			}
+		}
+	}
+
+	Ok(())
+}
+
 pub(crate) fn expand(
 	raw_args: &TokenStream,
 	raw_item: &TokenStream,
@@ -240,7 +287,10 @@ pub(crate) fn expand(
 		field.ty = ty.clone();
 
 		let ident = field.ident.clone().expect("named fields have names");
-		let args = match FieldArgs::parse(&field.attrs) {
+		let args = match FieldArgs::parse(&field.attrs).and_then(|mut args| {
+			args.default_visibility(&ty)?;
+			Ok(args)
+		}) {
 			Ok(args) => args,
 			Err(error) => {
 				combine(&mut errors, error);
@@ -296,6 +346,7 @@ pub(crate) fn expand(
 	}
 
 	refuse_misplaced_geo(&fields)?;
+	refuse_misplaced_vector(&fields)?;
 
 	// Ask the next unresolved mixin for its fields.
 	let flattened: Vec<&Field> = fields.iter().filter(|field| field.args.flatten).collect();
@@ -579,7 +630,8 @@ fn check_view(fields: &[Field], policies: &[PolicyArgs]) -> syn::Result<()> {
 			|| args.actor.is_some()
 			|| args.slug.is_some()
 			|| args.search.is_some()
-			|| args.geo.is_some();
+			|| args.geo.is_some()
+			|| args.vector.is_some();
 
 		if filled_in {
 			return Err(syn::Error::new_spanned(
@@ -825,6 +877,10 @@ impl Table<'_> {
 					(
 						args.geo.is_some(),
 						"can't take `geo`; index and check the columns it's computed from",
+					),
+					(
+						args.vector.is_some(),
+						"can't take `vector`; store the vectors the app makes",
 					),
 					(args.flatten, "can't be a flattened mixin"),
 					(
@@ -1106,6 +1162,7 @@ impl Table<'_> {
 		let link = self.link_impl();
 		let searchable = self.searchable();
 		let geo_columns = self.geo_columns();
+		let vector_columns = self.vector_columns();
 		let public_columns = self.public_columns();
 		let projections = self.projections();
 		let name = self.name;
@@ -1137,6 +1194,7 @@ impl Table<'_> {
 				#link
 				#searchable
 				#geo_columns
+				#vector_columns
 				#public_columns
 				#register
 			}
@@ -1891,6 +1949,8 @@ impl Table<'_> {
 			}
 		}
 
+		calls.extend(self.vector_call(column));
+
 		// `Id<T>` columns reference another table, and a table's own
 		// `Id<Self>` key references nothing. A mixin's field types aren't
 		// visible here, so its columns ask their type at run time.
@@ -1980,6 +2040,128 @@ impl Table<'_> {
 		})
 	}
 
+	/// The builder call recording a vector column's options, for a column
+	/// with `vector(…)` or of a vector type: how it's measured, indexed,
+	/// and kept fresh, and whether clients see it.
+	fn vector_call(&self, column: &Column<'_>) -> Option<TokenStream> {
+		let krate = self.krate;
+		let args = column.args;
+
+		if args.vector.is_none() && !(column.inner.is_none() && is_vector_type(&column.field.ty)) {
+			return None;
+		}
+
+		let name = column.name;
+		let schema = quote! { #krate::__private::schema };
+		let vector = args.vector.as_ref();
+		let distance = option_tokens(vector.and_then(|vector| vector.distance.as_ref()).map(
+			|distance| {
+				let variant = format_ident!(
+					"{}",
+					convert_case::Converter::new()
+						.from_case(convert_case::Case::Snake)
+						.to_case(convert_case::Case::Pascal)
+						.convert(distance.to_string())
+				);
+				quote! { #schema::VectorDistance::#variant }
+			},
+		));
+		let index = option_tokens(
+			vector
+				.and_then(|vector| vector.index.as_ref())
+				.map(|index| {
+					if index == "hnsw" {
+						quote! { #schema::VectorIndexKind::Hnsw }
+					} else {
+						quote! { #schema::VectorIndexKind::IvfFlat }
+					}
+				}),
+		);
+		let sources: Vec<String> = vector
+			.map(|vector| {
+				vector
+					.sources
+					.iter()
+					.map(|source| self.column_of(source))
+					.collect()
+			})
+			.unwrap_or_default();
+		let public = args.visibility == Visibility::Public;
+
+		Some(quote! { table.vector(#name, #distance, #index, &[#(#sources),*], #public); })
+	}
+
+	/// `stale_embeddings()`, for a table with one vector column made from
+	/// sources: its rows whose vectors are missing or stale.
+	fn stale_embeddings(&self) -> Option<TokenStream> {
+		let krate = self.krate;
+		let mut sourced = self.columns().into_iter().filter(|column| {
+			column
+				.args
+				.vector
+				.as_ref()
+				.is_some_and(|vector| !vector.sources.is_empty())
+		});
+		let column = sourced.next()?;
+
+		if sourced.next().is_some() {
+			return None;
+		}
+
+		let handle = column.handle;
+		let doc = format!(
+			"The rows whose `{}` is missing, or was made from text that has changed since: the \
+			 work left for an `Embedder`, as `stale_embeddings().limit(100).embed_stale(|row| \
+			 row.{handle}, &model, &db)`.",
+			column.name
+		);
+
+		Some(quote! {
+			#[doc = #doc]
+			pub fn stale_embeddings() -> #krate::Query<Self> {
+				Self::query().filter(|columns| columns.#handle.is_stale())
+			}
+		})
+	}
+
+	/// A check that each `#[db(vector(…))]` column holds vectors, and that
+	/// its sources hold text.
+	fn vector_columns(&self) -> Option<TokenStream> {
+		let krate = self.krate;
+		let mut checks = Vec::new();
+
+		for column in self.columns() {
+			let Some(vector) = &column.args.vector else {
+				continue;
+			};
+			let ty = &column.ty;
+			checks.push(quote_spanned! { vector.span=> vector::<#ty>(); });
+
+			for source in &vector.sources {
+				if let Some(field) = self.fields.iter().find(|field| &field.ident == source) {
+					let ty = &field.ty;
+					checks.push(quote_spanned! { source.span()=> text::<#ty>(); });
+				}
+			}
+		}
+
+		if checks.is_empty() {
+			return None;
+		}
+
+		Some(quote! {
+			const _: () = {
+				fn vector<T: #krate::vector::VectorColumn>() {}
+				fn text<T: #krate::TextColumn>() {}
+
+				#[allow(dead_code, reason = "only checks that `vector` columns hold vectors")]
+				fn check() {
+					#(#checks)*
+				}
+			};
+		})
+	}
+
 	/// A check that each `#[db(geo(…))]` column holds shapes.
 	fn geo_columns(&self) -> Option<TokenStream> {
 		let krate = self.krate;
@@ -2058,6 +2240,7 @@ impl Table<'_> {
 		let new = self.new_name();
 		let columns = self.columns_name();
 		let keys: Vec<&Field> = self.fields.iter().filter(|field| field.key).collect();
+		let stale = self.stale_embeddings();
 		let by_key = match keys.as_slice() {
 			[key] => {
 				let ident = &key.ident;
@@ -2093,6 +2276,8 @@ impl Table<'_> {
 				}
 
 				#by_key
+
+				#stale
 
 				/// Writes every column, matched by the key, and bumps `updated_at`.
 				#write_vis async fn save(&mut self, connection: &impl #krate::Connection) -> #krate::Result<()> {
