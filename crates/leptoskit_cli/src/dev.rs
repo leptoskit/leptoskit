@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -35,6 +36,10 @@ use leptoskit_config::Platform;
 use notify::RecursiveMode;
 use notify::Watcher;
 
+use crate::budgets::Package;
+use crate::budgets::Rebuild;
+use crate::budgets::classify_edit;
+use crate::budgets::dependency_names;
 use crate::cli::REBUILD_DEBOUNCE;
 use crate::server::LeptosEnv;
 use crate::server::SiteEnv;
@@ -381,6 +386,28 @@ struct Heard {
 	config_changed: Arc<AtomicBool>,
 	tables_changed: Arc<AtomicBool>,
 	branch: BranchWatch,
+	paths: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Heard {
+	#[cfg(test)]
+	fn new(database: bool, root: &Path) -> Self {
+		Self {
+			config_changed: Arc::new(AtomicBool::new(false)),
+			tables_changed: Arc::new(AtomicBool::new(false)),
+			branch: BranchWatch::new(database, root),
+			paths: Arc::new(Mutex::new(Vec::new())),
+		}
+	}
+
+	fn take_paths(&self) -> Vec<PathBuf> {
+		std::mem::take(
+			&mut self
+				.paths
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner),
+		)
+	}
 }
 
 /// The files the watcher covers.
@@ -407,6 +434,7 @@ fn start_watcher(
 	let tables_dir = database.and_then(|database| database.package_dir(&metadata));
 	let tables_changed = Arc::new(AtomicBool::new(false));
 	let branch = BranchWatch::new(database.is_some(), root);
+	let paths = Arc::new(Mutex::new(Vec::new()));
 
 	let filter = WatchFilter {
 		public: public.clone(),
@@ -424,6 +452,7 @@ fn start_watcher(
 	let changed = Arc::clone(&config_changed);
 	let tables = Arc::clone(&tables_changed);
 	let switched = branch.clone();
+	let heard_paths = Arc::clone(&paths);
 	let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
 		match event {
 			Ok(event) if switched.heard(&event) => drop(events_tx.send(Wake::Changed)),
@@ -441,6 +470,16 @@ fn start_watcher(
 					tables.store(true, Ordering::Relaxed);
 				}
 
+				if let Ok(mut paths) = heard_paths.lock() {
+					paths.extend(
+						event
+							.paths
+							.iter()
+							.filter(|path| filter.is_relevant(path))
+							.cloned(),
+					);
+				}
+
 				let _ = events_tx.send(Wake::Changed);
 			}
 
@@ -456,6 +495,7 @@ fn start_watcher(
 			config_changed,
 			tables_changed,
 			branch,
+			paths,
 		},
 		Watched {
 			metadata,
@@ -507,6 +547,7 @@ fn rebuild(mut started: Started, watching: &Watching) {
 	let Watching { events, heard, .. } = watching;
 
 	on_changes(events, || {
+		let paths = heard.take_paths();
 		// Before the rebuild, so the server starts on the branch's database
 		// and embeds a migration written now.
 		follow_database(
@@ -517,7 +558,7 @@ fn rebuild(mut started: Started, watching: &Watching) {
 		);
 
 		if let Some(web) = &mut started.web {
-			web.rebuild();
+			web.rebuild(&paths);
 		}
 
 		if let Some(extension) = &mut started.extension {
@@ -680,6 +721,14 @@ struct Web {
 	database_url: Option<crate::services::run::AppDatabase>,
 	/// The app's services, running beside it.
 	services: DevServices,
+	/// Workspace packages, for deciding which side an edit rebuilds.
+	packages: Vec<Package>,
+	/// Packages the wasm client links.
+	client_packages: std::collections::BTreeSet<String>,
+	/// Packages the server links.
+	server_packages: std::collections::BTreeSet<String>,
+	/// Directories copied without a compile.
+	asset_dirs: Vec<PathBuf>,
 }
 
 /// The services `leptoskit dev` runs, and what the app receives for them.
@@ -716,7 +765,8 @@ impl Web {
 		let server_rendered =
 			config.app.render.renders_on_server() && config.app.default_platform == Platform::Web;
 
-		let output = crate::build::run(false, None, None, DEV_OUT)?;
+		let output = crate::build::run_dev(Rebuild::Full)?;
+		let (packages, client_packages, server_packages, asset_dirs) = edit_scope(config, root);
 		crate::build::serve_plugins(config)?;
 		// An app with a server package runs it, whatever its render mode: a
 		// client-rendered app's server is where its API and sign-in live, and
@@ -753,6 +803,10 @@ impl Web {
 				tokens: crate::services::run::tokens(&output.services)?,
 				..DevServices::default()
 			},
+			packages,
+			client_packages,
+			server_packages,
+			asset_dirs,
 		};
 		web.start_services(&output.services)?;
 
@@ -873,22 +927,48 @@ impl Web {
 		}
 	}
 
-	fn rebuild(&mut self) {
+	fn rebuild(&mut self, paths: &[PathBuf]) {
+		let edit = classify_edit(
+			paths,
+			&self.packages,
+			&self.client_packages,
+			&self.server_packages,
+			&self.asset_dirs,
+		);
 		// Stop the app server and the services before cargo replaces their
-		// binaries: Windows refuses to overwrite a running executable.
-		self.stop_app_server();
-		self.services.running.stop();
+		// binaries: Windows refuses to overwrite a running executable. An
+		// asset or client-only edit leaves the server running.
+		let restarts = edit.compiles_server();
+
+		if restarts {
+			self.stop_app_server();
+			self.services.running.stop();
+		}
+
 		let started = Instant::now();
 
-		match crate::build::run(false, None, None, DEV_OUT) {
+		match crate::build::run_dev(edit) {
 			Ok(output) => {
+				let elapsed = started.elapsed();
+				let budget = crate::budgets::EDIT_TO_PRESENT;
+				let place = if elapsed <= budget {
+					"inside"
+				} else {
+					"outside"
+				};
 				ui::tagged(
 					"web",
 					format_args!(
-						"{GOOD}rebuilt{GOOD:#} {DIM}in {}{DIM:#}",
-						ui::seconds(started.elapsed())
+						"{GOOD}rebuilt{GOOD:#} {} {DIM}in {} ({place} the {} edit budget){DIM:#}",
+						edit.label(),
+						ui::seconds(elapsed),
+						ui::seconds(budget),
 					),
 				);
+
+				if !restarts {
+					return;
+				}
 
 				if let Err(error) = self.start_services(&output.services) {
 					ui::tagged_error(
@@ -1037,6 +1117,61 @@ fn excluded_dirs(
 	let android = crate::native::host_dir(root, crate::native::Target::Android);
 	excluded.extend([".gradle", "build", "app/build", "app/.cxx"].map(|path| android.join(path)));
 	excluded
+}
+
+/// Packages an edit can belong to, and which side links each one.
+fn edit_scope(
+	config: &LeptoskitConfig,
+	root: &Path,
+) -> (
+	Vec<Package>,
+	std::collections::BTreeSet<String>,
+	std::collections::BTreeSet<String>,
+	Vec<PathBuf>,
+) {
+	let asset_dirs = crate::budgets::asset_dirs(root);
+	let Ok(metadata) = crate::wasm::cargo_metadata(root) else {
+		return (
+			Vec::new(),
+			std::collections::BTreeSet::new(),
+			std::collections::BTreeSet::new(),
+			asset_dirs,
+		);
+	};
+	let packages: Vec<Package> = metadata
+		.packages
+		.iter()
+		.map(|package| {
+			Package {
+				name: package.name.clone(),
+				dir: package.manifest_path.parent().unwrap_or(root).to_path_buf(),
+				deps: package
+					.dependencies
+					.iter()
+					.filter(|dependency| metadata.package(&dependency.name).is_some())
+					.map(|dependency| dependency.name.clone())
+					.collect(),
+			}
+		})
+		.collect();
+	let client = crate::wasm::detect_client_with(
+		config.build.client_package.as_deref(),
+		Some(&config.app.name),
+		&metadata,
+	)
+	.ok()
+	.flatten()
+	.map(|client| client.name)
+	.unwrap_or_default();
+	let server = crate::server::backend_package(config, &metadata, Platform::Web)
+		.ok()
+		.flatten()
+		.map(|package| package.name.clone())
+		.unwrap_or_default();
+
+	let client_packages = dependency_names(&packages, &client);
+	let server_packages = dependency_names(&packages, &server);
+	(packages, client_packages, server_packages, asset_dirs)
 }
 
 /// Starts the app's development database, if it has one, and checks its
@@ -1518,6 +1653,10 @@ mod tests {
 			runs_app_server: false,
 			app_server: None,
 			env: Vec::new(),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 		assert_eq!(web.url(), "http://127.0.0.1:4810");
 		web.stop_app_server();
@@ -1541,6 +1680,10 @@ mod tests {
 					.spawn()
 					.unwrap(),
 			),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 
 		running.stop_app_server();
@@ -1566,6 +1709,10 @@ mod tests {
 			runs_app_server: true,
 			env: Vec::new(),
 			app_server: Some(created),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 
 		drop(doomed);
@@ -1638,11 +1785,7 @@ mod tests {
 		let watching = Watching {
 			_watcher: watcher,
 			events: received,
-			heard: Heard {
-				config_changed: Arc::new(AtomicBool::new(false)),
-				tables_changed: Arc::new(AtomicBool::new(false)),
-				branch: BranchWatch::new(false, root),
-			},
+			heard: Heard::new(false, root),
 		};
 		rebuild(started(), &watching);
 	}
@@ -1661,11 +1804,7 @@ mod tests {
 		let watching = Watching {
 			_watcher: watcher,
 			events: received,
-			heard: Heard {
-				config_changed: Arc::new(AtomicBool::new(false)),
-				tables_changed: Arc::new(AtomicBool::new(false)),
-				branch: BranchWatch::new(false, root),
-			},
+			heard: Heard::new(false, root),
 		};
 		rebuild(started(), &watching);
 		handle.join().unwrap();

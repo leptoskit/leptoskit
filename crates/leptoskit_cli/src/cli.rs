@@ -429,6 +429,9 @@ pub enum Command {
 		#[arg(long)]
 		all: bool,
 	},
+	/// Runs the caps and boot checks, and prints the build, test, lint, and
+	/// workspace commands.
+	Budgets,
 	/// Validates a workspace and releases independently configured apps.
 	Workspace {
 		#[command(subcommand)]
@@ -883,6 +886,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 		Command::Auth { command } => crate::auth_command::run(command),
 		Command::Codepush { command } => codepush::run(command),
 		Command::Doctor { all } => doctor::run(all),
+		Command::Budgets => crate::budgets::run(),
 		Command::Workspace { command } => crate::workspace::run(command),
 		Command::Format(args) => {
 			match leptoskit_fmt::cli::execute(&args) {

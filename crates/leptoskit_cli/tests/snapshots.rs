@@ -210,6 +210,7 @@ fn help_text_is_pinned() {
 		&["codepush", "approve", "--help"][..],
 		&["codepush", "attach", "--help"][..],
 		&["doctor", "--help"][..],
+		&["budgets", "--help"][..],
 		&["auth", "--help"][..],
 		&["auth", "doctor", "--help"][..],
 		&["auth", "rotate-keys", "--help"][..],

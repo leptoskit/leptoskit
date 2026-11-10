@@ -35,6 +35,7 @@ Commands:
   auth         Checks sign-in's configuration, rotates its keys, adds third-party providers, and registers the apps that may sign people in with yours
   codepush     Manages code push releases
   doctor       Checks the local environment for missing tooling: the tools every build uses, then each native platform the project targets; exits non-zero when a required check fails
+  budgets      Runs the caps and boot checks, and prints the build, test, lint, and workspace commands
   workspace    Validates a workspace and releases independently configured apps
   format       Formats Rust, and the markup in `view!` macros, with the project's `rustfmt.toml`
   lint         Checks the project with the leptoskit rules and clippy, side by side

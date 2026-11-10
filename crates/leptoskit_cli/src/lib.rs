@@ -23,6 +23,7 @@
 
 pub mod auth_command;
 pub mod auth_pages;
+pub mod budgets;
 pub mod build;
 pub mod cache;
 pub mod cargo_messages;
