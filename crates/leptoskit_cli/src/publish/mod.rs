@@ -205,6 +205,13 @@ const NEEDED: [Needed; 17] = [
 /// this names receives the store's credentials and signed tokens, so only
 /// set it deliberately.
 fn api(variable: &str, default: &str) -> String {
+	// Tests point a store at their own server on their own thread, since
+	// every test shares the environment.
+	#[cfg(test)]
+	if let Some(address) = tests::api(variable) {
+		return address;
+	}
+
 	std::env::var(variable).unwrap_or_else(|_| default.to_owned())
 }
 
