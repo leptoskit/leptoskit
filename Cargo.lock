@@ -2568,6 +2568,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact_bench"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+ "leptoskit_testing",
+]
+
+[[package]]
+name = "exact_examples"
+version = "0.3.0"
+dependencies = [
+ "leptos",
+ "leptoskit",
+ "leptoskit_testing",
+ "reactive_graph",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "extended"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
