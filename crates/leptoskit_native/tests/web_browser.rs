@@ -399,6 +399,43 @@ fn hydrates_existing_server_controls_and_attaches_handlers() {
 }
 
 #[wasm_bindgen_test]
+async fn hydrated_screens_refresh_stylesheets_when_classes_change() {
+	let parent = container();
+	parent.set_inner_html(include_str!("fixtures/web_hydration.html"));
+	let expanded = ArcRwSignal::new(false);
+	let app_expanded = expanded.clone();
+	let mount = hydrate_from(parent.clone(), move || {
+		move || {
+			render(
+				Element::view()
+					.class(if app_expanded.get() { "p-8" } else { "p-4" })
+					.child(Element::text("Hydrated"))
+					.child(Element::button("Activate")),
+			)
+		}
+	});
+	let root: web_sys::HtmlElement = find(&parent, "div");
+	let padding = || {
+		window()
+			.get_computed_style(&root)
+			.unwrap()
+			.unwrap()
+			.get_property_value("padding-top")
+			.unwrap()
+	};
+	assert_eq!(padding(), "16px");
+	expanded.set(true);
+	tick().await;
+	assert_eq!(padding(), "32px", "the new style scope must have CSS");
+	assert_eq!(parent.query_selector_all("style").unwrap().length(), 1);
+	expanded.set(false);
+	tick().await;
+	assert_eq!(padding(), "16px");
+	drop(mount);
+	parent.remove();
+}
+
+#[wasm_bindgen_test]
 async fn reactive_controls_preserve_focus_and_deliver_native_events() {
 	let parent = container();
 	let value = ArcRwSignal::new("First".to_owned());
