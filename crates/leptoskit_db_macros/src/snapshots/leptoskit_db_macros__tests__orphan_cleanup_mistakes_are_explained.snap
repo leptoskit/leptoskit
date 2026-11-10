@@ -1,0 +1,6 @@
+---
+source: crates/leptoskit_db_macros/src/tests.rs
+expression: "report.join(\"\\n\")"
+---
+unknown action: `on_source_delete` is `delete_orphan_targets`: deleting a `from` row deletes the `to` rows no other `from` row links to any more
+on a table: `from`, `to`, `exclusive`, and `on_source_delete` describe a link table: use `#[db::link(...)]`

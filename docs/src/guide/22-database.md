@@ -445,6 +445,25 @@ Narrow what you read with `filter(|tag| …)` on the linked rows and `filter_lin
 - **Replacing every link at once.** `set` adds, updates, and removes links in one transaction. It replaces only what the request sees: a link to a row it can't see stays, and filters narrow it, so `post.tags().filter(|tag| tag.kind.eq("topic")).set(…)` leaves other tags alone. If a policy keeps a link from being removed, the whole change fails with `DbError::Forbidden`.
 - **A schema pack's links** are read like any other, but only the pack adds or removes them.
 
+### Delete what nothing links to any more
+
+Some targets exist only for their sources: a tag nobody uses is clutter, and an attachment no message carries is wasted storage. `on_source_delete = delete_orphan_targets` deletes a target when deleting its sources leaves no link to it:
+
+```rust
+#[db::link(name = "post_tags", from = Post as tags, to = Tag as posts, on_source_delete = delete_orphan_targets)]
+pub struct PostTag {}
+
+post.destroy(&db).await?;   // its tags go too, unless another post still carries them
+```
+
+It runs in the same transaction as the delete, after `delete`, `destroy`, and bulk `Post::query().delete(…)` and `destroy(…)`:
+
+- **Only this link counts.** A tag that another post carries stays; a tag that only a note links to, through another link table, doesn't keep it.
+- **It deletes the way the source was deleted.** Deleting a post for good removes a tag for good once no link row at all is left to it, even one from a soft-deleted post that could still be restored. Soft-deleting a post soft-deletes the tags no live post carries any more. A target table without a `#[db(deleted_at)]` column keeps its rows on a soft delete, since that can be undone.
+- **It reaches every orphan.** Like a cascade, it deletes targets whatever the request may see. Each one is deleted through the database layer, so its hooks run, its audit log entry gives the reason, and its own links clean up in turn. A hook that refuses rolls the whole delete back.
+
+It doesn't follow rows the database removes on its own: deleting a user whose posts go through `on_delete = cascade` leaves those posts' tags.
+
 ## Fetch linked rows in one query
 
 A profile page wants a user's handle, how many posts they've written, and their three latest posts, each with its tags. Fetching the user, then the posts, then each post's tags is one query per row, which gets slower with every post, and leaves you assembling the result by hand. A **shape** says what you want as a struct, and fetches all of it in one statement:
@@ -490,6 +509,27 @@ Each field reads one thing:
 
 - **A column**, by the field's name: `handle`. To use another name, say which column: `#[db(column = display_name)] pub name: String`.
 - **A count**, `#[db(count(posts))]`, of the rows a link reaches, with an optional `filter`.
+- **A link's own columns**, through `via = tags_links`, which reaches the `#[db::link]` rows themselves rather than the rows they point at. Shape the link table, and nest the far row in it:
+
+  ```rust
+  #[derive(Shape, Serialize, Deserialize)]
+  #[db(from = Post)]
+  pub struct PostCard {
+  	pub title: String,
+  	#[db(via = tags_links, order_by = |link| link.position.asc())]
+  	pub tags: Vec<Tagging>,
+  }
+
+  #[derive(Shape, Serialize, Deserialize)]
+  #[db(from = PostTag)]
+  pub struct Tagging {
+  	pub position: i16,
+  	#[db(via = tag)]
+  	pub tag: TagName,
+  }
+  ```
+
+  Every `#[db::link]` method has one, `tags_links` and `posts_links`, and a link to a row the request can't see, or that's soft-deleted, isn't there, as with `via = tags`.
 - **Linked rows**, `#[db(via = posts)]`, as another shape. `via` names any way from this table to another: a link column without its `_id` (`via = author`), a `backlink` (`via = posts`), or a `#[db::link]` method (`via = tags`). The field's type says how many: `Vec<_>` for all of them, `Option<_>` for the first, and the shape itself for the row a required link points at. A `Vec` takes `filter`, where several must all match, `order_by`, where later ones break ties, `limit`, and `offset`; an `Option` takes all but `limit`.
 
 What the query returns follows the same rules as every other query:
@@ -583,6 +623,57 @@ A count sees what the request may see, just as `query.count(&db)` would:
 - **The comparison is yours.** A rule that allows when a count is zero, such as "no one has blocked you", allows for a request without the global it reads, unless you wrap it in `cx.global`.
 
 When the query's table is the rule's own, as in the cap, its columns on the right of a comparison are the checked row's: `other.team_id.eq(project.team_id)` compares each counted project with the one being inserted.
+
+### Enforce policies in the database too
+
+Policies filter every query the database layer writes, but not SQL you write yourself, and not a query someone forgets to run through a request's handle. On Postgres, the same rules can also run as row-level security, so the database itself filters every statement, raw SQL included.
+
+The database can't run Rust closures, so rules read the request through settings: globals whose value Postgres sees as `leptoskit.<name>`.
+
+```rust
+use leptoskit::db::Setting;
+
+/// The signed-in user.
+pub struct Viewer(pub Id<User>);
+
+impl Setting for Viewer {
+	const NAME: &'static str = "viewer";
+	type Value = Id<User>;
+
+	fn value(&self) -> Id<User> {
+		self.0
+	}
+}
+
+leptoskit::db::register_setting!(Viewer);
+
+#[table(name = "posts", public)]
+#[db::policy(select, |post, cx| post.published.eq(true) | post.author_id.eq(cx.setting::<Viewer>()))]
+#[db::policy(insert, update, delete, |post, cx| post.author_id.eq(cx.setting::<Viewer>()))]
+pub struct Post { … }
+```
+
+`cx.setting::<Viewer>()` works whether or not row-level security is on: put `Viewer` in the request's context with `Context::new().with(Viewer(id))`, as any global. A request without it compares with `NULL`, so the rule matches no row, even negated. `leptoskit_auth`'s `SignedIn` is a setting too, named `account`, holding the account's ID.
+
+Then turn row-level security on, and connect with it:
+
+```toml
+[db]
+policies = "rls"
+```
+
+```rust
+let db = Db::connect(&url).await?.with_row_security()?;
+```
+
+The next migration creates a policy for each table with rules, for reads, inserts, updates, and deletes, and forces it on the table's owner too, which apps usually connect as. Every statement then runs in a transaction that first sets each registered setting from the request's context, and `db.system(…)` sets a bypass instead; migrations bypass it as well. Results are the same as without it: the database layer still adds the rules to its queries, and a refused write is still `DbError::Forbidden`. A refused insert names the rule's message as before; a save or upsert that Postgres refuses first carries Postgres's message instead.
+
+- **Exporting fails** when a rule can't run in the database: it reads a global with `cx.global` or `cx.get`, reads a setting nobody registered, or counts rows of its own table, which Postgres would check against the same policy forever. The error names the table.
+- **Not covered:** views, whose queries run with their owner's rights, and the audit log, whose `AuditReader` is Rust code. The database layer's rules still apply to both.
+- **What it guards against:** a query that skips the request's handle, and raw SQL. Anyone who can run arbitrary SQL can also change the settings, so it isn't a defence against SQL injection, and Postgres superusers bypass it entirely.
+- **Soft deletes are updates to Postgres.** On a table with a `deleted_at` column, the update policy also lets a request change a row its `delete` rules allow, as long as the row it leaves is soft-deleted, since that is how the database layer deletes it. Raw SQL from such a request can change other columns in the same statement.
+- **Postgres only.** On SQLite, `policies = "rls"` refuses to export and `with_row_security` fails.
+- Each statement outside a transaction becomes a short transaction, so it costs a few more round trips. Postgres also checks a row a write returns against the `select` policy, so a rule that lets a request insert a row it may not read is refused.
 
 ## Run your own code when rows change
 
@@ -770,6 +861,68 @@ A view can read another view: migrations create each view after the views its qu
 
 Migrations create views after every table change and drop them before. A view's SQL isn't parsed, so when a migration changes a table in a way a view could notice, it drops and recreates every view, which refills materialized ones.
 
+## Search text
+
+A search box that matches with `ilike '%rust%'` misses `Rust's`, can't rank the best match first, and reads every row. Mark the text columns to search, and the table gets a full-text index that the migrations create and every write keeps current:
+
+```rust
+#[table(name = "articles", public, search(language = "english"))]
+#[db::policy(select, |article, cx| article.published.eq(true)
+	| cx.global(|viewer: &Viewer| article.author_id.eq(viewer.0)))]
+pub struct Article {
+	pub id: Id<Article>,
+	pub author_id: Id<User>,
+	#[db(search(weight = A))]
+	pub title: String,
+	#[db(search(weight = C))]
+	pub body: Option<String>,
+	pub published: bool,
+}
+
+let hits = Article::query()
+	.search("passkeys rust")
+	.limit(10)
+	.all(&db)
+	.await?;
+```
+
+`search` returns the matching rows, best first. A match in a column with a higher weight counts more: `A` most, then `B`, `C`, and `D`, which is what `#[db(search)]` alone gives. The text reads like a web search box:
+
+| You type          | It finds rows that                      |
+| ----------------- | --------------------------------------- |
+| `passkeys rust`   | contain both words                      |
+| `"memory safety"` | contain the phrase, words in that order |
+| `rust -java`      | contain `rust` and not `java`           |
+| `rust OR go`      | contain either                          |
+| `concur*`         | contain a word starting with `concur`   |
+
+Punctuation and stray quotes never make the search fail; a search with nothing to match, such as `-java` alone, finds nothing. A search has at most 32 words and phrases.
+
+The search is a query like any other: the table's `select` policy decides which rows it can find, soft-deleted rows stay hidden unless you add `with_deleted()`, and `filter`, `order_by` (to break ties between equally good matches), `limit`, `offset`, `first`, and `count` work as they do on `query()`.
+
+To show why a row matched, ask for highlights. `hits` returns each row with its rank (higher is better) and the highlights, in the order you asked:
+
+```rust
+let hits = Article::query()
+	.search("passkeys")
+	.highlight(|article| article.title)
+	.excerpt(|article| article.body, 20)
+	.hits(&db)
+	.await?;
+
+for segment in hits[0].highlights[0].segments() {
+	// `segment.text`, and `segment.matched` for the words that matched.
+}
+```
+
+`highlight` returns a column's whole text and `excerpt` about that many words (2 to 64) around the best matches. A highlight is plain text in runs, never HTML, so render each run escaped, with matched runs wrapped in `<mark>` or styled as you like. Matches are marked on their way from the database with two private-use characters, U+E000 and U+E001, so highlighted text leaves those two out.
+
+**Languages.** `search(language = …)` decides how text is split into words. `simple`, the default, lowercases words and keeps each one as written, so `apple` doesn't find `apples`. `english` reduces words to their stem, so `passkey` finds `passkeys`. On Postgres, any text search configuration the server has works, such as `german`; SQLite has only `simple` and `english`, and the migration is refused for others.
+
+**On each database.** Postgres keeps a generated `tsvector` column, `lk_search`, with a GIN index, and ranks with `ts_rank`. SQLite keeps a copy of the searched text in an FTS5 table, `<table>_lk_search`, numbered by a second table that maps each entry to its row's key, with triggers that update both on every write; it ranks with `bm25`, weighted like Postgres. Both follow every write, including raw SQL. They split words slightly differently: Postgres's `english` leaves out stopwords such as `the` and `again`, which SQLite's keeps, and excerpts may choose different words. Ranks order rows the same way on both, but their values differ.
+
+**Migrations.** Adding `search` to a table indexes the rows it already has. Changing which columns are searched, their weights, or the language, renaming the table, or renaming or retyping a searched or key column recreates the index; it holds only words derived from the table, so nothing is lost. Searched columns must hold text (`String`, `Option<String>`, or a text scalar such as `Email`) and can't be generated.
+
 ## Refetch what changed
 
 A page that lists posts shows stale data the moment someone else writes one, and polling every few seconds is wasteful and still late. Mark the table `live`, and every committed write to it says which rows changed, so each client refetches exactly the queries those rows touch:
@@ -927,6 +1080,7 @@ url_env = "DATABASE_URL" # where status, migrate, and reset find the database
 dev_server = "auto" # "devenv", "embedded", or "off"; Postgres only
 watch = "migrate" # or "push", "report", or "off"
 branch_databases = true # a database per git branch on the development Postgres
+policies = "orm" # or "rls": Postgres enforces policies too
 ```
 
 An empty `[db]` table uses every default. `dev_server` picks the development database when `DATABASE_URL` isn't set: `auto` uses devenv's `services.postgres` when `devenv.nix` turns it on and the embedded server otherwise, `devenv` and `embedded` choose one, and `off` starts none. `watch` says what `leptoskit dev` does when the tables change.

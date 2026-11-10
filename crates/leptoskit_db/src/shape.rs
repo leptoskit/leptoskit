@@ -192,6 +192,15 @@ enum RelationKind {
 		column: &'static str,
 		key: &'static str,
 	},
+	/// The target is a link table, whose `near` column holds the outer
+	/// row's `key`, and whose `far` column holds a key of `end`: only links
+	/// to an `end` row the request may see count.
+	Links {
+		end: Target,
+		near: &'static str,
+		far: &'static str,
+		key: &'static str,
+	},
 	/// A link table's rows pair the outer row's `key`, in `near`, with the
 	/// target's key, in `far`.
 	Through {
@@ -238,6 +247,24 @@ impl<From: HasId, To: Table> Relation<From, To, Many> {
 			Target::of::<To>(),
 			RelationKind::Through {
 				link: Target::of::<J>(),
+				near,
+				far,
+				key: From::KEY[0],
+			},
+		)
+	}
+}
+
+impl<From: HasId, J: Link> Relation<From, J, Many> {
+	/// The link rows of `J` from a `From` row, through its `near` column,
+	/// with their own columns, to the `Far` rows their `far` column holds.
+	/// A link to a row the request can't see, or that's soft-deleted, isn't
+	/// there, as with [`Relation::through`].
+	pub fn links<Far: HasId>(near: &'static str, far: &'static str) -> Self {
+		Self::with(
+			Target::of::<J>(),
+			RelationKind::Links {
+				end: Target::of::<Far>(),
 				near,
 				far,
 				key: From::KEY[0],
@@ -642,6 +669,21 @@ fn write_related_where(
 				.push(".")
 				.identifier(key);
 		}
+		RelationKind::Links {
+			end,
+			near,
+			far,
+			key,
+		} => {
+			sql.push(alias)
+				.push(".")
+				.identifier(near)
+				.push(" = ")
+				.push(outer)
+				.push(".")
+				.identifier(key);
+			write_visible_end(sql, access, end, alias, far, related.with_deleted)?;
+		}
 		RelationKind::Through {
 			link,
 			near,
@@ -682,6 +724,62 @@ fn write_related_where(
 	}
 
 	write_visible(sql, access, target, related.with_deleted)
+}
+
+/// `AND alias.far IN (…)` the rows of `end` the request may read and, unless
+/// `with_deleted`, that aren't soft-deleted. Nothing when every row of
+/// `end` qualifies: the foreign key already says the row is there.
+fn write_visible_end(
+	sql: &mut Sql,
+	access: &Access,
+	end: &Target,
+	alias: &str,
+	far: &str,
+	with_deleted: bool,
+) -> Result<()> {
+	let policy = (end.policy)(access, Action::Select);
+	let deleted_at = end.deleted_at.filter(|_| !with_deleted);
+
+	if policy.is_none() && deleted_at.is_none() {
+		return Ok(());
+	}
+
+	sql.push(" AND ")
+		.push(alias)
+		.push(".")
+		.identifier(far)
+		.push(" IN (SELECT ");
+	let (table, ends) = sql.open(&end.table, "end");
+	sql.push(&ends)
+		.push(".")
+		.identifier(end.key[0])
+		.push(" FROM ")
+		.push(&table)
+		.push(" AS ")
+		.push(&ends)
+		.push(" WHERE ");
+	let written = match &policy {
+		Some(policy) => {
+			sql.push("(");
+			let written = sql.isolated(|sql| policy.write(sql));
+			sql.push(")");
+			written
+		}
+		None => Ok(()),
+	};
+
+	if let Some(column) = deleted_at {
+		if policy.is_some() {
+			sql.push(" AND ");
+		}
+
+		sql.identifier(column).push(" IS NULL");
+	}
+
+	sql.leave();
+	written?;
+	sql.push(")");
+	Ok(())
 }
 
 /// `AND` what the request may read of the innermost scope's table, and not

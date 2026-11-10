@@ -26,11 +26,11 @@ use crate::sql::Sql;
 /// the query asks for them with [`Query::with_deleted`].
 #[must_use = "a query does nothing until it runs"]
 pub struct Query<T> {
-	filter: Option<Expr>,
-	order: Vec<Order>,
-	limit: Option<u64>,
-	offset: Option<u64>,
-	with_deleted: bool,
+	pub(crate) filter: Option<Expr>,
+	pub(crate) order: Vec<Order>,
+	pub(crate) limit: Option<u64>,
+	pub(crate) offset: Option<u64>,
+	pub(crate) with_deleted: bool,
 	skip_hooks: bool,
 	table: PhantomData<fn() -> T>,
 }
@@ -175,9 +175,31 @@ impl<T: Table> Query<T> {
 	///
 	/// On an audited table, every deleted row is recorded. An `after_delete`
 	/// hook doesn't run; see [`Query::allow_skipping_hooks`].
+	///
+	/// Deleting rows that a link with `on_source_delete =
+	/// delete_orphan_targets` starts from also deletes the targets they
+	/// leave orphaned, in the same transaction.
 	pub async fn delete(self, connection: &impl Connection) -> Result<u64> {
+		#[cfg(any(feature = "postgres", feature = "sqlite"))]
+		if crate::orphans::has_rules::<T>() {
+			let mode = if T::DELETED_AT.is_some() {
+				crate::orphans::Mode::Soft
+			} else {
+				crate::orphans::Mode::Hard
+			};
+			let rows = self.deleting(connection.access(), mode == crate::orphans::Mode::Hard);
+			return atomically!(connection, |tx| {
+				delete_with_orphans(tx, self, &rows, mode, Self::delete_matching).await
+			});
+		}
+
+		self.delete_matching(connection).await
+	}
+
+	/// [`Query::delete`], without orphan cleanup.
+	async fn delete_matching(self, connection: &impl Connection) -> Result<u64> {
 		let Some(column) = T::DELETED_AT else {
-			return self.destroy(connection).await;
+			return self.destroy_matching(connection).await;
 		};
 
 		refuse_bulk::<T>(T::HOOKS.after_delete, self.skip_hooks)?;
@@ -207,7 +229,51 @@ impl<T: Table> Query<T> {
 	///
 	/// On an audited table, every removed row is recorded. An `after_delete`
 	/// hook doesn't run; see [`Query::allow_skipping_hooks`].
-	pub async fn destroy(mut self, connection: &impl Connection) -> Result<u64> {
+	///
+	/// Targets of a link with `on_source_delete = delete_orphan_targets`
+	/// that the rows leave orphaned are removed with them.
+	pub async fn destroy(self, connection: &impl Connection) -> Result<u64> {
+		#[cfg(any(feature = "postgres", feature = "sqlite"))]
+		if crate::orphans::has_rules::<T>() {
+			let rows = self.deleting(connection.access(), true);
+			return atomically!(connection, |tx| {
+				delete_with_orphans(
+					tx,
+					self,
+					&rows,
+					crate::orphans::Mode::Hard,
+					Self::destroy_matching,
+				)
+				.await
+			});
+		}
+
+		self.destroy_matching(connection).await
+	}
+
+	/// The rows a delete of this query reaches: its filter, what the request
+	/// may delete, and, unless `with_deleted`, only rows not soft-deleted.
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	fn deleting(&self, access: &policy::Access, with_deleted: bool) -> Expr {
+		let mut rows = self.filter.clone().unwrap_or_else(Expr::always);
+
+		if let Some(policy) = policy::condition::<T>(access, Action::Delete) {
+			rows = rows & policy;
+		}
+
+		if let Some(column) = T::DELETED_AT.filter(|_| !with_deleted) {
+			rows = rows
+				& Expr::Null {
+					column,
+					negated: false,
+				};
+		}
+
+		rows
+	}
+
+	/// [`Query::destroy`], without orphan cleanup.
+	async fn destroy_matching(mut self, connection: &impl Connection) -> Result<u64> {
 		refuse_bulk::<T>(T::HOOKS.after_delete, self.skip_hooks)?;
 		self.with_deleted = true;
 
@@ -407,6 +473,22 @@ impl<T: Table> Update<T> {
 			table: PhantomData,
 		})
 	}
+}
+
+/// Runs a bulk delete of `query`, which reaches `rows`, after reading the
+/// targets its orphan rules may leave orphaned, and deletes those after.
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+async fn delete_with_orphans<T: Table, C: Connection>(
+	connection: &C,
+	query: Query<T>,
+	rows: &Expr,
+	mode: crate::orphans::Mode,
+	delete: impl AsyncFnOnce(Query<T>, &C) -> Result<u64>,
+) -> Result<u64> {
+	let pending = crate::orphans::before::<T>(connection, rows, mode).await?;
+	let deleted = delete(query, connection).await?;
+	pending.clean(connection).await?;
+	Ok(deleted)
 }
 
 /// Fails a bulk write on a view, or one that would skip the table's hooks
@@ -695,7 +777,19 @@ fn write_where<T: Table>(
 	policy: Option<&Expr>,
 	with_deleted: bool,
 ) -> Result<()> {
-	let mut first = true;
+	write_conditions::<T>(sql, filter, policy, with_deleted, false)
+}
+
+/// The conditions [`write_where`] writes, after `WHERE` and conditions of
+/// the caller's own when `started`.
+pub(crate) fn write_conditions<T: Table>(
+	sql: &mut Sql,
+	filter: Option<&Expr>,
+	policy: Option<&Expr>,
+	with_deleted: bool,
+	started: bool,
+) -> Result<()> {
+	let mut first = !started;
 
 	for condition in [filter, policy].into_iter().flatten() {
 		sql.push(if first { " WHERE (" } else { " AND (" });

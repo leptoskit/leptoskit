@@ -20,6 +20,13 @@ pub trait Connection: Send + Sync {
 	#[doc(hidden)]
 	fn access(&self) -> &crate::policy::Access;
 
+	/// Whether Postgres row-level security filters the connection's
+	/// statements too: [`Db::with_row_security`](crate::Db::with_row_security).
+	#[doc(hidden)]
+	fn row_security(&self) -> bool {
+		false
+	}
+
 	/// Runs a statement and returns its rows, each as values in column order.
 	#[doc(hidden)]
 	fn fetch(&self, statement: Statement) -> impl Future<Output = Result<Vec<Vec<Value>>>> + Send;
@@ -42,6 +49,14 @@ pub trait Connection: Send + Sync {
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	fn begin_unless_in_transaction(&self)
 	-> impl Future<Output = Result<Option<crate::Tx>>> + Send;
+
+	/// The transaction this connection is, or runs in, for work that has to
+	/// name its concrete type, such as orphan cleanup's registry.
+	#[doc(hidden)]
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	fn current_transaction(&self) -> Option<&crate::Tx> {
+		None
+	}
 }
 
 /// Runs `$work` all at once: in a new transaction on a pool, or as part of

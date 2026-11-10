@@ -347,6 +347,18 @@ impl Post {
             PostTag,
         >("post_id", "tag_id")
     }
+    /// The link rows themselves, with their own columns, for
+    /// shapes to follow: `via = …_links`.
+    #[doc(hidden)]
+    pub fn __via_tags_links() -> ::leptoskit_db::__private::shape::Relation<
+        Self,
+        PostTag,
+        ::leptoskit_db::__private::shape::Many,
+    > {
+        ::leptoskit_db::__private::shape::Relation::links::<
+            crate::Tag,
+        >("post_id", "tag_id")
+    }
 }
 impl crate::Tag {
     /// The `Post` rows linked to this one through [`PostTag`].
@@ -363,6 +375,16 @@ impl crate::Tag {
         ::leptoskit_db::__private::shape::Relation::through::<
             PostTag,
         >("tag_id", "post_id")
+    }
+    /// The link rows themselves, with their own columns, for
+    /// shapes to follow: `via = …_links`.
+    #[doc(hidden)]
+    pub fn __via_posts_links() -> ::leptoskit_db::__private::shape::Relation<
+        Self,
+        PostTag,
+        ::leptoskit_db::__private::shape::Many,
+    > {
+        ::leptoskit_db::__private::shape::Relation::links::<Post>("tag_id", "post_id")
     }
 }
 /// The columns a public shape may read.

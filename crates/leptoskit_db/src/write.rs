@@ -232,6 +232,11 @@ async fn effected_insert<T: Table>(
 		&WriteContext::insert(connection.access()),
 	)
 	.await?;
+
+	if let Some(check) = check {
+		refuse_before_row_security::<T>(connection, &row, check).await?;
+	}
+
 	let stored = write_insert(connection, row).await?;
 
 	if let Some(check) = check {
@@ -247,10 +252,37 @@ async fn effected_insert<T: Table>(
 /// Inserts, then checks the stored row. Errors return from here rather than
 /// from inside `atomically!`, which must see them to roll back.
 async fn checked_insert<T: Table>(connection: &impl Connection, row: T, check: &Expr) -> Result<T> {
+	refuse_before_row_security::<T>(connection, &row, check).await?;
 	let stored = write_insert(connection, row).await?;
 	let key = policy::key_of::<T>(&stored.to_values()?);
 	policy::verify::<T>(connection, &[key], Action::Insert, check).await?;
 	Ok(stored)
+}
+
+/// Under row-level security, refuses an insert its policy won't allow
+/// before writing it, with the database layer's own refusal: Postgres would
+/// refuse it first, with an error that says less.
+#[cfg_attr(
+	not(feature = "postgres"),
+	expect(clippy::unused_async, reason = "only Postgres has row-level security")
+)]
+async fn refuse_before_row_security<T: Table>(
+	connection: &impl Connection,
+	row: &T,
+	check: &Expr,
+) -> Result<()> {
+	#[cfg(feature = "postgres")]
+	if connection.row_security()
+		&& let Some(refusal) =
+			policy::refuse_image::<T>(connection, &row.to_values()?, Action::Insert, check).await?
+	{
+		return Err(refusal);
+	}
+
+	#[cfg(not(feature = "postgres"))]
+	let _ = (connection, row, check);
+
+	Ok(())
 }
 
 async fn write_insert<T: Table>(connection: &impl Connection, row: T) -> Result<T> {
@@ -665,9 +697,44 @@ fn position<T: Table>(column: &str) -> usize {
 /// column, setting that column on `row` too. Rows linked to it with
 /// `on_soft_delete = cascade` are soft-deleted with it, in one transaction.
 /// With policies, the row must be one the request may delete.
+///
+/// Deleting a row that a link with `on_source_delete =
+/// delete_orphan_targets` starts from also deletes the targets it leaves
+/// orphaned, in the same transaction.
 pub async fn delete<T: Table>(connection: &impl Connection, row: &mut T) -> Result<()> {
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	if crate::orphans::has_rules::<T>() {
+		return atomically!(connection, |tx| {
+			with_orphans(tx, row, async |tx, row| delete_row(tx, row).await).await
+		});
+	}
+
+	delete_row(connection, row).await
+}
+
+/// Deletes `row` with `delete`, reading first the targets its orphan rules
+/// may leave orphaned, and deleting those after.
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+async fn with_orphans<T: Table, C: Connection>(
+	connection: &C,
+	row: &mut T,
+	delete: impl AsyncFnOnce(&C, &mut T) -> Result<()>,
+) -> Result<()> {
+	let mode = if T::DELETED_AT.is_some() {
+		crate::orphans::Mode::Soft
+	} else {
+		crate::orphans::Mode::Hard
+	};
+	let rows = policy::keys_condition::<T>(&[policy::key_of::<T>(&row.to_values()?)]);
+	let pending = crate::orphans::before::<T>(connection, &rows, mode).await?;
+	delete(connection, row).await?;
+	pending.clean(connection).await
+}
+
+/// [`delete`], without orphan cleanup.
+async fn delete_row<T: Table>(connection: &impl Connection, row: &mut T) -> Result<()> {
 	if T::DELETED_AT.is_none() {
-		return destroy(connection, row).await;
+		return destroy_row(connection, row).await;
 	}
 
 	row.mark_deleted();
@@ -813,8 +880,29 @@ async fn soft_delete<T: Table>(
 }
 
 /// Removes a row for good. With policies, the row must be one the request
-/// may delete.
+/// may delete. Targets of a link with `on_source_delete =
+/// delete_orphan_targets` it leaves orphaned are removed with it.
 pub async fn destroy<T: Table>(connection: &impl Connection, row: &T) -> Result<()> {
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	if crate::orphans::has_rules::<T>() {
+		return atomically!(connection, |tx| destroy_with_orphans(tx, row).await);
+	}
+
+	destroy_row(connection, row).await
+}
+
+/// Removes `row` for good, then the targets it leaves orphaned.
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+async fn destroy_with_orphans<T: Table>(connection: &impl Connection, row: &T) -> Result<()> {
+	let rows = policy::keys_condition::<T>(&[policy::key_of::<T>(&row.to_values()?)]);
+	let pending =
+		crate::orphans::before::<T>(connection, &rows, crate::orphans::Mode::Hard).await?;
+	destroy_row(connection, row).await?;
+	pending.clean(connection).await
+}
+
+/// [`destroy`], without orphan cleanup.
+async fn destroy_row<T: Table>(connection: &impl Connection, row: &T) -> Result<()> {
 	let values = row.to_values()?;
 	let filter = policy::condition::<T>(connection.access(), Action::Delete);
 
