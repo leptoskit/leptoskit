@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use leptoskit_db::DbError;
 use p256::ecdsa::SigningKey as EcKey;
+use ring::signature::RsaKeyPair;
 use serde_json::Value;
 
 use crate::Idp;
@@ -123,66 +124,145 @@ impl Idp {
 		Ok((retires_at, expires_at))
 	}
 
-	/// The RSA key, published under its thumbprint. Its row is renewed while
-	/// it signs, so it stays in the key set; once the server is given another
-	/// key, the old one stops being renewed and leaves the set after the
-	/// last token it signed has expired.
+	/// The RSA key that signs now, published under its thumbprint, and
+	/// renewed while it signs so it stays in the key set.
+	///
+	/// A next key is published as soon as the server has it, and signs once
+	/// it has been published for [`Lifetimes::next_key_notice`], counted from
+	/// its row, so every server switches together. The key it takes over
+	/// from then stops being renewed, and its row is cut short to leave the
+	/// key set once the last token it signed has expired. Without a next
+	/// key, the configured one signs, and a key the server no longer has,
+	/// such as one replaced after a leak, is cut short the same way.
+	///
+	/// [`Lifetimes::next_key_notice`]: crate::Lifetimes::next_key_notice
 	async fn rsa_signer(&self) -> Result<Signer> {
-		let Some(key) = &self.inner.rsa_key else {
+		let Some(current) = &self.inner.rsa_key else {
 			return Err(IdpError::Config(
 				"an app asked for RS256 ID tokens, but the provider has no RSA key".into(),
 			));
 		};
+
+		let mut key = current;
+		let mut keep = vec![rsa_kid(current)];
+		if let Some(next) = &self.inner.next_rsa_key {
+			let published = self.published_rsa(next, true).await?;
+			let notice = Self::lifetime(self.inner.lifetimes.next_key_notice)?;
+			if leptoskit_db::now() >= published.created_at + notice {
+				key = next;
+				keep = vec![published.kid];
+			} else {
+				keep.push(published.kid);
+			}
+		}
+		// Every other RSA key stops signing here: one the next key took over
+		// from, one replaced outright (a leaked key, say), and one promoted
+		// away from.
+		self.retire_rsa_except(&keep).await?;
+
+		let row = self.published_rsa(key, false).await?;
+		self.renew_rsa(&row).await?;
+		Ok(Signer {
+			kid: row.kid,
+			key: PrivateKey::Rsa(Arc::clone(key)),
+		})
+	}
+
+	/// The published row of the RSA key `key`, publishing it first if it
+	/// isn't yet: from now for a key that signs, or after the notice period
+	/// for one that's still `ahead` of its turn.
+	async fn published_rsa(&self, key: &RsaKeyPair, ahead: bool) -> Result<SigningKey> {
 		let PublicKey::Rsa { n, e } = jwt::rsa_public(key) else {
 			unreachable!("an RSA key pair has an RSA public key");
 		};
 		let kid = jwt::rsa_thumbprint(&n, &e);
-		let (retires_at, expires_at) = self.key_schedule()?;
-		let renew_after = retires_at - Self::lifetime(self.inner.lifetimes.signing_key / 2)?;
-		let stored = SigningKey::query()
-			.filter(|row| row.kid.eq(kid.clone()))
-			.first(&self.inner.db)
-			.await?;
-
-		match stored {
-			Some(row) if row.retires_at < renew_after => {
-				SigningKey::update()
-					.filter(|candidate| candidate.id.eq(row.id))
-					.set(|candidate| candidate.retires_at, retires_at)
-					.set(|candidate| candidate.expires_at, expires_at)
-					.run(&self.inner.db)
-					.await?;
-				self.forget_cached_key(&kid);
-			}
-			Some(_) => {}
-			None => {
-				let inserted = NewSigningKey {
-					kid: kid.clone(),
-					algorithm: SigningAlgorithm::Rs256,
-					derived_from: None,
-					x: None,
-					y: None,
-					n: Some(base64url(&n)),
-					e: Some(base64url(&e)),
-					retires_at,
-					expires_at,
-				}
-				.insert(&self.inner.db)
-				.await;
-
-				// Another server published it first.
-				if let Err(error) = inserted
-					&& !matches!(error, DbError::Conflict { .. })
-				{
-					return Err(error.into());
-				}
-			}
+		let find = || {
+			SigningKey::query()
+				.filter(|row| row.kid.eq(kid.clone()))
+				.first(&self.inner.db)
+		};
+		if let Some(row) = find().await? {
+			return Ok(row);
 		}
 
-		Ok(Signer {
-			kid,
-			key: PrivateKey::Rsa(Arc::clone(key)),
-		})
+		let (mut retires_at, mut expires_at) = self.key_schedule()?;
+		if ahead {
+			let notice = Self::lifetime(self.inner.lifetimes.next_key_notice)?;
+			retires_at += notice;
+			expires_at += notice;
+		}
+		let inserted = NewSigningKey {
+			kid: kid.clone(),
+			algorithm: SigningAlgorithm::Rs256,
+			derived_from: None,
+			x: None,
+			y: None,
+			n: Some(base64url(&n)),
+			e: Some(base64url(&e)),
+			retires_at,
+			expires_at,
+		}
+		.insert(&self.inner.db)
+		.await;
+
+		match inserted {
+			Ok(row) => Ok(row),
+			// Another server published it first.
+			Err(DbError::Conflict { .. }) => {
+				find().await?.ok_or_else(|| {
+					IdpError::Config("an RSA key vanished as it was published".into())
+				})
+			}
+			Err(error) => Err(error.into()),
+		}
+	}
+
+	/// Keeps a signing RSA key's row in the key set for another signing
+	/// period, once half of the current one has passed.
+	async fn renew_rsa(&self, row: &SigningKey) -> Result<()> {
+		let (retires_at, expires_at) = self.key_schedule()?;
+		let renew_after = retires_at - Self::lifetime(self.inner.lifetimes.signing_key / 2)?;
+		if row.retires_at < renew_after {
+			SigningKey::update()
+				.filter(|candidate| candidate.id.eq(row.id))
+				.set(|candidate| candidate.retires_at, retires_at)
+				.set(|candidate| candidate.expires_at, expires_at)
+				.run(&self.inner.db)
+				.await?;
+			self.forget_cached_key(&row.kid);
+		}
+		Ok(())
+	}
+
+	/// Stops every RSA key but those in `keep` signing, and cuts their rows
+	/// short so each leaves the key set once the last token it could have
+	/// signed has expired. Rows already retired are left as they are. A
+	/// server still running with an old key renews its row as it signs, so
+	/// a key leaves only once no server signs with it.
+	async fn retire_rsa_except(&self, keep: &[String]) -> Result<()> {
+		let now = leptoskit_db::now();
+		let lifetimes = &self.inner.lifetimes;
+		let expires_at =
+			now + Self::lifetime(lifetimes.access.max(lifetimes.id_token))? + PUBLISHED_MARGIN;
+		let retired = SigningKey::update()
+			.filter(|row| {
+				keep.iter().fold(
+					row.algorithm.eq(SigningAlgorithm::Rs256) & row.retires_at.gt(now),
+					|condition, kid| condition & row.kid.ne(kid.clone()),
+				)
+			})
+			.set(|row| row.retires_at, now)
+			.set(|row| row.expires_at, expires_at)
+			.run(&self.inner.db)
+			.await?;
+		if retired > 0 {
+			self.inner
+				.verifying_keys
+				.lock()
+				.expect("the key cache is never poisoned")
+				.clear();
+		}
+		Ok(())
 	}
 
 	/// The private key for `kid`, derived from the server key `derived_from`,
@@ -238,10 +318,18 @@ impl Idp {
 	/// The published key set, which `/oauth/jwks` serves: every key that
 	/// signs, or signed a token that hasn't expired yet.
 	///
+	/// The keys that sign next are made first, if they don't exist yet, so
+	/// an app that reads the set before any token is signed, and keeps it,
+	/// can still check the first one.
+	///
 	/// # Errors
 	///
-	/// When the database fails.
+	/// When the database fails, or the RSA key can't be published.
 	pub async fn jwks(&self) -> Result<Value> {
+		self.signer(SigningAlgorithm::Es256).await?;
+		if self.inner.rsa_key.is_some() {
+			self.signer(SigningAlgorithm::Rs256).await?;
+		}
 		let now = leptoskit_db::now();
 		let keys = SigningKey::query()
 			.filter(|key| key.expires_at.gt(now))
@@ -270,6 +358,14 @@ impl Idp {
 			return Ok(None);
 		};
 		Ok(unverified.verify(&key, typ))
+	}
+}
+
+/// The RSA key's ID in the key set: its RFC 7638 thumbprint.
+pub(crate) fn rsa_kid(key: &RsaKeyPair) -> String {
+	match jwt::rsa_public(key) {
+		PublicKey::Rsa { n, e } => jwt::rsa_thumbprint(&n, &e),
+		PublicKey::Ec(_) => unreachable!("an RSA key pair has an RSA public key"),
 	}
 }
 

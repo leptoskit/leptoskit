@@ -94,6 +94,7 @@ impl Idp {
 				first_party: false,
 				introspection: false,
 				dpop_bound: false,
+				require_pkce: true,
 			};
 			let (client, secret) = self
 				.insert_client(spec, Some(me.account), None, &tx)

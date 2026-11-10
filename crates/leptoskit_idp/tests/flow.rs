@@ -510,6 +510,261 @@ async fn a_public_app_signs_in_with_pkce_and_signs_out() {
 }
 
 #[tokio::test]
+async fn the_key_set_lists_signing_keys_before_they_sign() {
+	let cluster = PostgresCluster::start();
+
+	for db in databases(cluster.as_ref()).await {
+		let app = app_with(db, |idp| idp.rsa_key(TEST_RSA_KEY)).await;
+
+		// An app that reads the key set first, and keeps it, as the
+		// conformance suite does, finds the keys its tokens are signed with.
+		let jwks: Value = body(app.get("/oauth/jwks", None).await).await;
+		let published: Vec<(String, String)> = jwks["keys"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|key| {
+				(
+					key["alg"].as_str().unwrap().to_owned(),
+					key["kid"].as_str().unwrap().to_owned(),
+				)
+			})
+			.collect();
+		assert_eq!(published.len(), 2, "{jwks}");
+
+		let output = app
+			.idp
+			.run_command(&ClientCommand::Add(NewClientSpec {
+				id_token_alg: leptoskit_idp::SigningAlgorithm::Rs256,
+				..spec(ClientAuth::SecretBasic, &["openid"])
+			}))
+			.await;
+		let ClientCommandOutput::Added { client, secret } = output else {
+			panic!("the client should register: {output:?}");
+		};
+		let cookie = app.sign_in("ada@example.com").await;
+		let code = app.code(&client.client_id, "openid", &cookie).await;
+		let tokens: TokenResponse = body(
+			app.exchange(&client.client_id, secret.as_deref(), &code, VERIFIER)
+				.await,
+		)
+		.await;
+		for token in [tokens.id_token.unwrap(), tokens.access_token] {
+			let header: Value = serde_json::from_slice(
+				&base64::Engine::decode(
+					&base64::engine::general_purpose::URL_SAFE_NO_PAD,
+					token.split('.').next().unwrap(),
+				)
+				.unwrap(),
+			)
+			.unwrap();
+			let signed_with = (
+				header["alg"].as_str().unwrap().to_owned(),
+				header["kid"].as_str().unwrap().to_owned(),
+			);
+			assert!(published.contains(&signed_with), "{signed_with:?}");
+		}
+
+		// Reading it again makes no more keys.
+		let again: Value = body(app.get("/oauth/jwks", None).await).await;
+		assert_eq!(again, jwks);
+	}
+}
+
+#[tokio::test]
+#[expect(
+	clippy::too_many_lines,
+	reason = "every rule of the opt-out, on both databases, reads best in one place"
+)]
+async fn an_operator_lets_a_confidential_app_sign_in_without_pkce() {
+	let cluster = PostgresCluster::start();
+
+	for db in databases(cluster.as_ref()).await {
+		let app = app(db).await;
+
+		// A public app always uses PKCE.
+		let refused = app
+			.idp
+			.run_command(&ClientCommand::Add(NewClientSpec {
+				require_pkce: false,
+				..spec(ClientAuth::None, &["openid"])
+			}))
+			.await;
+		assert!(
+			matches!(&refused, ClientCommandOutput::Failed { message } if message.contains("public app always uses PKCE")),
+			"{refused:?}"
+		);
+
+		let output = app
+			.idp
+			.run_command(&ClientCommand::Add(NewClientSpec {
+				require_pkce: false,
+				..spec(ClientAuth::SecretBasic, &["openid", "notes:read"])
+			}))
+			.await;
+		let ClientCommandOutput::Added { client, secret } = output else {
+			panic!("the client should register: {output:?}");
+		};
+		assert!(!client.require_pkce);
+		let (client_id, secret) = (client.client_id, secret.unwrap());
+		let (strict_id, _) = app
+			.register(ClientAuth::SecretBasic, &["openid", "notes:read"])
+			.await;
+		let cookie = app.sign_in("ada@example.com").await;
+		let without_pkce = |client_id: &str, scope: &str, nonce: Option<&str>| {
+			let mut pairs = vec![
+				("response_type", "code"),
+				("client_id", client_id),
+				("redirect_uri", CALLBACK),
+				("scope", scope),
+				("state", "af0ifjsldkj"),
+			];
+			if let Some(nonce) = nonce {
+				pairs.push(("nonce", nonce));
+			}
+			let query = url::form_urlencoded::Serializer::new(String::new())
+				.extend_pairs(pairs)
+				.finish();
+			format!("/oauth/authorize?{query}")
+		};
+		let refusal = async |url: String| {
+			let to = location(&app.get(&url, Some(&cookie)).await);
+			assert!(to.starts_with(CALLBACK), "{to}");
+			(
+				param(&to, "error").unwrap(),
+				param(&to, "error_description").unwrap(),
+			)
+		};
+
+		// Every other app still needs PKCE.
+		let (error, description) =
+			refusal(without_pkce(&strict_id, "openid", Some("n-0S6_WzA2Mj"))).await;
+		assert_eq!(error, "invalid_request");
+		assert!(description.contains("PKCE is required"), "{description}");
+
+		// Without PKCE, the request must be OpenID Connect with a nonce.
+		for url in [
+			without_pkce(&client_id, "openid", None),
+			without_pkce(&client_id, "openid", Some("")),
+			without_pkce(&client_id, "notes:read", Some("n-0S6_WzA2Mj")),
+		] {
+			let (error, description) = refusal(url).await;
+			assert_eq!(error, "invalid_request");
+			assert!(description.contains("nonce"), "{description}");
+		}
+
+		// A half-sent challenge is still refused.
+		let half = format!(
+			"{}&code_challenge_method=S256",
+			without_pkce(&client_id, "openid", Some("n-0S6_WzA2Mj"))
+		);
+		assert_eq!(refusal(half).await.0, "invalid_request");
+
+		// With both, it signs in, and the code trades without a verifier.
+		let to = location(
+			&app.get(
+				&without_pkce(&client_id, "openid notes:read", Some("n-0S6_WzA2Mj")),
+				Some(&cookie),
+			)
+			.await,
+		);
+		let request = param(&to, "request").unwrap();
+		let decided = app
+			.post_json(
+				"/oauth/consent",
+				json!({ "request": request, "approve": true }),
+				Some(&cookie),
+			)
+			.await;
+		let to = body::<ConsentRedirect>(decided).await.redirect_to;
+		let code = param(&to, "code").unwrap();
+		let authorization = basic(&client_id, &secret);
+		let exchange = async |code: String, verifier: Option<&str>| {
+			let mut pairs = vec![
+				("grant_type", "authorization_code"),
+				("code", code.as_str()),
+				("redirect_uri", CALLBACK),
+			];
+			if let Some(verifier) = verifier {
+				pairs.push(("code_verifier", verifier));
+			}
+			app.post_form("/oauth/token", &pairs, Some(&authorization))
+				.await
+		};
+
+		// A verifier for a code that had no challenge means someone took the
+		// challenge out on the way: refused, and the code is still unused.
+		assert_eq!(
+			App::error(
+				exchange(code.clone(), Some(VERIFIER)).await,
+				StatusCode::BAD_REQUEST
+			)
+			.await,
+			"invalid_grant"
+		);
+		let response = exchange(code, None).await;
+		assert_eq!(response.status(), StatusCode::OK);
+		let tokens: TokenResponse = body(response).await;
+		let id_token = claims(tokens.id_token.as_deref().unwrap());
+		assert_eq!(id_token["nonce"], "n-0S6_WzA2Mj");
+
+		// It may still use PKCE, and then the verifier is checked as ever.
+		let code = app.code(&client_id, "openid", &cookie).await;
+		assert_eq!(
+			App::error(exchange(code.clone(), None).await, StatusCode::BAD_REQUEST).await,
+			"invalid_request"
+		);
+		assert_eq!(
+			App::error(
+				exchange(
+					code,
+					Some("another-verifier-of-at-least-forty-three-chars-0123")
+				)
+				.await,
+				StatusCode::BAD_REQUEST
+			)
+			.await,
+			"invalid_grant"
+		);
+		let code = app.code(&client_id, "openid", &cookie).await;
+		assert_eq!(
+			exchange(code, Some(VERIFIER)).await.status(),
+			StatusCode::OK
+		);
+
+		// Pushing the request follows the same rules.
+		let pushed = app
+			.post_form(
+				"/oauth/par",
+				&[
+					("response_type", "code"),
+					("redirect_uri", CALLBACK),
+					("scope", "openid"),
+					("nonce", "n-0S6_WzA2Mj"),
+				],
+				Some(&basic(&client_id, &secret)),
+			)
+			.await;
+		assert_eq!(pushed.status(), StatusCode::CREATED);
+		let pushed = app
+			.post_form(
+				"/oauth/par",
+				&[
+					("response_type", "code"),
+					("redirect_uri", CALLBACK),
+					("scope", "openid"),
+				],
+				Some(&basic(&client_id, &secret)),
+			)
+			.await;
+		assert_eq!(
+			App::error(pushed, StatusCode::BAD_REQUEST).await,
+			"invalid_request"
+		);
+	}
+}
+
+#[tokio::test]
 async fn bad_requests_are_refused_where_its_safe_to_say_so() {
 	let db = Db::connect("sqlite::memory:").await.unwrap();
 	let app = app(db).await;
@@ -726,6 +981,7 @@ async fn operators_manage_clients_and_removing_one_ends_its_grants() {
 			first_party: false,
 			introspection: false,
 			dpop_bound: false,
+			require_pkce: true,
 		}))
 		.await;
 	assert!(
@@ -746,6 +1002,7 @@ async fn operators_manage_clients_and_removing_one_ends_its_grants() {
 			first_party: false,
 			introspection: false,
 			dpop_bound: false,
+			require_pkce: true,
 		}))
 		.await;
 	assert!(
@@ -794,6 +1051,7 @@ async fn first_party_apps_see_the_account_id_and_skip_consent() {
 			first_party: true,
 			introspection: false,
 			dpop_bound: false,
+			require_pkce: true,
 		}))
 		.await;
 	let ClientCommandOutput::Added { client, .. } = output else {
@@ -941,6 +1199,7 @@ async fn edges_of_the_token_endpoints_are_refused_or_handled() {
 			first_party: false,
 			introspection: true,
 			dpop_bound: false,
+			require_pkce: true,
 		}))
 		.await;
 	let ClientCommandOutput::Added {
@@ -1145,6 +1404,7 @@ async fn the_provider_is_configured_carefully() {
 			first_party: true,
 			introspection: false,
 			dpop_bound: false,
+			require_pkce: true,
 		}))
 		.await;
 	assert!(matches!(output, ClientCommandOutput::Added { .. }));

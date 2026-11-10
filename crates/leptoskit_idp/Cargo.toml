@@ -42,6 +42,9 @@ base64 = { workspace = true }
 http-body-util = "0.1"
 leptos = { workspace = true, features = ["ssr"] }
 leptoskit_rpc = { workspace = true, features = ["ssr"] }
+# RSA keys for the rotation tests, made at test time. ring can't make them,
+# and openssl is already built for leptoskit_auth's passkeys.
+openssl = { version = "0.10", features = ["vendored"] }
 p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 ring = "0.17"
 sha2 = { workspace = true }

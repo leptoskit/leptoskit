@@ -1,0 +1,26 @@
+[
+	{
+		"test-name": "oidcc-scope-address",
+		"variant": "*",
+		"configuration-filename": "*",
+		"comment": "The address scope isn't offered."
+	},
+	{
+		"test-name": "oidcc-scope-phone",
+		"variant": "*",
+		"configuration-filename": "*",
+		"comment": "The phone scope isn't offered."
+	},
+	{
+		"test-name": "oidcc-scope-all",
+		"variant": "*",
+		"configuration-filename": "*",
+		"comment": "Needs the address and phone scopes, which aren't offered."
+	},
+	{
+		"test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+		"variant": "*",
+		"configuration-filename": "*",
+		"comment": "Request objects aren't supported, and discovery says so; apps push requests to /oauth/par instead."
+	}
+]

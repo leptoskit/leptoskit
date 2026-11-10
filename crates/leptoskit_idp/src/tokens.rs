@@ -277,7 +277,6 @@ impl Idp {
 		info: &RequestInfo,
 	) -> Result<TokenResponse> {
 		let code = required(request.code.as_ref(), "code")?;
-		let verifier = required(request.code_verifier.as_ref(), "code_verifier")?;
 		let redirect_uri = required(request.redirect_uri.as_ref(), "redirect_uri")?;
 		let authorization = Authorization::query()
 			.filter(|row| row.code_hash.eq(secrets::hash(code)))
@@ -309,10 +308,26 @@ impl Idp {
 				"redirect_uri must be the one the code was sent to",
 			));
 		}
-		if !secrets::pkce_matches(verifier, &authorization.code_challenge) {
-			return Err(IdpError::invalid_grant(
-				"code_verifier doesn't match the challenge",
-			));
+		let verifier = request
+			.code_verifier
+			.as_deref()
+			.filter(|verifier| !verifier.is_empty());
+		match (authorization.code_challenge.as_deref(), verifier) {
+			(Some(challenge), Some(verifier)) if secrets::pkce_matches(verifier, challenge) => {}
+			(Some(_), Some(_)) => {
+				return Err(IdpError::invalid_grant(
+					"code_verifier doesn't match the challenge",
+				));
+			}
+			(Some(_), None) => return Err(IdpError::invalid_request("code_verifier is missing")),
+			(None, None) => {}
+			// A verifier for a code that had no challenge: someone dropped the
+			// challenge on the way (RFC 9700 §2.1.1).
+			(None, Some(_)) => {
+				return Err(IdpError::invalid_grant(
+					"that code was issued without PKCE, so it takes no code_verifier",
+				));
+			}
 		}
 
 		// Signing may create a key, and claims read the app's tables, each on

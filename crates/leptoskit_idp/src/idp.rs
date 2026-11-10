@@ -60,6 +60,9 @@ pub(crate) struct Inner {
 	pub lifetimes: Lifetimes,
 	/// The RSA key RS256 ID tokens are signed with, if the server has one.
 	pub rsa_key: Option<Arc<ring::signature::RsaKeyPair>>,
+	/// The RSA key that takes over from it: published at once, signing once
+	/// it has been published for [`Lifetimes::next_key_notice`].
+	pub next_rsa_key: Option<Arc<ring::signature::RsaKeyPair>>,
 	/// Whether signed-in people may register apps of their own.
 	pub developer_portal: Option<Portal>,
 	/// Whether DPoP proofs bind tokens to apps' keys (RFC 9449).
@@ -88,6 +91,7 @@ impl Idp {
 			device_page: "/device".into(),
 			lifetimes: Lifetimes::default(),
 			rsa_key: None,
+			next_rsa_key: None,
 			developer_portal: None,
 			dpop: false,
 			registration: None,
@@ -244,6 +248,7 @@ pub struct IdpBuilder {
 	device_page: String,
 	lifetimes: Lifetimes,
 	rsa_key: Option<Vec<u8>>,
+	next_rsa_key: Option<Vec<u8>>,
 	developer_portal: Option<Portal>,
 	dpop: bool,
 	registration: Option<Registration>,
@@ -332,10 +337,24 @@ impl IdpBuilder {
 	///
 	/// Make one with `openssl genpkey -algorithm RSA -pkeyopt
 	/// rsa_keygen_bits:3072`, and keep it with the server's other secrets.
-	/// To rotate it, give the server a new one: the old key stays published
-	/// until every token it signed has expired.
+	/// To rotate it, give the server the new one as
+	/// [`next_rsa_key`](Self::next_rsa_key) first.
 	pub fn rsa_key(mut self, key: impl Into<Vec<u8>>) -> Self {
 		self.rsa_key = Some(key.into());
+		self
+	}
+
+	/// The RSA key that takes over from [`rsa_key`](Self::rsa_key), in the
+	/// same forms. It's published in JWKS at once, so apps that keep the key
+	/// set fetch it before it's needed, and signs once it has been published
+	/// for [`Lifetimes::next_key_notice`] (a day by default). The old key then
+	/// stops signing, and stays published only until the last token it
+	/// signed has expired.
+	///
+	/// Any time after the switch, make it the `rsa_key` and drop this; every
+	/// server switches together, since the time is kept in the database.
+	pub fn next_rsa_key(mut self, key: impl Into<Vec<u8>>) -> Self {
+		self.next_rsa_key = Some(key.into());
 		self
 	}
 
@@ -422,17 +441,23 @@ impl IdpBuilder {
 
 		self.lifetimes.check()?;
 
-		let rsa_key = match &self.rsa_key {
-			Some(key) => {
-				Some(Arc::new(crate::jwt::rsa_key(key).ok_or_else(|| {
-					IdpError::Config(
-						"the RSA key isn't a PEM or DER RSA private key of at least 2048 bits"
-							.into(),
-					)
-				})?))
+		let rsa_key = self.rsa_key.as_deref().map(read_rsa_key).transpose()?;
+		let next_rsa_key = self.next_rsa_key.as_deref().map(read_rsa_key).transpose()?;
+		match (&rsa_key, &next_rsa_key) {
+			(None, Some(_)) => {
+				return Err(IdpError::Config(
+					"a next RSA key takes over from a current one: set rsa_key too".into(),
+				));
 			}
-			None => None,
-		};
+			(Some(current), Some(next))
+				if crate::keys::rsa_kid(current) == crate::keys::rsa_kid(next) =>
+			{
+				return Err(IdpError::Config(
+					"the next RSA key is the current one: give it a new key".into(),
+				));
+			}
+			_ => {}
+		}
 
 		if self
 			.developer_portal
@@ -468,6 +493,7 @@ impl IdpBuilder {
 				device_page: self.device_page,
 				lifetimes: self.lifetimes,
 				rsa_key,
+				next_rsa_key,
 				developer_portal: self.developer_portal,
 				dpop: self.dpop,
 				registration: self.registration,
@@ -475,6 +501,15 @@ impl IdpBuilder {
 			}),
 		})
 	}
+}
+
+/// An RSA key from PEM or DER.
+fn read_rsa_key(key: &[u8]) -> Result<Arc<ring::signature::RsaKeyPair>> {
+	crate::jwt::rsa_key(key).map(Arc::new).ok_or_else(|| {
+		IdpError::Config(
+			"the RSA key isn't a PEM or DER RSA private key of at least 2048 bits".into(),
+		)
+	})
 }
 
 /// An issuer is an `https` origin, or `http` on localhost for development,
@@ -518,6 +553,9 @@ pub struct Lifetimes {
 	/// How long a signing key signs before the next one takes over: 30
 	/// days.
 	pub signing_key: Duration,
+	/// How long a next RSA key is published before it signs: a day, at most
+	/// 30, so apps that keep the key set have it before they need it.
+	pub next_key_notice: Duration,
 	/// A pushed authorization request's `request_uri` (RFC 9126): 10
 	/// minutes, at most an hour, long enough to sign in on the way.
 	pub pushed_request: Duration,
@@ -535,6 +573,7 @@ impl Default for Lifetimes {
 			consent: Duration::from_mins(10),
 			refresh: Duration::from_hours(90 * 24),
 			signing_key: Duration::from_hours(30 * 24),
+			next_key_notice: Duration::from_hours(24),
 			pushed_request: Duration::from_mins(10),
 			device_code: Duration::from_mins(10),
 		}
@@ -551,6 +590,7 @@ impl Lifetimes {
 			&& within(self.consent, Duration::from_hours(1))
 			&& within(self.refresh, Duration::from_hours(400 * 24))
 			&& within(self.signing_key, Duration::from_hours(400 * 24))
+			&& within(self.next_key_notice, Duration::from_hours(30 * 24))
 			&& within(self.pushed_request, Duration::from_hours(1))
 			&& within(self.device_code, Duration::from_hours(1))
 		{

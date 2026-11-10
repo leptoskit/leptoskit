@@ -171,6 +171,7 @@ impl Server {
 				first_party: false,
 				introspection: false,
 				dpop_bound: false,
+				require_pkce: true,
 			})
 			.await
 			.unwrap();

@@ -403,6 +403,13 @@
 						"null"
 					]
 				},
+				"next_rsa_key_env": {
+					"description": "The environment variable holding the RSA key that takes over from\n`rsa_key_env`'s: published at once, and signing a day later. Once it\nsigns, move it to `rsa_key_env` and remove this.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
 				"refresh_days": {
 					"description": "Days an app stays signed in, however often it refreshes.",
 					"type": "integer",

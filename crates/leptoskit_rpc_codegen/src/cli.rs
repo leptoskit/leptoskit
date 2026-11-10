@@ -327,6 +327,21 @@ const HELPERS: &str =
 	 std::fmt::Result {\n\t\twrite!(formatter, \"{}\", \
 	 serde_json::to_string(&self.0).expect(\"serializable\"))\n\t}\n}\n";
 
+/// The keychain `login` keeps the sign-in in, on each system that has one.
+/// Elsewhere the CLI keeps it in a file only you can read.
+const KEYCHAIN: &str = "
+# `login` keeps the sign-in in the operating system's keychain.
+[target.'cfg(target_os = \"macos\")'.dependencies]
+keyring = { version = \"3.6\", features = [\"apple-native\"] }
+
+[target.'cfg(target_os = \"windows\")'.dependencies]
+keyring = { version = \"3.6\", features = [\"windows-native\"] }
+
+[target.'cfg(any(target_os = \"linux\", target_os = \"freebsd\"))'.dependencies]
+keyring = { version = \"3.6\", features = [\"sync-secret-service\", \"crypto-rust\", \"vendored\"] \
+                        }
+";
+
 fn cargo_toml(context: &Context<'_>, sign_in: bool) -> String {
 	format!(
 		"{banner}# The CLI is its own workspace so it builds from any directory. To share the
@@ -349,8 +364,9 @@ serde_json = \"1\"
 serde_qs = \"0.15\"
 thiserror = \"2\"
 tokio = {{ version = \"1\", features = [{tokio}] }}
-",
+{keychain}",
 		banner = context.banner("#"),
+		keychain = if sign_in { KEYCHAIN } else { "" },
 		// Signing in waits between polls.
 		tokio = if sign_in {
 			"\"rt\", \"time\""
@@ -425,8 +441,11 @@ Pass `--server-url https://api.example.com` to point it at a server.
 			format!(
 				"\n## Signing in\n\nSome commands act for you, with the scopes `{scopes}`. Run `{name} \
 				 {login}` once: it shows a code to enter in your browser, then keeps the tokens in \
-				 your config directory, readable only by you, and renews them as needed. `{name} \
-				 {logout}` revokes them.\n\n`{login}` needs this CLI's client ID, from `--client-id` or \
+				 your operating system's keychain (the macOS Keychain, Windows Credential Manager, \
+				 or the Secret Service on Linux) and renews them as needed. Where there's no \
+				 keychain, such as a server without a desktop session, it says so and keeps them in \
+				 your config directory instead, readable only by you. `{name} {logout}` revokes \
+				 them and forgets them from both places.\n\n`{login}` needs this CLI's client ID, from `--client-id` or \
 				 the `{env}` environment variable. The app's operator registers it once with `lk auth \
 				 idp client add \"{name}\" --public --grant device --scopes {comma}`.\n",
 				scopes = sign_in.scopes.join(" "),

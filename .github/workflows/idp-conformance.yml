@@ -1,0 +1,66 @@
+name: idp conformance
+# The OpenID Foundation's conformance suite against `leptoskit_idp`: the
+# Basic OP and Config OP certification plans, self-hosted from a pinned tag
+# of the suite's source. Any module that fails, warns, or is skipped, unless
+# examples/idp_conformance lists it as expected, fails the job.
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: idp-conformance
+  cancel-in-progress: false
+jobs:
+  conformance:
+    name: OpenID conformance, Basic OP and Config OP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SUITE_TAG: release-v5.3.4
+      SUITE_COMMIT: 23353b36957d6466010de767c812d2c91ed37638
+      MAVEN_IMAGE: maven:3-eclipse-temurin-21@sha256:d49bca545509b98965a808175862337dfdd24e1a8a4b11005cc8ce0578e52e8c
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: fetch the conformance suite
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch "$SUITE_TAG" https://gitlab.com/openid/conformance-suite.git "$RUNNER_TEMP/suite"
+          test "$(git -C "$RUNNER_TEMP/suite" rev-parse HEAD)" = "$SUITE_COMMIT"
+      - name: cache Maven dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: idp-conformance-maven-${{ env.SUITE_COMMIT }}
+      - name: build the conformance suite
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.m2"
+          docker run --rm \
+            --volume "$RUNNER_TEMP/suite:/usr/src/mymaven" \
+            --volume "$HOME/.m2:/root/.m2" \
+            --workdir /usr/src/mymaven \
+            "$MAVEN_IMAGE" mvn -B -q clean package -DskipTests=true
+          test -f "$RUNNER_TEMP/suite/target/fapi-test-suite.jar"
+      - name: install rust
+        uses: ./.github/actions/rust
+      - name: cache rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: idp-conformance
+          cache-on-failure: false
+      - name: build the test server
+        run: cargo build --locked -p idp_conformance_example
+      - name: run Basic OP and Config OP
+        run: bash examples/idp_conformance/run-suite.sh "$RUNNER_TEMP/suite" target/debug/idp_conformance_example "$RUNNER_TEMP/results"
+      - name: keep the results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: idp-conformance
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore

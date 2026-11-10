@@ -1316,6 +1316,7 @@ async fn developers_register_and_manage_their_own_apps() {
 		let created: RegisteredApp = body(created).await;
 		assert_eq!(created.app.name, "Dev's App");
 		assert!(!created.app.first_party && !created.app.introspection);
+		assert!(created.app.require_pkce);
 		let client_id = created.app.client_id.clone();
 		let secret = created.secret.unwrap();
 

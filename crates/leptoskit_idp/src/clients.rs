@@ -66,6 +66,19 @@ impl Idp {
 				"a public app can't introspect tokens; give it a secret",
 			));
 		}
+		if !spec.require_pkce {
+			if spec.auth_method == ClientAuth::None {
+				return Err(metadata(
+					"a public app always uses PKCE; only an app with a secret or a key may sign \
+					 in without it",
+				));
+			}
+			if owner.is_some() || registration.is_some() {
+				return Err(metadata(
+					"only the operator can let an app sign in without PKCE",
+				));
+			}
+		}
 		if spec.dpop_bound && !self.inner.dpop {
 			return Err(metadata(
 				"DPoP-bound tokens need DPoP on the server: turn on `dpop` in [auth.idp]",
@@ -98,6 +111,7 @@ impl Idp {
 			subject_salt: secrets::random::<32>()?.to_vec(),
 			owner_id: owner,
 			dpop_bound: spec.dpop_bound,
+			require_pkce: spec.require_pkce,
 			registration_hash: registration,
 		}
 		.insert(connection)
@@ -490,6 +504,7 @@ impl From<Client> for ClientInfo {
 			first_party: client.first_party,
 			introspection: client.introspection,
 			dpop_bound: client.dpop_bound,
+			require_pkce: client.require_pkce,
 			self_registered: client.registration_hash.is_some(),
 			created_at: client.created_at,
 		}

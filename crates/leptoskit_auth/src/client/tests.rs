@@ -402,6 +402,26 @@ async fn lists_and_ends_devices(
 		.collect();
 	assert_eq!(current, [laptop_session]);
 
+	// The activity lists those sign-ins, newest first. A cursor goes to the
+	// server as one parameter, whatever it holds.
+	let trail = laptop.api.security_events(None).await.unwrap();
+	let sign_ins = trail
+		.events
+		.iter()
+		.filter(|event| event.kind == crate::EventKind::SignedIn)
+		.count();
+	assert!(sign_ins >= 3, "{trail:?}");
+	assert!(trail.events.windows(2).all(|pair| pair[0].at >= pair[1].at));
+	assert_eq!(
+		laptop
+			.api
+			.security_events(Some("0.x&limit=1".to_owned()))
+			.await
+			.unwrap_err()
+			.error,
+		"not_found"
+	);
+
 	assert!(laptop.api.revoke(tablet_session.id).await.unwrap());
 	assert!(!laptop.api.revoke(tablet_session.id).await.unwrap());
 	assert_eq!(session_id(&tablet).await, None);
@@ -1001,6 +1021,15 @@ async fn the_scopes_call_the_configured_client() {
 	let phone_session = sign_in(&server, &phone).await;
 	sign_in(&server, &server.browser()).await;
 	assert_eq!(use_devices().await.unwrap().len(), 3);
+	let activity = client
+		.fetch_infinite_query(&security_events(), ())
+		.await
+		.unwrap();
+	assert_eq!(activity.pages.len(), 1);
+	assert_eq!(
+		activity.pages[0].events.first().map(|event| event.kind),
+		Some(crate::EventKind::SignedIn)
+	);
 	assert!(
 		use_mutation_in(client.clone(), revoke_device())
 			.mutate_async(phone_session.id)

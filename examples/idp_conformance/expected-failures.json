@@ -1,0 +1,38 @@
+[
+	{
+		"test-name": "oidcc-ensure-request-without-nonce-succeeds-for-code-flow",
+		"variant": "*",
+		"configuration-filename": "*",
+		"current-block": "*",
+		"condition": "CheckIfAuthorizationEndpointError",
+		"expected-result": "failure",
+		"comment": "Deliberate: an app allowed to sign in without PKCE must send a nonce (RFC 9700 section 2.1.1), and this module sends neither."
+	},
+	{
+		"test-name": "oidcc-userinfo-post-body",
+		"variant": "*",
+		"configuration-filename": "*",
+		"current-block": "*",
+		"condition": "UserInfoEndpointWithAccessTokenInBodyNotSupported",
+		"expected-result": "warning",
+		"comment": "Deliberate: userinfo takes the access token in the Authorization header only; RFC 6750 section 2.2 says the form body SHOULD NOT be used."
+	},
+	{
+		"test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+		"variant": "*",
+		"configuration-filename": "*",
+		"current-block": "*",
+		"condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+		"expected-result": "warning",
+		"comment": "acr_values and the acr claim aren't supported."
+	},
+	{
+		"test-name": "oidcc-claims-essential",
+		"variant": "*",
+		"configuration-filename": "*",
+		"current-block": "*",
+		"condition": "EnsureUserInfoContainsName",
+		"expected-result": "warning",
+		"comment": "Deliberate: the claims parameter only picks among claims the granted scopes release, so asking for name with only openid releases nothing more."
+	}
+]

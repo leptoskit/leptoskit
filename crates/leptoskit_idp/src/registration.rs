@@ -502,6 +502,7 @@ impl Idp {
 			first_party: false,
 			introspection: false,
 			dpop_bound: metadata.dpop_bound_access_tokens,
+			require_pkce: true,
 		})
 	}
 

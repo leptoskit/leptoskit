@@ -100,7 +100,7 @@ struct Checked {
 	client: Client,
 	redirect_uri: String,
 	scopes: Vec<String>,
-	code_challenge: String,
+	code_challenge: Option<String>,
 	prompt: Prompt,
 	max_age: Option<i64>,
 	claims: RequestedClaims,
@@ -558,17 +558,6 @@ impl Idp {
 			));
 		}
 
-		let code_challenge = request
-			.code_challenge
-			.clone()
-			.filter(|challenge| secrets::is_pkce_value(challenge))
-			.ok_or_else(|| IdpError::invalid_request("PKCE is required: send a code_challenge"))?;
-		if request.code_challenge_method.as_deref() != Some("S256") {
-			return Err(IdpError::invalid_request(
-				"code_challenge_method must be S256",
-			));
-		}
-
 		if [&request.state, &request.nonce]
 			.into_iter()
 			.flatten()
@@ -594,6 +583,8 @@ impl Idp {
 				"this app may not ask for `{scope}`"
 			)));
 		}
+
+		let code_challenge = pkce(request, &client, &scopes)?;
 
 		let prompts: Vec<&str> = request
 			.prompt
@@ -721,6 +712,40 @@ impl Idp {
 		pairs.push(("iss", self.inner.issuer.as_str()));
 		with_query(redirect_uri, &pairs)
 	}
+}
+
+/// The request's PKCE challenge, which must be `S256`. Only an app the
+/// operator let sign in without PKCE may leave it out, and then its request
+/// must be an OpenID Connect one with a `nonce`, which binds the ID token to
+/// the browser that started it (RFC 9700 §2.1.1).
+fn pkce(request: &AuthorizeRequest, client: &Client, scopes: &[String]) -> Result<Option<String>> {
+	if request.code_challenge.is_none() && request.code_challenge_method.is_none() {
+		if client.require_pkce {
+			return Err(IdpError::invalid_request(
+				"PKCE is required: send a code_challenge",
+			));
+		}
+		if request.nonce.as_deref().is_none_or(str::is_empty)
+			|| !scopes.iter().any(|scope| scope == "openid")
+		{
+			return Err(IdpError::invalid_request(
+				"without PKCE, ask for the openid scope and send a nonce",
+			));
+		}
+		return Ok(None);
+	}
+
+	let code_challenge = request
+		.code_challenge
+		.clone()
+		.filter(|challenge| secrets::is_pkce_value(challenge))
+		.ok_or_else(|| IdpError::invalid_request("PKCE is required: send a code_challenge"))?;
+	if request.code_challenge_method.as_deref() != Some("S256") {
+		return Err(IdpError::invalid_request(
+			"code_challenge_method must be S256",
+		));
+	}
+	Ok(Some(code_challenge))
 }
 
 /// Reads the `claims` parameter: a JSON object whose `id_token` and

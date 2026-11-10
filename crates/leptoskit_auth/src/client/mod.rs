@@ -51,9 +51,12 @@ use std::sync::PoisonError;
 use std::sync::RwLock;
 
 use leptoskit_db::Id;
+use leptoskit_query::InfiniteQueryHandle;
+use leptoskit_query::InfiniteQueryScope;
 use leptoskit_query::MutationScope;
 use leptoskit_query::QueryHandle;
 use leptoskit_query::QueryScope;
+use leptoskit_query::use_infinite_query;
 use leptoskit_query::use_query;
 pub use protocol::HttpResponse;
 pub use protocol::Method;
@@ -78,6 +81,7 @@ use crate::ProviderOutcome;
 use crate::PublicSession;
 use crate::RecoveryCodes;
 use crate::RenamePasskey;
+use crate::SecurityEvents;
 use crate::Session;
 use crate::StartProvider;
 use crate::TotpSetup;
@@ -353,6 +357,7 @@ pub(crate) trait Api: Send + Sync + 'static {
 	fn continue_provider_sign_up(&self) -> Pending<'_, PublicSession>;
 	fn provider_outcome(&self) -> Option<ProviderOutcome>;
 	fn identities(&self) -> Pending<'_, Vec<IdentityInfo>>;
+	fn security_events(&self, before: Option<String>) -> Pending<'_, SecurityEvents>;
 	fn unlink_identity(&self, id: Id<Identity>) -> Pending<'_, ()>;
 	fn merge_offer(&self) -> Pending<'_, Option<MergeOffer>>;
 	fn merge_accounts(&self, input: MergeInput) -> Pending<'_, ()>;
@@ -718,6 +723,27 @@ pub fn devices() -> QueryScope<(), Vec<Device>, ErrorResponse> {
 #[track_caller]
 pub fn use_devices() -> QueryHandle<Vec<Device>, ErrorResponse> {
 	use_query(devices(), || ())
+}
+
+/// The security events query, for a "Recent activity" screen: what
+/// happened to the signed-in person's account, newest first, a page at a
+/// time. Load older pages with `fetch_next_page`.
+///
+/// Fails with `reauthenticate` or `step_up_required` when the session isn't
+/// fresh enough to show where someone signed in from, and `signed_out` when
+/// no one is signed in.
+pub fn security_events() -> InfiniteQueryScope<(), Option<String>, SecurityEvents, ErrorResponse> {
+	InfiniteQueryScope::new(
+		|context| async move { api().security_events(context.page_param).await },
+		None,
+	)
+	.with_next_page_param(|context| context.page.next.clone().map(Some))
+}
+
+/// The signed-in person's security events, as an infinite query handle.
+#[track_caller]
+pub fn use_security_events() -> InfiniteQueryHandle<SecurityEvents, Option<String>, ErrorResponse> {
+	use_infinite_query(security_events(), || ())
 }
 
 /// Ends the session it's given, such as a lost phone's, and says whether it

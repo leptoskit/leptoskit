@@ -8,28 +8,28 @@ OpenID certification is self-certification. The implementer runs the OpenID Foun
 
 ## Which profiles fit
 
-| Profile                                            | Test plan                                           | Fits?                                                                                               |
-| -------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Basic OP                                           | `oidcc-basic-certification-test-plan`               | Blocked by PKCE (below); otherwise the code flow, `userinfo`, `prompt`, `max_age`, `claims` are in. |
-| Config OP                                          | `oidcc-config-certification-test-plan`              | Blocked by PKCE; discovery and JWKS are in.                                                         |
-| Dynamic OP                                         | `oidcc-dynamic-certification-test-plan`             | Blocked by PKCE; dynamic registration is in since IdP 3.                                            |
-| RP-Initiated Logout OP                             | `oidcc-rp-initiated-logout-certification-test-plan` | Likely: `end_session` with `id_token_hint` and registered `post_logout_redirect_uri`s.              |
-| Implicit OP, Hybrid OP                             |                                                     | No: neither flow exists, deliberately.                                                              |
-| Form Post OP                                       |                                                     | No: `response_mode=form_post` isn't supported.                                                      |
-| Session Management, Front- and Back-Channel Logout |                                                     | No: none is built.                                                                                  |
-| FAPI 2.0 Security Profile                          | the suite's FAPI 2.0 Security Profile plan          | Closest fit for PAR + PKCE + DPoP + `private_key_jwt` + ES256; needs the gaps below checked first.  |
+| Profile                                            | Test plan                                           | Fits?                                                                                              |
+| -------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Basic OP                                           | `oidcc-basic-certification-test-plan`               | Runs nightly; one module fails by design (below).                                                  |
+| Config OP                                          | `oidcc-config-certification-test-plan`              | Runs nightly and passes.                                                                           |
+| Dynamic OP                                         | `oidcc-dynamic-certification-test-plan`             | Blocked: self-registered apps can't opt out of PKCE (below).                                       |
+| RP-Initiated Logout OP                             | `oidcc-rp-initiated-logout-certification-test-plan` | Likely: `end_session` with `id_token_hint` and registered `post_logout_redirect_uri`s.             |
+| Implicit OP, Hybrid OP                             |                                                     | No: neither flow exists, deliberately.                                                             |
+| Form Post OP                                       |                                                     | No: `response_mode=form_post` isn't supported.                                                     |
+| Session Management, Front- and Back-Channel Logout |                                                     | No: none is built.                                                                                 |
+| FAPI 2.0 Security Profile                          | the suite's FAPI 2.0 Security Profile plan          | Closest fit for PAR + PKCE + DPoP + `private_key_jwt` + ES256; needs the gaps below checked first. |
 
 The `oidcc-*` names are the suite's plan identifiers; confirm them, and find the FAPI 2.0 plan's, in the suite version used.
 
 ## What blocks it
 
-1. **PKCE is always required.** The Basic, Config, and Dynamic plans send authorization requests without `code_challenge`, and `/oauth/authorize` refuses those for every client. RFC 9700 §2.1.1 allows a confidential client that sends `nonce` to skip PKCE, so a per-client opt-in would unblock the plans. This is the owner's decision and stays as it is: PKCE is required. Until that changes, those three profiles can't pass, and only RP-Initiated Logout and FAPI 2.0 (which require PKCE) are worth running.
-2. **A purpose-built test server.** The suite drives sign-in and consent with a scripted browser through configured page selectors, and email codes can't be scripted. `examples/idp_conformance` (not built yet) needs:
-   - an `https` issuer that the suite's containers and browser both reach, with an RSA key (`rsa_key_env`), since the OpenID plans expect RS256 ID tokens;
-   - an HTML sign-in page for one seeded user (a password-less test-only form behind a build flag, never in a release build), and an HTML consent page that approves on submit;
-   - `[auth.idp]` with `dynamic_registration = true` and no `registration_token_env` for the Dynamic plan, and for the static plans two pre-registered clients whose redirect URI is the suite's callback for the plan's alias (`client_secret_basic` and `private_key_jwt` variants; `client_secret_jwt` isn't supported, so don't pick that variant);
-   - a scope set with `openid`, `profile`, and `email`, and `Claims` that release `name`, `email`, and `email_verified`.
-3. **A container runtime in CI.** The nightly job builds the suite, starts MongoDB and the suite with Docker Compose, starts the test server, and runs each plan with the suite's `scripts/run-test-plan.py`, failing on any failed module.
+1. **The no-nonce module.** The owner decided (IdP leftovers) that PKCE stays required by default, and that an operator may let a confidential app sign in without it, provided each such request asks for `openid` and carries a `nonce` (RFC 9700 §2.1.1). That lets the Basic and Config plans run, with the test server's apps opted out. But the Basic plan's `oidcc-ensure-request-without-nonce-succeeds-for-code-flow` sends neither PKCE nor a `nonce` and expects a code, so it fails by that rule; the nightly job lists it as expected. Certifying Basic OP needs either that module accepted as a failure by the Foundation, or the owner relaxing the `nonce` rule for opted-out apps. This is the owner's call.
+2. **Dynamic OP.** Apps that register themselves can't opt out of PKCE, by the same decision, and the Dynamic plan registers its own clients and sends no PKCE. It stays out of reach unless the operator can pre-approve the opt-out for registrations (for example, with an initial access token that grants it).
+3. **Manual review.** Four Basic modules end in `REVIEW`: `oidcc-prompt-login` and `oidcc-max-age-1` (a screenshot of the sign-in page shown again) and the two that expect the redirect-URI error page. The suite records the screenshots; a person checks them before submitting.
+
+## How the nightly job runs
+
+`examples/idp_conformance` is the test server: the provider over a fresh SQLite database, an HTML sign-in page with one button for a seeded person (through `leptoskit_auth`'s development sign-in, so a release build can't start), an HTML consent page, an RSA key for RS256 ID tokens, and three apps opted out of PKCE (`client`, `client2` and `client_secret_post`). Its `run-suite.sh` starts the suite's own Docker Compose with the test server reachable as `https://idp.test:9443`, and runs both plans with `expected-failures.json` and `expected-skips.json`; anything else that fails, warns, or is skipped fails the job, and so does an expected entry that stops happening. `.github/workflows/idp-conformance.yml` runs it nightly and on demand from a pinned tag of the suite. The same script runs locally with Docker or podman.
 
 ## What the provider doesn't do, which some modules try
 
@@ -39,9 +39,10 @@ For FAPI 2.0, check first: DPoP nonces (`DPoP-Nonce`) and binding the code to th
 
 ## The order to do it in
 
-1. Decide the PKCE question, or accept that only RP-Initiated Logout and FAPI 2.0 are in reach.
-2. Build `examples/idp_conformance` as above, with an end-to-end test that its HTML sign-in and consent forms work without a browser.
-3. Add the `workflow_dispatch` and nightly conformance job, self-hosting the suite, and run every plan above that fits. Fix what fails.
-4. Deploy the test server at a public `https` address, run the same plans on the Foundation's hosted suite, and export the results.
-5. Sign the certification statement, pay the fee, and submit the results.
-6. Keep the nightly job as the release gate for `leptoskit_idp`, as the plan says.
+1. ~~Decide the PKCE question.~~ Done: an operator opt-out with a required `nonce`.
+2. ~~Build `examples/idp_conformance`, with an end-to-end test of its HTML forms.~~ Done.
+3. ~~Add the nightly and `workflow_dispatch` conformance job.~~ Done, for Basic OP and Config OP. Add RP-Initiated Logout and FAPI 2.0 next, and fix what fails.
+4. Settle the no-nonce module (above).
+5. Deploy the test server at a public `https` address, run the same plans on the Foundation's hosted suite, review the screenshots, and export the results.
+6. Sign the certification statement, pay the fee, and submit the results.
+7. Keep the nightly job as the release gate for `leptoskit_idp`, as the plan says.

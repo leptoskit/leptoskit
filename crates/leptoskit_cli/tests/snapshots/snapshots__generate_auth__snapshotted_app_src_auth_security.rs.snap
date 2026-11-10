@@ -6,13 +6,15 @@ expression: contents
 //! authenticator app with the recovery codes that stand in for it when the
 //! phone is lost, connected accounts such as Google, and Solana wallets.
 //! Connecting an account or a wallet that belongs to another account offers
-//! to merge the two, with a preview of what moves.
+//! to merge the two, with a preview of what moves. "Recent activity" lists
+//! sign-ins and changes to the account, with where they came from.
 //!
 //! Changing these asks the person to prove it's them again. With a passkey
 //! or an authenticator on, the screen asks for one and then tries the change
 //! again; without either, signing in again is the only proof left.
 
 use leptoskit::auth::ErrorResponse;
+use leptoskit::auth::EventKind;
 use leptoskit::auth::Factor;
 use leptoskit::auth::Identity;
 use leptoskit::auth::IdentityInfo;
@@ -27,6 +29,8 @@ use leptoskit::auth::ProviderInfo;
 use leptoskit::auth::ProviderOutcome;
 use leptoskit::auth::PublicSession;
 use leptoskit::auth::RecoveryCodes;
+use leptoskit::auth::SecurityEvent;
+use leptoskit::auth::SecurityEvents;
 use leptoskit::auth::StartProvider;
 use leptoskit::auth::TotpSetup;
 use leptoskit::auth::UpdateWallet;
@@ -55,6 +59,7 @@ use leptoskit::auth::client::provider_outcome;
 use leptoskit::auth::client::qr_code;
 use leptoskit::auth::client::regenerate_recovery_codes;
 use leptoskit::auth::client::remove_passkey;
+use leptoskit::auth::client::security_events;
 use leptoskit::auth::client::sign_out_mutation;
 use leptoskit::auth::client::step_up;
 use leptoskit::auth::client::step_up_with_passkey;
@@ -77,11 +82,13 @@ use leptoskit::native::VectorPath;
 use leptoskit::native::ViewBox;
 use leptoskit::prelude::*;
 use leptoskit::query::ErrorArgs;
+use leptoskit::query::InfiniteQueryHandle;
 use leptoskit::query::MutateCallbacks;
 use leptoskit::query::MutationHandle;
 use leptoskit::query::QueryHandle;
 use leptoskit::query::QueryObserverOptions;
 use leptoskit::query::SuccessArgs;
+use leptoskit::query::use_infinite_query_with;
 use leptoskit::query::use_mutation;
 use leptoskit::query::use_query_with;
 
@@ -115,6 +122,8 @@ pub enum Change {
 	WalletSignIn(Id<Wallet>, bool),
 	/// Unlinking a wallet.
 	UnlinkWallet(Id<Wallet>),
+	/// Showing recent activity, which says where someone signed in from.
+	ShowActivity,
 }
 
 /// The security screen's state. It's `Copy`, so handlers capture it freely.
@@ -128,6 +137,9 @@ pub struct Security {
 	wallets: QueryHandle<Vec<WalletInfo>, ErrorResponse>,
 	wallet_settings: QueryHandle<WalletSettings, ErrorResponse>,
 	wallet_apps: QueryHandle<Vec<WalletApp>, ErrorResponse>,
+	/// Recent activity, read only once the person asks for it.
+	activity: InfiniteQueryHandle<SecurityEvents, Option<String>, ErrorResponse>,
+	show_activity: RwSignal<bool>,
 	link_wallet: MutationHandle<LinkWalletInput, WalletLinked, ErrorResponse>,
 	update_wallet: MutationHandle<UpdateWallet, WalletInfo, ErrorResponse>,
 	unlink_wallet: MutationHandle<Id<Wallet>, (), ErrorResponse>,
@@ -171,6 +183,11 @@ impl Security {
 		let notice = RwSignal::new(None);
 		// Coming back from connecting a provider, say how it went.
 		Effect::new(move |_| notice.set(connected()));
+		let show_activity = RwSignal::new(false);
+		let activity_enabled = {
+			let enabled = enabled.clone();
+			move || enabled() && show_activity.get()
+		};
 
 		Self {
 			status: use_query_with(
@@ -205,6 +222,12 @@ impl Security {
 				|| (),
 				QueryObserverOptions::default().with_enabled(enabled.clone()),
 			),
+			activity: use_infinite_query_with(
+				security_events(),
+				|| (),
+				QueryObserverOptions::default().with_enabled(activity_enabled),
+			),
+			show_activity,
 			link_wallet: use_mutation(link_wallet()),
 			update_wallet: use_mutation(update_wallet()),
 			unlink_wallet: use_mutation(unlink_wallet()),
@@ -291,6 +314,7 @@ impl Security {
 			.child(authenticator)
 			.child(self.connected_accounts())
 			.child(self.wallets())
+			.child(self.activity())
 			.children(
 				self.problem
 					.get()
@@ -810,15 +834,100 @@ impl Security {
 			)
 	}
 
+	/// What happened to the account lately, newest first, once asked for.
+	/// It shows where someone signed in from, so it needs a fresh sign-in,
+	/// or step-up when the account has a second factor.
+	fn activity(&self) -> Element {
+		let this = *self;
+		let section = View()
+			.class("gap-3")
+			.child(Heading(2, "Recent activity").class("text-lg font-semibold"));
+
+		if !self.show_activity.get() {
+			return section
+				.child(
+					Text(
+						"Sign-ins, new devices, and changes to how you sign in, with where they \
+						 came from.",
+					)
+					.class("text-sm text-slate-300"),
+				)
+				.child(
+					Button("Show recent activity")
+						.on_press(move || this.run(Change::ShowActivity))
+						.class("rounded-lg bg-slate-700 px-4 py-3 font-semibold"),
+				);
+		}
+
+		if let Some(error) = self.activity.error() {
+			let (explain, label, change): (&str, &str, fn(&Self)) = match error.error.as_str() {
+				"step_up_required" => {
+					(
+						"Confirm it's you to see where you've signed in.",
+						"Confirm it's you",
+						|this| this.waiting.set(Some(Change::ShowActivity)),
+					)
+				}
+				"reauthenticate" => {
+					(
+						"Sign in again to see where you've signed in.",
+						"Sign in again",
+						|this| this.reauthenticate.set(true),
+					)
+				}
+				_ => {
+					return section
+						.child(Alert(sentence(&error.message)).class("text-sm text-rose-300"));
+				}
+			};
+			return section
+				.child(Text(explain).class("text-sm text-slate-300"))
+				.child(
+					Button(label)
+						.on_press(move || change(&this))
+						.class("rounded-lg bg-indigo-500 px-4 py-3 font-semibold"),
+				);
+		}
+
+		let Some(pages) = self.activity.data() else {
+			return section.child(Status("Loading…").class("text-slate-300"));
+		};
+		let mut list = section;
+		for event in pages.pages.iter().flat_map(|page| &page.events) {
+			list = list.child(
+				View()
+					.class("gap-1 rounded-lg bg-slate-800 p-3")
+					.child(Text(happened(event)).class("font-semibold"))
+					.child(Text(from(event)).class("text-xs text-slate-400")),
+			);
+		}
+
+		let older = self.activity.is_fetching_next_page();
+		list.children(self.activity.has_next_page().then(|| {
+			Button(if older { "Loading…" } else { "Show older" })
+				.enabled(!older)
+				.aria_busy(older)
+				.on_press(move || {
+					let _ = this.activity.fetch_next_page();
+				})
+				.class("rounded-lg px-4 py-2 text-sm text-indigo-300")
+		}))
+	}
+
 	/// Step-up: a passkey, or a code from the app, before the change goes
 	/// through.
 	fn confirm_its_you(&self, status: &MfaStatus) -> Element {
 		let this = *self;
 		let code = self.code;
 		let checking = self.step_up.is_pending() || self.step_up_passkey.is_pending();
-		let mut confirm = View()
-			.class("gap-3")
-			.child(Status("Confirm it's you before this change.").class("text-sm text-slate-300"));
+		let mut confirm = View().class("gap-3").child(
+			Status(if self.waiting.get() == Some(Change::ShowActivity) {
+				"Confirm it's you to see your recent activity."
+			} else {
+				"Confirm it's you before this change."
+			})
+			.class("text-sm text-slate-300"),
+		);
 
 		if status.passkeys > 0 {
 			confirm = confirm.child(
@@ -999,6 +1108,13 @@ impl Security {
 					MutateCallbacks::new().on_error(move |args| failed(&args.error)),
 				);
 			}
+			Change::ShowActivity => {
+				// Turning it on fetches it; after step-up, fetch it again.
+				if self.show_activity.get_untracked() {
+					let _ = self.activity.refetch();
+				}
+				self.show_activity.set(true);
+			}
 		}
 	}
 
@@ -1156,6 +1272,66 @@ impl Security {
 	}
 }
 
+/// What happened, in words, such as "Signed in" or "Connected an app:
+/// Partner".
+pub fn happened(event: &SecurityEvent) -> String {
+	let what = match event.kind {
+		EventKind::SignedUp => "Created the account",
+		EventKind::SignedIn => "Signed in",
+		EventKind::SignInFailed => "A sign-in failed",
+		EventKind::SignedOut => "Signed out",
+		EventKind::SessionRevoked => "Signed out another device",
+		EventKind::RefreshReused => "Ended a copied sign-in",
+		EventKind::CodeSent => "Sent a sign-in code",
+		EventKind::TotpEnabled => "Turned on the authenticator app",
+		EventKind::TotpDisabled => "Turned off the authenticator app",
+		EventKind::SecondFactorFailed => "A wrong code was entered",
+		EventKind::SteppedUp => "Confirmed it was you",
+		EventKind::RecoveryCodeUsed => "Used a recovery code",
+		EventKind::RecoveryCodesRegenerated => "Made new recovery codes",
+		EventKind::PasskeyAdded => "Added a passkey",
+		EventKind::PasskeyRemoved => "Removed a passkey",
+		EventKind::PasskeyFailed => "A passkey was refused",
+		EventKind::Locked => "Locked after too many wrong codes",
+		EventKind::Unlocked => "Unlocked",
+		EventKind::MfaReset => "Two-step verification was reset",
+		EventKind::IdentityLinked => "Connected an account",
+		EventKind::IdentityUnlinked => "Disconnected an account",
+		EventKind::AccountMerged => "Merged another account in",
+		EventKind::WalletLinked => "Linked a wallet",
+		EventKind::WalletUnlinked => "Unlinked a wallet",
+		EventKind::AppConnected => "Connected an app",
+		EventKind::AppDisconnected => "Disconnected an app",
+		EventKind::AppTokenReused => "Ended an app's copied sign-in",
+		EventKind::AppRegistered => "Registered an app",
+		EventKind::AppChanged => "Changed an app",
+		EventKind::AppDeleted => "Deleted an app",
+		// Anything newer than this screen reads as its own name.
+		kind => {
+			let name = kind.as_str().replace('_', " ");
+			let mut letters = name.chars();
+			return letters.next().map_or_else(String::new, |first| {
+				first.to_uppercase().chain(letters).collect()
+			});
+		}
+	};
+
+	match &event.detail {
+		Some(detail) => format!("{what}: {detail}"),
+		None => what.to_owned(),
+	}
+}
+
+/// Where and when it happened, such as "Firefox on macOS · 203.0.113.9 · 1
+/// November 2026".
+pub fn from(event: &SecurityEvent) -> String {
+	[event.device.clone(), event.ip.clone(), Some(day(event.at))]
+		.into_iter()
+		.flatten()
+		.collect::<Vec<_>>()
+		.join(" · ")
+}
+
 /// An address shortened for people, such as `9WzD…AWWM`.
 pub fn short(address: &str) -> String {
 	let characters: Vec<char> = address.chars().collect();
@@ -1285,5 +1461,32 @@ mod tests {
 	fn a_setup_link_draws_as_a_code() {
 		assert!(qr("otpauth://totp/Notes:ada%40example.com?issuer=Notes").is_some());
 		assert!(qr(&"x".repeat(4000)).is_none());
+	}
+
+	#[test]
+	fn activity_reads_as_words() {
+		let at = "2026-11-01T09:30:00Z".parse().unwrap();
+		let signed_in = SecurityEvent {
+			kind: EventKind::SignedIn,
+			detail: None,
+			device: Some("Firefox on macOS".into()),
+			ip: Some("203.0.113.9".into()),
+			at,
+		};
+		assert_eq!(happened(&signed_in), "Signed in");
+		assert_eq!(
+			from(&signed_in),
+			"Firefox on macOS · 203.0.113.9 · 1 November 2026"
+		);
+
+		let connected = SecurityEvent {
+			kind: EventKind::AppConnected,
+			detail: Some("Partner".into()),
+			device: None,
+			ip: None,
+			..signed_in
+		};
+		assert_eq!(happened(&connected), "Connected an app: Partner");
+		assert_eq!(from(&connected), "1 November 2026");
 	}
 }

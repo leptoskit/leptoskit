@@ -1184,6 +1184,7 @@ fn clis_whose_functions_need_scopes_can_sign_in() {
 	let plain = files(&spec(), "todos-cli");
 	assert!(!plain.contains_key("src/login.rs"));
 	assert!(!plain["src/main.rs"].contains("Login"));
+	assert!(!plain["Cargo.toml"].contains("keyring"));
 
 	let mut scoped = spec();
 	scoped.functions[0].scopes = vec!["todos:read".to_owned()];
@@ -1218,7 +1219,20 @@ fn clis_whose_functions_need_scopes_can_sign_in() {
 		"{main}"
 	);
 	assert!(generated["Cargo.toml"].contains("features = [\"rt\", \"time\"]"));
+	// The sign-in goes in the system's keychain, with the file only where
+	// there's none, and `logout` forgets both.
+	let manifest = &generated["Cargo.toml"];
+	for keychain in ["apple-native", "windows-native", "sync-secret-service"] {
+		assert!(manifest.contains(keychain), "{manifest}");
+	}
+	assert!(
+		login.contains("keyring::Entry::new(super::APP, \"sign-in\")"),
+		"{login}"
+	);
+	assert!(login.contains("No keychain is available here"), "{login}");
+	assert!(login.contains("keychain::delete();"), "{login}");
 	assert!(generated["README.md"].contains("## Signing in"));
+	assert!(generated["README.md"].contains("keychain"));
 	assert!(generated["README.md"].contains("TODOS_CLI_CLIENT_ID"));
 
 	// A function already called `login` keeps its name; signing in moves.
@@ -1230,8 +1244,9 @@ fn clis_whose_functions_need_scopes_can_sign_in() {
 	assert!(main.contains("#[command(name = \"logout\")]"), "{main}");
 }
 
-/// The signing-in CLI compiles. It needs clap, reqwest and tokio from the
-/// registry, so it's run on request: `cargo test -- --ignored`.
+/// The signing-in CLI compiles, keychain included. It needs clap, keyring,
+/// reqwest and tokio from the registry, so it's run on request: `cargo test
+/// -- --ignored`. It checks this host's keychain backend only.
 #[test]
 #[ignore = "builds a generated crate against the registry; run with --ignored"]
 fn a_signing_in_cli_compiles() {

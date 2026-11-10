@@ -158,6 +158,7 @@ impl Auth {
 	/// | `POST /auth/refresh`                 | trades a native app's tokens ([`RefreshTokens`])    |
 	/// | `POST /auth/sign-out`                | ends it                                            |
 	/// | `GET /auth/sessions`                 | the person's signed-in devices ([`Device`])         |
+	/// | `GET /auth/events`                   | their security events, newest first ([`SecurityEvents`]) |
 	/// | `POST /auth/sessions/revoke`         | ends one of them ([`RevokeSession`])                |
 	/// | `POST /auth/sessions/revoke-others`  | ends all but the current one                       |
 	/// | `POST /auth/sessions/revoke-all`     | ends every one, the current one included           |
@@ -211,6 +212,7 @@ impl Auth {
 			.route("/auth/refresh", post(refresh))
 			.route("/auth/sign-out", post(sign_out))
 			.route("/auth/sessions", get(sessions))
+			.route("/auth/events", get(events))
 			.route("/auth/sessions/revoke", post(revoke))
 			.route("/auth/sessions/revoke-others", post(revoke_others))
 			.route("/auth/sessions/revoke-all", post(revoke_all))
@@ -1150,6 +1152,17 @@ async fn refresh(
 
 async fn sessions(State(auth): State<Auth>, me: SignedIn) -> Result<Json<Vec<Device>>, AuthError> {
 	Ok(Json(auth.devices(&me).await?))
+}
+
+async fn events(
+	State(auth): State<Auth>,
+	me: SignedIn,
+	Query(query): Query<crate::SecurityEventsQuery>,
+) -> Result<Json<crate::SecurityEvents>, AuthError> {
+	Ok(Json(
+		auth.security_events(&me, query.before.as_deref(), query.limit)
+			.await?,
+	))
 }
 
 async fn revoke(

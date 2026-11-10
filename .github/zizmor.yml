@@ -31,5 +31,6 @@ rules:
       - benchmarks.yml
       - ci.yml
       - docs.yml
+      - idp-conformance.yml
       - publish.yml
       - release.yml

@@ -125,6 +125,10 @@ impl std::fmt::Debug for TokenResponse {
 
 /// An app to register, as `lk auth idp client add` describes it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(
+	clippy::struct_excessive_bools,
+	reason = "independent properties of an app, as its JSON carries them"
+)]
 pub struct NewClientSpec {
 	/// Its name, as the consent screen shows it.
 	pub name: String,
@@ -164,11 +168,22 @@ pub struct NewClientSpec {
 	/// DPoP (RFC 9449). It needs the provider's DPoP on.
 	#[serde(default)]
 	pub dpop_bound: bool,
+	/// Whether every sign-in must use PKCE: yes, unless you turn it off for
+	/// an app with a secret or a key whose library can't send it. Such an
+	/// app may then sign in without PKCE when it sends a `nonce` and asks for
+	/// `openid` (RFC 9700 §2.1.1). Public apps always use PKCE.
+	#[serde(default = "required")]
+	pub require_pkce: bool,
 }
 
 /// The authorization code flow: what an app gets unless it asks otherwise.
 pub fn default_grant_types() -> Vec<GrantType> {
 	vec![GrantType::AuthorizationCode]
+}
+
+/// PKCE is required unless an operator says otherwise.
+const fn required() -> bool {
+	true
 }
 
 /// A registered app, as `lk auth idp client list` shows it. No secret.
@@ -204,6 +219,9 @@ pub struct ClientInfo {
 	/// Whether its access tokens must be bound to its key with DPoP.
 	#[serde(default)]
 	pub dpop_bound: bool,
+	/// Whether every sign-in must use PKCE.
+	#[serde(default = "required")]
+	pub require_pkce: bool,
 	/// Whether it registered itself, through dynamic registration.
 	#[serde(default)]
 	pub self_registered: bool,
@@ -457,6 +475,7 @@ mod tests {
 				first_party: false,
 				introspection: false,
 				dpop_bound: false,
+				require_pkce: true,
 				self_registered: false,
 				created_at: Timestamp::default(),
 			},
@@ -513,6 +532,7 @@ mod tests {
 		assert_eq!(spec.grant_types, [GrantType::AuthorizationCode]);
 		assert_eq!(spec.id_token_alg, SigningAlgorithm::Es256);
 		assert!(!spec.first_party);
+		assert!(spec.require_pkce);
 		let spec: NewClientSpec = serde_json::from_str(
 			r#"{"name":"CLI","scopes":["notes:read"],"auth_method":"none","grant_types":["urn:ietf:params:oauth:grant-type:device_code"],"id_token_alg":"RS256"}"#,
 		)

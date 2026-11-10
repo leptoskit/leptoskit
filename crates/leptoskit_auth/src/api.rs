@@ -370,6 +370,50 @@ pub struct Device {
 	pub current: bool,
 }
 
+/// Something that happened to the signed-in person's account, as `GET
+/// /auth/events` lists it for a security page: a sign-in, a new device, a
+/// factor turned on or off, a merge, an app connected, and so on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityEvent {
+	/// What happened.
+	pub kind: crate::EventKind,
+	/// What it concerns, such as the app that was connected.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub detail: Option<String>,
+	/// The device it came from, such as "Firefox on macOS", read from its
+	/// user agent.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub device: Option<String>,
+	/// The IP address it came from.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ip: Option<String>,
+	/// When it happened.
+	pub at: Timestamp,
+}
+
+/// One page of the signed-in person's [`SecurityEvent`]s, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityEvents {
+	/// The events on this page.
+	pub events: Vec<SecurityEvent>,
+	/// The cursor for the next, older page, as `GET /auth/events?before=…`
+	/// takes it; `None` on the last page.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub next: Option<String>,
+}
+
+/// The query of `GET /auth/events`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityEventsQuery {
+	/// Where the page starts: the `next` of the page before, or `None` for
+	/// the newest events.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub before: Option<String>,
+	/// How many events, at most: 50 by default, and never more than 100.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limit: Option<u32>,
+}
+
 /// The body of `POST /auth/sessions/revoke`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RevokeSession {

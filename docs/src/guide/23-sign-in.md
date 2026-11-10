@@ -213,6 +213,7 @@ The routes take and return JSON:
 | `GET /auth/session`                 |                       | The current session, or `null`.                             |
 | `POST /auth/sign-out`               |                       | Ends the current session, and clears the cookie.            |
 | `GET /auth/sessions`                |                       | The person's signed-in devices, this one marked `current`.  |
+| `GET /auth/events`                  | `?before=&limit=`     | Their recent activity, newest first, a page at a time.      |
 | `POST /auth/sessions/revoke`        | `{ "id" }`            | Ends one of them.                                           |
 | `POST /auth/sessions/revoke-others` |                       | Ends all but the current one.                               |
 | `POST /auth/sessions/revoke-all`    |                       | Ends every one, this one included, and clears the cookie.   |
@@ -329,6 +330,25 @@ everywhere.mutate(());                          // end them all, this one includ
 ```
 
 Each `Device` has the session's `device` label, when it signed in, when it was last used, and `current`, which marks the device you're on. Ending a device ends its session at once: its next request is signed out, and a native app's refresh token stops working with it. Each mutation refreshes the list, and signing out everywhere also clears the session query.
+
+### Show their recent activity
+
+Someone who wonders whether their account was used needs to see what happened to it: when and where it was signed in to, a new passkey, an authenticator turned off, an app connected. Sign-in already records all of that, and the security page can list it with no code of your own:
+
+```rust
+use leptoskit::auth::client::use_security_events;
+
+let activity = use_security_events();           // pages of SecurityEvents, newest first
+for event in activity.items_with(|page| &page.events) {
+	// event.kind, such as EventKind::SignedIn; event.detail, such as the app's name;
+	// event.device, such as "Firefox on macOS"; event.ip; event.at
+}
+if activity.has_next_page() {
+	activity.fetch_next_page();                 // the next 50, older
+}
+```
+
+People only ever see their own account's events. Because the list shows where someone signed in from, it needs a fresh session, as changing a sign-in method does: when the account has a passkey or an authenticator app, the query fails with `step_up_required` until they confirm it's them, and otherwise with `reauthenticate` if they signed in more than 10 minutes ago. The screen `leptoskit generate auth` writes shows it under "Recent activity" on the security page, and asks them to confirm first when it has to. It works the same in the browser and in native apps.
 
 ## Two-step verification
 

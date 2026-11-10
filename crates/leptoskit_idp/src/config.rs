@@ -32,7 +32,8 @@ impl Idp {
 	/// # Errors
 	///
 	/// [`IdpError::Config`] without `[auth.idp]`, or when the variable
-	/// `rsa_key_env` or `registration_token_env` names isn't set.
+	/// `rsa_key_env`, `next_rsa_key_env` or `registration_token_env` names
+	/// isn't set.
 	pub fn from_config(db: &Db, auth: &Auth, config: &LeptoskitConfig) -> Result<IdpBuilder> {
 		let idp = config
 			.auth
@@ -63,6 +64,11 @@ impl Idp {
 		if let Some(name) = &idp.rsa_key_env {
 			let key = std::env::var(name).map_err(|_| IdpError::Config(format!("set {name}")))?;
 			builder = builder.rsa_key(key);
+		}
+
+		if let Some(name) = &idp.next_rsa_key_env {
+			let key = std::env::var(name).map_err(|_| IdpError::Config(format!("set {name}")))?;
+			builder = builder.next_rsa_key(key);
 		}
 
 		if idp.developer_portal {
@@ -184,6 +190,19 @@ mod tests {
 			error
 				.to_string()
 				.contains("LEPTOSKIT_IDP_TEST_MISSING_RSA_KEY")
+		);
+
+		let next = LeptoskitConfig::from_toml(
+			"[auth.idp]\nrsa_key_env = \"PATH\"\nnext_rsa_key_env = \
+			 \"LEPTOSKIT_IDP_TEST_MISSING_NEXT_RSA_KEY\"\n",
+			Path::new("notes"),
+		)
+		.unwrap();
+		let error = Idp::from_config(&db, &auth, &next).unwrap_err();
+		assert!(
+			error
+				.to_string()
+				.contains("LEPTOSKIT_IDP_TEST_MISSING_NEXT_RSA_KEY")
 		);
 
 		let registration = LeptoskitConfig::from_toml(

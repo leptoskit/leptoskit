@@ -1751,6 +1751,11 @@ pub struct AuthIdpConfig {
 	/// that need RS256 ID tokens. Without it every token is ES256.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub rsa_key_env: Option<String>,
+	/// The environment variable holding the RSA key that takes over from
+	/// `rsa_key_env`'s: published at once, and signing a day later. Once it
+	/// signs, move it to `rsa_key_env` and remove this.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub next_rsa_key_env: Option<String>,
 	/// Minutes an access token lasts: revoking one reaches servers that only
 	/// check its signature after this long.
 	pub access_minutes: u32,
@@ -1788,6 +1793,7 @@ impl Default for AuthIdpConfig {
 			signed_out_page: "/".to_owned(),
 			device_page: "/device".to_owned(),
 			rsa_key_env: None,
+			next_rsa_key_env: None,
 			access_minutes: 10,
 			id_token_minutes: 10,
 			refresh_days: 90,
@@ -1818,6 +1824,27 @@ impl AuthIdpConfig {
 
 		if self.rsa_key_env.as_ref().is_some_and(String::is_empty) {
 			return Some("auth.idp.rsa_key_env must name an environment variable".to_owned());
+		}
+
+		match &self.next_rsa_key_env {
+			Some(name) if name.is_empty() => {
+				return Some(
+					"auth.idp.next_rsa_key_env must name an environment variable".to_owned(),
+				);
+			}
+			Some(name) if self.rsa_key_env.as_ref() == Some(name) => {
+				return Some(
+					"auth.idp.next_rsa_key_env must name another variable than rsa_key_env"
+						.to_owned(),
+				);
+			}
+			Some(_) if self.rsa_key_env.is_none() => {
+				return Some(
+					"auth.idp.next_rsa_key_env takes over from a current key: set rsa_key_env too"
+						.to_owned(),
+				);
+			}
+			_ => {}
 		}
 
 		match &self.registration_token_env {

@@ -116,6 +116,12 @@ pub struct Client {
 	/// with DPoP (RFC 9449), so a stolen token is useless without the key.
 	#[db(default = false)]
 	pub dpop_bound: bool,
+	/// Whether every sign-in must use PKCE. Only an operator can turn it off,
+	/// and only for an app with a secret or a key: it may then sign in
+	/// without PKCE when it sends a `nonce` and asks for `openid` (RFC 9700
+	/// §2.1.1), as older OpenID Connect libraries do.
+	#[db(default = true)]
+	pub require_pkce: bool,
 	/// The SHA-256 of the token that manages it, for an app that registered
 	/// itself through dynamic registration (RFC 7591 and 7592).
 	#[db(unique, secret)]
@@ -214,9 +220,10 @@ pub struct Authorization {
 	pub nonce: Option<String>,
 	/// Claims asked for in the ID token with the `claims` parameter.
 	pub id_token_claims: Json<Vec<String>>,
-	/// The PKCE `S256` challenge.
+	/// The PKCE `S256` challenge; `None` only for an app allowed to sign in
+	/// without PKCE, whose request then carried a `nonce`.
 	#[db(max_len = 128)]
-	pub code_challenge: String,
+	pub code_challenge: Option<String>,
 	pub auth_time: Timestamp,
 	/// The handle the consent screen reads it by, while it waits.
 	#[db(unique, secret)]

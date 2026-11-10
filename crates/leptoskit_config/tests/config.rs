@@ -955,11 +955,13 @@ fn the_auth_table_names_secrets_by_variable() {
 	let config = load(
 		"auth_idp_custom",
 		"[auth.idp]\nissuer = \"https://notes.example\"\nconsent_page = \"/connect\"\nrsa_key_env \
-		 = \"IDP_RSA_KEY\"\ndeveloper_portal = true\napps_per_person = 3\n",
+		 = \"IDP_RSA_KEY\"\nnext_rsa_key_env = \"IDP_NEXT_RSA_KEY\"\ndeveloper_portal = \
+		 true\napps_per_person = 3\n",
 	)
 	.expect("load");
 	let idp = config.auth.expect("auth").idp.expect("idp");
 	assert_eq!(idp.rsa_key_env.as_deref(), Some("IDP_RSA_KEY"));
+	assert_eq!(idp.next_rsa_key_env.as_deref(), Some("IDP_NEXT_RSA_KEY"));
 	assert!(idp.developer_portal);
 	assert_eq!(idp.apps_per_person, 3);
 }
@@ -1063,6 +1065,18 @@ fn auth_settings_are_checked() {
 			"sign_in_page",
 		),
 		("[auth.idp]\nrsa_key_env = \"\"", "rsa_key_env"),
+		(
+			"[auth.idp]\nrsa_key_env = \"A\"\nnext_rsa_key_env = \"\"",
+			"next_rsa_key_env must name",
+		),
+		(
+			"[auth.idp]\nrsa_key_env = \"A\"\nnext_rsa_key_env = \"A\"",
+			"another variable",
+		),
+		(
+			"[auth.idp]\nnext_rsa_key_env = \"B\"",
+			"set rsa_key_env too",
+		),
 		("[auth.idp]\naccess_minutes = 61", "access_minutes"),
 		("[auth.idp]\nrefresh_days = 0", "refresh_days"),
 		(

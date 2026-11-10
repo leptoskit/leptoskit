@@ -60,6 +60,7 @@ use crate::RenamePasskey;
 use crate::RequestChallengeResponse;
 use crate::RevokeSession;
 use crate::SecondFactorCode;
+use crate::SecurityEvents;
 use crate::SendCode;
 use crate::Session;
 use crate::SessionResponse;
@@ -807,6 +808,17 @@ impl<H: Http, C: Credentials> Api for Remote<H, C> {
 
 	fn identities(&self) -> Pending<'_, Vec<IdentityInfo>> {
 		Box::pin(Self::identities(self))
+	}
+
+	fn security_events(&self, before: Option<String>) -> Pending<'_, SecurityEvents> {
+		Box::pin(async move {
+			let path = match before {
+				Some(cursor) => format!("/auth/events?before={}", escape(&cursor)),
+				None => "/auth/events".to_owned(),
+			};
+			let response = self.call(Method::Get, &path, None, unauthorized).await?;
+			decode(&response)
+		})
 	}
 
 	fn unlink_identity(&self, id: Id<Identity>) -> Pending<'_, ()> {
@@ -1611,4 +1623,21 @@ fn succeeded(response: &HttpResponse) -> Result<(), ErrorResponse> {
 
 	Err(serde_json::from_slice(&response.body)
 		.unwrap_or_else(|_| error("server", "something went wrong; try again")))
+}
+
+/// `text` percent-encoded for a query string, so a cursor from the server
+/// can't add parameters of its own.
+fn escape(text: &str) -> String {
+	let mut escaped = String::with_capacity(text.len());
+	for byte in text.bytes() {
+		if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+			escaped.push(char::from(byte));
+		} else {
+			const HEX: &[u8; 16] = b"0123456789ABCDEF";
+			escaped.push('%');
+			escaped.push(char::from(HEX[usize::from(byte >> 4)]));
+			escaped.push(char::from(HEX[usize::from(byte & 0xF)]));
+		}
+	}
+	escaped
 }

@@ -127,6 +127,19 @@ async fn an_app_registers_itself_signs_someone_in_and_manages_its_registration()
 			.unwrap();
 		assert!(info.self_registered && !info.first_party && !info.introspection);
 
+		// Only the operator can let an app sign in without PKCE.
+		let mut lax = partner();
+		lax["require_pkce"] = json!(false);
+		let lax: ClientRegistration = body(app.register_json(None, lax).await).await;
+		assert!(
+			app.idp
+				.clients()
+				.await
+				.unwrap()
+				.iter()
+				.all(|client| client.client_id != lax.client_id || client.require_pkce)
+		);
+
 		// It reads its registration back, without the secret.
 		let path = path_of(&registered);
 		let response = app.registration("GET", &path, Some(&manager), None).await;

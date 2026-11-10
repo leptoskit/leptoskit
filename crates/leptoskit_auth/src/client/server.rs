@@ -35,6 +35,7 @@ use crate::ProviderOutcome;
 use crate::PublicSession;
 use crate::RecoveryCodes;
 use crate::RenamePasskey;
+use crate::SecurityEvents;
 use crate::Session;
 use crate::StartProvider;
 use crate::TotpSetup;
@@ -185,6 +186,10 @@ impl Api for Server {
 		Box::pin(reads::identities())
 	}
 
+	fn security_events(&self, before: Option<String>) -> Pending<'_, SecurityEvents> {
+		Box::pin(reads::security_events(before))
+	}
+
 	fn unlink_identity(&self, _id: Id<Identity>) -> Pending<'_, ()> {
 		in_the_browser()
 	}
@@ -310,6 +315,14 @@ mod reads {
 		Ok(auth.identities(me.account).await?)
 	}
 
+	pub(super) async fn security_events(
+		before: Option<String>,
+	) -> Result<crate::SecurityEvents, ErrorResponse> {
+		let me = crate::require_signed_in()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.security_events(&me, before.as_deref(), None).await?)
+	}
+
 	pub(super) async fn merge_offer() -> Result<Option<crate::MergeOffer>, ErrorResponse> {
 		let me = crate::require_signed_in()?;
 		let auth: Auth = crate::guards::extension()?;
@@ -386,6 +399,12 @@ mod reads {
 	}
 
 	pub(super) async fn identities() -> Result<Vec<crate::IdentityInfo>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn security_events(
+		_before: Option<String>,
+	) -> Result<crate::SecurityEvents, ErrorResponse> {
 		Err(no_database())
 	}
 

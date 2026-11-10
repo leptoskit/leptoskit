@@ -1,0 +1,7 @@
+# Layered over the conformance suite's own docker-compose.yml: the suite's
+# server (and the HtmlUnit browser inside it) reaches the test server, which
+# runs on the host, as idp.test.
+services:
+  server:
+    extra_hosts:
+      - "idp.test:host-gateway"

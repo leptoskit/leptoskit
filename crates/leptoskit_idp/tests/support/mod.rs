@@ -183,6 +183,12 @@ pub async fn app(db: Db) -> App {
 /// The app, with its provider configured further by `configure`.
 pub async fn app_with(db: Db, configure: impl FnOnce(IdpBuilder) -> IdpBuilder) -> App {
 	leptoskit_db::testing::create_tables(&db).await.unwrap();
+	restart(db, configure).await
+}
+
+/// The app again over a database that already has its tables, as a server
+/// deployed with new settings starts.
+pub async fn restart(db: Db, configure: impl FnOnce(IdpBuilder) -> IdpBuilder) -> App {
 	let mailbox = Mailbox::new();
 	let auth = Auth::builder(&db, Keys::single("test", [5; 32]))
 		.app_name("Notes")
@@ -517,6 +523,7 @@ pub fn spec(auth_method: ClientAuth, scopes: &[&str]) -> NewClientSpec {
 		first_party: false,
 		introspection: false,
 		dpop_bound: false,
+		require_pkce: true,
 	}
 }
 

@@ -85,6 +85,7 @@ device_page = "/device" # where people enter a CLI's or a TV's code
 | `signed_out_page`        | `/`        | Where people land after an app signs them out, if it named nowhere.                                |
 | `device_page`            | `/device`  | Where people enter a device's code.                                                                |
 | `rsa_key_env`            | none       | The environment variable holding an RSA key, for apps that need RS256 ID tokens.                   |
+| `next_rsa_key_env`       | none       | The environment variable holding the RSA key that takes over from it, when you rotate it.          |
 | `access_minutes`         | 10         | How long an access token lasts, at most 60.                                                        |
 | `id_token_minutes`       | 10         | How long an ID token lasts.                                                                        |
 | `refresh_days`           | 90         | How long an app stays signed in, however often it refreshes.                                       |
@@ -160,6 +161,7 @@ The secret is shown this once; only its hash is kept. Store it in the app's secr
 - `--post-logout-redirect` adds where the app may send people after signing them out.
 - `--first-party` marks one of your own apps. It sees the account ID as `sub` and skips the consent screen. Every other app sees a different, stable `sub` for the same person, so two apps can't match up their users through you.
 - `--introspect` lets a resource server introspect tokens issued to other apps.
+- `--pkce-optional` lets an app with a secret or a key sign in without PKCE, for an older OpenID Connect library that can't send it. Every request it makes without PKCE must then ask for `openid` and send a `nonce`, which ties the ID token to the browser that started the sign-in; anything else is refused. Leave it off unless a library needs it: PKCE also protects the code when a `nonce` can't, and public apps always use it.
 
 `leptoskit auth idp client list` shows every app you registered, and `leptoskit auth idp client remove <client id>` removes one, with every grant and token it holds; everyone who had connected it finds that in their activity. `leptoskit auth idp client rotate-secret <client id>` replaces an app's secret and prints the new one once: the old secret stops working, and so do the tokens the app got as itself.
 
@@ -262,7 +264,23 @@ $ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out idp-rsa.pem
 rsa_key_env = "IDP_RSA_KEY" # holds the PEM file's contents
 ```
 
-Their ID tokens are then RS256; access tokens stay ES256. The RSA key lives in the environment with your other secrets, never in the database. To rotate it, give the server a new one: the old key stays published until every token it signed has expired.
+Their ID tokens are then RS256; access tokens stay ES256. The RSA key lives in the environment with your other secrets, never in the database.
+
+**Rotating the RSA key.** Apps that check your tokens keep a copy of the key set, and fetch it again only now and then. Switch keys at once and their copy doesn't have the new key yet, so your tokens fail for them until it does. Instead, give the server the next key a day ahead:
+
+1. Make a new key, and set it as the next one alongside the current one:
+
+   ```toml
+   [auth.idp]
+   rsa_key_env = "IDP_RSA_KEY"
+   next_rsa_key_env = "IDP_NEXT_RSA_KEY" # holds the new PEM file's contents
+   ```
+
+2. Deploy. The next key is published right away, but the current key keeps signing.
+3. A day after the next key was first published, it starts signing, on every server at once. The old key stops signing, and leaves the key set once the last token it signed has expired, about an hour later with the default lifetimes.
+4. Whenever it suits you after that, move the new key into `IDP_RSA_KEY` and remove `next_rsa_key_env`. Nothing changes for apps.
+
+If a key leaks, don't wait: put a new key in `IDP_RSA_KEY` straight away. The leaked key stops signing as soon as the server starts with the new one, and leaves the key set an hour or so later, once the last token it signed has expired. Until then, a token signed with it still checks out, so apps that matter should also check tokens with `/oauth/introspect`.
 
 ## Sign in from a CLI or a TV
 
@@ -294,7 +312,7 @@ Signed in to https://notes.example.
 $ notes-cli list-my-notes
 ```
 
-The CLI keeps its tokens in your config directory (`~/.config/notes-cli/credentials.json`, or under `%APPDATA%` on Windows), readable only by you, renews the access token as it runs out, and sends it with every command. Two commands renewing at once take turns, since a refresh token works once. `logout` revokes the tokens and deletes the file.
+The CLI keeps its tokens in the operating system's keychain: the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet). Where there's none, such as a server you reach over SSH, `login` says so and keeps them in your config directory instead (`~/.config/notes-cli/credentials.json`, or under `%APPDATA%` on Windows), readable only by you. It renews the access token as it runs out, and sends it with every command. Two commands renewing at once take turns, since a refresh token works once. `logout` revokes the tokens and forgets them from the keychain and the file.
 
 ## Let a server act as itself
 
@@ -385,6 +403,4 @@ The answer holds the new `client_id`, a `client_secret` unless the app asked for
 
 ## What isn't there yet
 
-- PKCE is required for every app, including confidential ones. Some older libraries, and the OpenID Foundation's basic certification tests, sign in without it; those can't use your provider yet.
 - Binding an authorization code to a DPoP key at `/oauth/authorize` (`dpop_jkt`) and server-provided DPoP nonces.
-- The generated CLI keeps its tokens in a file in your config directory, not in the operating system's keychain.

@@ -1,0 +1,33 @@
+[package]
+name = "idp_conformance_example"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+description = "A test server for the OpenID Foundation's conformance suite: `leptoskit_idp` with an HTML sign-in page for one seeded person and an HTML consent page, served over https."
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, features = ["form", "http1", "json", "query", "tokio"] }
+getrandom = { workspace = true }
+leptoskit_auth = { workspace = true, features = ["axum", "sqlite"] }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+base64 = { workspace = true }
+http-body-util = "0.1"
+url = { workspace = true }
+
+[lints]
+workspace = true

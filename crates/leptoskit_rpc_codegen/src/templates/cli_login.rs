@@ -1,6 +1,8 @@
 //! Signing in for the commands that need it: the device flow (RFC 8628)
 //! against the app's own sign-in. `login` shows a code to enter in a
-//! browser, and keeps the tokens in a file only you can read; each command
+//! browser, and keeps the tokens in the operating system's keychain (the
+//! macOS Keychain, Windows Credential Manager, or the Secret Service on
+//! Linux), or, where there's none, in a file only you can read. Each command
 //! then sends the access token, renewing it when it runs out.
 
 use std::path::PathBuf;
@@ -103,7 +105,74 @@ fn credentials_path() -> Result<PathBuf, String> {
 	Ok(directory()?.join("credentials.json"))
 }
 
+/// The operating system's keychain, where it has one: the sign-in is one
+/// entry, named for the CLI. `Err` means there's no keychain to use, such
+/// as on a Linux server with no Secret Service, and the file stands in.
+#[cfg(any(
+	target_os = "macos",
+	target_os = "windows",
+	target_os = "linux",
+	target_os = "freebsd"
+))]
+mod keychain {
+	fn entry() -> Result<keyring::Entry, keyring::Error> {
+		keyring::Entry::new(super::APP, "sign-in")
+	}
+
+	pub fn read() -> Result<Option<Vec<u8>>, ()> {
+		match entry().and_then(|entry| entry.get_secret()) {
+			Ok(secret) => Ok(Some(secret)),
+			Err(keyring::Error::NoEntry) => Ok(None),
+			Err(_) => Err(()),
+		}
+	}
+
+	pub fn write(secret: &[u8]) -> Result<(), ()> {
+		entry()
+			.and_then(|entry| entry.set_secret(secret))
+			.map_err(|_| ())
+	}
+
+	pub fn delete() {
+		if let Ok(entry) = entry() {
+			let _ = entry.delete_credential();
+		}
+	}
+}
+
+/// No keychain on this system: the file stands in.
+#[cfg(not(any(
+	target_os = "macos",
+	target_os = "windows",
+	target_os = "linux",
+	target_os = "freebsd"
+)))]
+mod keychain {
+	pub fn read() -> Result<Option<Vec<u8>>, ()> {
+		Err(())
+	}
+
+	pub fn write(_: &[u8]) -> Result<(), ()> {
+		Err(())
+	}
+
+	pub fn delete() {}
+}
+
+/// Where `save` kept the sign-in.
+enum Kept {
+	Keychain,
+	File(PathBuf),
+}
+
+/// The sign-in: from the keychain, or else from the file, where it is when
+/// there's no keychain, or when an older version of this CLI kept it.
 fn load() -> Result<Option<Credentials>, String> {
+	if let Ok(Some(secret)) = keychain::read() {
+		return serde_json::from_slice(&secret)
+			.map(Some)
+			.map_err(|_| format!("the sign-in in the keychain is damaged; run `{APP} logout`"));
+	}
 	let path = credentials_path()?;
 	match std::fs::read(&path) {
 		Ok(bytes) => {
@@ -116,15 +185,30 @@ fn load() -> Result<Option<Credentials>, String> {
 	}
 }
 
-/// Writes the credentials readable only by you, replacing the old file in
-/// one step.
-fn save(credentials: &Credentials) -> Result<(), String> {
+/// Keeps the sign-in in the keychain, and removes the file an older version
+/// or a missing keychain left behind. Without a keychain, or when it refuses
+/// the entry, the sign-in goes in the file instead.
+fn save(credentials: &Credentials) -> Result<Kept, String> {
+	let json = serde_json::to_vec(credentials).map_err(|error| error.to_string())?;
+	if keychain::write(&json).is_ok() {
+		let path = credentials_path()?;
+		return match std::fs::remove_file(&path) {
+			Ok(()) => Ok(Kept::Keychain),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Kept::Keychain),
+			Err(error) => Err(format!("couldn't remove {}: {error}", path.display())),
+		};
+	}
+	save_file(&json).map(Kept::File)
+}
+
+/// Writes the sign-in to the file, readable only by you, replacing the old
+/// one in one step.
+fn save_file(json: &[u8]) -> Result<PathBuf, String> {
 	let directory = directory()?;
 	std::fs::create_dir_all(&directory)
 		.map_err(|error| format!("couldn't create {}: {error}", directory.display()))?;
 	let path = directory.join("credentials.json");
 	let staged = directory.join(format!("credentials.{}.json", std::process::id()));
-	let json = serde_json::to_vec(credentials).map_err(|error| error.to_string())?;
 	let mut options = std::fs::OpenOptions::new();
 	options.write(true).create(true).truncate(true);
 	#[cfg(unix)]
@@ -134,15 +218,18 @@ fn save(credentials: &Credentials) -> Result<(), String> {
 	}
 	let written = options
 		.open(&staged)
-		.and_then(|mut file| std::io::Write::write_all(&mut file, &json))
+		.and_then(|mut file| std::io::Write::write_all(&mut file, json))
 		.and_then(|()| std::fs::rename(&staged, &path));
 	written.map_err(|error| {
 		let _ = std::fs::remove_file(&staged);
 		format!("couldn't write {}: {error}", path.display())
-	})
+	})?;
+	Ok(path)
 }
 
+/// Forgets the sign-in, from the keychain and the file both.
 fn forget() -> Result<(), String> {
+	keychain::delete();
 	let path = credentials_path()?;
 	match std::fs::remove_file(&path) {
 		Ok(()) => Ok(()),
@@ -323,7 +410,7 @@ pub async fn login(server_url: &str, client_id: Option<String>) -> Result<String
 		.await?;
 		match answer {
 			Answer::Tokens(tokens) => {
-				save(&Credentials {
+				let kept = save(&Credentials {
 					server_url: server_url.to_owned(),
 					client_id,
 					token_endpoint: discovery.token_endpoint,
@@ -332,6 +419,13 @@ pub async fn login(server_url: &str, client_id: Option<String>) -> Result<String
 					refresh_token: tokens.refresh_token,
 					expires_at: now() + tokens.expires_in,
 				})?;
+				if let Kept::File(path) = kept {
+					eprintln!(
+						"No keychain is available here, so the sign-in is kept in {}, readable \
+						 only by you.",
+						path.display()
+					);
+				}
 				return Ok(format!("Signed in to {server_url}."));
 			}
 			Answer::Refused(error) if error.error == "authorization_pending" => {}
@@ -346,9 +440,12 @@ pub async fn login(server_url: &str, client_id: Option<String>) -> Result<String
 	Err(format!("the code expired; run `{APP} login` again"))
 }
 
-/// `logout`: revokes the tokens, and forgets them.
+/// `logout`: revokes the tokens, and forgets them, from the keychain and
+/// the file both.
 pub async fn logout(server_url: &str) -> Result<String, String> {
-	let Some(credentials) = load()? else {
+	// A damaged sign-in is forgotten too: that's what its error says to do.
+	let Some(credentials) = load().ok().flatten() else {
+		forget()?;
 		return Ok("You weren't signed in.".to_owned());
 	};
 	if let (Some(revocation), Some(refresh)) =

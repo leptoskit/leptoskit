@@ -100,6 +100,12 @@ pub enum ClientArgs {
 		/// `dpop = true` in `[auth.idp]`.
 		#[arg(long)]
 		dpop: bool,
+		/// Lets it sign in without PKCE, for an OpenID Connect library that
+		/// can't send it, such as the OpenID Foundation's certification tests.
+		/// It must then ask for `openid` and send a `nonce`. Only for an app
+		/// with a secret or a key.
+		#[arg(long, conflicts_with = "public")]
+		pkce_optional: bool,
 	},
 	/// Lists every registered app.
 	List,
@@ -182,6 +188,7 @@ fn client_command(args: ClientArgs) -> Result<ClientCommand> {
 			first_party,
 			introspect,
 			dpop,
+			pkce_optional,
 		} => {
 			let jwks = jwks
 				.map(|path| -> Result<serde_json::Value> {
@@ -216,6 +223,7 @@ fn client_command(args: ClientArgs) -> Result<ClientCommand> {
 				first_party,
 				introspection: introspect,
 				dpop_bound: dpop,
+				require_pkce: !pkce_optional,
 			})
 		}
 		ClientArgs::List => ClientCommand::List,
@@ -390,6 +398,9 @@ fn describe(text: &mut String, client: &ClientInfo) {
 	if client.dpop_bound {
 		let _ = writeln!(text, "  tokens bound to its key with DPoP");
 	}
+	if !client.require_pkce {
+		let _ = writeln!(text, "  PKCE optional with openid and a nonce");
+	}
 	if client.self_registered {
 		let _ = writeln!(text, "  registered itself (dynamic registration)");
 	}
@@ -434,9 +445,43 @@ mod tests {
 			first_party: true,
 			introspection: true,
 			dpop_bound: false,
+			require_pkce: true,
 			self_registered: false,
 			created_at: chrono::DateTime::default(),
 		}
+	}
+
+	#[test]
+	fn pkce_is_optional_only_for_apps_that_authenticate() {
+		let ClientCommand::Add(spec) = parse(&[
+			"idp",
+			"client",
+			"add",
+			"Legacy",
+			"--redirect",
+			"https://a.example/cb",
+			"--scopes",
+			"openid",
+			"--pkce-optional",
+		]) else {
+			panic!("an add");
+		};
+		assert_eq!(spec.auth_method, ClientAuth::SecretBasic);
+		assert!(!spec.require_pkce);
+		assert!(
+			Harness::try_parse_from([
+				"auth",
+				"idp",
+				"client",
+				"add",
+				"X",
+				"--scopes",
+				"openid",
+				"--public",
+				"--pkce-optional",
+			])
+			.is_err()
+		);
 	}
 
 	#[test]
@@ -465,6 +510,7 @@ mod tests {
 				first_party: false,
 				introspection: false,
 				dpop_bound: false,
+				require_pkce: true,
 			})
 		);
 		let ClientCommand::Add(cli) = parse(&[
@@ -561,6 +607,7 @@ mod tests {
 		assert_eq!(spec.auth_method, ClientAuth::SecretPost);
 		assert_eq!(spec.post_logout_redirect_uris, ["https://a.example/out"]);
 		assert!(spec.first_party && spec.introspection && spec.dpop_bound);
+		assert!(spec.require_pkce);
 		assert_eq!(parse(&["idp", "client", "list"]), ClientCommand::List);
 		assert_eq!(
 			parse(&["idp", "client", "remove", "abc"]),
@@ -624,6 +671,7 @@ mod tests {
 		let mut bound = client("Two");
 		bound.dpop_bound = true;
 		bound.self_registered = true;
+		bound.require_pkce = false;
 		let (text, _) = render(&ClientCommandOutput::Listed {
 			clients: vec![client("One"), bound],
 		});
@@ -631,6 +679,7 @@ mod tests {
 		assert!(text.contains("post-logout redirects"), "{text}");
 		assert!(text.contains("bound to its key with DPoP"), "{text}");
 		assert!(text.contains("registered itself"), "{text}");
+		assert!(text.contains("PKCE optional"), "{text}");
 		let (text, _) = render(&ClientCommandOutput::Listed {
 			clients: Vec::new(),
 		});
@@ -709,6 +758,7 @@ mod tests {
 				first_party: false,
 				introspection: false,
 				dpop_bound: false,
+				require_pkce: true,
 			}),
 			Duration::from_millis(200),
 		)
