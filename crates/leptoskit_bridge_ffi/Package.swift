@@ -14,7 +14,7 @@ let controllerTargets: [Target] = [
             "mobile/LeptosKitView.kt", "mobile/WidgetStyle.swift", "mobile/NativeReleases.kt",
             "mobile/WidgetTextStyle.swift", "mobile/WidgetImageStyle.swift",
             "mobile/NativeReleases.swift", "mobile/LeptosKitApplicationView.kt",
-            "mobile/MobileWidgetRenderer.swift", "mobile/LeptosKitViewController.swift",
+            "mobile/MobileWidgetRenderer.swift", "mobile/MobileWidgetControls.swift", "mobile/LeptosKitViewController.swift",
             "mobile/MobileApplicationChrome.swift", "desktop/LeptosKitMacViewController.swift",
             "mobile/NativeAppFactory.swift", "mobile/NativeAppRuntime.swift", "mobile/NativeGuestRuntime.swift",
             "mobile/NativeRustWorker.kt", "mobile/NativeRustAsync.kt", "mobile/NativeApp.kt",
