@@ -12,12 +12,14 @@
 //!   for after the email code once an account turns it on, and step-up, which
 //!   sensitive actions ask for again. Passkeys count as both factors at once,
 //!   and can be required for everyone or for certain roles.
+//! - **Passwords** (the `password` feature), off unless the app turns them on:
+//!   Argon2id, NIST SP 800-63B rules, and resets through emailed codes.
 //! - **Passkeys** (the `passkey` feature): WebAuthn on the web, through
 //!   `webauthn-rs`, with ceremony state sealed on the server.
 //! - **Third-party sign-in** (the `oauth` feature): Google, Apple, Microsoft,
-//!   GitHub, and any OpenID Connect provider, identified by the provider's
-//!   subject, never an email address; with linking, unlinking, and merging
-//!   accounts.
+//!   GitHub, Facebook, X, Discord, LinkedIn, GitLab, Slack, and any OpenID
+//!   Connect provider, identified by the provider's subject, never an email
+//!   address; with linking, unlinking, and merging accounts.
 //! - **Solana wallets** (the `solana` feature): linked to an account with a
 //!   signed Sign-In With Solana message, re-proved when an action needs a fresh
 //!   signature, and used to sign in only when their owner turns that on.
@@ -87,6 +89,14 @@ mod oauth;
 )]
 mod passkeys;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+mod passwords;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+#[cfg_attr(
+	not(all(feature = "axum", feature = "oauth")),
+	allow(dead_code, reason = "the provider routes finish the flows")
+)]
+mod provider_tokens;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 #[cfg_attr(
 	not(all(feature = "axum", feature = "oauth")),
 	allow(dead_code, reason = "the provider routes finish the flows")
@@ -128,6 +138,8 @@ pub use auth::SessionLifetimes;
 pub use auth::context;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use error::AuthError;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use error::PasswordProblem;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use error::Result;
 #[cfg(all(feature = "leptos", any(feature = "postgres", feature = "sqlite")))]
@@ -175,6 +187,10 @@ pub use mfa::SignInStep;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use mfa::TotpConfirmed;
 #[cfg(all(feature = "oauth", any(feature = "postgres", feature = "sqlite")))]
+pub use oauth::FACEBOOK_GRAPH_VERSION;
+#[cfg(all(feature = "oauth", any(feature = "postgres", feature = "sqlite")))]
+pub use oauth::GITLAB_COM;
+#[cfg(all(feature = "oauth", any(feature = "postgres", feature = "sqlite")))]
 pub use oauth::Provider;
 #[cfg(all(feature = "oauth", any(feature = "postgres", feature = "sqlite")))]
 pub use oauth::ProviderFuture;
@@ -192,6 +208,14 @@ pub use oauth::VERIFIED as PROVIDERS_VERIFIED;
 pub use passkeys::PasskeyAdded;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use passkeys::PasskeyChallenge;
+#[cfg(all(feature = "password", any(feature = "postgres", feature = "sqlite")))]
+pub use passwords::BreachFuture;
+#[cfg(all(feature = "password", any(feature = "postgres", feature = "sqlite")))]
+pub use passwords::BreachedPasswords;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use passwords::PasswordOptions;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use provider_tokens::ProviderAccess;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use providers::CallbackParams;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]

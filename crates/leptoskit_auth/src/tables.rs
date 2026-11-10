@@ -139,6 +139,10 @@ pub enum Purpose {
 	WalletProof,
 	/// Signing in with a wallet. Its token finds it.
 	WalletSignIn,
+	/// Too many wrong passwords for an address, whether or not it has an
+	/// account: password sign-in for it waits until this expires. Its
+	/// subject is the address.
+	PasswordPause,
 }
 
 /// A short-lived secret a sign-in method sent or expects, such as an email
@@ -247,6 +251,22 @@ pub enum EventKind {
 	/// They deleted an app of their own, ending every grant and token it
 	/// held. `detail` names the app.
 	AppDeleted,
+	/// An account was deleted. Its own history goes with it; this entry
+	/// has no account, and `detail` holds the deleted account's ID.
+	AccountDeleted,
+	/// A password was set where there was none.
+	PasswordSet,
+	/// The password was changed, and the account's other sessions ended.
+	PasswordChanged,
+	/// The password was removed.
+	PasswordRemoved,
+	/// The password was reset with an emailed code, and every session
+	/// ended.
+	PasswordReset,
+	/// Too many wrong passwords for the account's address: signing in with
+	/// a password was paused for a while, and its owner emailed. Other ways
+	/// to sign in still work.
+	PasswordPaused,
 }
 
 /// The audit trail: what happened to an account, and from where. Never
@@ -288,6 +308,24 @@ pub struct TotpSecret {
 	pub confirmed_at: Option<Timestamp>,
 	/// The last 30-second step whose code was used, so no code works twice.
 	pub last_used_step: Option<i64>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// An account's password, as an Argon2id hash in the PHC string format,
+/// which names its parameters, so a hash made with older ones is replaced
+/// at the next sign-in. Nobody reads it but this crate.
+#[table(name = "passwords", pack = "auth")]
+#[policy(select, |_, _| leptoskit_db::Expr::never())]
+pub struct Password {
+	pub id: Id<Self>,
+	/// One password per account.
+	#[db(unique, on_delete = cascade)]
+	pub account_id: Id<Account>,
+	#[db(secret, max_len = 512)]
+	pub hash: String,
+	/// When it was last set, changed, or reset.
+	pub changed_at: Timestamp,
 	#[db(created_at)]
 	pub created_at: Timestamp,
 }
@@ -368,6 +406,43 @@ pub struct Identity {
 	pub name: Option<String>,
 	/// When it last signed in.
 	pub last_used_at: Option<Timestamp>,
+	#[db(created_at)]
+	pub created_at: Timestamp,
+}
+
+/// A provider's access and refresh tokens for one connected account, kept
+/// only for providers the app configured with `store_tokens`, so the app
+/// can call that provider's API for the person. Both are encrypted with the
+/// server's keys and bound to the identity, so a copy of the database calls
+/// no one's API. Nobody reads them directly, not even their owner: the app
+/// asks [`Auth::provider_access_token`](crate::Auth), which refreshes them.
+/// Disconnecting the account, merging it away, or deleting the account
+/// deletes them, and revokes them where the provider allows.
+#[table(name = "provider_tokens", pack = "auth", index(account_id))]
+#[policy(select, |_, _| leptoskit_db::Expr::never())]
+pub struct ProviderToken {
+	pub id: Id<Self>,
+	/// The connected account they belong to: one set each.
+	#[db(unique, on_delete = cascade)]
+	pub identity_id: Id<Identity>,
+	#[db(on_delete = cascade)]
+	pub account_id: Id<Account>,
+	/// The provider's ID in `[auth.providers]`, such as `github`.
+	#[db(max_len = 64)]
+	pub provider: String,
+	/// The access token, AES-256-GCM-SIV under the newest key.
+	#[db(secret)]
+	pub access_token: Vec<u8>,
+	/// The refresh token, sealed the same way, when the provider gave one.
+	#[db(secret)]
+	pub refresh_token: Option<Vec<u8>>,
+	/// When the access token stops working, if the provider said.
+	pub expires_at: Option<Timestamp>,
+	/// The scopes the provider granted, as it listed them.
+	#[db(max_len = 2048)]
+	pub scope: Option<String>,
+	/// When they were last replaced, at sign-in or by a refresh.
+	pub updated_at: Timestamp,
 	#[db(created_at)]
 	pub created_at: Timestamp,
 }

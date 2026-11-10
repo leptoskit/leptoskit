@@ -53,11 +53,13 @@ pub enum ProviderCommand {
 	/// environment variables its secrets go in, and prints how to set the
 	/// provider up.
 	Add {
-		/// `google`, `apple`, `microsoft`, `github`, or your own ID for an
-		/// OpenID Connect issuer, such as `company`.
+		/// A built-in provider, such as `google`, `github`, `discord`, or
+		/// `slack`, or your own ID for an OpenID Connect issuer, such as
+		/// `company`.
 		id: String,
 		/// For an OpenID Connect provider: its issuer, such as
-		/// `https://sso.example.com`.
+		/// `https://sso.example.com`. For `gitlab`: a self-managed GitLab's
+		/// address.
 		#[arg(long)]
 		issuer: Option<String>,
 	},
@@ -201,6 +203,7 @@ pub(crate) fn doctor(
 	findings.extend(mail(&auth.mail, &env, release));
 	findings.extend(native_origins(config, release));
 	findings.extend(providers(config, &env));
+	findings.extend(passwords(auth));
 
 	if !auth.required_for.is_empty() {
 		findings.push(ok(format!(
@@ -286,6 +289,10 @@ fn providers(config: &LeptoskitConfig, env: &impl Fn(&str) -> Option<String>) ->
 	let mut findings = Vec::new();
 	let origin = auth.origin.as_deref().unwrap_or("http://localhost:3000");
 	let today = chrono::Utc::now().date_naive();
+	let app_name = auth
+		.app_name
+		.clone()
+		.unwrap_or_else(|| config.app.name.clone());
 
 	for (id, provider) in &auth.providers {
 		let kind = provider.kind(id);
@@ -299,6 +306,7 @@ fn providers(config: &LeptoskitConfig, env: &impl Fn(&str) -> Option<String>) ->
 			}
 		}
 
+		findings.extend(provider_notes(id, provider, &kind, &app_name));
 		let verified = leptoskit_auth::PROVIDERS_VERIFIED
 			.iter()
 			.find(|(provider, _)| *provider == kind)
@@ -333,6 +341,99 @@ fn providers(config: &LeptoskitConfig, env: &impl Fn(&str) -> Option<String>) ->
 	}
 
 	findings
+}
+
+/// What `doctor` says about passwords, when they're on.
+fn passwords(auth: &leptoskit_config::AuthConfig) -> Vec<Finding> {
+	let passwords = &auth.passwords;
+
+	if !passwords.enabled {
+		return Vec::new();
+	}
+
+	let mut findings = vec![ok(format!(
+		"passwords are on: at least {} characters, Argon2id; the server needs leptoskit_auth's \
+		 `password` feature (`auth-passwords`)",
+		passwords.min_length
+	))];
+
+	if passwords.min_length < 15 && auth.mfa != leptoskit_config::AuthMfa::Required {
+		findings.push(warning(format!(
+			"passwords of {} characters are only enough when everyone has two-step verification \
+			 (mfa = \"required\"); NIST SP 800-63B asks for 15 when a password is the only factor",
+			passwords.min_length
+		)));
+	}
+
+	if passwords.breach_check {
+		findings.push(ok("new passwords are checked against Have I Been Pwned, \
+		                  which the server must reach at \
+		                  api.pwnedpasswords.com; only 5 characters of each \
+		                  password's SHA-1 hash are sent"));
+	}
+
+	findings
+}
+
+/// The providers that never vouch for an email address: what they give is
+/// kept on the connected account, never as the account's own.
+const UNVOUCHED_EMAIL: &[&str] = &[
+	"microsoft",
+	"facebook",
+	"x",
+	"spotify",
+	"reddit",
+	"amazon",
+	"notion",
+	"tiktok",
+];
+
+/// What `doctor` says about one provider beyond its variables and age.
+fn provider_notes(
+	id: &str,
+	provider: &leptoskit_config::AuthProviderConfig,
+	kind: &str,
+	app_name: &str,
+) -> Vec<Finding> {
+	let mut findings = Vec::new();
+
+	if UNVOUCHED_EMAIL.contains(&kind) {
+		findings.push(ok(format!(
+			"{id}: {kind} never vouches for email addresses, so accounts made with it start \
+			 without one, and its address never matches another account"
+		)));
+	}
+
+	if kind == "facebook" {
+		let pinned = leptoskit_auth::FACEBOOK_GRAPH_VERSION;
+		let configured = provider.api_version.as_deref().unwrap_or(pinned);
+
+		if graph_version(configured) < graph_version(pinned) {
+			findings.push(warning(format!(
+				"{id}: Graph API {configured} is older than {pinned}, which the facebook \
+				 definition was checked against; Facebook retires each version about two years \
+				 after the next ships"
+			)));
+		}
+	}
+
+	if kind == "reddit" {
+		findings.push(ok(format!(
+			"{id}: requests to Reddit name the app, \"{app_name}\", in User-Agent, as Reddit \
+			 asks; set [auth] app_name to change it"
+		)));
+	}
+
+	findings
+}
+
+/// A Graph API version, such as `v26.0`, as numbers to compare.
+fn graph_version(version: &str) -> (u32, u32) {
+	let (major, minor) = version
+		.trim_start_matches('v')
+		.split_once('.')
+		.unwrap_or_default();
+	(major.parse().unwrap_or(0), minor.parse().unwrap_or(0))
 }
 
 /// The findings, one per line.
@@ -395,11 +496,11 @@ async fn rotate_in(
 
 pub(crate) fn rotation_report(newest: &str, rotated: leptoskit_auth::Rotated) -> String {
 	format!(
-		"Re-encrypted under `{newest}`: {} authenticator secret(s) and {} sign-in(s) in progress; \
-		 {} already were.\n\nRecovery codes and emailed codes are hashes, which can't be \
-		 re-keyed: keep the older keys listed until people with recovery codes have made new \
-		 ones, or accept that their old codes stop working.\n",
-		rotated.totp, rotated.ceremonies, rotated.current
+		"Re-encrypted under `{newest}`: {} authenticator secret(s), {} sign-in(s) in progress, \
+		 and {} provider token(s); {} already were.\n\nRecovery codes and emailed codes are \
+		 hashes, which can't be re-keyed: keep the older keys listed until people with recovery \
+		 codes have made new ones, or accept that their old codes stop working.\n",
+		rotated.totp, rotated.ceremonies, rotated.provider_tokens, rotated.current
 	)
 }
 
@@ -495,7 +596,46 @@ fn recipe(id: &str, issuer: Option<&str>, redirects: &str) -> Result<Recipe> {
 				settings,
 			}
 		}
+		"gitlab" => {
+			let base = issuer
+				.unwrap_or(leptoskit_auth::GITLAB_COM)
+				.trim_end_matches('/');
+			let mut settings = pair();
+
+			if issuer.is_some() {
+				settings.insert(0, ("issuer", base.to_owned()));
+			}
+
+			Recipe {
+				steps: vec![
+					format!(
+						"Open {base}/-/user_settings/applications (or a group's Applications \
+						 page) and add a confidential application with the scopes `openid`, \
+						 `profile`, and `email`."
+					),
+					format!("Set its Redirect URIs to:\n{redirects}"),
+					set(&settings),
+				],
+				settings,
+			}
+		}
 		_ => {
+			if let Some((register, redirect, note)) = setup(id) {
+				let mut settings = pair();
+
+				if id == "facebook" {
+					settings.push((
+						"api_version",
+						leptoskit_auth::FACEBOOK_GRAPH_VERSION.to_owned(),
+					));
+				}
+
+				let mut steps = vec![register.to_owned(), format!("{redirect}\n{redirects}")];
+				steps.extend(note.map(str::to_owned));
+				steps.push(set(&settings));
+				return Ok(Recipe { settings, steps });
+			}
+
 			let Some(issuer) = issuer else {
 				bail!(
 					"`{id}` isn't a built-in provider; pass --issuer with its OpenID Connect \
@@ -513,6 +653,159 @@ fn recipe(id: &str, issuer: Option<&str>, redirects: &str) -> Result<Recipe> {
 				settings,
 			}
 		}
+	})
+}
+
+/// Where to register an app with a built-in provider, how it names the
+/// redirect URIs, and anything else its setup needs.
+fn setup(kind: &str) -> Option<(&'static str, &'static str, Option<&'static str>)> {
+	Some(match kind {
+		"facebook" => {
+			(
+				"Open https://developers.facebook.com/apps and create an app with the \
+				 \"Authenticate and request data from users with Facebook Login\" use case.",
+				"Under Facebook Login's settings, add these Valid OAuth Redirect URIs:",
+				Some(
+					"`api_version` pins the Graph API version the app was set up with; Facebook \
+					 retires each version about two years after the next ships.",
+				),
+			)
+		}
+		"x" => {
+			(
+				"Open https://developer.x.com/en/portal/dashboard, and in the app's User \
+				 authentication settings choose OAuth 2.0 with the type \"Web App, Automated App \
+				 or Bot\".",
+				"Add these Callback URIs:",
+				Some(
+					"Use the OAuth 2.0 Client ID and Client Secret, not the API key. X never \
+					 shares a verified email address, so accounts made with it start without one.",
+				),
+			)
+		}
+		"discord" => {
+			(
+				"Open https://discord.com/developers/applications, create an application, and \
+				 open its OAuth2 page.",
+				"Add these Redirects:",
+				None,
+			)
+		}
+		"linkedin" => {
+			(
+				"Open https://www.linkedin.com/developers/apps, create an app, and add the \"Sign \
+				 In with LinkedIn using OpenID Connect\" product.",
+				"On its Auth tab, add these Authorized redirect URLs:",
+				None,
+			)
+		}
+		"slack" => {
+			(
+				"Open https://api.slack.com/apps, create an app, and under OAuth & Permissions \
+				 add the user scopes `openid`, `email`, and `profile`.",
+				"Add these Redirect URLs:",
+				Some(
+					"A Slack user belongs to one workspace: the same person in two workspaces \
+					 signs in as two connected accounts.",
+				),
+			)
+		}
+		"twitch" => {
+			(
+				"Open https://dev.twitch.tv/console/apps and register an application with the \
+				 category \"Website Integration\" and the client type \"Confidential\".",
+				"Add these OAuth Redirect URLs:",
+				None,
+			)
+		}
+		"spotify" => {
+			(
+				"Open https://developer.spotify.com/dashboard, create an app, and tick Web API.",
+				"Add these Redirect URIs:",
+				Some(
+					"Spotify doesn't check email addresses, so accounts made with it start \
+					 without one.",
+				),
+			)
+		}
+		"reddit" => {
+			(
+				"Open https://www.reddit.com/prefs/apps and create an app of type \"web app\".",
+				"Set its redirect uri to one of these (Reddit takes one per app, so make a second \
+				 app for development):",
+				Some(
+					"Reddit shares no email address, and asks each app to name itself: requests \
+					 carry `User-Agent: web:<your app's name>:leptoskit-auth/…`.",
+				),
+			)
+		}
+		"amazon" => (
+			"Open https://developer.amazon.com/loginwithamazon/console/site/lwa/overview.html, \
+			 create a security profile, and open its Web Settings.",
+			"Add these Allowed Return URLs:",
+			Some(
+				"Amazon doesn't say whether it checked an address, so accounts made with it start \
+				 without one.",
+			),
+		),
+		"dropbox" => {
+			(
+				"Open https://www.dropbox.com/developers/apps, create an app with scoped access, \
+				 and on its Permissions tab turn on `openid`, `email`, and `profile`.",
+				"On its Settings tab, add these Redirect URIs:",
+				None,
+			)
+		}
+		"bitbucket" => {
+			(
+				"Open your Bitbucket workspace's settings, then OAuth consumers, and add a \
+				 consumer with the Account: Email and Account: Read permissions.",
+				"Set its Callback URL to one of these (Bitbucket takes one per consumer, so add a \
+				 second consumer for development):",
+				None,
+			)
+		}
+		"notion" => {
+			(
+				"Open https://www.notion.so/profile/integrations, create a public integration, \
+				 and fill in its OAuth domain and URIs.",
+				"Add these Redirect URIs:",
+				Some(
+					"Notion's grants are per workspace; the person who connects one is the one \
+					 who signs in. Notion doesn't vouch for addresses, so accounts made with it \
+					 start without one.",
+				),
+			)
+		}
+		"zoom" => {
+			(
+				"Open https://marketplace.zoom.us/develop/create, create a General App with \
+				 user-managed OAuth, and add the scope `user:read:user`.",
+				"Add these OAuth Redirect URLs, and the same addresses to the OAuth Allow List:",
+				None,
+			)
+		}
+		"tiktok" => {
+			(
+				"Open https://developers.tiktok.com/apps, create an app, and add Login Kit for \
+				 the web with the `user.info.basic` scope.",
+				"Add these Redirect URIs (TikTok accepts only https, so test with a tunnel or \
+				 your deployed site):",
+				Some(
+					"TIKTOK_CLIENT_ID holds the app's client key. TikTok shares no email address, \
+					 so accounts made with it start without one.",
+				),
+			)
+		}
+		"yahoo" => {
+			(
+				"Open https://developer.yahoo.com/apps/create, create an app with OpenID Connect \
+				 permissions for Email and Profile.",
+				"Set its Redirect URI(s) to:",
+				None,
+			)
+		}
+		_ => return None,
 	})
 }
 
@@ -754,6 +1047,48 @@ mod tests {
 		for id in ["github", "microsoft", "apple"] {
 			add_provider(root.path(), &config, id, None).unwrap();
 		}
+
+		let facebook = add_provider(root.path(), &config, "facebook", None).unwrap();
+		assert!(facebook.contains("Valid OAuth Redirect URIs"), "{facebook}");
+		assert!(
+			facebook.contains("5. Run `leptoskit auth doctor`"),
+			"{facebook}"
+		);
+
+		for id in [
+			"x",
+			"discord",
+			"linkedin",
+			"slack",
+			"twitch",
+			"spotify",
+			"reddit",
+			"amazon",
+			"dropbox",
+			"bitbucket",
+			"notion",
+			"zoom",
+			"tiktok",
+			"yahoo",
+		] {
+			let output = add_provider(root.path(), &config, id, None).unwrap();
+			assert!(
+				output.contains(&format!("https://notes.example/auth/callback/{id}")),
+				"{output}"
+			);
+		}
+
+		let gitlab = add_provider(
+			root.path(),
+			&config,
+			"gitlab",
+			Some("https://gitlab.example/"),
+		)
+		.unwrap();
+		assert!(
+			gitlab.contains("https://gitlab.example/-/user_settings/applications"),
+			"{gitlab}"
+		);
 		let company = add_provider(
 			root.path(),
 			&config,
@@ -765,7 +1100,16 @@ mod tests {
 		let written = std::fs::read_to_string(root.path().join("leptoskit.toml")).unwrap();
 		let reloaded = LeptoskitConfig::from_toml(&written, root.path()).unwrap();
 		let providers = reloaded.auth.unwrap().providers;
-		assert_eq!(providers.len(), 5);
+		assert_eq!(providers.len(), 21);
+		assert_eq!(
+			providers["facebook"].api_version.as_deref(),
+			Some(leptoskit_auth::FACEBOOK_GRAPH_VERSION)
+		);
+		assert_eq!(
+			providers["gitlab"].issuer.as_deref(),
+			Some("https://gitlab.example")
+		);
+		assert_eq!(providers["x"].kind("x"), "x");
 		assert_eq!(
 			providers["company-sso"].issuer.as_deref(),
 			Some("https://sso.example")
@@ -776,6 +1120,60 @@ mod tests {
 		assert!(add_provider(root.path(), &config, "Bad ID", None).is_err());
 		let no_auth = LeptoskitConfig::from_toml("", root.path()).unwrap();
 		assert!(add_provider(root.path(), &no_auth, "google", None).is_err());
+	}
+
+	#[test]
+	fn doctor_says_what_each_provider_does_differently() {
+		let config = load(
+			"[auth]\norigin = \"https://notes.example\"\n\n[auth.providers.facebook]\nclient_id_env \
+			 = \"F_ID\"\nclient_secret_env = \"F_SECRET\"\napi_version = \"v19.0\"\n\n[auth.\
+			 providers.slack]\nclient_id_env = \"S_ID\"\nclient_secret_env = \"S_SECRET\"\n",
+		);
+		let report = report(&doctor(&config, env(&[]), false));
+		assert!(
+			report.contains("warning  facebook: Graph API v19.0 is older than"),
+			"{report}"
+		);
+		assert!(
+			report.contains("facebook: facebook never vouches for email addresses"),
+			"{report}"
+		);
+		assert!(!report.contains("slack: slack never vouches"), "{report}");
+		let reddit = load(
+			"[app]\nname = \"notes\"\n\n[auth]\n\n[auth.providers.reddit]\nclient_id_env = \
+			 \"R_ID\"\nclient_secret_env = \"R_SECRET\"\n",
+		);
+		let notes = super::report(&doctor(&reddit, env(&[]), false));
+		assert!(
+			notes.contains("reddit: requests to Reddit name the app, \"notes\""),
+			"{notes}"
+		);
+		assert!(graph_version("v26.0") > graph_version("v9.9"));
+		assert_eq!(graph_version("nonsense"), (0, 0));
+	}
+
+	#[test]
+	fn doctor_checks_how_long_passwords_must_be() {
+		let short = load(
+			"[auth]\n\n[auth.passwords]\nenabled = true\nmin_length = 8\nbreach_check = true\n",
+		);
+		let report = report(&doctor(&short, env(&[]), false));
+		assert!(
+			report.contains("passwords are on: at least 8 characters"),
+			"{report}"
+		);
+		assert!(
+			report.contains("warning  passwords of 8 characters"),
+			"{report}"
+		);
+		assert!(report.contains("Have I Been Pwned"), "{report}");
+		let required = load(
+			"[auth]\nmfa = \"required\"\n\n[auth.passwords]\nenabled = true\nmin_length = 8\n",
+		);
+		let report = super::report(&doctor(&required, env(&[]), false));
+		assert!(!report.contains("warning  passwords"), "{report}");
+		let off = super::report(&doctor(&load("[auth]\n"), env(&[]), false));
+		assert!(!off.contains("passwords are on"), "{off}");
 	}
 
 	#[tokio::test]
@@ -795,10 +1193,12 @@ mod tests {
 			leptoskit_auth::Rotated {
 				totp: 3,
 				ceremonies: 1,
+				provider_tokens: 4,
 				current: 2,
 			},
 		);
 		assert!(report.starts_with("Re-encrypted under `2027-04`: 3 authenticator secret(s)"));
+		assert!(report.contains("and 4 provider token(s); 2 already were"));
 		assert!(report.contains("can't be re-keyed"));
 	}
 }

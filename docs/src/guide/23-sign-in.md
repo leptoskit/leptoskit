@@ -508,9 +508,88 @@ The same passkey works on your site and in your apps, because they share the rel
 - Passkeys must verify their user, and a signature counter that goes backwards, which can mean a cloned key, is refused.
 - A passkey from another site, or registered to another account, is refused, and the attempt recorded.
 
+## Passwords
+
+Some people expect a password, and some apps have audiences that do. Passwords are off unless you turn them on: passkeys and emailed codes sign people in just as well, with nothing on your server worth stealing. When you do turn them on, a password is one more way to sign in with the account's email address; it never replaces the others.
+
+```toml
+[auth.passwords]
+enabled = true
+min_length = 15 # the default; 8 is only enough when everyone has two-step verification
+breach_check = false # the default; see below
+```
+
+Turn on the `auth-passwords` feature on your server's `leptoskit` dependency. `AuthBuilder::passwords(auth::PasswordOptions { … })` does the same in code.
+
+### Setting one, and signing in
+
+Someone signs up with an emailed code, as always, then sets a password while their sign-in is fresh (within ten minutes, or after step-up):
+
+```rust
+auth.set_password(&me, "correct horse battery staple", &request).await?;
+let step = auth.sign_in_with_password("ada@example.com", "correct horse battery staple", &request).await?;
+```
+
+`sign_in_with_password` answers like an emailed code: a session, or the second step when the account has two-step verification. A password is one factor, so two-step verification and step-up work as they do after an emailed code. `remove_password(&me, …)` turns it off again; the account keeps its other ways to sign in. The routes are `POST /auth/password/sign-in`, `POST /auth/password` (set or change), `POST /auth/password/remove`, `POST /auth/password/reset`, and `GET /auth/password/config`, which says whether passwords are on and how long they must be.
+
+### From the app
+
+The client has the same functions on every platform:
+
+```rust
+use leptoskit::auth::client::PasswordInput;
+use leptoskit::auth::client::sign_in_with_password;
+use leptoskit::auth::client::use_password_settings;
+
+let settings = use_password_settings();              // PasswordSettings { enabled, min_length, max_length }
+let sign_in = use_mutation(sign_in_with_password());
+sign_in.mutate(PasswordInput { email, password });   // SignInStep, as `verify_code()` answers
+```
+
+`set_password()` and `remove_password()` change the signed-in person's password, answering `step_up_required` or `reauthenticate` when their sign-in isn't fresh, as turning on an authenticator does; `reset_password()` takes a `PasswordReset { email, code, password }`, with the code from `send_code()`. Errors are `invalid_password`, `weak_password` (its message says what's wrong), and `rate_limited`.
+
+| Platform                 | Passwords                                                                                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web                      | Everything above, with the session in the `HttpOnly` cookie                                                                                         |
+| iOS, Android, and macOS  | Everything above, with the session's tokens in the secure store                                                                                     |
+| Windows and Linux        | Everything above, for a host that registers the `http` and `secure-store` plugins; the generated runners can't host plugins yet and answer `config` |
+| HarmonyOS (experimental) | Everything above, as for emailed codes                                                                                                              |
+| Server rendering         | `password_settings()` reads in process; the others run in the browser and answer `server`                                                           |
+
+`leptoskit generate auth` turns on `auth-passwords` for your server when `[auth.passwords] enabled` is set, but its screens don't have password fields yet: leptoskit's `TextInput` can't hide what's typed in native apps, and a password field that shows the password isn't one to ship. Build your own field for the web, where an `<input type="password">` does, until it can.
+
+### The rules
+
+They follow NIST SP 800-63B:
+
+- at least `min_length` characters (15 by default) and at most 256, counted as characters, not bytes, with any characters at all, spaces and emoji included;
+- no rules about mixing upper case, digits, or symbols, which make passwords harder to remember without making them harder to guess;
+- not one of the most common passwords, from a list built into leptoskit, and not the email address, its name, or your app's name with a few digits added;
+- with `breach_check = true`, not a password that has appeared in a data breach, as [Have I Been Pwned](https://haveibeenpwned.com/Passwords) knows. It's off by default because it's a request to another service. What's sent is the first 5 characters of the password's SHA-1 hash, never the password, and the answer is padded, so its size says nothing either. If the service can't be reached, the password is allowed on the other rules.
+
+A refused password fails with `AuthError::WeakPassword`, naming the problem: too short, too long, too common, too close to the address or the app's name, or breached.
+
+### Forgotten passwords
+
+A reset is an emailed code plus a new password: send a code with `send_email_code` (the one sign-in uses), then
+
+```rust
+let step = auth.reset_password("ada@example.com", &code, "a new and longer phrase", &request).await?;
+```
+
+The new password is checked before the code is used, so a refused one leaves the code working. A reset ends every session the account has, and starts a new one. When the account has two-step verification, it gets the second step first, and nothing changes until that succeeds, so someone who gets into the inbox still can't reset their way past an authenticator app or a passkey.
+
+### How it's kept safe
+
+- Passwords are hashed with Argon2id at OWASP's settings (19 MiB of memory, two passes), off your server's async threads. Each hash records its settings, so when they change, the hash is replaced the next time the person signs in.
+- Passwords are compared after Unicode normalization (NFKC), so the same password typed on two keyboards matches.
+- A wrong password and an address without an account or a password answer the same, `invalid_password`, in the same time.
+- Each address gets 10 tries every 15 minutes. After 20 wrong passwords in a day, signing in with a password is paused for an hour for that address, whether or not it has an account, and the account's owner is emailed. Emailed codes, passkeys, and providers keep working, so nobody can lock someone out by guessing.
+- Changing a password ends the account's other sessions; a reset ends all of them. Each change emails the account.
+
 ## Sign in with other sites
 
-Many people would rather "Continue with Google" than wait for an email. leptoskit signs in with Google, Apple, Microsoft, and GitHub, and with any OpenID Connect provider, such as Okta, Auth0, Keycloak, or your company's Entra tenant. Each has a [setup page](auth/providers/google.md).
+Many people would rather "Continue with Google" than wait for an email. leptoskit has built-in definitions for Google, Apple, Microsoft, GitHub, Facebook, X, Discord, LinkedIn, GitLab, Slack, Twitch, Spotify, Reddit, Amazon, Dropbox, Bitbucket, Notion, Zoom, TikTok, and Yahoo, and signs in with any OpenID Connect provider, such as Okta, Auth0, Keycloak, or your company's Entra tenant. Each has a [setup page](auth/providers/google.md).
 
 Add one from the command line, which writes its `[auth.providers.<id>]` table and prints its setup steps:
 
@@ -558,7 +637,7 @@ The page goes to the provider's sign-in page, and comes back to `redirect_to` (a
 | `Merge`            | It belongs to another account here, which can be merged into this one                     |
 | `Failed(code)`     | It didn't work: `cancelled`, `sign_in_expired`, `provider`, `locked`, …                   |
 
-Who someone is at a provider is the provider's own ID for them, never their email address: some providers let people set any address, and trusting it is how accounts get taken over. So a provider sign-in never signs in to an account just because the email matches. When it does match, the outcome is `EmailInUse`: the person can sign in to that account with their email and connect the provider from its security screen, or `continue_provider_sign_up()` for a separate account without that address. An address is only stored as verified when the provider vouches for it; Microsoft's never is.
+Who someone is at a provider is the provider's own ID for them, never their email address: some providers let people set any address, and trusting it is how accounts get taken over. So a provider sign-in never signs in to an account just because the email matches. When it does match, the outcome is `EmailInUse`: the person can sign in to that account with their email and connect the provider from its security screen, or `continue_provider_sign_up()` for a separate account without that address. An address is only stored as verified when the provider vouches for it. Microsoft, Facebook, X, Spotify, Reddit, Amazon, Notion, and TikTok never do, so accounts made with them start without an address.
 
 ### Connecting, disconnecting, and merging
 
@@ -577,6 +656,37 @@ merge.mutate(MergeInput { mode: Some(MergeMode::BringData), confirm: true, code:
 
 Merging moves the other account's email addresses, connected accounts, passkeys, and wallets here, and either brings its data along, as your tables' `on_account_merge` strategies say, or deletes it. It can't be undone, and needs a recent sign-in or step-up on this account and the other account's second factor when it has one. [Merging accounts](auth/merging.md) covers both modes, the preview, and your own merge code.
 
+### Call a provider's API
+
+Signing in only needs to know who someone is, so leptoskit forgets a provider's tokens once sign-in is done. When your app also calls the provider's API for the person, such as listing their GitHub repositories, keep the tokens with `store_tokens`:
+
+```toml
+[auth.providers.github]
+client_id_env = "GITHUB_CLIENT_ID"
+client_secret_env = "GITHUB_CLIENT_SECRET"
+scopes = ["read:user", "user:email", "repo"]
+store_tokens = true
+```
+
+Then, on your server, ask for an access token whenever you need one:
+
+```rust
+let Some(github) = auth.provider_access_token(me.account, "github").await? else {
+	// Not connected, or the grant ended: ask them to connect GitHub again with `link_provider()`.
+	return Err(MyError::ConnectGitHub);
+};
+let repositories = client
+	.get("https://api.github.com/user/repos")
+	.bearer_auth(&github.access_token)
+	.send()
+	.await?;
+```
+
+- The tokens are encrypted with `AUTH_ENCRYPTION_KEYS` and tied to the connected account they came with, so a copy of the database calls no one's API. Nothing reads them directly, not even their owner; `leptoskit auth rotate-keys` re-encrypts them with the rest.
+- An access token about to expire is refreshed first. Where a provider needs asking for a refresh token (Google's `access_type=offline`, the `offline_access` scope for Microsoft and OpenID Connect providers, X's `offline.access`, Dropbox's offline access, Reddit's permanent grant), sign-in asks for it when `store_tokens` is on. When the provider has ended the grant, the tokens are deleted and the answer is `None`.
+- Disconnecting the provider, merging its account into another, or `auth.delete_account(account, &request)` deletes the tokens, and revokes them at providers that let apps do that: Google, Apple, X, Discord, LinkedIn, GitLab, Twitch, Reddit, Zoom, TikTok, Yahoo, and any OpenID Connect provider whose discovery document names a `revocation_endpoint`. Apple asks apps to revoke its tokens when someone deletes their account.
+- It runs on the server only; the client functions never see the tokens, on any platform.
+
 ### On every platform
 
 | Platform                 | Third-party sign-in                                                                                                                                    |
@@ -591,7 +701,7 @@ Your providers need no extra setup for apps: the provider sends the browser back
 
 ### How it's kept safe
 
-- Every flow uses PKCE (`S256`), a random `state`, and, for OpenID Connect, a `nonce`. They're kept on the server, encrypted, for ten minutes, and the browser keeps only a random token in an `HttpOnly` cookie, so a sign-in only finishes in the browser that started it.
+- Every flow uses PKCE (`S256`), except with Notion and TikTok, whose web sign-ins don't take it, a random `state`, and, for OpenID Connect, a `nonce`. They're kept on the server, encrypted, for ten minutes, and the browser keeps only a random token in an `HttpOnly` cookie, so a sign-in only finishes in the browser that started it.
 - ID tokens must be signed by a key the provider publishes (RS256, PS256, ES256, ES384, or EdDSA; never `none` or a shared secret), for your client, from the right issuer (for Microsoft, the person's own tenant), unexpired, and with the flow's nonce.
 - Apple posts its answer from its own site, which `SameSite` cookies don't follow, so that post only gets a page that posts it again from your site; it never signs anyone in by itself.
 - Provider secrets come from environment variables; Apple's client secret is signed for each request from your `.p8` key, so there's nothing to rotate.
@@ -718,6 +828,8 @@ Every step is rate limited, by address and by IP address:
 | Starting a passkey, provider, or wallet request | 120 per IP per 15 minutes                            |
 | Signing in with a wallet                        | 30 per IP per 15 minutes                             |
 | Wrong second factors                            | 20 per account per day, then locked for an hour      |
+| Passwords tried for one address                 | 10 per 15 minutes                                    |
+| Wrong passwords for one address                 | 20 per day, then password sign-in pauses for an hour |
 
 Change them with `Limits`. An attempt over the limit fails with `AuthError::RateLimited`, which says how long to wait. The counters live in `auth.rate_limits`, and concurrent attempts can't both take the last one. To count somewhere faster, such as Redis, implement `auth::RateLimiter`.
 

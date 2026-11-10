@@ -1024,7 +1024,28 @@ fn auth_settings_are_checked() {
 		),
 		(
 			"[auth.providers.x]\nkind = \"myspace\"",
-			"isn't one of google",
+			"isn't oidc or a built-in provider: google, apple",
+		),
+		(
+			"[auth.providers.slack]\nissuer = \"https://slack.example\"\nclient_id_env = \"A\"",
+			"add kind = \"oidc\"",
+		),
+		(
+			"[auth.providers.gitlab]\nissuer = \"http://gitlab.example\"\nclient_id_env = \"A\"",
+			"must be an `https://` URL",
+		),
+		(
+			"[auth.providers.facebook]\napi_version = \"26\"\nclient_id_env = \
+			 \"A\"\nclient_secret_env = \"B\"",
+			"a Graph API version",
+		),
+		(
+			"[auth.providers.discord]\napi_version = \"v26.0\"",
+			"only for facebook",
+		),
+		(
+			"[auth.providers.discord]\nclient_id_env = \"A\"",
+			"needs `client_secret_env`",
 		),
 		(
 			"[auth.providers.google]\nclient_id_env = \"A\"\nclient_secret = \"inline\"",
@@ -1032,6 +1053,9 @@ fn auth_settings_are_checked() {
 		),
 		("[auth.solana]\nchain_id = \"main net\"", "chain_id"),
 		("[auth.solana]\nchain_id = \"\"", "chain_id"),
+		("[auth.passwords]\nmin_length = 7", "min_length"),
+		("[auth.passwords]\nmin_length = 65", "min_length"),
+		("[auth.passwords]\nhibp = true", "could not parse"),
 		("[auth.solana]\nrpc_url = \"https://x\"", "could not parse"),
 		("[auth.idp]\nconsent_page = \"consent\"", "consent_page"),
 		(
@@ -1101,4 +1125,37 @@ fn native_app_associations_are_checked() {
 		);
 		assert!(error.to_string().contains("keytool"));
 	}
+}
+
+#[test]
+fn built_in_providers_take_their_kind_from_their_id() {
+	let provider = leptoskit_config::AuthProviderConfig::default();
+	assert_eq!(provider.kind("x"), "x");
+	assert_eq!(provider.kind("tiktok"), "tiktok");
+	assert_eq!(provider.kind("myspace"), "oidc");
+	assert!(!provider.store_tokens, "off unless asked for");
+	let config = load(
+		"auth_store_tokens",
+		"[auth.providers.github]\nclient_id_env = \"A\"\nclient_secret_env = \"B\"\nstore_tokens \
+		 = true\n",
+	)
+	.expect("store_tokens");
+	assert!(config.auth.expect("auth").providers["github"].store_tokens);
+}
+
+#[test]
+fn passwords_are_off_unless_turned_on() {
+	let config = load("auth_no_passwords", "[auth]\n").expect("load");
+	let passwords = config.auth.expect("auth").passwords;
+	assert!(!passwords.enabled);
+	assert!(!passwords.breach_check);
+	assert_eq!(passwords.min_length, 15);
+	let config = load(
+		"auth_passwords",
+		"[auth.passwords]\nenabled = true\nmin_length = 8\nbreach_check = true\n",
+	)
+	.expect("load");
+	let passwords = config.auth.expect("auth").passwords;
+	assert!(passwords.enabled && passwords.breach_check);
+	assert_eq!(passwords.min_length, 8);
 }

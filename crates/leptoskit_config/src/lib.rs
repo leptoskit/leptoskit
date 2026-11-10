@@ -1251,9 +1251,9 @@ pub struct AuthConfig {
 	/// How email is sent.
 	#[serde(skip_serializing_if = "AuthMailConfig::is_default")]
 	pub mail: AuthMailConfig,
-	/// Third-party sign-in providers, by ID: `google`, `apple`,
-	/// `microsoft`, `github`, or your own name for any OpenID Connect
-	/// issuer.
+	/// Third-party sign-in providers, by ID: one of
+	/// [`AUTH_PROVIDER_KINDS`], such as `google` or `github`, or your own
+	/// name for any OpenID Connect issuer.
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	pub providers: BTreeMap<String, AuthProviderConfig>,
 	/// Solana wallets, which people link to their account with a signed
@@ -1264,6 +1264,52 @@ pub struct AuthConfig {
 	/// one, with `leptoskit::idp`.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub idp: Option<AuthIdpConfig>,
+	/// Passwords: off unless turned on here. Needs `leptoskit_auth`'s
+	/// `password` feature.
+	#[serde(skip_serializing_if = "AuthPasswordsConfig::is_default")]
+	pub passwords: AuthPasswordsConfig,
+}
+
+/// Passwords, as a way to sign in with the account's email address. Off by
+/// default: passkeys and emailed codes do the same with less to steal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct AuthPasswordsConfig {
+	/// Whether people may set a password and sign in with it.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub enabled: bool,
+	/// The fewest characters a password may have: at least 8, at most 64.
+	/// The default, 15, is NIST SP 800-63B's for a password that's the only
+	/// factor; 8 is enough only where everyone has two-step verification.
+	pub min_length: u32,
+	/// Whether new passwords are checked against Have I Been Pwned's list
+	/// of breached passwords. Off by default, since it's a request to
+	/// another service; only the first 5 characters of the password's
+	/// SHA-1 hash are sent, never the password.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub breach_check: bool,
+}
+
+impl Default for AuthPasswordsConfig {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			min_length: 15,
+			breach_check: false,
+		}
+	}
+}
+
+impl AuthPasswordsConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+
+	fn problem(&self) -> Option<String> {
+		(!(8..=64).contains(&self.min_length))
+			.then(|| "auth.passwords.min_length must be between 8 and 64".to_owned())
+	}
 }
 
 /// Solana wallets. Linking a wallet is always on with the `solana`
@@ -1325,14 +1371,40 @@ impl AuthMfa {
 	}
 }
 
+/// The third-party sign-in providers leptoskit has built-in definitions
+/// for. Any other provider ID is an OpenID Connect issuer, unless its
+/// `kind` names one of these.
+pub const AUTH_PROVIDER_KINDS: &[&str] = &[
+	"google",
+	"apple",
+	"microsoft",
+	"github",
+	"facebook",
+	"x",
+	"discord",
+	"linkedin",
+	"gitlab",
+	"slack",
+	"twitch",
+	"spotify",
+	"reddit",
+	"amazon",
+	"dropbox",
+	"bitbucket",
+	"notion",
+	"zoom",
+	"tiktok",
+	"yahoo",
+];
+
 /// A third-party sign-in provider. Its secrets are named by the
 /// environment variables that hold them.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct AuthProviderConfig {
-	/// What it is: `google`, `apple`, `microsoft`, `github`, or `oidc`.
-	/// Defaults to the provider's ID when that's one of the first four, and
+	/// What it is: one of [`AUTH_PROVIDER_KINDS`], such as `google`, or
+	/// `oidc`. Defaults to the provider's ID when that's a built-in one, and
 	/// to `oidc` otherwise.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub kind: Option<String>,
@@ -1348,7 +1420,8 @@ pub struct AuthProviderConfig {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub client_secret_env: Option<String>,
 	/// For `oidc`: the issuer, whose discovery document names the
-	/// endpoints, such as `https://sso.example.com`.
+	/// endpoints, such as `https://sso.example.com`. For `gitlab`: a
+	/// self-managed GitLab's address; defaults to `https://gitlab.com`.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub issuer: Option<String>,
 	/// For `microsoft`: `common`, `organizations`, `consumers`, or a tenant
@@ -1366,18 +1439,28 @@ pub struct AuthProviderConfig {
 	/// contents.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub private_key_env: Option<String>,
+	/// For `facebook`: the Graph API version, such as `v26.0`. Defaults to
+	/// the version leptoskit's definition was last checked against.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub api_version: Option<String>,
 	/// The scopes to ask for, instead of the provider's defaults.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub scopes: Option<Vec<String>>,
+	/// Keeps the provider's access and refresh tokens, encrypted with the
+	/// server's keys, so the app can call its API on the person's behalf.
+	/// Off by default: signing in doesn't need them.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub store_tokens: bool,
 }
 
 impl AuthProviderConfig {
 	/// What the provider `id` is.
 	pub fn kind(&self, id: &str) -> String {
 		self.kind.clone().unwrap_or_else(|| {
-			match id {
-				"google" | "apple" | "microsoft" | "github" => id.to_owned(),
-				_ => "oidc".to_owned(),
+			if AUTH_PROVIDER_KINDS.contains(&id) {
+				id.to_owned()
+			} else {
+				"oidc".to_owned()
 			}
 		})
 	}
@@ -1424,13 +1507,26 @@ impl AuthProviderConfig {
 				.map(|(setting, _)| format!("auth.providers.{id} needs `{setting}`"))
 		};
 
+		let issuer = self.issuer.as_deref().unwrap_or_default();
+		let secure = issuer.starts_with("https://")
+			|| ["http://localhost", "http://127.0.0.1"]
+				.iter()
+				.any(|prefix| issuer.starts_with(prefix));
+
+		if self.issuer.is_some() && !matches!(kind.as_str(), "oidc" | "gitlab") {
+			return Some(format!(
+				"auth.providers.{id}.issuer is only for OpenID Connect providers; add kind = \
+				 \"oidc\" to sign in through that issuer instead of the built-in {kind} definition"
+			));
+		}
+
+		if self.api_version.is_some() && kind != "facebook" {
+			return Some(format!(
+				"auth.providers.{id}.api_version is only for facebook"
+			));
+		}
+
 		match kind.as_str() {
-			"google" | "github" | "microsoft" => {
-				missing(&[
-					("client_id_env", &self.client_id_env),
-					("client_secret_env", &self.client_secret_env),
-				])
-			}
 			"apple" => {
 				missing(&[
 					("client_id_env", &self.client_id_env),
@@ -1439,13 +1535,8 @@ impl AuthProviderConfig {
 					("private_key_env", &self.private_key_env),
 				])
 			}
-			"oidc" => {
-				let issuer = self.issuer.as_deref().unwrap_or_default();
-				let local = ["http://localhost", "http://127.0.0.1"]
-					.iter()
-					.any(|prefix| issuer.starts_with(prefix));
-
-				if !(issuer.starts_with("https://") || local) {
+			"oidc" | "gitlab" => {
+				if (kind == "oidc" || self.issuer.is_some()) && !secure {
 					return Some(format!(
 						"auth.providers.{id}.issuer must be an `https://` URL, such as \
 						 \"https://sso.example.com\""
@@ -1454,10 +1545,39 @@ impl AuthProviderConfig {
 
 				missing(&[("client_id_env", &self.client_id_env)])
 			}
+			"facebook" => {
+				let version = self.api_version.as_deref().unwrap_or("v1.0");
+				let valid = version.strip_prefix('v').is_some_and(|number| {
+					number.split_once('.').is_some_and(|(major, minor)| {
+						[major, minor].iter().all(|part| {
+							!part.is_empty()
+								&& part.len() <= 3
+								&& part.bytes().all(|byte| byte.is_ascii_digit())
+						})
+					})
+				});
+
+				if !valid {
+					return Some(format!(
+						"auth.providers.{id}.api_version is a Graph API version, such as \"v26.0\""
+					));
+				}
+
+				missing(&[
+					("client_id_env", &self.client_id_env),
+					("client_secret_env", &self.client_secret_env),
+				])
+			}
+			kind if AUTH_PROVIDER_KINDS.contains(&kind) => {
+				missing(&[
+					("client_id_env", &self.client_id_env),
+					("client_secret_env", &self.client_secret_env),
+				])
+			}
 			kind => {
 				Some(format!(
-					"auth.providers.{id}.kind `{kind}` isn't one of google, apple, microsoft, \
-					 github, or oidc"
+					"auth.providers.{id}.kind `{kind}` isn't oidc or a built-in provider: {}",
+					AUTH_PROVIDER_KINDS.join(", ")
 				))
 			}
 		}
@@ -1480,6 +1600,7 @@ impl Default for AuthConfig {
 			providers: BTreeMap::new(),
 			solana: AuthSolanaConfig::default(),
 			idp: None,
+			passwords: AuthPasswordsConfig::default(),
 		}
 	}
 }
@@ -1542,6 +1663,10 @@ impl AuthConfig {
 		}
 
 		if let Some(problem) = self.solana.problem() {
+			return Some(problem);
+		}
+
+		if let Some(problem) = self.passwords.problem() {
 			return Some(problem);
 		}
 
