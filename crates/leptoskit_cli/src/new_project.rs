@@ -1754,7 +1754,97 @@ fn secrets_manifest(config: &LeptoskitConfig) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+	use quote::ToTokens as _;
+
 	use super::host_manifest;
+
+	#[test]
+	fn browser_clients_start_inside_the_mount_owner() {
+		for template in [
+			include_str!("new_project/templates/app_db.rs"),
+			include_str!("new_project/templates/app_auth.rs"),
+		] {
+			for entry in ["hydrate", "start"] {
+				let syntax = syn::parse_file(template).unwrap();
+				let body = syntax
+					.items
+					.into_iter()
+					.find_map(|item| {
+						match item {
+							syn::Item::Fn(function) if function.sig.ident == entry => {
+								Some(function.block)
+							}
+							_ => None,
+						}
+					})
+					.expect("browser entrypoint");
+				let directory = tempfile::tempdir().unwrap();
+				let source = directory.path().join("entry.rs");
+				let binary = directory.path().join("entry-test");
+				let fixture = r#"
+use std::sync::atomic::{AtomicBool, Ordering};
+static IN_OWNER: AtomicBool = AtomicBool::new(false);
+static CONFIGURED: AtomicBool = AtomicBool::new(false);
+static RENDERED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+mod leptos {
+    pub mod mount {
+        pub fn hydrate_body(render: impl FnOnce()) {
+            crate::IN_OWNER.store(true, crate::Ordering::SeqCst);
+            render();
+            crate::IN_OWNER.store(false, crate::Ordering::SeqCst);
+        }
+        pub fn mount_to_body(render: impl FnOnce()) { hydrate_body(render); }
+    }
+}
+mod leptoskit {
+    pub mod rpc {
+        pub mod client {
+            pub struct ClientConfig;
+            impl ClientConfig { pub fn new() -> Self { Self } }
+            pub fn configure(_: ClientConfig) {
+                assert!(crate::IN_OWNER.load(crate::Ordering::SeqCst), "configure requires the mount's executor and owner");
+                crate::CONFIGURED.store(true, crate::Ordering::SeqCst);
+            }
+        }
+    }
+    pub mod auth { pub use super::rpc::client; }
+}
+#[allow(non_snake_case)]
+fn App() {
+    assert!(CONFIGURED.load(Ordering::SeqCst));
+    RENDERED.store(true, Ordering::SeqCst);
+}
+fn entry() __ENTRY_BODY__
+#[test]
+fn startup() { entry(); assert!(RENDERED.load(Ordering::SeqCst)); }
+"#;
+				std::fs::write(
+					&source,
+					fixture.replace("__ENTRY_BODY__", &body.to_token_stream().to_string()),
+				)
+				.unwrap();
+				let compiled = std::process::Command::new("rustc")
+					.args(["--edition=2024", "--test"])
+					.arg(&source)
+					.arg("-o")
+					.arg(&binary)
+					.output()
+					.unwrap();
+				assert!(
+					compiled.status.success(),
+					"{}",
+					String::from_utf8_lossy(&compiled.stderr)
+				);
+				let ran = std::process::Command::new(binary).output().unwrap();
+				assert!(
+					ran.status.success(),
+					"{entry}: {}",
+					String::from_utf8_lossy(&ran.stdout)
+				);
+			}
+		}
+	}
 
 	#[test]
 	fn the_router_plugin_points_at_the_app_crate_routes() {

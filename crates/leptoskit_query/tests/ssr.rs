@@ -194,9 +194,18 @@ fn hydrate_in_browser(
 ) -> (Arc<Browser>, Owner, QueryHandle<u32, Failure>) {
 	// Made outside the owner: `quiet_client` resets the current owner.
 	let client = quiet_client();
+	hydrate_in_client(client, scope, streamed, QueryObserverOptions::new())
+}
+
+fn hydrate_in_client(
+	client: QueryClient,
+	scope: QueryScope<u32, u32, Failure>,
+	streamed: Vec<(SerializedDataId, String)>,
+	options: QueryObserverOptions<u32, Failure>,
+) -> (Arc<Browser>, Owner, QueryHandle<u32, Failure>) {
 	let browser = Browser::new(streamed);
 	let owner = Owner::new_root(Some(browser.clone()));
-	let query = owner.with(|| use_query_in(client, scope, || 1, QueryObserverOptions::new()));
+	let query = owner.with(|| use_query_in(client, scope, || 1, options));
 	(browser, owner, query)
 }
 
@@ -295,13 +304,127 @@ async fn stale_server_data_refetches_only_after_hydration() {
 #[tokio::test]
 async fn an_unmounted_query_skips_its_deferred_fetch() {
 	let (_, streamed) = render_on_server(scope(Counter::new(), Ok(7))).await;
-
 	let calls = Counter::new();
 	let (browser, owner, _query) = hydrate_in_browser(scope(calls.clone(), Ok(8)), streamed);
 	owner.cleanup();
 	browser.hydration_complete();
 	settle().await;
 	assert_eq!(calls.get(), 0, "nobody is left to show the refetch");
+}
+
+#[tokio::test]
+async fn an_error_the_codec_cannot_encode_stays_on_the_server() {
+	let codec = DataCodec::new(
+		|_: &Failure| serde_json::from_str("{"),
+		serde_json::from_value,
+	);
+	let (html, streamed) = render_on_server(
+		scope(Counter::new(), Err(Failure("private error".into()))).with_error_codec(codec),
+	)
+	.await;
+	assert!(html.contains("status=Error"));
+	assert_eq!(streamed[0].1, "null");
+}
+
+#[tokio::test]
+async fn a_streamed_error_needs_a_matching_client_codec() {
+	for has_codec in [false, true] {
+		let (_, mut streamed) = render_on_server(
+			scope(Counter::new(), Err(Failure("server error".into()))).with_ssr_errors(),
+		)
+		.await;
+		let mut client_scope = scope(Counter::new(), Ok(8));
+		if has_codec {
+			client_scope = client_scope.with_ssr_errors();
+			let mut payload: serde_json::Value = serde_json::from_str(&streamed[0].1).unwrap();
+			payload["error"]["error"] = serde_json::json!({"unexpected": "shape"});
+			streamed[0].1 = serde_json::to_string(&payload).unwrap();
+		}
+		let (_, owner, query) = hydrate_in_client(
+			quiet_client(),
+			client_scope,
+			streamed,
+			QueryObserverOptions::new().with_enabled(|| false),
+		);
+		assert_eq!(owner.with(|| query.error()), None);
+		assert_eq!(owner.with(|| query.failure_count()), 0);
+		owner.cleanup();
+	}
+}
+
+#[tokio::test]
+async fn cached_data_and_newer_errors_win_over_a_streamed_error() {
+	for has_data in [false, true] {
+		let (_, streamed) = render_on_server(
+			scope(Counter::new(), Err(Failure("older server error".into()))).with_ssr_errors(),
+		)
+		.await;
+		let client = quiet_client();
+		let client_scope =
+			scope(Counter::new(), Err(Failure("newer browser error".into()))).with_ssr_errors();
+		if has_data {
+			client.set_query_data(&client_scope, 1, 99);
+		} else {
+			assert!(client.fetch_query(&client_scope, 1).await.is_err());
+		}
+		let (_, owner, query) = hydrate_in_client(
+			client,
+			client_scope,
+			streamed,
+			QueryObserverOptions::new().with_enabled(|| false),
+		);
+		if has_data {
+			assert_eq!(owner.with(|| query.data()), Some(99));
+			assert_eq!(owner.with(|| query.error()), None);
+		} else {
+			assert_eq!(
+				owner.with(|| query.error()),
+				Some(Failure("newer browser error".into()))
+			);
+			assert_eq!(owner.with(|| query.failure_count()), 1);
+		}
+		owner.cleanup();
+	}
+}
+
+#[tokio::test]
+async fn a_real_suspense_view_renders_the_settled_query() {
+	for answer in [Ok(7), Err(Failure("not found".into()))] {
+		init();
+		let calls = Counter::new();
+		let context = Arc::new(SsrSharedContext::new());
+		let owner = Owner::new_root(Some(context.clone()));
+		let stream = owner.with(|| {
+			let query = use_query_in(
+				QueryClient::new(),
+				scope(calls.clone(), answer.clone()).with_ssr_errors(),
+				|| 1,
+				QueryObserverOptions::new(),
+			);
+			Suspense(
+				SuspenseProps::builder()
+					.fallback(|| "Waiting")
+					.children(TypedChildren::to_children(move || move || render(&query)))
+					.build(),
+			)
+			.to_html_stream_in_order()
+		});
+		let html = tokio::time::timeout(Duration::from_secs(3), stream.collect::<String>())
+			.await
+			.expect("the actual Suspense renderer must finish");
+		assert!(!html.contains("loading=true"), "{html}");
+		assert!(
+			html.contains(if answer.is_ok() {
+				"status=Success"
+			} else {
+				"status=Error"
+			}),
+			"{html}"
+		);
+		assert_eq!(calls.get(), 1);
+		assert_eq!(context.consume_buffers().await.len(), 1);
+		owner.cleanup();
+	}
 }
 
 #[tokio::test]

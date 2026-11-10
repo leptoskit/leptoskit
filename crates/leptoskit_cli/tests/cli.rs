@@ -922,6 +922,97 @@ fn new_project_builds_caches_and_restores_outputs() {
 	assert!(project.join("dist2/pkg/e2e_app_app.js").is_file());
 }
 
+/// A real generated adapter must render the query outcome, rather than a
+/// loading tree that differs from the state it streams to the browser.
+#[test]
+#[ignore = "builds a generated SSR project; run explicitly with the scaffold end-to-end tests"]
+fn new_database_scaffold_renders_its_query_error_before_hydration() {
+	let scratch = Scratch::new("ssr-query");
+	let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+	let created = leptoskit(
+		&scratch.path,
+		&[
+			"new",
+			"ssr_probe",
+			"--sdk-path",
+			sdk.to_str().expect("UTF-8 SDK"),
+			"--db",
+			"sqlite",
+		],
+	);
+	assert!(created.status.success(), "{}", stderr(&created));
+	let project = scratch.path.join("ssr_probe");
+	let app = project.join("ssr_probe_app");
+	let sdk_manifest: toml::Value =
+		toml::from_str(&std::fs::read_to_string(sdk.join("Cargo.toml")).unwrap()).unwrap();
+	let hydration = sdk_manifest["workspace"]["dependencies"]["hydration_context"]
+		.as_str()
+		.expect("hydration_context version");
+	let manifest = app.join("Cargo.toml");
+	let mut source = std::fs::read_to_string(&manifest).unwrap();
+	source.push_str(&format!(
+		r#"
+
+[dev-dependencies]
+any_spawner = {{ version = "0.3", features = ["tokio"] }}
+futures = "0.3"
+hydration_context = "{hydration}"
+serde_json = "1"
+tokio = {{ version = "1", features = ["macros", "rt", "time"] }}
+"#
+	));
+	std::fs::write(manifest, source).unwrap();
+	std::fs::create_dir_all(app.join("tests")).unwrap();
+	std::fs::write(
+		app.join("tests/ssr_regression.rs"),
+		r#"
+use std::sync::Arc;
+use std::time::Duration;
+use futures::StreamExt;
+use hydration_context::SsrSharedContext;
+use leptos::prelude::*;
+
+#[tokio::test]
+async fn the_generated_app_streams_its_rendered_error() {
+    let _ = any_spawner::Executor::init_tokio();
+    let context = Arc::new(SsrSharedContext::new());
+    let owner = Owner::new_root(Some(context.clone()));
+    // No RPC server is installed: the notes query must show its error.
+    let stream = owner.with(|| ssr_probe_app::App().to_html_stream_in_order());
+    let html = tokio::time::timeout(Duration::from_secs(10), stream.collect::<String>())
+        .await.expect("the generated adapter must settle");
+    assert!(!html.contains("Loading notes"), "{html}");
+    assert!(html.contains("The notes couldn") && html.contains("be loaded"), "{html}");
+    let outcomes = context.consume_buffers().await;
+    assert!(outcomes.iter().any(|(_, payload)| {
+        serde_json::from_str::<serde_json::Value>(payload).unwrap().get("error").is_some()
+    }), "the browser must receive the same error: {outcomes:?}");
+    owner.cleanup();
+}
+"#,
+	)
+	.unwrap();
+	let result = std::process::Command::new("cargo")
+		.current_dir(&project)
+		.args([
+			"test",
+			"-p",
+			"ssr_probe_app",
+			"--features",
+			"ssr",
+			"--test",
+			"ssr_regression",
+		])
+		.output()
+		.expect("test the generated adapter");
+	assert!(
+		result.status.success(),
+		"{}\n{}",
+		stdout(&result),
+		stderr(&result)
+	);
+}
+
 /// `leptoskit dev` on a new project's web app. Server-rendered, it builds the
 /// app and runs its server, reports a broken edit and keeps running, rebuilds
 /// and restarts the server once the edit is fixed, and on `SIGTERM` stops the

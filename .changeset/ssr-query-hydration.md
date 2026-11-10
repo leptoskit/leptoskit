@@ -1,6 +1,7 @@
 ---
 "leptoskit_query": minor
 "leptoskit_rpc": minor
+"leptoskit_cli": patch
 ---
 
 # Server-rendered queries hydrate without a mismatch
@@ -13,3 +14,7 @@ A page that rendered a query on the server now hydrates as the same page in the 
 - Streamed payloads escape `<`, `>`, `&`, and U+2028/U+2029, so data and errors can't close the `<script>` they're embedded in.
 
 Apps using `render = "ssr"` should read queries inside `<Suspense>`; outside a boundary the server renders whatever the query holds at that moment.
+
+New apps put their web adapter inside that boundary, including the database and sign-in scaffolds. Existing portable apps should wrap the closure that calls `leptoskit::web::render` in the same way.
+
+Generated browser entrypoints configure the RPC and auth clients inside the mount callback, after leptos has set up its executor and owner, so the live socket starts on the first page load. A query observer reads `enabled` without subscribing while it binds or runs its refetch interval, so an `enabled` closure that reads another query no longer logs a reactive-tracking warning on every page.

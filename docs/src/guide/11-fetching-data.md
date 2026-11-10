@@ -144,6 +144,8 @@ A plain query does not fetch during SSR; the browser fetches after hydration. Ad
 
 Read such queries inside `<Suspense>`, exactly as you would a leptos resource. On the server, reading a query that is still loading — `query.data()`, `query.is_loading()`, or `query.await` — holds the boundary until the query settles, so the page shows the data or the error, and the browser's first render is the same page. Outside a boundary the server renders whatever the query holds at that moment, which can be "loading" while the browser hydrates the data, and leptos reports a hydration mismatch.
 
+For a portable UI, put the web adapter's closure that calls `leptoskit::web::render` inside the boundary. Its route reads the queries while the boundary is active. New projects already wrap their `App` adapter this way, including projects with a database or sign-in.
+
 A query the server rendered doesn't fetch while the page hydrates. Once hydration finishes, it refetches only if it would have on mount: stale data in the background, and an error again unless the scope turns `retry_on_mount` off.
 
 Give those scopes a stale time, such as `.with_stale_time(Duration::from_secs(30))`. Data counts as stale the moment it is fetched unless a scope says otherwise, so without one the browser refetches it in the background right after hydrating. If you dehydrate the cache yourself with `client.dehydrate()` — to embed it in a page or save it to storage — name the scopes too: the browser, or the next build, is another program, and only a name identifies a scope in both.

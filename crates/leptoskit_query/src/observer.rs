@@ -244,7 +244,9 @@ where
 			query as Access<T, E>
 		});
 		let previous = self.current.get_untracked();
-		let enabled = (self.enabled)();
+		// `track_rebind_sources` subscribes the effect to `enabled`; here it is
+		// only read, and the first bind runs outside any tracking context.
+		let enabled = untrack(|| (self.enabled)());
 		let was_enabled = self.last_enabled.swap(enabled, Ordering::SeqCst);
 
 		if Self::same_query(previous.as_ref(), next.as_ref()) {
@@ -514,7 +516,7 @@ where
 				if observer.interval_generation.load(Ordering::SeqCst) != generation {
 					break;
 				}
-				if !(observer.enabled)() {
+				if !untrack(|| (observer.enabled)()) {
 					continue;
 				}
 				if !in_background && !FocusManager::is_focused_untracked() {
@@ -714,5 +716,33 @@ where
 				.unwrap_or_else(|| query.fetch(FetchOptions::JOIN));
 			fetch.await;
 		}
+	}
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+	use std::sync::Arc;
+
+	use super::Access;
+	use super::Observer;
+	use crate::QueryClient;
+	use crate::QueryObserverOptions;
+	use crate::QueryScope;
+
+	#[tokio::test]
+	async fn deferred_mount_does_not_keep_a_removed_observer_alive() {
+		let _ = any_spawner::Executor::init_tokio();
+		let client = QueryClient::new();
+		let scope = QueryScope::new(|()| async { Ok::<u32, String>(7) });
+		let query: Access<u32, String> = client.get_or_create(&scope, ());
+		let observer = Observer::new(client, QueryObserverOptions::new());
+		let weak = Arc::downgrade(&observer);
+		observer.fetch_after_hydration(&query);
+		drop(observer);
+		assert!(
+			weak.upgrade().is_none(),
+			"a deferred mount must not retain its observer"
+		);
+		tokio::task::yield_now().await;
 	}
 }
