@@ -27,6 +27,7 @@
 //! `<html>` element yourself from the stored value.
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::fmt;
 use std::str::FromStr;
 
@@ -117,12 +118,21 @@ impl FromStr for Appearance {
 }
 
 thread_local! {
-	/// The app's choice. The interface runs on one thread, so it is that
-	/// thread's.
-	static CHOICE: ArcRwSignal<Appearance> = ArcRwSignal::new(Appearance::System);
+	/// The app's choice, made on first use. The interface runs on one
+	/// thread, so it is that thread's.
+	static CHOICE: RefCell<Option<ArcRwSignal<Appearance>>> = const { RefCell::new(None) };
 	/// Whether the app has chosen at all. Until it does, a native root
 	/// carries nothing, and the host keeps whatever its surface was given.
 	static CHOSEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The signal that holds the app's choice.
+fn choice() -> ArcRwSignal<Appearance> {
+	CHOICE.with_borrow_mut(|choice| {
+		choice
+			.get_or_insert_with(|| ArcRwSignal::new(Appearance::System))
+			.clone()
+	})
 }
 
 /// Shows `appearance` from now on: `dark:` utilities follow it instead of the
@@ -133,11 +143,11 @@ thread_local! {
 /// changes.
 pub fn set(appearance: Appearance) {
 	CHOSEN.set(true);
-	CHOICE.with(|choice| {
-		if choice.get_untracked() != appearance {
-			choice.set(appearance);
-		}
-	});
+	let choice = choice();
+
+	if choice.get_untracked() != appearance {
+		choice.set(appearance);
+	}
 
 	#[cfg(all(feature = "web", target_arch = "wasm32"))]
 	mark_document(appearance);
@@ -147,13 +157,13 @@ pub fn set(appearance: Appearance) {
 /// before it chose one. Reading it in a view or effect subscribes to it.
 #[must_use]
 pub fn get() -> Appearance {
-	CHOICE.with(Get::get)
+	choice().get()
 }
 
 /// [`get`], without subscribing.
 #[must_use]
 pub fn get_untracked() -> Appearance {
-	CHOICE.with(GetUntracked::get_untracked)
+	choice().get_untracked()
 }
 
 /// The choice a native root carries: `None` until the app has called
