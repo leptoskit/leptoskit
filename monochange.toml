@@ -60,6 +60,7 @@ packages = [
 	"leptoskit_yoga",
 	"leptoskit_canvas",
 	"leptoskit_3d",
+	"leptoskit_game",
 	"leptoskit_xr",
 	"leptoskit_depth",
 	"leptoskit_animation",
@@ -267,6 +268,10 @@ type = "cargo"
 
 [package.leptoskit_3d]
 path = "crates/leptoskit_3d"
+type = "cargo"
+
+[package.leptoskit_game]
+path = "crates/leptoskit_game"
 type = "cargo"
 
 [package.leptoskit_xr]
