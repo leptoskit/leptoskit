@@ -38,6 +38,73 @@ impl Tree {
 const PAGE: &str = "pub fn page() {}";
 
 #[test]
+fn optional_server_paths_compile_and_document_inside_a_private_module() {
+	let tree = Tree::new(&[("index.rs", PAGE)]);
+	let generated = leptoskit_router_codegen::generate(&tree.dir()).expect("valid tree");
+	let syntax = syn::parse_file(&generated.source).expect("generated Rust");
+	let helper = syntax
+		.items
+		.iter()
+		.find(
+			|item| matches!(item, syn::Item::Fn(function) if function.sig.ident == "axum_route_list"),
+		)
+		.expect("server paths helper");
+	let helper = quote::quote!(#helper).to_string();
+	let mut failures = Vec::new();
+
+	for (name, caller) in [
+		("csr", ""),
+		(
+			"ssr",
+			"pub fn server_paths() -> Vec<String> { routes::axum_route_list() }",
+		),
+	] {
+		let directory = tree.project.path().join(name);
+		std::fs::create_dir(&directory).unwrap();
+		let source = directory.join("lib.rs");
+		// Only the optional helper is under test. Its runtime's root-pattern
+		// API is enough to compile it without building a complete app. The
+		// rest of the generated router has its own snapshots and tests.
+		std::fs::write(
+			&source,
+			format!(
+				r#"
+extern crate self as leptoskit_router;
+pub struct Pattern;
+impl Pattern {{
+    pub fn new(_: &[()]) -> Self {{ Self }}
+    pub fn axum_path(&self) -> String {{ "/".to_owned() }}
+}}
+mod routes {{ {helper} }}
+{caller}
+"#
+			),
+		)
+		.unwrap();
+		for tool in ["rustc", "rustdoc"] {
+			let mut command = std::process::Command::new(tool);
+			command.args(["--edition=2024", "--crate-type=lib", "-Dwarnings"]);
+			if tool == "rustdoc" {
+				command
+					.arg("--document-private-items")
+					.arg("-o")
+					.arg(directory.join("docs"));
+			} else {
+				command.arg("--out-dir").arg(&directory);
+			}
+			let output = command.arg(&source).output().expect("Rust toolchain");
+			if !output.status.success() {
+				failures.push(format!(
+					"{name} {tool}: {}",
+					String::from_utf8_lossy(&output.stderr)
+				));
+			}
+		}
+	}
+	assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn generates_the_module_and_route_table() {
 	let tree = Tree::new(&[
 		(
