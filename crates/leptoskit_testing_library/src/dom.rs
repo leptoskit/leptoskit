@@ -261,9 +261,11 @@ fn strip_noise(node: &Node) {
 		}
 
 		if let Some(element) = element {
-			element
-				.remove_attribute("data-lk-style")
-				.expect("an element drops an attribute");
+			for scope in ["data-lk-style", "data-lk-root"] {
+				element
+					.remove_attribute(scope)
+					.expect("an element drops an attribute");
+			}
 
 			if element.get_attribute("class").as_deref() == Some("") {
 				element

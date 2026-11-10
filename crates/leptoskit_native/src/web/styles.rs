@@ -1,6 +1,9 @@
 //! Serialize typed base styles below the specificity of utility classes.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write;
+use std::sync::LazyLock;
 
 use leptoskit_yoga::Dimension;
 use leptoskit_yoga::Direction;
@@ -16,6 +19,50 @@ use crate::NativeKind;
 use crate::NativeProps;
 use crate::TextStyle;
 use crate::tailwind::keyword;
+
+/// The typed base styles of a plain, unstyled `View`, which most elements
+/// share almost entirely. [`super::render`] writes them once per
+/// stylesheet, and each scope's sheet holds only its [`delta`] from them.
+pub(super) fn defaults() -> &'static str {
+	static DEFAULTS: LazyLock<String> = LazyLock::new(|| base(&Element::view(), false));
+	&DEFAULTS
+}
+
+/// The declarations of an element's `base` styles that [`defaults`] doesn't
+/// already set to the same value, in their order. Written after the
+/// defaults at the same specificity, they give each property the value
+/// `base` alone would.
+///
+/// Properties compare by name, so this relies on `base` writing shorthands,
+/// such as `margin` and `font`, only in its fixed reset, which every element
+/// shares with the defaults; everything after the reset is a longhand or
+/// stands alone.
+pub(super) fn delta(base: &str) -> String {
+	static DEFAULTS: LazyLock<HashMap<&'static str, &'static str>> =
+		LazyLock::new(|| declarations(defaults()).collect());
+
+	let mut seen = HashSet::new();
+	// The last declaration of a property is the one that counts.
+	let mut kept = declarations(base)
+		.rev()
+		.filter(|&(name, value)| seen.insert(name) && DEFAULTS.get(name) != Some(&value))
+		.collect::<Vec<_>>();
+	kept.reverse();
+
+	let mut css = String::new();
+
+	for (name, value) in kept {
+		property(&mut css, name, value);
+	}
+
+	css
+}
+
+/// Each `name:value` of a declaration block that [`base`] wrote.
+fn declarations(css: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
+	css.split_terminator(';')
+		.filter_map(|declaration| declaration.split_once(':'))
+}
 
 /// Native defaults are explicit so browser defaults cannot change layout.
 pub(super) fn base(element: &Element, root: bool) -> String {
@@ -523,4 +570,97 @@ pub(super) fn span(span: &crate::TextSpan) -> String {
 	}
 
 	css
+}
+
+#[cfg(test)]
+mod tests {
+	use std::collections::BTreeMap;
+
+	use leptoskit_yoga::Overflow;
+
+	use super::*;
+	use crate::BorderWidths;
+	use crate::FontWeight;
+	use crate::TextAlign;
+
+	/// Each property's value once every declaration has applied in order.
+	fn cascade<'a>(
+		declarations: impl Iterator<Item = (&'a str, &'a str)>,
+	) -> BTreeMap<&'a str, &'a str> {
+		declarations.collect()
+	}
+
+	#[test]
+	fn the_defaults_and_a_delta_resolve_every_property_as_the_base_does() {
+		let styled = Element::view()
+			.with_style(|style| {
+				style.width = Dimension::Points(230.0);
+				style.margin.top = Dimension::Auto;
+				style.padding.left = Dimension::Percent(0.5);
+				style.overflow = Overflow::Scroll;
+				style.aspect_ratio = Some(1.5);
+				style.grid = Some(GridStyle::default());
+			})
+			.background(Color::rgba(1, 2, 3, 255))
+			.corner_radius(8.0)
+			.opacity(0.5)
+			.font(18.0, FontWeight::Bold)
+			.text_align(TextAlign::Center)
+			.with_props(|props| {
+				props.italic = Some(true);
+				props.border_widths = Some(BorderWidths {
+					top: 1.0,
+					right: 0.0,
+					bottom: 2.0,
+					left: 0.0,
+				});
+			});
+		let cases = [
+			(Element::view(), false),
+			(Element::view(), true),
+			(Element::text("Plain"), false),
+			(Element::button("Press"), false),
+			(Element::image("photo.png"), false),
+			(Element::scroll_view(), false),
+			(
+				Element::new(NativeKind::Switch).background(Color::rgba(0, 0, 255, 255)),
+				false,
+			),
+			(Element::new(NativeKind::Checkbox), false),
+			(styled, false),
+			(
+				Element::view().with_props(|props| {
+					props.hidden = Some(true);
+					props.clip = Some(true);
+				}),
+				false,
+			),
+		];
+
+		assert_eq!(delta(defaults()), "");
+
+		for (element, root) in cases {
+			let base = base(&element, root);
+			let delta = delta(&base);
+
+			assert_eq!(
+				cascade(declarations(defaults()).chain(declarations(&delta))),
+				cascade(declarations(&base)),
+				"{:?} (root: {root}): {delta}",
+				element.kind
+			);
+
+			// A shorthand in the delta would reset longhands it leaves to the
+			// defaults.
+			for (name, _) in declarations(&delta) {
+				assert!(
+					!matches!(
+						name,
+						"margin" | "padding" | "border" | "background" | "font" | "inset"
+					),
+					"{name} in {delta}"
+				);
+			}
+		}
+	}
 }

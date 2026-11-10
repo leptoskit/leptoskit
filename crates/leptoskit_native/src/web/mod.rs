@@ -117,6 +117,13 @@ pub fn render(element: Element) -> AnyView {
 		&NodePath::root(),
 	);
 	let mut css = crate::Theme::css();
+	let scope = root_scope(&sheets);
+	write!(
+		css,
+		":where([data-lk-root=\"{scope}\"],[data-lk-root=\"{scope}\"] [data-lk-style]){{{}}}",
+		styles::defaults()
+	)
+	.expect("write to String");
 	css.push_str(&sheets.into_values().collect::<String>());
 
 	if wants_focus {
@@ -342,7 +349,9 @@ fn render_node(
 	}
 
 	let devtools = path.attributes(&element);
-	let base = styles::base(&element, root);
+	// The render's stylesheet sets the defaults once, so each scope's sheet
+	// holds only what differs from them.
+	let base = styles::delta(&styles::base(&element, root));
 	let styles_active = element.classes().active_class().is_some();
 	let control = styles::control("", element.kind, styles_active);
 	let motion = element
@@ -437,8 +446,11 @@ fn render_node(
 		.collect::<Vec<_>>();
 	let focused = props.focused == Some(true);
 	let scroll = props.scroll_offset.map(scroll_target);
+	// Every sheet is in by now: the children's were added above.
+	let render_scope = root.then(|| root_scope(sheets));
 
 	let attrs = (
+		custom_attribute("data-lk-root", render_scope),
 		custom_attribute("data-lk-style", scope),
 		custom_attribute("data-lk-motion", motion_scope),
 		custom_attribute("data-lk-focus", focused.then_some("true")),
@@ -507,15 +519,29 @@ fn style_scope(base: &str, classes: &str, control: &str) -> String {
 	hasher.update(classes);
 	hasher.update(b"\0");
 	hasher.update(control);
-	format!("lk-{:x}", hasher.finalize())
+	short_scope("lk-", &hasher.finalize())
 }
 
-/// The motion scope a node's motion rules hash to, so equal motions share
-/// one sheet. Motion rules differ by delay as well as by movement, so a
-/// short hash keeps the many scopes of a staggered list small.
-fn motion_scope(rules: &str) -> String {
-	let digest = Sha256::digest(rules.as_bytes());
-	let mut scope = String::from("lk-m");
+/// The scope of one render: the defaults its stylesheet writes apply only
+/// under its root, since a stylesheet later in the document would otherwise
+/// reset the elements of renders before it. Two renders share a scope only
+/// when they wrote the same sheets, so either one's defaults are followed by
+/// every delta both trees need.
+fn root_scope(sheets: &BTreeMap<String, String>) -> String {
+	let mut hasher = Sha256::new();
+
+	for scope in sheets.keys() {
+		hasher.update(scope);
+		hasher.update(b"\0");
+	}
+
+	short_scope("lk-r", &hasher.finalize())
+}
+
+/// `prefix` and the first 64 bits of `digest` in hex: unique enough within
+/// one document, and short, since every element carries its scope.
+fn short_scope(prefix: &str, digest: &[u8]) -> String {
+	let mut scope = String::from(prefix);
 
 	for byte in &digest[..8] {
 		write!(scope, "{byte:02x}").expect("write to String");
@@ -524,10 +550,17 @@ fn motion_scope(rules: &str) -> String {
 	scope
 }
 
-/// The node's stylesheet: typed base styles, utility classes, and control
-/// decoration, under the selector its scope names. Only built for a scope
-/// the document has not seen, so a re-render that reuses every style builds
-/// none.
+/// The motion scope a node's motion rules hash to, so equal motions share
+/// one sheet. Motion rules differ by delay as well as by movement, so a
+/// short hash keeps the many scopes of a staggered list small.
+fn motion_scope(rules: &str) -> String {
+	short_scope("lk-m", &Sha256::digest(rules.as_bytes()))
+}
+
+/// The node's stylesheet: typed base styles that differ from the defaults,
+/// utility classes, and control decoration, under the selector its scope
+/// names. Only built for a scope the document has not seen, so a re-render
+/// that reuses every style builds none.
 fn scoped_sheet(
 	scope: &str,
 	base: &str,
@@ -537,8 +570,13 @@ fn scoped_sheet(
 	motion: &str,
 ) -> String {
 	let selector = format!("[data-lk-style=\"{scope}\"]");
+	let base = if base.is_empty() {
+		String::new()
+	} else {
+		format!(":where({selector}){{{base}}}")
+	};
 	format!(
-		":where({selector}){{{base}}}{}{}{motion}",
+		"{base}{}{}{motion}",
 		classes.css_scoped(&selector),
 		styles::control(&selector, kind, styles_active),
 	)
