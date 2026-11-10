@@ -188,7 +188,8 @@ fn axum_paths_code(table: &Table) -> Result<TokenStream, String> {
 		.collect::<Result<Vec<_>, String>>()?;
 
 	Ok(quote! {
-		/// Paths for [`leptos_axum::LeptosRoutes::leptos_routes`].
+		/// Paths for `leptos_axum::LeptosRoutes::leptos_routes`.
+		#[allow(dead_code, reason = "client-rendered apps do not need the SSR route list")]
 		pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
 			::std::vec![#(#paths),*]
 		}
