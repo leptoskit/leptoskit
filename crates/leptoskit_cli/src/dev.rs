@@ -64,19 +64,18 @@ fn terminal(config: &LeptoskitConfig, root: &Path) -> Result<()> {
 }
 
 /// Starts the studio beside the app when asked to, over the database `dev`
-/// uses.
+/// uses, which keeps it running, and moves it on a branch switch.
 fn start_studio(
-	studio: bool,
-	database: Option<&crate::db::DevDatabase>,
-) -> Result<Option<crate::db::StudioProcess>> {
-	if !studio {
-		return Ok(None);
-	}
+	studio: Option<crate::db::StudioOptions>,
+	database: Option<&mut crate::db::DevDatabase>,
+) -> Result<()> {
+	let Some(options) = studio else {
+		return Ok(());
+	};
 
 	database
 		.context("--studio serves the database, and leptoskit.toml has no `[db]` table")?
-		.studio()
-		.map(Some)
+		.start_studio(options)
 }
 
 /// Runs the dev loop: an initial build of every selected platform, then a
@@ -86,7 +85,7 @@ fn start_studio(
 ///
 /// The terminal app needs this terminal to itself, so it runs alone: when it
 /// is the one platform named, or when nothing is named and it is the app's
-/// default platform.
+/// default platform. `studio` serves the database studio beside the app.
 pub fn run(
 	open: bool,
 	port: Option<u16>,
@@ -94,11 +93,19 @@ pub fn run(
 	devices: &[String],
 	no_devtools: bool,
 	devtools_port: Option<u16>,
-	studio: bool,
+	studio: Option<crate::db::StudioOptions>,
 ) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 
-	if terminal_only(&config, &root, platforms, open, port, devices, studio)? {
+	if terminal_only(
+		&config,
+		&root,
+		platforms,
+		open,
+		port,
+		devices,
+		studio.is_some(),
+	)? {
 		return Ok(());
 	}
 
@@ -171,9 +178,8 @@ fn report_skipped(selection: &native::Selection) {
 
 struct Started {
 	web: Option<Web>,
-	/// The studio over the development database, stopped before it.
-	_studio: Option<crate::db::StudioProcess>,
-	/// The development database, stopped after the server that uses it.
+	/// The development database, and the studio over it when asked for,
+	/// stopped after the server that uses it.
 	database: Option<crate::db::DevDatabase>,
 	extension: Option<crate::extension::dev::ExtensionDev>,
 	native: Option<native::NativeDev>,
@@ -190,7 +196,7 @@ struct Start<'a> {
 	runtime: &'a tokio::runtime::Runtime,
 	no_devtools: bool,
 	devtools_port: Option<u16>,
-	studio: bool,
+	studio: Option<crate::db::StudioOptions>,
 }
 
 impl Started {
@@ -220,8 +226,8 @@ impl Started {
 			Some(hub)
 		};
 
-		let database = start_database(config, root)?;
-		let studio = start_studio(studio, database.as_ref())?;
+		let mut database = start_database(config, root)?;
+		start_studio(studio, database.as_mut())?;
 		let web = selection
 			.web
 			.then(|| Web::start(config, root, port, runtime, database.as_ref()))
@@ -244,7 +250,6 @@ impl Started {
 
 		Ok(Self {
 			web,
-			_studio: studio,
 			database,
 			extension,
 			native,
@@ -525,8 +530,8 @@ impl BranchWatch {
 }
 
 /// Keeps the database in step with the project: the branch's own database
-/// after a switch, which the app server restarts on with the next rebuild,
-/// and the tables after they change.
+/// after a switch, which the app server restarts on with the next rebuild
+/// and the studio at once, and the tables after they change.
 fn follow_database(
 	database: Option<&mut crate::db::DevDatabase>,
 	branch: &BranchWatch,
@@ -880,8 +885,10 @@ mod tests {
 
 	#[test]
 	fn the_studio_starts_only_when_asked_and_needs_a_database() {
-		assert!(start_studio(false, None).unwrap().is_none());
-		let error = start_studio(true, None).err().unwrap();
+		start_studio(None, None).unwrap();
+		let error = start_studio(Some(crate::db::StudioOptions::default()), None)
+			.err()
+			.unwrap();
 		assert!(
 			error.to_string().contains("--studio serves the database"),
 			"{error}"

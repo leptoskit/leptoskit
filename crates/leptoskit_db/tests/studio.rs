@@ -9,6 +9,8 @@
 	debug_assertions
 ))]
 
+#[path = "support/studio.rs"]
+mod studio_client;
 mod support;
 
 use std::net::SocketAddr;
@@ -23,10 +25,12 @@ use leptoskit_db::policy;
 use leptoskit_db::studio::Options;
 use leptoskit_db::studio::Running;
 use leptoskit_db::table;
+use leptoskit_db::view;
 use leptoskit_db_schema::RequireHints;
 use leptoskit_db_schema::Schema;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use studio_client::Reply;
+use studio_client::query;
+use studio_client::send;
 
 /// The person a request reads as.
 #[derive(Clone, Copy)]
@@ -44,10 +48,12 @@ leptoskit_db::register_persona!(Persona {
 });
 
 /// Someone who writes notes.
-#[table(name = "writers")]
+#[table(name = "writers", audit)]
 pub struct Writer {
 	pub id: Id<Self>,
 	pub name: String,
+	#[db(private)]
+	pub email: String,
 }
 
 /// A note: anyone reads a public one, its writer reads and changes their
@@ -65,6 +71,29 @@ pub struct Note {
 	pub token: String,
 	#[db(deleted_at)]
 	pub deleted_at: Option<Timestamp>,
+}
+
+/// Each note's title, which a writer reads for their own notes only.
+#[view(
+	name = "note_titles",
+	sql = "SELECT id, writer_id, title FROM notes WHERE deleted_at IS NULL"
+)]
+#[policy(select, |title, cx| cx.global(|viewer: &Viewer| title.writer_id.eq(viewer.0)))]
+pub struct NoteTitle {
+	pub id: Id<Note>,
+	pub writer_id: Id<Writer>,
+	pub title: String,
+}
+
+/// How many notes each writer had at the last refresh.
+#[view(
+	name = "note_counts",
+	materialized,
+	sql = "SELECT writer_id, count(*) AS notes FROM notes GROUP BY writer_id"
+)]
+pub struct NoteCount {
+	pub writer_id: Id<Writer>,
+	pub notes: i64,
 }
 
 struct Fixture {
@@ -110,13 +139,17 @@ async fn fixture(db: Db) -> Fixture {
 	.unwrap();
 
 	let system = db.system("a studio test");
-	let ada = NewWriter { name: "ada".into() }
-		.insert(&system)
-		.await
-		.unwrap()
-		.id;
+	let ada = NewWriter {
+		name: "ada".into(),
+		email: "ada@example.com".into(),
+	}
+	.insert(&system)
+	.await
+	.unwrap()
+	.id;
 	let grace = NewWriter {
 		name: "grace".into(),
+		email: "grace@example.com".into(),
 	}
 	.insert(&system)
 	.await
@@ -144,17 +177,12 @@ async fn fixture(db: Db) -> Fixture {
 		Options {
 			address: "127.0.0.1:0".parse().unwrap(),
 			migrations: Some(migrations.path().to_path_buf()),
+			reveal: false,
 		},
 	)
 	.await
 	.unwrap();
-	let (address, token) = running
-		.url
-		.strip_prefix("http://")
-		.and_then(|rest| rest.split_once("/?token="))
-		.unwrap();
-	let address = address.parse().unwrap();
-	let token = token.to_string();
+	let (address, token) = studio_client::address_and_token(&running.url);
 
 	Fixture {
 		db,
@@ -167,55 +195,6 @@ async fn fixture(db: Db) -> Fixture {
 	}
 }
 
-/// A response: its status, headers, and body.
-struct Reply {
-	status: u16,
-	head: String,
-	body: String,
-}
-
-/// Sends one HTTP/1.1 request and reads the whole reply.
-async fn send(address: SocketAddr, request: &str) -> Reply {
-	let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-	stream.write_all(request.as_bytes()).await.unwrap();
-	let mut reply = String::new();
-	tokio::time::timeout(Duration::from_secs(10), stream.read_to_string(&mut reply))
-		.await
-		.expect("the studio answers")
-		.unwrap();
-	let (head, body) = reply.split_once("\r\n\r\n").unwrap();
-	let status = head
-		.split(' ')
-		.nth(1)
-		.and_then(|status| status.parse().ok())
-		.unwrap();
-	Reply {
-		status,
-		head: head.to_lowercase(),
-		body: body.to_string(),
-	}
-}
-
-fn encode(text: &str) -> String {
-	text.bytes()
-		.map(|byte| {
-			if byte.is_ascii_alphanumeric() {
-				char::from(byte).to_string()
-			} else {
-				format!("%{byte:02X}")
-			}
-		})
-		.collect()
-}
-
-fn query(pairs: &[(&str, &str)]) -> String {
-	pairs
-		.iter()
-		.map(|(name, value)| format!("{name}={}", encode(value)))
-		.collect::<Vec<_>>()
-		.join("&")
-}
-
 impl Fixture {
 	fn host(&self) -> String {
 		format!("127.0.0.1:{}", self.address.port())
@@ -223,17 +202,7 @@ impl Fixture {
 
 	/// `GET path` with this run's token and `pairs`.
 	async fn get(&self, path: &str, pairs: &[(&str, &str)]) -> Reply {
-		let mut all = vec![("token", self.token.as_str())];
-		all.extend_from_slice(pairs);
-		send(
-			self.address,
-			&format!(
-				"GET {path}?{} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-				query(&all),
-				self.host()
-			),
-		)
-		.await
+		studio_client::get(self.address, &self.token, path, pairs).await
 	}
 
 	/// `POST path`, the viewer in the address and the form both, as the
@@ -259,6 +228,22 @@ impl Fixture {
 		.await
 	}
 
+	/// Another studio over the same database, started with `--reveal`.
+	async fn revealing(&self) -> (Running, SocketAddr, String) {
+		let running = leptoskit_db::studio::start(
+			self.db.clone(),
+			Options {
+				address: "127.0.0.1:0".parse().unwrap(),
+				migrations: None,
+				reveal: true,
+			},
+		)
+		.await
+		.unwrap();
+		let (address, token) = studio_client::address_and_token(&running.url);
+		(running, address, token)
+	}
+
 	async fn note(&self, title: &str) -> Note {
 		Note::query()
 			.with_deleted()
@@ -279,6 +264,7 @@ async fn the_studio_listens_on_this_machine_only() {
 			Options {
 				address: address.parse().unwrap(),
 				migrations: None,
+				reveal: false,
 			},
 		)
 		.await
@@ -414,6 +400,99 @@ async fn each_viewer_reads_what_its_policies_allow() {
 				.contains(&format!("WHERE (\"public\" = {first} OR 1 = 0)"))
 		);
 		assert!(policies.body.contains("every row: no policy restricts it"));
+		studio.running.stop();
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn private_values_show_only_with_reveal_and_secret_ones_never() {
+	on_both(async |studio| {
+		let system = [("as", "system"), ("reason", "checking emails")];
+		let editing = [
+			("as", "system"),
+			("reason", "checking emails"),
+			("edit", "1"),
+		];
+		let by = |column: &'static str, op: &'static str, value: &'static str| {
+			let mut pairs = system.to_vec();
+			pairs.extend([("column", column), ("op", op), ("value", value)]);
+			pairs
+		};
+
+		// Without `--reveal`, a private value shows as `‹private›`, and the
+		// page says how to see it.
+		let writers = studio.get("/table/writers", &editing).await;
+		assert!(writers.body.contains("‹private›"), "{}", writers.body);
+		assert!(!writers.body.contains("ada@example.com"));
+		assert!(
+			writers
+				.body
+				.contains("start the studio with --reveal to see them")
+		);
+		// It's neither offered as a filter, a sort, nor an edit, and asking
+		// for one is refused.
+		assert!(!writers.body.contains("<option value=\"email\""));
+		assert!(writers.body.contains("<th>email</th>"));
+		assert!(!writers.body.contains("column=email"));
+		for pairs in [
+			by("email", "contains", "ada"),
+			[system.as_slice(), &[("order", "email")]].concat(),
+		] {
+			let refused = studio.get("/table/writers", &pairs).await;
+			assert!(
+				refused
+					.body
+					.contains("`email` is private: start the studio with `--reveal`"),
+				"{}",
+				refused.body
+			);
+		}
+		// The audit log's page hides it too.
+		let audit = studio.get("/audit", &system).await;
+		assert!(
+			audit.body.contains("\"email\":\"‹private›\""),
+			"{}",
+			audit.body
+		);
+		assert!(!audit.body.contains("ada@example.com"));
+
+		// With `--reveal` it shows, filters, and sorts, and the page says so.
+		let (running, address, token) = studio.revealing().await;
+		let get = async |pairs: &[(&str, &str)]| {
+			studio_client::get(address, &token, "/table/writers", pairs).await
+		};
+		let revealed = get(&editing).await;
+		assert!(revealed.body.contains("ada@example.com"));
+		assert!(
+			revealed
+				.body
+				.contains("Private values are revealed: the studio was started with --reveal.")
+		);
+		assert!(revealed.body.contains("column=email"));
+		let filtered = get(&by("email", "contains", "grace")).await;
+		assert!(filtered.body.contains("Rows 1–1 of 1"), "{}", filtered.body);
+		let audit = studio_client::get(address, &token, "/audit", &system).await;
+		assert!(audit.body.contains("ada@example.com"));
+
+		// A secret never shows, filters, or sorts, revealed or not.
+		let notes = studio_client::get(address, &token, "/table/notes", &system).await;
+		assert!(notes.body.contains("‹secret›"));
+		assert!(!notes.body.contains("hunter2"));
+		for (address, token) in [(studio.address, &studio.token), (address, &token)] {
+			let mut pairs = system.to_vec();
+			pairs.extend([("column", "token"), ("op", "eq"), ("value", "hunter2")]);
+			let refused = studio_client::get(address, token, "/table/notes", &pairs).await;
+			assert!(
+				refused
+					.body
+					.contains("`token` is secret, so the studio never filters or sorts by it"),
+				"{}",
+				refused.body
+			);
+		}
+
+		running.stop();
 		studio.running.stop();
 	})
 	.await;
@@ -628,6 +707,329 @@ async fn writes_need_edit_mode_a_confirmation_and_the_policies_consent() {
 				.await;
 			assert!(reply.body.contains(expected), "{column}: {}", reply.body);
 		}
+
+		studio.running.stop();
+	})
+	.await;
+}
+
+/// The insert form's fields for a private note.
+fn row<'a>(writer: &'a str, title: &'a str) -> Vec<(&'a str, &'a str)> {
+	vec![
+		("column.writer_id", writer),
+		("column.title", title),
+		("column.public", "false"),
+		("column.token", "s3cret"),
+	]
+}
+
+/// `fields`, confirmed.
+fn confirmed<'a>(mut fields: Vec<(&'a str, &'a str)>) -> Vec<(&'a str, &'a str)> {
+	fields.push(("confirmed", "yes"));
+	fields
+}
+
+#[tokio::test]
+async fn inserts_need_edit_mode_a_confirmation_and_the_policies_consent() {
+	on_both(async |studio| {
+		let ada = studio.ada.to_string();
+		let grace = studio.grace.to_string();
+		let as_ada = [("as", "writer"), ("who", ada.as_str())];
+		let editing_as_ada = [("as", "writer"), ("who", ada.as_str()), ("edit", "1")];
+		let (ada_id, grace_id) = (ada.as_str(), grace.as_str());
+		let titled = async |title: &str| {
+			Note::query()
+				.with_deleted()
+				.filter(|note| note.title.eq(title.to_string()))
+				.all(&studio.db.system("a studio test"))
+				.await
+				.unwrap()
+		};
+
+		// Without edit mode there's no insert, and one is refused.
+		let page = studio.get("/table/notes", &as_ada).await;
+		assert!(!page.body.contains("Insert a row"));
+		let form = studio.get("/table/notes/insert", &as_ada).await;
+		assert!(form.body.contains("turn on edit mode"));
+		let refused = studio
+			.post(
+				"/table/notes/insert",
+				&as_ada,
+				&confirmed(row(ada_id, "drafted")),
+			)
+			.await;
+		assert!(refused.body.contains("turn on edit mode"));
+
+		// The form asks for what an insert provides: not the key, nor the
+		// soft-delete column, which the table's insert fills in.
+		let page = studio.get("/table/notes", &editing_as_ada).await;
+		assert!(page.body.contains("Insert a row"));
+		let form = studio.get("/table/notes/insert", &editing_as_ada).await;
+		for field in [
+			"column.writer_id",
+			"column.title",
+			"column.public",
+			"column.token",
+		] {
+			assert!(
+				form.body.contains(&format!("name=\"{field}\"")),
+				"{field}: {}",
+				form.body
+			);
+		}
+		assert!(!form.body.contains("name=\"column.id\""));
+		assert!(!form.body.contains("column.deleted_at"));
+
+		// The first submit only asks.
+		let asked = studio
+			.post(
+				"/table/notes/insert",
+				&editing_as_ada,
+				&row(ada_id, "drafted"),
+			)
+			.await;
+		assert!(asked.body.contains("Confirm the insert"), "{}", asked.body);
+		assert_eq!(titled("drafted").await.len(), 0);
+
+		// A form can't insert as someone other than its page shows.
+		let mut sneaky = vec![("as", "system"), ("reason", "sneaky")];
+		sneaky.extend(confirmed(row(ada_id, "drafted")));
+		let mismatched = studio
+			.post("/table/notes/insert", &editing_as_ada, &sneaky)
+			.await;
+		assert!(
+			mismatched
+				.body
+				.contains("the form's viewer doesn't match the page's")
+		);
+
+		// The policy refuses a note in someone else's name, with its message.
+		let forged = studio
+			.post(
+				"/table/notes/insert",
+				&editing_as_ada,
+				&confirmed(row(grace_id, "forged")),
+			)
+			.await;
+		assert!(
+			forged.body.contains("Only its writer changes a note"),
+			"{}",
+			forged.body
+		);
+		assert_eq!(titled("forged").await.len(), 0);
+
+		// Values must fit their columns.
+		let mut maybe = row(ada_id, "drafted");
+		maybe[2] = ("column.public", "maybe");
+		let wrong = studio
+			.post("/table/notes/insert", &editing_as_ada, &confirmed(maybe))
+			.await;
+		assert!(wrong.body.contains("`maybe` isn't `true` or `false`"));
+		let mut untitled = row(ada_id, "drafted");
+		untitled.push(("null.title", "1"));
+		let null = studio
+			.post("/table/notes/insert", &editing_as_ada, &confirmed(untitled))
+			.await;
+		assert!(null.body.contains("`title` can't be NULL"), "{}", null.body);
+		assert_eq!(titled("drafted").await.len(), 0);
+
+		// Confirmed, it's inserted, and the audit log records it.
+		let done = studio
+			.post(
+				"/table/notes/insert",
+				&editing_as_ada,
+				&confirmed(row(ada_id, "drafted")),
+			)
+			.await;
+		let note = studio.note("drafted").await;
+		assert!(
+			done.body
+				.contains(&format!("Inserted the row keyed {}.", note.id)),
+			"{}",
+			done.body
+		);
+		assert_eq!(note.writer_id, studio.ada);
+		assert_eq!(note.token, "s3cret");
+		assert!(!note.public);
+		let system = studio.db.system("a studio test");
+		let entries = leptoskit_db::AuditEntry::for_row(&note)
+			.unwrap()
+			.all(&system)
+			.await
+			.unwrap();
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].op, leptoskit_db::AuditOp::Insert);
+		assert_eq!(entries[0].reason, None);
+
+		// `system` inserts only with a reason, which the audit log records.
+		let no_reason = studio
+			.post(
+				"/table/notes/insert",
+				&[("as", "system"), ("edit", "1")],
+				&confirmed(row(grace_id, "for grace")),
+			)
+			.await;
+		assert!(no_reason.body.contains("say why"));
+		let seeded = studio
+			.post(
+				"/table/notes/insert",
+				&[
+					("as", "system"),
+					("reason", "seeding a note"),
+					("edit", "1"),
+				],
+				&confirmed(row(grace_id, "for grace")),
+			)
+			.await;
+		assert!(seeded.body.contains("Inserted the row"), "{}", seeded.body);
+		let note = studio.note("for grace").await;
+		let entries = leptoskit_db::AuditEntry::for_row(&note)
+			.unwrap()
+			.all(&system)
+			.await
+			.unwrap();
+		assert_eq!(entries[0].reason.as_deref(), Some("studio: seeding a note"));
+
+		studio.running.stop();
+	})
+	.await;
+}
+
+#[tokio::test]
+async fn views_are_browsed_read_only_through_their_policies() {
+	on_both(async |studio| {
+		let ada = studio.ada.to_string();
+		let as_ada = [("as", "writer"), ("who", ada.as_str())];
+		let editing_as_ada = [("as", "writer"), ("who", ada.as_str()), ("edit", "1")];
+
+		// The index lists views apart from tables, counted as the viewer
+		// may read them.
+		let index = studio.get("/", &as_ada).await;
+		assert!(index.body.contains("<h2>Views</h2>"), "{}", index.body);
+		assert!(
+			index
+				.body
+				.contains("note_titles</a></td><td>view</td><td>2</td>"),
+			"{}",
+			index.body
+		);
+		assert!(
+			index
+				.body
+				.contains("note_counts</a></td><td>materialized view</td><td>0</td>")
+		);
+		let anonymous = studio.get("/", &[]).await;
+		assert!(
+			anonymous
+				.body
+				.contains("note_titles</a></td><td>view</td><td>0</td>")
+		);
+
+		// A view's rows filter, sort, and page like a table's, through its
+		// policy, and offer no changes even in edit mode.
+		let titles = studio.get("/table/note_titles", &editing_as_ada).await;
+		assert!(titles.body.contains("Rows 1–2 of 2"), "{}", titles.body);
+		assert!(titles.body.contains("ada's private note"));
+		assert!(!titles.body.contains("grace's private note"));
+		assert!(titles.body.contains("A view: read-only"));
+		for link in [">edit</a>", ">delete</a>", "Insert a row"] {
+			assert!(!titles.body.contains(link), "{link}");
+		}
+		let filtered = studio
+			.get(
+				"/table/note_titles",
+				&[
+					("as", "writer"),
+					("who", &ada),
+					("column", "title"),
+					("op", "contains"),
+					("value", "public"),
+				],
+			)
+			.await;
+		assert!(filtered.body.contains("Rows 1–1 of 1"));
+		let sorted = studio
+			.get(
+				"/table/note_titles",
+				&[
+					("as", "writer"),
+					("who", &ada),
+					("order", "title"),
+					("desc", "1"),
+				],
+			)
+			.await;
+		assert!(
+			sorted.body.find("ada's public note").unwrap()
+				< sorted.body.find("ada's private note").unwrap()
+		);
+		let paged = studio
+			.get(
+				"/table/note_titles",
+				&[("as", "writer"), ("who", &ada), ("page", "1")],
+			)
+			.await;
+		assert!(paged.body.contains("← Previous"));
+		assert!(!paged.body.contains("ada's"));
+
+		// Nothing writes to a view.
+		let key = serde_json::to_string(&[studio.note("ada's public note").await.id.to_string()])
+			.unwrap();
+		for (path, form) in [
+			("/table/note_titles/insert", vec![("column.title", "x")]),
+			(
+				"/table/note_titles/edit",
+				vec![("key", key.as_str()), ("column", "title"), ("value", "x")],
+			),
+			("/table/note_titles/delete", vec![("key", key.as_str())]),
+		] {
+			let refused = studio.post(path, &editing_as_ada, &confirmed(form)).await;
+			assert!(
+				refused
+					.body
+					.contains("`note_titles` is a view, which nothing writes to"),
+				"{path}: {}",
+				refused.body
+			);
+		}
+		let form = studio
+			.get("/table/note_titles/insert", &editing_as_ada)
+			.await;
+		assert!(form.body.contains("is a view, which nothing writes to"));
+
+		// A materialized view holds what its last refresh read.
+		NoteCount::refresh(&studio.db).await.unwrap();
+		let system = [("as", "system"), ("reason", "counting")];
+		let counts = studio.get("/table/note_counts", &system).await;
+		assert!(counts.body.contains("Rows 1–2 of 2"), "{}", counts.body);
+		assert!(
+			counts
+				.body
+				.contains("It holds the rows of its last refresh.")
+		);
+
+		// Its rules cover reads only, and the schema page shows its query.
+		let policies = studio.get("/policies", &as_ada).await;
+		let section = policies
+			.body
+			.split("<h2>note_titles</h2>")
+			.nth(1)
+			.and_then(|rest| rest.split("<h2>").next())
+			.unwrap();
+		assert!(section.contains("<h3>Select</h3>"), "{section}");
+		assert!(!section.contains("<h3>Insert</h3>"), "{section}");
+		let schema = studio.get("/schema", &[]).await;
+		assert!(
+			schema.body.contains("note_titles (view)"),
+			"{}",
+			schema.body
+		);
+		assert!(schema.body.contains("note_counts (materialized view)"));
+		assert!(
+			schema
+				.body
+				.contains("SELECT id, writer_id, title FROM notes WHERE deleted_at IS NULL")
+		);
 
 		studio.running.stop();
 	})

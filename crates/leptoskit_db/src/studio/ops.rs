@@ -33,22 +33,78 @@ pub(crate) type Local<T> = Pin<Box<dyn Future<Output = Result<T>>>>;
 /// database layer adds, or `None` when nothing restricts it.
 pub(crate) type Rules = Vec<(Action, Option<Statement>)>;
 
-/// One table's operations, as plain function pointers.
+/// What the studio browses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+	Table,
+	View,
+	/// A view that keeps its rows until refreshed.
+	Materialized,
+}
+
+impl Kind {
+	pub(crate) fn label(self) -> &'static str {
+		match self {
+			Self::Table => "table",
+			Self::View => "view",
+			Self::Materialized => "materialized view",
+		}
+	}
+}
+
+/// One table's or view's operations, as plain function pointers.
 #[derive(Clone, Copy)]
 pub(crate) struct TableOps {
-	pub(crate) read: for<'a> fn(&'a Db, &'a Browse) -> Boxed<'a, Rows>,
+	pub(crate) kind: Kind,
+	/// A page of rows, with `private` values shown only when the second
+	/// argument, `--reveal`, is set.
+	pub(crate) read: for<'a> fn(&'a Db, &'a Browse, bool) -> Boxed<'a, Rows>,
+	pub(crate) rules: fn(&Access, Dialect) -> Result<Rules>,
+	/// The `private` columns, which the audit log's page hides too.
+	pub(crate) private: &'static [&'static str],
+	/// How it's written to; a view never is.
+	pub(crate) writes: Option<Writes>,
+}
+
+/// How the studio writes to a table.
+#[derive(Clone, Copy)]
+pub(crate) struct Writes {
 	pub(crate) edit: fn(Db, Edit) -> Local<()>,
 	pub(crate) remove: fn(Db, Vec<String>) -> Local<()>,
-	pub(crate) rules: fn(&Access, Dialect) -> Result<Rules>,
+	pub(crate) insert: fn(Db, Insert) -> Local<Vec<String>>,
+	/// The columns an insert provides, which the insert form asks for.
+	pub(crate) provided: fn() -> Vec<leptoskit_db_schema::Column>,
 }
 
 impl TableOps {
 	pub(crate) const fn of<T: Table>() -> Self {
 		Self {
+			kind: Kind::Table,
 			read: read::<T>,
-			edit: edit::<T>,
-			remove: remove::<T>,
 			rules: rules::<T>,
+			private: T::PRIVATE,
+			writes: Some(Writes {
+				edit: edit::<T>,
+				remove: remove::<T>,
+				insert: insert::<T>,
+				provided: provided::<T>,
+			}),
+		}
+	}
+
+	/// A view's: it's read like a table, through its policies, and never
+	/// written to.
+	pub(crate) const fn view<V: crate::View>() -> Self {
+		Self {
+			kind: if V::MATERIALIZED {
+				Kind::Materialized
+			} else {
+				Kind::View
+			},
+			read: read::<V>,
+			rules: rules::<V>,
+			private: V::PRIVATE,
+			writes: None,
 		}
 	}
 }
@@ -128,6 +184,9 @@ pub(crate) struct Browse {
 pub(crate) struct Rows {
 	pub(crate) columns: Vec<&'static str>,
 	pub(crate) key: Vec<usize>,
+	/// The columns whose values the page hides, which it doesn't filter or
+	/// sort by either.
+	pub(crate) hidden: Vec<usize>,
 	pub(crate) cells: Vec<Vec<Cell>>,
 	pub(crate) total: u64,
 }
@@ -137,6 +196,8 @@ pub(crate) struct Rows {
 pub(crate) enum Cell {
 	Null,
 	Secret,
+	/// A `private` value, while the studio doesn't reveal them.
+	Private,
 	Text(String),
 }
 
@@ -145,8 +206,14 @@ impl Cell {
 		match self {
 			Self::Null => "NULL",
 			Self::Secret => "‹secret›",
+			Self::Private => "‹private›",
 			Self::Text(text) => text,
 		}
+	}
+
+	/// Whether the page hides the value.
+	pub(crate) fn hidden(&self) -> bool {
+		matches!(self, Self::Secret | Self::Private)
 	}
 }
 
@@ -158,6 +225,13 @@ pub(crate) struct Edit {
 	pub(crate) column: String,
 	/// The new value, or `None` for `NULL`.
 	pub(crate) value: Option<String>,
+}
+
+/// A new row, as the insert form sends it: each column an insert provides,
+/// with its text, or `None` for `NULL`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Insert {
+	pub(crate) values: Vec<(String, Option<String>)>,
 }
 
 fn invalid(message: impl Into<String>) -> DbError {
@@ -180,6 +254,30 @@ fn column_of<T: Table>(name: &str) -> Result<&'static str> {
 		})
 }
 
+/// Whether a page hides `column` of `T`: a `secret` one always, a
+/// `private` one unless the studio reveals them.
+fn hides<T: Table>(column: &str, reveal: bool) -> bool {
+	T::SECRET.contains(&column) || (!reveal && T::PRIVATE.contains(&column))
+}
+
+/// The column a filter or ordering names, when the page shows it: matching
+/// or sorting a hidden column's values would tell what they are.
+fn shown_column<T: Table>(name: &str, reveal: bool) -> Result<&'static str> {
+	let column = column_of::<T>(name)?;
+
+	if T::SECRET.contains(&column) {
+		Err(invalid(format!(
+			"`{column}` is secret, so the studio never filters or sorts by it"
+		)))
+	} else if hides::<T>(column, reveal) {
+		Err(invalid(format!(
+			"`{column}` is private: start the studio with `--reveal` to filter or sort by it"
+		)))
+	} else {
+		Ok(column)
+	}
+}
+
 /// A column's type and whether it takes `NULL`.
 fn column_type<T: Table>(column: &str) -> Result<(ColumnType, bool)> {
 	T::definition()
@@ -188,6 +286,18 @@ fn column_type<T: Table>(column: &str) -> Result<(ColumnType, bool)> {
 		.find(|candidate| candidate.name == column)
 		.map(|column| (column.ty, column.nullable))
 		.ok_or_else(|| invalid(format!("`{}` has no column `{column}`", T::flat_name())))
+}
+
+/// The value a form gives `column` of `T`: its text parsed for the column's
+/// type, or `NULL` where the column takes it.
+fn form_value<T: Table>(column: &str, text: Option<&str>) -> Result<Value> {
+	let (ty, nullable) = column_type::<T>(column)?;
+
+	match text {
+		None if nullable => Ok(Value::Null),
+		None => Err(invalid(format!("`{column}` can't be NULL"))),
+		Some(text) => parse_value(&ty, text).map_err(invalid),
+	}
 }
 
 /// The value `text` means in a column of type `ty`.
@@ -275,8 +385,8 @@ pub(crate) fn display(value: &Value) -> Cell {
 }
 
 /// The condition a filter makes on `T`.
-fn filter_expr<T: Table>(filter: &Filter) -> Result<Expr> {
-	let column = column_of::<T>(&filter.column)?;
+fn filter_expr<T: Table>(filter: &Filter, reveal: bool) -> Result<Expr> {
+	let column = shown_column::<T>(&filter.column, reveal)?;
 
 	let comparison = match filter.op {
 		Op::IsNull | Op::IsNotNull => {
@@ -307,11 +417,11 @@ fn filter_expr<T: Table>(filter: &Filter) -> Result<Expr> {
 }
 
 /// The query a page reads: its filter, and soft-deleted rows when asked.
-fn browse_query<T: Table>(browse: &Browse) -> Result<Query<T>> {
+fn browse_query<T: Table>(browse: &Browse, reveal: bool) -> Result<Query<T>> {
 	let mut query = Query::<T>::new();
 
 	if let Some(filter) = &browse.filter {
-		let condition = filter_expr::<T>(filter)?;
+		let condition = filter_expr::<T>(filter, reveal)?;
 		query = query.filter(|_| condition);
 	}
 
@@ -322,19 +432,30 @@ fn browse_query<T: Table>(browse: &Browse) -> Result<Query<T>> {
 	Ok(query)
 }
 
-/// A page of `T`'s rows as `db` may read them, `secret` columns hidden.
-fn read<'a, T: Table>(db: &'a Db, browse: &'a Browse) -> Boxed<'a, Rows> {
+/// A page of `T`'s rows as `db` may read them, `secret` columns hidden,
+/// and `private` ones unless `reveal`.
+fn read<'a, T: Table>(db: &'a Db, browse: &'a Browse, reveal: bool) -> Boxed<'a, Rows> {
 	Box::pin(async move {
-		let total = browse_query::<T>(browse)?.count(db).await?;
-		let mut query = browse_query::<T>(browse)?;
+		let total = browse_query::<T>(browse, reveal)?.count(db).await?;
+		let mut query = browse_query::<T>(browse, reveal)?;
+		// A view has no key, so it's ordered by its first column.
 		let order = match &browse.order {
-			Some((column, descending)) => Order::by(column_of::<T>(column)?, *descending),
-			None => Order::by(T::KEY[0], false),
+			Some((column, descending)) => {
+				Some(Order::by(shown_column::<T>(column, reveal)?, *descending))
+			}
+			None => {
+				T::KEY
+					.first()
+					.or(T::COLUMNS.first())
+					.map(|column| Order::by(column, false))
+			}
 		};
-		query = query
-			.order_by(|_| order)
-			.limit(browse.limit)
-			.offset(browse.offset);
+
+		if let Some(order) = order {
+			query = query.order_by(|_| order);
+		}
+
+		query = query.limit(browse.limit).offset(browse.offset);
 
 		let cells = query
 			.all(db)
@@ -347,6 +468,8 @@ fn read<'a, T: Table>(db: &'a Db, browse: &'a Browse) -> Boxed<'a, Rows> {
 					.map(|(column, value)| {
 						if T::SECRET.contains(column) {
 							Cell::Secret
+						} else if hides::<T>(column, reveal) {
+							Cell::Private
 						} else {
 							display(&value)
 						}
@@ -364,9 +487,17 @@ fn read<'a, T: Table>(db: &'a Db, browse: &'a Browse) -> Boxed<'a, Rows> {
 			})
 			.collect();
 
+		let hidden = T::COLUMNS
+			.iter()
+			.enumerate()
+			.filter(|(_, column)| hides::<T>(column, reveal))
+			.map(|(position, _)| position)
+			.collect();
+
 		Ok(Rows {
 			columns: T::COLUMNS.to_vec(),
 			key,
+			hidden,
 			cells,
 			total,
 		})
@@ -414,12 +545,7 @@ fn edit<T: Table>(db: Db, edit: Edit) -> Local<()> {
 			)));
 		}
 
-		let (ty, nullable) = column_type::<T>(column)?;
-		let value = match &edit.value {
-			None if nullable => Value::Null,
-			None => return Err(invalid(format!("`{column}` can't be NULL"))),
-			Some(text) => parse_value(&ty, text).map_err(invalid)?,
-		};
+		let value = form_value::<T>(column, edit.value.as_deref())?;
 		let row = find::<T>(&db, &edit.key).await?;
 		let mut values = row.to_values()?;
 		let position = T::COLUMNS
@@ -430,6 +556,41 @@ fn edit<T: Table>(db: Db, edit: Edit) -> Local<()> {
 		let mut row = T::from_values(values)?;
 		crate::write::save(&db, &mut row).await
 	})
+}
+
+/// Inserts a row through `insert`, with the table's hooks, rules, policies,
+/// and audit log, from the columns an insert provides; the rest are filled
+/// in as the table's `New…` type fills them. Returns the new row's key.
+fn insert<T: Table>(db: Db, insert: Insert) -> Local<Vec<String>> {
+	Box::pin(async move {
+		let values = T::PROVIDED
+			.iter()
+			.map(|column| {
+				let (_, text) = insert
+					.values
+					.iter()
+					.find(|(name, _)| name == column)
+					.ok_or_else(|| invalid(format!("the form has no value for `{column}`")))?;
+				form_value::<T>(column, text.as_deref())
+			})
+			.collect::<Result<Vec<Value>>>()?;
+		let stored = crate::write::insert(&db, T::from_provided(values)?).await?;
+		let values = stored.to_values()?;
+		Ok(T::KEY
+			.iter()
+			.filter_map(|key| T::COLUMNS.iter().position(|column| column == key))
+			.map(|position| display(&values[position]).text().to_string())
+			.collect())
+	})
+}
+
+/// The columns an insert into `T` provides, in order.
+fn provided<T: Table>() -> Vec<leptoskit_db_schema::Column> {
+	let columns = T::definition().columns;
+	T::PROVIDED
+		.iter()
+		.filter_map(|name| columns.iter().find(|column| column.name == *name).cloned())
+		.collect()
 }
 
 /// Deletes one row through `delete`: soft-deletes it when the table can.
@@ -445,6 +606,8 @@ fn remove<T: Table>(db: Db, key: Vec<String>) -> Local<()> {
 fn rules<T: Table>(access: &Access, dialect: Dialect) -> Result<Rules> {
 	Action::ALL
 		.iter()
+		// Nothing writes to a view, so only its reads have rules.
+		.filter(|action| !T::READ_ONLY || **action == Action::Select)
 		.map(|action| {
 			let statement = crate::policy::condition::<T>(access, *action)
 				.map(|condition| {

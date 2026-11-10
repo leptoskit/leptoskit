@@ -30,7 +30,10 @@ Options:
           The port the `DevTools` hub binds; defaults to 7340
 
       --studio
-          Serve the database studio beside the app, as `leptoskit db studio` does
+          Serve the database studio beside the app, as `leptoskit db studio` does, and restart it on each branch's database as you switch
+
+      --reveal
+          With --studio, show the values of `private` columns, as `leptoskit db studio --reveal` does
 
   -h, --help
           Print help (see a summary with '-h')

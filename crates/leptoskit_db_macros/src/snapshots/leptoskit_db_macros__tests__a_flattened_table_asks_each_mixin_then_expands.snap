@@ -64,6 +64,7 @@ impl ::leptoskit_db::Table for Order {
     const VERSION: ::core::option::Option<&'static str> = ::core::option::Option::None;
     const PACK: ::core::option::Option<&'static str> = ::core::option::Option::None;
     const GENERATED: &'static [&'static str] = &[];
+    const PRIVATE: &'static [&'static str] = &["billing_notes"];
     type Columns = OrderColumns;
     fn columns() -> &'static OrderColumns {
         static COLUMNS: OrderColumns = OrderColumns {
@@ -237,6 +238,56 @@ impl ::leptoskit_db::Table for Order {
     }
     fn mark_deleted(&mut self) {}
     fn bump_version(&mut self) {}
+    const PROVIDED: &'static [&'static str] = &[
+        "billing_street",
+        "billing_city",
+        "billing_notes",
+    ];
+    fn from_provided(
+        values: ::std::vec::Vec<::leptoskit_db::Value>,
+    ) -> ::core::result::Result<Self, ::leptoskit_db::DecodeError> {
+        #[allow(
+            unused_mut,
+            unused_variables,
+            reason = "used only when the insert provides a column"
+        )]
+        let mut values = values.into_iter();
+        let __value_billing__street: <Address as ::leptoskit_db::MixinField<
+            0usize,
+        >>::Type = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "orders",
+            "billing_street",
+        )?;
+        let __value_billing__city: <Address as ::leptoskit_db::MixinField<
+            1usize,
+        >>::Type = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "orders",
+            "billing_city",
+        )?;
+        let __value_billing__notes: <Address as ::leptoskit_db::MixinField<
+            2usize,
+        >>::Type = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "orders",
+            "billing_notes",
+        )?;
+        #[allow(unused_variables, reason = "used only when the table has timestamps")]
+        let now = ::leptoskit_db::now();
+        ::core::result::Result::Ok(Self {
+            id: ::leptoskit_db::Id::new(),
+            billing: Address {
+                street: __value_billing__street,
+                city: __value_billing__city,
+                notes: __value_billing__notes,
+            },
+            times: db::Timestamps {
+                created_at: now,
+                updated_at: now,
+            },
+        })
+    }
 }
 /// A new [`Order`] to insert: everything except what the database layer fills in.
 pub struct NewOrder {

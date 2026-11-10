@@ -260,9 +260,13 @@ pub enum Command {
 		#[arg(long, value_name = "PORT")]
 		devtools_port: Option<u16>,
 		/// Serve the database studio beside the app, as `leptoskit db studio`
-		/// does.
+		/// does, and restart it on each branch's database as you switch.
 		#[arg(long)]
 		studio: bool,
+		/// With --studio, show the values of `private` columns, as
+		/// `leptoskit db studio --reveal` does.
+		#[arg(long, requires = "studio")]
+		reveal: bool,
 	},
 	/// Builds the project for a platform.
 	Build {
@@ -707,6 +711,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			no_devtools,
 			devtools_port,
 			studio,
+			reveal,
 		} => {
 			dev::run(
 				open,
@@ -715,7 +720,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 				&devices,
 				no_devtools,
 				devtools_port,
-				studio,
+				studio.then_some(crate::db::StudioOptions { reveal }),
 			)
 		}
 		Command::Build {

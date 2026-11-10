@@ -741,7 +741,13 @@ fn the_studio_runs_the_export_test_with_its_settings() {
 	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
 
 	// `cargo metadata --no-deps` reads the manifest without resolving it.
-	let command = project.studio("sqlite::memory:", 4000).unwrap();
+	let command = project
+		.studio(
+			"sqlite::memory:",
+			4000,
+			super::StudioOptions { reveal: true },
+		)
+		.unwrap();
 	let args: Vec<String> = command
 		.get_args()
 		.map(|arg| arg.to_string_lossy().into_owned())
@@ -774,6 +780,14 @@ fn the_studio_runs_the_export_test_with_its_settings() {
 	assert_eq!(env[leptoskit_db::STUDIO_DATABASE_ENV], "sqlite::memory:");
 	assert_eq!(env[leptoskit_db::DIALECT_ENV], "sqlite");
 	assert!(env[leptoskit_db::STUDIO_MIGRATIONS_ENV].ends_with("migrations"));
+	assert_eq!(env[leptoskit_db::STUDIO_REVEAL_ENV], "1");
+
+	let hiding = project
+		.studio("sqlite::memory:", 0, super::StudioOptions::default())
+		.unwrap();
+	assert!(hiding.get_envs().any(|(name, value)| {
+		name == leptoskit_db::STUDIO_REVEAL_ENV && value == Some("0".as_ref())
+	}));
 }
 
 #[test]

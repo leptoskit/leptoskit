@@ -129,6 +129,39 @@ impl ::leptoskit_db::Table for PostTag {
     fn touch(&mut self) {}
     fn mark_deleted(&mut self) {}
     fn bump_version(&mut self) {}
+    const PROVIDED: &'static [&'static str] = &["post_id", "tag", "position"];
+    fn from_provided(
+        values: ::std::vec::Vec<::leptoskit_db::Value>,
+    ) -> ::core::result::Result<Self, ::leptoskit_db::DecodeError> {
+        #[allow(
+            unused_mut,
+            unused_variables,
+            reason = "used only when the insert provides a column"
+        )]
+        let mut values = values.into_iter();
+        let __value_post_id: Id<Post> = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "post_tags",
+            "post_id",
+        )?;
+        let __value_tag: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "post_tags",
+            "tag",
+        )?;
+        let __value_position: i16 = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "post_tags",
+            "position",
+        )?;
+        #[allow(unused_variables, reason = "used only when the table has timestamps")]
+        let now = ::leptoskit_db::now();
+        ::core::result::Result::Ok(Self {
+            post_id: __value_post_id,
+            tag: __value_tag,
+            position: __value_position,
+        })
+    }
 }
 /// A new [`PostTag`] to insert: everything except what the database layer fills in.
 pub(crate) struct NewPostTag {

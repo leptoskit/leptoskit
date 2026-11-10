@@ -13,6 +13,8 @@ use super::Viewer;
 use super::ops::Browse;
 use super::ops::Cell;
 use super::ops::Edit;
+use super::ops::Insert;
+use super::ops::Kind;
 use super::ops::Op;
 use super::ops::Rows;
 use super::ops::Rules;
@@ -23,9 +25,10 @@ use crate::Persona;
 pub(crate) enum Body {
 	/// Why the page can't show what it was asked for.
 	Problem(String),
-	Tables(Vec<(String, Result<u64, String>)>),
+	Tables(Vec<(String, Kind, Result<u64, String>)>),
 	Rows {
 		table: String,
+		kind: Kind,
 		browse: Browse,
 		rows: Rows,
 	},
@@ -38,6 +41,15 @@ pub(crate) enum Body {
 	ConfirmEdit {
 		table: String,
 		change: Edit,
+	},
+	InsertForm {
+		table: String,
+		/// The columns an insert provides.
+		columns: Vec<leptoskit_db_schema::Column>,
+	},
+	ConfirmInsert {
+		table: String,
+		row: Insert,
 	},
 	ConfirmDelete {
 		table: String,
@@ -69,6 +81,8 @@ pub(crate) struct MigrationRow {
 pub(crate) struct Frame<'a> {
 	pub(crate) token: &'a str,
 	pub(crate) viewer: &'a Viewer,
+	/// Whether `private` columns show their values: `--reveal`.
+	pub(crate) reveal: bool,
 	pub(crate) title: &'a str,
 	pub(crate) personas: Vec<&'static Persona>,
 	pub(crate) body: Body,
@@ -168,7 +182,7 @@ pub(crate) fn render(frame: &Frame<'_>) -> String {
 	let refresh = matches!(frame.body, Body::Live(_)).then(|| {
 		view! { <meta http-equiv="refresh" content="2" /> }
 	});
-	let header = header(&links, frame.viewer, &frame.personas);
+	let header = header(&links, frame.viewer, frame.reveal, &frame.personas);
 	let body = body(&links, frame);
 	let page = view! {
 		<html lang="en">
@@ -192,7 +206,12 @@ pub(crate) fn render(frame: &Frame<'_>) -> String {
 }
 
 /// The navigation, the viewer form, and the banner saying who reads.
-fn header(links: &Links, viewer: &Viewer, personas: &[&'static Persona]) -> impl IntoView + use<> {
+fn header(
+	links: &Links,
+	viewer: &Viewer,
+	reveal: bool,
+	personas: &[&'static Persona],
+) -> impl IntoView + use<> {
 	let nav = [
 		("/", "Tables"),
 		("/schema", "Schema"),
@@ -236,7 +255,7 @@ fn header(links: &Links, viewer: &Viewer, personas: &[&'static Persona]) -> impl
 	} else {
 		"viewing"
 	};
-	let banner = if viewer.edit {
+	let mut banner = if viewer.edit {
 		format!(
 			"Reading as {}. Edit mode is on: each change asks you to confirm it, then runs as \
 			 this viewer.",
@@ -245,6 +264,11 @@ fn header(links: &Links, viewer: &Viewer, personas: &[&'static Persona]) -> impl
 	} else {
 		format!("Reading as {}.", viewer.describe())
 	};
+	banner.push_str(if reveal {
+		" Private values are revealed: the studio was started with --reveal."
+	} else {
+		" Private values show as ‹private›; start the studio with --reveal to see them."
+	});
 
 	view! {
 		<header>
@@ -272,9 +296,10 @@ fn body(links: &Links, frame: &Frame<'_>) -> AnyView {
 		Body::Tables(tables) => tables_view(links, tables).into_any(),
 		Body::Rows {
 			table,
+			kind,
 			browse,
 			rows,
-		} => rows_view(links, frame.viewer, table, browse, rows).into_any(),
+		} => rows_view(links, frame.viewer, table, *kind, browse, rows).into_any(),
 		Body::EditForm {
 			table,
 			key,
@@ -282,6 +307,8 @@ fn body(links: &Links, frame: &Frame<'_>) -> AnyView {
 			current,
 		} => edit_form_view(links, table, key, column, current).into_any(),
 		Body::ConfirmEdit { table, change } => confirm_edit_view(links, table, change).into_any(),
+		Body::InsertForm { table, columns } => insert_form_view(links, table, columns).into_any(),
+		Body::ConfirmInsert { table, row } => confirm_insert_view(links, table, row).into_any(),
 		Body::ConfirmDelete { table, key } => confirm_delete_view(links, table, key).into_any(),
 		Body::Done { table, message } => {
 			view! {
@@ -300,24 +327,49 @@ fn body(links: &Links, frame: &Frame<'_>) -> AnyView {
 	}
 }
 
-fn tables_view(links: &Links, tables: &[(String, Result<u64, String>)]) -> impl IntoView + use<> {
-	let rows = tables
+fn tables_view(
+	links: &Links,
+	tables: &[(String, Kind, Result<u64, String>)],
+) -> impl IntoView + use<> {
+	let rows = |views: bool| {
+		tables
+			.iter()
+			.filter(|(_, kind, _)| (*kind != Kind::Table) == views)
+			.map(|(name, kind, count)| {
+				let count = match count {
+					Ok(count) => count.to_string(),
+					Err(error) => error.clone(),
+				};
+				let kind = views.then(|| view! { <td>{kind.label()}</td> });
+				view! {
+					<tr>
+						<td>
+							<a href=links.href(&format!("/table/{name}"), &[])>{name.clone()}</a>
+						</td>
+						{kind}
+						<td>{count}</td>
+					</tr>
+				}
+			})
+			.collect_view()
+	};
+	let views = tables
 		.iter()
-		.map(|(name, count)| {
-			let count = match count {
-				Ok(count) => count.to_string(),
-				Err(error) => error.clone(),
-			};
+		.any(|(_, kind, _)| *kind != Kind::Table)
+		.then(|| {
 			view! {
-				<tr>
-					<td>
-						<a href=links.href(&format!("/table/{name}"), &[])>{name.clone()}</a>
-					</td>
-					<td>{count}</td>
-				</tr>
+				<h2>"Views"</h2>
+				<p>"Read-only: each reads through its own policies."</p>
+				<table>
+					<tr>
+						<th>"View"</th>
+						<th>"Kind"</th>
+						<th>"Rows"</th>
+					</tr>
+					{rows(true)}
+				</table>
 			}
-		})
-		.collect_view();
+		});
 	view! {
 		<p>"Each count is what the viewer may read: the table's policies apply."</p>
 		<table>
@@ -325,15 +377,16 @@ fn tables_view(links: &Links, tables: &[(String, Result<u64, String>)]) -> impl 
 				<th>"Table"</th>
 				<th>"Rows"</th>
 			</tr>
-			{rows}
+			{rows(false)}
 		</table>
+		{views}
 	}
 }
 
 fn cell_view(cell: &Cell) -> impl IntoView + use<> {
 	let class = match cell {
 		Cell::Null => "null",
-		Cell::Secret => "secret",
+		Cell::Secret | Cell::Private => "secret",
 		Cell::Text(_) => "",
 	};
 	view! { <span class=class>{cell.text().to_string()}</span> }
@@ -343,10 +396,13 @@ fn rows_view(
 	links: &Links,
 	viewer: &Viewer,
 	table: &str,
+	kind: Kind,
 	browse: &Browse,
 	rows: &Rows,
 ) -> impl IntoView + use<> {
 	let path = format!("/table/{table}");
+	// Nothing writes to a view, so it offers no changes, even in edit mode.
+	let editing = viewer.edit && kind == Kind::Table;
 	let filter = browse.filter.clone();
 	let mut state: Vec<(&str, String)> = Vec::new();
 
@@ -361,7 +417,12 @@ fn rows_view(
 	}
 
 	let page = browse.offset / super::PAGE;
-	let columns = rows.columns.iter().map(|column| {
+	let columns = rows.columns.iter().enumerate().map(|(position, column)| {
+		// Sorting by a hidden column would tell its values apart.
+		if rows.hidden.contains(&position) {
+			return view! { <th>{(*column).to_string()}</th> }.into_any();
+		}
+
 		let descending = browse
 			.order
 			.as_ref()
@@ -378,9 +439,10 @@ fn rows_view(
 				<a href=links.href(&path, &params)>{(*column).to_string()}</a>
 			</th>
 		}
+		.into_any()
 	});
 	let columns = columns.collect_view();
-	let edit_header = viewer.edit.then(|| view! { <th>"Row"</th> });
+	let edit_header = editing.then(|| view! { <th>"Row"</th> });
 	let body = rows
 		.cells
 		.iter()
@@ -391,13 +453,15 @@ fn rows_view(
 				.map(|position| row[*position].text().to_string())
 				.collect();
 			let key = serde_json::to_string(&key).unwrap_or_default();
+			// A row is named by its key, so one whose key the page hides
+			// offers no changes.
+			let editing = editing && rows.key.iter().all(|position| !row[*position].hidden());
 			let cells = row
 				.iter()
 				.zip(&rows.columns)
 				.enumerate()
 				.map(|(position, (cell, column))| {
-					let editable =
-						viewer.edit && !rows.key.contains(&position) && *cell != Cell::Secret;
+					let editable = editing && !rows.key.contains(&position) && !cell.hidden();
 					let edit = editable.then(|| {
 						let href = links.href(
 							&format!("{path}/edit"),
@@ -415,7 +479,7 @@ fn rows_view(
 					view! { <td>{cell_view(cell)}{edit}</td> }
 				})
 				.collect_view();
-			let delete = viewer.edit.then(|| {
+			let delete = editing.then(|| {
 				let href = links.href(&format!("{path}/delete"), &[("key", key.clone())]);
 				view! {
 					<td>
@@ -426,27 +490,6 @@ fn rows_view(
 			view! { <tr>{cells}{delete}</tr> }
 		})
 		.collect_view();
-	let column_options = rows
-		.columns
-		.iter()
-		.map(|column| {
-			let selected = filter
-				.as_ref()
-				.is_some_and(|filter| filter.column == *column);
-			view! { <option value=*column selected=selected>{*column}</option> }
-		})
-		.collect_view();
-	let op_options = Op::ALL
-		.into_iter()
-		.map(|op| {
-			let selected = filter.as_ref().is_some_and(|filter| filter.op == op);
-			view! { <option value=op.name() selected=selected>{op.label()}</option> }
-		})
-		.collect_view();
-	let value = filter
-		.as_ref()
-		.map(|filter| filter.value.clone())
-		.unwrap_or_default();
 	let shown_from = browse.offset + 1;
 	let shown_to = browse.offset + rows.cells.len() as u64;
 	let previous = (page > 0).then(|| {
@@ -473,26 +516,84 @@ fn rows_view(
 		};
 		view! { <a href=links.href(&path, &params)>{label}</a> }
 	};
+	let insert = editing.then(|| {
+		view! { <a href=links.href(&format!("{path}/insert"), &[])>"Insert a row"</a> }
+	});
+	let shown: Vec<&'static str> = rows
+		.columns
+		.iter()
+		.enumerate()
+		.filter(|(position, _)| !rows.hidden.contains(position))
+		.map(|(_, column)| *column)
+		.collect();
+
+	let read_only = (kind != Kind::Table).then(|| {
+		let refreshed = if kind == Kind::Materialized {
+			" It holds the rows of its last refresh."
+		} else {
+			""
+		};
+		view! {
+			<p>
+				{format!(
+					"A {}: read-only, through its own policies.{refreshed}",
+					kind.label()
+				)}
+			</p>
+		}
+	});
 
 	view! {
-		<form method="get" action=path.clone()>
-			{links.hidden(true)} "Filter: " <select name="column">{column_options}</select>
-			<select name="op">{op_options}</select> <input name="value" value=value />
-			{browse
-				.with_deleted
-				.then(|| view! { <input type="hidden" name="deleted" value="1" /> })}
-			<button>"Apply"</button> " " <a href=links.href(&path, &[])>"Clear"</a>
-		</form>
+		{read_only}
+		{filter_view(links, &path, &shown, browse)}
 		<nav class="pages">
 			<span>{format!("Rows {shown_from}–{shown_to} of {}", rows.total)}</span>
 			{previous}
 			{next}
 			{deleted_toggle}
+			{insert}
 		</nav>
 		<table>
 			<tr>{columns}{edit_header}</tr>
 			{body}
 		</table>
+	}
+}
+
+/// The form that filters a table page by one of `columns`.
+fn filter_view(
+	links: &Links,
+	path: &str,
+	columns: &[&'static str],
+	browse: &Browse,
+) -> impl IntoView + use<> {
+	let filter = browse.filter.as_ref();
+	let column_options = columns
+		.iter()
+		.map(|column| {
+			let selected = filter.is_some_and(|filter| filter.column == *column);
+			view! { <option value=*column selected=selected>{*column}</option> }
+		})
+		.collect_view();
+	let op_options = Op::ALL
+		.into_iter()
+		.map(|op| {
+			let selected = filter.is_some_and(|filter| filter.op == op);
+			view! { <option value=op.name() selected=selected>{op.label()}</option> }
+		})
+		.collect_view();
+	let value = filter
+		.map(|filter| filter.value.clone())
+		.unwrap_or_default();
+	view! {
+		<form method="get" action=path.to_string()>
+			{links.hidden(true)} "Filter: " <select name="column">{column_options}</select>
+			<select name="op">{op_options}</select> <input name="value" value=value />
+			{browse
+				.with_deleted
+				.then(|| view! { <input type="hidden" name="deleted" value="1" /> })}
+			<button>"Apply"</button> " " <a href=links.href(path, &[])>"Clear"</a>
+		</form>
 	}
 }
 
@@ -559,6 +660,128 @@ fn confirm_edit_view(links: &Links, table: &str, change: &Edit) -> impl IntoView
 			<input type="hidden" name="confirmed" value="yes" />
 			<button>"Confirm the change"</button> " "
 			<a href=links.href(&format!("/table/{table}"), &[])>"Cancel"</a>
+		</form>
+	}
+}
+
+fn insert_form_view(
+	links: &Links,
+	table: &str,
+	columns: &[leptoskit_db_schema::Column],
+) -> impl IntoView + use<> {
+	let action = links.href(&format!("/table/{table}/insert"), &[]);
+	let fields = columns
+		.iter()
+		.map(|column| {
+			let null = column.nullable.then(|| {
+				view! {
+					<label>
+						<input type="checkbox" name=format!("null.{}", column.name) value="1" />
+						" NULL"
+					</label>
+				}
+			});
+			view! {
+				<tr>
+					<td>
+						<label for=format!("column.{}", column.name)>{column.name.clone()}</label>
+					</td>
+					<td>{format!("{:?}", column.ty)}</td>
+					<td>
+						<input
+							id=format!("column.{}", column.name)
+							name=format!("column.{}", column.name)
+							size="60"
+						/>
+						" "
+						{null}
+					</td>
+				</tr>
+			}
+		})
+		.collect_view();
+	view! {
+		<p>
+			{format!(
+				"A new `{table}` row. The key, timestamps, version, and computed columns are \
+				 filled in as the table's insert fills them."
+			)}
+		</p>
+		<form method="post" action=action>
+			{post_fields(links)}
+			<table>
+				<tr>
+					<th>"Column"</th>
+					<th>"Type"</th>
+					<th>"Value"</th>
+				</tr>
+				{fields}
+			</table>
+			<p>
+				<button>"Review the insert"</button>
+			</p>
+		</form>
+	}
+}
+
+fn confirm_insert_view(links: &Links, table: &str, row: &Insert) -> impl IntoView + use<> {
+	let action = links.href(&format!("/table/{table}/insert"), &[]);
+	let shown = row
+		.values
+		.iter()
+		.map(|(column, value)| {
+			let cell = match value {
+				Some(value) => Cell::Text(value.clone()),
+				None => Cell::Null,
+			};
+			view! {
+				<tr>
+					<td>{column.clone()}</td>
+					<td>{cell_view(&cell)}</td>
+				</tr>
+			}
+		})
+		.collect_view();
+	let fields = row
+		.values
+		.iter()
+		.map(|(column, value)| {
+			match value {
+				Some(value) => {
+					view! {
+						<input type="hidden" name=format!("column.{column}") value=value.clone() />
+					}
+					.into_any()
+				}
+				None => {
+					view! { <input type="hidden" name=format!("null.{column}") value="1" /> }
+						.into_any()
+				}
+			}
+		})
+		.collect_view();
+	view! {
+		<p class="problem">
+			{format!(
+				"Insert this `{table}` row, as {}? It runs through the table's insert, with its \
+				 hooks, rules, policies, and audit log.",
+				links.viewer.describe()
+			)}
+		</p>
+		<table>
+			<tr>
+				<th>"Column"</th>
+				<th>"Value"</th>
+			</tr>
+			{shown}
+		</table>
+		<form method="post" action=action>
+			{post_fields(links)} {fields} <input type="hidden" name="confirmed" value="yes" />
+			<p>
+				<button>"Confirm the insert"</button>
+				" "
+				<a href=links.href(&format!("/table/{table}"), &[])>"Cancel"</a>
+			</p>
 		</form>
 	}
 }
@@ -653,9 +876,53 @@ fn schema_view(schema: &Schema) -> impl IntoView + use<> {
 			}
 		})
 		.collect_view();
+	let views = schema
+		.views
+		.iter()
+		.map(|view| {
+			let columns = view
+				.columns
+				.iter()
+				.map(|column| {
+					view! {
+						<tr>
+							<td>{column.name.clone()}</td>
+							<td>{format!("{:?}", column.ty)}</td>
+							<td>{if column.nullable { "null" } else { "not null" }}</td>
+						</tr>
+					}
+				})
+				.collect_view();
+			let sql = match schema.dialect {
+				leptoskit_db_schema::Dialect::Postgres => view.sql.postgres.trim().to_string(),
+				leptoskit_db_schema::Dialect::Sqlite => view.sql.sqlite.trim().to_string(),
+			};
+			view! {
+				<h2>
+					{view.name.to_string()}
+					{if view.materialized {
+						" (materialized view)"
+					} else {
+						" (view)"
+					}}
+				</h2>
+				<p>{view.comment.clone().unwrap_or_default()}</p>
+				<table>
+					<tr>
+						<th>"Column"</th>
+						<th>"Type"</th>
+						<th>"Null"</th>
+					</tr>
+					{columns}
+				</table>
+				<pre>{sql}</pre>
+			}
+		})
+		.collect_view();
 	view! {
 		<p>"The tables this build of the app declares, as the next migration would see them."</p>
 		{tables}
+		{views}
 	}
 }
 

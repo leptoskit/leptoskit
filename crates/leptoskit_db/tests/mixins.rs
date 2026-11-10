@@ -91,6 +91,58 @@ fn new_order(total: i64) -> NewOrder {
 	}
 }
 
+/// Code that knows a table only as a `Table`, such as the studio, inserts
+/// what its `New…` type would: the same columns, filled in the same way.
+#[test]
+fn rows_from_provided_columns_match_the_insert_type() {
+	assert_eq!(
+		Order::PROVIDED,
+		[
+			"total",
+			"billing_street",
+			"billing_city",
+			"billing_notes",
+			"shipping_street",
+			"shipping_city",
+			"shipping_notes",
+		]
+	);
+	// A mixin the insert provides only part of.
+	assert_eq!(AccountNote::PROVIDED, ["body", "by"]);
+
+	let typed = new_order(12).into_row().to_values().unwrap();
+	let values: Vec<leptoskit_db::Value> = Order::COLUMNS
+		.iter()
+		.zip(&typed)
+		.filter(|(column, _)| Order::PROVIDED.contains(column))
+		.map(|(_, value)| value.clone())
+		.collect();
+	let built = Order::from_provided(values).unwrap();
+	let built_values = built.to_values().unwrap();
+
+	// The key is new and the timestamps are now; the rest is the same.
+	assert_ne!(built.id.uuid(), uuid::Uuid::nil());
+	assert_eq!(built_values[1..8], typed[1..8]);
+	assert_eq!(built.deleted.deleted_at, None);
+	assert_eq!(built.version.version, 0);
+	assert_eq!(built.times.created_at, built.times.updated_at);
+
+	let account: Id<Account> = Id::new();
+	let note = AccountNote::from_provided(vec![
+		leptoskit_db::Value::Text("hello".into()),
+		leptoskit_db::Value::Uuid(account.uuid()),
+	])
+	.unwrap();
+	assert_eq!(note.body, "hello");
+	assert_eq!(note.stamp.by, account);
+
+	let error = AccountNote::from_provided(vec![leptoskit_db::Value::Int(1)])
+		.err()
+		.unwrap()
+		.to_string();
+	assert!(error.contains("account_notes.body"), "{error}");
+}
+
 #[test]
 fn mixin_columns_join_the_table_in_place() {
 	assert_eq!(
@@ -157,7 +209,7 @@ fn inserts_provide_only_what_the_orm_does_not() {
 	assert_eq!(row.version.version, 0);
 
 	// A mixin the insert partly provides has a `New…` struct.
-	let account = Id::new();
+	let account: Id<Account> = Id::new();
 	let note = NewAccountNote {
 		body: "hello".into(),
 		stamp: NewStamp { by: account },

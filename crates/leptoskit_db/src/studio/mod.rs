@@ -13,10 +13,15 @@
 //!   chosen viewer: nobody (an anonymous request), a registered
 //!   [`Persona`](crate::Persona) with the identity you type, or `system`, which
 //!   bypasses policies and needs a reason, as the audit log records.
-//! - **Writing.** Edits and deletes only appear in edit mode, each shows what
-//!   it will do and waits for a second, confirming submit, and each runs
-//!   through the table's own `save` or `delete`: its hooks, rules, policies,
-//!   and audit log.
+//! - **Private values.** `secret` columns never show, and `private` ones show
+//!   as `‹private›` unless the studio was started with `--reveal`; a page
+//!   neither filters nor sorts by a column it hides.
+//! - **Views.** Registered views, materialized ones too, are browsed like
+//!   tables, through their policies, and never written to.
+//! - **Writing.** Inserts, edits, and deletes only appear in edit mode, each
+//!   shows what it will do and waits for a second, confirming submit, and each
+//!   runs through the table's own `insert`, `save`, or `delete`: its hooks,
+//!   rules, policies, and audit log.
 
 mod ops;
 mod pages;
@@ -44,7 +49,6 @@ use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
-use leptoskit_db_schema::TableName;
 pub(crate) use ops::TableOps;
 
 use crate::Context;
@@ -71,6 +75,8 @@ pub struct Options {
 	pub address: SocketAddr,
 	/// The app's migrations directory, for the migrations page.
 	pub migrations: Option<PathBuf>,
+	/// Whether `private` columns show their values: `--reveal`.
+	pub reveal: bool,
 }
 
 /// A studio that is serving.
@@ -103,6 +109,7 @@ pub(crate) struct Studio {
 	token: String,
 	hosts: Vec<String>,
 	migrations: Option<PathBuf>,
+	reveal: bool,
 	feeds: Mutex<HashMap<String, Arc<Mutex<VecDeque<Change>>>>>,
 }
 
@@ -146,6 +153,7 @@ pub async fn start(db: Db, options: Options) -> std::io::Result<Running> {
 		token,
 		hosts,
 		migrations: options.migrations,
+		reveal: options.reveal,
 		feeds: Mutex::new(HashMap::new()),
 	});
 	let router = router(studio);
@@ -169,6 +177,7 @@ pub(crate) fn serve_from_env() {
 		.unwrap_or_else(|_| panic!("{} names no database", crate::STUDIO_DATABASE_ENV));
 	let migrations = std::env::var_os(crate::STUDIO_MIGRATIONS_ENV).map(PathBuf::from);
 	let row_security = std::env::var(crate::POLICIES_ENV).as_deref() == Ok("rls");
+	let reveal = std::env::var(crate::STUDIO_REVEAL_ENV).as_deref() == Ok("1");
 	let runtime = tokio::runtime::Builder::new_multi_thread()
 		.enable_all()
 		.build()
@@ -188,6 +197,7 @@ pub(crate) fn serve_from_env() {
 			Options {
 				address,
 				migrations,
+				reveal,
 			},
 		)
 		.await
@@ -240,6 +250,7 @@ pub(crate) fn router(studio: Arc<Studio>) -> Router {
 	Router::new()
 		.route("/", get(tables))
 		.route("/table/{name}", get(table))
+		.route("/table/{name}/insert", get(insert_form).post(insert))
 		.route("/table/{name}/edit", get(edit_form).post(edit))
 		.route("/table/{name}/delete", get(delete_form).post(delete))
 		.route("/schema", get(schema))
@@ -422,19 +433,35 @@ fn intern(reason: &str) -> &'static str {
 	leaked
 }
 
-/// The registered table with this flat name, and its operations.
-fn table_named(name: &str) -> Option<(TableName, TableOps)> {
-	crate::table::entries()
-		.iter()
-		.find(|(table, _)| table.flat() == name)
-		.map(|(table, entry)| (table.clone(), entry.studio))
+/// Every registered table and view, by flat name, with its operations.
+fn registered() -> &'static [(String, TableOps)] {
+	static REGISTERED: OnceLock<Vec<(String, TableOps)>> = OnceLock::new();
+	REGISTERED.get_or_init(|| {
+		let tables = crate::table::entries()
+			.iter()
+			.map(|(name, entry)| (name.flat(), entry.studio));
+		let views = inventory::iter::<crate::view::ViewEntry>()
+			.map(|entry| ((entry.definition)().name.flat(), entry.studio));
+		let mut registered: Vec<(String, TableOps)> = tables.chain(views).collect();
+		registered.sort_by(|(left, _), (right, _)| left.cmp(right));
+		registered
+	})
 }
 
-/// Every registered table, by flat name.
-fn table_names() -> Vec<TableName> {
-	let mut names: Vec<TableName> = crate::table::entries().keys().cloned().collect();
-	names.sort_by_key(TableName::flat);
-	names
+/// The registered table or view with this flat name.
+fn table_named(name: &str) -> Result<TableOps, String> {
+	registered()
+		.iter()
+		.find(|(registered, _)| registered == name)
+		.map(|(_, ops)| *ops)
+		.ok_or_else(|| format!("there's no table `{name}`"))
+}
+
+/// How the studio writes to the table with this flat name, or why it can't.
+fn writes_to(name: &str) -> Result<ops::Writes, String> {
+	table_named(name)?
+		.writes
+		.ok_or_else(|| format!("`{name}` is a view, which nothing writes to"))
 }
 
 type Params = Query<HashMap<String, String>>;
@@ -449,6 +476,7 @@ fn page(
 	let html = pages::render(&pages::Frame {
 		token: &studio.token,
 		viewer,
+		reveal: studio.reveal,
 		title,
 		personas: crate::persona::personas(),
 		body: body.unwrap_or_else(pages::Body::Problem),
@@ -462,17 +490,16 @@ async fn tables(State(studio): State<Arc<Studio>>, Query(query): Params) -> Resp
 		let db = viewer.db(&studio.db)?;
 		let mut counts = Vec::new();
 
-		for name in table_names() {
-			let (_, ops) = table_named(&name.flat()).expect("a registered table");
+		for (name, ops) in registered() {
 			let browse = ops::Browse {
 				limit: 0,
 				..ops::Browse::default()
 			};
-			let count = (ops.read)(&db, &browse)
+			let count = (ops.read)(&db, &browse, studio.reveal)
 				.await
 				.map(|rows| rows.total)
 				.map_err(|error| chain(&error));
-			counts.push((name.flat(), count));
+			counts.push((name.clone(), ops.kind, count));
 		}
 
 		Ok(pages::Body::Tables(counts))
@@ -515,12 +542,13 @@ async fn table(
 	let browse = browse_of(&query);
 	let body = async {
 		let db = viewer.db(&studio.db)?;
-		let (_, ops) = table_named(&name).ok_or_else(|| format!("there's no table `{name}`"))?;
-		let rows = (ops.read)(&db, &browse)
+		let ops = table_named(&name)?;
+		let rows = (ops.read)(&db, &browse, studio.reveal)
 			.await
 			.map_err(|error| chain(&error))?;
 		Ok(pages::Body::Rows {
 			table: name.clone(),
+			kind: ops.kind,
 			browse,
 			rows,
 		})
@@ -552,7 +580,7 @@ async fn edit_form(
 	let viewer = Viewer::from_query(&query);
 	let body = (|| {
 		editing(&viewer)?;
-		table_named(&name).ok_or_else(|| format!("there's no table `{name}`"))?;
+		writes_to(&name)?;
 		Ok(pages::Body::EditForm {
 			table: name.clone(),
 			key: key_of(&query)?,
@@ -575,7 +603,7 @@ async fn edit(
 	let body = async {
 		same_viewer(&query, &viewer)?;
 		editing(&viewer)?;
-		let (_, ops) = table_named(&name).ok_or_else(|| format!("there's no table `{name}`"))?;
+		let writes = writes_to(&name)?;
 		let change = ops::Edit {
 			key: key_of(&form)?,
 			column: form.get("column").cloned().unwrap_or_default(),
@@ -591,7 +619,7 @@ async fn edit(
 		}
 
 		let db = viewer.db(&studio.db)?;
-		let edit = ops.edit;
+		let edit = writes.edit;
 		let applied = change.clone();
 		on_own_thread(move || edit(db, applied))
 			.await
@@ -609,6 +637,82 @@ async fn edit(
 	page(&studio, &viewer, &name, body)
 }
 
+async fn insert_form(
+	State(studio): State<Arc<Studio>>,
+	Path(name): Path<String>,
+	Query(query): Params,
+) -> Response {
+	let viewer = Viewer::from_query(&query);
+	let body = (|| {
+		editing(&viewer)?;
+		Ok(pages::Body::InsertForm {
+			table: name.clone(),
+			columns: (writes_to(&name)?.provided)(),
+		})
+	})();
+	page(&studio, &viewer, &name, body)
+}
+
+/// The values an insert form sends: `column.<name>` for each column, and
+/// `null.<name>` for those set to `NULL`.
+fn insert_of(
+	form: &HashMap<String, String>,
+	columns: &[leptoskit_db_schema::Column],
+) -> ops::Insert {
+	ops::Insert {
+		values: columns
+			.iter()
+			.map(|column| {
+				let null = form
+					.get(&format!("null.{}", column.name))
+					.map(String::as_str)
+					== Some("1");
+				let text = form
+					.get(&format!("column.{}", column.name))
+					.cloned()
+					.unwrap_or_default();
+				(column.name.clone(), (!null).then_some(text))
+			})
+			.collect(),
+	}
+}
+
+/// A submitted insert: the first submit asks for confirmation, and only a
+/// second, confirming one writes.
+async fn insert(
+	State(studio): State<Arc<Studio>>,
+	Path(name): Path<String>,
+	Query(query): Params,
+	Form(form): Form<HashMap<String, String>>,
+) -> Response {
+	let viewer = Viewer::from_query(&form);
+	let body = async {
+		same_viewer(&query, &viewer)?;
+		editing(&viewer)?;
+		let writes = writes_to(&name)?;
+		let row = insert_of(&form, &(writes.provided)());
+
+		if form.get("confirmed").map(String::as_str) != Some("yes") {
+			return Ok(pages::Body::ConfirmInsert {
+				table: name.clone(),
+				row,
+			});
+		}
+
+		let db = viewer.db(&studio.db)?;
+		let insert = writes.insert;
+		let key = on_own_thread(move || insert(db, row))
+			.await
+			.map_err(|error| format!("the insert was refused: {}", chain(&error)))?;
+		Ok(pages::Body::Done {
+			table: name.clone(),
+			message: format!("Inserted the row keyed {}.", key.join(", ")),
+		})
+	}
+	.await;
+	page(&studio, &viewer, &name, body)
+}
+
 async fn delete_form(
 	State(studio): State<Arc<Studio>>,
 	Path(name): Path<String>,
@@ -617,7 +721,7 @@ async fn delete_form(
 	let viewer = Viewer::from_query(&query);
 	let body = (|| {
 		editing(&viewer)?;
-		table_named(&name).ok_or_else(|| format!("there's no table `{name}`"))?;
+		writes_to(&name)?;
 		Ok(pages::Body::ConfirmDelete {
 			table: name.clone(),
 			key: key_of(&query)?,
@@ -636,7 +740,7 @@ async fn delete(
 	let body = async {
 		same_viewer(&query, &viewer)?;
 		editing(&viewer)?;
-		let (_, ops) = table_named(&name).ok_or_else(|| format!("there's no table `{name}`"))?;
+		let writes = writes_to(&name)?;
 		let key = key_of(&form)?;
 
 		if form.get("confirmed").map(String::as_str) != Some("yes") {
@@ -647,7 +751,7 @@ async fn delete(
 		}
 
 		let db = viewer.db(&studio.db)?;
-		let remove = ops.remove;
+		let remove = writes.remove;
 		let removed = key.clone();
 		on_own_thread(move || remove(db, removed))
 			.await
@@ -718,10 +822,9 @@ async fn policies(State(studio): State<Arc<Studio>>, Query(query): Params) -> Re
 		let access = db.access().clone();
 		let mut tables = Vec::new();
 
-		for name in table_names() {
-			let (_, ops) = table_named(&name.flat()).expect("a registered table");
+		for (name, ops) in registered() {
 			let rules = (ops.rules)(&access, studio.db.dialect()).map_err(|error| chain(&error));
-			tables.push((name.flat(), rules));
+			tables.push((name.clone(), rules));
 		}
 
 		Ok(pages::Body::Policies(tables))
@@ -737,13 +840,18 @@ async fn audit(State(studio): State<Arc<Studio>>, Query(query): Params) -> Respo
 		.unwrap_or(0);
 	let body = async {
 		let db = viewer.db(&studio.db)?;
-		let entries = crate::AuditEntry::query()
+		let mut entries = crate::AuditEntry::query()
 			.order_by(|entry| entry.id.desc())
 			.limit(PAGE)
 			.offset(page_number.saturating_mul(PAGE))
 			.all(&db)
 			.await
 			.map_err(|error| format!("couldn't read the audit log: {}", chain(&error)))?;
+
+		if !studio.reveal {
+			entries.iter_mut().for_each(hide_private);
+		}
+
 		Ok(pages::Body::Audit {
 			entries,
 			page: page_number,
@@ -751,6 +859,25 @@ async fn audit(State(studio): State<Arc<Studio>>, Query(query): Params) -> Respo
 	}
 	.await;
 	page(&studio, &viewer, "Audit log", body)
+}
+
+/// Hides the values of the changed table's `private` columns in what an
+/// audit entry recorded of its row, as the table pages do.
+fn hide_private(entry: &mut crate::AuditEntry) {
+	let private = crate::table::entries()
+		.iter()
+		.find(|(name, _)| name.to_string() == entry.table_name)
+		.map_or(&[][..], |(_, table)| table.studio.private);
+
+	for row in [&mut entry.before, &mut entry.after].into_iter().flatten() {
+		if let serde_json::Value::Object(columns) = &mut row.0 {
+			for column in private {
+				if let Some(value) = columns.get_mut(*column) {
+					*value = serde_json::Value::String(ops::Cell::Private.text().into());
+				}
+			}
+		}
+	}
 }
 
 /// The changes this viewer has heard of since the studio started following
@@ -857,9 +984,9 @@ fn summary(invalidation: &Invalidation) -> String {
 
 /// Runs a write that holds a row across awaits on a blocking thread, which
 /// waits for it: a row needn't be `Send`, but a handler's future must be.
-async fn on_own_thread(
-	write: impl FnOnce() -> ops::Local<()> + Send + 'static,
-) -> crate::Result<()> {
+async fn on_own_thread<T: Send + 'static>(
+	write: impl FnOnce() -> ops::Local<T> + Send + 'static,
+) -> crate::Result<T> {
 	let handle = tokio::runtime::Handle::current();
 	tokio::task::spawn_blocking(move || handle.block_on(write()))
 		.await

@@ -94,6 +94,7 @@ impl ::leptoskit_db::Table for User {
     const PACK: ::core::option::Option<&'static str> = ::core::option::Option::None;
     const GENERATED: &'static [&'static str] = &[];
     const SECRET: &'static [&'static str] = &["password_hash"];
+    const PRIVATE: &'static [&'static str] = &["email_address"];
     type Columns = UserColumns;
     fn columns() -> &'static UserColumns {
         static COLUMNS: UserColumns = UserColumns {
@@ -423,6 +424,96 @@ impl ::leptoskit_db::Table for User {
         self.deleted_at = ::core::option::Option::Some(::leptoskit_db::now());
     }
     fn bump_version(&mut self) {}
+    const PROVIDED: &'static [&'static str] = &[
+        "handle",
+        "email_address",
+        "password_hash",
+        "karma",
+        "theme",
+        "balance",
+        "slug",
+        "invited_by",
+        "legacy_id",
+        "active",
+    ];
+    fn from_provided(
+        values: ::std::vec::Vec<::leptoskit_db::Value>,
+    ) -> ::core::result::Result<Self, ::leptoskit_db::DecodeError> {
+        #[allow(
+            unused_mut,
+            unused_variables,
+            reason = "used only when the insert provides a column"
+        )]
+        let mut values = values.into_iter();
+        let __value_handle: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "handle",
+        )?;
+        let __value_email: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "email_address",
+        )?;
+        let __value_password_hash: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "password_hash",
+        )?;
+        let __value_karma: i32 = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "karma",
+        )?;
+        let __value_theme: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "theme",
+        )?;
+        let __value_balance: f64 = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "balance",
+        )?;
+        let __value_slug: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "slug",
+        )?;
+        let __value_invited_by: Option<Id<User>> = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "invited_by",
+        )?;
+        let __value_legacy_id: Option<Id<User>> = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "legacy_id",
+        )?;
+        let __value_active: bool = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "users",
+            "active",
+        )?;
+        #[allow(unused_variables, reason = "used only when the table has timestamps")]
+        let now = ::leptoskit_db::now();
+        ::core::result::Result::Ok(Self {
+            id: ::leptoskit_db::Id::new(),
+            handle: __value_handle,
+            email: __value_email,
+            password_hash: __value_password_hash,
+            karma: __value_karma,
+            theme: __value_theme,
+            balance: __value_balance,
+            slug: __value_slug,
+            invited_by: __value_invited_by,
+            legacy_id: __value_legacy_id,
+            created_at: now,
+            updated_at: now,
+            deleted_at: ::core::option::Option::None,
+            active: __value_active,
+        })
+    }
 }
 /// A new [`User`] to insert: everything except what the database layer fills in.
 pub struct NewUser {

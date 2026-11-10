@@ -178,6 +178,40 @@ impl ::leptoskit_db::Table for Post {
         ];
         POLICIES
     }
+    const PROVIDED: &'static [&'static str] = &["author_id", "published", "locked"];
+    fn from_provided(
+        values: ::std::vec::Vec<::leptoskit_db::Value>,
+    ) -> ::core::result::Result<Self, ::leptoskit_db::DecodeError> {
+        #[allow(
+            unused_mut,
+            unused_variables,
+            reason = "used only when the insert provides a column"
+        )]
+        let mut values = values.into_iter();
+        let __value_author_id: Id<User> = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "posts",
+            "author_id",
+        )?;
+        let __value_published: bool = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "posts",
+            "published",
+        )?;
+        let __value_locked: bool = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "posts",
+            "locked",
+        )?;
+        #[allow(unused_variables, reason = "used only when the table has timestamps")]
+        let now = ::leptoskit_db::now();
+        ::core::result::Result::Ok(Self {
+            id: ::leptoskit_db::Id::new(),
+            author_id: __value_author_id,
+            published: __value_published,
+            locked: __value_locked,
+        })
+    }
 }
 /// A new [`Post`] to insert: everything except what the database layer fills in.
 pub struct NewPost {

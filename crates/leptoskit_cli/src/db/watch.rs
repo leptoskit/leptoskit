@@ -13,6 +13,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
+use std::process::Command;
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -26,6 +28,7 @@ use super::CreateOptions;
 use super::Created;
 use super::History;
 use super::Project;
+use super::StudioOptions;
 use super::dev_server;
 use super::dev_server::DevServer;
 use crate::cli::invoked_name;
@@ -36,6 +39,9 @@ pub(crate) struct DevDatabase {
 	/// The URL, when `leptoskit dev` knows it: from `db.url_env`, or the
 	/// development server's.
 	url: Option<String>,
+	/// The studio over the database, when `leptoskit dev --studio` asked
+	/// for it: declared before the server, so it stops first.
+	studio: Option<StudioProcess>,
 	/// The development server, when `leptoskit dev` provides one. Held so
 	/// that a server it started stops when `dev` does.
 	server: Option<DevServer>,
@@ -62,6 +68,7 @@ impl DevDatabase {
 			return Ok(Self {
 				project,
 				url: Some(url),
+				studio: None,
 				server: None,
 			});
 		}
@@ -70,6 +77,7 @@ impl DevDatabase {
 			return Ok(Self {
 				project,
 				url: None,
+				studio: None,
 				server: None,
 			});
 		};
@@ -84,6 +92,7 @@ impl DevDatabase {
 		Ok(Self {
 			project,
 			url: Some(server.url.clone()),
+			studio: None,
 			server: Some(server),
 		})
 	}
@@ -92,42 +101,97 @@ impl DevDatabase {
 	/// `leptoskit dev` runs the development Postgres and the branch changed:
 	/// copied from the main branch's database the first time. Returns the app
 	/// server's new variables when the database changed, and brings the
-	/// branch's database in step with the tables.
+	/// branch's database in step with the tables. The studio, when it runs,
+	/// starts again over the branch's database.
 	pub(crate) fn switch_branch(&mut self) -> Result<Option<Vec<(String, String)>>> {
 		let Some(server) = &self.server else {
 			return Ok(None);
 		};
-		let postgres = dev_server::with_database(&server.url, "postgres")?;
-		let database = super::branches::ensure(&self.project, &postgres)?;
-		let url = dev_server::with_database(&server.url, &database)?;
+		let base = server.url.clone();
+		let target =
+			dev_server::with_database(&base, &super::branches::current_database(&self.project))?;
+		let moving = self.url.as_deref() != Some(target.as_str());
+
+		// Postgres copies a database only while nothing is connected to it,
+		// and the studio is connected to the one being left.
+		if moving && let Some(studio) = &mut self.studio {
+			studio.stop();
+		}
+
+		let switched = dev_server::with_database(&base, "postgres").and_then(|postgres| {
+			let database = super::branches::ensure(&self.project, &postgres)?;
+			Ok((dev_server::with_database(&base, &database)?, database))
+		});
+		let (url, database) = match switched {
+			Ok(switched) => switched,
+			Err(error) => {
+				self.restart_studio();
+				return Err(error);
+			}
+		};
 
 		if self.url.as_deref() == Some(url.as_str()) {
+			self.restart_studio();
 			return Ok(None);
 		}
 
 		println!("[db] switched to the database `{database}`");
 		self.url = Some(url);
 		self.tables_changed();
+
+		if self.studio.is_some() {
+			println!(
+				"[db] restarting the studio over `{database}`; open the new address it prints"
+			);
+			self.restart_studio();
+		}
+
 		Ok(Some(self.env()))
 	}
 
-	/// Starts the studio over this database, in the background, until the
-	/// returned process is dropped. It keeps the database it started with,
-	/// so a branch switch needs `leptoskit dev` restarted to follow.
-	pub(crate) fn studio(&self) -> Result<StudioProcess> {
+	/// Starts the studio over this database, in the background, until `dev`
+	/// stops. A branch switch moves it to the branch's database.
+	pub(crate) fn start_studio(&mut self, options: StudioOptions) -> Result<()> {
+		self.start_studio_with(options, |project, url, options| {
+			project.studio(url, 0, options)
+		})
+	}
+
+	/// [`Self::start_studio`], with `command` serving it over a URL.
+	fn start_studio_with(
+		&mut self,
+		options: StudioOptions,
+		command: fn(&Project, &str, StudioOptions) -> Result<Command>,
+	) -> Result<()> {
 		let Some(url) = &self.url else {
 			anyhow::bail!(
 				"the studio needs the database's URL: set {}",
 				self.project.config.url_env
 			);
 		};
-		println!("[db] building the studio into {}", self.project.package);
-		let child = self
-			.project
-			.studio(url, 0)?
-			.spawn()
-			.with_context(|| format!("couldn't run cargo for {}", self.project.package))?;
-		Ok(StudioProcess(child))
+		let mut studio = StudioProcess {
+			options,
+			command,
+			running: None,
+		};
+		studio.start(&self.project, url)?;
+		self.studio = Some(studio);
+		Ok(())
+	}
+
+	/// Starts the studio again over the current database, when it runs and
+	/// a branch switch stopped it. Problems are printed: the dev loop
+	/// carries on.
+	fn restart_studio(&mut self) {
+		let (Some(studio), Some(url)) = (&mut self.studio, &self.url) else {
+			return;
+		};
+
+		if studio.running.is_none()
+			&& let Err(error) = studio.start(&self.project, url)
+		{
+			eprintln!("[db] couldn't restart the studio: {error:#}");
+		}
 	}
 
 	/// The variables the app server needs to find the database: the URL,
@@ -571,8 +635,9 @@ mod tests {
 	#[test]
 	fn the_studio_needs_the_databases_url() {
 		let root = tempfile::tempdir().unwrap();
-		let sqlite = DevDatabase::open(project(root.path(), DbWatch::Migrate), None, None).unwrap();
-		let error = sqlite.studio().err().unwrap();
+		let mut sqlite =
+			DevDatabase::open(project(root.path(), DbWatch::Migrate), None, None).unwrap();
+		let error = sqlite.start_studio(StudioOptions::default()).err().unwrap();
 		assert!(
 			error
 				.to_string()
@@ -583,13 +648,14 @@ mod tests {
 		// With a URL, it starts cargo in the project, and stops it when
 		// dropped; this project has no workspace, so cargo metadata fails
 		// before anything runs.
-		let named = DevDatabase::open(
+		let mut named = DevDatabase::open(
 			project(root.path(), DbWatch::Migrate),
 			Some("sqlite::memory:".into()),
 			None,
 		)
 		.unwrap();
-		assert!(named.studio().is_err());
+		assert!(named.start_studio(StudioOptions::default()).is_err());
+		assert!(named.studio.is_none());
 	}
 
 	#[test]
@@ -599,6 +665,7 @@ mod tests {
 		let mut database = DevDatabase {
 			project: project(root.path(), DbWatch::Migrate),
 			url: Some(url.clone()),
+			studio: None,
 			server: None,
 		};
 		let migrations = |database: &DevDatabase| history(&database.project).names.len();
@@ -734,6 +801,122 @@ mod push_tests {
 		assert!(env[0].1.contains("/app?"), "{env:?}");
 	}
 
+	/// Stands in for the studio: `psql`, connected to the database the
+	/// studio would serve and idle until it's stopped, as the studio's own
+	/// connections are.
+	fn stand_in(_: &Project, url: &str, _: StudioOptions) -> Result<Command> {
+		let binaries = dev_server::test_binaries().context("no Postgres binaries")?;
+		let mut command =
+			Command::new(binaries.join(format!("psql{}", std::env::consts::EXE_SUFFIX)));
+		command
+			.args(["--no-psqlrc", "--quiet", url])
+			.stdin(std::process::Stdio::piped())
+			.stdout(std::process::Stdio::null());
+		Ok(command)
+	}
+
+	/// Waits until something holds a connection to `database` on the
+	/// server at `url`.
+	fn wait_for_connection(url: &str, database: &str) {
+		let postgres = dev_server::with_database(url, "postgres").unwrap();
+
+		for _ in 0..100 {
+			let connections = super::super::runtime()
+				.unwrap()
+				.block_on(async {
+					let db = leptoskit_db::Db::connect(&postgres).await?;
+					leptoskit_db::Read::fetch(
+						&db,
+						leptoskit_db::Statement {
+							sql: "SELECT 1 FROM pg_catalog.pg_stat_activity WHERE datname = $1 \
+							      AND application_name = 'psql'"
+								.to_owned(),
+							args: vec![leptoskit_db::Value::Text(database.to_owned())],
+						},
+					)
+					.await
+				})
+				.unwrap();
+
+			if !connections.is_empty() {
+				return;
+			}
+
+			std::thread::sleep(std::time::Duration::from_millis(100));
+		}
+
+		panic!("nothing connected to {database}");
+	}
+
+	#[test]
+	fn the_studio_follows_each_branch_s_database() {
+		let git = |root: &Path, args: &[&str]| {
+			let status = crate::git::command(root)
+				.args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+				.args(args)
+				.env("GIT_CONFIG_GLOBAL", root.join("no-global-config"))
+				.env("GIT_CONFIG_NOSYSTEM", "1")
+				.stdout(std::process::Stdio::null())
+				.stderr(std::process::Stdio::null())
+				.status()
+				.unwrap();
+			assert!(status.success(), "git {args:?}");
+		};
+		let Some(binaries) = dev_server::test_binaries() else {
+			return;
+		};
+		let root = tempfile::tempdir().unwrap();
+		git(root.path(), &["init", "--quiet", "--initial-branch=main"]);
+		git(
+			root.path(),
+			&["commit", "--quiet", "--allow-empty", "-m", "first"],
+		);
+		let project = Project {
+			root: root.path().to_path_buf(),
+			config: DbConfig {
+				dialect: DbDialect::Postgres,
+				dev_server: leptoskit_config::DbDevServer::Embedded,
+				watch: DbWatch::Off,
+				..DbConfig::default()
+			},
+			package: "app_db".into(),
+			name: "app".into(),
+		};
+		let mut database = DevDatabase::open(project, None, Some(&binaries)).unwrap();
+		database
+			.start_studio_with(StudioOptions::default(), stand_in)
+			.unwrap();
+		let serving = |database: &DevDatabase| {
+			let studio = database.studio.as_ref().unwrap();
+			let (url, child) = studio.running.as_ref().unwrap();
+			(url.clone(), child.id())
+		};
+		let (url, first) = serving(&database);
+		assert!(url.contains("/app?"), "{url}");
+		wait_for_connection(&url, "app");
+
+		// Staying on the branch leaves the studio running as it was.
+		assert_eq!(database.switch_branch().unwrap(), None);
+		assert_eq!(serving(&database), (url.clone(), first));
+
+		// Postgres copies the main branch's database for a new branch only
+		// while nothing is connected to it, so the studio stops first, then
+		// starts again over the copy.
+		git(root.path(), &["checkout", "--quiet", "-b", "feature"]);
+		let env = database.switch_branch().unwrap().unwrap();
+		assert!(env[0].1.contains("/app__feature?"), "{env:?}");
+		let (url, second) = serving(&database);
+		assert_eq!(url, env[0].1);
+		assert_ne!(second, first, "a new process");
+		wait_for_connection(&url, "app__feature");
+
+		git(root.path(), &["checkout", "--quiet", "main"]);
+		database.switch_branch().unwrap().unwrap();
+		let (url, third) = serving(&database);
+		assert!(url.contains("/app?"), "{url}");
+		assert_ne!(third, second);
+	}
+
 	#[test]
 	fn push_mode_changes_the_database_and_writes_no_migration() {
 		let root = tempfile::tempdir().unwrap();
@@ -751,6 +934,7 @@ mod push_tests {
 		let mut database = DevDatabase {
 			project,
 			url: None,
+			studio: None,
 			server: None,
 		};
 		let notes = Schema::new(
@@ -786,12 +970,36 @@ mod push_tests {
 }
 
 /// The studio `leptoskit dev --studio` runs beside the app, stopped when
-/// `dev` stops.
-pub(crate) struct StudioProcess(std::process::Child);
+/// `dev` stops, and before a branch switch moves its database.
+pub(crate) struct StudioProcess {
+	options: StudioOptions,
+	/// Builds the command that serves it over a database's URL:
+	/// [`Project::studio`], or a stand-in in tests.
+	command: fn(&Project, &str, StudioOptions) -> Result<Command>,
+	/// The database it serves, and the process serving it, while it runs.
+	running: Option<(String, Child)>,
+}
+
+impl StudioProcess {
+	fn start(&mut self, project: &Project, url: &str) -> Result<()> {
+		println!("[db] building the studio into {}", project.package);
+		let child = (self.command)(project, url, self.options)?
+			.spawn()
+			.with_context(|| format!("couldn't run cargo for {}", project.package))?;
+		self.running = Some((url.to_owned(), child));
+		Ok(())
+	}
+
+	fn stop(&mut self) {
+		if let Some((_, mut child)) = self.running.take() {
+			let _ = child.kill();
+			let _ = child.wait();
+		}
+	}
+}
 
 impl Drop for StudioProcess {
 	fn drop(&mut self) {
-		let _ = self.0.kill();
-		let _ = self.0.wait();
+		self.stop();
 	}
 }

@@ -283,6 +283,29 @@ fn new_order(quantity: i64) -> NewOrder {
 	}
 }
 
+/// The studio inserts through `Table::from_provided`, which fills in the
+/// slug and who's acting as an insert through `New…` does.
+#[test]
+fn rows_from_provided_columns_leave_slugs_and_actors_to_the_insert() {
+	use leptoskit_db::Table as _;
+	use leptoskit_db::Value;
+
+	assert_eq!(Article::PROVIDED, ["code", "title"]);
+	let article = Article::from_provided(vec![
+		Value::Text("a1".into()),
+		Value::Text("Hello, World".into()),
+	])
+	.unwrap();
+	assert_eq!(article.slug.as_inner(), "hello-world");
+	assert_eq!(article.deleted_at, None);
+
+	assert_eq!(SignedNote::PROVIDED, ["body"]);
+	assert_eq!(
+		Order::PROVIDED,
+		["reference", "status", "quantity", "unit_price", "total"]
+	);
+}
+
 #[tokio::test]
 async fn hooks_run_inside_every_single_row_write() {
 	on_both(async |db| {

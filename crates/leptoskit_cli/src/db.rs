@@ -47,7 +47,13 @@ mod push;
 mod watch;
 
 pub(crate) use watch::DevDatabase;
-pub(crate) use watch::StudioProcess;
+
+/// How `leptoskit dev --studio` serves the studio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StudioOptions {
+	/// Whether `private` columns show their values: `--reveal`.
+	pub reveal: bool,
+}
 
 /// The `leptoskit db` subcommands.
 #[derive(Debug, clap::Subcommand)]
@@ -105,10 +111,10 @@ pub enum DbCommand {
 		command: BranchCommand,
 	},
 	/// Serves the studio: a browser UI for the database, on this machine only,
-	/// at an address with a token made for the run. It reads every table
-	/// through the app's own policies, as the viewer you choose, and changes
-	/// rows only in edit mode, after you confirm each change. Release builds
-	/// never contain it.
+	/// at an address with a token made for the run. It reads every table and
+	/// view through the app's own policies, as the viewer you choose, and
+	/// inserts, changes, and deletes rows only in edit mode, after you
+	/// confirm each change. Release builds never contain it.
 	Studio {
 		/// The database URL; defaults to the variable `db.url_env` names.
 		#[arg(long)]
@@ -116,6 +122,10 @@ pub enum DbCommand {
 		/// The port to listen on, on 127.0.0.1; by default a free one.
 		#[arg(long, default_value_t = 0)]
 		port: u16,
+		/// Show the values of `private` columns, which otherwise read as
+		/// ‹private›. `secret` columns never show.
+		#[arg(long)]
+		reveal: bool,
 	},
 	/// Recreates a local development database from the migrations, deleting
 	/// every row.
@@ -239,11 +249,11 @@ pub fn run(command: DbCommand) -> Result<()> {
 			Ok(())
 		}
 		DbCommand::Status { url } => status(&project, url),
-		DbCommand::Studio { url, port } => {
+		DbCommand::Studio { url, port, reveal } => {
 			let (url, _server) = project.database(url)?;
 			println!("building the studio into {}", project.package);
 			let status = project
-				.studio(&url, port)?
+				.studio(&url, port, StudioOptions { reveal })?
 				.status()
 				.with_context(|| format!("couldn't run cargo for {}", project.package))?;
 			ensure!(status.success(), "the studio stopped: {status}");
@@ -492,7 +502,7 @@ impl Project {
 	/// The command that serves the studio on `127.0.0.1:port` over the
 	/// database at `url`: the db crate's `export_schema!()` test, built with
 	/// the studio and the dialect's driver, which serves until it's stopped.
-	pub(crate) fn studio(&self, url: &str, port: u16) -> Result<Command> {
+	pub(crate) fn studio(&self, url: &str, port: u16, options: StudioOptions) -> Result<Command> {
 		let manifest = self.manifest()?;
 		let mut features = self.config.features.clone();
 		features.extend(studio_features(&manifest, self.config.dialect)?);
@@ -507,6 +517,10 @@ impl Project {
 			.env(leptoskit_db::STUDIO_MIGRATIONS_ENV, self.migrations_dir())
 			.env(leptoskit_db::DIALECT_ENV, self.config.dialect.as_str())
 			.env(leptoskit_db::POLICIES_ENV, self.config.policies.as_str())
+			.env(
+				leptoskit_db::STUDIO_REVEAL_ENV,
+				if options.reveal { "1" } else { "0" },
+			)
 			.args(["--", "__leptoskit_db_export_schema", "--nocapture"]);
 		Ok(command)
 	}

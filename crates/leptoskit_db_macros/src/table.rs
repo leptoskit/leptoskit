@@ -1428,6 +1428,8 @@ impl Table<'_> {
 		let stamp = self.stamp_fn(&all);
 		let hooks = self.hook_fns();
 		let reads_through = self.reads_through_fn();
+		// Nothing inserts into a view.
+		let provided = self.args.view.is_none().then(|| self.provided_items());
 
 		quote! {
 			impl #krate::Table for #name {
@@ -1483,6 +1485,7 @@ impl Table<'_> {
 				#policies
 				#supertype
 				#reads_through
+				#provided
 			}
 		}
 	}
@@ -1575,18 +1578,7 @@ impl Table<'_> {
 			);
 		}
 
-		let secret: Vec<&str> = columns
-			.iter()
-			.filter(|column| {
-				column.args.visibility == Visibility::Secret
-					|| column.field.args.visibility == Visibility::Secret
-			})
-			.map(|column| column.name)
-			.collect();
-
-		if !secret.is_empty() {
-			consts.push(quote! { const SECRET: &'static [&'static str] = &[#(#secret),*]; });
-		}
+		consts.extend(visibility_consts(columns));
 
 		let geo_indexed: Vec<&str> = columns
 			.iter()
@@ -2569,35 +2561,14 @@ impl Table<'_> {
 			.provided_fields()
 			.into_iter()
 			.map(|(_, declaration)| declaration);
-		// A slug starts as its source's, before the insert makes it unique;
-		// it's made first, since the source moves into the row.
-		let slugs: Vec<TokenStream> = self
-			.fields
-			.iter()
-			.filter_map(|field| {
-				let from = field.args.slug.as_ref()?;
-				let binding = format_ident!("__slug_{}", unraw(&field.ident));
-				Some(quote_spanned! { located(field.ty.span())=>
-					let #binding = #krate::Slug::from_text(::core::convert::AsRef::<str>::as_ref(&self.#from));
-				})
-			})
-			.collect();
+		let slugs = self.slugs(|from| quote!(self.#from));
 		let assignments = self.fields.iter().map(|field| {
 			let ident = &field.ident;
 			let span = located(field.ty.span());
 
 			match &field.mixin {
 				None if is_provided(field) => quote! { #ident: self.#ident },
-				None if field.generated => quote_spanned! { span=> #ident: #krate::Id::new() },
-				None if field.args.slug.is_some() => {
-					let binding = format_ident!("__slug_{}", unraw(ident));
-					quote_spanned! { span=> #ident: #binding }
-				}
-				None => {
-					let ty = &field.ty;
-					let value = automatic(krate, &quote!(#ty), &field.args);
-					quote_spanned! { span=> #ident: #value }
-				}
+				None => self.filled(field),
 				Some(mixin)
 					if mixin
 						.columns
@@ -2648,6 +2619,126 @@ impl Table<'_> {
 				pub fn validate(&self) -> ::core::result::Result<(), #krate::ValidationErrors> {
 					#validate
 				}
+			}
+		}
+	}
+
+	/// The slugs a new row starts with, each its source's, read with
+	/// `source`, before the insert makes it unique. They're made first,
+	/// since the sources move into the row.
+	fn slugs(&self, source: impl Fn(&Ident) -> TokenStream) -> Vec<TokenStream> {
+		let krate = self.krate;
+		self.fields
+			.iter()
+			.filter_map(|field| {
+				let from = source(field.args.slug.as_ref()?);
+				let binding = format_ident!("__slug_{}", unraw(&field.ident));
+				Some(quote_spanned! { located(field.ty.span())=>
+					let #binding = #krate::Slug::from_text(::core::convert::AsRef::<str>::as_ref(&#from));
+				})
+			})
+			.collect()
+	}
+
+	/// A new row's field that the ORM fills in, rather than the insert: the
+	/// generated key, a slug made by [`Self::slugs`], or what [`automatic`]
+	/// gives.
+	fn filled(&self, field: &Field) -> TokenStream {
+		let krate = self.krate;
+		let ident = &field.ident;
+		let span = located(field.ty.span());
+
+		if field.generated {
+			quote_spanned! { span=> #ident: #krate::Id::new() }
+		} else if field.args.slug.is_some() {
+			let binding = format_ident!("__slug_{}", unraw(ident));
+			quote_spanned! { span=> #ident: #binding }
+		} else {
+			let ty = &field.ty;
+			let value = automatic(krate, &quote!(#ty), &field.args);
+			quote_spanned! { span=> #ident: #value }
+		}
+	}
+
+	/// `Table::PROVIDED` and `Table::from_provided`: the columns an insert
+	/// provides, and a new row from their values, filled in as `into_row`
+	/// fills it, so code that knows the table only as a `Table`, such as the
+	/// studio, inserts what the `New…` type would.
+	fn provided_items(&self) -> TokenStream {
+		let krate = self.krate;
+		let table_name = &self.args.name;
+		let columns = self.columns();
+		let provided: Vec<&Column<'_>> = columns
+			.iter()
+			.filter(|column| column.is_provided())
+			.collect();
+		let names = provided.iter().map(|column| column.name);
+		let local = |column: &Column<'_>| {
+			match column.inner {
+				None => format_ident!("__value_{}", unraw(&column.field.ident)),
+				Some(inner) => {
+					format_ident!(
+						"__value_{}__{}",
+						unraw(&column.field.ident),
+						unraw(&inner.ident)
+					)
+				}
+			}
+		};
+		let decoded = provided.iter().map(|column| {
+			let binding = local(column);
+			let ty = &column.ty;
+			let name = column.name;
+			quote_spanned! { column.span=>
+				let #binding: #ty = #krate::__private::decode_next(&mut values, #table_name, #name)?;
+			}
+		});
+		let slugs = self.slugs(|from| {
+			let binding = format_ident!("__value_{}", unraw(from));
+			quote!(#binding)
+		});
+		let assignments = self.fields.iter().map(|field| {
+			let ident = &field.ident;
+
+			match &field.mixin {
+				None if is_provided(field) => {
+					let binding = format_ident!("__value_{}", unraw(ident));
+					quote! { #ident: #binding }
+				}
+				None => self.filled(field),
+				Some(mixin) => {
+					let path = &mixin.path;
+					let span = located(field.ty.span());
+					let inner = mixin.columns.iter().map(|inner| {
+						let inner_ident = &inner.ident;
+
+						if is_provided_args(&inner.args) {
+							let binding =
+								format_ident!("__value_{}__{}", unraw(ident), unraw(inner_ident));
+							quote! { #inner_ident: #binding }
+						} else {
+							let position = inner.position;
+							let ty = quote!(<#path as #krate::MixinField<#position>>::Type);
+							let value = automatic(krate, &ty, &inner.args);
+							quote_spanned! { span=> #inner_ident: #value }
+						}
+					});
+					quote! { #ident: #path { #(#inner),* } }
+				}
+			}
+		});
+
+		quote! {
+			const PROVIDED: &'static [&'static str] = &[#(#names),*];
+
+			fn from_provided(values: ::std::vec::Vec<#krate::Value>) -> ::core::result::Result<Self, #krate::DecodeError> {
+				#[allow(unused_mut, unused_variables, reason = "used only when the insert provides a column")]
+				let mut values = values.into_iter();
+				#(#decoded)*
+				#[allow(unused_variables, reason = "used only when the table has timestamps")]
+				let now = #krate::now();
+				#(#slugs)*
+				::core::result::Result::Ok(Self { #(#assignments),* })
 			}
 		}
 	}
@@ -2867,6 +2958,36 @@ fn check_markers(columns: &[Column<'_>]) -> syn::Result<()> {
 /// Whether an insert provides the field, rather than the ORM.
 fn is_provided(field: &Field) -> bool {
 	!field.generated && is_provided_args(&field.args)
+}
+
+/// `Table::SECRET` and `Table::PRIVATE`, each only when it lists a column. A
+/// column a mixin marks, or one the table flattens a mixin into that way, is
+/// `secret` when either marks it so, and otherwise `private` when either
+/// marks it so.
+fn visibility_consts(columns: &[Column<'_>]) -> Vec<TokenStream> {
+	let marked = |visibility: Visibility| {
+		columns
+			.iter()
+			.filter(move |column| {
+				column.args.visibility == visibility || column.field.args.visibility == visibility
+			})
+			.map(|column| column.name)
+	};
+	let secret: Vec<&str> = marked(Visibility::Secret).collect();
+	let private: Vec<&str> = marked(Visibility::Private)
+		.filter(|column| !secret.contains(column))
+		.collect();
+	let mut consts = Vec::new();
+
+	if !secret.is_empty() {
+		consts.push(quote! { const SECRET: &'static [&'static str] = &[#(#secret),*]; });
+	}
+
+	if !private.is_empty() {
+		consts.push(quote! { const PRIVATE: &'static [&'static str] = &[#(#private),*]; });
+	}
+
+	consts
 }
 
 /// Whether an insert provides a column with these options, rather than the

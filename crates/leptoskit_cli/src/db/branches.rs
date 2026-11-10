@@ -129,16 +129,34 @@ pub(crate) fn database_for(main_database: &str, branches: &Branches) -> String {
 	format!("{short}_{hash}")
 }
 
-/// The database the project uses on the development server at `url`, which
-/// names its `postgres` database: the branch's, copied from the main
-/// branch's when it doesn't exist yet. Returns its name.
-pub(crate) fn ensure(project: &Project, url: &str) -> Result<String> {
+/// The name of the database the project uses on the branch it's on, and
+/// where it is in git when each branch has its own database.
+fn current(project: &Project) -> (String, Option<Branches>) {
 	let main = project.database_name();
 	let branches = project
 		.config
 		.branch_databases
 		.then(|| branches(&project.root))
 		.flatten();
+
+	match branches {
+		Some(branches) => (database_for(&main, &branches), Some(branches)),
+		None => (main, None),
+	}
+}
+
+/// The name of the database the project uses on the branch it's on, which
+/// [`ensure`] creates when it doesn't exist yet.
+pub(crate) fn current_database(project: &Project) -> String {
+	current(project).0
+}
+
+/// The database the project uses on the development server at `url`, which
+/// names its `postgres` database: the branch's, copied from the main
+/// branch's when it doesn't exist yet. Returns its name.
+pub(crate) fn ensure(project: &Project, url: &str) -> Result<String> {
+	let main = project.database_name();
+	let (name, branches) = current(project);
 	let Some(branches) = branches else {
 		ensure_database(url, &main, None)?;
 		return Ok(main);
@@ -148,7 +166,6 @@ pub(crate) fn ensure(project: &Project, url: &str) -> Result<String> {
 		println!("[db] HEAD is detached, so the main branch's database `{main}` is used");
 	}
 
-	let name = database_for(&main, &branches);
 	ensure_database(url, &main, None)?;
 
 	if name != main {

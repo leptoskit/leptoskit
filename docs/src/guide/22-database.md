@@ -63,7 +63,7 @@ $ leptoskit dev
 [db] branch `feat/karma` has its own database, `my_app__feat_karma`, copied from `my_app`
 ```
 
-`leptoskit dev` follows `git switch` while it runs: it stops the app server, moves to the branch's database, brings it in step with the tables, and restarts the server on it. `leptoskit db migrate`, `status`, `push`, and `reset` use the branch's database too. The main branch, `main` or `master` or whatever `origin` points at, keeps the app's database, and so does a detached `HEAD`.
+`leptoskit dev` follows `git switch` while it runs: it stops the app server, moves to the branch's database, brings it in step with the tables, and restarts the server on it. With `--studio`, it restarts the studio on the branch's database too, and prints its new address. `leptoskit db migrate`, `status`, `push`, and `reset` use the branch's database too. The main branch, `main` or `master` or whatever `origin` points at, keeps the app's database, and so does a detached `HEAD`.
 
 Postgres copies a database only while nothing is connected to it, so stop a `psql` session on the main branch's database before using a new branch. `leptoskit db branch list` shows each branch's database, and `leptoskit db branch prune --yes` deletes those whose branch is deleted or merged into the main branch; without `--yes` it only says what it would delete. Set `branch_databases = false` under `[db]` to share one database across branches. A database you name with `DATABASE_URL`, and SQLite apps, are left as they are.
 
@@ -84,11 +84,29 @@ Open that address. The studio runs inside your db crate's tests, so it reads eac
 - **A persona**: a kind of request with an identity you type. With `leptoskit::auth`, `account` views the data as a signed-in account, by its ID. Register your own with `register_persona!` for the globals your policies read.
 - **`system`**: every row, bypassing policies. You type why, and the audit log records it.
 
-It has pages for each table's rows, with paging, a filter, and sorting by any column; the schema the next migration would see; the migrations and which this database has; the SQL each table's policies add for the current viewer; the audit log; and the live changes the viewer hears of. Columns marked `secret` always show as `‹secret›`.
+It has pages for each table's rows, with paging, a filter, and sorting by any column; the schema the next migration would see; the migrations and which this database has; the SQL each table's policies add for the current viewer; the audit log; and the live changes the viewer hears of. Columns marked `secret` always show as `‹secret›`, and `private` ones as `‹private›`, so a screen you share or record doesn't show an email address or a phone number. The studio doesn't filter or sort by a column it hides either, since that would give its values away. When you need to see private values, start it with `--reveal`:
 
-**Changing rows.** Edits appear only in edit mode, which the header turns on. Each change shows what it will do and waits for you to confirm it, then runs through the table's own `save` or `delete`, as the current viewer, with its hooks, rules, policies, and audit log. A change the viewer may not make is refused with the policy's message.
+```console
+$ leptoskit db studio --reveal
+```
 
-**Who can reach it.** It listens on `127.0.0.1` only, on a free port unless you pass `--port`, and answers only requests that carry the token printed for this run and name that address, so other machines and other sites in your browser can't use it. `leptoskit dev --studio` runs it beside the app.
+Every page then says that private values are revealed, including the audit log's records of rows. `leptoskit dev --studio --reveal` does the same beside the app. `secret` columns never show, with or without it.
+
+Views are listed under the tables, and you browse their rows the same way, read-only. A view's own `select` policy applies, as it does to `AuthorStats::query()`. With `policies = "rls"`, Postgres also filters the tables a plain view reads by the viewer's policies, so viewing `author_stats` as a writer counts only the posts that writer may read. A materialized view shows the rows of its last refresh.
+
+**Changing rows.** Inserts, edits, and deletes appear only in edit mode, which the header turns on. Each change shows what it will do and waits for you to confirm it, then runs through the table's own `insert`, `save`, or `delete`, as the current viewer, with its hooks, rules, policies, and audit log. A change the viewer may not make is refused with the policy's message.
+
+**Adding a row.** In edit mode, a table page has **Insert a row**: a form with one field per column your `New…` type takes, read the way the filter reads values (`true` or `false`, whole numbers, RFC 3339 instants such as `2026-10-30T12:00:00Z`, JSON). The key, timestamps, version, slugs, `created_by`/`updated_by`, and generated columns aren't asked for: the insert fills them in, as `NewPost { … }.insert(&db)` would. Say you're checking that a writer can't post in someone else's name: view as that writer, insert a post with another writer's ID, and the studio shows your insert policy's message instead of the row.
+
+**Who can reach it.** It listens on `127.0.0.1` only, on a free port unless you pass `--port`, and answers only requests that carry the token printed for this run and name that address, so other machines and other sites in your browser can't use it. `leptoskit dev --studio` runs it beside the app. When you switch branches it stops the studio, moves to the branch's database, and starts the studio again over it, at a new address:
+
+```console
+$ git switch feat/karma
+[db] switched to the database `my_app__feat_karma`
+[db] restarting the studio over `my_app__feat_karma`; open the new address it prints
+[db] building the studio into my_app_db
+leptoskit db studio: http://127.0.0.1:52417/?token=91ad…
+```
 
 **It never ships.** The studio exists only in builds with debug assertions: `leptoskit db studio` builds your db crate's tests with the `studio` feature of `leptoskit_db` (or `db-studio` of `leptoskit`), and a release build leaves all of it out, even with the feature on.
 

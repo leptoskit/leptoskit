@@ -435,6 +435,8 @@ pub use table::STUDIO_ENV;
 #[cfg(feature = "server")]
 pub use table::STUDIO_MIGRATIONS_ENV;
 #[cfg(feature = "server")]
+pub use table::STUDIO_REVEAL_ENV;
+#[cfg(feature = "server")]
 pub use table::Table;
 #[cfg(feature = "server")]
 pub use table::schema;

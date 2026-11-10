@@ -78,6 +78,9 @@ fn values_show_as_text() {
 	assert_eq!(display(&Value::Null), Cell::Null);
 	assert_eq!(display(&Value::Null).text(), "NULL");
 	assert_eq!(Cell::Secret.text(), "‹secret›");
+	assert_eq!(Cell::Private.text(), "‹private›");
+	assert!(Cell::Secret.hidden() && Cell::Private.hidden());
+	assert!(!Cell::Null.hidden() && !Cell::Text("x".into()).hidden());
 	assert_eq!(display(&Value::Bool(true)).text(), "true");
 	assert_eq!(display(&Value::Int(3)).text(), "3");
 	assert_eq!(display(&Value::Float(0.5)).text(), "0.5");

@@ -5,6 +5,9 @@
 
 #![cfg(all(feature = "postgres", feature = "sqlite"))]
 
+#[cfg(all(feature = "studio", debug_assertions))]
+#[path = "support/studio.rs"]
+mod studio_client;
 mod support;
 
 use std::borrow::Cow;
@@ -50,6 +53,17 @@ impl Setting for Viewer {
 }
 
 leptoskit_db::register_setting!(Viewer);
+
+leptoskit_db::register_persona!(leptoskit_db::Persona {
+	name: "writer",
+	describe: "a writer, by ID",
+	context: |id| {
+		let id = id
+			.parse()
+			.map_err(|error| format!("not a writer's ID: {error}"))?;
+		Ok(Context::new().with(Viewer(id)))
+	},
+});
 
 /// Someone who writes. Anyone reads writers; each changes only their own,
 /// and the audit log records it.
@@ -581,6 +595,51 @@ async fn views_read_their_tables_as_their_reader() {
 			.posts,
 		4
 	);
+}
+
+/// The studio reads a view as its viewer under row-level security too: the
+/// view has no policy of its own, and Postgres filters the posts it reads.
+#[cfg(all(feature = "studio", debug_assertions))]
+#[tokio::test]
+async fn the_studio_reads_views_as_its_viewer() {
+	let Some(cluster) = PostgresCluster::start() else {
+		return;
+	};
+	let db = secured(&cluster).await;
+	let (ada, _) = seed(&db).await;
+	let running = leptoskit_db::studio::start(
+		db,
+		leptoskit_db::studio::Options {
+			address: "127.0.0.1:0".parse().unwrap(),
+			migrations: None,
+			reveal: false,
+		},
+	)
+	.await
+	.unwrap();
+	let (address, token) = studio_client::address_and_token(&running.url);
+	let ada = ada.to_string();
+
+	let as_ada = studio_client::get(
+		address,
+		&token,
+		"/table/titles",
+		&[("as", "writer"), ("who", &ada)],
+	)
+	.await;
+	assert_eq!(as_ada.status, 200);
+	assert!(as_ada.head.contains("cache-control: no-store"));
+	assert!(as_ada.body.contains("Rows 1–3 of 3"), "{}", as_ada.body);
+	assert!(as_ada.body.contains("grace-shared"));
+	assert!(!as_ada.body.contains("grace-locked"));
+	let anonymous = studio_client::get(address, &token, "/table/titles", &[]).await;
+	assert!(
+		anonymous.body.contains("Rows 1–1 of 1"),
+		"{}",
+		anonymous.body
+	);
+	assert!(anonymous.body.contains("ada-published"));
+	running.stop();
 }
 
 #[tokio::test]

@@ -33,6 +33,7 @@ impl ::leptoskit_db::Table for AuthorStats {
     const VERSION: ::core::option::Option<&'static str> = ::core::option::Option::None;
     const PACK: ::core::option::Option<&'static str> = ::core::option::Option::None;
     const GENERATED: &'static [&'static str] = &[];
+    const PRIVATE: &'static [&'static str] = &["posts"];
     const READ_ONLY: bool = true;
     type Columns = AuthorStatsColumns;
     fn columns() -> &'static AuthorStatsColumns {

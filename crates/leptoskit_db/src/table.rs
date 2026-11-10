@@ -63,6 +63,10 @@ pub trait Table: Sized + 'static {
 	/// The `secret` columns, which the audit log never records.
 	const SECRET: &'static [&'static str] = &[];
 
+	/// The `private` columns, which only server code reads: the studio hides
+	/// them unless it was started with `--reveal`.
+	const PRIVATE: &'static [&'static str] = &[];
+
 	/// Whether every change is recorded in the audit log:
 	/// `#[db::table(audit)]`.
 	const AUDIT: bool = false;
@@ -82,6 +86,12 @@ pub trait Table: Sized + 'static {
 
 	/// Whether the table is a view, which nothing writes to.
 	const READ_ONLY: bool = false;
+
+	/// The columns an insert provides, in [`Self::COLUMNS`] order: all but
+	/// the generated key and those the ORM or the database fills in, as the
+	/// generated `New…` type takes them.
+	#[doc(hidden)]
+	const PROVIDED: &'static [&'static str] = Self::COLUMNS;
 
 	/// The tables a read of this one reads in its place: those a view's
 	/// query reads, `#[db::view(reads(…))]`. `None` for a view that doesn't
@@ -116,6 +126,13 @@ pub trait Table: Sized + 'static {
 
 	/// A row from values in [`Self::COLUMNS`] order.
 	fn from_values(values: Vec<Value>) -> Result<Self, DecodeError>;
+
+	/// A new row from values of [`Self::PROVIDED`], in order, with the rest
+	/// filled in as the `New…` type's `into_row` fills them.
+	#[doc(hidden)]
+	fn from_provided(values: Vec<Value>) -> Result<Self, DecodeError> {
+		Self::from_values(values)
+	}
 
 	/// Sets the `updated_at` column, if there is one, to now.
 	fn touch(&mut self);
@@ -801,6 +818,10 @@ pub const STUDIO_DATABASE_ENV: &str = "LEPTOSKIT_DB_STUDIO_DATABASE";
 /// The environment variable naming the app's migrations directory, for the
 /// studio's migrations page.
 pub const STUDIO_MIGRATIONS_ENV: &str = "LEPTOSKIT_DB_STUDIO_MIGRATIONS";
+
+/// The environment variable that makes the studio show `private` columns'
+/// values, when it's `1`: `leptoskit db studio --reveal` sets it.
+pub const STUDIO_REVEAL_ENV: &str = "LEPTOSKIT_DB_STUDIO_REVEAL";
 
 /// Writes every table's schema as `schema.json` when `leptoskit db` asks, by
 /// setting [`SCHEMA_OUT_ENV`]; otherwise does nothing, so an ordinary

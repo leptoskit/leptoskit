@@ -231,6 +231,40 @@ impl ::leptoskit_db::Table for Post {
     > + ::core::marker::Send {
         <Self as ::leptoskit_db::AfterDelete>::after_delete(self, connection)
     }
+    const PROVIDED: &'static [&'static str] = &["title", "token"];
+    fn from_provided(
+        values: ::std::vec::Vec<::leptoskit_db::Value>,
+    ) -> ::core::result::Result<Self, ::leptoskit_db::DecodeError> {
+        #[allow(
+            unused_mut,
+            unused_variables,
+            reason = "used only when the insert provides a column"
+        )]
+        let mut values = values.into_iter();
+        let __value_title: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "posts",
+            "title",
+        )?;
+        let __value_token: String = ::leptoskit_db::__private::decode_next(
+            &mut values,
+            "posts",
+            "token",
+        )?;
+        #[allow(unused_variables, reason = "used only when the table has timestamps")]
+        let now = ::leptoskit_db::now();
+        let __slug_slug = ::leptoskit_db::Slug::from_text(
+            ::core::convert::AsRef::<str>::as_ref(&__value_title),
+        );
+        ::core::result::Result::Ok(Self {
+            id: ::leptoskit_db::Id::new(),
+            title: __value_title,
+            slug: __slug_slug,
+            author_id: <Id<User> as ::leptoskit_db::ActorColumn>::unset(),
+            editor: <Option<uuid::Uuid> as ::leptoskit_db::ActorColumn>::unset(),
+            token: __value_token,
+        })
+    }
 }
 /// A new [`Post`] to insert: everything except what the database layer fills in.
 pub struct NewPost {

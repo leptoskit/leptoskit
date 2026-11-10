@@ -25,13 +25,26 @@ pub trait View: Table {
 /// without listing views by hand.
 #[doc(hidden)]
 pub struct ViewEntry {
-	definition: fn() -> leptoskit_db_schema::View,
+	pub(crate) definition: fn() -> leptoskit_db_schema::View,
+	/// What the studio does to the view: reads it.
+	#[cfg(all(
+		feature = "studio",
+		debug_assertions,
+		any(feature = "postgres", feature = "sqlite")
+	))]
+	pub(crate) studio: crate::studio::TableOps,
 }
 
 impl ViewEntry {
 	pub const fn of<V: View>() -> Self {
 		Self {
 			definition: V::view,
+			#[cfg(all(
+				feature = "studio",
+				debug_assertions,
+				any(feature = "postgres", feature = "sqlite")
+			))]
+			studio: crate::studio::TableOps::view::<V>(),
 		}
 	}
 }
