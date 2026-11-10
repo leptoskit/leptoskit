@@ -1911,6 +1911,14 @@ mod tests {
 		let linux = std::fs::read_to_string(&existing).unwrap();
 		assert!(linux.contains("pub fn plugins<B: leptoskit::native::NativeBackend>"));
 
+		// Several missing hosts share one held lock through all their writes.
+		let macos_path = root.join(".leptoskit/macos/registrant.rs");
+		std::fs::remove_file(&macos_path).unwrap();
+		std::fs::remove_file(&existing).unwrap();
+		let hosts =
+			workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target))).unwrap();
+		assert_eq!(hosts.written, [macos_path, existing]);
+
 		let error = workspace_hosts_for(root, &config, &candidates, |_| {
 			anyhow::bail!("cargo metadata failed")
 		})
@@ -1919,6 +1927,36 @@ mod tests {
 			format!("{error:#}"),
 			"resolve the macos host's plugins: cargo metadata failed"
 		);
+
+		// Lint must respect the same lock as a native build.
+		let macos_directory = root.join(".leptoskit/macos");
+		std::fs::remove_file(macos_directory.join("registrant.rs")).unwrap();
+		let guard = lock::acquire(root).unwrap();
+		let error = workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+			.unwrap_err();
+		assert!(
+			error
+				.to_string()
+				.contains("another native prepare or build")
+		);
+		drop(guard);
+
+		#[cfg(unix)]
+		{
+			// A generated directory must not redirect lint's writes elsewhere.
+			std::fs::remove_dir(&macos_directory).unwrap();
+			let elsewhere = root.join("elsewhere");
+			std::fs::create_dir(&elsewhere).unwrap();
+			std::os::unix::fs::symlink(&elsewhere, &macos_directory).unwrap();
+			let error =
+				workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+					.unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				".leptoskit must be an ordinary generated directory"
+			);
+			assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+		}
 		assert!(LOCAL_HOSTS.contains(&Target::Tui));
 	}
 

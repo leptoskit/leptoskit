@@ -425,6 +425,76 @@ mod tests {
 		// it can't compile.
 		assert_eq!(prepare_hosts(dir.path()), Vec::<String>::new());
 		assert!(!dir.path().join(".leptoskit/tui/registrant.rs").exists());
+		std::fs::write(
+			dir.path().join("leptoskit.toml"),
+			"[app]\nname = \"notes\"\nplatforms = [\"web\"]\n",
+		)
+		.expect("web-only config");
+		assert_eq!(prepare_hosts(dir.path()), Vec::<String>::new());
+	}
+
+	fn lint_fixture(source: &str) -> tempfile::TempDir {
+		let dir = tempfile::tempdir().expect("scratch");
+		std::fs::write(
+			dir.path().join("Cargo.toml"),
+			"[package]\nname = \"lint-probe\"\nversion = \"0.1.0\"\nedition = \
+			 \"2024\"\n[workspace]\n[features]\nnative-host = []\n",
+		)
+		.expect("manifest");
+		std::fs::create_dir(dir.path().join("src")).expect("source directory");
+		std::fs::write(dir.path().join("src/lib.rs"), source).expect("source");
+		dir
+	}
+
+	#[test]
+	fn clippy_builds_with_the_native_host_features() {
+		let dir = lint_fixture(
+			"#[cfg(not(feature = \"native-host\"))]\ncompile_error!(\"the host feature must reach \
+			 clippy\");\n",
+		);
+		let report = run_clippy(dir.path(), true, &[], &[], &["native-host".to_owned()])
+			.expect("clippy starts");
+		assert_eq!((report.errors, report.warnings), (0, 0), "{report:?}");
+		assert!(report.failure.is_none(), "{report:?}");
+	}
+
+	#[test]
+	fn lint_runs_clippy_in_a_fresh_workspace() {
+		const CHILD_ROOT: &str = "LEPTOSKIT_TEST_LINT_WORKSPACE";
+		if let Some(root) = std::env::var_os(CHILD_ROOT) {
+			// Change the working directory only in this isolated child.
+			std::env::set_current_dir(root).expect("fixture directory");
+			run(&LintArgs {
+				paths: Vec::new(),
+				no_clippy: false,
+				deny_warnings: true,
+				clippy_args: Vec::new(),
+			})
+			.expect("fresh workspace passes both lint stages");
+			return;
+		}
+		let dir = lint_fixture("pub fn ready() {}\n");
+		std::fs::write(
+			dir.path().join("leptoskit.toml"),
+			"[app]\nname = \"lint-probe\"\nplatforms = [\"web\", \"macos\", \"linux\", \
+			 \"windows\", \"ios\", \"android\", \"tui\"]\n",
+		)
+		.expect("config");
+		let result = Command::new(std::env::current_exe().expect("test executable"))
+			.args([
+				"--exact",
+				"lint::tests::lint_runs_clippy_in_a_fresh_workspace",
+				"--nocapture",
+			])
+			.env(CHILD_ROOT, dir.path())
+			.output()
+			.expect("isolated lint process");
+		assert!(
+			result.status.success(),
+			"{}\n{}",
+			String::from_utf8_lossy(&result.stdout),
+			String::from_utf8_lossy(&result.stderr)
+		);
 	}
 
 	#[test]
