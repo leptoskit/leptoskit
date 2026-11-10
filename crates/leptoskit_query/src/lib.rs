@@ -103,8 +103,11 @@
 //! serializable and the server fetches it, streams it with the HTML, and the
 //! browser hydrates the cache with it — the same mechanism leptos resources
 //! use — so the first render shows the server's data with no loading state.
-//! Read such queries inside a `<Suspense>` with `query.await` so the server
-//! waits for the data before rendering.
+//! Add [`with_ssr_errors`](QueryScope::with_ssr_errors) as well and an error
+//! is carried the same way. Read such queries inside a `<Suspense>`: on the
+//! server, reading one that is still loading holds the boundary until it
+//! settles, so the server renders what the browser hydrates. A query seeded
+//! this way doesn't fetch until hydration has finished.
 //!
 //! Give such scopes a [stale time](QueryScope::with_stale_time). Data is
 //! stale the moment it is fetched by default, so without one the browser

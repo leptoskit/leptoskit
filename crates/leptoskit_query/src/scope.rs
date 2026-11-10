@@ -210,6 +210,7 @@ pub struct QueryScope<K, T, E> {
 	pub(crate) options: QueryOptions<E>,
 	pub(crate) tags: Option<TagsFn<K>>,
 	pub(crate) codec: Option<DataCodec<T>>,
+	pub(crate) error_codec: Option<DataCodec<E>>,
 	pub(crate) data_eq: Option<DataEqFn<T>>,
 }
 
@@ -223,6 +224,7 @@ impl<K, T, E> Clone for QueryScope<K, T, E> {
 			options: self.options.clone(),
 			tags: self.tags.clone(),
 			codec: self.codec.clone(),
+			error_codec: self.error_codec.clone(),
 			data_eq: self.data_eq.clone(),
 		}
 	}
@@ -235,6 +237,7 @@ impl<K, T, E> fmt::Debug for QueryScope<K, T, E> {
 			.field("name", &self.name)
 			.field("options", &self.options)
 			.field("ssr", &self.codec.is_some())
+			.field("ssr_errors", &self.error_codec.is_some())
 			.finish_non_exhaustive()
 	}
 }
@@ -289,6 +292,7 @@ where
 			options: QueryOptions::default(),
 			tags: None,
 			codec: None,
+			error_codec: None,
 			data_eq: None,
 		}
 	}
@@ -385,6 +389,32 @@ where
 	#[must_use]
 	pub fn with_codec(mut self, codec: DataCodec<T>) -> Self {
 		self.codec = Some(codec);
+		self
+	}
+
+	/// Streams a server render's error to the browser too, using serde JSON,
+	/// for a scope that also has [`with_ssr`](Self::with_ssr).
+	///
+	/// Without this a query that failed while the server rendered starts the
+	/// browser from loading, so a page that showed the error on the server
+	/// does not match when it hydrates. With it the browser shows the same
+	/// error first, then retries once hydration has finished, as
+	/// [`retry_on_mount`](crate::QueryOptions::retry_on_mount) asks. Only
+	/// the server's render streams errors:
+	/// [`QueryClient::dehydrate`](crate::QueryClient::dehydrate) still
+	/// carries data alone.
+	#[must_use]
+	pub fn with_ssr_errors(self) -> Self
+	where
+		E: Serialize + DeserializeOwned,
+	{
+		self.with_error_codec(DataCodec::json())
+	}
+
+	/// Like [`with_ssr_errors`](Self::with_ssr_errors) with a custom codec.
+	#[must_use]
+	pub fn with_error_codec(mut self, codec: DataCodec<E>) -> Self {
+		self.error_codec = Some(codec);
 		self
 	}
 

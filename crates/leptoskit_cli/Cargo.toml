@@ -141,6 +141,8 @@ leptoskit_plugin_http = { workspace = true }
 leptoskit_rpc = { workspace = true, features = ["live", "postgres", "sqlite"] }
 leptoskit_yoga = { workspace = true }
 png = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
 tempfile = "3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 tower = { workspace = true, features = ["util"] }

@@ -5,6 +5,7 @@
 
 use leptos::prelude::Get as _;
 use leptos::prelude::Owner;
+use leptos::prelude::ScopedFuture;
 use leptoskit_rpc as rpc;
 use leptoskit_rpc::client::ClientConfig;
 
@@ -61,27 +62,31 @@ async fn live_hooks_without_a_connection_use_the_ordinary_client() {
 	tokio::task::LocalSet::new()
 		.run_until(async {
 			let owner = Owner::new();
-			owner.set();
-			leptoskit_query::QueryClient::new().provide();
-			rpc::server::Server::new(db.clone()).install();
+			owner
+				.with(|| {
+					ScopedFuture::new(async {
+						leptoskit_query::QueryClient::new().provide();
+						rpc::server::Server::new(db.clone()).install();
 
-			let bodies = rpc::use_live(|| OfflineBodies {});
-			tokio::time::timeout(std::time::Duration::from_secs(10), async {
-				while bodies.data().is_none() {
-					tokio::task::yield_now().await;
-				}
-			})
-			.await
-			.expect("the rows arrive");
-			let send = rpc::use_live_mutation::<OfflineAdd>();
-			send.mutate_async(OfflineAdd {
-				body: "offline".into(),
-			})
-			.await
-			.unwrap();
-			let notes = OfflineNote::query().all(&db).await.unwrap();
-			assert_eq!(notes.len(), 1);
-			assert_eq!(notes[0].body, "offline");
+						let bodies = rpc::use_live(|| OfflineBodies {});
+						let rows =
+							tokio::time::timeout(std::time::Duration::from_secs(10), bodies.wait())
+								.await
+								.expect("the rows arrive")
+								.expect("the ordinary query succeeds");
+						assert_eq!(rows, Vec::<String>::new());
+						let send = rpc::use_live_mutation::<OfflineAdd>();
+						send.mutate_async(OfflineAdd {
+							body: "offline".into(),
+						})
+						.await
+						.unwrap();
+						let notes = OfflineNote::query().all(&db).await.unwrap();
+						assert_eq!(notes.len(), 1);
+						assert_eq!(notes[0].body, "offline");
+					})
+				})
+				.await;
 		})
 		.await;
 }

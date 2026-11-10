@@ -102,6 +102,8 @@ pub fn provide() -> Shell {
 #[cfg(feature = "web")]
 #[leptos::component]
 pub fn App() -> impl leptos::prelude::IntoView {
+	use leptos::prelude::*;
+
 	let shell = provide();
 	reactive_graph::owner::provide_context(shell);
 	let navigation = {
@@ -124,7 +126,13 @@ pub fn App() -> impl leptos::prelude::IntoView {
 		}
 	};
 
-	move || leptoskit::web::render(auth::screens().gate(|| navigation.render()))
+	Suspense(
+		SuspenseProps::builder()
+			.children(TypedChildren::to_children(move || {
+				move || leptoskit::web::render(auth::screens().gate(|| navigation.render()))
+			}))
+			.build(),
+	)
 }
 
 /// The complete HTML document sent by the SSR server.
@@ -158,8 +166,10 @@ pub fn hydrate() {
 	leptoskit::devtools::install(env!("CARGO_PKG_NAME"));
 	// The browser's sign-in client talks to the page's own origin, and
 	// configures the RPC client and live socket too.
-	leptoskit::auth::client::configure(leptoskit::auth::client::ClientConfig::new());
-	leptos::mount::hydrate_body(App);
+	leptos::mount::hydrate_body(|| {
+		leptoskit::auth::client::configure(leptoskit::auth::client::ClientConfig::new());
+		App()
+	});
 }
 
 /// Mounts the CSR application when the browser loads its Wasm module.
@@ -168,8 +178,10 @@ pub fn hydrate() {
 pub fn start() {
 	#[cfg(feature = "devtools")]
 	leptoskit::devtools::install(env!("CARGO_PKG_NAME"));
-	leptoskit::auth::client::configure(leptoskit::auth::client::ClientConfig::new());
-	leptos::mount::mount_to_body(App);
+	leptos::mount::mount_to_body(|| {
+		leptoskit::auth::client::configure(leptoskit::auth::client::ClientConfig::new());
+		App()
+	});
 }
 
 /// The native guest's executor for requests the query client starts itself.
