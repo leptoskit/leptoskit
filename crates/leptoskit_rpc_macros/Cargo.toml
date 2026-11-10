@@ -20,6 +20,8 @@ convert_case = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["full"] }
+# Reads whether the calling crate declares a `service` feature.
+toml = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

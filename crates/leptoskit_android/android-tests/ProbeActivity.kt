@@ -600,7 +600,6 @@ class ProbeActivity : Activity() {
         presses: Int,
         spinner: ProgressBar,
     ) {
-
         val taps = gestureCount(0)
         val padAt = center(pad)
         val tapDown = android.os.SystemClock.uptimeMillis()
@@ -629,7 +628,11 @@ class ProbeActivity : Activity() {
         handler.postDelayed({ runCatching { captureHardwareWindow(spinner) }.onFailure(::failed) }, 150)
     }
 
-    private fun gestureCount(index: Int): Int = org.json.JSONObject(nativeStatus()).getJSONArray("gestures").getInt(index)
+    private fun gestureCount(index: Int): Int =
+        org.json
+            .JSONObject(nativeStatus())
+            .getJSONArray("gestures")
+            .getInt(index)
 
     private fun center(view: View): Pair<Float, Float> {
         val child = IntArray(2)
@@ -660,17 +663,23 @@ class ProbeActivity : Activity() {
         down.recycle()
         val properties =
             arrayOf(
-                android.view.MotionEvent.PointerProperties().apply { id = 0 },
-                android.view.MotionEvent.PointerProperties().apply { id = 1 },
+                android.view.MotionEvent
+                    .PointerProperties()
+                    .apply { id = 0 },
+                android.view.MotionEvent
+                    .PointerProperties()
+                    .apply { id = 1 },
             )
-        val first = android.view.MotionEvent.PointerCoords().apply {
-            this.x = x - 30f
-            this.y = y
-        }
-        val second = android.view.MotionEvent.PointerCoords().apply {
-            this.x = x + 30f
-            this.y = y
-        }
+        val first =
+            android.view.MotionEvent.PointerCoords().apply {
+                this.x = x - 30f
+                this.y = y
+            }
+        val second =
+            android.view.MotionEvent.PointerCoords().apply {
+                this.x = x + 30f
+                this.y = y
+            }
         val pointerDown =
             android.view.MotionEvent.obtain(
                 time,

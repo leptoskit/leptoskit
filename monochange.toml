@@ -101,6 +101,7 @@ packages = [
 	"leptoskit_plugin_device",
 	"leptoskit_plugin_device_policy",
 	"leptoskit_plugin_device_keys",
+	"leptoskit_plugin_dev_client",
 	"leptoskit_plugin_android_intent",
 	"leptoskit_plugin_secure_store",
 	"leptoskit_plugin_linking",
@@ -537,6 +538,9 @@ path = "crates/leptoskit_plugin_power_monitor"
 path = "crates/leptoskit_plugin_print"
 [package.leptoskit_plugin_recorder]
 path = "crates/leptoskit_plugin_recorder"
+
+[package.leptoskit_plugin_dev_client]
+path = "crates/leptoskit_plugin_dev_client"
 
 [package.leptoskit_plugin_single_instance]
 path = "crates/leptoskit_plugin_single_instance"

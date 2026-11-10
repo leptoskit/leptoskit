@@ -129,6 +129,7 @@ async fn a_failed_query_is_not_retried_by_the_rebuild_its_error_caused() {
 
 #[tokio::test]
 async fn a_mount_after_the_window_refetches_stale_data() {
+	common::init();
 	let client = QueryClient::new().with_defaults(
 		QueryDefaults::new()
 			.with_refetch_on_window_focus(RefetchOn::Never)

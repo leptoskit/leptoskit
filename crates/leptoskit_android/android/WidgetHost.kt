@@ -204,11 +204,15 @@ class WidgetHost(
                     cancel.recycle()
                     true
                 }
+
                 1 -> {
                     view.pass(event)
                     true
                 }
-                else -> view.pass(event)
+
+                else -> {
+                    view.pass(event)
+                }
             }
         } finally {
             routing = false
