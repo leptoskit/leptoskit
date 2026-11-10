@@ -56,6 +56,19 @@ jobs:
       - name: test configuration contracts and migrations
         run: cargo test --locked --package leptoskit_config --all-features
 
+  budgets:
+    name: performance budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: caps and boot
+        run: python3 setup/scripts/budgets.py
+
   use:
     name: use coverage and portability
     runs-on: ubuntu-latest

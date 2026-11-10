@@ -1,0 +1,11 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Runs the caps and boot checks, and prints the build, test, lint, and workspace commands
+
+Usage: leptoskit budgets
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

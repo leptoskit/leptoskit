@@ -1571,7 +1571,7 @@ fn host_manifest(
 }
 
 /// The CSR document also documents the browser bootstrap for custom web hosts.
-fn index_html(name: &str) -> String {
+pub(crate) fn index_html(name: &str) -> String {
 	let lib = format!("{}_app", name.replace('-', "_"));
 	format!(
 		r#"<!doctype html>
