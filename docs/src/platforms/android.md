@@ -39,6 +39,12 @@ You can also open the `android/` folder in Android Studio and run it from there.
 
 The `android/` folder is yours: the activity, the manifest, the Gradle files, and `Cargo.toml` for native Rust dependencies such as [runtime plugins](plugins.md). The CLI keeps its generated files in `.leptoskit/android/`, including the R8 keep rules that release builds need for the native library; put rules for your own code in `android/app/proguard-rules.pro`.
 
+## System Back
+
+When you render a `Router`, Android's Back button and completed back gesture return to the previous route. For example, opening a note from a list and pressing Back returns to the list. At the first route, Back leaves the app. The gesture does not preview the previous route while dragging.
+
+Newly generated activities include this behavior. Existing apps need the updated activity Back callbacks as well as the updated guest and native runtime.
+
 ## Test it
 
 Each project includes an instrumented test that taps **Add one** and waits for **Count: 1**. Update it when you change the home screen, then run it with an emulator running:
@@ -50,7 +56,7 @@ cd android
 
 ## How it differs from macOS
 
-- The generated app draws ten components: `View`, `Text`, `Button`, `Pressable`, `TextInput`, `PasswordInput`, `ScrollView`, `Image`, `Vector`, and `Rive`. Others, such as `Switch` or `Slider`, stop it with an "unsupported widget" error. The `leptoskit_android` backend crate draws every component; see [generated apps and backend crates](readme.md#generated-apps-and-backend-crates).
+- Generated apps also draw `Switch`, `Checkbox`, `Radio`, `Slider`, `LinearProgressIndicator`, and `ActivityIndicator` with Android controls. Switches and checkboxes report their checked state; radio options select within the group your screen controls, and sliders report values on their configured step grid. Tapping outside an editor clears focus and dismisses the keyboard. The keyboard moves to the next enabled field, or submits and dismisses from the last field. System Back is not yet connected to the file router; use an in-app Back button.
 - [Rive](../guide/20-rive.md) uploads native vector frames to a reusable Android bitmap. The generated host schedules through Choreographer, stops when idle or offscreen, and treats disabled system animations as reduced motion. Native playback rejects text, image, layout, script, and audio assets.
 - In the backend crate, a `Custom` widget kind with no registered native implementation stops the app. Other platforms render an empty container instead.
 - TalkBack gets a smaller set of roles than macOS's accessibility API.
