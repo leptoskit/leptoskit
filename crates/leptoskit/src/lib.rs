@@ -454,6 +454,13 @@ pub mod scene3d {
 	pub use leptoskit_3d::*;
 }
 
+#[cfg(feature = "game")]
+pub mod game {
+	//! A game host: Rust gameplay, leptoskit menus, and a wgpu picture of the
+	//! world.
+	pub use leptoskit_game::*;
+}
+
 #[cfg(feature = "rive")]
 pub mod rive {
 	//! Bounded Rive assets and owned native/browser playback.

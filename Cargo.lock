@@ -4853,6 +4853,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lantern"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5120,6 +5127,7 @@ dependencies = [
  "leptoskit_devtools",
  "leptoskit_extension",
  "leptoskit_form",
+ "leptoskit_game",
  "leptoskit_gtk",
  "leptoskit_idp",
  "leptoskit_l10n",
@@ -5827,6 +5835,18 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_testing",
  "serde",
+]
+
+[[package]]
+name = "leptoskit_game"
+version = "0.3.0"
+dependencies = [
+ "glam",
+ "leptoskit_canvas",
+ "leptoskit_native",
+ "leptoskit_yoga",
+ "png 0.17.16",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
