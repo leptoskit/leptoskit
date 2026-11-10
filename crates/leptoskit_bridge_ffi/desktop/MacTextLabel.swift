@@ -21,25 +21,41 @@ final class TextLabel: NSView {
     private(set) var font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
     private(set) var textColor = NSColor.labelColor
     private(set) var alignment = NSTextAlignment.natural
+    /// The height of every line, or nil for the font's own.
+    private(set) var lineHeight: CGFloat?
     private var string = NSAttributedString()
 
     override var isFlipped: Bool { true }
 
     /// Updates what the label shows, redrawing only when something changed.
-    func update(text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment) {
+    func update(
+        text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment, lineHeight: CGFloat? = nil
+    ) {
         guard text != self.text || font != self.font || color != textColor || alignment != self.alignment
+            || lineHeight != self.lineHeight
         else { return }
 
         self.text = text
         self.font = font
         textColor = color
         self.alignment = alignment
+        self.lineHeight = lineHeight
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
         paragraph.lineBreakMode = .byWordWrapping
-        string = NSAttributedString(string: text, attributes: [
+        var attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph
-        ])
+        ]
+
+        // Every line is exactly the line height with its glyphs centered, as
+        // `AppKitTextMeasurer` measures them: AppKit puts the extra above the glyphs.
+        if let lineHeight {
+            paragraph.minimumLineHeight = lineHeight
+            paragraph.maximumLineHeight = lineHeight
+            attributes[.baselineOffset] = (lineHeight - (font.ascender - font.descender)) / 2
+        }
+
+        string = NSAttributedString(string: text, attributes: attributes)
 
         needsDisplay = true
     }

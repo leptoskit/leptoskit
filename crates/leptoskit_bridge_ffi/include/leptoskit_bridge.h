@@ -102,7 +102,7 @@ int32_t lk_app_poll_service(lk_app *app);
 /* 0 is an ordinary app entry; 1 is a platform background tick. */
 int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason);
 /* Host text measurement. measure lays out len UTF-8 bytes at font_size logical
- * points, CSS font_weight (400-700), and rtl direction within width logical
+ * points, CSS font_weight (100-900), and rtl direction within width logical
  * points (-1 unbounded, -2 the widest word), writes the logical width and
  * height to out[0] and out[1], and returns true. It may run on any thread.
  * release runs once, after the last measurement. */

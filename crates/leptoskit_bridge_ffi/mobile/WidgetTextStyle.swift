@@ -25,6 +25,17 @@ enum WidgetTextStyle {
             if label.textColor != color { label.textColor = color }
 
             if label.textAlignment != alignment { label.textAlignment = alignment }
+
+            if let lineHeight = props.lineHeight?.points(fontSize: font.pointSize) {
+                let lined = lined(props.text ?? "", font: font, color: color, alignment: alignment,
+                                  lineHeight: lineHeight)
+
+                if label.attributedText != lined { label.attributedText = lined }
+            } else if let shown = label.attributedText, shown.length > 0,
+                      shown.attribute(.baselineOffset, at: 0, effectiveRange: nil) != nil {
+                // Plain text drops the line height's paragraph style.
+                label.text = props.text
+            }
         }
 
         if let button = widget as? UIButton {
@@ -40,6 +51,24 @@ enum WidgetTextStyle {
         if let field = widget as? UITextField {
             applyField(props, to: field, font: font, alignment: alignment)
         }
+    }
+
+    /// Text whose every line is `lineHeight` tall with its glyphs centered, as
+    /// CSS's `line-height` sets them and `UIKitTextMeasurer` measures them.
+    static func lined(
+        _ text: String, font: UIFont, color: UIColor, alignment: NSTextAlignment, lineHeight: CGFloat
+    ) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.minimumLineHeight = lineHeight
+        paragraph.maximumLineHeight = lineHeight
+
+        return NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
+            // UIKit puts a line's extra height above its glyphs; this centers them.
+            .baselineOffset: (lineHeight - (font.ascender - font.descender)) / 2
+        ])
     }
 
     private static func applyField(
@@ -93,13 +122,7 @@ enum WidgetTextStyle {
     }
 
     private static func font(_ props: WidgetProps) -> UIFont {
-        let weight: UIFont.Weight =
-            switch props.fontWeight {
-            case "bold": .bold
-            case "semibold": .semibold
-            case "medium": .medium
-            default: .regular
-            }
+        let weight = WidgetFontWeight.uiKit(props.fontWeight)
         let size = props.fontSize ?? defaultSize
         let key = FontKey(size: size, weight: weight.rawValue)
 
@@ -112,6 +135,24 @@ enum WidgetTextStyle {
         fonts[key] = font
 
         return font
+    }
+}
+
+/// UIKit's weight for each weight a render transaction names: ultralight is
+/// CSS's 100 and thin its 200, as Apple's fonts number them, and heavy is 800.
+enum WidgetFontWeight {
+    static func uiKit(_ name: String?) -> UIFont.Weight {
+        switch name {
+        case "thin": .ultraLight
+        case "extra_light": .thin
+        case "light": .light
+        case "medium": .medium
+        case "semibold": .semibold
+        case "bold": .bold
+        case "extra_bold": .heavy
+        case "black": .black
+        default: .regular
+        }
     }
 }
 

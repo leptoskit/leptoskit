@@ -96,6 +96,7 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		clip,
 		font_size: _,
 		font_weight: _,
+		line_height: _,
 		italic,
 		spans,
 		text_align: _,

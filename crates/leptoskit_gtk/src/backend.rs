@@ -1002,18 +1002,20 @@ fn control_css(kind: NativeKind, props: &NativeProps) -> String {
 	let mut css = format!(
 		"* {{ font-family: Sans; font-size: {}px; font-weight: {}; font-style: {}; }}",
 		props.text_style().font_size,
-		match props.text_style().font_weight {
-			leptoskit_native::FontWeight::Regular => 400,
-			leptoskit_native::FontWeight::Medium => 500,
-			leptoskit_native::FontWeight::Semibold => 600,
-			leptoskit_native::FontWeight::Bold => 700,
-		},
+		props.text_style().font_weight.value(),
 		if props.italic.unwrap_or(false) {
 			"italic"
 		} else {
 			"normal"
 		}
 	);
+
+	// GTK sets every line of a label to the line height, with the glyphs
+	// centered in it as CSS does. Text fields keep their own height.
+	if let Some(line_height) = props.text_style().line_height {
+		write!(css, "label {{ line-height: {line_height}px; }}")
+			.expect("formatting a String cannot fail");
+	}
 
 	if let Some(color) = props.color {
 		write!(

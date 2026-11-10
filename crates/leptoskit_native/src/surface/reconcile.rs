@@ -138,7 +138,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 				id,
 				MeasuredText {
 					content: text.to_owned(),
-					style: element.props.text_style(),
+					style: super::measurement::measured_style(element),
 					native_chrome: has_native_chrome(element),
 				},
 			);

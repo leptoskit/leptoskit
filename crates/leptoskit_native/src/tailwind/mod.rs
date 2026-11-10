@@ -39,8 +39,9 @@
 //! Block/inline/contents flow, fixed/sticky positioning, baseline alignment,
 //! overflow on individual axes, other pseudo states, arbitrary selectors and
 //! properties, non-color CSS functions (`calc`), deep nested `var()` beyond one
-//! fallback level, filters, and shadows are rejected. Text sizes
-//! set font size only: line height is not yet a native text prop. Colors use
+//! fallback level, filters, and shadows are rejected. Text sizes set font
+//! size only; `leading-*` and the `text-sm/6` shorthand set line height, and
+//! `font-thin` through `font-black` set all nine weights. Colors use
 //! the default palette converted to 8-bit sRGB, clipping colors outside its
 //! gamut, so native and web use the same color values. Arbitrary color and
 //! length values may be `var(--name)` or `var(--name, fallback)` (one nested

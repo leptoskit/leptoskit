@@ -18,10 +18,13 @@ import android.os.Looper
 import android.text.Editable
 import android.text.InputType
 import android.text.Layout
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import android.text.TextWatcher
+import android.text.style.LineHeightSpan
 import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
@@ -465,6 +468,19 @@ class WidgetHost(
     }
 
     private fun px(value: Double): Float = (value * density).toFloat()
+
+    /** Every line's height in points, or null for the font's own. */
+    private fun lineHeight(props: JSONObject): Double? {
+        val height = props.optJSONObject("line_height") ?: return null
+        val points =
+            when {
+                height.has("relative") -> height.getDouble("relative") * props.number("font_size", 14.0)
+                height.has("fixed") -> height.getDouble("fixed")
+                else -> return null
+            }
+
+        return points.takeIf { it.isFinite() && it > 0 }
+    }
 
     /**
      * Border stroke widths in device pixels: per-edge `border_widths` when set,
@@ -932,11 +948,17 @@ class WidgetHost(
 
         if (control is TextView) {
             control.textDirection = if (rtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
+            // Android draws the nearest weight the system font has.
             val weight =
                 when (props.string("font_weight")) {
+                    "thin" -> 100
+                    "extra_light" -> 200
+                    "light" -> 300
                     "medium" -> 500
                     "semibold" -> 600
                     "bold" -> 700
+                    "extra_bold" -> 800
+                    "black" -> 900
                     else -> 400
                 }
 
@@ -969,7 +991,7 @@ class WidgetHost(
 
                 control.setHintTextColor(if (dark) 0xffa0a0a0.toInt() else 0xff707070.toInt())
             } else if (control !is CompoundButton) {
-                control.text = props.string("text") ?: ""
+                control.text = ExactLineHeightSpan.lined(props.string("text") ?: "", lineHeight(props)?.let(::px))
             }
         }
         when (control) {
@@ -1855,6 +1877,48 @@ private fun autofillHint(token: String): String? =
 
         else -> null
     }
+
+/**
+ * Sets every line to [height] pixels with its glyphs centered in it, as CSS's
+ * `line-height` does: the extra space, or the overlap, is split above and
+ * below. Line bottoms are rounded from the text's top, so `n` lines are
+ * exactly `n * height` tall, rounded once, which is what layout reserved.
+ */
+internal class ExactLineHeightSpan(
+    private val height: Float,
+) : LineHeightSpan {
+    override fun chooseHeight(
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        spanstartv: Int,
+        lineHeight: Int,
+        fm: Paint.FontMetricsInt,
+    ) {
+        // `lineHeight` is this line's top, in pixels from the text's top.
+        val line = ((lineHeight - spanstartv) / height).roundToInt()
+        val target = ((line + 1) * height).roundToInt() - (line * height).roundToInt()
+        val above = (target - (fm.descent - fm.ascent)) / 2
+        fm.ascent -= above
+        fm.descent = fm.ascent + target
+        fm.top = fm.ascent
+        fm.bottom = fm.descent
+    }
+
+    companion object {
+        /** [text] with every line [height] pixels tall, or unchanged without a height. */
+        fun lined(
+            text: String,
+            height: Float?,
+        ): CharSequence {
+            if (height == null || text.isEmpty()) return text
+
+            return SpannableString(text).apply {
+                setSpan(ExactLineHeightSpan(height), 0, text.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+            }
+        }
+    }
+}
 
 private fun JSONObject.string(name: String): String? = if (isNull(name)) null else getString(name)
 

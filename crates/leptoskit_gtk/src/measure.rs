@@ -48,12 +48,7 @@ pub(crate) fn font_with_italic(style: TextStyle, italic: bool) -> pango::FontDes
 	let mut font = pango::FontDescription::new();
 	font.set_family("Sans");
 	font.set_absolute_size(f64::from(style.font_size) * f64::from(pango::SCALE));
-	font.set_weight(match style.font_weight {
-		FontWeight::Regular => pango::Weight::Normal,
-		FontWeight::Medium => pango::Weight::Medium,
-		FontWeight::Semibold => pango::Weight::Semibold,
-		FontWeight::Bold => pango::Weight::Bold,
-	});
+	font.set_weight(weight(style.font_weight));
 	font.set_style(if italic {
 		pango::Style::Italic
 	} else {
@@ -61,6 +56,21 @@ pub(crate) fn font_with_italic(style: TextStyle, italic: bool) -> pango::FontDes
 	});
 
 	font
+}
+
+/// Pango's weight for each CSS weight; Pango numbers them the same way.
+pub(crate) const fn weight(weight: FontWeight) -> pango::Weight {
+	match weight {
+		FontWeight::Thin => pango::Weight::Thin,
+		FontWeight::ExtraLight => pango::Weight::Ultralight,
+		FontWeight::Light => pango::Weight::Light,
+		FontWeight::Regular => pango::Weight::Normal,
+		FontWeight::Medium => pango::Weight::Medium,
+		FontWeight::Semibold => pango::Weight::Semibold,
+		FontWeight::Bold => pango::Weight::Bold,
+		FontWeight::ExtraBold => pango::Weight::Ultrabold,
+		FontWeight::Black => pango::Weight::Heavy,
+	}
 }
 
 impl TextMeasurer for GtkTextMeasurer {
@@ -112,9 +122,19 @@ impl TextMeasurer for GtkTextMeasurer {
 		}
 
 		let (width, height) = layout.pixel_size();
-		Size::new(
+		let size = Size::new(
 			if text.is_empty() { 0.0 } else { width as f32 },
 			height as f32,
-		)
+		);
+
+		// GTK's CSS `line-height` sets every line of the label to the line
+		// height, so the label is that many lines tall.
+		if style.line_height.is_some() {
+			layout.set_text(" ");
+			layout.set_width(-1);
+			return style.fit_line_height(size, layout.pixel_size().1 as f32);
+		}
+
+		size
 	}
 }

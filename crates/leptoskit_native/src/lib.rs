@@ -108,6 +108,7 @@ pub use props::Color;
 pub use props::EventOutcome;
 pub use props::FontWeight;
 pub use props::KeyPress;
+pub use props::LineHeight;
 pub use props::NativeEvent;
 pub use props::NativeKind;
 pub use props::NativeProps;

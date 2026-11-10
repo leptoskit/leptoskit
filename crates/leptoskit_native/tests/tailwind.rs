@@ -565,7 +565,7 @@ fn unsupported_syntax_and_inactive_utilities_are_errors() {
 		"fixed",
 		"sticky",
 		"items-baseline",
-		"font-black",
+		"font-heavy",
 		"border-x-red-500",
 		"overflow-x-hidden",
 		"hover:p-4",

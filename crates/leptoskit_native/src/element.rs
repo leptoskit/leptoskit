@@ -935,6 +935,7 @@ impl Element {
 		element.props.color = element.props.color.or(parent.color);
 		element.props.font_size = element.props.font_size.or(parent.font_size);
 		element.props.font_weight = element.props.font_weight.or(parent.font_weight);
+		element.props.line_height = element.props.line_height.or(parent.line_height);
 		element.props.italic = element.props.italic.or(parent.italic);
 		element.props.text_align = element.props.text_align.or(parent.text_align);
 
@@ -977,6 +978,7 @@ impl Element {
 		previous.color != next.color
 			|| previous.font_size != next.font_size
 			|| previous.font_weight != next.font_weight
+			|| previous.line_height != next.line_height
 			|| previous.italic != next.italic
 			|| previous.text_align != next.text_align
 			|| (previous.enabled == Some(false)) != (next.enabled == Some(false))
@@ -1842,6 +1844,13 @@ impl Element {
 	pub fn font(mut self, size: f32, weight: FontWeight) -> Self {
 		self.props.font_size = Some(size);
 		self.props.font_weight = Some(weight);
+		self
+	}
+
+	/// Sets the height of each line of text, which descendants inherit.
+	#[must_use]
+	pub fn line_height(mut self, line_height: crate::LineHeight) -> Self {
+		self.props.line_height = Some(line_height);
 		self
 	}
 

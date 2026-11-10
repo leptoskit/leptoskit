@@ -138,6 +138,7 @@ pub(super) enum Declaration {
 	Color(ColorField, PaintColor),
 	FontSize(Length),
 	FontWeight(FontWeight),
+	LineHeight(Leading),
 	Italic(bool),
 	TextAlign(TextAlign),
 	BorderWidth(Length),
@@ -148,6 +149,24 @@ pub(super) enum Declaration {
 	Opacity(f32),
 	/// A transform or animation utility.
 	Motion(super::motion::Motion),
+}
+
+/// A `leading-*` value: a multiple of the font size, or a length.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Leading {
+	/// A unitless multiple, as `leading-tight` is `1.25`.
+	Relative(f32),
+	/// An absolute or viewport length, as `leading-6` is `1.5rem`.
+	Length(Length),
+}
+
+impl Leading {
+	fn css(&self) -> String {
+		match self {
+			Self::Relative(multiple) => multiple.to_string(),
+			Self::Length(length) => length.css(),
+		}
+	}
 }
 
 /// Writes one declaration, marked important when the utility is.
@@ -312,6 +331,12 @@ impl Declaration {
 			}
 			Self::FontSize(value) => props.font_size = Some(value.points(context)),
 			Self::FontWeight(value) => props.font_weight = Some(*value),
+			Self::LineHeight(value) => {
+				props.line_height = Some(match value {
+					Leading::Relative(multiple) => crate::LineHeight::Relative(*multiple),
+					Leading::Length(length) => crate::LineHeight::Fixed(length.points(context)),
+				});
+			}
 			Self::Italic(value) => props.italic = Some(*value),
 			Self::TextAlign(value) => props.text_align = Some(*value),
 			Self::BorderWidth(value) => {
@@ -560,6 +585,7 @@ impl Declaration {
 					keyword::font_weight(*value),
 				);
 			}
+			Self::LineHeight(value) => write(output, important, "line-height", &value.css()),
 			Self::Italic(value) => {
 				write(output, important, "font-style", keyword::font_style(*value));
 			}

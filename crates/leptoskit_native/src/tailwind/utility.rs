@@ -16,6 +16,7 @@ use super::declaration::ColorField;
 use super::declaration::Declaration;
 use super::declaration::Edge;
 use super::declaration::EdgeField;
+use super::declaration::Leading;
 use super::declaration::SizeField;
 use super::declaration::Track;
 use super::value::Length;
@@ -131,10 +132,15 @@ fn keyword(utility: &str) -> Option<Declaration> {
 		"aspect-auto" => Declaration::Aspect(None),
 		"aspect-square" => Declaration::Aspect(Some(1.0)),
 		"aspect-video" => Declaration::Aspect(Some(16.0 / 9.0)),
+		"font-thin" => Declaration::FontWeight(FontWeight::Thin),
+		"font-extralight" => Declaration::FontWeight(FontWeight::ExtraLight),
+		"font-light" => Declaration::FontWeight(FontWeight::Light),
 		"font-normal" => Declaration::FontWeight(FontWeight::Regular),
 		"font-medium" => Declaration::FontWeight(FontWeight::Medium),
 		"font-semibold" => Declaration::FontWeight(FontWeight::Semibold),
 		"font-bold" => Declaration::FontWeight(FontWeight::Bold),
+		"font-extrabold" => Declaration::FontWeight(FontWeight::ExtraBold),
+		"font-black" => Declaration::FontWeight(FontWeight::Black),
 		"italic" => Declaration::Italic(true),
 		"not-italic" => Declaration::Italic(false),
 		"text-start" => Declaration::TextAlign(TextAlign::Start),
@@ -475,6 +481,10 @@ fn paint(utility: &str) -> Option<Parsed> {
 		return text_paint(value);
 	}
 
+	if let Some(value) = utility.strip_prefix("leading-") {
+		return Some(leading(value).map(|leading| (300, vec![Declaration::LineHeight(leading)])));
+	}
+
 	if utility == "border" {
 		return Some(Ok((300, vec![Declaration::BorderWidth(Length::Px(1.0))])));
 	}
@@ -512,12 +522,38 @@ fn paint(utility: &str) -> Option<Parsed> {
 	None
 }
 
-/// `text-sm`, `text-[14px]`, or a text color.
+/// `text-sm`, `text-[14px]`, `text-sm/6` (a size and a line height), or a
+/// text color.
 #[expect(
 	clippy::unnecessary_wraps,
 	reason = "the caller reads it as an optional match"
 )]
 fn text_paint(value: &str) -> Option<Parsed> {
+	// A slash after a size sets the line height; after a color, it is the
+	// color's opacity, as in `text-black/50`.
+	if let Some((size, line_height)) = value.rsplit_once('/')
+		&& let Some(size) = font_size(size)
+	{
+		return Some(size.and_then(|size| {
+			Ok((
+				300,
+				vec![
+					Declaration::FontSize(size),
+					Declaration::LineHeight(leading(line_height)?),
+				],
+			))
+		}));
+	}
+
+	if let Some(size) = font_size(value) {
+		return Some(size.map(|size| (300, vec![Declaration::FontSize(size)])));
+	}
+
+	Some(color(value).map(|color| (300, vec![Declaration::Color(ColorField::Text, color)])))
+}
+
+/// The font size a `text-*` value names, or `None` when it names a color.
+fn font_size(value: &str) -> Option<Result<Length, String>> {
 	let rem = match value {
 		"xs" => Some(0.75),
 		"sm" => Some(0.875),
@@ -536,22 +572,57 @@ fn text_paint(value: &str) -> Option<Parsed> {
 	};
 
 	if let Some(rem) = rem {
-		return Some(Ok((300, vec![Declaration::FontSize(Length::Rem(rem))])));
+		return Some(Ok(Length::Rem(rem)));
 	}
 
-	if let Some(inner) = arbitrary(value) {
+	let inner = arbitrary(value)?;
+	let inner = inner.strip_prefix("length:").unwrap_or(inner);
+
+	(!inner.starts_with('#') && !inner.starts_with("color:") && !inner.starts_with("var("))
+		.then(|| Length::parse(inner, false, false).and_then(Length::absolute))
+}
+
+/// A line height: `leading-tight` and the other named multiples, `leading-6`
+/// on the spacing scale, `leading-[1.4]` as a multiple, or `leading-[20px]`
+/// and `leading-[150%]` as lengths.
+fn leading(value: &str) -> Result<Leading, String> {
+	let multiple = match value {
+		"none" => Some(1.0),
+		"tight" => Some(1.25),
+		"snug" => Some(1.375),
+		"normal" => Some(1.5),
+		"relaxed" => Some(1.625),
+		"loose" => Some(2.0),
+		_ => None,
+	};
+
+	let leading = if let Some(multiple) = multiple {
+		Leading::Relative(multiple)
+	} else if let Some(inner) = arbitrary(value) {
 		let inner = inner.strip_prefix("length:").unwrap_or(inner);
 
-		if !inner.starts_with('#') && !inner.starts_with("color:") && !inner.starts_with("var(") {
-			return Some(
-				Length::parse(inner, false, false)
-					.and_then(Length::absolute)
-					.map(|size| (300, vec![Declaration::FontSize(size)])),
-			);
+		if let Ok(multiple) = finite(inner) {
+			Leading::Relative(multiple)
+		} else {
+			match Length::parse(inner, false, false)? {
+				// A percentage is of the font size, so it is a multiple.
+				Length::Percent(fraction) => Leading::Relative(fraction),
+				length => Leading::Length(length.absolute()?),
+			}
 		}
-	}
+	} else {
+		Leading::Length(Length::spacing(value, false, false, false)?)
+	};
 
-	Some(color(value).map(|color| (300, vec![Declaration::Color(ColorField::Text, color)])))
+	match &leading {
+		Leading::Relative(multiple) if *multiple <= 0.0 => {
+			Err("line height must be positive".to_owned())
+		}
+		Leading::Length(length) if length.is_zero() => {
+			Err("line height must be positive".to_owned())
+		}
+		_ => Ok(leading),
+	}
 }
 
 /// A border width or color, from `border-2` or `border-slate-700`.

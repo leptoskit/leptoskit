@@ -456,6 +456,11 @@ pub struct NativeProps {
 	/// The font weight of `Text`, `TextInput`, and `Button`.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub font_weight: Option<FontWeight>,
+	/// The height of each line of a `Text` or `Button` label. Unset keeps
+	/// the font's own line height. Native text fields keep their platform's
+	/// single-line height.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub line_height: Option<LineHeight>,
 	/// Whether text draws in the font's italic style. Unset means upright.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
 	pub italic: Option<bool>,
@@ -600,6 +605,9 @@ impl NativeProps {
 			font_weight: self.font_weight.unwrap_or_default(),
 			text_align: self.text_align.unwrap_or_default(),
 			direction: self.direction.unwrap_or_default(),
+			line_height: self.line_height.and_then(|line_height| {
+				line_height.points(self.font_size.unwrap_or(TextStyle::DEFAULT_FONT_SIZE))
+			}),
 		}
 	}
 
@@ -830,22 +838,101 @@ impl<T: Into<String>> From<T> for TextSpan {
 }
 
 /// The weight of a font, from the platform's system font family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+///
+/// The nine weights are CSS's and Tailwind's, from `font-thin` (100) to
+/// `font-black` (900). A platform whose system font lacks a weight draws the
+/// nearest one it has, as browsers do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[cfg_attr(
 	feature = "serde",
 	derive(serde::Serialize, serde::Deserialize),
 	serde(rename_all = "snake_case")
 )]
 pub enum FontWeight {
-	/// The body weight.
+	/// The lightest weight, 100.
+	Thin,
+	/// 200, between thin and light.
+	ExtraLight,
+	/// 300, lighter than body text.
+	Light,
+	/// The body weight, 400.
 	#[default]
 	Regular,
-	/// Slightly heavier than regular, for emphasis inside body text.
+	/// 500, slightly heavier than regular, for emphasis inside body text.
 	Medium,
-	/// Between medium and bold, for titles and labels.
+	/// 600, between medium and bold, for titles and labels.
 	Semibold,
-	/// The heaviest weight, for headlines and figures.
+	/// 700, for headlines and figures.
 	Bold,
+	/// 800, heavier than bold.
+	ExtraBold,
+	/// The heaviest weight, 900.
+	Black,
+}
+
+impl FontWeight {
+	/// Every weight, from lightest to heaviest.
+	pub const ALL: [Self; 9] = [
+		Self::Thin,
+		Self::ExtraLight,
+		Self::Light,
+		Self::Regular,
+		Self::Medium,
+		Self::Semibold,
+		Self::Bold,
+		Self::ExtraBold,
+		Self::Black,
+	];
+
+	/// The numeric weight CSS and OpenType give it, from 100 to 900.
+	#[must_use]
+	pub const fn value(self) -> u16 {
+		match self {
+			Self::Thin => 100,
+			Self::ExtraLight => 200,
+			Self::Light => 300,
+			Self::Regular => 400,
+			Self::Medium => 500,
+			Self::Semibold => 600,
+			Self::Bold => 700,
+			Self::ExtraBold => 800,
+			Self::Black => 900,
+		}
+	}
+}
+
+/// How tall each line of text is, set by the `leading-*` utilities.
+///
+/// Every line takes exactly this height and centers its glyphs in it, as
+/// CSS's `line-height` does: the extra space (or the overlap, when it is
+/// smaller than the font's own line) is split evenly above and below.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(rename_all = "snake_case")
+)]
+pub enum LineHeight {
+	/// A multiple of the font size, as a unitless CSS `line-height`:
+	/// `leading-tight` is `1.25`. Descendants that inherit it multiply their
+	/// own font size.
+	Relative(f32),
+	/// A height in layout units, as `leading-6` (24) is.
+	Fixed(f32),
+}
+
+impl LineHeight {
+	/// The height in layout units for text set at `font_size`, or `None`
+	/// when the value is not a positive finite number.
+	#[must_use]
+	pub fn points(self, font_size: f32) -> Option<f32> {
+		let points = match self {
+			Self::Relative(multiple) => multiple * font_size,
+			Self::Fixed(points) => points,
+		};
+
+		(points.is_finite() && points > 0.0).then_some(points)
+	}
 }
 
 /// The horizontal alignment of text inside its widget.
@@ -905,19 +992,43 @@ pub struct TextStyle {
 	pub text_align: TextAlign,
 	/// The writing direction used for shaping and logical alignment.
 	pub direction: Direction,
+	/// The height of every line in layout units, resolved from
+	/// [`NativeProps::line_height`]; `None` keeps the font's own line height.
+	pub line_height: Option<f32>,
 }
 
 impl TextStyle {
 	/// The font size used when a node does not set one.
 	pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
-	/// A start-aligned style with the given size and weight.
+	/// A start-aligned style with the given size and weight, and the font's
+	/// own line height.
 	pub const fn new(font_size: f32, font_weight: FontWeight) -> Self {
 		Self {
 			font_size,
 			font_weight,
 			text_align: TextAlign::Start,
 			direction: Direction::Ltr,
+			line_height: None,
+		}
+	}
+
+	/// Converts a size measured at the font's own line height into the size
+	/// at [`line_height`](Self::line_height), given the height of one line
+	/// of the font, so a measurer whose platform cannot set line height
+	/// still reserves what the platform draws once each line is that tall.
+	///
+	/// The line count is the measured height in whole natural lines, and
+	/// is at least one. Without a line height, or without a positive
+	/// natural line, `size` is returned unchanged.
+	#[must_use]
+	pub fn fit_line_height(&self, size: Size<f32>, natural_line: f32) -> Size<f32> {
+		match self.line_height {
+			Some(line_height) if natural_line > 0.0 && natural_line.is_finite() => {
+				let lines = (size.height / natural_line).round().max(1.0);
+				Size::new(size.width, lines * line_height)
+			}
+			_ => size,
 		}
 	}
 }
@@ -1104,7 +1215,8 @@ pub trait TextMeasurer: Send + Sync {
 /// wrapping at word boundaries when width is bounded. Explicit newlines start
 /// a new line, including consecutive and trailing empty lines.
 ///
-/// The font weight and the alignment do not change the approximation.
+/// The font weight and the alignment do not change the approximation; a
+/// [`TextStyle::line_height`] replaces the cell's height.
 #[derive(Debug, Clone, Copy)]
 pub struct ApproxTextMeasurer {
 	/// The character cell width at the default font size.
@@ -1137,7 +1249,10 @@ impl TextMeasurer for ApproxTextMeasurer {
 		available: Size<leptoskit_yoga::AvailableSpace>,
 	) -> Size<f32> {
 		let scale = style.font_size.max(0.0) / TextStyle::DEFAULT_FONT_SIZE;
-		let cell = Size::new(self.char_width * scale, self.line_height * scale);
+		let cell = Size::new(
+			self.char_width * scale,
+			style.line_height.unwrap_or(self.line_height * scale),
+		);
 
 		let max_width = match available.width {
 			leptoskit_yoga::AvailableSpace::Definite(width) => Some(width.max(0.0)),
