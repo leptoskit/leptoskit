@@ -33,7 +33,7 @@ The `macos/` folder is yours: `App.swift` starts the app and owns its window, `I
 - [Sign-in](../guide/23-sign-in.md#native-apps) works as on iOS: the system's passkey sheet and Sign in with Apple's own sheet once the app has its associated domain, which the generated project doesn't add yet, and other providers in an `ASWebAuthenticationSession`.
 - Labels in the generated app can't be selected, as on iOS and Android. AppKit's own labels also darken glyph edges slightly with private font dilation that no public API offers, so text there is a shade lighter than in an `NSTextField`.
 - The generated macOS app doesn't check for [code push](../guide/05-code-push.md) updates; ship a new build to update it. The iOS and Android apps do.
-- AppKit follows the system's light or dark appearance until the app calls `NativeSurface::set_dark_mode`. An app with a fixed light theme should call `set_dark_mode(false)` before it shows its first screen.
+- AppKit follows the system's light or dark appearance until the app calls `NativeSurface::set_dark_mode`. An app with a fixed light theme should call `set_dark_mode(false)` before it shows its first screen, and an app that lets people choose calls [`appearance::set`](../guide/07-shared-components.md#let-people-choose-light-or-dark).
 
 ## Application menus
 

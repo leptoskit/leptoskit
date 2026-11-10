@@ -30,6 +30,7 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
+pub mod appearance;
 pub mod aria;
 pub mod asset;
 pub mod backend;
@@ -62,6 +63,7 @@ pub mod guest;
 #[cfg(feature = "web")]
 pub mod web;
 
+pub use appearance::Appearance;
 pub use aria::Aria;
 pub use aria::Current;
 pub use aria::HasPopup;

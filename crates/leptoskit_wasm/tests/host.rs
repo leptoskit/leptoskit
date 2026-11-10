@@ -605,6 +605,89 @@ fn environment_changes_reapply_wire_classes_without_a_guest_commit() {
 	assert_eq!(host.commits(), 1);
 }
 
+/// A guest that renders `first` on its root, then `second` when its child is
+/// pressed.
+fn pressed_props_guest(first: &serde_json::Value, second: &serde_json::Value) -> String {
+	use std::fmt::Write;
+
+	let escape = |value: &serde_json::Value| {
+		let mut escaped = String::new();
+
+		for byte in value.to_string().bytes() {
+			write!(escaped, "\\{byte:02x}").expect("write to String");
+		}
+
+		escaped
+	};
+	format!(
+		r#"(module
+  (import "leptoskit" "node_create" (func $create (param i64 i32)))
+  (import "leptoskit" "node_set_props" (func $props (param i64 i32 i32)))
+  (import "leptoskit" "node_insert" (func $insert (param i64 i64 i32)))
+  (import "leptoskit" "commit" (func $commit))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "{first}")
+  (data (i32.const 4096) "{second}")
+  (func (export "leptoskit_main")
+    (call $create (i64.const 1) (i32.const 0))
+    (call $create (i64.const 99) (i32.const 6))
+    (call $props (i64.const 1) (i32.const 0) (i32.const {first_len}))
+    (call $insert (i64.const 1) (i64.const 99) (i32.const 0))
+    (call $commit))
+  (func (export "leptoskit_event")
+    (param i64 i32 i32 i32) (result i32)
+    (call $props (i64.const 1) (i32.const 4096) (i32.const {second_len}))
+    (call $commit)
+    (i32.const 1)))"#,
+		first = escape(first),
+		second = escape(second),
+		first_len = first.to_string().len(),
+		second_len = second.to_string().len(),
+	)
+}
+
+#[test]
+fn the_guest_s_appearance_choice_overrides_the_device_s() {
+	let class = "w-20 h-10 bg-white dark:bg-black";
+	let guest = pressed_props_guest(
+		&serde_json::json!({ "class": class }),
+		&serde_json::json!({ "class": class, "appearance": "dark" }),
+	);
+	let mut host = WasmHost::headless(guest.as_bytes()).expect("compile guest");
+	host.set_dark_mode(false);
+	host.start(VIEWPORT_WIDTH, COMPACT_VIEWPORT_HEIGHT)
+		.expect("start");
+	let background = |host: &WasmHost<_>| {
+		host.surface()
+			.props(host.surface().root().unwrap())
+			.background
+	};
+	assert_eq!(
+		background(&host),
+		Some(leptoskit_native::Color::rgba(255, 255, 255, 255))
+	);
+
+	let root = host.surface().root().expect("root");
+	let button = host.surface().children(root)[0];
+	host.dispatch(button, &leptoskit_native::NativeEvent::Press)
+		.expect("the press reaches the guest");
+	assert_eq!(
+		host.surface().appearance(),
+		leptoskit_native::Appearance::Dark
+	);
+	assert_eq!(
+		background(&host),
+		Some(leptoskit_native::Color::rgba(0, 0, 0, 255))
+	);
+
+	// The device's own setting no longer changes what shows.
+	host.set_dark_mode(false);
+	assert_eq!(
+		background(&host),
+		Some(leptoskit_native::Color::rgba(0, 0, 0, 255))
+	);
+}
+
 #[test]
 fn responsive_widget_replacements_preserve_wire_event_targets() {
 	let guest = class_guest("w-20 h-20 md:overflow-scroll");

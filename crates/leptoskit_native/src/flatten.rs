@@ -107,6 +107,8 @@ pub fn is_layout_only(kind: NativeKind, props: &NativeProps) -> bool {
 		// never needs a native view, and adding motion leaves the native
 		// tree as it was.
 		motion: _,
+		// Read from the root by the surface; it draws nothing.
+		appearance: _,
 		extra,
 	} = props;
 
