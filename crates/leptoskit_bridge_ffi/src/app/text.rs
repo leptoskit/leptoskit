@@ -194,7 +194,7 @@ mod tests {
 			.unwrap()
 			.push((text.to_owned(), font_size, weight, width, rtl));
 
-		if text == "fail" || (text == " " && font_size == 13.0) {
+		if text == "fail" || (text == " " && (font_size - 13.0).abs() < f32::EPSILON) {
 			return false;
 		}
 
