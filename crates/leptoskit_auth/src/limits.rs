@@ -129,8 +129,23 @@ pub struct Limits {
 	pub code_per_address: Limit,
 	/// Codes requested from one IP address.
 	pub code_per_ip: Limit,
-	/// Codes tried from one IP address.
+	/// Codes tried from one IP address: emailed codes, authenticator codes,
+	/// and recovery codes.
 	pub verify_per_ip: Limit,
+	/// Authenticator and recovery codes tried for one account, from
+	/// anywhere.
+	pub second_factor_per_account: Limit,
+	/// Passkey and third-party sign-ins started from one IP address. Each
+	/// start stores a short-lived challenge, so this bounds the table.
+	pub ceremony_per_ip: Limit,
+	/// Wrong second factors for one account (authenticator codes, recovery
+	/// codes, and passkeys, at sign-in or step-up) before it locks for
+	/// [`Limits::lock_for`] and its owner is emailed. Emailed codes don't
+	/// count: anyone who knows an address can get those wrong, and locking
+	/// on them would let anyone lock anyone out.
+	pub failures_before_lock: Limit,
+	/// How long a locked account refuses to sign in.
+	pub lock_for: Duration,
 }
 
 impl Default for Limits {
@@ -139,6 +154,10 @@ impl Default for Limits {
 			code_per_address: Limit::new(5, Duration::from_mins(15)),
 			code_per_ip: Limit::new(20, Duration::from_hours(1)),
 			verify_per_ip: Limit::new(30, Duration::from_mins(15)),
+			second_factor_per_account: Limit::new(10, Duration::from_mins(15)),
+			ceremony_per_ip: Limit::new(120, Duration::from_mins(15)),
+			failures_before_lock: Limit::new(20, Duration::from_hours(24)),
+			lock_for: Duration::from_hours(1),
 		}
 	}
 }

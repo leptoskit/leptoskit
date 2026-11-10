@@ -1,0 +1,788 @@
+//! [`Idp`]: the provider, and how an app configures it.
+
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use leptoskit_auth::Account;
+use leptoskit_auth::Auth;
+use leptoskit_db::Db;
+use leptoskit_db::Id;
+use leptoskit_db::Timestamp;
+use leptoskit_rpc::Scopes;
+use serde_json::Value;
+
+use crate::GrantType;
+use crate::IdpError;
+use crate::Result;
+use crate::ScopeDescription;
+use crate::SigningAlgorithm;
+use crate::jwt::PublicKey;
+
+/// Sign in with your app: the OAuth 2.1 and OpenID Connect provider, over
+/// the `idp` and `auth` tables in the app's database.
+///
+/// Build one at startup, next to [`Auth`], and share it; clones are cheap.
+///
+/// ```ignore
+/// let idp = Idp::builder(&db, &auth)
+/// 	.issuer("https://myapp.com")
+/// 	.scopes::<Scope>()
+/// 	.claims::<User>()
+/// 	.sign_in_page("/sign-in")
+/// 	.consent_page("/connect")
+/// 	.build()?;
+/// ```
+#[derive(Clone)]
+pub struct Idp {
+	pub(crate) inner: Arc<Inner>,
+}
+
+pub(crate) struct Inner {
+	/// The app's database, bypassing policies: only this crate's own
+	/// queries run on it.
+	pub db: Db,
+	pub auth: Auth,
+	pub issuer: String,
+	pub audience: String,
+	/// Every scope a client may ask for: the OpenID Connect ones, then the
+	/// app's.
+	pub scopes: Vec<ScopeDescription>,
+	pub claims: ClaimsHook,
+	pub sign_in_page: String,
+	pub consent_page: String,
+	pub signed_out_page: String,
+	pub device_page: String,
+	pub lifetimes: Lifetimes,
+	/// The RSA key RS256 ID tokens are signed with, if the server has one.
+	pub rsa_key: Option<Arc<ring::signature::RsaKeyPair>>,
+	/// Whether signed-in people may register apps of their own.
+	pub developer_portal: Option<Portal>,
+	/// Whether DPoP proofs bind tokens to apps' keys (RFC 9449).
+	pub dpop: bool,
+	/// Whether apps may register themselves (RFC 7591), and how.
+	pub registration: Option<Registration>,
+	/// Public keys by key ID, with when each leaves the key set: they never
+	/// change, so once read they're kept.
+	pub verifying_keys: Mutex<HashMap<String, (PublicKey, Timestamp)>>,
+}
+
+impl Idp {
+	/// Starts configuring the provider over `db`, signing people in through
+	/// `auth`. Its keys derive from `auth`'s.
+	pub fn builder(db: &Db, auth: &Auth) -> IdpBuilder {
+		IdpBuilder {
+			db: db.system("idp: sign in with this app"),
+			auth: auth.clone(),
+			issuer: auth.origin().map(str::to_owned),
+			audience: None,
+			scopes: Vec::new(),
+			claims: |_, _, _, _| Box::pin(async { Ok(()) }),
+			sign_in_page: "/sign-in".into(),
+			consent_page: "/consent".into(),
+			signed_out_page: "/".into(),
+			device_page: "/device".into(),
+			lifetimes: Lifetimes::default(),
+			rsa_key: None,
+			developer_portal: None,
+			dpop: false,
+			registration: None,
+		}
+	}
+
+	/// The issuer: the app's origin, such as `https://myapp.com`.
+	pub fn issuer(&self) -> &str {
+		&self.inner.issuer
+	}
+
+	/// The scopes clients may ask for, with what each allows.
+	pub fn scopes(&self) -> &[ScopeDescription] {
+		&self.inner.scopes
+	}
+
+	/// The OpenID Connect discovery document, which
+	/// `/.well-known/openid-configuration` serves.
+	pub fn discovery(&self) -> Value {
+		let issuer = &self.inner.issuer;
+		let endpoint = |path: &str| format!("{issuer}{path}");
+		let scopes: Vec<&str> = self
+			.inner
+			.scopes
+			.iter()
+			.map(|scope| scope.name.as_str())
+			.collect();
+
+		let mut id_token_algorithms = vec![SigningAlgorithm::Es256.as_str()];
+		if self.inner.rsa_key.is_some() {
+			id_token_algorithms.push(SigningAlgorithm::Rs256.as_str());
+		}
+
+		let mut document = serde_json::json!({
+			"issuer": issuer,
+			"authorization_endpoint": endpoint("/oauth/authorize"),
+			"token_endpoint": endpoint("/oauth/token"),
+			"userinfo_endpoint": endpoint("/oauth/userinfo"),
+			"jwks_uri": endpoint("/oauth/jwks"),
+			"revocation_endpoint": endpoint("/oauth/revoke"),
+			"introspection_endpoint": endpoint("/oauth/introspect"),
+			"end_session_endpoint": endpoint("/oauth/end_session"),
+			"pushed_authorization_request_endpoint": endpoint("/oauth/par"),
+			"device_authorization_endpoint": endpoint("/oauth/device_authorization"),
+			"scopes_supported": scopes,
+			"response_types_supported": ["code"],
+			"response_modes_supported": ["query"],
+			"grant_types_supported": [
+				GrantType::AuthorizationCode.as_str(),
+				"refresh_token",
+				GrantType::DeviceCode.as_str(),
+				GrantType::ClientCredentials.as_str(),
+			],
+			"subject_types_supported": ["pairwise", "public"],
+			"id_token_signing_alg_values_supported": id_token_algorithms,
+			"token_endpoint_auth_methods_supported": AUTH_METHODS,
+			"token_endpoint_auth_signing_alg_values_supported": ["ES256", "RS256"],
+			"revocation_endpoint_auth_methods_supported": AUTH_METHODS,
+			"revocation_endpoint_auth_signing_alg_values_supported": ["ES256", "RS256"],
+			"introspection_endpoint_auth_methods_supported":
+				["client_secret_basic", "client_secret_post", "private_key_jwt"],
+			"introspection_endpoint_auth_signing_alg_values_supported": ["ES256", "RS256"],
+			"code_challenge_methods_supported": ["S256"],
+			"prompt_values_supported": ["none", "login", "consent"],
+			"claim_types_supported": ["normal"],
+			"claims_supported": [
+				"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "sid",
+				"email", "email_verified", "name", "given_name", "family_name",
+				"preferred_username", "picture", "locale", "zoneinfo", "updated_at",
+			],
+			"claims_parameter_supported": true,
+			"request_parameter_supported": false,
+			"request_uri_parameter_supported": false,
+			"require_pushed_authorization_requests": false,
+			"authorization_response_iss_parameter_supported": true,
+		});
+
+		if self.inner.dpop {
+			document["dpop_signing_alg_values_supported"] = crate::dpop::ALGORITHMS.into();
+		}
+		if self.inner.registration.is_some() {
+			document["registration_endpoint"] = endpoint("/oauth/register").into();
+		}
+
+		document
+	}
+
+	/// What `scope` lets an app do, for a consent screen.
+	pub(crate) fn describe(&self, scopes: &[String]) -> Vec<ScopeDescription> {
+		scopes
+			.iter()
+			.map(|name| {
+				self.inner
+					.scopes
+					.iter()
+					.find(|scope| scope.name == *name)
+					.cloned()
+					.unwrap_or_else(|| {
+						ScopeDescription {
+							name: name.clone(),
+							description: String::new(),
+						}
+					})
+			})
+			.collect()
+	}
+
+	/// Whether clients may ask for `scope`.
+	pub(crate) fn knows_scope(&self, scope: &str) -> bool {
+		self.inner.scopes.iter().any(|known| known.name == scope)
+	}
+
+	pub(crate) fn lifetime(duration: Duration) -> Result<chrono::TimeDelta> {
+		chrono::TimeDelta::from_std(duration)
+			.map_err(|_| IdpError::Config("a lifetime is too long".into()))
+	}
+}
+
+impl std::fmt::Debug for Idp {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Idp")
+			.field("issuer", &self.inner.issuer)
+			.finish_non_exhaustive()
+	}
+}
+
+/// How apps may authenticate at the token, revocation and PAR endpoints.
+const AUTH_METHODS: [&str; 4] = [
+	"client_secret_basic",
+	"client_secret_post",
+	"private_key_jwt",
+	"none",
+];
+
+/// The scopes OpenID Connect defines, which every provider offers.
+const STANDARD_SCOPES: [(&str, &str); 3] = [
+	("openid", "Sign you in with your account."),
+	("profile", "See your name and profile picture."),
+	("email", "See your email address."),
+];
+
+/// Configures an [`Idp`].
+#[must_use]
+pub struct IdpBuilder {
+	db: Db,
+	auth: Auth,
+	issuer: Option<String>,
+	audience: Option<String>,
+	scopes: Vec<leptoskit_rpc::ScopeInfo>,
+	claims: ClaimsHook,
+	sign_in_page: String,
+	consent_page: String,
+	signed_out_page: String,
+	device_page: String,
+	lifetimes: Lifetimes,
+	rsa_key: Option<Vec<u8>>,
+	developer_portal: Option<Portal>,
+	dpop: bool,
+	registration: Option<Registration>,
+}
+
+impl std::fmt::Debug for IdpBuilder {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("IdpBuilder")
+			.field("issuer", &self.issuer)
+			.finish_non_exhaustive()
+	}
+}
+
+impl IdpBuilder {
+	/// The issuer, which tokens name and apps discover the provider at: the
+	/// app's own origin, such as `https://myapp.com`, with no path. Defaults
+	/// to `auth`'s origin.
+	pub fn issuer(mut self, issuer: impl Into<String>) -> Self {
+		self.issuer = Some(issuer.into().trim_end_matches('/').to_owned());
+		self
+	}
+
+	/// What access tokens name as their audience: your API. Defaults to the
+	/// issuer, for an app whose API is on its own origin.
+	pub fn audience(mut self, audience: impl Into<String>) -> Self {
+		self.audience = Some(audience.into());
+		self
+	}
+
+	/// Offers the scopes `S` declares, from
+	/// [`scopes!`](leptoskit_rpc::scopes!), as well as `openid`, `profile`
+	/// and `email`. Call it once per set.
+	pub fn scopes<S: Scopes>(mut self) -> Self {
+		self.scopes.extend_from_slice(S::ALL);
+		self
+	}
+
+	/// Fills in the claims apps see about a person, beyond `sub` and their
+	/// verified email, with `C::claims`.
+	pub fn claims<C: Claims + 'static>(mut self) -> Self {
+		self.claims = |db, account, scopes, out| Box::pin(C::claims(db, account, scopes, out));
+		self
+	}
+
+	/// Your sign-in page, which `/oauth/authorize` sends signed-out people to
+	/// with `?return_to=…`. Sign them in, then send them there. Defaults to
+	/// `/sign-in`.
+	pub fn sign_in_page(mut self, path: impl Into<String>) -> Self {
+		self.sign_in_page = path.into();
+		self
+	}
+
+	/// Your consent page, which `/oauth/authorize` sends people to with
+	/// `?request=…`. It reads `GET /oauth/consent?request=…` and posts the
+	/// answer to `POST /oauth/consent`. Defaults to `/consent`.
+	pub fn consent_page(mut self, path: impl Into<String>) -> Self {
+		self.consent_page = path.into();
+		self
+	}
+
+	/// Where `/oauth/end_session` sends people when the app that signed them
+	/// out named nowhere to go. Defaults to `/`.
+	pub fn signed_out_page(mut self, path: impl Into<String>) -> Self {
+		self.signed_out_page = path.into();
+		self
+	}
+
+	/// Your device page, where people enter the code a CLI or a TV shows
+	/// them (RFC 8628). It reads `GET /oauth/device?user_code=…` and posts the
+	/// answer to `POST /oauth/device`. Defaults to `/device`.
+	pub fn device_page(mut self, path: impl Into<String>) -> Self {
+		self.device_page = path.into();
+		self
+	}
+
+	/// How long codes, tokens and signing keys last.
+	pub fn lifetimes(mut self, lifetimes: Lifetimes) -> Self {
+		self.lifetimes = lifetimes;
+		self
+	}
+
+	/// The RSA private key that signs ID tokens for apps registered for
+	/// RS256, as PEM (`PRIVATE KEY` or `RSA PRIVATE KEY`) or DER, of at least
+	/// 2048 bits. Without one, every token is ES256, which most libraries
+	/// verify; OpenID certification also wants RS256.
+	///
+	/// Make one with `openssl genpkey -algorithm RSA -pkeyopt
+	/// rsa_keygen_bits:3072`, and keep it with the server's other secrets.
+	/// To rotate it, give the server a new one: the old key stays published
+	/// until every token it signed has expired.
+	pub fn rsa_key(mut self, key: impl Into<Vec<u8>>) -> Self {
+		self.rsa_key = Some(key.into());
+		self
+	}
+
+	/// Lets signed-in people register apps of their own, for third-party
+	/// developers: the `/oauth/apps` routes. Each person sees and manages
+	/// only their own apps, which are never first-party and can't introspect
+	/// other apps' tokens. Off by default.
+	pub fn developer_portal(mut self, portal: Portal) -> Self {
+		self.developer_portal = Some(portal);
+		self
+	}
+
+	/// Takes DPoP proofs (RFC 9449), so an app can bind its tokens to a key
+	/// it holds: a stolen access or refresh token is then useless without
+	/// the key. Apps opt in per request with a `DPoP` header, and an app
+	/// registered with `dpop_bound` must always. Off by default, when the
+	/// header is ignored and every token is a bearer token.
+	pub fn dpop(mut self, on: bool) -> Self {
+		self.dpop = on;
+		self
+	}
+
+	/// Lets apps register themselves at `POST /oauth/register` (RFC 7591),
+	/// and manage their registration with the token it returns (RFC 7592).
+	/// Such apps are never first-party and can't introspect other apps'
+	/// tokens. Off by default.
+	pub fn dynamic_registration(mut self, registration: Registration) -> Self {
+		self.registration = Some(registration);
+		self
+	}
+
+	/// The configured provider.
+	///
+	/// # Errors
+	///
+	/// [`IdpError::Config`] without an issuer, with one that isn't an
+	/// `https` origin (or `http` on localhost), with a page that isn't a
+	/// path on this site, with a scope that isn't one or is declared twice,
+	/// or with lifetimes out of bounds.
+	pub fn build(self) -> Result<Idp> {
+		let issuer = self.issuer.ok_or_else(|| {
+			IdpError::Config("set the issuer, or `origin` on Auth, to the app's own origin".into())
+		})?;
+		check_issuer(&issuer)?;
+
+		for page in [
+			&self.sign_in_page,
+			&self.consent_page,
+			&self.signed_out_page,
+			&self.device_page,
+		] {
+			if !is_local_path(page) {
+				return Err(IdpError::Config(format!(
+					"`{page}` must be a path on this site, such as `/consent`"
+				)));
+			}
+		}
+
+		let mut scopes: Vec<ScopeDescription> = STANDARD_SCOPES
+			.iter()
+			.map(|(name, description)| {
+				ScopeDescription {
+					name: (*name).into(),
+					description: (*description).into(),
+				}
+			})
+			.collect();
+
+		for scope in &self.scopes {
+			if !leptoskit_rpc::is_scope_name(scope.name) {
+				return Err(IdpError::Config(format!("`{}` isn't a scope", scope.name)));
+			}
+			if scopes.iter().any(|known| known.name == scope.name) {
+				return Err(IdpError::Config(format!(
+					"the scope `{}` is declared twice",
+					scope.name
+				)));
+			}
+			scopes.push(ScopeDescription {
+				name: scope.name.into(),
+				description: scope.description(),
+			});
+		}
+
+		self.lifetimes.check()?;
+
+		let rsa_key = match &self.rsa_key {
+			Some(key) => {
+				Some(Arc::new(crate::jwt::rsa_key(key).ok_or_else(|| {
+					IdpError::Config(
+						"the RSA key isn't a PEM or DER RSA private key of at least 2048 bits"
+							.into(),
+					)
+				})?))
+			}
+			None => None,
+		};
+
+		if self
+			.developer_portal
+			.is_some_and(|portal| portal.apps_per_person == 0)
+		{
+			return Err(IdpError::Config(
+				"the developer portal must allow at least one app per person".into(),
+			));
+		}
+
+		if self.registration.as_ref().is_some_and(|registration| {
+			registration
+				.initial_access_token
+				.as_ref()
+				.is_some_and(|token| token.len() < 32)
+		}) {
+			return Err(IdpError::Config(
+				"the initial access token for registration must be at least 32 characters".into(),
+			));
+		}
+
+		Ok(Idp {
+			inner: Arc::new(Inner {
+				db: self.db,
+				auth: self.auth,
+				audience: self.audience.unwrap_or_else(|| issuer.clone()),
+				issuer,
+				scopes,
+				claims: self.claims,
+				sign_in_page: self.sign_in_page,
+				consent_page: self.consent_page,
+				signed_out_page: self.signed_out_page,
+				device_page: self.device_page,
+				lifetimes: self.lifetimes,
+				rsa_key,
+				developer_portal: self.developer_portal,
+				dpop: self.dpop,
+				registration: self.registration,
+				verifying_keys: Mutex::new(HashMap::new()),
+			}),
+		})
+	}
+}
+
+/// An issuer is an `https` origin, or `http` on localhost for development,
+/// with no path, query or fragment: discovery lives at its root.
+fn check_issuer(issuer: &str) -> Result<()> {
+	let url = url::Url::parse(issuer)
+		.map_err(|_| IdpError::Config(format!("the issuer `{issuer}` isn't a URL")))?;
+	let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+	let secure = url.scheme() == "https" || (url.scheme() == "http" && local);
+	let bare = url.path() == "/" && url.query().is_none() && url.fragment().is_none();
+
+	if secure && bare && url.username().is_empty() && url.password().is_none() {
+		Ok(())
+	} else {
+		Err(IdpError::Config(format!(
+			"the issuer `{issuer}` must be an https origin with no path, such as \
+			 `https://myapp.com`"
+		)))
+	}
+}
+
+/// A path on this site, which can't be read as another host's address.
+pub(crate) fn is_local_path(path: &str) -> bool {
+	path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
+}
+
+/// How long the provider's codes, tokens and keys last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lifetimes {
+	/// An access token: 10 minutes, at most an hour. Revocation reaches
+	/// resource servers that only check signatures after this long.
+	pub access: Duration,
+	/// An ID token: 10 minutes.
+	pub id_token: Duration,
+	/// An authorization code: one minute, at most ten.
+	pub code: Duration,
+	/// How long a consent screen may wait for an answer: 10 minutes.
+	pub consent: Duration,
+	/// A refresh-token family, however often it's used: 90 days.
+	pub refresh: Duration,
+	/// How long a signing key signs before the next one takes over: 30
+	/// days.
+	pub signing_key: Duration,
+	/// A pushed authorization request's `request_uri` (RFC 9126): 10
+	/// minutes, at most an hour, long enough to sign in on the way.
+	pub pushed_request: Duration,
+	/// A device code (RFC 8628): how long someone has to enter it, 10
+	/// minutes, at most an hour.
+	pub device_code: Duration,
+}
+
+impl Default for Lifetimes {
+	fn default() -> Self {
+		Self {
+			access: Duration::from_mins(10),
+			id_token: Duration::from_mins(10),
+			code: Duration::from_secs(60),
+			consent: Duration::from_mins(10),
+			refresh: Duration::from_hours(90 * 24),
+			signing_key: Duration::from_hours(30 * 24),
+			pushed_request: Duration::from_mins(10),
+			device_code: Duration::from_mins(10),
+		}
+	}
+}
+
+impl Lifetimes {
+	fn check(&self) -> Result<()> {
+		let within = |value: Duration, max: Duration| !value.is_zero() && value <= max;
+
+		if within(self.access, Duration::from_hours(1))
+			&& within(self.id_token, Duration::from_hours(24))
+			&& within(self.code, Duration::from_mins(10))
+			&& within(self.consent, Duration::from_hours(1))
+			&& within(self.refresh, Duration::from_hours(400 * 24))
+			&& within(self.signing_key, Duration::from_hours(400 * 24))
+			&& within(self.pushed_request, Duration::from_hours(1))
+			&& within(self.device_code, Duration::from_hours(1))
+		{
+			Ok(())
+		} else {
+			Err(IdpError::Config(
+				"lifetimes must be positive; access tokens last at most an hour, and codes at \
+				 most ten minutes"
+					.into(),
+			))
+		}
+	}
+}
+
+/// The developer portal's limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Portal {
+	/// The most apps one person may register: 10 by default.
+	pub apps_per_person: u32,
+}
+
+impl Default for Portal {
+	fn default() -> Self {
+		Self {
+			apps_per_person: 10,
+		}
+	}
+}
+
+/// How apps register themselves, with
+/// [`IdpBuilder::dynamic_registration`]. Its `Debug` leaves out the token.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Registration {
+	/// The initial access token an app must send as `Authorization: Bearer`
+	/// to register (RFC 7591 §3), at least 32 characters, from the
+	/// environment. `None` opens registration to anyone, at most 10 apps an
+	/// hour from one address.
+	pub initial_access_token: Option<String>,
+}
+
+impl std::fmt::Debug for Registration {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Registration")
+			.field(
+				"initial_access_token",
+				&self.initial_access_token.as_ref().map(|_| "…"),
+			)
+			.finish()
+	}
+}
+
+/// The scopes a person granted the app asking about them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantedScopes {
+	scopes: Vec<String>,
+}
+
+impl GrantedScopes {
+	pub(crate) fn new(scopes: Vec<String>) -> Self {
+		Self { scopes }
+	}
+
+	/// Whether `scope` was granted, such as `"profile"` or
+	/// `Scope::PostsRead.as_str()`.
+	pub fn has(&self, scope: &str) -> bool {
+		self.scopes.iter().any(|granted| granted == scope)
+	}
+
+	/// Every granted scope.
+	pub fn iter(&self) -> impl Iterator<Item = &str> {
+		self.scopes.iter().map(String::as_str)
+	}
+}
+
+/// Claims about a person, as `userinfo` releases them.
+///
+/// The provider sets `sub` and, with the `email` scope, the person's
+/// verified primary email itself; those names, and the token claims (`iss`,
+/// `aud`, `exp`, …), are ignored here.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClaimSet {
+	claims: BTreeMap<String, Value>,
+}
+
+/// Claims only the provider sets.
+const RESERVED_CLAIMS: [&str; 11] = [
+	"sub",
+	"iss",
+	"aud",
+	"exp",
+	"iat",
+	"nbf",
+	"jti",
+	"auth_time",
+	"nonce",
+	"email",
+	"email_verified",
+];
+
+impl ClaimSet {
+	/// Sets the claim `name`, unless only the provider may set it.
+	pub fn insert(&mut self, name: &str, value: impl Into<Value>) -> &mut Self {
+		if !RESERVED_CLAIMS.contains(&name) {
+			self.claims.insert(name.to_owned(), value.into());
+		}
+		self
+	}
+
+	/// `name`: their full name.
+	pub fn name(&mut self, name: &str) -> &mut Self {
+		self.insert("name", name)
+	}
+
+	/// `preferred_username`: the handle they go by.
+	pub fn preferred_username(&mut self, username: &str) -> &mut Self {
+		self.insert("preferred_username", username)
+	}
+
+	/// `picture`: the address of their profile picture.
+	pub fn picture(&mut self, url: &str) -> &mut Self {
+		self.insert("picture", url)
+	}
+
+	/// The claims set so far.
+	pub fn get(&self, name: &str) -> Option<&Value> {
+		self.claims.get(name)
+	}
+
+	pub(crate) fn into_inner(self) -> BTreeMap<String, Value> {
+		self.claims
+	}
+}
+
+/// Releases claims about a person to the apps they connected, such as their
+/// name, from the app's own tables.
+///
+/// ```ignore
+/// impl idp::Claims for User {
+/// 	async fn claims(db: &Db, account: Id<auth::Account>, scopes: &idp::GrantedScopes, out: &mut idp::ClaimSet) -> idp::Result<()> {
+/// 		let Some(user) = User::find(db, account).await? else { return Ok(()) };
+/// 		if scopes.has("profile") {
+/// 			out.name(&user.display_name).preferred_username(&user.handle);
+/// 		}
+/// 		Ok(())
+/// 	}
+/// }
+/// ```
+///
+/// `db` acts as the person, so their own policies apply.
+pub trait Claims {
+	/// Adds the claims `scopes` allow about `account` to `out`.
+	fn claims(
+		db: &Db,
+		account: Id<Account>,
+		scopes: &GrantedScopes,
+		out: &mut ClaimSet,
+	) -> impl Future<Output = Result<()>> + Send;
+}
+
+pub(crate) type ClaimsHook = for<'a> fn(
+	&'a Db,
+	Id<Account>,
+	&'a GrantedScopes,
+	&'a mut ClaimSet,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn issuers_are_bare_secure_origins() {
+		for issuer in [
+			"https://myapp.com",
+			"http://localhost:3000",
+			"http://127.0.0.1:8080",
+		] {
+			assert!(check_issuer(issuer).is_ok(), "{issuer}");
+		}
+		for issuer in [
+			"http://myapp.com",
+			"https://myapp.com/idp",
+			"https://myapp.com?x=1",
+			"https://user@myapp.com",
+			"myapp.com",
+		] {
+			assert!(check_issuer(issuer).is_err(), "{issuer}");
+		}
+	}
+
+	#[test]
+	fn pages_are_local_paths() {
+		assert!(is_local_path("/consent"));
+		assert!(!is_local_path("//evil.example"));
+		assert!(!is_local_path("/\\evil.example"));
+		assert!(!is_local_path("https://evil.example"));
+	}
+
+	#[test]
+	fn lifetimes_are_bounded() {
+		assert!(Lifetimes::default().check().is_ok());
+		let long = Lifetimes {
+			access: Duration::from_hours(2),
+			..Lifetimes::default()
+		};
+		assert!(long.check().is_err());
+		let zero = Lifetimes {
+			code: Duration::ZERO,
+			..Lifetimes::default()
+		};
+		assert!(zero.check().is_err());
+	}
+
+	#[test]
+	fn claims_the_provider_owns_are_ignored() {
+		let mut claims = ClaimSet::default();
+		claims
+			.name("Ada")
+			.preferred_username("ada")
+			.picture("https://img.example/ada")
+			.insert("sub", "forged")
+			.insert("email", "forged@example.com")
+			.insert("locale", "en");
+
+		assert_eq!(claims.get("name"), Some(&Value::from("Ada")));
+		assert_eq!(claims.get("sub"), None);
+		assert_eq!(claims.get("email"), None);
+		assert_eq!(claims.into_inner().len(), 4);
+
+		let scopes = GrantedScopes::new(vec!["openid".into(), "profile".into()]);
+		assert!(scopes.has("profile"));
+		assert!(!scopes.has("email"));
+		assert_eq!(scopes.iter().count(), 2);
+	}
+}

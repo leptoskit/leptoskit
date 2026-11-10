@@ -11,11 +11,38 @@ use leptoskit_db::Id;
 
 use super::Api;
 use super::EmailCode;
+use super::HttpResponse;
+use super::LinkWalletInput;
+use super::MergeInput;
+use super::Method;
+use super::PasskeyAdded;
+use super::PasskeyMode;
 use super::Pending;
+use super::ProveWalletInput;
+use super::SignInStep;
+use super::TotpConfirmation;
+use super::WalletApp;
 use super::protocol::error;
 use crate::Device;
+use crate::Identity;
+use crate::IdentityInfo;
+use crate::MergeOffer;
+use crate::MfaStatus;
+use crate::Passkey;
+use crate::PasskeyInfo;
+use crate::ProviderInfo;
+use crate::ProviderOutcome;
 use crate::PublicSession;
+use crate::RecoveryCodes;
+use crate::RenamePasskey;
 use crate::Session;
+use crate::StartProvider;
+use crate::TotpSetup;
+use crate::UpdateWallet;
+use crate::Wallet;
+use crate::WalletInfo;
+use crate::WalletLinked;
+use crate::WalletSettings;
 
 /// The request's own session, in process.
 pub(crate) struct Server;
@@ -36,7 +63,35 @@ impl Api for Server {
 		in_the_browser()
 	}
 
-	fn verify_code(&self, _input: EmailCode) -> Pending<'_, PublicSession> {
+	fn verify_code(&self, _input: EmailCode) -> Pending<'_, SignInStep> {
+		in_the_browser()
+	}
+
+	fn complete_sign_in(&self, _code: String) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn mfa(&self) -> Pending<'_, MfaStatus> {
+		Box::pin(reads::mfa())
+	}
+
+	fn step_up(&self, _code: String) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn begin_totp(&self) -> Pending<'_, TotpSetup> {
+		in_the_browser()
+	}
+
+	fn confirm_totp(&self, _code: String) -> Pending<'_, TotpConfirmation> {
+		in_the_browser()
+	}
+
+	fn disable_totp(&self) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn regenerate_recovery_codes(&self) -> Pending<'_, RecoveryCodes> {
 		in_the_browser()
 	}
 
@@ -59,6 +114,116 @@ impl Api for Server {
 	fn sign_out_everywhere(&self) -> Pending<'_, ()> {
 		in_the_browser()
 	}
+
+	fn passkey_sign_in(&self, _mode: PasskeyMode) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn cancel_passkey(&self) {}
+
+	fn add_passkey(&self, _name: Option<String>) -> Pending<'_, PasskeyAdded> {
+		in_the_browser()
+	}
+
+	fn complete_sign_in_with_passkey(&self) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn step_up_with_passkey(&self) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn passkeys(&self) -> Pending<'_, Vec<PasskeyInfo>> {
+		Box::pin(reads::passkeys())
+	}
+
+	fn rename_passkey(&self, _input: RenamePasskey) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn remove_passkey(&self, _id: Id<Passkey>) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn providers(&self) -> Pending<'_, Vec<ProviderInfo>> {
+		Box::pin(reads::providers())
+	}
+
+	fn start_provider(&self, _input: StartProvider, _link: bool) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn continue_provider_sign_up(&self) -> Pending<'_, PublicSession> {
+		in_the_browser()
+	}
+
+	fn provider_outcome(&self) -> Option<ProviderOutcome> {
+		None
+	}
+
+	fn identities(&self) -> Pending<'_, Vec<IdentityInfo>> {
+		Box::pin(reads::identities())
+	}
+
+	fn unlink_identity(&self, _id: Id<Identity>) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn merge_offer(&self) -> Pending<'_, Option<MergeOffer>> {
+		Box::pin(reads::merge_offer())
+	}
+
+	fn merge_accounts(&self, _input: MergeInput) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn cancel_merge(&self) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn wallet_settings(&self) -> Pending<'_, WalletSettings> {
+		Box::pin(reads::wallet_settings())
+	}
+
+	fn wallet_apps(&self) -> Pending<'_, Vec<WalletApp>> {
+		in_the_browser()
+	}
+
+	fn wallets(&self) -> Pending<'_, Vec<WalletInfo>> {
+		Box::pin(reads::wallets())
+	}
+
+	fn link_wallet(&self, _input: LinkWalletInput) -> Pending<'_, WalletLinked> {
+		in_the_browser()
+	}
+
+	fn prove_wallet(&self, _input: ProveWalletInput) -> Pending<'_, WalletInfo> {
+		in_the_browser()
+	}
+
+	fn update_wallet(&self, _input: UpdateWallet) -> Pending<'_, WalletInfo> {
+		in_the_browser()
+	}
+
+	fn unlink_wallet(&self, _id: Id<Wallet>) -> Pending<'_, ()> {
+		in_the_browser()
+	}
+
+	fn wallet_sign_in(&self, _wallet: String) -> Pending<'_, SignInStep> {
+		in_the_browser()
+	}
+
+	fn send(
+		&self,
+		_method: Method,
+		_path: String,
+		_body: Option<String>,
+	) -> Pending<'_, HttpResponse> {
+		Box::pin(std::future::ready(Err(error(
+			"server",
+			"requests to the server run in the browser or the app, not while the server renders",
+		))))
+	}
 }
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -71,7 +236,10 @@ mod reads {
 	use crate::Session;
 
 	pub(super) async fn session() -> Result<Option<PublicSession>, ErrorResponse> {
-		let Some(me) = crate::signed_in()? else {
+		// A session that may only set up two-step verification is still
+		// the person's session.
+		let current = crate::current_session()?;
+		let Some(me) = current.signed_in.or(current.enrolling) else {
 			return Ok(None);
 		};
 		let auth: Auth = crate::guards::extension()?;
@@ -85,6 +253,58 @@ mod reads {
 		let me = crate::require_signed_in()?;
 		let auth: Auth = crate::guards::extension()?;
 		Ok(auth.devices(&me).await?)
+	}
+
+	pub(super) async fn mfa() -> Result<crate::MfaStatus, ErrorResponse> {
+		let me = enrolling()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.mfa_status(me.account).await?)
+	}
+
+	pub(super) async fn passkeys() -> Result<Vec<crate::PasskeyInfo>, ErrorResponse> {
+		let me = enrolling()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.passkeys(me.account).await?)
+	}
+
+	#[allow(clippy::unused_async, reason = "the reads share a shape")]
+	pub(super) async fn providers() -> Result<Vec<crate::ProviderInfo>, ErrorResponse> {
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.providers())
+	}
+
+	pub(super) async fn identities() -> Result<Vec<crate::IdentityInfo>, ErrorResponse> {
+		let me = crate::require_signed_in()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.identities(me.account).await?)
+	}
+
+	pub(super) async fn merge_offer() -> Result<Option<crate::MergeOffer>, ErrorResponse> {
+		let me = crate::require_signed_in()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.merge_offer(&me).await?)
+	}
+
+	#[allow(clippy::unused_async, reason = "the reads share a shape")]
+	pub(super) async fn wallet_settings() -> Result<crate::WalletSettings, ErrorResponse> {
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.wallet_settings())
+	}
+
+	pub(super) async fn wallets() -> Result<Vec<crate::WalletInfo>, ErrorResponse> {
+		let me = crate::require_signed_in()?;
+		let auth: Auth = crate::guards::extension()?;
+		Ok(auth.wallets(me.account).await?)
+	}
+
+	/// The signed-in person, including a session that may only set up a
+	/// second factor, as the routes that do that accept it.
+	fn enrolling() -> Result<crate::SignedIn, ErrorResponse> {
+		let current = crate::current_session()?;
+		current
+			.signed_in
+			.or(current.enrolling)
+			.ok_or_else(|| AuthError::SignedOut.into())
 	}
 }
 
@@ -113,6 +333,34 @@ mod reads {
 	}
 
 	pub(super) async fn devices() -> Result<Vec<Device>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn mfa() -> Result<crate::MfaStatus, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn passkeys() -> Result<Vec<crate::PasskeyInfo>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn providers() -> Result<Vec<crate::ProviderInfo>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn identities() -> Result<Vec<crate::IdentityInfo>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn merge_offer() -> Result<Option<crate::MergeOffer>, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn wallet_settings() -> Result<crate::WalletSettings, ErrorResponse> {
+		Err(no_database())
+	}
+
+	pub(super) async fn wallets() -> Result<Vec<crate::WalletInfo>, ErrorResponse> {
 		Err(no_database())
 	}
 }

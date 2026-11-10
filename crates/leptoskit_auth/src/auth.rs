@@ -65,6 +65,29 @@ pub(crate) struct Inner {
 	pub dev_mailbox: Option<crate::Mailbox>,
 	/// Whether `/auth/dev/sign-in` signs anyone in without a code.
 	pub dev_sign_in: bool,
+	/// Who must have a second factor.
+	pub mfa: MfaPolicy,
+	/// The app's roles for an account, for [`MfaPolicy::required_for`].
+	pub roles: Option<RolesHook>,
+	/// The app's native builds, whose passkeys and return addresses count
+	/// as this site's.
+	#[cfg_attr(
+		not(feature = "oauth"),
+		allow(dead_code, reason = "only provider sign-in reads it after building")
+	)]
+	pub native: NativeApps,
+	/// The WebAuthn relying party: the origin's host. `None` without an
+	/// origin, and then passkeys answer a configuration error.
+	#[cfg(feature = "passkey")]
+	pub webauthn: Option<webauthn_rs::Webauthn>,
+	/// The third-party sign-in providers.
+	#[cfg(feature = "oauth")]
+	pub providers: crate::oauth::Providers,
+	/// How wallets work here.
+	pub solana: crate::SolanaOptions,
+	/// How accounts' data moves when they merge, when the app moves some
+	/// of it itself.
+	pub on_merge: Option<crate::merge::MergeHooks>,
 }
 
 impl Auth {
@@ -84,12 +107,32 @@ impl Auth {
 			client_ip_header: None,
 			dev_mailbox: None,
 			dev_sign_in: false,
+			mfa: MfaPolicy::default(),
+			roles: None,
+			solana: crate::SolanaOptions::default(),
+			on_merge: None,
+			native: NativeApps::default(),
+			#[cfg(feature = "oauth")]
+			providers: Vec::new(),
+			#[cfg(feature = "oauth")]
+			provider_http: None,
 		}
 	}
 
 	/// The app's name, as emails say it.
 	pub fn app_name(&self) -> &str {
 		&self.inner.app_name
+	}
+
+	/// The site's origin, such as `https://myapp.com`, if one was set.
+	pub fn origin(&self) -> Option<&str> {
+		self.inner.origin.as_deref()
+	}
+
+	/// The server's keys, for crates that build on sign-in, such as
+	/// `leptoskit_idp`, to derive their own secrets from.
+	pub fn keys(&self) -> &Keys {
+		&self.inner.keys
 	}
 }
 
@@ -118,6 +161,15 @@ pub struct AuthBuilder {
 	client_ip_header: Option<String>,
 	dev_mailbox: Option<crate::Mailbox>,
 	dev_sign_in: bool,
+	mfa: MfaPolicy,
+	roles: Option<RolesHook>,
+	solana: crate::SolanaOptions,
+	on_merge: Option<crate::merge::MergeHooks>,
+	native: NativeApps,
+	#[cfg(feature = "oauth")]
+	providers: Vec<crate::oauth::Provider>,
+	#[cfg(feature = "oauth")]
+	provider_http: Option<Arc<dyn crate::oauth::ProviderHttp>>,
 }
 
 impl std::fmt::Debug for AuthBuilder {
@@ -204,6 +256,61 @@ impl AuthBuilder {
 		self
 	}
 
+	/// Who must have a second factor: everyone, or people with certain
+	/// roles. Until they have one, their sessions may only set one up.
+	pub fn mfa(mut self, policy: MfaPolicy) -> Self {
+		self.mfa = policy;
+		self
+	}
+
+	/// Reads an account's roles with `R::roles`, for
+	/// [`MfaPolicy::required_for`].
+	pub fn roles<R: Roles + 'static>(mut self) -> Self {
+		self.roles = Some(|db, account| Box::pin(R::roles(db, account)));
+		self
+	}
+
+	/// How Solana wallets work: whether one may sign in once its owner
+	/// turns that on, and the cluster messages name. Linking needs the
+	/// `solana` feature and an [`origin`](Self::origin).
+	pub fn solana(mut self, options: crate::SolanaOptions) -> Self {
+		self.solana = options;
+		self
+	}
+
+	/// Lets a merge bring the other account's data along with `U`'s
+	/// [`OnMerge`](crate::OnMerge): its summary for the preview, and the
+	/// tables marked `on_account_merge = custom`, which it moves itself.
+	pub fn on_merge<U: crate::OnMerge + 'static>(mut self) -> Self {
+		self.on_merge = Some(crate::merge::MergeHooks::of::<U>());
+		self
+	}
+
+	/// The app's native builds: their passkeys are accepted as this site's,
+	/// and their system-browser sign-ins may return to them. `from_config`
+	/// reads these from `[native]`.
+	pub fn native_apps(mut self, apps: NativeApps) -> Self {
+		self.native = apps;
+		self
+	}
+
+	/// Adds a third-party sign-in provider, such as
+	/// [`Provider::google`](crate::Provider::google).
+	#[cfg(feature = "oauth")]
+	pub fn provider(mut self, provider: crate::oauth::Provider) -> Self {
+		self.providers.retain(|existing| existing.id != provider.id);
+		self.providers.push(provider);
+		self
+	}
+
+	/// Sends the providers' requests through `http` instead of the network,
+	/// for tests.
+	#[cfg(feature = "oauth")]
+	pub fn provider_http(mut self, http: impl crate::oauth::ProviderHttp) -> Self {
+		self.provider_http = Some(Arc::new(http));
+		self
+	}
+
 	/// Runs `U::on_sign_up` whenever an account is created, so the app's
 	/// user row exists from the first request.
 	pub fn on_sign_up<U: OnSignUp + 'static>(mut self) -> Self {
@@ -215,11 +322,30 @@ impl AuthBuilder {
 	///
 	/// # Errors
 	///
-	/// [`AuthError::Config`] without a mailer.
+	/// [`AuthError::Config`] without a mailer, when roles require a second
+	/// factor but nothing reads them, or when the origin can't be a passkey
+	/// relying party.
 	pub fn build(self) -> Result<Auth> {
 		let mailer = self.mailer.ok_or_else(|| {
 			AuthError::Config("set a mailer, such as `Mailbox::new()` in development".into())
 		})?;
+
+		if !self.mfa.required_for.is_empty() && self.roles.is_none() {
+			return Err(AuthError::Config(
+				"`required_for` names roles; tell sign-in how to read them with \
+				 `AuthBuilder::roles`"
+					.into(),
+			));
+		}
+
+		#[cfg(feature = "passkey")]
+		let webauthn = self
+			.origin
+			.as_deref()
+			.map(|origin| crate::passkeys::relying_party(origin, &self.app_name, &self.native))
+			.transpose()?;
+		#[cfg(feature = "oauth")]
+		let providers = crate::oauth::Providers::new(self.providers, self.provider_http);
 		let limiter = self
 			.limiter
 			.unwrap_or_else(|| Arc::new(DbRateLimiter::new(&self.db)));
@@ -239,8 +365,54 @@ impl AuthBuilder {
 				client_ip_header: self.client_ip_header,
 				dev_mailbox: self.dev_mailbox,
 				dev_sign_in: self.dev_sign_in,
+				mfa: self.mfa,
+				roles: self.roles,
+				solana: self.solana,
+				on_merge: self.on_merge,
+				native: self.native,
+				#[cfg(feature = "passkey")]
+				webauthn,
+				#[cfg(feature = "oauth")]
+				providers,
 			}),
 		})
+	}
+}
+
+/// An app's native builds, as `[native]` in `leptoskit.toml` describes them.
+///
+/// - Their passkeys count as this site's: Apple's carry the relying party's own
+///   `https` origin, and Android's `android:apk-key-hash:` and the signing
+///   certificate's SHA-256.
+/// - Their system-browser sign-ins may return to `<package
+///   id>:/auth/native/return`.
+/// - Sign in with Apple on the device issues ID tokens to the package ID.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeApps {
+	/// The bundle ID and Android application ID, such as
+	/// `com.example.myapp`. Empty for none.
+	pub package_id: String,
+	/// The Apple team that signs the iOS and macOS apps.
+	pub apple_team_id: Option<String>,
+	/// SHA-256 digests of the certificates that sign the Android app.
+	pub android_certificates: Vec<[u8; 32]>,
+}
+
+impl NativeApps {
+	/// The origins their passkeys report: `android:apk-key-hash:` and each
+	/// Android certificate's digest, base64url.
+	pub fn android_origins(&self) -> Vec<String> {
+		use base64::Engine;
+
+		self.android_certificates
+			.iter()
+			.map(|digest| {
+				format!(
+					"android:apk-key-hash:{}",
+					base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+				)
+			})
+			.collect()
 	}
 }
 
@@ -408,6 +580,64 @@ pub trait OnSignUp {
 	) -> impl Future<Output = Result<()>> + Send;
 }
 
+/// Who must have a second factor. The default asks no one: people turn
+/// it on themselves, and sensitive actions ask for step-up.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MfaPolicy {
+	/// Everyone must.
+	pub required: bool,
+	/// People with any of these roles must, as [`Roles`] reads them.
+	pub required_for: Vec<String>,
+}
+
+impl MfaPolicy {
+	/// Everyone must have a second factor.
+	pub fn required() -> Self {
+		Self {
+			required: true,
+			required_for: Vec::new(),
+		}
+	}
+
+	/// People with any of `roles` must have a second factor.
+	pub fn required_for<R: Into<String>>(roles: impl IntoIterator<Item = R>) -> Self {
+		Self {
+			required: false,
+			required_for: roles.into_iter().map(Into::into).collect(),
+		}
+	}
+
+	/// Whether nobody has to.
+	pub(crate) fn optional(&self) -> bool {
+		!self.required && self.required_for.is_empty()
+	}
+}
+
+/// Reads an account's roles, such as `"Admin"`, for
+/// [`MfaPolicy::required_for`]. Sign-in calls it for sessions that haven't
+/// used a second factor, so it should be one indexed query.
+///
+/// ```ignore
+/// impl auth::Roles for User {
+/// 	async fn roles(db: &Db, account: Id<auth::Account>) -> auth::Result<Vec<String>> {
+/// 		let user = User::get(db, account.into()).await?;
+/// 		Ok(vec![user.role.to_string()])
+/// 	}
+/// }
+/// ```
+///
+/// The `Db` bypasses policies.
+pub trait Roles {
+	/// The roles `account` has.
+	fn roles(db: &Db, account: Id<Account>) -> impl Future<Output = Result<Vec<String>>> + Send;
+}
+
+pub(crate) type RolesHook =
+	for<'a> fn(
+		&'a Db,
+		Id<Account>,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
+
 pub(crate) type SignUpHook = for<'a> fn(
 	&'a Tx,
 	Id<Account>,
@@ -415,11 +645,46 @@ pub(crate) type SignUpHook = for<'a> fn(
 ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 /// The context a request's policies read: [`SignedIn`] when it has a live
-/// session, and nothing when it doesn't.
+/// session, and nothing when it doesn't. [`Auth::request_context`] adds the
+/// person's wallets too.
 pub fn context(signed_in: Option<SignedIn>) -> Context {
 	match signed_in {
 		Some(signed_in) => Context::new().with(signed_in),
 		None => Context::new(),
+	}
+}
+
+impl Auth {
+	/// The context a request's policies read: [`SignedIn`] and the person's
+	/// linked [`Wallets`](crate::Wallets) when it has a live session, and
+	/// nothing when it doesn't. The layer builds one per request. Reading
+	/// the wallets is one indexed query, made only with the `solana` feature.
+	///
+	/// # Errors
+	///
+	/// When the database fails.
+	#[cfg_attr(
+		not(feature = "solana"),
+		allow(
+			clippy::unused_async,
+			reason = "the `solana` feature reads the wallets"
+		)
+	)]
+	pub async fn request_context(&self, signed_in: Option<SignedIn>) -> Result<Context> {
+		let Some(signed_in) = signed_in else {
+			return Ok(Context::new());
+		};
+		#[cfg(feature = "solana")]
+		let wallets = self.wallet_addresses(signed_in.account).await?;
+		#[cfg(not(feature = "solana"))]
+		let wallets: Vec<leptoskit_db::Pubkey> = Vec::new();
+		let context = Context::new().with(signed_in);
+
+		Ok(if wallets.is_empty() {
+			context
+		} else {
+			context.with(crate::Wallets(wallets))
+		})
 	}
 }
 

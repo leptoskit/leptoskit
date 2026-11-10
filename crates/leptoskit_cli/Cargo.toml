@@ -54,12 +54,14 @@ fs4 = "1"
 getrandom = { workspace = true }
 hex = { workspace = true }
 ignore = { workspace = true }
+leptoskit_auth = { workspace = true, features = ["oauth", "postgres", "sqlite"] }
 leptoskit_axum = { workspace = true }
 leptoskit_codepush = { workspace = true }
 leptoskit_config = { workspace = true }
 leptoskit_db = { workspace = true, features = ["postgres", "sqlite"] }
 leptoskit_db_schema = { workspace = true }
 leptoskit_fmt = { workspace = true, features = ["cli"] }
+leptoskit_idp = { workspace = true }
 leptoskit_l10n_codegen = { workspace = true }
 leptoskit_lint = { workspace = true }
 leptoskit_plugin = { workspace = true }
@@ -80,6 +82,7 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 ureq = { workspace = true, features = ["rustls"] }
 url = { workspace = true }
 walkdir = { workspace = true }

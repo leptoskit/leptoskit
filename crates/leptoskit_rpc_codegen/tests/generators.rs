@@ -301,6 +301,7 @@ fn api_function(name: &str, method: &str, input: HttpInput) -> ApiFunction {
 		internal: false,
 		deprecated: false,
 		tags: Vec::new(),
+		scopes: Vec::new(),
 	}
 }
 
@@ -535,6 +536,7 @@ fn unsupported_encodings_are_skipped_with_the_reason() {
 		internal: false,
 		deprecated: true,
 		tags: Vec::new(),
+		scopes: Vec::new(),
 	});
 	let generated = spec.generate(&GenerateOptions::new(TargetLanguage::TypeScript, "todos"));
 	let cli = spec.generate(&GenerateOptions::new(TargetLanguage::Cli, "todos-cli"));
@@ -586,6 +588,10 @@ fn empty_specs_generate_valid_packages() {
 /// case-colliding enum values, `const` strings, floats, free-form values,
 /// `$ref`s to missing schemas, zero-argument functions, and a function whose
 /// output encoding no client can decode.
+#[expect(
+	clippy::too_many_lines,
+	reason = "one literal fixture reads best top to bottom"
+)]
 fn edge_spec() -> ApiSpec {
 	let mut schemas: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 	schemas.insert(
@@ -677,6 +683,7 @@ fn edge_spec() -> ApiSpec {
 				internal: false,
 				deprecated: false,
 				tags: Vec::new(),
+				scopes: Vec::new(),
 			},
 			ApiFunction {
 				name: "summarize".to_owned(),
@@ -698,6 +705,7 @@ fn edge_spec() -> ApiSpec {
 				internal: false,
 				deprecated: false,
 				tags: Vec::new(),
+				scopes: Vec::new(),
 			},
 			ApiFunction {
 				name: "closed".to_owned(),
@@ -714,6 +722,7 @@ fn edge_spec() -> ApiSpec {
 				internal: false,
 				deprecated: false,
 				tags: Vec::new(),
+				scopes: Vec::new(),
 			},
 			ApiFunction {
 				name: "blob".to_owned(),
@@ -732,6 +741,7 @@ fn edge_spec() -> ApiSpec {
 				internal: false,
 				deprecated: false,
 				tags: Vec::new(),
+				scopes: Vec::new(),
 			},
 		],
 		schemas: schemas.into_iter().collect(),
@@ -856,6 +866,7 @@ fn colliding_spec() -> ApiSpec {
 			internal: false,
 			deprecated: false,
 			tags: Vec::new(),
+			scopes: Vec::new(),
 		}
 	};
 	let param = |name: &str, docs: &str, schema: serde_json::Value| {
@@ -1118,3 +1129,90 @@ func TestJSONBodiesKeepNumbers(t *testing.T) {
 	}
 }
 "#;
+
+#[test]
+fn clis_whose_functions_need_scopes_can_sign_in() {
+	let files = |spec: &ApiSpec, package: &str| {
+		spec.generate(&GenerateOptions::new(TargetLanguage::Cli, package))
+			.files
+			.into_iter()
+			.map(|file| (file.path.display().to_string(), file.contents))
+			.collect::<BTreeMap<_, _>>()
+	};
+
+	// Without scopes there's nothing to sign in to.
+	let plain = files(&spec(), "todos-cli");
+	assert!(!plain.contains_key("src/login.rs"));
+	assert!(!plain["src/main.rs"].contains("Login"));
+
+	let mut scoped = spec();
+	scoped.functions[0].scopes = vec!["todos:read".to_owned()];
+	scoped.functions[1].scopes = vec!["todos:read".to_owned(), "todos:write".to_owned()];
+	let generated = files(&scoped, "todos-cli");
+	let login = &generated["src/login.rs"];
+	assert!(
+		login.contains("const APP: &str = \"todos-cli\";"),
+		"{login}"
+	);
+	assert!(
+		login.contains("const SCOPES: &str = \"todos:read todos:write\";"),
+		"{login}"
+	);
+	assert!(
+		login.contains("const CLIENT_ID_ENV: &str = \"TODOS_CLI_CLIENT_ID\";"),
+		"{login}"
+	);
+	assert!(
+		login.contains("urn:ietf:params:oauth:grant-type:device_code"),
+		"{login}"
+	);
+	let main = &generated["src/main.rs"];
+	assert!(main.contains("mod login;"), "{main}");
+	assert!(main.contains("#[command(name = \"login\")]"), "{main}");
+	assert!(
+		main.contains("login::authorization(api.server_url())"),
+		"{main}"
+	);
+	assert!(
+		main.contains("Command::Login { .. } | Command::Logout =>"),
+		"{main}"
+	);
+	assert!(generated["Cargo.toml"].contains("features = [\"rt\", \"time\"]"));
+	assert!(generated["README.md"].contains("## Signing in"));
+	assert!(generated["README.md"].contains("TODOS_CLI_CLIENT_ID"));
+
+	// A function already called `login` keeps its name; signing in moves.
+	scoped.functions[2].name = "login".to_owned();
+	let generated = files(&scoped, "todos-cli");
+	let main = &generated["src/main.rs"];
+	assert!(main.contains("#[command(name = \"auth-login\")]"), "{main}");
+	assert!(main.contains("#[command(name = \"login\")]"), "{main}");
+	assert!(main.contains("#[command(name = \"logout\")]"), "{main}");
+}
+
+/// The signing-in CLI compiles. It needs clap, reqwest and tokio from the
+/// registry, so it's run on request: `cargo test -- --ignored`.
+#[test]
+#[ignore = "builds a generated crate against the registry; run with --ignored"]
+fn a_signing_in_cli_compiles() {
+	let mut scoped = spec();
+	scoped.functions[0].scopes = vec!["todos:read".to_owned()];
+	let generated = scoped.generate(&GenerateOptions::new(TargetLanguage::Cli, "todos-cli"));
+	let directory = tempfile::tempdir().unwrap();
+	for file in &generated.files {
+		let path = directory.path().join(&file.path);
+		std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+		std::fs::write(path, &file.contents).unwrap();
+	}
+	let output = std::process::Command::new(env!("CARGO"))
+		.args(["check", "--quiet"])
+		.current_dir(directory.path())
+		.env("CARGO_TARGET_DIR", directory.path().join("target"))
+		.output()
+		.unwrap();
+	assert!(
+		output.status.success(),
+		"{}",
+		String::from_utf8_lossy(&output.stderr)
+	);
+}

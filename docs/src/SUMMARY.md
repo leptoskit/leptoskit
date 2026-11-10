@@ -34,6 +34,14 @@
 - [Foldable phones](guide/21-foldable-phones.md)
 - [The database](guide/22-database.md)
 - [Sign-in](guide/23-sign-in.md)
+  - [Google](guide/auth/providers/google.md)
+  - [Sign in with Apple](guide/auth/providers/apple.md)
+  - [Microsoft](guide/auth/providers/microsoft.md)
+  - [GitHub](guide/auth/providers/github.md)
+  - [Any OpenID Connect provider](guide/auth/providers/oidc.md)
+  - [Solana wallets](guide/auth/wallets.md)
+  - [Merging accounts](guide/auth/merging.md)
+- [Sign in with your app](guide/24-sign-in-with-your-app.md)
 
 # Reference
 

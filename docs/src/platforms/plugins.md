@@ -46,6 +46,8 @@ plugins = ["clipboard"]
 
 The next native build registers the plugin with the host and grants your app its methods. A plugin that is a host dependency but isn't listed stays unregistered, and one that is listed but missing from the host stops the build. [Host projects](host-projects.md#automatic-plugin-registration) covers the details.
 
+The generated Linux, Windows, and terminal runners can't host plugins yet. A build for one of them leaves out everything in `native.plugins` and warns that it did, so the same `leptoskit.toml` still builds there; your app's calls to those plugins fail as unavailable, which each plugin's client reports as an error.
+
 Granting a plugin doesn't grant operating-system permissions. Plugins that need one, such as location or the camera, say which `Info.plist` strings, manifest permissions, or entitlements to add, and your app still asks the user at run time.
 
 ## Reactive settings and secrets
@@ -119,6 +121,7 @@ Most runtime names match the crate's suffix: `leptoskit_plugin_clipboard` is `cl
 | `leptoskit_plugin_secure_store`          | `secure-store`          |
 | `leptoskit_plugin_store_review`          | `store-review`          |
 | `leptoskit_plugin_tracking_transparency` | `tracking-transparency` |
+| `leptoskit_plugin_web_auth`              | `web-auth`              |
 
 `light_sensor` and `image_manipulator` keep their underscores. `dialog`, `menu`, `tray`, `global_shortcut`, `window_state`, `autostart`, `single_instance`, and `arguments` have no runtime name: the desktop host constructs them itself, because each needs something only the host has, such as a running event loop or a window.
 

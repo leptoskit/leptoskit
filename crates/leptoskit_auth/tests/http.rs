@@ -3,6 +3,12 @@
 
 #![cfg(all(feature = "axum", feature = "sqlite"))]
 
+#[cfg(feature = "passkey")]
+#[path = "support/passkey.rs"]
+mod passkey;
+#[path = "support/totp.rs"]
+mod totp;
+
 use std::net::SocketAddr;
 
 use axum::Extension;
@@ -20,19 +26,25 @@ use leptoskit_auth::Auth;
 use leptoskit_auth::Device;
 use leptoskit_auth::ErrorResponse;
 use leptoskit_auth::Event;
+use leptoskit_auth::Factor;
 use leptoskit_auth::Keys;
 use leptoskit_auth::Limit;
 use leptoskit_auth::Limits;
 use leptoskit_auth::Mailbox;
+use leptoskit_auth::MfaStatus;
 use leptoskit_auth::RequestInfo;
 use leptoskit_auth::Session;
 use leptoskit_auth::SessionResponse;
 use leptoskit_auth::SignedIn;
 use leptoskit_auth::SignedInResponse;
 use leptoskit_auth::Tokens;
+use leptoskit_auth::TotpConfirmedResponse;
+use leptoskit_auth::TotpSetup;
+use leptoskit_auth::VerifyResponse;
 use leptoskit_db::Db;
 use serde_json::Value;
 use serde_json::json;
+use totp::totp;
 use tower::ServiceExt;
 
 const ORIGIN: &str = "https://notes.example";
@@ -752,4 +764,678 @@ async fn the_client_address_comes_from_the_peer_or_a_trusted_header() {
 		.unwrap();
 	assert_eq!(events[0].ip.as_deref(), Some("203.0.113.5"));
 	assert_eq!(events[0].user_agent.as_deref(), Some("Firefox/131.0"));
+}
+
+/// Every `Set-Cookie` a response sends, as `name=value`.
+fn set_cookies(response: &Response) -> Vec<String> {
+	response
+		.headers()
+		.get_all(header::SET_COOKIE)
+		.iter()
+		.map(|value| value.to_str().unwrap().to_owned())
+		.collect()
+}
+
+fn session_cookie(response: &Response) -> String {
+	set_cookies(response)
+		.into_iter()
+		.find(|cookie| cookie.starts_with("__Host-session="))
+		.expect("a session cookie")
+		.split(';')
+		.next()
+		.unwrap()
+		.to_owned()
+}
+
+#[tokio::test]
+async fn a_browser_turns_on_an_authenticator_and_needs_it_to_sign_in() {
+	let app = app(|builder| builder).await;
+	let cookie = app.sign_in("ada@example.com").await;
+	let codes = browser_turns_on(&app, &cookie).await;
+	let laptop = browser_second_step(&app, &codes).await;
+
+	// The fresh session may make new codes and turn the authenticator off.
+	let status: MfaStatus = body(app.call("GET", "/auth/mfa", None, Some(&laptop)).await).await;
+	assert_eq!(
+		status,
+		MfaStatus {
+			passkeys: 0,
+			required: false,
+			totp: true,
+			recovery_codes: 9
+		}
+	);
+	let fresh = app
+		.call("POST", "/auth/recovery-codes", None, Some(&laptop))
+		.await;
+	assert_eq!(fresh.status(), StatusCode::OK);
+	let stepped_up = app
+		.call(
+			"POST",
+			"/auth/step-up",
+			Some(json!({ "code": codes[1] })),
+			Some(&laptop),
+		)
+		.await;
+	let stepped_up: ErrorResponse = body(stepped_up).await;
+	assert_eq!(
+		stepped_up.error, "invalid_code",
+		"the old codes were replaced"
+	);
+	let off = app
+		.call("POST", "/auth/totp/disable", None, Some(&laptop))
+		.await;
+	assert_eq!(off.status(), StatusCode::NO_CONTENT);
+	let again: ErrorResponse = body(
+		app.call("POST", "/auth/totp/disable", None, Some(&laptop))
+			.await,
+	)
+	.await;
+	assert_eq!(again.error, "not_enrolled");
+}
+
+/// Turns an authenticator on in the browser signed in with `cookie`, and
+/// returns the recovery codes.
+async fn browser_turns_on(app: &App, cookie: &str) -> Vec<String> {
+	let cookie = cookie.to_owned();
+
+	let status: MfaStatus = body(app.call("GET", "/auth/mfa", None, Some(&cookie)).await).await;
+	assert_eq!(status, MfaStatus::default());
+	// Without an authenticator there's nothing to back up, and an aal1
+	// session hasn't stepped up.
+	let refused = app
+		.call("POST", "/auth/recovery-codes", None, Some(&cookie))
+		.await;
+	assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+	let refused: ErrorResponse = body(refused).await;
+	assert_eq!(refused.error, "step_up_required");
+
+	let setup: TotpSetup = body(app.call("POST", "/auth/totp", None, Some(&cookie)).await).await;
+	let wrong = app
+		.call(
+			"POST",
+			"/auth/totp/confirm",
+			Some(json!({ "code": "000000" })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+	let confirmed = app
+		.call(
+			"POST",
+			"/auth/totp/confirm",
+			Some(json!({ "code": totp(&setup.secret, 0) })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(confirmed.status(), StatusCode::OK);
+	let elevated = session_cookie(&confirmed);
+	assert_ne!(elevated, cookie, "the token rotates");
+	let confirmed: TotpConfirmedResponse = body(confirmed).await;
+	assert_eq!(confirmed.tokens, None);
+	let codes = confirmed.recovery_codes.unwrap().codes;
+	assert_eq!(codes.len(), 10);
+	let stale: SessionResponse =
+		body(app.call("GET", "/auth/session", None, Some(&cookie)).await).await;
+	assert_eq!(stale.session, None);
+
+	codes
+}
+
+/// Signs in again: the emailed code stops at the second step, which a
+/// recovery code finishes. Returns the new session's cookie.
+async fn browser_second_step(app: &App, codes: &[String]) -> String {
+	// Signing in again stops at the second step, whose token stays in a
+	// cookie the page's scripts can't read.
+	app.call(
+		"POST",
+		"/auth/email/send",
+		Some(json!({ "email": "ada@example.com" })),
+		None,
+	)
+	.await;
+	let verified = app
+		.call(
+			"POST",
+			"/auth/email/verify",
+			Some(json!({ "email": "ada@example.com", "code": app.code("ada@example.com") })),
+			None,
+		)
+		.await;
+	assert_eq!(verified.status(), StatusCode::OK);
+	let pending = set_cookies(&verified);
+	assert_eq!(pending.len(), 1, "{pending:?}");
+	assert!(pending[0].starts_with("__Host-second-factor="));
+	assert!(pending[0].contains("; Path=/; HttpOnly; SameSite=Lax; Max-Age="));
+	assert!(pending[0].ends_with("; Secure"));
+	let pending = pending[0].split(';').next().unwrap().to_owned();
+	let VerifyResponse::SecondFactor(step) = body(verified).await else {
+		panic!("the account has a second factor");
+	};
+	assert_eq!(
+		step.second_factor.factors,
+		[Factor::Totp, Factor::RecoveryCode]
+	);
+	assert_eq!(
+		step.second_factor.token, None,
+		"a browser's is in the cookie"
+	);
+
+	// A wrong code keeps the step's cookie for another try.
+	let wrong = app
+		.call(
+			"POST",
+			"/auth/second-factor",
+			Some(json!({ "code": "000000" })),
+			Some(&pending),
+		)
+		.await;
+	assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+	assert_eq!(set_cookies(&wrong), [] as [String; 0]);
+	let signed_in = app
+		.call(
+			"POST",
+			"/auth/second-factor",
+			Some(json!({ "code": codes[0] })),
+			Some(&pending),
+		)
+		.await;
+	assert_eq!(signed_in.status(), StatusCode::OK);
+	let cookies = set_cookies(&signed_in);
+	assert!(
+		cookies.iter().any(|cookie| {
+			cookie.starts_with("__Host-second-factor=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+		}),
+		"{cookies:?}"
+	);
+	let laptop = session_cookie(&signed_in);
+	let signed_in: SignedInResponse = body(signed_in).await;
+	assert!(signed_in.session.mfa_at.is_some());
+
+	// The used step is gone, and so is its cookie.
+	let again = app
+		.call(
+			"POST",
+			"/auth/second-factor",
+			Some(json!({ "code": codes[1] })),
+			Some(&pending),
+		)
+		.await;
+	let again: ErrorResponse = body(again).await;
+	assert_eq!(again.error, "sign_in_expired");
+	let missing = app
+		.call(
+			"POST",
+			"/auth/second-factor",
+			Some(json!({ "code": codes[1] })),
+			None,
+		)
+		.await;
+	assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+
+	laptop
+}
+
+#[tokio::test]
+async fn a_native_app_carries_the_second_step_and_steps_up_with_tokens() {
+	let app = app(|builder| builder).await;
+	let cookie = app.sign_in("ada@example.com").await;
+	let setup: TotpSetup = body(app.call("POST", "/auth/totp", None, Some(&cookie)).await).await;
+	let confirmed: TotpConfirmedResponse = body(
+		app.call(
+			"POST",
+			"/auth/totp/confirm",
+			Some(json!({ "code": totp(&setup.secret, 0) })),
+			Some(&cookie),
+		)
+		.await,
+	)
+	.await;
+	let codes = confirmed.recovery_codes.unwrap().codes;
+
+	let native = |path: &str, body: Value, bearer: Option<&str>| {
+		let mut builder = Request::builder()
+			.method("POST")
+			.uri(path)
+			.header(header::CONTENT_TYPE, "application/json");
+
+		if let Some(token) = bearer {
+			builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+		}
+
+		with_body(builder, Some(body))
+	};
+	app.send(native(
+		"/auth/email/send",
+		json!({ "email": "ada@example.com" }),
+		None,
+	))
+	.await;
+	let verified = app
+		.send(native(
+			"/auth/email/verify",
+			json!({
+				"email": "ada@example.com",
+				"code": app.code("ada@example.com"),
+				"transport": "bearer",
+			}),
+			None,
+		))
+		.await;
+	assert!(set_cookies(&verified).is_empty(), "a native app has no jar");
+	let VerifyResponse::SecondFactor(step) = body(verified).await else {
+		panic!("the account has a second factor");
+	};
+	let token = step
+		.second_factor
+		.token
+		.clone()
+		.expect("a native app holds the token");
+	assert!(!format!("{:?}", step.second_factor).contains(&token));
+
+	let signed_in = app
+		.send(native(
+			"/auth/second-factor",
+			json!({
+				"code": codes[0],
+				"token": token,
+				"transport": "bearer",
+				"device_name": "Ada's phone",
+			}),
+			None,
+		))
+		.await;
+	assert_eq!(signed_in.status(), StatusCode::OK);
+	assert_eq!(set_cookies(&signed_in), [] as [String; 0]);
+	let signed_in: SignedInResponse = body(signed_in).await;
+	assert_eq!(signed_in.session.device, "Ada's phone");
+	let tokens = signed_in.tokens.expect("tokens");
+
+	let stepped_up = app
+		.send(native(
+			"/auth/step-up",
+			json!({ "code": codes[1] }),
+			Some(&tokens.access_token),
+		))
+		.await;
+	assert_eq!(stepped_up.status(), StatusCode::OK);
+	let stepped_up: SignedInResponse = body(stepped_up).await;
+	let rotated = stepped_up.tokens.expect("new tokens");
+	assert_ne!(rotated.access_token, tokens.access_token);
+	assert_ne!(rotated.refresh_token, tokens.refresh_token);
+	let stale = app
+		.send(native(
+			"/auth/totp/disable",
+			json!({}),
+			Some(&tokens.access_token),
+		))
+		.await;
+	assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+	let off = app
+		.send(native(
+			"/auth/totp/disable",
+			json!({}),
+			Some(&rotated.access_token),
+		))
+		.await;
+	assert_eq!(off.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_session_that_must_set_up_two_step_reaches_only_that() {
+	let app = app(|builder| builder.mfa(leptoskit_auth::MfaPolicy::required())).await;
+	let cookie = app.sign_in("ada@example.com").await;
+
+	// The app sees no one, and says why.
+	let me = app.call("GET", "/me", None, Some(&cookie)).await;
+	assert_eq!(me.status(), StatusCode::FORBIDDEN);
+	assert_eq!(body::<ErrorResponse>(me).await.error, "mfa_required");
+	let visible = app
+		.call("GET", "/visible-sessions", None, Some(&cookie))
+		.await;
+	assert_eq!(text(visible).await, "0", "policies see no one");
+	let devices = app.call("GET", "/auth/sessions", None, Some(&cookie)).await;
+	assert_eq!(body::<ErrorResponse>(devices).await.error, "mfa_required");
+
+	// It is still the person's session, and may set a factor up.
+	let session: SessionResponse =
+		body(app.call("GET", "/auth/session", None, Some(&cookie)).await).await;
+	assert!(session.session.is_some());
+	let status: MfaStatus = body(app.call("GET", "/auth/mfa", None, Some(&cookie)).await).await;
+	assert!(status.required);
+	assert!(!status.enrolled());
+	let setup: TotpSetup = body(app.call("POST", "/auth/totp", None, Some(&cookie)).await).await;
+	let confirmed = app
+		.call(
+			"POST",
+			"/auth/totp/confirm",
+			Some(json!({ "code": totp(&setup.secret, 0) })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(confirmed.status(), StatusCode::OK);
+	let cookie = session_cookie(&confirmed);
+	let me = app.call("GET", "/me", None, Some(&cookie)).await;
+	assert_eq!(me.status(), StatusCode::OK);
+}
+
+/// Adds a passkey on `device` for the browser with `cookie`, and returns
+/// the new cookie and the account's passkeys.
+#[cfg(feature = "passkey")]
+async fn register(
+	app: &App,
+	cookie: &str,
+	device: &mut passkey::SoftPasskey,
+) -> (String, Vec<leptoskit_auth::PasskeyInfo>) {
+	let options = app
+		.call("POST", "/auth/passkey/register/options", None, Some(cookie))
+		.await;
+	assert_eq!(options.status(), StatusCode::OK);
+	let options: leptoskit_auth::CreationChallengeResponse = body(options).await;
+	let added = app
+		.call(
+			"POST",
+			"/auth/passkey/register",
+			Some(json!({ "credential": device.register(&options), "name": "Laptop" })),
+			Some(cookie),
+		)
+		.await;
+	assert_eq!(added.status(), StatusCode::OK);
+	let cookie = session_cookie(&added);
+	let added: leptoskit_auth::PasskeyAddedResponse = body(added).await;
+	assert_eq!(added.passkey.name, "Laptop");
+	assert!(
+		added.tokens.is_none(),
+		"a browser's session stays in its cookie"
+	);
+	let listed: Vec<leptoskit_auth::PasskeyInfo> =
+		body(app.call("GET", "/auth/passkeys", None, Some(&cookie)).await).await;
+	assert_eq!(listed.len(), 1);
+	(cookie, listed)
+}
+
+#[cfg(feature = "passkey")]
+#[tokio::test]
+async fn a_browser_signs_in_with_a_passkey_through_its_cookie() {
+	let app = app(|builder| builder).await;
+	let cookie = app.sign_in("ada@example.com").await;
+	let mut device = passkey::SoftPasskey::new(ORIGIN);
+
+	register(&app, &cookie, &mut device).await;
+
+	// Signing in: the ceremony's token goes in an `HttpOnly` cookie, never
+	// the body, and goes once it's used.
+	let started = app
+		.call(
+			"POST",
+			"/auth/passkey/sign-in/options",
+			Some(json!({})),
+			None,
+		)
+		.await;
+	let set = set_cookies(&started);
+	assert!(set[0].starts_with("__Host-passkey="), "{set:?}");
+	assert!(set[0].contains("HttpOnly"));
+	let ceremony = set[0].split(';').next().unwrap().to_owned();
+	let started: leptoskit_auth::PasskeyOptions = body(started).await;
+	assert!(started.token.is_none());
+	let signed_in = app
+		.call(
+			"POST",
+			"/auth/passkey/sign-in",
+			Some(json!({ "credential": device.sign(&started.options) })),
+			Some(&ceremony),
+		)
+		.await;
+	assert_eq!(signed_in.status(), StatusCode::OK);
+	let set = set_cookies(&signed_in);
+	assert!(
+		set.iter()
+			.any(|cookie| cookie.starts_with("__Host-session="))
+	);
+	assert!(
+		set.iter()
+			.any(|cookie| cookie.starts_with("__Host-passkey=;"))
+	);
+
+	// Without the cookie there's nothing to finish.
+	let started: leptoskit_auth::PasskeyOptions = body(
+		app.call(
+			"POST",
+			"/auth/passkey/sign-in/options",
+			Some(json!({})),
+			None,
+		)
+		.await,
+	)
+	.await;
+	let refused = app
+		.call(
+			"POST",
+			"/auth/passkey/sign-in",
+			Some(json!({ "credential": device.sign(&started.options) })),
+			None,
+		)
+		.await;
+	assert_eq!(body::<ErrorResponse>(refused).await.error, "passkey_failed");
+}
+
+#[cfg(feature = "passkey")]
+#[tokio::test]
+async fn passkeys_answer_the_second_step_step_up_and_management_over_http() {
+	let app = app(|builder| builder).await;
+	let cookie = app.sign_in("ada@example.com").await;
+	let mut device = passkey::SoftPasskey::new(ORIGIN);
+	let (_, listed) = register(&app, &cookie, &mut device).await;
+
+	// A native app gets its ceremony token in the body.
+	let native = app
+		.send(with_body(
+			Request::post("/auth/passkey/sign-in/options")
+				.header(header::CONTENT_TYPE, "application/json"),
+			Some(json!({ "transport": "bearer" })),
+		))
+		.await;
+	assert_eq!(set_cookies(&native), [] as [String; 0]);
+	let native: leptoskit_auth::PasskeyOptions = body(native).await;
+	let signed_in = app
+		.send(with_body(
+			Request::post("/auth/passkey/sign-in").header(header::CONTENT_TYPE, "application/json"),
+			Some(json!({
+				"credential": device.sign(&native.options),
+				"token": native.token,
+				"transport": "bearer",
+				"device_name": "Ada's phone",
+			})),
+		))
+		.await;
+	let signed_in: SignedInResponse = body(signed_in).await;
+	assert!(signed_in.tokens.is_some());
+	assert_eq!(signed_in.session.device, "Ada's phone");
+
+	// The second step through the browser's cookie.
+	let emailed = app
+		.call(
+			"POST",
+			"/auth/email/send",
+			Some(json!({ "email": "ada@example.com" })),
+			None,
+		)
+		.await;
+	assert_eq!(emailed.status(), StatusCode::NO_CONTENT);
+	let verified = app
+		.call(
+			"POST",
+			"/auth/email/verify",
+			Some(json!({ "email": "ada@example.com", "code": app.code("ada@example.com") })),
+			None,
+		)
+		.await;
+	let step = set_cookies(&verified)[0]
+		.split(';')
+		.next()
+		.unwrap()
+		.to_owned();
+	let options: leptoskit_auth::PasskeyOptions = body(
+		app.call(
+			"POST",
+			"/auth/passkey/second-factor/options",
+			Some(json!({})),
+			Some(&step),
+		)
+		.await,
+	)
+	.await;
+	let finished = app
+		.call(
+			"POST",
+			"/auth/passkey/second-factor",
+			Some(json!({ "credential": device.sign(&options.options) })),
+			Some(&step),
+		)
+		.await;
+	assert_eq!(finished.status(), StatusCode::OK);
+	let cookie = session_cookie(&finished);
+
+	// Step-up, renaming, and removing.
+	let options: leptoskit_auth::PasskeyOptions = body(
+		app.call("POST", "/auth/passkey/step-up/options", None, Some(&cookie))
+			.await,
+	)
+	.await;
+	let stepped = app
+		.call(
+			"POST",
+			"/auth/passkey/step-up",
+			Some(json!({ "credential": device.sign(&options.options) })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(stepped.status(), StatusCode::OK);
+	let cookie = session_cookie(&stepped);
+	let renamed = app
+		.call(
+			"POST",
+			"/auth/passkeys/rename",
+			Some(json!({ "id": listed[0].id, "name": "Phone" })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(renamed.status(), StatusCode::NO_CONTENT);
+	let removed = app
+		.call(
+			"POST",
+			"/auth/passkeys/remove",
+			Some(json!({ "id": listed[0].id })),
+			Some(&cookie),
+		)
+		.await;
+	assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_delegated_request_is_the_granting_persons_from_any_site() {
+	let db = leptoskit_db::testing::sqlite().await;
+	let auth = Auth::builder(&db, Keys::single("test", [3; 32]))
+		.mailer(Mailbox::new())
+		.origin(ORIGIN)
+		.build()
+		.unwrap();
+	let me = SignedIn {
+		account: leptoskit_db::Id::new(),
+		session: leptoskit_db::Id::new(),
+		aal: leptoskit_auth::Aal::One,
+		authenticated_at: leptoskit_db::now(),
+		mfa_at: None,
+	};
+	let delegation = leptoskit_auth::Delegation {
+		signed_in: Some(me.clone()),
+		client_id: "partner".into(),
+		scopes: vec!["posts:read".into()],
+	};
+	let router = Router::new()
+		.route(
+			"/me",
+			post(
+				|me: SignedIn,
+				 request: RequestInfo,
+				 Extension(current): Extension<leptoskit_auth::CurrentSession>,
+				 Extension(db): Extension<Db>| {
+					async move {
+						let delegation = current.delegation.unwrap();
+						assert!(db.context().is_some());
+						assert_eq!(request.transport, leptoskit_auth::Transport::Bearer);
+						format!("{} {}", me.account, delegation.client_id)
+					}
+				},
+			),
+		)
+		.layer(auth.layer())
+		.layer(axum::middleware::map_request(
+			move |mut request: Request<Body>| {
+				let delegation = delegation.clone();
+				async move {
+					request.extensions_mut().insert(delegation);
+					request
+				}
+			},
+		));
+	let response = router
+		.oneshot(
+			Request::post("/me")
+				.header(header::ORIGIN, "https://partner.example")
+				.body(Body::empty())
+				.unwrap(),
+		)
+		.await
+		.unwrap();
+
+	assert_eq!(response.status(), StatusCode::OK);
+	assert_eq!(text(response).await, format!("{} partner", me.account));
+
+	// An app acting as itself signs no one in: the route that needs a
+	// person refuses it, and one that doesn't sees the app.
+	let machine = leptoskit_auth::Delegation {
+		signed_in: None,
+		client_id: "worker".into(),
+		scopes: vec!["posts:read".into()],
+	};
+	let router = Router::new()
+		.route(
+			"/me",
+			post(|me: SignedIn| async move { me.account.to_string() }),
+		)
+		.route(
+			"/app",
+			post(
+				|me: Option<SignedIn>,
+				 Extension(current): Extension<leptoskit_auth::CurrentSession>| {
+					async move {
+						assert!(me.is_none());
+						current.delegation.unwrap().client_id
+					}
+				},
+			),
+		)
+		.layer(auth.layer())
+		.layer(axum::middleware::map_request(
+			move |mut request: Request<Body>| {
+				let machine = machine.clone();
+				async move {
+					request.extensions_mut().insert(machine);
+					request
+				}
+			},
+		));
+	let post_to = |path: &'static str| {
+		Request::post(path)
+			.header(header::ORIGIN, "https://partner.example")
+			.body(Body::empty())
+			.unwrap()
+	};
+	let refused = router.clone().oneshot(post_to("/me")).await.unwrap();
+	assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+	let app = router.oneshot(post_to("/app")).await.unwrap();
+	assert_eq!(app.status(), StatusCode::OK);
+	assert_eq!(text(app).await, "worker");
 }

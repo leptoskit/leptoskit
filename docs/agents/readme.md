@@ -18,5 +18,7 @@ Notes for people and coding agents working on leptoskit itself. The public site 
 | [preview-sandbox.md](preview-sandbox.md)             | The proposed preview sandbox: real environments for every platform on one page, and examples.                                                      |
 | [database-plan.md](database-plan.md)                 | The approved plan for `leptoskit_db`: schema as Rust structs, generated migrations, policies, shapes, geospatial and vectors.                      |
 | [auth-plan.md](auth-plan.md)                         | The approved plan for `leptoskit_auth` and `leptoskit_idp`: passkeys, MFA, third-party login, account merging, and acting as an identity provider. |
+| [idp-certification.md](idp-certification.md)         | What OpenID certification of `leptoskit_idp` needs: the profiles that fit, what blocks them, and the order of work.                                |
+| [auth-threat-model.md](auth-threat-model.md)         | What sign-in protects, from whom, the control and test for each threat, and the known gaps.                                                        |
 
 The Flutter widget audit behind the component catalog's Flutter table is [`.audit/component-catalog/flutter-widgets.tsv`](../../.audit/component-catalog/flutter-widgets.tsv): all 229 entries in the published Flutter index as of 20 October 2026, each with its mapping or missing foundation.

@@ -690,6 +690,20 @@ pub struct NativeConfig {
 		schemars(regex(pattern = r"^(?:$|[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)+)$"))
 	)]
 	pub package_id: String,
+	/// The Apple Developer team that signs the iOS and macOS apps, such as
+	/// `ABCDE12345`. With it, `leptoskit::server` publishes
+	/// `/.well-known/apple-app-site-association`, which lets the apps use
+	/// the site's passkeys and its sign-in return address.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[A-Z0-9]{10}$")))]
+	pub apple_team_id: Option<String>,
+	/// The SHA-256 fingerprints of the certificates that sign the Android
+	/// app, as `keytool -list` prints them (`AB:CD:…`, 32 bytes). With them,
+	/// `leptoskit::server` publishes `/.well-known/assetlinks.json`, and the
+	/// app's passkeys are accepted. List the upload key and the Play app
+	/// signing key when Google signs the release.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub android_certificates: Vec<String>,
 	/// Legacy native target selection. New projects use `app.platforms`.
 	#[serde(skip_serializing_if = "NativeConfig::legacy_default_targets")]
 	pub targets: Vec<NativeTarget>,
@@ -706,6 +720,8 @@ impl Default for NativeConfig {
 			plugins: Vec::new(),
 			plugin_options: BTreeMap::new(),
 			package_id: String::new(),
+			apple_team_id: None,
+			android_certificates: Vec::new(),
 			targets: vec![
 				NativeTarget::Macos,
 				NativeTarget::Ios,
@@ -717,7 +733,21 @@ impl Default for NativeConfig {
 	}
 }
 
+/// The path on the server a native app's system-browser sign-in returns to.
+/// The well-known association files claim it for the apps, and the sign-in
+/// server accepts it as a native app's return address.
+pub const NATIVE_AUTH_RETURN_PATH: &str = "/auth/native/return";
+
 impl NativeConfig {
+	/// The Android signing certificates' SHA-256 digests, skipping any that
+	/// aren't valid; [`LeptoskitConfig::validate`] refuses those.
+	pub fn android_certificate_digests(&self) -> Vec<[u8; 32]> {
+		self.android_certificates
+			.iter()
+			.filter_map(|fingerprint| certificate_digest(fingerprint))
+			.collect()
+	}
+
 	fn legacy_default_targets(targets: &[NativeTarget]) -> bool {
 		targets
 			== [
@@ -1006,9 +1036,228 @@ pub struct AuthConfig {
 	pub absolute_days: u32,
 	/// Minutes a native app's access token works before it refreshes.
 	pub access_minutes: u32,
+	/// Who must use two-step verification: `optional` lets people choose,
+	/// and `required` asks everyone.
+	#[serde(skip_serializing_if = "AuthMfa::is_optional")]
+	pub mfa: AuthMfa,
+	/// Roles that must use two-step verification even when `mfa` is
+	/// `optional`, such as `["Admin"]`. The app says who has which role.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub required_for: Vec<String>,
 	/// How email is sent.
 	#[serde(skip_serializing_if = "AuthMailConfig::is_default")]
 	pub mail: AuthMailConfig,
+	/// Third-party sign-in providers, by ID: `google`, `apple`,
+	/// `microsoft`, `github`, or your own name for any OpenID Connect
+	/// issuer.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub providers: BTreeMap<String, AuthProviderConfig>,
+	/// Solana wallets, which people link to their account with a signed
+	/// message. Needs `leptoskit_auth`'s `solana` feature and an `origin`.
+	#[serde(skip_serializing_if = "AuthSolanaConfig::is_default")]
+	pub solana: AuthSolanaConfig,
+	/// "Sign in with your app": other apps signing people in through this
+	/// one, with `leptoskit::idp`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub idp: Option<AuthIdpConfig>,
+}
+
+/// Solana wallets. Linking a wallet is always on with the `solana`
+/// feature; signing in with one is opt-in, here and for each wallet.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct AuthSolanaConfig {
+	/// Whether a wallet may sign in, once its owner turns that on for it.
+	/// A wallet signature is one factor, so two-step verification still
+	/// applies.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub sign_in: bool,
+	/// The cluster messages name, such as `mainnet` (the default),
+	/// `devnet`, or `testnet`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub chain_id: Option<String>,
+}
+
+impl AuthSolanaConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+
+	fn problem(&self) -> Option<String> {
+		let valid = self.chain_id.as_deref().is_none_or(|chain| {
+			!chain.is_empty()
+				&& chain.len() <= 64
+				&& chain
+					.bytes()
+					.all(|byte| byte.is_ascii_alphanumeric() || b":-_".contains(&byte))
+		});
+
+		(!valid).then(|| {
+			"auth.solana.chain_id is a cluster name, such as \"mainnet\" or \"devnet\"".to_owned()
+		})
+	}
+}
+
+/// Who must use two-step verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMfa {
+	/// People choose, and sensitive actions ask for step-up.
+	#[default]
+	Optional,
+	/// Everyone: until they set it up, a session may only do that.
+	Required,
+}
+
+impl AuthMfa {
+	#[allow(
+		clippy::trivially_copy_pass_by_ref,
+		reason = "serde's skip_serializing_if passes a reference"
+	)]
+	fn is_optional(&self) -> bool {
+		*self == Self::Optional
+	}
+}
+
+/// A third-party sign-in provider. Its secrets are named by the
+/// environment variables that hold them.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct AuthProviderConfig {
+	/// What it is: `google`, `apple`, `microsoft`, `github`, or `oidc`.
+	/// Defaults to the provider's ID when that's one of the first four, and
+	/// to `oidc` otherwise.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub kind: Option<String>,
+	/// What people see on its button, such as "Company SSO".
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	/// The environment variable holding the OAuth client ID, or Apple's
+	/// Services ID.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub client_id_env: Option<String>,
+	/// The environment variable holding the client secret. An OpenID Connect
+	/// provider without one is a public client.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub client_secret_env: Option<String>,
+	/// For `oidc`: the issuer, whose discovery document names the
+	/// endpoints, such as `https://sso.example.com`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub issuer: Option<String>,
+	/// For `microsoft`: `common`, `organizations`, `consumers`, or a tenant
+	/// ID. Defaults to `common`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tenant: Option<String>,
+	/// For `apple`: the environment variable holding the team ID.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub team_id_env: Option<String>,
+	/// For `apple`: the environment variable holding the Sign in with Apple
+	/// key's ID.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub key_id_env: Option<String>,
+	/// For `apple`: the environment variable holding the key's `.p8`
+	/// contents.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub private_key_env: Option<String>,
+	/// The scopes to ask for, instead of the provider's defaults.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub scopes: Option<Vec<String>>,
+}
+
+impl AuthProviderConfig {
+	/// What the provider `id` is.
+	pub fn kind(&self, id: &str) -> String {
+		self.kind.clone().unwrap_or_else(|| {
+			match id {
+				"google" | "apple" | "microsoft" | "github" => id.to_owned(),
+				_ => "oidc".to_owned(),
+			}
+		})
+	}
+
+	/// The environment variables it reads, by setting name.
+	pub fn env_names(&self) -> Vec<(&'static str, &str)> {
+		[
+			("client_id_env", &self.client_id_env),
+			("client_secret_env", &self.client_secret_env),
+			("team_id_env", &self.team_id_env),
+			("key_id_env", &self.key_id_env),
+			("private_key_env", &self.private_key_env),
+		]
+		.into_iter()
+		.filter_map(|(setting, name)| name.as_deref().map(|name| (setting, name)))
+		.collect()
+	}
+
+	/// Why the provider `id` can't work, if it can't.
+	fn problem(&self, id: &str) -> Option<String> {
+		let valid_id = !id.is_empty()
+			&& id.len() <= 64
+			&& id
+				.bytes()
+				.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+
+		if !valid_id {
+			return Some(format!(
+				"auth.providers.{id}: provider IDs are lowercase letters, digits, and dashes"
+			));
+		}
+
+		if self.env_names().iter().any(|(_, name)| name.is_empty()) {
+			return Some(format!(
+				"auth.providers.{id}'s `_env` settings must name environment variables"
+			));
+		}
+
+		let kind = self.kind(id);
+		let missing = |settings: &[(&str, &Option<String>)]| {
+			settings
+				.iter()
+				.find(|(_, value)| value.is_none())
+				.map(|(setting, _)| format!("auth.providers.{id} needs `{setting}`"))
+		};
+
+		match kind.as_str() {
+			"google" | "github" | "microsoft" => {
+				missing(&[
+					("client_id_env", &self.client_id_env),
+					("client_secret_env", &self.client_secret_env),
+				])
+			}
+			"apple" => {
+				missing(&[
+					("client_id_env", &self.client_id_env),
+					("team_id_env", &self.team_id_env),
+					("key_id_env", &self.key_id_env),
+					("private_key_env", &self.private_key_env),
+				])
+			}
+			"oidc" => {
+				let issuer = self.issuer.as_deref().unwrap_or_default();
+				let local = ["http://localhost", "http://127.0.0.1"]
+					.iter()
+					.any(|prefix| issuer.starts_with(prefix));
+
+				if !(issuer.starts_with("https://") || local) {
+					return Some(format!(
+						"auth.providers.{id}.issuer must be an `https://` URL, such as \
+						 \"https://sso.example.com\""
+					));
+				}
+
+				missing(&[("client_id_env", &self.client_id_env)])
+			}
+			kind => {
+				Some(format!(
+					"auth.providers.{id}.kind `{kind}` isn't one of google, apple, microsoft, \
+					 github, or oidc"
+				))
+			}
+		}
+	}
 }
 
 impl Default for AuthConfig {
@@ -1021,7 +1270,12 @@ impl Default for AuthConfig {
 			idle_days: 14,
 			absolute_days: 90,
 			access_minutes: 15,
+			mfa: AuthMfa::Optional,
+			required_for: Vec::new(),
 			mail: AuthMailConfig::default(),
+			providers: BTreeMap::new(),
+			solana: AuthSolanaConfig::default(),
+			idp: None,
 		}
 	}
 }
@@ -1071,7 +1325,159 @@ impl AuthConfig {
 			));
 		}
 
-		self.mail.problem()
+		if self.required_for.iter().any(String::is_empty) {
+			return Some("auth.required_for names roles, which can't be empty".to_owned());
+		}
+
+		if let Some(problem) = self
+			.providers
+			.iter()
+			.find_map(|(id, provider)| provider.problem(id))
+		{
+			return Some(problem);
+		}
+
+		if let Some(problem) = self.solana.problem() {
+			return Some(problem);
+		}
+
+		self.mail
+			.problem()
+			.or_else(|| self.idp.as_ref().and_then(AuthIdpConfig::problem))
+	}
+}
+
+/// "Sign in with your app", through `leptoskit::idp`: an OAuth 2.1 and
+/// OpenID Connect provider, so other apps sign people in with yours. The
+/// scopes and claims it offers come from the app's code; this table holds
+/// where its pages are and how long its tokens last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default)]
+pub struct AuthIdpConfig {
+	/// The issuer other apps discover the provider at, such as
+	/// `https://myapp.com`. Defaults to `auth.origin`.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub issuer: Option<String>,
+	/// What access tokens name as their audience: your API. Defaults to the
+	/// issuer.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audience: Option<String>,
+	/// The page signed-out people sign in on before an app may sign them in.
+	pub sign_in_page: String,
+	/// The page that asks people whether an app may sign them in.
+	pub consent_page: String,
+	/// Where people go after an app signs them out, when it names nowhere.
+	pub signed_out_page: String,
+	/// The page where people enter the code a CLI or a TV shows them.
+	pub device_page: String,
+	/// The environment variable holding an RSA private key, as PEM, for apps
+	/// that need RS256 ID tokens. Without it every token is ES256.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub rsa_key_env: Option<String>,
+	/// Minutes an access token lasts: revoking one reaches servers that only
+	/// check its signature after this long.
+	pub access_minutes: u32,
+	/// Minutes an ID token lasts.
+	pub id_token_minutes: u32,
+	/// Days an app stays signed in, however often it refreshes.
+	pub refresh_days: u32,
+	/// Days a signing key signs before the next one takes over.
+	pub signing_key_days: u32,
+	/// Lets signed-in people register apps of their own, for third-party
+	/// developers.
+	pub developer_portal: bool,
+	/// The most apps one person may register in the developer portal.
+	pub apps_per_person: u32,
+	/// Takes DPoP proofs (RFC 9449), so apps can bind their tokens to a key
+	/// they hold, and a stolen token is useless without it.
+	pub dpop: bool,
+	/// Lets apps register themselves at `/oauth/register` (RFC 7591), and
+	/// manage their registration with the token they get (RFC 7592).
+	pub dynamic_registration: bool,
+	/// The environment variable holding the initial access token apps must
+	/// send to register, at least 32 characters. Without it, anyone may
+	/// register, at most 10 apps an hour from one address.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub registration_token_env: Option<String>,
+}
+
+impl Default for AuthIdpConfig {
+	fn default() -> Self {
+		Self {
+			issuer: None,
+			audience: None,
+			sign_in_page: "/sign-in".to_owned(),
+			consent_page: "/consent".to_owned(),
+			signed_out_page: "/".to_owned(),
+			device_page: "/device".to_owned(),
+			rsa_key_env: None,
+			access_minutes: 10,
+			id_token_minutes: 10,
+			refresh_days: 90,
+			signing_key_days: 30,
+			developer_portal: false,
+			apps_per_person: 10,
+			dpop: false,
+			dynamic_registration: false,
+			registration_token_env: None,
+		}
+	}
+}
+
+impl AuthIdpConfig {
+	fn problem(&self) -> Option<String> {
+		for (name, page) in [
+			("sign_in_page", &self.sign_in_page),
+			("consent_page", &self.consent_page),
+			("signed_out_page", &self.signed_out_page),
+			("device_page", &self.device_page),
+		] {
+			if !page.starts_with('/') || page.starts_with("//") || page.contains('\\') {
+				return Some(format!(
+					"auth.idp.{name} `{page}` must be a path on this site, such as \"/consent\""
+				));
+			}
+		}
+
+		if self.rsa_key_env.as_ref().is_some_and(String::is_empty) {
+			return Some("auth.idp.rsa_key_env must name an environment variable".to_owned());
+		}
+
+		match &self.registration_token_env {
+			Some(name) if name.is_empty() => {
+				return Some(
+					"auth.idp.registration_token_env must name an environment variable".to_owned(),
+				);
+			}
+			Some(_) if !self.dynamic_registration => {
+				return Some(
+					"auth.idp.registration_token_env needs dynamic_registration = true".to_owned(),
+				);
+			}
+			_ => {}
+		}
+
+		let bounds = [
+			("access_minutes", self.access_minutes, 60),
+			("id_token_minutes", self.id_token_minutes, 24 * 60),
+			("refresh_days", self.refresh_days, 400),
+			("signing_key_days", self.signing_key_days, 400),
+		];
+		for (name, value, max) in bounds {
+			if !(1..=max).contains(&value) {
+				return Some(format!("auth.idp.{name} must be between 1 and {max}"));
+			}
+		}
+
+		if self.developer_portal && self.apps_per_person == 0 {
+			return Some(
+				"auth.idp.apps_per_person must be at least 1 with the developer portal on"
+					.to_owned(),
+			);
+		}
+
+		None
 	}
 }
 
@@ -1273,6 +1679,25 @@ pub fn default_package_id(app_name: &str) -> String {
 	format!("com.leptoskit.{segment}")
 }
 
+/// A `AB:CD:…` SHA-256 fingerprint's bytes. Colons are optional; case is
+/// not significant.
+fn certificate_digest(fingerprint: &str) -> Option<[u8; 32]> {
+	let hex: Vec<u8> = fingerprint.bytes().filter(|byte| *byte != b':').collect();
+
+	if hex.len() != 64 || !hex.iter().all(u8::is_ascii_hexdigit) {
+		return None;
+	}
+
+	let mut digest = [0; 32];
+
+	for (byte, pair) in digest.iter_mut().zip(hex.chunks(2)) {
+		let pair = std::str::from_utf8(pair).ok()?;
+		*byte = u8::from_str_radix(pair, 16).ok()?;
+	}
+
+	Some(digest)
+}
+
 /// Why `package_id` is not a valid reverse-domain id, if it is not.
 fn package_id_problem(package_id: &str) -> Option<&'static str> {
 	let segments: Vec<&str> = package_id.split('.').collect();
@@ -1426,6 +1851,22 @@ impl LeptoskitConfig {
 				package_id: package_id.clone(),
 				reason,
 			});
+		}
+		if let Some(team) = &self.native.apple_team_id
+			&& (team.len() != 10
+				|| !team
+					.bytes()
+					.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()))
+		{
+			return Err(ConfigError::InvalidAppleTeamId(team.clone()));
+		}
+		if let Some(fingerprint) = self
+			.native
+			.android_certificates
+			.iter()
+			.find(|fingerprint| certificate_digest(fingerprint).is_none())
+		{
+			return Err(ConfigError::InvalidAndroidCertificate(fingerprint.clone()));
 		}
 		for target in &self.rpc.targets {
 			if !RPC_TARGETS.contains(&target.language.as_str()) {
@@ -1643,6 +2084,15 @@ pub enum ConfigError {
 		/// What is wrong with it.
 		reason: &'static str,
 	},
+	/// `native.apple_team_id` is not a ten-character Apple team ID.
+	#[error("invalid native.apple_team_id `{0}`: expected 10 uppercase letters or digits")]
+	InvalidAppleTeamId(String),
+	/// A `native.android_certificates` entry is not a SHA-256 fingerprint.
+	#[error(
+		"invalid native.android_certificates entry `{0}`: expected a SHA-256 fingerprint such as \
+		 `AB:CD:…` (32 bytes), as `keytool -list` prints it"
+	)]
+	InvalidAndroidCertificate(String),
 	/// A `rpc.targets` entry names an unknown target.
 	#[error(
 		"unknown fns target `{0}`; expected one of typescript, python, go, rust, dart, cli, \

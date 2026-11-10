@@ -27,6 +27,7 @@ leptoskit_codepush = { workspace = true, optional = true }
 leptoskit_config = { workspace = true }
 leptoskit_db = { workspace = true, optional = true }
 leptoskit_form = { workspace = true, optional = true }
+leptoskit_idp = { workspace = true, optional = true }
 leptoskit_l10n = { workspace = true, optional = true }
 leptoskit_macros = { workspace = true }
 leptoskit_native = { workspace = true }
@@ -73,13 +74,21 @@ form = ["dep:leptoskit_form", "aria"]
 # through leptoskit at the versions it was built against. The render-mode
 # features forward to them, following the leptos convention.
 leptos = ["dep:leptos", "dep:leptos_meta", "dep:leptos_router"]
-csr = ["leptos", "leptos/csr"]
-hydrate = ["leptos", "leptos/hydrate"]
+# Browser builds also give the query cache its browser clock and timers.
+csr = ["leptos", "leptos/csr", "leptoskit_query?/browser", "leptoskit_rpc?/browser"]
+hydrate = ["leptos", "leptos/hydrate", "leptoskit_query?/browser", "leptoskit_rpc?/browser"]
 islands = ["leptos", "leptos/islands"]
 ssr = ["leptos", "leptos/ssr", "leptos_meta/ssr", "leptos_router/ssr"]
 # The server toolkit with the crates every deployment links: axum, tokio,
 # tower, tower-http, and leptos_axum. A server renders, so this implies `ssr`.
-server = ["dep:leptoskit_axum", "dep:leptos_axum", "ssr", "leptoskit_auth?/ssr"]
+server = [
+	"dep:leptoskit_axum",
+	"dep:leptos_axum",
+	"ssr",
+	"leptoskit_auth?/ssr",
+	"leptoskit_idp?/axum",
+	"leptoskit_idp?/ssr",
+]
 rpc = ["dep:leptoskit_rpc"]
 # The server side of `#[api]` through `leptoskit::rpc` (with `crate =
 # "leptoskit::rpc"`): registers the function descriptions and adds the `spec`
@@ -88,7 +97,16 @@ rpc-ssr = ["rpc", "leptoskit_rpc/ssr"]
 # `rpc-ssr` plus `leptoskit::rpc::spec::openapi_router`.
 rpc-axum = ["rpc-ssr", "leptoskit_rpc/axum"]
 table = ["dep:leptoskit_table"]
-guest = ["leptoskit_native/guest", "dep:leptoskit_bridge", "leptoskit_bridge/guest", "leptoskit_auth?/guest"]
+# A native Wasm guest: the host reports the time to the query cache, and
+# nothing browser-only is linked.
+guest = [
+	"leptoskit_native/guest",
+	"dep:leptoskit_bridge",
+	"leptoskit_bridge/guest",
+	"leptoskit_auth?/guest",
+	"leptoskit_query?/guest",
+	"leptoskit_idp?/guest",
+]
 tui = ["dep:leptoskit_tui"]
 gtk = ["dep:leptoskit_gtk"]
 ios = ["uikit"]
@@ -98,22 +116,52 @@ l10n = ["dep:leptoskit_l10n"]
 db = ["dep:leptoskit_db"]
 ## The server side of `leptoskit::db`: rows, queries, and schema export,
 ## without a driver.
-db-server = ["db", "leptoskit_db/server", "leptoskit_auth?/server"]
+db-server = ["db", "leptoskit_db/server", "leptoskit_auth?/server", "leptoskit_idp?/server"]
 ## `leptoskit::db` connecting to Postgres.
-db-postgres = ["db-server", "leptoskit_db/postgres", "leptoskit_auth?/postgres"]
+db-postgres = [
+	"db-server",
+	"leptoskit_db/postgres",
+	"leptoskit_auth?/postgres",
+	"leptoskit_idp?/postgres",
+]
 ## `leptoskit::db` connecting to SQLite.
-db-sqlite = ["db-server", "leptoskit_db/sqlite", "leptoskit_auth?/sqlite"]
+db-sqlite = [
+	"db-server",
+	"leptoskit_db/sqlite",
+	"leptoskit_auth?/sqlite",
+	"leptoskit_idp?/sqlite",
+]
 ## Sign-in: `leptoskit::auth`, with the `auth` schema pack and the headless
 ## client. Its server side follows `db-server`, `db-postgres`, and
 ## `db-sqlite`, and `server` adds the `/auth` routes, the session layer, the
 ## server-function guards, and the client's reads during server rendering.
 ## `web` and `guest` pick how the client reaches the server.
 auth = ["db", "dep:leptoskit_auth", "leptoskit_auth/client"]
+## Sign in with your app: `leptoskit::idp`, an OAuth 2.1 and OpenID Connect
+## provider with the `idp` schema pack. Its server side follows `db-server`,
+## `db-postgres`, and `db-sqlite`, like `auth`, and `server` adds the `/oauth`
+## routes and the layer that lets third-party tokens call `#[api(scope = …)]`
+## functions. Its headless client (`idp::client`) reaches the server the way
+## `auth`'s does.
+idp = ["auth", "dep:leptoskit_idp", "leptoskit_idp/client"]
 ## Sign-in email over SMTP: `auth::SmtpMailer`, and `smtp_url_env` in `[auth.mail]`.
 auth-smtp = ["auth", "leptoskit_auth/smtp"]
 ## Sign-in email as a signed webhook: `auth::WebhookMailer`, and
 ## `webhook_url_env` in `[auth.mail]`.
 auth-webhook = ["auth", "leptoskit_auth/webhook"]
+## Passkeys on the server: WebAuthn with `webauthn-rs`, which builds OpenSSL
+## from source. Turn it on in the server's crate only. Without it, the
+## client's passkey functions still exist, and the server answers
+## `unsupported`.
+auth-passkeys = ["auth", "leptoskit_auth/passkey"]
+## Third-party sign-in on the server: `auth::Provider` and
+## `[auth.providers]`, for Google, Apple, Microsoft, GitHub, and any OpenID
+## Connect issuer. Turn it on in the server's crate only.
+auth-providers = ["auth", "leptoskit_auth/oauth"]
+## Solana wallets on the server: linking with signed Sign-In With Solana
+## messages, verified as ed25519, and optional wallet sign-in. Turn it on for
+## the server's crate only.
+auth-solana = ["auth", "leptoskit_auth/solana"]
 linux = ["gtk"]
 macos = ["appkit"]
 # leptos's `nightly` feature, for its macro and renderer. Requires a nightly
@@ -128,7 +176,15 @@ storage = ["use", "leptoskit_use/local-storage"]
 # Import SVG documents into `Vector` drawings with `Drawing::parse_svg`.
 svg = ["leptoskit_native/svg"]
 wasm = ["dep:leptoskit_wasm", "leptoskit_native/serde"]
-web = ["leptoskit_native/web", "leptoskit_l10n?/web", "leptoskit_rive?/web", "leptoskit_auth?/web"]
+web = [
+	"leptoskit_native/web",
+	"leptoskit_l10n?/web",
+	"leptoskit_rive?/web",
+	"leptoskit_auth?/web",
+	"leptoskit_query?/browser",
+	"leptoskit_rpc?/browser",
+	"leptoskit_idp?/web",
+]
 windows = ["dep:leptoskit_windows"]
 
 [lints]

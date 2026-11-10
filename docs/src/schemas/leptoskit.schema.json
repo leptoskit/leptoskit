@@ -262,6 +262,17 @@
 					"default": 14,
 					"minimum": 0
 				},
+				"idp": {
+					"description": "\"Sign in with your app\": other apps signing people in through this\none, with `leptoskit::idp`.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/AuthIdpConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"keys_env": {
 					"description": "The environment variable holding the server's keys.",
 					"type": "string",
@@ -271,12 +282,139 @@
 					"description": "How email is sent.",
 					"$ref": "#/$defs/AuthMailConfig"
 				},
+				"mfa": {
+					"description": "Who must use two-step verification: `optional` lets people choose,\nand `required` asks everyone.",
+					"$ref": "#/$defs/AuthMfa"
+				},
 				"origin": {
 					"description": "The site's origin, such as `https://myapp.com`. State-changing\nrequests from anywhere else are refused. Only `localhost` may use\nplain `http`.",
 					"type": [
 						"string",
 						"null"
 					]
+				},
+				"providers": {
+					"description": "Third-party sign-in providers, by ID: `google`, `apple`,\n`microsoft`, `github`, or your own name for any OpenID Connect\nissuer.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/AuthProviderConfig"
+					}
+				},
+				"required_for": {
+					"description": "Roles that must use two-step verification even when `mfa` is\n`optional`, such as `[\"Admin\"]`. The app says who has which role.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"solana": {
+					"description": "Solana wallets, which people link to their account with a signed\nmessage. Needs `leptoskit_auth`'s `solana` feature and an `origin`.",
+					"$ref": "#/$defs/AuthSolanaConfig"
+				}
+			},
+			"additionalProperties": false
+		},
+		"AuthIdpConfig": {
+			"description": "\"Sign in with your app\", through `leptoskit::idp`: an OAuth 2.1 and\nOpenID Connect provider, so other apps sign people in with yours. The\nscopes and claims it offers come from the app's code; this table holds\nwhere its pages are and how long its tokens last.",
+			"type": "object",
+			"properties": {
+				"access_minutes": {
+					"description": "Minutes an access token lasts: revoking one reaches servers that only\ncheck its signature after this long.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 10,
+					"minimum": 0
+				},
+				"apps_per_person": {
+					"description": "The most apps one person may register in the developer portal.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 10,
+					"minimum": 0
+				},
+				"audience": {
+					"description": "What access tokens name as their audience: your API. Defaults to the\nissuer.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"consent_page": {
+					"description": "The page that asks people whether an app may sign them in.",
+					"type": "string",
+					"default": "/consent"
+				},
+				"developer_portal": {
+					"description": "Lets signed-in people register apps of their own, for third-party\ndevelopers.",
+					"type": "boolean",
+					"default": false
+				},
+				"device_page": {
+					"description": "The page where people enter the code a CLI or a TV shows them.",
+					"type": "string",
+					"default": "/device"
+				},
+				"dpop": {
+					"description": "Takes DPoP proofs (RFC 9449), so apps can bind their tokens to a key\nthey hold, and a stolen token is useless without it.",
+					"type": "boolean",
+					"default": false
+				},
+				"dynamic_registration": {
+					"description": "Lets apps register themselves at `/oauth/register` (RFC 7591), and\nmanage their registration with the token they get (RFC 7592).",
+					"type": "boolean",
+					"default": false
+				},
+				"id_token_minutes": {
+					"description": "Minutes an ID token lasts.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 10,
+					"minimum": 0
+				},
+				"issuer": {
+					"description": "The issuer other apps discover the provider at, such as\n`https://myapp.com`. Defaults to `auth.origin`.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"refresh_days": {
+					"description": "Days an app stays signed in, however often it refreshes.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 90,
+					"minimum": 0
+				},
+				"registration_token_env": {
+					"description": "The environment variable holding the initial access token apps must\nsend to register, at least 32 characters. Without it, anyone may\nregister, at most 10 apps an hour from one address.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"rsa_key_env": {
+					"description": "The environment variable holding an RSA private key, as PEM, for apps\nthat need RS256 ID tokens. Without it every token is ES256.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"sign_in_page": {
+					"description": "The page signed-out people sign in on before an app may sign them in.",
+					"type": "string",
+					"default": "/sign-in"
+				},
+				"signed_out_page": {
+					"description": "Where people go after an app signs them out, when it names nowhere.",
+					"type": "string",
+					"default": "/"
+				},
+				"signing_key_days": {
+					"description": "Days a signing key signs before the next one takes over.",
+					"type": "integer",
+					"format": "uint32",
+					"default": 30,
+					"minimum": 0
 				}
 			},
 			"additionalProperties": false
@@ -312,6 +450,119 @@
 						"string",
 						"null"
 					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"AuthMfa": {
+			"description": "Who must use two-step verification.",
+			"oneOf": [
+				{
+					"description": "People choose, and sensitive actions ask for step-up.",
+					"type": "string",
+					"const": "optional"
+				},
+				{
+					"description": "Everyone: until they set it up, a session may only do that.",
+					"type": "string",
+					"const": "required"
+				}
+			]
+		},
+		"AuthProviderConfig": {
+			"description": "A third-party sign-in provider. Its secrets are named by the\nenvironment variables that hold them.",
+			"type": "object",
+			"properties": {
+				"client_id_env": {
+					"description": "The environment variable holding the OAuth client ID, or Apple's\nServices ID.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"client_secret_env": {
+					"description": "The environment variable holding the client secret. An OpenID Connect\nprovider without one is a public client.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"issuer": {
+					"description": "For `oidc`: the issuer, whose discovery document names the\nendpoints, such as `https://sso.example.com`.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"key_id_env": {
+					"description": "For `apple`: the environment variable holding the Sign in with Apple\nkey's ID.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"kind": {
+					"description": "What it is: `google`, `apple`, `microsoft`, `github`, or `oidc`.\nDefaults to the provider's ID when that's one of the first four, and\nto `oidc` otherwise.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"name": {
+					"description": "What people see on its button, such as \"Company SSO\".",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"private_key_env": {
+					"description": "For `apple`: the environment variable holding the key's `.p8`\ncontents.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"scopes": {
+					"description": "The scopes to ask for, instead of the provider's defaults.",
+					"type": [
+						"array",
+						"null"
+					],
+					"items": {
+						"type": "string"
+					}
+				},
+				"team_id_env": {
+					"description": "For `apple`: the environment variable holding the team ID.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"tenant": {
+					"description": "For `microsoft`: `common`, `organizations`, `consumers`, or a tenant\nID. Defaults to `common`.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"AuthSolanaConfig": {
+			"description": "Solana wallets. Linking a wallet is always on with the `solana`\nfeature; signing in with one is opt-in, here and for each wallet.",
+			"type": "object",
+			"properties": {
+				"chain_id": {
+					"description": "The cluster messages name, such as `mainnet` (the default),\n`devnet`, or `testnet`.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"sign_in": {
+					"description": "Whether a wallet may sign in, once its owner turns that on for it.\nA wallet signature is one factor, so two-step verification still\napplies.",
+					"type": "boolean"
 				}
 			},
 			"additionalProperties": false
@@ -723,6 +974,21 @@
 			"description": "Native app settings.",
 			"type": "object",
 			"properties": {
+				"android_certificates": {
+					"description": "The SHA-256 fingerprints of the certificates that sign the Android\napp, as `keytool -list` prints them (`AB:CD:…`, 32 bytes). With them,\n`leptoskit::server` publishes `/.well-known/assetlinks.json`, and the\napp's passkeys are accepted. List the upload key and the Play app\nsigning key when Google signs the release.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"apple_team_id": {
+					"description": "The Apple Developer team that signs the iOS and macOS apps, such as\n`ABCDE12345`. With it, `leptoskit::server` publishes\n`/.well-known/apple-app-site-association`, which lets the apps use\nthe site's passkeys and its sign-in return address.",
+					"type": [
+						"string",
+						"null"
+					],
+					"pattern": "^[A-Z0-9]{10}$"
+				},
 				"package_id": {
 					"description": "The reverse-domain application id used by platform shells, such as\n`com.example.counter`.\n\nIt must have at least two dot-separated segments, each an ASCII letter\nfollowed by ASCII letters or digits: the only form both iOS bundle ids\n(no `_`) and Android package names (no `-`) accept. When unset it\ndefaults to [`default_package_id`] of the app name.",
 					"type": "string",

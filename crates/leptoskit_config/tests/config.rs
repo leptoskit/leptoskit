@@ -778,9 +778,68 @@ fn the_auth_table_names_secrets_by_variable() {
 	assert_eq!(embedded.app.name, "notes");
 	assert!(embedded.auth.is_some());
 
+	let providers = load(
+		"auth_providers",
+		"[auth]\nmfa = \"required\"\nrequired_for = [\"Admin\"]\n\n[auth.providers.google]\nclient_id_env \
+		 = \"GOOGLE_CLIENT_ID\"\nclient_secret_env = \"GOOGLE_CLIENT_SECRET\"\n\n[auth.providers.\
+		 apple]\nclient_id_env = \"A\"\nteam_id_env = \"T\"\nkey_id_env = \"K\"\nprivate_key_env = \
+		 \"P\"\n\n[auth.providers.company]\nname = \"Company SSO\"\nissuer = \
+		 \"https://sso.example\"\nclient_id_env = \"SSO_ID\"\n\n[auth.providers.microsoft]\
+		 \nclient_id_env = \"M\"\nclient_secret_env = \"S\"\ntenant = \"consumers\"\n",
+	)
+	.expect("providers");
+	let auth = providers.auth.expect("auth");
+	assert_eq!(auth.mfa, leptoskit_config::AuthMfa::Required);
+	assert_eq!(auth.required_for, ["Admin"]);
+	assert_eq!(auth.providers.len(), 4);
+	assert_eq!(auth.providers["company"].kind("company"), "oidc");
+	assert_eq!(auth.providers["google"].kind("google"), "google");
+	assert_eq!(
+		auth.providers["google"].env_names(),
+		[
+			("client_id_env", "GOOGLE_CLIENT_ID"),
+			("client_secret_env", "GOOGLE_CLIENT_SECRET")
+		]
+	);
+
 	let webhook =
 		"[auth.mail]\nwebhook_url_env = \"MAIL_URL\"\nwebhook_secret_env = \"MAIL_SECRET\"\n";
 	load("auth_webhook", webhook).expect("a webhook with its secret");
+
+	let solana = load(
+		"auth_solana",
+		"[auth]\n\n[auth.solana]\nsign_in = true\nchain_id = \"devnet\"\n",
+	)
+	.expect("solana");
+	let auth = solana.auth.expect("auth");
+	assert!(auth.solana.sign_in);
+	assert_eq!(auth.solana.chain_id.as_deref(), Some("devnet"));
+
+	let config = load("auth_idp_on", "[auth.idp]\n").expect("load");
+	let idp = config
+		.auth
+		.expect("auth")
+		.idp
+		.expect("an empty table turns it on");
+	assert_eq!(idp, leptoskit_config::AuthIdpConfig::default());
+	assert_eq!(
+		(
+			idp.consent_page.as_str(),
+			idp.device_page.as_str(),
+			idp.access_minutes
+		),
+		("/consent", "/device", 10)
+	);
+	let config = load(
+		"auth_idp_custom",
+		"[auth.idp]\nissuer = \"https://notes.example\"\nconsent_page = \"/connect\"\nrsa_key_env \
+		 = \"IDP_RSA_KEY\"\ndeveloper_portal = true\napps_per_person = 3\n",
+	)
+	.expect("load");
+	let idp = config.auth.expect("auth").idp.expect("idp");
+	assert_eq!(idp.rsa_key_env.as_deref(), Some("IDP_RSA_KEY"));
+	assert!(idp.developer_portal);
+	assert_eq!(idp.apps_per_person, 3);
 }
 
 #[test]
@@ -815,8 +874,109 @@ fn auth_settings_are_checked() {
 			"must name environment variables",
 		),
 		("smtp_password = \"hunter2\"", "could not parse"),
+		("mfa = \"sometimes\"", "could not parse"),
+		("required_for = [\"\"]", "required_for"),
+		(
+			"[auth.providers.Google]\nclient_id_env = \"A\"",
+			"lowercase letters",
+		),
+		(
+			"[auth.providers.google]\nclient_id_env = \"A\"",
+			"needs `client_secret_env`",
+		),
+		(
+			"[auth.providers.github]\nclient_id_env = \"\"\nclient_secret_env = \"B\"",
+			"must name environment variables",
+		),
+		(
+			"[auth.providers.apple]\nclient_id_env = \"A\"",
+			"needs `team_id_env`",
+		),
+		(
+			"[auth.providers.sso]\nissuer = \"http://sso.example\"\nclient_id_env = \"A\"",
+			"must be an `https://` URL",
+		),
+		(
+			"[auth.providers.sso]\nissuer = \"https://sso.example\"",
+			"needs `client_id_env`",
+		),
+		(
+			"[auth.providers.x]\nkind = \"myspace\"",
+			"isn't one of google",
+		),
+		(
+			"[auth.providers.google]\nclient_id_env = \"A\"\nclient_secret = \"inline\"",
+			"could not parse",
+		),
+		("[auth.solana]\nchain_id = \"main net\"", "chain_id"),
+		("[auth.solana]\nchain_id = \"\"", "chain_id"),
+		("[auth.solana]\nrpc_url = \"https://x\"", "could not parse"),
+		("[auth.idp]\nconsent_page = \"consent\"", "consent_page"),
+		(
+			"[auth.idp]\nsign_in_page = \"//evil.example\"",
+			"sign_in_page",
+		),
+		("[auth.idp]\nrsa_key_env = \"\"", "rsa_key_env"),
+		("[auth.idp]\naccess_minutes = 61", "access_minutes"),
+		("[auth.idp]\nrefresh_days = 0", "refresh_days"),
+		(
+			"[auth.idp]\ndeveloper_portal = true\napps_per_person = 0",
+			"apps_per_person",
+		),
+		("[auth.idp]\nrsa_key = \"-----BEGIN\"", "could not parse"),
+		(
+			"[auth.idp]\ndynamic_registration = true\nregistration_token_env = \"\"",
+			"registration_token_env must name",
+		),
+		(
+			"[auth.idp]\nregistration_token_env = \"IDP_REGISTRATION_TOKEN\"",
+			"needs dynamic_registration",
+		),
+		(
+			"[auth.idp]\nregistration_token = \"inline\"",
+			"could not parse",
+		),
 	] {
 		let error = load("auth_bad", &format!("[auth]\n{settings}\n")).unwrap_err();
 		assert!(error.to_string().contains(message), "{settings}: {error}");
+	}
+}
+
+#[test]
+fn native_app_associations_are_checked() {
+	let config = |native: &str| {
+		LeptoskitConfig::from_toml(
+			&format!("[app]\nname = \"counter\"\n\n[native]\n{native}"),
+			std::path::Path::new("counter"),
+		)
+	};
+	let fingerprint = "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:\
+	                   CD:EF:01:23:45:67:89";
+	let loaded = config(&format!(
+		"apple_team_id = \"ABCDE12345\"\nandroid_certificates = [\"{fingerprint}\", \"{}\"]",
+		fingerprint.replace(':', "").to_lowercase()
+	))
+	.expect("a team ID and fingerprints load");
+	assert_eq!(loaded.native.apple_team_id.as_deref(), Some("ABCDE12345"));
+	let digests = loaded.native.android_certificate_digests();
+	assert_eq!(digests.len(), 2);
+	assert_eq!(digests[0], digests[1]);
+	assert_eq!(digests[0][..4], [0xAB, 0xCD, 0xEF, 0x01]);
+
+	for team in ["abcde12345", "ABCDE1234", "ABCDE-2345"] {
+		let error = config(&format!("apple_team_id = \"{team}\"")).unwrap_err();
+		assert!(
+			matches!(error, ConfigError::InvalidAppleTeamId(ref found) if found == team),
+			"{error}"
+		);
+	}
+
+	for certificate in ["AB:CD", "zz", &"A".repeat(66)] {
+		let error = config(&format!("android_certificates = [\"{certificate}\"]")).unwrap_err();
+		assert!(
+			matches!(error, ConfigError::InvalidAndroidCertificate(ref found) if found == certificate),
+			"{error}"
+		);
+		assert!(error.to_string().contains("keytool"));
 	}
 }
