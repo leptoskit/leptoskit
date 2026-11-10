@@ -21,7 +21,6 @@ use jni::sys::jdouble;
 use jni::sys::jfloat;
 use jni::sys::jint;
 use jni::sys::jlong;
-use leptoskit_native::FontWeight;
 use leptoskit_native::Mutation;
 use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
@@ -377,6 +376,22 @@ struct AndroidTextMeasurer {
 
 impl TextMeasurer for AndroidTextMeasurer {
 	fn measure(&self, text: &str, style: TextStyle, available: Size<AvailableSpace>) -> Size<f32> {
+		let size = self.natural(text, style, available);
+
+		// `StaticLayout` sets lines at the font's own height; the widget host
+		// draws each one at the line height, so the label is that many lines.
+		if style.line_height.is_some() {
+			let unbounded = Size::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+			return style.fit_line_height(size, self.natural(" ", style, unbounded).height);
+		}
+
+		size
+	}
+}
+
+impl AndroidTextMeasurer {
+	/// The size `StaticLayout` sets `text` in, at the font's own line height.
+	fn natural(&self, text: &str, style: TextStyle, available: Size<AvailableSpace>) -> Size<f32> {
 		let mut env = self
 			.vm
 			.attach_current_thread()
@@ -388,12 +403,7 @@ impl TextMeasurer for AndroidTextMeasurer {
 				AvailableSpace::MinContent => -2.0,
 				AvailableSpace::MaxContent => -1.0,
 			};
-			let weight = match style.font_weight {
-				FontWeight::Regular => 400,
-				FontWeight::Medium => 500,
-				FontWeight::Semibold => 600,
-				FontWeight::Bold => 700,
-			};
+			let weight = i32::from(style.font_weight.value());
 
 			let class: &JClass<'_> = self.class.as_obj().into();
 			let array = env

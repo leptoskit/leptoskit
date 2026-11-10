@@ -5,7 +5,6 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.view.Gravity
@@ -192,7 +191,10 @@ internal class NativeWidgetProps(
     private data class TextStyle(
         val size: Float,
         val color: Int,
+        /** The CSS weight, from 100 to 900. */
         val weight: Int,
+        /** Every line's height in pixels, or null for the font's own. */
+        val lineHeight: Float?,
         val gravity: Int,
     )
 
@@ -218,8 +220,12 @@ internal class NativeWidgetProps(
         props: WidgetProps,
     ) {
         val value = textValue(widget, props)
+        // Text fields keep their own single-line height.
+        val lineHeight =
+            if (widget is EditText) null else props.lineHeight?.let { (it * widget.resources.displayMetrics.density).toFloat() }
+        val retext = widget.text.toString() != value || textStyles[widget]?.lineHeight != lineHeight
 
-        if (widget.text.toString() != value) widget.text = value
+        if (retext) widget.text = ExactLineHeightSpan.lined(value, lineHeight)
         // NativeTextMeasurer sizes text without font padding, as layout expects,
         // and breaks its lines with its own strategy: a view that broke them
         // differently could need a line more than its frame holds.
@@ -236,8 +242,7 @@ internal class NativeWidgetProps(
 
         if (widget is EditText) applyAutofill(widget, props)
 
-        val weight =
-            if (props.fontWeight == "bold" || props.fontWeight == "semibold") Typeface.BOLD else Typeface.NORMAL
+        val weight = cssWeight(props.fontWeight)
         // A button centres its label unless the element aligns it, as web
         // buttons and UIKit buttons do.
         val unaligned = if (widget is Button) Gravity.CENTER else Gravity.START or Gravity.CENTER_VERTICAL
@@ -246,6 +251,7 @@ internal class NativeWidgetProps(
                 size = (props.fontSize ?: DEFAULT_FONT_SIZE).toFloat(),
                 color = props.color?.let(NativeWidgetColor::argb) ?: android.graphics.Color.BLACK,
                 weight = weight,
+                lineHeight = lineHeight,
                 gravity =
                     when (props.textAlign) {
                         "center" -> Gravity.CENTER
@@ -259,7 +265,7 @@ internal class NativeWidgetProps(
         textStyles[widget] = style
         widget.textSize = style.size
         widget.setTextColor(style.color)
-        widget.setTypeface(null, style.weight)
+        widget.typeface = nativeTypeface(style.weight)
         widget.gravity = style.gravity
     }
 

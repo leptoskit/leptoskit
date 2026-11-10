@@ -15,6 +15,7 @@ use serde::de::Visitor;
 use super::Host;
 use super::Tree;
 use super::kind_code;
+use crate::Appearance;
 use crate::Aria;
 use crate::BorderWidths;
 use crate::Color;
@@ -23,6 +24,7 @@ use crate::Element;
 use crate::FontWeight;
 use crate::HasPopup;
 use crate::Invalid;
+use crate::LineHeight;
 use crate::Live;
 use crate::NativeKind;
 use crate::NativeProps;
@@ -195,6 +197,7 @@ fn every_prop() -> NativeProps {
 		font_size: Some(13.5),
 		font_weight: Some(FontWeight::Semibold),
 		italic: Some(true),
+		line_height: Some(LineHeight::Relative(1.375)),
 		spans: Some(vec![
 			TextSpan::new("The dead market ").color(Color(0xFFFF_FFFF)),
 			TextSpan::new("did not stay dead.").background(Color(0x0000_00FF)),
@@ -205,6 +208,7 @@ fn every_prop() -> NativeProps {
 		scroll_offset: Some(ScrollOffset::new(0.0, 640.5).animated()),
 		// Never sent: the guest runs motion itself.
 		motion: None,
+		appearance: Some(Appearance::Dark),
 		extra: BTreeMap::from([
 			("tint".into(), PropValue::Color(Color(0x1122_33FF))),
 			("weight".into(), PropValue::Number(0.125)),

@@ -55,7 +55,7 @@ Some limits apply to every native platform:
 
 - `Image` loads [`asset://` pictures](../guide/36-assets.md) bundled from your `assets/` folder and local files, not URLs. iOS also accepts `resource://` names and Android `android.resource://` URIs.
 - [Rive](../guide/20-rive.md) supports vector scenes. Native text, images, layout, scripts, audio, view models, and some draw features are rejected. HarmonyOS uses an application-supplied reduced-motion preference and still needs device playback validation.
-- Shadows, transforms, gradients, custom fonts, line height, and letter spacing aren't supported yet. The [CSS coverage reference](../reference/css-coverage.md) lists what is.
+- Shadows, transforms, gradients, custom fonts, and letter spacing aren't supported yet, and Windows draws text at the font's own line height. The [CSS coverage reference](../reference/css-coverage.md) lists what is.
 - Links (`href`) only work on the web.
 - A scroll view's [`scroll_offset`](../guide/17-virtualized-lists.md#programmatic-scrolling) moves it on the web and in the generated macOS, iOS, and Android apps. The backend crates, and so the generated Windows and Linux apps, HarmonyOS, and the terminal don't apply it yet.
 - The generated macOS, Windows, and Linux apps don't check for code push updates yet; only the iOS and Android apps do. Ship a new build to update a desktop app.

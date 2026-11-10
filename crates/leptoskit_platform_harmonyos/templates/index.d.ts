@@ -26,6 +26,8 @@ export interface WidgetProps {
 	clip?: boolean | null;
 	font_size?: number | null;
 	font_weight?: string | null;
+	/** Each line's height: a multiple of the font size, or vp. Unset is the font's own. */
+	line_height?: { relative?: number; fixed?: number } | null;
 	/** Whether text draws italic. Unset means upright. */
 	italic?: boolean | null;
 	text_align?: string | null;

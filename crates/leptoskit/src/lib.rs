@@ -167,6 +167,14 @@ pub mod native {
 	pub use leptoskit_native::*;
 }
 
+pub mod appearance {
+	//! Light, dark, or the device's appearance: what `dark:` utilities follow.
+	//!
+	//! Call [`set`] when the person picks "Light", "Dark", or "Match
+	//! device", and read the choice with [`get`].
+	pub use leptoskit_native::appearance::*;
+}
+
 pub mod splash {
 	//! Hold and dismiss the launch overlay after the OS splash ends.
 	pub use leptoskit_native::splash::*;

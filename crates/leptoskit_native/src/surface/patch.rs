@@ -143,7 +143,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		// A held control resolves along its path through the whole tree; a
 		// full commit of the patched source keeps that one rule in one place.
-		if self.pressed.is_some() {
+		// A new appearance on the root changes `dark:` everywhere.
+		if self.pressed.is_some() || self.adopt_root_appearance() {
 			self.commit_source();
 		} else {
 			self.reconcile_patches(checked.iter().map(|(path, (subtree, _))| (path, *subtree)));

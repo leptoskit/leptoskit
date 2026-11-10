@@ -136,20 +136,30 @@ impl UIKitTextMeasurer {
 				.lines()
 				.count()
 				+ trailing_break;
-			CGSize::new(
-				size.width,
-				size.height.max(lines as f64 * ui_font.lineHeight()),
-			)
+			// A line height sets every line, as the label's paragraph style
+			// does when it draws.
+			let height = style.line_height.map_or_else(
+				|| size.height.max(lines as f64 * ui_font.lineHeight()),
+				|line_height| lines as f64 * f64::from(line_height),
+			);
+			CGSize::new(size.width, height)
 		}
 	}
 }
 
+/// UIKit's weight for each CSS weight: ultralight is 100 and thin 200, as
+/// Apple's fonts number them, and heavy is 800.
 pub(crate) const fn font_weight(weight: FontWeight) -> f64 {
 	match weight {
+		FontWeight::Thin => -0.8,
+		FontWeight::ExtraLight => -0.6,
+		FontWeight::Light => -0.4,
 		FontWeight::Regular => 0.0,
 		FontWeight::Medium => 0.23,
 		FontWeight::Semibold => 0.3,
 		FontWeight::Bold => 0.4,
+		FontWeight::ExtraBold => 0.56,
+		FontWeight::Black => 0.62,
 	}
 }
 

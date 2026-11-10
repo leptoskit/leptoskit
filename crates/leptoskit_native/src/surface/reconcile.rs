@@ -20,6 +20,8 @@ use crate::tailwind::StyleContext;
 
 impl<B: NativeBackend> NativeSurface<B> {
 	pub(super) fn commit_source(&mut self) {
+		self.adopt_root_appearance();
+
 		let Some(source) = &self.source else {
 			return;
 		};
@@ -138,7 +140,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 				id,
 				MeasuredText {
 					content: text.to_owned(),
-					style: element.props.text_style(),
+					style: super::measurement::measured_style(element),
 					native_chrome: has_native_chrome(element),
 				},
 			);

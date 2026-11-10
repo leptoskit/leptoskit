@@ -408,6 +408,10 @@ fn text(css: &mut String, element: &Element) {
 		property(css, "font-weight", keyword::font_weight(weight));
 	}
 
+	if let Some(line_height) = props.line_height {
+		property(css, "line-height", &keyword::line_height(line_height));
+	}
+
 	if let Some(alignment) = props.text_align {
 		let value = keyword::text_align(alignment);
 		property(css, "text-align", value);

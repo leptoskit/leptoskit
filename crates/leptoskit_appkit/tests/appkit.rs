@@ -105,6 +105,11 @@ mod macos {
 				"measurement_follows_the_style",
 				measurement_follows_the_style,
 			),
+			trial("lines_take_the_line_height", lines_take_the_line_height),
+			trial(
+				"every_weight_draws_a_distinct_width",
+				every_weight_draws_a_distinct_width,
+			),
 			trial(
 				"logical_text_alignment_follows_layout_direction",
 				logical_text_alignment_follows_layout_direction,
@@ -707,6 +712,39 @@ mod macos {
 		assert!(
 			min.width < line.width / 4.0,
 			"min-content is the widest word"
+		);
+	}
+
+	fn lines_take_the_line_height() {
+		let text = "first line\nsecond line\nthird line";
+		let natural = TextStyle::new(15.0, FontWeight::Regular);
+		let natural_height = measure(text, natural, None).height;
+
+		for line_height in [12.0, 30.0, 45.5] {
+			let style = TextStyle {
+				line_height: Some(line_height),
+				..natural
+			};
+			let measured = measure(text, style, None);
+			assert!(
+				(measured.height - 3.0 * line_height).abs() <= 1.0,
+				"three lines of {line_height} measure {}",
+				measured.height
+			);
+			assert_eq!(measured.width, measure(text, natural, None).width);
+		}
+
+		assert!(natural_height < 3.0 * 30.0);
+	}
+
+	fn every_weight_draws_a_distinct_width() {
+		let text = "the quick brown fox jumps over the lazy dog";
+		let widths =
+			FontWeight::ALL.map(|weight| measure(text, TextStyle::new(15.0, weight), None).width);
+
+		assert!(
+			widths.windows(2).all(|pair| pair[0] < pair[1]),
+			"heavier weights are wider: {widths:?}"
 		);
 	}
 

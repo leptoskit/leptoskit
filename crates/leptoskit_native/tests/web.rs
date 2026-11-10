@@ -555,6 +555,36 @@ fn styled_runs_render_as_inline_spans_in_a_block() {
 }
 
 #[test]
+fn typed_weights_and_line_heights_render_as_css() {
+	let relative = render(
+		Element::text("Loose")
+			.font(15.0, FontWeight::Black)
+			.line_height(leptoskit_native::LineHeight::Relative(1.5)),
+	)
+	.to_html();
+	assert!(relative.contains("font-weight:900;"), "{relative}");
+	assert!(relative.contains("line-height:1.5;"), "{relative}");
+
+	let fixed = render(
+		Element::text("Fixed")
+			.font(15.0, FontWeight::Thin)
+			.line_height(leptoskit_native::LineHeight::Fixed(22.0)),
+	)
+	.to_html();
+	assert!(fixed.contains("font-weight:100;"), "{fixed}");
+	assert!(fixed.contains("line-height:22px;"), "{fixed}");
+
+	let span = render(
+		Text("").spans([leptoskit_native::TextSpan::new("light").weight(FontWeight::Light)]),
+	)
+	.to_html();
+	assert!(
+		span.contains("<span style=\"font-weight:300;\">light</span>"),
+		"{span}"
+	);
+}
+
+#[test]
 fn italic_and_per_edge_border_props_render_as_css() {
 	let element = View().with_props(|props| {
 		props.italic = Some(true);

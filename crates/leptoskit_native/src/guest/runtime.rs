@@ -47,6 +47,9 @@ thread_local! {
 	static OWNER: RefCell<Option<reactive_graph::owner::Owner>> = const { RefCell::new(None) };
 	static PAYLOAD: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 	static VIEWPORT: std::cell::Cell<Option<(f32, f32)>> = const { std::cell::Cell::new(None) };
+	/// The appearance the last rendered root carried to the host.
+	static SENT_APPEARANCE: std::cell::Cell<Option<crate::Appearance>> =
+		const { std::cell::Cell::new(None) };
 }
 
 /// The host's viewport, `(width, height)` in layout units, once the host has
@@ -151,7 +154,12 @@ pub fn render() {
 	// The tree evaluates new lists while it updates, so they are part of the
 	// build too.
 	state.build(|| {
-		let (element, tracked) = super::track::render_tracking(move || view());
+		let (mut element, tracked) = super::track::render_tracking(move || view());
+
+		// The host resolves `dark:` against the appearance the root carries.
+		let appearance = crate::appearance::chosen();
+		element.props.appearance = appearance;
+		SENT_APPEARANCE.set(appearance);
 
 		APPLICATION.with_borrow_mut(|application| {
 			let application = application
@@ -211,7 +219,11 @@ fn sync(on_event: bool) {
 		super::track::ViewKind::Plain
 	};
 
-	if super::track::needs_render(kind, on_event) {
+	// A new appearance reaches the host on the root, so the turn that chose
+	// it renders even when nothing else asked to.
+	if super::track::needs_render(kind, on_event)
+		|| crate::appearance::chosen() != SENT_APPEARANCE.get()
+	{
 		render();
 	}
 
