@@ -58,6 +58,42 @@ fn terminal(config: &LeptoskitConfig, root: &Path) -> Result<()> {
 	Ok(())
 }
 
+/// Environment variables for a process `dev` starts.
+type Env = Vec<(String, String)>;
+
+/// The development database, brought in step with the tables, and the
+/// variables the app server finds it by.
+fn start_database(
+	config: &LeptoskitConfig,
+	root: &Path,
+) -> Result<(Option<crate::db::DevDatabase>, Env)> {
+	let database = crate::db::DevDatabase::start(config, root)?;
+	if let Some(database) = &database {
+		database.tables_changed();
+	}
+	let env = database
+		.as_ref()
+		.map(crate::db::DevDatabase::env)
+		.unwrap_or_default();
+	Ok((database, env))
+}
+
+/// Starts the studio beside the app when asked to, over the database `dev`
+/// uses.
+fn start_studio(
+	studio: bool,
+	database: Option<&crate::db::DevDatabase>,
+) -> Result<Option<crate::db::StudioProcess>> {
+	if !studio {
+		return Ok(None);
+	}
+
+	database
+		.context("--studio serves the database, and leptoskit.toml has no `[db]` table")?
+		.studio()
+		.map(Some)
+}
+
 /// Runs the dev loop: an initial build of every selected platform, then a
 /// watcher that rebuilds them once changes settle. `platforms` names the
 /// platforms to run; empty means every enabled platform this machine can run.
@@ -71,6 +107,7 @@ pub fn run(
 	port: Option<u16>,
 	platforms: &[Platform],
 	devices: &[String],
+	studio: bool,
 ) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
 	let terminal_only = match platforms {
@@ -79,9 +116,9 @@ pub fn run(
 	};
 	if terminal_only {
 		anyhow::ensure!(
-			!open && port.is_none() && devices.is_empty(),
-			"--open, --port, and --device choose where other platforms run; the terminal app runs \
-			 in this terminal"
+			!open && port.is_none() && devices.is_empty() && !studio,
+			"--open, --port, --device, and --studio serve other platforms; the terminal app runs \
+			 in this terminal alone"
 		);
 		return terminal(&config, &root);
 	}
@@ -99,14 +136,9 @@ pub fn run(
 	);
 	// Declared before the app server, so it outlives it: a development
 	// database `dev` started stops after the server that uses it.
-	let mut database = crate::db::DevDatabase::start(&config, &root)?;
-	if let Some(database) = &database {
-		database.tables_changed();
-	}
-	let database_env = database
-		.as_ref()
-		.map(crate::db::DevDatabase::env)
-		.unwrap_or_default();
+	let (mut database, database_env) = start_database(&config, &root)?;
+	// Declared after the database, so it stops first.
+	let _studio = start_studio(studio, database.as_ref())?;
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
 	let mut web = if selection.web {
@@ -591,6 +623,16 @@ fn open_browser(url: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_studio_starts_only_when_asked_and_needs_a_database() {
+		assert!(start_studio(false, None).unwrap().is_none());
+		let error = start_studio(true, None).err().unwrap();
+		assert!(
+			error.to_string().contains("--studio serves the database"),
+			"{error}"
+		);
+	}
 
 	#[test]
 	fn the_dev_loop_follows_git_s_head_and_the_tables() {

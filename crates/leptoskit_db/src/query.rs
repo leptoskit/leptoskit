@@ -26,11 +26,11 @@ use crate::sql::Sql;
 /// the query asks for them with [`Query::with_deleted`].
 #[must_use = "a query does nothing until it runs"]
 pub struct Query<T> {
-	filter: Option<Expr>,
-	order: Vec<Order>,
-	limit: Option<u64>,
-	offset: Option<u64>,
-	with_deleted: bool,
+	pub(crate) filter: Option<Expr>,
+	pub(crate) order: Vec<Order>,
+	pub(crate) limit: Option<u64>,
+	pub(crate) offset: Option<u64>,
+	pub(crate) with_deleted: bool,
 	skip_hooks: bool,
 	table: PhantomData<fn() -> T>,
 }
@@ -211,7 +211,9 @@ impl<T: Table> Query<T> {
 		refuse_bulk::<T>(T::HOOKS.after_delete, self.skip_hooks)?;
 		self.with_deleted = true;
 
-		if crate::fallout::reaches::<T>() {
+		// A variant of a polymorphic table removes its supertype rows after
+		// it, so it needs to know which rows it removed.
+		if crate::fallout::reaches::<T>() || T::SUPERTYPE.is_some() {
 			let mut condition = self.filter.take().unwrap_or_else(Expr::always);
 
 			if let Some(policy) = policy::condition::<T>(connection.access(), Action::Delete) {
@@ -610,7 +612,7 @@ async fn audited_destroy<T: Table>(connection: &impl Connection, sql: Sql) -> Re
 
 /// Removes the rows matching `condition` for good, and records them and
 /// the rows the database's own cascades change with them: reads and locks
-/// them first, then deletes exactly those.
+/// them first, then deletes exactly those, then their supertype rows.
 async fn destroy_with_fallout<T: Table>(
 	connection: &impl Connection,
 	condition: &Expr,
@@ -640,6 +642,15 @@ async fn destroy_with_fallout<T: Table>(
 	}
 
 	fallout.record(connection).await?;
+
+	if T::SUPERTYPE.is_some() {
+		let keys = rows
+			.iter()
+			.flat_map(|row| policy::key_of::<T>(row))
+			.collect();
+		T::remove_supertypes(keys, connection).await?;
+	}
+
 	Ok(removed)
 }
 
@@ -660,7 +671,7 @@ async fn soft_delete_cascading<T: Table>(
 			.into_iter()
 			.filter_map(|key| key.into_iter().next())
 			.collect();
-		crate::cascade::soft_delete_linked(connection, T::table_name(), keys, now).await?;
+		crate::cascade::soft_delete_from::<T>(connection, keys, now).await?;
 	}
 
 	Ok(deleted)
@@ -695,7 +706,19 @@ fn write_where<T: Table>(
 	policy: Option<&Expr>,
 	with_deleted: bool,
 ) -> Result<()> {
-	let mut first = true;
+	write_conditions::<T>(sql, filter, policy, with_deleted, false)
+}
+
+/// The conditions [`write_where`] writes, after `WHERE` and conditions of
+/// the caller's own when `started`.
+pub(crate) fn write_conditions<T: Table>(
+	sql: &mut Sql,
+	filter: Option<&Expr>,
+	policy: Option<&Expr>,
+	with_deleted: bool,
+	started: bool,
+) -> Result<()> {
+	let mut first = !started;
 
 	for condition in [filter, policy].into_iter().flatten() {
 		sql.push(if first { " WHERE (" } else { " AND (" });

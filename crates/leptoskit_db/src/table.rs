@@ -77,6 +77,11 @@ pub trait Table: Sized + 'static {
 	/// Whether the table is a view, which nothing writes to.
 	const READ_ONLY: bool = false;
 
+	/// The supertype of a variant of a polymorphic table,
+	/// `#[db::table(extends = …)]`, whose policies the table inherits.
+	#[doc(hidden)]
+	const SUPERTYPE: Option<crate::__private::polymorphic::Supertype> = None;
+
 	/// The typed columns, for filters and orderings.
 	type Columns: 'static;
 
@@ -151,6 +156,26 @@ pub trait Table: Sized + 'static {
 		async { Ok(()) }
 	}
 
+	/// Inserts a variant row's supertype row, before the row itself.
+	#[doc(hidden)]
+	fn write_supertype(
+		&self,
+		connection: &impl crate::Connection,
+	) -> impl Future<Output = crate::Result<()>> + Send {
+		let _ = connection;
+		async { Ok(()) }
+	}
+
+	/// Removes the supertype rows of variant rows just removed, by key.
+	#[doc(hidden)]
+	fn remove_supertypes(
+		keys: Vec<Value>,
+		connection: &impl crate::Connection,
+	) -> impl Future<Output = crate::Result<()>> + Send {
+		let _ = (keys, connection);
+		async { Ok(()) }
+	}
+
 	/// The table's access policy, which `#[db::policy]` declares. Empty means
 	/// open to server code.
 	fn policies() -> &'static [crate::Policy<Self>] {
@@ -186,6 +211,15 @@ pub struct TableEntry {
 	pub(crate) subject: crate::audit::Subject,
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	images: VisibleImages,
+	/// The table's policies as row-level security.
+	row_security: fn() -> Result<Option<leptoskit_db_schema::RowSecurity>, String>,
+	/// What the studio does to the table.
+	#[cfg(all(
+		feature = "studio",
+		debug_assertions,
+		any(feature = "postgres", feature = "sqlite")
+	))]
+	pub(crate) studio: crate::studio::TableOps,
 }
 
 /// Builds the statements that check rows of a table, which aren't stored,
@@ -209,6 +243,13 @@ impl TableEntry {
 			subject: crate::audit::Subject::of::<T>(),
 			#[cfg(any(feature = "postgres", feature = "sqlite"))]
 			images: crate::live::visible_images::<T>,
+			row_security: crate::policy::row_security::<T>,
+			#[cfg(all(
+				feature = "studio",
+				debug_assertions,
+				any(feature = "postgres", feature = "sqlite")
+			))]
+			studio: crate::studio::TableOps::of::<T>(),
 		}
 	}
 
@@ -288,6 +329,91 @@ pub fn schema(dialect: Dialect) -> Result<Schema, SchemaError> {
 		Err(SchemaError::Invalid(problems))
 	}
 }
+
+/// [`schema`], with every table's access policy also enforced by Postgres
+/// as row-level security, for `[db] policies = "rls"`. Every rule must read
+/// the request through settings (`cx.setting::<G>()`) rather than as Rust
+/// values (`cx.global`), so the database can evaluate it.
+///
+/// Views and the audit log are left to the database layer alone.
+///
+/// # Errors
+///
+/// The schema's own problems, and each table whose rules can't be enforced
+/// by the database, or settings registered twice under one name or with an
+/// invalid one.
+pub fn schema_with_row_security(dialect: Dialect) -> Result<Schema, SchemaError> {
+	let mut schema = schema(dialect)?;
+	let mut problems = Vec::new();
+
+	for entry in inventory::iter::<TableEntry>() {
+		let name = (entry.name)();
+
+		match (entry.row_security)() {
+			Ok(security) => {
+				if let Some(table) = schema.tables.iter_mut().find(|table| table.name == name) {
+					table.row_security = security;
+				}
+			}
+			Err(message) => {
+				problems.push(leptoskit_db_schema::Problem {
+					location: name.to_string(),
+					message: format!("row-level security: {message}"),
+				});
+			}
+		}
+	}
+
+	let mut names: Vec<(&str, &str)> = Vec::new();
+
+	for entry in crate::settings::entries() {
+		let type_name = (entry.type_name)();
+		let snake = entry
+			.name
+			.chars()
+			.next()
+			.is_some_and(|first| first.is_ascii_lowercase())
+			&& entry.name.chars().all(|character| {
+				character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+			});
+
+		if !snake {
+			problems.push(leptoskit_db_schema::Problem {
+				location: format!("setting `{type_name}`"),
+				message: format!(
+					"its name, `{}`, must be lowercase snake case, starting with a letter",
+					entry.name
+				),
+			});
+		}
+
+		match names.iter().find(|(name, _)| *name == entry.name) {
+			Some((_, other)) if *other != type_name => {
+				problems.push(leptoskit_db_schema::Problem {
+					location: format!("setting `{type_name}`"),
+					message: format!("`{other}` is named `{}` too", entry.name),
+				});
+			}
+			Some(_) => {}
+			None => names.push((entry.name, type_name)),
+		}
+	}
+
+	schema
+		.problems()
+		.into_iter()
+		.for_each(|problem| problems.push(problem));
+
+	if problems.is_empty() {
+		Ok(schema)
+	} else {
+		Err(SchemaError::Invalid(problems))
+	}
+}
+
+/// The environment variable saying whether `export_schema!` exports the
+/// policies as row-level security: `rls`, or `orm` (the default).
+pub const POLICIES_ENV: &str = "LEPTOSKIT_DB_POLICIES";
 
 /// Decodes the next value of a row, locating any error at its column.
 #[doc(hidden)]
@@ -511,6 +637,21 @@ impl TableBuilder {
 		self.table.foreign_keys.push(foreign_key);
 	}
 
+	/// A full-text search index over `columns`, each with its weight.
+	pub fn search(
+		&mut self,
+		language: &str,
+		columns: &[(&str, leptoskit_db_schema::SearchWeight)],
+	) {
+		self.table.search = Some(leptoskit_db_schema::Search::new(
+			language,
+			columns
+				.iter()
+				.map(|(column, weight)| leptoskit_db_schema::SearchColumn::new(*column, *weight))
+				.collect(),
+		));
+	}
+
 	pub fn build(self) -> leptoskit_db_schema::Table {
 		self.table
 	}
@@ -529,6 +670,18 @@ pub const SCHEMA_OUT_ENV: &str = "LEPTOSKIT_DB_SCHEMA_OUT";
 /// The environment variable naming the dialect `export_schema!` exports for.
 pub const DIALECT_ENV: &str = "LEPTOSKIT_DB_DIALECT";
 
+/// The environment variable that makes `export_schema!` serve the studio
+/// instead of exporting the schema: the loopback address to listen on, such
+/// as `127.0.0.1:0`. `leptoskit db studio` sets it.
+pub const STUDIO_ENV: &str = "LEPTOSKIT_DB_STUDIO";
+
+/// The environment variable naming the database the studio opens.
+pub const STUDIO_DATABASE_ENV: &str = "LEPTOSKIT_DB_STUDIO_DATABASE";
+
+/// The environment variable naming the app's migrations directory, for the
+/// studio's migrations page.
+pub const STUDIO_MIGRATIONS_ENV: &str = "LEPTOSKIT_DB_STUDIO_MIGRATIONS";
+
 /// Writes every table's schema as `schema.json` when `leptoskit db` asks, by
 /// setting [`SCHEMA_OUT_ENV`]; otherwise does nothing, so an ordinary
 /// `cargo test` passes through it.
@@ -539,6 +692,11 @@ pub const DIALECT_ENV: &str = "LEPTOSKIT_DB_DIALECT";
 /// panic is the error `leptoskit db` shows.
 #[doc(hidden)]
 pub fn export_schema_if_requested() {
+	if std::env::var_os(STUDIO_ENV).is_some() {
+		serve_studio();
+		return;
+	}
+
 	let Some(out) = std::env::var_os(SCHEMA_OUT_ENV) else {
 		return;
 	};
@@ -548,7 +706,13 @@ pub fn export_schema_if_requested() {
 		Ok(other) => panic!("{DIALECT_ENV} is `{other}`; expected `postgres` or `sqlite`"),
 	};
 
-	match schema(dialect) {
+	let exported = match std::env::var(POLICIES_ENV).as_deref() {
+		Ok("rls") => schema_with_row_security(dialect),
+		Ok("orm") | Err(_) => schema(dialect),
+		Ok(other) => panic!("{POLICIES_ENV} is `{other}`; expected `orm` or `rls`"),
+	};
+
+	match exported {
 		Ok(schema) => {
 			if let Err(error) = std::fs::write(&out, schema.to_json()) {
 				panic!(
@@ -559,4 +723,31 @@ pub fn export_schema_if_requested() {
 		}
 		Err(error) => panic!("{error}"),
 	}
+}
+
+/// Serves the studio, when this build has it.
+#[cfg(all(
+	feature = "studio",
+	debug_assertions,
+	any(feature = "postgres", feature = "sqlite")
+))]
+fn serve_studio() {
+	crate::studio::serve_from_env();
+}
+
+/// Says why this build has no studio.
+///
+/// # Panics
+///
+/// Always: the panic is the message `leptoskit db studio` shows.
+#[cfg(not(all(
+	feature = "studio",
+	debug_assertions,
+	any(feature = "postgres", feature = "sqlite")
+)))]
+fn serve_studio() {
+	panic!(
+		"this build has no studio: it needs the `studio` feature of leptoskit_db, a database \
+		 driver, and debug assertions, which release builds turn off"
+	);
 }

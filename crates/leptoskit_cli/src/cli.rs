@@ -219,6 +219,10 @@ pub enum Command {
 		/// that is shut down boots.
 		#[arg(long = "device", value_name = "DEVICE")]
 		devices: Vec<String>,
+		/// Serve the database studio beside the app, as `leptoskit db studio`
+		/// does.
+		#[arg(long)]
+		studio: bool,
 	},
 	/// Builds the project for a platform.
 	Build {
@@ -574,7 +578,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			port,
 			platforms,
 			devices,
-		} => dev::run(open, port, &platforms, &devices),
+			studio,
+		} => dev::run(open, port, &platforms, &devices, studio),
 		Command::Build {
 			release,
 			platform,

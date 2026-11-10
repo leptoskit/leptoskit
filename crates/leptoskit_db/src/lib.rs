@@ -63,18 +63,35 @@ pub mod live;
 mod migrate;
 mod mixins;
 #[cfg(feature = "server")]
+mod persona;
+#[cfg(feature = "server")]
 mod policy;
+#[cfg(feature = "server")]
+mod polymorphic;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "server")]
 mod query;
 mod scalars;
 #[cfg(feature = "server")]
+mod search;
+#[cfg(feature = "server")]
+mod settings;
+#[cfg(feature = "server")]
 mod shape;
 #[cfg(feature = "server")]
 mod sql;
 #[cfg(feature = "sqlite")]
 mod sqlite;
+/// The studio, a browser UI for the development database: see
+/// `leptoskit db studio`. Builds without debug assertions leave it out, so
+/// it never reaches a release build.
+#[cfg(all(
+	feature = "studio",
+	debug_assertions,
+	any(feature = "postgres", feature = "sqlite")
+))]
+pub mod studio;
 #[cfg(feature = "server")]
 mod table;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -230,6 +247,39 @@ pub use leptoskit_db_macros::mixin;
 /// a refused insert, or a change to something not allowed, fails with
 /// `DbError::Forbidden`. `Db::system` bypasses policies, explicitly.
 pub use leptoskit_db_macros::policy;
+/// Declares a polymorphic table: an enum whose variants are tables, so a
+/// link can point at any of them and a `match` handles each, exhaustively.
+///
+/// ```ignore
+/// /// Anything that can own a budget.
+/// #[db::polymorphic(name = "actors", public)]
+/// pub enum Actor {
+/// 	User(User),
+/// 	Group(Group),
+/// }
+///
+/// #[db::table(name = "users", public, extends = Actor)]
+/// pub struct User { pub id: Id<Self>, pub handle: String }
+///
+/// #[db::table(name = "budgets", public)]
+/// pub struct Budget { pub id: Id<Self>, pub owner_id: Id<Actor> }
+///
+/// match budget.owner(&db).await? {
+/// 	Actor::User(user) => …,
+/// 	Actor::Group(group) => …,
+/// }
+/// let everyone: Vec<Actor> = Actor::query().all(&db).await?;
+/// ```
+///
+/// It declares the supertype table, `ActorRow` (`actors(id, kind)`), with
+/// one row per variant row; `ActorKind`; and, with `public`, `PublicActor`.
+/// Each variant table names the enum in `extends`, its key is also a
+/// foreign key to the supertype table, and inserting or removing a variant
+/// row writes its supertype row in the same transaction. `#[db::policy]`
+/// rules below it govern the supertype, and every variant inherits them.
+/// Reading through the enum runs one query per variant table. See
+/// [`Polymorphic`].
+pub use leptoskit_db_macros::polymorphic;
 /// Declares a table. See the crate documentation.
 pub use leptoskit_db_macros::table;
 /// Declares a read-only view: a query the migrations create under a name,
@@ -257,9 +307,13 @@ pub use leptoskit_db_macros::view;
 #[cfg(feature = "server")]
 pub use leptoskit_db_schema::Dialect;
 #[cfg(feature = "server")]
+pub use leptoskit_db_schema::SearchWeight;
+#[cfg(feature = "server")]
 pub use links::HasId;
 #[cfg(feature = "server")]
 pub use links::Link;
+#[cfg(feature = "server")]
+pub use links::Linkable;
 #[cfg(feature = "server")]
 pub use links::Links;
 #[cfg(feature = "server")]
@@ -286,6 +340,8 @@ pub use mixins::SoftDelete;
 pub use mixins::Timestamps;
 pub use mixins::Versioned;
 #[cfg(feature = "server")]
+pub use persona::Persona;
+#[cfg(feature = "server")]
 pub use policy::Action;
 #[cfg(feature = "server")]
 pub use policy::Context;
@@ -294,12 +350,32 @@ pub use policy::Count;
 #[cfg(feature = "server")]
 pub use policy::Policy;
 #[cfg(feature = "server")]
+pub use polymorphic::Polymorphic;
+#[cfg(feature = "server")]
+pub use polymorphic::Variant;
+#[cfg(feature = "server")]
+pub use polymorphic::Variants;
+#[cfg(feature = "server")]
 pub use query::Query;
 #[cfg(feature = "server")]
 pub use query::Update;
 pub use scalars::Email;
 pub use scalars::Slug;
 pub use scalars::Url;
+#[cfg(feature = "server")]
+pub use search::Highlighted;
+#[cfg(feature = "server")]
+pub use search::Hit;
+#[cfg(feature = "server")]
+pub use search::Search;
+#[cfg(feature = "server")]
+pub use search::Searchable;
+#[cfg(feature = "server")]
+pub use search::Segment;
+#[cfg(feature = "server")]
+pub use settings::Setting;
+#[cfg(feature = "server")]
+pub use settings::SettingValue;
 #[cfg(feature = "server")]
 pub use shape::PublicShape;
 #[cfg(feature = "server")]
@@ -311,11 +387,21 @@ pub use sql::Statement;
 #[cfg(feature = "server")]
 pub use table::DIALECT_ENV;
 #[cfg(feature = "server")]
+pub use table::POLICIES_ENV;
+#[cfg(feature = "server")]
 pub use table::SCHEMA_OUT_ENV;
+#[cfg(feature = "server")]
+pub use table::STUDIO_DATABASE_ENV;
+#[cfg(feature = "server")]
+pub use table::STUDIO_ENV;
+#[cfg(feature = "server")]
+pub use table::STUDIO_MIGRATIONS_ENV;
 #[cfg(feature = "server")]
 pub use table::Table;
 #[cfg(feature = "server")]
 pub use table::schema;
+#[cfg(feature = "server")]
+pub use table::schema_with_row_security;
 pub use time::Timestamp;
 #[cfg(feature = "server")]
 pub use time::now;
@@ -328,6 +414,8 @@ pub use value::DecodeError;
 pub use value::EncodeError;
 #[cfg(feature = "server")]
 pub use value::Reference;
+#[cfg(feature = "server")]
+pub use value::Referenced;
 #[cfg(feature = "server")]
 pub use value::ScalarRules;
 #[cfg(feature = "server")]
@@ -432,6 +520,8 @@ pub mod __private {
 	#[cfg(feature = "server")]
 	pub use crate::cascade::SoftCascade;
 	#[cfg(feature = "server")]
+	pub use crate::settings::SettingEntry;
+	#[cfg(feature = "server")]
 	pub use crate::table::TableBuilder;
 	#[cfg(feature = "server")]
 	pub use crate::table::TableEntry;
@@ -466,6 +556,17 @@ pub mod __private {
 	#[cfg(feature = "server")]
 	pub use crate::table::export_schema_if_requested;
 	pub use crate::validate::rules;
+	/// What `#[db::polymorphic]` and its variants expand to.
+	#[cfg(feature = "server")]
+	pub mod polymorphic {
+		pub use crate::polymorphic::Page;
+		pub use crate::polymorphic::Supertype;
+		pub use crate::polymorphic::count_variant;
+		pub use crate::polymorphic::fetch_variant;
+		pub use crate::polymorphic::load;
+		pub use crate::polymorphic::remove_supertypes;
+		pub use crate::polymorphic::write_supertype;
+	}
 	/// The writes generated methods call.
 	#[cfg(feature = "server")]
 	pub mod write {
