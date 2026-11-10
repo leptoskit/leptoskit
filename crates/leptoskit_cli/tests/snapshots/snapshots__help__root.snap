@@ -24,6 +24,7 @@ Commands:
   generate     Generates an application, sign-in screens, a runtime plugin crate, a tooling plugin program, or deployment files
   new          Scaffolds a new project
   dev          Runs every platform you have set up, and rebuilds them on change
+  game         Builds or runs a game: Rust gameplay, leptoskit menus, a wgpu picture
   build        Builds the project for a platform
   serve        Serves the built output
   services     Lists the app's services: where each comes from, its port, database, public paths, volumes, and the variables the app receives for it

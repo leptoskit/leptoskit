@@ -1,0 +1,16 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Builds or runs a game: Rust gameplay, leptoskit menus, a wgpu picture
+
+Usage: leptoskit game <COMMAND>
+
+Commands:
+  build  Builds the game crate
+  run    Runs the game and writes the last frame
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

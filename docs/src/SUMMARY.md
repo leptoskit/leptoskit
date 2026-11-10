@@ -47,6 +47,7 @@
 - [Rive animations](guide/20-rive.md)
 - [Playing sound](guide/34-audio.md)
 - [3D scenes](guide/33-3d-scenes.md)
+- [A game engine](guide/39-game-engine.md)
 - [Foldable phones](guide/21-foldable-phones.md)
 - [Augmented reality on phones](guide/34-augmented-reality.md)
 - [VR and AR on headsets](guide/35-headsets.md)

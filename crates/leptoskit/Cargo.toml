@@ -32,6 +32,7 @@ leptoskit_db = { workspace = true, optional = true }
 leptoskit_devtools = { workspace = true, optional = true, default-features = false }
 leptoskit_extension = { workspace = true, optional = true }
 leptoskit_form = { workspace = true, optional = true }
+leptoskit_game = { workspace = true, optional = true }
 leptoskit_idp = { workspace = true, optional = true }
 leptoskit_l10n = { workspace = true, optional = true }
 leptoskit_macros = { workspace = true }
@@ -145,6 +146,9 @@ guest = [
 # page. A native app built with it gets the bridge's `scene3d` feature and
 # its `assets/` folder from `leptoskit build`.
 3d = ["dep:leptoskit_3d"]
+# Rust gameplay with leptoskit menus, drawn by a wgpu host. `leptoskit game`
+# builds and runs a crate that enables this.
+game = ["dep:leptoskit_game"]
 tui = ["dep:leptoskit_tui"]
 gtk = ["dep:leptoskit_gtk"]
 ios = ["uikit"]

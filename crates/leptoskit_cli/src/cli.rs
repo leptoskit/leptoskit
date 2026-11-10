@@ -323,6 +323,11 @@ pub enum Command {
 		#[arg(long)]
 		studio: bool,
 	},
+	/// Builds or runs a game: Rust gameplay, leptoskit menus, a wgpu picture.
+	Game {
+		#[command(subcommand)]
+		command: crate::game::GameCommand,
+	},
 	/// Builds the project for a platform.
 	Build {
 		/// Build in release mode.
@@ -861,6 +866,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 				browser,
 			})
 		}
+		Command::Game { command } => crate::game::run(command),
 		Command::Build {
 			release,
 			platform,
