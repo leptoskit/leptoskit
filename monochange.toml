@@ -78,6 +78,7 @@ packages = [
 	"leptoskit_wearos",
 	"leptoskit_aria",
 	"leptoskit_apm",
+	"leptoskit_analytics",
 	"leptoskit_deploy_console",
 	"leptoskit_form",
 	"leptoskit_config",
@@ -332,6 +333,10 @@ type = "cargo"
 
 [package.leptoskit_apm]
 path = "crates/leptoskit_apm"
+type = "cargo"
+
+[package.leptoskit_analytics]
+path = "crates/leptoskit_analytics"
 type = "cargo"
 
 [package.leptoskit_deploy_console]

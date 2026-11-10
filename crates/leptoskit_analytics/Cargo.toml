@@ -1,0 +1,79 @@
+[package]
+name = "leptoskit_analytics"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Product analytics for LeptosKit apps: a service with its own database, and the batch format its clients send."
+
+# The service itself. `lk` builds it with the `service` feature.
+[[bin]]
+name = "leptoskit_analytics"
+path = "src/main.rs"
+required-features = ["service"]
+
+# The service's tests need its bodies.
+[[test]]
+name = "service"
+required-features = ["service"]
+
+[dependencies]
+# Everything below is the service's. The library without features (the
+# batch format, and later the clients) depends on nothing, so an app that
+# captures events doesn't compile any of it.
+chrono = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
+leptoskit_db = { workspace = true, optional = true }
+leptoskit_rpc = { workspace = true, optional = true, features = ["client"] }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
+uuid = { workspace = true, optional = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+flate2 = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+# Building the service: ingestion, storage, and the binary. Only `lk` turns
+# this on, when it builds the service; the app never does.
+service = [
+	"dep:chrono",
+	"dep:flate2",
+	"dep:leptoskit_axum",
+	"dep:leptoskit_db",
+	"dep:leptoskit_rpc",
+	"dep:schemars",
+	"dep:serde",
+	"dep:serde_json",
+	"dep:sha2",
+	"dep:tokio",
+	"dep:uuid",
+	"leptoskit_db/sqlite",
+	"leptoskit_rpc/server",
+	"leptoskit_rpc/sqlite",
+]
+# The same service on Postgres, for an app whose `[db]` is Postgres.
+postgres = ["service", "leptoskit_db/postgres", "leptoskit_rpc/postgres"]
+
+# What `lk` reads to run this crate as a service.
+[package.metadata.leptoskit.service]
+name = "analytics"
+port = 3110
+public = true
+features = ["service"]
+database = true
+
+[lints]
+workspace = true
