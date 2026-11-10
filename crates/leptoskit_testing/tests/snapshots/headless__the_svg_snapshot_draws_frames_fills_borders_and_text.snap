@@ -1,0 +1,22 @@
+---
+source: crates/leptoskit_testing/tests/headless.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="480" viewBox="0 0 320 480" font-family="monospace">
+<rect width="320" height="480" fill="#ffffff"/>
+<text x="16" y="28" font-size="14" textLength="64" lengthAdjust="spacingAndGlyphs" fill="#000000" xml:space="preserve">Count: 0</text>
+<rect x="16.5" y="40.5" width="287" height="15" rx="6" fill="none" stroke="#8e8e93" stroke-width="1"/>
+<text x="124" y="52" font-size="14" textLength="72" lengthAdjust="spacingAndGlyphs" fill="#007aff" xml:space="preserve">Increment</text>
+<rect x="16.5" y="64.5" width="287" height="27" rx="6" fill="none" stroke="#8e8e93" stroke-width="1"/>
+<text x="24" y="82" font-size="14" textLength="72" lengthAdjust="spacingAndGlyphs" fill="#8e8e93" xml:space="preserve">Your name</text>
+<text x="16" y="112" font-size="14" textLength="128" lengthAdjust="spacingAndGlyphs" fill="#000000" xml:space="preserve">Ada &amp; &lt;Lovelace&gt;</text>
+<rect x="16" y="124" width="48" height="28" rx="14" fill="#e5e5ea"/>
+<circle cx="30" cy="138" r="12" fill="#ffffff"/>
+<rect x="16" y="160" width="288" height="36" rx="8" fill="#2b7fff"/>
+<rect x="17" y="161" width="286" height="34" rx="7" fill="none" stroke="#1447e6" stroke-width="2"/>
+<clipPath id="clip1"><rect x="16" y="160" width="288" height="36" rx="8"/></clipPath>
+<g clip-path="url(#clip1)">
+  <text x="26" y="182" font-size="14" font-weight="700" textLength="32" lengthAdjust="spacingAndGlyphs" fill="#ffffff" xml:space="preserve">Card</text>
+</g>
+<text x="16" y="216" font-size="14" textLength="56" lengthAdjust="spacingAndGlyphs" fill="#000000" xml:space="preserve">Loading</text>
+</svg>

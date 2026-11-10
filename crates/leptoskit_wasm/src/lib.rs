@@ -94,6 +94,14 @@
 //! are written into a buffer the module handed out from `leptoskit_alloc`;
 //! the host never frees it, so the module reclaims it once `leptoskit_event`
 //! returns.
+//!
+//! # Frame log
+//!
+//! Every guest commit records a [`FrameStats`]: the entry point, the time the
+//! guest spent, the host's reconcile and layout time, the mutations applied,
+//! and the committed node count. [`WasmHost::last_frame`] returns the latest.
+//! Set [`FRAME_LOG_ENV`] (`LEPTOSKIT_FRAME_LOG`) to `stderr` or a file path
+//! before creating a host to also write each record as a JSON line.
 #![doc(
 	html_logo_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/icon.svg"
 )]
@@ -129,6 +137,7 @@ use wasmi::errors::MemoryError;
 use wasmi::errors::TableError;
 
 mod budget;
+mod frames;
 mod imports;
 mod plugins;
 mod resource_limits;
@@ -141,6 +150,9 @@ pub use budget::MAX_RENDER_MUTATION_BYTES;
 pub use budget::MAX_RENDER_NODES;
 pub use budget::MAX_RENDER_PROPERTY_BYTES;
 pub use budget::MAX_RENDER_WORK;
+pub use frames::Entry;
+pub use frames::FRAME_LOG_ENV;
+pub use frames::FrameStats;
 use resource_limits::ResourceLimits;
 
 /// The ABI version this host speaks.
@@ -473,6 +485,8 @@ pub struct WasmHost<B: NativeBackend> {
 	deferred: Option<WasmError>,
 	/// Fuel granted per wasm entry point.
 	fuel_budget: u64,
+	/// The last commit's costs and the opt-in frame log.
+	frames: frames::Recorder,
 }
 
 /// Opaque interpreter identity, stable across moves and retained completions.
@@ -621,10 +635,12 @@ impl<B: NativeBackend> WasmHost<B> {
 	pub fn new(mut backend: B, wasm: &[u8]) -> Result<Self, WasmError> {
 		backend.limit_mutation_log(MAX_RENDER_MUTATION_BYTES);
 		let guest = Guest::instantiate(wasm)?;
+		let mut surface = NativeSurface::new(backend);
+		surface.record_commit_stats(true);
 
 		Ok(Self {
 			identity: HostIdentity(std::sync::Arc::new(())),
-			surface: NativeSurface::new(backend),
+			surface,
 			wire_ids: Vec::new(),
 			store: guest.store,
 			main_fn: guest.main_fn,
@@ -637,6 +653,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			clock_fn: guest.clock_fn,
 			deferred: None,
 			fuel_budget: DEFAULT_FUEL_BUDGET,
+			frames: frames::Recorder::from_env(),
 		})
 	}
 
@@ -773,10 +790,11 @@ impl<B: NativeBackend> WasmHost<B> {
 			return Ok(());
 		};
 		self.refuel()?;
+		let guest = frames::Stopwatch::start();
 		viewport
 			.call(&mut self.store, (width, height))
 			.map_err(WasmError::from)?;
-		self.drain_commit()
+		self.drain_commit(Entry::Viewport, guest)
 	}
 
 	/// Updates the host appearance and re-evaluates retained `dark:` utilities.
@@ -838,6 +856,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			.as_ref()
 			.map_err(|error| WasmError::Trap(error.to_string()))?;
 		self.refuel()?;
+		let guest = frames::Stopwatch::start();
 		callback.call(&mut self.store, ())?;
 
 		if let Some(poll) = &self.plugins_poll {
@@ -856,7 +875,7 @@ impl<B: NativeBackend> WasmHost<B> {
 				.call(&mut self.store, ())?;
 		}
 
-		self.drain_commit()?;
+		self.drain_commit(Entry::Plugins, guest)?;
 		Ok(())
 	}
 
@@ -885,6 +904,17 @@ impl<B: NativeBackend> WasmHost<B> {
 			.saturating_sub(self.store.get_fuel().unwrap_or(0))
 	}
 
+	/// What the most recent commit cost, whether or not the frame log is on.
+	pub fn last_frame(&self) -> Option<&FrameStats> {
+		self.frames.last()
+	}
+
+	/// Sends the frame log to `sink`, one JSON line per commit, replacing
+	/// the destination [`FRAME_LOG_ENV`] chose; `None` turns it off.
+	pub fn set_frame_log(&mut self, sink: Option<Box<dyn std::io::Write + Send>>) {
+		self.frames.set_sink(sink);
+	}
+
 	/// Sets the fuel granted to each later entry-point call, replacing
 	/// [`DEFAULT_FUEL_BUDGET`].
 	pub fn set_fuel_budget(&mut self, fuel: u64) {
@@ -900,10 +930,11 @@ impl<B: NativeBackend> WasmHost<B> {
 		}
 
 		self.refuel()?;
+		let guest = frames::Stopwatch::start();
 		self.main_fn
 			.call(&mut self.store, &[], &mut [])
 			.map_err(WasmError::from)?;
-		self.drain_commit()?;
+		self.drain_commit(Entry::Main, guest)?;
 		Ok(())
 	}
 
@@ -989,6 +1020,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		};
 
 		self.refuel()?;
+		let guest = frames::Stopwatch::start();
 		let mut results = [Val::I32(0)];
 		self.event_fn
 			.call(
@@ -1002,7 +1034,7 @@ impl<B: NativeBackend> WasmHost<B> {
 				&mut results,
 			)
 			.map_err(WasmError::from)?;
-		self.drain_commit()?;
+		self.drain_commit(Entry::Event, guest)?;
 		let handled = matches!(results[0], Val::I32(1));
 		Ok(if handled {
 			EventOutcome::Handled
@@ -1124,8 +1156,11 @@ impl<B: NativeBackend> WasmHost<B> {
 		Ok((ptr, len))
 	}
 
-	/// Hands a pending committed tree to the surface and resyncs the id map.
-	fn drain_commit(&mut self) -> Result<(), WasmError> {
+	/// Hands a pending committed tree to the surface, resyncs the id map, and
+	/// records what the commit cost.
+	fn drain_commit(&mut self, entry: Entry, guest: frames::Stopwatch) -> Result<(), WasmError> {
+		let guest = guest.elapsed();
+
 		if let Some(pending) = self.store.data_mut().pending.take() {
 			// Replacing a held widget can trigger a second reconciliation to
 			// release its active styles. Reserve both complete trees before
@@ -1134,9 +1169,22 @@ impl<B: NativeBackend> WasmHost<B> {
 				return Err(host_trap(self.render_error().expect("rendering was rejected")).into());
 			}
 
+			// Environment changes since the last commit are not this one's.
+			self.surface.take_commit_stats();
 			self.surface.set_owned_root(pending.tree);
+			let stats = self.surface.take_commit_stats().unwrap_or_default();
 			self.wire_ids = pending.wire_ids;
 			self.resync_map();
+			self.frames.record(FrameStats {
+				commit: self.store.data().commits,
+				entry,
+				at_ms: self.frames.since_created(),
+				guest_us: frames::micros(guest),
+				commit_us: frames::micros(stats.reconcile),
+				layout_us: frames::micros(stats.layout),
+				mutations: stats.mutations,
+				nodes: self.wire_ids.len(),
+			});
 			self.check_backend()?;
 		}
 

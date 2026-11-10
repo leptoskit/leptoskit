@@ -25,6 +25,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		};
 		// Reconciliation is positional, so the held node's path in the
 		// committed tree names its element in the new source.
+		let timer = super::stats::Timer::start(self.stats.is_some());
 		let held = self
 			.pressed
 			.filter(|&id| self.is_committed(id))
@@ -53,6 +54,12 @@ impl<B: NativeBackend> NativeSurface<B> {
 		self.backend.apply(&mutations);
 		#[cfg(feature = "devtools")]
 		self.devtools.source(mutations.len(), source_start);
+
+		if let Some(stats) = &mut self.stats {
+			stats.commits += 1;
+			stats.mutations += mutations.len();
+			stats.reconcile += timer.elapsed();
+		}
 
 		self.commit_layout();
 

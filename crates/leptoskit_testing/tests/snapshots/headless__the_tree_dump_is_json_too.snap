@@ -1,0 +1,127 @@
+---
+source: crates/leptoskit_testing/tests/headless.rs
+expression: tree
+---
+{
+  "kind": "view",
+  "frame": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 320.0,
+    "height": 236.0
+  },
+  "visible": true,
+  "enabled": true,
+  "children": [
+    {
+      "kind": "text",
+      "name": "Count: 0",
+      "text": "Count: 0",
+      "frame": {
+        "x": 16.0,
+        "y": 16.0,
+        "width": 288.0,
+        "height": 16.0
+      },
+      "visible": true,
+      "enabled": true
+    },
+    {
+      "kind": "button",
+      "role": "button",
+      "name": "Increment",
+      "text": "Increment",
+      "test_id": "increment",
+      "frame": {
+        "x": 16.0,
+        "y": 40.0,
+        "width": 288.0,
+        "height": 16.0
+      },
+      "visible": true,
+      "enabled": true
+    },
+    {
+      "kind": "text_input",
+      "role": "textbox",
+      "name": "Name",
+      "label": "Name",
+      "placeholder": "Your name",
+      "frame": {
+        "x": 16.0,
+        "y": 64.0,
+        "width": 288.0,
+        "height": 28.0
+      },
+      "visible": true,
+      "enabled": true
+    },
+    {
+      "kind": "text",
+      "name": "Hello",
+      "text": "Hello",
+      "frame": {
+        "x": 16.0,
+        "y": 100.0,
+        "width": 288.0,
+        "height": 16.0
+      },
+      "visible": true,
+      "enabled": true
+    },
+    {
+      "kind": "switch",
+      "role": "switch",
+      "name": "Notifications",
+      "label": "Notifications",
+      "checked": false,
+      "frame": {
+        "x": 16.0,
+        "y": 124.0,
+        "width": 48.0,
+        "height": 28.0
+      },
+      "visible": true,
+      "enabled": true
+    },
+    {
+      "kind": "view",
+      "frame": {
+        "x": 16.0,
+        "y": 160.0,
+        "width": 288.0,
+        "height": 36.0
+      },
+      "visible": true,
+      "enabled": true,
+      "children": [
+        {
+          "kind": "text",
+          "name": "Card",
+          "text": "Card",
+          "frame": {
+            "x": 26.0,
+            "y": 170.0,
+            "width": 268.0,
+            "height": 16.0
+          },
+          "visible": true,
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "kind": "text",
+      "name": "Loading",
+      "text": "Loading",
+      "frame": {
+        "x": 16.0,
+        "y": 204.0,
+        "width": 288.0,
+        "height": 16.0
+      },
+      "visible": true,
+      "enabled": true
+    }
+  ]
+}

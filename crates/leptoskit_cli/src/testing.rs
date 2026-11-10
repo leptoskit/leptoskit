@@ -27,6 +27,8 @@ use clap::ValueEnum;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod headless;
+
 /// Testing commands.
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
@@ -38,6 +40,12 @@ pub enum TestCommand {
 	},
 	/// Runs a compiled test executable and retains its logs and JSON report.
 	Run(RunArgs),
+	/// Runs the built guest `.wasm` without a device or window: scripted
+	/// input, widget-tree dumps, and SVG or PNG snapshots.
+	Headless {
+		#[command(subcommand)]
+		command: headless::HeadlessCommand,
+	},
 	/// Builds the browser extension and checks it in Chrome for Testing or
 	/// Firefox: every page shows something, the worker runs, and each
 	/// content script puts its frame on a page with a strict content
@@ -317,6 +325,7 @@ pub fn run(command: TestCommand) -> anyhow::Result<()> {
 			Ok(())
 		}
 		TestCommand::Run(args) => run_binary(&args),
+		TestCommand::Headless { command } => headless::run(command),
 		TestCommand::Extension { browser } => crate::extension::test::run(browser),
 		TestCommand::Web {
 			package,

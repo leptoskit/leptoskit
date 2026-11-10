@@ -16,6 +16,10 @@
 //! `explain_styles`, `query_cache`, `navigate`, `highlight`, and `set_state`)
 //! read a running app through the hub `leptoskit dev` starts; see
 //! [`devtools`].
+//!
+//! The headless tools (`headless_run`, `headless_tree`, and
+//! `headless_snapshot`) load the built guest `.wasm` with no device or window;
+//! see [`headless`].
 
 use std::io::BufRead;
 use std::io::Write;
@@ -27,6 +31,7 @@ use serde_json::Value;
 use serde_json::json;
 
 mod devtools;
+mod headless;
 
 /// The protocol revisions this server speaks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -311,6 +316,7 @@ fn tools() -> Value {
 
 	if let Value::Array(tools) = &mut tools {
 		tools.extend(devtools::tools());
+		tools.extend(headless::tools());
 	}
 
 	tools
@@ -369,6 +375,10 @@ fn call_tool(params: Option<&Value>) -> Result<Value, String> {
 
 	if devtools::NAMES.contains(&name) {
 		return Ok(devtools::call(name, &arguments));
+	}
+
+	if headless::NAMES.contains(&name) {
+		return Ok(headless::call(name, &arguments));
 	}
 
 	match name {
@@ -518,6 +528,9 @@ mod tests {
 				"navigate",
 				"highlight",
 				"set_state",
+				"headless_run",
+				"headless_tree",
+				"headless_snapshot",
 			]
 		);
 		// The control tool carries the document schema, so clients validate

@@ -11,6 +11,9 @@ rust-version.workspace = true
 description = "Widget and native OS UI testing for leptoskit."
 
 [features]
+# Runs a compiled guest `.wasm` without a device: scripted input, tree dumps,
+# and SVG or PNG snapshots.
+headless = ["dep:leptoskit_wasm", "dep:serde", "dep:serde_json", "dep:tiny-skia"]
 native-ui = ["dep:base64", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:rustix"]
 schema = ["native-ui", "dep:schemars"]
 
@@ -22,13 +25,23 @@ thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 base64 = { workspace = true, optional = true }
+leptoskit_wasm = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json", "rustls-tls"] }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, optional = true, features = ["process"] }
+
+[dev-dependencies]
+insta = { workspace = true, features = ["json"] }
+wasmi = { workspace = true, features = ["wat"] }
+
+[[test]]
+name = "headless"
+required-features = ["headless"]
 
 [[example]]
 name = "testing_schema"

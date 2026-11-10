@@ -6328,7 +6328,9 @@ name = "leptoskit_testing"
 version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
+ "insta",
  "leptoskit_native",
+ "leptoskit_wasm",
  "leptoskit_yoga",
  "png 0.17.16",
  "reqwest 0.12.28",
@@ -6337,6 +6339,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tiny-skia 0.11.4",
+ "wasmi",
 ]
 
 [[package]]

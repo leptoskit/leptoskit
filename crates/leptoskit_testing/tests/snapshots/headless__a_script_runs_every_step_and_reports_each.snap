@@ -1,0 +1,13 @@
+---
+source: crates/leptoskit_testing/tests/headless.rs
+expression: report.summary()
+---
+  ok   1  press {"test_id":"increment"}  (commit 2, 1 mutation, 9 nodes)
+  ok   2  press {"role":"button","name":"Increment"}  (commit 3, 1 mutation, 9 nodes)
+  ok   3  expect {"text":"Count: 2"}
+  ok   4  expect no {"text":"Count: 0"}
+  ok   5  type "Ada" into {"label":"Name"}  (commit 4, 1 mutation, 9 nodes)
+  ok   6  expect {"text":"Ada"}
+  ok   7  toggle {"label":"Notifications"} to true  (commit 5, 1 mutation, 9 nodes)
+  ok   8  wait for 1 commit  (commit 6, 1 mutation, 9 nodes)
+  ok   9  expect {"text":"Loaded"}

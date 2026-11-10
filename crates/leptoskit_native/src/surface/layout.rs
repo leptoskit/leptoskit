@@ -20,6 +20,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		};
 		#[cfg(feature = "devtools")]
 		let layout_start = std::time::Instant::now();
+		let timer = super::stats::Timer::start(self.stats.is_some());
 		let available = Size::new(
 			AvailableSpace::Definite(self.viewport.width.max(0.0)),
 			AvailableSpace::Definite(self.viewport.height.max(0.0)),
@@ -36,6 +37,11 @@ impl<B: NativeBackend> NativeSurface<B> {
 		let mut frames = MutationList::new();
 		self.collect_frames(root, 0.0, 0.0, &mut frames);
 		self.backend.apply(&frames);
+
+		if let Some(stats) = &mut self.stats {
+			stats.mutations += frames.len();
+			stats.layout += timer.elapsed();
+		}
 		#[cfg(feature = "devtools")]
 		{
 			let commit = self.devtools.finish(frames.len(), layout_start);

@@ -92,6 +92,7 @@ pub use props::TextContent;
 pub use props::TextMeasurer;
 pub use props::TextSpan;
 pub use props::TextStyle;
+pub use surface::CommitStats;
 pub use surface::Frame;
 pub use surface::NativeSurface;
 #[cfg(all(feature = "rive", not(target_arch = "wasm32")))]

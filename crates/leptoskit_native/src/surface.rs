@@ -28,11 +28,13 @@ mod measurement;
 mod reconcile;
 #[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 mod rive;
+mod stats;
 
 #[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 pub use rive::RiveEnvironment;
 #[cfg(all(feature = "rive", not(target_arch = "wasm32")))]
 pub use rive::RivePresenter;
+pub use stats::CommitStats;
 
 /// A committed widget frame, relative to the parent.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,6 +319,8 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// The control the user is holding down, resolved with its `active:`
 	/// utilities until it is released or leaves the tree.
 	pressed: Option<NodeId>,
+	/// Commit costs since they were last read, while recording.
+	stats: Option<CommitStats>,
 	#[cfg(feature = "devtools")]
 	devtools: Devtools,
 }
@@ -339,6 +343,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			dark: false,
 			safe_area: Rect::default(),
 			pressed: None,
+			stats: None,
 			#[cfg(feature = "devtools")]
 			devtools: Devtools::default(),
 		}
@@ -520,6 +525,18 @@ impl<B: NativeBackend> NativeSurface<B> {
 		self.source = Some(element);
 		self.commit_source();
 		Ok(())
+	}
+
+	/// Starts or stops recording what commits cost. Stopping discards what
+	/// was recorded.
+	pub fn record_commit_stats(&mut self, on: bool) {
+		self.stats = on.then(CommitStats::default);
+	}
+
+	/// What commits cost since the last call, and starts counting again.
+	/// `None` unless [`Self::record_commit_stats`] turned recording on.
+	pub fn take_commit_stats(&mut self) -> Option<CommitStats> {
+		self.stats.as_mut().map(std::mem::take)
 	}
 
 	/// The yoga layout of a committed node, in parent-relative coordinates.

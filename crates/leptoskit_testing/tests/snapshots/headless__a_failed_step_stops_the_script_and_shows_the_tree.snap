@@ -1,0 +1,19 @@
+---
+source: crates/leptoskit_testing/tests/headless.rs
+expression: report.summary()
+---
+  ok   1  press {"text":"Increment"}  (commit 2, 1 mutation, 9 nodes)
+FAIL   2  expect {"text":"Count: 9"}
+          expected one match for Text("Count: 9"), found 0
+1 step skipped
+
+committed tree:
+view frame=(0,0 390x236)
+  text "Count: 1" frame=(16,16 358x16)
+  button "Increment" test_id="increment" frame=(16,40 358x16)
+  text_input "Name" role=textbox placeholder="Your name" frame=(16,64 358x28)
+  text "Hello" frame=(16,100 358x16)
+  switch "Notifications" unchecked frame=(16,124 48x28)
+  view frame=(16,160 358x36)
+    text "Card" frame=(26,170 338x16)
+  text "Loading" frame=(16,204 358x16)

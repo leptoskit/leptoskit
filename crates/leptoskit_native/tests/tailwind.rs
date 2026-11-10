@@ -499,15 +499,17 @@ fn css_var_opacity_nested_fallback_and_length_tokens() {
 	);
 	Theme::clear();
 	assert_eq!(
-		resolve("bg-[var(--brand,var(--ink,#112233))]")
-			.1
-			.background,
+		resolve("bg-[var(--brand,var(--ink,#112233))]").1.background,
 		Some(Color::rgba(0x11, 0x22, 0x33, 0xff))
 	);
 
 	Theme::set_length("gap", ThemeLength::Px(16.0));
 	let length = Tailwind::parse("w-[var(--gap)] p-[var(--pad,8px)]").expect("length var");
-	assert!(length.css().contains("width:var(--gap);"), "{}", length.css());
+	assert!(
+		length.css().contains("width:var(--gap);"),
+		"{}",
+		length.css()
+	);
 	assert!(
 		length.css().contains("padding-top:var(--pad,8px);"),
 		"{}",

@@ -1,0 +1,13 @@
+---
+source: crates/leptoskit_testing/tests/headless.rs
+expression: app().tree()
+---
+view frame=(0,0 320x236)
+  text "Count: 0" frame=(16,16 288x16)
+  button "Increment" test_id="increment" frame=(16,40 288x16)
+  text_input "Name" role=textbox placeholder="Your name" frame=(16,64 288x28)
+  text "Hello" frame=(16,100 288x16)
+  switch "Notifications" unchecked frame=(16,124 48x28)
+  view frame=(16,160 288x36)
+    text "Card" frame=(26,170 268x16)
+  text "Loading" frame=(16,204 288x16)

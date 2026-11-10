@@ -76,7 +76,7 @@ leptoskit_plugin = { workspace = true }
 leptoskit_plugin_router = { workspace = true }
 leptoskit_router_codegen = { workspace = true }
 leptoskit_rpc_codegen = { workspace = true, features = ["generators"] }
-leptoskit_testing = { workspace = true, features = ["native-ui", "schema"] }
+leptoskit_testing = { workspace = true, features = ["headless", "native-ui", "schema"] }
 leptoskit_wasm = { workspace = true }
 # The checksum App Store Connect asks for with each uploaded screenshot.
 md-5 = "0.11"
