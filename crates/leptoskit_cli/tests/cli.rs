@@ -4,6 +4,7 @@
 //! so the same on-disk fixtures back these tests and the snapshot suite.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -950,7 +951,8 @@ fn new_database_scaffold_renders_its_query_error_before_hydration() {
 		.expect("hydration_context version");
 	let manifest = app.join("Cargo.toml");
 	let mut source = std::fs::read_to_string(&manifest).unwrap();
-	source.push_str(&format!(
+	let _ = write!(
+		source,
 		r#"
 
 [dev-dependencies]
@@ -960,7 +962,7 @@ hydration_context = "{hydration}"
 serde_json = "1"
 tokio = {{ version = "1", features = ["macros", "rt", "time"] }}
 "#
-	));
+	);
 	std::fs::write(manifest, source).unwrap();
 	std::fs::create_dir_all(app.join("tests")).unwrap();
 	std::fs::write(
@@ -992,7 +994,7 @@ async fn the_generated_app_streams_its_rendered_error() {
 "#,
 	)
 	.unwrap();
-	let result = std::process::Command::new("cargo")
+	let result = Command::new("cargo")
 		.current_dir(&project)
 		.args([
 			"test",

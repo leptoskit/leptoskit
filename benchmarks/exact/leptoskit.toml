@@ -1,0 +1,13 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# The workloads are tooling, so they are builder calls.
+[app]
+name = "exact_bench"
+
+[lint]
+markup = "builder"
+
+[lint.rules]
+markup_style = "deny"

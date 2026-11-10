@@ -61,6 +61,7 @@ Every example lives in the leptoskit repository, most under `examples/`:
 | [`postcard`](https://github.com/leptoskit/leptoskit/tree/main/examples/postcard)                                                | A postcard in five languages: [typed translations](guide/19-localization.md) with plurals, selects, fallback, and right-to-left layout                                                     | A macOS or Linux window, or headlessly on any platform                                      |
 | [`scene3d`](https://github.com/leptoskit/leptoskit/tree/main/examples/scene3d)                                                  | Turntable: a skinned character swaying as it turns on a stand, in a [3D scene](guide/33-3d-scenes.md)                                                                                      | The browser with `leptoskit dev`, and the generated iOS, macOS, and Android apps            |
 | [`harbor`](https://github.com/leptoskit/leptoskit/tree/main/examples/harbor)                                                    | A departure board: [queries](guide/11-fetching-data.md), hooks, and [server functions](guide/06-server-functions.md) with a [generated client](guide/13-sharing-the-rpc.md)                | The host, headlessly                                                                        |
+| [`exact`](https://github.com/leptoskit/leptoskit/tree/main/examples/exact)                                                      | The example apps from Exact: Caltrain, a calendar, galleries, a chat, and the rest of that list                                                                                            | A headless summary on every platform, and the browser                                       |
 | [`huddle`](https://github.com/leptoskit/leptoskit/tree/main/examples/huddle)                                                    | A team chat and task board: [live queries, channels, and presence](guide/24-real-time.md), [jobs, actions, and the inbox](guide/24-background-work.md), and [sign-in](guide/23-sign-in.md) | The browser, macOS, iOS, and Linux, against its own server; Fly or Compose to deploy        |
 | [`release_lifecycle`](https://github.com/leptoskit/leptoskit/tree/main/crates/leptoskit_codepush/examples/release_lifecycle.rs) | A [code push](guide/05-code-push.md) release from signing to a device that confirms it, a delta, a rollback, and a mirrored bucket                                                         | The host, headlessly                                                                        |
 
@@ -135,6 +136,18 @@ cd examples/scene3d
 leptoskit dev                   # in the browser, with WebGPU or WebGL2
 cargo test -p scene3d_example   # the screen, the model, and one drawn frame
 ```
+
+### Exact's examples
+
+[Exact](https://github.com/expo/exact) publishes a set of example apps and a set of list benchmarks. The screens are in [`examples/exact`](https://github.com/leptoskit/leptoskit/tree/main/examples/exact). The game engine is not among them.
+
+```bash
+cargo run -p exact_examples -- caltrain    # the departure board, printed for a screen reader
+cd examples/exact
+leptoskit dev                              # the same screens in the browser
+```
+
+Add `?screen=shelf` (or any other name `cargo run -p exact_examples` prints) to open one screen. The summary command lays the tree out and prints it on macOS, Linux, and Windows. The browser shows the same screens. iOS, Android, the terminal, HarmonyOS, and the watches are not separate runners for this example. The benchmarks that follow Exact's published list workloads are `cargo run --release -p exact_bench`.
 
 ### harbor
 

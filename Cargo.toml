@@ -1,5 +1,6 @@
 [workspace]
 members = [
+	"benchmarks/exact",
 	"benchmarks/native",
 	"benchmarks/native/counter",
 	"benchmarks/native/guest",
@@ -17,6 +18,7 @@ members = [
 	"examples/analytics/analytics_service",
 	"examples/auth_pages",
 	"examples/counter",
+	"examples/exact",
 	"examples/gallery",
 	"examples/gallery/verify",
 	"examples/harbor",

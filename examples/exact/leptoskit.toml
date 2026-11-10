@@ -1,0 +1,19 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# `leptoskit dev` serves the example picker in the browser. `?screen=` opens
+# one app, the way Exact's dev server opens `--app <name>`.
+[app]
+name = "exact_examples_web"
+
+[build]
+client_package = "exact_examples"
+features = ["csr"]
+
+[lint]
+markup = "view"
+
+[lint.rules]
+markup_style = "deny"
+component_attribute = "deny"
