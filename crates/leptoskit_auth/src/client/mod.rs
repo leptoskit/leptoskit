@@ -338,6 +338,10 @@ pub(crate) trait Api: Send + Sync + 'static {
 	fn remove_password(&self) -> Pending<'_, ()>;
 	fn reset_password(&self, input: PasswordReset) -> Pending<'_, SignInStep>;
 	fn sign_out(&self) -> Pending<'_, ()>;
+	/// Whether sign-out forgets local credentials even if revocation fails.
+	fn signs_out_locally(&self) -> bool {
+		false
+	}
 	fn devices(&self) -> Pending<'_, Vec<Device>>;
 	fn revoke(&self, id: Id<Session>) -> Pending<'_, bool>;
 	fn revoke_others(&self) -> Pending<'_, ()>;
@@ -710,11 +714,18 @@ pub fn reset_password() -> MutationScope<PasswordReset, SignInStep, ErrorRespons
 }
 
 /// Signs out. On success, the session query holds `None`. A native app
-/// forgets its tokens even when the server can't be reached.
+/// forgets its tokens and clears the session query even when revocation
+/// fails. The mutation still reports the server or network error.
 pub fn sign_out_mutation() -> MutationScope<(), (), ErrorResponse> {
-	MutationScope::new(|()| async { api().sign_out().await }).with_on_success(|args| {
-		args.client.set_query_data(&session(), (), None);
-	})
+	MutationScope::new(|()| async { api().sign_out().await })
+		.with_on_success(|args| {
+			args.client.set_query_data(&session(), (), None);
+		})
+		.with_on_error(|args| {
+			if api().signs_out_locally() {
+				args.client.set_query_data(&session(), (), None);
+			}
+		})
 }
 
 /// The devices query, for a "where you're signed in" screen: one live
