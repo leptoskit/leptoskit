@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use dev_client::home::Session;
 use dev_client::home::home;
 use leptoskit::prelude::RwSignal;
+use leptoskit_router::Routable;
 use leptoskit_testing::Finder;
 use leptoskit_testing::Queries;
 use leptoskit_testing::WidgetTester;
@@ -93,4 +94,35 @@ fn scanning_without_a_reader_asks_for_the_address() {
 	tester
 		.get_by_text("Paste the address from the terminal.")
 		.unwrap();
+}
+
+#[test]
+fn typing_an_address_and_connecting_uses_the_current_field() {
+	let connected = Arc::new(Mutex::new(Vec::new()));
+	let mut tester = open("", &connected, None);
+	tester
+		.enter_text(
+			&Finder::label("Development address"),
+			"http://192.168.1.20:43123/_leptoskit/dev",
+		)
+		.unwrap();
+	tester.tap(&Finder::text("Connect")).unwrap();
+	assert_eq!(
+		connected.lock().unwrap().as_slice(),
+		["http://192.168.1.20:43123/_leptoskit/dev/android/guest"]
+	);
+}
+
+#[test]
+fn an_unknown_route_renders_its_not_found_page_in_the_layout() {
+	let tester = WidgetTester::new(
+		|| {
+			let route = dev_client::routes::Route::parse("/missing").expect("fallback route");
+			dev_client::routes::Navigation::new(route).render()
+		},
+		320.0,
+		568.0,
+	)
+	.unwrap();
+	tester.get_by_text("Not found").unwrap();
 }

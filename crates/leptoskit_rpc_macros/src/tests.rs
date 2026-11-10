@@ -5,8 +5,27 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use quote::quote;
 
+use super::Build;
 use super::argument_docs;
 use super::expand;
+
+/// A build of a crate that declares a `service` feature, as a service's own
+/// crate does.
+fn build(server: bool) -> Build {
+	Build {
+		server,
+		declares_service: || true,
+	}
+}
+
+/// A build of a crate without a `service` feature, as an app that only calls
+/// a service is.
+fn build_without_service(server: bool) -> Build {
+	Build {
+		server,
+		declares_service: || false,
+	}
+}
 
 /// Pretty-prints an expansion. prettyplease leaves macro bodies as raw
 /// tokens, so the registration — an `inventory::submit!` of one descriptor —
@@ -556,24 +575,26 @@ mod operations {
 	use proc_macro2::TokenStream;
 	use quote::quote;
 
+	use super::build;
+	use super::build_without_service;
 	use super::pretty;
 	use crate::expand as api;
 	use crate::operation::OperationKind;
 	use crate::operation::expand;
 
 	fn query(args: TokenStream, item: TokenStream, server: bool) -> String {
-		pretty(expand(OperationKind::Query, args, item, server).expect("expands"))
+		pretty(expand(OperationKind::Query, args, item, build(server)).expect("expands"))
 	}
 
 	fn mutation(args: TokenStream, item: TokenStream, server: bool) -> String {
-		pretty(expand(OperationKind::Mutation, args, item, server).expect("expands"))
+		pretty(expand(OperationKind::Mutation, args, item, build(server)).expect("expands"))
 	}
 
 	/// The error an operation macro gives, with the text its span covers.
 	fn error(kind: OperationKind, args: &str, item: &str) -> (String, String) {
 		let args: TokenStream = args.parse().expect("argument tokens");
 		let item: TokenStream = item.parse().expect("item tokens");
-		let error = expand(kind, args, item, true).expect_err("an error");
+		let error = expand(kind, args, item, build(true)).expect_err("an error");
 		let underlined = error.span().source_text().unwrap_or_default();
 		(error.to_string(), underlined)
 	}
@@ -664,12 +685,80 @@ mod operations {
 				quote! {
 					pub async fn export(cx: &rpc::ActionCx) -> rpc::Result<()> { Ok(()) }
 				},
-				true,
+				build(true),
 			)
 			.expect("expands"),
 		);
 		assert!(action.contains("Kind::Action"), "{action}");
 		assert!(action.contains("RemoteCx"), "{action}");
+	}
+
+	#[test]
+	fn a_crate_without_a_service_feature_gets_the_stub_without_a_cfg() {
+		// An app that only calls a service declares no `service` feature, so
+		// a `cfg` naming one would only draw check-cfg's warning. Its server
+		// build gets what that `cfg` would have picked: the stub.
+		let expanded = |kind, item| {
+			pretty(
+				expand(
+					kind,
+					quote!(service = "analytics"),
+					item,
+					build_without_service(true),
+				)
+				.expect("expands"),
+			)
+		};
+		let job = quote! {
+			pub async fn roll_up(cx: &rpc::JobCx) -> rpc::Result<u32> {
+				Ok(0)
+			}
+		};
+		let stream = quote! {
+			pub async fn tail(cx: &rpc::QueryCx) -> rpc::Result<impl Stream<Item = u32>> {
+				Ok(futures::stream::empty())
+			}
+		};
+
+		for (kind, item, stub) in [
+			(OperationKind::Query, messages(), "remote_error"),
+			(OperationKind::Job, job, "__remote_job_run!()"),
+			(OperationKind::Stream, stream, "__remote_stream_pump!()"),
+		] {
+			let server = expanded(kind, item);
+			assert!(!server.contains("feature = \"service\""), "{server}");
+			assert!(!server.contains("inventory"), "{server}");
+			assert!(!server.contains("pub async fn"), "{server}");
+			assert!(server.contains(stub), "{server}");
+		}
+
+		// The client build never had the `cfg`.
+		let client = pretty(
+			expand(
+				OperationKind::Query,
+				quote!(service = "analytics"),
+				messages(),
+				build_without_service(false),
+			)
+			.expect("expands"),
+		);
+		assert_eq!(
+			client,
+			query(quote!(service = "analytics"), messages(), false)
+		);
+		// Nor does an operation of the crate's own.
+		assert_eq!(
+			pretty(
+				expand(
+					OperationKind::Query,
+					TokenStream::new(),
+					messages(),
+					build_without_service(true),
+				)
+				.expect("expands"),
+			),
+			query(TokenStream::new(), messages(), true)
+		);
 	}
 
 	#[test]
@@ -741,7 +830,7 @@ mod operations {
 				OperationKind::Job,
 				quote!(service = "analytics"),
 				job.clone(),
-				false,
+				build(false),
 			)
 			.expect("expands"),
 		);
@@ -755,7 +844,13 @@ mod operations {
 		);
 
 		let server = pretty(
-			expand(OperationKind::Job, quote!(service = "analytics"), job, true).expect("expands"),
+			expand(
+				OperationKind::Job,
+				quote!(service = "analytics"),
+				job,
+				build(true),
+			)
+			.expect("expands"),
 		);
 		let compact: String = server.split_whitespace().collect();
 		// The service's build: the body, and a registration for its workers.
@@ -787,7 +882,7 @@ mod operations {
 				OperationKind::Stream,
 				quote!(service = "analytics"),
 				stream.clone(),
-				false,
+				build(false),
 			)
 			.expect("expands"),
 		);
@@ -801,7 +896,7 @@ mod operations {
 				OperationKind::Stream,
 				quote!(service = "analytics"),
 				stream,
-				true,
+				build(true),
 			)
 			.expect("expands"),
 		);
@@ -1085,19 +1180,20 @@ mod jobs {
 	use proc_macro2::TokenStream;
 	use quote::quote;
 
+	use super::build;
 	use super::pretty;
 	use crate::expand as api;
 	use crate::operation::OperationKind;
 	use crate::operation::expand;
 
 	fn expanded(kind: OperationKind, args: TokenStream, item: TokenStream, server: bool) -> String {
-		pretty(expand(kind, args, item, server).expect("expands"))
+		pretty(expand(kind, args, item, build(server)).expect("expands"))
 	}
 
 	fn error(kind: OperationKind, args: &str, item: &str) -> (String, String) {
 		let args: TokenStream = args.parse().expect("argument tokens");
 		let item: TokenStream = item.parse().expect("item tokens");
-		let error = expand(kind, args, item, true).expect_err("an error");
+		let error = expand(kind, args, item, build(true)).expect_err("an error");
 		let underlined = error.span().source_text().unwrap_or_default();
 		(error.to_string(), underlined)
 	}
@@ -1518,14 +1614,17 @@ mod channels {
 	use proc_macro2::TokenStream;
 	use quote::quote;
 
+	use super::build;
+	use super::build_without_service;
 	use super::pretty;
 	use crate::channel::expand;
 
 	/// The server build's expansion, after checking the client build leaves
 	/// the registration out.
 	fn expansion(args: TokenStream, item: TokenStream) -> String {
-		let server = pretty(expand(args.clone(), item.clone(), true).expect("the server build"));
-		let client = pretty(expand(args, item, false).expect("the client build"));
+		let server =
+			pretty(expand(args.clone(), item.clone(), build(true)).expect("the server build"));
+		let client = pretty(expand(args, item, build(false)).expect("the client build"));
 		assert!(
 			server.contains("ChannelRegistration"),
 			"the server build registers"
@@ -1555,7 +1654,9 @@ mod channels {
 	fn error(args: &str, item: &str) -> String {
 		let args: TokenStream = args.parse().expect("argument tokens");
 		let item: TokenStream = item.parse().expect("item tokens");
-		expand(args, item, true).expect_err("an error").to_string()
+		expand(args, item, build(true))
+			.expect_err("an error")
+			.to_string()
 	}
 
 	#[test]
@@ -1593,6 +1694,36 @@ mod channels {
 			"pub struct Chat { pub channel: String }",
 		);
 		assert!(message.contains("a lowercase letter"), "{message}");
+	}
+
+	#[test]
+	fn a_crate_without_a_service_feature_hosts_none_of_its_channels() {
+		let args = quote!(
+			message = Typing,
+			authorize = may_join,
+			service = "analytics"
+		);
+		let server = pretty(
+			expand(args.clone(), chat(), build_without_service(true)).expect("the server build"),
+		);
+		assert!(!server.contains("feature = \"service\""), "{server}");
+		assert!(!server.contains("ChannelRegistration"), "{server}");
+		assert!(server.contains("\"analytics\""), "{server}");
+		assert_eq!(
+			server,
+			pretty(expand(args, chat(), build(false)).expect("the client build"))
+		);
+
+		// Its own channels still register.
+		let own = pretty(
+			expand(
+				quote!(message = Typing, authorize = may_join),
+				chat(),
+				build_without_service(true),
+			)
+			.expect("the server build"),
+		);
+		assert!(own.contains("ChannelRegistration"), "{own}");
 	}
 
 	#[test]

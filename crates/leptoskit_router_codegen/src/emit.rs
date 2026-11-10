@@ -183,7 +183,7 @@ fn axum_paths_code(table: &Table) -> Result<TokenStream, String> {
 		.iter()
 		.map(|route| {
 			let segments = segments(&route.segments);
-			Ok(quote!(#runtime::Pattern::new(&[#(#segments),*]).axum_path().into()))
+			Ok(quote!(#runtime::Pattern::new(&[#(#segments),*]).axum_path()))
 		})
 		.collect::<Result<Vec<_>, String>>()?;
 

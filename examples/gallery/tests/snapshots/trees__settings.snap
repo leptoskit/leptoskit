@@ -2,73 +2,73 @@
 source: examples/gallery/tests/trees.rs
 expression: "lines.join(\"\\n\")"
 ---
-ScrollView [h-full w-full] #2c7c22a6d19c
-  View [flex-col gap-6 pb-safe-offset-6 pt-safe-offset-4 px-4] #e4f97c2e23e7
-    View [flex-col gap-3] #99b54469d7cc
-      Text "Settings" #323c93872bc3
-      View [bg-[#e3e3e8] flex-row gap-2 h-9 items-center px-3 py-0 rounded-[10px]] #1191ebbff737
-        View [h-[13px] rounded-[6.5px] w-[13px]] #54bdafe00005
-        TextInput [bg-[#00000000] flex-1 h-5] #6b8c39b1fe47
-    View [flex-row gap-3 items-center px-4 py-3 rounded-[12px]] #16954cae179e
-      Image [h-[60px] rounded-[30px] w-[60px]] #9f23c6de26c1
-      View [flex-1 flex-col gap-0.5] #3562435670ec
-        Text "Tolu Bankole" #76e294c064f1
-        Text "Account, backups, and purchases" #1f3457b533bf
-      Text "›" [font-normal text-[22px]] #56895e961bf5
-    View [flex-col rounded-[12px]] #a667adca0ed5
-      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #ab233107f7cb
-          View [h-3 rounded-[3px] w-3] #c9614fd7a363
-        Text "Airplane Mode" [flex-1] #0b2e9fc02296
-        Switch #dfe8f27f23b4
-      View [h-[1px] ml-[58px]] #46aff12d77b3
-      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #1a1e5bace8ee
-          View [h-3.5 rounded-[7px] w-3.5] #e28ffa2b287f
-        Text "Wi-Fi" [flex-1] #21d31cce0f5a
-        View [flex-row gap-2 items-center] #5f00e0f80600
-          Text "Home 5G" #69262a6919c3
-          Text "›" [font-normal text-[22px]] #56895e961bf5
-      View [h-[1px] ml-[58px]] #46aff12d77b3
-      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #1a1e5bace8ee
-          View #bc73c1bf174c
-        Text "Bluetooth" [flex-1] #3313fde16151
-        View [flex-row gap-2 items-center] #5f00e0f80600
-          Text "On" #7d0c4a11cffc
-          Text "›" [font-normal text-[22px]] #56895e961bf5
-      View [h-[1px] ml-[58px]] #46aff12d77b3
-      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #17e7a5a1df44
-          View [h-1 rounded-[2px] w-3.5] #8f231e32e73a
-        Text "Mobile Data" [flex-1] #85b9d583f9e9
-        Text "›" [font-normal text-[22px]] #56895e961bf5
-    View [flex-col gap-2] #f5205e6e95af
-      View [flex-col rounded-[12px]] #a667adca0ed5
-        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #f21e7435b88d
-            View #bc73c1bf174c
-          Text "Notifications" [flex-1] #76366ffaa8d6
-          Text "›" [font-normal text-[22px]] #56895e961bf5
-        View [h-[1px] ml-[58px]] #46aff12d77b3
-        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #f51162c6ddfb
-            View [h-3.5 rounded-[7px] w-3.5] #e28ffa2b287f
-          Text "Focus" [flex-1] #5f7f325213ac
-          View [flex-row gap-2 items-center] #5f00e0f80600
-            Text "Off" #16cdc8090759
-            Text "›" [font-normal text-[22px]] #56895e961bf5
-        View [h-[1px] ml-[58px]] #46aff12d77b3
-        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #f094b5d0f326
-            View [h-1 rounded-[2px] w-3.5] #8f231e32e73a
-          Text "Haptics" [flex-1] #40699aa2705a
-          Switch #83a1895b9d73
-        View [h-[1px] ml-[58px]] #46aff12d77b3
-        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #486f1382e527
-          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #f9911d39c10d
-            View [h-3 rounded-[3px] w-3] #c9614fd7a363
-          Text "Low Power Mode" [flex-1] #cff9e37765d0
-          Switch #3b2f4eae3935
-      View [px-4 py-0] #3cd984576b0f
-        Text "Low Power Mode reduces background activity like downloads and mail fetch until you charge your phone." #dfe88dcefbd2
+ScrollView [h-full w-full] #101c95fa8fb4
+  View [flex-col gap-6 pb-safe-offset-6 pt-safe-offset-4 px-4] #ac50a96e8c7c
+    View [flex-col gap-3] #6cd621b73537
+      Text "Settings" #d41bd6d6e07a
+      View [bg-[#e3e3e8] flex-row gap-2 h-9 items-center px-3 py-0 rounded-[10px]] #4de33fc607f8
+        View [h-[13px] rounded-[6.5px] w-[13px]] #75aaaf4c1b01
+        TextInput [bg-[#00000000] flex-1 h-5] #4d13052065b5
+    View [flex-row gap-3 items-center px-4 py-3 rounded-[12px]] #85845afee99b
+      Image [h-[60px] rounded-[30px] w-[60px]] #2abf1483b88b
+      View [flex-1 flex-col gap-0.5] #1e26487b787f
+        Text "Tolu Bankole" #644cd2e9597c
+        Text "Account, backups, and purchases" #255c703d726b
+      Text "›" [font-normal text-[22px]] #4e2dde84389a
+    View [flex-col rounded-[12px]] #25c3def521a9
+      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #e7ebbe6bc30d
+          View [h-3 rounded-[3px] w-3] #fe8bd96022fb
+        Text "Airplane Mode" [flex-1] #c83fb97b37dc
+        Switch #ba62d5dc19ba
+      View [h-[1px] ml-[58px]] #b3cb0581bd0d
+      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #a7738ad36544
+          View [h-3.5 rounded-[7px] w-3.5] #6c7ad723ea5c
+        Text "Wi-Fi" [flex-1] #04a2c99949aa
+        View [flex-row gap-2 items-center] #7078258931b5
+          Text "Home 5G" #f539e1360a57
+          Text "›" [font-normal text-[22px]] #4e2dde84389a
+      View [h-[1px] ml-[58px]] #b3cb0581bd0d
+      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #a7738ad36544
+          View #943d0e765436
+        Text "Bluetooth" [flex-1] #0e23659a7f52
+        View [flex-row gap-2 items-center] #7078258931b5
+          Text "On" #4e5072f85995
+          Text "›" [font-normal text-[22px]] #4e2dde84389a
+      View [h-[1px] ml-[58px]] #b3cb0581bd0d
+      View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+        View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #0e8e1f8ec9fa
+          View [h-1 rounded-[2px] w-3.5] #1da03574c783
+        Text "Mobile Data" [flex-1] #0804d9fd87d9
+        Text "›" [font-normal text-[22px]] #4e2dde84389a
+    View [flex-col gap-2] #f3e018350dd0
+      View [flex-col rounded-[12px]] #25c3def521a9
+        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #9f2c67dcd1f1
+            View #943d0e765436
+          Text "Notifications" [flex-1] #3babe505e21b
+          Text "›" [font-normal text-[22px]] #4e2dde84389a
+        View [h-[1px] ml-[58px]] #b3cb0581bd0d
+        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #e01c9c16641c
+            View [h-3.5 rounded-[7px] w-3.5] #6c7ad723ea5c
+          Text "Focus" [flex-1] #2c11d2b236b5
+          View [flex-row gap-2 items-center] #7078258931b5
+            Text "Off" #7a233188ffa7
+            Text "›" [font-normal text-[22px]] #4e2dde84389a
+        View [h-[1px] ml-[58px]] #b3cb0581bd0d
+        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #d4cc1e8bc836
+            View [h-1 rounded-[2px] w-3.5] #1da03574c783
+          Text "Haptics" [flex-1] #0d24157f2d53
+          Switch #67cc4ac2658d
+        View [h-[1px] ml-[58px]] #b3cb0581bd0d
+        View [flex-row gap-3 h-[46px] items-center px-4 py-0] #288db825eb57
+          View [h-[30px] items-center justify-center rounded-[7px] w-[30px]] #162d28f5b95a
+            View [h-3 rounded-[3px] w-3] #fe8bd96022fb
+          Text "Low Power Mode" [flex-1] #fba0ec777d54
+          Switch #457036c429a8
+      View [px-4 py-0] #da2769268969
+        Text "Low Power Mode reduces background activity like downloads and mail fetch until you charge your phone." #7fb43a17654f

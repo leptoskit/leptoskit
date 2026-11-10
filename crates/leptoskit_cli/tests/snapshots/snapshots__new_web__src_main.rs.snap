@@ -10,11 +10,11 @@ expression: contents
 //! depends on `leptoskit` alone.
 
 use snapshotted_app::App;
+use snapshotted_app::routes;
 use snapshotted_app::shell;
 use leptoskit::server::GracefulShutdown;
 use leptoskit::server::Readiness;
 use leptoskit::server::leptos_axum::LeptosRoutes;
-use snapshotted_app::routes;
 use leptoskit::server::tokio;
 
 #[tokio::main]

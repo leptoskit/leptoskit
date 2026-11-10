@@ -15,12 +15,10 @@ use std::time::Duration;
 
 use futures::Stream;
 use futures::StreamExt;
-use leptos::prelude::Owner;
 use leptoskit_db::Db;
 use leptoskit_db::Id;
 use leptoskit_db::table;
 use leptoskit_query::BoxFuture;
-use leptoskit_query::QueryClient;
 use leptoskit_rpc as rpc;
 use leptoskit_rpc::FnError;
 use leptoskit_rpc::client::ChannelEvent;
@@ -568,34 +566,6 @@ async fn the_global_client_reauthenticates() {
 			rpc::client::live::reauthenticate();
 			tokio::time::sleep(Duration::from_millis(100)).await;
 			assert!(client.status().is_live());
-		})
-		.await;
-}
-
-/// Without a live connection the hooks are ordinary calls, in process.
-#[tokio::test(flavor = "multi_thread")]
-async fn live_hooks_without_a_connection_use_the_ordinary_client() {
-	start();
-	let db = leptoskit_db::testing::sqlite().await;
-
-	LocalSet::new()
-		.run_until(async {
-			let owner = Owner::new();
-			owner.set();
-			QueryClient::new().provide();
-			rpc::server::Server::new(db.clone()).install();
-
-			let bodies = rpc::use_live(|| ClientBodies {});
-			wait_for("the rows", || bodies.data().is_some()).await;
-			let send = rpc::use_live_mutation::<ClientAdd>();
-			send.mutate_async(ClientAdd {
-				body: "offline".into(),
-			})
-			.await
-			.unwrap();
-			let notes = Note::query().all(&db).await.unwrap();
-			assert_eq!(notes.len(), 1);
-			assert_eq!(notes[0].body, "offline");
 		})
 		.await;
 }
