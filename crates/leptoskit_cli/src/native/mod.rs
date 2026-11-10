@@ -1,5 +1,6 @@
 //! Generated native hosts and dependency-driven plugin registration.
 
+use std::ffi::OsString;
 use std::io::IsTerminal as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -671,6 +672,23 @@ const NDK_LAUNCHER_SUFFIX: &str = if cfg!(target_os = "windows") {
 	""
 };
 
+/// The minimum Android API level the NDK launchers and the cc-rs flags both
+/// target. The launcher names encode it (`…-linux-android26-clang`); the flag
+/// variables repeat it because a build cache that renames the launcher hides
+/// it from the `cc` crate (see [`configure_android_toolchain`]).
+const ANDROID_MIN_API: &str = "26";
+
+/// The value for a target's `CFLAGS`/`CXXFLAGS`: whatever the caller already
+/// exported for it, with `flag` appended so it stays the effective one.
+fn append_flag(existing: Option<OsString>, flag: &str) -> OsString {
+	let mut value = existing.unwrap_or_default();
+	if !value.is_empty() {
+		value.push(" ");
+	}
+	value.push(flag);
+	value
+}
+
 /// Points the host build's linker and cc-rs at the clang of the NDK at `ndk`
 /// for an Android target, and records the NDK for Gradle.
 fn configure_android_toolchain(
@@ -687,7 +705,7 @@ fn configure_android_toolchain(
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
 	let compiler = tools.join(format!(
-		"{architecture}-linux-android26-clang{NDK_LAUNCHER_SUFFIX}"
+		"{architecture}-linux-android{ANDROID_MIN_API}-clang{NDK_LAUNCHER_SUFFIX}"
 	));
 	anyhow::ensure!(
 		compiler.is_file(),
@@ -702,6 +720,24 @@ fn configure_android_toolchain(
 	// TLS) compile with cc-rs, which needs the NDK compiler and archiver
 	// too.
 	let target_key = target.rust().replace('-', "_");
+
+	// The NDK launcher passes `--target=<triple>{ANDROID_MIN_API}` to clang
+	// itself, but the `cc` crate only skips its own `--target` when the
+	// compiler's file name looks like an NDK launcher. A build cache in
+	// front of the compiler (mbx, sccache, ccache) renames it, so cc-rs
+	// appends `--target=<triple>` without the API level, which overrides
+	// the launcher's and drops bionic to the level's symbol set: libc++'s
+	// `condition_variable.h` calls `pthread_cond_clockwait`, declared only
+	// for API 30 and up, and build scripts such as rive's fail to compile.
+	// Naming the level in the per-target `CFLAGS`/`CXXFLAGS` makes it
+	// explicit whatever the compiler is called: cc-rs appends those
+	// variables' flags after its own, so this `--target` wins (cc 1.11,
+	// "Set flags from the environment (do this last, to allow these to
+	// override everything else)"). The user's own flags are kept — ours are
+	// appended to them, not replacing them.
+	let target_flag = format!("--target={architecture}-linux-android{ANDROID_MIN_API}");
+	let cflags = format!("CFLAGS_{target_key}");
+	let cxxflags = format!("CXXFLAGS_{target_key}");
 	host.env(
 		format!(
 			"CARGO_TARGET_{}_LINUX_ANDROID_LINKER",
@@ -713,7 +749,7 @@ fn configure_android_toolchain(
 	.env(
 		format!("CXX_{target_key}"),
 		tools.join(format!(
-			"{architecture}-linux-android26-clang++{NDK_LAUNCHER_SUFFIX}"
+			"{architecture}-linux-android{ANDROID_MIN_API}-clang++{NDK_LAUNCHER_SUFFIX}"
 		)),
 	)
 	.env(
@@ -723,6 +759,14 @@ fn configure_android_toolchain(
 		} else {
 			"llvm-ar"
 		}),
+	)
+	.env(
+		&cflags,
+		append_flag(std::env::var_os(&cflags), &target_flag),
+	)
+	.env(
+		&cxxflags,
+		append_flag(std::env::var_os(&cxxflags), &target_flag),
 	);
 	Ok(())
 }
@@ -2301,42 +2345,69 @@ mod tests {
 		std::fs::create_dir_all(&tools).unwrap();
 		std::fs::create_dir_all(root.join(".leptoskit/android")).unwrap();
 		let clang = tools.join(format!(
-			"aarch64-linux-android26-clang{NDK_LAUNCHER_SUFFIX}"
+			"aarch64-linux-android{ANDROID_MIN_API}-clang{NDK_LAUNCHER_SUFFIX}"
 		));
 		std::fs::write(&clang, "").unwrap();
 
 		let mut host = Command::new("cargo");
 		configure_android_toolchain(&mut host, &root, Target::Android, &ndk).unwrap();
-		let environment = environment(&host);
+		let android = environment(&host);
 		let value = |name: &str| {
-			environment
+			android
 				.iter()
 				.find(|(key, _)| key == name)
 				.map(|(_, value)| PathBuf::from(value))
+		};
+		let flag = |name: &str| {
+			android
+				.iter()
+				.find(|(key, _)| key == name)
+				.map(|(_, value)| value.as_str())
 		};
 		assert_eq!(
 			value("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"),
 			Some(clang.clone())
 		);
-		assert_eq!(value("CC_aarch64_linux_android"), Some(clang));
+		assert_eq!(value("CC_aarch64_linux_android"), Some(clang.clone()));
 		assert_eq!(
 			value("CXX_aarch64_linux_android"),
 			Some(tools.join(format!(
-				"aarch64-linux-android26-clang++{NDK_LAUNCHER_SUFFIX}"
+				"aarch64-linux-android{ANDROID_MIN_API}-clang++{NDK_LAUNCHER_SUFFIX}"
 			)))
 		);
 		assert!(
 			value("AR_aarch64_linux_android").is_some_and(|archiver| archiver.starts_with(&tools)),
-			"the NDK's llvm-ar archives: {environment:?}"
+			"the NDK's llvm-ar archives: {android:?}"
 		);
 
+		// The flags name the same triple and API level the launcher encodes,
+		// so a renamed compiler still compiles for the intended level.
+		let launcher = clang.file_name().unwrap().to_str().unwrap();
+		let wrapper_target = launcher
+			.strip_suffix(&format!("-clang{NDK_LAUNCHER_SUFFIX}"))
+			.unwrap();
+		let expected = format!("--target={wrapper_target}");
 		assert_eq!(
-			std::fs::read_to_string(root.join(".leptoskit/android/ndk-path.txt")).unwrap(),
-			gradle_ndk_path(&ndk).unwrap(),
-			"Gradle reads the same NDK"
+			flag("CFLAGS_aarch64_linux_android"),
+			Some(expected.as_str())
+		);
+		assert_eq!(
+			flag("CXXFLAGS_aarch64_linux_android"),
+			Some(expected.as_str())
 		);
 
-		// This NDK has no compiler for the x86_64 emulator.
+		// The Quest headset reuses the Android host and its environment.
+		let mut host = Command::new("cargo");
+		configure_android_toolchain(&mut host, &root, Target::Quest, &ndk).unwrap();
+		let quest = environment(&host);
+		assert_eq!(
+			quest
+				.iter()
+				.find(|(key, _)| key == "CFLAGS_aarch64_linux_android"),
+			Some(&("CFLAGS_aarch64_linux_android".to_string(), expected.clone()))
+		);
+
+		// This NDK has no compiler for the x86_64 emulator yet.
 		let error = configure_android_toolchain(
 			&mut Command::new("cargo"),
 			&root,
@@ -2348,7 +2419,53 @@ mod tests {
 			error.to_string().contains("does not contain a compiler"),
 			"{error}"
 		);
+
+		// With the launcher present, the emulator target gets its own
+		// versioned `--target`.
+		let emulator = tools.join(format!(
+			"x86_64-linux-android{ANDROID_MIN_API}-clang{NDK_LAUNCHER_SUFFIX}"
+		));
+		std::fs::write(&emulator, "").unwrap();
+		let mut host = Command::new("cargo");
+		configure_android_toolchain(&mut host, &root, Target::AndroidX86_64, &ndk).unwrap();
+		let emulator_environment = environment(&host);
+		assert_eq!(
+			emulator_environment
+				.iter()
+				.find(|(key, _)| key == "CC_x86_64_linux_android")
+				.map(|(_, value)| PathBuf::from(value)),
+			Some(emulator)
+		);
+		assert_eq!(
+			emulator_environment
+				.iter()
+				.find(|(key, _)| key == "CFLAGS_x86_64_linux_android"),
+			Some(&(
+				"CFLAGS_x86_64_linux_android".to_string(),
+				format!("--target=x86_64-linux-android{ANDROID_MIN_API}")
+			))
+		);
+
+		assert_eq!(
+			std::fs::read_to_string(root.join(".leptoskit/android/ndk-path.txt")).unwrap(),
+			gradle_ndk_path(&ndk).unwrap(),
+			"Gradle reads the same NDK"
+		);
 		std::fs::remove_dir_all(&root).unwrap();
+	}
+
+	#[test]
+	fn android_target_flags_keep_the_users_own() {
+		// Exported flags survive; the versioned `--target` is appended so it
+		// is the one that takes effect.
+		assert_eq!(
+			append_flag(Some("-O0".into()), "--target=aarch64-linux-android26"),
+			"-O0 --target=aarch64-linux-android26"
+		);
+		assert_eq!(
+			append_flag(None, "--target=aarch64-linux-android26"),
+			"--target=aarch64-linux-android26"
+		);
 	}
 
 	#[test]
