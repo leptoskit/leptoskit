@@ -197,9 +197,10 @@ fn active_rules_apply_only_while_held_and_outrank_other_conditions() {
 
 	let css = classes.css();
 	assert!(css.contains(".active\\3a bg-blue-800:active:not([aria-disabled=true]){"));
-	assert!(
-		css.contains("@media (prefers-color-scheme:dark){.dark\\3a active\\3a bg-blue-900:active")
-	);
+	assert!(css.contains(
+		"@media (prefers-color-scheme:dark){:where(:root:not([data-lk-appearance=light])) \
+		 .dark\\3a active\\3a bg-blue-900:active"
+	));
 	assert!(
 		css.find(".md\\3a bg-blue-500{").unwrap() < css.find("active\\3a bg-blue-800").unwrap(),
 		"pressed rules follow responsive ones: {css}"

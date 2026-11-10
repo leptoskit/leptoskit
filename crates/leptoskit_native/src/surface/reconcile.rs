@@ -20,6 +20,8 @@ use crate::tailwind::StyleContext;
 
 impl<B: NativeBackend> NativeSurface<B> {
 	pub(super) fn commit_source(&mut self) {
+		self.adopt_root_appearance();
+
 		let Some(source) = &self.source else {
 			return;
 		};

@@ -257,6 +257,33 @@ surface.set_dark_mode(true);
 
 On native, the host supplies the viewport in logical pixels and calls `set_dark_mode` when appearance changes. The browser uses generated width media queries and `prefers-color-scheme`. Browser resizing does not require rebuilding the screen.
 
+## Let people choose light or dark
+
+Many apps offer a setting with three choices: Light, Dark, and Match device. `dark:` utilities follow the device until your app calls `appearance::set`; from then on they follow the choice, without a reload or a restart:
+
+```rust
+use leptoskit::appearance::{self, Appearance};
+use leptoskit::prelude::*;
+
+#[component]
+pub fn AppearancePicker() -> Element {
+	view! {
+		<View class="flex-row gap-2">
+			<Button on:press=move || appearance::set(Appearance::Light)>"Light"</Button>
+			<Button on:press=move || appearance::set(Appearance::Dark)>"Dark"</Button>
+			<Button on:press=move || appearance::set(Appearance::System)>"Match device"</Button>
+		</View>
+	}
+}
+```
+
+`appearance::get()` returns the current choice and is reactive, so a picker can mark the selected option with a binding or `Show`.
+
+- **Web:** the choice marks the page's `<html>` element with `data-lk-appearance="light"` or `"dark"`, which the generated stylesheet reads, and sets its `color-scheme`, so the browser's own form controls and scrollbars match. Match device removes both.
+- **macOS, iOS, Android, Linux, Windows, and the terminal:** the next render carries the choice to the host, which resolves `dark:` against it and tells the platform backend, so controls the backend crates draw match too. In the generated macOS, iOS, and Android apps, `dark:` utilities follow the choice, but a label with no colour class and the system's own control chrome still follow the device, so give text an explicit colour, as in `text-slate-900 dark:text-slate-100`.
+
+Remembering the choice is up to your app. Store `Appearance::as_str()` (`"system"`, `"light"`, or `"dark"`) with the [`store` plugin](../platforms/plugin-inventory.md), a cookie, or your own settings, and call `appearance::set` with `stored.parse()` before the first screen renders. A server render can't know the choice, so on the web put the attribute on `<html>` yourself from the stored value to avoid showing the device's appearance first.
+
 The [CSS coverage reference](../reference/css-coverage.md#defaults-and-units) lists breakpoint values, units, and component defaults.
 
 ## Style the pressed state

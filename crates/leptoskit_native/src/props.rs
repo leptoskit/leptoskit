@@ -495,6 +495,13 @@ pub struct NativeProps {
 	/// stay small.
 	#[cfg_attr(feature = "serde", serde(skip))]
 	pub motion: Option<Box<crate::motion::MotionProps>>,
+	/// The app's light or dark choice, which overrides the device's for the
+	/// whole surface. Only the root's counts:
+	/// [`appearance::set`](crate::appearance::set) puts it there in a native
+	/// guest, and [`NativeSurface`](crate::NativeSurface) reads it on each
+	/// commit. Unset leaves the surface's appearance as it was.
+	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+	pub appearance: Option<crate::Appearance>,
 	/// Platform-specific properties, keyed by name.
 	#[cfg_attr(feature = "serde", serde(skip_serializing_if = "BTreeMap::is_empty"))]
 	pub extra: BTreeMap<String, PropValue>,
