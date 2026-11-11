@@ -29,6 +29,9 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 axum = { workspace = true }
 huddle = { path = "../huddle_server" }
 huddle_db = { path = "../huddle_db", features = ["server"] }
+# The library name is `huddle_server`; the package name is `huddle`. Naming
+# the dependency after the library keeps it in use for the smoke test.
+huddle_server = { package = "huddle", path = "../huddle_server" }
 leptoskit_auth = { workspace = true, features = ["axum", "sqlite"] }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
 tokio = { workspace = true, features = ["process"] }
