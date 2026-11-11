@@ -59,6 +59,7 @@ packages = [
 	"leptoskit_testing_library",
 	"leptoskit_yoga",
 	"leptoskit_canvas",
+	"leptoskit_game",
 	"leptoskit_3d",
 	"leptoskit_game",
 	"leptoskit_xr",
