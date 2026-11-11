@@ -157,9 +157,13 @@ internal class NativeTextMeasurer(
 
         var widest = 0f
         repeat(measured.lineCount) { widest = max(widest, measured.getLineWidth(it)) }
-        val pixels = ceil(widest.coerceAtMost(limit.coerceAtLeast(0f)).toDouble()).toFloat()
+        // Snap outward to a whole pixel, then stop at the caller's limit. Ceil
+        // after the clamp can land one pixel past a fractional box (264 > 263.67
+        // at mdpi), and layout would give the paragraph a frame it overflows.
+        val capped = widest.coerceAtMost(limit.coerceAtLeast(0f))
+        val snapped = ceil(capped.toDouble()).toFloat().coerceAtMost(limit.coerceAtLeast(0f))
 
-        return floatArrayOf(pixels / metrics.density, measured.height / metrics.density)
+        return floatArrayOf(snapped / metrics.density, measured.height / metrics.density)
     }
 
     private fun paint(
