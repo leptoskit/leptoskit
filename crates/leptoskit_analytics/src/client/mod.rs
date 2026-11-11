@@ -6,8 +6,8 @@
 //! I/O: a [`Platform`] gives it the time and random bytes, and the
 //! platform's transport takes batches from [`Client::queue`] and sends
 //! them. The transports are `web` for the browser (the `web`
-//! feature), `server` for the app's server (`server-client`), and, in a
-//! later release, native apps.
+//! feature), `server` for the app's server (`server-client`), and
+//! `native` for a native app's Wasm guest (`native`).
 //!
 //! It depends on nothing but the standard library, so an app that records
 //! events compiles no JSON, UUID, time, or compression crate for it.
@@ -16,6 +16,9 @@ pub mod queue;
 
 #[cfg(feature = "server-client")]
 pub mod server;
+
+#[cfg(all(feature = "native", target_arch = "wasm32"))]
+pub mod native;
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub mod web;

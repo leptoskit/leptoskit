@@ -5214,13 +5214,19 @@ dependencies = [
 name = "leptoskit_analytics"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "chrono",
  "flate2",
  "insta",
  "js-sys",
  "leptoskit_apm",
  "leptoskit_axum",
+ "leptoskit_bridge",
  "leptoskit_db",
+ "leptoskit_plugin_crypto",
+ "leptoskit_plugin_filesystem",
+ "leptoskit_plugin_http",
+ "leptoskit_query",
  "leptoskit_rpc",
  "proptest",
  "reqwest 0.12.28",
