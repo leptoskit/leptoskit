@@ -40,6 +40,11 @@ rules:
       - sdk-acceptance.yml
       - services-deploy.yml
 
+      # Generated projects likewise bootstrap the checked-out candidate's
+      # actions/toolchain, rather than the workflow caller's revision.
+      # This job has read-only permissions and persists no checkout credentials.
+      - project-acceptance.yml
+
   # The Kamal job installs the one release of Kamal whose behaviour
   # docs/agents/services.md cites, by exact version, to check the
   # configuration `lk infra` writes against it. It's the tool under test
