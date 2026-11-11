@@ -177,15 +177,36 @@ pub fn from_env() -> Result<Option<ServerConfig>, ServerError> {
 }
 
 fn export_from_env() -> Result<Option<export::Config>, ServerError> {
-	let optional = |name| {
+	export_config(|name| {
 		match std::env::var(name) {
 			Ok(value) => Ok(Some(value)),
 			Err(std::env::VarError::NotPresent) => Ok(None),
 			Err(_) => Err(ServerError::Environment(name)),
 		}
-	};
+	})
+}
+
+/// The analytics service's OTLP route, under its private URL.
+const SERVICE_METRICS: &str = "/_leptoskit/services/analytics/otlp/v1/metrics";
+
+/// Where metrics go: the endpoint the app configured, or else, when the app
+/// runs the analytics service (`leptoskit dev` and `leptoskit serve` set its
+/// private URL and token), that service, signed with its token. The token
+/// stays in this server process; nothing sends it to a browser.
+fn export_config(
+	optional: impl Fn(&'static str) -> Result<Option<String>, ServerError>,
+) -> Result<Option<export::Config>, ServerError> {
 	let Some(endpoint) = optional("LEPTOSKIT_ANALYTICS_EXPORT_ENDPOINT")? else {
-		return Ok(None);
+		let url = optional("LEPTOSKIT_SERVICE_ANALYTICS_URL")?.filter(|url| !url.trim().is_empty());
+		let token =
+			optional("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN")?.filter(|token| !token.trim().is_empty());
+		return Ok(url.zip(token).map(|(url, token)| {
+			export::Config {
+				endpoint: format!("{}{SERVICE_METRICS}", url.trim_end_matches('/')),
+				key: Some(token),
+				protocol: export::Protocol::OtlpMetrics,
+			}
+		}));
 	};
 
 	let protocol = match optional("LEPTOSKIT_ANALYTICS_EXPORT_PROTOCOL")?.as_deref() {
@@ -468,5 +489,65 @@ impl Timer {
 impl Drop for Timer {
 	fn drop(&mut self) {
 		self.record();
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn config(settings: &[(&str, &str)]) -> Option<export::Config> {
+		export_config(|name| {
+			Ok(settings
+				.iter()
+				.find(|(have, _)| *have == name)
+				.map(|(_, value)| (*value).to_owned()))
+		})
+		.unwrap()
+	}
+
+	#[test]
+	fn an_app_running_the_analytics_service_exports_to_it() {
+		let config = config(&[
+			("LEPTOSKIT_SERVICE_ANALYTICS_URL", "http://127.0.0.1:3110/"),
+			("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN", "service-token"),
+		])
+		.unwrap();
+		assert_eq!(
+			config.endpoint,
+			"http://127.0.0.1:3110/_leptoskit/services/analytics/otlp/v1/metrics"
+		);
+		assert_eq!(config.key.as_deref(), Some("service-token"));
+		assert_eq!(config.protocol, export::Protocol::OtlpMetrics);
+	}
+
+	#[test]
+	fn an_explicit_export_wins_over_the_service() {
+		let config = config(&[
+			(
+				"LEPTOSKIT_ANALYTICS_EXPORT_ENDPOINT",
+				"https://collector.example/v1/metrics",
+			),
+			("LEPTOSKIT_ANALYTICS_EXPORT_PROTOCOL", "otlp"),
+			("LEPTOSKIT_ANALYTICS_WRITE_KEY", "collector-key"),
+			("LEPTOSKIT_SERVICE_ANALYTICS_URL", "http://127.0.0.1:3110"),
+			("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN", "service-token"),
+		])
+		.unwrap();
+		assert_eq!(config.endpoint, "https://collector.example/v1/metrics");
+		assert_eq!(config.key.as_deref(), Some("collector-key"));
+	}
+
+	#[test]
+	fn without_the_service_s_token_nothing_is_exported() {
+		assert!(config(&[]).is_none());
+		assert!(config(&[("LEPTOSKIT_SERVICE_ANALYTICS_URL", "http://127.0.0.1:3110")]).is_none());
+		assert!(
+			config(&[
+				("LEPTOSKIT_SERVICE_ANALYTICS_URL", "http://127.0.0.1:3110"),
+				("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN", " "),
+			])
+			.is_none()
+		);
 	}
 }
