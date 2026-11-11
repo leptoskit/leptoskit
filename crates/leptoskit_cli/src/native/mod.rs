@@ -846,7 +846,8 @@ fn configure_android_toolchain(
 	for variable in ["CFLAGS", "CXXFLAGS"] {
 		let key = format!("{variable}_{}", target.rust());
 		let existing = match host.get_envs().find(|(name, _)| *name == key.as_str()) {
-			Some((_, value)) => value.map(|value| value.to_os_string()),
+			Some((_, Some(value))) => Some(value.to_os_string()),
+			Some((_, None)) => None,
 			None => std::env::var_os(&key),
 		};
 		host.env(&key, append_flag(existing, &target_flag));
@@ -2614,13 +2615,12 @@ mod tests {
 			.strip_suffix(&format!("-clang{NDK_LAUNCHER_SUFFIX}"))
 			.unwrap();
 		let expected = format!("--target={wrapper_target}");
-		assert_eq!(
-			flag("CFLAGS_aarch64-linux-android"),
-			Some(format!("-DLOCAL_C=1 {expected}").as_str())
-		);
+		let cflags = format!("-DLOCAL_C=1 {expected}");
+		let cxxflags = format!("-DLOCAL_CXX=1 {expected}");
+		assert_eq!(flag("CFLAGS_aarch64-linux-android"), Some(cflags.as_str()));
 		assert_eq!(
 			flag("CXXFLAGS_aarch64-linux-android"),
-			Some(format!("-DLOCAL_CXX=1 {expected}").as_str())
+			Some(cxxflags.as_str())
 		);
 
 		// The Quest headset reuses the Android host and its environment.
