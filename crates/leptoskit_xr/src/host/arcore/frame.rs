@@ -53,6 +53,7 @@ impl ArCoreBackend {
 			camera_image,
 			camera_intrinsics,
 			depth,
+			depth_source: DepthSource::Measured,
 			depth_view: None,
 			planes: planes.into(),
 			planes_revision: 0,

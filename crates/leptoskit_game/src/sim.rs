@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use crate::world::World;
 
 thread_local! {
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static INBOX: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 

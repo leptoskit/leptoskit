@@ -22,6 +22,7 @@
 #![recursion_limit = "256"]
 
 pub mod client;
+mod pointer;
 mod protocol;
 mod sanitize;
 
@@ -65,6 +66,8 @@ pub use gpu::Backend;
 pub use gpu::Error;
 #[cfg(feature = "renderer")]
 pub use gpu::Gpu;
+pub use pointer::PointerInput;
+pub use pointer::PointerPhase;
 pub use protocol::*;
 #[cfg(feature = "renderer")]
 pub use renderer::*;

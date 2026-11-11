@@ -370,6 +370,7 @@ fn worker(worker: &Background) {
 }
 
 thread_local! {
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static PORT_LISTENERS: std::cell::RefCell<Vec<leptoskit_extension::Listener>> =
 		const { std::cell::RefCell::new(Vec::new()) };
 }

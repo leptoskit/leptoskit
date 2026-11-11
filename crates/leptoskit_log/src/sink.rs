@@ -155,7 +155,7 @@ mod platform {
 
 /// One line on standard error, through the test harness's capture when a
 /// test is running.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn stderr(level: Level, tag: &str, message: &str) {
 	eprintln!("{level:<5} {tag}: {message}");
 }

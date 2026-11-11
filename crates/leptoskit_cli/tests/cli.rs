@@ -1041,8 +1041,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 		.to_string();
 
 	let mut dev = DevSession::start(&project, &["dev", "--platform", "web", "--port", &port]);
-	dev.expect("[web] app server at", Duration::from_mins(15));
-	dev.expect("watching", Duration::from_mins(1));
+	dev.ready(Duration::from_mins(15));
 	assert!(page(&port).contains("<html"), "the server renders the page");
 
 	let main = project.join("src/main.rs");
@@ -1054,7 +1053,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 		format!("{source}\n// Changed while `leptoskit dev` watches.\n"),
 	)
 	.expect("fix src/main.rs");
-	dev.expect("[web] rebuilt in", Duration::from_mins(10));
+	dev.expect("[web] rebuilt the server in", Duration::from_mins(10));
 	assert!(
 		page(&port).contains("<html"),
 		"the restarted server renders the page"
@@ -1084,8 +1083,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 	let mut dev = DevSession::start(&project, &["dev", "--port", &port]);
 	dev.expect("[windows] skipped", Duration::from_mins(1));
 
-	dev.expect("[web] app server at", Duration::from_mins(15));
-	dev.expect("watching", Duration::from_mins(1));
+	dev.ready(Duration::from_mins(15));
 	assert!(
 		page(&port).contains("<html"),
 		"the server serves web/index.html"
@@ -1104,13 +1102,18 @@ struct DevSession {
 #[cfg(unix)]
 impl DevSession {
 	fn start(project: &Path, args: &[&str]) -> Self {
+		let mut command = Command::new(env!("CARGO_BIN_EXE_leptoskit"));
+		command.current_dir(project).args(args).arg("--no-secrets");
+		Self::from_command(command)
+	}
+
+	fn from_command(mut command: Command) -> Self {
 		use std::io::BufRead as _;
+		use std::os::unix::process::CommandExt as _;
 		use std::process::Stdio;
 
-		let mut child = Command::new(env!("CARGO_BIN_EXE_leptoskit"))
-			.current_dir(project)
-			.args(args)
-			.arg("--no-secrets")
+		let mut child = command
+			.process_group(0)
 			.stdin(Stdio::null())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
@@ -1143,6 +1146,14 @@ impl DevSession {
 		}
 	}
 
+	/// The web server can start before cold phone guests finish building.
+	/// Both readiness markers share one budget for the complete startup.
+	fn ready(&mut self, within: std::time::Duration) {
+		let started = std::time::Instant::now();
+		self.expect("[web] app server at", within);
+		self.expect("watching", within.saturating_sub(started.elapsed()));
+	}
+
 	/// Waits for a line starting with `prefix`.
 	fn expect(&mut self, prefix: &str, within: std::time::Duration) {
 		let deadline = std::time::Instant::now() + within;
@@ -1168,7 +1179,18 @@ impl DevSession {
 			.status()
 			.expect("run kill");
 		assert!(terminated.success());
-		let status = self.child.wait().expect("wait for leptoskit dev");
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+		let status = loop {
+			if let Some(status) = self.child.try_wait().expect("wait for leptoskit dev") {
+				break status;
+			}
+
+			assert!(
+				std::time::Instant::now() < deadline,
+				"`leptoskit dev` did not stop within 15 seconds after SIGTERM"
+			);
+			std::thread::sleep(std::time::Duration::from_millis(20));
+		};
 		self.seen.extend(self.output.try_iter());
 		assert!(
 			status.success(),
@@ -1176,6 +1198,44 @@ impl DevSession {
 			self.seen.join("\n")
 		);
 	}
+}
+
+#[cfg(unix)]
+impl Drop for DevSession {
+	fn drop(&mut self) {
+		if let Ok(None) = self.child.try_wait() {
+			// Only this session's isolated group, including unfinished builds
+			// and the app server, is stopped when a test fails or abandons it.
+			if let Ok(raw) = i32::try_from(self.child.id())
+				&& let Some(pid) = rustix::process::Pid::from_raw(raw)
+			{
+				let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+			}
+			let _ = self.child.kill();
+			let _ = self.child.wait();
+		}
+	}
+}
+
+#[cfg(unix)]
+#[test]
+fn abandoning_a_dev_session_closes_its_descendants_output_pipes() {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	use std::time::Instant;
+
+	let mut command = Command::new("sh");
+	command.args(["-c", "sleep 10 &\nprintf 'ready\\n'\nwait"]);
+	let mut dev = DevSession::from_command(command);
+	dev.expect("ready", Duration::from_secs(5));
+	let output = std::mem::replace(&mut dev.output, mpsc::channel().1);
+	let started = Instant::now();
+	drop(dev);
+	assert!(started.elapsed() < Duration::from_secs(5));
+	assert!(matches!(
+		output.recv_timeout(Duration::from_secs(5)),
+		Err(mpsc::RecvTimeoutError::Disconnected)
+	));
 }
 
 /// `GET /` from the dev server on `port`, retried while the server starts.

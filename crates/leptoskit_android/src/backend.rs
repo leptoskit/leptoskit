@@ -597,8 +597,7 @@ fn pack(decision: &PointerDecision, now: u64) -> i64 {
 	};
 	let wait = decision
 		.deadline_ms
-		.map(|at| at.saturating_sub(now).min(10_000))
-		.unwrap_or(0);
+		.map_or(0, |at| at.saturating_sub(now).min(10_000));
 	route | i64::try_from(wait).unwrap_or(0) << 8
 }
 

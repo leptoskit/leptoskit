@@ -240,3 +240,39 @@ fn sessions_need_a_supported_mode_and_their_required_features() {
 		Err(Error::InvalidArgument)
 	);
 }
+
+#[test]
+fn estimated_depth_keeps_its_source_through_recording_and_playback() {
+	let mut recording = walk(2);
+	recording.frames[0].frame.depth = Some(DepthSource::Estimated);
+	recording.frames[0].depth = Some(image::DepthImage {
+		width: 1,
+		height: 1,
+		format: image::DepthFormat::Meters32,
+		data: 2.0_f32.to_le_bytes().to_vec().into(),
+		row_stride: 4,
+		confidence: None,
+		display_transform: image::IDENTITY_AFFINE,
+	});
+	let recording = Recording::from_bytes(&recording.to_bytes()).unwrap();
+	let mut backend = ReplayBackend::new(recording);
+	Backend::start(
+		&mut backend,
+		&SessionConfig::new(Mode::PhoneAr),
+		Features::NONE,
+	)
+	.unwrap();
+	let frame = Backend::update(&mut backend, 0.0).unwrap().unwrap();
+	assert_eq!(frame.to_guest(1, true).depth, Some(DepthSource::Estimated));
+}
+
+#[test]
+fn version_one_recordings_do_not_claim_unrecorded_depth_provenance() {
+	let mut recording = walk(2);
+	recording.frames[0].frame.depth = Some(DepthSource::Measured);
+	let mut bytes = recording.to_bytes();
+	bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
+	let read = Recording::from_bytes(&bytes).unwrap();
+	assert_eq!(read.frames[0].frame.depth, Some(DepthSource::Estimated));
+	assert_eq!(read.frames[1].frame.depth, None);
+}

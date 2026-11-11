@@ -1,12 +1,11 @@
 {
-	"capabilities": {
-		"goog:chromeOptions": {
-			"args": [
-				"--headless",
-				"--no-sandbox",
-				"--disable-gpu"
-			]
-		},
-		"safari:options": {}
-	}
+	"goog:chromeOptions": {
+		"args": [
+			"--headless",
+			"--no-sandbox",
+			"--disable-gpu",
+			"--autoplay-policy=no-user-gesture-required"
+		]
+	},
+	"safari:options": {}
 }

@@ -255,6 +255,7 @@ impl XrRuntime {
 
 			if let Some(estimate) = estimator.latest() {
 				frame.depth = Some(estimate.depth);
+				frame.depth_source = DepthSource::Estimated;
 				frame.depth_view = Some(estimate.view);
 			}
 		}
@@ -333,6 +334,16 @@ impl XrRuntime {
 			}
 			None => state.backend.hit_test(request, &frame),
 		};
+		// Hit tests use the latest host frame, which may be newer than the
+		// guest's frame. Report the source of the picture actually hit.
+		if frame.depth_source == DepthSource::Estimated {
+			for hit in &mut hits {
+				if hit.kind == HitKind::Depth {
+					hit.kind = HitKind::EstimatedDepth;
+				}
+			}
+		}
+
 		crate::hit_test::sort_and_truncate(&mut hits, request.max_results as usize);
 		Ok(hits)
 	}

@@ -262,7 +262,7 @@ fn an_estimator_fills_in_depth_from_the_camera() {
 	// Read from this very frame, so seen from its own view.
 	assert_eq!(frame.depth_view, Some(frame.views[0]));
 	assert_eq!(frame.depth_transform(), Some(depth.display_transform));
-	assert!(frame.to_guest(1, true).depth);
+	assert_eq!(frame.to_guest(1, true).depth, Some(DepthSource::Estimated));
 }
 
 /// A phone with AR tracking but no depth of its own, like ARCore without
@@ -362,7 +362,7 @@ fn hit_tests_cast_against_estimated_depth_from_where_it_was_seen() {
 	let first = runtime.update(0.0).unwrap().unwrap();
 	assert_eq!(first.depth_view, Some(first.views[0]));
 	let hit = ahead(&runtime)[0];
-	assert_eq!(hit.kind, HitKind::Depth);
+	assert_eq!(hit.kind, HitKind::EstimatedDepth);
 	assert!((hit.distance - 2.0).abs() < 0.03, "{}", hit.distance);
 
 	// Two frames later the viewer has backed a metre away, and the depth
@@ -414,11 +414,13 @@ fn a_platform_that_measures_depth_keeps_its_own() {
 	// The estimator is never asked: the platform's depth is newer.
 	assert!(seen.lock().unwrap().is_empty());
 	assert_eq!(frame.depth_view, None);
+	assert_eq!(frame.to_guest(2, true).depth, Some(DepthSource::Measured));
 	assert_eq!(
 		frame.depth.as_ref().unwrap().sample_view(0.5, 0.5),
 		Some(1.0)
 	);
 	// Measured this frame, so cast from where the viewer is now.
 	let hit = ahead(&runtime)[0];
+	assert_eq!(hit.kind, HitKind::Depth);
 	assert!((hit.distance - 1.0).abs() < 0.03, "{}", hit.distance);
 }

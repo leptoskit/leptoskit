@@ -83,6 +83,10 @@ impl Audio {
 	/// the browser held it back.
 	pub fn new() -> Result<Self, Error> {
 		let context = AudioContext::new().map_err(|_| Error::Unavailable)?;
+		Self::with_context(context)
+	}
+
+	fn with_context(context: AudioContext) -> Result<Self, Error> {
 		let filters = [transparent(&context)?, transparent(&context)?];
 		let volume = context.create_gain().map_err(native)?;
 		filters[0]

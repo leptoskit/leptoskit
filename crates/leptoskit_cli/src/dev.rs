@@ -143,6 +143,9 @@ pub fn run(options: Options<'_>) -> Result<()> {
 		selection.web || selection.extension || !selection.native.is_empty(),
 		"this machine can run none of the platforms in app.platforms"
 	);
+	if selection.web {
+		serve_address(&config, port)?;
+	}
 
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
@@ -741,6 +744,16 @@ struct DevServices {
 	app_env: Vec<(String, String)>,
 }
 
+fn serve_address(config: &LeptoskitConfig, port: Option<u16>) -> Result<SocketAddr> {
+	let ip: IpAddr = config.serve.address.parse().with_context(|| {
+		format!(
+			"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
+			config.serve.address
+		)
+	})?;
+	Ok(SocketAddr::new(ip, port.unwrap_or(config.serve.port)))
+}
+
 impl Web {
 	/// Binds the configured address, builds, and starts serving.
 	fn start(
@@ -750,14 +763,9 @@ impl Web {
 		runtime: &tokio::runtime::Runtime,
 		database: Option<&crate::db::DevDatabase>,
 	) -> Result<Self> {
-		let port = port.unwrap_or(config.serve.port);
-		let ip: IpAddr = config.serve.address.parse().with_context(|| {
-			format!(
-				"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
-				config.serve.address
-			)
-		})?;
-		let address = SocketAddr::new(ip, port);
+		let address = serve_address(config, port)?;
+		let ip = address.ip();
+		let port = address.port();
 		// Bind first, so a taken port fails before the initial build rather
 		// than leaving a dev loop with no server behind it.
 		let listener = std::net::TcpListener::bind(address)
