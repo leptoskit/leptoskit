@@ -1498,39 +1498,60 @@ mod linux {
 				.contains(&(slider, NativeEvent::ValueChange { value: 40.0 })),
 			"RTL horizontal arrow follows native visual scale direction"
 		);
-		let surface = mounted.surface.borrow();
-		let png = surface
-			.backend()
-			.snapshot_png(surface.root().unwrap())
-			.unwrap();
-		std::fs::write(artifact_path("rtl.png"), &png).unwrap();
-		let texture = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
-		let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
-		texture.download(&mut pixels, texture.width() as usize * 4);
+		let deadline = std::time::Instant::now() + Duration::from_secs(5);
+		let mut pixels_ready = false;
+		let mut ranges = [(0usize, 0usize); 2];
 
-		for index in [1, 3] {
-			let layout = surface.layout(child(&mounted, index));
-			let mut min_x = layout.width as usize;
-			let mut max_x = 0;
+		while !pixels_ready {
+			pump();
+			let surface = mounted.surface.borrow();
+			let root = surface.root().unwrap();
+			let children = surface.children(root);
+			let layouts = [surface.layout(children[1]), surface.layout(children[3])];
+			let png = surface.backend().snapshot_png(root).unwrap();
+			drop(surface);
+			let texture =
+				gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
+			let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+			texture.download(&mut pixels, texture.width() as usize * 4);
+			pixels_ready = true;
 
-			for y in 2..layout.height as usize - 2 {
-				for x in 2..layout.width as usize - 2 {
-					let offset = ((layout.y as usize + y) * texture.width() as usize
-						+ layout.x as usize
-						+ x)
-						* 4;
+			for (slot, layout) in layouts.iter().enumerate() {
+				let mut min_x = layout.width as usize;
+				let mut max_x = 0;
 
-					if pixels[offset + 3] == 255
-						&& pixels[offset..offset + 3]
-							.iter()
-							.all(|channel| *channel < 100)
-					{
-						min_x = min_x.min(x);
-						max_x = max_x.max(x);
+				for y in 2..layout.height as usize - 2 {
+					for x in 2..layout.width as usize - 2 {
+						let offset = ((layout.y as usize + y) * texture.width() as usize
+							+ layout.x as usize
+							+ x)
+							* 4;
+
+						if pixels[offset + 3] == 255
+							&& pixels[offset..offset + 3]
+								.iter()
+								.all(|channel| *channel < 100)
+						{
+							min_x = min_x.min(x);
+							max_x = max_x.max(x);
+						}
 					}
 				}
+
+				if max_x == 0 {
+					pixels_ready = false;
+				}
+
+				ranges[slot] = (min_x, max_x);
 			}
 
+			assert!(
+				pixels_ready || std::time::Instant::now() < deadline,
+				"declared RTL text did not paint"
+			);
+		}
+
+		for (min_x, max_x) in ranges {
 			assert!(
 				min_x > 50 && max_x > 140,
 				"declared RTL start positions Arabic and Latin at right: {min_x}..{max_x}"
@@ -1974,30 +1995,43 @@ mod linux {
 		use gtk::glib;
 		let session = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>)
 			.map_err(|error| error.to_string())?;
-		let address = session
-			.call_sync(
-				Some("org.a11y.Bus"),
-				"/org/a11y/bus",
-				"org.a11y.Bus",
-				"GetAddress",
+		// Several GTK processes start the accessibility bus together. Its
+		// address can name a socket that is not listening yet.
+		let deadline = std::time::Instant::now() + Duration::from_secs(8);
+		let connection = loop {
+			let address = session
+				.call_sync(
+					Some("org.a11y.Bus"),
+					"/org/a11y/bus",
+					"org.a11y.Bus",
+					"GetAddress",
+					None,
+					None,
+					gio::DBusCallFlags::NONE,
+					5000,
+					None::<&gio::Cancellable>,
+				)
+				.map_err(|error| error.to_string())?
+				.get::<(String,)>()
+				.ok_or("AT bus address")?
+				.0;
+			match gio::DBusConnection::for_address_sync(
+				&address,
+				gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+					| gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
 				None,
-				None,
-				gio::DBusCallFlags::NONE,
-				5000,
 				None::<&gio::Cancellable>,
-			)
-			.map_err(|error| error.to_string())?
-			.get::<(String,)>()
-			.ok_or("AT bus address")?
-			.0;
-		let connection = gio::DBusConnection::for_address_sync(
-			&address,
-			gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-				| gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-			None,
-			None::<&gio::Cancellable>,
-		)
-		.map_err(|error| error.to_string())?;
+			) {
+				Ok(connection) => break connection,
+				Err(error)
+					if std::time::Instant::now() < deadline
+						&& error.to_string().contains("No such file or directory") =>
+				{
+					std::thread::sleep(Duration::from_millis(50));
+				}
+				Err(error) => return Err(error.to_string()),
+			}
+		};
 		let registry = (
 			"org.a11y.atspi.Registry".to_owned(),
 			glib::variant::ObjectPath::try_from("/org/a11y/atspi/accessible/root").unwrap(),
