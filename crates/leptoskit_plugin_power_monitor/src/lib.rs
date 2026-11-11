@@ -375,6 +375,9 @@ fn system_idle_time() -> Result<u32, Error> {
 }
 
 #[cfg(all(test, not(windows)))]
+// Already `const`. Android's OS thread-local backend still emits a non-const
+// init function, which this lint treats as a missing const.
+#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static IDLE_OVERRIDE: std::cell::Cell<Option<Result<u32, Error>>> =

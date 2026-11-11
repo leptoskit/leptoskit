@@ -117,6 +117,10 @@ impl FromStr for Appearance {
 	}
 }
 
+// Already `const`. Android's OS thread-local backend still emits a non-const
+// init function, which this lint treats as a missing const. The native
+// backend used on other targets accepts this initializer.
+#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	/// The app's choice, made on first use. The interface runs on one
 	/// thread, so it is that thread's.

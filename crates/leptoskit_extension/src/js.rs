@@ -292,6 +292,9 @@ pub(crate) async fn call<T: DeserializeOwned>(
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+// Already `const`. Android's OS thread-local backend still emits a non-const
+// init function, which this lint treats as a missing const.
+#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CALL_OVERRIDE: std::cell::RefCell<Option<serde_json::Value>> =
