@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from host import canonical, digest
+import test_host
 import transport
 
 
@@ -81,6 +83,46 @@ class Transport(unittest.TestCase):
             transport.exchange([sys.executable, "-c", "import time;time.sleep(5)"], b"", timeout=0.05)
         with self.assertRaisesRegex(RuntimeError, "SSH failed"):
             transport.exchange([sys.executable, "-c", "raise SystemExit(7)"], b"")
+
+    def test_two_large_asset_releases_fit_the_actual_transport_bound(self):
+        fixture = test_host.Releases()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        module_path = str(pathlib.Path(__file__).resolve().parent)
+        worker = (f"import sys;sys.path.insert(0,{module_path!r})\n"
+                  "import json\nfrom host import Machine\nfrom test_host import Runtime\n"
+                  "print(json.dumps(Machine(Runtime()).run(json.load(sys.stdin))))")
+
+        def exchange(request):
+            output = transport.exchange([sys.executable, "-c", worker], canonical(request))
+            self.assertLess(len(output), 64 * 1024)
+            return json.loads(output)
+
+        def release(version, content):
+            request = fixture.request(version, content)
+            tree = request["host"]["units"]["frontends.docs"]
+            for index in range(10000):
+                name = f"page-{index:05d}.txt"
+                tree[name] = {"kind": "file", "mode": 0o644, "size": 1, "sha256": digest(b"x")}
+                request["files"]["frontends.docs/" + name] = "eA=="
+            request["operation"] = digest(canonical([version, request["host"]]))
+            return request
+
+        for version, content in [("v1", b"first"), ("v2", b"second")]:
+            request = release(version, content)
+            for _ in range(2):
+                prepared = exchange(request)
+                self.assertEqual((prepared["operation"], prepared["phase"]),
+                                 (request["operation"], "prepared"))
+            for _ in range(2):
+                self.assertEqual(exchange({**request, "action": "activate"})["phase"], "complete")
+            status = exchange({**request, "action": "status"})
+            self.assertEqual(status["journal"]["version"], version)
+            self.assertEqual(status["current"]["frontends.docs"], "releases/" + version)
+
+        journal = fixture.root / "journal.json"
+        self.assertGreater(journal.stat().st_size, 1024 * 1024)
+        self.assertEqual(len(json.loads(journal.read_bytes())["previous_pins"]["frontends.docs"]), 10001)
 
 
 if __name__ == "__main__":

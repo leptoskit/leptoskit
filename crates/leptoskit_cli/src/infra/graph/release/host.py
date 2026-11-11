@@ -472,7 +472,17 @@ class Machine:
             require(stat.S_ISREG(os.fstat(fd).st_mode) and os.fstat(fd).st_nlink == 1, "unsafe operation lock")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            return self.locked(request, root)
+            return self.public_result(self.locked(request, root))
+
+    @staticmethod
+    def public_result(result):
+        """Keep recovery inventories on-host instead of filling bounded SSH replies."""
+        if "journal" in result:
+            return {**result, "journal": Machine.public_result(result["journal"])
+                    if result["journal"] is not None else None}
+        fields = ("operation", "transaction", "version", "phase", "rollback",
+                  "observations", "legacy_recovery", "legacy_phase")
+        return {name: result[name] for name in fields if name in result}
 
     def locked(self, request, root):
         """A context must own the journal before it can enter failure cleanup."""
