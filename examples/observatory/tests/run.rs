@@ -48,7 +48,12 @@ fn a_snapshot_is_a_png_drawn_by_appkit() {
 	assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
 }
 
-#[cfg(not(target_os = "macos"))]
+// Windows open on macOS and Linux. Elsewhere the process prints the summary
+// and refuses to snapshot, instead of running a window.
+#[cfg(not(any(
+	target_os = "macos",
+	all(target_os = "linux", not(target_env = "ohos"))
+)))]
 #[test]
 fn without_macos_the_window_is_the_summary_and_snapshots_refuse() {
 	let output = observatory(&[]);
