@@ -29,6 +29,8 @@ The generated web dev journey gives the app server and final watcher announcemen
 
 Android hosts carry rustc's `native-static-libs` into the generated JNI link line. Parser regressions cover plain and coloured compiler notes, including the styled prefix and final library name; captured stderr retains the terminal's colours.
 
+Field's standalone workspace lints its web feature and all test targets in the Wasm gate. Headless and interpreter fixtures, together with their development dependencies, are native-only.
+
 Linux coverage builds use `line-tables-only` debug information for the dev and test profiles, with incremental compilation disabled. This keeps source locations for diagnostics and LLVM coverage while reducing the disk footprint of instrumented binaries and nested fixture builds. Their cache keys include the debug profile so they cannot restore the previous full-debug artifacts.
 
 The Linux workspace coverage job installs NATS at the version provided by devenv and sets `LEPTOSKIT_REQUIRE_NATS=1`. Relay and session-revocation tests must run against a real server; a missing binary fails the job instead of silently skipping them.

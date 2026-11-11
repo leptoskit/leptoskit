@@ -4,6 +4,7 @@
 //! `tests/guest.rs` reads the bundle a native build produced, so run
 //! `leptoskit native bundle --target ios` in this directory first; without a
 //! bundle the suite reports itself skipped.
+#![cfg(not(target_arch = "wasm32"))]
 
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;

@@ -1,5 +1,6 @@
 //! Navigating the example the way a person would: tapping its links on the
 //! headless backend, with the router's in-memory history.
+#![cfg(not(target_arch = "wasm32"))]
 
 use file_routes_example::routes::Compose;
 use file_routes_example::routes::Navigation;

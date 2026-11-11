@@ -114,6 +114,9 @@ wasm() {
 	wasm_group "the deployment app in a guest" --package=leptoskit_app --features native --lib
 	wasm_group "the deployment console" --package=leptoskit_deploy_console --features csr --lib
 	wasm_group "the generated auth pages" --package=auth_pages_example --features web --all-targets
+	# Field is a standalone workspace. Its browser tests must not pull in the
+	# native fixtures' interpreter and threaded timer host.
+	wasm_group "the Field browser example" --manifest-path examples/file_routes/Cargo.toml --features web --all-targets
 }
 
 wasm_group() {
