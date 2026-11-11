@@ -94,9 +94,13 @@ struct Shared {
 	sending: tokio::sync::Mutex<()>,
 	wake: tokio::sync::Notify,
 	url: String,
+	/// Where the event catalogue's `register_events` operation is.
+	register_url: String,
 	token: Option<String>,
 	http: reqwest::Client,
 	flush_at: usize,
+	/// Whether this program's typed events are in the service's catalogue.
+	registered: std::sync::atomic::AtomicBool,
 }
 
 /// Records events from the app's server. Clones share one queue.
@@ -143,6 +147,11 @@ impl Analytics {
 				"{}/_leptoskit/services/{SERVICE}/v1/batch",
 				url.trim_end_matches('/')
 			),
+			register_url: format!(
+				"{}/_leptoskit/services/{SERVICE}/api/register_events",
+				url.trim_end_matches('/')
+			),
+			registered: std::sync::atomic::AtomicBool::new(false),
 			token,
 			http: reqwest::Client::new(),
 			flush_at: config.flush_at.max(1),
@@ -165,7 +174,16 @@ impl Analytics {
 	/// Records a typed event for `distinct_id`: [`capture`](Self::capture)
 	/// with its name and properties.
 	pub fn capture_event<E: crate::Event>(&self, distinct_id: &str, event: E) {
-		self.capture(distinct_id, E::NAME, event.into_properties());
+		self.queue().remember_schema(E::SCHEMA_ID, E::FIELDS);
+		self.record(
+			distinct_id,
+			Body::TypedEvent {
+				name: E::NAME.into(),
+				schema_id: E::SCHEMA_ID,
+				values: event.into_values(),
+				properties: Vec::new(),
+			},
+		);
 	}
 
 	/// `distinct_id` is the person `anon_distinct_id` was, now signed in;
@@ -287,9 +305,73 @@ async fn run(shared: std::sync::Weak<Shared>, interval: Duration) {
 	}
 }
 
+/// The most schemas one registration sends, as the service accepts.
+const SCHEMAS_PER_REGISTRATION: usize = 1_000;
+
+/// Registers the typed events this server was built with in the service's
+/// event catalogue, as the app, until the service accepts them. Until then
+/// typed events whose schemas it doesn't know are sent again with names.
+async fn register_events(shared: &Shared) {
+	use std::sync::atomic::Ordering;
+
+	if shared.registered.load(Ordering::Relaxed) {
+		return;
+	}
+	#[cfg(feature = "derive")]
+	{
+		let schemas: Vec<serde_json::Value> = crate::compiled_events()
+			.map(|schema| {
+				serde_json::json!({
+					"schema_id": schema.schema_id,
+					"name": schema.name,
+					"fields": schema.fields,
+				})
+			})
+			.collect();
+		for chunk in schemas.chunks(SCHEMAS_PER_REGISTRATION) {
+			let mut request = shared
+				.http
+				.post(&shared.register_url)
+				.header("content-type", "application/json")
+				.body(serde_json::json!({ "schemas": chunk }).to_string());
+			if let Some(token) = &shared.token {
+				request = request.bearer_auth(token);
+			}
+			match request.send().await {
+				Ok(response) if response.status().is_success() => {}
+				_ => return,
+			}
+		}
+	}
+	#[cfg(not(feature = "derive"))]
+	let _ = SCHEMAS_PER_REGISTRATION;
+	shared.registered.store(true, Ordering::Relaxed);
+}
+
+/// The entries a stored batch's answer says were refused, by index and
+/// reason.
+fn refusals(answer: &[u8]) -> Vec<(u32, String)> {
+	let Ok(answer) = serde_json::from_slice::<serde_json::Value>(answer) else {
+		return Vec::new();
+	};
+	answer["refused"]
+		.as_array()
+		.map(|refused| {
+			refused
+				.iter()
+				.filter_map(|refusal| {
+					let index = u32::try_from(refusal["index"].as_u64()?).ok()?;
+					Some((index, refusal["reason"].as_str()?.to_owned()))
+				})
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
 /// Sends batches until nothing waits or the service asks to wait.
 async fn send_waiting(shared: &Shared) {
 	let _sending = shared.sending.lock().await;
+	register_events(shared).await;
 	loop {
 		let pending = {
 			let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
@@ -307,23 +389,38 @@ async fn send_waiting(shared: &Shared) {
 		if let Some(token) = &shared.token {
 			request = request.bearer_auth(token);
 		}
-		let outcome = match request.send().await {
+		let (outcome, refused) = match request.send().await {
 			Ok(response) => {
-				Outcome::from_status(
+				let outcome = Outcome::from_status(
 					response.status().as_u16(),
 					response
 						.headers()
 						.get("retry-after")
 						.and_then(|value| value.to_str().ok()),
-				)
+				);
+				let refused = if outcome == Outcome::Stored {
+					refusals(&response.bytes().await.unwrap_or_default())
+				} else {
+					Vec::new()
+				};
+				(outcome, refused)
 			}
-			Err(_) => Outcome::Retry { after: None },
+			Err(_) => (Outcome::Retry { after: None }, Vec::new()),
 		};
 
 		let mut jitter = [0_u8; 1];
 		System.fill_random(&mut jitter);
+		let jitter = f64::from(jitter[0]) / 255.0;
 		let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
-		queue.settle(outcome, System.now(), f64::from(jitter[0]) / 255.0);
+		if outcome == Outcome::Stored {
+			let refused: Vec<(u32, &str)> = refused
+				.iter()
+				.map(|(index, reason)| (*index, reason.as_str()))
+				.collect();
+			queue.settle_with_refusals(&refused, System.now(), jitter);
+		} else {
+			queue.settle(outcome, System.now(), jitter);
+		}
 		if matches!(outcome, Outcome::Retry { .. }) {
 			return;
 		}

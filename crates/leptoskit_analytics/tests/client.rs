@@ -120,3 +120,109 @@ async fn an_unreachable_service_keeps_the_events_queued() {
 	assert_eq!(error.waiting, 1);
 	assert_eq!(analytics.waiting(), 1);
 }
+
+/// Collected at build time and registered by the server's client.
+#[derive(leptoskit_analytics::Event)]
+#[event(name = "invoice_sent")]
+struct InvoiceSent {
+	amount_cents: u32,
+	currency: String,
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_registers_its_typed_events_and_they_arrive_named() {
+	use leptoskit_analytics::Event as _;
+
+	let (url, db) = start().await;
+	let analytics = Analytics::new(&url, Some(TOKEN.into()), Config::default());
+	analytics.capture_event(
+		"user-9",
+		InvoiceSent {
+			amount_cents: 2500,
+			currency: "EUR".into(),
+		},
+	);
+	analytics.flush().await.unwrap();
+
+	assert_eq!(
+		scalar(
+			&db,
+			&format!(
+				"SELECT name FROM event_schemas WHERE schema_id = {}",
+				InvoiceSent::SCHEMA_ID as i64
+			)
+		)
+		.await,
+		r#"Text("invoice_sent")"#,
+		"registered from the build"
+	);
+	assert_eq!(
+		scalar(
+			&db,
+			"SELECT properties FROM events WHERE name = 'invoice_sent'"
+		)
+		.await,
+		r#"Text("{\"amount_cents\":2500,\"currency\":\"EUR\"}")"#
+	);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_schema_the_service_doesn_t_know_is_sent_again_with_names() {
+	use leptoskit_analytics::client::Limits;
+	use leptoskit_analytics::client::Queue;
+	use leptoskit_analytics::wire;
+
+	static FIELDS: &[(&str, &str)] = &[("plan", "String")];
+	let (url, db) = start().await;
+	let mut queue = Queue::new(Limits::default(), vec![]);
+	let now = 1_762_646_400_000;
+	let id = leptoskit_analytics::schema_id("never_registered", FIELDS);
+	queue.remember_schema(id, FIELDS);
+	queue.push(
+		wire::Entry {
+			uuid: wire::uuid_v7(now, [3; 10]),
+			distinct_id: "user-1".into(),
+			session_id: None,
+			context: 0,
+			body: wire::Body::TypedEvent {
+				name: "never_registered".into(),
+				schema_id: id,
+				values: vec![wire::Value::Text("pro".into())],
+				properties: vec![],
+			},
+		},
+		now,
+	);
+
+	let post = |body: Vec<u8>| {
+		let url = url.clone();
+		async move {
+			let response = reqwest::Client::new()
+				.post(format!("{url}/_leptoskit/services/analytics/v1/batch"))
+				.bearer_auth(TOKEN)
+				.body(body)
+				.send()
+				.await
+				.unwrap();
+			response.json::<serde_json::Value>().await.unwrap()
+		}
+	};
+	let answer = post(queue.take(now, [0; 10]).unwrap().body).await;
+	assert_eq!(answer["refused"][0]["reason"], "unknown_schema");
+	queue.settle_with_refusals(&[(0, "unknown_schema")], now, 0.0);
+	assert_eq!(queue.len(), 1, "queued again");
+
+	let again = queue.take(now, [0; 10]).unwrap();
+	let resent = wire::decode(&again.body, &wire::Limits::default()).unwrap();
+	assert!(matches!(resent.entries[0].body, wire::Body::Event { .. }));
+	let answer = post(again.body).await;
+	assert_eq!(answer["stored"], 1, "{answer}");
+	assert_eq!(
+		scalar(
+			&db,
+			"SELECT properties FROM events WHERE name = 'never_registered'"
+		)
+		.await,
+		r#"Text("{\"plan\":\"pro\"}")"#
+	);
+}

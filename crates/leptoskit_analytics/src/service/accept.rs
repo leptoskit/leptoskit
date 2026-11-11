@@ -14,6 +14,7 @@ use sha2::Digest as _;
 use sha2::Sha256;
 use uuid::Uuid;
 
+use super::catalogue::Catalogue;
 use crate::wire;
 use crate::wire::Body;
 
@@ -90,7 +91,9 @@ pub struct ContextRow {
 pub struct Refused {
 	pub index: u32,
 	/// A short code: `invalid_uuid`, `invalid_name`, `invalid_distinct_id`,
-	/// `properties_too_large`.
+	/// `properties_too_large`, `invalid_timestamp`, `unknown_schema` (a typed
+	/// event whose schema the catalogue doesn't have: send it with names) or
+	/// `schema_mismatch`.
 	pub reason: String,
 }
 
@@ -120,8 +123,15 @@ impl Accepted {
 	}
 }
 
-/// Accepts a binary batch received at `received_at`.
-pub fn batch(batch: wire::Batch, received_at: Timestamp, source: Source) -> Accepted {
+/// Accepts a binary batch received at `received_at`. Typed events are named
+/// from `catalogue`, which must already hold the batch's schemas that the
+/// database has ([`Catalogue::load`]).
+pub fn batch(
+	batch: wire::Batch,
+	received_at: Timestamp,
+	source: Source,
+	catalogue: &Catalogue,
+) -> Accepted {
 	let mut accepted = Accepted::default();
 	let contexts: Vec<ContextRow> = batch
 		.contexts
@@ -146,6 +156,23 @@ pub fn batch(batch: wire::Batch, received_at: Timestamp, source: Source) -> Acce
 			accepted.refused.push(refused(index, "invalid_uuid"));
 			continue;
 		};
+		let entry_body = match entry.body {
+			Body::TypedEvent {
+				name,
+				schema_id,
+				values,
+				properties,
+			} => {
+				match catalogue.resolve(&name, schema_id, values, properties) {
+					Ok(properties) => Body::Event { name, properties },
+					Err(reason) => {
+						accepted.refused.push(refused(index, reason));
+						continue;
+					}
+				}
+			}
+			other => other,
+		};
 		let context_id = if let Some(context) = contexts.get(entry.context as usize) {
 			used[entry.context as usize] = true;
 			context.id
@@ -153,7 +180,7 @@ pub fn batch(batch: wire::Batch, received_at: Timestamp, source: Source) -> Acce
 			used_empty = true;
 			empty.id
 		};
-		let (name, properties) = body(entry.body);
+		let (name, properties) = body(entry_body);
 		let timestamp = corrected(millis, skew, received_at, &mut accepted.clamped);
 		match row(
 			Uuid::from_bytes(entry.uuid),
@@ -394,6 +421,12 @@ fn body(body: Body) -> (String, Json) {
 				);
 			}
 			"$set"
+		}
+		// `batch` names a typed event's values before it gets here.
+		Body::TypedEvent {
+			name, properties, ..
+		} => {
+			return (name, object(properties));
 		}
 		Body::GroupIdentify {
 			group_type,

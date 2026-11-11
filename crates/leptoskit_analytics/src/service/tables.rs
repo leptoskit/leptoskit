@@ -119,6 +119,23 @@ pub struct ApmWindow {
 	pub bounds: String,
 }
 
+/// One version of a typed event's schema ([`crate::Event`]): what a typed
+/// event's values are called, by schema id. Versions are kept, never
+/// replaced, so events from clients built against an older version still
+/// read correctly.
+#[table(name = "event_schemas", index(name))]
+pub struct EventSchema {
+	/// The schema id, as the two's-complement `i64` of the `u64`.
+	#[db(key)]
+	pub schema_id: i64,
+	#[db(min_len = 1, max_len = 200)]
+	pub name: String,
+	/// Each property's name and type as spelled, as a JSON array of pairs.
+	pub fields: String,
+	pub first_registered: Timestamp,
+	pub last_registered: Timestamp,
+}
+
 leptoskit_db::export_schema!();
 
 /// Every migration, embedded for the service to apply when it starts.

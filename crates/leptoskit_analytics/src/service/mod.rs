@@ -11,6 +11,7 @@
 //! answer once the batch writer has committed them ([`ingest`]).
 
 pub mod accept;
+pub mod catalogue;
 pub mod ingest;
 pub mod limits;
 pub mod otlp;
@@ -43,6 +44,7 @@ pub use self::accept::JsonBatch;
 pub use self::accept::JsonEvent;
 pub use self::accept::Refused;
 pub use self::accept::Source;
+pub use self::catalogue::Catalogue;
 pub use self::ingest::Ack;
 pub use self::ingest::Committed;
 pub use self::ingest::Ingest;
@@ -110,11 +112,38 @@ pub async fn capture(
 	})
 }
 
+/// Adds typed events' schemas to the event catalogue, as the app: the app's
+/// server calls it when it starts, with the events it was built with
+/// ([`crate::client::server::Analytics`] does). Versions are added, never
+/// replaced or removed, so events from clients built against an older one
+/// still read. At most [`catalogue::MAX_SCHEMAS`] at once.
+#[rpc::action(service = "analytics")]
+pub async fn register_events(
+	cx: &rpc::ActionCx,
+	schemas: Vec<catalogue::SchemaInput>,
+) -> rpc::Result<catalogue::Registered> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app registers events: call this from its server, with the service's token",
+		));
+	}
+	let Some(catalogue) = cx.get::<Catalogue>() else {
+		return Err(rpc::Error::server(
+			"the analytics service has no event catalogue",
+		));
+	};
+	catalogue
+		.register(schemas)
+		.await
+		.map_err(rpc::Error::invalid)
+}
+
 /// Identifies callers with `inner`, and gives every request the ingest
-/// queue, which the `capture` operation reads.
+/// queue, which the `capture` operation reads, and the event catalogue.
 struct WithIngest<I> {
 	inner: I,
 	ingest: Ingest,
+	catalogue: Catalogue,
 }
 
 impl<I: Identify> Identify for WithIngest<I> {
@@ -142,7 +171,10 @@ impl<I: Identify> Identify for WithIngest<I> {
 
 impl<I> WithIngest<I> {
 	fn with_ingest(&self, mut identity: Identity) -> Identity {
-		identity.context = identity.context.with(self.ingest.clone());
+		identity.context = identity
+			.context
+			.with(self.ingest.clone())
+			.with(self.catalogue.clone());
 		identity
 	}
 }
@@ -152,6 +184,7 @@ struct BatchState {
 	ingest: Ingest,
 	identify: Arc<dyn Identify>,
 	db: Db,
+	catalogue: Catalogue,
 }
 
 /// The service's routes, under `/_leptoskit/services/analytics`, with the
@@ -173,9 +206,11 @@ pub fn routes_with(
 ) -> Router {
 	let _ = origin;
 	let ingest = Ingest::start(db.clone(), config);
+	let catalogue = Catalogue::new(db.clone());
 	let with_ingest = Arc::new(WithIngest {
 		inner: callers,
 		ingest: ingest.clone(),
+		catalogue: catalogue.clone(),
 	});
 	let server = rpc::server::Server::new(db.clone())
 		.service(SERVICE)
@@ -190,6 +225,7 @@ pub fn routes_with(
 			ingest,
 			identify,
 			db,
+			catalogue,
 		});
 
 	Router::new().nest(&rpc::service_prefix(SERVICE), server.router().merge(batch))
@@ -223,7 +259,26 @@ async fn receive_batch(
 	} else {
 		Source::Client
 	};
-	let accepted = accept::batch(batch, received_at, source);
+	// Typed events' schemas, from the database when this replica hasn't
+	// seen them yet.
+	let schema_ids: Vec<u64> = batch
+		.entries
+		.iter()
+		.filter_map(|entry| {
+			match &entry.body {
+				wire::Body::TypedEvent { schema_id, .. } => Some(*schema_id),
+				_ => None,
+			}
+		})
+		.collect();
+	if let Err(error) = state.catalogue.load(&schema_ids).await {
+		let mut response = error_response(StatusCode::SERVICE_UNAVAILABLE, &error.to_string());
+		response
+			.headers_mut()
+			.insert(header::RETRY_AFTER, header::HeaderValue::from_static("1"));
+		return response;
+	}
+	let accepted = accept::batch(batch, received_at, source, &state.catalogue);
 	let refused = accepted.refused.clone();
 	match state.ingest.submit(accepted, received_at).await {
 		Ok(committed) => {

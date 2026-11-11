@@ -670,3 +670,137 @@ async fn leptoskit_apm_s_export_is_stored_and_accepted() {
 		]]
 	);
 }
+
+fn schema(name: &str, fields: &[(&str, &str)]) -> serde_json::Value {
+	json!({
+		"schema_id": leptoskit_analytics::schema_id(name, fields),
+		"name": name,
+		"fields": fields,
+	})
+}
+
+async fn register(
+	service: &Service,
+	schemas: Vec<serde_json::Value>,
+	token: Option<&str>,
+) -> (u16, String) {
+	let mut request = reqwest::Client::new()
+		.post(format!(
+			"http://{}{PREFIX}/api/register_events",
+			service.address
+		))
+		.json(&json!({ "schemas": schemas }));
+	if let Some(token) = token {
+		request = request.bearer_auth(token);
+	}
+	let response = request.send().await.unwrap();
+	(response.status().as_u16(), response.text().await.unwrap())
+}
+
+fn typed(name: &str, fields: &[(&str, &str)], values: Vec<Value>, now: i64) -> Entry {
+	Entry {
+		body: Body::TypedEvent {
+			name: name.into(),
+			schema_id: leptoskit_analytics::schema_id(name, fields),
+			values,
+			properties: vec![("flavour".into(), Value::Text("beta".into()))],
+		},
+		..event(name, now)
+	}
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_events_are_named_from_the_catalogue_and_checked_against_it() {
+	let service = start(IngestConfig::default()).await;
+	let v1: &[(&str, &str)] = &[("plan", "String")];
+	let v2: &[(&str, &str)] = &[("plan", "String"), ("seats", "u32")];
+
+	// Only the app registers, and only schemas that match their ids.
+	let (status, _) = register(&service, vec![schema("upgraded", v1)], None).await;
+	assert_eq!(status, 403);
+	let mut wrong = schema("upgraded", v1);
+	wrong["schema_id"] = json!(1);
+	let (status, answer) = register(&service, vec![wrong], Some(TOKEN)).await;
+	assert_ne!(status, 200, "{answer}");
+	let too_many = (0..1_001)
+		.map(|n| schema(&format!("event_{n}"), &[]))
+		.collect();
+	let (status, answer) = register(&service, too_many, Some(TOKEN)).await;
+	assert_ne!(status, 200, "{answer}");
+
+	let (status, answer) = register(&service, vec![schema("upgraded", v1)], Some(TOKEN)).await;
+	assert_eq!(status, 200, "{answer}");
+	assert_eq!(answer, r#"{"added":1,"known":0}"#);
+	// A later build adds a field: the old version stays.
+	let (status, answer) = register(
+		&service,
+		vec![schema("upgraded", v1), schema("upgraded", v2)],
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!((status, answer.as_str()), (200, r#"{"added":1,"known":1}"#));
+
+	let now = now_millis();
+	let batch = Batch {
+		sent_at: now,
+		contexts: vec![context()],
+		entries: vec![
+			// An old client, offline since before the field was added.
+			typed("upgraded", v1, vec![Value::Text("pro".into())], now),
+			typed(
+				"upgraded",
+				v2,
+				vec![Value::Text("team".into()), Value::Int(5)],
+				now,
+			),
+			typed("unregistered", &[("x", "u32")], vec![Value::Int(1)], now),
+			typed("upgraded", v2, vec![Value::Text("team".into())], now),
+			typed(
+				"upgraded",
+				v2,
+				vec![Value::Text("team".into()), Value::Text("5".into())],
+				now,
+			),
+		],
+	};
+	let body = wire::encode(&batch);
+	let (status, answer, _) = send(&service, body.clone(), None, None).await;
+	assert_eq!(status, 200, "{answer}");
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!(result.stored, 2);
+	let refused: Vec<(u32, &str)> = result
+		.refused
+		.iter()
+		.map(|refusal| (refusal.index, refusal.reason.as_str()))
+		.collect();
+	assert_eq!(
+		refused,
+		[
+			(2, "unknown_schema"),
+			(3, "schema_mismatch"),
+			(4, "schema_mismatch")
+		]
+	);
+
+	// A retry stores nothing twice.
+	let (_, answer, _) = send(&service, body, None, None).await;
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!((result.stored, result.duplicates), (0, 2));
+
+	let mut stored: Vec<String> = rows(
+		&service.db,
+		"SELECT properties FROM events WHERE name = 'upgraded'",
+	)
+	.await
+	.iter()
+	.map(|row| text(&row[0]))
+	.collect();
+	stored.sort();
+	assert_eq!(
+		stored,
+		[
+			r#"{"flavour":"beta","plan":"pro"}"#,
+			r#"{"flavour":"beta","plan":"team","seats":5}"#,
+		]
+	);
+}

@@ -138,6 +138,9 @@ pub struct Queue {
 	batch_entries: usize,
 	failures: u32,
 	retry_at: i64,
+	/// The field names of each typed event's schema, by schema id, to send
+	/// it with its names when the service doesn't know the schema.
+	schemas: Vec<(u64, &'static [(&'static str, &'static str)])>,
 }
 
 impl Queue {
@@ -162,6 +165,72 @@ impl Queue {
 			batch_entries,
 			failures: 0,
 			retry_at: i64::MIN,
+			schemas: Vec::new(),
+		}
+	}
+
+	/// Remembers a typed event's fields, for [`settle_with_refusals`].
+	///
+	/// [`settle_with_refusals`]: Self::settle_with_refusals
+	pub fn remember_schema(
+		&mut self,
+		schema_id: u64,
+		fields: &'static [(&'static str, &'static str)],
+	) {
+		if !self.schemas.iter().any(|(have, _)| *have == schema_id) {
+			self.schemas.push((schema_id, fields));
+		}
+	}
+
+	/// [`settle`](Self::settle) with [`Outcome::Stored`], given the entries
+	/// the service refused, by their index in the batch and the reason. A
+	/// typed event refused as `unknown_schema` is queued again with its
+	/// property names, keeping its id, so it's stored once all the same.
+	pub fn settle_with_refusals(&mut self, refused: &[(u32, &str)], now: i64, jitter: f64) {
+		let mut again = Vec::new();
+		for (index, reason) in refused {
+			if *reason != "unknown_schema" {
+				continue;
+			}
+			let Some(queued) = self.sending.get(*index as usize) else {
+				continue;
+			};
+			let Body::TypedEvent {
+				name,
+				schema_id,
+				values,
+				properties,
+			} = &queued.entry.body
+			else {
+				continue;
+			};
+			let Some((_, fields)) = self.schemas.iter().find(|(have, _)| have == schema_id) else {
+				continue;
+			};
+			let mut keyed: Properties = fields
+				.iter()
+				.zip(values)
+				.map(|((field, _), value)| ((*field).to_owned(), value.clone()))
+				.collect();
+			keyed.extend(properties.iter().cloned());
+			let mut entry = queued.entry.clone();
+			entry.body = Body::Event {
+				name: name.clone(),
+				properties: keyed,
+			};
+			again.push(Queued {
+				bytes: size(&entry),
+				entry,
+				at: queued.at,
+			});
+		}
+		self.settle(Outcome::Stored, now, jitter);
+		for queued in again.into_iter().rev() {
+			self.bytes += queued.bytes;
+			self.waiting.push_front(queued);
+		}
+		while self.waiting.len() > self.limits.queue_entries {
+			self.drop_oldest();
 		}
 	}
 
@@ -538,6 +607,17 @@ fn index_of(used: &mut Vec<u32>, generation: u32) -> u32 {
 fn size(entry: &Entry) -> usize {
 	let body = match &entry.body {
 		Body::Event { name, properties } => name.len() + properties_size(properties),
+		Body::TypedEvent {
+			name,
+			values,
+			properties,
+			..
+		} => {
+			name.len()
+				+ 8
+				+ values.iter().map(value_size).sum::<usize>()
+				+ properties_size(properties)
+		}
 		Body::Identify {
 			anon_distinct_id,
 			set,

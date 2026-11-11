@@ -98,10 +98,12 @@ fn expand(input: &DeriveInput) -> syn::Result<Tokens> {
 	let krate = crate_path();
 	// Each conversion carries its field's span, so a type that can't be a
 	// property is reported on that field.
-	let values = fields.iter().map(|field| {
+	let convert = |field: &&syn::Field| {
 		let (ident, ty) = (field.ident.as_ref().expect("named"), &field.ty);
 		quote_spanned! {ty.span()=> <#krate::wire::Value as ::core::convert::From<#ty>>::from(self.#ident)}
-	});
+	};
+	let values: Vec<_> = fields.iter().map(convert).collect();
+	let positional = values.clone();
 	let (_, _, where_clause) = input.generics.split_for_impl();
 
 	Ok(quote! {
@@ -112,6 +114,20 @@ fn expand(input: &DeriveInput) -> syn::Result<Tokens> {
 
 			fn into_properties(self) -> #krate::wire::Properties {
 				::std::vec![#((::std::string::String::from(#names), #values)),*]
+			}
+
+			fn into_values(self) -> ::std::vec::Vec<#krate::wire::Value> {
+				::std::vec![#(#positional),*]
+			}
+		}
+
+		// Collected for the event catalogue in server builds only.
+		#[cfg(not(target_arch = "wasm32"))]
+		#krate::__inventory::submit! {
+			#krate::EventSchema {
+				name: #name,
+				schema_id: #schema_id,
+				fields: <#ident as #krate::Event>::FIELDS,
 			}
 		}
 	})
