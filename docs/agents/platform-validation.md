@@ -23,6 +23,8 @@ Linux jobs use Nix's C/C++ compilers and Rust host linker with the Nix libraries
 
 Desktop workspace jobs have a 150-minute budget for cold builds and the separate dependency graphs used by compile-error fixtures. Linux workspace coverage keeps its 90-minute budget; application coverage has 120 minutes to finish cold generated-app builds, upload coverage, and save its build cache.
 
+On macOS, `lint:all` and the pre-push gate run `lint:swift`, using the same strict configuration as the Apple bridge job.
+
 The generated web dev journey gives the app server and final watcher announcement one shared 15-minute startup budget: phone guest bundles can still be compiling after the web server starts. Reload checks retain their own build deadlines and match the server rebuild's current status line, while SIGTERM shutdown must finish within 15 seconds. An abandoned test session stops its isolated process group so a failed startup leaves no compiler or app server behind.
 
 Android hosts carry rustc's `native-static-libs` into the generated JNI link line. Parser regressions cover plain and coloured compiler notes, including the styled prefix and final library name; captured stderr retains the terminal's colours.

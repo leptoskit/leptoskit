@@ -142,11 +142,12 @@ enum DevClientWire {
         var v4 = in_addr()
         if host.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
             let bytes = withUnsafeBytes(of: v4.s_addr) { Array($0) }
-            let a = Int(bytes[0])
-            let b = Int(bytes[1])
-            if a == 0 || a == 255 || (224...239).contains(a) { return false }
-            return a == 127 || a == 10 || (a == 169 && b == 254) || (a == 172 && (16...31).contains(b))
-                || (a == 192 && b == 168)
+            let firstOctet = Int(bytes[0])
+            let secondOctet = Int(bytes[1])
+            if firstOctet == 0 || firstOctet == 255 || (224...239).contains(firstOctet) { return false }
+            return firstOctet == 127 || firstOctet == 10 || (firstOctet == 169 && secondOctet == 254)
+                || (firstOctet == 172 && (16...31).contains(secondOctet))
+                || (firstOctet == 192 && secondOctet == 168)
         }
         var v6 = in6_addr()
         guard host.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 else { return false }

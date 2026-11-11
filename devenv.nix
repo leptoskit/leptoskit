@@ -958,6 +958,9 @@ in
         run_step "lint:docs" lint:docs
         run_step "lint:format" lint:format
         run_step "lint:kotlin" lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" lint:swift
+        ''}
         run_step "lint:releases" lint:releases
         run_step "schema:check" schema:check
         run_step "deny:check" deny:check
@@ -989,6 +992,9 @@ in
         run_step "lint:docs" ${currentDir}/.devenv/profile/bin/lint:docs
         run_step "lint:format" ${currentDir}/.devenv/profile/bin/lint:format
         run_step "lint:kotlin" ${currentDir}/.devenv/profile/bin/lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" ${currentDir}/.devenv/profile/bin/lint:swift
+        ''}
         run_step "test:cargo" ${currentDir}/.devenv/profile/bin/test:cargo
         run_step "security:zizmor" ${currentDir}/.devenv/profile/bin/security:zizmor
         run_step "lint:releases" ${currentDir}/.devenv/profile/bin/lint:releases

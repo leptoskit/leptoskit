@@ -2,11 +2,6 @@ import Foundation
 import LeptosKitBridge
 import UIKit
 
-/// The development companion asks the running controller to follow a guest URL.
-public enum DevelopmentSession {
-    @MainActor public static var follow: (@MainActor (String) -> Bool)?
-}
-
 // `leptoskit dev` reloads, which swap guests without the release store.
 extension LeptosKitApplicationController {
     /// Follows the guests `leptoskit dev` serves, starting after the one running.
