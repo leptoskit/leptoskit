@@ -1,5 +1,6 @@
 {
 	"name": "@leptoskit/pod",
+	"private": true,
 	"version": "0.3.0",
 	"description": "LK Pod — portable little-endian TLV codec for leptoskit RPC",
 	"type": "module",

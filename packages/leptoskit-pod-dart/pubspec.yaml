@@ -1,6 +1,7 @@
 name: leptoskit_pod
 description: LK Pod little-endian wire codec for leptoskit RPC.
 version: 0.1.0
+publish_to: none
 repository: https://github.com/leptoskit/leptoskit
 
 environment:
