@@ -940,6 +940,20 @@ fn configure(widget: &Widget, _dark: Option<bool>) {
 	}
 
 	if let Ok(entry) = widget.control.clone().downcast::<gtk::Entry>() {
+		// GtkEntry's text delegate does not inherit the entry's direction, and
+		// GTK 4.18 reverses alignment from that delegate. Point it the same way
+		// before the alignment compensation below reads it.
+		if let Some(text) = entry
+			.first_child()
+			.filter(|child| child.css_name() == "text")
+		{
+			text.set_direction(if rtl {
+				gtk::TextDirection::Rtl
+			} else {
+				gtk::TextDirection::Ltr
+			});
+		}
+
 		configure_entry(&entry, widget.kind, props, rtl);
 	}
 
@@ -1102,6 +1116,20 @@ fn configure_button(button: &gtk::Button, props: &NativeProps) {
 	}
 }
 
+/// Direction GTK 4.16 and earlier use when the entry's text has no strong
+/// character: the keyboard direction while focused, otherwise the widget's.
+fn password_reverses(entry: &gtk::Entry, rtl: bool) -> bool {
+	if entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
+		entry
+			.display()
+			.default_seat()
+			.and_then(|seat| seat.keyboard())
+			.is_some_and(|keyboard| keyboard.direction() == gtk::pango::Direction::Rtl)
+	} else {
+		rtl
+	}
+}
+
 fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rtl: bool) {
 	let value = props
 		.value
@@ -1127,38 +1155,23 @@ fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rt
 		}
 	};
 
-	// GtkText reverses xalign using its content's first strong direction,
-	// which can differ from the declared Yoga direction. Compensate at
-	// this native boundary so both Latin and Arabic honor logical start.
-	let natural = if kind == NativeKind::PasswordInput {
-		gtk::pango::Direction::Neutral
+	// GtkText reverses xalign. GTK 4.18 and later reverse the widget's
+	// direction; earlier releases reverse the text's first strong direction,
+	// which can differ from the direction Yoga resolved. Compensate so both
+	// Latin and Arabic honor logical start on either generation.
+	let reverses = if gtk::minor_version() >= 18 {
+		rtl
+	} else if kind == NativeKind::PasswordInput {
+		password_reverses(entry, rtl)
 	} else {
-		gtk::pango::find_base_dir(value)
-	};
-
-	let resolved_rtl = match natural {
-		gtk::pango::Direction::Rtl => true,
-		gtk::pango::Direction::Ltr => false,
-
-		_ if entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) => {
-			entry
-				.display()
-				.default_seat()
-				.and_then(|seat| seat.keyboard())
-				.is_some_and(|keyboard| keyboard.direction() == gtk::pango::Direction::Rtl)
+		match gtk::pango::find_base_dir(value) {
+			gtk::pango::Direction::Rtl => true,
+			gtk::pango::Direction::Ltr => false,
+			_ => password_reverses(entry, rtl),
 		}
-
-		_ => rtl,
 	};
 
-	EntryExt::set_alignment(
-		entry,
-		if resolved_rtl {
-			1.0 - physical
-		} else {
-			physical
-		},
-	);
+	EntryExt::set_alignment(entry, if reverses { 1.0 - physical } else { physical });
 
 	if entry.text() != value {
 		let position = entry.position();
