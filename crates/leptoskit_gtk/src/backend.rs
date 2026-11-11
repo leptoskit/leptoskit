@@ -67,6 +67,53 @@ struct Host {
 	root: Option<NodeId>,
 }
 
+/// Drops named controls out of the tree and puts them back.
+///
+/// GTK 4.22 can mark their accessible context realized before the bus is
+/// connected. Reinserting them after the window is mapped publishes a live
+/// object. The explicit name is applied after GtkButton's labelled-by
+/// relation. The slider already registers, and reparenting it would reset
+/// its value.
+fn reregister_accessible_controls(state: &RefCell<State>) {
+	let controls = state
+		.borrow()
+		.widgets
+		.values()
+		.filter(|widget| {
+			matches!(
+				widget.kind,
+				NativeKind::Button
+					| NativeKind::Pressable
+					| NativeKind::Checkbox
+					| NativeKind::Radio
+					| NativeKind::Vector
+					| NativeKind::Switch
+			)
+		})
+		.map(|widget| {
+			(
+				widget.control.clone(),
+				widget.props.accessibility_label.clone(),
+			)
+		})
+		.collect::<Vec<_>>();
+
+	for (control, label) in &controls {
+		let parent = control.parent();
+		let next = control.next_sibling();
+
+		if let Some(parent) = parent.as_ref() {
+			control.unparent();
+			control.insert_before(parent, next.as_ref());
+		}
+
+		if let Some(label) = label.as_deref() {
+			control.reset_relation(gtk::AccessibleRelation::LabelledBy);
+			control.update_property(&[gtk::accessible::Property::Label(label)]);
+		}
+	}
+}
+
 /// Real GTK4 widgets, created and mutated on the initializing GTK thread.
 ///
 /// Call [`gtk::init`] on the application thread before constructing this
@@ -239,80 +286,28 @@ impl GtkBackend {
 			.build();
 
 		self.track_pointers(&host);
-		window.present();
 		self.refresh();
 		drop(guard);
 		// GTK 4.22 marks an accessible context realized when it first assigns
 		// a bus path, even if the AT-SPI connection is not up yet, and then
-		// never registers that object. Once the window is mapped, drop each
-		// named control out of the tree and put it back so the next
-		// accessibility walk registers a live object. The explicit name is
-		// applied after GtkButton's labelled-by relation. Earlier GTK
-		// releases register the original context, so they keep it.
-		if gtk::minor_version() < 22 {
-			return window;
+		// never registers that object. When the window maps, drop each named
+		// control out of the tree and put it back so the next accessibility
+		// walk registers a live object. The map signal does that work, so
+		// this function does not pump the loop itself. Earlier GTK releases
+		// register the original context.
+		if gtk::minor_version() >= 22 {
+			let once = Rc::new(Cell::new(false));
+			let state = Rc::clone(&self.state);
+			window.connect_map(move |_| {
+				if once.replace(true) {
+					return;
+				}
+
+				reregister_accessible_controls(state.as_ref());
+			});
 		}
 
-		let context = glib::MainContext::default();
-		let deadline = std::time::Instant::now() + Duration::from_secs(2);
-
-		while !window.is_mapped() && std::time::Instant::now() < deadline {
-			while context.pending() {
-				context.iteration(false);
-			}
-
-			std::thread::sleep(Duration::from_millis(5));
-		}
-
-		let controls = self
-			.state
-			.borrow()
-			.widgets
-			.values()
-			.filter(|widget| {
-				matches!(
-					widget.kind,
-					NativeKind::Button
-						| NativeKind::Pressable
-						| NativeKind::Checkbox
-						| NativeKind::Radio
-						| NativeKind::Vector
-						| NativeKind::Switch
-				)
-			})
-			.map(|widget| {
-				(
-					widget.control.clone(),
-					widget.props.accessibility_label.clone(),
-				)
-			})
-			.collect::<Vec<_>>();
-
-		for (control, label) in &controls {
-			let parent = control.parent();
-			let next = control.next_sibling();
-
-			if let Some(parent) = parent.as_ref() {
-				control.unparent();
-				control.insert_before(parent, next.as_ref());
-			}
-
-			if let Some(label) = label.as_deref() {
-				control.reset_relation(gtk::AccessibleRelation::LabelledBy);
-				control.update_property(&[gtk::accessible::Property::Label(label)]);
-			}
-		}
-
-		while controls.iter().any(|(control, _)| !control.is_mapped())
-			&& std::time::Instant::now() < deadline
-		{
-			while context.pending() {
-				context.iteration(false);
-			}
-
-			std::thread::sleep(Duration::from_millis(5));
-		}
-
+		window.present();
 		window
 	}
 
