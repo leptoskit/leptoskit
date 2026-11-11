@@ -16,6 +16,13 @@ let
   # that file, so every script that can trigger such an install exports the
   # same setting. Remove both once the upstream issue is fixed.
   keepProcMacrosLoadable = "export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none";
+  linuxWebdriver = pkgs.writeText "leptoskit-webdriver.json" (
+    builtins.toJSON (
+      lib.recursiveUpdate (builtins.fromJSON (builtins.readFile ./webdriver.json)) {
+        "goog:chromeOptions".binary = lib.getExe pkgs.chromium;
+      }
+    )
+  );
 in
 {
   # The macOS frameworks come from the host Xcode toolchain (see `enterShell`);
@@ -73,6 +80,8 @@ in
       pkgs.swiftlint
     ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+      # Keep the browser and chromedriver on the same nixpkgs revision.
+      pkgs.chromium
       # cpal, behind the audio plugin, plays through ALSA.
       pkgs.alsa-lib
       pkgs.at-spi2-core
@@ -83,6 +92,10 @@ in
       pkgs.xdotool
       pkgs.xvfb-run
     ];
+
+  env = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    WASM_BINDGEN_TEST_WEBDRIVER_JSON = linuxWebdriver;
+  };
 
   enterShell = ''
     # Keep shell entry fast. Only bootstrap missing toolchains here; explicit

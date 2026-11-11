@@ -102,15 +102,24 @@ def upgrade(base, path, origin):
 
 
 def wait_until_ready(base, deadline):
+    probes = (
+        ("/readyz", "GET", None),
+        (f"{ANALYTICS}/api/summary", "POST", {"days": 7}),
+        (f"{ECHO}/headers", "GET", None),
+    )
     while True:
-        try:
-            status, _, _ = request(base, "/readyz")
-            if status == 200:
-                return
-        except OSError:
-            pass
+        pending = []
+        for path, method, body in probes:
+            try:
+                status, _, _ = request(base, path, method, body)
+                if status != 200:
+                    pending.append(f"{path} answered {status}")
+            except OSError as error:
+                pending.append(f"{path}: {error}")
+        if not pending:
+            return
         if time.monotonic() > deadline:
-            raise SystemExit(f"FAIL {base}/readyz never answered 200")
+            raise SystemExit(f"FAIL {base} routes never became ready: {', '.join(pending)}")
         time.sleep(2)
 
 
