@@ -8,15 +8,23 @@
 #   setup/scripts/analytics-size.sh [--enforce]
 #
 # With --enforce it fails over the budget. It edits analytics_app and
-# Cargo.lock for the second build and restores both, so run it on a clean
-# checkout. Run it in `devenv shell`, which has wasm-bindgen, wasm-opt and
-# brotli.
+# Cargo.lock for the second build and restores both from git, so it refuses
+# to start when either has uncommitted changes. Run it in `devenv shell`,
+# which has wasm-bindgen, wasm-opt and brotli.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 budget=$((12 * 1024))
 app=examples/analytics/analytics_app
+
+# The second build edits these and the exit trap restores them from git, so
+# uncommitted changes there would be lost: refuse before touching anything.
+if ! git diff --quiet HEAD -- "$app" Cargo.lock; then
+	echo "analytics-size: $app or Cargo.lock has uncommitted changes; commit or stash them first" >&2
+	exit 1
+fi
+
 out="$(mktemp -d)"
 trap 'git checkout -- "$app" Cargo.lock; rm -rf "$out"' EXIT
 

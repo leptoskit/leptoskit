@@ -9,9 +9,7 @@
 
 use std::cell::RefCell;
 
-use js_sys::Uint8Array;
 use wasm_bindgen::JsCast as _;
-use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
@@ -100,7 +98,7 @@ pub fn init(options: Options) {
 			}
 		})
 	});
-	let context = context(&window);
+	let context = context();
 	let mut client = match identity {
 		Some(identity) => Client::restore(Browser, options.config.clone(), context, identity),
 		None => Client::new(Browser, options.config.clone(), context),
@@ -120,12 +118,7 @@ pub fn init(options: Options) {
 	tick.forget();
 
 	let hidden = Closure::<dyn FnMut()>::new(|| {
-		let hidden = web_sys::window()
-			.and_then(|window| window.document())
-			.is_some_and(|document| {
-				document.visibility_state() == web_sys::VisibilityState::Hidden
-			});
-		if hidden {
+		if page_hidden() {
 			beacon();
 		}
 	});
@@ -148,24 +141,12 @@ pub fn capture_event<E: crate::Event>(event: E) {
 }
 
 /// Records a page view of the current page.
-pub fn capture_pageview(properties: Properties) {
-	let mut properties = properties;
-	if let Some(window) = web_sys::window() {
-		let location = window.location();
-		let mut add = |name: &str, value: Result<String, JsValue>| {
-			if let Ok(value) = value
-				&& !value.is_empty()
-				&& !properties.iter().any(|(have, _)| have == name)
-			{
-				properties.push((name.into(), Value::Text(value)));
-			}
-		};
-		add("$current_url", location.href());
-		add("$pathname", location.pathname());
-		add("$host", location.host());
-		if let Some(document) = window.document() {
-			add("$title", Ok(document.title()));
-			add("$referrer", Ok(document.referrer()));
+pub fn capture_pageview(mut properties: Properties) {
+	let page = page_view();
+	let names = ["$current_url", "$pathname", "$host", "$title", "$referrer"];
+	for (name, value) in names.into_iter().zip(page.split('\n')) {
+		if !value.is_empty() && !properties.iter().any(|(have, _)| have == name) {
+			properties.push((name.into(), Value::Text(value.into())));
 		}
 	}
 	capture("$pageview", properties);
@@ -263,28 +244,20 @@ fn save_identity() {
 	}
 }
 
-fn storage() -> Option<web_sys::Storage> {
-	web_sys::window()?.local_storage().ok().flatten()
-}
-
 fn read(key: &str) -> Option<String> {
-	storage()?.get_item(key).ok().flatten()
+	storage_get(key)
 }
 
 fn write(key: &str, value: Option<&str>) {
 	let persist =
 		STATE.with_borrow(|state| state.as_ref().is_some_and(|state| state.options.persist));
-	let Some(storage) = storage().filter(|_| persist) else {
-		return;
-	};
-	let _ = match value {
-		Some(value) => storage.set_item(key, value),
-		None => storage.remove_item(key),
-	};
+	if persist {
+		storage_set(key, value);
+	}
 }
 
 /// What's the same for every event from this page.
-fn context(window: &web_sys::Window) -> Properties {
+fn context() -> Properties {
 	let mut context: Properties = vec![
 		("$lib".into(), Value::Text("leptoskit-web".into())),
 		(
@@ -292,33 +265,91 @@ fn context(window: &web_sys::Window) -> Properties {
 			Value::Text(env!("CARGO_PKG_VERSION").into()),
 		),
 	];
-	let mut number = |name: &str, value: Result<JsValue, JsValue>| {
-		if let Some(value) = value.ok().and_then(|value| value.as_f64()) {
-			context.push((name.into(), Value::Int(value as i64)));
+	let page = page_context();
+	let mut values = page.split('\n');
+	for name in [
+		"$screen_width",
+		"$screen_height",
+		"$viewport_width",
+		"$viewport_height",
+	] {
+		if let Some(Ok(number)) = values.next().map(str::parse::<i64>) {
+			context.push((name.into(), Value::Int(number)));
 		}
-	};
-	if let Ok(screen) = window.screen() {
-		number("$screen_width", screen.width().map(JsValue::from));
-		number("$screen_height", screen.height().map(JsValue::from));
 	}
-	number("$viewport_width", window.inner_width());
-	number("$viewport_height", window.inner_height());
-	let navigator = window.navigator();
-	if let Some(locale) = navigator.language() {
-		context.push(("$locale".into(), Value::Text(locale)));
-	}
-	if let Ok(agent) = navigator.user_agent() {
-		context.push(("$raw_user_agent".into(), Value::Text(agent)));
-	}
-	let options = js_sys::Intl::DateTimeFormat::new(&js_sys::Array::new(), &js_sys::Object::new())
-		.resolved_options();
-	if let Some(zone) = js_sys::Reflect::get(&options, &"timeZone".into())
-		.ok()
-		.and_then(|zone| zone.as_string())
-	{
-		context.push(("$timezone".into(), Value::Text(zone)));
+	for name in ["$locale", "$timezone", "$raw_user_agent"] {
+		if let Some(text) = values.next().filter(|text| !text.is_empty()) {
+			context.push((name.into(), Value::Text(text.into())));
+		}
 	}
 	context
+}
+
+// The browser APIs the client uses, as small functions: one call each is
+// less code, in both the wasm and its JavaScript glue, than web-sys's
+// bindings and their error handling. The page's values are joined by
+// newlines, which none can hold. Storage and sending never throw: storage
+// that isn't there is skipped, and a failed request answers "", a retry.
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+const text = (value) => (value == null ? "" : String(value).replace(/\n/g, " "));
+export function page_context() {
+	const screen = globalThis.screen || {};
+	const navigator = globalThis.navigator || {};
+	let zone = "";
+	try {
+		zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	} catch (_) {}
+	return [screen.width, screen.height, globalThis.innerWidth, globalThis.innerHeight,
+		navigator.language, zone, navigator.userAgent].map(text).join("\n");
+}
+export function page_hidden() {
+	return globalThis.document?.visibilityState === "hidden";
+}
+export function storage_get(key) {
+	try {
+		return globalThis.localStorage.getItem(key);
+	} catch (_) {
+		return null;
+	}
+}
+export function storage_set(key, value) {
+	try {
+		if (value == null) globalThis.localStorage.removeItem(key);
+		else globalThis.localStorage.setItem(key, value);
+	} catch (_) {}
+}
+export async function fetch_batch(url, body, keepalive) {
+ try {
+  const r = await fetch(url, {method:"POST",body,keepalive});
+  const h = `${r.status} ${r.headers.get("retry-after")||""}|`;
+  if (!r.ok) return h;
+  const i = await unknown_schemas(r);
+  return i == null ? "" : h+i;
+ } catch (_) { return ""; }
+}
+export function send_beacon(url, body) {
+	try {
+		return globalThis.navigator.sendBeacon(url, body);
+	} catch (_) {
+		return false;
+	}
+}
+export function page_view() {
+	const location = globalThis.location || {};
+	const document = globalThis.document || {};
+	return [location.href, location.pathname, location.host, document.title, document.referrer]
+		.map(text).join("\n");
+}
+export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
+"#)]
+extern "C" {
+	fn page_context() -> String;
+	fn page_view() -> String;
+	fn page_hidden() -> bool;
+	fn storage_get(key: &str) -> Option<String>;
+	fn storage_set(key: &str, value: Option<&str>);
+	fn fetch_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
+	fn send_beacon(url: &str, body: &[u8]) -> bool;
 }
 
 /// Takes the next batch, if one may be sent now.
@@ -372,72 +403,33 @@ async fn send_waiting() {
 }
 
 async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
-	let Some(window) = web_sys::window() else {
+	let answer = JsFuture::from(fetch_batch(endpoint, body, body.len() <= KEEPALIVE_BYTES))
+		.await.ok().and_then(|answer| answer.as_string()).unwrap_or_default();
+	let Some((head, indices)) = answer.split_once('|') else {
 		return (Outcome::Retry { after: None }, Vec::new());
 	};
-	let init = web_sys::RequestInit::new();
-	init.set_method("POST");
-	init.set_body(&Uint8Array::from(body));
-	if body.len() <= KEEPALIVE_BYTES {
-		let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
-	}
-	let response = JsFuture::from(window.fetch_with_str_and_init(endpoint, &init))
-		.await
-		.ok()
-		.and_then(|response| response.dyn_into::<web_sys::Response>().ok());
-	match response {
-		Some(response) => {
-			let retry_after = response.headers().get("retry-after").ok().flatten();
-			let outcome = Outcome::from_status(response.status(), retry_after.as_deref());
-			if outcome != Outcome::Stored {
-				return (outcome, Vec::new());
-			}
-			let answer = JsFuture::from(unknown_schemas(&response))
-				.await
-				.ok()
-				.and_then(|value| value.as_string());
-			match answer {
-				Some(answer) => {
-					(
-						outcome,
-						answer
-							.split(',')
-							.filter_map(|index| index.parse().ok())
-							.map(|index| (index, "unknown_schema".to_owned()))
-							.collect(),
-					)
-				}
-				None => (Outcome::Retry { after: None }, Vec::new()),
-			}
-		}
-		None => (Outcome::Retry { after: None }, Vec::new()),
-	}
+	let Some((status, retry_after)) = head.split_once(' ') else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	let Ok(status) = status.parse() else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	let outcome = Outcome::from_status(status, Some(retry_after).filter(|after| !after.is_empty()));
+	let refused = indices.split(',').filter_map(|index| index.parse().ok())
+		.map(|index| (index, "unknown_schema".to_owned())).collect();
+	(outcome, refused)
 }
 
 /// Hands every waiting batch to `sendBeacon`, which sends it even as the
 /// page goes away. The answer never comes back, so a batch the browser
 /// accepted counts as stored.
 fn beacon() {
-	let Some(navigator) = web_sys::window().map(|window| window.navigator()) else {
-		return;
-	};
 	while let Some((pending, endpoint)) = take(true) {
-		let queued = navigator
-			.send_beacon_with_opt_js_u8_array(&endpoint, Some(&Uint8Array::from(&pending.body[..])))
-			.unwrap_or(false);
-		if queued {
+		if send_beacon(&endpoint, &pending.body) {
 			settle(Outcome::Stored, &[]);
 		} else {
 			settle(Outcome::Retry { after: None }, &[]);
 			return;
 		}
 	}
-}
-
-// Only unknown schemas can be retried; other per-event refusals are final.
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
-export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
-"#)]
-extern "C" {
-	fn unknown_schemas(response: &web_sys::Response) -> js_sys::Promise;
 }

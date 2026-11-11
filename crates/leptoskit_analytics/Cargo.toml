@@ -64,7 +64,7 @@ leptoskit_query = { workspace = true, optional = true, features = ["guest"] }
 js-sys = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true, features = ["Crypto", "Document", "Headers", "Location", "Navigator", "RequestInit", "Response", "Screen", "Storage", "VisibilityState", "Window"] }
+web-sys = { workspace = true, optional = true, features = ["Crypto", "Window"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 js-sys = { workspace = true }
