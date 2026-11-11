@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-fn files(root: &Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 	walkdir::WalkDir::new(root)
 		.into_iter()
 		.map(|entry| entry.unwrap())

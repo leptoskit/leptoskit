@@ -1206,6 +1206,38 @@ fn explicit_backend_adds_server_feature_only_to_its_separate_package() {
 }
 
 #[test]
+fn a_shared_client_and_backend_reports_server_feature_wiring_without_enabling_it_for_wasm() {
+	let fixture = tempfile::tempdir().unwrap();
+	let root = fixture.path();
+	fs::create_dir(root.join("src")).unwrap();
+	fs::write(root.join("src/lib.rs"), "pub fn app() {}\n").unwrap();
+	fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+	fs::write(
+		root.join("Cargo.toml"),
+		"[package]\nname = \"solo\"\nversion = \"0.1.0\"\nedition = \
+		 \"2024\"\n[dependencies]\nleptoskit = { version = \"0.1\", features = [\"db-sqlite\"] }\n",
+	)
+	.unwrap();
+	fs::write(
+		root.join("leptoskit.toml"),
+		"schema_version = 0\n[app]\nname = \"solo\"\n[build]\nbackend = true\n[db]\ndialect = \
+		 \"sqlite\"\n",
+	)
+	.unwrap();
+	let report = run(root, false);
+	assert!(root.join("src/sign_in.rs").is_file());
+	assert!(read(root, "src/main.rs").contains("mod sign_in;"));
+	assert!(
+		report
+			.next
+			.iter()
+			.any(|step| step.contains("leptoskit/server") && step.contains("backend build"))
+	);
+	assert!(!has_feature(&root.join("Cargo.toml"), "leptoskit", "server").unwrap());
+	assert!(run(root, false).changed.is_empty());
+}
+
+#[test]
 fn explicit_static_mode_leaves_the_backend_sources_and_features_alone() {
 	let fixture = workspace(true);
 	let root = fixture.path();

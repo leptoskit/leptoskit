@@ -498,13 +498,23 @@ fn server(
 			.chain(passwords.then_some("auth-passwords"))
 			.collect();
 		add_features(root, manifest, &features, report)?;
-	} else if passwords && !has_feature(manifest, "leptoskit", "auth-passwords")? {
-		report.next.push(
-			"Passwords are on in [auth.passwords]: turn on leptoskit's `auth-passwords` feature \
-			 for the server's build only (it hashes with Argon2id, which the browser bundle \
-			 doesn't need), such as through the feature your server build turns on."
-				.to_owned(),
-		);
+	} else {
+		if !has_feature(manifest, "leptoskit", "server")? {
+			report.next.push(format!(
+				"The generated server module in {shown} needs leptoskit's `server` feature. \
+				 Enable `leptoskit/server` through the Cargo feature your backend build turns on, \
+				 or use a separate backend package. Keep it out of the shared dependency's \
+				 features so browser and guest builds do not acquire server dependencies."
+			));
+		}
+		if passwords && !has_feature(manifest, "leptoskit", "auth-passwords")? {
+			report.next.push(
+				"Passwords are on in [auth.passwords]: turn on leptoskit's `auth-passwords` \
+				 feature for the server's build only (it hashes with Argon2id, which the browser \
+				 bundle doesn't need), such as through the feature your server build turns on."
+					.to_owned(),
+			);
+		}
 	}
 
 	let main_source = source::Source::read(main)?;
