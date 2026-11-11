@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_rpc/tests/api_spec.rs
-assertion_line: 262
 expression: spec
 ---
 {
@@ -39,7 +38,8 @@ expression: spec
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": "array",
+            "x-leptoskit-server-default": true
           },
           "required": false
         }

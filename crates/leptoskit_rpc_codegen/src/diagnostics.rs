@@ -23,6 +23,8 @@ use crate::schema::analyze;
 use crate::schema::has_default;
 use crate::schema::recognize_enum;
 use crate::spec::ApiSpec;
+use crate::spec::HttpInput;
+use crate::spec::SERVER_DEFAULT_SCHEMA_KEY;
 
 /// What kind of detail a target cannot carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -44,6 +46,9 @@ pub enum DiagnosticKind {
 	AdditionalPropertiesLost,
 	/// A function left out because the target cannot speak its encoding.
 	SkippedFunction,
+	/// The HTTP encoding cannot preserve every value allowed by an input
+	/// schema.
+	EncodingLoss,
 }
 
 /// One place where a target cannot faithfully generate the published RPC,
@@ -115,14 +120,29 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 
 		for param in &function.params {
 			let path = format!("functions.{}.params.{}", function.name, param.name);
+			if matches!(function.input, HttpInput::Query | HttpInput::Form)
+				&& walker.has_dynamic_input(&param.schema, &mut std::collections::BTreeSet::new())
+			{
+				walker.loss(
+					&path,
+					DiagnosticKind::EncodingLoss,
+					"query/form encoding cannot preserve every free-form JSON value, including \
+					 empty arrays and objects; use JSON input encoding"
+						.to_owned(),
+				);
+			}
 
 			// Without a default, a server reads an omitted nullable argument
-			// as null, so only a declared default makes the two differ. A
-			// `#[server(default = "...")]` value is not in the schema, so it
-			// goes unreported; reporting every `Option` argument would fail
-			// `--strict` for nearly every Go and Rust client.
+			// as null, so only a declared default makes the two differ. The
+			// annotation also covers default functions whose values cannot
+			// safely be evaluated while exporting the specification.
 			let collapsed = !param.required
-				&& has_default(&param.schema)
+				&& (has_default(&param.schema)
+					|| param
+						.schema
+						.get(SERVER_DEFAULT_SCHEMA_KEY)
+						.and_then(Value::as_bool)
+						== Some(true))
 				&& match options.language {
 					TargetLanguage::Go => walker.nullable_alias(&param.schema),
 					TargetLanguage::Rust | TargetLanguage::Cli => {
@@ -186,6 +206,54 @@ struct Walker<'a> {
 	target: TargetLanguage,
 	spec: &'a ApiSpec,
 	diagnostics: Vec<Diagnostic>,
+}
+
+impl Walker<'_> {
+	fn has_dynamic_input(
+		&self,
+		schema: &Value,
+		seen: &mut std::collections::BTreeSet<String>,
+	) -> bool {
+		let analyzed = analyze(schema);
+		if analyzed.unsupported.is_some() {
+			return false;
+		}
+		match analyzed.shape {
+			Shape::Any => true,
+			Shape::Ref(name) => {
+				if !seen.insert(name.to_owned()) {
+					return false;
+				}
+				let dynamic = self
+					.spec
+					.schema(name)
+					.is_some_and(|schema| self.has_dynamic_input(schema, seen));
+				seen.remove(name);
+				dynamic
+			}
+			Shape::Array { items } => {
+				items.is_none_or(|schema| self.has_dynamic_input(schema, seen))
+			}
+			Shape::Map { values } => {
+				values.is_none_or(|schema| self.has_dynamic_input(schema, seen))
+			}
+			Shape::Object(object) => {
+				object
+					.properties
+					.iter()
+					.any(|(_, schema)| self.has_dynamic_input(schema, seen))
+					|| object
+						.additional
+						.is_some_and(|schema| self.has_dynamic_input(schema, seen))
+			}
+			Shape::Tuple(items) | Shape::Union(items) => {
+				items
+					.iter()
+					.any(|schema| self.has_dynamic_input(schema, seen))
+			}
+			_ => false,
+		}
+	}
 }
 
 impl Walker<'_> {
