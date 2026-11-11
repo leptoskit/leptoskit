@@ -39,7 +39,9 @@ if [ -z "$binary" ]; then
 		echo "chrome_for_tests: npx is required to install Chrome ${version}" >&2
 		exit 1
 	fi
-	npx --yes @puppeteer/browsers@2 install "chrome@${version}" --path "$cache"
+	# npx prints the installed path on stdout. This script's stdout is only
+	# the json path: wasm-bindgen opens that path as a file.
+	npx --yes @puppeteer/browsers@2 install "chrome@${version}" --path "$cache" >&2
 	binary="$(find_binary)"
 fi
 
