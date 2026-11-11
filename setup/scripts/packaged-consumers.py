@@ -67,6 +67,9 @@ def main():
     environment = os.environ.copy()
     for key in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"]:
         environment.pop(key, None)
+    # Each consumer is a fresh workspace. Let mbx manage its target instead
+    # of creating a separate unmanaged build tree under the report directory.
+    environment.pop("CARGO_TARGET_DIR", None)
     environment["RUSTUP_TOOLCHAIN"] = capture(
         ["rustup", "show", "active-toolchain"], root, environment
     ).split()[0]
@@ -76,7 +79,6 @@ def main():
             raise ValueError("required target missing: wasm32-unknown-unknown")
         # Reusing a previous directory could leave stale successful evidence.
         output.mkdir(parents=True, exist_ok=False)
-        environment["CARGO_TARGET_DIR"] = str(output / "target")
     revision = capture(["git", "rev-parse", "HEAD"], root, environment)
     metadata = json.loads(capture(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], root, environment

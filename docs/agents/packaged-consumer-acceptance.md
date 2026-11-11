@@ -18,7 +18,7 @@ python3 setup/scripts/packaged-consumers.py \
 
 The output directory must not already exist. All eight profiles are mandatory; absent tools, a missing Wasm target, missing/stale packages, registry fallback, feature leakage or a failed build fail the gate. A final `acceptance.json` appears only after all profiles pass. It records archive hashes, the toolchain, each lockfile hash, and the resolved feature sets. Per-profile logs and metadata are retained on failure. Publication uploads these small evidence files without uploading build targets or package trees.
 
-The gate shares a target directory across the serial consumers to conserve space. Separate Cargo invocations and independent workspace manifests still resolve their feature graphs independently. The recorded source revision is package metadata; it is not a cryptographic proof that those bytes came from that revision. Exact archive hashes identify what the gate actually tested. The workflow still performs its existing crate packaging verification before this step.
+The gate leaves target management to `mbx` instead of setting `CARGO_TARGET_DIR`. Separate Cargo invocations and independent workspace manifests resolve their feature graphs independently while compatible compiled dependencies can use the shared cache. The recorded source revision is package metadata; it is not a cryptographic proof that those bytes came from that revision. Exact archive hashes identify what the gate actually tested. The workflow still performs its existing crate packaging verification before this step.
 
 ## Evidence boundaries
 
