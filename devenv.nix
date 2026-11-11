@@ -1103,6 +1103,11 @@ in
           cargo test --locked --package leptoskit_wasm --test plugin_replies -- --ignored
         # The native runtime's real cancellable timer: a guest sleeps, abandons
         # a longer sleep, and runs real query retries, expiry, and intervals.
+        # The native analytics client: offline, saved in the app's files, and
+        # sent with the next run's events.
+        cargo build --locked --release --target wasm32-unknown-unknown --package analytics_guest_probe
+        LEPTOSKIT_ANALYTICS_GUEST="$guest_target/wasm32-unknown-unknown/release/analytics_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test analytics_guest -- --ignored
         cargo build --locked --release --target wasm32-unknown-unknown --package timer_guest_probe
         LEPTOSKIT_TIMER_GUEST="$guest_target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test timers -- --ignored

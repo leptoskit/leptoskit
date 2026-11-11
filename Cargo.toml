@@ -15,6 +15,7 @@ members = [
 	# crates with no manifest of its own, which a glob would match.
 	"examples/agent_ui_guest",
 	"examples/analytics/analytics_app",
+	"examples/analytics/analytics_guest",
 	"examples/analytics/analytics_service",
 	"examples/auth_pages",
 	"examples/counter",

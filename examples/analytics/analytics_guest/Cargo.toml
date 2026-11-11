@@ -1,0 +1,20 @@
+[package]
+name = "analytics_guest_probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "A compiled Rust guest that records analytics events with the native client, for leptoskit_wasm's headless host to check offline persistence and delivery."
+
+[lib]
+crate-type = ["cdylib"]
+
+# The guest compiles only for wasm32; the host build is an empty crate.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+any_spawner = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+leptoskit_analytics = { workspace = true, features = ["native"] }
+leptoskit_bridge = { workspace = true, features = ["guest"] }
+
+[lints]
+workspace = true

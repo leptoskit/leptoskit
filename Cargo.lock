@@ -146,6 +146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "analytics_guest_probe"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "futures",
+ "leptoskit_analytics",
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "analytics_service"
 version = "0.3.0"
 dependencies = [
@@ -7403,9 +7413,12 @@ dependencies = [
 name = "leptoskit_wasm"
 version = "0.3.0"
 dependencies = [
+ "leptoskit_analytics",
  "leptoskit_bridge",
  "leptoskit_log",
  "leptoskit_native",
+ "leptoskit_plugin_filesystem",
+ "leptoskit_plugin_http",
  "leptoskit_rive",
  "leptoskit_yoga",
  "log",
