@@ -387,7 +387,7 @@ fn generated_application_shares_behavior_and_selects_platform_overrides() {
 	fs::write(
 		components.join("mod.rs"),
 		"//! Reusable application components shared by all \
-		 platforms.\n\nleptoskit::platform_module!(pub mod heading = \"heading\");\n",
+		 platforms.\n\nleptoskit::platform_module!(pub mod heading = \"components/heading\");\n",
 	)
 	.expect("declare a platform_module heading");
 	fs::write(
