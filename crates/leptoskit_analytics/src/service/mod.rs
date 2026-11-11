@@ -42,6 +42,7 @@ pub use self::accept::JsonBatch;
 pub use self::accept::JsonEvent;
 pub use self::accept::Refused;
 pub use self::accept::Source;
+pub use self::ingest::Ack;
 pub use self::ingest::Committed;
 pub use self::ingest::Ingest;
 pub use self::ingest::IngestConfig;
