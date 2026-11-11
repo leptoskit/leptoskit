@@ -6,4 +6,6 @@
 
 Compile eight separate browser, guest, server and auth feature combinations from the actual Cargo package payloads before publication. Require complete package resolution and reject server features in client builds. Retain per-consumer build logs and exact archive and lockfile hashes; failed or incomplete runs produce no successful acceptance report.
 
+Reject archive paths and directory names that alias by case on every host, so Linux validation also catches archives that cannot extract on a case-insensitive filesystem.
+
 Run validation during release dry runs without publisher credentials. Before upload, require freshly prepared archives to match the hashes from the successful consumer run on the same revision.
