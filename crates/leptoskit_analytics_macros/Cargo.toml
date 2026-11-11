@@ -1,0 +1,26 @@
+[package]
+name = "leptoskit_analytics_macros"
+version = "0.3.0"
+authors.workspace = true
+categories = ["development-tools::procedural-macro-helpers"]
+edition.workspace = true
+homepage.workspace = true
+keywords = ["analytics", "macros", "leptoskit"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "`#[derive(Event)]`, behind leptoskit_analytics's typed events."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+convert_case = { workspace = true }
+proc-macro-crate = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

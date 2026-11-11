@@ -1,0 +1,5 @@
+error: an event's name must have 1 to 200 bytes and can't start with `$`, which leptoskit's own events use: set it with `#[event(name = "...")]`
+ --> tests/ui/reserved_name.rs:3:8
+  |
+3 | struct Viewed {
+  |        ^^^^^^

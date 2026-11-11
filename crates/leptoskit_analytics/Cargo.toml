@@ -21,6 +21,11 @@ required-features = ["service"]
 name = "service"
 required-features = ["service"]
 
+# Typed events, derived.
+[[test]]
+name = "event"
+required-features = ["derive"]
+
 # The server's client, sending to the service.
 [[test]]
 name = "client"
@@ -33,6 +38,7 @@ required-features = ["service", "server-client"]
 # `tests/dependencies.rs` keeps it that way.
 chrono = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
+leptoskit_analytics_macros = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
 leptoskit_db = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, optional = true, features = ["client"] }
@@ -75,6 +81,7 @@ leptoskit_apm = { workspace = true, features = ["server"] }
 proptest = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+trybuild = { workspace = true }
 
 [features]
 default = []
@@ -96,6 +103,9 @@ service = [
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",
 ]
+# `#[derive(Event)]`, for typed events. A proc macro: it adds nothing to
+# an app's bundle.
+derive = ["dep:leptoskit_analytics_macros"]
 # The client for the app's server: `client::server::Analytics`, sending in
 # the background with Tokio.
 server-client = ["dep:reqwest", "dep:tokio", "tokio/macros"]

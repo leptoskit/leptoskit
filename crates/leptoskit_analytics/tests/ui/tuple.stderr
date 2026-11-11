@@ -1,0 +1,5 @@
+error: an event's properties need names: use a struct with named fields
+ --> tests/ui/tuple.rs:2:15
+  |
+2 | struct Clicked(String);
+  |               ^^^^^^^^

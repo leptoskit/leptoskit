@@ -1,0 +1,5 @@
+error: an event is a struct with named fields, one per property
+ --> tests/ui/enum.rs:2:6
+  |
+2 | enum Clicked {
+  |      ^^^^^^^

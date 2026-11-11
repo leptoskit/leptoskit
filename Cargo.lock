@@ -5229,6 +5229,7 @@ dependencies = [
  "flate2",
  "insta",
  "js-sys",
+ "leptoskit_analytics_macros",
  "leptoskit_apm",
  "leptoskit_axum",
  "leptoskit_bridge",
@@ -5245,11 +5246,23 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+ "trybuild",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_analytics_macros"
+version = "0.3.0"
+dependencies = [
+ "convert_case 0.11.0",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
