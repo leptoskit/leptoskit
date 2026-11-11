@@ -286,28 +286,41 @@ impl GtkBackend {
 			.build();
 
 		self.track_pointers(&host);
+		// Present while notifications are suppressed. The first focus would
+		// otherwise be reported as a mount event while the caller still
+		// holds its surface borrow. Refresh after the window is mapped so a
+		// spinner sees that and starts without emitting the focus event.
+		window.present();
 		self.refresh();
 		drop(guard);
 		// GTK 4.22 marks an accessible context realized when it first assigns
 		// a bus path, even if the AT-SPI connection is not up yet, and then
-		// never registers that object. When the window maps, drop each named
+		// never registers that object. After the window maps, drop each named
 		// control out of the tree and put it back so the next accessibility
-		// walk registers a live object. The map signal does that work, so
-		// this function does not pump the loop itself. Earlier GTK releases
-		// register the original context.
+		// walk registers a live object. An idle does that after this function
+		// returns, so the caller's borrow is gone before the reparent runs.
+		// Earlier GTK releases register the original context.
 		if gtk::minor_version() >= 22 {
-			let once = Rc::new(Cell::new(false));
 			let state = Rc::clone(&self.state);
-			window.connect_map(move |_| {
+			let once = Rc::new(Cell::new(false));
+			let schedule = move || {
 				if once.replace(true) {
 					return;
 				}
 
-				reregister_accessible_controls(state.as_ref());
-			});
+				let state = Rc::clone(&state);
+				glib::idle_add_local_once(move || {
+					reregister_accessible_controls(state.as_ref());
+				});
+			};
+
+			if window.is_mapped() {
+				schedule();
+			} else {
+				window.connect_map(move |_| schedule());
+			}
 		}
 
-		window.present();
 		window
 	}
 

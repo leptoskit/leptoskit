@@ -322,6 +322,12 @@ mod linux {
 		// server has mapped the window and allocated the shared tree.
 		let root = surface.backend().view(surface.root().unwrap()).unwrap();
 		pump_until(|| window.is_mapped() && root.width() > 0);
+		// GTK 4.22 republishes named controls on an idle after map. Drain
+		// that idle before a test reads the accessibility tree.
+		let context = gtk::glib::MainContext::default();
+		while context.pending() {
+			context.iteration(false);
+		}
 		Mounted {
 			surface: Rc::new(RefCell::new(surface)),
 			window,
