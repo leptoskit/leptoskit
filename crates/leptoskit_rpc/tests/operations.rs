@@ -672,9 +672,7 @@ async fn server_code_calls_operations(db: &Db) {
 	})
 	.await
 	.unwrap();
-	let rpc::wire::WireBody::Json(count) = count else {
-		panic!("expected JSON");
-	};
+	let rpc::wire::WireBody::Json(count) = count;
 	assert!(count.as_u64().is_some_and(|count| count > 0));
 	let reads = sink.take();
 	assert_eq!(reads.len(), 1);
@@ -692,9 +690,7 @@ async fn server_code_calls_operations(db: &Db) {
 	})
 	.await
 	.unwrap();
-	let rpc::wire::WireBody::Json(_) = body else {
-		panic!("expected JSON");
-	};
+	let rpc::wire::WireBody::Json(_) = body;
 	assert_eq!(sink.take(), Vec::<leptoskit_db::ReadEntry>::new());
 }
 
