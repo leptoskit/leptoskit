@@ -47,10 +47,16 @@ pub fn App() -> impl leptos::prelude::IntoView {
 		}
 	};
 
-	move || {
-		changed.get();
-		leptoskit::web::render(navigation.render())
-	}
+	Suspense(
+		SuspenseProps::builder()
+			.children(TypedChildren::to_children(move || {
+				move || {
+					changed.get();
+					leptoskit::web::render(navigation.render())
+				}
+			}))
+			.build(),
+	)
 }
 
 /// The complete HTML document sent by the SSR server.

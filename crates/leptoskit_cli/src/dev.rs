@@ -130,6 +130,12 @@ pub fn run(options: Options<'_>) -> Result<()> {
 		browser,
 	} = options;
 	let (config, root) = LeptoskitConfig::load()?;
+	// The watcher asks Cargo for the workspace before any platform starts.
+	// A bad address has to fail first: `dev` promises that, and a project
+	// with no manifest never gets as far as a build.
+	if serves_web(&config, platforms) {
+		let _ = parse_serve_address(&config)?;
+	}
 
 	if terminal_only(&config, &root, platforms, open, port, devices, studio)? {
 		return Ok(());
@@ -209,6 +215,37 @@ fn announce(root: &Path, open: bool, web: Option<&Web>) {
 	{
 		ui::warning(format_args!("could not open the browser: {error:#}"));
 	}
+}
+
+/// Whether `dev` will serve the web app for this request.
+///
+/// Matches `native::select`: the web server starts only when the app's
+/// default platform is web or server and the request includes that platform.
+fn serves_web(config: &LeptoskitConfig, requested: &[Platform]) -> bool {
+	let has_web = matches!(
+		config.app.default_platform,
+		Platform::Web | Platform::Server
+	);
+	if !has_web {
+		return false;
+	}
+
+	let web_platform = |platform: Platform| matches!(platform, Platform::Web | Platform::Server);
+	if requested.is_empty() {
+		config.app.default_platform == Platform::Server
+			|| config.app.platforms.iter().copied().any(web_platform)
+	} else {
+		requested.iter().copied().any(web_platform)
+	}
+}
+
+fn parse_serve_address(config: &LeptoskitConfig) -> Result<IpAddr> {
+	config.serve.address.parse().with_context(|| {
+		format!(
+			"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
+			config.serve.address
+		)
+	})
 }
 
 fn terminal_only(
@@ -754,12 +791,7 @@ impl Web {
 		database: Option<&crate::db::DevDatabase>,
 	) -> Result<Self> {
 		let port = port.unwrap_or(config.serve.port);
-		let ip: IpAddr = config.serve.address.parse().with_context(|| {
-			format!(
-				"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
-				config.serve.address
-			)
-		})?;
+		let ip = parse_serve_address(config)?;
 		let address = SocketAddr::new(ip, port);
 		// Bind first, so a taken port fails before the initial build rather
 		// than leaving a dev loop with no server behind it.
