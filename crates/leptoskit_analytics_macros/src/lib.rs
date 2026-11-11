@@ -12,6 +12,7 @@ use quote::quote;
 use quote::quote_spanned;
 use syn::DeriveInput;
 use syn::LitStr;
+use syn::ext::IdentExt as _;
 use syn::spanned::Spanned as _;
 
 /// Declares an analytics event. See `leptoskit_analytics::Event`.
@@ -47,11 +48,18 @@ fn expand(input: &DeriveInput) -> syn::Result<Tokens> {
 		|| ident.to_string().to_case(Case::Snake),
 		|name| name.value(),
 	);
-	if name.is_empty() || name.len() > MAX_NAME_BYTES || name.starts_with('$') {
+	// The service's own rule (`accept::valid_name`), so a name that compiles
+	// is a name the service stores, plus `$`, which leptoskit's events use.
+	if name.trim().is_empty()
+		|| name.len() > MAX_NAME_BYTES
+		|| name.chars().any(char::is_control)
+		|| name.starts_with('$')
+	{
 		return Err(syn::Error::new_spanned(
 			ident,
-			"an event's name must have 1 to 200 bytes and can't start with `$`, which leptoskit's \
-			 own events use: set it with `#[event(name = \"...\")]`",
+			"an event's name needs 1 to 200 bytes, not only spaces, with no control characters \
+			 such as newlines, and can't start with `$`, which leptoskit's own events use: set it \
+			 with `#[event(name = \"...\")]`",
 		));
 	}
 	if !input.generics.params.is_empty() {
@@ -77,9 +85,10 @@ fn expand(input: &DeriveInput) -> syn::Result<Tokens> {
 		}
 	};
 
+	// The logical name: a field written `r#type` is the property `type`.
 	let names: Vec<String> = fields
 		.iter()
-		.map(|field| field.ident.as_ref().expect("named").to_string())
+		.map(|field| field.ident.as_ref().expect("named").unraw().to_string())
 		.collect();
 	let types: Vec<String> = fields
 		.iter()
@@ -110,6 +119,10 @@ fn expand(input: &DeriveInput) -> syn::Result<Tokens> {
 
 /// FNV-1a over the name and each field's name and type: the same declaration
 /// always has the same id, and changing a field's name or type changes it.
+///
+/// A type is hashed as it's spelled, without whitespace, not as what it
+/// resolves to: `String` and `std::string::String`, or a type alias and its
+/// target, give different ids though they're the same type.
 fn schema_id(name: &str, names: &[String], types: &[String]) -> u64 {
 	let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
 	let mut eat = |text: &str| {

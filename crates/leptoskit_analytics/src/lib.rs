@@ -36,9 +36,11 @@ pub const SERVICE: &str = "analytics";
 /// client.capture_event(CheckoutCompleted { plan: "pro".into(), amount_cents: 1999 });
 /// ```
 ///
-/// Without `name`, the event is named after the struct, in `snake_case`.
-/// Each field becomes a property of the same name; its type must convert
-/// into [`wire::Value`].
+/// Without `name`, the event is named after the struct, in `snake_case`. The
+/// name follows the service's rules: not blank, at most 200 bytes, no control
+/// characters, and no leading `$`, which leptoskit's own events use.
+/// Each field becomes a property of the same name (a field written `r#type`
+/// is the property `type`); its type must convert into [`wire::Value`].
 pub trait Event {
 	/// The event's name.
 	const NAME: &'static str;
@@ -46,6 +48,8 @@ pub trait Event {
 	const FIELDS: &'static [(&'static str, &'static str)];
 	/// A hash of the name and the fields' names and types: the same
 	/// declaration always has the same id, and any change to it changes it.
+	/// Types are hashed as spelled, so `String` and `std::string::String`
+	/// differ.
 	const SCHEMA_ID: u64;
 
 	/// The event's properties, in field order.

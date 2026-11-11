@@ -24,6 +24,12 @@ struct CheckoutCompleted {
 #[derive(Event)]
 struct SignedUp;
 
+#[derive(Event)]
+struct Searched {
+	r#type: String,
+	r#match: bool,
+}
+
 #[test]
 fn the_derive_names_the_event_and_lists_its_properties() {
 	assert_eq!(CheckoutCompleted::NAME, "checkout_completed");
@@ -63,6 +69,20 @@ impl Platform for Clock {
 	fn fill_random(&self, bytes: &mut [u8]) {
 		bytes.fill(7);
 	}
+}
+
+#[test]
+fn raw_field_names_are_their_logical_names() {
+	assert_eq!(Searched::FIELDS, [("type", "String"), ("match", "bool")]);
+	// Hashed by the logical names: what `searched` with `type` and `match`
+	// fields gives, with or without `r#`.
+	assert_eq!(Searched::SCHEMA_ID, 0x8702_2740_26e5_46fc);
+	let properties = Searched {
+		r#type: "notes".into(),
+		r#match: true,
+	}
+	.into_properties();
+	assert_eq!(properties, props! { "type" => "notes", "match" => true });
 }
 
 #[test]
