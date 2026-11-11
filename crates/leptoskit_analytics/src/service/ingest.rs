@@ -472,7 +472,7 @@ fn truncate(text: &mut String, max: usize) {
 }
 
 /// A multi-row `INSERT`, numbering placeholders for the dialect.
-struct Insert {
+pub(super) struct Insert {
 	dialect: Dialect,
 	sql: String,
 	args: Vec<Value>,
@@ -480,7 +480,7 @@ struct Insert {
 }
 
 impl Insert {
-	fn new(dialect: Dialect, table: &str, columns: &[&str]) -> Self {
+	pub(super) fn new(dialect: Dialect, table: &str, columns: &[&str]) -> Self {
 		let columns = columns
 			.iter()
 			.map(|column| format!("\"{column}\""))
@@ -494,7 +494,7 @@ impl Insert {
 		}
 	}
 
-	fn row(&mut self, values: Vec<Value>) {
+	pub(super) fn row(&mut self, values: Vec<Value>) {
 		if self.rows > 0 {
 			self.sql.push_str(", ");
 		}
@@ -521,7 +521,7 @@ impl Insert {
 		}
 	}
 
-	fn on_conflict_do_nothing(self, key: &str) -> Statement {
+	pub(super) fn on_conflict_do_nothing(self, key: &str) -> Statement {
 		let mut statement = self.finish();
 		let _ = write!(statement.sql, " ON CONFLICT (\"{key}\") DO NOTHING");
 		statement

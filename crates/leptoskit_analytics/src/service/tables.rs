@@ -80,6 +80,45 @@ pub struct IngestionWarning {
 	pub detail: String,
 }
 
+/// One window of an application-performance metric, as `leptoskit_apm`
+/// exports it over OTLP: a delta histogram point, such as how long one
+/// route took over one minute. Keyed by a hash of its series and start, so
+/// a retried export stores each window once.
+#[table(name = "apm_windows", index(metric, start), index(operation, start))]
+pub struct ApmWindow {
+	#[db(key)]
+	pub id: i64,
+	/// The metric's name, such as `leptoskit.operation.duration`.
+	#[db(min_len = 1, max_len = 200)]
+	pub metric: String,
+	#[db(max_len = 200)]
+	pub unit: String,
+	/// The resource's `service.name`, `service.instance.id`,
+	/// `service.version` and `deployment.environment.name`.
+	#[db(max_len = 200)]
+	pub service: String,
+	#[db(max_len = 200)]
+	pub instance: String,
+	#[db(max_len = 200)]
+	pub release: String,
+	#[db(max_len = 200)]
+	pub environment: String,
+	/// The point's `leptoskit.operation`, such as a route.
+	#[db(max_len = 400)]
+	pub operation: String,
+	/// The point's other attributes, as a JSON object with sorted keys.
+	pub attributes: String,
+	pub start: Timestamp,
+	pub end: Timestamp,
+	pub count: i64,
+	pub sum: Option<f64>,
+	pub max: Option<f64>,
+	/// The histogram's counts, as a JSON array, one more than its bounds.
+	pub bucket_counts: String,
+	/// The histogram's upper bounds, as a JSON array.
+	pub bounds: String,
+}
+
 leptoskit_db::export_schema!();
 
 /// Every migration, embedded for the service to apply when it starts.
