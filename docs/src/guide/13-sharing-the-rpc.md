@@ -354,6 +354,8 @@ When an endpoint has a default, omitting its argument and sending a zero value c
 
 After regenerating an older client, pass addresses for optional arguments you previously supplied directly. Optional nullable fields can still collapse JSON null into absence; `--strict` reports this limitation for fields, and for arguments whose schema declares a default. A plain `Option` argument loses nothing, because the server reads an omitted one as `None`. An `Option` argument with a server default function, `#[server(default = "...")]`, is the exception: Go and Rust clients cannot send an explicit null for it. New specs record the presence of that default without running it, so `--strict` reports the limitation. Regenerate older saved specs to receive this check. A `#[serde(default = "...")]` on an optional nullable model field also remains subject to strict field diagnostics.
 
+Exported schemas now carry `x-leptoskit-server-default: true` for arguments with server defaults. `rpc check` compares schema declarations conservatively and reports the added annotation as a change against an older export. If you pin compatibility baselines, review that change before replacing the independently selected baseline. The annotation records the default's presence; it does not establish that the default function's behavior is unchanged.
+
 ### Optional values in Python
 
 Omitting an optional argument lets the server apply its default. Passing `None` sends an explicit null. To forward an optional argument without sending it, import `UNSET` from the generated package and pass that value. This works for synchronous, asynchronous and live calls:
