@@ -491,14 +491,7 @@ fn server(
 		.as_ref()
 		.is_some_and(|auth| auth.passwords.enabled);
 
-	if layout.client.manifest != server.manifest {
-		let features: Vec<&str> = ["server", "auth"]
-			.into_iter()
-			.chain(idp.then_some("idp"))
-			.chain(passwords.then_some("auth-passwords"))
-			.collect();
-		add_features(root, manifest, &features, report)?;
-	} else {
+	if layout.client.manifest == server.manifest {
 		if !has_feature(manifest, "leptoskit", "server")? {
 			report.next.push(format!(
 				"The generated server module in {shown} needs leptoskit's `server` feature. \
@@ -515,6 +508,13 @@ fn server(
 					.to_owned(),
 			);
 		}
+	} else {
+		let features: Vec<&str> = ["server", "auth"]
+			.into_iter()
+			.chain(idp.then_some("idp"))
+			.chain(passwords.then_some("auth-passwords"))
+			.collect();
+		add_features(root, manifest, &features, report)?;
 	}
 
 	let main_source = source::Source::read(main)?;

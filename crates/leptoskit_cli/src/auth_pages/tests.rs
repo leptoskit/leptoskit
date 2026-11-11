@@ -1234,7 +1234,7 @@ fn a_shared_client_and_backend_reports_server_feature_wiring_without_enabling_it
 			.any(|step| step.contains("leptoskit/server") && step.contains("backend build"))
 	);
 	assert!(!has_feature(&root.join("Cargo.toml"), "leptoskit", "server").unwrap());
-	assert!(run(root, false).changed.is_empty());
+	assert_eq!(run(root, false).changed, Vec::<String>::new());
 }
 
 #[test]
