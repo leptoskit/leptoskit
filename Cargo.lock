@@ -5210,6 +5210,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_analytics"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "flate2",
+ "insta",
+ "leptoskit_axum",
+ "leptoskit_db",
+ "leptoskit_rpc",
+ "proptest",
+ "reqwest 0.12.28",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "leptoskit_android"
 version = "0.3.0"
 dependencies = [
