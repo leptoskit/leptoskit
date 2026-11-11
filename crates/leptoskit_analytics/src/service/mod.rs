@@ -12,6 +12,7 @@
 
 pub mod accept;
 pub mod ingest;
+pub mod limits;
 pub mod tables;
 
 use std::future::Future;
@@ -45,6 +46,7 @@ pub use self::ingest::Committed;
 pub use self::ingest::Ingest;
 pub use self::ingest::IngestConfig;
 pub use self::ingest::IngestError;
+pub use self::limits::Rate;
 pub use self::tables::MIGRATIONS;
 #[cfg(feature = "postgres")]
 pub use self::tables::POSTGRES_MIGRATIONS;
@@ -68,6 +70,10 @@ pub struct CaptureResult {
 	pub stored: u32,
 	/// Entries an earlier attempt already stored.
 	pub duplicates: u32,
+	/// Entries dropped because their `distinct_id` sent too many too fast.
+	/// Like refused ones, they're not worth retrying.
+	#[serde(default)]
+	pub rate_limited: u32,
 	pub refused: Vec<Refused>,
 }
 
@@ -97,6 +103,7 @@ pub async fn capture(
 	Ok(CaptureResult {
 		stored: committed.stored,
 		duplicates: committed.duplicates,
+		rate_limited: committed.rate_limited,
 		refused,
 	})
 }
@@ -215,6 +222,7 @@ async fn receive_batch(
 			axum::Json(CaptureResult {
 				stored: committed.stored,
 				duplicates: committed.duplicates,
+				rate_limited: committed.rate_limited,
 				refused,
 			})
 			.into_response()
