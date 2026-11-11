@@ -83,6 +83,157 @@ fn assert_ios_sources(
 	}
 }
 
+/// Every type a shipped source refers to is declared by another shipped
+/// source. A file a renderer uses but the platform inventory leaves out
+/// otherwise fails late, in Gradle's `compileDebugKotlin` or Xcode, instead of
+/// here.
+#[test]
+fn platform_source_lists_ship_every_type_they_reference() {
+	let bridge = Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi");
+	let android_extra = [
+		// `prepare_android_sources` copies these for every app before the
+		// inventory: the plugin dispatcher and the host view always exist.
+		"android/NativePlugin.kt",
+		"mobile/LeptosKitView.kt",
+	];
+
+	assert_lists_ship_referenced_types(
+		&bridge,
+		&["android", "mobile"],
+		"kt",
+		"ANDROID",
+		platform_sources::ANDROID,
+		&android_extra,
+	);
+	assert_lists_ship_referenced_types(
+		&bridge,
+		&["desktop", "mobile"],
+		"swift",
+		"MACOS",
+		platform_sources::MACOS,
+		&[],
+	);
+	assert_lists_ship_referenced_types(
+		&bridge,
+		&["desktop", "mobile"],
+		"swift",
+		"IOS",
+		platform_sources::IOS,
+		&[],
+	);
+}
+
+fn assert_lists_ship_referenced_types(
+	bridge: &Path,
+	directories: &[&str],
+	extension: &str,
+	list: &str,
+	listed: &[&str],
+	also_copied: &[&str],
+) {
+	let shipped: BTreeSet<&str> = listed.iter().chain(also_copied).copied().collect();
+	let mut shipped_types = BTreeSet::new();
+	let mut shipped_text = String::new();
+
+	for source in &shipped {
+		let text = std::fs::read_to_string(bridge.join(source)).unwrap();
+		shipped_types.extend(declared_types(&text, extension));
+		shipped_text.push_str(&text);
+		shipped_text.push('\n');
+	}
+
+	let mut candidates = Vec::new();
+
+	for directory in directories {
+		for entry in std::fs::read_dir(bridge.join(directory)).unwrap() {
+			let path = entry.unwrap().path();
+
+			if path.extension().is_some_and(|value| value == extension) {
+				candidates.push(path);
+			}
+		}
+	}
+
+	candidates.sort();
+
+	for path in candidates {
+		let relative = path
+			.strip_prefix(bridge)
+			.unwrap()
+			.to_str()
+			.unwrap()
+			.to_owned();
+
+		if shipped.contains(relative.as_str()) {
+			continue;
+		}
+
+		let text = std::fs::read_to_string(&path).unwrap();
+
+		for declared in declared_types(&text, extension) {
+			assert!(
+				shipped_types.contains(&declared) || !mentions(&shipped_text, &declared),
+				"{relative} declares {declared}, which a {list} source refers to; add it to \
+				 platform_sources::{list}"
+			);
+		}
+	}
+}
+
+/// Top-level type names, which are the names another source can refer to
+/// without qualification. Members stay out: only column-zero declarations are
+/// visible across files.
+fn declared_types(source: &str, extension: &str) -> Vec<String> {
+	let keywords: &[&str] = if extension == "kt" {
+		&["class", "interface", "object", "typealias"]
+	} else {
+		&["actor", "class", "enum", "protocol", "struct", "typealias"]
+	};
+
+	source
+		.lines()
+		.filter(|line| {
+			!line.starts_with(char::is_whitespace) && !line.trim_start().starts_with("//")
+		})
+		.filter_map(|line| top_level_type(line, keywords))
+		.collect()
+}
+
+fn top_level_type(line: &str, keywords: &[&str]) -> Option<String> {
+	let words: Vec<&str> = line
+		.split(|character: char| character.is_whitespace() || "(){}[]<>,:;=".contains(character))
+		.filter(|word| !word.is_empty() && !word.starts_with('@') && !word.starts_with("//"))
+		.collect();
+
+	for (index, word) in words.iter().enumerate() {
+		if !keywords.contains(word) {
+			continue;
+		}
+
+		let name = words.get(index + 1)?;
+		let mut characters = name.chars();
+
+		return (characters.next().is_some_and(char::is_uppercase)
+			&& characters.all(|character| character.is_alphanumeric() || character == '_'))
+		.then(|| (*name).to_owned());
+	}
+
+	None
+}
+
+fn mentions(source: &str, name: &str) -> bool {
+	source.match_indices(name).any(|(index, _)| {
+		let before = source[..index].chars().next_back();
+		let after = source[index + name.len()..].chars().next();
+
+		!before.is_some_and(identifier_character) && !after.is_some_and(identifier_character)
+	})
+}
+
+fn identifier_character(character: char) -> bool {
+	character.is_alphanumeric() || character == '_'
+}
+
 fn assert_android_sources(root: &Path, registry: &Registry) {
 	write(
 		&registry.bridge.join("android/NativePlugin.kt"),

@@ -34,6 +34,8 @@ host() {
 	cargo clippy "${deny[@]}" --workspace --all-features --all-targets
 	echo "clippy: examples/file_routes"
 	cargo clippy "${deny[@]}" --manifest-path examples/file_routes/Cargo.toml --all-targets
+	echo "clippy: examples/dev_client"
+	cargo clippy "${deny[@]}" --manifest-path examples/dev_client/Cargo.toml --all-targets
 	echo "clippy: devtools"
 	cargo clippy "${deny[@]}" --manifest-path devtools/Cargo.toml --all-targets
 }
@@ -49,7 +51,7 @@ wasm_full=(
 	leptoskit_canvas
 	leptoskit_extension
 	leptoskit_l10n
-	leptoskit_plugin_age_range leptoskit_plugin_app_integrity leptoskit_plugin_asset leptoskit_plugin_diagnostics leptoskit_plugin_blob leptoskit_plugin_accelerometer leptoskit_plugin_android_alarm_manager leptoskit_plugin_android_intent leptoskit_plugin_application leptoskit_plugin_audio
+	leptoskit_plugin_age_range leptoskit_plugin_app_integrity leptoskit_plugin_asset leptoskit_plugin_diagnostics leptoskit_plugin_blob leptoskit_plugin_accelerometer leptoskit_plugin_android_alarm_manager leptoskit_plugin_android_intent leptoskit_plugin_application leptoskit_plugin_audio leptoskit_plugin_recorder
 	leptoskit_plugin_autostart
 	leptoskit_plugin_barometer leptoskit_plugin_background_task leptoskit_plugin_battery leptoskit_plugin_brightness
 	leptoskit_plugin_calendar leptoskit_plugin_camera leptoskit_plugin_cellular leptoskit_plugin_contacts leptoskit_plugin_crypto leptoskit_plugin_device_keys leptoskit_plugin_device_motion leptoskit_plugin_dialog

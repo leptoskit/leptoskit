@@ -26,7 +26,7 @@ use clap::Subcommand;
 use serde_json::Value;
 use serde_json::json;
 
-mod devtools;
+pub(crate) mod devtools;
 
 /// The protocol revisions this server speaks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -106,7 +106,12 @@ fn http_router(hosts: Option<Vec<String>>) -> axum::Router {
 	#[derive(Clone)]
 	struct Dispatcher(fn(&Value) -> Option<Value>);
 
-	async fn message(State(dispatcher): State<Dispatcher>, body: String) -> (StatusCode, String) {
+	async fn message(
+		State(dispatcher): State<Dispatcher>,
+		body: String,
+	) -> axum::response::Response {
+		use axum::response::IntoResponse;
+
 		match serde_json::from_str::<Value>(&body) {
 			Ok(request) => {
 				// The control executor blocks on drivers and platform tools;
@@ -115,16 +120,19 @@ fn http_router(hosts: Option<Vec<String>>) -> axum::Router {
 					.await
 					.expect("dispatch cannot panic");
 				match answer {
-					Some(response) => (StatusCode::OK, response.to_string()),
+					// `Json` sets `application/json`. A plain string is
+					// `text/plain`, which streamable HTTP clients reject.
+					Some(response) => (StatusCode::OK, axum::Json(response)).into_response(),
 					// A notification: accepted, with nothing to answer.
-					None => (StatusCode::ACCEPTED, String::new()),
+					None => StatusCode::ACCEPTED.into_response(),
 				}
 			}
 			Err(error) => {
 				(
 					StatusCode::BAD_REQUEST,
-					error_response(&Value::Null, -32700, &error.to_string()).to_string(),
+					axum::Json(error_response(&Value::Null, -32700, &error.to_string())),
 				)
+					.into_response()
 			}
 		}
 	}
@@ -343,9 +351,50 @@ fn control_tools() -> Value {
 			"description": "Captures one screenshot and returns it as image content, with the \
 				saved path. The target fields are the control document's; without an \
 				application this captures the whole device screen.",
-			"inputSchema": document_schema_value()["properties"]["target"],
+			"inputSchema": screenshot_input_schema(),
+		},
+		{
+			"name": "read_logs",
+			"description": "Reads recent system logs from an Android device or an iOS simulator. \
+				`kind` is android or ios_simulator, `device` is the adb serial or simulator UDID, \
+				and `tail` is how many lines to keep (500 when omitted).",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"kind": {"type": "string", "enum": ["android", "ios_simulator"]},
+					"device": {"type": "string"},
+					"tail": {"type": "integer", "minimum": 1},
+				},
+				"required": ["kind", "device"],
+				"additionalProperties": false,
+			},
 		},
 	])
+}
+
+/// The screenshot tool's arguments: the control target, plus `label`.
+///
+/// The target in the document schema is a `$ref`. Copying that ref alone
+/// leaves `#/$defs/Target` with nothing to point at, and a client that
+/// resolves the tool schema rejects the call.
+fn screenshot_input_schema() -> Value {
+	let document = document_schema_value();
+	let defs = document.get("$defs").cloned().unwrap_or_else(|| json!({}));
+	let mut schema = defs
+		.get("Target")
+		.cloned()
+		.unwrap_or_else(|| json!({"type": "object"}));
+	if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+		properties.insert(
+			"label".to_owned(),
+			json!({
+				"type": "string",
+				"description": "Names the saved screenshot.",
+			}),
+		);
+	}
+	schema["$defs"] = defs;
+	schema
 }
 
 /// The published control document schema, as plain JSON.
@@ -439,8 +488,56 @@ fn call_tool(params: Option<&Value>) -> Result<Value, String> {
 				"isError": !outcome.passed,
 			}))
 		}
+		"read_logs" => read_logs(&arguments),
 		other => Err(format!("unknown tool {other:?}")),
 	}
+}
+
+/// Recent device logs, as one control step.
+fn read_logs(arguments: &Value) -> Result<Value, String> {
+	let kind = arguments
+		.get("kind")
+		.and_then(Value::as_str)
+		.ok_or("read_logs needs kind")?;
+	let device = arguments
+		.get("device")
+		.and_then(Value::as_str)
+		.filter(|device| !device.trim().is_empty())
+		.ok_or("read_logs needs device")?
+		.to_owned();
+	let kind = match kind {
+		"android" => leptoskit_testing::control::TargetKind::Android,
+		"ios_simulator" => leptoskit_testing::control::TargetKind::IosSimulator,
+		other => return Err(format!("read_logs does not read {other:?} logs")),
+	};
+	let tail = arguments.get("tail").and_then(Value::as_u64);
+	let document = leptoskit_testing::control::Document {
+		schema_version: leptoskit_testing::control::SCHEMA_VERSION,
+		target: leptoskit_testing::control::Target {
+			kind,
+			device: Some(device),
+			application: None,
+			url: None,
+			browser: None,
+			endpoint: None,
+			capabilities: std::collections::BTreeMap::new(),
+			headless: true,
+			startup_seconds: 30,
+			command_seconds: 30,
+			wait_seconds: 15,
+			artifacts: std::path::PathBuf::from("target/leptoskit-control"),
+		},
+		steps: vec![leptoskit_testing::control::Step::Logs {
+			tail,
+			minutes: None,
+		}],
+	};
+	let outcome = leptoskit_testing::control::run(&document);
+	let passed = outcome.passed;
+	Ok(json!({
+		"content": [{"type": "text", "text": serde_json::to_string_pretty(&outcome).unwrap()}],
+		"isError": !passed,
+	}))
 }
 
 fn text_result(text: &str) -> Value {
@@ -510,6 +607,7 @@ mod tests {
 				"list_devices",
 				"control",
 				"screenshot",
+				"read_logs",
 				"devtools_sessions",
 				"inspect_tree",
 				"inspect_node",
@@ -518,6 +616,8 @@ mod tests {
 				"navigate",
 				"highlight",
 				"set_state",
+				"runtime_errors",
+				"performance",
 			]
 		);
 		// The control tool carries the document schema, so clients validate
@@ -695,6 +795,15 @@ mod tests {
 			.await
 			.unwrap();
 		assert_eq!(ping.status(), StatusCode::OK);
+		// Streamable HTTP clients reject anything that is not JSON or an event
+		// stream. `(StatusCode, String)` is `text/plain`, so every tool call
+		// fails in those clients before the body is read.
+		assert_eq!(
+			ping.headers()
+				.get("content-type")
+				.and_then(|value| value.to_str().ok()),
+			Some("application/json")
+		);
 		let body = axum::body::to_bytes(ping.into_body(), 4096).await.unwrap();
 		assert!(
 			std::str::from_utf8(&body)
@@ -803,6 +912,54 @@ mod tests {
 			"[::1]:9000"
 		);
 		assert_eq!(allowed_hosts("0.0.0.0", 7331), None);
+	}
+
+	#[test]
+	fn the_screenshot_schema_resolves_every_ref() {
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 1,
+			"method": "tools/list",
+		}))
+		.unwrap();
+		let tools = response["result"]["tools"].as_array().unwrap();
+		let screenshot = tools
+			.iter()
+			.find(|tool| tool["name"] == "screenshot")
+			.expect("screenshot");
+		let schema = &screenshot["inputSchema"];
+		fn resolve(root: &Value, node: &Value) {
+			if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+				let mut cursor = root;
+				for part in reference.trim_start_matches("#/").split('/') {
+					cursor = cursor.get(part).unwrap_or(&Value::Null);
+				}
+				assert!(
+					!cursor.is_null(),
+					"{reference} does not resolve inside the screenshot schema"
+				);
+			}
+			match node {
+				Value::Array(items) => {
+					for item in items {
+						resolve(root, item);
+					}
+				}
+				Value::Object(fields) => {
+					for (key, value) in fields {
+						if key != "$ref" {
+							resolve(root, value);
+						}
+					}
+				}
+				_ => {}
+			}
+		}
+		resolve(schema, schema);
+		assert!(
+			schema.to_string().contains("label"),
+			"the capture's label has to be part of the tool schema"
+		);
 	}
 
 	#[test]
@@ -938,6 +1095,56 @@ mod tests {
 		}))
 		.unwrap();
 		// The target is missing its url; parse fails before the run starts.
+		assert_eq!(response["error"]["code"], -32602);
+	}
+
+	#[test]
+	fn read_logs_rejects_a_browser_and_reports_a_missing_device() {
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 11,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"kind": "web", "device": "x"}},
+		}))
+		.unwrap();
+		assert_eq!(response["error"]["code"], -32602);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 12,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"device": "emulator-5554"}},
+		}))
+		.unwrap();
+		assert_eq!(response["error"]["code"], -32602);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 13,
+			"method": "tools/call",
+			"params": {
+				"name": "read_logs",
+				"arguments": {"kind": "android", "device": "no-such-serial", "tail": 5},
+			},
+		}))
+		.unwrap();
+		assert_eq!(response["result"]["isError"], true);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 14,
+			"method": "tools/call",
+			"params": {
+				"name": "read_logs",
+				"arguments": {"kind": "ios_simulator", "device": "UDID"},
+			},
+		}))
+		.unwrap();
+		assert_eq!(response["result"]["isError"], true);
+		let response = dispatch(&json!({
+			"jsonrpc": "2.0",
+			"id": 15,
+			"method": "tools/call",
+			"params": {"name": "read_logs", "arguments": {"kind": "android", "device": " "}},
+		}))
+		.unwrap();
 		assert_eq!(response["error"]["code"], -32602);
 	}
 }

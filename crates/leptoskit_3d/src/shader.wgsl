@@ -73,7 +73,8 @@ struct Instance {
 	@location(9) emissive: vec4<f32>,
 	// rgb: rim colour; w: rim strength.
 	@location(10) rim: vec4<f32>,
-	// x: joints' first texel; y: morph header's texel; z: rim power bits.
+	// x: joints' first texel; y: morph header's texel; z: rim power bits;
+	// w: 1 when the part adds its light to what is behind it.
 	@location(11) params: vec4<u32>,
 }
 
@@ -101,6 +102,7 @@ struct Varyings {
 	@location(6) rim: vec4<f32>,
 	@location(7) @interpolate(flat) rim_power: f32,
 	@location(8) view_depth: f32,
+	@location(9) @interpolate(flat) additive: f32,
 }
 
 fn data_texel(index: u32) -> vec4<f32> {
@@ -156,6 +158,7 @@ fn finish(world: vec4<f32>, normal: vec3<f32>, vertex: Vertex, instance: Instanc
 	out.rim = instance.rim;
 	out.rim_power = bitcast<f32>(instance.params.z);
 	out.view_depth = -(globals.view * world).z;
+	out.additive = f32(instance.params.w);
 	return out;
 }
 
@@ -370,7 +373,9 @@ fn fs_mesh(in: Varyings, @builtin(front_facing) front: bool) -> @location(0) vec
 		color = linear_to_srgb(color);
 	}
 	let opacity = clamp(base.a, 0.0, 1.0);
-	return vec4<f32>(color * opacity, opacity);
+	// Premultiplied blending adds the colour and keeps what is behind it by
+	// one minus alpha, so an additive part writes no alpha at all.
+	return vec4<f32>(color * opacity, opacity * (1.0 - in.additive));
 }
 
 // The soft shadow under a model: a disc on the ground, darkest at its centre.

@@ -23,16 +23,36 @@ pub fn App() -> impl leptos::prelude::IntoView {
 	let state = Counter::default()
 		.on_change(move || changed.update(|value| *value = value.wrapping_add(1)));
 	reactive_graph::owner::provide_context(state.clone());
-	#[cfg(target_arch = "wasm32")]
-	let navigation = routes::Navigation::from_browser()
-		.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home));
-	#[cfg(not(target_arch = "wasm32"))]
-	let navigation = routes::Navigation::new(routes::Route::Home);
+	let navigation = {
+		#[cfg(target_arch = "wasm32")]
+		{
+			routes::Navigation::from_browser()
+				.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home))
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			#[cfg(feature = "ssr")]
+			{
+				leptoskit_router::ssr::navigation_from_request::<routes::Route>()
+					.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home))
+			}
+			#[cfg(not(feature = "ssr"))]
+			{
+				routes::Navigation::new(routes::Route::Home)
+			}
+		}
+	};
 
-	move || {
-		changed.get();
-		leptoskit::web::render(navigation.render())
-	}
+	Suspense(
+		SuspenseProps::builder()
+			.children(TypedChildren::to_children(move || {
+				move || {
+					changed.get();
+					leptoskit::web::render(navigation.render())
+				}
+			}))
+			.build(),
+	)
 }
 
 /// The complete HTML document sent by the SSR server.

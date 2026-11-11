@@ -4,7 +4,10 @@
 //! [`QueryScope::with_ssr`](crate::QueryScope::with_ssr) (or a custom codec)
 //! take part, and only successful data is carried: an error on the server is
 //! simply fetched again in the browser, which matches TanStack's default
-//! `shouldDehydrateQuery`.
+//! `shouldDehydrateQuery`. The one exception is the server's render, which
+//! also streams an error when the scope opted in with
+//! [`QueryScope::with_ssr_errors`](crate::QueryScope::with_ssr_errors), so
+//! the browser hydrates the page the server showed.
 //!
 //! Hydration is lazy. A dehydrated entry whose query does not exist yet waits
 //! in the cache and seeds the query the moment something creates it, so
@@ -45,6 +48,51 @@ pub struct DehydratedQuery {
 pub struct DehydratedState {
 	/// The dehydrated queries.
 	pub queries: Vec<DehydratedQuery>,
+}
+
+/// What the server's render streams for one query: the outcome it settled
+/// with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Rendered {
+	/// It succeeded.
+	Data(DehydratedQuery),
+	/// It failed, and the scope streams errors.
+	Error {
+		/// The error, encoded by the scope's error codec.
+		error: serde_json::Value,
+		/// When it failed, in epoch milliseconds.
+		error_updated_at: u64,
+		/// How many attempts had failed.
+		failure_count: u32,
+	},
+}
+
+/// `value` as JSON that is safe inside an HTML `<script>`: `<`, `>`, `&`,
+/// and the two JavaScript line terminators are written as `\u` escapes,
+/// which JSON decodes back to the same characters. They can only occur
+/// inside strings, so escaping them never changes the structure.
+pub(crate) fn to_script_safe_json(value: &impl Serialize) -> serde_json::Result<String> {
+	let json = serde_json::to_string(value)?;
+
+	if !json.contains(['<', '>', '&', '\u{2028}', '\u{2029}']) {
+		return Ok(json);
+	}
+
+	let mut escaped = String::with_capacity(json.len() + 16);
+
+	for character in json.chars() {
+		match character {
+			'<' => escaped.push_str("\\u003c"),
+			'>' => escaped.push_str("\\u003e"),
+			'&' => escaped.push_str("\\u0026"),
+			'\u{2028}' => escaped.push_str("\\u2028"),
+			'\u{2029}' => escaped.push_str("\\u2029"),
+			other => escaped.push(other),
+		}
+	}
+
+	Ok(escaped)
 }
 
 /// Whether this code is running during server rendering.

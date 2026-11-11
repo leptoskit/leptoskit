@@ -50,6 +50,37 @@ use semantics::Tag;
 
 type Handlers = Arc<[HandlerEntry]>;
 
+/// A screen that rebuilds whenever a signal `view` reads changes, keeping
+/// what it [remembers](crate::remember::remember) between builds.
+///
+/// Call it where the app's root component builds its view, with the function
+/// that builds the current screen:
+///
+/// ```ignore
+/// #[leptos::component]
+/// fn WebApp() -> impl leptos::prelude::IntoView {
+/// 	let navigation = Navigation::new(Route::Home);
+/// 	leptoskit::web::screen(move || navigation.render())
+/// }
+/// ```
+///
+/// It is `move || render(view())` with a [`ScreenState`] around each build,
+/// released with the component.
+///
+/// [`ScreenState`]: crate::remember::ScreenState
+pub fn screen(view: impl Fn() -> Element + Send + Sync + 'static) -> impl IntoView {
+	rebuilds(view)
+}
+
+/// The closure [`screen`] hands leptos: one build per call.
+fn rebuilds(
+	view: impl Fn() -> Element + Send + Sync + 'static,
+) -> impl Fn() -> AnyView + Send + Sync + 'static {
+	let state = crate::remember::ScreenState::new();
+	state.provide();
+	move || render(state.build(&view))
+}
+
 /// Converts a shared element tree into a Leptos view, including its stylesheet.
 ///
 /// This supports server rendering, hydration, and reactive client rendering.
@@ -67,6 +98,11 @@ type Handlers = Arc<[HandlerEntry]>;
 /// Panics for platform-specific `Custom` widgets or an invalid control tree
 /// (see [`Element::validate`]).
 pub fn render(element: Element) -> AnyView {
+	// In a browser, leptoskit's records and panics go to the console. A
+	// server rendering the same tree keeps its own logger.
+	#[cfg(target_arch = "wasm32")]
+	leptoskit_log::install();
+
 	element
 		.validate()
 		.unwrap_or_else(|error| panic!("invalid leptoskit element tree: {error}"));
@@ -81,6 +117,13 @@ pub fn render(element: Element) -> AnyView {
 		&NodePath::root(),
 	);
 	let mut css = crate::Theme::css();
+	let scope = root_scope(&sheets);
+	write!(
+		css,
+		":where([data-lk-root=\"{scope}\"],[data-lk-root=\"{scope}\"] [data-lk-style]){{{}}}",
+		styles::defaults()
+	)
+	.expect("write to String");
 	css.push_str(&sheets.into_values().collect::<String>());
 
 	if wants_focus {
@@ -91,7 +134,55 @@ pub fn render(element: Element) -> AnyView {
 		scroll_after_render();
 	}
 
+	lift_splash_after_render();
+
 	(html::style().child(css), root).into_any()
+}
+
+/// Lifts the HTML launch screen once a render is painted, unless the app
+/// holds it with [`crate::splash::hold`]: the web's `until = "first_frame"`.
+/// After it is gone, a render only looks it up.
+fn lift_splash_after_render() {
+	#[cfg(target_arch = "wasm32")]
+	{
+		if crate::splash::is_held() || splash_element().is_none() {
+			return;
+		}
+		// Scheduling fails only without a window, and then there is no splash.
+		let _ = request_animation_frame(|| {
+			if !crate::splash::is_held() {
+				lift_splash();
+			}
+		});
+	}
+}
+
+#[cfg(target_arch = "wasm32")]
+fn splash_element() -> Option<web_sys::Element> {
+	web_sys::window()?
+		.document()?
+		.get_element_by_id(crate::splash::HTML_ID)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+	/// The fade-out the injected splash defines, `crate::splash::HTML_DISMISS`
+	/// (a literal here, as wasm-bindgen needs). Throws when there is none.
+	#[wasm_bindgen(js_namespace = window, js_name = leptoskitDismissSplash, catch)]
+	fn dismiss_html_splash() -> Result<(), wasm_bindgen::JsValue>;
+}
+
+/// Lifts the HTML launch screen now: through the page's own
+/// `window.leptoskitDismissSplash`, which fades it out, or by removing it
+/// when the page defines none.
+pub(crate) fn lift_splash() {
+	#[cfg(target_arch = "wasm32")]
+	if dismiss_html_splash().is_err()
+		&& let Some(splash) = splash_element()
+	{
+		splash.remove();
+	}
 }
 
 /// Whether any element in the tree asks for keyboard focus.
@@ -258,7 +349,9 @@ fn render_node(
 	}
 
 	let devtools = path.attributes(&element);
-	let base = styles::base(&element, root);
+	// The render's stylesheet sets the defaults once, so each scope's sheet
+	// holds only what differs from them.
+	let base = styles::delta(&styles::base(&element, root));
 	let styles_active = element.classes().active_class().is_some();
 	let control = styles::control("", element.kind, styles_active);
 	let motion = element
@@ -353,8 +446,11 @@ fn render_node(
 		.collect::<Vec<_>>();
 	let focused = props.focused == Some(true);
 	let scroll = props.scroll_offset.map(scroll_target);
+	// Every sheet is in by now: the children's were added above.
+	let render_scope = root.then(|| root_scope(sheets));
 
 	let attrs = (
+		custom_attribute("data-lk-root", render_scope),
 		custom_attribute("data-lk-style", scope),
 		custom_attribute("data-lk-motion", motion_scope),
 		custom_attribute("data-lk-focus", focused.then_some("true")),
@@ -423,15 +519,29 @@ fn style_scope(base: &str, classes: &str, control: &str) -> String {
 	hasher.update(classes);
 	hasher.update(b"\0");
 	hasher.update(control);
-	format!("lk-{:x}", hasher.finalize())
+	short_scope("lk-", &hasher.finalize())
 }
 
-/// The motion scope a node's motion rules hash to, so equal motions share
-/// one sheet. Motion rules differ by delay as well as by movement, so a
-/// short hash keeps the many scopes of a staggered list small.
-fn motion_scope(rules: &str) -> String {
-	let digest = Sha256::digest(rules.as_bytes());
-	let mut scope = String::from("lk-m");
+/// The scope of one render: the defaults its stylesheet writes apply only
+/// under its root, since a stylesheet later in the document would otherwise
+/// reset the elements of renders before it. Two renders share a scope only
+/// when they wrote the same sheets, so either one's defaults are followed by
+/// every delta both trees need.
+fn root_scope(sheets: &BTreeMap<String, String>) -> String {
+	let mut hasher = Sha256::new();
+
+	for scope in sheets.keys() {
+		hasher.update(scope);
+		hasher.update(b"\0");
+	}
+
+	short_scope("lk-r", &hasher.finalize())
+}
+
+/// `prefix` and the first 64 bits of `digest` in hex: unique enough within
+/// one document, and short, since every element carries its scope.
+fn short_scope(prefix: &str, digest: &[u8]) -> String {
+	let mut scope = String::from(prefix);
 
 	for byte in &digest[..8] {
 		write!(scope, "{byte:02x}").expect("write to String");
@@ -440,10 +550,17 @@ fn motion_scope(rules: &str) -> String {
 	scope
 }
 
-/// The node's stylesheet: typed base styles, utility classes, and control
-/// decoration, under the selector its scope names. Only built for a scope
-/// the document has not seen, so a re-render that reuses every style builds
-/// none.
+/// The motion scope a node's motion rules hash to, so equal motions share
+/// one sheet. Motion rules differ by delay as well as by movement, so a
+/// short hash keeps the many scopes of a staggered list small.
+fn motion_scope(rules: &str) -> String {
+	short_scope("lk-m", &Sha256::digest(rules.as_bytes()))
+}
+
+/// The node's stylesheet: typed base styles that differ from the defaults,
+/// utility classes, and control decoration, under the selector its scope
+/// names. Only built for a scope the document has not seen, so a re-render
+/// that reuses every style builds none.
 fn scoped_sheet(
 	scope: &str,
 	base: &str,
@@ -453,8 +570,13 @@ fn scoped_sheet(
 	motion: &str,
 ) -> String {
 	let selector = format!("[data-lk-style=\"{scope}\"]");
+	let base = if base.is_empty() {
+		String::new()
+	} else {
+		format!(":where({selector}){{{base}}}")
+	};
 	format!(
-		":where({selector}){{{base}}}{}{}{motion}",
+		"{base}{}{}{motion}",
 		classes.css_scoped(&selector),
 		styles::control(&selector, kind, styles_active),
 	)
@@ -1014,6 +1136,39 @@ fn spans_view(spans: Vec<crate::TextSpan>) -> AnyView {
 		})
 		.collect_view()
 		.into_any()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod screen_tests {
+	use super::*;
+	use crate::remember::remember;
+
+	#[test]
+	fn a_screen_keeps_what_it_remembers_from_build_to_build() {
+		Owner::new().with(|| {
+			let taps = Arc::new(std::sync::Mutex::new(Vec::new()));
+			let seen = Arc::clone(&taps);
+			let build = rebuilds(move || {
+				let count = remember(|| 0_u32);
+				count.update(|count| *count += 1);
+				seen.lock().unwrap().push(count.get_untracked());
+				Element::text(count.get_untracked().to_string())
+			});
+			let first = build().to_html();
+			let second = build().to_html();
+			assert_eq!(*taps.lock().unwrap(), [1, 2]);
+			assert!(first.contains(">1<"), "{first}");
+			assert!(second.contains(">2<"), "{second}");
+		});
+	}
+
+	#[test]
+	fn a_screen_renders_what_its_view_builds() {
+		Owner::new().with(|| {
+			let html = screen(|| Element::text("Home")).into_view().to_html();
+			assert!(html.contains("Home"), "{html}");
+		});
+	}
 }
 
 #[cfg(test)]

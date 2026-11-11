@@ -45,18 +45,7 @@ pub fn generate(
 		crate::ui::warning(warning);
 	}
 
-	let generated = super::generated_dir(root, target);
-
-	if let Ok(metadata) = std::fs::symlink_metadata(&generated) {
-		anyhow::ensure!(
-			metadata.is_dir() && !metadata.file_type().is_symlink(),
-			".leptoskit must be an ordinary generated directory"
-		);
-	}
-
-	std::fs::create_dir_all(&generated)?;
-	let rust = rust_registrant(registry, target)?;
-	write(&generated.join("registrant.rs"), &rust)?;
+	registrant(root, config, registry, target)?;
 
 	match target {
 		Target::Macos => super::desktop::generate(root, config, registry),
@@ -82,6 +71,32 @@ pub fn generate(
 			anyhow::bail!("watch hosts are scaffolded before project::generate")
 		}
 	}
+}
+
+/// Writes only the Rust registrant the app-owned host crate includes, which
+/// is all the workspace needs to compile, without the platform project.
+pub(super) fn registrant(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+	target: Target,
+) -> Result<()> {
+	if matches!(target, Target::Windows | Target::Linux | Target::Tui) {
+		return super::rust_desktop::generate(root, config, registry, target);
+	}
+
+	let generated = super::generated_dir(root, target);
+
+	if let Ok(metadata) = std::fs::symlink_metadata(&generated) {
+		anyhow::ensure!(
+			metadata.is_dir() && !metadata.file_type().is_symlink(),
+			".leptoskit must be an ordinary generated directory"
+		);
+	}
+
+	std::fs::create_dir_all(&generated)?;
+	let rust = rust_registrant(registry, target)?;
+	write(&generated.join("registrant.rs"), &rust)
 }
 
 fn validate_ios_usage_descriptions(root: &Path, registry: &Registry) -> Result<()> {
@@ -287,7 +302,9 @@ fn android_host(
 	// extends the application's own.
 	let launch = crate::launch::Launch::load(root, config)?;
 
-	if let Some(launch) = &launch {
+	if let Some(launch) = &launch
+		&& launch.for_android()
+	{
 		let parent = super::manifest::application_theme(&manifest)?
 			.unwrap_or_else(|| "@android:style/Theme.Material.Light.NoActionBar".to_owned());
 		crate::launch::write_files(&res, launch.android_files(&parent)?)?;
@@ -309,7 +326,10 @@ fn android_host(
 		manifest = themed;
 	}
 
-	if (icon || launch.is_some())
+	let launch_assets = launch
+		.as_ref()
+		.is_some_and(crate::launch::Launch::for_android);
+	if (icon || launch_assets)
 		&& let Some(warning) = android_res_warning(root)
 	{
 		crate::ui::warning(warning);
@@ -323,6 +343,19 @@ fn android_host(
 	}
 
 	write(&dir.join("AndroidManifest.xml"), &manifest)?;
+	write_android_cmake(root, registry, &[])
+}
+
+/// Writes the `CMake` project that builds the host's JNI library around the
+/// Rust archive. `native` is what rustc reports for that archive with
+/// `--print native-static-libs`: an archive carries no link directives, so the
+/// plugins' system libraries (`aaudio`, `OpenSLES`, `mediandk`, …) have to be
+/// named again here.
+pub(super) fn write_android_cmake(
+	root: &Path,
+	registry: &Registry,
+	native: &[String],
+) -> Result<()> {
 	let cmake = format!(
 		"cmake_minimum_required(VERSION 3.22)\nproject(leptoskit_app LANGUAGES \
 		 CXX)\nadd_library(runtime STATIC IMPORTED)\nset_target_properties(runtime PROPERTIES \
@@ -331,13 +364,37 @@ fn android_host(
 		 cxx_std_20)\ntarget_compile_options(leptoskit_bridge_jni PRIVATE -Wall -Wextra \
 		 -Werror)\ntarget_compile_options(leptoskit_bridge_jni PRIVATE -ffunction-sections \
 		 -fdata-sections)\ntarget_link_options(leptoskit_bridge_jni PRIVATE \
-		 -Wl,--gc-sections)\ntarget_link_libraries(leptoskit_bridge_jni PRIVATE runtime log \
-		 android dl m)\n",
+		 -Wl,--gc-sections)\ntarget_link_libraries(leptoskit_bridge_jni PRIVATE {})\n",
 		quote(&super::generated_dir(root, Target::Android).join("lib/libleptoskit_bridge_ffi.a"))?,
 		quote(&registry.bridge.join("android/bridge.cpp"))?,
-		quote(&registry.bridge.join("mobile/app.cpp"))?
+		quote(&registry.bridge.join("mobile/app.cpp"))?,
+		android_link_libraries(native)
 	);
-	write(&dir.join("CMakeLists.txt"), &cmake)
+	write(&root.join(".leptoskit/android/CMakeLists.txt"), &cmake)
+}
+
+/// The C++ runtime, which the host project owns: `CMake` compiles the JNI
+/// library's own C++ against the NDK's `c++_static`, so a dependency's
+/// preference for `c++_shared` would only add an `libc++_shared.so` the APK
+/// does not carry.
+const ANDROID_CPP_RUNTIMES: [&str; 4] = ["c++", "c++_shared", "c++_static", "stdc++"];
+
+/// The host's link line: the archive, the NDK libraries the JNI library already
+/// names, then every library rustc reported, in its order, without repeats.
+fn android_link_libraries(native: &[String]) -> String {
+	let mut libraries = vec!["runtime", "log", "android", "dl", "m"];
+
+	for library in native {
+		let library = library.as_str();
+
+		if libraries.contains(&library) || ANDROID_CPP_RUNTIMES.contains(&library) {
+			continue;
+		}
+
+		libraries.push(library);
+	}
+
+	libraries.join(" ")
 }
 
 /// Copies each selected plugin's `FileProvider` paths XML into the generated
@@ -542,6 +599,30 @@ pub(super) fn rust_registrant(registry: &Registry, target: Target) -> Result<Str
 	Ok(rust)
 }
 
+/// Whether every plugin `registrant` installs goes through `App::register`,
+/// so that a factory that fails at launch is named in the app's error.
+#[cfg(test)]
+pub(crate) fn installs_only_named_plugins(registrant: &str) -> bool {
+	let lines: Vec<_> = registrant.lines().map(str::trim).collect();
+	let installs: Vec<_> = (0..lines.len())
+		.filter(|&index| {
+			lines[index].starts_with("app.install") || lines[index].starts_with("app.defer_service")
+		})
+		.collect();
+	!installs.is_empty()
+		&& installs.iter().all(|&index| {
+			index > 0
+				&& lines[index - 1].starts_with("app.register(\"")
+				&& lines[index - 1].ends_with("\", |app| {")
+		})
+		&& !registrant.lines().any(|line| {
+			let line = line.trim();
+			(line.contains("app.install") || line.contains("app.defer_service"))
+				&& !line.starts_with("app.install")
+				&& !line.starts_with("app.defer_service")
+		})
+}
+
 /// How a registrant spells the calls that install one plugin.
 pub(super) struct Installer {
 	/// The receiver and leading arguments of every install call.
@@ -553,6 +634,9 @@ pub(super) struct Installer {
 	indent: &'static str,
 	/// Whether the host runs plugin services.
 	services: bool,
+	/// Whether each plugin installs through `App::register`, which names the
+	/// plugin in the error when its factory or installation fails.
+	named: bool,
 }
 
 impl Installer {
@@ -563,6 +647,7 @@ impl Installer {
 		directories: "context",
 		indent: "    ",
 		services: false,
+		named: false,
 	};
 	/// Inside the mobile and macOS registrant's `create_with_context`
 	/// closure.
@@ -572,10 +657,28 @@ impl Installer {
 		directories: "_context",
 		indent: "                ",
 		services: true,
+		named: true,
 	};
 
 	fn install(&self, install: &str) -> String {
-		format!("{}{}", self.indent, self.call.replace("{install}", install))
+		self.call.replace("{install}", install)
+	}
+
+	/// Writes the statement that installs `plugin` with `expression`, an
+	/// install call that returns `Result<_, Error>`.
+	fn statement(&self, plugin: &str, expression: &str, rust: &mut String) -> Result<()> {
+		if self.named {
+			let indent = self.indent;
+			writeln!(
+				rust,
+				"{indent}app.register({plugin:?}, |app| {{\n{indent}    \
+				 {expression}\n{indent}}})?;"
+			)?;
+		} else {
+			writeln!(rust, "{}{expression}?;", self.indent)?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -599,11 +702,15 @@ pub(super) fn register_rust_plugin(
 			"{} declares a plugin service, which this host can't run",
 			plugin.name
 		);
-		writeln!(
+		installer.statement(
+			&plugin.name,
+			&format!(
+				"app.defer_service({}::{factory}(\n                        \
+				 &_context.data_dir,\n                        &_context.cache_dir,\n                    \
+				 )?)",
+				plugin.crate_name
+			),
 			rust,
-			"                app.defer_service({}::{factory}(\n                    \
-			 &_context.data_dir,\n                    &_context.cache_dir,\n                )?)?;",
-			plugin.crate_name
 		)?;
 
 		return Ok(());
@@ -625,13 +732,12 @@ pub(super) fn register_rust_plugin(
 
 	let crate_name = &plugin.crate_name;
 
-	match constructor {
+	let expression = match constructor {
 		Constructor::Type(kind) => {
-			writeln!(
-				rust,
-				"{}Box::new({crate_name}::{kind}::default()))?;",
+			format!(
+				"{}Box::new({crate_name}::{kind}::default()))",
 				installer.install(install)
-			)?;
+			)
 		}
 
 		Constructor::Factory(factory) if flavour == Flavour::Async => {
@@ -639,11 +745,10 @@ pub(super) fn register_rust_plugin(
 				.options_json
 				.as_ref()
 				.context("validated async plugin options missing")?;
-			writeln!(
-				rust,
-				"{}std::sync::Arc::new({crate_name}::{factory}({options:?})?))?;",
+			format!(
+				"{}std::sync::Arc::new({crate_name}::{factory}({options:?})?))",
 				installer.install("install_async")
-			)?;
+			)
 		}
 
 		Constructor::ContextFactory(factory) if flavour == Flavour::Async => {
@@ -651,32 +756,29 @@ pub(super) fn register_rust_plugin(
 				.options_json
 				.as_ref()
 				.context("validated async plugin options missing")?;
-			writeln!(
-				rust,
-				"{}std::sync::Arc::new({crate_name}::{factory}({context}, {options:?})?))?;",
+			format!(
+				"{}std::sync::Arc::new({crate_name}::{factory}({context}, {options:?})?))",
 				installer.install("install_async")
-			)?;
+			)
 		}
 
 		Constructor::Factory(factory) => {
-			writeln!(
-				rust,
+			format!(
 				"{}Box::new({crate_name}::{factory}(&{directories}.data_dir, \
-				 &{directories}.cache_dir)?))?;",
+				 &{directories}.cache_dir)?))",
 				installer.install(install)
-			)?;
+			)
 		}
 
 		Constructor::ContextFactory(factory) => {
-			writeln!(
-				rust,
-				"{}Box::new({crate_name}::{factory}({context})?))?;",
+			format!(
+				"{}Box::new({crate_name}::{factory}({context})?))",
 				installer.install(install)
-			)?;
+			)
 		}
-	}
+	};
 
-	Ok(())
+	installer.statement(&plugin.name, &expression, rust)
 }
 
 /// Native handlers retain order independently of Rust service installation.

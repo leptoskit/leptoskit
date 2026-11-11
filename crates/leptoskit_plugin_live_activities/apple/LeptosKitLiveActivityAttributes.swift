@@ -1,7 +1,7 @@
 import Foundation
 
-#if canImport(ActivityKit)
-import ActivityKit
+#if canImport(ActivityKit) && os(iOS)
+@preconcurrency import ActivityKit
 
 /// Portable Live Activity attributes shared by the plugin and Widget Extensions.
 ///

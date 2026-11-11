@@ -9,7 +9,9 @@ use objc2::runtime::AnyObject;
 use objc2_foundation::NSAttributedString;
 use objc2_foundation::NSAttributedStringKey;
 use objc2_foundation::NSDictionary;
+use objc2_foundation::NSNumber;
 use objc2_foundation::NSString;
+use objc2_ui_kit::NSBaselineOffsetAttributeName;
 use objc2_ui_kit::NSFontAttributeName;
 use objc2_ui_kit::NSForegroundColorAttributeName;
 use objc2_ui_kit::NSLineBreakMode;
@@ -34,6 +36,13 @@ pub(crate) fn alignment(style: TextStyle) -> NSTextAlignment {
 	}
 }
 
+/// How far to raise each line's glyphs so they sit centered in a line of
+/// `line_height`, as CSS centers them: UIKit puts the extra height above the
+/// glyphs, and takes a shortfall from above them too.
+pub(crate) fn baseline_offset(line_height: f64, natural: f64) -> f64 {
+	(line_height - natural) / 2.0
+}
+
 pub(crate) fn attributed(
 	text: &str,
 	style: TextStyle,
@@ -50,14 +59,30 @@ pub(crate) fn attributed(
 
 	paragraph.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
 	// SAFETY: UIKit exports immutable attribute keys with the documented font,
-	// UIColor, and paragraph-style value types supplied in this dictionary.
+	// UIColor, paragraph-style, and number value types supplied in this
+	// dictionary.
 	unsafe {
-		let keys: [&NSAttributedStringKey; 3] = [
+		let mut keys: Vec<&NSAttributedStringKey> = vec![
 			NSFontAttributeName,
 			NSForegroundColorAttributeName,
 			NSParagraphStyleAttributeName,
 		];
-		let values: [&AnyObject; 3] = [&font, color, &paragraph];
+		let offset;
+		let mut values: Vec<&AnyObject> = vec![&font, color, &paragraph];
+
+		// Every line is exactly the line height, with its glyphs centered.
+		if let Some(line_height) = style.line_height {
+			let line_height = f64::from(line_height);
+			paragraph.setMinimumLineHeight(line_height);
+			paragraph.setMaximumLineHeight(line_height);
+			offset = NSNumber::new_f64(baseline_offset(
+				line_height,
+				font.ascender() - font.descender(),
+			));
+			keys.push(NSBaselineOffsetAttributeName);
+			values.push(&offset);
+		}
+
 		let attributes = NSDictionary::from_slices(&keys, &values);
 		NSAttributedString::initWithString_attributes(
 			NSAttributedString::alloc(),

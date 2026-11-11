@@ -203,7 +203,17 @@ impl Reader<'_> {
 		}
 
 		if has(15) {
-			let weight = ["regular", "medium", "semibold", "bold"][self.u8() as usize];
+			let weight = [
+				"regular",
+				"medium",
+				"semibold",
+				"bold",
+				"thin",
+				"extra_light",
+				"light",
+				"extra_bold",
+				"black",
+			][self.u8() as usize];
 			props.insert("font_weight".into(), weight.into());
 		}
 
@@ -433,6 +443,29 @@ fn partial_animations_carry_only_their_parts() {
 		decode(&bytes),
 		json_transaction(Some(id.index()), &mutations)
 	);
+}
+
+#[test]
+fn every_weight_and_a_line_height_cross_in_the_binary_transaction() {
+	let mut yoga = Yoga::new();
+	let mutations = FontWeight::ALL
+		.into_iter()
+		.map(|weight| {
+			Mutation::Create {
+				id: yoga.create_node(),
+				kind: NativeKind::Text,
+				props: NativeProps {
+					font_weight: Some(weight),
+					// Not a typed field: it travels with the other properties.
+					line_height: Some(leptoskit_native::LineHeight::Relative(1.25)),
+					..NativeProps::text("Weighed")
+				},
+			}
+		})
+		.collect::<Vec<_>>();
+	let bytes = encode(None, &mutations, usize::MAX).unwrap();
+
+	assert_eq!(decode(&bytes), json_transaction(None, &mutations));
 }
 
 #[test]

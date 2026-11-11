@@ -698,6 +698,10 @@ impl<H: Http, C: Credentials> Api for Remote<H, C> {
 		})
 	}
 
+	fn signs_out_locally(&self) -> bool {
+		C::TRANSPORT == Transport::Bearer
+	}
+
 	fn devices(&self) -> Pending<'_, Vec<Device>> {
 		Box::pin(async move {
 			let response = self

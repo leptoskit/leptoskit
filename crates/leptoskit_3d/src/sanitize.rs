@@ -203,6 +203,7 @@ impl Op {
 	/// limit, so applying it cannot make the host allocate or loop without
 	/// limit.
 	#[must_use]
+	#[allow(clippy::too_many_lines)]
 	pub fn sanitized(self) -> Self {
 		match self {
 			Self::LoadAsset { asset, path } => {
@@ -226,6 +227,19 @@ impl Op {
 					node,
 					part: name(part, MAX_NAME_BYTES),
 					visible,
+				}
+			}
+			Self::SetPartOffset {
+				node,
+				part,
+				offset,
+				seconds,
+			} => {
+				Self::SetPartOffset {
+					node,
+					part: name(part, MAX_NAME_BYTES),
+					offset: offset.sanitized(),
+					seconds: bounded(seconds, 0.0, MAX_FADE),
 				}
 			}
 			Self::Play { node, play } => {
@@ -256,6 +270,13 @@ impl Op {
 					part: part.map(|part| name(part, MAX_NAME_BYTES)),
 					target: name(target, MAX_NAME_BYTES),
 					weight: bounded(weight, -MAX_MORPH_WEIGHT, MAX_MORPH_WEIGHT),
+				}
+			}
+			Self::SetBlend { node, part, blend } => {
+				Self::SetBlend {
+					node,
+					part: part.map(|part| name(part, MAX_NAME_BYTES)),
+					blend,
 				}
 			}
 			Self::SetMaterial {

@@ -18,22 +18,64 @@ pub const MAX_KEYFRAMES: usize = 16;
 
 /// One look in a [`Keyframes`] sequence.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+	feature = "serde",
+	derive(serde::Serialize, serde::Deserialize),
+	serde(from = "KeyframeWire", into = "KeyframeWire")
+)]
 pub struct Keyframe {
 	/// Where in the sequence this look applies, from `0.0` (start) to `1.0`
 	/// (end).
 	pub offset: f32,
 	/// The look. Unset parts are interpolated from the nearest keyframes
 	/// that set them, or the widget's own value at the ends, as in CSS.
-	#[cfg_attr(feature = "serde", serde(default, flatten))]
 	pub visual: Visual,
 	/// How the motion from this keyframe to the next is eased, instead of
 	/// the sequence's own easing.
-	#[cfg_attr(
-		feature = "serde",
-		serde(default, skip_serializing_if = "Option::is_none")
-	)]
 	pub easing: Option<Easing>,
+}
+
+/// A keyframe on the wire: the look's parts sit beside the offset. They are
+/// listed here rather than flattened, because `#[serde(flatten)]` buffers
+/// values and `serde_json`'s `arbitrary_precision`, which an app's other
+/// dependencies can turn on, buffers a number with a fraction as a map no
+/// `f32` reads.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KeyframeWire {
+	offset: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	opacity: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	transform: Option<Transform>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	easing: Option<Easing>,
+}
+
+#[cfg(feature = "serde")]
+impl From<KeyframeWire> for Keyframe {
+	fn from(wire: KeyframeWire) -> Self {
+		Self {
+			offset: wire.offset,
+			visual: Visual {
+				opacity: wire.opacity,
+				transform: wire.transform,
+			},
+			easing: wire.easing,
+		}
+	}
+}
+
+#[cfg(feature = "serde")]
+impl From<Keyframe> for KeyframeWire {
+	fn from(keyframe: Keyframe) -> Self {
+		Self {
+			offset: keyframe.offset,
+			opacity: keyframe.visual.opacity,
+			transform: keyframe.visual.transform,
+			easing: keyframe.easing,
+		}
+	}
 }
 
 impl Keyframe {

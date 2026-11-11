@@ -18,6 +18,7 @@ use crate::gpu::Pipelines;
 use crate::gpu::Shared;
 use crate::gpu::Variant;
 use crate::protocol::Backdrop;
+use crate::protocol::Blend;
 use crate::raycast;
 use crate::upload::*;
 use crate::world::World;
@@ -359,7 +360,12 @@ fn instance_record(
 		],
 		emissive,
 		rim: [rim.color[0], rim.color[1], rim.color[2], rim.strength],
-		params: [joints, morph, rim.power.to_bits(), 0],
+		params: [
+			joints,
+			morph,
+			rim.power.to_bits(),
+			u32::from(part.blend == Blend::Additive),
+		],
 	}
 }
 
@@ -830,7 +836,9 @@ impl Renderer {
 		self.items.push(Item {
 			variant: Variant {
 				skinned,
-				blend: material.alpha == AlphaMode::Blend || record.tint[3] < 1.0,
+				blend: material.alpha == AlphaMode::Blend
+					|| record.tint[3] < 1.0
+					|| record.params[3] != 0,
 				double_sided: material.double_sided,
 			},
 			asset: part.slot,

@@ -155,7 +155,7 @@ pub async fn summary(cx: &rpc::QueryCx, days: u32) -> rpc::Result<EventSummary> 
 - **It keeps the body in the service.** The body only compiles when the library's own `service` feature is on, which is how the service binary builds it. In your app the operation is just its typed arguments, so the app doesn't compile the service's database code, and the app's server never serves the operation itself, even when a workspace-wide build turns `service` on everywhere.
 - **It sends every call to the service.** In the browser and in native apps, calls go to `/_leptoskit/services/analytics/api/<operation>` on the app's origin. From the app's server, they go to the service's private address.
 
-The feature must be called `service`.
+The feature must be called `service`. A crate that only calls a service's operations, such as your app, doesn't declare it: there the attribute gives just the typed arguments and the stub, with nothing for Cargo to warn about.
 
 Background jobs, cron schedules, streams, and channels belong to a service the same way:
 

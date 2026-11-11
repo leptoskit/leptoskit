@@ -59,18 +59,24 @@ Everything that changes a scene is an op, sent with the next `flush`:
 | play, crossfade, or stop a clip         | `play(node, Play::new("walk").fade(0.2))`, `.once()`, `.speed(1.5)`, `stop(node, fade)`     |
 | show one of a model's variants          | `set_part_visible(node, "head_1", true)`, by the part's node name in the file               |
 | change a face or a robe's shape         | `set_morph_weight(node, "smile", 1.0)`, by the morph target's name                          |
+| turn a head or swing a leg yourself     | `set_part_offset(node, "head", Transform::IDENTITY.with_yaw(0.4), 0.1)`, by the part's name |
 | tint, light up, fade, or outline a part | `set_material(node, Some("robe"), MaterialOverride { … })` (colour, emissive, opacity, rim) |
+| make a part glow like light             | `set_blend(node, Some("flash"), Blend::Additive)`                                           |
 | put a sword in a hand                   | `attach(sword, character, "socket_weapon")`                                                 |
 | ask what is under a tap                 | `raycast_screen(x, y)`, answered by an `Event::RaycastHits`                                 |
 | remove a model                          | `remove(node)`                                                                              |
 
 Ops that name a part, a clip, or a morph target apply even when they arrive before the model has loaded, and ops for names a model does not have do nothing. A clip played with `once()` holds its last pose; the others loop. A new clip crossfades from the one playing; clips don't layer on top of each other.
 
+`set_part_offset` moves one named part of a model, a bone or any node, from where its rest pose or the playing clip puts it: the offset turns the part about its own origin and moves it along its own axes, and everything attached below it follows. Use it for what your app decides as it runs, such as a creature turning its head towards the camera while its walk clip plays, or a drum turning one chamber on each shot. The last argument is how many seconds the part takes to get there, in a straight line from where it is now, on the host's own clock. An app that works out a pose on every tick of its own clock and sends it with the tick's length is drawn smoothly between ticks, at the display's rate. Zero moves it at once; `Transform::IDENTITY` puts it back.
+
+`Blend::Additive` adds a part's colour to whatever is behind it instead of covering it, scaled by its opacity: a muzzle flash, a spark, or a halo stays bright over a camera picture of a dark room, and black adds nothing, so a soft round glow needs no cut-out. Light added to something already bright barely shows, so for a glow that must read over a white wall, put a darker, normally blended halo behind it. Additive parts draw with the transparent parts and hide nothing behind them.
+
 `next_events` waits for what the host has to say: a model loaded (with its clips' names) or failed to, a clip played once has finished, or what a raycast hit, nearest first, with the part's name, the distance, and the point.
 
 ## Models
 
-Scenes load glTF 2.0: `.glb` files, or `.gltf` files with their buffers and images beside them or embedded. Meshes may be compressed with meshopt (`EXT_meshopt_compression`) and quantized (`KHR_mesh_quantization`), as `gltfpack` writes them. Skins, morph targets, and animations of transforms and morph weights (step, linear, and cubic spline) play; metallic-roughness, unlit, and emissive materials draw, with opaque, masked, and blended alpha; textures are PNG or JPEG. A file that needs any other required extension, such as Draco, fails to load with an event that says which.
+Scenes load glTF 2.0: `.glb` files, or `.gltf` files with their buffers and images beside them or embedded. Meshes may be compressed with meshopt (`EXT_meshopt_compression`) and quantized (`KHR_mesh_quantization`), with texture coordinates scaled and offset by `KHR_texture_transform`, as `gltfpack` writes them. A material's textures share one transform: the first one found, starting from its base color texture. Skins, morph targets, and animations of transforms and morph weights (step, linear, and cubic spline) play; metallic-roughness, unlit, and emissive materials draw, with opaque, masked, and blended alpha; textures are PNG or JPEG. A file that needs any other required extension, such as Draco, fails to load with an event that says which.
 
 A model loaded by several scenes, or spawned many times, is read and uploaded to the GPU once. Identical static parts draw together in one call.
 
@@ -98,4 +104,4 @@ Native apps draw scenes in their own host, never in the app's Wasm code, so a bu
 
 A scene may hold 4,096 nodes and refer to 64 models; an app may hold 16 scenes. A model may be 128 MiB, 4 million vertices, and 16,384 nodes, with 64 morph targets per mesh, 256 joints per skin, and textures up to 4,096 pixels a side. Numbers in ops are bounded to finite, sensible ranges, and model paths must stay inside the app's assets.
 
-Not supported yet: shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, `KHR_texture_transform`, texture coordinates beyond the first set, and stereo through multiview.
+Not supported yet: shadows cast onto other models, more than one light, image-based lighting from the camera, textures other than PNG and JPEG, a different `KHR_texture_transform` for each texture of one material, texture coordinates beyond the first set, and stereo through multiview.

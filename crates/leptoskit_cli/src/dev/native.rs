@@ -831,6 +831,8 @@ pub struct NativeDev {
 	builds: Vec<(Platform, Target)>,
 	guests: Guests,
 	apps: Vec<Child>,
+	/// The port the development guest server bound, on every interface.
+	port: u16,
 }
 
 impl NativeDev {
@@ -848,8 +850,18 @@ impl NativeDev {
 	) -> Result<Self> {
 		tools.devtools =
 			crate::build::devtools::hub().and_then(|hub| DevtoolsLaunch::new(hub, config));
-		let guests = Guests::new(platforms.iter().map(ToString::to_string));
-		let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+		let guests = Guests::new(
+			platforms.iter().map(ToString::to_string).chain(
+				[Platform::Android, Platform::Ios]
+					.into_iter()
+					.filter(|platform| config.app.platforms.contains(platform))
+					.map(|platform| platform.to_string()),
+			),
+		);
+		// Every interface, so a phone on the same network can fetch the guest.
+		// Loopback still works for adb reverse and the simulator.
+		let listener = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+			.or_else(|_| std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
 			.context("could not bind the development guest server")?;
 		listener
 			.set_nonblocking(true)
@@ -875,6 +887,7 @@ impl NativeDev {
 			builds: Vec::new(),
 			guests,
 			apps: Vec::new(),
+			port,
 		};
 
 		for &platform in platforms {
@@ -889,6 +902,43 @@ impl NativeDev {
 	/// Whether no native platform started.
 	pub fn is_empty(&self) -> bool {
 		self.builds.is_empty()
+	}
+
+	/// The port the development guest server is bound to.
+	pub fn port(&self) -> u16 {
+		self.port
+	}
+
+	/// Whether `platform`'s guest is already being rebuilt for a launched app.
+	pub fn serves(&self, platform: Platform) -> bool {
+		self.builds.iter().any(|(running, _)| *running == platform)
+	}
+
+	/// Builds the phone's Wasm guest and offers it to a companion on the
+	/// network. A later reload rebuilds it with the launched apps.
+	///
+	/// # Errors
+	///
+	/// Returns an error when `platform` is not Android or iOS, or the guest
+	/// does not compile.
+	pub fn publish_phone_guest(
+		&mut self,
+		config: &LeptoskitConfig,
+		platform: Platform,
+	) -> Result<()> {
+		let target = match platform {
+			Platform::Android => Target::Android,
+			Platform::Ios => Target::Ios,
+			other => anyhow::bail!("{other} is not a phone guest"),
+		};
+		let wasm = (self.tools.rebuild_guest)(&self.root, config, target)?;
+		self.guests.publish(&platform.to_string(), wasm);
+
+		if !self.serves(platform) {
+			self.builds.push((platform, target));
+		}
+
+		Ok(())
 	}
 
 	/// Builds the app once per target its devices need, then launches it on
@@ -2073,5 +2123,40 @@ esac"#,
 			.unwrap()
 			.success();
 		assert!(!alive, "dropping the dev session stops the apps it started");
+	}
+
+	#[test]
+	fn a_phone_can_fetch_a_guest_that_was_not_launched_here() {
+		let dir = tempfile::tempdir().unwrap();
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let mut native = NativeDev::start(
+			dir.path(),
+			&app_config(),
+			&[],
+			&[],
+			tools(dir.path()),
+			&runtime,
+		)
+		.unwrap();
+		assert!(native.is_empty());
+		native
+			.publish_phone_guest(&app_config(), Platform::Android)
+			.unwrap();
+		assert!(native.serves(Platform::Android));
+		let url = format!(
+			"http://127.0.0.1:{}{}",
+			native.port(),
+			guest_path("android")
+		);
+		let mut client = leptoskit_codepush::dev::DevGuests::new(&url, b"").unwrap();
+		assert_eq!(
+			client.next_guest().unwrap().as_deref(),
+			Some(&b"second guest"[..])
+		);
+		assert!(
+			native
+				.publish_phone_guest(&app_config(), Platform::Linux)
+				.is_err()
+		);
 	}
 }

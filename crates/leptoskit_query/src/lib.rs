@@ -103,14 +103,29 @@
 //! serializable and the server fetches it, streams it with the HTML, and the
 //! browser hydrates the cache with it — the same mechanism leptos resources
 //! use — so the first render shows the server's data with no loading state.
-//! Read such queries inside a `<Suspense>` with `query.await` so the server
-//! waits for the data before rendering.
+//! Add [`with_ssr_errors`](QueryScope::with_ssr_errors) as well and an error
+//! is carried the same way. Read such queries inside a `<Suspense>`: on the
+//! server, reading one that is still loading holds the boundary until it
+//! settles, so the server renders what the browser hydrates. A query seeded
+//! this way doesn't fetch until hydration has finished.
 //!
 //! Give such scopes a [stale time](QueryScope::with_stale_time). Data is
 //! stale the moment it is fetched by default, so without one the browser
 //! refetches in the background as soon as it hydrates, exactly as TanStack
 //! does. Scopes dehydrated by hand with [`QueryClient::dehydrate`] must also
 //! be [named](QueryScope::with_name), since the browser is another binary.
+//!
+//! # Screens that rebuild
+//!
+//! leptoskit builds a screen again whenever a signal it read changes, so a
+//! `use_query` inside it mounts a new observer on every rebuild, including
+//! the rebuild its own data caused. Mounting is still cheap: a mount within
+//! [two seconds](DEFAULT_MOUNT_DEDUPE) of this client's last fetch of the key
+//! reuses that fetch's data or error instead of fetching again, and a fetch
+//! already in flight is joined rather than repeated. A screen that shows a
+//! query therefore fetches once, not in a loop, under the default options.
+//! A [stale time](QueryScope::with_stale_time) still decides when a later
+//! visit to the screen fetches again.
 //!
 //! # Running anywhere
 //!
@@ -233,6 +248,7 @@ pub use mutation_cache::MutationInfo;
 pub use mutation_cache::MutationNotification;
 pub use mutation_cache::use_is_mutating;
 pub use mutation_cache::use_mutation_state;
+pub use options::DEFAULT_MOUNT_DEDUPE;
 pub use options::GcTime;
 pub use options::NetworkMode;
 pub use options::QueryDefaults;

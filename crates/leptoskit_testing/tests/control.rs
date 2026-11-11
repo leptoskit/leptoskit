@@ -628,3 +628,111 @@ fn a_native_journey_runs_through_the_shared_session() {
 	assert_eq!(capabilities["appium:bundleId"], "dev.example.app");
 	std::fs::remove_dir_all(outcome.artifacts.unwrap()).unwrap();
 }
+
+#[test]
+fn gesture_steps_reach_the_driver_as_pointer_actions() {
+	let (endpoint, server) = server(vec![
+		reply("GET /status ", json!({"ready": true})),
+		reply("POST /session ", json!({"sessionId": "s"})),
+		reply("POST /session/s/timeouts ", Value::Null),
+		reply("POST /session/s/url ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("DELETE /session/s ", Value::Null),
+	]);
+	let document = Document {
+		schema_version: 1,
+		target: web_target(&endpoint),
+		steps: vec![
+			Step::TapPoint { x: 200, y: 400 },
+			Step::LongPress {
+				x: 200,
+				y: 400,
+				duration_ms: Some(600),
+			},
+			Step::Pan {
+				start: Point { x: 200, y: 400 },
+				end: Point { x: 280, y: 400 },
+				duration_ms: Some(300),
+			},
+			Step::Pinch {
+				x: 200,
+				y: 400,
+				start_span: 80,
+				end_span: 160,
+				duration_ms: Some(300),
+			},
+		],
+	};
+	let outcome = leptoskit_testing::control::run(&document);
+	assert!(outcome.passed, "{:?}", outcome.error);
+	let requests = server.join().unwrap();
+	let actions = &requests[4]["actions"];
+	assert_eq!(actions[0]["id"], "leptoskit-tap");
+	assert_eq!(requests[5]["actions"][0]["actions"][2]["duration"], 600);
+	assert_eq!(requests[6]["actions"][0]["actions"][2]["x"], 280);
+	assert_eq!(requests[7]["actions"].as_array().unwrap().len(), 2);
+	assert_eq!(actions[0]["parameters"]["pointerType"], "touch");
+	std::fs::remove_dir_all(outcome.artifacts.unwrap()).unwrap();
+}
+
+#[test]
+fn macos_pointer_actions_use_a_mouse_not_touch() {
+	let (endpoint, server) = server(vec![
+		reply("GET /status ", json!({"ready": true})),
+		reply("POST /session ", json!({"sessionId": "s"})),
+		reply("POST /session/s/timeouts ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("POST /session/s/actions ", Value::Null),
+		reply("DELETE /session/s ", Value::Null),
+	]);
+	let mut target = device_target(TargetKind::Macos, "ignored");
+	target.device = None;
+	target.application = Some(leptoskit_testing::native::Application::Identifier(
+		"dev.example.app".to_owned(),
+	));
+	target.endpoint = Some(endpoint);
+	let document = Document {
+		schema_version: 1,
+		target,
+		steps: vec![
+			Step::TapPoint { x: 200, y: 400 },
+			Step::LongPress {
+				x: 200,
+				y: 400,
+				duration_ms: Some(600),
+			},
+			Step::Pan {
+				start: Point { x: 200, y: 400 },
+				end: Point { x: 280, y: 400 },
+				duration_ms: Some(300),
+			},
+			Step::Swipe {
+				start: Point { x: 10, y: 10 },
+				end: Point { x: 10, y: 40 },
+				duration_ms: Some(200),
+			},
+			Step::Pinch {
+				x: 200,
+				y: 400,
+				start_span: 80,
+				end_span: 160,
+				duration_ms: Some(300),
+			},
+		],
+	};
+	let outcome = leptoskit_testing::control::run(&document);
+	assert!(outcome.passed, "{:?}", outcome.error);
+	let requests = server.join().unwrap();
+	for request in &requests[3..=7] {
+		for source in request["actions"].as_array().unwrap() {
+			assert_eq!(source["parameters"]["pointerType"], "mouse", "{source}");
+		}
+	}
+	std::fs::remove_dir_all(outcome.artifacts.unwrap()).unwrap();
+}

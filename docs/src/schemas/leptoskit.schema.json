@@ -213,6 +213,105 @@
 	},
 	"additionalProperties": false,
 	"$defs": {
+		"Android12Splash": {
+			"description": "Android 12 and later splash attributes.",
+			"type": "object",
+			"properties": {
+				"background": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"icon_background": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"image": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"AndroidIcons": {
+			"description": "Android launcher and notification icons.",
+			"type": "object",
+			"properties": {
+				"adaptive_background": {
+					"description": "Opaque hex fill behind the adaptive foreground.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"adaptive_background_image": {
+					"description": "Image behind the adaptive foreground (mutually exclusive with\n`adaptive_background`).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"adaptive_foreground": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"adaptive_monochrome": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"enable": {
+					"type": "boolean",
+					"default": true
+				},
+				"image": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"notification": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"AnimatedSplash": {
+			"description": "Cross-platform motion after the OS launch screen ends.",
+			"type": "object",
+			"properties": {
+				"gif": {
+					"description": "A GIF used on the web splash and as a fallback image source.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"rive": {
+					"description": "A Rive `.riv` asset path relative to the project (preferred).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"until": {
+					"description": "When to dismiss the animated overlay.",
+					"$ref": "#/$defs/SplashUntil"
+				}
+			},
+			"additionalProperties": false
+		},
 		"AppConfig": {
 			"description": "The application identity.",
 			"type": "object",
@@ -223,14 +322,25 @@
 					"default": "web"
 				},
 				"icon": {
-					"description": "The app's icon: one square PNG or SVG, 1024×1024 or larger, relative\nto this file. Every platform's icon sizes are made from it: the iOS\napp icon, Android's launcher icons, the macOS `.icns`, and the\nextension's 16 to 128 pixel icons.",
+					"description": "The app's icon: one square PNG or SVG, 1024×1024 or larger, relative\nto this file. Every platform's icon sizes are made from it: the iOS\napp icon, Android's launcher icons, the macOS `.icns`, and the\nextension's 16 to 128 pixel icons. Prefer `[app.icons]` when you need\nper-platform images, notification icons, or extension metadata.",
 					"type": [
 						"string",
 						"null"
 					]
 				},
+				"icons": {
+					"description": "Flutter-shaped icon declaration. When set, its `image` (or a\nplatform override) is used instead of [`Self::icon`] for that\nplatform. See [`IconsConfig`].",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/IconsConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"launch_screen": {
-					"description": "What iOS and Android show while the app starts: a background colour\nand, centered on it, an image.",
+					"description": "What iOS, Android, and the web show while the app starts: a background\ncolour and, centered on it, an image. Also accepted as `[app.splash]`.",
 					"anyOf": [
 						{
 							"$ref": "#/$defs/LaunchScreen"
@@ -302,6 +412,35 @@
 			"required": [
 				"app_id"
 			]
+		},
+		"AppleIcons": {
+			"description": "iOS app icons, including iOS 18 dark and tinted appearances.",
+			"type": "object",
+			"properties": {
+				"dark": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"enable": {
+					"type": "boolean",
+					"default": true
+				},
+				"image": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"tinted": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
 		},
 		"AttributeBraces": {
 			"description": "Whether the formatter keeps the braces around attribute values.",
@@ -1624,8 +1763,104 @@
 			},
 			"additionalProperties": false
 		},
+		"IconsConfig": {
+			"description": "Rich icon declaration, matching [icons_launcher](https://pub.dev/packages/icons_launcher)'s\nshape. When present, it overrides `app.icon` as the default source image.\n\n```toml\n[app.icons]\nimage = \"assets/icon.svg\"\nnotification = \"assets/notification.png\"\n\n[app.icons.android]\nadaptive_background = \"#FFFFFF\"\n\n[app.icons.extensions.my_tool]\nflavor = \"beta\"\n```",
+			"type": "object",
+			"properties": {
+				"android": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/AndroidIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"extension": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PlatformIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"extensions": {
+					"description": "Named free-form tables for asset tooling extensions.",
+					"type": "object",
+					"additionalProperties": true
+				},
+				"image": {
+					"description": "Default square PNG or SVG for every platform that does not override it.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"ios": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/AppleIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"linux": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PlatformIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"macos": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PlatformIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"notification": {
+					"description": "Android notification / status-bar small icon (white silhouette on\ntransparent). Also used when `[app.icons.android].notification` is\nomitted.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"web": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/WebIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"windows": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PlatformIcons"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"additionalProperties": false
+		},
 		"InfraAnalytics": {
-			"description": "Bounded, in-process analytics. Requires the application's `analytics`\nfeature and the `LeptosKit` server entrypoint (or an explicit Axum mount).",
+			"description": "Bounded, in-process route metrics. Requires the application's `apm`\nfeature and the `LeptosKit` server entrypoint (or an explicit Axum mount).",
 			"type": "object",
 			"properties": {
 				"browser_routes": {
@@ -2108,12 +2343,42 @@
 			"additionalProperties": false
 		},
 		"LaunchScreen": {
-			"description": "The screen iOS and Android show from the moment the app is opened until\nits first screen is drawn: the iOS `UILaunchScreen`, and Android's\nsplash screen (Android 12 and later) or starting window (before).\n\n```toml\n[app.launch_screen]\nbackground = \"#0b0c10\"\nimage = \"assets/branding/mark.svg\"\n```",
+			"description": "The screen iOS, Android, and the web show from the moment the app is\nopened until its first screen is drawn: the iOS `UILaunchScreen`,\nAndroid's splash screen (Android 12 and later) or starting window\n(before), and an HTML overlay on the web. Also configured as\n`[app.splash]`.\n\n```toml\n[app.launch_screen]\nbackground = \"#0b0c10\"\nimage = \"assets/branding/mark.svg\"\n\n[app.launch_screen.animated]\nrive = \"assets/splash.riv\"\nuntil = \"manual\"\n\n[app.launch_screen.extensions.my_tool]\ncampaign = \"winter\"\n```",
 			"type": "object",
 			"properties": {
+				"android": {
+					"description": "Generate the Android splash. Default true.",
+					"type": "boolean",
+					"default": true
+				},
+				"android_12": {
+					"description": "Android 12+ splash overrides (colour, icon, icon background).",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Android12Splash"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"animated": {
+					"description": "Animated overlay after the native splash ends.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/AnimatedSplash"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"background": {
-					"description": "The background colour, as `#rrggbb` or `#rgb`.",
-					"type": "string"
+					"description": "The background colour, as `#rrggbb` or `#rgb`. Required unless\n`background_image` is set.",
+					"type": [
+						"string",
+						"null"
+					]
 				},
 				"background_dark": {
 					"description": "The background colour while the system is dark, as `#rrggbb` or\n`#rgb`; `background` when left out.",
@@ -2122,8 +2387,44 @@
 						"null"
 					]
 				},
+				"background_image": {
+					"description": "Full-bleed background image instead of `background` (mutually\nexclusive).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"branding": {
+					"description": "Branding image shown near the bottom of the splash (Flutter-style).",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"branding_dark": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"extensions": {
+					"description": "Named free-form tables for asset tooling extensions.",
+					"type": "object",
+					"additionalProperties": true
+				},
+				"fullscreen": {
+					"description": "Hide the status bar on Android while the splash shows.",
+					"type": "boolean"
+				},
 				"image": {
-					"description": "One square PNG or SVG, 1024×1024 or larger, relative to this file,\ndrawn in the middle of the screen. Android 12 and later show it inside\na circle, so keep what matters in the middle two thirds.",
+					"description": "One square PNG or SVG, 1024×1024 or larger, relative to this file,\ndrawn in the middle of the screen. Android 12 and later show it inside\na circle, so keep what matters in the middle two thirds. A GIF is kept\nas a GIF on the web splash.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"image_dark": {
+					"description": "Dark-mode centre image.",
 					"type": [
 						"string",
 						"null"
@@ -2135,12 +2436,19 @@
 					"format": "uint32",
 					"default": 160,
 					"minimum": 0
+				},
+				"ios": {
+					"description": "Generate the iOS splash. Default true.",
+					"type": "boolean",
+					"default": true
+				},
+				"web": {
+					"description": "Generate the web splash. Default true.",
+					"type": "boolean",
+					"default": true
 				}
 			},
-			"additionalProperties": false,
-			"required": [
-				"background"
-			]
+			"additionalProperties": false
 		},
 		"LintConfig": {
 			"description": "What `leptoskit lint` checks, from the `[lint]` table.\n\n```toml\n[lint]\nmarkup = \"view\"\nexclude = [\"tests/fixtures/**\"]\n\n[lint.rules]\ncomponent_attribute = \"deny\"\n```",
@@ -2242,6 +2550,41 @@
 			},
 			"additionalProperties": false
 		},
+		"LogLevel": {
+			"description": "The most detailed level of record the runtime writes to the platform's\nlog, from `[native] log-level`.",
+			"oneOf": [
+				{
+					"description": "Nothing.",
+					"type": "string",
+					"const": "off"
+				},
+				{
+					"description": "Failures only.",
+					"type": "string",
+					"const": "error"
+				},
+				{
+					"description": "Failures, and what the runtime worked around.",
+					"type": "string",
+					"const": "warn"
+				},
+				{
+					"description": "Also the app's lifecycle: creation, plugins, the first commit, pause\nand resume.",
+					"type": "string",
+					"const": "info"
+				},
+				{
+					"description": "Also routine detail, such as surface resizes and cancelled calls.",
+					"type": "string",
+					"const": "debug"
+				},
+				{
+					"description": "Everything.",
+					"type": "string",
+					"const": "trace"
+				}
+			]
+		},
 		"MacosDistribution": {
 			"description": "How the macOS app is distributed.",
 			"oneOf": [
@@ -2332,6 +2675,17 @@
 				"ios": {
 					"description": "How a release iOS build is signed and exported.",
 					"$ref": "#/$defs/IosConfig"
+				},
+				"log-level": {
+					"description": "The most detailed records the runtime writes to the platform's log\n(logcat, the unified log, standard error, or the browser console).\nUnset, a debug build logs `info` and above and a release build `warn`\nand above. Records never leave the device.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LogLevel"
+						},
+						{
+							"type": "null"
+						}
+					]
 				},
 				"missing-plugins": {
 					"description": "What a build does when a selected plugin has no implementation the\nplatform's host can run. `warn` (the default) leaves it out with a\nwarning, so its calls fail with `Unavailable`; `error` stops the build.",
@@ -2555,6 +2909,24 @@
 					"const": "server"
 				}
 			]
+		},
+		"PlatformIcons": {
+			"description": "Shared per-platform enable + image override.",
+			"type": "object",
+			"properties": {
+				"enable": {
+					"description": "When false, skip generating this platform's icons.",
+					"type": "boolean",
+					"default": true
+				},
+				"image": {
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false
 		},
 		"PlayStore": {
 			"description": "An app in Google Play Console, created once there. Its package name is\n`native.package_id`.",
@@ -3291,6 +3663,21 @@
 				}
 			]
 		},
+		"SplashUntil": {
+			"description": "When the animated splash overlay is removed.",
+			"oneOf": [
+				{
+					"description": "Remove when the first frame of the app is drawn (default).",
+					"type": "string",
+					"const": "first_frame"
+				},
+				{
+					"description": "Keep until `leptoskit::splash::dismiss()` runs.",
+					"type": "string",
+					"const": "manual"
+				}
+			]
+		},
 		"ThemeConfig": {
 			"description": "Design tokens from the `[theme]` table, matching CSS custom properties\nthat Tailwind `var(--name)` utilities and the process-wide `Theme` map\nresolve.\n\n```toml\n[theme.colors]\nbrand = \"#3b82f6\"\nink = \"black\"\n\n[theme.lengths]\ngap = \"1rem\"\npad = \"16px\"\n```\n\nCall `Theme::install_maps(&theme.colors, &theme.lengths)` once at app\nstartup so native paint and the web `:root` sheet see the same names.",
 			"type": "object",
@@ -3308,6 +3695,35 @@
 					"additionalProperties": {
 						"type": "string"
 					}
+				}
+			},
+			"additionalProperties": false
+		},
+		"WebIcons": {
+			"description": "Web favicon and PWA maskable icon.",
+			"type": "object",
+			"properties": {
+				"enable": {
+					"type": "boolean",
+					"default": true
+				},
+				"favicon": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"image": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"maskable": {
+					"type": [
+						"string",
+						"null"
+					]
 				}
 			},
 			"additionalProperties": false

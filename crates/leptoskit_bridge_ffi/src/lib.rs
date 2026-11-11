@@ -114,6 +114,48 @@ pub unsafe extern "C" fn lk_buffer_release(buffer: Buffer) {
 	}
 }
 
+/// Writes one record through leptoskit's logger, so the Kotlin, Swift, and
+/// C++ hosts log at the runtime's level, under the same tags, to the same
+/// platform log. `level` is 1 error, 2 warn, 3 info, 4 debug, or 5 trace;
+/// anything else is an error. Text that is not UTF-8 is written lossily.
+/// Installs the logger first when no app has yet.
+///
+/// # Safety
+/// `target` and `message` each address their length in readable bytes, or
+/// are null with length 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_log_write(
+	level: u32,
+	target: *const u8,
+	target_len: usize,
+	message: *const u8,
+	message_len: usize,
+) {
+	leptoskit_log::install();
+	let level = match level {
+		2 => log::Level::Warn,
+		3 => log::Level::Info,
+		4 => log::Level::Debug,
+		5 => log::Level::Trace,
+		_ => log::Level::Error,
+	};
+
+	if !log::log_enabled!(level) {
+		return;
+	}
+
+	// SAFETY: The caller lends both texts for this call.
+	let (target, message) = unsafe { (borrow(target, target_len), borrow(message, message_len)) };
+	let target = String::from_utf8_lossy(target.unwrap_or_default());
+	let target = if target.is_empty() {
+		leptoskit_log::target::BRIDGE
+	} else {
+		&target
+	};
+	let message = String::from_utf8_lossy(message.unwrap_or_default());
+	log::log!(target: target, level, "{message}");
+}
+
 /// Registers a plugin; returns its nonnegative ID or a negative error code.
 ///
 /// # Safety
@@ -133,11 +175,23 @@ pub unsafe extern "C" fn lk_bridge_register(
 		(|| {
 			let bridge = bridge.as_mut().ok_or(Error::InvalidArgument)?;
 			if name_len > 256 || method_count > 4096 {
+				log::error!(
+					target: leptoskit_log::target::BRIDGE,
+					"cannot register a plugin: its name is {name_len} bytes and its method \
+					 count {method_count}, over the limits of 256 bytes and 4096 methods"
+				);
 				return Err(Error::TooLarge);
 			}
 
-			let name =
-				std::str::from_utf8(borrow(name, name_len)?).map_err(|_| Error::InvalidArgument)?;
+			let name = borrow(name, name_len)?;
+			let name = std::str::from_utf8(name).map_err(|_| {
+				log::error!(
+					target: leptoskit_log::target::BRIDGE,
+					"cannot register plugin `{}`: its name is not UTF-8",
+					String::from_utf8_lossy(name)
+				);
+				Error::InvalidArgument
+			})?;
 			bridge.register(
 				name,
 				borrow(methods, method_count)?.iter().copied().map(MethodId),

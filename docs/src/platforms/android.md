@@ -59,6 +59,18 @@ let fold = use_posture(posture);
 
 Apps scaffolded before foldable support need `screenLayout|smallestScreenSize` added to `android:configChanges` by hand so folding does not restart the activity.
 
+## The Back gesture
+
+Swiping back from the edge of the screen, or pressing the Back button, goes back one route through your [file router](../guide/10-file-routes.md#deep-links-and-system-back). On the first route there is nothing to go back to, so Back leaves the app as it does in any other app.
+
+Your router answers from its own thread, a moment after the gesture. Two quick Backs are answered in order, so from two routes deep they return to the first route, and from one route deep they go back and then leave. Because only your router knows whether it can go back, the app always takes Back, and Android does not show its preview of the home screen while you swipe.
+
+Apps scaffolded before Back reached the router need three changes, which a new project shows:
+
+- `MainActivity.kt` registers an `OnBackInvokedCallback` in `onCreate` on Android 13 and later, keeps `onBackPressed` for earlier versions, and asks `LeptosKitApplicationView.offerSystemBack` before leaving. Android 16 calls nothing else for an app that targets it, so without the callback every Back leaves the app.
+- `AndroidManifest.xml` sets `android:enableOnBackInvokedCallback="true"` on `<application>`, so Android 13, 14, and 15 use the same callback.
+- Your app's `lib.rs` calls `navigation.bind_system_back()` and exports `leptoskit_system_back`, as the [file routes guide](../guide/10-file-routes.md#deep-links-and-system-back) shows.
+
 ## Test it
 
 Each project includes an instrumented test that taps **Add one** and waits for **Count: 1**. Update it when you change the home screen, then run it with an emulator running:
@@ -71,10 +83,11 @@ cd android
 ## How it differs from macOS
 
 - Transforms and [animations](../guide/32-animations.md) run on Android's animators, springs included. A widget animating out is drawn above its former siblings until it is gone. Only background colors animate; text and border colors jump.
-- Generated apps also draw `Switch`, `Checkbox`, `Radio`, `Slider`, `LinearProgressIndicator`, and `ActivityIndicator` with Android controls. Switches and checkboxes report their checked state; radio options select within the group your screen controls, and sliders report values on their configured step grid. Tapping outside an editor clears focus and dismisses the keyboard. The keyboard moves to the next enabled field, or submits and dismisses from the last field. System Back is not yet connected to the file router; use an in-app Back button.
+- The widget backend recognizes [taps, long presses, pans, pinches, rotations, and flings](../guide/38-gestures.md) on the view under the finger. A drag that wins cancels the control underneath so it does not also click. The generated Swift and Kotlin renderer does not forward that pointer stream yet, so a gesture there does not run.
+- Generated apps also draw `Switch`, `Checkbox`, `Radio`, `Slider`, `LinearProgressIndicator`, and `ActivityIndicator` with Android controls. Switches and checkboxes report their checked state; radio options select within the group your screen controls, and sliders report values on their configured step grid. Tapping outside an editor clears focus and dismisses the keyboard. The keyboard moves to the next enabled field, or submits and dismisses from the last field. [The Back gesture](#the-back-gesture) goes back one route.
 - [3D scenes](../guide/33-3d-scenes.md) draw into a translucent `SurfaceView` with OpenGL ES, scheduled through Choreographer only while the scene changes or animates. Choose Vulkan with the `dev.leptoskit.scene3d.backend` manifest metadata set to `vulkan`. The APK carries the app's `assets/` folder when the app uses `leptoskit`'s `3d` feature.
 - [Rive](../guide/20-rive.md) uploads native vector frames to a reusable Android bitmap. The generated host schedules through Choreographer, stops when idle or offscreen, and treats disabled system animations as reduced motion. Native playback rejects text, image, layout, script, and audio assets.
-- In the backend crate, a `Custom` widget kind with no registered native implementation stops the app. Other platforms render an empty container instead.
+- A `Custom` widget kind with no registered native implementation is an empty container, the same as on the other platforms.
 - TalkBack gets a smaller set of roles than macOS's accessibility API.
 - Italic text and per-edge borders (`border-t`, `border-l-2`, …) paint through Android views the same way they do on the web.
 - [Sign-in](../guide/23-sign-in.md#native-apps) uses Credential Manager for passkeys once your site vouches for the app's signing certificate. Other providers open in Chrome's Auth Tab, which needs Chrome 137 or later as the default browser; with another default browser, provider sign-in ends with the outcome `unsupported`. Sign in with Apple uses Apple's web sign-in, in the same Auth Tab.

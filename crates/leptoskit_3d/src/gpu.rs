@@ -188,6 +188,19 @@ impl Gpu {
 			})
 			.await
 			.map_err(|error| Error::Device(error.to_string()))?;
+		let info = adapter.get_info();
+		log::info!(
+			target: leptoskit_log::target::GPU,
+			"created a GPU device on {} ({:?})",
+			info.name,
+			info.backend
+		);
+		device.set_device_lost_callback(|reason, message| {
+			log::error!(
+				target: leptoskit_log::target::GPU,
+				"the GPU device was lost ({reason:?}): {message}"
+			);
+		});
 		Ok(Self::from_parts(instance, adapter, device, queue))
 	}
 
@@ -877,5 +890,78 @@ impl Shared {
 			multiview_mask: None,
 			cache: None,
 		})
+	}
+}
+
+/// How a surface on `backend` composites over what is behind its view,
+/// chosen from the modes it lists: premultiplied wherever it can, so a scene
+/// over [`Backdrop::Transparent`](crate::protocol::Backdrop::Transparent)
+/// shows the page or window behind it.
+///
+/// A browser's WebGPU canvas always takes `premultiplied`: the WebGPU
+/// specification gives a canvas two alpha modes, and every browser has both.
+/// wgpu lists only `Opaque` for it, which would draw every transparent scene
+/// over black.
+#[cfg(any(
+	test,
+	all(feature = "host", not(target_arch = "wasm32")),
+	all(feature = "web", target_arch = "wasm32")
+))]
+pub(crate) fn surface_alpha_mode(
+	backend: wgpu::Backend,
+	listed: &[wgpu::CompositeAlphaMode],
+) -> wgpu::CompositeAlphaMode {
+	if backend == wgpu::Backend::BrowserWebGpu {
+		return wgpu::CompositeAlphaMode::PreMultiplied;
+	}
+
+	[
+		wgpu::CompositeAlphaMode::PreMultiplied,
+		wgpu::CompositeAlphaMode::Inherit,
+	]
+	.into_iter()
+	.find(|mode| listed.contains(mode))
+	.unwrap_or(wgpu::CompositeAlphaMode::Auto)
+}
+
+#[cfg(test)]
+mod tests {
+	use wgpu::Backend;
+	use wgpu::CompositeAlphaMode;
+
+	use super::surface_alpha_mode;
+
+	#[test]
+	fn browser_canvases_composite_premultiplied_though_wgpu_lists_opaque() {
+		assert_eq!(
+			surface_alpha_mode(Backend::BrowserWebGpu, &[CompositeAlphaMode::Opaque]),
+			CompositeAlphaMode::PreMultiplied
+		);
+	}
+
+	#[test]
+	fn other_surfaces_take_the_best_mode_they_list() {
+		assert_eq!(
+			surface_alpha_mode(
+				Backend::Metal,
+				&[
+					CompositeAlphaMode::Opaque,
+					CompositeAlphaMode::PreMultiplied
+				]
+			),
+			CompositeAlphaMode::PreMultiplied
+		);
+		assert_eq!(
+			surface_alpha_mode(
+				Backend::Vulkan,
+				&[CompositeAlphaMode::Opaque, CompositeAlphaMode::Inherit]
+			),
+			CompositeAlphaMode::Inherit
+		);
+		// WebGL2 lists only opaque, and wgpu refuses anything it does not list.
+		assert_eq!(
+			surface_alpha_mode(Backend::Gl, &[CompositeAlphaMode::Opaque]),
+			CompositeAlphaMode::Auto
+		);
 	}
 }

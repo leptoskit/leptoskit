@@ -22,7 +22,7 @@ All six destinations are enabled in `leptoskit.toml`. Each build activates exact
 
 ## File routes
 
-Screens live under `snapshotted_app/src/routes/`. The `router` plugin regenerates `snapshotted_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
+Screens live under `snapshotted_app/src/routes/`. The starter opens on Home, with Kit and Platforms beside it in the tab bar. The `router` plugin regenerates `snapshotted_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
 
 For a module that is not a route — a reusable component, for example — `leptoskit::platform_module!` still picks a per-platform file (`thing.ios.rs`, `thing.android.rs`, …) beside the shared one. Per-platform *route* files are not supported yet; use `cfg!(feature = "…")` inside a route when one platform must differ.
 

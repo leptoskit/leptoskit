@@ -26,6 +26,7 @@ pub(crate) struct Overrides {
 	pub emissive_strength: Option<f32>,
 	pub opacity: f32,
 	pub rim: Rim,
+	pub blend: Blend,
 }
 
 impl Default for Overrides {
@@ -40,6 +41,7 @@ impl Default for Overrides {
 				strength: 0.0,
 				power: 2.0,
 			},
+			blend: Blend::Normal,
 		}
 	}
 }
@@ -77,6 +79,67 @@ fn merge(into: &mut MaterialOverride, change: &MaterialOverride) {
 	into.rim = change.rim.or(into.rim);
 }
 
+/// A part's offset, as the pose composes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Motion {
+	translation: Vec3,
+	rotation: Quat,
+	scale: Vec3,
+}
+
+impl Motion {
+	const IDENTITY: Self = Self {
+		translation: Vec3::ZERO,
+		rotation: Quat::IDENTITY,
+		scale: Vec3::ONE,
+	};
+
+	fn from_transform(transform: &Transform) -> Self {
+		Self {
+			translation: Vec3::from(transform.translation),
+			rotation: Quat::from_array(transform.rotation),
+			scale: Vec3::from(transform.scale),
+		}
+	}
+
+	/// The motion `t` of the way from `self` to `to`, along a straight line
+	/// and the shorter arc.
+	fn towards(self, to: Self, t: f32) -> Self {
+		Self {
+			translation: self.translation.lerp(to.translation, t),
+			rotation: self.rotation.slerp(to.rotation, t),
+			scale: self.scale.lerp(to.scale, t),
+		}
+	}
+}
+
+/// A part the guest has moved, and how far it is on its way.
+#[derive(Clone, Copy, Debug)]
+struct PartOffset {
+	/// The asset node it moves, once the asset has loaded, when it has the
+	/// part.
+	node: Option<usize>,
+	from: Motion,
+	to: Motion,
+	seconds: f32,
+	elapsed: f32,
+}
+
+impl PartOffset {
+	/// Where the part is on its way now.
+	fn current(&self) -> Motion {
+		if self.elapsed >= self.seconds {
+			self.to
+		} else {
+			self.from.towards(self.to, self.elapsed / self.seconds)
+		}
+	}
+
+	fn is_moving(&self) -> bool {
+		self.elapsed < self.seconds
+	}
+}
+
 /// The most material, visibility, or morph settings one instance keeps.
 const MAX_SETTINGS: usize = 1024;
 
@@ -88,7 +151,9 @@ pub(crate) struct Instance {
 	pub cast_shadow: bool,
 	parts_visible: BTreeMap<String, bool>,
 	materials: Vec<(Option<String>, MaterialOverride)>,
+	blends: Vec<(Option<String>, Blend)>,
 	morphs: BTreeMap<(Option<String>, String), f32>,
+	offsets: BTreeMap<String, PartOffset>,
 	pending_play: Option<Play>,
 	animator: Animator,
 	rest: Option<Pose>,
@@ -109,7 +174,9 @@ impl Instance {
 			cast_shadow: true,
 			parts_visible: BTreeMap::new(),
 			materials: Vec::new(),
+			blends: Vec::new(),
 			morphs: BTreeMap::new(),
+			offsets: BTreeMap::new(),
 			pending_play: None,
 			animator: Animator::default(),
 			rest: None,
@@ -131,6 +198,7 @@ impl Instance {
 		self.resolve_visibility();
 		self.resolve_materials();
 		self.resolve_morphs();
+		self.resolve_offsets();
 
 		if let Some(play) = self.pending_play.take() {
 			self.play(&play);
@@ -184,6 +252,24 @@ impl Instance {
 				self.overrides[node].apply(change);
 			}
 		}
+
+		for (part, blend) in &self.blends {
+			for node in Self::subtree(asset, part.as_deref()) {
+				self.overrides[node].blend = *blend;
+			}
+		}
+	}
+
+	/// Replaces the blend set for `part`, or adds it while there is room. A
+	/// later setting wins where parts overlap.
+	fn set_blend(&mut self, part: Option<String>, blend: Blend) {
+		self.blends.retain(|(existing, _)| *existing != part);
+
+		if self.blends.len() < MAX_SETTINGS {
+			self.blends.push((part, blend));
+		}
+
+		self.resolve_materials();
 	}
 
 	/// Applies morph weights set by name before the asset loaded, now that
@@ -209,6 +295,76 @@ impl Instance {
 				}
 			}
 		}
+	}
+
+	/// Finds the node each offset moves, now that the asset says which
+	/// node each name is.
+	fn resolve_offsets(&mut self) {
+		let Some(asset) = &self.asset else {
+			return;
+		};
+
+		for (part, offset) in &mut self.offsets {
+			offset.node = asset.node_named(part);
+		}
+	}
+
+	/// Starts `part` on its way to `offset` from where it is now, or puts it
+	/// there at once.
+	fn set_part_offset(&mut self, part: String, offset: &Transform, seconds: f32) {
+		let to = Motion::from_transform(offset);
+		let from = self
+			.offsets
+			.get(&part)
+			.map_or(Motion::IDENTITY, PartOffset::current);
+
+		if seconds <= 0.0 && to == Motion::IDENTITY {
+			self.offsets.remove(&part);
+
+			return;
+		}
+
+		if self.offsets.len() >= MAX_SETTINGS && !self.offsets.contains_key(&part) {
+			return;
+		}
+
+		let node = self
+			.asset
+			.as_ref()
+			.and_then(|asset| asset.node_named(&part));
+		self.offsets.insert(
+			part,
+			PartOffset {
+				node,
+				from,
+				to,
+				seconds: seconds.max(0.0),
+				elapsed: 0.0,
+			},
+		);
+	}
+
+	/// Composes every offset onto the pose, in each part's own frame, and
+	/// forgets the ones that have come back to rest.
+	fn apply_offsets(&mut self, elapsed: f32) {
+		let Some(pose) = &mut self.pose else {
+			return;
+		};
+
+		for offset in self.offsets.values_mut() {
+			offset.elapsed = (offset.elapsed + elapsed).min(offset.seconds);
+			let Some(node) = offset.node else {
+				continue;
+			};
+			let motion = offset.current();
+			let (rotation, scale) = (pose.rotation[node], pose.scale[node]);
+			pose.translation[node] += rotation * (scale * motion.translation);
+			pose.rotation[node] = (rotation * motion.rotation).normalize();
+			pose.scale[node] = scale * motion.scale;
+		}
+
+		self.offsets
+			.retain(|_, offset| offset.is_moving() || offset.to != Motion::IDENTITY);
 	}
 
 	fn play(&mut self, play: &Play) {
@@ -295,11 +451,14 @@ impl Instance {
 			}
 		}
 
-		advance
+		let finished = advance
 			.finished
 			.into_iter()
 			.map(|clip| asset.clips[clip].name.clone())
-			.collect()
+			.collect();
+		self.apply_offsets(elapsed);
+
+		finished
 	}
 
 	/// Computes every asset node's world matrix under `root`.
@@ -326,7 +485,7 @@ impl Instance {
 
 	/// Whether this instance would change if time moved.
 	fn is_moving(&self) -> bool {
-		self.animator.is_moving()
+		self.animator.is_moving() || self.offsets.values().any(PartOffset::is_moving)
 	}
 }
 
@@ -733,11 +892,24 @@ impl World {
 				target,
 				weight,
 			} => self.with_instance(node, |instance| instance.set_morph(part, target, weight)),
+			Op::SetPartOffset {
+				node,
+				part,
+				offset,
+				seconds,
+			} => {
+				self.with_instance(node, |instance| {
+					instance.set_part_offset(part, &offset, seconds);
+				});
+			}
 			Op::SetMaterial {
 				node,
 				part,
 				material,
 			} => self.with_instance(node, |instance| instance.set_material(part, &material)),
+			Op::SetBlend { node, part, blend } => {
+				self.with_instance(node, |instance| instance.set_blend(part, blend));
+			}
 			Op::SetShadow { node, cast } => {
 				self.with_instance(node, |instance| instance.cast_shadow = cast);
 			}

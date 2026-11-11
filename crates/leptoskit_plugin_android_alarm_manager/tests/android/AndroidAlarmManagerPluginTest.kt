@@ -312,8 +312,13 @@ class AndroidAlarmManagerPluginTest {
 
         return List(list.int) {
             val id = list.int
+            // next, interval, flags, timing. Read the params length before
+            // adding it: `position() + int` samples the position first, so the
+            // cursor stopped four bytes early and the next record's length
+            // ran past the buffer.
             list.position(list.position() + 8 + 8 + 4 + 1)
-            list.position(list.position() + list.int)
+            val params = list.int
+            list.position(list.position() + params)
             id
         }
     }

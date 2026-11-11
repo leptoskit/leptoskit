@@ -23,7 +23,7 @@ linux = ["native", "leptoskit/linux"]
 tui = ["native", "leptoskit/tui"]
 csr = ["web", "leptos/csr"]
 hydrate = ["web", "leptos/hydrate"]
-ssr = ["web", "leptos/ssr"]
+ssr = ["web", "leptos/ssr", "leptoskit_router/ssr"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 

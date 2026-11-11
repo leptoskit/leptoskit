@@ -76,7 +76,7 @@ packages = [
 	"leptoskit_watchos",
 	"leptoskit_wearos",
 	"leptoskit_aria",
-	"leptoskit_analytics",
+	"leptoskit_apm",
 	"leptoskit_deploy_console",
 	"leptoskit_form",
 	"leptoskit_config",
@@ -86,6 +86,7 @@ packages = [
 	"leptoskit_plugin",
 	"leptoskit_bridge",
 	"leptoskit_bridge_ffi",
+	"leptoskit_log",
 	"leptoskit_build",
 	"leptoskit_plugin_crypto",
 	"leptoskit_plugin_os",
@@ -100,6 +101,7 @@ packages = [
 	"leptoskit_plugin_device",
 	"leptoskit_plugin_device_policy",
 	"leptoskit_plugin_device_keys",
+	"leptoskit_plugin_dev_client",
 	"leptoskit_plugin_android_intent",
 	"leptoskit_plugin_secure_store",
 	"leptoskit_plugin_linking",
@@ -114,6 +116,7 @@ packages = [
 	"leptoskit_plugin_posture",
 	"leptoskit_plugin_power_monitor",
 	"leptoskit_plugin_print",
+	"leptoskit_plugin_recorder",
 	"leptoskit_plugin_dialog",
 	"leptoskit_plugin_document_picker",
 	"leptoskit_plugin_screen_orientation",
@@ -322,8 +325,8 @@ type = "cargo"
 path = "crates/leptoskit_aria"
 type = "cargo"
 
-[package.leptoskit_analytics]
-path = "crates/leptoskit_analytics"
+[package.leptoskit_apm]
+path = "crates/leptoskit_apm"
 type = "cargo"
 
 [package.leptoskit_deploy_console]
@@ -359,6 +362,9 @@ path = "crates/leptoskit_bridge"
 
 [package.leptoskit_bridge_ffi]
 path = "crates/leptoskit_bridge_ffi"
+
+[package.leptoskit_log]
+path = "crates/leptoskit_log"
 
 [package.leptoskit_plugin_crypto]
 path = "crates/leptoskit_plugin_crypto"
@@ -530,6 +536,11 @@ path = "crates/leptoskit_plugin_power_monitor"
 
 [package.leptoskit_plugin_print]
 path = "crates/leptoskit_plugin_print"
+[package.leptoskit_plugin_recorder]
+path = "crates/leptoskit_plugin_recorder"
+
+[package.leptoskit_plugin_dev_client]
+path = "crates/leptoskit_plugin_dev_client"
 
 [package.leptoskit_plugin_single_instance]
 path = "crates/leptoskit_plugin_single_instance"

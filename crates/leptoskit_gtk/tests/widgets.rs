@@ -164,6 +164,10 @@ mod linux {
 				"vector_paths_fill_stroke_scale_and_redraw",
 				vector_paths_fill_stroke_scale_and_redraw,
 			),
+			(
+				"pointer_gestures_use_the_shared_arena",
+				pointer_gestures_use_the_shared_arena,
+			),
 		]
 		.into_iter()
 		.map(|(name, test)| {
@@ -529,35 +533,37 @@ mod linux {
 	}
 
 	fn all_widgets_have_exact_yoga_frames() {
-		let tree = View().class("w-full h-full bg-white gap-2 p-4").children([
-			Text("GTK native primitives"),
-			Button("A button with a very long label").class("w-1 h-1"),
-			Switch(false).class("w-1 h-1"),
-			Checkbox(false).class("w-1 h-1"),
-			Radio(RadioGroup::new("all").unwrap(), false).class("w-1 h-1"),
-			Slider(SliderState::new(0.0, 100.0, 40.0, Some(5.0)).unwrap()).class("w-1 h-1"),
-			TextInput().aria_label("Editor").class("w-1 h-1"),
-			PasswordInput().aria_label("Password").class("w-1 h-1"),
-			LinearProgressIndicator(Progress::Determinate(ProgressValue::new(0.4).unwrap()))
-				.class("h-2"),
-			ActivityIndicator(true).class("w-6 h-6"),
-			Pressable("Add")
-				.class("h-10 w-32 bg-blue-600 rounded-lg")
-				.child(Text("Add preview").class("text-white")),
-			Image(artifact_path("image.png").to_string_lossy()).class("h-4 w-4"),
-			ScrollView()
-				.class("h-10")
-				.child(Text("Scrollable document")),
-			Element::new(NativeKind::TextRun)
-				.props(leptoskit_native::NativeProps::text("run"))
-				.class("h-5"),
-			Vector(ViewBox::new(0.0, 0.0, 10.0, 10.0).unwrap())
-				.path(
-					drawn("M 0 0 L 10 10")
-						.stroke(Stroke::new(Color::rgba(0, 0, 0, 255), 1.0).unwrap()),
-				)
-				.class("h-4 w-4"),
-		]);
+		let tree = View()
+			.class("w-full h-full bg-white gap-2 p-4")
+			.children(vec![
+				Text("GTK native primitives"),
+				Button("A button with a very long label").class("w-1 h-1"),
+				Switch(false).class("w-1 h-1"),
+				Checkbox(false).class("w-1 h-1"),
+				Radio(RadioGroup::new("all").unwrap(), false).class("w-1 h-1"),
+				Slider(SliderState::new(0.0, 100.0, 40.0, Some(5.0)).unwrap()).class("w-1 h-1"),
+				TextInput().aria_label("Editor").class("w-1 h-1"),
+				PasswordInput().aria_label("Password").class("w-1 h-1"),
+				LinearProgressIndicator(Progress::Determinate(ProgressValue::new(0.4).unwrap()))
+					.class("h-2"),
+				ActivityIndicator(true).class("w-6 h-6"),
+				Pressable("Add")
+					.class("h-10 w-32 bg-blue-600 rounded-lg")
+					.child(Text("Add preview").class("text-white")),
+				Image(artifact_path("image.png").to_string_lossy()).class("h-4 w-4"),
+				ScrollView()
+					.class("h-10")
+					.child(Text("Scrollable document")),
+				Element::new(NativeKind::TextRun)
+					.props(leptoskit_native::NativeProps::text("run"))
+					.class("h-5"),
+				Vector(ViewBox::new(0.0, 0.0, 10.0, 10.0).unwrap())
+					.path(
+						drawn("M 0 0 L 10 10")
+							.stroke(Stroke::new(Color::rgba(0, 0, 0, 255), 1.0).unwrap()),
+					)
+					.class("h-4 w-4"),
+			]);
 		let mounted = mounted(&tree);
 		let surface = mounted.surface.borrow();
 		let root = surface.root().unwrap();
@@ -2494,5 +2500,121 @@ mod linux {
 			WHITE_PIXEL,
 			"a new frame rescales the drawing"
 		);
+	}
+
+	fn pointer_gestures_use_the_shared_arena() {
+		use std::sync::Arc;
+		use std::sync::Mutex;
+
+		use leptoskit_native::Gesture;
+		use leptoskit_native::PointerPhase;
+		use leptoskit_native::PointerRoute;
+		use leptoskit_native::PointerSample;
+
+		let taps = Arc::new(Mutex::new(0usize));
+		let pans = Arc::new(Mutex::new(0.0f32));
+		let scales = Arc::new(Mutex::new(1.0f32));
+		let tap_count = Arc::clone(&taps);
+		let pan_count = Arc::clone(&pans);
+		let scale_count = Arc::clone(&scales);
+		let mounted = mounted(
+			&View().class("w-full h-full").child(
+				View()
+					.accessibility_label("Gesture pad")
+					.class("w-40 h-40")
+					.gesture(
+						Gesture::tap()
+							.on_end(move |_| *tap_count.lock().expect("tap") += 1)
+							.simultaneous(Gesture::pan().on_update(move |event| {
+								*pan_count.lock().expect("pan") = event.translation_x;
+							}))
+							.simultaneous(Gesture::pinch().on_update(move |event| {
+								*scale_count.lock().expect("pinch") = event.scale;
+							})),
+					),
+			),
+		);
+		let untouched = mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Down, 8.0, 8.0, 0));
+		assert_eq!(untouched.route, PointerRoute::Platform);
+		let surface = Rc::clone(&mounted.surface);
+		mounted.surface.borrow().backend().set_pointer_listener({
+			let surface = Rc::clone(&surface);
+			move |sample| surface.borrow().pointer(sample)
+		});
+		mounted.surface.borrow().backend().set_gesture_clock({
+			let surface = Rc::clone(&surface);
+			move |now| surface.borrow().advance_gestures(now)
+		});
+		let pad = child(&mounted, 0);
+		let frame = mounted.surface.borrow().layout(pad);
+		let x = frame.x + 12.0;
+		let y = frame.y + 12.0;
+		assert_eq!(
+			mounted
+				.surface
+				.borrow()
+				.backend()
+				.deliver_pointer(PointerSample::new(1, PointerPhase::Down, x, y, 0))
+				.route,
+			PointerRoute::Track
+		);
+		assert_eq!(
+			mounted
+				.surface
+				.borrow()
+				.backend()
+				.deliver_pointer(PointerSample::new(1, PointerPhase::Up, x, y, 40))
+				.route,
+			PointerRoute::Platform
+		);
+		assert_eq!(*taps.lock().expect("tap"), 1);
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Down, x, y, 100));
+		let claimed = mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Move, x + 40.0, y, 120));
+		assert_eq!(claimed.route, PointerRoute::Claim);
+		assert!(*pans.lock().expect("pan") > 20.0);
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Up, x + 40.0, y, 140));
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Down, x, y, 200));
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(2, PointerPhase::Down, x + 20.0, y, 210));
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(2, PointerPhase::Move, x + 50.0, y, 230));
+		assert!(*scales.lock().expect("pinch") > 1.5);
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(2, PointerPhase::Up, x + 50.0, y, 240));
+		mounted
+			.surface
+			.borrow()
+			.backend()
+			.deliver_pointer(PointerSample::new(1, PointerPhase::Cancel, x, y, 250));
+		assert_eq!(*taps.lock().expect("tap"), 1);
 	}
 }

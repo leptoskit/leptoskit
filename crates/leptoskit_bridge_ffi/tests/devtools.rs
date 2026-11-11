@@ -314,7 +314,7 @@ fn counter(count: u32) -> serde_json::Value {
 	json!({
 		"text": format!("Count: {count}"),
 		"class": "text-lg",
-		"source": "src/app.rs:11:9",
+		"source_location": "src/app.rs:11:9",
 	})
 }
 
@@ -325,27 +325,27 @@ fn counter_guest() -> String {
 				1,
 				0,
 				None,
-				json!({ "class": "flex-col p-4", "source": "src/app.rs:10:5" }),
+				json!({ "class": "flex-col p-4", "source_location": "src/app.rs:10:5" }),
 			),
 			(2, 1, Some(1), counter(0)),
 			(
 				3,
 				6,
 				Some(1),
-				json!({ "text": "Add one", "source": "src/app.rs:12:9" }),
+				json!({ "text": "Add one", "source_location": "src/app.rs:12:9" }),
 			),
 			// A layout-only container, which the platform draws no view for.
 			(
 				4,
 				0,
 				Some(1),
-				json!({ "class": "p-2", "source": "src/app.rs:13:9" }),
+				json!({ "class": "p-2", "source_location": "src/app.rs:13:9" }),
 			),
 			(
 				5,
 				1,
 				Some(4),
-				json!({ "text": "Nested", "class": "w-20 h-6", "source": "src/app.rs:14:13" }),
+				json!({ "text": "Nested", "class": "w-20 h-6", "source_location": "src/app.rs:14:13" }),
 			),
 		],
 		Some((3, 2, counter(1))),
@@ -645,7 +645,7 @@ fn an_app_reports_its_tree_commits_and_commands_across_a_reload() {
 			1,
 			1,
 			None,
-			json!({ "text": "Reloaded", "source": "src/app.rs:20:5" }),
+			json!({ "text": "Reloaded", "source_location": "src/app.rs:20:5" }),
 		)],
 		None,
 	));

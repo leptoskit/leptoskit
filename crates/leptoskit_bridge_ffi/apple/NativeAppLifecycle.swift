@@ -89,7 +89,7 @@ public final class NativeAppClosing {
         let completed: Result<Void, NativeAppCloseError> = status > 0
             ? .success(()) : .failure(NativeAppCloseError(status: status))
 
-        if status < 0 { NSLog("LeptosKit service close failed (%d)", status) }
+        if status < 0 { NativeLog.warn(NativeLog.bridge, "a service failed to close (\(status))") }
         result = completed
         releaseNative()
         let pending = waiters

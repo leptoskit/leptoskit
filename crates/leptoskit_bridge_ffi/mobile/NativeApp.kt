@@ -47,6 +47,13 @@ object NativeApp {
 
     @JvmStatic external fun error(app: Long): ByteArray
 
+    /** Writes one record through leptoskit's logger: level 1 error, 2 warn, 3 info, 4 debug. */
+    @JvmStatic external fun log(
+        level: Int,
+        tag: ByteArray,
+        message: ByteArray,
+    )
+
     /**
      * Lends [app] to a new guest thread, which calls [notifier]'s `notified()`
      * after it posts something. Returns 0 when it cannot start.
@@ -95,6 +102,12 @@ object NativeApp {
 
     /** Runs a guest step for a platform background tick, marking the wake reason. */
     @JvmStatic external fun guestWakeBackground(guest: Long): Int
+
+    /** Offers system Back to the guest; its answer follows a notification. */
+    @JvmStatic external fun guestSystemBack(guest: Long): Int
+
+    /** The oldest answer to [guestSystemBack]: 1 went back, 2 leave, 0 none waiting. */
+    @JvmStatic external fun guestTakeSystemBack(guest: Long): Int
 
     @JvmStatic external fun guestComplete(
         guest: Long,

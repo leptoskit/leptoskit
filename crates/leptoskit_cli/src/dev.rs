@@ -13,6 +13,7 @@
 
 mod guests;
 mod native;
+mod session;
 
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -21,6 +22,7 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -34,6 +36,10 @@ use leptoskit_config::Platform;
 use notify::RecursiveMode;
 use notify::Watcher;
 
+use crate::budgets::Package;
+use crate::budgets::Rebuild;
+use crate::budgets::classify_edit;
+use crate::budgets::dependency_names;
 use crate::cli::REBUILD_DEBOUNCE;
 use crate::server::LeptosEnv;
 use crate::server::SiteEnv;
@@ -81,7 +87,8 @@ fn start_studio(
 }
 
 /// Runs the dev loop: an initial build of every selected platform, then a
-/// watcher that rebuilds them once changes settle. `platforms` names the
+/// rebuild once changes settle after each change, including one made while
+/// the initial build ran. `platforms` names the
 /// platforms to run; empty means every enabled platform this machine can run.
 /// `devices` narrows the mobile platforms to the simulators and devices named.
 ///
@@ -139,28 +146,66 @@ pub fn run(options: Options<'_>) -> Result<()> {
 
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
-	let started = Started::start(Start {
-		config: &config,
-		root: &root,
-		port,
-		devices,
-		tools,
-		selection: &selection,
-		runtime: &runtime,
-		no_devtools,
-		devtools_port,
-		studio,
-	})?;
-	let watching = watch(
-		&config,
-		&root,
-		&runtime,
-		open,
-		started.web.as_ref(),
-		started.database.as_ref(),
-	)?;
+	let database = start_database(&config, &root)?;
+
+	develop(
+		database,
+		|database| watch(&config, &root, &runtime, database.as_ref()),
+		|database| {
+			Started::start(Start {
+				config: &config,
+				root: &root,
+				port,
+				devices,
+				tools,
+				selection: &selection,
+				runtime: &runtime,
+				no_devtools,
+				devtools_port,
+				studio,
+				database,
+			})
+		},
+		|started, watching| {
+			announce(&root, open, started.web.as_ref());
+			rebuild(started, watching);
+		},
+	)
+}
+
+/// Starts watching before anything builds, then starts the platforms, then
+/// rebuilds on every change. An edit made while the first build runs, which
+/// takes minutes on a fresh checkout, waits in the watcher's queue and
+/// rebuilds as soon as the platforms are up. Watching only afterwards lost
+/// it unless the platform's watcher happened to report it late, which
+/// inotify never does, leaving the server on the code from before the edit
+/// until the next one. The database, which the watcher follows, starts
+/// first.
+fn develop<D, W, S>(
+	database: D,
+	watch: impl FnOnce(&D) -> Result<W>,
+	start: impl FnOnce(D) -> Result<S>,
+	rebuild: impl FnOnce(S, &W),
+) -> Result<()> {
+	let watching = watch(&database)?;
+	let started = start(database)?;
 	rebuild(started, &watching);
 	Ok(())
+}
+
+/// Says what `dev` watches, and opens the web app when asked to.
+fn announce(root: &Path, open: bool, web: Option<&Web>) {
+	anstream::println!(
+		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
+		root.display()
+	);
+
+	if let Some(web) = web
+		&& open
+		&& let Err(error) = open_browser(&web.url())
+	{
+		ui::warning(format_args!("could not open the browser: {error:#}"));
+	}
 }
 
 fn terminal_only(
@@ -218,6 +263,9 @@ struct Start<'a> {
 	no_devtools: bool,
 	devtools_port: Option<u16>,
 	studio: bool,
+	/// The development database, started before the watcher, which follows
+	/// its tables.
+	database: Option<crate::db::DevDatabase>,
 }
 
 impl Started {
@@ -233,6 +281,7 @@ impl Started {
 			no_devtools,
 			devtools_port,
 			studio,
+			database,
 		} = start;
 		let devtools = if no_devtools {
 			None
@@ -247,7 +296,6 @@ impl Started {
 			Some(hub)
 		};
 
-		let database = start_database(config, root)?;
 		let studio = start_studio(studio, database.as_ref())?;
 		let web = selection
 			.web
@@ -259,11 +307,30 @@ impl Started {
 				crate::extension::dev::ExtensionDev::start(root, runtime, tools.extension_browser)
 			})
 			.transpose()?;
-		let native = if selection.native.is_empty() {
+		let phones = [Platform::Android, Platform::Ios]
+			.into_iter()
+			.filter(|platform| config.app.platforms.contains(platform))
+			.collect::<Vec<_>>();
+		let native = if selection.native.is_empty() && phones.is_empty() {
 			None
 		} else {
-			let native =
+			let mut native =
 				native::NativeDev::start(root, config, &selection.native, devices, tools, runtime)?;
+
+			for platform in phones {
+				if native.serves(platform) {
+					continue;
+				}
+
+				if let Err(error) = native.publish_phone_guest(config, platform) {
+					ui::tagged(
+						platform,
+						format_args!("the phone guest was not published: {error:#}"),
+					);
+				}
+			}
+
+			session::print_session(native.port());
 			anyhow::ensure!(
 				web.is_some() || extension.is_some() || !native.is_empty(),
 				"no platform started"
@@ -286,8 +353,6 @@ fn watch(
 	config: &LeptoskitConfig,
 	root: &Path,
 	runtime: &tokio::runtime::Runtime,
-	open: bool,
-	web: Option<&Web>,
 	database: Option<&crate::db::DevDatabase>,
 ) -> Result<Watching> {
 	let (events_tx, events_rx) = mpsc::channel::<Wake>();
@@ -300,18 +365,6 @@ fn watch(
 	let (mut watcher, heard, scope) = start_watcher(config, root, events_tx, database)?;
 	watch_roots(&mut watcher, &scope)?;
 	heard.branch.watch(&mut watcher)?;
-
-	anstream::println!(
-		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
-		root.display()
-	);
-
-	if let Some(web) = web
-		&& open
-		&& let Err(error) = open_browser(&web.url())
-	{
-		ui::warning(format_args!("could not open the browser: {error:#}"));
-	}
 
 	Ok(Watching {
 		_watcher: watcher,
@@ -333,6 +386,28 @@ struct Heard {
 	config_changed: Arc<AtomicBool>,
 	tables_changed: Arc<AtomicBool>,
 	branch: BranchWatch,
+	paths: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl Heard {
+	#[cfg(test)]
+	fn new(database: bool, root: &Path) -> Self {
+		Self {
+			config_changed: Arc::new(AtomicBool::new(false)),
+			tables_changed: Arc::new(AtomicBool::new(false)),
+			branch: BranchWatch::new(database, root),
+			paths: Arc::new(Mutex::new(Vec::new())),
+		}
+	}
+
+	fn take_paths(&self) -> Vec<PathBuf> {
+		std::mem::take(
+			&mut self
+				.paths
+				.lock()
+				.unwrap_or_else(std::sync::PoisonError::into_inner),
+		)
+	}
 }
 
 /// The files the watcher covers.
@@ -359,6 +434,7 @@ fn start_watcher(
 	let tables_dir = database.and_then(|database| database.package_dir(&metadata));
 	let tables_changed = Arc::new(AtomicBool::new(false));
 	let branch = BranchWatch::new(database.is_some(), root);
+	let paths = Arc::new(Mutex::new(Vec::new()));
 
 	let filter = WatchFilter {
 		public: public.clone(),
@@ -376,6 +452,7 @@ fn start_watcher(
 	let changed = Arc::clone(&config_changed);
 	let tables = Arc::clone(&tables_changed);
 	let switched = branch.clone();
+	let heard_paths = Arc::clone(&paths);
 	let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
 		match event {
 			Ok(event) if switched.heard(&event) => drop(events_tx.send(Wake::Changed)),
@@ -393,6 +470,16 @@ fn start_watcher(
 					tables.store(true, Ordering::Relaxed);
 				}
 
+				if let Ok(mut paths) = heard_paths.lock() {
+					paths.extend(
+						event
+							.paths
+							.iter()
+							.filter(|path| filter.is_relevant(path))
+							.cloned(),
+					);
+				}
+
 				let _ = events_tx.send(Wake::Changed);
 			}
 
@@ -408,6 +495,7 @@ fn start_watcher(
 			config_changed,
 			tables_changed,
 			branch,
+			paths,
 		},
 		Watched {
 			metadata,
@@ -458,6 +546,34 @@ fn watch_roots(watcher: &mut notify::RecommendedWatcher, scope: &Watched) -> Res
 fn rebuild(mut started: Started, watching: &Watching) {
 	let Watching { events, heard, .. } = watching;
 
+	on_changes(events, || {
+		let paths = heard.take_paths();
+		// Before the rebuild, so the server starts on the branch's database
+		// and embeds a migration written now.
+		follow_database(
+			started.database.as_mut(),
+			&heard.branch,
+			&heard.tables_changed,
+			started.web.as_mut(),
+		);
+
+		if let Some(web) = &mut started.web {
+			web.rebuild(&paths);
+		}
+
+		if let Some(extension) = &mut started.extension {
+			extension.rebuild();
+		}
+
+		if let Some(native) = &started.native {
+			reload_native(native, &heard.config_changed);
+		}
+	});
+}
+
+/// Calls `rebuild` once changes settle after each change, until `dev` is
+/// asked to stop.
+fn on_changes(events: &mpsc::Receiver<Wake>, mut rebuild: impl FnMut()) {
 	while let Ok(Wake::Changed) = events.recv() {
 		// Debounce: keep absorbing events until none arrives for a whole
 		// window, so an editor's burst of writes triggers one rebuild.
@@ -469,26 +585,7 @@ fn rebuild(mut started: Started, watching: &Watching) {
 			}
 		}
 
-		// Before the rebuild, so the server starts on the branch's database
-		// and embeds a migration written now.
-		follow_database(
-			started.database.as_mut(),
-			&heard.branch,
-			&heard.tables_changed,
-			started.web.as_mut(),
-		);
-
-		if let Some(web) = &mut started.web {
-			web.rebuild();
-		}
-
-		if let Some(extension) = &mut started.extension {
-			extension.rebuild();
-		}
-
-		if let Some(native) = &started.native {
-			reload_native(native, &heard.config_changed);
-		}
+		rebuild();
 	}
 }
 
@@ -624,6 +721,14 @@ struct Web {
 	database_url: Option<crate::services::run::AppDatabase>,
 	/// The app's services, running beside it.
 	services: DevServices,
+	/// Workspace packages, for deciding which side an edit rebuilds.
+	packages: Vec<Package>,
+	/// Packages the wasm client links.
+	client_packages: std::collections::BTreeSet<String>,
+	/// Packages the server links.
+	server_packages: std::collections::BTreeSet<String>,
+	/// Directories copied without a compile.
+	asset_dirs: Vec<PathBuf>,
 }
 
 /// The services `leptoskit dev` runs, and what the app receives for them.
@@ -660,7 +765,8 @@ impl Web {
 		let server_rendered =
 			config.app.render.renders_on_server() && config.app.default_platform == Platform::Web;
 
-		let output = crate::build::run(false, None, None, DEV_OUT)?;
+		let output = crate::build::run_dev(Rebuild::Full)?;
+		let (packages, client_packages, server_packages, asset_dirs) = edit_scope(config, root);
 		crate::build::serve_plugins(config)?;
 		// An app with a server package runs it, whatever its render mode: a
 		// client-rendered app's server is where its API and sign-in live, and
@@ -697,6 +803,10 @@ impl Web {
 				tokens: crate::services::run::tokens(&output.services)?,
 				..DevServices::default()
 			},
+			packages,
+			client_packages,
+			server_packages,
+			asset_dirs,
 		};
 		web.start_services(&output.services)?;
 
@@ -817,22 +927,48 @@ impl Web {
 		}
 	}
 
-	fn rebuild(&mut self) {
+	fn rebuild(&mut self, paths: &[PathBuf]) {
+		let edit = classify_edit(
+			paths,
+			&self.packages,
+			&self.client_packages,
+			&self.server_packages,
+			&self.asset_dirs,
+		);
 		// Stop the app server and the services before cargo replaces their
-		// binaries: Windows refuses to overwrite a running executable.
-		self.stop_app_server();
-		self.services.running.stop();
+		// binaries: Windows refuses to overwrite a running executable. An
+		// asset or client-only edit leaves the server running.
+		let restarts = edit.compiles_server();
+
+		if restarts {
+			self.stop_app_server();
+			self.services.running.stop();
+		}
+
 		let started = Instant::now();
 
-		match crate::build::run(false, None, None, DEV_OUT) {
+		match crate::build::run_dev(edit) {
 			Ok(output) => {
+				let elapsed = started.elapsed();
+				let budget = crate::budgets::EDIT_TO_PRESENT;
+				let place = if elapsed <= budget {
+					"inside"
+				} else {
+					"outside"
+				};
 				ui::tagged(
 					"web",
 					format_args!(
-						"{GOOD}rebuilt{GOOD:#} {DIM}in {}{DIM:#}",
-						ui::seconds(started.elapsed())
+						"{GOOD}rebuilt{GOOD:#} {} {DIM}in {} ({place} the {} edit budget){DIM:#}",
+						edit.label(),
+						ui::seconds(elapsed),
+						ui::seconds(budget),
 					),
 				);
+
+				if !restarts {
+					return;
+				}
 
 				if let Err(error) = self.start_services(&output.services) {
 					ui::tagged_error(
@@ -981,6 +1117,61 @@ fn excluded_dirs(
 	let android = crate::native::host_dir(root, crate::native::Target::Android);
 	excluded.extend([".gradle", "build", "app/build", "app/.cxx"].map(|path| android.join(path)));
 	excluded
+}
+
+/// Packages an edit can belong to, and which side links each one.
+fn edit_scope(
+	config: &LeptoskitConfig,
+	root: &Path,
+) -> (
+	Vec<Package>,
+	std::collections::BTreeSet<String>,
+	std::collections::BTreeSet<String>,
+	Vec<PathBuf>,
+) {
+	let asset_dirs = crate::budgets::asset_dirs(root);
+	let Ok(metadata) = crate::wasm::cargo_metadata(root) else {
+		return (
+			Vec::new(),
+			std::collections::BTreeSet::new(),
+			std::collections::BTreeSet::new(),
+			asset_dirs,
+		);
+	};
+	let packages: Vec<Package> = metadata
+		.packages
+		.iter()
+		.map(|package| {
+			Package {
+				name: package.name.clone(),
+				dir: package.manifest_path.parent().unwrap_or(root).to_path_buf(),
+				deps: package
+					.dependencies
+					.iter()
+					.filter(|dependency| metadata.package(&dependency.name).is_some())
+					.map(|dependency| dependency.name.clone())
+					.collect(),
+			}
+		})
+		.collect();
+	let client = crate::wasm::detect_client_with(
+		config.build.client_package.as_deref(),
+		Some(&config.app.name),
+		&metadata,
+	)
+	.ok()
+	.flatten()
+	.map(|client| client.name)
+	.unwrap_or_default();
+	let server = crate::server::backend_package(config, &metadata, Platform::Web)
+		.ok()
+		.flatten()
+		.map(|package| package.name.clone())
+		.unwrap_or_default();
+
+	let client_packages = dependency_names(&packages, &client);
+	let server_packages = dependency_names(&packages, &server);
+	(packages, client_packages, server_packages, asset_dirs)
 }
 
 /// Starts the app's development database, if it has one, and checks its
@@ -1315,6 +1506,59 @@ mod tests {
 	}
 
 	#[test]
+	fn an_edit_during_the_first_build_rebuilds_once_the_platforms_start() {
+		let (temporary, config) = workspace();
+		let root = &temporary.path().canonicalize().unwrap();
+		let (events, received) = mpsc::channel();
+		let stop = events.clone();
+		// Ends the loop if the edit is never heard, so the test fails
+		// rather than hangs.
+		let deadline = events.clone();
+		std::thread::spawn(move || {
+			std::thread::sleep(std::time::Duration::from_secs(30));
+			let _ = deadline.send(Wake::Stop);
+		});
+		let mut order = Vec::new();
+		let mut rebuilds = 0;
+
+		develop(
+			(),
+			|()| {
+				let (mut watcher, _, scope) = start_watcher(&config, root, events, None)?;
+				watch_roots(&mut watcher, &scope)?;
+				Ok(watcher)
+			},
+			|()| {
+				// The first build, which takes long enough to edit the app
+				// during it.
+				std::fs::write(root.join("app/src/lib.rs"), "pub fn edited() {}\n").unwrap();
+				order.push("started");
+				Ok(())
+			},
+			|(), _watcher| {
+				on_changes(&received, || {
+					rebuilds += 1;
+					let _ = stop.send(Wake::Stop);
+				});
+			},
+		)
+		.unwrap();
+
+		assert_eq!(order, ["started"]);
+		assert_eq!(rebuilds, 1, "the edit made during the first build rebuilds");
+
+		// A platform that fails to start ends `dev` before it rebuilds.
+		let error = develop(
+			(),
+			|()| Ok(()),
+			|()| -> Result<()> { anyhow::bail!("could not build") },
+			|(), ()| unreachable!("nothing started"),
+		)
+		.unwrap_err();
+		assert_eq!(error.to_string(), "could not build");
+	}
+
+	#[test]
 	fn a_terminal_build_refuses_the_flags_meant_for_other_platforms() {
 		let temporary = tempfile::tempdir().unwrap();
 		let root = temporary.path();
@@ -1409,6 +1653,10 @@ mod tests {
 			runs_app_server: false,
 			app_server: None,
 			env: Vec::new(),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 		assert_eq!(web.url(), "http://127.0.0.1:4810");
 		web.stop_app_server();
@@ -1432,6 +1680,10 @@ mod tests {
 					.spawn()
 					.unwrap(),
 			),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 
 		running.stop_app_server();
@@ -1457,6 +1709,10 @@ mod tests {
 			runs_app_server: true,
 			env: Vec::new(),
 			app_server: Some(created),
+			packages: Vec::new(),
+			client_packages: std::collections::BTreeSet::new(),
+			server_packages: std::collections::BTreeSet::new(),
+			asset_dirs: Vec::new(),
 		};
 
 		drop(doomed);
@@ -1466,7 +1722,8 @@ mod tests {
 	fn watching_starts_the_dev_loop_and_stops_without_a_browser() {
 		let (root, config) = workspace();
 		let runtime = tokio::runtime::Runtime::new().unwrap();
-		let watching = watch(&config, root.path(), &runtime, false, None, None).unwrap();
+		let watching = watch(&config, root.path(), &runtime, None).unwrap();
+		announce(root.path(), false, None);
 		drop(watching);
 	}
 
@@ -1528,11 +1785,7 @@ mod tests {
 		let watching = Watching {
 			_watcher: watcher,
 			events: received,
-			heard: Heard {
-				config_changed: Arc::new(AtomicBool::new(false)),
-				tables_changed: Arc::new(AtomicBool::new(false)),
-				branch: BranchWatch::new(false, root),
-			},
+			heard: Heard::new(false, root),
 		};
 		rebuild(started(), &watching);
 	}
@@ -1551,11 +1804,7 @@ mod tests {
 		let watching = Watching {
 			_watcher: watcher,
 			events: received,
-			heard: Heard {
-				config_changed: Arc::new(AtomicBool::new(false)),
-				tables_changed: Arc::new(AtomicBool::new(false)),
-				branch: BranchWatch::new(false, root),
-			},
+			heard: Heard::new(false, root),
 		};
 		rebuild(started(), &watching);
 		handle.join().unwrap();

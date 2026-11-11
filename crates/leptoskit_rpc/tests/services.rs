@@ -366,11 +366,8 @@ async fn the_apps_live_connection_refuses_a_service_signing_in_after_it_opens() 
 
 /// A service's operation as the app's build declares it: this test crate
 /// has no `service` feature, as an app's server build of the service's
-/// crate doesn't, so `#[rpc::query(service = "...")]` gives the typed stub.
-#[allow(
-	unexpected_cfgs,
-	reason = "this test crate stands in for a service crate without its `service` feature"
-)]
+/// crate doesn't, so `#[rpc::query(service = "...")]` gives the typed stub,
+/// with no `cfg` naming a feature this crate lacks.
 mod elsewhere {
 	use leptoskit_rpc as rpc;
 

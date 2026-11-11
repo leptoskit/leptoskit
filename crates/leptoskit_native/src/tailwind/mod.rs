@@ -20,7 +20,10 @@
 //! widths (`min-[968px]`, `max-[968px]`), `dark`, `active`, `starting` (the
 //! look a widget enters from, as CSS `@starting-style`), and trailing `!`
 //! (or the older leading `!`) are supported. Dark mode follows the system
-//! preference on the web; native hosts supply [`StyleContext::dark`]. `active`
+//! preference on the web unless the document's root element carries
+//! `data-lk-appearance="light"` or `"dark"`, which
+//! [`appearance::set`](crate::appearance::set) puts there; native hosts
+//! supply [`StyleContext::dark`]. `active`
 //! styles an enabled control while it is held down: CSS `:active` on the web,
 //! and [`StyleContext::active`] on native, which the surface sets for the
 //! control the user is pressing.
@@ -39,8 +42,9 @@
 //! Block/inline/contents flow, fixed/sticky positioning, baseline alignment,
 //! overflow on individual axes, other pseudo states, arbitrary selectors and
 //! properties, non-color CSS functions (`calc`), deep nested `var()` beyond one
-//! fallback level, filters, and shadows are rejected. Text sizes
-//! set font size only: line height is not yet a native text prop. Colors use
+//! fallback level, filters, and shadows are rejected. Text sizes set font
+//! size only; `leading-*` and the `text-sm/6` shorthand set line height, and
+//! `font-thin` through `font-black` set all nine weights. Colors use
 //! the default palette converted to 8-bit sRGB, clipping colors outside its
 //! gamut, so native and web use the same color values. Arbitrary color and
 //! length values may be `var(--name)` or `var(--name, fallback)` (one nested
@@ -355,53 +359,24 @@ impl Tailwind {
 		let mut css = String::new();
 
 		for rule in self.rules.iter() {
-			let conditions = rule.conditions;
-			let mut wrappers = 0;
-
-			if conditions.starting {
-				css.push_str("@starting-style{");
-				wrappers += 1;
-			}
-
-			if conditions.dark {
+			if rule.conditions.dark {
+				// The device's dark setting, unless the app chose light...
 				css.push_str("@media (prefers-color-scheme:dark){");
-				wrappers += 1;
-			}
-
-			if let Some(min) = conditions.min_width {
-				let _ = write!(css, "@media (width>={}rem){{", f32::from(min) / 16.0);
-				wrappers += 1;
-			}
-
-			if let Some(max) = conditions.max_width {
-				let _ = write!(css, "@media (width<{}rem){{", f32::from(max) / 16.0);
-				wrappers += 1;
-			}
-
-			if let Some(scope) = scope {
-				let _ = write!(css, ":where({scope})");
-			}
-
-			css.push('.');
-			escape_identifier(&rule.class, &mut css);
-
-			// Disabled links render without an `href`, which browsers would
-			// still mark `:active` under the pointer; native controls never
-			// press while disabled.
-			if conditions.active {
-				css.push_str(":active:not([aria-disabled=true])");
-			}
-
-			css.push('{');
-
-			for declaration in &rule.declarations {
-				declaration.css(&mut css, rule.important);
-			}
-
-			css.push('}');
-
-			for _ in 0..wrappers {
+				rule.css(
+					&mut css,
+					scope,
+					Some(":where(:root:not([data-lk-appearance=light])) "),
+				);
 				css.push('}');
+				// ...and whenever the app chose dark. `:where` adds no
+				// specificity, so precedence stays the rules' order.
+				rule.css(
+					&mut css,
+					scope,
+					Some(":where(:root[data-lk-appearance=dark]) "),
+				);
+			} else {
+				rule.css(&mut css, scope, None);
 			}
 
 			for declaration in &rule.declarations {
@@ -416,6 +391,58 @@ impl Tailwind {
 }
 
 impl Rule {
+	/// Writes the rule within its conditions other than `dark`, which the
+	/// caller expresses through `root`, a selector for the document root.
+	fn css(&self, css: &mut String, scope: Option<&str>, root: Option<&str>) {
+		let conditions = self.conditions;
+		let mut wrappers = 0;
+
+		if conditions.starting {
+			css.push_str("@starting-style{");
+			wrappers += 1;
+		}
+
+		if let Some(min) = conditions.min_width {
+			let _ = write!(css, "@media (width>={}rem){{", f32::from(min) / 16.0);
+			wrappers += 1;
+		}
+
+		if let Some(max) = conditions.max_width {
+			let _ = write!(css, "@media (width<{}rem){{", f32::from(max) / 16.0);
+			wrappers += 1;
+		}
+
+		if let Some(root) = root {
+			css.push_str(root);
+		}
+
+		if let Some(scope) = scope {
+			let _ = write!(css, ":where({scope})");
+		}
+
+		css.push('.');
+		escape_identifier(&self.class, css);
+
+		// Disabled links render without an `href`, which browsers would
+		// still mark `:active` under the pointer; native controls never
+		// press while disabled.
+		if conditions.active {
+			css.push_str(":active:not([aria-disabled=true])");
+		}
+
+		css.push('{');
+
+		for declaration in &self.declarations {
+			declaration.css(css, self.important);
+		}
+
+		css.push('}');
+
+		for _ in 0..wrappers {
+			css.push('}');
+		}
+	}
+
 	fn parse(class: &str) -> Result<Self, String> {
 		let mut parts = split_variants(class)?;
 		let utility = parts.pop().ok_or("empty utility")?;

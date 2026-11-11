@@ -425,7 +425,9 @@ internal class NativeWidgetRenderer(
                 }
 
                 else -> {
-                    error("Unsupported widget: $kind")
+                    // GTK draws an unknown or custom kind as an empty container.
+                    // Stopping the tree here took the whole activity down.
+                    FrameLayout(context)
                 }
             }
         widget.tag = id
@@ -576,6 +578,13 @@ internal class NativeWidgetRenderer(
         val view = widget(item.id)
         val params = view.layoutParams as? FrameLayout.LayoutParams
 
+        // The stroke scale uses this continuous size. The view's pixel box is
+        // the outward snap below, which at 420 dpi turns a 10dp edge into 27px
+        // and stretches a drawing-scaled stroke past the layout size.
+        if (view is NativeVectorView) {
+            view.setLayoutSize((item.width * density).toFloat(), (item.height * density).toFloat())
+        }
+
         // Assigning params requests a layout pass, so an unchanged frame keeps them.
         if (params != null &&
             params.width == width &&
@@ -585,7 +594,6 @@ internal class NativeWidgetRenderer(
         ) {
             return
         }
-
         view.layoutParams =
             (params ?: FrameLayout.LayoutParams(width, height)).apply {
                 this.width = width
@@ -752,6 +760,20 @@ internal class NativeVectorView(
             remap()
         }
 
+    /** The layout frame in continuous pixels, before it is snapped to whole pixels. */
+    private var layoutWidth = 0f
+    private var layoutHeight = 0f
+
+    fun setLayoutSize(
+        width: Float,
+        height: Float,
+    ) {
+        if (layoutWidth == width && layoutHeight == height) return
+        layoutWidth = width
+        layoutHeight = height
+        if (this.width > 0 || this.height > 0) remap()
+    }
+
     /** Each path mapped onto the current frame in pixels, in painting order. */
     var frames: List<NativeVectorFrame> = emptyList()
         private set
@@ -803,8 +825,15 @@ internal class NativeVectorView(
             } else {
                 val matrix = drawing.matrix(width.toFloat(), height.toFloat())
                 val density = resources.displayMetrics.density
-                // For a scale-and-translate matrix, a mapped unit radius is sqrt(|scaleX * scaleY|).
-                val drawingScale = matrix.mapRadius(1f)
+                // Stroke widths follow the layout frame, not the snapped view.
+                // mapRadius of a scale is sqrt(|scaleX * scaleY|).
+                val strokeMatrix =
+                    if (layoutWidth > 0f && layoutHeight > 0f) {
+                        drawing.matrix(layoutWidth, layoutHeight)
+                    } else {
+                        matrix
+                    }
+                val drawingScale = strokeMatrix.mapRadius(1f)
 
                 drawing.paths.map { path ->
 

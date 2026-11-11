@@ -26,7 +26,7 @@ enum BlobWire {
     static func create(_ payload: NativeBuffer) throws -> Data {
         try payload.withUnsafeBytes { bytes in
             var reader = WireReader(bytes)
-            let data = try reader.bytes()
+            let data = try reader.readBytes()
             try reader.finish()
             guard !data.isEmpty, data.count <= maxCreate else { throw PluginError.invalidArgument }
             return data
@@ -82,7 +82,7 @@ private struct WireReader {
         }
         return UInt32(littleEndian: value)
     }
-    mutating func bytes() throws -> Data {
+    mutating func readBytes() throws -> Data {
         let count = Int(try u32())
         guard count >= 0, offset + count <= bytes.count else { throw PluginError.invalidArgument }
         let data = Data(bytes[offset ..< offset + count])

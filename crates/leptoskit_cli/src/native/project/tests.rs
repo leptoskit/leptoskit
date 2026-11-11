@@ -207,6 +207,57 @@ fn android_emits_selected_maven_dependencies_once_and_removes_stale_entries() {
 }
 
 #[test]
+fn android_cmake_links_the_libraries_rustc_reports_without_repeats() {
+	let root = std::env::temp_dir()
+		.canonicalize()
+		.unwrap()
+		.join(format!("leptoskit-android-cmake-{}", std::process::id()));
+	std::fs::create_dir_all(&root).unwrap();
+	let registry = metadata_registry(&root, &[]);
+	let path = root.join(".leptoskit/android/CMakeLists.txt");
+
+	// Generation alone names the archive and the NDK's own libraries; the host
+	// build then adds the ones rustc reports for the archive.
+	write_android_cmake(&root, &registry, &[]).unwrap();
+	let cmake = std::fs::read_to_string(&path).unwrap();
+	assert!(
+		cmake.contains(
+			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m)\n"
+		),
+		"{cmake}"
+	);
+
+	write_android_cmake(
+		&root,
+		&registry,
+		&[
+			"dl".to_owned(),
+			"aaudio".to_owned(),
+			"c++_shared".to_owned(),
+			"aaudio".to_owned(),
+			"OpenSLES".to_owned(),
+		],
+	)
+	.unwrap();
+	let cmake = std::fs::read_to_string(&path).unwrap();
+	assert!(
+		cmake.contains(
+			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m aaudio \
+			 OpenSLES)\n"
+		),
+		"{cmake}"
+	);
+	assert_eq!(cmake.matches("aaudio").count(), 1, "{cmake}");
+	assert!(
+		!cmake.contains("c++"),
+		"the host's C++ runtime is CMake's to link, and the APK carries no libc++_shared.so: \
+		 {cmake}"
+	);
+
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ios_passes_presentation_context_only_to_plugins_that_request_it() {
 	let root = std::env::temp_dir()
 		.canonicalize()
@@ -321,12 +372,17 @@ fn generated_hosts_install_rust_workers_and_register_only_native_plugins() {
 
 	generate(&root, &config, &registry, Target::Android, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(registrant.contains("app.install_worker(Box::new(store_crate::Store::default()))?;"));
 	assert!(registrant.contains(
-		"app.install_worker(Box::new(files_crate::from_app_dirs(&_context.data_dir, \
-		 &_context.cache_dir)?))?;"
+		"app.register(\"store\", |app| {\n                    \
+		 app.install_worker(Box::new(store_crate::Store::default()))\n                })?;"
+	));
+	assert!(registrant.contains(
+		"app.register(\"filesystem\", |app| {\n                    \
+		 app.install_worker(Box::new(files_crate::from_app_dirs(&_context.data_dir, \
+		 &_context.cache_dir)?))\n                })?;"
 	));
 	assert!(!registrant.contains("haptics"));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let sources = root.join(".leptoskit/android/sources");
 	let kotlin = std::fs::read_to_string(sources.join("GeneratedPlugins.kt")).unwrap();
 	assert_eq!(kotlin.matches("dispatcher.register(").count(), 1);
@@ -430,10 +486,8 @@ fn the_android_launcher_activity_starts_in_the_launch_theme() {
 	let registry = host_registry(&root);
 	let mut config = leptoskit_config::LeptoskitConfig::default();
 	config.app.launch_screen = Some(leptoskit_config::LaunchScreen {
-		background: "#0b0c10".into(),
-		background_dark: None,
-		image: None,
-		image_size: leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE,
+		background: Some("#0b0c10".into()),
+		..leptoskit_config::LaunchScreen::default()
 	});
 	let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
 	fixture(
@@ -708,10 +762,12 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 
 	generate(&root, &config, &registry, Target::Android, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(
-		registrant
-			.contains("app.install_main(Box::new(clipboard_crate::from_context(_context)?))?;")
-	);
+	assert!(registrant.contains(
+		"app.register(\"clipboard\", |app| {\n                    \
+		 app.install_main(Box::new(clipboard_crate::from_context(_context)?))\n                \
+		 })?;"
+	));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let kotlin =
 		std::fs::read_to_string(root.join(".leptoskit/android/sources/GeneratedPlugins.kt"))
 			.unwrap();
@@ -724,10 +780,12 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 
 	generate(&root, &config, &registry, Target::IosSimulator, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(
-		registrant
-			.contains("app.install_main(Box::new(clipboard_crate::from_context(_context)?))?;")
-	);
+	assert!(registrant.contains(
+		"app.register(\"clipboard\", |app| {\n                    \
+		 app.install_main(Box::new(clipboard_crate::from_context(_context)?))\n                \
+		 })?;"
+	));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let swift =
 		std::fs::read_to_string(root.join(".leptoskit/ios/GeneratedPlugins.swift")).unwrap();
 	assert!(!swift.contains("LeptosKitClipboard"));

@@ -64,6 +64,7 @@ in
       xpkgs.mdt
       xpkgs.monochange
       xpkgs.monostyle
+      xpkgs.swift-format
       zip
       zizmor
     ]
@@ -95,6 +96,12 @@ in
     else
       export PATH="$DEVENV_PROFILE/bin:$PATH"
     fi
+  ''
+  + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+    # The native Rive runtime links libstdc++. Nix's dynamic linker does not
+    # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
+    # for `cargo nextest` and other linked test binaries.
+    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
@@ -549,13 +556,32 @@ in
             cargo nextest run --workspace --all-features
           dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+          cargo nextest run --manifest-path examples/dev_client/Cargo.toml
+          test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
         fi
         cargo nextest run --workspace --all-features
         cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        cargo nextest run --manifest-path examples/dev_client/Cargo.toml
         cargo nextest run --manifest-path devtools/Cargo.toml
+        test:wire
       '';
       description = "Run cargo tests with nextest.";
+      binary = "bash";
+    };
+
+    "test:wire" = {
+      exec = ''
+        set -euo pipefail
+        # Apps that use Solana's clients build serde_json with
+        # `arbitrary_precision`, which turns a buffered number with a
+        # fraction into a map. The guest-to-host wire must read the same
+        # with it as without.
+        cargo nextest run -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision \
+          -E 'test(/wire_tests/)'
+        cargo nextest run -p leptoskit_wasm --features serde_json/arbitrary_precision
+      '';
+      description = "Run the native wire's tests under serde_json's arbitrary_precision.";
       binary = "bash";
     };
 
@@ -567,6 +593,9 @@ in
         cargo test --manifest-path examples/file_routes/Cargo.toml \
           --test routes --test navigation --test pages
         cargo test --manifest-path examples/file_routes/Cargo.toml --doc
+        (cd examples/dev_client && cargo run --locked --manifest-path ../../Cargo.toml \
+          --package leptoskit_cli --bin leptoskit -- routes --check)
+        cargo test --manifest-path examples/dev_client/Cargo.toml
         # Huddle: its web client through the CLI, its screens, and two people
         # against its server.
         (cd examples/huddle && cargo run --locked --manifest-path ../../Cargo.toml \
@@ -632,7 +661,7 @@ in
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package auth_pages_example --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser
+          cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser --test web_splash
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features local-storage --test web_storage --test web_storage_worker
         test:rive
@@ -1046,6 +1075,11 @@ in
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe
         LEPTOSKIT_HOOKS_GUEST="$guest_target/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test hooks_guest -- --ignored
+        # A screen's remembered state survives the runtime's rebuilds and
+        # leaves with the screen.
+        cargo build --locked --target wasm32-unknown-unknown --package rebuild_guest_probe
+        LEPTOSKIT_REBUILD_GUEST="$guest_target/wasm32-unknown-unknown/debug/rebuild_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test rebuild_guest -- --ignored
         # An agent's document, interpreted by an ordinary guest: what a
         # published app runs when an agent sends it interface as text.
         cargo build --locked --target wasm32-unknown-unknown --package agent_ui_guest_probe
@@ -1169,21 +1203,23 @@ in
           --test jni_async_lifecycle -- --ignored
         cargo build --locked --package leptoskit_bridge_ffi
         mkdir -p target/plugin-jni
-        task_jdk="$(dirname "$(dirname "$(realpath "$(command -v javac)")")")"
+        task_jdk="''${JAVA_HOME:-$(dirname "$(dirname "$(realpath "$(command -v javac)")")")}"
         case "$(uname -s)" in
           Darwin)
             platform=darwin
             extension=dylib
             link_flags=(-dynamiclib)
+            cxx=(/usr/bin/xcrun --sdk macosx clang++)
             ;;
           Linux)
             platform=linux
             extension=so
             link_flags=(-shared -ldl -lpthread -lm)
+            cxx=("''${CXX:-c++}")
             ;;
           *) echo "JNI smoke tests require macOS or Linux" >&2; exit 1 ;;
         esac
-        c++ -std=c++20 -Wall -Wextra -Werror -fPIC \
+        "''${cxx[@]}" -std=c++20 -Wall -Wextra -Werror -fPIC \
           -I "$task_jdk/include" -I "$task_jdk/include/$platform" \
           crates/leptoskit_bridge_ffi/android/bridge.cpp \
           target/debug/libleptoskit_bridge_ffi.a \

@@ -27,12 +27,15 @@ final class NativeCameraView: NativeCameraBase {
         self.layer = created
         return created
         #else
-        return layer as! AVCaptureVideoPreviewLayer
+        guard let preview = layer as? AVCaptureVideoPreviewLayer else {
+            preconditionFailure("NativeCameraView.layerClass is AVCaptureVideoPreviewLayer")
+        }
+        return preview
         #endif
     }
 
     #if !os(macOS)
-    override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    override static var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     #endif
 
     private var sessionId: UInt32?

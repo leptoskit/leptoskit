@@ -115,6 +115,44 @@ struct MacTextPaintTests {
         #expect(text.isEmpty || drawn.ink > 0)
     }
 
+    /// A line height sets every line of the label, from a multiple of the font size
+    /// or in points, and every weight reaches the system font.
+    @Test func lineHeightAndWeightUpdates() throws {
+        let field = try label("ready\ndenied", width: Self.wideWidth)
+        let natural = field.frame.height
+        let props = try JSONDecoder().decode(WidgetProps.self, from: Data(#"""
+        {"text":"ready\ndenied", "fontSize":14, "fontWeight":"black", "lineHeight":{"relative":2}}
+        """#.utf8))
+
+        try MacWidgetStyle.apply(props, to: field)
+        #expect(field.lineHeight == 28)
+        #expect(field.font == NSFont.systemFont(ofSize: 14, weight: .black))
+        field.frame.size.height = 56
+        let lined = try TextPaint.capture(field)
+        #expect(lined.ink > 0)
+        #expect(natural < 56)
+
+        let fixed = try JSONDecoder().decode(WidgetProps.self, from: Data(#"""
+        {"text":"ready", "fontWeight":"thin", "lineHeight":{"fixed":20}}
+        """#.utf8))
+        try MacWidgetStyle.apply(fixed, to: field)
+        #expect(field.lineHeight == 20)
+        #expect(field.font == NSFont.systemFont(ofSize: field.font.pointSize, weight: .ultraLight))
+
+        let cleared = try JSONDecoder().decode(WidgetProps.self, from: Data(#"{"text":"ready"}"#.utf8))
+        try MacWidgetStyle.apply(cleared, to: field)
+        #expect(field.lineHeight == nil)
+    }
+
+    /// Unusable line heights keep the font's own.
+    @Test func unusableLineHeightsAreIgnored() {
+        #expect(WidgetLineHeight(relative: 1.5, fixed: nil).points(fontSize: 20) == 30)
+        #expect(WidgetLineHeight(relative: nil, fixed: 18).points(fontSize: 20) == 18)
+        #expect(WidgetLineHeight(relative: 0, fixed: nil).points(fontSize: 20) == nil)
+        #expect(WidgetLineHeight(relative: nil, fixed: -4).points(fontSize: 20) == nil)
+        #expect(WidgetLineHeight(relative: nil, fixed: nil).points(fontSize: 20) == nil)
+    }
+
     /// The label reports itself to assistive technology as static text.
     @Test func accessibleAsStaticText() throws {
         let field = try label("ready", width: Self.wideWidth)

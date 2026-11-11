@@ -47,7 +47,7 @@ public final class PictureInPicturePlugin: NativePlugin {
 
     private func capabilities() -> Data {
         #if os(iOS)
-        let supported = AVPictureInPictureController.isPictureInPictureSupported
+        let supported = AVPictureInPictureController.isPictureInPictureSupported()
 
         return words(Self.wireVersion, supported ? 1 : 0, 0)
         #else

@@ -152,11 +152,43 @@ fn invalid_bundle_and_registration_failure_return_owned_diagnostics() {
 			})
 			.is_null()
 		);
-		assert!(
-			String::from_utf8(take(error.assume_init()))
-				.unwrap()
-				.contains("register plugin")
+		assert_eq!(
+			String::from_utf8(take(error.assume_init())).unwrap(),
+			"register plugin: Unavailable"
 		);
+	}
+}
+
+/// A plugin whose factory rejects its options stops the app at launch. The
+/// error names the plugin, so the platform's crash report says which one.
+#[test]
+fn a_registration_failure_names_the_plugin_that_failed() {
+	// SAFETY: Inputs are borrowed and diagnostics are released after the call.
+	unsafe {
+		let mut error = MaybeUninit::uninit();
+		let app = create(GUEST.as_ptr(), GUEST.len(), error.as_mut_ptr(), |app| {
+			app.register("echo", |app| app.install(Box::new(Echo)))?;
+			// As a factory does when its options leave out what it needs.
+			app.register("websocket", |_| Err::<(), _>(Error::InvalidArgument))?;
+			app.register("never", |_| -> Result<(), Error> {
+				panic!("registration continued past a failure")
+			})?;
+			Ok(())
+		});
+		assert!(app.is_null());
+		assert_eq!(
+			String::from_utf8(take(error.assume_init())).unwrap(),
+			"register plugin `websocket`: InvalidArgument"
+		);
+
+		// Plugins that register are installed as before.
+		let mut error = MaybeUninit::uninit();
+		let app = create(GUEST.as_ptr(), GUEST.len(), error.as_mut_ptr(), |app| {
+			app.register("echo", |app| app.install(Box::new(Echo)))?;
+			Ok(())
+		});
+		assert!(!app.is_null());
+		lk_app_destroy(app);
 	}
 }
 

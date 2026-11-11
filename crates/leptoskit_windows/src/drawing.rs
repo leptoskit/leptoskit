@@ -1,7 +1,6 @@
 //! GDI resources shared by measurement, native control fonts, and painting.
 
 use leptoskit_native::Color;
-use leptoskit_native::FontWeight;
 use leptoskit_native::TextAlign;
 use leptoskit_native::TextMeasurer;
 use leptoskit_native::TextStyle;
@@ -40,12 +39,8 @@ pub(crate) struct Font(pub HFONT);
 
 impl Font {
 	pub fn new(style: TextStyle, scale: f32) -> Self {
-		let weight = match style.font_weight {
-			FontWeight::Regular => 400,
-			FontWeight::Medium => 500,
-			FontWeight::Semibold => 600,
-			FontWeight::Bold => 700,
-		};
+		// GDI picks the nearest weight Segoe UI has.
+		let weight = i32::from(style.font_weight.value());
 
 		// SAFETY: All font parameters are values; the static family is
 		// terminated.

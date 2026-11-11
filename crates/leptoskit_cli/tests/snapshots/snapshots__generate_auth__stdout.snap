@@ -2,7 +2,7 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: "normalize(&stdout(&output), &project)"
 ---
-wrote snapshotted_app/src/routes.rs (5 routes)
+wrote snapshotted_app/src/routes.rs (7 routes)
 created snapshotted_app/src/auth/mod.rs
 created snapshotted_app/src/auth/sign_in.rs
 created snapshotted_app/src/auth/devices.rs

@@ -378,6 +378,20 @@ fn attributes_combine_through_unions() {
 }
 
 #[test]
+fn heavy_weights_draw_bold_and_light_weights_draw_regular() {
+	use leptoskit_native::FontWeight;
+
+	for weight in FontWeight::ALL {
+		let expected = if weight >= FontWeight::Semibold {
+			Attributes::BOLD
+		} else {
+			Attributes::EMPTY
+		};
+		assert_eq!(Attributes::for_weight(weight), expected, "{weight:?}");
+	}
+}
+
+#[test]
 fn viewport_scales_cells_to_pixels() {
 	assert_eq!(leptoskit_tui::viewport(80, 24), (640.0, 384.0));
 }

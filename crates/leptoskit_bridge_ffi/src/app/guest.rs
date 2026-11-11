@@ -58,10 +58,10 @@ pub struct GuestCallbacks {
 	/// Passed to both callbacks.
 	pub context: *mut c_void,
 	/// Runs on the guest thread when it has posted something: a transaction,
-	/// a request, a cancellation, a Rive frame, a changed frame or Rive flag,
-	/// or a failure. Post a turn to the UI thread, and there call
-	/// [`lk_guest_ack`] before taking what the guest posted. It runs again
-	/// only after that acknowledgement.
+	/// a request, a cancellation, a Rive frame, a system Back answer, a
+	/// changed frame or Rive flag, or a failure. Post a turn to the UI thread,
+	/// and there call [`lk_guest_ack`] before taking what the guest posted.
+	/// It runs again only after that acknowledgement.
 	pub notify: Option<unsafe extern "C" fn(*mut c_void)>,
 	/// Runs once, on the thread calling [`lk_guest_stop`], after the guest
 	/// thread has exited, so no `notify` can follow.
@@ -111,6 +111,9 @@ struct State {
 	requests_capped: bool,
 	cancelled: VecDeque<u64>,
 	rive_images: Vec<RiveImage>,
+	/// Answers to system Back offers, oldest first: whether the guest went
+	/// back.
+	system_back: VecDeque<bool>,
 	error: Option<String>,
 }
 
@@ -142,6 +145,8 @@ enum Command {
 	/// iOS background task): run a step so the service can poll, and mark the
 	/// reason so the service can tell it from an app call.
 	BackgroundWake,
+	/// The platform's Back: offer it to the guest and post its answer.
+	SystemBack,
 	RiveTick {
 		elapsed: Duration,
 		environment: RiveEnvironment,
@@ -477,7 +482,9 @@ pub unsafe extern "C" fn lk_guest_event(
 			0
 		}
 		Err(error) => {
-			guest.shared.fail(error.into());
+			let message = format!("event {kind} for view {node}: {error}");
+			log::error!(target: leptoskit_log::target::BRIDGE, "{message}");
+			guest.shared.fail(message);
 			-1
 		}
 	}
@@ -535,6 +542,49 @@ pub unsafe extern "C" fn lk_guest_wake(guest: *const Guest) -> i32 {
 pub unsafe extern "C" fn lk_guest_wake_background(guest: *const Guest) -> i32 {
 	// SAFETY: The caller lends a live guest.
 	unsafe { post(guest, Command::BackgroundWake) }
+}
+
+/// Offers the platform's Back, such as Android's Back gesture or button, to
+/// the guest's optional `leptoskit_system_back` export. The guest answers on
+/// its own thread: after a notification, take the answer with
+/// [`lk_guest_take_system_back`]. Offers are answered in the order they were
+/// made. A guest that fails or stops first never answers.
+///
+/// # Safety
+/// `guest` is null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_guest_system_back(guest: *const Guest) -> i32 {
+	// SAFETY: The caller lends a live guest.
+	unsafe { post(guest, Command::SystemBack) }
+}
+
+/// No answer to [`lk_guest_system_back`] is waiting.
+pub const SYSTEM_BACK_NONE: i32 = 0;
+/// The guest went back: the platform stays where it is.
+pub const SYSTEM_BACK_WENT_BACK: i32 = 1;
+/// The guest had nothing to go back to, or does not export
+/// `leptoskit_system_back`: the platform leaves, as Back does when nothing
+/// handles it.
+pub const SYSTEM_BACK_LEAVE: i32 = 2;
+
+/// Takes the oldest answer to [`lk_guest_system_back`]:
+/// [`SYSTEM_BACK_WENT_BACK`], [`SYSTEM_BACK_LEAVE`], or [`SYSTEM_BACK_NONE`]
+/// when none is waiting. -1 for a null guest.
+///
+/// # Safety
+/// `guest` is null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lk_guest_take_system_back(guest: *const Guest) -> i32 {
+	// SAFETY: The caller lends a live guest.
+	let Some(guest) = (unsafe { guest.as_ref() }) else {
+		return -1;
+	};
+
+	match guest.shared.lock().system_back.pop_front() {
+		Some(true) => SYSTEM_BACK_WENT_BACK,
+		Some(false) => SYSTEM_BACK_LEAVE,
+		None => SYSTEM_BACK_NONE,
+	}
 }
 
 /// Completes a platform plugin call, as `lk_bridge_complete` does: `error` 0
@@ -849,8 +899,14 @@ fn run(app: &mut App, shared: &Shared) {
 				shared.fail(message);
 				false
 			}
-			Err(_) => {
-				shared.fail("the guest thread panicked".into());
+			Err(panic) => {
+				// The panic hook logged where; this says what it stopped.
+				let message = format!(
+					"the guest thread panicked: {}",
+					panic_message(panic.as_ref())
+				);
+				log::error!(target: leptoskit_log::target::BRIDGE, "{message}");
+				shared.fail(message);
 				false
 			}
 		};
@@ -860,6 +916,15 @@ fn run(app: &mut App, shared: &Shared) {
 	if let Some(host) = app.host.as_mut() {
 		let _ = std::panic::catch_unwind(AssertUnwindSafe(|| host.release_rive_players()));
 	}
+}
+
+/// What a caught panic said.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+	payload
+		.downcast_ref::<&str>()
+		.copied()
+		.or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+		.unwrap_or("a panic without a message")
 }
 
 /// Runs one batch of commands and the frame, then does what a UI-thread pump
@@ -873,6 +938,7 @@ fn step(
 ) -> Result<bool, String> {
 	let mut rive_images = Vec::new();
 	let mut rive_pending = None;
+	let mut system_back = Vec::new();
 
 	if app.poll_timers() < 0 {
 		return Err(app.error.clone());
@@ -894,6 +960,15 @@ fn step(
 				app.set_service_wake_reason(super::ServiceWakeReason::Background);
 				0
 			}
+			Command::SystemBack => {
+				let status = app.system_back();
+
+				if status >= 0 {
+					system_back.push(status == 1);
+				}
+
+				status
+			}
 			Command::RiveTick {
 				elapsed,
 				environment,
@@ -913,7 +988,7 @@ fn step(
 						0
 					}
 					Err(error) => {
-						app.error = error.to_string();
+						app.fail(format!("Rive: {error}"));
 						-1
 					}
 				}
@@ -988,14 +1063,18 @@ fn step(
 				shared.rive_pending.swap(pending, Ordering::AcqRel) != pending
 			});
 	let handed_out = !requests.is_empty();
-	let posted =
-		transaction.is_some() || handed_out || !cancelled.is_empty() || !rive_images.is_empty();
+	let posted = transaction.is_some()
+		|| handed_out
+		|| !cancelled.is_empty()
+		|| !rive_images.is_empty()
+		|| !system_back.is_empty();
 
 	let mut state = shared.lock();
 	state.transactions.extend(transaction);
 	state.requests.extend(requests);
 	state.requests_capped |= capped;
 	state.cancelled.extend(cancelled);
+	state.system_back.extend(system_back);
 
 	for image in rive_images {
 		state.rive_images.retain(|queued| queued.node != image.node);
@@ -1035,7 +1114,7 @@ fn woken(app: &mut App, completed: Result<(), Error>) -> i32 {
 		}
 		Err(Error::InvalidCall) => 0,
 		Err(error) => {
-			app.error = format!("complete a platform plugin call: {error:?}");
+			app.fail(format!("complete a platform plugin call: {error:?}"));
 			-1
 		}
 	}
@@ -1113,6 +1192,9 @@ fn raise_priority() {
 		unsafe { setpriority(PRIO_PROCESS, 0, DISPLAY) };
 	}
 }
+
+#[cfg(test)]
+mod routing_tests;
 
 #[cfg(test)]
 mod tests {

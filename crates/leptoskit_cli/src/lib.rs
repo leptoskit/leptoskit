@@ -23,6 +23,7 @@
 
 pub mod auth_command;
 pub mod auth_pages;
+pub mod budgets;
 pub mod build;
 pub mod cache;
 pub mod cargo_messages;
@@ -33,12 +34,14 @@ pub mod compress;
 pub mod console;
 pub mod db;
 
+pub mod debug;
 pub mod deploy;
 pub mod dev;
 pub mod device;
 pub mod devtools;
 pub mod doctor;
 pub mod extension;
+pub mod game;
 pub mod generate;
 mod git;
 

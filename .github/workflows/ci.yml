@@ -56,6 +56,19 @@ jobs:
       - name: test configuration contracts and migrations
         run: cargo test --locked --package leptoskit_config --all-features
 
+  budgets:
+    name: performance budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: caps and boot
+        run: python3 setup/scripts/budgets.py
+
   use:
     name: use coverage and portability
     runs-on: ubuntu-latest
@@ -337,6 +350,13 @@ jobs:
           LEPTOSKIT_HYBRID_FIXTURE_OUTPUT: ${{ runner.temp }}/hybrid-service
 
         run: cargo test --locked --workspace --all-features -- --test-threads=1
+
+      # Apps on Solana's clients build serde_json with arbitrary_precision;
+      # the guest-to-host wire must read the same with it (devenv's test:wire).
+      - name: test the native wire under arbitrary_precision
+        run: |
+          cargo test --locked -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision --lib wire_tests -- --test-threads=1
+          cargo test --locked -p leptoskit_wasm --features serde_json/arbitrary_precision -- --test-threads=1
 
       - name: run the generated hybrid service constructor
         shell: bash

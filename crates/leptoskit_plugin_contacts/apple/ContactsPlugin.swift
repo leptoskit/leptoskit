@@ -123,7 +123,7 @@ public final class ContactsPlugin: NSObject, NativePlugin {
             CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactOrganizationNameKey as CNKeyDescriptor
         ]
         let request = CNContactFetchRequest(keysToFetch: keys)
         request.unifyResults = true
@@ -250,7 +250,7 @@ public final class ContactsPlugin: NSObject, NativePlugin {
 }
 
 #if canImport(UIKit)
-extension ContactsPlugin: CNContactPickerDelegate {
+extension ContactsPlugin: @MainActor CNContactPickerDelegate {
     public func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
         guard self.picker === picker else { return }
 
@@ -268,13 +268,13 @@ extension ContactsPlugin: CNContactPickerDelegate {
     }
 }
 
-extension ContactsPlugin: UIAdaptivePresentationControllerDelegate {
+extension ContactsPlugin: @MainActor UIAdaptivePresentationControllerDelegate {
     public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         selection.finish(.failure(PluginError.cancelled))
     }
 }
 #elseif canImport(AppKit)
-extension ContactsPlugin: CNContactPickerDelegate {
+extension ContactsPlugin: @MainActor CNContactPickerDelegate {
     public func contactPickerDidClose(_ picker: CNContactPicker) {
         guard self.picker === picker else { return }
 

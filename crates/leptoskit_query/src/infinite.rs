@@ -439,6 +439,22 @@ where
 		self
 	}
 
+	/// See [`QueryScope::with_ssr_errors`].
+	#[must_use]
+	pub fn with_ssr_errors(self) -> Self
+	where
+		E: Serialize + DeserializeOwned,
+	{
+		self.with_error_codec(DataCodec::json())
+	}
+
+	/// See [`QueryScope::with_error_codec`].
+	#[must_use]
+	pub fn with_error_codec(mut self, codec: DataCodec<E>) -> Self {
+		self.scope = self.scope.with_error_codec(codec);
+		self
+	}
+
 	/// See [`QueryScope::with_structural_sharing`].
 	#[must_use]
 	pub fn with_structural_sharing(mut self) -> Self

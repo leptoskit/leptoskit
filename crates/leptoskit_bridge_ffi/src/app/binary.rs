@@ -28,7 +28,8 @@
 //!                9 hidden u8           10 clip u8
 //!               11 corner_radius f32   12 border_width f32
 //!               13 opacity f32         14 font_size f32
-//!               15 font_weight u8 (0 regular, 1 medium, 2 semibold, 3 bold)
+//!               15 font_weight u8 (0 regular, 1 medium, 2 semibold, 3 bold,
+//!                  4 thin, 5 extra_light, 6 light, 7 extra_bold, 8 black)
 //!               16 text_align u8 (0 start, 1 center, 2 end)
 //!               17 transform
 //!               18 animation
@@ -295,11 +296,18 @@ impl Writer {
 		}
 
 		if let Some(weight) = font_weight {
+			// The weights added later follow the first four, so a renderer
+			// built before them still reads those.
 			self.put(&[match weight {
 				FontWeight::Regular => 0,
 				FontWeight::Medium => 1,
 				FontWeight::Semibold => 2,
 				FontWeight::Bold => 3,
+				FontWeight::Thin => 4,
+				FontWeight::ExtraLight => 5,
+				FontWeight::Light => 6,
+				FontWeight::ExtraBold => 7,
+				FontWeight::Black => 8,
 			}])?;
 		}
 

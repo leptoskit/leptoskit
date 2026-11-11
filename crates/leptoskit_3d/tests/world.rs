@@ -376,6 +376,110 @@ fn morph_weights_change_the_shape() {
 }
 
 #[test]
+fn part_offsets_move_parts_and_ease_between_ticks() {
+	let mut world = scene();
+	// The head is a 0.4 m box from y = 1.6 to 2; the body stops at 1.6.
+	assert_eq!(parts(&hits(&mut world, 0.0, 1.8)), ["head"]);
+	world.apply([Op::SetPartOffset {
+		node: FIGURE,
+		part: "head".into(),
+		offset: Transform::from_translation(1.0, 0.0, 0.0),
+		seconds: 0.0,
+	}]);
+	world.advance(0.0);
+	assert_eq!(hits(&mut world, 0.0, 1.8), [] as [Hit; 0]);
+	assert_eq!(parts(&hits(&mut world, 1.0, 1.8)), ["head"]);
+	assert!(!world.needs_frame());
+
+	// Released over a second: halfway there after half of it, still asking
+	// for frames, and home at the end, when it stops asking.
+	world.apply([Op::SetPartOffset {
+		node: FIGURE,
+		part: "head".into(),
+		offset: Transform::IDENTITY,
+		seconds: 1.0,
+	}]);
+	run(&mut world, 0.5);
+	assert!(world.needs_frame());
+	assert_eq!(parts(&hits(&mut world, 0.5, 1.8)), ["head"]);
+	assert_eq!(hits(&mut world, 0.0, 1.8), [] as [Hit; 0]);
+	run(&mut world, 0.6);
+	assert_eq!(parts(&hits(&mut world, 0.0, 1.8)), ["head"]);
+	assert!(!world.needs_frame());
+}
+
+#[test]
+fn part_offsets_bend_skins_and_ride_on_clips() {
+	let mut world = scene();
+	// Turning the arm joint 90° about z bends the body's top over, as the
+	// `raise` clip does.
+	assert_eq!(hits(&mut world, -0.65, 0.8), [] as [Hit; 0]);
+	let half = std::f32::consts::FRAC_1_SQRT_2;
+	world.apply([Op::SetPartOffset {
+		node: FIGURE,
+		part: "arm".into(),
+		offset: Transform::IDENTITY.with_rotation([0.0, 0.0, half, half]),
+		seconds: 0.0,
+	}]);
+	world.advance(0.0);
+	assert_eq!(parts(&hits(&mut world, -0.65, 0.8)), ["body"]);
+
+	// `nod` turns the head 45° about x, which lowers it to about y = 1.27;
+	// the offset then moves it 1 m along its own x, which the turn keeps.
+	world.apply([
+		Op::Play {
+			node: FIGURE,
+			play: Play::new("nod").once(),
+		},
+		Op::SetPartOffset {
+			node: FIGURE,
+			part: "head".into(),
+			offset: Transform::from_translation(1.0, 0.0, 0.0),
+			seconds: 0.0,
+		},
+		// A part the model does not have changes nothing.
+		Op::SetPartOffset {
+			node: FIGURE,
+			part: "tail".into(),
+			offset: Transform::from_translation(5.0, 0.0, 0.0),
+			seconds: 0.0,
+		},
+	]);
+	run(&mut world, 1.1);
+	assert_eq!(parts(&hits(&mut world, 1.0, 1.27)), ["head"]);
+	assert_eq!(hits(&mut world, 0.0, 1.27), [] as [Hit; 0]);
+	assert_eq!(hits(&mut world, 1.0, 1.8), [] as [Hit; 0]);
+}
+
+#[test]
+fn part_offsets_sent_before_the_model_loads_apply_when_it_does() {
+	let mut world = World::new();
+	world.apply([
+		Op::LoadAsset {
+			asset: RIG,
+			path: "models/rig.glb".into(),
+		},
+		Op::Spawn {
+			node: FIGURE,
+			asset: Some(RIG),
+			parent: None,
+		},
+		Op::SetPartOffset {
+			node: FIGURE,
+			part: "head".into(),
+			offset: Transform::from_translation(1.0, 0.0, 0.0),
+			seconds: 0.0,
+		},
+	]);
+	world.take_loads();
+	let asset = Asset::from_slice(&fixture::rig()).unwrap();
+	world.asset_loaded(RIG, Ok(Arc::new(asset)));
+	world.advance(0.0);
+	world.take_events();
+	assert_eq!(parts(&hits(&mut world, 1.0, 1.8)), ["head"]);
+}
+
+#[test]
 fn attached_nodes_follow_their_part() {
 	let mut world = scene();
 	let cube = AssetId(2);

@@ -18,15 +18,20 @@ use jni::objects::JObject;
 use jni::objects::JString;
 use jni::objects::JValue;
 use jni::sys::jdouble;
+use jni::sys::jfloat;
 use jni::sys::jint;
 use jni::sys::jlong;
-use leptoskit_native::FontWeight;
 use leptoskit_native::Mutation;
 use leptoskit_native::MutationList;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
+use leptoskit_native::PointerDecision;
+use leptoskit_native::PointerKind;
+use leptoskit_native::PointerPhase;
+use leptoskit_native::PointerRoute;
+use leptoskit_native::PointerSample;
 use leptoskit_native::SharedTextMeasurer;
 use leptoskit_native::TextMeasurer;
 use leptoskit_native::TextStyle;
@@ -45,10 +50,14 @@ pub enum AndroidError {
 }
 
 type Listener = Rc<dyn Fn(NodeId, &NativeEvent)>;
+type PointerListener = Rc<dyn Fn(PointerSample) -> PointerDecision>;
+type ClockListener = Rc<dyn Fn(u64) -> PointerDecision>;
 
 #[derive(Default)]
 struct EventSink {
 	listener: RefCell<Option<Listener>>,
+	pointer: RefCell<Option<PointerListener>>,
+	clock: RefCell<Option<ClockListener>>,
 	nodes: RefCell<HashMap<usize, (NodeId, NativeProps)>>,
 }
 
@@ -125,6 +134,33 @@ impl AndroidBackend {
 	/// Removes the listener without removing the mounted tree.
 	pub fn clear_event_listener(&self) {
 		self.sink.listener.borrow_mut().take();
+	}
+
+	/// Receives raw pointer samples from the root view, in viewport layout
+	/// units.
+	///
+	/// The host calls this before the platform control sees the touch. The
+	/// returned route says whether the control should still handle it.
+	pub fn set_pointer_listener(
+		&self,
+		listener: impl Fn(PointerSample) -> PointerDecision + 'static,
+	) {
+		*self.sink.pointer.borrow_mut() = Some(Rc::new(listener));
+	}
+
+	/// Advances gestures that are waiting on the clock, such as a long press.
+	pub fn set_gesture_clock(&self, clock: impl Fn(u64) -> PointerDecision + 'static) {
+		*self.sink.clock.borrow_mut() = Some(Rc::new(clock));
+	}
+
+	/// Drops the pointer and clock listeners. Platform controls keep working.
+	pub fn clear_pointer_listener(&self) {
+		self.sink.pointer.borrow_mut().take();
+		self.sink.clock.borrow_mut().take();
+	}
+
+	pub(crate) fn handle(&self) -> i64 {
+		self.handle
 	}
 
 	/// Returns a local JNI reference to a node's exact Yoga outer view.
@@ -340,6 +376,22 @@ struct AndroidTextMeasurer {
 
 impl TextMeasurer for AndroidTextMeasurer {
 	fn measure(&self, text: &str, style: TextStyle, available: Size<AvailableSpace>) -> Size<f32> {
+		let size = self.natural(text, style, available);
+
+		// `StaticLayout` sets lines at the font's own height; the widget host
+		// draws each one at the line height, so the label is that many lines.
+		if style.line_height.is_some() {
+			let unbounded = Size::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+			return style.fit_line_height(size, self.natural(" ", style, unbounded).height);
+		}
+
+		size
+	}
+}
+
+impl AndroidTextMeasurer {
+	/// The size `StaticLayout` sets `text` in, at the font's own line height.
+	fn natural(&self, text: &str, style: TextStyle, available: Size<AvailableSpace>) -> Size<f32> {
 		let mut env = self
 			.vm
 			.attach_current_thread()
@@ -351,12 +403,7 @@ impl TextMeasurer for AndroidTextMeasurer {
 				AvailableSpace::MinContent => -2.0,
 				AvailableSpace::MaxContent => -1.0,
 			};
-			let weight = match style.font_weight {
-				FontWeight::Regular => 400,
-				FontWeight::Medium => 500,
-				FontWeight::Semibold => 600,
-				FontWeight::Bold => 700,
-			};
+			let weight = i32::from(style.font_weight.value());
 
 			let class: &JClass<'_> = self.class.as_obj().into();
 			let array = env
@@ -474,4 +521,108 @@ pub extern "system" fn Java_dev_leptoskit_widgets_WidgetHost_nativeEvent(
 	if let Some(listener) = listener {
 		listener(id, &event);
 	}
+}
+
+/// Routes one pointer sample to the host's listener. A missing host, a missing
+/// listener, or a sample the arena does not understand returns platform
+/// handling, so the Android control still receives the touch.
+pub(crate) fn route_pointer(
+	handle: i64,
+	pointer: i64,
+	phase: i32,
+	x: f32,
+	y: f32,
+	time_ms: i64,
+	kind: i32,
+) -> i64 {
+	let Some(sink) = sink(handle) else {
+		return 0;
+	};
+	let Some(listener) = sink.pointer.borrow().clone() else {
+		return 0;
+	};
+	let Some(sample) = pointer_sample(pointer, phase, x, y, time_ms, kind) else {
+		return 0;
+	};
+	pack(&listener(sample), sample.time_ms)
+}
+
+/// Advances the arena clock for recognizers waiting on a deadline.
+pub(crate) fn route_clock(handle: i64, time_ms: i64) -> i64 {
+	let Some(sink) = sink(handle) else {
+		return 0;
+	};
+	let Some(clock) = sink.clock.borrow().clone() else {
+		return 0;
+	};
+	let now = u64::try_from(time_ms).unwrap_or(0);
+	pack(&clock(now), now)
+}
+
+fn sink(handle: i64) -> Option<Rc<EventSink>> {
+	SINKS.with(|sinks| sinks.borrow().get(&handle).and_then(Weak::upgrade))
+}
+
+fn pointer_sample(
+	pointer: i64,
+	phase: i32,
+	x: f32,
+	y: f32,
+	time_ms: i64,
+	kind: i32,
+) -> Option<PointerSample> {
+	let phase = match phase {
+		0 => PointerPhase::Down,
+		1 => PointerPhase::Move,
+		2 => PointerPhase::Up,
+		3 => PointerPhase::Cancel,
+		_ => return None,
+	};
+	let kind = match kind {
+		0 => PointerKind::Touch,
+		1 => PointerKind::Mouse,
+		2 => PointerKind::Pen,
+		_ => return None,
+	};
+	let id = u64::try_from(pointer).ok()?;
+	let time_ms = u64::try_from(time_ms).unwrap_or(0);
+	Some(PointerSample::new(id, phase, x, y, time_ms).kind(kind))
+}
+
+fn pack(decision: &PointerDecision, now: u64) -> i64 {
+	let route = match decision.route {
+		PointerRoute::Platform => 0,
+		PointerRoute::Track => 1,
+		PointerRoute::Claim => 2,
+	};
+	let wait = decision
+		.deadline_ms
+		.map(|at| at.saturating_sub(now).min(10_000))
+		.unwrap_or(0);
+	route | i64::try_from(wait).unwrap_or(0) << 8
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_leptoskit_widgets_WidgetHost_nativePointer(
+	_env: JNIEnv<'_>,
+	_class: JClass<'_>,
+	handle: jlong,
+	pointer: jlong,
+	phase: jint,
+	x: jfloat,
+	y: jfloat,
+	time_ms: jlong,
+	kind: jint,
+) -> jlong {
+	route_pointer(handle, pointer, phase, x, y, time_ms, kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_leptoskit_widgets_WidgetHost_nativeGestureAdvance(
+	_env: JNIEnv<'_>,
+	_class: JClass<'_>,
+	handle: jlong,
+	time_ms: jlong,
+) -> jlong {
+	route_clock(handle, time_ms)
 }

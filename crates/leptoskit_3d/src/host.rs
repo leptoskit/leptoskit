@@ -554,13 +554,7 @@ impl Hub {
 			})
 			.or_else(|| capabilities.formats.first().copied())
 			.ok_or(Error::Target("the surface supports no format"))?;
-		let alpha_mode = [
-			wgpu::CompositeAlphaMode::PreMultiplied,
-			wgpu::CompositeAlphaMode::Inherit,
-		]
-		.into_iter()
-		.find(|mode| capabilities.alpha_modes.contains(mode))
-		.unwrap_or(wgpu::CompositeAlphaMode::Auto);
+		let alpha_mode = crate::gpu::surface_alpha_mode(gpu.backend(), &capabilities.alpha_modes);
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 			format,
@@ -771,7 +765,21 @@ impl View {
 		let texture = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(texture)
 			| wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-			wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+			wgpu::CurrentSurfaceTexture::Outdated => {
+				log::debug!(
+					target: leptoskit_log::target::GPU,
+					"the surface is outdated; configuring it again"
+				);
+				self.surface.configure(self.gpu.device(), &self.config);
+				return Ok(true);
+			}
+			wgpu::CurrentSurfaceTexture::Lost => {
+				log::warn!(
+					target: leptoskit_log::target::GPU,
+					"the surface was lost; restoring it at {}×{}",
+					self.config.width,
+					self.config.height
+				);
 				self.surface.configure(self.gpu.device(), &self.config);
 				return Ok(true);
 			}

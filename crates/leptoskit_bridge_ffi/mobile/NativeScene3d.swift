@@ -1,5 +1,6 @@
 import CLeptosKitBridge
 import Foundation
+import LeptosKitBridge
 import QuartzCore
 #if os(macOS)
 import AppKit
@@ -156,8 +157,9 @@ final class NativeScene3dView: NativeScene3dBase {
         else {
             let error = lk_scene3d_error()
             defer { lk_buffer_release(error) }
-            let message = String(decoding: UnsafeBufferPointer(start: error.data, count: error.len), as: UTF8.self)
-            NSLog("leptoskit: a 3D scene could not attach: %@", message)
+            let bytes = UnsafeBufferPointer(start: error.data, count: error.len)
+            let message = String(bytes: bytes, encoding: .utf8) ?? ""
+            NativeLog.warn(NativeLog.gpu, "a 3D scene could not attach: \(message)")
 
             return
         }

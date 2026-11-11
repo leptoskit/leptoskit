@@ -1,8 +1,8 @@
 import Foundation
 import LeptosKitBridge
 
-#if canImport(ActivityKit)
-import ActivityKit
+#if canImport(ActivityKit) && os(iOS)
+@preconcurrency import ActivityKit
 #endif
 
 /// Injectable ActivityKit surface so tests never start system Live Activities.
@@ -29,7 +29,7 @@ enum DismissalKind: UInt32 {
     case after = 2
 }
 
-#if canImport(ActivityKit)
+#if canImport(ActivityKit) && os(iOS)
 @available(iOS 16.1, *)
 @MainActor
 private final class SystemLiveActivityService: LiveActivityService {

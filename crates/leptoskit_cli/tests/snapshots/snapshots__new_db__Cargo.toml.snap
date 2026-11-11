@@ -15,13 +15,14 @@ default-members = ["."]
 
 [features]
 default = ["ssr"]
-ssr = ["snapshotted_app/web", "snapshotted_app/ssr", "leptoskit/ssr"]
+ssr = ["snapshotted_app/web", "snapshotted_app/ssr", "leptoskit/ssr", "leptoskit_router/ssr"]
 
 [dependencies]
 snapshotted_app = { path = "snapshotted_app", default-features = false }
 snapshotted_backend = { path = "snapshotted_backend" }
 snapshotted_db = { path = "snapshotted_db", features = ["server"] }
 leptoskit = { version = "=[version]", default-features = false, features = ["server", "rpc-ssr", "db-sqlite", "rpc-live"] }
+leptoskit_router = { version = "=[version]", default-features = false }
 
 [profile.release]
 lto = "thin"

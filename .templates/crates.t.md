@@ -19,14 +19,14 @@ code, so a published app shows new interfaces without a new build.
 
 <!-- {/agentUiSummary} -->
 
-<!-- {@analyticsSummary} -->
+<!-- {@apmSummary} -->
 
 See which application routes are failing or slow. The app keeps bounded minute aggregates
 and a small correlation buffer in memory. Connect the optional deployment service for
 durable fleet history, or use the per-process endpoint without an extra observability
 service. Unexported in-memory data resets on restart.
 
-<!-- {/analyticsSummary} -->
+<!-- {/apmSummary} -->
 
 <!-- {@androidSummary} -->
 
@@ -126,6 +126,16 @@ without its Depth API, and iPhones without LiDAR. The model is Depth Anything V2
 fine-tuned for rooms, and it runs in pure Rust on the CPU in about a quarter of a second.
 
 <!-- {/depthSummary} -->
+
+<!-- {@logSummary} -->
+
+It sends leptoskit's own records to the platform's log: logcat on Android, the unified
+log (`os_log`) on iOS and macOS, standard error on Linux and Windows, and the console in
+a browser. The runtime installs it when an app starts, with a panic hook, so a failure on
+a device says which plugin, call, node, and payload it was about. Nothing leaves the
+device.
+
+<!-- {/logSummary} -->
 
 <!-- {@canvasSummary} -->
 
@@ -390,6 +400,12 @@ registers `BGTaskScheduler` tasks that wake the `AppService`. iOS gives no guara
 continuous execution, and macOS, desktop, and the browser report `Unavailable`.
 
 <!-- {/p_backgroundSummary} -->
+
+<!-- {@p_recorderSummary} -->
+
+Add `{{ plugin_recorder.package.name }}` as a direct dependency and select the `{{ plugin_recorder.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Windows, Linux, and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Recorder` rather than resolving the plugin on every call. iOS records through `AVAudioEngine` and Android through `AudioRecord` with a `MediaCodec` AAC encoder; the app supplies its `NSMicrophoneUsageDescription` purpose string and, for Android background recording, runs the `background` plugin's microphone-typed foreground service.
+
+<!-- {/p_recorderSummary} -->
 
 
 <!-- {@p_age_rangeSummary} -->

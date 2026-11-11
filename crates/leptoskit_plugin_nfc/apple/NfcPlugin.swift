@@ -29,7 +29,7 @@ protocol NfcReader {
 
 #if os(iOS)
 @MainActor
-private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDelegate {
+private final class CoreNfcReader: NSObject, NfcReader {
     private var continuation: CheckedContinuation<NfcRecord, Error>?
     private var session: NFCNDEFReaderSession?
 
@@ -50,7 +50,9 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
             session.begin()
         }
     }
+}
 
+extension CoreNfcReader: @MainActor NFCNDEFReaderSessionDelegate {
     func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
         finish(.failure(map(error)))
     }
@@ -75,7 +77,8 @@ private final class CoreNfcReader: NSObject, NfcReader, NFCNDEFReaderSessionDele
     private func map(_ error: Error) -> PluginError {
         let nfc = error as NSError
 
-        if nfc.domain == NFCErrorDomain, nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
+        if nfc.domain == NFCErrorDomain,
+           nfc.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
             return .cancelled
         }
 

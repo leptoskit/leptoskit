@@ -6,12 +6,12 @@
 //! depends on `leptoskit` alone.
 
 use __CRATE___app::App;
+use __CRATE___app::routes;
 use __CRATE___app::shell;
 use leptoskit::rpc::server::Roles;
 use leptoskit::server::GracefulShutdown;
 use leptoskit::server::Readiness;
 use leptoskit::server::leptos_axum::LeptosRoutes;
-use leptoskit::server::leptos_axum::generate_route_list;
 use leptoskit::server::tokio;
 
 #[tokio::main]
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		ready.pass();
 	}
 
-	let routes = generate_route_list(App);
+	let routes = leptoskit_router::ssr::route_listings(routes::axum_route_list());
 	let app_options = options.clone();
 	// The pages and the API, with the `web` role. The built files are served
 	// with their precompressed brotli and gzip copies when the browser

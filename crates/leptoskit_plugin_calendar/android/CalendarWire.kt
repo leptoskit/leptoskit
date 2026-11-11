@@ -57,7 +57,8 @@ internal data class CalendarRecord(
         }
 
         fun decode(payload: ByteBuffer): CalendarRecord {
-            val bytes = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+            // Advance the caller's cursor so a list can decode the next calendar.
+            val bytes = payload.order(ByteOrder.LITTLE_ENDIAN)
             val id = required(readString(bytes), MAX_ID_BYTES)
             val title = required(readString(bytes), MAX_TITLE_BYTES)
             val flag = bytes.int
@@ -100,7 +101,8 @@ internal data class CalendarEventRecord(
 
         return ByteBuffer
             .allocate(
-                28 + idBytes.size + calendarBytes.size + titleBytes.size + notesBytes.size +
+                // Five length prefixes and two timestamps: 5 * 4 + 2 * 8.
+                36 + idBytes.size + calendarBytes.size + titleBytes.size + notesBytes.size +
                     locationBytes.size,
             ).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(idBytes.size)
@@ -163,7 +165,7 @@ internal data class CalendarEventRecord(
         }
 
         fun decode(payload: ByteBuffer): CalendarEventRecord {
-            val bytes = payload.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+            val bytes = payload.order(ByteOrder.LITTLE_ENDIAN)
             val id = required(readString(bytes), MAX_ID_BYTES)
             val calendarId = required(readString(bytes), MAX_ID_BYTES)
             val title = required(readString(bytes), MAX_TITLE_BYTES)
@@ -236,7 +238,12 @@ internal data class CalendarEventRecord(
             val size = bytes.int
             if (size < 0 || bytes.remaining() < size) throw invalid()
 
-            val slice = bytes.slice().limit(size).order(ByteOrder.LITTLE_ENDIAN)
+            // Android's ByteBuffer.limit returns Buffer, which has no order().
+            val slice =
+                bytes.slice().apply {
+                    limit(size)
+                    order(ByteOrder.LITTLE_ENDIAN)
+                }
             bytes.position(bytes.position() + size)
 
             return try {

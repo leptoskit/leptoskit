@@ -456,16 +456,21 @@ enum MacWidgetStyle {
         #if DEBUG
         throw NativeAppError(message: message)
         #else
-        NSLog("leptoskit: %@", message)
+        NativeLog.error(NativeLog.render, message)
         return nil
         #endif
     }
 
     private static func font(_ props: WidgetProps) -> NSFont {
         let weight: NSFont.Weight = switch props.fontWeight {
-        case "bold": .bold
-        case "semibold": .semibold
+        case "thin": .ultraLight
+        case "extra_light": .thin
+        case "light": .light
         case "medium": .medium
+        case "semibold": .semibold
+        case "bold": .bold
+        case "extra_bold": .heavy
+        case "black": .black
         default: .regular
         }
 
@@ -486,9 +491,11 @@ enum MacWidgetStyle {
         if let field = widget as? NSTextField { applyField(props, to: field) }
 
         if let label = widget as? TextLabel {
+            let font = font(props)
             label.update(
-                text: props.text ?? "", font: font(props),
-                color: props.color.map(color) ?? .labelColor, alignment: alignment(props.textAlign)
+                text: props.text ?? "", font: font,
+                color: props.color.map(color) ?? .labelColor, alignment: alignment(props.textAlign),
+                lineHeight: props.lineHeight?.points(fontSize: font.pointSize)
             )
         }
     }

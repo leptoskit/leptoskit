@@ -115,14 +115,15 @@ impl Attributes {
 	pub const UNDERLINE: Self = Self(Self::UNDERLINE_BIT);
 	const UNDERLINE_BIT: u8 = 1 << 2;
 
-	/// The attributes bold text renders with for the given weight.
+	/// The attributes text of the given weight renders with: bold from
+	/// semibold up. Terminals have no lighter weight than regular, and dim
+	/// already means disabled, so lighter weights draw regular.
 	#[must_use]
 	pub const fn for_weight(weight: leptoskit_native::FontWeight) -> Self {
-		match weight {
-			leptoskit_native::FontWeight::Semibold | leptoskit_native::FontWeight::Bold => {
-				Self::BOLD
-			}
-			_ => Self::EMPTY,
+		if weight.value() >= leptoskit_native::FontWeight::Semibold.value() {
+			Self::BOLD
+		} else {
+			Self::EMPTY
 		}
 	}
 

@@ -11,6 +11,7 @@ use leptoskit_config::FormatConfig;
 use leptoskit_config::LeptoskitConfig;
 use leptoskit_config::LintConfig;
 use leptoskit_config::LintLevel;
+use leptoskit_config::LogLevel;
 use leptoskit_config::MarkupStyle;
 use leptoskit_config::MissingPlugins;
 use leptoskit_config::Optimize;
@@ -222,6 +223,31 @@ fn missing_plugins_warn_by_default_and_can_stop_the_build() {
 			.contains("missing-plugins = \"error\"")
 	);
 	assert!(toml::from_str::<LeptoskitConfig>("[native]\nmissing-plugins = \"ignore\"").is_err());
+}
+
+#[test]
+fn the_log_level_follows_the_build_unless_set() {
+	let config: LeptoskitConfig = toml::from_str("").unwrap();
+	assert_eq!(config.native.log_level, None);
+	assert!(!toml::to_string(&config).unwrap().contains("log-level"));
+
+	for level in [
+		LogLevel::Off,
+		LogLevel::Error,
+		LogLevel::Warn,
+		LogLevel::Info,
+		LogLevel::Debug,
+		LogLevel::Trace,
+	] {
+		let line = format!("log-level = \"{}\"", level.as_str());
+		let config: LeptoskitConfig = toml::from_str(&format!("[native]\n{line}")).unwrap();
+		assert_eq!(config.native.log_level, Some(level));
+		assert!(toml::to_string(&config).unwrap().contains(&line));
+		// The CLI hands the name to the runtime, which parses it with `log`.
+		assert!(level.as_str().parse::<log::LevelFilter>().is_ok());
+	}
+
+	assert!(toml::from_str::<LeptoskitConfig>("[native]\nlog-level = \"verbose\"").is_err());
 }
 
 #[test]
@@ -1443,7 +1469,7 @@ fn launch_screens_take_opaque_colours_and_a_sized_image() {
 	)
 	.expect("launch screen");
 	let launch = config.app.launch_screen.expect("launch screen table");
-	assert_eq!(launch.background, "#0b0c10");
+	assert_eq!(launch.background.as_deref(), Some("#0b0c10"));
 	assert_eq!(launch.image, Some(PathBuf::from("assets/mark.svg")));
 	assert_eq!(
 		launch.image_size,
@@ -1482,6 +1508,35 @@ fn launch_screens_take_opaque_colours_and_a_sized_image() {
 	)
 	.expect_err("unknown key");
 	assert!(matches!(error, ConfigError::Parse { .. }), "{error}");
+
+	let splash =
+		load("splash_alias", "[app.splash]\nbackground = \"#abc\"\n").expect("splash alias");
+	assert_eq!(
+		splash.app.launch_screen.unwrap().background.as_deref(),
+		Some("#abc")
+	);
+
+	let icons = load(
+		"icons_table",
+		"[app.icons]\nimage = \"assets/icon.svg\"\nnotification = \
+		 \"assets/notification.png\"\n[app.icons.extensions.tool]\nflavor = \"beta\"\n",
+	)
+	.expect("icons");
+	let icons = icons.app.icons.expect("icons table");
+	assert_eq!(icons.image, Some(PathBuf::from("assets/icon.svg")));
+	assert_eq!(
+		icons.notification,
+		Some(PathBuf::from("assets/notification.png"))
+	);
+	assert!(icons.extensions.contains_key("tool"));
+
+	let error = load(
+		"icons_conflict",
+		"[app.icons.android]\nadaptive_background = \"#fff\"\nadaptive_background_image = \
+		 \"bg.png\"\n",
+	)
+	.expect_err("conflict");
+	assert!(matches!(error, ConfigError::InvalidIcons(_)), "{error}");
 }
 
 #[test]

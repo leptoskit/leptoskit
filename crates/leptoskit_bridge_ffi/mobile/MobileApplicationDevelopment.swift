@@ -1,5 +1,11 @@
 import Foundation
+import LeptosKitBridge
 import UIKit
+
+/// The development companion asks the running controller to follow a guest URL.
+public enum DevelopmentSession {
+    @MainActor public static var follow: (@MainActor (String) -> Bool)?
+}
 
 // `leptoskit dev` reloads, which swap guests without the release store.
 extension LeptosKitApplicationController {
@@ -23,28 +29,28 @@ extension LeptosKitApplicationController {
                 self?.developmentFailed(controller, error)
             }
             attachCandidate(controller)
-        } catch { NSLog("leptoskit dev: %@", error.localizedDescription) }
+        } catch { NativeLog.error(NativeLog.bridge, "leptoskit dev", error) }
     }
 
     private func promoteDevelopment(_ controller: LeptosKitViewController?) {
         guard let controller, pending === controller, !closed else { return }
         let previous = active
         reveal(controller)
-        NSLog("leptoskit dev: reloaded")
+        NativeLog.info(NativeLog.bridge, "leptoskit dev: reloaded")
 
         guard let previous else { return }
         // The replaced guest sits above its successor until its teardown joins.
         previous.view.isHidden = true
         Task {
             if let failure = await remove(previous) {
-                NSLog("leptoskit dev: previous guest cleanup: %@", failure.localizedDescription)
+                NativeLog.warn(NativeLog.bridge, "leptoskit dev: previous guest cleanup", failure)
             }
         }
     }
 
     /// A candidate that fails keeps the running guest on screen.
     private func developmentFailed(_ controller: LeptosKitViewController?, _ error: Error) {
-        NSLog("leptoskit dev: %@", error.localizedDescription)
+        NativeLog.error(NativeLog.bridge, "leptoskit dev", error)
 
         guard let controller, pending === controller else { return }
         discard(controller)

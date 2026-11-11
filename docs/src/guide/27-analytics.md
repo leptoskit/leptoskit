@@ -1,16 +1,16 @@
-# Application analytics
+# Application performance
 
-When a deployed route starts failing, you need its error counts, latency and release identity in one place. Enable the analytics package to collect bounded measurements inside the existing application process.
+When a deployed route starts failing, you need its error counts, latency and release identity in one place. Enable the `apm` package to collect bounded measurements inside the existing application process.
 
 This example targets an Axum backend serving web and native clients. The server automatically measures HTTP requests. The optional browser module records web page views, navigation duration, selected request timing and error counts. Native hosts can submit explicit observations to the Rust collector; automatic native device instrumentation is not included.
 
 ## Enable the package
 
-Add `analytics` to the server package's existing LeptosKit features:
+Add `apm` to the server package's existing LeptosKit features:
 
 ```toml
 [dependencies]
-leptoskit = { version = "0.1", features = ["server", "analytics"] }
+leptoskit = { version = "0.1", features = ["server", "apm"] }
 ```
 
 For the managed deployment described in [Deploying a server](24-deploying.md), add this table alongside your existing infrastructure configuration:
@@ -28,7 +28,7 @@ With the [deployment service](28-deployment-service.md), app credentials and the
 
 `lk infra plugins` prints the capabilities, app features, bindings and secret names. Regenerate the managed configuration, review and apply the saved plan, then deploy a new app version with your usual release flow. The plugin adds environment settings to the app and its deployment workflow. It adds no new cloud resources or containers. Normal app memory and request costs still apply.
 
-Servers using `leptoskit::server::serve_listener_with` (including the generated entrypoints) install the collector from those settings. A custom Axum entrypoint can instead call `leptoskit::analytics::server::mount` with a `ServerConfig`. Mount it once, after adding application routes, and avoid a second automatic environment mount. Backend code can use `server::Timer` for a named database, RPC, job or live operation; these hooks are explicit.
+Servers using `leptoskit::server::serve_listener_with` (including the generated entrypoints) install the collector from those settings. A custom Axum entrypoint can instead call `leptoskit::apm::server::mount` with a `ServerConfig`. Mount it once, after adding application routes, and avoid a second automatic environment mount. Backend code can use `server::Timer` for a named database, RPC, job or live operation; these hooks are explicit.
 
 ## Read measurements
 

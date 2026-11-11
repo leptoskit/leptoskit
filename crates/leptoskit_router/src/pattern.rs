@@ -113,6 +113,33 @@ impl Pattern {
 		Href::from_parts(&path, &sink.into_query())
 	}
 
+	/// The path [`leptos_axum`] registers for server rendering.
+	///
+	/// Static segments become ordinary path pieces. Dynamic segments use axum's
+	/// `:name` syntax, and a trailing catch-all uses `{*name}`.
+	///
+	/// [`leptos_axum`]: https://docs.rs/leptos_axum
+	pub fn axum_path(&self) -> String {
+		if self.segments.is_empty() {
+			return "/".into();
+		}
+
+		let mut parts = Vec::new();
+		for segment in self.segments {
+			match segment {
+				Segment::Static(text) => parts.push((*text).to_owned()),
+				Segment::Param(name) | Segment::OptionalParam(name) => {
+					parts.push(format!(":{name}"));
+				}
+				Segment::Rest(name) | Segment::OptionalRest(name) => {
+					return format!("/{{*{name}}}");
+				}
+			}
+		}
+
+		format!("/{}", parts.join("/"))
+	}
+
 	/// The href of a pattern with no parameters.
 	pub fn static_href(&self) -> Href {
 		let path: Vec<String> = self
@@ -307,6 +334,20 @@ mod tests {
 		let middle = Pattern::new(&[Segment::Rest("dirs"), Segment::Static("edit")]);
 		let captures = middle.capture(&path(&["a", "b", "edit"])).unwrap();
 		assert_eq!(values(&captures, "dirs"), Some(path(&["a", "b"])));
+	}
+
+	#[test]
+	fn axum_paths_match_what_leptoskit_registers() {
+		assert_eq!(Pattern::new(&[]).axum_path(), "/");
+		assert_eq!(Pattern::new(&[Segment::Static("kit")]).axum_path(), "/kit");
+		assert_eq!(
+			Pattern::new(&[Segment::Param("note")]).axum_path(),
+			"/:note"
+		);
+		assert_eq!(
+			Pattern::new(&[Segment::OptionalRest("path")]).axum_path(),
+			"/{*path}"
+		);
 	}
 
 	#[test]

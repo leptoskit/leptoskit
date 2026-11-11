@@ -45,7 +45,7 @@ class AndroidIntentPlugin(
             SEND_SERVICE -> empty { service(build(IntentWire.requireExplicit(IntentWire.decode(payload)))) }
             CAN_RESOLVE_ACTIVITY -> IntentWire.booleanReply(resolve(build(IntentWire.decode(payload))) != null)
             RESOLVED_ACTIVITY -> resolvedReply(resolve(build(IntentWire.decode(payload))))
-            PARSE_AND_LAUNCH -> empty { start(parse(IntentWire.decodeIntentUri(payload))) }
+            PARSE_AND_LAUNCH -> empty { startParsed(parse(IntentWire.decodeIntentUri(payload))) }
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
     }
@@ -60,6 +60,23 @@ class AndroidIntentPlugin(
         val title = chooser.title.ifEmpty { null }
 
         start(Intent.createChooser(build(chooser.intent), title))
+    }
+
+    /**
+     * A browser-style `intent:` link names a scheme and resolves to an
+     * activity whose filter declares [Intent.CATEGORY_BROWSABLE]. An
+     * action-only URI such as Settings has no scheme. API 35 marks that
+     * Settings activity browsable, so [start] would open it.
+     */
+    private fun startParsed(intent: Intent) {
+        if (intent.data?.scheme.isNullOrEmpty()) throw PluginException(PluginException.UNAVAILABLE)
+
+        val info = resolve(intent) ?: throw PluginException(PluginException.UNAVAILABLE)
+        if (info.filter?.hasCategory(Intent.CATEGORY_BROWSABLE) != true) {
+            throw PluginException(PluginException.UNAVAILABLE)
+        }
+
+        start(intent)
     }
 
     /** Starts from the host activity when there is one, so the target joins the app's task. */
@@ -124,6 +141,9 @@ class AndroidIntentPlugin(
      * declare CATEGORY_BROWSABLE.
      */
     private fun parse(uri: String): Intent {
+        // API 35's parseUri drops grant flags, so the request is read from the URI.
+        IntentWire.requireFlags(requestedLaunchFlags(uri))
+
         val intent =
             try {
                 Intent.parseUri(uri, Intent.URI_INTENT_SCHEME)
@@ -141,6 +161,23 @@ class AndroidIntentPlugin(
         if (intent.data?.scheme.equals("file", ignoreCase = true)) throw PluginException(PluginException.PERMISSION_DENIED)
 
         return intent.addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+
+    /** Every `launchFlags=` value in an `intent:` URI, or an invalid number. */
+    private fun requestedLaunchFlags(uri: String): Int {
+        var flags = 0
+
+        for (match in LAUNCH_FLAGS.findAll(uri)) {
+            flags =
+                flags or
+                try {
+                    Integer.decode(match.groupValues[1])
+                } catch (error: NumberFormatException) {
+                    throw PluginException(PluginException.INVALID_ARGUMENT, error)
+                }
+        }
+
+        return flags
     }
 
     private fun build(spec: IntentSpec): Intent {
@@ -202,5 +239,6 @@ class AndroidIntentPlugin(
         const val CAN_RESOLVE_ACTIVITY = 4
         const val RESOLVED_ACTIVITY = 5
         const val PARSE_AND_LAUNCH = 6
+        val LAUNCH_FLAGS = Regex("""(?:^|;)launchFlags=([^;]*)""")
     }
 }

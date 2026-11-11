@@ -19,7 +19,9 @@ let controllerTargets: [Target] = [
             "mobile/MobileApplicationChrome.swift", "desktop/LeptosKitMacViewController.swift",
             "mobile/NativeAppFactory.swift", "mobile/NativeAppRuntime.swift", "mobile/NativeGuestRuntime.swift",
             "mobile/NativeRustWorker.kt", "mobile/NativeRustAsync.kt", "mobile/NativeApp.kt",
-            "mobile/NativeRiveAnimator.kt", "mobile/NativeScene3d.kt", "mobile/NativeVideo.kt", "mobile/NativeCamera.kt", "mobile/NativeMap.kt", "mobile/NativeLivePhoto.kt", "mobile/NativeApplicationTeardown.kt", "mobile/NativePluginJobs.kt",
+            "mobile/NativeRiveAnimator.kt", "mobile/NativeScene3d.kt", "mobile/NativeVideo.kt",
+            "mobile/NativeCamera.kt", "mobile/NativeMap.kt", "mobile/NativeLivePhoto.kt",
+            "mobile/NativeApplicationTeardown.kt", "mobile/NativePluginJobs.kt",
             "mobile/NativeServiceOwner.kt", "mobile/NativeTextMeasurer.kt",
             "mobile/NativeWidgetProps.kt", "mobile/NativeWidgetRenderer.kt", "mobile/RenderBatch.kt",
             "mobile/LeptosKitApplicationController.swift", "mobile/app.cpp",
@@ -29,14 +31,17 @@ let controllerTargets: [Target] = [
             "mobile/MobileApplicationGuests.swift"
         ],
         sources: [
-            "mobile/NativeRive.swift", "mobile/NativeScene3d.swift", "mobile/NativeVideo.swift", "mobile/NativeCamera.swift", "mobile/NativeMap.swift", "mobile/NativeLivePhoto.swift", "mobile/DevtoolsOverlay.swift",
+            "mobile/NativeRive.swift", "mobile/NativeScene3d.swift", "mobile/NativeVideo.swift",
+            "mobile/NativeCamera.swift", "mobile/NativeMap.swift", "mobile/NativeLivePhoto.swift",
+            "mobile/DevtoolsOverlay.swift",
             "desktop/MacWidgetRenderer.swift", "desktop/MacWidgetControls.swift",
             "desktop/MacTextLabel.swift", "desktop/MacScrollView.swift",
             "mobile/RenderTransaction.swift", "mobile/BinaryTransaction.swift",
             "mobile/WidgetProps.swift", "mobile/WidgetMotion.swift", "mobile/LayerMotion.swift",
             "mobile/ExitingViews.swift",
             "mobile/ScrollTracker.swift",
-            "mobile/NativeRequestExecutor.swift", "mobile/NativeRustWorker.swift", "mobile/NativeRustAsync.swift"
+            "mobile/NativeRequestExecutor.swift", "mobile/NativeRustWorker.swift",
+            "mobile/NativeRustAsync.swift"
         ]
     ),
     .testTarget(

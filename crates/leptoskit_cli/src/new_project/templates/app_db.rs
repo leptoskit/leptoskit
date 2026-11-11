@@ -16,23 +16,46 @@ pub const SERVER: &str = "http://localhost:3000";
 #[cfg(feature = "web")]
 #[leptos::component]
 pub fn App() -> impl leptos::prelude::IntoView {
+	use leptos::prelude::*;
+
 	let notes = provide();
 	reactive_graph::owner::provide_context(notes.clone());
-	#[cfg(target_arch = "wasm32")]
-	let navigation = routes::Navigation::from_browser()
-		.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home));
-	#[cfg(not(target_arch = "wasm32"))]
-	let navigation = routes::Navigation::new(routes::Route::Home);
+	let navigation = {
+		#[cfg(target_arch = "wasm32")]
+		{
+			routes::Navigation::from_browser()
+				.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home))
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			#[cfg(feature = "ssr")]
+			{
+				leptoskit_router::ssr::navigation_from_request::<routes::Route>()
+					.unwrap_or_else(|_| routes::Navigation::new(routes::Route::Home))
+			}
+			#[cfg(not(feature = "ssr"))]
+			{
+				routes::Navigation::new(routes::Route::Home)
+			}
+		}
+	};
 
-	move || leptoskit::web::render(navigation.render())
+	Suspense(
+		SuspenseProps::builder()
+			.children(TypedChildren::to_children(move || {
+				move || leptoskit::web::render(navigation.render())
+			}))
+			.build(),
+	)
 }
 
 /// Starts the app's shared state in the current reactive owner: the query
 /// cache the notes screen keeps its list in, and the list itself.
 ///
 /// During SSR, query data loads in process and streams into the browser
-/// cache. The initial HTML can show the loading state; rendering never
-/// calls the server through its own relative URL.
+/// cache. The app's Suspense boundary waits for route queries before it
+/// renders their outcome; rendering never calls the server through its own
+/// relative URL.
 pub fn provide() -> Notes {
 	leptoskit::query::QueryClient::new().provide();
 	Notes::shared()
@@ -76,8 +99,10 @@ pub fn hydrate() {
 	// The browser talks to the page's own origin, with the session cookie
 	// when the app has sign-in. This configures the RPC client and the live
 	// socket too.
-	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
-	leptos::mount::hydrate_body(App);
+	leptos::mount::hydrate_body(|| {
+		leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
+		App()
+	});
 }
 
 /// Mounts the CSR application when the browser loads its Wasm module.
@@ -86,8 +111,10 @@ pub fn hydrate() {
 pub fn start() {
 	#[cfg(feature = "devtools")]
 	leptoskit::devtools::install(env!("CARGO_PKG_NAME"));
-	leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
-	leptos::mount::mount_to_body(App);
+	leptos::mount::mount_to_body(|| {
+		leptoskit::rpc::client::configure(leptoskit::rpc::client::ClientConfig::new());
+		App()
+	});
 }
 
 /// The native guest's executor for requests the query client starts itself.

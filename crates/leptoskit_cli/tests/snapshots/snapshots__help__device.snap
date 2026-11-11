@@ -21,6 +21,9 @@ Commands:
   start-app       Launches an installed app by bundle id or package
   stop-app        Terminates an installed app
   logs            Reads recent system logs
+  install         Installs an app package, or checks that a desktop path exists
+  open            Opens an installed app, or launches a desktop binary
+  sanity          Installs, opens, and runs tap, long press, pan, and pinch where the target can inject them
   help            Print this message or the help of the given subcommand(s)
 
 Options:

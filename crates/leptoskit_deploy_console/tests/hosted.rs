@@ -484,9 +484,9 @@ async fn offline_restore_verifies_encrypted_state_and_revokes_restored_access() 
 }
 
 async fn check_export(app: &Router, job: &Value, alice: &str, bob: &str) {
-	use leptoskit::analytics::Analytics;
-	use leptoskit::analytics::Limits;
-	use leptoskit::analytics::Resource;
+	use leptoskit::apm::Analytics;
+	use leptoskit::apm::Limits;
+	use leptoskit::apm::Resource;
 	let analytics = Analytics::new(
 		Resource {
 			service: "notes".into(),

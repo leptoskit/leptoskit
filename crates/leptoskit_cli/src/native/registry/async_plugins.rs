@@ -26,6 +26,17 @@ pub(super) fn configure_plugin(
 				"async plugin `{name}` requires [native.plugin-options.{name}] host configuration"
 			)
 		})?;
+
+		// The factory reads these when the app starts; without them it fails
+		// there, before the app shows anything.
+		for option in &plugin.required_options {
+			anyhow::ensure!(
+				options.get(option).is_some_and(|value| !empty(value)),
+				"plugin `{name}` needs `{option}` in [native.plugin-options.{name}]: without it, \
+				 the app stops at launch when the plugin starts"
+			);
+		}
+
 		let json = serde_json::to_string(options)
 			.with_context(|| format!("serializing native.plugin-options.{name}"))?;
 		anyhow::ensure!(
@@ -48,9 +59,23 @@ pub(super) fn configure_plugin(
 			plugin.option_features.is_empty(),
 			"plugin `{name}` declares option-features but takes no native.plugin-options"
 		);
+		anyhow::ensure!(
+			plugin.required_options.is_empty(),
+			"plugin `{name}` declares required-options but takes no native.plugin-options"
+		);
 	}
 
 	Ok(())
+}
+
+/// A value that says nothing: an empty string, list, or table.
+fn empty(value: &toml::Value) -> bool {
+	match value {
+		toml::Value::String(text) => text.is_empty(),
+		toml::Value::Array(items) => items.is_empty(),
+		toml::Value::Table(table) => table.is_empty(),
+		_ => false,
+	}
 }
 
 pub(super) fn host_features(

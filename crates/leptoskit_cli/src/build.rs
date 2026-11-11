@@ -3,9 +3,12 @@
 //! The pipeline mirrors what cargo-leptos does — compile the server, compile
 //! the wasm client, run wasm-bindgen, optionally optimize, lay out assets:
 //!
-//! - cargo always runs for the server and the client, one after the other: both
-//!   share the target directory and cargo's lock on it, and cargo's own
-//!   incremental cache makes an unchanged build a sub-second no-op;
+//! - `leptoskit build` runs cargo for the server and then the client: they
+//!   share a target directory, and cargo's incremental cache makes an unchanged
+//!   build a sub-second no-op. `leptoskit dev` uses a line-table profile,
+//!   compiles the two sides in parallel in separate target directories, and
+//!   skips a side the edit does not affect. An asset edit copies files and does
+//!   not run cargo;
 //! - wasm-bindgen (and, in release, `wasm-opt`) is content-fingerprinted
 //!   through [`crate::cache`] on the compiled wasm, so an unchanged compile
 //!   skips it — unless its outputs went missing or the output directory moved;
@@ -131,6 +134,30 @@ pub fn run(
 	optimize: Option<Optimize>,
 	out: &str,
 ) -> Result<BuildOutput> {
+	run_with(
+		release,
+		platform,
+		optimize,
+		out,
+		false,
+		crate::budgets::Rebuild::Full,
+	)
+}
+
+/// A `leptoskit dev` rebuild. Assets skip cargo. The dev profile and, when
+/// both sides are needed, parallel cargo invocations apply to the rest.
+pub(crate) fn run_dev(edit: crate::budgets::Rebuild) -> Result<BuildOutput> {
+	run_with(false, None, None, "dist", true, edit)
+}
+
+fn run_with(
+	release: bool,
+	platform: Option<Platform>,
+	optimize: Option<Optimize>,
+	out: &str,
+	dev: bool,
+	edit: crate::budgets::Rebuild,
+) -> Result<BuildOutput> {
 	let (mut config, root) = LeptoskitConfig::load()?;
 
 	if let Some(optimize) = optimize {
@@ -144,13 +171,18 @@ pub fn run(
 		!platform.is_native(),
 		"use `leptoskit build --platform {platform}` for native platform builds"
 	);
-	let registry = resolve_plugins(&config)?;
-	registry.generate(&root, platform, release)?;
-	crate::l10n::sync(&root, &config)?;
 	let root = Utf8PathBuf::from_path_buf(root)
 		.map_err(|_| anyhow::anyhow!("project path is not UTF-8"))?;
 	let out_dir = root.join(out);
 	std::fs::create_dir_all(&out_dir).with_context(|| format!("could not create {out_dir}"))?;
+
+	if dev && edit == crate::budgets::Rebuild::Assets && platform == Platform::Web {
+		return copy_assets_only(&config, &root, out_dir);
+	}
+
+	let registry = resolve_plugins(&config)?;
+	registry.generate(root.as_std_path(), platform, release)?;
+	crate::l10n::sync(root.as_std_path(), &config)?;
 
 	let (registry, context) = plugin_context(&config, platform, release)?;
 	let mut rustflags = config.build.rustflags.clone();
@@ -203,14 +235,14 @@ pub fn run(
 		None => render::ModeFeatures::default(),
 	};
 
-	let server_options = options.with_features(&mode.server);
+	let mut server_options = options.with_features(&mode.server);
 	// An extension renders in the browser whatever the website does, so it
 	// takes no render mode, only its own platform feature.
 	let extension_package = client
 		.as_ref()
 		.filter(|_| builds_client && platform == Platform::Extension)
 		.and_then(|client| metadata.package(&client.name));
-	let client_options = client_cargo_options(
+	let mut client_options = client_cargo_options(
 		&config,
 		&root,
 		platform,
@@ -219,40 +251,40 @@ pub fn run(
 		options.with_features(&mode.client),
 	)?;
 
-	// An extension is only a client: its server, if the app has one, is
-	// built and deployed as the website's, and so are its services.
-	let (server_binary, services) = compile_server_and_services(
+	apply_dev_profile(
+		dev,
+		release,
+		&root,
+		&mut server_options,
+		&mut client_options,
+	);
+	let (server_binary, services, wasm_path) = compile_sides(
 		&config,
 		&root,
 		&metadata,
 		platform,
 		server_package.is_some(),
 		&server_options,
+		&client_options,
+		client.as_ref(),
 		release,
+		Sides {
+			server: edit.compiles_server() && platform != Platform::Extension,
+			client: edit.compiles_client() && builds_client,
+		},
 	)?;
-
-	let mut wasm_bound = false;
-	let mut wasm_bundle = None;
-
-	if let (true, Some(client)) = (builds_client, &client) {
-		let wasm_path = wasm::compile_wasm(root.as_std_path(), client, &client_options)?;
-		wasm::ensure_wasm_bindgen_compatible(&metadata.workspace_root.join("Cargo.lock"))?;
-
-		let pkg_dir = out_dir.join("pkg").into_std_path_buf();
-		let (bound, module) = bind_client(
-			&wasm_path,
-			&pkg_dir,
-			client,
-			release,
-			&config.bundle,
-			&metadata.target_directory,
-		)?;
-		wasm_bound = bound;
-		wasm_bundle = Some(module);
-	}
+	let (wasm_bound, wasm_bundle) = bind_built_wasm(
+		wasm_path.as_deref(),
+		client.as_ref(),
+		&out_dir,
+		release,
+		&config,
+		&metadata,
+	)?;
 
 	if platform == Platform::Web {
 		collect_assets(&root, &out_dir)?;
+		write_web_branding(&root, &config, out_dir.as_std_path())?;
 	}
 
 	let mut post = leptoskit_plugin::PluginPostBuildContext {
@@ -280,7 +312,7 @@ pub fn run(
 		crate::ui::warning("no cdylib client crate found; built the server only");
 	} else if wasm_bound {
 		crate::ui::success(format_args!("wasm client bound into {out_dir}/pkg"));
-	} else if platform != Platform::Server {
+	} else if platform != Platform::Server && edit.compiles_client() {
 		crate::ui::skipped("wasm client unchanged; skipped wasm-bindgen");
 	}
 
@@ -382,6 +414,162 @@ pub(crate) mod devtools {
 	}
 }
 
+/// Copies `web/`, `public/`, and `assets/` and refreshes the launch screen.
+fn copy_assets_only(
+	config: &LeptoskitConfig,
+	root: &Utf8PathBuf,
+	out_dir: Utf8PathBuf,
+) -> Result<BuildOutput> {
+	collect_assets(root, &out_dir)?;
+	write_web_branding(root, config, out_dir.as_std_path())?;
+	crate::ui::success(format_args!("copied assets into {out_dir}"));
+	Ok(BuildOutput {
+		out_dir,
+		client: None,
+		server_binary: None,
+		services: Vec::new(),
+	})
+}
+
+/// Selects the line-table dev profile and a wasm target directory that does
+/// not share the server's cargo lock.
+fn apply_dev_profile(
+	dev: bool,
+	release: bool,
+	root: &Utf8Path,
+	server_options: &mut CargoOptions,
+	client_options: &mut CargoOptions,
+) {
+	if !dev || release {
+		return;
+	}
+
+	*server_options = std::mem::take(server_options).with_dev_profile();
+	*client_options = std::mem::take(client_options).with_dev_profile();
+
+	if client_options.target_directory.is_none() {
+		client_options.target_directory =
+			Some(root.join("target/leptoskit-dev-wasm").into_std_path_buf());
+	}
+}
+
+/// Binds a wasm artifact when this edit compiled one.
+fn bind_built_wasm(
+	wasm_path: Option<&Path>,
+	client: Option<&ClientInfo>,
+	out_dir: &Utf8Path,
+	release: bool,
+	config: &LeptoskitConfig,
+	metadata: &wasm::CargoMetadata,
+) -> Result<(bool, Option<PathBuf>)> {
+	let Some(wasm_path) = wasm_path else {
+		return Ok((false, None));
+	};
+	let client = client.context("the wasm build finished without a client crate")?;
+	wasm::ensure_wasm_bindgen_compatible(&metadata.workspace_root.join("Cargo.lock"))?;
+	let pkg_dir = out_dir.join("pkg").into_std_path_buf();
+	let (bound, module) = bind_client(
+		wasm_path,
+		&pkg_dir,
+		client,
+		release,
+		&config.bundle,
+		&metadata.target_directory,
+	)?;
+	Ok((bound, Some(module)))
+}
+
+/// Which sides of an edit to compile.
+#[derive(Clone, Copy)]
+struct Sides {
+	server: bool,
+	client: bool,
+}
+
+/// Compiles the sides `server_job` and `client_job` name. Both at once run
+/// in parallel: the client's target directory is not the server's, so the
+/// two cargo processes do not share a lock.
+#[allow(clippy::too_many_arguments)]
+fn compile_sides(
+	config: &LeptoskitConfig,
+	root: &Utf8PathBuf,
+	metadata: &wasm::CargoMetadata,
+	platform: Platform,
+	has_server: bool,
+	server_options: &CargoOptions,
+	client_options: &CargoOptions,
+	client: Option<&ClientInfo>,
+	release: bool,
+	sides: Sides,
+) -> Result<(
+	Option<PathBuf>,
+	Vec<crate::services::BuiltService>,
+	Option<PathBuf>,
+)> {
+	let Sides {
+		server: server_job,
+		client: client_job,
+	} = sides;
+
+	if server_job && client_job {
+		let client = client.context("this build has a wasm client but no client crate")?;
+
+		return std::thread::scope(|scope| {
+			let server = scope.spawn(|| {
+				compile_server_and_services(
+					config,
+					root,
+					metadata,
+					platform,
+					has_server,
+					server_options,
+					release,
+				)
+			});
+			let wasm =
+				scope.spawn(|| wasm::compile_wasm(root.as_std_path(), client, client_options));
+			let server = joined(server.join());
+			let wasm = joined(wasm.join());
+
+			match (server, wasm) {
+				(Ok((binary, services)), Ok(wasm)) => Ok((binary, services, Some(wasm))),
+				(Err(server), Err(client)) => {
+					anyhow::bail!("{server:#}\n{client:#}")
+				}
+				(Err(error), _) | (_, Err(error)) => Err(error),
+			}
+		});
+	}
+
+	if server_job {
+		let (binary, services) = compile_server_and_services(
+			config,
+			root,
+			metadata,
+			platform,
+			has_server,
+			server_options,
+			release,
+		)?;
+		return Ok((binary, services, None));
+	}
+
+	if client_job {
+		let client = client.context("this build has a wasm client but no client crate")?;
+		let wasm = wasm::compile_wasm(root.as_std_path(), client, client_options)?;
+		return Ok((None, Vec::new(), Some(wasm)));
+	}
+
+	Ok((None, Vec::new(), None))
+}
+
+fn joined<T>(result: std::thread::Result<Result<T>>) -> Result<T> {
+	match result {
+		Ok(result) => result,
+		Err(_) => anyhow::bail!("a dev build thread panicked"),
+	}
+}
+
 /// Settings a platform overrides: an extension never splits its client,
 /// because split chunks load with dynamic `import()`, which extension service
 /// workers forbid, and stores review one package anyway.
@@ -399,6 +587,13 @@ fn platform_env(
 	platform: Platform,
 	mut env: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
+	if let Some(level) = config.native.log_level {
+		env.insert(
+			leptoskit_config::LogLevel::VARIABLE.to_owned(),
+			level.as_str().to_owned(),
+		);
+	}
+
 	if platform == Platform::Extension
 		&& let Some(server) = config
 			.extension
@@ -886,6 +1081,38 @@ fn collect_assets(root: &Utf8PathBuf, out_dir: &Utf8PathBuf) -> Result<()> {
 	Ok(())
 }
 
+/// Writes web favicons from `[app.icons]` / `app.icon`, and injects the HTML
+/// splash from `[app.launch_screen]` when enabled for the web.
+fn write_web_branding(root: &Utf8PathBuf, config: &LeptoskitConfig, out_dir: &Path) -> Result<()> {
+	crate::icons::write(
+		root.as_std_path(),
+		config,
+		crate::icons::Platform::Web,
+		out_dir,
+	)?;
+
+	if let Some(launch) = crate::launch::Launch::load(root.as_std_path(), config)?
+		&& launch.for_web()
+	{
+		let files = launch.web_files()?;
+		let snippet = files
+			.iter()
+			.find(|(name, _)| name == "splash/splash.html")
+			.map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+			.unwrap_or_default();
+		crate::launch::write_files(out_dir, files)?;
+		let index = out_dir.join("index.html");
+		if index.is_file() && !snippet.is_empty() {
+			let html = std::fs::read_to_string(&index)
+				.with_context(|| format!("read {}", index.display()))?;
+			std::fs::write(&index, crate::launch::inject_web_splash(&html, &snippet))
+				.with_context(|| format!("write {}", index.display()))?;
+		}
+	}
+
+	Ok(())
+}
+
 fn copy_assets(public: &Utf8PathBuf, out_dir: &Utf8PathBuf) -> Result<()> {
 	use rayon::prelude::*;
 
@@ -954,6 +1181,18 @@ mod tests {
 		assert_eq!(spec.options["dir"], "app/ui".into());
 
 		assert!(router_spec(&LeptoskitConfig::default()).is_none());
+	}
+
+	#[test]
+	fn web_builds_carry_the_configured_log_level() {
+		let variable = leptoskit_config::LogLevel::VARIABLE;
+		let env = platform_env(&LeptoskitConfig::default(), Platform::Web, BTreeMap::new());
+		assert!(!env.contains_key(variable));
+
+		let mut config = LeptoskitConfig::default();
+		config.native.log_level = Some(leptoskit_config::LogLevel::Trace);
+		let env = platform_env(&config, Platform::Web, BTreeMap::new());
+		assert_eq!(env.get(variable).map(String::as_str), Some("trace"));
 	}
 
 	fn package(features: &[&str]) -> wasm::MetadataPackage {

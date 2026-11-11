@@ -139,3 +139,35 @@ extern "C" void lk_dev_destroy(lk_dev*) { std::abort(); }
 extern "C" int32_t lk_devtools_hub(const uint8_t*, size_t, const uint8_t*, size_t) {
     std::abort();
 }
+extern "C" int32_t lk_devtools_active(void) { std::abort(); }
+extern "C" int32_t lk_devtools_highlight(lk_devtools_frame*) { std::abort(); }
+extern "C" int32_t lk_devtools_picking(void) { std::abort(); }
+extern "C" int32_t lk_devtools_pick(size_t, float, float) { std::abort(); }
+
+// The application bridge links every scene and timer entry point, but these
+// callback ownership tests never create an app that reaches them.
+extern "C" int32_t lk_app_enable_timers(lk_app*) { std::abort(); }
+extern "C" int32_t lk_app_enable_scene3d(lk_app*) { std::abort(); }
+extern "C" int32_t lk_scene3d_available(void) { std::abort(); }
+extern "C" lk_buffer lk_scene3d_error(void) { std::abort(); }
+extern "C" int32_t lk_scene3d_set_backend(const uint8_t*, size_t) { std::abort(); }
+extern "C" int32_t lk_scene3d_set_asset_directory(const uint8_t*, size_t) { std::abort(); }
+extern "C" int32_t lk_scene3d_set_asset_reader(void*, lk_scene3d_read_fn) { std::abort(); }
+extern "C" void lk_scene3d_sink_write(void*, const uint8_t*, size_t) { std::abort(); }
+extern "C" lk_scene3d_view* lk_scene3d_view_attach_layer(
+    uint32_t, void*, uint32_t, uint32_t) {
+    std::abort();
+}
+extern "C" lk_scene3d_view* lk_scene3d_view_attach_window(
+    uint32_t, void*, uint32_t, uint32_t) {
+    std::abort();
+}
+extern "C" void lk_scene3d_view_set_waker(lk_scene3d_view*, void*, lk_scene3d_wake_fn) {
+    std::abort();
+}
+extern "C" void lk_scene3d_view_resize(lk_scene3d_view*, uint32_t, uint32_t) { std::abort(); }
+extern "C" void lk_scene3d_view_set_rotation(lk_scene3d_view*, uint32_t) { std::abort(); }
+extern "C" int32_t lk_scene3d_view_shows_camera(const lk_scene3d_view*) { std::abort(); }
+extern "C" int32_t lk_scene3d_view_frame(lk_scene3d_view*, double) { std::abort(); }
+extern "C" int32_t lk_scene3d_view_needs_frame(const lk_scene3d_view*) { std::abort(); }
+extern "C" void lk_scene3d_view_detach(lk_scene3d_view*) { std::abort(); }

@@ -54,6 +54,8 @@ use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 
+use crate::Build;
+
 /// Which operation macro is expanding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OperationKind {
@@ -944,14 +946,14 @@ fn is_failed(ty: &Type) -> bool {
 		&& path.path.segments.last().is_some_and(|segment| segment.ident == "Failed"))
 }
 
-/// Expands `#[rpc::query]` or `#[rpc::mutation]`. `server` decides whether the
-/// body and its registration are kept: the `server` feature in the real
-/// macro, either way in tests.
+/// Expands `#[rpc::query]` or `#[rpc::mutation]`. `build.server` decides
+/// whether the body and its registration are kept: the `server` feature in
+/// the real macro, either way in tests.
 pub(crate) fn expand(
 	kind: OperationKind,
 	args: TokenStream,
 	item: TokenStream,
-	server: bool,
+	build: Build,
 ) -> syn::Result<TokenStream> {
 	let args = OperationArgs::parse(kind, args)?;
 	let function: ItemFn = syn::parse2(item)?;
@@ -1074,7 +1076,7 @@ pub(crate) fn expand(
 			&krate,
 			&struct_ident,
 			&name,
-			server,
+			build,
 		)?);
 
 		return Ok(out);
@@ -1082,7 +1084,7 @@ pub(crate) fn expand(
 
 	let service = service_const(args.service.as_ref());
 
-	if server {
+	if build.server {
 		let items = server_items(
 			kind,
 			&args,
@@ -1094,7 +1096,7 @@ pub(crate) fn expand(
 			&options,
 		);
 
-		out.extend(gate_for_service(&args, items, || {
+		out.extend(gate_for_service(&args, build, items, || {
 			let mut stub = remote_stub(&krate, &struct_ident, &name, &variant, output, &service);
 			let job = remote_job_stub(&krate, &struct_ident, &name, output, &service, &options);
 			stub.extend((kind == OperationKind::Job).then_some(job));
@@ -1366,13 +1368,13 @@ fn stream_items(
 	krate: &Path,
 	struct_ident: &Ident,
 	name: &LitStr,
-	server: bool,
+	build: Build,
 ) -> syn::Result<TokenStream> {
 	let item = &stream.item;
 	let resumable = args.resumable;
 	let service = service_const(args.service.as_ref());
 
-	if !server {
+	if !build.server {
 		return Ok(quote! {
 			#[allow(deprecated)]
 			impl #krate::StreamOperation for #struct_ident {
@@ -1458,7 +1460,7 @@ fn stream_items(
 		};
 	};
 
-	gate_for_service(args, items, || {
+	gate_for_service(args, build, items, || {
 		quote! {
 			#[allow(deprecated)]
 			impl #krate::StreamOperation for #struct_ident {
@@ -1501,14 +1503,21 @@ fn service_const(service: Option<&LitStr>) -> TokenStream {
 /// and for a service's, each kept only where the declaring crate's own
 /// `service` feature is on, with the `stub` for every other build, such as
 /// the app's server. The client sends a service's operation to the service
-/// either way, and the app's server never serves it.
+/// either way, and the app's server never serves it. A crate that declares
+/// no `service` feature, such as an app calling a service, gets the stub
+/// alone, so check-cfg has no unknown feature to warn about.
 fn gate_for_service(
 	args: &OperationArgs,
+	build: Build,
 	items: TokenStream,
 	stub: impl FnOnce() -> TokenStream,
 ) -> syn::Result<TokenStream> {
 	if args.service.is_none() {
 		return Ok(items);
+	}
+
+	if !(build.declares_service)() {
+		return Ok(stub());
 	}
 
 	let mut gated = cfg_each(items, &quote!(feature = "service"))?;

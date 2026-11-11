@@ -116,7 +116,7 @@ public final class LeptosKitMacViewController: NSViewController, NSTextFieldDele
             previous.close()
             Task {
                 do { try await previous.closeAndWait() } catch {
-                    NSLog("leptoskit dev: previous guest cleanup: %@", error.localizedDescription)
+                    NativeLog.warn(NativeLog.bridge, "leptoskit dev: previous guest cleanup", error)
                 }
             }
         }
@@ -129,7 +129,7 @@ public final class LeptosKitMacViewController: NSViewController, NSTextFieldDele
             runtime = try makeRuntime(wasm)
             installRenderer()
             try layoutRuntime()
-            NSLog("leptoskit dev: reloaded")
+            NativeLog.info(NativeLog.bridge, "leptoskit dev: reloaded")
         } catch { fail(error) }
     }
 
@@ -144,7 +144,7 @@ public final class LeptosKitMacViewController: NSViewController, NSTextFieldDele
     /// the next rebuilt guest replaces the message.
     private func fail(_ error: Error) {
         closeGuest()
-        NSLog("leptoskit: %@", error.localizedDescription)
+        NativeLog.error(NativeLog.bridge, "the app stopped", error)
         let label = NSTextField(wrappingLabelWithString: error.localizedDescription)
         label.setAccessibilityIdentifier("leptoskit-error")
         label.translatesAutoresizingMaskIntoConstraints = false

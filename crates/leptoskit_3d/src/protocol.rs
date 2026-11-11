@@ -220,6 +220,18 @@ pub struct MaterialOverride {
 	pub rim: Option<Rim>,
 }
 
+/// How a part's colour meets what is drawn behind it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+	/// It covers what is behind it, as much as its opacity says.
+	#[default]
+	Normal,
+	/// It adds its light to what is behind it, scaled by its opacity, and
+	/// covers nothing: a glow, a flash, a spark, a beam. Black adds nothing.
+	/// It draws with the transparent parts and hides nothing behind it.
+	Additive,
+}
+
 /// The directional light, standing in for the sun or a room's key light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
@@ -347,6 +359,27 @@ pub enum Op {
 		/// Usually between 0 and 1.
 		weight: f32,
 	},
+	/// Moves a named part of a model instance (a bone, a pivot, any node)
+	/// from where its rest pose or the playing clip puts it, such as a head
+	/// turned towards something or a leg swung by the game.
+	///
+	/// `offset` is applied in the part's own frame, after the pose: it turns
+	/// the part about its own origin and moves it along its own axes, and
+	/// everything under the part follows. It replaces the part's last
+	/// offset, and [`Transform::IDENTITY`] releases it. Over `seconds` the
+	/// part moves there in a straight line from where it is now, on the
+	/// host's own clock, so a guest that sends one offset per tick with the
+	/// tick's length is drawn smoothly between ticks. Zero jumps there.
+	SetPartOffset {
+		/// The model instance.
+		node: NodeId,
+		/// The part's node name in the model file.
+		part: String,
+		/// The move, in the part's own frame.
+		offset: Transform,
+		/// Seconds to get there; zero jumps.
+		seconds: f32,
+	},
 	/// Changes how a model instance's materials draw.
 	SetMaterial {
 		/// The model instance.
@@ -356,6 +389,16 @@ pub enum Op {
 		part: Option<String>,
 		/// What to change.
 		material: MaterialOverride,
+	},
+	/// Sets how a model instance's parts meet what is behind them.
+	SetBlend {
+		/// The model instance.
+		node: NodeId,
+		/// The part to change, with everything under it, or `None` for the
+		/// whole instance.
+		part: Option<String>,
+		/// How it blends.
+		blend: Blend,
 	},
 	/// Turns the soft shadow under a model instance on or off. Instances cast
 	/// one by default.
@@ -510,6 +553,8 @@ const SET_BACKDROP: u8 = 17;
 const SET_EXPOSURE: u8 = 18;
 const RAYCAST: u8 = 19;
 const RAYCAST_SCREEN: u8 = 20;
+const SET_PART_OFFSET: u8 = 21;
+const SET_BLEND: u8 = 22;
 
 // Event tags.
 const ASSET_LOADED: u8 = 1;
@@ -709,6 +754,7 @@ fn read_material(reader: &mut Reader<'_>) -> Result<MaterialOverride, DecodeErro
 }
 
 impl Op {
+	#[allow(clippy::too_many_lines)]
 	fn write(&self, writer: &mut Writer) {
 		match self {
 			Self::LoadAsset { asset, path } => {
@@ -779,6 +825,18 @@ impl Op {
 				writer.str(target);
 				writer.f32(*weight);
 			}
+			Self::SetPartOffset {
+				node,
+				part,
+				offset,
+				seconds,
+			} => {
+				writer.u8(SET_PART_OFFSET);
+				writer.u32(node.0);
+				writer.str(part);
+				writer.transform(offset);
+				writer.f32(*seconds);
+			}
 			Self::SetMaterial {
 				node,
 				part,
@@ -788,6 +846,15 @@ impl Op {
 				writer.u32(node.0);
 				writer.option(part.as_deref(), Writer::str);
 				write_material(writer, material);
+			}
+			Self::SetBlend { node, part, blend } => {
+				writer.u8(SET_BLEND);
+				writer.u32(node.0);
+				writer.option(part.as_deref(), Writer::str);
+				writer.u8(match blend {
+					Blend::Normal => 0,
+					Blend::Additive => 1,
+				});
 			}
 			Self::SetShadow { node, cast } => {
 				writer.u8(SET_SHADOW);
@@ -934,11 +1001,30 @@ impl Op {
 					weight: reader.f32()?,
 				}
 			}
+			SET_PART_OFFSET => {
+				Self::SetPartOffset {
+					node: NodeId(reader.u32()?),
+					part: reader.str(NAME)?,
+					offset: reader.transform()?,
+					seconds: reader.f32()?,
+				}
+			}
 			SET_MATERIAL => {
 				Self::SetMaterial {
 					node: NodeId(reader.u32()?),
 					part: reader.option(|reader| reader.str(NAME))?,
 					material: read_material(reader)?,
+				}
+			}
+			SET_BLEND => {
+				Self::SetBlend {
+					node: NodeId(reader.u32()?),
+					part: reader.option(|reader| reader.str(NAME))?,
+					blend: match reader.u8()? {
+						0 => Blend::Normal,
+						1 => Blend::Additive,
+						_ => return Err(DecodeError("an unknown blend")),
+					},
 				}
 			}
 			SET_SHADOW => {

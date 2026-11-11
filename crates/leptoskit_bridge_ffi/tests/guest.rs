@@ -262,7 +262,11 @@ fn a_malformed_event_fails_the_guest_and_it_still_stops() {
 		wait("the first transaction", || transaction(guest));
 		assert_eq!(lk_guest_event(guest, 0, 77, ptr::null(), 0), -1);
 		assert_eq!(lk_guest_failed(guest), 1);
-		assert_eq!(take(lk_guest_error(guest)), b"unknown event kind");
+		// The guest's error names the event and the view it was for.
+		assert_eq!(
+			take(lk_guest_error(guest)),
+			b"event 77 for view 0: unknown event kind"
+		);
 
 		// A failed guest drops what it is sent.
 		assert_eq!(lk_guest_frame(guest, 2_000_000, 16_666_667), 0);
@@ -365,5 +369,109 @@ fn spawning_needs_an_app_and_both_callbacks() {
 			-1
 		);
 		lk_app_destroy(app);
+	}
+}
+
+/// One route deep: Back pops it, then has nothing left to pop. Popping
+/// changes the label only when the host flushes, as a router's signal does.
+const ROUTED_GUEST: &str = r#"(module
+ (import "leptoskit" "node_create" (func $create (param i64 i32)))
+ (import "leptoskit" "node_set_props" (func $props (param i64 i32 i32)))
+ (import "leptoskit" "commit" (func $commit))
+ (memory (export "memory") 1)
+ ;; `{"text":"Depth 1"}`: 18 bytes, with the digit at offset 79.
+ (data (i32.const 64) "{\"text\":\"Depth 1\"}")
+ (global $depth (mut i32) (i32.const 1))
+ (global $dirty (mut i32) (i32.const 0))
+ (func (export "leptoskit_main")
+   (call $create (i64.const 1) (i32.const 1))
+   (call $props (i64.const 1) (i32.const 64) (i32.const 18))
+   (call $commit))
+ (func (export "leptoskit_event") (param i64 i32 i32 i32) (result i32)
+   (i32.const 0))
+ (func (export "leptoskit_system_back") (result i32)
+   (if (result i32) (i32.eqz (global.get $depth))
+     (then (i32.const 0))
+     (else
+       (global.set $depth (i32.sub (global.get $depth) (i32.const 1)))
+       (global.set $dirty (i32.const 1))
+       (i32.const 1))))
+ (func (export "leptoskit_flush")
+   (if (global.get $dirty)
+     (then
+       (i32.store8 (i32.const 79) (i32.add (i32.const 48) (global.get $depth)))
+       (call $props (i64.const 1) (i32.const 64) (i32.const 18))
+       (call $commit)
+       (global.set $dirty (i32.const 0)))))
+)"#;
+
+fn routed_app() -> *mut App {
+	let mut diagnostic = MaybeUninit::uninit();
+	// SAFETY: The input outlives the call and the output is writable.
+	let app = unsafe {
+		create(
+			ROUTED_GUEST.as_ptr(),
+			ROUTED_GUEST.len(),
+			diagnostic.as_mut_ptr(),
+			|_| Ok(()),
+		)
+	};
+	assert!(!app.is_null());
+	app
+}
+
+/// Waits for the next answer to a system Back offer.
+unsafe fn system_back_answer(guest: *const Guest) -> i32 {
+	wait("a system Back answer", || {
+		// SAFETY: The test lends its live guest.
+		let answer = unsafe { lk_guest_take_system_back(guest) };
+		(answer != SYSTEM_BACK_NONE).then_some(answer)
+	})
+}
+
+#[test]
+fn system_back_reaches_the_guest_and_its_answers_come_back_in_order() {
+	let app = routed_app();
+	let (guest, _) = spawn(app);
+
+	// SAFETY: The guest is live until stopped.
+	unsafe {
+		assert_eq!(lk_guest_start(guest, 390.0, 844.0), 0);
+		wait("the first transaction", || transaction(guest));
+		assert_eq!(lk_guest_take_system_back(guest), SYSTEM_BACK_NONE);
+
+		// Two offers before either is answered: the first pops the route,
+		// and the second finds nothing left, as two quick presses would.
+		assert_eq!(lk_guest_system_back(guest), 0);
+		assert_eq!(lk_guest_system_back(guest), 0);
+		assert_eq!(system_back_answer(guest), SYSTEM_BACK_WENT_BACK);
+		assert_eq!(system_back_answer(guest), SYSTEM_BACK_LEAVE);
+		assert_eq!(lk_guest_take_system_back(guest), SYSTEM_BACK_NONE);
+
+		// The popped route reached the screen through the host's flush.
+		let (_, mutations) = wait("the popped route", || transaction(guest));
+		assert!(mutations > 0);
+
+		assert_eq!(lk_guest_failed(guest), 0);
+		assert_eq!(lk_guest_stop(guest), 0);
+		lk_app_destroy(app);
+	}
+}
+
+#[test]
+fn system_back_leaves_when_the_guest_has_no_export() {
+	let app = app();
+	let (guest, _) = spawn(app);
+
+	// SAFETY: The guest is live until stopped.
+	unsafe {
+		assert_eq!(lk_guest_start(guest, 390.0, 844.0), 0);
+		assert_eq!(lk_guest_system_back(guest), 0);
+		assert_eq!(system_back_answer(guest), SYSTEM_BACK_LEAVE);
+		assert_eq!(lk_guest_stop(guest), 0);
+		lk_app_destroy(app);
+
+		assert_eq!(lk_guest_system_back(ptr::null()), -1);
+		assert_eq!(lk_guest_take_system_back(ptr::null()), -1);
 	}
 }

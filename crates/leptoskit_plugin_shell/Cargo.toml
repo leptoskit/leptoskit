@@ -14,6 +14,21 @@ description = "Scoped, bounded, cancellable desktop child processes for LeptosKi
 name = "shell"
 rust-factory = "from_config"
 rust-async = true
+# `leptoskit build` refuses an app whose options leave these out, which the
+# factory would reject at launch. `host::desktop` tests hold the factory to
+# the list.
+required-options = ["commands"]
+
+# Phones have no processes to start: the factory there always fails, which
+# would stop the app at launch, so the build leaves the plugin out.
+[package.metadata.leptoskit.runtime.ios]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.android]
+unavailable = true
+
+[package.metadata.leptoskit.runtime.harmonyos]
+unavailable = true
 
 [features]
 guest = ["leptoskit_bridge/guest"]
@@ -33,6 +48,7 @@ serde_json = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+toml = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 rustix = { workspace = true, features = ["process"] }

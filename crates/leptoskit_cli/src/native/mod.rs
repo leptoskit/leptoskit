@@ -1,5 +1,6 @@
 //! Generated native hosts and dependency-driven plugin registration.
 
+use std::io::IsTerminal as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,6 +27,8 @@ mod platforms;
 mod project;
 mod quest;
 
+#[cfg(test)]
+mod dev_client_host;
 mod registry;
 pub mod signing;
 mod watch;
@@ -268,6 +271,85 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	generated
 }
 
+/// What cargo needs to compile the app-owned hosts that build for this
+/// machine as part of the whole workspace, as `leptoskit lint` does.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkspaceHosts {
+	/// The registrants written because they were missing.
+	pub written: Vec<PathBuf>,
+	/// The features native builds turn on for those hosts, such as
+	/// `leptoskit_bridge_ffi/async-host`, which their registrants call into.
+	pub features: Vec<String>,
+}
+
+/// The hosts whose crates compile for the machine running the CLI. The
+/// other hosts' sources are behind `#[cfg(target_os = …)]`, so a workspace
+/// build here never includes their registrants.
+const LOCAL_HOSTS: &[Target] = if cfg!(target_os = "macos") {
+	&[Target::Macos, Target::Tui]
+} else if cfg!(target_os = "linux") {
+	&[Target::Linux, Target::Tui]
+} else if cfg!(target_os = "windows") {
+	&[Target::Windows, Target::Tui]
+} else {
+	&[Target::Tui]
+};
+
+/// Prepares the enabled hosts that compile on this machine for a workspace
+/// build: writes each Rust registrant a fresh checkout lacks, since only
+/// native builds write them, and gathers the features native builds turn
+/// on. Registrants that exist are left alone: the next native build
+/// refreshes them.
+pub(crate) fn workspace_hosts(root: &Path, config: &LeptoskitConfig) -> Result<WorkspaceHosts> {
+	workspace_hosts_for(root, config, LOCAL_HOSTS, |target| {
+		registry::resolve(root, config, target)
+	})
+}
+
+fn workspace_hosts_for(
+	root: &Path,
+	config: &LeptoskitConfig,
+	candidates: &[Target],
+	mut resolve: impl FnMut(Target) -> Result<registry::Registry>,
+) -> Result<WorkspaceHosts> {
+	let mut hosts = WorkspaceHosts::default();
+	let mut lock = None;
+
+	for &target in candidates {
+		let platform = target.platform();
+
+		if !config.app.platforms.contains(&platform)
+			|| !root.join(platform.to_string()).join("Cargo.toml").is_file()
+		{
+			continue;
+		}
+
+		let registry =
+			resolve(target).with_context(|| format!("resolve the {platform} host's plugins"))?;
+
+		for feature in &registry.host_features {
+			if !hosts.features.contains(feature) {
+				hosts.features.push(feature.clone());
+			}
+		}
+
+		let path = generated_dir(root, target).join("registrant.rs");
+
+		if path.is_file() {
+			continue;
+		}
+
+		if lock.is_none() {
+			lock = Some(lock::acquire(root)?);
+		}
+
+		project::registrant(root, config, &registry, target)?;
+		hosts.written.push(path);
+	}
+
+	Ok(hosts)
+}
+
 /// Runs native generation and optionally the platform build tool.
 pub fn run(command: NativeCommand) -> Result<()> {
 	let (target, release, build, options) = match command {
@@ -383,7 +465,16 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&build_dir,
 		ohos_ndk.as_deref(),
 	)?;
-	run_tool(&mut host)?;
+	if target.is_android() {
+		// The archive is linked from CMake, which never sees Cargo's link
+		// directives, so the libraries rustc reports for it are written into
+		// the host's CMake project before Gradle links the JNI library.
+		let native_libraries = run_host_library(&mut host)?;
+		project::write_android_cmake(&root, &registry, &native_libraries)?;
+	} else {
+		run_tool(&mut host)?;
+	}
+
 	let profile = profile_directory(&config, true, release);
 	project::copy(
 		&build_dir
@@ -552,6 +643,11 @@ fn check_host(config: &LeptoskitConfig, target: Target, release: bool) -> Result
 /// The cargo invocation that compiles the host static library a mobile or
 /// macOS shell links, with the target's C toolchain configured for the
 /// host's C dependencies.
+///
+/// The Android hosts link that archive from `CMake`, outside Cargo, so the
+/// build asks rustc for the native libraries it needs: `cargo rustc` is `cargo
+/// build` plus a flag for the last crate, and the note it prints is the only
+/// place those libraries are named.
 fn host_library_command(
 	root: &Path,
 	config: &LeptoskitConfig,
@@ -563,7 +659,11 @@ fn host_library_command(
 ) -> Result<Command> {
 	let mut host = Command::new("cargo");
 	host.current_dir(root).args([
-		"build",
+		if target.is_android() {
+			"rustc"
+		} else {
+			"build"
+		},
 		"--package",
 		&registry.package,
 		"--lib",
@@ -595,8 +695,18 @@ fn host_library_command(
 		host.args(["--features", &features.join(",")]);
 	}
 
+	set_log_level(&mut host, config);
+
 	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
+
+		// `run_host_library` reads the build's stderr, so Cargo no longer sees
+		// a terminal; keep its colour when the build prints to one.
+		if std::io::stderr().is_terminal() {
+			host.args(["--color", "always"]);
+		}
+
+		host.args(["--", "--print", "native-static-libs"]);
 	} else if matches!(target, Target::Ios | Target::IosSimulator | Target::Macos) {
 		for (key, value) in apple_cc_environment(target) {
 			host.env(key, value);
@@ -1285,6 +1395,15 @@ pub(crate) const DEBUG_HOST_ARGUMENTS: &[&str] = &[
 	"profile.dev.package.wasmi.debug-assertions=false",
 ];
 
+/// Hands `[native] log-level` to the runtime's logger, which reads it when
+/// it is compiled. Unset, the runtime logs `info` in a debug build and
+/// `warn` in a release build.
+pub(crate) fn set_log_level(command: &mut Command, config: &LeptoskitConfig) {
+	if let Some(level) = config.native.log_level {
+		command.env(leptoskit_config::LogLevel::VARIABLE, level.as_str());
+	}
+}
+
 /// The profile arguments a release cargo build takes: `--release`, or
 /// `--profile <name>` with the `--config` entries defining the profile.
 /// `host` picks between the two size profiles: the wasm one can
@@ -1427,6 +1546,56 @@ pub(crate) fn run_tool(command: &mut Command) -> Result<()> {
 		.with_context(|| format!("could not execute {command:?}"))?;
 	anyhow::ensure!(status.success(), "{command:?} failed: {status}");
 	Ok(())
+}
+
+/// Runs the host library build, printing what it prints, and returns the native
+/// libraries rustc reported for the archive, in the order it reported them.
+fn run_host_library(command: &mut Command) -> Result<Vec<String>> {
+	use std::io::BufRead as _;
+
+	let mut child = command
+		.stdout(std::process::Stdio::inherit())
+		.stderr(std::process::Stdio::piped())
+		.spawn()
+		.with_context(|| format!("could not execute {command:?}"))?;
+	let stderr = child.stderr.take().context("host build has no stderr")?;
+	let mut output = String::new();
+
+	for line in std::io::BufReader::new(stderr).lines() {
+		let line = line?;
+		eprintln!("{line}");
+		output.push_str(&line);
+		output.push('\n');
+	}
+
+	let status = child.wait()?;
+	anyhow::ensure!(status.success(), "{command:?} failed: {status}");
+	Ok(native_static_libs(&output))
+}
+
+/// The libraries in rustc's `note: native-static-libs:` line, with `-l`
+/// stripped, in rustc's order and without the repeats it keeps for linkers that
+/// care about them. Anything that is not a `-l` entry is left to the C linker.
+fn native_static_libs(output: &str) -> Vec<String> {
+	let mut libraries: Vec<String> = Vec::new();
+
+	for line in output.lines() {
+		let Some(list) = line.trim().strip_prefix("note: native-static-libs:") else {
+			continue;
+		};
+
+		for entry in list.split_whitespace() {
+			let Some(name) = entry.strip_prefix("-l") else {
+				continue;
+			};
+
+			if !name.is_empty() && !libraries.iter().any(|known| known == name) {
+				libraries.push(name.to_owned());
+			}
+		}
+	}
+
+	libraries
 }
 
 /// The path of `tool` inside an SDK, from the `xcrun` on `PATH`: Xcode's own
@@ -1668,6 +1837,127 @@ mod tests {
 		std::fs::write(&blocked, b"file").unwrap();
 		report_application_size(&root, Target::IosSimulator, true);
 		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn workspace_hosts_write_missing_registrants_and_gather_host_features() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = &temporary.path().canonicalize().unwrap();
+
+		for host in ["macos", "linux", "windows", "tui"] {
+			project::write(&root.join(host).join("Cargo.toml"), "# owned manifest").unwrap();
+		}
+
+		let existing = root.join(".leptoskit/linux/registrant.rs");
+		project::write(&existing, "// written by the last Linux build\n").unwrap();
+		let mut config = LeptoskitConfig::default();
+		config.app.platforms = vec![
+			Platform::Web,
+			Platform::Macos,
+			Platform::Linux,
+			Platform::Windows,
+			Platform::Ios,
+		];
+		let registry = |target: Target| {
+			registry::Registry {
+				package: format!("app_{}", target.platform()),
+				plugins: Vec::new(),
+				support: Vec::new(),
+				bridge: root.join("bridge"),
+				target: root.join("target"),
+				host_features: vec![
+					"leptoskit_bridge_ffi/async-host".into(),
+					format!("leptoskit_plugin_{}/async-host", target.platform()),
+				],
+				devtools_feature: None,
+				missing: Vec::new(),
+				scene3d: false,
+			}
+		};
+		// Windows has a host crate but doesn't build here, the terminal isn't
+		// enabled, and iOS has no host crate.
+		let candidates = [Target::Macos, Target::Linux, Target::Tui, Target::Ios];
+
+		let mut resolved = Vec::new();
+		let hosts = workspace_hosts_for(root, &config, &candidates, |target| {
+			resolved.push(target);
+			Ok(registry(target))
+		})
+		.unwrap();
+
+		assert_eq!(resolved, [Target::Macos, Target::Linux]);
+		assert_eq!(
+			hosts,
+			WorkspaceHosts {
+				written: vec![root.join(".leptoskit/macos/registrant.rs")],
+				features: vec![
+					"leptoskit_bridge_ffi/async-host".into(),
+					"leptoskit_plugin_macos/async-host".into(),
+					"leptoskit_plugin_linux/async-host".into(),
+				],
+			}
+		);
+		let macos = std::fs::read_to_string(&hosts.written[0]).unwrap();
+		assert!(macos.starts_with("// Generated by leptoskit."), "{macos}");
+		assert_eq!(
+			std::fs::read_to_string(&existing).unwrap(),
+			"// written by the last Linux build\n"
+		);
+
+		std::fs::remove_file(&existing).unwrap();
+		let hosts =
+			workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target))).unwrap();
+		assert_eq!(hosts.written, std::slice::from_ref(&existing));
+		let linux = std::fs::read_to_string(&existing).unwrap();
+		assert!(linux.contains("pub fn plugins<B: leptoskit::native::NativeBackend>"));
+
+		// Several missing hosts share one held lock through all their writes.
+		let macos_path = root.join(".leptoskit/macos/registrant.rs");
+		std::fs::remove_file(&macos_path).unwrap();
+		std::fs::remove_file(&existing).unwrap();
+		let hosts =
+			workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target))).unwrap();
+		assert_eq!(hosts.written, [macos_path, existing]);
+
+		let error = workspace_hosts_for(root, &config, &candidates, |_| {
+			anyhow::bail!("cargo metadata failed")
+		})
+		.unwrap_err();
+		assert_eq!(
+			format!("{error:#}"),
+			"resolve the macos host's plugins: cargo metadata failed"
+		);
+
+		// Lint must respect the same lock as a native build.
+		let macos_directory = root.join(".leptoskit/macos");
+		std::fs::remove_file(macos_directory.join("registrant.rs")).unwrap();
+		let guard = lock::acquire(root).unwrap();
+		let error = workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+			.unwrap_err();
+		assert!(
+			error
+				.to_string()
+				.contains("another native prepare or build")
+		);
+		drop(guard);
+
+		#[cfg(unix)]
+		{
+			// A generated directory must not redirect lint's writes elsewhere.
+			std::fs::remove_dir(&macos_directory).unwrap();
+			let elsewhere = root.join("elsewhere");
+			std::fs::create_dir(&elsewhere).unwrap();
+			std::os::unix::fs::symlink(&elsewhere, &macos_directory).unwrap();
+			let error =
+				workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+					.unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				".leptoskit must be an ordinary generated directory"
+			);
+			assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+		}
+		assert!(LOCAL_HOSTS.contains(&Target::Tui));
 	}
 
 	#[test]
@@ -2631,6 +2921,37 @@ mod tests {
 	}
 
 	#[test]
+	fn host_library_builds_carry_the_configured_log_level() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let build_dir = root.join("target");
+		let registry = host_registry();
+		let level = |config: &LeptoskitConfig| {
+			let host = host_library_command(
+				root,
+				config,
+				&registry,
+				Target::Macos,
+				false,
+				&build_dir,
+				None,
+			)
+			.unwrap();
+			environment(&host)
+				.into_iter()
+				.find(|(key, _)| key == leptoskit_config::LogLevel::VARIABLE)
+				.map(|(_, value)| value)
+		};
+
+		// Unset, the runtime picks the level from the build.
+		assert_eq!(level(&LeptoskitConfig::default()), None);
+
+		let mut config = LeptoskitConfig::default();
+		config.native.log_level = Some(leptoskit_config::LogLevel::Debug);
+		assert_eq!(level(&config).as_deref(), Some("debug"));
+	}
+
+	#[test]
 	fn tools_report_whether_they_ran() {
 		#[cfg(unix)]
 		{
@@ -2647,6 +2968,44 @@ mod tests {
 		let mut missing = Command::new("leptoskit-tool-that-does-not-exist");
 		let error = run_tool(&mut missing).unwrap_err().to_string();
 		assert!(error.contains("could not execute"), "{error}");
+	}
+
+	#[test]
+	fn rustcs_note_names_the_archives_libraries_once_in_its_order() {
+		let output = "   Compiling app v0.1.0\nnote: link against the following native \
+		              artifacts\n\nnote: native-static-libs: -ldl -llog -lunwind -ldl -lm -lc \
+		              -laaudio -lOpenSLES\n\n    Finished `dev` profile [unoptimized + debuginfo] \
+		              target(s) in 0.42s\n";
+
+		assert_eq!(
+			native_static_libs(output),
+			["dl", "log", "unwind", "m", "c", "aaudio", "OpenSLES"]
+		);
+		assert_eq!(
+			native_static_libs("nothing was printed"),
+			Vec::<String>::new()
+		);
+		assert_eq!(
+			native_static_libs("note: native-static-libs: -framework Security -lAudioToolbox"),
+			["AudioToolbox"],
+			"a framework is the C linker's to name, not a library to link"
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn a_host_build_reports_the_libraries_it_printed() {
+		let mut build = Command::new("sh");
+		build.args([
+			"-c",
+			"echo 'note: native-static-libs: -laaudio -ldl -laaudio' >&2; echo compiling",
+		]);
+		assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+
+		let mut failed = Command::new("sh");
+		failed.args(["-c", "exit 3"]);
+		let error = run_host_library(&mut failed).unwrap_err().to_string();
+		assert!(error.contains("failed"), "{error}");
 	}
 
 	#[test]

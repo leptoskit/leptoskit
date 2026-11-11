@@ -1,7 +1,7 @@
 import CLeptosKitBridge
 import Foundation
 import LeptosKitBridge
-import LeptosKitCamera
+@testable import LeptosKitCamera
 import Testing
 
 private func buffer(_ bytes: Data = Data()) throws -> NativeBuffer {

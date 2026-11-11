@@ -256,6 +256,33 @@ impl Scene {
 		});
 	}
 
+	/// Moves `part` of the model instance `node` by `offset`, in the part's
+	/// own frame, over `seconds` (see [`Op::SetPartOffset`]).
+	pub fn set_part_offset(
+		&self,
+		node: NodeId,
+		part: impl Into<String>,
+		offset: Transform,
+		seconds: f32,
+	) {
+		self.push(Op::SetPartOffset {
+			node,
+			part: part.into(),
+			offset,
+			seconds,
+		});
+	}
+
+	/// Sets how a part (or, with `None`, the whole instance) meets what is
+	/// behind it: [`Blend::Additive`] for light that adds to it.
+	pub fn set_blend(&self, node: NodeId, part: Option<&str>, blend: Blend) {
+		self.push(Op::SetBlend {
+			node,
+			part: part.map(str::to_owned),
+			blend,
+		});
+	}
+
 	/// Changes how a part (or, with `None`, the whole instance) draws.
 	pub fn set_material(&self, node: NodeId, part: Option<&str>, material: MaterialOverride) {
 		self.push(Op::SetMaterial {

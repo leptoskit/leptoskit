@@ -50,6 +50,24 @@ internal class WidgetProps(
     /** The session a `LivePhoto` shows; it travels in [rest]. */
     val livePhoto: Long? = rest?.takeUnless { it.isNull("live_photo") }?.getLong("live_photo")
 
+    /**
+     * The height in points of every line of text, or null for the font's own;
+     * it travels in [rest] as a multiple of the font size or as points.
+     */
+    val lineHeight: Double? =
+        rest
+            ?.optJSONObject("line_height")
+            ?.let { height ->
+                when {
+                    // Text without a font size is 14 points.
+                    height.has("relative") -> height.getDouble("relative") * (fontSize ?: 14.0)
+
+                    height.has("fixed") -> height.getDouble("fixed")
+
+                    else -> null
+                }
+            }?.takeIf { it.isFinite() && it > 0 }
+
     /** Where a scroll view's content is scrolled to; it travels in [rest]. */
     val scrollOffset: ScrollOffset? = rest?.optJSONObject("scroll_offset")?.let(ScrollOffset::fromJson)
 
@@ -220,7 +238,10 @@ internal class RenderBatch(
         private const val MAGIC = "LKB1"
         private const val HEADER = 16
         private const val U32 = 0xffff_ffffL
-        private val FONT_WEIGHTS = arrayOf("regular", "medium", "semibold", "bold")
+
+        // In wire order: the four first weights, then the ones added after them.
+        private val FONT_WEIGHTS =
+            arrayOf("regular", "medium", "semibold", "bold", "thin", "extra_light", "light", "extra_bold", "black")
         private val TEXT_ALIGNS = arrayOf("start", "center", "end")
 
         private fun ByteBuffer.id(): Long = int.toLong() and U32

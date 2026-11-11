@@ -2459,6 +2459,8 @@ dependencies = [
  "half",
  "js-sys",
  "leptoskit_bridge",
+ "leptoskit_log",
+ "log",
  "png 0.17.16",
  "pollster",
  "serde",
@@ -2536,6 +2538,8 @@ name = "leptoskit_bridge"
 version = "0.3.0"
 dependencies = [
  "bytes",
+ "leptoskit_log",
+ "log",
  "thiserror 2.0.21",
 ]
 
@@ -2546,10 +2550,12 @@ dependencies = [
  "leptoskit_appkit",
  "leptoskit_bridge",
  "leptoskit_codepush",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_uikit",
  "leptoskit_wasm",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
 ]
@@ -2675,6 +2681,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_log"
+version = "0.3.0"
+dependencies = [
+ "cc",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "leptoskit_macros"
 version = "0.3.0"
 dependencies = [
@@ -2694,6 +2710,7 @@ dependencies = [
  "leptoskit_3d",
  "leptoskit_animation",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
@@ -2936,6 +2953,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -2968,11 +2986,14 @@ name = "leptoskit_wasm"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_rive",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror 2.0.21",
  "wasmi",
  "wasmi_core",
@@ -4522,6 +4543,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

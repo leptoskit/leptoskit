@@ -20,6 +20,8 @@ use crate::tailwind::StyleContext;
 
 impl<B: NativeBackend> NativeSurface<B> {
 	pub(super) fn commit_source(&mut self) {
+		self.adopt_root_appearance();
+
 		let Some(source) = &self.source else {
 			return;
 		};
@@ -88,6 +90,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 			kind,
 			props: NativeProps::default(),
 			handlers: Vec::new(),
+			gesture: None,
 			children: Vec::new(),
 			parent: None,
 			text_cell: None,
@@ -118,6 +121,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 		let id = self.allocate(element.kind);
 		self.shadows[id.index()].props = element.props.clone();
 		self.shadows[id.index()].handlers = element.handlers().to_vec();
+		self.shadows[id.index()].gesture = element.attached_gesture().cloned();
 		#[cfg(feature = "devtools")]
 		{
 			self.shadows[id.index()].source = element.source_location();
@@ -136,7 +140,7 @@ impl<B: NativeBackend> NativeSurface<B> {
 				id,
 				MeasuredText {
 					content: text.to_owned(),
-					style: element.props.text_style(),
+					style: super::measurement::measured_style(element),
 					native_chrome: has_native_chrome(element),
 				},
 			);
@@ -236,6 +240,19 @@ impl<B: NativeBackend> NativeSurface<B> {
 		}
 
 		self.shadows[id.index()].handlers = element.handlers().to_vec();
+		let gesture_removed =
+			self.shadows[id.index()].gesture.is_some() && element.attached_gesture().is_none();
+		self.shadows[id.index()].gesture = element.attached_gesture().cloned();
+
+		if gesture_removed {
+			let effects = {
+				let mut session = self.gestures.borrow_mut();
+				session.cancel_node(id, 0);
+				session.take_effects()
+			};
+			self.fire_gestures(effects);
+		}
+
 		#[cfg(feature = "devtools")]
 		{
 			self.shadows[id.index()].source = element.source_location();
@@ -304,9 +321,15 @@ impl<B: NativeBackend> NativeSurface<B> {
 			out.push(Mutation::RemoveChild { parent, child: id });
 		}
 
+		let effects = {
+			let mut session = self.gestures.borrow_mut();
+			session.cancel_node(id, 0);
+			session.take_effects()
+		};
+		self.fire_gestures(effects);
 		let shadow = &mut self.shadows[id.index()];
-
 		shadow.handlers.clear();
+		shadow.gesture = None;
 		// Inert arena slots must not retain removed assets or other owned
 		// props.
 		shadow.props = NativeProps::default();

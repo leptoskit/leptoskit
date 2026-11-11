@@ -88,11 +88,14 @@ pub(super) fn generate(
 		}
 	}
 
-	if let Some(launch) = &launch {
+	if let Some(launch) = &launch
+		&& launch.for_ios()
+	{
 		crate::launch::write_files(&dir, launch.ios_files()?)?;
 	}
 
-	if icon || launch.is_some() {
+	let launch_assets = launch.as_ref().is_some_and(crate::launch::Launch::for_ios);
+	if icon || launch_assets {
 		writeln!(
 			objects,
 			"{} = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = {}; \
@@ -121,7 +124,10 @@ pub(super) fn generate(
 		config,
 		&package_root,
 		icon,
-		launch.as_ref().map(crate::launch::Launch::ios_plist),
+		launch
+			.as_ref()
+			.filter(|screen| screen.for_ios())
+			.map(crate::launch::Launch::ios_plist),
 		&linked_frameworks(registry)?,
 		&background_modes(registry),
 		&bg_task_identifiers(registry),
@@ -1174,10 +1180,8 @@ mod tests {
 		std::fs::write(root.join("assets/nfts/ada.webp"), b"RIFF").unwrap();
 		let mut config = pods_config();
 		config.app.launch_screen = Some(leptoskit_config::LaunchScreen {
-			background: "#0b0c10".into(),
-			background_dark: None,
-			image: None,
-			image_size: leptoskit_config::LaunchScreen::DEFAULT_IMAGE_SIZE,
+			background: Some("#0b0c10".into()),
+			..leptoskit_config::LaunchScreen::default()
 		});
 		super::generate(root, &config, &registry).unwrap();
 		let project =

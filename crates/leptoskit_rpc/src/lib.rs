@@ -386,7 +386,10 @@ macro_rules! __remote_stream_pump {
 }
 
 /// One classified server-fn failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable, so a query that failed while the server rendered shows the
+/// same error when the browser hydrates.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FnError {
 	/// The request never reached the server, or the connection dropped.
 	Network(String),

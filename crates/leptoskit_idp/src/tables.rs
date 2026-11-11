@@ -126,7 +126,15 @@ pub struct Client {
 
 /// What a person let an app do: the scopes they consented to. One per
 /// account and app; revoking it ends every token the app holds for them.
-#[table(name = "grants", pack = "idp", unique(account_id, client_id))]
+///
+/// Merging accounts moves the absorbed account's grants here, except for an
+/// app this account already granted, whose grant stays as it is.
+#[table(
+	name = "grants",
+	pack = "idp",
+	unique(account_id, client_id),
+	on_account_merge = reassign_skip_conflicts
+)]
 #[policy(select, |grant, cx| grant.account_id.eq(cx.setting::<leptoskit_auth::SignedIn>()))]
 pub struct Grant {
 	pub id: Id<Self>,
