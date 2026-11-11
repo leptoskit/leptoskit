@@ -19,18 +19,6 @@ cd "$repo_root"
 budget=$((12 * 1024))
 app=examples/analytics/analytics_app
 
-# The second build edits these and the exit trap restores them from git, so
-# uncommitted changes there would be lost: refuse before touching anything.
-if ! git diff --quiet HEAD -- "$app" Cargo.lock; then
-	echo "analytics-size: $app or Cargo.lock has uncommitted changes; commit or stash them first" >&2
-	exit 1
-fi
-
-out="$(mktemp -d)"
-trap 'git checkout -- "$app" Cargo.lock; rm -rf "$out"' EXIT
-
-target="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
-
 build() {
 	cargo build "$@" --release --target wasm32-unknown-unknown -p analytics_app --lib --no-default-features --features hydrate
 }
@@ -56,6 +44,14 @@ served() {
 	echo "$((wasm)) $((js)) $((other)) $((wasm + js + other))"
 }
 
+# Whether any of the paths has changes in the working tree or in the index.
+# Both: a staged edit that an unstaged one undoes leaves no difference from
+# HEAD, but the exit trap's checkout restores from the index and would
+# overwrite the working tree.
+dirty() {
+	! git diff --quiet -- "$@" || ! git diff --cached --quiet -- "$@"
+}
+
 # A JavaScript file nested below the output, as an inline_js snippet is,
 # must count: without this, the client could move code into a snippet and
 # seem to shrink.
@@ -69,6 +65,40 @@ self_test() {
 	head -c 2048 /dev/urandom | base64 >"$dir/snippets/probe/inline0.js"
 	read -r _ _ after total_after < <(served "$dir" app.js)
 	rm -rf "$dir"
+
+	# The guard, in a throwaway repository that borrows this one's objects
+	# (read-only, through alternates) and points HEAD at this commit, so no
+	# commit or configuration is made: a staged edit that the working tree
+	# undoes, which is no difference from HEAD, and an unstaged edit.
+	local repo objects head staged unstaged
+	repo="$(mktemp -d)"
+	objects="$(cd "$(git rev-parse --git-common-dir)" && pwd)/objects"
+	head="$(git rev-parse HEAD)"
+	(
+		cd "$repo"
+		git init -q .
+		echo "$objects" >.git/objects/info/alternates
+		git update-ref HEAD "$head"
+		git read-tree HEAD
+		git show HEAD:Cargo.lock >Cargo.lock
+		echo "# staged" >>Cargo.lock
+		git add Cargo.lock
+		git show HEAD:Cargo.lock >Cargo.lock
+		git diff --quiet HEAD -- Cargo.lock
+		dirty Cargo.lock
+	) && staged=1 || staged=0
+	(
+		cd "$repo"
+		git reset -q -- Cargo.lock
+		echo "# unstaged" >>Cargo.lock
+		dirty Cargo.lock
+	) && unstaged=1 || unstaged=0
+	rm -rf "$repo"
+	if [ "$staged" -ne 1 ] || [ "$unstaged" -ne 1 ]; then
+		echo "analytics-size: the guard misses a change (staged $staged, unstaged $unstaged)" >&2
+		exit 1
+	fi
+
 	if [ "$before" -ne 0 ] || [ "$after" -le 0 ] || [ "$total_after" -ne $((total_before + after)) ]; then
 		echo "analytics-size: a nested .js sidecar isn't counted ($before, $after, $total_before, $total_after)" >&2
 		exit 1
@@ -76,9 +106,21 @@ self_test() {
 }
 self_test
 if [ "${1:-}" = "--self-test" ]; then
-	echo "analytics-size: nested .js sidecars are counted"
+	echo "analytics-size: nested .js sidecars are counted, and the guard sees staged and unstaged changes"
 	exit 0
 fi
+
+# The second build edits these and the exit trap restores them from git, so
+# uncommitted changes there would be lost: refuse before touching anything.
+if dirty "$app" Cargo.lock; then
+	echo "analytics-size: $app or Cargo.lock has uncommitted changes; commit or stash them first" >&2
+	exit 1
+fi
+
+out="$(mktemp -d)"
+trap 'git checkout -- "$app" Cargo.lock; rm -rf "$out"' EXIT
+
+target="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 
 # Builds wasm-bindgen's output for the last analytics_app build in
 # $out/$1, and prints what's served from it.
