@@ -320,6 +320,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # Full debug databases exceed MSVC's PDB limit and fill the runner.
+      # Keep source locations for failures without type and local-variable data.
+      - name: keep Windows test debug artifacts within linker limits
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CARGO_PROFILE_DEV_DEBUG=line-tables-only" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "CARGO_PROFILE_TEST_DEBUG=line-tables-only" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       # RPC generator regressions compile the generated Go clients.
       - name: install Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -671,6 +680,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: select a reachable Ubuntu archive
+        uses: $/.github/actions/ubuntu-archive
+
       - name: install rust
         uses: ./.github/actions/rust
 
@@ -686,16 +698,18 @@ jobs:
           tool: cargo-llvm-cov@0.9.1
 
       - name: install Linux native widget dependencies
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config xvfb dbus-x11 at-spi2-core fonts-dejavu-core xdotool
+          set -euo pipefail
+          sudo apt-get --error-on=any -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y libgtk-4-dev libasound2-dev pkg-config xvfb dbus-x11 at-spi2-core fonts-dejavu-core xdotool
 
       # The canvas renderer's GPU tests skip when no Vulkan ICD is present, so
       # its paths go unmeasured. Mesa's lavapipe gives the coverage suite a
       # software adapter the wgpu Vulkan backend can use.
       - name: install Mesa's Vulkan driver for the canvas renderer tests
         if: matrix.suite == 'workspace'
-        run: sudo apt-get install -y mesa-vulkan-drivers
+        run: sudo apt-get -o Acquire::Retries=5 install -y mesa-vulkan-drivers
 
       # The geospatial and vector database tests apply PostGIS and pgvector
       # migrations to the runner's preinstalled Postgres, so it gets the
@@ -710,7 +724,7 @@ jobs:
           set -euo pipefail
           major="$(find /usr/lib/postgresql -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -n | tail -n 1)"
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y "postgresql-${major}-postgis-3" "postgresql-${major}-pgvector"
+          sudo apt-get -o Acquire::Retries=5 install -y "postgresql-${major}-postgis-3" "postgresql-${major}-pgvector"
 
       # Match devenv's NATS version. Without the server, the relay tests
       # return early and leave the distributed live-query paths unmeasured.
