@@ -106,6 +106,29 @@ lk_bridge *lk_app_plugins(lk_app *app) { return (lk_bridge *)app; }
 int32_t lk_app_start(lk_app *app, float width, float height) { return 0; }
 int32_t lk_app_resize(lk_app *app, float width, float height, bool dark) { return 0; }
 int32_t lk_app_wake(lk_app *app) { return 0; }
+/* The fixture guest has no real timers or 3D. Enabling timers succeeds so the
+ * pump can poll them; 3D reports unavailable (0), which is not a failure. */
+int32_t lk_app_enable_timers(lk_app *app) { return 0; }
+int32_t lk_app_poll_timers(lk_app *app) { return 0; }
+int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason) { return 0; }
+int32_t lk_app_enable_scene3d(lk_app *app) { return 0; }
+void lk_log_write(uint32_t level, const uint8_t *target, size_t target_len,
+    const uint8_t *message, size_t message_len) {}
+int32_t lk_scene3d_available(void) { return 0; }
+lk_buffer lk_scene3d_error(void) { return (lk_buffer){NULL, 0, NULL}; }
+int32_t lk_scene3d_pointer(uint32_t scene, uint32_t phase, float x, float y, float dx, float dy) {
+    return 0;
+}
+int32_t lk_scene3d_set_asset_directory(const uint8_t *path, size_t len) { return 0; }
+lk_scene3d_view *lk_scene3d_view_attach_layer(uint32_t scene, void *ca_metal_layer,
+    uint32_t width, uint32_t height) {
+    return NULL;
+}
+void lk_scene3d_view_detach(lk_scene3d_view *view) {}
+int32_t lk_scene3d_view_frame(lk_scene3d_view *view, double time) { return 0; }
+void lk_scene3d_view_resize(lk_scene3d_view *view, uint32_t width, uint32_t height) {}
+void lk_scene3d_view_set_rotation(lk_scene3d_view *view, uint32_t quarter_turns) {}
+void lk_scene3d_view_set_waker(lk_scene3d_view *view, void *context, lk_scene3d_wake_fn wake) {}
 /* The fixture guest never waits for a display frame, so the link stays paused. */
 int32_t lk_app_enable_frames(lk_app *app) { return 0; }
 int32_t lk_app_frame_requested(lk_app *app) { return 0; }
