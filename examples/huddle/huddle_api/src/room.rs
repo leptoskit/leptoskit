@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// What someone in a room sends the others.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Signal {
@@ -32,7 +31,6 @@ pub enum Signal {
 }
 
 /// What each person in a room shows the others.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Here {
 	/// Their account.

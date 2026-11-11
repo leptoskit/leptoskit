@@ -15,7 +15,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// A card on the board.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TaskCard {
 	pub id: Id<Task>,

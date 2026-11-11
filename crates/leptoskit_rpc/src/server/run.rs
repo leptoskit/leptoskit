@@ -6,8 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use leptoskit_db::Db;
-use leptoskit_pod::PodDecode;
-use leptoskit_pod::PodEncode;
 use leptoskit_query::BoxFuture;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -35,7 +33,7 @@ pub struct Invocation {
 	pub identity: Identity,
 	/// The call's request ID, such as its `Idempotency-Key`.
 	pub request_id: Option<String>,
-	/// The arguments, as JSON or LK Pod bytes.
+	/// The arguments, as one JSON object.
 	pub arguments: WireArgs,
 	/// How to encode a successful result.
 	pub response: Transport,
@@ -47,8 +45,7 @@ pub struct Invocation {
 /// What a registration runs.
 pub(crate) type Handler = fn(Invocation) -> BoxFuture<'static, crate::Result<WireBody>>;
 
-/// Decodes JSON arguments of `O`, runs it, and encodes a JSON (or refuses Pod)
-/// result. Built-in ops without `#[pod::data]` on every boundary type use this.
+/// Decodes JSON arguments of `O`, runs it, and encodes a JSON result.
 #[doc(hidden)]
 pub fn handle<O>(invocation: Invocation) -> BoxFuture<'static, crate::Result<WireBody>>
 where
@@ -56,20 +53,10 @@ where
 	<O as Operation>::Output: Serialize + DeserializeOwned,
 {
 	Box::pin(async move {
-		let op: O = match &invocation.arguments {
-			WireArgs::Json(value) => {
-				serde_json::from_value(value.clone()).map_err(|error| {
-					Error::invalid(format!("the arguments of `{}` don't fit: {error}", O::NAME))
-				})?
-			}
-			WireArgs::Pod(_) => {
-				return Err(Error::invalid(format!(
-					"`{}` does not accept LK Pod yet; send `application/json` or use types with \
-					 `#[pod::data]`",
-					O::NAME
-				)));
-			}
-		};
+		let WireArgs::Json(value) = &invocation.arguments;
+		let op: O = serde_json::from_value(value.clone()).map_err(|error| {
+			Error::invalid(format!("the arguments of `{}` don't fit: {error}", O::NAME))
+		})?;
 		let output = O::Context::dispatch_recording(
 			&invocation.db,
 			invocation.identity,
@@ -78,65 +65,10 @@ where
 			op,
 		)
 		.await?;
-		match invocation.response {
-			Transport::Json => {
-				Ok(WireBody::Json(serde_json::to_value(&output).map_err(
-					|_| Error::server(format!("the result of `{}` isn't JSON", O::NAME)),
-				)?))
-			}
-			Transport::Pod => {
-				Err(Error::invalid(format!(
-					"`{}` cannot reply with LK Pod yet; ask for `application/json`",
-					O::NAME
-				)))
-			}
-		}
-	})
-}
-
-/// Dual-transport handler for operations whose args and output speak Pod.
-#[doc(hidden)]
-pub fn handle_pod<O>(invocation: Invocation) -> BoxFuture<'static, crate::Result<WireBody>>
-where
-	O: Operation + PodEncode + for<'a> PodDecode<'a> + DeserializeOwned,
-	<O as Operation>::Output: PodEncode + Serialize + DeserializeOwned,
-{
-	Box::pin(async move {
-		let op: O = match &invocation.arguments {
-			WireArgs::Json(value) => {
-				serde_json::from_value(value.clone()).map_err(|error| {
-					Error::invalid(format!("the arguments of `{}` don't fit: {error}", O::NAME))
-				})?
-			}
-			WireArgs::Pod(bytes) => {
-				O::from_pod_bytes(bytes).map_err(|error| {
-					Error::invalid(format!(
-						"the arguments of `{}` aren't valid Pod: {error}",
-						O::NAME
-					))
-				})?
-			}
-		};
-		let output = O::Context::dispatch_recording(
-			&invocation.db,
-			invocation.identity,
-			invocation.request_id.as_deref(),
-			invocation.reads,
-			op,
-		)
-		.await?;
-		match invocation.response {
-			Transport::Json => {
-				Ok(WireBody::Json(serde_json::to_value(&output).map_err(
-					|_| Error::server(format!("the result of `{}` isn't JSON", O::NAME)),
-				)?))
-			}
-			Transport::Pod => {
-				Ok(WireBody::Pod(output.to_pod_bytes().map_err(|error| {
-					Error::server(format!("the result of `{}` isn't Pod: {error}", O::NAME))
-				})?))
-			}
-		}
+		let Transport::Json = invocation.response;
+		Ok(WireBody::Json(serde_json::to_value(&output).map_err(
+			|_| Error::server(format!("the result of `{}` isn't JSON", O::NAME)),
+		)?))
 	})
 }
 

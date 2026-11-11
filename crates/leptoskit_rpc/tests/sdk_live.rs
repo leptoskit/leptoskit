@@ -73,7 +73,6 @@ pub struct SdkNoteRow {
 }
 
 /// One note, as the query returns it.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, JsonSchema)]
 pub struct SdkNote {
 	/// The note's id.
@@ -83,7 +82,6 @@ pub struct SdkNote {
 }
 
 /// A page-shaped result, including metadata that changes with its rows.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, JsonSchema)]
 pub struct SdkPage {
 	/// The page's ordered rows.

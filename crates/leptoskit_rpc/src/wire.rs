@@ -1,68 +1,58 @@
-//! Request and response bodies on the HTTP operation routes: LK Pod and JSON.
+//! Request and response bodies on the HTTP operation routes.
+//!
+//! The server speaks JSON through serde. A client that sends the retired LK
+//! Pod content type is refused so the mismatch is obvious.
 
 use serde_json::Value;
 
 pub(crate) use crate::JSON_CONTENT_TYPE;
-pub(crate) use crate::POD_CONTENT_TYPE;
+
+/// Content type of the retired LK Pod encoding. It is not a configured
+/// transport; requests that send it are rejected.
+const RETIRED_POD_CONTENT_TYPE: &str = "application/vnd.leptoskit.rpc.v1+bin";
 
 /// Which wire encoding a call uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
-	/// `application/vnd.leptoskit.rpc.v1+bin`.
-	Pod,
 	/// `application/json`.
 	Json,
 }
 
 /// Which transports the server allows on operation routes.
+///
+/// JSON is the only transport. The flag stays so `[rpc].transports` can turn
+/// the routes off explicitly, and so another encoding can be added later
+/// without changing the call shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransportSet {
-	/// LK Pod.
-	pub pod: bool,
 	/// JSON through serde.
 	pub json: bool,
 }
 
 impl Default for TransportSet {
-	/// Pod and JSON, so existing JSON callers keep working until apps tighten
-	/// config; product default in `leptoskit.toml` is `["pod"]` only.
 	fn default() -> Self {
-		Self {
-			pod: true,
-			json: true,
-		}
+		Self { json: true }
 	}
 }
 
 impl TransportSet {
-	/// Builds the set from `[rpc].transports` names (`pod`, `json`).
+	/// Builds the set from `[rpc].transports` names. The only name is `json`.
+	/// An empty list is JSON, matching the configuration default.
 	#[must_use]
 	pub fn from_names(names: &[String]) -> Self {
-		let mut set = Self {
-			pod: false,
-			json: false,
-		};
-
-		for name in names {
-			match name.as_str() {
-				"pod" => set.pod = true,
-				"json" => set.json = true,
-				_ => {}
-			}
+		if names.is_empty() {
+			return Self { json: true };
 		}
 
-		if !set.pod && !set.json {
-			set.pod = true;
+		Self {
+			json: names.iter().any(|name| name == "json"),
 		}
-
-		set
 	}
 
 	/// Whether `transport` is allowed.
 	#[must_use]
 	pub const fn allows(self, transport: Transport) -> bool {
 		match transport {
-			Transport::Pod => self.pod,
 			Transport::Json => self.json,
 		}
 	}
@@ -71,20 +61,16 @@ impl TransportSet {
 /// Arguments on the wire before they reach a handler.
 #[derive(Clone, Debug)]
 pub enum WireArgs {
-	/// One JSON object, as today.
+	/// One JSON object.
 	Json(Value),
-	/// LK Pod bytes for the operation's argument struct.
-	Pod(Vec<u8>),
 }
 
 impl WireArgs {
-	/// Empty arguments: `{}` for JSON, a version-0 struct header with no fields
-	/// for Pod.
+	/// Empty arguments: `{}`.
 	#[must_use]
 	pub fn empty(transport: Transport) -> Self {
 		match transport {
 			Transport::Json => Self::Json(Value::Object(serde_json::Map::new())),
-			Transport::Pod => Self::Pod(empty_pod_struct()),
 		}
 	}
 }
@@ -94,29 +80,23 @@ impl WireArgs {
 pub enum WireBody {
 	/// JSON value.
 	Json(Value),
-	/// LK Pod bytes for the operation's output type.
-	Pod(Vec<u8>),
-}
-
-fn empty_pod_struct() -> Vec<u8> {
-	let mut writer = leptoskit_pod::Writer::new();
-	let _ = leptoskit_pod::encode_struct_v0(&mut writer, |_| Ok(()));
-	writer.finish()
 }
 
 /// Parses `Content-Type` into a [`Transport`] the server allows.
 ///
-/// The only transport is JSON through serde. A missing content type is JSON.
-/// LK Pod is rejected so an old client hears that immediately.
+/// A missing content type is JSON. The retired Pod content type is rejected.
 pub(crate) fn request_transport(
 	content_type: Option<&str>,
 	allowed: TransportSet,
 ) -> Result<Transport, &'static str> {
-	let _ = allowed;
 	let requested = content_type.map_or(JSON_CONTENT_TYPE, media_type);
 
-	if requested == POD_CONTENT_TYPE {
+	if requested == RETIRED_POD_CONTENT_TYPE {
 		return Err("this server speaks JSON; send application/json");
+	}
+
+	if !allowed.json {
+		return Err("JSON is not enabled for this server");
 	}
 
 	if requested == JSON_CONTENT_TYPE {
@@ -146,34 +126,29 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn config_transports_name_pod_and_json() {
-		let both = TransportSet::from_names(&["pod".into(), "json".into()]);
-		assert!(both.allows(Transport::Pod));
-		assert!(both.allows(Transport::Json));
+	fn config_transports_name_json() {
+		let json = TransportSet::from_names(&["json".into()]);
+		assert!(json.allows(Transport::Json));
 
-		let pod = TransportSet::from_names(&["pod".into()]);
-		assert!(pod.allows(Transport::Pod));
-		assert!(!pod.allows(Transport::Json));
+		let empty = TransportSet::from_names(&[]);
+		assert!(empty.allows(Transport::Json));
 
-		let unknown = TransportSet::from_names(&["ftp".into()]);
-		assert!(unknown.allows(Transport::Pod));
+		let unknown = TransportSet::from_names(&["pod".into()]);
+		assert!(!unknown.allows(Transport::Json));
 	}
 
 	#[test]
 	fn negotiate_request_and_response() {
-		let both = TransportSet::default();
-		assert!(request_transport(Some(POD_CONTENT_TYPE), both).is_err());
+		let json = TransportSet::default();
+		assert!(request_transport(Some(RETIRED_POD_CONTENT_TYPE), json).is_err());
 		assert_eq!(
-			request_transport(Some(JSON_CONTENT_TYPE), both).unwrap(),
+			request_transport(Some(JSON_CONTENT_TYPE), json).unwrap(),
 			Transport::Json
 		);
-		assert_eq!(request_transport(None, both).unwrap(), Transport::Json);
+		assert_eq!(request_transport(None, json).unwrap(), Transport::Json);
+		assert!(request_transport(Some(JSON_CONTENT_TYPE), TransportSet { json: false }).is_err());
 		assert_eq!(
-			response_transport(
-				Some("application/json, application/vnd.leptoskit.rpc.v1+bin"),
-				both,
-				Transport::Json
-			),
+			response_transport(Some("application/json"), json, Transport::Json),
 			Transport::Json
 		);
 	}

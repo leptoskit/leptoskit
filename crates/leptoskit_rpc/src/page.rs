@@ -25,13 +25,6 @@
 //! shorter rather than pulling one back. So a row is on exactly one page
 //! however the data moves.
 
-use leptoskit_pod::PodDecode;
-use leptoskit_pod::PodEncode;
-use leptoskit_pod::Reader;
-use leptoskit_pod::Result as PodResult;
-use leptoskit_pod::Writer;
-use leptoskit_pod::encode_struct_v0;
-use leptoskit_pod::pod;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -48,7 +41,6 @@ pub const MAX_PAGE_ROWS: u32 = 1_000;
 pub const MAX_PINNED_ROWS: u32 = 10 * MAX_PAGE_ROWS;
 
 /// Which rows one page of a paginated query reads.
-#[pod::data]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PageArgs {
 	/// Where the page before ended: this page starts after it. `None` for
@@ -118,29 +110,6 @@ impl<T> Default for Page<T> {
 			end: None,
 			has_more: false,
 		}
-	}
-}
-
-impl<T: PodEncode> PodEncode for Page<T> {
-	fn encode(&self, w: &mut Writer) -> PodResult<()> {
-		encode_struct_v0(w, |w| {
-			self.items.encode(w)?;
-			self.end.encode(w)?;
-			self.has_more.encode(w)?;
-			Ok(())
-		})
-	}
-}
-
-impl<'a, T: PodDecode<'a>> PodDecode<'a> for Page<T> {
-	fn decode(r: &mut Reader<'a>) -> PodResult<Self> {
-		leptoskit_pod::decode_struct_version(r, 0, |r| {
-			Ok(Self {
-				items: Vec::<T>::decode(r)?,
-				end: Option::<String>::decode(r)?,
-				has_more: bool::decode(r)?,
-			})
-		})
 	}
 }
 

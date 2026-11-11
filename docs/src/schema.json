@@ -158,7 +158,7 @@
 			"description": "The published RPC: what `leptoskit rpc` describes and generates\nclients for.",
 			"$ref": "#/$defs/RpcConfig",
 			"default": {
-				"default_transport": "pod",
+				"default_transport": "json",
 				"description": null,
 				"exclude": [],
 				"include_internal": false,
@@ -173,7 +173,7 @@
 				"targets": [],
 				"title": null,
 				"transports": [
-					"pod"
+					"json"
 				]
 			}
 		},
@@ -3177,9 +3177,9 @@
 			"type": "object",
 			"properties": {
 				"default_transport": {
-					"description": "The encoding generated SDKs prefer; defaults to `pod`.",
+					"description": "The encoding generated SDKs prefer. The only transport is `json`.",
 					"type": "string",
-					"default": "pod"
+					"default": "json"
 				},
 				"description": {
 					"description": "A longer description for the OpenAPI document.",
@@ -3253,10 +3253,10 @@
 					"default": null
 				},
 				"transports": {
-					"description": "Which wire encodings the server accepts on operation routes: `pod`\n(LK Pod, default) and/or `json` (serde JSON on the same paths).",
+					"description": "Which wire encodings the server accepts on operation routes. The only\ntransport is `json` (serde JSON).",
 					"type": "array",
 					"default": [
-						"pod"
+						"json"
 					],
 					"items": {
 						"type": "string"

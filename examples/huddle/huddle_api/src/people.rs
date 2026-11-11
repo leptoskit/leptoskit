@@ -10,7 +10,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Someone, as every screen shows them.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Person {
 	pub id: Id<Account>,
@@ -20,7 +19,6 @@ pub struct Person {
 
 /// Whether the signed-in person's session still holds. Their open apps
 /// watch it, and go back to the sign-in screen when it doesn't.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionState {
 	/// Signed in, with a session nobody has ended.

@@ -285,8 +285,8 @@ impl<'a> Call<'a> {
 
 	async fn send_pod(self, router: &Router) -> (StatusCode, Vec<u8>) {
 		let mut request = Request::post(format!("/rpc/{}", self.name))
-			.header("content-type", rpc::POD_CONTENT_TYPE)
-			.header("accept", rpc::POD_CONTENT_TYPE);
+			.header("content-type", "application/vnd.leptoskit.rpc.v1+bin")
+			.header("accept", "application/vnd.leptoskit.rpc.v1+bin");
 
 		if let Some(user) = self.user {
 			request = request.header("x-user", user);
@@ -795,12 +795,7 @@ fn published_operations_join_the_spec_with_their_kind() {
 	assert_eq!(notes.params[0].name, "starting");
 	assert_eq!(notes.params[0].docs, "Only titles beginning with this.");
 	assert!(!notes.params[0].required);
-	assert_eq!(
-		notes.input,
-		rpc::spec::HttpInput::Other {
-			content_type: rpc::POD_CONTENT_TYPE.to_owned(),
-		}
-	);
+	assert_eq!(notes.input, rpc::spec::HttpInput::Json);
 
 	let add = spec
 		.functions

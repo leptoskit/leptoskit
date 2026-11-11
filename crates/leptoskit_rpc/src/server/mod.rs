@@ -117,7 +117,6 @@ pub use run::call_as;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 #[doc(hidden)]
 pub use run::handle;
-pub use run::handle_pod;
 #[cfg(feature = "db")]
 pub use services::APP_CALLER;
 #[cfg(feature = "db")]

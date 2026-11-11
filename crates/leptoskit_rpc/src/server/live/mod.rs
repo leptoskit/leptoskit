@@ -597,12 +597,7 @@ async fn run_query(
 	})
 	.await
 	.map_err(|error| WireError::new(&error))?;
-	let value = match value {
-		crate::wire::WireBody::Json(value) => value,
-		crate::wire::WireBody::Pod(_) => {
-			return Err(WireError::invalid("live queries still speak JSON"));
-		}
-	};
+	let crate::wire::WireBody::Json(value) = value;
 	let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
 
 	if size > MAX_RESULT_BYTES {

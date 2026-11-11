@@ -54,13 +54,9 @@ impl Api for InProcess {
 				)
 				.await
 				.map_err(FnError::from)
-				.and_then(|body| {
-					match body {
-						crate::wire::WireBody::Json(value) => Ok(value),
-						crate::wire::WireBody::Pod(_) => {
-							Err(FnError::Other("in-process calls use JSON".to_owned()))
-						}
-					}
+				.map(|body| {
+					let crate::wire::WireBody::Json(value) = body;
+					value
 				})
 		})
 	}

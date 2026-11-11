@@ -29,7 +29,6 @@ pub struct Message {
 }
 
 /// A message as a page shows it.
-#[leptoskit_pod::pod::data]
 #[derive(
 	Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]

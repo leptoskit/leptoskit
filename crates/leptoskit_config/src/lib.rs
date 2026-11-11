@@ -1898,12 +1898,15 @@ fn default_rpc_path() -> String {
 }
 
 fn default_transports() -> Vec<String> {
-	vec!["pod".into()]
+	vec!["json".into()]
 }
 
 fn default_transport_name() -> String {
-	"pod".into()
+	"json".into()
 }
+
+/// The only wire encoding operation routes speak.
+const RPC_TRANSPORTS: &[&str] = &["json"];
 
 /// The published RPC, as `leptoskit rpc` describes it and generates clients
 /// for it.
@@ -1922,11 +1925,11 @@ pub struct RpcConfig {
 	/// Live WebSocket or SSE mount; defaults to `{path}/live` when unset.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub live_path: Option<String>,
-	/// Which wire encodings the server accepts on operation routes: `pod`
-	/// (LK Pod, default) and/or `json` (serde JSON on the same paths).
+	/// Which wire encodings the server accepts on operation routes. The only
+	/// transport is `json` (serde JSON).
 	#[serde(default = "default_transports")]
 	pub transports: Vec<String>,
-	/// The encoding generated SDKs prefer; defaults to `pod`.
+	/// The encoding generated SDKs prefer. The only transport is `json`.
 	#[serde(default = "default_transport_name")]
 	pub default_transport: String,
 	/// The RPC title; defaults to `<app.name> RPC`.
@@ -1980,8 +1983,7 @@ impl RpcConfig {
 			.unwrap_or_else(|| format!("{}/live", self.path.trim_end_matches('/')))
 	}
 
-	/// Whether JSON bodies are accepted on the operation routes (dual with
-	/// Pod).
+	/// Whether JSON bodies are accepted on the operation routes.
 	#[must_use]
 	pub fn serves_json(&self) -> bool {
 		self.transports.iter().any(|transport| transport == "json")
@@ -3418,6 +3420,8 @@ impl LeptoskitConfig {
 	///   colour that isn't opaque hex, or an `image_size` outside 16 to 512.
 	/// - [`ConfigError::CodePushServerMissing`] when code push is enabled
 	///   without a `server`.
+	/// - [`ConfigError::InvalidRpcTransport`] when `rpc.transports` or
+	///   `rpc.default_transport` names anything other than `json`.
 	/// - [`ConfigError::UnknownRpcTarget`] when a `rpc.targets` entry names a
 	///   target `leptoskit rpc generate` cannot write.
 	/// - [`ConfigError::UnknownRpcScaffold`] when a `rpc.targets` entry names a
@@ -3648,8 +3652,42 @@ impl LeptoskitConfig {
 		Ok(())
 	}
 
-	/// RPC targets name a language and scaffold this build knows.
+	/// RPC targets name a language and scaffold this build knows, and the
+	/// wire lists only JSON.
 	fn validate_rpc(&self) -> Result<(), ConfigError> {
+		if self.rpc.transports.is_empty() {
+			return Err(ConfigError::InvalidRpcTransport(
+				"rpc.transports must list `json`".into(),
+			));
+		}
+
+		for transport in &self.rpc.transports {
+			if !RPC_TRANSPORTS.contains(&transport.as_str()) {
+				return Err(ConfigError::InvalidRpcTransport(format!(
+					"unknown rpc transport `{transport}`; the only transport is `json`"
+				)));
+			}
+		}
+
+		if !RPC_TRANSPORTS.contains(&self.rpc.default_transport.as_str()) {
+			return Err(ConfigError::InvalidRpcTransport(format!(
+				"unknown rpc.default_transport `{}`; the only transport is `json`",
+				self.rpc.default_transport
+			)));
+		}
+
+		if !self
+			.rpc
+			.transports
+			.iter()
+			.any(|transport| transport == &self.rpc.default_transport)
+		{
+			return Err(ConfigError::InvalidRpcTransport(format!(
+				"rpc.default_transport `{}` must be one of rpc.transports",
+				self.rpc.default_transport
+			)));
+		}
+
 		for target in &self.rpc.targets {
 			if !RPC_TARGETS.contains(&target.language.as_str()) {
 				return Err(ConfigError::UnknownRpcTarget(target.language.clone()));
@@ -3964,6 +4002,9 @@ pub enum ConfigError {
 		 openapi"
 	)]
 	UnknownRpcTarget(String),
+	/// `rpc.transports` or `rpc.default_transport` is not JSON.
+	#[error("{0}")]
+	InvalidRpcTransport(String),
 	/// A `rpc.targets` entry names an unknown scaffold mode.
 	#[error("unknown fns scaffold mode `{0}`; expected create, full, or files")]
 	UnknownRpcScaffold(String),

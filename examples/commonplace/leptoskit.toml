@@ -67,8 +67,8 @@ public_keys = []
 
 [rpc]
 path = "/rpc"
-transports = ["pod", "json"]
-default_transport = "pod"
+transports = ["json"]
+default_transport = "json"
 servers = []
 exclude = []
 include_internal = false

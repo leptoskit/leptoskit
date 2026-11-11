@@ -260,20 +260,14 @@ impl Server {
 		let arguments = if bytes.is_empty() || bytes.iter().all(u8::is_ascii_whitespace) {
 			crate::wire::WireArgs::empty(request_transport)
 		} else {
-			match request_transport {
-				crate::wire::Transport::Json => {
-					match serde_json::from_slice(&bytes) {
-						Ok(value @ serde_json::Value::Object(_)) => {
-							crate::wire::WireArgs::Json(value)
-						}
-						Ok(_) | Err(_) => {
-							return failure(&Error::invalid(
-								"send the arguments as one JSON object, such as `{\"limit\": 10}`",
-							));
-						}
-					}
+			let crate::wire::Transport::Json = request_transport;
+			match serde_json::from_slice(&bytes) {
+				Ok(value @ serde_json::Value::Object(_)) => crate::wire::WireArgs::Json(value),
+				Ok(_) | Err(_) => {
+					return failure(&Error::invalid(
+						"send the arguments as one JSON object, such as `{\"limit\": 10}`",
+					));
 				}
-				crate::wire::Transport::Pod => crate::wire::WireArgs::Pod(bytes.to_vec()),
 			}
 		};
 
@@ -333,28 +327,15 @@ impl Server {
 
 impl crate::wire::WireBody {
 	pub(crate) fn into_response(self) -> Response {
-		match self {
-			Self::Json(value) => {
-				(
-					[(
-						header::CONTENT_TYPE,
-						HeaderValue::from_static(crate::JSON_CONTENT_TYPE),
-					)],
-					value.to_string(),
-				)
-					.into_response()
-			}
-			Self::Pod(bytes) => {
-				(
-					[(
-						header::CONTENT_TYPE,
-						HeaderValue::from_static(crate::POD_CONTENT_TYPE),
-					)],
-					bytes,
-				)
-					.into_response()
-			}
-		}
+		let Self::Json(value) = self;
+		(
+			[(
+				header::CONTENT_TYPE,
+				HeaderValue::from_static(crate::JSON_CONTENT_TYPE),
+			)],
+			value.to_string(),
+		)
+			.into_response()
 	}
 }
 

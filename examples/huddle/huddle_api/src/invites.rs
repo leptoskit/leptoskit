@@ -17,7 +17,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// An invitation, as the channel's screen shows it.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InviteView {
 	pub id: Id<huddle_db::Invite>,

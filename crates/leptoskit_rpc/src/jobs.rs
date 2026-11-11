@@ -170,33 +170,6 @@ pub struct Failed<J> {
 	pub attempts: u32,
 }
 
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
-impl<J: leptoskit_pod::PodEncode> leptoskit_pod::PodEncode for Failed<J> {
-	fn encode(&self, w: &mut leptoskit_pod::Writer) -> leptoskit_pod::Result<()> {
-		leptoskit_pod::encode_struct_v0(w, |w| {
-			self.id.encode(w)?;
-			self.job.encode(w)?;
-			self.error.encode(w)?;
-			self.attempts.encode(w)?;
-			Ok(())
-		})
-	}
-}
-
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
-impl<'a, J: leptoskit_pod::PodDecode<'a>> leptoskit_pod::PodDecode<'a> for Failed<J> {
-	fn decode(r: &mut leptoskit_pod::Reader<'a>) -> leptoskit_pod::Result<Self> {
-		leptoskit_pod::decode_struct_version(r, 0, |r| {
-			Ok(Self {
-				id: leptoskit_pod::PodDecode::decode(r)?,
-				job: J::decode(r)?,
-				error: leptoskit_pod::PodDecode::decode(r)?,
-				attempts: u32::decode(r)?,
-			})
-		})
-	}
-}
-
 /// A job's state and result, as a client reads it.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct JobStatus {

@@ -10,16 +10,8 @@ expression: summarize
   "docs": "Summarizes a channel with an outside service, then pins the summary.",
   "path": "/rpc/summarize",
   "method": "POST",
-  "input": {
-    "Other": {
-      "content_type": "application/vnd.leptoskit.rpc.v1+bin"
-    }
-  },
-  "output": {
-    "Other": {
-      "content_type": "application/vnd.leptoskit.rpc.v1+bin"
-    }
-  },
+  "input": "Json",
+  "output": "Json",
   "error_content_type": "text/plain",
   "params": [
     {

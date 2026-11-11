@@ -20,4 +20,4 @@ pub async fn notes(starting: Option<String>) -> rpc::Result<Vec<String>> {
 
 `rpc::cx()` is the query. `rpc::mutation_cx()` is the mutation. Hold the returned `Arc` for as long as you use it. Passing `cx: &rpc::QueryCx` still works, and nested `rpc::call` uses that reference.
 
-Another transport can be added later. This server does not speak LK Pod.
+`[rpc].transports` and `[rpc].default_transport` are `json`. That is the only transport. A request with another content type is rejected. To change a field without breaking an older payload, see [Changing a JSON field](migrations.md).

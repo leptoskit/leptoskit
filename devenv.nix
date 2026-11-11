@@ -705,20 +705,6 @@ in
       description = "Enforce complete line coverage for cross-platform use primitives.";
       binary = "bash";
     };
-    "coverage:pod" = {
-      exec = ''
-        set -euo pipefail
-        mkdir -p target/coverage
-        # Drive the gate from library unit tests only. Merging multiple
-        # integration-test binaries under-counts inlined codec helpers here.
-        cargo llvm-cov --package leptoskit_pod --lib --all-features \
-          --ignore-filename-regex '/tests/|/src/proofs\.rs|/src/lib_tests\.rs|/crates/leptoskit_pod_macros/' \
-          --fail-under-lines 100 \
-          --lcov --output-path target/coverage/leptoskit-pod.lcov
-      '';
-      description = "Enforce complete line coverage for the LK Pod wire codec.";
-      binary = "bash";
-    };
     "coverage:use:browser" = {
       exec = ''
         set -euo pipefail

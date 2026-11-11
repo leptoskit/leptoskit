@@ -25,7 +25,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// A tip, as the screen shows it.
-#[leptoskit_pod::pod::data]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TipView {
 	pub id: Id<huddle_db::Tip>,

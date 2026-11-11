@@ -90,8 +90,8 @@
 - [`view!` and `#[component]`](reference/view.md)
 - [CSS and Tailwind coverage](reference/css-coverage.md)
 - [Nightly feature](reference/nightly.md)
-- [RPC wire](rpc/lk-pod.md)
-  - [Adding a Pod language](rpc/adding-a-pod-language.md)
+- [RPC wire](rpc/wire.md)
+  - [Changing a JSON field](rpc/migrations.md)
 
 # Platforms
 

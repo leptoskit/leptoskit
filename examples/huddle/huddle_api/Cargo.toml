@@ -14,7 +14,6 @@ description = "Huddle's operations: the queries, mutations, channel, jobs, and a
 huddle_db = { path = "../huddle_db" }
 leptoskit_auth = { workspace = true }
 leptoskit_db = { workspace = true }
-leptoskit_pod = { workspace = true }
 leptoskit_rpc = { workspace = true, features = ["client"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

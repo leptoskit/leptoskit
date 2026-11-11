@@ -220,10 +220,7 @@ mod stream;
 /// Prefix for `#[rpc::query]` and `#[rpc::mutation]` HTTP routes.
 pub const RPC_ROUTE_PREFIX: &str = "/rpc";
 
-/// `Content-Type` / `Accept` for LK Pod on operation routes.
-pub const POD_CONTENT_TYPE: &str = "application/vnd.leptoskit.rpc.v1+bin";
-
-/// `Content-Type` / `Accept` for JSON when the `json` transport is enabled.
+/// `Content-Type` / `Accept` for JSON operation bodies.
 pub const JSON_CONTENT_TYPE: &str = "application/json";
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -259,10 +256,6 @@ pub mod __private {
 	#[cfg(feature = "ssr")]
 	pub use inventory;
 	pub use leptos::server_fn::ServerFn;
-	pub use leptoskit_pod;
-	pub use leptoskit_pod::PodDecode;
-	pub use leptoskit_pod::PodEncode;
-	pub use leptoskit_pod_macros::data as pod_data;
 	pub use leptoskit_query::BoxFuture;
 	pub use schemars;
 	pub use serde;
@@ -275,8 +268,6 @@ pub mod __private {
 	pub use crate::operation::assert_output;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::handle;
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
-	pub use crate::server::handle_pod;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub use crate::server::jobs::assert_on_failure;
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]

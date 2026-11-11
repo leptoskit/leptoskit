@@ -153,7 +153,6 @@ dependencies = [
  "futures",
  "leptoskit_axum",
  "leptoskit_db",
- "leptoskit_pod",
  "leptoskit_rpc",
  "reqwest 0.12.28",
  "schemars",
@@ -3625,7 +3624,6 @@ dependencies = [
  "any_spawner",
  "leptos",
  "leptoskit",
- "leptoskit_pod",
  "leptoskit_rpc_codegen",
  "leptoskit_testing",
  "parking_lot",
@@ -3997,7 +3995,6 @@ dependencies = [
  "huddle_db",
  "leptoskit_auth",
  "leptoskit_db",
- "leptoskit_pod",
  "leptoskit_rpc",
  "schemars",
  "serde",
@@ -5629,7 +5626,6 @@ dependencies = [
  "leptos",
  "leptoskit_db_macros",
  "leptoskit_db_schema",
- "leptoskit_pod",
  "proptest",
  "regex",
  "rusqlite",
@@ -7060,28 +7056,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptoskit_pod"
-version = "0.3.0"
-dependencies = [
- "insta",
- "leptoskit_pod_macros",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "leptoskit_pod_macros"
-version = "0.3.0"
-dependencies = [
- "insta",
- "prettyplease 0.3.0",
- "proc-macro2",
- "quote",
- "syn 3.0.9",
-]
-
-[[package]]
 name = "leptoskit_query"
 version = "0.3.0"
 dependencies = [
@@ -7197,8 +7171,6 @@ dependencies = [
  "leptoskit_plugin_http",
  "leptoskit_plugin_store",
  "leptoskit_plugin_websocket",
- "leptoskit_pod",
- "leptoskit_pod_macros",
  "leptoskit_query",
  "leptoskit_rpc_codegen",
  "leptoskit_rpc_macros",

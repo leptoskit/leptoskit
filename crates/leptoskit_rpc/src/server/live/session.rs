@@ -939,15 +939,9 @@ impl Session {
 			reads: None,
 		}))
 		.await;
-		let result = result.and_then(|body| {
-			match body {
-				crate::wire::WireBody::Json(value) => Ok(value),
-				crate::wire::WireBody::Pod(_) => {
-					Err(crate::Error::server(
-						"live mutations still speak JSON".to_owned(),
-					))
-				}
-			}
+		let result = result.map(|body| {
+			let crate::wire::WireBody::Json(value) = body;
+			value
 		});
 
 		self.answer(Finished {
@@ -1015,15 +1009,9 @@ impl Session {
 		tokio::spawn(async move {
 			let (result, version) = recording_commits(handler(invocation)).await;
 			let result = result
-				.and_then(|body| {
-					match body {
-						crate::wire::WireBody::Json(value) => Ok(value),
-						crate::wire::WireBody::Pod(_) => {
-							Err(crate::Error::server(
-								"live actions still speak JSON".to_owned(),
-							))
-						}
-					}
+				.map(|body| {
+					let crate::wire::WireBody::Json(value) = body;
+					value
 				})
 				.map_err(|error| WireError::new(&error));
 			let _ = finished

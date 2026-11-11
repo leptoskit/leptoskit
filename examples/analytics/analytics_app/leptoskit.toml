@@ -23,5 +23,5 @@ package = "analytics_service"
 
 [rpc]
 path = "/rpc"
-transports = ["pod", "json"]
-default_transport = "pod"
+transports = ["json"]
+default_transport = "json"

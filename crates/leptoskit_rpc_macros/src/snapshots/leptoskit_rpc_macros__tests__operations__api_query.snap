@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_rpc_macros/src/tests.rs
+assertion_line: 991
 expression: published
 ---
 /// The latest messages.
@@ -23,14 +24,13 @@ const _: () = {
         leptoskit::rpc::spec::ApiKind::Query, module_path : ::core::module_path!(),
         struct_name : "Messages", docs : "The latest messages.", path : "/rpc/recent",
         method : leptoskit::rpc::spec::OPERATION_METHOD, input_content_type :
-        "application/vnd.leptoskit.rpc.v1+bin", output_content_type :
-        "application/vnd.leptoskit.rpc.v1+bin", error_content_type : "text/plain", params
-        : & [leptoskit::rpc::spec::ApiParamDescriptor { name : "limit", docs :
-        "How many.", schema : | generator | generator.subschema_for:: < u32 > (),
-        required : true, }, leptoskit::rpc::spec::ApiParamDescriptor { name : "from",
-        docs : "", schema : | generator | generator.subschema_for:: < u32 > (), required
-        : true, }], output_schema : | generator | { generator.subschema_for:: < <
-        Messages as leptoskit::rpc::Operation > ::Output > () }, internal : true,
+        "application/json", output_content_type : "application/json", error_content_type
+        : "text/plain", params : & [leptoskit::rpc::spec::ApiParamDescriptor { name :
+        "limit", docs : "How many.", schema : | generator | generator.subschema_for:: <
+        u32 > (), required : true, }, leptoskit::rpc::spec::ApiParamDescriptor { name :
+        "from", docs : "", schema : | generator | generator.subschema_for:: < u32 > (),
+        required : true, }], output_schema : | generator | { generator.subschema_for:: <
+        < Messages as leptoskit::rpc::Operation > ::Output > () }, internal : true,
         deprecated : false, tags : & ["chat"], scopes : & [], service :
         ::core::option::Option::None, }
     }

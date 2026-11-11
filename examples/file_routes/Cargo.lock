@@ -2837,23 +2837,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptoskit_pod"
-version = "0.3.0"
-dependencies = [
- "leptoskit_pod_macros",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "leptoskit_pod_macros"
-version = "0.3.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.9",
-]
-
-[[package]]
 name = "leptoskit_query"
 version = "0.3.0"
 dependencies = [
@@ -2932,8 +2915,6 @@ dependencies = [
  "leptoskit_plugin_http",
  "leptoskit_plugin_store",
  "leptoskit_plugin_websocket",
- "leptoskit_pod",
- "leptoskit_pod_macros",
  "leptoskit_query",
  "leptoskit_rpc_macros",
  "schemars",

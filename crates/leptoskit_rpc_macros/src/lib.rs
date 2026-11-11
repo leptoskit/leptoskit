@@ -1073,8 +1073,8 @@ fn registration(
 					docs: #docs,
 					path: #path,
 					method: #krate::spec::OPERATION_METHOD,
-					input_content_type: "application/vnd.leptoskit.rpc.v1+bin",
-					output_content_type: "application/vnd.leptoskit.rpc.v1+bin",
+					input_content_type: "application/json",
+					output_content_type: "application/json",
 					error_content_type: "text/plain",
 					params: &[#(#params),*],
 					output_schema: |generator| {
