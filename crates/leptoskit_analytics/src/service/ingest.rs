@@ -46,6 +46,30 @@ pub struct IngestConfig {
 	pub batch_wait: Duration,
 	/// Each `distinct_id`'s rate limit, or `None` for none.
 	pub per_distinct_id: Option<Rate>,
+	/// When a request is answered.
+	pub ack: Ack,
+}
+
+/// When a request that sent events is answered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ack {
+	/// Once its events are committed: every answer means they're stored.
+	#[default]
+	Committed,
+	/// As soon as its events are queued: faster, and a crash loses at most
+	/// what's queued. Duplicates aren't known yet, so none are reported.
+	Queued,
+}
+
+impl Ack {
+	/// `"queued"` or `"committed"`, as `LEPTOSKIT_ANALYTICS_ACK` holds it.
+	pub fn parse(value: &str) -> Option<Self> {
+		match value.trim() {
+			"committed" => Some(Self::Committed),
+			"queued" => Some(Self::Queued),
+			_ => None,
+		}
+	}
 }
 
 impl Default for IngestConfig {
@@ -56,6 +80,7 @@ impl Default for IngestConfig {
 			batch_rows: 2_000,
 			batch_wait: Duration::from_millis(50),
 			per_distinct_id: Some(Rate::PER_DISTINCT_ID),
+			ack: Ack::Committed,
 		}
 	}
 }
@@ -203,6 +228,7 @@ impl Ingest {
 			.map_err(|_| IngestError::Full)?;
 
 		let (done, wait) = oneshot::channel();
+		let queued = accepted.rows.len() as u32;
 		self.queue
 			.send(Submission {
 				rows: accepted.rows,
@@ -215,6 +241,14 @@ impl Ingest {
 			})
 			.map_err(|_| IngestError::Closed)?;
 
+		if self.config.ack == Ack::Queued {
+			// The writer still commits them; nobody waits to hear it.
+			drop(wait);
+			return Ok(finish(Committed {
+				stored: queued,
+				..Committed::default()
+			}));
+		}
 		match wait.await {
 			Ok(Ok(committed)) => Ok(finish(committed)),
 			Ok(Err(error)) => Err(IngestError::Database(error)),
