@@ -59,9 +59,9 @@ pub(super) fn generated_app_requires_explicit_removal(root: &Path) {
 		.find(|pack| pack.name == "rpc")
 		.expect("the generated packs! declaration must retain RPC ownership");
 	assert!(!rpc.builtin);
-	assert!(!rpc.tables.is_empty());
+	assert_ne!(rpc.tables, []);
 	let before = database_state(root);
-	assert!(!before["rows"]["notes"].as_array().unwrap().is_empty());
+	assert_ne!(before["rows"]["notes"].as_array().unwrap().as_slice(), []);
 	for table in &rpc.tables {
 		assert!(before["rows"].get(table.flat()).is_some());
 	}
