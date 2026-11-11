@@ -72,10 +72,9 @@ fn exported_defaults_diagnose_actual_null_and_omission_differences() {
 		TargetLanguage::Python,
 		TargetLanguage::Dart,
 	] {
-		assert!(
-			reread
-				.diagnostics(&GenerateOptions::new(target, "defaults"))
-				.is_empty()
+		assert_eq!(
+			reread.diagnostics(&GenerateOptions::new(target, "defaults")),
+			[]
 		);
 	}
 }
