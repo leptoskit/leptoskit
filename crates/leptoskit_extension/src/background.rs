@@ -353,6 +353,7 @@ mod tests {
 	}
 
 	thread_local! {
+		#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 		static CONNECT_SEEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 	}
 

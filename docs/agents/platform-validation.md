@@ -29,6 +29,8 @@ The iOS matrix separates widget verification, generated application journeys, an
 
 The coverage gate merges only the Linux, browser, iOS, and Android reports; see [CONTRIBUTING.md](../../CONTRIBUTING.md#coverage).
 
+Android Clippy checks use the NDK compiler through `setup/scripts/clippy.sh aarch64-linux-android`. The script keeps API 24 explicit in C/C++ and bindgen flags even when a compiler cache hides the NDK compiler's name. The pinned Clippy reports `missing_const_for_thread_local` on some initializers that already use `const`, through Android's fallback TLS expansion ([rust-clippy#13422](https://github.com/rust-lang/rust-clippy/issues/13422)). Each affected static has an Android-only `expect` for that lint, so a fixed compiler reports the expectation as unfulfilled and requires removing it. Keep the const initializer and all other warnings denied.
+
 ## Deployments with services
 
 `services-deploy.yml` runs what `leptoskit generate deploy` and `lk infra` write for an app with [services](services.md), for real. It runs on pull requests and pushes to `main` that touch the generators, the service runtime, `examples/analytics`, or `Cargo.lock`, and weekly for the images and tools it pulls.

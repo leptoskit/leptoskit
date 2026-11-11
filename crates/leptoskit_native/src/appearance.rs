@@ -120,9 +120,11 @@ impl FromStr for Appearance {
 thread_local! {
 	/// The app's choice, made on first use. The interface runs on one
 	/// thread, so it is that thread's.
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CHOICE: RefCell<Option<ArcRwSignal<Appearance>>> = const { RefCell::new(None) };
 	/// Whether the app has chosen at all. Until it does, a native root
 	/// carries nothing, and the host keeps whatever its surface was given.
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CHOSEN: Cell<bool> = const { Cell::new(false) };
 }
 

@@ -254,14 +254,16 @@ fn arm_pointers(surface: &Rc<RefCell<NativeSurface<AndroidBackend>>>) {
 		.backend()
 		.set_pointer_listener(move |sample| {
 			weak.upgrade()
-				.map(|surface| surface.borrow().pointer(sample))
-				.unwrap_or_else(PointerDecision::platform)
+				.map_or_else(PointerDecision::platform, |surface| {
+					surface.borrow().pointer(sample)
+				})
 		});
 	let weak = Rc::downgrade(surface);
 	surface.borrow().backend().set_gesture_clock(move |now| {
 		weak.upgrade()
-			.map(|surface| surface.borrow().advance_gestures(now))
-			.unwrap_or_else(PointerDecision::platform)
+			.map_or_else(PointerDecision::platform, |surface| {
+				surface.borrow().advance_gestures(now)
+			})
 	});
 }
 

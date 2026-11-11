@@ -293,6 +293,7 @@ pub(crate) async fn call<T: DeserializeOwned>(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 thread_local! {
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CALL_OVERRIDE: std::cell::RefCell<Option<serde_json::Value>> =
 		const { std::cell::RefCell::new(None) };
 }

@@ -145,16 +145,25 @@ android_compiler() {
 	esac
 	local toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$host"
 	local variable="${target//-/_}"
-	export "CC_$variable=$toolchain/bin/${target}24-clang"
+	local api_target="${target}24"
+	export "CC_$variable=$toolchain/bin/$api_target-clang"
 	# The native Rive runtime builds C++.
-	export "CXX_$variable=$toolchain/bin/${target}24-clang++"
+	export "CXX_$variable=$toolchain/bin/$api_target-clang++"
+	# A compiler cache can hide the API suffix from cc-rs, which then adds an
+	# unversioned --target. NDK 30 rejects that; keep the API explicit in the
+	# flags appended after cc-rs's defaults.
+	local flags flag_variable
+	for flags in CFLAGS CXXFLAGS; do
+		flag_variable="${flags}_$variable"
+		export "$flag_variable=${!flag_variable:-${!flags:-}} --target=$api_target"
+	done
 	export "AR_$variable=$toolchain/bin/llvm-ar"
 	# OpenSSL archives its static libraries with the toolchain's ranlib, and
 	# derives the command from the target triple unless this is set, which names
 	# a binary the runner does not have.
 	export "RANLIB_$variable=$toolchain/bin/llvm-ranlib"
 	# bindgen (QuickJS, in the native benchmark) reads the headers too.
-	export "BINDGEN_EXTRA_CLANG_ARGS_$variable=--sysroot=$toolchain/sysroot"
+	export "BINDGEN_EXTRA_CLANG_ARGS_$variable=--sysroot=$toolchain/sysroot --target=$api_target"
 }
 
 for target in "$@"; do
