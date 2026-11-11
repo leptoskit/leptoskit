@@ -210,6 +210,9 @@ fn say_watching(root: &Path) {
 		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
 		root.display()
 	);
+	// Piped logs are block-buffered. CI reads this line as soon as it is
+	// printed, which is before the first build finishes.
+	let _ = std::io::Write::flush(&mut std::io::stdout());
 }
 
 /// Opens the web app when asked to, after the server is up.

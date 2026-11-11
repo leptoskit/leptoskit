@@ -128,6 +128,11 @@ in
     # does not have (`GLIBC_ABI_DT_X86_64_PLT`).
     export LEPTOSKIT_NIX_LIBCXX="${pkgs.stdenv.cc.cc.lib}/lib"
     export LD_LIBRARY_PATH="$LEPTOSKIT_NIX_LIBCXX''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Commands that stay inside this shell still link libm from that prefix.
+    # Host-target builds use Nix's loader so libm and libc are the same glibc.
+    # The loader path is baked into the binary; Nix's libc must not go on
+    # LD_LIBRARY_PATH, or every host program loads it and breaks.
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-} -C link-arg=-Wl,--dynamic-linker,${pkgs.glibc}/lib/ld-linux-x86-64.so.2 -C link-arg=-Wl,-rpath,${pkgs.glibc}/lib"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless

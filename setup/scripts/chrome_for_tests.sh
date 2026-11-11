@@ -57,7 +57,21 @@ import sys
 
 binary, path = sys.argv[1], sys.argv[2]
 with open(path, "w", encoding="utf-8") as out:
-    json.dump({"goog:chromeOptions": {"binary": binary}}, out)
+    json.dump(
+        {
+            "goog:chromeOptions": {
+                "binary": binary,
+                "args": [
+                    "--headless",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--mute-audio",
+                    "--autoplay-policy=no-user-gesture-required",
+                ],
+            }
+        },
+        out,
+    )
     out.write("\n")
 PY
 printf '%s\n' "$json"
