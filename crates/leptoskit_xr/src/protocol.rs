@@ -297,7 +297,7 @@ mod tests {
 				axes: vec![0.5, -0.5],
 				hand: Some(joints),
 			}],
-			depth: true,
+			depth: Some(DepthSource::Measured),
 		}
 	}
 
@@ -346,6 +346,30 @@ mod tests {
 			pose: Pose::IDENTITY,
 			distance: 1.25,
 			kind: HitKind::Depth,
+			plane: None,
+		}]);
+	}
+
+	#[test]
+	fn depth_sources_survive_the_wire_and_unknown_sources_are_refused() {
+		for source in [
+			None,
+			Some(DepthSource::Measured),
+			Some(DepthSource::Estimated),
+		] {
+			let mut frame = sample_frame();
+			frame.depth = source;
+			round_trip(&frame);
+		}
+
+		let mut bytes = encode(&sample_frame());
+		let tag = bytes.len() - 4;
+		bytes[tag..].copy_from_slice(&3_u32.to_le_bytes());
+		assert_eq!(decode::<Frame>(&bytes), Err(Error::InvalidArgument));
+		round_trip(&vec![Hit {
+			pose: Pose::IDENTITY,
+			distance: 2.0,
+			kind: HitKind::EstimatedDepth,
 			plane: None,
 		}]);
 	}

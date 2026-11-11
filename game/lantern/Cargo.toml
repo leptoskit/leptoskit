@@ -1,0 +1,17 @@
+[package]
+name = "lantern"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+description = "A small leptoskit game: a drifting lantern and a menu that restarts it."
+
+[dependencies]
+leptoskit = { workspace = true, features = ["game"] }
+
+[lints]
+workspace = true

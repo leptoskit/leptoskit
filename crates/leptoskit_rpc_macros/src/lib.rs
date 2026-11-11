@@ -58,6 +58,7 @@ use syn::punctuated::Punctuated;
 
 mod channel;
 mod cron;
+mod manifest;
 mod operation;
 
 use operation::OperationArgs;
@@ -144,9 +145,8 @@ pub fn channel(
 	item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
 	let item = TokenStream::from(item);
-	let server = cfg!(feature = "server");
 
-	match channel::expand(args.into(), item.clone(), server) {
+	match channel::expand(args.into(), item.clone(), Build::current()) {
 		Ok(tokens) => tokens.into(),
 		// Only the error: the struct's field types may not compile on a
 		// client, and the server check certainly won't.
@@ -280,6 +280,26 @@ pub fn cron(
 	}
 }
 
+/// What the build an operation or channel expands in has on.
+#[derive(Clone, Copy)]
+pub(crate) struct Build {
+	/// This crate's `server` feature: keep bodies and registrations.
+	pub(crate) server: bool,
+	/// Whether the crate being compiled declares a `service` feature. Asked
+	/// only for a service's operations and channels in a server build.
+	pub(crate) declares_service: fn() -> bool,
+}
+
+impl Build {
+	/// The build the attribute is expanding in.
+	fn current() -> Self {
+		Self {
+			server: cfg!(feature = "server"),
+			declares_service: manifest::declares_service_feature,
+		}
+	}
+}
+
 fn operation_macro(
 	kind: OperationKind,
 	args: proc_macro::TokenStream,
@@ -287,7 +307,7 @@ fn operation_macro(
 ) -> proc_macro::TokenStream {
 	let item = TokenStream::from(item);
 
-	match operation::expand(kind, args.into(), item.clone(), cfg!(feature = "server")) {
+	match operation::expand(kind, args.into(), item.clone(), Build::current()) {
 		Ok(tokens) => tokens.into(),
 		// Only the error: the function's body may not compile on a client.
 		Err(error) => error.to_compile_error().into(),

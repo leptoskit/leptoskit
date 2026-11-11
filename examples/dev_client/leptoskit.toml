@@ -1,0 +1,19 @@
+#:schema https://leptoskit.dev/schemas/leptoskit.v0.schema.json
+
+schema_version = 0
+
+# The phone app that opens whatever `leptoskit dev` is serving.
+[app]
+name = "dev_client"
+platforms = ["web", "ios", "android"]
+render = "csr"
+
+[build]
+client_package = "dev_client"
+
+[native]
+package_id = "dev.leptoskit.devclient"
+plugins = ["dev-client"]
+
+[[plugins]]
+name = "router"

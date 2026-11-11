@@ -264,6 +264,18 @@ rust-async = true
 option-features = { depth-model = "depth-estimation" }
 ```
 
+An async plugin whose factory can't start without some options lists them in `required-options`. `leptoskit build` stops when the app's `[native.plugin-options.<name>]` table leaves one out, or sets it to an empty string, list, or table, instead of building an app that stops at launch when the factory rejects its options. The `websocket` plugin needs the origins it may connect to:
+
+```toml
+[package.metadata.leptoskit.runtime]
+name = "websocket"
+rust-factory = "from_config"
+rust-async = true
+required-options = ["origins"]
+```
+
+If a plugin's factory or installation still fails when the app starts, the app's error names the plugin, such as ``register plugin `websocket`: InvalidArgument``.
+
 With `rust-context = true`, the factory receives `&leptoskit_bridge::AppContext` instead of the two directory paths. Besides `data_dir` and `cache_dir`, its `platform()` lends the host's native handle: on Android, `android_handles()` returns the `JavaVM` and the app's `Context`; on iOS and macOS, `apple_presentation_owner()` and `apple_attached_owner()` return the app's view controller while it's on screen. With `rust-main-thread = true`, calls run on the platform's UI thread instead of a background worker, which UIKit, AppKit, and most Android UI APIs require. With `experimental = true`, the registration is used only when `leptoskit.toml` sets `native.experimental-rust-plugins = true`; otherwise the build uses the plugin's Swift or Kotlin implementation on that platform.
 
 For each platform, the CLI uses the first of these that the plugin declares:

@@ -43,18 +43,20 @@ final class NativeAppRuntime {
         wasm: Data, identifier: String?, owner: NativePresentationOwner,
         register: (OpaquePointer, NativeDispatcher, NativePluginContext) throws -> Void
     ) throws {
+        NativeLog.followLifecycle()
         pluginContext = NativePluginContext(owner: owner)
         let app = try NativeAppFactory.create(
             wasm: wasm, identifier: identifier, pluginContext: pluginContext
         )
         self.app = app
+        NativeScene3dView.configure()
         // This runtime drives the guest's frame clock from the display link.
         guard lk_app_enable_frames(app.raw) == 0 else { throw PluginError.native }
         // Timers are optional: if the host cannot start one, the guest sees
         // `Unavailable` instead of the app failing to start.
-        if lk_app_enable_timers(app.raw) != 0 { NSLog("LeptosKit: timers unavailable") }
+        if lk_app_enable_timers(app.raw) != 0 { NativeLog.warn(NativeLog.bridge, "timers are unavailable") }
         // 3D scenes, when the app was built with them (`lk_app_enable_scene3d` answers 0 otherwise).
-        if lk_app_enable_scene3d(app.raw) < 0 { NSLog("LeptosKit: 3D scenes unavailable") }
+        if lk_app_enable_scene3d(app.raw) < 0 { NativeLog.warn(NativeLog.gpu, "3D scenes are unavailable") }
         app.onWake = { [weak self] in self?.schedulePump() }
         NativeServiceWakeBroker.install { [weak self] in self?.backgroundWake() }
         requests.onCapacity = { [weak self] in self?.schedulePump() }
@@ -227,7 +229,9 @@ final class NativeAppRuntime {
         case .failure(let error):
             let code = (error as? PluginError)?.rawValue ?? PluginError.native.rawValue
 
-            if !(error is PluginError) { NSLog("LeptosKit plugin: %@", error.localizedDescription) }
+            if !(error is PluginError) {
+                NativeLog.error(NativeLog.bridge, "call #\(id) to a native plugin threw", error)
+            }
             return lk_bridge_complete(bridge, id, code, nil, 0)
         }
     }

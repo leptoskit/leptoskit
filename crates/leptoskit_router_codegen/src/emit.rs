@@ -118,6 +118,7 @@ fn routes_code(table: &Table) -> Result<TokenStream, String> {
 
 	let shapes = shapes_code(table)?;
 	let render = render_code(table)?;
+	let axum_paths = axum_paths_code(table)?;
 
 	Ok(quote! {
 		#(#re_exports)*
@@ -164,11 +165,34 @@ fn routes_code(table: &Table) -> Result<TokenStream, String> {
 			}
 		}
 
+		#axum_paths
+
 		/// The app's router: pages and layouts that take a `navigation` prop
 		/// receive it, to navigate with and to build links.
 		pub type Navigation = #runtime::Router<Route>;
 
 		#render
+	})
+}
+
+/// `axum_route_list`: one axum path per route file, in variant order.
+fn axum_paths_code(table: &Table) -> Result<TokenStream, String> {
+	let runtime = quote!(::leptoskit_router);
+	let paths = table
+		.routes
+		.iter()
+		.map(|route| {
+			let segments = segments(&route.segments);
+			Ok(quote!(#runtime::Pattern::new(&[#(#segments),*]).axum_path()))
+		})
+		.collect::<Result<Vec<_>, String>>()?;
+
+	Ok(quote! {
+		/// Paths for `leptos_axum::LeptosRoutes::leptos_routes`.
+		#[allow(dead_code, reason = "client-rendered apps do not need the SSR route list")]
+		pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
+			::std::vec![#(#paths),*]
+		}
 	})
 }
 

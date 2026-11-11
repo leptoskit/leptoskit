@@ -1,5 +1,5 @@
+import LeptosKitBridge
 import UIKit
-import os
 
 /// File-backed images remain synchronous and reject remote image sources.
 @MainActor
@@ -37,7 +37,6 @@ enum WidgetImageStyle {
 /// bundle's own `assets` folder. iOS 14 and later decode PNG, JPEG, and WebP.
 enum BundledAsset {
     private static let scheme = "asset://"
-    private static let log = Logger(subsystem: "dev.leptoskit", category: "assets")
 
     /// The bundled file `source` names, or nil when it is not an asset source.
     static func url(_ source: String) throws -> URL? {
@@ -63,7 +62,7 @@ enum BundledAsset {
         #if DEBUG
         throw RuntimeFailure(message: message)
         #else
-        log.error("\(message, privacy: .public)")
+        NativeLog.error(NativeLog.render, message)
         return nil
         #endif
     }

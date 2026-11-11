@@ -52,16 +52,90 @@ impl ToolOutput {
 /// Runs one command to completion under a deadline, terminating its process
 /// group on expiry.
 pub fn run(command: &mut Command, timeout: Duration) -> Result<ToolOutput, Error> {
+	run_feeding(command, timeout, None)
+}
+
+/// Runs one command, writing `input` to its standard input and closing it.
+///
+/// `None` leaves standard input closed, which is what a tool with no program
+/// to read expects.
+pub fn run_feeding(
+	command: &mut Command,
+	timeout: Duration,
+	input: Option<&[u8]>,
+) -> Result<ToolOutput, Error> {
+	feed(command, timeout, input, None)
+}
+
+/// Writes `first`, waits `pause_ms`, then writes `second` and closes input.
+///
+/// A `uinput` touchscreen is not attached at the moment it is registered.
+/// Sending the gesture in the same write, with a `delay` command for that
+/// wait, stamps the wait into the gesture's event timestamps. The pause is
+/// wall time between the two writes instead.
+pub fn run_feeding_then(
+	command: &mut Command,
+	timeout: Duration,
+	first: &[u8],
+	pause_ms: u64,
+	second: &[u8],
+) -> Result<ToolOutput, Error> {
+	feed(
+		command,
+		timeout,
+		Some(first),
+		Some((Duration::from_millis(pause_ms), second)),
+	)
+}
+
+/// Runs `command`, optionally writing standard input in one or two parts.
+fn feed(
+	command: &mut Command,
+	timeout: Duration,
+	input: Option<&[u8]>,
+	then: Option<(Duration, &[u8])>,
+) -> Result<ToolOutput, Error> {
 	isolate(command);
-	command
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped());
+	if input.is_some() {
+		command.stdin(Stdio::piped());
+	} else {
+		command.stdin(Stdio::null());
+	}
+	command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
 	let name = command.get_program().to_string_lossy().into_owned();
+	let started = Instant::now();
 	let mut child = spawn(command, &name)?;
+	if let Some(bytes) = input
+		&& let Some(mut pipe) = child.stdin.take()
+	{
+		use std::io::Write;
+		let _ = pipe.write_all(bytes);
+		let _ = pipe.flush();
+		if let Some((pause, second)) = then {
+			let pause_started = Instant::now();
+			while pause_started.elapsed() < pause {
+				if started.elapsed() >= timeout {
+					let _ = terminate(&mut child);
+					let _ = child.wait();
+					return Err(Error::Tool {
+						name,
+						detail: format!("exceeded {} seconds", timeout.as_secs()),
+					});
+				}
+				if matches!(child.try_wait(), Ok(Some(_))) {
+					break;
+				}
+				let left = pause.saturating_sub(pause_started.elapsed());
+				std::thread::sleep(Duration::from_millis(20).min(left));
+			}
+			let _ = pipe.write_all(second);
+			let _ = pipe.flush();
+		}
+	}
 	let (receiver, readers) = read_pipes(&mut child);
-	let timed_out = wait(&mut child, timeout, &name);
+	let left = timeout.saturating_sub(started.elapsed());
+	let timed_out = wait(&mut child, left, &name);
 
 	// Reap the child in either case. After a kill this also lets the tool's
 	// own pipe ends close, so the readers usually finish inside the grace.
@@ -219,19 +293,19 @@ fn collect(
 /// Spawns a detached process that outlives this run, for emulators a control
 /// document boots but no process owns.
 pub fn spawn_detached(command: &mut Command) -> Result<(), Error> {
+	spawn_detached_child(command).map(|_| ())
+}
+
+/// Spawns a detached process and returns it, so the caller can wait until a
+/// window appears without blocking on the process exiting.
+pub fn spawn_detached_child(command: &mut Command) -> Result<Child, Error> {
 	isolate(command);
 	command
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.map(|_| ())
-		.map_err(|error| {
-			Error::Tool {
-				name: command.get_program().to_string_lossy().into_owned(),
-				detail: format!("starting: {error}"),
-			}
-		})
+		.stderr(Stdio::null());
+	let name = command.get_program().to_string_lossy().into_owned();
+	spawn(command, &name)
 }
 
 fn isolate(command: &mut Command) {
@@ -327,11 +401,57 @@ pub fn simulator_list(timeout: Duration) -> Option<String> {
 	list(command, timeout)
 }
 
-/// Reads `xcrun devicectl list devices --json`, or [`None`] without Xcode.
+/// Reads `xcrun devicectl list devices --json-output <file>`, or [`None`]
+/// without Xcode.
+///
+/// devicectl writes the JSON document to the file named by `--json-output`.
+/// It does not print that document for `--json`.
 pub fn iphone_list(timeout: Duration) -> Option<String> {
+	let path = devicectl_listing_path();
+	let command = devicectl_list_command(&path);
+	let command_ok = list(command, timeout).is_some();
+	listing_body(command_ok, &path)
+}
+
+/// `xcrun devicectl list devices --json-output <path>`.
+fn devicectl_list_command(json_path: &std::path::Path) -> Command {
 	let mut command = Command::new("xcrun");
-	command.args(["devicectl", "list", "devices", "--json"]);
-	list(command, timeout)
+	command
+		.args(["devicectl", "list", "devices", "--json-output"])
+		.arg(json_path);
+	command
+}
+
+/// A private path for one `devicectl` listing.
+fn devicectl_listing_path() -> PathBuf {
+	static LISTINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let listing = LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let nanos = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |duration| duration.as_nanos());
+	std::env::temp_dir().join(format!(
+		"leptoskit-devicectl-{}-{nanos}-{listing}.json",
+		std::process::id()
+	))
+}
+
+/// The JSON file devicectl wrote, when it wrote one.
+fn read_listing(path: &std::path::Path) -> Option<String> {
+	let text = std::fs::read_to_string(path).ok()?;
+	if text.trim().is_empty() {
+		None
+	} else {
+		Some(text)
+	}
+}
+
+/// The JSON file devicectl wrote, when the command succeeded and the file
+/// has a document. The file is removed either way, so a failed command cannot
+/// return a stale document.
+fn listing_body(command_ok: bool, path: &std::path::Path) -> Option<String> {
+	let body = read_listing(path);
+	let _ = std::fs::remove_file(path);
+	if command_ok { body } else { None }
 }
 
 /// Reads `adb devices -l`, or [`None`] without an Android SDK.
@@ -421,6 +541,15 @@ mod tests {
 		);
 	}
 
+	#[cfg(unix)]
+	#[test]
+	fn feeding_stdin_reaches_the_command() {
+		let mut command = Command::new("sh");
+		command.args(["-c", "cat"]);
+		let output = run_feeding(&mut command, Duration::from_secs(5), Some(b"pinch\n")).unwrap();
+		assert_eq!(output.stdout, "pinch\n");
+	}
+
 	#[test]
 	fn missing_tools_report_their_name() {
 		let mut command = Command::new("leptoskit-no-such-tool");
@@ -460,6 +589,65 @@ mod tests {
 		assert_eq!(devicectl.get_program(), "xcrun");
 		let adb = android_tool("adb");
 		assert!(adb.get_program().to_string_lossy().ends_with("adb"));
+	}
+
+	#[test]
+	fn devicectl_list_writes_json_to_a_file() {
+		let path = PathBuf::from("/tmp/leptoskit-devices.json");
+		let command = devicectl_list_command(&path);
+		assert_eq!(command.get_program(), "xcrun");
+		let args: Vec<_> = command
+			.get_args()
+			.map(|arg| arg.to_string_lossy().into_owned())
+			.collect();
+		assert_eq!(
+			args,
+			[
+				"devicectl",
+				"list",
+				"devices",
+				"--json-output",
+				"/tmp/leptoskit-devices.json",
+			]
+		);
+	}
+
+	#[test]
+	fn a_listing_file_is_kept_only_when_it_has_json() {
+		let directory =
+			std::env::temp_dir().join(format!("leptoskit-listing-{}", std::process::id()));
+		std::fs::create_dir_all(&directory).unwrap();
+		let path = directory.join("devices.json");
+		std::fs::write(&path, " \n").unwrap();
+		assert!(read_listing(&path).is_none());
+		std::fs::write(&path, "{\"result\":{\"devices\":[]}}\n").unwrap();
+		assert_eq!(
+			read_listing(&path).as_deref(),
+			Some("{\"result\":{\"devices\":[]}}\n")
+		);
+		assert!(read_listing(directory.join("missing.json").as_path()).is_none());
+		std::fs::write(&path, "{\"ok\":true}\n").unwrap();
+		assert!(listing_body(false, &path).is_none());
+		assert!(!path.exists(), "a failed command must not leave the file");
+		std::fs::write(&path, "{\"ok\":true}\n").unwrap();
+		assert_eq!(
+			listing_body(true, &path).as_deref(),
+			Some("{\"ok\":true}\n")
+		);
+		assert!(!path.exists());
+		assert!(listing_body(true, &directory.join("missing.json")).is_none());
+		let _ = std::fs::remove_dir_all(&directory);
+	}
+
+	#[test]
+	fn iphone_list_fails_closed_without_xcrun() {
+		// A machine with Xcode would actually talk to a phone. The Linux
+		// lanes have no `xcrun`, and that is the path this covers.
+		if find_in_path("xcrun").is_some() {
+			return;
+		}
+
+		assert!(iphone_list(Duration::from_secs(2)).is_none());
 	}
 
 	#[test]

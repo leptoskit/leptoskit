@@ -175,7 +175,7 @@ fn nested_node_patches_apply_together_while_subtree_overlaps_decline() {
 		])
 		.expect("valid patches")
 		.expect("applied in place");
-	assert_eq!(applied, [container, text]);
+	assert_eq!(applied, [text, container], "in the order given");
 	assert_eq!(surface.props(text).text.as_deref(), Some("New"));
 	assert_eq!(surface.children(container), [text]);
 
@@ -331,4 +331,69 @@ fn an_empty_patch_list_is_a_no_op() {
 	let mut surface = mounted(&Element::view().child(Element::text("Unchanged")));
 	assert_eq!(surface.try_patch(Vec::new()), Ok(Some(Vec::new())));
 	assert_eq!(surface.backend().log(), []);
+}
+
+/// Patches apply in tree order, whatever order they come in, but each answer
+/// is the node at the position of the patch in the same place in the list.
+/// The wasm host pairs answers with its patches by position; answering in
+/// tree order once paired a subtree's wire ids with a different widget, and
+/// a Seeker stopped with "surface and wire tree diverged".
+#[test]
+fn patched_nodes_come_back_in_the_order_the_patches_were_given() {
+	let tree = Element::view()
+		.child(Element::text("label"))
+		.child(Element::view().child(Element::text("old")))
+		.child(Element::text("becomes a button"));
+	let patches = [
+		// The label's text: the same widget.
+		(vec![0], false, Element::text("relabelled")),
+		// The box and everything in it: a new child list.
+		(
+			vec![1],
+			true,
+			Element::view()
+				.child(Element::text("new"))
+				.child(Element::text("added")),
+		),
+		// Another kind: a new widget under a new id.
+		(vec![2], false, Element::button("Go")),
+	];
+
+	for order in [
+		[0, 1, 2],
+		[0, 2, 1],
+		[1, 0, 2],
+		[1, 2, 0],
+		[2, 0, 1],
+		[2, 1, 0],
+	] {
+		let mut surface = mounted(&tree);
+		let sent: Vec<SourcePatch> = order
+			.iter()
+			.map(|&index| {
+				let (path, subtree, element) = &patches[index];
+				let at = node(&surface, path);
+
+				if *subtree {
+					subtree_patch(at, element.clone())
+				} else {
+					node_patch(at, element.clone())
+				}
+			})
+			.collect();
+
+		let answered = surface
+			.try_patch(sent)
+			.expect("valid patches")
+			.expect("applied in place");
+		let expected: Vec<NodeId> = order
+			.iter()
+			.map(|&index| node(&surface, &patches[index].0))
+			.collect();
+		assert_eq!(answered, expected, "patches sent in the order {order:?}");
+
+		let root = surface.root().expect("a committed root");
+		assert_eq!(surface.children(surface.children(root)[1]).len(), 2);
+		assert_eq!(surface.kind(surface.children(root)[2]), NativeKind::Button);
+	}
 }

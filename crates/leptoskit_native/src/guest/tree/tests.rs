@@ -422,14 +422,14 @@ fn the_wire_names_where_each_node_was_built() {
 	let line = line!() + 1;
 	tree.update(Element::view().child(Element::text("hello")), &mut host);
 	let root = tree.root.unwrap();
-	let source = host.nodes[&root].props["source"].as_str().unwrap();
+	let source = host.nodes[&root].props["source_location"].as_str().unwrap();
 	assert!(
 		source.starts_with(&format!("{}:{line}:", file!())),
 		"{source}"
 	);
 	let text = host.nodes[&root].children[0];
 
-	assert!(host.nodes[&text].props["source"].is_string());
+	assert!(host.nodes[&text].props["source_location"].is_string());
 }
 
 #[cfg(feature = "devtools")]

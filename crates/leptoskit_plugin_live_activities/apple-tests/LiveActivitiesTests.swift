@@ -101,10 +101,13 @@ final class LiveActivitiesTests: XCTestCase {
         let service = FakeLiveActivities()
         let plugin = LiveActivitiesPlugin(service: service)
 
-        XCTAssertEqual(try await flag(plugin, method: 0), 1)
+        let enabled = try await flag(plugin, method: 0)
+        XCTAssertEqual(enabled, 1)
         service.areEnabled = false
-        XCTAssertEqual(try await flag(plugin, method: 0), 0)
-        XCTAssertEqual(try await flag(plugin, method: 1), 0)
+        let disabled = try await flag(plugin, method: 0)
+        XCTAssertEqual(disabled, 0)
+        let disabledUpdates = try await flag(plugin, method: 1)
+        XCTAssertEqual(disabledUpdates, 0)
 
         let started = try await plugin.invoke(method: 2, payload: startPayload())
         XCTAssertEqual(try identifier(started), "ride-1")
@@ -259,9 +262,8 @@ final class LiveActivitiesTests: XCTestCase {
             var buffer = lk_buffer()
             let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: data.count)
             pointer.initialize(from: raw.bindMemory(to: UInt8.self).baseAddress!, count: data.count)
-            buffer.data = pointer
+            buffer.data = UnsafePointer(pointer)
             buffer.len = data.count
-            buffer.capacity = data.count
 
             return NativeBuffer(taking: buffer)
         }

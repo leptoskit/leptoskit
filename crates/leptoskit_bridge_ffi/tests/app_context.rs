@@ -83,7 +83,10 @@ fn rejects_invalid_context_without_invoking_registration() {
 			)
 		};
 		assert!(app.is_null());
-		assert!(error.len > 0);
+		// SAFETY: The failed call wrote this owned error.
+		let message = unsafe { std::slice::from_raw_parts(error.data, error.len) };
+		// The directories are the host's, not a plugin's.
+		assert_eq!(message, b"app context: InvalidArgument");
 		// SAFETY: Error allocation is uniquely owned.
 		unsafe { leptoskit_bridge_ffi::lk_buffer_release(error) };
 	}

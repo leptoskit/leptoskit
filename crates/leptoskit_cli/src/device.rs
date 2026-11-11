@@ -19,12 +19,16 @@ use clap::Subcommand;
 use clap::ValueEnum;
 use leptoskit_testing::control::Browser;
 use leptoskit_testing::control::Document;
+use leptoskit_testing::control::Injector;
 use leptoskit_testing::control::Locator;
 use leptoskit_testing::control::SCHEMA_VERSION;
 use leptoskit_testing::control::Step;
+use leptoskit_testing::control::SuiteRequest;
 use leptoskit_testing::control::Target;
 use leptoskit_testing::control::TargetKind;
+use leptoskit_testing::control::default_injector;
 use leptoskit_testing::control::inventory;
+use leptoskit_testing::control::suite;
 use leptoskit_testing::native::Application;
 
 /// The device commands.
@@ -132,6 +136,37 @@ pub enum DeviceCommand {
 		/// The most recent lines to keep; 500 when unset.
 		#[arg(long)]
 		tail: Option<u64>,
+	},
+	/// Installs an app package, or checks that a desktop path exists.
+	Install {
+		#[command(flatten)]
+		target: TargetArgs,
+		/// The `.apk`, `.ipa`, `.app`, or desktop path.
+		#[arg(long)]
+		path: String,
+	},
+	/// Opens an installed app, or launches a desktop binary.
+	Open {
+		#[command(flatten)]
+		target: TargetArgs,
+		/// Bundle id, package, or path. Defaults to `--app`.
+		#[arg(long)]
+		identifier: Option<String>,
+	},
+	/// Installs, opens, and runs tap, long press, pan, and pinch where the
+	/// target can inject them.
+	Sanity {
+		#[command(flatten)]
+		target: TargetArgs,
+		/// A package to install before the app is opened.
+		#[arg(long)]
+		path: Option<String>,
+		/// Drive gestures through a UI session. Phones and Linux can pinch.
+		#[arg(long, conflicts_with = "pointer")]
+		driver: bool,
+		/// Drive Linux with `xdotool`. Pinch is omitted.
+		#[arg(long, conflicts_with = "driver")]
+		pointer: bool,
 	},
 }
 
@@ -363,8 +398,42 @@ pub fn run(command: DeviceCommand) -> Result<()> {
 
 			Ok(())
 		}
+		command @ DeviceCommand::Sanity { .. } => execute_sanity(command),
 		other => execute(&document(other)?),
 	}
+}
+
+/// Prints the sanity suite's coverage beside the step outcome, as one JSON
+/// document.
+fn execute_sanity(command: DeviceCommand) -> Result<()> {
+	let DeviceCommand::Sanity {
+		target,
+		path,
+		driver,
+		pointer,
+	} = command
+	else {
+		unreachable!("only the sanity command");
+	};
+	let listed = if target.needs_inventory() {
+		inventory::list()
+	} else {
+		inventory::Inventory::empty()
+	};
+	let built = sanity_suite(&target, path.as_deref(), driver, pointer, &listed)?;
+	let outcome = leptoskit_testing::control::run(&built.document);
+	let mut report = serde_json::to_value(&outcome)?;
+	report["gestures"] = serde_json::to_value(&built.gestures)?;
+	report["omitted"] = serde_json::to_value(&built.omitted)?;
+	report["arena"] = serde_json::Value::Bool(built.arena);
+	report["notes"] = serde_json::to_value(&built.notes)?;
+	println!("{}", serde_json::to_string_pretty(&report)?);
+
+	if !outcome.passed {
+		std::process::exit(1);
+	}
+
+	Ok(())
 }
 
 /// The document one action command stands for, built without running it, so
@@ -393,7 +462,10 @@ fn needs_inventory(command: &DeviceCommand) -> bool {
 		| DeviceCommand::Source { target, .. }
 		| DeviceCommand::StartApp { target, .. }
 		| DeviceCommand::StopApp { target, .. }
-		| DeviceCommand::Logs { target, .. } => target.needs_inventory(),
+		| DeviceCommand::Logs { target, .. }
+		| DeviceCommand::Install { target, .. }
+		| DeviceCommand::Open { target, .. }
+		| DeviceCommand::Sanity { target, .. } => target.needs_inventory(),
 	}
 }
 
@@ -533,17 +605,85 @@ pub fn document_with(command: DeviceCommand, inventory: &inventory::Inventory) -
 				steps: vec![Step::StopApp { identifier }],
 			})
 		}
-		DeviceCommand::Logs { target, tail } => {
-			Ok(Document {
-				schema_version: SCHEMA_VERSION,
-				target: target.resolve_with(inventory)?,
-				steps: vec![Step::Logs {
-					tail,
-					minutes: None,
-				}],
-			})
-		}
+		DeviceCommand::Logs { target, tail } => logs_document(&target, tail, inventory),
+		DeviceCommand::Install { target, path } => install_document(&target, path, inventory),
+		DeviceCommand::Open { target, identifier } => open_document(&target, identifier, inventory),
+		DeviceCommand::Sanity {
+			target,
+			path,
+			driver,
+			pointer,
+		} => Ok(sanity_suite(&target, path.as_deref(), driver, pointer, inventory)?.document),
 	}
+}
+
+fn logs_document(
+	target: &TargetArgs,
+	tail: Option<u64>,
+	inventory: &inventory::Inventory,
+) -> Result<Document> {
+	Ok(Document {
+		schema_version: SCHEMA_VERSION,
+		target: target.resolve_with(inventory)?,
+		steps: vec![Step::Logs {
+			tail,
+			minutes: None,
+		}],
+	})
+}
+
+fn install_document(
+	target: &TargetArgs,
+	path: String,
+	inventory: &inventory::Inventory,
+) -> Result<Document> {
+	Ok(Document {
+		schema_version: SCHEMA_VERSION,
+		target: target.resolve_with(inventory)?,
+		steps: vec![Step::InstallApp { path }],
+	})
+}
+
+fn open_document(
+	target: &TargetArgs,
+	identifier: Option<String>,
+	inventory: &inventory::Inventory,
+) -> Result<Document> {
+	let identifier = identifier
+		.or_else(|| target.app.clone())
+		.context("pass --identifier or --app")?;
+	Ok(Document {
+		schema_version: SCHEMA_VERSION,
+		target: target.resolve_with(inventory)?,
+		steps: vec![Step::OpenApp { identifier }],
+	})
+}
+
+fn sanity_suite(
+	target: &TargetArgs,
+	path: Option<&str>,
+	driver: bool,
+	pointer: bool,
+	inventory: &inventory::Inventory,
+) -> Result<leptoskit_testing::control::Suite> {
+	let identifier = target
+		.app
+		.clone()
+		.context("pass --app with the bundle id, package, or desktop path")?;
+	let resolved = target.resolve_with(inventory)?;
+	let injector = if driver {
+		Injector::Driver
+	} else if pointer {
+		Injector::Xdotool
+	} else {
+		default_injector(resolved.kind)?
+	};
+	Ok(suite(SuiteRequest {
+		target: resolved,
+		identifier: &identifier,
+		install: path,
+		injector,
+	})?)
 }
 
 /// A target with just enough defaults for one device-only step.

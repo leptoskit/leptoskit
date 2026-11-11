@@ -1,6 +1,7 @@
 //! The surface: owns the shadow tree, diffs new element trees against it,
 //! commits mutations to the backend, and dispatches events.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::RwLock;
 #[cfg(feature = "devtools")]
@@ -23,6 +24,7 @@ use crate::props::TextStyle;
 #[cfg(feature = "devtools")]
 mod devtools;
 mod events;
+mod gestures;
 mod layout;
 mod measurement;
 mod patch;
@@ -113,6 +115,7 @@ struct ShadowNode {
 	kind: NativeKind,
 	props: NativeProps,
 	handlers: Vec<HandlerEntry>,
+	gesture: Option<crate::gesture::Gesture>,
 	children: Vec<NodeId>,
 	parent: Option<NodeId>,
 	/// Live text content and font shared with the yoga measure function, so a
@@ -318,11 +321,21 @@ pub struct NativeSurface<B: NativeBackend> {
 	/// Whether the last full resolution found accessibility relationships,
 	/// which resolve across the whole tree and so rule out patching.
 	relationships: bool,
+	/// Whether `dark:` utilities apply: the app's choice resolved against
+	/// the device's setting.
 	dark: bool,
+	/// The device's own setting, as the host last reported it.
+	system_dark: bool,
+	/// The app's choice, from [`Self::set_appearance`] or the root's
+	/// [`NativeProps::appearance`](crate::NativeProps::appearance).
+	appearance: crate::Appearance,
 	safe_area: Rect<f32>,
 	/// The control the user is holding down, resolved with its `active:`
 	/// utilities until it is released or leaves the tree.
 	pressed: Option<NodeId>,
+	/// Recognizers for pointers currently down. Interior mutability lets a
+	/// gesture callback rebuild the tree without borrowing the session.
+	gestures: RefCell<crate::gesture::Session>,
 	#[cfg(feature = "devtools")]
 	devtools: Devtools,
 }
@@ -344,8 +357,11 @@ impl<B: NativeBackend> NativeSurface<B> {
 			source: None,
 			relationships: false,
 			dark: false,
+			system_dark: false,
+			appearance: crate::Appearance::System,
 			safe_area: Rect::default(),
 			pressed: None,
+			gestures: RefCell::default(),
 			#[cfg(feature = "devtools")]
 			devtools: Devtools::default(),
 		}
@@ -392,16 +408,76 @@ impl<B: NativeBackend> NativeSurface<B> {
 		}
 	}
 
-	/// Applies the host's color scheme to native controls and retained `dark:`
-	/// utilities. Call even for an initial light scheme to override system
-	/// appearance in a host with a fixed light theme.
+	/// Applies the device's color scheme to native controls and retained
+	/// `dark:` utilities, unless the app chose an appearance of its own (see
+	/// [`Self::set_appearance`]). Call even for an initial light scheme to
+	/// override system appearance in a host with a fixed light theme.
 	pub fn set_dark_mode(&mut self, dark: bool) {
+		self.system_dark = dark;
+		self.show_appearance();
+	}
+
+	/// Shows `appearance` instead of following the device: `dark:`
+	/// utilities and native controls are light for [`Appearance::Light`],
+	/// dark for [`Appearance::Dark`], and follow [`Self::set_dark_mode`]
+	/// again for [`Appearance::System`].
+	///
+	/// A native guest's [`appearance::set`](crate::appearance::set) reaches
+	/// the surface through the root it renders, which replaces this.
+	///
+	/// [`Appearance::Light`]: crate::Appearance::Light
+	/// [`Appearance::Dark`]: crate::Appearance::Dark
+	/// [`Appearance::System`]: crate::Appearance::System
+	pub fn set_appearance(&mut self, appearance: crate::Appearance) {
+		self.appearance = appearance;
+		self.show_appearance();
+	}
+
+	/// The app's appearance choice;
+	/// [`Appearance::System`](crate::Appearance::System) until one is made.
+	pub fn appearance(&self) -> crate::Appearance {
+		self.appearance
+	}
+
+	/// Whether the surface shows dark: the app's choice, resolved against
+	/// the device's setting.
+	pub fn is_dark(&self) -> bool {
+		self.dark
+	}
+
+	/// Tells the backend the resolved appearance and resolves `dark:` again
+	/// when it changed.
+	fn show_appearance(&mut self) {
+		let dark = self.appearance.is_dark(self.system_dark);
 		self.backend.set_dark_mode(dark);
 
 		if self.dark != dark {
 			self.dark = dark;
 			self.commit_source();
 		}
+	}
+
+	/// Takes the appearance the source's root carries, before it resolves.
+	/// Returns whether that changed what `dark:` resolves to.
+	pub(super) fn adopt_root_appearance(&mut self) -> bool {
+		let Some(appearance) = self
+			.source
+			.as_ref()
+			.and_then(|source| source.props.appearance)
+		else {
+			return false;
+		};
+
+		self.appearance = appearance;
+		let dark = appearance.is_dark(self.system_dark);
+
+		if self.dark == dark {
+			return false;
+		}
+
+		self.dark = dark;
+		self.backend.set_dark_mode(dark);
+		true
 	}
 
 	/// Starts holding a `Button` or `Pressable` down, as a backend's

@@ -70,6 +70,7 @@ leptoskit_wasm = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["AudioContextOptions"] }
 
 [[test]]
 name = "soundboard_guest"

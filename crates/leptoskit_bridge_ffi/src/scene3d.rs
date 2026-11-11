@@ -17,11 +17,16 @@ use std::ffi::c_void;
 use crate::Buffer;
 
 thread_local! {
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
+/// Records why a `lk_scene3d_*` call failed, for [`lk_scene3d_error`], and
+/// logs it.
 fn fail(message: impl Into<String>) {
-	ERROR.with_borrow_mut(|error| *error = message.into());
+	let message = message.into();
+	log::error!(target: leptoskit_log::target::GPU, "{message}");
+	ERROR.with_borrow_mut(|error| *error = message);
 }
 
 /// Borrows a UTF-8 string from C.
@@ -90,6 +95,8 @@ mod enabled {
 	use std::ptr::NonNull;
 
 	use leptoskit_3d::Backend;
+	use leptoskit_3d::PointerInput;
+	use leptoskit_3d::PointerPhase;
 	use leptoskit_3d::SceneId;
 	use leptoskit_3d::host::Directory;
 	use leptoskit_3d::host::Hub;
@@ -167,6 +174,25 @@ mod enabled {
 		1
 	}
 
+	pub fn pointer(scene: u32, phase: u32, x: f32, y: f32, dx: f32, dy: f32) -> i32 {
+		let Some(phase) = PointerPhase::from_tag(phase) else {
+			fail("unknown pointer phase");
+			return -1;
+		};
+		let input = PointerInput {
+			phase,
+			x,
+			y,
+			dx,
+			dy,
+		};
+		if !input.is_valid() {
+			fail("invalid pointer coordinates");
+			return -1;
+		}
+		i32::from(Hub::global().pointer(SceneId(scene), input))
+	}
+
 	pub fn set_asset_reader(context: *mut c_void, read: ReadFn) -> i32 {
 		let reader = Callback {
 			context,
@@ -191,15 +217,23 @@ mod enabled {
 		let surface = match unsafe { hub.instance().create_surface_unsafe(target) } {
 			Ok(surface) => surface,
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!("scene {scene}: cannot create a surface: {error}"));
 				return ptr::null_mut();
 			}
 		};
 
 		match hub.attach(SceneId(scene), surface, width, height) {
-			Ok(view) => Box::into_raw(Box::new(ViewHandle(view))),
+			Ok(view) => {
+				log::info!(
+					target: leptoskit_log::target::GPU,
+					"scene {scene}: created a {width}×{height} surface"
+				);
+				Box::into_raw(Box::new(ViewHandle(view)))
+			}
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!(
+					"scene {scene}: cannot draw on a {width}×{height} surface: {error}"
+				));
 				ptr::null_mut()
 			}
 		}
@@ -246,6 +280,10 @@ mod enabled {
 	}
 
 	pub fn resize(view: &mut ViewHandle, width: u32, height: u32) {
+		log::debug!(
+			target: leptoskit_log::target::GPU,
+			"resized a surface to {width}×{height}"
+		);
 		view.0.resize(width, height);
 	}
 
@@ -261,7 +299,7 @@ mod enabled {
 		match view.0.frame(time) {
 			Ok(more) => i32::from(more),
 			Err(error) => {
-				fail(error.to_string());
+				fail(format!("cannot draw a frame: {error}"));
 				-1
 			}
 		}
@@ -292,6 +330,11 @@ mod enabled {
 	}
 
 	pub fn set_asset_directory(_: &str) -> i32 {
+		fail(DISABLED);
+		-1
+	}
+
+	pub fn pointer(_: u32, _: u32, _: f32, _: f32, _: f32, _: f32) -> i32 {
 		fail(DISABLED);
 		-1
 	}
@@ -344,6 +387,22 @@ mod enabled {
 }
 
 pub use enabled::ViewHandle;
+
+/// Offers primary-pointer input to a scene. Phases are 0 down, 1 move,
+/// 2 up, 3 cancel. Positions are fractions across and down the view; deltas
+/// are layout units (points or dp). Returns 1 if queued, 0 for an absent
+/// scene, or -1 for invalid input or unavailable 3D support.
+#[unsafe(no_mangle)]
+pub extern "C" fn lk_scene3d_pointer(
+	scene: u32,
+	phase: u32,
+	x: f32,
+	y: f32,
+	dx: f32,
+	dy: f32,
+) -> i32 {
+	enabled::pointer(scene, phase, x, y, dx, dy)
+}
 
 /// 1 when this build can show 3D scenes, 0 when it was built without them.
 #[unsafe(no_mangle)]
@@ -535,6 +594,7 @@ pub unsafe extern "C" fn lk_scene3d_view_needs_frame(view: *const ViewHandle) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lk_scene3d_view_detach(view: *mut ViewHandle) {
 	if !view.is_null() {
+		log::info!(target: leptoskit_log::target::GPU, "released a surface");
 		// SAFETY: The caller transfers the view back exactly once.
 		drop(unsafe { Box::from_raw(view) });
 	}

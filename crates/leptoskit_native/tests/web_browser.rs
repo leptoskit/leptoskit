@@ -541,6 +541,57 @@ async fn handled_events_stop_bubbling_and_disabled_buttons_do_not_press() {
 }
 
 #[wasm_bindgen_test]
+async fn the_app_s_appearance_choice_restyles_dark_rules_without_a_rerender() {
+	use leptoskit_native::appearance;
+	use leptoskit_native::appearance::Appearance;
+
+	let parent = container();
+	let mount = mount_to(parent.clone(), || {
+		render(
+			Element::view()
+				.class("w-4 h-4 bg-white dark:bg-black")
+				.with_props(|props| props.accessibility_label = Some("Themed".into())),
+		)
+	});
+	tick().await;
+	let themed = parent
+		.query_selector("[aria-label=Themed]")
+		.expect("selector")
+		.expect("themed view");
+	let background = || {
+		web_sys::window()
+			.expect("window")
+			.get_computed_style(&themed)
+			.expect("computed style")
+			.expect("style")
+			.get_property_value("background-color")
+			.expect("background")
+	};
+	let root = document().document_element().expect("root element");
+	let device = background();
+
+	appearance::set(Appearance::Dark);
+	assert_eq!(background(), "rgb(0, 0, 0)");
+	assert_eq!(
+		root.get_attribute(appearance::ATTRIBUTE).as_deref(),
+		Some("dark")
+	);
+	assert_eq!(appearance::get(), Appearance::Dark);
+
+	appearance::set(Appearance::Light);
+	assert_eq!(background(), "rgb(255, 255, 255)");
+	assert_eq!(
+		root.get_attribute(appearance::ATTRIBUTE).as_deref(),
+		Some("light")
+	);
+
+	appearance::set(Appearance::System);
+	assert_eq!(background(), device);
+	assert_eq!(root.get_attribute(appearance::ATTRIBUTE), None);
+	drop(mount);
+}
+
+#[wasm_bindgen_test]
 async fn responsive_styles_update_and_independent_trees_remain_isolated() {
 	let frame = document()
 		.create_element("iframe")

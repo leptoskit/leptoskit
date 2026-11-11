@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::Shared;
@@ -26,6 +27,7 @@ use crate::cache::CacheEvent;
 use crate::cache::CacheInner;
 use crate::cancel::CancelToken;
 use crate::hydration::DehydratedQuery;
+use crate::hydration::Rendered;
 use crate::key::ScopeId;
 use crate::key::Tag;
 use crate::key::hash_key;
@@ -54,6 +56,7 @@ use crate::state::QueryState;
 use crate::state::QueryStatus;
 use crate::state::status_of;
 use crate::time::BoxFuture;
+use crate::time::millis;
 use crate::time::now_ms;
 use crate::time::try_sleep;
 
@@ -206,10 +209,14 @@ pub(crate) struct Query<K, T, E> {
 	pub(crate) options: ResolvedQueryOptions<E>,
 	pub(crate) signals: QuerySignals<T, E>,
 	pub(crate) codec: Option<DataCodec<T>>,
+	error_codec: Option<DataCodec<E>>,
 	data_eq: Option<DataEqFn<T>>,
 	observers: Mutex<Vec<ObserverEntry<E>>>,
 	in_flight: Mutex<Option<InFlight>>,
 	fetch_generation: AtomicU64,
+	/// When this client's last fetch settled, with data or an error, in
+	/// epoch milliseconds. Data written another way does not move it.
+	settled_at: Mutex<Option<u64>>,
 	/// Cancels the cleanup waiting to drop this query, so at most one is ever
 	/// pending.
 	pending_gc: Mutex<Option<CancelToken>>,
@@ -246,10 +253,12 @@ where
 				options,
 				signals: QuerySignals::new(),
 				codec: scope.codec.clone(),
+				error_codec: scope.error_codec.clone(),
 				data_eq: scope.data_eq.clone(),
 				observers: Mutex::new(Vec::new()),
 				in_flight: Mutex::new(None),
 				fetch_generation: AtomicU64::new(0),
+				settled_at: Mutex::new(None),
 				pending_gc: Mutex::new(None),
 				cache: Arc::downgrade(cache),
 				removed: ArcTrigger::new(),
@@ -300,6 +309,18 @@ where
 			self.signals.meta.get(),
 			stale_time,
 		)
+	}
+
+	/// Whether a fetch of this query settled less than `window` ago and
+	/// nothing has invalidated it since.
+	pub(crate) fn settled_within(&self, window: Duration) -> bool {
+		if self.signals.meta.with_untracked(|meta| meta.is_invalidated) {
+			return false;
+		}
+
+		self.settled_at
+			.lock()
+			.is_some_and(|settled_at| now_ms().saturating_sub(settled_at) < millis(window))
 	}
 
 	fn stale(has_data: bool, meta: QueryMeta, stale_time: StaleTime) -> bool {
@@ -561,8 +582,14 @@ where
 
 		match settled {
 			_ if superseded => {}
-			Settled::Success(data) => self.on_success(data),
-			Settled::Error(error) => self.on_error(error, direction),
+			Settled::Success(data) => {
+				*self.settled_at.lock() = Some(now_ms());
+				self.on_success(data);
+			}
+			Settled::Error(error) => {
+				*self.settled_at.lock() = Some(now_ms());
+				self.on_error(error, direction);
+			}
 			Settled::Cancelled => {
 				Self::set_signal(&self.signals.error, revert.error);
 				Self::set_signal(&self.signals.failure_reason, revert.failure_reason);
@@ -651,6 +678,69 @@ where
 		self.emit(CacheEvent::Updated);
 	}
 
+	/// What the server's render streams: the data, or the error when there is
+	/// no data and the scope streams errors.
+	pub(crate) fn rendered(&self) -> Option<Rendered> {
+		if let Some(dehydrated) = AnyQuery::dehydrate(self) {
+			return Some(Rendered::Data(dehydrated));
+		}
+
+		let codec = self.error_codec.as_ref()?;
+		let meta = self.signals.meta.get_untracked();
+		let error = self
+			.signals
+			.error
+			.with_untracked(|error| error.as_ref().map(|error| codec.encode(error)))?
+			.ok()?;
+		Some(Rendered::Error {
+			error,
+			error_updated_at: meta.error_updated_at.unwrap_or_else(now_ms),
+			failure_count: meta.failure_count,
+		})
+	}
+
+	/// Seeds the query with what the server's render settled with.
+	pub(crate) fn hydrate_rendered(&self, rendered: &Rendered) {
+		match rendered {
+			Rendered::Data(dehydrated) => AnyQuery::hydrate(self, dehydrated),
+			Rendered::Error {
+				error,
+				error_updated_at,
+				failure_count,
+			} => self.hydrate_error(error, *error_updated_at, *failure_count),
+		}
+	}
+
+	/// Writes a server render's error, as if a fetch had just failed, unless
+	/// the query already has data or a newer error.
+	fn hydrate_error(&self, error: &serde_json::Value, updated_at: u64, failure_count: u32) {
+		let Some(codec) = self.error_codec.as_ref() else {
+			return;
+		};
+		let meta = self.signals.meta.get_untracked();
+
+		if self.has_data_untracked()
+			|| meta
+				.error_updated_at
+				.is_some_and(|current| current >= updated_at)
+		{
+			return;
+		}
+
+		let Ok(error) = codec.decode(error.clone()) else {
+			return;
+		};
+
+		Self::set_signal(&self.signals.failure_reason, Some(error.clone()));
+		self.signals.error.set(Some(error));
+		self.update_meta(|meta| {
+			meta.error_updated_at = Some(updated_at);
+			meta.error_update_count += 1;
+			meta.failure_count = failure_count;
+		});
+		self.emit(CacheEvent::Updated);
+	}
+
 	/// Marks the data stale regardless of age.
 	pub(crate) fn invalidate(&self) {
 		self.update_meta(|meta| meta.is_invalidated = true);
@@ -663,6 +753,7 @@ where
 		// restore the state it saved nor be joined by the next fetch.
 		self.fetch_generation.fetch_add(1, Ordering::SeqCst);
 		*self.in_flight.lock() = None;
+		*self.settled_at.lock() = None;
 		Self::set_signal(&self.signals.data, None);
 		Self::set_signal(&self.signals.error, None);
 		Self::set_signal(&self.signals.failure_reason, None);

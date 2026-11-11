@@ -128,7 +128,7 @@ error[E0277]: `<Greeting>` is missing the required prop `name`
 
 ## Reactivity
 
-Screens are rebuilt whenever their state changes. On native, the host calls the screen function again and commits the new tree. On the web, wrap `leptoskit::web::render(view! { … })` in a closure that reads your signals. A closure child, such as `{move || count.get()}`, is called each time the view is built, so a signal read inside it is tracked by the closure that rebuilds the screen. Closures keep the `Fn() + Send + Sync + 'static` bound of a reactive region, so they will keep working when regions update on their own.
+Screens are rebuilt whenever their state changes. On native, the host calls the screen function again and commits the new tree. On the web, pass the function that builds the screen to `leptoskit::web::screen`, or wrap `leptoskit::web::render(view! { … })` in a closure that reads your signals. A signal a screen creates for itself is created again by every rebuild; use `remember(|| initial)` for one that keeps its value, as [shared components](../guide/07-shared-components.md#keep-a-screens-own-state-across-rebuilds) explains. A closure child, such as `{move || count.get()}`, is called each time the view is built, so a signal read inside it is tracked by the closure that rebuilds the screen. Closures keep the `Fn() + Send + Sync + 'static` bound of a reactive region, so they will keep working when regions update on their own.
 
 ## leptos's `view!` or leptoskit's
 

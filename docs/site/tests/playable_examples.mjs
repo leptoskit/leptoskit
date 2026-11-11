@@ -165,12 +165,26 @@ const PLAYS = {
 			);
 			await player.press(this.target);
 			await player.until(shown("Map"), "Field following its link to the map");
+			assert(
+				await page.evaluate(
+					`document.querySelector(${JSON.stringify(back)}).disabled`,
+				),
+				"switching tabs replaces the route without adding history",
+			);
+			await player.press(find.css('a[aria-label="Notes"]'));
+			await player.until(shown("Notes"), "Field switching to the notes tab");
+			await player.press(find.css('a[aria-label="Open note 1"]'));
+			await player.until(
+				`location.pathname === "/docs/play/field/notes/1" &&
+					document.body.textContent.includes("Note 1")`,
+				"Field opening the first note",
+			);
 			await page.until(
 				`() => !document.querySelector(${JSON.stringify(back)}).disabled`,
 				"the toolbar offering to go back",
 			);
 			await pressToolbar(page, back);
-			await player.until(shown("Today"), "Field going back to today");
+			await player.until(shown("Notes"), "Field going back to the notes tab");
 
 			await page.until(
 				`() => document.querySelector(${JSON.stringify(back)}).disabled`,

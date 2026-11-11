@@ -1,0 +1,6 @@
+---
+source: crates/leptoskit_analytics/tests/wire.rs
+expression: report
+---
+posthog-js JSON: 21648 bytes, 1054 gzipped (52 per event)
+leptoskit batch: 1623 bytes, 464 gzipped (23 per event)

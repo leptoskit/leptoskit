@@ -94,6 +94,7 @@ Return `Element` when the caller will pass the component into `.child(…)`. `im
 - Animate with Tailwind (`transition duration-300`, `translate-y-4`, `animate-spin`, `starting:opacity-0`) or with `.transition(…)`, `.entering(…)`, `.exiting(…)`, and `.layout_transition(…)` from `leptoskit::native::animation`. Change the value once; the platform animates it, so never step an animation from a timer in the guest.
 - Handlers: `.on_press(|| …)`, `.on_change(|text: &str| …)`, `.on_toggle(|checked| …)`, `.on_value_change(|value| …)`.
 - State that changes in place: hold it in a `RwSignal` and pass a closure, `Text(move || count.get().to_string())` or `.background(move || phase.get().colour())`. Writing the signal updates that node, including from an event handler. A list is `For(move || items.get(), |item| item.id, |item| row(item))` and a condition is `Show(move || open.get(), || panel())`; either one rebuilds its own children. `leptoskit::guest::spawn` runs a task, and the runtime polls it.
+- State a screen keeps for itself, such as a chosen filter or a typed field: `let filter = remember(|| Filter::All);`, never `RwSignal::new` in the screen body, which a rebuild runs again and resets. Rows that move use `remember_keyed(&row.id, || …)`. In the browser, render with `leptoskit::web::screen(move || app())` so the values survive rebuilds there too. A query read on a screen fetches once even though the rebuild its data causes runs `use_query` again.
 - State with many fields: `#[derive(Store)]` on the struct plus `ArcStore` from `leptoskit::store` (the derive needs `reactive_stores` in Cargo.toml). Each field is its own signal — `store.title().get()` subscribes to that field only — and with `#[derive(Patch)]`, `store.patch(next)` notifies only the fields that changed. Handles that must never notify stay in a `StoredValue`.
 - Accessibility: `.accessibility_label("…")`, `.role(Role::…)`. Give anything a test needs to find a stable `.test_id("…")`.
 
@@ -123,9 +124,12 @@ assert!(tester.query_by_text("Count: 0")?.is_none());
 When something looks wrong in an app running under `leptoskit dev`, read the app instead of guessing from the code. The `leptoskit mcp` server's devtools tools talk to the hub `leptoskit dev` starts:
 
 1. `devtools_sessions` lists the running apps and their platforms.
-2. `inspect_tree` (with `depth`, and `root` to look inside one node) shows each node's kind, text, classes, frame, and the source line that built it. Use the frame and the source line to find the code to change.
+2. `inspect_tree` (with `depth`, and `root` to look inside one node) shows each node's kind, text, classes, frame, and the source line that built it. Use the frame and the source line to find the code to change. `leptoskit debug` prints the same tree.
 3. `inspect_node` and `explain_styles` give one node's details and the Tailwind classes styling it.
 4. `query_cache` shows what data the screen has; `navigate` opens a route; `set_state` changes named state the app exposes to the devtools (with `leptoskit::devtools::expose`, which reports from web and native apps alike); `highlight` with `all_sessions` marks the same node on every platform.
+5. `runtime_errors` lists failed plugin calls and server attempts. `performance` lists render commits. `read_logs` reads Android or iOS simulator logs, and `screenshot` returns a capture where the platform allows one.
+
+`leptoskit device sanity` installs and opens a native app, then injects tap, long press, pan, and pinch where that target can. `leptoskit device install` and `leptoskit device open` do the two steps on their own.
 
 Pass `session` (an id, `web`, `ios`, … or the app name) when more than one app is running. "No hub is running" means start `leptoskit dev` first.
 

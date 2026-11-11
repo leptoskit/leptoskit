@@ -25,6 +25,7 @@ struct WidgetProps: Decodable {
     let opacity: CGFloat?
     let fontSize: CGFloat?
     let fontWeight: String?
+    let lineHeight: WidgetLineHeight?
     let textAlign: String?
     let drawing: VectorDrawing?
     let aria: WidgetAria?
@@ -48,6 +49,20 @@ extension WidgetProps {
     var textContent: TextContent? {
         autocomplete?.lowercased().split(whereSeparator: \.isWhitespace)
             .lazy.compactMap { TextContent(rawValue: String($0)) }.first
+    }
+}
+
+/// How tall each line of text is, as `LineHeight` sends it: a multiple of the font size, or points.
+struct WidgetLineHeight: Decodable, Equatable {
+    let relative: CGFloat?
+    let fixed: CGFloat?
+
+    /// The height in points of every line of text set at `fontSize`, or nil
+    /// to keep the font's own line height.
+    func points(fontSize: CGFloat) -> CGFloat? {
+        guard let points = relative.map({ $0 * fontSize }) ?? fixed, points.isFinite, points > 0 else { return nil }
+
+        return points
     }
 }
 

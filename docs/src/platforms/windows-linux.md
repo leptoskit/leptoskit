@@ -35,7 +35,7 @@ rustup target add wasm32-unknown-unknown
 leptoskit build --platform linux
 ```
 
-The build prints the path of the executable. The app runs in the GTK event loop and passes control events to your screens.
+The build prints the path of the executable. The app runs in the GTK event loop and passes control events to your screens. The GTK backend also feeds pointer motion into the shared [gesture arena](../guide/38-gestures.md), the same recognizers the Android widget backend uses. The generated Linux app's guest does not receive that stream yet, so a gesture in a `leptoskit new` Linux app does not run until the host forwards samples.
 
 </Tab>
 </Tabs>
@@ -46,8 +46,8 @@ The `windows/` and `linux/` folders are yours: each holds a small Rust program t
 
 ## How they differ from macOS
 
-- **Windows:** `Switch` is drawn as a checkbox. Rounded corners are cut with a window region, so their edges aren't smoothed, and borders stay rectangular inside them. `ActivityIndicator` is drawn by leptoskit rather than a system control. Accessibility, through UI Automation, has no expanded or collapsed state. A `Vector` with no background takes clicks only where it has ink; clicks on its empty parts reach whatever is underneath.
-- **Linux:** live regions update their text but aren't announced, because announcements need GTK 4.14. Italic text and per-edge borders (`border-t`, `border-l-2`, …) paint through GTK the same way they do on the web.
+- **Windows:** `Switch` is drawn as a checkbox. Rounded corners are cut with a window region, so their edges aren't smoothed, and borders stay rectangular inside them. `ActivityIndicator` is drawn by leptoskit rather than a system control. Accessibility, through UI Automation, has no expanded or collapsed state. A `Vector` with no background takes clicks only where it has ink; clicks on its empty parts reach whatever is underneath. Text draws at the font's own line height: `leading-*` utilities are ignored, and layout reserves that natural height. Segoe UI draws the nearest weight it has to each `font-*` weight.
+- **Linux:** live regions update their text but aren't announced, because announcements need GTK 4.14. Italic text, all nine font weights, `leading-*` line heights on labels, and per-edge borders (`border-t`, `border-l-2`, …) paint through GTK the same way they do on the web.
 - **Sign-in:** the generated Linux app [signs in](../guide/23-sign-in.md#native-apps) with providers in the default browser, which comes back to the app on a loopback address, and keeps the session in the desktop's Secret Service keyring, such as GNOME Keyring or KWallet. The generated Windows runner can't host plugins yet, so sign-in there answers `config`; a host that registers plugins itself can register `leptoskit_plugin_web_auth::desktop::WebAuth` on a worker thread. There are no native passkeys on Windows or Linux, so passkey calls answer `unsupported` there; people sign in with an emailed code or a provider instead.
 - On both, transforms and [animations](../guide/32-animations.md) are ignored: values jump to their new state, and a removed widget disappears at once.
 - On both, `Image` loads [`asset://` pictures](../guide/36-assets.md) from the `assets` folder beside the executable and local files, not URLs (Linux needs the system's WebP loader for WebP), and the generated apps don't check for [code push](../guide/05-code-push.md) updates; ship a new build to update them.

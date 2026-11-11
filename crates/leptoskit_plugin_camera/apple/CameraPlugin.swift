@@ -200,7 +200,7 @@ public final class CameraPlugin: NativePlugin {
 }
 
 private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private static var live = [ObjectIdentifier: PhotoDelegate]()
+    private static let live = PhotoDelegateStore()
     private let finish: (Result<Data, Error>) -> Void
 
     init(finish: @escaping (Result<Data, Error>) -> Void) {
@@ -208,7 +208,7 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     }
 
     static func retain(_ delegate: PhotoDelegate) {
-        live[ObjectIdentifier(delegate)] = delegate
+        live.insert(delegate)
     }
 
     func photoOutput(
@@ -216,7 +216,7 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
-        defer { Self.live.removeValue(forKey: ObjectIdentifier(self)) }
+        defer { Self.live.remove(self) }
         if let error {
             finish(.failure(error))
             return
@@ -226,5 +226,22 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
             return
         }
         finish(.success(data))
+    }
+}
+
+private final class PhotoDelegateStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delegates: [ObjectIdentifier: PhotoDelegate] = [:]
+
+    func insert(_ delegate: PhotoDelegate) {
+        lock.lock()
+        defer { lock.unlock() }
+        delegates[ObjectIdentifier(delegate)] = delegate
+    }
+
+    func remove(_ delegate: PhotoDelegate) {
+        lock.lock()
+        defer { lock.unlock() }
+        delegates.removeValue(forKey: ObjectIdentifier(delegate))
     }
 }

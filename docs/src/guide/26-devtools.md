@@ -15,6 +15,8 @@ leptoskit DevTools fills that gap. Every app that `leptoskit dev` runs reports t
 
 Open the hub's address in any browser. It needs no extension and no account, which also makes it the way to inspect an app running in the iOS Simulator or on an Android emulator.
 
+`leptoskit debug` prints that same tree in the terminal, without opening a browser. `leptoskit debug errors` lists failed plugin calls and server attempts, and `leptoskit debug performance` lists render commits. `leptoskit debug open` prints the hub address when you want the page. An agent connected to `leptoskit mcp` reads the same things with `inspect_tree`, `runtime_errors`, and `performance`.
+
 | Flag                     | What it does                            |
 | ------------------------ | --------------------------------------- |
 | `--devtools-port <port>` | Runs the hub on another port than 7340. |

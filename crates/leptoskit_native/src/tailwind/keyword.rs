@@ -102,10 +102,26 @@ pub(crate) fn grid_line(value: GridLine) -> String {
 
 pub(crate) fn font_weight(value: FontWeight) -> &'static str {
 	match value {
+		FontWeight::Thin => "100",
+		FontWeight::ExtraLight => "200",
+		FontWeight::Light => "300",
 		FontWeight::Regular => "400",
 		FontWeight::Medium => "500",
 		FontWeight::Semibold => "600",
 		FontWeight::Bold => "700",
+		FontWeight::ExtraBold => "800",
+		FontWeight::Black => "900",
+	}
+}
+
+/// A `line-height` value: unitless for a multiple of the font size, as
+/// inherited multiples rescale with each descendant's font. Only the web
+/// renderer's inline styles write a typed line height.
+#[cfg(feature = "web")]
+pub(crate) fn line_height(value: crate::LineHeight) -> String {
+	match value {
+		crate::LineHeight::Relative(multiple) => multiple.to_string(),
+		crate::LineHeight::Fixed(points) => format!("{points}px"),
 	}
 }
 

@@ -336,3 +336,48 @@ fn factory_validates_strict_host_policy_without_a_runtime_or_process() {
 	));
 	assert!(!fixture.directory.path().join("pid").exists());
 }
+
+/// `leptoskit build` refuses an app whose `[native.plugin-options.shell]`
+/// leaves out an option this crate's metadata lists in `required-options`.
+/// The factory must need exactly those: one it needs and the build doesn't
+/// check stops the app at launch, as an empty
+/// `[native.plugin-options.websocket]` once did on Android.
+#[test]
+fn the_factory_needs_exactly_the_options_the_build_requires() {
+	let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+	let required: Vec<&str> = manifest["package"]["metadata"]["leptoskit"]["runtime"]
+		["required-options"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|option| option.as_str().unwrap())
+		.collect();
+	// The least an app can set.
+	let least = json!({
+		"commands": { "fixture": {
+			"executable": std::env::current_exe().unwrap(),
+			"directory": std::env::temp_dir(),
+			"arguments": []
+		} }
+	});
+	let set: Vec<&str> = least
+		.as_object()
+		.unwrap()
+		.keys()
+		.map(String::as_str)
+		.collect();
+	assert_eq!(set, required, "the least options are the required ones");
+	assert!(from_config(&least.to_string()).is_ok());
+
+	for option in required {
+		let mut without = least.clone();
+		without.as_object_mut().unwrap().remove(option);
+		assert!(
+			from_config(&without.to_string()).is_err(),
+			"the factory started without `{option}`"
+		);
+	}
+
+	// An empty list of commands is as good as none.
+	assert!(from_config(&json!({"commands": {}}).to_string()).is_err());
+}

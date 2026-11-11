@@ -140,11 +140,17 @@ pub mod secrets {
 	pub use monosecret::client::*;
 }
 
-/// Application observability and agent-readable evidence.
-#[cfg(feature = "analytics")]
-pub mod analytics {
-	pub use leptoskit_analytics::*;
+/// Route metrics, request correlation, and agent-readable evidence, kept
+/// inside the app's own process.
+#[cfg(feature = "apm")]
+pub mod apm {
+	pub use leptoskit_apm::*;
 }
+
+/// The old name of [`apm`], kept for one release.
+#[cfg(feature = "apm")]
+#[doc(hidden)]
+pub use apm as analytics;
 
 pub mod plugin {
 	//! The plugin system.
@@ -161,6 +167,14 @@ pub mod native {
 	pub use leptoskit_native::*;
 }
 
+pub mod appearance {
+	//! Light, dark, or the device's appearance: what `dark:` utilities follow.
+	//!
+	//! Call [`set`] when the person picks "Light", "Dark", or "Match
+	//! device", and read the choice with [`get`].
+	pub use leptoskit_native::appearance::*;
+}
+
 pub mod splash {
 	//! Hold and dismiss the launch overlay after the OS splash ends.
 	pub use leptoskit_native::splash::*;
@@ -169,6 +183,13 @@ pub mod splash {
 pub mod components {
 	//! Built-in components shared by native and web screens.
 	pub use leptoskit_native::components::*;
+}
+
+pub mod remember {
+	//! State that survives a rebuild of the screen: [`remember`] and
+	//! [`remember_keyed`] hand each build the signals the last one left, and
+	//! release the ones a whole build no longer asks for.
+	pub use leptoskit_native::remember::*;
 }
 
 pub mod store {
@@ -433,6 +454,13 @@ pub mod scene3d {
 	pub use leptoskit_3d::*;
 }
 
+#[cfg(feature = "game")]
+pub mod game {
+	//! A game host: Rust gameplay, leptoskit menus, and a wgpu picture of the
+	//! world.
+	pub use leptoskit_game::*;
+}
+
 #[cfg(feature = "rive")]
 pub mod rive {
 	//! Bounded Rive assets and owned native/browser playback.
@@ -498,6 +526,9 @@ pub mod prelude {
 	pub use leptoskit_native::Color;
 	pub use leptoskit_native::Element;
 	pub use leptoskit_native::EventOutcome;
+	pub use leptoskit_native::Gesture;
+	pub use leptoskit_native::GestureEvent;
+	pub use leptoskit_native::GestureState;
 	pub use leptoskit_native::NativeEvent;
 	pub use leptoskit_native::NativeEventSlot;
 	pub use leptoskit_native::NativeKind;
@@ -518,6 +549,8 @@ pub mod prelude {
 	pub use leptoskit_native::reactive::Update;
 	pub use leptoskit_native::reactive::With;
 	pub use leptoskit_native::reactive::WithUntracked;
+	pub use leptoskit_native::remember::remember;
+	pub use leptoskit_native::remember::remember_keyed;
 	pub use leptoskit_native::tailwind::ClassError;
 	pub use leptoskit_native::tailwind::StyleContext;
 	pub use leptoskit_native::tailwind::Tailwind;

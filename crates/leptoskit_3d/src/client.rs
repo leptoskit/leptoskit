@@ -45,6 +45,7 @@ mod transport {
 	const APPLY: leptoskit_bridge::MethodId = leptoskit_bridge::MethodId(1);
 	const NEXT_EVENTS: leptoskit_bridge::MethodId = leptoskit_bridge::MethodId(2);
 	const CLOSE: leptoskit_bridge::MethodId = leptoskit_bridge::MethodId(3);
+	const NEXT_POINTER: leptoskit_bridge::MethodId = leptoskit_bridge::MethodId(4);
 
 	fn error(error: leptoskit_bridge::Error) -> ClientError {
 		match error {
@@ -86,6 +87,20 @@ mod transport {
 			.await
 			.map_err(error)?;
 		decode_events(&reply).map_err(|_| ClientError::Failed)
+	}
+
+	pub async fn next_pointer(scene: SceneId) -> Result<Option<crate::PointerInput>, ClientError> {
+		let reply = client()?
+			.call(NEXT_POINTER, &payload(scene, &[]))
+			.map_err(error)?
+			.await
+			.map_err(error)?;
+		if reply.is_empty() {
+			return Ok(None);
+		}
+		crate::PointerInput::decode(&reply)
+			.map(Some)
+			.map_err(|_| ClientError::Failed)
 	}
 
 	pub fn close(
@@ -344,6 +359,13 @@ impl Scene {
 	#[cfg(all(any(feature = "guest", feature = "web"), target_arch = "wasm32"))]
 	pub async fn next_events(&self) -> Result<Vec<Event>, ClientError> {
 		transport::next_events(self.id).await
+	}
+
+	/// Waits for the native view's next primary pointer input. This stream
+	/// is separate from asset events; closing the scene ends it with `None`.
+	#[cfg(all(feature = "guest", target_arch = "wasm32"))]
+	pub async fn next_pointer(&self) -> Result<Option<crate::PointerInput>, ClientError> {
+		transport::next_pointer(self.id).await
 	}
 
 	/// Asks the host to forget the scene.

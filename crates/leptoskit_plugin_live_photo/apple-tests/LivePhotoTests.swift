@@ -1,7 +1,7 @@
 import CLeptosKitBridge
 import Foundation
 import LeptosKitBridge
-import LeptosKitLivePhoto
+@testable import LeptosKitLivePhoto
 import Testing
 
 private func buffer(_ bytes: Data = Data()) throws -> NativeBuffer {
@@ -34,7 +34,7 @@ struct LivePhotoTests {
         let start = try LivePhotoWire.startPlayback(buffer(words(3, 1)))
         #expect(start.id == 3)
         #expect(start.style == 1)
-        #expect(LivePhotoWire.session(buffer(words(9))) == 9)
+        #expect(try LivePhotoWire.session(buffer(words(9))) == 9)
         let status = LivePhotoWire.status(active: true, playing: false)
         #expect(status.count == 12)
     }

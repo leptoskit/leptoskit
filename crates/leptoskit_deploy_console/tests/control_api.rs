@@ -11,16 +11,16 @@ use axum::body::to_bytes;
 use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
-use leptoskit::analytics::Analytics;
-use leptoskit::analytics::ExportHealth;
-use leptoskit::analytics::HostSample;
-use leptoskit::analytics::Limits;
-use leptoskit::analytics::Outcome;
-use leptoskit::analytics::Resource;
-use leptoskit::analytics::SeriesKey;
-use leptoskit::analytics::Signal;
-use leptoskit::analytics::Snapshot;
-use leptoskit::analytics::Source;
+use leptoskit::apm::Analytics;
+use leptoskit::apm::ExportHealth;
+use leptoskit::apm::HostSample;
+use leptoskit::apm::Limits;
+use leptoskit::apm::Outcome;
+use leptoskit::apm::Resource;
+use leptoskit::apm::SeriesKey;
+use leptoskit::apm::Signal;
+use leptoskit::apm::Snapshot;
+use leptoskit::apm::Source;
 use leptoskit_deploy_console::control::*;
 use serde_json::Value;
 use serde_json::json;
@@ -718,7 +718,8 @@ async fn analytics_ingest_and_fleet_queries_enforce_scopes_and_ranges() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(fleet["instances"], 1);
 
-	let to = clock();
+	// The query's upper bound is exclusive, including at a minute boundary.
+	let to = snapshot.observed_unix_seconds + 1;
 	let (status, fleet) = call(
 		&app,
 		"GET",

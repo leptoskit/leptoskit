@@ -203,6 +203,12 @@ pub enum Command {
 		#[command(subcommand)]
 		command: DevtoolsCommand,
 	},
+	/// Prints how a running app's tree, errors, and commits look, from the
+	/// devtools hub. `open` prints the hub address for the inspector page.
+	Debug {
+		#[command(subcommand)]
+		command: Option<crate::debug::DebugCommand>,
+	},
 	/// Serves the device control API over the Model Context Protocol, on
 	/// standard input and output or over HTTP.
 	Mcp {
@@ -317,6 +323,11 @@ pub enum Command {
 		#[arg(long)]
 		studio: bool,
 	},
+	/// Builds or runs a game: Rust gameplay, leptoskit menus, a wgpu picture.
+	Game {
+		#[command(subcommand)]
+		command: crate::game::GameCommand,
+	},
 	/// Builds the project for a platform.
 	Build {
 		/// Build in release mode.
@@ -418,6 +429,9 @@ pub enum Command {
 		#[arg(long)]
 		all: bool,
 	},
+	/// Runs the caps and boot checks, and prints the build, test, lint, and
+	/// workspace commands.
+	Budgets,
 	/// Validates a workspace and releases independently configured apps.
 	Workspace {
 		#[command(subcommand)]
@@ -800,6 +814,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 		Command::Devtools {
 			command: DevtoolsCommand::Fetch { force },
 		} => crate::devtools::fetch::run(force),
+		Command::Debug { command } => crate::debug::run(command),
 		Command::Mcp { command } => crate::mcp::run(command),
 		Command::Rpc { command } => rpc::run(command),
 		Command::Publish(args) => crate::publish::run(&args),
@@ -854,6 +869,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 				browser,
 			})
 		}
+		Command::Game { command } => crate::game::run(command),
 		Command::Build {
 			release,
 			platform,
@@ -870,6 +886,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 		Command::Auth { command } => crate::auth_command::run(command),
 		Command::Codepush { command } => codepush::run(command),
 		Command::Doctor { all } => doctor::run(all),
+		Command::Budgets => crate::budgets::run(),
 		Command::Workspace { command } => crate::workspace::run(command),
 		Command::Format(args) => {
 			match leptoskit_fmt::cli::execute(&args) {

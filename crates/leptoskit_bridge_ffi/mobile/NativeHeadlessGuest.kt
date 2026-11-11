@@ -3,7 +3,6 @@ package dev.leptoskit.mobile
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import dev.leptoskit.bridge.NativeBridge
 import dev.leptoskit.bridge.NativeDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -62,7 +61,7 @@ class NativeHeadlessGuest(
                 val configuration = context.assets.open("codepush.json").use { it.readBytes() }
                 !JSONObject(configuration.toString(Charsets.UTF_8)).optBoolean("enabled", false)
             } catch (error: java.io.IOException) {
-                Log.w("LeptosKit", "No bundled guest for a headless launch", error)
+                NativeLog.warn(NativeLog.BRIDGE, "no bundled guest for a headless launch", error)
                 false
             }
     }
@@ -148,7 +147,7 @@ class NativeHeadlessGuest(
                 joining.joinAll()
                 services.awaitClosed()
             } catch (error: Exception) {
-                Log.w("LeptosKit", "A headless guest closed abnormally", error)
+                NativeLog.warn(NativeLog.BRIDGE, "a headless guest closed abnormally", error)
                 result = NativeHeadlessOutcome.FAILED
             }
             onStopped?.invoke(result)
@@ -162,14 +161,14 @@ class NativeHeadlessGuest(
         val lent = guest
         guest = 0L
 
-        if (lent != 0L && NativeApp.guestStop(lent) != 0) Log.w("LeptosKit", "The headless guest stopped abnormally")
+        if (lent != 0L && NativeApp.guestStop(lent) != 0) NativeLog.warn(NativeLog.BRIDGE, "the headless guest stopped abnormally")
         val owned = app
         app = 0L
         val joining = jobs.close()
         try {
             dispatcher.close()
         } catch (error: Exception) {
-            Log.w("LeptosKit", "A plugin failed to close", error)
+            NativeLog.warn(NativeLog.BRIDGE, "a plugin failed to close", error)
         } finally {
             if (owned != 0L) services.close(NativeApp.beginClose(owned))
             services.finishAdmission()
@@ -184,7 +183,7 @@ class NativeHeadlessGuest(
         NativeApp.guestAck(guest)
 
         if (NativeApp.guestFailed(guest)) {
-            Log.w("LeptosKit", "A headless guest failed: ${NativeApp.guestError(guest).toString(Charsets.UTF_8)}")
+            NativeLog.error(NativeLog.BRIDGE, "a headless guest failed: ${NativeApp.guestError(guest).toString(Charsets.UTF_8)}")
             stop(NativeHeadlessOutcome.FAILED)
 
             return
@@ -215,7 +214,7 @@ class NativeHeadlessGuest(
                 jobs.launch(request, NativeRustWorker.adopt(handles[0]) ?: NativeRustAsync.adopt(handles[1]))
             }
         } catch (error: Exception) {
-            Log.w("LeptosKit", "A headless guest's plugin call failed to start", error)
+            NativeLog.warn(NativeLog.BRIDGE, "a headless guest's plugin call failed to start", error)
             stop(NativeHeadlessOutcome.FAILED)
         }
     }

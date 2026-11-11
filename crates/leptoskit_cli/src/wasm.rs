@@ -31,6 +31,27 @@ use crate::cache::hash_bytes;
 /// The wasm target every client build uses.
 pub const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
+/// The cargo profile `leptoskit dev` compiles with. Line tables keep panic
+/// locations and drop the type-level debug info an incremental link rewrites
+/// on every one-line edit. The Dioxus CLI made this cut for `dx serve` by
+/// passing a profile through `--config`, not `RUSTFLAGS`, so rust-analyzer's
+/// build cache stays valid.
+pub const DEV_PROFILE: &str = "leptoskit-dev";
+
+/// The `--config` entries that define [`DEV_PROFILE`].
+#[must_use]
+pub fn dev_profile_config() -> Vec<String> {
+	[
+		"inherits = \"dev\"",
+		"debug = \"line-tables-only\"",
+		"incremental = true",
+		"split-debuginfo = \"off\"",
+	]
+	.into_iter()
+	.map(|setting| format!("profile.{DEV_PROFILE}.{setting}"))
+	.collect()
+}
+
 /// The cargo profile `bundle.optimize = "smallest"` compiles release clients
 /// with: defined by leptoskit, through [`smallest_profile_config`], so no
 /// manifest needs editing.
@@ -142,6 +163,24 @@ impl CargoOptions {
 		let mut options = self.clone();
 		options.profile = Some(profile.to_owned());
 		options.config.extend(config);
+		options
+	}
+
+	/// These options compiling `leptoskit dev` with [`DEV_PROFILE`]. Release
+	/// builds keep the profile they already had.
+	#[must_use]
+	pub fn with_dev_profile(self) -> Self {
+		if self.release {
+			return self;
+		}
+
+		let mut options = self;
+		options.profile = Some(DEV_PROFILE.to_owned());
+		options.config.retain(|entry| {
+			!entry.starts_with("profile.leptoskit-smallest")
+				&& !entry.starts_with("profile.leptoskit-host-smallest")
+		});
+		options.config.extend(dev_profile_config());
 		options
 	}
 
@@ -405,6 +444,8 @@ pub fn cargo_build_command(root: &Path, package: &str, options: &CargoOptions) -
 			Some(profile) => command.arg("--profile").arg(profile),
 			None => command.arg("--release"),
 		};
+	} else if options.profile.as_deref() == Some(DEV_PROFILE) {
+		command.arg("--profile").arg(DEV_PROFILE);
 	}
 
 	for config in &options.config {
@@ -797,6 +838,8 @@ mod platform_tests {
 
 #[cfg(test)]
 mod tests {
+	use std::path::Path;
+
 	use super::*;
 
 	#[test]
@@ -818,6 +861,26 @@ mod tests {
 			!entries.iter().any(|entry| entry.contains("panic")),
 			"the host profile must keep unwinding: {entries:?}"
 		);
+	}
+
+	#[test]
+	fn the_dev_profile_keeps_line_tables_and_selects_itself() {
+		let entries = dev_profile_config();
+		assert!(
+			entries
+				.iter()
+				.all(|entry| { !entry.contains("lto") && !entry.contains("codegen-units") })
+		);
+		let options = CargoOptions::default().with_dev_profile();
+		let args: Vec<_> = cargo_build_command(Path::new("."), "app", &options)
+			.get_args()
+			.map(|arg| arg.to_string_lossy().into_owned())
+			.collect();
+		assert!(
+			args.windows(2)
+				.any(|pair| pair == ["--profile", DEV_PROFILE])
+		);
+		assert!(!args.iter().any(|arg| arg == "--release"));
 	}
 
 	#[test]

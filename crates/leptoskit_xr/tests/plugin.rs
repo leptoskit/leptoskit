@@ -221,3 +221,21 @@ fn an_installed_depth_estimator_reaches_every_plugin() {
 	assert!(depth(&from_context(&context, options).unwrap()));
 	let _ = std::fs::remove_dir_all(directory);
 }
+
+/// `leptoskit build` refuses an app whose `[native.plugin-options.xr]`
+/// leaves out an option this crate's metadata lists in `required-options`.
+/// It lists none, so the factory must start from an empty table: an option
+/// it needs and the build doesn't check stops the app at launch, as an empty
+/// `[native.plugin-options.websocket]` once did on Android.
+#[test]
+fn the_factory_needs_exactly_the_options_the_build_requires() {
+	let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+	let required = manifest["package"]["metadata"]["leptoskit"]["runtime"]["required-options"]
+		.as_array()
+		.unwrap();
+	assert!(required.is_empty(), "{required:?}");
+
+	let directory = std::env::temp_dir();
+	let context = leptoskit_bridge::AppContext::new(directory.clone(), directory);
+	assert!(from_context(&context, "{}").is_ok());
+}

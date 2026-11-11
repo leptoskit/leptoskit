@@ -24,6 +24,9 @@ leptoskit device start-app --device SM02E4060324957 --identifier dev.example.app
 leptoskit device tap --device emulator-5554 --app dev.example.app --locator-text "Sign in"
 leptoskit device expect-text --device emulator-5554 --app dev.example.app --locator-id title --text "Welcome"
 leptoskit device logs --device SM02E4060324957 --tail 100
+leptoskit device install --kind android --device emulator-5554 --path app.apk
+leptoskit device open --kind android --device emulator-5554 --app dev.example.app
+leptoskit device sanity --kind android --device emulator-5554 --app dev.example.app --path app.apk
 ```
 
 `--device` looks the id up in the inventory to pick the target kind; `--url https://example.com` targets a website; `--app` names the app a UI session attaches to (an installed identity, a path with a separator, or `desktop` for the whole screen on Windows and Linux).
@@ -70,7 +73,24 @@ The reply reports every step with its status, any text it read, and its artifact
 
 Driver steps work through one W3C session per run: `tap`, `enter_text`, `type_text`, `press_key`, `swipe`, `expect_visible`, `expect_absent`, `expect_text`, `alert_text`, `accept_alert`, `dismiss_alert`, `screenshot`, `source`, `native_command`, and `perform_actions` for raw W3C action sequences. `locator` picks controls by `accessibility_id`, `text`, `id`, `xpath` everywhere, or `css` on websites.
 
-Device steps need no driver at all: `boot` and `shutdown` manage simulators and emulators, `start_emulator` boots an AVD detached and waits for it, `start_app` and `stop_app` launch and terminate installed apps, `device_screenshot` captures the whole screen, `device_tap`, `device_swipe`, and `device_key` inject input on Android, and `logs` reads recent `logcat` or unified logs.
+Device steps need no driver at all: `boot` and `shutdown` manage simulators and emulators, `start_emulator` boots an AVD detached and waits for it, `start_app` and `stop_app` launch and terminate installed apps, `install_app` installs an `.apk`, `.ipa`, or `.app` (on the desktop it checks that the path exists), `open_app` launches that app, `device_screenshot` captures the whole screen, `device_tap`, `device_swipe`, and `device_key` inject input on Android, and `logs` reads recent `logcat` or unified logs.
+
+`tap_point`, `long_press`, `pan`, and `pinch` are driver steps. A tap does not move. A long press holds for 600 milliseconds when you leave the duration out, which is past a 500 millisecond long press. A pan drags from `start` to `end`. A pinch moves two pointers from `start_span` apart to `end_span` apart around one point. `inject_tap`, `inject_long_press`, `inject_pan`, and `inject_pinch` do the same without a UI session: `adb` on Android, including a two-finger pinch, and `xdotool` on Linux for the one-pointer gestures. `xdotool` cannot pinch.
+
+## A sanity pass
+
+`leptoskit device sanity` installs the package when you pass `--path`, opens `--app`, then runs the gestures that target can inject, and takes a screenshot when the injector can capture one.
+
+| Target                      | Default injector | Gestures                    |
+| --------------------------- | ---------------- | --------------------------- |
+| Android, emulator or device | `adb`            | tap, long press, pan, pinch |
+| iOS simulator, iOS device   | UI session       | tap, long press, pan, pinch |
+| Linux                       | `xdotool`        | tap, long press, pan        |
+| macOS, Windows              | UI session       | tap, long press, pan        |
+
+`--driver` uses the UI session instead, which is how Linux pinches. A mouse session on macOS or Windows has one pointer, so pinch is reported as omitted rather than run. The reply is one JSON document: the step outcome, plus `gestures`, `omitted`, `arena`, and `notes`.
+
+Android and Linux feed those pointers into the [gesture arena](38-gestures.md). A tap, a 600 millisecond hold, an 80 point drag, and a two-finger pinch are the same gestures `Gesture::tap`, `Gesture::long_press`, `Gesture::pan`, and `Gesture::pinch` recognize. On iOS, macOS, and Windows the widgets still receive presses and clicks; the controller injects the other gestures for the operating system.
 
 ### What each target needs
 
@@ -100,7 +120,7 @@ HarmonyOS devices cannot be driven yet; the experimental ArkUI host has no autom
 }
 ```
 
-Three tools cover the surface: `list_devices` reports the inventory, `control` runs a whole document (its JSON Schema ships with the tool, so clients validate journeys before sending them), and `screenshot` returns the capture as image content with its saved path, so vision-capable agents see the screen inline.
+Four tools cover device control: `list_devices` reports the inventory, `control` runs a whole document (its JSON Schema ships with the tool, so clients validate journeys before sending them), `screenshot` returns the capture as image content with its saved path, so vision-capable agents see the screen inline, and `read_logs` reads recent Android or iOS simulator logs.
 
 `leptoskit mcp http --port 7331` accepts the identical JSON-RPC messages as POST bodies on loopback — no MCP client required:
 
@@ -116,7 +136,7 @@ The same document reaches all three surfaces: flags build one for a single comma
 
 ## Agents: debugging a running app
 
-A screenshot shows what went wrong on screen, but not why: which node is too wide, which class it has, which line built it, or what the query cache holds. `leptoskit dev` starts a devtools hub, and apps running with leptoskit's devtools report their element tree, layout, queries, and named state to it. The same `leptoskit mcp` server reads them through eight more tools:
+A screenshot shows what went wrong on screen, but not why: which node is too wide, which class it has, which line built it, or what the query cache holds. `leptoskit dev` starts a devtools hub, and apps running with leptoskit's devtools report their element tree, layout, queries, and named state to it. The same `leptoskit mcp` server reads them through ten more tools. `leptoskit debug` prints the same tree, errors, and commits in the terminal, and `leptoskit debug open` prints the hub address so you can open the inspector.
 
 | Tool                | What it does                                                                                                 |
 | ------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -128,6 +148,8 @@ A screenshot shows what went wrong on screen, but not why: which node is too wid
 | `navigate`          | Opens a route in the app, such as `/settings`.                                                               |
 | `highlight`         | Highlights a node; with `all_sessions`, the same node on every platform the app is running on, by match key. |
 | `set_state`         | Sets a piece of named state the app exposes to the devtools. On native, a hot reload resets it.              |
+| `runtime_errors`    | Lists plugin calls that failed or were cancelled, and server attempts that recorded an error.                |
+| `performance`       | Lists render commits, and layout and draw time while profiling is on.                                        |
 
 For example, with the web page and the iOS simulator both running under `leptoskit dev`, an agent asks for the iOS tree and then highlights a row everywhere:
 

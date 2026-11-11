@@ -554,6 +554,10 @@ pub(crate) fn sdk_dependency(
 }
 
 /// Assembles every template before creating any destination files.
+#[expect(
+	clippy::too_many_lines,
+	reason = "the starter file list is one table, including the kit and platforms screens"
+)]
 fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(String, Vec<u8>)>> {
 	let name = &config.app.name;
 	let app = format!("{name}_app");
@@ -616,6 +620,11 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 			format!("{app}/src/routes.rs"),
 			generated_routes_module(&[
 				("index.rs", include_str!("new_project/templates/index.rs")),
+				("kit.rs", include_str!("new_project/templates/kit.rs")),
+				(
+					"platforms.rs",
+					include_str!("new_project/templates/platforms.rs"),
+				),
 				(
 					"_layout.rs",
 					include_str!("new_project/templates/layout.rs"),
@@ -629,6 +638,14 @@ fn template(config: &LeptoskitConfig, sdk: Option<&Utf8Path>) -> Result<Vec<(Str
 		(
 			format!("{app}/src/routes/index.rs"),
 			include_str!("new_project/templates/index.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/kit.rs"),
+			include_str!("new_project/templates/kit.rs").into(),
+		),
+		(
+			format!("{app}/src/routes/platforms.rs"),
+			include_str!("new_project/templates/platforms.rs").into(),
 		),
 		(
 			format!("{app}/src/routes/_layout.rs"),
@@ -1197,6 +1214,7 @@ fn server_manifest(
 	}
 
 	let dependency = sdk_dependency("leptoskit", sdk, &features)?;
+	let router = sdk_dependency("leptoskit_router", sdk, &[])?;
 
 	let (database_member, database_dependency) = match db {
 		Some(_) => {
@@ -1227,12 +1245,13 @@ default-members = ["."]
 
 [features]
 default = ["ssr"]
-ssr = ["{name}_app/web", "{name}_app/ssr", "leptoskit/ssr"]
+ssr = ["{name}_app/web", "{name}_app/ssr", "leptoskit/ssr", "leptoskit_router/ssr"]
 
 [dependencies]
 {name}_app = {{ path = "{name}_app", default-features = false }}
 {name}_backend = {{ path = "{name}_backend" }}
 {database_dependency}leptoskit = {dependency}
+leptoskit_router = {router}
 
 [profile.release]
 lto = "thin"
@@ -1295,7 +1314,7 @@ linux = ["native", "leptoskit/linux"]
 tui = ["native", "leptoskit/tui"]
 csr = ["web", "leptos/csr"]
 hydrate = ["web", "leptos/hydrate"]
-ssr = ["web", "leptos/ssr"]
+ssr = ["web", "leptos/ssr", "leptoskit_router/ssr"]
 # The DevTools agents; `leptoskit dev` turns this on, `leptoskit build` never does.
 devtools = ["leptoskit/devtools"]
 
@@ -1552,7 +1571,7 @@ fn host_manifest(
 }
 
 /// The CSR document also documents the browser bootstrap for custom web hosts.
-fn index_html(name: &str) -> String {
+pub(crate) fn index_html(name: &str) -> String {
 	let lib = format!("{}_app", name.replace('-', "_"));
 	format!(
 		r#"<!doctype html>
@@ -1598,7 +1617,7 @@ All six destinations are enabled in `leptoskit.toml`. Each build activates exact
 
 ## File routes
 
-Screens live under `{name}_app/src/routes/`. The `router` plugin regenerates `{name}_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
+Screens live under `{name}_app/src/routes/`. The starter opens on Home, with Kit and Platforms beside it in the tab bar. The `router` plugin regenerates `{name}_app/src/routes.rs` on `leptoskit dev` and `leptoskit build` (or run `leptoskit plugin:router routes`). Edit the files under `routes/`; do not edit the generated module by hand.
 
 For a module that is not a route — a reusable component, for example — `leptoskit::platform_module!` still picks a per-platform file (`thing.ios.rs`, `thing.android.rs`, …) beside the shared one. Per-platform *route* files are not supported yet; use `cfg!(feature = "…")` inside a route when one platform must differ.
 
@@ -1663,6 +1682,8 @@ pub fn verify_scaffold(dir: &Path) -> Result<()> {
 		format!("{name}_app/src/lib.rs"),
 		format!("{name}_app/src/routes.rs"),
 		format!("{name}_app/src/routes/index.rs"),
+		format!("{name}_app/src/routes/kit.rs"),
+		format!("{name}_app/src/routes/platforms.rs"),
 		format!("{name}_app/src/routes/_layout.rs"),
 		format!("{name}_app/src/routes/+not-found.rs"),
 		format!("{name}_backend/src/rpc/mod.rs"),
@@ -1733,7 +1754,97 @@ fn secrets_manifest(config: &LeptoskitConfig) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+	use quote::ToTokens as _;
+
 	use super::host_manifest;
+
+	#[test]
+	fn browser_clients_start_inside_the_mount_owner() {
+		for template in [
+			include_str!("new_project/templates/app_db.rs"),
+			include_str!("new_project/templates/app_auth.rs"),
+		] {
+			for entry in ["hydrate", "start"] {
+				let syntax = syn::parse_file(template).unwrap();
+				let body = syntax
+					.items
+					.into_iter()
+					.find_map(|item| {
+						match item {
+							syn::Item::Fn(function) if function.sig.ident == entry => {
+								Some(function.block)
+							}
+							_ => None,
+						}
+					})
+					.expect("browser entrypoint");
+				let directory = tempfile::tempdir().unwrap();
+				let source = directory.path().join("entry.rs");
+				let binary = directory.path().join("entry-test");
+				let fixture = r#"
+use std::sync::atomic::{AtomicBool, Ordering};
+static IN_OWNER: AtomicBool = AtomicBool::new(false);
+static CONFIGURED: AtomicBool = AtomicBool::new(false);
+static RENDERED: AtomicBool = AtomicBool::new(false);
+#[allow(dead_code)]
+mod leptos {
+    pub mod mount {
+        pub fn hydrate_body(render: impl FnOnce()) {
+            crate::IN_OWNER.store(true, crate::Ordering::SeqCst);
+            render();
+            crate::IN_OWNER.store(false, crate::Ordering::SeqCst);
+        }
+        pub fn mount_to_body(render: impl FnOnce()) { hydrate_body(render); }
+    }
+}
+mod leptoskit {
+    pub mod rpc {
+        pub mod client {
+            pub struct ClientConfig;
+            impl ClientConfig { pub fn new() -> Self { Self } }
+            pub fn configure(_: ClientConfig) {
+                assert!(crate::IN_OWNER.load(crate::Ordering::SeqCst), "configure requires the mount's executor and owner");
+                crate::CONFIGURED.store(true, crate::Ordering::SeqCst);
+            }
+        }
+    }
+    pub mod auth { pub use super::rpc::client; }
+}
+#[allow(non_snake_case)]
+fn App() {
+    assert!(CONFIGURED.load(Ordering::SeqCst));
+    RENDERED.store(true, Ordering::SeqCst);
+}
+fn entry() __ENTRY_BODY__
+#[test]
+fn startup() { entry(); assert!(RENDERED.load(Ordering::SeqCst)); }
+"#;
+				std::fs::write(
+					&source,
+					fixture.replace("__ENTRY_BODY__", &body.to_token_stream().to_string()),
+				)
+				.unwrap();
+				let compiled = std::process::Command::new("rustc")
+					.args(["--edition=2024", "--test"])
+					.arg(&source)
+					.arg("-o")
+					.arg(&binary)
+					.output()
+					.unwrap();
+				assert!(
+					compiled.status.success(),
+					"{}",
+					String::from_utf8_lossy(&compiled.stderr)
+				);
+				let ran = std::process::Command::new(binary).output().unwrap();
+				assert!(
+					ran.status.success(),
+					"{entry}: {}",
+					String::from_utf8_lossy(&ran.stdout)
+				);
+			}
+		}
+	}
 
 	#[test]
 	fn the_router_plugin_points_at_the_app_crate_routes() {
@@ -1749,6 +1860,11 @@ mod tests {
 	fn the_starter_routes_generate_a_home_navigation_module() {
 		let source = super::generated_routes_module(&[
 			("index.rs", include_str!("new_project/templates/index.rs")),
+			("kit.rs", include_str!("new_project/templates/kit.rs")),
+			(
+				"platforms.rs",
+				include_str!("new_project/templates/platforms.rs"),
+			),
 			(
 				"_layout.rs",
 				include_str!("new_project/templates/layout.rs"),
@@ -1762,6 +1878,9 @@ mod tests {
 		assert!(source.contains("@generated"), "{source}");
 		assert!(source.contains("pub type Navigation"), "{source}");
 		assert!(source.contains("Route::Home"), "{source}");
+		assert!(source.contains("Route::Kit"), "{source}");
+		assert!(source.contains("Route::Platforms"), "{source}");
+		assert!(source.contains("navigator()"), "{source}");
 		assert!(source.contains("NotFound"), "{source}");
 	}
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use analytics_service::MIGRATIONS;
 use futures::SinkExt;
 use futures::StreamExt;
+use leptoskit_db::Connection as _;
 use leptoskit_rpc as rpc;
 use rpc::server::Anonymous;
 use rpc::server::ServiceCallers;
@@ -22,9 +23,14 @@ const PREFIX: &str = "/_leptoskit/services/analytics";
 
 /// The service with a fresh, migrated database, on a free port.
 async fn start() -> std::net::SocketAddr {
+	start_with_db().await.0
+}
+
+/// The running service and its fixture database, for explicit event times.
+async fn start_with_db() -> (std::net::SocketAddr, leptoskit_db::Db) {
 	let db = leptoskit_db::testing::sqlite_migrated(MIGRATIONS).await;
 	let (router, live) = analytics_service::routes_with(
-		db,
+		db.clone(),
 		Some(ORIGIN),
 		ServiceCallers::new(Anonymous)
 			.caller(TOKEN, rpc::server::APP_CALLER)
@@ -36,7 +42,7 @@ async fn start() -> std::net::SocketAddr {
 	tokio::spawn(async move {
 		leptoskit_axum::axum::serve(listener, router).await.unwrap();
 	});
-	address
+	(address, db)
 }
 
 async fn post(
@@ -114,7 +120,7 @@ fn signed_in(person: uuid::Uuid) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_signed_in_person_reads_their_own_events_and_nobody_elses() {
-	let address = start().await;
+	let (address, db) = start_with_db().await;
 	let ada = uuid::Uuid::from_u128(0xada);
 	let grace = uuid::Uuid::from_u128(0x9ace);
 	assert_eq!(
@@ -133,6 +139,23 @@ async fn a_signed_in_person_reads_their_own_events_and_nobody_elses() {
 		let (status, body) = post(address, "capture", capture(event), token.as_deref()).await;
 		assert_eq!(status, 200, "{body}");
 	}
+
+	// Requests can share SQLite's timestamp precision. Give this ordering
+	// fixture distinct times without depending on the clock or a sleep.
+	db.execute(leptoskit_db::Statement {
+		sql: "UPDATE events SET created_at = CASE WHEN name = 'clicked_buy' THEN ? ELSE ? END"
+			.into(),
+		args: vec![
+			leptoskit_db::Value::Timestamp(
+				leptoskit_db::Timestamp::from_timestamp(1_700_000_001, 0).unwrap(),
+			),
+			leptoskit_db::Value::Timestamp(
+				leptoskit_db::Timestamp::from_timestamp(1_700_000_000, 0).unwrap(),
+			),
+		],
+	})
+	.await
+	.unwrap();
 
 	let (status, body) = post(
 		address,

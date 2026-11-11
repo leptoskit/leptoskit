@@ -53,11 +53,15 @@ private struct WidgetExtras: Decodable {
     let camera: UInt32?
     let map: UInt32?
     let livePhoto: UInt32?
+    let lineHeight: WidgetLineHeight?
 }
 
 /// A cursor over one binary transaction; every read checks it stays in bounds.
 private struct BinaryReader {
-    private static let fontWeights = ["regular", "medium", "semibold", "bold"]
+    /// In wire order: the four first weights, then the ones added after them.
+    private static let fontWeights = [
+        "regular", "medium", "semibold", "bold", "thin", "extra_light", "light", "extra_bold", "black"
+    ]
     private static let textAligns = ["start", "center", "end"]
     private let bytes: UnsafeRawBufferPointer
     private var offset = 0
@@ -163,7 +167,7 @@ private struct BinaryReader {
             accessibilityLabel: accessibilityLabel, color: color, background: background,
             enabled: enabled, hidden: hidden, clip: clip, cornerRadius: cornerRadius,
             borderWidth: borderWidth, borderColor: borderColor, opacity: opacity,
-            fontSize: fontSize, fontWeight: fontWeight, textAlign: textAlign,
+            fontSize: fontSize, fontWeight: fontWeight, lineHeight: extras?.lineHeight, textAlign: textAlign,
             drawing: extras?.drawing, aria: extras?.aria, scrollOffset: extras?.scrollOffset,
             transform: transform, animation: animation, scene3d: extras?.scene3d, video: extras?.video,
             camera: extras?.camera, map: extras?.map, livePhoto: extras?.livePhoto)

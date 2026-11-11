@@ -27,6 +27,8 @@ warning[leptoskit::markup_style]: `View(…)` builds this tree with builder call
 
 The run fails when either check finds an error, or a warning with `--deny-warnings`.
 
+Native runners include files that native builds write under `.leptoskit/`, which Git ignores. For the enabled hosts that compile on your machine, `lk lint` writes any missing registrants and enables the Cargo features their plugins need before clippy starts. You don't need a native build first.
+
 ## The rules
 
 ### `component_attribute`

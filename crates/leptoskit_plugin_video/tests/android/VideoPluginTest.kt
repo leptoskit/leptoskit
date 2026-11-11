@@ -2,6 +2,7 @@ package dev.leptoskit.plugins.video
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -15,7 +16,7 @@ import java.nio.ByteOrder
 class VideoPluginTest {
     @Test
     fun createStatusAndRelease() =
-        runBlocking {
+        onMain {
             val plugin = VideoPlugin(ApplicationProvider.getApplicationContext())
             val created = plugin.invoke(0, source("https://example.com/a.mp4"))
             assertEquals(4, created.size)
@@ -61,4 +62,11 @@ class VideoPluginTest {
             .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(id)
             .also { it.flip() }
+
+    /** ExoPlayer refuses a player touched off the main thread. */
+    private fun onMain(body: suspend () -> Unit) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            runBlocking { body() }
+        }
+    }
 }

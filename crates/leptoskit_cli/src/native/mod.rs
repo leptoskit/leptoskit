@@ -28,6 +28,8 @@ mod platforms;
 mod project;
 mod quest;
 
+#[cfg(test)]
+mod dev_client_host;
 mod registry;
 pub mod signing;
 mod watch;
@@ -268,6 +270,85 @@ pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	}
 
 	generated
+}
+
+/// What cargo needs to compile the app-owned hosts that build for this
+/// machine as part of the whole workspace, as `leptoskit lint` does.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkspaceHosts {
+	/// The registrants written because they were missing.
+	pub written: Vec<PathBuf>,
+	/// The features native builds turn on for those hosts, such as
+	/// `leptoskit_bridge_ffi/async-host`, which their registrants call into.
+	pub features: Vec<String>,
+}
+
+/// The hosts whose crates compile for the machine running the CLI. The
+/// other hosts' sources are behind `#[cfg(target_os = …)]`, so a workspace
+/// build here never includes their registrants.
+const LOCAL_HOSTS: &[Target] = if cfg!(target_os = "macos") {
+	&[Target::Macos, Target::Tui]
+} else if cfg!(target_os = "linux") {
+	&[Target::Linux, Target::Tui]
+} else if cfg!(target_os = "windows") {
+	&[Target::Windows, Target::Tui]
+} else {
+	&[Target::Tui]
+};
+
+/// Prepares the enabled hosts that compile on this machine for a workspace
+/// build: writes each Rust registrant a fresh checkout lacks, since only
+/// native builds write them, and gathers the features native builds turn
+/// on. Registrants that exist are left alone: the next native build
+/// refreshes them.
+pub(crate) fn workspace_hosts(root: &Path, config: &LeptoskitConfig) -> Result<WorkspaceHosts> {
+	workspace_hosts_for(root, config, LOCAL_HOSTS, |target| {
+		registry::resolve(root, config, target)
+	})
+}
+
+fn workspace_hosts_for(
+	root: &Path,
+	config: &LeptoskitConfig,
+	candidates: &[Target],
+	mut resolve: impl FnMut(Target) -> Result<registry::Registry>,
+) -> Result<WorkspaceHosts> {
+	let mut hosts = WorkspaceHosts::default();
+	let mut lock = None;
+
+	for &target in candidates {
+		let platform = target.platform();
+
+		if !config.app.platforms.contains(&platform)
+			|| !root.join(platform.to_string()).join("Cargo.toml").is_file()
+		{
+			continue;
+		}
+
+		let registry =
+			resolve(target).with_context(|| format!("resolve the {platform} host's plugins"))?;
+
+		for feature in &registry.host_features {
+			if !hosts.features.contains(feature) {
+				hosts.features.push(feature.clone());
+			}
+		}
+
+		let path = generated_dir(root, target).join("registrant.rs");
+
+		if path.is_file() {
+			continue;
+		}
+
+		if lock.is_none() {
+			lock = Some(lock::acquire(root)?);
+		}
+
+		project::registrant(root, config, &registry, target)?;
+		hosts.written.push(path);
+	}
+
+	Ok(hosts)
 }
 
 /// Runs native generation and optionally the platform build tool.
@@ -615,6 +696,8 @@ fn host_library_command(
 		host.args(["--features", &features.join(",")]);
 	}
 
+	set_log_level(&mut host, config);
+
 	if target.is_android() {
 		configure_android_toolchain(&mut host, root, target, &android_ndk()?)?;
 
@@ -704,9 +787,12 @@ fn configure_android_toolchain(
 	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
-	let compiler = tools.join(format!(
-		"{architecture}-linux-android{ANDROID_MIN_API}-clang{NDK_LAUNCHER_SUFFIX}"
-	));
+	// The launcher name and the flag share one level (`…-linux-android26-clang`
+	// passes `--target=…26`). cc-rs 1.11 applies every set `CFLAGS`/`CXXFLAGS`
+	// form, and `<var>_<target>` (dashes, the triple from [`Target::rust`])
+	// comes last, after `<var>_<target_with_underscores>`.
+	let clang_target = format!("{architecture}-linux-android{ANDROID_MIN_API}");
+	let compiler = tools.join(format!("{clang_target}-clang{NDK_LAUNCHER_SUFFIX}"));
 	anyhow::ensure!(
 		compiler.is_file(),
 		"selected NDK does not contain a compiler for this host: {}",
@@ -720,24 +806,6 @@ fn configure_android_toolchain(
 	// TLS) compile with cc-rs, which needs the NDK compiler and archiver
 	// too.
 	let target_key = target.rust().replace('-', "_");
-
-	// The NDK launcher passes `--target=<triple>{ANDROID_MIN_API}` to clang
-	// itself, but the `cc` crate only skips its own `--target` when the
-	// compiler's file name looks like an NDK launcher. A build cache in
-	// front of the compiler (mbx, sccache, ccache) renames it, so cc-rs
-	// appends `--target=<triple>` without the API level, which overrides
-	// the launcher's and drops bionic to the level's symbol set: libc++'s
-	// `condition_variable.h` calls `pthread_cond_clockwait`, declared only
-	// for API 30 and up, and build scripts such as rive's fail to compile.
-	// Naming the level in the per-target `CFLAGS`/`CXXFLAGS` makes it
-	// explicit whatever the compiler is called: cc-rs appends those
-	// variables' flags after its own, so this `--target` wins (cc 1.11,
-	// "Set flags from the environment (do this last, to allow these to
-	// override everything else)"). The user's own flags are kept — ours are
-	// appended to them, not replacing them.
-	let target_flag = format!("--target={architecture}-linux-android{ANDROID_MIN_API}");
-	let cflags = format!("CFLAGS_{target_key}");
-	let cxxflags = format!("CXXFLAGS_{target_key}");
 	host.env(
 		format!(
 			"CARGO_TARGET_{}_LINUX_ANDROID_LINKER",
@@ -748,9 +816,7 @@ fn configure_android_toolchain(
 	.env(format!("CC_{target_key}"), compiler)
 	.env(
 		format!("CXX_{target_key}"),
-		tools.join(format!(
-			"{architecture}-linux-android{ANDROID_MIN_API}-clang++{NDK_LAUNCHER_SUFFIX}"
-		)),
+		tools.join(format!("{clang_target}-clang++{NDK_LAUNCHER_SUFFIX}")),
 	)
 	.env(
 		format!("AR_{target_key}"),
@@ -759,15 +825,32 @@ fn configure_android_toolchain(
 		} else {
 			"llvm-ar"
 		}),
-	)
-	.env(
-		&cflags,
-		append_flag(std::env::var_os(&cflags), &target_flag),
-	)
-	.env(
-		&cxxflags,
-		append_flag(std::env::var_os(&cxxflags), &target_flag),
 	);
+	// The NDK launcher passes `--target=<triple>{ANDROID_MIN_API}` to clang
+	// itself, but cc-rs only skips its own `--target` when the compiler's
+	// file name looks like an NDK launcher. A build cache in front of the
+	// compiler (mbx, sccache, ccache) renames it, so cc-rs appends
+	// `--target=<triple>` without the API level. That flag is added before
+	// the environment flags ("Set flags from the environment (do this last,
+	// to allow these to override everything else)"), and the dashed
+	// `CFLAGS_<target>` / `CXXFLAGS_<target>` are the last of those, so the
+	// versioned `--target` wins for aarch64 and x86_64 alike. Bionic
+	// otherwise drops to the unversioned triple's symbol set: libc++'s
+	// `condition_variable.h` calls `pthread_cond_clockwait`, declared only
+	// for API 30 and up, and build scripts such as rive's fail to compile.
+	// Flags already on the command, or exported for that dashed target, are
+	// kept — the versioned target is appended, not a replacement. The
+	// underscored `CFLAGS_<target>` form is left alone so a caller can still
+	// set it; cc-rs applies it earlier.
+	let target_flag = format!("--target={clang_target}");
+	for variable in ["CFLAGS", "CXXFLAGS"] {
+		let key = format!("{variable}_{}", target.rust());
+		let existing = match host.get_envs().find(|(name, _)| *name == key.as_str()) {
+			Some((_, value)) => value.map(|value| value.to_os_string()),
+			None => std::env::var_os(&key),
+		};
+		host.env(&key, append_flag(existing, &target_flag));
+	}
 	Ok(())
 }
 
@@ -1356,6 +1439,15 @@ pub(crate) const DEBUG_HOST_ARGUMENTS: &[&str] = &[
 	"profile.dev.package.wasmi.debug-assertions=false",
 ];
 
+/// Hands `[native] log-level` to the runtime's logger, which reads it when
+/// it is compiled. Unset, the runtime logs `info` in a debug build and
+/// `warn` in a release build.
+pub(crate) fn set_log_level(command: &mut Command, config: &LeptoskitConfig) {
+	if let Some(level) = config.native.log_level {
+		command.env(leptoskit_config::LogLevel::VARIABLE, level.as_str());
+	}
+}
+
 /// The profile arguments a release cargo build takes: `--release`, or
 /// `--profile <name>` with the `--config` entries defining the profile.
 /// `host` picks between the two size profiles: the wasm one can
@@ -1529,6 +1621,8 @@ fn run_host_library(command: &mut Command) -> Result<Vec<String>> {
 /// stripped, in rustc's order and without the repeats it keeps for linkers that
 /// care about them. Anything that is not a `-l` entry is left to the C linker.
 fn native_static_libs(output: &str) -> Vec<String> {
+	// Cargo may colour both the note's prefix and its final library name.
+	let output = anstream::adapter::strip_str(output).to_string();
 	let mut libraries: Vec<String> = Vec::new();
 
 	for line in output.lines() {
@@ -1789,6 +1883,127 @@ mod tests {
 		std::fs::write(&blocked, b"file").unwrap();
 		report_application_size(&root, Target::IosSimulator, true);
 		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn workspace_hosts_write_missing_registrants_and_gather_host_features() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = &temporary.path().canonicalize().unwrap();
+
+		for host in ["macos", "linux", "windows", "tui"] {
+			project::write(&root.join(host).join("Cargo.toml"), "# owned manifest").unwrap();
+		}
+
+		let existing = root.join(".leptoskit/linux/registrant.rs");
+		project::write(&existing, "// written by the last Linux build\n").unwrap();
+		let mut config = LeptoskitConfig::default();
+		config.app.platforms = vec![
+			Platform::Web,
+			Platform::Macos,
+			Platform::Linux,
+			Platform::Windows,
+			Platform::Ios,
+		];
+		let registry = |target: Target| {
+			registry::Registry {
+				package: format!("app_{}", target.platform()),
+				plugins: Vec::new(),
+				support: Vec::new(),
+				bridge: root.join("bridge"),
+				target: root.join("target"),
+				host_features: vec![
+					"leptoskit_bridge_ffi/async-host".into(),
+					format!("leptoskit_plugin_{}/async-host", target.platform()),
+				],
+				devtools_feature: None,
+				missing: Vec::new(),
+				scene3d: false,
+			}
+		};
+		// Windows has a host crate but doesn't build here, the terminal isn't
+		// enabled, and iOS has no host crate.
+		let candidates = [Target::Macos, Target::Linux, Target::Tui, Target::Ios];
+
+		let mut resolved = Vec::new();
+		let hosts = workspace_hosts_for(root, &config, &candidates, |target| {
+			resolved.push(target);
+			Ok(registry(target))
+		})
+		.unwrap();
+
+		assert_eq!(resolved, [Target::Macos, Target::Linux]);
+		assert_eq!(
+			hosts,
+			WorkspaceHosts {
+				written: vec![root.join(".leptoskit/macos/registrant.rs")],
+				features: vec![
+					"leptoskit_bridge_ffi/async-host".into(),
+					"leptoskit_plugin_macos/async-host".into(),
+					"leptoskit_plugin_linux/async-host".into(),
+				],
+			}
+		);
+		let macos = std::fs::read_to_string(&hosts.written[0]).unwrap();
+		assert!(macos.starts_with("// Generated by leptoskit."), "{macos}");
+		assert_eq!(
+			std::fs::read_to_string(&existing).unwrap(),
+			"// written by the last Linux build\n"
+		);
+
+		std::fs::remove_file(&existing).unwrap();
+		let hosts =
+			workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target))).unwrap();
+		assert_eq!(hosts.written, std::slice::from_ref(&existing));
+		let linux = std::fs::read_to_string(&existing).unwrap();
+		assert!(linux.contains("pub fn plugins<B: leptoskit::native::NativeBackend>"));
+
+		// Several missing hosts share one held lock through all their writes.
+		let macos_path = root.join(".leptoskit/macos/registrant.rs");
+		std::fs::remove_file(&macos_path).unwrap();
+		std::fs::remove_file(&existing).unwrap();
+		let hosts =
+			workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target))).unwrap();
+		assert_eq!(hosts.written, [macos_path, existing]);
+
+		let error = workspace_hosts_for(root, &config, &candidates, |_| {
+			anyhow::bail!("cargo metadata failed")
+		})
+		.unwrap_err();
+		assert_eq!(
+			format!("{error:#}"),
+			"resolve the macos host's plugins: cargo metadata failed"
+		);
+
+		// Lint must respect the same lock as a native build.
+		let macos_directory = root.join(".leptoskit/macos");
+		std::fs::remove_file(macos_directory.join("registrant.rs")).unwrap();
+		let guard = lock::acquire(root).unwrap();
+		let error = workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+			.unwrap_err();
+		assert!(
+			error
+				.to_string()
+				.contains("another native prepare or build")
+		);
+		drop(guard);
+
+		#[cfg(unix)]
+		{
+			// A generated directory must not redirect lint's writes elsewhere.
+			std::fs::remove_dir(&macos_directory).unwrap();
+			let elsewhere = root.join("elsewhere");
+			std::fs::create_dir(&elsewhere).unwrap();
+			std::os::unix::fs::symlink(&elsewhere, &macos_directory).unwrap();
+			let error =
+				workspace_hosts_for(root, &config, &candidates, |target| Ok(registry(target)))
+					.unwrap_err();
+			assert_eq!(
+				error.to_string(),
+				".leptoskit must be an ordinary generated directory"
+			);
+			assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+		}
+		assert!(LOCAL_HOSTS.contains(&Target::Tui));
 	}
 
 	#[test]
@@ -2096,16 +2311,16 @@ mod tests {
 		let (first, second) = {
 			use std::os::unix::ffi::OsStringExt;
 			(
-				root.join(std::ffi::OsString::from_vec(vec![b'a', 0xfe])),
-				root.join(std::ffi::OsString::from_vec(vec![b'a', 0xff])),
+				root.join(OsString::from_vec(vec![b'a', 0xfe])),
+				root.join(OsString::from_vec(vec![b'a', 0xff])),
 			)
 		};
 		#[cfg(windows)]
 		let (first, second) = {
 			use std::os::windows::ffi::OsStringExt;
 			(
-				root.join(std::ffi::OsString::from_wide(&[u16::from(b'a'), 0xD800])),
-				root.join(std::ffi::OsString::from_wide(&[u16::from(b'a'), 0xD801])),
+				root.join(OsString::from_wide(&[u16::from(b'a'), 0xD800])),
+				root.join(OsString::from_wide(&[u16::from(b'a'), 0xD801])),
 			)
 		};
 		std::fs::create_dir_all(&first).unwrap();
@@ -2350,6 +2565,10 @@ mod tests {
 		std::fs::write(&clang, "").unwrap();
 
 		let mut host = Command::new("cargo");
+		host.env("CFLAGS", "-DGLOBAL_C=1")
+			.env("CFLAGS_aarch64_linux_android", "-DUNDERSCORE_C=1")
+			.env("CFLAGS_aarch64-linux-android", "-DLOCAL_C=1")
+			.env("CXXFLAGS_aarch64-linux-android", "-DLOCAL_CXX=1");
 		configure_android_toolchain(&mut host, &root, Target::Android, &ndk).unwrap();
 		let android = environment(&host);
 		let value = |name: &str| {
@@ -2364,6 +2583,13 @@ mod tests {
 				.find(|(key, _)| key == name)
 				.map(|(_, value)| value.as_str())
 		};
+		// The plain and underscored forms stay as the caller set them. The
+		// dashed `<var>_<target>` form is the one cc-rs applies last.
+		assert_eq!(flag("CFLAGS"), Some("-DGLOBAL_C=1"));
+		assert_eq!(
+			flag("CFLAGS_aarch64_linux_android"),
+			Some("-DUNDERSCORE_C=1")
+		);
 		assert_eq!(
 			value("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"),
 			Some(clang.clone())
@@ -2381,19 +2607,20 @@ mod tests {
 		);
 
 		// The flags name the same triple and API level the launcher encodes,
-		// so a renamed compiler still compiles for the intended level.
+		// so a renamed compiler still compiles for the intended level. Caller
+		// flags on that variable are kept in front of the versioned target.
 		let launcher = clang.file_name().unwrap().to_str().unwrap();
 		let wrapper_target = launcher
 			.strip_suffix(&format!("-clang{NDK_LAUNCHER_SUFFIX}"))
 			.unwrap();
 		let expected = format!("--target={wrapper_target}");
 		assert_eq!(
-			flag("CFLAGS_aarch64_linux_android"),
-			Some(expected.as_str())
+			flag("CFLAGS_aarch64-linux-android"),
+			Some(format!("-DLOCAL_C=1 {expected}").as_str())
 		);
 		assert_eq!(
-			flag("CXXFLAGS_aarch64_linux_android"),
-			Some(expected.as_str())
+			flag("CXXFLAGS_aarch64-linux-android"),
+			Some(format!("-DLOCAL_CXX=1 {expected}").as_str())
 		);
 
 		// The Quest headset reuses the Android host and its environment.
@@ -2403,8 +2630,8 @@ mod tests {
 		assert_eq!(
 			quest
 				.iter()
-				.find(|(key, _)| key == "CFLAGS_aarch64_linux_android"),
-			Some(&("CFLAGS_aarch64_linux_android".to_string(), expected.clone()))
+				.find(|(key, _)| key == "CFLAGS_aarch64-linux-android"),
+			Some(&("CFLAGS_aarch64-linux-android".to_string(), expected.clone()))
 		);
 
 		// This NDK has no compiler for the x86_64 emulator yet.
@@ -2419,14 +2646,16 @@ mod tests {
 			error.to_string().contains("does not contain a compiler"),
 			"{error}"
 		);
-
 		// With the launcher present, the emulator target gets its own
-		// versioned `--target`.
+		// versioned `--target`, even when the caller exported an empty flag
+		// list for that triple.
 		let emulator = tools.join(format!(
 			"x86_64-linux-android{ANDROID_MIN_API}-clang{NDK_LAUNCHER_SUFFIX}"
 		));
 		std::fs::write(&emulator, "").unwrap();
 		let mut host = Command::new("cargo");
+		host.env("CFLAGS_x86_64-linux-android", "")
+			.env("CXXFLAGS_x86_64-linux-android", "");
 		configure_android_toolchain(&mut host, &root, Target::AndroidX86_64, &ndk).unwrap();
 		let emulator_environment = environment(&host);
 		assert_eq!(
@@ -2436,15 +2665,19 @@ mod tests {
 				.map(|(_, value)| PathBuf::from(value)),
 			Some(emulator)
 		);
-		assert_eq!(
-			emulator_environment
-				.iter()
-				.find(|(key, _)| key == "CFLAGS_x86_64_linux_android"),
-			Some(&(
-				"CFLAGS_x86_64_linux_android".to_string(),
-				format!("--target=x86_64-linux-android{ANDROID_MIN_API}")
-			))
-		);
+		let emulator_target = format!("--target=x86_64-linux-android{ANDROID_MIN_API}");
+		for name in [
+			"CFLAGS_x86_64-linux-android",
+			"CXXFLAGS_x86_64-linux-android",
+		] {
+			assert_eq!(
+				emulator_environment
+					.iter()
+					.find(|(key, _)| key == name)
+					.map(|(_, value)| value.as_str()),
+				Some(emulator_target.as_str())
+			);
+		}
 
 		assert_eq!(
 			std::fs::read_to_string(root.join(".leptoskit/android/ndk-path.txt")).unwrap(),
@@ -2825,6 +3058,37 @@ mod tests {
 	}
 
 	#[test]
+	fn host_library_builds_carry_the_configured_log_level() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		let build_dir = root.join("target");
+		let registry = host_registry();
+		let level = |config: &LeptoskitConfig| {
+			let host = host_library_command(
+				root,
+				config,
+				&registry,
+				Target::Macos,
+				false,
+				&build_dir,
+				None,
+			)
+			.unwrap();
+			environment(&host)
+				.into_iter()
+				.find(|(key, _)| key == leptoskit_config::LogLevel::VARIABLE)
+				.map(|(_, value)| value)
+		};
+
+		// Unset, the runtime picks the level from the build.
+		assert_eq!(level(&LeptoskitConfig::default()), None);
+
+		let mut config = LeptoskitConfig::default();
+		config.native.log_level = Some(leptoskit_config::LogLevel::Debug);
+		assert_eq!(level(&config).as_deref(), Some("debug"));
+	}
+
+	#[test]
 	fn tools_report_whether_they_ran() {
 		#[cfg(unix)]
 		{
@@ -2868,17 +3132,45 @@ mod tests {
 	#[cfg(unix)]
 	#[test]
 	fn a_host_build_reports_the_libraries_it_printed() {
-		let mut build = Command::new("sh");
-		build.args([
-			"-c",
-			"echo 'note: native-static-libs: -laaudio -ldl -laaudio' >&2; echo compiling",
-		]);
-		assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		for note in [
+			"note: native-static-libs: -laaudio -ldl -laaudio",
+			"\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -laaudio -ldl \
+			 -laaudio\u{1b}[0m",
+		] {
+			let mut build = Command::new("sh");
+			build.args([
+				"-c",
+				"printf '%s\\n' \"$1\" >&2; echo compiling",
+				"host-library-test",
+				note,
+			]);
+			assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		}
 
 		let mut failed = Command::new("sh");
 		failed.args(["-c", "exit 3"]);
 		let error = run_host_library(&mut failed).unwrap_err().to_string();
 		assert!(error.contains("failed"), "{error}");
+	}
+
+	#[test]
+	fn rustcs_coloured_note_keeps_clean_library_names() {
+		// Cargo's `--color always` decorates both the prefix and final entry.
+		let output = "\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -landroid \
+		              -laaudio -ldl -lc++_shared -llog -ldl -llog -lunwind -ldl -lm -lc\u{1b}[0m\n";
+		assert_eq!(
+			native_static_libs(output),
+			[
+				"android",
+				"aaudio",
+				"dl",
+				"c++_shared",
+				"log",
+				"unwind",
+				"m",
+				"c"
+			]
+		);
 	}
 
 	#[test]

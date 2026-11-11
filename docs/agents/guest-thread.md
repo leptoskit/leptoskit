@@ -38,13 +38,14 @@ Waiting in `lk_guest_stop` is bounded by one guest step. A guest stuck in an end
 A mutex-guarded state with a condition variable carries two queues. The UI side never waits on the guest while holding the mutex.
 
 - **The inbox**, UI to guest:
-  - start, resize, events, display frames, plugin replies, worker replies, wakes, Rive ticks, and stop;
+  - start, resize, events, display frames, plugin replies, worker replies, wakes, Rive ticks, system Back, and stop;
   - the first display frame enqueued in place keeps the newest timestamp, so a slow guest never works through a backlog of frames;
   - a scroll event replaces the one still queued for the same view.
 - **The outbox**, guest to UI:
   - encoded transactions, in order;
   - native requests, each with its resolved worker or async job when it has one;
   - cancellations and Rive frames;
+  - answers to system Back, in the order it was offered: went back, or leave. The UI thread keeps the callbacks waiting for them and drops them if the guest fails or stops first;
   - the first failure.
 - **Flags:** whether the guest waits for a frame, and whether it owns Rive scenes. The UI side reads these without the mutex.
 - **Notification:** when the outbox gains something, the guest calls the platform's notify callback, at most once until the UI thread drains. iOS posts a main-queue block; Android posts to the main looper.

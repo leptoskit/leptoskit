@@ -4,6 +4,7 @@
 //! so the same on-disk fixtures back these tests and the snapshot suite.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -344,6 +345,52 @@ fn native_scaffold_carries_mobile_apps_and_does_not_overwrite_sources() {
 	assert_eq!(
 		std::fs::read_to_string(project.join("ios/App.swift")).unwrap(),
 		"// user change"
+	);
+}
+
+/// Android 16 never calls `onBackPressed` for an app that targets it: Back
+/// arrives only through an `OnBackInvokedCallback`. Without one, every Back
+/// left the app instead of going back a route.
+#[test]
+fn the_generated_android_activity_offers_system_back_to_the_router() {
+	let scratch = Scratch::new("android-system-back");
+	let project = scratch.path.join("back_native");
+	new_project::run(
+		project.to_string_lossy().as_ref(),
+		leptoskit_config::Platform::Native,
+		None,
+	)
+	.expect("scaffold");
+	let read = |file: &str| std::fs::read_to_string(project.join(file)).expect(file);
+	let activity = read("android/app/src/main/java/MainActivity.kt");
+	let manifest = read("android/app/src/main/AndroidManifest.xml");
+	let guest = read("back_native_app/src/lib.rs");
+
+	assert!(
+		activity.contains("if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)")
+			&& activity.contains(
+				"onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.\
+				 PRIORITY_DEFAULT)"
+			),
+		"Android 13 and later need an OnBackInvokedCallback:\n{activity}"
+	);
+	assert!(
+		manifest.contains("android:enableOnBackInvokedCallback=\"true\""),
+		"Android 13 to 15 ignore the callback unless the manifest opts in:\n{manifest}"
+	);
+	assert!(
+		activity.contains("override fun onBackPressed() = offerSystemBack()"),
+		"Android 12 and earlier still deliver Back to onBackPressed:\n{activity}"
+	);
+	assert!(
+		activity.contains("view.offerSystemBack { wentBack -> if (!wentBack) leave() }")
+			&& !activity.contains("getMethod(\"offerSystemBack\")"),
+		"the activity asks the router directly and leaves only on its answer:\n{activity}"
+	);
+	assert!(
+		guest.contains("navigation.bind_system_back();")
+			&& guest.contains("pub extern \"C\" fn leptoskit_system_back() -> i32"),
+		"the guest binds its router to system Back and exports it:\n{guest}"
 	);
 }
 
@@ -876,6 +923,98 @@ fn new_project_builds_caches_and_restores_outputs() {
 	assert!(project.join("dist2/pkg/e2e_app_app.js").is_file());
 }
 
+/// A real generated adapter must render the query outcome, rather than a
+/// loading tree that differs from the state it streams to the browser.
+#[test]
+#[ignore = "builds a generated SSR project; run explicitly with the scaffold end-to-end tests"]
+fn new_database_scaffold_renders_its_query_error_before_hydration() {
+	let scratch = Scratch::new("ssr-query");
+	let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+	let created = leptoskit(
+		&scratch.path,
+		&[
+			"new",
+			"ssr_probe",
+			"--sdk-path",
+			sdk.to_str().expect("UTF-8 SDK"),
+			"--db",
+			"sqlite",
+		],
+	);
+	assert!(created.status.success(), "{}", stderr(&created));
+	let project = scratch.path.join("ssr_probe");
+	let app = project.join("ssr_probe_app");
+	let sdk_manifest: toml::Value =
+		toml::from_str(&std::fs::read_to_string(sdk.join("Cargo.toml")).unwrap()).unwrap();
+	let hydration = sdk_manifest["workspace"]["dependencies"]["hydration_context"]
+		.as_str()
+		.expect("hydration_context version");
+	let manifest = app.join("Cargo.toml");
+	let mut source = std::fs::read_to_string(&manifest).unwrap();
+	let _ = write!(
+		source,
+		r#"
+
+[dev-dependencies]
+any_spawner = {{ version = "0.3", features = ["tokio"] }}
+futures = "0.3"
+hydration_context = "{hydration}"
+serde_json = "1"
+tokio = {{ version = "1", features = ["macros", "rt", "time"] }}
+"#
+	);
+	std::fs::write(manifest, source).unwrap();
+	std::fs::create_dir_all(app.join("tests")).unwrap();
+	std::fs::write(
+		app.join("tests/ssr_regression.rs"),
+		r#"
+use std::sync::Arc;
+use std::time::Duration;
+use futures::StreamExt;
+use hydration_context::SsrSharedContext;
+use leptos::prelude::*;
+
+#[tokio::test]
+async fn the_generated_app_streams_its_rendered_error() {
+    let _ = any_spawner::Executor::init_tokio();
+    let context = Arc::new(SsrSharedContext::new());
+    let owner = Owner::new_root(Some(context.clone()));
+    // No RPC server is installed: the notes query must show its error.
+    let stream = owner.with(|| ssr_probe_app::App().to_html_stream_in_order());
+    let html = tokio::time::timeout(Duration::from_secs(10), stream.collect::<String>())
+        .await.expect("the generated adapter must settle");
+    assert!(!html.contains("Loading notes"), "{html}");
+    assert!(html.contains("The notes couldn") && html.contains("be loaded"), "{html}");
+    let outcomes = context.consume_buffers().await;
+    assert!(outcomes.iter().any(|(_, payload)| {
+        serde_json::from_str::<serde_json::Value>(payload).unwrap().get("error").is_some()
+    }), "the browser must receive the same error: {outcomes:?}");
+    owner.cleanup();
+}
+"#,
+	)
+	.unwrap();
+	let result = Command::new("cargo")
+		.current_dir(&project)
+		.args([
+			"test",
+			"-p",
+			"ssr_probe_app",
+			"--features",
+			"ssr",
+			"--test",
+			"ssr_regression",
+		])
+		.output()
+		.expect("test the generated adapter");
+	assert!(
+		result.status.success(),
+		"{}\n{}",
+		stdout(&result),
+		stderr(&result)
+	);
+}
+
 /// `leptoskit dev` on a new project's web app. Server-rendered, it builds the
 /// app and runs its server, reports a broken edit and keeps running, rebuilds
 /// and restarts the server once the edit is fixed, and on `SIGTERM` stops the
@@ -902,8 +1041,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 		.to_string();
 
 	let mut dev = DevSession::start(&project, &["dev", "--platform", "web", "--port", &port]);
-	dev.expect("[web] app server at", Duration::from_mins(15));
-	dev.expect("watching", Duration::from_mins(1));
+	dev.ready(Duration::from_mins(15));
 	assert!(page(&port).contains("<html"), "the server renders the page");
 
 	let main = project.join("src/main.rs");
@@ -915,7 +1053,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 		format!("{source}\n// Changed while `leptoskit dev` watches.\n"),
 	)
 	.expect("fix src/main.rs");
-	dev.expect("[web] rebuilt in", Duration::from_mins(10));
+	dev.expect("[web] rebuilt the server in", Duration::from_mins(10));
 	assert!(
 		page(&port).contains("<html"),
 		"the restarted server renders the page"
@@ -945,8 +1083,7 @@ fn dev_serves_the_web_app_rebuilds_it_on_change_and_stops_on_sigterm() {
 	let mut dev = DevSession::start(&project, &["dev", "--port", &port]);
 	dev.expect("[windows] skipped", Duration::from_mins(1));
 
-	dev.expect("[web] app server at", Duration::from_mins(15));
-	dev.expect("watching", Duration::from_mins(1));
+	dev.ready(Duration::from_mins(15));
 	assert!(
 		page(&port).contains("<html"),
 		"the server serves web/index.html"
@@ -965,13 +1102,18 @@ struct DevSession {
 #[cfg(unix)]
 impl DevSession {
 	fn start(project: &Path, args: &[&str]) -> Self {
+		let mut command = Command::new(env!("CARGO_BIN_EXE_leptoskit"));
+		command.current_dir(project).args(args).arg("--no-secrets");
+		Self::from_command(command)
+	}
+
+	fn from_command(mut command: Command) -> Self {
 		use std::io::BufRead as _;
+		use std::os::unix::process::CommandExt as _;
 		use std::process::Stdio;
 
-		let mut child = Command::new(env!("CARGO_BIN_EXE_leptoskit"))
-			.current_dir(project)
-			.args(args)
-			.arg("--no-secrets")
+		let mut child = command
+			.process_group(0)
 			.stdin(Stdio::null())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
@@ -1004,6 +1146,14 @@ impl DevSession {
 		}
 	}
 
+	/// The web server can start before cold phone guests finish building.
+	/// Both readiness markers share one budget for the complete startup.
+	fn ready(&mut self, within: std::time::Duration) {
+		let started = std::time::Instant::now();
+		self.expect("[web] app server at", within);
+		self.expect("watching", within.saturating_sub(started.elapsed()));
+	}
+
 	/// Waits for a line starting with `prefix`.
 	fn expect(&mut self, prefix: &str, within: std::time::Duration) {
 		let deadline = std::time::Instant::now() + within;
@@ -1029,7 +1179,18 @@ impl DevSession {
 			.status()
 			.expect("run kill");
 		assert!(terminated.success());
-		let status = self.child.wait().expect("wait for leptoskit dev");
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+		let status = loop {
+			if let Some(status) = self.child.try_wait().expect("wait for leptoskit dev") {
+				break status;
+			}
+
+			assert!(
+				std::time::Instant::now() < deadline,
+				"`leptoskit dev` did not stop within 15 seconds after SIGTERM"
+			);
+			std::thread::sleep(std::time::Duration::from_millis(20));
+		};
 		self.seen.extend(self.output.try_iter());
 		assert!(
 			status.success(),
@@ -1037,6 +1198,44 @@ impl DevSession {
 			self.seen.join("\n")
 		);
 	}
+}
+
+#[cfg(unix)]
+impl Drop for DevSession {
+	fn drop(&mut self) {
+		if let Ok(None) = self.child.try_wait() {
+			// Only this session's isolated group, including unfinished builds
+			// and the app server, is stopped when a test fails or abandons it.
+			if let Ok(raw) = i32::try_from(self.child.id())
+				&& let Some(pid) = rustix::process::Pid::from_raw(raw)
+			{
+				let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+			}
+			let _ = self.child.kill();
+			let _ = self.child.wait();
+		}
+	}
+}
+
+#[cfg(unix)]
+#[test]
+fn abandoning_a_dev_session_closes_its_descendants_output_pipes() {
+	use std::sync::mpsc;
+	use std::time::Duration;
+	use std::time::Instant;
+
+	let mut command = Command::new("sh");
+	command.args(["-c", "sleep 10 &\nprintf 'ready\\n'\nwait"]);
+	let mut dev = DevSession::from_command(command);
+	dev.expect("ready", Duration::from_secs(5));
+	let output = std::mem::replace(&mut dev.output, mpsc::channel().1);
+	let started = Instant::now();
+	drop(dev);
+	assert!(started.elapsed() < Duration::from_secs(5));
+	assert!(matches!(
+		output.recv_timeout(Duration::from_secs(5)),
+		Err(mpsc::RecvTimeoutError::Disconnected)
+	));
 }
 
 /// `GET /` from the dev server on `port`, retried while the server starts.

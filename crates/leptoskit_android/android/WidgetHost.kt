@@ -18,10 +18,13 @@ import android.os.Looper
 import android.text.Editable
 import android.text.InputType
 import android.text.Layout
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import android.text.TextWatcher
+import android.text.style.LineHeightSpan
 import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
@@ -162,14 +165,138 @@ class WidgetHost(
             val previous = mountedRoot
 
             if (previous?.view !== root?.outer || previous?.container !== container) {
-                previous?.let { (it.view.parent as? ViewGroup)?.removeView(it.view) }
+                previous?.let {
+                    it.view.routesPointers = false
+                    it.view.pointerRouter = null
+                    (it.view.parent as? ViewGroup)?.removeView(it.view)
+                }
                 mountedRoot = root?.let { RootMount(it.id, container, it.outer) }
 
-                if (root != null) container.addView(root.outer)
+                if (root != null) {
+                    root.outer.routesPointers = true
+                    root.outer.pointerRouter = { event -> routePointer(root.outer, event) }
+                    container.addView(root.outer)
+                }
             }
 
             refreshMountedRoot()
         }
+    }
+
+    private val gestureClock = android.os.Handler(android.os.Looper.getMainLooper())
+    private val gestureTick = Runnable { onGestureTick() }
+    private var routing = false
+
+    private fun routePointer(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+    ): Boolean {
+        if (routing || handle == 0L) return view.pass(event)
+        routing = true
+        try {
+            val packed = forwardPointers(view, event)
+            armDeadline(packed ushr 8)
+            if (event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+                return view.pass(event)
+            }
+            return when ((packed and 0xff).toInt()) {
+                2 -> {
+                    val cancel = android.view.MotionEvent.obtain(event)
+                    cancel.action = android.view.MotionEvent.ACTION_CANCEL
+                    view.pass(cancel)
+                    cancel.recycle()
+                    true
+                }
+
+                1 -> {
+                    view.pass(event)
+                    true
+                }
+
+                else -> {
+                    view.pass(event)
+                }
+            }
+        } finally {
+            routing = false
+        }
+    }
+
+    private fun forwardPointers(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+    ): Long {
+        val phase =
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_POINTER_DOWN -> 0
+                android.view.MotionEvent.ACTION_MOVE -> 1
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_POINTER_UP -> 2
+                else -> 3
+            }
+        if (phase == 1) {
+            var packed = 0L
+            for (index in 0 until event.pointerCount) {
+                packed = combinePointer(packed, sendPointer(view, event, index, phase))
+            }
+            return packed
+        }
+        return sendPointer(view, event, event.actionIndex, phase)
+    }
+
+    private fun sendPointer(
+        view: ExactGroup,
+        event: android.view.MotionEvent,
+        index: Int,
+        phase: Int,
+    ): Long {
+        val kind =
+            when (event.getToolType(index)) {
+                android.view.MotionEvent.TOOL_TYPE_MOUSE -> 1
+                android.view.MotionEvent.TOOL_TYPE_STYLUS -> 2
+                else -> 0
+            }
+        val x = (view.left + event.getX(index)) / density
+        val y = (view.top + event.getY(index)) / density
+        return nativePointer(handle, event.getPointerId(index).toLong(), phase, x, y, event.eventTime, kind)
+    }
+
+    private fun combinePointer(
+        left: Long,
+        right: Long,
+    ): Long {
+        val route = max(left and 0xff, right and 0xff)
+        val leftWait = left ushr 8
+        val rightWait = right ushr 8
+        val wait =
+            when {
+                leftWait == 0L -> rightWait
+                rightWait == 0L -> leftWait
+                else -> min(leftWait, rightWait)
+            }
+        return route or (wait shl 8)
+    }
+
+    private fun armDeadline(wait: Long) {
+        gestureClock.removeCallbacks(gestureTick)
+        if (wait > 0) gestureClock.postDelayed(gestureTick, wait)
+    }
+
+    private fun onGestureTick() {
+        if (handle == 0L || routing) return
+        val packed = nativeGestureAdvance(handle, android.os.SystemClock.uptimeMillis())
+        if ((packed and 0xff) == 2L) {
+            val root = mountedRoot?.view ?: return
+            val now = android.os.SystemClock.uptimeMillis()
+            val cancel = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            routing = true
+            try {
+                root.pass(cancel)
+            } finally {
+                routing = false
+            }
+            cancel.recycle()
+        }
+        armDeadline(packed ushr 8)
     }
 
     private fun refreshMountedRoot() {
@@ -342,6 +469,19 @@ class WidgetHost(
 
     private fun px(value: Double): Float = (value * density).toFloat()
 
+    /** Every line's height in points, or null for the font's own. */
+    private fun lineHeight(props: JSONObject): Double? {
+        val height = props.optJSONObject("line_height") ?: return null
+        val points =
+            when {
+                height.has("relative") -> height.getDouble("relative") * props.number("font_size", 14.0)
+                height.has("fixed") -> height.getDouble("fixed")
+                else -> return null
+            }
+
+        return points.takeIf { it.isFinite() && it > 0 }
+    }
+
     /**
      * Border stroke widths in device pixels: per-edge `border_widths` when set,
      * otherwise the uniform `border_width` on every side.
@@ -508,7 +648,9 @@ class WidgetHost(
                 }
 
                 else -> {
-                    error("Custom Android widgets require a registered native implementation: $kind")
+                    // Same as a plain view: an empty container. A custom kind
+                    // used to stop the host, which closed the app.
+                    null
                 }
             }
         val node = Node(id, kind, outer, control, content, props, scroll)
@@ -806,11 +948,17 @@ class WidgetHost(
 
         if (control is TextView) {
             control.textDirection = if (rtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
+            // Android draws the nearest weight the system font has.
             val weight =
                 when (props.string("font_weight")) {
+                    "thin" -> 100
+                    "extra_light" -> 200
+                    "light" -> 300
                     "medium" -> 500
                     "semibold" -> 600
                     "bold" -> 700
+                    "extra_bold" -> 800
+                    "black" -> 900
                     else -> 400
                 }
 
@@ -843,7 +991,7 @@ class WidgetHost(
 
                 control.setHintTextColor(if (dark) 0xffa0a0a0.toInt() else 0xff707070.toInt())
             } else if (control !is CompoundButton) {
-                control.text = props.string("text") ?: ""
+                control.text = ExactLineHeightSpan.lined(props.string("text") ?: "", lineHeight(props)?.let(::px))
             }
         }
         when (control) {
@@ -1441,6 +1589,11 @@ class WidgetHost(
             clipToPadding = false
         }
 
+        var routesPointers = false
+        var pointerRouter: ((android.view.MotionEvent) -> Boolean)? = null
+
+        fun pass(event: android.view.MotionEvent): Boolean = super.dispatchTouchEvent(event)
+
         override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
             if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
                 val editor = findFocus() as? EditText
@@ -1459,7 +1612,12 @@ class WidgetHost(
                 }
             }
 
-            return super.dispatchTouchEvent(event)
+            val router = pointerRouter
+            if (!routesPointers || router == null) {
+                return super.dispatchTouchEvent(event)
+            }
+
+            return router(event)
         }
 
         // Like FrameLayout, a container that never scrolls shows a child's
@@ -1627,6 +1785,21 @@ class WidgetHost(
             text: String,
         )
 
+        @JvmStatic private external fun nativePointer(
+            handle: Long,
+            pointer: Long,
+            phase: Int,
+            x: Float,
+            y: Float,
+            timeMs: Long,
+            kind: Int,
+        ): Long
+
+        @JvmStatic private external fun nativeGestureAdvance(
+            handle: Long,
+            timeMs: Long,
+        ): Long
+
         /** Pure per-call platform measurement; safe from an attached Rust worker. */
         @JvmStatic fun measureText(
             text: String,
@@ -1704,6 +1877,48 @@ private fun autofillHint(token: String): String? =
 
         else -> null
     }
+
+/**
+ * Sets every line to [height] pixels with its glyphs centered in it, as CSS's
+ * `line-height` does: the extra space, or the overlap, is split above and
+ * below. Line bottoms are rounded from the text's top, so `n` lines are
+ * exactly `n * height` tall, rounded once, which is what layout reserved.
+ */
+internal class ExactLineHeightSpan(
+    private val height: Float,
+) : LineHeightSpan {
+    override fun chooseHeight(
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        spanstartv: Int,
+        lineHeight: Int,
+        fm: Paint.FontMetricsInt,
+    ) {
+        // `lineHeight` is this line's top, in pixels from the text's top.
+        val line = ((lineHeight - spanstartv) / height).roundToInt()
+        val target = ((line + 1) * height).roundToInt() - (line * height).roundToInt()
+        val above = (target - (fm.descent - fm.ascent)) / 2
+        fm.ascent -= above
+        fm.descent = fm.ascent + target
+        fm.top = fm.ascent
+        fm.bottom = fm.descent
+    }
+
+    companion object {
+        /** [text] with every line [height] pixels tall, or unchanged without a height. */
+        fun lined(
+            text: String,
+            height: Float?,
+        ): CharSequence {
+            if (height == null || text.isEmpty()) return text
+
+            return SpannableString(text).apply {
+                setSpan(ExactLineHeightSpan(height), 0, text.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+            }
+        }
+    }
+}
 
 private fun JSONObject.string(name: String): String? = if (isNull(name)) null else getString(name)
 

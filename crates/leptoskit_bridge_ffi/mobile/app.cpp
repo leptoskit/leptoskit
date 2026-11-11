@@ -323,6 +323,23 @@ Java_dev_leptoskit_mobile_NativeApp_error(JNIEnv* env, jclass, jlong handle) {
     return array(env, lk_app_error(app(handle)));
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_dev_leptoskit_mobile_NativeApp_log(JNIEnv* env, jclass, jint level, jbyteArray tag,
+    jbyteArray message) {
+    if (!tag || !message) return;
+    const auto tag_size = env->GetArrayLength(tag);
+    const auto message_size = env->GetArrayLength(message);
+    std::string tag_text(tag_size, '\0');
+    std::string message_text(message_size, '\0');
+    env->GetByteArrayRegion(tag, 0, tag_size, reinterpret_cast<jbyte*>(tag_text.data()));
+    env->GetByteArrayRegion(message, 0, message_size, reinterpret_cast<jbyte*>(message_text.data()));
+
+    if (env->ExceptionCheck()) return;
+    lk_log_write(static_cast<uint32_t>(level),
+        reinterpret_cast<const uint8_t*>(tag_text.data()), tag_text.size(),
+        reinterpret_cast<const uint8_t*>(message_text.data()), message_text.size());
+}
+
 namespace {
 lk_updates* updates(jlong handle) {
     return reinterpret_cast<lk_updates*>(static_cast<uintptr_t>(handle));
@@ -905,6 +922,16 @@ Java_dev_leptoskit_mobile_NativeApp_guestWakeBackground(JNIEnv*, jclass, jlong h
 }
 
 extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_guestSystemBack(JNIEnv*, jclass, jlong handle) {
+    return lk_guest_system_back(guest(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeApp_guestTakeSystemBack(JNIEnv*, jclass, jlong handle) {
+    return lk_guest_take_system_back(guest(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_dev_leptoskit_mobile_NativeApp_guestComplete(JNIEnv* env, jclass, jlong handle,
     jlong id, jint error, jbyteArray payload) {
     if (error != 0) return lk_guest_complete(guest(handle), static_cast<uint64_t>(id), error, nullptr, 0);
@@ -1086,6 +1113,13 @@ Scene3dView* scene3d(jlong handle) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_leptoskit_mobile_NativeScene3d_available(JNIEnv*, jclass) {
     return lk_scene3d_available() == 1;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_leptoskit_mobile_NativeScene3d_pointer(JNIEnv*, jclass, jint scene, jint phase,
+    jfloat x, jfloat y, jfloat dx, jfloat dy) {
+    if (scene < 0 || phase < 0) return -1;
+    return lk_scene3d_pointer(static_cast<uint32_t>(scene), static_cast<uint32_t>(phase), x, y, dx, dy);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

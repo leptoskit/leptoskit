@@ -14,16 +14,19 @@ description = "Axum server toolkit for leptoskit apps: static assets, code push 
 
 [features]
 default = []
-analytics = ["dep:leptoskit_analytics"]
+apm = ["dep:leptoskit_apm"]
 
 [dependencies]
+# Set to tokio when serving, so leptos resources, queries, and anything else
+# that spawns through `any_spawner` work during server rendering.
+any_spawner = { workspace = true, features = ["tokio"] }
 axum = { workspace = true }
 # Serves connections directly, so it can time out a client that never
 # finishes its request headers; `axum::serve` sets no timer, which turns
 # hyper's header read timeout off.
 hyper = { workspace = true, features = ["http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["http1", "http2", "server-auto", "server-graceful", "service", "tokio"] }
-leptoskit_analytics = { workspace = true, optional = true, features = ["server"] }
+leptoskit_apm = { workspace = true, optional = true, features = ["server"] }
 leptoskit_codepush = { workspace = true, features = ["server"] }
 # `[native]` describes the apps whose associations the site publishes.
 leptoskit_config = { workspace = true }

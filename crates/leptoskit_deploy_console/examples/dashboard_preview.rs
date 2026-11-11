@@ -2,7 +2,7 @@
 use axum::body::Body;
 use axum::body::to_bytes;
 use axum::http::Request;
-use leptoskit::analytics::*;
+use leptoskit::apm::*;
 use leptoskit_deploy_console::control::*;
 use tower::ServiceExt as _;
 

@@ -39,6 +39,7 @@ final class MobileApplicationChrome {
     }
 
     func showError(_ error: Error, hasActive: Bool) {
+        NativeLog.error(NativeLog.bridge, hasActive ? "an update cannot run" : "the app cannot run", error)
         status.text = error.localizedDescription
         update.isEnabled = hasActive
 

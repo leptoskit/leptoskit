@@ -29,6 +29,12 @@ typedef struct {
     lk_buffer payload;
 } lk_request;
 
+/* Writes one record to the platform's log through leptoskit's logger:
+ * logcat, os_log, or stderr. Levels: 1 error, 2 warn, 3 info, 4 debug,
+ * 5 trace. `target` is the tag, such as "leptoskit/bridge". */
+void lk_log_write(uint32_t level, const uint8_t *target, size_t target_len,
+                  const uint8_t *message, size_t message_len);
+
 lk_bridge *lk_bridge_create(void);
 void lk_bridge_destroy(lk_bridge *bridge);
 void lk_buffer_release(lk_buffer buffer);
@@ -96,7 +102,7 @@ int32_t lk_app_poll_service(lk_app *app);
 /* 0 is an ordinary app entry; 1 is a platform background tick. */
 int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason);
 /* Host text measurement. measure lays out len UTF-8 bytes at font_size logical
- * points, CSS font_weight (400-700), and rtl direction within width logical
+ * points, CSS font_weight (100-900), and rtl direction within width logical
  * points (-1 unbounded, -2 the widest word), writes the logical width and
  * height to out[0] and out[1], and returns true. It may run on any thread.
  * release runs once, after the last measurement. */
@@ -164,6 +170,10 @@ int32_t lk_app_enable_scene3d(lk_app *app);
  * scene3d feature lk_scene3d_available reports 0 and nothing attaches.
  * Views draw on the thread that attached them, from the display link. */
 typedef struct lk_scene3d_view lk_scene3d_view;
+/* Primary pointer phases: 0 down, 1 move, 2 up, 3 cancel. x/y are fractions
+ * of the view; dx/dy are layout units (points/dp), not physical pixels.
+ * Returns 1 queued, 0 absent scene, -1 invalid input or unavailable 3D. */
+int32_t lk_scene3d_pointer(uint32_t scene, uint32_t phase, float x, float y, float dx, float dy);
 typedef void (*lk_scene3d_wake_fn)(void *context);
 typedef int32_t (*lk_scene3d_read_fn)(void *context, const uint8_t *path, size_t path_len,
     void *sink);
@@ -359,6 +369,13 @@ int32_t lk_guest_frame_requested(const lk_guest *guest);
 /* For a service or async plugin wake. */
 int32_t lk_guest_wake(const lk_guest *guest);
 int32_t lk_guest_wake_background(const lk_guest *guest);
+/* Offers the platform's Back to the guest's optional leptoskit_system_back
+ * export. The answer follows a notification; offers are answered in order,
+ * and a guest that fails or stops first never answers. */
+int32_t lk_guest_system_back(const lk_guest *guest);
+/* The oldest answer: 1 when the guest went back, 2 when the platform should
+ * leave as Back does when nothing handles it, 0 when none is waiting. */
+int32_t lk_guest_take_system_back(const lk_guest *guest);
 /* lk_bridge_complete's arguments; the bytes are copied. */
 int32_t lk_guest_complete(const lk_guest *guest, uint64_t id, int32_t error,
                           const uint8_t *data, size_t len);

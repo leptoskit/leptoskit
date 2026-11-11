@@ -12,7 +12,7 @@ protocol WebBrowserService {
 
 #if canImport(UIKit)
 @MainActor
-private final class SafariBrowserService: NSObject, WebBrowserService, SFSafariViewControllerDelegate {
+private final class SafariBrowserService: NSObject, WebBrowserService {
     private var continuation: CheckedContinuation<Void, Error>?
     private weak var controller: SFSafariViewController?
 
@@ -28,7 +28,9 @@ private final class SafariBrowserService: NSObject, WebBrowserService, SFSafariV
             owner.present(controller, animated: true)
         }
     }
+}
 
+extension SafariBrowserService: @MainActor SFSafariViewControllerDelegate {
     func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
         guard self.controller === controller else { return }
 

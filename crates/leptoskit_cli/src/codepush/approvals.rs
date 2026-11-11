@@ -406,7 +406,6 @@ mod tests {
 	use super::first_difference;
 	use super::project_policy;
 	use super::read_approval;
-	use super::regular_files;
 
 	const COMMIT: &str = "3f9d5a1c2b8e7f604a9d5c3e2b1f0a8d7c6e5b4a";
 	const REPOSITORY: &str = "https://github.com/example/notes";
@@ -495,8 +494,11 @@ mod tests {
 		);
 	}
 
+	#[cfg(unix)]
 	#[test]
 	fn a_rebuild_holding_special_files_is_refused() {
+		use super::regular_files;
+
 		let directory = tempfile::tempdir().unwrap();
 		std::fs::write(directory.path().join("app.wasm"), b"a").unwrap();
 		std::os::unix::fs::symlink("app.wasm", directory.path().join("link")).unwrap();

@@ -1,6 +1,6 @@
 import CLeptosKitBridge
 import Foundation
-import LeptosKitAgeRange
+@testable import LeptosKitAgeRange
 import LeptosKitBridge
 import Testing
 

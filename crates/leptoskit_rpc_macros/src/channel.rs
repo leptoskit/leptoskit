@@ -15,6 +15,8 @@ use syn::Type;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 
+use crate::Build;
+
 /// What the attribute was given.
 pub(crate) struct ChannelArgs {
 	pub(crate) message: Type,
@@ -32,7 +34,7 @@ pub(crate) struct ChannelArgs {
 pub(crate) fn expand(
 	args: TokenStream,
 	item: TokenStream,
-	server: bool,
+	build: Build,
 ) -> syn::Result<TokenStream> {
 	let args = parse(args)?;
 	let mut item: ItemStruct = syn::parse2(item)?;
@@ -72,13 +74,17 @@ pub(crate) fn expand(
 		quote!(const SERVICE: ::core::option::Option<&'static str> = ::core::option::Option::Some(#service);)
 	});
 	// A service's channel is authorized only by that service: its check is
-	// kept where the declaring crate's own `service` feature is on.
-	let gate = args
-		.service
-		.as_ref()
-		.map(|_| quote!(#[cfg(feature = "service")]));
+	// kept where the declaring crate's own `service` feature is on, and left
+	// out of a crate that declares no such feature.
+	let (gate, registered) = if args.service.is_none() {
+		(None, build.server)
+	} else if build.server && (build.declares_service)() {
+		(Some(quote!(#[cfg(feature = "service")])), true)
+	} else {
+		(None, false)
+	};
 
-	let registration = server.then(|| {
+	let registration = registered.then(|| {
 		quote! {
 			#gate
 			#[allow(deprecated)]

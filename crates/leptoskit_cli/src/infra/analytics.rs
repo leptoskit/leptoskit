@@ -3,7 +3,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use leptoskit_analytics::Evidence;
+use leptoskit_apm::Evidence;
 use leptoskit_config::infra::InfraConfig;
 
 pub(super) fn query(c: &InfraConfig) -> Result<()> {

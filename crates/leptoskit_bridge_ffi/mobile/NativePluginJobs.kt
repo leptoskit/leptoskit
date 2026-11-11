@@ -1,7 +1,6 @@
 package dev.leptoskit.mobile
 
 import android.os.Handler
-import android.util.Log
 import dev.leptoskit.bridge.NativeDispatcher
 import dev.leptoskit.bridge.NativeJobBudget
 import dev.leptoskit.bridge.NativeRequest
@@ -110,7 +109,11 @@ internal class NativePluginJobs(
 
                 byteArrayOf()
             } catch (error: Exception) {
-                Log.e("LeptosKit", "Native plugin call failed", error)
+                NativeLog.error(
+                    NativeLog.BRIDGE,
+                    "call #${request.id} to native plugin ${request.plugin} method ${request.method} threw",
+                    error,
+                )
                 code = PluginException.NATIVE
                 byteArrayOf()
             }

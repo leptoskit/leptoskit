@@ -353,6 +353,10 @@ pub async fn serve_listener(
 /// [`serve_listener`] that stops the way `shutdown` says, for a server
 /// behind a load balancer.
 ///
+/// Serving makes tokio the global [`any_spawner::Executor`], unless the app
+/// chose another one first, so server rendering can spawn: leptos resources,
+/// `leptoskit::query` caches, and live subscriptions all start tasks there.
+///
 /// When the signal arrives, the server:
 ///
 /// 1. fails `shutdown`'s [`Readiness`], so `/readyz` answers `503`;
@@ -397,12 +401,14 @@ pub async fn serve_listener_with(
 	router: Router,
 	shutdown: GracefulShutdown,
 ) -> Result<(), ServeError> {
-	#[cfg(feature = "analytics")]
-	let router = match leptoskit_analytics::server::from_env()
+	// Fails only when an executor is already set, which is the app's choice.
+	let _ = any_spawner::Executor::init_tokio();
+	#[cfg(feature = "apm")]
+	let router = match leptoskit_apm::server::from_env()
 		.map_err(|error| ServeError::Serve(error.to_string()))?
 	{
 		Some(config) => {
-			leptoskit_analytics::server::mount(router, config)
+			leptoskit_apm::server::mount(router, config)
 				.map_err(|error| ServeError::Serve(error.to_string()))?
 				.0
 		}

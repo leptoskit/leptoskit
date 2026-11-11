@@ -2,7 +2,6 @@ package dev.leptoskit.plugins.pictureinpicture
 
 import android.app.Activity
 import android.app.Application
-import android.app.PictureInPictureModeChangedInfo
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
@@ -17,13 +16,15 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.core.app.OnPictureInPictureModeChangedProvider
+import androidx.core.app.PictureInPictureModeChangedInfo
+import androidx.core.util.Consumer
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.function.Consumer
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -300,7 +301,9 @@ class PictureInPicturePlugin(
     }
 
     private fun observePipMode(activity: Activity) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        // The listener lives on AndroidX, not android.app.Activity. A plain
+        // activity still notices the user leaving PiP when it resumes.
+        val provider = activity as? OnPictureInPictureModeChangedProvider ?: return
 
         if (pipModeListener != null) return
 
@@ -312,17 +315,15 @@ class PictureInPicturePlugin(
                     stopObservingIfIdle()
                 }
             }
-        activity.addOnPictureInPictureModeChangedListener(listener)
+        provider.addOnPictureInPictureModeChangedListener(listener)
         pipModeListener = listener
     }
 
     private fun clearPipModeListener(activity: Activity) {
         val listener = pipModeListener ?: return
         pipModeListener = null
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            activity.removeOnPictureInPictureModeChangedListener(listener)
-        }
+        (activity as? OnPictureInPictureModeChangedProvider)
+            ?.removeOnPictureInPictureModeChangedListener(listener)
     }
 
     private fun stopObservingIfIdle() {

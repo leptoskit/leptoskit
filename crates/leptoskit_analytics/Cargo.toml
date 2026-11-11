@@ -8,45 +8,82 @@ license.workspace = true
 readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded application observability and agent-readable evidence for LeptosKit."
+description = "Product analytics for LeptosKit apps: a service with its own database, and the batch format its clients send."
+
+# The service itself. `lk` builds it with the `service` feature.
+[[bin]]
+name = "leptoskit_analytics"
+path = "src/main.rs"
+required-features = ["service"]
+
+# The service's tests need its bodies.
+[[test]]
+name = "service"
+required-features = ["service"]
+
+# The server's client, sending to the service.
+[[test]]
+name = "client"
+required-features = ["service", "server-client"]
+
+[dependencies]
+# Everything below is the service's, or the server client's. The library
+# without features (the client core and the batch format) depends on
+# nothing, so an app that captures events doesn't compile any of it;
+# `tests/dependencies.rs` keeps it that way.
+chrono = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
+leptoskit_db = { workspace = true, optional = true }
+leptoskit_rpc = { workspace = true, optional = true, features = ["client"] }
+reqwest = { workspace = true, optional = true, features = ["rustls-tls"] }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
+uuid = { workspace = true, optional = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+flate2 = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
-server = [
-	"dep:axum",
-	"dep:getrandom",
-	"dep:reqwest",
-	"dep:rustix",
+# Building the service: ingestion, storage, and the binary. Only `lk` turns
+# this on, when it builds the service; the app never does.
+service = [
+	"dep:chrono",
+	"dep:flate2",
+	"dep:leptoskit_axum",
+	"dep:leptoskit_db",
+	"dep:leptoskit_rpc",
+	"dep:schemars",
+	"dep:serde",
 	"dep:serde_json",
 	"dep:sha2",
-	"dep:subtle",
 	"dep:tokio",
-	"dep:url",
+	"dep:uuid",
+	"leptoskit_db/sqlite",
+	"leptoskit_rpc/server",
+	"leptoskit_rpc/sqlite",
 ]
+# The client for the app's server: `client::server::Analytics`, sending in
+# the background with Tokio.
+server-client = ["dep:reqwest", "dep:tokio", "tokio/macros"]
+# The same service on Postgres, for an app whose `[db]` is Postgres.
+postgres = ["service", "leptoskit_db/postgres", "leptoskit_rpc/postgres"]
 
-[dependencies]
-axum = { workspace = true, optional = true }
-getrandom = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
-subtle = { workspace = true, optional = true }
-thiserror = { workspace = true }
-tokio = { workspace = true, optional = true, features = ["rt", "time"] }
-url = { workspace = true, optional = true }
-
-[target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, optional = true, features = ["fs"] }
-
-[dev-dependencies]
-serde_json = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
-tower = { workspace = true, features = ["util"] }
-
-[[example]]
-name = "server"
-required-features = ["server"]
+# What `lk` reads to run this crate as a service.
+[package.metadata.leptoskit.service]
+name = "analytics"
+port = 3110
+public = true
+features = ["service"]
+database = true
 
 [lints]
 workspace = true

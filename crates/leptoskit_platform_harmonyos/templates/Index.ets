@@ -1,4 +1,4 @@
-import { NativeRequest, Runtime, RenderBatch, RiveFrame } from 'libleptoskit.so';
+import { NativeRequest, Runtime, RenderBatch, RiveFrame, LineHeight } from 'libleptoskit.so';
 import { NativePlugin, NativePlugins } from '../leptoskit/plugins';
 import { nativePlugins } from '../leptoskit/registrant';
 import { Widget, Scene, BorderEdges, assetRawfile, borderEdges, color, isItalic, textContent } from '../scene';
@@ -87,14 +87,29 @@ struct NativeWidget {
     return content === 'email' ? InputType.Email : InputType.Normal;
   }
 
-  fontWeight(): FontWeight {
-    if (this.node.props.font_weight === 'bold') {
-      return FontWeight.Bold;
+  /** The CSS weight, from 100 to 900; ArkUI draws the nearest the system font has. */
+  fontWeight(): number {
+    switch (this.node.props.font_weight) {
+      case 'thin': return 100;
+      case 'extra_light': return 200;
+      case 'light': return 300;
+      case 'medium': return 500;
+      case 'semibold': return 600;
+      case 'bold': return 700;
+      case 'extra_bold': return 800;
+      case 'black': return 900;
+      default: return 400;
     }
-    if (this.node.props.font_weight === 'semibold') {
-      return FontWeight.Medium;
-    }
-    return this.node.props.font_weight === 'medium' ? FontWeight.Medium : FontWeight.Normal;
+  }
+
+  /** Every line's height in vp, or undefined for the font's own. */
+  lineHeight(): number | undefined {
+    const height: LineHeight | null | undefined = this.node.props.line_height;
+    if (height === undefined || height === null) { return undefined; }
+    const points: number | undefined = height.relative !== undefined
+      ? height.relative * (this.node.props.font_size ?? 14)
+      : height.fixed;
+    return points !== undefined && isFinite(points) && points > 0 ? points : undefined;
   }
 
   fontStyle(): FontStyle {
@@ -113,6 +128,7 @@ struct NativeWidget {
           .width('100%').height('100%')
           .fontSize(this.node.props.font_size ?? 14)
           .fontWeight(this.fontWeight()).fontStyle(this.fontStyle()).textAlign(this.textAlign())
+          .lineHeight(this.lineHeight())
           .fontColor(color(this.node.props.color, 0xff111827))
       } else if (this.node.kind === 'button') {
         Button(this.node.props.text ?? '', { type: ButtonType.Normal })

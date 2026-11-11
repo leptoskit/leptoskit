@@ -65,6 +65,7 @@ pub use leptoskit_plugin_picture_in_picture;
 pub use leptoskit_plugin_posture;
 pub use leptoskit_plugin_power_monitor;
 pub use leptoskit_plugin_print;
+pub use leptoskit_plugin_recorder;
 pub use leptoskit_plugin_screen_capture;
 pub use leptoskit_plugin_screen_orientation;
 pub use leptoskit_plugin_secure_store;

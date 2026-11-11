@@ -18,6 +18,11 @@ use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
 use leptoskit_native::NativeProps;
+use leptoskit_native::PointerDecision;
+use leptoskit_native::PointerKind;
+use leptoskit_native::PointerPhase;
+use leptoskit_native::PointerRoute;
+use leptoskit_native::PointerSample;
 use leptoskit_native::Progress;
 use leptoskit_native::SharedTextMeasurer;
 use leptoskit_native::TextAlign;
@@ -52,6 +57,9 @@ struct State {
 	dark: Option<bool>,
 	hosts: Vec<Host>,
 	resize_listener: Option<Rc<dyn Fn(f32, f32)>>,
+	pointer: Option<Rc<dyn Fn(PointerSample) -> PointerDecision>>,
+	clock: Option<Rc<dyn Fn(u64) -> PointerDecision>>,
+	gesture_timer: Option<glib::SourceId>,
 }
 
 struct Host {
@@ -110,6 +118,37 @@ impl GtkBackend {
 	/// Removes the event callback without changing the widget hierarchy.
 	pub fn clear_event_listener(&self) {
 		self.state.borrow_mut().listener = None;
+	}
+
+	/// Receives pointer samples in the window's layout coordinates.
+	///
+	/// The window's capture controller and
+	/// [`deliver_pointer`](Self::deliver_pointer) both call this. A claimed
+	/// gesture stops the event; anything else is also delivered to the
+	/// widget under the pointer.
+	pub fn set_pointer_listener(
+		&self,
+		listener: impl Fn(PointerSample) -> PointerDecision + 'static,
+	) {
+		self.state.borrow_mut().pointer = Some(Rc::new(listener));
+	}
+
+	/// Advances gestures waiting on the clock. `now_ms` matches the sample
+	/// clock.
+	pub fn set_gesture_clock(&self, clock: impl Fn(u64) -> PointerDecision + 'static) {
+		self.state.borrow_mut().clock = Some(Rc::new(clock));
+	}
+
+	/// Feeds one pointer sample through the same listener the window controller
+	/// uses.
+	pub fn deliver_pointer(&self, sample: PointerSample) -> PointerDecision {
+		let listener = self.state.borrow().pointer.clone();
+		let Some(listener) = listener else {
+			return PointerDecision::platform();
+		};
+		let decision = listener(sample);
+		self.arm_gesture(decision, sample.time_ms);
+		decision
 	}
 
 	/// Receives window content sizes in GTK logical pixels after allocation.
@@ -199,10 +238,44 @@ impl GtkBackend {
 			.child(&host)
 			.build();
 
+		self.track_pointers(&host);
 		window.present();
 		self.refresh();
 		drop(guard);
 		window
+	}
+
+	fn track_pointers(&self, host: &Frame) {
+		let controller = gtk::EventControllerLegacy::new();
+		controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+		let state = Rc::downgrade(&self.state);
+		let backend = Rc::downgrade(&self.state);
+		controller.connect_event(move |_, event| {
+			let Some(state) = state.upgrade() else {
+				return glib::Propagation::Proceed;
+			};
+			let Some(sample) = pointer_sample(event) else {
+				return glib::Propagation::Proceed;
+			};
+			let listener = state.borrow().pointer.clone();
+			let Some(listener) = listener else {
+				return glib::Propagation::Proceed;
+			};
+			let decision = listener(sample);
+			if let Some(state) = backend.upgrade() {
+				arm_timer(&state, decision, sample.time_ms);
+			}
+			if decision.route == PointerRoute::Claim {
+				glib::Propagation::Stop
+			} else {
+				glib::Propagation::Proceed
+			}
+		});
+		host.add_controller(controller);
+	}
+
+	fn arm_gesture(&self, decision: PointerDecision, now: u64) {
+		arm_timer(&self.state, decision, now);
 	}
 
 	/// Renders a mapped root to a PNG using its actual GTK renderer.
@@ -929,18 +1002,20 @@ fn control_css(kind: NativeKind, props: &NativeProps) -> String {
 	let mut css = format!(
 		"* {{ font-family: Sans; font-size: {}px; font-weight: {}; font-style: {}; }}",
 		props.text_style().font_size,
-		match props.text_style().font_weight {
-			leptoskit_native::FontWeight::Regular => 400,
-			leptoskit_native::FontWeight::Medium => 500,
-			leptoskit_native::FontWeight::Semibold => 600,
-			leptoskit_native::FontWeight::Bold => 700,
-		},
+		props.text_style().font_weight.value(),
 		if props.italic.unwrap_or(false) {
 			"italic"
 		} else {
 			"normal"
 		}
 	);
+
+	// GTK sets every line of a label to the line height, with the glyphs
+	// centered in it as CSS does. Text fields keep their own height.
+	if let Some(line_height) = props.text_style().line_height {
+		write!(css, "label {{ line-height: {line_height}px; }}")
+			.expect("formatting a String cannot fail");
+	}
 
 	if let Some(color) = props.color {
 		write!(
@@ -1503,5 +1578,83 @@ fn collect_visible_group(state: &State, id: NodeId, group: &str, members: &mut V
 
 	for child in &widget.children {
 		collect_visible_group(state, *child, group, members);
+	}
+}
+
+fn arm_timer(state: &Rc<RefCell<State>>, decision: PointerDecision, now: u64) {
+	let mut borrowed = state.borrow_mut();
+
+	if let Some(source) = borrowed.gesture_timer.take() {
+		source.remove();
+	}
+
+	let Some(at) = decision.deadline_ms else {
+		return;
+	};
+	let wait = at.saturating_sub(now);
+
+	if wait == 0 {
+		return;
+	}
+
+	let clock = borrowed.clock.clone();
+	let weak = Rc::downgrade(state);
+	drop(borrowed);
+	let source = glib::timeout_add_local(Duration::from_millis(wait), move || {
+		if let Some(clock) = clock.clone() {
+			let decision = clock(at);
+
+			if let Some(state) = weak.upgrade() {
+				arm_timer(&state, decision, at);
+			}
+		}
+
+		glib::ControlFlow::Break
+	});
+	state.borrow_mut().gesture_timer = Some(source);
+}
+
+fn pointer_sample(event: &gdk::Event) -> Option<PointerSample> {
+	let phase = phase_of(event.event_type())?;
+	let (x, y) = event.position()?;
+	let kind = match event.event_type() {
+		gdk::EventType::TouchBegin
+		| gdk::EventType::TouchUpdate
+		| gdk::EventType::TouchEnd
+		| gdk::EventType::TouchCancel => PointerKind::Touch,
+		_ => PointerKind::Mouse,
+	};
+	let id = 1;
+	Some(PointerSample::new(id, phase, x as f32, y as f32, u64::from(event.time())).kind(kind))
+}
+
+fn phase_of(kind: gdk::EventType) -> Option<PointerPhase> {
+	match kind {
+		gdk::EventType::ButtonPress | gdk::EventType::TouchBegin => Some(PointerPhase::Down),
+		gdk::EventType::MotionNotify | gdk::EventType::TouchUpdate => Some(PointerPhase::Move),
+		gdk::EventType::ButtonRelease | gdk::EventType::TouchEnd => Some(PointerPhase::Up),
+		gdk::EventType::TouchCancel | gdk::EventType::GrabBroken => Some(PointerPhase::Cancel),
+		_ => None,
+	}
+}
+
+#[cfg(test)]
+mod phase_tests {
+	use gtk::gdk::EventType;
+	use leptoskit_native::PointerPhase;
+
+	use super::phase_of;
+
+	#[test]
+	fn pointer_phases_cover_mouse_and_touch() {
+		assert_eq!(phase_of(EventType::ButtonPress), Some(PointerPhase::Down));
+		assert_eq!(phase_of(EventType::TouchBegin), Some(PointerPhase::Down));
+		assert_eq!(phase_of(EventType::MotionNotify), Some(PointerPhase::Move));
+		assert_eq!(phase_of(EventType::TouchUpdate), Some(PointerPhase::Move));
+		assert_eq!(phase_of(EventType::ButtonRelease), Some(PointerPhase::Up));
+		assert_eq!(phase_of(EventType::TouchEnd), Some(PointerPhase::Up));
+		assert_eq!(phase_of(EventType::TouchCancel), Some(PointerPhase::Cancel));
+		assert_eq!(phase_of(EventType::GrabBroken), Some(PointerPhase::Cancel));
+		assert_eq!(phase_of(EventType::Delete), None);
 	}
 }

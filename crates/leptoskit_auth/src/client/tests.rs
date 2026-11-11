@@ -147,6 +147,7 @@ struct InMemory {
 	jar: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
 	sent: Arc<Mutex<Vec<String>>>,
 	offline: Arc<AtomicBool>,
+	refuse_sign_out: Arc<AtomicBool>,
 }
 
 impl InMemory {
@@ -157,6 +158,7 @@ impl InMemory {
 			jar: Arc::default(),
 			sent: Arc::default(),
 			offline: Arc::default(),
+			refuse_sign_out: Arc::default(),
 		}
 	}
 
@@ -180,6 +182,14 @@ impl Http for InMemory {
 
 			if this.offline.load(Ordering::SeqCst) {
 				return Err(error("network", "offline"));
+			}
+			if this.refuse_sign_out.load(Ordering::SeqCst)
+				&& request.url.ends_with("/auth/sign-out")
+			{
+				return Ok(HttpResponse {
+					status: 503,
+					body: b"Unavailable".to_vec(),
+				});
 			}
 
 			let mut builder = Request::builder()
@@ -828,6 +838,63 @@ async fn an_unreachable_server_keeps_a_native_apps_refresh_token() {
 	assert_eq!(app.store().held(), None);
 }
 
+#[tokio::test]
+async fn failed_sign_out_updates_the_session_query_when_local_credentials_are_gone() {
+	let _turn = INSTALLED.lock().await;
+	use leptos::prelude::Owner;
+	use leptoskit_query::NetworkMode;
+	use leptoskit_query::QueryClient;
+	use leptoskit_query::QueryDefaults;
+	use leptoskit_query::use_mutation_in;
+
+	let _ = any_spawner::Executor::init_tokio();
+	let owner = Owner::new();
+	owner.set();
+
+	for native in [true, false] {
+		for offline in [true, false] {
+			let server = Server::new().await;
+			let device = if native {
+				server.native().device()
+			} else {
+				server.browser()
+			};
+			install(Arc::clone(&device.api));
+			let client = QueryClient::new()
+				.with_defaults(QueryDefaults::new().with_network_mode(NetworkMode::Always));
+			let signed_in = sign_in(&server, &device).await;
+			client.set_query_data(&session(), (), Some(signed_in.clone()));
+			device.http.sent.lock().unwrap().clear();
+			device.http.offline.store(offline, Ordering::SeqCst);
+			device
+				.http
+				.refuse_sign_out
+				.store(!offline, Ordering::SeqCst);
+
+			let error = use_mutation_in(client.clone(), sign_out_mutation())
+				.mutate_async(())
+				.await
+				.unwrap_err();
+			assert_eq!(error.error, if offline { "network" } else { "server" });
+			let sent = device.http.sent.lock().unwrap().clone();
+			assert_eq!(sent.len(), 1, "sign-out does not need another request");
+			assert!(sent[0].ends_with("/auth/sign-out"));
+			assert_eq!((device.held)(), !native);
+			let expected = if native { None } else { Some(signed_in) };
+			assert_eq!(
+				client.get_query_data(&session(), &()),
+				Some(expected.clone())
+			);
+
+			// Reconnecting does not sign the native app back in; a browser
+			// still has its cookie because the server never signed it out.
+			device.http.offline.store(false, Ordering::SeqCst);
+			assert_eq!(device.api.session().await.unwrap(), expected);
+		}
+	}
+	owner.cleanup();
+}
+
 /// Answers every request with the same response.
 struct Answer(u16, &'static str);
 
@@ -1315,6 +1382,7 @@ async fn server_rendering_reads_the_requests_session() {
 
 	// Changes run in the browser, not while the server renders.
 	assert_eq!(Rendering.sign_out().await.unwrap_err().error, "server");
+	assert!(!Rendering.signs_out_locally());
 	for refused in [
 		Rendering.send_code(ADA.to_owned()).await,
 		Rendering.revoke_others().await,

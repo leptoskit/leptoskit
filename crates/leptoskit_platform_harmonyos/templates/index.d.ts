@@ -1,5 +1,11 @@
 import type { image } from "@kit.ImageKit";
 
+/** Each line's height: a multiple of the font size, or logical vp. */
+export interface LineHeight {
+	relative?: number;
+	fixed?: number;
+}
+
 /** Rust's v1 render protocol. Optional values may be serialized as null. */
 export interface WidgetProps {
 	text?: string | null;
@@ -26,6 +32,8 @@ export interface WidgetProps {
 	clip?: boolean | null;
 	font_size?: number | null;
 	font_weight?: string | null;
+	/** Each line's height: a multiple of the font size, or vp. Unset is the font's own. */
+	line_height?: LineHeight | null;
 	/** Whether text draws italic. Unset means upright. */
 	italic?: boolean | null;
 	text_align?: string | null;

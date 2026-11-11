@@ -1,12 +1,14 @@
 package dev.leptoskit.mobile
 
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.graphics.Color
 import android.os.Build
+import android.os.Bundle
 import android.os.Looper
-import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowInsetsController
 import android.widget.Button
@@ -47,6 +49,7 @@ class LeptosKitApplicationView(
     private val action = Button(context)
     private var releases: NativeReleases? = null
     private var development: NativeDevelopmentGuests? = null
+    private var runningGuest = ByteArray(0)
     private var current: LeptosKitView? = null
         set(value) {
             field = value
@@ -69,6 +72,12 @@ class LeptosKitApplicationView(
     private val lifecycle = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val closeCompletion = CompletableDeferred<Unit>()
     private val transitions = mutableSetOf<Job>()
+
+    /** Breadcrumbs for the activity's pause and resume, for reading a failure's log. */
+    private val lifecycleLog =
+        (context as? Activity)?.let { activity ->
+            ActivityLifecycleLog(activity).also { activity.application.registerActivityLifecycleCallbacks(it) }
+        }
 
     private fun transition(block: suspend () -> Unit) {
         val task = lifecycle.launch { block() }
@@ -119,9 +128,19 @@ class LeptosKitApplicationView(
             // Before the first app, so every guest `leptoskit dev` sends reports to its hub.
             NativeDevtools.configure(context)
             val wasm = NativeUpdates.entry(embedded)
+            runningGuest = wasm
 
-            current = adopt(LeptosKitView(context, wasm, register = register))
-            guests.addView(current, FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            try {
+                current = adopt(LeptosKitView(context, wasm, register = register))
+                guests.addView(current, FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            } catch (error: Exception) {
+                // A plugin that cannot start, or a guest that cannot load:
+                // say why on screen rather than close the app.
+                guests.addView(NativeFailureView.create(context, NativeApplicationTeardown.message(error)))
+
+                if (error is NativeApplicationInitializationFailure) transition { joinInitialization(error) }
+            }
+
             development = developmentUrl?.let { NativeDevelopmentGuests(it, wasm, ::reload) }
         }
     }
@@ -167,6 +186,7 @@ class LeptosKitApplicationView(
         prefix: String,
         error: Throwable,
     ) {
+        NativeLog.error(NativeLog.BRIDGE, prefix, error)
         setBusy(false, "$prefix: ${NativeApplicationTeardown.message(error)}")
     }
 
@@ -408,12 +428,26 @@ class LeptosKitApplicationView(
     }
 
     /**
-     * Mounts a guest from `leptoskit dev` hidden behind the running one and swaps
-     * them once it renders, so a reload never shows an empty screen. A newer guest
-     * replaces a candidate that has not rendered yet.
+     * Follows a development guest the companion app scanned or pasted. Only a private http or https
+     * URL is accepted; release builds still refuse the unsigned module inside the follower.
+     */
+    fun followDevelopmentGuest(url: String): Boolean {
+        if (closed || Looper.myLooper() != Looper.getMainLooper()) return false
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+        if (url.any { it == '?' || it == '#' || it == '@' }) return false
+        development?.close()
+        development = NativeDevelopmentGuests(url, runningGuest, ::reload)
+        return true
+    }
+
+    /**
+     * Mounts a guest from leptoskit dev hidden behind the running one and swaps them once it
+     * renders, so a reload never shows an empty screen. A newer guest replaces a candidate that has
+     * not rendered yet.
      */
     private fun reload(wasm: ByteArray) {
         if (closed) return
+        runningGuest = wasm
         val token = ++generation
         pending?.let { stale ->
             pending = null
@@ -462,8 +496,8 @@ class LeptosKitApplicationView(
         view.alpha = 1f
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         view.bringToFront()
-        Log.i("LeptosKit", "leptoskit dev: reloaded")
-        cleanup?.let { Log.w("LeptosKit", "leptoskit dev: previous guest cleanup: ${NativeApplicationTeardown.message(it)}") }
+        NativeLog.info(NativeLog.BRIDGE, "leptoskit dev: reloaded")
+        cleanup?.let { NativeLog.warn(NativeLog.BRIDGE, "leptoskit dev: previous guest cleanup", it) }
     }
 
     /** A candidate that fails keeps the running guest; a running guest that fails shows why. */
@@ -483,33 +517,36 @@ class LeptosKitApplicationView(
                 retire(view)
             }
         } else if (view === current) {
-            view.addView(
-                TextView(context).apply {
-                    text = NativeApplicationTeardown.message(error)
-                    contentDescription = "leptoskit-error"
-                },
-            )
+            view.addView(NativeFailureView.create(context, NativeApplicationTeardown.message(error)))
         }
     }
 
     private fun reportDevelopment(error: Throwable) {
         val message = "leptoskit dev: ${NativeApplicationTeardown.message(error)}"
-        Log.w("LeptosKit", message)
+        NativeLog.error(NativeLog.BRIDGE, "leptoskit dev", error)
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 
     /**
-     * Asks the active guest to handle Android system Back through the file
-     * router (`leptoskit_system_back`). Returns true when the guest popped a
-     * route. Hosts without the guest export return false so the activity finishes.
+     * Offers Android system Back to the running guest, which pops its file
+     * router through `leptoskit_system_back` when it can; see
+     * [LeptosKitView.offerSystemBack]. [answer] runs later, on the main thread:
+     * true when the guest went back, false when the activity should leave.
+     * With no guest running, such as while an update loads or an error shows,
+     * it runs at once with false.
      */
-    fun offerSystemBack(): Boolean = current?.offerSystemBack() == true
+    fun offerSystemBack(answer: (Boolean) -> Unit) {
+        val view = current
+
+        if (view == null) answer(false) else view.offerSystemBack(answer)
+    }
 
     override fun close() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Application close requires the main thread" }
 
         if (closed) return
         closed = true
+        lifecycleLog?.let { it.activity.application.unregisterActivityLifecycleCallbacks(it) }
         development?.close()
         development = null
         ++generation
@@ -595,4 +632,57 @@ private fun Window.useLightSystemBars(light: Boolean) {
     @Suppress("DEPRECATION")
     decorView.systemUiVisibility =
         if (light) decorView.systemUiVisibility or flags else decorView.systemUiVisibility and flags.inv()
+}
+
+/** Logs one activity's pause and resume at info level. */
+private class ActivityLifecycleLog(
+    val activity: Activity,
+) : Application.ActivityLifecycleCallbacks {
+    override fun onActivityResumed(resumed: Activity) {
+        if (resumed === activity) NativeLog.info(NativeLog.BRIDGE, "resumed")
+    }
+
+    override fun onActivityPaused(paused: Activity) {
+        if (paused === activity) NativeLog.info(NativeLog.BRIDGE, "paused")
+    }
+
+    override fun onActivityCreated(
+        created: Activity,
+        state: Bundle?,
+    ) {}
+
+    override fun onActivityStarted(started: Activity) {}
+
+    override fun onActivityStopped(stopped: Activity) {}
+
+    override fun onActivitySaveInstanceState(
+        saved: Activity,
+        state: Bundle,
+    ) {}
+
+    override fun onActivityDestroyed(destroyed: Activity) {}
+}
+
+/**
+ * The development companion asks the running activity to follow a guest URL.
+ * The application view registers itself by being in the activity's hierarchy.
+ */
+object DevelopmentSession {
+    fun follow(
+        context: Context,
+        url: String,
+    ): Boolean {
+        val activity = context as? Activity ?: return false
+        val root = activity.window?.decorView ?: return false
+        return find(root)?.followDevelopmentGuest(url) == true
+    }
+
+    private fun find(view: View): LeptosKitApplicationView? {
+        if (view is LeptosKitApplicationView) return view
+        if (view !is ViewGroup) return null
+        for (index in 0 until view.childCount) {
+            find(view.getChildAt(index))?.let { return it }
+        }
+        return null
+    }
 }

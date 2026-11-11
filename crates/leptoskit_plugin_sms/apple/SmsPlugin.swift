@@ -13,7 +13,7 @@ protocol SmsComposerService {
 
 #if canImport(MessageUI) && os(iOS)
 @MainActor
-private final class SystemSmsComposer: NSObject, SmsComposerService, MFMessageComposeViewControllerDelegate {
+private final class SystemSmsComposer: NSObject, SmsComposerService {
     var canSend: Bool { MFMessageComposeViewController.canSendText() }
     private var continuation: CheckedContinuation<Void, Error>?
 
@@ -32,7 +32,9 @@ private final class SystemSmsComposer: NSObject, SmsComposerService, MFMessageCo
             owner.present(controller, animated: true)
         }
     }
+}
 
+extension SystemSmsComposer: @MainActor MFMessageComposeViewControllerDelegate {
     func messageComposeViewController(
         _ controller: MFMessageComposeViewController,
         didFinishWith result: MessageComposeResult

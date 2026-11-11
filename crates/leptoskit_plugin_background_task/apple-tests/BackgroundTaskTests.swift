@@ -1,6 +1,6 @@
 import CLeptosKitBridge
 import Foundation
-import LeptosKitBackgroundTask
+@testable import LeptosKitBackgroundTask
 import LeptosKitBridge
 import Testing
 

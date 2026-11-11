@@ -30,6 +30,7 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
+pub mod appearance;
 pub mod aria;
 pub mod asset;
 pub mod backend;
@@ -39,18 +40,22 @@ pub mod controls;
 pub mod devtools;
 pub mod element;
 pub mod flatten;
+pub mod gesture;
 pub mod splash;
 
 mod hash;
 pub mod motion;
 pub mod props;
 pub mod reactive;
+pub mod remember;
 pub mod store;
 pub mod surface;
 pub mod tailwind;
 pub mod vector;
 
 pub mod view;
+#[cfg(feature = "serde")]
+pub mod wire;
 
 #[cfg(feature = "guest")]
 pub mod guest;
@@ -58,6 +63,7 @@ pub mod guest;
 #[cfg(feature = "web")]
 pub mod web;
 
+pub use appearance::Appearance;
 pub use aria::Aria;
 pub use aria::Current;
 pub use aria::HasPopup;
@@ -78,6 +84,14 @@ pub use controls::RadioGroup;
 pub use controls::SliderState;
 pub use element::Element;
 pub use element::NativeEventSlot;
+pub use gesture::Gesture;
+pub use gesture::GestureEvent;
+pub use gesture::GestureState;
+pub use gesture::PointerDecision;
+pub use gesture::PointerKind;
+pub use gesture::PointerPhase;
+pub use gesture::PointerRoute;
+pub use gesture::PointerSample;
 pub use leptoskit_animation as animation;
 pub use leptoskit_animation::Animation;
 pub use leptoskit_animation::Transform;
@@ -96,6 +110,7 @@ pub use props::Color;
 pub use props::EventOutcome;
 pub use props::FontWeight;
 pub use props::KeyPress;
+pub use props::LineHeight;
 pub use props::NativeEvent;
 pub use props::NativeKind;
 pub use props::NativeProps;

@@ -188,6 +188,59 @@ fn emits_deterministic_scoped_styles_below_class_specificity() {
 	assert!(first.contains("font-weight:600"));
 }
 
+/// A list of rows that each look a little different, as a page's do.
+fn varied_rows(count: u16) -> Element {
+	(0..count).fold(Element::view().class("p-4"), |list, row| {
+		list.child(
+			Element::view()
+				.with_style(|style| style.width = Dimension::Points(f32::from(row) * 10.0))
+				.child(Element::text(format!("Row {row}")))
+				.child(Element::button("Open")),
+		)
+	})
+}
+
+#[test]
+fn the_style_reset_is_written_once_per_render() {
+	let html = render(varied_rows(24)).to_html();
+	let reset = "appearance:none;margin:0;border:0 solid transparent;";
+
+	assert_eq!(html.matches(reset).count(), 1, "{html}");
+	assert_eq!(html.matches("flex-direction:column;").count(), 1);
+	// Each row's sheet holds only its width.
+	for row in 1..24 {
+		assert_eq!(
+			html.matches(&format!("{{width:{}px;}}", row * 10)).count(),
+			1,
+			"{html}"
+		);
+	}
+
+	// 24 distinct rows wrote 24 full resets, of about a kilobyte each.
+	assert!(html.len() < 9_000, "{} bytes", html.len());
+}
+
+#[test]
+fn the_reset_applies_under_its_own_render_only() {
+	let html = render(varied_rows(2)).to_html();
+	let scope = html
+		.split("data-lk-root=\"")
+		.nth(1)
+		.and_then(|rest| rest.split('"').next())
+		.expect("the root names its render");
+
+	assert!(scope.starts_with("lk-r"), "{scope}");
+	assert!(html.contains(&format!(
+		":where([data-lk-root=\"{scope}\"],[data-lk-root=\"{scope}\"] \
+		 [data-lk-style]){{appearance:none;"
+	)));
+	assert_eq!(html.matches(" data-lk-root=").count(), 1, "only the root");
+	assert_eq!(html, render(varied_rows(2)).to_html(), "deterministic");
+	// A stylesheet later in the page can't reset an earlier render's
+	// elements, since its rule names its own root.
+	assert!(!render(varied_rows(3)).to_html().contains(scope));
+}
+
 #[test]
 fn motion_props_become_transforms_transitions_and_keyframes() {
 	use leptoskit_native::Transform;
@@ -499,6 +552,36 @@ fn styled_runs_render_as_inline_spans_in_a_block() {
 		"{html}"
 	);
 	assert!(html.contains("<span> = 1</span>"), "{html}");
+}
+
+#[test]
+fn typed_weights_and_line_heights_render_as_css() {
+	let relative = render(
+		Element::text("Loose")
+			.font(15.0, FontWeight::Black)
+			.line_height(leptoskit_native::LineHeight::Relative(1.5)),
+	)
+	.to_html();
+	assert!(relative.contains("font-weight:900;"), "{relative}");
+	assert!(relative.contains("line-height:1.5;"), "{relative}");
+
+	let fixed = render(
+		Element::text("Fixed")
+			.font(15.0, FontWeight::Thin)
+			.line_height(leptoskit_native::LineHeight::Fixed(22.0)),
+	)
+	.to_html();
+	assert!(fixed.contains("font-weight:100;"), "{fixed}");
+	assert!(fixed.contains("line-height:22px;"), "{fixed}");
+
+	let span = render(
+		Text("").spans([leptoskit_native::TextSpan::new("light").weight(FontWeight::Light)]),
+	)
+	.to_html();
+	assert!(
+		span.contains("<span style=\"font-weight:300;\">light</span>"),
+		"{span}"
+	);
 }
 
 #[test]

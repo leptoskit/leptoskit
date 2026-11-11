@@ -19,6 +19,7 @@ leptos = { workspace = true, optional = true }
 leptoskit_3d = { workspace = true }
 leptoskit_animation = { workspace = true }
 leptoskit_devtools_protocol = { workspace = true, optional = true }
+leptoskit_log = { workspace = true }
 leptoskit_rive = { workspace = true }
 leptoskit_yoga = { workspace = true }
 reactive_graph = { workspace = true }
@@ -52,6 +53,10 @@ web-sys = { workspace = true, features = ["Blob", "BlobPropertyBag", "CanvasRend
 name = "vector"
 harness = false
 
+[[bench]]
+name = "gesture"
+harness = false
+
 [[example]]
 name = "grid_parity_probe"
 required-features = ["web"]
@@ -63,7 +68,7 @@ rive = ["leptoskit_rive/native", "leptoskit_rive/web"]
 guest = ["serde", "dep:serde_json", "dep:futures"]
 serde = ["dep:serde", "dep:serde_json", "leptoskit_yoga/serde", "leptoskit_rive/serde", "leptoskit_animation/serde"]
 svg = ["dep:roxmltree"]
-web = ["dep:leptos", "dep:sha2", "dep:wasm-bindgen", "dep:web-sys"]
+web = ["dep:leptos", "dep:sha2", "dep:wasm-bindgen", "dep:web-sys", "leptoskit_log/web"]
 
 [lints]
 workspace = true

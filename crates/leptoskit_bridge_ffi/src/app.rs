@@ -21,6 +21,8 @@ use leptoskit_bridge::MethodId;
 use leptoskit_bridge::Plugin;
 use leptoskit_bridge::PluginId;
 use leptoskit_bridge::Reply;
+use leptoskit_log::target;
+use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_native::Mutation;
 use leptoskit_native::NativeEvent;
@@ -189,7 +191,12 @@ pub unsafe fn create_with_context(
 			.and_then(|context| context.decode())
 	};
 	// SAFETY: Input/output buffers obey the same contract as create.
-	unsafe { create(wasm, len, error, |app| install(app, &context?)) }
+	unsafe {
+		create_reporting(wasm, len, error, |app| {
+			let context = context.map_err(|error| format!("app context: {error:?}"))?;
+			install(app, &context).map_err(|error| app.registration_failure(error))
+		})
+	}
 }
 
 /// One loaded guest and its installed immediate and worker Rust plugins.
@@ -216,6 +223,9 @@ pub struct App {
 	flattener: leptoskit_native::flatten::Flattener,
 	nodes: BTreeMap<usize, NodeId>,
 	error: String,
+	/// The plugin whose [`Self::register`] failed, which app creation names
+	/// in its error.
+	failed_plugin: Option<&'static str>,
 	started: bool,
 	render_failed: bool,
 	/// The root the last transaction named, so an unchanged one needs no
@@ -231,6 +241,7 @@ pub struct App {
 impl App {
 	/// Loads a guest without running it. Install plugins before starting.
 	pub fn new(wasm: &[u8]) -> Result<Self, leptoskit_wasm::WasmError> {
+		leptoskit_log::install();
 		let backend = HeadlessBackend::new();
 		// Layout measures text with the platform's own fonts so the boxes it
 		// gives labels and buttons match what the native views draw.
@@ -267,6 +278,7 @@ impl App {
 			flattener: leptoskit_native::flatten::Flattener::default(),
 			nodes: BTreeMap::new(),
 			error: String::new(),
+			failed_plugin: None,
 			started: false,
 			render_failed: false,
 			rendered_root: None,
@@ -283,7 +295,10 @@ impl App {
 		if let Some(plugin) = app.devtools.as_ref().map(devtools::Devtools::plugin)
 			&& let Err(error) = app.install_async(plugin)
 		{
-			eprintln!("leptoskit devtools: the guest's values can't be reported: {error:?}");
+			log::warn!(
+				target: target::BRIDGE,
+				"DevTools can't report the guest's values: {error:?}"
+			);
 		}
 
 		Ok(app)
@@ -321,6 +336,36 @@ impl App {
 		self.host
 			.as_mut()
 			.expect("live applications own an interpreter")
+	}
+
+	/// Installs the plugin `name` with `install`, and remembers the name when
+	/// that fails, so that app creation's error says which plugin stopped the
+	/// app: ``register plugin `websocket`: InvalidArgument`` rather than
+	/// `register plugin: InvalidArgument`. Generated registrants install
+	/// every plugin through it.
+	///
+	/// # Errors
+	/// Whatever `install` returns.
+	pub fn register<T>(
+		&mut self,
+		name: &'static str,
+		install: impl FnOnce(&mut Self) -> Result<T, Error>,
+	) -> Result<T, Error> {
+		let result = install(self);
+
+		if result.is_err() {
+			self.failed_plugin = Some(name);
+		}
+
+		result
+	}
+
+	/// What app creation reports when installing plugins failed with `error`.
+	fn registration_failure(&self, error: Error) -> String {
+		match self.failed_plugin {
+			Some(name) => format!("register plugin `{name}`: {error:?}"),
+			None => format!("register plugin: {error:?}"),
+		}
 	}
 
 	/// Stores one inert installer. No service runs during synchronous creation.
@@ -390,7 +435,7 @@ impl App {
 		let work = match service.poll(host, reason) {
 			Ok(work) => work,
 			Err(error) => {
-				self.error = format!("application service: {error:?}");
+				self.fail(format!("application service: {error:?}"));
 				return Err(error);
 			}
 		};
@@ -425,14 +470,42 @@ impl App {
 		}
 	}
 
+	/// The next request the service handed back or the guest queued. A
+	/// service drains the bridge itself, so what it hands back has not been
+	/// served yet: the interpreter's own plugins take theirs here, as
+	/// [`WasmHost::next_host_request`] does for the queue.
 	fn next_routed_or_queued_request(&mut self) -> Option<leptoskit_bridge::Request> {
 		while let Some(request) = self.routed_requests.pop_front() {
-			if matches!(self.host_mut().plugins().result(request.id), Ok(None)) {
+			if matches!(self.host_mut().plugins().result(request.id), Ok(None))
+				&& !self.host_mut().serve(&request)
+			{
 				return Some(request);
 			}
 		}
 
 		self.host_mut().next_host_request()
+	}
+
+	/// Every plugin answered in Rust, whose calls never reach the platform's
+	/// plugin router. The interpreter's own (its timer), the frame clock, and
+	/// each plugin [`Self::install`] took are answered in this app. Worker and
+	/// async plugins reach the platform only as the Rust job [`lk_app_worker`]
+	/// or `lk_app_async` makes of each call, for its executor to run.
+	pub fn rust_plugins(&self) -> Vec<PluginId> {
+		let host = self
+			.host
+			.as_ref()
+			.expect("live applications own an interpreter");
+		let plugins = host
+			.served_plugins()
+			.chain(self.frame_plugin)
+			.chain(self.plugins.keys().map(|id| PluginId(*id)))
+			.chain(self.workers.keys().map(|id| PluginId(*id)));
+
+		#[cfg(feature = "async-host")]
+		let plugins = plugins.chain(self.async_host.plugins());
+
+		plugins.collect()
 	}
 
 	/// Routes cancellation through the same service owner as native requests.
@@ -467,7 +540,7 @@ impl App {
 		match result {
 			Ok(()) => Ok(()),
 			Err(error) => {
-				self.error = format!("enable timers: {error}");
+				self.fail(format!("enable timers: {error}"));
 				Err(Error::Native)
 			}
 		}
@@ -602,13 +675,26 @@ impl App {
 		self.install_async(Arc::new(leptoskit_3d::host::Scene3dPlugin::new()))
 	}
 
+	/// Records why the app failed, for [`lk_app_error`] and the guest
+	/// thread's error, and logs it. The same failure reported again, as a
+	/// rejected render is on every later call, is logged once.
+	fn fail(&mut self, message: impl Into<String>) {
+		let message = message.into();
+
+		if message != self.error {
+			log::error!(target: target::BRIDGE, "{message}");
+		}
+
+		self.error = message;
+	}
+
 	fn record(&mut self, result: Result<(), leptoskit_wasm::WasmError>) -> i32 {
 		if self.render_failed {
 			return -1;
 		}
 
 		if let Some(error) = self.host_mut().render_error() {
-			self.error = error.into();
+			self.fail(error);
 
 			return -1;
 		}
@@ -619,7 +705,7 @@ impl App {
 				0
 			}
 			Err(error) => {
-				self.error = error.to_string();
+				self.fail(error.to_string());
 				-1
 			}
 		}
@@ -636,12 +722,13 @@ impl App {
 			)
 			|| !valid_viewport(width, height)
 		{
-			self.error = "invalid viewport or application already started".into();
+			self.fail("invalid viewport or application already started");
 
 			return -1;
 		}
 
 		self.started = true;
+		log::info!(target: target::BRIDGE, "starting the guest at {width}×{height}");
 		let result = self.host_mut().start(width, height);
 		self.record(result)
 	}
@@ -649,7 +736,7 @@ impl App {
 	/// Lays the screen out again for a new viewport or appearance.
 	fn resize(&mut self, width: f32, height: f32, dark: bool) -> i32 {
 		if !self.started || !valid_viewport(width, height) {
-			self.error = "cannot resize before start or with an invalid viewport".into();
+			self.fail("cannot resize before start or with an invalid viewport");
 
 			return -1;
 		}
@@ -681,11 +768,31 @@ impl App {
 		self.record(result)
 	}
 
+	/// Offers the platform's Back to the guest's `leptoskit_system_back`
+	/// export: 1 when the guest went back, 0 when the platform should leave,
+	/// as Back does when nothing handles it, or -1 when the guest failed.
+	/// Before the guest has started there is nothing to go back to. The guest
+	/// thread is the only caller.
+	#[cfg(not(target_arch = "wasm32"))]
+	fn system_back(&mut self) -> i32 {
+		if !self.started {
+			return 0;
+		}
+
+		let result = self.host_mut().system_back();
+		let went_back = matches!(result, Ok(EventOutcome::Handled));
+
+		match self.record(result.map(|_| ())) {
+			0 => i32::from(went_back),
+			failed => failed,
+		}
+	}
+
 	/// Delivers a display frame to the guest calls waiting for one, then lets
 	/// the guest run.
 	fn deliver_frame(&mut self, frame: leptoskit_bridge::frame::Frame) -> i32 {
 		if let Err(error) = self.frame(frame) {
-			self.error = format!("deliver a display frame: {error:?}");
+			self.fail(format!("deliver a display frame: {error:?}"));
 
 			return -1;
 		}
@@ -735,7 +842,14 @@ impl App {
 				// This runs on the platform's UI thread under an `extern "C"`
 				// entry point, where unwinding would abort the app. The
 				// plugin's state is unknown, so it answers no more calls,
-				// like a worker plugin whose mutex a panic poisoned.
+				// like a worker plugin whose mutex a panic poisoned. The panic
+				// hook has logged where it panicked.
+				log::error!(
+					target: &target::plugin(name),
+					"plugin `{name}` panicked in call #{} method {}; it answers no more calls",
+					request.id.0,
+					request.method.0,
+				);
 				let failed = self
 					.plugins
 					.insert(request.plugin.0, Box::new(FailedPlugin { name, methods }));
@@ -744,7 +858,7 @@ impl App {
 			});
 
 			if let Err(error) = self.host_mut().plugins().complete(request.id, reply) {
-				self.error = format!("complete Rust plugin: {error:?}");
+				self.fail(format!("complete Rust plugin: {error:?}"));
 
 				return Err(());
 			}
@@ -1022,6 +1136,24 @@ pub unsafe fn create(
 	error: *mut Buffer,
 	install: impl FnOnce(&mut App) -> Result<(), Error>,
 ) -> *mut App {
+	// SAFETY: The caller upholds this function's contract.
+	unsafe {
+		create_reporting(wasm, len, error, |app| {
+			install(app).map_err(|error| app.registration_failure(error))
+		})
+	}
+}
+
+/// [`create`], with `install` describing its own failure.
+///
+/// # Safety
+/// As for [`create`].
+unsafe fn create_reporting(
+	wasm: *const u8,
+	len: usize,
+	error: *mut Buffer,
+	install: impl FnOnce(&mut App) -> Result<(), String>,
+) -> *mut App {
 	if error.is_null() {
 		return ptr::null_mut();
 	}
@@ -1032,14 +1164,19 @@ pub unsafe fn create(
 		App::new(unsafe { std::slice::from_raw_parts(wasm, len) })
 			.map_err(|error| error.to_string())
 			.and_then(|mut app| {
-				install(&mut app).map_err(|error| format!("register plugin: {error:?}"))?;
+				install(&mut app)?;
 				Ok(app)
 			})
 	};
 
 	match result {
-		Ok(app) => Box::into_raw(Box::new(app)),
+		Ok(app) => {
+			log::info!(target: target::BRIDGE, "created the app from {len} bytes of Wasm");
+			Box::into_raw(Box::new(app))
+		}
 		Err(message) => {
+			leptoskit_log::install();
+			log::error!(target: target::BRIDGE, "cannot create the app: {message}");
 			// SAFETY: Caller provides writable output storage.
 			unsafe {
 				error.write(Buffer::new(message.into()));
@@ -1121,7 +1258,7 @@ pub unsafe extern "C" fn lk_app_event(
 	match unsafe { decode_event(kind, text, len) } {
 		Ok(event) => app.dispatch_event(node, &event),
 		Err(error) => {
-			app.error = error.into();
+			app.fail(error);
 			-1
 		}
 	}
@@ -1326,7 +1463,7 @@ pub unsafe extern "C" fn lk_app_enable_frames(app: *mut App) -> i32 {
 	match app.enable_frames() {
 		Ok(()) => 0,
 		Err(error) => {
-			app.error = format!("enable the frame clock: {error:?}");
+			app.fail(format!("enable the frame clock: {error:?}"));
 			-1
 		}
 	}
@@ -1442,7 +1579,7 @@ impl App {
 		}
 
 		if let Some(error) = self.host_mut().render_error() {
-			self.error = error.into();
+			self.fail(error);
 			self.render_failed = true;
 
 			return None;
@@ -1466,10 +1603,20 @@ impl App {
 			Ok(bytes) => bytes,
 			Err(error) => {
 				self.render_failed = true;
-				self.error = error;
+				self.fail(format!("encode the render transaction: {error}"));
 				return None;
 			}
 		};
+
+		if self.rendered_root.is_none() && root.is_some() {
+			log::info!(
+				target: target::RENDER,
+				"first commit: {} bytes changing the native views {} time{}",
+				bytes.len(),
+				mutations.len(),
+				if mutations.len() == 1 { "" } else { "s" }
+			);
+		}
 
 		self.rendered_root = root;
 

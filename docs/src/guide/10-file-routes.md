@@ -147,7 +147,7 @@ A drawer lists typed roots in a side panel. Open state lives on the router, so i
 
 `Navigation::open_url` turns an incoming URL into a typed route: `myapp://notes/42` and `/notes/42` both reach `Route::Note`. Custom schemes treat the host as the first path segment; `http(s)` uses the URL path and query. Prefer `open_url_with(..., OpenMode::Replace)` on cold start so Back leaves the app. Drain a host deep-link queue with `apply_activations` and the same open modes.
 
-On native mounts, call `navigation.bind_system_back()` and export `leptoskit_system_back` so Android system Back can pop the router. Generated Android activities already ask the host view to offer system Back before finishing the activity. Packaging still has to declare URL schemes; mobile inbound handlers beyond the host push queue remain a platform gap (see the [plugin inventory](../platforms/plugin-inventory.md)).
+On native mounts, call `navigation.bind_system_back()` and export `leptoskit_system_back` so Android's Back gesture and Back button go back one route; new projects do both. On the first route, Back leaves the app. Only Android sends system Back today; on other platforms the export is never called. [Android](../platforms/android.md#the-back-gesture) lists what an app scaffolded before this needs. Packaging still has to declare URL schemes; mobile inbound handlers beyond the host push queue remain a platform gap (see the [plugin inventory](../platforms/plugin-inventory.md)).
 
 ### Props
 
@@ -259,9 +259,11 @@ In the browser, turn on `leptoskit_router`'s `web` feature and start from the pa
 let navigation = Navigation::from_browser()?;
 leptos::mount::mount_to_body(move || {
 	let navigation = navigation.clone();
-	move || leptoskit::web::render(navigation.render())
+	leptoskit::web::screen(move || navigation.render())
 });
 ```
+
+`leptoskit::web::screen` renders the current route again whenever a signal it read changes, and keeps what each screen [remembers](07-shared-components.md#keep-a-screens-own-state-across-rebuilds) until you leave it.
 
 `from_browser` fails only when the page's URL matches no route, which can't happen with a root `+not-found.rs`.
 

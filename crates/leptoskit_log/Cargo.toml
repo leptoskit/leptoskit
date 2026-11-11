@@ -1,0 +1,35 @@
+[package]
+name = "leptoskit_log"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include = ["src/**", "apple/**", "/build.rs", "/Cargo.toml", "/readme.md"]
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Where leptoskit's own records go on each platform: logcat, os_log, stderr, or the browser console, with a panic hook."
+
+[features]
+# The browser console, for apps running in a web page. The native guest is
+# also `wasm32`, but has no console: only the web renderer turns this on.
+web = ["dep:wasm-bindgen", "dep:web-sys"]
+# `capture`, a sink that keeps records in memory for tests to read.
+testing = []
+
+[dependencies]
+log = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["console"] }
+
+[dev-dependencies]
+leptoskit_log = { workspace = true, features = ["testing"] }
+
+[build-dependencies]
+cc = { workspace = true }
+
+[lints]
+workspace = true

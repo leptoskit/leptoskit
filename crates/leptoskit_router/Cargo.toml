@@ -19,6 +19,11 @@ reactive_graph = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+leptos = { workspace = true, optional = true }
+leptos_axum = { workspace = true, optional = true }
+leptos_router = { workspace = true, optional = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 send_wrapper = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
@@ -29,6 +34,9 @@ default = []
 # Keep the browser's address bar, back button and history in step with the
 # router. Only takes effect in wasm builds that run in a browser.
 web = ["dep:send_wrapper", "dep:wasm-bindgen", "dep:web-sys"]
+# Register file routes with `leptos_axum` and read the request URL on the server.
+# Only takes effect on native targets, even when features unify in a web build.
+ssr = ["dep:leptos", "dep:leptos_axum", "dep:leptos_router"]
 
 [dev-dependencies]
 leptoskit_yoga = { workspace = true }

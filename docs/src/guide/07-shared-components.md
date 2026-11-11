@@ -160,9 +160,37 @@ view! {
 
 The view function runs again when it reads a signal. `let n = count.get();` in the body rebuilds the screen, which is how a value chooses the shape of the tree, and it is the slow way to change a label. A read inside `Text`, `For`, or `Show` stays with that piece. A screen that stores its state in a plain value still rebuilds after a press, because that is how the new value reaches the screen.
 
-Keep a signal in application state rather than creating one inside a view function: a signal lives as long as the guest, so one created on every render is never freed.
+Keep a signal in application state, or in [`remember`](#keep-a-screens-own-state-across-rebuilds), rather than creating one inside a view function: a signal lives as long as the guest, so one created on every render is never freed.
 
 On the web the same tree shows the value read at build time, and leptos re-runs the screen when the signal changes, so nothing else is needed there. `leptoskit::prelude` exports leptos's own `RwSignal`, so a screen shared with the browser keeps one signal type.
+
+## Keep a screen's own state across rebuilds
+
+A chosen filter or a half-typed search belongs to one screen, not to the whole app, but `RwSignal::new(false)` inside the screen runs again on every rebuild, so the value resets the moment the screen redraws. `remember` hands back the same signal on every build instead:
+
+```rust
+use leptoskit::prelude::*;
+
+#[component]
+pub fn Tasks() -> Element {
+	// Created on the first build; every rebuild after it gets the same signal.
+	let open_only = remember(|| false);
+	let toggle = move || open_only.update(|open| *open = !*open);
+	let label = if open_only.get() { "Open tasks" } else { "All tasks" };
+	view! {
+		<View class="flex-col gap-2 p-4">
+			<Text class="text-xl font-bold">{label}</Text>
+			<Button on:press=move || toggle()>"Switch"</Button>
+		</View>
+	}
+}
+```
+
+This works the same on the web and on every native platform. Each `remember` call is named by where it is in your code and by how many times that line already ran in the build, so a component used twice keeps two values. Rows that can move, appear, or disappear name their value with `remember_keyed(&task.id, || …)` instead, so the value follows the row rather than its position.
+
+A value lives as long as the screen keeps asking for it. When a whole rebuild finishes without reaching a `remember` call — you navigated to another route, or a branch stopped rendering — its value is released, and coming back starts from the closure again. State that must outlive a screen, such as a signed-in user, still goes in a signal you create before mounting the app.
+
+`leptoskit::guest::mount` keeps the values for a native app. In the browser, render the screen with `leptoskit::web::screen(move || …)` where you would write `move || leptoskit::web::render(…)`: it rebuilds the same way and keeps the values. Outside both, as in a test that builds a screen once, `remember` is `RwSignal::new`.
 
 ## Group a state struct into a store
 
@@ -256,6 +284,33 @@ surface.set_dark_mode(true);
 ```
 
 On native, the host supplies the viewport in logical pixels and calls `set_dark_mode` when appearance changes. The browser uses generated width media queries and `prefers-color-scheme`. Browser resizing does not require rebuilding the screen.
+
+## Let people choose light or dark
+
+Many apps offer a setting with three choices: Light, Dark, and Match device. `dark:` utilities follow the device until your app calls `appearance::set`; from then on they follow the choice, without a reload or a restart:
+
+```rust
+use leptoskit::appearance::{self, Appearance};
+use leptoskit::prelude::*;
+
+#[component]
+pub fn AppearancePicker() -> Element {
+	view! {
+		<View class="flex-row gap-2">
+			<Button on:press=move || appearance::set(Appearance::Light)>"Light"</Button>
+			<Button on:press=move || appearance::set(Appearance::Dark)>"Dark"</Button>
+			<Button on:press=move || appearance::set(Appearance::System)>"Match device"</Button>
+		</View>
+	}
+}
+```
+
+`appearance::get()` returns the current choice and is reactive, so a picker can mark the selected option with a binding or `Show`.
+
+- **Web:** the choice marks the page's `<html>` element with `data-lk-appearance="light"` or `"dark"`, which the generated stylesheet reads, and sets its `color-scheme`, so the browser's own form controls and scrollbars match. Match device removes both.
+- **macOS, iOS, Android, Linux, Windows, and the terminal:** the next render carries the choice to the host, which resolves `dark:` against it and tells the platform backend, so controls the backend crates draw match too. In the generated macOS, iOS, and Android apps, `dark:` utilities follow the choice, but a label with no colour class and the system's own control chrome still follow the device, so give text an explicit colour, as in `text-slate-900 dark:text-slate-100`.
+
+Remembering the choice is up to your app. Store `Appearance::as_str()` (`"system"`, `"light"`, or `"dark"`) with the [`store` plugin](../platforms/plugin-inventory.md), a cookie, or your own settings, and call `appearance::set` with `stored.parse()` before the first screen renders. A server render can't know the choice, so on the web put the attribute on `<html>` yourself from the stored value to avoid showing the device's appearance first.
 
 The [CSS coverage reference](../reference/css-coverage.md#defaults-and-units) lists breakpoint values, units, and component defaults.
 

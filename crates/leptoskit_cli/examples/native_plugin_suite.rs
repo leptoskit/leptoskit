@@ -90,9 +90,11 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 	("app-integrity", "leptoskit_plugin_app_integrity"),
 	("blob", "leptoskit_plugin_blob"),
 	("diagnostics", "leptoskit_plugin_diagnostics"),
+	("dev-client", "leptoskit_plugin_dev_client"),
 	("asset", "leptoskit_plugin_asset"),
 	("age-range", "leptoskit_plugin_age_range"),
 	("audio", "leptoskit_plugin_audio"),
+	("recorder", "leptoskit_plugin_recorder"),
 	(
 		"android_alarm_manager",
 		"leptoskit_plugin_android_alarm_manager",
@@ -103,7 +105,9 @@ const OPTIONAL_PLUGINS: &[(&str, &str)] = &[
 const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_bridge_ffi/android-tests/ActivityResultBrokerTest.kt",
 	"leptoskit_bridge_ffi/android-tests/NativeVectorViewTest.kt",
+	"leptoskit_bridge_ffi/android-tests/NativeFailureViewTest.kt",
 	"leptoskit_bridge_ffi/android-tests/NativeControlsTest.kt",
+	"leptoskit_bridge_ffi/android-tests/NativeTextMeasurerTest.kt",
 	"leptoskit_bridge_ffi/android-tests/RenderBatchTest.kt",
 	"leptoskit_bridge_ffi/android-tests/RenderBatchFixture.kt",
 	"leptoskit_plugin_secure_store/tests/android/SecureStorePluginTest.kt",
@@ -155,8 +159,10 @@ const ANDROID_TESTS: &[&str] = &[
 	"leptoskit_plugin_app_integrity/tests/android/AppIntegrityWireTest.kt",
 	"leptoskit_plugin_blob/tests/android/BlobWireTest.kt",
 	"leptoskit_plugin_diagnostics/tests/android/DiagnosticsWireTest.kt",
+	"leptoskit_plugin_dev_client/tests/android/DevClientWireTest.kt",
 	"leptoskit_plugin_asset/tests/android/AssetWireTest.kt",
 	"leptoskit_plugin_age_range/tests/android/AgeRangeWireTest.kt",
+	"leptoskit_plugin_recorder/tests/android/RecorderWireTest.kt",
 ];
 
 /// Instrumentation wrappers that call each plugin test file's `main`.
@@ -209,6 +215,7 @@ const WRAPPERS: &[(&str, &str)] = &[
 		"DiagnosticsWireInstrumentationTest.kt",
 		DIAGNOSTICS_WIRE_TEST,
 	),
+	("DevClientWireInstrumentationTest.kt", DEV_CLIENT_WIRE_TEST),
 	("AssetWireInstrumentationTest.kt", ASSET_WIRE_TEST),
 	("AgeRangeWireInstrumentationTest.kt", AGE_RANGE_WIRE_TEST),
 ];
@@ -403,6 +410,19 @@ import org.junit.Test
 class BlobWireInstrumentationTest {
     @Test
     fun smoke() {
+        main()
+    }
+}
+";
+
+const DEV_CLIENT_WIRE_TEST: &str = r"package dev.leptoskit.plugins.devclient
+
+import org.junit.Test
+
+/** Validates development-guest addresses without a camera. */
+class DevClientWireInstrumentationTest {
+    @Test
+    fun localAddressesMatchTheRustParser() {
         main()
     }
 }

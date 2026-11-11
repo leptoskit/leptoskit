@@ -1,29 +1,20 @@
-//! <!-- {=analyticsSummary|trim|linePrefix:"//! ":true} -->
+//! Product analytics for leptoskit apps.
 //!
-//! See which application routes are failing or slow. The app keeps bounded
-//! minute aggregates and a small correlation buffer in memory. Connect the
-//! optional deployment service for durable fleet history, or use the
-//! per-process endpoint without an extra observability service. Unexported
-//! in-memory data resets on restart.
+//! Without features, this crate is the client apps record events with
+//! ([`client`]) and the batch format it sends them in ([`wire`]), and
+//! depends on nothing, so it adds little to an app's bundle. With the `service`
+//! feature, it's the analytics service itself: a process of its own, with its
+//! own database, which `lk` runs when an app declares `[services.analytics]`.
 //!
-//! <!-- {/analyticsSummary} -->
-//!
-//! [`Analytics`] retains aggregate windows and a small correlation buffer.
-//! With `server`, [`server::mount`] instruments Axum and provides protected
-//! JSON evidence plus a same-origin browser SDK. The JSON API is `LeptosKit`'s
-//! versioned format, not OTLP. Trace IDs use W3C Trace Context version 00.
+//! The design, and what's built so far, is in the repository's
+//! `docs/agents/analytics-service.md`.
 
-mod aggregate;
-mod context;
-mod model;
+pub mod client;
+pub mod wire;
 
-pub use aggregate::Analytics;
-pub use context::TraceContext;
-pub use model::*;
+#[cfg(feature = "service")]
+pub mod service;
 
-#[cfg(feature = "server")]
-pub mod export;
-#[cfg(feature = "server")]
-pub mod host;
-#[cfg(feature = "server")]
-pub mod server;
+/// The service's name: the `[services.analytics]` table in the app's
+/// `leptoskit.toml` must use it, because every operation is addressed to it.
+pub const SERVICE: &str = "analytics";

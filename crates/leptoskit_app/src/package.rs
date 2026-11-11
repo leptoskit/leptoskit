@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 		args.cli
 	};
 
-	web_build(&cli, &root, &out, args.release).context("could not build the website")?;
+	web_build(&cli, &root, &out, args.release, true).context("could not build the website")?;
 	let mode = if args.public_only {
 		Mode::Public
 	} else {
@@ -59,8 +59,15 @@ fn main() -> Result<()> {
 }
 
 /// Runs `leptoskit build --platform web` for the project in `project`,
-/// writing the site into `out`.
-fn web_build(cli: &Path, project: &Path, out: &Path, release: bool) -> Result<()> {
+/// writing the site into `out`. The website's release client also builds
+/// the standard library for size, using the pinned toolchain's Rust sources.
+fn web_build(
+	cli: &Path,
+	project: &Path,
+	out: &Path,
+	release: bool,
+	optimize_std: bool,
+) -> Result<()> {
 	let mut build = std::process::Command::new(cli);
 	build
 		.current_dir(project)
@@ -69,6 +76,11 @@ fn web_build(cli: &Path, project: &Path, out: &Path, release: bool) -> Result<()
 
 	if release {
 		build.arg("--release");
+		if optimize_std {
+			build
+				.env("CARGO_UNSTABLE_BUILD_STD", "std,panic_abort")
+				.env("CARGO_UNSTABLE_BUILD_STD_FEATURES", "optimize_for_size");
+		}
 	}
 
 	ensure!(
@@ -108,6 +120,7 @@ fn play_examples(
 			&repository.join(example.directory),
 			&directory,
 			release,
+			false,
 		)
 		.with_context(|| format!("could not build the {} example to play", example.name))?;
 		let page = directory.join("index.html");

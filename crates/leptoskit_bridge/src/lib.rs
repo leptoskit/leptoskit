@@ -117,6 +117,19 @@ pub enum Error {
 }
 
 impl Error {
+	/// Every error, in wire-code order, for code that must handle each one.
+	pub const ALL: [Self; 9] = [
+		Self::Unavailable,
+		Self::PermissionDenied,
+		Self::InvalidArgument,
+		Self::Busy,
+		Self::TooLarge,
+		Self::Cancelled,
+		Self::Native,
+		Self::InvalidCall,
+		Self::Exhausted,
+	];
+
 	/// Decodes a v1 wire status (`-(code + 1)`).
 	pub fn from_status(status: i64) -> Self {
 		match status {
@@ -221,6 +234,8 @@ struct ReadyReply {
 struct Slot {
 	id: CallId,
 	call: Option<Call>,
+	/// The plugin and method the call was made to, for its failure's record.
+	target: (PluginId, MethodId),
 	#[cfg(all(feature = "async-host", not(target_arch = "wasm32")))]
 	permission: Option<async_host::CancellationToken>,
 	#[cfg(feature = "devtools")]
@@ -292,6 +307,7 @@ impl Bridge {
 					Slot {
 						id: CallId(index as u64 + 1),
 						call: None,
+						target: (PluginId(u32::MAX), MethodId(u32::MAX)),
 						#[cfg(all(feature = "async-host", not(target_arch = "wasm32")))]
 						permission: None,
 						#[cfg(feature = "devtools")]
@@ -322,12 +338,36 @@ impl Bridge {
 		name: &str,
 		methods: impl IntoIterator<Item = MethodId>,
 	) -> Result<PluginId, Error> {
-		if name.is_empty() || name.len() > MAX_PLUGIN_NAME_BYTES || self.resolve(name).is_some() {
+		let refused = if name.is_empty() {
+			Some("a plugin needs a name".to_owned())
+		} else if name.len() > MAX_PLUGIN_NAME_BYTES {
+			Some(format!(
+				"its name is {} bytes, more than {MAX_PLUGIN_NAME_BYTES}",
+				name.len()
+			))
+		} else if self.resolve(name).is_some() {
+			Some("a plugin of that name is already registered".to_owned())
+		} else {
+			None
+		};
+
+		if let Some(reason) = refused {
+			log::error!(
+				target: &leptoskit_log::target::plugin(name),
+				"cannot register plugin `{name}`: {reason}"
+			);
 			return Err(Error::InvalidArgument);
 		}
 
 		let id = PluginId(u32::try_from(self.plugins.len()).map_err(|_| Error::Exhausted)?);
 		let methods: BTreeMap<_, _> = methods.into_iter().map(|method| (method, false)).collect();
+		log::info!(
+			target: &leptoskit_log::target::plugin(name),
+			"registered plugin `{name}` as #{} with {} method{}",
+			id.0,
+			methods.len(),
+			if methods.len() == 1 { "" } else { "s" },
+		);
 		self.plugins.push(Registration {
 			name: name.to_owned(),
 			#[cfg(feature = "devtools")]
@@ -340,6 +380,42 @@ impl Bridge {
 			methods,
 		});
 		Ok(id)
+	}
+
+	/// A registered plugin's name.
+	pub fn plugin_name(&self, plugin: PluginId) -> Option<&str> {
+		self.plugins
+			.get(plugin.0 as usize)
+			.map(|registration| registration.name.as_str())
+	}
+
+	/// The plugin and method an outstanding call was made to.
+	pub fn call_target(&self, id: CallId) -> Option<(PluginId, MethodId)> {
+		self.call(id)?;
+		let slot = self.calls.get(self.index(id)?)?;
+		Some(slot.target)
+	}
+
+	/// Records a call's failure under its plugin's target. A cancellation is
+	/// routine, so it is only a debug record.
+	fn log_failure(&self, id: CallId, error: Error) {
+		let Some((plugin, method)) = self.call_target(id) else {
+			return;
+		};
+		let name = self.plugin_name(plugin).unwrap_or("?");
+		let level = if error == Error::Cancelled {
+			log::Level::Debug
+		} else {
+			log::Level::Warn
+		};
+
+		log::log!(
+			target: &leptoskit_log::target::plugin(name),
+			level,
+			"call #{} to `{name}` method {} failed with {error:?}: {error}",
+			id.0,
+			method.0,
+		);
 	}
 
 	/// Resolves a plugin name once during client setup, outside the call path.
@@ -446,6 +522,7 @@ impl Bridge {
 		let slot = &mut self.calls[index];
 		let id = slot.id;
 		slot.call = Some(Call::Queued);
+		slot.target = (plugin, method);
 		#[cfg(all(feature = "async-host", not(target_arch = "wasm32")))]
 		{
 			slot.permission = Some(self.plugins[plugin.0 as usize].permissions[&method].clone());
@@ -521,6 +598,10 @@ impl Bridge {
 			self.check_payload(reply.bytes.len())?;
 			Ok(reply)
 		});
+
+		if let Err(error) = &result {
+			self.log_failure(id, *error);
+		}
 
 		let (result, lease) = match result {
 			Ok(mut reply) => {

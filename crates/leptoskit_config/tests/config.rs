@@ -11,6 +11,7 @@ use leptoskit_config::FormatConfig;
 use leptoskit_config::LeptoskitConfig;
 use leptoskit_config::LintConfig;
 use leptoskit_config::LintLevel;
+use leptoskit_config::LogLevel;
 use leptoskit_config::MarkupStyle;
 use leptoskit_config::MissingPlugins;
 use leptoskit_config::Optimize;
@@ -222,6 +223,31 @@ fn missing_plugins_warn_by_default_and_can_stop_the_build() {
 			.contains("missing-plugins = \"error\"")
 	);
 	assert!(toml::from_str::<LeptoskitConfig>("[native]\nmissing-plugins = \"ignore\"").is_err());
+}
+
+#[test]
+fn the_log_level_follows_the_build_unless_set() {
+	let config: LeptoskitConfig = toml::from_str("").unwrap();
+	assert_eq!(config.native.log_level, None);
+	assert!(!toml::to_string(&config).unwrap().contains("log-level"));
+
+	for level in [
+		LogLevel::Off,
+		LogLevel::Error,
+		LogLevel::Warn,
+		LogLevel::Info,
+		LogLevel::Debug,
+		LogLevel::Trace,
+	] {
+		let line = format!("log-level = \"{}\"", level.as_str());
+		let config: LeptoskitConfig = toml::from_str(&format!("[native]\n{line}")).unwrap();
+		assert_eq!(config.native.log_level, Some(level));
+		assert!(toml::to_string(&config).unwrap().contains(&line));
+		// The CLI hands the name to the runtime, which parses it with `log`.
+		assert!(level.as_str().parse::<log::LevelFilter>().is_ok());
+	}
+
+	assert!(toml::from_str::<LeptoskitConfig>("[native]\nlog-level = \"verbose\"").is_err());
 }
 
 #[test]

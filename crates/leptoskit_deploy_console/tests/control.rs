@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::body::to_bytes;
 use axum::http::Request;
 use axum::http::StatusCode;
-use leptoskit::analytics::*;
+use leptoskit::apm::*;
 use leptoskit_deploy_console::control::*;
 use tower::ServiceExt as _;
 
@@ -442,10 +442,10 @@ async fn scoped_api_and_browser_sessions_enforce_the_same_project_permissions() 
 
 #[tokio::test]
 async fn the_application_exporter_delivers_to_the_durable_service_without_management_credentials() {
-	use leptoskit_analytics::export::Config;
-	use leptoskit_analytics::export::Protocol;
-	use leptoskit_analytics::server::ServerConfig;
-	use leptoskit_analytics::server::{self};
+	use leptoskit_apm::export::Config;
+	use leptoskit_apm::export::Protocol;
+	use leptoskit_apm::server::ServerConfig;
+	use leptoskit_apm::server::{self};
 	let (_root, store) = setup();
 	let service = Service::new(store.clone(), OWNER, "http://localhost:4700").unwrap();
 	let ingest = service.managed_app_key("notes", true).unwrap();

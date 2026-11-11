@@ -17,7 +17,21 @@ How the repository proves that each platform works: the runtime probe, the widge
 
 The workspace tests and generated application builds run in separate jobs. Each generated app retains its own build target. The two Linux jobs export separate instrumented reports, and the coverage gate requires both.
 
+The local pre-push gate includes the same grouped Wasm Clippy checks as CI, covering browser and guest feature combinations. Optional server dependencies, such as the file router's SSR integration, stay behind native target guards even when a browser build enables every feature.
+
+Linux jobs use Nix's C/C++ compilers and Rust host linker with the Nix libraries. `setup:ci` exports those compiler paths and the Wasm browser capabilities file to later steps, which run outside the devenv shell. Keeping only its `bin` directory on `PATH` loses these settings: a system linker can pair the runner's glibc with a newer Nix `libm`, and browser tests can fall back to the runner's Chrome instead of the pinned Chromium.
+
 Desktop workspace jobs have a 150-minute budget for cold builds and the separate dependency graphs used by compile-error fixtures. Linux workspace coverage keeps its 90-minute budget; application coverage has 120 minutes to finish cold generated-app builds, upload coverage, and save its build cache.
+
+On macOS, `lint:all` and the pre-push gate run `lint:swift`, using the same strict configuration as the Apple bridge job.
+
+The generated web dev journey gives the app server and final watcher announcement one shared 15-minute startup budget: phone guest bundles can still be compiling after the web server starts. Reload checks retain their own build deadlines and match the server rebuild's current status line, while SIGTERM shutdown must finish within 15 seconds. An abandoned test session stops its isolated process group so a failed startup leaves no compiler or app server behind.
+
+Android hosts carry rustc's `native-static-libs` into the generated JNI link line. Parser regressions cover plain and coloured compiler notes, including the styled prefix and final library name; captured stderr retains the terminal's colours.
+
+Field's standalone workspace lints its web feature and all test targets in the Wasm gate. Headless and interpreter fixtures, together with their development dependencies, are native-only.
+
+Browser audio tests exercise the default context and explicit 44.1 kHz and 48 kHz contexts. Decoded metadata must match the context rate, and the half-second fixture must retain its length within one output frame after resampling. Chrome test profiles allow autoplay so the muted audio and speech fixtures reach their playback and cancellation checks. The audio engine has its own Wasm Clippy group with its browser feature enabled and guest mode off.
 
 Linux coverage builds use `line-tables-only` debug information for the dev and test profiles, with incremental compilation disabled. This keeps source locations for diagnostics and LLVM coverage while reducing the disk footprint of instrumented binaries and nested fixture builds. Their cache keys include the debug profile so they cannot restore the previous full-debug artifacts.
 
@@ -26,6 +40,8 @@ The Linux workspace coverage job installs NATS at the version provided by devenv
 The iOS matrix separates widget verification, generated application journeys, and code push. Each job boots its own simulator, and the coverage gate waits for all three jobs to succeed.
 
 The coverage gate merges only the Linux, browser, iOS, and Android reports; see [CONTRIBUTING.md](../../CONTRIBUTING.md#coverage).
+
+Android Clippy checks use the NDK compiler through `setup/scripts/clippy.sh aarch64-linux-android`. The script keeps API 24 explicit in C/C++ and bindgen flags even when a compiler cache hides the NDK compiler's name. The pinned Clippy reports `missing_const_for_thread_local` on some initializers that already use `const`, through Android's fallback TLS expansion ([rust-clippy#13422](https://github.com/rust-lang/rust-clippy/issues/13422)). Each affected static has an Android-only `expect` for that lint, so a fixed compiler reports the expectation as unfulfilled and requires removing it. Keep the const initializer and all other warnings denied.
 
 ## Deployments with services
 

@@ -1,5 +1,6 @@
 //! Rendering imports preserve the versioned guest ABI and tree invariants.
 
+use leptoskit_log::Excerpt;
 use leptoskit_native::NativeKind;
 use wasmi::Caller;
 use wasmi::Linker;
@@ -13,37 +14,50 @@ use super::PendingCommit;
 use super::WireNode;
 use super::caller_memory;
 use super::host_trap;
+use super::in_import;
 
-const NATIVE_KINDS: &[NativeKind] = &[
-	NativeKind::View,
-	NativeKind::Text,
-	NativeKind::TextRun,
-	NativeKind::Image,
-	NativeKind::ScrollView,
-	NativeKind::TextInput,
-	NativeKind::Button,
-	NativeKind::Switch,
-	NativeKind::Checkbox,
-	NativeKind::Radio,
-	NativeKind::Slider,
-	NativeKind::LinearProgressIndicator,
-	NativeKind::ActivityIndicator,
-	NativeKind::PasswordInput,
-	NativeKind::Pressable,
-	NativeKind::Vector,
-	NativeKind::Rive,
-	NativeKind::Scene3d,
-	NativeKind::Video,
-	NativeKind::Camera,
-];
-
+/// Links the rendering imports. Each names itself in front of its traps, so
+/// a failure reads `node_set_props: …` rather than only what went wrong.
 pub(super) fn link(linker: &mut Linker<HostState>) -> Result<(), wasmi::errors::LinkerError> {
-	linker.func_wrap("leptoskit", "node_create", node_create)?;
-	linker.func_wrap("leptoskit", "node_set_props", node_set_props)?;
-	linker.func_wrap("leptoskit", "node_insert", node_insert)?;
-	linker.func_wrap("leptoskit", "node_remove", node_remove)?;
-	linker.func_wrap("leptoskit", "node_delete", node_delete)?;
-	linker.func_wrap("leptoskit", "commit", commit)?;
+	linker.func_wrap(
+		"leptoskit",
+		"node_create",
+		|caller: Caller<'_, HostState>, id: i64, kind: i32| {
+			node_create(caller, id, kind).map_err(|error| in_import("node_create", error))
+		},
+	)?;
+	linker.func_wrap(
+		"leptoskit",
+		"node_set_props",
+		|caller: Caller<'_, HostState>, id: i64, ptr: i32, len: i32| {
+			node_set_props(caller, id, ptr, len).map_err(|error| in_import("node_set_props", error))
+		},
+	)?;
+	linker.func_wrap(
+		"leptoskit",
+		"node_insert",
+		|caller: Caller<'_, HostState>, parent: i64, child: i64, index: i32| {
+			node_insert(caller, parent, child, index)
+				.map_err(|error| in_import("node_insert", error))
+		},
+	)?;
+	linker.func_wrap(
+		"leptoskit",
+		"node_remove",
+		|caller: Caller<'_, HostState>, parent: i64, child: i64| {
+			node_remove(caller, parent, child).map_err(|error| in_import("node_remove", error))
+		},
+	)?;
+	linker.func_wrap(
+		"leptoskit",
+		"node_delete",
+		|caller: Caller<'_, HostState>, id: i64| {
+			node_delete(caller, id).map_err(|error| in_import("node_delete", error))
+		},
+	)?;
+	linker.func_wrap("leptoskit", "commit", |caller: Caller<'_, HostState>| {
+		commit(caller).map_err(|error| in_import("commit", error))
+	})?;
 	Ok(())
 }
 
@@ -51,10 +65,7 @@ fn node_create(mut caller: Caller<'_, HostState>, id: i64, kind: i32) -> Result<
 	let state = caller.data_mut();
 	state.budget.charge(256)?;
 	state.check_nodes(usize::from(!state.nodes.contains_key(&id)))?;
-	let kind = NATIVE_KINDS
-		.get(kind as u32 as usize)
-		.copied()
-		.unwrap_or(NativeKind::View);
+	let kind = leptoskit_native::wire::kind(kind).unwrap_or(NativeKind::View);
 	state.ensure_node(id);
 
 	// A different widget kind replaces the node and everything below it.
@@ -121,8 +132,8 @@ fn node_set_props(
 			.ok_or_else(|| host_trap(format!("props range {start}+{len} is out of bounds")))?
 	};
 
-	let mut wire: WireNode =
-		serde_json::from_slice(bytes).map_err(|error| host_trap(error.to_string()))?;
+	let mut wire = WireNode::from_json(bytes)
+		.map_err(|error| props_error(id, caller.data().kinds.get(&id).copied(), bytes, &error))?;
 	let mut rive_bytes = if wire.props.rive.is_some() { len } else { 0 };
 	let mut retained_bytes = len;
 
@@ -307,6 +318,62 @@ fn commit(mut caller: Caller<'_, HostState>) -> Result<(), wasmi::Error> {
 	state.commits = state.commits.saturating_add(1);
 	state.clear_dirty();
 	Ok(())
+}
+
+/// Why a node's props did not decode, as the trap's message and an error
+/// record: the node and its kind, the field, the decoder's error, and the
+/// bytes around where it stopped, at most [`leptoskit_log::MAX_EXCERPT_BYTES`]
+/// of them.
+fn props_error(
+	id: i64,
+	kind: Option<NativeKind>,
+	bytes: &[u8],
+	error: &serde_json::Error,
+) -> wasmi::Error {
+	let field = failing_field(bytes);
+	let excerpt = if error.line() > 0 {
+		Excerpt::at_line_column(bytes, error.line(), error.column())
+	} else {
+		// An error with no position: find its field's key instead.
+		let at = field
+			.as_deref()
+			.and_then(|field| field_offset(bytes, field))
+			.unwrap_or(0);
+		Excerpt::around(bytes, at)
+	};
+	let kind = kind.map_or_else(|| "not yet created".to_owned(), |kind| kind.to_string());
+	let field = field.map_or_else(String::new, |field| format!(" at `{field}`"));
+	let message =
+		format!("node {id} ({kind}) sent props that do not decode{field}: {error}; {excerpt}");
+	log::error!(target: leptoskit_log::target::RENDER, "node_set_props: {message}");
+	host_trap(message)
+}
+
+/// The path of the field `bytes` fail to decode at, such as `style.flex_grow`,
+/// found by repeating the two passes of [`WireNode::from_json`]: the widget
+/// props, then the keys beside them.
+fn failing_field(bytes: &[u8]) -> Option<String> {
+	fn path<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<String> {
+		let mut decoder = serde_json::Deserializer::from_slice(bytes);
+		let path = serde_path_to_error::deserialize::<_, T>(&mut decoder)
+			.err()?
+			.path()
+			.to_string();
+		(path != "." && path != "?").then_some(path)
+	}
+
+	path::<leptoskit_native::NativeProps>(bytes)
+		.or_else(|| path::<leptoskit_native::wire::Envelope>(bytes))
+}
+
+/// Where the key of the last segment of `field` appears in `bytes`.
+fn field_offset(bytes: &[u8], field: &str) -> Option<usize> {
+	let name = field.rsplit('.').next()?.split('[').next()?;
+	let key = format!("\"{name}\"");
+	bytes
+		.windows(key.len())
+		.position(|window| window == key.as_bytes())
+		.map(|at| at + key.len())
 }
 
 fn excess_roots(roots: &[i64], count: usize) -> wasmi::Error {

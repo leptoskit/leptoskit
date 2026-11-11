@@ -25,7 +25,7 @@ The `macos/` folder is yours: `App.swift` starts the app and owns its window, `I
 ## How it differs from the other platforms
 
 - The generated app draws the common controls: `View`, `Text`, `Button`, `Pressable`, `TextInput`, `PasswordInput`, `ScrollView`, `Image`, `Vector`, and `Rive`, plus `Switch`, `Checkbox`, `Radio`, `Slider`, `LinearProgressIndicator`, and `ActivityIndicator`. Switches use `NSSwitch`, choices use `NSButton`, sliders use `NSSlider`, and indicators use `NSProgressIndicator`. Update checked or slider state in your handler to accept a change; otherwise the control restores the previous value. Custom widgets remain unsupported. See [generated apps and backend crates](readme.md#generated-apps-and-backend-crates).
-- [3D scenes](../guide/33-3d-scenes.md) draw with Metal into a `CAMetalLayer`, on the view's display link, only while the scene changes or animates. The app bundle carries the app's `assets/` folder when the app uses `leptoskit`'s `3d` feature.
+- [3D scenes](../guide/33-3d-scenes.md) draw with Metal into a `CAMetalLayer`, on the view's display link, only while the scene changes or animates. The app bundle carries the app's `assets/` folder when the app uses `leptoskit`'s `3d` feature. Native scene views send primary-pointer input through `Scene::next_pointer`: positions are fractions of the view and movement uses layout units, so drag sensitivity stays the same across display densities.
 - [Rive](../guide/20-rive.md) displays native vector frames in an `NSImageView`. The generated host uses a display link and follows the system reduced-motion preference. Native Rive rejects text, image, layout, script, and audio assets.
 - Pressing a button with the keyboard (Space, with Full Keyboard Access on) or through VoiceOver activates it without showing its [pressed style](../guide/07-shared-components.md#style-the-pressed-state). A mouse press shows it.
 - Transforms and [animations](../guide/32-animations.md) run on Core Animation, as on iOS, with the same limits: a widget animating out is drawn above its former siblings until it is gone, and text color changes don't animate.
@@ -33,7 +33,7 @@ The `macos/` folder is yours: `App.swift` starts the app and owns its window, `I
 - [Sign-in](../guide/23-sign-in.md#native-apps) works as on iOS: the system's passkey sheet and Sign in with Apple's own sheet once the app has its associated domain, which the generated project doesn't add yet, and other providers in an `ASWebAuthenticationSession`.
 - Labels in the generated app can't be selected, as on iOS and Android. AppKit's own labels also darken glyph edges slightly with private font dilation that no public API offers, so text there is a shade lighter than in an `NSTextField`.
 - The generated macOS app doesn't check for [code push](../guide/05-code-push.md) updates; ship a new build to update it. The iOS and Android apps do.
-- AppKit follows the system's light or dark appearance until the app calls `NativeSurface::set_dark_mode`. An app with a fixed light theme should call `set_dark_mode(false)` before it shows its first screen.
+- AppKit follows the system's light or dark appearance until the app calls `NativeSurface::set_dark_mode`. An app with a fixed light theme should call `set_dark_mode(false)` before it shows its first screen, and an app that lets people choose calls [`appearance::set`](../guide/07-shared-components.md#let-people-choose-light-or-dark).
 
 ## Application menus
 

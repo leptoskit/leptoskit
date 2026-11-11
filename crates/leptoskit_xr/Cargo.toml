@@ -31,6 +31,9 @@ apple-frameworks = ["ARKit", "AVFoundation", "CoreMotion", "CoreVideo", "Metal"]
 # `[native.plugin-options.xr] depth-model` turns on estimated depth, which
 # `leptoskit build` compiles in only for apps that set it.
 option-features = { depth-model = "depth-estimation" }
+# Every option has a default: an empty table starts the plugin. The
+# `host::plugin` tests hold the options to that.
+required-options = []
 
 [package.metadata.leptoskit.runtime.macos]
 unavailable = true
@@ -129,6 +132,7 @@ web-sys = { workspace = true, optional = true, features = ["Document", "Event", 
 
 [dev-dependencies]
 pollster = { workspace = true }
+toml = { workspace = true }
 zune-jpeg = { workspace = true }
 
 [lints]

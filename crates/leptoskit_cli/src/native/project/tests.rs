@@ -372,12 +372,17 @@ fn generated_hosts_install_rust_workers_and_register_only_native_plugins() {
 
 	generate(&root, &config, &registry, Target::Android, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(registrant.contains("app.install_worker(Box::new(store_crate::Store::default()))?;"));
 	assert!(registrant.contains(
-		"app.install_worker(Box::new(files_crate::from_app_dirs(&_context.data_dir, \
-		 &_context.cache_dir)?))?;"
+		"app.register(\"store\", |app| {\n                    \
+		 app.install_worker(Box::new(store_crate::Store::default()))\n                })?;"
+	));
+	assert!(registrant.contains(
+		"app.register(\"filesystem\", |app| {\n                    \
+		 app.install_worker(Box::new(files_crate::from_app_dirs(&_context.data_dir, \
+		 &_context.cache_dir)?))\n                })?;"
 	));
 	assert!(!registrant.contains("haptics"));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let sources = root.join(".leptoskit/android/sources");
 	let kotlin = std::fs::read_to_string(sources.join("GeneratedPlugins.kt")).unwrap();
 	assert_eq!(kotlin.matches("dispatcher.register(").count(), 1);
@@ -757,10 +762,12 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 
 	generate(&root, &config, &registry, Target::Android, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(
-		registrant
-			.contains("app.install_main(Box::new(clipboard_crate::from_context(_context)?))?;")
-	);
+	assert!(registrant.contains(
+		"app.register(\"clipboard\", |app| {\n                    \
+		 app.install_main(Box::new(clipboard_crate::from_context(_context)?))\n                \
+		 })?;"
+	));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let kotlin =
 		std::fs::read_to_string(root.join(".leptoskit/android/sources/GeneratedPlugins.kt"))
 			.unwrap();
@@ -773,10 +780,12 @@ fn experimental_rust_plugin_installs_in_rust_and_skips_native_wrappers() {
 
 	generate(&root, &config, &registry, Target::IosSimulator, false).unwrap();
 	let registrant = std::fs::read_to_string(root.join(".leptoskit/registrant.rs")).unwrap();
-	assert!(
-		registrant
-			.contains("app.install_main(Box::new(clipboard_crate::from_context(_context)?))?;")
-	);
+	assert!(registrant.contains(
+		"app.register(\"clipboard\", |app| {\n                    \
+		 app.install_main(Box::new(clipboard_crate::from_context(_context)?))\n                \
+		 })?;"
+	));
+	assert!(installs_only_named_plugins(&registrant), "{registrant}");
 	let swift =
 		std::fs::read_to_string(root.join(".leptoskit/ios/GeneratedPlugins.swift")).unwrap();
 	assert!(!swift.contains("LeptosKitClipboard"));

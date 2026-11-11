@@ -188,6 +188,19 @@ impl Gpu {
 			})
 			.await
 			.map_err(|error| Error::Device(error.to_string()))?;
+		let info = adapter.get_info();
+		log::info!(
+			target: leptoskit_log::target::GPU,
+			"created a GPU device on {} ({:?})",
+			info.name,
+			info.backend
+		);
+		device.set_device_lost_callback(|reason, message| {
+			log::error!(
+				target: leptoskit_log::target::GPU,
+				"the GPU device was lost ({reason:?}): {message}"
+			);
+		});
 		Ok(Self::from_parts(instance, adapter, device, queue))
 	}
 

@@ -8,7 +8,7 @@ cd water
 leptoskit dev
 ```
 
-`leptoskit dev` builds the app, starts a server at `http://127.0.0.1:3000`, and rebuilds when you save. Open that address and you get a counter with an **Add one** button. The server renders the page as HTML first, and the browser then takes it over, so the button works. The same screen is what every native app shows: `dev` also opens it in the iOS Simulator, on an Android emulator, and as a desktop app, on every platform this machine can run, and updates them all when you save. [Building and serving](04-building.md#leptoskit-dev) lists what runs where.
+`leptoskit dev` builds the app, starts a server at `http://127.0.0.1:3000`, and rebuilds when you save. Open that address and you get the starter: a home screen with an **Add one** button, a Kit tab of the shared controls, and a Platforms tab. The server renders the page as HTML first, and the browser then takes it over, so the button works. The same screens are what every native app shows: `dev` also opens them in the iOS Simulator, on an Android emulator, and as a desktop app, on every platform this machine can run, and updates them all when you save. It also prints a QR code. The LeptosKit app on a phone, in `examples/dev_client`, scans that code and runs the same guest. [Building and serving](04-building.md#leptoskit-dev) lists what runs where.
 
 For a **marketing site**, **product app**, and **admin console** as separate deployments in one repository:
 
@@ -32,7 +32,9 @@ water/
 │       ├── routes.rs     generated from routes/; do not edit by hand
 │       ├── routes/
 │       │   ├── index.rs       `/` — the home screen
-│       │   ├── _layout.rs     chrome around every screen
+│       │   ├── kit.rs         `/kit` — shared controls
+│       │   ├── platforms.rs   `/platforms` — where the app runs
+│       │   ├── _layout.rs     the tab bar around every screen
 │       │   └── +not-found.rs  unmatched URLs
 │       ├── components/   reusable pieces of UI
 │       └── services/     app state, such as the counter

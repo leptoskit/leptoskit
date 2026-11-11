@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use leptoskit::analytics::Snapshot;
-use leptoskit::analytics::Window;
+use leptoskit::apm::Snapshot;
+use leptoskit::apm::Window;
 use rusqlite::OptionalExtension as _;
 use rusqlite::params;
 use sha2::Digest as _;
@@ -657,7 +657,11 @@ impl Store {
 		let parent = path.parent().context("backup needs a parent directory")?;
 		let temporary = tempfile::NamedTempFile::new_in(parent)?;
 		let db = self.db()?;
-		db.backup(rusqlite::MAIN_DB, temporary.path(), None)?;
+		db.backup(
+			rusqlite::MAIN_DB,
+			temporary.path(),
+			rusqlite::backup::NO_PROGRESS,
+		)?;
 		temporary.as_file().sync_all()?;
 		temporary.persist_noclobber(path)?;
 		Ok(())

@@ -2568,6 +2568,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact_bench"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+ "leptoskit_testing",
+]
+
+[[package]]
+name = "exact_examples"
+version = "0.3.0"
+dependencies = [
+ "leptos",
+ "leptoskit",
+ "leptoskit_testing",
+ "reactive_graph",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "extended"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3680,6 +3700,7 @@ dependencies = [
  "leptoskit_plugin_posture",
  "leptoskit_plugin_power_monitor",
  "leptoskit_plugin_print",
+ "leptoskit_plugin_recorder",
  "leptoskit_plugin_screen_capture",
  "leptoskit_plugin_screen_orientation",
  "leptoskit_plugin_secure_store",
@@ -4852,6 +4873,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lantern"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5106,8 +5134,8 @@ dependencies = [
  "leptos_router",
  "leptoskit_3d",
  "leptoskit_agent_ui",
- "leptoskit_analytics",
  "leptoskit_android",
+ "leptoskit_apm",
  "leptoskit_appkit",
  "leptoskit_aria",
  "leptoskit_auth",
@@ -5119,6 +5147,7 @@ dependencies = [
  "leptoskit_devtools",
  "leptoskit_extension",
  "leptoskit_form",
+ "leptoskit_game",
  "leptoskit_gtk",
  "leptoskit_idp",
  "leptoskit_l10n",
@@ -5154,6 +5183,8 @@ dependencies = [
  "half",
  "js-sys",
  "leptoskit_bridge",
+ "leptoskit_log",
+ "log",
  "png 0.17.16",
  "pollster",
  "serde",
@@ -5182,18 +5213,20 @@ dependencies = [
 name = "leptoskit_analytics"
 version = "0.3.0"
 dependencies = [
- "axum",
- "getrandom 0.4.3",
+ "chrono",
+ "flate2",
+ "insta",
+ "leptoskit_axum",
+ "leptoskit_db",
+ "leptoskit_rpc",
+ "proptest",
  "reqwest 0.12.28",
- "rustix",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.21",
  "tokio",
- "tower",
- "url",
+ "uuid",
 ]
 
 [[package]]
@@ -5215,6 +5248,24 @@ version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "leptoskit_apm"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "reqwest 0.12.28",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "url",
 ]
 
 [[package]]
@@ -5334,11 +5385,12 @@ dependencies = [
 name = "leptoskit_axum"
 version = "0.3.0"
 dependencies = [
+ "any_spawner",
  "axum",
  "http-body-util",
  "hyper",
  "hyper-util",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_codepush",
  "leptoskit_config",
  "semver",
@@ -5387,6 +5439,8 @@ version = "0.3.0"
 dependencies = [
  "bytes",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
+ "log",
  "thiserror 2.0.21",
  "tokio-util",
 ]
@@ -5403,12 +5457,14 @@ dependencies = [
  "leptoskit_codepush",
  "leptoskit_devtools",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_plugin_devtools",
  "leptoskit_rive",
  "leptoskit_uikit",
  "leptoskit_wasm",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
@@ -5461,7 +5517,7 @@ dependencies = [
  "ignore",
  "image",
  "insta",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_auth",
  "leptoskit_axum",
  "leptoskit_bridge",
@@ -5480,6 +5536,7 @@ dependencies = [
  "leptoskit_platform_harmonyos",
  "leptoskit_platform_oculus",
  "leptoskit_plugin",
+ "leptoskit_plugin_dev_client",
  "leptoskit_plugin_http",
  "leptoskit_plugin_router",
  "leptoskit_router_codegen",
@@ -5494,6 +5551,8 @@ dependencies = [
  "png 0.17.16",
  "postgres-protocol",
  "postgresql_embedded",
+ "qrcode",
+ "quote",
  "rayon",
  "resvg",
  "ring",
@@ -5504,6 +5563,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "syn 3.0.9",
  "tar",
  "tempfile",
  "tokio",
@@ -5555,6 +5615,7 @@ version = "0.3.0"
 dependencies = [
  "insta",
  "jsonschema",
+ "log",
  "schemars",
  "semver",
  "serde",
@@ -5674,7 +5735,7 @@ dependencies = [
  "hmac 0.12.1",
  "leptos",
  "leptoskit",
- "leptoskit_analytics",
+ "leptoskit_apm",
  "leptoskit_testing",
  "reactive_graph",
  "reqwest 0.12.28",
@@ -5817,6 +5878,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_game"
+version = "0.3.0"
+dependencies = [
+ "glam",
+ "leptoskit_canvas",
+ "leptoskit_native",
+ "leptoskit_yoga",
+ "png 0.17.16",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "leptoskit_gtk"
 version = "0.3.0"
 dependencies = [
@@ -5908,6 +5981,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_log"
+version = "0.3.0"
+dependencies = [
+ "cc",
+ "leptoskit_log",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "leptoskit_macros"
 version = "0.3.0"
 dependencies = [
@@ -5942,6 +6026,7 @@ dependencies = [
  "leptoskit_3d",
  "leptoskit_animation",
  "leptoskit_devtools_protocol",
+ "leptoskit_log",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
@@ -6249,6 +6334,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_dev_client"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_device"
 version = "0.3.0"
 dependencies = [
@@ -6418,6 +6510,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -6713,6 +6806,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptoskit_plugin_recorder"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
+]
+
+[[package]]
 name = "leptoskit_plugin_router"
 version = "0.3.0"
 dependencies = [
@@ -6800,6 +6900,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "windows-sys 0.61.2",
 ]
 
@@ -6954,6 +7055,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "toml 0.9.12+spec-1.1.0",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-test",
@@ -7027,6 +7129,9 @@ dependencies = [
 name = "leptoskit_router"
 version = "0.3.0"
 dependencies = [
+ "leptos",
+ "leptos_axum",
+ "leptos_router",
  "leptoskit_native",
  "leptoskit_router_macros",
  "leptoskit_yoga",
@@ -7145,6 +7250,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -7278,11 +7384,14 @@ name = "leptoskit_wasm"
 version = "0.3.0"
 dependencies = [
  "leptoskit_bridge",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_rive",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror 2.0.21",
  "wasmi",
  "wasmi_core",
@@ -7348,6 +7457,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "toml 0.9.12+spec-1.1.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -7446,9 +7556,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -9639,6 +9749,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebuild_guest_probe"
+version = "0.3.0"
+dependencies = [
+ "leptoskit",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10155,9 +10272,9 @@ checksum = "5974e397833d890f2f74963408e0d4a6cd8eda2f6a445ae06750291b5d7a997e"
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags 2.13.2",
  "fallible-iterator 0.3.0",

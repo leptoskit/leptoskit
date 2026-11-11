@@ -557,7 +557,7 @@ pub(crate) fn scope_name(service: Option<&str>, name: &str) -> String {
 
 /// The `leptoskit_query` scope of a query, named `rpc:<name>`: its results
 /// are cached by arguments and shared by every screen that reads them, and
-/// travel from the server's render to the browser.
+/// travel from the server's render to the browser, errors included.
 ///
 /// ```ignore
 /// client.invalidate_scope(&query_scope::<Messages>()).await;
@@ -571,6 +571,7 @@ where
 	QueryScope::new(|args: Args<Q>| call(args.into_inner()))
 		.with_name(&scope_name(Q::SERVICE, Q::NAME))
 		.with_ssr()
+		.with_ssr_errors()
 }
 
 /// A background job's state: live over the app's socket when it has one,

@@ -142,7 +142,8 @@ class AndroidIntentPluginTest {
                 "intent:#Intent;action=android.settings.SETTINGS;launchFlags=0x1;end" to PluginException.PERMISSION_DENIED,
                 "intent://x/#Intent;scheme=file;action=android.intent.action.VIEW;end" to PluginException.PERMISSION_DENIED,
                 "intent:#Intent;action=a.B;launchFlags=zz;end" to PluginException.INVALID_ARGUMENT,
-                // CATEGORY_BROWSABLE is added, so Settings' own entry point is not reachable this way.
+                // No data scheme: API 35's Settings filter is browsable, and
+                // startActivity would open it. A link that opens an app names a scheme.
                 "intent:#Intent;action=android.settings.SETTINGS;end" to PluginException.UNAVAILABLE,
                 "intent:#Intent;action=dev.leptoskit.test.NO_SUCH_ACTION;end" to PluginException.UNAVAILABLE,
                 "https://example.com" to PluginException.INVALID_ARGUMENT,

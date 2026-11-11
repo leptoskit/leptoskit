@@ -94,7 +94,8 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 	/// Refreshes cached text only when the existing measurement inputs change.
 	pub(super) fn update_text_measure(&mut self, id: NodeId, element: &Element) {
-		let style = element.props.text_style();
+		let style = measured_style(element);
+
 		let native_chrome = has_native_chrome(element);
 		match (
 			measured_content(element),
@@ -153,4 +154,19 @@ impl<B: NativeBackend> NativeSurface<B> {
 			self.yoga.mark_dirty(id);
 		}
 	}
+}
+
+/// The style an element's text is measured in. Text fields keep their
+/// platform's single-line height, whatever line height they inherit.
+pub(super) fn measured_style(element: &Element) -> crate::props::TextStyle {
+	let mut style = element.props.text_style();
+
+	if matches!(
+		element.kind,
+		NativeKind::TextInput | NativeKind::PasswordInput
+	) {
+		style.line_height = None;
+	}
+
+	style
 }

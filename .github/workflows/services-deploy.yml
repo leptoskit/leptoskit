@@ -90,6 +90,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: test deployment readiness checks
+        run: python3 setup/scripts/services_deploy_checks_test.py
+
       - name: install rust
         uses: ./.github/actions/rust
 

@@ -84,6 +84,10 @@ impl<B: NativeBackend> NativeSurface<B> {
 			planned.push((self.path_to(node), patch));
 		}
 
+		// Patches apply in tree order, but answer in the order given: a caller
+		// pairs each answer with the patch it sent.
+		let given: Vec<Vec<usize>> = planned.iter().map(|(path, _)| path.clone()).collect();
+
 		// Ancestors first, so a parent's resolved props are settled before a
 		// patch below it resolves against them.
 		planned.sort_by(|(left, _), (right, _)| left.cmp(right));
@@ -139,15 +143,14 @@ impl<B: NativeBackend> NativeSurface<B> {
 
 		// A held control resolves along its path through the whole tree; a
 		// full commit of the patched source keeps that one rule in one place.
-		if self.pressed.is_some() {
+		// A new appearance on the root changes `dark:` everywhere.
+		if self.pressed.is_some() || self.adopt_root_appearance() {
 			self.commit_source();
 		} else {
 			self.reconcile_patches(checked.iter().map(|(path, (subtree, _))| (path, *subtree)));
 		}
 
-		Ok(Some(
-			checked.iter().map(|(path, _)| self.node_at(path)).collect(),
-		))
+		Ok(Some(given.iter().map(|path| self.node_at(path)).collect()))
 	}
 
 	/// Resolves and reconciles each patched position of the updated source.

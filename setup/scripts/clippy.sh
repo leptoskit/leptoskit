@@ -34,6 +34,8 @@ host() {
 	cargo clippy "${deny[@]}" --workspace --all-features --all-targets
 	echo "clippy: examples/file_routes"
 	cargo clippy "${deny[@]}" --manifest-path examples/file_routes/Cargo.toml --all-targets
+	echo "clippy: examples/dev_client"
+	cargo clippy "${deny[@]}" --manifest-path examples/dev_client/Cargo.toml --all-targets
 	echo "clippy: devtools"
 	cargo clippy "${deny[@]}" --manifest-path devtools/Cargo.toml --all-targets
 }
@@ -49,7 +51,7 @@ wasm_full=(
 	leptoskit_canvas
 	leptoskit_extension
 	leptoskit_l10n
-	leptoskit_plugin_age_range leptoskit_plugin_app_integrity leptoskit_plugin_asset leptoskit_plugin_diagnostics leptoskit_plugin_blob leptoskit_plugin_accelerometer leptoskit_plugin_android_alarm_manager leptoskit_plugin_android_intent leptoskit_plugin_application leptoskit_plugin_audio
+	leptoskit_plugin_age_range leptoskit_plugin_app_integrity leptoskit_plugin_asset leptoskit_plugin_diagnostics leptoskit_plugin_blob leptoskit_plugin_accelerometer leptoskit_plugin_android_alarm_manager leptoskit_plugin_android_intent leptoskit_plugin_application leptoskit_plugin_audio leptoskit_plugin_recorder
 	leptoskit_plugin_autostart
 	leptoskit_plugin_barometer leptoskit_plugin_background_task leptoskit_plugin_battery leptoskit_plugin_brightness
 	leptoskit_plugin_calendar leptoskit_plugin_camera leptoskit_plugin_cellular leptoskit_plugin_contacts leptoskit_plugin_crypto leptoskit_plugin_device_keys leptoskit_plugin_device_motion leptoskit_plugin_dialog
@@ -80,7 +82,7 @@ wasm_library=(
 )
 # Default features, the library only: some of their features need the host.
 wasm_default_library=(
-	hooks_guest_probe islands_example leptoskit leptoskit_auth leptoskit_codepush leptoskit_db
+	hooks_guest_probe islands_example leptoskit leptoskit_analytics leptoskit_auth leptoskit_codepush leptoskit_db
 	leptoskit_plugin_store leptoskit_tui soundboard_example
 )
 # Default features, every target: posture's `guest` feature leaves out the
@@ -112,6 +114,12 @@ wasm() {
 	wasm_group "the deployment app in a guest" --package=leptoskit_app --features native --lib
 	wasm_group "the deployment console" --package=leptoskit_deploy_console --features csr --lib
 	wasm_group "the generated auth pages" --package=auth_pages_example --features web --all-targets
+	# Field is a standalone workspace. Its browser tests must not pull in the
+	# native fixtures' interpreter and threaded timer host.
+	wasm_group "the Field browser example" --manifest-path examples/file_routes/Cargo.toml --features web --all-targets
+	# Audio's guest feature replaces its web implementation; lint the browser
+	# engine separately so enabling every feature cannot hide it.
+	wasm_group "the browser audio engine" --package=leptoskit_plugin_audio --no-default-features --features browser --all-targets
 }
 
 wasm_group() {
@@ -143,16 +151,25 @@ android_compiler() {
 	esac
 	local toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$host"
 	local variable="${target//-/_}"
-	export "CC_$variable=$toolchain/bin/${target}24-clang"
+	local api_target="${target}24"
+	export "CC_$variable=$toolchain/bin/$api_target-clang"
 	# The native Rive runtime builds C++.
-	export "CXX_$variable=$toolchain/bin/${target}24-clang++"
+	export "CXX_$variable=$toolchain/bin/$api_target-clang++"
+	# A compiler cache can hide the API suffix from cc-rs, which then adds an
+	# unversioned --target. NDK 30 rejects that; keep the API explicit in the
+	# flags appended after cc-rs's defaults.
+	local flags flag_variable
+	for flags in CFLAGS CXXFLAGS; do
+		flag_variable="${flags}_$variable"
+		export "$flag_variable=${!flag_variable:-${!flags:-}} --target=$api_target"
+	done
 	export "AR_$variable=$toolchain/bin/llvm-ar"
 	# OpenSSL archives its static libraries with the toolchain's ranlib, and
 	# derives the command from the target triple unless this is set, which names
 	# a binary the runner does not have.
 	export "RANLIB_$variable=$toolchain/bin/llvm-ranlib"
 	# bindgen (QuickJS, in the native benchmark) reads the headers too.
-	export "BINDGEN_EXTRA_CLANG_ARGS_$variable=--sysroot=$toolchain/sysroot"
+	export "BINDGEN_EXTRA_CLANG_ARGS_$variable=--sysroot=$toolchain/sysroot --target=$api_target"
 }
 
 for target in "$@"; do

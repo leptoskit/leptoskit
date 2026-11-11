@@ -97,6 +97,7 @@ pub struct Element {
 	applied: Tailwind,
 	classes: Tailwind,
 	handlers: Vec<HandlerEntry>,
+	gesture: Option<crate::gesture::Gesture>,
 	/// Values that follow application state instead of being rebuilt with the
 	/// tree: see [`Element::text_from`] and [`Element::background_from`].
 	bindings: Bindings,
@@ -127,6 +128,9 @@ impl std::fmt::Debug for Element {
 			.field("children", &self.children)
 			.field("classes", &self.classes)
 			.field("handlers", &self.handlers);
+		if let Some(gesture) = &self.gesture {
+			debug.field("gesture", gesture);
+		}
 		// Bindings and a region are absent on almost every node. Leaving them
 		// out of the debug output when absent keeps the digest of an unchanged
 		// node stable.
@@ -522,6 +526,7 @@ impl Element {
 			applied: Tailwind::default(),
 			classes: Tailwind::default(),
 			handlers: Vec::new(),
+			gesture: None,
 			bindings: Bindings::default(),
 			region: None,
 		}
@@ -923,12 +928,14 @@ impl Element {
 			applied: self.classes.clone(),
 			classes: Tailwind::default(),
 			handlers: self.handlers.clone(),
+			gesture: self.gesture.clone(),
 			bindings: self.bindings.clone(),
 			region: self.region.clone(),
 		};
 		element.props.color = element.props.color.or(parent.color);
 		element.props.font_size = element.props.font_size.or(parent.font_size);
 		element.props.font_weight = element.props.font_weight.or(parent.font_weight);
+		element.props.line_height = element.props.line_height.or(parent.line_height);
 		element.props.italic = element.props.italic.or(parent.italic);
 		element.props.text_align = element.props.text_align.or(parent.text_align);
 
@@ -971,6 +978,7 @@ impl Element {
 		previous.color != next.color
 			|| previous.font_size != next.font_size
 			|| previous.font_weight != next.font_weight
+			|| previous.line_height != next.line_height
 			|| previous.italic != next.italic
 			|| previous.text_align != next.text_align
 			|| (previous.enabled == Some(false)) != (next.enabled == Some(false))
@@ -1839,6 +1847,13 @@ impl Element {
 		self
 	}
 
+	/// Sets the height of each line of text, which descendants inherit.
+	#[must_use]
+	pub fn line_height(mut self, line_height: crate::LineHeight) -> Self {
+		self.props.line_height = Some(line_height);
+		self
+	}
+
 	/// Sets the horizontal text alignment.
 	#[must_use]
 	pub fn text_align(mut self, align: TextAlign) -> Self {
@@ -1889,6 +1904,7 @@ impl Element {
 		self.kind == NativeKind::Text
 			&& self.children.is_empty()
 			&& self.handlers.is_empty()
+			&& self.gesture.is_none()
 			&& self.classes == Tailwind::default()
 			&& self.style == Style::default()
 			&& NativeProps {
@@ -1978,6 +1994,32 @@ impl Element {
 	/// The handlers registered on this element.
 	pub(crate) fn handlers(&self) -> &[HandlerEntry] {
 		&self.handlers
+	}
+
+	/// Recognizers for pointers that hit this element.
+	///
+	/// A tap, pan, long press, pinch, rotation, or fling. Compose them with
+	/// [`Gesture::simultaneous`](crate::Gesture::simultaneous),
+	/// [`Gesture::exclusive`](crate::Gesture::exclusive), or
+	/// [`Gesture::race`](crate::Gesture::race). Calling this more than once
+	/// keeps every gesture: the later one runs at the same time as the one
+	/// already attached.
+	///
+	/// Android and Linux deliver the pointer into the arena. A drag that wins
+	/// claims the pointer so the control underneath does not also click. A tap
+	/// does not, so a `Button` still presses. Other platforms keep their
+	/// existing press handling until they forward pointer samples.
+	#[must_use]
+	pub fn gesture(mut self, gesture: crate::gesture::Gesture) -> Self {
+		self.gesture = Some(match self.gesture.take() {
+			Some(existing) => existing.simultaneous(gesture),
+			None => gesture,
+		});
+		self
+	}
+
+	pub(crate) fn attached_gesture(&self) -> Option<&crate::gesture::Gesture> {
+		self.gesture.as_ref()
 	}
 }
 

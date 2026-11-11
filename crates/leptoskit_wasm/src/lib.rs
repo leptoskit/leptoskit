@@ -52,7 +52,13 @@
 //!   its own, so when this is present the host calls it with the wall clock, in
 //!   milliseconds since the Unix epoch, before every other entry point.
 //!   `leptoskit_query`'s `guest` feature exports it. Hosts and modules that
-//!   predate it skip it.
+//!   predate it skip it;
+//! - `leptoskit_system_back() -> i32` — *optional*. The platform's Back, such
+//!   as Android's Back gesture or button, reaches it through
+//!   [`WasmHost::system_back`]. It returns `1` when the module went back, so
+//!   the platform stays where it is, and `0` when there was nothing to go back
+//!   to, so the platform leaves. The host then calls `leptoskit_flush`, when
+//!   present, and commits what changed. A module without it never handles Back.
 //!
 //! Timers are a reserved bridge plugin, `leptoskit.timer`, rather than a new
 //! import. [`WasmHost::enable_timers`] registers it; [`WasmHost::pump_timers`]
@@ -117,7 +123,6 @@ use leptoskit_native::HeadlessBackend;
 use leptoskit_native::NativeBackend;
 use leptoskit_native::NativeEvent;
 use leptoskit_native::NativeKind;
-use leptoskit_native::NativeProps;
 use leptoskit_native::NativeSurface;
 use leptoskit_yoga::NodeId;
 use wasmi::Caller;
@@ -155,32 +160,8 @@ use resource_limits::ResourceLimits;
 /// The ABI version this host speaks.
 pub const ABI_VERSION: u32 = 1;
 
-/// The wire form of a node's properties: the native props plus its style.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct WireNode {
-	/// The widget properties.
-	#[serde(flatten)]
-	pub props: NativeProps,
-	/// The layout style.
-	#[serde(default)]
-	pub style: leptoskit_yoga::Style,
-	/// Built-in Tailwind utilities, validated before a tree is committed.
-	#[serde(default)]
-	pub class: String,
-	/// Replaces inputs while reusing this node's existing Rive asset and scene.
-	/// Valid only without `props.rive`, after that same node received full
-	/// content.
-	#[serde(default)]
-	pub rive_inputs: Option<BTreeMap<leptoskit_rive::Name, leptoskit_rive::Update>>,
-	/// Where the guest created the node, as `file:line:column`. Only a guest
-	/// built with `DevTools` sends it, for the host's agent to report.
-	#[serde(default)]
-	pub source: Option<String>,
-	/// The `#[component]` whose body created the node. Only a guest built
-	/// with `DevTools` sends it.
-	#[serde(default)]
-	pub component: Option<String>,
-}
+/// A node's properties as the host reads them from the guest.
+pub use leptoskit_native::wire::WireNode;
 
 /// The payload delivered with a text-change or submit event.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -466,6 +447,29 @@ fn host_trap(message: impl Into<String>) -> wasmi::Error {
 	wasmi::Error::host(HostTrap(message.into()))
 }
 
+/// Puts the import a host trap came from in front of its message. Other
+/// errors, such as running out of fuel, keep their kind.
+fn in_import(import: &str, error: wasmi::Error) -> wasmi::Error {
+	match error.downcast_ref::<HostTrap>() {
+		Some(HostTrap(message)) => host_trap(format!("{import}: {message}")),
+		None => error,
+	}
+}
+
+/// What a failed call into the guest's `export` becomes: a trap names the
+/// export in front of its message, so it reads `leptoskit_event:
+/// node_set_props: …`. The other kinds say nothing of where they happened, so
+/// that is logged.
+fn in_export(export: &str, error: wasmi::Error) -> WasmError {
+	match WasmError::from(error) {
+		WasmError::Trap(message) => WasmError::Trap(format!("{export}: {message}")),
+		other => {
+			log::error!(target: leptoskit_log::target::WASM, "{export}: {other}");
+			other
+		}
+	}
+}
+
 /// Runs one wasm app against a native backend.
 pub struct WasmHost<B: NativeBackend> {
 	identity: HostIdentity,
@@ -483,6 +487,8 @@ pub struct WasmHost<B: NativeBackend> {
 	flush: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	viewport_fn: Option<TypedFunc<(f32, f32), ()>>,
 	clock_fn: Option<TypedFunc<i64, ()>>,
+	/// Takes the platform's Back; see [`Self::system_back`].
+	system_back_fn: Option<TypedFunc<(), i32>>,
 	/// The reserved timer plugin, registered only when the host offers real
 	/// sleeps; see [`Self::enable_timers`].
 	timer_plugin: Option<leptoskit_bridge::PluginId>,
@@ -550,6 +556,7 @@ struct Guest {
 	flush: Option<Result<TypedFunc<(), ()>, wasmi::Error>>,
 	viewport_fn: Option<TypedFunc<(f32, f32), ()>>,
 	clock_fn: Option<TypedFunc<i64, ()>>,
+	system_back_fn: Option<TypedFunc<(), i32>>,
 }
 
 impl Guest {
@@ -618,6 +625,16 @@ impl Guest {
 			.map_err(|_| {
 				WasmError::Compile("leptoskit_clock must take an i64 and return nothing".to_owned())
 			})?;
+		let system_back_fn = instance
+			.get_export(&store, "leptoskit_system_back")
+			.and_then(Extern::into_func)
+			.map(|function| function.typed(&store))
+			.transpose()
+			.map_err(|_| {
+				WasmError::Compile(
+					"leptoskit_system_back must take nothing and return an i32".to_owned(),
+				)
+			})?;
 
 		store.data_mut().memory = instance
 			.get_export(&store, "memory")
@@ -635,6 +652,7 @@ impl Guest {
 			flush,
 			viewport_fn,
 			clock_fn,
+			system_back_fn,
 		})
 	}
 }
@@ -663,6 +681,7 @@ impl<B: NativeBackend> WasmHost<B> {
 			flush: guest.flush,
 			viewport_fn: guest.viewport_fn,
 			clock_fn: guest.clock_fn,
+			system_back_fn: guest.system_back_fn,
 			timer_plugin: None,
 			timer: None,
 			routed_replies_pending: false,
@@ -712,6 +731,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.flush = guest.flush;
 		self.viewport_fn = guest.viewport_fn;
 		self.clock_fn = guest.clock_fn;
+		self.system_back_fn = guest.system_back_fn;
 		self.deferred = None;
 
 		if timers {
@@ -826,7 +846,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		viewport
 			.call(&mut self.store, (width, height))
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_viewport", error))?;
 		self.drain_commit()
 	}
 
@@ -956,8 +976,8 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.timer.as_ref().is_some_and(|timers| timers.cancel(id))
 	}
 
-	/// Takes the next plugin request for the host's own router, scheduling a
-	/// timer request instead of returning it.
+	/// Takes the next plugin request for the host's own router, serving a
+	/// request for one of [`Self::served_plugins`] instead of returning it.
 	///
 	/// Call this instead of `plugins().next_request()` on a host that enabled
 	/// timers, so a timer never reaches the platform.
@@ -965,10 +985,28 @@ impl<B: NativeBackend> WasmHost<B> {
 		loop {
 			let request = self.store.data_mut().plugins.next_request()?;
 
-			if !self.route_timer(&request) {
+			if !self.serve(&request) {
 				return Some(request);
 			}
 		}
+	}
+
+	/// The plugins this interpreter answers itself, never the platform: its
+	/// timer, once [`Self::enable_timers`] has run.
+	pub fn served_plugins(&self) -> impl Iterator<Item = leptoskit_bridge::PluginId> + use<B> {
+		self.timer_plugin.into_iter()
+	}
+
+	/// Serves `request` when it is for one of [`Self::served_plugins`],
+	/// returning whether it did.
+	///
+	/// An `AppService` may drain `plugins().next_request()` itself and hand
+	/// back every call it does not own. Its host passes each one through
+	/// here before the platform sees it, as [`Self::next_host_request`] does:
+	/// a timer handed back to the platform found no plugin there and failed
+	/// as `Unavailable`, so every guest sleep failed on Android.
+	pub fn serve(&mut self, request: &leptoskit_bridge::Request) -> bool {
+		self.route_timer(request)
 	}
 
 	/// Takes a non-timer request held by [`Self::pump_timers`].
@@ -1026,7 +1064,7 @@ impl<B: NativeBackend> WasmHost<B> {
 					break;
 				};
 
-				if self.route_timer(&request) {
+				if self.serve(&request) {
 					moved += 1;
 				} else if self.routed_requests.len() < MAX_ROUTED_REQUESTS {
 					self.routed_requests.push_back(request);
@@ -1153,26 +1191,65 @@ impl<B: NativeBackend> WasmHost<B> {
 			.as_ref()
 			.map_err(|error| WasmError::Trap(error.to_string()))?;
 		self.refuel()?;
-		callback.call(&mut self.store, ())?;
+		callback
+			.call(&mut self.store, ())
+			.map_err(|error| in_export("leptoskit_plugins_ready", error))?;
 
 		if let Some(poll) = &self.plugins_poll {
 			poll.as_ref()
 				.map_err(|error| WasmError::Trap(error.to_string()))?
-				.call(&mut self.store, ())?;
+				.call(&mut self.store, ())
+				.map_err(|error| in_export("leptoskit_poll", error))?;
 		}
 
-		// The guest's tasks may have written signals without rendering. Settle
-		// the values they bound before the commit is drained, so an application
-		// never has to flush them itself.
+		self.settle()
+	}
+
+	/// Offers the platform's Back, such as Android's Back gesture or button,
+	/// to the module's optional `leptoskit_system_back` export, then settles
+	/// and commits what it changed.
+	///
+	/// [`EventOutcome::Handled`] means the module went back, so the platform
+	/// stays where it is. [`EventOutcome::Unhandled`] means the platform
+	/// leaves, as Back does when nothing handles it: the module had nothing
+	/// to go back to, or does not export `leptoskit_system_back`.
+	pub fn system_back(&mut self) -> Result<EventOutcome, WasmError> {
+		if let Some(error) = self.deferred.take() {
+			return Err(error);
+		}
+
+		let Some(system_back) = self.system_back_fn else {
+			return Ok(EventOutcome::Unhandled);
+		};
+
+		if !self.allow_render(self.committed_nodes()) {
+			return Err(host_trap(self.render_error().expect("rendering was rejected")).into());
+		}
+
+		self.refuel()?;
+		let went_back = system_back.call(&mut self.store, ())?;
+		self.settle()?;
+		Ok(if went_back == 1 {
+			EventOutcome::Handled
+		} else {
+			EventOutcome::Unhandled
+		})
+	}
+
+	/// Settles the values the guest bound, then commits. A turn such as a
+	/// plugin poll or system Back may write signals without rendering; this
+	/// settles them before the commit is drained, so an application never has
+	/// to flush them itself.
+	fn settle(&mut self) -> Result<(), WasmError> {
 		if let Some(flush) = &self.flush {
 			flush
 				.as_ref()
 				.map_err(|error| WasmError::Trap(error.to_string()))?
-				.call(&mut self.store, ())?;
+				.call(&mut self.store, ())
+				.map_err(|error| in_export("leptoskit_flush", error))?;
 		}
 
-		self.drain_commit()?;
-		Ok(())
+		self.drain_commit()
 	}
 
 	/// The number of commits the module has made.
@@ -1217,7 +1294,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		self.main_fn
 			.call(&mut self.store, &[], &mut [])
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_main", error))?;
 		self.drain_commit()?;
 		Ok(())
 	}
@@ -1316,7 +1393,7 @@ impl<B: NativeBackend> WasmHost<B> {
 				],
 				&mut results,
 			)
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_event", error))?;
 		self.drain_commit()?;
 		let handled = matches!(results[0], Val::I32(1));
 		Ok(if handled {
@@ -1400,7 +1477,9 @@ impl<B: NativeBackend> WasmHost<B> {
 			.map_err(WasmError::from)?;
 
 		if let Some(clock) = self.clock_fn {
-			clock.call(&mut self.store, unix_ms())?;
+			clock
+				.call(&mut self.store, unix_ms())
+				.map_err(|error| in_export("leptoskit_clock", error))?;
 		}
 
 		Ok(())
@@ -1418,7 +1497,7 @@ impl<B: NativeBackend> WasmHost<B> {
 		self.refuel()?;
 		alloc
 			.call(&mut self.store, &[Val::I32(len as i32)], &mut pointer)
-			.map_err(WasmError::from)?;
+			.map_err(|error| in_export("leptoskit_alloc", error))?;
 		let Val::I32(ptr) = pointer[0] else {
 			return Err(WasmError::Trap("allocator returned no pointer".to_owned()));
 		};

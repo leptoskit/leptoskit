@@ -19,8 +19,10 @@ Each frame says where the viewer is, how the screen sees the world, and what the
 | `planes`   | Flat surfaces found so far: floors, tables, walls, with their outlines. On recent iPhones each is labelled `Floor`, `Wall`, … |
 | `anchors`  | Points you pinned, where they are now: they move as the phone corrects its map.                                               |
 | `light`    | How bright the room is, so a creature isn't lit like a studio in a dark hallway.                                              |
-| `depth`    | Whether the frame has the room's depth, measured or estimated, so things hide behind real furniture.                          |
+| `depth`    | `Some(DepthSource::Measured)` or `Some(DepthSource::Estimated)` for the room's depth, or `None`.                              |
 | `tracking` | Whether tracking is `Normal`, `Limited` (and why: too dark, moving too fast), or lost.                                        |
+
+`frame.depth.is_some()` says whether depth is available. When combining depth with tracked planes, match the source: a model's metre estimates can be long or short, so find each estimated picture's own floor before scaling it to the tracked floor's height. Depth hit tests return `HitKind::Depth` for measured depth and `HitKind::EstimatedDepth` for model depth. Hits use the newest host frame, so their source can differ from the last frame your app received.
 
 The camera picture and the depth picture never reach your app's code. The native app draws the camera behind your 3D scene and hides the parts of the scene that are behind real things; your code decides where things are.
 

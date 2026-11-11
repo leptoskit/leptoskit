@@ -224,12 +224,12 @@ pub enum LoadMode {
 pub struct SoundInfo {
 	/// The handle to play it with.
 	pub sound: Sound,
-	/// The recording's own sample rate, in hertz.
+	/// The decoded sample rate, in hertz. Browsers resample buffered sounds
+	/// to their `AudioContext`'s rate.
 	pub sample_rate: u32,
 	/// The recording's channel count.
 	pub channels: u32,
-	/// Its length in frames at [`Self::sample_rate`], when the container
-	/// says.
+	/// Its length in frames at [`Self::sample_rate`], when known.
 	pub frames: Option<u64>,
 	/// Whether it streams while playing rather than sitting in memory.
 	pub streamed: bool,

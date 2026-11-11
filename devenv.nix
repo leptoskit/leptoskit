@@ -16,6 +16,22 @@ let
   # that file, so every script that can trigger such an install exports the
   # same setting. Remove both once the upstream issue is fixed.
   keepProcMacrosLoadable = "export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none";
+  linuxWebdriver = pkgs.writeText "leptoskit-webdriver.json" (
+    builtins.toJSON (
+      lib.recursiveUpdate (builtins.fromJSON (builtins.readFile ./webdriver.json)) {
+        "goog:chromeOptions".binary = lib.getExe pkgs.chromium;
+      }
+    )
+  );
+  hostRustTarget = lib.toUpper (
+    builtins.replaceStrings [ "-" ] [ "_" ] pkgs.stdenv.hostPlatform.rust.rustcTarget
+  );
+  linuxBuildEnvironment = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    CC = "${pkgs.stdenv.cc}/bin/cc";
+    CXX = "${pkgs.stdenv.cc}/bin/c++";
+    "CARGO_TARGET_${hostRustTarget}_LINKER" = "${pkgs.stdenv.cc}/bin/cc";
+    WASM_BINDGEN_TEST_WEBDRIVER_JSON = linuxWebdriver;
+  };
 in
 {
   # The macOS frameworks come from the host Xcode toolchain (see `enterShell`);
@@ -73,6 +89,8 @@ in
       pkgs.swiftlint
     ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+      # Keep the browser and chromedriver on the same nixpkgs revision.
+      pkgs.chromium
       # cpal, behind the audio plugin, plays through ALSA.
       pkgs.alsa-lib
       pkgs.at-spi2-core
@@ -83,6 +101,8 @@ in
       pkgs.xdotool
       pkgs.xvfb-run
     ];
+
+  env = linuxBuildEnvironment;
 
   enterShell = ''
     # Keep shell entry fast. Only bootstrap missing toolchains here; explicit
@@ -556,13 +576,32 @@ in
             cargo nextest run --workspace --all-features
           dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+          cargo nextest run --manifest-path examples/dev_client/Cargo.toml
+          test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
         fi
         cargo nextest run --workspace --all-features
         cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        cargo nextest run --manifest-path examples/dev_client/Cargo.toml
         cargo nextest run --manifest-path devtools/Cargo.toml
+        test:wire
       '';
       description = "Run cargo tests with nextest.";
+      binary = "bash";
+    };
+
+    "test:wire" = {
+      exec = ''
+        set -euo pipefail
+        # Apps that use Solana's clients build serde_json with
+        # `arbitrary_precision`, which turns a buffered number with a
+        # fraction into a map. The guest-to-host wire must read the same
+        # with it as without.
+        cargo nextest run -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision \
+          -E 'test(/wire_tests/)'
+        cargo nextest run -p leptoskit_wasm --features serde_json/arbitrary_precision
+      '';
+      description = "Run the native wire's tests under serde_json's arbitrary_precision.";
       binary = "bash";
     };
 
@@ -574,6 +613,9 @@ in
         cargo test --manifest-path examples/file_routes/Cargo.toml \
           --test routes --test navigation --test pages
         cargo test --manifest-path examples/file_routes/Cargo.toml --doc
+        (cd examples/dev_client && cargo run --locked --manifest-path ../../Cargo.toml \
+          --package leptoskit_cli --bin leptoskit -- routes --check)
+        cargo test --manifest-path examples/dev_client/Cargo.toml
         # Huddle: its web client through the CLI, its screens, and two people
         # against its server.
         (cd examples/huddle && cargo run --locked --manifest-path ../../Cargo.toml \
@@ -639,7 +681,7 @@ in
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package auth_pages_example --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser
+          cargo test --target wasm32-unknown-unknown --package leptoskit_native --features web --test web_browser --test web_splash
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features local-storage --test web_storage --test web_storage_worker
         test:rive
@@ -916,6 +958,9 @@ in
         run_step "lint:docs" lint:docs
         run_step "lint:format" lint:format
         run_step "lint:kotlin" lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" lint:swift
+        ''}
         run_step "lint:releases" lint:releases
         run_step "schema:check" schema:check
         run_step "deny:check" deny:check
@@ -936,13 +981,20 @@ in
 
         # Sibling scripts are addressed absolutely so the hook also works
         # outside `devenv shell`, where the profile bin dir is not on PATH.
-        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --verbose --redact
+        # Scan the branch's complete history, including every commit being
+        # pushed. Local tool checkpoint refs are not repository history and
+        # can contain audit reports or snapshots from unrelated worktrees.
+        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --log-opts=HEAD --verbose --redact
         run_step "lint:clippy" ${currentDir}/.devenv/profile/bin/lint:clippy
+        run_step "lint:clippy:wasm" ${currentDir}/.devenv/profile/bin/lint:clippy:wasm
         run_step "lint:monostyle" ${currentDir}/.devenv/profile/bin/lint:monostyle
         run_step "lint:leptoskit" ${currentDir}/.devenv/profile/bin/lint:leptoskit
         run_step "lint:docs" ${currentDir}/.devenv/profile/bin/lint:docs
         run_step "lint:format" ${currentDir}/.devenv/profile/bin/lint:format
         run_step "lint:kotlin" ${currentDir}/.devenv/profile/bin/lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" ${currentDir}/.devenv/profile/bin/lint:swift
+        ''}
         run_step "test:cargo" ${currentDir}/.devenv/profile/bin/test:cargo
         run_step "security:zizmor" ${currentDir}/.devenv/profile/bin/security:zizmor
         run_step "lint:releases" ${currentDir}/.devenv/profile/bin/lint:releases
@@ -1039,6 +1091,11 @@ in
         cargo build --locked --target wasm32-unknown-unknown --package hooks_guest_probe
         LEPTOSKIT_HOOKS_GUEST="$guest_target/wasm32-unknown-unknown/debug/hooks_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test hooks_guest -- --ignored
+        # A screen's remembered state survives the runtime's rebuilds and
+        # leaves with the screen.
+        cargo build --locked --target wasm32-unknown-unknown --package rebuild_guest_probe
+        LEPTOSKIT_REBUILD_GUEST="$guest_target/wasm32-unknown-unknown/debug/rebuild_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test rebuild_guest -- --ignored
         # An agent's document, interpreted by an ordinary guest: what a
         # published app runs when an agent sends it interface as text.
         cargo build --locked --target wasm32-unknown-unknown --package agent_ui_guest_probe
@@ -1162,21 +1219,23 @@ in
           --test jni_async_lifecycle -- --ignored
         cargo build --locked --package leptoskit_bridge_ffi
         mkdir -p target/plugin-jni
-        task_jdk="$(dirname "$(dirname "$(realpath "$(command -v javac)")")")"
+        task_jdk="''${JAVA_HOME:-$(dirname "$(dirname "$(realpath "$(command -v javac)")")")}"
         case "$(uname -s)" in
           Darwin)
             platform=darwin
             extension=dylib
             link_flags=(-dynamiclib)
+            cxx=(/usr/bin/xcrun --sdk macosx clang++)
             ;;
           Linux)
             platform=linux
             extension=so
             link_flags=(-shared -ldl -lpthread -lm)
+            cxx=("''${CXX:-c++}")
             ;;
           *) echo "JNI smoke tests require macOS or Linux" >&2; exit 1 ;;
         esac
-        c++ -std=c++20 -Wall -Wextra -Werror -fPIC \
+        "''${cxx[@]}" -std=c++20 -Wall -Wextra -Werror -fPIC \
           -I "$task_jdk/include" -I "$task_jdk/include/$platform" \
           crates/leptoskit_bridge_ffi/android/bridge.cpp \
           target/debug/libleptoskit_bridge_ffi.a \
@@ -1406,6 +1465,14 @@ in
 
         # update github ci environment
         echo "DEVENV_PROFILE=$DEVENV_PROFILE" >> $GITHUB_ENV
+
+        # Later steps run outside devenv. Keep Rust's host linker and C/C++
+        # compilers with the Nix libraries, and retain the pinned browser path.
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            name: value: ''echo ${lib.escapeShellArg "${name}=${value}"} >> "$GITHUB_ENV"''
+          ) linuxBuildEnvironment
+        )}
 
         # prepend common compilation lookup paths; the `:-` defaults matter
         # because Linux runners do not export several of these, and `set -u`
