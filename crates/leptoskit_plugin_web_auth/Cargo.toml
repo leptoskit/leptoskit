@@ -5,6 +5,7 @@ authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
+readme = "readme.md"
 repository.workspace = true
 rust-version.workspace = true
 description = "System-browser sign-in sessions for LeptosKit: ASWebAuthenticationSession, Android Auth Tab, and a desktop loopback redirect."
