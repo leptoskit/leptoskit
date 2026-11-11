@@ -17,6 +17,8 @@ How the repository proves that each platform works: the runtime probe, the widge
 
 The workspace tests and generated application builds run in separate jobs. Each generated app retains its own build target. The two Linux jobs export separate instrumented reports, and the coverage gate requires both.
 
+Linux jobs use Nix's C/C++ compilers and Rust host linker with the Nix libraries. `setup:ci` exports those compiler paths and the Wasm browser capabilities file to later steps, which run outside the devenv shell. Keeping only its `bin` directory on `PATH` loses these settings: a system linker can pair the runner's glibc with a newer Nix `libm`, and browser tests can fall back to the runner's Chrome instead of the pinned Chromium.
+
 Desktop workspace jobs have a 150-minute budget for cold builds and the separate dependency graphs used by compile-error fixtures. Linux workspace coverage keeps its 90-minute budget; application coverage has 120 minutes to finish cold generated-app builds, upload coverage, and save its build cache.
 
 Linux coverage builds use `line-tables-only` debug information for the dev and test profiles, with incremental compilation disabled. This keeps source locations for diagnostics and LLVM coverage while reducing the disk footprint of instrumented binaries and nested fixture builds. Their cache keys include the debug profile so they cannot restore the previous full-debug artifacts.

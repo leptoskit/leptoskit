@@ -23,6 +23,15 @@ let
       }
     )
   );
+  hostRustTarget = lib.toUpper (
+    builtins.replaceStrings [ "-" ] [ "_" ] pkgs.stdenv.hostPlatform.rust.rustcTarget
+  );
+  linuxBuildEnvironment = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    CC = "${pkgs.stdenv.cc}/bin/cc";
+    CXX = "${pkgs.stdenv.cc}/bin/c++";
+    "CARGO_TARGET_${hostRustTarget}_LINKER" = "${pkgs.stdenv.cc}/bin/cc";
+    WASM_BINDGEN_TEST_WEBDRIVER_JSON = linuxWebdriver;
+  };
 in
 {
   # The macOS frameworks come from the host Xcode toolchain (see `enterShell`);
@@ -93,9 +102,7 @@ in
       pkgs.xvfb-run
     ];
 
-  env = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-    WASM_BINDGEN_TEST_WEBDRIVER_JSON = linuxWebdriver;
-  };
+  env = linuxBuildEnvironment;
 
   enterShell = ''
     # Keep shell entry fast. Only bootstrap missing toolchains here; explicit
@@ -1451,6 +1458,14 @@ in
 
         # update github ci environment
         echo "DEVENV_PROFILE=$DEVENV_PROFILE" >> $GITHUB_ENV
+
+        # Later steps run outside devenv. Keep Rust's host linker and C/C++
+        # compilers with the Nix libraries, and retain the pinned browser path.
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            name: value: ''echo ${lib.escapeShellArg "${name}=${value}"} >> "$GITHUB_ENV"''
+          ) linuxBuildEnvironment
+        )}
 
         # prepend common compilation lookup paths; the `:-` defaults matter
         # because Linux runners do not export several of these, and `set -u`
