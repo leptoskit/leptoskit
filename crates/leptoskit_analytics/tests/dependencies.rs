@@ -3,6 +3,8 @@
 //! bundles. `cargo deny` can't check this, because the service uses some of
 //! them legitimately.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::process::Command;
 
 /// Crates the client must never pull in, directly or through another.
@@ -22,9 +24,19 @@ const BANNED: &[&str] = &[
 
 #[test]
 fn the_client_compiles_none_of_the_banned_crates() {
+	check(&[]);
+}
+
+#[test]
+fn the_browser_client_compiles_none_of_the_banned_crates() {
+	check(&["--features", "web"]);
+}
+
+fn check(features: &[&str]) {
 	let output = Command::new(env!("CARGO"))
+		.arg("tree")
+		.args(features)
 		.args([
-			"tree",
 			"--offline",
 			"--package",
 			"leptoskit_analytics",

@@ -5,6 +5,8 @@
 //! `cargo nextest run --release -p leptoskit_analytics --test capture_speed
 //! --run-ignored only --no-capture`.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::cell::Cell;
 use std::time::Instant;
 

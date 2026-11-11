@@ -5217,6 +5217,7 @@ dependencies = [
  "chrono",
  "flate2",
  "insta",
+ "js-sys",
  "leptoskit_axum",
  "leptoskit_db",
  "leptoskit_rpc",
@@ -5228,6 +5229,10 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

@@ -1,6 +1,8 @@
 //! The batch format: its exact bytes, round trips, hostile input, and how
 //! small it is next to the JSON `PostHog`'s browser library sends.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::fmt::Write as _;
 use std::io::Write as _;
 

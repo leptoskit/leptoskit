@@ -2,6 +2,8 @@
 //! in the background are stored as the server's, and a service that can't
 //! be reached keeps them queued.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use leptoskit_analytics::client::server::Analytics;
 use leptoskit_analytics::client::server::Config;
 use leptoskit_analytics::props;

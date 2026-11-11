@@ -2,6 +2,8 @@
 //! refused entries named, contexts stored once, clock correction, gzip and
 //! its limits, and a full queue answering `503`.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::io::Write as _;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
