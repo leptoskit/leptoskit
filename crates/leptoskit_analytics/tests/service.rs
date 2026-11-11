@@ -371,7 +371,16 @@ async fn throughput() {
 	let url = format!("sqlite://{}?mode=rwc", file.display());
 	let db = Db::connect(&url).await.unwrap();
 	db.migrate(service::MIGRATIONS).await.unwrap();
-	let router = service::routes(db.clone(), None, IngestConfig::default());
+	// It measures the writer, so it sends far faster per id than a person
+	// could, without the per-id limit.
+	let router = service::routes(
+		db.clone(),
+		None,
+		IngestConfig {
+			per_distinct_id: None,
+			..IngestConfig::default()
+		},
+	);
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let address = listener.local_addr().unwrap();
 	tokio::spawn(async move {
@@ -449,4 +458,44 @@ async fn an_extreme_sent_at_is_clamped_without_losing_the_request() {
 	let warnings = rows(&service.db, "SELECT reason, count FROM ingestion_warnings").await;
 	assert_eq!(text(&warnings[0][0]), "clock_clamped");
 	assert_eq!(text(&warnings[0][1]), "1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hot_distinct_id_is_rate_limited_and_the_app_is_not() {
+	let service = start(IngestConfig {
+		per_distinct_id: Some(service::Rate {
+			per_second: 0.001,
+			burst: 5.0,
+		}),
+		..IngestConfig::default()
+	})
+	.await;
+	let now = now_millis();
+	let batch = |count| {
+		Batch {
+			sent_at: now,
+			contexts: vec![context()],
+			entries: (0..count).map(|_| event("spam", now)).collect(),
+		}
+	};
+
+	let (status, answer, _) = send(&service, wire::encode(&batch(8)), None, None).await;
+	assert_eq!(status, 200, "{answer}");
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!((result.stored, result.rate_limited), (5, 3));
+	let warnings = rows(
+		&service.db,
+		"SELECT reason, count FROM ingestion_warnings WHERE reason = 'rate_limited'",
+	)
+	.await;
+	assert_eq!(warnings.len(), 1);
+
+	let (status, answer, _) = send(&service, wire::encode(&batch(8)), None, Some(TOKEN)).await;
+	assert_eq!(status, 200, "{answer}");
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!(
+		(result.stored, result.rate_limited),
+		(8, 0),
+		"the app's own events"
+	);
 }

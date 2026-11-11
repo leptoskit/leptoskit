@@ -30,6 +30,8 @@ use tokio::time::Instant;
 use super::accept::Accepted;
 use super::accept::ContextRow;
 use super::accept::Row;
+use super::limits::Limiter;
+use super::limits::Rate;
 
 /// How the queue and the writer are sized.
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +44,8 @@ pub struct IngestConfig {
 	pub batch_rows: usize,
 	/// How long the writer waits for more rows before writing what it has.
 	pub batch_wait: Duration,
+	/// Each `distinct_id`'s rate limit, or `None` for none.
+	pub per_distinct_id: Option<Rate>,
 }
 
 impl Default for IngestConfig {
@@ -51,6 +55,7 @@ impl Default for IngestConfig {
 			queue_bytes: 64 << 20,
 			batch_rows: 2_000,
 			batch_wait: Duration::from_millis(50),
+			per_distinct_id: Some(Rate::PER_DISTINCT_ID),
 		}
 	}
 }
@@ -62,6 +67,8 @@ pub struct Committed {
 	pub stored: u32,
 	/// Rows already written by an earlier attempt, so not written again.
 	pub duplicates: u32,
+	/// Rows dropped because their `distinct_id` sent too many too fast.
+	pub rate_limited: u32,
 }
 
 /// Why rows weren't written.
@@ -112,6 +119,7 @@ pub struct Ingest {
 	rows: Arc<Semaphore>,
 	bytes: Arc<Semaphore>,
 	config: IngestConfig,
+	limiter: Option<Arc<Limiter>>,
 }
 
 /// The unit the byte limit counts in, so it fits a semaphore's permits.
@@ -127,6 +135,9 @@ impl Ingest {
 			rows: Arc::new(Semaphore::new(config.queue_rows)),
 			bytes: Arc::new(Semaphore::new(config.queue_bytes.div_ceil(BYTE_UNIT))),
 			config,
+			limiter: config
+				.per_distinct_id
+				.map(|rate| Arc::new(Limiter::new(rate))),
 		}
 	}
 
@@ -139,10 +150,20 @@ impl Ingest {
 	/// others when the write fails.
 	pub async fn submit(
 		&self,
-		accepted: Accepted,
+		mut accepted: Accepted,
 		received_at: Timestamp,
 	) -> Result<Committed, IngestError> {
 		let mut warnings = Vec::new();
+		let rate_limited = self.limiter.as_ref().map_or(0, |limiter| {
+			limiter.admit(&mut accepted.rows, std::time::Instant::now())
+		});
+		if rate_limited > 0 {
+			warnings.push(Warning {
+				reason: "rate_limited".into(),
+				count: rate_limited,
+				detail: "a distinct id sent more than its rate limit".into(),
+			});
+		}
 		if !accepted.refused.is_empty() {
 			warnings.push(Warning {
 				reason: "invalid".into(),
@@ -160,6 +181,12 @@ impl Ingest {
 		if accepted.rows.is_empty() && warnings.is_empty() {
 			return Ok(Committed::default());
 		}
+		let finish = |committed: Committed| {
+			Committed {
+				rate_limited,
+				..committed
+			}
+		};
 
 		let rows = u32::try_from(accepted.rows.len().max(1)).unwrap_or(u32::MAX);
 		let bytes = u32::try_from(accepted.bytes().div_ceil(BYTE_UNIT).max(1)).unwrap_or(u32::MAX);
@@ -189,7 +216,7 @@ impl Ingest {
 			.map_err(|_| IngestError::Closed)?;
 
 		match wait.await {
-			Ok(Ok(committed)) => Ok(committed),
+			Ok(Ok(committed)) => Ok(finish(committed)),
 			Ok(Err(error)) => Err(IngestError::Database(error)),
 			Err(_) => Err(IngestError::Closed),
 		}
