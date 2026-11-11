@@ -72,7 +72,7 @@ registry_username = 'team'
 
 struct Fixture {
 	data: TempDir,
-	root: TempDir,
+	_root: TempDir,
 	store: Store,
 	#[cfg(unix)]
 	service: Service,
@@ -102,7 +102,7 @@ impl Fixture {
 
 		Self {
 			data,
-			root,
+			_root: root,
 			store,
 			#[cfg(unix)]
 			service,
@@ -112,7 +112,7 @@ impl Fixture {
 
 	#[cfg(unix)]
 	fn root(&self) -> PathBuf {
-		self.root.path().to_path_buf()
+		self.project.root.clone()
 	}
 
 	#[cfg(unix)]
