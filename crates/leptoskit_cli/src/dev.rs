@@ -153,7 +153,14 @@ pub fn run(options: Options<'_>) -> Result<()> {
 
 	develop(
 		database,
-		|database| watch(&config, &root, &runtime, database.as_ref()),
+		|database| {
+			let watching = watch(&config, &root, &runtime, database.as_ref())?;
+			// The first build can take minutes. Say the watcher is already
+			// running before that build starts, so an edit during it is
+			// visibly queued instead of looking ignored.
+			say_watching(&root);
+			Ok(watching)
+		},
 		|database| {
 			Started::start(Start {
 				config: &config,
@@ -170,7 +177,7 @@ pub fn run(options: Options<'_>) -> Result<()> {
 			})
 		},
 		|started, watching| {
-			announce(&root, open, started.web.as_ref());
+			open_started(open, started.web.as_ref());
 			rebuild(started, watching);
 		},
 	)
@@ -196,13 +203,17 @@ fn develop<D, W, S>(
 	Ok(())
 }
 
-/// Says what `dev` watches, and opens the web app when asked to.
-fn announce(root: &Path, open: bool, web: Option<&Web>) {
+/// Says the watcher is running. Printed when it starts, before the first
+/// build, which is the long part of `dev`.
+fn say_watching(root: &Path) {
 	anstream::println!(
 		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
 		root.display()
 	);
+}
 
+/// Opens the web app when asked to, after the server is up.
+fn open_started(open: bool, web: Option<&Web>) {
 	if let Some(web) = web
 		&& open
 		&& let Err(error) = open_browser(&web.url())
@@ -1815,7 +1826,7 @@ mod tests {
 		let (root, config) = workspace();
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		let watching = watch(&config, root.path(), &runtime, None).unwrap();
-		announce(root.path(), false, None);
+		say_watching(root.path());
 		drop(watching);
 	}
 
