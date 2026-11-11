@@ -47,9 +47,23 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		println!("applied migration {name}");
 	}
 
+	// `LEPTOSKIT_ANALYTICS_ACK=queued` answers once events are queued rather
+	// than committed, for an app that prefers latency to durability.
+	let ack = match std::env::var("LEPTOSKIT_ANALYTICS_ACK") {
+		Ok(value) => {
+			service::Ack::parse(&value).ok_or_else(|| {
+				format!("LEPTOSKIT_ANALYTICS_ACK is {value:?}: use \"committed\" or \"queued\"")
+			})?
+		}
+		Err(_) => service::Ack::Committed,
+	};
+
 	Ok(service::routes(
 		db,
 		env.public_origin(),
-		service::IngestConfig::default(),
+		service::IngestConfig {
+			ack,
+			..service::IngestConfig::default()
+		},
 	))
 }

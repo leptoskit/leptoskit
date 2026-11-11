@@ -499,3 +499,30 @@ async fn a_hot_distinct_id_is_rate_limited_and_the_app_is_not() {
 		"the app's own events"
 	);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_ack_answers_before_the_commit_and_still_stores() {
+	let service = start(IngestConfig {
+		ack: service::Ack::Queued,
+		..IngestConfig::default()
+	})
+	.await;
+	let now = now_millis();
+	let batch = Batch {
+		sent_at: now,
+		contexts: vec![context()],
+		entries: vec![event("one", now), event("two", now)],
+	};
+	let (status, answer, _) = send(&service, wire::encode(&batch), None, None).await;
+	assert_eq!(status, 200, "{answer}");
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!((result.stored, result.duplicates), (2, 0));
+
+	for _ in 0..200 {
+		if rows(&service.db, "SELECT uuid FROM events").await.len() == 2 {
+			return;
+		}
+		tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+	}
+	panic!("the queued events were never written");
+}
