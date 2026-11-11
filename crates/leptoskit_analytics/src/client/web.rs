@@ -9,7 +9,6 @@
 
 use std::cell::RefCell;
 
-use wasm_bindgen::JsCast as _;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
@@ -56,14 +55,7 @@ impl Platform for Browser {
 	}
 
 	fn fill_random(&self, bytes: &mut [u8]) {
-		let filled = web_sys::window()
-			.and_then(|window| window.crypto().ok())
-			.is_some_and(|crypto| crypto.get_random_values_with_u8_array(bytes).is_ok());
-		if !filled {
-			for byte in bytes {
-				*byte = (js_sys::Math::random() * 256.0) as u8;
-			}
-		}
+		fill_random(bytes);
 	}
 }
 
@@ -84,9 +76,9 @@ pub fn init(options: Options) {
 	if STATE.with_borrow(Option::is_some) {
 		return;
 	}
-	let Some(window) = web_sys::window() else {
+	if !in_page() {
 		return;
-	};
+	}
 
 	let stored = options.persist.then(|| read(ID_KEY)).flatten();
 	let identity = stored.and_then(|stored| {
@@ -110,24 +102,13 @@ pub fn init(options: Options) {
 	STATE.with_borrow_mut(|state| *state = Some(State { client, options }));
 	save_identity();
 
+	// Sends on the interval, and hands what's left to `sendBeacon` when the
+	// page is hidden or closed.
 	let tick = Closure::<dyn FnMut()>::new(|| wasm_bindgen_futures::spawn_local(send_waiting()));
-	let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-		tick.as_ref().unchecked_ref(),
-		interval,
-	);
+	let leave = Closure::<dyn FnMut()>::new(beacon);
+	watch_page(interval, &tick, &leave);
 	tick.forget();
-
-	let hidden = Closure::<dyn FnMut()>::new(|| {
-		if page_hidden() {
-			beacon();
-		}
-	});
-	let _ = window
-		.add_event_listener_with_callback("visibilitychange", hidden.as_ref().unchecked_ref());
-	hidden.forget();
-	let leaving = Closure::<dyn FnMut()>::new(beacon);
-	let _ = window.add_event_listener_with_callback("pagehide", leaving.as_ref().unchecked_ref());
-	leaving.forget();
+	leave.forget();
 }
 
 /// Records that `name` happened.
@@ -290,62 +271,28 @@ fn context() -> Properties {
 // bindings and their error handling. The page's values are joined by
 // newlines, which none can hold. Storage and sending never throw: storage
 // that isn't there is skipped, and a failed request answers "", a retry.
+// It's served as written, with nothing to minify it, so it's written small:
+// `g` is `globalThis`, `t` turns a value into a line of text, and `c` runs
+// a function, answering `e` if it throws.
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
-const text = (value) => (value == null ? "" : String(value).replace(/\n/g, " "));
-export function page_context() {
-	const screen = globalThis.screen || {};
-	const navigator = globalThis.navigator || {};
-	let zone = "";
-	try {
-		zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-	} catch (_) {}
-	return [screen.width, screen.height, globalThis.innerWidth, globalThis.innerHeight,
-		navigator.language, zone, navigator.userAgent].map(text).join("\n");
-}
-export function page_hidden() {
-	return globalThis.document?.visibilityState === "hidden";
-}
-export function storage_get(key) {
-	try {
-		return globalThis.localStorage.getItem(key);
-	} catch (_) {
-		return null;
-	}
-}
-export function storage_set(key, value) {
-	try {
-		if (value == null) globalThis.localStorage.removeItem(key);
-		else globalThis.localStorage.setItem(key, value);
-	} catch (_) {}
-}
-export async function fetch_batch(url, body, keepalive) {
- try {
-  const r = await fetch(url, {method:"POST",body,keepalive});
-  const h = `${r.status} ${r.headers.get("retry-after")||""}|`;
-  if (!r.ok) return h;
-  const i = await unknown_schemas(r);
-  return i == null ? "" : h+i;
- } catch (_) { return ""; }
-}
-export function send_beacon(url, body) {
-	try {
-		return globalThis.navigator.sendBeacon(url, body);
-	} catch (_) {
-		return false;
-	}
-}
-export function page_view() {
-	const location = globalThis.location || {};
-	const document = globalThis.document || {};
-	return [location.href, location.pathname, location.host, document.title, document.referrer]
-		.map(text).join("\n");
-}
+const g=globalThis,t=v=>v==null?"":String(v).replace(/\n/g," "),j=a=>a.map(t).join("\n"),c=(f,e)=>{try{return f()}catch(_){return e}},s=()=>g.localStorage;
+export const page_context=()=>{const w=g.screen||{},n=g.navigator||{};return j([w.width,w.height,g.innerWidth,g.innerHeight,n.language,c(()=>Intl.DateTimeFormat().resolvedOptions().timeZone,""),n.userAgent])};
+export const page_view=()=>{const l=g.location||{},d=g.document||{};return j([l.href,l.pathname,l.host,d.title,d.referrer])};
+export const in_page=()=>typeof window!=="undefined";
+export const watch_page=(ms,tick,leave)=>{setInterval(tick,ms);addEventListener("visibilitychange",()=>{if(g.document?.visibilityState==="hidden")leave()});addEventListener("pagehide",()=>leave())};
+export const fill_random=b=>{if(!c(()=>(g.crypto.getRandomValues(b),1),0))for(let i=0;i<b.length;i++)b[i]=Math.random()*256};
+export const storage_get=k=>c(()=>s().getItem(k),null);
+export const storage_set=(k,v)=>c(()=>v==null?s().removeItem(k):s().setItem(k,v));
+export const fetch_batch=(url,body,keepalive)=>c(()=>fetch(url,{method:"POST",body,keepalive}).then(async r=>{const h=`${r.status} ${r.headers.get("retry-after")||""}|`;if(!r.ok)return h;const i=await unknown_schemas(r);return i==null?"":h+i},()=>""),Promise.resolve(""));
+export const send_beacon=(u,b)=>c(()=>g.navigator.sendBeacon(u,b),false);
 export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
 "#)]
 extern "C" {
 	fn page_context() -> String;
 	fn page_view() -> String;
-	fn page_hidden() -> bool;
+	fn in_page() -> bool;
+	fn watch_page(interval: i32, tick: &Closure<dyn FnMut()>, leave: &Closure<dyn FnMut()>);
+	fn fill_random(bytes: &mut [u8]);
 	fn storage_get(key: &str) -> Option<String>;
 	fn storage_set(key: &str, value: Option<&str>);
 	fn fetch_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
