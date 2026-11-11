@@ -71,7 +71,7 @@ struct Host {
 ///
 /// GTK 4.22 can mark their accessible context realized before the bus is
 /// connected. Reinserting them after the window is mapped publishes a live
-/// object. The explicit name is applied after GtkButton's labelled-by
+/// object. The explicit name is applied after `GtkButton`'s labelled-by
 /// relation. The slider already registers, and reparenting it would reset
 /// its value.
 fn reregister_accessible_controls(state: &RefCell<State>) {
