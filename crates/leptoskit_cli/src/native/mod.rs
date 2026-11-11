@@ -1589,6 +1589,8 @@ fn run_host_library(command: &mut Command) -> Result<Vec<String>> {
 /// stripped, in rustc's order and without the repeats it keeps for linkers that
 /// care about them. Anything that is not a `-l` entry is left to the C linker.
 fn native_static_libs(output: &str) -> Vec<String> {
+	// Cargo may colour both the note's prefix and its final library name.
+	let output = anstream::adapter::strip_str(output).to_string();
 	let mut libraries: Vec<String> = Vec::new();
 
 	for line in output.lines() {
@@ -3053,17 +3055,45 @@ mod tests {
 	#[cfg(unix)]
 	#[test]
 	fn a_host_build_reports_the_libraries_it_printed() {
-		let mut build = Command::new("sh");
-		build.args([
-			"-c",
-			"echo 'note: native-static-libs: -laaudio -ldl -laaudio' >&2; echo compiling",
-		]);
-		assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		for note in [
+			"note: native-static-libs: -laaudio -ldl -laaudio",
+			"\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -laaudio -ldl \
+			 -laaudio\u{1b}[0m",
+		] {
+			let mut build = Command::new("sh");
+			build.args([
+				"-c",
+				"printf '%s\\n' \"$1\" >&2; echo compiling",
+				"host-library-test",
+				note,
+			]);
+			assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		}
 
 		let mut failed = Command::new("sh");
 		failed.args(["-c", "exit 3"]);
 		let error = run_host_library(&mut failed).unwrap_err().to_string();
 		assert!(error.contains("failed"), "{error}");
+	}
+
+	#[test]
+	fn rustcs_coloured_note_keeps_clean_library_names() {
+		// Cargo's `--color always` decorates both the prefix and final entry.
+		let output = "\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -landroid \
+		              -laaudio -ldl -lc++_shared -llog -ldl -llog -lunwind -ldl -lm -lc\u{1b}[0m\n";
+		assert_eq!(
+			native_static_libs(output),
+			[
+				"android",
+				"aaudio",
+				"dl",
+				"c++_shared",
+				"log",
+				"unwind",
+				"m",
+				"c"
+			]
+		);
 	}
 
 	#[test]
