@@ -1430,6 +1430,40 @@ mod linux {
 		);
 	}
 
+	/// Horizontal span of opaque dark pixels inside one widget. The second
+	/// value is `0` when that widget has not painted yet.
+	fn dark_pixel_span(
+		pixels: &[u8],
+		stride: usize,
+		layout: &leptoskit_yoga::Layout,
+	) -> (usize, usize) {
+		let mut min_x = layout.width as usize;
+		let mut max_x = 0usize;
+		let height = layout.height as usize;
+		let width = layout.width as usize;
+
+		if height < 4 || width < 4 {
+			return (min_x, max_x);
+		}
+
+		for y in 2..height - 2 {
+			let row = (layout.y as usize + y) * stride;
+
+			for x in 2..width - 2 {
+				let offset = (row + layout.x as usize + x) * 4;
+				let dark =
+					pixels[offset] < 100 && pixels[offset + 1] < 100 && pixels[offset + 2] < 100;
+
+				if pixels[offset + 3] == 255 && dark {
+					min_x = min_x.min(x);
+					max_x = max_x.max(x);
+				}
+			}
+		}
+
+		(min_x, max_x)
+	}
+
 	fn rtl_text_and_inputs_follow_resolved_direction() {
 		let rtl = leptoskit_yoga::Style {
 			direction: leptoskit_yoga::Direction::Rtl,
@@ -1514,36 +1548,12 @@ mod linux {
 				gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
 			let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
 			texture.download(&mut pixels, texture.width() as usize * 4);
-			pixels_ready = true;
-
-			for (slot, layout) in layouts.iter().enumerate() {
-				let mut min_x = layout.width as usize;
-				let mut max_x = 0;
-
-				for y in 2..layout.height as usize - 2 {
-					for x in 2..layout.width as usize - 2 {
-						let offset = ((layout.y as usize + y) * texture.width() as usize
-							+ layout.x as usize
-							+ x)
-							* 4;
-
-						if pixels[offset + 3] == 255
-							&& pixels[offset..offset + 3]
-								.iter()
-								.all(|channel| *channel < 100)
-						{
-							min_x = min_x.min(x);
-							max_x = max_x.max(x);
-						}
-					}
-				}
-
-				if max_x == 0 {
-					pixels_ready = false;
-				}
-
-				ranges[slot] = (min_x, max_x);
-			}
+			let stride = texture.width() as usize;
+			ranges = [
+				dark_pixel_span(&pixels, stride, &layouts[0]),
+				dark_pixel_span(&pixels, stride, &layouts[1]),
+			];
+			pixels_ready = ranges.iter().all(|(_, max_x)| *max_x > 0);
 
 			assert!(
 				pixels_ready || std::time::Instant::now() < deadline,
