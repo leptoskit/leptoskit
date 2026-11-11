@@ -70,6 +70,7 @@ import "fmt"
 import "io"
 import "net/http"
 import "net/url"
+import "sort"
 import "strings"
 
 // DefaultServerURL is the server origin baked in at generation time.
@@ -216,7 +217,7 @@ func (c *Client) exchange(ctx context.Context, method string, path string, encod
 			return nil, &FnError{Kind: KindInvalid, Message: err.Error()}
 		}
 		// RawQuery carries no leading `?` of its own.
-		if encoded := values.Encode(); encoded != "" {
+		if encoded := encodeQuery(values); encoded != "" {
 			if request.URL.RawQuery != "" {
 				request.URL.RawQuery += "&"
 			}
@@ -227,32 +228,18 @@ func (c *Client) exchange(ctx context.Context, method string, path string, encod
 		if err != nil {
 			return nil, &FnError{Kind: KindInvalid, Message: err.Error()}
 		}
-		form := values.Encode()
+		form := encodeQuery(values)
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		if form != "" {
 			request.Body = io.NopCloser(strings.NewReader(form))
 			request.ContentLength = int64(len(form))
 		}
 	default:
-		// Absent optional arguments are omitted, as serde_qs omits them: the
-		// server fills defaulted arguments in, and Option arguments read a
-		// missing key as None. The fields stay raw JSON, so numbers keep every
-		// digit.
+		// Struct tags omit absent optional arguments; explicit null stays present.
 		if payload != nil {
 			encoded, err := json.Marshal(payload)
 			if err != nil {
 				return nil, &FnError{Kind: KindInvalid, Message: err.Error()}
-			}
-			var present map[string]json.RawMessage
-			if err := json.Unmarshal(encoded, &present); err == nil {
-				for key, item := range present {
-					if string(item) == "null" {
-						delete(present, key)
-					}
-				}
-				if encoded, err = json.Marshal(present); err != nil {
-					return nil, &FnError{Kind: KindInvalid, Message: err.Error()}
-				}
 			}
 			request.Body = io.NopCloser(bytes.NewReader(encoded))
 			request.ContentLength = int64(len(encoded))
@@ -274,8 +261,30 @@ func (c *Client) exchange(ctx context.Context, method string, path string, encod
 	return text, nil
 }
 
+// encodeQuery retains bare keys for null, which url.Values.Encode omits.
+func encodeQuery(values url.Values) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		encoded := url.QueryEscape(key)
+		if values[key] == nil {
+			parts = append(parts, encoded)
+			continue
+		}
+		for _, value := range values[key] {
+			parts = append(parts, encoded+"="+url.QueryEscape(value))
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
 // toQueryValues encodes a value the way serde_qs does: nested keys in
-// brackets, arrays by index, nil omitted. Numbers are decoded as json.Number,
+// brackets, arrays by index, nil as a bare key, and empty collections as key=.
+// Numbers are decoded as json.Number,
 // so they are written exactly as encoding/json wrote them: 1234567, not
 // 1.234567e+06, and integers above 2^53 keep every digit.
 func toQueryValues(value any) (url.Values, error) {
@@ -284,6 +293,7 @@ func toQueryValues(value any) (url.Values, error) {
 	appendValue = func(key string, item any) {
 		switch typed := item.(type) {
 		case nil:
+			values[key] = nil
 		case bool:
 			values.Set(key, fmt.Sprintf("%t", typed))
 		case string:
@@ -291,10 +301,16 @@ func toQueryValues(value any) (url.Values, error) {
 		case json.Number:
 			values.Set(key, typed.String())
 		case map[string]any:
+			if len(typed) == 0 {
+				values.Set(key, "")
+			}
 			for field, nested := range typed {
 				appendValue(fmt.Sprintf("%s[%s]", key, field), nested)
 			}
 		case []any:
+			if len(typed) == 0 {
+				values.Set(key, "")
+			}
 			for index, nested := range typed {
 				appendValue(fmt.Sprintf("%s[%d]", key, index), nested)
 			}
@@ -763,10 +779,6 @@ func livePresent(args any) (json.RawMessage, error) {
 	var out bytes.Buffer
 	out.WriteByte('{')
 	for _, key := range keys {
-		if string(values[key]) == "null" {
-			continue
-		}
-
 		if out.Len() > 1 {
 			out.WriteByte(',')
 		}

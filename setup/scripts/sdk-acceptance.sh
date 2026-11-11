@@ -27,3 +27,8 @@ cargo nextest run --locked --package leptoskit_rpc --all-features \
 
 cargo nextest run --locked -p leptoskit_rpc_codegen --features generators \
 	--test dart_presence --run-ignored all --no-tests=fail --test-threads=1
+
+# URL codecs must distinguish absence, null and empty collections just as
+# the server does. This also executes the generated packages, not snippets.
+cargo nextest run --locked -p leptoskit_rpc_codegen --features generators \
+	--test query_wire --run-ignored all --no-tests=fail --test-threads=1

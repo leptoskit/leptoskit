@@ -7223,6 +7223,7 @@ dependencies = [
  "insta",
  "serde",
  "serde_json",
+ "serde_qs",
  "syn 3.0.9",
  "tempfile",
  "thiserror 2.0.21",

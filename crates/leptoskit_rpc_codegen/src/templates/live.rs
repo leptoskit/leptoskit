@@ -1220,14 +1220,6 @@ fn channel_key(fields: &[&str], args: &Value) -> String {
 fn arguments(args: &impl Serialize) -> Result<Value, LiveError> {
 	match serde_json::to_value(args).map_err(decode_error)? {
 		Value::Null => Ok(json!({})),
-		Value::Object(fields) => {
-			Ok(Value::Object(
-				fields
-					.into_iter()
-					.filter(|(_, item)| !item.is_null())
-					.collect(),
-			))
-		}
 		other => Ok(other),
 	}
 }

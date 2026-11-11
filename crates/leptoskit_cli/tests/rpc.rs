@@ -116,7 +116,7 @@ fn spec_writes_every_format() {
 	let spec: serde_json::Value = serde_json::from_str(&stdout(&json)).expect("spec json");
 	// The fixture is a version 1 spec: it still reads, and is written as the
 	// current version, every function a `call`.
-	assert_eq!(spec["leptoskit_rpc_spec"], 3);
+	assert_eq!(spec["leptoskit_rpc_spec"], 4);
 	assert!(
 		spec["functions"]
 			.as_array()
@@ -443,8 +443,8 @@ fn strict_accepts_targets_that_preserve_the_schema() {
 }
 
 #[test]
-fn dart_strict_accepts_json_presence_and_rejects_form_null_loss() {
-	for (input, succeeds) in [("Json", true), ("Form", false)] {
+fn dart_strict_accepts_presence_in_every_http_encoding() {
+	for input in ["Json", "Form", "Query"] {
 		let scratch = Scratch::new("dart-presence-strict");
 		project(&scratch.path, "");
 		let mut spec: serde_json::Value = serde_json::from_str(include_str!(
@@ -469,17 +469,8 @@ fn dart_strict_accepts_json_presence_and_rejects_form_null_loss() {
 				"--strict",
 			],
 		);
-		assert_eq!(output.status.success(), succeeds, "{}", stderr(&output));
-
-		assert_eq!(scratch.path.join("clients/dart").exists(), succeeds);
-
-		if !succeeds {
-			assert!(
-				stderr(&output).contains("functions.send.params.required_nullable_text"),
-				"{}",
-				stderr(&output)
-			);
-		}
+		assert!(output.status.success(), "{}", stderr(&output));
+		assert!(scratch.path.join("clients/dart").exists());
 	}
 }
 

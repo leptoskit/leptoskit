@@ -22,6 +22,7 @@ toml = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
+serde_qs = { workspace = true }
 syn = { workspace = true, features = ["full"] }
 tempfile = { workspace = true }
 

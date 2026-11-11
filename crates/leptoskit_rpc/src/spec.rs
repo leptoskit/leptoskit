@@ -50,6 +50,7 @@ pub use leptoskit_rpc_codegen::spec::SPEC_SERVICE_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_TITLE_ENV;
 use leptoskit_rpc_codegen::spec::SPEC_VERSION;
 pub use leptoskit_rpc_codegen::spec::SPEC_VERSION_ENV;
+use leptoskit_rpc_codegen::spec::schema_is_nullable;
 pub use schemars;
 use schemars::Schema;
 use schemars::SchemaGenerator;
@@ -471,11 +472,15 @@ pub fn collect_with_channels(
 				.params
 				.iter()
 				.map(|param| {
+					let schema = (param.schema)(&mut generator).to_value();
+					// serde reads a missing `Option` argument as `None`, so a
+					// nullable argument may be omitted as well as sent as null.
+					let required = param.required && !schema_is_nullable(&schema);
 					ApiParam {
 						name: param.name.to_owned(),
 						docs: param.docs.to_owned(),
-						schema: (param.schema)(&mut generator).to_value(),
-						required: param.required,
+						schema,
+						required,
 					}
 				})
 				.collect();

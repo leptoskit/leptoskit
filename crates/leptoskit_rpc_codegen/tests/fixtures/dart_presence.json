@@ -1,5 +1,5 @@
 {
-	"leptoskit_rpc_spec": 3,
+	"leptoskit_rpc_spec": 4,
 	"title": "DartPresence",
 	"version": "1.0.0",
 	"description": "Requiredness and nullability in generated Dart clients.",

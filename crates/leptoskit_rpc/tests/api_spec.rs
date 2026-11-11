@@ -207,8 +207,8 @@ fn argument_docs_flow_from_the_arguments_section() {
 	assert_eq!(list.params[0].name, "filter");
 	assert!(list.params[0].is_required(), "filter is required");
 	assert!(
-		!list.params[1].is_required(),
-		"limit is nullable, so optional on the wire"
+		!list.params[1].required,
+		"limit is nullable, so the spec marks it optional"
 	);
 
 	let create = spec

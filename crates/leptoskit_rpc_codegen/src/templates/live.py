@@ -18,6 +18,7 @@ import random
 import threading
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Awaitable, Callable, Generic, Mapping, Optional, TypedDict, TypeVar, Union, cast
 
 LIVE_SUBPROTOCOL = "leptoskit.live.v1.json"
@@ -28,6 +29,16 @@ M = TypeVar("M")
 P = TypeVar("P")
 
 _log = logging.getLogger(__name__)
+
+
+class UnsetType(Enum):
+    """Marks an omitted optional argument; ``None`` sends explicit null."""
+
+    UNSET = "unset"
+
+
+UNSET = UnsetType.UNSET
+"""Leave an optional argument out so the server can apply its default."""
 
 
 class LiveError(Exception):
@@ -1290,7 +1301,7 @@ def _present(args: Any) -> Any:
         return {}
 
     if isinstance(args, Mapping):
-        return {key: item for key, item in args.items() if item is not None}
+        return {key: item for key, item in args.items() if item is not UNSET}
     return args
 
 

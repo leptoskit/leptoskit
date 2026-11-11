@@ -366,11 +366,9 @@ fn go_nullable_aliases_cannot_hide_null_omission() {
 	}
 }
 
-/// Dart's typed API keeps null distinct from absence, but query-string and
-/// form encodings cannot carry that distinction. The diagnostic names the
-/// argument and nested field that lose it.
+/// Dart's request encoder preserves null and absence across HTTP codecs.
 #[test]
-fn dart_query_and_form_arguments_report_null_encoding_loss() {
+fn dart_query_and_form_arguments_preserve_null() {
 	let mut spec = supported_spec();
 	spec.schemas.insert(
 		"Nested".to_owned(),
@@ -393,6 +391,12 @@ fn dart_query_and_form_arguments_report_null_encoding_loss() {
 		ApiParam {
 			name: "optional".to_owned(),
 			docs: String::new(),
+			schema: json!({ "type": ["string", "null"], "default": "kept" }),
+			required: false,
+		},
+		ApiParam {
+			name: "plain".to_owned(),
+			docs: String::new(),
 			schema: json!({ "type": ["string", "null"] }),
 			required: false,
 		},
@@ -403,38 +407,28 @@ fn dart_query_and_form_arguments_report_null_encoding_loss() {
 			required: true,
 		},
 	];
-	let found = diagnostics(&spec, TargetLanguage::Dart);
-	assert_eq!(
-		kinds(&found, "functions.read.params.required"),
-		[DiagnosticKind::NullableCollapsed]
-	);
-	assert_eq!(
-		kinds(&found, "functions.read.params.optional"),
-		[DiagnosticKind::NullableCollapsed]
-	);
-	assert_eq!(
-		kinds(&found, "functions.read.params.nested.properties.note"),
-		[DiagnosticKind::NullableCollapsed]
-	);
-
-	assert_eq!(
-		kinds(
-			&found,
-			"functions.read.params.nested.properties.values.items"
-		),
-		[DiagnosticKind::NullableCollapsed]
-	);
-	assert!(
-		at(&found, "components.Nested.properties.note").is_empty(),
-		"the model itself keeps null and absence distinct"
-	);
-
-	// The same schemas over JSON are lossless.
-	spec.functions[0].input = HttpInput::Json;
-	assert!(
-		diagnostics(&spec, TargetLanguage::Dart).is_empty(),
-		"JSON bodies carry explicit null"
-	);
+	for input in [HttpInput::Query, HttpInput::Form, HttpInput::Json] {
+		spec.functions[0].input = input;
+		assert_eq!(diagnostics(&spec, TargetLanguage::Dart), []);
+		for target in [
+			TargetLanguage::Go,
+			TargetLanguage::Rust,
+			TargetLanguage::Cli,
+		] {
+			assert_eq!(
+				kinds(
+					&diagnostics(&spec, target),
+					"functions.read.params.optional"
+				),
+				[DiagnosticKind::NullableCollapsed]
+			);
+			assert_eq!(
+				kinds(&diagnostics(&spec, target), "functions.read.params.plain"),
+				[],
+				"without a default, the server reads omission as null"
+			);
+		}
+	}
 }
 
 #[test]
@@ -476,7 +470,7 @@ fn dart_channel_presence_cannot_confuse_absence_with_null() {
 }
 
 #[test]
-fn dart_null_only_and_untyped_values_need_json_encoding() {
+fn dart_null_only_and_untyped_values_preserve_form_encoding() {
 	for schema in [json!({"type": "null"}), json!(true), json!({})] {
 		let mut spec = supported_spec();
 		spec.schemas.insert("NullableAlias".into(), schema);
@@ -488,10 +482,7 @@ fn dart_null_only_and_untyped_values_need_json_encoding() {
 			schema: json!({"$ref": "#/components/schemas/NullableAlias"}),
 		}];
 		let path = format!("functions.{}.params.value", spec.functions[0].name);
-		assert_eq!(
-			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
-			[DiagnosticKind::NullableCollapsed]
-		);
+		assert_eq!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path), []);
 		spec.functions[0].input = HttpInput::Json;
 
 		assert_eq!(
@@ -502,7 +493,7 @@ fn dart_null_only_and_untyped_values_need_json_encoding() {
 }
 
 #[test]
-fn dart_unconstrained_collection_values_report_null_encoding_loss() {
+fn dart_unconstrained_collection_values_preserve_form_encoding() {
 	for (schema, suffix) in [
 		(json!({"type": "array"}), "items"),
 		(
@@ -522,10 +513,7 @@ fn dart_unconstrained_collection_values_report_null_encoding_loss() {
 			"functions.{}.params.values.{suffix}",
 			spec.functions[0].name
 		);
-		assert_eq!(
-			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
-			[DiagnosticKind::NullableCollapsed]
-		);
+		assert_eq!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path), []);
 		spec.functions[0].input = HttpInput::Json;
 		assert_eq!(
 			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
