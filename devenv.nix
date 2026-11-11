@@ -583,7 +583,10 @@ in
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
         displayed="${currentDir}/setup/scripts/run_displayed.sh"
-        if [ "$(uname -s)" = Linux ] && [ -z "''${DISPLAY:-}" ]; then
+        # Always isolate Linux runs. A host DISPLAY without a runtime directory
+        # makes AT-SPI use a shared cache socket, and pixel checks then see a
+        # window that never paints.
+        if [ "$(uname -s)" = Linux ]; then
           bash "$displayed" cargo nextest run --workspace --all-features
           bash "$displayed" cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
