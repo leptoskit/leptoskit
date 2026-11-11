@@ -983,6 +983,7 @@ in
         # can contain audit reports or snapshots from unrelated worktrees.
         run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --log-opts=HEAD --verbose --redact
         run_step "lint:clippy" ${currentDir}/.devenv/profile/bin/lint:clippy
+        run_step "lint:clippy:wasm" ${currentDir}/.devenv/profile/bin/lint:clippy:wasm
         run_step "lint:monostyle" ${currentDir}/.devenv/profile/bin/lint:monostyle
         run_step "lint:leptoskit" ${currentDir}/.devenv/profile/bin/lint:leptoskit
         run_step "lint:docs" ${currentDir}/.devenv/profile/bin/lint:docs
