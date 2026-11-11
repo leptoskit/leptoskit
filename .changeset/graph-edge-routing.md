@@ -8,4 +8,4 @@
 
 The generated Caddy configuration preserves query strings, checks origin TLS host identity, and derives forwarded identity from the configured ingress trust boundary. Graph services strip ambient cookies unless explicitly declared `trust = "first-party"`. SSR frontend sessions remain enabled. HTTPS accepts only the recorded Cloudflare ranges as trusted proxies; Tunnel listens on loopback and trusts the local tunnel connector.
 
-Generation preserves operator edits unless `--force` is supplied. Edge installation, certificates, application activation and provider deployment remain separate pending lifecycle work; generating these files does not claim a running deployment.
+Generation preserves operator edits unless `--force` is supplied. Use `lk infra release` for installation and activation. Certificates and provider deployment remain explicit prerequisites; generating files alone does not establish a running deployment.
