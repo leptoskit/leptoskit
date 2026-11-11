@@ -350,32 +350,43 @@ class Linux:
         self.command(["systemctl", "restart", self.service(host)])
         self.command(["systemctl", "is-active", "--quiet", self.service(host)])
 
+    def active_identity(self, host):
+        pid = int(self.command(["systemctl", "show", "-p", "MainPID", "--value", self.service(host)]))
+        require(pid > 0, "edge service has no main process")
+        process = pathlib.Path("/proc") / str(pid)
+        executable = os.stat(process / "exe")
+        installed = os.stat(pathlib.Path(host["root"]) / "edge/current/caddy")
+        require((executable.st_dev, executable.st_ino) == (installed.st_dev, installed.st_ino)
+                and os.stat(process).st_uid == self.user.pw_uid,
+                "active process differs from installed binary or dedicated UID")
+        started = process.joinpath("stat").read_bytes().rsplit(b")", 1)[1].split()[19]
+
+        return pid, started
+
     def active(self, host, releases):
         if host["edge"] is None:
             return
 
         tls = "tls" in host["edge"]["apps"]
-        pid = int(self.command(["systemctl", "show", "-p", "MainPID", "--value", self.service(host)]))
-        require(pid > 0, "edge service has no main process")
-        executable = os.stat(pathlib.Path("/proc") / str(pid) / "exe")
-        installed = os.stat(pathlib.Path(host["root"]) / "edge/current/caddy")
-        require((executable.st_dev, executable.st_ino) == (installed.st_dev, installed.st_ino)
-                and os.stat(pathlib.Path("/proc") / str(pid)).st_uid == self.user.pw_uid,
-                "active process differs from installed binary or dedicated UID")
-
+        port = 443 if tls else 8088
+        # Type=simple can report an active systemd executor before exec and
+        # credential setup finish. Wait for our binary and account as well
+        # as readiness; repeat their identity checks after probing.
         for attempt in range(30):
             try:
-                if not self.owns_listener(pid, 443 if tls else 8088):
-                    time.sleep(0.1)
-                    continue
-
-                self.probe(host, releases, 443 if tls else 8088, tls=tls)
+                identity = self.active_identity(host)
+                pid = identity[0]
+                require(self.owns_listener(pid, port), "edge does not own its listening socket")
+                self.probe(host, releases, port, tls=tls)
+                require(self.active_identity(host) == identity and self.owns_listener(pid, port),
+                        "edge process changed during readiness observation")
 
                 return
 
-            except (OSError, http.client.HTTPException):
+            except (OSError, ValueError, http.client.HTTPException) as error:
+                if attempt == 29:
+                    raise RuntimeError("active edge did not become ready") from error
                 time.sleep(0.1)
-        raise RuntimeError("active edge did not become ready")
 
     def stop(self, host, system=pathlib.Path("/etc/systemd/system")):
         if host["edge"] is None:

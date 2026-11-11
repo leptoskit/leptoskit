@@ -298,6 +298,54 @@ class SystemdMasks(unittest.TestCase):
         self.assertEqual(commands[-2:], [["systemctl", "stop", unit], ["systemctl", "disable", unit]])
 
 
+class ActiveEdgeStartup(unittest.TestCase):
+    def runtime(self):
+        runtime = Linux()
+        runtime.owns_listener = mock.Mock(return_value=True)
+        runtime.probe = mock.Mock()
+        host = {"root": "/var/lib/leptoskit/example", "edge": {"apps": {}}}
+        return runtime, host
+
+    def test_waits_for_systemd_executor_to_become_the_owned_caddy_process(self):
+        runtime, host = self.runtime()
+        runtime.active_identity = mock.Mock(side_effect=[
+            ValueError("no PID yet"), ValueError("systemd executor before exec"), (17, b"42"), (17, b"42")])
+        with mock.patch("host.time.sleep") as pause:
+            runtime.active(host, {})
+        self.assertEqual(pause.call_count, 2)
+        self.assertEqual(runtime.active_identity.call_count, 4)
+        runtime.probe.assert_called_once_with(host, {}, 8088, tls=False)
+
+    def test_foreign_binary_or_account_never_counts_as_ready(self):
+        for error in (ValueError("foreign binary or UID"), FileNotFoundError("exited before exec")):
+            runtime, host = self.runtime()
+            runtime.active_identity = mock.Mock(side_effect=error)
+            with mock.patch("host.time.sleep") as pause:
+                with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+                    runtime.active(host, {})
+            self.assertEqual(pause.call_count, 29)
+            runtime.probe.assert_not_called()
+
+    def test_process_replacement_during_probe_must_pass_a_fresh_observation(self):
+        runtime, host = self.runtime()
+        # Reused PID, different starttime: the first response cannot admit it.
+        runtime.active_identity = mock.Mock(side_effect=[(17, b"42"), (17, b"43"), (17, b"43"), (17, b"43")])
+        with mock.patch("host.time.sleep") as pause:
+            runtime.active(host, {})
+        self.assertEqual(pause.call_count, 1)
+        self.assertEqual(runtime.probe.call_count, 2)
+
+    def test_continuous_process_replacement_or_wrong_route_never_passes(self):
+        for route_failure in (False, True):
+            runtime, host = self.runtime()
+            runtime.active_identity = mock.Mock(side_effect=[(17, str(i).encode()) for i in range(60)])
+            if route_failure:
+                runtime.probe.side_effect = ValueError("wrong route body")
+            with mock.patch("host.time.sleep"):
+                with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+                    runtime.active(host, {})
+
+
 class ServiceLifecycle(unittest.TestCase):
     def test_service_is_enabled_for_boot_and_disabled_without_previous_release(self):
         runtime = Linux()
