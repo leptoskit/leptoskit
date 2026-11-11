@@ -495,6 +495,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(unix)]
 	#[test]
 	fn a_rebuild_holding_special_files_is_refused() {
 		let directory = tempfile::tempdir().unwrap();

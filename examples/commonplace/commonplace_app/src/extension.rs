@@ -18,6 +18,7 @@ use leptoskit::extension::context_menus;
 use leptoskit::extension::scripting;
 use leptoskit::extension::storage;
 use leptoskit::prelude::Element;
+use leptoskit::prelude::Update;
 use leptoskit_router::Routable;
 
 use crate::api::Api;

@@ -7,6 +7,10 @@ use std::marker::PhantomData;
 use crate::world::World;
 
 thread_local! {
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static INBOX: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 

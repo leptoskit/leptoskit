@@ -108,6 +108,27 @@ int32_t lk_app_resize(lk_app *app, float width, float height, bool dark) { retur
 int32_t lk_app_wake(lk_app *app) { return 0; }
 /* The fixture guest never waits for a display frame, so the link stays paused. */
 int32_t lk_app_enable_frames(lk_app *app) { return 0; }
+/* No real timers or 3D scenes in the controls fixture. */
+int32_t lk_app_enable_timers(lk_app *app) { return 0; }
+int32_t lk_app_poll_timers(lk_app *app) { return 0; }
+int64_t lk_app_timer_delay_ms(lk_app *app) { return -1; }
+int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason) { return 0; }
+int32_t lk_app_enable_scene3d(lk_app *app) { return 0; }
+int32_t lk_scene3d_available(void) { return 0; }
+lk_buffer lk_scene3d_error(void) { return bytes(""); }
+int32_t lk_scene3d_set_backend(const uint8_t *name, size_t len) { return 0; }
+int32_t lk_scene3d_set_asset_directory(const uint8_t *path, size_t len) { return 0; }
+int32_t lk_scene3d_set_asset_reader(void *context, lk_scene3d_read_fn read) { return 0; }
+void lk_scene3d_sink_write(void *sink, const uint8_t *bytes, size_t len) {}
+lk_scene3d_view *lk_scene3d_view_attach_layer(uint32_t scene, void *layer, uint32_t width, uint32_t height) { return NULL; }
+lk_scene3d_view *lk_scene3d_view_attach_window(uint32_t scene, void *window, uint32_t width, uint32_t height) { return NULL; }
+void lk_scene3d_view_set_waker(lk_scene3d_view *view, void *context, lk_scene3d_wake_fn wake) {}
+void lk_scene3d_view_resize(lk_scene3d_view *view, uint32_t width, uint32_t height) {}
+void lk_scene3d_view_set_rotation(lk_scene3d_view *view, uint32_t quarter_turns) {}
+int32_t lk_scene3d_view_shows_camera(const lk_scene3d_view *view) { return 0; }
+int32_t lk_scene3d_view_frame(lk_scene3d_view *view, double time) { return 0; }
+int32_t lk_scene3d_view_needs_frame(const lk_scene3d_view *view) { return 0; }
+void lk_scene3d_view_detach(lk_scene3d_view *view) {}
 int32_t lk_app_frame_requested(lk_app *app) { return 0; }
 int32_t lk_app_frame(lk_app *app, uint64_t timestamp_ns, uint64_t period_ns) { return 0; }
 int32_t lk_app_event(lk_app *app, size_t node, uint32_t kind, const uint8_t *text, size_t len) { return 0; }

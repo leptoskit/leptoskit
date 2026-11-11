@@ -222,7 +222,7 @@ fn android_cmake_links_the_libraries_rustc_reports_without_repeats() {
 	let cmake = std::fs::read_to_string(&path).unwrap();
 	assert!(
 		cmake.contains(
-			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m)\n"
+			"target_link_libraries(leptoskit_bridge_jni PRIVATE runtime log android dl m aaudio)\n"
 		),
 		"{cmake}"
 	);

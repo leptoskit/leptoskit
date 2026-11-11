@@ -293,6 +293,10 @@ pub(crate) async fn call<T: DeserializeOwned>(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 thread_local! {
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static CALL_OVERRIDE: std::cell::RefCell<Option<serde_json::Value>> =
 		const { std::cell::RefCell::new(None) };
 }

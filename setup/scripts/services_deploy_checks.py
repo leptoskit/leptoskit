@@ -67,8 +67,22 @@ def rendered_total(html):
     return int(match.group(1)) if match else None
 
 
+def request_when_routed(base, path, method="GET", body=None, headers=None):
+    """Retry while the ingress has not published the upstream yet.
+
+    A Deployment can report ready before the ingress controller has an
+    endpoint for its Service. That gap answers 502 or 503 for a moment.
+    """
+    deadline = time.monotonic() + 30
+    while True:
+        status, response_headers, response_body = request(base, path, method, body, headers)
+        if status not in (502, 503) or time.monotonic() >= deadline:
+            return status, response_headers, response_body
+        time.sleep(1)
+
+
 def summary_total(base):
-    status, _, body = request(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
+    status, _, body = request_when_routed(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
     if status != 200:
         raise SystemExit(f"FAIL summary answered {status}: {body}")
     return json.loads(body)["total"]
@@ -149,7 +163,7 @@ def main():
 
     # A browser's capture goes to the service through its public prefix,
     # and the next render shows it.
-    status, _, body = request(
+    status, _, body = request_when_routed(
         base,
         f"{ANALYTICS}/api/capture",
         "POST",
@@ -165,9 +179,9 @@ def main():
     checks.check("the service's summary counts it", summary_total(base) == before + 1)
 
     # Public paths are the internet: the app-only operation refuses them.
-    status, _, _ = request(base, f"{ANALYTICS}/api/recent", "POST", {"limit": 10})
+    status, _, _ = request_when_routed(base, f"{ANALYTICS}/api/recent", "POST", {"limit": 10})
     checks.check("an app-only operation refuses a caller without the token", status in (401, 403), str(status))
-    status, _, _ = request(
+    status, _, _ = request_when_routed(
         base,
         f"{ANALYTICS}/api/recent",
         "POST",

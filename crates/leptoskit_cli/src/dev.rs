@@ -199,6 +199,9 @@ fn announce(root: &Path, open: bool, web: Option<&Web>) {
 		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
 		root.display()
 	);
+	// Piped logs are block-buffered. The dev session test, and CI, read this
+	// line as soon as the platforms are up.
+	let _ = std::io::Write::flush(&mut std::io::stdout());
 
 	if let Some(web) = web
 		&& open

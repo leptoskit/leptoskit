@@ -105,10 +105,17 @@ struct NativeWidget {
   /** Every line's height in vp, or undefined for the font's own. */
   lineHeight(): number | undefined {
     const height = this.node.props.line_height;
-    const points = height?.relative !== undefined
-      ? height.relative * (this.node.props.font_size ?? 14)
-      : height?.fixed;
-    return points !== undefined && isFinite(points) && points > 0 ? points : undefined;
+    if (height === undefined || height === null) {
+      return undefined;
+    }
+    const relative: number | undefined = height.relative;
+    const fixed: number | undefined = height.fixed;
+    const fontSize: number = this.node.props.font_size ?? 14;
+    const points: number | undefined = relative !== undefined ? relative * fontSize : fixed;
+    if (points === undefined || !isFinite(points) || points <= 0) {
+      return undefined;
+    }
+    return points;
   }
 
   fontStyle(): FontStyle {

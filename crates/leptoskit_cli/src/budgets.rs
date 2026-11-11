@@ -666,7 +666,7 @@ mod tests {
 	#[test]
 	fn the_scaffold_document_is_one_module_and_a_second_script_fails() {
 		let html = crate::new_project::index_html("demo");
-		assert!(boot_document("web/index.html", &html).is_empty());
+		assert_eq!(boot_document("web/index.html", &html), Vec::<String>::new());
 		let extra = html.replace("</body>", "<script src=\"/extra.js\"></script></body>");
 		let problems = boot_document("web/index.html", &extra);
 		assert!(

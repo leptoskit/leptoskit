@@ -370,6 +370,10 @@ fn worker(worker: &Background) {
 }
 
 thread_local! {
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static PORT_LISTENERS: std::cell::RefCell<Vec<leptoskit_extension::Listener>> =
 		const { std::cell::RefCell::new(Vec::new()) };
 }

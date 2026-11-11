@@ -17,6 +17,10 @@ use std::ffi::c_void;
 use crate::Buffer;
 
 thread_local! {
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 

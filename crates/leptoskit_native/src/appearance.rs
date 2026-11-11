@@ -120,9 +120,17 @@ impl FromStr for Appearance {
 thread_local! {
 	/// The app's choice, made on first use. The interface runs on one
 	/// thread, so it is that thread's.
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static CHOICE: RefCell<Option<ArcRwSignal<Appearance>>> = const { RefCell::new(None) };
 	/// Whether the app has chosen at all. Until it does, a native root
 	/// carries nothing, and the host keeps whatever its surface was given.
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static CHOSEN: Cell<bool> = const { Cell::new(false) };
 }
 

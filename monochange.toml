@@ -79,6 +79,7 @@ packages = [
 	"leptoskit_apm",
 	"leptoskit_deploy_console",
 	"leptoskit_form",
+	"leptoskit_game",
 	"leptoskit_config",
 	"leptoskit_platform",
 	"leptoskit_platform_harmonyos",
@@ -335,6 +336,10 @@ type = "cargo"
 
 [package.leptoskit_form]
 path = "crates/leptoskit_form"
+type = "cargo"
+
+[package.leptoskit_game]
+path = "crates/leptoskit_game"
 type = "cargo"
 
 [package.leptoskit_config]

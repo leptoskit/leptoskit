@@ -353,6 +353,10 @@ mod tests {
 	}
 
 	thread_local! {
+		#[allow(
+			clippy::missing_const_for_thread_local,
+			reason = "already const; Android's thread-local backend still emits a non-const init function"
+		)]
 		static CONNECT_SEEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 	}
 

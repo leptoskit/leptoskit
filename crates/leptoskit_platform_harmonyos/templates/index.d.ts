@@ -14,12 +14,7 @@ export interface WidgetProps {
 	corner_radius?: number | null;
 	border_width?: number | null;
 	/** Per-edge widths from `border-t` / `border-l-2` / …; prefer over `border_width`. */
-	border_widths?: {
-		top: number;
-		right: number;
-		bottom: number;
-		left: number;
-	} | null;
+	border_widths?: BorderEdges | null;
 	border_color?: number | null;
 	opacity?: number | null;
 	hidden?: boolean | null;
@@ -27,11 +22,27 @@ export interface WidgetProps {
 	font_size?: number | null;
 	font_weight?: string | null;
 	/** Each line's height: a multiple of the font size, or vp. Unset is the font's own. */
-	line_height?: { relative?: number; fixed?: number } | null;
+	line_height?: LineHeight | null;
 	/** Whether text draws italic. Unset means upright. */
 	italic?: boolean | null;
 	text_align?: string | null;
-	aria?: { aria_hidden?: boolean | null } | null;
+	aria?: AriaState | null;
+}
+/** Per-edge stroke widths. Named so ArkTS does not treat the shape as `any`. */
+export interface BorderEdges {
+	top: number;
+	right: number;
+	bottom: number;
+	left: number;
+}
+/** A line height as a multiple of the font size, or a fixed length in vp. */
+export interface LineHeight {
+	relative?: number;
+	fixed?: number;
+}
+/** Accessibility state carried on a widget. */
+export interface AriaState {
+	aria_hidden?: boolean | null;
 }
 export interface Frame {
 	id: number;

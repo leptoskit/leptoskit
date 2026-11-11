@@ -376,6 +376,10 @@ fn system_idle_time() -> Result<u32, Error> {
 
 #[cfg(all(test, not(windows)))]
 thread_local! {
+	#[allow(
+		clippy::missing_const_for_thread_local,
+		reason = "already const; Android's thread-local backend still emits a non-const init function"
+	)]
 	static IDLE_OVERRIDE: std::cell::Cell<Option<Result<u32, Error>>> =
 		const { std::cell::Cell::new(None) };
 }

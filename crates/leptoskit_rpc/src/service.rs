@@ -21,7 +21,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[cfg(any(not(feature = "server"), feature = "postgres", feature = "sqlite"))]
 use crate::Kind;
+#[cfg(any(not(feature = "server"), feature = "postgres", feature = "sqlite"))]
 use crate::Operation;
 
 /// The path every service's public routes live under:

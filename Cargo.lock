@@ -4049,7 +4049,6 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
- "huddle",
  "huddle_db",
  "leptoskit_auth",
  "leptoskit_db",

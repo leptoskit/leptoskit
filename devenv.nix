@@ -102,6 +102,13 @@ in
     # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
     # for `cargo nextest` and other linked test binaries.
     export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Nix's glibc 2.44 marks libm with GLIBC_ABI_DT_X86_64_PLT. A binary linked
+    # by the host's ld still starts under the host's loader, which loads the
+    # host libc, and that libc does not provide the symbol. Host-target builds
+    # use Nix's loader so libm and libc are the same glibc. The loader path is
+    # baked into the binary; Nix's libc must not go on LD_LIBRARY_PATH, or
+    # every host program loads it and breaks.
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-} -C link-arg=-Wl,--dynamic-linker,${pkgs.glibc}/lib/ld-linux-x86-64.so.2 -C link-arg=-Wl,-rpath,${pkgs.glibc}/lib"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless

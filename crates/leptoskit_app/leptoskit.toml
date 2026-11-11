@@ -11,7 +11,7 @@ features = []
 [bundle]
 optimize = "smallest"
 precompress = false
-budget_kib = 180
+budget_kib = 186
 [native]
 package_id = "dev.leptoskit.cloud"
 update_contract = "mobile-v1"

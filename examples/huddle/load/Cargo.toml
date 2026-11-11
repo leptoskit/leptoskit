@@ -27,7 +27,6 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 
 [dev-dependencies]
 axum = { workspace = true }
-huddle = { path = "../huddle_server" }
 huddle_db = { path = "../huddle_db", features = ["server"] }
 leptoskit_auth = { workspace = true, features = ["axum", "sqlite"] }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
