@@ -582,19 +582,13 @@ in
         # file_routes and the DevTools interface are their own workspaces (the
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
-        # Nix's xvfb-run defaults to 640x480, which clips the GTK window the
-        # resize test grows to 700px. Nix dbus also has no /etc session bus
-        # config on a machine that did not install dbus system-wide.
-        run_displayed() {
-          local config=()
-          if [ ! -f /etc/dbus-1/session.conf ]; then
-            config=(--config-file "$(dirname "$(command -v dbus-daemon)")/../share/dbus-1/session.conf")
-          fi
-          dbus-run-session "''${config[@]}" -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo "$@"
-        }
-        if [ "$(uname -s)" = Linux ] && [ -z "''${DISPLAY:-}" ]; then
-          run_displayed cargo nextest run --workspace --all-features
-          run_displayed cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        displayed="${currentDir}/setup/scripts/run_displayed.sh"
+        # Always isolate Linux runs. A host DISPLAY without a runtime directory
+        # makes AT-SPI use a shared cache socket, and pixel checks then see a
+        # window that never paints.
+        if [ "$(uname -s)" = Linux ]; then
+          bash "$displayed" cargo nextest run --workspace --all-features
+          bash "$displayed" cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
           test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
@@ -676,11 +670,7 @@ in
     "test:widgets:gtk" = {
       exec = ''
         set -euo pipefail
-        config=()
-        if [ ! -f /etc/dbus-1/session.conf ]; then
-          config=(--config-file "$(dirname "$(command -v dbus-daemon)")/../share/dbus-1/session.conf")
-        fi
-        dbus-run-session "''${config[@]}" -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+        bash ${currentDir}/setup/scripts/run_displayed.sh \
           cargo test --locked -p leptoskit_gtk --test widgets -- --test-threads=1
       '';
       description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
