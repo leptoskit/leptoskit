@@ -771,7 +771,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=/dev/null
           source "$LLVM_COV_ENV"
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+          dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo test --locked --workspace --all-features -- --test-threads=1
 
       - name: reject Rive widgets when the host feature is disabled
