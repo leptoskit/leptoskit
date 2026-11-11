@@ -9,7 +9,9 @@
 //!
 //! Deliberately unconstrained JSON — `true`, `{}`, `additionalProperties:
 //! true`, an array without `items` — is represented as `unknown`/`Any`/`any`
-//! by design and is not reported. Only dropped structure is.
+//! by design and is not a type-fidelity warning. Query/form input still
+//! reports encoding loss when that dynamic type permits values the wire
+//! cannot preserve.
 
 use std::fmt;
 
@@ -121,7 +123,7 @@ pub(crate) fn diagnose(spec: &ApiSpec, options: &GenerateOptions) -> Vec<Diagnos
 		for param in &function.params {
 			let path = format!("functions.{}.params.{}", function.name, param.name);
 			if matches!(function.input, HttpInput::Query | HttpInput::Form)
-				&& walker.has_dynamic_input(&param.schema, &mut std::collections::BTreeSet::new())
+				&& walker.has_dynamic_input(&param.schema)
 			{
 				walker.loss(
 					&path,
@@ -209,50 +211,36 @@ struct Walker<'a> {
 }
 
 impl Walker<'_> {
-	fn has_dynamic_input(
-		&self,
-		schema: &Value,
-		seen: &mut std::collections::BTreeSet<String>,
-	) -> bool {
-		let analyzed = analyze(schema);
-		if analyzed.unsupported.is_some() {
-			return false;
-		}
-		match analyzed.shape {
-			Shape::Any => true,
-			Shape::Ref(name) => {
-				if !seen.insert(name.to_owned()) {
-					return false;
+	fn has_dynamic_input(&self, schema: &Value) -> bool {
+		// References can form long chains and cycles even in shallow JSON.
+		// Visit each named schema once without growing the call stack.
+		let mut pending = vec![schema];
+		let mut seen = std::collections::BTreeSet::new();
+		while let Some(schema) = pending.pop() {
+			let analyzed = analyze(schema);
+			if analyzed.unsupported.is_some() {
+				continue;
+			}
+			match analyzed.shape {
+				Shape::Any => return true,
+				Shape::Ref(name) => {
+					if seen.insert(name) {
+						pending.extend(self.spec.schema(name));
+					}
 				}
-				let dynamic = self
-					.spec
-					.schema(name)
-					.is_some_and(|schema| self.has_dynamic_input(schema, seen));
-				seen.remove(name);
-				dynamic
+				Shape::Array { items } | Shape::Map { values: items } => {
+					let Some(items) = items else { return true };
+					pending.push(items);
+				}
+				Shape::Object(object) => {
+					pending.extend(object.properties.iter().map(|(_, schema)| *schema));
+					pending.extend(object.additional);
+				}
+				Shape::Tuple(items) | Shape::Union(items) => pending.extend(items),
+				_ => {}
 			}
-			Shape::Array { items } => {
-				items.is_none_or(|schema| self.has_dynamic_input(schema, seen))
-			}
-			Shape::Map { values } => {
-				values.is_none_or(|schema| self.has_dynamic_input(schema, seen))
-			}
-			Shape::Object(object) => {
-				object
-					.properties
-					.iter()
-					.any(|(_, schema)| self.has_dynamic_input(schema, seen))
-					|| object
-						.additional
-						.is_some_and(|schema| self.has_dynamic_input(schema, seen))
-			}
-			Shape::Tuple(items) | Shape::Union(items) => {
-				items
-					.iter()
-					.any(|schema| self.has_dynamic_input(schema, seen))
-			}
-			_ => false,
 		}
+		false
 	}
 }
 

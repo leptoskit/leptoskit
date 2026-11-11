@@ -573,3 +573,31 @@ fn dart_unconstrained_form_collections_report_encoding_loss_without_null_loss() 
 		);
 	}
 }
+
+#[test]
+fn dynamic_query_diagnostics_handle_long_reference_chains_and_cycles() {
+	let mut spec = supported_spec();
+	spec.functions[0].input = HttpInput::Query;
+	spec.functions[0].params = vec![ApiParam {
+		name: "value".to_owned(),
+		docs: String::new(),
+		required: true,
+		schema: json!({"$ref": "#/components/schemas/Link0"}),
+	}];
+	for index in 0..4096 {
+		spec.schemas.insert(
+			format!("Link{index}"),
+			json!({"$ref": format!("#/components/schemas/Link{}", (index + 1) % 4096)}),
+		);
+	}
+	let path = "functions.read.params.value";
+	assert_eq!(
+		kinds(&diagnostics(&spec, TargetLanguage::TypeScript), path),
+		[]
+	);
+	spec.schemas.insert("Link4095".to_owned(), json!(true));
+	assert_eq!(
+		kinds(&diagnostics(&spec, TargetLanguage::TypeScript), path),
+		[DiagnosticKind::EncodingLoss]
+	);
+}
