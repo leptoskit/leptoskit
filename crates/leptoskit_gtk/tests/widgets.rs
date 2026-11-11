@@ -824,10 +824,12 @@ mod linux {
 			&View().class("w-full h-full p-4 gap-4 bg-white").children([
 				// The gallery's settings search field: chrome stripped, sized
 				// by the application.
+				// `min-h-5` rather than a fixed `h-5`: a 15px face can have a
+				// 21px line box, and a fixed 20px height would clip it.
 				TextInput()
 					.placeholder("Search")
 					.font(15.0, body)
-					.class("bg-[#00000000] h-5 w-40"),
+					.class("bg-[#00000000] min-h-5 w-40"),
 				TextInput()
 					.placeholder("Message")
 					.border(1.0, Color::rgba(200, 200, 200, 255))
@@ -1893,30 +1895,62 @@ mod linux {
 			.ok_or("variant property")?)
 		}
 
+		/// Name, object, description, and role read before walking children.
+		///
+		/// GTK 4.22 can replace an object's bus path while a later sibling is
+		/// realized, so properties have to be read before the walk continues.
+		pub(super) type Node = (String, Ref, String, Option<u32>);
+
 		pub(super) fn walk(
 			connection: &gio::DBusConnection,
 			target: &Ref,
-			found: &mut Vec<(String, Ref)>,
+			found: &mut Vec<Node>,
 			depth: usize,
 		) -> Result<(), String> {
 			if depth > 30 {
 				return Err("AT-SPI tree depth".into());
 			}
 
-			let name = property(connection, target, "org.a11y.atspi.Accessible", "Name")?
-				.get::<String>()
-				.ok_or("accessible name")?;
-			found.push((name, target.clone()));
-			let children = call(
+			let name = match property(connection, target, "org.a11y.atspi.Accessible", "Name") {
+				Ok(name) => name.get::<String>().ok_or("accessible name")?,
+				// GTK 4.22 can advertise a child path before that object is
+				// registered. Skip the ghost and keep the controls that exist.
+				Err(error) if error.contains("UnknownMethod") => return Ok(()),
+				Err(error) => return Err(error),
+			};
+			let description = match property(
+				connection,
+				target,
+				"org.a11y.atspi.Accessible",
+				"Description",
+			) {
+				Ok(value) => value.get::<String>().unwrap_or_default(),
+				Err(error) if error.contains("UnknownMethod") => String::new(),
+				Err(error) => return Err(error),
+			};
+			let role = match call(
+				connection,
+				target,
+				"org.a11y.atspi.Accessible",
+				"GetRole",
+				None,
+			) {
+				Ok(value) => value.get::<(u32,)>().map(|role| role.0),
+				Err(error) if error.contains("UnknownMethod") => None,
+				Err(error) => return Err(error),
+			};
+			found.push((name, target.clone(), description, role));
+			let children = match call(
 				connection,
 				target,
 				"org.a11y.atspi.Accessible",
 				"GetChildren",
 				None,
-			)?
-			.get::<(Vec<Ref>,)>()
-			.ok_or("accessible children")?
-			.0;
+			) {
+				Ok(value) => value.get::<(Vec<Ref>,)>().ok_or("accessible children")?.0,
+				Err(error) if error.contains("UnknownMethod") => return Ok(()),
+				Err(error) => return Err(error),
+			};
 
 			for child in children {
 				walk(connection, &child, found, depth + 1)?;
@@ -1966,18 +2000,15 @@ mod linux {
 		walk(&connection, &registry, &mut found, 0)?;
 		let volume = found
 			.iter()
-			.find(|(name, _)| name == "AT volume")
+			.find(|(name, ..)| name == "AT volume")
 			.ok_or_else(|| format!("volume missing from AT-SPI tree: {found:?}"))?
 			.1
 			.clone();
-		let spoken_value = property(
-			&connection,
-			&volume,
-			"org.a11y.atspi.Accessible",
-			"Description",
-		)?
-		.get::<String>()
-		.ok_or("slider spoken value")?;
+		let spoken_value = found
+			.iter()
+			.find(|(name, ..)| name == "AT volume")
+			.map(|(_, _, description, _)| description.clone())
+			.ok_or("slider spoken value")?;
 
 		if spoken_value != "0 (range -10 to 10)" {
 			return Err(format!(
@@ -2016,26 +2047,18 @@ mod linux {
 			return Err(format!("controlled AT rejection: {restored}"));
 		}
 
-		if found.iter().any(|(name, _)| name == "Decorative text") {
+		if found.iter().any(|(name, ..)| name == "Decorative text") {
 			return Err(format!("decorative child appears in AT tree: {found:?}"));
 		}
 
-		if !found.iter().any(|(name, _)| name == "AT add preview") {
+		if !found.iter().any(|(name, ..)| name == "AT add preview") {
 			return Err("explicit native Button accessibility label was overwritten".into());
 		}
 
-		for (name, target) in found
+		for (name, _, description, _) in found
 			.iter()
-			.filter(|(name, _)| name == "AT first" || name == "AT second")
+			.filter(|(name, ..)| name == "AT first" || name == "AT second")
 		{
-			let description = property(
-				&connection,
-				target,
-				"org.a11y.atspi.Accessible",
-				"Description",
-			)?
-			.get::<String>()
-			.ok_or("radio description")?;
 			let expected = if name == "AT first" {
 				"Option 1 of 2"
 			} else {
@@ -2050,18 +2073,9 @@ mod linux {
 		const ATSPI_ROLE_IMAGE: u32 = 27;
 		let drawing = found
 			.iter()
-			.find(|(name, _)| name == "AT drawing")
+			.find(|(name, ..)| name == "AT drawing")
 			.ok_or_else(|| format!("labelled drawing missing from AT-SPI tree: {found:?}"))?;
-		let role = call(
-			&connection,
-			&drawing.1,
-			"org.a11y.atspi.Accessible",
-			"GetRole",
-			None,
-		)?
-		.get::<(u32,)>()
-		.ok_or("drawing role")?
-		.0;
+		let role = drawing.3.ok_or("drawing role")?;
 
 		if role != ATSPI_ROLE_IMAGE {
 			return Err(format!("labelled drawing is not an image: role {role}"));
