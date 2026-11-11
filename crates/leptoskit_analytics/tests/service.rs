@@ -526,3 +526,73 @@ async fn a_queued_ack_answers_before_the_commit_and_still_stores() {
 	}
 	panic!("the queued events were never written");
 }
+
+/// One minute of one route, as `leptoskit_apm`'s OTLP exporter sends it.
+fn apm_export(temporality: u8) -> serde_json::Value {
+	json!({"resourceMetrics":[{"resource":{"attributes":[
+		{"key":"service.name","value":{"stringValue":"shop"}},
+		{"key":"service.version","value":{"stringValue":"1.2.0"}},
+		{"key":"service.instance.id","value":{"stringValue":"web-1"}},
+		{"key":"deployment.environment.name","value":{"stringValue":"production"}}
+	]},"scopeMetrics":[{"scope":{"name":"leptoskit_apm","version":"0.3.0"},"metrics":[
+		{"name":"leptoskit.operation.duration","unit":"ms","histogram":{"aggregationTemporality":temporality,"dataPoints":[
+			{"attributes":[
+				{"key":"leptoskit.source","value":{"stringValue":"server"}},
+				{"key":"leptoskit.signal","value":{"stringValue":"route"}},
+				{"key":"leptoskit.operation","value":{"stringValue":"GET /notes/:id"}},
+				{"key":"leptoskit.outcome","value":{"stringValue":"ok"}}
+			],"startTimeUnixNano":"1762646400000000000","timeUnixNano":"1762646460000000000",
+			"count":"12","sum":180.5,"max":41.0,"bucketCounts":["2","9","1"],"explicitBounds":[5,25]}
+		]}}
+	]}]}]})
+}
+
+async fn send_metrics(
+	service: &Service,
+	body: &serde_json::Value,
+	token: Option<&str>,
+) -> (u16, String) {
+	let mut request = reqwest::Client::new()
+		.post(format!(
+			"http://{}{PREFIX}/otlp/v1/metrics",
+			service.address
+		))
+		.json(body);
+	if let Some(token) = token {
+		request = request.bearer_auth(token);
+	}
+	let response = request.send().await.unwrap();
+	(response.status().as_u16(), response.text().await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_s_route_metrics_are_stored_once_and_others_are_refused() {
+	let service = start(IngestConfig::default()).await;
+
+	let (status, answer) = send_metrics(&service, &apm_export(1), Some(TOKEN)).await;
+	assert_eq!((status, answer.as_str()), (200, "{}"));
+	let (status, answer) = send_metrics(&service, &apm_export(1), Some(TOKEN)).await;
+	assert_eq!((status, answer.as_str()), (200, "{}"), "a retried export");
+	let stored = rows(
+		&service.db,
+		"SELECT operation, count, sum, bucket_counts, service FROM apm_windows",
+	)
+	.await;
+	assert_eq!(stored.len(), 1, "stored once");
+	assert_eq!(
+		stored[0].iter().map(text).collect::<Vec<_>>(),
+		["GET /notes/:id", "12", "Float(180.5)", "[2,9,1]", "shop"]
+	);
+
+	let (status, answer) = send_metrics(&service, &apm_export(2), Some(TOKEN)).await;
+	assert_eq!(status, 200);
+	let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+	assert_eq!(answer["partialSuccess"]["rejectedDataPoints"], "1");
+	assert_eq!(
+		answer["partialSuccess"]["errorMessage"],
+		"only delta histograms are stored"
+	);
+
+	let (status, _) = send_metrics(&service, &apm_export(1), None).await;
+	assert_eq!(status, 403, "only the app sends metrics");
+}

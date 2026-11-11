@@ -13,6 +13,7 @@
 pub mod accept;
 pub mod ingest;
 pub mod limits;
+pub mod otlp;
 pub mod tables;
 
 use std::future::Future;
@@ -150,6 +151,7 @@ impl<I> WithIngest<I> {
 struct BatchState {
 	ingest: Ingest,
 	identify: Arc<dyn Identify>,
+	db: Db,
 }
 
 /// The service's routes, under `/_leptoskit/services/analytics`, with the
@@ -175,15 +177,20 @@ pub fn routes_with(
 		inner: callers,
 		ingest: ingest.clone(),
 	});
-	let server = rpc::server::Server::new(db)
+	let server = rpc::server::Server::new(db.clone())
 		.service(SERVICE)
 		.identify(Arc::clone(&with_ingest));
 	let identify: Arc<dyn Identify> = with_ingest;
 
 	let batch = Router::new()
 		.route("/v1/batch", post(receive_batch))
+		.route("/otlp/v1/metrics", post(receive_metrics))
 		.layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-		.with_state(BatchState { ingest, identify });
+		.with_state(BatchState {
+			ingest,
+			identify,
+			db,
+		});
 
 	Router::new().nest(&rpc::service_prefix(SERVICE), server.router().merge(batch))
 }
@@ -236,6 +243,53 @@ async fn receive_batch(
 			response
 		}
 	}
+}
+
+/// `POST otlp/v1/metrics`: `leptoskit_apm`'s OTLP/HTTP JSON export, from
+/// the app only. Answers as OTLP does: `{}`, or `partialSuccess` with the
+/// data points it didn't store and why.
+async fn receive_metrics(
+	State(state): State<BatchState>,
+	request: axum::extract::Request,
+) -> Response {
+	let (parts, body) = request.into_parts();
+	let identity = match state.identify.identify(&parts).await {
+		Ok(identity) => identity,
+		Err(error) => return error_response(StatusCode::UNAUTHORIZED, &error.to_string()),
+	};
+	if identity.caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return error_response(
+			StatusCode::FORBIDDEN,
+			"only the app sends metrics: sign the export with the service's token",
+		);
+	}
+	let Ok(body) = axum::body::to_bytes(body, MAX_BODY_BYTES).await else {
+		return error_response(StatusCode::PAYLOAD_TOO_LARGE, "the export is too large");
+	};
+	let bytes = match decompress(&parts.headers, &body) {
+		Ok(bytes) => bytes,
+		Err((status, message)) => return error_response(status, message),
+	};
+	let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+		return error_response(StatusCode::BAD_REQUEST, "the export isn't OTLP JSON");
+	};
+	let parsed = otlp::parse(&json);
+	if let Err(error) = otlp::write(&state.db, &parsed.windows).await {
+		let mut response = error_response(StatusCode::SERVICE_UNAVAILABLE, &error.to_string());
+		response
+			.headers_mut()
+			.insert(header::RETRY_AFTER, header::HeaderValue::from_static("1"));
+		return response;
+	}
+	let answer = if parsed.rejected == 0 {
+		serde_json::json!({})
+	} else {
+		serde_json::json!({ "partialSuccess": {
+			"rejectedDataPoints": parsed.rejected.to_string(),
+			"errorMessage": parsed.reason.unwrap_or_default(),
+		}})
+	};
+	axum::Json(answer).into_response()
 }
 
 /// The body, gunzipped when `Content-Encoding` says so, within
