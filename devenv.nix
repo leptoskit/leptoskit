@@ -16,6 +16,33 @@ let
   # that file, so every script that can trigger such an install exports the
   # same setting. Remove both once the upstream issue is fixed.
   keepProcMacrosLoadable = "export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none";
+  linuxFontsConf = pkgs.writeText "leptoskit-fonts.conf" ''
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+    <fontconfig>
+      <dir>${pkgs.dejavu_fonts}/share/fonts</dir>
+      <alias>
+        <family>sans</family>
+        <prefer><family>DejaVu Sans</family></prefer>
+      </alias>
+      <alias>
+        <family>Sans</family>
+        <prefer><family>DejaVu Sans</family></prefer>
+      </alias>
+      <alias>
+        <family>sans-serif</family>
+        <prefer><family>DejaVu Sans</family></prefer>
+      </alias>
+      <alias>
+        <family>monospace</family>
+        <prefer><family>DejaVu Sans Mono</family></prefer>
+      </alias>
+      <alias>
+        <family>serif</family>
+        <prefer><family>DejaVu Serif</family></prefer>
+      </alias>
+    </fontconfig>
+  '';
   linuxWebdriver = pkgs.writeText "leptoskit-webdriver.json" (
     builtins.toJSON (
       lib.recursiveUpdate (builtins.fromJSON (builtins.readFile ./webdriver.json)) {
@@ -118,10 +145,57 @@ in
     fi
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-    # The native Rive runtime links libstdc++. Nix's dynamic linker does not
-    # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
-    # for `cargo nextest` and other linked test binaries.
-    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # The native Rive runtime links libstdc++, and the GTK backends link
+    # Pango, Cairo, and GTK from this shell. Nix's dynamic linker does not
+    # search the host's /usr/lib, and rustc does not record a runpath for
+    # those libraries. `cargo nextest` loads gallery's desktop tests through
+    # `LD_LIBRARY_PATH`. Tests that re-exec with `env_clear` still need the
+    # runpath baked in at link time (`NIX_LDFLAGS`), which is how libstdc++
+    # stays visible to those children.
+    runtime_libs="${
+      lib.makeLibraryPath [
+        pkgs.alsa-lib
+        pkgs.cairo
+        pkgs.gdk-pixbuf
+        pkgs.glib
+        pkgs.graphene
+        pkgs.gtk4
+        pkgs.harfbuzz
+        pkgs.pango
+        pkgs.stdenv.cc.cc
+        pkgs.vulkan-loader
+      ]
+    }"
+    export LD_LIBRARY_PATH="$runtime_libs''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    unset runtime_libs
+    # Re-execed test binaries clear the environment, so libstdc++ has to be on
+    # the binary's runpath. The other libraries stay on `LD_LIBRARY_PATH`,
+    # which is enough for the process nextest launches.
+    export NIX_LDFLAGS="-rpath ${pkgs.stdenv.cc.cc.lib}/lib''${NIX_LDFLAGS:+ $NIX_LDFLAGS}"
+    # DejaVu is the face the GTK widget tests measure. The shell's fontconfig
+    # otherwise prefers Noto Sans, whose 15px line is taller than the `h-5`
+    # frame those tests size, and it also searches /usr/share/fonts.
+    export FONTCONFIG_FILE="${linuxFontsConf}"
+    # Nix's dbus looks for its session config in the store. The private buses
+    # the Linux plugin tests start pass `--session`, which otherwise reads
+    # `/etc/dbus-1/session.conf`.
+    export PATH="${pkgs.writeShellScriptBin "dbus-daemon" ''
+      real=${pkgs.dbus}/bin/dbus-daemon
+      conf=${pkgs.dbus}/share/dbus-1/session.conf
+      args=()
+      has_config=0
+      for arg in "$@"; do
+        case "$arg" in
+          --config-file|--config-file=*) has_config=1; args+=("$arg") ;;
+          --session) ;;
+          *) args+=("$arg") ;;
+        esac
+      done
+      if [ "$has_config" -eq 0 ]; then
+        args=(--config-file "$conf" "''${args[@]}")
+      fi
+      exec "$real" "''${args[@]}"
+    ''}/bin:$PATH"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
@@ -572,9 +646,12 @@ in
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
         if [ "$(uname -s)" = Linux ] && [ -z "''${DISPLAY:-}" ]; then
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+          # A previous run can leave an AT-SPI bus address whose socket is gone.
+          # GTK then paints nothing and the accessibility probe cannot connect.
+          rm -rf "''${XDG_CACHE_HOME:-$HOME/.cache}/at-spi"
+          dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --workspace --all-features
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+          dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo \
             cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
           test:wire
@@ -657,7 +734,7 @@ in
     "test:widgets:gtk" = {
       exec = ''
         set -euo pipefail
-        dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+        dbus-run-session -- xvfb-run -a -s "-screen 0 1280x1024x24" env GDK_BACKEND=x11 GSK_RENDERER=cairo \
           cargo test --locked -p leptoskit_gtk --test widgets -- --test-threads=1
       '';
       description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
