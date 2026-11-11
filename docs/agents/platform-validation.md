@@ -31,6 +31,8 @@ Android hosts carry rustc's `native-static-libs` into the generated JNI link lin
 
 Field's standalone workspace lints its web feature and all test targets in the Wasm gate. Headless and interpreter fixtures, together with their development dependencies, are native-only.
 
+Browser audio tests exercise the default context and explicit 44.1 kHz and 48 kHz contexts. Decoded metadata must match the context rate, and the half-second fixture must retain its length within one output frame after resampling. Chrome test profiles allow autoplay so the muted audio and speech fixtures reach their playback and cancellation checks. The audio engine has its own Wasm Clippy group with its browser feature enabled and guest mode off.
+
 Linux coverage builds use `line-tables-only` debug information for the dev and test profiles, with incremental compilation disabled. This keeps source locations for diagnostics and LLVM coverage while reducing the disk footprint of instrumented binaries and nested fixture builds. Their cache keys include the debug profile so they cannot restore the previous full-debug artifacts.
 
 The Linux workspace coverage job installs NATS at the version provided by devenv and sets `LEPTOSKIT_REQUIRE_NATS=1`. Relay and session-revocation tests must run against a real server; a missing binary fails the job instead of silently skipping them.

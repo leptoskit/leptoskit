@@ -3,7 +3,8 @@
 		"args": [
 			"--headless",
 			"--no-sandbox",
-			"--disable-gpu"
+			"--disable-gpu",
+			"--autoplay-policy=no-user-gesture-required"
 		]
 	},
 	"safari:options": {}

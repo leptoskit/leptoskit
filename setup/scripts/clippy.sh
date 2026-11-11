@@ -117,6 +117,9 @@ wasm() {
 	# Field is a standalone workspace. Its browser tests must not pull in the
 	# native fixtures' interpreter and threaded timer host.
 	wasm_group "the Field browser example" --manifest-path examples/file_routes/Cargo.toml --features web --all-targets
+	# Audio's guest feature replaces its web implementation; lint the browser
+	# engine separately so enabling every feature cannot hide it.
+	wasm_group "the browser audio engine" --package=leptoskit_plugin_audio --no-default-features --features browser --all-targets
 }
 
 wasm_group() {
