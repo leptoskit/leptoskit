@@ -170,6 +170,10 @@ int32_t lk_app_enable_scene3d(lk_app *app);
  * scene3d feature lk_scene3d_available reports 0 and nothing attaches.
  * Views draw on the thread that attached them, from the display link. */
 typedef struct lk_scene3d_view lk_scene3d_view;
+/* Primary pointer phases: 0 down, 1 move, 2 up, 3 cancel. x/y are fractions
+ * of the view; dx/dy are layout units (points/dp), not physical pixels.
+ * Returns 1 queued, 0 absent scene, -1 invalid input or unavailable 3D. */
+int32_t lk_scene3d_pointer(uint32_t scene, uint32_t phase, float x, float y, float dx, float dy);
 typedef void (*lk_scene3d_wake_fn)(void *context);
 typedef int32_t (*lk_scene3d_read_fn)(void *context, const uint8_t *path, size_t path_len,
     void *sink);

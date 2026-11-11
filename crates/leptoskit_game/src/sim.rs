@@ -1,5 +1,10 @@
 //! The fixed step, and the actions and messages a tick reads.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
@@ -7,10 +12,7 @@ use std::marker::PhantomData;
 use crate::world::World;
 
 thread_local! {
-	#[allow(
-		clippy::missing_const_for_thread_local,
-		reason = "already const; Android's thread-local backend still emits a non-const init function"
-	)]
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static INBOX: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 

@@ -67,22 +67,29 @@ def rendered_total(html):
     return int(match.group(1)) if match else None
 
 
-def request_when_routed(base, path, method="GET", body=None, headers=None):
-    """Retry while the ingress has not published the upstream yet.
+def request_eventually(base, path, method="GET", body=None, headers=None, seconds=90):
+    """Retry while the edge has no endpoints for this service yet.
 
-    A Deployment can report ready before the ingress controller has an
-    endpoint for its Service. That gap answers 502 or 503 for a moment.
+    Ingress answers 502 or 503 until a Ready pod is in the Service. The app's
+    `/readyz` can already be 200 while analytics or echo is still registering,
+    so a single request in that window fails a deployment that is coming up.
+    Other statuses, including 401 and 403, return immediately.
     """
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + seconds
     while True:
-        status, response_headers, response_body = request(base, path, method, body, headers)
-        if status not in (502, 503) or time.monotonic() >= deadline:
-            return status, response_headers, response_body
-        time.sleep(1)
+        try:
+            status, response_headers, payload = request(base, path, method, body, headers)
+        except OSError:
+            status, response_headers, payload = None, None, ""
+        if status not in (None, 502, 503) or time.monotonic() > deadline:
+            if status is None:
+                raise SystemExit(f"FAIL {method} {path} never connected")
+            return status, response_headers, payload
+        time.sleep(2)
 
 
 def summary_total(base):
-    status, _, body = request_when_routed(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
+    status, _, body = request_eventually(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
     if status != 200:
         raise SystemExit(f"FAIL summary answered {status}: {body}")
     return json.loads(body)["total"]
@@ -116,15 +123,24 @@ def upgrade(base, path, origin):
 
 
 def wait_until_ready(base, deadline):
+    probes = (
+        ("/readyz", "GET", None),
+        (f"{ANALYTICS}/api/summary", "POST", {"days": 7}),
+        (f"{ECHO}/headers", "GET", None),
+    )
     while True:
-        try:
-            status, _, _ = request(base, "/readyz")
-            if status == 200:
-                return
-        except OSError:
-            pass
+        pending = []
+        for path, method, body in probes:
+            try:
+                status, _, _ = request(base, path, method, body)
+                if status != 200:
+                    pending.append(f"{path} answered {status}")
+            except OSError as error:
+                pending.append(f"{path}: {error}")
+        if not pending:
+            return
         if time.monotonic() > deadline:
-            raise SystemExit(f"FAIL {base}/readyz never answered 200")
+            raise SystemExit(f"FAIL {base} routes never became ready: {', '.join(pending)}")
         time.sleep(2)
 
 
@@ -163,7 +179,7 @@ def main():
 
     # A browser's capture goes to the service through its public prefix,
     # and the next render shows it.
-    status, _, body = request_when_routed(
+    status, _, body = request(
         base,
         f"{ANALYTICS}/api/capture",
         "POST",
@@ -179,9 +195,9 @@ def main():
     checks.check("the service's summary counts it", summary_total(base) == before + 1)
 
     # Public paths are the internet: the app-only operation refuses them.
-    status, _, _ = request_when_routed(base, f"{ANALYTICS}/api/recent", "POST", {"limit": 10})
+    status, _, _ = request(base, f"{ANALYTICS}/api/recent", "POST", {"limit": 10})
     checks.check("an app-only operation refuses a caller without the token", status in (401, 403), str(status))
-    status, _, _ = request_when_routed(
+    status, _, _ = request(
         base,
         f"{ANALYTICS}/api/recent",
         "POST",
@@ -200,7 +216,7 @@ def main():
     # Only the public prefixes reach a service: everything else is the app's.
     # The echo service answers every path it doesn't serve with a marker, so
     # a path the edge sends it is told apart from one it sends to the app.
-    status, _, body = request(base, f"{ECHO}/no-such-path")
+    status, _, body = request_eventually(base, f"{ECHO}/no-such-path")
     checks.check("a path under the echo prefix reaches the echo service", ECHO_FALLBACK in body, f"{status} {body}")
     for path in ("/headers", "/_leptoskit/services/echox/headers", "/_leptoskit/services/echo-headers", "/_leptoskit/services"):
         status, _, body = request(base, path)

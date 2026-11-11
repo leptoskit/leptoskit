@@ -24,7 +24,12 @@
 //! [`Appearance::from_str`](std::str::FromStr) of it when the app starts,
 //! before its first render. A server render cannot know the choice; to avoid
 //! a flash of the device's appearance, put the attribute on the page's
-//! `<html>` element yourself from the stored value.
+//! 	`<html>` element yourself from the stored value.
+
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -120,17 +125,11 @@ impl FromStr for Appearance {
 thread_local! {
 	/// The app's choice, made on first use. The interface runs on one
 	/// thread, so it is that thread's.
-	#[allow(
-		clippy::missing_const_for_thread_local,
-		reason = "already const; Android's thread-local backend still emits a non-const init function"
-	)]
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CHOICE: RefCell<Option<ArcRwSignal<Appearance>>> = const { RefCell::new(None) };
 	/// Whether the app has chosen at all. Until it does, a native root
 	/// carries nothing, and the host keeps whatever its surface was given.
-	#[allow(
-		clippy::missing_const_for_thread_local,
-		reason = "already const; Android's thread-local backend still emits a non-const init function"
-	)]
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static CHOSEN: Cell<bool> = const { Cell::new(false) };
 }
 

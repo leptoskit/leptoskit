@@ -61,7 +61,7 @@ pub fn walk(count: usize) -> Recording {
 						main_light_direction: None,
 					}),
 					inputs: Vec::new(),
-					depth: false,
+					depth: None,
 				},
 				depth: None,
 			}

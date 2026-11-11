@@ -1,5 +1,17 @@
 import type { image } from "@kit.ImageKit";
 
+/**
+ * A line height from the renderer. Serde emits one field: `relative` is a
+ * multiple of the font size, `fixed` is vp. The other field is absent.
+ *
+ * Named, with each field `number | undefined`, so ArkTS does not treat the
+ * value as `any` the way an inline `{ relative?: number }` does.
+ */
+export interface LineHeight {
+	relative: number | undefined;
+	fixed: number | undefined;
+}
+
 /** Rust's v1 render protocol. Optional values may be serialized as null. */
 export interface WidgetProps {
 	text?: string | null;
@@ -34,11 +46,6 @@ export interface BorderEdges {
 	right: number;
 	bottom: number;
 	left: number;
-}
-/** A line height as a multiple of the font size, or a fixed length in vp. */
-export interface LineHeight {
-	relative?: number;
-	fixed?: number;
 }
 /** Accessibility state carried on a widget. */
 export interface AriaState {

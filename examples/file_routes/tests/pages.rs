@@ -1,6 +1,7 @@
 //! Every route renders inside its layouts on the headless backend: the
 //! screens are valid trees with valid Tailwind classes, and they show what
 //! their route says.
+#![cfg(not(target_arch = "wasm32"))]
 
 use file_routes_example::routes::About;
 use file_routes_example::routes::Compose;

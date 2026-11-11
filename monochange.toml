@@ -60,6 +60,7 @@ packages = [
 	"leptoskit_yoga",
 	"leptoskit_canvas",
 	"leptoskit_3d",
+	"leptoskit_game",
 	"leptoskit_xr",
 	"leptoskit_depth",
 	"leptoskit_animation",
@@ -79,7 +80,6 @@ packages = [
 	"leptoskit_apm",
 	"leptoskit_deploy_console",
 	"leptoskit_form",
-	"leptoskit_game",
 	"leptoskit_config",
 	"leptoskit_platform",
 	"leptoskit_platform_harmonyos",
@@ -270,6 +270,10 @@ type = "cargo"
 path = "crates/leptoskit_3d"
 type = "cargo"
 
+[package.leptoskit_game]
+path = "crates/leptoskit_game"
+type = "cargo"
+
 [package.leptoskit_xr]
 path = "crates/leptoskit_xr"
 type = "cargo"
@@ -336,10 +340,6 @@ type = "cargo"
 
 [package.leptoskit_form]
 path = "crates/leptoskit_form"
-type = "cargo"
-
-[package.leptoskit_game]
-path = "crates/leptoskit_game"
 type = "cargo"
 
 [package.leptoskit_config]

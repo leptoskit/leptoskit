@@ -24,7 +24,7 @@ use crate::wire::Writer;
 /// The first bytes of a recording file.
 const MAGIC: [u8; 4] = *b"LKXR";
 /// The recording format this crate writes and reads.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 /// The largest depth picture a recording holds: 1024 × 1024 four-byte
 /// pixels.
 const MAX_DEPTH_BYTES: usize = 4 << 20;
@@ -89,7 +89,11 @@ impl Recording {
 	pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
 		let mut reader = Reader::new(bytes);
 
-		if reader.u32()? != u32::from_le_bytes(MAGIC) || reader.u32()? != VERSION {
+		if reader.u32()? != u32::from_le_bytes(MAGIC) {
+			return Err(Error::InvalidArgument);
+		}
+		let version = reader.u32()?;
+		if !matches!(version, 1 | VERSION) {
 			return Err(Error::InvalidArgument);
 		}
 
@@ -98,7 +102,13 @@ impl Recording {
 		let mut frames: Vec<RecordedFrame> = Vec::with_capacity(count);
 
 		for _ in 0..count {
-			let frame = Frame::read(&mut reader)?;
+			let mut frame = Frame::read(&mut reader)?;
+			// Version one carried only availability, so it cannot prove a
+			// picture's scale agrees with tracked planes. Treat it as an
+			// estimate rather than claiming it was measured.
+			if version == 1 && frame.depth.is_some() {
+				frame.depth = Some(DepthSource::Estimated);
+			}
 			let depth = if reader.bool()? {
 				Some(read_depth(&mut reader)?)
 			} else {
@@ -319,6 +329,7 @@ impl ReplayBackend {
 			camera_image: None,
 			camera_intrinsics: None,
 			depth: recorded.depth.clone(),
+			depth_source: frame.depth.unwrap_or_default(),
 			depth_view: None,
 			planes: frame.planes.clone().into(),
 			planes_revision: 0,

@@ -406,7 +406,6 @@ mod tests {
 	use super::first_difference;
 	use super::project_policy;
 	use super::read_approval;
-	use super::regular_files;
 
 	const COMMIT: &str = "3f9d5a1c2b8e7f604a9d5c3e2b1f0a8d7c6e5b4a";
 	const REPOSITORY: &str = "https://github.com/example/notes";
@@ -501,7 +500,9 @@ mod tests {
 		let directory = tempfile::tempdir().unwrap();
 		std::fs::write(directory.path().join("app.wasm"), b"a").unwrap();
 		std::os::unix::fs::symlink("app.wasm", directory.path().join("link")).unwrap();
-		let error = regular_files(directory.path()).unwrap_err().to_string();
+		let error = super::regular_files(directory.path())
+			.unwrap_err()
+			.to_string();
 		assert!(error.contains("is not a regular file"), "{error}");
 		assert!(
 			error.contains("a release holds only regular files"),

@@ -54,7 +54,7 @@ macos = ["native", "leptoskit/macos"]
 windows = ["native", "leptoskit/windows"]
 linux = ["native", "leptoskit/linux"]
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 leptoskit_native = { path = "../../crates/leptoskit_native" }
 leptoskit_testing = { workspace = true }
 leptoskit_wasm = { workspace = true }

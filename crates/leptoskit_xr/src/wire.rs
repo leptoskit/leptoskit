@@ -646,7 +646,11 @@ impl Wire for Frame {
 
 		write_option(writer, self.light.as_ref(), |w, v| v.write(w));
 		write_list(writer, &self.inputs, Self::MAX_INPUTS);
-		writer.u32(u32::from(self.depth));
+		writer.u32(match self.depth {
+			None => 0,
+			Some(DepthSource::Measured) => 1,
+			Some(DepthSource::Estimated) => 2,
+		});
 	}
 
 	fn read(reader: &mut Reader<'_>) -> Result<Self, Error> {
@@ -661,7 +665,12 @@ impl Wire for Frame {
 			anchors: list(reader, Self::MAX_ANCHORS)?,
 			light: option(reader, LightEstimate::read)?,
 			inputs: list(reader, Self::MAX_INPUTS)?,
-			depth: reader.bool()?,
+			depth: match reader.u32()? {
+				0 => None,
+				1 => Some(DepthSource::Measured),
+				2 => Some(DepthSource::Estimated),
+				_ => return Err(Error::InvalidArgument),
+			},
 		})
 	}
 }
@@ -720,6 +729,7 @@ fn hit_kind(value: u32) -> Result<HitKind, Error> {
 		HitKind::InfinitePlane,
 		HitKind::Depth,
 		HitKind::Estimated,
+		HitKind::EstimatedDepth,
 	]
 	.get(value as usize)
 	.copied()

@@ -102,6 +102,7 @@ budget_kib = 80
 `leptoskit build --release` always does the cheap things that make the client smaller:
 
 - **`wasm-opt -Oz`**, binaryen's most aggressive size optimization, when `bundle.wasm_opt` is on (the default).
+- **Minified JavaScript.** The same release builds run `esbuild --minify` over the glue, its snippets, and the chunk loader. Export names and `import.meta` stay, so the page's imports keep working. `esbuild` has to be on `PATH` (the development environment includes it). Turn both this and `wasm-opt` off with `bundle.wasm_opt = false`.
 - **No debugging sections.** The name and producers sections are dropped from release wasm.
 - **Precompressed output.** Every compressible file (wasm, JavaScript, CSS, HTML, SVG, JSON) gets a brotli `.br` and a gzip `.gz` copy, compressed once at the highest settings instead of on every request. `leptoskit serve`, `leptoskit_axum::static_files`, and most CDNs send them to browsers that accept them. Turn it off with `bundle.precompress = false`. Dev builds remove the copies, so a server never sends a stale one.
 

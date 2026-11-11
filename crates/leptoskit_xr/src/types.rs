@@ -754,6 +754,8 @@ pub enum HitKind {
 	Depth = 2,
 	/// A surface the platform guessed.
 	Estimated = 3,
+	/// A depth picture inferred from a camera image, with approximate scale.
+	EstimatedDepth = 4,
 }
 
 /// Where a ray met the real world.
@@ -768,6 +770,18 @@ pub struct Hit {
 	pub kind: HitKind,
 	/// The plane hit, for plane hits.
 	pub plane: Option<u64>,
+}
+
+/// Where a depth picture came from. A model's metre estimates can have a
+/// different scale from tracked planes: find the picture's own floor before
+/// scaling it to a measured floor, rather than treating its values as exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DepthSource {
+	/// Depth measured by the platform, in its tracked metre scale.
+	#[default]
+	Measured,
+	/// Depth inferred from a camera picture, with approximate metre scale.
+	Estimated,
 }
 
 /// One frame as the guest receives it: everything but the pictures.
@@ -800,9 +814,9 @@ pub struct Frame {
 	pub light: Option<LightEstimate>,
 	/// Controllers, hands, touches, and gaze.
 	pub inputs: Vec<InputSource>,
-	/// Whether the host has a depth picture this frame, so depth hit tests
-	/// and occlusion work.
-	pub depth: bool,
+	/// The source of this frame's depth picture, or `None` when depth hit
+	/// tests and occlusion have no picture to use.
+	pub depth: Option<DepthSource>,
 }
 
 impl Frame {

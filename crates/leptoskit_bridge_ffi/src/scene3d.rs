@@ -11,16 +11,18 @@
 //! renderers always link, but nothing attaches: [`lk_scene3d_available`]
 //! reports 0 and attaching returns null.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::cell::RefCell;
 use std::ffi::c_void;
 
 use crate::Buffer;
 
 thread_local! {
-	#[allow(
-		clippy::missing_const_for_thread_local,
-		reason = "already const; Android's thread-local backend still emits a non-const init function"
-	)]
+	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static ERROR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
@@ -98,6 +100,8 @@ mod enabled {
 	use std::ptr::NonNull;
 
 	use leptoskit_3d::Backend;
+	use leptoskit_3d::PointerInput;
+	use leptoskit_3d::PointerPhase;
 	use leptoskit_3d::SceneId;
 	use leptoskit_3d::host::Directory;
 	use leptoskit_3d::host::Hub;
@@ -173,6 +177,25 @@ mod enabled {
 	pub fn set_asset_directory(path: &str) -> i32 {
 		Hub::global().set_asset_source(Directory(path.into()));
 		1
+	}
+
+	pub fn pointer(scene: u32, phase: u32, x: f32, y: f32, dx: f32, dy: f32) -> i32 {
+		let Some(phase) = PointerPhase::from_tag(phase) else {
+			fail("unknown pointer phase");
+			return -1;
+		};
+		let input = PointerInput {
+			phase,
+			x,
+			y,
+			dx,
+			dy,
+		};
+		if !input.is_valid() {
+			fail("invalid pointer coordinates");
+			return -1;
+		}
+		i32::from(Hub::global().pointer(SceneId(scene), input))
 	}
 
 	pub fn set_asset_reader(context: *mut c_void, read: ReadFn) -> i32 {
@@ -316,6 +339,11 @@ mod enabled {
 		-1
 	}
 
+	pub fn pointer(_: u32, _: u32, _: f32, _: f32, _: f32, _: f32) -> i32 {
+		fail(DISABLED);
+		-1
+	}
+
 	pub fn set_asset_reader(_: *mut c_void, _: ReadFn) -> i32 {
 		fail(DISABLED);
 		-1
@@ -364,6 +392,22 @@ mod enabled {
 }
 
 pub use enabled::ViewHandle;
+
+/// Offers primary-pointer input to a scene. Phases are 0 down, 1 move,
+/// 2 up, 3 cancel. Positions are fractions across and down the view; deltas
+/// are layout units (points or dp). Returns 1 if queued, 0 for an absent
+/// scene, or -1 for invalid input or unavailable 3D support.
+#[unsafe(no_mangle)]
+pub extern "C" fn lk_scene3d_pointer(
+	scene: u32,
+	phase: u32,
+	x: f32,
+	y: f32,
+	dx: f32,
+	dy: f32,
+) -> i32 {
+	enabled::pointer(scene, phase, x, y, dx, dy)
+}
 
 /// 1 when this build can show 3D scenes, 0 when it was built without them.
 #[unsafe(no_mangle)]

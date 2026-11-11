@@ -16,6 +16,22 @@ let
   # that file, so every script that can trigger such an install exports the
   # same setting. Remove both once the upstream issue is fixed.
   keepProcMacrosLoadable = "export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none";
+  linuxWebdriver = pkgs.writeText "leptoskit-webdriver.json" (
+    builtins.toJSON (
+      lib.recursiveUpdate (builtins.fromJSON (builtins.readFile ./webdriver.json)) {
+        "goog:chromeOptions".binary = lib.getExe pkgs.chromium;
+      }
+    )
+  );
+  hostRustTarget = lib.toUpper (
+    builtins.replaceStrings [ "-" ] [ "_" ] pkgs.stdenv.hostPlatform.rust.rustcTarget
+  );
+  linuxBuildEnvironment = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    CC = "${pkgs.stdenv.cc}/bin/cc";
+    CXX = "${pkgs.stdenv.cc}/bin/c++";
+    "CARGO_TARGET_${hostRustTarget}_LINKER" = "${pkgs.stdenv.cc}/bin/cc";
+    WASM_BINDGEN_TEST_WEBDRIVER_JSON = linuxWebdriver;
+  };
 in
 {
   # The macOS frameworks come from the host Xcode toolchain (see `enterShell`);
@@ -35,6 +51,7 @@ in
       dart
       deno
       dprint
+      esbuild
       geckodriver
       gh
       git
@@ -73,6 +90,8 @@ in
       pkgs.swiftlint
     ]
     ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+      # Keep the browser and chromedriver on the same nixpkgs revision.
+      pkgs.chromium
       # cpal, behind the audio plugin, plays through ALSA.
       pkgs.alsa-lib
       pkgs.at-spi2-core
@@ -83,6 +102,8 @@ in
       pkgs.xdotool
       pkgs.xvfb-run
     ];
+
+  env = linuxBuildEnvironment;
 
   enterShell = ''
     # Keep shell entry fast. Only bootstrap missing toolchains here; explicit
@@ -100,14 +121,17 @@ in
   + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     # The native Rive runtime links libstdc++. Nix's dynamic linker does not
     # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
-    # for `cargo nextest` and other linked test binaries.
-    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    # Nix's glibc 2.44 marks libm with GLIBC_ABI_DT_X86_64_PLT. A binary linked
-    # by the host's ld still starts under the host's loader, which loads the
-    # host libc, and that libc does not provide the symbol. Host-target builds
-    # use Nix's loader so libm and libc are the same glibc. The loader path is
-    # baked into the binary; Nix's libc must not go on LD_LIBRARY_PATH, or
-    # every host program loads it and breaks.
+    # for `cargo nextest` and other nix-linked test binaries.
+    # `setup:ci` strips this prefix from the path it writes for later steps:
+    # those steps link with the runner's cc, and a nix libstdc++ first on
+    # LD_LIBRARY_PATH loads nix libm, which needs a glibc symbol the runner
+    # does not have (`GLIBC_ABI_DT_X86_64_PLT`).
+    export LEPTOSKIT_NIX_LIBCXX="${pkgs.stdenv.cc.cc.lib}/lib"
+    export LD_LIBRARY_PATH="$LEPTOSKIT_NIX_LIBCXX''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Commands that stay inside this shell still link libm from that prefix.
+    # Host-target builds use Nix's loader so libm and libc are the same glibc.
+    # The loader path is baked into the binary; Nix's libc must not go on
+    # LD_LIBRARY_PATH, or every host program loads it and breaks.
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-} -C link-arg=-Wl,--dynamic-linker,${pkgs.glibc}/lib/ld-linux-x86-64.so.2 -C link-arg=-Wl,-rpath,${pkgs.glibc}/lib"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
@@ -673,6 +697,9 @@ in
     "test:browser" = {
       exec = ''
         set -euo pipefail
+        # The runner's Chrome and this chromedriver disagree on the major
+        # version. The json names a Chrome built for this chromedriver.
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_testing_library
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -703,6 +730,7 @@ in
           --features leptoskit_rive/native,leptoskit_rive/serde,leptoskit_native/rive,leptoskit_native/serde,leptoskit_wasm/rive,leptoskit_bridge_ffi/app \
           --lib --test native --test asset --test rive
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown --package leptoskit_rive --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -727,6 +755,7 @@ in
     "coverage:use:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         task_browser_root="$(git rev-parse --show-toplevel)"
         # wasm-bindgen-test 0.3.79 pins minicov 0.3.8, the LLVM 22 profiling
         # runtime (raw profile v10). LLVM 23 nightlies emit v11 profile data it
@@ -784,6 +813,7 @@ in
     "coverage:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         root="$(git rev-parse --show-toplevel)"
         # See coverage:use:browser: minicov 0.3.8 writes LLVM 22 profiles.
         toolchain=nightly-2026-05-08
@@ -957,6 +987,9 @@ in
         run_step "lint:docs" lint:docs
         run_step "lint:format" lint:format
         run_step "lint:kotlin" lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" lint:swift
+        ''}
         run_step "lint:releases" lint:releases
         run_step "schema:check" schema:check
         run_step "deny:check" deny:check
@@ -977,13 +1010,20 @@ in
 
         # Sibling scripts are addressed absolutely so the hook also works
         # outside `devenv shell`, where the profile bin dir is not on PATH.
-        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --verbose --redact
+        # Scan the branch's complete history, including every commit being
+        # pushed. Local tool checkpoint refs are not repository history and
+        # can contain audit reports or snapshots from unrelated worktrees.
+        run_step "gitleaks detect" ${pkgs.gitleaks}/bin/gitleaks detect --log-opts=HEAD --verbose --redact
         run_step "lint:clippy" ${currentDir}/.devenv/profile/bin/lint:clippy
+        run_step "lint:clippy:wasm" ${currentDir}/.devenv/profile/bin/lint:clippy:wasm
         run_step "lint:monostyle" ${currentDir}/.devenv/profile/bin/lint:monostyle
         run_step "lint:leptoskit" ${currentDir}/.devenv/profile/bin/lint:leptoskit
         run_step "lint:docs" ${currentDir}/.devenv/profile/bin/lint:docs
         run_step "lint:format" ${currentDir}/.devenv/profile/bin/lint:format
         run_step "lint:kotlin" ${currentDir}/.devenv/profile/bin/lint:kotlin
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+          run_step "lint:swift" ${currentDir}/.devenv/profile/bin/lint:swift
+        ''}
         run_step "test:cargo" ${currentDir}/.devenv/profile/bin/test:cargo
         run_step "security:zizmor" ${currentDir}/.devenv/profile/bin/security:zizmor
         run_step "lint:releases" ${currentDir}/.devenv/profile/bin/lint:releases
@@ -1143,6 +1183,7 @@ in
     "test:plugins:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown \
             --package leptoskit_plugin_audio \
@@ -1455,11 +1496,33 @@ in
         # update github ci environment
         echo "DEVENV_PROFILE=$DEVENV_PROFILE" >> $GITHUB_ENV
 
+        # Later steps run outside devenv. Keep Rust's host linker and C/C++
+        # compilers with the Nix libraries, and retain the pinned browser path.
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            name: value: ''echo ${lib.escapeShellArg "${name}=${value}"} >> "$GITHUB_ENV"''
+          ) linuxBuildEnvironment
+        )}
+
         # prepend common compilation lookup paths; the `:-` defaults matter
         # because Linux runners do not export several of these, and `set -u`
         # treats the unbound expansion as a failure.
         echo "PKG_CONFIG_PATH=''${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=''${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+        # Keep nix libstdc++ for commands inside this shell. Drop it from the
+        # environment later steps inherit: they link with the runner's cc, and
+        # inheriting the nix library loads nix libm against the runner's libc.
+        ci_ld_library_path="''${LD_LIBRARY_PATH:-}"
+        if [ -n "''${LEPTOSKIT_NIX_LIBCXX:-}" ]; then
+          case "$ci_ld_library_path" in
+            "$LEPTOSKIT_NIX_LIBCXX")
+              ci_ld_library_path=""
+              ;;
+            "$LEPTOSKIT_NIX_LIBCXX:"*)
+              ci_ld_library_path="''${ci_ld_library_path#"$LEPTOSKIT_NIX_LIBCXX:"}"
+              ;;
+          esac
+        fi
+        echo "LD_LIBRARY_PATH=$ci_ld_library_path" >> $GITHUB_ENV
         echo "LIBRARY_PATH=''${LIBRARY_PATH:-}" >> $GITHUB_ENV
         echo "C_INCLUDE_PATH=''${C_INCLUDE_PATH:-}" >> $GITHUB_ENV
 

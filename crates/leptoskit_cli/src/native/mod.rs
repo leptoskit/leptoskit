@@ -769,9 +769,8 @@ fn configure_android_toolchain(
 	};
 
 	let tools = ndk.join(format!("toolchains/llvm/prebuilt/{NDK_HOST}/bin"));
-	let compiler = tools.join(format!(
-		"{architecture}-linux-android26-clang{NDK_LAUNCHER_SUFFIX}"
-	));
+	let clang_target = format!("{architecture}-linux-android26");
+	let compiler = tools.join(format!("{clang_target}-clang{NDK_LAUNCHER_SUFFIX}"));
 	anyhow::ensure!(
 		compiler.is_file(),
 		"selected NDK does not contain a compiler for this host: {}",
@@ -795,9 +794,7 @@ fn configure_android_toolchain(
 	.env(format!("CC_{target_key}"), compiler)
 	.env(
 		format!("CXX_{target_key}"),
-		tools.join(format!(
-			"{architecture}-linux-android26-clang++{NDK_LAUNCHER_SUFFIX}"
-		)),
+		tools.join(format!("{clang_target}-clang++{NDK_LAUNCHER_SUFFIX}")),
 	)
 	.env(
 		format!("AR_{target_key}"),
@@ -807,6 +804,21 @@ fn configure_android_toolchain(
 			"llvm-ar"
 		}),
 	);
+	// A compiler cache can hide the launcher's name from cc-rs, which then
+	// adds the Rust target without its API level. Keep the selected NDK API
+	// explicit in the final C and C++ flags, preserving the caller's flags.
+	for variable in ["CFLAGS", "CXXFLAGS"] {
+		let key = format!("{variable}_{}", target.rust());
+		let mut flags = match host.get_envs().find(|(name, _)| *name == key.as_str()) {
+			Some((_, value)) => value.unwrap_or_default().to_os_string(),
+			None => std::env::var_os(&key).unwrap_or_default(),
+		};
+		if !flags.is_empty() {
+			flags.push(" ");
+		}
+		flags.push(format!("--target={clang_target}"));
+		host.env(key, flags);
+	}
 	Ok(())
 }
 
@@ -1577,10 +1589,13 @@ fn run_host_library(command: &mut Command) -> Result<Vec<String>> {
 /// stripped, in rustc's order and without the repeats it keeps for linkers that
 /// care about them. Anything that is not a `-l` entry is left to the C linker.
 fn native_static_libs(output: &str) -> Vec<String> {
+	// Cargo may colour both the note's prefix and its final library name.
+	let output = anstream::adapter::strip_str(output).to_string();
 	let mut libraries: Vec<String> = Vec::new();
 
 	for line in output.lines() {
-		let Some(list) = line.trim().strip_prefix("note: native-static-libs:") else {
+		let plain = strip_ansi(line);
+		let Some(list) = plain.trim().strip_prefix("note: native-static-libs:") else {
 			continue;
 		};
 
@@ -1596,6 +1611,32 @@ fn native_static_libs(output: &str) -> Vec<String> {
 	}
 
 	libraries
+}
+
+/// Drops CSI color sequences so a colored `note:` still matches.
+///
+/// `CARGO_TERM_COLOR=always` paints rustc's `note` label. The prefix check
+/// then misses the line, and an Android plugin build links without the
+/// libraries rustc named (`aaudio`, `OpenSLES`).
+fn strip_ansi(text: &str) -> String {
+	let mut plain = String::with_capacity(text.len());
+	let mut chars = text.chars().peekable();
+
+	while let Some(ch) = chars.next() {
+		if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+			chars.next();
+			for next in chars.by_ref() {
+				if ('\u{40}'..='\u{7e}').contains(&next) {
+					break;
+				}
+			}
+			continue;
+		}
+
+		plain.push(ch);
+	}
+
+	plain
 }
 
 /// The path of `tool` inside an SDK, from the `xcrun` on `PATH`: Xcode's own
@@ -2519,8 +2560,31 @@ mod tests {
 		std::fs::write(&clang, "").unwrap();
 
 		let mut host = Command::new("cargo");
+		host.env("CFLAGS", "-DGLOBAL_C=1")
+			.env("CFLAGS_aarch64_linux_android", "-DUNDERSCORE_C=1")
+			.env("CFLAGS_aarch64-linux-android", "-DLOCAL_C=1")
+			.env("CXXFLAGS_aarch64-linux-android", "-DLOCAL_CXX=1");
 		configure_android_toolchain(&mut host, &root, Target::Android, &ndk).unwrap();
 		let environment = environment(&host);
+		let flags = |name: &str| {
+			environment
+				.iter()
+				.find(|(key, _)| key == name)
+				.map(|(_, value)| value.as_str())
+		};
+		assert_eq!(flags("CFLAGS"), Some("-DGLOBAL_C=1"));
+		assert_eq!(
+			flags("CFLAGS_aarch64_linux_android"),
+			Some("-DUNDERSCORE_C=1")
+		);
+		assert_eq!(
+			flags("CFLAGS_aarch64-linux-android"),
+			Some("-DLOCAL_C=1 --target=aarch64-linux-android26")
+		);
+		assert_eq!(
+			flags("CXXFLAGS_aarch64-linux-android"),
+			Some("-DLOCAL_CXX=1 --target=aarch64-linux-android26")
+		);
 		let value = |name: &str| {
 			environment
 				.iter()
@@ -2561,6 +2625,29 @@ mod tests {
 			error.to_string().contains("does not contain a compiler"),
 			"{error}"
 		);
+		std::fs::write(
+			tools.join(format!("x86_64-linux-android26-clang{NDK_LAUNCHER_SUFFIX}")),
+			"",
+		)
+		.unwrap();
+		let mut emulator = Command::new("cargo");
+		emulator
+			.env("CFLAGS_x86_64-linux-android", "")
+			.env("CXXFLAGS_x86_64-linux-android", "");
+		configure_android_toolchain(&mut emulator, &root, Target::AndroidX86_64, &ndk).unwrap();
+		let emulator_env = self::environment(&emulator);
+		for name in [
+			"CFLAGS_x86_64-linux-android",
+			"CXXFLAGS_x86_64-linux-android",
+		] {
+			assert_eq!(
+				emulator_env
+					.iter()
+					.find(|(key, _)| key == name)
+					.map(|(_, value)| value.as_str()),
+				Some("--target=x86_64-linux-android26")
+			);
+		}
 		std::fs::remove_dir_all(&root).unwrap();
 	}
 
@@ -2990,22 +3077,58 @@ mod tests {
 			["AudioToolbox"],
 			"a framework is the C linker's to name, not a library to link"
 		);
+		assert_eq!(
+			native_static_libs(
+				"\u{1b}[1m\u{1b}[92mnote\u{1b}[0m: native-static-libs: -landroid -laaudio -ldl \
+				 -lm\n"
+			),
+			["android", "aaudio", "dl", "m"],
+			"a colored note is the same line once the CSI sequences are gone"
+		);
 	}
 
 	#[cfg(unix)]
 	#[test]
 	fn a_host_build_reports_the_libraries_it_printed() {
-		let mut build = Command::new("sh");
-		build.args([
-			"-c",
-			"echo 'note: native-static-libs: -laaudio -ldl -laaudio' >&2; echo compiling",
-		]);
-		assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		for note in [
+			"note: native-static-libs: -laaudio -ldl -laaudio",
+			"\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -laaudio -ldl \
+			 -laaudio\u{1b}[0m",
+		] {
+			let mut build = Command::new("sh");
+			build.args([
+				"-c",
+				"printf '%s\\n' \"$1\" >&2; echo compiling",
+				"host-library-test",
+				note,
+			]);
+			assert_eq!(run_host_library(&mut build).unwrap(), ["aaudio", "dl"]);
+		}
 
 		let mut failed = Command::new("sh");
 		failed.args(["-c", "exit 3"]);
 		let error = run_host_library(&mut failed).unwrap_err().to_string();
 		assert!(error.contains("failed"), "{error}");
+	}
+
+	#[test]
+	fn rustcs_coloured_note_keeps_clean_library_names() {
+		// Cargo's `--color always` decorates both the prefix and final entry.
+		let output = "\u{1b}[1m\u{1b}[92mnote\u{1b}[0m\u{1b}[1m: native-static-libs: -landroid \
+		              -laaudio -ldl -lc++_shared -llog -ldl -llog -lunwind -ldl -lm -lc\u{1b}[0m\n";
+		assert_eq!(
+			native_static_libs(output),
+			[
+				"android",
+				"aaudio",
+				"dl",
+				"c++_shared",
+				"log",
+				"unwind",
+				"m",
+				"c"
+			]
+		);
 	}
 
 	#[test]

@@ -313,3 +313,66 @@ fn scenes_draw_on_another_device_and_move_back() {
 	hub.close(SceneId(1));
 	assert!(hub.draw_scene(SceneId(1), &first, 2.0, |_| ()).is_none());
 }
+
+#[test]
+fn pointers_wake_independently_of_asset_events_and_end_on_close_or_cancel() {
+	use std::task::Context;
+	use std::task::Poll;
+	use std::task::Wake;
+	use std::task::Waker;
+	struct Counter(AtomicUsize);
+	impl Wake for Counter {
+		fn wake(self: Arc<Self>) {
+			self.0.fetch_add(1, Ordering::SeqCst);
+		}
+	}
+	let (hub, _) = hub();
+	let plugin = plugin(hub);
+	hub.apply_ops(SceneId(4), Vec::new()).unwrap();
+	let payload = || Bytes::from(4_u32.to_le_bytes().to_vec());
+	let token = CancellationToken::new();
+	let mut call = plugin.invoke(NEXT_POINTER, payload(), token.clone());
+	let notifications = Arc::new(Counter(AtomicUsize::new(0)));
+	let waker = Waker::from(notifications.clone());
+	let mut context = Context::from_waker(&waker);
+	assert!(call.as_mut().poll(&mut context).is_pending());
+	let input = PointerInput {
+		phase: PointerPhase::Down,
+		x: 0.2,
+		y: 0.8,
+		dx: 0.0,
+		dy: 0.0,
+	};
+	assert!(hub.pointer(SceneId(4), input));
+	assert!(notifications.0.load(Ordering::SeqCst) > 0);
+	let Poll::Ready(Ok(reply)) = call.as_mut().poll(&mut context) else {
+		panic!("input ready");
+	};
+	assert_eq!(PointerInput::decode(reply.bytes()), Ok(input));
+	let mut call = plugin.invoke(NEXT_POINTER, payload(), token.clone());
+	assert!(call.as_mut().poll(&mut context).is_pending());
+	token.cancel();
+	assert!(matches!(
+		call.as_mut().poll(&mut context),
+		Poll::Ready(Err(leptoskit_bridge::Error::Cancelled))
+	));
+	let mut call = plugin.invoke(NEXT_POINTER, payload(), CancellationToken::new());
+	assert!(call.as_mut().poll(&mut context).is_pending());
+	hub.close(SceneId(4));
+	let Poll::Ready(Ok(reply)) = call.as_mut().poll(&mut context) else {
+		panic!("close ready");
+	};
+	assert!(reply.bytes().is_empty());
+	assert_eq!(
+		plugin.reply_limit(NEXT_POINTER),
+		Ok(PointerInput::WIRE_SIZE)
+	);
+	assert!(
+		pollster::block_on(plugin.invoke(
+			NEXT_POINTER,
+			Bytes::from(vec![4, 0, 0, 0, 1]),
+			CancellationToken::new()
+		))
+		.is_err()
+	);
+}

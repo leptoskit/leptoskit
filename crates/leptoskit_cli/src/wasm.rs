@@ -395,6 +395,7 @@ pub fn bindgen_fingerprint(
 	pkg_dir: &Path,
 	wasm_opt_version: Option<&str>,
 	split: bool,
+	esbuild_version: Option<&str>,
 ) -> Fingerprint {
 	// The cache keeps one entry per phase, and the target directory holding
 	// it can be shared by projects or output directories (a workspace, a
@@ -406,7 +407,8 @@ pub fn bindgen_fingerprint(
 		.with_input("release", if release { "1" } else { "0" }.to_owned())
 		.with_input("pkg_dir", pkg_dir.display().to_string())
 		.with_input("wasm_opt", wasm_opt_version.unwrap_or("off").to_owned())
-		.with_input("glue_flags", "3".to_owned())
+		.with_input("esbuild", esbuild_version.unwrap_or("off").to_owned())
+		.with_input("glue_flags", "4".to_owned())
 		.with_input("split", if split { "1" } else { "0" }.to_owned())
 }
 
@@ -615,6 +617,71 @@ const WASM_OPT_FEATURES: [&str; 6] = [
 	"--enable-reference-types",
 	"--enable-multivalue",
 ];
+
+/// Minifies every JavaScript file under `pkg_dir` in place.
+///
+/// esbuild keeps export names and `import.meta`, and it does not bundle, so
+/// the glue, its snippets, and the chunk loader still import one another.
+/// Release builds run this beside [`optimize`].
+pub fn minify_javascript(pkg_dir: &Path) -> Result<()> {
+	let mut scripts = Vec::new();
+
+	for entry in walkdir::WalkDir::new(pkg_dir) {
+		let entry = entry.with_context(|| format!("could not read {}", pkg_dir.display()))?;
+		let path = entry.path();
+		let javascript = path.extension().and_then(|extension| extension.to_str()) == Some("js");
+
+		if entry.file_type().is_file() && javascript {
+			scripts.push(path.to_path_buf());
+		}
+	}
+
+	for script in scripts {
+		minify_script(&script)?;
+	}
+
+	Ok(())
+}
+
+/// One script, minified onto itself.
+fn minify_script(script: &Path) -> Result<()> {
+	let minified = script.with_extension("min.js");
+	let status = Command::new("esbuild")
+		.arg(script)
+		.args([
+			"--minify",
+			"--format=esm",
+			"--target=esnext",
+			"--legal-comments=none",
+		])
+		.arg(format!("--outfile={}", minified.display()))
+		.status()
+		.context(
+			"could not run esbuild; install it or set `bundle.wasm_opt = false` in leptoskit.toml",
+		)?;
+	anyhow::ensure!(status.success(), "esbuild failed on {}", script.display());
+	std::fs::rename(&minified, script).with_context(|| {
+		format!(
+			"could not replace {} with {}",
+			script.display(),
+			minified.display()
+		)
+	})?;
+	Ok(())
+}
+
+/// The `esbuild --version` line, part of the bindgen fingerprint in release.
+pub fn esbuild_version() -> Result<String> {
+	let output = Command::new("esbuild").arg("--version").output().context(
+		"could not run esbuild; install it or set `bundle.wasm_opt = false` in leptoskit.toml",
+	)?;
+	anyhow::ensure!(output.status.success(), "`esbuild --version` failed");
+	let mut version = String::from_utf8(output.stdout).context("esbuild version was not UTF-8")?;
+	if version.is_empty() {
+		version = String::from_utf8(output.stderr).context("esbuild version was not UTF-8")?;
+	}
+	Ok(version.trim().to_owned())
+}
 
 /// Optimizes the processed wasm in place with `wasm-opt -Oz`, its most
 /// aggressive size optimization. Pure.
@@ -890,6 +957,32 @@ mod tests {
 				.iter()
 				.any(|entry| entry.ends_with("panic = \"abort\""))
 		);
+	}
+
+	#[test]
+	fn minify_javascript_keeps_exports_and_import_meta() {
+		if esbuild_version().is_err() {
+			return;
+		}
+
+		let root = std::env::temp_dir()
+			.canonicalize()
+			.unwrap()
+			.join(format!("leptoskit-minify-js-{}", std::process::id()));
+		std::fs::create_dir_all(&root).unwrap();
+		let script = root.join("glue.js");
+		std::fs::write(
+			&script,
+			"export function load() {\n\treturn new URL(\"./app.wasm\", import.meta.url);\n}\n",
+		)
+		.unwrap();
+		minify_javascript(&root).expect("esbuild");
+		let minified = std::fs::read_to_string(&script).unwrap();
+		assert!(minified.contains("export"), "{minified}");
+		assert!(minified.contains("load"), "{minified}");
+		assert!(minified.contains("import.meta.url"), "{minified}");
+		assert!(minified.len() < 80, "{minified}");
+		std::fs::remove_dir_all(root).unwrap();
 	}
 
 	#[test]

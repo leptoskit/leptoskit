@@ -8,10 +8,16 @@ render = "csr"
 [build]
 client_package = "leptoskit_app"
 features = []
+# The public site's initial load is capped at 180 KiB, brotli-compressed.
+# Panic locations and Debug text are unique per crate and survive brotli.
+# `remember_keyed` tells call sites apart by those locations, and this app
+# does not call it. The flags apply to every wasm client, including the
+# iOS and Android guests.
+rustflags = ["-Zlocation-detail=none", "-Zfmt-debug=none"]
 [bundle]
 optimize = "smallest"
 precompress = false
-budget_kib = 186
+budget_kib = 180
 [native]
 package_id = "dev.leptoskit.cloud"
 update_contract = "mobile-v1"

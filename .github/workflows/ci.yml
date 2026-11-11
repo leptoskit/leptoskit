@@ -88,9 +88,6 @@ jobs:
       - name: enforce complete use coverage
         run: coverage:use
 
-      - name: install Chrome for the pinned chromedriver
-        run: bash setup/scripts/chrome-for-pinned-driver.sh
-
       - name: enforce complete browser storage coverage
         run: coverage:use:browser
 
@@ -962,9 +959,6 @@ jobs:
           cargo check --locked --package leptoskit_rive --package leptoskit_native
           --features leptoskit_rive/serde,leptoskit_rive/native,leptoskit_native/rive,leptoskit_native/serde
           --target wasm32-wasip1 --lib
-
-      - name: install Chrome for the pinned chromedriver
-        run: bash setup/scripts/chrome-for-pinned-driver.sh
 
       - name: chromedriver browser suites
         run: test:browser

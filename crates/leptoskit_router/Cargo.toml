@@ -13,14 +13,16 @@ rust-version.workspace = true
 description = "Typed file routes for leptoskit: the runtime behind the generated `Route` enum."
 
 [dependencies]
-leptos = { workspace = true, optional = true }
-leptos_axum = { workspace = true, optional = true }
-leptos_router = { workspace = true, optional = true }
 leptoskit_native = { workspace = true }
 leptoskit_router_macros = { workspace = true }
 reactive_graph = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+leptos = { workspace = true, optional = true }
+leptos_axum = { workspace = true, optional = true }
+leptos_router = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 send_wrapper = { workspace = true, optional = true }
@@ -33,6 +35,7 @@ default = []
 # router. Only takes effect in wasm builds that run in a browser.
 web = ["dep:send_wrapper", "dep:wasm-bindgen", "dep:web-sys"]
 # Register file routes with `leptos_axum` and read the request URL on the server.
+# Only takes effect on native targets, even when features unify in a web build.
 ssr = ["dep:leptos", "dep:leptos_axum", "dep:leptos_router"]
 
 [dev-dependencies]

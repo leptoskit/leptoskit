@@ -171,6 +171,9 @@ pub struct XrFrame {
 	pub camera_intrinsics: Option<Intrinsics>,
 	/// The depth picture, for occlusion and hit tests.
 	pub depth: Option<DepthImage>,
+	/// Where `depth` came from. Ignored when there is no depth picture;
+	/// backends that measure depth keep the default, `Measured`.
+	pub depth_source: DepthSource,
 	/// The view `depth` was seen from, when it isn't this frame's: depth a
 	/// [`DepthEstimator`] read from an older camera picture was seen from
 	/// where the viewer was then, up to a second ago. Hit tests cast against
@@ -252,7 +255,7 @@ impl XrFrame {
 				.take(Frame::MAX_INPUTS)
 				.cloned()
 				.collect(),
-			depth: self.depth.is_some(),
+			depth: self.depth.as_ref().map(|_| self.depth_source),
 		}
 	}
 }

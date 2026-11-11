@@ -154,9 +154,8 @@ mod platform {
 }
 
 /// One line on standard error, through the test harness's capture when a
-/// test is running. Android writes to logcat instead, and wasm has no
-/// standard error.
-#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+/// test is running.
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 fn stderr(level: Level, tag: &str, message: &str) {
 	eprintln!("{level:<5} {tag}: {message}");
 }

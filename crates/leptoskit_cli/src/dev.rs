@@ -130,12 +130,6 @@ pub fn run(options: Options<'_>) -> Result<()> {
 		browser,
 	} = options;
 	let (config, root) = LeptoskitConfig::load()?;
-	// The watcher asks Cargo for the workspace before any platform starts.
-	// A bad address has to fail first: `dev` promises that, and a project
-	// with no manifest never gets as far as a build.
-	if serves_web(&config, platforms) {
-		let _ = parse_serve_address(&config)?;
-	}
 
 	if terminal_only(&config, &root, platforms, open, port, devices, studio)? {
 		return Ok(());
@@ -149,6 +143,9 @@ pub fn run(options: Options<'_>) -> Result<()> {
 		selection.web || selection.extension || !selection.native.is_empty(),
 		"this machine can run none of the platforms in app.platforms"
 	);
+	if selection.web {
+		serve_address(&config, port)?;
+	}
 
 	// Held for the whole loop: dropping the runtime would stop the servers.
 	let runtime = tokio::runtime::Runtime::new().context("could not start the async runtime")?;
@@ -156,7 +153,14 @@ pub fn run(options: Options<'_>) -> Result<()> {
 
 	develop(
 		database,
-		|database| watch(&config, &root, &runtime, database.as_ref()),
+		|database| {
+			let watching = watch(&config, &root, &runtime, database.as_ref())?;
+			// The first build can take minutes. Say the watcher is already
+			// running before that build starts, so an edit during it is
+			// visibly queued instead of looking ignored.
+			say_watching(&root);
+			Ok(watching)
+		},
 		|database| {
 			Started::start(Start {
 				config: &config,
@@ -173,7 +177,7 @@ pub fn run(options: Options<'_>) -> Result<()> {
 			})
 		},
 		|started, watching| {
-			announce(&root, open, started.web.as_ref());
+			open_started(open, started.web.as_ref());
 			rebuild(started, watching);
 		},
 	)
@@ -199,53 +203,26 @@ fn develop<D, W, S>(
 	Ok(())
 }
 
-/// Says what `dev` watches, and opens the web app when asked to.
-fn announce(root: &Path, open: bool, web: Option<&Web>) {
+/// Says the watcher is running. Printed when it starts, before the first
+/// build, which is the long part of `dev`.
+fn say_watching(root: &Path) {
 	anstream::println!(
 		"{DIM}watching{DIM:#} {} {DIM}for changes{DIM:#}",
 		root.display()
 	);
-	// Piped logs are block-buffered. The dev session test, and CI, read this
-	// line as soon as the platforms are up.
+	// Piped logs are block-buffered. CI reads this line as soon as it is
+	// printed, which is before the first build finishes.
 	let _ = std::io::Write::flush(&mut std::io::stdout());
+}
 
+/// Opens the web app when asked to, after the server is up.
+fn open_started(open: bool, web: Option<&Web>) {
 	if let Some(web) = web
 		&& open
 		&& let Err(error) = open_browser(&web.url())
 	{
 		ui::warning(format_args!("could not open the browser: {error:#}"));
 	}
-}
-
-/// Whether `dev` will serve the web app for this request.
-///
-/// Matches `native::select`: the web server starts only when the app's
-/// default platform is web or server and the request includes that platform.
-fn serves_web(config: &LeptoskitConfig, requested: &[Platform]) -> bool {
-	let has_web = matches!(
-		config.app.default_platform,
-		Platform::Web | Platform::Server
-	);
-	if !has_web {
-		return false;
-	}
-
-	let web_platform = |platform: Platform| matches!(platform, Platform::Web | Platform::Server);
-	if requested.is_empty() {
-		config.app.default_platform == Platform::Server
-			|| config.app.platforms.iter().copied().any(web_platform)
-	} else {
-		requested.iter().copied().any(web_platform)
-	}
-}
-
-fn parse_serve_address(config: &LeptoskitConfig) -> Result<IpAddr> {
-	config.serve.address.parse().with_context(|| {
-		format!(
-			"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
-			config.serve.address
-		)
-	})
 }
 
 fn terminal_only(
@@ -422,6 +399,7 @@ struct Watching {
 }
 
 /// What the watcher notes for the next rebuild, beyond that something changed.
+#[derive(Clone)]
 struct Heard {
 	config_changed: Arc<AtomicBool>,
 	tables_changed: Arc<AtomicBool>,
@@ -438,6 +416,54 @@ impl Heard {
 			branch: BranchWatch::new(database, root),
 			paths: Arc::new(Mutex::new(Vec::new())),
 		}
+	}
+
+	/// Records a filesystem event and says whether it should wake the dev loop.
+	fn record(
+		&self,
+		event: &notify::Event,
+		filter: &WatchFilter,
+		config: &Path,
+		tables_dir: Option<&Path>,
+	) -> bool {
+		// Linux reports reads and opens too. Builds read these same inputs,
+		// so treating access as an edit would rebuild forever.
+		if event.kind.is_access() {
+			return false;
+		}
+
+		if self.branch.heard(event) {
+			return true;
+		}
+
+		if !event.paths.iter().any(|path| filter.is_relevant(path)) {
+			return false;
+		}
+
+		if event.paths.iter().any(|path| path == config) {
+			self.config_changed.store(true, Ordering::Relaxed);
+		}
+
+		if let Some(dir) = tables_dir
+			&& event
+				.paths
+				.iter()
+				.any(|path| path.starts_with(dir) && filter.is_relevant(path))
+		{
+			self.tables_changed.store(true, Ordering::Relaxed);
+		}
+
+		if let Ok(mut paths) = self.paths.lock() {
+			paths.extend(
+				event
+					.paths
+					.iter()
+					.filter(|path| filter.is_relevant(path))
+					.cloned(),
+			);
+		}
+
+		true
 	}
 
 	fn take_paths(&self) -> Vec<PathBuf> {
@@ -489,37 +515,18 @@ fn start_watcher(
 			.collect(),
 	};
 	let watched_config = config_file.clone();
-	let changed = Arc::clone(&config_changed);
-	let tables = Arc::clone(&tables_changed);
-	let switched = branch.clone();
-	let heard_paths = Arc::clone(&paths);
+	let heard = Heard {
+		config_changed,
+		tables_changed,
+		branch,
+		paths,
+	};
+	let changes = heard.clone();
 	let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
 		match event {
-			Ok(event) if switched.heard(&event) => drop(events_tx.send(Wake::Changed)),
-			Ok(event) if event.paths.iter().any(|path| filter.is_relevant(path)) => {
-				if event.paths.contains(&watched_config) {
-					changed.store(true, Ordering::Relaxed);
-				}
-
-				if let Some(dir) = &tables_dir
-					&& event
-						.paths
-						.iter()
-						.any(|path| path.starts_with(dir) && filter.is_relevant(path))
-				{
-					tables.store(true, Ordering::Relaxed);
-				}
-
-				if let Ok(mut paths) = heard_paths.lock() {
-					paths.extend(
-						event
-							.paths
-							.iter()
-							.filter(|path| filter.is_relevant(path))
-							.cloned(),
-					);
-				}
-
+			Ok(event)
+				if changes.record(&event, &filter, &watched_config, tables_dir.as_deref()) =>
+			{
 				let _ = events_tx.send(Wake::Changed);
 			}
 
@@ -531,12 +538,7 @@ fn start_watcher(
 
 	Ok((
 		watcher,
-		Heard {
-			config_changed,
-			tables_changed,
-			branch,
-			paths,
-		},
+		heard,
 		Watched {
 			metadata,
 			public,
@@ -781,6 +783,16 @@ struct DevServices {
 	app_env: Vec<(String, String)>,
 }
 
+fn serve_address(config: &LeptoskitConfig, port: Option<u16>) -> Result<SocketAddr> {
+	let ip: IpAddr = config.serve.address.parse().with_context(|| {
+		format!(
+			"invalid serve.address `{}`: expected an IP address such as 127.0.0.1",
+			config.serve.address
+		)
+	})?;
+	Ok(SocketAddr::new(ip, port.unwrap_or(config.serve.port)))
+}
+
 impl Web {
 	/// Binds the configured address, builds, and starts serving.
 	fn start(
@@ -790,9 +802,9 @@ impl Web {
 		runtime: &tokio::runtime::Runtime,
 		database: Option<&crate::db::DevDatabase>,
 	) -> Result<Self> {
-		let port = port.unwrap_or(config.serve.port);
-		let ip = parse_serve_address(config)?;
-		let address = SocketAddr::new(ip, port);
+		let address = serve_address(config, port)?;
+		let ip = address.ip();
+		let port = address.port();
 		// Bind first, so a taken port fails before the initial build rather
 		// than leaving a dev loop with no server behind it.
 		let listener = std::net::TcpListener::bind(address)
@@ -1353,6 +1365,65 @@ mod tests {
 	}
 
 	#[test]
+	fn reading_watched_inputs_never_rebuilds_or_switches_the_database() {
+		use notify::Event;
+		use notify::EventKind;
+		use notify::event::AccessKind;
+		use notify::event::AccessMode;
+
+		let root = Path::new("/app");
+		let config = root.join("leptoskit.toml");
+		let tables = root.join("tables");
+		let branch_file = root.join(".git/HEAD");
+		let mut heard = Heard::new(false, root);
+		heard.branch.head = Some(branch_file.clone());
+		let filter = filter(&[]);
+
+		for path in [
+			root.join("src/lib.rs"),
+			config.clone(),
+			tables.join("lib.rs"),
+			branch_file,
+		] {
+			for access in [
+				AccessKind::Any,
+				AccessKind::Open(AccessMode::Any),
+				AccessKind::Read,
+				AccessKind::Close(AccessMode::Read),
+				AccessKind::Close(AccessMode::Write),
+				AccessKind::Other,
+			] {
+				let event = Event::new(EventKind::Access(access)).add_path(path.clone());
+				assert!(
+					!heard.record(&event, &filter, &config, Some(&tables)),
+					"{event:?}"
+				);
+			}
+		}
+
+		assert_eq!(heard.take_paths(), Vec::<PathBuf>::new());
+		assert!(!heard.config_changed.load(Ordering::Relaxed));
+		assert!(!heard.tables_changed.load(Ordering::Relaxed));
+		assert!(!heard.branch.switched.load(Ordering::Relaxed));
+
+		let event = Event::new(EventKind::Modify(notify::event::ModifyKind::Data(
+			notify::event::DataChange::Any,
+		)))
+		.add_path(config.clone())
+		.add_path(tables.join("lib.rs"));
+		assert!(heard.record(&event, &filter, &config, Some(&tables)));
+		assert_eq!(heard.take_paths(), event.paths);
+		assert!(heard.config_changed.load(Ordering::Relaxed));
+		assert!(heard.tables_changed.load(Ordering::Relaxed));
+		let event = Event::new(EventKind::Modify(notify::event::ModifyKind::Name(
+			notify::event::RenameMode::To,
+		)))
+		.add_path(root.join(".git/HEAD"));
+		assert!(heard.record(&event, &filter, &config, Some(&tables)));
+		assert!(heard.branch.switched.load(Ordering::Relaxed));
+	}
+
+	#[test]
 	fn rebuilds_for_sources_and_public_assets_only() {
 		let filter = filter(&[]);
 		assert!(filter.is_relevant(Path::new("/app/src/lib.rs")));
@@ -1758,7 +1829,7 @@ mod tests {
 		let (root, config) = workspace();
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		let watching = watch(&config, root.path(), &runtime, None).unwrap();
-		announce(root.path(), false, None);
+		say_watching(root.path());
 		drop(watching);
 	}
 

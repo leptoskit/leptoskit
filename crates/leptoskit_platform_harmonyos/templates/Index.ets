@@ -1,7 +1,7 @@
 import { NativeRequest, Runtime, RenderBatch, RiveFrame } from 'libleptoskit.so';
 import { NativePlugin, NativePlugins } from '../leptoskit/plugins';
 import { nativePlugins } from '../leptoskit/registrant';
-import { Widget, Scene, BorderEdges, assetRawfile, borderEdges, color, isItalic, textContent } from '../scene';
+import { Widget, Scene, BorderEdges, assetRawfile, borderEdges, color, isItalic, lineHeightPoints, textContent } from '../scene';
 import { displaySync } from '@kit.ArkGraphics2D';
 import { image } from '@kit.ImageKit';
 
@@ -104,18 +104,7 @@ struct NativeWidget {
 
   /** Every line's height in vp, or undefined for the font's own. */
   lineHeight(): number | undefined {
-    const height = this.node.props.line_height;
-    if (height === undefined || height === null) {
-      return undefined;
-    }
-    const relative: number | undefined = height.relative;
-    const fixed: number | undefined = height.fixed;
-    const fontSize: number = this.node.props.font_size ?? 14;
-    const points: number | undefined = relative !== undefined ? relative * fontSize : fixed;
-    if (points === undefined || !isFinite(points) || points <= 0) {
-      return undefined;
-    }
-    return points;
+    return lineHeightPoints(this.node.props.line_height, this.node.props.font_size ?? 14);
   }
 
   fontStyle(): FontStyle {
