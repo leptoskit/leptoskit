@@ -257,12 +257,7 @@ fn run_with(
 	)?;
 	// One crate for the browser and native hosts declares both sides, and
 	// each build selects its platform's feature.
-	let portable = client
-		.as_ref()
-		.and_then(|client| metadata.package(&client.name))
-		.is_some_and(|package| {
-			package.declares_feature("web") && package.declares_feature("native")
-		});
+	let portable = client_is_portable(client.as_ref(), &metadata);
 	let builds_client = matches!(
 		platform,
 		Platform::Web | Platform::Native | Platform::Extension
@@ -375,6 +370,14 @@ fn run_with(
 		server_binary,
 		services,
 	})
+}
+
+fn client_is_portable(client: Option<&ClientInfo>, metadata: &wasm::CargoMetadata) -> bool {
+	client
+		.and_then(|client| metadata.package(&client.name))
+		.is_some_and(|package| {
+			package.declares_feature("web") && package.declares_feature("native")
+		})
 }
 
 /// `leptoskit dev`'s `DevTools` hub, compiled into the clients it builds.
