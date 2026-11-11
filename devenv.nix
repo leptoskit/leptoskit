@@ -212,6 +212,7 @@ in
       };
       "lint:push" = {
         enable = true;
+        always_run = true;
         verbose = true;
         pass_filenames = false;
         name = "lint:push";
