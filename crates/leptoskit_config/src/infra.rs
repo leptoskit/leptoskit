@@ -4,12 +4,77 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// One explicit infrastructure lifecycle. Existing untagged tables retain
+/// the managed preset; a graph must declare `mode = "graph"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum InfraConfig {
+	Graph(Box<crate::deployment::InfraGraph>),
+	Managed(Box<ManagedInfraConfig>),
+}
+
+impl InfraConfig {
+	/// Validate only the selected lifecycle's settings.
+	#[must_use]
+	pub fn problem(&self) -> Option<String> {
+		match self {
+			Self::Graph(graph) => graph.problem(),
+			Self::Managed(managed) => managed.problem(),
+		}
+	}
+
+	#[must_use]
+	pub fn as_managed(&self) -> Option<&ManagedInfraConfig> {
+		match self {
+			Self::Managed(value) => Some(value),
+			Self::Graph(_) => None,
+		}
+	}
+
+	#[must_use]
+	pub fn as_managed_mut(&mut self) -> Option<&mut ManagedInfraConfig> {
+		match self {
+			Self::Managed(value) => Some(value),
+			Self::Graph(_) => None,
+		}
+	}
+
+	#[must_use]
+	pub fn into_managed(self) -> Option<ManagedInfraConfig> {
+		match self {
+			Self::Managed(value) => Some(*value),
+			Self::Graph(_) => None,
+		}
+	}
+
+	#[must_use]
+	pub fn as_graph(&self) -> Option<&crate::deployment::InfraGraph> {
+		match self {
+			Self::Graph(value) => Some(value),
+			Self::Managed(_) => None,
+		}
+	}
+}
+
+impl From<ManagedInfraConfig> for InfraConfig {
+	fn from(value: ManagedInfraConfig) -> Self {
+		Self::Managed(Box::new(value))
+	}
+}
+
+impl From<crate::deployment::InfraGraph> for InfraConfig {
+	fn from(value: crate::deployment::InfraGraph) -> Self {
+		Self::Graph(Box::new(value))
+	}
+}
+
 /// Infrastructure intent. Credentials are supplied by the operator's
 /// environment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct InfraConfig {
+pub struct ManagedInfraConfig {
 	/// Provision hosts and edge routing for an independently supervised
 	/// service. Omitting this keeps the managed Postgres/Kamal release preset.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,7 +407,7 @@ pub struct InfraState {
 	pub region: String,
 }
 
-impl InfraConfig {
+impl ManagedInfraConfig {
 	fn ssh_problem(&self) -> Option<String> {
 		if self.ssh_key_ids.is_empty() || self.ssh_cidrs.is_empty() {
 			return Some("infra requires existing ssh_key_ids and administrator ssh_cidrs".into());

@@ -211,8 +211,7 @@ fn within(root: &Path, path: &Path) -> Result<PathBuf> {
 
 fn variables(application: &Application, config: &LeptoskitConfig) -> Result<()> {
 	let infrastructure = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.context("workspace release needs managed infrastructure")?;
 	let allowed: BTreeSet<&str> = infrastructure
 		.secrets

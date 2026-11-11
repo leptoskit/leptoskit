@@ -3601,6 +3601,29 @@ fn amending_cannot_forget_a_pack_introduced_in_the_current_draft() {
 }
 
 #[test]
+fn consolidating_reports_lost_pack_before_table_drift_without_writes() {
+	let root = tempfile::tempdir().unwrap();
+	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);
+	let baseline = sample_pack(&users(project.dialect(), Vec::new()));
+	let created = create(&project, "users", &baseline, &options(), &mut RequireHints).unwrap();
+	let registry = std::fs::read(project.migrations_dir().join("registry.txt")).unwrap();
+	let snapshot = std::fs::read(created.directory.join("schema.json")).unwrap();
+	let removed = Schema::new(project.dialect(), Vec::new());
+	let error = super::consolidate(&project, &removed, &[], &[], &mut RequireHints)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("--drop-pack sample"), "{error}");
+	assert_eq!(
+		std::fs::read(project.migrations_dir().join("registry.txt")).unwrap(),
+		registry
+	);
+	assert_eq!(
+		std::fs::read(created.directory.join("schema.json")).unwrap(),
+		snapshot
+	);
+}
+
+#[test]
 fn consolidating_checks_the_release_and_latest_membership_together() {
 	let root = tempfile::tempdir().unwrap();
 	let project = project(root.path(), leptoskit_config::DbDialect::Sqlite);

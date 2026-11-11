@@ -15,6 +15,9 @@ use anyhow::Context;
 use anyhow::Result;
 use leptoskit_config::LeptoskitConfig;
 
+mod layout;
+mod source;
+
 /// The screens, relative to the client crate's `src/`, and whether each is
 /// only for `--idp`. The templates hold every optional part; [`render`]
 /// leaves out the ones a [`Mode`] doesn't write.
@@ -220,7 +223,23 @@ pub(crate) fn server_module(config: &str, idp: bool) -> String {
 		idp,
 		..Mode::default()
 	};
-	render(include_str!("auth_pages/templates/server.rs"), mode).replace("__CONFIG_PATH__", config)
+	render(include_str!("auth_pages/templates/server.rs"), mode)
+		.replace("__CONFIG_PATH__", &config.escape_default().to_string())
+}
+
+/// Embed configuration relative to the actual binary target and app directory.
+fn server_module_at(config: &str, root: &str, idp: bool) -> String {
+	let source = server_module(config, idp);
+	if root == "." {
+		return source;
+	}
+	source.replace(
+		"env!(\"CARGO_MANIFEST_DIR\")",
+		&format!(
+			"concat!(env!(\"CARGO_MANIFEST_DIR\"), {:?})",
+			format!("/{root}")
+		),
+	)
 }
 
 /// The same file as every other mode writes it, where it differs: a page
@@ -314,23 +333,33 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 			.as_ref()
 			.is_some_and(|auth| auth.passwords.enabled),
 	};
-	let client = client_dir(root, config)?;
-	let source = client.join("src");
-	let entry = ["lib.rs", "main.rs"]
-		.into_iter()
-		.map(|file| source.join(file))
-		.find(|path| path.is_file())
-		.with_context(|| {
-			format!(
-				"{} has no src/lib.rs or src/main.rs",
-				relative(root, &client)
-			)
-		})?;
+	let root = std::fs::canonicalize(root).context("resolve auth project directory")?;
+	let root = root.as_path();
+	let layout = layout::Layout::read(
+		root,
+		&config.app.name,
+		config.build.client_package.as_deref(),
+		config.build.backend,
+	)?;
+	check_feature_destination(root, &layout.client.manifest)?;
+	if config.db.is_some()
+		&& let Some(server) = &layout.server
+	{
+		check_feature_destination(root, &server.manifest)?;
+	}
+	let client = layout
+		.client
+		.manifest
+		.parent()
+		.context("client manifest directory")?;
+	let entry = &layout.client.entry;
+	let source = entry.parent().context("client target directory")?;
 	anyhow::ensure!(
-		!source.join("auth.rs").exists(),
+		!source.join("auth.rs").try_exists()?,
 		"{} already exists; the screens go in src/auth/, so rename it first",
 		relative(root, &source.join("auth.rs"))
 	);
+	let client_source = source::preflight(&layout, config.db.is_some())?;
 
 	for (path, contents) in pages(mode) {
 		let file = Template {
@@ -341,7 +370,7 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 		write_template(root, &source.join(path), &file, force, &mut report)?;
 	}
 
-	declare_module(root, &entry, "auth", &mut report)?;
+	declare_module(root, entry, "auth", &mut report)?;
 	let features: Vec<&str> = CLIENT_FEATURES
 		.into_iter()
 		.chain(idp.then_some("idp"))
@@ -361,14 +390,14 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 	}
 
 	let granted = native_plugins(root, &mut report)?;
-	let wired = std::fs::read_to_string(&entry)?.contains("auth::provide(");
+	let wired = client_source.calls.provide && client_source.calls.gate;
 
 	if !wired {
 		report.next.push(format!(
 			"In {}, call `leptoskit::query::QueryClient::new().provide()` and then \
 			 `auth::provide()` where the app starts, in its reactive owner, and show \
 			 `auth::screens().gate(|| home)` in front of the screens that need someone signed in.",
-			relative(root, &entry)
+			relative(root, entry)
 		));
 		report.next.push(if granted {
 			"A native app also calls `leptoskit::auth::client::configure(ClientConfig::new().\
@@ -383,16 +412,16 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 		});
 	}
 
-	if idp && !std::fs::read_to_string(&entry)?.contains("navigate_with(") {
+	if idp && !client_source.calls.navigate {
 		report.next.push(format!(
 			"In {}, after `auth::provide()`, say how the screens leave the app, such as back to \
 			 an app asking for consent: `auth::screens().navigate_with(|address| ...)`, with \
 			 `window.location.assign(address)` in the browser. The screens' module docs show how.",
-			relative(root, &entry)
+			relative(root, entry)
 		));
 	}
 
-	server(root, config, &client, idp, force, &mut report)?;
+	server(root, config, &layout, idp, force, &mut report)?;
 	Ok(report)
 }
 
@@ -401,18 +430,18 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 fn server(
 	root: &Path,
 	config: &LeptoskitConfig,
-	client: &Path,
+	layout: &layout::Layout,
 	idp: bool,
 	force: bool,
 	report: &mut Report,
 ) -> Result<()> {
-	let manifest = root.join("Cargo.toml");
-	let main = root.join("src/main.rs");
-
-	if !main.is_file() || !has_feature(&manifest, "leptoskit", "server")? {
+	let Some(server) = &layout.server else {
 		return Ok(());
-	}
-
+	};
+	let manifest = &server.manifest;
+	let main = &server.entry;
+	let source = main.parent().context("server target directory")?;
+	let shown = relative(root, main);
 	if config.db.is_none() {
 		report.next.push(
 			"Sign-in keeps its accounts in your database, so the server's side wasn't added. Add \
@@ -425,22 +454,36 @@ fn server(
 
 	// A server that is also the client crate already has `src/auth/`, so the
 	// server's module takes another name.
-	let module = root.join("src/sign_in.rs");
-	let contents = server_module("../leptoskit.toml", idp);
+	let module = source.join("sign_in.rs");
+	let config_path = layout::relative(source, &root.join(leptoskit_config::CONFIG_FILE));
+	let config_path = config_path
+		.to_str()
+		.context("config path must be UTF-8")?
+		.replace(std::path::MAIN_SEPARATOR, "/");
+	let config_root = layout::relative(
+		manifest.parent().context("server manifest directory")?,
+		root,
+	);
+	let config_root = config_root
+		.to_str()
+		.context("config root must be UTF-8")?
+		.replace(std::path::MAIN_SEPARATOR, "/");
+	let render = |idp| server_module_at(&config_path, &config_root, idp);
+	let contents = render(idp);
 	let other = Mode {
 		idp: !idp,
 		..Mode::default()
 	};
 	let file = Template {
 		contents: &contents,
-		others: &[(other, server_module("../leptoskit.toml", !idp))],
+		others: &[(other, render(!idp))],
 		mode: Mode {
 			idp,
 			..Mode::default()
 		},
 	};
 	write_template(root, &module, &file, force, report)?;
-	declare_module(root, &main, "sign_in", report)?;
+	declare_module(root, main, "sign_in", report)?;
 
 	// Passwords hash on the server, so only the server's build gets them.
 	let passwords = config
@@ -448,44 +491,52 @@ fn server(
 		.as_ref()
 		.is_some_and(|auth| auth.passwords.enabled);
 
-	if client != root {
-		let features: Vec<&str> = ["auth"]
+	if layout.client.manifest == server.manifest {
+		if !has_feature(manifest, "leptoskit", "server")? {
+			report.next.push(format!(
+				"The generated server module in {shown} needs leptoskit's `server` feature. \
+				 Enable `leptoskit/server` through the Cargo feature your backend build turns on, \
+				 or use a separate backend package. Keep it out of the shared dependency's \
+				 features so browser and guest builds do not acquire server dependencies."
+			));
+		}
+		if passwords && !has_feature(manifest, "leptoskit", "auth-passwords")? {
+			report.next.push(
+				"Passwords are on in [auth.passwords]: turn on leptoskit's `auth-passwords` \
+				 feature for the server's build only (it hashes with Argon2id, which the browser \
+				 bundle doesn't need), such as through the feature your server build turns on."
+					.to_owned(),
+			);
+		}
+	} else {
+		let features: Vec<&str> = ["server", "auth"]
 			.into_iter()
 			.chain(idp.then_some("idp"))
 			.chain(passwords.then_some("auth-passwords"))
 			.collect();
-		add_features(root, &manifest, &features, report)?;
-	} else if passwords && !has_feature(&manifest, "leptoskit", "auth-passwords")? {
-		report.next.push(
-			"Passwords are on in [auth.passwords]: turn on leptoskit's `auth-passwords` feature \
-			 for the server's build only (it hashes with Argon2id, which the browser bundle \
-			 doesn't need), such as through the feature your server build turns on."
-				.to_owned(),
-		);
+		add_features(root, manifest, &features, report)?;
 	}
 
-	let main_source = std::fs::read_to_string(&main)?;
+	let main_source = source::Source::read(main)?;
 
-	if idp && !main_source.contains("sign_in::provider") {
-		report.next.push(
-			"In src/main.rs, build the provider next to the sign-in service, with your scopes and \
+	if idp && !main_source.calls.provider {
+		report.next.push(format!(
+			"In {shown}, build the provider next to the sign-in service, with your scopes and \
 			 claims: `let idp = sign_in::provider(&db, \
 			 &auth)?.scopes::<Scope>().claims::<User>().build()?;`. Merge `idp.router()` next to \
 			 `auth.router()`, and add `.layer(idp.layer())` after `.layer(auth.layer())`, so it's \
 			 outermost. Add `leptoskit_idp` after `leptoskit_auth` in `packs!`, and run \
 			 `leptoskit db migration create idp`."
-				.to_owned(),
-		);
+		));
 	}
 
-	if !main_source.contains("sign_in::service") {
-		report.next.push(
-			"In src/main.rs, build the service once the database is migrated, with your user \
-			 table: `let auth = sign_in::service::<User>(&db)?;`. Then add \
-			 `.merge(auth.router())` and `.merge(sign_in::associations()?)` to the router, and \
-			 `.layer(auth.layer())` last, so it wraps every route."
-				.to_owned(),
-		);
+	if !main_source.calls.service {
+		report.next.push(format!(
+			"In {shown}, build the service once the database is migrated, with your user table: \
+			 `let auth = sign_in::service::<User>(&db)?;`. Then add `.merge(auth.router())` and \
+			 `.merge(sign_in::associations()?)` to the router, and `.layer(auth.layer())` last, \
+			 so it wraps every route."
+		));
 		report.next.push(
 			"In the crate that declares your tables, add \
 			 `leptoskit::db::packs!(leptoskit_auth);`, key your user table by \
@@ -502,39 +553,6 @@ fn server(
 	}
 
 	Ok(())
-}
-
-/// The directory of the crate the app's interface lives in:
-/// `build.client_package`, or the root package.
-fn client_dir(root: &Path, config: &LeptoskitConfig) -> Result<PathBuf> {
-	let root_package = package_name(&root.join("Cargo.toml"))?;
-	let Some(package) = config.build.client_package.clone().or(root_package.clone()) else {
-		anyhow::bail!(
-			"there's no package at {}; set `build.client_package` in {}",
-			root.display(),
-			leptoskit_config::CONFIG_FILE
-		);
-	};
-
-	if root_package.as_deref() == Some(package.as_str()) {
-		return Ok(root.to_path_buf());
-	}
-
-	for member in workspace_members(&root.join("Cargo.toml"))?
-		.into_iter()
-		.chain([package.clone()])
-	{
-		let dir = root.join(member);
-
-		if package_name(&dir.join("Cargo.toml"))?.as_deref() == Some(package.as_str()) {
-			return Ok(dir);
-		}
-	}
-
-	anyhow::bail!(
-		"couldn't find the client package `{package}` in the workspace at {}",
-		root.display()
-	)
 }
 
 /// The routes directory, when the app uses the file router.
@@ -931,17 +949,7 @@ fn write_owned(
 /// Appends `pub mod <name>;` to a crate root that doesn't declare the module.
 fn declare_module(root: &Path, entry: &Path, name: &str, report: &mut Report) -> Result<()> {
 	let mut contents = std::fs::read_to_string(entry)?;
-	let declared = contents.lines().any(|line| {
-		let line = line.trim();
-		[
-			format!("mod {name};"),
-			format!("pub mod {name};"),
-			format!("pub(crate) mod {name};"),
-		]
-		.contains(&line.to_owned())
-	});
-
-	if declared {
+	if source::Source::read(entry)?.module(name)? {
 		return Ok(());
 	}
 
@@ -959,6 +967,19 @@ fn declare_module(root: &Path, entry: &Path, name: &str, report: &mut Report) ->
 		"updated {}: declared `{visibility}mod {name};`",
 		relative(root, entry)
 	));
+	Ok(())
+}
+
+/// Validate the dependency shape before writing any generated source.
+fn check_feature_destination(root: &Path, manifest: &Path) -> Result<()> {
+	let shown = relative(root, manifest);
+	let mut document = std::fs::read_to_string(manifest)?.parse::<toml_edit::DocumentMut>()?;
+	add_dependency_features(&mut document, "leptoskit", &[]).with_context(|| {
+		format!(
+			"{shown} needs a leptoskit entry under [dependencies] for generated auth; \
+			 target-specific dependency tables must be integrated manually"
+		)
+	})?;
 	Ok(())
 }
 
@@ -1048,41 +1069,6 @@ fn has_feature(manifest: &Path, dependency: &str, feature: &str) -> Result<bool>
 		.and_then(|dependency| dependency.get("features"))
 		.and_then(toml::Value::as_array)
 		.is_some_and(|features| features.iter().any(|value| value.as_str() == Some(feature))))
-}
-
-/// The `[package]` name in a manifest, if it has one.
-fn package_name(manifest: &Path) -> Result<Option<String>> {
-	let Ok(contents) = std::fs::read_to_string(manifest) else {
-		return Ok(None);
-	};
-	let document: toml::Table = toml::from_str(&contents)
-		.with_context(|| format!("could not parse {}", manifest.display()))?;
-	Ok(document
-		.get("package")
-		.and_then(|package| package.get("name"))
-		.and_then(toml::Value::as_str)
-		.map(str::to_owned))
-}
-
-/// The workspace's member paths, as written.
-fn workspace_members(manifest: &Path) -> Result<Vec<String>> {
-	let Ok(contents) = std::fs::read_to_string(manifest) else {
-		return Ok(Vec::new());
-	};
-	let document: toml::Table = toml::from_str(&contents)
-		.with_context(|| format!("could not parse {}", manifest.display()))?;
-	Ok(document
-		.get("workspace")
-		.and_then(|workspace| workspace.get("members"))
-		.and_then(toml::Value::as_array)
-		.map(|members| {
-			members
-				.iter()
-				.filter_map(toml::Value::as_str)
-				.map(str::to_owned)
-				.collect()
-		})
-		.unwrap_or_default())
 }
 
 /// `path` relative to the project root, with `/` separators.

@@ -161,8 +161,7 @@ pub fn inspect(manifest: &Path) -> Result<Report> {
 			.with_context(|| format!("applications.{name}: invalid application configuration"))?;
 		check_identities(&mut identities, &name, &config)?;
 		let image = config
-			.infra
-			.as_ref()
+			.managed_infra()
 			.map(|infra| infra.image.clone())
 			.filter(|image| !image.is_empty());
 		applications.insert(
@@ -221,9 +220,13 @@ fn check_identities(
 	name: &str,
 	config: &LeptoskitConfig,
 ) -> Result<()> {
-	let Some(infra) = &config.infra else {
+	let Some(declaration) = &config.infra else {
 		return Ok(());
 	};
+	let infra = declaration.as_managed().context(
+		"workspace app identity validation currently requires the managed preset; nested \
+		 deployment graphs need graph identity validation",
+	)?;
 	for (namespace, field, value) in [
 		("infra.name", "infra.name", infra.name.clone()),
 		("infra.image", "infra.image", infra.image.clone()),

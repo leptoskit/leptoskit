@@ -114,7 +114,8 @@ expression: spec.public().to_openapi()
                     "items": {
                       "type": "string"
                     },
-                    "type": "array"
+                    "type": "array",
+                    "x-leptoskit-server-default": true
                   },
                   "title": {
                     "description": "What needs doing.",

@@ -25,8 +25,16 @@ log = { workspace = true, features = ["std"] }
 wasm-bindgen = { workspace = true, optional = true }
 web-sys = { workspace = true, optional = true, features = ["console"] }
 
-[dev-dependencies]
-leptoskit_log = { workspace = true, features = ["testing"] }
+# Integration tests use the optional capture sink. Do not enable it through
+# a self dev-dependency: packaging would resolve this unpublished version
+# from the registry instead of the package being prepared.
+[[test]]
+name = "capture"
+required-features = ["testing"]
+
+[[test]]
+name = "panic"
+required-features = ["testing"]
 
 [build-dependencies]
 cc = { workspace = true }

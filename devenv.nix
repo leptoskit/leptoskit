@@ -212,6 +212,7 @@ in
       };
       "lint:push" = {
         enable = true;
+        always_run = true;
         verbose = true;
         pass_filenames = false;
         name = "lint:push";
@@ -550,6 +551,7 @@ in
         set -euo pipefail
         test:cargo
         test:sdk
+        test:projects
         test:harmonyos
         test:docs
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
@@ -565,9 +567,22 @@ in
       description = "Run every generated SDK against the live server; missing tools fail.";
       binary = "bash";
     };
+    "test:projects" = {
+      exec = ''
+        exec bash "${currentDir}/setup/scripts/project-acceptance.sh"
+      '';
+      description = "Run required generated DB, auth and universal app journeys without toolchain skips.";
+      binary = "bash";
+    };
     "test:cargo" = {
       exec = ''
         set -euo pipefail
+        # Restored compiled outputs do not imply that registry archives are
+        # cached. trybuild resolves its fixture workspaces offline, so prepare
+        # the locked host dependencies before starting any tests.
+        test_host="$(rustc -vV | sed -n 's/^host: //p')"
+        test -n "$test_host"
+        cargo fetch --locked --target "$test_host"
         # file_routes and the DevTools interface are their own workspaces (the
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.

@@ -28,14 +28,18 @@ For an app you already have, generate the screens:
 leptoskit generate auth
 ```
 
-It writes three screens into your app's `src/auth/` folder: a sign-in screen, with an emailed code, a passkey button and the email field's passkey suggestions, a "Continue with …" button for each provider, and the second step when an account has one; a "where you're signed in" screen; and a security screen for passkeys, an authenticator app with its QR code, connected accounts, and merging accounts. It also adds what they need:
+It writes three screens into an `auth/` folder beside your client crate's root source file (normally `src/auth/`): a sign-in screen, with an emailed code, a passkey button and the email field's passkey suggestions, a "Continue with …" button for each provider, and the second step when an account has one; a "where you're signed in" screen; and a security screen for passkeys, an authenticator app with its QR code, connected accounts, and merging accounts. It also adds what they need:
 
 - the `[auth]` table in `leptoskit.toml`, and the `auth`, `leptos`, and `query` features of `leptoskit`;
 - `/sign-in`, `/devices`, and `/security` routes, if your app uses the [file router](10-file-routes.md);
-- a `src/sign_in.rs` module that builds the service, if your app has a server and a database;
+- a `sign_in.rs` module beside the backend binary's root source file, if your app has a server and a database;
 - for an app with iOS, Android, or macOS hosts, the `http` and `secure-store` plugins those hosts need, granted in `leptoskit.toml` and added to each host's `Cargo.toml`.
 
+Run the command from the directory containing `leptoskit.toml`. In a Cargo workspace it follows `build.client_package` and `app.name`, including globbed members, inherited dependencies, and custom `[lib]` or `[[bin]]` paths. The configuration can live in a nested app directory without its own `Cargo.toml`; the generated server still embeds that app's configuration. Set `build.backend = false` when sign-in is served elsewhere. If multiple packages could be the client, name one with `build.client_package` before generating.
+
 Then it lists the few lines it can't add for you, such as putting the sign-in screen in front of your app. Running it again changes nothing, and a screen you've edited is kept unless you pass `--force`. With `--idp`, it also writes the screens for [other apps signing in with yours](25-sign-in-with-your-app.md#build-the-consent-page).
+
+Existing `mod auth;` and `mod sign_in;` declarations keep their formatting and visibility. An inline module or a `#[path]` override needs manual integration; the command stops before writing files, including with `--force`. Its setup reminders look for direct calls in the crate roots. Comments, example strings, and function references do not count. Calls hidden behind macros, aliases, or helper modules can still need a manual review. Finding calls does not prove that your startup path runs them, that the router serves sign-in, or that your database policies protect each account's rows. Check those separately on every platform you ship.
 
 The screens are built from leptoskit's own components and Tailwind classes, on the [sign-in client](#build-the-sign-in-screen), so the same files build and render in the browser and in native apps on every platform. They show a message while they load, show the server's error messages, and after too many attempts disable the button until the server will take another. They're yours to restyle.
 

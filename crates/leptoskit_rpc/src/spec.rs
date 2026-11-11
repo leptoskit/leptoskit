@@ -43,6 +43,7 @@ pub use leptoskit_rpc_codegen::ApiParam;
 pub use leptoskit_rpc_codegen::ApiSpec;
 pub use leptoskit_rpc_codegen::HttpInput;
 pub use leptoskit_rpc_codegen::HttpOutput;
+use leptoskit_rpc_codegen::spec::SERVER_DEFAULT_SCHEMA_KEY;
 pub use leptoskit_rpc_codegen::spec::SPEC_DESCRIPTION_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_OUT_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_SERVERS_ENV;
@@ -472,7 +473,13 @@ pub fn collect_with_channels(
 				.params
 				.iter()
 				.map(|param| {
-					let schema = (param.schema)(&mut generator).to_value();
+					let mut schema = (param.schema)(&mut generator);
+					if !param.required {
+						schema
+							.ensure_object()
+							.insert(SERVER_DEFAULT_SCHEMA_KEY.to_owned(), true.into());
+					}
+					let schema = schema.to_value();
 					// serde reads a missing `Option` argument as `None`, so a
 					// nullable argument may be omitted as well as sent as null.
 					let required = param.required && !schema_is_nullable(&schema);

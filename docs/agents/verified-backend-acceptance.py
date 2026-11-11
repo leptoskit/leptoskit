@@ -2,9 +2,12 @@
 
 Uses a signed commit of the committed fixture tree and invocation-only local
 Git transport mapping. Tests full reproduction mechanics, not public provenance.
+The fixture exports one query and one channel; RPC baselines are derived from
+the actual candidate export. This is structural declaration evidence only.
 No checkout, registry publication, deployment, or shared Git config changes.
 """
 from contextlib import nullcontext
+import copy
 import hashlib
 import json
 import os
@@ -25,49 +28,92 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def check_rpc_compatibility(package, temp, env):
-    """Compare the real image export, including rejection after a baseline rehash.
+def check_rpc_compatibility(package, descriptor, temp, env):
+    """Compare the real reproducible export with baselines built from its bytes.
 
-    The tiny fixture declares an empty API. This tests the packaging boundary;
-    nonempty function/channel comparisons and operator policy have separate tests.
+    Bootstrap packaging uses an empty prior contract only to observe the
+    candidate's exact export. The successful checked packaging then uses that
+    observed export as its own pinned baseline. Every later baseline is
+    independently self-consistent: a removed function, a changed function
+    result, a removed channel, or a changed channel message must still fail.
+    This is structural declaration evidence, not endpoint behavior.
     """
+    bootstrap = json.loads(descriptor.read_text())
+    assert bootstrap["format_version"] == 3
+    bootstrap_contract = bootstrap["rpc_contract"]
+    exported_text = bootstrap_contract["compatibility"]["checked"]["specification"]
+    exported_bytes = exported_text.encode()
+    assert digest(exported_bytes) == bootstrap_contract["sha256"]
+
+    exported = json.loads(exported_text)
+    assert exported["leptoskit_rpc_spec"] == 3
+    assert [function["name"] for function in exported["functions"]] == ["list_items"]
+    assert [channel["name"] for channel in exported["channels"]] == ["updates"]
+    assert exported["functions"][0]["output_schema"]["type"] == "array"
+    assert exported["channels"][0]["message_schema"] == {"type": "string"}
+
     baseline = temp / "rpc-baseline.json"
-    baseline.write_text(json.dumps(dict(leptoskit_rpc_spec=3, title="published", version="1", functions=[])))
-    baseline_bytes = baseline.read_bytes()
-    pin = digest(baseline_bytes)
+    baseline.write_bytes(exported_bytes)
+    pin = digest(exported_bytes)
     checked = package + ["--rpc-baseline", str(baseline), "--rpc-baseline-sha256", pin]
-    descriptor = temp / "rpc-checked.json"
-    run(*checked, "--out", str(descriptor), env=env)
-    evidence = json.loads(descriptor.read_text())
+    checked_descriptor = temp / "rpc-checked.json"
+    run(*checked, "--out", str(checked_descriptor), env=env)
+    evidence = json.loads(checked_descriptor.read_text())
     assert evidence["format_version"] == 3
 
     contract = evidence["rpc_contract"]
     compatibility = contract["compatibility"]["checked"]
     assert compatibility["algorithm"] == "leptoskit-rpc-structural-v1"
+    assert compatibility["specification"].encode() == exported_bytes
     assert digest(compatibility["specification"].encode()) == contract["sha256"]
-    assert compatibility["baselines"] == [dict(sha256=pin, specification=baseline_bytes.decode())]
+    assert compatibility["baselines"] == [dict(sha256=pin, specification=exported_text)]
     run(*checked, "--reuse-existing", "--out", str(temp / "rpc-reuse.json"), env=env)
 
-    # Changing the file cannot keep its original independent pin.
-    baseline.write_bytes(baseline_bytes + b" ")
-    failed = temp / "rpc-replaced.json"
-    run(*checked, "--out", str(failed), env=env, success=False)
-    assert not failed.exists()
+    def rejected(name, changed, message):
+        path = temp / f"rpc-{name}.json"
+        path.write_text(json.dumps(changed, separators=(",", ":")))
+        attempted = package + ["--rpc-baseline", str(path), "--rpc-baseline-sha256", digest(path.read_bytes())]
+        failed = temp / f"rpc-{name}-failed.json"
+        output = run(*attempted, "--reuse-existing", "--out", str(failed), env=env, success=False)
+        assert "not structurally compatible" in output and message in output, output
+        assert not failed.exists()
 
-    # A previously supported endpoint is absent from this actual executable.
-    # Even a self-consistent baseline pin must fail the comparison.
-    prior = json.loads((root / "crates/leptoskit_cli/tests/fixtures/fns_spec.json").read_text())
-    baseline.write_text(json.dumps(prior))
-    incompatible = checked.copy()
-    incompatible[incompatible.index("--rpc-baseline-sha256") + 1] = digest(baseline.read_bytes())
-    failed = temp / "rpc-incompatible.json"
-    run(*incompatible, "--reuse-existing", "--out", str(failed), env=env, success=False)
+    def changed_copy(change):
+        changed = copy.deepcopy(exported)
+        change(changed)
+        return changed
+
+    def legacy_function(spec):
+        spec["functions"].append(dict(spec["functions"][0], name="legacy_list", struct_name="LegacyList", path="/api/legacy_list", docs="Previously published."))
+
+    def changed_function(spec):
+        spec["functions"][0]["output_schema"] = {"type": "string"}
+
+    def legacy_channel(spec):
+        spec["channels"].append(dict(spec["channels"][0], name="legacy_updates"))
+
+    def changed_channel(spec):
+        spec["channels"][0]["message_schema"] = {"type": "integer"}
+
+    # Each self-consistent pin still fails when the prior contract is missing
+    # or changed in a way an installed client would observe.
+    rejected("removed-function", changed_copy(legacy_function), "removed `legacy_list`")
+    rejected("changed-function", changed_copy(changed_function), "`list_items` result schema changed")
+    rejected("removed-channel", changed_copy(legacy_channel), "removed channel `legacy_updates`")
+    rejected("changed-channel", changed_copy(changed_channel), "channel `updates` messages schema changed")
+
+    # Changing the file cannot keep its original independent pin.
+    baseline.write_bytes(exported_bytes + b" ")
+    failed = temp / "rpc-replaced.json"
+    output = run(*checked, "--out", str(failed), env=env, success=False)
+    assert "differs from independently selected SHA-256" in output, output
     assert not failed.exists()
-    baseline.write_bytes(baseline_bytes)
+    baseline.write_bytes(exported_bytes)
 
     failed = temp / "rpc-no-api.json"
     run(*checked, "--no-rpc", "--out", str(failed), env=env, success=False)
     assert not failed.exists()
+    descriptor = checked_descriptor
 
     # The exact checked contract bytes enter the existing approval domain.
     key = temp / "rpc-reviewer.key"
@@ -120,9 +166,13 @@ with (nullcontext(evidence_dir) if evidence_dir else tempfile.TemporaryDirectory
     run(cli, "verify", "reproduce", *common, env=env)
     tag = f"localhost/a04-acceptance:{os.getpid()}"
     descriptor = temp / "descriptor.json"
+    bootstrap = temp / "rpc-bootstrap.json"
+    bootstrap.write_text(json.dumps(dict(leptoskit_rpc_spec=3, title="bootstrap", version="1", functions=[], channels=[])))
+    bootstrap_pin = digest(bootstrap.read_bytes())
+    bootstrap_args = ["--rpc-baseline", str(bootstrap), "--rpc-baseline-sha256", bootstrap_pin]
     package = [cli, "infra", "build-verified", *common, "--runtime-image", runtime, "--runtime-config-sha256", runtime_pin, "--tag", tag]
     try:
-        run(*package, "--out", str(descriptor), env=env)
+        run(*package, *bootstrap_args, "--out", str(descriptor), env=env)
         print(descriptor.read_text())
         evidence = json.loads(descriptor.read_text())
         assert evidence["executable_sha256"] == digest((out / "bundle/artifacts/backend").read_bytes())
@@ -135,8 +185,8 @@ with (nullcontext(evidence_dir) if evidence_dir else tempfile.TemporaryDirectory
             print("independent extracted executable SHA-256", digest(extracted.read_bytes()))
         finally:
             run("podman", "rm", container)
-        run(*package, "--reuse-existing", "--out", str(temp / "reuse.json"), env=env)
-        check_rpc_compatibility(package, temp, env)
+        run(*package, *bootstrap_args, "--reuse-existing", "--out", str(temp / "reuse.json"), env=env)
+        check_rpc_compatibility(package, descriptor, temp, env)
 
         for relative in ["artifacts/backend", "source/src/main.rs", "source/migrations/registry.txt", "source/leptoskit.toml", "build.json"]:
             path = out / "bundle" / relative

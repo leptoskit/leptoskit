@@ -12,7 +12,10 @@ pub fn run(url: &str, root: &Path, data: &Path) -> Result<()> {
 	let url = client::origin(url)?;
 	let root = root.canonicalize()?;
 	let config = LeptoskitConfig::load_from(&root)?;
-	let infra = config.infra.context("worker needs [infra]")?;
+	let infra = config
+		.infra
+		.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+		.context("worker requires the managed application infrastructure preset")?;
 	ensure!(
 		infra.hosted_state,
 		"set infra.hosted_state=true for the hosted worker; migrate existing state explicitly \
@@ -188,7 +191,7 @@ async fn with_state(
 }
 
 fn check_managed_policy(
-	infra: &leptoskit_config::infra::InfraConfig,
+	infra: &leptoskit_config::infra::ManagedInfraConfig,
 	ownership: &Value,
 ) -> Result<()> {
 	if ownership == "leptoskit_digitalocean" {

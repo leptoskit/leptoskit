@@ -148,11 +148,18 @@ jobs:
           monochange step validate
 
   # Resolve the tag once in validate, then test and build that exact commit.
-  # Every publication side effect depends on this gate through devtools-ui.
+  # Every publication side effect depends on both acceptance gates through devtools-ui.
   sdk-acceptance:
     name: verify generated SDKs before publication
     needs: validate
     uses: ./.github/workflows/sdk-acceptance.yml
+    with:
+      revision: ${{ needs.validate.outputs.revision }}
+
+  project-acceptance:
+    name: verify generated projects before publication
+    needs: validate
+    uses: ./.github/workflows/project-acceptance.yml
     with:
       revision: ${{ needs.validate.outputs.revision }}
 
@@ -161,7 +168,7 @@ jobs:
   # the hash before serving it, so the interface and the CLI that fetches it always match.
   devtools-ui:
     name: build the DevTools interface
-    needs: [validate, sdk-acceptance]
+    needs: [validate, sdk-acceptance, project-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -437,25 +444,15 @@ jobs:
             fi
           done
 
-  # A registry publish is not reversible, and a version whose binaries failed to build or attest
-  # should not reach crates.io either: the crates would advertise an install path that is not
-  # there yet. So this waits for the assets, mirroring how pina and monochange order their
-  # publishes.
-  publish-crates:
-    name: publish crates
-    needs: [validate, attest-assets, devtools-ui]
-    if: inputs.dry_run != true
+  # Package and consumer checks run during dry runs too, without publishing
+  # credentials or the publisher environment. Both jobs use the validated SHA.
+  validate-crates:
+    name: validate packaged crates and consumers
+    needs: [validate, devtools-ui]
     runs-on: ubuntu-latest
-    # Verifying that every crate builds from its package, cold, takes well over the forty minutes
-    # the old dozen crates needed.
     timeout-minutes: 180
-    # The registry-side trusted-publisher enrollment names this environment, so the OIDC identity
-    # the job presents has to carry it: crates.io rejects a claim from a workflow that matches
-    # everything except the environment.
-    environment: publisher
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -466,7 +463,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # A publishing job never restores a cache that pull requests could have written, so the
+          # Package validation never restores a cache that pull requests could have written, so the
           # package verification below builds cold.
           lookup-only: true
 
@@ -516,6 +513,83 @@ jobs:
 
           cargo package --workspace --locked --allow-dirty "${excludes[@]}"
 
+      - name: check independent consumers of the packaged crates
+        id: packaged-consumers
+        # These fixtures resolve only the packaged payloads, in separate workspaces
+        # outside this checkout. Default package builds cannot cover the feature
+        # combinations used by browser, guest, database and auth consumers.
+        run: |
+          set -euo pipefail
+          python3 setup/scripts/packaged-consumers.py \
+            --archives "${CARGO_TARGET_DIR:-target}/package" \
+            --output "$RUNNER_TEMP/packaged-consumers"
+
+      - name: retain packaged consumer evidence
+        if: always() && steps.packaged-consumers.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packaged-consumer-evidence
+          path: |
+            ${{ runner.temp }}/packaged-consumers/acceptance.json
+            ${{ runner.temp }}/packaged-consumers/*/metadata.json
+            ${{ runner.temp }}/packaged-consumers/*/metadata.log
+            ${{ runner.temp }}/packaged-consumers/*/resolve.log
+            ${{ runner.temp }}/packaged-consumers/*/check.log
+            ${{ runner.temp }}/packaged-consumers/*/Cargo.lock
+          if-no-files-found: warn
+
+  # The registry job starts only after the exact revision passes package,
+  # consumer, binary and attestation gates. Repackaging must reproduce the
+  # tested archive hashes before this job requests a registry credential.
+  publish-crates:
+    name: publish crates
+    needs: [validate, attest-assets, devtools-ui, validate-crates]
+    if: inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: publisher
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+
+      - name: restore the validated interface hash
+        env:
+          SHA256: ${{ needs.devtools-ui.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SHA256"
+          echo "$SHA256" > crates/leptoskit_cli/devtools-ui.sha256
+
+      - name: download consumer acceptance evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packaged-consumer-evidence
+          path: ${{ runner.temp }}/consumer-evidence
+
+      - name: require the exact tested package archives
+        run: |
+          set -euo pipefail
+          mapfile -t unpublished < <(
+            cargo metadata --no-deps --format-version 1 \
+              | jq -r '.packages[] | select(.publish == []) | .name'
+          )
+          excludes=()
+          for package in "${unpublished[@]}"; do
+            excludes+=("--exclude" "$package")
+          done
+          # validate-crates already compiled the packages and consumers.
+          cargo package --workspace --locked --allow-dirty --no-verify "${excludes[@]}"
+          python3 setup/scripts/packaged-consumers.py \
+            --archives "${CARGO_TARGET_DIR:-target}/package" \
+            --verify-report "$RUNNER_TEMP/consumer-evidence/acceptance.json"
+
       - name: request a crates.io credential via OIDC
         id: oidc
         # A crate that is not yet enrolled with a trusted publisher makes this fail, and that is not
@@ -552,7 +626,7 @@ jobs:
       - name: publish in dependency order
         # `cargo publish --workspace` publishes every crate that is not `publish = false`, each
         # after the crates it depends on, and waits for each to reach the index before the next.
-        # `--no-verify` skips a second build: the step above already built every package.
+        # `--no-verify` skips another build: validate-crates built the exact checked archives.
         # A hand-written list here fell behind the workspace: crates depended on crates it never
         # published, and crates.io refuses those.
         env:

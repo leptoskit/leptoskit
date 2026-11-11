@@ -22,12 +22,15 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod assets;
+pub mod deployment;
 pub mod extension;
+pub mod graph;
 pub mod infra;
 pub mod migration;
 pub mod publish;
 #[cfg(feature = "schema")]
 pub mod schema;
+
 pub mod services;
 pub mod workspace;
 
@@ -122,6 +125,12 @@ pub struct LeptoskitConfig {
 	/// its own port, data, and operations.
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	pub services: BTreeMap<String, ServiceConfig>,
+	/// Named, trusted build recipes for independently published outputs.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub artifacts: BTreeMap<String, deployment::Artifact>,
+	/// Independently routed and released frontend outputs.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub frontends: BTreeMap<String, deployment::Frontend>,
 	/// How `leptoskit format` lays out markup. Omitted from serialized
 	/// configuration while it holds the defaults.
 	#[serde(skip_serializing_if = "FormatConfig::is_default")]
@@ -157,6 +166,8 @@ impl Default for LeptoskitConfig {
 			publish: PublishConfig::default(),
 			plugins: Vec::new(),
 			services: BTreeMap::new(),
+			artifacts: BTreeMap::new(),
+			frontends: BTreeMap::new(),
 			format: FormatConfig::default(),
 			lint: LintConfig::default(),
 			theme: None,
@@ -1066,6 +1077,10 @@ pub enum LintLevel {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct ServeConfig {
+	/// Environment variable through which graph releases supply a complete
+	/// loopback socket address. The backend must actually consume it.
+	#[serde(rename = "address-env", skip_serializing_if = "Option::is_none")]
+	pub address_env: Option<String>,
 	/// The bind address.
 	pub address: String,
 	/// The bind port.
@@ -1079,6 +1094,7 @@ pub struct ServeConfig {
 impl Default for ServeConfig {
 	fn default() -> Self {
 		Self {
+			address_env: None,
 			address: "127.0.0.1".to_owned(),
 			port: 3000,
 			probes: false,
@@ -3169,7 +3185,7 @@ fn is_module_name(name: &str) -> bool {
 /// points at a plugin crate compiled into the tooling. Leptos plugins —
 /// activated as cargo features on the app — are declared with `leptos = true`
 /// and forwarded to the app build.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct PluginSpec {
@@ -3189,18 +3205,6 @@ pub struct PluginSpec {
 		schemars(with = "serde_json::Map<String, serde_json::Value>")
 	)]
 	pub options: toml::Table,
-}
-
-impl Default for PluginSpec {
-	fn default() -> Self {
-		Self {
-			name: String::new(),
-			path: None,
-			leptos: false,
-			command: None,
-			options: toml::Table::new(),
-		}
-	}
 }
 
 /// Keys that moved to another table, as `(table, key, new table)`. A
@@ -3296,6 +3300,13 @@ fn package_id_problem(package_id: &str) -> Option<&'static str> {
 }
 
 impl LeptoskitConfig {
+	/// The existing managed application preset, when selected. Graph mode
+	/// never falls through to a preset with implicit Postgres or backups.
+	#[must_use]
+	pub fn managed_infra(&self) -> Option<&infra::ManagedInfraConfig> {
+		self.infra.as_ref().and_then(infra::InfraConfig::as_managed)
+	}
+
 	/// Loads and validates the configuration for the project rooted at `dir`.
 	///
 	/// # Errors
@@ -3425,7 +3436,11 @@ impl LeptoskitConfig {
 			return Err(ConfigError::InvalidAuth(problem));
 		}
 
-		if let Some(problem) = services::problem(&self.services, self.serve.port) {
+		let graph = deployment::compile(self).map_err(ConfigError::InvalidInfra)?;
+
+		if graph.is_none()
+			&& let Some(problem) = services::problem(&self.services, self.serve.port)
+		{
 			return Err(ConfigError::InvalidServices(problem));
 		}
 
@@ -3715,6 +3730,28 @@ impl LeptoskitConfig {
 			platforms: &self.app.platforms,
 			apple_team_id: self.native.apple_team_id.as_deref(),
 		})
+	}
+
+	/// Require a single application before using its build or host settings.
+	/// Graph roots describe independent units and cannot safely inherit a
+	/// single application's default Cargo targets or native host generation.
+	///
+	/// # Errors
+	/// Returns [`ConfigError::InvalidInfra`] for a deployment graph root.
+	pub fn ensure_application_root(&self) -> Result<(), ConfigError> {
+		if self
+			.infra
+			.as_ref()
+			.is_some_and(|infra| infra.as_graph().is_some())
+		{
+			return Err(ConfigError::InvalidInfra(
+				"this command operates on one application, but this is a deployment graph root; \
+				 inspect its units with `lk infra graph` or build them with `lk build --unit \
+				 <qualified-unit>`; graph dev and release dispatch are not available yet"
+					.into(),
+			));
+		}
+		Ok(())
 	}
 
 	/// Rejects a build for a destination the project has disabled.

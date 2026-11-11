@@ -265,6 +265,44 @@ fn useful_permissive_schemas_are_not_rejected() {
 }
 
 #[test]
+fn query_and_form_diagnose_free_form_json_without_rejecting_json_input() {
+	let mut spec = supported_spec();
+	spec.schemas.insert("Dynamic".to_owned(), json!(true));
+	for schema in [
+		json!(true),
+		json!({"type": "array", "items": true}),
+		json!({"type": "object", "additionalProperties": true}),
+		json!({"$ref": "#/components/schemas/Dynamic"}),
+		json!({"type": "object", "properties": {"nested": true}}),
+	] {
+		spec.functions[0].params = vec![ApiParam {
+			name: "value".to_owned(),
+			docs: String::new(),
+			schema,
+			required: true,
+		}];
+		for input in [HttpInput::Query, HttpInput::Form, HttpInput::Json] {
+			spec.functions[0].input = input.clone();
+			for target in TargetLanguage::ALL {
+				if *target == TargetLanguage::OpenApi {
+					continue;
+				}
+				let found = diagnostics(&spec, *target);
+				let losses = kinds(&found, "functions.read.params.value");
+				if input == HttpInput::Json {
+					assert!(losses.is_empty(), "{target}: {found:?}");
+				} else {
+					assert!(
+						losses.contains(&DiagnosticKind::EncodingLoss),
+						"{target}: {found:?}"
+					);
+				}
+			}
+		}
+	}
+}
+
+#[test]
 fn optional_nullable_fields_and_explicit_extra_properties_are_reported() {
 	let mut spec = supported_spec();
 	spec.schemas.get_mut("User").unwrap()["properties"]["note"] =
@@ -470,8 +508,12 @@ fn dart_channel_presence_cannot_confuse_absence_with_null() {
 }
 
 #[test]
-fn dart_null_only_and_untyped_values_preserve_form_encoding() {
-	for schema in [json!({"type": "null"}), json!(true), json!({})] {
+fn dart_null_only_inputs_are_supported_and_untyped_form_inputs_are_reported() {
+	for (schema, expected) in [
+		(json!({"type": "null"}), vec![]),
+		(json!(true), vec![DiagnosticKind::EncodingLoss]),
+		(json!({}), vec![DiagnosticKind::EncodingLoss]),
+	] {
 		let mut spec = supported_spec();
 		spec.schemas.insert("NullableAlias".into(), schema);
 		spec.functions[0].input = HttpInput::Form;
@@ -482,7 +524,10 @@ fn dart_null_only_and_untyped_values_preserve_form_encoding() {
 			schema: json!({"$ref": "#/components/schemas/NullableAlias"}),
 		}];
 		let path = format!("functions.{}.params.value", spec.functions[0].name);
-		assert_eq!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path), []);
+		assert_eq!(
+			kinds(&diagnostics(&spec, TargetLanguage::Dart), &path),
+			expected
+		);
 		spec.functions[0].input = HttpInput::Json;
 
 		assert_eq!(
@@ -493,7 +538,7 @@ fn dart_null_only_and_untyped_values_preserve_form_encoding() {
 }
 
 #[test]
-fn dart_unconstrained_collection_values_preserve_form_encoding() {
+fn dart_unconstrained_form_collections_report_encoding_loss_without_null_loss() {
 	for (schema, suffix) in [
 		(json!({"type": "array"}), "items"),
 		(
@@ -513,6 +558,13 @@ fn dart_unconstrained_collection_values_preserve_form_encoding() {
 			"functions.{}.params.values.{suffix}",
 			spec.functions[0].name
 		);
+		assert_eq!(
+			kinds(
+				&diagnostics(&spec, TargetLanguage::Dart),
+				"functions.read.params.values"
+			),
+			[DiagnosticKind::EncodingLoss]
+		);
 		assert_eq!(kinds(&diagnostics(&spec, TargetLanguage::Dart), &path), []);
 		spec.functions[0].input = HttpInput::Json;
 		assert_eq!(
@@ -520,4 +572,32 @@ fn dart_unconstrained_collection_values_preserve_form_encoding() {
 			vec![]
 		);
 	}
+}
+
+#[test]
+fn dynamic_query_diagnostics_handle_long_reference_chains_and_cycles() {
+	let mut spec = supported_spec();
+	spec.functions[0].input = HttpInput::Query;
+	spec.functions[0].params = vec![ApiParam {
+		name: "value".to_owned(),
+		docs: String::new(),
+		required: true,
+		schema: json!({"$ref": "#/components/schemas/Link0"}),
+	}];
+	for index in 0..4096 {
+		spec.schemas.insert(
+			format!("Link{index}"),
+			json!({"$ref": format!("#/components/schemas/Link{}", (index + 1) % 4096)}),
+		);
+	}
+	let path = "functions.read.params.value";
+	assert_eq!(
+		kinds(&diagnostics(&spec, TargetLanguage::TypeScript), path),
+		[]
+	);
+	spec.schemas.insert("Link4095".to_owned(), json!(true));
+	assert_eq!(
+		kinds(&diagnostics(&spec, TargetLanguage::TypeScript), path),
+		[DiagnosticKind::EncodingLoss]
+	);
 }

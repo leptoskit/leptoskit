@@ -4,7 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use leptoskit_apm::Evidence;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 
 pub(super) fn query(c: &InfraConfig) -> Result<()> {
 	let plugin = c

@@ -3,7 +3,6 @@
 //! An inventory is only integrity evidence. Only the container build path may
 //! construct a reproduced website descriptor after comparing fresh outputs.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -121,59 +120,15 @@ pub(crate) fn hash(bytes: &[u8]) -> String {
 	hex::encode(Sha256::digest(bytes))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Member {
-	Directory {
-		mode: u32,
-	},
-	File {
-		mode: u32,
-		size: u64,
-		sha256: String,
-	},
-}
-
-pub(crate) type Tree = BTreeMap<String, Member>;
-
-fn safe_path(path: &str) -> bool {
-	!path.is_empty()
-		&& !path.contains('\\')
-		&& !path.chars().any(char::is_control)
-		&& path.split('/').all(|p| !matches!(p, "" | "." | ".."))
-}
+pub(crate) use super::assets::Member;
+pub(crate) use super::assets::Tree;
+use super::assets::safe_path;
 
 /// Validate every member and its parent before checking mandatory generated
 /// assets. Parent membership prevents a flat inventory from hiding an
 /// incomplete tree.
 pub(crate) fn validate_tree(tree: &Tree, output_name: &str) -> Result<()> {
-	ensure!(
-		!tree.is_empty() && tree.len() <= 100_000,
-		"website asset tree is absent or too large"
-	);
-
-	for (path, member) in tree {
-		ensure!(safe_path(path), "unsafe website asset path");
-
-		if let Some((parent, _)) = path.rsplit_once('/') {
-			ensure!(
-				matches!(tree.get(parent), Some(Member::Directory { .. })),
-				"missing website parent directory"
-			);
-		}
-
-		match member {
-			Member::Directory { mode } => {
-				ensure!(*mode == 0o755, "website directories require mode 0755");
-			}
-			Member::File { mode, sha256, .. } => {
-				ensure!(
-					*mode == 0o644 && super::digest_is_valid(sha256),
-					"website files require mode 0644 and SHA-256"
-				);
-			}
-		}
-	}
+	super::assets::validate(tree)?;
 	for path in [
 		format!("pkg/{output_name}.js"),
 		format!("pkg/{output_name}_bg.wasm"),
@@ -186,101 +141,19 @@ pub(crate) fn validate_tree(tree: &Tree, output_name: &str) -> Result<()> {
 	Ok(())
 }
 
-fn unix_mode(metadata: &fs::Metadata) -> u32 {
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt as _;
-		metadata.permissions().mode() & 0o7777
-	}
-	#[cfg(not(unix))]
-	{
-		let _ = metadata;
-		// Missing mode metadata can never satisfy the required 0755/0644 modes.
-		0
-	}
-}
-
 pub(crate) fn tree(root: &Path, output_name: &str) -> Result<Tree> {
-	ensure!(
-		fs::symlink_metadata(root)?.is_dir(),
-		"website root must be a directory"
-	);
-	ensure!(
-		unix_mode(&fs::metadata(root)?) == 0o755,
-		"website root requires mode 0755"
-	);
-	let mut result = Tree::new();
-
-	for entry in walkdir::WalkDir::new(root).min_depth(1).follow_links(false) {
-		let entry = entry?;
-		let path = entry
-			.path()
-			.strip_prefix(root)?
-			.to_str()
-			.context("website paths must be UTF-8")?
-			.to_owned();
-		let metadata = fs::symlink_metadata(entry.path())?;
-		let mode = unix_mode(&metadata);
-		let member = if metadata.is_dir() {
-			Member::Directory { mode }
-		} else {
-			ensure!(
-				metadata.is_file(),
-				"website links and special files are unsupported"
-			);
-			let mut hasher = Sha256::new();
-			let size = std::io::copy(&mut fs::File::open(entry.path())?, &mut hasher)?;
-			Member::File {
-				mode,
-				size,
-				sha256: hex::encode(hasher.finalize()),
-			}
-		};
-
-		result.insert(path, member);
-	}
-
-	validate_tree(&result, output_name)?;
-	Ok(result)
+	let tree = super::assets::Root::open(root)?.tree(&[])?;
+	validate_tree(&tree, output_name)?;
+	Ok(tree)
 }
 
-/// Copy only inventoried members, then compare the copy, catching mutation
-/// between inventory and copying. No links, source or arbitrary build scripts.
+/// Copy exact members using the same open source root for inventory and
+/// copying. Website-specific generated JS/Wasm requirements still apply.
 pub(crate) fn copy(root: &Path, dest: &Path, output_name: &str) -> Result<Tree> {
-	let expected = tree(root, output_name)?;
-	fs::create_dir(dest)?;
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt as _;
-		fs::set_permissions(dest, fs::Permissions::from_mode(0o755))?;
-	}
-
-	for (path, member) in &expected {
-		let target = dest.join(path);
-
-		match member {
-			Member::Directory { .. } => fs::create_dir(&target)?,
-			Member::File { .. } => {
-				fs::copy(root.join(path), &target)?;
-			}
-		}
-
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::PermissionsExt as _;
-			fs::set_permissions(
-				&target,
-				fs::Permissions::from_mode(match member {
-					Member::Directory { mode } | Member::File { mode, .. } => *mode,
-				}),
-			)?;
-		}
-	}
-
-	ensure!(
-		tree(dest, output_name)? == expected,
-		"website assets changed while copying"
-	);
+	let root = super::assets::Root::open(root)?;
+	let expected = root.tree(&[])?;
+	validate_tree(&expected, output_name)?;
+	root.copy(dest, &[], &expected)?;
 	Ok(expected)
 }
 

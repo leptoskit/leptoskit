@@ -41,12 +41,16 @@ impl Connection {
 		}
 
 		let (config, root) = LeptoskitConfig::load()?;
-		let Some(infra) = config.infra else {
+		let Some(infra) = config
+			.infra
+			.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+		else {
 			return Ok(None);
 		};
 		let Some(url) = infra.control_url else {
 			return Ok(None);
 		};
+
 		let url = origin(&url)?;
 
 		let key = key(&url, &infra.name)?;
@@ -197,7 +201,10 @@ pub(super) fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
 pub fn connect(url: &str) -> Result<()> {
 	let url = origin(url)?;
 	let (config, root) = LeptoskitConfig::load()?;
-	let infra = config.infra.context("add [infra] before linking the app")?;
+	let infra = config
+		.infra
+		.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+		.context("linking requires the managed application infrastructure preset")?;
 	let connection = Connection {
 		key: key(&url, &infra.name)?,
 		url: url.clone(),

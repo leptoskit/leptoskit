@@ -72,6 +72,48 @@ pub struct BuildOutput {
 /// Runs `leptoskit build`: a native project with generated hosts is built by
 /// its platform build tools, and every other project through [`run`].
 /// `optimize` overrides `bundle.optimize` for a [`run`] build.
+pub(crate) fn command_selected(
+	release: bool,
+	platform: Option<Platform>,
+	optimize: Option<Optimize>,
+	out: Option<&str>,
+	units: &[String],
+	options: crate::native::signing::ReleaseOptions,
+) -> Result<()> {
+	let (config, root) = LeptoskitConfig::load()?;
+
+	if config
+		.infra
+		.as_ref()
+		.is_some_and(|infra| infra.as_graph().is_some())
+	{
+		anyhow::ensure!(
+			platform.is_none() && optimize.is_none(),
+			"graph builds use each unit's declared recipe; platform and optimize apply to single \
+			 applications"
+		);
+		anyhow::ensure!(
+			options == crate::native::signing::ReleaseOptions::default(),
+			"graph builds use each unit's declared recipe; signing options apply to native app \
+			 releases"
+		);
+		return crate::infra::graph::build::run(
+			&root,
+			&config,
+			units,
+			release,
+			Path::new(out.unwrap_or(".leptoskit/graph/builds")),
+		)
+		.map(drop);
+	}
+	anyhow::ensure!(
+		units.is_empty(),
+		"--unit requires a deployment graph project"
+	);
+	command(release, platform, optimize, out.unwrap_or("dist"), options)
+}
+
+/// Build one application; the CLI dispatches graph selections separately.
 pub fn command(
 	release: bool,
 	platform: Option<Platform>,
@@ -80,6 +122,7 @@ pub fn command(
 	options: crate::native::signing::ReleaseOptions,
 ) -> Result<()> {
 	let (config, root) = LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 	let platform = platform.unwrap_or(config.app.default_platform);
 	config.ensure_platform_enabled(platform)?;
 
@@ -159,6 +202,7 @@ fn run_with(
 	edit: crate::budgets::Rebuild,
 ) -> Result<BuildOutput> {
 	let (mut config, root) = LeptoskitConfig::load()?;
+	config.ensure_application_root()?;
 
 	if let Some(optimize) = optimize {
 		config.bundle.optimize = optimize;

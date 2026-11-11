@@ -328,7 +328,7 @@ pub enum Command {
 		#[command(subcommand)]
 		command: crate::game::GameCommand,
 	},
-	/// Builds the project for a platform.
+	/// Builds the application or selected deployment graph units.
 	Build {
 		/// Build in release mode.
 		#[arg(long)]
@@ -340,9 +340,14 @@ pub enum Command {
 		/// `smallest`; defaults to `bundle.optimize`. Needs `--release`.
 		#[arg(long, requires = "release")]
 		optimize: Option<leptoskit_config::Optimize>,
-		/// The output directory, relative to the project root.
-		#[arg(long, default_value = "dist")]
-		out: String,
+		/// Output directory: dist for applications, .leptoskit/graph/builds
+		/// for captured graph artifacts. Recipe output paths remain declared.
+		#[arg(long)]
+		out: Option<String>,
+		/// Graph unit to build, such as frontends.docs. Repeat for several;
+		/// omit to build all units. Unselected services are not rebuilt.
+		#[arg(long)]
+		unit: Vec<String>,
 		#[command(flatten)]
 		options: crate::native::signing::ReleaseOptions,
 	},
@@ -875,8 +880,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			platform,
 			optimize,
 			out,
+			unit,
 			options,
-		} => build::command(release, platform, optimize, &out, options),
+		} => build::command_selected(release, platform, optimize, out.as_deref(), &unit, options),
 		Command::Serve { dir, port } => serve_cmd::run(&dir, port),
 		Command::Services { json } => crate::services::command(json),
 		Command::Routes { check } => routes::command(check),

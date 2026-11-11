@@ -1,5 +1,9 @@
 # Agent and maintainer notes
 
+The [deployment graph ownership notes](deployment-graph-ownership.md) track frontend/service route, artifact and placement ownership, and the remaining complete website deployment acceptance.
+
+The [audit coverage record](audit-coverage.md) maps the platform audit findings to implemented checks, proposed fixes, and remaining acceptance work.
+
 The [management service implementation](management-service.md) records the operational single-owner service, queue, analytics storage and validation limits.
 
 The [analytics and infrastructure plugins investigation](analytics-and-infra-plugins.md) records the product research, implemented embedded tier, plugin contract and remaining observability adapters.
@@ -7,6 +11,8 @@ The [analytics and infrastructure plugins investigation](analytics-and-infra-plu
 The [workspace release graph](workspace-release-graph.md) records application boundaries, readiness and call graphs, inspection evidence, and the remaining independent-release acceptance gates.
 
 Notes for people and coding agents working on leptoskit itself. The public site in `docs/src` is for app authors; anything about how this repository is built, tested, or planned lives here or in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). Start with [`AGENTS.md`](../../AGENTS.md).
+
+The [packaged consumer acceptance](packaged-consumer-acceptance.md) checks independent browser, guest, database and auth feature sets from the exact crate payloads before publication.
 
 | File                                                                 | What it covers                                                                                                                                                                                               |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -19,6 +19,8 @@ wgpu and naga already speak `log`, so one logger shows the GPU's own records und
 
 `leptoskit_log`'s `testing` feature adds `capture::start()`, which keeps records in memory. A test binary has one logger, shared by tests running at once, so each test finds its own records by a name only it uses: a plugin name, a node id, a payload. `Records::expect` fails with every record kept, which makes a missing record easy to read.
 
+Run the crate's capture and panic integration tests with `cargo nextest run -p leptoskit_log --features testing`. The workspace's all-feature test gate also runs them. Keeping this an explicit test feature avoids a self dependency on an unpublished registry version during packaging.
+
 The tests that hold each failure path to its record:
 
 | Path                                    | Test                                                           |

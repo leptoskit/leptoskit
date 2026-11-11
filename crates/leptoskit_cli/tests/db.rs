@@ -24,6 +24,9 @@ use leptoskit_plugin_http::Request as HttpRequest;
 use leptoskit_plugin_http::protocol;
 use leptoskit_yoga::NodeId;
 
+#[path = "db/packs.rs"]
+mod packs;
+
 const TABLES: &str = r#"
 use leptoskit_db::Id;
 use leptoskit_db::table;
@@ -707,6 +710,7 @@ fn the_database_scaffold_migrates_and_serves() {
 	}
 
 	assert!(root.join("notes.sqlite3").is_file());
+	packs::generated_app_requires_explicit_removal(&root);
 }
 
 /// `leptoskit db studio` on a throwaway app: it builds the studio into the

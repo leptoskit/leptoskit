@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 236
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Generates and manages the app's `OpenTofu` infrastructure
@@ -7,6 +8,8 @@ Generates and manages the app's `OpenTofu` infrastructure
 Usage: leptoskit infra <COMMAND>
 
 Commands:
+  release         Install checked graph artifacts on trusted Linux hosts
+  graph           Prints declared unit ownership, placement and release selection as JSON. Does not build, provision, deploy or verify runtime capabilities
   build-verified  Reproduce and package a backend without rebuilding it in the image
   analytics       Queries read-only JSON evidence from one app instance, not a fleet total
   plugins         Prints the versioned capability catalog, enabled plugins and bindings as JSON
