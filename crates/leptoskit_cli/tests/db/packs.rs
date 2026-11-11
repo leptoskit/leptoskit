@@ -61,7 +61,11 @@ pub(super) fn generated_app_requires_explicit_removal(root: &Path) {
 	assert!(!rpc.builtin);
 	assert_ne!(rpc.tables, []);
 	let before = database_state(root);
-	assert_ne!(before["rows"]["notes"].as_array().unwrap().as_slice(), []);
+	let empty_rows: &[Value] = &[];
+	assert_ne!(
+		before["rows"]["notes"].as_array().unwrap().as_slice(),
+		empty_rows
+	);
 	for table in &rpc.tables {
 		assert!(before["rows"].get(table.flat()).is_some());
 	}
