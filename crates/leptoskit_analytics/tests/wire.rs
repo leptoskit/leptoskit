@@ -306,3 +306,75 @@ fn twenty_pageviews_are_far_smaller_than_posthogs_json() {
 	insta::assert_snapshot!(report);
 	assert!(gzip(&ours) / 20 < 100, "{report}");
 }
+
+#[test]
+fn repeated_interned_strings_cannot_expand_past_the_memory_budget() {
+	let entry = Entry {
+		uuid: wire::uuid_v7(1_000, [1; 10]),
+		distinct_id: "x".repeat(10_000),
+		session_id: None,
+		context: 0,
+		body: Body::Event {
+			name: "event".into(),
+			properties: vec![],
+		},
+	};
+	let encoded = wire::encode(&Batch {
+		sent_at: 1_000,
+		contexts: vec![],
+		entries: vec![entry; 100],
+	});
+	assert!(encoded.len() < 15_000);
+	let limits = wire::Limits {
+		decoded_bytes: 100_000,
+		..Default::default()
+	};
+	assert_eq!(
+		wire::decode(&encoded, &limits).unwrap_err().reason,
+		"decoded batch exceeds the memory limit"
+	);
+}
+
+#[test]
+fn property_names_also_count_towards_the_decoded_memory_budget() {
+	let batch = Batch {
+		sent_at: SENT_AT,
+		contexts: vec![],
+		entries: vec![Entry {
+			uuid: wire::uuid_v7(SENT_AT, [1; 10]),
+			distinct_id: "visitor".into(),
+			session_id: None,
+			context: 0,
+			body: Body::Event {
+				name: "event".into(),
+				properties: vec![("key".repeat(1_000), Value::Bool(true)); 100],
+			},
+		}],
+	};
+	let bytes = wire::encode(&batch);
+	assert!(
+		bytes.len() < 4_000,
+		"the dictionary stores the long key once"
+	);
+	let limits = wire::Limits {
+		decoded_bytes: 100_000,
+		..Default::default()
+	};
+	assert_eq!(
+		wire::decode(&bytes, &limits).unwrap_err().reason,
+		"decoded batch exceeds the memory limit"
+	);
+}
+
+#[test]
+fn unknown_entry_flags_are_refused() {
+	// A valid header, one interned id, no contexts, and one entry with an
+	// unassigned head bit. The decoder must reject the flag before its body.
+	let bytes = b"LKE\x01\x00\x01\x01v\x00\x01\x40";
+	assert_eq!(
+		wire::decode(bytes, &wire::Limits::default())
+			.unwrap_err()
+			.reason,
+		"unknown entry flags"
+	);
+}

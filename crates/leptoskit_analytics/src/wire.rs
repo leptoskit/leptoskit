@@ -412,6 +412,8 @@ fn put_value<'a>(out: &mut Vec<u8>, strings: &mut Strings<'a>, value: &'a Value)
 /// allocate without bound.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+	/// Maximum allocation charged for decoded strings and collections.
+	pub decoded_bytes: usize,
 	pub entries: usize,
 	pub contexts: usize,
 	pub strings: usize,
@@ -426,6 +428,7 @@ pub struct Limits {
 impl Default for Limits {
 	fn default() -> Self {
 		Self {
+			decoded_bytes: 32 << 20,
 			entries: 10_000,
 			contexts: 256,
 			strings: 65_536,
@@ -463,6 +466,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Batch, DecodeError> {
 		at: 0,
 		limits,
 		strings: Vec::new(),
+		allocated: 0,
 	};
 
 	if reader.take(3)? != MAGIC {
@@ -492,14 +496,20 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Batch, DecodeError> {
 	for _ in 0..count {
 		let start = reader.at;
 		let head = reader.byte()?;
+		if head & 0xC0 != 0 {
+			return Err(error_at(start, "unknown entry flags"));
+		}
 		let uuid: [u8; 16] = reader.take(16)?.try_into().expect("16 bytes");
 		let previous = entries.last();
 		let distinct_id = if head & SAME_DISTINCT == 0 {
 			reader.string_ref()?
 		} else {
 			previous
-				.map(|entry| entry.distinct_id.clone())
-				.ok_or_else(|| error_at(start, "the first entry can't repeat a distinct id"))?
+				.map(|entry| {
+					reader.charge(entry.distinct_id.len())?;
+					Ok(entry.distinct_id.clone())
+				})
+				.ok_or_else(|| error_at(start, "the first entry can't repeat a distinct id"))??
 		};
 		let session_id = match (head & HAS_SESSION != 0, head & SAME_SESSION != 0) {
 			(false, false) => None,
@@ -558,7 +568,9 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Batch, DecodeError> {
 					set: reader.map(0)?,
 				}
 			}
-			_ => return Err(error_at(start, "an entry kind this service doesn't know")),
+			_ => {
+				return Err(error_at(start, "an entry kind this service doesn't know"));
+			}
 		};
 
 		entries.push(Entry {
@@ -590,9 +602,30 @@ struct Reader<'a> {
 	at: usize,
 	limits: &'a Limits,
 	strings: Vec<String>,
+	allocated: usize,
 }
 
 impl<'a> Reader<'a> {
+	fn charge(&mut self, bytes: usize) -> Result<(), DecodeError> {
+		self.allocated = self
+			.allocated
+			.checked_add(bytes)
+			.filter(|total| *total <= self.limits.decoded_bytes)
+			.ok_or_else(|| self.error("decoded batch exceeds the memory limit"))?;
+		Ok(())
+	}
+
+	fn reference(&mut self, index: u64) -> Result<String, DecodeError> {
+		let index = usize::try_from(index).unwrap_or(usize::MAX);
+		let len = self
+			.strings
+			.get(index)
+			.ok_or_else(|| self.error("no such string"))?
+			.len();
+		self.charge(len)?;
+		Ok(self.strings[index].clone())
+	}
+
 	fn error(&self, reason: &'static str) -> DecodeError {
 		error_at(self.at, reason)
 	}
@@ -642,6 +675,7 @@ impl<'a> Reader<'a> {
 		if count > limit as u64 || count > remaining.max(1) {
 			return Err(error_at(start, reason));
 		}
+		self.charge((count as usize).saturating_mul(size_of::<Entry>().max(128)))?;
 		Ok(count as usize)
 	}
 
@@ -651,30 +685,26 @@ impl<'a> Reader<'a> {
 		if len > self.limits.string_bytes as u64 {
 			return Err(error_at(start, "a string longer than the limit"));
 		}
+		self.charge(len as usize)?;
 		let bytes = self.take(len as usize)?;
 		String::from_utf8(bytes.to_vec()).map_err(|_| error_at(start, "a string that isn't UTF-8"))
 	}
 
 	fn string_ref(&mut self) -> Result<String, DecodeError> {
 		let index = self.uvarint()?;
-		self.strings
-			.get(usize::try_from(index).unwrap_or(usize::MAX))
-			.cloned()
-			.ok_or_else(|| self.error("no such string"))
+		self.reference(index)
 	}
 
 	fn name(&mut self) -> Result<String, DecodeError> {
 		let code = self.uvarint()?;
 		if code % 2 == 0 {
-			RESERVED
+			let name = RESERVED
 				.get(usize::try_from(code / 2).unwrap_or(usize::MAX))
-				.map(|name| (*name).to_owned())
-				.ok_or_else(|| self.error("a reserved name this service doesn't know"))
+				.ok_or_else(|| self.error("a reserved name this service doesn't know"))?;
+			self.charge(name.len())?;
+			Ok((*name).to_owned())
 		} else {
-			self.strings
-				.get(usize::try_from(code / 2).unwrap_or(usize::MAX))
-				.cloned()
-				.ok_or_else(|| self.error("no such string"))
+			self.reference(code / 2)
 		}
 	}
 
@@ -715,7 +745,9 @@ impl<'a> Reader<'a> {
 				Value::List(items)
 			}
 			TAG_MAP => Value::Map(self.map(depth + 1)?),
-			_ => return Err(error_at(start, "a value type this service doesn't know")),
+			_ => {
+				return Err(error_at(start, "a value type this service doesn't know"));
+			}
 		})
 	}
 }
@@ -767,6 +799,7 @@ mod tests {
 				at: 0,
 				limits: &limits,
 				strings: Vec::new(),
+				allocated: 0,
 			};
 			assert_eq!(reader.uvarint().unwrap(), value);
 			assert_eq!(reader.at, out.len());
@@ -780,6 +813,7 @@ mod tests {
 				at: 0,
 				limits: &limits,
 				strings: Vec::new(),
+				allocated: 0,
 			};
 			assert_eq!(reader.ivarint().unwrap(), value);
 		}
@@ -794,6 +828,7 @@ mod tests {
 			at: 0,
 			limits: &limits,
 			strings: Vec::new(),
+			allocated: 0,
 		};
 		assert_eq!(
 			reader.uvarint().unwrap_err().reason,

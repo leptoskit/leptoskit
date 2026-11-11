@@ -433,3 +433,20 @@ async fn throughput() {
 	);
 	let _ = std::fs::remove_file(&file);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_extreme_sent_at_is_clamped_without_losing_the_request() {
+	let service = start(IngestConfig::default()).await;
+	let batch = Batch {
+		sent_at: i64::MAX,
+		contexts: vec![],
+		entries: vec![event("clock_edge", now_millis())],
+	};
+	let (status, answer, _) = send(&service, wire::encode(&batch), None, None).await;
+	assert_eq!(status, 200, "{answer}");
+	let result: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!(result.stored, 1);
+	let warnings = rows(&service.db, "SELECT reason, count FROM ingestion_warnings").await;
+	assert_eq!(text(&warnings[0][0]), "clock_clamped");
+	assert_eq!(text(&warnings[0][1]), "1");
+}

@@ -82,7 +82,7 @@ wasm_library=(
 )
 # Default features, the library only: some of their features need the host.
 wasm_default_library=(
-	hooks_guest_probe islands_example leptoskit leptoskit_auth leptoskit_codepush leptoskit_db
+	hooks_guest_probe islands_example leptoskit leptoskit_analytics leptoskit_auth leptoskit_codepush leptoskit_db
 	leptoskit_plugin_store leptoskit_tui soundboard_example
 )
 # Default features, every target: posture's `guest` feature leaves out the

@@ -345,7 +345,8 @@ fn clock_skew(sent_at: i64, received_at: Timestamp) -> TimeDelta {
 /// The client's time `millis`, corrected for `skew`, and clamped to
 /// `received_at` when it's still more than [`MAX_FUTURE`] ahead.
 fn corrected(millis: i64, skew: TimeDelta, received_at: Timestamp, clamped: &mut u32) -> Timestamp {
-	let timestamp = DateTime::<Utc>::from_timestamp_millis(millis).map(|time| time - skew);
+	let timestamp = DateTime::<Utc>::from_timestamp_millis(millis)
+		.and_then(|time| time.checked_sub_signed(skew));
 	match timestamp {
 		Some(timestamp) if timestamp <= received_at + MAX_FUTURE => timestamp,
 		_ => {
@@ -491,6 +492,22 @@ mod tests {
 		let future = received.timestamp_millis() + MAX_FUTURE.num_milliseconds() + 1;
 		assert_eq!(
 			corrected(future, TimeDelta::zero(), received, &mut clamped),
+			received
+		);
+		assert_eq!(clamped, 1);
+	}
+
+	#[test]
+	fn an_extreme_client_clock_cannot_overflow_the_timestamp() {
+		let received = at(1_000_000_000_000);
+		let mut clamped = 0;
+		assert_eq!(
+			corrected(
+				1_000,
+				clock_skew(i64::MAX, received),
+				received,
+				&mut clamped
+			),
 			received
 		);
 		assert_eq!(clamped, 1);
