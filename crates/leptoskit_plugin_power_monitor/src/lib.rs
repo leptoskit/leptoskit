@@ -14,6 +14,11 @@
 //! inhibition belongs to `leptoskit_plugin_keep_awake`. This crate covers
 //! power-source and session lifecycle events plus system idle queries.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::collections::VecDeque;
 
 use leptoskit_bridge::Bytes;
@@ -375,9 +380,6 @@ fn system_idle_time() -> Result<u32, Error> {
 }
 
 #[cfg(all(test, not(windows)))]
-// Already `const`. Android's OS thread-local backend still emits a non-const
-// init function, which this lint treats as a missing const.
-#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static IDLE_OVERRIDE: std::cell::Cell<Option<Result<u32, Error>>> =

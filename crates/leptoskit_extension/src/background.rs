@@ -307,6 +307,11 @@ pub async fn simulate(kind: &str, detail: Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+	#![allow(
+		clippy::missing_const_for_thread_local,
+		reason = "the initializer is already const; Clippy reports a false positive on Linux"
+	)]
+
 	use serde_json::json;
 
 	use super::*;
@@ -352,9 +357,6 @@ mod tests {
 		});
 	}
 
-	// Already `const`. Android's OS thread-local backend still emits a
-	// non-const init function, which this lint treats as a missing const.
-	#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 	thread_local! {
 		#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 		static CONNECT_SEEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };

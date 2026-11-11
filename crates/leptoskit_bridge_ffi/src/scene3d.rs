@@ -11,14 +11,16 @@
 //! renderers always link, but nothing attaches: [`lk_scene3d_available`]
 //! reports 0 and attaching returns null.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::cell::RefCell;
 use std::ffi::c_void;
 
 use crate::Buffer;
 
-// Already `const`. Android's OS thread-local backend still emits a non-const
-// init function, which this lint treats as a missing const.
-#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static ERROR: RefCell<String> = const { RefCell::new(String::new()) };

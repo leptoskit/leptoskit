@@ -3,6 +3,10 @@
 //! the browser API it would have called, which pins every wrapper to the
 //! right function in `chrome.*` and `browser.*`.
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
 
 use futures::executor::block_on;
 use leptoskit_extension::Background;
@@ -369,9 +373,6 @@ fn worker(worker: &Background) {
 	});
 }
 
-// Already `const`. Android's OS thread-local backend still emits a non-const
-// init function, which this lint treats as a missing const.
-#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
 	#[cfg_attr(target_os = "android", expect(clippy::missing_const_for_thread_local, reason = "Android fallback TLS: rust-clippy#13422"))]
 	static PORT_LISTENERS: std::cell::RefCell<Vec<leptoskit_extension::Listener>> =
