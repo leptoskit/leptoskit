@@ -242,6 +242,77 @@ impl GtkBackend {
 		window.present();
 		self.refresh();
 		drop(guard);
+		// GTK 4.22 marks an accessible context realized when it first assigns
+		// a bus path, even if the AT-SPI connection is not up yet, and then
+		// never registers that object. Once the window is mapped, drop each
+		// named control out of the tree and put it back so the next
+		// accessibility walk registers a live object. The explicit name is
+		// applied after GtkButton's labelled-by relation. Earlier GTK
+		// releases register the original context, so they keep it.
+		if gtk::minor_version() < 22 {
+			return window;
+		}
+
+		let context = glib::MainContext::default();
+		let deadline = std::time::Instant::now() + Duration::from_secs(2);
+
+		while !window.is_mapped() && std::time::Instant::now() < deadline {
+			while context.pending() {
+				context.iteration(false);
+			}
+
+			std::thread::sleep(Duration::from_millis(5));
+		}
+
+		let controls = self
+			.state
+			.borrow()
+			.widgets
+			.values()
+			.filter(|widget| {
+				matches!(
+					widget.kind,
+					NativeKind::Button
+						| NativeKind::Pressable
+						| NativeKind::Checkbox
+						| NativeKind::Radio
+						| NativeKind::Vector
+						| NativeKind::Switch
+				)
+			})
+			.map(|widget| {
+				(
+					widget.control.clone(),
+					widget.props.accessibility_label.clone(),
+				)
+			})
+			.collect::<Vec<_>>();
+
+		for (control, label) in &controls {
+			let parent = control.parent();
+			let next = control.next_sibling();
+
+			if let Some(parent) = parent.as_ref() {
+				control.unparent();
+				control.insert_before(parent, next.as_ref());
+			}
+
+			if let Some(label) = label.as_deref() {
+				control.reset_relation(gtk::AccessibleRelation::LabelledBy);
+				control.update_property(&[gtk::accessible::Property::Label(label)]);
+			}
+		}
+
+		while controls.iter().any(|(control, _)| !control.is_mapped())
+			&& std::time::Instant::now() < deadline
+		{
+			while context.pending() {
+				context.iteration(false);
+			}
+
+			std::thread::sleep(Duration::from_millis(5));
+		}
+
 		window
 	}
 
@@ -1151,9 +1222,12 @@ fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rt
 		_ => rtl,
 	};
 
+	// GTK 4.22 stopped mirroring `xalign` for right-to-left content, so the
+	// compensation below would pin logical start to the left edge.
+	let mirrors_xalign = gtk::minor_version() < 22;
 	EntryExt::set_alignment(
 		entry,
-		if resolved_rtl {
+		if mirrors_xalign && resolved_rtl {
 			1.0 - physical
 		} else {
 			physical
