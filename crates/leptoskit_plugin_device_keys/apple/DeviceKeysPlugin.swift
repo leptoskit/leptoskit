@@ -122,10 +122,12 @@ public final class DeviceKeysPlugin: NSObject, NativePlugin {
 
         let privateKey = unsafeDowncast(item as AnyObject, to: SecKey.self)
         var error: Unmanaged<CFError>?
-        guard let signature = SecKeyCreateSignature(
+        let signed = SecKeyCreateSignature(
             privateKey, .ecdsaSignatureMessageX962SHA256, request.message as CFData, &error
-        ) as Data? else {
-            return deviceKeysFields([1, keyStatus(for: error?.takeRetainedValue() as NSError?)])
+        )
+        guard let signature = signed as Data? else {
+            let failure = error?.takeRetainedValue() as NSError?
+            return deviceKeysFields([1, keyStatus(for: failure)])
         }
 
         return deviceKeysFields([1, KeyStatus.ok]) + lengthPrefixed(signature)
