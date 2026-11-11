@@ -740,12 +740,14 @@ pub fn bind_client(
 	// is irrelevant while iterating.
 	let optimizes = release && bundle.wasm_opt;
 	let wasm_opt_version = optimizes.then(wasm::wasm_opt_version).transpose()?;
+	let esbuild_version = optimizes.then(wasm::esbuild_version).transpose()?;
 	let fingerprint = wasm::bindgen_fingerprint(
 		&hash_bytes(&wasm),
 		release,
 		pkg_dir,
 		wasm_opt_version.as_deref(),
 		splits,
+		esbuild_version.as_deref(),
 	);
 	let [glue, module] = wasm::bindgen_outputs(pkg_dir, &client.lib_name);
 	let chunks_present = || {
@@ -787,6 +789,7 @@ pub fn bind_client(
 			.collect::<Vec<_>>()
 			.into_par_iter()
 			.try_for_each(|path| wasm::optimize(path))?;
+		wasm::minify_javascript(pkg_dir)?;
 	}
 
 	cache.record(&fingerprint);

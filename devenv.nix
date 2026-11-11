@@ -51,6 +51,7 @@ in
       dart
       deno
       dprint
+      esbuild
       geckodriver
       gh
       git

@@ -203,6 +203,7 @@ fn everything() -> Lab {
 	lab.reports("cargo", "cargo 1.90.0 (fixture)");
 	lab.rustc();
 	lab.reports("wasm-opt", "wasm-opt version 123 (fixture)");
+	lab.reports("esbuild", "0.27.2");
 	lab.reports("swift", "Swift version 6.1 (fixture)");
 	lab.reports("xcodebuild", "Xcode 18.0");
 	lab.tool(
@@ -245,6 +246,7 @@ fn every_check_passes_with_the_tools_a_full_project_needs() {
 		"✔ rustc",
 		"✔ wasm32-unknown-unknown",
 		"✔ wasm-opt",
+		"✔ esbuild",
 		"✔ project wasm-bindgen",
 		"✔ Chrome for Testing",
 		"✔ Firefox",
@@ -300,10 +302,15 @@ fn optional_tools_warn_without_failing_the_run() {
 	let output = lab.doctor(&[], &[]);
 	succeeds(&output);
 	carries(&output, "▲ wasm-opt");
+	carries(&output, "▲ esbuild");
 
 	carries(
 		&output,
 		"release builds need it unless `bundle.wasm_opt = false`",
+	);
+	carries(
+		&output,
+		"release builds minify JavaScript with it when wasm-opt runs",
 	);
 }
 
