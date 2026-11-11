@@ -228,6 +228,7 @@ jobs:
           echo "kernel=$(uname -r)" >> "$GITHUB_OUTPUT"
           echo "user=$(id -u)-$(id -g)" >> "$GITHUB_OUTPUT"
           echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - uses: $/.github/actions/ubuntu-archive
       - name: install the GTK4 dialog fixture's development libraries
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config
       - run: cargo build --locked -p leptoskit_testing --features native-ui --example native_conformance --example dialog_plugin_journey

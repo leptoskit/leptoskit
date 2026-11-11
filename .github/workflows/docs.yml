@@ -26,6 +26,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/actions/rust/**"
+      - ".github/actions/ubuntu-archive/**"
       - ".github/workflows/docs.yml"
 
   pull_request:
@@ -43,6 +44,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/actions/rust/**"
+      - ".github/actions/ubuntu-archive/**"
       - ".github/workflows/docs.yml"
 
   workflow_dispatch:
@@ -79,6 +81,8 @@ jobs:
           workspaces: |
             . -> target
             examples/file_routes -> .leptoskit/web/target
+
+      - uses: $/.github/actions/ubuntu-archive
 
       - name: install build dependencies
         run: |

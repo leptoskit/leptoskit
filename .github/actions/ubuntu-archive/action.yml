@@ -1,0 +1,16 @@
+name: Ubuntu archive
+description: Use Ubuntu's public archives instead of the hosted runner's Azure mirror
+
+runs:
+  using: composite
+  steps:
+    - name: select Ubuntu's public archives
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Jammy and Noble runners reference this list from their APT sources.
+        # Keep the suites, components and signature checks those sources define.
+        printf '%s\n' \
+          'https://archive.ubuntu.com/ubuntu' \
+          'https://security.ubuntu.com/ubuntu' \
+          | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
