@@ -24,7 +24,7 @@ import time
 try:
     Processes
 except NameError:
-    from process import Processes
+    from process import Processes, masked_dropins
 
 try:
     Instances
@@ -167,7 +167,7 @@ class Linux:
             self.command(["systemctl", "is-active", "--quiet", tunnel["unit"]])
             fragment = self.command(["systemctl", "show", "-p", "FragmentPath", "--value", tunnel["unit"]]).decode().strip()
             drops = self.command(["systemctl", "show", "-p", "DropInPaths", "--value", tunnel["unit"]]).strip()
-            require(not drops and fragment == tunnel["fragment"]
+            require(masked_dropins(drops) and fragment == tunnel["fragment"]
                     and digest(regular(fragment)[0]) == tunnel["sha256"], "tunnel runtime differs")
             require(host["trust"]["prerequisites"], "pin the configured tunnel input")
         service = pathlib.Path("/etc/systemd/system") / self.service(host)
@@ -175,7 +175,7 @@ class Linux:
         if service.exists():
             require(regular(service)[0] == self.unit(host), "existing edge service differs")
             drops = self.command(["systemctl", "show", "-p", "DropInPaths", "--value", self.service(host)]).strip()
-            require(not drops, "edge service drop-ins are unsupported")
+            require(masked_dropins(drops), "edge service drop-ins are unsupported")
         # Full TLS validation occurs under the Caddy UID before promotion.
 
     def private_preflight(self, host, system=pathlib.Path("/etc/systemd/system")):
@@ -219,7 +219,7 @@ class Linux:
             atomic(path, self.unit(host), 0o644)
         self.command(["systemctl", "daemon-reload"])
         drops = self.command(["systemctl", "show", "-p", "DropInPaths", "--value", self.service(host)]).strip()
-        require(not drops, "edge service drop-ins are unsupported")
+        require(masked_dropins(drops), "edge service drop-ins are unsupported")
 
     def owns_listener(self, pid, port):
         sockets = set()
@@ -389,7 +389,7 @@ class Linux:
             return
         require(regular(path)[0] == self.unit(host), "retiring edge service differs")
         drops = self.command(["systemctl", "show", "-p", "DropInPaths", "--value", self.service(host)]).strip()
-        require(not drops, "retiring edge service has drop-ins")
+        require(masked_dropins(drops), "retiring edge service has drop-ins")
         self.command(["systemctl", "stop", self.service(host)])
         self.command(["systemctl", "disable", self.service(host)])
 

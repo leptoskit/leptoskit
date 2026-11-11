@@ -9,6 +9,8 @@ import tempfile
 import unittest
 
 from host import Linux, Machine, canonical, digest, inventory, pointer
+from process import masked_dropins
+from unittest import mock
 
 
 class Interrupted(BaseException):
@@ -243,6 +245,57 @@ class Releases(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.machine.run({**changed, "action": "activate"})
         self.assertIsNone(self.current())
+
+
+class SystemdMasks(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(dir=os.getcwd())
+        self.addCleanup(self.directory.cleanup)
+        self.root = pathlib.Path(self.directory.name)
+        self.mask = self.root / "10-timeout-abort.conf"
+        self.mask.symlink_to("/dev/null")
+
+    def test_empty_and_protected_absolute_null_masks_are_inert(self):
+        second = self.root / "20-disabled.conf"
+        second.symlink_to("/dev/null")
+        self.assertTrue(masked_dropins(b""))
+        self.assertTrue(masked_dropins(f"{self.mask} {second}\n".encode()))
+
+    def test_active_missing_relative_and_non_null_dropins_are_rejected(self):
+        active = self.root / "active.conf"
+        active.write_text("[Service]\nUser=root\n")
+        alias = self.root / "alias.conf"
+        alias.symlink_to(active)
+        relative = self.root / "relative.conf"
+        relative.symlink_to("../../../dev/null")
+        for path in (active, alias, relative, self.root / "missing.conf", pathlib.Path("relative.conf")):
+            with self.subTest(path=path):
+                self.assertFalse(masked_dropins(str(path).encode()))
+        self.assertFalse(masked_dropins(f"{self.mask} {active}".encode()))
+        self.assertFalse(masked_dropins(b"\xff"))
+
+    def test_masks_reject_writable_or_aliased_parents_and_foreign_ownership(self):
+        self.root.chmod(0o777)
+        self.assertFalse(masked_dropins(str(self.mask).encode()))
+        self.root.chmod(0o700)
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.assertFalse(masked_dropins(str(alias / self.mask.name).encode()))
+        with mock.patch("process.os.geteuid", return_value=os.geteuid() + 1):
+            self.assertFalse(masked_dropins(str(self.mask).encode()))
+
+    def test_first_release_recovery_can_stop_a_unit_with_a_verified_mask(self):
+        runtime = Linux()
+        host = {"root": "/var/lib/leptoskit/example", "edge": {}}
+        unit = runtime.service(host)
+        (self.root / unit).write_bytes(runtime.unit(host))
+        commands = []
+        def command(args):
+            commands.append(args)
+            return str(self.mask).encode() if "DropInPaths" in args else b""
+        runtime.command = command
+        runtime.stop(host, self.root)
+        self.assertEqual(commands[-2:], [["systemctl", "stop", unit], ["systemctl", "disable", unit]])
 
 
 class ServiceLifecycle(unittest.TestCase):

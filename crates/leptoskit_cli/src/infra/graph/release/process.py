@@ -27,6 +27,27 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def masked_dropins(raw):
+    """systemd reports /dev/null masks too; only installer-owned masks are inert."""
+    try:
+        for value in raw.decode("utf-8").split():
+            path = pathlib.Path(value)
+            if not path.is_absolute() or ".." in path.parts:
+                return False
+            for parent in reversed(path.parents):
+                info = parent.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+                        or info.st_mode & 0o022):
+                    return False
+            info = path.lstat()
+            if (not stat.S_ISLNK(info.st_mode) or info.st_uid != os.geteuid()
+                    or os.readlink(path) != "/dev/null"):
+                return False
+        return True
+    except (OSError, UnicodeError):
+        return False
+
+
 def identity(path):
     info = os.stat(path)
     return info.st_dev, info.st_ino
@@ -163,7 +184,7 @@ class Processes:
 
         if path.exists():
             require(self.read(path, 0o644) == self.unit(release, contract), "existing application unit differs")
-            require(not self.command(["systemctl", "show", "-p", "DropInPaths", "--value", name]).strip(),
+            require(masked_dropins(self.command(["systemctl", "show", "-p", "DropInPaths", "--value", name])),
                     "application unit has unsupported drop-ins")
         else:
             with socket.socket() as listener:
@@ -273,6 +294,6 @@ class Processes:
         if path.exists():
             require(self.read(path, 0o644) == self.unit(release, contract),
                     "retiring application unit differs")
-            require(not self.command(["systemctl", "show", "-p", "DropInPaths", "--value",
-                                      self.name(release)]).strip(), "retiring application has drop-ins")
+            require(masked_dropins(self.command(["systemctl", "show", "-p", "DropInPaths", "--value",
+                                                self.name(release)])), "retiring application has drop-ins")
             self.stop(release)
