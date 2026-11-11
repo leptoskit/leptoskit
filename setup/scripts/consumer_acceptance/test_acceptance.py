@@ -68,6 +68,16 @@ class Packages(unittest.TestCase):
             self.load()
         self.assertFalse((self.root / "outside").exists())
 
+    def test_case_aliases_are_rejected_on_every_filesystem(self):
+        self.archive({"leptoskit-1.0.0/README.md": "upper", "leptoskit-1.0.0/readme.md": "lower"})
+        with self.assertRaisesRegex(ValueError, "case-insensitive path collision"):
+            self.load()
+
+    def test_directory_case_aliases_are_rejected(self):
+        self.archive({"leptoskit-1.0.0/Src/other.rs": "pub fn other() {}"})
+        with self.assertRaisesRegex(ValueError, "case-insensitive path collision"):
+            self.load()
+
     def test_no_publishable_facade_fails(self):
         self.metadata["packages"][0]["publish"] = []
         with self.assertRaisesRegex(ValueError, "no publishable facade"):

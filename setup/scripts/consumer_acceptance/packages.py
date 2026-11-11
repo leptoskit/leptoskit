@@ -16,6 +16,7 @@ def sha256(path):
 def extract_archive(archive, output, name, version, revision):
     root_name = f"{name}-{version}"
     archive_hash = sha256(archive)
+    seen_paths = {}
     with tarfile.open(archive, "r:gz") as bundle:
         for member in bundle:
             path = PurePosixPath(member.name)
@@ -27,6 +28,13 @@ def extract_archive(archive, output, name, version, revision):
                 or not (member.isfile() or member.isdir())
             ):
                 raise ValueError(f"{archive.name}: unsupported archive member {member.name}")
+            for length in range(1, len(path.parts) + 1):
+                prefix = str(PurePosixPath(*path.parts[:length]))
+                previous = seen_paths.setdefault(prefix.casefold(), prefix)
+                if previous != prefix:
+                    raise ValueError(
+                        f"{archive.name}: case-insensitive path collision: {previous} and {prefix}"
+                    )
             target = output.joinpath(*path.parts)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
