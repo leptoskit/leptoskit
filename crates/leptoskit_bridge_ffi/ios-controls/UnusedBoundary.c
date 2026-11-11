@@ -46,3 +46,19 @@ int32_t lk_devtools_pick(size_t view, float x, float y) { abort(); }
 int32_t lk_app_has_rive(const lk_app *app) { return 0; }
 int32_t lk_app_rive_tick(lk_app *app, double elapsed, float scale, uint32_t flags,
     void *context, lk_rive_visible_fn visible, lk_rive_present_fn present) { abort(); }
+
+/* These controls have no 3D scenes. Discovery is inert; drawing is unexpected. */
+int32_t lk_app_enable_scene3d(lk_app *app) { return 0; }
+int32_t lk_scene3d_available(void) { return 0; }
+lk_buffer lk_scene3d_error(void) { abort(); }
+int32_t lk_scene3d_set_asset_directory(const uint8_t *path, size_t len) { abort(); }
+int32_t lk_scene3d_pointer(uint32_t scene, uint32_t phase, float x, float y,
+    float dx, float dy) { abort(); }
+lk_scene3d_view *lk_scene3d_view_attach_layer(uint32_t scene, void *layer,
+    uint32_t width, uint32_t height) { abort(); }
+void lk_scene3d_view_set_waker(lk_scene3d_view *view, void *context,
+    lk_scene3d_wake_fn wake) { abort(); }
+void lk_scene3d_view_resize(lk_scene3d_view *view, uint32_t width, uint32_t height) { abort(); }
+void lk_scene3d_view_set_rotation(lk_scene3d_view *view, uint32_t quarter_turns) { abort(); }
+int32_t lk_scene3d_view_frame(lk_scene3d_view *view, double time) { abort(); }
+void lk_scene3d_view_detach(lk_scene3d_view *view) { abort(); }
