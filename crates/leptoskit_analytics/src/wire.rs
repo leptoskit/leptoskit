@@ -112,6 +112,44 @@ pub enum Value {
 /// Properties, in the order they were given.
 pub type Properties = Vec<(String, Value)>;
 
+macro_rules! value_from {
+	($($from:ty => $variant:ident as $as:ty),+ $(,)?) => {$(
+		impl From<$from> for Value {
+			fn from(value: $from) -> Self {
+				Self::$variant(<$as>::from(value))
+			}
+		}
+	)+};
+}
+
+value_from! {
+	bool => Bool as bool,
+	i8 => Int as i64,
+	i16 => Int as i64,
+	i32 => Int as i64,
+	i64 => Int as i64,
+	u8 => Int as i64,
+	u16 => Int as i64,
+	u32 => Int as i64,
+	f32 => Float as f64,
+	f64 => Float as f64,
+	String => Text as String,
+	&str => Text as String,
+	&String => Text as String,
+}
+
+impl<T: Into<Value>> From<Option<T>> for Value {
+	fn from(value: Option<T>) -> Self {
+		value.map_or(Self::Null, Into::into)
+	}
+}
+
+impl<T: Into<Value>> From<Vec<T>> for Value {
+	fn from(values: Vec<T>) -> Self {
+		Self::List(values.into_iter().map(Into::into).collect())
+	}
+}
+
 /// One batch.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Batch {

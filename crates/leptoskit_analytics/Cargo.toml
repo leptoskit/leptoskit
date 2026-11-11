@@ -21,15 +21,22 @@ required-features = ["service"]
 name = "service"
 required-features = ["service"]
 
+# The server's client, sending to the service.
+[[test]]
+name = "client"
+required-features = ["service", "server-client"]
+
 [dependencies]
-# Everything below is the service's. The library without features (the
-# batch format, and later the clients) depends on nothing, so an app that
-# captures events doesn't compile any of it.
+# Everything below is the service's, or the server client's. The library
+# without features (the client core and the batch format) depends on
+# nothing, so an app that captures events doesn't compile any of it;
+# `tests/dependencies.rs` keeps it that way.
 chrono = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
 leptoskit_db = { workspace = true, optional = true }
 leptoskit_rpc = { workspace = true, optional = true, features = ["client"] }
+reqwest = { workspace = true, optional = true, features = ["rustls-tls"] }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
@@ -64,6 +71,9 @@ service = [
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",
 ]
+# The client for the app's server: `client::server::Analytics`, sending in
+# the background with Tokio.
+server-client = ["dep:reqwest", "dep:tokio", "tokio/macros"]
 # The same service on Postgres, for an app whose `[db]` is Postgres.
 postgres = ["service", "leptoskit_db/postgres", "leptoskit_rpc/postgres"]
 
