@@ -136,7 +136,9 @@ pub fn render(element: Element) -> AnyView {
 
 	lift_splash_after_render();
 
-	(html::style().child(css), root).into_any()
+	// Tachys does not hydrate raw-text children of <style>. Keep the sheet in
+	// an attribute so a hydrated screen can replace it when styles change.
+	(html::style().inner_html(css), root).into_any()
 }
 
 /// Lifts the HTML launch screen once a render is painted, unless the app
@@ -1201,14 +1203,17 @@ mod devtools_tests {
 
 		#[cfg(not(feature = "devtools"))]
 		assert!(attributes.node.is_none() && attributes.key.is_none());
-		let paths = NodePath::root().children(&element.children);
-		assert_eq!(
-			paths
-				.iter()
-				.map(|path| path.path.as_str())
-				.collect::<Vec<_>>(),
-			[".0", ".1", ".2"]
-		);
+		#[cfg(feature = "devtools")]
+		{
+			let paths = NodePath::root().children(&element.children);
+			assert_eq!(
+				paths
+					.iter()
+					.map(|path| path.path.as_str())
+					.collect::<Vec<_>>(),
+				[".0", ".1", ".2"]
+			);
+		}
 	}
 
 	/// The web and native builds name each element the same way, so a node

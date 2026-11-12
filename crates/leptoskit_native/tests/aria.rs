@@ -11,6 +11,7 @@ use leptoskit_native::Invalid;
 use leptoskit_native::Live;
 use leptoskit_native::Mutation;
 use leptoskit_native::NativeKind;
+#[cfg(feature = "serde")]
 use leptoskit_native::NativeProps;
 use leptoskit_native::NativeSurface;
 use leptoskit_native::Orientation;
