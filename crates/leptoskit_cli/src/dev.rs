@@ -477,9 +477,9 @@ fn start_watcher(
 	database: Option<&crate::db::DevDatabase>,
 ) -> Result<(notify::RecommendedWatcher, Heard, Watched)> {
 	let metadata = crate::wasm::cargo_metadata(root)?;
-	let out_dir = root.join(DEV_OUT);
+	let out_dir = root.join(config.output_directory(DEV_OUT));
 	let excluded = excluded_dirs(root, &metadata, &out_dir);
-	let public = root.join("public");
+	let public = root.join(&config.build.inputs.public);
 	let config_file = root.join(leptoskit_config::CONFIG_FILE);
 	let config_changed = Arc::new(AtomicBool::new(false));
 	// The package that declares the tables: a change there may change them.
@@ -490,7 +490,10 @@ fn start_watcher(
 
 	let filter = WatchFilter {
 		public: public.clone(),
-		assets: vec![root.join("web"), root.join("assets")],
+		assets: vec![
+			root.join(&config.build.inputs.web),
+			root.join(&config.build.inputs.assets),
+		],
 		excluded: excluded.clone(),
 		// Each build rewrites the generated modules when their inputs
 		// changed; those writes must not trigger another build. Plugins
@@ -868,12 +871,12 @@ impl Web {
 		} else if let Some(listener) = listener {
 			// No services to proxy, and no app server: leptoskit's static
 			// server takes the configured port.
-			serve_static(root, ip, port, adopt(listener)?, runtime);
+			serve_static(config, root, ip, port, adopt(listener)?, runtime);
 			ui::tagged(
 				"web",
 				format_args!(
 					"serving {} at {BOLD}{}{BOLD:#}",
-					root.join(DEV_OUT).display(),
+					root.join(config.output_directory(DEV_OUT)).display(),
 					web.url()
 				),
 			);
@@ -896,12 +899,19 @@ impl Web {
 			listener
 				.set_nonblocking(true)
 				.context("could not configure the listener")?;
-			serve_static(root, ip, app_address.port(), adopt(listener)?, runtime);
+			serve_static(
+				config,
+				root,
+				ip,
+				app_address.port(),
+				adopt(listener)?,
+				runtime,
+			);
 			ui::tagged(
 				"web",
 				format_args!(
 					"serving {} at {BOLD}{}{BOLD:#}",
-					root.join(DEV_OUT).display(),
+					root.join(config.output_directory(DEV_OUT)).display(),
 					web.url()
 				),
 			);
@@ -1051,13 +1061,14 @@ fn free_address(ip: IpAddr) -> Result<SocketAddr> {
 
 /// Serves `dist/` with leptoskit's static server on `listener`.
 fn serve_static(
+	config: &LeptoskitConfig,
 	root: &Path,
 	ip: IpAddr,
 	port: u16,
 	listener: tokio::net::TcpListener,
 	runtime: &tokio::runtime::Runtime,
 ) {
-	let out_dir = root.join(DEV_OUT);
+	let out_dir = root.join(config.output_directory(DEV_OUT));
 	let router = leptoskit_axum::dev_router(&leptoskit_axum::ServeOptions::new(
 		&out_dir,
 		ip.to_string(),
@@ -1571,7 +1582,7 @@ mod tests {
 		let (events, _received) = mpsc::channel();
 		let (mut watcher, heard, scope) = start_watcher(&config, root, events, None).unwrap();
 
-		assert_eq!(scope.public, root.join("public"));
+		assert_eq!(scope.public, root.join(&config.build.inputs.public));
 		assert_eq!(scope.config_file, root.join(leptoskit_config::CONFIG_FILE));
 		assert!(
 			scope

@@ -173,6 +173,8 @@ fn run_with(
 	);
 	let root = Utf8PathBuf::from_path_buf(root)
 		.map_err(|_| anyhow::anyhow!("project path is not UTF-8"))?;
+	let out = Utf8PathBuf::from_path_buf(config.output_directory(out))
+		.map_err(|_| anyhow::anyhow!("output path is not UTF-8"))?;
 	let out_dir = root.join(out);
 	std::fs::create_dir_all(&out_dir).with_context(|| format!("could not create {out_dir}"))?;
 
@@ -206,11 +208,7 @@ fn run_with(
 	};
 	let metadata = wasm::cargo_metadata(root.as_std_path())?;
 	let server_package = server::backend_package(&config, &metadata, platform)?;
-	let client = wasm::detect_client_with(
-		config.build.client_package.as_deref(),
-		Some(&config.app.name),
-		&metadata,
-	)?;
+	let client = wasm::target_client(&config, platform, &metadata)?;
 	// One crate for the browser and native hosts declares both sides, and
 	// each build selects its platform's feature.
 	let portable = client
@@ -283,7 +281,7 @@ fn run_with(
 	)?;
 
 	if platform == Platform::Web {
-		collect_assets(&root, &out_dir)?;
+		collect_assets(&config, &root, &out_dir)?;
 		write_web_branding(&root, &config, out_dir.as_std_path())?;
 	}
 
@@ -420,7 +418,7 @@ fn copy_assets_only(
 	root: &Utf8PathBuf,
 	out_dir: Utf8PathBuf,
 ) -> Result<BuildOutput> {
-	collect_assets(root, &out_dir)?;
+	collect_assets(config, root, &out_dir)?;
 	write_web_branding(root, config, out_dir.as_std_path())?;
 	crate::ui::success(format_args!("copied assets into {out_dir}"));
 	Ok(BuildOutput {
@@ -989,7 +987,10 @@ fn compile_server_and_services(
 			BuiltServer {
 				binary: binary.clone(),
 			}
-			.save(&metadata.target_directory, root.as_std_path())?;
+			.save(
+				&metadata.target_directory,
+				&config.artifact_root(root.as_std_path()),
+			)?;
 		}
 
 		Ok(())
@@ -1010,7 +1011,11 @@ fn compile_server_and_services(
 
 	if services.is_empty() {
 		let binary = if has_server {
-			required(compile_server(root, &config.app.name, server_options)?)?
+			required(compile_server(
+				root,
+				config.server_package(),
+				server_options,
+			)?)?
 		} else {
 			None
 		};
@@ -1025,7 +1030,7 @@ fn compile_server_and_services(
 		metadata,
 		has_server
 			.then_some(crate::services::AppBuild {
-				package: &config.app.name,
+				package: config.server_package(),
 				options: server_options,
 			})
 			.as_ref(),
@@ -1035,7 +1040,10 @@ fn compile_server_and_services(
 	crate::services::BuiltServices {
 		services: built.services.clone(),
 	}
-	.save(&metadata.target_directory, root.as_std_path())?;
+	.save(
+		&metadata.target_directory,
+		&config.artifact_root(root.as_std_path()),
+	)?;
 	let app = required(built.app)?;
 	save(&app)?;
 	Ok((app, built.services))
@@ -1067,17 +1075,20 @@ pub(crate) fn compile_server(
 
 /// Copies the public asset tree into the output, hashing in parallel and
 /// copying only files whose content differs from the existing copy.
-fn collect_assets(root: &Utf8PathBuf, out_dir: &Utf8PathBuf) -> Result<()> {
-	for directory in ["web", "public", "assets"] {
-		let destination = if directory == "assets" {
-			out_dir.join("assets")
-		} else {
-			out_dir.clone()
-		};
-
-		copy_assets(&root.join(directory), &destination)?;
+fn collect_assets(
+	config: &LeptoskitConfig,
+	root: &Utf8PathBuf,
+	out_dir: &Utf8PathBuf,
+) -> Result<()> {
+	let inputs = &config.build.inputs;
+	for (source, destination) in [
+		(&inputs.web, out_dir.clone()),
+		(&inputs.public, out_dir.clone()),
+		(&inputs.assets, out_dir.join("assets")),
+	] {
+		let source = source.to_str().context("frontend input is not UTF-8")?;
+		copy_assets(&root.join(source), &destination)?;
 	}
-
 	Ok(())
 }
 
@@ -1160,6 +1171,24 @@ fn copy_assets(public: &Utf8PathBuf, out_dir: &Utf8PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn named_frontend_copies_only_its_own_public_inputs() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = Utf8PathBuf::from_path_buf(temporary.path().to_path_buf()).unwrap();
+		std::fs::create_dir_all(root.join("assets/public")).unwrap();
+		std::fs::write(root.join("assets/public/site.css"), "public").unwrap();
+		std::fs::write(root.join("assets/private.txt"), "private").unwrap();
+		let mut config = LeptoskitConfig::default();
+		config.build.inputs.assets = "assets/public".into();
+		let output = root.join("dist/site");
+		collect_assets(&config, &root, &output).unwrap();
+		assert_eq!(
+			std::fs::read_to_string(output.join("assets/site.css")).unwrap(),
+			"public"
+		);
+		assert!(!output.join("assets/private.txt").exists());
+	}
 
 	#[test]
 	fn a_legacy_router_table_becomes_a_plugin_declaration() {

@@ -32,6 +32,7 @@
 - [Forms](guide/19-forms.md)
 - [Security and scale](guide/16-security-and-scale.md)
 - [Deploying a server](guide/24-deploying.md)
+- [Several targets in one application](guide/34-application-targets.md)
 - [Applications in one workspace](guide/33-workspaces.md)
 - [Verifying a release](guide/30-verifying-releases.md)
 - [Virtualized lists](guide/17-virtualized-lists.md)

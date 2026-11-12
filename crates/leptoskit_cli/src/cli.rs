@@ -27,6 +27,9 @@ use crate::serve_cmd;
 #[derive(Debug, Parser)]
 #[command(name = "leptoskit", version, about, propagate_version = true)]
 pub struct Cli {
+	/// Select a named target from the root leptoskit.toml.
+	#[arg(long, global = true, value_name = "NAME")]
+	pub app_target: Option<String>,
 	#[command(subcommand)]
 	pub command: Command,
 }
@@ -149,6 +152,8 @@ pub enum DevtoolsCommand {
 /// The subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+	/// Validate and list the destinations in this application's configuration.
+	Targets,
 	/// Hosts or connects to the deployment dashboard and durable agent API.
 	Console {
 		#[command(subcommand)]
@@ -774,6 +779,17 @@ pub fn main() {
 		command = command.after_help(plugins);
 	}
 	let cli = Cli::from_arg_matches(&command.get_matches()).expect("clap derive matches");
+	if cli
+		.app_target
+		.as_ref()
+		.is_some_and(|target| std::env::var("LEPTOSKIT_APP_TARGET").ok().as_ref() != Some(target))
+	{
+		if let Err(error) = run(cli) {
+			crate::ui::error(&error);
+			std::process::exit(1);
+		}
+		return;
+	}
 
 	if let Command::Dev { no_secrets, .. } = &cli.command {
 		match crate::secrets::development(&arguments, *no_secrets) {
@@ -798,7 +814,32 @@ pub fn main() {
 ///
 /// Returns an error when any step of the command fails.
 pub fn run(cli: Cli) -> anyhow::Result<()> {
+	// Re-exec with a child-only environment. All nested loaders and Cargo
+	// subprocesses then agree on the target without mutating process globals.
+	if let Some(target) = &cli.app_target
+		&& std::env::var("LEPTOSKIT_APP_TARGET").ok().as_ref() != Some(target)
+	{
+		let status = std::process::Command::new(std::env::current_exe()?)
+			.args(std::env::args_os().skip(1))
+			.env("LEPTOSKIT_APP_TARGET", target)
+			.status()?;
+		anyhow::ensure!(status.success(), "target `{target}` command failed");
+		return Ok(());
+	}
 	match cli.command {
+		Command::Targets => {
+			let root = leptoskit_config::LeptoskitConfig::find_root()?;
+			let config = leptoskit_config::LeptoskitConfig::load_from(&root)?;
+			for (name, target) in &config.targets {
+				println!(
+					"{name}\t{}\t{}\t{}",
+					target.platform,
+					target.frontend.as_deref().unwrap_or("server"),
+					target.unavailable.as_deref().unwrap_or("available")
+				);
+			}
+			Ok(())
+		}
 		Command::Console { command } => crate::console::run(command),
 		Command::Infra { command } => crate::console::infra(command),
 		Command::Deploy(args) => crate::console::deploy(&args),
@@ -832,6 +873,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			frontends,
 		} => {
 			run(Cli {
+				app_target: None,
 				command: Command::Generate {
 					kind: GenerateCommand::App {
 						path,

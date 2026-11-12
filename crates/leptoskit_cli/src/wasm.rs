@@ -344,6 +344,23 @@ pub fn detect_client(root: &Path, configured: Option<&str>) -> Result<Option<Cli
 	detect_client_with(configured, None, &cargo_metadata(root)?)
 }
 
+/// Detect the selected frontend, skipping all UI packages for a server-only
+/// destination in a workspace that may contain several client libraries.
+pub(crate) fn target_client(
+	config: &leptoskit_config::LeptoskitConfig,
+	platform: leptoskit_config::Platform,
+	metadata: &CargoMetadata,
+) -> Result<Option<ClientInfo>> {
+	if platform == leptoskit_config::Platform::Server {
+		return Ok(None);
+	}
+	detect_client_with(
+		config.build.client_package.as_deref(),
+		Some(&config.app.name),
+		metadata,
+	)
+}
+
 /// The detection core over a shared `cargo metadata` result.
 ///
 /// Without a configured package, the app package itself wins when it has a

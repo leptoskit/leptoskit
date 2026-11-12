@@ -95,6 +95,13 @@
 			"description": "How `leptoskit format` lays out markup. Omitted from serialized\nconfiguration while it holds the defaults.",
 			"$ref": "#/$defs/FormatConfig"
 		},
+		"frontends": {
+			"description": "Frontends built from packages in this application's Cargo workspace.",
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/FrontendConfig"
+			}
+		},
 		"infra": {
 			"description": "Managed infrastructure and container release settings.",
 			"anyOf": [
@@ -192,6 +199,13 @@
 			"type": "object",
 			"additionalProperties": {
 				"$ref": "#/$defs/ServiceConfig"
+			}
+		},
+		"targets": {
+			"description": "Named combinations of frontend, platform, server, and sidecars.",
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/TargetConfig"
 			}
 		},
 		"theme": {
@@ -315,6 +329,13 @@
 					"description": "The platform `leptoskit build` targets by default. `leptoskit dev` runs\nevery enabled platform this machine can run.",
 					"$ref": "#/$defs/Platform",
 					"default": "web"
+				},
+				"default_target": {
+					"description": "Named target selected when no `--app-target` is supplied.",
+					"type": [
+						"string",
+						"null"
+					]
 				},
 				"icon": {
 					"description": "The app's icon: one square PNG or SVG, 1024×1024 or larger, relative\nto this file. Every platform's icon sizes are made from it: the iOS\napp icon, Android's launcher icons, the macOS `.icns`, and the\nextension's 16 to 128 pixel icons. Prefer `[app.icons]` when you need\nper-platform images, notification icons, or extension metadata.",
@@ -891,6 +912,10 @@
 						"type": "string"
 					}
 				},
+				"inputs": {
+					"description": "Frontend inputs, relative to the application root.",
+					"$ref": "#/$defs/FrontendInputs"
+				},
 				"rustflags": {
 					"description": "Extra rustc flags for the wasm client build. They merge with any\n`target.wasm32-unknown-unknown.rustflags` in `.cargo/config.toml`. When\nset, cargo ignores a `[build] rustflags` table for the wasm build, and\nit ignores all of them when the `RUSTFLAGS` environment variable is set.",
 					"type": "array",
@@ -898,6 +923,13 @@
 					"items": {
 						"type": "string"
 					}
+				},
+				"server_package": {
+					"description": "Backend Cargo package, independent of application identity.",
+					"type": [
+						"string",
+						"null"
+					]
 				}
 			},
 			"additionalProperties": false
@@ -1754,6 +1786,93 @@
 					"description": "The rustfmt toolchain that formats the Rust around and inside markup:\n`nightly` by default, so unstable `rustfmt.toml` options apply,\n`stable`, or any installed rustup toolchain name.",
 					"type": "string",
 					"default": "nightly"
+				}
+			},
+			"additionalProperties": false
+		},
+		"FrontendConfig": {
+			"description": "A UI package and its own routes, server, and public inputs.",
+			"type": "object",
+			"properties": {
+				"inputs": {
+					"description": "Frontend-specific asset roots.",
+					"$ref": "#/$defs/FrontendInputs",
+					"default": {
+						"assets": "assets",
+						"public": "public",
+						"web": "web"
+					}
+				},
+				"lint": {
+					"description": "Frontend-specific markup rules.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LintConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"package": {
+					"description": "Workspace package producing the client library.",
+					"type": "string"
+				},
+				"plugins": {
+					"description": "Tooling plugins, in addition to application-wide plugins.",
+					"type": "array",
+					"default": [],
+					"items": {
+						"$ref": "#/$defs/PluginSpec"
+					}
+				},
+				"render": {
+					"description": "Browser rendering mode.",
+					"$ref": "#/$defs/RenderMode",
+					"default": "csr"
+				},
+				"router": {
+					"description": "Frontend-specific file routes.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/RouterConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"server_package": {
+					"description": "Optional server package for this frontend.",
+					"type": [
+						"string",
+						"null"
+					]
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"package"
+			]
+		},
+		"FrontendInputs": {
+			"description": "Files copied for one frontend. Inputs never change the Cargo project root.",
+			"type": "object",
+			"properties": {
+				"assets": {
+					"description": "Assets copied beneath the output's `assets/` directory.",
+					"type": "string",
+					"default": "assets"
+				},
+				"public": {
+					"description": "Public files copied to the output root.",
+					"type": "string",
+					"default": "public"
+				},
+				"web": {
+					"description": "HTML and other web entry files copied to the output root.",
+					"type": "string",
+					"default": "web"
 				}
 			},
 			"additionalProperties": false
@@ -2686,6 +2805,10 @@
 					"description": "What a build does when a selected plugin has no implementation the\nplatform's host can run. `warn` (the default) leaves it out with a\nwarning, so its calls fail with `Unavailable`; `error` stops the build.",
 					"$ref": "#/$defs/MissingPlugins"
 				},
+				"mode": {
+					"description": "Desktop launch behavior. Menu-bar mode creates no initial window.",
+					"$ref": "#/$defs/NativeMode"
+				},
 				"optional-capabilities": {
 					"description": "Capability identifiers the app can run without. A missing one produces\na warning instead of failing the build.",
 					"type": "array",
@@ -2764,6 +2887,21 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"NativeMode": {
+			"description": "Native startup behavior. Neither mode needs a URL or web server.",
+			"oneOf": [
+				{
+					"description": "Open the main window at launch.",
+					"type": "string",
+					"const": "window"
+				},
+				{
+					"description": "Keep a macOS status item alive; create UI only when requested.",
+					"type": "string",
+					"const": "menu-bar"
+				}
+			]
 		},
 		"NativeTarget": {
 			"description": "A native platform shell.",
@@ -3645,6 +3783,102 @@
 					"const": "manual"
 				}
 			]
+		},
+		"TargetConfig": {
+			"description": "One named destination. Omitted sidecars mean no sidecars, including for\na public frontend in an application that also declares private services.",
+			"type": "object",
+			"properties": {
+				"build": {
+					"description": "Explicit build overrides; replaced as a unit when supplied.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/BuildConfig"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"db": {
+					"description": "Database used by this target, independent of other targets.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/DbConfig"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"frontend": {
+					"description": "Frontend key, or no frontend for a server-only target.",
+					"type": [
+						"string",
+						"null"
+					],
+					"default": null
+				},
+				"infra": {
+					"description": "Infrastructure for this target's independent deployment.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraConfig"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"native": {
+					"description": "Native configuration for this destination.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/NativeConfig"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"platform": {
+					"description": "Destination platform.",
+					"$ref": "#/$defs/Platform",
+					"default": "web"
+				},
+				"serve": {
+					"description": "Listener settings for this destination.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ServeConfig"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"services": {
+					"description": "Keys in the application's existing `[services]` registry.",
+					"type": "array",
+					"default": [],
+					"items": {
+						"type": "string"
+					}
+				},
+				"unavailable": {
+					"description": "A declared destination that is not available yet. Selecting it fails\nbefore generating files or compiling anything, with this explanation.",
+					"type": [
+						"string",
+						"null"
+					],
+					"default": null
+				}
+			},
+			"additionalProperties": false
 		},
 		"ThemeConfig": {
 			"description": "Design tokens from the `[theme]` table, matching CSS custom properties\nthat Tailwind `var(--name)` utilities and the process-wide `Theme` map\nresolve.\n\n```toml\n[theme.colors]\nbrand = \"#3b82f6\"\nink = \"black\"\n\n[theme.lengths]\ngap = \"1rem\"\npad = \"16px\"\n```\n\nCall `Theme::install_maps(&theme.colors, &theme.lengths)` once at app\nstartup so native paint and the web `:root` sheet see the same names.",

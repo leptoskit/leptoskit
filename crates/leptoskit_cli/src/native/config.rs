@@ -8,7 +8,13 @@ use leptoskit_config::Platform;
 /// Universal projects own a Cargo runner in each native platform directory.
 pub(crate) fn universal(root: &Path) -> bool {
 	Platform::APPLICATION.into_iter().any(|platform| {
-		platform.is_native() && root.join(platform.to_string()).join("Cargo.toml").is_file()
+		platform.is_native()
+			&& (root.join(platform.to_string()).join("Cargo.toml").is_file()
+				|| root
+					.join("platforms")
+					.join(platform.to_string())
+					.join("Cargo.toml")
+					.is_file())
 	})
 }
 

@@ -555,6 +555,7 @@ fn the_cli_dispatch_reaches_the_device_section() {
 	use leptoskit_cli::cli::Cli;
 	use leptoskit_cli::cli::Command;
 	leptoskit_cli::cli::run(Cli {
+		app_target: None,
 		command: Command::Device {
 			command: DeviceCommand::List { json: true },
 		},

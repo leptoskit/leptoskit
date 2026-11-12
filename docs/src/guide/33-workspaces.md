@@ -1,5 +1,7 @@
 # Applications in one workspace
 
+For one application with several frontends, servers and native destinations, use [named application targets](34-application-targets.md) in a single root `leptoskit.toml`. This page covers independent applications.
+
 Keep several applications in the same repository while giving each its own configuration, build, and deploy. A `leptoskit.workspace.toml` file describes those boundaries and checks how the apps depend on one another before a build starts.
 
 Use this when a **marketing site**, the **signed-in product**, and an **admin console** should ship as separate frontends (different domains, bundles, and release records), or when a website and an accounts API share a repo. Prefer separate frontends over stuffing landing and product into one route tree; same-deploy route groups stay an escape hatch for a thin splash on the product origin.

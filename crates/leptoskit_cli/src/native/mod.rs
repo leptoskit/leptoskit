@@ -247,6 +247,10 @@ fn host_triple() -> &'static str {
 /// App-owned platform integration, with support for existing native projects.
 pub(crate) fn host_dir(root: &Path, target: Target) -> PathBuf {
 	let platform = target.host_platform().to_string();
+	let owned = root.join("platforms").join(&platform);
+	if owned.join("Cargo.toml").is_file() {
+		return owned;
+	}
 	let directory = root.join(&platform);
 
 	if directory.join("Cargo.toml").is_file() {
@@ -260,11 +264,7 @@ pub(crate) fn host_dir(root: &Path, target: Target) -> PathBuf {
 pub(crate) fn generated_dir(root: &Path, target: Target) -> PathBuf {
 	let generated = root.join(".leptoskit");
 
-	if root
-		.join(target.host_platform().to_string())
-		.join("Cargo.toml")
-		.is_file()
-	{
+	if host_dir(root, target).join("Cargo.toml").is_file() {
 		return generated.join(target.host_platform().to_string());
 	}
 
@@ -319,7 +319,7 @@ fn workspace_hosts_for(
 		let platform = target.platform();
 
 		if !config.app.platforms.contains(&platform)
-			|| !root.join(platform.to_string()).join("Cargo.toml").is_file()
+			|| !host_dir(root, target).join("Cargo.toml").is_file()
 		{
 			continue;
 		}
@@ -448,7 +448,10 @@ pub fn run(command: NativeCommand) -> Result<()> {
 
 		// The terminal shows no pictures, so it ships none.
 		if target != Target::Tui {
-			stage_assets(&root, &assets_destination(&root, target))?;
+			sync_folder(
+				&root.join(&config.build.inputs.assets),
+				&assets_destination(&root, target),
+			)?;
 		}
 
 		rust_desktop::build(&root, &config, target, release, &registry.host_features)?;
@@ -484,7 +487,10 @@ pub fn run(command: NativeCommand) -> Result<()> {
 		&generated.join("lib").join("libleptoskit_bridge_ffi.a"),
 	)?;
 	write_assets(&root, &config, target, &bundle_dir, release, &contract)?;
-	stage_assets(&root, &assets_destination(&root, target))?;
+	sync_folder(
+		&root.join(&config.build.inputs.assets),
+		&assets_destination(&root, target),
+	)?;
 
 	if build {
 		match &signing {
@@ -1105,6 +1111,7 @@ fn apple_cc_environment(target: Target) -> Vec<(String, String)> {
 ///
 /// Assets ship with the store build. A code push update carries the guest
 /// alone, so a release that shows a new asset needs a new store build.
+#[cfg(test)]
 fn stage_assets(root: &Path, destination: &Path) -> Result<()> {
 	sync_folder(&root.join(ASSETS), destination)
 }
@@ -1295,10 +1302,16 @@ fn bundle(
 	}
 
 	let metadata = crate::wasm::cargo_metadata(root)?;
-	let portable = root
-		.join(target.platform().to_string())
-		.join("Cargo.toml")
-		.is_file();
+	let portable = host_dir(root, target).join("Cargo.toml").is_file()
+		&& (root
+			.join(target.platform().to_string())
+			.join("Cargo.toml")
+			.is_file()
+			|| root
+				.join("platforms")
+				.join(target.platform().to_string())
+				.join("Cargo.toml")
+				.is_file());
 	let package = if portable {
 		config
 			.build
@@ -3141,6 +3154,20 @@ mod tests {
 		} else {
 			assert_eq!(inferred, Target::Android);
 		}
+	}
+
+	#[test]
+	fn platform_hosts_keep_the_workspace_root_and_generated_state() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::create_dir_all(root.join("platforms/macos")).unwrap();
+		std::fs::write(root.join("platforms/macos/Cargo.toml"), "").unwrap();
+		assert_eq!(host_dir(root, Target::Macos), root.join("platforms/macos"));
+		assert_eq!(
+			generated_dir(root, Target::Macos),
+			root.join(".leptoskit/macos")
+		);
+		assert!(config::universal(root));
 	}
 
 	#[test]
