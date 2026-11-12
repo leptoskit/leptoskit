@@ -33,7 +33,10 @@ fn kotlin_sources() -> Vec<(String, String)> {
 /// The body of `object NativeFailureView`, up to the next top-level item.
 fn failure_view() -> String {
 	let source = std::fs::read_to_string(Path::new(MOBILE).join("LeptosKitView.kt"))
-		.expect("LeptosKitView.kt");
+		.expect("LeptosKitView.kt")
+		// Windows runners check the sources out with CRLF; the boundary
+		// markers below are written against LF.
+		.replace("\r\n", "\n");
 	let start = source
 		.find("internal object NativeFailureView {")
 		.expect("LeptosKitView.kt defines NativeFailureView");
