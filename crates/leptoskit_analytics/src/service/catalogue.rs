@@ -312,8 +312,11 @@ fn fits(ty: &str, value: &Value) -> bool {
 	{
 		return matches!(value, Value::Null) || fits(inner, value);
 	}
-	if ty.starts_with("Vec<") {
-		return matches!(value, Value::List(_));
+	if let Some(inner) = ty
+		.strip_prefix("Vec<")
+		.and_then(|rest| rest.strip_suffix('>'))
+	{
+		return matches!(value, Value::List(values) if values.iter().all(|value| fits(inner, value)));
 	}
 	match ty {
 		"String" | "&str" | "&String" | "&'staticstr" => matches!(value, Value::Text(_)),
@@ -327,6 +330,23 @@ fn fits(ty: &str, value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn typed_vectors_check_known_element_types_recursively() {
+		assert!(!fits("Vec<String>", &Value::List(vec![Value::Int(1)])));
+		assert!(fits(
+			"Vec<Option<Vec<String>>>",
+			&Value::List(vec![
+				Value::Null,
+				Value::List(vec![Value::Text("ok".into())])
+			])
+		));
+		assert!(!fits(
+			"Vec<Option<Vec<String>>>",
+			&Value::List(vec![Value::List(vec![Value::Bool(true)])])
+		));
+		assert!(fits("Vec<Custom>", &Value::List(vec![Value::Bool(true)])));
+	}
 
 	async fn catalogue(fields: &[(&str, &str)]) -> (Catalogue, u64) {
 		let catalogue =

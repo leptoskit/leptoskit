@@ -188,6 +188,7 @@ impl Queue {
 	/// property names, keeping its id, so it's stored once all the same.
 	pub fn settle_with_refusals(&mut self, refused: &[(u32, &str)], now: i64, jitter: f64) {
 		let mut again = Vec::new();
+		let mut dropped = 0_u64;
 		for (index, reason) in refused {
 			if *reason != "unknown_schema" {
 				continue;
@@ -212,25 +213,46 @@ impl Queue {
 				.zip(values)
 				.map(|((field, _), value)| ((*field).to_owned(), value.clone()))
 				.collect();
-			keyed.extend(properties.iter().cloned());
+			for (key, value) in properties {
+				if !keyed.iter().any(|(have, _)| have == key) {
+					keyed.push((key.clone(), value.clone()));
+				}
+			}
 			let mut entry = queued.entry.clone();
 			entry.body = Body::Event {
 				name: name.clone(),
 				properties: keyed,
 			};
+			let bytes = size(&entry);
+			if bytes > self.limits.queue_bytes.min(self.limits.batch_bytes) {
+				dropped += 1;
+				continue;
+			}
 			again.push(Queued {
-				bytes: size(&entry),
+				bytes,
 				entry,
 				at: queued.at,
 			});
 		}
-		self.settle(Outcome::Stored, now, jitter);
+		// Keep the entries visible while settling prunes unused contexts.
 		for queued in again.into_iter().rev() {
 			self.bytes += queued.bytes;
 			self.waiting.push_front(queued);
 		}
-		while self.waiting.len() > self.limits.queue_entries {
+		self.settle(Outcome::Stored, now, jitter);
+		self.dropped = self.dropped.saturating_add(dropped);
+		while !self.waiting.is_empty()
+			&& (self.waiting.len() > self.limits.queue_entries
+				|| self.bytes
+					+ self
+						.contexts
+						.iter()
+						.map(|(_, context)| properties_size(context))
+						.sum::<usize>()
+					> self.limits.queue_bytes)
+		{
 			self.drop_oldest();
+			self.forget_unused_contexts();
 		}
 	}
 
@@ -691,6 +713,127 @@ mod tests {
 
 	fn queue(limits: Limits) -> Queue {
 		Queue::new(limits, vec![("$lib".into(), Value::Text("test".into()))])
+	}
+
+	fn typed(n: u8, fields: &'static [(&'static str, &'static str)]) -> Entry {
+		let mut entry = event(n);
+		entry.body = Body::TypedEvent {
+			name: "typed".into(),
+			schema_id: crate::schema_id("typed", fields),
+			values: vec![Value::Text("pro".into())],
+			properties: Vec::new(),
+		};
+		entry
+	}
+
+	const LONG_FIELDS: &[(&str, &str)] = &[(
+		concat!(
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		),
+		"String",
+	)];
+
+	#[test]
+	fn typed_fallback_keeps_the_original_context_and_field_precedence() {
+		static FIELDS: &[(&str, &str)] = &[("plan", "String")];
+		let old = vec![("$lib_version".into(), Value::Text("old".into()))];
+		let mut queue = Queue::new(Limits::default(), old.clone());
+		queue.remember_schema(crate::schema_id("typed", FIELDS), FIELDS);
+		let mut entry = typed(0, FIELDS);
+		let uuid = entry.uuid;
+		if let Body::TypedEvent { properties, .. } = &mut entry.body {
+			properties.extend([
+				("plan".into(), Value::Text("shadow".into())),
+				("registered".into(), Value::Bool(true)),
+			]);
+		}
+		queue.push(entry, 0);
+		queue.take(0, [0; 10]).unwrap();
+		queue.set_context(vec![("$lib_version".into(), Value::Text("new".into()))]);
+		queue.settle_with_refusals(&[(0, "unknown_schema")], 0, 0.0);
+		let resent = queue.take(0, [0; 10]).unwrap();
+		let batch = wire::decode(&resent.body, &wire::Limits::default()).unwrap();
+		assert_eq!(batch.entries[0].uuid, uuid);
+		assert_eq!(batch.contexts[batch.entries[0].context as usize], old);
+		assert_eq!(
+			batch.entries[0].body,
+			Body::Event {
+				name: "typed".into(),
+				properties: vec![
+					("plan".into(), Value::Text("pro".into())),
+					("registered".into(), Value::Bool(true)),
+				],
+			}
+		);
+	}
+
+	#[test]
+	fn typed_fallback_drops_an_entry_that_expands_past_either_byte_limit() {
+		for limits in [
+			Limits {
+				queue_bytes: 128,
+				..Limits::default()
+			},
+			Limits {
+				batch_bytes: 128,
+				..Limits::default()
+			},
+		] {
+			let mut queue = Queue::new(limits, Vec::new());
+			queue.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+			queue.push(typed(0, LONG_FIELDS), 0);
+			queue.take(0, [0; 10]).unwrap();
+			queue.settle_with_refusals(&[(0, "unknown_schema")], 0, 0.0);
+			assert!(queue.is_empty());
+			assert_eq!(queue.dropped(), 1);
+		}
+	}
+
+	#[test]
+	fn typed_fallback_enforces_the_total_waiting_byte_limit() {
+		let mut queue = Queue::new(
+			Limits {
+				batch_entries: 1,
+				queue_bytes: 280,
+				batch_bytes: 280,
+				..Limits::default()
+			},
+			Vec::new(),
+		);
+		queue.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+		queue.push(typed(0, LONG_FIELDS), 0);
+		queue.take(0, [0; 10]).unwrap();
+		queue.push(event(1), 0);
+		queue.settle_with_refusals(&[(0, "unknown_schema")], 0, 0.0);
+		assert_eq!(queue.len(), 1);
+		assert_eq!(queue.dropped(), 1);
+		assert_eq!(
+			names(&queue.take(0, [0; 10]).unwrap()),
+			["event 1", "$lk_dropped"]
+		);
+	}
+
+	#[test]
+	fn typed_fallback_counts_the_retained_context_in_its_byte_limit() {
+		let mut queue = Queue::new(
+			Limits {
+				batch_entries: 1,
+				queue_bytes: 400,
+				batch_bytes: 400,
+				..Limits::default()
+			},
+			vec![("padding".into(), Value::Text("x".repeat(140)))],
+		);
+		queue.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+		queue.push(typed(0, LONG_FIELDS), 0);
+		queue.take(0, [0; 10]).unwrap();
+		queue.push(event(1), 0);
+		queue.settle_with_refusals(&[(0, "unknown_schema")], 0, 0.0);
+		assert_eq!(queue.len(), 1);
+		assert_eq!(queue.dropped(), 1);
 	}
 
 	#[test]
