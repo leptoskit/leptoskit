@@ -68,6 +68,8 @@ export interface LiveOptions {
 	onAuthRefused?: () => void;
 	/** The `WebSocket` constructor; defaults to the global one. */
 	WebSocket?: LiveSocketConstructor;
+	/** Milliseconds to open the socket and receive welcome before retrying. Defaults to 10000. */
+	connectTimeoutMs?: number;
 	/**
 	 * How long a mutation over the socket waits for its own write to reach the
 	 * subscriptions before it resolves anyway, in milliseconds. Defaults to 2000.
@@ -199,6 +201,7 @@ export class LiveConnection {
 	#version = 0;
 	#attempt = 0;
 	#retry: ReturnType<typeof setTimeout> | null = null;
+	#connecting: ReturnType<typeof setTimeout> | null = null;
 	#heartbeat: ReturnType<typeof setInterval> | null = null;
 	#heartbeatMs = 30_000;
 	#lastHeard = 0;
@@ -421,6 +424,13 @@ export class LiveConnection {
 		}
 		this.#socket = socket;
 		this.#lastHeard = Date.now();
+		this.#connecting = setTimeout(() => {
+			if (this.#socket === socket) {
+				// Detach first: closing may synchronously call onclose.
+				this.#lost();
+				socket.close(4000, "connection timeout");
+			}
+		}, this.#options.connectTimeoutMs ?? 10_000);
 		socket.onopen = () => {
 			void this.#greet(socket);
 		};
@@ -453,6 +463,10 @@ export class LiveConnection {
 
 	/** Says hello, signs in, and sends everything the connection holds. */
 	async #greet(socket: LiveSocket): Promise<void> {
+		if (this.#socket !== socket || socket.readyState !== OPEN) {
+			return;
+		}
+
 		const raw = (frame: Frame) => socket.send(JSON.stringify(frame));
 		raw(
 			this.#version > 0
@@ -669,9 +683,7 @@ export class LiveConnection {
 	}
 
 	#startHeartbeat(seconds: number): void {
-		if (this.#heartbeat !== null) {
-			clearInterval(this.#heartbeat);
-		}
+		this.#clearTimers();
 
 		this.#heartbeatMs = Math.max(1, seconds) * 1000;
 		this.#heartbeat = setInterval(() => {
@@ -691,6 +703,11 @@ export class LiveConnection {
 	}
 
 	#clearTimers(): void {
+		if (this.#connecting !== null) {
+			clearTimeout(this.#connecting);
+			this.#connecting = null;
+		}
+
 		if (this.#retry !== null) {
 			clearTimeout(this.#retry);
 			this.#retry = null;

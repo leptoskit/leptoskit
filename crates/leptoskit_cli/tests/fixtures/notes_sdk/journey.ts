@@ -43,12 +43,13 @@ const api = new Client({
 	serverUrl: env("NOTES_URL"),
 	live: { minBackoffMs: 100, maxBackoffMs: 500 },
 });
-const statuses: LiveStatus["state"][] = [];
+const started = Date.now();
+const statuses: (LiveStatus & { at: number })[] = [];
 let notes: PublicNote[] | undefined;
 const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((listener) => listener());
 api.live.onStatus((status) => {
-	statuses.push(status.state);
+	statuses.push({ ...status, at: Date.now() - started });
 	changed();
 });
 const stop = api.notes.subscribe((value) => {
@@ -64,7 +65,7 @@ function until(test: () => boolean, what: string): Promise<void> {
 				reject(
 					new Error(
 						`waited too long for ${what}: ${JSON.stringify(notes)} ${
-							statuses.join(", ")
+							JSON.stringify(statuses)
 						}`,
 					),
 				),
@@ -130,8 +131,8 @@ try {
 		"the note added after the restart",
 	);
 	check(
-		statuses.includes("reconnecting"),
-		`the client reconnected: ${statuses.join(", ")}`,
+		statuses.some((status) => status.state === "reconnecting"),
+		`the client reconnected: ${JSON.stringify(statuses)}`,
 	);
 	check(
 		has("from the sdk") === 1 && has("one shot") === 1,
