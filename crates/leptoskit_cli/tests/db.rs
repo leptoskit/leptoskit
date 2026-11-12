@@ -519,6 +519,7 @@ fn assert_generated_notes_screen(root: &Path, auth: bool) {
 )]
 fn the_database_scaffold_migrates_and_serves() {
 	use std::io::BufRead;
+	use std::io::Write as _;
 
 	let scratch = tempfile::tempdir().unwrap();
 	let sdk = repository();
@@ -662,6 +663,7 @@ fn the_database_scaffold_migrates_and_serves() {
 			.args(["--experimental-strip-types", "--no-warnings", "journey.ts"])
 			.current_dir(&client)
 			.env("NOTES_URL", format!("http://{address}"))
+			.stdin(std::process::Stdio::piped())
 			.stdout(std::process::Stdio::piped())
 			.stderr(std::process::Stdio::inherit())
 			.spawn()
@@ -687,6 +689,14 @@ fn the_database_scaffold_migrates_and_serves() {
 					r#"{"body":"after restart"}"#,
 				);
 				assert_eq!(status, 200, "{body}");
+				// Shutdown and startup each have their own minute. Only now
+				// start the client's deadline for the resumed subscription.
+				journey
+					.stdin
+					.as_mut()
+					.unwrap()
+					.write_all(b"restarted\n")
+					.unwrap();
 			}
 		}
 

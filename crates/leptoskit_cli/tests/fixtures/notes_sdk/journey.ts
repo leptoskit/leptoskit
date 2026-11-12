@@ -9,6 +9,9 @@
 //    starts it again. The client reconnects, subscribes again, and receives
 //    the note the harness adds afterwards.
 
+import { stdin } from "node:process";
+import { createInterface } from "node:readline";
+
 import { Client, type LiveStatus, type PublicNote } from "./index.ts";
 
 const env = (name: string): string => {
@@ -90,7 +93,10 @@ try {
 
 	// Read-your-writes: when the call resolves, the subscription has it.
 	const added = await api.addNote.live({ body: "from the sdk" });
-	check(added.body === "from the sdk", `the mutation: ${JSON.stringify(added)}`);
+	check(
+		added.body === "from the sdk",
+		`the mutation: ${JSON.stringify(added)}`,
+	);
 	check(has("from the sdk") === 1, `the write shows: ${JSON.stringify(notes)}`);
 	check(notes![0].id === added.id, "the newest note comes first");
 	console.log("ok mutation");
@@ -103,8 +109,22 @@ try {
 		`the one-shot list: ${JSON.stringify(listed)}`,
 	);
 	await until(() => has("one shot") === 1, "the one-shot note, live");
+	clearTimeout(budget);
+	// The harness allows a minute each for shutdown and startup. Only
+	// after its marker does the resumed subscription get its own minute.
+	const restartBudget = setTimeout(() => {
+		console.error("the harness did not finish restarting");
+		exit(1);
+	}, 120_000);
+	const control = createInterface({ input: stdin });
+	const restarted = new Promise<string>((resolve) =>
+		control.once("line", resolve)
+	);
 	console.log("ready for restart");
 
+	check(await restarted === "restarted", "the harness completed the restart");
+	clearTimeout(restartBudget);
+	control.close();
 	await until(
 		() => has("after restart") === 1,
 		"the note added after the restart",
@@ -121,7 +141,6 @@ try {
 
 	stop();
 	api.live.close();
-	clearTimeout(budget);
 } catch (error) {
 	console.error(error);
 	exit(1);
