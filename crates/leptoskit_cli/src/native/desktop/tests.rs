@@ -211,3 +211,33 @@ fn support_registry(root: &Path) -> Registry {
 		scene3d: false,
 	}
 }
+
+#[test]
+fn menu_bar_mode_replaces_only_the_stock_host() {
+	let temporary = tempfile::tempdir().unwrap();
+	let root = temporary.path();
+	let registry = clipboard_registry(root);
+	write(
+		&root.join("hosts/macos/App.swift"),
+		include_str!("../templates/MacApp.swift"),
+	)
+	.unwrap();
+	let mut config = LeptoskitConfig::default();
+	config.native.mode = leptoskit_config::application::NativeMode::MenuBar;
+	generate(root, &config, &registry).unwrap();
+	let generated = root.join(".leptoskit/macos/Sources/App.swift");
+	assert_eq!(
+		std::fs::read_to_string(&generated).unwrap(),
+		include_str!("../templates/MacMenuBarApp.swift")
+	);
+	write(
+		&root.join("hosts/macos/App.swift"),
+		"// custom resident lifecycle",
+	)
+	.unwrap();
+	generate(root, &config, &registry).unwrap();
+	assert_eq!(
+		std::fs::read_to_string(generated).unwrap(),
+		"// custom resident lifecycle"
+	);
+}

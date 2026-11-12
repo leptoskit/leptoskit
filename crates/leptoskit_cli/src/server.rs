@@ -32,13 +32,13 @@ pub(crate) fn backend_package<'a>(
 	platform: leptoskit_config::Platform,
 ) -> Result<Option<&'a crate::wasm::MetadataPackage>> {
 	let package = metadata
-		.package(&config.app.name)
+		.package(config.server_package())
 		.filter(|package| package.bin_target().is_some());
 	let enabled = config.backend_enabled(package.is_some())?;
 	anyhow::ensure!(
 		platform != leptoskit_config::Platform::Server || enabled,
 		"the server platform requires a backend; set build.backend = true and name its package in \
-		 app.name"
+		 build.server_package"
 	);
 	Ok(package.filter(|_| enabled))
 }

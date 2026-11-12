@@ -15,7 +15,7 @@ use super::project::copy_package;
 use super::project::write;
 use super::registry::Registry;
 
-pub fn generate(root: &Path, _config: &LeptoskitConfig, registry: &Registry) -> Result<()> {
+pub fn generate(root: &Path, config: &LeptoskitConfig, registry: &Registry) -> Result<()> {
 	let directory = root.join(".leptoskit/macos");
 	let packages = directory.join("packages");
 	copy_package(&registry.bridge, &packages.join("leptoskit_bridge_ffi"))?;
@@ -45,10 +45,18 @@ pub fn generate(root: &Path, _config: &LeptoskitConfig, registry: &Registry) -> 
 		&directory.join("Sources/GeneratedPlugins.swift"),
 		&registrant,
 	)?;
-	copy(
-		&super::host_dir(root, Target::Macos).join("App.swift"),
-		&directory.join("Sources/App.swift"),
-	)?;
+	let app_source = super::host_dir(root, Target::Macos).join("App.swift");
+	let app = std::fs::read_to_string(&app_source)?;
+	// App-owned custom hosts keep their lifecycle. The stock host gains a
+	// status item with a lazy window; it starts no guest interpreter at launch.
+	let app = if config.native.mode == leptoskit_config::application::NativeMode::MenuBar
+		&& app == include_str!("templates/MacApp.swift")
+	{
+		include_str!("templates/MacMenuBarApp.swift")
+	} else {
+		&app
+	};
+	write(&directory.join("Sources/App.swift"), app)?;
 	let mut sources = vec!["App.swift".to_owned(), "GeneratedPlugins.swift".to_owned()];
 
 	for source in super::project::platform_sources::MACOS {

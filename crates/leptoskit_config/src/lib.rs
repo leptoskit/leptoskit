@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub mod application;
 pub mod assets;
 pub mod extension;
 pub mod infra;
@@ -69,6 +70,15 @@ const fn default_schema_version() -> u32 {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct LeptoskitConfig {
+	/// Frontends built from packages in this application's Cargo workspace.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub frontends: BTreeMap<String, application::FrontendConfig>,
+	/// Named combinations of frontend, platform, server, and sidecars.
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	pub targets: BTreeMap<String, application::TargetConfig>,
+	/// The target resolved by the loader; never written into configuration.
+	#[serde(skip)]
+	pub selected_target: Option<String>,
 	/// Configuration contract version. Version 0 is unstable; breaking changes
 	/// are expected until version 1. Omitted versions are accepted for existing
 	/// projects; `leptoskit migrate` writes the current version.
@@ -140,6 +150,9 @@ pub struct LeptoskitConfig {
 impl Default for LeptoskitConfig {
 	fn default() -> Self {
 		Self {
+			frontends: BTreeMap::new(),
+			targets: BTreeMap::new(),
+			selected_target: None,
 			schema_version: SCHEMA_VERSION,
 			app: AppConfig::default(),
 			serve: ServeConfig::default(),
@@ -302,6 +315,9 @@ fn validate_theme_length_value(value: &str) -> Result<(), String> {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct AppConfig {
+	/// Named target selected when no `--app-target` is supplied.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub default_target: Option<String>,
 	/// The package name; defaults to the directory name.
 	pub name: String,
 	/// The semantic version of the app.
@@ -336,6 +352,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
 	fn default() -> Self {
 		Self {
+			default_target: None,
 			name: String::new(),
 			version: semver::Version::new(0, 1, 0),
 			default_platform: Platform::Web,
@@ -1091,6 +1108,12 @@ impl Default for ServeConfig {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct BuildConfig {
+	/// Backend Cargo package, independent of application identity.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub server_package: Option<String>,
+	/// Frontend inputs, relative to the application root.
+	#[serde(skip_serializing_if = "application::FrontendInputs::is_default")]
+	pub inputs: application::FrontendInputs,
 	/// Whether `app.name` supplies the backend binary, independently of
 	/// browser rendering. Unset detects a binary in that Cargo package;
 	/// false selects a static client even if the package has other binaries.
@@ -1193,6 +1216,9 @@ impl std::str::FromStr for Optimize {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct NativeConfig {
+	/// Desktop launch behavior. Menu-bar mode creates no initial window.
+	#[serde(skip_serializing_if = "application::NativeMode::is_default")]
+	pub mode: application::NativeMode,
 	/// The app-owned native capability contract. Change this when a store
 	/// release changes plugin grants or native behavior incompatibly.
 	pub update_contract: String,
@@ -1296,6 +1322,7 @@ pub struct NativeConfig {
 impl Default for NativeConfig {
 	fn default() -> Self {
 		Self {
+			mode: application::NativeMode::default(),
 			update_contract: "mobile-v1".into(),
 			plugins: Vec::new(),
 			required_plugins: Vec::new(),
@@ -3397,6 +3424,7 @@ impl LeptoskitConfig {
 	///   pattern that can't work, lacks Firefox's add-on ID or the package ID
 	///   Safari needs, or is combined with code push.
 	pub fn validate(&self) -> Result<(), ConfigError> {
+		self.validate_application()?;
 		if self.schema_version != SCHEMA_VERSION {
 			return Err(ConfigError::SchemaVersion(self.schema_version));
 		}
@@ -3471,7 +3499,7 @@ impl LeptoskitConfig {
 			return Err(ConfigError::InvalidBackend(format!(
 				"app.name `{}` must name a package with a backend binary; add src/main.rs or a \
 				 [[bin]] target",
-				self.app.name
+				self.server_package()
 			)));
 		}
 
@@ -3740,6 +3768,8 @@ impl LeptoskitConfig {
 	pub fn load() -> Result<(Self, PathBuf), ConfigError> {
 		let current = Self::find_root()?;
 		let config = Self::load_from(&current)?;
+		let name = std::env::var("LEPTOSKIT_APP_TARGET").ok();
+		let config = config.resolve_target(name.as_deref())?;
 		Ok((config, current))
 	}
 
@@ -3786,6 +3816,9 @@ impl LeptoskitConfig {
 /// Errors raised while loading configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+	/// A named application target or frontend cannot be resolved.
+	#[error("invalid application target: {0}")]
+	InvalidApplication(String),
 	/// Backend selection conflicts with rendering or Cargo targets.
 	#[error("invalid backend configuration: {0}")]
 	InvalidBackend(String),

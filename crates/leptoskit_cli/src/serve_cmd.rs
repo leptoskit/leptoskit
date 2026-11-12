@@ -26,7 +26,12 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 	let (config, root) = leptoskit_config::LeptoskitConfig::load()?;
 	let root = Utf8PathBuf::from_path_buf(root)
 		.map_err(|_| anyhow::anyhow!("project path is not UTF-8"))?;
-	let dir_path = root.join(dir);
+	let dir_path = root.join(
+		config
+			.output_directory(dir)
+			.to_str()
+			.context("output path is not UTF-8")?,
+	);
 	anyhow::ensure!(
 		dir_path.is_dir(),
 		"{dir_path} does not exist; run `leptoskit build` first"
@@ -65,7 +70,10 @@ pub fn run(dir: &str, port: Option<u16>) -> Result<()> {
 		BuiltServices::default()
 	} else {
 		let metadata = crate::wasm::cargo_metadata(root.as_std_path())?;
-		BuiltServices::load(&metadata.target_directory, root.as_std_path())?
+		BuiltServices::load(
+			&metadata.target_directory,
+			&config.artifact_root(root.as_std_path()),
+		)?
 	};
 
 	let routes = Routes::of(&services.services);
@@ -185,12 +193,11 @@ fn run_app_server(
 	stop: &std::sync::atomic::AtomicBool,
 ) -> Result<()> {
 	let metadata = crate::wasm::cargo_metadata(root.as_std_path())?;
-	let server = BuiltServer::load(&metadata.target_directory, root.as_std_path())?;
-	let client = crate::wasm::detect_client_with(
-		config.build.client_package.as_deref(),
-		Some(&config.app.name),
-		&metadata,
+	let server = BuiltServer::load(
+		&metadata.target_directory,
+		&config.artifact_root(root.as_std_path()),
 	)?;
+	let client = crate::wasm::target_client(config, config.app.default_platform, &metadata)?;
 	let site = SiteEnv {
 		output_name: crate::server::output_name(client.as_ref(), &config.app.name),
 		site_root: site_root.into_std_path_buf(),
