@@ -676,25 +676,33 @@ impl<'a> Leader<'a> {
 				return Ok(());
 			}
 
-			let found = self.step().await?;
+			let Some(read) = self.step().await? else {
+				return Ok(());
+			};
 
-			if !found && pause(stop, self.settings.poll).await {
+			if read == 0 && pause(stop, self.settings.poll).await {
 				return Ok(());
 			}
 		}
 	}
 
 	/// One read of the slot, up to where the log has been flushed: records
-	/// what it found and moves the slot past it. Whether it found anything.
-	async fn step(&mut self) -> Result<bool> {
-		let target = u64::try_from(
-			query_i64(
-				self.client,
-				"SELECT (pg_current_wal_flush_lsn() - '0/0'::pg_lsn)::bigint",
+	/// what it found and moves the slot past it. Returns the message count,
+	/// or `None` when a migration has removed the publication.
+	async fn step(&mut self) -> Result<Option<usize>> {
+		let position = self
+			.client
+			.query_one(
+				"SELECT EXISTS (SELECT FROM pg_catalog.pg_publication WHERE pubname = $1), \
+				 (pg_current_wal_flush_lsn() - '0/0'::pg_lsn)::bigint",
+				&[&live::PUBLICATION],
 			)
-			.await?,
-		)
-		.unwrap_or(0);
+			.await
+			.map_err(driver_error)?;
+		if !position.get::<_, bool>(0) {
+			return Ok(None);
+		}
+		let target = u64::try_from(position.get::<_, i64>(1)).unwrap_or(0);
 		let limit = i32::try_from(self.settings.changes_per_read).unwrap_or(i32::MAX);
 		let rows = self
 			.client
@@ -728,7 +736,7 @@ impl<'a> Leader<'a> {
 		}
 
 		self.advance(end).await?;
-		Ok(!rows.is_empty())
+		Ok(Some(rows.len()))
 	}
 
 	/// Groups messages into committed transactions.
