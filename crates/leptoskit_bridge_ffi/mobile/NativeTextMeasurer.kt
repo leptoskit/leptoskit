@@ -158,8 +158,12 @@ internal class NativeTextMeasurer(
         var widest = 0f
         repeat(measured.lineCount) { widest = max(widest, measured.getLineWidth(it)) }
         val pixels = ceil(widest.coerceAtMost(limit.coerceAtLeast(0f)).toDouble()).toFloat()
+        val logicalWidth = pixels / metrics.density
+        // Pixel rounding can cross a fractional logical constraint. The
+        // renderer snaps the final frame outward to pixels separately.
+        val constrainedWidth = if (width >= 0f) logicalWidth.coerceAtMost(width) else logicalWidth
 
-        return floatArrayOf(pixels / metrics.density, measured.height / metrics.density)
+        return floatArrayOf(constrainedWidth, measured.height / metrics.density)
     }
 
     private fun paint(
