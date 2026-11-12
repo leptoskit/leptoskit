@@ -125,7 +125,9 @@ public final class DeviceKeysPlugin: NSObject, NativePlugin {
         guard let signature = SecKeyCreateSignature(
             privateKey, .ecdsaSignatureMessageX962SHA256, request.message as CFData, &error
         ) as Data? else {
-            return deviceKeysFields([1, keyStatus(for: error?.takeRetainedValue() as NSError?)])
+            let failure = error?.takeRetainedValue()
+            let status = keyStatus(for: failure.map { $0 as Error as NSError })
+            return deviceKeysFields([1, status])
         }
 
         return deviceKeysFields([1, KeyStatus.ok]) + lengthPrefixed(signature)
