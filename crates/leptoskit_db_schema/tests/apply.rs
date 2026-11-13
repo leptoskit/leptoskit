@@ -751,7 +751,10 @@ impl PostgresCluster {
 
 	/// Every column, constraint, index, and comment outside the system
 	/// schemas, in a stable order. Column order isn't compared: `ADD COLUMN`
-	/// always appends.
+	/// always appends. PostgreSQL 18's `NOT NULL` constraint names retain old
+	/// table and column names after renames, so compare their definitions;
+	/// nullability is also checked in the column query. Other constraint
+	/// names remain part of the comparison.
 	fn describe(&self, database: &str) -> Vec<String> {
 		const USER_SCHEMAS: &str = "NOT IN ('pg_catalog', 'information_schema', 'pg_toast')";
 		let queries = [
@@ -761,9 +764,10 @@ impl PostgresCluster {
 				 information_schema.columns WHERE table_schema {USER_SCHEMAS} ORDER BY 1, 2, 3"
 			),
 			format!(
-				"SELECT n.nspname, c.conrelid::regclass, c.conname, pg_get_constraintdef(c.oid) \
-				 FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE \
-				 n.nspname {USER_SCHEMAS} ORDER BY 1, 2, 3"
+				"SELECT n.nspname, c.conrelid::regclass, CASE c.contype WHEN 'n' THEN '' ELSE \
+				 c.conname END, pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN \
+				 pg_namespace n ON n.oid = c.connamespace WHERE n.nspname {USER_SCHEMAS} ORDER BY \
+				 1, 2, 3"
 			),
 			format!(
 				"SELECT schemaname, tablename, indexname, indexdef FROM pg_indexes WHERE \
