@@ -30,6 +30,7 @@ fn the_client_compiles_none_of_the_banned_crates() {
 #[test]
 fn the_browser_client_compiles_none_of_the_banned_crates() {
 	check(&["--features", "web"]);
+	check(&["--features", "web,derive,typed"]);
 }
 
 fn check(features: &[&str]) {

@@ -10,7 +10,7 @@ description = "A compiled Rust guest that records analytics events with the nati
 crate-type = ["cdylib"]
 
 [features]
-typed = ["leptoskit_analytics/derive"]
+typed = ["leptoskit_analytics/derive", "leptoskit_analytics/typed"]
 
 # The guest compiles only for wasm32; the host build is an empty crate.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

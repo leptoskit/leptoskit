@@ -9,6 +9,8 @@
 
 use std::cell::RefCell;
 
+#[cfg(not(feature = "typed"))]
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
@@ -17,7 +19,6 @@ use super::Config;
 use super::Identity;
 use super::Outcome;
 use super::Platform;
-use crate::SERVICE;
 use crate::wire::Properties;
 use crate::wire::Value;
 
@@ -38,7 +39,7 @@ impl Default for Options {
 	fn default() -> Self {
 		Self {
 			config: Config::default(),
-			endpoint: format!("/_leptoskit/services/{SERVICE}/v1/batch"),
+			endpoint: "/_leptoskit/services/analytics/v1/batch".into(),
 			interval: 3_000,
 			persist: true,
 		}
@@ -118,6 +119,9 @@ pub fn capture(name: &str, properties: Properties) {
 
 /// Records a typed event with its declared name and fields.
 pub fn capture_event<E: crate::Event>(event: E) {
+	#[cfg(not(feature = "typed"))]
+	capture(E::NAME, event.into_properties());
+	#[cfg(feature = "typed")]
 	with(|client| client.capture_event(event));
 }
 
@@ -270,7 +274,7 @@ fn context() -> Properties {
 // less code, in both the wasm and its JavaScript glue, than web-sys's
 // bindings and their error handling. The page's values are joined by
 // newlines, which none can hold. Storage and sending never throw: storage
-// that isn't there is skipped, and a failed request answers "", a retry.
+// that isn't there is skipped, and failed requests become retries.
 // It's served as written, with nothing to minify it, so it's written small:
 // `g` is `globalThis`, `t` turns a value into a line of text, and `c` runs
 // a function, answering `e` if it throws.
@@ -283,9 +287,9 @@ export const watch_page=(ms,tick,leave)=>{setInterval(tick,ms);addEventListener(
 export const fill_random=b=>{if(!c(()=>(g.crypto.getRandomValues(b),1),0))for(let i=0;i<b.length;i++)b[i]=Math.random()*256};
 export const storage_get=k=>c(()=>s().getItem(k),null);
 export const storage_set=(k,v)=>c(()=>v==null?s().removeItem(k):s().setItem(k,v));
-export const fetch_batch=(url,body,keepalive)=>c(()=>fetch(url,{method:"POST",body,keepalive}).then(async r=>{const h=`${r.status} ${r.headers.get("retry-after")||""}|`;if(!r.ok)return h;const i=await unknown_schemas(r);return i==null?"":h+i},()=>""),Promise.resolve(""));
+export async function fetch_batch(url,body,keepalive){const r=await fetch(url,{method:"POST",body,keepalive});return [r.status,r.headers.get("retry-after")]}
 export const send_beacon=(u,b)=>c(()=>g.navigator.sendBeacon(u,b),false);
-export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
+
 "#)]
 extern "C" {
 	fn page_context() -> String;
@@ -295,8 +299,20 @@ extern "C" {
 	fn fill_random(bytes: &mut [u8]);
 	fn storage_get(key: &str) -> Option<String>;
 	fn storage_set(key: &str, value: Option<&str>);
+	#[cfg(not(feature = "typed"))]
 	fn fetch_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
 	fn send_beacon(url: &str, body: &[u8]) -> bool;
+}
+
+// Only compact batches need catalogue acknowledgements; named events need
+// just an HTTP status. Keep this snippet out of the core client's download.
+#[cfg(feature = "typed")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function fetch_typed_batch(url,body,keepalive){try{const r=await fetch(url,{method:"POST",body,keepalive}),h=`${r.status} ${r.headers.get("retry-after")||""}|`;if(!r.ok)return h;const i=await unknown_schemas(r);return i==null?"":h+i}catch(_){return ""}}
+export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
+"#)]
+extern "C" {
+	fn fetch_typed_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
 }
 
 /// Takes the next batch, if one may be sent now.
@@ -315,10 +331,13 @@ fn take(named: bool) -> Option<(super::Pending, String)> {
 }
 
 fn settle(outcome: Outcome, refused: &[(u32, String)]) {
+	#[cfg(not(feature = "typed"))]
+	let _ = refused;
 	let mut jitter = [0_u8; 1];
 	Browser.fill_random(&mut jitter);
 	with(|client| {
 		let jitter = f64::from(jitter[0]) / 255.0;
+		#[cfg(feature = "typed")]
 		if outcome == Outcome::Stored {
 			let refused: Vec<(u32, &str)> = refused
 				.iter()
@@ -327,9 +346,9 @@ fn settle(outcome: Outcome, refused: &[(u32, String)]) {
 			client
 				.queue()
 				.settle_with_refusals(&refused, Browser.now(), jitter);
-		} else {
-			client.queue().settle(outcome, Browser.now(), jitter);
+			return;
 		}
+		client.queue().settle(outcome, Browser.now(), jitter);
 	});
 }
 
@@ -349,9 +368,17 @@ async fn send_waiting() {
 	}
 }
 
+#[cfg(feature = "typed")]
 async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
-	let answer = JsFuture::from(fetch_batch(endpoint, body, body.len() <= KEEPALIVE_BYTES))
-		.await.ok().and_then(|answer| answer.as_string()).unwrap_or_default();
+	let answer = JsFuture::from(fetch_typed_batch(
+		endpoint,
+		body,
+		body.len() <= KEEPALIVE_BYTES,
+	))
+	.await
+	.ok()
+	.and_then(|answer| answer.as_string())
+	.unwrap_or_default();
 	let Some((head, indices)) = answer.split_once('|') else {
 		return (Outcome::Retry { after: None }, Vec::new());
 	};
@@ -362,9 +389,27 @@ async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
 		return (Outcome::Retry { after: None }, Vec::new());
 	};
 	let outcome = Outcome::from_status(status, Some(retry_after).filter(|after| !after.is_empty()));
-	let refused = indices.split(',').filter_map(|index| index.parse().ok())
-		.map(|index| (index, "unknown_schema".to_owned())).collect();
+	let refused = indices
+		.split(',')
+		.filter_map(|index| index.parse().ok())
+		.map(|index| (index, "unknown_schema".to_owned()))
+		.collect();
 	(outcome, refused)
+}
+
+#[cfg(not(feature = "typed"))]
+async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
+	let Ok(answer) =
+		JsFuture::from(fetch_batch(endpoint, body, body.len() <= KEEPALIVE_BYTES)).await
+	else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	// The helper returns [HTTP status, Retry-After]. Keep the numeric status
+	// numeric rather than allocating and parsing another string in Wasm.
+	let answer = answer.unchecked_into::<js_sys::Array>();
+	let status = answer.get(0).as_f64().unwrap_or(0.0) as u16;
+	let after = answer.get(1).as_string();
+	(Outcome::from_status(status, after.as_deref()), Vec::new())
 }
 
 /// Hands every waiting batch to `sendBeacon`, which sends it even as the

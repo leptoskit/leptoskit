@@ -69,7 +69,7 @@ extern "C" {
 	fn send_on_hide();
 }
 
-#[cfg(feature = "derive")]
+#[cfg(all(feature = "derive", feature = "typed"))]
 #[derive(leptoskit_analytics::Event)]
 struct TypedCheckout {
 	plan: String,
@@ -149,7 +149,7 @@ async fn the_browser_records_identifies_and_remembers() {
 	web::reset();
 	assert_ne!(web::distinct_id().unwrap(), "user-7");
 	assert!(stored("lk_analytics_id").unwrap().starts_with("a:"));
-	#[cfg(feature = "derive")]
+	#[cfg(all(feature = "derive", feature = "typed"))]
 	{
 		for mode in ["unknown", "old"] {
 			intercept_typed(mode);

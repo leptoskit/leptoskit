@@ -210,6 +210,7 @@ pub enum Body {
 	/// schema id, and its values in field order, with no property names.
 	/// The service reads the names from its event catalogue. `properties`
 	/// are keyed ones sent with it, such as registered properties.
+	#[cfg(feature = "typed")]
 	TypedEvent {
 		name: String,
 		schema_id: u64,
@@ -226,6 +227,7 @@ impl Body {
 			Self::Alias { .. } => 2,
 			Self::Set { .. } => 3,
 			Self::GroupIdentify { .. } => 4,
+			#[cfg(feature = "typed")]
 			Self::TypedEvent { .. } => 5,
 		}
 	}
@@ -318,6 +320,7 @@ pub fn encode(batch: &Batch) -> Vec<u8> {
 				put_uvarint(&mut body, strings.index(group_key));
 				put_map(&mut body, &mut strings, set);
 			}
+			#[cfg(feature = "typed")]
 			Body::TypedEvent {
 				name,
 				schema_id,
@@ -593,6 +596,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Batch, DecodeError> {
 					set: reader.map(0)?,
 				}
 			}
+			#[cfg(feature = "typed")]
 			5 => {
 				let name = reader.name()?;
 				let schema_id = u64::from_le_bytes(reader.take(8)?.try_into().expect("8 bytes"));

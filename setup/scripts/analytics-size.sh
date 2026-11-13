@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # What the analytics browser client adds to a real leptoskit web app's first
 # load (docs/agents/analytics-service.md §16): builds analytics_app's hydrate
-# bundle as it is, then again with the client started and every recording
-# function called, runs both through wasm-bindgen, `wasm-opt -Oz` and brotli,
+# bundle as it is, then again with the client started, derived capture and
+# identity, group, registration, alias and consent operations, runs both through wasm-bindgen, `wasm-opt -Oz` and brotli,
 # and prints the difference against the 12 KiB budget.
 #
-#   setup/scripts/analytics-size.sh [--enforce | --self-test]
+#   setup/scripts/analytics-size.sh [--enforce | --compact | --self-test]
 #
-# With --enforce it fails over the budget; --self-test only checks that
-# nested JavaScript is counted, which every run checks first. It edits analytics_app and
+# With --enforce it fails over the core budget; --compact measures the
+# optional positional codec too. --self-test checks nested JavaScript and
+# the dirty-worktree guard, which every run checks first. It edits analytics_app and
 # Cargo.lock for the second build and restores both from git, so it refuses
 # to start when either has uncommitted changes. Run it in `devenv shell`,
 # which has wasm-bindgen, wasm-opt and brotli.
@@ -142,7 +143,7 @@ path = f"{app}/Cargo.toml"
 manifest = open(path).read()
 anchor = 'analytics_service = { path = "../analytics_service" }\n'
 assert anchor in manifest
-open(path, "w").write(manifest.replace(anchor, anchor + 'leptoskit_analytics = { workspace = true, features = ["web"] }\n', 1))
+open(path, "w").write(manifest.replace(anchor, anchor + 'leptoskit_analytics = { workspace = true, features = ["web", "derive"] }\n', 1))
 path = f"{app}/src/lib.rs"
 source = open(path).read()
 anchor = "\tleptos::mount::hydrate_body(app::App);"
@@ -152,7 +153,9 @@ calls = """\t{
 \t\tuse leptoskit_analytics::props;
 \t\tweb::init(web::Options::default());
 \t\tweb::capture_pageview(props! {});
-\t\tweb::capture("signed_up", props! { "plan" => "pro", "seats" => 3 });
+\t\t#[derive(leptoskit_analytics::Event)]
+\t\tstruct SignedUp { plan: String, seats: u32 }
+\t\tweb::capture_event(SignedUp { plan: "pro".into(), seats: 3 });
 \t\tweb::identify("user-1", props! { "email" => "ada@example.com" });
 \t\tweb::group("company", "acme", props! {});
 \t\tweb::register(props! { "flavour" => "beta" });
@@ -165,13 +168,26 @@ calls = """\t{
 """
 open(path, "w").write(source.replace(anchor, calls + anchor, 1))
 PY
+if [ "${1:-}" = "--compact" ]; then
+	python3 - "$app/Cargo.toml" <<'PY2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+assert 'features = ["web", "derive"]' in s
+open(p, "w").write(s.replace('features = ["web", "derive"]', 'features = ["web", "derive", "typed"]'))
+PY2
+fi
 build
 read -r with_wasm with_js with_other with < <(measure with)
 
 added=$((with - base))
 echo "analytics_app without the client: wasm $base_wasm + main js $base_js + other js $base_other = $base (brotli, per file)"
 echo "analytics_app with the client:    wasm $with_wasm + main js $with_js + other js $with_other = $with"
-echo "the client adds $added bytes; the budget is $budget"
+if [ "${1:-}" = "--compact" ]; then
+	echo "the client with the optional compact codec adds $added bytes (informational; the core budget is $budget)"
+else
+	echo "the client adds $added bytes; the budget is $budget"
+fi
 if [ "${1:-}" = "--enforce" ] && [ "$added" -gt "$budget" ]; then
 	echo "over the budget by $((added - budget)) bytes" >&2
 	exit 1
