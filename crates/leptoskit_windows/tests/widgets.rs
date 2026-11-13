@@ -15,6 +15,9 @@ use leptoskit_windows::WindowsBackend;
 use leptoskit_windows::WindowsWindow;
 use leptoskit_yoga::NodeId;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Dwm::DWMWA_TRANSITIONS_FORCEDISABLED;
+use windows::Win32::Graphics::Dwm::DwmFlush;
+use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
 use windows::Win32::System::Com::COINIT_MULTITHREADED;
@@ -35,6 +38,18 @@ use windows::core::w;
 )]
 fn mount(root: Element) -> (WindowsWindow, NativeSurface<WindowsBackend>) {
 	let window = WindowsWindow::new("Leptoskit native widget verification", 520, 680).unwrap();
+	let disable_transitions = windows::core::BOOL(1);
+	// SAFETY: The fixture owns this window, and the attribute receives one
+	// correctly sized BOOL. This changes no other window or desktop setting.
+	unsafe {
+		DwmSetWindowAttribute(
+			window.handle(),
+			DWMWA_TRANSITIONS_FORCEDISABLED,
+			std::ptr::from_ref(&disable_transitions).cast(),
+			u32::try_from(size_of::<windows::core::BOOL>()).unwrap(),
+		)
+		.expect("disable transitions on the fixture window");
+	}
 	let mut backend = WindowsBackend::new().unwrap();
 	backend.set_dpi(window.dpi());
 	let mut surface = NativeSurface::new(backend);
@@ -147,6 +162,13 @@ fn accessible(hwnd: HWND) -> IAccessible {
 fn pixel(window: &WindowsWindow, hwnd: HWND, x: f32, y: f32) -> [u8; 4] {
 	window.pump_messages();
 	std::thread::sleep(std::time::Duration::from_millis(50));
+	// snapshot_png reads the screen, so queued drawing must reach the desktop
+	// before inspecting an exact color. A sleep alone is no presentation fence.
+	// SAFETY: DwmFlush takes no pointers and flushes this process's queued
+	// work.
+	unsafe {
+		DwmFlush().expect("present queued drawing before capturing pixels");
+	}
 	let image = image::load_from_memory(&window.snapshot_png().unwrap())
 		.unwrap()
 		.into_rgba8();
