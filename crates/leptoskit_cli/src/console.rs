@@ -105,12 +105,18 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 			let data = data_directory(data)?;
 			let lock = directory_lock(&data)?;
 			let store = Store::open(&data.join("console.sqlite3"))?;
+
 			for root in project {
 				let root = root
 					.canonicalize()
 					.context("registered repository does not exist")?;
 				let config = LeptoskitConfig::load_from(&root)?;
-				let infra = config.infra.context("registered app needs [infra]")?;
+				let infra = config
+					.infra
+					.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+					.context(
+						"registration requires the managed application infrastructure preset",
+					)?;
 				let environment = infra
 					.plugins
 					.analytics

@@ -1,0 +1,34 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 236
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Prepare candidates, recheck inputs, then activate each host
+
+Usage: leptoskit infra release apply [OPTIONS] --bundle <BUNDLE> --sha256 <SHA256> --trust <TRUST> --trust-sha256 <TRUST_SHA256> --version <VERSION> --unit <UNIT> --plan <PLAN>
+
+Options:
+      --bundle <BUNDLE>
+          Directory containing captured graph artifacts and manifest.json
+      --sha256 <SHA256>
+          Independently obtained graph manifest digest
+      --trust <TRUST>
+          Independently maintained host/runtime trust document
+      --trust-sha256 <TRUST_SHA256>
+          Independently obtained SHA-256 of the host/runtime trust document
+      --caddy <CADDY>
+          Supplied Linux Caddy executable; required only for selected public hosts
+      --caddy-sha256 <CADDY_SHA256>
+          Independently obtained SHA-256 of the Linux Caddy executable
+      --version <VERSION>
+          Release identifier; rollback selects a previously installed version
+      --unit <UNIT>
+          Selected graph unit, such as frontends.docs; repeat for multiple units
+      --plan <PLAN>
+          Saved plan file. Apply/status/rollback compare it to current inputs
+      --recover-plan-sha256 <RECOVER_PLAN_SHA256>
+          Recover an existing operation using the independently obtained digest of its original saved plan. Retains historical operation/host identities
+      --policy <POLICY>
+          Graph approvals are not implemented; strict fails before mutation [default: operator] [possible values: operator, strict]
+  -h, --help
+          Print help

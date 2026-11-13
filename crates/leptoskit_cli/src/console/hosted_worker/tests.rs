@@ -40,7 +40,7 @@ registry_username = 'team'
 	text
 }
 
-fn infra(compute: &str, budget: bool) -> leptoskit_config::infra::InfraConfig {
+fn infra(compute: &str, budget: bool) -> leptoskit_config::infra::ManagedInfraConfig {
 	let mut text = format!(
 		"\
 [infra]
@@ -67,7 +67,7 @@ compute = '{compute}'
 	}
 
 	let config = LeptoskitConfig::from_toml(&text, Path::new("fixture")).unwrap();
-	config.infra.unwrap()
+	config.infra.unwrap().into_managed().unwrap()
 }
 
 #[cfg(unix)]
@@ -242,7 +242,9 @@ fn run_validates_the_origin_repository_and_configuration() {
 	std::fs::write(bare.path().join("leptoskit.toml"), "").unwrap();
 	let error = run("http://localhost:4700", bare.path(), data.path()).unwrap_err();
 	assert!(
-		error.to_string().contains("worker needs [infra]"),
+		error
+			.to_string()
+			.contains("worker requires the managed application infrastructure preset"),
 		"unexpected error: {error}"
 	);
 

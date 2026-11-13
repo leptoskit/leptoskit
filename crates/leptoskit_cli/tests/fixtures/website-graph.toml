@@ -1,0 +1,73 @@
+# Declaration fixture only. Provider IDs and addresses are documentation values.
+[app]
+name = "leptoskit-web"
+
+[build]
+backend = false
+
+[artifacts.public-site]
+command = ["cargo", "run", "--locked", "-p", "leptoskit_app", "--bin", "leptoskit-site"]
+output = "crates/leptoskit_app/dist"
+
+[infra.frontends.site]
+artifact = "public-site"
+directory = "."
+host = "web"
+domain = "leptoskit.dev"
+
+[infra.frontends.docs]
+artifact = "public-site"
+directory = "docs"
+host = "web"
+domain = "leptoskit.dev"
+mount = "/docs/"
+
+[infra.frontends.play]
+artifact = "public-site"
+directory = "play"
+host = "web"
+domain = "leptoskit.dev"
+mount = "/play/"
+calls = ["services.play-api"]
+
+[services.play-api]
+package = "leptoskit_playground_server"
+database = false
+port = 4702
+
+[services.play-api.deploy]
+host = "compiler"
+domain = "play-api.leptoskit.dev"
+ingress = "cloudflare-https"
+
+[services.play-api.serve]
+probes = true
+
+[services.play-api.runtime.container]
+engine = "podman"
+rootless = true
+socket-env = "PLAY_SOCKET"
+engine-env = "PLAY_RUNTIME"
+image-env = "PLAY_IMAGE"
+image-pin = "deploy/playground-toolchain.digest"
+
+[infra]
+mode = "graph"
+name = "leptoskit-web"
+account_id = "00000000000000000000000000000001"
+zone_id = "00000000000000000000000000000002"
+ssh_key_ids = [123]
+ssh_cidrs = ["192.0.2.0/24", "2001:db8::/32"]
+
+[infra.hosts.web]
+location = "hel1"
+server_type = "cx23"
+
+[infra.hosts.compiler]
+location = "hel1"
+server_type = "cpx32"
+exclusive = true
+
+[infra.edge]
+ingress = "cloudflare-https"
+origin-firewall = "cloudflare-only"

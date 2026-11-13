@@ -2,7 +2,7 @@
 source: crates/leptoskit_cli/tests/snapshots.rs
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
-Builds the project for a platform
+Builds the application or selected deployment graph units
 
 Usage: leptoskit build [OPTIONS]
 
@@ -11,7 +11,8 @@ Options:
       --release                        Build in release mode
       --platform <PLATFORM>            The platform to build; defaults to the configuration's
       --optimize <OPTIMIZE>            How hard to optimize a release client for size, `fast` or `smallest`; defaults to `bundle.optimize`. Needs `--release`
-      --out <OUT>                      The output directory, relative to the project root [default: dist]
+      --out <OUT>                      Output directory: dist for applications, .leptoskit/graph/builds for captured graph artifacts. Recipe output paths remain declared
+      --unit <UNIT>                    Graph unit to build, such as frontends.docs. Repeat for several; omit to build all units. Unselected services are not rebuilt
       --unsigned                       Build the release without signing it: an APK or app no store takes, for measuring or testing. Without it, an Android, Quest, or iOS release is signed, or not built
       --export-method <EXPORT_METHOD>  Who an iOS release's `.ipa` is for: app-store-connect, ad-hoc, or development. Defaults to `native.ios.export-method`
       --build-number <BUILD_NUMBER>    The release's build number: Android's `versionCode`, and iOS's `CFBundleVersion`. Each store upload needs a higher one

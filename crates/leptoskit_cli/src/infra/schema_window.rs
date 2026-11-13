@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig;
 use leptoskit_db::MigrationWindow;
 use serde_json::Value;
 use serde_json::json;
@@ -181,7 +181,7 @@ fn directory(name: &str) -> Result<String> {
 /// failed candidate's configuration, or the reserved fields are removed.
 pub(super) fn prepare(
 	dir: &Path,
-	config: &InfraConfig,
+	config: &ManagedInfraConfig,
 	hosts: &[String],
 	window: Option<&Window>,
 	reservation: &Reservation,
