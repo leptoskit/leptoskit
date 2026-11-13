@@ -12,8 +12,9 @@
 //! send.mutate(SendMessage { channel, body });
 //! ```
 //!
-//! Every target speaks the same protocol, `POST /api/<name>` with the
-//! arguments as JSON, and the client picks how to send it:
+//! Every target speaks the same protocol, `POST /rpc/<name>` — `/rpc`
+//! unless the build's `[rpc].path` moved it — with the arguments as JSON,
+//! and the client picks how to send it:
 //!
 //! - **In the browser** (`web`), a same-origin `fetch`, which carries the
 //!   session cookie.
@@ -99,7 +100,7 @@ pub use stream::use_stream;
 /// Where the client finds the server, and how this device proves who it
 /// is. Pass it to [`configure`] once, when the app starts; the same call
 /// works on every platform.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ClientConfig {
 	/// The server's origin, such as `https://myapp.com`. A native app needs
 	/// it. In the browser, leave it unset: the page's own origin is the one
@@ -121,6 +122,51 @@ pub struct ClientConfig {
 	/// token, never go to a service by default, and a service refusing a
 	/// request never renews them.
 	pub service_credentials: std::collections::BTreeMap<String, Arc<dyn Credentials>>,
+	/// Where the operations mount, relative to the origin: `/rpc` unless
+	/// `LEPTOSKIT_RPC_PATH` was set when this crate was compiled — which
+	/// `leptoskit dev` and `leptoskit build` do from `[rpc].path` — or
+	/// [`rpc_path`](Self::rpc_path) says otherwise. It must match the
+	/// server's `[rpc].path`. A service's operations keep the default
+	/// mounts under the service's prefix whatever this says.
+	pub rpc_path: String,
+	/// Where the live socket mounts, relative to the origin: `/live`
+	/// unless `LEPTOSKIT_RPC_LIVE_PATH` was set when this crate was
+	/// compiled — which `leptoskit dev` and `leptoskit build` do from the
+	/// `[rpc]` live mount — or [`live_path`](Self::live_path) says
+	/// otherwise. It must match where the server's live router is nested.
+	pub live_path: String,
+}
+
+impl Default for ClientConfig {
+	fn default() -> Self {
+		Self {
+			origin: None,
+			credentials: None,
+			offline_queue: false,
+			offline_store: None,
+			service_credentials: std::collections::BTreeMap::new(),
+			rpc_path: mount(option_env!("LEPTOSKIT_RPC_PATH"), crate::RPC_ROUTE_PREFIX),
+			live_path: mount(
+				option_env!("LEPTOSKIT_RPC_LIVE_PATH"),
+				crate::live::LIVE_PATH,
+			),
+		}
+	}
+}
+
+/// The mount `value` names, trimmed and beginning with a slash the way the
+/// server mounts it, or `default` when the build set nothing.
+fn mount(value: Option<&str>, default: &str) -> String {
+	let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+		return default.to_owned();
+	};
+
+	let trimmed = value.trim_matches('/');
+	if trimmed.is_empty() {
+		default.to_owned()
+	} else {
+		format!("/{trimmed}")
+	}
 }
 
 impl ClientConfig {
@@ -141,6 +187,22 @@ impl ClientConfig {
 	#[must_use]
 	pub fn credentials(mut self, credentials: impl Credentials) -> Self {
 		self.credentials = Some(Arc::new(credentials));
+		self
+	}
+
+	/// Where the operations mount, such as `/gateway`: the same
+	/// `[rpc].path` the server applies.
+	#[must_use]
+	pub fn rpc_path(mut self, path: impl Into<String>) -> Self {
+		self.rpc_path = mount(Some(&path.into()), crate::RPC_ROUTE_PREFIX);
+		self
+	}
+
+	/// Where the live socket mounts, such as `/realtime`: the same live
+	/// mount the server nests.
+	#[must_use]
+	pub fn live_path(mut self, path: impl Into<String>) -> Self {
+		self.live_path = mount(Some(&path.into()), crate::live::LIVE_PATH);
 		self
 	}
 
@@ -188,6 +250,8 @@ impl std::fmt::Debug for ClientConfig {
 			.field("origin", &self.origin)
 			.field("credentials", &self.credentials.is_some())
 			.field("offline_queue", &self.offline_queue)
+			.field("rpc_path", &self.rpc_path)
+			.field("live_path", &self.live_path)
 			.field(
 				"service_credentials",
 				&self.service_credentials.keys().collect::<Vec<_>>(),

@@ -225,6 +225,7 @@ fn spec() -> ApiSpec {
 			tags: Vec::new(),
 		}],
 		live_path: "/live".to_owned(),
+		rpc_path: "/rpc".to_owned(),
 		schemas: schemas().into_iter().collect(),
 	}
 }
@@ -777,6 +778,7 @@ fn edge_spec() -> ApiSpec {
 		servers: Vec::new(),
 		channels: Vec::new(),
 		live_path: "/live".to_owned(),
+		rpc_path: "/rpc".to_owned(),
 		functions: vec![
 			ApiFunction {
 				kind: ApiKind::Call,
@@ -1019,6 +1021,7 @@ fn colliding_spec() -> ApiSpec {
 		servers: Vec::new(),
 		channels: Vec::new(),
 		live_path: "/live".to_owned(),
+		rpc_path: "/rpc".to_owned(),
 		functions: vec![
 			function(
 				"call",

@@ -1,5 +1,6 @@
-//! The one-shot HTTP transport: `POST /api/<name>` for every query and
-//! mutation, and the same calls in process while the server renders.
+//! The one-shot HTTP transport: `POST {path}/<name>` for every query and
+//! mutation — `/rpc` unless `[rpc].path` says otherwise — and the same
+//! calls in process while the server renders.
 
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -15,7 +16,6 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::post;
 use leptoskit_db::Db;
-use serde_json::Value;
 
 use super::Anonymous;
 use super::Identify;
@@ -29,6 +29,9 @@ pub const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
 /// The largest request body a call may send: 2 MiB.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// JSON operation routes kept on `/api` while `json` is in `[rpc].transports`.
+const LEGACY_ROUTE_PREFIX: &str = "/api";
 
 /// The app's operations, served: the database they run on, and how to tell
 /// who is calling.
@@ -47,6 +50,11 @@ struct Inner {
 	identify: Arc<dyn Identify>,
 	/// The service these operations belong to; `None` for the app's own.
 	service: Option<&'static str>,
+	transports: crate::wire::TransportSet,
+	route_prefix: String,
+	/// Where [`live`](Self::live) serves its socket: the `[rpc]` config's
+	/// resolved live path, `/live` by default.
+	live_path: String,
 }
 
 impl Server {
@@ -58,6 +66,29 @@ impl Server {
 				db,
 				identify: Arc::new(Anonymous),
 				service: None,
+				transports: crate::wire::TransportSet::default(),
+				route_prefix: crate::RPC_ROUTE_PREFIX.to_owned(),
+				live_path: crate::live::LIVE_PATH.to_owned(),
+			}),
+		}
+	}
+
+	/// Applies `[rpc].path`, `[rpc].live_path`, and `[rpc].transports` from
+	/// configuration: the operation routes mount at `path` (the JSON ones
+	/// keep the legacy `/api` prefix while JSON is a transport), and
+	/// [`live`](Self::live) serves at `live_path`, or `{path}/live`.
+	#[must_use]
+	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
+		let route_prefix = config.path.trim_end_matches('/').to_owned();
+
+		Self {
+			inner: Arc::new(Inner {
+				db: self.inner.db.clone(),
+				identify: Arc::clone(&self.inner.identify),
+				service: self.inner.service,
+				transports: crate::wire::TransportSet::from_names(&config.transports),
+				route_prefix,
+				live_path: super::mount_path(&config.resolved_live_path()),
 			}),
 		}
 	}
@@ -71,6 +102,9 @@ impl Server {
 				db: self.inner.db.clone(),
 				identify: Arc::new(identify),
 				service: self.inner.service,
+				transports: self.inner.transports,
+				route_prefix: self.inner.route_prefix.clone(),
+				live_path: self.inner.live_path.clone(),
 			}),
 		}
 	}
@@ -109,6 +143,9 @@ impl Server {
 				db: self.inner.db.clone(),
 				identify: Arc::clone(&self.inner.identify),
 				service: Some(name),
+				transports: self.inner.transports,
+				route_prefix: self.inner.route_prefix.clone(),
+				live_path: self.inner.live_path.clone(),
 			}),
 		}
 	}
@@ -134,14 +171,16 @@ impl Server {
 		self.inner.identify.identify(parts)
 	}
 
-	/// The live server for these operations: the same database and the same
-	/// way of telling callers apart. Configure it, then merge its
+	/// The live server for these operations: the same database, the same way
+	/// of telling callers apart, and the same `[rpc].path`/`live_path`
+	/// mount. Configure it, then merge its
 	/// [`router`](super::Live::router).
 	#[cfg(feature = "live")]
 	pub fn live(&self) -> super::Live {
 		super::Live::new(self.inner.db.clone())
 			.identify_arc(Arc::clone(&self.inner.identify))
 			.for_service(self.inner.service)
+			.with_live_path(self.inner.live_path.clone())
 	}
 
 	/// Makes this the server that in-process calls use, such as
@@ -151,9 +190,11 @@ impl Server {
 		*INSTALLED.write().unwrap_or_else(PoisonError::into_inner) = Some(self.clone());
 	}
 
-	/// `POST /api/<name>` for every registered query and mutation, relative
-	/// to wherever the router is nested, and [installs](Self::install) this
-	/// server for in-process calls.
+	/// `POST {path}/<name>` for every registered query and mutation —
+	/// `[rpc].path`, `/rpc` by default, with the legacy JSON routes kept on
+	/// `/api` while JSON is a transport — relative to wherever the router is
+	/// nested, and [installs](Self::install) this server for in-process
+	/// calls.
 	///
 	/// A call sends its arguments as one JSON object, and gets back its
 	/// result as JSON with status `200`, or a `Kind|message` error as
@@ -186,14 +227,22 @@ impl Server {
 				continue;
 			}
 
-			let server = self.clone();
-			router = router.route(
-				&format!("/api/{}", registration.name),
-				post(move |request: Request| {
-					let server = server.clone();
-					async move { server.serve(registration, request).await }
-				}),
-			);
+			let mut prefixes = vec![self.inner.route_prefix.clone()];
+			if self.inner.transports.json && self.inner.route_prefix != LEGACY_ROUTE_PREFIX {
+				prefixes.push(LEGACY_ROUTE_PREFIX.to_owned());
+			}
+
+			for prefix in prefixes {
+				let server = self.clone();
+				let path = format!("{prefix}/{}", registration.name);
+				router = router.route(
+					&path,
+					post(move |request: Request| {
+						let server = server.clone();
+						async move { server.serve(registration, request).await }
+					}),
+				);
+			}
 		}
 
 		router
@@ -206,11 +255,31 @@ impl Server {
 				"the request body is too large, or didn't arrive",
 			));
 		};
-		let arguments = if bytes.iter().all(u8::is_ascii_whitespace) {
-			Value::Object(serde_json::Map::new())
+
+		let content_type = parts
+			.headers
+			.get(header::CONTENT_TYPE)
+			.and_then(|value| value.to_str().ok());
+		let request_transport =
+			match crate::wire::request_transport(content_type, self.inner.transports) {
+				Ok(transport) => transport,
+				Err(message) => return failure(&Error::invalid(message)),
+			};
+		let response_transport = crate::wire::response_transport(
+			parts
+				.headers
+				.get(header::ACCEPT)
+				.and_then(|value| value.to_str().ok()),
+			self.inner.transports,
+			request_transport,
+		);
+
+		let arguments = if bytes.is_empty() || bytes.iter().all(u8::is_ascii_whitespace) {
+			crate::wire::WireArgs::empty(request_transport)
 		} else {
-			match serde_json::from_slice::<Value>(&bytes) {
-				Ok(value @ Value::Object(_)) => value,
+			let crate::wire::Transport::Json = request_transport;
+			match serde_json::from_slice(&bytes) {
+				Ok(value @ serde_json::Value::Object(_)) => crate::wire::WireArgs::Json(value),
 				Ok(_) | Err(_) => {
 					return failure(&Error::invalid(
 						"send the arguments as one JSON object, such as `{\"limit\": 10}`",
@@ -235,17 +304,17 @@ impl Server {
 			));
 		};
 
-		match self.call(&parts, registration, arguments, request_id).await {
-			Ok(value) => {
-				(
-					[(
-						header::CONTENT_TYPE,
-						HeaderValue::from_static("application/json"),
-					)],
-					value.to_string(),
-				)
-					.into_response()
-			}
+		match self
+			.call(
+				&parts,
+				registration,
+				arguments,
+				response_transport,
+				request_id,
+			)
+			.await
+		{
+			Ok(body) => body.into_response(),
 			Err(error) => failure(&error),
 		}
 	}
@@ -255,9 +324,10 @@ impl Server {
 		&self,
 		parts: &http::request::Parts,
 		registration: &'static Registration,
-		arguments: Value,
+		arguments: crate::wire::WireArgs,
+		response: crate::wire::Transport,
 		request_id: Option<String>,
-	) -> crate::Result<Value> {
+	) -> crate::Result<crate::wire::WireBody> {
 		let identity = self.inner.identify.identify(parts).await?;
 		let db = self.inner.db.with_context(identity.context.clone());
 		(registration.handler)(Invocation {
@@ -265,9 +335,24 @@ impl Server {
 			identity,
 			request_id,
 			arguments,
+			response,
 			reads: None,
 		})
 		.await
+	}
+}
+
+impl crate::wire::WireBody {
+	pub(crate) fn into_response(self) -> Response {
+		let Self::Json(value) = self;
+		(
+			[(
+				header::CONTENT_TYPE,
+				HeaderValue::from_static(crate::JSON_CONTENT_TYPE),
+			)],
+			value.to_string(),
+		)
+			.into_response()
 	}
 }
 

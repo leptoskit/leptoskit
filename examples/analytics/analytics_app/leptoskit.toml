@@ -20,3 +20,8 @@ probes = true
 # rest: its port, that browsers may reach it, and that it has a database.
 [services.analytics]
 package = "analytics_service"
+
+[rpc]
+path = "/rpc"
+transports = ["json"]
+default_transport = "json"

@@ -330,11 +330,11 @@ impl OperationContext for QueryCx {
 		reads: Option<ReadSink>,
 		op: O,
 	) -> crate::Result<O::Output> {
-		let cx = Self::new(db.clone(), identity);
-		let output = op.run(&cx).await;
+		let cx = Arc::new(Self::new(db.clone(), identity));
+		let output = super::ambient::enter_query(Arc::clone(&cx), op.run(&cx)).await;
 
 		if let Some(reads) = reads {
-			reads.extend(cx.into_reads());
+			reads.extend(cx.reads());
 		}
 
 		output

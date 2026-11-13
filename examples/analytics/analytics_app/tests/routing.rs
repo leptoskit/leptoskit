@@ -56,7 +56,7 @@ async fn the_apps_server_sends_service_operations_to_the_service() {
 	let app = rpc::server::Server::new(leptoskit_db::testing::sqlite().await);
 	let app_address = serve(app.router()).await;
 	let status = reqwest::Client::new()
-		.post(format!("http://{app_address}/api/capture"))
+		.post(format!("http://{app_address}/rpc/capture"))
 		.json(&serde_json::json!({ "event": "signup", "distinct_id": "v" }))
 		.send()
 		.await

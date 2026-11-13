@@ -92,6 +92,8 @@
 - [`view!` and `#[component]`](reference/view.md)
 - [CSS and Tailwind coverage](reference/css-coverage.md)
 - [Nightly feature](reference/nightly.md)
+- [RPC wire](rpc/wire.md)
+  - [Changing a JSON field](rpc/migrations.md)
 
 # Platforms
 

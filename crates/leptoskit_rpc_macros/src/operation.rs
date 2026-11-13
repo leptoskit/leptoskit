@@ -87,6 +87,11 @@ impl OperationKind {
 		}
 	}
 
+	/// Query, mutation, and stream can omit `cx` and call `rpc::cx()` instead.
+	fn ambient_context(self) -> bool {
+		matches!(self, Self::Query | Self::Mutation | Self::Stream)
+	}
+
 	/// The context type its first argument takes.
 	fn context(self) -> &'static str {
 		match self {
@@ -303,7 +308,7 @@ impl OperationArgs {
 				if !crate::is_route_segment(&name.value()) {
 					return Err(syn::Error::new_spanned(
 						&name,
-						"`name` becomes the route `/api/<name>` and the generated method names, \
+						"`name` becomes the route `/rpc/<name>` and the generated method names, \
 						 so it must be non-empty and use ASCII letters, digits, `_`, `-`, and \
 						 `.`, as in `chat.messages`",
 					));
@@ -522,6 +527,9 @@ pub(crate) struct Argument {
 /// What the function says about the operation.
 pub(crate) struct Signature {
 	pub(crate) arguments: Vec<Argument>,
+	/// The function's first parameter is `&rpc::*Cx`. When false, the body
+	/// pulls that context with `rpc::cx()` or `rpc::mutation_cx()`.
+	pub(crate) takes_context: bool,
 	/// `T` in `-> rpc::Result<T>`.
 	pub(crate) output: Type,
 	/// The span of the return type, for errors about the body's result.
@@ -533,11 +541,17 @@ pub(crate) struct Signature {
 pub(crate) fn signature(kind: OperationKind, function: &ItemFn) -> syn::Result<Signature> {
 	check_signature(kind, function)?;
 
-	let mut inputs = function.sig.inputs.iter();
-	let Some(first) = inputs.next() else {
-		return Err(missing_context(kind, function));
+	let mut inputs = function.sig.inputs.iter().peekable();
+	let takes_context = match inputs.peek() {
+		Some(first) => takes_context_arg(kind, first)?,
+		None => false,
 	};
-	check_context(kind, first)?;
+
+	if takes_context {
+		inputs.next();
+	} else if !kind.ambient_context() {
+		return Err(missing_context(kind, function));
+	}
 
 	let mut arguments = Vec::new();
 
@@ -548,6 +562,7 @@ pub(crate) fn signature(kind: OperationKind, function: &ItemFn) -> syn::Result<S
 	let (output, output_span) = output_of(kind, &function.sig.output)?;
 	Ok(Signature {
 		arguments,
+		takes_context,
 		output,
 		output_span,
 	})
@@ -665,9 +680,11 @@ fn argument(input: &FnArg) -> syn::Result<Argument> {
 		doc_attrs,
 	})
 }
-/// Checks the first argument is `cx: &rpc::QueryCx` or `&rpc::MutationCx`,
-/// whichever `kind` needs.
-fn check_context(kind: OperationKind, first: &FnArg) -> syn::Result<()> {
+/// Whether `first` is this operation's context parameter.
+///
+/// A shared reference to the right `*Cx` is the context. Anything else is an
+/// argument, unless it names some other operation's context.
+fn takes_context_arg(kind: OperationKind, first: &FnArg) -> syn::Result<bool> {
 	let attribute = kind.attribute();
 	let context = kind.context();
 	let FnArg::Typed(typed) = first else {
@@ -676,37 +693,37 @@ fn check_context(kind: OperationKind, first: &FnArg) -> syn::Result<()> {
 			"an operation can't take `self`",
 		));
 	};
-	let wrong = |span: &dyn ToTokens, extra: &str| {
-		syn::Error::new_spanned(
-			span,
-			format!("#[rpc::{attribute}] takes its context first, as `cx: &rpc::{context}`{extra}"),
-		)
+	let Some(name) = context_type_name(&typed.ty) else {
+		return Ok(false);
 	};
+	let Some(other) = OperationKind::ALL
+		.into_iter()
+		.find(|other| other.context() == name)
+	else {
+		return Ok(false);
+	};
+
 	let Type::Reference(reference) = &*typed.ty else {
-		return Err(wrong(&typed.ty, ", by reference"));
+		return Err(syn::Error::new_spanned(
+			&typed.ty,
+			format!(
+				"#[rpc::{attribute}] takes its context first, as `cx: &rpc::{context}`, by \
+				 reference — or omit it and call `rpc::cx()` / `rpc::mutation_cx()`"
+			),
+		));
 	};
 
 	if reference.mutability.is_some() {
-		return Err(wrong(&typed.ty, ", by shared reference"));
+		return Err(syn::Error::new_spanned(
+			&typed.ty,
+			format!(
+				"#[rpc::{attribute}] takes its context first, as `cx: &rpc::{context}`, by shared \
+				 reference"
+			),
+		));
 	}
 
-	let Type::Path(path) = &*reference.elem else {
-		return Err(wrong(&typed.ty, ""));
-	};
-	let last = path
-		.path
-		.segments
-		.last()
-		.map(|segment| segment.ident.to_string());
-
-	if last.as_deref() == Some(context) {
-		return Ok(());
-	}
-
-	if let Some(other) = OperationKind::ALL
-		.into_iter()
-		.find(|other| last.as_deref() == Some(other.context()))
-	{
+	if name != context {
 		return Err(syn::Error::new_spanned(
 			&reference.elem,
 			format!(
@@ -718,7 +735,22 @@ fn check_context(kind: OperationKind, first: &FnArg) -> syn::Result<()> {
 			),
 		));
 	}
-	Err(wrong(&reference.elem, ""))
+
+	Ok(true)
+}
+
+/// `QueryCx` in `QueryCx`, `&QueryCx`, or `&mut QueryCx`.
+fn context_type_name(ty: &Type) -> Option<String> {
+	match ty {
+		Type::Reference(reference) => context_type_name(&reference.elem),
+		Type::Path(path) => {
+			path.path
+				.segments
+				.last()
+				.map(|segment| segment.ident.to_string())
+		}
+		_ => None,
+	}
 }
 
 /// `T` in `-> rpc::Result<T>`, or `-> Result<T, rpc::Error>`.
@@ -1368,8 +1400,14 @@ fn stream_items(
 		(true, true) => quote!(#krate::__private::stream_resumable_fallible::<#item>),
 	};
 
-	let call = quote_spanned! {signature.output_span=>
-		#fn_ident(&cx, #(#bindings),*)
+	let call = if signature.takes_context {
+		quote_spanned! {signature.output_span=>
+			#fn_ident(&cx, #(#bindings),*)
+		}
+	} else {
+		quote_spanned! {signature.output_span=>
+			#fn_ident(#(#bindings),*)
+		}
 	};
 	function
 		.attrs
@@ -1380,6 +1418,36 @@ fn stream_items(
 			typed.attrs.retain(|attr| attr.path().is_ident("doc"));
 		}
 	}
+
+	// The body reads the same context through its argument, and
+	// `rpc::cx()` sees it too.
+	let context_binding = if signature.takes_context {
+		quote! {
+			let cx: &#krate::QueryCx = &scope;
+		}
+	} else {
+		TokenStream::new()
+	};
+
+	let scope_body = quote! {
+		let scope = ::std::sync::Arc::new(cx);
+		#context_binding
+		let Self { #(#bindings),* } = self;
+
+		// The whole body runs inside the context's task: constructing the
+		// stream, and driving its items, so a stream that reads
+		// `rpc::cx()` while it is polled sees the same context.
+		#krate::__private::query_scope(
+			::std::sync::Arc::clone(&scope),
+			async move {
+				match #call.await {
+					::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
+					::core::result::Result::Err(error) => sink.fail(&error),
+				}
+			},
+		)
+		.await
+	};
 
 	let items = quote! {
 		#function
@@ -1396,14 +1464,7 @@ fn stream_items(
 				cx: #krate::QueryCx,
 				sink: #krate::server::StreamSink,
 			) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
-				async move {
-					let Self { #(#bindings),* } = self;
-
-					match #call.await {
-						::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-						::core::result::Result::Err(error) => sink.fail(&error),
-					}
-				}
+				async move { #scope_body }
 			}
 		}
 
@@ -1606,10 +1667,18 @@ fn server_items(
 		_ => quote!(),
 	};
 
+	// Arguments and results are JSON through serde. `handle` is the only
+	// transport today; another encoding would be a second handler later.
 	let handler = quote!(#krate::__private::handle::<#struct_ident>);
 	let service = service_const(args.service.as_ref());
-	let call = quote_spanned! {signature.output_span=>
-		#fn_ident(cx, #(#bindings),*)
+	let call = if signature.takes_context {
+		quote_spanned! {signature.output_span=>
+			#fn_ident(cx, #(#bindings),*)
+		}
+	} else {
+		quote_spanned! {signature.output_span=>
+			#fn_ident(#(#bindings),*)
+		}
 	};
 	// Every operation is async, whether or not its body awaits.
 	function

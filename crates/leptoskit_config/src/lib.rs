@@ -1921,16 +1921,56 @@ fn is_github_repository(repository: &str) -> bool {
 		.is_some_and(|(owner, name)| segment(owner) && segment(name) && !is_git_suffixed(name))
 }
 
+/// The operation route prefix `[rpc].path` defaults to.
+const DEFAULT_RPC_PATH: &str = "/rpc";
+
+/// Where the live socket serves while `[rpc]` stays at its defaults: the
+/// mount every leptoskit app has served.
+const DEFAULT_RPC_LIVE_PATH: &str = "/live";
+
+fn default_rpc_path() -> String {
+	DEFAULT_RPC_PATH.into()
+}
+
+fn default_transports() -> Vec<String> {
+	vec!["json".into()]
+}
+
+fn default_transport_name() -> String {
+	"json".into()
+}
+
+/// The only wire encoding operation routes speak.
+const RPC_TRANSPORTS: &[&str] = &["json"];
+
 /// The published RPC, as `leptoskit rpc` describes it and generates clients
 /// for it.
 ///
 /// Which functions are published is decided in code, with
 /// `#[leptoskit_rpc::api]`; this section names the RPC, excludes functions by
 /// pattern, and says where generated clients go.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct RpcConfig {
+	/// HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before
+	/// `/<name>`; defaults to `/rpc`. The JSON routes also stay mounted on
+	/// the legacy `/api` prefix. Moving it moves the live socket to
+	/// `{path}/live` unless `live_path` names another mount.
+	#[serde(default = "default_rpc_path")]
+	pub path: String,
+	/// Live WebSocket or SSE mount. Unset, the socket stays at `/live` while
+	/// `path` is the default `/rpc`, and follows the operations at
+	/// `{path}/live` once `path` moves; set it to mount the socket anywhere.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live_path: Option<String>,
+	/// Which wire encodings the server accepts on operation routes. The only
+	/// transport is `json` (serde JSON).
+	#[serde(default = "default_transports")]
+	pub transports: Vec<String>,
+	/// The encoding generated SDKs prefer. The only transport is `json`.
+	#[serde(default = "default_transport_name")]
+	pub default_transport: String,
 	/// The RPC title; defaults to `<app.name> RPC`.
 	pub title: Option<String>,
 	/// A longer description for the OpenAPI document.
@@ -1952,6 +1992,50 @@ pub struct RpcConfig {
 	/// Live queries across several servers.
 	#[serde(skip_serializing_if = "RpcLiveConfig::is_default")]
 	pub live: RpcLiveConfig,
+}
+
+impl Default for RpcConfig {
+	fn default() -> Self {
+		Self {
+			path: default_rpc_path(),
+			live_path: None,
+			transports: default_transports(),
+			default_transport: default_transport_name(),
+			title: None,
+			description: None,
+			servers: Vec::new(),
+			exclude: Vec::new(),
+			include_internal: false,
+			targets: Vec::new(),
+			jobs: RpcJobsConfig::default(),
+			live: RpcLiveConfig::default(),
+		}
+	}
+}
+
+impl RpcConfig {
+	/// The live mount path: [`live_path`](Self::live_path) when it is set.
+	/// Otherwise `/live` while [`path`](Self::path) is the default `/rpc` —
+	/// the mount every app has served — and `{path}/live` once `path` moves,
+	/// so the socket follows the operations.
+	#[must_use]
+	pub fn resolved_live_path(&self) -> String {
+		if let Some(live_path) = &self.live_path {
+			return live_path.clone();
+		}
+
+		if self.path == DEFAULT_RPC_PATH {
+			return DEFAULT_RPC_LIVE_PATH.to_owned();
+		}
+
+		format!("{}/live", self.path.trim_end_matches('/'))
+	}
+
+	/// Whether JSON bodies are accepted on the operation routes.
+	#[must_use]
+	pub fn serves_json(&self) -> bool {
+		self.transports.iter().any(|transport| transport == "json")
+	}
 }
 
 /// Live queries across several servers: `[rpc.live]`.
@@ -3394,6 +3478,8 @@ impl LeptoskitConfig {
 	///   colour that isn't opaque hex, or an `image_size` outside 16 to 512.
 	/// - [`ConfigError::CodePushServerMissing`] when code push is enabled
 	///   without a `server`.
+	/// - [`ConfigError::InvalidRpcTransport`] when `rpc.transports` or
+	///   `rpc.default_transport` names anything other than `json`.
 	/// - [`ConfigError::UnknownRpcTarget`] when a `rpc.targets` entry names a
 	///   target `leptoskit rpc generate` cannot write.
 	/// - [`ConfigError::UnknownRpcScaffold`] when a `rpc.targets` entry names a
@@ -3629,8 +3715,42 @@ impl LeptoskitConfig {
 		Ok(())
 	}
 
-	/// RPC targets name a language and scaffold this build knows.
+	/// RPC targets name a language and scaffold this build knows, and the
+	/// wire lists only JSON.
 	fn validate_rpc(&self) -> Result<(), ConfigError> {
+		if self.rpc.transports.is_empty() {
+			return Err(ConfigError::InvalidRpcTransport(
+				"rpc.transports must list `json`".into(),
+			));
+		}
+
+		for transport in &self.rpc.transports {
+			if !RPC_TRANSPORTS.contains(&transport.as_str()) {
+				return Err(ConfigError::InvalidRpcTransport(format!(
+					"unknown rpc transport `{transport}`; the only transport is `json`"
+				)));
+			}
+		}
+
+		if !RPC_TRANSPORTS.contains(&self.rpc.default_transport.as_str()) {
+			return Err(ConfigError::InvalidRpcTransport(format!(
+				"unknown rpc.default_transport `{}`; the only transport is `json`",
+				self.rpc.default_transport
+			)));
+		}
+
+		if !self
+			.rpc
+			.transports
+			.iter()
+			.any(|transport| transport == &self.rpc.default_transport)
+		{
+			return Err(ConfigError::InvalidRpcTransport(format!(
+				"rpc.default_transport `{}` must be one of rpc.transports",
+				self.rpc.default_transport
+			)));
+		}
+
 		for target in &self.rpc.targets {
 			if !RPC_TARGETS.contains(&target.language.as_str()) {
 				return Err(ConfigError::UnknownRpcTarget(target.language.clone()));
@@ -3972,6 +4092,9 @@ pub enum ConfigError {
 		 openapi"
 	)]
 	UnknownRpcTarget(String),
+	/// `rpc.transports` or `rpc.default_transport` is not JSON.
+	#[error("{0}")]
+	InvalidRpcTransport(String),
 	/// A `rpc.targets` entry names an unknown scaffold mode.
 	#[error("unknown fns scaffold mode `{0}`; expected create, full, or files")]
 	UnknownRpcScaffold(String),

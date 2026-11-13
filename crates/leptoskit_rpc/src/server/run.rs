@@ -2,10 +2,13 @@
 //! transaction, retries and receipt, and calling one from server code.
 
 use std::hash::BuildHasher;
+use std::sync::Arc;
 use std::time::Duration;
 
 use leptoskit_db::Db;
 use leptoskit_query::BoxFuture;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::Identity;
@@ -17,9 +20,12 @@ use super::receipts::ReceiptKey;
 use super::receipts::ReceiptOwner;
 use crate::Error;
 use crate::Operation;
+use crate::wire::Transport;
+use crate::wire::WireArgs;
+use crate::wire::WireBody;
 
-/// One call to run: the arguments as JSON, who is calling, and the database
-/// to run on, already acting for them.
+/// One call to run: the arguments on the wire, who is calling, and the
+/// database to run on, already acting for them.
 pub struct Invocation {
 	/// The database, acting for the caller.
 	pub db: Db,
@@ -28,21 +34,27 @@ pub struct Invocation {
 	/// The call's request ID, such as its `Idempotency-Key`.
 	pub request_id: Option<String>,
 	/// The arguments, as one JSON object.
-	pub arguments: Value,
+	pub arguments: WireArgs,
+	/// How to encode a successful result.
+	pub response: Transport,
 	/// Where a query adds what it read, for the live hub; `None` to let
 	/// the read set go.
 	pub reads: Option<ReadSink>,
 }
 
 /// What a registration runs.
-pub(crate) type Handler = fn(Invocation) -> BoxFuture<'static, crate::Result<Value>>;
+pub(crate) type Handler = fn(Invocation) -> BoxFuture<'static, crate::Result<WireBody>>;
 
-/// Decodes the arguments of `O`, runs it, and encodes its result: the
-/// handler `#[rpc::query]` and `#[rpc::mutation]` register.
+/// Decodes JSON arguments of `O`, runs it, and encodes a JSON result.
 #[doc(hidden)]
-pub fn handle<O: Operation>(invocation: Invocation) -> BoxFuture<'static, crate::Result<Value>> {
+pub fn handle<O>(invocation: Invocation) -> BoxFuture<'static, crate::Result<WireBody>>
+where
+	O: Operation + DeserializeOwned,
+	<O as Operation>::Output: Serialize + DeserializeOwned,
+{
 	Box::pin(async move {
-		let op: O = serde_json::from_value(invocation.arguments).map_err(|error| {
+		let WireArgs::Json(value) = &invocation.arguments;
+		let op: O = serde_json::from_value(value.clone()).map_err(|error| {
 			Error::invalid(format!("the arguments of `{}` don't fit: {error}", O::NAME))
 		})?;
 		let output = O::Context::dispatch_recording(
@@ -53,8 +65,10 @@ pub fn handle<O: Operation>(invocation: Invocation) -> BoxFuture<'static, crate:
 			op,
 		)
 		.await?;
-		serde_json::to_value(output)
-			.map_err(|_| Error::server(format!("the result of `{}` isn't JSON", O::NAME)))
+		let Transport::Json = invocation.response;
+		Ok(WireBody::Json(serde_json::to_value(&output).map_err(
+			|_| Error::server(format!("the result of `{}` isn't JSON", O::NAME)),
+		)?))
 	})
 }
 
@@ -252,8 +266,11 @@ async fn run_once<M: Operation<Context = MutationCx>>(
 	let tx = db.begin_serializable().await?;
 	// The change log records the commit as this mutation's.
 	tx.set_origin(M::NAME).await?;
-	let cx = MutationCx::new(tx, identity.clone(), attempt);
-	let outcome = op.clone().run(&cx).await;
+	let cx = Arc::new(MutationCx::new(tx, identity.clone(), attempt));
+	let outcome = super::ambient::enter_mutation(Arc::clone(&cx), op.clone().run(&cx)).await;
+	let cx = Arc::try_unwrap(cx).unwrap_or_else(|_| {
+		panic!("a mutation stored rpc::mutation_cx() past the end of its body")
+	});
 	let (tx, after_commit) = cx.into_parts();
 
 	match outcome {
@@ -304,7 +321,7 @@ enum Finish {
 async fn finish(
 	tx: leptoskit_db::Tx,
 	receipt: Option<&ReceiptKey>,
-	output: &impl serde::Serialize,
+	output: &impl Serialize,
 ) -> Result<(), Finish> {
 	if let Some(key) = receipt {
 		let result = serde_json::to_value(output)

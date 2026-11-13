@@ -102,8 +102,13 @@ pub const MAX_CHANNEL_KEY_BYTES: usize = 4 * 1024;
 /// join and leave sends every member's state to every member.
 pub const MAX_PRESENCE_BYTES: usize = 16 * 1024;
 
+/// Where a server serves the live WebSocket, before `[rpc].live_path`
+/// (or `[rpc].path`/live) moves it. The server-sent events routes sit
+/// next to it, at `{path}/events` and `{path}/frames`.
+pub const LIVE_PATH: &str = "/live";
+
 /// Where a server-sent events connection reads server frames, next to the
-/// WebSocket's `/live`.
+/// WebSocket's [`LIVE_PATH`](crate::live::LIVE_PATH).
 pub const EVENTS_PATH: &str = "/live/events";
 
 /// Where a server-sent events connection posts its client frames, with

@@ -27,6 +27,12 @@ fn export_timeout() -> Duration {
 		.map_or(EXPORT_TIMEOUT, Duration::from_secs)
 }
 
+/// The operation prefix the spec describes: `[rpc].path`, trimmed the way
+/// the server trims it when it mounts the routes.
+fn operation_path(config: &LeptoskitConfig) -> String {
+	config.rpc.path.trim_end_matches('/').to_owned()
+}
+
 pub(super) fn export_from_server(config: &LeptoskitConfig, root: &Utf8PathBuf) -> Result<ApiSpec> {
 	let binary = server_binary(config, root)?;
 	let options = crate::build::server_options(config, false)?;
@@ -54,6 +60,8 @@ pub(super) fn export_from_server(config: &LeptoskitConfig, root: &Utf8PathBuf) -
 			config.rpc.description.clone().unwrap_or_default(),
 		)
 		.env(spec::SPEC_SERVERS_ENV, config.rpc.servers.join(","))
+		.env(spec::SPEC_PATH_ENV, operation_path(config))
+		.env(spec::SPEC_LIVE_PATH_ENV, config.rpc.resolved_live_path())
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::piped())

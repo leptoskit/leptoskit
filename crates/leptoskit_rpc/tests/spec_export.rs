@@ -93,6 +93,51 @@ fn an_unrequested_export_returns_to_main() {
 	spec::export_if_requested_with(&SpecOptions::new("Todos", "1.0.0"));
 }
 
+/// The CLI exports with the configured mounts in the environment, so the
+/// spec describes where a client really sends its calls.
+#[test]
+fn an_export_carries_the_configured_operation_and_live_paths() {
+	if std::env::var_os(CHILD).is_some() {
+		spec::export_if_requested();
+		unreachable!("export_if_requested exits once an export is requested");
+	}
+
+	let dir = scratch("paths");
+	let out = dir.join("spec.json");
+	let child = Command::new(std::env::current_exe().expect("the test binary"))
+		.args([
+			"--exact",
+			"an_export_carries_the_configured_operation_and_live_paths",
+			"--nocapture",
+			"--test-threads=1",
+		])
+		.env(CHILD, "1")
+		.env(spec::SPEC_OUT_ENV, &out)
+		.env(spec::SPEC_PATH_ENV, "/gateway")
+		.env(spec::SPEC_LIVE_PATH_ENV, "/rt")
+		.output()
+		.expect("run the child");
+	let stderr = String::from_utf8_lossy(&child.stderr);
+	assert!(child.status.success(), "{stderr}");
+
+	let written = std::fs::read_to_string(&out).expect("the spec file");
+	let parsed = spec::ApiSpec::from_json(&written).expect("the spec parses");
+	assert_eq!(parsed.rpc_path, "/gateway");
+	assert_eq!(parsed.live_path, "/rt");
+
+	for function in &parsed.functions {
+		if function.kind != spec::ApiKind::Call {
+			assert_eq!(
+				function.path,
+				format!("/gateway/{}", function.name),
+				"rpc operations serve at the configured prefix"
+			);
+		}
+	}
+
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn writing_over_a_directory_names_the_path() {
 	let dir = scratch("directory");

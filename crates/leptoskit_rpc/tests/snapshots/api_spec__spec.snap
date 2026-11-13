@@ -215,6 +215,7 @@ expression: spec
     }
   ],
   "live_path": "/live",
+  "rpc_path": "/rpc",
   "schemas": {
     "Event": {
       "description": "Something that happened to a todo.",

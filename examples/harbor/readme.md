@@ -14,3 +14,9 @@ cargo test -p harbor_example
 The example builds in server mode, so the server functions run in-process, the way the server calls them for a request; each answer takes 50 ms, as a network round trip would, so a booking shows on the board before the harbour confirms it. A browser build of the same functions calls them over HTTP on the routes the spec lists.
 
 After changing a server function or a type it returns, run `leptoskit rpc generate` here to rewrite the client; the tests fail while it is out of date.
+
+### The `/rpc` path
+
+`leptoskit.toml` sets `path = "/rpc"`, `transports = ["json"]`, and `default_transport = "json"`. `#[rpc::query]` and `#[rpc::mutation]` operations answer `POST /rpc/<name>` with one JSON object. While JSON is enabled, the same calls also stay on `/api/<name>`.
+
+The harbour's three `#[server]` functions keep **Form** encoding on **`/api/<name>`** in the published OpenAPI spec and in the committed TypeScript client — they are not `#[rpc::query]` yet. The board still works through Leptos server functions and JSON/form on those legacy routes; do not point the generated harbour client at `/rpc` until those operations are migrated.

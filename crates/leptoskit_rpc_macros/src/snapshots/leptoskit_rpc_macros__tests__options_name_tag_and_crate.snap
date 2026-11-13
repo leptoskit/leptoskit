@@ -36,4 +36,5 @@ static REGISTERED: leptoskit::rpc::spec::ApiFnDescriptor = leptoskit::rpc::spec:
     tags: &["events", "legacy"],
     scopes: &[],
     service: ::core::option::Option::None,
+    rpc_operation: false,
 };

@@ -93,6 +93,7 @@ pub use spec::ApiParam;
 pub use spec::ApiSpec;
 pub use spec::CodegenError;
 pub use spec::DEFAULT_LIVE_PATH;
+pub use spec::DEFAULT_RPC_PATH;
 pub use spec::HttpInput;
 pub use spec::HttpOutput;
 pub use spec::SPEC_MARKER;

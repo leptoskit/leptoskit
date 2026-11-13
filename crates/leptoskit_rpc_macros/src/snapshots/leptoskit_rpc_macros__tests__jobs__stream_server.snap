@@ -40,17 +40,25 @@ impl ::leptoskit_rpc::StreamOperation for Answer {
         sink: ::leptoskit_rpc::server::StreamSink,
     ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
         async move {
+            let scope = ::std::sync::Arc::new(cx);
+            let cx: &::leptoskit_rpc::QueryCx = &scope;
             let Self { prompt } = self;
-            match answer(&cx, prompt).await {
-                ::core::result::Result::Ok(items) => {
-                    sink.drive(
-                            items,
-                            ::leptoskit_rpc::__private::stream_fallible::<String>,
-                        )
-                        .await
-                }
-                ::core::result::Result::Err(error) => sink.fail(&error),
-            }
+            ::leptoskit_rpc::__private::query_scope(
+                    ::std::sync::Arc::clone(&scope),
+                    async move {
+                        match answer(&cx, prompt).await {
+                            ::core::result::Result::Ok(items) => {
+                                sink.drive(
+                                        items,
+                                        ::leptoskit_rpc::__private::stream_fallible::<String>,
+                                    )
+                                    .await
+                            }
+                            ::core::result::Result::Err(error) => sink.fail(&error),
+                        }
+                    },
+                )
+                .await
         }
     }
 }

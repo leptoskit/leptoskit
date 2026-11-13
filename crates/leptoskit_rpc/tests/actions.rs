@@ -258,7 +258,7 @@ async fn actions_run_as_the_caller(db: &Db) {
 		let response = router
 			.clone()
 			.oneshot(
-				Request::post("/api/summarize")
+				Request::post("/rpc/summarize")
 					.header("content-type", "application/json")
 					.header("x-account", ada_id.to_string())
 					.header("idempotency-key", "same-key")
@@ -275,7 +275,7 @@ async fn actions_run_as_the_caller(db: &Db) {
 	let response = router
 		.clone()
 		.oneshot(
-			Request::post("/api/summarize")
+			Request::post("/rpc/summarize")
 				.header("content-type", "application/json")
 				.body(Body::from(json!({ "channel": "general" }).to_string()))
 				.unwrap(),
@@ -454,5 +454,5 @@ fn a_published_action_joins_the_spec_and_openapi() {
 	assert_eq!(summarize.kind, rpc::spec::ApiKind::Action);
 	insta::assert_json_snapshot!("action_spec", summarize);
 	let openapi = spec.to_openapi();
-	insta::assert_json_snapshot!("action_openapi", openapi["paths"]["/api/summarize"]);
+	insta::assert_json_snapshot!("action_openapi", openapi["paths"]["/rpc/summarize"]);
 }

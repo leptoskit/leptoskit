@@ -174,6 +174,8 @@ pub use server::call;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::cancel;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use server::cx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::inbox::Recipient;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::jobs::Enqueue;
@@ -183,6 +185,8 @@ pub use server::jobs::enqueue;
 pub use server::jobs::job_registration;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use server::jobs::job_registration_in;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use server::mutation_cx;
 pub use service::IDENTITY_FORWARDED;
 pub use service::SERVICES_PREFIX;
 pub use service::ServiceToken;
@@ -212,6 +216,24 @@ mod service;
 pub mod spec;
 
 mod stream;
+
+/// Prefix for `#[rpc::query]` and `#[rpc::mutation]` HTTP routes.
+pub const RPC_ROUTE_PREFIX: &str = "/rpc";
+
+/// `Content-Type` / `Accept` for JSON operation bodies.
+pub const JSON_CONTENT_TYPE: &str = "application/json";
+
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub mod wire;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::Transport;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::TransportSet;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::WireArgs;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use wire::WireBody;
+
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub mod testing;
 
@@ -266,6 +288,19 @@ pub mod __private {
 	pub use crate::server::stream::resumable_fallible as stream_resumable_fallible;
 	pub use crate::stream::assert_cursor;
 	pub use crate::stream::assert_stream_item;
+
+	/// Runs a stream's whole body inside the query context's task, so it
+	/// can read the context the server passed in with
+	/// [`rpc::cx()`](crate::cx): both the part that constructs the stream
+	/// and the part that drives its items, which a lazily-polled stream
+	/// reads the context from too.
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	pub async fn query_scope<F: Future>(
+		cx: std::sync::Arc<crate::QueryCx>,
+		future: F,
+	) -> F::Output {
+		crate::server::enter_query(cx, future).await
+	}
 }
 
 /// Refuses a server build that declares queries or mutations without a

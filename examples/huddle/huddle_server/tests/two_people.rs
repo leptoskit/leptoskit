@@ -1,5 +1,5 @@
 //! Two people use Huddle at once, against the real server on SQLite,
-//! through the same wire protocol every client speaks: `POST /api/<name>`
+//! through the same wire protocol every client speaks: `POST /rpc/<name>`
 //! with the session cookie, and the `/live` WebSocket.
 //!
 //! Ada signs in first, so she's the admin. Grace signs in second. Between
@@ -68,7 +68,7 @@ impl Person {
 	async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
 		let response = self
 			.http
-			.post(format!("{}/api/{name}", self.base))
+			.post(format!("{}/rpc/{name}", self.base))
 			.header("origin", &self.base)
 			.header("cookie", &self.cookie)
 			.header("content-type", "application/json")

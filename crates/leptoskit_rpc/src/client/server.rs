@@ -45,9 +45,19 @@ impl Api for InProcess {
 			};
 
 			server
-				.call(&parts, registration, arguments, key.resolve().await)
+				.call(
+					&parts,
+					registration,
+					crate::wire::WireArgs::Json(arguments),
+					crate::wire::Transport::Json,
+					key.resolve().await,
+				)
 				.await
 				.map_err(FnError::from)
+				.map(|body| {
+					let crate::wire::WireBody::Json(value) = body;
+					value
+				})
 		})
 	}
 }

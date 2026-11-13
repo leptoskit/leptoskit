@@ -21,7 +21,7 @@ const _: () = {
     leptoskit::rpc::__private::inventory::submit! {
         leptoskit::rpc::spec::ApiFnDescriptor { name : "recent", kind :
         leptoskit::rpc::spec::ApiKind::Query, module_path : ::core::module_path!(),
-        struct_name : "Messages", docs : "The latest messages.", path : "/api/recent",
+        struct_name : "Messages", docs : "The latest messages.", path : "/rpc/recent",
         method : leptoskit::rpc::spec::OPERATION_METHOD, input_content_type :
         "application/json", output_content_type : "application/json", error_content_type
         : "text/plain", params : & [leptoskit::rpc::spec::ApiParamDescriptor { name :
@@ -31,6 +31,6 @@ const _: () = {
         required : true, }], output_schema : | generator | { generator.subschema_for:: <
         < Messages as leptoskit::rpc::Operation > ::Output > () }, internal : true,
         deprecated : false, tags : & ["chat"], scopes : & [], service :
-        ::core::option::Option::None, }
+        ::core::option::Option::None, rpc_operation : true, }
     }
 };
