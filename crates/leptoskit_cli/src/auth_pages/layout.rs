@@ -53,6 +53,7 @@ impl Layout {
 		app: &str,
 		client: Option<&str>,
 		backend: Option<bool>,
+		server_package: &str,
 	) -> Result<Self> {
 		anyhow::ensure!(
 			root.ancestors().any(|dir| dir.join("Cargo.toml").is_file()),
@@ -71,7 +72,7 @@ impl Layout {
 		);
 		let metadata: Metadata = serde_json::from_slice(&output.stdout)
 			.context("could not parse auth Cargo metadata")?;
-		Self::resolve(root, app, client, backend, &metadata)
+		Self::resolve(root, app, client, backend, server_package, &metadata)
 	}
 
 	fn resolve(
@@ -79,6 +80,7 @@ impl Layout {
 		app: &str,
 		client: Option<&str>,
 		backend: Option<bool>,
+		server_package: &str,
 		metadata: &Metadata,
 	) -> Result<Self> {
 		let workspace = metadata.workspace_root.canonicalize()?;
@@ -94,7 +96,7 @@ impl Layout {
 			.find(|target| target.library())
 			.map_or_else(|| selected.binary(), Ok)?;
 		let client = Package::checked(selected, target, &workspace)?;
-		let server = metadata.server(app, backend, &workspace)?;
+		let server = metadata.server(server_package, backend, &workspace)?;
 		Ok(Self { client, server })
 	}
 }
@@ -148,13 +150,17 @@ impl Metadata {
 
 	fn server(
 		&self,
-		app: &str,
+		server_package: &str,
 		backend: Option<bool>,
 		workspace: &Path,
 	) -> Result<Option<Package>> {
 		let server = if backend == Some(false) {
 			None
-		} else if let Some(member) = self.packages.iter().find(|package| package.name == app) {
+		} else if let Some(member) = self
+			.packages
+			.iter()
+			.find(|package| package.name == server_package)
+		{
 			let enabled = member.dependencies.iter().any(|dependency| {
 				dependency.name == "leptoskit"
 					&& dependency
@@ -177,7 +183,7 @@ impl Metadata {
 		} else {
 			anyhow::ensure!(
 				backend != Some(true),
-				"app.name `{app}` does not name a backend package"
+				"backend package `{server_package}` could not be found"
 			);
 			None
 		};

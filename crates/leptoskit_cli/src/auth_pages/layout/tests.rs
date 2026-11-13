@@ -1,5 +1,14 @@
 use super::*;
 
+fn read_layout(
+	root: &Path,
+	app: &str,
+	client: Option<&str>,
+	backend: Option<bool>,
+) -> Result<Layout> {
+	Layout::read(root, app, client, backend, app)
+}
+
 fn write(root: &Path, file: &str, text: &str) {
 	let path = root.join(file);
 	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -80,10 +89,81 @@ leptoskit.workspace = true
 }
 
 #[test]
+fn auth_generation_writes_only_the_selected_server_package() {
+	let root = fixture();
+	write(
+		root.path(),
+		"packages/identity/Cargo.toml",
+		"[package]\nname = 'website'\nversion.workspace = true\nedition.workspace = \
+		 true\n[dependencies]\nleptoskit.workspace = true\n",
+	);
+	let decoy = "// Application-owned backend, not selected.\nfn main() {}\n";
+	write(root.path(), "packages/identity/src/main.rs", decoy);
+	let app = root.path().join("apps/website");
+	write(
+		&app,
+		"leptoskit.toml",
+		"[app]\nname = 'website'\n[build]\nclient_package = 'ui'\nserver_package = 'api'\nbackend \
+		 = true\n[db]\ndialect = 'sqlite'\n",
+	);
+	let config = leptoskit_config::LeptoskitConfig::load_from(&app).unwrap();
+	let before_manifest = std::fs::read(root.path().join("packages/identity/Cargo.toml")).unwrap();
+	super::super::generate(&app, &config, false, false).unwrap();
+	assert!(
+		root.path()
+			.join("packages/backend/backend/sign_in.rs")
+			.is_file()
+	);
+	assert!(
+		!root
+			.path()
+			.join("packages/identity/src/sign_in.rs")
+			.exists()
+	);
+	assert_eq!(
+		std::fs::read_to_string(root.path().join("packages/identity/src/main.rs")).unwrap(),
+		decoy
+	);
+	assert_eq!(
+		std::fs::read(root.path().join("packages/identity/Cargo.toml")).unwrap(),
+		before_manifest
+	);
+}
+
+#[test]
+fn missing_selected_backend_refuses_before_generator_writes() {
+	let root = fixture();
+	let app = root.path().join("apps/website");
+	let config: leptoskit_config::LeptoskitConfig = toml::from_str(
+		"[app]\nname = 'api'\n[build]\nclient_package = 'ui'\nserver_package = 'missing'\nbackend \
+		 = true\n[db]\ndialect = 'sqlite'\n",
+	)
+	.unwrap();
+	let manifest = root.path().join("packages/frontend/Cargo.toml");
+	let before = std::fs::read(&manifest).unwrap();
+	let error = super::super::generate(&app, &config, false, true).unwrap_err();
+	assert!(
+		error.to_string().contains("backend package `missing`"),
+		"{error:#}"
+	);
+	assert!(
+		!root
+			.path()
+			.join("packages/frontend/interface/auth")
+			.exists()
+	);
+	assert_eq!(std::fs::read(&manifest).unwrap(), before);
+	assert_eq!(
+		std::fs::read_to_string(app.join("leptoskit.toml")).unwrap(),
+		""
+	);
+}
+
+#[test]
 fn nested_app_globs_inheritance_and_custom_targets_resolve_without_building() {
 	let root = fixture();
 	let app = root.path().join("apps/website");
-	let layout = Layout::read(&app, "api", Some("ui"), None).unwrap();
+	let layout = read_layout(&app, "api", Some("ui"), None).unwrap();
 	assert_eq!(
 		layout.client.entry,
 		root.path()
@@ -120,7 +200,7 @@ fn nested_app_globs_inheritance_and_custom_targets_resolve_without_building() {
 #[test]
 fn automatic_client_and_explicit_static_backend_agree_with_cargo_targets() {
 	let root = fixture();
-	let layout = Layout::read(&root.path().join("apps/website"), "api", None, Some(false)).unwrap();
+	let layout = read_layout(&root.path().join("apps/website"), "api", None, Some(false)).unwrap();
 	assert!(
 		layout
 			.client
@@ -139,7 +219,7 @@ fn ambiguous_clients_and_binaries_fail_before_any_write() {
 		"[package]\nname = \"other\"\nversion = \"0.1.0\"\n[lib]\ncrate-type = [\"cdylib\"]\n",
 	);
 	write(root.path(), "packages/other/src/lib.rs", "");
-	let error = Layout::read(root.path(), "api", None, None).unwrap_err();
+	let error = read_layout(root.path(), "api", None, None).unwrap_err();
 	assert!(error.to_string().contains("several packages"), "{error:#}");
 	let path = root.path().join("packages/backend/Cargo.toml");
 	let source = std::fs::read_to_string(&path)
@@ -155,7 +235,7 @@ fn ambiguous_clients_and_binaries_fail_before_any_write() {
 		"packages/backend/backend/maintenance.rs",
 		"fn main() {}\n",
 	);
-	let error = Layout::read(root.path(), "api", Some("ui"), None).unwrap_err();
+	let error = read_layout(root.path(), "api", Some("ui"), None).unwrap_err();
 	assert!(error.to_string().contains("several binaries"), "{error:#}");
 	assert!(
 		!root
@@ -171,7 +251,7 @@ fn missing_and_renamed_dependencies_are_rejected_before_generation() {
 	let path = root.path().join("packages/frontend/Cargo.toml");
 	let source = std::fs::read_to_string(&path).unwrap();
 	std::fs::write(&path, source.replace("leptoskit.workspace = true", "")).unwrap();
-	let error = Layout::read(root.path(), "api", Some("ui"), None).unwrap_err();
+	let error = read_layout(root.path(), "api", Some("ui"), None).unwrap_err();
 	assert!(
 		error.to_string().contains("doesn't depend on leptoskit"),
 		"{error:#}"
@@ -184,7 +264,7 @@ fn missing_and_renamed_dependencies_are_rejected_before_generation() {
 		),
 	)
 	.unwrap();
-	let error = Layout::read(root.path(), "api", Some("ui"), None).unwrap_err();
+	let error = read_layout(root.path(), "api", Some("ui"), None).unwrap_err();
 	assert!(
 		error.to_string().contains("keep that dependency name"),
 		"{error:#}"
@@ -202,7 +282,7 @@ fn source_target_outside_workspace_is_rejected() {
 		.join("packages/frontend/interface/application.rs");
 	std::fs::remove_file(&entry).unwrap();
 	std::os::unix::fs::symlink(outside.path().join("app.rs"), entry).unwrap();
-	let error = Layout::read(root.path(), "api", Some("ui"), None).unwrap_err();
+	let error = read_layout(root.path(), "api", Some("ui"), None).unwrap_err();
 	assert!(
 		error.to_string().contains("outside the Cargo workspace"),
 		"{error:#}"
@@ -212,9 +292,9 @@ fn source_target_outside_workspace_is_rejected() {
 #[test]
 fn a_library_only_app_does_not_invent_a_backend_from_dependency_features() {
 	let root = fixture();
-	let layout = Layout::read(root.path(), "ui", Some("ui"), None).unwrap();
+	let layout = read_layout(root.path(), "ui", Some("ui"), None).unwrap();
 	assert!(layout.server.is_none());
-	let error = Layout::read(root.path(), "ui", Some("ui"), Some(true)).unwrap_err();
+	let error = read_layout(root.path(), "ui", Some("ui"), Some(true)).unwrap_err();
 	assert!(
 		error.to_string().contains("no binary source target"),
 		"{error:#}"
@@ -234,7 +314,7 @@ fn a_backend_source_cannot_be_its_own_generated_module() {
 		root.path().join("packages/backend/backend/sign_in.rs"),
 	)
 	.unwrap();
-	let error = Layout::read(root.path(), "api", Some("ui"), None).unwrap_err();
+	let error = read_layout(root.path(), "api", Some("ui"), None).unwrap_err();
 	assert!(
 		error
 			.to_string()

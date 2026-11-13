@@ -340,6 +340,7 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -
 		&config.app.name,
 		config.build.client_package.as_deref(),
 		config.build.backend,
+		config.server_package(),
 	)?;
 	check_feature_destination(root, &layout.client.manifest)?;
 	if config.db.is_some()
