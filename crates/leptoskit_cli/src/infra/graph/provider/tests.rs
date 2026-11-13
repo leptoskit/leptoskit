@@ -162,7 +162,14 @@ fn tunnel_closes_public_https_and_marks_tokens_sensitive() {
 fn static_only_has_no_application_database_or_backup_resources() {
 	let mut config = website();
 	config.services.clear();
-	config.frontends.get_mut("play").unwrap().calls.clear();
+	config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("play")
+		.unwrap()
+		.calls
+		.clear();
 	graph(&mut config).hosts.remove("compiler");
 	let output = render(&config, Some(&ranges()));
 	assert_eq!(
@@ -190,7 +197,11 @@ fn static_only_has_no_application_database_or_backup_resources() {
 #[test]
 fn private_service_has_no_cloudflare_resources_or_listener() {
 	let mut config = website();
-	config.frontends.clear();
+	config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.clear();
 	config.artifacts.clear();
 	let service = config
 		.services

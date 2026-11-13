@@ -211,7 +211,10 @@ impl Captured {
 		}
 		match unit {
 			Unit::Frontend(name) => {
-				let frontend = &config.frontends[name];
+				let frontend = &config
+					.graph_infra()
+					.context("graph infrastructure required")?
+					.frontends[name];
 				let assets = self
 					.assets
 					.as_ref()

@@ -1,5 +1,7 @@
 # Deployment graph ownership
 
+Graph frontend placement is declared under `[infra.frontends.<name>]`. The top-level `[frontends.<name>]` table belongs to application build targets. Graph unit identifiers such as `frontends.docs` still select the same independently owned deployment units.
+
 The required dogfood project is `leptoskit.dev`: landing, docs and lazy playground frontends, plus a database-free compile API on an exclusive CPU-heavy host. The platform must own the complete lifecycle through `lk infra`. A separate provisioning script or external application supervisor does not meet this requirement.
 
 ## Implemented core

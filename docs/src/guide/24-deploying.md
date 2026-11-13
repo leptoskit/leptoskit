@@ -2,7 +2,7 @@
 
 ## Provision hosts for a deployment graph
 
-If your project already declares frontends, services and their hosts with `infra.mode = "graph"`, you can review and provision those hosts through the same CLI:
+If your project already declares frontend placement under `[infra.frontends.<name>]`, services and their hosts with `infra.mode = "graph"`, you can review and provision those hosts through the same CLI:
 
 ```sh
 lk infra generate

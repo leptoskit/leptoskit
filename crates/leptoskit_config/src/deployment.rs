@@ -37,6 +37,9 @@ pub struct InfraGraph {
 	pub ssh_key_ids: Vec<u64>,
 	pub ssh_cidrs: Vec<String>,
 	pub hosts: BTreeMap<String, Host>,
+	/// Frontend artifact placement and routes owned by this graph.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub frontends: BTreeMap<String, Frontend>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub edge: Option<Edge>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

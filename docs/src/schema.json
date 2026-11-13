@@ -102,13 +102,6 @@
 			"description": "How `leptoskit format` lays out markup. Omitted from serialized\nconfiguration while it holds the defaults.",
 			"$ref": "#/$defs/FormatConfig"
 		},
-		"frontends": {
-			"description": "Independently routed and released frontend outputs.",
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/$defs/Frontend"
-			}
-		},
 		"infra": {
 			"description": "Managed infrastructure and container release settings.",
 			"anyOf": [
@@ -2251,6 +2244,13 @@
 							"type": "null"
 						}
 					]
+				},
+				"frontends": {
+					"description": "Frontend artifact placement and routes owned by this graph.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Frontend"
+					}
 				},
 				"hosts": {
 					"type": "object",

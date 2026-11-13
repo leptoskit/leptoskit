@@ -295,7 +295,13 @@ mod tests {
 		);
 		std::fs::write(&edge, &edge_original).unwrap();
 		std::fs::write(&manifest, "operator edits\n").unwrap();
-		config.frontends.get_mut("docs").unwrap().mount = "/reference/".into();
+		config
+			.graph_infra_mut()
+			.unwrap()
+			.frontends
+			.get_mut("docs")
+			.unwrap()
+			.mount = "/reference/".into();
 		assert!(generate(root.path(), &config, false).is_err());
 		assert_eq!(std::fs::read(&main).unwrap(), original);
 		assert_eq!(
@@ -319,7 +325,13 @@ mod tests {
 	#[test]
 	fn invalid_graph_writes_no_provider_configuration() {
 		let mut config = website();
-		config.frontends.get_mut("docs").unwrap().host = "undeclared".into();
+		config
+			.graph_infra_mut()
+			.unwrap()
+			.frontends
+			.get_mut("docs")
+			.unwrap()
+			.host = "undeclared".into();
 		let root = tempfile::tempdir().unwrap();
 		assert!(generate(root.path(), &config, false).is_err());
 		assert!(!root.path().join("infra").exists());

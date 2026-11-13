@@ -126,7 +126,7 @@ fn graph_receipt_verification_stages_exact_bytes_and_rejects_later_changes() {
 #[ignore = "builds and executes two real Cargo service artifacts"]
 fn services_capture_independent_feature_sets_from_the_same_package() {
 	let (root, mut config) = project();
-	config.frontends.clear();
+	config.graph_infra_mut().unwrap().frontends.clear();
 	config.artifacts.clear();
 	let mut red = config.services.remove("play-api").unwrap();
 	red.package = Some("graph_fixture".into());

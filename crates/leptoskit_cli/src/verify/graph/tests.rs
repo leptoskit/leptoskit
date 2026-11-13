@@ -229,7 +229,14 @@ fn current_configuration_and_declarations_are_independent_checks() {
 		assert!(fixture.check().is_err(), "declaration {change}");
 	}
 	let mut fixture = Fixture::new();
-	fixture.config.frontends.get_mut("docs").unwrap().mount = "/reference/".into();
+	fixture
+		.config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("docs")
+		.unwrap()
+		.mount = "/reference/".into();
 	assert!(fixture.check().is_err());
 }
 
@@ -320,7 +327,14 @@ fn metadata_and_aggregate_artifact_budgets_are_enforced_before_consumption() {
 #[test]
 fn readiness_dependencies_are_retained_without_staging_their_artifacts() {
 	let mut fixture = Fixture::new();
-	fixture.config.frontends.get_mut("docs").unwrap().depends_on = vec!["services.play-api".into()];
+	fixture
+		.config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("docs")
+		.unwrap()
+		.depends_on = vec!["services.play-api".into()];
 	let mut manifest = fixture.manifest();
 	manifest["configuration_sha256"] = json!(hash(&serde_json::to_vec(&fixture.config).unwrap()));
 	manifest["readiness_only"] = json!(["services.play-api"]);

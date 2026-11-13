@@ -128,9 +128,6 @@ pub struct LeptoskitConfig {
 	/// Named, trusted build recipes for independently published outputs.
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	pub artifacts: BTreeMap<String, deployment::Artifact>,
-	/// Independently routed and released frontend outputs.
-	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
-	pub frontends: BTreeMap<String, deployment::Frontend>,
 	/// How `leptoskit format` lays out markup. Omitted from serialized
 	/// configuration while it holds the defaults.
 	#[serde(skip_serializing_if = "FormatConfig::is_default")]
@@ -167,7 +164,6 @@ impl Default for LeptoskitConfig {
 			plugins: Vec::new(),
 			services: BTreeMap::new(),
 			artifacts: BTreeMap::new(),
-			frontends: BTreeMap::new(),
 			format: FormatConfig::default(),
 			lint: LintConfig::default(),
 			theme: None,
@@ -3305,6 +3301,21 @@ impl LeptoskitConfig {
 	#[must_use]
 	pub fn managed_infra(&self) -> Option<&infra::ManagedInfraConfig> {
 		self.infra.as_ref().and_then(infra::InfraConfig::as_managed)
+	}
+
+	/// Explicit graph placement, independent of application build targets.
+	#[must_use]
+	pub fn graph_infra(&self) -> Option<&deployment::InfraGraph> {
+		self.infra.as_ref().and_then(infra::InfraConfig::as_graph)
+	}
+
+	/// Mutable graph placement, when graph infrastructure is selected.
+	#[must_use]
+	pub fn graph_infra_mut(&mut self) -> Option<&mut deployment::InfraGraph> {
+		match self.infra.as_mut()? {
+			infra::InfraConfig::Graph(value) => Some(value.as_mut()),
+			infra::InfraConfig::Managed(_) => None,
+		}
 	}
 
 	/// Loads and validates the configuration for the project rooted at `dir`.

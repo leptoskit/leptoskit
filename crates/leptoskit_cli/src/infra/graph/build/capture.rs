@@ -33,7 +33,11 @@ pub(super) fn selection(config: &LeptoskitConfig, names: &[String]) -> Result<Se
 		.map_err(anyhow::Error::msg)?
 		.context("graph build requires infra.mode=graph")?;
 
-	for (name, frontend) in &config.frontends {
+	for (name, frontend) in &config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+	{
 		if let Some(path) = &frontend.backend {
 			let path = path.to_str().context("backend path is not UTF-8")?;
 			let owner = plan
@@ -279,7 +283,10 @@ fn frontend(
 	name: &str,
 	destination: &Path,
 ) -> Result<Captured> {
-	let declared = &config.frontends[name];
+	let declared = &config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends[name];
 	let unit = Unit::Frontend(name.into());
 	let artifact = project.beneath(
 		config.artifacts[&declared.artifact]

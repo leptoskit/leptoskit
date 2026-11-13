@@ -13,6 +13,22 @@ fn website() -> LeptoskitConfig {
 	toml::from_str(WEBSITE).unwrap()
 }
 
+#[test]
+fn graph_frontend_placement_is_namespaced_under_infrastructure() {
+	let config = website();
+	let document: toml::Value = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+	assert!(document.get("frontends").is_none());
+	assert_eq!(document["infra"]["frontends"].as_table().unwrap().len(), 3);
+	assert_eq!(
+		document["infra"]["frontends"]["docs"]["artifact"].as_str(),
+		Some("public-site")
+	);
+	assert!(
+		toml::from_str::<LeptoskitConfig>(&WEBSITE.replace("[infra.frontends.", "[frontends."))
+			.is_err()
+	);
+}
+
 fn plan(config: &LeptoskitConfig) -> leptoskit_config::graph::plan::Plan {
 	config.validate().unwrap();
 	deployment::compile(config).unwrap().unwrap()
@@ -76,7 +92,14 @@ fn docs_and_compiler_release_selections_are_independent() {
 fn static_only_project_has_no_server_or_service_requirement() {
 	let mut config = website();
 	config.services.clear();
-	config.frontends.get_mut("play").unwrap().calls.clear();
+	config
+		.graph_infra_mut()
+		.unwrap()
+		.frontends
+		.get_mut("play")
+		.unwrap()
+		.calls
+		.clear();
 	let InfraConfig::Graph(infra) = config.infra.as_mut().unwrap() else {
 		panic!()
 	};
@@ -88,7 +111,12 @@ fn static_only_project_has_no_server_or_service_requirement() {
 #[test]
 fn ssr_frontend_owns_its_backend_and_readiness() {
 	let mut config = website();
-	let site = config.frontends.get_mut("site").unwrap();
+	let site = config
+		.graph_infra_mut()
+		.unwrap()
+		.frontends
+		.get_mut("site")
+		.unwrap();
 	site.kind = deployment::FrontendKind::Ssr;
 	site.backend = Some("server".into());
 	site.serve = Some(leptoskit_config::ServeConfig {
@@ -97,6 +125,8 @@ fn ssr_frontend_owns_its_backend_and_readiness() {
 	});
 	plan(&config);
 	config
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap()
@@ -110,7 +140,13 @@ fn ssr_frontend_owns_its_backend_and_readiness() {
 #[test]
 fn static_frontend_rejects_inapplicable_process_fields() {
 	let mut config = website();
-	config.frontends.get_mut("site").unwrap().backend = Some("server".into());
+	config
+		.graph_infra_mut()
+		.unwrap()
+		.frontends
+		.get_mut("site")
+		.unwrap()
+		.backend = Some("server".into());
 	refuses(&config, "static and cannot declare");
 }
 
@@ -247,7 +283,13 @@ fn derived_artifact_names_preserve_the_complete_service_name() {
 	let service = config.services.remove("play-api").unwrap();
 	let name = "a".repeat(63);
 	config.services.insert(name.clone(), service);
-	config.frontends.get_mut("play").unwrap().calls = vec![format!("services.{name}")];
+	config
+		.graph_infra_mut()
+		.unwrap()
+		.frontends
+		.get_mut("play")
+		.unwrap()
+		.calls = vec![format!("services.{name}")];
 	let graph = plan(&config);
 	assert!(graph.artifacts().contains(&format!("toolchain-{name}")));
 }
@@ -256,14 +298,24 @@ fn derived_artifact_names_preserve_the_complete_service_name() {
 fn graph_references_and_readiness_cycles_fail_before_side_effects() {
 	let mut config = website();
 	config
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("docs")
 		.unwrap()
 		.depends_on
 		.push("services.missing".into());
 	refuses(&config, "missing");
-	config.frontends.get_mut("docs").unwrap().depends_on = vec!["frontends.site".into()];
 	config
+		.graph_infra_mut()
+		.unwrap()
+		.frontends
+		.get_mut("docs")
+		.unwrap()
+		.depends_on = vec!["frontends.site".into()];
+	config
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap()

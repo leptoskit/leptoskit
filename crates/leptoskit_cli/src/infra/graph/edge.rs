@@ -79,7 +79,7 @@ fn declared_bindings(
 	{
 		let target = match &route.unit {
 			Unit::Frontend(name) => {
-				let frontend = &config.frontends[name];
+				let frontend = &infra.frontends[name];
 				match frontend.kind {
 					FrontendKind::Static => {
 						Target::Static(PathBuf::from(format!(

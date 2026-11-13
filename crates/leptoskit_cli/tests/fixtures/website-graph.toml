@@ -9,20 +9,20 @@ backend = false
 command = ["cargo", "run", "--locked", "-p", "leptoskit_app", "--bin", "leptoskit-site"]
 output = "crates/leptoskit_app/dist"
 
-[frontends.site]
+[infra.frontends.site]
 artifact = "public-site"
 directory = "."
 host = "web"
 domain = "leptoskit.dev"
 
-[frontends.docs]
+[infra.frontends.docs]
 artifact = "public-site"
 directory = "docs"
 host = "web"
 domain = "leptoskit.dev"
 mount = "/docs/"
 
-[frontends.play]
+[infra.frontends.play]
 artifact = "public-site"
 directory = "play"
 host = "web"

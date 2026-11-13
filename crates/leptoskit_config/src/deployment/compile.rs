@@ -34,9 +34,7 @@ pub fn compile(config: &LeptoskitConfig) -> Result<Option<Plan>, String> {
 	let Some(graph) = graph else {
 		if graph_fields(config) {
 			return Err(
-				"artifacts, frontends and independently deployed services require infra.mode = \
-				 'graph'"
-					.into(),
+				"artifacts and independently deployed services require infra.mode = 'graph'".into(),
 			);
 		}
 
@@ -60,7 +58,7 @@ pub fn compile(config: &LeptoskitConfig) -> Result<Option<Plan>, String> {
 	}
 	let mut builder = Builder::new(graph, config)?;
 
-	for (name, frontend) in &config.frontends {
+	for (name, frontend) in &graph.frontends {
 		builder.frontend(name, frontend)?;
 	}
 
@@ -494,7 +492,6 @@ fn artifact_outputs(config: &LeptoskitConfig) -> Result<(), String> {
 
 fn graph_fields(config: &LeptoskitConfig) -> bool {
 	!config.artifacts.is_empty()
-		|| !config.frontends.is_empty()
 		|| config.services.values().any(|service| {
 			service.deploy.is_some() || service.serve.is_some() || service.runtime.is_some()
 		})

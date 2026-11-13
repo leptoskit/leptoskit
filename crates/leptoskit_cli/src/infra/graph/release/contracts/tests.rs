@@ -20,7 +20,12 @@ fn backend(unit: &str) -> Executable {
 }
 
 fn ssr(config: &mut LeptoskitConfig) {
-	let site = config.frontends.get_mut("site").unwrap();
+	let site = config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("site")
+		.unwrap();
 	site.kind = FrontendKind::Ssr;
 	site.backend = Some("server".into());
 	site.serve = Some(leptoskit_config::ServeConfig {
@@ -46,6 +51,8 @@ fn ssr_requires_explicit_socket_contract_and_preserves_exact_backend_pin() {
 	);
 	assert_ne!(value["account"], "leptoskit-edge");
 	let serve = config
+		.graph_infra()
+		.context("graph infrastructure required")?
 		.frontends
 		.get_mut("site")
 		.unwrap()
@@ -66,7 +73,12 @@ fn refuses_unrepresentable_ssr_contracts_before_transport() {
 	for field in ["variable", "address", "mount", "port", "probes"] {
 		let mut config = config();
 		ssr(&mut config);
-		let site = config.frontends.get_mut("site").unwrap();
+		let site = config
+			.graph_infra()
+			.context("graph infrastructure required")?
+			.frontends
+			.get_mut("site")
+			.unwrap();
 		let serve = site.serve.as_mut().unwrap();
 		match field {
 			"variable" => serve.address_env = Some("X\nUser=root".into()),

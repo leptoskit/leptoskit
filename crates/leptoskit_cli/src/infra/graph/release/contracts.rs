@@ -55,6 +55,8 @@ fn listener<'a>(
 	Ok(match &unit {
 		Unit::Frontend(name) => {
 			let frontend = config
+				.graph_infra()
+				.context("graph infrastructure required")?
 				.frontends
 				.get(name)
 				.context("frontend declaration missing")?;

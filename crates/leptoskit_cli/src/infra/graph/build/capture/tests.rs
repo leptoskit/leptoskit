@@ -177,7 +177,12 @@ fn missing_or_mutable_toolchain_pin_fails_before_recipes() {
 #[test]
 fn ssr_executable_is_captured_outside_its_public_asset_tree() {
 	let (root, mut config) = fixture();
-	let site = config.frontends.get_mut("site").unwrap();
+	let site = config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("site")
+		.unwrap();
 	site.kind = FrontendKind::Ssr;
 	site.backend = Some("server".into());
 	site.serve = Some(leptoskit_config::ServeConfig {
@@ -277,7 +282,12 @@ fn preexisting_output_symlink_is_refused_before_running_the_recipe() {
 #[test]
 fn server_only_ssr_captures_an_existing_empty_asset_tree() {
 	let (root, mut config) = fixture();
-	let site = config.frontends.get_mut("site").unwrap();
+	let site = config
+		.graph_infra()
+		.context("graph infrastructure required")?
+		.frontends
+		.get_mut("site")
+		.unwrap();
 	site.kind = FrontendKind::Ssr;
 	site.backend = Some("server".into());
 	site.serve = Some(leptoskit_config::ServeConfig {
