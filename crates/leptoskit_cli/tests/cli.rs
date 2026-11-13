@@ -3362,6 +3362,7 @@ fn dev_resolves_the_project_manifest_and_preserves_failure_status() {
 /// descriptor fixture.
 fn capability_workspace(scratch: &Scratch) {
 	let ffi = Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi");
+	let ffi = toml::Value::String(ffi.to_string_lossy().into_owned());
 	let plugin = scratch.path.join("echo");
 	let app = scratch.path.join("app_guest");
 	let tui = scratch.path.join("tui");
@@ -3376,9 +3377,8 @@ fn capability_workspace(scratch: &Scratch) {
 		format!(
 			"[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \
 			 \"2021\"\n\n[workspace]\nresolver = \"2\"\nmembers = [\"app_guest\", \"echo\", \
-			 \"tui\"]\n\n[dependencies]\nleptoskit_bridge_ffi = {{ path = \"{}\", features = \
-			 [\"app\"] }}\necho = {{ path = \"echo\" }}\n",
-			ffi.display()
+			 \"tui\"]\n\n[dependencies]\nleptoskit_bridge_ffi = {{ path = {ffi}, features = \
+			 [\"app\"] }}\necho = {{ path = \"echo\" }}\n"
 		),
 	)
 	.unwrap();
@@ -3407,9 +3407,8 @@ fn capability_workspace(scratch: &Scratch) {
 		format!(
 			"[package]\nname = \"app_tui\"\nversion = \"0.1.0\"\nedition = \
 			 \"2021\"\n\n[target.'cfg(not(target_arch = \
-			 \"wasm32\"))'.dependencies]\nleptoskit_bridge_ffi = {{ path = \"{}\", features = \
-			 [\"app\"] }}\necho = {{ path = \"../echo\" }}\n",
-			ffi.display()
+			 \"wasm32\"))'.dependencies]\nleptoskit_bridge_ffi = {{ path = {ffi}, features = \
+			 [\"app\"] }}\necho = {{ path = \"../echo\" }}\n"
 		),
 	)
 	.unwrap();

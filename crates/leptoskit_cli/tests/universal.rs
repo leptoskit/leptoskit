@@ -382,12 +382,13 @@ fn generated_application_shares_behavior_and_selects_platform_overrides() {
 	}
 
 	// File routes reject per-platform route files; platform_module still
-	// selects overrides for non-route modules such as components.
+	// selects overrides for non-route modules such as components. Its paths
+	// are relative to src, including when declared inside a nested module.
 	let components = project.join("counter_app/src/components");
 	fs::write(
 		components.join("mod.rs"),
 		"//! Reusable application components shared by all \
-		 platforms.\n\nleptoskit::platform_module!(pub mod heading = \"heading\");\n",
+		 platforms.\n\nleptoskit::platform_module!(pub mod heading = \"components/heading\");\n",
 	)
 	.expect("declare a platform_module heading");
 	fs::write(

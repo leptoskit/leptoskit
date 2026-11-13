@@ -1,0 +1,12 @@
+---
+source: crates/leptoskit_cli/tests/snapshots.rs
+expression: "normalize(&stdout(&output), &scratch.path)"
+---
+Validate and list the destinations in this application's configuration
+
+Usage: leptoskit targets [OPTIONS]
+
+Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

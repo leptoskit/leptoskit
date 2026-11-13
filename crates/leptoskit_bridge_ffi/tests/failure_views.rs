@@ -31,12 +31,9 @@ fn kotlin_sources() -> Vec<(String, String)> {
 }
 
 /// The body of `object NativeFailureView`, up to the next top-level item.
-fn failure_view() -> String {
-	let source = std::fs::read_to_string(Path::new(MOBILE).join("LeptosKitView.kt"))
-		.expect("LeptosKitView.kt")
-		// Windows runners check the sources out with CRLF; the boundary
-		// markers below are written against LF.
-		.replace("\r\n", "\n");
+fn failure_view(source: &str) -> String {
+	// Windows checkouts use CRLF; exercise either encoding against LF markers.
+	let source = source.replace("\r\n", "\n");
 	let start = source
 		.find("internal object NativeFailureView {")
 		.expect("LeptosKitView.kt defines NativeFailureView");
@@ -92,29 +89,36 @@ fn every_android_failure_message_is_a_native_failure_view() {
 
 #[test]
 fn the_failure_view_brings_its_own_readable_colors_and_fills_the_app() {
-	let view = failure_view();
+	let source = std::fs::read_to_string(Path::new(MOBILE).join("LeptosKitView.kt"))
+		.expect("LeptosKitView.kt")
+		.replace("\r\n", "\n");
+	let crlf = source.replace('\n', "\r\n");
 
-	for required in [
-		"setTextColor(TEXT)",
-		"setBackgroundColor(BACKGROUND)",
-		"FrameLayout.LayoutParams.MATCH_PARENT,\n                    \
-		 FrameLayout.LayoutParams.MATCH_PARENT,",
-	] {
+	for source in [&source, &crlf] {
+		let view = failure_view(source);
+
+		for required in [
+			"setTextColor(TEXT)",
+			"setBackgroundColor(BACKGROUND)",
+			"FrameLayout.LayoutParams.MATCH_PARENT,\n                    \
+			 FrameLayout.LayoutParams.MATCH_PARENT,",
+		] {
+			assert!(
+				view.contains(required),
+				"NativeFailureView lacks `{required}`"
+			);
+		}
+
+		let (text, background) = (color(&view, "TEXT"), color(&view, "BACKGROUND"));
+		assert_eq!(text >> 24, 0xFF, "the text is opaque");
+		assert_eq!(background >> 24, 0xFF, "the background is opaque");
+		let (light, dark) = (luminance(text), luminance(background));
+		let contrast = (light.max(dark) + 0.05) / (light.min(dark) + 0.05);
 		assert!(
-			view.contains(required),
-			"NativeFailureView lacks `{required}`"
+			contrast >= 7.0,
+			"contrast {contrast:.1}:1 is under WCAG AAA's 7:1"
 		);
 	}
-
-	let (text, background) = (color(&view, "TEXT"), color(&view, "BACKGROUND"));
-	assert_eq!(text >> 24, 0xFF, "the text is opaque");
-	assert_eq!(background >> 24, 0xFF, "the background is opaque");
-	let (light, dark) = (luminance(text), luminance(background));
-	let contrast = (light.max(dark) + 0.05) / (light.min(dark) + 0.05);
-	assert!(
-		contrast >= 7.0,
-		"contrast {contrast:.1}:1 is under WCAG AAA's 7:1"
-	);
 }
 
 #[test]

@@ -170,10 +170,10 @@ Sometimes one piece of UI should differ on one platform. Say a greeting componen
 Route files under `src/routes/` cannot use per-platform names yet (`index.ios.rs` is rejected). For reusable modules — components, helpers, services — declare them with `platform_module!` instead of a plain `mod`:
 
 ```rust
-leptoskit::platform_module!(pub mod heading = "heading");
+leptoskit::platform_module!(pub mod heading = "components/heading");
 ```
 
-`"heading"` is the module's path inside `water_app/src/components`, without the `.rs`. Next to the shared file, add one named for the platform:
+Declare this in `water_app/src/components/mod.rs`. `"components/heading"` is the module's path relative to `water_app/src`, without the `.rs`. Next to the shared file, add one named for the platform:
 
 ```text
 water_app/src/components/

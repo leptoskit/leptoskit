@@ -24,9 +24,13 @@ pub struct Limits {
 	pub batch_entries: usize,
 	/// The most a batch's entries may take, roughly, before encoding.
 	pub batch_bytes: usize,
-	/// The most entries waiting; past it, the oldest are dropped.
+	/// The most entries held, waiting or on their way; past it, the oldest
+	/// waiting are dropped.
 	pub queue_entries: usize,
-	/// The most the waiting entries may take, roughly.
+	/// The most the queue may hold, roughly: its entries, waiting or on
+	/// their way, and the contexts they name. An entry larger than this,
+	/// or than [`batch_bytes`](Self::batch_bytes), is dropped when it's
+	/// queued, since it could never be sent.
 	pub queue_bytes: usize,
 	/// Entries older than this, in milliseconds, are dropped rather than
 	/// sent: the service only deduplicates retries within its window.
@@ -114,8 +118,15 @@ pub struct Queue {
 	waiting: VecDeque<Queued>,
 	/// The entries of the batch on its way, oldest first.
 	sending: Vec<Queued>,
+	/// What the waiting entries take.
 	bytes: usize,
+	/// What the entries on their way take.
+	sending_bytes: usize,
+	/// What the kept contexts take.
+	context_bytes: usize,
 	dropped: u64,
+	/// How many of `dropped` the batch on its way reports.
+	reporting: u64,
 	/// Shrinks when the service says a batch is too large.
 	batch_entries: usize,
 	failures: u32,
@@ -127,6 +138,7 @@ impl Queue {
 	/// same for all of them, such as the library and the device.
 	pub fn new(limits: Limits, context: Properties) -> Self {
 		let batch_entries = limits.batch_entries.max(1);
+		let context_bytes = properties_size(&context);
 		Self {
 			limits,
 			contexts: vec![(0, context)],
@@ -134,7 +146,10 @@ impl Queue {
 			waiting: VecDeque::new(),
 			sending: Vec::new(),
 			bytes: 0,
+			sending_bytes: 0,
+			context_bytes,
 			dropped: 0,
+			reporting: 0,
 			batch_entries,
 			failures: 0,
 			retry_at: i64::MIN,
@@ -145,8 +160,10 @@ impl Queue {
 	/// queued keep theirs.
 	pub fn set_context(&mut self, context: Properties) {
 		self.generation = self.generation.wrapping_add(1);
+		self.context_bytes += properties_size(&context);
 		self.contexts.push((self.generation, context));
 		self.forget_unused_contexts();
+		self.enforce_limits();
 	}
 
 	/// Queues `entry`, recorded at `now`. Its `context` is replaced with the
@@ -154,16 +171,29 @@ impl Queue {
 	pub fn push(&mut self, mut entry: Entry, now: i64) {
 		entry.context = self.generation;
 		let bytes = size(&entry);
+		if bytes > self.limits.queue_bytes.min(self.limits.batch_bytes) {
+			self.dropped += 1;
+			return;
+		}
 		self.waiting.push_back(Queued {
 			entry,
 			bytes,
 			at: now,
 		});
 		self.bytes += bytes;
-		while self.waiting.len() > self.limits.queue_entries
-			|| (self.bytes > self.limits.queue_bytes && self.waiting.len() > 1)
+		self.enforce_limits();
+	}
+
+	/// Drops the oldest waiting entries until the queue is within its
+	/// limits, counting a batch on its way and the contexts. Entries on
+	/// their way are never dropped here: they settle first.
+	fn enforce_limits(&mut self) {
+		while !self.waiting.is_empty()
+			&& (self.waiting.len() + self.sending.len() > self.limits.queue_entries
+				|| self.bytes + self.sending_bytes + self.context_bytes > self.limits.queue_bytes)
 		{
 			self.drop_oldest();
+			self.forget_unused_contexts();
 		}
 	}
 
@@ -224,6 +254,7 @@ impl Queue {
 			}
 			bytes += next.bytes;
 			self.bytes -= next.bytes;
+			self.sending_bytes += next.bytes;
 			self.sending.extend(self.waiting.pop_front());
 		}
 
@@ -238,6 +269,7 @@ impl Queue {
 			entry.context = index_of(&mut used, entry.context);
 			batch.entries.push(entry);
 		}
+		self.reporting = self.dropped;
 		if self.dropped > 0 {
 			let first = &self.sending[0].entry;
 			batch.entries.push(Entry {
@@ -280,9 +312,13 @@ impl Queue {
 				if outcome == Outcome::Rejected {
 					self.dropped += self.sending.len() as u64;
 				} else {
-					self.dropped = 0;
+					// Drops counted while the batch was on its way are
+					// reported by the next one.
+					self.dropped -= self.reporting.min(self.dropped);
 				}
+				self.reporting = 0;
 				self.sending.clear();
+				self.sending_bytes = 0;
 				self.failures = 0;
 				self.retry_at = i64::MIN;
 				self.batch_entries = self.limits.batch_entries.max(1);
@@ -293,6 +329,7 @@ impl Queue {
 					// Even alone it's too large: it never will be accepted.
 					self.dropped += self.sending.len() as u64;
 					self.sending.clear();
+					self.sending_bytes = 0;
 					self.forget_unused_contexts();
 				} else {
 					self.batch_entries = (self.sending.len() / 2).max(1);
@@ -315,9 +352,8 @@ impl Queue {
 			self.bytes += queued.bytes;
 			self.waiting.push_front(queued);
 		}
-		while self.waiting.len() > self.limits.queue_entries {
-			self.drop_oldest();
-		}
+		self.sending_bytes = 0;
+		self.enforce_limits();
 	}
 
 	fn drop_oldest(&mut self) {
@@ -346,6 +382,11 @@ impl Queue {
 				|| waiting.iter().any(|queued| queued.entry.context == *have)
 				|| sending.iter().any(|queued| queued.entry.context == *have)
 		});
+		self.context_bytes = self
+			.contexts
+			.iter()
+			.map(|(_, context)| properties_size(context))
+			.sum();
 	}
 }
 
@@ -549,6 +590,62 @@ mod tests {
 		);
 		queue.settle(Outcome::Stored, 0, 0.0);
 		assert_eq!(queue.dropped(), 0);
+	}
+
+	#[test]
+	fn an_entry_too_large_to_send_is_dropped_when_queued() {
+		let mut queue = queue(Limits {
+			batch_bytes: 200,
+			..Limits::default()
+		});
+		let mut large = event(0);
+		large.body = Body::Event {
+			name: "large".into(),
+			properties: vec![("text".into(), Value::Text("x".repeat(500)))],
+		};
+		queue.push(large, 0);
+		assert_eq!(queue.len(), 0);
+		assert_eq!(queue.dropped(), 1);
+	}
+
+	#[test]
+	fn a_batch_on_its_way_counts_against_the_limits() {
+		let mut queue = queue(Limits {
+			batch_entries: 3,
+			queue_entries: 4,
+			..Limits::default()
+		});
+		for n in 0..3 {
+			queue.push(event(n), 0);
+		}
+		queue.take(0, [0; 10]).unwrap();
+		for n in 3..6 {
+			queue.push(event(n), 0);
+		}
+		assert_eq!(queue.len(), 1, "three on their way, one waiting");
+		assert_eq!(queue.dropped(), 2);
+		queue.settle(Outcome::Retry { after: None }, 0, 0.0);
+		assert_eq!(queue.len(), 4);
+	}
+
+	#[test]
+	fn contexts_count_against_the_byte_limit() {
+		let small = size(&event(0));
+		let mut queue = queue(Limits {
+			queue_bytes: 3 * small + 40,
+			..Limits::default()
+		});
+		for n in 0..3 {
+			queue.push(event(n), 0);
+		}
+		assert_eq!(queue.len(), 3);
+		queue.set_context(vec![("$lib".into(), Value::Text("x".repeat(small)))]);
+		assert!(
+			queue.len() < 3,
+			"a larger context leaves room for fewer entries"
+		);
+		let held = queue.bytes + queue.sending_bytes + queue.context_bytes;
+		assert!(held <= 3 * small + 40);
 	}
 
 	#[test]
