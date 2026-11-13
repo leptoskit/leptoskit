@@ -19,6 +19,10 @@ pub const SPEC_MARKER: &str = "leptoskit_rpc_spec";
 /// version 3, and whose nullable arguments are optional.
 pub const SPEC_VERSION: u32 = 4;
 
+/// Schema annotation recording an argument's server-side default without
+/// executing the default function or claiming its result is a fixed value.
+pub const SERVER_DEFAULT_SCHEMA_KEY: &str = "x-leptoskit-server-default";
+
 /// Where a server serves the live socket by default, relative to its
 /// origin.
 pub const DEFAULT_LIVE_PATH: &str = "/live";
