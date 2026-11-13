@@ -175,54 +175,138 @@ fn exchange(
 	headers: &str,
 	body: &str,
 ) -> (u16, String, String) {
+	try_exchange(
+		address,
+		method,
+		path,
+		headers,
+		body,
+		std::time::Duration::from_secs(30),
+	)
+	.unwrap_or_else(|error| panic!("{method} {path} at {address}: {error}"))
+}
+
+fn try_exchange(
+	address: &str,
+	method: &str,
+	path: &str,
+	headers: &str,
+	body: &str,
+	timeout: std::time::Duration,
+) -> Result<(u16, String, String), String> {
 	use std::io::Read;
 	use std::io::Write;
 
-	let mut stream = std::net::TcpStream::connect(address).expect("connect");
+	let address = address
+		.parse()
+		.map_err(|error| format!("invalid address: {error}"))?;
+	let mut stream = std::net::TcpStream::connect_timeout(&address, timeout)
+		.map_err(|error| format!("connect: {error}"))?;
+	stream
+		.set_read_timeout(Some(timeout))
+		.map_err(|error| error.to_string())?;
+	stream
+		.set_write_timeout(Some(timeout))
+		.map_err(|error| error.to_string())?;
 	write!(
 		stream,
 		"{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: \
 		 application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
 		body.len()
 	)
-	.unwrap();
+	.map_err(|error| format!("write request: {error}"))?;
 	let mut response = String::new();
-	stream.read_to_string(&mut response).unwrap();
-	let status = response[9..12].parse().unwrap();
-	let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
-	(status, head.to_owned(), body.to_owned())
+	stream
+		.read_to_string(&mut response)
+		.map_err(|error| format!("read response: {error}"))?;
+	let (status, head, body) =
+		parse_response(&response).map_err(|error| format!("{error}; response: {response:?}"))?;
+	Ok((status, head.to_owned(), body.to_owned()))
+}
+
+fn parse_response(response: &str) -> Result<(u16, &str, &str), &'static str> {
+	let (head, body) = response
+		.split_once("\r\n\r\n")
+		.ok_or("incomplete HTTP headers")?;
+	let mut words = head
+		.lines()
+		.next()
+		.ok_or("missing HTTP status line")?
+		.split_whitespace();
+	if !matches!(words.next(), Some("HTTP/1.0" | "HTTP/1.1")) {
+		return Err("invalid HTTP protocol");
+	}
+	let status = words.next().ok_or("missing HTTP status")?;
+	if status.len() != 3 || !status.bytes().all(|byte| byte.is_ascii_digit()) {
+		return Err("invalid HTTP status");
+	}
+	let status = status.parse().map_err(|_| "invalid HTTP status")?;
+	if !(100..600).contains(&status) {
+		return Err("invalid HTTP status");
+	}
+	Ok((status, head, body))
 }
 
 /// A scaffolded server, killed if the test ends while it runs.
 struct Server {
 	child: std::process::Child,
+	log: tempfile::NamedTempFile,
 }
 
 impl Server {
 	/// Starts the scaffold's debug server on `address`, with `envs`, and
-	/// waits for it to listen.
+	/// waits for a successful HTTP readiness response, retaining startup logs.
 	fn start(root: &Path, target: &Path, address: &str, envs: &[(&str, &str)]) -> Self {
+		let log = tempfile::NamedTempFile::new_in(root).expect("create the server log");
 		let mut child = Command::new(target.join("debug/notes"));
 		child
 			.current_dir(root)
 			.env("LEPTOS_SITE_ADDR", address)
 			.env_remove("DATABASE_URL")
-			.stdout(std::process::Stdio::null())
-			.stderr(std::process::Stdio::null());
+			.stdout(log.as_file().try_clone().expect("open stdout log"))
+			.stderr(log.as_file().try_clone().expect("open stderr log"));
 
 		for (name, value) in envs {
 			child.env(name, value);
 		}
 
-		let server = Self {
+		let mut server = Self {
 			child: child.spawn().unwrap(),
+			log,
 		};
-		let ready = (0..240).any(|_| {
-			std::thread::sleep(std::time::Duration::from_millis(250));
-			std::net::TcpStream::connect(address).is_ok()
-		});
-		assert!(ready, "the server never listened on {address}");
-		server
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+		loop {
+			if let Some(status) = server.child.try_wait().expect("check scaffold process") {
+				panic!(
+					"the server exited before readiness: {status}\n{}",
+					server.logs()
+				);
+			}
+			if matches!(
+				try_exchange(
+					address,
+					"GET",
+					"/readyz",
+					"",
+					"",
+					std::time::Duration::from_millis(250)
+				),
+				Ok((200, _, _))
+			) {
+				return server;
+			}
+			assert!(
+				std::time::Instant::now() < deadline,
+				"the server never became HTTP-ready on {address}\n{}",
+				server.logs()
+			);
+			std::thread::sleep(std::time::Duration::from_millis(100));
+		}
+	}
+
+	fn logs(&self) -> String {
+		fs::read_to_string(self.log.path())
+			.unwrap_or_else(|error| format!("read server log: {error}"))
 	}
 
 	/// Stops the server the way a container runtime does, with `SIGTERM`, and
@@ -252,7 +336,69 @@ impl Drop for Server {
 	fn drop(&mut self) {
 		let _ = self.child.kill();
 		let _ = self.child.wait();
+		if std::thread::panicking() {
+			eprintln!("scaffold server output:\n{}", self.logs());
+		}
 	}
+}
+
+#[test]
+fn empty_or_incomplete_http_responses_report_the_protocol_failure() {
+	for response in [
+		"",
+		"HTTP/1.1 200",
+		"HTTP/1.1 200 OK\r\n",
+		"HTTP/2 200\r\n\r\n",
+		"HTTP/1.1 +20\r\n\r\n",
+	] {
+		assert!(parse_response(response).is_err(), "{response:?}");
+	}
+	assert_eq!(
+		parse_response("HTTP/1.1 200 OK\r\n\r\nready").unwrap(),
+		(200, "HTTP/1.1 200 OK", "ready")
+	);
+}
+
+#[test]
+fn accepting_tcp_without_an_http_response_is_not_readiness() {
+	use std::io::Read as _;
+	use std::io::Write as _;
+
+	let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+	let address = listener.local_addr().unwrap().to_string();
+	let host = std::thread::spawn(move || {
+		for ready in [false, true] {
+			let (mut stream, _) = listener.accept().unwrap();
+			stream
+				.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+				.unwrap();
+			let mut request = Vec::new();
+			while !request.ends_with(b"\r\n\r\n") {
+				let mut byte = [0];
+				stream.read_exact(&mut byte).unwrap();
+				request.extend_from_slice(&byte);
+				assert!(request.len() < 1024);
+			}
+			if ready {
+				stream
+					.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+					.unwrap();
+			}
+		}
+	});
+	let probe = || {
+		try_exchange(
+			&address,
+			"GET",
+			"/readyz",
+			"",
+			"",
+			std::time::Duration::from_secs(2),
+		)
+	};
+	assert!(probe().is_err());
+	assert_eq!(probe().unwrap().0, 200);
+	host.join().unwrap();
 }
 
 /// A free port on this machine, as `127.0.0.1:port`.
@@ -390,8 +536,13 @@ fn exports_migration_checkpoint_without_startup(root: &Path, target: &Path) {
 		.stdout(std::process::Stdio::null())
 		.stderr(std::process::Stdio::null());
 	let run = |command: &mut Command| {
+		let log = tempfile::NamedTempFile::new_in(root).unwrap();
+		command
+			.stdout(log.as_file().try_clone().unwrap())
+			.stderr(log.as_file().try_clone().unwrap());
 		let mut server = Server {
 			child: command.spawn().unwrap(),
+			log,
 		};
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
