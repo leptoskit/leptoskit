@@ -4,9 +4,10 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Links this app to a service. Reads `LEPTOSKIT_CONTROL_KEY`; stores it outside the repository
 
-Usage: leptoskit console connect --url <URL>
+Usage: leptoskit console connect [OPTIONS] --url <URL>
 
 Options:
-      --url <URL>  
-  -h, --help       Print help
-  -V, --version    Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --url <URL>          
+  -h, --help               Print help
+  -V, --version            Print version

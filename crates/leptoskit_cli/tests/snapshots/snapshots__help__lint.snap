@@ -16,6 +16,9 @@ Arguments:
           Arguments passed on to clippy, such as `-- -W clippy::nursery`
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --no-clippy
           Run only the leptoskit rules
 

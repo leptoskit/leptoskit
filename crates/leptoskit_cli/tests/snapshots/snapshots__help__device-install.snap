@@ -7,6 +7,9 @@ Installs an app package, or checks that a desktop path exists
 Usage: leptoskit device install [OPTIONS] --path <PATH>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --kind <KIND>
           What to drive; inferred from `--device` or `--url` when omitted
 

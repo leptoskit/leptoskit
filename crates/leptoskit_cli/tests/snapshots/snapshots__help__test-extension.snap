@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 185
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Builds the browser extension and checks it in Chrome for Testing or Firefox: every page shows something, the worker runs, and each content script puts its frame on a page with a strict content security policy
@@ -8,6 +7,9 @@ Builds the browser extension and checks it in Chrome for Testing or Firefox: eve
 Usage: leptoskit test extension [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --browser <BROWSER>
           Browser family to run
 

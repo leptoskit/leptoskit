@@ -1,13 +1,13 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 212
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Runs a dedicated outbound worker paired with the hosted `LeptosKit` app
 
-Usage: leptoskit console worker --url <URL> --project <PROJECT> --data <DATA>
+Usage: leptoskit console worker [OPTIONS] --url <URL> --project <PROJECT> --data <DATA>
 
 Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
       --url <URL>          
       --project <PROJECT>  
       --data <DATA>        

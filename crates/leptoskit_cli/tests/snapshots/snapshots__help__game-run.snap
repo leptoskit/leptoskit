@@ -10,6 +10,7 @@ Arguments:
   [PATH]  The game directory. Defaults to `game/lantern` when that crate is here, otherwise the current directory
 
 Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
       --release            Build in release mode
       --frames <FRAMES>    Fixed steps to run. Each step is one frame
       --out <OUT>          Where to write the last frame

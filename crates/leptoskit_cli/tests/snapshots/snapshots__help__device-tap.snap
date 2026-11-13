@@ -7,6 +7,9 @@ Clicks a visible control
 Usage: leptoskit device tap [OPTIONS] <--locator-accessibility-id <LOCATOR_ACCESSIBILITY_ID>|--locator-text <LOCATOR_TEXT>|--locator-id <LOCATOR_ID>|--locator-css <LOCATOR_CSS>|--locator-xpath <LOCATOR_XPATH>>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --kind <KIND>
           What to drive; inferred from `--device` or `--url` when omitted
 

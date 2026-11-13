@@ -4,9 +4,10 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Runs real native UI/system-dialog scenarios through an OS driver
 
-Usage: leptoskit test native --suite <SUITE>
+Usage: leptoskit test native [OPTIONS] --suite <SUITE>
 
 Options:
-      --suite <SUITE>  JSON scenario containing the session and ordered actions/assertions
-  -h, --help           Print help
-  -V, --version        Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --suite <SUITE>      JSON scenario containing the session and ordered actions/assertions
+  -h, --help               Print help
+  -V, --version            Print version

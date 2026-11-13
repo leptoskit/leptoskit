@@ -10,6 +10,7 @@ Arguments:
   <PATH>  The project directory; created when missing. Existing files are never overwritten
 
 Options:
+      --app-target <NAME>              Select a named target from the root leptoskit.toml
       --platform <PLATFORM>            The default build platform. Standard projects include all six; HarmonyOS generates its experimental standalone starter [default: web]
       --native-target <NATIVE_TARGET>  Select a native default, or the standalone HarmonyOS starter (requires --platform native)
       --name <NAME>                    The app name; defaults to the directory name

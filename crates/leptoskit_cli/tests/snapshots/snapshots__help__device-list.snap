@@ -7,6 +7,7 @@ Lists everything attached right now: simulators, phones, emulators, AVDs, the de
 Usage: leptoskit device list [OPTIONS]
 
 Options:
-      --json     Print the machine-readable inventory instead of a table
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --json               Print the machine-readable inventory instead of a table
+  -h, --help               Print help
+  -V, --version            Print version

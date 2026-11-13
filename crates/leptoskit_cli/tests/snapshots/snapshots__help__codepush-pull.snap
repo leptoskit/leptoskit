@@ -9,6 +9,9 @@ Uses the same credentials as `publish`.
 Usage: leptoskit codepush pull [OPTIONS] --endpoint <URL> --bucket <BUCKET>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --store <STORE>
           The release store directory; defaults to `releases/`
           

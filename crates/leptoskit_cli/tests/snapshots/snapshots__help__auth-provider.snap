@@ -4,12 +4,13 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Manages third-party sign-in providers
 
-Usage: leptoskit auth provider <COMMAND>
+Usage: leptoskit auth provider [OPTIONS] <COMMAND>
 
 Commands:
   add   Adds `[auth.providers.<id>]` to leptoskit.toml, naming the environment variables its secrets go in, and prints how to set the provider up
   help  Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

@@ -7,6 +7,9 @@ Runs browser component tests through wasm-bindgen-test
 Usage: leptoskit test web [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --package <PACKAGE>
           Cargo package containing browser tests
           

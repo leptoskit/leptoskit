@@ -9,6 +9,9 @@ Credentials come from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional
 Usage: leptoskit codepush publish [OPTIONS] --endpoint <URL> --bucket <BUCKET>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --store <STORE>
           The release store directory; defaults to `releases/`
           

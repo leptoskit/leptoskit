@@ -7,6 +7,9 @@ Reproduce and package a backend without rebuilding it in the image
 Usage: leptoskit infra build-verified [OPTIONS] --bundle <BUNDLE> --manifest <MANIFEST> --sha256 <SHA256> --runtime-image <RUNTIME_IMAGE> --runtime-config-sha256 <RUNTIME_CONFIG_SHA256> --tag <TAG> --out <OUT>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --bundle <BUNDLE>
           The extracted backend bundle directory
 

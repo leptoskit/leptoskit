@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 229
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Produces an Apple, Windows, or Linux application, Android APK, or HarmonyOS HAP.
@@ -27,6 +26,9 @@ Arguments:
           - tui:              A terminal application for this machine's own terminal
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --release
           
 

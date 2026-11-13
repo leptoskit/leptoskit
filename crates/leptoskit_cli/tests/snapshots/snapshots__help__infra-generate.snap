@@ -7,6 +7,7 @@ Writes inspectable main.tf.json and deployment instructions
 Usage: leptoskit infra generate [OPTIONS]
 
 Options:
-      --force    Replace an edited generated configuration
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --force              Replace an edited generated configuration
+  -h, --help               Print help
+  -V, --version            Print version

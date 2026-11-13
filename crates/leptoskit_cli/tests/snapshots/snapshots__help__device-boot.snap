@@ -4,11 +4,12 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Boots a simulator or AVD and waits for it to finish
 
-Usage: leptoskit device boot <ID>
+Usage: leptoskit device boot [OPTIONS] <ID>
 
 Arguments:
   <ID>  The simulator UDID or AVD name, as `device list` prints it
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

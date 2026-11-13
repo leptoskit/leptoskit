@@ -4,8 +4,9 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Serves MCP on standard input and output, as clients launch it
 
-Usage: leptoskit mcp serve
+Usage: leptoskit mcp serve [OPTIONS]
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

@@ -4,8 +4,9 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Runs the caps and boot checks, and prints the build, test, lint, and workspace commands
 
-Usage: leptoskit budgets
+Usage: leptoskit budgets [OPTIONS]
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

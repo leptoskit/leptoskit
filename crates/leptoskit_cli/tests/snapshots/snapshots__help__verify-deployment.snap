@@ -7,6 +7,7 @@ Checks an origin's signed deployment policy against a key you trust. Does not sh
 Usage: leptoskit verify deployment [OPTIONS] --origin <ORIGIN> --key <HEX>
 
 Options:
+      --app-target <NAME>        Select a named target from the root leptoskit.toml
       --origin <ORIGIN>          The website or API origin to check, such as `https://example.com`
       --key <HEX>                A deployment public key you trust, in hex; repeat for each. Get it from the project, never from the website being checked
       --repository <REPOSITORY>  The repository the policy must name

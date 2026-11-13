@@ -10,6 +10,7 @@ Arguments:
   [PATHS]...  Files or directories to format. Directories are walked respecting `.gitignore`. Defaults to the current directory
 
 Options:
+      --app-target <NAME>      Select a named target from the root leptoskit.toml
       --check                  Write nothing; print a diff of every file that would change and fail if any would
       --stdin                  Format source read from stdin and write it to stdout
       --stdin-filepath <PATH>  The path of the file read from stdin, used to find its configuration

@@ -7,6 +7,7 @@ Packs a directory into a versioned release signed with the publisher key
 Usage: leptoskit codepush release [OPTIONS]
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --from <FROM>          The directory to release; defaults to `dist/` [default: dist]
       --store <STORE>        The release store directory; defaults to `releases/` [default: releases]
       --channel <CHANNEL>    The release channel [default: production]

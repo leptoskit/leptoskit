@@ -7,6 +7,7 @@ Rejects invalid graphs, escaping paths and conflicting managed identities
 Usage: leptoskit workspace check [OPTIONS]
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --manifest <MANIFEST>  Workspace manifest; otherwise find leptoskit.workspace.toml in this directory or a parent. Application paths are relative to that file
       --json                 Emit a versioned JSON report without secret values
   -h, --help                 Print help

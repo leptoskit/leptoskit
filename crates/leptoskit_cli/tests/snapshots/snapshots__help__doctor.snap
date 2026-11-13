@@ -7,6 +7,7 @@ Checks the local environment for missing tooling: the tools every build uses, th
 Usage: leptoskit doctor [OPTIONS]
 
 Options:
-      --all      Checks every native platform this machine can build, not just the project's
-  -h, --help     Print help
-  -V, --version  Print version
+      --all                Checks every native platform this machine can build, not just the project's
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

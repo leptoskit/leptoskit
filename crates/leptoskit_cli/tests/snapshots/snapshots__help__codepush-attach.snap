@@ -13,6 +13,9 @@ Arguments:
           The approval files `leptoskit codepush approve` wrote
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --store <STORE>
           The release store directory; defaults to `releases/`
           

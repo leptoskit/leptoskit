@@ -7,8 +7,9 @@ Reverses the management schema offline, after making a new backup. Deletes its h
 Usage: leptoskit console rollback-database [OPTIONS] --backup <BACKUP>
 
 Options:
-      --data <DATA>      
-      --backup <BACKUP>  
-      --yes              
-  -h, --help             Print help
-  -V, --version          Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --data <DATA>        
+      --backup <BACKUP>    
+      --yes                
+  -h, --help               Print help
+  -V, --version            Print version

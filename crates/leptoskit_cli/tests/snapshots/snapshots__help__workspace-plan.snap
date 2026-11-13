@@ -7,6 +7,7 @@ Freeze application configurations and independently pinned artifacts
 Usage: leptoskit workspace plan [OPTIONS] --releases <RELEASES> --out <OUT>
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --manifest <MANIFEST>  Workspace manifest; otherwise locate it from the current directory
       --releases <RELEASES>  TOML release set, with versions and independently authenticated pins
       --out <OUT>            New plan file; never overwrites an existing plan

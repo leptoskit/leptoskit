@@ -7,6 +7,7 @@ Restores a verified management backup offline and revokes restored tokens
 Usage: leptoskit console restore [OPTIONS] --from <FROM> --previous <PREVIOUS>
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --data <DATA>          
       --from <FROM>          
       --previous <PREVIOUS>  
