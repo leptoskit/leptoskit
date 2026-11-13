@@ -568,6 +568,12 @@ in
     "test:cargo" = {
       exec = ''
         set -euo pipefail
+        # Restored compiled outputs do not imply that registry archives are
+        # cached. trybuild resolves its fixture workspaces offline, so prepare
+        # the locked host dependencies before starting any tests.
+        test_host="$(rustc -vV | sed -n 's/^host: //p')"
+        test -n "$test_host"
+        cargo fetch --locked --target "$test_host"
         # file_routes and the DevTools interface are their own workspaces (the
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
