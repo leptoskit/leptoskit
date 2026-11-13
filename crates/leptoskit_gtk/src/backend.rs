@@ -67,6 +67,53 @@ struct Host {
 	root: Option<NodeId>,
 }
 
+/// Drops named controls out of the tree and puts them back.
+///
+/// GTK 4.22 can mark their accessible context realized before the bus is
+/// connected. Reinserting them after the window is mapped publishes a live
+/// object. The explicit name is applied after `GtkButton`'s labelled-by
+/// relation. The slider already registers, and reparenting it would reset
+/// its value.
+fn reregister_accessible_controls(state: &RefCell<State>) {
+	let controls = state
+		.borrow()
+		.widgets
+		.values()
+		.filter(|widget| {
+			matches!(
+				widget.kind,
+				NativeKind::Button
+					| NativeKind::Pressable
+					| NativeKind::Checkbox
+					| NativeKind::Radio
+					| NativeKind::Vector
+					| NativeKind::Switch
+			)
+		})
+		.map(|widget| {
+			(
+				widget.control.clone(),
+				widget.props.accessibility_label.clone(),
+			)
+		})
+		.collect::<Vec<_>>();
+
+	for (control, label) in &controls {
+		let parent = control.parent();
+		let next = control.next_sibling();
+
+		if let Some(parent) = parent.as_ref() {
+			control.unparent();
+			control.insert_before(parent, next.as_ref());
+		}
+
+		if let Some(label) = label.as_deref() {
+			control.reset_relation(gtk::AccessibleRelation::LabelledBy);
+			control.update_property(&[gtk::accessible::Property::Label(label)]);
+		}
+	}
+}
+
 /// Real GTK4 widgets, created and mutated on the initializing GTK thread.
 ///
 /// Call [`gtk::init`] on the application thread before constructing this
@@ -239,9 +286,41 @@ impl GtkBackend {
 			.build();
 
 		self.track_pointers(&host);
+		// Present while notifications are suppressed. The first focus would
+		// otherwise be reported as a mount event while the caller still
+		// holds its surface borrow. Refresh after the window is mapped so a
+		// spinner sees that and starts without emitting the focus event.
 		window.present();
 		self.refresh();
 		drop(guard);
+		// GTK 4.22 marks an accessible context realized when it first assigns
+		// a bus path, even if the AT-SPI connection is not up yet, and then
+		// never registers that object. After the window maps, drop each named
+		// control out of the tree and put it back so the next accessibility
+		// walk registers a live object. An idle does that after this function
+		// returns, so the caller's borrow is gone before the reparent runs.
+		// Earlier GTK releases register the original context.
+		if gtk::minor_version() >= 22 {
+			let state = Rc::clone(&self.state);
+			let once = Rc::new(Cell::new(false));
+			let schedule = move || {
+				if once.replace(true) {
+					return;
+				}
+
+				let state = Rc::clone(&state);
+				glib::idle_add_local_once(move || {
+					reregister_accessible_controls(state.as_ref());
+				});
+			};
+
+			if window.is_mapped() {
+				schedule();
+			} else {
+				window.connect_map(move |_| schedule());
+			}
+		}
+
 		window
 	}
 
@@ -1151,9 +1230,12 @@ fn configure_entry(entry: &gtk::Entry, kind: NativeKind, props: &NativeProps, rt
 		_ => rtl,
 	};
 
+	// GTK 4.22 stopped mirroring `xalign` for right-to-left content, so the
+	// compensation below would pin logical start to the left edge.
+	let mirrors_xalign = gtk::minor_version() < 22;
 	EntryExt::set_alignment(
 		entry,
-		if resolved_rtl {
+		if mirrors_xalign && resolved_rtl {
 			1.0 - physical
 		} else {
 			physical

@@ -1,4 +1,9 @@
-import type { Frame, Transaction, WidgetProps } from "libleptoskit.so";
+import type {
+	Frame,
+	LineHeight,
+	Transaction,
+	WidgetProps,
+} from "libleptoskit.so";
 /** Yoga frames are logical vp; ArkUI must not independently reflow the tree. */
 export class Widget {
 	id: number;
@@ -195,6 +200,35 @@ export function borderEdges(
 /** Whether text should draw in the italic slant. Unset means upright. */
 export function isItalic(italic: boolean | null | undefined): boolean {
 	return italic === true;
+}
+
+/**
+ * A line's height in the same logical units as the font size.
+ *
+ * `relative` wins when it is present: it is a multiple of `fontSize`.
+ * Otherwise `fixed` is already in those units. A missing, non-finite, or
+ * non-positive value leaves the font's own line height.
+ */
+export function lineHeightPoints(
+	height: LineHeight | null | undefined,
+	fontSize: number,
+): number | undefined {
+	if (height === undefined || height === null) {
+		return undefined;
+	}
+
+	let points: number | undefined = undefined;
+	if (height.relative !== undefined) {
+		points = height.relative * fontSize;
+	} else {
+		points = height.fixed;
+	}
+
+	if (points === undefined || !Number.isFinite(points) || points <= 0) {
+		return undefined;
+	}
+
+	return points;
 }
 
 /** The `autocomplete` tokens password managers read on every platform. */

@@ -165,3 +165,20 @@ impl<T: ?Sized> schemars::JsonSchema for Id<T> {
 		Uuid::json_schema(generator)
 	}
 }
+
+#[cfg(feature = "pod")]
+impl<T: ?Sized> leptoskit_pod::PodEncode for Id<T> {
+	fn encode(&self, w: &mut leptoskit_pod::Writer) -> leptoskit_pod::Result<()> {
+		leptoskit_pod::PodEncode::encode(&self.uuid.to_string(), w)
+	}
+}
+
+#[cfg(feature = "pod")]
+impl<'a, T: ?Sized> leptoskit_pod::PodDecode<'a> for Id<T> {
+	fn decode(r: &mut leptoskit_pod::Reader<'a>) -> leptoskit_pod::Result<Self> {
+		let text: String = leptoskit_pod::PodDecode::decode(r)?;
+		Uuid::parse_str(&text)
+			.map(Self::from_uuid)
+			.map_err(|_| leptoskit_pod::Error::InvalidTag(0))
+	}
+}

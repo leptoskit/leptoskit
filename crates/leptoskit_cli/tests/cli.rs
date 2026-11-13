@@ -1148,10 +1148,22 @@ impl DevSession {
 
 	/// The web server can start before cold phone guests finish building.
 	/// Both readiness markers share one budget for the complete startup.
+	/// `watching` is printed when the watcher starts, which is before that
+	/// build, so a line read while waiting for the other marker still counts.
 	fn ready(&mut self, within: std::time::Duration) {
 		let started = std::time::Instant::now();
-		self.expect("[web] app server at", within);
-		self.expect("watching", within.saturating_sub(started.elapsed()));
+		self.expect_seen("[web] app server at", within);
+		self.expect_seen("watching", within.saturating_sub(started.elapsed()));
+	}
+
+	/// `prefix` may already have been read while waiting for another line.
+	fn expect_seen(&mut self, prefix: &str, within: std::time::Duration) {
+		if let Some(index) = self.seen.iter().position(|line| line.starts_with(prefix)) {
+			self.seen.remove(index);
+			return;
+		}
+
+		self.expect(prefix, within);
 	}
 
 	/// Waits for a line starting with `prefix`.

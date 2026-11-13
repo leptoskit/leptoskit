@@ -1,0 +1,25 @@
+{
+	"name": "@leptoskit/pod",
+	"private": true,
+	"version": "0.3.0",
+	"description": "LK Pod — portable little-endian TLV codec for leptoskit RPC",
+	"type": "module",
+	"license": "Unlicense",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsc",
+		"test": "node --import tsx --test test/conformance.test.ts"
+	},
+	"devDependencies": {
+		"tsx": "^4.19.0",
+		"typescript": "^5.6.0"
+	}
+}

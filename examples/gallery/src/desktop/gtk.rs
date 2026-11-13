@@ -106,18 +106,24 @@ pub fn open(slug: &str, assets: Assets) -> Result<Host, String> {
 	{
 		let gallery = session.borrow();
 		let backend = gallery.surface.backend();
-		// GTK delivers both callbacks outside any borrow of the session.
+		// `show` holds this session across `open_window`. Mapping the
+		// window can re-enter these callbacks while that borrow is still
+		// held, and those callbacks leave it alone.
 		let weak = Rc::downgrade(&session);
 		backend.set_event_listener(move |node, event| {
-			if let Some(session) = weak.upgrade() {
-				session.borrow_mut().dispatch(node, &event);
+			if let Some(session) = weak.upgrade()
+				&& let Ok(mut session) = session.try_borrow_mut()
+			{
+				session.dispatch(node, &event);
 			}
 		});
 
 		let weak = Rc::downgrade(&session);
 		backend.set_resize_listener(move |width, height| {
-			if let Some(session) = weak.upgrade() {
-				session.borrow_mut().surface.set_viewport(width, height);
+			if let Some(session) = weak.upgrade()
+				&& let Ok(mut session) = session.try_borrow_mut()
+			{
+				session.surface.set_viewport(width, height);
 			}
 		});
 	}

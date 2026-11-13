@@ -63,9 +63,13 @@ fn a_snapshot_is_a_png_drawn_by_appkit() {
 	assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
 }
 
-#[cfg(not(target_os = "macos"))]
+// Linux opens a real window, same as macOS. This is the other platforms.
+#[cfg(not(any(
+	target_os = "macos",
+	all(target_os = "linux", not(target_env = "ohos"))
+)))]
 #[test]
-fn without_macos_the_window_is_the_summary_and_snapshots_refuse() {
+fn without_a_native_window_the_summary_stands_in_and_snapshots_refuse() {
 	let output = postcard(&[], "pl_PL.UTF-8");
 	assert!(output.status.success(), "{}", text(&output.stderr));
 	assert!(text(&output.stdout).contains("Pocztówka"));

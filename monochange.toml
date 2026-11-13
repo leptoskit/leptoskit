@@ -186,6 +186,8 @@ packages = [
 	"leptoskit_rpc_codegen",
 	"leptoskit_rpc_macros",
 	"leptoskit_rpc",
+	"leptoskit_pod",
+	"leptoskit_pod_macros",
 	"leptoskit_query",
 	"leptoskit_virtual",
 	"leptoskit_table",
@@ -658,6 +660,12 @@ type = "cargo"
 
 [package.leptoskit_rpc]
 path = "crates/leptoskit_rpc"
+
+[package.leptoskit_pod]
+path = "crates/leptoskit_pod"
+
+[package.leptoskit_pod_macros]
+path = "crates/leptoskit_pod_macros"
 type = "cargo"
 
 [package.leptoskit_query]

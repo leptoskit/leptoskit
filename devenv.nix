@@ -51,6 +51,7 @@ in
       dart
       deno
       dprint
+      esbuild
       geckodriver
       gh
       git
@@ -120,8 +121,18 @@ in
   + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     # The native Rive runtime links libstdc++. Nix's dynamic linker does not
     # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
-    # for `cargo nextest` and other linked test binaries.
-    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # for `cargo nextest` and other nix-linked test binaries.
+    # `setup:ci` strips this prefix from the path it writes for later steps:
+    # those steps link with the runner's cc, and a nix libstdc++ first on
+    # LD_LIBRARY_PATH loads nix libm, which needs a glibc symbol the runner
+    # does not have (`GLIBC_ABI_DT_X86_64_PLT`).
+    export LEPTOSKIT_NIX_LIBCXX="${pkgs.stdenv.cc.cc.lib}/lib"
+    export LD_LIBRARY_PATH="$LEPTOSKIT_NIX_LIBCXX''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Commands that stay inside this shell still link libm from that prefix.
+    # Host-target builds use Nix's loader so libm and libc are the same glibc.
+    # The loader path is baked into the binary; Nix's libc must not go on
+    # LD_LIBRARY_PATH, or every host program loads it and breaks.
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-} -C link-arg=-Wl,--dynamic-linker,${pkgs.glibc}/lib/ld-linux-x86-64.so.2 -C link-arg=-Wl,-rpath,${pkgs.glibc}/lib"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
@@ -571,11 +582,13 @@ in
         # file_routes and the DevTools interface are their own workspaces (the
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
-        if [ "$(uname -s)" = Linux ] && [ -z "''${DISPLAY:-}" ]; then
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
-            cargo nextest run --workspace --all-features
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
-            cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        displayed="${currentDir}/setup/scripts/run_displayed.sh"
+        # Always isolate Linux runs. A host DISPLAY without a runtime directory
+        # makes AT-SPI use a shared cache socket, and pixel checks then see a
+        # window that never paints.
+        if [ "$(uname -s)" = Linux ]; then
+          bash "$displayed" cargo nextest run --workspace --all-features
+          bash "$displayed" cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
           test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
@@ -657,7 +670,7 @@ in
     "test:widgets:gtk" = {
       exec = ''
         set -euo pipefail
-        dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+        bash ${currentDir}/setup/scripts/run_displayed.sh \
           cargo test --locked -p leptoskit_gtk --test widgets -- --test-threads=1
       '';
       description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
@@ -674,6 +687,9 @@ in
     "test:browser" = {
       exec = ''
         set -euo pipefail
+        # The runner's Chrome and this chromedriver disagree on the major
+        # version. The json names a Chrome built for this chromedriver.
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_testing_library
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -704,6 +720,7 @@ in
           --features leptoskit_rive/native,leptoskit_rive/serde,leptoskit_native/rive,leptoskit_native/serde,leptoskit_wasm/rive,leptoskit_bridge_ffi/app \
           --lib --test native --test asset --test rive
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown --package leptoskit_rive --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -725,9 +742,24 @@ in
       description = "Enforce complete line coverage for cross-platform use primitives.";
       binary = "bash";
     };
+    "coverage:pod" = {
+      exec = ''
+        set -euo pipefail
+        mkdir -p target/coverage
+        # Drive the gate from library unit tests only. Merging multiple
+        # integration-test binaries under-counts inlined codec helpers here.
+        cargo llvm-cov --package leptoskit_pod --lib --all-features \
+          --ignore-filename-regex '/tests/|/src/proofs\.rs|/src/lib_tests\.rs|/crates/leptoskit_pod_macros/' \
+          --fail-under-lines 100 \
+          --lcov --output-path target/coverage/leptoskit-pod.lcov
+      '';
+      description = "Enforce complete line coverage for the LK Pod wire codec.";
+      binary = "bash";
+    };
     "coverage:use:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         task_browser_root="$(git rev-parse --show-toplevel)"
         # wasm-bindgen-test 0.3.79 pins minicov 0.3.8, the LLVM 22 profiling
         # runtime (raw profile v10). LLVM 23 nightlies emit v11 profile data it
@@ -785,6 +817,7 @@ in
     "coverage:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         root="$(git rev-parse --show-toplevel)"
         # See coverage:use:browser: minicov 0.3.8 writes LLVM 22 profiles.
         toolchain=nightly-2026-05-08
@@ -1154,6 +1187,7 @@ in
     "test:plugins:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown \
             --package leptoskit_plugin_audio \
@@ -1478,7 +1512,21 @@ in
         # because Linux runners do not export several of these, and `set -u`
         # treats the unbound expansion as a failure.
         echo "PKG_CONFIG_PATH=''${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=''${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+        # Keep nix libstdc++ for commands inside this shell. Drop it from the
+        # environment later steps inherit: they link with the runner's cc, and
+        # inheriting the nix library loads nix libm against the runner's libc.
+        ci_ld_library_path="''${LD_LIBRARY_PATH:-}"
+        if [ -n "''${LEPTOSKIT_NIX_LIBCXX:-}" ]; then
+          case "$ci_ld_library_path" in
+            "$LEPTOSKIT_NIX_LIBCXX")
+              ci_ld_library_path=""
+              ;;
+            "$LEPTOSKIT_NIX_LIBCXX:"*)
+              ci_ld_library_path="''${ci_ld_library_path#"$LEPTOSKIT_NIX_LIBCXX:"}"
+              ;;
+          esac
+        fi
+        echo "LD_LIBRARY_PATH=$ci_ld_library_path" >> $GITHUB_ENV
         echo "LIBRARY_PATH=''${LIBRARY_PATH:-}" >> $GITHUB_ENV
         echo "C_INCLUDE_PATH=''${C_INCLUDE_PATH:-}" >> $GITHUB_ENV
 

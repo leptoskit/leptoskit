@@ -11,6 +11,11 @@
 //! renderers always link, but nothing attaches: [`lk_scene3d_available`]
 //! reports 0 and attaching returns null.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::cell::RefCell;
 use std::ffi::c_void;
 

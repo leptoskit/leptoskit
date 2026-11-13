@@ -307,6 +307,11 @@ pub async fn simulate(kind: &str, detail: Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+	#![allow(
+		clippy::missing_const_for_thread_local,
+		reason = "the initializer is already const; Clippy reports a false positive on Linux"
+	)]
+
 	use serde_json::json;
 
 	use super::*;
