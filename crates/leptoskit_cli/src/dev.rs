@@ -1615,6 +1615,8 @@ mod tests {
 		let root = &temporary.path().canonicalize().unwrap();
 		let (events, received) = mpsc::channel();
 		let stop = events.clone();
+		let observed_paths = std::cell::OnceCell::new();
+		let expires = Instant::now() + std::time::Duration::from_secs(30);
 		// Ends the loop if the edit is never heard, so the test fails
 		// rather than hangs.
 		let deadline = events.clone();
@@ -1628,14 +1630,32 @@ mod tests {
 		develop(
 			(),
 			|()| {
-				let (mut watcher, _, scope) = start_watcher(&config, root, events, None)?;
+				let (mut watcher, heard, scope) = start_watcher(&config, root, events, None)?;
 				watch_roots(&mut watcher, &scope)?;
+				assert!(observed_paths.set(heard.paths).is_ok());
 				Ok(watcher)
 			},
 			|()| {
-				// The first build, which takes long enough to edit the app
-				// during it.
-				std::fs::write(root.join("app/src/lib.rs"), "pub fn edited() {}\n").unwrap();
+				// Keep the simulated first build open until the real backend
+				// records an edit. Watch registration can return before the
+				// backend is ready; a burst of edits avoids racing that
+				// startup.
+				let paths = observed_paths
+					.get()
+					.expect("watching precedes the first build");
+				loop {
+					std::fs::write(root.join("app/src/lib.rs"), "pub fn edited() {}\n").unwrap();
+					if paths
+						.lock()
+						.unwrap()
+						.iter()
+						.any(|path| path.ends_with("app/src/lib.rs"))
+					{
+						break;
+					}
+					assert!(Instant::now() < expires, "the watcher hears the edit");
+					std::thread::sleep(std::time::Duration::from_millis(50));
+				}
 				order.push("started");
 				Ok(())
 			},
