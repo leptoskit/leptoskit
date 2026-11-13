@@ -9,10 +9,11 @@
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 // The broker's policy, so the client is also checked under the hosted
-// artifact's restrictions.
+// artifact's restrictions. The docs' images are hosted on Backblaze.
 const CONTENT_SECURITY_POLICY =
 	"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; " +
-	"style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+	"style-src 'self' 'unsafe-inline'; img-src 'self' https://f002.backblazeb2.com; " +
+	"frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 // The broker's policy for the examples the book plays, under `/docs/play/`:
 // the book's pages may frame them, they name where they are served with

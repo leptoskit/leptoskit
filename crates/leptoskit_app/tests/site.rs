@@ -160,6 +160,11 @@ async fn one_origin_serves_the_landing_real_docs_console_and_api() {
 			policy.contains("frame-ancestors 'none'"),
 			"{path} must not be framed: {policy}"
 		);
+		// The book's screenshots and AppKit renders are hosted on Backblaze.
+		assert!(
+			policy.contains("img-src 'self' https://f002.backblazeb2.com"),
+			"{path} must load the hosted images: {policy}"
+		);
 		assert!(
 			!response
 				.headers()

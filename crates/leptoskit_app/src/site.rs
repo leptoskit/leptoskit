@@ -134,12 +134,17 @@ pub fn router(api: Router, assets: &Path, docs: &Path, origin: &str) -> Result<R
 			CONTENT_SECURITY_POLICY,
 			HeaderValue::from_str(&format!(
 				"default-src 'self'; connect-src 'self' {}; script-src 'self' 'wasm-unsafe-eval'; \
-				 style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; \
-				 object-src 'none'",
+				 style-src 'self' 'unsafe-inline'; img-src 'self' {}; frame-ancestors 'none'; \
+				 base-uri 'none'; object-src 'none'",
 				crate::playground::SERVICE,
+				HOSTED_IMAGES,
 			))?,
 		)))
 }
+
+/// Where the docs' images are hosted, outside the repository: the book's
+/// screenshots and the AppKit renders its players switch to.
+const HOSTED_IMAGES: &str = "https://f002.backblazeb2.com";
 
 /// Where the book's players load the examples' web builds from.
 const PLAYED_EXAMPLES: &str = "/docs/play/";
