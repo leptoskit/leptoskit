@@ -50,6 +50,8 @@ pub use action::ActionCx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use ambient::cx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub(crate) use ambient::enter_query;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use ambient::mutation_cx;
 #[cfg(feature = "live")]
 pub use channel::ChannelRegistration;
