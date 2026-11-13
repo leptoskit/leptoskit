@@ -206,6 +206,16 @@ pub enum Body {
 		group_key: String,
 		set: Properties,
 	},
+	/// An event declared as a Rust type ([`crate::Event`]): its name, its
+	/// schema id, and its values in field order, with no property names.
+	/// The service reads the names from its event catalogue. `properties`
+	/// are keyed ones sent with it, such as registered properties.
+	TypedEvent {
+		name: String,
+		schema_id: u64,
+		values: Vec<Value>,
+		properties: Properties,
+	},
 }
 
 impl Body {
@@ -216,6 +226,7 @@ impl Body {
 			Self::Alias { .. } => 2,
 			Self::Set { .. } => 3,
 			Self::GroupIdentify { .. } => 4,
+			Self::TypedEvent { .. } => 5,
 		}
 	}
 }
@@ -306,6 +317,20 @@ pub fn encode(batch: &Batch) -> Vec<u8> {
 				put_name(&mut body, &mut strings, group_type);
 				put_uvarint(&mut body, strings.index(group_key));
 				put_map(&mut body, &mut strings, set);
+			}
+			Body::TypedEvent {
+				name,
+				schema_id,
+				values,
+				properties,
+			} => {
+				put_name(&mut body, &mut strings, name);
+				body.extend_from_slice(&schema_id.to_le_bytes());
+				put_uvarint(&mut body, values.len() as u64);
+				for value in values {
+					put_value(&mut body, &mut strings, value);
+				}
+				put_map(&mut body, &mut strings, properties);
 			}
 		}
 
@@ -566,6 +591,21 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Batch, DecodeError> {
 					group_type: reader.name()?,
 					group_key: reader.string_ref()?,
 					set: reader.map(0)?,
+				}
+			}
+			5 => {
+				let name = reader.name()?;
+				let schema_id = u64::from_le_bytes(reader.take(8)?.try_into().expect("8 bytes"));
+				let count = reader.count(limits.items, "a typed event with too many values")?;
+				let mut values = Vec::with_capacity(count);
+				for _ in 0..count {
+					values.push(reader.value(0)?);
+				}
+				Body::TypedEvent {
+					name,
+					schema_id,
+					values,
+					properties: reader.map(0)?,
 				}
 			}
 			_ => {

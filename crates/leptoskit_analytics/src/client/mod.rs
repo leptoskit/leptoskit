@@ -39,6 +39,72 @@ use crate::wire::Entry;
 use crate::wire::Properties;
 use crate::wire::Value;
 
+// Server and native transports read the same JSON acknowledgement. A response
+// that cannot be read is retried, since it may contain unknown-schema refusals.
+#[cfg(any(
+	feature = "server-client",
+	all(feature = "native", target_arch = "wasm32")
+))]
+fn acknowledge(outcome: Outcome, bytes: &[u8]) -> (Outcome, Vec<(u32, String)>) {
+	if outcome != Outcome::Stored {
+		return (outcome, Vec::new());
+	}
+	match refusals(bytes) {
+		Ok(refused) => (outcome, refused),
+		Err(()) => (Outcome::Retry { after: None }, Vec::new()),
+	}
+}
+
+#[cfg(any(
+	feature = "server-client",
+	all(feature = "native", target_arch = "wasm32")
+))]
+fn refusals(bytes: &[u8]) -> Result<Vec<(u32, String)>, ()> {
+	let answer: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+	let object = answer.as_object().ok_or(())?;
+	let Some(refused) = object.get("refused") else {
+		return Ok(Vec::new());
+	};
+	refused
+		.as_array()
+		.ok_or(())?
+		.iter()
+		.map(|refused| {
+			let index = u32::try_from(refused["index"].as_u64().ok_or(())?).map_err(|_| ())?;
+			Ok((index, refused["reason"].as_str().ok_or(())?.to_owned()))
+		})
+		.collect()
+}
+
+#[cfg(all(test, feature = "server-client"))]
+#[test]
+fn unreadable_acknowledgements_keep_the_batch_for_retry() {
+	for bytes in [
+		b"".as_slice(),
+		b"broken",
+		b"[]",
+		br#"{"refused":42}"#,
+		br#"{"refused":[{"index":0}]}"#,
+	] {
+		assert_eq!(
+			acknowledge(Outcome::Stored, bytes).0,
+			Outcome::Retry { after: None }
+		);
+	}
+	assert_eq!(
+		acknowledge(Outcome::Stored, b"{}"),
+		(Outcome::Stored, vec![])
+	);
+	assert_eq!(
+		acknowledge(
+			Outcome::Stored,
+			br#"{"refused":[{"index":3,"reason":"unknown_schema"}]}"#
+		)
+		.1,
+		vec![(3, "unknown_schema".into())]
+	);
+}
+
 /// What a client needs from where it runs.
 pub trait Platform {
 	/// The time, in milliseconds since the Unix epoch.
@@ -161,10 +227,30 @@ impl<P: Platform> Client<P> {
 		});
 	}
 
-	/// Records a typed event: [`capture`](Self::capture) with its name and
-	/// properties.
+	/// Records a typed event. It's sent by position, its values without
+	/// their names, which the service reads from its event catalogue; if the
+	/// service doesn't know the schema yet, the client sends it again with
+	/// its names. Registered properties and groups go with it, keyed.
 	pub fn capture_event<E: crate::Event>(&mut self, event: E) {
-		self.capture(E::NAME, event.into_properties());
+		if self.opted_out {
+			return;
+		}
+		let mut properties = Vec::new();
+		for (name, value) in &self.registered {
+			if !E::FIELDS.iter().any(|(field, _)| field == name) {
+				properties.push((name.clone(), value.clone()));
+			}
+		}
+		if !self.groups.is_empty() {
+			properties.push(("$groups".into(), Value::Map(self.groups.clone())));
+		}
+		self.queue.remember_schema(E::SCHEMA_ID, E::FIELDS);
+		self.record(Body::TypedEvent {
+			name: E::NAME.into(),
+			schema_id: E::SCHEMA_ID,
+			values: event.into_values(),
+			properties,
+		});
 	}
 
 	/// The person signed in as `distinct_id`, the app's own id for them:

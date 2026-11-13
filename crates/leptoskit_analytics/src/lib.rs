@@ -54,7 +54,56 @@ pub trait Event {
 
 	/// The event's properties, in field order.
 	fn into_properties(self) -> wire::Properties;
+
+	/// The event's values, in field order, without their names: what a
+	/// typed event sends ([`wire::Body::TypedEvent`]).
+	fn into_values(self) -> Vec<wire::Value>;
+}
+
+/// The schema id of an event named `name` with `fields` (each property's
+/// name and its type as spelled, without whitespace): FNV-1a over each,
+/// NUL-separated. What `#[derive(Event)]` computes at compile time, and
+/// what the service checks a registered schema against.
+pub fn schema_id(name: &str, fields: &[(&str, &str)]) -> u64 {
+	let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+	let mut eat = |text: &str| {
+		for byte in text.bytes().chain([0]) {
+			hash ^= u64::from(byte);
+			hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+		}
+	};
+	eat(name);
+	for (field, ty) in fields {
+		eat(field);
+		eat(ty);
+	}
+	hash
 }
 
 #[cfg(feature = "derive")]
 pub use leptoskit_analytics_macros::Event;
+
+/// A typed event's schema, as `#[derive(Event)]` records it in a server
+/// build: what the app registers in the service's event catalogue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventSchema {
+	pub name: &'static str,
+	pub schema_id: u64,
+	pub fields: &'static [(&'static str, &'static str)],
+}
+
+#[cfg(all(feature = "derive", not(target_arch = "wasm32")))]
+inventory::collect!(EventSchema);
+
+/// Every typed event this program was built with, outside wasm: what the
+/// app's server registers in the service's event catalogue when it starts.
+/// Browser and native builds don't collect them, so their bundles don't
+/// grow.
+#[cfg(all(feature = "derive", not(target_arch = "wasm32")))]
+pub fn compiled_events() -> impl Iterator<Item = &'static EventSchema> {
+	inventory::iter::<EventSchema>.into_iter()
+}
+
+#[cfg(all(feature = "derive", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use inventory as __inventory;

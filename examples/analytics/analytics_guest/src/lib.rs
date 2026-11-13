@@ -12,9 +12,17 @@ use futures::executor::LocalPool;
 use futures::executor::LocalSpawner;
 use futures::task::LocalSpawnExt as _;
 use leptoskit_analytics::client::native;
+#[cfg(not(feature = "typed"))]
 use leptoskit_analytics::props;
 use leptoskit_bridge::MethodId;
 use leptoskit_bridge::guest::Client;
+
+#[cfg(feature = "typed")]
+#[derive(leptoskit_analytics::Event)]
+#[event(name = "opened")]
+struct Opened {
+	screen: String,
+}
 
 /// The plugin the test registers to hear what the guest reports.
 const REPORT: &str = "analytics-test-report";
@@ -47,7 +55,12 @@ pub extern "C" fn leptoskit_main() {
 				options.flush_at = 1_000;
 				native::init(options).await;
 				report(0, native::distinct_id().unwrap_or_default().as_bytes());
+				#[cfg(not(feature = "typed"))]
 				native::capture("opened", props! { "screen" => "home" });
+				#[cfg(feature = "typed")]
+				native::capture_event(Opened {
+					screen: "home".into(),
+				});
 				native::flush().await;
 				// A failed persistence write must remain eligible for this
 				// retry, even though recording no new event

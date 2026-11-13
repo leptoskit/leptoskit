@@ -29,7 +29,7 @@ required-features = ["derive"]
 # The server's client, sending to the service.
 [[test]]
 name = "client"
-required-features = ["service", "server-client"]
+required-features = ["derive", "service", "server-client"]
 
 [dependencies]
 # Everything below is the service's, or the server client's. The library
@@ -73,6 +73,10 @@ wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 web-sys = { workspace = true, features = ["Window"] }
 
+# Typed event schemas are collected only in server builds.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+inventory = { workspace = true, optional = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 flate2 = { workspace = true }
 insta = { workspace = true }
@@ -105,16 +109,17 @@ service = [
 ]
 # `#[derive(Event)]`, for typed events. A proc macro: it adds nothing to
 # an app's bundle.
-derive = ["dep:leptoskit_analytics_macros"]
+derive = ["dep:inventory", "dep:leptoskit_analytics_macros"]
 # The client for the app's server: `client::server::Analytics`, sending in
 # the background with Tokio.
-server-client = ["dep:reqwest", "dep:tokio", "tokio/macros"]
+server-client = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/macros"]
 # The client in the browser: `client::web`, sending with `fetch` and
 # `sendBeacon`. Only on `wasm32-unknown-unknown`.
 web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 # The client in a native app's Wasm guest: `client::native`, sending
 # through the HTTP plugin and keeping unsent events in the app's files.
 native = [
+	"dep:serde_json",
 	"dep:any_spawner",
 	"dep:leptoskit_bridge",
 	"dep:leptoskit_plugin_crypto",

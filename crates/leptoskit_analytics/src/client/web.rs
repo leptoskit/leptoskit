@@ -322,22 +322,36 @@ fn context(window: &web_sys::Window) -> Properties {
 }
 
 /// Takes the next batch, if one may be sent now.
-fn take() -> Option<(super::Pending, String)> {
+fn take(named: bool) -> Option<(super::Pending, String)> {
 	STATE.with_borrow_mut(|state| {
 		let state = state.as_mut()?;
 		let now = Browser.now();
-		let pending = state.client.queue().take(now, super::random(&Browser))?;
+		let random = super::random(&Browser);
+		let pending = if named {
+			state.client.queue().take_named(now, random)?
+		} else {
+			state.client.queue().take(now, random)?
+		};
 		Some((pending, state.options.endpoint.clone()))
 	})
 }
 
-fn settle(outcome: Outcome) {
+fn settle(outcome: Outcome, refused: &[(u32, String)]) {
 	let mut jitter = [0_u8; 1];
 	Browser.fill_random(&mut jitter);
 	with(|client| {
-		client
-			.queue()
-			.settle(outcome, Browser.now(), f64::from(jitter[0]) / 255.0);
+		let jitter = f64::from(jitter[0]) / 255.0;
+		if outcome == Outcome::Stored {
+			let refused: Vec<(u32, &str)> = refused
+				.iter()
+				.map(|(index, reason)| (*index, reason.as_str()))
+				.collect();
+			client
+				.queue()
+				.settle_with_refusals(&refused, Browser.now(), jitter);
+		} else {
+			client.queue().settle(outcome, Browser.now(), jitter);
+		}
 	});
 }
 
@@ -348,18 +362,18 @@ const KEEPALIVE_BYTES: usize = 60 << 10;
 /// Sends batches with `fetch` until nothing waits or the service asks to
 /// wait.
 async fn send_waiting() {
-	while let Some((pending, endpoint)) = take() {
-		let outcome = post(&endpoint, &pending.body).await;
-		settle(outcome);
+	while let Some((pending, endpoint)) = take(false) {
+		let (outcome, refused) = post(&endpoint, &pending.body).await;
+		settle(outcome, &refused);
 		if matches!(outcome, Outcome::Retry { .. }) {
 			return;
 		}
 	}
 }
 
-async fn post(endpoint: &str, body: &[u8]) -> Outcome {
+async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
 	let Some(window) = web_sys::window() else {
-		return Outcome::Retry { after: None };
+		return (Outcome::Retry { after: None }, Vec::new());
 	};
 	let init = web_sys::RequestInit::new();
 	init.set_method("POST");
@@ -374,9 +388,29 @@ async fn post(endpoint: &str, body: &[u8]) -> Outcome {
 	match response {
 		Some(response) => {
 			let retry_after = response.headers().get("retry-after").ok().flatten();
-			Outcome::from_status(response.status(), retry_after.as_deref())
+			let outcome = Outcome::from_status(response.status(), retry_after.as_deref());
+			if outcome != Outcome::Stored {
+				return (outcome, Vec::new());
+			}
+			let answer = JsFuture::from(unknown_schemas(&response))
+				.await
+				.ok()
+				.and_then(|value| value.as_string());
+			match answer {
+				Some(answer) => {
+					(
+						outcome,
+						answer
+							.split(',')
+							.filter_map(|index| index.parse().ok())
+							.map(|index| (index, "unknown_schema".to_owned()))
+							.collect(),
+					)
+				}
+				None => (Outcome::Retry { after: None }, Vec::new()),
+			}
 		}
-		None => Outcome::Retry { after: None },
+		None => (Outcome::Retry { after: None }, Vec::new()),
 	}
 }
 
@@ -387,15 +421,23 @@ fn beacon() {
 	let Some(navigator) = web_sys::window().map(|window| window.navigator()) else {
 		return;
 	};
-	while let Some((pending, endpoint)) = take() {
+	while let Some((pending, endpoint)) = take(true) {
 		let queued = navigator
 			.send_beacon_with_opt_js_u8_array(&endpoint, Some(&Uint8Array::from(&pending.body[..])))
 			.unwrap_or(false);
 		if queued {
-			settle(Outcome::Stored);
+			settle(Outcome::Stored, &[]);
 		} else {
-			settle(Outcome::Retry { after: None });
+			settle(Outcome::Retry { after: None }, &[]);
 			return;
 		}
 	}
+}
+
+// Only unknown schemas can be retried; other per-event refusals are final.
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
+"#)]
+extern "C" {
+	fn unknown_schemas(response: &web_sys::Response) -> js_sys::Promise;
 }

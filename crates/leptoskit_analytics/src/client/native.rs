@@ -437,16 +437,25 @@ fn take() -> Option<(super::Pending, String)> {
 
 async fn send_waiting() {
 	while let Some((pending, endpoint)) = take() {
-		let outcome = post(endpoint, pending.body).await;
+		let (outcome, refused) = post(endpoint, pending.body).await;
 		STATE.with_borrow_mut(|state| {
 			if let Some(state) = state {
 				let mut jitter = [0_u8; 1];
 				state.client.platform().fill_random(&mut jitter);
 				let now = state.client.platform().now();
-				state
-					.client
-					.queue()
-					.settle(outcome, now, f64::from(jitter[0]) / 255.0);
+				let jitter = f64::from(jitter[0]) / 255.0;
+				if outcome == Outcome::Stored {
+					let refused: Vec<(u32, &str)> = refused
+						.iter()
+						.map(|(index, reason)| (*index, reason.as_str()))
+						.collect();
+					state
+						.client
+						.queue()
+						.settle_with_refusals(&refused, now, jitter);
+				} else {
+					state.client.queue().settle(outcome, now, jitter);
+				}
 			}
 		});
 		if matches!(outcome, Outcome::Retry { .. }) {
@@ -455,9 +464,9 @@ async fn send_waiting() {
 	}
 }
 
-async fn post(url: String, body: Vec<u8>) -> Outcome {
+async fn post(url: String, body: Vec<u8>) -> (Outcome, Vec<(u32, String)>) {
 	let Ok(http) = HttpClient::connect() else {
-		return Outcome::Retry { after: None };
+		return (Outcome::Retry { after: None }, Vec::new());
 	};
 	let request = leptoskit_plugin_http::Request {
 		method: Method::Post,
@@ -475,8 +484,11 @@ async fn post(url: String, body: Vec<u8>) -> Outcome {
 				.iter()
 				.find(|header| header.name.eq_ignore_ascii_case("retry-after"))
 				.and_then(|header| std::str::from_utf8(&header.value).ok());
-			Outcome::from_status(response.status, retry_after)
+			super::acknowledge(
+				Outcome::from_status(response.status, retry_after),
+				&response.body,
+			)
 		}
-		Err(_) => Outcome::Retry { after: None },
+		Err(_) => (Outcome::Retry { after: None }, Vec::new()),
 	}
 }

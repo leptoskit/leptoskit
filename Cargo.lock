@@ -5228,6 +5228,7 @@ dependencies = [
  "chrono",
  "flate2",
  "insta",
+ "inventory",
  "js-sys",
  "leptoskit_analytics_macros",
  "leptoskit_apm",

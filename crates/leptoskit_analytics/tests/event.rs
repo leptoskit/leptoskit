@@ -99,15 +99,40 @@ fn a_typed_event_is_recorded_like_any_other() {
 	let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
 	assert_eq!(
 		batch.entries[0].body,
-		Body::Event {
+		Body::TypedEvent {
 			name: "checkout_completed".into(),
-			properties: props! {
-				"plan" => "team",
-				"amount_cents" => 4900_u32,
-				"coupon" => "SPRING",
-				"flavour" => "beta",
-			},
+			schema_id: CheckoutCompleted::SCHEMA_ID,
+			values: vec![
+				Value::Text("team".into()),
+				Value::Int(4900),
+				Value::Text("SPRING".into()),
+			],
+			properties: props! { "flavour" => "beta" },
+		},
+		"by position, with registered properties keyed"
+	);
+}
+
+#[test]
+fn the_derived_id_is_the_one_the_service_checks() {
+	for (name, fields, id) in [
+		(
+			CheckoutCompleted::NAME,
+			CheckoutCompleted::FIELDS,
+			CheckoutCompleted::SCHEMA_ID,
+		),
+		(SignedUp::NAME, SignedUp::FIELDS, SignedUp::SCHEMA_ID),
+		(Searched::NAME, Searched::FIELDS, Searched::SCHEMA_ID),
+	] {
+		assert_eq!(leptoskit_analytics::schema_id(name, fields), id, "{name}");
+	}
+	assert_eq!(
+		Searched {
+			r#type: "notes".into(),
+			r#match: false,
 		}
+		.into_values(),
+		[Value::Text("notes".into()), Value::Bool(false)]
 	);
 }
 

@@ -380,3 +380,47 @@ fn unknown_entry_flags_are_refused() {
 		"unknown entry flags"
 	);
 }
+
+#[test]
+fn a_typed_event_sends_values_without_names_and_round_trips() {
+	let typed = Entry {
+		uuid: uuid(9),
+		distinct_id: "user-42".into(),
+		session_id: None,
+		context: 0,
+		body: Body::TypedEvent {
+			name: "checkout_completed".into(),
+			schema_id: 0x9792_45b8_5425_9b97,
+			values: vec![Value::Text("pro".into()), Value::Int(1999), Value::Null],
+			properties: vec![("flavour".into(), Value::Text("beta".into()))],
+		},
+	};
+	let keyed = Entry {
+		body: Body::Event {
+			name: "checkout_completed".into(),
+			properties: vec![
+				("plan".into(), Value::Text("pro".into())),
+				("amount_cents".into(), Value::Int(1999)),
+				("coupon".into(), Value::Null),
+				("flavour".into(), Value::Text("beta".into())),
+			],
+		},
+		..typed.clone()
+	};
+	let batch = |entry: &Entry| {
+		Batch {
+			sent_at: SENT_AT,
+			contexts: vec![],
+			entries: vec![entry.clone()],
+		}
+	};
+	let bytes = wire::encode(&batch(&typed));
+	assert_eq!(
+		wire::decode(&bytes, &wire::Limits::default()).unwrap(),
+		batch(&typed)
+	);
+	assert!(
+		bytes.len() < wire::encode(&batch(&keyed)).len(),
+		"positional is smaller than keyed"
+	);
+}

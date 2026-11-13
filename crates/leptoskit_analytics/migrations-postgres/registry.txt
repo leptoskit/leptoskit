@@ -1,3 +1,4 @@
 # The migrations, in the order they apply. `leptoskit db migration create` adds to it.
 20261110T112908_init
 20261111T173608_apm_windows
+20261111T232352_event_schemas
