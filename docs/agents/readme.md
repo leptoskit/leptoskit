@@ -2,6 +2,8 @@
 
 The [deployment graph ownership notes](deployment-graph-ownership.md) track frontend/service route, artifact and placement ownership, and the remaining complete website deployment acceptance.
 
+The [audit coverage record](audit-coverage.md) maps the platform audit findings to implemented checks, proposed fixes, and remaining acceptance work.
+
 The [management service implementation](management-service.md) records the operational single-owner service, queue, analytics storage and validation limits.
 
 The [analytics and infrastructure plugins investigation](analytics-and-infra-plugins.md) records the product research, implemented embedded tier, plugin contract and remaining observability adapters.

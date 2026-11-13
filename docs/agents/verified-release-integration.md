@@ -44,7 +44,7 @@ The real-engine fixture is `crates/leptoskit_cli/tests/fixtures/verified-backend
 
 The follow-up rebases on `23e5a1df`. The CLI library suite passed: 559 tests, 5 ignored. A tiny dependency-free locked backend fixture exports before a deliberate normal-startup panic. `verified-backend-acceptance.py` uses a signed synthetic commit of its committed tree and an invocation-only Git transport mapping to exercise full reproduction locally; this does not authenticate public GitHub provenance. It never publishes images or deploys.
 
-RPC descriptors are still unsigned operator evidence. The independent descriptor pin authenticates the operator claim; no guest signature, approval, or runtime attestation is implied. Website and service evidence, and approval integration, remain outside this slice.
+The initial RPC descriptor slice emits unsigned operator evidence. An independently obtained descriptor pin authenticates the selected bytes; it does not establish runtime attestation. The later approval and website sections below add signatures over the complete descriptor and reproduced website evidence. Application services remain unsupported.
 
 Review found the initial packaging implementation reused a text checksum for executable bytes. The follow-up uses raw-byte SHA-256 and tests invalid-UTF-8 substitutions. It also normalizes Podman image IDs and validates a descriptor before writing it.
 
@@ -61,7 +61,7 @@ Passed with Podman 6.1.4, a disposable libkrun VM (2 CPUs, 2 GiB RAM, 10 GiB spa
 - Engine image ID: `sha256:0cbb253ba208b8c13d74657da2b882b9064bb15c58867ba9009e615e6a6ba0ad`.
 - Descriptor SHA-256: `c72a5752f11ae8971e200015913e1feaf87195add5161b88bea89fdd4a04b690`.
 
-The final output was `REAL ENGINE ACCEPTANCE PASSED; local fixture transport, no public provenance claim`. The false-label substitution failed with `image executable bytes differ`. No registry push or deployment occurred. This accepts the local backend packaging slice; it does not complete A04 across websites, services, and approvals.
+The final output was `REAL ENGINE ACCEPTANCE PASSED; local fixture transport, no public provenance claim`. The false-label substitution failed with `image executable bytes differ`. No registry push or deployment occurred. This accepts the local backend packaging slice. Later sections record separate website and approval acceptance; application services and the broader A04 runtime/provenance requirements remain open.
 
 The final CLI library run passed 560 tests (5 ignored). Full-workspace validation also exposed two pre-existing RPC test setup issues: the offline status test needed a reactive owner with sandboxed arenas, and the slow-reader test relied on a fixed sleep instead of observing each transition. The follow-up scopes the owner and synchronizes backpressure generation against the server counter; it preserves the full-transition assertion.
 
