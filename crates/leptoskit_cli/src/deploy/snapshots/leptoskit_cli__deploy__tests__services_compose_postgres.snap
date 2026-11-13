@@ -36,6 +36,8 @@ ARG RUST_VERSION=1
 ARG LEPTOSKIT_VERSION=[version]
 # binaryen's wasm-opt shrinks the release client.
 ARG BINARYEN_VERSION=132
+# esbuild minifies the release client's JavaScript.
+ARG ESBUILD_VERSION=0.27.2
 
 FROM rust:${RUST_VERSION}-bookworm AS build
 ARG LEPTOSKIT_VERSION
@@ -46,6 +48,20 @@ RUN curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
  && tar -xzf /tmp/binaryen.tar.gz -C /opt \
  && rm /tmp/binaryen.tar.gz \
  && ln -s "/opt/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
+ARG ESBUILD_VERSION
+RUN case "$(uname -m)" in \
+      x86_64) package=linux-x64 checksum=4ac0a36a8573ef6b612263661e7c77343a38789485344e1875cf33a498292310 ;; \
+      aarch64) package=linux-arm64 checksum=c9e85311c05560f3659902c605434a890c47bc2b18a740ef21661e4968543824 ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac \
+ && curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+      --output /tmp/esbuild.tgz \
+      "https://registry.npmjs.org/@esbuild/${package}/-/${package}-${ESBUILD_VERSION}.tgz" \
+ && echo "${checksum}  /tmp/esbuild.tgz" | sha256sum --check --strict \
+ && tar -xzf /tmp/esbuild.tgz -C /opt \
+ && mv /opt/package "/opt/esbuild-${ESBUILD_VERSION}" \
+ && rm /tmp/esbuild.tgz \
+ && ln -s "/opt/esbuild-${ESBUILD_VERSION}/bin/esbuild" /usr/local/bin/esbuild
 RUN cargo install leptoskit_cli --version "${LEPTOSKIT_VERSION}" --locked
 WORKDIR /src
 RUN rustup target add wasm32-unknown-unknown

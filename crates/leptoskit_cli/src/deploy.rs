@@ -103,6 +103,26 @@ const DIST_DIR: &str = "dist";
 /// The binaryen release whose `wasm-opt` shrinks the release client.
 const BINARYEN_VERSION: &str = "132";
 
+/// The esbuild release whose `--minify` shrinks the release client's
+/// JavaScript. Keep it in step with the `esbuild` package the development
+/// environment installs, so every environment minifies the same way.
+const ESBUILD_VERSION: &str = "0.27.2";
+
+/// esbuild ships its binaries as npm platform packages. The machine's
+/// architecture selects the package, and its checksum pins the download.
+const ESBUILD_ARCHIVES: [(&str, &str, &str); 2] = [
+	(
+		"x86_64",
+		"linux-x64",
+		"4ac0a36a8573ef6b612263661e7c77343a38789485344e1875cf33a498292310",
+	),
+	(
+		"aarch64",
+		"linux-arm64",
+		"c9e85311c05560f3659902c605434a890c47bc2b18a740ef21661e4968543824",
+	),
+];
+
 /// Everything the files need to know about the project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
@@ -1114,6 +1134,42 @@ const WORKSPACE_DOCKERIGNORE: &str = "\
 **/infra/.kamal
 ";
 
+/// The `ARG` and `RUN` block that installs the pinned esbuild archive beside
+/// binaryen, selecting the npm platform package by architecture.
+fn esbuild_install_block() -> String {
+	let mut archives = String::new();
+	for (machine, package, checksum) in ESBUILD_ARCHIVES {
+		let _ = writeln!(
+			archives,
+			"      {machine}) package={package} checksum={checksum} ;; \\"
+		);
+	}
+
+	let _ = write!(
+		archives,
+		"      *) echo \"unsupported architecture: $(uname -m)\" >&2; exit 1 ;; \\
+    esac \\
+ && curl \
+		 --fail --silent --show-error --location --retry 5 --retry-all-errors \\
+      --output /tmp/esbuild.tgz \
+		 \\
+      \"https://registry.npmjs.org/@esbuild/${{package}}/-/${{package}}-${{ESBUILD_VERSION}}.tgz\" \
+		 \\
+ && echo \"${{checksum}}  /tmp/esbuild.tgz\" | sha256sum --check --strict \\
+ && tar -xzf /tmp/esbuild.tgz -C /opt \\
+ && mv /opt/package \"/opt/esbuild-${{ESBUILD_VERSION}}\" \\
+ && rm /tmp/esbuild.tgz \\
+ && ln -s \"/opt/esbuild-${{ESBUILD_VERSION}}/bin/esbuild\" /usr/local/bin/esbuild
+"
+	);
+
+	format!(
+		"ARG ESBUILD_VERSION
+RUN case \"$(uname -m)\" in \\
+{archives}"
+	)
+}
+
 /// The multi-stage `Dockerfile`: build with `leptoskit build --release`,
 /// run as an unprivileged user on a read-only filesystem.
 #[allow(clippy::too_many_lines)]
@@ -1177,6 +1233,11 @@ ARG LEPTOSKIT_VERSION={version}
 			"# binaryen's wasm-opt shrinks the release client.\nARG \
 			 BINARYEN_VERSION={BINARYEN_VERSION}"
 		);
+		let _ = writeln!(
+			out,
+			"# esbuild minifies the release client's JavaScript.\nARG \
+			 ESBUILD_VERSION={ESBUILD_VERSION}"
+		);
 	}
 
 	out.push_str(
@@ -1197,6 +1258,7 @@ RUN curl --fail --silent --show-error --location --retry 5 --retry-all-errors \\
  && ln -s \"/opt/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt\" /usr/local/bin/wasm-opt
 ",
 		);
+		out.push_str(&esbuild_install_block());
 	}
 
 	if project.app_dir.is_empty() {
