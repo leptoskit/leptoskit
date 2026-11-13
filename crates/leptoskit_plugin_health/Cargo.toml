@@ -1,0 +1,61 @@
+[package]
+name = "leptoskit_plugin_health"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Read heart rate, sleep, steps and other health records from Health Connect and HealthKit in LeptosKit apps."
+
+[package.metadata.leptoskit.runtime]
+name = "health"
+apple-module = "LeptosKitHealth"
+apple-type = "HealthPlugin"
+apple-usage-descriptions = ["NSHealthShareUsageDescription"]
+apple-entitlements = ["com.apple.developer.healthkit"]
+android-type = "dev.leptoskit.plugins.health.HealthPlugin"
+android-context = true
+android-dependencies = ["androidx.health.connect:connect-client:1.1.0"]
+android-permissions = [
+	"android.permission.health.READ_EXERCISE",
+	"android.permission.health.READ_HEART_RATE",
+	"android.permission.health.READ_HEART_RATE_VARIABILITY",
+	"android.permission.health.READ_OXYGEN_SATURATION",
+	"android.permission.health.READ_RESPIRATORY_RATE",
+	"android.permission.health.READ_RESTING_HEART_RATE",
+	"android.permission.health.READ_SLEEP",
+	"android.permission.health.READ_STEPS",
+]
+# Android 11 to 13 install Health Connect as an app, which the client
+# library can only find when the package is visible.
+android-query-packages = ["com.google.android.apps.healthdata"]
+
+# Health Connect shows its permission screen only to apps that explain their
+# use: Android 13 and earlier launch this action, Android 14 and later the
+# alias below. Both open the privacy policy the app names in its manifest.
+[[package.metadata.leptoskit.runtime.android-activities]]
+name = "dev.leptoskit.plugins.health.HealthPermissionsRationaleActivity"
+exported = true
+theme = "@android:style/Theme.NoDisplay"
+intent-filters = [{ actions = ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"] }]
+
+[[package.metadata.leptoskit.runtime.android-activities]]
+name = "dev.leptoskit.plugins.health.ViewPermissionUsageActivity"
+target-activity = "dev.leptoskit.plugins.health.HealthPermissionsRationaleActivity"
+exported = true
+permission = "android.permission.START_VIEW_PERMISSION_USAGE"
+intent-filters = [
+	{ actions = ["android.intent.action.VIEW_PERMISSION_USAGE"], categories = ["android.intent.category.HEALTH_PERMISSIONS"] },
+]
+
+[features]
+guest = ["leptoskit_bridge/guest"]
+
+[dependencies]
+leptoskit_bridge = { workspace = true }
+
+[lints]
+workspace = true

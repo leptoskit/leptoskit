@@ -3671,6 +3671,7 @@ dependencies = [
  "leptoskit_plugin_global_shortcut",
  "leptoskit_plugin_gyroscope",
  "leptoskit_plugin_haptics",
+ "leptoskit_plugin_health",
  "leptoskit_plugin_home_widgets",
  "leptoskit_plugin_http",
  "leptoskit_plugin_image_manipulator",
@@ -6487,6 +6488,13 @@ dependencies = [
  "objc2-ui-kit",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "leptoskit_plugin_health"
+version = "0.3.0"
+dependencies = [
+ "leptoskit_bridge",
 ]
 
 [[package]]

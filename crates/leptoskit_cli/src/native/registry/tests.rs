@@ -749,3 +749,114 @@ fn validates_android_file_providers_before_generating_xml() {
 		);
 	}
 }
+
+#[test]
+fn validates_entitlements_query_packages_and_activities_before_generation() {
+	let mut config = LeptoskitConfig::default();
+	config.app.name = "app".into();
+	config.native.plugins = vec!["echo".into()];
+	let activity = |extra: serde_json::Value| {
+		let mut activity = json!({
+			"name": "dev.example.Rationale",
+			"exported": true,
+			"intent-filters": [{"actions": ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"]}]
+		});
+		for (key, value) in extra.as_object().unwrap() {
+			activity[key] = value.clone();
+		}
+		json!([activity])
+	};
+
+	for (field, value, valid) in [
+		(
+			"apple-entitlements",
+			json!(["com.apple.developer.healthkit"]),
+			true,
+		),
+		(
+			"apple-entitlements",
+			json!(["com.apple.developer.healthkit.background-delivery"]),
+			true,
+		),
+		("apple-entitlements", json!(["healthkit"]), false),
+		("apple-entitlements", json!(["com.apple.</key>"]), false),
+		(
+			"android-query-packages",
+			json!(["com.google.android.apps.healthdata"]),
+			true,
+		),
+		("android-query-packages", json!(["healthdata"]), false),
+		("android-query-packages", json!(["com.example\"/>"]), false),
+		("android-activities", activity(json!({})), true),
+		(
+			"android-activities",
+			activity(json!({"theme": "@android:style/Theme.NoDisplay"})),
+			true,
+		),
+		(
+			"android-activities",
+			activity(json!({"theme": "@style/App.Translucent"})),
+			true,
+		),
+		(
+			"android-activities",
+			activity(json!({"theme": "Theme.NoDisplay"})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({
+				"target-activity": "dev.example.Other",
+				"permission": "android.permission.START_VIEW_PERMISSION_USAGE"
+			})),
+			true,
+		),
+		(
+			"android-activities",
+			activity(json!({
+				"target-activity": "dev.example.Other",
+				"theme": "@style/Theme"
+			})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({"name": "Rationale"})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({"permission": "a.b\" evil=\"c"})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({"intent-filters": [{"actions": []}]})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({"intent-filters": [{"actions": ["a.b"], "categories": ["c"]}]})),
+			false,
+		),
+		(
+			"android-activities",
+			activity(json!({"process": ":health"})),
+			false,
+		),
+	] {
+		let mut metadata = metadata("Plugin");
+		metadata.packages[2]
+			.metadata
+			.pointer_mut("/leptoskit/runtime")
+			.unwrap()
+			.as_object_mut()
+			.unwrap()
+			.insert(field.into(), value.clone());
+		assert_eq!(
+			resolve_metadata(metadata, &config).is_ok(),
+			valid,
+			"{field}: {value}"
+		);
+	}
+}

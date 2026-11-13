@@ -265,9 +265,13 @@ fn android_host(
 	let mut permissions = std::collections::BTreeSet::new();
 	let mut query_actions = std::collections::BTreeSet::new();
 	let mut query_intents = std::collections::BTreeSet::new();
+	let mut query_packages = std::collections::BTreeSet::new();
+	let mut activities = Vec::new();
 
 	for plugin in &registry.plugins {
 		permissions.extend(plugin.android_permissions.iter().map(String::as_str));
+		query_packages.extend(plugin.android_query_packages.iter().map(String::as_str));
+		activities.extend(&plugin.android_activities);
 		query_actions.extend(plugin.android_query_actions.iter().map(String::as_str));
 		query_intents.extend(
 			plugin
@@ -279,6 +283,7 @@ fn android_host(
 
 	let mut manifest =
 		super::manifest::merge(&manifest, &permissions, &query_actions, &query_intents)?;
+	manifest = super::manifest::components::merge(&manifest, &query_packages, &activities)?;
 	manifest = super::manifest::services::app_components(
 		&manifest,
 		&android_services(registry),

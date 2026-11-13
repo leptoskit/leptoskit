@@ -36,6 +36,7 @@ pub use leptoskit_plugin_filesystem;
 pub use leptoskit_plugin_global_shortcut;
 pub use leptoskit_plugin_gyroscope;
 pub use leptoskit_plugin_haptics;
+pub use leptoskit_plugin_health;
 pub use leptoskit_plugin_home_widgets;
 pub use leptoskit_plugin_http;
 pub use leptoskit_plugin_image_manipulator;
