@@ -35,6 +35,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: test hosted WDA destination readiness
+        if: matrix.platform == 'ios'
+        run: python3 setup/scripts/native_wda_build_test.py
       # The simulator boots and WebDriverAgent builds while the job compiles.
       # A session that did both itself spent eight minutes before its first
       # command, and launching the app on the just-booted device then outlasted
