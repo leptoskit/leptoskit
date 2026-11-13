@@ -201,7 +201,7 @@ jobs:
       - name: install monochange
         run: |
           set -euo pipefail
-          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.0 \
+          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.1 \
             || cargo install --locked --version 0.21.0 monochange
 
       - name: validate the release configuration
@@ -325,7 +325,7 @@ jobs:
       - name: install monochange
         run: |
           set -euo pipefail
-          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.0 \
+          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.1 \
             || cargo install --locked --version 0.21.0 monochange
 
       - name: confirm the commit is a release commit

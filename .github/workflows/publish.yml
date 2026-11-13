@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.0 \
+          cargo binstall --no-confirm --disable-strategies compile monochange@0.21.1 \
             || cargo install --locked --version 0.21.0 monochange
           monochange step validate
 

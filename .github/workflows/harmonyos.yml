@@ -48,7 +48,7 @@ jobs:
   harmonyos-sdk:
     name: harmonyos SDK, guest, and render tests
     needs: gate
-    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['harmonyos-sdk']
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['harmonyos-sdk']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:

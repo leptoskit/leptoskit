@@ -56,7 +56,7 @@ jobs:
   native-ui-mobile:
     name: native ${{ matrix.platform }} dialogs and pixels
     needs: gate
-    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-mobile']
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-mobile']) }}
     strategy:
       fail-fast: false
       matrix:
@@ -187,7 +187,7 @@ jobs:
   native-ui-macos:
     name: native macOS dialogs and pixels
     needs: gate
-    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-macos']
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-macos']) }}
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
@@ -223,7 +223,7 @@ jobs:
   native-ui-windows:
     name: native Windows dialogs and pixels
     needs: gate
-    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-windows']
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-windows']) }}
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -249,7 +249,7 @@ jobs:
   native-ui-linux:
     name: native Linux dialogs and pixels
     needs: gate
-    if: needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-linux']
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['native-ui-linux']) }}
     # Its 6.8 Azure kernel supplies vgem; newer Azure kernels omit it.
     # The desktop itself runs Ubuntu 26.04 in the container.
     runs-on: ubuntu-22.04
