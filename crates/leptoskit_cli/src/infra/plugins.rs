@@ -2,7 +2,7 @@
 //! runtime bindings and resource ownership; it does not load executable
 //! extensions into a credential-bearing deployment runner.
 
-use leptoskit_config::infra::InfraConfig;
+use leptoskit_config::infra::ManagedInfraConfig as InfraConfig;
 use serde_json::Value;
 use serde_json::json;
 

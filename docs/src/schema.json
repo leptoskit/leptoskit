@@ -23,6 +23,13 @@
 				"version": "0.1.0"
 			}
 		},
+		"artifacts": {
+			"description": "Named, trusted build recipes for independently published outputs.",
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Artifact"
+			}
+		},
 		"auth": {
 			"description": "Sign-in. Present when the app uses `leptoskit::auth`.",
 			"anyOf": [
@@ -457,6 +464,26 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"Artifact": {
+			"description": "A trusted repository build recipe with a named output directory. Its\ncommand is an argument vector, not a shell fragment or user input.",
+			"type": "object",
+			"properties": {
+				"command": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"output": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"command",
+				"output"
+			]
 		},
 		"AttributeBraces": {
 			"description": "Whether the formatter keeps the braces around attribute values.",
@@ -1151,6 +1178,40 @@
 				}
 			]
 		},
+		"Container": {
+			"description": "A dedicated rootless runtime used by the trusted service supervisor.\nThe untrusted compilation workload must never receive its socket.",
+			"type": "object",
+			"properties": {
+				"engine": {
+					"$ref": "#/$defs/Engine"
+				},
+				"engine-env": {
+					"type": "string"
+				},
+				"image-env": {
+					"type": "string"
+				},
+				"image-pin": {
+					"description": "Repository-relative file containing an immutable registry digest.\nIts exact bytes are captured in the concrete release plan.",
+					"type": "string"
+				},
+				"rootless": {
+					"type": "boolean",
+					"default": true
+				},
+				"socket-env": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"engine",
+				"socket-env",
+				"engine-env",
+				"image-env",
+				"image-pin"
+			]
+		},
 		"ContentScript": {
 			"description": "An interface shown on other sites' pages.",
 			"type": "object",
@@ -1446,6 +1507,36 @@
 				"panel"
 			]
 		},
+		"Edge": {
+			"type": "object",
+			"properties": {
+				"ingress": {
+					"$ref": "#/$defs/Ingress"
+				},
+				"origin-firewall": {
+					"$ref": "#/$defs/OriginFirewall"
+				},
+				"provider": {
+					"$ref": "#/$defs/EdgeProvider",
+					"default": "cloudflare"
+				},
+				"proxied": {
+					"type": "boolean",
+					"default": true
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"ingress",
+				"origin-firewall"
+			]
+		},
+		"EdgeProvider": {
+			"type": "string",
+			"enum": [
+				"cloudflare"
+			]
+		},
 		"EdgeStore": {
 			"description": "A product in Microsoft Partner Center, created once there.",
 			"type": "object",
@@ -1458,6 +1549,13 @@
 			"additionalProperties": false,
 			"required": [
 				"product_id"
+			]
+		},
+		"Engine": {
+			"type": "string",
+			"enum": [
+				"docker",
+				"podman"
 			]
 		},
 		"ExportMethod": {
@@ -1790,6 +1888,68 @@
 			},
 			"additionalProperties": false
 		},
+		"Frontend": {
+			"description": "A frontend's owned files, public route and host.",
+			"type": "object",
+			"properties": {
+				"artifact": {
+					"type": "string"
+				},
+				"backend": {
+					"description": "SSR executable relative to the declared artifact output. Static\nfrontends have no application executable.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"calls": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"depends-on": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"directory": {
+					"type": "string",
+					"default": "."
+				},
+				"domain": {
+					"type": "string"
+				},
+				"host": {
+					"type": "string"
+				},
+				"kind": {
+					"$ref": "#/$defs/FrontendKind",
+					"default": "static"
+				},
+				"mount": {
+					"type": "string",
+					"default": "/"
+				},
+				"serve": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ServeConfig"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"artifact",
+				"host",
+				"domain"
+			]
+		},
 		"FrontendConfig": {
 			"description": "A UI package and its own routes, server, and public inputs.",
 			"type": "object",
@@ -1876,6 +2036,47 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"FrontendKind": {
+			"type": "string",
+			"enum": [
+				"static",
+				"ssr"
+			]
+		},
+		"Host": {
+			"description": "A named host class. Several units can share it unless exclusive.",
+			"type": "object",
+			"properties": {
+				"compute": {
+					"$ref": "#/$defs/ComputeProvider",
+					"default": "hetzner"
+				},
+				"exclusive": {
+					"type": "boolean",
+					"default": false
+				},
+				"location": {
+					"type": "string"
+				},
+				"server_type": {
+					"type": "string"
+				},
+				"ssh_key_ids": {
+					"description": "Override the project's SSH keys for a different provider account.",
+					"type": "array",
+					"items": {
+						"type": "integer",
+						"format": "uint64",
+						"minimum": 0
+					}
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"location",
+				"server_type"
+			]
 		},
 		"IconsConfig": {
 			"description": "Rich icon declaration, matching [icons_launcher](https://pub.dev/packages/icons_launcher)'s\nshape. When present, it overrides `app.icon` as the default source image.\n\n```toml\n[app.icons]\nimage = \"assets/icon.svg\"\nnotification = \"assets/notification.png\"\n\n[app.icons.android]\nadaptive_background = \"#FFFFFF\"\n\n[app.icons.extensions.my_tool]\nflavor = \"beta\"\n```",
@@ -2109,194 +2310,14 @@
 			]
 		},
 		"InfraConfig": {
-			"description": "Infrastructure intent. Credentials are supplied by the operator's\nenvironment.",
-			"type": "object",
-			"properties": {
-				"account_id": {
-					"description": "Cloudflare account ID, not a credential.",
-					"type": "string"
+			"description": "One explicit infrastructure lifecycle. Existing untagged tables retain\nthe managed preset; a graph must declare `mode = \"graph\"`.",
+			"anyOf": [
+				{
+					"$ref": "#/$defs/InfraGraph"
 				},
-				"b2": {
-					"description": "When present, provision the private backup bucket in Backblaze B2.\nSigned update delivery remains on R2 behind Cloudflare.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/InfraB2"
-						},
-						{
-							"type": "null"
-						}
-					],
-					"default": null
-				},
-				"backup_bucket": {
-					"description": "Private R2 or B2 bucket for encrypted database backups.",
-					"type": "string"
-				},
-				"backups": {
-					"description": "Encrypted backup scheduling, verification, and retention.",
-					"$ref": "#/$defs/InfraBackups",
-					"default": {
-						"daily": 7,
-						"enabled": true,
-						"max_age_hours": 36,
-						"monthly": 3,
-						"schedule": "daily",
-						"weekly": 4
-					}
-				},
-				"budget": {
-					"description": "Optional live-price guard on compute and primary IPv4, excluding usage,\ntax, storage, domains, and other services. This is not a billing cap.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/InfraBudget"
-						},
-						{
-							"type": "null"
-						}
-					],
-					"default": null
-				},
-				"compute": {
-					"description": "Compute provider. Hetzner is the default; sizes and locations use the\nselected provider's own names.",
-					"$ref": "#/$defs/ComputeProvider",
-					"default": "hetzner"
-				},
-				"control_url": {
-					"description": "Optional self-hosted deployment service. Credentials are kept outside\nthe repository; ordinary `lk deploy` uses its durable operation queue.",
-					"type": [
-						"string",
-						"null"
-					]
-				},
-				"domain": {
-					"description": "Public application hostname on the selected Cloudflare zone.",
-					"type": "string"
-				},
-				"external": {
-					"description": "Provision hosts and edge routing for an independently supervised\nservice. Omitting this keeps the managed Postgres/Kamal release preset.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/InfraExternal"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"hosted_state": {
-					"description": "Use the hosted service's locking HTTP state backend. Credentials stay on\nthe worker.",
-					"type": "boolean"
-				},
-				"image": {
-					"description": "Image repository without a tag, for example `ghcr.io/team/app`.",
-					"type": "string"
-				},
-				"instances": {
-					"description": "Application hosts. The first owns persistent services; the others are\nstateless application replicas.",
-					"type": "integer",
-					"format": "uint8",
-					"default": 1,
-					"maximum": 255,
-					"minimum": 0
-				},
-				"location": {
-					"description": "Provider location, for example Hetzner `hel1` or `DigitalOcean` `ams3`.",
-					"type": "string"
-				},
-				"name": {
-					"description": "Resource-name prefix; use a distinct prefix for each environment.",
-					"type": "string"
-				},
-				"plugins": {
-					"description": "Versioned optional infrastructure capabilities. No plugin executes\narbitrary downloaded code or gets provider credentials at runtime.",
-					"$ref": "#/$defs/InfraPlugins",
-					"default": {
-						"analytics": null
-					}
-				},
-				"postgres": {
-					"description": "The managed Postgres server's connection limit, and the pool size the\napp's server opens, for the connection budget `lk infra plan` and\n`lk doctor` check.",
-					"$ref": "#/$defs/InfraPostgres"
-				},
-				"registry": {
-					"description": "Registry hostname, for example `ghcr.io`.",
-					"type": "string"
-				},
-				"registry_username": {
-					"description": "Registry login name; password is `KAMAL_REGISTRY_PASSWORD`.",
-					"type": "string"
-				},
-				"secrets": {
-					"description": "Additional application secret environment names.",
-					"type": "array",
-					"default": [],
-					"items": {
-						"type": "string"
-					}
-				},
-				"server_type": {
-					"description": "Provider size, for example `cx23`. No automatic paid fallback.",
-					"type": "string"
-				},
-				"services": {
-					"description": "Optional shared cache and live relay.",
-					"$ref": "#/$defs/InfraServices",
-					"default": {
-						"cache": false,
-						"relay": false
-					}
-				},
-				"ssh_cidrs": {
-					"description": "Administrator source CIDRs permitted to SSH; no world-open rule.",
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"ssh_key_ids": {
-					"description": "Existing provider SSH key IDs to authorize on the host.",
-					"type": "array",
-					"items": {
-						"type": "integer",
-						"format": "uint64",
-						"minimum": 0
-					}
-				},
-				"state": {
-					"description": "Optional S3 remote-state backend. Local state is private and gitignored.",
-					"anyOf": [
-						{
-							"$ref": "#/$defs/InfraState"
-						},
-						{
-							"type": "null"
-						}
-					],
-					"default": null
-				},
-				"updates_bucket": {
-					"description": "R2 bucket exposed only for signed release artifacts.",
-					"type": "string"
-				},
-				"updates_domain": {
-					"description": "Public hostname for signed code-push artifacts in R2.",
-					"type": "string"
-				},
-				"zone_id": {
-					"description": "Cloudflare DNS zone ID, not a credential.",
-					"type": "string"
+				{
+					"$ref": "#/$defs/ManagedInfraConfig"
 				}
-			},
-			"additionalProperties": false,
-			"required": [
-				"name",
-				"domain",
-				"location",
-				"server_type",
-				"ssh_key_ids",
-				"ssh_cidrs",
-				"account_id",
-				"zone_id"
 			]
 		},
 		"InfraExternal": {
@@ -2314,6 +2335,91 @@
 			"additionalProperties": false,
 			"required": [
 				"origin_port"
+			]
+		},
+		"InfraGraph": {
+			"description": "Infrastructure for a graph of independently released units.",
+			"type": "object",
+			"properties": {
+				"account_id": {
+					"type": "string"
+				},
+				"budget": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraBudget"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"edge": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Edge"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"frontends": {
+					"description": "Frontend artifact placement and routes owned by this graph.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Frontend"
+					}
+				},
+				"hosts": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Host"
+					}
+				},
+				"mode": {
+					"$ref": "#/$defs/Mode"
+				},
+				"name": {
+					"type": "string"
+				},
+				"ssh_cidrs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"ssh_key_ids": {
+					"type": "array",
+					"default": [],
+					"items": {
+						"type": "integer",
+						"format": "uint64",
+						"minimum": 0
+					}
+				},
+				"state": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraState"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"zone_id": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"mode",
+				"name",
+				"account_id",
+				"zone_id",
+				"ssh_cidrs",
+				"hosts"
 			]
 		},
 		"InfraPlugins": {
@@ -2395,6 +2501,14 @@
 				"bucket",
 				"key",
 				"region"
+			]
+		},
+		"Ingress": {
+			"description": "How traffic reaches an origin. Tunnel and public HTTPS are different\ncontracts, not interchangeable firewall presets.",
+			"type": "string",
+			"enum": [
+				"cloudflare-https",
+				"cloudflare-tunnel"
 			]
 		},
 		"Inject": {
@@ -2728,6 +2842,197 @@
 			},
 			"additionalProperties": false
 		},
+		"ManagedInfraConfig": {
+			"description": "Infrastructure intent. Credentials are supplied by the operator's\nenvironment.",
+			"type": "object",
+			"properties": {
+				"account_id": {
+					"description": "Cloudflare account ID, not a credential.",
+					"type": "string"
+				},
+				"b2": {
+					"description": "When present, provision the private backup bucket in Backblaze B2.\nSigned update delivery remains on R2 behind Cloudflare.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraB2"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"backup_bucket": {
+					"description": "Private R2 or B2 bucket for encrypted database backups.",
+					"type": "string"
+				},
+				"backups": {
+					"description": "Encrypted backup scheduling, verification, and retention.",
+					"$ref": "#/$defs/InfraBackups",
+					"default": {
+						"daily": 7,
+						"enabled": true,
+						"max_age_hours": 36,
+						"monthly": 3,
+						"schedule": "daily",
+						"weekly": 4
+					}
+				},
+				"budget": {
+					"description": "Optional live-price guard on compute and primary IPv4, excluding usage,\ntax, storage, domains, and other services. This is not a billing cap.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraBudget"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"compute": {
+					"description": "Compute provider. Hetzner is the default; sizes and locations use the\nselected provider's own names.",
+					"$ref": "#/$defs/ComputeProvider",
+					"default": "hetzner"
+				},
+				"control_url": {
+					"description": "Optional self-hosted deployment service. Credentials are kept outside\nthe repository; ordinary `lk deploy` uses its durable operation queue.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"domain": {
+					"description": "Public application hostname on the selected Cloudflare zone.",
+					"type": "string"
+				},
+				"external": {
+					"description": "Provision hosts and edge routing for an independently supervised\nservice. Omitting this keeps the managed Postgres/Kamal release preset.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraExternal"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"hosted_state": {
+					"description": "Use the hosted service's locking HTTP state backend. Credentials stay on\nthe worker.",
+					"type": "boolean"
+				},
+				"image": {
+					"description": "Image repository without a tag, for example `ghcr.io/team/app`.",
+					"type": "string"
+				},
+				"instances": {
+					"description": "Application hosts. The first owns persistent services; the others are\nstateless application replicas.",
+					"type": "integer",
+					"format": "uint8",
+					"default": 1,
+					"maximum": 255,
+					"minimum": 0
+				},
+				"location": {
+					"description": "Provider location, for example Hetzner `hel1` or `DigitalOcean` `ams3`.",
+					"type": "string"
+				},
+				"name": {
+					"description": "Resource-name prefix; use a distinct prefix for each environment.",
+					"type": "string"
+				},
+				"plugins": {
+					"description": "Versioned optional infrastructure capabilities. No plugin executes\narbitrary downloaded code or gets provider credentials at runtime.",
+					"$ref": "#/$defs/InfraPlugins",
+					"default": {
+						"analytics": null
+					}
+				},
+				"postgres": {
+					"description": "The managed Postgres server's connection limit, and the pool size the\napp's server opens, for the connection budget `lk infra plan` and\n`lk doctor` check.",
+					"$ref": "#/$defs/InfraPostgres"
+				},
+				"registry": {
+					"description": "Registry hostname, for example `ghcr.io`.",
+					"type": "string"
+				},
+				"registry_username": {
+					"description": "Registry login name; password is `KAMAL_REGISTRY_PASSWORD`.",
+					"type": "string"
+				},
+				"secrets": {
+					"description": "Additional application secret environment names.",
+					"type": "array",
+					"default": [],
+					"items": {
+						"type": "string"
+					}
+				},
+				"server_type": {
+					"description": "Provider size, for example `cx23`. No automatic paid fallback.",
+					"type": "string"
+				},
+				"services": {
+					"description": "Optional shared cache and live relay.",
+					"$ref": "#/$defs/InfraServices",
+					"default": {
+						"cache": false,
+						"relay": false
+					}
+				},
+				"ssh_cidrs": {
+					"description": "Administrator source CIDRs permitted to SSH; no world-open rule.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"ssh_key_ids": {
+					"description": "Existing provider SSH key IDs to authorize on the host.",
+					"type": "array",
+					"items": {
+						"type": "integer",
+						"format": "uint64",
+						"minimum": 0
+					}
+				},
+				"state": {
+					"description": "Optional S3 remote-state backend. Local state is private and gitignored.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/InfraState"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
+				},
+				"updates_bucket": {
+					"description": "R2 bucket exposed only for signed release artifacts.",
+					"type": "string"
+				},
+				"updates_domain": {
+					"description": "Public hostname for signed code-push artifacts in R2.",
+					"type": "string"
+				},
+				"zone_id": {
+					"description": "Cloudflare DNS zone ID, not a credential.",
+					"type": "string"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"name",
+				"domain",
+				"location",
+				"server_type",
+				"ssh_key_ids",
+				"ssh_cidrs",
+				"account_id",
+				"zone_id"
+			]
+		},
 		"MarkupStyle": {
 			"description": "How a project writes its component trees.",
 			"oneOf": [
@@ -2761,6 +3066,13 @@
 					"type": "string",
 					"const": "error"
 				}
+			]
+		},
+		"Mode": {
+			"description": "The explicit discriminator keeps graph declarations separate from the\nexisting managed application preset during parsing and serialization.",
+			"type": "string",
+			"enum": [
+				"graph"
 			]
 		},
 		"NativeConfig": {
@@ -2965,6 +3277,20 @@
 					"description": "Also fat LTO, one codegen unit, `opt-level = \"z\"`, and\n`panic = \"abort\"`, so the optimizer sees and prunes the whole program.\nOn leptoskit's benchmark app: 14% less wasm, brotli-compressed, for\nrelease rebuilds about three times slower.",
 					"type": "string",
 					"const": "smallest"
+				}
+			]
+		},
+		"OriginFirewall": {
+			"oneOf": [
+				{
+					"description": "Only the pinned Cloudflare ranges reach the public origin listener.",
+					"type": "string",
+					"const": "cloudflare-only"
+				},
+				{
+					"description": "No public application listener; a tunnel connects outbound.",
+					"type": "string",
+					"const": "closed"
 				}
 			]
 		},
@@ -3541,6 +3867,13 @@
 					"type": "string",
 					"default": "127.0.0.1"
 				},
+				"address-env": {
+					"description": "Environment variable through which graph releases supply a complete\nloopback socket address. The backend must actually consume it.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
 				"port": {
 					"description": "The bind port.",
 					"type": "integer",
@@ -3594,6 +3927,17 @@
 					"type": [
 						"boolean",
 						"null"
+					]
+				},
+				"deploy": {
+					"description": "Independent graph placement. Omitted services retain the existing\nalongside-the-app lifecycle outside explicit graph mode.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ServiceDeploy"
+						},
+						{
+							"type": "null"
+						}
 					]
 				},
 				"env": {
@@ -3684,6 +4028,16 @@
 						"type": "string"
 					}
 				},
+				"runtime": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ServiceRuntime"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"secrets": {
 					"description": "Variables passed through from the environment to the service only.",
 					"type": [
@@ -3693,6 +4047,16 @@
 					"items": {
 						"type": "string"
 					}
+				},
+				"serve": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ServiceServe"
+						},
+						{
+							"type": "null"
+						}
+					]
 				},
 				"tag": {
 					"description": "The git tag to build.",
@@ -3738,6 +4102,83 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"ServiceDeploy": {
+			"description": "Independent placement and exposure for an existing service source.",
+			"type": "object",
+			"properties": {
+				"calls": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"depends-on": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"domain": {
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"host": {
+					"type": "string"
+				},
+				"ingress": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/Ingress"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"mount": {
+					"type": "string",
+					"default": "/"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"host"
+			]
+		},
+		"ServiceRuntime": {
+			"type": "object",
+			"properties": {
+				"container": {
+					"$ref": "#/$defs/Container"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"container"
+			]
+		},
+		"ServiceServe": {
+			"description": "The service implements the same health/readiness contract as an app\nwith `serve.probes`. A declaration is not a successful runtime probe.",
+			"type": "object",
+			"properties": {
+				"address-env": {
+					"description": "Variable consumed by this executable for its complete listen address,\nfor example `PLAY_BIND`. Required when releasing an executable graph\nunit.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"probes": {
+					"type": "boolean"
+				}
+			},
+			"additionalProperties": false,
+			"required": [
+				"probes"
+			]
 		},
 		"ServiceTrust": {
 			"description": "How far the app trusts a service with its origin.",

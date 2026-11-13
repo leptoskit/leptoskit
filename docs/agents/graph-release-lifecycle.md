@@ -1,0 +1,39 @@
+# Graph release lifecycle: local validation and deployment acceptance
+
+The CLI consumes the static, SSR and service state machines through `infra release plan/apply/status/rollback`. This record describes the current integrated implementation; earlier handoff notes about uncompiled source and restrictions on running builds are superseded by the validation below and the repository's current `AGENTS.md`.
+
+## Implemented path
+
+Plans are reconstructed from `verify::graph::Checked`, selected artifact inventories, current configuration/placement, typed provider output, reproduced edge files, independently pinned SSH trust and supplied Caddy bytes. Saved JSON is compared with that reconstruction. Strict policy and backend-only trust fail rather than authorizing graph fields. Descriptor staging and ELF inspection do not execute an untrusted backend on the developer's host.
+
+SSH uses explicit known-hosts, a private identity, no user configuration or agent forwarding, BatchMode, StrictHostKeyChecking and a 180-second deadline. A bounded payload invokes the production Python state machine. Root-owned per-unit releases are installed only after inventory checks. Candidate and active routes are probed, and current pointers switch atomically. Caddy uses an existing dedicated UID and an exact generated systemd unit. Active drop-ins are rejected; installer-owned absolute masks pointing exactly to `/dev/null` are accepted only with protected parent directories. Readiness waits for the pinned executable and dedicated account, then rechecks PID/starttime and socket ownership after route probes. Certificates and tunnels remain explicit prerequisites.
+
+Per-host flock and durable journals coordinate prepared and interrupted operations. Recovery rechecks previous inventories, runtime bytes and process ownership before restoring pointers. Full recovery inventories remain on-host; prepare, activate and status return compact journal summaries so an otherwise permitted asset tree cannot overflow the 1 MiB SSH response limit. Failed SSH records no successful local history. Hosts commit independently, and shared edge configuration changes are rejected during selective releases.
+
+SSR/service candidates have immutable per-release runtime bindings, distinct candidate addresses, readiness checks and recoverable promotion/retirement. The CLI includes their payloads and recovery paths. [Executable lifecycle details](graph-executable-release-lifecycle.md) describe the process boundary. A readiness observation does not establish source provenance or runtime attestation.
+
+## Validation
+
+Before the response-size correction, 156 configuration/schema tests, 99 focused Rust CLI/receipt/release tests, and 89 Python release/recovery tests passed. These Rust suites compiled the integrated CLI library and its Python wrappers. The generated schema aliases were regenerated and checked. This supersedes the old status that the CLI wrapper, ELF tests and executable integration were uncompiled.
+
+The added transport regression executes the production host worker through the real bounded `exchange` function, deploys two 10,001-file trees, retries preparation and activation, and reads status while retaining the complete prior inventory on-host. Existing transport tests still exercise exact remote command construction, pinned SSH arguments, simultaneous large upload/reply, limits, timeouts, remote failures and incomplete responses. The runtime adapter is deterministic; these tests do not establish real SSH, systemd, Caddy, TLS or cloud behavior.
+
+Existing state-machine tests cover install/retry/rollback, failed candidate and active readiness, copied-byte substitution, altered installed artifacts, restrictive umasks, operation conflicts/flock, selective route isolation, changed runtime/edge/host bindings, failed restoration and interruptions across promotion. Negative controls for earlier SSH lookup/command, journal reservation and restoration-probe bugs remain recorded in the historical acceptance evidence. Reboot and real connection loss need separate live evidence.
+
+## Remaining acceptance and resources
+
+Run the full CLI snapshot and repository gates on the final revision and record their exact combined source head in the PR. `crates/leptoskit_cli/src/infra/graph/release/acceptance.py` remains an opt-in Linux/SSH fixture. The live result below used a separately retained driver invoking the production CLI; it does not claim that repository fixture was executed. Provider fixtures do not establish live DNS, public CA TLS, firewall or production cutover.
+
+Graph receipts establish selected artifact integrity and binding. Rootless image execution, source reproduction, origin/publisher authorization, independent graph approvals, cross-app API compatibility and runtime attestation remain outside this path. Graph services still require `database = false`; broader A02/A04/A05/A09 acceptance remains open.
+
+Use the current repository build instructions with `CARGO_BUILD_JOBS=4` and mbx-managed targets. Keep expensive builds coordinated and preserve source/evidence outside disposable build caches. Signing and hooks remain enabled. Static transfers are bounded to 64 MiB per host including Caddy; certificate/tunnel setup, brief edge restart and separate shared-edge migration remain operational constraints. Failed staging and old releases remain for explicit operator cleanup. Root owns the installation trust boundary, and rollback rechecks original artifacts against current configuration and trust.
+
+## Linux acceptance on 11 November 2026
+
+Signed source `47a2690ddb24dabed3a8e8e62a8576e90f57d9e3` passed a real strict-SSH static release cycle on Mini02: V1 activation, a docs-only V2 update with the root frontend unchanged, and requested rollback to V1. All 11 external HTTPS assertions passed, covering root/docs/nested bodies and missing-path responses. The built CLI SHA-256 was `532ea00cf30c027826b8eed7a22c062a8f9955d1b6e4fecf7cc2f36c5d21cdf2`. The Python release/recovery suite also passed all 98 cases, including delayed exec, foreign identity, process replacement and wrong-route regressions.
+
+Earlier runs exposed two source defects. The worker rejected systemd's reported `/dev/null` mask; source `18de43a3` accepts verified inert masks and restores failed activation to terminal `reverted`. A subsequent run showed `Type=simple` reporting an active root-owned systemd executor before Caddy exec completed. Source `47a2690d` moves executable/account verification inside bounded readiness polling and checks process identity and listener ownership again after probing. Generated unit bytes stayed unchanged. Original failure evidence remains retained rather than relabelled as passing.
+
+The disposable Fedora CoreOS VM kept SELinux enforcing. Its explicit baseline included the known vendor drop-in mask and a scoped `bin_t` label on the task-owned edge/releases parent so new executable files inherited a permitted label. This is a tested host prerequisite, not automatic Fedora provisioning. Active overrides remain unsupported and must be resolved before deployment; first-install discovery of an unsupported global override may still require operator recovery. SSH host keys and the origin certificate were independently pinned. TLS private keys stayed only inside the removed VM disk.
+
+Placement came from local synthetic `terraform_data` outputs. Real cloud resources, public DNS, public CA TLS, firewalls, reboot/disconnect recovery and SSR/service process isolation were not exercised. An external driver import-name error was corrected and documented without changing production source, units, plans or trust. The task VM, forwards and connections were removed, the original clean checkout and configuration were restored, and all previous evidence hashes were preserved.

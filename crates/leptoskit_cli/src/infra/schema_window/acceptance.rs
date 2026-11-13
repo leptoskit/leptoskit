@@ -71,7 +71,7 @@ fn real_managed_window_delivery_and_recovery() {
 		.check_remote(&host, &image, &descriptor.migrations)
 		.unwrap();
 	let hosts = vec![host.clone()];
-	let config: InfraConfig = serde_json::from_value(json!({"name":"a05-window", "domain":"a05.invalid", "location":"local", "server_type":"local", "ssh_key_ids":[], "ssh_cidrs":[], "account_id":"local", "zone_id":"local"})).unwrap();
+	let config: ManagedInfraConfig = serde_json::from_value(json!({"name":"a05-window", "domain":"a05.invalid", "location":"local", "server_type":"local", "ssh_key_ids":[], "ssh_cidrs":[], "account_id":"local", "zone_id":"local"})).unwrap();
 	let reservation = Reservation::acquire(&host, &config.name).unwrap();
 	let original = serde_json::to_string_pretty(
 		&json!({"service":"a05-window", "env":{"clear":{}, "secret":["DATABASE_URL"]}}),

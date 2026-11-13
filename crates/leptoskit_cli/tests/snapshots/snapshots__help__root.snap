@@ -1,5 +1,6 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
+assertion_line: 229
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 The command line interface for building, serving, and shipping leptos apps.
@@ -26,7 +27,7 @@ Commands:
   new          Scaffolds a new project
   dev          Runs every platform you have set up, and rebuilds them on change
   game         Builds or runs a game: Rust gameplay, leptoskit menus, a wgpu picture
-  build        Builds the project for a platform
+  build        Builds the application or selected deployment graph units
   serve        Serves the built output
   services     Lists the app's services: where each comes from, its port, database, public paths, volumes, and the variables the app receives for it
   routes       Writes the typed `Route` module from the routes directory

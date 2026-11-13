@@ -683,8 +683,7 @@ fn connections_check(config: &LeptoskitConfig, root: &Path) -> Option<Check> {
 	}
 
 	let settings = config
-		.infra
-		.as_ref()
+		.managed_infra()
 		.map(|infra| (infra.postgres, infra.instances))
 		.unwrap_or_default();
 	let (limits, hosts) = (settings.0, settings.1.max(1));

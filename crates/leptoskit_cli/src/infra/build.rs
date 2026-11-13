@@ -67,7 +67,7 @@ fn docker(root: &Path, private: Option<&tempfile::TempDir>) -> Command {
 
 fn credentials(
 	root: &Path,
-	c: &leptoskit_config::infra::InfraConfig,
+	c: &leptoskit_config::infra::ManagedInfraConfig,
 ) -> Result<Option<tempfile::TempDir>> {
 	let Some(password) = std::env::var("KAMAL_REGISTRY_PASSWORD")
 		.ok()
