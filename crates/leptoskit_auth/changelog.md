@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.1) (2026-11-13)
+
+### Fixes
+
+- **Native sign-out clears the session query when offline.** `sign_out_mutation()` now clears a native app's session query when it forgets its local tokens, including when the server is unreachable or refuses the request. The mutation still reports that error: local sign-out does not claim the server revoked the session. A browser keeps its session query on failure because its cookie remains until the server removes it. _Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #754](https://github.com/leptoskit/leptoskit/pull/754)
+
 ## [0.3.0](https://github.com/leptoskit/leptoskit/releases/tag/v0.3.0) (2026-11-06)
 
 ### Breaking changes

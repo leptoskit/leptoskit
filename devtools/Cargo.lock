@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_3d",
  "leptoskit_auth",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_3d"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1366,11 +1366,11 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_animation"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "leptoskit_auth"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "futures",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_bridge"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "leptoskit_log",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "semver",
  "serde",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_db"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "leptoskit_db_macros",
@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_db_macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "convert_case 0.11.0",
  "proc-macro-crate",
@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_devtools"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gloo-net",
  "gloo-timers",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_devtools_protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_extension"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures",
  "js-sys",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_idp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "leptoskit_auth",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_l10n"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "intl_pluralrules",
  "js-sys",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_log"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cc",
  "log",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "proc-macro2-diagnostics",
@@ -1546,7 +1546,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_native"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptos",
  "leptoskit_3d",
@@ -1563,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_config",
  "serde",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_plugin_websocket"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures",
  "gloo-timers",
@@ -1590,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_query"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "any_spawner",
  "futures",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_rive"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cc",
  "js-sys",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_router"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_native",
  "leptoskit_router_macros",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_router_macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1639,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_rpc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "any_spawner",
  "futures",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_rpc_macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "convert_case 0.11.0",
  "proc-macro2",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_testing"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_native",
  "leptoskit_yoga",
@@ -1679,7 +1679,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_yoga"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "libc"
