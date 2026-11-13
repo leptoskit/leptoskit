@@ -5218,6 +5218,7 @@ dependencies = [
  "flate2",
  "insta",
  "js-sys",
+ "leptoskit_apm",
  "leptoskit_axum",
  "leptoskit_db",
  "leptoskit_rpc",

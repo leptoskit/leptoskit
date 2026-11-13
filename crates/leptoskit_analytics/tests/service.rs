@@ -598,3 +598,75 @@ async fn the_app_s_route_metrics_are_stored_once_and_others_are_refused() {
 	let (status, _) = send_metrics(&service, &apm_export(1), None).await;
 	assert_eq!(status, 403, "only the app sends metrics");
 }
+
+/// The app's real exporter output, sent the way `leptoskit_apm` sends it: JSON
+/// signed with the key it was given, which, when the app runs this service, is
+/// the service's token.
+#[tokio::test(flavor = "multi_thread")]
+async fn leptoskit_apm_s_export_is_stored_and_accepted() {
+	use leptoskit_apm::Outcome;
+	use leptoskit_apm::SeriesKey;
+	use leptoskit_apm::Signal;
+	use leptoskit_apm::Source;
+
+	static NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1_762_646_400);
+	fn clock() -> u64 {
+		NOW.load(Ordering::Relaxed)
+	}
+
+	let service = start(IngestConfig::default()).await;
+	let limits = leptoskit_apm::Limits::default();
+	let window = limits.window_seconds;
+	let apm = leptoskit_apm::Analytics::new(
+		leptoskit_apm::Resource {
+			service: "shop".into(),
+			environment: "production".into(),
+			release: "1.2.0".into(),
+			instance: "web-1".into(),
+		},
+		limits,
+		clock,
+	)
+	.unwrap();
+	let route = SeriesKey {
+		source: Source::Backend,
+		signal: Signal::Http,
+		operation: "/notes/:id".into(),
+		outcome: Outcome::Ok,
+	};
+	for duration in [4.0, 12.5, 30.0] {
+		assert!(apm.record(route.clone(), duration, None));
+	}
+	// The exporter sends only completed windows.
+	NOW.fetch_add(window, Ordering::Relaxed);
+	let body = leptoskit_apm::export::otlp_metrics(&apm.snapshot(), 0);
+
+	let (status, answer) = send_metrics(&service, &body, Some(TOKEN)).await;
+	assert_eq!(status, 200);
+	let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+	assert!(
+		answer.get("partialSuccess").is_none(),
+		"the exporter reads anything rejected as a failure: {answer}"
+	);
+	let stored = rows(
+		&service.db,
+		"SELECT operation, count, service, instance, release, environment, attributes FROM \
+		 apm_windows",
+	)
+	.await;
+	assert_eq!(
+		stored
+			.iter()
+			.map(|row| row.iter().map(text).collect::<Vec<_>>())
+			.collect::<Vec<_>>(),
+		[[
+			"/notes/:id",
+			"3",
+			"shop",
+			"web-1",
+			"1.2.0",
+			"production",
+			r#"{"leptoskit.outcome":"ok","leptoskit.signal":"http","leptoskit.source":"backend"}"#,
+		]]
+	);
+}

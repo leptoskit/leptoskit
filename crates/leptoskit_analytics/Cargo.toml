@@ -62,6 +62,8 @@ web-sys = { workspace = true, features = ["Window"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 flate2 = { workspace = true }
 insta = { workspace = true }
+# What `leptoskit_apm`'s exporter sends, for the OTLP route's end-to-end test.
+leptoskit_apm = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
