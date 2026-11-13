@@ -160,6 +160,41 @@ fn missing_selected_backend_refuses_before_generator_writes() {
 }
 
 #[test]
+fn graph_roots_refuse_auth_generation_without_changing_application_files() {
+	let root = fixture();
+	let app = root.path().join("apps/website");
+	let mut config: leptoskit_config::LeptoskitConfig = toml::from_str(
+		&std::fs::read_to_string(
+			Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/website-graph.toml"),
+		)
+		.unwrap(),
+	)
+	.unwrap();
+	config.build.client_package = Some("ui".into());
+	config.validate().unwrap();
+	let original = toml::to_string(&config).unwrap();
+	write(&app, "leptoskit.toml", &original);
+	let manifest = root.path().join("packages/frontend/Cargo.toml");
+	let before = std::fs::read(&manifest).unwrap();
+	let error = super::super::generate(&app, &config, false, true).unwrap_err();
+	assert_eq!(
+		std::fs::read_to_string(app.join("leptoskit.toml")).unwrap(),
+		original
+	);
+	assert_eq!(std::fs::read(&manifest).unwrap(), before);
+	assert!(
+		!root
+			.path()
+			.join("packages/frontend/interface/auth")
+			.exists()
+	);
+	assert!(
+		error.to_string().contains("deployment graph root"),
+		"{error:#}"
+	);
+}
+
+#[test]
 fn nested_app_globs_inheritance_and_custom_targets_resolve_without_building() {
 	let root = fixture();
 	let app = root.path().join("apps/website");
