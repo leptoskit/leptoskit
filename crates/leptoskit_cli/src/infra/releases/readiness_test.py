@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -31,13 +32,11 @@ class ProbeTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
         self.directory = tempfile.TemporaryDirectory()
-        docker = pathlib.Path(self.directory.name) / "docker"
-        docker.write_text(
-            "#!" + sys.executable + "\n"
+        self.docker = pathlib.Path(self.directory.name) / "docker.py"
+        self.docker.write_text(
             "import os,sys\n"
             "print(os.environ['PROBE_ACTIVE' if sys.argv[1]=='ps' else 'PROBE_INSPECT'])\n"
         )
-        docker.chmod(0o700)
         self.record = {
             "Name": "/notes-web-v1",
             "State": {"Running": True, "Restarting": False},
@@ -57,10 +56,12 @@ class ProbeTests(unittest.TestCase):
         self.directory.cleanup()
 
     def invoke(self, record=None, active="notes-web-v1", optimized=False):
-        environment = dict(os.environ, PATH=self.directory.name + os.pathsep + os.environ.get("PATH", ""))
+        environment = dict(os.environ)
         environment["PROBE_ACTIVE"] = active
         environment["PROBE_INSPECT"] = json.dumps([record or self.record])
-        command = [sys.executable] + (["-O"] if optimized else []) + [str(PROBE)]
+        command = [sys.executable] + (["-O"] if optimized else []) + [
+            __file__, "--probe", str(self.docker), str(PROBE),
+        ]
         result = subprocess.run(command, input=json.dumps(self.request), text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, timeout=15)
         self.assertNotIn("fixture-current-secret", result.stdout + result.stderr)
@@ -110,4 +111,17 @@ class ProbeTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--probe":
+        # Launch the Docker boundary through Python on every host. Windows
+        # cannot execute the extensionless shebang fixture used on Unix.
+        run = subprocess.run
+
+        def docker(command, **kwargs):
+            if command[0] == "docker":
+                command = [sys.executable, sys.argv[2], *command[1:]]
+            return run(command, **kwargs)
+
+        subprocess.run = docker
+        runpy.run_path(sys.argv[3], run_name="__main__")
+    else:
+        unittest.main()

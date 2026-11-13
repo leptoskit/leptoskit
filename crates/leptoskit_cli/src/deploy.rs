@@ -202,11 +202,13 @@ impl Project {
 		})?;
 		let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
 			.unwrap_or_else(|_| metadata.workspace_root.clone());
-		validate_local_dependencies(&workspace_root, &metadata)?;
+		validate_local_dependencies(&metadata.workspace_root, &metadata)?;
 		let app_dir = app_relative_dir(&workspace_root, &app_root)?;
 		let app_dir = path_to_slashes(&app_dir);
+		// Compare Cargo's paths before mixing in canonical Windows prefixes.
 		anyhow::ensure!(
-			!app_dir.is_empty() || metadata.target_directory == workspace_root.join("target"),
+			!app_dir.is_empty()
+				|| metadata.target_directory == metadata.workspace_root.join("target"),
 			"standalone deployment expects target/release; remove build.target-dir from Cargo \
 			 configuration before generation, or maintain a custom Dockerfile"
 		);
@@ -220,7 +222,7 @@ impl Project {
 			)
 		})?;
 
-		package_directory(&workspace_root, &app, &package.manifest_path)?;
+		package_directory(&metadata.workspace_root, &app, &package.manifest_path)?;
 		let binary = binary(package)?;
 
 		let output_name = match &config.build.client_package {
@@ -231,7 +233,8 @@ impl Project {
 						leptoskit_config::CONFIG_FILE
 					)
 				})?;
-				let directory = package_directory(&workspace_root, client, &package.manifest_path)?;
+				let directory =
+					package_directory(&metadata.workspace_root, client, &package.manifest_path)?;
 				lib_name(&directory.join("Cargo.toml"))?.unwrap_or_else(|| client.replace('-', "_"))
 			}
 			None => app.replace('-', "_"),
@@ -707,6 +710,7 @@ fn package_directory(workspace_root: &Path, package: &str, manifest: &Path) -> R
 		.parent()
 		.with_context(|| format!("the package `{package}` has no directory"))?;
 
+	// Cargo's workspace and manifest paths share the same Windows prefix.
 	directory.strip_prefix(workspace_root).with_context(|| {
 		format!(
 			"the package `{package}` at {} is outside the Cargo workspace at {}; the container \
@@ -715,10 +719,14 @@ fn package_directory(workspace_root: &Path, package: &str, manifest: &Path) -> R
 			workspace_root.display()
 		)
 	})?;
+	// Resolve both sides as well, so a package symlink cannot escape the
+	// context.
+	let workspace_root = std::fs::canonicalize(workspace_root)
+		.context("could not resolve Cargo workspace directory")?;
 	let directory = std::fs::canonicalize(directory)
 		.with_context(|| format!("could not resolve package `{package}` directory"))?;
 	anyhow::ensure!(
-		directory.starts_with(workspace_root),
+		directory.starts_with(&workspace_root),
 		"the package `{package}` resolves outside the Cargo workspace at {}",
 		workspace_root.display()
 	);

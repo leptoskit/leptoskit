@@ -1201,7 +1201,9 @@ mod tests {
 		let project = project(&registry);
 
 		assert!(project.contains("lastKnownFileType = folder; name = assets;"));
-		assert!(project.contains("mobile/assets"));
+		let assets =
+			crate::native::generated_dir(root, crate::native::Target::Ios).join("mobile/assets");
+		assert!(project.contains(&super::quote(&assets).unwrap()));
 	}
 
 	#[test]

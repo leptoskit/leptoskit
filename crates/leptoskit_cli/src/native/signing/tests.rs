@@ -218,7 +218,14 @@ fn gradle_gets_the_keystore_path_in_its_environment_and_no_secret_on_its_command
 	let android = Path::new("/app/android");
 	let tool = gradle_release(android, &signing, Some(42));
 
-	assert_eq!(Path::new(&tool.program), android.join("gradlew"));
+	assert_eq!(
+		Path::new(&tool.program),
+		android.join(if cfg!(windows) {
+			"gradlew.bat"
+		} else {
+			"gradlew"
+		})
+	);
 	assert_eq!(tool.dir.as_deref(), Some(android));
 	assert_eq!(
 		tool.args,
@@ -759,11 +766,12 @@ fn manual(method: ExportMethod) -> IosSigning {
 #[test]
 fn a_signed_ios_release_archives_and_exports_with_its_signing() {
 	let root = Path::new("/app");
+	let arguments = |tool: &Tool| tool.args.join(" ").replace('\\', "/");
 	let archive = ios_archive(root, &automatic(ExportMethod::AppStoreConnect), Some(42));
 	assert_eq!(archive.program, "xcodebuild");
 	assert_eq!(archive.dir.as_deref(), Some(root));
 	assert_eq!(archive.unset, ["LD", "LDPLUSPLUS"]);
-	insta::assert_snapshot!(archive.args.join(" "), @"-quiet archive -project .leptoskit/ios/Host.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath /app/.leptoskit/release/ios/App.xcarchive -derivedDataPath .leptoskit/ios/build -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1 DEVELOPMENT_TEAM=ABCDE12345 CODE_SIGN_STYLE=Automatic CURRENT_PROJECT_VERSION=42");
+	insta::assert_snapshot!(arguments(&archive), @"-quiet archive -project .leptoskit/ios/Host.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath /app/.leptoskit/release/ios/App.xcarchive -derivedDataPath .leptoskit/ios/build -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1 DEVELOPMENT_TEAM=ABCDE12345 CODE_SIGN_STYLE=Automatic CURRENT_PROJECT_VERSION=42");
 	assert!(
 		!archive
 			.args
@@ -773,10 +781,10 @@ fn a_signed_ios_release_archives_and_exports_with_its_signing() {
 	);
 
 	let export = ios_export(root, &automatic(ExportMethod::AppStoreConnect));
-	insta::assert_snapshot!(export.args.join(" "), @"-quiet -exportArchive -archivePath /app/.leptoskit/release/ios/App.xcarchive -exportPath /app/.leptoskit/release/ios -exportOptionsPlist /app/.leptoskit/release/ios/ExportOptions.plist -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1");
+	insta::assert_snapshot!(arguments(&export), @"-quiet -exportArchive -archivePath /app/.leptoskit/release/ios/App.xcarchive -exportPath /app/.leptoskit/release/ios -exportOptionsPlist /app/.leptoskit/release/ios/ExportOptions.plist -allowProvisioningUpdates -authenticationKeyPath /keys/AuthKey_KEY123.p8 -authenticationKeyID KEY123 -authenticationKeyIssuerID issuer-1");
 
 	let archive = ios_archive(root, &manual(ExportMethod::AdHoc), None);
-	insta::assert_snapshot!(archive.args.join(" "), @"-quiet archive -project .leptoskit/ios/Host.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath /app/.leptoskit/release/ios/App.xcarchive -derivedDataPath .leptoskit/ios/build DEVELOPMENT_TEAM=ABCDE12345 CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=Apple Distribution PROVISIONING_PROFILE_SPECIFIER=Notes Ad Hoc");
+	insta::assert_snapshot!(arguments(&archive), @"-quiet archive -project .leptoskit/ios/Host.xcodeproj -scheme App -configuration Release -destination generic/platform=iOS -archivePath /app/.leptoskit/release/ios/App.xcarchive -derivedDataPath .leptoskit/ios/build DEVELOPMENT_TEAM=ABCDE12345 CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=Apple Distribution PROVISIONING_PROFILE_SPECIFIER=Notes Ad Hoc");
 	assert!(
 		!ios_export(root, &manual(ExportMethod::AdHoc))
 			.args
