@@ -1355,10 +1355,18 @@ fn migration_schema_tracks_the_registry_and_only_its_final_snapshot() {
 	let tokens = crate::migrations::snapshot(&path, directory.path(), &runtime()).unwrap();
 	syn::parse2::<syn::Expr>(tokens.clone()).unwrap();
 	let text = tokens.to_string();
-	assert!(text.contains("registry.txt"));
-	assert!(text.contains("second/schema.json"));
-
-	assert!(!text.contains("first/schema.json"));
+	// Compare Rust string literals, including the platform's path separators
+	// and escaping, rather than searching for a Unix-only suffix.
+	let literal = |relative: &str| {
+		let path = relative
+			.split('/')
+			.fold(directory.path().join("."), |path, part| path.join(part));
+		let path = path.to_string_lossy();
+		quote!(#path).to_string()
+	};
+	assert!(text.contains(&literal("registry.txt")), "{text}");
+	assert!(text.contains(&literal("second/schema.json")), "{text}");
+	assert!(!text.contains(&literal("first/schema.json")), "{text}");
 	assert!(text.contains("Option :: Some"));
 	std::fs::remove_file(directory.path().join("second/schema.json")).unwrap();
 	assert!(
