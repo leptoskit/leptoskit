@@ -142,6 +142,11 @@ pub fn capture(name: &str, properties: Properties) {
 	with(|client| client.capture(name, properties));
 }
 
+/// Records a typed event with its declared name and fields.
+pub fn capture_event<E: crate::Event>(event: E) {
+	with(|client| client.capture_event(event));
+}
+
 /// Records a page view of the current page.
 pub fn capture_pageview(properties: Properties) {
 	let mut properties = properties;

@@ -222,6 +222,7 @@ leptoskit = { path = "crates/leptoskit", version = "0.3.0" }
 leptoskit_3d = { path = "crates/leptoskit_3d", version = "0.3.0", default-features = false }
 leptoskit_agent_ui = { path = "crates/leptoskit_agent_ui", version = "0.3.0" }
 leptoskit_analytics = { path = "crates/leptoskit_analytics", version = "0.3.0" }
+leptoskit_analytics_macros = { path = "crates/leptoskit_analytics_macros", version = "0.3.0" }
 leptoskit_android = { path = "crates/leptoskit_android", version = "0.3.0" }
 leptoskit_animation = { path = "crates/leptoskit_animation", version = "0.3.0" }
 leptoskit_apm = { path = "crates/leptoskit_apm", version = "0.3.0" }

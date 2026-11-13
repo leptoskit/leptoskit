@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `Value: From<Plan>` is not satisfied
+ --> tests/ui/unconvertible.rs:3:10
+  |
+3 | #[derive(leptoskit_analytics::Event)]
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<Plan>` is not implemented for `Value`
+  |
+  = help: `Value` implements trait `From<T>`:
+            From<&String>
+            From<&str>
+            From<Option<T>>
+            From<String>
+            From<Vec<T>>
+            From<bool>
+            From<f32>
+            From<f64>
+            From<i16>
+            From<i32>
+            From<i64>
+            From<i8>
+            From<u16>
+            From<u32>
+            From<u8>

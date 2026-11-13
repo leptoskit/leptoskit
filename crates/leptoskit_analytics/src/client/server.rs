@@ -162,6 +162,12 @@ impl Analytics {
 		);
 	}
 
+	/// Records a typed event for `distinct_id`: [`capture`](Self::capture)
+	/// with its name and properties.
+	pub fn capture_event<E: crate::Event>(&self, distinct_id: &str, event: E) {
+		self.capture(distinct_id, E::NAME, event.into_properties());
+	}
+
 	/// `distinct_id` is the person `anon_distinct_id` was, now signed in;
 	/// `set` are their properties.
 	pub fn identify(&self, distinct_id: &str, anon_distinct_id: &str, set: Properties) {

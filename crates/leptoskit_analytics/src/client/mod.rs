@@ -161,6 +161,12 @@ impl<P: Platform> Client<P> {
 		});
 	}
 
+	/// Records a typed event: [`capture`](Self::capture) with its name and
+	/// properties.
+	pub fn capture_event<E: crate::Event>(&mut self, event: E) {
+		self.capture(E::NAME, event.into_properties());
+	}
+
 	/// The person signed in as `distinct_id`, the app's own id for them:
 	/// events from now on are theirs, and so are the ones recorded under
 	/// the made-up id before. `set` are properties of the person.

@@ -200,6 +200,11 @@ pub fn capture(name: &str, properties: Properties) {
 	with(|client| client.capture(name, properties));
 }
 
+/// Records a typed event with its declared name and fields.
+pub fn capture_event<E: crate::Event>(event: E) {
+	with(|client| client.capture_event(event));
+}
+
 /// Records that the person saw the screen `name`.
 pub fn capture_screen(name: &str, mut properties: Properties) {
 	properties.push(("$screen_name".into(), Value::Text(name.into())));
