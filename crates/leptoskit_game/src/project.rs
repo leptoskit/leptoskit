@@ -34,7 +34,7 @@ impl Default for Camera {
 
 /// One filled convex quad, already in pixels. `depth` is view-space z; larger
 /// (less negative) is farther.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Quad {
 	pub points: [(f32, f32); 4],
 	pub depth: f32,
@@ -65,7 +65,16 @@ const FACES: [[usize; 4]; 6] = [
 /// The sky behind the world.
 pub(crate) const SKY: [u8; 4] = [20, 26, 34, 255];
 
-pub(crate) fn quads(world: &World, camera: &Camera, width: u32, height: u32) -> Vec<Quad> {
+pub(crate) struct Projection {
+	eye: Vec3,
+	view: Mat4,
+	clip: Mat4,
+	width: u32,
+	height: u32,
+}
+
+/// The camera matrices for one frame size. A run builds this once.
+pub(crate) fn camera_frame(camera: &Camera, width: u32, height: u32) -> Projection {
 	let aspect = width.max(1) as f32 / height.max(1) as f32;
 	let view = glam::camera::rh::view::look_at_mat4(camera.eye, camera.target, camera.up);
 	let projection = glam::camera::rh::proj::opengl::perspective(
@@ -74,28 +83,27 @@ pub(crate) fn quads(world: &World, camera: &Camera, width: u32, height: u32) -> 
 		0.05,
 		100.0,
 	);
-	let clip_from_world = projection * view;
-	let framed = Projection {
+	Projection {
 		eye: camera.eye,
 		view,
-		clip: clip_from_world,
+		clip: projection * view,
 		width,
 		height,
-	};
+	}
+}
+
+#[cfg(test)]
+fn quads(world: &World, camera: &Camera, width: u32, height: u32) -> Vec<Quad> {
+	quads_in(world, &camera_frame(camera, width, height))
+}
+
+pub(crate) fn quads_in(world: &World, framed: &Projection) -> Vec<Quad> {
 	let mut quads = Vec::new();
 	for (transform, mesh) in world.bodies() {
-		push_body(&mut quads, transform, mesh, &framed);
+		push_body(&mut quads, transform, mesh, framed);
 	}
 	quads.sort_by(|left, right| right.depth.total_cmp(&left.depth));
 	quads
-}
-
-struct Projection {
-	eye: Vec3,
-	view: Mat4,
-	clip: Mat4,
-	width: u32,
-	height: u32,
 }
 
 fn push_body(quads: &mut Vec<Quad>, transform: &Transform, mesh: &Mesh, projection: &Projection) {
@@ -178,6 +186,16 @@ mod tests {
 	fn a_cube_behind_the_camera_is_dropped() {
 		let mut world = World::new();
 		let _ = world.cube("gone").at(0.0, 0.0, 20.0);
-		assert!(quads(&world, &Camera::default(), 64, 64).is_empty());
+		assert_eq!(quads(&world, &Camera::default(), 64, 64).len(), 0);
+	}
+
+	#[test]
+	fn a_cached_camera_projects_the_same_quads() {
+		let mut world = World::new();
+		let _ = world.cube("box").at(0.0, 0.5, 0.0).color("#e7b15a");
+		let camera = Camera::default();
+		let fresh = quads(&world, &camera, 80, 60);
+		let cached = quads_in(&world, &camera_frame(&camera, 80, 60));
+		assert_eq!(fresh, cached);
 	}
 }

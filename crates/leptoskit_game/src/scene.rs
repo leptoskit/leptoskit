@@ -24,40 +24,60 @@ pub(crate) fn to_scene(list: &DrawList, width: u32, height: u32) -> Scene {
 	for rect in &list.rects {
 		scene = scene.fill_rect(rect_of(rect), color(rect.color));
 	}
-	for run in &list.glyphs {
-		scene = blit_text(scene, run);
-	}
 	scene
 }
 
-pub(crate) fn paint_gpu(scene: &Scene, width: u32, height: u32) -> Result<Vec<u8>, String> {
-	leptoskit_canvas::render_to_rgba(scene, width, height, 1.0).map_err(|error| error.to_string())
+/// One wgpu device and renderer for every frame of a run.
+///
+/// [`leptoskit_canvas::render_to_rgba`] builds a device per call. A game keeps
+/// this instead, and remembers a missing adapter so later frames do not ask
+/// again.
+pub(crate) struct GpuPainter {
+	renderer: Option<leptoskit_canvas::Renderer>,
+	missed: bool,
 }
 
-fn blit_text(mut scene: Scene, run: &crate::raster::GlyphRun) -> Scene {
-	let scale = run.scale.max(1.0);
-	let mut pen = run.x;
-	let ink = color(run.color);
-	for ch in run.text.chars() {
-		for (row, bits) in crate::font::rows(ch).into_iter().enumerate() {
-			for col in 0..5 {
-				if bits & (1 << (4 - col)) == 0 {
-					continue;
-				}
-				scene = scene.fill_rect(
-					Rect::new(
-						pen + col as f32 * scale,
-						run.y + row as f32 * scale,
-						scale,
-						scale,
-					),
-					ink,
-				);
-			}
+impl GpuPainter {
+	pub(crate) fn new() -> Self {
+		Self {
+			renderer: None,
+			missed: false,
 		}
-		pen += 6.0 * scale;
 	}
-	scene
+
+	/// Draws `scene`. HUD text is not in the scene; the caller stamps it after.
+	pub(crate) fn paint(
+		&mut self,
+		scene: &Scene,
+		width: u32,
+		height: u32,
+	) -> Result<Vec<u8>, String> {
+		if self.missed {
+			return Err("no GPU adapter is available".to_owned());
+		}
+		if self.renderer.is_none() {
+			let (device, queue) = leptoskit_canvas::headless_device().map_err(|error| {
+				self.missed = true;
+				error.to_string()
+			})?;
+			self.renderer = Some(leptoskit_canvas::Renderer::new(
+				&device,
+				&queue,
+				leptoskit_canvas::wgpu::TextureFormat::Rgba8Unorm,
+			));
+		}
+		let Some(renderer) = self.renderer.as_mut() else {
+			return Err("the renderer was not installed".to_owned());
+		};
+		renderer
+			.render_to_rgba(scene, width, height, 1.0)
+			.map_err(|error| error.to_string())
+	}
+}
+
+#[cfg(test)]
+fn paint_gpu(scene: &Scene, width: u32, height: u32) -> Result<Vec<u8>, String> {
+	GpuPainter::new().paint(scene, width, height)
 }
 
 fn rect_of(rect: &ScreenRect) -> Rect {
@@ -84,7 +104,37 @@ mod tests {
 			8,
 			4,
 		);
-		assert_ne!(scene.commands.len(), 0);
+		assert_eq!(scene.commands.len(), 1);
+	}
+
+	#[test]
+	fn hud_text_is_not_a_draw_per_pixel() {
+		let scene = to_scene(
+			&DrawList {
+				sky: SKY,
+				glyphs: vec![crate::raster::GlyphRun {
+					x: 4.0,
+					y: 4.0,
+					text: "Restart".to_owned(),
+					color: [255, 255, 255, 255],
+					scale: 2.0,
+				}],
+				..DrawList::default()
+			},
+			64,
+			32,
+		);
+		assert_eq!(scene.commands.len(), 1);
+	}
+
+	#[test]
+	fn a_missing_adapter_is_not_requested_again() {
+		let mut painter = GpuPainter::new();
+		painter.missed = true;
+		let first = painter.paint(&Scene::new(), 4, 4).unwrap_err();
+		let second = painter.paint(&Scene::new(), 4, 4).unwrap_err();
+		assert_eq!(first, second);
+		assert!(first.contains("adapter"));
 	}
 
 	#[test]

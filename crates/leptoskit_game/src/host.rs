@@ -10,9 +10,7 @@ use crate::Error;
 use crate::overlay;
 use crate::project::Camera;
 use crate::project::SKY;
-use crate::project::quads;
 use crate::raster::DrawList;
-use crate::raster::paint;
 use crate::scene;
 use crate::sim::Game;
 use crate::sim::Sim;
@@ -129,6 +127,9 @@ pub struct Report {
 	pub out: Option<PathBuf>,
 	/// Number publications, in name order.
 	pub numbers: Vec<(String, f64)>,
+	/// Mean time of one frame, in microseconds, including the tick and the
+	/// paint.
+	pub frame_us: u64,
 }
 
 /// Reads the process arguments, runs `game`, and writes the last frame.
@@ -151,8 +152,12 @@ where
 	sim.set_held(&options.hold);
 	let mut surface = NativeSurface::new(HeadlessBackend::new());
 	surface.set_viewport(options.width as f32, options.height as f32);
+	let framed = crate::project::camera_frame(&Camera::default(), options.width, options.height);
+	let mut gpu = scene::GpuPainter::new();
+	let mut pixels = Vec::new();
 	let tap_at = options.tap.as_ref().map(|_| options.frames / 2);
-	let mut painted = None;
+	let started = std::time::Instant::now();
+	let mut painter_name = "cpu";
 	for index in 0..options.frames {
 		sim.step();
 		surface.set_owned_root(hud(sim.world()));
@@ -161,25 +166,28 @@ where
 		{
 			overlay::tap(&surface, label)?;
 		}
-		let list = compose(sim.world(), &surface, options.width, options.height);
-		painted = Some(paint_frame(
+		let list = compose(sim.world(), &surface, &framed);
+		painter_name = paint_frame(
+			&mut gpu,
+			&mut pixels,
 			&list,
 			options.width,
 			options.height,
 			options.painter,
-		)?);
+		)?;
 	}
-	let painted = painted.ok_or(Error::Empty)?;
+	let frame_us = (started.elapsed().as_micros() / u128::from(options.frames)) as u64;
 	if let Some(path) = &options.out {
-		write_png(path, options.width, options.height, &painted.rgba)?;
+		write_png(path, options.width, options.height, &pixels)?;
 	}
 	let report = Report {
 		id: G::ID,
 		frames: options.frames,
 		tick: sim.world().tick(),
-		painter: painted.painter,
+		painter: painter_name,
 		out: options.out,
 		numbers: sim.world().numbers(),
+		frame_us,
 	};
 	print_report(&report);
 	Ok(report)
@@ -201,67 +209,58 @@ fn validate(options: &Options) -> Result<(), Error> {
 fn compose(
 	world: &World,
 	surface: &NativeSurface<HeadlessBackend>,
-	width: u32,
-	height: u32,
+	framed: &crate::project::Projection,
 ) -> DrawList {
 	let overlay = overlay::read(surface);
 	DrawList {
 		sky: SKY,
-		quads: quads(world, &Camera::default(), width, height),
+		quads: crate::project::quads_in(world, framed),
 		rects: overlay.rects,
 		glyphs: overlay.glyphs,
 	}
 }
 
-struct Frame {
-	rgba: Vec<u8>,
-	painter: &'static str,
-}
-
-fn paint_frame(list: &DrawList, width: u32, height: u32, painter: Painter) -> Result<Frame, Error> {
-	paint_with(list, width, height, painter, scene::paint_gpu)
-}
-
-fn paint_with(
+fn paint_frame(
+	gpu: &mut scene::GpuPainter,
+	pixels: &mut Vec<u8>,
 	list: &DrawList,
 	width: u32,
 	height: u32,
 	painter: Painter,
-	gpu: impl FnOnce(&leptoskit_canvas::Scene, u32, u32) -> Result<Vec<u8>, String>,
-) -> Result<Frame, Error> {
+) -> Result<&'static str, Error> {
+	paint_with(
+		pixels,
+		list,
+		width,
+		height,
+		painter,
+		|scene, width, height| gpu.paint(scene, width, height),
+	)
+}
+
+fn paint_with(
+	pixels: &mut Vec<u8>,
+	list: &DrawList,
+	width: u32,
+	height: u32,
+	painter: Painter,
+	mut gpu: impl FnMut(&leptoskit_canvas::Scene, u32, u32) -> Result<Vec<u8>, String>,
+) -> Result<&'static str, Error> {
+	if painter == Painter::Cpu {
+		crate::raster::paint_into(pixels, list, width, height);
+		return Ok("cpu");
+	}
 	let scene = scene::to_scene(list, width, height);
-	match painter {
-		Painter::Cpu => {
-			Ok(Frame {
-				rgba: paint(list, width, height),
-				painter: "cpu",
-			})
+	match gpu(&scene, width, height) {
+		Ok(mut rgba) => {
+			crate::raster::stamp_glyphs(&mut rgba, list, width, height);
+			*pixels = rgba;
+			Ok("gpu")
 		}
-		Painter::Gpu => {
-			gpu(&scene, width, height)
-				.map(|rgba| {
-					Frame {
-						rgba,
-						painter: "gpu",
-					}
-				})
-				.map_err(Error::Gpu)
-		}
-		Painter::Auto => {
-			match gpu(&scene, width, height) {
-				Ok(rgba) => {
-					Ok(Frame {
-						rgba,
-						painter: "gpu",
-					})
-				}
-				Err(_) => {
-					Ok(Frame {
-						rgba: paint(list, width, height),
-						painter: "cpu",
-					})
-				}
-			}
+		Err(error) if painter == Painter::Gpu => Err(Error::Gpu(error)),
+		Err(_) => {
+			crate::raster::paint_into(pixels, list, width, height);
+			Ok("cpu")
 		}
 	}
 }
@@ -271,6 +270,7 @@ fn print_report(report: &Report) {
 	println!("painter: {}", report.painter);
 	println!("frames: {}", report.frames);
 	println!("tick: {}", report.tick);
+	println!("frame_us: {}", report.frame_us);
 	for (name, value) in &report.numbers {
 		println!("{name}: {value}");
 	}
@@ -362,6 +362,7 @@ mod tests {
 		assert_eq!(report.painter, "cpu");
 		assert_eq!(report.tick, 2);
 		assert!(report.numbers[0].1 > 0.0);
+		assert!(report.frame_us < 100_000, "{}", report.frame_us);
 
 		let path = std::env::temp_dir().join(format!("leptoskit-game-{}.png", std::process::id()));
 		let written = run_with::<Still, _>(
@@ -464,16 +465,21 @@ mod tests {
 			sky: SKY,
 			..DrawList::default()
 		};
-		let cpu = paint_with(&list, 4, 4, Painter::Auto, |_, _, _| {
+		let mut pixels = Vec::new();
+		let cpu = paint_with(&mut pixels, &list, 4, 4, Painter::Auto, |_, _, _| {
 			Err("no adapter".to_owned())
 		})
 		.unwrap();
-		assert_eq!(cpu.painter, "cpu");
-		assert_eq!(cpu.rgba.len(), 4 * 4 * 4);
-		let gpu = paint_with(&list, 2, 2, Painter::Gpu, |_, _, _| Ok(vec![9; 16])).unwrap();
-		assert_eq!(gpu.painter, "gpu");
+		assert_eq!(cpu, "cpu");
+		assert_eq!(pixels.len(), 4 * 4 * 4);
+		let gpu = paint_with(&mut pixels, &list, 2, 2, Painter::Gpu, |_, _, _| {
+			Ok(vec![9; 16])
+		})
+		.unwrap();
+		assert_eq!(gpu, "gpu");
+		assert_eq!(pixels.len(), 16);
 		assert!(matches!(
-			paint_with(&list, 2, 2, Painter::Gpu, |_, _, _| {
+			paint_with(&mut pixels, &list, 2, 2, Painter::Gpu, |_, _, _| {
 				Err("missing".to_owned())
 			}),
 			Err(Error::Gpu(_))

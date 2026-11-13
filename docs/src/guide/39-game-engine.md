@@ -61,6 +61,6 @@ fn hud(world: &World) -> Element {
 leptoskit game run --frames 12 --painter cpu --out artifacts/frame.png
 ```
 
-The report names the painter, the tick, and each number the world published. `--hold move` keeps an action down. `--tap Restart` presses that label halfway through, which needs at least two frames so a later tick can read it. `--painter gpu` refuses to fall back when no adapter is available.
+The report names the painter, the tick, the mean frame time in microseconds (`frame_us`), and each number the world published. The wgpu device is created once for the run, and HUD text is stamped onto the picture instead of being a separate GPU shape for every pixel. A missing adapter is remembered, so the frames after the first do not ask for a GPU again. `--hold move` keeps an action down. `--tap Restart` presses that label halfway through, which needs at least two frames so a later tick can read it. `--painter gpu` refuses to fall back when no adapter is available.
 
 `leptoskit game build` only compiles the crate. Pass a directory to build a game that is not `game/lantern`.
