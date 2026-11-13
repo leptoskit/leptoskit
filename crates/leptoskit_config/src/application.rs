@@ -123,6 +123,59 @@ fn invalid(message: impl Into<String>) -> ConfigError {
 	ConfigError::InvalidApplication(message.into())
 }
 
+/// Parse only lint and target-selection fields so unrelated, unfinished
+/// application settings do not prevent linting source during editing.
+pub(crate) fn lint_config(
+	raw: &str,
+	path: &Path,
+	requested: Option<&str>,
+) -> Result<crate::LintConfig, ConfigError> {
+	#[derive(Default, Deserialize)]
+	#[serde(default)]
+	struct App {
+		default_target: Option<String>,
+	}
+	#[derive(Default, Deserialize)]
+	#[serde(default)]
+	struct Frontend {
+		lint: Option<crate::LintConfig>,
+	}
+	#[derive(Default, Deserialize)]
+	#[serde(default)]
+	struct Target {
+		frontend: Option<String>,
+	}
+	#[derive(Default, Deserialize)]
+	#[serde(default)]
+	struct Document {
+		lint: crate::LintConfig,
+		app: App,
+		frontends: BTreeMap<String, Frontend>,
+		targets: BTreeMap<String, Target>,
+	}
+	let document: Document = toml::from_str(raw).map_err(|source| {
+		ConfigError::Parse {
+			path: path.to_owned(),
+			source,
+		}
+	})?;
+	let Some(name) = requested.or(document.app.default_target.as_deref()) else {
+		return Ok(document.lint);
+	};
+	let target = document
+		.targets
+		.get(name)
+		.ok_or_else(|| invalid(format!("unknown target `{name}`")))?;
+	let Some(name) = &target.frontend else {
+		return Ok(document.lint);
+	};
+	let frontend = document
+		.frontends
+		.get(name)
+		.ok_or_else(|| invalid(format!("unknown frontend `{name}`")))?;
+	Ok(frontend.lint.clone().unwrap_or(document.lint))
+}
+
 fn name_valid(name: &str) -> bool {
 	!name.is_empty()
 		&& name
@@ -304,6 +357,53 @@ fn validate_inputs(inputs: &FrontendInputs) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn lint_selection_keeps_frontend_rules_and_exclusions_together() {
+		let raw = r#"
+            [app]
+            default_target = "desktop"
+            editing_an_unrelated_setting = true
+            [lint]
+            markup = "builder"
+            exclude = ["crates/site/**"]
+            [frontends.site.lint]
+            markup = "view"
+            clippy = false
+            exclude = ["crates/product/**"]
+            [frontends.site.lint.rules]
+            component_attribute = "deny"
+            [targets.landing]
+            frontend = "site"
+            [targets.desktop]
+            [targets.relay]
+        "#;
+		let path = Path::new("leptoskit.toml");
+		let landing = lint_config(raw, path, Some("landing")).unwrap();
+		assert_eq!(landing.markup, crate::MarkupStyle::View);
+		assert_eq!(landing.exclude, ["crates/product/**"]);
+		assert!(!landing.clippy);
+		assert_eq!(landing.rules.component_attribute, crate::LintLevel::Deny);
+		let default_landing = raw.replace(
+			"default_target = \"desktop\"",
+			"default_target = \"landing\"",
+		);
+		assert_eq!(lint_config(&default_landing, path, None).unwrap(), landing);
+		for target in [None, Some("desktop"), Some("relay")] {
+			let lint = lint_config(raw, path, target).unwrap();
+			assert_eq!(lint.markup, crate::MarkupStyle::Builder);
+			assert_eq!(lint.exclude, ["crates/site/**"]);
+		}
+		assert!(lint_config(raw, path, Some("missing")).is_err());
+		assert!(
+			lint_config(
+				&raw.replace("frontend = \"site\"", "frontend = \"missing\""),
+				path,
+				Some("landing")
+			)
+			.is_err()
+		);
+	}
 
 	const CONFIG: &str = r#"
         [app]
