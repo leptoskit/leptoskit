@@ -285,6 +285,54 @@ impl ::leptoskit_router::Routable for Route {
 		}
 	}
 }
+/// Paths for `leptos_axum::LeptosRoutes::leptos_routes`.
+#[allow(
+	dead_code,
+	reason = "client-rendered apps do not need the SSR route list"
+)]
+pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
+	::std::vec![
+		::leptoskit_router::Pattern::new(&[]).axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("clip")])
+			.axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("panel")])
+			.axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("reading")])
+			.axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("settings")])
+			.axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("overlay"),
+			::leptoskit_router::Segment::Static("clipper")
+		])
+		.axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("overlay"),
+			::leptoskit_router::Segment::Static("highlights")
+		])
+		.axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("projects"),
+			::leptoskit_router::Segment::Param("project")
+		])
+		.axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("projects"),
+			::leptoskit_router::Segment::Param("project"),
+			::leptoskit_router::Segment::Static("export")
+		])
+		.axum_path(),
+		::leptoskit_router::Pattern::new(&[
+			::leptoskit_router::Segment::Static("projects"),
+			::leptoskit_router::Segment::Param("project"),
+			::leptoskit_router::Segment::Static("clips"),
+			::leptoskit_router::Segment::Param("clip")
+		])
+		.axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::OptionalRest("path")])
+			.axum_path()
+	]
+}
 /// The app's router: pages and layouts that take a `navigation` prop
 /// receive it, to navigate with and to build links.
 pub type Navigation = ::leptoskit_router::Router<Route>;

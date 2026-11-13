@@ -72,6 +72,18 @@ impl ::leptoskit_router::Routable for Route {
 		}
 	}
 }
+/// Paths for `leptos_axum::LeptosRoutes::leptos_routes`.
+#[allow(
+	dead_code,
+	reason = "client-rendered apps do not need the SSR route list"
+)]
+pub fn axum_route_list() -> ::std::vec::Vec<::std::string::String> {
+	::std::vec![
+		::leptoskit_router::Pattern::new(&[]).axum_path(),
+		::leptoskit_router::Pattern::new(&[::leptoskit_router::Segment::Static("session")])
+			.axum_path()
+	]
+}
 /// The app's router: pages and layouts that take a `navigation` prop
 /// receive it, to navigate with and to build links.
 pub type Navigation = ::leptoskit_router::Router<Route>;
