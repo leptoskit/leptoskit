@@ -29,6 +29,15 @@ static lk_buffer bytes(const char *text) {
     return (lk_buffer){(const uint8_t *)copy, strlen(copy), copy};
 }
 
+void lk_log_write(uint32_t level, const uint8_t *target, size_t target_len,
+    const uint8_t *message, size_t message_len) {
+    fprintf(stderr, "[%u] ", level);
+    fwrite(target, 1, target_len, stderr);
+    fputs(": ", stderr);
+    fwrite(message, 1, message_len, stderr);
+    fputc('\n', stderr);
+}
+
 void fixture_reset(int mode) {
     scenario = mode;
     next_identifier = 0;
@@ -72,6 +81,9 @@ int32_t lk_app_poll_service(lk_app *app) {
     return scenario == 1 && app->identifier == 1 ? service_failure : 0;
 }
 
+/* Wake reasons do not change this fixture's scripted service state. */
+int32_t lk_app_set_service_wake_reason(lk_app *app, int32_t reason) { return 0; }
+
 lk_closing_app *lk_app_begin_close(lk_app *app) {
     lk_closing_app *closing = malloc(sizeof(lk_closing_app));
     closing->app = app;
@@ -106,6 +118,9 @@ lk_bridge *lk_app_plugins(lk_app *app) { return (lk_bridge *)app; }
 int32_t lk_app_start(lk_app *app, float width, float height) { return 0; }
 int32_t lk_app_resize(lk_app *app, float width, float height, bool dark) { return 0; }
 int32_t lk_app_wake(lk_app *app) { return 0; }
+/* The fixture guest never schedules a timer. */
+int32_t lk_app_enable_timers(lk_app *app) { return 0; }
+int32_t lk_app_poll_timers(lk_app *app) { return 0; }
 /* The fixture guest never waits for a display frame, so the link stays paused. */
 int32_t lk_app_enable_frames(lk_app *app) { return 0; }
 int32_t lk_app_frame_requested(lk_app *app) { return 0; }

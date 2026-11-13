@@ -103,7 +103,7 @@ class NativeAppTest {
     private fun activate() {
         val action = By.desc("leptoskit-update-action")
         checkNotNull(device.wait(Until.findObject(action), 15000)).click()
-        val downloaded = device.wait(Until.findObject(By.textEndsWith(" downloaded")), 30000)
+        val downloaded = device.wait(Until.findObject(By.desc("leptoskit-update-status").textContains(" downloaded.")), 30000)
         val status = device.findObject(By.desc("leptoskit-update-status"))?.text
         assertNotNull("download did not finish; status: $status", downloaded)
         checkNotNull(device.wait(Until.findObject(By.copy(action).text("Activate update")), 15000)).click()

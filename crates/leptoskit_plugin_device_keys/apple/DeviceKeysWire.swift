@@ -79,7 +79,9 @@ func spki(sec1: Data) -> Data {
 }
 
 /// The terminal status for a SecKey signing failure.
-func keyStatus(for error: NSError?) -> UInt32 {
+func keyStatus(for failure: (any Error)?) -> UInt32 {
+    let error = failure as NSError?
+
     guard let error, error.domain == LAError.errorDomain else {
         return keyStatusForOSStatus(error.map { Int32($0.code) } ?? errSecAuthFailed)
     }

@@ -1,10 +1,17 @@
 # Isolated Linux desktop with the real KDE AT-SPI driver and compositor.
 FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_ARCHIVE=http://mirrors.edge.kernel.org/ubuntu
+# Bootstrap ca-certificates over HTTP as the base image does, keeping Ubuntu's
+# signature verification and the reachable mirror selected by the runner.
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|$UBUNTU_ARCHIVE|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|$UBUNTU_ARCHIVE|g" \
+        /etc/apt/sources.list.d/ubuntu.sources
 # Each fetch retries, and an index update that still fails (an Ubuntu mirror
 # mid-sync reports hash mismatches for minutes) is attempted again after a pause.
 RUN for attempt in 1 2 3; do \
-        apt-get -o Acquire::Retries=5 update && break; \
+        apt-get --error-on=any -o Acquire::Retries=5 update && break; \
         if [ "$attempt" = 3 ]; then echo "apt-get update failed 3 times" >&2; exit 1; fi; \
         sleep $((attempt * 30)); \
     done \

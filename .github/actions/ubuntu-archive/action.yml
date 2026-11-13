@@ -1,0 +1,38 @@
+name: Ubuntu archive
+description: Select a reachable Ubuntu archive before installing runner dependencies
+
+runs:
+  using: composite
+  steps:
+    - name: select a reachable Ubuntu archive
+      shell: bash
+      run: |
+        set -euo pipefail
+        . /etc/os-release
+        ubuntu_codename=${VERSION_CODENAME:?Ubuntu release is required}
+
+        reachable() {
+          local mirror=$1 suite
+          for suite in "$ubuntu_codename" "$ubuntu_codename-security"; do
+            curl --head --fail --location --silent --show-error \
+              --connect-timeout 5 --max-time 10 --output /dev/null \
+              "$mirror/dists/$suite/InRelease" || return 1
+          done
+        }
+
+        # Probe independent domains: both Ubuntu hostnames can fail DNS together.
+        # The kernel module downloader also uses kernel.org's Ubuntu mirror.
+        for mirror in \
+          https://archive.ubuntu.com/ubuntu \
+          https://mirrors.edge.kernel.org/ubuntu \
+          https://security.ubuntu.com/ubuntu; do
+          if reachable "$mirror"; then
+            # Keep APT's suites, components and Ubuntu signature verification.
+            printf '%s\n' "$mirror" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            echo "Using $mirror for $ubuntu_codename"
+            exit 0
+          fi
+        done
+
+        echo "No Ubuntu archive serves both $ubuntu_codename and its security suite" >&2
+        exit 1

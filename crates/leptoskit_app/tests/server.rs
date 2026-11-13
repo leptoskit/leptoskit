@@ -397,8 +397,8 @@ fn get(address: std::net::SocketAddr) -> String {
 	response
 }
 
-/// Stops the broker through its graceful-shutdown signal, and checks it
-/// exited cleanly.
+/// Unix checks graceful SIGTERM shutdown and a clean exit.
+#[cfg(unix)]
 fn stop(mut child: std::process::Child) {
 	let killed = Command::new("kill")
 		.args(["-TERM", &child.id().to_string()])
@@ -421,11 +421,15 @@ fn stop(mut child: std::process::Child) {
 	panic!("the broker ignored SIGTERM");
 }
 
+/// Other hosts terminate and reap only this fixture's child. Windows has no
+/// SIGTERM; its test still covers serving, backup and restore.
+#[cfg(not(unix))]
+fn stop(mut child: std::process::Child) {
+	child.kill().expect("terminate the broker fixture");
+	child.wait().expect("reap the broker fixture");
+}
+
 #[test]
-#[cfg_attr(
-	windows,
-	ignore = "graceful shutdown uses the POSIX kill signal; Windows has no equivalent"
-)]
 fn the_broker_serves_the_site_until_it_is_asked_to_stop() {
 	let directory = tempfile::tempdir().unwrap();
 	let data = directory.path().join("cloud");

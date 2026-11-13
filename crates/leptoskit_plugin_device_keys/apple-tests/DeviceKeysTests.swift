@@ -1,7 +1,10 @@
 import CLeptosKitBridge
+import CoreFoundation
 import Foundation
 import LeptosKitBridge
 @testable import LeptosKitDeviceKeys
+import LocalAuthentication
+import Security
 import Testing
 
 /// Builds a Rust-owned payload by driving a bridge submit/next-request round trip.
@@ -50,6 +53,33 @@ private func signRequest() -> Data {
     bytes.append(deviceKeysFields([UInt32(reason.count)]))
     bytes.append(reason)
     return bytes
+}
+
+@Test(arguments: [
+    (NSOSStatusErrorDomain, Int(errSecUserCanceled), KeyStatus.cancelled),
+    (NSOSStatusErrorDomain, Int(errSecItemNotFound), KeyStatus.notFound),
+    (NSOSStatusErrorDomain, Int(errSecInteractionNotAllowed), KeyStatus.unavailable),
+    (NSOSStatusErrorDomain, Int(errSecNotAvailable), KeyStatus.unavailable),
+    (NSOSStatusErrorDomain, Int(errSecAuthFailed), KeyStatus.failed),
+    (LAError.errorDomain, LAError.userCancel.rawValue, KeyStatus.cancelled),
+    (LAError.errorDomain, LAError.appCancel.rawValue, KeyStatus.cancelled),
+    (LAError.errorDomain, LAError.systemCancel.rawValue, KeyStatus.cancelled),
+    (LAError.errorDomain, LAError.biometryLockout.rawValue, KeyStatus.lockedOut),
+    (LAError.errorDomain, LAError.biometryNotEnrolled.rawValue, KeyStatus.notEnrolled),
+    (LAError.errorDomain, LAError.passcodeNotSet.rawValue, KeyStatus.notEnrolled),
+    (LAError.errorDomain, LAError.biometryNotAvailable.rawValue, KeyStatus.unavailable),
+    (LAError.errorDomain, LAError.authenticationFailed.rawValue, KeyStatus.failed),
+    ("unrelated-domain", LAError.biometryLockout.rawValue, KeyStatus.failed)
+])
+func signingFailuresPreserveTheirErrorDomain(domain: String, code: Int, expected: UInt32) throws {
+    #expect(keyStatus(for: NSError(domain: domain, code: code)) == expected)
+    let error = try #require(CFErrorCreate(nil, domain as CFString, code, nil))
+    #expect(keyStatus(for: error) == expected)
+}
+
+@Test
+func missingSigningErrorsReportFailure() {
+    #expect(keyStatus(for: nil) == KeyStatus.failed)
 }
 
 @Test

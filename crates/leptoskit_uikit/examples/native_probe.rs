@@ -213,7 +213,7 @@ mod probe {
 		let group = RadioGroup::new("density").expect("fixture group");
 		Element::view()
 			.class("w-full h-full flex-col gap-3 p-6 pt-16 bg-slate-50 text-slate-900")
-			.children([
+			.children(vec![
 				named(
 					Element::text("Native, all the way down").class("text-2xl font-bold h-9"),
 					"title",

@@ -151,6 +151,7 @@ mod frame {
 			use leptoskit::extension::page;
 			use leptoskit::extension::page::PageEvent;
 			use leptoskit::extension::page::Placement;
+			use leptoskit::prelude::Update;
 
 			use crate::store::Store;
 

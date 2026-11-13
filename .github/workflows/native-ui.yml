@@ -228,6 +228,7 @@ jobs:
           echo "kernel=$(uname -r)" >> "$GITHUB_OUTPUT"
           echo "user=$(id -u)-$(id -g)" >> "$GITHUB_OUTPUT"
           echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - uses: $/.github/actions/ubuntu-archive
       - name: install the GTK4 dialog fixture's development libraries
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config
       - run: cargo build --locked -p leptoskit_testing --features native-ui --example native_conformance --example dialog_plugin_journey
@@ -266,7 +267,10 @@ jobs:
       - name: build isolated native Linux desktop
         if: steps.desktop.outputs.cache-hit != 'true'
         run: |
-          docker build --build-arg NATIVE_UID="$(id -u)" --build-arg NATIVE_GID="$(id -g)" -t leptoskit-native-linux -f setup/native-ui/Dockerfile setup/native-ui
+          # The minimal base image bootstraps its CA bundle over signed HTTP APT.
+          ubuntu_archive=$(head -n 1 /etc/apt/apt-mirrors.txt)
+          ubuntu_archive=${ubuntu_archive/https:/http:}
+          docker build --build-arg UBUNTU_ARCHIVE="$ubuntu_archive" --build-arg NATIVE_UID="$(id -u)" --build-arg NATIVE_GID="$(id -g)" -t leptoskit-native-linux -f setup/native-ui/Dockerfile setup/native-ui
           docker save --output "$RUNNER_TEMP/native-linux-desktop.tar" leptoskit-native-linux
       - name: keep isolated native Linux desktop
         if: steps.desktop.outputs.cache-hit != 'true'

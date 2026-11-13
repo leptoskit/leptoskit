@@ -1,5 +1,6 @@
 //! The binary itself: the summary prints the screen a screen reader walks,
-//! snapshots draw real AppKit views on macOS, and mistakes say what to try.
+//! snapshots draw native views on macOS and Linux, and mistakes say what to
+//! try.
 
 use std::process::Command;
 use std::process::Output;
@@ -37,9 +38,12 @@ fn mistakes_fail_and_say_what_to_try() {
 	assert!(text(&pathless.stderr).contains("snapshot needs a path"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(
+	target_os = "macos",
+	all(target_os = "linux", not(target_env = "ohos"))
+))]
 #[test]
-fn a_snapshot_is_a_png_drawn_by_appkit() {
+fn a_snapshot_is_a_png_drawn_by_the_native_backend() {
 	let path = std::env::temp_dir().join(format!("observatory-{}.png", std::process::id()));
 	let output = observatory(&["snapshot", path.to_str().expect("a UTF-8 path")]);
 	assert!(output.status.success(), "{}", text(&output.stderr));
@@ -48,15 +52,18 @@ fn a_snapshot_is_a_png_drawn_by_appkit() {
 	assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(
+	target_os = "macos",
+	all(target_os = "linux", not(target_env = "ohos"))
+)))]
 #[test]
-fn without_macos_the_window_is_the_summary_and_snapshots_refuse() {
+fn unsupported_hosts_print_a_summary_and_refuse_snapshots() {
 	let output = observatory(&[]);
 	assert!(output.status.success(), "{}", text(&output.stderr));
 	assert!(text(&output.stdout).contains("heading(1) \"Observatory\""));
-	assert!(text(&output.stderr).contains("windows open on macOS"));
+	assert!(text(&output.stderr).contains("windows open on macOS and Linux"));
 
 	let snapshot = observatory(&["snapshot", "sky.png"]);
 	assert!(!snapshot.status.success());
-	assert!(text(&snapshot.stderr).contains("need macOS"));
+	assert!(text(&snapshot.stderr).contains("need macOS or Linux"));
 }

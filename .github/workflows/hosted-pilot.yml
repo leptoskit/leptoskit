@@ -13,6 +13,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/actions/rust/**"
+      - ".github/actions/ubuntu-archive/**"
       - ".github/workflows/hosted-pilot.yml"
   workflow_dispatch:
     inputs:
@@ -52,6 +53,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: hosted-pilot
+
+      - uses: $/.github/actions/ubuntu-archive
 
       - name: install build dependencies
         run: |
@@ -105,7 +108,9 @@ jobs:
           cp -a "$PILOT_DIR-unpacked" "$PILOT_DIR-smoke/bundle"
           cp setup/scripts/hosted_pilot_local.py setup/scripts/hosted_pilot_smoke.py "$PILOT_DIR-smoke/checks/"
           cp crates/leptoskit_app/deploy/Smoke.Dockerfile "$PILOT_DIR-smoke/Dockerfile"
-          docker build --tag leptoskit-hosted-pilot-smoke "$PILOT_DIR-smoke"
+          ubuntu_archive=$(head -n 1 /etc/apt/apt-mirrors.txt)
+          ubuntu_archive=${ubuntu_archive/https:/http:}
+          docker build --build-arg UBUNTU_ARCHIVE="$ubuntu_archive" --tag leptoskit-hosted-pilot-smoke "$PILOT_DIR-smoke"
           docker run --rm --network none --read-only \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
             leptoskit-hosted-pilot-smoke > "$PILOT_DIR-acceptance.json"
