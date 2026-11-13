@@ -91,6 +91,9 @@ impl Outcome {
 	}
 }
 
+/// The first byte of a [`Queue::snapshot`] file.
+const SNAPSHOT_VERSION: u8 = 1;
+
 /// A batch on its way, encoded.
 #[derive(Debug)]
 pub struct Pending {
@@ -115,6 +118,10 @@ pub struct Queue {
 	/// `context` field holds.
 	contexts: Vec<(u32, Properties)>,
 	generation: u32,
+	/// The last generation handed out, by `set_context` or a restore.
+	last_generation: u32,
+	/// Changes whenever what a snapshot would hold changes.
+	version: u64,
 	waiting: VecDeque<Queued>,
 	/// The entries of the batch on its way, oldest first.
 	sending: Vec<Queued>,
@@ -143,6 +150,8 @@ impl Queue {
 			limits,
 			contexts: vec![(0, context)],
 			generation: 0,
+			last_generation: 0,
+			version: 0,
 			waiting: VecDeque::new(),
 			sending: Vec::new(),
 			bytes: 0,
@@ -159,7 +168,8 @@ impl Queue {
 	/// Entries queued from now on are sent with `context`; those already
 	/// queued keep theirs.
 	pub fn set_context(&mut self, context: Properties) {
-		self.generation = self.generation.wrapping_add(1);
+		self.last_generation = self.last_generation.wrapping_add(1);
+		self.generation = self.last_generation;
 		self.context_bytes += properties_size(&context);
 		self.contexts.push((self.generation, context));
 		self.forget_unused_contexts();
@@ -170,18 +180,23 @@ impl Queue {
 	/// current context.
 	pub fn push(&mut self, mut entry: Entry, now: i64) {
 		entry.context = self.generation;
+		self.push_with_context(entry, now);
+	}
+
+	fn push_with_context(&mut self, entry: Entry, at: i64) {
+		self.append_with_context(entry, at);
+		self.enforce_limits();
+	}
+
+	fn append_with_context(&mut self, entry: Entry, at: i64) {
+		self.version += 1;
 		let bytes = size(&entry);
 		if bytes > self.limits.queue_bytes.min(self.limits.batch_bytes) {
 			self.dropped += 1;
 			return;
 		}
-		self.waiting.push_back(Queued {
-			entry,
-			bytes,
-			at: now,
-		});
+		self.waiting.push_back(Queued { entry, bytes, at });
 		self.bytes += bytes;
-		self.enforce_limits();
 	}
 
 	/// Drops the oldest waiting entries until the queue is within its
@@ -226,6 +241,7 @@ impl Queue {
 	/// Drops every waiting entry, as opting out does. A batch on its way
 	/// still settles.
 	pub fn clear(&mut self) {
+		self.version += 1;
 		self.waiting.clear();
 		self.bytes = 0;
 		self.dropped = 0;
@@ -307,6 +323,7 @@ impl Queue {
 	/// `now`. `jitter`, from 0 to 1, spreads retries so clients that failed
 	/// together don't all retry together.
 	pub fn settle(&mut self, outcome: Outcome, now: i64, jitter: f64) {
+		self.version += 1;
 		match outcome {
 			Outcome::Stored | Outcome::Rejected => {
 				if outcome == Outcome::Rejected {
@@ -347,6 +364,119 @@ impl Queue {
 		}
 	}
 
+	/// A number that changes whenever what [`snapshot`](Self::snapshot)
+	/// would return changes, so a platform saves only when it must.
+	pub fn version(&self) -> u64 {
+		self.version
+	}
+
+	/// Everything the queue holds, waiting or on its way, as files of at
+	/// most `max_bytes` each, for a platform to save and
+	/// [`restore`](Self::restore) after the app restarts. Each is the
+	/// batch format behind a short header, so saving is a copy of what
+	/// would be sent. An empty queue is no files.
+	pub fn snapshot(&self, max_bytes: usize) -> Vec<Vec<u8>> {
+		let all: Vec<&Queued> = self.sending.iter().chain(&self.waiting).collect();
+		let mut segments = Vec::new();
+		let mut start = 0;
+		let mut bytes = 0;
+		// Estimates first, at three quarters of the limit; then each is
+		// encoded and halved until it fits.
+		for (index, queued) in all.iter().enumerate() {
+			if index > start && bytes + queued.bytes > max_bytes / 4 * 3 {
+				self.encode_segments(&all[start..index], max_bytes, &mut segments);
+				start = index;
+				bytes = 0;
+			}
+			bytes += queued.bytes;
+		}
+		if start < all.len() {
+			self.encode_segments(&all[start..], max_bytes, &mut segments);
+		}
+		if let Some(first) = segments.first_mut() {
+			first[1..9].copy_from_slice(&self.dropped.to_le_bytes());
+		}
+		segments
+	}
+
+	fn encode_segments(&self, entries: &[&Queued], max_bytes: usize, out: &mut Vec<Vec<u8>>) {
+		let mut used = Vec::new();
+		let mut batch = Batch::default();
+		for queued in entries {
+			let mut entry = queued.entry.clone();
+			entry.context = index_of(&mut used, entry.context);
+			batch.entries.push(entry);
+		}
+		batch.contexts = used
+			.iter()
+			.map(|generation| self.context(*generation))
+			.collect();
+		let mut segment = vec![SNAPSHOT_VERSION];
+		segment.extend_from_slice(&0_u64.to_le_bytes());
+		segment.extend_from_slice(&wire::encode(&batch));
+		if segment.len() <= max_bytes || entries.len() <= 1 {
+			// A lone entry larger than a file can hold is still saved whole;
+			// the platform decides what to do with a file too large.
+			out.push(segment);
+		} else {
+			let (first, second) = entries.split_at(entries.len() / 2);
+			self.encode_segments(first, max_bytes, out);
+			self.encode_segments(second, max_bytes, out);
+		}
+	}
+
+	fn context(&self, generation: u32) -> Properties {
+		self.contexts
+			.iter()
+			.find(|(have, _)| *have == generation)
+			.map(|(_, context)| context.clone())
+			.unwrap_or_default()
+	}
+
+	/// Adds the entries of a saved [`snapshot`](Self::snapshot) file, in
+	/// order, behind those already queued. They keep their contexts and
+	/// their ids, so the service stores each once even if it was sent
+	/// before the app stopped, and the time they were recorded, which
+	/// [`Limits::max_age`] is measured from.
+	pub fn restore(&mut self, segment: &[u8]) -> Result<(), wire::DecodeError> {
+		let refused = |reason| wire::DecodeError { offset: 0, reason };
+		let (&version, rest) = segment.split_first().ok_or(refused("an empty file"))?;
+		if version != SNAPSHOT_VERSION || rest.len() < 8 {
+			return Err(refused("not a saved analytics queue"));
+		}
+		let dropped = u64::from_le_bytes(rest[..8].try_into().expect("8 bytes"));
+		let batch = wire::decode(&rest[8..], &wire::Limits::default())?;
+
+		let generations: Vec<u32> = batch
+			.contexts
+			.into_iter()
+			.map(|context| {
+				if let Some((generation, _)) =
+					self.contexts.iter().find(|(_, have)| *have == context)
+				{
+					return *generation;
+				}
+				self.last_generation = self.last_generation.wrapping_add(1);
+				self.contexts.push((self.last_generation, context));
+				self.last_generation
+			})
+			.collect();
+		self.dropped += dropped;
+		for mut entry in batch.entries {
+			let Some(generation) = generations.get(entry.context as usize) else {
+				continue;
+			};
+			entry.context = *generation;
+			let at = wire::uuid_v7_millis(&entry.uuid).unwrap_or(0);
+			self.append_with_context(entry, at);
+		}
+		// Every restored entry must be present before dropping older ones:
+		// otherwise pruning contexts can forget a later entry's context.
+		self.forget_unused_contexts();
+		self.enforce_limits();
+		Ok(())
+	}
+
 	fn put_back(&mut self) {
 		for queued in self.sending.drain(..).rev() {
 			self.bytes += queued.bytes;
@@ -357,6 +487,7 @@ impl Queue {
 	}
 
 	fn drop_oldest(&mut self) {
+		self.version += 1;
 		if let Some(oldest) = self.waiting.pop_front() {
 			self.bytes -= oldest.bytes;
 			self.dropped += 1;
@@ -680,6 +811,124 @@ mod tests {
 		);
 		queue.settle(Outcome::Stored, 0, 0.0);
 		assert_eq!(queue.contexts.len(), 1, "the first context is forgotten");
+	}
+
+	#[test]
+	fn restoring_with_a_smaller_limit_keeps_the_last_entry_s_context() {
+		let mut source = queue(Limits::default());
+		for number in 0..3 {
+			source.set_context(vec![("version".into(), Value::Int(number))]);
+			source.push(event(number as u8), 1_000);
+		}
+		let files = source.snapshot(1 << 20);
+		let mut restored = queue(Limits {
+			queue_entries: 1,
+			..Limits::default()
+		});
+		for file in files {
+			restored.restore(&file).unwrap();
+		}
+		let pending = restored.take(1_000, [0; 10]).unwrap();
+		let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+		assert_eq!(batch.entries[0].body, event(2).body);
+		assert_eq!(
+			batch.contexts[batch.entries[0].context as usize],
+			vec![("version".into(), Value::Int(2))]
+		);
+		assert_eq!(restored.dropped(), 2);
+		restored.settle(Outcome::Stored, 1_000, 0.0);
+		assert_eq!(
+			restored.dropped(),
+			0,
+			"the successful batch acknowledges the drops"
+		);
+	}
+
+	#[test]
+	fn a_snapshot_restores_every_entry_in_order_with_its_context() {
+		let mut queue = queue(Limits {
+			batch_entries: 2,
+			queue_entries: 3,
+			..Limits::default()
+		});
+		for n in 0..4 {
+			queue.push(event(n), 1_000);
+		}
+		queue.set_context(vec![("$lib".into(), Value::Text("second".into()))]);
+		queue.push(event(4), 1_000);
+		queue.take(1_000, [0; 10]).unwrap();
+		let before = queue.version();
+		let files = queue.snapshot(1 << 20);
+		assert_eq!(files.len(), 1);
+		assert_eq!(queue.version(), before, "a snapshot changes nothing");
+
+		let mut restored = Queue::new(
+			Limits::default(),
+			vec![("$lib".into(), Value::Text("new".into()))],
+		);
+		for file in &files {
+			restored.restore(file).unwrap();
+		}
+		assert_eq!(restored.len(), 3);
+		assert_eq!(restored.dropped(), 2, "the drops are still reported");
+		let pending = restored.take(1_000, [0; 10]).unwrap();
+		assert_eq!(
+			names(&pending),
+			["event 2", "event 3", "event 4", "$lk_dropped"]
+		);
+		let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+		assert_eq!(batch.contexts.len(), 2);
+		assert_eq!(
+			batch.contexts[batch.entries[2].context as usize][0].1,
+			Value::Text("second".into())
+		);
+
+		restored.settle(Outcome::Stored, 1_000, 0.0);
+		restored.push(event(9), 1_000);
+		let batch = wire::decode(
+			&restored.take(1_000, [0; 10]).unwrap().body,
+			&wire::Limits::default(),
+		)
+		.unwrap();
+		assert_eq!(
+			batch.contexts,
+			[vec![("$lib".to_owned(), Value::Text("new".into()))]],
+			"new entries use the current context"
+		);
+	}
+
+	#[test]
+	fn a_large_queue_is_saved_in_files_under_the_limit() {
+		let mut queue = queue(Limits::default());
+		for n in 0..200 {
+			let mut entry = event(n);
+			entry.body = Body::Event {
+				name: format!("event {n}"),
+				properties: vec![("text".into(), Value::Text(format!("{n:0>200}")))],
+			};
+			queue.push(entry, 1_000);
+		}
+		let files = queue.snapshot(8 << 10);
+		assert!(files.len() > 3);
+		assert!(files.iter().all(|file| file.len() <= 8 << 10));
+		let mut restored = queue_with_default();
+		for file in &files {
+			restored.restore(file).unwrap();
+		}
+		assert_eq!(restored.len(), 200);
+	}
+
+	#[test]
+	fn a_file_that_isn_t_a_snapshot_is_refused() {
+		let mut queue = queue_with_default();
+		assert!(queue.restore(b"").is_err());
+		assert!(queue.restore(b"\x02whatever").is_err());
+		assert!(queue.restore(b"\x01\0\0\0\0\0\0\0\0garbage").is_err());
+		assert!(queue.is_empty());
+	}
+
+	fn queue_with_default() -> Queue {
+		queue(Limits::default())
 	}
 
 	#[test]
