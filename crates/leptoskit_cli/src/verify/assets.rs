@@ -90,6 +90,13 @@ pub(crate) struct Root {
 	file: std::fs::File,
 }
 
+#[cfg_attr(
+	not(unix),
+	allow(
+		clippy::unused_self,
+		reason = "non-Unix refusals retain the descriptor capability API without opening files"
+	)
+)]
 impl Root {
 	/// Bounded transport read using retained no-follow descriptors.
 	pub(crate) fn release_bytes(&self, relative: &str, limit: u64) -> Result<Vec<u8>> {

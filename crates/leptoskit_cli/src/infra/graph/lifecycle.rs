@@ -53,12 +53,14 @@ pub(in crate::infra) fn directory(root: &Path, config: &LeptoskitConfig) -> Resu
 			}
 
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				let mut builder = fs::DirBuilder::new();
+				let builder = fs::DirBuilder::new();
 				#[cfg(unix)]
-				{
+				let builder = {
 					use std::os::unix::fs::DirBuilderExt as _;
+					let mut builder = builder;
 					builder.mode(0o700);
-				}
+					builder
+				};
 				builder.create(&dir)?;
 			}
 			Err(error) => return Err(error.into()),
