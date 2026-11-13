@@ -2035,6 +2035,10 @@ fn consolidate(
 	let directory = project.migrations_dir();
 	let history = History::read(&directory, project.dialect())?;
 
+	// Report a lost dependency before generic table drift. The complete
+	// removal-intent check below also includes the release being folded.
+	check_pack_baselines(&[&history.latest], target, drop_packs, false)?;
+
 	// The tables must match the latest migration, so the consolidated
 	// migration covers exactly what the folded ones did.
 	check_database(&history, target)?;

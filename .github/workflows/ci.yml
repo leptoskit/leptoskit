@@ -30,6 +30,10 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  project-acceptance:
+    name: generated project acceptance
+    uses: ./.github/workflows/project-acceptance.yml
+
   sdk-acceptance:
     name: generated SDK acceptance
     uses: ./.github/workflows/sdk-acceptance.yml

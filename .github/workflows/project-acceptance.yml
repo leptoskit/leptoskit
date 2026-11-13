@@ -1,0 +1,46 @@
+name: Generated project acceptance
+
+on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact checkout revision, or the caller's commit when empty
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  projects:
+    name: database, auth and universal scaffolds
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_NET_RETRY: "10"
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/devenv
+        with:
+          github-token: ${{ github.token }}
+          nix-cache: /tmp/nixcache
+          install-tools: "false"
+
+      - uses: ./.github/actions/rust
+
+      - name: validate acceptance command failures
+        run: |
+          python3 -m unittest discover -s setup/scripts/tests -p 'test_project_acceptance.py'
+          python3 -m unittest discover -s setup/scripts/tests -p 'test_schema_pack_state.py'
+
+      - name: exercise generated applications
+        run: test:projects
