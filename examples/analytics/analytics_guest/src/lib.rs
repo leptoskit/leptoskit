@@ -49,6 +49,10 @@ pub extern "C" fn leptoskit_main() {
 				report(0, native::distinct_id().unwrap_or_default().as_bytes());
 				native::capture("opened", props! { "screen" => "home" });
 				native::flush().await;
+				// A failed persistence write must remain eligible for this
+				// retry, even though recording no new event
+				// left the queue version alone.
+				native::flush().await;
 				DONE.with(|done| done.set(true));
 			})
 			.expect("spawn acceptance");

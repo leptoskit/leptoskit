@@ -12,6 +12,7 @@ use leptoskit_bridge::Bytes;
 use leptoskit_bridge::Error;
 use leptoskit_bridge::MethodId;
 use leptoskit_bridge::codec::Decoder;
+use leptoskit_bridge::codec::Encoder;
 use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_plugin_filesystem as fs;
@@ -27,11 +28,21 @@ struct Run {
 	distinct_id: String,
 	/// The bodies of the batches the guest sent.
 	sent: Vec<Vec<u8>>,
+	failed_writes: usize,
 }
 
 /// Runs the guest once over `files`, answering HTTP with `status`, or with
 /// a network failure when it's `None`.
 fn run(wasm: &[u8], files: &mut BTreeMap<String, Vec<u8>>, status: Option<u16>) -> Run {
+	run_with_write_failure(wasm, files, status, None)
+}
+
+fn run_with_write_failure(
+	wasm: &[u8],
+	files: &mut BTreeMap<String, Vec<u8>>,
+	status: Option<u16>,
+	mut failed_path: Option<&str>,
+) -> Run {
 	let mut host = WasmHost::<HeadlessBackend>::headless(wasm).expect("compile the guest");
 	let report = register(&mut host, REPORT, &[MethodId(0), MethodId(1)]);
 	let http = register(&mut host, "http", &[MethodId(0)]);
@@ -88,7 +99,14 @@ fn run(wasm: &[u8], files: &mut BTreeMap<String, Vec<u8>>, status: Option<u16>) 
 					None => Err(Error::Native),
 				}
 			} else if request.plugin == filesystem {
-				file(files, request.method, &request.payload)
+				let path = Decoder::new(&request.payload).string().unwrap().to_owned();
+				if request.method == fs::WRITE && failed_path == Some(path.as_str()) {
+					failed_path = None;
+					run.failed_writes += 1;
+					Err(Error::Native)
+				} else {
+					file(files, request.method, &request.payload)
+				}
 			} else {
 				Err(Error::Unavailable)
 			};
@@ -129,6 +147,20 @@ fn file(
 			Ok(Bytes::new())
 		}
 		fs::MKDIR => Ok(Bytes::new()),
+		fs::LIST => {
+			let prefix = format!("{path}/");
+			let names: Vec<_> = files
+				.keys()
+				.filter_map(|path| path.strip_prefix(&prefix))
+				.filter(|name| !name.contains('/'))
+				.collect();
+			let mut encoder = Encoder::with_capacity(4);
+			encoder.u32(u32::try_from(names.len()).unwrap());
+			for name in names {
+				encoder.bytes(name.as_bytes())?;
+			}
+			Ok(encoder.finish())
+		}
 		fs::REMOVE => {
 			files
 				.remove(&path)
@@ -184,7 +216,7 @@ fn events_recorded_offline_are_sent_on_the_next_run() {
 	);
 	assert!(files.contains_key("leptoskit_analytics/identity"));
 	assert!(
-		files.contains_key("leptoskit_analytics/queue-0"),
+		files.contains_key("leptoskit_analytics/queue-0-0"),
 		"the unsent event was saved: {:?}",
 		files.keys().collect::<Vec<_>>()
 	);
@@ -208,7 +240,66 @@ fn events_recorded_offline_are_sent_on_the_next_run() {
 	);
 	assert_ne!(batch.entries[1].uuid, batch.entries[0].uuid);
 	assert!(
-		!files.contains_key("leptoskit_analytics/queue-0"),
+		!files.contains_key("leptoskit_analytics/queue-0-0"),
 		"a stored batch is gone from the next save"
+	);
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the Rust wasm fixture"]
+fn a_failed_checkpoint_write_retries_without_recording_another_event() {
+	let path = std::env::var("LEPTOSKIT_ANALYTICS_GUEST").expect("fixture wasm path");
+	let wasm = std::fs::read(path).expect("read fixture");
+	for failed_path in [
+		"leptoskit_analytics/queue-1-0",
+		"leptoskit_analytics/queue-manifest",
+	] {
+		let mut files = BTreeMap::new();
+		let first = run(&wasm, &mut files, None);
+		let retry = run_with_write_failure(&wasm, &mut files, None, Some(failed_path));
+		assert_eq!(retry.failed_writes, 1);
+		assert_eq!(
+			retry.sent.len(),
+			1,
+			"the second flush respects HTTP backoff"
+		);
+		let previous = wire::decode(&retry.sent[0], &wire::Limits::default()).unwrap();
+		assert_eq!(previous.entries.len(), 2);
+		let online = run(&wasm, &mut files, Some(200));
+		assert_eq!(online.distinct_id, first.distinct_id);
+		let sent = wire::decode(&online.sent[0], &wire::Limits::default()).unwrap();
+		assert_eq!(
+			sent.entries.len(),
+			3,
+			"the failed save did not lose either offline run"
+		);
+		for (sent, saved) in sent.entries.iter().zip(&previous.entries) {
+			assert_eq!(sent.uuid, saved.uuid, "retry retains the deduplication key");
+		}
+		let after_ack = run(&wasm, &mut files, Some(200));
+		assert_eq!(
+			names(&after_ack.sent[0]).len(),
+			1,
+			"acknowledged events stay gone"
+		);
+	}
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the Rust wasm fixture"]
+fn restarting_while_opted_out_cannot_resurrect_older_events_after_opt_in() {
+	let path = std::env::var("LEPTOSKIT_ANALYTICS_GUEST").expect("fixture wasm path");
+	let wasm = std::fs::read(path).expect("read fixture");
+	let mut files = BTreeMap::new();
+	run(&wasm, &mut files, None);
+	files.insert("leptoskit_analytics/opted_out".into(), b"1".to_vec());
+	let opted_out = run(&wasm, &mut files, Some(200));
+	assert_eq!(opted_out.sent, Vec::<Vec<u8>>::new());
+	files.remove("leptoskit_analytics/opted_out");
+	let opted_in = run(&wasm, &mut files, Some(200));
+	assert_eq!(
+		names(&opted_in.sent[0]).len(),
+		1,
+		"only the new, consented event is sent"
 	);
 }
