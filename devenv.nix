@@ -51,6 +51,7 @@ in
       dart
       deno
       dprint
+      esbuild
       geckodriver
       gh
       git
@@ -120,8 +121,13 @@ in
   + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
     # The native Rive runtime links libstdc++. Nix's dynamic linker does not
     # search the host's /usr/lib, so expose the shell's libstdc++ at runtime
-    # for `cargo nextest` and other linked test binaries.
-    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # for `cargo nextest` and other nix-linked test binaries.
+    # `setup:ci` strips this prefix from the path it writes for later steps:
+    # those steps link with the runner's cc, and a nix libstdc++ first on
+    # LD_LIBRARY_PATH loads nix libm, which needs a glibc symbol the runner
+    # does not have (`GLIBC_ABI_DT_X86_64_PLT`).
+    export LEPTOSKIT_NIX_LIBCXX="${pkgs.stdenv.cc.cc.lib}/lib"
+    export LD_LIBRARY_PATH="$LEPTOSKIT_NIX_LIBCXX''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
@@ -689,6 +695,9 @@ in
     "test:browser" = {
       exec = ''
         set -euo pipefail
+        # The runner's Chrome and this chromedriver disagree on the major
+        # version. The json names a Chrome built for this chromedriver.
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_testing_library
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -724,6 +733,7 @@ in
           --features leptoskit_rive/native,leptoskit_rive/serde,leptoskit_native/rive,leptoskit_native/serde,leptoskit_wasm/rive,leptoskit_bridge_ffi/app \
           --lib --test native --test asset --test rive
         deno test crates/leptoskit_rive/tests/lifecycle.mjs
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown --package leptoskit_rive --features web --test browser
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -748,6 +758,7 @@ in
     "coverage:use:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         task_browser_root="$(git rev-parse --show-toplevel)"
         # wasm-bindgen-test 0.3.79 pins minicov 0.3.8, the LLVM 22 profiling
         # runtime (raw profile v10). LLVM 23 nightlies emit v11 profile data it
@@ -805,6 +816,7 @@ in
     "coverage:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         root="$(git rev-parse --show-toplevel)"
         # See coverage:use:browser: minicov 0.3.8 writes LLVM 22 profiles.
         toolchain=nightly-2026-05-08
@@ -1196,6 +1208,7 @@ in
     "test:plugins:browser" = {
       exec = ''
         set -euo pipefail
+        export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(bash "$DEVENV_ROOT/setup/scripts/chrome_for_tests.sh")"
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --locked --target wasm32-unknown-unknown \
             --package leptoskit_plugin_audio \
@@ -1520,7 +1533,21 @@ in
         # because Linux runners do not export several of these, and `set -u`
         # treats the unbound expansion as a failure.
         echo "PKG_CONFIG_PATH=''${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=''${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+        # Keep nix libstdc++ for commands inside this shell. Drop it from the
+        # environment later steps inherit: they link with the runner's cc, and
+        # inheriting the nix library loads nix libm against the runner's libc.
+        ci_ld_library_path="''${LD_LIBRARY_PATH:-}"
+        if [ -n "''${LEPTOSKIT_NIX_LIBCXX:-}" ]; then
+          case "$ci_ld_library_path" in
+            "$LEPTOSKIT_NIX_LIBCXX")
+              ci_ld_library_path=""
+              ;;
+            "$LEPTOSKIT_NIX_LIBCXX:"*)
+              ci_ld_library_path="''${ci_ld_library_path#"$LEPTOSKIT_NIX_LIBCXX:"}"
+              ;;
+          esac
+        fi
+        echo "LD_LIBRARY_PATH=$ci_ld_library_path" >> $GITHUB_ENV
         echo "LIBRARY_PATH=''${LIBRARY_PATH:-}" >> $GITHUB_ENV
         echo "C_INCLUDE_PATH=''${C_INCLUDE_PATH:-}" >> $GITHUB_ENV
 

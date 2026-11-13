@@ -1,5 +1,10 @@
 //! The fixed step, and the actions and messages a tick reads.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;

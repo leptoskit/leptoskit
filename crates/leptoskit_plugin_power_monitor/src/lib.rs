@@ -14,6 +14,11 @@
 //! inhibition belongs to `leptoskit_plugin_keep_awake`. This crate covers
 //! power-source and session lifecycle events plus system idle queries.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 use std::collections::VecDeque;
 
 use leptoskit_bridge::Bytes;

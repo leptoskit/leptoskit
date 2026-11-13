@@ -113,8 +113,22 @@ edition = "2021"
 #[test]
 fn output_directories_sharing_a_target_dir_keep_their_own_cache_entries() {
 	let scratch = Scratch::new("shared_cache");
-	let first = wasm::bindgen_fingerprint("hash-a", true, Path::new("/one/dist/pkg"), None, false);
-	let second = wasm::bindgen_fingerprint("hash-b", true, Path::new("/two/dist/pkg"), None, false);
+	let first = wasm::bindgen_fingerprint(
+		"hash-a",
+		true,
+		Path::new("/one/dist/pkg"),
+		None,
+		false,
+		None,
+	);
+	let second = wasm::bindgen_fingerprint(
+		"hash-b",
+		true,
+		Path::new("/two/dist/pkg"),
+		None,
+		false,
+		None,
+	);
 	let mut cache = BuildCache::load(&scratch.path);
 	cache.record(&first);
 	cache.record(&second);
@@ -131,23 +145,32 @@ fn output_directories_sharing_a_target_dir_keep_their_own_cache_entries() {
 #[test]
 fn bindgen_fingerprint_tracks_the_output_location_and_flags() {
 	let pkg = Path::new("/project/dist/pkg");
-	let base = wasm::bindgen_fingerprint("hash-a", false, pkg, None, false);
+	let base = wasm::bindgen_fingerprint("hash-a", false, pkg, None, false, None);
 	assert_eq!(
 		base.digest(),
-		wasm::bindgen_fingerprint("hash-a", false, pkg, None, false).digest()
+		wasm::bindgen_fingerprint("hash-a", false, pkg, None, false, None).digest()
 	);
 	for other in [
-		wasm::bindgen_fingerprint("hash-b", false, pkg, None, false),
-		wasm::bindgen_fingerprint("hash-a", true, pkg, None, false),
+		wasm::bindgen_fingerprint("hash-b", false, pkg, None, false, None),
+		wasm::bindgen_fingerprint("hash-a", true, pkg, None, false, None),
 		wasm::bindgen_fingerprint(
 			"hash-a",
 			false,
 			Path::new("/project/dist2/pkg"),
 			None,
 			false,
+			None,
 		),
-		wasm::bindgen_fingerprint("hash-a", false, pkg, Some("wasm-opt version 123"), false),
-		wasm::bindgen_fingerprint("hash-a", false, pkg, None, true),
+		wasm::bindgen_fingerprint(
+			"hash-a",
+			false,
+			pkg,
+			Some("wasm-opt version 123"),
+			false,
+			None,
+		),
+		wasm::bindgen_fingerprint("hash-a", false, pkg, None, true, None),
+		wasm::bindgen_fingerprint("hash-a", false, pkg, None, false, Some("esbuild 0.27.2")),
 	] {
 		assert_ne!(base.digest(), other.digest(), "{other:?}");
 	}
@@ -254,7 +277,7 @@ fn full_pipeline_compiles_binds_and_caches() {
 	let mut cache = BuildCache::load(&cache_dir);
 	let pkg = scratch.path.join("dist").join("pkg");
 	let hash = wasm::hash_file(&wasm_path).expect("hash");
-	let bindgen_fp = wasm::bindgen_fingerprint(&hash, false, &pkg, None, false);
+	let bindgen_fp = wasm::bindgen_fingerprint(&hash, false, &pkg, None, false, None);
 	assert!(!cache.is_current(&bindgen_fp));
 	std::fs::create_dir_all(&pkg).expect("pkg dir");
 	wasm::bindgen(&wasm_path, &pkg, &client.lib_name, false, false).expect("bindgen");
@@ -280,7 +303,7 @@ fn full_pipeline_compiles_binds_and_caches() {
 	let rehash = wasm::hash_file(&recompiled).expect("hash");
 	let reloaded = BuildCache::load(&cache_dir);
 	assert!(reloaded.is_current(&wasm::bindgen_fingerprint(
-		&rehash, false, &pkg, None, false
+		&rehash, false, &pkg, None, false, None
 	)));
 }
 

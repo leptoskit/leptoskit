@@ -67,8 +67,29 @@ def rendered_total(html):
     return int(match.group(1)) if match else None
 
 
+def request_eventually(base, path, method="GET", body=None, headers=None, seconds=90):
+    """Retry while the edge has no endpoints for this service yet.
+
+    Ingress answers 502 or 503 until a Ready pod is in the Service. The app's
+    `/readyz` can already be 200 while analytics or echo is still registering,
+    so a single request in that window fails a deployment that is coming up.
+    Other statuses, including 401 and 403, return immediately.
+    """
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            status, response_headers, payload = request(base, path, method, body, headers)
+        except OSError:
+            status, response_headers, payload = None, None, ""
+        if status not in (None, 502, 503) or time.monotonic() > deadline:
+            if status is None:
+                raise SystemExit(f"FAIL {method} {path} never connected")
+            return status, response_headers, payload
+        time.sleep(2)
+
+
 def summary_total(base):
-    status, _, body = request(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
+    status, _, body = request_eventually(base, f"{ANALYTICS}/api/summary", "POST", {"days": 7})
     if status != 200:
         raise SystemExit(f"FAIL summary answered {status}: {body}")
     return json.loads(body)["total"]
@@ -195,7 +216,7 @@ def main():
     # Only the public prefixes reach a service: everything else is the app's.
     # The echo service answers every path it doesn't serve with a marker, so
     # a path the edge sends it is told apart from one it sends to the app.
-    status, _, body = request(base, f"{ECHO}/no-such-path")
+    status, _, body = request_eventually(base, f"{ECHO}/no-such-path")
     checks.check("a path under the echo prefix reaches the echo service", ECHO_FALLBACK in body, f"{status} {body}")
     for path in ("/headers", "/_leptoskit/services/echox/headers", "/_leptoskit/services/echo-headers", "/_leptoskit/services"):
         status, _, body = request(base, path)
