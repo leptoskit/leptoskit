@@ -128,6 +128,11 @@ in
     # does not have (`GLIBC_ABI_DT_X86_64_PLT`).
     export LEPTOSKIT_NIX_LIBCXX="${pkgs.stdenv.cc.cc.lib}/lib"
     export LD_LIBRARY_PATH="$LEPTOSKIT_NIX_LIBCXX''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Commands that stay inside this shell still link libm from that prefix.
+    # Host-target builds use Nix's loader so libm and libc are the same glibc.
+    # The loader path is baked into the binary; Nix's libc must not go on
+    # LD_LIBRARY_PATH, or every host program loads it and breaks.
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="''${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-} -C link-arg=-Wl,--dynamic-linker,${pkgs.glibc}/lib/ld-linux-x86-64.so.2 -C link-arg=-Wl,-rpath,${pkgs.glibc}/lib"
   ''
   + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
     # nix's clang wrapper links against its own bundled macOS SDK unless
@@ -592,11 +597,13 @@ in
         # file_routes and the DevTools interface are their own workspaces (the
         # scaffold's shape), so their suites run through their manifest paths
         # next to the repository's.
-        if [ "$(uname -s)" = Linux ] && [ -z "''${DISPLAY:-}" ]; then
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
-            cargo nextest run --workspace --all-features
-          dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
-            cargo nextest run --manifest-path examples/file_routes/Cargo.toml
+        displayed="${currentDir}/setup/scripts/run_displayed.sh"
+        # Always isolate Linux runs. A host DISPLAY without a runtime directory
+        # makes AT-SPI use a shared cache socket, and pixel checks then see a
+        # window that never paints.
+        if [ "$(uname -s)" = Linux ]; then
+          bash "$displayed" cargo nextest run --workspace --all-features
+          bash "$displayed" cargo nextest run --manifest-path examples/file_routes/Cargo.toml
           cargo nextest run --manifest-path examples/dev_client/Cargo.toml
           test:wire
           exec cargo nextest run --manifest-path devtools/Cargo.toml
@@ -678,7 +685,7 @@ in
     "test:widgets:gtk" = {
       exec = ''
         set -euo pipefail
-        dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 GSK_RENDERER=cairo \
+        bash ${currentDir}/setup/scripts/run_displayed.sh \
           cargo test --locked -p leptoskit_gtk --test widgets -- --test-threads=1
       '';
       description = "Exercise real GTK widgets, keyboard input, pixels, and accessibility under Xvfb.";
