@@ -13,6 +13,8 @@ devenv shell lint:all      # clippy on every target, monostyle, leptoskit lint, 
 devenv shell fix:all       # autofix everything fixable
 ```
 
+A Cursor cloud agent prepares the same shell with `.cursor/install.sh`: single-user Nix (flakes and `nix-command` on), devenv on `PATH` for login and non-login shells, and the public devenv and nix-community binary caches so the shell is substituted instead of built from source. The script is safe to run again. It then runs `devenv shell -- true` and `install:all`. macOS, iOS, Windows, Android emulators, and the HarmonyOS device SDK are not part of that Linux VM; those checks stay on their own runners.
+
 | Script                 | What it does                                                                   |
 | ---------------------- | ------------------------------------------------------------------------------ |
 | `lint:clippy`          | clippy on this machine's target, failing on any warning, cargo's own included. |
