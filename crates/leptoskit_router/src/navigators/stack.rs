@@ -35,12 +35,14 @@ pub enum StackGesture {
 }
 
 type PresentMatch<R> = Arc<dyn Fn(&R) -> bool + Send + Sync>;
+type SurfaceRenderer = Arc<dyn Fn(Presentation, Element) -> Element + Send + Sync>;
 
 /// A stack around a directory's screens.
 #[derive(Clone)]
 pub struct Stack<R> {
 	gesture: StackGesture,
 	presentations: Vec<(Presentation, PresentMatch<R>)>,
+	surface: Option<SurfaceRenderer>,
 }
 
 impl<R> std::fmt::Debug for Stack<R> {
@@ -49,6 +51,7 @@ impl<R> std::fmt::Debug for Stack<R> {
 			.debug_struct("Stack")
 			.field("gesture", &self.gesture)
 			.field("presentations", &self.presentations.len())
+			.field("surface", &self.surface.is_some())
 			.finish()
 	}
 }
@@ -59,6 +62,7 @@ impl<R> Stack<R> {
 		Self {
 			gesture: StackGesture::None,
 			presentations: Vec::new(),
+			surface: None,
 		}
 	}
 }
@@ -91,6 +95,20 @@ where
 		self
 	}
 
+	/// Draws the layer a modal or sheet route sits on with `render`, which
+	/// receives the presentation and the route's screen, instead of the
+	/// built-in white layer. The stack still positions nothing for you: the
+	/// returned element is the whole layer, placed over the dimmed previous
+	/// route.
+	#[must_use]
+	pub fn surface(
+		mut self,
+		render: impl Fn(Presentation, Element) -> Element + Send + Sync + 'static,
+	) -> Self {
+		self.surface = Some(Arc::new(render));
+		self
+	}
+
 	/// The presentation that applies to `route`, if any special one does.
 	pub fn presentation_for(&self, route: &R) -> Presentation {
 		self.presentations
@@ -109,7 +127,7 @@ where
 		let body = match presentation {
 			Presentation::Push => children,
 			Presentation::Modal | Presentation::Sheet => {
-				overlay(children, navigation, presentation)
+				overlay(children, navigation, presentation, self.surface.as_ref())
 			}
 		};
 
@@ -120,7 +138,12 @@ where
 	}
 }
 
-fn overlay<R>(children: Element, navigation: &Router<R>, presentation: Presentation) -> Element
+fn overlay<R>(
+	children: Element,
+	navigation: &Router<R>,
+	presentation: Presentation,
+	surface: Option<&SurfaceRenderer>,
+) -> Element
 where
 	R: Routable + Clone + PartialEq + Send + Sync + Render + 'static,
 {
@@ -137,7 +160,11 @@ where
 			("absolute inset-0 bg-white dark:bg-slate-950", "stack-modal")
 		}
 	};
-	let layer = View().class(layer_class).test_id(layer_id).child(children);
+	let layer = match surface {
+		Some(render) => render(presentation, children),
+		None => View().class(layer_class).child(children),
+	}
+	.test_id(layer_id);
 
 	if let Some(previous) = navigation.previous() {
 		let under = previous.render(navigation);

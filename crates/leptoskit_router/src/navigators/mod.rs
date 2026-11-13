@@ -16,6 +16,7 @@ pub use stack::Presentation;
 pub use stack::Stack;
 pub use stack::StackGesture;
 pub use tabs::Tab;
+pub use tabs::TabBar;
 pub use tabs::TabPlacement;
 pub use tabs::Tabs;
 
@@ -25,7 +26,7 @@ use crate::Router;
 
 /// A directory's navigator, produced by [`IntoNavigator`].
 #[derive(Clone, Debug)]
-pub enum Navigator<R> {
+pub enum Navigator<R: 'static> {
 	/// Push/pop history with optional modal and sheet presentations.
 	Stack(Stack<R>),
 	/// A bar of roots; the selected tab matches the current route by href.
@@ -54,25 +55,25 @@ pub trait IntoNavigator<R> {
 	fn into_navigator(self) -> Navigator<R>;
 }
 
-impl<R> IntoNavigator<R> for Navigator<R> {
+impl<R: 'static> IntoNavigator<R> for Navigator<R> {
 	fn into_navigator(self) -> Navigator<R> {
 		self
 	}
 }
 
-impl<R> IntoNavigator<R> for Stack<R> {
+impl<R: 'static> IntoNavigator<R> for Stack<R> {
 	fn into_navigator(self) -> Navigator<R> {
 		Navigator::Stack(self)
 	}
 }
 
-impl<R> IntoNavigator<R> for Tabs<R> {
+impl<R: 'static> IntoNavigator<R> for Tabs<R> {
 	fn into_navigator(self) -> Navigator<R> {
 		Navigator::Tabs(self)
 	}
 }
 
-impl<R> IntoNavigator<R> for Drawer<R> {
+impl<R: 'static> IntoNavigator<R> for Drawer<R> {
 	fn into_navigator(self) -> Navigator<R> {
 		Navigator::Drawer(self)
 	}

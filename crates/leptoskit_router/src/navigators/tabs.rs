@@ -1,5 +1,7 @@
 //! Tabs navigator: a bar of typed route roots.
 
+use std::sync::Arc;
+
 use leptoskit_native::Element;
 use leptoskit_native::components::Text;
 use leptoskit_native::components::View;
@@ -54,11 +56,66 @@ where
 	}
 }
 
+type BarRenderer<R> = Arc<dyn Fn(&TabBar<'_, R>) -> Element + Send + Sync>;
+
 /// A tab bar for a directory of screens.
-#[derive(Clone, Debug)]
-pub struct Tabs<R> {
-	tabs: Vec<Tab<R>>,
+#[derive(Clone)]
+pub struct Tabs<R: 'static> {
+	entries: Vec<Tab<R>>,
 	placement: TabPlacement,
+	bar: Option<BarRenderer<R>>,
+}
+
+impl<R: std::fmt::Debug + 'static> std::fmt::Debug for Tabs<R> {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Tabs")
+			.field("tabs", &self.entries)
+			.field("placement", &self.placement)
+			.field("bar", &self.bar.is_some())
+			.finish()
+	}
+}
+
+/// What a custom tab bar draws from: every tab, which one is selected, and
+/// links that switch to a tab the way the built-in bar does.
+pub struct TabBar<'a, R: 'static> {
+	tabs: &'a Tabs<R>,
+	navigation: &'a Router<R>,
+	route: &'a R,
+}
+
+impl<R: 'static> TabBar<'_, R>
+where
+	R: Routable + Clone + PartialEq + Send + Sync + 'static,
+{
+	/// Each tab, in order, with whether the current route is under it.
+	pub fn items(&self) -> impl Iterator<Item = (&Tab<R>, bool)> {
+		self.tabs
+			.entries
+			.iter()
+			.map(|tab| (tab, route_matches_root(self.route, &tab.root)))
+	}
+
+	/// The current route.
+	pub fn route(&self) -> &R {
+		self.route
+	}
+
+	/// The router the bar navigates.
+	pub fn navigation(&self) -> &Router<R> {
+		self.navigation
+	}
+
+	/// A link to `tab` around `child`: it `replace`s to the tab's root, is
+	/// named by the tab's title, and has the built-in bar's `tab-<title>`
+	/// test id.
+	pub fn link(&self, tab: &Tab<R>, child: Element) -> Element {
+		self.navigation
+			.link_replace(tab.root.clone(), tab.title.clone())
+			.test_id(format!("tab-{}", tab.title.to_ascii_lowercase()))
+			.child(child)
+	}
 }
 
 impl<R> Tabs<R>
@@ -68,8 +125,9 @@ where
 	/// Tabs for `items`, bottom placement by default.
 	pub fn new(items: impl IntoIterator<Item = Tab<R>>) -> Self {
 		Self {
-			tabs: items.into_iter().collect(),
+			entries: items.into_iter().collect(),
 			placement: TabPlacement::Bottom,
+			bar: None,
 		}
 	}
 
@@ -80,14 +138,26 @@ where
 		self
 	}
 
+	/// Draws the bar with `render` instead of the built-in row of titles,
+	/// so an app can give its tabs its own look. [`TabBar::link`] keeps
+	/// switching tabs the same.
+	#[must_use]
+	pub fn bar(
+		mut self,
+		render: impl Fn(&TabBar<'_, R>) -> Element + Send + Sync + 'static,
+	) -> Self {
+		self.bar = Some(Arc::new(render));
+		self
+	}
+
 	/// The configured tabs.
 	pub fn items(&self) -> &[Tab<R>] {
-		&self.tabs
+		&self.entries
 	}
 
 	/// The tab that matches `route`, if any.
 	pub fn selected(&self, route: &R) -> Option<&Tab<R>> {
-		self.tabs
+		self.entries
 			.iter()
 			.find(|tab| route_matches_root(route, &tab.root))
 	}
@@ -118,7 +188,14 @@ fn tab_bar<R>(tabs: &Tabs<R>, navigation: &Router<R>, route: &R) -> Element
 where
 	R: Routable + Clone + PartialEq + Send + Sync + 'static,
 {
-	let links = tabs.tabs.iter().map(|tab| {
+	if let Some(render) = &tabs.bar {
+		return render(&TabBar {
+			tabs,
+			navigation,
+			route,
+		});
+	}
+	let links = tabs.entries.iter().map(|tab| {
 		let selected = route_matches_root(route, &tab.root);
 		let label = tab.title.clone();
 		let root = tab.root.clone();
