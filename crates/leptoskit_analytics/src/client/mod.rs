@@ -39,6 +39,72 @@ use crate::wire::Entry;
 use crate::wire::Properties;
 use crate::wire::Value;
 
+// Server and native transports read the same JSON acknowledgement. A response
+// that cannot be read is retried, since it may contain unknown-schema refusals.
+#[cfg(any(
+	feature = "server-client",
+	all(feature = "native", target_arch = "wasm32")
+))]
+fn acknowledge(outcome: Outcome, bytes: &[u8]) -> (Outcome, Vec<(u32, String)>) {
+	if outcome != Outcome::Stored {
+		return (outcome, Vec::new());
+	}
+	match refusals(bytes) {
+		Ok(refused) => (outcome, refused),
+		Err(()) => (Outcome::Retry { after: None }, Vec::new()),
+	}
+}
+
+#[cfg(any(
+	feature = "server-client",
+	all(feature = "native", target_arch = "wasm32")
+))]
+fn refusals(bytes: &[u8]) -> Result<Vec<(u32, String)>, ()> {
+	let answer: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+	let object = answer.as_object().ok_or(())?;
+	let Some(refused) = object.get("refused") else {
+		return Ok(Vec::new());
+	};
+	refused
+		.as_array()
+		.ok_or(())?
+		.iter()
+		.map(|refused| {
+			let index = u32::try_from(refused["index"].as_u64().ok_or(())?).map_err(|_| ())?;
+			Ok((index, refused["reason"].as_str().ok_or(())?.to_owned()))
+		})
+		.collect()
+}
+
+#[cfg(all(test, feature = "server-client"))]
+#[test]
+fn unreadable_acknowledgements_keep_the_batch_for_retry() {
+	for bytes in [
+		b"".as_slice(),
+		b"broken",
+		b"[]",
+		br#"{"refused":42}"#,
+		br#"{"refused":[{"index":0}]}"#,
+	] {
+		assert_eq!(
+			acknowledge(Outcome::Stored, bytes).0,
+			Outcome::Retry { after: None }
+		);
+	}
+	assert_eq!(
+		acknowledge(Outcome::Stored, b"{}"),
+		(Outcome::Stored, vec![])
+	);
+	assert_eq!(
+		acknowledge(
+			Outcome::Stored,
+			br#"{"refused":[{"index":3,"reason":"unknown_schema"}]}"#
+		)
+		.1,
+		vec![(3, "unknown_schema".into())]
+	);
+}
+
 /// What a client needs from where it runs.
 pub trait Platform {
 	/// The time, in milliseconds since the Unix epoch.

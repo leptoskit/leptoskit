@@ -34,6 +34,10 @@ struct Service {
 
 async fn start(config: IngestConfig) -> Service {
 	let db = leptoskit_db::testing::sqlite_migrated(service::MIGRATIONS).await;
+	start_with_db(db, config).await
+}
+
+async fn start_with_db(db: Db, config: IngestConfig) -> Service {
 	let router = service::routes_with(
 		db.clone(),
 		None,
@@ -677,6 +681,73 @@ fn schema(name: &str, fields: &[(&str, &str)]) -> serde_json::Value {
 		"name": name,
 		"fields": fields,
 	})
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires LEPTOSKIT_ANALYTICS_TEST_POSTGRES pointing to a private test database"]
+async fn postgres_catalogue_migrates_recovers_and_deduplicates_typed_events() {
+	use leptoskit_analytics::service::catalogue::SchemaInput;
+
+	let url = std::env::var("LEPTOSKIT_ANALYTICS_TEST_POSTGRES").expect("private Postgres URL");
+	let db = Db::connect(&url).await.unwrap();
+	db.migrate(service::POSTGRES_MIGRATIONS).await.unwrap();
+	let fields = &[("plan", "String")];
+	let schema_id = leptoskit_analytics::schema_id("pg_catalogue_event", fields);
+	let catalogue = service::Catalogue::new(db.clone());
+	catalogue
+		.register(vec![SchemaInput {
+			schema_id,
+			name: "pg_catalogue_event".into(),
+			fields: fields
+				.iter()
+				.map(|(name, ty)| ((*name).into(), (*ty).into()))
+				.collect(),
+		}])
+		.await
+		.unwrap();
+	// A fresh catalogue and router must read the committed schema from
+	// Postgres.
+	let recovered = service::Catalogue::new(db.clone());
+	recovered.load(&[schema_id]).await.unwrap();
+	assert!(
+		recovered
+			.resolve(
+				"pg_catalogue_event",
+				schema_id,
+				vec![Value::Text("pro".into())],
+				vec![]
+			)
+			.is_ok()
+	);
+	let service = start_with_db(db, IngestConfig::default()).await;
+	let now = now_millis();
+	let body = wire::encode(&Batch {
+		sent_at: now,
+		contexts: vec![context()],
+		entries: vec![typed(
+			"pg_catalogue_event",
+			fields,
+			vec![Value::Text("pro".into())],
+			now,
+		)],
+	});
+	let (status, answer, _) = send(&service, body.clone(), None, None).await;
+	assert_eq!(status, 200, "{answer}");
+	let first: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!(first.stored, 1);
+	let (_, answer, _) = send(&service, body, None, None).await;
+	let retry: CaptureResult = serde_json::from_str(&answer).unwrap();
+	assert_eq!((retry.stored, retry.duplicates), (0, 1));
+	assert_eq!(
+		rows(
+			&service.db,
+			"SELECT properties FROM events WHERE name = 'pg_catalogue_event'"
+		)
+		.await
+		.len(),
+		1
+	);
 }
 
 async fn register(

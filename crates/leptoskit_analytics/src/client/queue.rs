@@ -62,9 +62,12 @@ pub enum Outcome {
 	/// Stored. Entries the service refused are in its answer; they'll never
 	/// be accepted, so they're done too.
 	Stored,
-	/// The batch will never be accepted (a `4xx` other than `408`, `413`
+	/// The batch will never be accepted (a `4xx` other than `400`, `408`, `413`
 	/// and `429`): it's dropped.
 	Rejected,
+	/// A bad request: typed events may need to be sent with names to an older
+	/// service.
+	BadRequest,
 	/// The batch was too large: it's sent again in smaller batches.
 	TooLarge,
 	/// Try again later: no answer, a `5xx`, `408` or `429`. `after` is the
@@ -78,6 +81,7 @@ impl Outcome {
 	pub fn from_status(status: u16, retry_after: Option<&str>) -> Self {
 		match status {
 			200..=299 => Self::Stored,
+			400 => Self::BadRequest,
 			413 => Self::TooLarge,
 			408 | 429 | 500..=599 => {
 				Self::Retry {
@@ -196,33 +200,11 @@ impl Queue {
 			let Some(queued) = self.sending.get(*index as usize) else {
 				continue;
 			};
-			let Body::TypedEvent {
-				name,
-				schema_id,
-				values,
-				properties,
-			} = &queued.entry.body
-			else {
+			let Some(body) = keyed_body(&queued.entry.body, &self.schemas) else {
 				continue;
 			};
-			let Some((_, fields)) = self.schemas.iter().find(|(have, _)| have == schema_id) else {
-				continue;
-			};
-			let mut keyed: Properties = fields
-				.iter()
-				.zip(values)
-				.map(|((field, _), value)| ((*field).to_owned(), value.clone()))
-				.collect();
-			for (key, value) in properties {
-				if !keyed.iter().any(|(have, _)| have == key) {
-					keyed.push((key.clone(), value.clone()));
-				}
-			}
 			let mut entry = queued.entry.clone();
-			entry.body = Body::Event {
-				name: name.clone(),
-				properties: keyed,
-			};
+			entry.body = body;
 			let bytes = size(&entry);
 			if bytes > self.limits.queue_bytes.min(self.limits.batch_bytes) {
 				dropped += 1;
@@ -241,19 +223,7 @@ impl Queue {
 		}
 		self.settle(Outcome::Stored, now, jitter);
 		self.dropped = self.dropped.saturating_add(dropped);
-		while !self.waiting.is_empty()
-			&& (self.waiting.len() > self.limits.queue_entries
-				|| self.bytes
-					+ self
-						.contexts
-						.iter()
-						.map(|(_, context)| properties_size(context))
-						.sum::<usize>()
-					> self.limits.queue_bytes)
-		{
-			self.drop_oldest();
-			self.forget_unused_contexts();
-		}
+		self.enforce_limits();
 	}
 
 	/// Entries queued from now on are sent with `context`; those already
@@ -410,12 +380,43 @@ impl Queue {
 		})
 	}
 
+	/// Takes a batch with explicit property names, for delivery such as
+	/// `sendBeacon` that cannot read per-event refusals from the response.
+	pub fn take_named(&mut self, now: i64, random: [u8; 10]) -> Option<Pending> {
+		if self.is_sending() || now < self.retry_at {
+			return None;
+		}
+		if name_entries(self.waiting.iter_mut(), &self.schemas) {
+			self.version += 1;
+			self.bytes = self.waiting.iter().map(|entry| entry.bytes).sum();
+			self.enforce_limits();
+		}
+		if self
+			.waiting
+			.iter()
+			.any(|entry| matches!(entry.entry.body, Body::TypedEvent { .. }))
+		{
+			return None;
+		}
+		self.take(now, random)
+	}
+
 	/// Settles the batch on its way with what the service did with it, at
 	/// `now`. `jitter`, from 0 to 1, spreads retries so clients that failed
 	/// together don't all retry together.
 	pub fn settle(&mut self, outcome: Outcome, now: i64, jitter: f64) {
 		self.version += 1;
 		match outcome {
+			Outcome::BadRequest => {
+				if name_entries(self.sending.iter_mut(), &self.schemas) {
+					self.sending_bytes = self.sending.iter().map(|entry| entry.bytes).sum();
+					self.put_back();
+					self.failures = 0;
+					self.retry_at = now;
+				} else {
+					self.settle(Outcome::Rejected, now, jitter);
+				}
+			}
 			Outcome::Stored | Outcome::Rejected => {
 				if outcome == Outcome::Rejected {
 					self.dropped += self.sending.len() as u64;
@@ -464,8 +465,9 @@ impl Queue {
 	/// Everything the queue holds, waiting or on its way, as files of at
 	/// most `max_bytes` each, for a platform to save and
 	/// [`restore`](Self::restore) after the app restarts. Each is the
-	/// batch format behind a short header, so saving is a copy of what
-	/// would be sent. An empty queue is no files.
+	/// batch format behind a short header, typed events include their property
+	/// names, so another app build can restore them without the old schema
+	/// metadata. An empty queue is no files.
 	pub fn snapshot(&self, max_bytes: usize) -> Vec<Vec<u8>> {
 		let all: Vec<&Queued> = self.sending.iter().chain(&self.waiting).collect();
 		let mut segments = Vec::new();
@@ -495,6 +497,9 @@ impl Queue {
 		let mut batch = Batch::default();
 		for queued in entries {
 			let mut entry = queued.entry.clone();
+			if let Some(body) = keyed_body(&entry.body, &self.schemas) {
+				entry.body = body;
+			}
 			entry.context = index_of(&mut used, entry.context);
 			batch.entries.push(entry);
 		}
@@ -626,6 +631,50 @@ fn index_of(used: &mut Vec<u32>, generation: u32) -> u32 {
 
 /// Roughly what `entry` takes encoded: its strings, and a little for each
 /// value and the entry's fixed fields.
+type Schema = (u64, &'static [(&'static str, &'static str)]);
+
+fn keyed_body(body: &Body, schemas: &[Schema]) -> Option<Body> {
+	let Body::TypedEvent {
+		name,
+		schema_id,
+		values,
+		properties,
+	} = body
+	else {
+		return None;
+	};
+	let (_, fields) = schemas.iter().find(|(have, _)| have == schema_id)?;
+	if fields.len() != values.len() {
+		return None;
+	}
+	let mut keyed: Properties = fields
+		.iter()
+		.zip(values)
+		.map(|((field, _), value)| ((*field).to_owned(), value.clone()))
+		.collect();
+	for (key, value) in properties {
+		if !keyed.iter().any(|(have, _)| have == key) {
+			keyed.push((key.clone(), value.clone()));
+		}
+	}
+	Some(Body::Event {
+		name: name.clone(),
+		properties: keyed,
+	})
+}
+
+fn name_entries<'a>(entries: impl Iterator<Item = &'a mut Queued>, schemas: &[Schema]) -> bool {
+	let mut named = false;
+	for queued in entries {
+		if let Some(body) = keyed_body(&queued.entry.body, schemas) {
+			queued.entry.body = body;
+			queued.bytes = size(&queued.entry);
+			named = true;
+		}
+	}
+	named
+}
+
 fn size(entry: &Entry) -> usize {
 	let body = match &entry.body {
 		Body::Event { name, properties } => name.len() + properties_size(properties),
@@ -735,6 +784,63 @@ mod tests {
 		),
 		"String",
 	)];
+
+	#[test]
+	fn typed_beacon_delivery_uses_names_and_respects_queue_limits() {
+		let mut queue = queue(Limits::default());
+		queue.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+		queue.push(typed(0, LONG_FIELDS), 0);
+		let pending = queue.take_named(0, [0; 10]).unwrap();
+		let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+		assert!(matches!(batch.entries[0].body, Body::Event { .. }));
+		queue.settle(Outcome::Stored, 0, 0.0);
+		queue.limits.queue_bytes = 150;
+		queue.push(typed(1, LONG_FIELDS), 0);
+		assert!(
+			queue.take_named(0, [0; 10]).is_none(),
+			"expanded names stay within the byte bound"
+		);
+		assert_eq!(queue.dropped(), 1);
+	}
+
+	#[test]
+	fn typed_snapshot_keeps_names_without_the_old_build_s_schema_metadata() {
+		let mut source = queue(Limits::default());
+		source.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+		let entry = typed(0, LONG_FIELDS);
+		let uuid = entry.uuid;
+		source.push(entry, 0);
+		let mut restored = queue(Limits::default());
+		for segment in source.snapshot(1 << 20) {
+			restored.restore(&segment).unwrap();
+		}
+		let pending = restored.take(0, [0; 10]).unwrap();
+		let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+		assert_eq!(batch.entries[0].uuid, uuid);
+		assert!(
+			matches!(&batch.entries[0].body, Body::Event { properties, .. }
+			if properties[0].0 == LONG_FIELDS[0].0)
+		);
+	}
+
+	#[test]
+	fn typed_old_service_bad_request_retries_the_whole_batch_with_names() {
+		let mut queue = queue(Limits::default());
+		queue.remember_schema(crate::schema_id("typed", LONG_FIELDS), LONG_FIELDS);
+		queue.push(event(1), 0);
+		queue.push(typed(0, LONG_FIELDS), 0);
+		let before = queue.take(0, [0; 10]).unwrap();
+		queue.settle(Outcome::from_status(400, None), 0, 0.0);
+		assert_eq!(queue.len(), 2, "the old service accepted neither entry");
+		let after = queue.take(0, [0; 10]).unwrap();
+		let before = wire::decode(&before.body, &wire::Limits::default()).unwrap();
+		let after = wire::decode(&after.body, &wire::Limits::default()).unwrap();
+		assert_eq!(after.entries[0], before.entries[0]);
+		assert_eq!(after.entries[1].uuid, before.entries[1].uuid);
+		assert!(matches!(after.entries[1].body, Body::Event { .. }));
+		queue.settle(Outcome::from_status(400, None), 0, 0.0);
+		assert_eq!(queue.len(), 0, "a keyed bad request does not retry forever");
+	}
 
 	#[test]
 	fn typed_fallback_keeps_the_original_context_and_field_precedence() {
@@ -1157,7 +1263,7 @@ mod tests {
 	#[test]
 	fn statuses_mean_what_http_says() {
 		assert_eq!(Outcome::from_status(200, None), Outcome::Stored);
-		assert_eq!(Outcome::from_status(400, None), Outcome::Rejected);
+		assert_eq!(Outcome::from_status(400, None), Outcome::BadRequest);
 		assert_eq!(Outcome::from_status(401, None), Outcome::Rejected);
 		assert_eq!(Outcome::from_status(413, None), Outcome::TooLarge);
 		assert_eq!(

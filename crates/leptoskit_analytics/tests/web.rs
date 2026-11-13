@@ -12,10 +12,11 @@ use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-#[wasm_bindgen(inline_js = r"
+#[wasm_bindgen(inline_js = r#"
 const sent = [];
 const original = window.fetch;
-export function restoreFetch() { window.fetch = original; }
+const originalBeacon = navigator.sendBeacon;
+export function restoreFetch() { window.fetch = original; navigator.sendBeacon = originalBeacon; }
 export function interceptFetch(status) {
   sent.length = 0;
   window.fetch = async (url, init) => {
@@ -29,7 +30,23 @@ export function sentKeepalive(index) { return sent[index].keepalive; }
 export function sentBody(index) { return sent[index].body; }
 export function clearStorage() { localStorage.clear(); }
 export function stored(key) { return localStorage.getItem(key); }
-")]
+export function interceptTyped(mode) {
+  sent.length = 0;
+  window.fetch = async (url, init) => {
+    sent.push({ url, body: new Uint8Array(init.body) });
+    const first = sent.length === 1;
+    const body = mode === 'broken' ? 'broken' : mode === 'unknown' && first
+      ? '{"refused":[{"index":0,"reason":"unknown_schema"}]}' : '{}';
+    return new Response(body, { status: mode === 'old' && first ? 400 : 200 });
+  };
+}
+export function sendOnHide() {
+  sent.length = 0;
+  navigator.sendBeacon = (url, body) => { sent.push({url, body:new Uint8Array(body)}); return true; };
+  window.dispatchEvent(new Event('pagehide'));
+}
+
+"#)]
 extern "C" {
 	#[wasm_bindgen(js_name = interceptFetch)]
 	fn intercept_fetch(status: u16);
@@ -46,6 +63,16 @@ extern "C" {
 	fn stored(key: &str) -> Option<String>;
 	#[wasm_bindgen(js_name = restoreFetch)]
 	fn restore_fetch();
+	#[wasm_bindgen(js_name = interceptTyped)]
+	fn intercept_typed(mode: &str);
+	#[wasm_bindgen(js_name = sendOnHide)]
+	fn send_on_hide();
+}
+
+#[cfg(feature = "derive")]
+#[derive(leptoskit_analytics::Event)]
+struct TypedCheckout {
+	plan: String,
 }
 
 fn sent(index: u32) -> wire::Batch {
@@ -122,6 +149,46 @@ async fn the_browser_records_identifies_and_remembers() {
 	web::reset();
 	assert_ne!(web::distinct_id().unwrap(), "user-7");
 	assert!(stored("lk_analytics_id").unwrap().starts_with("a:"));
+	#[cfg(feature = "derive")]
+	{
+		for mode in ["unknown", "old"] {
+			intercept_typed(mode);
+			web::capture_event(TypedCheckout { plan: "pro".into() });
+			web::capture("untyped", props! {});
+			web::flush().await;
+			assert_eq!(sent_count(), 2, "{mode}");
+			let first = sent(0);
+			let retry = sent(1);
+			assert!(matches!(first.entries[0].body, Body::TypedEvent { .. }));
+			assert_eq!(retry.entries[0].uuid, first.entries[0].uuid);
+			assert!(
+				matches!(&retry.entries[0].body, Body::Event { properties, .. }
+				if properties.contains(&("plan".into(), wire::Value::Text("pro".into()))))
+			);
+			assert_eq!(retry.entries.len(), if mode == "old" { 2 } else { 1 });
+		}
+		intercept_typed("broken");
+		web::capture_event(TypedCheckout {
+			plan: "retry".into(),
+		});
+		web::flush().await;
+		assert_eq!(sent_count(), 1);
+		let waiting = sent(0).entries[0].uuid;
+		intercept_fetch(200);
+		gloo_timers_sleep(2_100).await;
+		web::flush().await;
+		assert_eq!(sent(0).entries[0].uuid, waiting);
+		web::capture_event(TypedCheckout {
+			plan: "beacon".into(),
+		});
+		send_on_hide();
+		assert_eq!(sent_count(), 1);
+		assert!(
+			matches!(sent(0).entries[0].body, Body::Event { .. }),
+			"beacons cannot read schema refusals"
+		);
+	}
+
 	restore_fetch();
 }
 

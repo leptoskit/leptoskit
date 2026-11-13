@@ -348,26 +348,6 @@ async fn register_events(shared: &Shared) {
 	shared.registered.store(true, Ordering::Relaxed);
 }
 
-/// The entries a stored batch's answer says were refused, by index and
-/// reason.
-fn refusals(answer: &[u8]) -> Vec<(u32, String)> {
-	let Ok(answer) = serde_json::from_slice::<serde_json::Value>(answer) else {
-		return Vec::new();
-	};
-	answer["refused"]
-		.as_array()
-		.map(|refused| {
-			refused
-				.iter()
-				.filter_map(|refusal| {
-					let index = u32::try_from(refusal["index"].as_u64()?).ok()?;
-					Some((index, refusal["reason"].as_str()?.to_owned()))
-				})
-				.collect()
-		})
-		.unwrap_or_default()
-}
-
 /// Sends batches until nothing waits or the service asks to wait.
 async fn send_waiting(shared: &Shared) {
 	let _sending = shared.sending.lock().await;
@@ -398,12 +378,14 @@ async fn send_waiting(shared: &Shared) {
 						.get("retry-after")
 						.and_then(|value| value.to_str().ok()),
 				);
-				let refused = if outcome == Outcome::Stored {
-					refusals(&response.bytes().await.unwrap_or_default())
+				if outcome == Outcome::Stored {
+					match response.bytes().await {
+						Ok(bytes) => super::acknowledge(outcome, &bytes),
+						Err(_) => (Outcome::Retry { after: None }, Vec::new()),
+					}
 				} else {
-					Vec::new()
-				};
-				(outcome, refused)
+					(outcome, Vec::new())
+				}
 			}
 			Err(_) => (Outcome::Retry { after: None }, Vec::new()),
 		};

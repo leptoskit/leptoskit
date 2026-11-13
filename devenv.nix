@@ -695,7 +695,7 @@ in
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package leptoskit_use --features web --test web --test web_worker
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
-          cargo test --target wasm32-unknown-unknown --package leptoskit_analytics --features web --test web
+          cargo test --target wasm32-unknown-unknown --package leptoskit_analytics --features web,derive --test web
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
           cargo test --target wasm32-unknown-unknown --package gallery --features web --test web
         CHROMEDRIVER="$DEVENV_PROFILE/bin/chromedriver" \
@@ -1106,7 +1106,12 @@ in
         # The native analytics client: offline, saved in the app's files, and
         # sent with the next run's events.
         cargo build --locked --release --target wasm32-unknown-unknown --package analytics_guest_probe
-        LEPTOSKIT_ANALYTICS_GUEST="$guest_target/wasm32-unknown-unknown/release/analytics_guest_probe.wasm" \
+        analytics_probes="$(mktemp -d)"
+        trap 'rm -rf "$analytics_probes"' EXIT
+        cp "$guest_target/wasm32-unknown-unknown/release/analytics_guest_probe.wasm" "$analytics_probes/plain.wasm"
+        cargo build --locked --release --target wasm32-unknown-unknown --package analytics_guest_probe --features typed
+        LEPTOSKIT_ANALYTICS_GUEST="$analytics_probes/plain.wasm" \
+          LEPTOSKIT_ANALYTICS_TYPED_GUEST="$guest_target/wasm32-unknown-unknown/release/analytics_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test analytics_guest -- --ignored
         cargo build --locked --release --target wasm32-unknown-unknown --package timer_guest_probe
         LEPTOSKIT_TIMER_GUEST="$guest_target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \

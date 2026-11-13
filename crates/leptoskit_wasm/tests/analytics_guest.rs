@@ -89,11 +89,25 @@ fn run_with_write_failure(
 				run.sent.push(sent.body);
 				match status {
 					Some(status) => {
+						let batch =
+							wire::decode(run.sent.last().unwrap(), &wire::Limits::default())
+								.unwrap();
+						let refused: Vec<String> = batch
+							.entries
+							.iter()
+							.enumerate()
+							.filter(|(_, entry)| {
+								matches!(entry.body, wire::Body::TypedEvent { .. })
+							})
+							.map(|(index, _)| {
+								format!(r#"{{"index":{index},"reason":"unknown_schema"}}"#)
+							})
+							.collect();
 						protocol::encode_response(&leptoskit_plugin_http::Response {
 							status,
 							url: sent.url,
 							headers: Vec::new(),
-							body: b"{}".to_vec(),
+							body: format!(r#"{{"refused":[{}]}}"#, refused.join(",")).into_bytes(),
 						})
 					}
 					None => Err(Error::Native),
@@ -302,4 +316,45 @@ fn restarting_while_opted_out_cannot_resurrect_older_events_after_opt_in() {
 		1,
 		"only the new, consented event is sent"
 	);
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest with the typed Rust wasm fixture"]
+fn typed_guest_events_unknown_to_the_service_retry_with_names() {
+	let path = std::env::var("LEPTOSKIT_ANALYTICS_TYPED_GUEST").expect("typed fixture wasm path");
+	let wasm = std::fs::read(path).expect("read fixture");
+	let run = run(&wasm, &mut BTreeMap::new(), Some(200));
+	assert_eq!(run.sent.len(), 2);
+	let first = wire::decode(&run.sent[0], &wire::Limits::default()).unwrap();
+	let again = wire::decode(&run.sent[1], &wire::Limits::default()).unwrap();
+	assert!(matches!(
+		first.entries[0].body,
+		wire::Body::TypedEvent { .. }
+	));
+	assert_eq!(first.entries[0].uuid, again.entries[0].uuid);
+	assert!(
+		matches!(&again.entries[0].body, wire::Body::Event { properties, .. }
+		if properties.contains(&("screen".into(), wire::Value::Text("home".into()))))
+	);
+}
+
+#[test]
+#[ignore = "run by test:plugins:guest with both Rust wasm fixtures"]
+fn typed_offline_events_survive_a_build_without_the_old_event_schema() {
+	let typed = std::fs::read(std::env::var("LEPTOSKIT_ANALYTICS_TYPED_GUEST").unwrap()).unwrap();
+	let plain = std::fs::read(std::env::var("LEPTOSKIT_ANALYTICS_GUEST").unwrap()).unwrap();
+	let mut files = BTreeMap::new();
+	let offline = run(&typed, &mut files, None);
+	let online = run(&plain, &mut files, Some(200));
+	assert_eq!(online.distinct_id, offline.distinct_id);
+	assert_eq!(
+		online.sent.len(),
+		1,
+		"the new build needs no old schema metadata"
+	);
+	let previous = wire::decode(&offline.sent[0], &wire::Limits::default()).unwrap();
+	let restored = wire::decode(&online.sent[0], &wire::Limits::default()).unwrap();
+	assert_eq!(restored.entries.len(), 2);
+	assert_eq!(restored.entries[0].uuid, previous.entries[0].uuid);
+	assert!(matches!(restored.entries[0].body, wire::Body::Event { .. }));
 }
