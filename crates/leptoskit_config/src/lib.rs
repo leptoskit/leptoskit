@@ -981,34 +981,23 @@ impl LintConfig {
 		*self == Self::default()
 	}
 
-	/// Reads the `[lint]` table of a `leptoskit.toml`, ignoring the other
-	/// tables so linting works while the rest of the file is being edited.
+	/// Reads lint settings for `LEPTOSKIT_APP_TARGET` or `app.default_target`,
+	/// using its frontend's table when supplied. Unrelated application
+	/// settings are ignored so linting works while they are being edited.
 	///
 	/// # Errors
 	///
 	/// Returns an error when the file cannot be read, is not valid TOML, or
 	/// its `[lint]` table holds an unknown key or value.
 	pub fn load_from_file(path: &Path) -> Result<Self, ConfigError> {
-		#[derive(Deserialize)]
-		struct Document {
-			#[serde(default)]
-			lint: LintConfig,
-		}
-
 		let raw = std::fs::read_to_string(path).map_err(|source| {
 			ConfigError::Read {
 				path: path.to_owned(),
 				source,
 			}
 		})?;
-		toml::from_str::<Document>(&raw)
-			.map(|document| document.lint)
-			.map_err(|source| {
-				ConfigError::Parse {
-					path: path.to_owned(),
-					source,
-				}
-			})
+		let target = std::env::var("LEPTOSKIT_APP_TARGET").ok();
+		application::lint_config(&raw, path, target.as_deref())
 	}
 }
 
