@@ -288,6 +288,16 @@ pub mod __private {
 	pub use crate::server::stream::resumable_fallible as stream_resumable_fallible;
 	pub use crate::stream::assert_cursor;
 	pub use crate::stream::assert_stream_item;
+
+	/// Runs a stream body inside the query context's task, so it can read
+	/// the context the server passed in with [`rpc::cx()`](crate::cx).
+	#[cfg(any(feature = "postgres", feature = "sqlite"))]
+	pub async fn query_scope<F: Future>(
+		cx: std::sync::Arc<crate::QueryCx>,
+		future: F,
+	) -> F::Output {
+		crate::server::enter_query(cx, future).await
+	}
 }
 
 /// Refuses a server build that declares queries or mutations without a

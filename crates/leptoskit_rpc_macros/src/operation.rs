@@ -1419,6 +1419,41 @@ fn stream_items(
 		}
 	}
 
+	let scope_body = if signature.takes_context {
+		quote! {
+			let scope = ::std::sync::Arc::new(cx);
+			// The body reads the same context through its argument, and
+			// `rpc::cx()` sees it too.
+			let cx: &#krate::QueryCx = &scope;
+			let Self { #(#bindings),* } = self;
+
+			match #krate::__private::query_scope(
+				::std::sync::Arc::clone(&scope),
+				async move { #call.await },
+			)
+			.await
+			{
+				::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
+				::core::result::Result::Err(error) => sink.fail(&error),
+			}
+		}
+	} else {
+		quote! {
+			let scope = ::std::sync::Arc::new(cx);
+			let Self { #(#bindings),* } = self;
+
+			match #krate::__private::query_scope(
+				scope,
+				async move { #call.await },
+			)
+			.await
+			{
+				::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
+				::core::result::Result::Err(error) => sink.fail(&error),
+			}
+		}
+	};
+
 	let items = quote! {
 		#function
 
@@ -1434,14 +1469,7 @@ fn stream_items(
 				cx: #krate::QueryCx,
 				sink: #krate::server::StreamSink,
 			) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
-				async move {
-					let Self { #(#bindings),* } = self;
-
-					match #call.await {
-						::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-						::core::result::Result::Err(error) => sink.fail(&error),
-					}
-				}
+				async move { #scope_body }
 			}
 		}
 

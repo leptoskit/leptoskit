@@ -105,6 +105,13 @@ pub async fn client_count(cx: &rpc::QueryCx, upto: u32) -> rpc::Result<impl Stre
 	Ok(futures::stream::iter(0..upto))
 }
 
+/// The numbers below `upto`, reading the context from the task.
+#[rpc::stream]
+pub async fn client_ambient_count(upto: u32) -> rpc::Result<impl Stream<Item = u32>> {
+	let _ = rpc::cx()?;
+	Ok(futures::stream::iter(0..upto))
+}
+
 /// Whether a dropped stream's body went away.
 static DROPPED: AtomicBool = AtomicBool::new(false);
 
@@ -414,6 +421,37 @@ async fn stream_credits_and_cancellation() {
 				DROPPED.load(Ordering::SeqCst)
 			})
 			.await;
+		})
+		.await;
+}
+
+/// A stream that reads its context from the task gets the one the server
+/// passed in, the same as a stream that takes `cx` itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ambient_stream_reads_its_context() {
+	start();
+	let db = leptoskit_db::testing::sqlite().await;
+	let live = live(db);
+	let clients = LiveClients::new(&live);
+
+	LocalSet::new()
+		.run_until(async {
+			let client = clients.client(&ClientConfig::new());
+			wait_for("the connection", || client.status().is_live()).await;
+			let mut count = client.stream("client_ambient_count", json!({ "upto": 3 }), 2, false);
+			let mut seen = Vec::new();
+
+			while seen.len() < 3 {
+				match tokio::time::timeout(Duration::from_secs(20), count.next())
+					.await
+					.expect("an item arrives")
+				{
+					Some(StreamEvent::Item(value)) => seen.push(value),
+					other => panic!("expected an item, got {other:?}"),
+				}
+			}
+
+			assert_eq!(seen, [json!(0), json!(1), json!(2)]);
 		})
 		.await;
 }
