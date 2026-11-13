@@ -5985,7 +5985,6 @@ name = "leptoskit_log"
 version = "0.3.0"
 dependencies = [
  "cc",
- "leptoskit_log",
  "log",
  "wasm-bindgen",
  "web-sys",
