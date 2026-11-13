@@ -322,8 +322,22 @@ jobs:
       - name: install rust
         uses: ./.github/actions/rust
 
+      # Full debug information in every test binary exhausts the Windows
+      # runner: link.exe dies with LNK1318 on the PDB, then rustc reports
+      # no space on device. Line tables keep diagnostics and stay small.
+      # The cache key stays off the previous full-debug artifacts.
+      - name: keep Windows debug information to line tables
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_TEST_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+
       - name: cache rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ runner.os == 'Windows' && 'line-tables' || 'workspace' }}
 
       - name: build
         run: cargo build --workspace --all-features --locked
