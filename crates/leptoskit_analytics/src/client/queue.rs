@@ -184,6 +184,11 @@ impl Queue {
 	}
 
 	fn push_with_context(&mut self, entry: Entry, at: i64) {
+		self.append_with_context(entry, at);
+		self.enforce_limits();
+	}
+
+	fn append_with_context(&mut self, entry: Entry, at: i64) {
 		self.version += 1;
 		let bytes = size(&entry);
 		if bytes > self.limits.queue_bytes.min(self.limits.batch_bytes) {
@@ -192,7 +197,6 @@ impl Queue {
 		}
 		self.waiting.push_back(Queued { entry, bytes, at });
 		self.bytes += bytes;
-		self.enforce_limits();
 	}
 
 	/// Drops the oldest waiting entries until the queue is within its
@@ -464,9 +468,12 @@ impl Queue {
 			};
 			entry.context = *generation;
 			let at = wire::uuid_v7_millis(&entry.uuid).unwrap_or(0);
-			self.push_with_context(entry, at);
+			self.append_with_context(entry, at);
 		}
+		// Every restored entry must be present before dropping older ones:
+		// otherwise pruning contexts can forget a later entry's context.
 		self.forget_unused_contexts();
+		self.enforce_limits();
 		Ok(())
 	}
 
@@ -804,6 +811,37 @@ mod tests {
 		);
 		queue.settle(Outcome::Stored, 0, 0.0);
 		assert_eq!(queue.contexts.len(), 1, "the first context is forgotten");
+	}
+
+	#[test]
+	fn restoring_with_a_smaller_limit_keeps_the_last_entry_s_context() {
+		let mut source = queue(Limits::default());
+		for number in 0..3 {
+			source.set_context(vec![("version".into(), Value::Int(number))]);
+			source.push(event(number as u8), 1_000);
+		}
+		let files = source.snapshot(1 << 20);
+		let mut restored = queue(Limits {
+			queue_entries: 1,
+			..Limits::default()
+		});
+		for file in files {
+			restored.restore(&file).unwrap();
+		}
+		let pending = restored.take(1_000, [0; 10]).unwrap();
+		let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+		assert_eq!(batch.entries[0].body, event(2).body);
+		assert_eq!(
+			batch.contexts[batch.entries[0].context as usize],
+			vec![("version".into(), Value::Int(2))]
+		);
+		assert_eq!(restored.dropped(), 2);
+		restored.settle(Outcome::Stored, 1_000, 0.0);
+		assert_eq!(
+			restored.dropped(),
+			0,
+			"the successful batch acknowledges the drops"
+		);
 	}
 
 	#[test]
