@@ -126,8 +126,11 @@ public final class DeviceKeysPlugin: NSObject, NativePlugin {
             privateKey, .ecdsaSignatureMessageX962SHA256, request.message as CFData, &error
         )
         guard let signature = signed as Data? else {
-            let failure = error?.takeRetainedValue() as NSError?
-            return deviceKeysFields([1, keyStatus(for: failure)])
+            // One cast of the optional CFError makes this toolchain abort
+            // while producing the diagnostic. Take the error, then bridge it.
+            let failure = error?.takeRetainedValue()
+            let status = keyStatus(for: failure.map { $0 as Error as NSError })
+            return deviceKeysFields([1, status])
         }
 
         return deviceKeysFields([1, KeyStatus.ok]) + lengthPrefixed(signature)
