@@ -1,5 +1,7 @@
 # Auth generation in Cargo workspaces
 
+Backend selection follows `build.server_package`, defaulting to `app.name`, independently of client selection. Named targets provide their resolved backend package through the same field. An unselected package sharing the application identity receives no generated modules or dependency-feature edits.
+
 The auth generator used to look for literal workspace member paths and a server at the app's `src/main.rs`. Deployment already used Cargo metadata. Consequently a project could deploy successfully but fail to generate sign-in screens after moving its configuration or packages into a nested workspace.
 
 `auth_pages::layout` now reads `cargo metadata --no-deps` before writing. It resolves an explicit client package, otherwise the app's client library or a unique client candidate, with a single-package fallback. Backend selection keeps the package-named or single binary rule used by deployment. An explicit `build.backend = false` suppresses server generation; an explicit backend enables the server feature on a separate server package. Inherited dependency features participate in the existing automatic server detection.
