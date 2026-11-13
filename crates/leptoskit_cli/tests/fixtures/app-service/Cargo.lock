@@ -130,6 +130,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -253,6 +262,12 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "either"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "equivalent"
@@ -531,6 +546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -564,15 +588,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "leptoskit_3d"
+version = "0.3.1"
+dependencies = [
+ "leptoskit_log",
+ "log",
+]
+
+[[package]]
 name = "leptoskit_animation"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "leptoskit_appkit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_native",
  "leptoskit_yoga",
@@ -587,30 +619,34 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_bridge"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
+ "leptoskit_log",
+ "log",
  "thiserror",
 ]
 
 [[package]]
 name = "leptoskit_bridge_ffi"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_appkit",
  "leptoskit_bridge",
  "leptoskit_codepush",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_uikit",
  "leptoskit_wasm",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "leptoskit_codepush"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -627,20 +663,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptoskit_native"
-version = "0.3.0"
+name = "leptoskit_log"
+version = "0.3.1"
 dependencies = [
+ "cc",
+ "log",
+]
+
+[[package]]
+name = "leptoskit_native"
+version = "0.3.1"
+dependencies = [
+ "leptoskit_3d",
  "leptoskit_animation",
+ "leptoskit_log",
  "leptoskit_rive",
  "leptoskit_yoga",
  "reactive_graph",
+ "reactive_stores",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "leptoskit_rive"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "cc",
@@ -656,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_rive_runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cc",
  "flate2",
@@ -666,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_uikit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_native",
  "leptoskit_yoga",
@@ -681,14 +728,17 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leptoskit_bridge",
+ "leptoskit_log",
  "leptoskit_native",
  "leptoskit_rive",
  "leptoskit_yoga",
+ "log",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror",
  "wasmi",
  "wasmi_core",
@@ -696,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "leptoskit_yoga"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
 ]
@@ -962,6 +1012,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "reactive_stores"
+version = "0.5.0-rc1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bbb289f3a96225c4f09d8a6f39c92eb857a9876554739f034cbf564637e81d2"
+dependencies = [
+ "guardian",
+ "indexmap",
+ "itertools",
+ "or_poisoned",
+ "paste",
+ "reactive_graph",
+ "reactive_stores_macro",
+ "rustc-hash",
+ "send_wrapper",
+]
+
+[[package]]
+name = "reactive_stores_macro"
+version = "0.5.0-rc1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "431658b8b87fb47e57464b3561acd8685ddd5784e0ae1fc7bd06335eb96aad29"
+dependencies = [
+ "convert_case",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1113,6 +1192,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1297,6 +1387,12 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"

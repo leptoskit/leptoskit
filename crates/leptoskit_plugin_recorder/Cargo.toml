@@ -1,6 +1,6 @@
 [package]
 name = "leptoskit_plugin_recorder"
-version.workspace = true
+version = "0.3.1"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
