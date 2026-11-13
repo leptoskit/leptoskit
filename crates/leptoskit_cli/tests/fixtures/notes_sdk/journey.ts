@@ -42,6 +42,7 @@ const api = new Client({
 });
 const statuses: LiveStatus["state"][] = [];
 let notes: PublicNote[] | undefined;
+let deliveries = 0;
 const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((listener) => listener());
 api.live.onStatus((status) => {
@@ -50,6 +51,7 @@ api.live.onStatus((status) => {
 });
 const stop = api.notes.subscribe((value) => {
 	notes = value;
+	deliveries += 1;
 	changed();
 }, (error) => console.error(`notes: ${error.message}`));
 
@@ -104,6 +106,17 @@ try {
 	);
 	await until(() => has("one shot") === 1, "the one-shot note, live");
 	console.log("ready for restart");
+
+	// The harness restarts the server here. Wait until this process has the
+	// notes list from the new one before it adds another note, so the write
+	// is not committed in the gap between the query and its registration.
+	const seen = deliveries;
+	await until(
+		() =>
+			statuses.includes("reconnecting") && deliveries > seen,
+		"the notes list from the restarted server",
+	);
+	console.log("socket back");
 
 	await until(
 		() => has("after restart") === 1,

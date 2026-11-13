@@ -680,6 +680,12 @@ fn the_database_scaffold_migrates_and_serves() {
 					"the server didn't shut down cleanly"
 				);
 				server = Some(Server::start(&root, &target, &address, &[]));
+			}
+
+			// The client prints this once the new server has delivered the
+			// notes list. The note added before that can land between the
+			// query and its registration, and the subscription never sees it.
+			if line == "socket back" {
 				let (status, body) = request(
 					&address,
 					"POST",
@@ -698,6 +704,7 @@ fn the_database_scaffold_migrates_and_serves() {
 				"ok subscribed",
 				"ok mutation",
 				"ready for restart",
+				"socket back",
 				"ok reconnect"
 			]
 		);
