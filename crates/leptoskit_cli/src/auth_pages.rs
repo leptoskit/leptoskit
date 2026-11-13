@@ -325,6 +325,7 @@ impl fmt::Display for Report {
 ///
 /// As [`run`].
 pub fn generate(root: &Path, config: &LeptoskitConfig, idp: bool, force: bool) -> Result<Report> {
+	config.ensure_application_root()?;
 	let mut report = Report::default();
 	let mode = Mode {
 		idp,
