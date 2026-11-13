@@ -75,12 +75,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let auth = sign_in::service::<__CRATE___db::User>(&db)?;
 
 	// The queries and mutations in `__CRATE___shared`, each run as whoever
-	// signed in, so the tables' policies apply: `POST /api/<name>`, and the
-	// live socket at `/live`, where a screen or a generated client
-	// subscribes to a query and receives every change to its result. Once
-	// `[auth] origin` names the site, the socket refuses pages from anywhere
-	// else; native apps, which send no `Origin`, sign in with a token.
-	let operations = __CRATE___backend::operations(db.clone()).identify(auth.clone());
+	// signed in, so the tables' policies apply: `POST {path}/<name>`
+	// (`/rpc` by default, with the JSON routes also kept on `/api`), and the
+	// live socket at `[rpc].live_path`, or `{path}/live`, where a screen or
+	// a generated client subscribes to a query and receives every change to
+	// its result. Once `[auth] origin` names the site, the socket refuses
+	// pages from anywhere else; native apps, which send no `Origin`, sign in
+	// with a token.
+	let rpc = leptoskit::LeptoskitConfig::from_toml(
+		include_str!("../leptoskit.toml"),
+		std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+	)?
+	.rpc;
+	let operations = __CRATE___backend::operations(db.clone())
+		.rpc_config(&rpc)
+		.identify(auth.clone());
 
 	let live = match auth.origin() {
 		Some(origin) => operations.live().origin(origin),

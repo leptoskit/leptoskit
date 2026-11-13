@@ -44,6 +44,7 @@ pub use leptoskit_rpc_codegen::ApiSpec;
 pub use leptoskit_rpc_codegen::HttpInput;
 pub use leptoskit_rpc_codegen::HttpOutput;
 pub use leptoskit_rpc_codegen::spec::SPEC_DESCRIPTION_ENV;
+pub use leptoskit_rpc_codegen::spec::SPEC_LIVE_PATH_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_OUT_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_SERVERS_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_SERVICE_ENV;
@@ -268,7 +269,8 @@ impl SpecOptions {
 						.collect()
 				})
 				.unwrap_or_default(),
-			live_path: leptoskit_rpc_codegen::DEFAULT_LIVE_PATH.to_owned(),
+			live_path: read(SPEC_LIVE_PATH_ENV)
+				.unwrap_or_else(|| leptoskit_rpc_codegen::DEFAULT_LIVE_PATH.to_owned()),
 			service: None,
 		};
 
