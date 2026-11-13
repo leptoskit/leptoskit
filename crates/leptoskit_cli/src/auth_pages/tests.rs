@@ -7,6 +7,8 @@ use super::*;
 
 const LIB: &str = "//! The app.\n\npub mod routes;\n";
 
+mod preflight;
+
 /// Neither `--idp` nor passwords.
 const PLAIN: Mode = Mode {
 	idp: false,
@@ -232,7 +234,7 @@ fn a_server_with_a_database_gets_its_sign_in_module() {
 		root.path().join("src/main.rs"),
 		main.replace(
 			"fn main() {}",
-			"fn main() { let _ = sign_in::service::<()>; }",
+			"fn main() { let _ = sign_in::service::<()>(&db); }",
 		),
 	)
 	.unwrap();
@@ -398,14 +400,14 @@ fn a_single_crate_app_is_its_own_client() {
 	.unwrap();
 	fs::write(
 		path.join("Cargo.toml"),
-		"[package]\nname = \"solo\"\n\n[dependencies.leptoskit]\nworkspace = true\nfeatures = \
-		 [\"query\"]\n",
+		"[package]\nname = \"solo\"\n\n[workspace.dependencies]\nleptoskit = \
+		 \"0.1\"\n\n[dependencies.leptoskit]\nworkspace = true\nfeatures = [\"query\"]\n",
 	)
 	.unwrap();
 	fs::create_dir_all(path.join("src")).unwrap();
 	fs::write(
 		path.join("src/main.rs"),
-		"mod auth;\nfn main() { auth::provide(); }",
+		"mod auth;\nfn main() { auth::provide(); auth::screens().gate(|| home); }",
 	)
 	.unwrap();
 
@@ -463,7 +465,7 @@ fn the_client_crate_needs_a_root_file_and_leptoskit() {
 	assert!(
 		error
 			.to_string()
-			.contains("has no src/lib.rs or src/main.rs")
+			.contains("could not resolve auth packages")
 	);
 
 	fs::write(path.join("app_app/src/lib.rs"), LIB).unwrap();
@@ -857,14 +859,16 @@ fn idp_adds_its_screens_routes_config_and_features() {
 	fs::write(
 		path.join("app_app/src/lib.rs"),
 		format!(
-			"{}\nfn start() {{ auth::provide(); auth::screens().navigate_with(|_| ()); }}\n",
+			"{}\nfn start() {{ auth::provide(); auth::screens().gate(|| home); \
+			 auth::screens().navigate_with(|_| ()); }}\n",
 			read(path, "app_app/src/lib.rs")
 		),
 	)
 	.unwrap();
 	fs::write(
 		path.join("src/main.rs"),
-		"mod sign_in;\nfn main() { let _ = (sign_in::service::<()>, sign_in::provider); }\n",
+		"mod sign_in;\nfn main() { let _ = (sign_in::service::<()>(&db), sign_in::provider(&db, \
+		 &auth)); }\n",
 	)
 	.unwrap();
 	let again = run_idp(path, false);
@@ -1092,4 +1096,179 @@ fn modes_cover_the_parts_they_write() {
 	);
 	assert_eq!(both.added_to(PASSWORDS), "what --idp needs");
 	assert_eq!(both.added_to(IDP), "the password fields");
+}
+
+#[test]
+fn nested_workspace_generation_uses_custom_targets_and_the_app_config() {
+	let fixture = workspace(true);
+	let workspace = fixture.path();
+	fs::create_dir_all(workspace.join("crates/server")).unwrap();
+	fs::rename(workspace.join("app_app"), workspace.join("crates/client")).unwrap();
+	fs::rename(
+		workspace.join("src"),
+		workspace.join("crates/server/backend"),
+	)
+	.unwrap();
+	let manifest =
+		read(workspace, "Cargo.toml").replace("[workspace]\nmembers = [\"app_app\"]\n", "");
+	fs::write(
+		workspace.join("crates/server/Cargo.toml"),
+		format!("{manifest}\n[[bin]]\nname = \"app\"\npath = \"backend/main.rs\"\n"),
+	)
+	.unwrap();
+	fs::write(
+		workspace.join("Cargo.toml"),
+		"[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
+	)
+	.unwrap();
+	fs::rename(
+		workspace.join("crates/client/src"),
+		workspace.join("crates/client/interface"),
+	)
+	.unwrap();
+	let manifest = read(workspace, "crates/client/Cargo.toml");
+	fs::write(
+		workspace.join("crates/client/Cargo.toml"),
+		format!("{manifest}\n[lib]\npath = \"interface/lib.rs\"\n"),
+	)
+	.unwrap();
+	let app = workspace.join("apps/website");
+	fs::create_dir_all(&app).unwrap();
+	fs::rename(workspace.join("leptoskit.toml"), app.join("leptoskit.toml")).unwrap();
+	let report = run(&app, false);
+	assert!(
+		workspace
+			.join("crates/client/interface/auth/mod.rs")
+			.is_file()
+	);
+	let server = read(workspace, "crates/server/backend/sign_in.rs");
+	assert!(
+		server.contains("include_str!(\"../../../apps/website/leptoskit.toml\")"),
+		"{server}"
+	);
+	assert!(
+		server.contains("concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../apps/website\")"),
+		"{server}"
+	);
+	assert!(
+		report
+			.next
+			.iter()
+			.any(|step| step.contains("crates/server/backend/main.rs")),
+		"{report}"
+	);
+	assert!(!app.join("src").exists());
+	assert!(!workspace.join("src").exists());
+	assert_eq!(run(&app, false).changed, [] as [String; 0]);
+}
+
+#[test]
+fn invalid_server_selection_leaves_client_and_configuration_untouched() {
+	let fixture = workspace(true);
+	let root = fixture.path();
+	let original = read(root, "leptoskit.toml");
+	fs::remove_file(root.join("src/main.rs")).unwrap();
+	fs::create_dir_all(root.join("src/bin")).unwrap();
+	for name in ["worker", "maintenance"] {
+		fs::write(root.join(format!("src/bin/{name}.rs")), "fn main() {}\n").unwrap();
+	}
+	let config = LeptoskitConfig::load_from(root).unwrap();
+	let error = generate(root, &config, false, false).unwrap_err();
+	assert!(error.to_string().contains("several binaries"), "{error:#}");
+	assert!(!root.join("app_app/src/auth").exists());
+	assert_eq!(read(root, "app_app/src/lib.rs"), LIB);
+	assert_eq!(read(root, "leptoskit.toml"), original);
+}
+
+#[test]
+fn server_config_paths_are_rust_literals_and_preserve_the_app_base() {
+	let source = server_module_at("../../a\"b/leptoskit.toml", "../a\"b", false);
+	assert!(source.contains("include_str!(\"../../a\\\"b/leptoskit.toml\")"));
+	assert!(source.contains("concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../a\\\"b\")"));
+	assert_eq!(
+		server_module_at("../leptoskit.toml", ".", false),
+		server_module("../leptoskit.toml", false)
+	);
+}
+
+#[test]
+fn explicit_backend_adds_server_feature_only_to_its_separate_package() {
+	let fixture = workspace(true);
+	let root = fixture.path();
+	let manifest = read(root, "Cargo.toml").replace("features = [\"server\"]", "features = []");
+	fs::write(root.join("Cargo.toml"), manifest).unwrap();
+	let config = read(root, "leptoskit.toml").replace("[build]", "[build]\nbackend = true");
+	fs::write(root.join("leptoskit.toml"), config).unwrap();
+	run(root, false);
+	assert!(root.join("src/sign_in.rs").is_file());
+	assert!(read(root, "Cargo.toml").contains("features = [\"server\", \"auth\"]"));
+	assert!(!read(root, "app_app/Cargo.toml").contains("\"server\""));
+}
+
+#[test]
+fn a_shared_client_and_backend_reports_server_feature_wiring_without_enabling_it_for_wasm() {
+	let fixture = tempfile::tempdir().unwrap();
+	let root = fixture.path();
+	fs::create_dir(root.join("src")).unwrap();
+	fs::write(root.join("src/lib.rs"), "pub fn app() {}\n").unwrap();
+	fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+	fs::write(
+		root.join("Cargo.toml"),
+		"[package]\nname = \"solo\"\nversion = \"0.1.0\"\nedition = \
+		 \"2024\"\n[dependencies]\nleptoskit = { version = \"0.1\", features = [\"db-sqlite\"] }\n",
+	)
+	.unwrap();
+	fs::write(
+		root.join("leptoskit.toml"),
+		"schema_version = 0\n[app]\nname = \"solo\"\n[build]\nbackend = true\n[db]\ndialect = \
+		 \"sqlite\"\n",
+	)
+	.unwrap();
+	let report = run(root, false);
+	assert!(root.join("src/sign_in.rs").is_file());
+	assert!(read(root, "src/main.rs").contains("mod sign_in;"));
+	assert!(
+		report
+			.next
+			.iter()
+			.any(|step| step.contains("leptoskit/server") && step.contains("backend build"))
+	);
+	assert!(!has_feature(&root.join("Cargo.toml"), "leptoskit", "server").unwrap());
+	assert_eq!(run(root, false).changed, Vec::<String>::new());
+}
+
+#[test]
+fn explicit_static_mode_leaves_the_backend_sources_and_features_alone() {
+	let fixture = workspace(true);
+	let root = fixture.path();
+	let config = read(root, "leptoskit.toml").replace("[build]", "[build]\nbackend = false");
+	fs::write(root.join("leptoskit.toml"), config).unwrap();
+	let manifest = read(root, "Cargo.toml");
+	let source = read(root, "src/main.rs");
+	run(root, false);
+	assert!(!root.join("src/sign_in.rs").exists());
+	assert_eq!(read(root, "Cargo.toml"), manifest);
+	assert_eq!(read(root, "src/main.rs"), source);
+}
+
+#[test]
+fn unsupported_dependency_tables_fail_before_generated_files_are_written() {
+	let fixture = workspace(true);
+	let root = fixture.path();
+	let manifest = read(root, "app_app/Cargo.toml").replace(
+		"[dependencies]",
+		"[target.'cfg(target_arch = \"wasm32\")'.dependencies]",
+	);
+	fs::write(root.join("app_app/Cargo.toml"), manifest).unwrap();
+	let config = LeptoskitConfig::load_from(root).unwrap();
+	let error = generate(root, &config, false, false).unwrap_err();
+	assert!(
+		error
+			.to_string()
+			.contains("target-specific dependency tables"),
+		"{error:#}"
+	);
+	assert!(!root.join("app_app/src/auth").exists());
+	assert_eq!(read(root, "app_app/src/lib.rs"), LIB);
+	assert!(!root.join("src/sign_in.rs").exists());
 }
