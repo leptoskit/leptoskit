@@ -7,11 +7,13 @@
 #
 # Shards:
 #
-#   compile-errors   the compile-fail tests of `view!` and the RPC macros
-#   database         the Postgres-backed data layer
-#   cli              the CLI
-#   workspace        every other workspace package
-#   windows, macos   the packages whose code or tests depend on that OS
+#   compile-errors     the compile-fail tests of `view!` and the RPC macros
+#   database           the Postgres-backed data layer
+#   cli                the CLI
+#   workspace          every other workspace package
+#   windows, macos     the packages whose code or tests depend on that OS
+#   windows-cli,       the CLI, whose tests also change with the OS, in a
+#   macos-cli          leg of its own beside the platform shard
 #
 # The workspace suite runs once, on Linux, as the first four shards in
 # parallel, so no CI job compiles and tests the whole workspace. `workspace`
@@ -89,6 +91,21 @@ macos=(
 	platform_probe
 	postcard_example
 )
+# The CLI's tests change with the OS as much as any plugin's: Windows runs
+# the codepush keygen ACL tests (tests/cli.rs) and the publish tests' OpenSSL
+# key generation, macOS runs `doctor`'s macOS-only checks (tests/doctor.rs),
+# and src/native, src/dev, and their kin carry per-OS branches under
+# `cfg(test)`. Its test binaries are the largest in the workspace, so each
+# desktop OS runs them in a leg of their own beside the platform shard
+# rather than stretching that shard's build budget. `leptoskit_app`'s broker
+# test stops its server through Windows' terminate-and-reap path (the
+# `cfg(not(unix))` `stop` in tests/server.rs) and shares the CLI's server
+# dependency graph, so it joins the Windows leg.
+windows_cli=(
+	leptoskit_app
+	leptoskit_cli
+)
+macos_cli=(leptoskit_cli)
 
 shard="${1:-}"
 shift || true
@@ -116,8 +133,10 @@ workspace)
 	;;
 windows) selected=("${windows[@]}") ;;
 macos) selected=("${macos[@]}") ;;
+windows-cli) selected=("${windows_cli[@]}") ;;
+macos-cli) selected=("${macos_cli[@]}") ;;
 *)
-	echo "usage: $0 compile-errors|database|cli|workspace|windows|macos [cargo test arguments...]" >&2
+	echo "usage: $0 compile-errors|database|cli|workspace|windows|windows-cli|macos|macos-cli [cargo test arguments...]" >&2
 	exit 2
 	;;
 esac

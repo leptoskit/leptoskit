@@ -286,14 +286,18 @@ jobs:
   # Windows and macOS run only the packages whose code or tests depend on the
   # OS: the widget backend, the gallery's native conformance scenario and
   # snapshots, the desktop platform probe (the end-to-end suite for the
-  # layout, renderer, wasm runtime, and code push), and the plugins with a
-  # per-OS implementation. `setup/scripts/test-shard.sh` lists them. These
-  # jobs use a plain rust toolchain because devenv needs nix, which the
-  # hosted Windows runner does not provide.
+  # layout, renderer, wasm runtime, and code push), the plugins with a
+  # per-OS implementation, and — in the `-cli` legs — the CLI, whose tests
+  # carry Windows keygen ACLs, `doctor`'s macOS checks, and per-OS branches
+  # in `src/native` and `src/dev`. `setup/scripts/test-shard.sh` lists them.
+  # These jobs use a plain rust toolchain because devenv needs nix, which
+  # the hosted Windows runner does not provide.
   desktop:
-    name: desktop tests (${{ matrix.os }})
+    name: desktop tests (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    # The CLI's test binaries are the largest in the workspace, so its legs
+    # get a budget above a cold build of them; the platform shards keep 40.
+    timeout-minutes: ${{ matrix.timeout }}
 
     # Full debuginfo exhausts the windows-latest runner: link.exe hits PDB
     # size limits (LNK1318/LNK1140) and then dies with LNK1180 "insufficient
@@ -309,8 +313,16 @@ jobs:
         include:
           - os: windows-latest
             shard: windows
+            timeout: 40
+          - os: windows-latest
+            shard: windows-cli
+            timeout: 75
           - os: macos-latest
             shard: macos
+            timeout: 40
+          - os: macos-latest
+            shard: macos-cli
+            timeout: 60
     steps:
       - name: checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -329,8 +341,21 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: bash setup/scripts/test-shard.sh "$SHARD" --no-run
 
+      # The CLI's publishing tests generate fresh RSA keys; Windows has no
+      # openssl on PATH, so point them at Git for Windows' copy.
+      - name: locate Windows test key generator
+        if: runner.os == 'Windows' && matrix.shard == 'windows-cli'
+        shell: pwsh
+        run: |
+          $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
+          $openssl = Join-Path $gitRoot 'usr\bin\openssl.exe'
+          if (!(Test-Path $openssl)) { throw 'Git for Windows must provide openssl.exe for publishing tests' }
+          "LEPTOSKIT_TEST_OPENSSL=$openssl" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       # A panic inside a Win32 window procedure aborts the process and loses
-      # libtest's captured output, so the suite runs uncaptured.
+      # libtest's captured output, so the suite runs uncaptured. The CLI's
+      # hybrid fixture export stays unset here: the Linux `cli` coverage leg
+      # runs the export and compiles the registrants it writes.
       - name: test
         shell: bash
         env:
@@ -339,7 +364,10 @@ jobs:
 
       # Apps on Solana's clients build serde_json with arbitrary_precision;
       # the guest-to-host wire must read the same with it (devenv's test:wire).
+      # The platform shards own this check: it compiles a package-only
+      # `leptoskit_native` variant the CLI legs would otherwise build cold.
       - name: test the native wire under arbitrary_precision
+        if: matrix.shard == 'windows' || matrix.shard == 'macos'
         run: |
           cargo test --locked -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision --lib wire_tests -- --test-threads=1
           cargo test --locked -p leptoskit_wasm --features serde_json/arbitrary_precision -- --test-threads=1
@@ -350,7 +378,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: testing-${{ matrix.os }}
+          name: testing-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             target/leptoskit-tests
             target/native-widgets
