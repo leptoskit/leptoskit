@@ -396,7 +396,9 @@ fn uses_an_absolute_social_image_as_is() {
 
 	let home = read(out.path().join("index.html"));
 	assert!(
-		home.contains("<meta content=\"https://cdn.example.com/social.png\" property=\"og:image\">"),
+		home.contains(
+			"<meta content=\"https://cdn.example.com/social.png\" property=\"og:image\">"
+		),
 		"{home}"
 	);
 }

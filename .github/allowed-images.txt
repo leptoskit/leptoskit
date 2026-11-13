@@ -100,8 +100,13 @@ benchmarks/arena/apps/react-native/tier/android/app/src/main/res/mipmap-xxhdpi/i
 benchmarks/arena/apps/react-native/tier/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
 benchmarks/arena/apps/react-native/tier/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 benchmarks/arena/apps/react-native/tier/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
-crates/leptoskit_cli/src/native/templates/harmonyos/app_icon.svg
+# Licensed input pictures for the depth model's spatial regression tests.
+crates/leptoskit_depth/tests/fixtures/corridor.jpg
+crates/leptoskit_depth/tests/fixtures/kitchen.jpg
+crates/leptoskit_depth/tests/fixtures/wall.jpg
 crates/leptoskit_docs/tests/fixtures/book/assets/dot.svg
+# The HarmonyOS toolchain template, moved from the CLI into its platform crate.
+crates/leptoskit_platform_harmonyos/templates/app_icon.svg
 crates/leptoskit_uikit/probe/probe-image.bmp
 crates/leptoskit_uikit/probe/probe-image.png
 docs/src/assets/icon.svg
