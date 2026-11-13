@@ -527,6 +527,22 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_132/bin" >> "$GITHUB_PATH"
 
+      # Release builds minify the client's JavaScript with esbuild. It ships
+      # as npm platform packages, so the checksum pins the exact archive.
+      - name: install esbuild
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/esbuild.tgz"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.27.2.tgz" \
+            -o "$archive"
+          echo "b1651c88b6e0fb9ffea7e3cf2309a74e764598c737a2b48b6627c854290c950c  $archive" | shasum --algorithm 256 --check --strict
+          mkdir "$RUNNER_TEMP/esbuild"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/esbuild"
+          echo "$RUNNER_TEMP/esbuild/package/bin" >> "$GITHUB_PATH"
+
       # DevTools are a development feature, and the cargo feature is the gate:
       # `leptoskit dev` adds it, `leptoskit build` never does. A release build
       # that carried the agents would let a production app report itself to a
@@ -691,6 +707,8 @@ jobs:
       LLVM_COV_ENV: ${{ github.workspace }}/target/llvm-cov.env
       BINARYEN_VERSION: "132"
       BINARYEN_SHA256: 195ddc94f9bc89f45abdabb0b9eea86023d727ba90eac8b35b80f2544fc30572
+      ESBUILD_VERSION: "0.27.2"
+      ESBUILD_SHA256: 4ac0a36a8573ef6b612263661e7c77343a38789485344e1875cf33a498292310
       # The instrumented `leptoskit_cli` test binaries are large. Linking
       # several at once on a four-core runner has killed `ld` with SIGBUS, so
       # the legs that link them build two at a time.
@@ -791,6 +809,22 @@ jobs:
           echo "${BINARYEN_SHA256}  $archive" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      # Release builds minify the client's JavaScript with esbuild; this is
+      # the esbuild release devenv provides. It ships as npm platform
+      # packages, so the checksum pins the exact archive.
+      - name: install esbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/esbuild.tgz"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+            -o "$archive"
+          echo "${ESBUILD_SHA256}  $archive" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/esbuild"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/esbuild"
+          echo "$RUNNER_TEMP/esbuild/package/bin" >> "$GITHUB_PATH"
 
       # The exported values are shell-quoted, so each instrumented step sources
       # them rather than reading them through $GITHUB_ENV.
