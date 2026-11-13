@@ -22,6 +22,7 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gd
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 leptoskit_native = { workspace = true, features = ["rive"] }
 leptoskit_rive = { workspace = true }
+windows = { version = "0.61", features = ["Win32_Graphics_Dwm"] }
 
 [lints]
 workspace = true
