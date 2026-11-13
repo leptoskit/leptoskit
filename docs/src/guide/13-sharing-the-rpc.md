@@ -292,6 +292,14 @@ language = "openapi"
 out = "docs/openapi"
 ```
 
+The generated app serves the operations at `path` (`/rpc` by default, with the JSON routes also kept on the legacy `/api` prefix) and the live socket at `live_path`. Unset, the socket stays at `/live`; set `path` without `live_path`, and the socket follows the operations at `{path}/live`. The spec export carries the live mount, so regenerated clients open their socket where the app serves it. The generated HTTP calls still name the compile-time `/rpc/<op>` route, so keep the default `path` when generated clients call the app directly, and use a custom one when a proxy or gateway remounts the prefix:
+
+```toml
+[rpc]
+path = "/api/v2" # POST /api/v2/<op>, and /api/<op> for older JSON callers
+live_path = "/ws" # the live socket; omit it for /api/v2/live
+```
+
 ## Generating clients
 
 ```bash

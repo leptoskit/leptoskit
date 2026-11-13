@@ -37,6 +37,9 @@ pub const SPEC_DESCRIPTION_ENV: &str = "LEPTOSKIT_RPC_SPEC_DESCRIPTION";
 /// Overrides the server URLs, comma separated; set by the CLI from
 /// `leptoskit.toml`.
 pub const SPEC_SERVERS_ENV: &str = "LEPTOSKIT_RPC_SPEC_SERVERS";
+/// Overrides where the live socket is served; set by the CLI from
+/// `leptoskit.toml`'s `[rpc].live_path` (or `[rpc].path`/live).
+pub const SPEC_LIVE_PATH_ENV: &str = "LEPTOSKIT_RPC_SPEC_LIVE_PATH";
 /// Exports one service's spec instead of the app's: the operations declared
 /// with `#[rpc::query(service = "...")]` and the like for that service.
 pub const SPEC_SERVICE_ENV: &str = "LEPTOSKIT_RPC_SPEC_SERVICE";

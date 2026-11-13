@@ -1,5 +1,6 @@
-//! The one-shot HTTP transport: `POST /rpc/<name>` for every query and
-//! mutation, and the same calls in process while the server renders.
+//! The one-shot HTTP transport: `POST {path}/<name>` for every query and
+//! mutation — `/rpc` unless `[rpc].path` says otherwise — and the same
+//! calls in process while the server renders.
 
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -51,6 +52,9 @@ struct Inner {
 	service: Option<&'static str>,
 	transports: crate::wire::TransportSet,
 	route_prefix: String,
+	/// Where [`live`](Self::live) serves its socket: the `[rpc]` config's
+	/// resolved live path, `/live` by default.
+	live_path: String,
 }
 
 impl Server {
@@ -64,11 +68,15 @@ impl Server {
 				service: None,
 				transports: crate::wire::TransportSet::default(),
 				route_prefix: crate::RPC_ROUTE_PREFIX.to_owned(),
+				live_path: crate::live::LIVE_PATH.to_owned(),
 			}),
 		}
 	}
 
-	/// Applies `[rpc].path` and `[rpc].transports` from configuration.
+	/// Applies `[rpc].path`, `[rpc].live_path`, and `[rpc].transports` from
+	/// configuration: the operation routes mount at `path` (the JSON ones
+	/// keep the legacy `/api` prefix while JSON is a transport), and
+	/// [`live`](Self::live) serves at `live_path`, or `{path}/live`.
 	#[must_use]
 	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
 		Self {
@@ -78,6 +86,7 @@ impl Server {
 				service: self.inner.service,
 				transports: crate::wire::TransportSet::from_names(&config.transports),
 				route_prefix: config.path.trim_end_matches('/').to_owned(),
+				live_path: super::live::mount_path(&config.resolved_live_path()),
 			}),
 		}
 	}
@@ -93,6 +102,7 @@ impl Server {
 				service: self.inner.service,
 				transports: self.inner.transports,
 				route_prefix: self.inner.route_prefix.clone(),
+				live_path: self.inner.live_path.clone(),
 			}),
 		}
 	}
@@ -133,6 +143,7 @@ impl Server {
 				service: Some(name),
 				transports: self.inner.transports,
 				route_prefix: self.inner.route_prefix.clone(),
+				live_path: self.inner.live_path.clone(),
 			}),
 		}
 	}
@@ -158,14 +169,16 @@ impl Server {
 		self.inner.identify.identify(parts)
 	}
 
-	/// The live server for these operations: the same database and the same
-	/// way of telling callers apart. Configure it, then merge its
+	/// The live server for these operations: the same database, the same way
+	/// of telling callers apart, and the same `[rpc].path`/`live_path`
+	/// mount. Configure it, then merge its
 	/// [`router`](super::Live::router).
 	#[cfg(feature = "live")]
 	pub fn live(&self) -> super::Live {
 		super::Live::new(self.inner.db.clone())
 			.identify_arc(Arc::clone(&self.inner.identify))
 			.for_service(self.inner.service)
+			.with_live_path(self.inner.live_path.clone())
 	}
 
 	/// Makes this the server that in-process calls use, such as
@@ -175,9 +188,11 @@ impl Server {
 		*INSTALLED.write().unwrap_or_else(PoisonError::into_inner) = Some(self.clone());
 	}
 
-	/// `POST /rpc/<name>` for every registered query and mutation, relative
-	/// to wherever the router is nested, and [installs](Self::install) this
-	/// server for in-process calls.
+	/// `POST {path}/<name>` for every registered query and mutation —
+	/// `[rpc].path`, `/rpc` by default, with the legacy JSON routes kept on
+	/// `/api` while JSON is a transport — relative to wherever the router is
+	/// nested, and [installs](Self::install) this server for in-process
+	/// calls.
 	///
 	/// A call sends its arguments as one JSON object, and gets back its
 	/// result as JSON with status `200`, or a `Kind|message` error as

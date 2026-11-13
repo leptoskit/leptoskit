@@ -3217,14 +3217,14 @@
 					"$ref": "#/$defs/RpcLiveConfig"
 				},
 				"live_path": {
-					"description": "Live WebSocket or SSE mount; defaults to `{path}/live` when unset.",
+					"description": "Live WebSocket or SSE mount. Unset, the socket stays at `/live` while\n`path` is the default `/rpc`, and follows the operations at\n`{path}/live` once `path` moves; set it to mount the socket anywhere.",
 					"type": [
 						"string",
 						"null"
 					]
 				},
 				"path": {
-					"description": "HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before\n`/<name>`; defaults to `/rpc`.",
+					"description": "HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before\n`/<name>`; defaults to `/rpc`. The JSON routes also stay mounted on\nthe legacy `/api` prefix. Moving it moves the live socket to\n`{path}/live` unless `live_path` names another mount.",
 					"type": "string",
 					"default": "/rpc"
 				},

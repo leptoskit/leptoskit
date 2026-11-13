@@ -1893,8 +1893,15 @@ fn is_github_repository(repository: &str) -> bool {
 		.is_some_and(|(owner, name)| segment(owner) && segment(name) && !is_git_suffixed(name))
 }
 
+/// The operation route prefix `[rpc].path` defaults to.
+const DEFAULT_RPC_PATH: &str = "/rpc";
+
+/// Where the live socket serves while `[rpc]` stays at its defaults: the
+/// mount every leptoskit app has served.
+const DEFAULT_RPC_LIVE_PATH: &str = "/live";
+
 fn default_rpc_path() -> String {
-	"/rpc".into()
+	DEFAULT_RPC_PATH.into()
 }
 
 fn default_transports() -> Vec<String> {
@@ -1919,10 +1926,14 @@ const RPC_TRANSPORTS: &[&str] = &["json"];
 #[serde(deny_unknown_fields, default)]
 pub struct RpcConfig {
 	/// HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before
-	/// `/<name>`; defaults to `/rpc`.
+	/// `/<name>`; defaults to `/rpc`. The JSON routes also stay mounted on
+	/// the legacy `/api` prefix. Moving it moves the live socket to
+	/// `{path}/live` unless `live_path` names another mount.
 	#[serde(default = "default_rpc_path")]
 	pub path: String,
-	/// Live WebSocket or SSE mount; defaults to `{path}/live` when unset.
+	/// Live WebSocket or SSE mount. Unset, the socket stays at `/live` while
+	/// `path` is the default `/rpc`, and follows the operations at
+	/// `{path}/live` once `path` moves; set it to mount the socket anywhere.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub live_path: Option<String>,
 	/// Which wire encodings the server accepts on operation routes. The only
@@ -1975,12 +1986,21 @@ impl Default for RpcConfig {
 }
 
 impl RpcConfig {
-	/// The live mount path: [`live_path`](Self::live_path) or `{path}/live`.
+	/// The live mount path: [`live_path`](Self::live_path) when it is set.
+	/// Otherwise `/live` while [`path`](Self::path) is the default `/rpc` —
+	/// the mount every app has served — and `{path}/live` once `path` moves,
+	/// so the socket follows the operations.
 	#[must_use]
 	pub fn resolved_live_path(&self) -> String {
-		self.live_path
-			.clone()
-			.unwrap_or_else(|| format!("{}/live", self.path.trim_end_matches('/')))
+		if let Some(live_path) = &self.live_path {
+			return live_path.clone();
+		}
+
+		if self.path == DEFAULT_RPC_PATH {
+			return DEFAULT_RPC_LIVE_PATH.to_owned();
+		}
+
+		format!("{}/live", self.path.trim_end_matches('/'))
 	}
 
 	/// Whether JSON bodies are accepted on the operation routes.

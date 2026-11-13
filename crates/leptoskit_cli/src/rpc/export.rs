@@ -54,6 +54,7 @@ pub(super) fn export_from_server(config: &LeptoskitConfig, root: &Utf8PathBuf) -
 			config.rpc.description.clone().unwrap_or_default(),
 		)
 		.env(spec::SPEC_SERVERS_ENV, config.rpc.servers.join(","))
+		.env(spec::SPEC_LIVE_PATH_ENV, config.rpc.resolved_live_path())
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::piped())

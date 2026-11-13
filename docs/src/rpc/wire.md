@@ -3,7 +3,8 @@
 Operations travel as JSON through serde.
 
 - **Content-Type:** `application/json`
-- **HTTP entrypoint:** `POST /rpc/<op>` (override with `[rpc].path`)
+- **HTTP entrypoint:** `POST /rpc/<op>` — `[rpc].path` moves the prefix (the JSON routes also stay mounted on `/api`); the app's entrypoint applies it
+- **Live socket:** `GET /live` — `[rpc].live_path` moves it, or it follows `{path}/live` once `path` moves
 - **Arguments** are one JSON object, the generated struct for the function. Field attributes `#[serde(...)]` and `#[schemars(...)]` on the function parameters land on that struct. `schemars::JsonSchema` is the validation and description library for those arguments.
 - **Results** are the `T` in `rpc::Result<T>`, encoded with serde. Annotate that type with `Serialize`, `Deserialize`, and whatever serde attributes it needs. It does not need a second codec.
 
