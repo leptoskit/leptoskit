@@ -289,8 +289,7 @@ impl HttpOutput {
 
 /// The whole published RPC: metadata, the functions, and the shared type
 /// schemas.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ApiSpec {
 	/// A marker plus version, so consumers can reject foreign JSON.
 	pub leptoskit_rpc_spec: u32,
@@ -317,6 +316,35 @@ pub struct ApiSpec {
 	/// keyed by schema name.
 	#[serde(default)]
 	pub schemas: IndexMap<String, Value>,
+}
+
+// The remote representation constructs ApiSpec without calling its public
+// Deserialize implementation again. New fields must be added here too or
+// the derived constructor will not compile.
+#[derive(Deserialize)]
+#[serde(remote = "ApiSpec", deny_unknown_fields)]
+struct ApiSpecWire {
+	leptoskit_rpc_spec: u32,
+	title: String,
+	version: String,
+	#[serde(default)]
+	description: Option<String>,
+	#[serde(default)]
+	servers: Vec<String>,
+	functions: Vec<ApiFunction>,
+	#[serde(default)]
+	channels: Vec<ApiChannel>,
+	#[serde(default = "default_live_path")]
+	live_path: String,
+	#[serde(default)]
+	schemas: IndexMap<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for ApiSpec {
+	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		Self::read_value(value).map_err(serde::de::Error::custom)
+	}
 }
 
 fn default_live_path() -> String {
@@ -358,6 +386,10 @@ impl ApiSpec {
 	/// specification, or was written by an incompatible leptoskit version.
 	pub fn from_json(json: &str) -> Result<Self, CodegenError> {
 		let value: Value = serde_json::from_str(json).map_err(CodegenError::Deserialize)?;
+		Self::read_value(value)
+	}
+
+	fn read_value(value: Value) -> Result<Self, CodegenError> {
 		let found = value
 			.get(SPEC_MARKER)
 			.and_then(Value::as_u64)
@@ -370,7 +402,7 @@ impl ApiSpec {
 			});
 		}
 
-		let mut spec: Self = serde_json::from_value(value).map_err(CodegenError::Deserialize)?;
+		let mut spec = ApiSpecWire::deserialize(value).map_err(CodegenError::Deserialize)?;
 		if found < 4 {
 			// Earlier servers marked `Option` arguments required, and clients
 			// treated every nullable argument as optional.
@@ -816,6 +848,74 @@ mod tests {
 			!migrated.functions[0].params[0].is_required(),
 			"an older server's `Option` argument may be omitted"
 		);
+	}
+
+	#[test]
+	fn serde_and_json_readers_share_version_validation_and_migration() {
+		let mut list = function("list", &[], false);
+		list.params = vec![ApiParam {
+			name: "limit".to_owned(),
+			docs: String::new(),
+			schema: serde_json::json!({ "type": ["integer", "null"] }),
+			required: true,
+		}];
+		let mut spec = ApiSpec::empty("demo", "1.2.3");
+		spec.functions = vec![list];
+		let mut document = serde_json::to_value(spec).expect("spec JSON");
+		for version in OLDEST_SPEC_VERSION..=SPEC_VERSION {
+			document[SPEC_MARKER] = Value::from(version);
+			let json = document.to_string();
+			let expected = ApiSpec::from_json(&json).expect("supported version");
+			assert_eq!(expected.leptoskit_rpc_spec, SPEC_VERSION);
+			assert_eq!(expected.functions[0].params[0].required, version >= 4);
+			assert_eq!(serde_json::from_str::<ApiSpec>(&json).unwrap(), expected);
+			assert_eq!(
+				serde_json::from_value::<ApiSpec>(document.clone()).unwrap(),
+				expected
+			);
+		}
+
+		for version in [0, 99, u64::MAX] {
+			document[SPEC_MARKER] = Value::from(version);
+			assert!(
+				matches!(ApiSpec::from_json(&document.to_string()), Err(CodegenError::Version { found, .. }) if found == version)
+			);
+			assert!(serde_json::from_str::<ApiSpec>(&document.to_string()).is_err());
+			assert!(serde_json::from_value::<ApiSpec>(document.clone()).is_err());
+		}
+	}
+
+	#[test]
+	fn serde_keeps_schema_validation_and_legacy_defaults() {
+		let mut document = serde_json::json!({
+			"leptoskit_rpc_spec": 1,
+			"title": "demo",
+			"version": "1.2.3",
+			"functions": [],
+		});
+		let legacy: ApiSpec = serde_json::from_value(document.clone()).unwrap();
+		assert_eq!(legacy.leptoskit_rpc_spec, SPEC_VERSION);
+		assert_eq!(legacy.live_path, DEFAULT_LIVE_PATH);
+		assert_eq!(legacy.channels, []);
+		document["unknown"] = Value::Bool(true);
+		assert!(serde_json::from_value::<ApiSpec>(document.clone()).is_err());
+		document.as_object_mut().unwrap().remove("unknown");
+		document["functions"] = Value::Bool(false);
+		assert!(matches!(
+			ApiSpec::from_json(&document.to_string()),
+			Err(CodegenError::Deserialize(_))
+		));
+		assert!(serde_json::from_value::<ApiSpec>(document).is_err());
+		for foreign in [
+			serde_json::json!({}),
+			serde_json::json!({"leptoskit_rpc_spec": "4"}),
+		] {
+			assert!(matches!(
+				ApiSpec::from_json(&foreign.to_string()),
+				Err(CodegenError::NotASpec)
+			));
+			assert!(serde_json::from_value::<ApiSpec>(foreign).is_err());
+		}
 	}
 
 	#[test]
