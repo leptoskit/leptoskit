@@ -1,11 +1,10 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 236
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Install checked graph artifacts on trusted Linux hosts
 
-Usage: leptoskit infra release <COMMAND>
+Usage: leptoskit infra release [OPTIONS] <COMMAND>
 
 Commands:
   plan      Save a release plan after checking independent artifact and host pins
@@ -15,5 +14,6 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version
