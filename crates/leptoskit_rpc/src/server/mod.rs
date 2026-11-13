@@ -77,8 +77,6 @@ pub use http::IDEMPOTENCY_KEY;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use http::Server;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
-pub(crate) use http::configured_route_prefix;
-#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub(crate) use http::installed;
 #[cfg(feature = "db")]
 pub use identity::Anonymous;

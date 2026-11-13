@@ -66,6 +66,71 @@ impl Http for Script {
 	}
 }
 
+#[cfg(all(feature = "server", feature = "sqlite"))]
+mod configured_roundtrip {
+	use http_body_util::BodyExt as _;
+	use tower::ServiceExt as _;
+
+	use super::*;
+
+	#[crate::query(crate = "crate")]
+	async fn remote_mount_count(_cx: &crate::QueryCx) -> crate::Result<u32> {
+		Ok(3)
+	}
+
+	#[derive(Clone)]
+	struct RouterHttp(axum::Router);
+
+	impl Http for RouterHttp {
+		fn send(&self, request: HttpRequest) -> BoxFuture<'static, Result<HttpResponse, FnError>> {
+			let router = self.0.clone();
+			Box::pin(async move {
+				let mut builder = http::Request::post(&request.url);
+				for (name, value) in request.headers() {
+					builder = builder.header(name, value);
+				}
+				let response = router
+					.oneshot(builder.body(axum::body::Body::from(request.body)).unwrap())
+					.await
+					.unwrap();
+				let status = response.status().as_u16();
+				let body = response
+					.into_body()
+					.collect()
+					.await
+					.unwrap()
+					.to_bytes()
+					.to_vec();
+				Ok(HttpResponse { status, body })
+			})
+		}
+	}
+
+	#[tokio::test]
+	async fn generated_operation_round_trips_through_a_configured_server() {
+		let db = leptoskit_db::testing::sqlite().await;
+		let config = leptoskit_config::RpcConfig {
+			path: "/gateway".to_owned(),
+			..leptoskit_config::RpcConfig::default()
+		};
+		let router = crate::server::Server::new(db).rpc_config(&config).router();
+		let client = Remote::new(
+			ClientConfig::new().rpc_path(&config.path),
+			RouterHttp(router),
+		);
+		let arguments = serde_json::to_value(RemoteMountCount {}).unwrap();
+		let result = client
+			.call(
+				<RemoteMountCount as crate::Operation>::NAME,
+				arguments,
+				Key::None,
+			)
+			.await
+			.unwrap();
+		assert_eq!(result, json!(3));
+	}
+}
+
 /// A bearer token that renews once after a `401`.
 struct Token {
 	current: Mutex<String>,

@@ -368,22 +368,9 @@ pub fn channel_descriptors() -> Vec<&'static ApiChannelDescriptor> {
 /// `leptoskit_idp`'s layer, lets such a token reach only the routes this
 /// names with at least one scope, and only when the token carries every one
 /// of them.
-///
-/// An rpc operation matches at the prefix this process serves (`[rpc].path`,
-/// `/rpc` by default), not at the one baked in where it was declared.
 pub fn scopes_for(method: &http::Method, path: &str) -> Option<&'static [&'static str]> {
-	#[cfg(any(feature = "postgres", feature = "sqlite"))]
-	let rpc_prefix = crate::server::configured_route_prefix();
-	#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
-	let rpc_prefix = crate::RPC_ROUTE_PREFIX.to_owned();
-
 	inventory::iter::<ApiFnDescriptor>()
-		.find(|descriptor| {
-			descriptor.method == *method
-				&& (descriptor.path == path
-					|| (descriptor.rpc_operation
-						&& path == format!("{rpc_prefix}/{}", descriptor.name)))
-		})
+		.find(|descriptor| descriptor.method == *method && descriptor.path == path)
 		.map(|descriptor| descriptor.scopes)
 }
 
