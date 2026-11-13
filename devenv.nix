@@ -954,6 +954,7 @@ in
         run_step "lint:clippy" lint:clippy
         run_step "lint:clippy:wasm" lint:clippy:wasm
         run_step "lint:monostyle" lint:monostyle
+        run_step "lint:images" lint:images
         run_step "lint:leptoskit" lint:leptoskit
         run_step "lint:docs" lint:docs
         run_step "lint:format" lint:format
@@ -988,6 +989,7 @@ in
         run_step "lint:clippy" ${currentDir}/.devenv/profile/bin/lint:clippy
         run_step "lint:clippy:wasm" ${currentDir}/.devenv/profile/bin/lint:clippy:wasm
         run_step "lint:monostyle" ${currentDir}/.devenv/profile/bin/lint:monostyle
+        run_step "lint:images" ${currentDir}/.devenv/profile/bin/lint:images
         run_step "lint:leptoskit" ${currentDir}/.devenv/profile/bin/lint:leptoskit
         run_step "lint:docs" ${currentDir}/.devenv/profile/bin/lint:docs
         run_step "lint:format" ${currentDir}/.devenv/profile/bin/lint:format
@@ -1036,6 +1038,16 @@ in
         ${xpkgs.monostyle}/bin/monostyle check devenv.nix --config monostyle.toml --fail-under 100
       '';
       description = "Hold the tree to monostyle's 80 floor and devenv.nix to 100.";
+      binary = "bash";
+    };
+    # Images are hosted, not committed (docs/agents/images.md); the allowlist
+    # holds only fixtures, brand vectors, and toolchain scaffolding.
+    "lint:images" = {
+      exec = ''
+        set -euo pipefail
+        bash "$(git rev-parse --show-toplevel)/setup/scripts/check_images.sh"
+      '';
+      description = "Check tracked images against the hosting rule and allowlist.";
       binary = "bash";
     };
     # The examples show apps how to write leptoskit, so they pass its own

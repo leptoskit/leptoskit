@@ -35,7 +35,7 @@ pub fn site(root: impl Into<PathBuf>) -> Site {
 		.edit_url(format!("{REPOSITORY}/edit/main/docs/src/{{path}}"))
 		.logo("assets/logo-light.svg", "assets/logo-dark.svg")
 		.favicon("assets/mark.svg")
-		.social_image("assets/social.png")
+		.social_image("https://f002.backblazeb2.com/file/leptoskit/docs/social.png")
 		.stylesheet("theme/leptoskit.css")
 		.stylesheet("theme/skribble.css")
 		.stylesheet("theme/play.css")

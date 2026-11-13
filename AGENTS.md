@@ -33,6 +33,7 @@ leptoskit is a Rust toolkit for writing an app's interface once, as a tree of co
 - Formatting, lints, and tests: `devenv shell fix:all`, `devenv shell lint:all`, `devenv shell test:all`. The pre-push hook runs `lint:push`; it is slow enough to outlive git's SSH connection (exit 141), so run the checks yourself first rather than weakening them.
 - Generated output is snapshot-tested with insta. Review `.snap` diffs; never accept them blindly.
 - Every user-visible change carries a changeset in `.changeset/` (see existing files for the format).
+- Don't commit images. Host them on Backblaze (the public `leptoskit` bucket; `docs/agents/images.md` has the commands) or upload them as GitHub attachments (`gh pr comment --attach <file>` / `gh issue comment --attach <file>`, then link the returned `https://github.com/user-attachments/…` URL), and link the URL from the Markdown. `lint:images` fails on tracked images that aren't in `.github/allowed-images.txt`.
 - Configuration changes regenerate the schema with `devenv shell schema:update`; see [CONTRIBUTING.md](CONTRIBUTING.md#configuration-schema).
 - leptoskit code you write for apps, tests, and tooling uses builder calls (`View().class(…).child(Text(…))`), which the compiler checks directly. The examples and docs are the exception: they show people `view!` markup, and `lint:leptoskit` keeps them that way (`examples/counter` is the builder example). [`skills/leptoskit`](skills/leptoskit/SKILL.md) is the skill app authors' agents install.
 
