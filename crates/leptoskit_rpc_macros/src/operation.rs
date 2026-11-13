@@ -1419,39 +1419,34 @@ fn stream_items(
 		}
 	}
 
-	let scope_body = if signature.takes_context {
+	// The body reads the same context through its argument, and
+	// `rpc::cx()` sees it too.
+	let context_binding = if signature.takes_context {
 		quote! {
-			let scope = ::std::sync::Arc::new(cx);
-			// The body reads the same context through its argument, and
-			// `rpc::cx()` sees it too.
 			let cx: &#krate::QueryCx = &scope;
-			let Self { #(#bindings),* } = self;
-
-			match #krate::__private::query_scope(
-				::std::sync::Arc::clone(&scope),
-				async move { #call.await },
-			)
-			.await
-			{
-				::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-				::core::result::Result::Err(error) => sink.fail(&error),
-			}
 		}
 	} else {
-		quote! {
-			let scope = ::std::sync::Arc::new(cx);
-			let Self { #(#bindings),* } = self;
+		TokenStream::new()
+	};
 
-			match #krate::__private::query_scope(
-				scope,
-				async move { #call.await },
-			)
-			.await
-			{
-				::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
-				::core::result::Result::Err(error) => sink.fail(&error),
-			}
-		}
+	let scope_body = quote! {
+		let scope = ::std::sync::Arc::new(cx);
+		#context_binding
+		let Self { #(#bindings),* } = self;
+
+		// The whole body runs inside the context's task: constructing the
+		// stream, and driving its items, so a stream that reads
+		// `rpc::cx()` while it is polled sees the same context.
+		#krate::__private::query_scope(
+			::std::sync::Arc::clone(&scope),
+			async move {
+				match #call.await {
+					::core::result::Result::Ok(items) => sink.drive(items, #encode).await,
+					::core::result::Result::Err(error) => sink.fail(&error),
+				}
+			},
+		)
+		.await
 	};
 
 	let items = quote! {

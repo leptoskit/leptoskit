@@ -289,8 +289,11 @@ pub mod __private {
 	pub use crate::stream::assert_cursor;
 	pub use crate::stream::assert_stream_item;
 
-	/// Runs a stream body inside the query context's task, so it can read
-	/// the context the server passed in with [`rpc::cx()`](crate::cx).
+	/// Runs a stream's whole body inside the query context's task, so it
+	/// can read the context the server passed in with
+	/// [`rpc::cx()`](crate::cx): both the part that constructs the stream
+	/// and the part that drives its items, which a lazily-polled stream
+	/// reads the context from too.
 	#[cfg(any(feature = "postgres", feature = "sqlite"))]
 	pub async fn query_scope<F: Future>(
 		cx: std::sync::Arc<crate::QueryCx>,

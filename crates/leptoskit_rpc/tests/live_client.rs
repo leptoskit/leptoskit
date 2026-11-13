@@ -105,11 +105,57 @@ pub async fn client_count(cx: &rpc::QueryCx, upto: u32) -> rpc::Result<impl Stre
 	Ok(futures::stream::iter(0..upto))
 }
 
-/// The numbers below `upto`, reading the context from the task.
+/// The caller each item's polling reads from the task, after an await:
+/// the identity the server passed in, or `missing` without a context.
 #[rpc::stream]
-pub async fn client_ambient_count(upto: u32) -> rpc::Result<impl Stream<Item = u32>> {
+pub async fn client_ambient_callers(upto: u32) -> rpc::Result<impl Stream<Item = String>> {
 	let _ = rpc::cx()?;
-	Ok(futures::stream::iter(0..upto))
+	Ok(futures::stream::iter(0..upto).then(|n| {
+		async move {
+			format!(
+				"{}:{n}",
+				polled_caller()
+					.await
+					.unwrap_or_else(|| "missing".to_owned())
+			)
+		}
+	}))
+}
+
+/// The caller each item's polling reads from the task beside the context
+/// the body took explicitly, or what went wrong.
+#[rpc::stream]
+pub async fn client_explicit_callers(
+	cx: &rpc::QueryCx,
+	upto: u32,
+) -> rpc::Result<impl Stream<Item = String>> {
+	let taken = cx
+		.identity()
+		.caller
+		.clone()
+		.unwrap_or_else(|| "anonymous".to_owned());
+	Ok(futures::stream::iter(0..upto).then(move |n| {
+		let expected = taken.clone();
+		async move {
+			match polled_caller().await {
+				Some(polled) if polled == expected => format!("{expected}:{n}"),
+				other => format!("unexpected:{other:?}:{expected}:{n}"),
+			}
+		}
+	}))
+}
+
+/// Reads the caller from the task's context after an await, the way a
+/// lazily-polled stream item does: `None` when there is no context.
+async fn polled_caller() -> Option<String> {
+	tokio::task::yield_now().await;
+	let cx = rpc::cx().ok()?;
+	Some(
+		cx.identity()
+			.caller
+			.clone()
+			.unwrap_or_else(|| "anonymous".to_owned()),
+	)
 }
 
 /// Whether a dropped stream's body went away.
@@ -426,19 +472,21 @@ async fn stream_credits_and_cancellation() {
 }
 
 /// A stream that reads its context from the task gets the one the server
-/// passed in, the same as a stream that takes `cx` itself.
+/// passed in, the same as a stream that takes `cx` itself: while its
+/// items are polled, not only while it is constructed.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_ambient_stream_reads_its_context() {
 	start();
 	let db = leptoskit_db::testing::sqlite().await;
 	let live = live(db);
 	let clients = LiveClients::new(&live);
+	clients.header("x-caller", Some("ada"));
 
 	LocalSet::new()
 		.run_until(async {
 			let client = clients.client(&ClientConfig::new());
 			wait_for("the connection", || client.status().is_live()).await;
-			let mut count = client.stream("client_ambient_count", json!({ "upto": 3 }), 2, false);
+			let mut count = client.stream("client_ambient_callers", json!({ "upto": 3 }), 2, false);
 			let mut seen = Vec::new();
 
 			while seen.len() < 3 {
@@ -451,7 +499,88 @@ async fn an_ambient_stream_reads_its_context() {
 				}
 			}
 
-			assert_eq!(seen, [json!(0), json!(1), json!(2)]);
+			assert_eq!(seen, [json!("ada:0"), json!("ada:1"), json!("ada:2")]);
+		})
+		.await;
+}
+
+/// A stream that takes its context explicitly reads the same context from
+/// the task while its items are polled.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_explicit_stream_reads_its_context() {
+	start();
+	let db = leptoskit_db::testing::sqlite().await;
+	let live = live(db);
+	let clients = LiveClients::new(&live);
+	clients.header("x-caller", Some("ada"));
+
+	LocalSet::new()
+		.run_until(async {
+			let client = clients.client(&ClientConfig::new());
+			wait_for("the connection", || client.status().is_live()).await;
+			let mut count =
+				client.stream("client_explicit_callers", json!({ "upto": 2 }), 2, false);
+			let mut seen = Vec::new();
+
+			while seen.len() < 2 {
+				match tokio::time::timeout(Duration::from_secs(20), count.next())
+					.await
+					.expect("an item arrives")
+				{
+					Some(StreamEvent::Item(value)) => seen.push(value),
+					other => panic!("expected an item, got {other:?}"),
+				}
+			}
+
+			assert_eq!(seen, [json!("ada:0"), json!("ada:1")]);
+		})
+		.await;
+}
+
+/// Two streams polled at the same time each keep their own caller's
+/// context, rather than sharing or crossing one.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_streams_keep_their_contexts() {
+	start();
+	let db = leptoskit_db::testing::sqlite().await;
+	let live = live(db);
+	let clients = LiveClients::new(&live);
+
+	LocalSet::new()
+		.run_until(async {
+			let ada = Token::default();
+			ada.set(Some("ada"));
+			let ada_client = clients.client(&ClientConfig::new().credentials(ada));
+			let grace = Token::default();
+			grace.set(Some("grace"));
+			let grace_client = clients.client(&ClientConfig::new().credentials(grace));
+			wait_for("ada's connection", || ada_client.status().is_live()).await;
+			wait_for("grace's connection", || grace_client.status().is_live()).await;
+
+			let mut ada =
+				ada_client.stream("client_ambient_callers", json!({ "upto": 2 }), 1, false);
+			let mut grace =
+				grace_client.stream("client_ambient_callers", json!({ "upto": 2 }), 1, false);
+			let mut ada_seen = Vec::new();
+			let mut grace_seen = Vec::new();
+
+			for _ in 0..2 {
+				for (label, stream, seen) in [
+					("ada's item", &mut ada, &mut ada_seen),
+					("grace's item", &mut grace, &mut grace_seen),
+				] {
+					match tokio::time::timeout(Duration::from_secs(20), stream.next())
+						.await
+						.unwrap_or_else(|_| panic!("{label} arrives"))
+					{
+						Some(StreamEvent::Item(value)) => seen.push(value),
+						other => panic!("expected {label}, got {other:?}"),
+					}
+				}
+			}
+
+			assert_eq!(ada_seen, [json!("ada:0"), json!("ada:1")]);
+			assert_eq!(grace_seen, [json!("grace:0"), json!("grace:1")]);
 		})
 		.await;
 }
