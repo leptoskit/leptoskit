@@ -28,20 +28,51 @@ deployment_target="$(xcrun simctl list runtimes --json | jq -er --arg runtime "$
 # the build began 4m43s after `simctl boot` and still saw none, and `simctl
 # bootstatus` reported that same device booted 19s later). Wait until
 # xcodebuild's own destination list names the UDID instead of handing it one it
-# cannot resolve, then build once. This still overlaps the job's cargo build,
+# cannot resolve. A simulator can disappear again between that lookup and the
+# build (job 130871974940), so retry only that destination lookup failure.
+# This still overlaps the job's cargo build,
 # which is why the build runs here rather than inside the first test session.
 destination_timeout="${NATIVE_WDA_DESTINATION_TIMEOUT:-600}"
 wait_started=$SECONDS
+build_log="$(mktemp "${TMPDIR:-/tmp}/leptoskit-wda-build.XXXXXX")"
+trap 'rm -f "$build_log"' EXIT
 
 while :; do
 	destinations="$(xcodebuild -showdestinations -project "$project" -scheme WebDriverAgentRunner 2>&1 || true)"
 
-	if grep -Fq "id:$device" <<<"$destinations"; then
-		break
+	# Ineligible destinations can name the same UDID. Only an available iOS
+	# simulator without a destination error is usable by this scheme.
+	if awk -v device="$device" '
+		/Available destinations for/ { available = 1; next }
+		/Ineligible destinations for/ { available = 0 }
+		available && /platform:iOS Simulator,/ && index($0, "id:" device ",") && !/error:/ { found = 1 }
+		END { exit !found }
+	' <<<"$destinations"; then
+		echo "xcodebuild listed simulator $device as a destination after $((SECONDS - wait_started)) seconds"
+		if xcodebuild build-for-testing \
+			-project "$project" \
+			-scheme WebDriverAgentRunner \
+			-destination "id=$device" \
+			-derivedDataPath "$derived_data" \
+			"IPHONEOS_DEPLOYMENT_TARGET=$deployment_target" \
+			GCC_TREAT_WARNINGS_AS_ERRORS=0 \
+			COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee "$build_log"; then
+			exit 0
+		else
+			build_status=("${PIPESTATUS[@]}")
+		fi
+
+		if [ "${build_status[1]}" -ne 0 ]; then
+			exit "${build_status[1]}"
+		fi
+		if ! grep -Fq 'xcodebuild: error: Unable to find a device matching the provided destination specifier' "$build_log"; then
+			exit "${build_status[0]}"
+		fi
+		echo "Simulator $device disappeared before the build; checking its destination again" >&2
 	fi
 
 	if [ "$((SECONDS - wait_started))" -ge "$destination_timeout" ]; then
-		echo "xcodebuild did not list simulator $device as a destination within ${destination_timeout} seconds" >&2
+		echo "xcodebuild could not use simulator $device within ${destination_timeout} seconds" >&2
 		echo "xcodebuild: $(xcodebuild -version | tr '\n' ' ')" >&2
 		printf '%s\n' "$destinations" >&2
 		xcrun simctl list devices available >&2 || true
@@ -50,12 +81,3 @@ while :; do
 	fi
 	sleep 5
 done
-echo "xcodebuild listed simulator $device as a destination after $((SECONDS - wait_started)) seconds"
-xcodebuild build-for-testing \
-	-project "$project" \
-	-scheme WebDriverAgentRunner \
-	-destination "id=$device" \
-	-derivedDataPath "$derived_data" \
-	"IPHONEOS_DEPLOYMENT_TARGET=$deployment_target" \
-	GCC_TREAT_WARNINGS_AS_ERRORS=0 \
-	COMPILER_INDEX_STORE_ENABLE=NO
