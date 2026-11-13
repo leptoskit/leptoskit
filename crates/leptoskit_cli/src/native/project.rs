@@ -387,7 +387,10 @@ const ANDROID_CPP_RUNTIMES: [&str; 4] = ["c++", "c++_shared", "c++_static", "std
 /// The host's link line: the archive, the NDK libraries the JNI library already
 /// names, then every library rustc reported, in its order, without repeats.
 fn android_link_libraries(native: &[String]) -> String {
-	let mut libraries = vec!["runtime", "log", "android", "dl", "m"];
+	// `aaudio` is always named. The `ndk` crate references its symbols from the
+	// archive even when rustc's native-static-libs line omits the library, and
+	// the NDK does not add it on its own.
+	let mut libraries = vec!["runtime", "log", "android", "dl", "m", "aaudio"];
 
 	for library in native {
 		let library = library.as_str();
