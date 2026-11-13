@@ -430,10 +430,6 @@ fn stop(mut child: std::process::Child) {
 }
 
 #[test]
-#[cfg_attr(
-	windows,
-	ignore = "graceful shutdown uses the POSIX kill signal; Windows has no equivalent"
-)]
 fn the_broker_serves_the_site_until_it_is_asked_to_stop() {
 	let directory = tempfile::tempdir().unwrap();
 	let data = directory.path().join("cloud");

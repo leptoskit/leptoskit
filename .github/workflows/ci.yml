@@ -320,15 +320,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Full debug databases exceed MSVC's PDB limit and fill the runner.
-      # Keep source locations for failures without type and local-variable data.
-      - name: keep Windows test debug artifacts within linker limits
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          "CARGO_PROFILE_DEV_DEBUG=line-tables-only" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "CARGO_PROFILE_TEST_DEBUG=line-tables-only" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
       # RPC generator regressions compile the generated Go clients.
       - name: install Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
