@@ -373,6 +373,7 @@ jobs:
       # `leptoskit_native` variant the CLI legs would otherwise build cold.
       - name: test the native wire under arbitrary_precision
         if: matrix.shard == 'windows' || matrix.shard == 'macos'
+        shell: bash
         run: |
           cargo test --locked -p leptoskit_native --features guest,rive,serde_json/arbitrary_precision --lib wire_tests -- --test-threads=1
           cargo test --locked -p leptoskit_wasm --features serde_json/arbitrary_precision -- --test-threads=1
