@@ -322,6 +322,12 @@ mod linux {
 		// server has mapped the window and allocated the shared tree.
 		let root = surface.backend().view(surface.root().unwrap()).unwrap();
 		pump_until(|| window.is_mapped() && root.width() > 0);
+		// GTK 4.22 republishes named controls on an idle after map. Drain
+		// that idle before a test reads the accessibility tree.
+		let context = gtk::glib::MainContext::default();
+		while context.pending() {
+			context.iteration(false);
+		}
 		Mounted {
 			surface: Rc::new(RefCell::new(surface)),
 			window,
@@ -824,10 +830,12 @@ mod linux {
 			&View().class("w-full h-full p-4 gap-4 bg-white").children([
 				// The gallery's settings search field: chrome stripped, sized
 				// by the application.
+				// `min-h-5` rather than a fixed `h-5`: a 15px face can have a
+				// 21px line box, and a fixed 20px height would clip it.
 				TextInput()
 					.placeholder("Search")
 					.font(15.0, body)
-					.class("bg-[#00000000] h-5 w-40"),
+					.class("bg-[#00000000] min-h-5 w-40"),
 				TextInput()
 					.placeholder("Message")
 					.border(1.0, Color::rgba(200, 200, 200, 255))
@@ -1422,6 +1430,40 @@ mod linux {
 		);
 	}
 
+	/// Horizontal span of opaque dark pixels inside one widget. The second
+	/// value is `0` when that widget has not painted yet.
+	fn dark_pixel_span(
+		pixels: &[u8],
+		stride: usize,
+		layout: &leptoskit_yoga::Layout,
+	) -> (usize, usize) {
+		let mut min_x = layout.width as usize;
+		let mut max_x = 0usize;
+		let height = layout.height as usize;
+		let width = layout.width as usize;
+
+		if height < 4 || width < 4 {
+			return (min_x, max_x);
+		}
+
+		for y in 2..height - 2 {
+			let row = (layout.y as usize + y) * stride;
+
+			for x in 2..width - 2 {
+				let offset = (row + layout.x as usize + x) * 4;
+				let dark =
+					pixels[offset] < 100 && pixels[offset + 1] < 100 && pixels[offset + 2] < 100;
+
+				if pixels[offset + 3] == 255 && dark {
+					min_x = min_x.min(x);
+					max_x = max_x.max(x);
+				}
+			}
+		}
+
+		(min_x, max_x)
+	}
+
 	fn rtl_text_and_inputs_follow_resolved_direction() {
 		let rtl = leptoskit_yoga::Style {
 			direction: leptoskit_yoga::Direction::Rtl,
@@ -1490,39 +1532,36 @@ mod linux {
 				.contains(&(slider, NativeEvent::ValueChange { value: 40.0 })),
 			"RTL horizontal arrow follows native visual scale direction"
 		);
-		let surface = mounted.surface.borrow();
-		let png = surface
-			.backend()
-			.snapshot_png(surface.root().unwrap())
-			.unwrap();
-		std::fs::write(artifact_path("rtl.png"), &png).unwrap();
-		let texture = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
-		let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
-		texture.download(&mut pixels, texture.width() as usize * 4);
+		let deadline = std::time::Instant::now() + Duration::from_secs(5);
+		let mut pixels_ready = false;
+		let mut ranges = [(0usize, 0usize); 2];
 
-		for index in [1, 3] {
-			let layout = surface.layout(child(&mounted, index));
-			let mut min_x = layout.width as usize;
-			let mut max_x = 0;
+		while !pixels_ready {
+			pump();
+			let surface = mounted.surface.borrow();
+			let root = surface.root().unwrap();
+			let children = surface.children(root);
+			let layouts = [surface.layout(children[1]), surface.layout(children[3])];
+			let png = surface.backend().snapshot_png(root).unwrap();
+			drop(surface);
+			let texture =
+				gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(png)).unwrap();
+			let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+			texture.download(&mut pixels, texture.width() as usize * 4);
+			let stride = texture.width() as usize;
+			ranges = [
+				dark_pixel_span(&pixels, stride, &layouts[0]),
+				dark_pixel_span(&pixels, stride, &layouts[1]),
+			];
+			pixels_ready = ranges.iter().all(|(_, max_x)| *max_x > 0);
 
-			for y in 2..layout.height as usize - 2 {
-				for x in 2..layout.width as usize - 2 {
-					let offset = ((layout.y as usize + y) * texture.width() as usize
-						+ layout.x as usize
-						+ x)
-						* 4;
+			assert!(
+				pixels_ready || std::time::Instant::now() < deadline,
+				"declared RTL text did not paint"
+			);
+		}
 
-					if pixels[offset + 3] == 255
-						&& pixels[offset..offset + 3]
-							.iter()
-							.all(|channel| *channel < 100)
-					{
-						min_x = min_x.min(x);
-						max_x = max_x.max(x);
-					}
-				}
-			}
-
+		for (min_x, max_x) in ranges {
 			assert!(
 				min_x > 50 && max_x > 140,
 				"declared RTL start positions Arabic and Latin at right: {min_x}..{max_x}"
@@ -1893,30 +1932,62 @@ mod linux {
 			.ok_or("variant property")?)
 		}
 
+		/// Name, object, description, and role read before walking children.
+		///
+		/// GTK 4.22 can replace an object's bus path while a later sibling is
+		/// realized, so properties have to be read before the walk continues.
+		pub(super) type Node = (String, Ref, String, Option<u32>);
+
 		pub(super) fn walk(
 			connection: &gio::DBusConnection,
 			target: &Ref,
-			found: &mut Vec<(String, Ref)>,
+			found: &mut Vec<Node>,
 			depth: usize,
 		) -> Result<(), String> {
 			if depth > 30 {
 				return Err("AT-SPI tree depth".into());
 			}
 
-			let name = property(connection, target, "org.a11y.atspi.Accessible", "Name")?
-				.get::<String>()
-				.ok_or("accessible name")?;
-			found.push((name, target.clone()));
-			let children = call(
+			let name = match property(connection, target, "org.a11y.atspi.Accessible", "Name") {
+				Ok(name) => name.get::<String>().ok_or("accessible name")?,
+				// GTK 4.22 can advertise a child path before that object is
+				// registered. Skip the ghost and keep the controls that exist.
+				Err(error) if error.contains("UnknownMethod") => return Ok(()),
+				Err(error) => return Err(error),
+			};
+			let description = match property(
+				connection,
+				target,
+				"org.a11y.atspi.Accessible",
+				"Description",
+			) {
+				Ok(value) => value.get::<String>().unwrap_or_default(),
+				Err(error) if error.contains("UnknownMethod") => String::new(),
+				Err(error) => return Err(error),
+			};
+			let role = match call(
+				connection,
+				target,
+				"org.a11y.atspi.Accessible",
+				"GetRole",
+				None,
+			) {
+				Ok(value) => value.get::<(u32,)>().map(|role| role.0),
+				Err(error) if error.contains("UnknownMethod") => None,
+				Err(error) => return Err(error),
+			};
+			found.push((name, target.clone(), description, role));
+			let children = match call(
 				connection,
 				target,
 				"org.a11y.atspi.Accessible",
 				"GetChildren",
 				None,
-			)?
-			.get::<(Vec<Ref>,)>()
-			.ok_or("accessible children")?
-			.0;
+			) {
+				Ok(value) => value.get::<(Vec<Ref>,)>().ok_or("accessible children")?.0,
+				Err(error) if error.contains("UnknownMethod") => return Ok(()),
+				Err(error) => return Err(error),
+			};
 
 			for child in children {
 				walk(connection, &child, found, depth + 1)?;
@@ -1934,30 +2005,43 @@ mod linux {
 		use gtk::glib;
 		let session = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>)
 			.map_err(|error| error.to_string())?;
-		let address = session
-			.call_sync(
-				Some("org.a11y.Bus"),
-				"/org/a11y/bus",
-				"org.a11y.Bus",
-				"GetAddress",
+		// Several GTK processes start the accessibility bus together. Its
+		// address can name a socket that is not listening yet.
+		let deadline = std::time::Instant::now() + Duration::from_secs(8);
+		let connection = loop {
+			let address = session
+				.call_sync(
+					Some("org.a11y.Bus"),
+					"/org/a11y/bus",
+					"org.a11y.Bus",
+					"GetAddress",
+					None,
+					None,
+					gio::DBusCallFlags::NONE,
+					5000,
+					None::<&gio::Cancellable>,
+				)
+				.map_err(|error| error.to_string())?
+				.get::<(String,)>()
+				.ok_or("AT bus address")?
+				.0;
+			match gio::DBusConnection::for_address_sync(
+				&address,
+				gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+					| gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
 				None,
-				None,
-				gio::DBusCallFlags::NONE,
-				5000,
 				None::<&gio::Cancellable>,
-			)
-			.map_err(|error| error.to_string())?
-			.get::<(String,)>()
-			.ok_or("AT bus address")?
-			.0;
-		let connection = gio::DBusConnection::for_address_sync(
-			&address,
-			gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-				| gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-			None,
-			None::<&gio::Cancellable>,
-		)
-		.map_err(|error| error.to_string())?;
+			) {
+				Ok(connection) => break connection,
+				Err(error)
+					if std::time::Instant::now() < deadline
+						&& error.to_string().contains("No such file or directory") =>
+				{
+					std::thread::sleep(Duration::from_millis(50));
+				}
+				Err(error) => return Err(error.to_string()),
+			}
+		};
 		let registry = (
 			"org.a11y.atspi.Registry".to_owned(),
 			glib::variant::ObjectPath::try_from("/org/a11y/atspi/accessible/root").unwrap(),
@@ -1966,18 +2050,15 @@ mod linux {
 		walk(&connection, &registry, &mut found, 0)?;
 		let volume = found
 			.iter()
-			.find(|(name, _)| name == "AT volume")
+			.find(|(name, ..)| name == "AT volume")
 			.ok_or_else(|| format!("volume missing from AT-SPI tree: {found:?}"))?
 			.1
 			.clone();
-		let spoken_value = property(
-			&connection,
-			&volume,
-			"org.a11y.atspi.Accessible",
-			"Description",
-		)?
-		.get::<String>()
-		.ok_or("slider spoken value")?;
+		let spoken_value = found
+			.iter()
+			.find(|(name, ..)| name == "AT volume")
+			.map(|(_, _, description, _)| description.clone())
+			.ok_or("slider spoken value")?;
 
 		if spoken_value != "0 (range -10 to 10)" {
 			return Err(format!(
@@ -2016,26 +2097,18 @@ mod linux {
 			return Err(format!("controlled AT rejection: {restored}"));
 		}
 
-		if found.iter().any(|(name, _)| name == "Decorative text") {
+		if found.iter().any(|(name, ..)| name == "Decorative text") {
 			return Err(format!("decorative child appears in AT tree: {found:?}"));
 		}
 
-		if !found.iter().any(|(name, _)| name == "AT add preview") {
+		if !found.iter().any(|(name, ..)| name == "AT add preview") {
 			return Err("explicit native Button accessibility label was overwritten".into());
 		}
 
-		for (name, target) in found
+		for (name, _, description, _) in found
 			.iter()
-			.filter(|(name, _)| name == "AT first" || name == "AT second")
+			.filter(|(name, ..)| name == "AT first" || name == "AT second")
 		{
-			let description = property(
-				&connection,
-				target,
-				"org.a11y.atspi.Accessible",
-				"Description",
-			)?
-			.get::<String>()
-			.ok_or("radio description")?;
 			let expected = if name == "AT first" {
 				"Option 1 of 2"
 			} else {
@@ -2050,18 +2123,9 @@ mod linux {
 		const ATSPI_ROLE_IMAGE: u32 = 27;
 		let drawing = found
 			.iter()
-			.find(|(name, _)| name == "AT drawing")
+			.find(|(name, ..)| name == "AT drawing")
 			.ok_or_else(|| format!("labelled drawing missing from AT-SPI tree: {found:?}"))?;
-		let role = call(
-			&connection,
-			&drawing.1,
-			"org.a11y.atspi.Accessible",
-			"GetRole",
-			None,
-		)?
-		.get::<(u32,)>()
-		.ok_or("drawing role")?
-		.0;
+		let role = drawing.3.ok_or("drawing role")?;
 
 		if role != ATSPI_ROLE_IMAGE {
 			return Err(format!("labelled drawing is not an image: role {role}"));

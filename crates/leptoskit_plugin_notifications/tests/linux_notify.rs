@@ -90,10 +90,36 @@ mod linux {
 		libtest_mimic::run(&arguments, trials).exit_code()
 	}
 
+	/// A private session bus. Machines without `/etc/dbus-1/session.conf`
+	/// use the dbus that is actually on `PATH`.
+	fn session_daemon() -> Command {
+		let mut daemon = Command::new("dbus-daemon");
+		daemon
+			.args(["--nofork", "--print-address=1"])
+			.stdout(Stdio::piped());
+		// `--session` asks for `/etc/dbus-1/session.conf`. Passing
+		// `--config-file` as well is rejected, so a machine without that
+		// file uses the dbus install on `PATH` and nothing else.
+		if std::path::Path::new("/etc/dbus-1/session.conf").exists() {
+			daemon.arg("--session");
+		} else if let Some(config) =
+			std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).find_map(|dir| {
+				let binary = dir.join("dbus-daemon");
+				if !binary.is_file() {
+					return None;
+				}
+
+				let config = binary.parent()?.parent()?.join("share/dbus-1/session.conf");
+				config.is_file().then_some(config)
+			}) {
+			daemon.arg("--config-file").arg(config);
+		}
+
+		daemon
+	}
+
 	fn rerun_on_private_bus() -> ExitCode {
-		let mut daemon = Command::new("dbus-daemon")
-			.args(["--session", "--nofork", "--print-address=1"])
-			.stdout(Stdio::piped())
+		let mut daemon = session_daemon()
 			.spawn()
 			.expect("dbus-daemon is installed (the dbus package provides it)");
 		let mut address = String::new();
