@@ -7,6 +7,9 @@ Saves a screenshot: the device's whole screen, or the app's window when `--app` 
 Usage: leptoskit device screenshot [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --kind <KIND>
           What to drive; inferred from `--device` or `--url` when omitted
 

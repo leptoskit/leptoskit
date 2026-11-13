@@ -215,8 +215,11 @@ fn support_registry(root: &Path) -> Registry {
 #[test]
 fn menu_bar_mode_replaces_only_the_stock_host() {
 	let temporary = tempfile::tempdir().unwrap();
-	let root = temporary.path();
-	let registry = clipboard_registry(root);
+	// TMPDIR is /var/folders on macOS and /var is a symlink to
+	// /private/var; the generator refuses paths that traverse symlinks, so
+	// resolve the temp directory before generating into it.
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	let registry = clipboard_registry(&root);
 	write(
 		&root.join("hosts/macos/App.swift"),
 		include_str!("../templates/MacApp.swift"),
@@ -224,7 +227,7 @@ fn menu_bar_mode_replaces_only_the_stock_host() {
 	.unwrap();
 	let mut config = LeptoskitConfig::default();
 	config.native.mode = leptoskit_config::application::NativeMode::MenuBar;
-	generate(root, &config, &registry).unwrap();
+	generate(&root, &config, &registry).unwrap();
 	let generated = root.join(".leptoskit/macos/Sources/App.swift");
 	assert_eq!(
 		std::fs::read_to_string(&generated).unwrap(),
@@ -235,7 +238,7 @@ fn menu_bar_mode_replaces_only_the_stock_host() {
 		"// custom resident lifecycle",
 	)
 	.unwrap();
-	generate(root, &config, &registry).unwrap();
+	generate(&root, &config, &registry).unwrap();
 	assert_eq!(
 		std::fs::read_to_string(generated).unwrap(),
 		"// custom resident lifecycle"

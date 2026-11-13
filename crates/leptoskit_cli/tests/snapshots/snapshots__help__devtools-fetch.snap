@@ -7,6 +7,7 @@ Downloads the `DevTools` interface for exactly this leptoskit version, checked a
 Usage: leptoskit devtools fetch [OPTIONS]
 
 Options:
-      --force    Download it again even when it is already there
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --force              Download it again even when it is already there
+  -h, --help               Print help
+  -V, --version            Print version

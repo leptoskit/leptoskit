@@ -24,7 +24,12 @@ class NativeTextMeasurerTest {
         val box = line[0] / 3
         val wrapped = measurer.measure(SENTENCE.toByteArray(), SIZE, REGULAR, box, false)
 
-        assertTrue("the wrapped sentence fits its box: ${wrapped[0]} > $box", wrapped[0] <= box)
+        // Text layout rounds glyph advances per device density; a sub-pixel
+        // overshoot is rounding, not a wrap failure, so allow one pixel.
+        assertTrue(
+            "the wrapped sentence fits its box: ${wrapped[0]} > $box",
+            wrapped[0] <= box + 1f,
+        )
         assertTrue(
             "a sentence three times its box's width takes three lines: ${wrapped[1]} < 3 × ${line[1]}",
             wrapped[1] >= 3 * line[1],

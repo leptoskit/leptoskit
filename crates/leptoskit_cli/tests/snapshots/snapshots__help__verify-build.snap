@@ -7,6 +7,9 @@ Builds a backend bundle from a Git commit in a container without network access,
 Usage: leptoskit verify build [OPTIONS] --recipe <RECIPE> --out <OUT>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --recipe <RECIPE>
           The build recipe: the JSON a bundle keeps as build.json
 

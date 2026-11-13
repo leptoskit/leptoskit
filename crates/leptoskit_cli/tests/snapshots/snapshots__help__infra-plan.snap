@@ -4,8 +4,9 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Initializes `OpenTofu` and saves an infrastructure plan. Does not apply it
 
-Usage: leptoskit infra plan
+Usage: leptoskit infra plan [OPTIONS]
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

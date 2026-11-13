@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 201
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Builds the server/website image with migration metadata; optionally pushes it
@@ -8,6 +7,7 @@ Builds the server/website image with migration metadata; optionally pushes it
 Usage: leptoskit infra build [OPTIONS] --version <VERSION>
 
 Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
       --version <VERSION>  Unique immutable image tag
       --push               Push using Docker credentials, or `KAMAL_REGISTRY_PASSWORD` when set
       --reuse-existing     Reuse an existing tag only after checking its migration metadata

@@ -7,6 +7,8 @@ Deploys a Git commit through its service, releases a prebuilt image, or rolls ba
 Usage: leptoskit deploy [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
       --verified-descriptor <VERIFIED_DESCRIPTOR>
           Packaging descriptor whose digest was independently authenticated
       --descriptor-sha256 <DESCRIPTOR_SHA256>

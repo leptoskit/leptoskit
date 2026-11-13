@@ -9,6 +9,9 @@ Unpacks the release and compares it with the directory you built from `--reposit
 Usage: leptoskit codepush approve [OPTIONS] --rebuilt <DIR> --repository <URL> --commit <SHA> --out <PATH> <--release <PATH>|--version <VERSION>>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --release <PATH>
           The release container to approve, such as a downloaded `release.lkb`
 

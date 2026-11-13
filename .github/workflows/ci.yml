@@ -301,6 +301,14 @@ jobs:
     # the limit leaves room above that rather than sitting on it.
     timeout-minutes: 210
 
+    # Full debuginfo exhausts the windows-latest runner: link.exe hits PDB
+    # size limits (LNK1318/LNK1140) and then dies with LNK1180 "insufficient
+    # disk space". The coverage job already links with line-tables-only; match
+    # it here so the workspace build stays under the runner's disk budget.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
     strategy:
       fail-fast: false
       matrix:

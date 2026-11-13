@@ -7,7 +7,8 @@ Serves the built output
 Usage: leptoskit serve [OPTIONS]
 
 Options:
-      --dir <DIR>    The directory to serve; defaults to `dist/` [default: dist]
-      --port <PORT>  Serve on a different port than the configuration says
-  -h, --help         Print help
-  -V, --version      Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --dir <DIR>          The directory to serve; defaults to `dist/` [default: dist]
+      --port <PORT>        Serve on a different port than the configuration says
+  -h, --help               Print help
+  -V, --version            Print version

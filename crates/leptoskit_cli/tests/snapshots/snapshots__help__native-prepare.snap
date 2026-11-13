@@ -24,6 +24,9 @@ Arguments:
           - tui:              A terminal application for this machine's own terminal
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --release
           
 

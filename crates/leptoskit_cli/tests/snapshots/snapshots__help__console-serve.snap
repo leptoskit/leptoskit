@@ -7,6 +7,7 @@ Serves the dashboard, durable jobs and analytics history for trusted repositorie
 Usage: leptoskit console serve [OPTIONS] --project <PROJECT>
 
 Options:
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
       --project <PROJECT>  
       --data <DATA>        
       --bind <BIND>        [default: 127.0.0.1:4700]

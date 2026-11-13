@@ -4,8 +4,9 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Reads projects and recent operations from the connected service
 
-Usage: leptoskit console status
+Usage: leptoskit console status [OPTIONS]
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

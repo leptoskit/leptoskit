@@ -7,8 +7,9 @@ Serves a release store for clients to update from, on the configured `serve.addr
 Usage: leptoskit codepush serve [OPTIONS]
 
 Options:
-      --store <STORE>  The release store directory; defaults to `releases/` [default: releases]
-      --dir <DIR>      The static directory served next to the update API [default: dist]
-      --port <PORT>    The port to serve on; defaults to 4100
-  -h, --help           Print help
-  -V, --version        Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --store <STORE>      The release store directory; defaults to `releases/` [default: releases]
+      --dir <DIR>          The static directory served next to the update API [default: dist]
+      --port <PORT>        The port to serve on; defaults to 4100
+  -h, --help               Print help
+  -V, --version            Print version

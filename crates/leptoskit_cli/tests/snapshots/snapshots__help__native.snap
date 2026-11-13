@@ -4,7 +4,7 @@ expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Builds native application hosts and generates plugin registration
 
-Usage: leptoskit native <COMMAND>
+Usage: leptoskit native [OPTIONS] <COMMAND>
 
 Commands:
   bundle    Compiles the native Wasm guest and compatibility descriptor for code push
@@ -14,5 +14,6 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+  -h, --help               Print help
+  -V, --version            Print version

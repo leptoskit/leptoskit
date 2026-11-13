@@ -7,6 +7,9 @@ Opens an installed app, or launches a desktop binary
 Usage: leptoskit device open [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --kind <KIND>
           What to drive; inferred from `--device` or `--url` when omitted
 

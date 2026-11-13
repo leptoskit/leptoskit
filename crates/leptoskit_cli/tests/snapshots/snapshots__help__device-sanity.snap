@@ -7,6 +7,9 @@ Installs, opens, and runs tap, long press, pan, and pinch where the target can i
 Usage: leptoskit device sanity [OPTIONS]
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --kind <KIND>
           What to drive; inferred from `--device` or `--url` when omitted
 

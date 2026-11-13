@@ -7,6 +7,7 @@ Publishes an already signed code-push release to the provisioned bucket
 Usage: leptoskit infra publish [OPTIONS] --platform <PLATFORM>
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --platform <PLATFORM>  Platform whose signed release to publish
       --store <STORE>        Local release store [default: releases]
       --channel <CHANNEL>    Release channel [default: production]

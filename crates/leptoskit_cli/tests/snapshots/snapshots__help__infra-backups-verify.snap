@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 199
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Restores a snapshot into an isolated temporary Postgres container
@@ -8,6 +7,7 @@ Restores a snapshot into an isolated temporary Postgres container
 Usage: leptoskit infra backups verify [OPTIONS]
 
 Options:
+      --app-target <NAME>    Select a named target from the root leptoskit.toml
       --snapshot <SNAPSHOT>  [default: latest]
   -h, --help                 Print help
   -V, --version              Print version

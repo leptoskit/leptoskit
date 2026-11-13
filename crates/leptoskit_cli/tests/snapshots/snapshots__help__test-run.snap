@@ -11,6 +11,9 @@ Arguments:
           Arguments passed literally to the test executable, after --
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
+
       --binary <BINARY>
           Compiled executable for the selected target
 

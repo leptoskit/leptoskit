@@ -7,6 +7,7 @@ Runs one control document from a file or standard input
 Usage: leptoskit device run [OPTIONS]
 
 Options:
-      --from <FROM>  The document's path, or `-` for standard input [default: -]
-  -h, --help         Print help
-  -V, --version      Print version
+      --app-target <NAME>  Select a named target from the root leptoskit.toml
+      --from <FROM>        The document's path, or `-` for standard input [default: -]
+  -h, --help               Print help
+  -V, --version            Print version
