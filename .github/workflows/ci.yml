@@ -34,8 +34,51 @@ jobs:
     name: generated SDK acceptance
     uses: ./.github/workflows/sdk-acceptance.yml
 
+  # One cheap job decides which of the expensive jobs below run. The decision
+  # comes from `monochange ci` reading the declarative `[ci]` section of
+  # monochange.toml, where each job names its root packages and non-Cargo
+  # inputs; transitive dependencies are derived from the workspace graph, so
+  # no crate lists live in this file. The gate fails open twice over:
+  # `on-error: run-all` turns a decide error into "run everything", and each
+  # gated job also runs when the gate job itself fails, because GitHub would
+  # otherwise skip it and a skipped check counts as passing.
+  gate:
+    name: ci gatekeeper
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      decisions: ${{ steps.gate.outputs.decisions }}
+      run-all: ${{ steps.gate.outputs.run-all }}
+      affected-packages: ${{ steps.gate.outputs.affected-packages }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # False negatives learned on main persist in the memory ledger. Restore
+      # the newest one before deciding; ci-verify saves this run's ledger
+      # under a run-id key, so the restore-keys prefix finds the latest.
+      - name: restore the gate decision memory
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .monochange/ci-memory.json
+          key: monochange-ci-memory-${{ github.run_id }}
+          restore-keys: monochange-ci-memory-
+
+      - name: decide which jobs must run
+        id: gate
+        uses: monochange/actions/ci@v0
+        with:
+          provider: opencode-go
+          api-key: ${{ secrets.OPENCODE_GO_API_KEY }}
+          on-error: run-all
+
   schema:
     name: configuration schemas and migrations
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['schema']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -71,6 +114,8 @@ jobs:
 
   use:
     name: use coverage and portability
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['use']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -147,6 +192,8 @@ jobs:
 
   jni-plugins:
     name: kotlin JNI plugin bridge
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['jni-plugins']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -167,6 +214,8 @@ jobs:
 
   apple-plugins:
     name: apple plugin bridge
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['apple-plugins']) }}
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
@@ -187,6 +236,8 @@ jobs:
 
   checks:
     name: checks
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['checks']) }}
     runs-on: ubuntu-latest
     # lint:all also lints the Android and wasm builds, each a compile of its
     # own.
@@ -216,6 +267,8 @@ jobs:
   # rustc's, clippy's, and cargo's own.
   clippy:
     name: clippy (${{ matrix.os }})
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['clippy']) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -264,6 +317,8 @@ jobs:
   # pinning, and permission hardening regressions.
   security:
     name: security
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['security']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -289,6 +344,8 @@ jobs:
   # wasm runtime, and code push — runs as an ordinary test on every OS.
   test:
     name: test (${{ matrix.os }})
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['test']) }}
     runs-on: ${{ matrix.os }}
     # Database drivers and real Postgres clusters make the workspace suite
     # expensive. Generated applications compile optimized host dependencies in
@@ -408,6 +465,8 @@ jobs:
   # other's execution budget.
   applications:
     name: applications (${{ matrix.os }})
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['applications']) }}
     runs-on: ${{ matrix.os }}
     # The macOS leg takes 68–71 minutes when it succeeds, so 75 left no room for a slow runner.
     # A timed-out job never saves its build cache, so one timeout makes the next run start cold
@@ -627,6 +686,8 @@ jobs:
   # application builds do not consume the workspace tests' execution budget.
   coverage:
     name: ${{ matrix.name }}
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['coverage']) }}
     runs-on: ubuntu-latest
     # Cold application builds reached 90 minutes after uploading coverage,
     # then timed out while saving their build cache.
@@ -931,6 +992,8 @@ jobs:
   # the devenv pipeline where the drivers are pinned.
   browser:
     name: browser tests
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['browser']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -1028,6 +1091,8 @@ jobs:
   # crate that offers it.
   nightly:
     name: nightly feature
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['nightly']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -1052,6 +1117,8 @@ jobs:
   # must pass on device.
   ios:
     name: ${{ matrix.name }}
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['ios']) }}
     runs-on: macos-latest
     # Each application has an isolated native target. Keep its cold builds
     # separate from widget verification and the code push milestone.
@@ -1269,6 +1336,8 @@ jobs:
   # journey on an x86_64 emulator using the hosted Linux runner's KVM.
   android:
     name: android build and widget tests
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result != 'success' || needs.gate.outputs.run-all == 'true' || fromJSON(needs.gate.outputs.decisions)['android']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
@@ -1475,6 +1544,9 @@ jobs:
     # runs once they succeed, whatever became of the iOS and Android jobs,
     # whose queues can be long. A report that's missing makes the gate
     # stricter, never looser: lines only those platforms run count as missed.
+    # A job the gate skipped counts as neither: this gate stays skipped too, so
+    # a gated-off PR is never failed for a missing report, while a failure
+    # upstream keeps it (and its own required check) from merging.
     if: ${{ !cancelled() && needs.coverage.result == 'success' && needs.browser.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1531,3 +1603,55 @@ jobs:
             args+=(--base origin/main)
           fi
           cargo run --locked --quiet -p coverage_gate -- "${args[@]}"
+
+  # After a run on main, compare every job's actual outcome with the gate's
+  # decision: a skipped job that would have failed is a false negative, and
+  # its lesson becomes a learned rule in the memory ledger so the same skip
+  # cannot happen twice. The saved cache is what the next gate restores.
+  ci-verify:
+    name: ci gatekeeper outcome
+    needs:
+      - gate
+      - schema
+      - use
+      - jni-plugins
+      - apple-plugins
+      - checks
+      - clippy
+      - security
+      - test
+      - applications
+      - coverage
+      - browser
+      - nightly
+      - ios
+      - android
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: restore the gate decision memory
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .monochange/ci-memory.json
+          key: monochange-ci-memory-${{ github.run_id }}
+          restore-keys: monochange-ci-memory-
+
+      - name: verify gate decisions against the actual outcomes
+        uses: monochange/actions/ci@v0
+        with:
+          mode: verify
+          needs: ${{ toJSON(needs) }}
+          decisions: ${{ needs.gate.outputs.decisions }}
+
+      - name: keep the updated gate decision memory
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .monochange/ci-memory.json
+          key: monochange-ci-memory-${{ github.run_id }}

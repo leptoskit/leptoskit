@@ -972,6 +972,7 @@ in
           run_step "lint:swift" lint:swift
         ''}
         run_step "lint:releases" lint:releases
+        run_step "lint:ci" lint:ci
         run_step "schema:check" schema:check
         run_step "deny:check" deny:check
       '';
@@ -1323,6 +1324,20 @@ in
         monochange check
       '';
       description = "Validate the release configuration and changesets.";
+      binary = "bash";
+    };
+    "lint:ci" = {
+      exec = ''
+        set -euo pipefail
+        # The [ci] section of monochange.toml gates ci.yml, native-ui.yml,
+        # and harmonyos.yml; this keeps the job rules and the workflows that
+        # consume them from drifting apart.
+        monochange ci check \
+          --workflow .github/workflows/ci.yml \
+          --workflow .github/workflows/native-ui.yml \
+          --workflow .github/workflows/harmonyos.yml
+      '';
+      description = "Validate the [ci] gatekeeper config against the workflows it gates.";
       binary = "bash";
     };
     "release:preview" = {

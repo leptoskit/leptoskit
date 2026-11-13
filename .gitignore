@@ -8,6 +8,13 @@ __pycache__/
 # .monochange/releases are committed release state, so only the cache is ignored.
 .monochange/local/
 
+# Repo-scoped CI credentials are machine-local and must never be committed.
+.monochange/ci-auth.json
+
+# The CI gatekeeper's memory ledger is runtime state: CI restores and saves it
+# through the actions cache, and local decide runs rewrite it.
+.monochange/ci-memory.json
+
 # Devenv
 .devenv*
 devenv.local.nix

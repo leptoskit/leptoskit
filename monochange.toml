@@ -912,6 +912,274 @@ match = { paths = ["crates/leptoskit_android/Cargo.toml"] }
 rules = { "cargo/publishable-dependencies" = "off" }
 
 # =============================================================================
+# CI gatekeeper
+# =============================================================================
+
+# `monochange ci decide` (through the gate job of each workflow below) reads
+# this section to decide which CI jobs a change requires. Each job names its
+# ROOT packages — the crates whose builds and tests it runs — and monochange
+# derives their transitive dependencies from the workspace graph, so a change
+# in a dependency triggers the job and a change in an unrelated crate does
+# not. Job ids are the GitHub job ids of .github/workflows/ci.yml,
+# native-ui.yml, and harmonyos.yml (a matrix job's roots are the union of its
+# legs, because GitHub cannot skip a single leg); `devenv shell lint:ci`
+# checks the section against those workflows.
+[ci]
+# The AI provider may only add runs: with `ai_can_skip = false` (the default)
+# a provider "skip" on a graph "run" is ignored and recorded in the reason,
+# and unconditional, `always`, and learned-rule verdicts are never
+# overridden. A provider failure falls back to the graph verdict.
+provider = "opencode-go"
+
+# Changes that run every job: the dependency lockfile and toolchain pins
+# reshape every build, the workflow definitions can move the goalposts, and
+# the devenv inputs rebuild the environment every job develops in.
+unconditional_paths = [
+	"Cargo.lock",
+	"rust-toolchain.toml",
+	".github/workflows/**",
+	"devenv.nix",
+	"devenv.lock",
+]
+
+# Changes that never trigger a job on their own: prose. Markdown anywhere
+# (readmes, the book, changesets) and the book's static assets are covered by
+# the docs workflow and the always-on checks job's format and doc lints; a
+# job that needs a specific non-code input claims it in its own `paths`,
+# which wins over this list (the schema job claims docs/src/schemas/**).
+ignore_paths = ["**/*.md", "docs/src/assets/**", "docs/src/theme/**"]
+
+# leptoskit_config's schema example and contract tests (built `--all-features`,
+# so the string form) and leptoskit_db's server-only check, pinned to exactly
+# the `--no-default-features --features server` invocation this job runs;
+# dependencies (leptoskit_db_macros, leptoskit_db_schema, …) are derived.
+[ci.jobs.schema]
+packages = [
+	"leptoskit_config",
+	{ name = "leptoskit_db", default_features = false, features = ["server"] },
+]
+# The schema example regenerates the published JSON schemas into the book.
+paths = ["docs/src/schema.json", "docs/src/schemas/**"]
+
+# The use-primitive suites: llvm-cov's 100% gate on leptoskit_use, the wasm
+# and wasi portability checks, and the no-server-tree proofs. Every root
+# states the exact feature selection this job builds: the coverage gate and
+# the wasi check run leptoskit_use with `--all-features` (string form), the
+# browser and storage suites pin their features, and the facade is checked
+# only as `leptoskit --no-default-features` — the small Monosecret-only Wasm
+# client — so its optional re-exports alone no longer run this job. The
+# fixtures are compiled with their default features and with `guest`
+# respectively, which is what pulls leptoskit_db and leptoskit_rpc in.
+[ci.jobs.use]
+packages = [
+	"leptoskit_use",
+	{ name = "leptoskit_use", default_features = false },
+	{ name = "leptoskit_use", features = ["local-storage", "web"] },
+	{ name = "leptoskit", default_features = false },
+	{ name = "leptoskit_db_client_fixture" },
+	{ name = "leptoskit_rpc_guest_fixture", features = ["guest"] },
+]
+
+# test:plugins:async and test:plugins:jni exercise the async-host bridge and
+# the JNI bridge through real Kotlin; each crate is built with its
+# `async-host` feature (default features plus it), which also covers the
+# plain bridge_ffi build the JNI smoke test links against.
+[ci.jobs.jni-plugins]
+packages = [
+	{ name = "leptoskit_bridge", features = ["async-host"] },
+	{ name = "leptoskit_bridge_ffi", features = ["async-host"] },
+	{ name = "leptoskit_plugin_http", features = ["async-host"] },
+	{ name = "leptoskit_plugin_websocket", features = ["async-host"] },
+]
+
+# lint:swift plus test:plugins:apple: the Swift test packages live inside the
+# plugin crates, so the glob compiles every plugin's Package.swift — a new
+# plugin crate is covered with zero config edits. The bridge is built with
+# its `async-host` feature; the SwiftLint config is a repo root file no
+# package owns, so it is claimed here.
+[ci.jobs.apple-plugins]
+packages = [
+	{ name = "leptoskit_bridge_ffi", features = ["async-host"] },
+	"leptoskit_sensor",
+	"leptoskit_plugin_*",
+]
+paths = [".swiftlint.yml"]
+
+# lint:all lints the whole tree — clippy across the workspace and its wasm
+# groups, formatting, docs templates, Kotlin, release config — and
+# test:harmonyos checks the ArkTS render model, so even a prose-only change
+# must pass it. `always` is the honest shape for a repo-wide lint floor.
+[ci.jobs.checks]
+always = true
+
+# clippy.sh clippies the whole workspace (host, android, ios, windows legs),
+# plus the file_routes and devtools workspaces and the wasm groups; `*` makes
+# every workspace package a root.
+[ci.jobs.clippy]
+packages = ["*"]
+paths = ["examples/file_routes/**", "devtools/**", "setup/scripts/clippy.sh"]
+
+# zizmor audits .github (workflows are unconditional already); nothing Rust
+# enters this job.
+[ci.jobs.security]
+paths = [".github/**"]
+
+# The desktop suite builds and tests the whole workspace (`--workspace
+# --all-features`), so every workspace package is a root.
+[ci.jobs.test]
+packages = ["*"]
+
+# Both legs build the whole workspace and then drive generated and example
+# applications through the CLI; commonplace, file_routes, and devtools are
+# their own workspaces no package owns, so the job claims their paths.
+[ci.jobs.applications]
+packages = ["*"]
+paths = ["examples/commonplace/**", "examples/file_routes/**", "devtools/**"]
+
+# The workspace leg runs the whole instrumented suite; the applications leg
+# adds the CLI's wasm end-to-end tests and generated linux/tui apps.
+# file_routes is its own workspace, so its path is claimed here.
+[ci.jobs.coverage]
+packages = ["*"]
+paths = ["examples/file_routes/**"]
+
+# The chromedriver/geckodriver suites, the compiled-guest interpreter tests
+# (the *_probe example crates), and the browser plugin suites: the glob keeps
+# every plugin with a wasm test covered, including new ones. leptoskit_native
+# and leptoskit_rive keep the string form because the clippy step runs them
+# with `--all-features`; every other root states the exact selection its
+# suite builds, so leptoskit_use's crate-local selections and the wasm
+# crate's `rive` build are pinned.
+[ci.jobs.browser]
+packages = [
+	{ name = "leptoskit_testing_library" },
+	{ name = "leptoskit_query" },
+	{ name = "auth_pages_example", features = ["web"] },
+	"leptoskit_native",
+	{ name = "leptoskit_use", features = ["local-storage", "web"] },
+	"leptoskit_rive",
+	{ name = "leptoskit_wasm", features = ["rive"] },
+	{ name = "leptoskit_bridge", default_features = false, features = ["guest"] },
+	{ name = "leptoskit_bridge_ffi", features = ["app"] },
+	{ name = "leptoskit_bridge_ffi", features = ["devtools"] },
+	{ name = "leptoskit_cli" },
+	{ name = "gallery", features = ["web"] },
+	{ name = "leptoskit_sensor" },
+	"plugin_guest_probe",
+	"plugin_replies_probe",
+	"timer_guest_probe",
+	{ name = "hooks_guest_probe", features = ["devtools"] },
+	"agent_ui_guest_probe",
+	"leptoskit_plugin_*",
+]
+paths = ["examples/file_routes/**"]
+
+# The three crates that forward leptos's nightly feature, each pinned to the
+# exact selection the job compiles (`nightly` on top of default features, and
+# the facade additionally with `leptos`).
+[ci.jobs.nightly]
+packages = [
+	{ name = "leptoskit_rpc", features = ["nightly"] },
+	{ name = "leptoskit_query", features = ["nightly"] },
+	{ name = "leptoskit", features = ["nightly", "leptos"] },
+]
+
+# The simulator suites across all three legs: the platform probe, the use
+# primitives (`--all-features` for the ios-sim check, so the string form), the
+# UIKit controls and widget journey (leptoskit_testing, built with its
+# default features), and the generated/file_routes apps built and driven
+# through the CLI. leptoskit_bridge_ffi keeps the string form: the host
+# library's features are derived from each app's manifest, so no single
+# selection describes what the journey compiles. The probe scripts are repo
+# files no package owns, so the job claims them.
+[ci.jobs.ios]
+packages = [
+	"platform_probe",
+	"leptoskit_use",
+	{ name = "leptoskit_testing" },
+	"leptoskit_bridge_ffi",
+	"leptoskit_cli",
+	{ name = "leptoskit_uikit" },
+	"gallery_verify",
+]
+paths = [
+	"setup/scripts/ios_probe_run.sh",
+	"setup/scripts/tests/ios_probe_environment.rs",
+	"setup/scripts/export_device_coverage.sh",
+	"examples/file_routes/**",
+]
+
+# The emulator suite: the cross-compiled probe (bridge_ffi is cross-compiled
+# with its default features alongside it, and the host build derives its
+# features from each app's manifest, so it keeps the string form), the use
+# primitives (`--all-features`), the widget journey and host runner
+# (leptoskit_testing, default features), the Android backend's device
+# verification (default features), and the generated/universal/file_routes
+# apps through the CLI. android_apk is a dev-dependency of leptoskit_android,
+# so it is derived; the SDK install and settle scripts are claimed.
+[ci.jobs.android]
+packages = [
+	"platform_probe",
+	"leptoskit_use",
+	{ name = "leptoskit_testing" },
+	"leptoskit_bridge_ffi",
+	"leptoskit_cli",
+	{ name = "leptoskit_android" },
+	"gallery_verify",
+]
+paths = [
+	"setup/scripts/android_sdk_install.sh",
+	"setup/scripts/android_settle.sh",
+	"examples/file_routes/**",
+]
+
+# The mobile legs of the native UI conformance suite: the shared
+# native_conformance runner (leptoskit_testing with its `native-ui` feature)
+# against the CaptureLab fixture apps under crates/leptoskit_testing/fixtures.
+# The Appium driver, the WDA build, and the fixture wrappers live under setup/.
+[ci.jobs.native-ui-mobile]
+packages = [{ name = "leptoskit_testing", features = ["native-ui"] }]
+paths = [
+	"setup/native-ui/**",
+	"setup/scripts/native_*",
+	"setup/scripts/android_sdk_install.sh",
+	"setup/scripts/android_settle.sh",
+]
+
+# The desktop legs additionally drive the dialog plugin's own native fixture
+# and journey examples (compiled with default features), so the dialog plugin
+# is a root alongside the shared runner.
+[ci.jobs.native-ui-macos]
+packages = [
+	{ name = "leptoskit_testing", features = ["native-ui"] },
+	"leptoskit_plugin_dialog",
+]
+paths = ["setup/native-ui/**", "setup/scripts/native_*"]
+
+[ci.jobs.native-ui-windows]
+packages = [
+	{ name = "leptoskit_testing", features = ["native-ui"] },
+	"leptoskit_plugin_dialog",
+]
+paths = ["setup/native-ui/**", "setup/scripts/native_*"]
+
+[ci.jobs.native-ui-linux]
+packages = [
+	{ name = "leptoskit_testing", features = ["native-ui"] },
+	"leptoskit_plugin_dialog",
+]
+paths = ["setup/native-ui/**", "setup/scripts/native_*"]
+
+# The ArkUI host: the CLI's HarmonyOS templates and its harmonyos tests, the
+# posture plugin's ArkTS sources (owned by the plugin crate), and
+# harmonyos_plugins — the setup crate that depends on every plugin — which
+# the arm64 plugin build compiles. The glob keeps new plugin crates covered
+# before they are wired into it. The pinned hvigor wrapper is claimed.
+[ci.jobs.harmonyos-sdk]
+packages = ["leptoskit_cli", "harmonyos_plugins", "leptoskit_plugin_*"]
+paths = ["setup/harmonyos/**", "setup/scripts/harmonyos_plugins_build.sh"]
+
+# =============================================================================
 # CLI commands
 # =============================================================================
 
