@@ -172,6 +172,7 @@
 			"description": "The published RPC: what `leptoskit rpc` describes and generates\nclients for.",
 			"$ref": "#/$defs/RpcConfig",
 			"default": {
+				"default_transport": "json",
 				"description": null,
 				"exclude": [],
 				"include_internal": false,
@@ -181,9 +182,13 @@
 					"retention_days": 7,
 					"workers": 4
 				},
+				"path": "/rpc",
 				"servers": [],
 				"targets": [],
-				"title": null
+				"title": null,
+				"transports": [
+					"json"
+				]
 			}
 		},
 		"schema_version": {
@@ -3635,6 +3640,11 @@
 			"description": "The published RPC, as `leptoskit rpc` describes it and generates clients\nfor it.\n\nWhich functions are published is decided in code, with\n`#[leptoskit_rpc::api]`; this section names the RPC, excludes functions by\npattern, and says where generated clients go.",
 			"type": "object",
 			"properties": {
+				"default_transport": {
+					"description": "The encoding generated SDKs prefer. The only transport is `json`.",
+					"type": "string",
+					"default": "json"
+				},
 				"description": {
 					"description": "A longer description for the OpenAPI document.",
 					"type": [
@@ -3670,6 +3680,18 @@
 					"description": "Live queries across several servers.",
 					"$ref": "#/$defs/RpcLiveConfig"
 				},
+				"live_path": {
+					"description": "Live WebSocket or SSE mount. Unset, the socket stays at `/live` while\n`path` is the default `/rpc`, and follows the operations at\n`{path}/live` once `path` moves; set it to mount the socket anywhere.",
+					"type": [
+						"string",
+						"null"
+					]
+				},
+				"path": {
+					"description": "HTTP prefix for `#[rpc::query]` and `#[rpc::mutation]` routes, before\n`/<name>`; defaults to `/rpc`. The JSON routes also stay mounted on\nthe legacy `/api` prefix. Moving it moves the live socket to\n`{path}/live` unless `live_path` names another mount.",
+					"type": "string",
+					"default": "/rpc"
+				},
 				"servers": {
 					"description": "The origins the RPC is served from. The first one is the default the\ngenerated clients point at; none means the page's own origin.",
 					"type": "array",
@@ -3693,6 +3715,16 @@
 						"null"
 					],
 					"default": null
+				},
+				"transports": {
+					"description": "Which wire encodings the server accepts on operation routes. The only\ntransport is `json` (serde JSON).",
+					"type": "array",
+					"default": [
+						"json"
+					],
+					"items": {
+						"type": "string"
+					}
 				}
 			},
 			"additionalProperties": false

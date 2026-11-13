@@ -4,14 +4,14 @@
 //! sent to the `analytics` service rather than the app's own server:
 //!
 //! - in the browser and in a native app, to
-//!   `{origin}/_leptoskit/services/analytics/api/<name>`, on the app's origin,
+//!   `{origin}/_leptoskit/services/analytics/rpc/<name>`, on the app's origin,
 //!   which the edge (or `leptoskit dev`) forwards to the service. The app's own
 //!   credentials don't go along: only those
 //!   [`ClientConfig::service_credentials`] names for the service do. In the
 //!   browser the page's cookies still go with every same-origin request; the
 //!   edge strips them for services the app doesn't trust.
 //! - from a Rust server, such as the app's while it renders, to
-//!   `$LEPTOSKIT_SERVICE_ANALYTICS_URL/_leptoskit/services/analytics/api/
+//!   `$LEPTOSKIT_SERVICE_ANALYTICS_URL/_leptoskit/services/analytics/rpc/
 //!   <name>`, as an anonymous caller: what the server renders is what the
 //!   browser would fetch. [`call_as_app`](super::call_as_app) is the one way to
 //!   call as the app, signed with `$LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`; no
@@ -115,6 +115,11 @@ pub(crate) fn for_service(config: &ClientConfig, service: &str) -> ClientConfig 
 		offline_queue: false,
 		offline_store: None,
 		service_credentials: std::collections::BTreeMap::new(),
+		// A service's routes keep the toolkit's default mounts under its
+		// prefix: the app's `[rpc].path` moves its own operations, and
+		// generated clients a service exported point at its own.
+		rpc_path: crate::RPC_ROUTE_PREFIX.to_owned(),
+		live_path: crate::live::LIVE_PATH.to_owned(),
 	}
 }
 
@@ -576,6 +581,13 @@ impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 		};
 
 		let origin = service_origin(Some(&url), self.service);
+		// A service keeps the toolkit's default mounts under its prefix:
+		// this build's `[rpc].path` moves the app's own operations.
+		let endpoints = ClientConfig {
+			rpc_path: crate::RPC_ROUTE_PREFIX.to_owned(),
+			live_path: crate::live::LIVE_PATH.to_owned(),
+			..ClientConfig::default()
+		};
 
 		#[cfg(any(feature = "postgres", feature = "sqlite"))]
 		if !self.as_app && crate::service::forwards_identity(self.service, &*self.lookup) {
@@ -593,7 +605,7 @@ impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 				let config = ClientConfig {
 					origin: Some(origin),
 					credentials,
-					..ClientConfig::default()
+					..endpoints
 				};
 				super::protocol::Remote::new(config, http)
 					.call(name, arguments, key)
@@ -604,7 +616,7 @@ impl<H: super::protocol::Http + Clone> Api for FromEnvironment<H> {
 		let config = ClientConfig {
 			origin: Some(origin),
 			credentials,
-			..ClientConfig::default()
+			..endpoints
 		};
 		super::protocol::Remote::new(config, self.http.clone()).call(name, arguments, key)
 	}

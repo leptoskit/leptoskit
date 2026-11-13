@@ -15,6 +15,8 @@
 
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod action;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+mod ambient;
 #[cfg(feature = "live")]
 pub mod channel;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -43,8 +45,25 @@ mod services;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub mod stream;
 
+/// Normalizes a live mount for both HTTP-only and live server builds.
+#[cfg(any(feature = "live", feature = "postgres", feature = "sqlite"))]
+pub(crate) fn mount_path(path: &str) -> String {
+	let trimmed = path.trim_matches('/');
+	if trimmed.is_empty() {
+		crate::live::LIVE_PATH.to_owned()
+	} else {
+		format!("/{trimmed}")
+	}
+}
+
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use action::ActionCx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use ambient::cx;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub(crate) use ambient::enter_query;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use ambient::mutation_cx;
 #[cfg(feature = "live")]
 pub use channel::ChannelRegistration;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
@@ -355,8 +374,10 @@ mod tests {
 
 	fn handler(
 		_: Invocation,
-	) -> leptoskit_query::BoxFuture<'static, crate::Result<serde_json::Value>> {
-		Box::pin(std::future::ready(Ok(serde_json::Value::Null)))
+	) -> leptoskit_query::BoxFuture<'static, crate::Result<crate::wire::WireBody>> {
+		Box::pin(std::future::ready(Ok(crate::wire::WireBody::Json(
+			serde_json::Value::Null,
+		))))
 	}
 
 	static A: Registration = Registration {

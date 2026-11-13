@@ -52,7 +52,7 @@ async fn post(
 	token: Option<&str>,
 ) -> (u16, String) {
 	let mut request = reqwest::Client::new()
-		.post(format!("http://{address}{PREFIX}/api/{operation}"))
+		.post(format!("http://{address}{PREFIX}/rpc/{operation}"))
 		.json(&args);
 
 	if let Some(token) = token {
@@ -97,7 +97,7 @@ async fn browsers_capture_and_read_the_summary_but_only_the_app_reads_events() {
 
 	// The operations live under the service's prefix only.
 	let status = reqwest::Client::new()
-		.post(format!("http://{address}/api/capture"))
+		.post(format!("http://{address}/rpc/capture"))
 		.json(&capture("signup"))
 		.send()
 		.await

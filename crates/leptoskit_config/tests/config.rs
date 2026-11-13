@@ -343,6 +343,34 @@ fn unknown_fields_are_rejected() {
 }
 
 #[test]
+fn rpc_transports_name_json_only() {
+	let valid = LeptoskitConfig::from_toml(
+		"[rpc]\ntransports = [\"json\"]\ndefault_transport = \"json\"\n",
+		std::path::Path::new("notes"),
+	)
+	.expect("valid");
+	assert!(valid.rpc.serves_json());
+
+	for (raw, message) in [
+		("[rpc]\ntransports = []\n", "must list `json`"),
+		(
+			"[rpc]\ntransports = [\"json\", \"pod\"]\n",
+			"unknown rpc transport `pod`",
+		),
+		(
+			"[rpc]\ndefault_transport = \"pod\"\n",
+			"unknown rpc.default_transport `pod`",
+		),
+	] {
+		let error = LeptoskitConfig::from_toml(raw, std::path::Path::new("notes")).unwrap_err();
+		assert!(
+			matches!(&error, ConfigError::InvalidRpcTransport(reason) if reason.contains(message)),
+			"{raw}: {error}"
+		);
+	}
+}
+
+#[test]
 fn missing_file_reports_read_error() {
 	let scratch = Scratch::new("missing");
 	let error = LeptoskitConfig::load_from(&scratch.path).unwrap_err();

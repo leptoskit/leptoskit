@@ -1,4 +1,4 @@
-//! The client every remote platform shares: `POST /api/<name>` over
+//! The client every remote platform shares: `POST /rpc/<name>` over
 //! whatever sends HTTP there, signed by whatever keeps this device's
 //! credentials.
 
@@ -99,6 +99,9 @@ pub(crate) struct Remote<H> {
 
 struct Inner<H> {
 	origin: String,
+	/// Where the operations mount, such as `/rpc`: the configuration's
+	/// `[rpc].path`.
+	path: String,
 	http: H,
 	credentials: Option<Arc<dyn Credentials>>,
 }
@@ -112,6 +115,7 @@ impl<H: Http> Remote<H> {
 					.unwrap_or_default()
 					.trim_end_matches('/')
 					.to_owned(),
+				path: config.rpc_path,
 				http,
 				credentials: config.credentials,
 			}),
@@ -169,7 +173,7 @@ impl<H: Http> Inner<H> {
 		arguments: Value,
 		idempotency_key: Option<String>,
 	) -> Result<Value, FnError> {
-		let url = format!("{}/api/{name}", self.origin);
+		let url = format!("{}{}/{}", self.origin, self.path, name);
 		let body = arguments.to_string();
 		// Only a keyed call is safe to send again: the server runs it once.
 		let attempts = if idempotency_key.is_some() {

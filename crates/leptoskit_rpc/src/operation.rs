@@ -81,7 +81,7 @@ impl fmt::Display for Kind {
 /// let latest = rpc::client::call(Messages { channel, limit: 50 }).await?;
 /// ```
 pub trait Operation: Serialize + DeserializeOwned + Clone + Send + Sync + 'static {
-	/// The operation's name: its route is `/api/<NAME>`.
+	/// The operation's name: its route is `/rpc/<NAME>`.
 	const NAME: &'static str;
 	/// What kind of operation it is.
 	const KIND: Kind;

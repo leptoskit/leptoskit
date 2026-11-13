@@ -45,7 +45,9 @@ pub use leptoskit_rpc_codegen::HttpInput;
 pub use leptoskit_rpc_codegen::HttpOutput;
 use leptoskit_rpc_codegen::spec::SERVER_DEFAULT_SCHEMA_KEY;
 pub use leptoskit_rpc_codegen::spec::SPEC_DESCRIPTION_ENV;
+pub use leptoskit_rpc_codegen::spec::SPEC_LIVE_PATH_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_OUT_ENV;
+pub use leptoskit_rpc_codegen::spec::SPEC_PATH_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_SERVERS_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_SERVICE_ENV;
 pub use leptoskit_rpc_codegen::spec::SPEC_TITLE_ENV;
@@ -104,6 +106,13 @@ pub struct ApiFnDescriptor {
 	/// under [`service_prefix`](crate::service_prefix), and it belongs to
 	/// that service's spec, not the app's: see [`SpecOptions::service`].
 	pub service: Option<&'static str>,
+	/// Whether the macro that registered this is an `#[rpc::query]`,
+	/// `#[rpc::mutation]`, and the like: an operation the server mounts at
+	/// `[rpc].path`, rather than a leptos `#[server]` function leptos mounts
+	/// itself. The spec exporter composes these operations' routes from the
+	/// configured prefix and [`name`](Self::name), so a spec describes where
+	/// a client really sends them.
+	pub rpc_operation: bool,
 }
 
 /// One argument of an [`ApiFnDescriptor`].
@@ -222,6 +231,10 @@ pub struct SpecOptions {
 	pub description: Option<String>,
 	/// The base URLs the RPC is served from.
 	pub servers: Vec<String>,
+	/// Where the operations mount, relative to each server URL, such as
+	/// `/rpc`: `leptoskit.toml`'s `[rpc].path`. Every operation's route is
+	/// this prefix and the operation's name.
+	pub path: String,
 	/// Where the live socket is served, relative to each server URL;
 	/// `/live` unless the app nests `Live::router` elsewhere.
 	pub live_path: String,
@@ -240,6 +253,7 @@ impl SpecOptions {
 			version: version.into(),
 			description: None,
 			servers: Vec::new(),
+			path: leptoskit_rpc_codegen::DEFAULT_RPC_PATH.to_owned(),
 			live_path: leptoskit_rpc_codegen::DEFAULT_LIVE_PATH.to_owned(),
 			service: None,
 		}
@@ -270,7 +284,10 @@ impl SpecOptions {
 						.collect()
 				})
 				.unwrap_or_default(),
-			live_path: leptoskit_rpc_codegen::DEFAULT_LIVE_PATH.to_owned(),
+			live_path: read(SPEC_LIVE_PATH_ENV)
+				.unwrap_or_else(|| leptoskit_rpc_codegen::DEFAULT_LIVE_PATH.to_owned()),
+			path: read(SPEC_PATH_ENV)
+				.unwrap_or_else(|| leptoskit_rpc_codegen::DEFAULT_RPC_PATH.to_owned()),
 			service: None,
 		};
 
@@ -281,15 +298,13 @@ impl SpecOptions {
 	}
 
 	/// Describes the service `name`'s operations instead of the app's, with
-	/// its live socket under its prefix.
+	/// its routes and its live socket under its prefix.
 	#[must_use]
 	pub fn service(mut self, name: impl Into<String>) -> Self {
 		let name = name.into();
-		self.live_path = format!(
-			"{}{}",
-			crate::service_prefix(&name),
-			leptoskit_rpc_codegen::DEFAULT_LIVE_PATH
-		);
+		let prefix = crate::service_prefix(&name);
+		self.live_path = format!("{prefix}{}", self.live_path);
+		self.path = format!("{prefix}{}", self.path);
 		self.service = Some(name);
 		self
 	}
@@ -305,6 +320,13 @@ impl SpecOptions {
 	#[must_use]
 	pub fn with_live_path(mut self, path: impl Into<String>) -> Self {
 		self.live_path = path.into();
+		self
+	}
+
+	/// Sets where the operations mount, such as `/gateway`.
+	#[must_use]
+	pub fn with_path(mut self, path: impl Into<String>) -> Self {
+		self.path = path.into();
 		self
 	}
 
@@ -466,6 +488,13 @@ pub fn collect_with_channels(
 			settings.meta_schema = None;
 		})
 		.into_generator();
+	// An rpc operation's route is the configured prefix and its name: the
+	// server mounts it there (and keeps the legacy `/api` prefix for JSON
+	// while that is a transport), wherever the macro that registered it
+	// compiled. A leptos `#[server]` function keeps the route leptos
+	// generated for it. A service's spec has its prefix composed in
+	// already, by [`SpecOptions::service`].
+	let rpc_prefix = options.path.trim_end_matches('/').to_owned();
 	let functions = descriptors
 		.iter()
 		.map(|descriptor| {
@@ -492,13 +521,18 @@ pub fn collect_with_channels(
 				})
 				.collect();
 			let output_schema = (descriptor.output_schema)(&mut generator).to_value();
+			let path = if descriptor.rpc_operation {
+				format!("{rpc_prefix}/{}", descriptor.name)
+			} else {
+				descriptor.path.to_owned()
+			};
 			ApiFunction {
 				name: descriptor.name.to_owned(),
 				kind: descriptor.kind,
 				module_path: descriptor.module_path.to_owned(),
 				struct_name: descriptor.struct_name.to_owned(),
 				docs: descriptor.docs.to_owned(),
-				path: descriptor.path.to_owned(),
+				path,
 				method: descriptor.method.to_string(),
 				input: classify_input(&descriptor.method, descriptor.input_content_type),
 				output: classify_output(descriptor.output_content_type),
@@ -554,6 +588,7 @@ pub fn collect_with_channels(
 		functions,
 		channels,
 		live_path: options.live_path.clone(),
+		rpc_path: options.path.clone(),
 		schemas: schemas.into_iter().collect(),
 	})
 }

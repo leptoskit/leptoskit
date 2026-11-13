@@ -152,7 +152,7 @@ async fn each_server_serves_only_its_own_operations() {
 	// The app's server routes its own `ping`, not the service's.
 	let app = rpc::server::Server::new(db.clone());
 	assert_eq!(
-		post(app.router(), "/api/ping").await,
+		post(app.router(), "/rpc/ping").await,
 		(StatusCode::OK, r#""hi from the app""#.to_owned())
 	);
 
@@ -161,7 +161,7 @@ async fn each_server_serves_only_its_own_operations() {
 	let service = rpc::server::Server::new(db).service("echo");
 	assert_eq!(service.service_name(), Some("echo"));
 	assert_eq!(
-		post(service.router(), "/api/ping").await,
+		post(service.router(), "/rpc/ping").await,
 		(StatusCode::OK, r#""hi from nobody""#.to_owned())
 	);
 	let served: Vec<&str> = rpc::server::registrations_in(Some("echo"))
@@ -694,7 +694,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	// sign-in…
 	let (status, body) = send(
 		app.router(),
-		"/api/rpc.service_token",
+		"/rpc/rpc.service_token",
 		ask,
 		&[("x-person", &ada)],
 	)
@@ -705,7 +705,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	assert!(!minted.token.contains("t0k3n"));
 	// …and nobody gets nothing.
 	assert_eq!(
-		send(app.router(), "/api/rpc.service_token", ask, &[]).await,
+		send(app.router(), "/rpc/rpc.service_token", ask, &[]).await,
 		(StatusCode::OK, "null".to_owned())
 	);
 
@@ -715,7 +715,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	assert_eq!(
 		send(
 			service.router(),
-			"/api/ping",
+			"/rpc/ping",
 			r#"{"word":"hi"}"#,
 			&[("authorization", &bearer)]
 		)
@@ -725,7 +725,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	assert_eq!(
 		send(
 			service.router(),
-			"/api/ping",
+			"/rpc/ping",
 			r#"{"word":"hi"}"#,
 			&[("authorization", "Bearer t0k3n")]
 		)
@@ -740,7 +740,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 		.identify(ServiceCallers::new(Anonymous).forwarded_identity("other", "t0k3n"));
 	let (status, _) = send(
 		other.router(),
-		"/api/ping",
+		"/rpc/ping",
 		r#"{"word":"hi"}"#,
 		&[("authorization", &bearer)],
 	)
@@ -762,7 +762,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 		let service = echo_service(leptoskit_db::testing::sqlite().await);
 		let (status, body) = send(
 			service.router(),
-			"/api/ping",
+			"/rpc/ping",
 			r#"{"word":"hi"}"#,
 			&[("authorization", &format!("Bearer {token}"))],
 		)
@@ -775,7 +775,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	let service = echo_service(leptoskit_db::testing::sqlite().await);
 	let (status, body) = send(
 		service.router(),
-		"/api/rpc.service_token",
+		"/rpc/rpc.service_token",
 		ask,
 		&[("authorization", &bearer)],
 	)
@@ -788,7 +788,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 		.identify(ServiceCallers::new(People).forwarded_identity("echo", "t0k3n"));
 	let (status, body) = send(
 		confused.router(),
-		"/api/rpc.service_token",
+		"/rpc/rpc.service_token",
 		ask,
 		&[("authorization", &bearer)],
 	)
@@ -804,7 +804,7 @@ async fn the_app_mints_a_token_that_only_its_service_accepts_as_the_person() {
 	assert_eq!(
 		send(
 			app.router(),
-			"/api/rpc.service_token",
+			"/rpc/rpc.service_token",
 			ask,
 			&[("x-person", &ada)],
 		)

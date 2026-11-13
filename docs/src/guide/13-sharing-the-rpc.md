@@ -292,6 +292,14 @@ language = "openapi"
 out = "docs/openapi"
 ```
 
+The generated app serves the operations at `path` (`/rpc` by default, with the JSON routes also kept on the legacy `/api` prefix) and the live socket at `live_path`. Unset, the socket stays at `/live`; set `path` without `live_path`, and the socket follows the operations at `{path}/live`. The spec export carries both mounts, so generated clients call the operations and open the socket where the app serves them. The app's own client follows them too: `leptoskit dev` and `leptoskit build` compile the browser and native clients with the configured mounts, and `ClientConfig::rpc_path` and `live_path` name them by hand when a build doesn't go through the CLI. A service's operations keep the default mounts under the service's prefix: `[rpc].path` moves the app's own. For example:
+
+```toml
+[rpc]
+path = "/api/v2" # POST /api/v2/<op>, and /api/<op> for older JSON callers
+live_path = "/ws" # the live socket; omit it for /api/v2/live
+```
+
 ## Generating clients
 
 ```bash

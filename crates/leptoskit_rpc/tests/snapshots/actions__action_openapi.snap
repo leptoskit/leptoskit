@@ -1,6 +1,6 @@
 ---
 source: crates/leptoskit_rpc/tests/actions.rs
-expression: "openapi[\"paths\"][\"/api/summarize\"]"
+expression: "openapi[\"paths\"][\"/rpc/summarize\"]"
 ---
 {
   "post": {

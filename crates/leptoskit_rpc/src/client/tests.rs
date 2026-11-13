@@ -66,6 +66,71 @@ impl Http for Script {
 	}
 }
 
+#[cfg(all(feature = "server", feature = "sqlite"))]
+mod configured_roundtrip {
+	use http_body_util::BodyExt as _;
+	use tower::ServiceExt as _;
+
+	use super::*;
+
+	#[crate::query(crate = "crate")]
+	async fn remote_mount_count(_cx: &crate::QueryCx) -> crate::Result<u32> {
+		Ok(3)
+	}
+
+	#[derive(Clone)]
+	struct RouterHttp(axum::Router);
+
+	impl Http for RouterHttp {
+		fn send(&self, request: HttpRequest) -> BoxFuture<'static, Result<HttpResponse, FnError>> {
+			let router = self.0.clone();
+			Box::pin(async move {
+				let mut builder = http::Request::post(&request.url);
+				for (name, value) in request.headers() {
+					builder = builder.header(name, value);
+				}
+				let response = router
+					.oneshot(builder.body(axum::body::Body::from(request.body)).unwrap())
+					.await
+					.unwrap();
+				let status = response.status().as_u16();
+				let body = response
+					.into_body()
+					.collect()
+					.await
+					.unwrap()
+					.to_bytes()
+					.to_vec();
+				Ok(HttpResponse { status, body })
+			})
+		}
+	}
+
+	#[tokio::test]
+	async fn generated_operation_round_trips_through_a_configured_server() {
+		let db = leptoskit_db::testing::sqlite().await;
+		let config = leptoskit_config::RpcConfig {
+			path: "/gateway".to_owned(),
+			..leptoskit_config::RpcConfig::default()
+		};
+		let router = crate::server::Server::new(db).rpc_config(&config).router();
+		let client = Remote::new(
+			ClientConfig::new().rpc_path(&config.path),
+			RouterHttp(router),
+		);
+		let arguments = serde_json::to_value(RemoteMountCount {}).unwrap();
+		let result = client
+			.call(
+				<RemoteMountCount as crate::Operation>::NAME,
+				arguments,
+				Key::None,
+			)
+			.await
+			.unwrap();
+		assert_eq!(result, json!(3));
+	}
+}
+
 /// A bearer token that renews once after a `401`.
 struct Token {
 	current: Mutex<String>,
@@ -105,7 +170,7 @@ async fn calls_post_the_arguments_to_the_operations_route() {
 
 	let sent = script.sent();
 	assert_eq!(sent.len(), 1);
-	assert_eq!(sent[0].url, "https://notes.example/api/notes");
+	assert_eq!(sent[0].url, "https://notes.example/rpc/notes");
 	assert_eq!(sent[0].body, r#"{"starting":"m"}"#);
 	assert_eq!(
 		sent[0].headers(),
@@ -114,6 +179,31 @@ async fn calls_post_the_arguments_to_the_operations_route() {
 			("content-type", "application/json"),
 		]
 	);
+}
+
+#[tokio::test]
+async fn a_configured_rpc_path_moves_the_operations_route() {
+	let script = Script::default().answer(200, "3");
+	let client = remote(&script, ClientConfig::new().rpc_path("/gateway"));
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "/gateway/count");
+
+	// Slashes around the value name the same mount, whichever way they lean.
+	let script = Script::default().answer(200, "3");
+	let client = remote(
+		&script,
+		ClientConfig::new()
+			.origin("https://app.example/")
+			.rpc_path("ops/v1/"),
+	);
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "https://app.example/ops/v1/count");
+
+	// The default keeps the route every app has served.
+	let script = Script::default().answer(200, "3");
+	let client = remote(&script, ClientConfig::new().origin("https://app.example"));
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "https://app.example/rpc/count");
 }
 
 #[tokio::test]
@@ -141,7 +231,7 @@ async fn credentials_sign_requests_and_renew_after_a_refusal() {
 	let sent = script.sent();
 	assert_eq!(sent[0].authorization.as_deref(), Some("Bearer stale"));
 	assert_eq!(sent[1].authorization.as_deref(), Some("Bearer fresh"));
-	assert_eq!(sent[1].url, "/api/count");
+	assert_eq!(sent[1].url, "/rpc/count");
 
 	// A second refusal that renewing can't fix reaches the caller.
 	assert_eq!(
@@ -323,7 +413,7 @@ async fn a_server_calls_a_service_at_its_url_anonymously_unless_as_the_app() {
 	let sent = script.sent();
 	assert_eq!(
 		sent[0].url,
-		"http://127.0.0.1:3100/_leptoskit/services/event-store/api/ping"
+		"http://127.0.0.1:3100/_leptoskit/services/event-store/rpc/ping"
 	);
 	assert_eq!(sent[0].authorization, None, "anonymous by default");
 
@@ -396,7 +486,7 @@ async fn a_service_is_signed_with_the_persons_token_for_it_until_the_sign_in_cha
 	assert_eq!(token.authorization().await, Ok(first.clone()));
 	let sent = app.sent();
 	assert_eq!(sent.len(), 1);
-	assert_eq!(sent[0].url, "https://app.example/api/rpc.service_token");
+	assert_eq!(sent[0].url, "https://app.example/rpc/rpc.service_token");
 	assert_eq!(
 		serde_json::from_str::<serde_json::Value>(&sent[0].body).unwrap(),
 		json!({ "service": "analytics" })
@@ -487,7 +577,7 @@ async fn a_browser_or_native_app_calls_a_service_on_the_apps_origin() {
 	browser.call("capture", json!({}), Key::None).await.unwrap();
 	assert_eq!(
 		script.sent()[0].url,
-		"/_leptoskit/services/analytics/api/capture"
+		"/_leptoskit/services/analytics/rpc/capture"
 	);
 
 	// In a native app: the configured origin, and none of the app's own
@@ -515,7 +605,7 @@ async fn a_browser_or_native_app_calls_a_service_on_the_apps_origin() {
 	let _ = native.call("capture", json!({}), Key::None).await;
 	assert_eq!(
 		script.sent()[0].url,
-		"https://app.example/_leptoskit/services/analytics/api/capture"
+		"https://app.example/_leptoskit/services/analytics/rpc/capture"
 	);
 	assert_eq!(script.sent()[0].authorization, None);
 	assert_eq!(script.sent().len(), 1, "a service's 401 renews nothing");

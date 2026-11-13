@@ -779,7 +779,7 @@ mod operations {
 		// The descriptor is printed token by token: compare without spaces.
 		let compact: String = published.split_whitespace().collect();
 		assert!(
-			compact.contains(r#"path:"/_leptoskit/services/analytics/api/summary""#),
+			compact.contains(r#"path:"/_leptoskit/services/analytics/rpc/summary""#),
 			"{published}"
 		);
 		assert!(
@@ -1058,8 +1058,8 @@ mod operations {
 				Query,
 				"",
 				"async fn f(cx: &Db) -> rpc::Result<()> {}",
-				"`cx: &rpc::QueryCx`",
-				"Db",
+				"they are owned",
+				"&Db",
 			),
 			(
 				Mutation,

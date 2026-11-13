@@ -226,7 +226,7 @@ async fn call(
 	args: &Value,
 ) -> Result<Value, String> {
 	let response = http
-		.post(format!("{base}/api/{name}"))
+		.post(format!("{base}/rpc/{name}"))
 		.header("origin", base)
 		.header("cookie", &account.cookie)
 		.header("content-type", "application/json")

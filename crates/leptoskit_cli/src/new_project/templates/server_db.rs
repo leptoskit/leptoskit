@@ -68,10 +68,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	migrated.pass();
 
-	// The queries and mutations in `__CRATE___shared`: `POST /api/<name>`,
-	// and the live socket at `/live`, where a screen or a generated client
+	// The queries and mutations in `__CRATE___shared`, mounted where `[rpc]`
+	// in leptoskit.toml says: `POST {path}/<name>` (`/rpc` by default, with
+	// the JSON routes also kept on `/api`), and the live socket at
+	// `live_path`, or `{path}/live`, where a screen or a generated client
 	// subscribes to a query and receives every change to its result.
-	let operations = __CRATE___backend::operations(db.clone());
+	let rpc = leptoskit::LeptoskitConfig::from_toml(
+		include_str!("../leptoskit.toml"),
+		std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+	)?
+	.rpc;
+	let operations = __CRATE___backend::operations(db.clone()).rpc_config(&rpc);
 	let live = operations.live();
 
 	if let Some(ready) = live_ready {

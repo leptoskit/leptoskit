@@ -626,7 +626,10 @@ fn adjust_for_platform(config: &mut LeptoskitConfig, platform: Platform) {
 
 /// The plugins' environment, plus what this platform's build needs: an
 /// extension compiles in the server `[extension].server` names, which
-/// `leptoskit::extension::runtime::server()` reads.
+/// `leptoskit::extension::runtime::server()` reads, and the client reads
+/// the `[rpc]` mounts from `LEPTOSKIT_RPC_PATH` and
+/// `LEPTOSKIT_RPC_LIVE_PATH`, so the browser and a native app send their
+/// calls where the server really serves them.
 fn platform_env(
 	config: &LeptoskitConfig,
 	platform: Platform,
@@ -647,6 +650,20 @@ fn platform_env(
 	{
 		env.insert("LEPTOSKIT_EXTENSION_SERVER".to_owned(), server);
 	}
+
+	env.insert(
+		"LEPTOSKIT_RPC_PATH".to_owned(),
+		config.rpc.path.trim_end_matches('/').to_owned(),
+	);
+	env.insert(
+		"LEPTOSKIT_RPC_LIVE_PATH".to_owned(),
+		config
+			.rpc
+			.resolved_live_path()
+			.trim_end_matches('/')
+			.to_owned(),
+	);
+
 	env
 }
 
@@ -1272,6 +1289,39 @@ mod tests {
 		config.native.log_level = Some(leptoskit_config::LogLevel::Trace);
 		let env = platform_env(&config, Platform::Web, BTreeMap::new());
 		assert_eq!(env.get(variable).map(String::as_str), Some("trace"));
+	}
+
+	#[test]
+	fn client_builds_carry_the_configured_rpc_mounts() {
+		let env = platform_env(&LeptoskitConfig::default(), Platform::Web, BTreeMap::new());
+		assert_eq!(
+			env.get("LEPTOSKIT_RPC_PATH").map(String::as_str),
+			Some("/rpc")
+		);
+		assert_eq!(
+			env.get("LEPTOSKIT_RPC_LIVE_PATH").map(String::as_str),
+			Some("/live")
+		);
+
+		let mut config = LeptoskitConfig::default();
+		config.rpc.path = "/gateway/".to_owned();
+		let env = platform_env(&config, Platform::Native, BTreeMap::new());
+		assert_eq!(
+			env.get("LEPTOSKIT_RPC_PATH").map(String::as_str),
+			Some("/gateway")
+		);
+		// Without `live_path`, the socket follows the operations.
+		assert_eq!(
+			env.get("LEPTOSKIT_RPC_LIVE_PATH").map(String::as_str),
+			Some("/gateway/live")
+		);
+
+		config.rpc.live_path = Some("/realtime".to_owned());
+		let env = platform_env(&config, Platform::Extension, BTreeMap::new());
+		assert_eq!(
+			env.get("LEPTOSKIT_RPC_LIVE_PATH").map(String::as_str),
+			Some("/realtime")
+		);
 	}
 
 	fn package(features: &[&str]) -> wasm::MetadataPackage {

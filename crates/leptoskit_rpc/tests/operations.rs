@@ -82,6 +82,13 @@ pub async fn notes(
 		.collect())
 }
 
+/// Same query as [`notes`], pulling the context instead of taking it.
+#[rpc::query]
+pub async fn notes_here(#[serde(default)] starting: Option<String>) -> rpc::Result<Vec<String>> {
+	let cx = rpc::cx()?;
+	notes(&cx, starting).await
+}
+
 /// What `after_commit` saw, in order.
 static COMMITTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -219,6 +226,7 @@ struct Call<'a> {
 	user: Option<&'a str>,
 	key: Option<&'a str>,
 	body: String,
+	pod_body: Option<Vec<u8>>,
 }
 
 impl<'a> Call<'a> {
@@ -228,7 +236,13 @@ impl<'a> Call<'a> {
 			user: None,
 			key: None,
 			body: body.to_string(),
+			pod_body: None,
 		}
+	}
+
+	fn pod(mut self, bytes: Vec<u8>) -> Self {
+		self.pod_body = Some(bytes);
+		self
 	}
 
 	fn user(mut self, user: &'a str) -> Self {
@@ -248,7 +262,7 @@ impl<'a> Call<'a> {
 
 	async fn send(self, router: &Router) -> (StatusCode, String) {
 		let mut request =
-			Request::post(format!("/api/{}", self.name)).header("content-type", "application/json");
+			Request::post(format!("/rpc/{}", self.name)).header("content-type", "application/json");
 
 		if let Some(user) = self.user {
 			request = request.header("x-user", user);
@@ -267,6 +281,26 @@ impl<'a> Call<'a> {
 
 		let bytes = response.into_body().collect().await.unwrap().to_bytes();
 		(status, String::from_utf8(bytes.to_vec()).unwrap())
+	}
+
+	async fn send_pod(self, router: &Router) -> (StatusCode, Vec<u8>) {
+		let mut request = Request::post(format!("/rpc/{}", self.name))
+			.header("content-type", "application/vnd.leptoskit.rpc.v1+bin")
+			.header("accept", "application/vnd.leptoskit.rpc.v1+bin");
+
+		if let Some(user) = self.user {
+			request = request.header("x-user", user);
+		}
+
+		let payload = self.pod_body.unwrap_or_else(|| self.body.into_bytes());
+		let response = router
+			.clone()
+			.oneshot(request.body(Body::from(payload)).unwrap())
+			.await
+			.unwrap();
+		let status = response.status();
+		let bytes = response.into_body().collect().await.unwrap().to_bytes();
+		(status, bytes.to_vec())
 	}
 }
 
@@ -325,6 +359,36 @@ async fn routes_answer_as_the_caller(db: &Db) {
 		.send(&router)
 		.await;
 	assert_eq!(body, "2");
+}
+
+#[tokio::test]
+async fn ambient_query_cx_reads_notes() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+	Call::new("add_note", &json!({ "title": "ambient" }))
+		.user("ada")
+		.send(&router)
+		.await;
+	let (status, body) = Call::new("notes_here", &json!({}))
+		.user("ada")
+		.send(&router)
+		.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body, r#"["ambient"]"#);
+}
+
+#[tokio::test]
+async fn pod_content_type_is_rejected() {
+	let db = sqlite().await;
+	let router = Server::new(db.clone()).identify(Header).router::<()>();
+	let (status, bytes) = Call::new("notes", &json!({}))
+		.user("ada")
+		.pod(vec![0, 0])
+		.send_pod(&router)
+		.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let body = String::from_utf8_lossy(&bytes);
+	assert!(body.contains("JSON"), "{body}");
 }
 
 async fn failures_arrive_classified(db: &Db) {
@@ -602,11 +666,13 @@ async fn server_code_calls_operations(db: &Db) {
 		db: ada.clone(),
 		identity: Identity::of(&ada),
 		request_id: None,
-		arguments: json!({}),
+		arguments: rpc::wire::WireArgs::Json(json!({})),
+		response: rpc::wire::Transport::Json,
 		reads: Some(sink.clone()),
 	})
 	.await
 	.unwrap();
+	let rpc::wire::WireBody::Json(count) = count;
 	assert!(count.as_u64().is_some_and(|count| count > 0));
 	let reads = sink.take();
 	assert_eq!(reads.len(), 1);
@@ -614,15 +680,17 @@ async fn server_code_calls_operations(db: &Db) {
 	assert_eq!(sink.take(), Vec::<leptoskit_db::ReadEntry>::new());
 
 	let registration = rpc::server::registration("add_note").unwrap();
-	(registration.handler)(rpc::server::Invocation {
+	let body = (registration.handler)(rpc::server::Invocation {
 		db: ada.clone(),
 		identity: Identity::of(&ada),
 		request_id: None,
-		arguments: json!({ "title": "sunk" }),
+		arguments: rpc::wire::WireArgs::Json(json!({ "title": "sunk" })),
+		response: rpc::wire::Transport::Json,
 		reads: Some(sink.clone()),
 	})
 	.await
 	.unwrap();
+	let rpc::wire::WireBody::Json(_) = body;
 	assert_eq!(sink.take(), Vec::<leptoskit_db::ReadEntry>::new());
 }
 
@@ -713,7 +781,7 @@ fn published_operations_join_the_spec_with_their_kind() {
 	assert_eq!(notes.kind, rpc::spec::ApiKind::Query);
 	assert_eq!(
 		(notes.method.as_str(), notes.path.as_str()),
-		("POST", "/api/notes")
+		("POST", "/rpc/notes")
 	);
 	assert_eq!(notes.struct_name, "Notes");
 	assert_eq!(notes.tags, ["notes"]);
@@ -756,6 +824,7 @@ fn published_operations_join_the_spec_with_their_kind() {
 			"bump_once",
 			"note_count",
 			"notes",
+			"notes_here",
 			"rpc.cancel_job",
 			"rpc.inbox",
 			"rpc.job_status",

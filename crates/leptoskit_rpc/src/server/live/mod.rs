@@ -1,6 +1,6 @@
-//! Serving live queries: the `/live` WebSocket and its server-sent events
-//! fallback, the subscriptions each connection holds, and the transitions
-//! that tell it what changed.
+//! Serving live queries: the WebSocket at `[rpc].live_path` (`/live` by
+//! default) and its server-sent events fallback, the subscriptions each
+//! connection holds, and the transitions that tell it what changed.
 //!
 //! A connection asks for queries by name, with the same arguments the HTTP
 //! route takes. The server runs each one as the caller, keeps its result,
@@ -89,8 +89,6 @@ use super::Invocation;
 use super::ReadSink;
 use super::registration_in;
 use crate::Kind;
-use crate::live::EVENTS_PATH;
-use crate::live::FRAMES_PATH;
 use crate::live::MAX_RESULT_BYTES;
 use crate::live::PresenceMember;
 use crate::live::WireError;
@@ -129,6 +127,9 @@ struct Inner {
 	/// The service whose queries and mutations it serves; `None` for the
 	/// app's own.
 	service: Option<&'static str>,
+	/// Where the socket, its server-sent events, and its frame posts mount:
+	/// `[rpc].live_path`, or `[rpc].path`/live, or `/live`.
+	live_path: String,
 	/// How long a frame may wait to be sent before the connection closes.
 	stall: std::time::Duration,
 	shared: Arc<Shared>,
@@ -237,6 +238,7 @@ impl Live {
 				identify: Arc::new(super::Anonymous),
 				origin: None,
 				service: None,
+				live_path: crate::live::LIVE_PATH.to_owned(),
 				stall: STALL,
 				shared: Arc::new(Shared {
 					drain: broadcast::channel(8).0,
@@ -290,6 +292,24 @@ impl Live {
 	#[must_use]
 	pub fn for_service(self, name: Option<&'static str>) -> Self {
 		self.with(|inner| inner.service = name)
+	}
+
+	/// Mounts the socket where `[rpc]` in `leptoskit.toml` says:
+	/// [`live_path`](leptoskit_config::RpcConfig::live_path), or
+	/// `{path}/live` when it isn't set. The socket serves at that path, with
+	/// its server-sent events at `{path}/events` and its frame posts at
+	/// `{path}/frames`, relative to wherever the router is nested.
+	/// [`Server::live`](super::Server::live) applies the same setting for
+	/// the live server it hands out.
+	#[must_use]
+	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
+		self.with_live_path(config.resolved_live_path())
+	}
+
+	/// [`rpc_config`](Self::rpc_config) with an already resolved path.
+	pub(crate) fn with_live_path(self, path: impl Into<String>) -> Self {
+		let path = super::mount_path(&path.into());
+		self.with(|inner| inner.live_path = path)
 	}
 
 	/// The service whose operations this serves, or `None` for the app's.
@@ -451,6 +471,7 @@ impl Live {
 			identify: Arc::clone(&self.inner.identify),
 			origin: self.inner.origin.clone(),
 			service: self.inner.service,
+			live_path: self.inner.live_path.clone(),
 			stall: self.inner.stall,
 			shared: Arc::clone(&self.inner.shared),
 		};
@@ -460,17 +481,21 @@ impl Live {
 		}
 	}
 
-	/// The router serving `GET /live` (the WebSocket), `GET /live/events`
-	/// (server-sent events) and `POST /live/frames` (their client frames),
-	/// relative to wherever it is nested.
+	/// The router serving the configured live path (the WebSocket,
+	/// [`{path}/events`](crate::live::EVENTS_PATH) server-sent events, and
+	/// [`{path}/frames`](crate::live::FRAMES_PATH) for their client frames),
+	/// relative to wherever it is nested. The path is
+	/// [`/live`](crate::live::LIVE_PATH)
+	/// unless [`rpc_config`](Self::rpc_config) says otherwise.
 	pub fn router<S>(&self) -> Router<S>
 	where
 		S: Clone + Send + Sync + 'static,
 	{
+		let base = &self.inner.live_path;
 		Router::new()
-			.route("/live", get(socket::upgrade))
-			.route(EVENTS_PATH, get(sse::events))
-			.route(FRAMES_PATH, post(sse::frames))
+			.route(base, get(socket::upgrade))
+			.route(&format!("{base}/events"), get(sse::events))
+			.route(&format!("{base}/frames"), post(sse::frames))
 			.with_state(self.clone())
 	}
 
@@ -591,11 +616,13 @@ async fn run_query(
 		db,
 		identity,
 		request_id: None,
-		arguments: args,
+		arguments: crate::wire::WireArgs::Json(args),
+		response: crate::wire::Transport::Json,
 		reads: Some(sink.clone()),
 	})
 	.await
 	.map_err(|error| WireError::new(&error))?;
+	let crate::wire::WireBody::Json(value) = value;
 	let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
 
 	if size > MAX_RESULT_BYTES {
