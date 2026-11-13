@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 236
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Prepare candidates, recheck inputs, then activate each host
@@ -8,6 +7,8 @@ Prepare candidates, recheck inputs, then activate each host
 Usage: leptoskit infra release apply [OPTIONS] --bundle <BUNDLE> --sha256 <SHA256> --trust <TRUST> --trust-sha256 <TRUST_SHA256> --version <VERSION> --unit <UNIT> --plan <PLAN>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
       --bundle <BUNDLE>
           Directory containing captured graph artifacts and manifest.json
       --sha256 <SHA256>

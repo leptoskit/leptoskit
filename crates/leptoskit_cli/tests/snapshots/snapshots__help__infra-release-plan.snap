@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 236
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 Save a release plan after checking independent artifact and host pins
@@ -8,6 +7,8 @@ Save a release plan after checking independent artifact and host pins
 Usage: leptoskit infra release plan [OPTIONS] --bundle <BUNDLE> --sha256 <SHA256> --trust <TRUST> --trust-sha256 <TRUST_SHA256> --version <VERSION> --unit <UNIT> --plan <PLAN>
 
 Options:
+      --app-target <NAME>
+          Select a named target from the root leptoskit.toml
       --bundle <BUNDLE>
           Directory containing captured graph artifacts and manifest.json
       --sha256 <SHA256>
