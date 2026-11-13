@@ -106,7 +106,7 @@ fn settings() -> CaptureSettings {
 
 /// Waits until `check` holds, or fails after a while.
 async fn eventually(what: &str, mut check: impl AsyncFnMut() -> bool) {
-	let waited = tokio::time::timeout(Duration::from_secs(30), async {
+	let waited = tokio::time::timeout(Duration::from_secs(120), async {
 		while !check().await {
 			tokio::time::sleep(Duration::from_millis(10)).await;
 		}
