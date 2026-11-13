@@ -34,7 +34,7 @@ public final class HealthPlugin: NativePlugin {
         switch method {
         case Method.availability: encodeAvailability(Self.available)
         case Method.features: encodeMask(HealthWire.appleTypes, flags: 0)
-        case Method.granted: encodeGrants()
+        case Method.granted: encodeUnknownReadGrants()
         case Method.request: try await request(TypesRequest(data))
         case Method.read: try await read(ReadRequest(data))
         case Method.changesToken: try await changesToken(TypesRequest(data))
@@ -50,22 +50,12 @@ public final class HealthPlugin: NativePlugin {
         queries.removeAll()
     }
 
-    /// What the user allowed, as far as HealthKit says; reads it hides look
-    /// like ones never asked for, so `exact` stays false.
-    private func encodeGrants() -> Data {
-        var mask: UInt32 = 0
-        for code in Self.supportedCodes where store.authorizationStatus(for: objectType(code)) == .sharingAuthorized {
-            mask |= 1 << UInt32(code)
-        }
-        return encodeMask(mask, flags: HealthWire.flagExact)
-    }
-
     /// Shows HealthKit's sheet for the requested types and reports the state
     /// it left behind.
     private func request(_ request: TypesRequest) async throws -> Data {
         try await store.requestAuthorization(toShare: [], read: Set(request.types.map(objectType)))
         if closed { throw PluginError.cancelled }
-        return encodeGrants()
+        return encodeUnknownReadGrants()
     }
 
     /// One page of one type's samples, oldest first; the token carries how

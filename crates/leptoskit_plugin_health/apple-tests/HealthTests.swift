@@ -4,6 +4,13 @@ import XCTest
 
 /// Codec tests over synthetic payloads; these never open HealthKit or prompt.
 final class HealthTests: XCTestCase {
+    func testHealthKitReadGrantsStayUnknownRatherThanDenied() throws {
+        var grants = Reader(encodeUnknownReadGrants())
+        XCTAssertEqual(try grants.u32(), 0, "HealthKit cannot report a read authorization mask")
+        XCTAssertEqual(try grants.u32(), 0, "An unknown mask must not set the exact flag")
+        try grants.finished()
+    }
+
     func testAvailabilityAndMaskRepliesMatchTheRustFraming() {
         XCTAssertEqual(encodeAvailability(3), Data([3, 0, 0, 0]))
         XCTAssertEqual(encodeMask(HealthWire.appleTypes, flags: HealthWire.flagExact), reply(0x1FB, 4))

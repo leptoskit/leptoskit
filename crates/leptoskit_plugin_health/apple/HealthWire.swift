@@ -274,6 +274,13 @@ public func encodeMask(_ mask: UInt32, flags: UInt32) -> Data {
     return writer.bytes()
 }
 
+/// HealthKit deliberately does not reveal read authorization. An empty,
+/// inexact mask means unknown, never denied. Its sharing authorization API
+/// describes writes and must not be used to infer these read grants.
+func encodeUnknownReadGrants() -> Data {
+    encodeMask(0, flags: 0)
+}
+
 /// Encodes the availability code the Rust codec decodes.
 public func encodeAvailability(_ code: Int) -> Data {
     var writer = WireWriter()
