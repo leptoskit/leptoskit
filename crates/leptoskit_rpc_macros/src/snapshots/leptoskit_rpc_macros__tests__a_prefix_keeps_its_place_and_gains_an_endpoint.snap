@@ -34,4 +34,5 @@ static REGISTERED: ::leptoskit_rpc::spec::ApiFnDescriptor = ::leptoskit_rpc::spe
     tags: &[],
     scopes: &[],
     service: ::core::option::Option::None,
+    rpc_operation: false,
 };

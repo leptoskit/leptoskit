@@ -1796,7 +1796,7 @@ fn transport(config: &ClientConfig, service: Option<&str>) -> Option<Arc<dyn Tra
 	};
 
 	let socket = Arc::new(Socket {
-		url: socket_url(&origin),
+		url: socket_url(&origin, &config.live_path),
 	});
 
 	// The browser falls back to server-sent events; a native guest's HTTP
@@ -1809,7 +1809,10 @@ fn transport(config: &ClientConfig, service: Option<&str>) -> Option<Arc<dyn Tra
 	))]
 	return Some(Arc::new(Fallback::new(
 		socket,
-		Arc::new(events::EventStream::new(&origin)),
+		Arc::new(events::EventStream::new(&format!(
+			"{origin}{}",
+			live_mount(&config.live_path)
+		))),
 	)));
 
 	#[cfg(not(all(
@@ -1846,16 +1849,62 @@ fn transport(_config: &ClientConfig, _service: Option<&str>) -> Option<Arc<dyn T
 	)),
 	allow(dead_code, reason = "only the browser and native apps open sockets")
 )]
-fn socket_url(origin: &str) -> String {
+fn socket_url(origin: &str, live_path: &str) -> String {
 	let origin = origin.trim_end_matches('/');
+	let base = format!("{origin}{}", live_mount(live_path));
 
-	if let Some(rest) = origin.strip_prefix("https://") {
-		format!("wss://{rest}/live")
-	} else if let Some(rest) = origin.strip_prefix("http://") {
-		format!("ws://{rest}/live")
+	if let Some(rest) = base.strip_prefix("https://") {
+		format!("wss://{rest}")
+	} else if let Some(rest) = base.strip_prefix("http://") {
+		format!("ws://{rest}")
 	} else {
-		format!("{origin}/live")
+		base
 	}
+}
+
+/// The live mount `path` names: trimmed, and beginning with a slash, the
+/// same shape the server's live router serves.
+fn live_mount(path: &str) -> String {
+	let trimmed = path.trim_matches('/');
+	if trimmed.is_empty() {
+		crate::live::LIVE_PATH.to_owned()
+	} else {
+		format!("/{trimmed}")
+	}
+}
+
+/// The server-sent events stream of the live mount `base`, which is the
+/// origin and the live mount, such as `https://app.example/live`.
+#[cfg_attr(
+	not(all(
+		feature = "web",
+		not(feature = "guest"),
+		target_arch = "wasm32",
+		target_os = "unknown"
+	)),
+	allow(dead_code, reason = "only the browser opens event streams")
+)]
+fn events_url(base: &str) -> String {
+	format!("{}/events", base.trim_end_matches('/'))
+}
+
+/// The frames post of the live mount `base`, for `connection`'s client
+/// frames.
+#[cfg_attr(
+	not(all(
+		feature = "web",
+		not(feature = "guest"),
+		target_arch = "wasm32",
+		target_os = "unknown"
+	)),
+	allow(dead_code, reason = "only the browser posts frames")
+)]
+fn frames_url(base: &str, connection: &str) -> String {
+	format!(
+		"{}/frames?connection={}",
+		base.trim_end_matches('/'),
+		connection
+	)
 }
 
 /// The scheme and authority of `url`, without its path:
@@ -2157,9 +2206,9 @@ impl Transport for Fallback {
 	}
 }
 
-/// Server-sent events in the browser: an `EventSource` on `/live/events`
-/// for the server's frames, and a same-origin `POST` to `/live/frames` for
-/// each of the client's.
+/// Server-sent events in the browser: an `EventSource` on the live mount's
+/// `/events` for the server's frames, and a same-origin `POST` to its
+/// `/frames` for each of the client's.
 #[cfg(all(
 	feature = "web",
 	not(feature = "guest"),
@@ -2182,26 +2231,27 @@ mod events {
 
 	use super::Connection;
 	use super::Transport;
-	use crate::live::EVENTS_PATH;
-	use crate::live::FRAMES_PATH;
+	use super::events_url;
+	use super::frames_url;
 	use crate::live::ServerFrame;
 
 	pub(super) struct EventStream {
-		origin: String,
+		/// The origin and the live mount, such as `https://app.example/live`.
+		base: String,
 	}
 
 	impl EventStream {
-		pub(super) fn new(origin: &str) -> Self {
+		pub(super) fn new(base: &str) -> Self {
 			Self {
-				origin: origin.trim_end_matches('/').to_owned(),
+				base: base.trim_end_matches('/').to_owned(),
 			}
 		}
 	}
 
 	impl Transport for EventStream {
 		fn connect(&self) -> BoxFuture<'static, Result<Box<dyn Connection>, String>> {
-			let origin = self.origin.clone();
-			Box::pin(SendWrapper::new(async move { open(&origin).await }))
+			let base = self.base.clone();
+			Box::pin(SendWrapper::new(async move { open(&base).await }))
 		}
 	}
 
@@ -2225,8 +2275,8 @@ mod events {
 		post: String,
 	}
 
-	async fn open(origin: &str) -> Result<Box<dyn Connection>, String> {
-		let source = web_sys::EventSource::new(&format!("{origin}{EVENTS_PATH}"))
+	async fn open(base: &str) -> Result<Box<dyn Connection>, String> {
+		let source = web_sys::EventSource::new(&events_url(base))
 			.map_err(|_| "the event stream wouldn't open".to_owned())?;
 		let (sender, mut frames) = mpsc::unbounded::<Result<String, String>>();
 		let on_message = sender.clone();
@@ -2268,7 +2318,7 @@ mod events {
 			_source: Arc::new(SendWrapper::new(source)),
 			frames: Arc::new(Mutex::new(frames)),
 			welcome: Arc::new(Mutex::new(Some(welcome))),
-			post: format!("{origin}{FRAMES_PATH}?connection={connection}"),
+			post: frames_url(base, &connection),
 		}))
 	}
 
@@ -3621,6 +3671,9 @@ mod tests {
 
 #[cfg(test)]
 mod service_urls {
+	use super::events_url;
+	use super::frames_url;
+	use super::live_mount;
 	use super::socket_url;
 	use super::url_origin;
 	use crate::client::services::service_origin;
@@ -3629,11 +3682,14 @@ mod service_urls {
 	fn a_services_socket_lives_under_its_prefix_on_the_apps_origin() {
 		let origin = service_origin(Some("https://app.example/"), "analytics");
 		assert_eq!(origin, "https://app.example/_leptoskit/services/analytics");
-		let url = socket_url(&origin);
+		let url = socket_url(&origin, crate::live::LIVE_PATH);
 		assert_eq!(url, "wss://app.example/_leptoskit/services/analytics/live");
 		assert_eq!(url_origin(&url), Some("wss://app.example"));
 		assert_eq!(
-			socket_url(&service_origin(Some("http://127.0.0.1:3000"), "a")),
+			socket_url(
+				&service_origin(Some("http://127.0.0.1:3000"), "a"),
+				crate::live::LIVE_PATH
+			),
 			"ws://127.0.0.1:3000/_leptoskit/services/a/live"
 		);
 		assert_eq!(
@@ -3644,5 +3700,40 @@ mod service_urls {
 
 		assert_eq!(url_origin("/live"), None);
 		assert_eq!(url_origin("wss:///live"), None);
+	}
+
+	#[test]
+	fn a_configured_live_mount_replaces_the_default() {
+		assert_eq!(
+			socket_url("https://app.example", "/realtime"),
+			"wss://app.example/realtime"
+		);
+		assert_eq!(
+			socket_url("http://127.0.0.1:3000/", "rt/live/"),
+			"ws://127.0.0.1:3000/rt/live"
+		);
+		assert_eq!(socket_url("", "/live"), "/live");
+		// A mount given without its leading slash is still one mount.
+		assert_eq!(
+			socket_url("wss://app.example", "rt"),
+			"wss://app.example/rt"
+		);
+		assert_eq!(live_mount(""), "/live");
+		assert_eq!(live_mount("live"), "/live");
+		assert_eq!(live_mount("/realtime/"), "/realtime");
+	}
+
+	#[test]
+	fn the_event_stream_and_frame_posts_follow_the_live_mount() {
+		let base = "https://app.example/realtime";
+		assert_eq!(events_url(base), "https://app.example/realtime/events");
+		assert_eq!(
+			frames_url(base, "42"),
+			"https://app.example/realtime/frames?connection=42"
+		);
+		assert_eq!(
+			events_url("http://a.test/live"),
+			"http://a.test/live/events"
+		);
 	}
 }

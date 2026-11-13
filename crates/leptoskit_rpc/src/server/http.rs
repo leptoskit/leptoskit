@@ -79,13 +79,16 @@ impl Server {
 	/// [`live`](Self::live) serves at `live_path`, or `{path}/live`.
 	#[must_use]
 	pub fn rpc_config(self, config: &leptoskit_config::RpcConfig) -> Self {
+		let route_prefix = config.path.trim_end_matches('/').to_owned();
+		remember_route_prefix(&route_prefix);
+
 		Self {
 			inner: Arc::new(Inner {
 				db: self.inner.db.clone(),
 				identify: Arc::clone(&self.inner.identify),
 				service: self.inner.service,
 				transports: crate::wire::TransportSet::from_names(&config.transports),
-				route_prefix: config.path.trim_end_matches('/').to_owned(),
+				route_prefix,
 				live_path: super::mount_path(&config.resolved_live_path()),
 			}),
 		}
@@ -361,6 +364,27 @@ impl std::fmt::Debug for Server {
 }
 
 static INSTALLED: RwLock<Option<Server>> = RwLock::new(None);
+
+/// The operation prefix this process serves: `[rpc].path` once a server
+/// applied [`rpc_config`](Server::rpc_config), `/rpc` before that. Route
+/// matchers that only see a request's path, such as
+/// [`scopes_for`](crate::spec::scopes_for), read it here.
+static CONFIGURED_PREFIX: RwLock<Option<String>> = RwLock::new(None);
+
+fn remember_route_prefix(prefix: &str) {
+	*CONFIGURED_PREFIX
+		.write()
+		.unwrap_or_else(PoisonError::into_inner) = Some(prefix.to_owned());
+}
+
+/// The prefix rpc operations mount at in this process.
+pub(crate) fn configured_route_prefix() -> String {
+	CONFIGURED_PREFIX
+		.read()
+		.unwrap_or_else(PoisonError::into_inner)
+		.clone()
+		.unwrap_or_else(|| crate::RPC_ROUTE_PREFIX.to_owned())
+}
 
 /// The server in-process calls use, once one is installed.
 pub(crate) fn installed() -> Option<Server> {

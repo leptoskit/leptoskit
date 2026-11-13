@@ -117,6 +117,31 @@ async fn calls_post_the_arguments_to_the_operations_route() {
 }
 
 #[tokio::test]
+async fn a_configured_rpc_path_moves_the_operations_route() {
+	let script = Script::default().answer(200, "3");
+	let client = remote(&script, ClientConfig::new().rpc_path("/gateway"));
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "/gateway/count");
+
+	// Slashes around the value name the same mount, whichever way they lean.
+	let script = Script::default().answer(200, "3");
+	let client = remote(
+		&script,
+		ClientConfig::new()
+			.origin("https://app.example/")
+			.rpc_path("ops/v1/"),
+	);
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "https://app.example/ops/v1/count");
+
+	// The default keeps the route every app has served.
+	let script = Script::default().answer(200, "3");
+	let client = remote(&script, ClientConfig::new().origin("https://app.example"));
+	client.call("count", json!({}), Key::None).await.unwrap();
+	assert_eq!(script.sent()[0].url, "https://app.example/rpc/count");
+}
+
+#[tokio::test]
 async fn credentials_sign_requests_and_renew_after_a_refusal() {
 	let token = Arc::new(Token {
 		current: Mutex::new("stale".to_owned()),

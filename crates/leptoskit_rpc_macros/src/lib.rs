@@ -820,72 +820,18 @@ fn expand_server(args: &ApiArgs, mut function: ItemFn, register: bool) -> syn::R
 	// The `# Arguments` section lands on the arguments themselves, so it is
 	// stripped from the function docs to avoid saying everything twice.
 	let docs = strip_arguments_section(&raw_docs);
-	let deprecated = function
-		.attrs
-		.iter()
-		.any(|attr| attr.path().is_ident("deprecated"));
 
 	let registration = if register {
-		// The type leptos implements `ServerFn` for.
-		let server_fn: Type = match &server_args.custom {
-			Some(wrapper) => syn::parse_quote!(#wrapper<#struct_ident>),
-			None => syn::parse_quote!(#struct_ident),
-		};
-
-		let struct_name = LitStr::new(&struct_ident.to_string(), struct_ident.span());
-		let docs = LitStr::new(&docs, Span::call_site());
-		let internal = args.internal;
-		let tags = &args.tags;
-		// A literal is the scope itself; anything else is a variant of a
-		// `scopes!` enum, whose `as_str` is a `const fn`.
-		let scopes = args.scopes.iter().map(|scope| {
-			if let Expr::Lit(_) = scope {
-				scope.to_token_stream()
-			} else {
-				quote!((#scope).as_str())
-			}
-		});
-		let param_descriptors = params.iter().map(|param| {
-			let wire_name = LitStr::new(&param.wire_name, Span::call_site());
-			let docs = LitStr::new(&param.docs, Span::call_site());
-			let ty = &param.ty;
-			let required = param.required;
-			quote! {
-				#krate::spec::ApiParamDescriptor {
-					name: #wire_name,
-					docs: #docs,
-					schema: |generator| generator.subschema_for::<#ty>(),
-					required: #required,
-				}
-			}
-		});
-
-		quote! {
-			#krate::__private::inventory::submit! {
-				#krate::spec::ApiFnDescriptor {
-					name: #name,
-					kind: #krate::spec::ApiKind::Call,
-					module_path: ::core::module_path!(),
-					struct_name: #struct_name,
-					docs: #docs,
-					path: <#server_fn as #krate::__private::ServerFn>::PATH,
-					method: #krate::spec::method_of::<#server_fn>(),
-					input_content_type: #krate::spec::input_content_type_of::<#server_fn>(),
-					output_content_type: #krate::spec::output_content_type_of::<#server_fn>(),
-					error_content_type: #krate::spec::error_content_type_of::<#server_fn>(),
-					params: &[#(#param_descriptors),*],
-					output_schema: |generator| {
-						generator.subschema_for::<
-							<#server_fn as #krate::__private::ServerFn>::Output,
-						>()
-					},
-					internal: #internal,
-					deprecated: #deprecated,
-					tags: &[#(#tags),*],
-					scopes: &[#(#scopes),*], service: ::core::option::Option::None,
-				}
-			}
-		}
+		server_fn_registration(
+			args,
+			&function,
+			&server_args,
+			&struct_ident,
+			&docs,
+			&params,
+			&name,
+			&krate,
+		)
 	} else {
 		TokenStream::new()
 	};
@@ -894,6 +840,89 @@ fn expand_server(args: &ApiArgs, mut function: ItemFn, register: bool) -> syn::R
 		#function
 		#registration
 	})
+}
+
+/// The `ApiFnDescriptor` a `#[server]` function submits: leptos mounts it at
+/// `ServerFn::PATH` itself, so the route stays whatever leptos generated.
+#[expect(
+	clippy::too_many_arguments,
+	reason = "the pieces `expand_server` has already worked out, handed on as they are"
+)]
+fn server_fn_registration(
+	args: &ApiArgs,
+	function: &ItemFn,
+	server_args: &ServerArgs,
+	struct_ident: &Ident,
+	docs: &str,
+	params: &[Param],
+	name: &LitStr,
+	krate: &Path,
+) -> TokenStream {
+	// The type leptos implements `ServerFn` for.
+	let server_fn: Type = match &server_args.custom {
+		Some(wrapper) => syn::parse_quote!(#wrapper<#struct_ident>),
+		None => syn::parse_quote!(#struct_ident),
+	};
+
+	let struct_name = LitStr::new(&struct_ident.to_string(), struct_ident.span());
+	let docs = LitStr::new(docs, Span::call_site());
+	let internal = args.internal;
+	let tags = &args.tags;
+	let deprecated = function
+		.attrs
+		.iter()
+		.any(|attr| attr.path().is_ident("deprecated"));
+	// A literal is the scope itself; anything else is a variant of a
+	// `scopes!` enum, whose `as_str` is a `const fn`.
+	let scopes = args.scopes.iter().map(|scope| {
+		if let Expr::Lit(_) = scope {
+			scope.to_token_stream()
+		} else {
+			quote!((#scope).as_str())
+		}
+	});
+	let param_descriptors = params.iter().map(|param| {
+		let wire_name = LitStr::new(&param.wire_name, Span::call_site());
+		let docs = LitStr::new(&param.docs, Span::call_site());
+		let ty = &param.ty;
+		let required = param.required;
+		quote! {
+			#krate::spec::ApiParamDescriptor {
+				name: #wire_name,
+				docs: #docs,
+				schema: |generator| generator.subschema_for::<#ty>(),
+				required: #required,
+			}
+		}
+	});
+
+	quote! {
+		#krate::__private::inventory::submit! {
+			#krate::spec::ApiFnDescriptor {
+				name: #name,
+				kind: #krate::spec::ApiKind::Call,
+				module_path: ::core::module_path!(),
+				struct_name: #struct_name,
+				docs: #docs,
+				path: <#server_fn as #krate::__private::ServerFn>::PATH,
+				method: #krate::spec::method_of::<#server_fn>(),
+				input_content_type: #krate::spec::input_content_type_of::<#server_fn>(),
+				output_content_type: #krate::spec::output_content_type_of::<#server_fn>(),
+				error_content_type: #krate::spec::error_content_type_of::<#server_fn>(),
+				params: &[#(#param_descriptors),*],
+				output_schema: |generator| {
+					generator.subschema_for::<
+						<#server_fn as #krate::__private::ServerFn>::Output,
+					>()
+				},
+				internal: #internal,
+				deprecated: #deprecated,
+				tags: &[#(#tags),*],
+				scopes: &[#(#scopes),*], service: ::core::option::Option::None,
+				rpc_operation: false,
+			}
+		}
+	}
 }
 
 /// Publishes an `#[rpc::query]` or `#[rpc::mutation]`: hands `#[api]`'s name
@@ -1085,6 +1114,7 @@ fn registration(
 					tags: &[#(#tags),*],
 					scopes: &[],
 					service: #service,
+					rpc_operation: true,
 				}
 			}
 		};

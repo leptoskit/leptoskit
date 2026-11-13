@@ -44,6 +44,18 @@ fn breaking_changes(previous: &ApiSpec, current: &ApiSpec) -> Vec<String> {
 		));
 	}
 
+	if previous.rpc_path != current.rpc_path
+		&& previous
+			.functions
+			.iter()
+			.any(|function| function.kind.is_callable_over_http())
+	{
+		breaks.push(format!(
+			"operations moved from {} to {}",
+			previous.rpc_path, current.rpc_path
+		));
+	}
+
 	for old in &previous.functions {
 		let Some(new) = current
 			.functions

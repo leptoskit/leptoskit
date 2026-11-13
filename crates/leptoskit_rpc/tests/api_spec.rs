@@ -263,6 +263,114 @@ fn spec_and_openapi_snapshots() {
 	insta::assert_json_snapshot!("openapi", spec.public().to_openapi());
 }
 
+#[test]
+fn the_configured_path_names_where_operations_really_serve() {
+	let operation = rpc_descriptor("flush");
+	let options = SpecOptions::new("x", "0")
+		.with_path("/gateway")
+		.with_live_path("/rt");
+
+	let spec = spec::collect_from(&[&operation], &options).expect("the spec");
+	assert_eq!(spec.rpc_path, "/gateway");
+	assert_eq!(spec.live_path, "/rt");
+	assert_eq!(spec.functions.len(), 1);
+	assert_eq!(spec.functions[0].path, "/gateway/flush");
+
+	// A leptos `#[server]` function keeps the route leptos generated for it,
+	// whatever the rpc prefix says.
+	let server_fn = descriptor(
+		"page",
+		"/api/page",
+		Method::GET,
+		"application/json",
+		"application/json",
+	);
+	let spec = spec::collect_from(&[&server_fn], &options).expect("the spec");
+	assert_eq!(spec.functions[0].path, "/api/page");
+}
+
+#[test]
+fn a_service_spec_mounts_under_its_prefix() {
+	let operation = rpc_descriptor("flush");
+	let options = SpecOptions::new("x", "0")
+		.with_path("/gateway")
+		.with_live_path("/rt")
+		.service("analytics");
+
+	let spec = spec::collect_from(&[&operation], &options).expect("the spec");
+	assert_eq!(spec.rpc_path, "/_leptoskit/services/analytics/gateway");
+	assert_eq!(spec.live_path, "/_leptoskit/services/analytics/rt");
+	assert_eq!(
+		spec.functions[0].path,
+		"/_leptoskit/services/analytics/gateway/flush"
+	);
+
+	// At the defaults, the service composes today's routes.
+	let options = SpecOptions::new("x", "0").service("analytics");
+	let spec = spec::collect_from(&[&operation], &options).expect("the spec");
+	assert_eq!(spec.rpc_path, "/_leptoskit/services/analytics/rpc");
+	assert_eq!(spec.live_path, "/_leptoskit/services/analytics/live");
+	assert_eq!(
+		spec.functions[0].path,
+		"/_leptoskit/services/analytics/rpc/flush"
+	);
+}
+
+#[test]
+fn spec_options_read_the_configured_paths_from_the_environment() {
+	let lookup = |name: &str| {
+		match name {
+			spec::SPEC_PATH_ENV => Some("/gateway".to_owned()),
+			spec::SPEC_LIVE_PATH_ENV => Some("/rt".to_owned()),
+			_ => None,
+		}
+	};
+	let options = SpecOptions::from_lookup(lookup);
+	assert_eq!(options.path, "/gateway");
+	assert_eq!(options.live_path, "/rt");
+
+	let options = SpecOptions::from_lookup(|_| None);
+	assert_eq!(options.path, "/rpc");
+	assert_eq!(options.live_path, "/live");
+}
+
+/// Every SDK target embeds the configured operation and live paths a spec
+/// carries, so a generated client sends its calls where the server serves
+/// them.
+#[test]
+fn generated_clients_call_the_configured_paths() {
+	let operation = rpc_descriptor("flush");
+	let options = SpecOptions::new("demo", "1.0.0")
+		.with_path("/gateway")
+		.with_live_path("/rt");
+	let spec = spec::collect_from(&[&operation], &options).expect("the spec");
+
+	for language in leptoskit_rpc_codegen::TargetLanguage::ALL {
+		let generated = spec.generate(&leptoskit_rpc_codegen::GenerateOptions::new(
+			*language, "demo",
+		));
+		let code: String = generated
+			.files
+			.iter()
+			.map(|file| file.contents.clone())
+			.collect();
+
+		assert!(
+			code.contains("\"/gateway/flush\"")
+				|| code.contains("'/gateway/flush'")
+				|| code.contains("`/gateway/flush`"),
+			"{language:?} should call the configured operation path:\n{code}"
+		);
+		// The OpenAPI document describes HTTP calls only; it names no socket.
+		if *language != leptoskit_rpc_codegen::TargetLanguage::OpenApi {
+			assert!(
+				code.contains("\"/rt\"") || code.contains("'/rt'") || code.contains("`/rt`"),
+				"{language:?} should embed the configured live path:\n{code}"
+			);
+		}
+	}
+}
+
 /// A hand-built descriptor, for exercising the collector without a macro.
 fn descriptor(
 	name: &'static str,
@@ -294,6 +402,7 @@ fn descriptor(
 		tags: &[],
 		scopes: &[],
 		service: None,
+		rpc_operation: false,
 	}
 }
 
@@ -335,6 +444,21 @@ fn collisions_are_reported() {
 			.len(),
 		2
 	);
+}
+
+/// A hand-built rpc operation, as `#[rpc::query]` registers one: the macro
+/// bakes the default route, and the exporter composes the configured one.
+fn rpc_descriptor(name: &'static str) -> spec::ApiFnDescriptor {
+	let path: &'static str = Box::leak(format!("/rpc/{name}").into_boxed_str());
+	let mut descriptor = descriptor(
+		name,
+		path,
+		Method::POST,
+		"application/json",
+		"application/json",
+	);
+	descriptor.rpc_operation = true;
+	descriptor
 }
 
 /// A hand-built channel descriptor.

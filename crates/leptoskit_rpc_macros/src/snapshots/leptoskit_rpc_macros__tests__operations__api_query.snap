@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_rpc_macros/src/tests.rs
-assertion_line: 991
 expression: published
 ---
 /// The latest messages.
@@ -32,6 +31,6 @@ const _: () = {
         required : true, }], output_schema : | generator | { generator.subschema_for:: <
         < Messages as leptoskit::rpc::Operation > ::Output > () }, internal : true,
         deprecated : false, tags : & ["chat"], scopes : & [], service :
-        ::core::option::Option::None, }
+        ::core::option::Option::None, rpc_operation : true, }
     }
 };

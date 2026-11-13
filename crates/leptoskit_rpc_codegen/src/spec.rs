@@ -13,10 +13,14 @@ pub const SPEC_MARKER: &str = "leptoskit_rpc_spec";
 
 /// The specification version this crate writes. Version 2 added
 /// [`ApiFunction::kind`]; version 3 added [`ApiSpec::channels`] and
-/// [`ApiSpec::live_path`]. This crate still reads versions 1 and 2, whose
-/// functions are all [`ApiKind::Call`] in version 1, and which publish no
-/// channels.
-pub const SPEC_VERSION: u32 = 3;
+/// [`ApiSpec::live_path`]; version 4 added [`ApiSpec::rpc_path`]. This crate
+/// still reads versions 1 and 2, whose functions are all [`ApiKind::Call`] in
+/// version 1, and which publish no channels.
+pub const SPEC_VERSION: u32 = 4;
+
+/// The prefix an operation's route mounts at by default, relative to its
+/// origin, before `[rpc].path` moves it.
+pub const DEFAULT_RPC_PATH: &str = "/rpc";
 
 /// Where a server serves the live socket by default, relative to its
 /// origin.
@@ -40,6 +44,9 @@ pub const SPEC_SERVERS_ENV: &str = "LEPTOSKIT_RPC_SPEC_SERVERS";
 /// Overrides where the live socket is served; set by the CLI from
 /// `leptoskit.toml`'s `[rpc].live_path` (or `[rpc].path`/live).
 pub const SPEC_LIVE_PATH_ENV: &str = "LEPTOSKIT_RPC_SPEC_LIVE_PATH";
+/// Overrides where the operations mount, such as `/gateway`; set by the CLI
+/// from `leptoskit.toml`'s `[rpc].path`.
+pub const SPEC_PATH_ENV: &str = "LEPTOSKIT_RPC_SPEC_PATH";
 /// Exports one service's spec instead of the app's: the operations declared
 /// with `#[rpc::query(service = "...")]` and the like for that service.
 pub const SPEC_SERVICE_ENV: &str = "LEPTOSKIT_RPC_SPEC_SERVICE";
@@ -315,6 +322,12 @@ pub struct ApiSpec {
 	/// as `/live`. Absent before version 3, which means the default.
 	#[serde(default = "default_live_path")]
 	pub live_path: String,
+	/// Where the operations mount, relative to each server URL, such as
+	/// `/rpc`. Absent before version 4, which means the default. Every
+	/// operation's [`path`](ApiFunction::path) begins with it, and a
+	/// generated client sends every call there.
+	#[serde(default = "default_rpc_path")]
+	pub rpc_path: String,
 	/// The named JSON Schemas referenced from the functions and channels,
 	/// keyed by schema name.
 	#[serde(default)]
@@ -323,6 +336,10 @@ pub struct ApiSpec {
 
 fn default_live_path() -> String {
 	DEFAULT_LIVE_PATH.to_owned()
+}
+
+fn default_rpc_path() -> String {
+	DEFAULT_RPC_PATH.to_owned()
 }
 
 impl ApiSpec {
@@ -338,6 +355,7 @@ impl ApiSpec {
 			functions: Vec::new(),
 			channels: Vec::new(),
 			live_path: default_live_path(),
+			rpc_path: default_rpc_path(),
 			schemas: IndexMap::new(),
 		}
 	}
@@ -782,6 +800,23 @@ mod tests {
 		let json = spec.to_json().expect("serialize");
 		let back = ApiSpec::from_json(&json).expect("parse");
 		assert_eq!(spec, back);
+	}
+
+	#[test]
+	fn a_version_three_spec_reads_with_the_default_rpc_path() {
+		let mut spec = ApiSpec::empty("demo", "1.2.3");
+		spec.rpc_path = "/gateway".to_owned();
+		let mut json: Value =
+			serde_json::from_str(&spec.to_json().expect("serialize")).expect("json");
+		json[SPEC_MARKER] = Value::from(3);
+		json.as_object_mut()
+			.expect("object")
+			.remove("rpc_path")
+			.expect("the field version 4 added");
+
+		let back = ApiSpec::from_json(&json.to_string()).expect("version 3 still reads");
+		assert_eq!(back.rpc_path, DEFAULT_RPC_PATH);
+		assert_eq!(back.live_path, DEFAULT_LIVE_PATH);
 	}
 
 	#[test]
