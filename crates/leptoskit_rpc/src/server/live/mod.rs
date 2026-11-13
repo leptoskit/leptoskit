@@ -168,17 +168,6 @@ fn room_key(name: &str, channel: &str) -> String {
 	format!("{name}\0{channel}")
 }
 
-/// Normalizes a configured mount path: one leading `/`, no trailing `/`.
-/// An empty value becomes the default [`/live`](crate::live::LIVE_PATH).
-pub(crate) fn mount_path(path: &str) -> String {
-	let trimmed = path.trim_matches('/');
-	if trimmed.is_empty() {
-		crate::live::LIVE_PATH.to_owned()
-	} else {
-		format!("/{trimmed}")
-	}
-}
-
 /// The instance key a room's frames carry: the client's, without the name.
 fn wire_channel(room: &str) -> &str {
 	room.split_once('\0').map_or(room, |(_, channel)| channel)
@@ -319,7 +308,7 @@ impl Live {
 
 	/// [`rpc_config`](Self::rpc_config) with an already resolved path.
 	pub(crate) fn with_live_path(self, path: impl Into<String>) -> Self {
-		let path = mount_path(&path.into());
+		let path = super::mount_path(&path.into());
 		self.with(|inner| inner.live_path = path)
 	}
 

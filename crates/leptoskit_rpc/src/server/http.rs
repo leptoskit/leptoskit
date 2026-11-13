@@ -86,7 +86,7 @@ impl Server {
 				service: self.inner.service,
 				transports: crate::wire::TransportSet::from_names(&config.transports),
 				route_prefix: config.path.trim_end_matches('/').to_owned(),
-				live_path: super::live::mount_path(&config.resolved_live_path()),
+				live_path: super::mount_path(&config.resolved_live_path()),
 			}),
 		}
 	}

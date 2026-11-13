@@ -45,6 +45,17 @@ mod services;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub mod stream;
 
+/// Normalizes a live mount for both HTTP-only and live server builds.
+#[cfg(any(feature = "live", feature = "postgres", feature = "sqlite"))]
+pub(crate) fn mount_path(path: &str) -> String {
+	let trimmed = path.trim_matches('/');
+	if trimmed.is_empty() {
+		crate::live::LIVE_PATH.to_owned()
+	} else {
+		format!("/{trimmed}")
+	}
+}
+
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use action::ActionCx;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
