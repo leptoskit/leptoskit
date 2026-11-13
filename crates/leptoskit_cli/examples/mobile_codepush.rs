@@ -476,9 +476,16 @@ fn android(
 			&format!("09-instrument-{index}"),
 		)?;
 		let log = fs::read_to_string(output.join(format!("09-instrument-{index}.log")))?;
-		anyhow::ensure!(
-			log.contains("OK (1 test)") && !log.contains("FAILURES!!!"),
-			"Android instrumentation failed; inspect retained log"
+		if log.contains("OK (1 test)") && !log.contains("FAILURES!!!") {
+			continue;
+		}
+		let device_log = Command::new("adb")
+			.args(["-s", device, "logcat", "-d", "-t", "200"])
+			.output()
+			.map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+			.unwrap_or_default();
+		anyhow::bail!(
+			"Android instrumentation of {method} failed\n{log}\n--- logcat ---\n{device_log}"
 		);
 	}
 	adb(
