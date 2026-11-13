@@ -64,7 +64,6 @@ leptoskit_query = { workspace = true, optional = true, features = ["guest"] }
 js-sys = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
-web-sys = { workspace = true, optional = true, features = ["Crypto", "Document", "Headers", "Location", "Navigator", "RequestInit", "Response", "Screen", "Storage", "VisibilityState", "Window"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 js-sys = { workspace = true }
@@ -92,6 +91,7 @@ default = []
 # Building the service: ingestion, storage, and the binary. Only `lk` turns
 # this on, when it builds the service; the app never does.
 service = [
+	"typed",
 	"dep:chrono",
 	"dep:flate2",
 	"dep:leptoskit_axum",
@@ -110,12 +110,15 @@ service = [
 # `#[derive(Event)]`, for typed events. A proc macro: it adds nothing to
 # an app's bundle.
 derive = ["dep:inventory", "dep:leptoskit_analytics_macros"]
+# Optional positional encoding: smaller batches, with catalogue negotiation.
+# Without it, capture_event sends named properties and needs no catalogue.
+typed = []
 # The client for the app's server: `client::server::Analytics`, sending in
 # the background with Tokio.
-server-client = ["dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/macros"]
+server-client = ["typed", "dep:reqwest", "dep:serde_json", "dep:tokio", "tokio/macros"]
 # The client in the browser: `client::web`, sending with `fetch` and
 # `sendBeacon`. Only on `wasm32-unknown-unknown`.
-web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures"]
 # The client in a native app's Wasm guest: `client::native`, sending
 # through the HTTP plugin and keeping unsent events in the app's files.
 native = [

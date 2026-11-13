@@ -1038,6 +1038,13 @@ jobs:
         run: test:browser
         shell: bash
 
+      # The analytics browser client's core budget (docs/agents/analytics-service.md
+      # §16): what it adds to analytics_app's first load, after wasm-opt and
+      # brotli, may not exceed 12 KiB.
+      - name: analytics client size budget
+        run: setup/scripts/analytics-size.sh --enforce
+        shell: bash
+
       - name: test compiled plugin guest
         run: test:plugins:guest
         shell: bash

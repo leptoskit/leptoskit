@@ -62,11 +62,12 @@ pub enum Outcome {
 	/// Stored. Entries the service refused are in its answer; they'll never
 	/// be accepted, so they're done too.
 	Stored,
-	/// The batch will never be accepted (a `4xx` other than `400`, `408`, `413`
-	/// and `429`): it's dropped.
+	/// The batch will never be accepted: it's dropped. `400` can retry
+	/// compact events with names when the `typed` feature is enabled.
 	Rejected,
 	/// A bad request: typed events may need to be sent with names to an older
 	/// service.
+	#[cfg(feature = "typed")]
 	BadRequest,
 	/// The batch was too large: it's sent again in smaller batches.
 	TooLarge,
@@ -81,12 +82,13 @@ impl Outcome {
 	pub fn from_status(status: u16, retry_after: Option<&str>) -> Self {
 		match status {
 			200..=299 => Self::Stored,
+			#[cfg(feature = "typed")]
 			400 => Self::BadRequest,
 			413 => Self::TooLarge,
 			408 | 429 | 500..=599 => {
 				Self::Retry {
 					after: retry_after
-						.and_then(|seconds| seconds.trim().parse::<i64>().ok())
+						.and_then(|seconds| seconds.trim_ascii().parse::<i64>().ok())
 						.map(|seconds| seconds.saturating_mul(1_000)),
 				}
 			}
@@ -144,6 +146,7 @@ pub struct Queue {
 	retry_at: i64,
 	/// The field names of each typed event's schema, by schema id, to send
 	/// it with its names when the service doesn't know the schema.
+	#[cfg(feature = "typed")]
 	schemas: Vec<(u64, &'static [(&'static str, &'static str)])>,
 }
 
@@ -169,6 +172,7 @@ impl Queue {
 			batch_entries,
 			failures: 0,
 			retry_at: i64::MIN,
+			#[cfg(feature = "typed")]
 			schemas: Vec::new(),
 		}
 	}
@@ -176,6 +180,7 @@ impl Queue {
 	/// Remembers a typed event's fields, for [`settle_with_refusals`].
 	///
 	/// [`settle_with_refusals`]: Self::settle_with_refusals
+	#[cfg(feature = "typed")]
 	pub fn remember_schema(
 		&mut self,
 		schema_id: u64,
@@ -190,6 +195,7 @@ impl Queue {
 	/// the service refused, by their index in the batch and the reason. A
 	/// typed event refused as `unknown_schema` is queued again with its
 	/// property names, keeping its id, so it's stored once all the same.
+	#[cfg(feature = "typed")]
 	pub fn settle_with_refusals(&mut self, refused: &[(u32, &str)], now: i64, jitter: f64) {
 		let mut again = Vec::new();
 		let mut dropped = 0_u64;
@@ -224,6 +230,12 @@ impl Queue {
 		self.settle(Outcome::Stored, now, jitter);
 		self.dropped = self.dropped.saturating_add(dropped);
 		self.enforce_limits();
+	}
+
+	/// Settles named events; permanent per-event refusals need no retry.
+	#[cfg(not(feature = "typed"))]
+	pub fn settle_with_refusals(&mut self, _refused: &[(u32, &str)], now: i64, jitter: f64) {
+		self.settle(Outcome::Stored, now, jitter);
 	}
 
 	/// Entries queued from now on are sent with `context`; those already
@@ -263,6 +275,7 @@ impl Queue {
 	/// Drops the oldest waiting entries until the queue is within its
 	/// limits, counting a batch on its way and the contexts. Entries on
 	/// their way are never dropped here: they settle first.
+	#[inline(never)]
 	fn enforce_limits(&mut self) {
 		while !self.waiting.is_empty()
 			&& (self.waiting.len() + self.sending.len() > self.limits.queue_entries
@@ -382,6 +395,7 @@ impl Queue {
 
 	/// Takes a batch with explicit property names, for delivery such as
 	/// `sendBeacon` that cannot read per-event refusals from the response.
+	#[cfg(feature = "typed")]
 	pub fn take_named(&mut self, now: i64, random: [u8; 10]) -> Option<Pending> {
 		if self.is_sending() || now < self.retry_at {
 			return None;
@@ -401,12 +415,19 @@ impl Queue {
 		self.take(now, random)
 	}
 
+	/// Takes a batch; all entries already carry their property names.
+	#[cfg(not(feature = "typed"))]
+	pub fn take_named(&mut self, now: i64, random: [u8; 10]) -> Option<Pending> {
+		self.take(now, random)
+	}
+
 	/// Settles the batch on its way with what the service did with it, at
 	/// `now`. `jitter`, from 0 to 1, spreads retries so clients that failed
 	/// together don't all retry together.
 	pub fn settle(&mut self, outcome: Outcome, now: i64, jitter: f64) {
 		self.version += 1;
 		match outcome {
+			#[cfg(feature = "typed")]
 			Outcome::BadRequest => {
 				if name_entries(self.sending.iter_mut(), &self.schemas) {
 					self.sending_bytes = self.sending.iter().map(|entry| entry.bytes).sum();
@@ -497,6 +518,7 @@ impl Queue {
 		let mut batch = Batch::default();
 		for queued in entries {
 			let mut entry = queued.entry.clone();
+			#[cfg(feature = "typed")]
 			if let Some(body) = keyed_body(&entry.body, &self.schemas) {
 				entry.body = body;
 			}
@@ -601,6 +623,7 @@ impl Queue {
 	}
 
 	/// Keeps only the current context and those a queued entry names.
+	#[inline(never)]
 	fn forget_unused_contexts(&mut self) {
 		let generation = self.generation;
 		let (waiting, sending) = (&self.waiting, &self.sending);
@@ -629,10 +652,11 @@ fn index_of(used: &mut Vec<u32>, generation: u32) -> u32 {
 	index as u32
 }
 
-/// Roughly what `entry` takes encoded: its strings, and a little for each
-/// value and the entry's fixed fields.
+/// Known field names used for compact events' named fallback.
+#[cfg(feature = "typed")]
 type Schema = (u64, &'static [(&'static str, &'static str)]);
 
+#[cfg(feature = "typed")]
 fn keyed_body(body: &Body, schemas: &[Schema]) -> Option<Body> {
 	let Body::TypedEvent {
 		name,
@@ -663,6 +687,7 @@ fn keyed_body(body: &Body, schemas: &[Schema]) -> Option<Body> {
 	})
 }
 
+#[cfg(feature = "typed")]
 fn name_entries<'a>(entries: impl Iterator<Item = &'a mut Queued>, schemas: &[Schema]) -> bool {
 	let mut named = false;
 	for queued in entries {
@@ -675,9 +700,11 @@ fn name_entries<'a>(entries: impl Iterator<Item = &'a mut Queued>, schemas: &[Sc
 	named
 }
 
+/// Roughly what an entry takes encoded: strings, values and fixed fields.
 fn size(entry: &Entry) -> usize {
 	let body = match &entry.body {
 		Body::Event { name, properties } => name.len() + properties_size(properties),
+		#[cfg(feature = "typed")]
 		Body::TypedEvent {
 			name,
 			values,
@@ -764,6 +791,7 @@ mod tests {
 		Queue::new(limits, vec![("$lib".into(), Value::Text("test".into()))])
 	}
 
+	#[cfg(feature = "typed")]
 	fn typed(n: u8, fields: &'static [(&'static str, &'static str)]) -> Entry {
 		let mut entry = event(n);
 		entry.body = Body::TypedEvent {
@@ -775,6 +803,7 @@ mod tests {
 		entry
 	}
 
+	#[cfg(feature = "typed")]
 	const LONG_FIELDS: &[(&str, &str)] = &[(
 		concat!(
 			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -785,6 +814,7 @@ mod tests {
 		"String",
 	)];
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_beacon_delivery_uses_names_and_respects_queue_limits() {
 		let mut queue = queue(Limits::default());
@@ -803,6 +833,7 @@ mod tests {
 		assert_eq!(queue.dropped(), 1);
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_snapshot_keeps_names_without_the_old_build_s_schema_metadata() {
 		let mut source = queue(Limits::default());
@@ -823,6 +854,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_old_service_bad_request_retries_the_whole_batch_with_names() {
 		let mut queue = queue(Limits::default());
@@ -842,6 +874,7 @@ mod tests {
 		assert_eq!(queue.len(), 0, "a keyed bad request does not retry forever");
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_fallback_keeps_the_original_context_and_field_precedence() {
 		static FIELDS: &[(&str, &str)] = &[("plan", "String")];
@@ -876,6 +909,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_fallback_drops_an_entry_that_expands_past_either_byte_limit() {
 		for limits in [
@@ -898,6 +932,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_fallback_enforces_the_total_waiting_byte_limit() {
 		let mut queue = Queue::new(
@@ -922,6 +957,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "typed")]
 	#[test]
 	fn typed_fallback_counts_the_retained_context_in_its_byte_limit() {
 		let mut queue = Queue::new(
@@ -1263,12 +1299,23 @@ mod tests {
 	#[test]
 	fn statuses_mean_what_http_says() {
 		assert_eq!(Outcome::from_status(200, None), Outcome::Stored);
+		#[cfg(feature = "typed")]
 		assert_eq!(Outcome::from_status(400, None), Outcome::BadRequest);
+		#[cfg(not(feature = "typed"))]
+		assert_eq!(Outcome::from_status(400, None), Outcome::Rejected);
 		assert_eq!(Outcome::from_status(401, None), Outcome::Rejected);
 		assert_eq!(Outcome::from_status(413, None), Outcome::TooLarge);
 		assert_eq!(
 			Outcome::from_status(503, Some("2")),
 			Outcome::Retry { after: Some(2_000) }
+		);
+		assert_eq!(
+			Outcome::from_status(429, Some(" \t2 \t")),
+			Outcome::Retry { after: Some(2_000) }
+		);
+		assert_eq!(
+			Outcome::from_status(429, Some("\u{a0}2")),
+			Outcome::Retry { after: None }
 		);
 		assert_eq!(
 			Outcome::from_status(429, Some("soon")),

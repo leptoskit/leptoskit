@@ -227,30 +227,34 @@ impl<P: Platform> Client<P> {
 		});
 	}
 
-	/// Records a typed event. It's sent by position, its values without
-	/// their names, which the service reads from its event catalogue; if the
-	/// service doesn't know the schema yet, the client sends it again with
-	/// its names. Registered properties and groups go with it, keyed.
+	/// Records a typed event with its property names. With the `typed`
+	/// feature, sends values by position instead; an unknown schema is
+	/// retried with names. Registered properties and groups go with it.
 	pub fn capture_event<E: crate::Event>(&mut self, event: E) {
-		if self.opted_out {
-			return;
-		}
-		let mut properties = Vec::new();
-		for (name, value) in &self.registered {
-			if !E::FIELDS.iter().any(|(field, _)| field == name) {
-				properties.push((name.clone(), value.clone()));
+		#[cfg(not(feature = "typed"))]
+		self.capture(E::NAME, event.into_properties());
+		#[cfg(feature = "typed")]
+		{
+			if self.opted_out {
+				return;
 			}
+			let mut properties = Vec::new();
+			for (name, value) in &self.registered {
+				if !E::FIELDS.iter().any(|(field, _)| field == name) {
+					properties.push((name.clone(), value.clone()));
+				}
+			}
+			if !self.groups.is_empty() {
+				properties.push(("$groups".into(), Value::Map(self.groups.clone())));
+			}
+			self.queue.remember_schema(E::SCHEMA_ID, E::FIELDS);
+			self.record(Body::TypedEvent {
+				name: E::NAME.into(),
+				schema_id: E::SCHEMA_ID,
+				values: event.into_values(),
+				properties,
+			});
 		}
-		if !self.groups.is_empty() {
-			properties.push(("$groups".into(), Value::Map(self.groups.clone())));
-		}
-		self.queue.remember_schema(E::SCHEMA_ID, E::FIELDS);
-		self.record(Body::TypedEvent {
-			name: E::NAME.into(),
-			schema_id: E::SCHEMA_ID,
-			values: event.into_values(),
-			properties,
-		});
 	}
 
 	/// The person signed in as `distinct_id`, the app's own id for them:

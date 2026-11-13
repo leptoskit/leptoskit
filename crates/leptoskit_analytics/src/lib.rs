@@ -56,7 +56,7 @@ pub trait Event {
 	fn into_properties(self) -> wire::Properties;
 
 	/// The event's values, in field order, without their names: what a
-	/// typed event sends ([`wire::Body::TypedEvent`]).
+	/// compact event sends when the `typed` feature is enabled.
 	fn into_values(self) -> Vec<wire::Value>;
 }
 

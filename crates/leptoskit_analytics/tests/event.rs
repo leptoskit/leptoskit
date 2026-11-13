@@ -97,6 +97,7 @@ fn a_typed_event_is_recorded_like_any_other() {
 	let pending = client.queue().take(0, [0; 10]).unwrap();
 	client.queue().settle(Outcome::Stored, 0, 0.0);
 	let batch = wire::decode(&pending.body, &wire::Limits::default()).unwrap();
+	#[cfg(feature = "typed")]
 	assert_eq!(
 		batch.entries[0].body,
 		Body::TypedEvent {
@@ -110,6 +111,18 @@ fn a_typed_event_is_recorded_like_any_other() {
 			properties: props! { "flavour" => "beta" },
 		},
 		"by position, with registered properties keyed"
+	);
+	#[cfg(not(feature = "typed"))]
+	assert_eq!(
+		batch.entries[0].body,
+		Body::Event {
+			name: "checkout_completed".into(),
+			properties: props! {
+				"plan" => "team", "amount_cents" => 4900,
+				"coupon" => "SPRING", "flavour" => "beta"
+			},
+		},
+		"typed capture also works without compact encoding"
 	);
 }
 

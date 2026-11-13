@@ -29,7 +29,7 @@ wasmi_core = { workspace = true }
 [dev-dependencies]
 # The native analytics client's guest acceptance (`tests/analytics_guest.rs`):
 # the batch format, and the HTTP and filesystem plugins' wire formats.
-leptoskit_analytics = { workspace = true }
+leptoskit_analytics = { workspace = true, features = ["typed"] }
 leptoskit_log = { workspace = true, features = ["testing"] }
 leptoskit_plugin_filesystem = { workspace = true }
 leptoskit_plugin_http = { workspace = true }

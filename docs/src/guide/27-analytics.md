@@ -73,3 +73,43 @@ The connected deployment service retains aggregate history in its shared SQLite 
 For an external OTLP/HTTP metrics backend, set `infra.plugins.analytics.otlp_endpoint` to its metrics endpoint. If the backend requires a bearer credential, supply `LEPTOSKIT_ANALYTICS_WRITE_KEY` through the worker's secret store. This selects the external sink in place of the deployment service's collector. The adapter exports completed delta histograms; the backend must deduplicate repeated timestamps after an ambiguous transport failure. The app API reports export failures.
 
 Automatic DB/RPC hooks, Web Vitals, complete distributed traces, session replay, funnels and automatic infrastructure changes are separate capabilities. Current request correlation and explicit timers remain available.
+
+## Record typed product events
+
+To track actions such as sign-ups and purchases, install the analytics [service](32-services.md) in `leptoskit.toml`:
+
+```toml
+[services.analytics]
+package = "leptoskit_analytics"
+version = "0.3"
+```
+
+Add `leptoskit_analytics` to your app's dependencies too. Declaring an event as a Rust struct catches misspelled or retyped properties when the app compiles:
+
+```toml
+[dependencies]
+leptoskit_analytics = { version = "0.3", features = ["web", "derive"] }
+```
+
+This example targets the browser. Call it after your consent decision; initialize the client once when the page starts:
+
+```rust
+use leptoskit_analytics::Event;
+use leptoskit_analytics::client::web;
+
+#[derive(Event)]
+struct SignedUp {
+	plan: String,
+	seats: u32,
+}
+
+web::init(web::Options::default());
+web::capture_event(SignedUp {
+	plan: "pro".into(),
+	seats: 3,
+});
+```
+
+Typed events send their property names by default, keeping the initial browser download small. Add the `typed` Cargo feature to send compact values by position instead. This uses the service's event catalogue; unknown schemas retry with names and the same event ID. Server clients and the service enable that codec automatically.
+
+In a native Wasm guest, select `native,derive` and record through `client::native::capture_event` after initializing the native client. Add `typed` there for compact batches too. Native queues persist unsent events with names, so another app build can recover them even after an event type is removed. Browser beacons also use names because they cannot read a schema refusal.

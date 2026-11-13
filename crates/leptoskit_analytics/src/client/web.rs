@@ -9,9 +9,8 @@
 
 use std::cell::RefCell;
 
-use js_sys::Uint8Array;
-use wasm_bindgen::JsCast as _;
-use wasm_bindgen::JsValue;
+#[cfg(not(feature = "typed"))]
+use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::JsFuture;
 
@@ -20,7 +19,6 @@ use super::Config;
 use super::Identity;
 use super::Outcome;
 use super::Platform;
-use crate::SERVICE;
 use crate::wire::Properties;
 use crate::wire::Value;
 
@@ -41,7 +39,7 @@ impl Default for Options {
 	fn default() -> Self {
 		Self {
 			config: Config::default(),
-			endpoint: format!("/_leptoskit/services/{SERVICE}/v1/batch"),
+			endpoint: "/_leptoskit/services/analytics/v1/batch".into(),
 			interval: 3_000,
 			persist: true,
 		}
@@ -58,14 +56,7 @@ impl Platform for Browser {
 	}
 
 	fn fill_random(&self, bytes: &mut [u8]) {
-		let filled = web_sys::window()
-			.and_then(|window| window.crypto().ok())
-			.is_some_and(|crypto| crypto.get_random_values_with_u8_array(bytes).is_ok());
-		if !filled {
-			for byte in bytes {
-				*byte = (js_sys::Math::random() * 256.0) as u8;
-			}
-		}
+		fill_random(bytes);
 	}
 }
 
@@ -86,9 +77,9 @@ pub fn init(options: Options) {
 	if STATE.with_borrow(Option::is_some) {
 		return;
 	}
-	let Some(window) = web_sys::window() else {
+	if !in_page() {
 		return;
-	};
+	}
 
 	let stored = options.persist.then(|| read(ID_KEY)).flatten();
 	let identity = stored.and_then(|stored| {
@@ -100,7 +91,7 @@ pub fn init(options: Options) {
 			}
 		})
 	});
-	let context = context(&window);
+	let context = context();
 	let mut client = match identity {
 		Some(identity) => Client::restore(Browser, options.config.clone(), context, identity),
 		None => Client::new(Browser, options.config.clone(), context),
@@ -112,29 +103,13 @@ pub fn init(options: Options) {
 	STATE.with_borrow_mut(|state| *state = Some(State { client, options }));
 	save_identity();
 
+	// Sends on the interval, and hands what's left to `sendBeacon` when the
+	// page is hidden or closed.
 	let tick = Closure::<dyn FnMut()>::new(|| wasm_bindgen_futures::spawn_local(send_waiting()));
-	let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-		tick.as_ref().unchecked_ref(),
-		interval,
-	);
+	let leave = Closure::<dyn FnMut()>::new(beacon);
+	watch_page(interval, &tick, &leave);
 	tick.forget();
-
-	let hidden = Closure::<dyn FnMut()>::new(|| {
-		let hidden = web_sys::window()
-			.and_then(|window| window.document())
-			.is_some_and(|document| {
-				document.visibility_state() == web_sys::VisibilityState::Hidden
-			});
-		if hidden {
-			beacon();
-		}
-	});
-	let _ = window
-		.add_event_listener_with_callback("visibilitychange", hidden.as_ref().unchecked_ref());
-	hidden.forget();
-	let leaving = Closure::<dyn FnMut()>::new(beacon);
-	let _ = window.add_event_listener_with_callback("pagehide", leaving.as_ref().unchecked_ref());
-	leaving.forget();
+	leave.forget();
 }
 
 /// Records that `name` happened.
@@ -144,28 +119,19 @@ pub fn capture(name: &str, properties: Properties) {
 
 /// Records a typed event with its declared name and fields.
 pub fn capture_event<E: crate::Event>(event: E) {
+	#[cfg(not(feature = "typed"))]
+	capture(E::NAME, event.into_properties());
+	#[cfg(feature = "typed")]
 	with(|client| client.capture_event(event));
 }
 
 /// Records a page view of the current page.
-pub fn capture_pageview(properties: Properties) {
-	let mut properties = properties;
-	if let Some(window) = web_sys::window() {
-		let location = window.location();
-		let mut add = |name: &str, value: Result<String, JsValue>| {
-			if let Ok(value) = value
-				&& !value.is_empty()
-				&& !properties.iter().any(|(have, _)| have == name)
-			{
-				properties.push((name.into(), Value::Text(value)));
-			}
-		};
-		add("$current_url", location.href());
-		add("$pathname", location.pathname());
-		add("$host", location.host());
-		if let Some(document) = window.document() {
-			add("$title", Ok(document.title()));
-			add("$referrer", Ok(document.referrer()));
+pub fn capture_pageview(mut properties: Properties) {
+	let page = page_view();
+	let names = ["$current_url", "$pathname", "$host", "$title", "$referrer"];
+	for (name, value) in names.into_iter().zip(page.split('\n')) {
+		if !value.is_empty() && !properties.iter().any(|(have, _)| have == name) {
+			properties.push((name.into(), Value::Text(value.into())));
 		}
 	}
 	capture("$pageview", properties);
@@ -263,28 +229,20 @@ fn save_identity() {
 	}
 }
 
-fn storage() -> Option<web_sys::Storage> {
-	web_sys::window()?.local_storage().ok().flatten()
-}
-
 fn read(key: &str) -> Option<String> {
-	storage()?.get_item(key).ok().flatten()
+	storage_get(key)
 }
 
 fn write(key: &str, value: Option<&str>) {
 	let persist =
 		STATE.with_borrow(|state| state.as_ref().is_some_and(|state| state.options.persist));
-	let Some(storage) = storage().filter(|_| persist) else {
-		return;
-	};
-	let _ = match value {
-		Some(value) => storage.set_item(key, value),
-		None => storage.remove_item(key),
-	};
+	if persist {
+		storage_set(key, value);
+	}
 }
 
 /// What's the same for every event from this page.
-fn context(window: &web_sys::Window) -> Properties {
+fn context() -> Properties {
 	let mut context: Properties = vec![
 		("$lib".into(), Value::Text("leptoskit-web".into())),
 		(
@@ -292,33 +250,69 @@ fn context(window: &web_sys::Window) -> Properties {
 			Value::Text(env!("CARGO_PKG_VERSION").into()),
 		),
 	];
-	let mut number = |name: &str, value: Result<JsValue, JsValue>| {
-		if let Some(value) = value.ok().and_then(|value| value.as_f64()) {
-			context.push((name.into(), Value::Int(value as i64)));
+	let page = page_context();
+	let mut values = page.split('\n');
+	for name in [
+		"$screen_width",
+		"$screen_height",
+		"$viewport_width",
+		"$viewport_height",
+	] {
+		if let Some(Ok(number)) = values.next().map(str::parse::<i64>) {
+			context.push((name.into(), Value::Int(number)));
 		}
-	};
-	if let Ok(screen) = window.screen() {
-		number("$screen_width", screen.width().map(JsValue::from));
-		number("$screen_height", screen.height().map(JsValue::from));
 	}
-	number("$viewport_width", window.inner_width());
-	number("$viewport_height", window.inner_height());
-	let navigator = window.navigator();
-	if let Some(locale) = navigator.language() {
-		context.push(("$locale".into(), Value::Text(locale)));
-	}
-	if let Ok(agent) = navigator.user_agent() {
-		context.push(("$raw_user_agent".into(), Value::Text(agent)));
-	}
-	let options = js_sys::Intl::DateTimeFormat::new(&js_sys::Array::new(), &js_sys::Object::new())
-		.resolved_options();
-	if let Some(zone) = js_sys::Reflect::get(&options, &"timeZone".into())
-		.ok()
-		.and_then(|zone| zone.as_string())
-	{
-		context.push(("$timezone".into(), Value::Text(zone)));
+	for name in ["$locale", "$timezone", "$raw_user_agent"] {
+		if let Some(text) = values.next().filter(|text| !text.is_empty()) {
+			context.push((name.into(), Value::Text(text.into())));
+		}
 	}
 	context
+}
+
+// The browser APIs the client uses, as small functions: one call each is
+// less code, in both the wasm and its JavaScript glue, than web-sys's
+// bindings and their error handling. The page's values are joined by
+// newlines, which none can hold. Storage and sending never throw: storage
+// that isn't there is skipped, and failed requests become retries.
+// It's served as written, with nothing to minify it, so it's written small:
+// `g` is `globalThis`, `t` turns a value into a line of text, and `c` runs
+// a function, answering `e` if it throws.
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+const g=globalThis,t=v=>v==null?"":String(v).replace(/\n/g," "),j=a=>a.map(t).join("\n"),c=(f,e)=>{try{return f()}catch(_){return e}},s=()=>g.localStorage;
+export const page_context=()=>{const w=g.screen||{},n=g.navigator||{};return j([w.width,w.height,g.innerWidth,g.innerHeight,n.language,c(()=>Intl.DateTimeFormat().resolvedOptions().timeZone,""),n.userAgent])};
+export const page_view=()=>{const l=g.location||{},d=g.document||{};return j([l.href,l.pathname,l.host,d.title,d.referrer])};
+export const in_page=()=>typeof window!=="undefined";
+export const watch_page=(ms,tick,leave)=>{setInterval(tick,ms);addEventListener("visibilitychange",()=>{if(g.document?.visibilityState==="hidden")leave()});addEventListener("pagehide",()=>leave())};
+export const fill_random=b=>{if(!c(()=>(g.crypto.getRandomValues(b),1),0))for(let i=0;i<b.length;i++)b[i]=Math.random()*256};
+export const storage_get=k=>c(()=>s().getItem(k),null);
+export const storage_set=(k,v)=>c(()=>v==null?s().removeItem(k):s().setItem(k,v));
+export async function fetch_batch(url,body,keepalive){const r=await fetch(url,{method:"POST",body,keepalive});return [r.status,r.headers.get("retry-after")]}
+export const send_beacon=(u,b)=>c(()=>g.navigator.sendBeacon(u,b),false);
+
+"#)]
+extern "C" {
+	fn page_context() -> String;
+	fn page_view() -> String;
+	fn in_page() -> bool;
+	fn watch_page(interval: i32, tick: &Closure<dyn FnMut()>, leave: &Closure<dyn FnMut()>);
+	fn fill_random(bytes: &mut [u8]);
+	fn storage_get(key: &str) -> Option<String>;
+	fn storage_set(key: &str, value: Option<&str>);
+	#[cfg(not(feature = "typed"))]
+	fn fetch_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
+	fn send_beacon(url: &str, body: &[u8]) -> bool;
+}
+
+// Only compact batches need catalogue acknowledgements; named events need
+// just an HTTP status. Keep this snippet out of the core client's download.
+#[cfg(feature = "typed")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
+export async function fetch_typed_batch(url,body,keepalive){try{const r=await fetch(url,{method:"POST",body,keepalive}),h=`${r.status} ${r.headers.get("retry-after")||""}|`;if(!r.ok)return h;const i=await unknown_schemas(r);return i==null?"":h+i}catch(_){return ""}}
+export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
+"#)]
+extern "C" {
+	fn fetch_typed_batch(url: &str, body: &[u8], keepalive: bool) -> js_sys::Promise;
 }
 
 /// Takes the next batch, if one may be sent now.
@@ -337,10 +331,13 @@ fn take(named: bool) -> Option<(super::Pending, String)> {
 }
 
 fn settle(outcome: Outcome, refused: &[(u32, String)]) {
+	#[cfg(not(feature = "typed"))]
+	let _ = refused;
 	let mut jitter = [0_u8; 1];
 	Browser.fill_random(&mut jitter);
 	with(|client| {
 		let jitter = f64::from(jitter[0]) / 255.0;
+		#[cfg(feature = "typed")]
 		if outcome == Outcome::Stored {
 			let refused: Vec<(u32, &str)> = refused
 				.iter()
@@ -349,9 +346,9 @@ fn settle(outcome: Outcome, refused: &[(u32, String)]) {
 			client
 				.queue()
 				.settle_with_refusals(&refused, Browser.now(), jitter);
-		} else {
-			client.queue().settle(outcome, Browser.now(), jitter);
+			return;
 		}
+		client.queue().settle(outcome, Browser.now(), jitter);
 	});
 }
 
@@ -371,73 +368,60 @@ async fn send_waiting() {
 	}
 }
 
+#[cfg(feature = "typed")]
 async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
-	let Some(window) = web_sys::window() else {
+	let answer = JsFuture::from(fetch_typed_batch(
+		endpoint,
+		body,
+		body.len() <= KEEPALIVE_BYTES,
+	))
+	.await
+	.ok()
+	.and_then(|answer| answer.as_string())
+	.unwrap_or_default();
+	let Some((head, indices)) = answer.split_once('|') else {
 		return (Outcome::Retry { after: None }, Vec::new());
 	};
-	let init = web_sys::RequestInit::new();
-	init.set_method("POST");
-	init.set_body(&Uint8Array::from(body));
-	if body.len() <= KEEPALIVE_BYTES {
-		let _ = js_sys::Reflect::set(&init, &"keepalive".into(), &JsValue::TRUE);
-	}
-	let response = JsFuture::from(window.fetch_with_str_and_init(endpoint, &init))
-		.await
-		.ok()
-		.and_then(|response| response.dyn_into::<web_sys::Response>().ok());
-	match response {
-		Some(response) => {
-			let retry_after = response.headers().get("retry-after").ok().flatten();
-			let outcome = Outcome::from_status(response.status(), retry_after.as_deref());
-			if outcome != Outcome::Stored {
-				return (outcome, Vec::new());
-			}
-			let answer = JsFuture::from(unknown_schemas(&response))
-				.await
-				.ok()
-				.and_then(|value| value.as_string());
-			match answer {
-				Some(answer) => {
-					(
-						outcome,
-						answer
-							.split(',')
-							.filter_map(|index| index.parse().ok())
-							.map(|index| (index, "unknown_schema".to_owned()))
-							.collect(),
-					)
-				}
-				None => (Outcome::Retry { after: None }, Vec::new()),
-			}
-		}
-		None => (Outcome::Retry { after: None }, Vec::new()),
-	}
+	let Some((status, retry_after)) = head.split_once(' ') else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	let Ok(status) = status.parse() else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	let outcome = Outcome::from_status(status, Some(retry_after).filter(|after| !after.is_empty()));
+	let refused = indices
+		.split(',')
+		.filter_map(|index| index.parse().ok())
+		.map(|index| (index, "unknown_schema".to_owned()))
+		.collect();
+	(outcome, refused)
+}
+
+#[cfg(not(feature = "typed"))]
+async fn post(endpoint: &str, body: &[u8]) -> (Outcome, Vec<(u32, String)>) {
+	let Ok(answer) =
+		JsFuture::from(fetch_batch(endpoint, body, body.len() <= KEEPALIVE_BYTES)).await
+	else {
+		return (Outcome::Retry { after: None }, Vec::new());
+	};
+	// The helper returns [HTTP status, Retry-After]. Keep the numeric status
+	// numeric rather than allocating and parsing another string in Wasm.
+	let answer = answer.unchecked_into::<js_sys::Array>();
+	let status = answer.get(0).as_f64().unwrap_or(0.0) as u16;
+	let after = answer.get(1).as_string();
+	(Outcome::from_status(status, after.as_deref()), Vec::new())
 }
 
 /// Hands every waiting batch to `sendBeacon`, which sends it even as the
 /// page goes away. The answer never comes back, so a batch the browser
 /// accepted counts as stored.
 fn beacon() {
-	let Some(navigator) = web_sys::window().map(|window| window.navigator()) else {
-		return;
-	};
 	while let Some((pending, endpoint)) = take(true) {
-		let queued = navigator
-			.send_beacon_with_opt_js_u8_array(&endpoint, Some(&Uint8Array::from(&pending.body[..])))
-			.unwrap_or(false);
-		if queued {
+		if send_beacon(&endpoint, &pending.body) {
 			settle(Outcome::Stored, &[]);
 		} else {
 			settle(Outcome::Retry { after: None }, &[]);
 			return;
 		}
 	}
-}
-
-// Only unknown schemas can be retried; other per-event refusals are final.
-#[wasm_bindgen::prelude::wasm_bindgen(inline_js = r#"
-export async function unknown_schemas(r){try{const a=await r.json();if(!a||typeof a!=="object"||Array.isArray(a))return null;const f=a.refused??[];if(!Array.isArray(f))return null;const i=[];for(const x of f){if(!Number.isInteger(x.index)||x.index<0||x.index>4294967295||typeof x.reason!=="string")return null;if(x.reason==="unknown_schema")i.push(x.index)}return i.join(",")}catch(_){return null}}
-"#)]
-extern "C" {
-	fn unknown_schemas(response: &web_sys::Response) -> js_sys::Promise;
 }

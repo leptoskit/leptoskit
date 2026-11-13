@@ -381,6 +381,7 @@ fn unknown_entry_flags_are_refused() {
 	);
 }
 
+#[cfg(feature = "typed")]
 #[test]
 fn a_typed_event_sends_values_without_names_and_round_trips() {
 	let typed = Entry {
