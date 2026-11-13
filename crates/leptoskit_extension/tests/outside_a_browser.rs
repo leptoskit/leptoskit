@@ -3,6 +3,10 @@
 //! the browser API it would have called, which pins every wrapper to the
 //! right function in `chrome.*` and `browser.*`.
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
 
 use futures::executor::block_on;
 use leptoskit_extension::Background;

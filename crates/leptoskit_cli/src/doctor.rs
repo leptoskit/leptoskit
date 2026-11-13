@@ -59,6 +59,13 @@ pub fn run(all: bool) -> Result<()> {
 				format!("{error}; release builds need it unless `bundle.wasm_opt = false`")
 			}),
 		},
+		Check {
+			name: "esbuild",
+			required: false,
+			outcome: version_of("esbuild").map_err(|error| {
+				format!("{error}; release builds minify JavaScript with it when wasm-opt runs")
+			}),
+		},
 	];
 
 	if let Some(check) = project_check() {

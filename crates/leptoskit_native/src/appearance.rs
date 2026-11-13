@@ -24,7 +24,12 @@
 //! [`Appearance::from_str`](std::str::FromStr) of it when the app starts,
 //! before its first render. A server render cannot know the choice; to avoid
 //! a flash of the device's appearance, put the attribute on the page's
-//! `<html>` element yourself from the stored value.
+//! 	`<html>` element yourself from the stored value.
+
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
 
 use std::cell::Cell;
 use std::cell::RefCell;

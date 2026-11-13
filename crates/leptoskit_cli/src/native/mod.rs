@@ -1609,7 +1609,8 @@ fn native_static_libs(output: &str) -> Vec<String> {
 	let mut libraries: Vec<String> = Vec::new();
 
 	for line in output.lines() {
-		let Some(list) = line.trim().strip_prefix("note: native-static-libs:") else {
+		let plain = strip_ansi(line);
+		let Some(list) = plain.trim().strip_prefix("note: native-static-libs:") else {
 			continue;
 		};
 
@@ -1625,6 +1626,32 @@ fn native_static_libs(output: &str) -> Vec<String> {
 	}
 
 	libraries
+}
+
+/// Drops CSI color sequences so a colored `note:` still matches.
+///
+/// `CARGO_TERM_COLOR=always` paints rustc's `note` label. The prefix check
+/// then misses the line, and an Android plugin build links without the
+/// libraries rustc named (`aaudio`, `OpenSLES`).
+fn strip_ansi(text: &str) -> String {
+	let mut plain = String::with_capacity(text.len());
+	let mut chars = text.chars().peekable();
+
+	while let Some(ch) = chars.next() {
+		if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+			chars.next();
+			for next in chars.by_ref() {
+				if ('\u{40}'..='\u{7e}').contains(&next) {
+					break;
+				}
+			}
+			continue;
+		}
+
+		plain.push(ch);
+	}
+
+	plain
 }
 
 /// The path of `tool` inside an SDK, from the `xcrun` on `PATH`: Xcode's own
@@ -3065,6 +3092,14 @@ mod tests {
 			native_static_libs("note: native-static-libs: -framework Security -lAudioToolbox"),
 			["AudioToolbox"],
 			"a framework is the C linker's to name, not a library to link"
+		);
+		assert_eq!(
+			native_static_libs(
+				"\u{1b}[1m\u{1b}[92mnote\u{1b}[0m: native-static-libs: -landroid -laaudio -ldl \
+				 -lm\n"
+			),
+			["android", "aaudio", "dl", "m"],
+			"a colored note is the same line once the CSI sequences are gone"
 		);
 	}
 

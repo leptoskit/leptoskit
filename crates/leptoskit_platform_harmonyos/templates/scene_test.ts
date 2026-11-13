@@ -4,6 +4,7 @@ import {
 	borderEdges,
 	color,
 	isItalic,
+	lineHeightPoints,
 	Scene,
 	textContent,
 } from "./scene.ts";
@@ -179,6 +180,15 @@ Deno.test("border edges prefer per-edge widths and keep missing edges undrawn", 
 	equal(isItalic(false), false);
 	equal(isItalic(null), false);
 	equal(isItalic(undefined), false);
+	equal(lineHeightPoints(undefined, 14), undefined);
+	equal(lineHeightPoints(null, 14), undefined);
+	equal(lineHeightPoints({ relative: 1.5, fixed: undefined }, 16), 24);
+	equal(lineHeightPoints({ relative: undefined, fixed: 20 }, 16), 20);
+	equal(lineHeightPoints({ relative: 0, fixed: undefined }, 16), undefined);
+	equal(
+		lineHeightPoints({ relative: undefined, fixed: Number.NaN }, 16),
+		undefined,
+	);
 });
 
 /**

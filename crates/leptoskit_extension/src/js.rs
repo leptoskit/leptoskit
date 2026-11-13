@@ -2,6 +2,11 @@
 //! Safari), `chrome` otherwise. Values cross as JSON, so every argument and
 //! answer is a serde type.
 
+#![allow(
+	clippy::missing_const_for_thread_local,
+	reason = "the initializer is already const; Clippy reports a false positive on Linux"
+)]
+
 #[cfg(target_arch = "wasm32")]
 pub use imp::Listener;
 #[cfg(target_arch = "wasm32")]
