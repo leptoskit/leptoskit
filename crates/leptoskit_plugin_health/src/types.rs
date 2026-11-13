@@ -205,8 +205,10 @@ impl Extra {
 /// What the user allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grants {
-	/// The data types the app may read. When [`Grants::exact`] is false
-	/// these are the types the user has answered for, whatever the answer.
+	/// The data types the platform confirms the app may read. When
+	/// [`Grants::exact`] is false, an empty mask means unknown, not denied.
+	/// `HealthKit` does not reveal read authorization and returns an empty
+	/// mask.
 	pub read: DataTypes,
 	/// Whether the platform reports read access itself. `HealthKit` never
 	/// does: it hides denied reads, which then return no samples.
