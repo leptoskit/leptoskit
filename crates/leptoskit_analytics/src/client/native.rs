@@ -11,6 +11,7 @@
 
 use std::cell::Cell;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use leptoskit_plugin_filesystem::MAX_FILE_BYTES;
@@ -24,6 +25,7 @@ use super::Config;
 use super::Identity;
 use super::Outcome;
 use super::Platform;
+use super::persistence;
 use crate::SERVICE;
 use crate::wire;
 use crate::wire::Properties;
@@ -92,8 +94,9 @@ struct State {
 	client: Client<Guest>,
 	options: Options,
 	endpoint: String,
-	/// The queue's version when it was last saved, and how many files.
-	saved: (u64, usize),
+	/// The queue version and checkpoint committed by the last successful save.
+	saved: (u64, Option<persistence::Checkpoint>),
+	saving: Rc<persistence::Gate>,
 }
 
 thread_local! {
@@ -104,12 +107,10 @@ const DIRECTORY: &str = "leptoskit_analytics";
 const IDENTITY: &str = "leptoskit_analytics/identity";
 const OPTED_OUT: &str = "leptoskit_analytics/opted_out";
 
-fn queue_file(index: usize) -> String {
-	format!("{DIRECTORY}/queue-{index}")
-}
-
 /// Starts the app's client: recognises the person from last time, restores
 /// what wasn't sent, and starts sending. Calling it again does nothing.
+/// If existing persistent queue files cannot be read, initialization leaves
+/// them intact and may be tried again; [`distinct_id`] remains `None`.
 pub async fn init(options: Options) {
 	if STATE.with_borrow(Option::is_some) {
 		return;
@@ -150,14 +151,26 @@ pub async fn init(options: Options) {
 		None => Client::new(guest, options.config.clone(), context),
 	};
 
-	let mut restored = 0;
+	let mut checkpoint = None;
 	if opted_out {
 		client.opt_out();
-	} else {
-		while let Some(file) = read(&queue_file(restored)).await {
-			// A file that can't be read is skipped; the next save replaces it.
-			let _ = client.queue().restore(&file);
-			restored += 1;
+		// Commit an empty checkpoint before opt-in can remove the marker.
+		// Old queue files must never reappear after an opted-out restart.
+		if let Some(files) = files {
+			let Ok(empty) = persistence::save(&Disk(files), None, &[]).await else {
+				return;
+			};
+			checkpoint = Some(empty);
+		}
+	} else if let Some(files) = files {
+		let Ok((stored, segments)) = persistence::load(&Disk(files)).await else {
+			return;
+		};
+		checkpoint = stored;
+		for segment in segments {
+			if client.queue().restore(&segment).is_err() {
+				return;
+			}
 		}
 	}
 
@@ -174,7 +187,8 @@ pub async fn init(options: Options) {
 			client,
 			options,
 			endpoint,
-			saved: (version, restored),
+			saved: (version, checkpoint),
+			saving: Rc::default(),
 		});
 	});
 	save_identity().await;
@@ -315,12 +329,45 @@ async fn save_identity() {
 	}
 }
 
-/// Saves the queue if it changed since it was last saved: one write per
-/// file, replacing the last save, and removing files it no longer needs.
+struct Disk(Filesystem);
+
+impl persistence::Store for Disk {
+	async fn mkdir(&self, path: &str) -> Result<(), ()> {
+		self.0.mkdir(path).await.map_err(|_| ())
+	}
+
+	async fn list(&self, path: &str) -> Result<Vec<String>, ()> {
+		self.0.list(path).await.map_err(|_| ())
+	}
+
+	async fn read(&self, path: &str) -> Result<Vec<u8>, ()> {
+		self.0
+			.read(path)
+			.await
+			.map(|bytes| bytes.to_vec())
+			.map_err(|_| ())
+	}
+
+	async fn write(&self, path: &str, bytes: &[u8]) -> Result<(), ()> {
+		self.0.write(path, bytes).await.map_err(|_| ())
+	}
+
+	async fn remove(&self, path: &str) -> Result<(), ()> {
+		self.0.remove(path).await.map_err(|_| ())
+	}
+}
+
+/// Saves only to the inactive bank and advances the saved version after an
+/// atomic manifest commit. A failed write is retried on the next save.
 async fn save() {
 	let Some(files) = files() else {
 		return;
 	};
+	let Some(saving) = STATE.with_borrow(|state| state.as_ref().map(|state| state.saving.clone()))
+	else {
+		return;
+	};
+	let _guard = saving.lock().await;
 	let snapshot = STATE.with_borrow_mut(|state| {
 		let state = state.as_mut()?;
 		let version = state.client.queue().version();
@@ -332,22 +379,15 @@ async fn save() {
 			)
 		})
 	});
-	let Some((version, segments, before)) = snapshot else {
+	let Some((version, segments, previous)) = snapshot else {
 		return;
 	};
-	let _ = files.mkdir(DIRECTORY).await;
-	let mut written = 0;
-	for segment in &segments {
-		if files.write(&queue_file(written), segment).await.is_ok() {
-			written += 1;
-		}
-	}
-	for stale in written..before {
-		let _ = files.remove(&queue_file(stale)).await;
-	}
+	let Ok(checkpoint) = persistence::save(&Disk(files), previous, &segments).await else {
+		return;
+	};
 	STATE.with_borrow_mut(|state| {
 		if let Some(state) = state {
-			state.saved = (version, written);
+			state.saved = (version, Some(checkpoint));
 		}
 	});
 }

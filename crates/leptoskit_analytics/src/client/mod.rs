@@ -14,6 +14,12 @@
 
 pub mod queue;
 
+#[cfg(any(
+	all(test, not(target_arch = "wasm32")),
+	all(feature = "native", target_arch = "wasm32")
+))]
+mod persistence;
+
 #[cfg(feature = "server-client")]
 pub mod server;
 
