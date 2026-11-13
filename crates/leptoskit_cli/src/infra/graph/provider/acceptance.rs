@@ -43,22 +43,11 @@ fn configuration(variant: &str) -> LeptoskitConfig {
 		}
 		"static" => {
 			config.services.clear();
-			config
-				.graph_infra()
-				.context("graph infrastructure required")?
-				.frontends
-				.get_mut("play")
-				.unwrap()
-				.calls
-				.clear();
+			infra.frontends.get_mut("play").unwrap().calls.clear();
 			infra.hosts.remove("compiler");
 		}
 		"private" => {
-			config
-				.graph_infra()
-				.context("graph infrastructure required")?
-				.frontends
-				.clear();
+			infra.frontends.clear();
 			config.artifacts.clear();
 			infra.hosts.remove("web");
 			infra.edge = None;

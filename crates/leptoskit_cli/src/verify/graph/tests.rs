@@ -231,8 +231,8 @@ fn current_configuration_and_declarations_are_independent_checks() {
 	let mut fixture = Fixture::new();
 	fixture
 		.config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("docs")
 		.unwrap()
@@ -329,8 +329,8 @@ fn readiness_dependencies_are_retained_without_staging_their_artifacts() {
 	let mut fixture = Fixture::new();
 	fixture
 		.config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("docs")
 		.unwrap()

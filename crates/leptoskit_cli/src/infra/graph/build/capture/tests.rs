@@ -178,8 +178,8 @@ fn missing_or_mutable_toolchain_pin_fails_before_recipes() {
 fn ssr_executable_is_captured_outside_its_public_asset_tree() {
 	let (root, mut config) = fixture();
 	let site = config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap();
@@ -283,8 +283,8 @@ fn preexisting_output_symlink_is_refused_before_running_the_recipe() {
 fn server_only_ssr_captures_an_existing_empty_asset_tree() {
 	let (root, mut config) = fixture();
 	let site = config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap();

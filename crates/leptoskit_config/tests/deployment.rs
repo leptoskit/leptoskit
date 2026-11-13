@@ -34,7 +34,10 @@ fn application_frontends_and_graph_placement_keep_independent_contracts() {
 	let source = format!("{WEBSITE}\n[frontends.site]\npackage = 'site_ui'\n");
 	let config: LeptoskitConfig = toml::from_str(&source).unwrap();
 	assert_eq!(config.frontends["site"].package, "site_ui");
-	assert_eq!(config.graph_infra().unwrap().frontends["site"].artifact, "public-site");
+	assert_eq!(
+		config.graph_infra().unwrap().frontends["site"].artifact,
+		"public-site"
+	);
 	assert_eq!(plan(&config).placements().len(), 4);
 }
 

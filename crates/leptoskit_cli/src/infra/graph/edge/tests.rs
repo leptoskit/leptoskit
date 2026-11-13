@@ -98,8 +98,8 @@ fn reserved_listener_port_and_placeholder_mounts_are_refused() {
 	assert!(configurations(&config, &plan, None).is_err());
 	config.services.get_mut("play-api").unwrap().port = Some(4702);
 	config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("docs")
 		.unwrap()
@@ -113,11 +113,7 @@ fn reserved_listener_port_and_placeholder_mounts_are_refused() {
 #[test]
 fn private_hosts_do_not_gain_an_edge_listener() {
 	let mut config = website();
-	config
-		.graph_infra()
-		.context("graph infrastructure required")?
-		.frontends
-		.clear();
+	config.graph_infra_mut().unwrap().frontends.clear();
 	config.artifacts.clear();
 	let service = config.services.get_mut("play-api").unwrap();
 	service.deploy.as_mut().unwrap().domain = None;
@@ -147,8 +143,8 @@ fn generated_edges_serve_only_owned_routes_and_verified_proxy_headers() {
 	let http = configurations(&config, &plan, None).unwrap();
 	for (name, port) in [("site", 3000), ("play", 3001)] {
 		let frontend = config
-			.graph_infra()
-			.context("graph infrastructure required")?
+			.graph_infra_mut()
+			.unwrap()
 			.frontends
 			.get_mut(name)
 			.unwrap();

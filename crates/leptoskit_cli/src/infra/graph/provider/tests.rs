@@ -163,8 +163,8 @@ fn static_only_has_no_application_database_or_backup_resources() {
 	let mut config = website();
 	config.services.clear();
 	config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("play")
 		.unwrap()
@@ -197,11 +197,7 @@ fn static_only_has_no_application_database_or_backup_resources() {
 #[test]
 fn private_service_has_no_cloudflare_resources_or_listener() {
 	let mut config = website();
-	config
-		.graph_infra()
-		.context("graph infrastructure required")?
-		.frontends
-		.clear();
+	config.graph_infra_mut().unwrap().frontends.clear();
 	config.artifacts.clear();
 	let service = config
 		.services

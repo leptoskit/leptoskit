@@ -21,8 +21,8 @@ fn backend(unit: &str) -> Executable {
 
 fn ssr(config: &mut LeptoskitConfig) {
 	let site = config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap();
@@ -51,8 +51,8 @@ fn ssr_requires_explicit_socket_contract_and_preserves_exact_backend_pin() {
 	);
 	assert_ne!(value["account"], "leptoskit-edge");
 	let serve = config
-		.graph_infra()
-		.context("graph infrastructure required")?
+		.graph_infra_mut()
+		.unwrap()
 		.frontends
 		.get_mut("site")
 		.unwrap()
@@ -74,8 +74,8 @@ fn refuses_unrepresentable_ssr_contracts_before_transport() {
 		let mut config = config();
 		ssr(&mut config);
 		let site = config
-			.graph_infra()
-			.context("graph infrastructure required")?
+			.graph_infra_mut()
+			.unwrap()
 			.frontends
 			.get_mut("site")
 			.unwrap();
