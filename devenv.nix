@@ -16,6 +16,18 @@ let
   # that file, so every script that can trigger such an install exports the
   # same setting. Remove both once the upstream issue is fixed.
   keepProcMacrosLoadable = "export CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none";
+  # System Firefox is built against the host glibc. The shell's library path
+  # points at nix GTK and glib, which need a newer glibc than Ubuntu ships,
+  # so Firefox cannot load libmozgtk.so while that path is set. geckodriver
+  # launches whatever `firefox` comes first on `PATH`.
+  linuxFirefox = pkgs.writeShellScriptBin "firefox" ''
+    unset LD_LIBRARY_PATH
+    exec /usr/bin/firefox "$@"
+  '';
+  # Inside `setup:ci`'s indented string, so this stays a separate binding.
+  linuxFirefoxOnPath = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+    echo "${linuxFirefox}/bin" >> $GITHUB_PATH
+  '';
   linuxFontsConf = pkgs.writeText "leptoskit-fonts.conf" ''
     <?xml version="1.0"?>
     <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -168,6 +180,7 @@ in
     }"
     export LD_LIBRARY_PATH="$runtime_libs''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     unset runtime_libs
+    export PATH="${linuxFirefox}/bin:$PATH"
     # Re-execed test binaries clear the environment, so libstdc++ has to be on
     # the binary's runpath. The other libraries stay on `LD_LIBRARY_PATH`,
     # which is enough for the process nextest launches.
@@ -1566,6 +1579,8 @@ in
         echo "DEVENV_DOTFILE=$DEVENV_DOTFILE" >> $GITHUB_ENV
         echo "DEVENV_ROOT=$DEVENV_ROOT" >> $GITHUB_ENV
         echo "DEVENV_STATE=$DEVENV_STATE" >> $GITHUB_ENV
+        # Prepended last, so it is the first `firefox` geckodriver finds.
+        ${linuxFirefoxOnPath}
       '';
       description = "Setup devenv for GitHub Actions";
       binary = "bash";
