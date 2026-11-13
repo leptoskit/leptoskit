@@ -596,14 +596,11 @@ Deno.test({
 	name: "a player switches to its AppKit image and back",
 	async fn() {
 		await browse("/docs/examples.html", async (page, _frames, errors) => {
-			// The image is the AppKit render. The test server allows only the
-			// site's own images, so pick a player whose image the site serves.
-			const id = await page.evaluate(`(() => {
-				const image = [...document.querySelectorAll(".lk-play-native")]
-					.find((image) => new URL(image.dataset.src, location.href).origin === location.origin);
-				return image?.closest("[data-lk-play]").id;
-			})()`);
-			assert(id, "a player should offer an AppKit image the site serves");
+			// The image is the AppKit render, which the docs host on Backblaze.
+			const id = await page.evaluate(
+				`document.querySelector(".lk-play-native")?.closest("[data-lk-play]").id`,
+			);
+			assert(id, "a player should offer an AppKit image");
 			const figure = `document.getElementById(${JSON.stringify(id)})`;
 			await page.evaluate(
 				`${figure}.scrollIntoView({ block: "center", behavior: "instant" })`,
