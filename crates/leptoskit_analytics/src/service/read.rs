@@ -140,9 +140,10 @@ pub async fn persons(
 			Dialect::Postgres => "ILIKE",
 			Dialect::Sqlite => "LIKE",
 		};
-		let found = match where_clause.is_empty() {
-			true => "WHERE",
-			false => "AND",
+		let found = if where_clause.is_empty() {
+			"WHERE"
+		} else {
+			"AND"
 		};
 		let at = placeholder(dialect, args.len());
 		where_clause = format!(
@@ -311,8 +312,8 @@ pub async fn delete_person(cx: &rpc::MutationCx, id: Uuid) -> rpc::Result<Delete
 			.await
 			.map_err(|error| rpc::Error::server(error.to_string()))?;
 		match table {
-			"events" => deleted.events = u64::try_from(removed).unwrap_or(u64::MAX),
-			"sessions" => deleted.sessions = u64::try_from(removed).unwrap_or(u64::MAX),
+			"events" => deleted.events = removed,
+			"sessions" => deleted.sessions = removed,
 			_ => {}
 		}
 	}
@@ -479,7 +480,7 @@ fn person_summary(row: &[Value]) -> Option<PersonSummary> {
 		_ => return None,
 	};
 	let created_at = timestamp_of(row.get(2)?)?;
-	let is_identified = matches!(row.get(3), Some(Value::Bool(true)) | Some(Value::Int(1)));
+	let is_identified = matches!(row.get(3), Some(Value::Bool(true) | Value::Int(1)));
 	let version = match row.get(4) {
 		Some(Value::Int(version)) => *version,
 		_ => 1,
@@ -543,7 +544,7 @@ fn session_view(row: &[Value]) -> Option<SessionView> {
 		exit_pathname: text(9),
 		event_count: int(10),
 		pageview_count: int(11),
-		is_bounce: matches!(row.get(12), Some(Value::Bool(true)) | Some(Value::Int(1))),
+		is_bounce: matches!(row.get(12), Some(Value::Bool(true) | Value::Int(1))),
 		channel: text(13),
 		referrer_domain: text(14),
 		utm_source: text(15),

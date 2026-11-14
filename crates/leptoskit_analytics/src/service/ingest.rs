@@ -343,80 +343,7 @@ async fn write(
 			.map_err(|error| error.to_string())?;
 	}
 
-	// Which rows each submission wrote, by the names `RETURNING` gives back.
-	let mut committed = vec![Committed::default(); submissions.len()];
-	let mut volumes: Vec<(String, i64, Timestamp, Timestamp)> = Vec::new();
-	// Where a uuid sits, so the rows `RETURNING` confirms are the ones
-	// person and session processing applies to: a duplicate never runs
-	// them twice.
-	let mut row_by_uuid: HashMap<Uuid, (usize, usize)> = HashMap::new();
-	for (index, submission) in submissions.iter().enumerate() {
-		for (row_index, row) in submission.rows.iter().enumerate() {
-			row_by_uuid.entry(row.uuid).or_insert((index, row_index));
-		}
-	}
-	let mut inserted: Vec<&Row> = Vec::new();
-	for (index, submission) in submissions.iter().enumerate() {
-		for chunk in submission.rows.chunks(ROWS_PER_STATEMENT) {
-			let mut statement = Insert::new(
-				dialect,
-				"events",
-				&[
-					"uuid",
-					"name",
-					"distinct_id",
-					"person_id",
-					"timestamp",
-					"received_at",
-					"session_id",
-					"context_id",
-					"properties",
-					"source",
-				],
-			);
-			for row in chunk {
-				statement.row(vec![
-					Value::Uuid(row.uuid),
-					Value::Text(row.name.clone()),
-					Value::Text(row.distinct_id.clone()),
-					Value::Null,
-					Value::Timestamp(row.timestamp),
-					Value::Timestamp(submission.received_at),
-					row.session_id.map_or(Value::Null, Value::Uuid),
-					Value::Int(row.context_id),
-					Value::Text(row.properties.clone()),
-					Value::Int(row.source as i64),
-				]);
-			}
-			let mut statement = statement.on_conflict_do_nothing("uuid");
-			statement.sql.push_str(" RETURNING \"uuid\"");
-			let written = tx
-				.fetch(statement)
-				.await
-				.map_err(|error| error.to_string())?;
-			let stored = written.len();
-			committed[index].stored += stored as u32;
-			committed[index].duplicates += (chunk.len() - stored) as u32;
-			for row in written {
-				let Some(uuid) = row.first().and_then(uuid_of) else {
-					continue;
-				};
-				let Some((submission_index, row_index)) = row_by_uuid.get(&uuid) else {
-					continue;
-				};
-				let row = &submissions[*submission_index].rows[*row_index];
-				inserted.push(row);
-				match volumes.iter_mut().find(|volume| volume.0 == row.name) {
-					Some(volume) => {
-						volume.1 += 1;
-						volume.2 = volume.2.min(row.timestamp);
-						volume.3 = volume.3.max(row.timestamp);
-					}
-					None => volumes.push((row.name.clone(), 1, row.timestamp, row.timestamp)),
-				}
-			}
-		}
-	}
+	let (committed, inserted, volumes) = insert_events(&tx, dialect, submissions).await?;
 
 	// The contexts, by id, for the sessions' device and browser.
 	let context_map: HashMap<i64, &ContextRow> = contexts
@@ -497,6 +424,97 @@ async fn write(
 
 	tx.commit().await.map_err(|error| error.to_string())?;
 	Ok(committed)
+}
+
+/// Inserts every submission's events, and answers what each submission
+/// stored, the rows newly stored in arrival order — the only ones person
+/// and session processing applies to, so a duplicate never runs them
+/// twice — and the event catalogue's volumes.
+async fn insert_events<'a>(
+	tx: &leptoskit_db::Tx,
+	dialect: Dialect,
+	submissions: &'a [Submission],
+) -> Result<
+	(
+		Vec<Committed>,
+		Vec<&'a Row>,
+		Vec<(String, i64, Timestamp, Timestamp)>,
+	),
+	String,
+> {
+	let mut committed = vec![Committed::default(); submissions.len()];
+	let mut volumes: Vec<(String, i64, Timestamp, Timestamp)> = Vec::new();
+	// Where a uuid sits, so the rows `RETURNING` confirms map back to the
+	// batch's own rows.
+	let mut row_by_uuid: HashMap<Uuid, (usize, usize)> = HashMap::new();
+	for (index, submission) in submissions.iter().enumerate() {
+		for (row_index, row) in submission.rows.iter().enumerate() {
+			row_by_uuid.entry(row.uuid).or_insert((index, row_index));
+		}
+	}
+	let mut inserted: Vec<&Row> = Vec::new();
+	for (index, submission) in submissions.iter().enumerate() {
+		for chunk in submission.rows.chunks(ROWS_PER_STATEMENT) {
+			let mut statement = Insert::new(
+				dialect,
+				"events",
+				&[
+					"uuid",
+					"name",
+					"distinct_id",
+					"person_id",
+					"timestamp",
+					"received_at",
+					"session_id",
+					"context_id",
+					"properties",
+					"source",
+				],
+			);
+			for row in chunk {
+				statement.row(vec![
+					Value::Uuid(row.uuid),
+					Value::Text(row.name.clone()),
+					Value::Text(row.distinct_id.clone()),
+					Value::Null,
+					Value::Timestamp(row.timestamp),
+					Value::Timestamp(submission.received_at),
+					row.session_id.map_or(Value::Null, Value::Uuid),
+					Value::Int(row.context_id),
+					Value::Text(row.properties.clone()),
+					Value::Int(row.source as i64),
+				]);
+			}
+			let mut statement = statement.on_conflict_do_nothing("uuid");
+			statement.sql.push_str(" RETURNING \"uuid\"");
+			let written = tx
+				.fetch(statement)
+				.await
+				.map_err(|error| error.to_string())?;
+			let stored = written.len();
+			committed[index].stored += stored as u32;
+			committed[index].duplicates += (chunk.len() - stored) as u32;
+			for row in written {
+				let Some(uuid) = row.first().and_then(uuid_of) else {
+					continue;
+				};
+				let Some((submission_index, row_index)) = row_by_uuid.get(&uuid) else {
+					continue;
+				};
+				let row = &submissions[*submission_index].rows[*row_index];
+				inserted.push(row);
+				match volumes.iter_mut().find(|volume| volume.0 == row.name) {
+					Some(volume) => {
+						volume.1 += 1;
+						volume.2 = volume.2.min(row.timestamp);
+						volume.3 = volume.3.max(row.timestamp);
+					}
+					None => volumes.push((row.name.clone(), 1, row.timestamp, row.timestamp)),
+				}
+			}
+		}
+	}
+	Ok((committed, inserted, volumes))
 }
 
 /// Writes each event's person onto the row, in chunks of one `CASE`

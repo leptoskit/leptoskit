@@ -124,8 +124,8 @@ pub(crate) async fn process(
 	for row in rows {
 		let properties = identity_properties(row);
 		let person = match row.name.as_str() {
-			"$identify" => persons.identify(row, &properties),
-			"$create_alias" => persons.alias(row, &properties),
+			"$identify" => persons.identify(row, properties.as_ref()),
+			"$create_alias" => persons.alias(row, properties.as_ref()),
 			_ => {
 				persons.resolve(
 					&row.distinct_id,
@@ -134,7 +134,7 @@ pub(crate) async fn process(
 			}
 		};
 		if let Some(person) = person {
-			persons.apply_changes(person, &properties, row.timestamp);
+			persons.apply_changes(person, properties.as_ref(), row.timestamp);
 		}
 		person_ids.push(person);
 	}
@@ -301,7 +301,7 @@ impl Persons {
 					PersonState {
 						id,
 						properties: serde_json::from_str(properties)
-							.unwrap_or(Json::Object(Default::default())),
+							.unwrap_or(Json::Object(serde_json::Map::default())),
 						updated_at: serde_json::from_str(updated_at).unwrap_or_default(),
 						created_at,
 						is_identified,
@@ -335,7 +335,7 @@ impl Persons {
 
 	/// `$identify`: the row's id is now the person's known id, marked
 	/// identified, and the anonymous id's person merges into it.
-	fn identify(&mut self, row: &Row, properties: &Option<Json>) -> Option<Uuid> {
+	fn identify(&mut self, row: &Row, properties: Option<&Json>) -> Option<Uuid> {
 		let person = self.resolve(&row.distinct_id, true)?;
 		self.mark_identified(person);
 		let anon = properties
@@ -351,7 +351,7 @@ impl Persons {
 
 	/// `$create_alias`: `alias` becomes another id of the same person,
 	/// under the same merge rules as [`Self::identify`].
-	fn alias(&mut self, row: &Row, properties: &Option<Json>) -> Option<Uuid> {
+	fn alias(&mut self, row: &Row, properties: Option<&Json>) -> Option<Uuid> {
 		let person = self.resolve(&row.distinct_id, true)?;
 		let alias = properties
 			.as_ref()
@@ -439,7 +439,7 @@ impl Persons {
 
 	/// Applies an identity entry's `$set`, `$set_once`, and `$unset` to
 	/// `person`, each property last written when this entry is newer.
-	fn apply_changes(&mut self, person: Uuid, properties: &Option<Json>, timestamp: Timestamp) {
+	fn apply_changes(&mut self, person: Uuid, properties: Option<&Json>, timestamp: Timestamp) {
 		let Some(properties) = properties else {
 			return;
 		};
@@ -485,30 +485,49 @@ impl Persons {
 	/// Writes everything the batch changed, inside the writer's
 	/// transaction.
 	async fn write_back(&mut self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
-		if dialect == Dialect::Postgres {
-			// One lock per person, taken in a sorted order so two replicas
-			// merging the same pair can't deadlock.
-			let mut locks: Vec<Uuid> = self
-				.moved
-				.iter()
-				.flat_map(|(from, to)| [*from, *to])
-				.collect();
-			locks.sort();
-			locks.dedup();
-			for id in locks {
-				tx.execute(Statement {
-					sql: "SELECT pg_advisory_xact_lock($1)".into(),
-					args: vec![Value::Int(i64::from_be_bytes(
-						id.as_bytes()[..8].try_into().expect("8 bytes"),
-					))],
-				})
-				.await
-				.map_err(|error| error.to_string())?;
-			}
-		}
+		self.lock_merges(tx, dialect).await?;
+		let overrides = self.overrides_of_moved(tx, dialect).await?;
+		self.upsert_persons(tx, dialect).await?;
+		self.delete_absorbed(tx, dialect).await?;
+		self.write_overrides(tx, dialect, overrides).await?;
+		self.move_distinct_ids(tx, dialect).await?;
+		self.insert_new_mappings(tx, dialect).await?;
+		Ok(())
+	}
 
-		// Which distinct ids each merge moves, for the overrides. Read
-		// before the move: the rows still say the old person.
+	/// Postgres: one advisory lock per merged person, taken in a sorted
+	/// order so two replicas merging the same pair can't deadlock.
+	async fn lock_merges(&self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
+		if dialect != Dialect::Postgres {
+			return Ok(());
+		}
+		let mut locks: Vec<Uuid> = self
+			.moved
+			.iter()
+			.flat_map(|(from, to)| [*from, *to])
+			.collect();
+		locks.sort();
+		locks.dedup();
+		for id in locks {
+			tx.execute(Statement {
+				sql: "SELECT pg_advisory_xact_lock($1)".into(),
+				args: vec![Value::Int(i64::from_be_bytes(
+					id.as_bytes()[..8].try_into().expect("8 bytes"),
+				))],
+			})
+			.await
+			.map_err(|error| error.to_string())?;
+		}
+		Ok(())
+	}
+
+	/// Which distinct ids each merge moves, read before the move: the rows
+	/// still say the old person.
+	async fn overrides_of_moved(
+		&self,
+		tx: &Tx,
+		dialect: Dialect,
+	) -> Result<Vec<(String, Uuid)>, String> {
 		let mut overrides: Vec<(String, Uuid)> = Vec::new();
 		for (from, to) in &self.moved {
 			let rows = tx
@@ -528,7 +547,11 @@ impl Persons {
 				}
 			}
 		}
+		Ok(overrides)
+	}
 
+	/// Writes the new and changed person rows.
+	async fn upsert_persons(&self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
 		let mut living: Vec<&PersonState> =
 			self.states.values().filter(|state| state.changed).collect();
 		living.sort_by_key(|state| state.id);
@@ -566,26 +589,38 @@ impl Persons {
 				.await
 				.map_err(|error| error.to_string())?;
 		}
+		Ok(())
+	}
 
-		if !self.moved.is_empty() {
-			let absorbed: Vec<Value> = self
-				.moved
-				.iter()
-				.map(|(from, _)| Value::Uuid(*from))
-				.collect();
-			for chunk in absorbed.chunks(super::ingest::ROWS_PER_STATEMENT) {
-				tx.execute(Statement {
-					sql: format!(
-						"DELETE FROM \"persons\" WHERE \"id\" IN ({})",
-						placeholders(dialect, chunk.len())
-					),
-					args: chunk.to_vec(),
-				})
-				.await
-				.map_err(|error| error.to_string())?;
-			}
+	/// Removes the persons a merge absorbed.
+	async fn delete_absorbed(&self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
+		let absorbed: Vec<Value> = self
+			.moved
+			.iter()
+			.map(|(from, _)| Value::Uuid(*from))
+			.collect();
+		for chunk in absorbed.chunks(super::ingest::ROWS_PER_STATEMENT) {
+			tx.execute(Statement {
+				sql: format!(
+					"DELETE FROM \"persons\" WHERE \"id\" IN ({})",
+					placeholders(dialect, chunk.len())
+				),
+				args: chunk.to_vec(),
+			})
+			.await
+			.map_err(|error| error.to_string())?;
 		}
+		Ok(())
+	}
 
+	/// Records, for each moved id, that its events belong to the survivor
+	/// now.
+	async fn write_overrides(
+		&self,
+		tx: &Tx,
+		dialect: Dialect,
+		overrides: Vec<(String, Uuid)>,
+	) -> Result<(), String> {
 		for chunk in overrides.chunks(super::ingest::ROWS_PER_STATEMENT) {
 			let mut insert = Insert::new(
 				dialect,
@@ -608,7 +643,12 @@ impl Persons {
 				.await
 				.map_err(|error| error.to_string())?;
 		}
+		Ok(())
+	}
 
+	/// Points every stored distinct id of an absorbed person at its
+	/// survivor.
+	async fn move_distinct_ids(&self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
 		for (from, to) in &self.moved {
 			tx.execute(Statement {
 				sql: format!(
@@ -622,7 +662,11 @@ impl Persons {
 			.await
 			.map_err(|error| error.to_string())?;
 		}
+		Ok(())
+	}
 
+	/// Records the batch's new id-to-person mappings.
+	async fn insert_new_mappings(&self, tx: &Tx, dialect: Dialect) -> Result<(), String> {
 		let mut new_ids: Vec<(&String, &Uuid)> = self
 			.mappings
 			.iter()

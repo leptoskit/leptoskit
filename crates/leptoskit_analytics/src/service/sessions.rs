@@ -65,6 +65,16 @@ pub(crate) async fn upsert(
 	person_ids: &[Option<Uuid>],
 	contexts: &HashMap<i64, &ContextRow>,
 ) -> Result<(), String> {
+	let visits = visit_rows(rows, person_ids);
+	if visits.is_empty() {
+		return Ok(());
+	}
+	write(tx, dialect, &visits, contexts).await
+}
+
+/// What one batch saw of each session, in arrival order: the walk every
+/// batch does before its sessions' rows are written.
+fn visit_rows(rows: &[&Row], person_ids: &[Option<Uuid>]) -> Vec<(Uuid, Visit)> {
 	let mut visits: Vec<(Uuid, Visit)> = Vec::new();
 	for (row, person) in rows.iter().zip(person_ids) {
 		let Some(session_id) = row.session_id else {
@@ -117,12 +127,20 @@ pub(crate) async fn upsert(
 			}
 		}
 	}
-	if visits.is_empty() {
-		return Ok(());
-	}
+	visits
+}
 
-	// UTM parameters and the referrer belong to the visit's first pageview,
-	// later ones to the pages they came from.
+/// Writes the sessions' rows, folding each into what the session's earlier
+/// batches wrote: times extend, counts add, and the entry, the first
+/// pageview's origin, and the device stay what they were. UTM parameters
+/// and the referrer belong to the visit's first pageview, later ones to
+/// the pages they came from.
+async fn write(
+	tx: &Tx,
+	dialect: Dialect,
+	visits: &[(Uuid, Visit)],
+	contexts: &HashMap<i64, &ContextRow>,
+) -> Result<(), String> {
 	let mut insert = Insert::new(
 		dialect,
 		"sessions",
@@ -150,7 +168,7 @@ pub(crate) async fn upsert(
 			"os",
 		],
 	);
-	for (id, visit) in &mut visits {
+	for (id, visit) in visits {
 		let (entry_url, entry_pathname) = visit
 			.entry
 			.as_ref()

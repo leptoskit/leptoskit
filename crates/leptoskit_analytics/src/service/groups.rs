@@ -25,6 +25,15 @@ use super::persons::stamp;
 /// The most group types one project may have, as `PostHog`'s five.
 pub const MAX_GROUP_TYPES: usize = 5;
 
+/// A group the batch touches, with its properties as the batch has merged
+/// them and each key's last write.
+struct GroupEdit {
+	index: i16,
+	key: String,
+	properties: Json,
+	seen: HashMap<String, String>,
+}
+
 /// Processes the batch's `$groupidentify` entries inside `tx`.
 pub(crate) async fn process(
 	tx: &Tx,
@@ -32,6 +41,19 @@ pub(crate) async fn process(
 	rows: &[&Row],
 	now: Timestamp,
 ) -> Result<Vec<Warning>, String> {
+	let entries = entries(rows);
+	if entries.is_empty() {
+		return Ok(Vec::new());
+	}
+	let (types, warnings) = register_types(tx, dialect, &entries, now).await?;
+	let mut edits = load(tx, dialect, &entries, &types).await?;
+	merge_entries(&mut edits, rows, &types);
+	write(tx, dialect, &edits, now).await?;
+	Ok(warnings)
+}
+
+/// The batch's `$groupidentify` entries, as (type, key).
+fn entries(rows: &[&Row]) -> Vec<(String, String)> {
 	let mut entries: Vec<(String, String)> = Vec::new();
 	for row in rows {
 		if row.name != "$groupidentify" {
@@ -46,11 +68,17 @@ pub(crate) async fn process(
 			entries.push((group_type.to_owned(), group_key.to_owned()));
 		}
 	}
-	if entries.is_empty() {
-		return Ok(Vec::new());
-	}
+	entries
+}
 
-	// The registry: a name keeps the index it first took.
+/// The registry, with this batch's new kinds given the next index. A name
+/// keeps the index it first took; at most five kinds exist.
+async fn register_types(
+	tx: &Tx,
+	dialect: Dialect,
+	entries: &[(String, String)],
+	now: Timestamp,
+) -> Result<(HashMap<String, i16>, Vec<Warning>), String> {
 	let mut types: HashMap<String, i16> = HashMap::new();
 	let mut highest = -1_i16;
 	let registry = tx
@@ -73,7 +101,7 @@ pub(crate) async fn process(
 
 	let mut warnings = Vec::new();
 	let mut new_types: Vec<(String, i16)> = Vec::new();
-	for (group_type, _) in &entries {
+	for (group_type, _) in entries {
 		if types.contains_key(group_type) {
 			continue;
 		}
@@ -110,11 +138,19 @@ pub(crate) async fn process(
 			.await
 			.map_err(|error| error.to_string())?;
 	}
+	Ok((types, warnings))
+}
 
-	// What the batch's groups hold now, so `$group_set` merges per key
-	// rather than replacing everything.
-	let mut groups: HashMap<i64, (Json, HashMap<String, String>)> = HashMap::new();
-	let ids: Vec<i64> = entries
+/// What the batch's groups hold now, as an edit per id the batch touches,
+/// so `$group_set` merges per key rather than replacing everything.
+async fn load(
+	tx: &Tx,
+	dialect: Dialect,
+	entries: &[(String, String)],
+	types: &HashMap<String, i16>,
+) -> Result<HashMap<i64, GroupEdit>, String> {
+	let mut edits: HashMap<i64, GroupEdit> = HashMap::new();
+	let mut wanted: Vec<i64> = entries
 		.iter()
 		.filter_map(|(group_type, group_key)| {
 			types
@@ -122,7 +158,9 @@ pub(crate) async fn process(
 				.map(|index| group_id(*index, group_key))
 		})
 		.collect();
-	for chunk in ids.chunks(super::ingest::ROWS_PER_STATEMENT) {
+	wanted.sort_unstable();
+	wanted.dedup();
+	for chunk in wanted.chunks(super::ingest::ROWS_PER_STATEMENT) {
 		let existing = tx
 			.fetch(Statement {
 				sql: format!(
@@ -140,25 +178,29 @@ pub(crate) async fn process(
 			else {
 				continue;
 			};
-			let Value::Text(properties) = properties else {
+			let (Value::Text(properties), Value::Text(updated_at)) = (properties, updated_at)
+			else {
 				continue;
 			};
-			let Value::Text(updated_at) = updated_at else {
-				continue;
-			};
-			groups.insert(
+			edits.insert(
 				*id,
-				(
-					serde_json::from_str(properties).unwrap_or(Json::Object(Default::default())),
-					serde_json::from_str(updated_at).unwrap_or_default(),
-				),
+				GroupEdit {
+					index: 0,
+					key: String::new(),
+					properties: serde_json::from_str(properties)
+						.unwrap_or(Json::Object(serde_json::Map::new())),
+					seen: serde_json::from_str(updated_at).unwrap_or_default(),
+				},
 			);
 		}
 	}
+	Ok(edits)
+}
 
-	// Apply each entry's `$group_set` last-write-wins by event time, in
-	// arrival order.
-	let mut touched: Vec<(i64, i16, String, Json, HashMap<String, String>)> = Vec::new();
+/// Applies every entry's `$group_set` to its group's edit, last-write-wins
+/// by event time, in arrival order. A group of an unknown type — one the
+/// registry refused — is left alone.
+fn merge_entries(edits: &mut HashMap<i64, GroupEdit>, rows: &[&Row], types: &HashMap<String, i16>) {
 	for row in rows.iter().filter(|row| row.name == "$groupidentify") {
 		let Ok(properties) = serde_json::from_str::<Json>(&row.properties) else {
 			continue;
@@ -174,19 +216,29 @@ pub(crate) async fn process(
 		};
 		let id = group_id(*index, group_key);
 		let when = stamp(row.timestamp);
-		if let Some(edit) = touched.iter_mut().find(|(touched, ..)| *touched == id) {
-			merge_set(&mut edit.3, &mut edit.4, &properties, &when);
-			continue;
-		}
-		let (mut merged, mut seen) = groups.get(&id).map_or(
-			(Json::Object(serde_json::Map::new()), HashMap::new()),
-			|(properties, seen)| (properties.clone(), seen.clone()),
-		);
-		merge_set(&mut merged, &mut seen, &properties, &when);
-		touched.push((id, *index, group_key.to_owned(), merged, seen));
+		let edit = edits.entry(id).or_insert_with(|| {
+			GroupEdit {
+				index: *index,
+				key: group_key.to_owned(),
+				properties: Json::Object(serde_json::Map::new()),
+				seen: HashMap::new(),
+			}
+		});
+		edit.index = *index;
+		merge_set(&mut edit.properties, &mut edit.seen, &properties, &when);
 	}
+}
 
-	for chunk in touched.chunks(super::ingest::ROWS_PER_STATEMENT) {
+/// Writes the batch's group edits, inside the writer's transaction.
+async fn write(
+	tx: &Tx,
+	dialect: Dialect,
+	edits: &HashMap<i64, GroupEdit>,
+	now: Timestamp,
+) -> Result<(), String> {
+	let mut edits: Vec<(&i64, &GroupEdit)> = edits.iter().collect();
+	edits.sort_by_key(|(id, _)| **id);
+	for chunk in edits.chunks(super::ingest::ROWS_PER_STATEMENT) {
 		let mut insert = Insert::new(
 			dialect,
 			"groups",
@@ -199,13 +251,13 @@ pub(crate) async fn process(
 				"created_at",
 			],
 		);
-		for (id, index, key, properties, seen) in chunk {
+		for (id, edit) in chunk {
 			insert.row(vec![
-				Value::Int(*id),
-				Value::Int(i64::from(*index)),
-				Value::Text(key.clone()),
-				Value::Text(properties.to_string()),
-				Value::Text(serde_json::to_string(seen).unwrap_or_default()),
+				Value::Int(**id),
+				Value::Int(i64::from(edit.index)),
+				Value::Text(edit.key.clone()),
+				Value::Text(edit.properties.to_string()),
+				Value::Text(serde_json::to_string(&edit.seen).unwrap_or_default()),
 				Value::Timestamp(now),
 			]);
 		}
@@ -218,8 +270,7 @@ pub(crate) async fn process(
 			.await
 			.map_err(|error| error.to_string())?;
 	}
-
-	Ok(warnings)
+	Ok(())
 }
 
 /// Applies one entry's `$group_set` per key into `properties`, where

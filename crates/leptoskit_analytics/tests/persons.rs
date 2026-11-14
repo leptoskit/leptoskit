@@ -239,7 +239,7 @@ async fn anonymous_events_get_no_person_until_the_client_identifies() {
 	// `identified_only` leaves anonymous events without a person.
 	assert_eq!(
 		rows(&service.db, "SELECT id FROM persons").await,
-		[] as [std::vec::Vec<leptoskit_db::Value>; 0]
+		[] as [Vec<leptoskit_db::Value>; 0]
 	);
 	assert_eq!(
 		one(
@@ -834,7 +834,7 @@ async fn the_setting_of_never_writes_no_person_at_all() {
 	.await;
 	assert_eq!(
 		rows(&service.db, "SELECT id FROM persons").await,
-		[] as [std::vec::Vec<leptoskit_db::Value>; 0]
+		[] as [Vec<leptoskit_db::Value>; 0]
 	);
 	assert_eq!(
 		one(
