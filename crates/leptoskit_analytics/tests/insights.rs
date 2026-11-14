@@ -15,6 +15,8 @@ use leptoskit_analytics::service::JsonBatch;
 use leptoskit_analytics::service::JsonEvent;
 use leptoskit_analytics::service::Source;
 use leptoskit_analytics::service::query;
+use leptoskit_analytics::service::query::DashboardView;
+use leptoskit_analytics::service::query::InsightView;
 use leptoskit_db::Db;
 use leptoskit_db::Read as _;
 use leptoskit_db::Statement;
@@ -46,7 +48,7 @@ fn next_uuid() -> Uuid {
 }
 
 /// One event, with its exact time.
-fn event(name: &str, distinct_id: &str, when: &str, properties: serde_json::Value) -> JsonEvent {
+fn event(name: &str, distinct_id: &str, when: &str, properties: &serde_json::Value) -> JsonEvent {
 	JsonEvent {
 		event: name.to_owned(),
 		distinct_id: distinct_id.to_owned(),
@@ -63,7 +65,7 @@ fn identify(distinct_id: &str, anon_distinct_id: &str, when: &str) -> JsonEvent 
 		"$identify",
 		distinct_id,
 		when,
-		json!({"$anon_distinct_id": anon_distinct_id}),
+		&json!({"$anon_distinct_id": anon_distinct_id}),
 	)
 }
 
@@ -74,7 +76,7 @@ fn pageview(distinct_id: &str, session: Uuid, when: &str, url: &str, referrer: &
 		"$pageview",
 		distinct_id,
 		when,
-		json!({
+		&json!({
 			"$current_url": url,
 			"$pathname": url.split("app.example").nth(1).unwrap_or("/"),
 			"$referrer": referrer,
@@ -195,10 +197,10 @@ async fn a_trend_counts_its_buckets_fills_gaps_and_compares() {
 	let harness = Harness::start().await;
 	harness
 		.store(vec![
-			event("signed_up", "ada", &at(0, 9), json!({"plan": "pro"})),
-			event("signed_up", "grace", &at(0, 10), json!({"plan": "pro"})),
-			event("signed_up", "linus", &at(1, 11), json!({"plan": "free"})),
-			event("signed_up", "grace", &at(1, 12), json!({"plan": "free"})),
+			event("signed_up", "ada", &at(0, 9), &json!({"plan": "pro"})),
+			event("signed_up", "grace", &at(0, 10), &json!({"plan": "pro"})),
+			event("signed_up", "linus", &at(1, 11), &json!({"plan": "free"})),
+			event("signed_up", "grace", &at(1, 12), &json!({"plan": "free"})),
 		])
 		.await;
 
@@ -286,20 +288,20 @@ async fn a_funnel_counts_order_windows_and_time_to_convert() {
 	harness
 		.store(vec![
 			// Ada walks the whole funnel within the window.
-			event("$pageview", "ada", &day(0, 9), json!({})),
-			event("signed_up", "ada", &day(1, 9), json!({})),
-			event("checkout", "ada", &day(2, 9), json!({})),
+			event("$pageview", "ada", &day(0, 9), &json!({})),
+			event("signed_up", "ada", &day(1, 9), &json!({})),
+			event("checkout", "ada", &day(2, 9), &json!({})),
 			// Grace never signs up.
-			event("$pageview", "grace", &day(0, 9), json!({})),
-			event("checkout", "grace", &day(1, 9), json!({})),
+			event("$pageview", "grace", &day(0, 9), &json!({})),
+			event("checkout", "grace", &day(1, 9), &json!({})),
 			// Linus signs up outside the window.
-			event("$pageview", "linus", &day(0, 9), json!({})),
-			event("signed_up", "linus", &day(3, 10), json!({})),
+			event("$pageview", "linus", &day(0, 9), &json!({})),
+			event("signed_up", "linus", &day(3, 10), &json!({})),
 			// Kay walks the steps, but checks out before signing up: the
 			// ordered funnel stops at two, the unordered one finishes.
-			event("$pageview", "kay", &day(0, 9), json!({})),
-			event("checkout", "kay", &day(1, 9), json!({})),
-			event("signed_up", "kay", &day(1, 12), json!({})),
+			event("$pageview", "kay", &day(0, 9), &json!({})),
+			event("checkout", "kay", &day(1, 9), &json!({})),
+			event("signed_up", "kay", &day(1, 12), &json!({})),
 		])
 		.await;
 
@@ -403,13 +405,13 @@ async fn retention_builds_the_cohort_grid() {
 	// day one; Ada pings on day two as well.
 	harness
 		.store(vec![
-			event("signed_up", "ada", &at(0, 9), json!({})),
-			event("signed_up", "grace", &at(0, 10), json!({})),
-			event("signed_up", "linus", &at(0, 11), json!({})),
-			event("opened", "ada", &at(0, 12), json!({})),
-			event("opened", "ada", &at(1, 9), json!({})),
-			event("opened", "grace", &at(1, 10), json!({})),
-			event("opened", "ada", &at(2, 9), json!({})),
+			event("signed_up", "ada", &at(0, 9), &json!({})),
+			event("signed_up", "grace", &at(0, 10), &json!({})),
+			event("signed_up", "linus", &at(0, 11), &json!({})),
+			event("opened", "ada", &at(0, 12), &json!({})),
+			event("opened", "ada", &at(1, 9), &json!({})),
+			event("opened", "grace", &at(1, 10), &json!({})),
+			event("opened", "ada", &at(2, 9), &json!({})),
 		])
 		.await;
 	let retention = |kind: RetentionKind| {
@@ -588,7 +590,7 @@ async fn the_events_list_paginates_on_a_cursor() {
 			"note",
 			"ada",
 			&at(0, 9 + index),
-			json!({ "n": index }),
+			&json!({ "n": index }),
 		));
 	}
 	harness.store(events).await;
@@ -635,12 +637,12 @@ async fn actors_serve_a_trend_bucket() {
 	let harness = Harness::start().await;
 	harness
 		.store(vec![
-			event("signed_up", "ada", &at(0, 9), json!({})),
-			event("signed_up", "grace", &at(1, 9), json!({})),
-			event("opened", "ada", &at(1, 10), json!({})),
+			event("signed_up", "ada", &at(0, 9), &json!({})),
+			event("signed_up", "grace", &at(1, 9), &json!({})),
+			event("opened", "ada", &at(1, 10), &json!({})),
 		])
 		.await;
-	let trends = trends_query(DateRange::between(at(0, 0), at(2, 0)), false, None);
+	let _trends = trends_query(DateRange::between(at(0, 0), at(2, 0)), false, None);
 	let bucket = |trends: Query| {
 		Query::Actors(Box::new(ActorsQuery {
 			query: trends,
@@ -688,7 +690,7 @@ async fn actors_serve_a_trend_bucket() {
 		panic!("expected actors");
 	};
 	assert_eq!(page.actors.len(), 1, "ada's person is in the bucket");
-	let names: Vec<String> = page.actors[0].distinct_ids.iter().cloned().collect();
+	let names: Vec<String> = page.actors[0].distinct_ids.clone();
 	assert!(names.contains(&"ada".to_owned()), "{names:?}");
 }
 
@@ -697,8 +699,8 @@ async fn a_property_filter_cannot_carry_sql() {
 	let harness = Harness::start().await;
 	harness
 		.store(vec![
-			event("note", "ada", &at(0, 9), json!({"plan": "pro"})),
-			event("note", "grace", &at(0, 9), json!({"plan": "free"})),
+			event("note", "ada", &at(0, 9), &json!({"plan": "pro"})),
+			event("note", "grace", &at(0, 9), &json!({"plan": "free"})),
 		])
 		.await;
 	let notes = |filter: PropertyFilter| {
@@ -727,7 +729,7 @@ async fn a_property_filter_cannot_carry_sql() {
 	let QueryResult::Events(page) = answer.result else {
 		panic!("expected events");
 	};
-	assert!(page.events.is_empty());
+	assert_eq!(page.events, [] as [EventRow; 0]);
 
 	// The value side is bound too: a value with SQL matches nothing.
 	let answer = harness
@@ -812,19 +814,19 @@ async fn insights_and_dashboards_round_trip() {
 		.as_app(query::DeleteDashboard { id: dashboard.id })
 		.await
 		.expect("the dashboard deletes");
-	assert!(
-		harness
-			.as_app(query::Dashboards {})
-			.await
-			.unwrap()
-			.is_empty()
+	assert_eq!(
+		harness.as_app(query::Dashboards {}).await.unwrap(),
+		[] as [DashboardView; 0]
 	);
 
 	harness
 		.as_app(query::DeleteInsight { id: saved.id })
 		.await
 		.expect("the insight deletes");
-	assert!(harness.as_app(query::Insights {}).await.unwrap().is_empty());
+	assert_eq!(
+		harness.as_app(query::Insights {}).await.unwrap(),
+		[] as [InsightView; 0]
+	);
 
 	// The default web overview is data an app can save as-is.
 	let web_overview = query::web_overview_insights();
@@ -845,7 +847,7 @@ async fn the_writer_bumps_the_tick_once_per_window() {
 	})
 	.await;
 	harness
-		.store(vec![event("note", "ada", &at(0, 9), json!({}))])
+		.store(vec![event("note", "ada", &at(0, 9), &json!({}))])
 		.await;
 	let first = harness
 		.tick()
@@ -855,7 +857,7 @@ async fn the_writer_bumps_the_tick_once_per_window() {
 
 	// A batch inside the window doesn't bump again.
 	harness
-		.store(vec![event("note", "ada", &at(0, 10), json!({}))])
+		.store(vec![event("note", "ada", &at(0, 10), &json!({}))])
 		.await;
 	assert_eq!(
 		harness.tick().await,
@@ -866,7 +868,7 @@ async fn the_writer_bumps_the_tick_once_per_window() {
 	// After the window, the tick moves and carries the events since.
 	tokio::time::sleep(std::time::Duration::from_millis(1_200)).await;
 	harness
-		.store(vec![event("note", "ada", &at(0, 11), json!({}))])
+		.store(vec![event("note", "ada", &at(0, 11), &json!({}))])
 		.await;
 	let second = harness.tick().await.expect("the window passed");
 	assert_ne!(second.0, first.0, "the tick moved");
@@ -877,7 +879,7 @@ async fn the_writer_bumps_the_tick_once_per_window() {
 async fn a_run_reads_the_tick_so_watchers_rerun() {
 	let harness = Harness::start().await;
 	harness
-		.store(vec![event("signed_up", "ada", &at(0, 9), json!({}))])
+		.store(vec![event("signed_up", "ada", &at(0, 9), &json!({}))])
 		.await;
 	let identity = rpc::server::Identity::anonymous().with_caller(APP_CALLER.to_owned());
 	let cx = rpc::QueryCx::new(harness.db.clone(), identity);
@@ -917,8 +919,8 @@ async fn the_tail_holds_what_the_writer_stored() {
 	let harness = Harness::start().await;
 	harness
 		.store(vec![
-			event("note", "ada", &at(0, 9), json!({ "n": 1 })),
-			event("note", "grace", &at(0, 10), json!({ "n": 2 })),
+			event("note", "ada", &at(0, 9), &json!({ "n": 1 })),
+			event("note", "grace", &at(0, 10), &json!({ "n": 2 })),
 		])
 		.await;
 	let (events, latest, missed) = harness.ingest.tail().since(0);
@@ -945,8 +947,8 @@ async fn postgres_runs_the_same_queries() {
 	};
 	harness
 		.store(vec![
-			event("signed_up", "pg-ada", &at(0, 9), json!({"plan": "pro"})),
-			event("signed_up", "pg-grace", &at(1, 9), json!({"plan": "free"})),
+			event("signed_up", "pg-ada", &at(0, 9), &json!({"plan": "pro"})),
+			event("signed_up", "pg-grace", &at(1, 9), &json!({"plan": "free"})),
 		])
 		.await;
 	let trends = run_trends(

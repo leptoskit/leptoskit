@@ -13,6 +13,8 @@
 //! - Session columns come from an allow-list.
 //! - Event names, distinct ids, and values are always bound.
 
+use std::fmt::Write as _;
+
 use chrono::Datelike as _;
 use chrono::Duration;
 use chrono::NaiveDate;
@@ -357,11 +359,6 @@ pub enum Plan {
 ///
 /// [`PlanError`] naming what the query asks for that the engine can't
 /// safely or sensibly do.
-///
-/// # Panics
-///
-/// Never on its own; the planner returns errors rather than panicking.
-#[must_use]
 pub fn plan(query: &Query, now: Timestamp, dialect: Dialect) -> Result<Plan, PlanError> {
 	let sql = DialectSql::new(dialect);
 	match query {
@@ -678,14 +675,15 @@ fn trends_statement(
 	let mut group = "GROUP BY \"bucket\"".to_owned();
 	if let Some(breakdown) = query.breakdown.as_ref() {
 		let expression = breakdown_expression(sql, &mut args, breakdown)?;
-		select.push_str(&format!(", {expression} AS \"group\""));
+		let _ = write!(select, ", {expression} AS \"group\"");
 		group.push_str(", \"group\"");
 	}
-	select.push_str(&format!(
+	let _ = write!(
+		select,
 		", {} AS \"value\" FROM \"events\" WHERE {where_clause} {group} ORDER BY \"bucket\" LIMIT \
 		 {MAX_GROUPED_ROWS}",
 		aggregate(query.math)
-	));
+	);
 	let who = if series.event.is_empty() {
 		"every event"
 	} else {
@@ -1118,15 +1116,13 @@ fn events_plan(sql: &DialectSql, query: &EventsQuery, now: Timestamp) -> Result<
 	// The timestamp and the uuid always come first, for the order and the
 	// cursor, whatever columns the page asks to show; the page's own
 	// column list skips them, since they ride along anyway.
-	let selected = format!(
-		"\"events\".\"timestamp\", \"events\".\"uuid\"{}",
-		columns
-			.iter()
-			.filter(|column| !matches!(column, EventColumn::Uuid | EventColumn::Timestamp))
-			.map(|column| format!(", {}", column_expression(sql, *column)))
-			.collect::<Vec<_>>()
-			.join("")
-	);
+	let mut selected = String::from("\"events\".\"timestamp\", \"events\".\"uuid\"");
+	for column in columns {
+		if matches!(column, EventColumn::Uuid | EventColumn::Timestamp) {
+			continue;
+		}
+		let _ = write!(selected, ", {}", column_expression(sql, *column));
+	}
 	let limit = query.limit.clamp(1, EventsQuery::MAX_LIMIT) + 1;
 	let page_sql = format!(
 		"SELECT {selected} FROM \"events\" WHERE {} ORDER BY \"events\".\"timestamp\" DESC, \
@@ -1243,10 +1239,11 @@ fn actors_plan(sql: &DialectSql, query: &ActorsQuery, now: Timestamp) -> Result<
 				}
 			}
 		});
-		conditions.push_str(&format!(
+		let _ = write!(
+			conditions,
 			" AND {expression} = {}",
 			sql.placeholder(args.len())
-		));
+		);
 	}
 	let bucket_sql = format!(
 		"SELECT DISTINCT {0} AS \"person\" FROM \"events\" WHERE {conditions} LIMIT {MAX_ROWS}",

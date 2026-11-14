@@ -394,9 +394,10 @@ impl DialectSql {
 						match value {
 							serde_json::Value::Bool(bool) => Value::Bool(*bool),
 							serde_json::Value::Number(number) => {
-								number.as_i64().map(Value::Int).unwrap_or_else(|| {
-									Value::Float(number.as_f64().unwrap_or_default())
-								})
+								number.as_i64().map_or_else(
+									|| Value::Float(number.as_f64().unwrap_or_default()),
+									Value::Int,
+								)
 							}
 							serde_json::Value::String(text) => Value::Text(text.clone()),
 							other => Value::Text(other.to_string()),
@@ -469,9 +470,10 @@ impl DialectSql {
 			Dialect::Sqlite => {
 				let format = match interval {
 					crate::query::Interval::Hour => "%Y-%m-%dT%H:00:00",
-					crate::query::Interval::Day => "%Y-%m-%dT00:00:00",
 					crate::query::Interval::Month => "%Y-%m-01T00:00:00",
-					crate::query::Interval::Week => "%Y-%m-%dT00:00:00",
+					// A day and a week start at the same midnight; the
+					// week's Monday shift rides below.
+					_ => "%Y-%m-%dT00:00:00",
 				};
 				// The Monday that starts the week: step back six days,
 				// then forward to the next-or-same Monday, which lands on
@@ -493,8 +495,8 @@ mod tests {
 
 	#[test]
 	fn property_names_travel_as_values_or_are_refused() {
-		let key = checked_property(r#"plan'); DROP TABLE events;--"#).expect("safe: bound");
-		assert_eq!(key.key, r#"plan'); DROP TABLE events;--"#);
+		let key = checked_property(r"plan'); DROP TABLE events;--").expect("safe: bound");
+		assert_eq!(key.key, r"plan'); DROP TABLE events;--");
 		assert!(key.path.contains(r#""plan'); DROP TABLE events;--""#));
 
 		assert!(checked_property("").is_err());

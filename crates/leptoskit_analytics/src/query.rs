@@ -153,7 +153,7 @@ pub enum Operator {
 }
 
 /// One condition: a property of an event, a person, or a session, compared
-/// with an operator. A query's filters are ANDed.
+/// with an operator. A query's filters are `ANDed`.
 ///
 /// Values are always sent to the database as bound parameters, and the
 /// property's name is checked before any SQL is built, so neither can
@@ -775,7 +775,8 @@ pub enum QueryResult {
 	Trends(TrendsResult),
 	Funnels(FunnelsResult),
 	Retention(RetentionResult),
-	WebOverview(WebOverviewResult),
+	/// Boxed: it holds every table, and the enum stays small beside it.
+	WebOverview(Box<WebOverviewResult>),
 	Events(EventsPage),
 	Actors(ActorsPage),
 }

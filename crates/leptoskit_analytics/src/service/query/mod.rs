@@ -105,7 +105,8 @@ pub async fn run(cx: &rpc::QueryCx, query: crate::query::Query) -> rpc::Result<A
 	read_tick(db, dialect).await?;
 
 	let started = Instant::now();
-	let planned = plan::plan(&query, leptoskit_db::now(), dialect).map_err(plan_error)?;
+	let planned =
+		plan::plan(&query, leptoskit_db::now(), dialect).map_err(|error| plan_error(&error))?;
 	let mut work = Work {
 		info: QueryInfo {
 			dialect: dialect_name(dialect),
@@ -214,14 +215,14 @@ pub async fn run(cx: &rpc::QueryCx, query: crate::query::Query) -> rpc::Result<A
 			};
 			let pages_rows = run_statement(db, pages, &mut work).await?;
 			let dimension_rows = run_statement(db, dimensions, &mut work).await?;
-			QueryResult::WebOverview(fold_web(
+			QueryResult::WebOverview(Box::new(fold_web(
 				web,
 				*table_limit,
 				&stats_rows,
 				previous_rows.as_deref(),
 				&pages_rows,
 				&dimension_rows,
-			))
+			)))
 		}
 		(crate::query::Query::Events(events), Plan::Events { page }) => {
 			let rows = run_statement(db, page, &mut work).await?;
@@ -354,7 +355,7 @@ fn dialect_name(dialect: Dialect) -> String {
 }
 
 /// A plan error, as an rpc error.
-fn plan_error(error: plan::PlanError) -> rpc::Error {
+fn plan_error(error: &plan::PlanError) -> rpc::Error {
 	rpc::Error::invalid(error.to_string())
 }
 
@@ -574,7 +575,7 @@ fn walk_person(
 	window_seconds: u64,
 	order: FunnelOrder,
 ) -> Option<Walker> {
-	events.sort_by(|a, b| a.1.cmp(&b.1));
+	events.sort_by_key(|a| a.1);
 	let entry = events
 		.iter()
 		.find(|(name, ..)| name == &steps[0])
@@ -584,12 +585,12 @@ fn walk_person(
 	let mut last = entry.0;
 	if order == FunnelOrder::Strict {
 		// The next step must be this person's very next event.
-		let mut index = events
+		let entry_index = events
 			.iter()
 			.position(|(name, ..)| name == &steps[0])
 			.unwrap_or(0);
-		for step in steps.iter().skip(1) {
-			index += 1;
+		for (offset, step) in steps.iter().skip(1).enumerate() {
+			let index = entry_index + 1 + offset;
 			match events.get(index) {
 				Some((name, at, _)) if name == step && *at <= window => {
 					reached += 1;
@@ -620,9 +621,8 @@ fn walk_person(
 				.unwrap_or(last);
 		}
 	} else {
-		let mut index = 0usize;
-		for step in steps.iter().skip(1) {
-			index += 1;
+		for (offset, step) in steps.iter().skip(1).enumerate() {
+			let index = 1 + offset;
 			let found = events[index..]
 				.iter()
 				.find(|(name, at, _)| name == step && *at >= last && *at <= window)
@@ -773,8 +773,8 @@ fn fold_funnel_group<'a>(walkers: impl Iterator<Item = &'a Walker>, step_count: 
 }
 
 /// The median of a list, taking the mean of the middle two on an even
-/// count, and consuming the list.
-fn median(values: &mut Vec<f64>) -> Option<f64> {
+/// count, and sorting the slice in place.
+fn median(values: &mut [f64]) -> Option<f64> {
 	if values.is_empty() {
 		return None;
 	}
@@ -782,7 +782,7 @@ fn median(values: &mut Vec<f64>) -> Option<f64> {
 	Some(if values.len() % 2 == 1 {
 		values[values.len() / 2]
 	} else {
-		(values[values.len() / 2 - 1] + values[values.len() / 2]) / 2.0
+		f64::midpoint(values[values.len() / 2 - 1], values[values.len() / 2])
 	})
 }
 
@@ -827,10 +827,10 @@ fn fold_retention(
 		let Some(label) = text_of(row.get(1)) else {
 			continue;
 		};
-		if let Some(index) = period_starts.iter().position(|start| *start == label) {
-			if members.contains(&person) {
-				returns_by_person.entry(person).or_default().insert(index);
-			}
+		if let Some(index) = period_starts.iter().position(|start| *start == label)
+			&& members.contains(&person)
+		{
+			returns_by_person.entry(person).or_default().insert(index);
 		}
 	}
 	let cohort_start = period_starts.first().cloned().unwrap_or_default();
@@ -854,8 +854,11 @@ fn fold_retention(
 	}
 }
 
+/// One dimension's setter: where its counts land in the answer.
+type WebTable = (&'static str, fn(&mut WebOverviewResult, Vec<NamedCount>));
+
 /// The web overview's dimensions, as the answer's tables name them.
-const WEB_DIMENSIONS: &[(&str, fn(&mut WebOverviewResult, Vec<NamedCount>))] = &[
+const WEB_DIMENSIONS: &[WebTable] = &[
 	("entry_pathname", |web, counts| web.entry_pages = counts),
 	("exit_pathname", |web, counts| web.exit_pages = counts),
 	("referrer_domain", |web, counts| web.referrers = counts),
@@ -998,16 +1001,16 @@ fn fold_events(query: &crate::query::EventsQuery, rows: &[Vec<Value>]) -> Events
 				let value = row.get(index + 2);
 				match column {
 					crate::query::EventColumn::Name => {
-						event.name = text_of(value).unwrap_or_default()
+						event.name = text_of(value).unwrap_or_default();
 					}
 					crate::query::EventColumn::DistinctId => {
-						event.distinct_id = text_of(value).unwrap_or_default()
+						event.distinct_id = text_of(value).unwrap_or_default();
 					}
 					crate::query::EventColumn::PersonId => event.person_id = text_of(value),
 					crate::query::EventColumn::SessionId => {
 						event.session_id = value
 							.and_then(|value| uuid_of(Some(value)))
-							.map(|uuid| uuid.to_string())
+							.map(|uuid| uuid.to_string());
 					}
 					crate::query::EventColumn::Properties => {
 						event.properties = match value {

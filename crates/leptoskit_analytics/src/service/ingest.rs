@@ -171,12 +171,7 @@ impl Ingest {
 	pub fn start(db: Db, config: IngestConfig) -> Self {
 		let (queue, receiver) = mpsc::unbounded_channel();
 		let tail = Arc::new(Tail::new());
-		tokio::spawn(write_batches(
-			db,
-			receiver,
-			config.clone(),
-			Arc::clone(&tail),
-		));
+		tokio::spawn(write_batches(db, receiver, config, Arc::clone(&tail)));
 		Self {
 			queue,
 			rows: Arc::new(Semaphore::new(config.queue_rows)),
