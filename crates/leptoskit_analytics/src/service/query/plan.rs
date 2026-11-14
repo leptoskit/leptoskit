@@ -856,11 +856,14 @@ fn retention_plan(
 		Some(&query.start_event),
 		query.test_accounts.as_ref(),
 	)?;
+	// Retention counts whoever did the steps, the way funnels do: a
+	// person resolved through the overrides, or the distinct id itself.
 	let cohort_sql = format!(
-		"SELECT {} AS \"person\", min(\"events\".\"timestamp\") AS \"first_ever\", min(CASE WHEN \
-		 \"events\".\"timestamp\" >= {1} AND \"events\".\"timestamp\" < {2} THEN \
-		 \"events\".\"timestamp\" END) AS \"entered\" FROM \"events\" WHERE {cohort_where} GROUP \
-		 BY \"person\" ORDER BY \"person\" LIMIT {MAX_ROWS}",
+		"SELECT coalesce({0}, \"events\".\"distinct_id\") AS \"person\", \
+		 min(\"events\".\"timestamp\") AS \"first_ever\", min(CASE WHEN \"events\".\"timestamp\" \
+		 >= {1} AND \"events\".\"timestamp\" < {2} THEN \"events\".\"timestamp\" END) AS \
+		 \"entered\" FROM \"events\" WHERE {cohort_where} GROUP BY \"person\" ORDER BY \"person\" \
+		 LIMIT {MAX_ROWS}",
 		person_of_events(),
 		sql.placeholder(1),
 		sql.placeholder(2),
@@ -885,8 +888,9 @@ fn retention_plan(
 	returns_args.push(shift_arg(sql.dialect, &range));
 	let bucket = sql.bucket(query.period, returns_args.len())?;
 	let returns_sql = format!(
-		"SELECT {} AS \"person\", {bucket} AS \"period\" FROM \"events\" WHERE {returns_where} \
-		 GROUP BY \"person\", \"period\" ORDER BY \"person\", \"period\" LIMIT {MAX_ROWS}",
+		"SELECT coalesce({0}, \"events\".\"distinct_id\") AS \"person\", {bucket} AS \"period\" \
+		 FROM \"events\" WHERE {returns_where} GROUP BY \"person\", \"period\" ORDER BY \
+		 \"person\", \"period\" LIMIT {MAX_ROWS}",
 		person_of_events()
 	);
 	let returns = Statement::new("retention returns", returns_sql, returns_args);

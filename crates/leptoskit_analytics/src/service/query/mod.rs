@@ -959,11 +959,31 @@ fn fold_events(query: &crate::query::EventsQuery, rows: &[Vec<Value>]) -> Events
 	} else {
 		query.columns.as_slice()
 	};
+	// The uuid and the timestamp ride first for the order and the cursor;
+	// the page's own list of columns follows, without them.
+	let shown: Vec<&crate::query::EventColumn> = columns
+		.iter()
+		.filter(|column| {
+			!matches!(
+				column,
+				crate::query::EventColumn::Uuid | crate::query::EventColumn::Timestamp
+			)
+		})
+		.collect();
 	let events: Vec<EventRow> = page_rows
 		.iter()
 		.filter_map(|row| {
 			let at = timestamp_of(row.first())?;
-			let uuid = text_of(row.get(1))?;
+			let uuid = match row.get(1) {
+				Some(Value::Uuid(id)) => id.to_string(),
+				Some(Value::Bytes(bytes)) => {
+					Uuid::from_slice(bytes)
+						.map(|id| id.to_string())
+						.unwrap_or_default()
+				}
+				Some(Value::Text(text)) => text.clone(),
+				_ => String::new(),
+			};
 			let mut event = EventRow {
 				uuid,
 				name: String::new(),
@@ -974,7 +994,7 @@ fn fold_events(query: &crate::query::EventsQuery, rows: &[Vec<Value>]) -> Events
 				properties: serde_json::Value::Null,
 				source: None,
 			};
-			for (index, column) in columns.iter().enumerate() {
+			for (index, column) in shown.iter().enumerate() {
 				let value = row.get(index + 2);
 				match column {
 					crate::query::EventColumn::Name => {
@@ -1018,7 +1038,12 @@ fn fold_events(query: &crate::query::EventsQuery, rows: &[Vec<Value>]) -> Events
 			let last = &page_rows[page_rows.len() - 1];
 			Some(EventsCursor {
 				timestamp: super::persons::stamp(timestamp_of(last.first())?),
-				uuid: text_of(last.get(1))?,
+				uuid: match last.get(1) {
+					Some(Value::Uuid(id)) => id.to_string(),
+					Some(Value::Bytes(bytes)) => Uuid::from_slice(bytes).ok()?.to_string(),
+					Some(Value::Text(text)) => text.clone(),
+					_ => return None,
+				},
 			})
 		})
 		.and_then(|inner| inner);
