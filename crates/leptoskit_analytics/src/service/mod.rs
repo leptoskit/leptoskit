@@ -21,6 +21,7 @@ pub mod persons;
 pub mod read;
 pub mod sessions;
 pub mod tables;
+pub mod tail;
 pub mod ua;
 
 use std::future::Future;

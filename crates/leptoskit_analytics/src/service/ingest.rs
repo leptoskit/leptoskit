@@ -37,6 +37,7 @@ use super::limits::Limiter;
 use super::limits::Rate;
 use super::persons;
 use super::sessions;
+use super::tail::Tail;
 
 /// How the queue and the writer are sized.
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +57,9 @@ pub struct IngestConfig {
 	/// Who gets a person profile: identified ids and person-property
 	/// entries by default, as `PostHog`'s `person_profiles` is (§8).
 	pub person_profiles: persons::PersonProfiles,
+	/// The least time between two bumps of `ingest_ticks`, in seconds,
+	/// which is how often live insights re-run (§10). Default 10.
+	pub refresh_seconds: u64,
 }
 
 /// When a request that sent events is answered.
@@ -90,6 +94,7 @@ impl Default for IngestConfig {
 			per_distinct_id: Some(Rate::PER_DISTINCT_ID),
 			ack: Ack::Committed,
 			person_profiles: persons::PersonProfiles::IdentifiedOnly,
+			refresh_seconds: 10,
 		}
 	}
 }
@@ -154,6 +159,8 @@ pub struct Ingest {
 	bytes: Arc<Semaphore>,
 	config: IngestConfig,
 	limiter: Option<Arc<Limiter>>,
+	/// The last events stored, for the `live_events` stream.
+	tail: Arc<Tail>,
 }
 
 /// The unit the byte limit counts in, so it fits a semaphore's permits.
@@ -163,7 +170,13 @@ impl Ingest {
 	/// Starts the batch writer on `db`, on the current Tokio runtime.
 	pub fn start(db: Db, config: IngestConfig) -> Self {
 		let (queue, receiver) = mpsc::unbounded_channel();
-		tokio::spawn(write_batches(db, receiver, config));
+		let tail = Arc::new(Tail::new());
+		tokio::spawn(write_batches(
+			db,
+			receiver,
+			config.clone(),
+			Arc::clone(&tail),
+		));
 		Self {
 			queue,
 			rows: Arc::new(Semaphore::new(config.queue_rows)),
@@ -172,7 +185,14 @@ impl Ingest {
 			limiter: config
 				.per_distinct_id
 				.map(|rate| Arc::new(Limiter::new(rate))),
+			tail,
 		}
+	}
+
+	/// The last events stored, for the `live_events` stream.
+	#[must_use]
+	pub fn tail(&self) -> &Tail {
+		&self.tail
 	}
 
 	/// Queues `accepted` and waits until it's written. Refused entries and
@@ -275,7 +295,11 @@ async fn write_batches(
 	db: Db,
 	mut receiver: mpsc::UnboundedReceiver<Submission>,
 	config: IngestConfig,
+	tail: Arc<Tail>,
 ) {
+	// The last `ingest_ticks` bump: the writer is one task per process, so
+	// its own memory is the clock the refresh window needs.
+	let mut last_tick: Option<Timestamp> = None;
 	while let Some(first) = receiver.recv().await {
 		let mut rows = first.rows.len();
 		let mut submissions = vec![first];
@@ -291,7 +315,20 @@ async fn write_batches(
 		}
 
 		match write(&db, &submissions, &config).await {
-			Ok(stored) => {
+			Ok((stored, inserted)) => {
+				tail.append(&inserted);
+				let stored_total: u32 = stored.iter().map(|committed| committed.stored).sum();
+				if stored_total > 0 {
+					let now = leptoskit_db::now();
+					let due = last_tick.is_none_or(|last| {
+						now - last
+							>= chrono::TimeDelta::seconds(config.refresh_seconds.max(1) as i64)
+					});
+					if due {
+						bump_tick(&db, now, i64::from(stored_total)).await;
+						last_tick = Some(now);
+					}
+				}
 				for (submission, committed) in submissions.into_iter().zip(stored) {
 					let _ = submission.done.send(Ok(committed));
 				}
@@ -306,16 +343,49 @@ async fn write_batches(
 	}
 }
 
+/// Bumps the one `ingest_ticks` row, in its own transaction, so the live
+/// layer re-runs the insight queries that read it (§10). A failed bump
+/// costs the next batch's watchers one window, nothing more, so it's
+/// logged and dropped rather than fail the commit that already happened.
+async fn bump_tick(db: &Db, at: Timestamp, events: i64) {
+	let dialect = db.dialect();
+	let statement = match dialect {
+		Dialect::Postgres => {
+			Statement::new(
+				"INSERT INTO \"ingest_ticks\" (\"id\", \"at\", \"events\") VALUES ($1, $2, $3) ON \
+				 CONFLICT (\"id\") DO UPDATE SET \"at\" = excluded.\"at\", \"events\" = \
+				 excluded.\"events\"",
+				vec![Value::Int(1), Value::Timestamp(at), Value::Int(events)],
+			)
+		}
+		Dialect::Sqlite => {
+			Statement::new(
+				"INSERT INTO \"ingest_ticks\" (\"id\", \"at\", \"events\") VALUES (?1, ?2, ?3) ON \
+				 CONFLICT (\"id\") DO UPDATE SET \"at\" = excluded.\"at\", \"events\" = \
+				 excluded.\"events\"",
+				vec![Value::Int(1), Value::Timestamp(at), Value::Int(events)],
+			)
+		}
+	};
+	let result = db.execute(statement).await;
+	if let Err(error) = result {
+		eprintln!("bumping ingest_ticks failed: {error}");
+	}
+}
+
 /// Rows per `INSERT`, which keeps every statement well under SQLite's and
 /// Postgres's limits on bound values.
 pub(super) const ROWS_PER_STATEMENT: usize = 500;
 
-/// Writes every submission in one transaction, and says what each came to.
-async fn write(
+/// Writes every submission in one transaction, and answers what each came
+/// to, and the rows newly stored in arrival order — the ones the tail
+/// ring takes, beside what person and session processing applied to.
+#[allow(clippy::type_complexity, reason = "what one write came to")]
+async fn write<'a>(
 	db: &Db,
-	submissions: &[Submission],
+	submissions: &'a [Submission],
 	config: &IngestConfig,
-) -> Result<Vec<Committed>, String> {
+) -> Result<(Vec<Committed>, Vec<&'a Row>), String> {
 	let dialect = db.dialect();
 	let tx = db.begin().await.map_err(|error| error.to_string())?;
 
@@ -423,7 +493,7 @@ async fn write(
 	}
 
 	tx.commit().await.map_err(|error| error.to_string())?;
-	Ok(committed)
+	Ok((committed, inserted))
 }
 
 /// Inserts every submission's events, and answers what each submission
