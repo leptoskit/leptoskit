@@ -128,7 +128,7 @@ fn device_type(ua: &str) -> &'static str {
 }
 
 /// The digits and dots after `token`, when `ua` names it.
-fn after<'a>(ua: &'a str, token: &str) -> Option<String> {
+fn after(ua: &str, token: &str) -> Option<String> {
 	let rest = ua.split_once(token)?.1;
 	let end = rest
 		.find(|c: char| !c.is_ascii_digit() && c != '.')

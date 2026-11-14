@@ -1,13 +1,13 @@
 //! A visit's channel, from its referrer and its UTM parameters (§8).
 //!
-//! A pure function, in PostHog's spirit: its named channels, its habit of
+//! A pure function, in `PostHog`'s spirit: its named channels, its habit of
 //! deciding from `utm_medium` first and the referrer second, and its
 //! distinction between nothing at all (`Direct`) and values it doesn't
 //! recognise (`Unknown`). Written as a function of already-parsed strings
 //! so tests can pin every rule; the batch writer feeds it the session's
 //! entry pageview.
 
-/// The channel a visit arrived through, classified in PostHog's order:
+/// The channel a visit arrived through, classified in `PostHog`'s order:
 /// what was paid wins over what was organic, medium rules over source
 /// rules, and the referrer decides only when no parameter did.
 #[must_use]
@@ -100,7 +100,7 @@ fn source_social(source: &str) -> bool {
 		|| source.ends_with("_social")
 }
 
-/// Media PostHog's rules read as bought search traffic.
+/// Media `PostHog`'s rules read as bought search traffic.
 const PAID_SEARCH_MEDIA: &[&str] = &[
 	"adwords",
 	"adwords-remarketing",
@@ -115,7 +115,7 @@ const PAID_SEARCH_MEDIA: &[&str] = &[
 	"sem",
 ];
 
-/// Media PostHog's rules read as bought social traffic, beyond any medium
+/// Media `PostHog`'s rules read as bought social traffic, beyond any medium
 /// that combines `paid` with a social source.
 const SOCIAL_MEDIA: &[&str] = &[
 	"paid-social",
@@ -128,7 +128,7 @@ const SOCIAL_MEDIA: &[&str] = &[
 	"ppc-social",
 ];
 
-/// Media PostHog's rules read as search traffic.
+/// Media `PostHog`'s rules read as search traffic.
 const SEARCH_MEDIA: &[&str] = &[
 	"google",
 	"organic",
@@ -138,7 +138,7 @@ const SEARCH_MEDIA: &[&str] = &[
 	"organic-search",
 ];
 
-/// Media PostHog's rules read as unpaid social traffic, without a social
+/// Media `PostHog`'s rules read as unpaid social traffic, without a social
 /// source saying so.
 const SOCIAL_MEDIA_UNPAID: &[&str] = &["social", "social-media", "social_media"];
 

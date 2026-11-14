@@ -58,11 +58,26 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		Err(_) => service::Ack::Committed,
 	};
 
+	// `LEPTOSKIT_ANALYTICS_PERSON_PROFILES` decides who gets a person: the
+	// default, `identified_only`, is PostHog's.
+	let person_profiles = match std::env::var("LEPTOSKIT_ANALYTICS_PERSON_PROFILES") {
+		Ok(value) => {
+			service::persons::PersonProfiles::parse(&value).ok_or_else(|| {
+				format!(
+					"LEPTOSKIT_ANALYTICS_PERSON_PROFILES is {value:?}: use \"identified_only\", \
+					 \"all\", or \"never\""
+				)
+			})?
+		}
+		Err(_) => service::persons::PersonProfiles::default(),
+	};
+
 	Ok(service::routes(
 		db,
 		env.public_origin(),
 		service::IngestConfig {
 			ack,
+			person_profiles,
 			..service::IngestConfig::default()
 		},
 	))

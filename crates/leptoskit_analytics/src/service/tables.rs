@@ -206,7 +206,7 @@ pub struct Group {
 }
 
 /// A kind of group the project uses, such as `company` or `team`. At most
-/// five per project, as PostHog's are; the first `$groupidentify` for a
+/// five per project, as `PostHog`'s are; the first `$groupidentify` for a
 /// new name takes the next index.
 #[table(name = "group_types")]
 pub struct GroupType {

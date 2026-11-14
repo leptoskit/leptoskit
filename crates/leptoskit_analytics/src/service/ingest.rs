@@ -10,6 +10,7 @@
 //! memory is bounded by configuration rather than by load. When it's full,
 //! [`Ingest::submit`] fails at once and the request answers `503`.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,12 +27,16 @@ use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+use uuid::Uuid;
 
 use super::accept::Accepted;
 use super::accept::ContextRow;
 use super::accept::Row;
+use super::groups;
 use super::limits::Limiter;
 use super::limits::Rate;
+use super::persons;
+use super::sessions;
 
 /// How the queue and the writer are sized.
 #[derive(Clone, Copy, Debug)]
@@ -48,6 +53,9 @@ pub struct IngestConfig {
 	pub per_distinct_id: Option<Rate>,
 	/// When a request is answered.
 	pub ack: Ack,
+	/// Who gets a person profile: identified ids and person-property
+	/// entries by default, as `PostHog`'s `person_profiles` is (§8).
+	pub person_profiles: persons::PersonProfiles,
 }
 
 /// When a request that sent events is answered.
@@ -81,6 +89,7 @@ impl Default for IngestConfig {
 			batch_wait: Duration::from_millis(50),
 			per_distinct_id: Some(Rate::PER_DISTINCT_ID),
 			ack: Ack::Committed,
+			person_profiles: persons::PersonProfiles::IdentifiedOnly,
 		}
 	}
 }
@@ -281,14 +290,14 @@ async fn write_batches(
 			}
 		}
 
-		match write(&db, &submissions).await {
+		match write(&db, &submissions, &config).await {
 			Ok(stored) => {
 				for (submission, committed) in submissions.into_iter().zip(stored) {
 					let _ = submission.done.send(Ok(committed));
 				}
 			}
 			Err(error) => {
-				let message = error.to_string();
+				let message = error.clone();
 				for submission in submissions {
 					let _ = submission.done.send(Err(message.clone()));
 				}
@@ -299,12 +308,16 @@ async fn write_batches(
 
 /// Rows per `INSERT`, which keeps every statement well under SQLite's and
 /// Postgres's limits on bound values.
-const ROWS_PER_STATEMENT: usize = 500;
+pub(super) const ROWS_PER_STATEMENT: usize = 500;
 
 /// Writes every submission in one transaction, and says what each came to.
-async fn write(db: &Db, submissions: &[Submission]) -> leptoskit_db::Result<Vec<Committed>> {
+async fn write(
+	db: &Db,
+	submissions: &[Submission],
+	config: &IngestConfig,
+) -> Result<Vec<Committed>, String> {
 	let dialect = db.dialect();
-	let tx = db.begin().await?;
+	let tx = db.begin().await.map_err(|error| error.to_string())?;
 
 	let mut contexts: Vec<&ContextRow> = Vec::new();
 	for context in submissions
@@ -325,12 +338,24 @@ async fn write(db: &Db, submissions: &[Submission]) -> leptoskit_db::Result<Vec<
 				Value::Timestamp(now),
 			]);
 		}
-		tx.execute(statement.on_conflict_do_nothing("id")).await?;
+		tx.execute(statement.on_conflict_do_nothing("id"))
+			.await
+			.map_err(|error| error.to_string())?;
 	}
 
 	// Which rows each submission wrote, by the names `RETURNING` gives back.
 	let mut committed = vec![Committed::default(); submissions.len()];
 	let mut volumes: Vec<(String, i64, Timestamp, Timestamp)> = Vec::new();
+	// Where a uuid sits, so the rows `RETURNING` confirms are the ones
+	// person and session processing applies to: a duplicate never runs
+	// them twice.
+	let mut row_by_uuid: HashMap<Uuid, (usize, usize)> = HashMap::new();
+	for (index, submission) in submissions.iter().enumerate() {
+		for (row_index, row) in submission.rows.iter().enumerate() {
+			row_by_uuid.entry(row.uuid).or_insert((index, row_index));
+		}
+	}
+	let mut inserted: Vec<&Row> = Vec::new();
 	for (index, submission) in submissions.iter().enumerate() {
 		for chunk in submission.rows.chunks(ROWS_PER_STATEMENT) {
 			let mut statement = Insert::new(
@@ -364,28 +389,53 @@ async fn write(db: &Db, submissions: &[Submission]) -> leptoskit_db::Result<Vec<
 				]);
 			}
 			let mut statement = statement.on_conflict_do_nothing("uuid");
-			statement.sql.push_str(" RETURNING \"name\", \"timestamp\"");
-			let written = tx.fetch(statement).await?;
+			statement.sql.push_str(" RETURNING \"uuid\"");
+			let written = tx
+				.fetch(statement)
+				.await
+				.map_err(|error| error.to_string())?;
 			let stored = written.len();
 			committed[index].stored += stored as u32;
 			committed[index].duplicates += (chunk.len() - stored) as u32;
 			for row in written {
-				let (Some(Value::Text(name)), Some(timestamp)) = (row.first().cloned(), row.get(1))
-				else {
+				let Some(uuid) = row.first().and_then(uuid_of) else {
 					continue;
 				};
-				let timestamp = timestamp_of(timestamp).unwrap_or(now);
-				match volumes.iter_mut().find(|volume| volume.0 == name) {
+				let Some((submission_index, row_index)) = row_by_uuid.get(&uuid) else {
+					continue;
+				};
+				let row = &submissions[*submission_index].rows[*row_index];
+				inserted.push(row);
+				match volumes.iter_mut().find(|volume| volume.0 == row.name) {
 					Some(volume) => {
 						volume.1 += 1;
-						volume.2 = volume.2.min(timestamp);
-						volume.3 = volume.3.max(timestamp);
+						volume.2 = volume.2.min(row.timestamp);
+						volume.3 = volume.3.max(row.timestamp);
 					}
-					None => volumes.push((name, 1, timestamp, timestamp)),
+					None => volumes.push((row.name.clone(), 1, row.timestamp, row.timestamp)),
 				}
 			}
 		}
 	}
+
+	// The contexts, by id, for the sessions' device and browser.
+	let context_map: HashMap<i64, &ContextRow> = contexts
+		.iter()
+		.map(|context| (context.id, *context))
+		.collect();
+
+	// Persons first: the events' person_id, the sessions' person, and the
+	// sessions' device all come from this pass.
+	let processed = persons::process(&tx, dialect, &inserted, config.person_profiles, now).await?;
+	let mut warnings: Vec<Warning> = submissions
+		.iter()
+		.flat_map(|submission| &submission.warnings)
+		.cloned()
+		.collect();
+	warnings.extend(processed.warnings);
+	warnings.extend(groups::process(&tx, dialect, &inserted, now).await?);
+	fill_person_ids(&tx, dialect, &inserted, &processed.person_ids).await?;
+	sessions::upsert(&tx, dialect, &inserted, &processed.person_ids, &context_map).await?;
 
 	let greatest = match dialect {
 		Dialect::Postgres => "GREATEST",
@@ -418,13 +468,11 @@ async fn write(db: &Db, submissions: &[Submission]) -> leptoskit_db::Result<Vec<
 			 excluded.\"last_seen\"), \"volume\" = \"event_definitions\".\"volume\" + \
 			 excluded.\"volume\""
 		);
-		tx.execute(statement).await?;
+		tx.execute(statement)
+			.await
+			.map_err(|error| error.to_string())?;
 	}
 
-	let warnings: Vec<&Warning> = submissions
-		.iter()
-		.flat_map(|submission| &submission.warnings)
-		.collect();
 	for chunk in warnings.chunks(ROWS_PER_STATEMENT) {
 		let mut statement = Insert::new(
 			dialect,
@@ -435,28 +483,67 @@ async fn write(db: &Db, submissions: &[Submission]) -> leptoskit_db::Result<Vec<
 			let mut detail = warning.detail.clone();
 			truncate(&mut detail, 400);
 			statement.row(vec![
-				Value::Uuid(uuid::Uuid::new_v4()),
+				Value::Uuid(Uuid::new_v4()),
 				Value::Timestamp(now),
 				Value::Text(warning.reason.clone()),
 				Value::Int(i64::from(warning.count)),
 				Value::Text(detail),
 			]);
 		}
-		tx.execute(statement.finish()).await?;
+		tx.execute(statement.finish())
+			.await
+			.map_err(|error| error.to_string())?;
 	}
 
-	tx.commit().await?;
+	tx.commit().await.map_err(|error| error.to_string())?;
 	Ok(committed)
 }
 
-fn timestamp_of(value: &Value) -> Option<Timestamp> {
-	match value {
-		Value::Timestamp(timestamp) => Some(*timestamp),
-		Value::Text(text) => {
-			chrono::DateTime::parse_from_rfc3339(text)
-				.ok()
-				.map(|time| time.to_utc())
+/// Writes each event's person onto the row, in chunks of one `CASE`
+/// statement, for the rows person processing found a person for.
+async fn fill_person_ids(
+	tx: &leptoskit_db::Tx,
+	dialect: Dialect,
+	rows: &[&Row],
+	person_ids: &[Option<Uuid>],
+) -> Result<(), String> {
+	let known: Vec<(Uuid, Uuid)> = rows
+		.iter()
+		.zip(person_ids)
+		.filter_map(|(row, person)| person.map(|person| (row.uuid, person)))
+		.collect();
+	for chunk in known.chunks(100) {
+		let mut sql = String::from("UPDATE \"events\" SET \"person_id\" = CASE ");
+		let mut args = Vec::with_capacity(chunk.len() * 2);
+		let mut uuids = Vec::with_capacity(chunk.len());
+		for (uuid, person) in chunk {
+			let _ = write!(
+				sql,
+				"WHEN \"uuid\" = {} THEN {} ",
+				persons::placeholder(dialect, args.len() + 1),
+				persons::placeholder(dialect, args.len() + 2)
+			);
+			args.push(Value::Uuid(*uuid));
+			args.push(Value::Uuid(*person));
+			uuids.push(persons::placeholder(dialect, args.len() - 1));
 		}
+		let _ = write!(
+			sql,
+			"ELSE \"person_id\" END WHERE \"uuid\" IN ({})",
+			uuids.join(", ")
+		);
+		tx.execute(Statement { sql, args })
+			.await
+			.map_err(|error| error.to_string())?;
+	}
+	Ok(())
+}
+
+/// A `Value` that holds a UUID, as either dialect returns one.
+fn uuid_of(value: &Value) -> Option<Uuid> {
+	match value {
+		Value::Uuid(uuid) => Some(*uuid),
+		Value::Bytes(bytes) => Uuid::from_slice(bytes).ok(),
 		_ => None,
 	}
 }
@@ -514,7 +601,7 @@ impl Insert {
 		self.rows += 1;
 	}
 
-	fn finish(self) -> Statement {
+	pub(super) fn finish(self) -> Statement {
 		Statement {
 			sql: self.sql,
 			args: self.args,

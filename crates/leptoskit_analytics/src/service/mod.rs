@@ -13,9 +13,12 @@
 pub mod accept;
 pub mod catalogue;
 pub mod channel;
+pub mod groups;
 pub mod ingest;
 pub mod limits;
 pub mod otlp;
+pub mod persons;
+pub mod sessions;
 pub mod tables;
 pub mod ua;
 
@@ -53,6 +56,7 @@ pub use self::ingest::Ingest;
 pub use self::ingest::IngestConfig;
 pub use self::ingest::IngestError;
 pub use self::limits::Rate;
+pub use self::persons::PersonProfiles;
 pub use self::tables::MIGRATIONS;
 #[cfg(feature = "postgres")]
 pub use self::tables::POSTGRES_MIGRATIONS;
