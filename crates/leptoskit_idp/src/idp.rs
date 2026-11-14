@@ -202,6 +202,16 @@ impl Idp {
 		self.inner.scopes.iter().any(|known| known.name == scope)
 	}
 
+	/// Whether `client` may ask for `scope` for a person, in any flow: the
+	/// scope is known and registered for it, and `roles` only for one of
+	/// your own first-party apps, since the roles a person has here are
+	/// yours, not another site's.
+	pub(crate) fn client_may_ask(&self, client: &crate::tables::Client, scope: &str) -> bool {
+		(scope != ROLES_SCOPE || client.first_party)
+			&& client.scopes.iter().any(|registered| registered == scope)
+			&& self.knows_scope(scope)
+	}
+
 	pub(crate) fn lifetime(duration: Duration) -> Result<chrono::TimeDelta> {
 		chrono::TimeDelta::from_std(duration)
 			.map_err(|_| IdpError::Config("a lifetime is too long".into()))

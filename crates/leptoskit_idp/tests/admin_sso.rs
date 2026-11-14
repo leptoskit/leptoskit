@@ -395,6 +395,7 @@ async fn apps(provider_db: Db, admin_db: Db) -> Apps {
 		true,
 		ClientAuth::SecretPost,
 		&["openid", "email", "profile", "roles"],
+		leptoskit_idp::default_grant_types(),
 	)
 	.await;
 
@@ -444,6 +445,7 @@ async fn register(
 	first_party: bool,
 	auth_method: ClientAuth,
 	scopes: &[&str],
+	grant_types: Vec<leptoskit_idp::GrantType>,
 ) -> (String, String) {
 	let output = idp
 		.run_command(&ClientCommand::Add(NewClientSpec {
@@ -452,7 +454,7 @@ async fn register(
 			post_logout_redirect_uris: Vec::new(),
 			scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
 			auth_method,
-			grant_types: leptoskit_idp::default_grant_types(),
+			grant_types,
 			jwks: None,
 			id_token_alg: SigningAlgorithm::Es256,
 			first_party,
@@ -659,11 +661,15 @@ async fn an_admin_app_signs_in_through_the_main_sites_own_sign_in() {
 
 		// Another site can't have the main site's roles: the scope is
 		// refused at authorize, before anyone is even asked to sign in.
-		let (partner, _partner_secret) = register(
+		let (partner, partner_secret) = register(
 			&app.notes_idp,
 			false,
-			ClientAuth::SecretBasic,
+			ClientAuth::SecretPost,
 			&["openid", "roles"],
+			vec![
+				leptoskit_idp::GrantType::AuthorizationCode,
+				leptoskit_idp::GrantType::DeviceCode,
+			],
 		)
 		.await;
 		let authorize_url = format!(
@@ -682,6 +688,22 @@ async fn an_admin_app_signs_in_through_the_main_sites_own_sign_in() {
 			Some("invalid_scope"),
 			"{back}"
 		);
+
+		// Nor through the device flow, which checks its scopes separately.
+		let device = post_form(
+			&app.notes,
+			"/oauth/device_authorization",
+			&[
+				("client_id", partner.as_str()),
+				("client_secret", partner_secret.as_str()),
+				("scope", "openid roles"),
+			],
+			None,
+		)
+		.await;
+		assert_eq!(device.status(), StatusCode::BAD_REQUEST);
+		let device: Value = json_body(device).await;
+		assert_eq!(device["error"], "invalid_scope", "{device}");
 
 		// The first-party app gets the roles in its ID token and userinfo.
 		let authorize_url = format!(
