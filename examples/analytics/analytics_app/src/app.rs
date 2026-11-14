@@ -124,7 +124,12 @@ fn Counts(summary: QueryHandle<EventSummary, FnError>) -> impl IntoView {
 				</tr>
 			</thead>
 			<tbody>
-				<For each=move || current().events key=|event| event.name.clone() let(event)>
+				// Keyed by count too: a row whose count changed is drawn again.
+				<For
+					each=move || current().events
+					key=|event| (event.name.clone(), event.count)
+					let(event)
+				>
 					<tr>
 						<td>{event.name}</td>
 						<td>{event.count}</td>
