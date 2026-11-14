@@ -56,6 +56,20 @@ Recording never waits: each call queues the event and returns, and the client se
 
 The client signs what it sends with the service's token, which only your server has. The service records these events as your server's, and never limits how fast your server sends them.
 
+## People, not just events
+
+Every event names who it happened to: the `user_id` above. The service joins those names into **persons**, so "who signed up" and "which plan is this account on" have an answer.
+
+A visitor usually starts as nobody in particular. Your app records their activity under a made-up id, and when they sign in you call `identify` with their real id and the made-up one. The service then treats both ids as the same person: what they did before signing in and what they do after are one story, and the made-up id keeps working, so a stale page can't create a stranger.
+
+Person properties work like the person's profile. A late batch from a phone that was offline doesn't overwrite what you learned later: each property keeps the value of whatever event happened most recently, whatever order the events arrived in. Some ids are never people — `anonymous`, `guest`, `null` — and the service never builds a person out of them.
+
+Visits are **sessions**: one row per visit, with the pages someone entered and left on, how long they stayed, and how they arrived (a search, a campaign, a link from another site). The service reads the browser's referrer and UTM parameters from the visit's first page to classify it, and parses the browser's user agent into browser, operating system, and device type — nothing extra for your app to send.
+
+By default the service builds persons only for ids your app identified or set properties on. A page of anonymous visitors costs no person rows. If you want a person for everyone, set `LEPTOSKIT_ANALYTICS_PERSON_PROFILES=all` on the service; `never` turns person building off entirely.
+
+Your server can ask the service about its persons: list them, read one with their ids and properties, list their events and sessions, delete a person and everything stored about them, or export it all as one JSON document. These operations answer only to your app's server — never to a browser — so your own rules decide who may see or delete a person.
+
 ## Record events from anywhere else
 
 Anything that can send JSON can record events, which is useful from a script, a job in another language, or `curl`:

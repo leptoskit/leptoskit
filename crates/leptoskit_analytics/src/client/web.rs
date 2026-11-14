@@ -33,6 +33,12 @@ pub struct Options {
 	/// Whether the person's id and consent are kept in `localStorage`.
 	/// Without it, every page load is someone new.
 	pub persist: bool,
+	/// Whether views are recorded automatically (§14): a `$pageview` when
+	/// the page loads and on history navigation, and a `$pageleave` with
+	/// the page's duration when it's left, the session's first `$pageview`
+	/// carrying the UTM parameters and the referrer. The opt-out for the
+	/// automatic part: [`capture_pageview`] still records by hand.
+	pub pageviews: bool,
 }
 
 impl Default for Options {
@@ -42,6 +48,7 @@ impl Default for Options {
 			endpoint: "/_leptoskit/services/analytics/v1/batch".into(),
 			interval: 3_000,
 			persist: true,
+			pageviews: true,
 		}
 	}
 }
@@ -63,6 +70,18 @@ impl Platform for Browser {
 struct State {
 	client: Client<Browser>,
 	options: Options,
+	/// The page being viewed, for the `$pageleave` its navigation makes.
+	page: Option<Page>,
+	/// The session the last automatic `$pageview` belonged to, so the
+	/// session's first one carries the UTM parameters and the referrer.
+	pageview_session: Option<[u8; 16]>,
+}
+
+/// The page being viewed since its `$pageview`.
+struct Page {
+	started: i64,
+	url: String,
+	pathname: String,
 }
 
 thread_local! {
@@ -100,17 +119,131 @@ pub fn init(options: Options) {
 		client.opt_out();
 	}
 	let interval = options.interval;
-	STATE.with_borrow_mut(|state| *state = Some(State { client, options }));
+	let pageviews = options.pageviews;
+	STATE.with_borrow_mut(|state| {
+		*state = Some(State {
+			client,
+			options,
+			page: None,
+			pageview_session: None,
+		})
+	});
 	save_identity();
 
-	// Sends on the interval, and hands what's left to `sendBeacon` when the
-	// page is hidden or closed.
+	// Sends on the interval, hands what's left to `sendBeacon` when the
+	// page is hidden or closed, and records views across navigations.
 	let tick = Closure::<dyn FnMut()>::new(|| wasm_bindgen_futures::spawn_local(send_waiting()));
-	let leave = Closure::<dyn FnMut()>::new(beacon);
-	watch_page(interval, &tick, &leave);
+	let leave = Closure::<dyn FnMut()>::new(|| {
+		leave_current();
+		beacon();
+	});
+	if pageviews {
+		let navigate = Closure::<dyn FnMut()>::new(navigated);
+		view_page();
+		watch_page(interval, &tick, &leave, &navigate);
+		navigate.forget();
+	} else {
+		watch_page(interval, &tick, &leave, &Closure::<dyn FnMut()>::new(|| {}));
+	}
 	tick.forget();
 	leave.forget();
 }
+
+/// The person navigated: the page they were on ends, the new one begins.
+fn navigated() {
+	STATE.with_borrow_mut(|state| {
+		let Some(state) = state else { return };
+		if !state.options.pageviews {
+			return;
+		}
+		leave(state);
+		view(state);
+	});
+}
+
+/// The page being viewed ends: its `$pageleave`.
+fn leave_current() {
+	STATE.with_borrow_mut(|state| {
+		let Some(state) = state else { return };
+		if state.options.pageviews {
+			leave(state);
+		}
+	});
+}
+
+/// Records the automatic `$pageview` of the page now shown.
+fn view_page() {
+	STATE.with_borrow_mut(|state| {
+		let Some(state) = state else { return };
+		if state.options.pageviews {
+			view(state);
+		}
+	});
+}
+
+/// Records the `$pageleave` of the page being viewed.
+fn leave(state: &mut State) {
+	let Some(page) = state.page.take() else {
+		return;
+	};
+	let now = Browser.now();
+	let duration = f64::from((now - page.started).max(0) as u32) / 1_000.0;
+	state.client.capture(
+		"$pageleave",
+		vec![
+			("$current_url".into(), Value::Text(page.url)),
+			("$pathname".into(), Value::Text(page.pathname)),
+			("$duration".into(), Value::Float(duration)),
+		],
+	);
+}
+
+/// Records the `$pageview` of the page now shown.
+fn view(state: &mut State) {
+	let page = page_view();
+	let mut parts = page.split('\n');
+	let url = parts.next().unwrap_or_default();
+	let pathname = parts.next().unwrap_or_default();
+	let session = state.client.session_id();
+	let first = state.pageview_session != Some(session);
+	state.pageview_session = Some(session);
+	let mut properties: Properties = vec![
+		("$current_url".into(), Value::Text(url.into())),
+		("$pathname".into(), Value::Text(pathname.into())),
+	];
+	for (name, value) in ["$host", "$title"].into_iter().zip(&mut parts) {
+		if !value.is_empty() {
+			properties.push((name.into(), Value::Text(value.into())));
+		}
+	}
+	if first {
+		// Where the session arrived from: the UTM parameters and the
+		// referrer belong to the visit's first view.
+		for (name, value) in CAMPAIGN_NAMES.into_iter().zip(campaign().split('\n')) {
+			if !value.is_empty() {
+				properties.push((name.into(), Value::Text(value.into())));
+			}
+		}
+	}
+	state.client.capture("$pageview", properties);
+	state.page = Some(Page {
+		started: Browser.now(),
+		url: url.to_owned(),
+		pathname: pathname.to_owned(),
+	});
+}
+
+/// The properties the session's first `$pageview` carries, in the order
+/// `campaign` answers with.
+const CAMPAIGN_NAMES: [&str; 7] = [
+	"utm_source",
+	"utm_medium",
+	"utm_campaign",
+	"utm_content",
+	"utm_term",
+	"$referrer",
+	"$referring_domain",
+];
 
 /// Records that `name` happened.
 pub fn capture(name: &str, properties: Properties) {
@@ -283,7 +416,8 @@ const g=globalThis,t=v=>v==null?"":String(v).replace(/\n/g," "),j=a=>a.map(t).jo
 export const page_context=()=>{const w=g.screen||{},n=g.navigator||{};return j([w.width,w.height,g.innerWidth,g.innerHeight,n.language,c(()=>Intl.DateTimeFormat().resolvedOptions().timeZone,""),n.userAgent])};
 export const page_view=()=>{const l=g.location||{},d=g.document||{};return j([l.href,l.pathname,l.host,d.title,d.referrer])};
 export const in_page=()=>typeof window!=="undefined";
-export const watch_page=(ms,tick,leave)=>{setInterval(tick,ms);addEventListener("visibilitychange",()=>{if(g.document?.visibilityState==="hidden")leave()});addEventListener("pagehide",()=>leave())};
+export const watch_page=(ms,tick,leave,nav)=>{setInterval(tick,ms);addEventListener("visibilitychange",()=>{if(g.document?.visibilityState==="hidden")leave()});addEventListener("pagehide",()=>leave());addEventListener("popstate",()=>nav());for(const m of["pushState","replaceState"]){const o=g.history?.[m];if(o)g.history[m]=function(...a){const r=o.apply(this,a);nav();return r}}};
+export const campaign=()=>{const p=new URLSearchParams(g.location?.search||""),r=g.document?.referrer||"";let h="";c(()=>h=new URL(r).host,"");return [p.get("utm_source"),p.get("utm_medium"),p.get("utm_campaign"),p.get("utm_content"),p.get("utm_term"),r,h].map(t).join("\n")};
 export const fill_random=b=>{if(!c(()=>(g.crypto.getRandomValues(b),1),0))for(let i=0;i<b.length;i++)b[i]=Math.random()*256};
 export const storage_get=k=>c(()=>s().getItem(k),null);
 export const storage_set=(k,v)=>c(()=>v==null?s().removeItem(k):s().setItem(k,v));
@@ -294,8 +428,14 @@ export const send_beacon=(u,b)=>c(()=>g.navigator.sendBeacon(u,b),false);
 extern "C" {
 	fn page_context() -> String;
 	fn page_view() -> String;
+	fn campaign() -> String;
 	fn in_page() -> bool;
-	fn watch_page(interval: i32, tick: &Closure<dyn FnMut()>, leave: &Closure<dyn FnMut()>);
+	fn watch_page(
+		interval: i32,
+		tick: &Closure<dyn FnMut()>,
+		leave: &Closure<dyn FnMut()>,
+		navigate: &Closure<dyn FnMut()>,
+	);
 	fn fill_random(bytes: &mut [u8]);
 	fn storage_get(key: &str) -> Option<String>;
 	fn storage_set(key: &str, value: Option<&str>);

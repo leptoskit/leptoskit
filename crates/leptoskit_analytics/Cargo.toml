@@ -21,6 +21,11 @@ required-features = ["service"]
 name = "service"
 required-features = ["service"]
 
+# Person, group, and session processing at the writer.
+[[test]]
+name = "persons"
+required-features = ["service"]
+
 # Typed events, derived.
 [[test]]
 name = "event"
