@@ -44,7 +44,8 @@ use crate::jwt::Signer;
 use crate::secrets;
 
 /// The scopes about a person, which an app acting as itself can't have.
-pub(crate) const PERSON_SCOPES: [&str; 4] = ["openid", "profile", "email", "offline_access"];
+pub(crate) const PERSON_SCOPES: [&str; 5] =
+	["openid", "profile", "email", "roles", "offline_access"];
 
 /// The form of `POST /oauth/token`. Its `Debug` leaves out the code, the
 /// verifier, the device code, the refresh token, the secret and the
@@ -917,25 +918,44 @@ impl Idp {
 			}
 		}
 
+		// Only a first-party client can be granted `roles`, and the scope is
+		// offered only when the app registered a `Roles` hook, so this reads
+		// one the app knows how to answer.
+		if scopes.has(crate::idp::ROLES_SCOPE) {
+			let roles = self.inner.auth.roles(account).await?;
+			out.insert(
+				crate::idp::ROLES_SCOPE.into(),
+				Value::from(roles.into_iter().map(Value::from).collect::<Vec<_>>()),
+			);
+		}
+
 		Ok(out)
 	}
 
 	/// The claims an app asked to find in its ID token, of those its scopes
-	/// release.
+	/// release. The roles come with their scope, unnamed.
 	pub(crate) async fn id_token_claims(
 		&self,
 		account: Id<Account>,
 		scopes: &[String],
 		requested: &[String],
 	) -> Result<Map<String, Value>> {
-		if requested.is_empty() || !scopes.iter().any(|scope| scope == "openid") {
+		let roles = scopes.iter().any(|scope| scope == crate::idp::ROLES_SCOPE);
+
+		if (requested.is_empty() && !roles) || !scopes.iter().any(|scope| scope == "openid") {
 			return Ok(Map::new());
 		}
 
 		let mut released = self.released_claims(account, scopes).await?;
 		let wanted = |name: &str| requested.iter().any(|claim| claim == name);
-		// `email_verified` says what `email` is worth, so it comes along.
-		released.retain(|name, _| wanted(name) || (name == "email_verified" && wanted("email")));
+		// `email_verified` says what `email` is worth, so it comes along;
+		// the roles come with their scope, so a first-party app always
+		// knows who may do what without naming the claim.
+		released.retain(|name, _| {
+			wanted(name)
+				|| (name == "email_verified" && wanted("email"))
+				|| (name == crate::idp::ROLES_SCOPE && roles)
+		});
 		Ok(released)
 	}
 }

@@ -1342,6 +1342,22 @@ fn auth_settings_are_checked() {
 			"[auth.providers.google]\nclient_id_env = \"A\"\nclient_secret = \"inline\"",
 			"could not parse",
 		),
+		(
+			"[auth.providers.google]\nclient_id_env = \"A\"\nclient_secret_env = \"B\"\nuserinfo = true",
+			"userinfo is for OpenID Connect providers",
+		),
+		(
+			"methods = [\"oidc:main\", \"email\", \"carrier-pigeon\"]\n\n[auth.providers.main]\nkind = \"oidc\"\nissuer = \"https://sso.example\"\nclient_id_env = \"A\"",
+			"isn't a way to sign in",
+		),
+		(
+			"methods = [\"oidc:other\"]\n\n[auth.providers.other]\nkind = \"google\"\nclient_id_env = \"A\"\nclient_secret_env = \"B\"",
+			"is a `google` provider",
+		),
+		(
+			"methods = []",
+			"at least one way to sign in",
+		),
 		("[auth.solana]\nchain_id = \"main net\"", "chain_id"),
 		("[auth.solana]\nchain_id = \"\"", "chain_id"),
 		("[auth.passwords]\nmin_length = 7", "min_length"),

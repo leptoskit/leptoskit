@@ -64,7 +64,7 @@ A function with no scope stays yours alone: another app's token is refused there
 
 The scopes also appear in your [published RPC](13-sharing-the-rpc.md): each function lists the scopes it needs under an `oauth2` security scheme, so generated clients know which to ask for.
 
-Every provider also offers the three OpenID Connect scopes: `openid` (sign them in), `profile` (their name and picture, as you release them below), and `email` (their verified email address).
+Every provider also offers the three OpenID Connect scopes: `openid` (sign them in), `profile` (their name and picture, as you release them below), and `email` (their verified email address). A fourth, `roles`, appears when your app says who has which role with `Auth::roles::<…>()` (see [an admin app that signs in through yours](#use-your-sites-sign-in-for-an-admin-app)); only one of your own first-party apps can ask for it.
 
 ## Start the provider
 
@@ -384,6 +384,82 @@ The answer holds the new `client_id`, a `client_secret` unless the app asked for
 - It may ask for the code, device, and `client_credentials` grants, and the `code` response type only. `jwks_uri` isn't supported; it sends its keys as `jwks`.
 - Without `scope`, it gets `openid profile email`. Without `id_token_signed_response_alg`, its ID tokens are RS256 if the server has an RSA key, as OpenID Connect makes the default, and ES256 otherwise.
 - Taking scopes away in a change takes them from everyone who connected it, and changing how it authenticates ends its sign-ins. Deleting it disconnects it from everyone.
+
+## Use your site's sign-in for an admin app
+
+Sooner or later you build a second app of your own — a moderation panel, an internal dashboard — that only some of your people may open. It needs sessions of its own, but it shouldn't have its own passwords or its own copy of your accounts: it should send people to your main site to sign in, and only let them in if the main site says they may.
+
+That's your provider and a generic OpenID Connect client, which `leptoskit::auth` already is on both ends. Three pieces make it work:
+
+**Release the roles.** Say who has which role on the main site, with the `Roles` hook:
+
+```rust
+impl auth::Roles for User {
+	async fn roles(db: &Db, account: Id<auth::Account>) -> auth::Result<Vec<String>> {
+		match User::find(db, account).await? {
+			Some(user) if user.admin => Ok(vec!["admin".into()]),
+			_ => Ok(Vec::new()),
+		}
+	}
+}
+```
+
+Register it with `.roles::<User>()` next to your other hooks, and register the admin app with `--secret-post --first-party --scopes openid,profile,roles` — `--secret-post` because a leptoskit app authenticates at your token endpoint with its secret in the form body. The `roles` scope is only offered when such a hook exists, and only a first-party app — one of yours — may ask for it: another site can never read who keeps your place. An admin's ID token and `userinfo` then carry `"roles": ["admin"]`.
+
+**Refuse everyone else.** On the admin app, add your main site as an OpenID Connect provider, ask for `userinfo` (the roles may arrive there rather than in the ID token), and check them with a gate:
+
+```rust
+let auth = auth::Auth::from_config(&db, &config)?
+	.provider(
+		auth::Provider::oidc("main", "Notes", "https://notes.example", &client_id, Some(client_secret))?
+			.userinfo(true)
+			.scopes(["openid", "email", "profile", "roles"]),
+	)
+	.gate(AdminGate)
+	.build()?;
+```
+
+```rust
+/// Only people the main site says are admins sign in here, and what it
+/// said is kept, by their subject there, for `Roles` to read back.
+struct AdminGate;
+
+impl auth::SignInGate for AdminGate {
+	async fn check(
+		&self,
+		tx: &auth::Tx,
+		attempt: &auth::SignInAttempt<'_>,
+	) -> auth::Result<()> {
+		if !attempt.roles().contains(&"admin") {
+			return Err(auth::AuthError::NotAllowed);
+		}
+		store_roles(tx, attempt.subject.unwrap(), &attempt.roles()).await?;
+		Ok(())
+	}
+}
+```
+
+The gate runs once per sign-in, whatever the method — through a provider, an emailed code, a password, a passkey, or a wallet — before any session or account exists, so a refusal creates nothing, and the sign-in page gets the `not_allowed` error code to show. Its transaction is the sign-in's own, so what it writes lands only when the sign-in does. Keep what the provider said in your own table, keyed by `attempt.subject`, and read it back in the app's `Roles`:
+
+```rust
+impl auth::Roles for AdminRoles {
+	async fn roles(db: &Db, account: Id<auth::Account>) -> auth::Result<Vec<String>> {
+		// the account's `main` identity names the subject; the roles row
+		// recorded at sign-in says what they may do here
+	}
+}
+```
+
+Roles are then live at every guard, and a role taken away at the main site applies at the next sign-in.
+
+**Leave one way in.** An admin app that only takes main-site sign-ins shouldn't also offer emailed codes or passwords:
+
+```toml
+[auth]
+methods = ["oidc:main"]
+```
+
+Every other way to sign in is off: its routes answer 404, and the sign-in pages see none of it. Leave `methods` out to keep everything on, which is the default. Guard each server function with `auth::require_role("admin")?`, or extract `auth::WithRole<Admin>` in an axum handler, and a session that somehow got past the gate still can't do anything.
 
 ## What isn't there yet
 

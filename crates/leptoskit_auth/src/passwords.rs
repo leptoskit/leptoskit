@@ -38,6 +38,7 @@ use crate::PasswordSettings;
 use crate::Purpose;
 use crate::RequestInfo;
 use crate::Result;
+use crate::SignInAttempt;
 use crate::SignInStep;
 use crate::SignedIn;
 use crate::auth::finish;
@@ -272,7 +273,12 @@ impl Auth {
 		let tx = db.begin().await?;
 		let result = async {
 			refuse_unusable(&Account::get(&tx, account).await?)?;
-			self.after_first_factor(&tx, account, false, true, request)
+			let attempt = SignInAttempt {
+				method: "password",
+				subject: None,
+				claims: None,
+			};
+			self.after_first_factor(&tx, account, false, true, request, &attempt)
 				.await
 		}
 		.await;
@@ -434,12 +440,18 @@ impl Auth {
 		// not be reachable without paying for a guess.
 		let hash = hashing::hash(&password).await?;
 		let tx = self.inner.db.begin().await?;
+		let attempt = SignInAttempt {
+			method: "email",
+			subject: None,
+			claims: None,
+		};
 		let result = async {
 			self.claim_code(&tx, &challenge).await?;
 			let (account, signed_up) = self.proven_account(&tx, &address, request).await?;
 			let factors = self.factors(&tx, account).await?;
 
 			if !signed_up && !factors.is_empty() {
+				self.check_gate(&tx, &attempt).await?;
 				let then = Then::ResetPassword { hash };
 				let challenge = self
 					.second_factor_challenge(&tx, account, factors, Some(&then))
@@ -451,7 +463,7 @@ impl Auth {
 			self.then(&tx, account, Then::ResetPassword { hash }, request)
 				.await?;
 			let step = self
-				.after_first_factor(&tx, account, signed_up, false, request)
+				.after_first_factor(&tx, account, signed_up, false, request, &attempt)
 				.await?;
 			Ok((step, account, true))
 		}

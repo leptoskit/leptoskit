@@ -71,6 +71,7 @@ let app = router
 - **Access tokens** are 10-minute ES256 JWTs (RFC 9068). **Refresh tokens** are opaque, stored hashed, and work once; a second use ends every token from that sign-in.
 - **Signing keys** rotate, and only their public halves are stored: the private keys derive from `AUTH_ENCRYPTION_KEYS`.
 - **Pairwise subjects:** each app sees its own `sub` for a person, unless it's one of your own.
+- **Roles for your own apps:** with a `Roles` hook on `auth`, a standard `roles` scope releases the person's roles to one of your first-party apps, in its ID token and `userinfo`; other sites' apps can't ask for it.
 - **Consent is headless:** your page reads `GET /oauth/consent` and posts the answer.
 - **Opt-in hardening and openness:** DPoP (RFC 9449) binds an app's tokens to its key, and dynamic registration (RFC 7591 and 7592) lets apps register themselves, with or without an initial access token. Both are off by default.
 

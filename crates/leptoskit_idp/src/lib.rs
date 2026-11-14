@@ -116,6 +116,8 @@ pub use idp::Lifetimes;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use idp::Portal;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use idp::ROLES_SCOPE;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use idp::Registration;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use leptoskit_rpc::ScopeInfo;

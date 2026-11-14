@@ -574,6 +574,16 @@
 					"description": "How email is sent.",
 					"$ref": "#/$defs/AuthMailConfig"
 				},
+				"methods": {
+					"description": "The ways people may sign in, when you'd rather they didn't have all\nof them: `email` (emailed codes), `password`, `passkey`, `wallet`,\nor a provider as `<kind>:<id>` or just `<id>`, such as\n`[\"oidc:main\"]`. Every other way is off: its routes answer 404, and\nthe sign-in pages see none of it. Leave it out to allow everything.",
+					"type": [
+						"array",
+						"null"
+					],
+					"items": {
+						"type": "string"
+					}
+				},
 				"mfa": {
 					"description": "Who must use two-step verification: `optional` lets people choose,\nand `required` asks everyone.",
 					"$ref": "#/$defs/AuthMfa"
@@ -874,6 +884,10 @@
 						"string",
 						"null"
 					]
+				},
+				"userinfo": {
+					"description": "Fetches `/userinfo` with the access token after the code exchange,\nchecks its `sub` against the ID token's, and merges its claims with\nthe ID token's, with `/userinfo` winning. For a provider that\nreleases roles or other claims only there, such as signing in\nthrough your own site for an admin app. Off by default.",
+					"type": "boolean"
 				}
 			},
 			"additionalProperties": false

@@ -18,6 +18,7 @@ use crate::RequestInfo;
 use crate::Result;
 use crate::Session;
 use crate::SessionToken;
+use crate::SignInAttempt;
 use crate::SignedIn;
 use crate::Tokens;
 use crate::Transport;
@@ -403,6 +404,17 @@ impl Auth {
 		.await;
 
 		finish(tx, result).await
+	}
+
+	/// Runs the app's sign-in gate, when it registered one: a refusal ends
+	/// the whole sign-in, on its own transaction, before anything it would
+	/// have made.
+	pub(crate) async fn check_gate(&self, tx: &Tx, attempt: &SignInAttempt<'_>) -> Result<()> {
+		if let Some(gate) = &self.inner.gate {
+			gate.check(tx, attempt).await?;
+		}
+
+		Ok(())
 	}
 
 	/// Starts a session for `account`, inside the transaction that signed

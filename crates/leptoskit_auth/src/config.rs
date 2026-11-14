@@ -170,22 +170,34 @@ fn providers(mut builder: AuthBuilder, auth: &AuthConfig) -> Result<AuthBuilder>
 			provider = provider.store_tokens(true);
 		}
 
+		if config.userinfo {
+			provider = provider.userinfo(true);
+		}
+
 		builder = builder.provider(provider);
+	}
+
+	if let Some(methods) = &auth.methods {
+		builder = builder.sign_in_methods(methods.iter().cloned());
 	}
 
 	Ok(builder)
 }
 
 #[cfg(not(feature = "oauth"))]
-fn providers(builder: AuthBuilder, auth: &AuthConfig) -> Result<AuthBuilder> {
-	if auth.providers.is_empty() {
-		Ok(builder)
-	} else {
-		Err(AuthError::Config(
+fn providers(mut builder: AuthBuilder, auth: &AuthConfig) -> Result<AuthBuilder> {
+	if !auth.providers.is_empty() {
+		return Err(AuthError::Config(
 			"[auth.providers] signs in with other sites; turn on leptoskit_auth's `oauth` feature"
 				.into(),
-		))
+		));
 	}
+
+	if let Some(methods) = &auth.methods {
+		builder = builder.sign_in_methods(methods.iter().cloned());
+	}
+
+	Ok(builder)
 }
 
 fn mailer(builder: AuthBuilder, auth: &AuthConfig) -> Result<AuthBuilder> {

@@ -573,7 +573,7 @@ impl Idp {
 
 		if let Some(scope) = scopes
 			.iter()
-			.find(|scope| !client.scopes.contains(*scope) || !self.knows_scope(scope))
+			.find(|scope| !self.client_may_ask(&client, scope))
 		{
 			return Err(IdpError::invalid_scope(format!(
 				"this app may not ask for `{scope}`"

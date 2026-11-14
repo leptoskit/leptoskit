@@ -2612,6 +2612,13 @@ pub struct AuthConfig {
 	/// `password` feature.
 	#[serde(skip_serializing_if = "AuthPasswordsConfig::is_default")]
 	pub passwords: AuthPasswordsConfig,
+	/// The ways people may sign in, when you'd rather they didn't have all
+	/// of them: `email` (emailed codes), `password`, `passkey`, `wallet`,
+	/// or a provider as `<kind>:<id>` or just `<id>`, such as
+	/// `["oidc:main"]`. Every other way is off: its routes answer 404, and
+	/// the sign-in pages see none of it. Leave it out to allow everything.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub methods: Option<Vec<String>>,
 }
 
 /// Passwords, as a way to sign in with the account's email address. Off by
@@ -2795,6 +2802,13 @@ pub struct AuthProviderConfig {
 	/// Off by default: signing in doesn't need them.
 	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub store_tokens: bool,
+	/// Fetches `/userinfo` with the access token after the code exchange,
+	/// checks its `sub` against the ID token's, and merges its claims with
+	/// the ID token's, with `/userinfo` winning. For a provider that
+	/// releases roles or other claims only there, such as signing in
+	/// through your own site for an admin app. Off by default.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub userinfo: bool,
 }
 
 impl AuthProviderConfig {
@@ -2870,7 +2884,7 @@ impl AuthProviderConfig {
 			));
 		}
 
-		match kind.as_str() {
+		if let Some(problem) = match kind.as_str() {
 			"apple" => {
 				missing(&[
 					("client_id_env", &self.client_id_env),
@@ -2926,7 +2940,18 @@ impl AuthProviderConfig {
 					AUTH_PROVIDER_KINDS.join(", ")
 				))
 			}
+		} {
+			return Some(problem);
 		}
+
+		if self.userinfo && kind != "oidc" {
+			return Some(format!(
+				"auth.providers.{id}.userinfo is for OpenID Connect providers: only `oidc` \
+				 discovers a userinfo endpoint here"
+			));
+		}
+
+		None
 	}
 }
 
@@ -2947,6 +2972,7 @@ impl Default for AuthConfig {
 			solana: AuthSolanaConfig::default(),
 			idp: None,
 			passwords: AuthPasswordsConfig::default(),
+			methods: None,
 		}
 	}
 }
@@ -3008,6 +3034,10 @@ impl AuthConfig {
 			return Some(problem);
 		}
 
+		if let Some(problem) = self.methods_problem() {
+			return Some(problem);
+		}
+
 		if let Some(problem) = self.solana.problem() {
 			return Some(problem);
 		}
@@ -3019,6 +3049,43 @@ impl AuthConfig {
 		self.mail
 			.problem()
 			.or_else(|| self.idp.as_ref().and_then(AuthIdpConfig::problem))
+	}
+
+	/// Why `auth.methods` can't work, if it can't.
+	fn methods_problem(&self) -> Option<String> {
+		let Some(methods) = &self.methods else {
+			return None;
+		};
+
+		if methods.is_empty() {
+			return Some("auth.methods names at least one way to sign in".to_owned());
+		}
+
+		for method in methods {
+			let (asked, id) = match method.split_once(':') {
+				None if matches!(method.as_str(), "email" | "password" | "passkey" | "wallet") => {
+					continue;
+				}
+				None => (None, method.as_str()),
+				Some((asked, id)) => (Some(asked), id),
+			};
+			let Some(provider) = self.providers.get(id) else {
+				return Some(format!(
+					"auth.methods names `{method}`, which isn't a way to sign in here: name \
+					 email, password, passkey, or wallet, or a provider from auth.providers"
+				));
+			};
+			let kind = provider.kind(id);
+
+			if asked.is_some_and(|asked| asked != kind) {
+				return Some(format!(
+					"auth.providers.{id} is a `{kind}` provider: name it `{kind}:{id}` or `{id}` \
+					 in auth.methods"
+				));
+			}
+		}
+
+		None
 	}
 }
 
