@@ -53,6 +53,7 @@ required-features = ["derive", "service", "server-client"]
 # `tests/dependencies.rs` keeps it that way.
 chrono = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
 leptoskit_analytics_macros = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
 leptoskit_db = { workspace = true, optional = true }
@@ -110,6 +111,7 @@ service = [
 	"typed",
 	"dep:chrono",
 	"dep:flate2",
+	"dep:futures",
 	"dep:leptoskit_axum",
 	"dep:leptoskit_db",
 	"dep:leptoskit_rpc",

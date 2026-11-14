@@ -5228,6 +5228,7 @@ dependencies = [
  "any_spawner",
  "chrono",
  "flate2",
+ "futures",
  "insta",
  "inventory",
  "js-sys",

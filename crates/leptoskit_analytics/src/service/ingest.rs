@@ -191,8 +191,8 @@ impl Ingest {
 
 	/// The last events stored, for the `live_events` stream.
 	#[must_use]
-	pub fn tail(&self) -> &Tail {
-		&self.tail
+	pub fn tail(&self) -> Arc<Tail> {
+		Arc::clone(&self.tail)
 	}
 
 	/// Queues `accepted` and waits until it's written. Refused entries and

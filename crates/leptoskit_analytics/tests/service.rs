@@ -38,7 +38,7 @@ async fn start(config: IngestConfig) -> Service {
 }
 
 async fn start_with_db(db: Db, config: IngestConfig) -> Service {
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		config,
@@ -379,7 +379,7 @@ async fn throughput() {
 	db.migrate(service::MIGRATIONS).await.unwrap();
 	// It measures the writer, so it sends far faster per id than a person
 	// could, without the per-id limit.
-	let router = service::routes(
+	let (router, _live) = service::routes(
 		db.clone(),
 		None,
 		IngestConfig {
