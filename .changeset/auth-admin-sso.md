@@ -2,7 +2,7 @@
 "release": minor
 ---
 
-# An admin app can sign people in through your site's own sign-in
+# Admin apps can sign in through your site's own sign-in
 
 `leptoskit_idp` gains a standard `roles` scope: when your app registers a `Roles` hook, one of your own first-party apps may ask for it, and the person's roles from that hook land in its ID token and `userinfo` as `"roles": ["admin", …]`. Another site's apps are refused the scope at authorize, and an app acting as itself can't have it.
 
