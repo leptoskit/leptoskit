@@ -31,6 +31,16 @@ required-features = ["service"]
 name = "event"
 required-features = ["derive"]
 
+# The insights engine: its types compile alone; its engine needs the service.
+[[test]]
+name = "insights"
+required-features = ["service"]
+
+# The SQL each insights query builds, per dialect.
+[[test]]
+name = "query_sql"
+required-features = ["service"]
+
 # The server's client, sending to the service.
 [[test]]
 name = "client"
@@ -96,6 +106,7 @@ default = []
 # Building the service: ingestion, storage, and the binary. Only `lk` turns
 # this on, when it builds the service; the app never does.
 service = [
+	"insights",
 	"typed",
 	"dep:chrono",
 	"dep:flate2",
@@ -109,12 +120,17 @@ service = [
 	"dep:tokio",
 	"dep:uuid",
 	"leptoskit_db/sqlite",
+	"leptoskit_rpc/live",
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",
 ]
 # `#[derive(Event)]`, for typed events. A proc macro: it adds nothing to
 # an app's bundle.
 derive = ["dep:inventory", "dep:leptoskit_analytics_macros"]
+# The insights engine's types (`query`): what an insight stores and what
+# the engine answers. Serde only, so any app — and the admin that drives
+# it — compiles them without the service.
+insights = ["dep:schemars", "dep:serde", "dep:serde_json"]
 # Optional positional encoding: smaller batches, with catalogue negotiation.
 # Without it, capture_event sends named properties and needs no catalogue.
 typed = []

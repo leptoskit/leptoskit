@@ -10,6 +10,8 @@
 //! `docs/agents/analytics-service.md`.
 
 pub mod client;
+#[cfg(feature = "insights")]
+pub mod query;
 pub mod wire;
 
 #[cfg(feature = "service")]
