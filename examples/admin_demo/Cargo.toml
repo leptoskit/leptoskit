@@ -1,0 +1,29 @@
+[package]
+name = "admin_demo"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+leptoskit_admin = { workspace = true }
+leptoskit_apm = { workspace = true, features = ["server"] }
+leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }
+leptoskit_axum = { workspace = true }
+leptoskit_cli = { workspace = true }
+leptoskit_config = { workspace = true }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+leptoskit_deploy_console = { workspace = true, features = ["server"] }
+leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

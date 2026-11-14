@@ -159,6 +159,12 @@ pub enum Command {
 		#[command(subcommand)]
 		command: crate::console::ConsoleCommand,
 	},
+	/// Runs the admin: analytics, infrastructure and lessons, signed in
+	/// through the main site.
+	Admin {
+		#[command(subcommand)]
+		command: crate::admin::AdminCommand,
+	},
 	/// Generates and manages the app's `OpenTofu` infrastructure.
 	#[command(alias = "tofu")]
 	Infra {
@@ -846,6 +852,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 			Ok(())
 		}
 		Command::Console { command } => crate::console::run(command),
+		Command::Admin { command } => crate::admin::run(command),
 		Command::Infra { command } => crate::console::infra(command),
 		Command::Deploy(args) => crate::console::deploy(&args),
 		Command::Verify { command } => crate::verify::run(command),

@@ -1,6 +1,6 @@
 ---
 source: crates/leptoskit_cli/tests/snapshots.rs
-assertion_line: 229
+assertion_line: 245
 expression: "normalize(&stdout(&output), &scratch.path)"
 ---
 The command line interface for building, serving, and shipping leptos apps.
@@ -10,6 +10,7 @@ Usage: leptoskit [OPTIONS] <COMMAND>
 Commands:
   targets      Validate and list the destinations in this application's configuration
   console      Hosts or connects to the deployment dashboard and durable agent API
+  admin        Runs the admin: analytics, infrastructure and lessons, signed in through the main site
   infra        Generates and manages the app's `OpenTofu` infrastructure
   deploy       Deploys a Git commit through its service, releases a prebuilt image, or rolls back
   verify       Builds and reproduces backends from public commits and checks signed deployment policies; does not show what a live server runs

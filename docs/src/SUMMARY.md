@@ -16,6 +16,7 @@
 - [Application performance](guide/27-analytics.md)
 - [Your deployment service](guide/28-deployment-service.md)
 - [Hosted deployment accounts](guide/29-hosted-deployments.md)
+- [Run an admin for your site](guide/32-admin.md)
 - [Code push](guide/05-code-push.md)
 - [Server functions](guide/06-server-functions.md)
 - [Shared components and Tailwind](guide/07-shared-components.md)

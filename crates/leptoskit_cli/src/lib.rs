@@ -21,6 +21,7 @@
 	html_favicon_url = "https://raw.githubusercontent.com/leptoskit/leptoskit/main/docs/src/assets/mark.svg"
 )]
 
+pub mod admin;
 pub mod auth_command;
 pub mod auth_pages;
 pub mod budgets;

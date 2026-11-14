@@ -1,0 +1,82 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 356
+expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
+---
+main [main]
+  div [notice] role=status
+  "Learn"
+  "Short lessons that check your real project, not a quiz."
+  div [progress-mark] role=img label="Your mark: 0 of 3 pieces"
+  "1 down. 4 to go."
+  span [progress]
+    "Finish a track and a piece of the mark lands. Infrastructure 1 of 5 · Analytics comes with its data."
+  div [up-next]
+    "Up next"
+    "5 min · Infrastructure"
+    "Plan, review, apply"
+    "A plan compares [infra] with what exists and lists the difference; it changes nothing. You read the rows, and Apply runs exactly that plan, refusing it if anything moved underneath. Deleting what keeps data is blocked outright."
+    "• Check: you applied a plan"
+    a label="Continue in notes-production" href=/_leptoskit/admin/infra/projects/notes-production/changes
+      "Continue in notes-production"
+    a label="Read it here instead" href=/_leptoskit/admin/learn/infrastructure/plan-review-apply
+      "Read it here instead"
+    "This lesson ticks itself once it's true of your projects."
+  div [grid-main]
+    "Infrastructure"
+    "1/5"
+    a [lesson:what-infra-describes] label="What [infra] describes: done" href=/_leptoskit/admin/learn/infrastructure/what-infra-describes
+      "✓"
+      "What [infra] describes"
+      "notes-production declares its infrastructure in leptoskit.toml"
+      "3 min"
+    a [lesson:plan-review-apply] label="Plan, review, apply: to do" href=/_leptoskit/admin/learn/infrastructure/plan-review-apply
+      "○"
+      "Plan, review, apply"
+      "Check: you applied a plan"
+      "5 min"
+    a [lesson:releases-and-rollbacks] label="Releases and rollbacks: to do" href=/_leptoskit/admin/learn/infrastructure/releases-and-rollbacks
+      "○"
+      "Releases and rollbacks"
+      "Check: you deployed a release and rolled one back"
+      "4 min"
+    a [lesson:backups-restored] label="Backups you've actually restored: to do" href=/_leptoskit/admin/learn/infrastructure/backups-restored
+      "○"
+      "Backups you've actually restored"
+      "Check: a backup verification succeeded"
+      "4 min"
+    a [lesson:reading-health] label="Reading health: to do" href=/_leptoskit/admin/learn/infrastructure/reading-health
+      "○"
+      "Reading health"
+      "Check: a health check passed"
+      "5 min"
+    "Analytics"
+    "coming with Analytics"
+    "○"
+    "Your first typed event"
+    "coming with Analytics"
+    "○"
+    "Reading a trend"
+    "coming with Analytics"
+    "○"
+    "Building a funnel"
+    "coming with Analytics"
+    "○"
+    "Retention, honestly"
+    "coming with Analytics"
+    "○"
+    "Who are these people?"
+    "coming with Analytics"
+    "○"
+    "SQL when you need it"
+    "coming with Analytics"
+    "Build with leptoskit"
+    "in the book; not tracked here"
+    a label="Builder components" href=https://leptoskit.dev/docs/guide/07-shared-components.html
+      "Builder components"
+    a label="Tailwind in leptoskit" href=https://leptoskit.dev/docs/reference/css-coverage.html
+      "Tailwind in leptoskit"
+    a label="Typed RPC and live queries" href=https://leptoskit.dev/docs/guide/24-real-time.html
+      "Typed RPC and live queries"
+    a label="Shipping to native with code push" href=https://leptoskit.dev/docs/guide/05-code-push.html
+      "Shipping to native with code push"

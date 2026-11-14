@@ -1,0 +1,39 @@
+[package]
+name = "leptoskit_admin"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "One admin web app for a leptoskit site: analytics, infrastructure, and lessons, signed in through the site's own sign-in."
+
+[dependencies]
+axum = { workspace = true }
+futures = { workspace = true }
+leptos = { workspace = true, features = ["ssr"] }
+leptoskit = { workspace = true, features = ["web", "apm", "db"] }
+leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }
+leptoskit_config = { workspace = true }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+leptoskit_db_schema = { workspace = true }
+leptoskit_deploy_console = { workspace = true, features = ["server"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "sync", "time"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+insta = { workspace = true }
+leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { workspace = true, features = ["util"] }
+url = { workspace = true }
+
+[lints]
+workspace = true

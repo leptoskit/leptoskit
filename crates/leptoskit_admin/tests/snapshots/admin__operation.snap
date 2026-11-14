@@ -1,0 +1,280 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 305
+expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
+---
+main [main]
+  div [notice] role=status
+  a label="notes-production" href=/_leptoskit/admin/infra/projects/notes-production/operations
+    "notes-production"
+  "/"
+  "<op 0>"
+  "Plan changes"
+  span [phase]
+    "✓ Succeeded"
+  "Started by ada@example.com · just now · took 0s"
+  div [card:operation]
+    "Timeline"
+    button [workings-tab:operation] label="Show workings: lk console status"
+      div [mint-piece]
+      "Workings"
+      span [mint-source]
+        "lk console status"
+    div [timeline]
+      div [event]
+        "Queued"
+        "Queued · just now"
+      div [event]
+        "Running on the registered deployment worker"
+        "Running · just now"
+      div [event]
+        "Generated infra/notes-production/main.tf.json"
+        "Running · just now"
+      div [event]
+        "Completed. The existing release engine verified its normal safety checks."
+        "Succeeded · just now"
+    span [result]
+      "Completed. The existing release engine verified its normal safety checks."
+  "What the plan found"
+  "+ create"
+  "hcloud_server.web[1]"
+  "~ update"
+  "cloudflare_record.app"
+  "± replace"
+  "hcloud_volume.data"
+  a label="Review it under Changes" href=/_leptoskit/admin/infra/projects/notes-production/changes
+    "Review it under Changes"
+aside [drawer-aside] label="Workings"
+  div [drawer:operation] label="Workings: Plan changes"
+    "Workings"
+    "Plan changes"
+    button [workings-close] label="Close workings (W)"
+      "Close"
+    div [station:declare]
+      "Declare"
+      "leptoskit.toml"
+      "Every operation acts on what [infra] declares. Nothing in [infra] changed since the last commit."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "[infra]"
+        div [code-line:name]
+          "2"
+          span [code-text]
+            "name"
+            "="
+            "\"notes-production\""
+        div [code-line:domain]
+          "3"
+          span [code-text]
+            "domain"
+            "="
+            "\"app.example.com\""
+        div [code-line:location]
+          "4"
+          span [code-text]
+            "location"
+            "="
+            "\"hel1\""
+        div [code-line:server_type]
+          "5"
+          span [code-text]
+            "server_type"
+            "="
+            "\"cx23\""
+        div [code-line:instances]
+          "6"
+          span [code-text]
+            "instances"
+            "="
+            "2"
+        div [code-line:ssh_key_ids]
+          "7"
+          span [code-text]
+            "ssh_key_ids"
+            "="
+            "["
+            "123"
+            "]"
+        div [code-line:ssh_cidrs]
+          "8"
+          span [code-text]
+            "ssh_cidrs"
+            "="
+            "["
+            "\"192.0.2.1/32\""
+            "]"
+        div [code-line:account_id]
+          "9"
+          span [code-text]
+            "account_id"
+            "="
+            "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+        div [code-line:zone_id]
+          "10"
+          span [code-text]
+            "zone_id"
+            "="
+            "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\""
+        div [code-line:updates_domain]
+          "11"
+          span [code-text]
+            "updates_domain"
+            "="
+            "\"updates.example.com\""
+        div [code-line:updates_bucket]
+          "12"
+          span [code-text]
+            "updates_bucket"
+            "="
+            "\"notes-releases\""
+        div [code-line:backup_bucket]
+          "13"
+          span [code-text]
+            "backup_bucket"
+            "="
+            "\"notes-backups\""
+        div [code-line:image]
+          "14"
+          span [code-text]
+            "image"
+            "="
+            "\"ghcr.io/team/notes\""
+        div [code-line:registry]
+          "15"
+          span [code-text]
+            "registry"
+            "="
+            "\"ghcr.io\""
+        div [code-line:registry_username]
+          "16"
+          span [code-text]
+            "registry_username"
+            "="
+            "\"team\""
+        div [code-line]
+          "17"
+          span [code-text]
+        div [code-line]
+          "18"
+          span [code-text]
+            "[infra.services]"
+        div [code-line:services.relay]
+          "19"
+          span [code-text]
+            "relay"
+            "="
+            "true"
+        div [code-line]
+          "20"
+          span [code-text]
+        div [code-line]
+          "21"
+          span [code-text]
+            "[infra.backups]"
+        div [code-line:backups.enabled]
+          "22"
+          span [code-text]
+            "enabled"
+            "="
+            "true"
+        div [code-line:backups.daily]
+          "23"
+          span [code-text]
+            "daily"
+            "="
+            "7"
+        button [copy] label="Copy as TOML"
+          "Copy"
+    div [station:generate]
+      "Generate"
+      "infra/notes-production/main.tf.json"
+      "lk infra generate"
+      "turns [infra] into OpenTofu's own JSON, which you can read and review like any other file."
+      "infra/notes-production/main.tf.json isn't in this checkout yet. Plan writes it first, so it'll be here after the next plan."
+    div [station:plan]
+      "Plan"
+      "operation <op 0>"
+      "A plan compares what's declared with what exists and lists the difference. It changes nothing."
+      div [code]
+        div [code-line:instances]
+          "1"
+          span [code-text]
+            "+"
+            "create"
+            "hcloud_server.web"
+            "["
+            "1"
+            "]"
+        div [code-line:domain]
+          "2"
+          span [code-text]
+            "~"
+            "update"
+            "cloudflare_record.app"
+        div [code-line:instances]
+          "3"
+          span [code-text]
+            "-"
+            "/+"
+            "replace"
+            "hcloud_volume.data"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:apply]
+      "Apply"
+      "the control service's worker"
+      "The control service runs one operation per project at a time, records every step, and keeps going if you close this tab."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "# The worker runs, in a checkout of this project:"
+        div [code-line]
+          "2"
+          span [code-text]
+            "lk"
+            "infra"
+            "plan"
+        div [code-line]
+          "3"
+          span [code-text]
+        div [code-line]
+          "4"
+          span [code-text]
+            "# Events from operation <op 0>:"
+        div [code-line]
+          "5"
+          span [code-text]
+            "#1   Queued  Queued"
+        div [code-line]
+          "6"
+          span [code-text]
+            "#2   Running  Running on the registered deployment worker"
+        div [code-line]
+          "7"
+          span [code-text]
+            "#3   Running  Generated infra/notes-production/main.tf.json"
+        div [code-line]
+          "8"
+          span [code-text]
+            "#4   Succeeded  Completed. The existing release engine verified its normal safety checks."
+        button [copy] label="Copy as shell"
+          "Copy"
+    div [station:check]
+      "Check"
+      "health checks and backups"
+      "Done means the fleet answers its health checks, not that a command exited."
+      "•"
+      "Follow it from a terminal too:"
+      "lk console status"
+      "lists it as <op 0>."
+      "•"
+      "No health check has run yet."
+      "•"
+      "Backups must be younger than 36 hours, as [infra.backups] max_age_hours says."
+    button [copy-all]
+      "Copy all"
+    a label="Open the infrastructure guide" href=https://leptoskit.dev/docs/guide/24-deploying.html
+      "Open docs"
