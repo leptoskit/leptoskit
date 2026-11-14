@@ -246,9 +246,9 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn sixty_frames_stay_inside_the_budget() {
-		let list = DrawList {
+	/// The scene sixty frames draw: sky, one quad, one bar, one glyph run.
+	fn budget_scene() -> DrawList {
+		DrawList {
 			sky: [20, 26, 34, 255],
 			quads: vec![Quad {
 				points: [(40.0, 40.0), (200.0, 30.0), (220.0, 180.0), (30.0, 190.0)],
@@ -269,7 +269,31 @@ mod tests {
 				color: [255, 255, 255, 255],
 				scale: 2.0,
 			}],
-		};
+		}
+	}
+
+	/// Sixty frames on a reused buffer still leave the expected ink, so a
+	/// fill regression cannot hide behind the ignored timing test below.
+	#[test]
+	fn sixty_frames_paint_the_expected_ink() {
+		let list = budget_scene();
+		let mut pixels = Vec::new();
+		for _ in 0..60 {
+			paint_into(&mut pixels, &list, 480, 320);
+		}
+		assert_eq!(pixels.len(), 480 * 320 * 4);
+		assert_eq!(pixel(&pixels, 480, 400, 100), list.sky);
+		assert_eq!(pixel(&pixels, 480, 120, 110), [231, 177, 90, 255]);
+		assert_eq!(pixel(&pixels, 480, 240, 300), [0, 0, 0, 255]);
+	}
+
+	/// Where a frame's time goes. A parallel run on a loaded machine can blow
+	/// the wall-clock budget without a real regression, so it runs on purpose:
+	/// `cargo nextest run -p leptoskit_game --run-ignored only sixty_frames`.
+	#[test]
+	#[ignore = "a benchmark: run it on purpose, on a quiet machine"]
+	fn sixty_frames_stay_inside_the_budget() {
+		let list = budget_scene();
 		let mut pixels = Vec::new();
 		let started = std::time::Instant::now();
 		for _ in 0..60 {
