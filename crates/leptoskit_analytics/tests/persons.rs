@@ -192,6 +192,12 @@ async fn one(db: &Db, sql: &str) -> Option<String> {
 		leptoskit_db::Value::Int(int) => int.to_string(),
 		leptoskit_db::Value::Bool(bool) => bool.to_string(),
 		leptoskit_db::Value::Null => "NULL".to_owned(),
+		leptoskit_db::Value::Uuid(uuid) => {
+			leptoskit_analytics::client::format_uuid(&uuid.into_bytes())
+		}
+		leptoskit_db::Value::Bytes(bytes) => {
+			leptoskit_analytics::client::format_uuid(&bytes.try_into().expect("16 bytes"))
+		}
 		other => format!("{other:?}"),
 	})
 }
@@ -1075,4 +1081,241 @@ async fn a_json_batch_identifies_the_same_way() {
 	)
 	.await;
 	assert_eq!(mappings, vec![vec!["anon-1"], vec!["user-1"]]);
+}
+
+/// Calls an app-only operation with the service's token.
+async fn call(
+	service: &Service,
+	operation: &str,
+	body: serde_json::Value,
+	token: Option<&str>,
+) -> (u16, serde_json::Value) {
+	let mut request = reqwest::Client::new()
+		.post(format!(
+			"http://{}{PREFIX}/api/{operation}",
+			service.address
+		))
+		.json(&body);
+	if let Some(token) = token {
+		request = request.bearer_auth(token);
+	}
+	let response = request.send().await.unwrap();
+	let status = response.status().as_u16();
+	let text = response.text().await.unwrap();
+	let answer: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+	(status, answer)
+}
+
+/// One person, identified, with an event under their anonymous id and a
+/// session, as the read operations' fixture.
+async fn a_person_with_a_session() -> (Service, String) {
+	let service = start(IngestConfig::default()).await;
+	let now = now_millis();
+	send(
+		&service,
+		wire::encode(&batch(
+			now,
+			vec![
+				pageview(
+					"anon-1",
+					now,
+					vec![
+						(
+							"$current_url".into(),
+							Value::Text("https://app.example/pricing".into()),
+						),
+						("$pathname".into(), Value::Text("/pricing".into())),
+					],
+				),
+				set(
+					"anon-1",
+					now,
+					vec![("email".into(), Value::Text("ada@example.com".into()))],
+					Vec::new(),
+					Vec::new(),
+				),
+				identify("anon-1", "user-1", now + 1_000),
+				entry("bought", "user-1", now + 2_000),
+			],
+		)),
+	)
+	.await;
+	let id = one(&service.db, "SELECT id FROM persons").await.unwrap();
+	(service, id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_reads_persons_their_events_and_their_sessions() {
+	let (service, id) = a_person_with_a_session().await;
+
+	// Anonymous calls are refused, as register_events is.
+	let (status, _) = call(
+		&service,
+		"persons",
+		serde_json::json!({ "limit": 10 }),
+		None,
+	)
+	.await;
+	assert_eq!(status, 403);
+
+	let (status, answer) = call(
+		&service,
+		"persons",
+		serde_json::json!({ "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(status, 200);
+	assert_eq!(answer.as_array().unwrap().len(), 1);
+	assert_eq!(answer[0]["properties"]["email"], "ada@example.com");
+	assert_eq!(answer[0]["is_identified"], true);
+
+	// A property filter and a search both find them; a wrong one doesn't.
+	let (status, answer) = call(
+		&service,
+		"persons",
+		serde_json::json!({ "property": "email", "value": "ada@example.com", "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!((status, answer.as_array().unwrap().len()), (200, 1));
+	let (_, answer) = call(
+		&service,
+		"persons",
+		serde_json::json!({ "property": "email", "value": "nobody@example.com", "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(answer.as_array().unwrap().len(), 0);
+	let (_, answer) = call(
+		&service,
+		"persons",
+		serde_json::json!({ "search": "user-1", "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(
+		answer.as_array().unwrap().len(),
+		1,
+		"the distinct id matches"
+	);
+
+	// The person's view carries both distinct ids.
+	let (status, answer) = call(
+		&service,
+		"person",
+		serde_json::json!({ "id": id }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(status, 200, "{answer}");
+	assert_eq!(
+		answer["distinct_ids"],
+		serde_json::json!(["anon-1", "user-1"])
+	);
+
+	// The events include the anonymous one, found through its distinct id.
+	let (_, answer) = call(
+		&service,
+		"person_events",
+		serde_json::json!({ "id": id, "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	let mut events: Vec<&str> = answer
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|event| event["name"].as_str().unwrap())
+		.collect();
+	events.sort_unstable();
+	assert_eq!(
+		events,
+		vec!["$identify", "$pageview", "$set", "bought"],
+		"newest first where the times differ; ties in any order"
+	);
+
+	// The session, with the person attached.
+	let (_, answer) = call(
+		&service,
+		"person_sessions",
+		serde_json::json!({ "id": id, "limit": 10 }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(answer.as_array().unwrap().len(), 1);
+	assert_eq!(answer[0]["entry_pathname"], "/pricing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn export_person_answers_everything_stored_about_them() {
+	let (service, id) = a_person_with_a_session().await;
+	let (_, answer) = call(
+		&service,
+		"export_person",
+		serde_json::json!({ "id": id }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(
+		answer["person"]["person"]["id"],
+		serde_json::json!(id),
+		"the document exists"
+	);
+	assert_eq!(
+		answer["person"]["distinct_ids"],
+		serde_json::json!(["anon-1", "user-1"])
+	);
+	assert_eq!(
+		answer["events"].as_array().unwrap().len(),
+		4,
+		"the anonymous events are in the export"
+	);
+	assert_eq!(answer["sessions"].as_array().unwrap().len(), 1);
+
+	// An unknown person exports nothing.
+	let (status, _) = call(
+		&service,
+		"export_person",
+		serde_json::json!({ "id": uuid::Uuid::new_v4() }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(status, 400);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_person_removes_everything_stored_about_them() {
+	let (service, id) = a_person_with_a_session().await;
+	let (status, answer) = call(
+		&service,
+		"delete_person",
+		serde_json::json!({ "id": id }),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(status, 200);
+	assert_eq!(answer["events"], 4);
+	assert_eq!(answer["sessions"], 1);
+
+	assert_eq!(
+		one(&service.db, "SELECT count(*) FROM persons").await,
+		Some("0".into())
+	);
+	assert_eq!(
+		one(&service.db, "SELECT count(*) FROM person_distinct_ids").await,
+		Some("0".into())
+	);
+	assert_eq!(
+		one(&service.db, "SELECT count(*) FROM person_overrides").await,
+		Some("0".into())
+	);
+	assert_eq!(
+		one(&service.db, "SELECT count(*) FROM events").await,
+		Some("0".into())
+	);
+	assert_eq!(
+		one(&service.db, "SELECT count(*) FROM sessions").await,
+		Some("0".into())
+	);
 }

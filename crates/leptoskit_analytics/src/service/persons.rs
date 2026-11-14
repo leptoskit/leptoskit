@@ -695,7 +695,7 @@ fn object_of(properties: &Json, name: &str) -> Vec<(String, Json)> {
 }
 
 /// A `Value` that holds a UUID, as either dialect returns one.
-fn uuid_of(value: &Value) -> Option<Uuid> {
+pub(crate) fn uuid_of(value: &Value) -> Option<Uuid> {
 	match value {
 		Value::Uuid(uuid) => Some(*uuid),
 		Value::Bytes(bytes) => Uuid::from_slice(bytes).ok(),

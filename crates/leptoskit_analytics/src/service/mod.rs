@@ -18,6 +18,7 @@ pub mod ingest;
 pub mod limits;
 pub mod otlp;
 pub mod persons;
+pub mod read;
 pub mod sessions;
 pub mod tables;
 pub mod ua;
