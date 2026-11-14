@@ -16,6 +16,7 @@ pub mod ingest;
 pub mod limits;
 pub mod otlp;
 pub mod tables;
+pub mod ua;
 
 use std::future::Future;
 use std::io::Read as _;

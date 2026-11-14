@@ -15,6 +15,7 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use super::catalogue::Catalogue;
+use super::ua;
 use crate::wire;
 use crate::wire::Body;
 
@@ -45,6 +46,7 @@ pub const CONTEXT_PROPERTIES: &[&str] = &[
 	"$viewport_height",
 	"$locale",
 	"$timezone",
+	"$raw_user_agent",
 	"$app_version",
 	"$lk_release",
 	"$device_id",
@@ -480,14 +482,57 @@ fn json(value: wire::Value) -> Json {
 
 /// A context's row: its properties sorted by name, and an id from their
 /// hash, so every replica gives the same context the same id without
-/// asking the database.
+/// asking the database. A raw user agent is parsed into the named parts
+/// ([`ua::parse`]) first, when the client didn't send them itself (§14).
 fn context_row(mut properties: Vec<(String, Json)>) -> ContextRow {
+	if properties.iter().any(|(name, _)| name == "$raw_user_agent") {
+		enrich_user_agent(&mut properties);
+	}
 	properties.sort_by(|a, b| a.0.cmp(&b.0));
 	properties.dedup_by(|a, b| a.0 == b.0);
 	let properties = Json::Object(properties.into_iter().collect()).to_string();
 	let digest = Sha256::digest(properties.as_bytes());
 	let id = i64::from_be_bytes(digest[..8].try_into().expect("8 bytes"));
 	ContextRow { id, properties }
+}
+
+/// Adds `$browser`, `$os`, and `$device_type` from `$raw_user_agent`,
+/// leaving anything the client already named alone.
+fn enrich_user_agent(properties: &mut Vec<(String, Json)>) {
+	let Json::String(user_agent) = properties
+		.iter()
+		.find(|(name, _)| name == "$raw_user_agent")
+		.map_or(Json::Null, |(_, value)| value.clone())
+	else {
+		return;
+	};
+	let parsed = ua::parse(&user_agent);
+	let named: Vec<String> = properties.iter().map(|(name, _)| name.clone()).collect();
+	let named = |name: &str| named.iter().any(|have| have == name);
+	let mut push = |name: &str, text: String| {
+		properties.push((name.to_owned(), Json::String(text)));
+	};
+	if let Some((name, version)) = parsed.browser {
+		if !named("$browser") {
+			push("$browser", name.to_owned());
+		}
+		if !named("$browser_version") && !version.is_empty() {
+			push("$browser_version", version);
+		}
+	}
+	if let Some((name, version)) = parsed.os {
+		if !named("$os") {
+			push("$os", name.to_owned());
+		}
+		if !named("$os_version") && !version.is_empty() {
+			push("$os_version", version);
+		}
+	}
+	if let Some(device_type) = parsed.device_type
+		&& !named("$device_type")
+	{
+		push("$device_type", device_type.to_owned());
+	}
 }
 
 fn random_tail() -> [u8; 10] {
@@ -558,6 +603,44 @@ mod tests {
 		]);
 		assert_eq!(a, b);
 		assert_eq!(a.properties, r#"{"$lib":"lk","$os":"iOS"}"#);
+	}
+
+	#[test]
+	fn a_raw_user_agent_is_parsed_into_the_named_parts() {
+		let context = context_row(vec![
+			(
+				"$raw_user_agent".into(),
+				Json::from(
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, \
+					 like Gecko) Chrome/131.0.0.0 Safari/537.36",
+				),
+			),
+			("$lib".into(), Json::from("leptoskit-web")),
+		]);
+		let parsed: Json = serde_json::from_str(&context.properties).unwrap();
+		assert_eq!(parsed["$browser"], "Chrome");
+		assert_eq!(parsed["$browser_version"], "131.0.0.0");
+		assert_eq!(parsed["$os"], "Mac OS X");
+		assert_eq!(parsed["$os_version"], "10.15.7");
+		assert_eq!(parsed["$device_type"], "Desktop");
+	}
+
+	#[test]
+	fn names_the_client_sent_win_over_the_raw_user_agent() {
+		let context = context_row(vec![
+			(
+				"$raw_user_agent".into(),
+				Json::from(
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, \
+					 like Gecko) Chrome/131.0.0.0 Safari/537.36",
+				),
+			),
+			("$os".into(), Json::from("iOS")),
+		]);
+		let parsed: Json = serde_json::from_str(&context.properties).unwrap();
+		assert_eq!(parsed["$os"], "iOS", "the client's own value stays");
+		assert_eq!(parsed["$os_version"], "10.15.7", "the missing one is added");
+		assert_eq!(parsed["$browser"], "Chrome");
 	}
 
 	#[test]
