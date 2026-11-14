@@ -14,9 +14,27 @@ use sha2::Digest as _;
 
 use super::*;
 
-const UP: &str = include_str!("migrations/001.up.sql");
-const DOWN: &str = include_str!("migrations/001.down.sql");
+const MIGRATIONS: [(u32, &str, &str); 2] = [
+	(
+		1,
+		include_str!("migrations/001.up.sql"),
+		include_str!("migrations/001.down.sql"),
+	),
+	(
+		2,
+		include_str!("migrations/002.up.sql"),
+		include_str!("migrations/002.down.sql"),
+	),
+];
 const RETENTION: u64 = 7 * 86400;
+
+fn checksum(sql: &str) -> String {
+	format!("{:x}", sha2::Sha256::digest(sql.as_bytes()))
+}
+
+fn storage_error(error: rusqlite::Error) -> EnqueueError {
+	EnqueueError::Storage(error.into())
+}
 
 /// A private, bounded SQLite journal. All read/modify/write operations use
 /// SQLite transactions, including calls made through separate connections.
@@ -65,28 +83,36 @@ impl Store {
 			"PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA \
 			 max_page_count=262144;",
 		)?;
+		let checksums: Vec<(u32, String)> = MIGRATIONS
+			.iter()
+			.map(|(version, up, _)| (*version, checksum(up)))
+			.collect();
 		let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 		tx.execute_batch(
 			"CREATE TABLE IF NOT EXISTS _lk_migrations(version INTEGER PRIMARY KEY, checksum TEXT \
 			 NOT NULL)",
 		)?;
-		let current: Option<(u32, String)> = tx
-			.query_row(
-				"SELECT version, checksum FROM _lk_migrations ORDER BY version DESC LIMIT 1",
-				[],
-				|row| Ok((row.get(0)?, row.get(1)?)),
-			)
-			.optional()?;
-		let checksum = format!("{:x}", sha2::Sha256::digest(UP.as_bytes()));
-
-		if let Some((version, applied)) = current {
+		let applied: Vec<(u32, String)> = tx
+			.prepare("SELECT version, checksum FROM _lk_migrations ORDER BY version")?
+			.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+			.collect::<rusqlite::Result<_>>()?;
+		ensure!(
+			applied.len() <= MIGRATIONS.len(),
+			"unsupported or modified management database migration"
+		);
+		for (index, expected) in checksums.iter().enumerate().take(applied.len()) {
 			ensure!(
-				version == 1 && applied == checksum,
+				applied[index] == *expected,
 				"unsupported or modified management database migration"
 			);
-		} else {
-			tx.execute_batch(UP)?;
-			tx.execute("INSERT INTO _lk_migrations VALUES(1, ?1)", [&checksum])?;
+		}
+
+		for (version, up, _) in MIGRATIONS.iter().skip(applied.len()) {
+			tx.execute_batch(up)?;
+			tx.execute(
+				"INSERT INTO _lk_migrations VALUES(?1, ?2)",
+				params![version, checksum(up)],
+			)?;
 		}
 
 		tx.commit()?;
@@ -157,14 +183,39 @@ impl Store {
 			.collect::<rusqlite::Result<_>>()?)
 	}
 
-	pub fn enqueue(&self, project: &str, intent: &Intent) -> Result<Operation> {
-		ensure!(
-			identifier(&intent.idempotency_key) && intent.action.valid(),
-			"invalid_intent"
-		);
+	pub fn enqueue(&self, project: &str, intent: &Intent) -> Result<Operation, EnqueueError> {
+		self.enqueue_as(project, intent, None)
+	}
+
+	/// Enqueues an intent on behalf of an authenticated principal, recording
+	/// who requested it. The journal's rules are identical to
+	/// [`Store::enqueue`]: a repeated project/idempotency pair returns the
+	/// existing operation for an identical request and rejects a changed
+	/// payload; the expected revision must match; one operation runs per
+	/// project; apply refers to the latest successful plan.
+	pub fn enqueue_as(
+		&self,
+		project: &str,
+		intent: &Intent,
+		actor: Option<&str>,
+	) -> Result<Operation, EnqueueError> {
+		if !(identifier(&intent.idempotency_key) && intent.action.valid()) {
+			return Err(EnqueueError::Rejected(Rejection::InvalidIntent));
+		}
+
+		if let Some(actor) = actor
+			&& (actor.is_empty()
+				|| actor.len() > 256
+				|| actor.bytes().any(|b| !(32..127).contains(&b)))
+		{
+			return Err(EnqueueError::Rejected(Rejection::InvalidActor));
+		}
+
 		let request = serde_json::to_string(intent)?;
-		let mut db = self.db()?;
-		let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+		let mut db = self.db().map_err(EnqueueError::Storage)?;
+		let tx = db
+			.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+			.map_err(storage_error)?;
 		let duplicate: Option<(String, String)> = tx
 			.query_row(
 				"SELECT id,request FROM operations WHERE project=?1 AND idempotency=?2",
@@ -174,9 +225,13 @@ impl Store {
 			.optional()?;
 
 		if let Some((id, previous)) = duplicate {
-			ensure!(previous == request, "idempotency_conflict");
+			if previous != request {
+				return Err(EnqueueError::Rejected(Rejection::IdempotencyConflict));
+			}
 
-			return operation(&tx, &id)?.context("operation missing");
+			return operation(&tx, &id)
+				.map_err(EnqueueError::Storage)?
+				.ok_or(EnqueueError::Rejected(Rejection::UnknownProject));
 		}
 
 		let revision: i64 = tx
@@ -185,18 +240,26 @@ impl Store {
 				[project],
 				|r| r.get(0),
 			)
-			.context("unknown_project")?;
-		ensure!(
-			revision as u64 == intent.expected_revision,
-			"revision_conflict"
-		);
+			.map_err(|error| {
+				match error {
+					rusqlite::Error::QueryReturnedNoRows => {
+						EnqueueError::Rejected(Rejection::UnknownProject)
+					}
+					other => EnqueueError::Storage(other.into()),
+				}
+			})?;
+		if revision as u64 != intent.expected_revision {
+			return Err(EnqueueError::Rejected(Rejection::RevisionConflict));
+		}
 		let busy: bool = tx.query_row(
 			"SELECT EXISTS(SELECT 1 FROM operations WHERE project=?1 AND phase IN \
 			 ('queued','running'))",
 			[project],
 			|r| r.get(0),
 		)?;
-		ensure!(!busy, "operation_in_progress");
+		if busy {
+			return Err(EnqueueError::Rejected(Rejection::OperationInProgress));
+		}
 
 		if let Action::Apply { plan_id } = &intent.action {
 			let plan: Option<(String, String)> = tx
@@ -207,17 +270,18 @@ impl Store {
 					|r| Ok((r.get(0)?, r.get(1)?)),
 				)
 				.optional()?;
-			ensure!(
-				plan == Some((plan_id.clone(), "succeeded".into())),
-				"plan_is_not_current"
-			);
+			if plan != Some((plan_id.clone(), "succeeded".into())) {
+				return Err(EnqueueError::Rejected(Rejection::PlanIsNotCurrent));
+			}
 			let used: bool = tx.query_row(
 				"SELECT EXISTS(SELECT 1 FROM operations WHERE project=?1 AND \
 				 json_extract(request,'$.action.plan_id')=?2)",
 				params![project, plan_id],
 				|r| r.get(0),
 			)?;
-			ensure!(!used, "plan_already_consumed");
+			if used {
+				return Err(EnqueueError::Rejected(Rejection::PlanAlreadyConsumed));
+			}
 		}
 
 		let id = random_key()?;
@@ -228,19 +292,22 @@ impl Store {
 		)?;
 		tx.execute(
 			"INSERT INTO \
-			 operations(id,project,idempotency,request,revision,phase,created,updated,message) \
-			 VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,'Queued')",
+			 operations(id,project,idempotency,request,revision,phase,created,updated,message,\
+			 actor) VALUES(?1,?2,?3,?4,?5,'queued',?6,?6,'Queued',?7)",
 			params![
 				id,
 				project,
 				intent.idempotency_key,
 				request,
 				revision + 1,
-				at
+				at,
+				actor
 			],
 		)?;
-		let result = operation(&tx, &id)?.context("operation missing")?;
-		tx.commit()?;
+		let result = operation(&tx, &id)
+			.map_err(EnqueueError::Storage)?
+			.ok_or(EnqueueError::Rejected(Rejection::UnknownProject))?;
+		tx.commit().map_err(storage_error)?;
 		Ok(result)
 	}
 
@@ -325,16 +392,61 @@ impl Store {
 		Ok(())
 	}
 
-	pub fn progress(&self, id: &str, message: &str) -> Result<()> {
+	/// Records bounded progress for a running operation and returns the
+	/// journal event the change produced, or `None` when the operation was
+	/// not running or its message did not change.
+	pub fn progress(&self, id: &str, message: &str) -> Result<Option<Event>> {
 		ensure!(
 			message.len() <= 2048,
 			"progress message exceeds journal limit"
 		);
-		self.db()?.execute(
+		let db = self.db()?;
+		let before: Option<u64> = db
+			.query_row(
+				"SELECT sequence FROM operation_events WHERE operation=?1 ORDER BY sequence DESC \
+				 LIMIT 1",
+				[id],
+				|r| r.get::<_, i64>(0).map(|n| n as u64),
+			)
+			.optional()?;
+		let changed = db.execute(
 			"UPDATE operations SET message=?1,updated=?2 WHERE id=?3 AND phase='running'",
 			params![message, now() as i64, id],
 		)?;
-		Ok(())
+		if changed == 0 {
+			return Ok(None);
+		}
+		let latest: Option<(i64, String, String, i64)> = db
+			.query_row(
+				"SELECT sequence,phase,message,created FROM operation_events WHERE operation=?1 \
+				 ORDER BY sequence DESC LIMIT 1",
+				[id],
+				|r| {
+					Ok((
+						r.get::<_, i64>(0)?,
+						r.get::<_, String>(1)?,
+						r.get::<_, String>(2)?,
+						r.get::<_, i64>(3)?,
+					))
+				},
+			)
+			.optional()?;
+		let latest = latest.map(|(sequence, phase, message, created)| {
+			Ok(Event {
+				sequence: sequence as u64,
+				phase: serde_json::from_value(serde_json::json!(phase))?,
+				message,
+				created: created as u64,
+			})
+		});
+
+		// The journal trigger only fires on a real phase or message change.
+		match latest {
+			Some(Ok(event)) if before == Some(event.sequence) => Ok(None),
+			Some(Ok(event)) => Ok(Some(event)),
+			Some(Err(error)) => Err(error),
+			None => Ok(None),
+		}
 	}
 
 	pub fn maintain(&self) -> Result<()> {
@@ -407,6 +519,7 @@ impl Store {
 					scope: serde_json::from_str(&scope)?,
 					project,
 					session,
+					actor: None,
 				})
 			})
 			.transpose()
@@ -668,14 +781,16 @@ impl Store {
 	}
 
 	/// Offline schema reversal. The caller must hold the service directory lock
-	/// and take an explicit backup first; the first down migration deletes
+	/// and take an explicit backup first; the last down migration deletes
 	/// history.
 	pub fn rollback(&self, backup: &Path) -> Result<()> {
 		self.backup(backup)?;
 		let mut db = self.db()?;
 		let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-		tx.execute_batch(DOWN)?;
-		tx.execute("DELETE FROM _lk_migrations WHERE version=1", [])?;
+		for (_, _, down) in MIGRATIONS.iter().rev() {
+			tx.execute_batch(down)?;
+		}
+		tx.execute("DELETE FROM _lk_migrations", [])?;
 		tx.commit()?;
 		Ok(())
 	}
@@ -759,29 +874,31 @@ fn operation(db: &rusqlite::Connection, id: &str) -> Result<Option<Operation>> {
 	events.reverse();
 	let row = db
 		.query_row(
-			"SELECT project,request,revision,phase,created,updated,message,result FROM operations \
-			 WHERE id=?1",
+			"SELECT project,actor,request,revision,phase,created,updated,message,result FROM \
+			 operations WHERE id=?1",
 			[id],
 			|r| {
 				Ok((
 					r.get::<_, String>(0)?,
-					r.get::<_, String>(1)?,
-					r.get::<_, i64>(2)?,
-					r.get::<_, String>(3)?,
-					r.get::<_, i64>(4)?,
+					r.get::<_, Option<String>>(1)?,
+					r.get::<_, String>(2)?,
+					r.get::<_, i64>(3)?,
+					r.get::<_, String>(4)?,
 					r.get::<_, i64>(5)?,
-					r.get::<_, String>(6)?,
+					r.get::<_, i64>(6)?,
 					r.get::<_, String>(7)?,
+					r.get::<_, String>(8)?,
 				))
 			},
 		)
 		.optional()?;
 	row.map(
-		|(project, request, revision, phase, created, updated, message, result)| {
+		|(project, actor, request, revision, phase, created, updated, message, result)| {
 			Ok(Operation {
 				events,
 				id: id.into(),
 				project,
+				actor,
 				intent: serde_json::from_str(&request)?,
 				revision: revision as u64,
 				phase: serde_json::from_value(serde_json::json!(phase))?,
@@ -865,3 +982,6 @@ fn validate(snapshot: &Snapshot) -> Result<()> {
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests;

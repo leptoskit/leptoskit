@@ -5784,6 +5784,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tower",
  "url",
  "wasm-bindgen",
@@ -11975,6 +11976,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -213,6 +213,9 @@ fn project_card(project: &Project, operations: &[&Operation], fleet: Option<&Fle
 					.class("text-sm font-semibold"),
 				)
 				.child(Text(&operation.message).class(QUIET))
+				.children(operation.actor.as_ref().map(|actor| {
+					Text(format!("by {actor}")).class("text-xs text-slate-500 dark:text-slate-400")
+				}))
 				.child(
 					Text(format!(
 						"{} · operation {}",

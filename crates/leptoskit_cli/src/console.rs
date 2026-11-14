@@ -1,7 +1,10 @@
 //! One optional deployment service, reusing the existing infrastructure engine.
 mod client;
 mod hosted_worker;
-mod runner;
+
+/// The fixed deployment engine executor, public so an app embedding the
+/// deployment service runs the same worker it does.
+pub mod runner;
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,6 +18,7 @@ use leptoskit_deploy_console::control::Project;
 use leptoskit_deploy_console::control::Scope;
 use leptoskit_deploy_console::control::Service;
 use leptoskit_deploy_console::control::Store;
+pub use runner::CommandRunner;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ConsoleCommand {
@@ -141,7 +145,7 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 				.enable_all()
 				.build()?;
 			runtime.block_on(async {
-				let mut worker = service.worker(Arc::new(runner::CommandRunner::new(
+				let mut worker = service.worker(Arc::new(CommandRunner::new(
 					data,
 					std::env::current_exe()?,
 					service.clone(),
