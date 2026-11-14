@@ -130,6 +130,7 @@ name = "analytics_app"
 version = "0.3.0"
 dependencies = [
  "analytics_service",
+ "any_spawner",
  "console_error_panic_hook",
  "js-sys",
  "leptos",

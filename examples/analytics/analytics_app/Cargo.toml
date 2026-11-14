@@ -25,6 +25,8 @@ required-features = ["ssr"]
 # The analytics service's operations, as types: calling them sends them to
 # the service. The app never turns on the service's `service` feature.
 analytics_service = { path = "../analytics_service" }
+# The browser's task executor, started before the client connects live.
+any_spawner = { workspace = true, optional = true, features = ["wasm-bindgen"] }
 console_error_panic_hook = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 leptos = { workspace = true }
@@ -63,6 +65,7 @@ ssr = ["dep:leptoskit", "leptos/ssr", "leptos_router/ssr", "leptoskit_rpc/servic
 # The browser: hydrates the page, and calls and watches the service through
 # the app's origin.
 hydrate = [
+	"dep:any_spawner",
 	"dep:console_error_panic_hook",
 	"dep:js-sys",
 	"dep:wasm-bindgen",
