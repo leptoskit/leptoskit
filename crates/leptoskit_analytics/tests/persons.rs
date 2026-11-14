@@ -866,6 +866,9 @@ async fn postgres_processes_persons_and_sessions_like_sqlite() {
 	});
 	let service = Service { address, db };
 	let now = now_millis();
+	// Ids unique to this test: the ignored Postgres tests run in parallel
+	// against one database.
+	let (anon, user) = ("pg-anon-1", "pg-user-1");
 
 	send(
 		&service,
@@ -873,15 +876,15 @@ async fn postgres_processes_persons_and_sessions_like_sqlite() {
 			now,
 			vec![
 				set(
-					"anon-1",
+					anon,
 					now,
 					vec![("email".into(), Value::Text("anon@example.com".into()))],
 					Vec::new(),
 					Vec::new(),
 				),
-				identify("anon-1", "user-1", now + 1_000),
+				identify(anon, user, now + 1_000),
 				pageview(
-					"user-1",
+					user,
 					now + 2_000,
 					vec![
 						(
@@ -899,36 +902,55 @@ async fn postgres_processes_persons_and_sessions_like_sqlite() {
 	)
 	.await;
 
+	let mine = "SELECT count(*) FROM persons WHERE id IN (SELECT person_id FROM \
+	            person_distinct_ids WHERE distinct_id IN ('pg-anon-1', 'pg-user-1'))";
+	assert_eq!(one(&service.db, mine).await, Some("1".into()));
+	let identified = "SELECT is_identified FROM persons WHERE id IN (SELECT person_id FROM \
+	                  person_distinct_ids WHERE distinct_id = 'pg-user-1')";
+	assert_eq!(one(&service.db, identified).await, Some("true".into()));
+	// One batch: the anonymous id's mapping moves to the survivor before
+	// the write-back, so its events carry the survivor's person directly
+	// and no override is needed. Overrides are for events an earlier batch
+	// wrote with the absorbed person.
 	assert_eq!(
-		one(&service.db, "SELECT count(*) FROM persons").await,
-		Some("1".into())
+		one(
+			&service.db,
+			"SELECT count(*) FROM person_overrides WHERE distinct_id IN ('pg-anon-1', 'pg-user-1')"
+		)
+		.await,
+		Some("0".into())
 	);
 	assert_eq!(
-		one(&service.db, "SELECT is_identified FROM persons").await,
-		Some("true".into())
+		one(
+			&service.db,
+			"SELECT count(*) FROM person_distinct_ids WHERE distinct_id IN ('pg-anon-1', \
+			 'pg-user-1')"
+		)
+		.await,
+		Some("2".into())
 	);
+	let properties = "SELECT properties FROM persons WHERE id IN (SELECT person_id FROM \
+	                  person_distinct_ids WHERE distinct_id = 'pg-user-1')";
 	assert_eq!(
-		one(&service.db, "SELECT count(*) FROM person_overrides").await,
-		Some("1".into())
-	);
-	assert_eq!(
-		one(&service.db, "SELECT properties FROM persons").await,
+		one(&service.db, properties).await,
 		Some(r#"{"email":"anon@example.com"}"#.into())
 	);
 	let sessions = text_rows(
 		&service.db,
-		"SELECT channel, referrer_domain, pageview_count FROM sessions",
+		"SELECT channel, referrer_domain, pageview_count FROM sessions WHERE distinct_id = \
+		 'pg-user-1'",
 	)
 	.await;
 	assert_eq!(sessions, vec![vec!["Organic Search", "google.com", "1"]]);
 	assert_eq!(
 		one(
 			&service.db,
-			"SELECT count(*) FROM events WHERE person_id IS NOT NULL"
+			"SELECT count(*) FROM events WHERE distinct_id IN ('pg-anon-1', 'pg-user-1') AND \
+			 person_id IS NOT NULL"
 		)
 		.await,
-		Some("2".into()),
-		"the anonymous event keeps no person; the rest carry one"
+		Some("3".into()),
+		"every event of the batch carries the survivor's person"
 	);
 }
 
@@ -952,24 +974,35 @@ async fn postgres_refuses_to_merge_two_identified_persons() {
 	});
 	let service = Service { address, db };
 	let now = now_millis();
+	// Ids unique to this test: the ignored Postgres tests run in parallel
+	// against one database.
 	send(
 		&service,
 		wire::encode(&batch(
 			now,
 			vec![
-				identify("a-1", "user-1", now),
-				identify("b-1", "user-2", now + 100),
-				identify("user-2", "user-1", now + 200),
+				identify("pg-merge-a", "pg-merge-1", now),
+				identify("pg-merge-b", "pg-merge-2", now + 100),
+				identify("pg-merge-2", "pg-merge-1", now + 200),
 			],
 		)),
 	)
 	.await;
 	assert_eq!(
-		one(&service.db, "SELECT count(*) FROM persons").await,
+		one(
+			&service.db,
+			"SELECT count(*) FROM persons WHERE id IN (SELECT person_id FROM person_distinct_ids \
+			 WHERE distinct_id IN ('pg-merge-a', 'pg-merge-1', 'pg-merge-b', 'pg-merge-2'))"
+		)
+		.await,
 		Some("2".into())
 	);
 	assert_eq!(
-		one(&service.db, "SELECT reason FROM ingestion_warnings").await,
+		one(
+			&service.db,
+			"SELECT reason FROM ingestion_warnings WHERE reason = 'merge_refused'"
+		)
+		.await,
 		Some("merge_refused".into())
 	);
 }
@@ -994,12 +1027,15 @@ async fn postgres_applies_set_by_event_time() {
 	});
 	let service = Service { address, db };
 	let now = now_millis();
+	// An id unique to this test: the ignored Postgres tests run in
+	// parallel against one database.
+	let user = "pg-setter";
 	send(
 		&service,
 		wire::encode(&batch(
 			now,
 			vec![set(
-				"user-1",
+				user,
 				now + 10_000,
 				vec![("plan".into(), Value::Text("pro".into()))],
 				Vec::new(),
@@ -1013,7 +1049,7 @@ async fn postgres_applies_set_by_event_time() {
 		wire::encode(&batch(
 			now,
 			vec![set(
-				"user-1",
+				user,
 				now + 1_000,
 				vec![("plan".into(), Value::Text("free".into()))],
 				Vec::new(),
@@ -1022,8 +1058,10 @@ async fn postgres_applies_set_by_event_time() {
 		)),
 	)
 	.await;
+	let properties = "SELECT properties FROM persons WHERE id IN (SELECT person_id FROM \
+	                  person_distinct_ids WHERE distinct_id = 'pg-setter')";
 	assert_eq!(
-		one(&service.db, "SELECT properties FROM persons").await,
+		one(&service.db, properties).await,
 		Some(r#"{"plan":"pro"}"#.into())
 	);
 }
