@@ -12,6 +12,7 @@
 
 pub mod accept;
 pub mod catalogue;
+pub mod channel;
 pub mod ingest;
 pub mod limits;
 pub mod otlp;
