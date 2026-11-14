@@ -153,7 +153,7 @@ async fn work(url: &str, key: &str, data: &Path, project: Project, service: Serv
 				&serde_json::to_vec(&json!({"operation":job.operation.id}))?,
 			)?;
 			let mut runner =
-				runner::CommandRunner::new(data.into(), std::env::current_exe()?, service.clone());
+				CommandRunner::new(data.into(), std::env::current_exe()?, service.clone());
 			runner.hosted_bindings = Some((job.analytics_read_key, job.analytics_ingest_key));
 			// Only the fixed engine commands inherit these state bindings. The
 			// hosted key is scoped to this installation.
@@ -175,7 +175,7 @@ async fn work(url: &str, key: &str, data: &Path, project: Project, service: Serv
 	}
 }
 async fn with_state(
-	runner: &mut runner::CommandRunner,
+	runner: &mut CommandRunner,
 	project: Project,
 	operation: leptoskit_deploy_console::control::Operation,
 	address: &str,

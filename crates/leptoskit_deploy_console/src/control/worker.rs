@@ -24,6 +24,7 @@ pub(crate) async fn work(
 	store: Store,
 	executor: Arc<dyn Executor>,
 	wake: Arc<tokio::sync::Notify>,
+	events: tokio::sync::broadcast::Sender<Update>,
 ) {
 	let mut maintenance = std::time::Instant::now();
 
@@ -44,6 +45,7 @@ pub(crate) async fn work(
 
 		match next {
 			Ok(Some(operation)) => {
+				publish(&store, &events, &operation.id, false);
 				let project = store
 					.projects()
 					.ok()
@@ -55,11 +57,33 @@ pub(crate) async fn work(
 				if store.finish(&operation.id, &result).is_err() {
 					return;
 				}
+				publish(&store, &events, &operation.id, true);
 			}
 			Ok(None) => {
 				tokio::select! { ()=wake.notified()=>{}, ()=tokio::time::sleep(std::time::Duration::from_secs(1))=>{} }
 			}
 			Err(_) => return,
 		}
+	}
+}
+
+/// Publishes the operation's newest journal event, or the terminal state.
+fn publish(
+	store: &Store,
+	events: &tokio::sync::broadcast::Sender<Update>,
+	id: &str,
+	terminal: bool,
+) {
+	let Ok(Some(operation)) = store.operation(id) else {
+		return;
+	};
+
+	if terminal {
+		let _ = events.send(Update::Finished { operation });
+	} else if let Some(event) = operation.events.last() {
+		let _ = events.send(Update::Progress {
+			operation_id: operation.id,
+			event: event.clone(),
+		});
 	}
 }

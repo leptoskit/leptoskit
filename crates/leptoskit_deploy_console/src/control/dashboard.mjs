@@ -88,15 +88,7 @@ document.addEventListener("click", async (event) => {
 			notice(
 				"Operation queued. You can close this page; the worker will continue.",
 			);
-			for (;;) {
-				await new Promise((resolve) => setTimeout(resolve, 1500));
-				const status = await api(`/api/v1/operations/${operation.id}`);
-				notice(`${status.phase}: ${status.message}`);
-				if (!["queued", "running"].includes(status.phase)) {
-					location.reload();
-					break;
-				}
-			}
+			watch(operation);
 		}
 	} catch (error) {
 		notice(error.message);
@@ -104,3 +96,39 @@ document.addEventListener("click", async (event) => {
 		pending = false;
 	}
 });
+
+// Live progress over server-sent events, with the old polling loop as the
+// fallback when the browser or the route cannot stream.
+function watch(operation) {
+	const show = (status) => notice(`${status.phase}: ${status.message}`);
+	const poll = async () => {
+		for (;;) {
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+			const status = await api(`/api/v1/operations/${operation.id}`);
+			show(status);
+			if (!["queued", "running"].includes(status.phase)) {
+				location.reload();
+				break;
+			}
+		}
+	};
+	let source;
+	try {
+		source = new EventSource(`/api/v1/operations/${operation.id}/events`);
+		source.addEventListener(
+			"progress",
+			(event) => show(JSON.parse(event.data)),
+		);
+		source.addEventListener("done", (event) => {
+			show(JSON.parse(event.data));
+			source.close();
+			location.reload();
+		});
+		source.onerror = () => {
+			source.close();
+			poll().catch((error) => notice(error.message));
+		};
+	} catch {
+		poll().catch((error) => notice(error.message));
+	}
+}

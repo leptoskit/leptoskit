@@ -1,0 +1,74 @@
+//! Migration behaviour tests: a version-one journal upgrades in place.
+
+use std::path::Path;
+
+use tempfile::TempDir;
+
+use super::*;
+
+fn version_one_journal(database: &Path) {
+	let db = rusqlite::Connection::open(database).unwrap();
+	db.execute_batch(
+		"CREATE TABLE _lk_migrations(version INTEGER PRIMARY KEY, checksum TEXT NOT NULL)",
+	)
+	.unwrap();
+	let (_, up, _) = MIGRATIONS[0];
+	db.execute_batch(up).unwrap();
+	db.execute("INSERT INTO _lk_migrations VALUES(1, ?1)", [checksum(up)])
+		.unwrap();
+	db.execute(
+		"INSERT INTO projects(id,environment,root,revision) VALUES('notes','production','/tmp',0)",
+		[],
+	)
+	.unwrap();
+	db.execute(
+		"INSERT INTO \
+		 operations(id,project,idempotency,request,revision,phase,created,updated,message,result) \
+		 VALUES('op-1','notes','key','{\"expected_revision\":0,\"idempotency_key\":\"key\",\"\
+		 action\":{\"kind\":\"status\"}}',1,'succeeded',1,1,'done','null')",
+		[],
+	)
+	.unwrap();
+}
+
+#[test]
+fn a_version_one_journal_upgrades_in_place_and_keeps_its_history() {
+	let root = TempDir::new().unwrap();
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt as _;
+		std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+	}
+	let database = root.path().join("console.sqlite3");
+	version_one_journal(&database);
+
+	let store = Store::open(&database).unwrap();
+	let restored = store.operation("op-1").unwrap().unwrap();
+	assert_eq!(restored.actor, None, "old operations have no actor");
+
+	let recorded = store
+		.enqueue_as(
+			"notes",
+			&Intent {
+				expected_revision: 0,
+				idempotency_key: "after-upgrade".into(),
+				action: Action::Status,
+			},
+			Some("admin@example.com"),
+		)
+		.unwrap();
+	assert_eq!(recorded.actor.as_deref(), Some("admin@example.com"));
+
+	let backup = root.path().join("before-rollback.sqlite3");
+	store.rollback(&backup).unwrap();
+	assert!(
+		!Store::open(&backup)
+			.unwrap()
+			.operations()
+			.unwrap()
+			.is_empty(),
+		"the rollback backup stays readable"
+	);
+	let rolled_back = Store::open(&database).unwrap();
+	assert!(rolled_back.projects().unwrap().is_empty());
+}

@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	)?;
 	store.claim()?;
 
-	store.progress(&operation.id, "Verified the example image and schema")?;
+	let _ = store.progress(&operation.id, "Verified the example image and schema")?;
 	store.finish(
 		&operation.id,
 		&RunResult {
