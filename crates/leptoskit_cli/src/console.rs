@@ -108,38 +108,7 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 		} => {
 			let data = data_directory(data)?;
 			let lock = directory_lock(&data)?;
-			let store = Store::open(&data.join("console.sqlite3"))?;
-
-			for root in project {
-				let root = root
-					.canonicalize()
-					.context("registered repository does not exist")?;
-				let config = LeptoskitConfig::load_from(&root)?;
-				let infra = config
-					.infra
-					.and_then(leptoskit_config::infra::InfraConfig::into_managed)
-					.context(
-						"registration requires the managed application infrastructure preset",
-					)?;
-				let environment = infra
-					.plugins
-					.analytics
-					.map_or_else(|| "production".into(), |a| a.environment);
-				store.register(&Project {
-					id: infra.name,
-					environment,
-					root,
-					revision: 0,
-				})?;
-			}
-
-			let key = std::env::var("LEPTOSKIT_CONTROL_KEY").map_err(|_| {
-				anyhow::anyhow!(
-					"set LEPTOSKIT_CONTROL_KEY to a random owner credential of at least 32 \
-					 characters"
-				)
-			})?;
-			let service = Service::new(store, &key, &url)?;
+			let service = open_service(&data, project, &url)?;
 			let runtime = tokio::runtime::Builder::new_multi_thread()
 				.worker_threads(4)
 				.enable_all()
@@ -214,7 +183,42 @@ pub fn run(command: ConsoleCommand) -> Result<()> {
 	}
 }
 
-fn data_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
+/// Opens the management store in `data`, registers each trusted repository,
+/// and returns the control service. Reads the owner credential from
+/// `LEPTOSKIT_CONTROL_KEY`.
+pub(crate) fn open_service(data: &Path, projects: Vec<PathBuf>, url: &str) -> Result<Service> {
+	let store = Store::open(&data.join("console.sqlite3"))?;
+
+	for root in projects {
+		let root = root
+			.canonicalize()
+			.context("registered repository does not exist")?;
+		let config = LeptoskitConfig::load_from(&root)?;
+		let infra = config
+			.infra
+			.and_then(leptoskit_config::infra::InfraConfig::into_managed)
+			.context("registration requires the managed application infrastructure preset")?;
+		let environment = infra
+			.plugins
+			.analytics
+			.map_or_else(|| "production".into(), |a| a.environment);
+		store.register(&Project {
+			id: infra.name,
+			environment,
+			root,
+			revision: 0,
+		})?;
+	}
+
+	let key = std::env::var("LEPTOSKIT_CONTROL_KEY").map_err(|_| {
+		anyhow::anyhow!(
+			"set LEPTOSKIT_CONTROL_KEY to a random owner credential of at least 32 characters"
+		)
+	})?;
+	Service::new(store, &key, url)
+}
+
+pub(crate) fn data_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
 	if let Some(path) = explicit {
 		return Ok(path);
 	}
@@ -225,7 +229,7 @@ fn data_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
 	)
 }
 
-fn directory_lock(path: &Path) -> Result<std::fs::File> {
+pub(crate) fn directory_lock(path: &Path) -> Result<std::fs::File> {
 	#[cfg(unix)]
 	let existed = path.exists();
 	std::fs::create_dir_all(path)?;

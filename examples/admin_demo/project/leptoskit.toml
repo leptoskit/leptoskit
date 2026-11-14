@@ -1,0 +1,40 @@
+# The demo project's configuration. The demo edits `instances` to 2 after
+# staging this file, so the admin has a change to plan.
+
+[app]
+name = "notes"
+render = "ssr"
+
+[db]
+dialect = "postgres"
+
+[infra]
+name = "notes-production"
+domain = "app.example.com"
+location = "hel1"
+server_type = "cx23"
+instances = 1
+ssh_key_ids = [123]
+ssh_cidrs = ["192.0.2.1/32"]
+account_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+zone_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+updates_domain = "updates.example.com"
+updates_bucket = "notes-releases"
+backup_bucket = "notes-backups"
+image = "ghcr.io/team/notes"
+registry = "ghcr.io"
+registry_username = "team"
+
+[infra.services]
+relay = true
+
+[infra.backups]
+enabled = true
+daily = 7
+
+[infra.plugins.analytics]
+version = 1
+environment = "production"
+
+[rpc.live]
+relay_url_env = "NATS_URL"

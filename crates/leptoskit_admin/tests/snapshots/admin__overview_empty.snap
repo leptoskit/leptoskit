@@ -1,0 +1,191 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 145
+expression: "redact(&world,\n&regions(&outline(&html), &[\"top-bar\", \"rail\", \"main\", \"tab-bar\"]))"
+---
+header [top-bar]
+  a label="Notes admin home" href=/_leptoskit/admin/
+    "Notes"
+    "admin"
+  span [env-pill]
+    "production"
+  <vector>
+  input [search] label="Find screens, projects, and lessons" placeholder="Find screens, projects, lessons…"
+  "⌘K"
+  a [live-pulse] label="Live events: analytics isn't connected yet" href=/_leptoskit/admin/analytics/live
+    "Not listening"
+  button [workings-mode] label="Show workings (Shift+W)"
+    div [workings-track]
+      div [workings-knob]
+    "Show workings"
+  button [theme] label="Switch between light and dark"
+    "◐"
+  button [avatar] label="Signed in as ada@example.com"
+    "A"
+  div [avatar-menu] role=menu
+    "Signed in as"
+    "ada@example.com"
+    button [sign-out] role=menuitem
+      "Sign out"
+nav [rail] label="Admin"
+  span [rail-label]
+    "ANALYTICS"
+  a label="Overview" href=/_leptoskit/admin/analytics/overview
+    <vector>
+    span [rail-label]
+      "Overview"
+  a label="Live" href=/_leptoskit/admin/analytics/live
+    <vector>
+    span [rail-label]
+      "Live"
+  a label="Trends" href=/_leptoskit/admin/analytics/insights/new?kind=trends
+    <vector>
+    span [rail-label]
+      "Trends"
+  a label="Funnels" href=/_leptoskit/admin/analytics/insights/new?kind=funnels
+    <vector>
+    span [rail-label]
+      "Funnels"
+  a label="Retention" href=/_leptoskit/admin/analytics/insights/new?kind=retention
+    <vector>
+    span [rail-label]
+      "Retention"
+  a label="Library" href=/_leptoskit/admin/analytics/library
+    <vector>
+    span [rail-label]
+      "Library"
+  a label="People" href=/_leptoskit/admin/analytics/people
+    <vector>
+    span [rail-label]
+      "People"
+  span [rail-label]
+    "INFRASTRUCTURE"
+  a label="notes-production" href=/_leptoskit/admin/infra/projects/notes-production/overview current=page
+    <vector>
+    span [rail-label]
+      "notes-production"
+  a label="Health" href=/_leptoskit/admin/infra/projects/notes-production/health
+    div [rail-label]
+    <vector>
+    span [rail-label]
+      "Health"
+  a label="Operations" href=/_leptoskit/admin/infra/projects/notes-production/operations
+    div [rail-label]
+    <vector>
+    span [rail-label]
+      "Operations"
+  span [rail-label]
+    "LEARN"
+  a label="Your progress" href=/_leptoskit/admin/learn
+    <vector>
+    span [rail-label]
+      "Your progress"
+    span [rail-label]
+      "1/5"
+  a label="Glossary" href=/_leptoskit/admin/learn/glossary
+    <vector>
+    span [rail-label]
+      "Glossary"
+main [main]
+  div [notice] role=status
+  a label="Projects" href=/_leptoskit/admin/infra/projects
+    "Projects"
+  "/"
+  "notes-production"
+  "notes-production"
+  "production"
+  nav label="Project sections"
+    a label="Overview" href=/_leptoskit/admin/infra/projects/notes-production/overview current=page
+      "Overview"
+    a label="Changes" href=/_leptoskit/admin/infra/projects/notes-production/changes
+      "Changes"
+    a label="Releases" href=/_leptoskit/admin/infra/projects/notes-production/releases
+      "Releases"
+    a label="Operations" href=/_leptoskit/admin/infra/projects/notes-production/operations
+      "Operations"
+    a label="Health" href=/_leptoskit/admin/infra/projects/notes-production/health
+      "Health"
+    a label="Backups" href=/_leptoskit/admin/infra/projects/notes-production/backups
+      "Backups"
+    a label="Config" href=/_leptoskit/admin/infra/projects/notes-production/config
+      "Config"
+  div [note:overview-tour]
+    "This is what's serving. Changes is where a change starts, and Releases is how you undo one."
+    button [note-dismiss:overview-tour]
+      "Got it"
+  div [card:release]
+    "Now serving"
+    button [workings-tab:release] label="Show workings: release engine → hosts"
+      div [mint-piece]
+      "Workings"
+      span [mint-source]
+        "release engine → hosts"
+    "Release"
+    span [serving-release]
+      "Nothing yet"
+    "Commit"
+    "—"
+    "Deployed by"
+    "—"
+    "When"
+    "—"
+    "Health"
+    "• Not checked"
+    a label="Deploy…" href=/_leptoskit/admin/infra/projects/notes-production/releases
+      "Deploy…"
+    a label="Roll back…" href=/_leptoskit/admin/infra/projects/notes-production/releases
+      "Roll back…"
+    button [action:status]
+      "Run health check"
+  div [grid-main]
+    "Recent operations"
+    div [recent]
+      "Nothing has run yet. Plan changes is the first step."
+    a label="All operations" href=/_leptoskit/admin/infra/projects/notes-production/operations
+      "All operations"
+    "Budget"
+    "No budget set. Plan refuses changes over a budget once you set one:"
+    div [code]
+      div [code-line]
+        span [code-text]
+          "[infra.budget]"
+      div [code-line]
+        span [code-text]
+          "currency = \"EUR\""
+      div [code-line]
+        span [code-text]
+          "monthly_compute = 20.0"
+      button [copy] label="Copy as TOML"
+        "Copy"
+    "Topology"
+    "from [infra] · hetzner"
+    div [node]
+      "app.example.com"
+      "Cloudflare DNS"
+    "→"
+    div [node]
+      "Tunnel"
+      "no open ports"
+    "→"
+    div [node]
+      "web[0]"
+      "cx23 · hel1 · primary, Postgres"
+    div [node]
+      "web[1]"
+      "cx23 · hel1 · replica"
+    "→"
+    div [node]
+      "Backups"
+      "encrypted · daily"
+nav [tab-bar] label="Areas"
+  a label="Analytics" href=/_leptoskit/admin/analytics/overview
+    <vector>
+    "Analytics"
+  a label="Infra" href=/_leptoskit/admin/infra/projects/notes-production/overview current=page
+    <vector>
+    "Infra"
+  a label="Learn" href=/_leptoskit/admin/learn
+    <vector>
+    "Learn"
+  button [search-open] label="Find a screen"
+    "⌘K"

@@ -1,0 +1,47 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 174
+expression: outline(&html)
+---
+div [refusal]
+  span [env-pill]
+    "production"
+  "Notes admin"
+  "The account you signed in with on notes.example isn't an admin here."
+  button [switch-account]
+    "Switch account"
+  "notes.example will ask who you are again."
+  button [how-toggle]
+    "How admins are chosen"
+  div [how-panel]
+    "The admin lets in accounts that notes.example gives the"
+    "admin"
+    "role. notes.example decides who has it with its Roles hook, and sends the roles along when you sign in:"
+    div [code]
+      div [code-line]
+        span [code-text]
+          "impl auth::Roles for User {"
+      div [code-line]
+        span [code-text]
+          "async fn roles(db: &Db, account: Id<Account>) -> auth::Result<Vec<String>> {"
+      div [code-line]
+        span [code-text]
+          "match User::find(db, account).await? {"
+      div [code-line]
+        span [code-text]
+          "Some(user) if user.admin => Ok(vec![\"admin\".into()]),"
+      div [code-line]
+        span [code-text]
+          "_ => Ok(Vec::new()),"
+      div [code-line]
+        span [code-text]
+          "}"
+      div [code-line]
+        span [code-text]
+          "}"
+      div [code-line]
+        span [code-text]
+          "}"
+      button [copy] label="Copy as Rust"
+        "Copy"
+    "Give the account the role there, then sign in again. The admin reads roles at sign-in, so a change applies from the next one."

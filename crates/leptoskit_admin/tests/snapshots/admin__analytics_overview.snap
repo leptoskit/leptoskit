@@ -1,0 +1,59 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 359
+expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
+---
+main [main]
+  div [notice] role=status
+  "Overview"
+  div [empty-state]
+    "Waiting for your first event"
+    "Visitors, pageviews, sessions, and bounce rate for your site, with the top pages, referrers, and devices beside them. Your app sends events with a Rust type for each, so a misspelled property fails when it compiles rather than in a chart. Add leptoskit_analytics with the web and derive features, then send one:"
+    div [code]
+      div [code-line]
+        span [code-text]
+          "use leptoskit_analytics::Event;"
+      div [code-line]
+        span [code-text]
+          "use leptoskit_analytics::client::web;"
+      div [code-line]
+        span [code-text]
+      div [code-line]
+        span [code-text]
+          "#[derive(Event)]"
+      div [code-line]
+        span [code-text]
+          "struct SignedUp {"
+      div [code-line]
+        span [code-text]
+          "plan: String,"
+      div [code-line]
+        span [code-text]
+          "seats: u32,"
+      div [code-line]
+        span [code-text]
+          "}"
+      div [code-line]
+        span [code-text]
+      div [code-line]
+        span [code-text]
+          "web::init(web::Options::default());"
+      div [code-line]
+        span [code-text]
+          "web::capture_event(SignedUp {"
+      div [code-line]
+        span [code-text]
+          "plan: \"pro\".into(),"
+      div [code-line]
+        span [code-text]
+          "seats: 3,"
+      div [code-line]
+        span [code-text]
+          "});"
+      button [copy] label="Copy as Rust"
+        "Copy"
+    "This page lands with the analytics service; until then the admin shows nothing rather than guessing. The guide has the rest: Product analytics."
+  "While you wait"
+  "Infrastructure already works: plan a change, deploy a release, and read your servers' health."
+  a label="Go to Infrastructure" href=/_leptoskit/admin/infra/projects
+    "Go to Infrastructure"

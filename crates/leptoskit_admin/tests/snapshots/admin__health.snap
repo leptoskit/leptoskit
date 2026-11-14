@@ -1,0 +1,290 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+assertion_line: 349
+expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
+---
+main [main]
+  div [notice] role=status
+  a label="Projects" href=/_leptoskit/admin/infra/projects
+    "Projects"
+  "/"
+  "notes-production"
+  "notes-production"
+  "production"
+  nav label="Project sections"
+    a label="Overview" href=/_leptoskit/admin/infra/projects/notes-production/overview
+      "Overview"
+    a label="Changes" href=/_leptoskit/admin/infra/projects/notes-production/changes
+      "Changes"
+      "3"
+    a label="Releases" href=/_leptoskit/admin/infra/projects/notes-production/releases
+      "Releases"
+    a label="Operations" href=/_leptoskit/admin/infra/projects/notes-production/operations
+      "Operations"
+    a label="Health" href=/_leptoskit/admin/infra/projects/notes-production/health current=page
+      "Health"
+    a label="Backups" href=/_leptoskit/admin/infra/projects/notes-production/backups
+      "Backups"
+    a label="Config" href=/_leptoskit/admin/infra/projects/notes-production/config
+      "Config"
+  div [card:status]
+    "Health check"
+    button [workings-tab:status] label="Show workings: lk infra status"
+      div [mint-piece]
+      "Workings"
+      span [mint-source]
+        "lk infra status"
+    "• Not checked"
+    "No health check has run yet."
+    button [action:status]
+      "Run health check"
+  div [grid-tiles]
+    div [stat]
+      "Requests"
+      "3/min"
+    div [stat]
+      "p95 latency"
+      "50 ms"
+    div [stat]
+      "Error rate"
+      "0.0%"
+    div [stat]
+      "Instances"
+      "1"
+  "Latency"
+  "last hour · release markers show deploys"
+  div role=img label="Latency: p95 and p50 per minute, with the SLO"
+    "p95 · 50 ms"
+    "p50 · 25 ms"
+    "SLO · 500 ms"
+    "600 ms"
+    "400 ms"
+    "200 ms"
+    "0 ms"
+    <vector>
+    <vector>
+    <vector>
+    <vector>
+    "hh:mm"
+    "hh:mm"
+    "hh:mm"
+  "Error rate"
+  "5xx responses"
+  div role=img label="Server error rate per minute"
+    "Server errors · 0.0%"
+    "3.0%"
+    "2.0%"
+    "1.0%"
+    "0.0%"
+    <vector>
+    <vector>
+    "hh:mm"
+    "hh:mm"
+    "hh:mm"
+  "Routes"
+  "sorted by p95"
+  div [routes]
+    "Route"
+    "Requests/min"
+    "p95"
+    "Errors"
+    div [route-row]
+      "/notes/{id}"
+      "2.0"
+      "50 ms"
+      "0.0%"
+      <vector>
+    div [route-row]
+      "/"
+      "1.0"
+      "5 ms"
+      "0.0%"
+      <vector>
+  "Hosts"
+  div [host]
+    "web-0"
+    "v41"
+    "This host hasn't sent a sample yet."
+  "Only reporting instances are counted; compare with deployment inventory for missing hosts."
+  "Current and startup windows can be partial. Browser reports remain untrusted."
+  "Up to seven days and 100,000 contribution windows per project; the oldest windows expire first. Query ranges are limited to 24 hours."
+aside [drawer-aside] label="Workings"
+  div [drawer:status] label="Workings: Health check"
+    "Workings"
+    "Health check"
+    button [workings-close] label="Close workings (W)"
+      "Close"
+    div [station:declare]
+      "Declare"
+      "leptoskit.toml"
+      "The hosts it probes are the ones [infra] declares. Nothing in [infra] changed since the last commit."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "[infra]"
+        div [code-line:name]
+          "2"
+          span [code-text]
+            "name"
+            "="
+            "\"notes-production\""
+        div [code-line:domain]
+          "3"
+          span [code-text]
+            "domain"
+            "="
+            "\"app.example.com\""
+        div [code-line:location]
+          "4"
+          span [code-text]
+            "location"
+            "="
+            "\"hel1\""
+        div [code-line:server_type]
+          "5"
+          span [code-text]
+            "server_type"
+            "="
+            "\"cx23\""
+        div [code-line:instances]
+          "6"
+          span [code-text]
+            "instances"
+            "="
+            "2"
+        div [code-line:ssh_key_ids]
+          "7"
+          span [code-text]
+            "ssh_key_ids"
+            "="
+            "["
+            "123"
+            "]"
+        div [code-line:ssh_cidrs]
+          "8"
+          span [code-text]
+            "ssh_cidrs"
+            "="
+            "["
+            "\"192.0.2.1/32\""
+            "]"
+        div [code-line:account_id]
+          "9"
+          span [code-text]
+            "account_id"
+            "="
+            "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+        div [code-line:zone_id]
+          "10"
+          span [code-text]
+            "zone_id"
+            "="
+            "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\""
+        div [code-line:updates_domain]
+          "11"
+          span [code-text]
+            "updates_domain"
+            "="
+            "\"updates.example.com\""
+        div [code-line:updates_bucket]
+          "12"
+          span [code-text]
+            "updates_bucket"
+            "="
+            "\"notes-releases\""
+        div [code-line:backup_bucket]
+          "13"
+          span [code-text]
+            "backup_bucket"
+            "="
+            "\"notes-backups\""
+        div [code-line:image]
+          "14"
+          span [code-text]
+            "image"
+            "="
+            "\"ghcr.io/team/notes\""
+        div [code-line:registry]
+          "15"
+          span [code-text]
+            "registry"
+            "="
+            "\"ghcr.io\""
+        div [code-line:registry_username]
+          "16"
+          span [code-text]
+            "registry_username"
+            "="
+            "\"team\""
+        div [code-line]
+          "17"
+          span [code-text]
+        div [code-line]
+          "18"
+          span [code-text]
+            "[infra.services]"
+        div [code-line:services.relay]
+          "19"
+          span [code-text]
+            "relay"
+            "="
+            "true"
+        div [code-line]
+          "20"
+          span [code-text]
+        div [code-line]
+          "21"
+          span [code-text]
+            "[infra.backups]"
+        div [code-line:backups.enabled]
+          "22"
+          span [code-text]
+            "enabled"
+            "="
+            "true"
+        div [code-line:backups.daily]
+          "23"
+          span [code-text]
+            "daily"
+            "="
+            "7"
+        button [copy] label="Copy as TOML"
+          "Copy"
+    div [station:generate]
+      "Generate"
+      "nothing"
+      "A health check reads; it generates nothing."
+    div [station:plan]
+      "Plan"
+      "nothing"
+      "A health check changes nothing, so there's no plan."
+    div [station:apply]
+      "Apply"
+      "the control service's worker"
+      "The control service runs one operation per project at a time, records every step, and keeps going if you close this tab."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "# The worker runs, in a checkout of this project:"
+        div [code-line]
+          "2"
+          span [code-text]
+            "lk"
+            "infra"
+            "status"
+        button [copy] label="Copy as shell"
+          "Copy"
+    div [station:check]
+      "Check"
+      "health checks and backups"
+      "Done means the fleet answers its health checks, not that a command exited."
+      "•"
+      "No health check has run yet."
+      "•"
+      "Backups must be younger than 36 hours, as [infra.backups] max_age_hours says."
+    button [copy-all]
+      "Copy all"
+    a label="Open the infrastructure guide" href=https://leptoskit.dev/docs/guide/24-deploying.html
+      "Open docs"
