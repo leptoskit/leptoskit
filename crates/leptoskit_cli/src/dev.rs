@@ -504,10 +504,10 @@ fn start_watcher(
 	let paths = Arc::new(Mutex::new(Vec::new()));
 
 	let filter = WatchFilter {
-		public: public.clone(),
+		public: resolve_event_path(&public),
 		assets: vec![
-			root.join(&config.build.inputs.web),
-			root.join(&config.build.inputs.assets),
+			resolve_event_path(&root.join(&config.build.inputs.web)),
+			resolve_event_path(&root.join(&config.build.inputs.assets)),
 		],
 		excluded: excluded.clone(),
 		// Each build rewrites the generated modules when their inputs
@@ -516,6 +516,7 @@ fn start_watcher(
 		generated: crate::build::generate_outputs(root, config)?
 			.into_iter()
 			.chain(config.l10n.as_ref().map(|l10n| root.join(&l10n.output)))
+			.map(|generated| resolve_event_path(&generated))
 			.collect(),
 	};
 	let watched_config = config_file.clone();
@@ -1171,11 +1172,51 @@ fn excluded_dirs(
 		metadata.target_directory.clone(),
 		out_dir.to_path_buf(),
 		root.join(".leptoskit"),
+		// The dev build compiles the wasm client into a target directory
+		// under the project root (see
+		// [`crate::build::dev_client_target_dir`]), which a workspace
+		// member has no cargo target directory of its own to cover.
+		// Everything beneath `target/` is build output either way, and
+		// watching it would make every build trigger the next.
+		root.join("target"),
 	];
 	// Gradle keeps its caches and outputs inside the app-owned Android project.
 	let android = crate::native::host_dir(root, crate::native::Target::Android);
 	excluded.extend([".gradle", "build", "app/build", "app/.cxx"].map(|path| android.join(path)));
 	excluded
+		.into_iter()
+		.map(|path| resolve_event_path(&path))
+		.collect()
+}
+
+/// The form filesystem events report `path` in: resolved through symlinks
+/// when the path exists, lexically without `.` and `..` otherwise. The
+/// watcher matches event paths against watched, excluded, and generated
+/// prefixes with `starts_with`, and those reach it in whatever form their
+/// source wrote them — cargo's `target_directory` may carry `..` components
+/// (a shared target directory chosen relative to the workspace), and a
+/// symlinked one resolves to elsewhere entirely. Events always name real
+/// paths, so prefixes are resolved to the same form once, at setup.
+fn resolve_event_path(path: &Path) -> PathBuf {
+	if let Ok(resolved) = path.canonicalize() {
+		return resolved;
+	}
+
+	let mut normalized = PathBuf::new();
+
+	for component in path.components() {
+		match component {
+			std::path::Component::CurDir => {}
+			std::path::Component::ParentDir => {
+				if !normalized.pop() {
+					normalized.push(component);
+				}
+			}
+			component => normalized.push(component.as_os_str()),
+		}
+	}
+
+	normalized
 }
 
 /// Packages an edit can belong to, and which side links each one.
@@ -1447,6 +1488,202 @@ mod tests {
 		assert!(!filter.is_relevant(Path::new("/app/target/debug/app.rs")));
 
 		assert!(!filter.is_relevant(Path::new("/app/dist/pkg/app.wasm")));
+	}
+
+	/// The filter of an app inside a larger workspace: the workspace's own
+	/// target directory is elsewhere, so the only build output under the app
+	/// is `dist/`, `.leptoskit/`, and the dev wasm client's target.
+	fn dev_filter(generated: &[&str]) -> WatchFilter {
+		WatchFilter {
+			public: PathBuf::from("/app/public"),
+			assets: vec![PathBuf::from("/app/web"), PathBuf::from("/app/assets")],
+			excluded: vec![
+				PathBuf::from("/workspace/target"),
+				PathBuf::from("/app/dist"),
+				PathBuf::from("/app/.leptoskit"),
+				PathBuf::from("/app/target"),
+			],
+			generated: generated.iter().map(PathBuf::from).collect(),
+		}
+	}
+
+	#[test]
+	fn build_outputs_and_service_data_never_trigger_a_rebuild() {
+		let filter = dev_filter(&[]);
+
+		for path in [
+			// The wasm client's target directory, rewritten on every build.
+			"/app/target/leptoskit-dev-wasm/wasm32-unknown-unknown/leptoskit-dev/app.wasm",
+			"/app/target/leptoskit-dev-wasm/wasm32-unknown-unknown/leptoskit-dev/app.js",
+			"/app/target/leptoskit-dev-wasm/CACHEDIR.TAG",
+			// The site the build writes.
+			"/app/dist/pkg/app.js",
+			"/app/dist/index.html",
+			"/app/dist/style.css",
+			// What the running app and its services write: the devtools
+			// hub's state and the service's SQLite database, journal
+			// included.
+			"/app/.leptoskit/devtools.json",
+			"/app/.leptoskit/services/analytics/analytics.sqlite3",
+			"/app/.leptoskit/services/analytics/analytics.sqlite3-wal",
+			"/app/.leptoskit/services/analytics/analytics.sqlite3-shm",
+			// The workspace's shared target directory, outside the app here.
+			"/workspace/target/leptoskit/services-0123456789abcdef.json",
+			"/workspace/target/debug/analytics_app",
+		] {
+			assert!(
+				!filter.is_relevant(Path::new(path)),
+				"{path} woke the watcher"
+			);
+		}
+
+		for path in [
+			"/app/src/app.rs",
+			"/app/src/lib.rs",
+			"/app/Cargo.toml",
+			"/app/leptoskit.toml",
+			"/app/public/style.css",
+			"/workspace/Cargo.toml",
+		] {
+			assert!(
+				filter.is_relevant(Path::new(path)),
+				"{path} did not wake the watcher"
+			);
+		}
+	}
+
+	#[test]
+	fn event_paths_resolve_through_symlinks_and_dotdot() {
+		let temporary = tempfile::tempdir().unwrap();
+		std::fs::create_dir_all(temporary.path().join("real/dist")).unwrap();
+
+		assert_eq!(
+			resolve_event_path(&temporary.path().join("real/./dist/../dist")),
+			temporary.path().join("real/dist").canonicalize().unwrap(),
+			"an existing path resolves like the events that name it"
+		);
+		assert_eq!(
+			resolve_event_path(&temporary.path().join("missing/../real/dist")),
+			temporary.path().join("real/dist"),
+			"a path that is not there yet normalises without one"
+		);
+
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::symlink;
+			symlink(temporary.path().join("real"), temporary.path().join("link")).unwrap();
+			assert_eq!(
+				resolve_event_path(&temporary.path().join("link/dist")),
+				temporary.path().join("real/dist").canonicalize().unwrap(),
+				"a symlinked path resolves to the tree the events name"
+			);
+		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn excluded_dirs_resolve_to_the_form_events_use_and_cover_the_dev_wasm_target() {
+		use std::os::unix::fs::symlink;
+
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path().join("app");
+		let real_target = temporary.path().join("shared/target");
+		std::fs::create_dir_all(&root).unwrap();
+		std::fs::create_dir_all(&real_target).unwrap();
+		symlink(
+			temporary.path().join("shared"),
+			temporary.path().join("link"),
+		)
+		.unwrap();
+		// A shared target directory chosen relative to the workspace arrives
+		// carrying `..` and, here, a symlink: the form no event ever uses.
+		let metadata = crate::wasm::CargoMetadata {
+			packages: Vec::new(),
+			target_directory: root.join("..").join("link/target"),
+			workspace_root: root.clone(),
+		};
+
+		let excluded = excluded_dirs(&root, &metadata, &root.join("dist"));
+
+		// The resolved form is what events name (`/var` is `/private/var`
+		// here), so compare against it.
+		let real_target = real_target.canonicalize().unwrap();
+		assert_eq!(excluded[0], real_target, "the target directory resolves");
+		for path in [
+			real_target.join("debug/gen.rs"),
+			real_target.join("wasm32-unknown-unknown/debug/app.wasm"),
+			// The dev wasm target a build leaves under the app, and the
+			// app's own output and state.
+			root.join("target/leptoskit-dev-wasm/wasm32-unknown-unknown/leptoskit-dev/app.wasm"),
+			root.join("dist/index.html"),
+			root.join(".leptoskit/services/analytics/analytics.sqlite3"),
+		] {
+			assert!(
+				excluded.iter().any(|dir| path.starts_with(dir)),
+				"{} is excluded: {excluded:?}",
+				path.display()
+			);
+		}
+	}
+
+	#[test]
+	fn excluded_dirs_normalize_a_missing_target_directory_and_cover_the_dev_wasm_target() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path().join("app");
+		std::fs::create_dir_all(&root).unwrap();
+		let metadata = crate::wasm::CargoMetadata {
+			packages: Vec::new(),
+			// The first run: the target directory is reported with `..`,
+			// and nothing is there yet to resolve.
+			target_directory: root.join("..").join("shared/target"),
+			workspace_root: root.clone(),
+		};
+
+		let excluded = excluded_dirs(&root, &metadata, &root.join("dist"));
+
+		assert_eq!(excluded[0], temporary.path().join("shared/target"));
+		for path in [
+			root.join("target/leptoskit-dev-wasm/wasm32-unknown-unknown/leptoskit-dev/app.wasm"),
+			root.join("dist/index.html"),
+			root.join(".leptoskit/services/analytics/analytics.sqlite3"),
+		] {
+			assert!(
+				excluded.iter().any(|dir| path.starts_with(dir)),
+				"{} is excluded: {excluded:?}",
+				path.display()
+			);
+		}
+	}
+
+	#[test]
+	fn watching_skips_the_dev_wasm_target_a_previous_build_left_behind() {
+		let temporary = tempfile::tempdir().unwrap();
+		let root = temporary.path();
+		std::fs::create_dir_all(root.join("src")).unwrap();
+		std::fs::create_dir_all(
+			root.join("target/leptoskit-dev-wasm/wasm32-unknown-unknown/leptoskit-dev"),
+		)
+		.unwrap();
+		let excluded = vec![
+			root.join("target"),
+			root.join("dist"),
+			root.join(".leptoskit"),
+		];
+
+		let mut watcher = RecordingWatcher {
+			watched: Vec::new(),
+		};
+		let mut recursive = Vec::new();
+		watch_tree(&mut watcher, root, &excluded, &mut recursive).unwrap();
+		assert_eq!(recursive, [root.join("src")]);
+		assert!(
+			!watcher
+				.watched
+				.iter()
+				.any(|(path, _)| path.starts_with(root.join("target"))),
+			"the dev wasm target tree is watched: {:?}",
+			watcher.watched
+		);
 	}
 
 	#[test]

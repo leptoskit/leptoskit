@@ -493,9 +493,17 @@ fn apply_dev_profile(
 	*client_options = std::mem::take(client_options).with_dev_profile();
 
 	if client_options.target_directory.is_none() {
-		client_options.target_directory =
-			Some(root.join("target/leptoskit-dev-wasm").into_std_path_buf());
+		client_options.target_directory = Some(dev_client_target_dir(root.as_std_path()));
 	}
+}
+
+/// Where the dev build compiles the wasm client: a target directory of the
+/// project's own, under its root, because the client and the server build in
+/// parallel and must not share a cargo lock. A workspace member has no
+/// target directory of its own, so this is the only mark the build leaves
+/// under the project — and the dev watcher has to know it is output.
+pub(crate) fn dev_client_target_dir(root: &Path) -> PathBuf {
+	root.join("target/leptoskit-dev-wasm")
 }
 
 /// Binds a wasm artifact when this edit compiled one.
