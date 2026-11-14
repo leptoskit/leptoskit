@@ -17,8 +17,9 @@
 //! `env(safe-area-inset-*)`, which needs `viewport-fit=cover`; native hosts
 //! supply [`StyleContext::safe_area`].
 //! `sm`/`md`/`lg`/`xl`/`2xl`, their `max-*` counterparts, arbitrary pixel
-//! widths (`min-[968px]`, `max-[968px]`), `dark`, `active`, `starting` (the
-//! look a widget enters from, as CSS `@starting-style`), and trailing `!`
+//! widths (`min-[968px]`, `max-[968px]`), `dark`, `active`, `hover`,
+//! `starting` (the look a widget enters from, as CSS `@starting-style`),
+//! and trailing `!`
 //! (or the older leading `!`) are supported. Dark mode follows the system
 //! preference on the web unless the document's root element carries
 //! `data-lk-appearance="light"` or `"dark"`, which
@@ -26,7 +27,18 @@
 //! supply [`StyleContext::dark`]. `active`
 //! styles an enabled control while it is held down: CSS `:active` on the web,
 //! and [`StyleContext::active`] on native, which the surface sets for the
-//! control the user is pressing.
+//! control the user is pressing. `hover` styles an element while a mouse
+//! pointer rests over it, on the web only (CSS `:hover` behind
+//! `@media (hover:hover)`, so touch screens never keep it); native hosts
+//! accept the class and never apply it, so hover may only change colors,
+//! opacity, and the cursor: polish, never layout or meaning.
+//!
+//! Some text utilities are web-only polish, accepted everywhere so one class
+//! string serves every platform: `font-sans`, `font-serif`, `font-mono`,
+//! and `font-[var(--name)]` (a family from a theme variable); `tabular-nums`
+//! and `normal-nums`; `truncate` (one line with an ellipsis); `tracking-*`;
+//! and `cursor-*`. Native text keeps the system face, proportional digits,
+//! wrapping, and normal spacing, and native hosts draw their own pointer.
 //!
 //! Classes have deterministic stylesheet precedence, independent of their
 //! input order: base rules precede conditional rules, larger minimum widths
@@ -162,11 +174,18 @@ struct Rule {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+	clippy::struct_excessive_bools,
+	reason = "each variant is an independent condition a class may combine with the others"
+)]
 struct Conditions {
 	min_width: Option<u16>,
 	max_width: Option<u16>,
 	dark: bool,
 	active: bool,
+	/// `hover:`, while a mouse pointer rests over the element. The web
+	/// only: native hosts never apply it.
+	hover: bool,
 	/// `starting:`, the look a widget enters from, as CSS
 	/// `@starting-style`. It never applies on its own.
 	starting: bool,
@@ -402,6 +421,13 @@ impl Rule {
 			wrappers += 1;
 		}
 
+		// Touch screens report a hover after a tap and keep it; only a
+		// pointer that can rest over the element hovers.
+		if conditions.hover {
+			css.push_str("@media (hover:hover){");
+			wrappers += 1;
+		}
+
 		if let Some(min) = conditions.min_width {
 			let _ = write!(css, "@media (width>={}rem){{", f32::from(min) / 16.0);
 			wrappers += 1;
@@ -426,6 +452,10 @@ impl Rule {
 		// Disabled links render without an `href`, which browsers would
 		// still mark `:active` under the pointer; native controls never
 		// press while disabled.
+		if conditions.hover {
+			css.push_str(":hover:not([aria-disabled=true])");
+		}
+
 		if conditions.active {
 			css.push_str(":active:not([aria-disabled=true])");
 		}
@@ -464,6 +494,11 @@ impl Rule {
 				continue;
 			}
 
+			if variant == "hover" {
+				conditions.hover = true;
+				continue;
+			}
+
 			if let Some(name) = variant.strip_prefix("max-") {
 				let breakpoint =
 					breakpoint(name).ok_or_else(|| format!("unsupported variant `{variant}`"))?;
@@ -499,6 +534,18 @@ impl Rule {
 		let utility = utility.strip_suffix('!').unwrap_or(utility);
 		let (order, declarations) = utility::parse(utility)?;
 
+		// Native hosts never hover, so a hover may change how an element
+		// looks but never its layout or anything a reader would miss.
+		if conditions.hover
+			&& !declarations.iter().all(|declaration| {
+				matches!(
+					declaration,
+					Declaration::Color(..) | Declaration::Opacity(_) | Declaration::Cursor(_)
+				)
+			}) {
+			return Err("`hover` may only change colors, opacity, and the cursor".to_owned());
+		}
+
 		Ok(Self {
 			class: class.to_owned(),
 			conditions,
@@ -508,11 +555,12 @@ impl Rule {
 		})
 	}
 
-	fn precedence(&self) -> (bool, bool, bool, bool, u16, Reverse<u16>, u16, &str) {
+	fn precedence(&self) -> (bool, bool, bool, bool, bool, u16, Reverse<u16>, u16, &str) {
 		(
 			self.important,
 			self.conditions.starting,
 			self.conditions.active,
+			self.conditions.hover,
 			self.conditions.dark,
 			self.conditions.min_width.unwrap_or(0),
 			Reverse(self.conditions.max_width.unwrap_or(u16::MAX)),
@@ -530,7 +578,8 @@ impl Conditions {
 	/// Whether the rule applies when a widget is entering: the rule's other
 	/// conditions hold, whether or not it is a `starting:` rule.
 	fn active_when_starting(self, context: &StyleContext) -> bool {
-		(!self.dark || context.dark)
+		!self.hover
+			&& (!self.dark || context.dark)
 			&& (!self.active || context.active)
 			&& self
 				.min_width
@@ -658,6 +707,7 @@ fn variant(conditions: &Conditions) -> Option<String> {
 		parts.push("active".to_owned());
 	}
 
+	// `hover:` rules never reach here either: no native host applies them.
 	// `starting:` rules never reach here: they apply only while a widget
 	// enters, so `explain` leaves them out.
 	(!parts.is_empty()).then(|| parts.join(", "))

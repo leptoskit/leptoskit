@@ -570,8 +570,9 @@ fn unsupported_syntax_and_inactive_utilities_are_errors() {
 		"border-x-red-500",
 		"overflow-x-hidden",
 		"hover:p-4",
+		"hover:translate-x-1",
 		"focus:bg-black",
-		"active:hover:bg-black",
+		"group-hover:bg-black",
 		"active:",
 		"dark:md:made-up",
 		"2xl:shadow-lg",
@@ -1448,4 +1449,30 @@ fn theme_lengths_parse_and_install_without_losing_their_unit() {
 	let error = Theme::install_maps(&BTreeMap::new(), &bad_length).unwrap_err();
 	assert!(error.contains("theme.lengths.gap"), "{error}");
 	Theme::clear();
+}
+
+#[test]
+fn web_only_utilities_parse_everywhere_and_leave_native_unchanged() {
+	let classes = "font-mono font-[var(--admin-font-note)] tabular-nums truncate tracking-wide \
+	               cursor-pointer hover:bg-black hover:opacity-50";
+	let (style, props) = resolve(classes);
+	assert_eq!(style, Style::default());
+	assert_eq!(props, NativeProps::default());
+
+	// Held or not, dark or light, native hosts never hover.
+	let mut style = Style::default();
+	let mut props = NativeProps::default();
+	Tailwind::parse("p-2 hover:bg-black active:p-8")
+		.unwrap()
+		.apply(
+			&mut style,
+			&mut props,
+			&StyleContext {
+				dark: true,
+				active: true,
+				..StyleContext::default()
+			},
+		);
+	assert_eq!(style.padding.top, Dimension::Points(32.0));
+	assert_eq!(props.background, None);
 }

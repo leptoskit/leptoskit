@@ -149,6 +149,53 @@ pub(super) enum Declaration {
 	Opacity(f32),
 	/// A transform or animation utility.
 	Motion(super::motion::Motion),
+	/// A typeface family, from `font-sans`, `font-serif`, `font-mono`, or a
+	/// theme variable (`font-[var(--name)]`). The web only: native text keeps
+	/// the platform's system face.
+	FontFamily(FontFamily),
+	/// Whether digits share one width (`tabular-nums`) or keep the font's
+	/// proportional widths (`normal-nums`). The web only.
+	TabularNumbers(bool),
+	/// `truncate`: one line, clipped with an ellipsis. The web only; native
+	/// labels wrap as before.
+	Truncate,
+	/// Letter spacing, in ems, from `tracking-*`. The web only.
+	Tracking(f32),
+	/// The mouse pointer over the element, from `cursor-*`. The web only:
+	/// native platforms draw their own pointer.
+	Cursor(&'static str),
+}
+
+/// A typeface family a `font-*` utility names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FontFamily {
+	/// The platform's interface face.
+	Sans,
+	/// A serif face.
+	Serif,
+	/// A monospaced face.
+	Mono,
+	/// A face named by a theme variable, such as `--admin-font-note`.
+	Var(String),
+}
+
+impl FontFamily {
+	/// The CSS `font-family` value, with Tailwind's default stacks.
+	fn css(&self) -> String {
+		match self {
+			Self::Sans => {
+				"ui-sans-serif,system-ui,sans-serif,\"Apple Color Emoji\",\"Segoe UI Emoji\""
+					.to_owned()
+			}
+			Self::Serif => "ui-serif,Georgia,Cambria,\"Times New Roman\",Times,serif".to_owned(),
+			Self::Mono => {
+				"ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",\"Courier \
+				 New\",monospace"
+					.to_owned()
+			}
+			Self::Var(name) => format!("var({name})"),
+		}
+	}
 }
 
 /// A `leading-*` value: a multiple of the font size, or a length.
@@ -637,6 +684,25 @@ impl Declaration {
 			}
 			Self::Opacity(value) => write(output, important, "opacity", &value.to_string()),
 			Self::Motion(motion) => motion.css(output, important),
+			Self::FontFamily(family) => write(output, important, "font-family", &family.css()),
+			Self::TabularNumbers(tabular) => {
+				write(
+					output,
+					important,
+					"font-variant-numeric",
+					if *tabular { "tabular-nums" } else { "normal" },
+				);
+			}
+			Self::Truncate => {
+				// Web text is a flex container, whose text never ellipsizes,
+				// so a truncated element flows as a block.
+				write(output, important, "display", "block");
+				write(output, important, "overflow", "hidden");
+				write(output, important, "text-overflow", "ellipsis");
+				write(output, important, "white-space", "nowrap");
+			}
+			Self::Tracking(ems) => write(output, important, "letter-spacing", &format!("{ems}em")),
+			Self::Cursor(cursor) => write(output, important, "cursor", cursor),
 			_ => {}
 		}
 	}
