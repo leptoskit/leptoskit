@@ -282,6 +282,71 @@ pub struct Session {
 	pub os: String,
 }
 
+/// Bumped by the batch writer at most once per `refresh_seconds`, so live
+/// insights re-run as events arrive without the `events` table being live,
+/// which would write every event twice (§10 "Live, without melting").
+/// Insight queries name what they read, this row among it, so the live
+/// layer re-runs each watched one at most once per tick.
+#[table(name = "ingest_ticks", live)]
+pub struct IngestTick {
+	/// Always 1: one row per service database.
+	#[db(key)]
+	pub id: i64,
+	/// When the tick was written.
+	pub at: Timestamp,
+	/// How many events the batches since the last tick stored.
+	pub events: i64,
+}
+
+/// A saved insight: a query, named, with who made it (§10). The query is
+/// [`query::Query`](crate::query::Query) as JSON, so the engine reads it
+/// and the admin's insight builder edits it.
+#[table(name = "insights", index(created_at))]
+pub struct Insight {
+	#[db(key)]
+	pub id: Uuid,
+	#[db(min_len = 1, max_len = 200)]
+	pub name: String,
+	#[db(max_len = 2_000)]
+	pub description: String,
+	/// The query, as [`crate::query::Query`]'s JSON.
+	pub query: String,
+	/// Who created it, as the app's server names the acting admin.
+	#[db(max_len = 200)]
+	pub created_by: String,
+	pub created_at: Timestamp,
+	pub updated_at: Timestamp,
+}
+
+/// One tile of a [`Dashboard`]: an insight, placed on the grid.
+#[derive(
+	Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct Tile {
+	/// The [`Insight`] the tile shows.
+	pub insight: Uuid,
+	/// The tile's place on the grid, in grid units, from the top left.
+	pub x: u16,
+	pub y: u16,
+	pub w: u16,
+	pub h: u16,
+}
+
+/// A dashboard: named tiles over insights, in the order the admin placed
+/// them (§10). A default "Web overview" dashboard is data, not a
+/// hard-coded screen: the app creates one when it wants one.
+#[table(name = "dashboards", index(created_at))]
+pub struct Dashboard {
+	#[db(key)]
+	pub id: Uuid,
+	#[db(min_len = 1, max_len = 200)]
+	pub name: String,
+	/// The tiles, as [`Tile`]s in a JSON array, in placement order.
+	pub tiles: String,
+	pub created_at: Timestamp,
+	pub updated_at: Timestamp,
+}
+
 leptoskit_db::export_schema!();
 
 /// Every migration, embedded for the service to apply when it starts.
