@@ -386,12 +386,13 @@ pub fn person_of_events() -> &'static str {
 	 \"events\".\"distinct_id\"))"
 }
 
-/// The sessions table's person, through the same overrides.
+/// The sessions table's person, through the same overrides. Sessions
+/// queries read `FROM "sessions" "s"`, so the alias is `s`.
 #[must_use]
 pub fn person_of_sessions() -> String {
 	person_of_events()
-		.replace("\"events\".\"distinct_id\"", "\"sessions\".\"distinct_id\"")
-		.replace("\"events\".\"person_id\"", "\"sessions\".\"person_id\"")
+		.replace("\"events\".\"distinct_id\"", "\"s\".\"distinct_id\"")
+		.replace("\"events\".\"person_id\"", "\"s\".\"person_id\"")
 }
 
 /// How a trend counts events.
@@ -421,17 +422,15 @@ fn event_where(
 	event: Option<&str>,
 	test_accounts: Option<&TestAccounts>,
 ) -> Result<String, PlanError> {
-	let mut parts = vec![
-		format!(
-			r#""events"."timestamp" >= {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-		format!(
-			r#""events"."timestamp" < {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-	];
+	let mut parts = vec![format!(
+		r#""events"."timestamp" >= {}"#,
+		sql.placeholder(args.len() + 1)
+	)];
 	args.push(Value::Timestamp(range.from));
+	parts.push(format!(
+		r#""events"."timestamp" < {}"#,
+		sql.placeholder(args.len() + 1)
+	));
 	args.push(Value::Timestamp(range.to));
 
 	if let Some(event) = event {
@@ -659,12 +658,18 @@ fn trends_statement(
 	label: &str,
 ) -> Result<Statement, PlanError> {
 	let mut args = Vec::new();
+	// An empty series name counts every event.
+	let event = if series.event.is_empty() {
+		None
+	} else {
+		Some(series.event.as_str())
+	};
 	let where_clause = event_where(
 		sql,
 		&mut args,
 		when,
 		&query.filters,
-		Some(&series.event),
+		event,
 		query.test_accounts.as_ref(),
 	)?;
 	args.push(shift_arg(sql.dialect, when));
@@ -912,10 +917,10 @@ fn web_stats_statement(
 	let mut args = Vec::new();
 	let where_clause = session_where(sql, &mut args, when, filters)?;
 	let sql_text = format!(
-		"SELECT count(*) AS \"sessions\", sum(\"sessions\".\"pageview_count\") AS \"pageviews\", \
-		 count(distinct coalesce({person}, \"sessions\".\"distinct_id\")) AS \"visitors\", \
-		 sum(CASE WHEN \"sessions\".\"is_bounce\" THEN 1 ELSE 0 END) AS \"bounces\", \
-		 sum(\"sessions\".\"duration_ms\") AS \"duration\" FROM \"sessions\" WHERE {where_clause}",
+		"SELECT count(*) AS \"sessions\", sum(\"s\".\"pageview_count\") AS \"pageviews\", \
+		 count(distinct coalesce({person}, \"s\".\"distinct_id\")) AS \"visitors\", sum(CASE WHEN \
+		 \"s\".\"is_bounce\" THEN 1 ELSE 0 END) AS \"bounces\", sum(\"s\".\"duration_ms\") AS \
+		 \"duration\" FROM \"sessions\" \"s\" WHERE {where_clause}",
 		person = person_of_sessions()
 	);
 	Ok(Statement::new(label.to_owned(), sql_text, args))
@@ -980,8 +985,9 @@ fn web_plan(sql: &DialectSql, query: &WebQuery, now: Timestamp) -> Result<Plan, 
 	.iter()
 	.map(|column| {
 		format!(
-			"SELECT '{column}' AS \"dimension\", \"{column}\" AS \"value\", count(*) AS \"count\" \
-			 FROM \"sessions\" WHERE {arm_where} AND \"{column}\" <> '' GROUP BY \"{column}\""
+			"SELECT '{column}' AS \"dimension\", \"s\".\"{column}\" AS \"value\", count(*) AS \
+			 \"count\" FROM \"sessions\" \"s\" WHERE {arm_where} AND \"s\".\"{column}\" <> '' \
+			 GROUP BY \"s\".\"{column}\""
 		)
 	})
 	.collect();
@@ -1011,17 +1017,15 @@ fn session_where(
 	range: &Range,
 	filters: &[PropertyFilter],
 ) -> Result<String, PlanError> {
-	let mut parts = vec![
-		format!(
-			r#""sessions"."first_timestamp" >= {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-		format!(
-			r#""sessions"."first_timestamp" < {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-	];
+	let mut parts = vec![format!(
+		r#""s"."first_timestamp" >= {}"#,
+		sql.placeholder(args.len() + 1)
+	)];
 	args.push(Value::Timestamp(range.from));
+	parts.push(format!(
+		r#""s"."first_timestamp" < {}"#,
+		sql.placeholder(args.len() + 1)
+	));
 	args.push(Value::Timestamp(range.to));
 	for filter in filters {
 		let key = checked_property(&filter.key)?;
@@ -1063,17 +1067,15 @@ fn session_where(
 fn events_plan(sql: &DialectSql, query: &EventsQuery, now: Timestamp) -> Result<Plan, PlanError> {
 	let range = resolve_range(&query.range, now)?;
 	let mut args = Vec::new();
-	let mut parts = vec![
-		format!(
-			r#""events"."timestamp" >= {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-		format!(
-			r#""events"."timestamp" < {}"#,
-			sql.placeholder(args.len() + 1)
-		),
-	];
+	let mut parts = vec![format!(
+		r#""events"."timestamp" >= {}"#,
+		sql.placeholder(args.len() + 1)
+	)];
 	args.push(Value::Timestamp(range.from));
+	parts.push(format!(
+		r#""events"."timestamp" < {}"#,
+		sql.placeholder(args.len() + 1)
+	));
 	args.push(Value::Timestamp(range.to));
 	if let Some(event) = query.event.as_deref() {
 		if event.is_empty() || event.len() > 200 {
@@ -1110,11 +1112,13 @@ fn events_plan(sql: &DialectSql, query: &EventsQuery, now: Timestamp) -> Result<
 		query.columns.as_slice()
 	};
 	// The timestamp and the uuid always come first, for the order and the
-	// cursor, whatever columns the page asks to show.
+	// cursor, whatever columns the page asks to show; the page's own
+	// column list skips them, since they ride along anyway.
 	let selected = format!(
 		"\"events\".\"timestamp\", \"events\".\"uuid\"{}",
 		columns
 			.iter()
+			.filter(|column| !matches!(column, EventColumn::Uuid | EventColumn::Timestamp))
 			.map(|column| format!(", {}", column_expression(sql, *column)))
 			.collect::<Vec<_>>()
 			.join("")
@@ -1195,21 +1199,28 @@ fn actors_plan(sql: &DialectSql, query: &ActorsQuery, now: Timestamp) -> Result<
 	let range = resolve_range(&trends.range, now)?;
 	let label = range.wall(range.utc(bucket)?);
 	let mut args = Vec::new();
+	// An empty series name counts every event, as trends do.
+	let event = if series.event.is_empty() {
+		None
+	} else {
+		Some(series.event.as_str())
+	};
 	let where_clause = event_where(
 		sql,
 		&mut args,
 		&range,
 		&trends.filters,
-		Some(series.event.as_str()),
+		event,
 		trends.test_accounts.as_ref(),
 	)?;
 	args.push(shift_arg(sql.dialect, &range));
 	let bucket_expression = sql.bucket(trends.interval, args.len())?;
 	args.push(Value::Text(label));
 	let bucket_condition = format!("{bucket_expression} = {}", sql.placeholder(args.len()));
-	let mut bucket_sql = format!(
-		"SELECT DISTINCT {0} AS \"person\" FROM \"events\" WHERE {where_clause} AND \
-		 {bucket_condition} AND {0} IS NOT NULL LIMIT {MAX_ROWS}",
+	// Every condition joins before the LIMIT, so the breakdown's bound
+	// lands inside the read, not after it.
+	let mut conditions = format!(
+		"{where_clause} AND {bucket_condition} AND {0} IS NOT NULL",
 		person_of_events()
 	);
 	if let Some(value) = breakdown_value {
@@ -1228,11 +1239,15 @@ fn actors_plan(sql: &DialectSql, query: &ActorsQuery, now: Timestamp) -> Result<
 				}
 			}
 		});
-		bucket_sql.push_str(&format!(
+		conditions.push_str(&format!(
 			" AND {expression} = {}",
 			sql.placeholder(args.len())
 		));
 	}
+	let bucket_sql = format!(
+		"SELECT DISTINCT {0} AS \"person\" FROM \"events\" WHERE {conditions} LIMIT {MAX_ROWS}",
+		person_of_events()
+	);
 	Ok(Plan::Actors(Statement::new(
 		"actors in bucket",
 		bucket_sql,

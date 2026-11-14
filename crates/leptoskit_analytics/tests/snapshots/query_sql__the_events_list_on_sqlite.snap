@@ -1,0 +1,6 @@
+---
+source: crates/leptoskit_analytics/tests/query_sql.rs
+expression: "sql_of(&query, Dialect::Sqlite)"
+---
+-- events page
+SELECT "events"."timestamp", "events"."uuid", "events"."name", "events"."distinct_id" FROM "events" WHERE "events"."timestamp" >= ?1 AND "events"."timestamp" < ?2 AND "events"."name" = ?3 AND (json_extract("events"."properties", ?4)) = ?5 AND ("events"."timestamp", "events"."uuid") < (?6, ?7) ORDER BY "events"."timestamp" DESC, "events"."uuid" DESC LIMIT 51

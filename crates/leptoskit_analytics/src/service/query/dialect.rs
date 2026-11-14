@@ -473,8 +473,11 @@ impl DialectSql {
 					crate::query::Interval::Month => "%Y-%m-01T00:00:00",
 					crate::query::Interval::Week => "%Y-%m-%dT00:00:00",
 				};
+				// The Monday that starts the week: step back six days,
+				// then forward to the next-or-same Monday, which lands on
+				// the week's own Monday whatever day it was.
 				let week = if interval == crate::query::Interval::Week {
-					", 'weekday 1', '-7 days'"
+					", '-6 days', 'weekday 1'"
 				} else {
 					""
 				};
