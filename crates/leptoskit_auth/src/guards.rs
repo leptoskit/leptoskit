@@ -13,6 +13,7 @@
 use leptos::prelude::use_context;
 use leptoskit_db::Db;
 
+use crate::Auth;
 use crate::AuthError;
 use crate::CurrentSession;
 use crate::SignedIn;
@@ -82,6 +83,38 @@ pub fn require_step_up(window: std::time::Duration) -> Result<SignedIn, AuthErro
 /// As [`current_session`].
 pub fn request_db() -> Result<Db, AuthError> {
 	extension()
+}
+
+/// The signed-in person with `role`, for a server function that only they
+/// may call:
+///
+/// ```ignore
+/// #[server]
+/// pub async fn admin_dashboard() -> Result<Dashboard, ServerFnError> {
+/// 	let me = auth::require_role("admin")?;
+/// 	// …
+/// }
+/// ```
+///
+/// # Errors
+///
+/// [`AuthError::SignedOut`] for a signed-out request,
+/// [`AuthError::NotAllowed`] for an account without the role, or as
+/// [`signed_in`] and [`Auth::roles`](crate::Auth::roles) fail. Roles are
+/// read on every call, so a role taken away during a session applies at
+/// once.
+///
+/// [`Auth::roles`]: crate::Auth::roles
+pub async fn require_role(role: &str) -> Result<SignedIn, AuthError> {
+	let me = require_signed_in()?;
+	let auth: Auth = extension()?;
+	let roles = auth.roles(me.account).await?;
+
+	if roles.iter().any(|known| known == role) {
+		Ok(me)
+	} else {
+		Err(AuthError::NotAllowed)
+	}
 }
 
 pub(crate) fn extension<T: Clone + Send + Sync + 'static>() -> Result<T, AuthError> {

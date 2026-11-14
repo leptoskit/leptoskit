@@ -153,6 +153,9 @@ impl ApiProfile {
 			name: text(&profile, self.name),
 			preferred_username: text(&profile, self.username),
 			picture: text(&profile, self.picture),
+			// Its API's whole answer isn't kept: only what the profile
+			// points at is.
+			claims: None,
 			grant: None,
 		})
 	}

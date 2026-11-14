@@ -695,6 +695,25 @@ let repositories = client
 - Disconnecting the provider, merging its account into another, or `auth.delete_account(account, &request)` deletes the tokens, and revokes them at providers that let apps do that: Google, Apple, X, Discord, LinkedIn, GitLab, Twitch, Reddit, Zoom, TikTok, Yahoo, and any OpenID Connect provider whose discovery document names a `revocation_endpoint`. Apple asks apps to revoke its tokens when someone deletes their account.
 - It runs on the server only; the client functions never see the tokens, on any platform.
 
+A provider configured with `userinfo = true` (OpenID Connect issuers only) fetches `/userinfo` with the access token right after the code exchange, checks its `sub` against the ID token's, and makes the merged claims available to your [`SignInGate`](#who-may-sign-in). For an issuer that releases roles or other claims about a person only there — such as your own site, signing an admin app in.
+
+### Who may sign in
+
+Some apps shouldn't take sign-ins except through your main site, and some shouldn't take them from everyone. `[auth] methods` names the ways people may sign in:
+
+```toml
+[auth]
+methods = [
+	"oidc:main",
+] # or "email", "password", "passkey", "wallet", or a provider's id
+```
+
+Everything not named is off: its routes answer 404, and the sign-in pages read none of it. Leave `methods` out to keep every way on, which is the default.
+
+To refuse people rather than methods — an admin app that only your admins may enter — register `AuthBuilder::gate(AdminGate)`, whose `SignInGate::check(&tx, &attempt)` sees the method, the provider's subject, and the provider's claims (`attempt.roles()` reads the `roles` claim your own site releases through `leptoskit_idp`), on the sign-in's own transaction. A refusal makes no session and no account, and the sign-in page gets the `not_allowed` error code. [An admin app that signs in through yours](25-sign-in-with-your-app.md#use-your-sites-sign-in-for-an-admin-app) puts all of this together.
+
+For pages and functions only some roles may use, guard with `auth::require_role("admin")?` in a server function, extract `auth::WithRole<Admin>` in an axum handler, or call `auth.require_role(&me, "admin").await?`. Roles are read on every call through the `Roles` hook, so a role taken away applies at once.
+
 ### On every platform
 
 | Platform                 | Third-party sign-in                                                                                                                                    |

@@ -10,6 +10,7 @@
 
 use std::fmt::Write;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Context as TaskContext;
@@ -195,6 +196,11 @@ impl Auth {
 	/// | `POST /auth/wallets/unlink`          | unlinks one ([`UnlinkWallet`])                      |
 	/// | `POST /auth/wallets/sign-in/…`       | signs in: `options`, then it ([`WalletSignIn`])     |
 	///
+	/// The routes a way to sign in needs exist only while
+	/// [`AuthBuilder::sign_in_methods`](crate::AuthBuilder::sign_in_methods)
+	/// allows that way: everything else answers 404, and the pages
+	/// discover none of it. Without it, every route is here.
+	///
 	/// In development,
 	/// [`AuthBuilder::dev_mailbox`](crate::AuthBuilder::dev_mailbox)
 	/// adds `GET /_leptoskit/mail`, and
@@ -204,9 +210,12 @@ impl Auth {
 	where
 		S: Clone + Send + Sync + 'static,
 	{
+		let email = self.allows_method("email");
+		let password = self.allows_method("password");
+		let passkey = self.allows_method("passkey");
+		let wallet = self.allows_method("wallet");
+
 		let mut router = Router::new()
-			.route("/auth/email/send", post(send_code))
-			.route("/auth/email/verify", post(verify_code))
 			.route("/auth/session", get(session))
 			.route("/auth/refresh", post(refresh))
 			.route("/auth/sign-out", post(sign_out))
@@ -221,34 +230,78 @@ impl Auth {
 			.route("/auth/totp/confirm", post(confirm_totp))
 			.route("/auth/totp/disable", post(disable_totp))
 			.route("/auth/recovery-codes", post(recovery_codes))
-			.route("/auth/password/config", get(password_settings))
-			.route("/auth/password/sign-in", post(password_sign_in))
-			.route("/auth/password/reset", post(reset_password))
-			.route("/auth/password", post(set_password))
-			.route("/auth/password/remove", post(remove_password))
-			.route(
-				"/auth/passkey/sign-in/options",
-				post(passkey_sign_in_options),
-			)
-			.route("/auth/passkey/sign-in", post(passkey_sign_in))
-			.route(
-				"/auth/passkey/second-factor/options",
-				post(passkey_second_factor_options),
-			)
-			.route("/auth/passkey/second-factor", post(passkey_second_factor))
-			.route(
-				"/auth/passkey/step-up/options",
-				post(passkey_step_up_options),
-			)
-			.route("/auth/passkey/step-up", post(passkey_step_up))
-			.route(
-				"/auth/passkey/register/options",
-				post(passkey_register_options),
-			)
-			.route("/auth/passkey/register", post(passkey_register))
-			.route("/auth/passkeys", get(passkeys))
-			.route("/auth/passkeys/rename", post(rename_passkey))
-			.route("/auth/passkeys/remove", post(remove_passkey))
+			.route("/auth/merge", get(merge_offer).post(merge_accounts))
+			.route("/auth/merge/passkey/options", post(merge_passkey_options))
+			.route("/auth/merge/cancel", post(cancel_merge));
+
+		if email {
+			router = router
+				.route("/auth/email/send", post(send_code))
+				.route("/auth/email/verify", post(verify_code));
+		}
+
+		if password {
+			router = router
+				.route("/auth/password/config", get(password_settings))
+				.route("/auth/password/sign-in", post(password_sign_in))
+				.route("/auth/password", post(set_password))
+				.route("/auth/password/remove", post(remove_password));
+		}
+
+		// A reset proves the address with an emailed code, so it needs both.
+		if email && password {
+			router = router.route("/auth/password/reset", post(reset_password));
+		}
+
+		if passkey {
+			router = router
+				.route(
+					"/auth/passkey/sign-in/options",
+					post(passkey_sign_in_options),
+				)
+				.route("/auth/passkey/sign-in", post(passkey_sign_in))
+				.route(
+					"/auth/passkey/second-factor/options",
+					post(passkey_second_factor_options),
+				)
+				.route("/auth/passkey/second-factor", post(passkey_second_factor))
+				.route(
+					"/auth/passkey/step-up/options",
+					post(passkey_step_up_options),
+				)
+				.route("/auth/passkey/step-up", post(passkey_step_up))
+				.route(
+					"/auth/passkey/register/options",
+					post(passkey_register_options),
+				)
+				.route("/auth/passkey/register", post(passkey_register))
+				.route("/auth/passkeys", get(passkeys))
+				.route("/auth/passkeys/rename", post(rename_passkey))
+				.route("/auth/passkeys/remove", post(remove_passkey));
+		}
+
+		if wallet {
+			router = router
+				.route("/auth/wallets/config", get(wallet_settings))
+				.route("/auth/wallets", get(wallets))
+				.route("/auth/wallets/link/options", post(wallet_link_options))
+				.route("/auth/wallets/link", post(link_wallet))
+				.route("/auth/wallets/proof/options", post(wallet_proof_options))
+				.route("/auth/wallets/proof", post(prove_wallet))
+				.route("/auth/wallets/update", post(update_wallet))
+				.route("/auth/wallets/unlink", post(unlink_wallet))
+				.route(
+					"/auth/wallets/sign-in/options",
+					post(wallet_sign_in_options),
+				)
+				.route("/auth/wallets/sign-in", post(wallet_sign_in));
+		}
+
+		// Provider routes stay, whatever `methods` says: each disabled
+		// provider is refused where its flow would start, and the pages
+		// read an empty list. A disabled provider's flow can't be started,
+		// and the provider isn't in `/auth/providers`' list.
+		router = router
 			.route("/auth/providers", get(providers))
 			.route("/auth/oauth/start", post(start_provider))
 			.route("/auth/oauth/link", post(link_provider))
@@ -259,23 +312,7 @@ impl Auth {
 				get(provider_callback_get).post(provider_callback_post),
 			)
 			.route("/auth/identities", get(identities))
-			.route("/auth/identities/unlink", post(unlink_identity))
-			.route("/auth/merge", get(merge_offer).post(merge_accounts))
-			.route("/auth/merge/passkey/options", post(merge_passkey_options))
-			.route("/auth/merge/cancel", post(cancel_merge))
-			.route("/auth/wallets/config", get(wallet_settings))
-			.route("/auth/wallets", get(wallets))
-			.route("/auth/wallets/link/options", post(wallet_link_options))
-			.route("/auth/wallets/link", post(link_wallet))
-			.route("/auth/wallets/proof/options", post(wallet_proof_options))
-			.route("/auth/wallets/proof", post(prove_wallet))
-			.route("/auth/wallets/update", post(update_wallet))
-			.route("/auth/wallets/unlink", post(unlink_wallet))
-			.route(
-				"/auth/wallets/sign-in/options",
-				post(wallet_sign_in_options),
-			)
-			.route("/auth/wallets/sign-in", post(wallet_sign_in));
+			.route("/auth/identities/unlink", post(unlink_identity));
 
 		if cfg!(debug_assertions) {
 			if self.inner.dev_mailbox.is_some() {
@@ -738,6 +775,7 @@ impl AuthError {
 			Self::InvalidCode => (StatusCode::BAD_REQUEST, "invalid_code"),
 			Self::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
 			Self::Disabled => (StatusCode::FORBIDDEN, "disabled"),
+			Self::NotAllowed => (StatusCode::FORBIDDEN, "not_allowed"),
 			Self::Locked { .. } => (StatusCode::FORBIDDEN, "locked"),
 			Self::SignedOut => (StatusCode::UNAUTHORIZED, "signed_out"),
 			Self::SignInExpired => (StatusCode::BAD_REQUEST, "sign_in_expired"),
@@ -894,6 +932,93 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for SignedIn {
 			.extensions
 			.get::<CurrentSession>()
 			.and_then(|current| current.signed_in.clone())))
+	}
+}
+
+/// Names a role, for the [`WithRole`] extractor:
+///
+/// ```ignore
+/// struct Admin;
+/// impl auth::Role for Admin {
+/// 	const ROLE: &'static str = "admin";
+/// }
+/// ```
+pub trait Role {
+	/// The role the app's [`Roles`](crate::Roles) hook returns for people
+	/// who have it.
+	const ROLE: &'static str;
+}
+
+/// The signed-in person who has a role, as an axum handler's argument:
+///
+/// ```ignore
+/// async fn admin_page(me: auth::WithRole<Admin>) -> Result<Page, AuthError> {
+/// 	// `me.0` is the `SignedIn`.
+/// }
+/// ```
+///
+/// A signed-out request, or one whose account doesn't have the role,
+/// fails with [`AuthError::SignedOut`] or [`AuthError::NotAllowed`].
+pub struct WithRole<R: Role>(pub SignedIn, PhantomData<fn() -> R>);
+
+impl<R: Role> std::fmt::Debug for WithRole<R> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_tuple("WithRole").field(&self.0).finish()
+	}
+}
+
+impl<R: Role + Send + Sync, S: Send + Sync> FromRequestParts<S> for WithRole<R> {
+	type Rejection = AuthError;
+
+	fn from_request_parts(
+		parts: &mut Parts,
+		state: &S,
+	) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+		let auth = parts.extensions.get::<Auth>().cloned();
+		let me = <SignedIn as FromRequestParts<S>>::from_request_parts(parts, state);
+		Box::pin(async move {
+			let me = me.await?;
+			let auth = auth.ok_or_else(|| {
+				AuthError::Config("add `auth.layer()` to the server's router".into())
+			})?;
+			check_role(&auth, &me, R::ROLE).await?;
+			Ok(WithRole(me, PhantomData))
+		})
+	}
+}
+
+/// Whether `me` has `role`, as the app's [`Roles`](crate::Roles) hook says.
+///
+/// # Errors
+///
+/// [`AuthError::Config`] without a registered hook, or as the hook and the
+/// database fail.
+async fn check_role(auth: &Auth, me: &SignedIn, role: &str) -> Result<(), AuthError> {
+	let roles = auth.roles(me.account).await?;
+
+	if roles.iter().any(|known| known == role) {
+		Ok(())
+	} else {
+		Err(AuthError::NotAllowed)
+	}
+}
+
+/// The role check as a method, for a handler that extracted [`SignedIn`]
+/// itself:
+///
+/// ```ignore
+/// async fn admin_page(me: SignedIn, State(auth): State<Auth>) -> Result<Page, AuthError> {
+/// 	auth.require_role(&me, "admin").await?;
+/// 	// …
+/// }
+/// ```
+impl Auth {
+	/// # Errors
+	///
+	/// [`AuthError::Config`] without a registered [`Roles`](crate::Roles)
+	/// hook, or as the hook and the database fail.
+	pub async fn require_role(&self, me: &SignedIn, role: &str) -> Result<(), AuthError> {
+		check_role(self, me, role).await
 	}
 }
 

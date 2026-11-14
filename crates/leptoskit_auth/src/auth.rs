@@ -69,6 +69,11 @@ pub(crate) struct Inner {
 	pub mfa: MfaPolicy,
 	/// The app's roles for an account, for [`MfaPolicy::required_for`].
 	pub roles: Option<RolesHook>,
+	/// The app's gate, which every sign-in must pass.
+	pub gate: Option<Arc<GateHook>>,
+	/// The ways people may sign in, when the app named them: everything
+	/// otherwise.
+	pub methods: Option<Vec<String>>,
 	/// The app's native builds, whose passkeys and return addresses count
 	/// as this site's.
 	#[cfg_attr(
@@ -114,6 +119,8 @@ impl Auth {
 			dev_sign_in: false,
 			mfa: MfaPolicy::default(),
 			roles: None,
+			gate: None,
+			methods: None,
 			solana: crate::SolanaOptions::default(),
 			on_merge: None,
 			native: NativeApps::default(),
@@ -171,6 +178,8 @@ pub struct AuthBuilder {
 	dev_sign_in: bool,
 	mfa: MfaPolicy,
 	roles: Option<RolesHook>,
+	gate: Option<Arc<GateHook>>,
+	methods: Option<Vec<String>>,
 	solana: crate::SolanaOptions,
 	on_merge: Option<crate::merge::MergeHooks>,
 	native: NativeApps,
@@ -281,6 +290,69 @@ impl AuthBuilder {
 		self
 	}
 
+	/// Checks every sign-in with `G::check` before a session starts: a
+	/// refusal ends the sign-in, with no session and no account made, and
+	/// the person sees [`AuthError::NotAllowed`]. It runs once per sign-in,
+	/// when its first factor checks out — a provider sign-in after the ID
+	/// token (and `userinfo`, when on) checked out, an emailed code or
+	/// password when the code or password is right, and so on. The second
+	/// factor completes the same sign-in and isn't checked again.
+	///
+	/// ```ignore
+	/// impl auth::SignInGate for AdminGate {
+	/// 	async fn check(&self, attempt: &auth::SignInAttempt<'_>) -> auth::Result<()> {
+	/// 		if attempt.roles().iter().any(|role| *role == "admin") {
+	/// 			Ok(())
+	/// 		} else {
+	/// 			Err(auth::AuthError::NotAllowed)
+	/// 		}
+	/// 	}
+	/// }
+	/// ```
+	/// Checks every sign-in with `gate.check` before a session starts: a
+	/// refusal ends the sign-in, with no session and no account made, and
+	/// the person sees [`AuthError::NotAllowed`]. It runs once per sign-in,
+	/// when its first factor checks out — a provider sign-in after the ID
+	/// token (and `userinfo`, when on) checked out, an emailed code or
+	/// password when the code or password is right, and so on. The second
+	/// factor completes the same sign-in and isn't checked again.
+	///
+	/// ```ignore
+	/// impl auth::SignInGate for AdminGate {
+	/// 	async fn check(&self, attempt: &auth::SignInAttempt<'_>) -> auth::Result<()> {
+	/// 		if attempt.roles().iter().any(|role| *role == "admin") {
+	/// 			Ok(())
+	/// 		} else {
+	/// 			Err(auth::AuthError::NotAllowed)
+	/// 		}
+	/// 	}
+	/// }
+	/// ```
+	pub fn gate(mut self, gate: impl SignInGate + 'static) -> Self {
+		let gate: Arc<GateHook> = Arc::new(Gated(gate));
+		self.gate = Some(gate);
+		self
+	}
+
+	/// Names the ways people may sign in, such as
+	/// `["email", "oidc:main"]`: `email` (emailed codes), `password`,
+	/// `passkey`, `wallet`, or a provider as `<kind>:<id>`, or `<id>` for
+	/// one configured under another name. Every other way is off: its
+	/// routes answer 404 and the sign-in pages see none of it. Without
+	/// this, every way the features allow is on.
+	///
+	/// # Errors
+	///
+	/// [`AuthError::Config`] when the list is empty or names a provider
+	/// that isn't configured, at [`AuthBuilder::build`].
+	pub fn sign_in_methods<S: Into<String>>(
+		mut self,
+		methods: impl IntoIterator<Item = S>,
+	) -> Self {
+		self.methods = Some(methods.into_iter().map(Into::into).collect());
+		self
+	}
+
 	/// How Solana wallets work: whether one may sign in once its owner
 	/// turns that on, and the cluster messages name. Linking needs the
 	/// `solana` feature and an [`origin`](Self::origin).
@@ -380,6 +452,17 @@ impl AuthBuilder {
 		#[cfg(feature = "oauth")]
 		let providers = crate::oauth::Providers::new(self.providers, self.provider_http);
 
+		let kind_of = |id: &str| -> Option<&'static str> {
+			#[cfg(feature = "oauth")]
+			return providers.get(id).map(crate::oauth::Provider::kind);
+			#[cfg(not(feature = "oauth"))]
+			{
+				let _ = id;
+				None
+			}
+		};
+		let methods = checked_methods(self.methods, &kind_of)?;
+
 		if let Some(options) = &self.passwords {
 			if !cfg!(feature = "password") {
 				return Err(AuthError::Config(
@@ -420,6 +503,8 @@ impl AuthBuilder {
 				dev_sign_in: self.dev_sign_in,
 				mfa: self.mfa,
 				roles: self.roles,
+				gate: self.gate,
+				methods,
 				solana: self.solana,
 				on_merge: self.on_merge,
 				native: self.native,
@@ -694,11 +779,153 @@ pub(crate) type RolesHook =
 		Id<Account>,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
 
+/// What a sign-in looked like when its first factor checked out, for
+/// [`SignInGate::check`].
+#[derive(Clone, Copy, Debug)]
+pub struct SignInAttempt<'a> {
+	/// How they're signing in: a provider's ID, such as `main`, or
+	/// `email`, `password`, `passkey`, or `wallet`.
+	pub method: &'a str,
+	/// The subject the provider gave them, when a provider did.
+	pub subject: Option<&'a str>,
+	/// The claims the provider released about them, from the ID token and,
+	/// with [`Provider::userinfo`](crate::Provider::userinfo), `/userinfo`.
+	pub claims: Option<&'a serde_json::Map<String, serde_json::Value>>,
+}
+
+impl SignInAttempt<'_> {
+	/// The roles the provider released in its `roles` claim, as signing in
+	/// through your own app with `leptoskit_idp` does. Anything else in the
+	/// claim is ignored.
+	pub fn roles(&self) -> Vec<&str> {
+		self.claims
+			.and_then(|claims| claims.get("roles"))
+			.and_then(serde_json::Value::as_array)
+			.map(|roles| roles.iter().filter_map(serde_json::Value::as_str).collect())
+			.unwrap_or_default()
+	}
+}
+
+/// The app's gate: it says who may sign in, and refuses everyone else
+/// before a session or account is made. Register one with
+/// [`AuthBuilder::gate`].
+///
+/// ```ignore
+/// struct AdminGate;
+///
+/// impl auth::SignInGate for AdminGate {
+/// 	async fn check(&self, tx: &auth::Tx, attempt: &auth::SignInAttempt<'_>) -> auth::Result<()> {
+/// 		if attempt.roles().contains(&"admin") {
+/// 			store_roles(tx, attempt.subject.unwrap(), &attempt.roles()).await?;
+/// 			Ok(())
+/// 		} else {
+/// 			Err(auth::AuthError::NotAllowed)
+/// 		}
+/// 	}
+/// }
+/// ```
+///
+/// The transaction is the sign-in's own: what the gate writes lands with
+/// the sign-in, and a refusal rolls all of it back, so nothing — not even
+/// a first account — is made. `attempt.subject` is the provider's subject;
+/// store what it said under that, and read it back in the app's
+/// [`Roles`](crate::Roles).
+pub trait SignInGate: Send + Sync {
+	/// Whether this person may sign in now. Returning an error refuses the
+	/// whole sign-in.
+	fn check(
+		&self,
+		tx: &Tx,
+		attempt: &SignInAttempt<'_>,
+	) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// The dyn-friendly form of [`SignInGate`], which [`AuthBuilder::gate`]
+/// builds from the app's type.
+pub(crate) trait GateFn: Send + Sync {
+	fn check<'a>(
+		&'a self,
+		tx: &'a Tx,
+		attempt: &'a SignInAttempt<'a>,
+	) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+}
+
+/// The hook a sign-in flow calls.
+pub(crate) type GateHook = dyn GateFn;
+
+/// Erases the app's gate type, keeping its [`SignInGate::check`].
+struct Gated<G>(G);
+
+impl<G: SignInGate> GateFn for Gated<G> {
+	fn check<'a>(
+		&'a self,
+		tx: &'a Tx,
+		attempt: &'a SignInAttempt<'a>,
+	) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+		Box::pin(self.0.check(tx, attempt))
+	}
+}
+
 pub(crate) type SignUpHook = for<'a> fn(
 	&'a Tx,
 	Id<Account>,
 	&'a Profile,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+/// The ways an app may sign people in: emailed codes, passwords, passkeys,
+/// and wallets. Providers are named as `<kind>:<id>`, such as `oidc:main`.
+const CORE_METHODS: [&str; 4] = ["email", "password", "passkey", "wallet"];
+
+/// Checks the methods [`AuthBuilder::sign_in_methods`] names: none of them
+/// empty or unknown, and each provider one that's configured. `kind_of`
+/// says what kind each configured provider is.
+fn checked_methods(
+	methods: Option<Vec<String>>,
+	kind_of: &dyn Fn(&str) -> Option<&'static str>,
+) -> Result<Option<Vec<String>>> {
+	let Some(methods) = methods else {
+		return Ok(None);
+	};
+
+	if methods.is_empty() {
+		return Err(AuthError::Config(
+			"[auth] methods names at least one way to sign in".into(),
+		));
+	}
+
+	let mut allowed: Vec<String> = Vec::new();
+	for method in methods {
+		let entry = match method.split_once(':') {
+			None if CORE_METHODS.contains(&method.as_str()) => method,
+			None | Some(_) => {
+				let id = method.split(':').next_back().unwrap_or_default();
+				let kind = kind_of(id).ok_or_else(|| {
+					AuthError::Config(format!(
+						"`{method}` in [auth] methods isn't a way to sign in here: name one of \
+						 {}, or a provider from [auth.providers]",
+						CORE_METHODS.join(", ")
+					))
+				})?;
+				let asked = method.split_once(':').map(|(asked, _)| asked);
+
+				if asked.is_some_and(|asked| asked != kind) {
+					return Err(AuthError::Config(format!(
+						"`{id}` is a `{kind}` provider: name it `{kind}:{id}` or `{id}` in [auth] \
+						 methods"
+					)));
+				}
+
+				format!("{kind}:{id}")
+			}
+		};
+
+		if !allowed.contains(&entry) {
+			allowed.push(entry);
+		}
+	}
+
+	Ok(Some(allowed))
+}
 
 /// The context a request's policies read: [`SignedIn`] when it has a live
 /// session, with the account as the [`Actor`](leptoskit_db::Actor) that
@@ -717,6 +944,49 @@ pub fn context(signed_in: Option<SignedIn>) -> Context {
 }
 
 impl Auth {
+	/// The roles `account` has, as the app's [`Roles`](crate::Roles) hook
+	/// reads them, for role guards and for `leptoskit_idp`'s `roles` scope.
+	///
+	/// # Errors
+	///
+	/// [`AuthError::Config`] when no `Roles` hook was registered, or as the
+	/// hook and the database fail.
+	pub async fn roles(&self, account: Id<Account>) -> Result<Vec<String>> {
+		let roles = self.inner.roles.as_ref().ok_or_else(|| {
+			AuthError::Config(
+				"no `Roles` hook is registered; add `AuthBuilder::roles::<R>()`".into(),
+			)
+		})?;
+		roles(&self.inner.db, account).await
+	}
+
+	/// Whether a [`Roles`](crate::Roles) hook was registered.
+	pub fn has_roles(&self) -> bool {
+		self.inner.roles.is_some()
+	}
+
+	/// Whether `method` — `email`, `password`, `passkey`, or `wallet` — is
+	/// still a way to sign in here, as [`AuthBuilder::sign_in_methods`]
+	/// named them.
+	pub(crate) fn allows_method(&self, method: &str) -> bool {
+		self.inner
+			.methods
+			.as_ref()
+			.is_none_or(|methods| methods.iter().any(|named| named == method))
+	}
+
+	/// Whether the provider `id` may still sign people in here.
+	pub(crate) fn allows_provider(&self, id: &str) -> bool {
+		self.inner.methods.as_ref().is_none_or(|methods| {
+			methods.iter().any(|named| {
+				named == id
+					|| named
+						.split_once(':')
+						.is_some_and(|(_, provider)| provider == id)
+			})
+		})
+	}
+
 	/// The context a request's policies read: [`SignedIn`] and the person's
 	/// linked [`Wallets`](crate::Wallets) when it has a live session, and
 	/// nothing when it doesn't. The layer builds one per request. Reading

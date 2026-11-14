@@ -41,6 +41,9 @@ axum = { workspace = true, features = ["tokio"] }
 base64 = { workspace = true }
 http-body-util = "0.1"
 leptos = { workspace = true, features = ["ssr"] }
+# The admin sign-in test signs in with the provider through leptoskit_auth's
+# own OpenID Connect client.
+leptoskit_auth = { workspace = true, features = ["oauth"] }
 leptoskit_rpc = { workspace = true, features = ["ssr"] }
 p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 ring = "0.17"

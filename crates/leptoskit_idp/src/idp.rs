@@ -231,6 +231,15 @@ const STANDARD_SCOPES: [(&str, &str); 3] = [
 	("email", "See your email address."),
 ];
 
+/// The scope that releases the roles the app gives the person, from its
+/// own [`Roles`](leptoskit_auth::Roles) hook. Only one of the site's own
+/// first-party apps may ask for it, and it's offered only when the app
+/// registered a `Roles` hook.
+pub const ROLES_SCOPE: &str = "roles";
+
+/// What the consent screen says the `roles` scope does.
+const ROLES_DESCRIPTION: &str = "See which of this app's roles your account has.";
+
 /// Configures an [`Idp`].
 #[must_use]
 pub struct IdpBuilder {
@@ -405,6 +414,16 @@ impl IdpBuilder {
 				}
 			})
 			.collect();
+
+		// The `roles` scope exists only when the app says who has which
+		// role: without the hook, no client could ask, and none would get
+		// an answer.
+		if self.auth.has_roles() {
+			scopes.push(ScopeDescription {
+				name: ROLES_SCOPE.into(),
+				description: ROLES_DESCRIPTION.into(),
+			});
+		}
 
 		for scope in &self.scopes {
 			if !leptoskit_rpc::is_scope_name(scope.name) {
@@ -705,6 +724,22 @@ impl ClaimSet {
 /// ```
 ///
 /// `db` acts as the person, so their own policies apply.
+///
+/// The provider itself releases the `roles` claim, which says which of the
+/// app's roles the person has, read by the `Roles` hook the app registered
+/// on its [`Auth`](leptoskit_auth::Auth). The claim is the value of the
+/// standard `roles` scope, [`ROLES_SCOPE`](crate::ROLES_SCOPE), which only
+/// a first-party client may ask for, and which is offered only when the app
+/// registered a `Roles` hook at all. With the scope, it lands in
+/// `/oauth/userinfo` and in a first-party app's ID token, without naming it
+/// in the `claims` parameter:
+///
+/// ```ignore
+/// let auth = Auth::builder(&db, keys).roles::<User>().build()?;
+/// let idp = Idp::builder(&db, &auth).build()?;
+/// // Your own admin app, registered with `first_party` and the `roles`
+/// // scope, signing someone in with `openid roles`, gets `"roles": [..]`.
+/// ```
 pub trait Claims {
 	/// Adds the claims `scopes` allow about `account` to `out`.
 	fn claims(

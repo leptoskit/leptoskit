@@ -28,6 +28,7 @@ use crate::Purpose;
 use crate::RequestInfo;
 use crate::Result;
 use crate::SessionToken;
+use crate::SignInAttempt;
 use crate::SignInStep;
 use crate::SignedIn;
 use crate::SiwsInput;
@@ -599,6 +600,15 @@ impl Auth {
 		let result = async {
 			let account = Account::get(&tx, wallet.account_id).await?;
 			refuse_unusable(&account)?;
+			self.check_gate(
+				&tx,
+				&SignInAttempt {
+					method: "wallet",
+					subject: None,
+					claims: None,
+				},
+			)
+			.await?;
 			set_proof(&tx, &wallet, proof).await?;
 			let factors = self.factors(&tx, account.id).await?;
 

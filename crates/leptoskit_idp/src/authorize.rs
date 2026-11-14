@@ -571,10 +571,13 @@ impl Idp {
 			return Err(IdpError::invalid_scope("ask for at least one scope"));
 		}
 
-		if let Some(scope) = scopes
-			.iter()
-			.find(|scope| !client.scopes.contains(*scope) || !self.knows_scope(scope))
-		{
+		if let Some(scope) = scopes.iter().find(|scope| {
+			// The roles a person has here are yours, not another
+			// site's: only one of your own first-party apps may ask.
+			(scope.as_str() == crate::idp::ROLES_SCOPE && !client.first_party)
+				|| !client.scopes.contains(*scope)
+				|| !self.knows_scope(scope)
+		}) {
 			return Err(IdpError::invalid_scope(format!(
 				"this app may not ask for `{scope}`"
 			)));

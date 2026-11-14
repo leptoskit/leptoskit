@@ -53,7 +53,7 @@ pub(crate) fn built_in(kind: &str, client_id: String, client_secret: String) -> 
 
 /// A provider with fixed endpoints and a client secret.
 fn fixed(
-	id: &str,
+	id: &'static str,
 	name: &str,
 	client_id: String,
 	client_secret: String,
@@ -65,11 +65,13 @@ fn fixed(
 		id: id.into(),
 		name: name.into(),
 		flavor: Flavor::Fixed,
+		kind: id,
 		client_id,
 		secret: Secret::Shared(client_secret),
 		scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
 		endpoints: Some(endpoints),
 		store_tokens: false,
+		userinfo: false,
 		quirks,
 	}
 }

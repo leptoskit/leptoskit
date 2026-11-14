@@ -25,6 +25,11 @@ pub enum AuthError {
 	/// The account was disabled.
 	#[error("this account is disabled")]
 	Disabled,
+	/// The app's sign-in gate refused this person: they may prove who they
+	/// are, but this app won't sign them in. No session or account was
+	/// made.
+	#[error("this app doesn't accept that sign-in")]
+	NotAllowed,
 	/// The account is locked after too many failures.
 	#[error("this account is locked; try again later")]
 	Locked {

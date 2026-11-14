@@ -26,6 +26,7 @@ use crate::Purpose;
 use crate::RequestInfo;
 use crate::Result;
 use crate::SignIn;
+use crate::SignInAttempt;
 use crate::SignInStep;
 use crate::auth::finish;
 use crate::events::record;
@@ -235,7 +236,12 @@ impl Auth {
 		second_factor: bool,
 	) -> Result<SignInStep> {
 		let (account, signed_up) = self.proven_account(tx, address, request).await?;
-		self.after_first_factor(tx, account, signed_up, second_factor, request)
+		let attempt = SignInAttempt {
+			method: "email",
+			subject: None,
+			claims: None,
+		};
+		self.after_first_factor(tx, account, signed_up, second_factor, request, &attempt)
 			.await
 	}
 
@@ -279,7 +285,9 @@ impl Auth {
 		signed_up: bool,
 		second_factor: bool,
 		request: &RequestInfo,
+		attempt: &SignInAttempt<'_>,
 	) -> Result<SignInStep> {
+		self.check_gate(tx, attempt).await?;
 		let now = leptoskit_db::now();
 
 		if second_factor && !signed_up {

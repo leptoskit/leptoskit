@@ -93,6 +93,8 @@ With the `oauth` feature, people sign in with any of twenty built-in providers, 
 
 With the `password` feature and `[auth.passwords] enabled`, people may also sign in with a password: Argon2id, NIST SP 800-63B rules, and resets through emailed codes.
 
+An app decides who may sign in at all. `[auth] methods` (or `AuthBuilder::sign_in_methods`) turns off every other way: its routes answer 404 and the sign-in pages see none of it. `AuthBuilder::gate` checks every sign-in — through a provider, an emailed code, a password, a passkey, or a wallet — before any session or account is made, and `require_role` (a server-function guard), `WithRole` (an axum extractor), and `Auth::roles` read the `Roles` hook an app registers, for pages and functions only certain roles may use. With `leptoskit_idp`, the same hook backs a standard `roles` scope that only the site's own first-party apps can ask for.
+
 Two accounts can be merged, moving only the sign-in methods or bringing the other account's data along, as each table's `on_account_merge` says.
 
 The tables, `SignedIn`, and the `Public*` row types build everywhere, including the browser. `Auth` needs the `server` feature and a database: `postgres` or `sqlite`.

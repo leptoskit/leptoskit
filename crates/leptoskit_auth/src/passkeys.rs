@@ -460,6 +460,7 @@ mod ceremonies {
 	use crate::Result;
 	use crate::SessionToken;
 	use crate::SignIn;
+	use crate::SignInAttempt;
 	use crate::SignedIn;
 	use crate::auth::finish;
 	use crate::email::refuse_unusable;
@@ -761,6 +762,15 @@ mod ceremonies {
 			let tx = db.begin().await?;
 			let result = async {
 				used(&tx, &row, key, &result).await?;
+				self.check_gate(
+					&tx,
+					&SignInAttempt {
+						method: "passkey",
+						subject: None,
+						claims: None,
+					},
+				)
+				.await?;
 				let now = leptoskit_db::now();
 				let sign_in = self
 					.start_session(&tx, row.account_id, Aal::Two, now, Some(now), request)

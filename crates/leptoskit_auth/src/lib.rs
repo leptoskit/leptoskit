@@ -152,6 +152,10 @@ pub use auth::Roles;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use auth::SessionLifetimes;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use auth::SignInAttempt;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
+pub use auth::SignInGate;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use auth::context;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use error::AuthError;
@@ -166,9 +170,13 @@ pub use http::CurrentSession;
 #[cfg(all(feature = "axum", any(feature = "postgres", feature = "sqlite")))]
 pub use http::Delegation;
 #[cfg(all(feature = "axum", any(feature = "postgres", feature = "sqlite")))]
+pub use http::Role;
+#[cfg(all(feature = "axum", any(feature = "postgres", feature = "sqlite")))]
 pub use http::SessionLayer;
 #[cfg(all(feature = "axum", any(feature = "postgres", feature = "sqlite")))]
 pub use http::SessionService;
+#[cfg(all(feature = "axum", any(feature = "postgres", feature = "sqlite")))]
+pub use http::WithRole;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 pub use limits::DbRateLimiter;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]

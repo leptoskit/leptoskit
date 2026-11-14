@@ -85,13 +85,20 @@ const MAX_BODY: usize = 1024 * 1024;
 pub struct Provider {
 	pub(crate) id: String,
 	pub(crate) name: String,
+	/// What it is, beyond plain OpenID Connect.
 	pub(crate) flavor: Flavor,
+	/// What it is in `[auth.providers]`: `oidc`, or one of the built-in
+	/// kinds.
+	pub(crate) kind: &'static str,
 	pub(crate) client_id: String,
 	secret: Secret,
 	pub(crate) scopes: Vec<String>,
 	endpoints: Option<Endpoints>,
 	/// Whether its tokens are kept, for the app to call its API.
 	pub(crate) store_tokens: bool,
+	/// Whether `/userinfo` is fetched with the access token after the code
+	/// exchange, and its claims merged with the ID token's. Off by default.
+	pub(crate) userinfo: bool,
 	quirks: Quirks,
 }
 
@@ -327,6 +334,7 @@ impl Provider {
 			id: "google".into(),
 			name: "Google".into(),
 			flavor: Flavor::Google,
+			kind: "google",
 			client_id: client_id.into(),
 			secret: Secret::Shared(client_secret.into()),
 			scopes: vec!["openid".into(), "email".into(), "profile".into()],
@@ -340,6 +348,7 @@ impl Provider {
 				.revoked_at("https://oauth2.googleapis.com/revoke"),
 			),
 			store_tokens: false,
+			userinfo: false,
 			quirks: Quirks {
 				select_account: true,
 				offline: Offline::Param("access_type", "offline"),
@@ -372,6 +381,7 @@ impl Provider {
 			id: "apple".into(),
 			name: "Apple".into(),
 			flavor: Flavor::Apple,
+			kind: "apple",
 			client_id: services_id.into(),
 			secret: Secret::Apple {
 				team_id: team_id.into(),
@@ -389,6 +399,7 @@ impl Provider {
 				.revoked_at("https://appleid.apple.com/auth/revoke"),
 			),
 			store_tokens: false,
+			userinfo: false,
 			quirks: Quirks::default(),
 		})
 	}
@@ -406,6 +417,7 @@ impl Provider {
 			id: "microsoft".into(),
 			name: "Microsoft".into(),
 			flavor: Flavor::Microsoft { tenant },
+			kind: "microsoft",
 			client_id: client_id.into(),
 			secret: Secret::Shared(client_secret.into()),
 			scopes: vec!["openid".into(), "email".into(), "profile".into()],
@@ -416,6 +428,7 @@ impl Provider {
 				None,
 			)),
 			store_tokens: false,
+			userinfo: false,
 			quirks: Quirks {
 				identify: Identify::IdToken(IdTokenRules {
 					trust_email: false,
@@ -434,6 +447,7 @@ impl Provider {
 			id: "github".into(),
 			name: "GitHub".into(),
 			flavor: Flavor::Fixed,
+			kind: "github",
 			client_id: client_id.into(),
 			secret: Secret::Shared(client_secret.into()),
 			scopes: vec!["read:user".into(), "user:email".into()],
@@ -444,6 +458,7 @@ impl Provider {
 				None,
 			)),
 			store_tokens: false,
+			userinfo: false,
 			quirks: Quirks {
 				identify: Identify::Api(Box::new(ApiProfile::github())),
 				select_account: true,
@@ -488,11 +503,13 @@ impl Provider {
 			id,
 			name: name.into(),
 			flavor: Flavor::Oidc { issuer },
+			kind: "oidc",
 			client_id: client_id.into(),
 			secret: client_secret.map_or(Secret::None, Secret::Shared),
 			scopes: vec!["openid".into(), "email".into(), "profile".into()],
 			endpoints: None,
 			store_tokens: false,
+			userinfo: false,
 			quirks: Quirks {
 				select_account: true,
 				offline: Offline::Scope("offline_access"),
@@ -526,6 +543,18 @@ impl Provider {
 		self
 	}
 
+	/// Fetches `/userinfo` with the access token after the code exchange,
+	/// checks its `sub` against the ID token's, and merges its claims with
+	/// the ID token's, with `/userinfo` winning. A provider that releases
+	/// roles or other claims only there needs this; the app's
+	/// [`SignInGate`](crate::SignInGate) then sees them. Off by default,
+	/// since the ID token usually carries enough.
+	#[must_use]
+	pub fn userinfo(mut self, fetch: bool) -> Self {
+		self.userinfo = fetch;
+		self
+	}
+
 	/// Shows it to people as `name`, such as "Company SSO".
 	#[must_use]
 	pub fn name(mut self, name: impl Into<String>) -> Self {
@@ -536,6 +565,12 @@ impl Provider {
 	/// Its ID, such as `google`.
 	pub fn id(&self) -> &str {
 		&self.id
+	}
+
+	/// What it is in `[auth.providers]`: `oidc`, or one of the built-in
+	/// kinds.
+	pub(crate) fn kind(&self) -> &'static str {
+		self.kind
 	}
 
 	/// Names it `id` in routes and `[auth.providers]`, for a built-in
@@ -792,6 +827,7 @@ impl Providers {
 			Some(&endpoints.authorization_endpoint),
 			Some(&endpoints.token_endpoint),
 			endpoints.jwks_uri.as_ref(),
+			endpoints.userinfo_endpoint.as_ref(),
 			endpoints.revocation_endpoint.as_ref(),
 		];
 
@@ -1410,6 +1446,10 @@ fn extra_params(quirks: &Quirks, offline: Option<Offline>) -> Vec<(&'static str,
 
 impl Auth {
 	pub(crate) fn provider(&self, id: &str) -> Result<&Provider> {
+		if !self.allows_provider(id) {
+			return Err(AuthError::UnknownProvider);
+		}
+
 		self.inner
 			.providers
 			.get(id)
@@ -1418,7 +1458,12 @@ impl Auth {
 
 	/// The providers people can sign in with.
 	pub fn providers(&self) -> Vec<ProviderInfo> {
-		self.inner.providers.info()
+		self.inner
+			.providers
+			.info()
+			.into_iter()
+			.filter(|provider| self.allows_provider(&provider.id))
+			.collect()
 	}
 
 	/// The `User-Agent` `provider` wants, if it wants one.
@@ -1775,15 +1820,18 @@ impl Auth {
 			now: leptoskit_db::now().timestamp(),
 		};
 		let claims = verify_id_token(providers, provider, &endpoints, id_token, expected).await?;
+		let claims_map = id_token_claims(&claims);
 		let profile = ProviderProfile {
-			subject: claims.sub,
-			email: claims.email,
+			subject: claims.sub.clone(),
+			email: claims.email.clone(),
 			email_verified: claims.email_verified.is_some_and(|flag| flag.is_true()),
 			name: claims
 				.name
+				.clone()
 				.or_else(|| params.user.as_deref().and_then(apple_name)),
-			preferred_username: claims.preferred_username,
-			picture: claims.picture,
+			preferred_username: claims.preferred_username.clone(),
+			picture: claims.picture.clone(),
+			claims: Some(claims_map),
 			grant: None,
 		};
 		Ok((flow, profile))
@@ -1875,14 +1923,48 @@ impl Auth {
 				};
 				let claims =
 					verify_id_token(providers, provider, &endpoints, &id_token, expected).await?;
+				let subject = scoped_subject(rules, &claims)?;
+				let mut merged = id_token_claims(&claims);
+
+				if provider.userinfo {
+					let access = text("access_token")
+						.ok_or_else(|| AuthError::Provider("no access token".into()))?;
+					let userinfo =
+						userinfo_claims(providers, provider, &endpoints, &access).await?;
+
+					// Compared against the token's own `sub`, not the
+					// scoped one, which names the claim that scopes it too.
+					if userinfo.get("sub").and_then(serde_json::Value::as_str)
+						!= Some(claims.sub.as_str())
+					{
+						return Err(AuthError::Provider(
+							"userinfo names another subject than the ID token".into(),
+						));
+					}
+
+					for (name, value) in userinfo {
+						merged.insert(name, value);
+					}
+				}
+
+				let field = |name: &str| {
+					merged
+						.get(name)
+						.and_then(serde_json::Value::as_str)
+						.map(str::to_owned)
+				};
 				let mut profile = ProviderProfile {
-					subject: scoped_subject(rules, &claims)?,
-					email: claims.email,
+					subject,
+					email: field("email"),
 					email_verified: rules.trust_email
-						&& claims.email_verified.is_some_and(|flag| flag.is_true()),
-					name: claims.name.or_else(|| given_and_family_name(&claims.other)),
-					preferred_username: claims.preferred_username,
-					picture: claims.picture,
+						&& merged.get("email_verified").is_some_and(|flag| {
+							flag.as_bool()
+								.unwrap_or_else(|| flag.as_str() == Some("true"))
+						}),
+					name: field("name").or_else(|| given_and_family_name(&merged)),
+					preferred_username: field("preferred_username"),
+					picture: field("picture"),
+					claims: Some(merged),
 					grant: None,
 				};
 
@@ -2060,6 +2142,79 @@ fn describe(error: &serde_json::Value) -> String {
 		.chars()
 		.take(200)
 		.collect()
+}
+
+/// The ID token's claims, as the app's sign-in gate sees them: the
+/// standard ones a sign-in reads, then the provider's own.
+fn id_token_claims(claims: &IdClaims) -> serde_json::Map<String, serde_json::Value> {
+	let mut merged = claims.other.clone();
+	let mut put = |name: &str, value: Option<serde_json::Value>| {
+		if let Some(value) = value {
+			merged.insert(name.to_owned(), value);
+		}
+	};
+
+	put("sub", Some(serde_json::Value::from(claims.sub.as_str())));
+	put(
+		"email",
+		claims.email.as_deref().map(serde_json::Value::from),
+	);
+	put(
+		"email_verified",
+		claims
+			.email_verified
+			.as_ref()
+			.map(|flag| serde_json::Value::from(flag.is_true())),
+	);
+	put("name", claims.name.as_deref().map(serde_json::Value::from));
+	put(
+		"preferred_username",
+		claims
+			.preferred_username
+			.as_deref()
+			.map(serde_json::Value::from),
+	);
+	put(
+		"picture",
+		claims.picture.as_deref().map(serde_json::Value::from),
+	);
+	merged
+}
+
+/// `/userinfo`'s claims, for an access token from the token endpoint.
+async fn userinfo_claims(
+	providers: &Providers,
+	provider: &Provider,
+	endpoints: &Endpoints,
+	access_token: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+	let url = endpoints.userinfo_endpoint.as_deref().ok_or_else(|| {
+		AuthError::Config(format!(
+			"`{}` publishes no userinfo endpoint; turn `userinfo` off",
+			provider.id
+		))
+	})?;
+	let response = providers
+		.send(ProviderRequest {
+			method: "GET",
+			url: url.to_owned(),
+			headers: vec![
+				("accept".to_owned(), "application/json".to_owned()),
+				("authorization".to_owned(), format!("Bearer {access_token}")),
+			],
+			body: None,
+		})
+		.await?;
+
+	if !(200..300).contains(&response.status) {
+		return Err(AuthError::Provider(format!(
+			"{url} answered {}",
+			response.status
+		)));
+	}
+
+	serde_json::from_slice(&response.body)
+		.map_err(|error| AuthError::Provider(format!("{url} answered unreadable JSON: {error}")))
 }
 
 /// The identity an ID token names: its subject, within the claim that

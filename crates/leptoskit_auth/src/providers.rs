@@ -42,6 +42,7 @@ use crate::Result;
 use crate::Session;
 use crate::SessionToken;
 use crate::SignIn;
+use crate::SignInAttempt;
 use crate::SignedIn;
 use crate::auth::finish;
 use crate::email::refuse_unusable;
@@ -50,7 +51,7 @@ use crate::mfa::Proof;
 use crate::secrets;
 
 /// What a provider said about the person who signed in.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ProviderProfile {
 	/// The provider's stable ID for them.
 	pub subject: String,
@@ -64,9 +65,26 @@ pub(crate) struct ProviderProfile {
 	pub preferred_username: Option<String>,
 	/// A picture of them.
 	pub picture: Option<String>,
+	/// The claims it released about them, from the ID token and, when the
+	/// provider was configured with `userinfo`, `/userinfo` too. None for
+	/// providers whose API says who signed in.
+	#[serde(default)]
+	pub claims: Option<serde_json::Map<String, serde_json::Value>>,
 	/// The provider's tokens, when the app keeps them (`store_tokens`).
 	#[serde(default)]
 	pub grant: Option<ProviderGrant>,
+}
+
+impl ProviderProfile {
+	/// What a sign-in with `provider` looked like, for the app's
+	/// [`SignInGate`](crate::SignInGate).
+	fn attempt<'a>(&'a self, provider: &'a str) -> SignInAttempt<'a> {
+		SignInAttempt {
+			method: provider,
+			subject: Some(&self.subject),
+			claims: self.claims.as_ref(),
+		}
+	}
 }
 
 /// The tokens a provider handed over at sign-in, for a provider whose
@@ -303,7 +321,10 @@ impl Auth {
 		request: &RequestInfo,
 	) -> Result<ProviderResult> {
 		match existing {
-			Some(identity) => self.sign_in_identity(identity, profile, request).await,
+			Some(identity) => {
+				self.sign_in_identity(identity, &flow.provider, profile, request)
+					.await
+			}
 			None => {
 				self.sign_up_identity(&flow.provider, profile, binding, request)
 					.await
@@ -399,6 +420,7 @@ impl Auth {
 	async fn sign_in_identity(
 		&self,
 		identity: &Identity,
+		provider: &str,
 		profile: &ProviderProfile,
 		request: &RequestInfo,
 	) -> Result<ProviderResult> {
@@ -406,6 +428,8 @@ impl Auth {
 		let result = async {
 			let account = Account::get(&tx, identity.account_id).await?;
 			refuse_unusable(&account)?;
+			let attempt = profile.attempt(provider);
+			self.check_gate(&tx, &attempt).await?;
 			refresh_identity(&tx, identity.id, profile).await?;
 			self.keep_grant(&tx, identity, profile).await?;
 			let factors = self.factors(&tx, account.id).await?;
@@ -512,6 +536,8 @@ impl Auth {
 		profile: &ProviderProfile,
 		request: &RequestInfo,
 	) -> Result<SignIn> {
+		// Before the account exists: a refused sign-up makes nothing.
+		self.check_gate(tx, &profile.attempt(provider)).await?;
 		let account = NewAccount {
 			disabled_at: None,
 			locked_until: None,
