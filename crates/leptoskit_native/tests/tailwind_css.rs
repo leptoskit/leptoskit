@@ -273,3 +273,77 @@ fn single_axis_scales_and_timing_variables() {
 		&["transition-timing-function:var(--tw-ease,cubic-bezier(0.4,0,0.2,1));"],
 	);
 }
+
+#[test]
+fn web_text_polish() {
+	assert_css(
+		"font-sans",
+		&["font-family:ui-sans-serif,system-ui,sans-serif"],
+	);
+	assert_css("font-serif", &["font-family:ui-serif,"]);
+	assert_css("font-mono", &["font-family:ui-monospace,"]);
+	assert_css(
+		"font-[var(--admin-font-note)]",
+		&["font-family:var(--admin-font-note);"],
+	);
+	assert_css("tabular-nums", &["font-variant-numeric:tabular-nums;"]);
+	assert_css("normal-nums", &["font-variant-numeric:normal;"]);
+	assert_css(
+		"truncate",
+		&[
+			"display:block;",
+			"overflow:hidden;",
+			"text-overflow:ellipsis;",
+			"white-space:nowrap;",
+		],
+	);
+	assert_css("tracking-wide", &["letter-spacing:0.025em;"]);
+	assert_css("tracking-tight", &["letter-spacing:-0.025em;"]);
+	assert_css("cursor-pointer", &["cursor:pointer;"]);
+}
+
+#[test]
+fn font_families_only_come_from_keywords_or_theme_variables() {
+	for class in [
+		"font-[Inter]",
+		"font-[var(brand)]",
+		"font-[var(--)]",
+		"font-[var(--a;b)]",
+		"font-[var(--a,serif)]",
+		"tracking-huge",
+		"cursor-grab",
+	] {
+		assert!(Tailwind::parse(class).is_err(), "`{class}` is rejected");
+	}
+}
+
+#[test]
+fn truncate_yields_to_display_utilities() {
+	// `hidden` and `flex` set display after `truncate`, whatever the order.
+	let css = css("truncate hidden");
+	let truncate = css.find(".truncate{").unwrap();
+	let hidden = css.find(".hidden{").unwrap();
+	assert!(truncate < hidden, "{css}");
+}
+
+#[test]
+fn hover_applies_only_to_a_resting_pointer() {
+	let sheet = css("bg-white hover:bg-black active:bg-red-500");
+	assert!(
+		sheet.contains("@media (hover:hover){.hover\\3a bg-black:hover:not([aria-disabled=true]){"),
+		"{sheet}"
+	);
+	// Hover overrides the base and yields to the pressed look.
+	let base = sheet.find(".bg-white{").unwrap();
+	let hover = sheet.find(".hover\\3a bg-black").unwrap();
+	let active = sheet.find(".active\\3a bg-red-500").unwrap();
+	assert!(base < hover && hover < active, "{sheet}");
+
+	let dark = css("dark:hover:bg-black");
+	assert!(
+		dark.contains(
+			"@media (hover:hover){:where(:root[data-lk-appearance=dark]) .dark\\3a hover"
+		),
+		"{dark}"
+	);
+}

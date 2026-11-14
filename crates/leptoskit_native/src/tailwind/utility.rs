@@ -16,6 +16,7 @@ use super::declaration::ColorField;
 use super::declaration::Declaration;
 use super::declaration::Edge;
 use super::declaration::EdgeField;
+use super::declaration::FontFamily;
 use super::declaration::Leading;
 use super::declaration::SizeField;
 use super::declaration::Track;
@@ -30,6 +31,12 @@ use crate::TextAlign;
 type Parsed = Result<(u16, Vec<Declaration>), String>;
 
 pub(super) fn parse(utility: &str) -> Parsed {
+	// `truncate` lays its element out as a block, so it ranks before
+	// `flex`, `grid`, and `hidden`, which override that display.
+	if utility == "truncate" {
+		return Ok((99, vec![Declaration::Truncate]));
+	}
+
 	if let Some(declaration) = keyword(utility) {
 		let rank = match declaration {
 			Declaration::Flex(..) => 110,
@@ -146,6 +153,22 @@ fn keyword(utility: &str) -> Option<Declaration> {
 		"text-start" => Declaration::TextAlign(TextAlign::Start),
 		"text-center" => Declaration::TextAlign(TextAlign::Center),
 		"text-end" => Declaration::TextAlign(TextAlign::End),
+		"font-sans" => Declaration::FontFamily(FontFamily::Sans),
+		"font-serif" => Declaration::FontFamily(FontFamily::Serif),
+		"font-mono" => Declaration::FontFamily(FontFamily::Mono),
+		"tabular-nums" => Declaration::TabularNumbers(true),
+		"normal-nums" => Declaration::TabularNumbers(false),
+		"tracking-tighter" => Declaration::Tracking(-0.05),
+		"tracking-tight" => Declaration::Tracking(-0.025),
+		"tracking-normal" => Declaration::Tracking(0.0),
+		"tracking-wide" => Declaration::Tracking(0.025),
+		"tracking-wider" => Declaration::Tracking(0.05),
+		"tracking-widest" => Declaration::Tracking(0.1),
+		"cursor-auto" => Declaration::Cursor("auto"),
+		"cursor-default" => Declaration::Cursor("default"),
+		"cursor-pointer" => Declaration::Cursor("pointer"),
+		"cursor-text" => Declaration::Cursor("text"),
+		"cursor-not-allowed" => Declaration::Cursor("not-allowed"),
 		_ => return None,
 	})
 }
@@ -470,6 +493,10 @@ fn align_value(value: &str, field: AlignField) -> Result<Align, String> {
 }
 
 fn paint(utility: &str) -> Option<Parsed> {
+	if let Some(value) = utility.strip_prefix("font-").and_then(arbitrary) {
+		return Some(font_family(value).map(|family| (300, vec![Declaration::FontFamily(family)])));
+	}
+
 	if let Some(value) = utility.strip_prefix("bg-") {
 		return Some(
 			color(value)
@@ -976,4 +1003,31 @@ fn non_negative(value: &str) -> Result<f32, String> {
 	}
 
 	Ok(value)
+}
+
+/// The family in `font-[var(--name)]`. Only a theme variable is accepted, so
+/// a class never spells a family name the CSS would have to quote.
+fn font_family(value: &str) -> Result<FontFamily, String> {
+	let name = value
+		.strip_prefix("var(")
+		.and_then(|name| name.strip_suffix(')'))
+		.ok_or_else(|| {
+			format!(
+				"unsupported font family `{value}`; use font-sans, font-serif, font-mono, or \
+				 font-[var(--name)]"
+			)
+		})?;
+	let valid = name.len() > 2
+		&& name.starts_with("--")
+		&& name[2..]
+			.chars()
+			.all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'));
+
+	if !valid {
+		return Err(format!(
+			"var() needs a custom property name like `--brand-font`; got `{name}`"
+		));
+	}
+
+	Ok(FontFamily::Var(name.to_owned()))
 }
