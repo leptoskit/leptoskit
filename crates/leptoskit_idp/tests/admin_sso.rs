@@ -552,6 +552,10 @@ async fn pairs(cluster: Option<&PostgresCluster>) -> Vec<(Db, Db)> {
 }
 
 #[tokio::test]
+#[allow(
+	clippy::too_many_lines,
+	reason = "one walk through the whole admin sign-in, with each refusal along the way"
+)]
 async fn an_admin_app_signs_in_through_the_main_sites_own_sign_in() {
 	let cluster = PostgresCluster::start();
 

@@ -1,0 +1,6 @@
+---
+source: crates/leptoskit_analytics/tests/query_sql.rs
+expression: "sql_of(&funnels(FunnelOrder::Ordered), Dialect::Sqlite)"
+---
+-- funnel pull
+SELECT coalesce(COALESCE((SELECT "po"."person_id" FROM "person_overrides" "po" WHERE "po"."distinct_id" = "events"."distinct_id"), "events"."person_id", (SELECT "pdi"."person_id" FROM "person_distinct_ids" "pdi" WHERE "pdi"."distinct_id" = "events"."distinct_id")), "events"."distinct_id") AS "person", "events"."name" AS "name", "events"."timestamp" AS "at", json_extract("events"."properties", ?8) AS "group" FROM "events" WHERE "events"."name" IN (?5, ?6, ?7) AND "events"."timestamp" >= ?1 AND "events"."timestamp" < ?2 AND COALESCE((SELECT "po"."person_id" FROM "person_overrides" "po" WHERE "po"."distinct_id" = "events"."distinct_id"), "events"."person_id", (SELECT "pdi"."person_id" FROM "person_distinct_ids" "pdi" WHERE "pdi"."distinct_id" = "events"."distinct_id")) IN (SELECT "pp"."id" FROM "persons" "pp" WHERE (json_extract("pp"."properties", ?3)) IS NOT ?4) ORDER BY "person", "at" LIMIT 100000

@@ -20,7 +20,7 @@ const TOKEN: &str = "app-token";
 
 async fn start() -> (String, Db) {
 	let db = leptoskit_db::testing::sqlite_migrated(service::MIGRATIONS).await;
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		IngestConfig::default(),

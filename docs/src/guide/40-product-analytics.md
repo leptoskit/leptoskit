@@ -70,6 +70,55 @@ By default the service builds persons only for ids your app identified or set pr
 
 Your server can ask the service about its persons: list them, read one with their ids and properties, list their events and sessions, delete a person and everything stored about them, or export it all as one JSON document. These operations answer only to your app's server — never to a browser — so your own rules decide who may see or delete a person.
 
+## Ask questions of your data
+
+Once events are stored, the next question is always the same one asked in a spreadsheet: how many, of what, over which days, and how does that compare with last week? Writing that question as SQL by hand means every chart reimplements time buckets, property filters, and "count people, not events", and one unescaped property name away from a broken table. The analytics service answers it with one operation that takes a **query** — a small typed value, not a string — and returns the series, the steps, or the grid behind it.
+
+A query is a Rust value your server builds and checks at compile time. Here is "sign-ups per day over the last week, beside the week before":
+
+```rust
+use leptoskit_analytics::query::*;
+
+let question = Query::Trends(TrendsQuery {
+    range: DateRange::last_days(7),
+    interval: Interval::Day,
+    series: vec!["signed_up".into()],
+    filters: Vec::new(),
+    math: Math::UniquePersons,
+    breakdown: None,
+    compare: true,
+    test_accounts: None,
+});
+
+// On your server, as the app, with the service's token: your admin's
+// sign-in decided, above this line, that they may look.
+let answer = leptoskit_rpc::server::call_as(
+    &db,
+    leptoskit_rpc::server::Identity::anonymous()
+        .with_caller(leptoskit_rpc::server::APP_CALLER.to_owned()),
+    None,
+    leptoskit_analytics::service::query::Run { query: question },
+)
+.await?;
+let leptoskit_analytics::query::QueryResult::Trends(trends) = answer.result else {
+    unreachable!("the question was a trend");
+};
+for series in &trends.series {
+    println!("{} sign-ups total", series.total);
+    for bucket in &series.buckets {
+        println!("  {} on {}", bucket.value, bucket.start);
+    }
+}
+```
+
+Change the shape of the question by changing the value: `Math::Total` counts events, `UniquePersons` counts people (a person who signed up twice counts once), `UniqueSessions` counts visits. Add a `Breakdown` to split a series by a property — plan, country, anything an event or a person carries — with the top values shown and the rest summed as `other`. Add filters for properties of the event, its person, or its session (`PropertyFilter::session("browser", …)`). Set `interval` to `Hour`, `Week`, or `Month`. This runs on the server: the browser never calls it, because every insight operation answers only to your app's server, exactly like the person operations above — your admin's sign-in decides who sees the numbers.
+
+The other questions have their own query kinds: `Funnels` walks people through ordered steps ("how many reached checkout, and how long did it take them"), `Retention` builds the cohort grid ("who came back the next week"), `WebOverview` is the web dashboard — visitors, pageviews, bounce rate, top pages, referrers — read from sessions, `Events` lists what happened with filters and pagination, and `Actors` names the people behind any number ("who are the eleven who dropped off at pricing?").
+
+Every answer also carries what it cost: the SQL the service ran, its bound parameters, how long each statement took, and how many rows came back. Show it in your admin's "Workings" drawer and a wrong number is never mysterious. And the numbers stay current: saved insights and dashboards live in the service, and a dashboard on the screen re-runs its query as events arrive — a few seconds behind, never stale, without anyone pressing refresh.
+
+Save the queries worth keeping as **insights** (`create_insight`), and lay them out as **dashboards** (`create_dashboard`). A dashboard is a named grid of tiles over insights, so "Web overview" is data your app saves — with the queries it's made of available as `web_overview_insights()` — rather than a screen someone else drew for you.
+
 ## Record events from anywhere else
 
 Anything that can send JSON can record events, which is useful from a script, a job in another language, or `curl`:

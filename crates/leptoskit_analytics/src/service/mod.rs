@@ -18,9 +18,11 @@ pub mod ingest;
 pub mod limits;
 pub mod otlp;
 pub mod persons;
+pub mod query;
 pub mod read;
 pub mod sessions;
 pub mod tables;
+pub mod tail;
 pub mod ua;
 
 use std::future::Future;
@@ -197,7 +199,11 @@ struct BatchState {
 /// The service's routes, under `/_leptoskit/services/analytics`, with the
 /// batch writer started on `db`. Callers presenting `LEPTOSKIT_SERVICE_TOKEN`
 /// are the app.
-pub fn routes(db: Db, origin: Option<&str>, config: IngestConfig) -> Router {
+///
+/// Returns the live socket with the router: start it with
+/// [`rpc::server::Live::start`] before serving, so live insights refresh
+/// and the `live_events` stream flows (§10, §11).
+pub fn routes(db: Db, origin: Option<&str>, config: IngestConfig) -> (Router, rpc::server::Live) {
 	use rpc::server::Anonymous;
 	use rpc::server::ServiceCallers;
 
@@ -210,8 +216,7 @@ pub fn routes_with(
 	origin: Option<&str>,
 	config: IngestConfig,
 	callers: impl Identify,
-) -> Router {
-	let _ = origin;
+) -> (Router, rpc::server::Live) {
 	let ingest = Ingest::start(db.clone(), config);
 	let catalogue = Catalogue::new(db.clone());
 	let with_ingest = Arc::new(WithIngest {
@@ -223,6 +228,10 @@ pub fn routes_with(
 		.service(SERVICE)
 		.identify(Arc::clone(&with_ingest));
 	let identify: Arc<dyn Identify> = with_ingest;
+	let live = match origin {
+		Some(origin) => server.live().origin(origin),
+		None => server.live(),
+	};
 
 	let batch = Router::new()
 		.route("/v1/batch", post(receive_batch))
@@ -235,7 +244,11 @@ pub fn routes_with(
 			catalogue,
 		});
 
-	Router::new().nest(&rpc::service_prefix(SERVICE), server.router().merge(batch))
+	let router = Router::new().nest(
+		&rpc::service_prefix(SERVICE),
+		server.router().merge(batch).merge(live.router()),
+	);
+	(router, live)
 }
 
 /// `POST v1/batch`: a binary batch, optionally gzipped.

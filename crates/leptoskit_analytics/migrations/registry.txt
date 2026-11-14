@@ -3,3 +3,4 @@
 20261111T173606_apm_windows
 20261111T232350_event_schemas
 20261114T163741_persons_groups_sessions
+20261114T210115_insights

@@ -720,6 +720,14 @@ pub(crate) fn stamp(time: Timestamp) -> String {
 	time.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// The instant [`stamp`] wrote, and the RFC 3339 either dialect returned
+/// as text.
+pub(crate) fn parse_stamp(text: &str) -> Option<Timestamp> {
+	chrono::DateTime::parse_from_rfc3339(text)
+		.ok()
+		.map(Into::into)
+}
+
 fn object(properties: &Json) -> serde_json::Map<String, Json> {
 	properties.as_object().cloned().unwrap_or_default()
 }

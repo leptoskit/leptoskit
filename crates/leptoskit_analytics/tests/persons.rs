@@ -30,7 +30,7 @@ struct Service {
 
 async fn start(config: IngestConfig) -> Service {
 	let db = leptoskit_db::testing::sqlite_migrated(service::MIGRATIONS).await;
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		config,
@@ -853,7 +853,7 @@ async fn postgres_processes_persons_and_sessions_like_sqlite() {
 	let url = std::env::var("LEPTOSKIT_ANALYTICS_TEST_POSTGRES").expect("private Postgres URL");
 	let db = Db::connect(&url).await.unwrap();
 	db.migrate(service::POSTGRES_MIGRATIONS).await.unwrap();
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		IngestConfig::default(),
@@ -961,7 +961,7 @@ async fn postgres_refuses_to_merge_two_identified_persons() {
 	let url = std::env::var("LEPTOSKIT_ANALYTICS_TEST_POSTGRES").expect("private Postgres URL");
 	let db = Db::connect(&url).await.unwrap();
 	db.migrate(service::POSTGRES_MIGRATIONS).await.unwrap();
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		IngestConfig::default(),
@@ -1014,7 +1014,7 @@ async fn postgres_applies_set_by_event_time() {
 	let url = std::env::var("LEPTOSKIT_ANALYTICS_TEST_POSTGRES").expect("private Postgres URL");
 	let db = Db::connect(&url).await.unwrap();
 	db.migrate(service::POSTGRES_MIGRATIONS).await.unwrap();
-	let router = service::routes_with(
+	let (router, _live) = service::routes_with(
 		db.clone(),
 		None,
 		IngestConfig::default(),

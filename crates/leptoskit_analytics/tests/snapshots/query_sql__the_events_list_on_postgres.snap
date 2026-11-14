@@ -1,0 +1,6 @@
+---
+source: crates/leptoskit_analytics/tests/query_sql.rs
+expression: "sql_of(&query, Dialect::Postgres)"
+---
+-- events page
+SELECT "events"."timestamp", "events"."uuid", "events"."name", "events"."distinct_id", COALESCE((SELECT "po"."person_id" FROM "person_overrides" "po" WHERE "po"."distinct_id" = "events"."distinct_id"), "events"."person_id", (SELECT "pdi"."person_id" FROM "person_distinct_ids" "pdi" WHERE "pdi"."distinct_id" = "events"."distinct_id")), "events"."session_id", "events"."properties", "events"."source" FROM "events" WHERE "events"."timestamp" >= $1 AND "events"."timestamp" < $2 ORDER BY "events"."timestamp" DESC, "events"."uuid" DESC LIMIT 51

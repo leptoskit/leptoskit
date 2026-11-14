@@ -72,7 +72,7 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		Err(_) => service::persons::PersonProfiles::default(),
 	};
 
-	Ok(service::routes(
+	let (router, live) = service::routes(
 		db,
 		env.public_origin(),
 		service::IngestConfig {
@@ -80,5 +80,7 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 			person_profiles,
 			..service::IngestConfig::default()
 		},
-	))
+	);
+	live.start().await?;
+	Ok(router)
 }
