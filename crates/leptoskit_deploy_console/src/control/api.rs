@@ -516,6 +516,9 @@ async fn operation_events(
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
 	let principal = service.auth(&headers, false).await?;
+	// Subscribe before reading the snapshot, so an update published in
+	// between is delivered (at worst twice) instead of lost.
+	let subscription = service.subscribe(&id);
 	let current = service.operation(&principal, &id).map_err(facade_error)?;
 	let terminal = matches!(
 		current.phase,
@@ -524,7 +527,7 @@ async fn operation_events(
 	let stream = EventStream {
 		snapshot: Some(current),
 		terminal,
-		subscription: service.subscribe(&id),
+		subscription,
 	};
 
 	Ok(Sse::new(stream)
