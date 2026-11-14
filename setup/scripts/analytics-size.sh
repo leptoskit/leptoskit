@@ -17,7 +17,10 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
-budget=$((12 * 1024))
+# 12 KiB until the automatic views (§14) joined the core, measured at
+# 13,584 bytes (docs/agents/analytics-service.md §21); the owner's rule is
+# that a budget changes in the open, so this one did.
+budget=$((14 * 1024))
 app=examples/analytics/analytics_app
 
 build() {
