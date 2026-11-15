@@ -13,6 +13,7 @@
 //! at each step, and people who come back, less each week.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -120,6 +121,19 @@ pub fn schemas() -> Vec<SchemaInput> {
 	]
 }
 
+/// The demo's ingest writer collection window. The service's default (50
+/// ms) groups concurrent client submissions into shared transactions at
+/// real load; the demo's seed instead sends 30 sequential committed
+/// batches, so under the default each batch waits out the whole window for
+/// more rows that never come — about 1.5 s of pure writer wait on a cold
+/// start, most of the readiness budget. A shorter window keeps the same
+/// group-commit mechanism for the demo's handful of concurrent visitors
+/// (submissions landing together still share a transaction) while the
+/// seed pays at most `30 * batch_wait` instead. The measured choice and
+/// its tradeoff are recorded in `docs/agents/public-demo.md`; the
+/// analytics service's own default is unchanged for production.
+const DEMO_BATCH_WAIT: Duration = Duration::from_millis(5);
+
 /// The service's routes, its database migrated, its live stream started,
 /// its files under `data`. `token` is the service's token for the app's
 /// own callers, which the caller keeps: whoever presents it registers and
@@ -135,7 +149,10 @@ pub async fn start(data: &Path, origin: &str, token: &str) -> Result<Router> {
 	let (router, live) = service::routes_with(
 		db,
 		Some(origin),
-		service::IngestConfig::default(),
+		service::IngestConfig {
+			batch_wait: DEMO_BATCH_WAIT,
+			..service::IngestConfig::default()
+		},
 		ServiceCallers::new(Anonymous).caller(token, APP_CALLER),
 	);
 	live.start().await?;
