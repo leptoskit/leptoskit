@@ -12,6 +12,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+hex = { workspace = true }
 leptoskit_admin = { workspace = true }
 leptoskit_analytics = { workspace = true, features = ["derive", "server-client", "service"] }
 leptoskit_apm = { workspace = true, features = ["server"] }
@@ -26,8 +27,14 @@ leptoskit_rpc = { workspace = true, features = ["services"] }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+# Paused time, for the simulation's waits.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
