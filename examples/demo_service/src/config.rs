@@ -200,12 +200,13 @@ impl Config {
 		let volume = std::path::PathBuf::from(read("LEPTOSKIT_SERVICE_VOLUME_STATE")?);
 		let site = read("DEMO_SITE_ORIGIN")?;
 		let admin = read("DEMO_ADMIN_ORIGIN")?;
-		let client_ip_header = std::env::var("DEMO_CLIENT_IP_HEADER")
-			.ok()
-			.map(|value| value.trim().to_owned())
-			.filter(|value| !value.is_empty())
-			.map(|value| client_ip_header(&value))
-			.transpose()?;
+		let client_ip_header = match std::env::var("DEMO_CLIENT_IP_HEADER") {
+			Ok(value) => Some(client_ip_header(&value)?),
+			Err(std::env::VarError::NotPresent) => None,
+			Err(std::env::VarError::NotUnicode(_)) => {
+				anyhow::bail!("DEMO_CLIENT_IP_HEADER must be valid text");
+			}
+		};
 		Self::parse(bind, volume, &site, &admin, client_ip_header)
 	}
 

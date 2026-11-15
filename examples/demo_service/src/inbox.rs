@@ -208,11 +208,6 @@ impl Mailer for DemoInbox {
 				state.addresses.contains_key(&address)
 			};
 
-			if !opened {
-				self.lock().dropped += 1;
-				return Ok(());
-			}
-
 			let sent_at = now();
 			let receipt = receipt_id().map_err(|error| MailError(error.to_string()))?;
 
@@ -224,8 +219,16 @@ impl Mailer for DemoInbox {
 				.await
 				.map_err(|error| MailError(error.to_string()))?;
 
-			if recorded == 0 {
+			if recorded == 0 && opened {
 				return Err(MailError("no demo person owns this address".into()));
+			}
+
+			if !opened {
+				// Auth has already replaced any earlier challenge. Record a
+				// known person's new receipt even when their inbox was evicted,
+				// so retained mail in another process is not reported current.
+				self.lock().dropped += 1;
+				return Ok(());
 			}
 
 			let stored = Stored {
@@ -424,6 +427,35 @@ mod tests {
 		let kept = inbox.messages_for(address);
 		assert_eq!(kept.len(), 1);
 		assert_eq!(kept[0].receipt.len(), RECEIPT_LEN, "an opaque id");
+	}
+
+	#[tokio::test]
+	async fn a_dropped_send_invalidates_the_previous_mail_receipt() {
+		let address = "ada-0123456789abcdef@demo.invalid";
+		let inbox = inbox_with_person(address).await;
+		inbox.open(address);
+		inbox.send(mail(address, "OLD")).await.expect("delivered");
+		let old_messages = inbox.messages_for(address);
+		inbox.lock().addresses.remove(address);
+		inbox.send(mail(address, "NEW")).await.expect("dropped");
+		let person = DemoPerson::query()
+			.filter(|person| person.email.eq(Email::parse(address).expect("email")))
+			.first(&inbox.db)
+			.await
+			.expect("read")
+			.expect("person");
+		assert_eq!(inbox.dropped(), 1);
+		assert!(inbox.messages_for(address).is_empty());
+		assert_eq!(
+			DemoInbox::unavailable(
+				Persona::Ada,
+				person.last_receipt_id.as_deref(),
+				person.last_receipt_at,
+				&old_messages,
+			),
+			Some(Persona::Ada),
+			"older mail cannot stand in for a code that was dropped"
+		);
 	}
 
 	#[tokio::test]

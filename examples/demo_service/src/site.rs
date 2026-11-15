@@ -592,11 +592,9 @@ fn page() -> Response {
 /// site origin; only when `Origin` is absent does `Sec-Fetch-Site:
 /// same-origin` stand in. Neither, or a contradictory pair, refuses.
 fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
-	if let Some(requested) = headers
-		.get(header::ORIGIN)
-		.and_then(|value| value.to_str().ok())
-	{
-		return requested == origin;
+	let mut origins = headers.get_all(header::ORIGIN).iter();
+	if let Some(requested) = origins.next() {
+		return origins.next().is_none() && requested.to_str().ok() == Some(origin);
 	}
 
 	headers
@@ -751,4 +749,29 @@ pub async fn count_events(router: &Router, token: &str) -> Result<i64> {
 		.filter_map(|definition| definition["volume"].as_i64())
 		.sum();
 	Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn malformed_or_duplicate_origins_cannot_use_fetch_metadata() {
+		let origin = "https://notes.example";
+		let mut headers = HeaderMap::new();
+		headers.insert("sec-fetch-site", "same-origin".parse().expect("header"));
+		assert!(same_origin(&headers, origin));
+		headers.insert(
+			header::ORIGIN,
+			header::HeaderValue::from_bytes(b"\xff").expect("header"),
+		);
+		assert!(!same_origin(&headers, origin));
+		headers.insert(header::ORIGIN, origin.parse().expect("header"));
+		assert!(same_origin(&headers, origin));
+		headers.append(
+			header::ORIGIN,
+			"https://foreign.example".parse().expect("header"),
+		);
+		assert!(!same_origin(&headers, origin));
+	}
 }

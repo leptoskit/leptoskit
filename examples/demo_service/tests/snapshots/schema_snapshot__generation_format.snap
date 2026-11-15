@@ -3,7 +3,7 @@ source: examples/demo_service/tests/schema_snapshot.rs
 expression: snapshot
 ---
 {
-  "admin_schema_json": "b798d6a57baa451ad83526d52068cc9fb2b8ae1cb3998b597124dbc3a8fb093f",
+  "admin_schema_json": "3f1b9f65d9c2b47d67dd99c4f15d0d4e6fd1ed1493a61beb6cf65e1c9ffb3a98",
   "admin_sqlite_master": {
     "names": [
       "admin_people_account_id_key",
@@ -33,6 +33,7 @@ expression: snapshot
       "demo_passes_ip_hash_idx",
       "demo_passes_token_hash_key",
       "demo_people_account_id_key",
+      "demo_people_email_key",
       "demo_people_pass_id_idx",
       "demo_people_pass_id_persona_key",
       "event_schemas_name_idx",
@@ -142,8 +143,8 @@ expression: snapshot
       "live_rpc_jobs_insert",
       "live_rpc_jobs_update"
     ],
-    "objects": 135,
-    "sql_sha256": "a75abce7c3feb901a35cc65e6b573361c66f21eabd9407100a529e001f16bdd0"
+    "objects": 136,
+    "sql_sha256": "1cc6f0b212269ec201b03cf361133ef375cd16879713f6844153c54647bfe84d"
   },
   "analytics_sqlite_master": {
     "names": [
@@ -224,7 +225,7 @@ expression: snapshot
     "objects": 11,
     "sql_sha256": "bbf053fc26946fc27ad5b928e6112e5c3ba51165d2d6fbd77854eb87823ff70f"
   },
-  "fingerprint": "3f44b58dcda8d75c0c46aecef1b204b1adbca4396b63e4b9111ed4fe07d9714f",
+  "fingerprint": "3d827a1e15d72c6c3ad28ddce2c3ea5691117fe7edd2e15daaceb2aeb60c6b4f",
   "format": 2,
   "site_sqlite_master": {
     "names": [
@@ -255,6 +256,7 @@ expression: snapshot
       "demo_passes_ip_hash_idx",
       "demo_passes_token_hash_key",
       "demo_people_account_id_key",
+      "demo_people_email_key",
       "demo_people_pass_id_idx",
       "demo_people_pass_id_persona_key",
       "event_schemas_name_idx",
@@ -364,7 +366,7 @@ expression: snapshot
       "live_rpc_jobs_insert",
       "live_rpc_jobs_update"
     ],
-    "objects": 135,
-    "sql_sha256": "a75abce7c3feb901a35cc65e6b573361c66f21eabd9407100a529e001f16bdd0"
+    "objects": 136,
+    "sql_sha256": "1cc6f0b212269ec201b03cf361133ef375cd16879713f6844153c54647bfe84d"
   }
 }

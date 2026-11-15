@@ -152,6 +152,7 @@ pub struct DemoPerson {
 	pub persona: Persona,
 	/// The synthetic address, unique across every visitor: the only
 	/// thing the sign-up hook matches on.
+	#[db(unique)]
 	pub email: Email,
 	/// The Auth account the address proved, exactly once. `None` until
 	/// the first successful verify.
@@ -182,7 +183,7 @@ impl OnSignUp for DemoPerson {
 			.run(tx)
 			.await?;
 
-		if claimed == 0 {
+		if claimed != 1 {
 			return Err(AuthError::NotAllowed);
 		}
 
@@ -365,10 +366,7 @@ pub(crate) fn client_ip(
 
 	let mut values = headers.get_all(name).iter();
 	let Some(value) = values.next() else {
-		// No header line: no address, the same answer a peer-less local
-		// process gives. The edge always sets the header; Auth skips its
-		// own IP bucket in exactly this case.
-		return Ok(None);
+		return Err(ClientIpError);
 	};
 
 	if values.next().is_some() {
@@ -711,6 +709,37 @@ pub(crate) fn sign_in_location(persona: Persona, return_to: &str) -> String {
 mod tests {
 	use super::*;
 
+	#[tokio::test]
+	async fn an_email_belongs_to_exactly_one_person() {
+		let db = leptoskit_db::testing::sqlite()
+			.await
+			.system("demo: unique email proof");
+		let pass = NewDemoPass {
+			token_hash: "test-hash".to_owned(),
+			ip_hash: None,
+		}
+		.insert(&db)
+		.await
+		.expect("pass");
+		for persona in [Persona::Ada, Persona::Grace] {
+			let result = NewDemoPerson {
+				pass_id: pass.id,
+				persona,
+				email: Email::parse("ada-same@demo.invalid").expect("email"),
+				account_id: None,
+				last_receipt_id: None,
+				last_receipt_at: None,
+			}
+			.insert(&db)
+			.await;
+			if persona == Persona::Ada {
+				assert!(result.is_ok());
+			} else {
+				assert!(matches!(result, Err(DbError::Conflict { .. })));
+			}
+		}
+	}
+
 	#[test]
 	fn personas_parse_from_form_values_only() {
 		assert_eq!(Persona::of_form("ada"), Some(Persona::Ada));
@@ -838,6 +867,7 @@ mod tests {
 			Some("127.0.0.1".parse().expect("an ip"))
 		);
 		assert_eq!(client_ip(None, &forwarded, None).expect("no peer"), None);
+		assert!(client_ip(Some("x-forwarded-for"), &HeaderMap::new(), Some(peer)).is_err());
 
 		// Configured: exactly one value that is exactly one address.
 		let good = headers(&[("x-forwarded-for", "203.0.113.9")]);
@@ -866,13 +896,7 @@ mod tests {
 		let garbage = headers(&[("x-forwarded-for", "not-an-ip")]);
 		assert!(client_ip(Some("x-forwarded-for"), &garbage, Some(peer)).is_err());
 
-		// Absent header: no IP, the same answer the peer-less local
-		// deployment gives.
-		assert_eq!(
-			client_ip(Some("x-forwarded-for"), &headers(&[]), Some(peer))
-				.expect("an absent header is no ip"),
-			None
-		);
+		assert!(client_ip(Some("x-forwarded-for"), &HeaderMap::new(), None).is_err());
 	}
 
 	#[test]

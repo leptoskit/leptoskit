@@ -928,6 +928,14 @@ fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 fn invalid_configuration_exits_nonzero_without_listening_or_writing_a_generation() {
 	let cases: Vec<(&str, Vec<(&str, String)>)> = vec![
 		(
+			"an empty configured client IP header",
+			vec![("DEMO_CLIENT_IP_HEADER", String::new())],
+		),
+		(
+			"a whitespace-only configured client IP header",
+			vec![("DEMO_CLIENT_IP_HEADER", "   ".to_owned())],
+		),
+		(
 			"an ftp site origin on loopback",
 			vec![("DEMO_SITE_ORIGIN", "ftp://localhost".to_owned())],
 		),

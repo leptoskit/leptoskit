@@ -109,7 +109,7 @@ impl Browser {
 		self.send(router, origin, request, Body::empty()).await
 	}
 
-	/// A JSON POST with this browser's cookies and its Origin.
+	/// A JSON POST with this browser's cookies, Origin and an edge IP.
 	async fn post_json(
 		&mut self,
 		router: &Router,
@@ -120,6 +120,7 @@ impl Browser {
 		let request = Request::post(path)
 			.header(header::HOST, host_of(origin))
 			.header(header::ORIGIN, origin)
+			.header("x-forwarded-for", "198.51.100.1")
 			.header(header::CONTENT_TYPE, "application/json");
 		self.send(router, origin, request, Body::from(body.to_string()))
 			.await
@@ -216,6 +217,25 @@ async fn mint(browser: &mut Browser, router: &Router, persona: &str) -> axum::re
 			"/demo/pass",
 			&[],
 			&body,
+		)
+		.await
+}
+
+/// Mints through a configured edge's single-address header.
+async fn mint_with_ip(
+	browser: &mut Browser,
+	router: &Router,
+	persona: &str,
+	ip: &str,
+) -> axum::response::Response {
+	browser
+		.post_form(
+			router,
+			SITE_HOST,
+			Some(SITE_ORIGIN),
+			"/demo/pass",
+			&[("x-forwarded-for", ip)],
+			&format!("persona={persona}"),
 		)
 		.await
 }
@@ -1087,7 +1107,7 @@ async fn caps_hold_under_concurrency_across_two_instances() -> Result<()> {
 
 	// One visitor keeps a pass from before the caps fill.
 	let mut keeper = Browser::default();
-	let kept = mint(&mut keeper, &first.router, "grace").await;
+	let kept = mint_with_ip(&mut keeper, &first.router, "grace", "198.51.100.1").await;
 	assert_eq!(kept.status(), StatusCode::SEE_OTHER);
 	let keeper_view = inbox(&mut keeper, &first.router).await;
 	let keeper_address = keeper_view["people"][0]["email"]
@@ -1254,15 +1274,18 @@ async fn a_configured_ip_header_gates_send_and_verify() -> Result<()> {
 	let built = harness.build(&options, ADMIN_ORIGIN).await;
 	let mut ada = Browser::default();
 
-	mint(&mut ada, &built.router, "ada").await;
+	let missing_ip = mint(&mut ada, &built.router, "ada").await;
+	assert_eq!(missing_ip.status(), StatusCode::BAD_REQUEST);
+	let minted = mint_with_ip(&mut ada, &built.router, "ada", "203.0.113.9").await;
+	assert_eq!(minted.status(), StatusCode::SEE_OTHER);
 	let view = inbox(&mut ada, &built.router).await;
 	let address = view["people"][0]["email"]
 		.as_str()
 		.expect("email")
 		.to_owned();
 
-	// Send without the header: the edge always sets it, so its absence
-	// means no IP — the send itself is allowed, as locally it must be.
+	// A configured edge must supply the header; omission cannot bypass
+	// its IP limits. Local requests omit the setting instead.
 	let sent = {
 		let mut browser = Browser::default();
 		browser
@@ -1289,8 +1312,8 @@ async fn a_configured_ip_header_gates_send_and_verify() -> Result<()> {
 	};
 	assert_eq!(
 		sent.status(),
-		StatusCode::NO_CONTENT,
-		"a header-less local request has no IP, and no IP is no refusal"
+		StatusCode::BAD_REQUEST,
+		"a configured but absent header is refused"
 	);
 
 	// A garbage header value is refused for send and verify alike.
