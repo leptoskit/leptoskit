@@ -115,12 +115,16 @@ default = []
 # The browser client: enrollment from the app's web build through the
 # browser's own Push API, and the receiver service-worker script. It adds
 # no server dependency; `tests/dependencies.rs` checks the tree the app's
-# client build compiles.
+# client build compiles. `leptoskit_rpc/web` is the transport: without it
+# a standalone dependency on this crate with only `browser` turned on
+# would compile enrollment that cannot reach the service, so the feature
+# carries its own same-origin fetch backend.
 browser = [
 	"dep:js-sys",
 	"dep:leptoskit_service_worker",
 	"dep:thiserror",
 	"dep:wasm-bindgen",
+	"leptoskit_rpc/web",
 ]
 # Building the service: the operations' bodies, their registrations, the
 # SQLite driver, live queries, and the push engine. Only `lk` turns this

@@ -7,11 +7,12 @@
 //! identity. What was missing is the client half — the service worker
 //! that shows what arrives, and the page code that turns the browser's
 //! subscription into a [`crate::push::PushCredential`] — and that is this
-//! module. It exists behind the `browser` feature, adds no server
-//! dependency (the tree is checked by `tests/dependencies.rs`), and every
-//! call outside a browser answers the plain "unavailable" errors the
-//! [`leptoskit_service_worker`] crate does, so the same app code compiles
-//! on native targets and during server rendering.
+//! module. It exists behind the `browser` feature, which carries its own
+//! browser transport (`leptoskit_rpc/web`'s same-origin `fetch`), adds no
+//! server dependency (the tree is checked by `tests/dependencies.rs`),
+//! and every call outside a browser answers the plain "unavailable"
+//! errors the [`leptoskit_service_worker`] crate does, so the same app
+//! code compiles on native targets and during server rendering.
 //!
 //! The whole workflow, in the order an app wires it:
 //!
@@ -22,46 +23,73 @@
 //!    you need it for a template engine.
 //! 2. Register it once at startup: [`register`] with the script's path
 //!    (`"/sw.js"`) and [`RegisterOptions::default()`], then [`ready`] to wait
-//!    for control. Nothing in [`enroll`] registers for you: offline caching
+//!    for control. Nothing in this module registers for you: offline caching
 //!    rules and scopes stay yours.
-//! 3. On an **explicit user gesture** — a "turn on notifications" button, never
+//! 3. On **launch**, once the person is signed in, call [`reconcile`]: it
+//!    registers the subscription the browser already holds, if it holds one,
+//!    and answers `None` when it doesn't. It never prompts — reading a
+//!    subscription needs no permission — so it belongs on startup paths where a
+//!    prompt is not allowed. `None` is the app's cue to offer the switch
+//!    itself.
+//! 4. On an **explicit user gesture** — a "turn on notifications" button, never
 //!    a mount or a render — call [`enroll`]. It checks [`availability`], waits
-//!    for the **active** worker instead of racing its install, reuses the
-//!    subscription the browser already holds rather than subscribing twice, and
-//!    registers the result with [`crate::push::register_push_endpoint`] over
-//!    the app's own RPC client: the enrollment is the forwarded signed-in
-//!    person's, and no service token or copy of their session is stored
-//!    anywhere in this module or in the worker.
-//! 4. Keep the [`Enrollment`] it answers — the endpoint's opaque id, the only
-//!    handle revocation takes. On sign-out, while the person is still
-//!    authenticated, call [`disable`]: the endpoint is revoked first, then the
-//!    browser unsubscribes. A failure of either half is returned, never
-//!    swallowed — a disable that couldn't revoke leaves the browser
-//!    subscription alone so the whole sequence can be retried while still
-//!    signed in, and the next account on this browser is refused
-//!    (`EnrollError::Enroll`) until the old account's revoke lands. The service
-//!    itself refuses to reassign a live destination to another account, so a
-//!    switch can never quietly enroll the previous account's endpoint.
+//!    for the **active** worker instead of racing its install, and subscribes
+//!    only when the browser holds no subscription: a subscription that exists
+//!    is reused — and only when it was created for this app's own VAPID key
+//!    ([`EnrollError::KeyMismatch`] otherwise, because a subscription made for
+//!    one sender cannot receive another's pushes). The result is registered
+//!    with [`crate::push::register_push_endpoint`] over the app's own RPC
+//!    client: the enrollment is the forwarded signed-in person's, and no
+//!    service token or copy of their session is stored anywhere in this module
+//!    or in the worker. Call [`reconcile`] at startup so the worker is settled
+//!    long before the gesture: `subscribe` is the one call whose permission the
+//!    browser ties to the gesture, and a worker still installing when the
+//!    gesture arrives can eat the gesture's window.
+//! 5. Keep the [`Enrollment`] it answers — the endpoint's opaque id, the
+//!    subscription it names, and the scope it was enrolled under. On sign-out,
+//!    while the person is still authenticated, call [`disable`]: the endpoint
+//!    is revoked first, then that one subscription — never whatever the browser
+//!    holds now — is unsubscribed. A failure of either half is returned, never
+//!    swallowed: a disable that couldn't revoke leaves the browser subscription
+//!    alone so the whole sequence can be retried while still signed in (a retry
+//!    after the revoke already landed completes: the service's "no such
+//!    endpoint" answer for an endpoint no longer in the person's own list is
+//!    already-done, not failure), and the next account on this browser is
+//!    refused (`EnrollError::Enroll`) until the old account's revoke lands. The
+//!    service itself refuses to reassign a live destination to another account,
+//!    so a switch can never quietly enroll the previous account's endpoint.
+//!
+//! When the worker is registered under an explicit scope, say so in
+//! [`EnrollOptions::worker_scope`]: the enrollment waits for that exact
+//! scope's worker and records the scope, and [`disable`] unsubscribes at
+//! that scope only. A broader worker — the origin's root, say — never
+//! stands in for it.
 //!
 //! Subscription changes the browser makes on its own (a rotated or
 //! replaced subscription, `pushsubscriptionchange`) cannot be reconciled
 //! from the worker: the worker deliberately holds no credentials, so it
 //! has no identity to enroll with. The supported reconciliation is the
-//! next authenticated app launch calling [`enroll`] again: the browser's
-//! current subscription is registered under the person who is signed in,
-//! and the replaced subscription's endpoint dies at its push service,
-//! whose "unregistered" answer invalidates the stale record on its next
+//! next authenticated app launch calling [`reconcile`] again: the
+//! browser's current subscription is registered under the person who is
+//! signed in, and a stale handle's [`disable`] leaves a replaced
+//! subscription alone — its endpoint dies at its push service, whose
+//! "unregistered" answer invalidates the stale record on its next
 //! delivery. Nothing here reads or mutates read state: the worker shows
 //! banners and routes clicks; the authenticated app marks what it reads.
 //!
 //! ```rust,ignore
 //! use leptoskit_notifications::browser;
 //!
-//! // From a click handler, with the operator's VAPID public key — the
-//! // private half never leaves the service:
-//! let enrollment = browser::enroll(&browser::EnrollOptions::new(vapid_public_key)).await?;
-//! // `enrollment.endpoint` is the opaque handle: keep it beside the
-//! // person's session.
+//! // At launch, after register and ready, without prompting:
+//! let options = browser::EnrollOptions::new(vapid_public_key);
+//! if browser::reconcile(&options).await?.is_none() {
+//!     // Offer the switch; from its click handler — with the operator's
+//!     // VAPID public key, whose private half never leaves the service —
+//!     // enroll:
+//!     let enrollment = browser::enroll(&options).await?;
+//!     // `enrollment.endpoint` is the opaque handle: keep it beside the
+//!     // person's session.
+//! }
 //! ```
 //!
 //! ```rust,ignore
@@ -237,14 +265,37 @@ pub fn availability() -> Availability {
 	Availability::Unsupported
 }
 
-/// One enrolled browser: the opaque handle the service answered, and all
-/// that [`disable`] needs later. Store it beside the person's session on
-/// this device. The credential the service holds never appears here.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One enrolled browser: the opaque handle the service answered, the one
+/// subscription it may unsubscribe, and the scope that subscription lives
+/// under. Store it beside the person's session on this device — it is the
+/// whole of [`disable`]. The credential the service holds never appears
+/// here, and the subscription's URL — the one capability in it, since
+/// whoever holds a push service endpoint can push to it — is redacted
+/// from the [`Debug`] print.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enrollment {
 	/// The endpoint's opaque id, as [`crate::push::EndpointSummary`]
 	/// lists it.
 	pub endpoint: uuid::Uuid,
+	/// The subscription's push service endpoint URL, exactly as the
+	/// browser answered it: [`disable`] unsubscribes this subscription and
+	/// no other, so a handle whose subscription the browser has since
+	/// replaced — rotated, or re-enrolled by another sender — leaves the
+	/// replacement alone.
+	pub subscription: String,
+	/// The registration's absolute scope the worker was enrolled under:
+	/// [`disable`] looks the worker up there, and only there.
+	pub scope: String,
+}
+
+impl std::fmt::Debug for Enrollment {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Enrollment")
+			.field("endpoint", &self.endpoint)
+			.field("subscription", &"<redacted>")
+			.field("scope", &self.scope)
+			.finish()
+	}
 }
 
 /// What [`enroll`] takes: the public half of the operator's VAPID pair,
@@ -259,7 +310,10 @@ pub struct EnrollOptions {
 	pub vapid_public_key: String,
 	/// The scope the receiver script was registered under, when the app
 	/// set one instead of the script path's default. `None` finds the
-	/// registration that matches this page.
+	/// registration that matches this page. The match is exact: a worker
+	/// registered for a broader scope never stands in for the one asked
+	/// for, because [`EnrollError::Scope`] would be better than enrolling
+	/// against a worker the app didn't select.
 	pub worker_scope: Option<String>,
 }
 
@@ -292,10 +346,26 @@ pub enum EnrollError {
 	/// nothing was subscribed.
 	#[error("no service worker registration: register the receiver script first")]
 	NoWorker,
+	/// No registration covers the requested scope. `getRegistration`
+	/// answers with whatever registration's scope contains the request,
+	/// so a broader worker — the origin's root, say — can answer for a
+	/// scope it doesn't cover; this enrollment refuses that stand-in.
+	/// Register a worker whose scope is exactly `{0}`, or enroll without
+	/// a scope to use the page's own.
+	#[error("no registration with scope {0}: a broader worker doesn't stand in for it")]
+	Scope(String),
 	/// The browser refused the subscription: no user gesture behind the
 	/// call, a bad VAPID key shape, or the registration can't push.
 	#[error("the browser refused the subscription: {0}")]
 	Subscribe(String),
+	/// The browser holds a subscription created for a different
+	/// application server key — another sender's, or this app's previous
+	/// VAPID identity — and a subscription made for one key cannot receive
+	/// another's pushes, so claiming enrollment would end in silent
+	/// delivery failure. Disable the subscription where it was enrolled,
+	/// or unsubscribe it, and enroll again.
+	#[error("the browser holds a subscription for a different application server key")]
+	KeyMismatch,
 	/// The enrollment call failed: the network, or the service's own
 	/// answer — including the refusal that says another live account
 	/// holds this browser's subscription, which that account's
@@ -311,11 +381,13 @@ pub enum EnrollError {
 /// later.
 ///
 /// Call it from a user gesture. The flow is: [`availability`] first (a
-/// refusal here prompts nothing), the active service worker awaited
-/// rather than raced, the browser's existing subscription reused when it
-/// holds one — so a second tap re-enrolls the same endpoint instead of
-/// prompting again, and two racing calls converge on one subscription —
-/// and the subscription registered as the person's own typed
+/// refusal here prompts nothing), the selected worker's activation
+/// awaited rather than raced, the browser's existing subscription reused
+/// when it holds one **for this app's own key** — so a second tap
+/// re-enrolls the same endpoint instead of prompting again, and two
+/// racing calls converge on one subscription — and only when it holds
+/// none, `subscribe`, the one call whose permission the browser ties to
+/// the gesture. The subscription is registered as the person's own typed
 /// [`crate::push::PushCredential`], over the app's RPC client as the
 /// forwarded signed-in person. Re-enrolling the same browser under the
 /// same account answers the same endpoint id, idempotently; under a
@@ -339,7 +411,66 @@ pub async fn enroll(options: &EnrollOptions) -> Result<Enrollment, EnrollError> 
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	enroll_in_browser(options).await
+	{
+		let (registration, held) = held_subscription(options).await?;
+		let subscription = match held {
+			Held::Subscription(existing) => existing,
+			Held::Absent => {
+				registration
+					.push_manager()
+					.map_err(|error| EnrollError::Unavailable(error.to_string()))?
+					.subscribe(&leptoskit_service_worker::PushOptions::new(
+						&options.vapid_public_key,
+					))
+					.await
+					.map_err(|error| EnrollError::Subscribe(error.to_string()))?
+			}
+		};
+
+		register_subscription(&registration, &subscription).await
+	}
+}
+
+/// The nonprompting half of enrollment, for app startup: registers the
+/// subscription the browser already holds — if it holds one for this
+/// app's key — under the signed-in person, and answers `None` when the
+/// browser holds none.
+///
+/// Reading a subscription needs no permission and prompts nothing, so
+/// this belongs on launch paths where a prompt is forbidden; `None` is
+/// the app's cue to offer the switch whose gesture-gated [`enroll`] can
+/// then make one. The worker's activation is still waited for, the key
+/// still matched ([`EnrollError::KeyMismatch`]), and the registration
+/// still the person's own typed credential.
+///
+/// # Errors
+///
+/// As [`enroll`], minus the prompts: there is no `Subscribe` failure,
+/// because nothing subscribes.
+#[cfg_attr(
+	not(target_arch = "wasm32"),
+	allow(clippy::unused_async, reason = "matches the browser signature")
+)]
+pub async fn reconcile(options: &EnrollOptions) -> Result<Option<Enrollment>, EnrollError> {
+	#[cfg(not(target_arch = "wasm32"))]
+	{
+		let _ = options;
+		Err(EnrollError::Unavailable(
+			Availability::Unsupported.reason().to_owned(),
+		))
+	}
+
+	#[cfg(target_arch = "wasm32")]
+	{
+		match held_subscription(options).await? {
+			(_, Held::Absent) => Ok(None),
+			(registration, Held::Subscription(subscription)) => {
+				Ok(Some(
+					register_subscription(&registration, &subscription).await?,
+				))
+			}
+		}
+	}
 }
 
 /// Why a disable stopped, and what state it left. Both halves are
@@ -351,14 +482,17 @@ pub async fn enroll(options: &EnrollOptions) -> Result<Enrollment, EnrollError> 
 pub enum DisableError {
 	/// The revoke failed, so the service still holds a live endpoint for
 	/// this browser. Nothing was unsubscribed: retry the whole disable
-	/// while this person is still authenticated.
+	/// while this person is still authenticated. A revoke that answers
+	/// "no such endpoint" for an endpoint no longer in the person's own
+	/// list is not this failure — that one already landed, and the
+	/// disable carries on.
 	#[error("revoking the endpoint failed: {0}")]
 	Revoke(leptoskit_rpc::FnError),
 	/// The endpoint is revoked, but the browser couldn't unsubscribe
-	/// (no registration on this page, or the browser refused). The
-	/// service pushes nothing further to a revoked endpoint; the browser
-	/// half can be cleaned up by unconditionally unsubscribing on next
-	/// launch.
+	/// (the worker at the enrolled scope is gone, or the browser
+	/// refused). The service pushes nothing further to a revoked
+	/// endpoint; the browser half can be cleaned up by unconditionally
+	/// unsubscribing on next launch.
 	#[error("the browser kept its subscription: {0}")]
 	Unsubscribe(String),
 	/// Not in a browser: nothing was revoked and nothing was
@@ -369,11 +503,15 @@ pub enum DisableError {
 }
 
 /// Disables one enrollment before its person signs out: the endpoint is
-/// revoked **while the person is still authenticated**, then the browser
-/// unsubscribes. This order is the account-switch guarantee: an endpoint
-/// the previous account never revoked is refused to the next one, so
-/// nothing of an old account can be quietly re-enrolled. Failures are
-/// returned, never swallowed.
+/// revoked **while the person is still authenticated**, then the one
+/// subscription the enrollment recorded is unsubscribed, at the scope it
+/// was enrolled under. This order is the account-switch guarantee: an
+/// endpoint the previous account never revoked is refused to the next
+/// one, so nothing of an old account can be quietly re-enrolled, and a
+/// stale handle never takes out the replacement subscription or another
+/// sender's enrollment, because the subscription it unsubscribes must be
+/// the very endpoint URL it recorded. Failures are returned, never
+/// swallowed.
 ///
 /// # Errors
 ///
@@ -395,26 +533,23 @@ pub async fn disable(enrollment: &Enrollment) -> Result<(), DisableError> {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	{
-		// Revoke first: unsubscribing first would strand the service's
-		// record behind a dead subscription exactly when the person can
-		// no longer revoke it.
-		leptoskit_rpc::client::call(crate::push::RevokePushEndpoint {
-			endpoint: enrollment.endpoint,
-		})
-		.await
-		.map_err(DisableError::Revoke)?;
-
-		unsubscribe_in_browser()
-			.await
-			.map_err(DisableError::Unsubscribe)?;
-
-		Ok(())
-	}
+	disable_in_browser(enrollment).await
 }
 
+/// What the browser holds for this app's key when enrollment looks.
 #[cfg(target_arch = "wasm32")]
-async fn enroll_in_browser(options: &EnrollOptions) -> Result<Enrollment, EnrollError> {
+enum Held {
+	/// A subscription created for this app's application server key: the
+	/// one to enroll.
+	Subscription(leptoskit_service_worker::PushSubscription),
+	/// No subscription: only a gesture may make one.
+	Absent,
+}
+
+/// Reads where enrollment stands: availability, the selected worker
+/// activated, and the subscription the browser holds for this app's key.
+#[cfg(target_arch = "wasm32")]
+async fn held_subscription(options: &EnrollOptions) -> Result<(Registration, Held), EnrollError> {
 	match availability() {
 		Availability::Ready => {}
 		Availability::Denied => return Err(EnrollError::Denied),
@@ -430,27 +565,38 @@ async fn enroll_in_browser(options: &EnrollOptions) -> Result<Enrollment, Enroll
 	// whatever account signed in last: reusing it is what keeps a second
 	// tap from prompting again and two racing calls from forking the
 	// browser's subscription. Only `subscribe` prompts, and only the
-	// gesture that reached this call covers it.
-	let subscription = match push.get_subscription().await {
-		Ok(Some(existing)) => existing,
-		Ok(None) => {
-			push.subscribe(&leptoskit_service_worker::PushOptions::new(
-				&options.vapid_public_key,
-			))
-			.await
-			.map_err(|error| EnrollError::Subscribe(error.to_string()))?
+	// gesture that reached this call covers it. A subscription is only
+	// reusable for the key it was created for, so anything else is an
+	// error rather than an enrollment that could never deliver.
+	match push.get_subscription().await {
+		Ok(Some(existing)) => {
+			expect_senders_key(&existing, &options.vapid_public_key)?;
+			Ok((registration, Held::Subscription(existing)))
 		}
-		Err(error) => return Err(EnrollError::Subscribe(error.to_string())),
-	};
+		Ok(None) => Ok((registration, Held::Absent)),
+		Err(error) => Err(EnrollError::Subscribe(error.to_string())),
+	}
+}
 
-	// The person is read from the app's forwarded identity by the
-	// service, never from anything this module holds.
+/// Registers one subscription as the signed-in person's, and answers the
+/// handle its disable needs.
+///
+/// The person is read from the app's forwarded identity by the service,
+/// never from anything this module holds.
+#[cfg(target_arch = "wasm32")]
+async fn register_subscription(
+	registration: &Registration,
+	subscription: &leptoskit_service_worker::PushSubscription,
+) -> Result<Enrollment, EnrollError> {
+	let scope = registration
+		.scope()
+		.map_err(|error| EnrollError::Unavailable(error.to_string()))?;
 	let summary = leptoskit_rpc::client::call(crate::push::RegisterPushEndpoint {
 		credential: crate::push::PushCredential::WebPush {
-			endpoint: subscription.endpoint,
+			endpoint: subscription.endpoint.clone(),
 			keys: crate::push::WebPushKeys {
-				p256dh: subscription.keys.p256dh,
-				auth: subscription.keys.auth,
+				p256dh: subscription.keys.p256dh.clone(),
+				auth: subscription.keys.auth.clone(),
 			},
 		},
 	})
@@ -459,65 +605,207 @@ async fn enroll_in_browser(options: &EnrollOptions) -> Result<Enrollment, Enroll
 
 	Ok(Enrollment {
 		endpoint: summary.id,
+		subscription: subscription.endpoint.clone(),
+		scope,
 	})
 }
 
 /// The registration to enroll against, with its worker active. Subscribe
 /// rides a registration whenever it was installed, but a worker that is
 /// still installing shows nothing when the push arrives, so activation is
-/// waited for instead of raced.
+/// waited for instead of raced — for the registration that was selected,
+/// never a stand-in: `ready` would answer the page's own, and
+/// `getRegistration` answers any scope it covers, so with an explicit scope
+/// the answer's scope is verified to be exactly the one asked for.
 #[cfg(target_arch = "wasm32")]
 async fn active_registration(scope: Option<&str>) -> Result<Registration, EnrollError> {
-	let mut registration = get_registration(scope)
-		.await
-		.map_err(|error| EnrollError::Unavailable(error.to_string()))?
-		.ok_or(EnrollError::NoWorker)?;
+	let unavailable =
+		|error: leptoskit_service_worker::Error| EnrollError::Unavailable(error.to_string());
 
-	if !has_active_worker(&registration) {
-		// `ready` answers the page's own registration; with an explicit
-		// scope, the scoped one is re-read once activation has settled,
-		// falling back to the page's when the scope is still quiet.
-		let ready = ready()
-			.await
-			.map_err(|error| EnrollError::Unavailable(error.to_string()))?;
-
-		registration = if scope.is_some() {
-			get_registration(scope)
+	let registration = match scope {
+		None => {
+			get_registration(None)
 				.await
-				.map_err(|error| EnrollError::Unavailable(error.to_string()))?
-				.filter(has_active_worker)
-				.unwrap_or(ready)
-		} else {
-			ready
-		};
-	}
+				.map_err(unavailable)?
+				.ok_or(EnrollError::NoWorker)?
+		}
+		Some(requested) => {
+			let found = get_registration(Some(requested))
+				.await
+				.map_err(unavailable)?
+				.ok_or(EnrollError::NoWorker)?;
 
+			let scope = found.scope().map_err(unavailable)?;
+			if scope != resolved_scope(requested)? {
+				return Err(EnrollError::Scope(requested.to_owned()));
+			}
+
+			found
+		}
+	};
+
+	registration
+		.wait_until_active()
+		.await
+		.map_err(|error| EnrollError::Unavailable(error.to_string()))?;
 	Ok(registration)
 }
 
+/// The absolute URL a scope string names on this page's origin, resolved
+/// the same way the browser resolves the client URL `getRegistration` is
+/// handed, so the comparison with the registration's own scope is exact.
 #[cfg(target_arch = "wasm32")]
-fn has_active_worker(registration: &Registration) -> bool {
-	registration.active().is_ok_and(|worker| worker.is_some())
+fn resolved_scope(scope: &str) -> Result<String, EnrollError> {
+	use wasm_bindgen::JsCast;
+
+	let page = js_sys::Reflect::get(&js_sys::global(), &js_sys::JsString::from("location"))
+		.ok()
+		.and_then(|location| js_sys::Reflect::get(&location, &js_sys::JsString::from("href")).ok())
+		.and_then(|href| href.as_string())
+		.ok_or_else(|| EnrollError::Unavailable("the page has no location".to_owned()))?;
+
+	let constructor = js_sys::Reflect::get(&js_sys::global(), &js_sys::JsString::from("URL"))
+		.ok()
+		.and_then(|value| value.dyn_into::<js_sys::Function>().ok())
+		.ok_or_else(|| EnrollError::Unavailable("URL".to_owned()))?;
+
+	let resolved = js_sys::Reflect::construct(
+		&constructor,
+		&js_sys::Array::of2(
+			&wasm_bindgen::JsValue::from_str(scope),
+			&wasm_bindgen::JsValue::from_str(&page),
+		),
+	)
+	.map_err(|error| EnrollError::Unavailable(js_message(&error)))?;
+
+	js_sys::Reflect::get(&resolved, &js_sys::JsString::from("href"))
+		.ok()
+		.and_then(|href| href.as_string())
+		.ok_or_else(|| EnrollError::Unavailable("the scope resolved to no URL".to_owned()))
 }
 
+/// The message of a JavaScript error, as the service worker crate reads
+/// it.
 #[cfg(target_arch = "wasm32")]
-async fn unsubscribe_in_browser() -> Result<(), String> {
-	let registration = get_registration(None)
+fn js_message(error: &wasm_bindgen::JsValue) -> String {
+	js_sys::Reflect::get(error, &js_sys::JsString::from("message"))
+		.ok()
+		.and_then(|message| message.as_string())
+		.or_else(|| error.as_string())
+		.unwrap_or_else(|| "the browser refused".to_owned())
+}
+
+/// Whether the subscription was created for `vapid_public_key`'s sender.
+/// The browser reports the commissioned key on the subscription's
+/// options; a subscription made for one key cannot receive another's
+/// pushes, and re-subscribing to replace it would silently destroy
+/// whatever sender holds it — so a mismatch is an error instead.
+#[cfg(target_arch = "wasm32")]
+fn expect_senders_key(
+	subscription: &leptoskit_service_worker::PushSubscription,
+	vapid_public_key: &str,
+) -> Result<(), EnrollError> {
+	let expected = decoded_key(vapid_public_key)?;
+
+	if subscription.application_server_key.as_ref() == Some(&expected) {
+		Ok(())
+	} else {
+		Err(EnrollError::KeyMismatch)
+	}
+}
+
+/// A base64url VAPID public key as the bytes the browser compares, with
+/// or without padding.
+#[cfg(target_arch = "wasm32")]
+fn decoded_key(key: &str) -> Result<Vec<u8>, EnrollError> {
+	use base64::Engine as _;
+
+	base64::engine::general_purpose::URL_SAFE_NO_PAD
+		.decode(key.trim_end_matches('='))
+		.map_err(|error| {
+			EnrollError::Subscribe(format!("the VAPID public key isn't base64url: {error}"))
+		})
+}
+
+/// The revoke half of [`disable`], tolerant of the one failure that means
+/// success: a revoke whose endpoint is already gone. The wire folds the
+/// service's "no such endpoint" — what a retried disable meets once its
+/// first attempt revoked and its unsubscribe failed — into the same
+/// variant as a real failure, so the person's own endpoint list says
+/// which it was: still listed, the revoke really failed; gone, it already
+/// landed and the disable carries on.
+#[cfg(target_arch = "wasm32")]
+async fn revoke_endpoint(endpoint: uuid::Uuid) -> Result<(), DisableError> {
+	use leptoskit_rpc::FnError;
+
+	match leptoskit_rpc::client::call(crate::push::RevokePushEndpoint { endpoint }).await {
+		Ok(()) => Ok(()),
+		Err(error @ FnError::Server(_)) => {
+			let still_listed = match leptoskit_rpc::client::call(crate::push::PushEndpoints {
+				page: leptoskit_rpc::PageArgs::default(),
+			})
+			.await
+			{
+				Ok(page) => page.items.iter().any(|summary| summary.id == endpoint),
+				// The list couldn't say: treat the endpoint as still
+				// held, so the failure stays explicit and the retry runs.
+				Err(_) => true,
+			};
+
+			if still_listed {
+				Err(DisableError::Revoke(error))
+			} else {
+				Ok(())
+			}
+		}
+		Err(error) => Err(DisableError::Revoke(error)),
+	}
+}
+
+/// The browser half of [`disable`]: only the subscription this enrollment
+/// recorded, only at the scope it was enrolled under.
+#[cfg(target_arch = "wasm32")]
+async fn disable_in_browser(enrollment: &Enrollment) -> Result<(), DisableError> {
+	// Revoke first: unsubscribing first would strand the service's
+	// record behind a dead subscription exactly when the person can no
+	// longer revoke it.
+	revoke_endpoint(enrollment.endpoint).await?;
+
+	// A registration that no longer exists took its subscriptions with
+	// it: nothing of this enrollment's is left in the browser.
+	// `getRegistration` still answers any scope it covers, so the scope is
+	// verified exactly — a broader worker's subscription is not this
+	// enrollment's to destroy.
+	let Some(registration) = registration_at(&enrollment.scope)
 		.await
-		.map_err(|error| error.to_string())?
-		.ok_or_else(|| {
-			"this page keeps no service worker registration, so its subscription couldn't be found"
-				.to_owned()
-		})?;
+		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?
+	else {
+		return Ok(());
+	};
 
 	let push = registration
 		.push_manager()
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?;
 
-	push.unsubscribe()
+	// The subscription that answers is unsubscribed itself, so whatever
+	// the browser holds now — a rotated replacement, another sender's —
+	// is never touched.
+	push.unsubscribe_endpoint(&enrollment.subscription)
 		.await
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?;
+
 	Ok(())
+}
+
+/// The registration whose scope is exactly `scope`, if one exists.
+#[cfg(target_arch = "wasm32")]
+async fn registration_at(
+	scope: &str,
+) -> Result<Option<Registration>, leptoskit_service_worker::Error> {
+	match get_registration(Some(scope)).await? {
+		Some(found) if found.scope()? == scope => Ok(Some(found)),
+		_ => Ok(None),
+	}
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -556,7 +844,9 @@ fn notification_permission() -> Option<String> {
 	let notification =
 		js_sys::Reflect::get(&js_sys::global(), &js_sys::JsString::from("Notification"))
 			.ok()
-			.filter(wasm_bindgen::JsValue::is_object)?;
+			// `Notification` is a constructor, and a constructor is a
+			// function: filtering for objects alone would never see it.
+			.filter(|value| value.is_object() || value.is_function())?;
 
 	js_sys::Reflect::get(&notification, &js_sys::JsString::from("permission"))
 		.ok()?
@@ -626,15 +916,18 @@ mod tests {
 		assert_eq!(RECEIVER_SCRIPT.matches("__LKN_INBOX_ROUTE__").count(), 1);
 	}
 
-	/// Outside a browser, enrollment and disabling answer their
-	/// unavailable errors without touching anything: no call is made, no
-	/// endpoint is revoked, nothing is stranded.
+	/// Outside a browser, enrollment, reconciliation, and disabling
+	/// answer their unavailable errors without touching anything: no call
+	/// is made, no endpoint is revoked, nothing is stranded. (These are
+	/// the non-browser stubs, so they run off the browser target.)
+	#[cfg(not(target_arch = "wasm32"))]
 	#[test]
 	fn outside_a_browser_nothing_enrolls_and_nothing_is_stranded() {
 		let options = super::availability();
 		assert_eq!(options, Availability::Unsupported);
 
-		let error = futures::executor::block_on(super::enroll(&super::EnrollOptions::new("BNc6")));
+		let options = super::EnrollOptions::new("BNc6");
+		let error = futures::executor::block_on(super::enroll(&options));
 		assert_eq!(
 			error,
 			Err(super::EnrollError::Unavailable(
@@ -642,9 +935,15 @@ mod tests {
 			))
 		);
 
-		let error = futures::executor::block_on(super::disable(&super::Enrollment {
-			endpoint: uuid::Uuid::nil(),
-		}));
+		let error = futures::executor::block_on(super::reconcile(&options));
+		assert_eq!(
+			error,
+			Err(super::EnrollError::Unavailable(
+				Availability::Unsupported.reason().to_owned()
+			))
+		);
+
+		let error = futures::executor::block_on(super::disable(&an_enrollment()));
 		assert_eq!(
 			error,
 			Err(super::DisableError::Unavailable(
@@ -653,8 +952,21 @@ mod tests {
 		);
 	}
 
+	/// The enrollment handle keeps its capability out of the `Debug`
+	/// print: the endpoint id and the scope explain it, the subscription
+	/// URL — whoever holds it can push — does not appear.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn the_enrollment_debug_print_hides_the_subscription() {
+		let printed = format!("{:?}", an_enrollment());
+		assert!(printed.contains("6ec0f4b1-0000-7000-8000-000000000001"));
+		assert!(printed.contains("/app/"));
+		assert!(printed.contains("<redacted>"));
+		assert!(!printed.contains("https://push.test/push/one"));
+	}
+
 	/// Availability is classified in the order a settings screen can act
-	/// on it: serving scheme, browser, then the person's refusal.
+	/// on: serving scheme, browser, then the person's refusal.
 	#[test]
 	fn availability_is_classified_in_action_order() {
 		let ready = Availability::from_browser(true, true, true, Some("granted"));
@@ -690,5 +1002,17 @@ mod tests {
 			Availability::Unsupported.reason(),
 			"this browser has no service worker or Push API"
 		);
+	}
+
+	/// A handle for tests: opaque as the browser would have answered it.
+	#[cfg(not(target_arch = "wasm32"))]
+	fn an_enrollment() -> super::Enrollment {
+		super::Enrollment {
+			endpoint: "6ec0f4b1-0000-7000-8000-000000000001"
+				.parse()
+				.expect("a uuid"),
+			subscription: "https://push.test/push/one".to_owned(),
+			scope: "https://app.test/app/".to_owned(),
+		}
 	}
 }

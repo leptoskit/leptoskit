@@ -212,7 +212,7 @@ The service answers an opaque endpoint id — the credential itself never comes 
 List and revoke are the person's own. The list is one bounded page at a time, oldest first, and it includes invalidated endpoints with their state — a device list that hides them can't explain them:
 
 ```rust,ignore
-let page = leptoskit_rpc::call(leptoskit_notifications::PushEndpoints {
+let page = leptoskit_rpc::call(leptoskit_notifications::push::PushEndpoints {
     page: Default::default(),
 }).await?;
 leptoskit_rpc::call(leptoskit_notifications::push::RevokePushEndpoint { endpoint: id }).await?;
@@ -238,6 +238,21 @@ let script = leptoskit_notifications::browser::receiver_script("/inbox")?;
 // Write `script` to `web/sw.js` at build time, or serve it from a route.
 ```
 
+`leptoskit build` copies `web/` into the served output as-is, so a build step (a script in your `justfile`, or a small generator run before `build`) that writes the built script to `web/sw.js` is enough. Or serve it from your server, same-origin at the root, with a JavaScript content type:
+
+```rust,ignore
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
+
+async fn sw_js() -> Response {
+    let script = leptoskit_notifications::browser::receiver_script("/inbox")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    ([(header::CONTENT_TYPE, "text/javascript")], script).into_response()
+}
+
+// .route("/sw.js", get(sw_js)) on the same router that serves your app.
+```
+
 The route is the only URL a notification click may open, checked against the worker's own origin again at click time — payload content can never add a host, a scheme, or a path, and a route the builder refuses (empty, not a `/`-rooted path, scheme-relative, backslash, control characters) never ships. Register the script once at startup, the way [the web platform page](../platforms/web.md#service-workers) does it, and wait for it to control the page:
 
 ```rust,ignore
@@ -247,19 +262,26 @@ let registration = browser::register("/sw.js", browser::RegisterOptions::default
 let _ = browser::ready().await?;
 ```
 
-**Ask before you offer.** `browser::availability()` reads where push stands — `ready`, `insecure_context` (serve `https`; nothing in code works around it), `unsupported`, or `denied` (the person refused; link to the browser's site settings rather than prompting again). It never prompts, so a settings screen may call it on every render. **Prompting is the browser's answer to subscribing, and it happens only inside `enroll`** — so call that from an explicit gesture, a button, never from a mount or a render:
+**Ask before you offer.** `browser::availability()` reads where push stands — `ready`, `insecure_context` (serve `https`; nothing in code works around it), `unsupported`, or `denied` (the person refused; link to the browser's site settings rather than prompting again). It never prompts, so a settings screen may call it on every render. **Prompting is the browser's answer to subscribing, and it happens only inside `enroll`** — the two calls are split by when they may run:
+
+- **`browser::reconcile`**, on launch, once the person is signed in. It registers the subscription the browser already holds, if it holds one for your key, and answers `None` when it holds none — the app's cue to show the switch. Reading a subscription needs no permission, so this may run from any startup path.
+- **`browser::enroll`**, from an explicit gesture — a button, never a mount or a render. It subscribes only when the browser holds no subscription, and that subscribe is the one call the browser gates on the gesture; reconciling at launch keeps the worker settled long before, so nothing asynchronous eats the gesture's activation window.
 
 ```rust,ignore
-// From the click handler, with the operator's VAPID public key — the
-// private half never leaves the service:
-let enrollment = browser::enroll(&browser::EnrollOptions::new(vapid_public_key)).await?;
+// At launch, after register and ready, without prompting:
+let options = browser::EnrollOptions::new(vapid_public_key);
+if browser::reconcile(&options).await?.is_none() {
+    // Show the switch; from its click handler, with the operator's
+    // VAPID public key — the private half never leaves the service:
+    let enrollment = browser::enroll(&options).await?;
+}
 ```
 
-`enroll` checks availability first, waits for the **active** worker instead of racing its install, reuses the subscription the browser already holds (a second tap re-enrolls the same endpoint instead of prompting twice, and two racing calls converge on one subscription), and registers it under the person who is signed in. It answers an opaque `Enrollment` — the endpoint's id — which you keep beside the person's session on the device.
+`enroll` checks availability first, waits for the **active** worker instead of racing its install, reuses the subscription the browser already holds (a second tap re-enrolls the same endpoint instead of prompting twice, and two racing calls converge on one subscription), and registers it under the person who is signed in — but only when that subscription was created for **your own VAPID key**: a subscription made for another sender's key can't receive your pushes, so claiming it would end in silent delivery failure, and it is refused (`KeyMismatch`) rather than replaced. When the receiver is registered under an explicit scope, name it in `EnrollOptions::worker_scope`: the match is exact — a worker registered for a broader scope never stands in for the one you asked for. It answers an opaque `Enrollment` — the endpoint's id, the subscription it enrolled, and the scope — which you keep beside the person's session on the device.
 
-**Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes the endpoint first, then unsubscribes the browser. Failures come back, never swallowed: a revoke that failed leaves the browser subscription untouched so the whole sequence retries while still signed in. The order is the account-switch guarantee — the service refuses to hand a live destination to another account, so until the previous account's revoke lands, the next account's `enroll` is refused and told so, and nothing of an old account is ever quietly re-enrolled.
+**Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes the endpoint first, then unsubscribes exactly the subscription the enrollment recorded, at the scope it named — never whatever the browser holds now. Failures come back, never swallowed: a revoke that failed leaves the browser subscription untouched so the whole sequence retries while still signed in, and a retry whose revoke already landed completes (an endpoint no longer in the person's own list is already done, not failure). The order is the account-switch guarantee — the service refuses to hand a live destination to another account, so until the previous account's revoke lands, the next account's `enroll` is refused and told so, and nothing of an old account is ever quietly re-enrolled.
 
-**When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `enroll` again; the replaced subscription's endpoint then dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
+**When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
 The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and brings it to your inbox route with the notification's id, or opens that route in a new window. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
 
@@ -292,11 +314,11 @@ A Web Push subscription's endpoint is attacker-shaped material — anyone who ca
 
 ### Platforms
 
-Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID). **Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery also needs the app's own OS setup on each platform (capabilities, `GoogleService-Info.plist` or `google-services.json`, a browser service worker) — the native token-acquisition plumbing that wires this up is still to come, so treat today's push as server-complete and client-plumbing-outstanding.
+Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser). **Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on the native platforms also needs the app's own OS setup there (capabilities, `GoogleService-Info.plist` or `google-services.json`) — the native token-acquisition plumbing that wires this up is still to come.
 
 ## What it doesn't do yet
 
-- **No client enrollment plumbing.** The service side of enrollment is done; the generated native token acquisition and the browser service-worker handler that receives decrypted pushes are later work. Today an app brings its own platform-issued credential to `register_push_endpoint`, and a web client decrypts the push with its own worker.
+- **No native client enrollment plumbing.** The service side of enrollment is done, and the web client is this crate's `browser` module (above). The generated native token acquisition is later work: today a native app brings its own platform-issued credential to `register_push_endpoint`.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
 

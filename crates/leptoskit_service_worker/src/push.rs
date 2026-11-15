@@ -46,6 +46,14 @@ pub struct PushSubscription {
 	pub expiration_time: Option<f64>,
 	/// The `p256dh` and `auth` keys, as URL-safe base64.
 	pub keys: PushKeys,
+	/// The application server key the subscription was created for, decoded
+	/// from `options.applicationServerKey`, when the browser reports one.
+	/// A subscription created for one sender's key cannot serve another's
+	/// pushes, so a caller about to reuse a subscription can compare this
+	/// with its own key instead of subscribing again — which would replace
+	/// the subscription the browser holds.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub application_server_key: Option<Vec<u8>>,
 }
 
 /// Client keys the push service needs to encrypt payloads.
@@ -146,6 +154,45 @@ impl PushManager {
 			js::unavailable_async("PushSubscription.unsubscribe").await
 		}
 	}
+
+	/// Unsubscribes the registration's current subscription only when its
+	/// endpoint is `endpoint`, and answers whether it was removed.
+	///
+	/// The subscription that answers is unsubscribed itself, so whatever
+	/// the browser holds afterwards — a subscription another sender
+	/// enrolled, or a rotated replacement — is never touched, and a
+	/// subscription that went away on its own answers `false` rather than
+	/// destroying whatever replaced it.
+	///
+	/// # Errors
+	///
+	/// Outside a browser, or when the browser refuses the read or the call.
+	pub async fn unsubscribe_endpoint(&self, endpoint: &str) -> Result<bool> {
+		#[cfg(target_arch = "wasm32")]
+		{
+			let subscription = js::call_method(&self.inner, "getSubscription", &[]).await?;
+
+			if subscription.is_null() || subscription.is_undefined() {
+				return Ok(false);
+			}
+
+			let held = js::property(&subscription, "endpoint")?
+				.as_string()
+				.ok_or_else(|| Error::Browser("push subscription has no endpoint".into()))?;
+
+			if held != endpoint {
+				return Ok(false);
+			}
+
+			let result = js::call_method(&subscription, "unsubscribe", &[]).await?;
+			Ok(result.as_bool().unwrap_or(false))
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			let _ = endpoint;
+			js::unavailable_async("PushSubscription.unsubscribe").await
+		}
+	}
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -168,6 +215,12 @@ fn subscription_from_js(value: &wasm_bindgen::JsValue) -> Result<PushSubscriptio
 	let auth = get_key
 		.call1(value, &"auth".into())
 		.map_err(|error| Error::Browser(js::message(&error)))?;
+	let application_server_key = js::property(value, "options")
+		.ok()
+		.and_then(|options| js::property(&options, "applicationServerKey").ok())
+		.filter(|key| !key.is_null() && !key.is_undefined())
+		.map(|key| buffer_to_bytes(&key))
+		.transpose()?;
 	Ok(PushSubscription {
 		endpoint,
 		expiration_time,
@@ -175,6 +228,7 @@ fn subscription_from_js(value: &wasm_bindgen::JsValue) -> Result<PushSubscriptio
 			p256dh: encode_base64_url(&buffer_to_bytes(&p256dh)?),
 			auth: encode_base64_url(&buffer_to_bytes(&auth)?),
 		},
+		application_server_key,
 	})
 }
 
@@ -299,6 +353,7 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
 
 #[cfg(test)]
 mod tests {
+	#[cfg(not(target_arch = "wasm32"))]
 	use futures::executor::block_on;
 	use serde_json::json;
 
@@ -342,6 +397,39 @@ mod tests {
 		assert_eq!(options.application_server_key, "BNcR");
 	}
 
+	#[test]
+	fn a_subscription_round_trips_with_and_without_a_sender_key() {
+		let without = PushSubscription {
+			endpoint: "https://push.test/sub".into(),
+			expiration_time: None,
+			keys: PushKeys {
+				p256dh: "BKey".into(),
+				auth: "AKey".into(),
+			},
+			application_server_key: None,
+		};
+		let json = serde_json::to_value(&without).expect("subscription serializes");
+		assert!(
+			json.get("applicationServerKey").is_none(),
+			"an absent key is skipped, as the browser's own JSON does"
+		);
+		assert_eq!(
+			serde_json::from_value::<PushSubscription>(json).unwrap(),
+			without
+		);
+
+		let with = PushSubscription {
+			application_server_key: Some(vec![4, 1, 170]),
+			..without
+		};
+		let json = serde_json::to_value(&with).expect("subscription serializes");
+		assert_eq!(json["applicationServerKey"], json!([4, 1, 170]));
+		assert_eq!(
+			serde_json::from_value::<PushSubscription>(json).unwrap(),
+			with
+		);
+	}
+
 	#[cfg(not(target_arch = "wasm32"))]
 	#[test]
 	fn push_manager_names_its_apis_outside_a_browser() {
@@ -357,6 +445,10 @@ mod tests {
 		);
 		assert_eq!(
 			block_on(manager.unsubscribe()),
+			Err(Error::Unavailable("PushSubscription.unsubscribe".into()))
+		);
+		assert_eq!(
+			block_on(manager.unsubscribe_endpoint("https://push.test/sub")),
 			Err(Error::Unavailable("PushSubscription.unsubscribe".into()))
 		);
 	}

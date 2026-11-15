@@ -86,10 +86,6 @@ pub(crate) fn api(service: &'static str) -> Arc<dyn Api> {
 
 /// The origin a service's routes live under, for a client whose origin is
 /// `origin`: `{origin}/_leptoskit/services/<service>`.
-#[cfg_attr(
-	all(target_arch = "wasm32", not(feature = "web"), not(feature = "guest")),
-	allow(dead_code, reason = "a transport names services only when one exists")
-)]
 pub(crate) fn service_origin(origin: Option<&str>, service: &str) -> String {
 	format!(
 		"{}{}",
@@ -408,10 +404,6 @@ impl super::Credentials for IdentityToken {
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(dead_code, reason = "a server reaches services by their environment")
-)]
-#[cfg_attr(
-	all(target_arch = "wasm32", not(feature = "web"), not(feature = "guest")),
-	allow(dead_code, reason = "a transport names services only when one exists")
 )]
 pub(crate) fn at_service(config: &ClientConfig, service: &str) -> ClientConfig {
 	let config = for_service(config, service);

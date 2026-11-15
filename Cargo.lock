@@ -7812,6 +7812,7 @@ name = "leptoskit_service_worker"
 version = "0.3.0"
 dependencies = [
  "futures",
+ "gloo-timers",
  "js-sys",
  "serde",
  "serde_json",
