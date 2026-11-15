@@ -53,6 +53,13 @@ fn main() -> std::process::ExitCode {
 	if let Err(ref error) = config::guard_inherited_descriptors() {
 		return refuse(error);
 	}
+	// The SIGTERM listener installs before anything serves: an unhandled
+	// SIGTERM would kill the process mid-write, so a failed install is a
+	// truthful refusal to start, not a risky one.
+	if let Err(error) = shutdown::install_terminate_handler() {
+		let error = anyhow::Error::new(error).context("installing the SIGTERM listener");
+		return refuse(&error);
+	}
 
 	let runtime = match tokio::runtime::Builder::new_multi_thread()
 		.enable_all()
@@ -71,12 +78,28 @@ fn main() -> std::process::ExitCode {
 	// the exec or exit below replaces or ends the process image.
 	runtime.shutdown_timeout(shutdown::runtime_shutdown_timeout());
 
-	match outcome {
-		Ok(Exit::Terminate) => std::process::ExitCode::SUCCESS,
+	// Debug builds only, off by default: park at the final handoff
+	// boundary so a test can deliver a SIGTERM after `run` has reported
+	// and before the choice below reads the reason. Bounded, driven by
+	// local files, unreachable over HTTP; release builds compile this
+	// out and never read the variables.
+	#[cfg(debug_assertions)]
+	test_handoff_gate();
+
+	// The final choice consults the latest stop state, now that the
+	// runtime has stopped: a SIGTERM observed during the last drain —
+	// after `run` had already reported a reset — is still the last word,
+	// because termination is terminal. A signal arriving after this read
+	// is past the boundary and is not claimed as observed.
+	let exit = match outcome {
+		Ok(exit) => shutdown::reason().unwrap_or(exit),
+		Err(ref error) => return refuse(error),
+	};
+	match exit {
+		Exit::Terminate => std::process::ExitCode::SUCCESS,
 		// `re_exec` never returns on success; if exec fails it exits
 		// nonzero for the supervisor to restart.
-		Ok(Exit::Reset) => re_exec(),
-		Err(ref error) => refuse(error),
+		Exit::Reset => re_exec(),
 	}
 }
 
@@ -196,5 +219,31 @@ async fn startup(
 			locks::retain_build(build);
 			Err(error)
 		}
+	}
+}
+
+/// Debug builds only: with `DEMO_TEST_HANDOFF_ARRIVED` set, announce that
+/// the final handoff boundary is reached; with `DEMO_TEST_HANDOFF_GATE`
+/// set, wait — at most ten seconds — for that gate file to appear. The
+/// process tests use this to deliver a SIGTERM exactly between `run`'s
+/// outcome and the final exit-or-exec choice. Off unless each variable is
+/// set, bounded, driven by local files, unreachable over HTTP; release
+/// builds compile the function out and never read the variables.
+#[cfg(debug_assertions)]
+fn test_handoff_gate() {
+	use std::path::Path;
+	use std::time::Instant;
+
+	let Some(arrived) = std::env::var_os("DEMO_TEST_HANDOFF_ARRIVED") else {
+		return;
+	};
+	let _ = std::fs::write(&arrived, b"");
+
+	let Some(gate) = std::env::var_os("DEMO_TEST_HANDOFF_GATE") else {
+		return;
+	};
+	let deadline = Instant::now() + Duration::from_secs(10);
+	while !Path::new(&gate).exists() && Instant::now() < deadline {
+		std::thread::sleep(Duration::from_millis(20));
 	}
 }

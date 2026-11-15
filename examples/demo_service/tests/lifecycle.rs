@@ -30,9 +30,14 @@ use support::ADMIN_HOST;
 use support::ADMIN_HOST_V6;
 use support::CONNECT_V4;
 use support::CONNECT_V6;
+use support::DRAIN;
+use support::READY;
+use support::RETRY;
+use support::SIGTERM_BUDGET;
 use support::SITE_HOST;
 use support::Sse;
 use support::appears_within;
+use support::clock_hooks;
 use support::date_of;
 use support::free_port;
 use support::generation_dir;
@@ -42,6 +47,7 @@ use support::get_on;
 use support::noon;
 use support::request_raw;
 use support::request_with_headers;
+use support::retry_hook;
 use support::secrets;
 use support::set_clock;
 use support::spawn;
@@ -53,26 +59,6 @@ use support::volume;
 use support::wait_bound;
 use support::wait_ready;
 use support::worker_owner;
-
-/// How long a spawn may take to become ready in a debug build.
-const READY: Duration = Duration::from_secs(60);
-/// How long a bounded retry may take (the hook shortens it).
-const RETRY: Duration = Duration::from_secs(30);
-/// How long a SIGTERM has to finish, per the brief.
-const SIGTERM_BUDGET: Duration = Duration::from_secs(8);
-/// The drain bound for in-flight requests and streams.
-const DRAIN: Duration = Duration::from_secs(6);
-
-fn clock_hooks(clock: &Path) -> Vec<(&'static str, String)> {
-	vec![
-		("DEMO_TEST_CLOCK", clock.display().to_string()),
-		("DEMO_TEST_CLOCK_TICK_MS", "50".to_owned()),
-	]
-}
-
-fn retry_hook() -> Vec<(&'static str, String)> {
-	vec![("DEMO_TEST_RETRY_MS", "1500".to_owned())]
-}
 
 // ─── (1) cold start ──────────────────────────────────────────────────
 

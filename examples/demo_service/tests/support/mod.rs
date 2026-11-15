@@ -34,6 +34,15 @@ pub const CONNECT_V4: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// The address the tests reach an IPv6-bound listener through.
 pub const CONNECT_V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
 
+/// How long a spawn may take to become ready in a debug build.
+pub const READY: Duration = Duration::from_secs(60);
+/// How long a bounded retry may take (the hook shortens it).
+pub const RETRY: Duration = Duration::from_secs(30);
+/// How long a SIGTERM has to finish, per the brief.
+pub const SIGTERM_BUDGET: Duration = Duration::from_secs(8);
+/// The drain bound for in-flight requests and streams.
+pub const DRAIN: Duration = Duration::from_secs(6);
+
 /// One running service process, its port, and its bind.
 pub struct Server {
 	pub child: Child,
@@ -80,6 +89,13 @@ impl Server {
 		// SIGTERM through the harness: `kill` on the child's pid.
 		terminate(self.pid());
 		self.wait_within(timeout)
+	}
+
+	/// Sends SIGTERM without waiting for the exit, so a proof can deliver
+	/// it while a drain is in progress and repeat it safely. A no-op where
+	/// there is no SIGTERM, like [`Server::terminate_within`].
+	pub fn signal_stop(&mut self) {
+		terminate(self.pid());
 	}
 
 	/// Kills without ceremony, for crash proofs.
@@ -339,6 +355,21 @@ pub fn worker_owner(root: &Path) -> Option<String> {
 /// Writes the debug clock file with a given instant.
 pub fn set_clock(path: &Path, millis: i64) {
 	std::fs::write(path, millis.to_string()).expect("the clock file is writable");
+}
+
+/// The debug clock hooks: a file-driven clock, ticked every 50 ms so a
+/// reset is deterministic instead of waiting for real midnight.
+pub fn clock_hooks(clock: &Path) -> Vec<(&'static str, String)> {
+	vec![
+		("DEMO_TEST_CLOCK", clock.display().to_string()),
+		("DEMO_TEST_CLOCK_TICK_MS", "50".to_owned()),
+	]
+}
+
+/// Shortens the bounded retry, so a failed initialization's fresh image
+/// arrives within a test's patience.
+pub fn retry_hook() -> Vec<(&'static str, String)> {
+	vec![("DEMO_TEST_RETRY_MS", "1500".to_owned())]
 }
 
 /// A plain HTTP request over raw TCP, with an explicit `Host`, answered

@@ -45,6 +45,8 @@ Retention recognizes a published generation **structurally** — a marker that n
 
 The day watch reads the UTC wall clock at most every 30 seconds. When the date differs from the generation's, or a failed initialization's bounded retry (60 seconds) comes due, the image drains in-flight requests and SSE streams for at most 3 seconds, gives the runtime at most 2 more seconds, and **execs the same binary with the same arguments in the same PID**. Every descriptor closes at exec, so the kernel releases the locks and databases only once the old execution has fully stopped. A SIGTERM follows the same drain and exits 0 within 8 seconds.
 
+**Termination is authoritative.** The SIGTERM listener installs before the listener binds and stays armed for the whole process life, so a signal observed during a reset's drain — or after `run` has already reported the reset, while the runtime is finishing — outranks it, and the process exits 0 instead of re-executing. The exit-or-exec choice reads the stop state once, after the runtime has stopped; a signal delivered after that read is past the boundary and is not claimed as observed. A failed handler install is a truthful refusal to start before anything serves.
+
 After a failed initialization the process never retries inside the same image — background tasks may already be running — it keeps the fallback for 60 seconds, then re-executes for a bounded retry. `Restart=on-failure` plus a successful exit is not a reset: the process never exits 0 on its own.
 
 ## Release rules

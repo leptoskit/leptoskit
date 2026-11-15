@@ -52,7 +52,10 @@ pub static AUTHORITIES: OnceLock<Authorities> = OnceLock::new();
 pub static GENERATION: OnceLock<generation::Generation> = OnceLock::new();
 
 /// Why the process stops serving: a supervisor's SIGTERM, or its own daily
-/// reset, which replaces the image through `execve`.
+/// reset, which replaces the image through `execve`. Termination is
+/// authoritative: a SIGTERM wins over a reset in whichever order they
+/// arrive, and the exit-or-exec choice reads the stop state once more
+/// after the runtime has stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exit {
 	/// A deliberate stop (`SIGTERM`): leave with status 0.
