@@ -1,24 +1,43 @@
-//! The main site: sign-in, the identity provider the admin signs in
-//! through, and its minimal pages.
+//! The main site: the front door, visitor passes, the bounded demo
+//! inbox, real email-code sign-in behind the pass gate, and the
+//! identity provider the admin signs in through.
 //!
-//! This slice has no visitor onboarding. The pages are plain responses,
-//! the mailer is a sink — an emailed code goes nowhere, and there is no
-//! development sign-in — so nobody can actually get in yet. That is the
-//! deliberate state of a slice that exists to prove the lifecycle, not
-//! the front door.
+//! The division of labor:
+//!
+//! - [`crate::visitors`] owns the durable contract: the pass and person tables,
+//!   the cookie, the caps, and the ownership checks.
+//! - [`crate::inbox`] owns the mailer: bounded memory, durable receipts.
+//! - [`crate::return_to`] owns the local-path allowlist.
+//! - This module owns the wiring: the routes, the pass gate that sits in front
+//!   of exactly `POST /auth/email/send` and `POST /auth/email/verify`, and the
+//!   Auth hooks' registration.
+//!
+//! The pages stay plain, escaped, `no-store` responses: their look is a
+//! later, design-owned task. Everything a visitor can reach is tested
+//! through the real routers, and no response carries a generation key,
+//! the analytics token, the control key, or a client secret.
 
+use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use anyhow::Result;
 use axum::Router;
+use axum::extract::ConnectInfo;
+use axum::extract::Request;
+use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::header;
+use axum::middleware::Next;
 use axum::response::IntoResponse as _;
 use axum::response::Response;
 use axum::routing::get;
+use axum::routing::post;
 use leptoskit_auth::Auth;
 use leptoskit_auth::Keys;
-use leptoskit_auth::Mailbox;
+use leptoskit_auth::SignedIn;
 use leptoskit_idp::ClientAuth;
 use leptoskit_idp::ClientCommand;
 use leptoskit_idp::ClientCommandOutput;
@@ -27,19 +46,38 @@ use leptoskit_idp::NewClientSpec;
 use leptoskit_idp::SigningAlgorithm;
 use tower::ServiceExt as _;
 
-/// What the site's pages say. Plain text in a plain page: visual design
-/// is a later task.
+use crate::inbox::DemoInbox;
+use crate::return_to;
+use crate::visitors;
+use crate::visitors::MintError;
+use crate::visitors::MintOutcome;
+use crate::visitors::PassState;
+use crate::visitors::Persona;
+use crate::visitors::Visitors;
+use crate::visitors::carried_cookie;
+use crate::visitors::display_tag;
+use crate::visitors::seconds_until_next_midnight;
+
+/// What the site's pages say while they are placeholders. Plain text in
+/// a plain page: visual design is a later task.
 const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Notes</title><h1>Notes</h1><p>The \
                     public demo is preparing its first day.</p>";
+
+/// The most bytes a mint form may carry.
+const MAX_FORM_BYTES: usize = 4 * 1024;
+
+/// The most bytes a gated sign-in body may carry; Auth's original bytes
+/// are forwarded inside this bound.
+const MAX_GATE_BODY: usize = 4 * 1024;
 
 /// What every build registers for the admin: its first-party client on
 /// this site's identity provider. The client secret is shown once by the
 /// provider, so the caller persists it in the generation's secrets.
 ///
-/// The scopes are the ones this slice offers: no `roles`, because the
-/// site has no sign-in yet — the mailer is a sink — and a roles hook
-/// would describe access nobody can reach. Visitor onboarding, the task
-/// that adds the inbox, revisits this list with the roles hook.
+/// The scopes include `roles` because the site now has real sign-in and
+/// a roles hook: Ada carries the `admin` role, Grace none, and the
+/// admin's gate reads the released `roles` claim. The admin requests
+/// that scope in its own client registration.
 pub async fn register_admin_client(idp: &Idp, admin_origin: &str) -> Result<(String, String)> {
 	let output = idp
 		.run_command(&ClientCommand::Add(NewClientSpec {
@@ -49,7 +87,9 @@ pub async fn register_admin_client(idp: &Idp, admin_origin: &str) -> Result<(Str
 				"{admin_origin}{}/sign-in",
 				leptoskit_admin::BASE
 			)],
-			scopes: ["openid", "email", "profile"].map(str::to_owned).to_vec(),
+			scopes: ["openid", "email", "profile", "roles"]
+				.map(str::to_owned)
+				.to_vec(),
 			auth_method: ClientAuth::SecretPost,
 			grant_types: leptoskit_idp::default_grant_types(),
 			jwks: None,
@@ -74,6 +114,68 @@ pub struct Site {
 	pub router: Router,
 	pub client_id: String,
 	pub client_secret: String,
+	/// The site's sign-in service, for tests that prove an Auth-level
+	/// refusal directly — never a second way in.
+	auth: Auth,
+}
+
+impl Site {
+	/// The site's Auth, for tests that prove an Auth-level refusal
+	/// directly.
+	#[must_use]
+	pub fn auth(&self) -> &Auth {
+		&self.auth
+	}
+}
+
+/// The site's own options for one generation: its UTC day, the optional
+/// client IP header, and the visitors' caps.
+#[derive(Clone, Debug)]
+pub struct SiteOptions {
+	day: String,
+	client_ip_header: Option<String>,
+	caps: visitors::Caps,
+}
+
+impl SiteOptions {
+	/// The options a generation runs under: production caps, the given
+	/// day, and the optional client IP header.
+	#[must_use]
+	pub fn new(day: impl Into<String>, client_ip_header: Option<String>) -> Self {
+		Self {
+			day: day.into(),
+			client_ip_header,
+			caps: visitors::Caps::default(),
+		}
+	}
+
+	/// Narrows the visitors' caps for a test. Debug builds only: a
+	/// release binary never sees this constructor, so production always
+	/// runs on the constants.
+	#[cfg(debug_assertions)]
+	#[must_use]
+	pub fn with_test_caps(mut self, per_ip_per_hour: u64, per_day: u64) -> Self {
+		self.caps = visitors::Caps {
+			new_passes_per_ip_per_hour: per_ip_per_hour,
+			new_passes_per_day: per_day,
+		};
+		self
+	}
+}
+
+/// What the routes share: everything is either immutable for the
+/// generation's life or inside an `Arc`.
+#[derive(Clone)]
+struct Shared(Arc<Parts>);
+
+struct Parts {
+	visitors: Visitors,
+	inbox: Arc<DemoInbox>,
+	/// The configured site origin, which a mint's Origin must equal.
+	origin: String,
+	/// The request header the visitor's canonical IP arrives in, when a
+	/// deployment configured one.
+	client_ip_header: Option<String>,
 }
 
 /// Builds the site for a fresh generation: its identity provider client
@@ -90,17 +192,30 @@ pub async fn build(
 	keys: Keys,
 	site_origin: &str,
 	admin_origin: &str,
+	options: &SiteOptions,
 ) -> Result<Site> {
-	let auth = site_auth(db, keys, site_origin)?;
+	let inbox = Arc::new(DemoInbox::new(db.system("demo: inbox")));
+	let visitors = Visitors::new(db.clone(), &keys, &options.day, site_origin, options.caps)?;
+	let auth = site_auth(db, keys, site_origin, options, &inbox)?;
 	let idp = Idp::builder(db, &auth).build()?;
 	let (client_id, client_secret) = register_admin_client(&idp, admin_origin).await?;
 
-	let router = routes(&auth, &idp);
+	let router = routes(
+		Shared(Arc::new(Parts {
+			visitors,
+			inbox,
+			origin: site_origin.to_owned(),
+			client_ip_header: options.client_ip_header.clone(),
+		})),
+		&auth,
+		&idp,
+	);
 
 	Ok(Site {
 		router,
 		client_id,
 		client_secret,
+		auth,
 	})
 }
 
@@ -110,32 +225,351 @@ pub async fn build(
 /// # Errors
 ///
 /// When sign-in or the provider can't start.
-pub fn rebuild(db: &leptoskit_db::Db, keys: Keys, site_origin: &str) -> Result<Router> {
-	let auth = site_auth(db, keys, site_origin)?;
+pub fn rebuild(
+	db: &leptoskit_db::Db,
+	keys: Keys,
+	site_origin: &str,
+	options: &SiteOptions,
+) -> Result<Router> {
+	let inbox = Arc::new(DemoInbox::new(db.system("demo: inbox")));
+	let visitors = Visitors::new(db.clone(), &keys, &options.day, site_origin, options.caps)?;
+	let auth = site_auth(db, keys, site_origin, options, &inbox)?;
 	let idp = Idp::builder(db, &auth).build()?;
-	Ok(routes(&auth, &idp))
+
+	Ok(routes(
+		Shared(Arc::new(Parts {
+			visitors,
+			inbox,
+			origin: site_origin.to_owned(),
+			client_ip_header: options.client_ip_header.clone(),
+		})),
+		&auth,
+		&idp,
+	))
 }
 
-fn site_auth(db: &leptoskit_db::Db, keys: Keys, site_origin: &str) -> Result<Auth> {
-	Ok(Auth::builder(db, keys)
+fn site_auth(
+	db: &leptoskit_db::Db,
+	keys: Keys,
+	site_origin: &str,
+	options: &SiteOptions,
+	inbox: &Arc<DemoInbox>,
+) -> Result<Auth> {
+	let mut builder = Auth::builder(db, keys)
 		.app_name("Notes")
 		.origin(site_origin)
-		// Codes go nowhere in this slice: there is no inbox yet, and no
-		// development sign-in to bypass that.
-		.mailer(Mailbox::new())
-		.build()?)
+		// The demo inbox stands in for an email app: bounded, private to
+		// the pass that opened the address, receipts recorded durably.
+		.mailer(inbox.as_ref().clone())
+		.on_sign_up::<visitors::DemoPerson>()
+		.roles::<visitors::DemoPerson>()
+		// Email is the only way in: no wallet, passkey, or password route
+		// can introduce another onboarding path, and neither dev sign-in
+		// nor the dev mailbox is ever mounted.
+		.sign_in_methods(["email"]);
+
+	if let Some(header) = &options.client_ip_header {
+		builder = builder.client_ip_header(header.clone());
+	}
+
+	Ok(builder.build()?)
 }
 
-fn routes(auth: &Auth, idp: &Idp) -> Router {
+fn routes(shared: Shared, auth: &Auth, idp: &Idp) -> Router {
 	Router::new()
 		.route("/", get(home))
 		.route("/sign-in", get(sign_in))
+		.route("/notes", get(notes))
+		.route("/demo/pass", post(mint_pass))
+		.route("/demo/inbox", get(demo_inbox))
+		.with_state(shared.clone())
 		.merge(auth.router())
 		.merge(idp.router())
+		// The pass gate wraps every route and acts on exactly the two
+		// email-code posts, after the session layer's same-site check and
+		// before Auth writes a challenge, mails, or counts a rate limit.
+		.layer(axum::middleware::from_fn_with_state(shared, pass_gate))
 		// The IdP answers discovery and tokens from its layer, so the
 		// layers go on last, as admin_demo's site does.
 		.layer(auth.layer())
 		.layer(idp.layer())
+}
+
+/// Whether the gate acts on this request: exactly the email-code posts.
+fn gated(method: &axum::http::Method, path: &str) -> bool {
+	method == axum::http::Method::POST && matches!(path, "/auth/email/send" | "/auth/email/verify")
+}
+
+/// The pass gate. For the two email-code posts it buffers the body,
+/// proves the request's pass owns the normalized address, and only then
+/// forwards Auth's original bytes; Auth's own limits and same-site
+/// checks still run on the forwarded request. A foreign identity is
+/// refused before a challenge is written, before mail is sent, and
+/// before Auth counts a rate-limit hit.
+async fn pass_gate(State(shared): State<Shared>, request: Request, next: Next) -> Response {
+	let shared = shared.0;
+
+	if !gated(request.method(), request.uri().path()) {
+		return next.run(request).await;
+	}
+
+	let is_send = request.uri().path() == "/auth/email/send";
+	let (parts, body) = request.into_parts();
+
+	// A configured edge header must arrive usable, or the request is
+	// refused outright: it is never treated as an unlimited caller.
+	if visitors::client_ip(
+		shared.client_ip_header.as_deref(),
+		&parts.headers,
+		peer(&parts),
+	)
+	.is_err()
+	{
+		return json_error(StatusCode::BAD_REQUEST, "bad_client_ip");
+	}
+
+	let Ok(bytes) = axum::body::to_bytes(body, MAX_GATE_BODY).await else {
+		return json_error(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+	};
+
+	let Some(email) = json_email(&bytes) else {
+		return json_error(StatusCode::BAD_REQUEST, "bad_request");
+	};
+
+	let pass = match shared.visitors.resolve(&parts.headers).await {
+		Ok(pass) => pass,
+		Err(error) => return internal_error(&error),
+	};
+
+	// A valid pass must own the address; any other answer — no pass, or
+	// a pass that never minted this address — is refused before Auth
+	// writes a challenge, mails, or counts a rate-limit hit.
+	let owned = match &pass {
+		PassState::Valid(pass) => {
+			match shared.visitors.owns(pass, &email).await {
+				Ok(owned) => owned,
+				Err(error) => return internal_error(&error),
+			}
+		}
+		PassState::Absent | PassState::EarlierDay => false,
+	};
+
+	if !owned {
+		let mut response = json_error(StatusCode::FORBIDDEN, "not_your_identity");
+
+		// A cookie that named no pass here goes with the refusal, so a
+		// stale browser stops carrying it around.
+		if !pass.is_valid()
+			&& carried_cookie(&parts.headers, shared.visitors.cookie().name).is_some()
+		{
+			response
+				.headers_mut()
+				.append(header::SET_COOKIE, shared.visitors.cookie().clear());
+		}
+
+		return response;
+	}
+
+	// Only an owned address is opened, and only on a send. The mailer
+	// records the receipt before Auth answers, so one inbox read after
+	// the send is enough.
+	if is_send {
+		shared.inbox.open(&email);
+	}
+
+	let request = Request::from_parts(parts, axum::body::Body::from(bytes));
+	next.run(request).await
+}
+
+/// `POST /demo/pass`: mint this browser's pass and persona identity, or
+/// reuse what it already owns.
+///
+/// The answer is `303` to local sign-in, carrying the persona and a
+/// validated `return_to`. Refusals are stable codes: not same-origin
+/// (`403`), an unusable body (`400`), an unusable client IP header
+/// (`400`), the per-IP hourly cap (`429` with `Retry-After`), or the
+/// generation's full day (`503`). An existing pass keeps signing in
+/// when the caps are full.
+async fn mint_pass(State(shared): State<Shared>, request: Request) -> Response {
+	let shared = shared.0;
+	let (parts, body) = request.into_parts();
+
+	// Same-origin only: a present Origin must equal this site's origin,
+	// and a contradictory Origin is never excused by Fetch Metadata.
+	if !same_origin(&parts.headers, &shared.origin) {
+		return json_error(StatusCode::FORBIDDEN, "cross_origin");
+	}
+
+	let Ok(bytes) = axum::body::to_bytes(body, MAX_FORM_BYTES).await else {
+		return json_error(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+	};
+
+	let Some((persona, return_target)) = form_choice(&bytes) else {
+		return json_error(StatusCode::BAD_REQUEST, "bad_request");
+	};
+
+	let Ok(ip) = visitors::client_ip(
+		shared.client_ip_header.as_deref(),
+		&parts.headers,
+		peer(&parts),
+	) else {
+		return json_error(StatusCode::BAD_REQUEST, "bad_client_ip");
+	};
+
+	let pass = match shared.visitors.resolve(&parts.headers).await {
+		Ok(PassState::Valid(pass)) => Some(pass),
+		Ok(PassState::Absent | PassState::EarlierDay) => None,
+		Err(error) => return internal_error(&error),
+	};
+
+	let outcome = match shared.visitors.mint(persona, ip, pass.as_ref()).await {
+		Ok(outcome) => outcome,
+		Err(MintError::IpLimited { retry_after }) => {
+			let mut response = json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+			response.headers_mut().insert(
+				header::RETRY_AFTER,
+				axum::http::HeaderValue::from(
+					u64::try_from(retry_after.num_seconds().max(1)).unwrap_or(1),
+				),
+			);
+			return response;
+		}
+		Err(MintError::Full) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "full"),
+		Err(MintError::Database(error)) => return internal_error(&error),
+	};
+
+	let location = visitors::sign_in_location(persona, &return_target);
+	let mut response = (
+		StatusCode::SEE_OTHER,
+		[(header::LOCATION, location)],
+		axum::body::Body::empty(),
+	)
+		.into_response();
+
+	if let MintOutcome::Fresh { token } = outcome {
+		let value = format!("{}.{token}", shared.visitors.day());
+		let max_age = seconds_until_next_midnight(chrono::Utc::now());
+		response.headers_mut().append(
+			header::SET_COOKIE,
+			shared.visitors.cookie().set(&value, max_age),
+		);
+	}
+
+	response
+}
+
+/// `GET /demo/inbox`: this pass's two people and the mail this process
+/// still holds for them. `no-store`, always; a query parameter cannot
+/// change ownership because queries are not read.
+async fn demo_inbox(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	session: Option<SignedIn>,
+) -> Response {
+	let shared = shared.0;
+	let no_store = [(header::CACHE_CONTROL, "no-store")];
+
+	let pass = match shared.visitors.resolve(&headers).await {
+		Ok(pass) => pass,
+		Err(error) => {
+			let mut response = internal_error(&error);
+			response.headers_mut().insert(
+				header::CACHE_CONTROL,
+				axum::http::HeaderValue::from_static("no-store"),
+			);
+			return response;
+		}
+	};
+
+	let cookie = shared.visitors.cookie();
+
+	let PassState::Valid(pass) = pass else {
+		let state = match &pass {
+			PassState::EarlierDay => "new_day",
+			PassState::Absent | PassState::Valid(_) => "absent",
+		};
+
+		let mut body = serde_json::json!({ "error": "no_pass", "pass": state });
+		if matches!(&pass, PassState::EarlierDay) {
+			body["day"] = serde_json::Value::String(shared.visitors.day().to_owned());
+		}
+
+		let mut response = (StatusCode::UNAUTHORIZED, no_store, axum::Json(body)).into_response();
+
+		if carried_cookie(&headers, cookie.name).is_some() {
+			response
+				.headers_mut()
+				.append(header::SET_COOKIE, cookie.clear());
+		}
+
+		return response;
+	};
+	let people = match shared.visitors.people(&pass).await {
+		Ok(people) => people,
+		Err(error) => {
+			let mut response = internal_error(&error);
+			response.headers_mut().insert(
+				header::CACHE_CONTROL,
+				axum::http::HeaderValue::from_static("no-store"),
+			);
+			return response;
+		}
+	};
+
+	let session_account = session.as_ref().map(|signed_in| signed_in.account);
+	let mut people_json = Vec::new();
+	let mut messages_json = Vec::new();
+	let mut lost_json = Vec::new();
+
+	for person in people {
+		let slug = person.persona.slug();
+		let retained = shared.inbox.messages_for(person.email.as_inner());
+
+		if let Some(lost_persona) = DemoInbox::unavailable(
+			person.persona,
+			person.last_receipt_id.as_deref(),
+			person.last_receipt_at,
+			&retained,
+		) {
+			lost_json.push(serde_json::json!({
+				"persona": lost_persona.slug(),
+				"sent_at": person
+					.last_receipt_at
+					.expect("unavailable requires a delivery time"),
+			}));
+		}
+
+		for stored in &retained {
+			messages_json.push(serde_json::json!({
+				"persona": slug,
+				"to": person.email.as_inner(),
+				"subject": stored.subject,
+				"text": stored.text,
+				"receipt": stored.receipt,
+				"sent_at": stored.sent_at,
+			}));
+		}
+
+		people_json.push(serde_json::json!({
+			"persona": slug,
+			"name": person.persona.name(&display_tag(&person.email)),
+			"tag": display_tag(&person.email),
+			"email": person.email.as_inner(),
+			"signed_in": match (person.account_id, session_account) {
+				(Some(account), Some(session)) => account == session,
+				_ => false,
+			},
+		}));
+	}
+
+	let body = serde_json::json!({
+		"day": shared.visitors.day(),
+		"people": people_json,
+		"messages": messages_json,
+		"lost": lost_json,
+	});
+
+	(StatusCode::OK, no_store, axum::Json(body)).into_response()
 }
 
 async fn home() -> Response {
@@ -146,13 +580,81 @@ async fn sign_in() -> Response {
 	page()
 }
 
+async fn notes() -> Response {
+	page()
+}
+
 fn page() -> Response {
-	(
-		StatusCode::OK,
-		[(axum::http::header::CACHE_CONTROL, "no-store")],
-		PAGE,
-	)
-		.into_response()
+	(StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], PAGE).into_response()
+}
+
+/// Whether a mint may act: a present `Origin` must equal the configured
+/// site origin; only when `Origin` is absent does `Sec-Fetch-Site:
+/// same-origin` stand in. Neither, or a contradictory pair, refuses.
+fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
+	if let Some(requested) = headers
+		.get(header::ORIGIN)
+		.and_then(|value| value.to_str().ok())
+	{
+		return requested == origin;
+	}
+
+	headers
+		.get("sec-fetch-site")
+		.and_then(|value| value.to_str().ok())
+		== Some("same-origin")
+}
+
+/// The persona and validated return target a mint form names, bounded by
+/// the body limit this handler already applied.
+fn form_choice(bytes: &[u8]) -> Option<(Persona, String)> {
+	let mut persona = None;
+	let mut return_target = None;
+
+	for (field, value) in url::form_urlencoded::parse(bytes) {
+		match field.as_ref() {
+			"persona" if persona.is_none() => persona = Persona::of_form(&value),
+			"return_to" if return_target.is_none() => {
+				return_target = Some(return_to::local_return_to(&value));
+			}
+			_ => {}
+		}
+	}
+
+	Some((
+		persona?,
+		return_target.unwrap_or_else(|| return_to::FALLBACK.to_owned()),
+	))
+}
+
+/// The normalized address a gated body names, or nothing: the gate only
+/// needs the address, never the rest of Auth's request.
+fn json_email(bytes: &[u8]) -> Option<String> {
+	let parsed: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+	parsed
+		.get("email")?
+		.as_str()
+		.map(|email| email.trim().to_ascii_lowercase())
+}
+
+/// The peer address the server recorded, when it serves with one.
+fn peer(parts: &axum::http::request::Parts) -> Option<SocketAddr> {
+	parts
+		.extensions
+		.get::<ConnectInfo<SocketAddr>>()
+		.map(|ConnectInfo(peer)| *peer)
+}
+
+/// A stable JSON refusal: no message text, only a code a page can name.
+fn json_error(status: StatusCode, code: &str) -> Response {
+	(status, axum::Json(serde_json::json!({ "error": code }))).into_response()
+}
+
+/// A database failure: the visitor hears only that the server failed,
+/// and the reason stays in the logs.
+fn internal_error(error: &anyhow::Error) -> Response {
+	eprintln!("the demo site's request failed: {error:#}");
+	json_error(StatusCode::INTERNAL_SERVER_ERROR, "server")
 }
 
 /// The analytics service's routes, started against the generation's
@@ -226,9 +728,9 @@ pub async fn count_events(router: &Router, token: &str) -> Result<i64> {
 			axum::http::Request::builder()
 				.method(axum::http::Method::POST)
 				.uri(path)
-				.header(axum::http::header::ACCEPT, "application/json")
-				.header(axum::http::header::CONTENT_TYPE, "application/json")
-				.header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+				.header(header::ACCEPT, "application/json")
+				.header(header::CONTENT_TYPE, "application/json")
+				.header(header::AUTHORIZATION, format!("Bearer {token}"))
 				.body(axum::body::Body::from("{}"))?,
 		)
 		.await

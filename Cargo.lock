@@ -2279,6 +2279,7 @@ dependencies = [
  "sha2 0.10.9",
  "signal-hook",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tower",
  "url",

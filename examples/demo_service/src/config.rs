@@ -172,6 +172,10 @@ pub struct Config {
 	pub admin_origin: String,
 	/// Their authorities, plus the bind's.
 	pub authorities: Authorities,
+	/// The request header the edge sets to the visitor's canonical IP,
+	/// when a deployment sits behind one that always overwrites it.
+	/// Lowercase and a valid header token, or absent.
+	pub client_ip_header: Option<String>,
 }
 
 impl Config {
@@ -196,26 +200,42 @@ impl Config {
 		let volume = std::path::PathBuf::from(read("LEPTOSKIT_SERVICE_VOLUME_STATE")?);
 		let site = read("DEMO_SITE_ORIGIN")?;
 		let admin = read("DEMO_ADMIN_ORIGIN")?;
-		Self::parse(bind, volume, &site, &admin)
+		let client_ip_header = std::env::var("DEMO_CLIENT_IP_HEADER")
+			.ok()
+			.map(|value| value.trim().to_owned())
+			.filter(|value| !value.is_empty())
+			.map(|value| client_ip_header(&value))
+			.transpose()?;
+		Self::parse(bind, volume, &site, &admin, client_ip_header)
 	}
 
 	/// Validates the parsed inputs into a configuration. The narrow seam
 	/// the unit tests use instead of mutating a process-global
 	/// environment: the environment is read only in `from_env`, and every
-	/// check here — the bind's loopback rule, the origins, and the three
-	/// authorities' distinctness after normalization — runs before the
-	/// runtime and the listener exist.
+	/// check here — the bind's loopback rule, the origins, the client IP
+	/// header, and the authorities' distinctness after normalization —
+	/// runs before the runtime and the listener exist.
+	///
+	/// The site and the admin must name *different hosts*, whatever their
+	/// ports and schemes: the two cookie hosts a browser tells apart are
+	/// hosts, and one host serving both roles would share cookies
+	/// between them.
 	///
 	/// # Errors
 	///
-	/// When the bind is off loopback, either origin fails its checks, or
-	/// two of the three authorities fold into one.
+	/// When the bind is off loopback, either origin or the client IP
+	/// header fails its checks, the site and the admin fold into one
+	/// host, or two of the three authorities fold into one.
 	fn parse(
 		bind: SocketAddr,
 		volume: std::path::PathBuf,
 		site: &str,
 		admin: &str,
+		ip_header: Option<String>,
 	) -> Result<Self> {
+		let client_ip_header = ip_header
+			.map(|value| client_ip_header(&value))
+			.transpose()?;
 		ensure!(
 			bind.ip().is_loopback(),
 			"the bind must stay on private loopback; the edge terminates the public origins"
@@ -225,6 +245,12 @@ impl Config {
 			origin(admin).context("the admin origin is not a usable origin")?;
 
 		let bind_authority = Authority::of_bind(bind);
+		ensure!(
+			site.host != admin.host,
+			"the site and the admin must be different hosts (ports and schemes do not separate \
+			 two cookie hosts); after normalization both are `{}`",
+			site.host
+		);
 		ensure!(
 			site != admin && site != bind_authority && admin != bind_authority,
 			"the site origin, the admin origin, and the bind must be distinct authorities; after \
@@ -241,6 +267,7 @@ impl Config {
 				admin,
 				bind: bind_authority,
 			},
+			client_ip_header,
 		})
 	}
 
@@ -340,6 +367,52 @@ fn parse_port(value: &str) -> Option<u16> {
 
 	let port = value.parse::<u16>().ok()?;
 	(port != 0).then_some(port)
+}
+
+/// Validates the client IP header's name: nonempty, already lowercase,
+/// and a valid HTTP header token (RFC 9110 `tchar`). A deployment may
+/// only name a header its edge always overwrites, so the name is held
+/// to the exact shape such a header has.
+///
+/// # Errors
+///
+/// When the name is empty, not lowercase, or carries a character a
+/// header token cannot.
+fn client_ip_header(name: &str) -> Result<String> {
+	ensure!(!name.is_empty(), "DEMO_CLIENT_IP_HEADER must not be empty");
+	ensure!(
+		name.bytes().all(is_token_char),
+		"DEMO_CLIENT_IP_HEADER must be a header token (letters, digits, and !#$%&'*+-.^_`|~); \
+		 `{name}` isn't"
+	);
+	ensure!(
+		name == name.to_ascii_lowercase(),
+		"DEMO_CLIENT_IP_HEADER must be lowercase: `{name}` isn't"
+	);
+	Ok(name.to_owned())
+}
+
+/// Whether `byte` is an RFC 9110 `tchar`: the characters a header field
+/// name may carry.
+fn is_token_char(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric()
+		|| matches!(
+			byte,
+			b'!' | b'#'
+				| b'$'
+				| b'%'
+				| b'&'
+				| b'\''
+				| b'*'
+				| b'+'
+				| b'-'
+				| b'.'
+				| b'^'
+				| b'_'
+				| b'`'
+				| b'|'
+				| b'~'
+		)
 }
 
 /// One host, normalized the same way on every path an authority enters
@@ -620,6 +693,7 @@ mod tests {
 			std::path::PathBuf::from("/tmp/demo-config-parse-test"),
 			site,
 			admin,
+			None,
 		)
 	}
 
@@ -723,6 +797,7 @@ mod tests {
 			site_origin: "https://site.example".into(),
 			admin_origin: "https://admin.example".into(),
 			authorities: Authorities { site, admin, bind },
+			client_ip_header: None,
 		};
 		assert!(
 			config
@@ -734,6 +809,78 @@ mod tests {
 			!config
 				.authorities
 				.allows(&Authority::of_host_header("other.example").expect("y"))
+		);
+	}
+
+	/// The site and the admin are two cookie hosts, and browsers tell
+	/// cookie hosts apart by host name alone: the same host on another
+	/// port or scheme folds into one cookie host, so it is refused even
+	/// though the authorities stay distinct.
+	#[test]
+	fn the_site_and_the_admin_are_different_hosts_whatever_the_port() {
+		assert!(
+			configuration(
+				"127.0.0.1:8080",
+				"https://demo.example",
+				"https://demo.example:8443"
+			)
+			.is_err(),
+			"the same host on another port is one cookie host"
+		);
+		assert!(
+			configuration(
+				"127.0.0.1:8080",
+				"https://demo.localhost",
+				"http://demo.localhost"
+			)
+			.is_err(),
+			"the same host on another scheme is one cookie host"
+		);
+		let config = configuration(
+			"127.0.0.1:8080",
+			"https://demo.example:8443",
+			"https://admin.example:8443",
+		)
+		.expect("distinct hosts on the same nondefault port");
+		assert_eq!(config.authorities.site.host, "demo.example");
+		assert_eq!(config.authorities.admin.host, "admin.example");
+	}
+
+	/// The client IP header's name is a lowercase header token, or the
+	/// setting is refused before anything binds.
+	#[test]
+	fn the_client_ip_header_is_a_lowercase_token() {
+		let configured = |value: &str| {
+			Config::parse(
+				"127.0.0.1:8080".parse().expect("bind"),
+				std::path::PathBuf::from("/tmp/demo-config-parse-test"),
+				"https://site.example",
+				"https://admin.example",
+				Some(value.to_owned()),
+			)
+			.map(|config| config.client_ip_header)
+		};
+
+		assert_eq!(
+			configured("x-forwarded-for").expect("a normal header name"),
+			Some("x-forwarded-for".to_owned())
+		);
+		assert!(
+			configured("X-Forwarded-For").is_err(),
+			"the setting must already be lowercase"
+		);
+		assert!(
+			configured("forwarded for").is_err(),
+			"a space is not a token"
+		);
+		assert!(
+			configured("forwarded,for").is_err(),
+			"a comma is not a token"
+		);
+		assert!(configured("").is_err(), "an empty name names nothing");
+		assert_eq!(
+			configured("x_forwarded.for-1").expect("token forms"),
+			Some("x_forwarded.for-1".to_owned())
 		);
 	}
 

@@ -3,7 +3,7 @@ source: examples/demo_service/tests/schema_snapshot.rs
 expression: snapshot
 ---
 {
-  "admin_schema_json": "58d3ad0ed629b41f45eb38c7661efc28eb58ee282dcd5a7c3c50d631105f046b",
+  "admin_schema_json": "b798d6a57baa451ad83526d52068cc9fb2b8ae1cb3998b597124dbc3a8fb093f",
   "admin_sqlite_master": {
     "names": [
       "admin_people_account_id_key",
@@ -30,6 +30,11 @@ expression: snapshot
       "auth_wallets_account_id_idx",
       "auth_wallets_chain_address_key",
       "dashboards_created_at_idx",
+      "demo_passes_ip_hash_idx",
+      "demo_passes_token_hash_key",
+      "demo_people_account_id_key",
+      "demo_people_pass_id_idx",
+      "demo_people_pass_id_persona_key",
       "event_schemas_name_idx",
       "events_distinct_id_timestamp_idx",
       "events_name_timestamp_idx",
@@ -92,6 +97,8 @@ expression: snapshot
       "auth_wallets",
       "contexts",
       "dashboards",
+      "demo_passes",
+      "demo_people",
       "event_definitions",
       "event_schemas",
       "events",
@@ -135,8 +142,8 @@ expression: snapshot
       "live_rpc_jobs_insert",
       "live_rpc_jobs_update"
     ],
-    "objects": 128,
-    "sql_sha256": "e24d8f79dc3bc871527d8131245b785de56074316005f52f331100b47431b712"
+    "objects": 135,
+    "sql_sha256": "a75abce7c3feb901a35cc65e6b573361c66f21eabd9407100a529e001f16bdd0"
   },
   "analytics_sqlite_master": {
     "names": [
@@ -217,8 +224,8 @@ expression: snapshot
     "objects": 11,
     "sql_sha256": "bbf053fc26946fc27ad5b928e6112e5c3ba51165d2d6fbd77854eb87823ff70f"
   },
-  "fingerprint": "33ba54677b1b1c2a114a11a98d63454894e5b7535dc17c50160c9ebf11d9aea5",
-  "format": 1,
+  "fingerprint": "3f44b58dcda8d75c0c46aecef1b204b1adbca4396b63e4b9111ed4fe07d9714f",
+  "format": 2,
   "site_sqlite_master": {
     "names": [
       "admin_people_account_id_key",
@@ -245,6 +252,11 @@ expression: snapshot
       "auth_wallets_account_id_idx",
       "auth_wallets_chain_address_key",
       "dashboards_created_at_idx",
+      "demo_passes_ip_hash_idx",
+      "demo_passes_token_hash_key",
+      "demo_people_account_id_key",
+      "demo_people_pass_id_idx",
+      "demo_people_pass_id_persona_key",
       "event_schemas_name_idx",
       "events_distinct_id_timestamp_idx",
       "events_name_timestamp_idx",
@@ -307,6 +319,8 @@ expression: snapshot
       "auth_wallets",
       "contexts",
       "dashboards",
+      "demo_passes",
+      "demo_people",
       "event_definitions",
       "event_schemas",
       "events",
@@ -350,7 +364,7 @@ expression: snapshot
       "live_rpc_jobs_insert",
       "live_rpc_jobs_update"
     ],
-    "objects": 128,
-    "sql_sha256": "e24d8f79dc3bc871527d8131245b785de56074316005f52f331100b47431b712"
+    "objects": 135,
+    "sql_sha256": "a75abce7c3feb901a35cc65e6b573361c66f21eabd9407100a529e001f16bdd0"
   }
 }

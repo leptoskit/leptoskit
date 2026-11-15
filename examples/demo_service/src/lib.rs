@@ -23,8 +23,12 @@
 //!   retained until exec or exit, so an aborted async task can never release
 //!   them while a writer is still running.
 //!
-//! Visitor onboarding (personas, inbox, limits, pages) is a later task:
-//! this slice has no public sign-in and the mailer is a sink.
+//! Visitor onboarding is the site's own contract: a browser owns a pass
+//! cookie and its pre-minted Ada or Grace, signs in with a real emailed
+//! code into a bounded in-memory inbox, and reaches the admin through
+//! the identity provider's `roles` scope. `visitors.rs` owns the passes
+//! and people, `inbox.rs` the mailer, `return_to.rs` the local-path
+//! allowlist, and `site.rs` wires the routes and the pass gate.
 //!
 //! The runtime is Unix only, deliberately: the locks are `flock`, the
 //! daily reset re-executes through `execve`, and the deployment is Linux.
@@ -45,15 +49,21 @@ pub mod dispatch;
 #[cfg(unix)]
 pub mod generation;
 #[cfg(unix)]
+pub mod inbox;
+#[cfg(unix)]
 pub mod locks;
 #[cfg(unix)]
 pub mod marker;
+#[cfg(unix)]
+pub mod return_to;
 #[cfg(unix)]
 pub mod secrets;
 #[cfg(unix)]
 pub mod shutdown;
 #[cfg(unix)]
 pub mod site;
+#[cfg(unix)]
+pub mod visitors;
 #[cfg(unix)]
 pub mod worker;
 

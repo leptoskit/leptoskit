@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::ensure;
+use demo_service::marker::GENERATION_FORMAT;
 use leptoskit_deploy_console::control::Action;
 use leptoskit_deploy_console::control::Intent;
 use leptoskit_deploy_console::control::Phase;
@@ -349,7 +350,11 @@ fn a_reset_replaces_the_image_and_collects_what_nobody_holds() -> Result<()> {
 
 	// Plant a day-before-yesterday generation, published but unheld, and
 	// a legacy unpublished leftover: both are collectable.
-	plant_generation(&root, &format!("{}.f1", day_before(2)), true);
+	plant_generation(
+		&root,
+		&format!("{}.f{GENERATION_FORMAT}", day_before(2)),
+		true,
+	);
 	plant_generation(
 		&root,
 		&format!("{}.building-leftover", day_before(2)),
@@ -374,11 +379,9 @@ fn a_reset_replaces_the_image_and_collects_what_nobody_holds() -> Result<()> {
 	assert_eq!(server.pid(), pid, "the PID survives the exec");
 
 	// The new day builds and publishes in the same PID.
-	let new_generation = root.join("gen").join(format!(
-		"{}.f{}",
-		tomorrow_name(),
-		demo_service::marker::GENERATION_FORMAT
-	));
+	let new_generation =
+		root.join("gen")
+			.join(format!("{}.f{}", tomorrow_name(), GENERATION_FORMAT));
 	ensure!(
 		appears_within(&new_generation.join("published"), Duration::from_secs(90)),
 		"the new day's generation is published: {}",
@@ -448,7 +451,7 @@ fn plant_generation(root: &Path, name: &str, published: bool) -> std::path::Path
 
 	if published {
 		let marker = demo_service::marker::Published {
-			format: demo_service::marker::GENERATION_FORMAT,
+			format: GENERATION_FORMAT,
 			fingerprint: demo_service::marker::Published::current_fingerprint()
 				.expect("the fingerprint is computable"),
 			day: name.split_once(".f").expect("a day.f name").0.to_owned(),
@@ -676,11 +679,7 @@ fn a_simultaneous_midnight_builds_exactly_one_new_generation() -> Result<()> {
 	let new_day = tomorrow();
 	let published = root
 		.join("gen")
-		.join(format!(
-			"{}.f{}",
-			new_day,
-			demo_service::marker::GENERATION_FORMAT
-		))
+		.join(format!("{new_day}.f{GENERATION_FORMAT}"))
 		.join("published");
 	ensure!(
 		appears_within(&published, Duration::from_secs(120)),
@@ -1236,10 +1235,10 @@ fn collection_keeps_recent_published_generations_and_never_deletes_what_it_canno
 	set_clock(&clock, noon(0));
 
 	// Yesterday in a foreign format: published, recent, unheld.
-	let foreign_name = format!("{}.f2", day_before(1));
+	let foreign_name = format!("{}.f1", day_before(1));
 	let foreign = plant_generation(&root, &foreign_name, false);
 	let foreign_marker = serde_json::to_vec_pretty(&demo_service::marker::Published {
-		format: 2,
+		format: 1,
 		fingerprint: "0".repeat(64),
 		day: day_before(1),
 		seed_events: 900,
@@ -1248,14 +1247,14 @@ fn collection_keeps_recent_published_generations_and_never_deletes_what_it_canno
 
 	// A recent generation of this format whose marker is truncated:
 	// unreadable means kept, counted, and reported — never deleted.
-	let corrupt_name = format!("{}.f1", day_before(1));
+	let corrupt_name = format!("{}.f2", day_before(1));
 	let corrupt = plant_generation(&root, &corrupt_name, false);
-	let truncated_marker = b"{\"format\": 1, \"fingerprint\": \"aa".to_vec();
+	let truncated_marker = b"{\"format\": 2, \"fingerprint\": \"aa".to_vec();
 	std::fs::write(corrupt.join("published"), &truncated_marker)?;
 
 	// An expired published generation of this format and an unpublished
 	// leftover: both genuinely collectable.
-	plant_generation(&root, &format!("{}.f1", day_before(2)), true);
+	plant_generation(&root, &format!("{}.f2", day_before(2)), true);
 	plant_generation(
 		&root,
 		&format!("{}.building-leftover", day_before(2)),
@@ -1301,8 +1300,16 @@ fn cleanup_refuses_a_held_lifetime_lock_and_the_budget_fails_honestly() {
 
 	// Two old generations whose lifetime locks the test holds: a live
 	// holder somewhere else is exactly what these stand in for.
-	let held_a = plant_generation(&root, &format!("{}.f1", day_before(2)), true);
-	let held_b = plant_generation(&root, &format!("{}.f1", day_before(3)), true);
+	let held_a = plant_generation(
+		&root,
+		&format!("{}.f{GENERATION_FORMAT}", day_before(2)),
+		true,
+	);
+	let held_b = plant_generation(
+		&root,
+		&format!("{}.f{GENERATION_FORMAT}", day_before(3)),
+		true,
+	);
 	let locks = [hold_shared(&held_a), hold_shared(&held_b)];
 
 	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
@@ -1356,11 +1363,7 @@ fn an_uncollectable_volume_stays_unready_with_an_honest_error() -> Result<()> {
 	// live databases or growing without bound.
 	let published = root
 		.join("gen")
-		.join(format!(
-			"{}.f{}",
-			today(),
-			demo_service::marker::GENERATION_FORMAT
-		))
+		.join(format!("{}.f{}", today(), GENERATION_FORMAT))
 		.join("published");
 	ensure!(
 		appears_within(&published, Duration::from_secs(90)),

@@ -227,8 +227,13 @@ async fn open(
 	let _ = site::count_events(&analytics, &secrets.analytics_token).await?;
 
 	let site_db = connect_site_db(dir).await?;
-	let site = site::rebuild(&site_db, site_keys(&secrets), &config.site_origin)
-		.context("starting the site")?;
+	let site = site::rebuild(
+		&site_db,
+		site_keys(&secrets),
+		&config.site_origin,
+		&site_options(config, marker.day.as_str()),
+	)
+	.context("starting the site")?;
 
 	let store = Store::open(&dir.join("console.sqlite3")).context("opening the console store")?;
 	let control = Service::new(store, &secrets.control_key, &config.admin_origin)
@@ -289,6 +294,7 @@ async fn build(
 		site_keys(&secrets),
 		&config.site_origin,
 		&config.admin_origin,
+		&site_options(config, day),
 	)
 	.await
 	.context("building the site")?;
@@ -433,8 +439,24 @@ async fn admin_router(
 	.await
 }
 
+/// The daily site signing key, named by the day so the visitor store can
+/// derive its IP-hash salt from the same key.
 fn site_keys(secrets: &Secrets) -> Keys {
-	Keys::single(&format!("demo-{}-site", secrets.day), secrets.site_key)
+	Keys::single(&site_key_id(&secrets.day), secrets.site_key)
+}
+
+/// The site key's id for one UTC day. Tests build their site keys with
+/// the same id, so the visitors' IP-hash salt derives from the key they
+/// handed the site.
+#[must_use]
+pub fn site_key_id(day: &str) -> String {
+	format!("demo-{day}-site")
+}
+
+/// The site's own options for a generation: its day and the configured
+/// client IP header.
+fn site_options(config: &Config, day: &str) -> site::SiteOptions {
+	site::SiteOptions::new(day, config.client_ip_header.clone())
 }
 
 async fn connect_site_db(dir: &Path) -> Result<leptoskit_db::Db> {
