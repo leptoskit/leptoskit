@@ -377,6 +377,70 @@ fn screen(html: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn live_workings_measures_a_stored_event() {
+	let analytics = analytics_service().await;
+	analytics
+		.register(&[("note_created", &[("words", "u32"), ("shared", "bool")])])
+		.await;
+	let now = chrono::Utc::now();
+	// The type is known, but its previous event is outside Live's window.
+	// Facts are cached independently of the events query.
+	analytics
+		.capture(vec![event(
+			"note_created",
+			"earlier-reader",
+			&(now - chrono::Duration::days(2)).to_rfc3339(),
+			&json!({ "words": 1, "shared": false }),
+		)])
+		.await;
+	let world = world_with(Some(analytics.connection(ANALYTICS_TOKEN))).await;
+	let mut ada = world.ada().await;
+	let path = format!("{BASE}/analytics/live");
+	let (status, html) = page(&world, &mut ada, &path).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		html.contains("none has arrived yet"),
+		"an empty tail has no sample"
+	);
+
+	for (name, seconds, properties, explanation) in [
+		(
+			"$pageview",
+			20,
+			json!({ "$pathname": "/notes" }),
+			"Without a type the names travel with every event",
+		),
+		(
+			"note_created",
+			10,
+			json!({ "words": 123, "shared": false }),
+			"Typed events send no property names",
+		),
+	] {
+		let timestamp = (now - chrono::Duration::seconds(seconds))
+			.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+		analytics
+			.capture(vec![event(name, "live-reader", &timestamp, &properties)])
+			.await;
+		let (status, html) = page(&world, &mut ada, &path).await;
+		assert_eq!(status, StatusCode::OK);
+		assert!(
+			html.contains(&format!("the latest {name}, re-encoded here")),
+			"Send names the latest {name}"
+		);
+		assert!(html.contains(explanation), "{name}: {explanation}");
+		assert!(
+			html.contains("Measured as one event alone in a batch"),
+			"{name} explains how its size was measured"
+		);
+		assert!(
+			!html.contains("none has arrived yet"),
+			"{name} provides a real sample"
+		);
+	}
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn without_a_service_the_area_teaches_how_to_connect() {
 	let world = world().await;
 	let mut ada = world.ada().await;

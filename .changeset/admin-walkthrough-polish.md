@@ -22,3 +22,5 @@ Simulation wording also covers deploy, first release, maintenance, rollback, hea
 Releases recorded in the same second keep their journal order, so the current release and rollback choices do not depend on random operation IDs.
 
 Changing a chart's breakdown updates its generated styles immediately, keeping the same series colours as a full reload. Confirmation dialogs keep keyboard focus inside, make the background inert, and return focus to their opener when dismissed; Escape no longer also closes Workings behind the dialog.
+
+Live's Send station measures the newest event fetched for the page, including typed events. It no longer says that no event has arrived when the list already contains events.

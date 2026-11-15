@@ -121,6 +121,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 		.aria_label("Events as they arrive")
 		.test_id("live-events");
 	let mut count = 0;
+	let mut sample = None;
 
 	match &answer {
 		Ok(Answer {
@@ -128,6 +129,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 			..
 		}) => {
 			count = page.events.len();
+			sample = page.events.first();
 
 			for event in &page.events {
 				list = list.child(row(
@@ -210,7 +212,7 @@ pub(crate) async fn page(cx: &Context<'_>) -> Screen {
 		query: &query,
 		answer: answer.as_ref().ok(),
 		definitions: &cx.facts.definitions,
-		sample: None,
+		sample,
 		url: cx.connection.url(),
 		drawn: Drawn {
 			sentence: format!(
