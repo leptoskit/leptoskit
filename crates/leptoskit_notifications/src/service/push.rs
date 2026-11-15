@@ -5,18 +5,31 @@
 //!
 //! - **At least once.** An attempt whose answer was lost retries, so a provider
 //!   may take a message twice. Every attempt carries the notification's id as
-//!   its collapse id, so repeats replace rather than stack, and nothing here
-//!   claims exactly-once or that a banner was seen.
+//!   its collapse id, so repeats replace rather than stack where the provider
+//!   coalesces — best-effort, never a guarantee a banner shows once — and
+//!   nothing here claims exactly-once or that a banner was seen.
 //! - **The attempt is the boundary.** Each attempt re-checks the notification's
 //!   schedule, cancellation, expiry, the person's latest opt-out, and the
 //!   endpoint's liveness immediately before it sends. A revocation that commits
 //!   after that check can still see that one attempt — that race is the
-//!   boundary, and it is documented rather than pretended away.
+//!   boundary, and it is documented rather than pretended away. What a
+//!   revocation can never do is bring a delivery back: every outcome's write is
+//!   fenced on the row's own state and attempt count, so an in-flight answer
+//!   that lands after a revoke, a skip, or a peer round's write finds the row
+//!   gone from the queue and writes nothing.
 //! - **No transaction crosses the network.** Attempts read, then call the
 //!   provider, then write, in that order, with no transaction held across the
 //!   call; a send's inbox rows never roll back because one endpoint failed.
+//! - **The transports are per service instance, not per process.** A process
+//!   may serve several notifications services, each with its own credentials:
+//!   the routes carry theirs in the request context, and the push job carries
+//!   its instance's key in its arguments, so a delivery always answers to the
+//!   configuration that enqueued it and no other's.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use leptoskit_db::Db;
 use leptoskit_rpc as rpc;
@@ -40,39 +53,102 @@ use crate::service::transport::Message;
 use crate::service::transport::Outcome;
 use crate::service::transport::PushRuntime;
 
-/// The process's push runtime, installed once at startup. Tests install
-/// their own per scenario, over their own boundary; production installs
-/// before the routes or workers start.
-static RUNTIME: std::sync::RwLock<Option<Arc<PushRuntime>>> = std::sync::RwLock::new(None);
+/// How long an operator-side stall waits before it tries again: a broken
+/// OAuth exchange or a refused token keeps the delivery queued, at a
+/// calm pace, until the operator fixes it.
+const STALLED_RETRY_SECS: i64 = 60;
 
-/// Installs `runtime` as the process's push transports, replacing
-/// whatever was there. Passing `None` disables push: enrollment refuses
-/// every platform, and queued deliveries skip as unconfigured.
-pub fn install(runtime: Option<PushRuntime>) {
-	*RUNTIME
-		.write()
-		.unwrap_or_else(std::sync::PoisonError::into_inner) = runtime.map(Arc::new);
+/// The service instance's push configuration, carried in the request
+/// context the routes build: the runtime its enrollments check against,
+/// and the key its jobs are enqueued under. Not a process global — a
+/// process may serve several notifications services — and not
+/// interchangeable: it is fixed when the routes are built.
+#[derive(Clone)]
+pub struct Push {
+	/// The instance's key: what the enqueued jobs name back. Stable
+	/// across restarts of the same service — its database URL is the
+	/// natural one.
+	pub instance: Arc<str>,
+	/// The instance's transports, or `None` when push is unconfigured —
+	/// enrollment refuses every platform, and queued deliveries skip as
+	/// unconfigured.
+	pub runtime: Option<Arc<PushRuntime>>,
 }
 
-/// The installed runtime, if any.
-fn installed() -> Option<Arc<PushRuntime>> {
-	RUNTIME
+impl Push {
+	/// The push configuration of the calling request, or the refusal for
+	/// a route built without one: push unconfigured on this server.
+	pub(crate) fn of(cx: &rpc::MutationCx) -> rpc::Result<&Self> {
+		cx.get::<Push>().ok_or_else(push_unconfigured)
+	}
+}
+
+fn push_unconfigured() -> rpc::Error {
+	rpc::Error::invalid(
+		"push is not configured on this server: set a transport's configuration to enroll an \
+		 endpoint",
+	)
+}
+
+/// An instance's registered configuration: transports, or their
+/// deliberate absence.
+#[derive(Clone)]
+struct Registered(Option<Arc<PushRuntime>>);
+
+/// The registered instances' transports, keyed by the instance key their
+/// routes and jobs share. This is the job side's half of the
+/// configuration: the job framework rebuilds a job's context from its
+/// owner alone, so a job's body cannot read the route context the send
+/// saw — it names its instance instead, and finds the same configuration
+/// the enqueueing route registered. Routes look nothing up here.
+type Instances = HashMap<Arc<str>, Registered>;
+static INSTANCES: OnceLock<RwLock<Instances>> = OnceLock::new();
+
+fn instances() -> &'static RwLock<Instances> {
+	INSTANCES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Registers `instance`'s transports: what a service's startup does once,
+/// before its routes and workers start, and what its jobs look up by
+/// key. Registering replaces an earlier registration under the same key —
+/// the same service starting again over the same database — and never
+/// touches another instance's.
+pub(crate) fn register_instance(instance: Arc<str>, runtime: Option<Arc<PushRuntime>>) {
+	instances()
+		.write()
+		.unwrap_or_else(std::sync::PoisonError::into_inner)
+		.insert(instance, Registered(runtime));
+}
+
+/// Looks up `instance`'s registered transports.
+fn instance_runtime(instance: &str) -> Option<Registered> {
+	instances()
 		.read()
 		.unwrap_or_else(std::sync::PoisonError::into_inner)
-		.clone()
+		.get(instance)
+		.cloned()
 }
 
-/// A credential's fingerprint: the SHA-256 of its canonical form, which
-/// is how a credential is recognized without ever searching on the
-/// secret itself.
-fn fingerprint(canonical: &str) -> String {
-	hex::encode(Sha256::digest(canonical.as_bytes()))
+/// An endpoint's fingerprint: the SHA-256 of its platform and its
+/// destination — the token a device was issued, or a Web Push
+/// subscription's endpoint URL — which is how an endpoint is recognized
+/// without ever searching on the secret itself. It deliberately does not
+/// cover a Web Push subscription's keys, so a browser that rotates them
+/// keeps its endpoint and its owner, while no other account can take a
+/// live endpoint over by presenting new keys for it.
+fn fingerprint(platform: PushPlatform, destination: &str) -> String {
+	hex::encode(Sha256::digest(
+		format!("{}\u{0}{destination}", platform.as_str()).as_bytes(),
+	))
 }
 
 /// Registers one endpoint for `me`, over the credential their app
-/// presented. Idempotent for the same person and credential; refused for
-/// a credential another live account holds; refused for a platform with
-/// no transport.
+/// presented. Idempotent for the same person and destination: a Web Push
+/// subscription whose browser rotated its keys updates the stored
+/// credential in place, keeping the endpoint, its owner, and its queued
+/// deliveries. Refused for a destination another **live** account holds;
+/// a destination the provider invalidated is taken over clean. Refused
+/// for a platform with no transport.
 ///
 /// # Errors
 ///
@@ -80,21 +156,18 @@ fn fingerprint(canonical: &str) -> String {
 /// checks, a host the push-host policy won't push to, a platform this
 /// server has no transport for, or enrollment past
 /// [`MAX_ENDPOINTS`](crate::push::MAX_ENDPOINTS); [`rpc::Error::Conflict`]
-/// when another account holds the credential; [`rpc::Error::Contended`]
-/// when the same credential enrolls twice at once.
+/// when another account holds the destination live;
+/// [`rpc::Error::Contended`] when the same destination enrolls twice at
+/// once.
 pub(crate) async fn register(
 	cx: &rpc::MutationCx,
+	push: &Push,
 	me: Uuid,
 	credential: &PushCredential,
 ) -> rpc::Result<EndpointSummary> {
 	crate::push::check_credential(credential).map_err(rpc::Error::invalid)?;
 
-	let runtime = installed().ok_or_else(|| {
-		rpc::Error::invalid(
-			"push is not configured on this server: set a transport's configuration to enroll an \
-			 endpoint",
-		)
-	})?;
+	let runtime = push.runtime.as_ref().ok_or_else(push_unconfigured)?;
 
 	let platform = credential.platform();
 
@@ -106,11 +179,12 @@ pub(crate) async fn register(
 	}
 
 	if let PushCredential::WebPush { endpoint, .. } = credential {
-		check_web_host(&runtime, endpoint).map_err(rpc::Error::invalid)?;
+		check_web_host(runtime, endpoint).map_err(rpc::Error::invalid)?;
 	}
 
+	let destination = credential.destination().map_err(rpc::Error::invalid)?;
 	let canonical = credential.canonical().map_err(rpc::Error::invalid)?;
-	let fingerprint = fingerprint(&canonical);
+	let fingerprint = fingerprint(platform, &destination);
 
 	let existing = match PushEndpoint::query()
 		.filter(|endpoint| endpoint.fingerprint.eq(fingerprint.clone()))
@@ -124,13 +198,55 @@ pub(crate) async fn register(
 
 	if let Some(existing) = existing {
 		if existing.person == me {
-			return Ok(summary(&existing));
+			// The same person's device: a re-enrollment rotates the
+			// stored credential in place — a browser's new keys, a
+			// device's refreshed token — and reactivates an endpoint a
+			// provider had invalidated, keeping the endpoint's id, its
+			// owner, and its queued deliveries. Nothing about the
+			// destination changed.
+			if existing.credential != canonical || existing.invalidated_at.is_some() {
+				PushEndpoint::update()
+					.filter(|endpoint| endpoint.id.eq(existing.id))
+					.set(|endpoint| endpoint.credential, canonical)
+					.set(|endpoint| endpoint.invalidated_at, None)
+					.run(cx.tx())
+					.await?;
+			}
+
+			return Ok(EndpointSummary {
+				id: existing.id,
+				platform,
+				created_at: existing.created_at,
+				invalidated_at: None,
+			});
 		}
 
-		return Err(rpc::Error::conflict(
-			"this device credential is already enrolled to another account; sign out of the other \
-			 account on the device, which revokes it, and enroll again",
-		));
+		if existing.invalidated_at.is_none() {
+			return Err(rpc::Error::conflict(
+				"this device is already enrolled to another account; sign out of the other \
+				 account on the device, which revokes it, and enroll again",
+			));
+		}
+
+		// The provider said this destination no longer exists for the
+		// other account: it is held by nobody, and the device now
+		// presenting it is this person's. The row is taken over in place,
+		// so its delivery history keeps explaining itself.
+		PushEndpoint::update()
+			.filter(|endpoint| endpoint.id.eq(existing.id))
+			.set(|endpoint| endpoint.person, me)
+			.set(|endpoint| endpoint.credential, canonical)
+			.set(|endpoint| endpoint.platform, platform.as_str())
+			.set(|endpoint| endpoint.invalidated_at, None)
+			.run(cx.tx())
+			.await?;
+
+		return Ok(EndpointSummary {
+			id: existing.id,
+			platform,
+			created_at: existing.created_at,
+			invalidated_at: None,
+		});
 	}
 
 	let held = PushEndpoint::query()
@@ -160,7 +276,7 @@ pub(crate) async fn register(
 
 	match inserted {
 		Ok(()) => {}
-		// Another enrollment of this credential committed between the
+		// Another enrollment of this destination committed between the
 		// read and the write; on Postgres this transaction can no longer
 		// read the winner's row, so the mutation runs again from the
 		// start and answers from there.
@@ -168,11 +284,51 @@ pub(crate) async fn register(
 		Err(error) => return Err(error.into()),
 	}
 
+	// The person's invalidated history stays explainable but bounded:
+	// the oldest invalidated endpoints past the bound are deleted, their
+	// story already told by the delivery rows that name them.
+	prune_history(cx.tx(), me).await?;
+
 	Ok(EndpointSummary {
 		id,
 		platform,
 		created_at: leptoskit_db::now(),
+		invalidated_at: None,
 	})
+}
+
+/// Deletes `me`'s invalidated endpoints past the history bound, oldest
+/// first: the newest [`MAX_ENDPOINT_HISTORY`] stay as explainable
+/// history, and the delivery rows keep the full story either way.
+///
+/// # Errors
+///
+/// Whatever the write fails with.
+async fn prune_history(tx: &leptoskit_db::Tx, me: Uuid) -> rpc::Result<()> {
+	let history: Vec<Uuid> = PushEndpoint::query()
+		.filter(|endpoint| endpoint.person.eq(me) & endpoint.invalidated_at.is_not_null())
+		.order_by(|endpoint| endpoint.created_at.asc())
+		.all(tx)
+		.await?
+		.into_iter()
+		.map(|endpoint| endpoint.id)
+		.collect();
+	let stale = history
+		.len()
+		.saturating_sub(crate::push::MAX_ENDPOINT_HISTORY);
+
+	for id in history.into_iter().take(stale) {
+		match PushEndpoint::query()
+			.filter(|endpoint| endpoint.id.eq(id))
+			.delete(tx)
+			.await
+		{
+			Ok(_) | Err(leptoskit_db::DbError::NotFound { .. }) => {}
+			Err(error) => return Err(error.into()),
+		}
+	}
+
+	Ok(())
 }
 
 /// The push-service host check at enrollment: the endpoint URL's host
@@ -187,8 +343,9 @@ fn check_web_host(runtime: &PushRuntime, endpoint: &str) -> Result<(), String> {
 	}
 }
 
-/// The person's endpoints, oldest first. Invalidated ones are included:
-/// a device list that hides them can't explain them.
+/// The person's endpoints, oldest first, one bounded page at a time,
+/// invalidated ones included with their state: a device list that hides
+/// them can't explain them, and a bounded page can't grow with them.
 ///
 /// # Errors
 ///
@@ -196,15 +353,29 @@ fn check_web_host(runtime: &PushRuntime, endpoint: &str) -> Result<(), String> {
 pub(crate) async fn list(
 	db: &impl leptoskit_db::Read,
 	me: Uuid,
-) -> rpc::Result<Vec<EndpointSummary>> {
-	let rows = PushEndpoint::query()
-		.filter(|endpoint| endpoint.person.eq(me))
-		.order_by(|endpoint| endpoint.created_at.asc())
-		.limit(u64::try_from(crate::push::MAX_ENDPOINTS).unwrap_or(u64::MAX))
-		.all(db)
-		.await?;
+	page: &rpc::PageArgs,
+) -> rpc::Result<rpc::Page<EndpointSummary>> {
+	let mut page = page.clone();
+	page.limit = page.limit.clamp(
+		1,
+		u32::try_from(crate::push::MAX_ENDPOINTS + crate::push::MAX_ENDPOINT_HISTORY)
+			.unwrap_or(u32::MAX),
+	);
 
-	Ok(rows.iter().map(summary).collect())
+	let page_of_rows = rpc::paginate(
+		db,
+		PushEndpoint::query().filter(|endpoint| endpoint.person.eq(me)),
+		&page,
+		|endpoint| endpoint.id.asc(),
+		|endpoint| endpoint.id,
+	)
+	.await?;
+
+	Ok(rpc::Page {
+		items: page_of_rows.items.iter().map(summary).collect(),
+		end: page_of_rows.end,
+		has_more: page_of_rows.has_more,
+	})
 }
 
 /// The row as its owner sees it.
@@ -213,6 +384,7 @@ fn summary(endpoint: &PushEndpoint) -> EndpointSummary {
 		id: endpoint.id,
 		platform: PushPlatform::from_str_value(&endpoint.platform).unwrap_or(PushPlatform::Apns),
 		created_at: endpoint.created_at,
+		invalidated_at: endpoint.invalidated_at,
 	}
 }
 
@@ -241,8 +413,11 @@ pub(crate) async fn revoke(tx: &leptoskit_db::Tx, me: Uuid, endpoint: Uuid) -> r
 		return Err(rpc::Error::not_found("no endpoint with this id is yours"));
 	}
 
-	// Its queued deliveries never attempt: the endpoint is gone, and the
-	// attempt's liveness check would only say so later.
+	// Its queued deliveries never attempt again: the endpoint is gone,
+	// and the attempt's liveness check would only say so later. The
+	// write touches only rows still in the queue, so a delivery that
+	// ended meanwhile — accepted, rejected, or skipped by its own
+	// attempt — keeps what it became.
 	PushDelivery::update()
 		.filter(|delivery| {
 			delivery.endpoint.eq(endpoint)
@@ -325,6 +500,7 @@ pub(crate) async fn status_page(
 /// Whatever a write or an enqueue fails with.
 pub(crate) async fn schedule(
 	cx: &rpc::MutationCx,
+	push: &Push,
 	send_key: &str,
 	spec: &crate::SendSpec,
 	fanout: &Fanout,
@@ -349,8 +525,7 @@ pub(crate) async fn schedule(
 		return Ok(());
 	}
 
-	let mut by_person: std::collections::HashMap<Uuid, Vec<Uuid>> =
-		std::collections::HashMap::new();
+	let mut by_person: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
 
 	for endpoint in &endpoints {
 		by_person
@@ -389,7 +564,8 @@ pub(crate) async fn schedule(
 
 	// The round-zero job, at the notification's visibility. Its key keeps
 	// a raced or retried send from doubling it, exactly as the wake jobs
-	// are kept.
+	// are kept, and its arguments name the instance whose transports
+	// carry the attempts.
 	let now = leptoskit_db::now();
 	let becomes_visible = spec
 		.visible_at
@@ -397,6 +573,7 @@ pub(crate) async fn schedule(
 	cx.enqueue(PushSend {
 		send_key: send_key.to_owned(),
 		round: 0,
+		instance: push.instance.to_string(),
 	})
 	.at(becomes_visible)
 	.key(format!("push:{send_key}:0"))
@@ -422,13 +599,27 @@ fn platform_name(endpoints: &[PushEndpoint], id: &Uuid) -> String {
 /// keeps the job keys apart, so a round enqueues its successor even
 /// while a previous round's row lingers until the retention prunes it.
 ///
+/// The job framework leases each round to one worker; the deliveries'
+/// own writes are fenced regardless (see [`write_outcome`]), so a lease
+/// that expires and replays a round while its first run is still in
+/// flight can at worst send a delivery twice — which at-least-once
+/// already allows — and can never regress a delivery that ended.
+///
 /// # Errors
 ///
 /// Whatever a read, a write, or the successor's enqueue fails with. The
 /// job framework retries the round; the deliveries already written are
 /// skipped by their state on the retry.
-pub(crate) async fn round(cx: &rpc::JobCx, send_key: &str, round: u32) -> rpc::Result<()> {
-	let Some(runtime) = installed() else {
+#[doc(hidden)]
+pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, instance: &str) -> rpc::Result<()> {
+	let runtime = instance_runtime(instance).ok_or_else(|| {
+		rpc::Error::retry(
+			"the push transports of the instance that enqueued this send are not registered in \
+			 this process",
+		)
+	})?;
+
+	let Some(runtime) = runtime.0 else {
 		// Nothing is configured: every delivery of this send skips,
 		// loudly and visibly in the send's status.
 		skip_all(cx.db(), send_key, DeliveryReason::TransportUnavailable).await?;
@@ -494,6 +685,7 @@ pub(crate) async fn round(cx: &rpc::JobCx, send_key: &str, round: u32) -> rpc::R
 			PushSend {
 				send_key: send_key.to_owned(),
 				round: round.saturating_add(1),
+				instance: instance.to_owned(),
 			},
 		)
 		.at(at.max(leptoskit_db::now()))
@@ -531,7 +723,7 @@ async fn skip_all(db: &Db, send_key: &str, reason: DeliveryReason) -> rpc::Resul
 
 /// Attempts one delivery: the checks at the moment of the attempt, the
 /// network call with nothing else held across it, and the outcome's
-/// write.
+/// fenced write.
 ///
 /// # Errors
 ///
@@ -661,7 +853,12 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 
 /// Writes one attempt's outcome, in its own short write: no transaction
 /// is held across the network, so this is the first write since the
-/// read.
+/// read — and the row may have moved under it. Every write is fenced on
+/// the row still being in the queue with the attempt count it was read
+/// with: a revoke that skipped the delivery, an invalidation that ended
+/// its sibling, or a replayed round that already wrote — none of them
+/// can be overwritten, and an outcome that arrives that late writes
+/// nothing. Terminal states never regress.
 ///
 /// # Errors
 ///
@@ -669,12 +866,25 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 /// skipping what already wrote by its state.
 async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rpc::Result<()> {
 	let now = leptoskit_db::now();
-	let attempts = delivery.attempts.saturating_add(1);
+	let attempted = outcome.network_attempted();
+	let attempts = if attempted {
+		delivery.attempts.saturating_add(1)
+	} else {
+		delivery.attempts
+	};
+	let still_queued = |row: &<PushDelivery as leptoskit_db::Table>::Columns| {
+		row.id.eq(delivery.id)
+			& row.state.in_list([
+				DeliveryState::Enqueued.as_str(),
+				DeliveryState::Retrying.as_str(),
+			])
+			& row.attempts.eq(delivery.attempts)
+	};
 
 	match outcome {
 		Outcome::Accepted => {
 			PushDelivery::update()
-				.filter(|row| row.id.eq(delivery.id))
+				.filter(still_queued)
 				.set(|row| row.state, DeliveryState::Accepted.as_str())
 				.set(|row| row.reason, None)
 				.set(|row| row.attempts, attempts)
@@ -685,11 +895,11 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 				.await?;
 		}
 		Outcome::Transient { after } => {
-			if attempts > i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
+			if attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
 				// The attempts ran out: rejected, with the reason that
-				// says so.
+				// says so. Eight attempts are eight, not nine.
 				PushDelivery::update()
-					.filter(|row| row.id.eq(delivery.id))
+					.filter(still_queued)
 					.set(|row| row.state, DeliveryState::Rejected.as_str())
 					.set(|row| row.reason, DeliveryReason::AttemptsExhausted.as_str())
 					.set(|row| row.attempts, attempts)
@@ -710,7 +920,7 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 					+ chrono::Duration::from_std(delay)
 						.unwrap_or(chrono::Duration::seconds(crate::push::MAX_RETRY_DELAY_SECS));
 				PushDelivery::update()
-					.filter(|row| row.id.eq(delivery.id))
+					.filter(still_queued)
 					.set(|row| row.state, DeliveryState::Retrying.as_str())
 					.set(|row| row.reason, None)
 					.set(|row| row.attempts, attempts)
@@ -720,9 +930,27 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 					.await?;
 			}
 		}
+		Outcome::Stalled { after } => {
+			// The operator's side is broken: the delivery stays queued,
+			// spending none of its attempts, at a calm pace until the
+			// configuration is fixed.
+			let delay = after.unwrap_or_else(|| {
+				std::time::Duration::from_secs(u64::try_from(STALLED_RETRY_SECS).unwrap_or(60))
+			});
+			let at = now
+				+ chrono::Duration::from_std(delay)
+					.unwrap_or(chrono::Duration::seconds(STALLED_RETRY_SECS));
+			PushDelivery::update()
+				.filter(still_queued)
+				.set(|row| row.state, DeliveryState::Retrying.as_str())
+				.set(|row| row.reason, None)
+				.set(|row| row.next_attempt_at, Some(at))
+				.run(db)
+				.await?;
+		}
 		Outcome::WaitUntil(at) => {
 			PushDelivery::update()
-				.filter(|row| row.id.eq(delivery.id))
+				.filter(still_queued)
 				.set(|row| row.next_attempt_at, Some(at))
 				.run(db)
 				.await?;
@@ -730,7 +958,8 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 		Outcome::Ended { reason, invalidate } => {
 			// Why it ended decides what it counts as: the notification's
 			// state or the endpoint's skipped it, the provider's answer
-			// rejected it.
+			// rejected it. A local decision — one that never reached a
+			// provider — spends no attempt and stamps no attempt time.
 			let state = match reason {
 				DeliveryReason::Expired
 				| DeliveryReason::Cancelled
@@ -749,11 +978,15 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 				// stops taking deliveries, and its other queued ones end
 				// now instead of failing the same way one by one. One
 				// transaction, so the endpoint and its siblings move
-				// together.
+				// together — and the siblings' own writes stay fenced on
+				// still being in the queue, so a sibling whose attempt
+				// answered first keeps its answer.
 				let tx = db.begin().await?;
 
 				PushEndpoint::update()
-					.filter(|endpoint| endpoint.id.eq(delivery.endpoint))
+					.filter(|endpoint| {
+						endpoint.id.eq(delivery.endpoint) & endpoint.invalidated_at.is_null()
+					})
 					.set(|endpoint| endpoint.invalidated_at, Some(now))
 					.run(&tx)
 					.await?;
@@ -781,11 +1014,11 @@ async fn write_outcome(db: &Db, delivery: &PushDelivery, outcome: Outcome) -> rp
 			}
 
 			PushDelivery::update()
-				.filter(|row| row.id.eq(delivery.id))
+				.filter(still_queued)
 				.set(|row| row.state, state)
 				.set(|row| row.reason, reason.as_str())
 				.set(|row| row.attempts, attempts)
-				.set(|row| row.attempted_at, Some(now))
+				.set(|row| row.attempted_at, attempted.then_some(now))
 				.set(|row| row.finished_at, Some(now))
 				.set(|row| row.next_attempt_at, None)
 				.run(db)

@@ -582,10 +582,36 @@ async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
 		fcm: None,
 		web: None,
 	};
-	push::install(Some(
-		PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
-			.expect("the runtime builds"),
-	));
+
+	// A second service over the same database, this one carrying an APNs
+	// transport so enrollment is accepted: each service's configuration
+	// is its own, never the process's.
+	let callers = ServiceCallers::new(Anonymous)
+		.caller(TOKEN, rpc::server::APP_CALLER)
+		.forwarded_identity(SERVICE, TOKEN);
+	let (router, live) = leptoskit_notifications::service::routes_with_push(
+		service.db.clone(),
+		Some(ORIGIN),
+		callers,
+		push::Push {
+			instance: format!("postgres-race-{}", Uuid::now_v7()).into(),
+			runtime: Some(std::sync::Arc::new(
+				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
+					.expect("the runtime builds"),
+			)),
+		},
+	);
+	live.start().await.expect("live starts");
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let address = listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		leptoskit_axum::axum::serve(listener, router).await.unwrap();
+	});
+	let service = Service {
+		address,
+		db: service.db.clone(),
+		jobs: None,
+	};
 
 	let token = "0".repeat(64);
 	let credential = serde_json::json!({ "apns": { "device_token": token } });

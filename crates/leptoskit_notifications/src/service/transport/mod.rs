@@ -17,7 +17,6 @@ pub(crate) mod fcm;
 pub(crate) mod host;
 pub(crate) mod webpush;
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,8 +31,11 @@ use crate::service::config;
 
 /// One outbound request, exactly as the transport means to send it: real
 /// provider URL, headers with their signed authorization material, and
-/// the encoded body.
-#[derive(Clone, Debug)]
+/// the encoded body. Secret material rides in all three — bearer tokens
+/// in the headers, device tokens in the URL, signed assertions and
+/// registration tokens in the body — so the `Debug` print shows the
+/// destination's host and the sizes, and none of the values.
+#[derive(Clone)]
 pub struct WireRequest {
 	/// The URL, with no credentials in it.
 	pub url: String,
@@ -48,8 +50,34 @@ pub struct WireRequest {
 	pub pinned: Option<Pinned>,
 }
 
+impl std::fmt::Debug for WireRequest {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let host = self
+			.url
+			.split_once("://")
+			.map_or("", |(_, rest)| rest)
+			.split(['/', '?', '#'])
+			.next()
+			.unwrap_or_default();
+
+		f.debug_struct("WireRequest")
+			.field("url", &format!("…://{host}/<redacted>"))
+			.field(
+				"headers",
+				&self
+					.headers
+					.iter()
+					.map(|(name, _)| (name.clone(), "<redacted>"))
+					.collect::<Vec<_>>(),
+			)
+			.field("body", &format!("<{} bytes redacted>", self.body.len()))
+			.field("pinned", &self.pinned)
+			.finish()
+	}
+}
+
 /// A host and the validated addresses a request to it may connect to.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pinned {
 	/// The host, as it names itself to the resolver and in TLS.
 	pub host: String,
@@ -62,8 +90,9 @@ pub struct Pinned {
 
 /// One provider answer, already bounded: the status, the headers the
 /// classification reads (`retry-after` among them), and a body read no
-/// further than [`crate::push`]'s response bound.
-#[derive(Clone, Debug)]
+/// further than [`crate::push`]'s response bound. A body can carry
+/// access tokens, so the `Debug` print shows the sizes, not the bytes.
+#[derive(Clone)]
 pub struct WireResponse {
 	/// The HTTP status.
 	pub status: u16,
@@ -71,6 +100,23 @@ pub struct WireResponse {
 	pub headers: Vec<(String, String)>,
 	/// The body, as bytes, truncated at the read bound.
 	pub body: Vec<u8>,
+}
+
+impl std::fmt::Debug for WireResponse {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("WireResponse")
+			.field("status", &self.status)
+			.field(
+				"headers",
+				&self
+					.headers
+					.iter()
+					.map(|(name, _)| (name.clone(), "<redacted>"))
+					.collect::<Vec<_>>(),
+			)
+			.field("body", &format!("<{} bytes redacted>", self.body.len()))
+			.finish()
+	}
 }
 
 /// Why a request never got an answer to classify: the socket said no.
@@ -105,8 +151,44 @@ pub trait Boundary: Send + Sync {
 /// read only up to the bound.
 pub struct HttpBoundary {
 	client: reqwest::Client,
-	/// One client per pinned host, holding its validated addresses.
-	pinned: std::sync::Mutex<HashMap<String, reqwest::Client>>,
+	/// One client per pinned host **and address set**, least recently
+	/// used first: a re-resolution with new addresses builds a fresh
+	/// client rather than connecting to stale ones, and a host whose
+	/// address set keeps changing can't grow the cache without bound.
+	pinned: std::sync::Mutex<PinnedClients>,
+}
+
+/// How many pinned clients are kept before the oldest is dropped. Each
+/// holds a connection pool; a few hosts with rotating addresses are
+/// normal, an unbounded set is not.
+const PINNED_CLIENT_LIMIT: usize = 32;
+
+/// A bounded insertion-ordered map of pinned clients.
+struct PinnedClients {
+	entries: Vec<(String, reqwest::Client)>,
+}
+
+impl PinnedClients {
+	fn get(&mut self, key: &str) -> Option<reqwest::Client> {
+		let at = self.entries.iter().position(|(held, _)| held == key)?;
+		let (held, client) = self.entries.remove(at);
+
+		// The hit goes to the back: the front is the least recently used.
+		self.entries.push((held, client.clone()));
+
+		Some(client)
+	}
+
+	fn insert(&mut self, key: String, client: reqwest::Client) {
+		self.entries.retain(|(held, _)| *held != key);
+
+		if self.entries.len() >= PINNED_CLIENT_LIMIT {
+			self.entries
+				.drain(..self.entries.len() + 1 - PINNED_CLIENT_LIMIT);
+		}
+
+		self.entries.push((key, client));
+	}
 }
 
 impl HttpBoundary {
@@ -117,33 +199,45 @@ impl HttpBoundary {
 	///
 	/// A message when the client can't be built.
 	pub fn new() -> Result<Self, String> {
-		let client = reqwest::Client::builder()
-			.redirect(reqwest::redirect::Policy::none())
-			.no_proxy()
-			.connect_timeout(Duration::from_secs(5))
-			.timeout(Duration::from_secs(10))
-			.build()
-			.map_err(|error| format!("the push HTTP client won't build: {error}"))?;
-
-		Ok(Self {
-			client,
-			pinned: std::sync::Mutex::new(HashMap::new()),
-		})
+		Ok(Self::over_client(boundary_client(
+			reqwest::Client::builder(),
+		)?))
 	}
 
-	/// The client for a pinned host, built with its validated addresses
-	/// once and reused. The addresses came from the caller's validator,
+	/// The same boundary over an already-built client: the crate's own
+	/// integration tests use it to prove production HTTP behavior against
+	/// local servers. Nothing in the service calls it.
+	#[doc(hidden)]
+	#[must_use]
+	pub fn over_client(client: reqwest::Client) -> Self {
+		Self {
+			client,
+			pinned: std::sync::Mutex::new(PinnedClients {
+				entries: Vec::new(),
+			}),
+		}
+	}
+
+	/// The client for a pinned host and address set, built with exactly
+	/// those addresses. The addresses came from the caller's validator,
 	/// so a connection here can't be talked into a private address after
-	/// the fact.
+	/// the fact, and a fresh resolution that answers new addresses gets a
+	/// fresh client rather than the stale one.
 	fn pinned_client(&self, pinned: &Pinned) -> Result<reqwest::Client, WireError> {
-		let key = format!("{}:{}", pinned.host, pinned.port);
+		let mut key = format!("{}:{}", pinned.host, pinned.port);
+
+		for addr in &pinned.addrs {
+			key.push(' ');
+			key.push_str(&addr.to_string());
+		}
+
 		let mut cached = self
 			.pinned
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		if let Some(client) = cached.get(&key) {
-			return Ok(client.clone());
+			return Ok(client);
 		}
 
 		let addrs: Vec<std::net::SocketAddr> = pinned
@@ -151,18 +245,29 @@ impl HttpBoundary {
 			.iter()
 			.map(|addr| std::net::SocketAddr::new(*addr, pinned.port))
 			.collect();
-		let client = reqwest::Client::builder()
-			.redirect(reqwest::redirect::Policy::none())
-			.no_proxy()
-			.connect_timeout(Duration::from_secs(5))
-			.timeout(Duration::from_secs(10))
-			.resolve_to_addrs(&pinned.host, &addrs)
-			.build()
-			.map_err(|_| WireError::Unreachable)?;
+		let client =
+			boundary_client(reqwest::Client::builder().resolve_to_addrs(&pinned.host, &addrs))
+				.map_err(|_| WireError::Unreachable)?;
 		cached.insert(key, client.clone());
 
 		Ok(client)
 	}
+}
+
+/// Finishes a boundary client: redirects refused, proxies ignored, TLS
+/// verified, and the timeouts set.
+///
+/// # Errors
+///
+/// A message when the client can't be built.
+fn boundary_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client, String> {
+	builder
+		.redirect(reqwest::redirect::Policy::none())
+		.no_proxy()
+		.connect_timeout(Duration::from_secs(5))
+		.timeout(Duration::from_secs(10))
+		.build()
+		.map_err(|error| format!("the push HTTP client won't build: {error}"))
 }
 
 impl Boundary for HttpBoundary {
@@ -258,11 +363,19 @@ pub(crate) enum Outcome {
 	/// The provider took the message.
 	Accepted,
 	/// Transient: wait `after` — the provider's `Retry-After`, when it
-	/// gave one — or the engine's backoff when `None`.
+	/// gave one — or the engine's backoff when `None`. A network attempt
+	/// was spent.
 	Transient { after: Option<Duration> },
 	/// The delivery's moment isn't here yet: wait until then, with no
 	/// attempt spent.
 	WaitUntil(Timestamp),
+	/// The operator's side is broken: the OAuth exchange was refused, or a
+	/// freshly exchanged token was still refused. Wait `after` — or the
+	/// engine's stall delay when `None` — and try again without spending
+	/// the delivery's attempts: the endpoint isn't at fault, and the
+	/// delivery stays queued rather than failing for something only the
+	/// operator can fix.
+	Stalled { after: Option<Duration> },
 	/// The delivery is over: the reason says why, and `invalidate` says
 	/// the credential is no good at the provider, so the endpoint stops
 	/// taking deliveries at all.
@@ -270,6 +383,24 @@ pub(crate) enum Outcome {
 		reason: DeliveryReason,
 		invalidate: bool,
 	},
+}
+
+impl Outcome {
+	/// Whether a provider was actually asked: only a network attempt may
+	/// spend a delivery's attempt count or stamp its `attempted_at`.
+	/// Local decisions — schedule, cancellation, expiry, opt-outs,
+	/// liveness, size — decided before any wire moved, and an
+	/// operator-configuration stall is not the delivery's attempt.
+	#[must_use]
+	pub(crate) fn network_attempted(self) -> bool {
+		match self {
+			Self::Accepted | Self::Transient { .. } => true,
+			Self::Stalled { .. } | Self::WaitUntil(_) => false,
+			Self::Ended { reason, .. } => {
+				reason == DeliveryReason::Unregistered || reason == DeliveryReason::ProviderRejected
+			}
+		}
+	}
 }
 
 /// One provider's sender. `credential` is the stored, canonical
@@ -373,6 +504,110 @@ impl PushRuntime {
 			PushPlatform::Apns => self.apns.as_ref().map(|t| t as &dyn Transport),
 			PushPlatform::Fcm => self.fcm.as_ref().map(|t| t as &dyn Transport),
 			PushPlatform::WebPush => self.web.as_ref().map(|t| t as &dyn Transport),
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::Pinned;
+	use super::WireRequest;
+	use super::WireResponse;
+
+	/// The wire types' `Debug` prints show the destination's host, the
+	/// header names, and sizes — never the tokens in the URL, the
+	/// authorization headers, or the bodies carrying assertions and
+	/// access tokens.
+	#[test]
+	fn wire_debug_prints_no_secrets() {
+		let request = WireRequest {
+			url: "https://api.sandbox.push.apple.com/3/device/a1b2c3d4e5f6".to_owned(),
+			headers: vec![
+				(
+					"authorization".to_owned(),
+					"Bearer eyJhbGc.secret.part".to_owned(),
+				),
+				("apns-topic".to_owned(), "dev.leptoskit.app".to_owned()),
+			],
+			body: b"grant_type=assertion=eyJ.very.secret".to_vec(),
+			pinned: None,
+		};
+		let printed = format!("{request:?}");
+		assert!(
+			printed.contains("api.sandbox.push.apple.com"),
+			"the host shows: {printed}"
+		);
+		assert!(!printed.contains("a1b2c3"), "no URL tokens: {printed}");
+		assert!(!printed.contains("Bearer"), "no auth headers: {printed}");
+		assert!(!printed.contains("secret"), "no bodies: {printed}");
+		assert!(printed.contains("redacted"), "the print says what it hides");
+
+		let response = WireResponse {
+			status: 200,
+			headers: vec![("retry-after".to_owned(), "1".to_owned())],
+			body: br#"{"access_token":"ya29.the-token"}"#.to_vec(),
+		};
+		let printed = format!("{response:?}");
+		assert!(!printed.contains("ya29"), "no access tokens: {printed}");
+		assert!(printed.contains("200"), "the status shows: {printed}");
+		assert!(
+			printed.contains("retry-after"),
+			"the header names show: {printed}"
+		);
+	}
+
+	/// A pinned destination with new addresses is a new cache entry, so a
+	/// re-resolution can't keep connecting to addresses the resolver no
+	/// longer answers, and the cache stays bounded however often they
+	/// change.
+	#[test]
+	fn a_pinned_host_with_new_addresses_is_a_new_client() {
+		use super::PINNED_CLIENT_LIMIT;
+
+		let mut clients = super::PinnedClients {
+			entries: Vec::new(),
+		};
+		let key = |pinned: &Pinned| {
+			let mut key = format!("{}:{} ", pinned.host, pinned.port);
+			key.push_str(
+				&pinned
+					.addrs
+					.iter()
+					.map(std::net::IpAddr::to_string)
+					.collect::<Vec<_>>()
+					.join(" "),
+			);
+			key
+		};
+		let pin = |addrs: &[std::net::IpAddr]| {
+			Pinned {
+				host: "push.example.net".to_owned(),
+				port: 443,
+				addrs: addrs.to_vec(),
+			}
+		};
+
+		let one = pin(&["1.1.1.1".parse().unwrap()]);
+		let two = pin(&["1.1.1.1".parse().unwrap(), "8.8.8.8".parse().unwrap()]);
+		clients.insert(key(&one), build());
+		assert!(clients.get(&key(&one)).is_some(), "the first set is kept");
+		assert!(
+			clients.get(&key(&two)).is_none(),
+			"a new address set is a new client, not the stale one"
+		);
+
+		// However many address sets come and go, the cache stays bounded.
+		for change in 0..(PINNED_CLIENT_LIMIT * 2) {
+			clients.insert(
+				key(&pin(&[format!("9.9.9.{change}").parse().unwrap()])),
+				build(),
+			);
+		}
+
+		assert!(clients.entries.len() <= PINNED_CLIENT_LIMIT);
+
+		fn build() -> reqwest::Client {
+			reqwest::Client::new()
 		}
 	}
 }

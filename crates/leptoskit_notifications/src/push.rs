@@ -17,16 +17,24 @@
 //! not a person's receipt. Every attempt carries a stable collapse id —
 //! the notification's own id — so repeats replace rather than stack.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use leptoskit_db::table;
 use leptoskit_rpc as rpc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// The most endpoints one person may hold, so enrollment stays bounded
-/// and a send's fanout with it. Registering past this refuses, and a
-/// re-registration of a held credential is idempotent.
+/// The most endpoints one person may hold live, so enrollment stays
+/// bounded and a send's fanout with it. Registering past this refuses, and
+/// a re-registration of a held credential is idempotent.
 pub const MAX_ENDPOINTS: usize = 10;
+
+/// How many of a person's invalidated endpoints stay as explainable
+/// history. Older ones are deleted as new enrollments come in, so the
+/// table can't grow without bound however often a device churns; the
+/// delivery rows keep the full story either way.
+pub const MAX_ENDPOINT_HISTORY: usize = 10;
 
 /// The longest APNs device token, in hex characters. Tokens are 64 today;
 /// the bound leaves room for longer ones rather than guessing a ceiling.
@@ -106,8 +114,9 @@ impl PushPlatform {
 }
 
 /// The Web Push subscription's browser keys, base64url without padding,
-/// exactly as `PushSubscription.toJSON()` handed them over.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// exactly as `PushSubscription.toJSON()` handed them over. Secret
+/// material: the `Debug` print shows none of it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WebPushKeys {
 	/// The browser's P-256 public key, 65 bytes uncompressed.
 	pub p256dh: String,
@@ -115,11 +124,21 @@ pub struct WebPushKeys {
 	pub auth: String,
 }
 
+impl std::fmt::Debug for WebPushKeys {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("WebPushKeys")
+			.field("p256dh", &"<redacted>")
+			.field("auth", &"<redacted>")
+			.finish()
+	}
+}
+
 /// The credential an app presents to enroll one endpoint: the thing its
 /// platform issued and the only thing the service needs to push to it.
 /// Anything else — topics, projects, VAPID identity — is server
 /// configuration, so a caller can't steer where a push really goes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Secret material: the `Debug` print shows only the platform.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PushCredential {
 	/// An APNs device token, hex.
@@ -142,6 +161,16 @@ pub enum PushCredential {
 	},
 }
 
+impl std::fmt::Debug for PushCredential {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(match self {
+			Self::Apns { .. } => "Apns { device_token: <redacted> }",
+			Self::Fcm { .. } => "Fcm { registration_token: <redacted> }",
+			Self::WebPush { .. } => "WebPush { endpoint: <redacted>, keys: <redacted> }",
+		})
+	}
+}
+
 impl PushCredential {
 	/// Which platform this credential belongs to.
 	#[must_use]
@@ -153,10 +182,37 @@ impl PushCredential {
 		}
 	}
 
-	/// The canonical form the service stores and hashes: hex folded to
-	/// lower case, tokens trimmed, and a Web Push subscription re-serialized
-	/// with its URL parsed and its keys unpadded. Two enrollments of the
-	/// same credential agree on it whatever their input's case or padding.
+	/// Where this credential delivers: the identity an endpoint's
+	/// ownership turns on, separate from the credential's whole content.
+	/// A device token or an FCM token *is* its destination; a Web Push
+	/// subscription's destination is its endpoint URL alone, so the same
+	/// browser stays the same endpoint through a key change while a
+	/// different account can never take a live URL over by presenting new
+	/// keys.
+	///
+	/// # Errors
+	///
+	/// [`check_credential`]'s message.
+	pub fn destination(&self) -> Result<String, String> {
+		match self {
+			Self::Apns { device_token } => Ok(device_token.trim().to_ascii_lowercase()),
+			Self::Fcm { registration_token } => Ok(registration_token.trim().to_owned()),
+			Self::WebPush { endpoint, .. } => {
+				check_web_endpoint(endpoint)?;
+				let url = url::Url::parse(endpoint.trim())
+					.map_err(|_| "a Web Push endpoint is an absolute https URL".to_owned())?;
+				Ok(url.into())
+			}
+		}
+	}
+
+	/// The canonical form the service stores and pushes with: hex folded
+	/// to lower case, tokens trimmed, and a Web Push subscription
+	/// re-serialized with its URL parsed and its keys decoded and
+	/// re-encoded unpadded, so padded and unpadded subscriptions from
+	/// different browsers or SDK versions store the same bytes. Two
+	/// enrollments of the same credential agree on it whatever their
+	/// input's case or padding.
 	///
 	/// # Errors
 	///
@@ -172,8 +228,9 @@ impl PushCredential {
 
 /// A Web Push subscription as the service stores it, and as a browser's
 /// `PushSubscription.toJSON()` hands it over: the endpoint URL and the
-/// keys, so what's stored is what the client saw.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// keys, so what's stored is what the client saw. Secret material: the
+/// `Debug` print shows none of it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WebSubscription {
 	/// The push service's endpoint URL.
 	pub endpoint: String,
@@ -181,9 +238,19 @@ pub struct WebSubscription {
 	pub keys: WebPushKeys,
 }
 
+impl std::fmt::Debug for WebSubscription {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("WebSubscription")
+			.field("endpoint", &"<redacted>")
+			.field("keys", &"<redacted>")
+			.finish()
+	}
+}
+
 /// The Web Push subscription the service stores: the URL re-serialized by
-/// the parser and the keys unpadded, so equivalent subscriptions store the
-/// same bytes.
+/// the parser and the keys decoded and re-encoded without padding, so
+/// equivalent subscriptions store the same bytes whatever form the
+/// browser's SDK handed over.
 ///
 /// # Errors
 ///
@@ -197,13 +264,25 @@ fn canonical_web_subscription(endpoint: &str, keys: &WebPushKeys) -> Result<Stri
 	let subscription = WebSubscription {
 		endpoint: url.into(),
 		keys: WebPushKeys {
-			p256dh: keys.p256dh.trim().to_owned(),
-			auth: keys.auth.trim().to_owned(),
+			p256dh: encode_canonical_key(&keys.p256dh, "the p256dh key is base64url")?,
+			auth: encode_canonical_key(&keys.auth, "the auth secret is base64url")?,
 		},
 	};
 
 	serde_json::to_string(&subscription)
 		.map_err(|error| format!("the subscription won't store: {error}"))
+}
+
+/// One key's bytes, re-encoded as unpadded base64url: the one form the
+/// service stores, whatever padding the input carried.
+///
+/// # Errors
+///
+/// The message naming the key, when it doesn't decode.
+fn encode_canonical_key(key: &str, complaint: &str) -> Result<String, String> {
+	let decoded = base64_url(key).ok_or_else(|| complaint.to_owned())?;
+
+	Ok(URL_SAFE_NO_PAD.encode(decoded))
 }
 
 /// Reads a stored Web Push subscription back, as the transport needs it.
@@ -335,14 +414,13 @@ pub(crate) fn base64_url(text: &str) -> Option<Vec<u8>> {
 	use base64::Engine as _;
 
 	let trimmed = text.trim();
-	let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
 	let unpadded = trimmed.trim_end_matches('=');
 
 	if trimmed.len() % 4 == 1 {
 		return None;
 	}
 
-	engine.decode(unpadded).ok().or_else(|| {
+	URL_SAFE_NO_PAD.decode(unpadded).ok().or_else(|| {
 		base64::engine::general_purpose::URL_SAFE
 			.decode(trimmed)
 			.ok()
@@ -365,9 +443,12 @@ pub struct PushEndpoint {
 	/// the audit log and redacted in debug output.
 	#[db(secret, max_len = 6_144)]
 	pub credential: String,
-	/// A SHA-256 of the credential, in hex: how the service knows a
-	/// credential is already enrolled, without ever searching on the
-	/// secret itself.
+	/// A SHA-256 of the endpoint's platform and destination — its token,
+	/// or a Web Push subscription's endpoint URL — in hex: how the service
+	/// knows two enrollments name the same endpoint without ever searching
+	/// on the secret itself. It deliberately does not cover a Web Push
+	/// subscription's keys, so a browser that rotates them keeps its
+	/// endpoint and its owner.
 	#[db(min_len = 64, max_len = 64)]
 	pub fingerprint: String,
 	/// When the provider said this credential no longer exists: expired,
@@ -569,7 +650,8 @@ pub struct DeliveryStatus {
 }
 
 /// One enrolled endpoint, as its owner sees it: the opaque id, the
-/// platform, and when it was enrolled. The credential is never here.
+/// platform, when it was enrolled, and whether a provider's answer has
+/// since invalidated it. The credential is never here.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EndpointSummary {
 	/// The endpoint's opaque id, for revocation.
@@ -578,21 +660,29 @@ pub struct EndpointSummary {
 	pub platform: PushPlatform,
 	/// When it was enrolled.
 	pub created_at: leptoskit_db::Timestamp,
+	/// When the provider said this credential no longer exists, if it
+	/// did: an invalidated endpoint stays listed — it explains itself —
+	/// but takes no further deliveries.
+	pub invalidated_at: Option<leptoskit_db::Timestamp>,
 }
 
 /// Registers one push endpoint for the signed-in person: their app hands
 /// over the credential its platform issued, and the service holds it
 /// against their id, read from the forwarded identity and never from an
-/// argument. Registering a credential this person already holds answers
+/// argument. Registering a destination this person already holds answers
 /// the same endpoint again — idempotent, same opaque id — so a retried
-/// enrollment makes no duplicate.
+/// enrollment makes no duplicate, and a Web Push subscription whose
+/// browser rotated its keys updates the stored credential in place: the
+/// endpoint and its queued deliveries stay.
 ///
-/// A credential another live account holds is refused rather than
+/// A destination another **live** account holds is refused rather than
 /// reassigned: the device's previous account revokes it first (signing
 /// out of the app revokes that device's endpoints), which is what keeps a
-/// push from reaching an account that never asked for it. The refusal
-/// says the credential is taken; the caller holds the credential itself,
-/// so this tells them only what their own device is already enrolled to.
+/// push from reaching an account that never asked for it. A destination
+/// the provider invalidated is not held: registering it takes it over
+/// clean, for whoever's device now presents it. The refusal says the
+/// destination is taken; the caller holds the credential itself, so this
+/// tells them only what their own device is already enrolled to.
 ///
 /// # Errors
 ///
@@ -601,27 +691,35 @@ pub struct EndpointSummary {
 /// [`check_credential`], a host the push-host policy won't push to, an
 /// endpoint past [`MAX_ENDPOINTS`], or a platform this server has no
 /// transport configured for, and [`rpc::Error::Conflict`] when another
-/// account holds the credential.
+/// account holds the destination live.
 #[rpc::mutation(service = "notifications")]
 pub async fn register_push_endpoint(
 	cx: &rpc::MutationCx,
 	credential: PushCredential,
 ) -> rpc::Result<EndpointSummary> {
 	let me = crate::service::me(cx.identity())?;
-	crate::service::push::register(cx, me, &credential).await
+	let push = crate::service::push::Push::of(cx)?;
+	crate::service::push::register(cx, push, me, &credential).await
 }
 
-/// The signed-in person's enrolled endpoints, oldest first: the opaque
-/// ids, platforms, and enrollment times. The credentials are never in the
-/// answer, and nobody else's endpoints are in it either.
+/// The signed-in person's enrolled endpoints, oldest first, one bounded
+/// page at a time: the opaque ids, platforms, enrollment times, and
+/// whether each has been invalidated. Invalidated endpoints are included
+/// — a device list that hides them can't explain them — and the page is
+/// bounded, so however many times a device churns the answer stays small.
+/// The credentials are never in the answer, and nobody else's endpoints
+/// are in it either.
 ///
 /// # Errors
 ///
 /// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person.
 #[rpc::query(service = "notifications")]
-pub async fn push_endpoints(cx: &rpc::QueryCx) -> rpc::Result<Vec<EndpointSummary>> {
+pub async fn push_endpoints(
+	cx: &rpc::QueryCx,
+	page: rpc::PageArgs,
+) -> rpc::Result<rpc::Page<EndpointSummary>> {
 	let me = crate::service::me(cx.identity())?;
-	crate::service::push::list(cx.db(), me).await
+	crate::service::push::list(cx.db(), me, &page).await
 }
 
 /// Revokes one of the signed-in person's endpoints: the service deletes
@@ -677,21 +775,177 @@ pub async fn push_deliveries(
 /// becomes visible, and again whenever attempts are waiting to retry.
 /// Each attempt re-reads the notification's schedule, cancellation,
 /// expiry, and the person's latest opt-out at the moment it fires, and
-/// never holds a database transaction across the network call.
+/// never holds a database transaction across the network call. The
+/// `instance` names the service instance whose push transports carry the
+/// attempts: a process may serve several notifications services, each
+/// with its own credentials, and a delivery always answers to the
+/// configuration that enqueued it.
 ///
 /// Transient failures wait and retry — honoring the provider's
 /// `Retry-After` when it gives one — until [`MAX_DELIVERY_ATTEMPTS`] is
 /// spent; permanent ones end the delivery and, for a credential the
 /// provider no longer knows, invalidate the endpoint so nothing further
-/// is pushed to it. The job runs whether or not any endpoint is still
-/// enrolled; it walks what is there. Only the service's own workers run
-/// it. No deadline: a scheduled send's first round waits as long as its
-/// schedule says, like a wake job does.
+/// is pushed to it. An operator-side failure — a refused OAuth exchange,
+/// a stale access token — waits and retries without spending the
+/// delivery's attempts: the endpoint isn't at fault, and the send's
+/// status shows it stuck rather than failed. The job runs whether or not
+/// any endpoint is still enrolled; it walks what is there. Only the
+/// service's own workers run it. No deadline: a scheduled send's first
+/// round waits as long as its schedule says, like a wake job does.
 #[rpc::job(
 	service = "notifications",
 	queue = "push",
 	timeout = 5m
 )]
-pub async fn push_send(cx: &rpc::JobCx, send_key: String, round: u32) -> rpc::Result<()> {
-	crate::service::push::round(cx, &send_key, round).await
+pub async fn push_send(
+	cx: &rpc::JobCx,
+	send_key: String,
+	round: u32,
+	instance: String,
+) -> rpc::Result<()> {
+	crate::service::push::round(cx, &send_key, round, &instance).await
+}
+
+#[cfg(test)]
+mod tests {
+	use base64::Engine as _;
+	use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+	use super::PushCredential;
+	use super::WebPushKeys;
+	use super::WebSubscription;
+
+	/// A P-256 point and auth secret long enough to pass the shared
+	/// checks: the first byte makes it an uncompressed point.
+	fn keys() -> (WebPushKeys, WebPushKeys) {
+		let point = {
+			let mut point = vec![0x04];
+			point.extend(std::iter::repeat_n(5_u8, 64));
+			point
+		};
+		let auth = [7_u8; 16];
+
+		(
+			WebPushKeys {
+				p256dh: URL_SAFE_NO_PAD.encode(&point),
+				auth: URL_SAFE_NO_PAD.encode(auth),
+			},
+			WebPushKeys {
+				p256dh: base64::engine::general_purpose::URL_SAFE.encode(&point),
+				auth: base64::engine::general_purpose::URL_SAFE.encode(auth),
+			},
+		)
+	}
+
+	fn web_push(endpoint: &str, keys: &WebPushKeys) -> PushCredential {
+		PushCredential::WebPush {
+			endpoint: endpoint.to_owned(),
+			keys: keys.clone(),
+		}
+	}
+
+	/// Padded and unpadded keys canonicalize to the same stored bytes, so
+	/// the same browser can't enroll twice by switching SDKs.
+	#[test]
+	fn padded_and_unpadded_keys_canonicalize_alike() {
+		let (unpadded, padded) = keys();
+		let one = web_push(
+			"https://updates.push.services.mozilla.com/push/1",
+			&unpadded,
+		)
+		.canonical()
+		.unwrap();
+		let two = web_push("https://updates.push.services.mozilla.com/push/1", &padded)
+			.canonical()
+			.unwrap();
+		assert_eq!(one, two, "padding changes nothing stored");
+		assert!(one.contains("BQUFB"), "the keys are stored unpadded: {one}");
+
+		// A padded pair decodes back to the same subscription.
+		let back: WebSubscription = serde_json::from_str(&one).unwrap();
+		assert_eq!(back.keys, unpadded);
+	}
+
+	/// The endpoint URL is part of the destination and the credential, and
+	/// its parsing folds trivial differences: a trailing dot-free host
+	/// with a default port is the same destination as one naming it.
+	#[test]
+	fn a_destination_is_the_platforms_own_identity() {
+		let (keys, padded) = keys();
+
+		// A web subscription's destination is its URL alone, not its keys:
+		// two enrollments of the same browser through a key rotation name
+		// the same endpoint.
+		let destination = web_push("https://updates.push.services.mozilla.com/push/1", &keys)
+			.destination()
+			.unwrap();
+		let rotated = web_push("https://updates.push.services.mozilla.com/push/1", &padded)
+			.destination()
+			.unwrap();
+		assert_eq!(
+			destination, rotated,
+			"key material changes nothing about where a Web Push subscription delivers"
+		);
+		assert_eq!(
+			destination,
+			"https://updates.push.services.mozilla.com/push/1"
+		);
+
+		// An explicit default port folds into the same URL.
+		let ported = web_push(
+			"https://updates.push.services.mozilla.com:443/push/1",
+			&keys,
+		)
+		.destination()
+		.unwrap();
+		assert_eq!(destination, ported, "the default port is nothing");
+	}
+
+	/// Nothing secret prints: the credential types' `Debug` shows the
+	/// platform and redaction, never the token, the URL, or the keys.
+	#[test]
+	fn debug_prints_no_secrets() {
+		let (keys, padded) = keys();
+		let credentials = [
+			PushCredential::Apns {
+				device_token: "a1b2c3d4".repeat(8),
+			},
+			PushCredential::Fcm {
+				registration_token: "fcm-secret-token".to_owned(),
+			},
+			web_push("https://updates.push.services.mozilla.com/push/1", &keys),
+		];
+
+		for credential in &credentials {
+			let printed = format!("{credential:?}");
+			assert!(!printed.contains("a1b2"), "an APNs token leaked: {printed}");
+			assert!(
+				!printed.contains("fcm-secret"),
+				"an FCM token leaked: {printed}"
+			);
+			assert!(
+				!printed.contains("mozilla") && !printed.contains("push/1"),
+				"an endpoint URL leaked: {printed}"
+			);
+			assert!(printed.contains("redacted"), "the print says what it hides");
+		}
+
+		for shown in [
+			format!("{keys:?}"),
+			format!("{padded:?}"),
+			format!(
+				"{:?}",
+				WebSubscription {
+					endpoint: "https://updates.push.services.mozilla.com/push/1".to_owned(),
+					keys: keys.clone(),
+				}
+			),
+		] {
+			assert!(shown.contains("redacted"), "the print says what it hides");
+			assert!(
+				!shown.contains("BQUFB") && !shown.contains("FcOw"),
+				"keys leaked: {shown}"
+			);
+		}
+	}
 }

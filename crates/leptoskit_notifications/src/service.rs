@@ -15,6 +15,8 @@ pub mod config;
 pub mod push;
 pub mod transport;
 
+use std::sync::Arc;
+
 use leptoskit_axum::axum::Router;
 use leptoskit_db::Db;
 use leptoskit_rpc as rpc;
@@ -454,4 +456,50 @@ pub fn routes_with(
 		server.router().merge(live.router()),
 	);
 	(router, live)
+}
+
+/// [`routes_with`], carrying `push`'s configuration in every request's
+/// context: the transports its enrollments check against, and the
+/// instance key its jobs name back. This is what a service with push
+/// configured serves; [`routes`] serves one without. The instance key
+/// should be stable across restarts of the same service — its database
+/// URL is the natural one — so a queued push job finds its transports
+/// again after one.
+pub fn routes_with_push(
+	db: Db,
+	origin: Option<&str>,
+	callers: impl rpc::server::Identify,
+	push: push::Push,
+) -> (Router, rpc::server::Live) {
+	push::register_instance(Arc::clone(&push.instance), push.runtime.clone());
+	routes_with(db, origin, WithPush::new(callers, push))
+}
+
+/// [`Identify`](rpc::server::Identify) as the wrapped caller would
+/// answer, with the service instance's push configuration added to the
+/// context: the framework's own way of carrying request-scoped state to
+/// an operation's body, the same road [`rpc::server::ForwardedIdentity`]
+/// takes. Nothing in the request can change it.
+struct WithPush<I> {
+	inner: I,
+	push: push::Push,
+}
+
+impl<I: rpc::server::Identify> WithPush<I> {
+	fn new(inner: I, push: push::Push) -> Self {
+		Self { inner, push }
+	}
+}
+
+impl<I: rpc::server::Identify> rpc::server::Identify for WithPush<I> {
+	fn identify<'a>(
+		&'a self,
+		parts: &'a http::request::Parts,
+	) -> leptoskit_query::BoxFuture<'a, rpc::Result<rpc::server::Identity>> {
+		Box::pin(async move {
+			let mut identity = self.inner.identify(parts).await?;
+			identity.context = identity.context.with(self.push.clone());
+			Ok(identity)
+		})
+	}
 }

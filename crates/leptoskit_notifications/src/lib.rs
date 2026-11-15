@@ -530,7 +530,13 @@ pub async fn send(
 	let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
 	service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
 	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
-	service::push::schedule(cx, &idempotency_key, &spec, &fanout).await?;
+
+	// A send on a server with push configured fans its deliveries out;
+	// on one without, or from a route that carries no configuration, the
+	// inbox is the whole send.
+	if let Ok(push) = service::push::Push::of(cx) {
+		service::push::schedule(cx, push, &idempotency_key, &spec, &fanout).await?;
+	}
 
 	Ok(SendResult {
 		delivered: fanout.delivered,

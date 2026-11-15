@@ -26,6 +26,16 @@ required-features = ["service"]
 name = "live"
 required-features = ["service"]
 
+# The push tests exercise the transports over an injected boundary; the
+# boundary tests below run real local HTTP servers.
+[[test]]
+name = "push"
+required-features = ["service"]
+
+[[test]]
+name = "boundary"
+required-features = ["service"]
+
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]
@@ -48,22 +58,34 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 # Everything below is the service's. The library without features (the shared
-# types and validation) doesn't compile any of it. Push's signing, key
-# agreement, and encryption are ring's, already in the graph through TLS.
+# types and validation) doesn't compile any of it. The push protocols are the
+# maintained libraries': Web Push encryption and VAPID through `web-push`
+# (Mozilla's `ece` underneath), the FCM service-account JWT through
+# `jsonwebtoken` with its Rust crypto, and APNs's ES256 provider token over
+# ring's primitives, already in the graph through TLS.
 hex = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+jsonwebtoken = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
+leptoskit_query = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
 ring = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+web-push = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures = { workspace = true }
+hex = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "http2", "server"] }
+hyper-util = { workspace = true, features = ["http1", "http2", "server", "server-auto", "tokio"] }
 leptoskit_axum = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 ring = { workspace = true }
+rsa = { workspace = true, features = ["std", "encoding", "getrandom"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
 [features]
@@ -73,11 +95,15 @@ default = []
 # on, when it builds the service; the app never does.
 service = [
 	"dep:hex",
+	"dep:http",
+	"dep:jsonwebtoken",
 	"dep:leptoskit_axum",
+	"dep:leptoskit_query",
 	"dep:reqwest",
 	"dep:ring",
 	"dep:sha2",
 	"dep:tokio",
+	"dep:web-push",
 	"leptoskit_db/sqlite",
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",

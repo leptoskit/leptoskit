@@ -13,6 +13,8 @@ use leptoskit_notifications::MIGRATIONS;
 use leptoskit_notifications::POSTGRES_MIGRATIONS;
 use leptoskit_notifications::SERVICE;
 use leptoskit_notifications::service;
+use leptoskit_rpc::server::Anonymous;
+use leptoskit_rpc::server::ServiceCallers;
 
 leptoskit_axum::service::main!(leptoskit_notifications, run);
 
@@ -52,9 +54,10 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 
 	// The push transports, from the operator's environment: none is a
 	// normal way to run — the inbox is the whole service — and a
-	// half-configured provider refuses to start, named in full. Installed
-	// before the routes and workers, so enrollment and delivery answer to
-	// the same configuration.
+	// half-configured provider refuses to start, named in full. Carried
+	// by the routes and named in the jobs by the instance key — here the
+	// database URL, stable across restarts — so a queued delivery always
+	// answers to the configuration that enqueued it.
 	let push = service::config::PushConfig::from_env()
 		.and_then(|config| {
 			if config.apns.is_none() && config.fcm.is_none() && config.web.is_none() {
@@ -76,9 +79,17 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 			service::transport::PushRuntime::build(&config).map(Some)
 		})
 		.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-	service::push::install(push);
+	let push = service::push::Push {
+		instance: url.to_string().into(),
+		runtime: push.map(std::sync::Arc::new),
+	};
 
-	let (router, live) = service::routes(db.clone(), env.public_origin());
+	let (router, live) = service::routes_with_push(
+		db.clone(),
+		env.public_origin(),
+		ServiceCallers::for_service(Anonymous),
+		push,
+	);
 	live.start().await?;
 	// The workers run the wake jobs a scheduled or expiring send enqueues,
 	// the push deliveries' rounds, and keep the change log the live
