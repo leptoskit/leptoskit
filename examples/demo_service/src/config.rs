@@ -369,36 +369,47 @@ fn normalize_host(host: &str) -> Option<String> {
 /// must close at exec, or the kernel would carry yesterday's database and
 /// lock files into tomorrow's image.
 ///
-/// The enumeration's own descriptor (the open `/proc/self/fd` directory)
-/// is excluded by its target, not by a guess about descriptor numbers, and
-/// the standard streams stay allowed: they belong to the process image.
+/// The enumeration snapshots the descriptor numbers and closes its own
+/// `/proc/self/fd` handle before any descriptor is inspected, so the one
+/// handle the check opens can never excuse another: a listed number that
+/// no longer resolves is exactly that closed handle, and every surviving
+/// descriptor — however it is named, a spare open of `/proc/self/fd`
+/// itself included — is refused. The standard streams stay allowed: they
+/// belong to the process image.
 ///
 /// # Errors
 ///
-/// When `/proc/self/fd` lists a descriptor beyond the standard streams and
-/// the enumeration itself.
+/// When `/proc/self/fd` lists a descriptor beyond the standard streams
+/// that survives the enumeration, or when inspecting one fails other
+/// than by the descriptor genuinely being gone.
 #[cfg(target_os = "linux")]
 pub fn guard_inherited_descriptors() -> Result<()> {
-	let entries = std::fs::read_dir("/proc/self/fd")
-		.context("the Linux descriptor guard needs /proc/self/fd")?;
-	let mut inherited = Vec::new();
+	// Snapshot the numbers first, then drop the enumeration: its own
+	// directory handle closes with the `read_dir`, so a number that no
+	// longer resolves below is that closed handle, not an inherited one.
+	let numbers: Vec<i32> = {
+		let entries = std::fs::read_dir("/proc/self/fd")
+			.context("the Linux descriptor guard needs /proc/self/fd")?;
+		let mut numbers = Vec::new();
+		for entry in entries {
+			let entry = entry.context("reading /proc/self/fd")?;
+			let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() else {
+				continue;
+			};
+			numbers.push(fd);
+		}
+		numbers
+	};
 
-	for entry in entries {
-		let entry = entry.context("reading /proc/self/fd")?;
-		let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() else {
-			continue;
-		};
+	let mut inherited = Vec::new();
+	for fd in numbers {
 		if fd <= 2 {
 			continue;
 		}
-		// The one descriptor this check itself opened. Its symlink names
-		// the directory being enumerated, so the guard can't reject its
-		// own view of the world.
-		let target = std::fs::read_link(format!("/proc/self/fd/{fd}")).unwrap_or_default();
-		if target.to_string_lossy().ends_with("/fd") {
+		let Some(target) = descriptor_target(Path::new(&format!("/proc/self/fd/{fd}")))? else {
 			continue;
-		}
-		inherited.push((fd, target.to_string_lossy().into_owned()));
+		};
+		inherited.push((fd, target));
 	}
 
 	ensure!(
@@ -407,6 +418,19 @@ pub fn guard_inherited_descriptors() -> Result<()> {
 		 the demo"
 	);
 	Ok(())
+}
+
+/// One descriptor's target, by the symlink that names it. `Ok(None)`
+/// means the descriptor is genuinely gone — the enumeration's own
+/// handle, closed with its `read_dir` — while any other inspection error
+/// comes back as `Err`: the guard refuses to guess.
+#[cfg(target_os = "linux")]
+fn descriptor_target(link: &Path) -> Result<Option<String>> {
+	match std::fs::read_link(link) {
+		Ok(target) => Ok(Some(target.to_string_lossy().into_owned())),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(error) => Err(error).with_context(|| format!("inspecting {}", link.display())),
+	}
 }
 
 /// Off Linux there is no `/proc/self/fd` to check; the process tests that
@@ -710,6 +734,38 @@ mod tests {
 			!config
 				.authorities
 				.allows(&Authority::of_host_header("other.example").expect("y"))
+		);
+	}
+
+	/// Linux only: the helper's proof paths live in procfs, which macOS
+	/// does not have, so these compile with the guard they prove.
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn a_descriptor_that_is_genuinely_gone_reads_as_none() {
+		// No process can hold descriptor `i32::MAX` — the kernel's
+		// descriptor table is capped far below it — so the only honest
+		// answer is that it is gone, not an error.
+		let target = descriptor_target(Path::new("/proc/self/fd/2147483647"))
+			.expect("a gone descriptor is not an error");
+		assert_eq!(target, None);
+	}
+
+	/// Linux only: an inspection failure that is not "the descriptor is
+	/// gone" comes back as an error, never as a silent exemption.
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn an_inspection_error_is_returned_not_excused() {
+		// `/proc/self/fd` itself is a directory, so reading it as a link
+		// fails with something other than "gone".
+		let error = descriptor_target(Path::new("/proc/self/fd"))
+			.expect_err("a real inspection error is returned, never excused");
+		let cause = error
+			.downcast_ref::<std::io::Error>()
+			.expect("the underlying error survives the context");
+		assert_ne!(
+			cause.kind(),
+			std::io::ErrorKind::NotFound,
+			"a failure other than a gone descriptor is not excused"
 		);
 	}
 }

@@ -13,6 +13,8 @@
 
 A misconfigured service refuses to start (nonzero exit) instead of serving half-configured.
 
+On Linux the process also refuses to start while a file descriptor beyond the standard streams survives into it: the guard lists `/proc/self/fd`, closes its own enumeration handle, and refuses every number still there, naming each with its target. There is no exemption by name — a spare open of `/proc/self/fd` itself, or a handle to any file or directory named `fd`, is refused like any other — and an inspection failure other than a descriptor genuinely gone is fatal rather than silently excused. The proofs are `examples/demo_service/tests/inherited_descriptors.rs` (Linux-only process tests).
+
 The two origins, the bind, and every incoming `Host` header share one host normalization: lowercase, exactly one DNS trailing dot folded away, IPv4 plain, IPv6 canonically bracketed (`[::1]`, whatever the header wrote), and explicit or implicit default ports equal — `https://Notes.Example.:443` and `https://notes.example` are the same authority. Only HTTPS is accepted, or HTTP when the host is a loopback address or a `localhost` development name; no other scheme is accepted anywhere. After normalization the site, the admin, and the bind must still be three distinct authorities — configuration that folds two of them into one is refused.
 
 ## What the process serves
