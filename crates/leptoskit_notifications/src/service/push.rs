@@ -571,12 +571,15 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> 
 					DeliveryState::Retrying.as_str(),
 				])
 		})
-		.order_by(|delivery| delivery.next_attempt_at.asc())
-		.first(cx.db())
+		.all(cx.db())
 		.await?;
 
-	if let Some(next) = waiting
-		&& let Some(at) = next.next_attempt_at
+	// NULL ordering differs between SQLite and Postgres. A fenced stale
+	// response can leave immediately runnable work with no timestamp.
+	if let Some(at) = waiting
+		.iter()
+		.map(|row| row.next_attempt_at.unwrap_or(now))
+		.min()
 	{
 		rpc::enqueue(
 			cx.db(),
@@ -718,6 +721,27 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 		});
 	}
 
+	if let Err(reason) = delivery_deadline(notification.visible_at, notification.expires_at)
+		.and_then(|deadline| {
+			if deadline <= now {
+				Err(DeliveryReason::HorizonExceeded)
+			} else {
+				Ok(deadline)
+			}
+		}) {
+		return Ok(Outcome::Ended {
+			reason,
+			invalidate: false,
+		});
+	}
+
+	if delivery.attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
+		return Ok(Outcome::Ended {
+			reason: DeliveryReason::AttemptsExhausted,
+			invalidate: false,
+		});
+	}
+
 	if crate::Preference::query()
 		.filter(|preference| {
 			preference.person.eq(delivery.person)
@@ -795,11 +819,12 @@ async fn apply_outcome(
 ) -> rpc::Result<()> {
 	let now = leptoskit_db::now();
 	let attempted = outcome.network_attempted();
-	let attempts = if attempted {
-		delivery.attempts.saturating_add(1)
+	let attempted_at = if attempted {
+		Some(now)
 	} else {
-		delivery.attempts
+		delivery.attempted_at
 	};
+	let attempts = delivery.attempts.saturating_add(i64::from(attempted));
 	let still_queued = |row: &<PushDelivery as leptoskit_db::Table>::Columns| {
 		row.id.eq(delivery.id)
 			& row.state.in_list([
@@ -832,57 +857,45 @@ async fn apply_outcome(
 				.run(tx)
 				.await?;
 		}
-		Outcome::Transient { after } => {
-			if attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
-				// The attempts ran out: rejected, with the reason that
-				// says so. Eight attempts are eight, not nine.
-				PushDelivery::update()
-					.filter(still_queued)
-					.set(|row| row.state, DeliveryState::Rejected.as_str())
-					.set(|row| row.reason, DeliveryReason::AttemptsExhausted.as_str())
-					.set(|row| row.attempts, attempts)
-					.set(|row| row.attempted_at, Some(now))
-					.set(|row| row.finished_at, Some(now))
-					.set(|row| row.next_attempt_at, None)
-					.run(tx)
-					.await?;
+		Outcome::Transient { after }
+		| Outcome::Stalled { after }
+		| Outcome::AuthRejected { after } => {
+			let stalled = matches!(
+				outcome,
+				Outcome::Stalled { .. } | Outcome::AuthRejected { .. }
+			);
+			let notification = crate::Notification::query()
+				.filter(|row| row.id.eq(delivery.notification))
+				.one(tx)
+				.await?;
+			let delay = retry_delay(delivery, outcome, attempts, after);
+			let plan = if attempts >= i64::from(crate::push::MAX_DELIVERY_ATTEMPTS) {
+				Err(DeliveryReason::AttemptsExhausted)
 			} else {
-				// The provider's `Retry-After` wins outright — it knows
-				// its own queue — and the engine's backoff is only its
-				// own guess when the provider gave nothing. The ceiling
-				// holds either way.
-				let delay = after.unwrap_or_else(|| {
-					std::time::Duration::from_secs(retry_backoff_seconds(attempts))
-				});
-				let at = now
-					+ chrono::Duration::from_std(delay)
-						.unwrap_or(chrono::Duration::seconds(crate::push::MAX_RETRY_DELAY_SECS));
-				PushDelivery::update()
-					.filter(still_queued)
-					.set(|row| row.state, DeliveryState::Retrying.as_str())
-					.set(|row| row.reason, None)
-					.set(|row| row.attempts, attempts)
-					.set(|row| row.attempted_at, Some(now))
-					.set(|row| row.next_attempt_at, Some(at))
-					.run(tx)
-					.await?;
-			}
-		}
-		Outcome::Stalled { after } => {
-			// The operator's side is broken: the delivery stays queued,
-			// spending none of its attempts, at a calm pace until the
-			// configuration is fixed.
-			let delay = after.unwrap_or_else(|| {
-				std::time::Duration::from_secs(u64::try_from(STALLED_RETRY_SECS).unwrap_or(60))
-			});
-			let at = now
-				+ chrono::Duration::from_std(delay)
-					.unwrap_or(chrono::Duration::seconds(STALLED_RETRY_SECS));
+				retry_time(now, notification.visible_at, notification.expires_at, delay)
+			};
+			let (state, reason, next, finished) = match plan {
+				Ok(at) => {
+					(
+						DeliveryState::Retrying,
+						stalled.then_some(DeliveryReason::OperatorConfiguration),
+						Some(at),
+						None,
+					)
+				}
+				Err(reason) => (DeliveryState::Rejected, Some(reason), None, Some(now)),
+			};
 			PushDelivery::update()
 				.filter(still_queued)
-				.set(|row| row.state, DeliveryState::Retrying.as_str())
-				.set(|row| row.reason, None)
-				.set(|row| row.next_attempt_at, Some(at))
+				.set(|row| row.state, state.as_str())
+				.set(
+					|row| row.reason,
+					reason.map(|reason| reason.as_str().to_owned()),
+				)
+				.set(|row| row.attempts, attempts)
+				.set(|row| row.attempted_at, attempted_at)
+				.set(|row| row.next_attempt_at, next)
+				.set(|row| row.finished_at, finished)
 				.run(tx)
 				.await?;
 		}
@@ -908,7 +921,10 @@ async fn apply_outcome(
 				DeliveryReason::Oversized
 				| DeliveryReason::Unregistered
 				| DeliveryReason::ProviderRejected
-				| DeliveryReason::AttemptsExhausted => DeliveryState::Rejected.as_str(),
+				| DeliveryReason::AttemptsExhausted
+				| DeliveryReason::HorizonExceeded
+				| DeliveryReason::RetryOverflow
+				| DeliveryReason::OperatorConfiguration => DeliveryState::Rejected.as_str(),
 			};
 
 			if invalidate {
@@ -956,7 +972,7 @@ async fn apply_outcome(
 				.set(|row| row.state, state)
 				.set(|row| row.reason, reason.as_str())
 				.set(|row| row.attempts, attempts)
-				.set(|row| row.attempted_at, attempted.then_some(now))
+				.set(|row| row.attempted_at, attempted_at)
 				.set(|row| row.finished_at, Some(now))
 				.set(|row| row.next_attempt_at, None)
 				.run(tx)
@@ -967,8 +983,70 @@ async fn apply_outcome(
 	Ok(())
 }
 
-/// The engine's own backoff before attempt `attempt`, in seconds: one
-/// second, doubling to five minutes.
+/// Provider minimums and deterministic per-delivery jitter for local backoff.
+fn retry_delay(
+	delivery: &PushDelivery,
+	outcome: Outcome,
+	attempts: i64,
+	after: Option<std::time::Duration>,
+) -> std::time::Duration {
+	let transient = matches!(outcome, Outcome::Transient { .. });
+	let backoff = retry_backoff_seconds(attempts)
+		* if delivery.platform == "fcm" && transient {
+			60
+		} else {
+			1
+		};
+	let jitter = u64::from(delivery.id.as_bytes()[0]) % (backoff / 4 + 1);
+	let fallback = if matches!(outcome, Outcome::Stalled { .. }) {
+		STALLED_RETRY_SECS as u64
+	} else {
+		backoff + jitter
+	};
+
+	match after {
+		Some(delay) if delivery.platform != "fcm" => delay.max(std::time::Duration::from_secs(1)),
+		Some(delay) => delay.max(std::time::Duration::from_secs(fallback)),
+		None => std::time::Duration::from_secs(fallback),
+	}
+}
+
+/// The earlier of notification expiry and the finite delivery horizon.
+fn delivery_deadline(
+	visible: leptoskit_db::Timestamp,
+	expiry: Option<leptoskit_db::Timestamp>,
+) -> Result<leptoskit_db::Timestamp, DeliveryReason> {
+	let horizon = visible
+		.checked_add_signed(chrono::Duration::seconds(
+			crate::push::DELIVERY_HORIZON_SECS,
+		))
+		.ok_or(DeliveryReason::RetryOverflow)?;
+	Ok(expiry.map_or(horizon, |expiry| expiry.min(horizon)))
+}
+
+/// Schedules a wake at the deadline instead of retrying earlier than requested.
+fn retry_time(
+	now: leptoskit_db::Timestamp,
+	visible: leptoskit_db::Timestamp,
+	expiry: Option<leptoskit_db::Timestamp>,
+	delay: std::time::Duration,
+) -> Result<leptoskit_db::Timestamp, DeliveryReason> {
+	let deadline = delivery_deadline(visible, expiry)?;
+	if deadline <= now {
+		return Err(if expiry.is_some_and(|expiry| expiry <= now) {
+			DeliveryReason::Expired
+		} else {
+			DeliveryReason::HorizonExceeded
+		});
+	}
+	let delay = chrono::Duration::from_std(delay).map_err(|_| DeliveryReason::RetryOverflow)?;
+	let at = now
+		.checked_add_signed(delay)
+		.ok_or(DeliveryReason::RetryOverflow)?;
+	Ok(at.min(deadline))
+}
+
+/// Exponential backoff, capped at five minutes before jitter.
 fn retry_backoff_seconds(attempt: i64) -> u64 {
 	let doublings = u32::try_from(attempt.saturating_sub(1).max(0))
 		.unwrap_or(16)
@@ -976,4 +1054,41 @@ fn retry_backoff_seconds(attempt: i64) -> u64 {
 	let seconds = u64::checked_shl(1, doublings).unwrap_or(u64::MAX).min(300);
 
 	seconds.max(1)
+}
+
+#[cfg(test)]
+mod retry_tests {
+	use super::*;
+
+	#[test]
+	fn explicit_clock_bounds_all_waits_including_broken_auth_without_expiry() {
+		let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+		let hour = chrono::Duration::hours(1);
+		let delay = std::time::Duration::from_hours(7);
+		assert_eq!(retry_time(now, now, None, delay), Ok(now + hour * 7));
+		assert_eq!(
+			retry_time(now, now, Some(now + hour), delay),
+			Ok(now + hour)
+		);
+		assert_eq!(
+			retry_time(now, now, None, std::time::Duration::from_hours(48)),
+			Ok(now + hour * 24)
+		);
+		assert_eq!(
+			retry_time(now + hour * 24, now, None, delay),
+			Err(DeliveryReason::HorizonExceeded)
+		);
+		assert_eq!(
+			retry_time(now, now, Some(now), delay),
+			Err(DeliveryReason::Expired)
+		);
+		assert_eq!(
+			retry_time(now, now, None, std::time::Duration::MAX),
+			Err(DeliveryReason::RetryOverflow)
+		);
+		assert_eq!(
+			delivery_deadline(chrono::DateTime::<chrono::Utc>::MAX_UTC, None),
+			Err(DeliveryReason::RetryOverflow)
+		);
+	}
 }

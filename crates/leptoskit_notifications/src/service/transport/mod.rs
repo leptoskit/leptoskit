@@ -356,6 +356,55 @@ fn wire_error(error: &reqwest::Error) -> WireError {
 	}
 }
 
+/// Parses provider delays without shortening them. An overflowing decimal
+/// becomes the largest duration, which the scheduler terminalizes safely.
+fn retry_after(response: &WireResponse, now: std::time::SystemTime) -> Option<Duration> {
+	let value = response
+		.headers
+		.iter()
+		.find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))?
+		.1
+		.trim();
+
+	if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+		return Some(Duration::from_secs(value.parse().unwrap_or(u64::MAX)));
+	}
+
+	httpdate::parse_http_date(value)
+		.ok()
+		.map(|date| date.duration_since(now).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod retry_tests {
+	use super::*;
+
+	#[test]
+	fn provider_delays_are_never_shortened() {
+		let now = std::time::UNIX_EPOCH + Duration::from_secs(784_111_777);
+		for (value, expected) in [
+			("42", Some(42)),
+			("25200", Some(25_200)),
+			("Sun, 06 Nov 1994 08:49:57 GMT", Some(20)),
+			("Sun, 06 Nov 1994 08:49:17 GMT", Some(0)),
+			("nonsense", None),
+			("-1", None),
+			("999999999999999999999999999999", Some(u64::MAX)),
+		] {
+			let response = WireResponse {
+				status: 429,
+				headers: vec![("Retry-After".into(), value.into())],
+				body: vec![],
+			};
+			assert_eq!(
+				retry_after(&response, now),
+				expected.map(Duration::from_secs),
+				"{value}"
+			);
+		}
+	}
+}
+
 /// What one transport's attempt came to, with nothing provider-shaped in
 /// it: the classification is the whole answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -369,13 +418,12 @@ pub(crate) enum Outcome {
 	/// The delivery's moment isn't here yet: wait until then, with no
 	/// attempt spent.
 	WaitUntil(Timestamp),
-	/// The operator's side is broken: the OAuth exchange was refused, or a
-	/// freshly exchanged token was still refused. Wait `after` — or the
-	/// engine's stall delay when `None` — and try again without spending
-	/// the delivery's attempts: the endpoint isn't at fault, and the
-	/// delivery stays queued rather than failing for something only the
-	/// operator can fix.
+	/// OAuth failed before a push request. Retry within the delivery horizon
+	/// without spending a push attempt; status names operator configuration.
 	Stalled { after: Option<Duration> },
+	/// A push request reached the provider but its operator credentials were
+	/// refused.
+	AuthRejected { after: Option<Duration> },
 	/// The delivery is over: the reason says why, and `invalidate` says
 	/// the credential is no good at the provider, so the endpoint stops
 	/// taking deliveries at all.
@@ -394,7 +442,7 @@ impl Outcome {
 	#[must_use]
 	pub(crate) fn network_attempted(self) -> bool {
 		match self {
-			Self::Accepted | Self::Transient { .. } => true,
+			Self::Accepted | Self::Transient { .. } | Self::AuthRejected { .. } => true,
 			Self::Stalled { .. } | Self::WaitUntil(_) => false,
 			Self::Ended { reason, .. } => {
 				reason == DeliveryReason::Unregistered || reason == DeliveryReason::ProviderRejected

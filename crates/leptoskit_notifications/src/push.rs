@@ -62,11 +62,9 @@ pub(crate) const MAX_DELIVERY_ATTEMPTS: u32 = 8;
 #[cfg(feature = "service")]
 pub(crate) const DELIVERY_CONCURRENCY: usize = 32;
 
-/// The longest a transient failure may push an attempt out, whichever
-/// header asked: past this the delivery is retried at this horizon
-/// instead of being held hostage by a provider's number.
+/// Deliveries stop 24 hours after visibility, even without notification expiry.
 #[cfg(feature = "service")]
-pub(crate) const MAX_RETRY_DELAY_SECS: i64 = 6 * 3_600;
+pub(crate) const DELIVERY_HORIZON_SECS: i64 = 24 * 3_600;
 
 /// Which platform's push service an endpoint speaks to. The platform is
 /// decided by the credential the app presents, and everything a provider
@@ -587,6 +585,12 @@ pub enum DeliveryReason {
 	ProviderRejected,
 	/// The attempts ran out before the provider took the message.
 	AttemptsExhausted,
+	/// The finite delivery window ended.
+	HorizonExceeded,
+	/// Retry time arithmetic could not be represented.
+	RetryOverflow,
+	/// Operator credentials or project configuration prevented delivery.
+	OperatorConfiguration,
 }
 
 impl DeliveryReason {
@@ -604,6 +608,9 @@ impl DeliveryReason {
 			Self::Unregistered => "unregistered",
 			Self::ProviderRejected => "provider_rejected",
 			Self::AttemptsExhausted => "attempts_exhausted",
+			Self::HorizonExceeded => "horizon_exceeded",
+			Self::RetryOverflow => "retry_overflow",
+			Self::OperatorConfiguration => "operator_configuration",
 		}
 	}
 
@@ -621,6 +628,9 @@ impl DeliveryReason {
 			"unregistered" => Some(Self::Unregistered),
 			"provider_rejected" => Some(Self::ProviderRejected),
 			"attempts_exhausted" => Some(Self::AttemptsExhausted),
+			"horizon_exceeded" => Some(Self::HorizonExceeded),
+			"retry_overflow" => Some(Self::RetryOverflow),
+			"operator_configuration" => Some(Self::OperatorConfiguration),
 			_ => None,
 		}
 	}
@@ -781,16 +791,12 @@ pub async fn push_deliveries(
 /// supply the instance runtime from memory.
 /// Arguments contain only logical send and round identifiers.
 ///
-/// Transient failures wait and retry — honoring the provider's
-/// `Retry-After` when it gives one — until [`MAX_DELIVERY_ATTEMPTS`] is
-/// spent; permanent ones end the delivery and, for a credential the
-/// provider no longer knows, invalidate the endpoint so nothing further
-/// is pushed to it. An operator-side failure — a refused OAuth exchange,
-/// a stale access token — waits and retries without spending the
-/// delivery's attempts: the endpoint isn't at fault, and the send's
-/// status shows it stuck rather than failed. The job runs whether or not
-/// any endpoint is still enrolled; it walks what is there. Only the
-/// service's own workers run it. No deadline: a scheduled send's first
+/// Delivery requests, including authentication refusals, are bounded by eight
+/// attempts and the earlier of expiry or 24 hours after visibility. OAuth
+/// exchanges do not spend push attempts; their failures retry within that same
+/// horizon with sanitized operator-configuration status. Provider delays are
+/// honored without shortening; a deadline wake terminates instead of pushing.
+/// Only the service's own workers run it. No deadline: a scheduled send's first
 /// round waits as long as its schedule says, like a wake job does.
 #[rpc::job(
 	service = "notifications",

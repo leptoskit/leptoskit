@@ -348,27 +348,6 @@ fn classify(response: &WireResponse) -> Outcome {
 	}
 }
 
-/// A `Retry-After` header, seconds or HTTP-date, as a delay — never
-/// longer than the engine's own ceiling.
 fn retry_after(response: &WireResponse) -> Option<Duration> {
-	let value = response
-		.headers
-		.iter()
-		.find(|(name, _)| name == "retry-after")?
-		.1
-		.trim();
-
-	let seconds = value.parse::<i64>().ok().or_else(|| {
-		chrono::DateTime::parse_from_rfc2822(value)
-			.ok()
-			.map(|date| date.timestamp() - leptoskit_db::now().timestamp())
-	})?;
-
-	if seconds <= 0 {
-		return Some(Duration::from_secs(1));
-	}
-
-	Some(Duration::from_secs(
-		seconds.min(crate::push::MAX_RETRY_DELAY_SECS) as u64,
-	))
+	super::retry_after(response, std::time::SystemTime::now())
 }

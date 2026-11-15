@@ -1952,13 +1952,13 @@ async fn a_refused_authorization_refreshes_once_and_then_stalls() {
 	let items = wait_not_enqueued(&service, "unfixable").await;
 	assert_eq!(
 		items[0]["state"], "retrying",
-		"a fresh 401 stalls without spending attempts: {items:?}"
+		"a fresh 401 is counted: {items:?}"
 	);
-	assert_eq!(items[0]["attempts"], 0, "{items:?}");
+	assert_eq!(items[0]["attempts"], 1, "{items:?}");
 	assert_eq!(
 		fresh_refusals.load(Ordering::SeqCst),
-		2,
-		"the send and its one refreshed retry: bounded"
+		1,
+		"one push per durable attempt; refresh does not spend a push"
 	);
 
 	let invalidated = rows(
@@ -3605,9 +3605,32 @@ async fn generation_case(
 	let (code, body) = enroll(service, ALICE, rotated).await;
 	assert_eq!(code, 200, "{body}");
 	assert_eq!(send(service, &fresh, spec(), &[ALICE]).await.0, 200);
+	if !reactivate {
+		leptoskit_notifications::push::PushDelivery::update()
+			.filter(|row| row.send_key.eq(old.clone()))
+			.set(|row| row.next_attempt_at, None)
+			.run(&service.db)
+			.await
+			.unwrap();
+	}
 	let before = delivery_status(service, &old).await;
 	mock.release();
 	held.await.unwrap();
+	if !reactivate {
+		let job = rpc::server::jobs::JobRow::query()
+			.filter(|row| row.key.eq(format!("push:{old}:1")))
+			.first(
+				&service
+					.db
+					.system("inspect retry job in credential fencing test"),
+			)
+			.await
+			.unwrap();
+		assert!(
+			job.is_some(),
+			"a fenced response must schedule pending work"
+		);
+	}
 	assert_eq!(
 		delivery_status(service, &old).await,
 		before,
@@ -3775,4 +3798,139 @@ async fn postgres_credential_generation_and_capacity_races() {
 			reactivation_capacity(db).await;
 		}
 	}
+}
+
+/// Drive retry boundaries directly; workers stay paused and no wall-clock wait
+/// is needed to exercise a deadline or an eight-request budget.
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_requests_are_bounded_and_oauth_failures_have_a_horizon() {
+	use leptoskit_notifications::Notification;
+	use leptoskit_notifications::push::PushDelivery;
+
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, fcm_credential("bounded-auth"))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(|request, _| {
+		if request.url.contains(FCM_TOKEN_HOST) {
+			Scripted::Reply(
+				200,
+				Vec::new(),
+				json!({"access_token": "test-token", "expires_in": 3600}).to_string(),
+			)
+		} else {
+			Scripted::Reply(401, Vec::new(), "private diagnostic".into())
+		}
+	});
+	assert_eq!(send(&service, "auth-budget", spec(), &[ALICE]).await.0, 200);
+	for round in 0..9 {
+		// Simulate the queue's scheduled wake without waiting for backoff.
+		PushDelivery::update()
+			.filter(|row| row.send_key.eq("auth-budget"))
+			.set(|row| row.next_attempt_at, None)
+			.run(&service.db)
+			.await
+			.unwrap();
+		spawn_round(&service, "auth-budget", round).await.unwrap();
+	}
+	let status = delivery_status(&service, "auth-budget").await;
+	assert_eq!(status[0]["state"], "rejected");
+	assert_eq!(status[0]["reason"], "attempts_exhausted");
+	assert_eq!(status[0]["attempts"], 8);
+	assert_eq!(mock.requests_to(FCM_HOST).len(), 8);
+
+	// A separate runtime has no cached OAuth token. Exchange failures spend
+	// no delivery requests, but the visibility horizon still ends recovery.
+	let mock = Mock::new();
+	let service = self::service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, fcm_credential("broken-oauth"))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(|_, _| Scripted::Reply(400, Vec::new(), "private diagnostic".into()));
+	assert_eq!(
+		send(&service, "oauth-horizon", spec(), &[ALICE]).await.0,
+		200
+	);
+	spawn_round(&service, "oauth-horizon", 0).await.unwrap();
+	let status = delivery_status(&service, "oauth-horizon").await;
+	assert_eq!(status[0]["state"], "retrying");
+	assert_eq!(status[0]["reason"], "operator_configuration");
+	assert_eq!(status[0]["attempts"], 0);
+	Notification::update()
+		.filter(|row| row.send_key.eq("oauth-horizon"))
+		.set(
+			|row| row.visible_at,
+			leptoskit_db::now() - chrono::Duration::hours(25),
+		)
+		.run(&service.db)
+		.await
+		.unwrap();
+	PushDelivery::update()
+		.filter(|row| row.send_key.eq("oauth-horizon"))
+		.set(|row| row.next_attempt_at, None)
+		.run(&service.db)
+		.await
+		.unwrap();
+	spawn_round(&service, "oauth-horizon", 1).await.unwrap();
+	let status = delivery_status(&service, "oauth-horizon").await;
+	assert_eq!(status[0]["reason"], "horizon_exceeded");
+	assert_eq!(status[0]["attempts"], 0);
+	assert_eq!(mock.requests_to(FCM_TOKEN_HOST).len(), 1);
+	assert!(mock.requests_to(FCM_HOST).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_wait_is_not_shortened_and_cancellation_prevents_another_request() {
+	use leptoskit_notifications::push::PushDelivery;
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(91)))
+			.await
+			.0,
+		200
+	);
+	mock.scripted(|_, _| {
+		Scripted::Reply(
+			429,
+			vec![("retry-after".into(), "25200".into())],
+			String::new(),
+		)
+	});
+	assert_eq!(send(&service, "long-wait", spec(), &[ALICE]).await.0, 200);
+	let before = leptoskit_db::now();
+	spawn_round(&service, "long-wait", 0).await.unwrap();
+	let delivery = PushDelivery::query()
+		.filter(|row| row.send_key.eq("long-wait"))
+		.one(&service.db)
+		.await
+		.unwrap();
+	assert!(delivery.next_attempt_at.unwrap() >= before + chrono::Duration::hours(7));
+	// Simulate cancellation committed while the delivery waited. The public
+	// cancel operation itself only accepts sends that are not visible yet.
+	leptoskit_notifications::Notification::update()
+		.filter(|row| row.send_key.eq("long-wait"))
+		.set(|row| row.cancelled_at, Some(leptoskit_db::now()))
+		.run(&service.db)
+		.await
+		.unwrap();
+	PushDelivery::update()
+		.filter(|row| row.send_key.eq("long-wait"))
+		.set(|row| row.next_attempt_at, None)
+		.run(&service.db)
+		.await
+		.unwrap();
+	spawn_round(&service, "long-wait", 1).await.unwrap();
+	assert_eq!(mock.requests_to(APNS_HOST).len(), 1);
+	assert_eq!(
+		delivery_status(&service, "long-wait").await[0]["reason"],
+		"cancelled"
+	);
 }

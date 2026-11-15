@@ -11,11 +11,10 @@
 //! The access token is short-lived by design, so it's exchanged on
 //! demand, one exchange in flight at a time, and cached only until two
 //! minutes before its `expires_in` runs out. A send the provider answers
-//! `401` discards the cached token and retries once with a fresh one —
-//! bounded, once per attempt — and a fresh token that is still refused is
-//! the operator's account configuration, not the endpoint's: the delivery
-//! waits and retries without spending its attempts, and the send's
-//! status shows it stuck.
+//! `401` discards the cached token and exchanges once more. The next push
+//! goes through the durable queue and spends another delivery attempt.
+//! Exchange failures spend no push attempts; recovery ends at the finite
+//! delivery deadline with sanitized operator-configuration status.
 //!
 //! The token endpoint is fixed in this file. A service-account file names
 //! one in `token_uri`, and whatever it says is ignored: nothing read from
@@ -336,7 +335,7 @@ impl Transport for Fcm {
 			// — rather than failing it.
 			let access_token = match self.access_token().await {
 				Ok(token) => token,
-				Err(AccessFailure::Network) => return Outcome::Transient { after: None },
+				Err(AccessFailure::Network) => return Outcome::Stalled { after: None },
 				Err(AccessFailure::Unusable) => {
 					return Outcome::Stalled { after: None };
 				}
@@ -347,20 +346,16 @@ impl Transport for Fcm {
 			if status == 401 {
 				// The provider refused this authorization: the cached
 				// token is stale or wrong, so drop it, exchange once more
-				// — bounded, once per attempt — and try the send again. A
+				// — bounded, once per request. A
 				// token that was refused when fresh is the operator's
 				// setup, and the delivery waits rather than ends.
 				self.drop_token().await;
 
-				return match self.access_token().await {
-					Ok(fresh) => {
-						match self.post(&fresh, &body).await {
-							(401, _) => Outcome::Stalled { after: None },
-							(_, retried) => retried,
-						}
-					}
-					Err(AccessFailure::Network) => Outcome::Transient { after: None },
-					Err(AccessFailure::Unusable) => Outcome::Stalled { after: None },
+				// Refresh once, but send again only through the durable queue:
+				// every push request must consume the eight-request budget.
+				let _refresh = self.access_token().await;
+				return Outcome::AuthRejected {
+					after: Some(Duration::from_secs(1)),
 				};
 			}
 
@@ -504,7 +499,7 @@ fn classify(response: &WireResponse) -> Outcome {
 				};
 			}
 
-			Outcome::Stalled { after: None }
+			Outcome::AuthRejected { after: None }
 		}
 		400 => {
 			// A registration token the project doesn't know is dead
@@ -526,14 +521,22 @@ fn classify(response: &WireResponse) -> Outcome {
 			// Authorization is the operator's account: the send's retry
 			// path refreshes once, and a refusal that survives it stalls
 			// the delivery instead of ending it.
-			Outcome::Stalled { after: None }
+			Outcome::AuthRejected { after: None }
 		}
 		429 => {
+			Outcome::Transient {
+				after: Some(
+					retry_after(response)
+						.unwrap_or_default()
+						.max(Duration::from_secs(60)),
+				),
+			}
+		}
+		500..=599 => {
 			Outcome::Transient {
 				after: retry_after(response),
 			}
 		}
-		500..=599 => Outcome::Transient { after: None },
 		// Anything unrecognized — redirects included, which the boundary
 		// refuses — ends the delivery the same clear way.
 		_ => {
@@ -562,29 +565,36 @@ fn unregistered(response: &WireResponse) -> bool {
 		})
 }
 
-/// A `Retry-After` header as a delay, capped at the engine's ceiling.
 fn retry_after(response: &WireResponse) -> Option<Duration> {
-	let value = response
-		.headers
-		.iter()
-		.find(|(name, _)| name == "retry-after")?
-		.1
-		.trim();
-
-	let seconds = value.parse::<i64>().ok()?;
-
-	if seconds <= 0 {
-		return Some(Duration::from_secs(1));
-	}
-
-	Some(Duration::from_secs(
-		seconds.min(crate::push::MAX_RETRY_DELAY_SECS) as u64,
-	))
+	super::retry_after(response, std::time::SystemTime::now())
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn quota_minimum_and_server_retry_after_are_honored() {
+		let mut response = WireResponse {
+			status: 429,
+			headers: vec![("retry-after".into(), "1".into())],
+			body: vec![],
+		};
+		assert_eq!(
+			classify(&response),
+			Outcome::Transient {
+				after: Some(Duration::from_secs(60))
+			}
+		);
+		response.status = 503;
+		response.headers[0].1 = "60000".into();
+		assert_eq!(
+			classify(&response),
+			Outcome::Transient {
+				after: Some(Duration::from_mins(1000))
+			}
+		);
+	}
 
 	#[test]
 	fn unregistered_requires_an_fcm_typed_detail() {

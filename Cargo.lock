@@ -6542,6 +6542,7 @@ dependencies = [
  "hex",
  "http 1.5.0",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "jsonwebtoken",
