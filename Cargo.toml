@@ -20,6 +20,7 @@ members = [
 	"examples/analytics/analytics_service",
 	"examples/auth_pages",
 	"examples/counter",
+	"examples/demo_service",
 	"examples/exact",
 	"examples/gallery",
 	"examples/gallery/verify",

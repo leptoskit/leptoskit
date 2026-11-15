@@ -1,0 +1,43 @@
+[package]
+name = "demo_service"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+admin_demo = { path = "../admin_demo" }
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+getrandom = { workspace = true }
+hex = { workspace = true, features = ["serde"] }
+leptoskit_admin = { workspace = true }
+leptoskit_analytics = { workspace = true, features = ["derive", "server-client", "service"] }
+leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }
+leptoskit_axum = { workspace = true }
+leptoskit_db = { workspace = true, features = ["sqlite"] }
+leptoskit_deploy_console = { workspace = true, features = ["server"] }
+leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
+leptoskit_rpc = { workspace = true, features = ["services"] }
+rustix = { workspace = true, features = ["fs", "process"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
+tower = { workspace = true, features = ["util"] }
+url = { workspace = true }
+
+[dev-dependencies]
+# The format snapshot and the planted generations in the process tests.
+insta = { workspace = true, features = ["json"] }
+rusqlite = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
