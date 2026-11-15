@@ -87,11 +87,19 @@ const demoState = (browser) =>
 async function choose(browser, service, persona) {
 	await browser.go(`${service.siteOrigin}/`);
 	await browser.click(`mint:${persona}`);
-	await waitFor(
-		browser,
-		`location.pathname === "/sign-in" && document.readyState === "complete"`,
-		"sign-in",
-	);
+	try {
+		await waitFor(
+			browser,
+			`location.pathname === "/sign-in" && document.readyState === "complete"`,
+			"sign-in",
+		);
+	} catch (error) {
+		throw new Error(
+			`${error.message}; path=${await path(browser)}; notice=${await browser
+				.text("mint-notice")}`,
+			{ cause: error },
+		);
+	}
 }
 
 /** Sends a code and signs in with it, through the page's own controls. */
@@ -687,6 +695,62 @@ Deno.test("the visitor pages", async (t) => {
 		);
 
 		await t.step(
+			"a restart between send and inbox read preserves the lost-mail explanation",
+			async () => {
+				// Reuse the pass with its other persona: a fresh inbox without
+				// another pass or the preceding persona's resend cooldown.
+				await browser.click("menu-toggle");
+				await browser.click("sign-out");
+				await waitFor(browser, `location.pathname === "/"`, "signed out");
+				await choose(browser, service, "grace");
+				const paused = browser.page.once("Fetch.requestPaused");
+				await browser.page.send("Fetch.enable", {
+					patterns: [{ urlPattern: "*/demo/inbox", requestStage: "Request" }],
+				});
+				let timeout;
+				try {
+					await browser.click("send");
+					const request = await Promise.race([
+						paused,
+						new Promise((_, reject) => {
+							timeout = setTimeout(
+								() => reject(new Error("inbox request did not arrive")),
+								10_000,
+							);
+						}),
+					]);
+					clearTimeout(timeout);
+					await service.restart();
+					await browser.page.send("Fetch.continueRequest", {
+						requestId: request.requestId,
+					});
+					await waitFor(
+						browser,
+						`document.documentElement.dataset.state === "lost"`,
+						"lost mail after sending",
+					);
+					assert(
+						!(await browser.visible("notice-alert")),
+						"lost mail is not replaced by a delivery-pending error",
+					);
+					assert(
+						(await browser.text("notice-status")).includes(
+							"last code isn't here",
+						),
+						"the durable receipt explains the missing message",
+					);
+					assert(
+						!(await browser.visible("fill")),
+						"there is no unavailable code to fill",
+					);
+				} finally {
+					clearTimeout(timeout);
+					await browser.page.send("Fetch.disable");
+				}
+			},
+		);
+
+		await t.step(
 			"pass states: a pass that is gone says so and offers a way back",
 			async () => {
 				await browser.clearCookies();
@@ -738,6 +802,34 @@ Deno.test("the visitor pages", async (t) => {
 					"and returns focus to the button",
 				);
 				await browser.click("menu-toggle");
+				const errorsBefore = browser.errors.length;
+				await service.stop();
+				try {
+					await browser.click("sign-out");
+					await waitFor(
+						browser,
+						`document.querySelector('.toast')`,
+						"the failed sign-out explanation",
+						5000,
+					);
+					assert(
+						await browser.eval(
+							`!document.querySelector('[data-testid="sign-out"]').disabled`,
+						),
+						"sign out can be retried after a connection failure",
+					);
+					assert(
+						(await path(browser)) === "/notes",
+						"a failed sign-out keeps the current page",
+					);
+					assert(
+						browser.errors.length === errorsBefore,
+						"the failure handler does not throw",
+					);
+				} finally {
+					await service.spawn();
+					await service.ready();
+				}
 				await browser.click("sign-out");
 				await waitFor(
 					browser,

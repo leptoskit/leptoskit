@@ -877,6 +877,7 @@
 			arrived = null;
 			const before = new Set(messages.map((item) => item.receipt));
 			if (await loadInbox()) {
+				if (state === "lost") return;
 				const fresh = messages.find((item) => !before.has(item.receipt));
 				if (fresh) {
 					arrived = fresh.receipt;
@@ -1150,10 +1151,11 @@
 		});
 
 		tid("sign-out").addEventListener("click", async (event) => {
-			event.currentTarget.disabled = true;
+			const button = event.currentTarget;
+			button.disabled = true;
 			if (await signOut()) window.location.assign("/?signed_out=1");
 			else {
-				event.currentTarget.disabled = false;
+				button.disabled = false;
 				toast("Couldn't sign out. Try again in a moment.");
 			}
 		});
