@@ -2,180 +2,180 @@
 source: examples/gallery/tests/trees.rs
 expression: "lines.join(\"\\n\")"
 ---
-View [bg-slate-100 h-full lg:overflow-hidden overflow-scroll text-slate-900 w-full] #fcc095184223
-  View [bg-white flex-row flex-wrap gap-3 items-center min-h-20 pb-3 pt-safe-offset-3 px-6] #6c66ea02ed39
-    View [flex-1 flex-row flex-wrap gap-3 items-center min-w-0] #6e982e3c8597
-      Text "leptoskit" [font-bold text-[22px] text-slate-900] #1a75a7f19610
-      View [bg-indigo-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-indigo-700] #7baeeb02a8c1
+View [bg-slate-100 h-full lg:overflow-hidden overflow-scroll text-slate-900 w-full] #7a5fa42e0003
+  View [bg-white flex-row flex-wrap gap-3 items-center min-h-20 pb-3 pt-safe-offset-3 px-6] #332484799e62
+    View [flex-1 flex-row flex-wrap gap-3 items-center min-w-0] #e95a3385cc1a
+      Text "leptoskit" [font-bold text-[22px] text-slate-900] #415aed28ffd6
+      View [bg-indigo-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-indigo-700] #40e5a95e6ff7
         Text "COMPONENT STUDIO" #19fbb8e4ec12
-    Text "Shared by design" [text-slate-500 text-sm] #54512aa194d7
-  View [gap-5 grid grid-cols-1 lg:flex-1 lg:grid-cols-3 lg:grid-rows-1 min-h-0 min-w-0 p-6] #b224d574fe40
-    View [bg-white gap-4 p-4 rounded-xl] #3096db87236c
-      View [gap-2] #1c749ef3258d
-        Text "01 / INPUT" [font-semibold text-indigo-600 text-xs] #283bc2a742a4
-        Text "Make it yours" [font-bold text-[22px] text-slate-900] #ff7612aeed4b
-        Text "Real controls. One shared state." [text-slate-500 text-sm] #0ae6de36489e
-      View [bg-slate-300 h-px self-stretch] #08596b36316a
-      View [flex-row gap-3 items-center min-h-8] #107663c36cce
-        Text "Haptic feedback" [flex-1 min-w-0 text-sm] #aa522a95d24b
+    Text "Shared by design" [text-slate-500 text-sm] #576744b6484b
+  View [gap-5 grid grid-cols-1 lg:flex-1 lg:grid-cols-3 lg:grid-rows-1 min-h-0 min-w-0 p-6] #cff904b7fcdc
+    View [bg-white gap-4 p-4 rounded-xl] #79d46f4c58e6
+      View [gap-2] #58c78dca6263
+        Text "01 / INPUT" [font-semibold text-indigo-600 text-xs] #ce287563c54e
+        Text "Make it yours" [font-bold text-[22px] text-slate-900] #bb0a84c06d8c
+        Text "Real controls. One shared state." [text-slate-500 text-sm] #dcbb155bfd95
+      View [bg-slate-300 h-px self-stretch] #499be0693ee5
+      View [flex-row gap-3 items-center min-h-8] #66243bc2dbe8
+        Text "Haptic feedback" [flex-1 min-w-0 text-sm] #2d0b16395511
         Switch #357fa2926f26
-      View [flex-row gap-3 items-center min-h-8] #107663c36cce
+      View [flex-row gap-3 items-center min-h-8] #66243bc2dbe8
         Checkbox #8a2354aee89c
-        Text "Enable previews" [flex-1 min-w-0 text-sm] #b53a1d188b1a
-      Text "Density" [font-semibold text-slate-500 text-xs] #fe8721eb6c9a
-      View [flex-row flex-wrap gap-3 items-center] #742b69527181
+        Text "Enable previews" [flex-1 min-w-0 text-sm] #6bc9c6c11772
+      Text "Density" [font-semibold text-slate-500 text-xs] #898b1c5b2af2
+      View [flex-row flex-wrap gap-3 items-center] #e64787489847
         Radio #8ea9b417a81e
-        Text "Comfortable" [text-sm] #8e563c17c393
+        Text "Comfortable" [text-sm] #7c9fec976a7e
         Radio #565a9c4cee0e
-        Text "Compact" [text-sm] #f787df955e4b
-      View [gap-2] #1c749ef3258d
-        View [flex-row justify-between] #8c3988eea969
-          Text "Volume" [text-sm] #24f5616c7303
-          Text "64%" [font-semibold text-sm] #588bc65b5aa8
-        Slider [w-full] #4aef1c51cedb
-      View [gap-2] #1c749ef3258d
-        Text "Password" [font-semibold text-slate-500 text-xs] #3f574fa16b49
-        View [border border-slate-300 h-10 p-2 rounded-lg w-full] #bab0bb620bb7
-          PasswordInput [border-0 h-full text-slate-900 w-full] #868e13d2ee34
-      View [flex-1 min-h-0] #f1c571a1d9d6
-      View [flex-row gap-3 items-center] #48232d3f8997
+        Text "Compact" [text-sm] #8f10d89cc699
+      View [gap-2] #58c78dca6263
+        View [flex-row justify-between] #034d9cbcf409
+          Text "Volume" [text-sm] #5045853b8862
+          Text "64%" [font-semibold text-sm] #6abeb53a1230
+        Slider [w-full] #fdfc34efdf81
+      View [gap-2] #58c78dca6263
+        Text "Password" [font-semibold text-slate-500 text-xs] #ac9017a7f5fa
+        View [border border-slate-300 h-10 p-2 rounded-lg w-full] #33cded2baa92
+          PasswordInput [border-0 h-full text-slate-900 w-full] #1b22051b4a91
+      View [flex-1 min-h-0] #a4c1f5db6e7a
+      View [flex-row gap-3 items-center] #214f1012c225
         ActivityIndicator #11906d4104b7
-        Text "Syncing in the background" [text-slate-500 text-xs] #62fe50f4af1c
-      LinearProgressIndicator [w-full] #cd931528c58c
-    View [bg-white gap-5 p-4 rounded-xl] #88699a0074ff
-      View [gap-2] #1c749ef3258d
-        Text "02 / COMPOSE" [font-semibold text-indigo-600 text-xs] #834b76174c86
-        Text "Small pieces, more room" [font-bold text-[22px] text-slate-900] #8dd024dffe92
-        Text "Native primitives plus Tailwind." [text-slate-500 text-sm] #cef679d761d4
-      View [bg-indigo-100 h-[148px] items-center justify-center overflow-hidden relative rounded-xl] #b5d6fcd77c72
-        Vector [absolute left-3 size-6 top-3] #0b9fd0a39ced
-        Vector [absolute bottom-3 left-3 size-12 text-[#1e40af]] #c31fb948f8e5
-        Text "Built together" [font-bold text-[24px] text-indigo-900] #2a3f9619bc08
-        View [h-[12px] mt-1 w-[180px]] #1bde3978b70d
-          Vector [absolute inset-0] #ba8cd1c585a1
-        View [absolute bg-[#1e40af] font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 right-3 rounded-[10px] self-start text-[11px] text-white top-3] #fd7bdfced98c
+        Text "Syncing in the background" [text-slate-500 text-xs] #cc7f0cadfed5
+      LinearProgressIndicator [w-full] #f482a7e1ce64
+    View [bg-white gap-5 p-4 rounded-xl] #37dc6cf43c17
+      View [gap-2] #58c78dca6263
+        Text "02 / COMPOSE" [font-semibold text-indigo-600 text-xs] #4cf29b1151eb
+        Text "Small pieces, more room" [font-bold text-[22px] text-slate-900] #7c3860302fec
+        Text "Native primitives plus Tailwind." [text-slate-500 text-sm] #0ed1cae642ff
+      View [bg-indigo-100 h-[148px] items-center justify-center overflow-hidden relative rounded-xl] #3c1c66c61177
+        Vector [absolute left-3 size-6 top-3] #b13f006d8e27
+        Vector [absolute bottom-3 left-3 size-12 text-[#1e40af]] #bb89d2aa08ae
+        Text "Built together" [font-bold text-[24px] text-indigo-900] #64ef3019d4b4
+        View [h-[12px] mt-1 w-[180px]] #f7b58a1fd367
+          Vector [absolute inset-0] #c473f210ecc6
+        View [absolute bg-[#1e40af] font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 right-3 rounded-[10px] self-start text-[11px] text-white top-3] #289f2e46c5ad
           Text "LIVE" #a2e6e7b61e0c
-      View [content-start flex-row flex-wrap gap-2] #d30c65287200
-        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #954d5f5a5ffa
+      View [content-start flex-row flex-wrap gap-2] #52d94fb8fdde
+        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #f667c267b3d6
           Text "Native" #8e22f9fd935c
-        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #954d5f5a5ffa
+        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #f667c267b3d6
           Text "Web" #344c744a3389
-        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #954d5f5a5ffa
+        View [bg-slate-100 font-medium items-center min-h-8 px-3 py-1.5 rounded-2xl self-start text-[13px] text-slate-900] #f667c267b3d6
           Text "Tailwind" #c63a7e85c741
-      View [bg-slate-300 h-px self-stretch] #08596b36316a
-      View [flex-row gap-3 h-16] #565debdb3339
-        View [bg-slate-100 flex-1 items-center justify-center min-h-0 min-w-0 rounded-lg] #f6a7ef4a1aa2
-          Text "1 share" [text-slate-500 text-xs] #1f70f536a251
-        View [basis-0 bg-indigo-100 grow-2 items-center justify-center min-h-0 min-w-0 rounded-lg shrink] #48b0e8eaa53f
-          Text "2 shares" [text-indigo-900 text-xs] #3201bc43dfe6
-      View [flex-1 min-h-0] #f1c571a1d9d6
-      Pressable [bg-indigo-600 flex-row gap-3 p-4 rounded-xl text-white] #292e0d81bc0a
-        Text "+" [font-semibold text-[26px]] #9bd2e34d624d
-        View [gap-1] #38ab499dbc4b
-          Text "Add a preview" [font-semibold text-sm] #5840dce01fd6
-          Text "12 previews created" [text-xs] #1d266365be93
-    View [bg-white gap-5 p-4 rounded-xl] #88699a0074ff
-      View [gap-2] #1c749ef3258d
-        Text "03 / COLLECT" [font-semibold text-indigo-600 text-xs] #6505a59e8d56
-        Text "A place for every idea" [font-bold text-[22px] text-slate-900] #723e7bac781c
-        Text "An eager list with room to scroll." [text-slate-500 text-sm] #ff04adabb142
-      ScrollView [gap-3 h-80 lg:grow lg:h-auto lg:shrink min-h-0 min-w-0] #27d7c4249d74
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "01" [font-semibold text-rose-700 text-xs] #8181ae4ef60c
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 01" [font-semibold text-slate-900 text-sm] #70793fa4dce4
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+      View [bg-slate-300 h-px self-stretch] #499be0693ee5
+      View [flex-row gap-3 h-16] #ca66945a82c5
+        View [bg-slate-100 flex-1 items-center justify-center min-h-0 min-w-0 rounded-lg] #5afac319948a
+          Text "1 share" [text-slate-500 text-xs] #7cedcd166eec
+        View [basis-0 bg-indigo-100 grow-2 items-center justify-center min-h-0 min-w-0 rounded-lg shrink] #8579c0ee49fb
+          Text "2 shares" [text-indigo-900 text-xs] #dd4229a31a9b
+      View [flex-1 min-h-0] #a4c1f5db6e7a
+      Pressable [bg-indigo-600 flex-row gap-3 p-4 rounded-xl text-white] #9c9eabe17bdf
+        Text "+" [font-semibold text-[26px]] #357e41542719
+        View [gap-1] #1c35ca2caead
+          Text "Add a preview" [font-semibold text-sm] #c4eb089b8d98
+          Text "12 previews created" [text-xs] #b105c6660ce8
+    View [bg-white gap-5 p-4 rounded-xl] #37dc6cf43c17
+      View [gap-2] #58c78dca6263
+        Text "03 / COLLECT" [font-semibold text-indigo-600 text-xs] #3967de317da7
+        Text "A place for every idea" [font-bold text-[22px] text-slate-900] #cedecd0d53e7
+        Text "An eager list with room to scroll." [text-slate-500 text-sm] #fcc0f40784cb
+      ScrollView [gap-3 h-80 lg:grow lg:h-auto lg:shrink min-h-0 min-w-0] #394e8a247de4
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "01" [font-semibold text-rose-700 text-xs] #a314332042d8
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 01" [font-semibold text-slate-900 text-sm] #8cd0b7b76390
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "02" [font-semibold text-rose-700 text-xs] #1479b0138a7e
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 02" [font-semibold text-slate-900 text-sm] #020dab15c159
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "02" [font-semibold text-rose-700 text-xs] #a11189956d66
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 02" [font-semibold text-slate-900 text-sm] #71fb3ab16305
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "03" [font-semibold text-rose-700 text-xs] #c2cb95655587
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 03" [font-semibold text-slate-900 text-sm] #be376edad0d5
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "03" [font-semibold text-rose-700 text-xs] #b23e7de7551d
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 03" [font-semibold text-slate-900 text-sm] #9d1e66597fa4
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "04" [font-semibold text-rose-700 text-xs] #eb773ce5da6b
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 04" [font-semibold text-slate-900 text-sm] #5408a8b091ff
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "04" [font-semibold text-rose-700 text-xs] #20da293c8a0c
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 04" [font-semibold text-slate-900 text-sm] #e98b412e5de0
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "05" [font-semibold text-rose-700 text-xs] #f42265d3cb3c
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 05" [font-semibold text-slate-900 text-sm] #a20c9d9de0a5
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "05" [font-semibold text-rose-700 text-xs] #0e6f3c0a7f45
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 05" [font-semibold text-slate-900 text-sm] #4531f73f4860
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "06" [font-semibold text-rose-700 text-xs] #c29f7408325a
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 06" [font-semibold text-slate-900 text-sm] #c8e29c2a3ce1
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "06" [font-semibold text-rose-700 text-xs] #4d0b386abfc4
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 06" [font-semibold text-slate-900 text-sm] #5689bb8395c3
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "07" [font-semibold text-rose-700 text-xs] #880f41d1d975
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 07" [font-semibold text-slate-900 text-sm] #7c15f292f348
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "07" [font-semibold text-rose-700 text-xs] #f60788f4d862
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 07" [font-semibold text-slate-900 text-sm] #041db55b5341
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "08" [font-semibold text-rose-700 text-xs] #ed190b5d1392
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 08" [font-semibold text-slate-900 text-sm] #7381f530a07f
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "08" [font-semibold text-rose-700 text-xs] #c7f38d5e1fd5
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 08" [font-semibold text-slate-900 text-sm] #3594ad9b5acd
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "09" [font-semibold text-rose-700 text-xs] #ddd2fc742107
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 09" [font-semibold text-slate-900 text-sm] #d0231f8667e8
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "09" [font-semibold text-rose-700 text-xs] #c22b9aeac5f5
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 09" [font-semibold text-slate-900 text-sm] #5f14737de465
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "10" [font-semibold text-rose-700 text-xs] #252fedb48174
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 10" [font-semibold text-slate-900 text-sm] #5dea476b1c71
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "10" [font-semibold text-rose-700 text-xs] #cb700dd371d7
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 10" [font-semibold text-slate-900 text-sm] #843c81d0272d
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "11" [font-semibold text-rose-700 text-xs] #aeefd1ad967f
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 11" [font-semibold text-slate-900 text-sm] #60fb4e370d42
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "11" [font-semibold text-rose-700 text-xs] #df78f49c1f35
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 11" [font-semibold text-slate-900 text-sm] #533b3b90a3eb
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #69a79037a9c6
-          View [bg-rose-100 items-center justify-center rounded-lg size-10] #6212e88537c6
-            Text "12" [font-semibold text-rose-700 text-xs] #4ca87fa63bee
-          View [flex-1 gap-1 min-h-0 min-w-0] #a0674aa7c9d3
-            Text "Preview 12" [font-semibold text-slate-900 text-sm] #f5f2767e371f
-            Text "Ready to explore" [text-slate-500 text-xs] #df5dc7e01220
-          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #e4da8bd293a9
+        View [bg-slate-50 flex-row gap-3 items-center min-h-12 p-2 rounded-xl] #9ac3e49ab7c8
+          View [bg-rose-100 items-center justify-center rounded-lg size-10] #9b8763677f38
+            Text "12" [font-semibold text-rose-700 text-xs] #6f43df1f3c7a
+          View [flex-1 gap-1 min-h-0 min-w-0] #8d352135f52d
+            Text "Preview 12" [font-semibold text-slate-900 text-sm] #804be0c332e2
+            Text "Ready to explore" [text-slate-500 text-xs] #439304cedf98
+          View [bg-slate-100 font-semibold items-center justify-center min-h-5 min-w-5 px-1.5 py-0.5 rounded-[10px] self-start text-[11px] text-slate-500] #3d62878efc3b
             Text "NEW" #3224eaa3295c
-  View [flex-row flex-wrap gap-3 items-center justify-between pb-safe-offset-3 pt-3 px-6] #cdc3c30aec3a
-    Text "Primitives first. Helpers optional." [text-slate-500 text-xs] #61d47c947e8d
-    Text "Native + Web" [font-semibold text-indigo-600 text-xs] #55505257d0d5
+  View [flex-row flex-wrap gap-3 items-center justify-between pb-safe-offset-3 pt-3 px-6] #58c9cd305232
+    Text "Primitives first. Helpers optional." [text-slate-500 text-xs] #bde22d792ef5
+    Text "Native + Web" [font-semibold text-indigo-600 text-xs] #6cb9714738c0
