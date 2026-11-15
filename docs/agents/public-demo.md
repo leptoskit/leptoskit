@@ -4,14 +4,16 @@
 
 ## The environment
 
-| Variable                         | Meaning                                                                                                                |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `DEMO_BIND`                      | The private loopback address to bind, e.g. `127.0.0.1:8080`. The edge terminates the public origins and forwards here. |
-| `LEPTOSKIT_SERVICE_VOLUME_STATE` | The state root: a real directory, mode `0700`, owned by the service account, not a symlink. Refused otherwise.         |
-| `DEMO_SITE_ORIGIN`               | The site's public origin. HTTPS, except loopback/localhost HTTP for development.                                       |
-| `DEMO_ADMIN_ORIGIN`              | The admin's public origin, same rules, a distinct authority from the site's.                                           |
+| Variable                         | Meaning                                                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DEMO_BIND`                      | The private loopback address to bind, e.g. `127.0.0.1:8080` (bracketed IPv6 accepted). The edge terminates the public origins and forwards here. |
+| `LEPTOSKIT_SERVICE_VOLUME_STATE` | The state root: a real directory, mode `0700`, owned by the service account, not a symlink. Refused otherwise.                                   |
+| `DEMO_SITE_ORIGIN`               | The site's public origin. HTTPS, except loopback/localhost HTTP for development.                                                                 |
+| `DEMO_ADMIN_ORIGIN`              | The admin's public origin, same rules, a distinct authority from the site's.                                                                     |
 
 A misconfigured service refuses to start (nonzero exit) instead of serving half-configured.
+
+The two origins, the bind, and every incoming `Host` header share one host normalization: lowercase, exactly one DNS trailing dot folded away, IPv4 plain, IPv6 canonically bracketed (`[::1]`, whatever the header wrote), and explicit or implicit default ports equal — `https://Notes.Example.:443` and `https://notes.example` are the same authority. Only HTTPS is accepted, or HTTP when the host is a loopback address or a `localhost` development name; no other scheme is accepted anywhere. After normalization the site, the admin, and the bind must still be three distinct authorities — configuration that folds two of them into one is refused.
 
 ## What the process serves
 
@@ -21,7 +23,7 @@ One listener, three authorities, validated the same way on every request:
 - the **admin origin** — the deploy console's admin, and `/demo/generation`;
 - the **bind authority** — only `/healthz`, `/readyz`, and the token-authenticated analytics service prefix. No pages, no admin.
 
-Every other `Host` is refused with 421, before a generation exists and after. `/healthz` and `/readyz` answer on all three authorities. Before a generation is ready, ordinary pages answer 503 with `Retry-After: 5` and `/readyz` names the failing `generation` check.
+Every other `Host` is refused with 421, before a generation exists and after — including a request whose `Host` header is missing, duplicated, or malformed: exactly one usable `Host` header names the authority, and it is never resolved by silently taking one of several values. `/healthz` and `/readyz` answer on all three authorities. Before a generation is ready, ordinary pages answer 503 with `Retry-After: 5` and `/readyz` names the failing `generation` check.
 
 ## The daily generation
 

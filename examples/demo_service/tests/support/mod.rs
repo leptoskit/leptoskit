@@ -7,6 +7,10 @@
 use std::fmt::Write as _;
 use std::io::Read as _;
 use std::io::Write as _;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
@@ -23,12 +27,20 @@ use std::time::Instant;
 pub const SITE_HOST: &str = "localhost";
 /// The admin's host.
 pub const ADMIN_HOST: &str = "127.0.0.1";
+/// The admin's host when it is a canonical bracketed IPv6 literal.
+pub const ADMIN_HOST_V6: &str = "[::1]";
+/// The address the tests reach an IPv4-bound listener through.
+pub const CONNECT_V4: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+/// The address the tests reach an IPv6-bound listener through.
+pub const CONNECT_V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
 
-/// One running service process, its volume, and its port.
+/// One running service process, its port, and its bind.
 pub struct Server {
 	pub child: Child,
 	pub port: u16,
-	pub root: PathBuf,
+	/// The address family the process binds, so the polling helpers
+	/// connect where it actually listens.
+	pub addr: IpAddr,
 	/// The process's stderr, on a thread, for honest failure reports.
 	pub stderr: Option<thread::JoinHandle<String>>,
 }
@@ -131,10 +143,11 @@ pub fn volume() -> PathBuf {
 	root
 }
 
-/// One server's environment.
-pub fn env(root: &Path, port: u16, extra: &[(&str, String)]) -> Vec<(String, String)> {
+/// One server's environment: the given bind, and the loopback HTTP
+/// origins the development proofs use.
+pub fn env(root: &Path, bind: SocketAddr, extra: &[(&str, String)]) -> Vec<(String, String)> {
 	let mut variables = vec![
-		("DEMO_BIND".to_owned(), format!("127.0.0.1:{port}")),
+		("DEMO_BIND".to_owned(), bind.to_string()),
 		(
 			"LEPTOSKIT_SERVICE_VOLUME_STATE".to_owned(),
 			root.display().to_string(),
@@ -151,11 +164,55 @@ pub fn env(root: &Path, port: u16, extra: &[(&str, String)]) -> Vec<(String, Str
 	variables
 }
 
-/// Spawns the real binary. Every hook is a debug-build env var the test
-/// passes in explicitly; the release binary ignores them.
+/// Spawns the real binary bound to IPv4 loopback. Every hook is a
+/// debug-build env var the test passes in explicitly; the release binary
+/// ignores them.
 pub fn spawn(root: &Path, port: u16, extra: &[(&str, String)]) -> Server {
+	spawn_on(SocketAddr::new(CONNECT_V4, port), root, extra)
+}
+
+/// Spawns the real binary bound to IPv6 loopback, with the admin origin
+/// moved onto the same bracketed literal so the IPv6 proofs exercise an
+/// IPv6 authority, not just an IPv6 bind.
+pub fn spawn_ipv6(root: &Path, port: u16, extra: &[(&str, String)]) -> Server {
+	let mut variables = env(root, SocketAddr::new(CONNECT_V6, port), &[]);
+	variables.push((
+		"DEMO_ADMIN_ORIGIN".to_owned(),
+		format!("http://{ADMIN_HOST_V6}"),
+	));
+	for (name, value) in extra {
+		variables.push(((*name).to_owned(), value.clone()));
+	}
+	spawn_with_variables(variables)
+}
+
+/// Spawns the real binary on the given bind. Every hook is a
+/// debug-build env var the test passes in explicitly; the release binary
+/// ignores them.
+pub fn spawn_on(bind: SocketAddr, root: &Path, extra: &[(&str, String)]) -> Server {
+	spawn_with_variables(env(root, bind, extra))
+}
+
+/// Spawns the real binary with named environment values replaced on top
+/// of the usual ones — for configuration-refusal proofs, where the
+/// malformed value is the point.
+pub fn spawn_env(root: &Path, port: u16, overrides: &[(&str, String)]) -> Server {
+	let mut variables = env(root, SocketAddr::new(CONNECT_V4, port), &[]);
+	for (name, value) in overrides {
+		variables.retain(|(known, _)| known != name);
+		variables.push(((*name).to_owned(), value.clone()));
+	}
+	spawn_with_variables(variables)
+}
+
+fn spawn_with_variables(variables: Vec<(String, String)>) -> Server {
+	let bind: SocketAddr = variables
+		.iter()
+		.find(|(name, _)| name == "DEMO_BIND")
+		.and_then(|(_, value)| value.parse().ok())
+		.expect("the bind parses");
 	let mut child = Command::new(env!("CARGO_BIN_EXE_demo_service"))
-		.envs(env(root, port, extra))
+		.envs(variables)
 		.stdout(Stdio::null())
 		.stderr(Stdio::piped())
 		.spawn()
@@ -171,8 +228,8 @@ pub fn spawn(root: &Path, port: u16, extra: &[(&str, String)]) -> Server {
 
 	Server {
 		child,
-		port,
-		root: root.to_owned(),
+		port: bind.port(),
+		addr: bind.ip(),
 		stderr,
 	}
 }
@@ -182,11 +239,12 @@ pub fn spawn(root: &Path, port: u16, extra: &[(&str, String)]) -> Server {
 pub fn wait_ready(server: &mut Server, timeout: Duration) -> u16 {
 	let deadline = Instant::now() + timeout;
 	loop {
-		let (status, body) = get(server.port, SITE_HOST, "/readyz");
+		let (status, body) = get_on(server.addr, server.port, SITE_HOST, "/readyz");
 		if std::env::var_os("DEMO_TEST_TRACE").is_some() {
 			eprintln!(
-				"[trace] /readyz on 127.0.0.1:{} as {SITE_HOST} -> {status} {body}",
-				server.port
+				"[trace] /readyz on {addr}:{port} as {SITE_HOST} -> {status} {body}",
+				addr = server.addr,
+				port = server.port
 			);
 		}
 		if status == 200 {
@@ -204,7 +262,7 @@ pub fn wait_ready(server: &mut Server, timeout: Duration) -> u16 {
 pub fn wait_bound(server: &mut Server, timeout: Duration) {
 	let deadline = Instant::now() + timeout;
 	loop {
-		let (status, _) = get(server.port, SITE_HOST, "/healthz");
+		let (status, _) = get_on(server.addr, server.port, SITE_HOST, "/healthz");
 		if status != 0 {
 			return;
 		}
@@ -220,7 +278,7 @@ pub fn wait_bound(server: &mut Server, timeout: Duration) {
 pub fn wait_unready(server: &mut Server, timeout: Duration) -> u16 {
 	let deadline = Instant::now() + timeout;
 	loop {
-		let (status, body) = get(server.port, SITE_HOST, "/readyz");
+		let (status, body) = get_on(server.addr, server.port, SITE_HOST, "/readyz");
 		if status != 200 {
 			return status;
 		}
@@ -286,11 +344,17 @@ pub fn set_clock(path: &Path, millis: i64) {
 /// A plain HTTP request over raw TCP, with an explicit `Host`, answered
 /// until the connection closes.
 pub fn get(port: u16, host: &str, path: &str) -> (u16, String) {
-	request(port, host, path, Duration::from_secs(5))
+	get_on(CONNECT_V4, port, host, path)
+}
+
+/// The same request, to whatever address the listener bound.
+pub fn get_on(ip: IpAddr, port: u16, host: &str, path: &str) -> (u16, String) {
+	let (status, _, body) = request_on(ip, port, host, path, Duration::from_secs(5));
+	(status, body)
 }
 
 pub fn request(port: u16, host: &str, path: &str, timeout: Duration) -> (u16, String) {
-	let (status, _, body) = get_with_headers(port, host, path, timeout);
+	let (status, _, body) = request_on(CONNECT_V4, port, host, path, timeout);
 	(status, body)
 }
 
@@ -300,10 +364,11 @@ pub fn request_with_headers(
 	host: &str,
 	path: &str,
 ) -> (u16, Vec<(String, String)>, String) {
-	get_with_headers(port, host, path, Duration::from_secs(5))
+	request_on(CONNECT_V4, port, host, path, Duration::from_secs(5))
 }
 
-fn get_with_headers(
+fn request_on(
+	ip: IpAddr,
 	port: u16,
 	host: &str,
 	path: &str,
@@ -311,7 +376,7 @@ fn get_with_headers(
 ) -> (u16, Vec<(String, String)>, String) {
 	// A server that hasn't bound yet, or is mid-exec, refuses: that is
 	// `not ready`, which the polling helpers understand.
-	let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+	let Ok(mut stream) = TcpStream::connect((ip, port)) else {
 		return (0, Vec::new(), String::new());
 	};
 	stream
@@ -334,6 +399,29 @@ fn get_with_headers(
 	let mut response = Vec::new();
 	let _ = stream.read_to_end(&mut response);
 	parse(&response)
+}
+
+/// A raw request, sent verbatim — for wire-syntax proofs the typed
+/// helpers cannot express, such as a duplicated `Host` header. Returns
+/// `(status, body)`.
+pub fn request_raw(ip: IpAddr, port: u16, raw: &str) -> (u16, String) {
+	let Ok(mut stream) = TcpStream::connect((ip, port)) else {
+		return (0, String::new());
+	};
+	stream
+		.set_read_timeout(Some(Duration::from_secs(5)))
+		.expect("the read timeout is set");
+	stream
+		.set_write_timeout(Some(Duration::from_secs(5)))
+		.expect("the write timeout is set");
+	stream
+		.write_all(raw.as_bytes())
+		.expect("the request is sent");
+
+	let mut response = Vec::new();
+	let _ = stream.read_to_end(&mut response);
+	let (status, _, body) = parse(&response);
+	(status, body)
 }
 
 /// A POST with a binary body, answered until the connection closes:

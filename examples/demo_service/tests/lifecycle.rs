@@ -27,6 +27,9 @@ use leptoskit_deploy_console::control::Phase;
 use leptoskit_deploy_console::control::Store;
 use rustix::fs::FlockOperation;
 use support::ADMIN_HOST;
+use support::ADMIN_HOST_V6;
+use support::CONNECT_V4;
+use support::CONNECT_V6;
 use support::SITE_HOST;
 use support::Sse;
 use support::appears_within;
@@ -35,11 +38,15 @@ use support::free_port;
 use support::generation_dir;
 use support::generation_names;
 use support::get;
+use support::get_on;
 use support::noon;
+use support::request_raw;
 use support::request_with_headers;
 use support::secrets;
 use support::set_clock;
 use support::spawn;
+use support::spawn_env;
+use support::spawn_ipv6;
 use support::today;
 use support::tomorrow;
 use support::volume;
@@ -824,6 +831,23 @@ fn a_failed_initialization_stays_unready_and_retries_in_a_fresh_image() {
 
 // ─── (9) dispatch boundaries ─────────────────────────────────────────
 
+/// A request that names two authorities — the site's host and a
+/// stranger's, here — must not be resolved by taking one of its Host
+/// values. The HTTP server may refuse the wire syntax itself (400); the
+/// application must refuse the request (421). Either way it is not
+/// served, and the proof runs before and after readiness.
+fn duplicated_host_is_not_served(port: u16) {
+	let duplicate = format!(
+		"GET /healthz HTTP/1.1\r\nHost: {SITE_HOST}\r\nHost: stranger.example\r\nUser-Agent: \
+		 demo-service-test\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+	);
+	let (status, body) = request_raw(CONNECT_V4, port, &duplicate);
+	assert!(
+		status == 400 || status == 421,
+		"a duplicated Host is refused, not served: {status} {body}"
+	);
+}
+
 #[test]
 fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 	let root = volume();
@@ -848,6 +872,7 @@ fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 	);
 	assert_eq!(get(port, "stranger.example", "/").0, 421);
 	assert_eq!(get(port, "stranger.example", "/healthz").0, 421);
+	duplicated_host_is_not_served(port);
 
 	wait_ready(&mut server, READY);
 
@@ -901,6 +926,165 @@ fn dispatch_answers_its_own_authorities_and_refuses_everyone_else() {
 		"the site router answers its own 404s"
 	);
 	assert_eq!(get(port, "stranger.example", "/").0, 421);
+	duplicated_host_is_not_served(port);
+
+	server.terminate_within(SIGTERM_BUDGET);
+}
+
+/// A misconfigured service refuses before the listener exists: nonzero
+/// exit, nothing bound, nothing built. The colliding cases differ from a
+/// good configuration only in the spelling the contract says must fold
+/// to the same authority — casing, a trailing dot, a default port, a
+/// bracketed IPv6 literal — so a refusal proves the normalization
+/// happened before the check.
+#[test]
+fn invalid_configuration_exits_nonzero_without_listening_or_writing_a_generation() {
+	let cases: Vec<(&str, Vec<(&str, String)>)> = vec![
+		(
+			"an ftp site origin on loopback",
+			vec![("DEMO_SITE_ORIGIN", "ftp://localhost".to_owned())],
+		),
+		(
+			"a plain-http admin origin off loopback",
+			vec![("DEMO_ADMIN_ORIGIN", "http://admin.example".to_owned())],
+		),
+		(
+			"credentials in the site origin",
+			vec![("DEMO_SITE_ORIGIN", "https://user@site.example".to_owned())],
+		),
+		(
+			"a path in the site origin",
+			vec![("DEMO_SITE_ORIGIN", "https://site.example/app".to_owned())],
+		),
+		(
+			"repeated trailing dots",
+			vec![("DEMO_SITE_ORIGIN", "https://site.example..".to_owned())],
+		),
+		(
+			"a bind off loopback",
+			vec![("DEMO_BIND", "10.0.0.1:8080".to_owned())],
+		),
+		(
+			"the site and the admin fold to one authority",
+			vec![
+				("DEMO_SITE_ORIGIN", "https://NOTES.example.:443".to_owned()),
+				("DEMO_ADMIN_ORIGIN", "https://notes.example".to_owned()),
+			],
+		),
+	];
+
+	for (name, overrides) in cases {
+		let root = volume();
+		let port = free_port();
+		let mut server = spawn_env(&root, port, &overrides);
+		let status = server
+			.wait_within(Duration::from_secs(15))
+			.unwrap_or_else(|| panic!("{name}: the process refuses the configuration and exits"));
+		assert!(!status.success(), "{name} is refused: {status:?}");
+		assert!(
+			std::net::TcpStream::connect_timeout(
+				&std::net::SocketAddr::new(CONNECT_V4, port),
+				Duration::from_millis(250)
+			)
+			.is_err(),
+			"{name}: nothing listens"
+		);
+		assert!(
+			generation_names(&root).is_empty(),
+			"{name}: no generation is built"
+		);
+	}
+}
+
+/// The site and the bind fold to one IPv6 authority: a bracketed origin
+/// and the same `[::1]` bind must collide after normalization, on pain
+/// of one authority answering for two. Refused before the listener.
+#[test]
+fn an_ipv6_site_origin_colliding_with_the_bind_is_refused() {
+	let root = volume();
+	let port = free_port();
+	let overrides = vec![
+		("DEMO_BIND", format!("[::1]:{port}")),
+		("DEMO_SITE_ORIGIN", format!("http://[::1]:{port}")),
+	];
+	let mut server = spawn_env(&root, port, &overrides);
+	let status = server
+		.wait_within(Duration::from_secs(15))
+		.expect("the process refuses the configuration and exits");
+	assert!(!status.success(), "the collision is refused: {status:?}");
+	assert!(
+		std::net::TcpStream::connect_timeout(
+			&std::net::SocketAddr::new(CONNECT_V4, port),
+			Duration::from_millis(250)
+		)
+		.is_err()
+			&& std::net::TcpStream::connect_timeout(
+				&std::net::SocketAddr::new(CONNECT_V6, port),
+				Duration::from_millis(250)
+			)
+			.is_err(),
+		"nothing listens on the collided authority"
+	);
+	assert!(generation_names(&root).is_empty(), "no generation is built");
+}
+
+/// Whether the machine can bind IPv6 loopback at all. The IPv6 proofs
+/// report a missing facility rather than pretend to pass.
+fn ipv6_loopback_available() -> bool {
+	std::net::TcpListener::bind(std::net::SocketAddr::from((
+		std::net::Ipv6Addr::LOCALHOST,
+		0,
+	)))
+	.is_ok()
+}
+
+/// Real IPv6 loopback: the bind, an IPv6 admin origin, and bracketed
+/// Host headers agree on one canonical spelling — `[::1]`, whatever the
+/// header wrote — before and after readiness.
+#[test]
+fn ipv6_loopback_authorities_route_and_foreign_hosts_are_refused() {
+	if !ipv6_loopback_available() {
+		eprintln!("skipping: this machine has no IPv6 loopback to bind; the proof needs one");
+		return;
+	}
+	let root = volume();
+	let clock = root.join("clock");
+	set_clock(&clock, noon(0));
+
+	let port = free_port();
+	let mut server = spawn_ipv6(&root, port, &clock_hooks(&clock));
+	wait_bound(&mut server, READY);
+
+	let bind_host = format!("[::1]:{port}");
+	// The bind authority answers health checks under every bracketed
+	// spelling of ::1, before a generation exists.
+	assert_eq!(get_on(CONNECT_V6, port, &bind_host, "/healthz").0, 200);
+	assert_eq!(
+		get_on(
+			CONNECT_V6,
+			port,
+			&format!("[0:0:0:0:0:0:0:1]:{port}"),
+			"/healthz"
+		)
+		.0,
+		200,
+		"a bracketed equivalent canonicalizes to the same authority"
+	);
+	assert_eq!(
+		get_on(CONNECT_V6, port, ADMIN_HOST_V6, "/readyz").0,
+		503,
+		"the bare literal names the admin, not ready yet"
+	);
+	assert_eq!(get_on(CONNECT_V6, port, "stranger.example", "/").0, 421);
+
+	wait_ready(&mut server, READY);
+
+	// After readiness: the bind answers no pages, the admin serves, the
+	// site serves through the IPv6 listener, strangers stay refused.
+	assert_eq!(get_on(CONNECT_V6, port, &bind_host, "/").0, 404);
+	assert_eq!(get_on(CONNECT_V6, port, ADMIN_HOST_V6, "/readyz").0, 200);
+	assert_eq!(get_on(CONNECT_V6, port, SITE_HOST, "/").0, 200);
+	assert_eq!(get_on(CONNECT_V6, port, "stranger.example", "/").0, 421);
 
 	server.terminate_within(SIGTERM_BUDGET);
 }

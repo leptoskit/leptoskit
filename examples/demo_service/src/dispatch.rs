@@ -2,11 +2,14 @@
 //! generation exists.
 //!
 //! Dispatch is by exact configured authority, validated the same way on
-//! every request: the site origin's host goes to the site, the admin
-//! origin's host goes to the admin, and this process's own private
-//! loopback address serves only health checks and the token-authenticated
-//! analytics service prefix. Anything else — any other `Host`, spelled
-//! any way — is refused with 421, before the generation exists and after.
+//! every request: a request names exactly one `Host` header, and that
+//! header names exactly one authority — the site origin's host goes to
+//! the site, the admin origin's host goes to the admin, and this
+//! process's own private loopback address serves only health checks and
+//! the token-authenticated analytics service prefix. Anything else — no
+//! usable `Host`, two of them, or one spelled any way this service
+//! cannot mean — is refused with 421, before the generation exists and
+//! after.
 //!
 //! Before initialization commits, every authority gets the fallback:
 //! `/healthz` answers 200, `/readyz` names the failing generation check,
@@ -38,13 +41,8 @@ pub fn router() -> Router {
 }
 
 async fn handle(request: Request) -> Response {
-	let authority = request
-		.headers()
-		.get(header::HOST)
-		.and_then(|value| value.to_str().ok())
-		.and_then(Authority::of_host_header);
-	let Some(authority) = authority else {
-		eprintln!("refusing a request with no usable Host header");
+	let Some(authority) = host_of(&request) else {
+		eprintln!("refusing a request with no single usable Host header");
 		return misdirected();
 	};
 
@@ -86,6 +84,19 @@ async fn handle(request: Request) -> Response {
 		Some(router) => serve(router, request).await,
 		None => misdirected(),
 	}
+}
+
+/// The request's one authority: exactly one `Host` header, holding one
+/// value the grammar accepts. A missing, duplicated, or unusable header
+/// names no authority — it is never resolved by silently taking one of
+/// several values.
+fn host_of(request: &Request) -> Option<Authority> {
+	let mut hosts = request.headers().get_all(header::HOST).iter();
+	let value = hosts.next()?;
+	if hosts.next().is_some() {
+		return None;
+	}
+	value.to_str().ok().and_then(Authority::of_host_header)
 }
 
 /// Sends a request into one of the generation's routers.
@@ -190,4 +201,74 @@ fn generation_stream(generation: &Generation) -> Response {
 	);
 
 	axum::response::sse::Sse::new(stream).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+	use axum::body::Body;
+
+	use super::*;
+
+	/// Routes one in-memory request carrying exactly the named Host
+	/// values, and returns its status.
+	async fn status_of(hosts: &[&str]) -> StatusCode {
+		let mut builder = Request::builder();
+		for host in hosts {
+			builder = builder.header(header::HOST, *host);
+		}
+		let request = builder.body(Body::empty()).expect("the request builds");
+		router()
+			.oneshot(request)
+			.await
+			.expect("the router answers")
+			.status()
+	}
+
+	#[tokio::test]
+	async fn a_request_without_a_host_header_names_no_authority() {
+		assert_eq!(
+			status_of(&[]).await,
+			StatusCode::MISDIRECTED_REQUEST,
+			"no Host at all is refused before routing"
+		);
+	}
+
+	/// Two Host values name two authorities; the request must not be
+	/// resolved by silently taking one of them.
+	#[tokio::test]
+	async fn two_host_headers_name_no_authority() {
+		assert_eq!(
+			status_of(&["site.example", "stranger.example"]).await,
+			StatusCode::MISDIRECTED_REQUEST
+		);
+	}
+
+	/// Every value the authority grammar refuses is refused before
+	/// routing, not resolved leniently.
+	#[tokio::test]
+	async fn hosts_that_cannot_mean_an_authority_are_refused() {
+		for host in [
+			"[::1]garbage",
+			"[::1]:bad",
+			"[::1]:0",
+			"::1",
+			"user@site.example",
+			"site.example:",
+			"site.example:0",
+			"site.example:99999",
+			"site.example/a",
+			"site.example?q",
+			"site.example#f",
+			"site.example,a.example",
+			"site.example..",
+			"site exam ple",
+			"   ",
+		] {
+			assert_eq!(
+				status_of(&[host]).await,
+				StatusCode::MISDIRECTED_REQUEST,
+				"{host:?} names no authority"
+			);
+		}
+	}
 }

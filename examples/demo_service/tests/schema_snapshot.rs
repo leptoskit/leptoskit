@@ -114,6 +114,8 @@ fn test_authorities() -> demo_service::config::Authorities {
 	demo_service::config::Authorities {
 		site: authority("localhost"),
 		admin: authority("127.0.0.1"),
-		bind: authority("127.0.0.1:0"),
+		// The header grammar refuses port 0; this test never dispatches
+		// on the bind, so the port only has to be a valid one.
+		bind: authority("127.0.0.1:8080"),
 	}
 }
