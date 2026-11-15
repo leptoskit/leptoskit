@@ -167,27 +167,50 @@ pub async fn start_analytics(dir: &Path, site_origin: &str, token: &str) -> Resu
 }
 
 /// A month of traffic through the service's own routes, then the
-/// observable barrier: a read of what the service now reports stored.
+/// observable barrier: the receipt is checked against the service's
+/// typed answers (every entry accounted, nothing refused or
+/// rate-limited), and the read-back must match it exactly — a fresh
+/// generation serves exactly the month it was seeded with, no more and
+/// no less.
 ///
 /// # Errors
 ///
-/// When ingestion refuses a batch, or the read-back count is zero.
+/// When ingestion refuses a batch, when the service's answers do not
+/// account for every entry, or when the read-back count differs from the
+/// receipt's entries.
 pub async fn seed_with_barrier(router: &Router, token: &str, now_millis: i64) -> Result<i64> {
-	let sent = admin_demo::analytics::seed_with(router.clone(), token, now_millis)
+	let receipt = admin_demo::analytics::seed_with(router.clone(), token, now_millis)
 		.await
 		.context("seeding the analytics service")?;
+	anyhow::ensure!(
+		receipt.entries > 0 && receipt.events > 0 && receipt.identities > 0,
+		"the seed barrier failed: the month sent no traffic: {receipt:?}"
+	);
+	anyhow::ensure!(
+		receipt.stored + receipt.duplicates == receipt.entries,
+		"the seed barrier failed: the service accounted for {} of the {} entries sent: {receipt:?}",
+		receipt.stored + receipt.duplicates,
+		receipt.entries
+	);
+
+	// The exact initial read-back: the catalogue counts every accepted
+	// entry — events and identity entries both — and a fresh generation
+	// holds exactly the month it was sent.
 	let counted = count_events(router, token).await?;
 	anyhow::ensure!(
-		sent > 0 && counted > 0 && counted <= i64::try_from(sent).unwrap_or(i64::MAX),
-		"the seed barrier failed: {sent} entries sent, the service reports {counted} stored"
+		i64::try_from(receipt.entries).unwrap_or(i64::MAX) == counted,
+		"the seed barrier failed: {} entries were accepted and the service reads back {counted} \
+		 stored",
+		receipt.entries
 	);
 	Ok(counted)
 }
 
 /// The service's own count of stored events, read through its read route
 /// — the durable, observable side of the seed barrier. A warm open calls
-/// this too, and refuses a generation whose count no longer matches its
-/// marker.
+/// this as a healthy read: it proves the generation's analytics answer,
+/// and deliberately checks nothing against the marker's historical
+/// count, which visitors' events and deletions move.
 ///
 /// # Errors
 ///

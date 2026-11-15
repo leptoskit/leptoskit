@@ -12,18 +12,17 @@
 //!
 //! The fingerprint is the schema contract. It is computed from the
 //! schema this binary was compiled with: the analytics service's
-//! migration list (name and SQL checksum per migration) and the full
+//! migration list (name and SQL checksum per migration), the deploy
+//! console's migration list (through `Store::schema_fingerprint()`,
+//! because `Store::open` applies new migrations on open), and the full
 //! SQLite table schema every linked `#[table]` contributes, serialized
 //! canonically (tables sorted by name). A generation records the
 //! fingerprint that built it; a process that opens one refuses — before
 //! any migration or database connection — a marker whose fingerprint
 //! differs from its own. That refusal is the protection: a schema change
 //! that landed without a `GENERATION_FORMAT` bump cannot silently
-//! migrate a live generation's databases, and must not be papered over by
-//! rebuilding. The deploy console's own migration checksums are the
-//! remaining piece; that store verifies them against the journal inside
-//! `Store::open`, and a new migration there is a format bump by the
-//! documented rule in `docs/agents/public-demo.md`.
+//! migrate a live generation's databases, and must not be papered over
+//! by rebuilding.
 
 use std::path::Path;
 
@@ -57,8 +56,11 @@ pub struct Published {
 	pub day: String,
 	/// The seeded analytics events counted back from the service's own
 	/// read path after ingestion confirmed their commit: the observable
-	/// seed-completion barrier. A warm open re-counts and refuses to
-	/// serve a generation whose events are gone.
+	/// seed-completion receipt. It is *historical* — proof the
+	/// initialization finished — and never an invariant over today's
+	/// analytics: visitors add events, deletions remove them, and a warm
+	/// open re-reading the catalogue must not require the frozen initial
+	/// count.
 	pub seed_events: i64,
 }
 
@@ -78,6 +80,13 @@ impl Published {
 			hasher.update([0]);
 			hasher.update(migration.checksum.as_bytes());
 		}
+
+		// The deploy console's migrations, too: `Store::open` applies new
+		// ones on open, so a migration added there changes what this
+		// binary would write into a same-format generation's databases.
+		// The executable contract refuses that before the store opens.
+		hasher.update([0]);
+		hasher.update(leptoskit_deploy_console::control::Store::schema_fingerprint().as_bytes());
 
 		let schema = leptoskit_db::schema(Dialect::Sqlite)
 			.context("computing this build's SQLite schema")?;
@@ -120,9 +129,46 @@ impl Published {
 	///
 	/// When the marker is missing or isn't valid JSON for this contract.
 	pub fn read(dir: &Path) -> Result<Self> {
+		Self::read_if_present(dir)?.with_context(|| format!("reading {}", dir.join(FILE).display()))
+	}
+
+	/// Reads the marker back, distinguishing *absent* from *unreadable*:
+	/// `Ok(None)` means no marker exists, which is the only state that
+	/// may ever take the unpublished build path. A marker that exists but
+	/// cannot be read or parsed is an error — never `None` — so a corrupt
+	/// marker on a published generation fails closed instead of being
+	/// mistaken for a day that was never built.
+	///
+	/// # Errors
+	///
+	/// When the marker is unreadable or isn't valid JSON for this contract.
+	pub fn read_if_present(dir: &Path) -> Result<Option<Self>> {
 		let path = dir.join(FILE);
-		let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-		serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+		match std::fs::read(&path) {
+			Ok(bytes) => {
+				serde_json::from_slice(&bytes)
+					.with_context(|| format!("parsing {}", path.display()))
+					.map(Some)
+			}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+			Err(error) => {
+				Err(anyhow::Error::new(error).context(format!(
+					"reading {} to recognize the generation",
+					path.display()
+				)))
+			}
+		}
+	}
+
+	/// Whether the marker *structurally* names a published generation:
+	/// it carries seed evidence and names exactly the directory it lives
+	/// in (`<day>.f<format>`, both its own). This is recognition, not
+	/// compatibility: it holds for a generation built by any format or
+	/// fingerprint, which is what retention needs — a recent published
+	/// generation is a rollback target, never an abandoned build.
+	#[must_use]
+	pub fn names(&self, dir_name: &str) -> bool {
+		self.seed_events > 0 && dir_name == format!("{}.f{}", self.day, self.format)
 	}
 
 	/// Whether the marker names a generation this binary may open:
@@ -131,16 +177,13 @@ impl Published {
 	/// incompatible marker is refused while the databases are untouched.
 	#[must_use]
 	pub fn is_valid_for(&self, dir_name: &str, fingerprint: &str) -> bool {
-		self.format == GENERATION_FORMAT
-			&& self.fingerprint == fingerprint
-			&& self.seed_events > 0
-			&& dir_name.starts_with(&self.day)
-			&& dir_name == format!("{}.f{}", self.day, self.format)
+		self.names(dir_name) && self.format == GENERATION_FORMAT && self.fingerprint == fingerprint
 	}
 }
 
-/// The generation files a valid marker stands behind. Used when deciding
-/// whether an unpublished directory is worth keeping.
+/// The generation files a valid marker stands behind. A generation is
+/// opened only when every required artifact is present, so a directory
+/// that lost a database is refused rather than served half-open.
 ///
 /// The admin's database file name comes from the admin crate's own
 /// connection string, which includes its `?mode=rwc` suffix verbatim;
@@ -207,13 +250,23 @@ mod tests {
 			day: day.to_owned(),
 			seed_events: 1_234,
 		};
+		ensure!(valid.names(&name), "a marker that names its directory");
 		ensure!(valid.is_valid_for(&name, &fingerprint), "a valid marker");
 
 		let mut wrong_format = valid.clone();
 		wrong_format.format += 1;
+		let foreign_name = format!("{day}.f{}", wrong_format.format);
 		ensure!(
-			!wrong_format.is_valid_for(&name, &fingerprint),
-			"a foreign format is not this generation"
+			wrong_format.names(&foreign_name),
+			"a foreign-format marker still names its own directory: recognition, not compatibility"
+		);
+		ensure!(
+			!wrong_format.names(&name),
+			"a marker naming another format does not name this directory"
+		);
+		ensure!(
+			!wrong_format.is_valid_for(&foreign_name, &fingerprint),
+			"a foreign format is not this binary's generation"
 		);
 
 		let mut drifted = valid.clone();
@@ -226,8 +279,61 @@ mod tests {
 		let mut unseeded = valid.clone();
 		unseeded.seed_events = 0;
 		ensure!(
+			!unseeded.names(&name),
+			"no seed evidence, no recognized generation"
+		);
+		ensure!(
 			!unseeded.is_valid_for(&name, &fingerprint),
 			"no seed evidence, no generation"
+		);
+		Ok(())
+	}
+
+	/// A marker that names the wrong day or the wrong format for its
+	/// directory is malformed: recognized by nothing, deleted by nothing.
+	#[test]
+	fn markers_that_name_their_directory_wrongly_are_malformed() -> Result<()> {
+		let day = "2026-11-15";
+		let marker = Published {
+			format: GENERATION_FORMAT,
+			fingerprint: Published::current_fingerprint()?,
+			day: day.to_owned(),
+			seed_events: 42,
+		};
+
+		let mut wrong_day = marker.clone();
+		wrong_day.day = "2026-11-16".into();
+		ensure!(
+			!wrong_day.names(&format!("{day}.f{GENERATION_FORMAT}")),
+			"a marker naming another day does not name this directory"
+		);
+		ensure!(
+			!marker.names("2026-11-15.building-leftover"),
+			"a non-generation directory is never named"
+		);
+		Ok(())
+	}
+
+	/// Absent and unreadable are different facts: only absence may take
+	/// the unpublished path, so `read_if_present` keeps them apart.
+	#[test]
+	fn an_unreadable_marker_is_an_error_not_an_absence() -> Result<()> {
+		let dir = TempDir::new()?.path().to_path_buf();
+		std::fs::create_dir_all(&dir)?;
+
+		ensure!(
+			Published::read_if_present(&dir)?.is_none(),
+			"no marker means none exists"
+		);
+
+		std::fs::write(dir.join("published"), b"{\"format\": 1, \"fing")?;
+		ensure!(
+			Published::read_if_present(&dir).is_err(),
+			"a truncated marker is unreadable, not absent"
+		);
+		ensure!(
+			Published::read(&dir).is_err(),
+			"reading a truncated marker fails"
 		);
 		Ok(())
 	}

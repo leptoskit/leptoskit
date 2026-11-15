@@ -336,6 +336,49 @@ fn get_with_headers(
 	parse(&response)
 }
 
+/// A POST with a binary body, answered until the connection closes:
+/// `(status, body)`. The callers name every header, so the request
+/// carries only what the proof needs.
+pub fn post(
+	port: u16,
+	host: &str,
+	path: &str,
+	headers: &[(&str, &str)],
+	body: &[u8],
+) -> (u16, String) {
+	let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+		return (0, String::new());
+	};
+	stream
+		.set_read_timeout(Some(Duration::from_secs(5)))
+		.expect("the read timeout is set");
+	stream
+		.set_write_timeout(Some(Duration::from_secs(5)))
+		.expect("the write timeout is set");
+
+	let mut wire = format!(
+		"POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: demo-service-test\r\nAccept: \
+		 */*\r\nConnection: close\r\n"
+	);
+	for (name, value) in headers {
+		wire.push_str(name);
+		wire.push_str(": ");
+		wire.push_str(value);
+		wire.push_str("\r\n");
+	}
+	wire.push_str("Content-Length: ");
+	let _ = write!(wire, "{}\r\n\r\n", body.len());
+	stream
+		.write_all(wire.as_bytes())
+		.expect("the request is sent");
+	stream.write_all(body).expect("the body is sent");
+
+	let mut response = Vec::new();
+	let _ = stream.read_to_end(&mut response);
+	let (status, _, text) = parse(&response);
+	(status, text)
+}
+
 /// Parses a full HTTP/1.1 response's status, headers, and body.
 fn parse(response: &[u8]) -> (u16, Vec<(String, String)>, String) {
 	let text = String::from_utf8_lossy(response);

@@ -27,6 +27,7 @@
 //! this slice has no public sign-in and the mailer is a sink.
 
 pub mod admin;
+pub mod barrier;
 pub mod clock;
 pub mod config;
 pub mod dispatch;

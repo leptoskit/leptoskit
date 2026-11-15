@@ -11,8 +11,23 @@
 //! 1. a 200 event stream on an operation-events path ends within the window, so
 //!    the browser reconnects;
 //! 2. everything else passes through byte for byte, however long;
-//! 3. a non-success status on that path is untouched — the wrapper never sits
-//!    in front of the auth handler's refusals.
+//! 3. an auth refusal at the *actual* operation-events path is untouched — the
+//!    wrapper never sits in front of the auth handler's refusals.
+//!
+//! What stays explicitly pending: a real authenticated overlap test — a signed
+//! in admin's `EventSource`, in a browser, watching an operation finish in
+//! another process and reconnecting into the durable terminal state. That
+//! needs the onboarding slice's real admin session; the stand-ins here prove
+//! the wrapper's behavior only, and a direct Store read is not an SSE proof.
+
+/// The pending proof, so it is named where it will be written: see the
+/// module docs. Runs only with `--ignored`, and fails loudly until the
+/// onboarding slice provides a real admin session.
+#[test]
+#[ignore = "needs the onboarding slice's real admin session; a Store read is not an SSE proof"]
+fn an_authenticated_browser_reconnects_across_a_worker_handoff() {
+	panic!("pending: drive the real admin session's EventSource across a worker handoff");
+}
 
 use std::time::Duration;
 
@@ -31,11 +46,18 @@ use tower::ServiceExt as _;
 const WINDOW: Duration = admin::OPERATION_SSE_WINDOW;
 const MARGIN: Duration = Duration::from_secs(5);
 
-/// An endless 200 event stream at the operation-events path, and a
-/// never-ending plain 200 at another path.
+/// An endless 200 event stream at the operation-events path, a
+/// never-ending plain 200 at another path, and an auth-shaped refusal at
+/// the operation-events path itself: the handler answers 401 for the id
+/// `denied`, exactly as the admin's auth gate would on a matching path.
 fn stand_in() -> Router {
-	let events = get(|| {
-		async {
+	let events = get(|axum::extract::Path(id): axum::extract::Path<String>| {
+		async move {
+			// The auth gate's refusal, at the real path shape: the wrapper
+			// must pass it through without softening or buffering it.
+			if id == "denied" {
+				return StatusCode::UNAUTHORIZED.into_response();
+			}
 			let stream = futures::stream::unfold(0_u32, |tick| {
 				async move {
 					tokio::time::sleep(Duration::from_millis(50)).await;
@@ -73,10 +95,6 @@ fn stand_in() -> Router {
 	Router::new()
 		.route(&format!("{base}/infra/operations/{{id}}/events"), events)
 		.route(&format!("{base}/infra/operations/nope"), endless_plain)
-		.route(
-			&format!("{base}/infra/operations/{{id}}/events-denied"),
-			get(|| async { StatusCode::UNAUTHORIZED }),
-		)
 }
 
 #[tokio::test]
@@ -154,12 +172,13 @@ async fn other_bodies_pass_through_untouched() {
 		"the timeout, not the body, ended the wait"
 	);
 
-	// A refusal on the operation-events path is passed through with its
-	// status, so the auth handler's answer is never softened.
+	// A refusal at the *actual* operation-events path — a path the
+	// wrapper's predicate matches — passes through with its status and
+	// its body, so the auth handler's answer is never softened.
 	let path = format!(
-		"{}{}/events-denied",
+		"{}{}/events",
 		leptoskit_admin::BASE,
-		"/infra/operations/op-1"
+		"/infra/operations/denied"
 	);
 	let response = wrapped
 		.oneshot(
@@ -172,6 +191,13 @@ async fn other_bodies_pass_through_untouched() {
 		.await
 		.expect("the router answers");
 	assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+	let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+		.await
+		.expect("the refusal's body arrives immediately");
+	assert!(
+		body.is_empty(),
+		"the refusal is passed through, not wrapped in a stream"
+	);
 }
 
 /// Reads the stream to its end, counting the SSE event frames that

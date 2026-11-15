@@ -32,6 +32,24 @@ fn checksum(sql: &str) -> String {
 	format!("{:x}", sha2::Sha256::digest(sql.as_bytes()))
 }
 
+/// Hashes a migration list into one unambiguous digest: each migration's
+/// version and SQL, framed by its byte length so no two different lists
+/// can hash alike. Public through [`Store::schema_fingerprint`] so a
+/// caller that must refuse schema drift *before* opening the journal —
+/// and thereby before [`Store::open`] applies new migrations — can hold
+/// the same contract the journal itself checks.
+fn migration_fingerprint(migrations: &[(u32, &str, &str)]) -> String {
+	let mut hasher = sha2::Sha256::new();
+	for (version, up, down) in migrations {
+		hasher.update(version.to_le_bytes());
+		for sql in [up, down] {
+			hasher.update((sql.len() as u64).to_le_bytes());
+			hasher.update(sql.as_bytes());
+		}
+	}
+	format!("{:x}", hasher.finalize())
+}
+
 fn storage_error(error: rusqlite::Error) -> EnqueueError {
 	EnqueueError::Storage(error.into())
 }
@@ -42,6 +60,21 @@ fn storage_error(error: rusqlite::Error) -> EnqueueError {
 pub struct Store(Arc<Mutex<rusqlite::Connection>>);
 
 impl Store {
+	/// The schema fingerprint of this build: a digest of the migrations
+	/// [`Store::open`] applies, computed from the migration list itself
+	/// — version and SQL, length-framed — without opening anything. A
+	/// release that adds or changes a management migration produces a
+	/// different fingerprint, so a caller holding a published state
+	/// contract (the demo runtime's generation marker, for one) refuses
+	/// before the store's auto-migration could touch an existing
+	/// database.
+	///
+	/// This is pure: no I/O, no database, no filesystem.
+	#[must_use]
+	pub fn schema_fingerprint() -> String {
+		migration_fingerprint(&MIGRATIONS)
+	}
+
 	pub fn open(path: &Path) -> Result<Self> {
 		let parent = path.parent().context("database needs a parent directory")?;
 		#[cfg(unix)]

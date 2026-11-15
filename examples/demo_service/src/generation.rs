@@ -6,26 +6,34 @@
 //! 1. **Validate before touching.** A generation is opened only when its
 //!    `published` marker names this binary's format and schema fingerprint. The
 //!    check runs before any database connection or migration, so incompatible
-//!    state is refused while it is still untouched.
+//!    state is refused while it is still untouched — and a marker that exists
+//!    but cannot be read, or does not name its directory, is refused the same
+//!    way: only a genuinely absent marker may take the unpublished build path.
 //! 2. **Hold the lifetime lock before opening.** A generation's `lifetime.lock`
 //!    is taken shared under the build lock, before the first database opens,
 //!    and kept until exec or exit. Nothing deletes a generation whose lifetime
 //!    lock it cannot take exclusively.
 //! 3. **Build at the final path; publish with a marker.** A new generation is
 //!    built where it will always live — never renamed after SQLite opened it —
-//!    and becomes openable only when its fsynced `published` marker is renamed
-//!    into place.
+//!    becomes durable through an explicit fsync barrier over its databases,
+//!    WALs, and directory entries, and is openable only when its fsynced
+//!    `published` marker is renamed into place after that barrier.
 //! 4. **Seed through the real service, and prove it.** The month goes through
-//!    the analytics service's own ingestion, whose committed-ack responses mean
-//!    the rows are stored; the barrier is the read-back count through the
-//!    service's read route, recorded in the marker and re-checked on every
-//!    open. No direct SQL writes seed events.
-//! 5. **Collect only what nobody holds.** Retention keeps today and yesterday;
-//!    anything older — or any unpublished leftover — is removed only if its
-//!    lifetime lock can be taken exclusively without blocking. Whatever
-//!    survives counts against a small, documented budget, and an over-budget
-//!    volume fails honestly instead of growing unbounded or unlinking live
-//!    databases.
+//!    the analytics service's own ingestion, and the receipt is checked entry
+//!    by entry against the service's typed answers before an exact read-back is
+//!    recorded in the marker. The recorded count is a historical initialization
+//!    receipt: a warm open re-reads the catalogue to prove the generation is
+//!    healthy, never to require the frozen initial count, which visitors change
+//!    and deletions reduce. No direct SQL writes seed events.
+//! 5. **Collect only what nobody holds, and only what is genuinely done.**
+//!    Retention recognizes a published generation structurally — a marker
+//!    naming its directory — regardless of format or fingerprint, and keeps
+//!    every recent one as same-day rollback state. Only genuinely expired
+//!    recognized generations, or genuinely unpublished abandoned builds, are
+//!    removed, and only under the exclusive lifetime lock; a marker that cannot
+//!    be read is never a deletion reason. Whatever survives counts against a
+//!    small, documented budget, and an over-budget volume fails honestly
+//!    instead of growing unbounded or unlinking live databases.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -126,26 +134,54 @@ pub async fn open_or_build(
 	let dir = dir_for(&config.volume, day);
 	let fingerprint = Published::current_fingerprint()?;
 
-	let published = Published::read(&dir).ok();
+	// Only a genuinely absent marker may take the unpublished path. A
+	// marker that exists but cannot be read — corrupt, truncated,
+	// unreadable — is a fail-closed fault on a published generation:
+	// treating it as absence would delete and rebuild a day that may
+	// already be serving, so it is an error while everything stays
+	// untouched.
+	let published = match Published::read_if_present(&dir) {
+		Ok(marker) => marker,
+		Err(error) => {
+			return Err(error.context(format!(
+				"the published marker at {} is unreadable, so the generation is refused untouched \
+				 rather than treated as an unpublished build",
+				dir.display()
+			)));
+		}
+	};
+
 	if let Some(marker) = &published {
-		if marker.is_valid_for(&dir_name(&dir), &fingerprint) {
+		// Recognition: the marker must structurally name this directory.
+		// A marker that names another day or format inside this
+		// directory is malformed, and malformed is refused, not rebuilt.
+		let name = dir_name(&dir);
+		ensure!(
+			marker.names(&name),
+			"the published marker at {} does not name this directory ({name}): it claims day {} \
+			 format {}, and the generation is refused untouched",
+			dir.display(),
+			marker.day,
+			marker.format
+		);
+
+		if marker.is_valid_for(&name, &fingerprint) {
 			return open(config, &dir, marker, terminated, readiness).await;
 		}
-		// Same format, different schema: the source's schemas drifted
-		// without a format bump. Refuse before anything in the
+
+		// Same format and day, different schema: the source's schemas
+		// drifted without a format bump. Refuse before anything in the
 		// generation is opened or migrated — rebuilding would wipe a
 		// live day's state instead of surfacing the bug, and migrating
 		// would change databases this binary doesn't understand. The
 		// fix is a format bump and a new directory, never this.
-		if marker.format == GENERATION_FORMAT && marker.day == day {
-			anyhow::bail!(
-				"the published generation at {} carries schema fingerprint {} but this binary \
-				 builds {fingerprint}: the schemas drifted without a GENERATION_FORMAT bump, so \
-				 the generation is refused untouched",
-				dir.display(),
-				marker.fingerprint
-			);
-		}
+		anyhow::bail!(
+			"the published generation at {} carries schema fingerprint {} but this binary builds \
+			 {fingerprint}: the schemas drifted without a GENERATION_FORMAT bump, so the \
+			 generation is refused untouched",
+			dir.display(),
+			marker.fingerprint
+		);
 	}
 
 	build(config, &dir, day, now_millis, terminated, readiness).await
@@ -160,9 +196,12 @@ fn dir_name(dir: &Path) -> String {
 }
 
 /// Opens a published generation: credentials, then databases, then the
-/// services on top. The seed barrier is re-checked against the marker,
-/// so a generation whose durable events are gone is refused, never
-/// silently served empty.
+/// services on top. The marker is a historical initialization receipt —
+/// it proves the build finished — and the reopen proves the generation
+/// is *healthy now*: the artifacts it names are present and the services
+/// open and answer reads. Today's event count is today's business:
+/// visitors add events and deletions remove them, so a warm open never
+/// requires the frozen initial count.
 async fn open(
 	config: &Config,
 	dir: &Path,
@@ -171,19 +210,21 @@ async fn open(
 	readiness: &Readiness,
 ) -> Result<Generation> {
 	locks::lifetime_shared(dir, terminated.cancellable()).await?;
+
+	// The receipt stands behind files; the files must still be there.
+	ensure!(
+		crate::marker::artifacts_present(dir),
+		"the published generation at {} is missing required artifacts",
+		dir.display()
+	);
 	let secrets = Secrets::load(dir, &marker.day)?;
 
-	// The analytics service first: the barrier's read goes through it.
+	// The analytics service first: its catalogue read is the healthy read
+	// that proves the database opens, migrates as a no-op, and answers.
 	let analytics = site::start_analytics(dir, &config.site_origin, &secrets.analytics_token)
 		.await
 		.context("starting the analytics service")?;
-	let counted = site::count_events(&analytics, &secrets.analytics_token).await?;
-	ensure!(
-		counted == marker.seed_events,
-		"the generation's seeded events are gone: the marker records {} and the service reports \
-		 {counted}",
-		marker.seed_events
-	);
+	let _ = site::count_events(&analytics, &secrets.analytics_token).await?;
 
 	let site_db = connect_site_db(dir).await?;
 	let site = site::rebuild(&site_db, site_keys(&secrets), &config.site_origin)
@@ -274,17 +315,20 @@ async fn build(
 		 already running"
 	);
 
-	#[cfg(debug_assertions)]
-	if std::env::var_os("DEMO_TEST_CRASH_AFTER_SEED").is_some() {
-		// A deterministic crash: after the writes committed, before the
-		// marker exists. The generation stays unpublished, its lifetime
-		// lock dies with the process, and the next image recovers.
-		eprintln!("DEMO_TEST_CRASH_AFTER_SEED: aborting before publication");
-		std::process::abort();
-	}
-
 	let seed_events =
 		site::seed_with_barrier(&analytics, &secrets.analytics_token, now_millis).await?;
+
+	#[cfg(debug_assertions)]
+	if std::env::var_os("DEMO_TEST_CRASH_AFTER_SEED").is_some() {
+		// A deterministic crash: after the seed committed and read back,
+		// before anything is published. The rows are on disk, the marker
+		// does not exist, the generation stays unpublished, its lifetime
+		// lock dies with the process, and the next image recovers.
+		eprintln!(
+			"DEMO_TEST_CRASH_AFTER_SEED: aborting after the committed seed, before publication"
+		);
+		std::process::abort();
+	}
 
 	// The identity provider's keys, warmed once so the admin's first
 	// sign-in needs no key fetch it can't do yet.
@@ -304,14 +348,22 @@ async fn build(
 		.context("starting the control service")?;
 	let admin = admin_router(config, dir, &secrets, &control, built.router.clone()).await?;
 
-	// Everything is durable on disk; the marker is the commit point.
+	// Everything this marker vouches for is made durable *before* the
+	// marker exists: the databases and their WALs are written under
+	// WAL + synchronous=NORMAL, where a committed, readable transaction
+	// is not yet a power-loss barrier. A failure here propagates without
+	// publishing; the generation stays unpublished and is rebuilt by the
+	// next image.
+	crate::barrier::establish(dir)
+		.context("establishing the generation's durability barrier before publication")?;
+
+	// The marker is the commit point: written last, over durable state.
 	let marker = Published {
 		format: GENERATION_FORMAT,
 		fingerprint: Published::current_fingerprint()?,
 		day: day.to_owned(),
 		seed_events,
 	};
-	sync_dir(dir)?;
 	marker.commit(dir)?;
 
 	Ok(assemble(GenerationParts {
@@ -437,15 +489,6 @@ fn make_generation_dir(dir: &Path) -> Result<()> {
 	Ok(())
 }
 
-/// fsyncs a generation directory's entries before the marker commits.
-fn sync_dir(dir: &Path) -> Result<()> {
-	let handle =
-		std::fs::File::open(dir).with_context(|| format!("opening {} to sync", dir.display()))?;
-	handle
-		.sync_all()
-		.with_context(|| format!("syncing {}", dir.display()))
-}
-
 /// The demo project: a git repository with the fixture committed as it
 /// stands and the two-instance change staged, so the admin has a change
 /// to plan. Nothing here commits — git only ever initializes and stages.
@@ -479,13 +522,46 @@ fn init_project(dir: &Path) -> Result<PathBuf> {
 	Ok(root)
 }
 
+/// What collection found in a generation directory. Recognition is
+/// *structural* — does a marker that names this directory exist? — and
+/// deliberately knows nothing about this binary's format or fingerprint:
+/// a valid recent generation of any format is a same-day rollback
+/// target, not an abandoned build.
+enum Recognition {
+	/// A marker structurally names the directory: this was published by
+	/// *some* build.
+	Published,
+	/// No marker at all: an abandoned build, or a stray directory.
+	Unpublished,
+	/// A marker exists but cannot be read, parsed, or matched to the
+	/// directory. Never a deletion reason: unreadable is kept, counted
+	/// against the budget, and reported.
+	Unreadable,
+}
+
+/// Recognizes what a generation directory is. Called by collection only;
+/// opening a generation validates far more strictly.
+fn recognize(dir: &Path, name: &str) -> Recognition {
+	match Published::read_if_present(dir) {
+		Ok(Some(marker)) if marker.names(name) => Recognition::Published,
+		// A marker that exists but cannot be read, parsed, or matched to
+		// its directory is never evidence of *no* publication: the
+		// directory is kept, counted, and reported instead.
+		Ok(Some(_)) | Err(_) => Recognition::Unreadable,
+		Ok(None) => Recognition::Unpublished,
+	}
+}
+
 /// Retention and budget. Called under the build lock, after the
-/// generation opened or built: today and yesterday stay, everything older
-/// — and any unpublished leftover in any directory — is removed only when
-/// its lifetime lock can be taken exclusively without blocking. What
-/// survives is counted; an over-budget volume refuses to serve, with the
-/// evidence in the error, instead of unlinking a live generation or
-/// growing without bound.
+/// generation opened or built. A published generation is kept while it
+/// is recent (today and yesterday), whatever format or fingerprint built
+/// it, because a recent generation of a foreign format is exactly the
+/// rollback state a same-day release must leave behind; only a
+/// genuinely expired published generation — or a genuinely unpublished
+/// leftover — is removed, and only when its lifetime lock can be taken
+/// exclusively without blocking. What survives is counted; an
+/// over-budget volume refuses to serve, with the evidence in the error,
+/// instead of unlinking a live generation or growing without bound.
 ///
 /// # Errors
 ///
@@ -498,7 +574,6 @@ pub fn collect(volume: &Path, now_millis: i64) -> Result<()> {
 	}
 
 	let oldest_kept = clock::day_of(now_millis - DAY_MS);
-	let fingerprint = Published::current_fingerprint()?;
 	let mut survivors: Vec<(String, PathBuf)> = Vec::new();
 
 	for entry in std::fs::read_dir(&generations).context("reading the generations")? {
@@ -512,21 +587,23 @@ pub fn collect(volume: &Path, now_millis: i64) -> Result<()> {
 		}
 
 		let name = dir_name(&path);
-		let older = name
+		let expired = name
 			.split_once(".f")
 			.is_some_and(|(day, _)| day < oldest_kept.as_str());
-		let published = Published::read(&path).ok();
-		let valid = published
-			.as_ref()
-			.is_some_and(|marker| marker.is_valid_for(&name, &fingerprint));
 
-		// Removable when older than yesterday, or never published — but
-		// only while nobody holds it. A live holder — a paused
-		// candidate, a process the clock jumped past, today's serving
-		// generation — keeps its database.
-		if (!valid || older)
-			&& let Some(exclusive) = locks::try_lifetime_exclusive(&path)?
-		{
+		// Removable when a recognized publication has genuinely expired,
+		// or when nothing was ever published — but never because a
+		// marker couldn't be read, and never while a live holder keeps
+		// the lifetime lock. A live holder — a paused candidate, a
+		// process the clock jumped past, today's serving generation —
+		// keeps its database.
+		let removable = match recognize(&path, &name) {
+			Recognition::Published => expired,
+			Recognition::Unpublished => true,
+			Recognition::Unreadable => false,
+		};
+
+		if removable && let Some(exclusive) = locks::try_lifetime_exclusive(&path)? {
 			std::fs::remove_dir_all(&path).with_context(|| {
 				format!("collecting the finished generation {}", path.display())
 			})?;
@@ -580,4 +657,68 @@ fn dir_size(dir: &Path) -> Result<u64> {
 		}
 	}
 	Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Recognition separates three facts a collector must not confuse: a
+	/// published generation (whatever format), a genuinely unpublished
+	/// directory, and a directory whose marker cannot be read, parsed, or
+	/// matched to it — the last never being a deletion reason.
+	#[test]
+	fn recognition_separates_published_unpublished_and_unreadable() -> Result<()> {
+		let temp = tempfile::TempDir::new()?;
+		let root = temp.path().join("gen");
+		std::fs::create_dir_all(&root)?;
+
+		// No marker: unpublished.
+		let unpublished = root.join("2026-11-15.building-leftover");
+		std::fs::create_dir_all(&unpublished)?;
+		assert!(matches!(
+			recognize(&unpublished, "2026-11-15.building-leftover"),
+			Recognition::Unpublished
+		));
+
+		// A marker naming its directory, in a foreign format: published.
+		let foreign = root.join("2026-11-14.f2");
+		std::fs::create_dir_all(&foreign)?;
+		let marker = Published {
+			format: 2,
+			fingerprint: "0".repeat(64),
+			day: "2026-11-14".to_owned(),
+			seed_events: 7,
+		};
+		std::fs::write(foreign.join("published"), serde_json::to_vec(&marker)?)?;
+		assert!(matches!(
+			recognize(&foreign, "2026-11-14.f2"),
+			Recognition::Published
+		));
+
+		// A truncated marker: unreadable.
+		let truncated = root.join("2026-11-14.f1");
+		std::fs::create_dir_all(&truncated)?;
+		std::fs::write(truncated.join("published"), b"{\"format\": 1")?;
+		assert!(matches!(
+			recognize(&truncated, "2026-11-14.f1"),
+			Recognition::Unreadable
+		));
+
+		// A marker that parses but names another day: still unreadable —
+		// malformed is not unpublished.
+		let mismatched = root.join("2026-11-13.f1");
+		std::fs::create_dir_all(&mismatched)?;
+		let mut elsewhere = marker.clone();
+		elsewhere.day = "2026-11-12".to_owned();
+		std::fs::write(
+			mismatched.join("published"),
+			serde_json::to_vec(&elsewhere)?,
+		)?;
+		assert!(matches!(
+			recognize(&mismatched, "2026-11-13.f1"),
+			Recognition::Unreadable
+		));
+		Ok(())
+	}
 }

@@ -190,6 +190,146 @@ fn count_events_in_db(root: &Path) -> Result<i64> {
 	Ok(count)
 }
 
+// ─── (2b) a mutable day ──────────────────────────────────────────────
+
+/// Ingests one real visitor event through the live service's own batch
+/// route, signed with the generation's real token, and returns the
+/// service's typed answer: `(status, the capture result as JSON)`.
+fn ingest_one_visit(port: u16, token: &str) -> (u16, serde_json::Value) {
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.expect("the clock is sane")
+		.as_millis() as i64;
+	let batch = leptoskit_analytics::wire::Batch {
+		sent_at: now,
+		contexts: vec![vec![(
+			"$lib".to_owned(),
+			leptoskit_analytics::wire::Value::Text("demo-service-test".to_owned()),
+		)]],
+		entries: vec![leptoskit_analytics::wire::Entry {
+			uuid: leptoskit_analytics::wire::uuid_v7(now, [9_u8; 10]),
+			distinct_id: "restart-proof-visitor".to_owned(),
+			session_id: Some(leptoskit_analytics::wire::uuid_v7(now, [7_u8; 10])),
+			context: 0,
+			body: leptoskit_analytics::wire::Body::Event {
+				name: "$pageview".to_owned(),
+				properties: vec![(
+					"$pathname".to_owned(),
+					leptoskit_analytics::wire::Value::Text("/restart-proof".to_owned()),
+				)],
+			},
+		}],
+	};
+	let path = "/_leptoskit/services/analytics/v1/batch";
+	let (status, body) = support::post(
+		port,
+		&format!("{ADMIN_HOST}:{port}"),
+		path,
+		&[
+			("Authorization", &format!("Bearer {token}")),
+			("Content-Type", "application/octet-stream"),
+		],
+		&leptoskit_analytics::wire::encode(&batch),
+	);
+	let receipt = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+	(status, receipt)
+}
+
+/// The published marker is a historical initialization receipt, not an
+/// invariant over today's editable analytics: visitor events land, an
+/// overlapping candidate opens the changed day, a same-day SIGKILL
+/// restart keeps keys, extra rows, and the marker without reseeding, and
+/// a legitimate analytics deletion does not make the day unopenable.
+#[test]
+fn a_published_generation_survives_visitor_changes_and_deletions_across_restarts() -> Result<()> {
+	let root = volume();
+	let clock = root.join("clock");
+	set_clock(&clock, noon(0));
+
+	let port = free_port();
+	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	wait_ready(&mut server, READY);
+
+	let marker_path = generation_dir(&root).join("published");
+	let marker_before = std::fs::read(&marker_path)?;
+	let secrets_before = secrets(&root);
+	let seeded = count_events_in_db(&root)?;
+
+	// A visitor's event, through the live service's own ingestion.
+	let token = secrets_before["analytics_token"]
+		.as_str()
+		.expect("the analytics token is in the secrets")
+		.to_owned();
+	let (status, receipt) = ingest_one_visit(port, &token);
+	assert_eq!(status, 200, "the live service accepts the visit: {receipt}");
+	assert_eq!(
+		receipt["stored"].as_i64(),
+		Some(1),
+		"the service's own answer says it stored exactly the one event: {receipt}"
+	);
+	assert_eq!(
+		count_events_in_db(&root)?,
+		seeded + 1,
+		"the visit is durably in the events table"
+	);
+
+	// An overlapping candidate opens the same, now-changed generation.
+	let mut candidate = spawn(&root, free_port(), &clock_hooks(&clock));
+	assert_eq!(
+		wait_ready(&mut candidate, READY),
+		200,
+		"a candidate opens the day a visitor already changed"
+	);
+	candidate.terminate_within(SIGTERM_BUDGET);
+
+	// Same-day SIGKILL and restart: keys, the extra row, and the marker
+	// are all kept, and nothing reseeds.
+	server.kill();
+	assert!(!server.alive(), "the process is dead after SIGKILL");
+	let mut restarted = spawn(&root, port, &clock_hooks(&clock));
+	assert_eq!(
+		wait_ready(&mut restarted, READY),
+		200,
+		"a restart reopens the changed generation without reseeding"
+	);
+	assert_eq!(
+		secrets(&root),
+		secrets_before,
+		"the credentials are unchanged"
+	);
+	assert_eq!(
+		std::fs::read(&marker_path)?,
+		marker_before,
+		"the published marker is untouched: a receipt, not a live count"
+	);
+	assert_eq!(
+		count_events_in_db(&root)?,
+		seeded + 1,
+		"neither a reseed nor a loss"
+	);
+
+	// A legitimate analytics deletion lowers the count below the receipt:
+	// the day must still open. The test arranges the durable post-deletion
+	// state directly, as the service's own delete path leaves it.
+	restarted.kill();
+	let connection = rusqlite::Connection::open(generation_dir(&root).join("analytics.sqlite3"))?;
+	let deleted = connection.execute(
+		"DELETE FROM events WHERE rowid IN (SELECT rowid FROM events ORDER BY rowid LIMIT 2)",
+		[],
+	)?;
+	ensure!(deleted == 2, "the deletion removed the rows it names");
+	drop(connection);
+
+	let mut after_deletion = spawn(&root, port, &clock_hooks(&clock));
+	assert_eq!(
+		wait_ready(&mut after_deletion, READY),
+		200,
+		"a day holding fewer events than its receipt still opens"
+	);
+	after_deletion.terminate_within(SIGTERM_BUDGET);
+	Ok(())
+}
+
 // ─── (3) reset ───────────────────────────────────────────────────────
 
 #[test]
@@ -574,7 +714,7 @@ fn a_simultaneous_midnight_builds_exactly_one_new_generation() -> Result<()> {
 // ─── (7) crash during a build ────────────────────────────────────────
 
 #[test]
-fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() {
+fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() -> Result<()> {
 	let root = volume();
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
@@ -590,11 +730,19 @@ fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() {
 		"an abort is not a clean exit: {status:?}"
 	);
 
-	// Nothing was published: the marker never existed.
+	// Nothing was published: the marker never existed. The crash happened
+	// *after* the committed seed and its read-back, so the rows are on
+	// disk — a crash any earlier would leave nothing to recover from and
+	// nothing worth preserving.
 	let generation = generation_dir(&root);
 	assert!(
 		!generation.join("published").exists(),
 		"a crashed build leaves no published marker"
+	);
+	let committed = count_events_in_db(&root)?;
+	assert!(
+		committed > 0,
+		"the deliberate crash happened after the committed seed: {committed} rows are on disk"
 	);
 
 	// The next image recovers: the unpublished state is rebuilt only
@@ -616,6 +764,7 @@ fn a_crash_during_a_build_publishes_nothing_and_the_next_image_recovers() {
 	);
 
 	recovery.terminate_within(SIGTERM_BUDGET);
+	Ok(())
 }
 
 // ─── (8) failed initialization ───────────────────────────────────────
@@ -825,7 +974,152 @@ fn file_hash(path: &Path) -> [u8; 32] {
 	sha2::Sha256::digest(&bytes).into()
 }
 
+// ─── (10b) a corrupt published marker ────────────────────────────────
+
+/// A published generation whose marker cannot be read back — truncated
+/// JSON here — is a fail-closed fault: the process stays unready and
+/// reports it, and no database, credential, or marker byte is touched.
+/// Only a genuinely absent marker permits the unpublished build path.
+#[test]
+fn a_corrupt_published_marker_fails_closed_without_touching_the_generation() -> Result<()> {
+	let root = volume();
+	let clock = root.join("clock");
+	set_clock(&clock, noon(0));
+
+	let port = free_port();
+	let mut server = spawn(&root, port, &clock_hooks(&clock));
+	wait_ready(&mut server, READY);
+	server.terminate_within(SIGTERM_BUDGET);
+
+	let generation = generation_dir(&root);
+	let marker_path = generation.join("published");
+	let intact = std::fs::read(&marker_path)?;
+	let truncated = intact[..intact.len() / 2].to_vec();
+	std::fs::write(&marker_path, &truncated)?;
+
+	let state = [
+		"site.sqlite3",
+		"analytics.sqlite3",
+		"console.sqlite3",
+		"secrets.json",
+	];
+	let before: Vec<(&str, [u8; 32])> = state
+		.iter()
+		.map(|name| (*name, file_hash(&generation.join(name))))
+		.collect();
+
+	let mut refused = spawn(&root, free_port(), &clock_hooks(&clock));
+
+	// Long enough that a rebuild — the old behavior — would have served.
+	// This process must keep the fallback instead, through at least one
+	// bounded re-exec retry.
+	let deadline = std::time::Instant::now() + Duration::from_secs(70);
+	loop {
+		assert!(refused.alive(), "the process keeps the fallback");
+		assert_ne!(
+			get(refused.port, SITE_HOST, "/readyz").0,
+			200,
+			"a corrupt marker must never serve, and never rebuild over the published generation"
+		);
+		if std::time::Instant::now() > deadline {
+			break;
+		}
+		std::thread::sleep(Duration::from_millis(250));
+	}
+	let stderr = support::stderr_of(&mut refused);
+	assert!(
+		stderr.contains("published") || stderr.contains("marker"),
+		"the refusal names the marker: {stderr}"
+	);
+
+	for (name, hash) in before {
+		assert_eq!(
+			file_hash(&generation.join(name)),
+			hash,
+			"{name} is byte-identical after the refusal"
+		);
+	}
+	assert_eq!(
+		std::fs::read(&marker_path)?,
+		truncated,
+		"nothing rewrote or removed the corrupt marker"
+	);
+	Ok(())
+}
+
 // ─── (11) cleanup and budget ─────────────────────────────────────────
+
+/// Retention recognizes a published generation structurally — a marker
+/// that names its own directory with seed evidence — regardless of the
+/// format or fingerprint this binary serves. A recent foreign-format
+/// generation is the same-day rollback target after a format bump, so it
+/// survives collection with no live holder; a marker that cannot be read
+/// is never a deletion reason; only genuinely expired published
+/// generations and genuinely unpublished leftovers are collected.
+#[test]
+fn collection_keeps_recent_published_generations_and_never_deletes_what_it_cannot_read()
+-> Result<()> {
+	let root = volume();
+	let clock = root.join("clock");
+	set_clock(&clock, noon(0));
+
+	// Yesterday in a foreign format: published, recent, unheld.
+	let foreign_name = format!("{}.f2", day_before(1));
+	let foreign = plant_generation(&root, &foreign_name, false);
+	let foreign_marker = serde_json::to_vec_pretty(&demo_service::marker::Published {
+		format: 2,
+		fingerprint: "0".repeat(64),
+		day: day_before(1),
+		seed_events: 900,
+	})?;
+	std::fs::write(foreign.join("published"), &foreign_marker)?;
+
+	// A recent generation of this format whose marker is truncated:
+	// unreadable means kept, counted, and reported — never deleted.
+	let corrupt_name = format!("{}.f1", day_before(1));
+	let corrupt = plant_generation(&root, &corrupt_name, false);
+	let truncated_marker = b"{\"format\": 1, \"fingerprint\": \"aa".to_vec();
+	std::fs::write(corrupt.join("published"), &truncated_marker)?;
+
+	// An expired published generation of this format and an unpublished
+	// leftover: both genuinely collectable.
+	plant_generation(&root, &format!("{}.f1", day_before(2)), true);
+	plant_generation(
+		&root,
+		&format!("{}.building-leftover", day_before(2)),
+		false,
+	);
+
+	let mut server = spawn(&root, free_port(), &clock_hooks(&clock));
+	wait_ready(&mut server, READY);
+
+	let names = generation_names(&root);
+	assert!(
+		names.contains(&foreign_name),
+		"the foreign-format rollback target survives collection: {names:?}"
+	);
+	assert!(
+		names.contains(&corrupt_name),
+		"the unreadable marker survives collection: {names:?}"
+	);
+	assert!(
+		!names.iter().any(|name| name.starts_with(&day_before(2))),
+		"the expired published generation and the leftover are collected: {names:?}"
+	);
+	assert_eq!(
+		std::fs::read(foreign.join("published"))?,
+		foreign_marker,
+		"the foreign marker is untouched"
+	);
+	assert_eq!(
+		std::fs::read(corrupt.join("published"))?,
+		truncated_marker,
+		"the truncated marker is untouched"
+	);
+
+	server.terminate_within(SIGTERM_BUDGET);
+	Ok(())
+}
 
 #[test]
 fn cleanup_refuses_a_held_lifetime_lock_and_the_budget_fails_honestly() {

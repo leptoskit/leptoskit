@@ -217,7 +217,7 @@ expression: snapshot
     "objects": 11,
     "sql_sha256": "bbf053fc26946fc27ad5b928e6112e5c3ba51165d2d6fbd77854eb87823ff70f"
   },
-  "fingerprint": "1df12a9c6e77c6aae164c3dbe642f4586a29c66d29077d16dea01b7b1293c673",
+  "fingerprint": "33ba54677b1b1c2a114a11a98d63454894e5b7535dc17c50160c9ebf11d9aea5",
   "format": 1,
   "site_sqlite_master": {
     "names": [
