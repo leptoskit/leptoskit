@@ -12,10 +12,11 @@
 //!   of exactly `POST /auth/email/send` and `POST /auth/email/verify`, and the
 //!   Auth hooks' registration.
 //!
-//! The pages stay plain, escaped, `no-store` responses: their look is a
-//! later, design-owned task. Everything a visitor can reach is tested
-//! through the real routers, and no response carries a generation key,
-//! the analytics token, the control key, or a client secret.
+//! The pages are [`crate::pages`]: real leptoskit trees, built here from
+//! what the visitor's pass and session say, and always `no-store`.
+//! Everything a visitor can reach is tested through the real routers, and
+//! no response carries a generation key, the analytics token, the control
+//! key, or a client secret.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -25,6 +26,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::ConnectInfo;
+use axum::extract::RawQuery;
 use axum::extract::Request;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -47,8 +49,10 @@ use leptoskit_idp::SigningAlgorithm;
 use tower::ServiceExt as _;
 
 use crate::inbox::DemoInbox;
+use crate::pages;
 use crate::return_to;
 use crate::visitors;
+use crate::visitors::DemoPerson;
 use crate::visitors::MintError;
 use crate::visitors::MintOutcome;
 use crate::visitors::PassState;
@@ -58,10 +62,12 @@ use crate::visitors::carried_cookie;
 use crate::visitors::display_tag;
 use crate::visitors::seconds_until_next_midnight;
 
-/// What the site's pages say while they are placeholders. Plain text in
-/// a plain page: visual design is a later task.
-const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Notes</title><h1>Notes</h1><p>The \
-                    public demo is preparing its first day.</p>";
+/// The faces the admin draws with, served from this site so a page never
+/// reaches another origin for them.
+const SKETCH_FONT: &[u8] =
+	include_bytes!("../../../crates/leptoskit_admin/assets/fonts/SkribbleNotoSketch-Latin.woff2");
+const MONO_FONT: &[u8] =
+	include_bytes!("../../../crates/leptoskit_admin/assets/fonts/SkribbleMonoPlayful-Latin.woff2");
 
 /// The most bytes a mint form may carry.
 const MAX_FORM_BYTES: usize = 4 * 1024;
@@ -173,6 +179,8 @@ struct Parts {
 	inbox: Arc<DemoInbox>,
 	/// The configured site origin, which a mint's Origin must equal.
 	origin: String,
+	/// The configured admin origin, which the pages link to.
+	admin_origin: String,
 	/// The request header the visitor's canonical IP arrives in, when a
 	/// deployment configured one.
 	client_ip_header: Option<String>,
@@ -205,6 +213,7 @@ pub async fn build(
 			visitors,
 			inbox,
 			origin: site_origin.to_owned(),
+			admin_origin: admin_origin.to_owned(),
 			client_ip_header: options.client_ip_header.clone(),
 		})),
 		&auth,
@@ -229,6 +238,7 @@ pub fn rebuild(
 	db: &leptoskit_db::Db,
 	keys: Keys,
 	site_origin: &str,
+	admin_origin: &str,
 	options: &SiteOptions,
 ) -> Result<Router> {
 	let inbox = Arc::new(DemoInbox::new(db.system("demo: inbox")));
@@ -241,6 +251,7 @@ pub fn rebuild(
 			visitors,
 			inbox,
 			origin: site_origin.to_owned(),
+			admin_origin: admin_origin.to_owned(),
 			client_ip_header: options.client_ip_header.clone(),
 		})),
 		&auth,
@@ -261,8 +272,8 @@ fn site_auth(
 		// The demo inbox stands in for an email app: bounded, private to
 		// the pass that opened the address, receipts recorded durably.
 		.mailer(inbox.as_ref().clone())
-		.on_sign_up::<visitors::DemoPerson>()
-		.roles::<visitors::DemoPerson>()
+		.on_sign_up::<DemoPerson>()
+		.roles::<DemoPerson>()
 		// Email is the only way in: no wallet, passkey, or password route
 		// can introduce another onboarding path, and neither dev sign-in
 		// nor the dev mailbox is ever mounted.
@@ -282,6 +293,7 @@ fn routes(shared: Shared, auth: &Auth, idp: &Idp) -> Router {
 		.route("/notes", get(notes))
 		.route("/demo/pass", post(mint_pass))
 		.route("/demo/inbox", get(demo_inbox))
+		.route("/demo/assets/{file}", get(font))
 		.with_state(shared.clone())
 		.merge(auth.router())
 		.merge(idp.router())
@@ -572,20 +584,376 @@ async fn demo_inbox(
 	(StatusCode::OK, no_store, axum::Json(body)).into_response()
 }
 
-async fn home() -> Response {
-	page()
+/// What one request's cookies and session say about the visitor, resolved
+/// once for a page.
+struct Visit {
+	/// This pass's people, Ada first; empty without a valid pass.
+	people: Vec<Held>,
+	/// The pass cookie named an earlier UTC day: the demo reset since.
+	earlier_day: bool,
+	/// A cookie the browser carried that names no pass here, so the
+	/// response clears it.
+	stale_cookie: bool,
 }
 
-async fn sign_in() -> Response {
-	page()
+/// A person the visitor's pass owns, and whether the request is signed in
+/// as them.
+struct Held {
+	person: DemoPerson,
+	signed_in: bool,
 }
 
-async fn notes() -> Response {
-	page()
+impl Held {
+	fn view(&self) -> pages::Person {
+		person_view(&self.person, self.signed_in)
+	}
 }
 
-fn page() -> Response {
-	(StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], PAGE).into_response()
+/// A person as the pages show them. Nothing here is a secret: the
+/// address is this browser's own, which only its pass can sign in to.
+fn person_view(person: &DemoPerson, signed_in: bool) -> pages::Person {
+	let tag = display_tag(&person.email);
+	pages::Person {
+		persona: person.persona.slug(),
+		name: person.persona.name(&tag),
+		tag,
+		email: person.email.as_inner().to_owned(),
+		signed_in,
+	}
+}
+
+impl Visit {
+	/// The person the request is signed in as, if any.
+	fn signed_in(&self) -> Option<&Held> {
+		self.people.iter().find(|held| held.signed_in)
+	}
+
+	/// This pass's person for a persona, if it owns one.
+	fn person(&self, persona: Persona) -> Option<&Held> {
+		self.people
+			.iter()
+			.find(|held| held.person.persona == persona)
+	}
+}
+
+/// Resolves the request's pass and, with it, which of the pass's people
+/// the session is signed in as.
+async fn visit(shared: &Parts, headers: &HeaderMap, session: Option<&SignedIn>) -> Result<Visit> {
+	let state = shared.visitors.resolve(headers).await?;
+	let carried = carried_cookie(headers, shared.visitors.cookie().name).is_some();
+
+	let (people, earlier_day) = match state {
+		PassState::Valid(pass) => {
+			let mut people = shared.visitors.people(&pass).await?;
+			// Ada first, always, so the pages never reorder.
+			people.sort_by_key(|person| person.persona != Persona::Ada);
+			let held = people
+				.into_iter()
+				.map(|person| {
+					let signed_in = matches!(
+						(person.account_id, session),
+						(Some(account), Some(session)) if account == session.account
+					);
+					Held { person, signed_in }
+				})
+				.collect();
+			(held, false)
+		}
+		PassState::EarlierDay => (Vec::new(), true),
+		PassState::Absent => (Vec::new(), false),
+	};
+
+	Ok(Visit {
+		stale_cookie: carried && people.is_empty(),
+		people,
+		earlier_day,
+	})
+}
+
+/// What every page knows: the generation's day and the server's clock,
+/// and the admin's address from configuration.
+fn page_context(shared: &Parts) -> pages::Context {
+	let host_of = |origin: &str| {
+		origin
+			.split_once("://")
+			.map_or(origin, |(_, host)| host)
+			.trim_end_matches('/')
+			.to_owned()
+	};
+
+	pages::Context {
+		day: shared.visitors.day().to_owned(),
+		now_ms: crate::clock::now_millis(),
+		site_host: host_of(&shared.origin),
+		admin_host: host_of(&shared.admin_origin),
+		admin_url: format!(
+			"{}{}/",
+			shared.admin_origin.trim_end_matches('/'),
+			leptoskit_admin::BASE
+		),
+	}
+}
+
+/// The first value of each query parameter a page reads. Unknown
+/// parameters are ignored and nothing in the query is trusted: callers
+/// validate what they use.
+struct Params(Vec<(String, String)>);
+
+impl Params {
+	fn of(query: Option<&str>) -> Self {
+		let mut seen = Vec::<(String, String)>::new();
+
+		for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+			if !seen.iter().any(|(known, _)| *known == name) {
+				seen.push((name.into_owned(), value.into_owned()));
+			}
+		}
+
+		Self(seen)
+	}
+
+	fn get(&self, name: &str) -> Option<&str> {
+		self.0
+			.iter()
+			.find(|(known, _)| known == name)
+			.map(|(_, value)| value.as_str())
+	}
+
+	/// The return target, validated: anything unusable is the fallback.
+	fn return_to(&self) -> String {
+		self.get("return_to").map_or_else(
+			|| return_to::FALLBACK.to_owned(),
+			return_to::local_return_to,
+		)
+	}
+}
+
+/// A page response: HTML, never stored, clearing a stale pass cookie when
+/// the browser carried one.
+fn html_page(body: String, clear: Option<axum::http::HeaderValue>) -> Response {
+	let mut response = (
+		StatusCode::OK,
+		[
+			(header::CONTENT_TYPE, "text/html; charset=utf-8"),
+			(header::CACHE_CONTROL, "no-store"),
+		],
+		body,
+	)
+		.into_response();
+
+	if let Some(cookie) = clear {
+		response.headers_mut().append(header::SET_COOKIE, cookie);
+	}
+
+	response
+}
+
+/// A `303` to a local path, never stored.
+fn see_other(location: &str, clear: Option<axum::http::HeaderValue>) -> Response {
+	let mut response = (
+		StatusCode::SEE_OTHER,
+		[
+			(header::LOCATION, location.to_owned()),
+			(header::CACHE_CONTROL, "no-store".to_owned()),
+		],
+		axum::body::Body::empty(),
+	)
+		.into_response();
+
+	if let Some(cookie) = clear {
+		response.headers_mut().append(header::SET_COOKIE, cookie);
+	}
+
+	response
+}
+
+/// The cookie that clears a stale pass, when this visit carried one.
+fn clearing(shared: &Parts, visit: &Visit) -> Option<axum::http::HeaderValue> {
+	(visit.stale_cookie || visit.earlier_day).then(|| shared.visitors.cookie().clear())
+}
+
+/// `GET /`: the front door.
+async fn home(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	RawQuery(query): RawQuery,
+	session: Option<SignedIn>,
+) -> Response {
+	let shared = shared.0;
+	let params = Params::of(query.as_deref());
+	let visit = match visit(&shared, &headers, session.as_ref()).await {
+		Ok(visit) => visit,
+		Err(error) => return no_store(internal_error(&error)),
+	};
+
+	let notice = if visit.earlier_day {
+		pages::Notice::NewDay
+	} else if params.get("signed_out") == Some("1")
+		&& !visit.people.is_empty()
+		&& visit.signed_in().is_none()
+	{
+		pages::Notice::SignedOut
+	} else {
+		pages::Notice::None
+	};
+
+	let door = pages::Door {
+		context: page_context(&shared),
+		return_to: params.return_to(),
+		notice,
+		people: visit.people.iter().map(Held::view).collect(),
+	};
+
+	html_page(pages::front(&door), clearing(&shared, &visit))
+}
+
+/// `GET /sign-in`: choose, or sign in as the person this pass minted.
+///
+/// A visitor who is already signed in goes straight on to their return
+/// target, except for the admin's `/oauth/authorize`: that request is
+/// asking for a fresh sign-in (`max_age`), so the page shows, and the
+/// identity provider would send the visitor straight back if it
+/// redirected.
+async fn sign_in(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	RawQuery(query): RawQuery,
+	session: Option<SignedIn>,
+) -> Response {
+	let shared = shared.0;
+	let params = Params::of(query.as_deref());
+	let visit = match visit(&shared, &headers, session.as_ref()).await {
+		Ok(visit) => visit,
+		Err(error) => return no_store(internal_error(&error)),
+	};
+
+	let target = params.return_to();
+	let oauth = target.split('?').next() == Some("/oauth/authorize");
+	let signed_in = visit.signed_in();
+
+	if signed_in.is_some() && !oauth {
+		return see_other(&target, None);
+	}
+
+	let requested = params.get("as").and_then(Persona::of_form);
+
+	// The person this page signs in: the one asked for when the pass owns
+	// them, the pass's only person when it owns just one, and otherwise
+	// the visitor chooses.
+	let chosen = match requested {
+		Some(persona) => visit.person(persona),
+		// Someone is signed in and the admin asked who is signing in: they
+		// pick, even when the pass owns one person.
+		None if signed_in.is_some() => None,
+		None if visit.people.len() == 1 => visit.people.first(),
+		None => None,
+	};
+
+	let preselect = requested
+		.or_else(|| {
+			oauth
+				.then_some(Persona::Ada)
+				.filter(|_| signed_in.is_some())
+		})
+		.map(Persona::slug);
+
+	let flow = match (oauth, signed_in) {
+		(false, _) => pages::Flow::Plain,
+		(true, None) => pages::Flow::Admin,
+		(true, Some(held)) => pages::Flow::Switch(held.view()),
+	};
+
+	let mail = chosen
+		.map(|held| mail_for(&shared, &held.person))
+		.unwrap_or_default();
+
+	let view = pages::SignIn {
+		context: page_context(&shared),
+		return_to: target,
+		flow,
+		identity: chosen.map(Held::view),
+		preselect,
+		new_day: visit.earlier_day,
+		mail,
+	};
+
+	html_page(pages::sign_in(&view), clearing(&shared, &visit))
+}
+
+/// What this process holds for one person, without the messages: how
+/// many it still has, and whether the person's latest code is
+/// unavailable here.
+fn mail_for(shared: &Parts, person: &DemoPerson) -> pages::Mail {
+	let retained = shared.inbox.messages_for(person.email.as_inner());
+	let lost = DemoInbox::unavailable(
+		person.persona,
+		person.last_receipt_id.as_deref(),
+		person.last_receipt_at,
+		&retained,
+	)
+	.and(person.last_receipt_at);
+
+	pages::Mail {
+		held: retained.len(),
+		lost_at_ms: lost.map(|at| at.timestamp_millis()),
+	}
+}
+
+/// `GET /notes`: the welcome for the account the request is signed in as.
+/// Anyone else is sent to sign in, then back here.
+async fn notes(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	session: Option<SignedIn>,
+) -> Response {
+	let shared = shared.0;
+	let visit = match visit(&shared, &headers, session.as_ref()).await {
+		Ok(visit) => visit,
+		Err(error) => return no_store(internal_error(&error)),
+	};
+
+	let Some(held) = visit.signed_in() else {
+		let location = format!(
+			"/sign-in?return_to={}",
+			return_to::encoded_query_value(return_to::FALLBACK)
+		);
+		return see_other(&location, clearing(&shared, &visit));
+	};
+
+	let welcome = pages::Welcome {
+		context: page_context(&shared),
+		person: held.view(),
+	};
+
+	html_page(pages::notes(&welcome), None)
+}
+
+/// The admin's two faces, served from this site: `GET /demo/assets/…`.
+async fn font(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+	let bytes = match file.as_str() {
+		"sketch.woff2" => SKETCH_FONT,
+		"mono.woff2" => MONO_FONT,
+		_ => return StatusCode::NOT_FOUND.into_response(),
+	};
+
+	(
+		[
+			(header::CONTENT_TYPE, "font/woff2"),
+			(header::CACHE_CONTROL, "public, max-age=86400"),
+		],
+		bytes,
+	)
+		.into_response()
+}
+
+/// Marks a response `no-store`: an error a page route produced still
+/// belongs to one visitor.
+fn no_store(mut response: Response) -> Response {
+	response.headers_mut().insert(
+		header::CACHE_CONTROL,
+		axum::http::HeaderValue::from_static("no-store"),
+	);
+	response
 }
 
 /// Whether a mint may act: a present `Origin` must equal the configured

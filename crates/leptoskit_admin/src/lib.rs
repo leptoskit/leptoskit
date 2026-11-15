@@ -58,6 +58,21 @@ use leptoskit_deploy_console::control::Service;
 /// Where the admin mounts: every page and endpoint lives under this path.
 pub const BASE: &str = "/_leptoskit/admin";
 
+/// The admin's colour custom properties as one stylesheet fragment, so a
+/// page beside the admin, such as the main site's sign-in, can wear the
+/// same paper, ink, ember, and mint without copying the values.
+///
+/// It defines every `--admin-*` property once for the light appearance on
+/// `:root`, and once for the dark one, following leptoskit's own rule: the
+/// device's `prefers-color-scheme` setting applies unless the root element
+/// carries `data-lk-appearance="light"` or `data-lk-appearance="dark"`,
+/// which wins either way. It also sets `color-scheme` to match, so native
+/// controls follow.
+///
+/// Only the custom properties are shared. The admin's component classes stay
+/// private, so they can change without breaking a page that reads the tokens.
+pub use style::tokens_css as theme_css;
+
 /// Which environment the admin acts on, shown as the pill in the top bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Environment {

@@ -38,11 +38,46 @@ The generation format is now **2** (the visitors' tables join the site schema, a
 
 One listener, three authorities, validated the same way on every request:
 
-- the **site origin** — the front door, visitor passes and inbox, real email-code sign-in, the identity provider, and `/demo/generation`;
+- the **site origin** — the front door, sign-in with the demo inbox, Notes' welcome, visitor passes and inbox, real email-code sign-in, the identity provider, the admin's two fonts at `/demo/assets/`, and `/demo/generation`;
 - the **admin origin** — the deploy console's admin, and `/demo/generation`;
 - the **bind authority** — only `/healthz`, `/readyz`, and the token-authenticated analytics service prefix. No pages, no admin.
 
-Every other `Host` is refused with 421, before a generation exists and after — including a request whose `Host` header is missing, duplicated, or malformed: exactly one usable `Host` header names the authority, and it is never resolved by silently taking one of several values. `/healthz` and `/readyz` answer on all three authorities. Before a generation is ready, ordinary pages answer 503 with `Retry-After: 5` and `/readyz` names the failing `generation` check.
+Every other `Host` is refused with 421, before a generation exists and after — including a request whose `Host` header is missing, duplicated, or malformed: exactly one usable `Host` header names the authority, and it is never resolved by silently taking one of several values. `/healthz` and `/readyz` answer on all three authorities. Before a generation is ready, ordinary pages answer 503 with `Retry-After: 5` and a styled "Notes is opening today's demo" page, and `/readyz` names the failing `generation` check. That page has no script, no outside request, and a `<meta http-equiv="refresh" content="5">`, so it works with scripts off and checks again by itself; it says only that the demo is not ready, because a release, a failed start, and midnight look the same from there.
+
+## The visitor pages
+
+The pages are real leptoskit component trees, written as `view!` markup in `examples/demo_service/src/pages/` and rendered by the web renderer in the admin's paper, ink, ember, and mint: `leptoskit_admin::theme_css()` shares the admin's `--admin-*` custom properties (light, dark, and `data-lk-appearance`), and nothing else of its styles. `assets/demo.css` holds what the class compiler cannot say, and `assets/demo.js` the behaviour; both are inlined into each page, so a page makes no request but the site's own `/demo/generation`, `/demo/inbox`, Auth, and mint routes. No page loads a font, script, or image from another origin, and the two faces the admin draws with are served from `/demo/assets/`.
+
+| Route                | What it is                                                                                                                                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /`              | The front door. First visit, a pass from an earlier day (cleared, explained), welcome back, and signed out (`?signed_out=1`). Mint goes through a same-origin `fetch` to `POST /demo/pass`, and a plain `<noscript>` form posts the same fields. |
+| `GET /sign-in`       | Choose, or sign in as the person this pass minted (`as=ada\|grace`). Signed in already and not asking for the admin: `303` to the validated `return_to`. For `/oauth/authorize` it always shows, because that request asks for a fresh sign-in.  |
+| `GET /notes`         | The welcome for the account the request is really signed in as, and the door to the admin. Anyone else: `303` to sign-in, then back.                                                                                                             |
+| `GET /demo/assets/*` | `sketch.woff2` and `mono.woff2`, the admin's faces. Nothing else.                                                                                                                                                                                |
+
+Every page response is `no-store`. `return_to` is validated by `return_to.rs`, carried to the script as JSON in `#demo-state` (serialized with `<`, `>`, `&`, and the line separators escaped), and followed with `location.assign` only after a verify. Dynamic text reaches the DOM through `textContent`, never as markup.
+
+**Sign-in** drives Auth's real routes and reads the private inbox only after a send or on **Check for mail**, plus once on load when the server says this process holds or lost mail for the person. The code appears only in the demo inbox; **Fill in code** copies it into the form, and nothing in the page's HTML, the pass gate's refusals, or the script invents one. The states are: choose, ready, sent, lost (the person's latest receipt names a code this process does not hold, shown with the time it was sent and without claiming why), a wrong code (`invalid_code`, announced and tied to the field), rate limited (`Retry-After` becomes a countdown), a pass that is gone (`not_your_identity`), and a busy or restarting server. A send disables itself for 30 seconds on top of Auth's own limit. The station rail is a tab list: one tab stop, arrows, Home, End.
+
+**Notes** welcomes the person the session names and links to the admin address built from `DEMO_ADMIN_ORIGIN` (`<origin>/_leptoskit/admin/`), in a new tab. Grace follows the real refusal; **Switch account** there goes through the identity provider's `prompt=login`, and the site's sign-in shows the choice with Ada selected. **Switch to Ada** from the account menu signs out through Auth's `POST /auth/sign-out` and mints the other person. Writing notes, the pretend checkout, and visitor analytics are not built, and the page says so.
+
+**The band and the countdown.** Every page carries the demo band: the reset time, "shared with everyone today", "infrastructure is simulated", and **What's real?**. The countdown is the generation's `day` plus the server's clock at render (`now_ms`, which honours the debug clock), counted forward in the browser, so a visitor with a wrong clock still sees the right midnight. It turns to a warning inside ten minutes.
+
+**The new-day dialog.** Each page holds one `EventSource` on `/demo/generation`. A failure closes it and reconnects after 2 s, doubling to 30 s. Only an event naming a different day than the page was made for opens the focus-managed alert dialog (the rest of the page is `inert`, Tab stays inside, Escape closes and returns focus); a 503 or a dropped stream proves nothing.
+
+### Proving the pages in a browser
+
+`examples/demo_service/tests/visitor_pages.mjs` drives the real debug service in headless Chrome through the repository's `browser.mjs` harness; Rust rendering and route proofs are in `tests/signin.rs` and the `pages` unit tests.
+
+```sh
+cargo build -p demo_service
+DEMO_SERVICE_BIN=<target dir>/debug/demo_service \
+DEMO_SHOTS=/some/scratch/dir \
+deno test --allow-env --allow-read --allow-net --allow-run --allow-write \
+  examples/demo_service/tests/visitor_pages.mjs
+```
+
+It needs a debug build, because the debug clock and failure hooks (`DEMO_TEST_CLOCK`, `DEMO_TEST_CLOCK_TICK_MS`, `DEMO_TEST_FAIL_INIT`, `DEMO_TEST_RETRY_MS`) are compiled out of release builds. `DEMO_SHOTS` also saves screenshots at 1280 and 400 px in light and dark, with an `index.html` gallery; keep them out of Git. The identity provider accepts plain-HTTP redirects only to `localhost`, `127.0.0.1`, and `[::1]`, so the harness serves the site at `localhost:<port>`, the private bind at `127.0.0.1:<port>`, and the admin at `127.0.0.1:<other port>`, a byte forwarder to the same listener; `admin.localhost` is refused.
 
 ## The daily generation
 
@@ -76,9 +111,8 @@ After a failed initialization the process never retries inside the same image �
 
 ## Deliberately not here yet
 
-- **The pages are placeholders.** The front door, sign-in, and Notes answer plain, escaped, `no-store` HTML; the visual design, the inbox drawn as the page's underside, and the recovery states are the design-owned task that builds on these route and JSON contracts.
-- **No notes, checkout, or analytics emission.** The visitors' tables have no notes table or event counters, the site emits no analytics at all — the synthetic addresses never reach shared analytics — and the note/checkout routes are later work.
-- **No real browser overlap proof.** The authenticated admin SSE overlap (a real browser crossing a process handover) and the styled rebuild fallback remain their own tasks; so do Linux/systemd acceptance and the edge deployment.
+- **No notes, checkout, or analytics emission.** The visitors' tables have no notes table or event counters, the site emits no analytics at all — the synthetic addresses never reach shared analytics — and the note/checkout routes are later work. Notes' page is a welcome and a door to the admin, and says that writing notes comes next.
+- **No real browser overlap proof.** The authenticated admin SSE overlap (a real browser crossing a process handover) remains its own task, as do Linux/systemd acceptance and the edge deployment. The browser proofs cover the site's pages, a same-day restart, a next day, and the build-time page on macOS, in Chrome only.
 - **No cross-process live broadcasts.** Operation progress SSE is process-local. During an overlap, an operation that finishes in the old process is seen by a candidate's viewer through reconnection: the runtime ends successful authenticated operation streams after 15 seconds, so the browser's EventSource reconnects into the durable terminal snapshot the shared store holds.
 - **No cloud provider, no real executor.** Operations run against the simulated executor only; nothing contacts a provider.
 

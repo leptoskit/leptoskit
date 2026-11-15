@@ -231,6 +231,7 @@ async fn open(
 		&site_db,
 		site_keys(&secrets),
 		&config.site_origin,
+		&config.admin_origin,
 		&site_options(config, marker.day.as_str()),
 	)
 	.context("starting the site")?;

@@ -395,7 +395,8 @@ impl SiteHarness {
 		))
 		.await
 		.expect("the second handle opens");
-		site::rebuild(&db, self.keys.clone(), SITE_ORIGIN, options).expect("the site reopens")
+		site::rebuild(&db, self.keys.clone(), SITE_ORIGIN, ADMIN_ORIGIN, options)
+			.expect("the site reopens")
 	}
 
 	/// A system handle for proofs that read what visitors must not.
@@ -1629,5 +1630,285 @@ async fn a_new_day_clears_the_pass_and_refuses_old_sessions() -> Result<()> {
 	// Dropping the generations ends this test's shared lifetime locks.
 	drop(first_day);
 	drop(next_day);
+	Ok(())
+}
+
+/// The page's own data, as its script reads it: the JSON in `#demo-state`.
+fn page_state(html: &str) -> Value {
+	let marker = "id=\"demo-state\">";
+	let start = html.find(marker).expect("the page carries its state") + marker.len();
+	let end = start + html[start..].find("</script>").expect("the state closes");
+	serde_json::from_str(&html[start..end]).expect("the state is JSON")
+}
+
+/// Whether a response is HTML that no cache may keep.
+fn is_private_html(response: &axum::response::Response) -> bool {
+	let header = |name| {
+		response
+			.headers()
+			.get(name)
+			.and_then(|value| value.to_str().ok())
+			.unwrap_or_default()
+			.to_owned()
+	};
+	header("content-type").starts_with("text/html") && header("cache-control").contains("no-store")
+}
+
+/// The front door and sign-in pages are real, escaped, `no-store` pages
+/// that carry only this browser's own people, and a return target is
+/// always a local path.
+#[tokio::test]
+async fn the_front_door_and_sign_in_render_what_the_pass_says() -> Result<()> {
+	let harness = SiteHarness::new().await;
+	let built = harness.build(&options(), ADMIN_ORIGIN).await;
+	let mut ada = Browser::default();
+
+	// A first visit: the choice, the real address of both hosts, and a
+	// local return target, however hostile the query.
+	let door = ada.get(&built.router, SITE_ORIGIN, "/").await;
+	assert_eq!(door.status(), StatusCode::OK);
+	assert!(is_private_html(&door), "the front door is never stored");
+	assert!(
+		door.headers().get(header::SET_COOKIE).is_none(),
+		"a first visit sets and clears nothing"
+	);
+	let html = text_body(door).await;
+	assert!(html.contains("Be Ada or Grace for a day."));
+	assert!(html.contains("Continue as Ada") && html.contains("Continue as Grace"));
+	assert!(
+		html.contains("action=\"/demo/pass\""),
+		"a visitor without scripts can still choose"
+	);
+	assert_eq!(page_state(&html)["people"], json!([]));
+	assert_eq!(page_state(&html)["day"], harness.day);
+
+	let hostile = ada
+		.get(
+			&built.router,
+			SITE_ORIGIN,
+			"/?return_to=%2F%2Fevil.example%2Fx",
+		)
+		.await;
+	assert_eq!(
+		page_state(&text_body(hostile).await)["returnTo"],
+		"/notes",
+		"a foreign return target becomes the fallback"
+	);
+
+	// A hostile-looking but local target cannot end the page's script.
+	let nasty = "/oauth/authorize?x=</script><script>alert(1)</script>";
+	let escaped = ada
+		.get(
+			&built.router,
+			SITE_ORIGIN,
+			&format!(
+				"/sign-in?return_to={}",
+				url::form_urlencoded::byte_serialize(nasty.as_bytes()).collect::<String>()
+			),
+		)
+		.await;
+	let html = text_body(escaped).await;
+	assert!(
+		!html.contains("</script><script>alert"),
+		"the target stays inside its JSON"
+	);
+	assert_eq!(page_state(&html)["returnTo"], nasty);
+
+	// Minting leads to a sign-in for this browser's own Ada.
+	let minted = mint(&mut ada, &built.router, "ada").await;
+	let target = location(&minted);
+	assert!(target.starts_with("/sign-in?as=ada&return_to="), "{target}");
+	let page = ada.get(&built.router, SITE_ORIGIN, &target).await;
+	assert!(is_private_html(&page));
+	let html = text_body(page).await;
+	let state = page_state(&html);
+	assert_eq!(state["identity"]["persona"], "ada");
+	assert_eq!(state["flow"], "plain");
+	assert_eq!(state["mail"]["held"], 0);
+	assert!(html.contains("data-state=\"ready\""), "nothing sent yet");
+	let address = state["identity"]["email"].as_str().expect("an address");
+	assert!(html.contains(address), "the visitor's own address shows");
+	assert!(
+		!html.contains("sign-in code"),
+		"no code or subject is ever in the page"
+	);
+
+	// A second browser's pass shows nothing of the first.
+	let mut grace = Browser::default();
+	mint(&mut grace, &built.router, "grace").await;
+	let theirs = text_body(
+		ada.get(&built.router, SITE_ORIGIN, "/sign-in?as=grace")
+			.await,
+	)
+	.await;
+	assert_eq!(
+		page_state(&theirs)["identity"],
+		Value::Null,
+		"Ada's pass owns no Grace, so she is asked to choose"
+	);
+	assert!(theirs.contains("data-state=\"choose\""));
+	assert!(
+		!theirs.contains(
+			&state["identity"]["email"]
+				.as_str()
+				.expect("addr")
+				.replace("ada", "grace")
+		)
+	);
+
+	// The fonts the pages ask for are served from the site.
+	let font = ada
+		.get(&built.router, SITE_ORIGIN, "/demo/assets/sketch.woff2")
+		.await;
+	assert_eq!(font.status(), StatusCode::OK);
+	assert_eq!(font.headers()[header::CONTENT_TYPE], "font/woff2");
+	let unknown = ada
+		.get(&built.router, SITE_ORIGIN, "/demo/assets/anything.js")
+		.await;
+	assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+	Ok(())
+}
+
+/// Notes answers the account the request is signed in as, names the real
+/// admin, and sends everyone else to sign in.
+#[tokio::test]
+async fn notes_welcomes_the_signed_in_account_and_sends_others_to_sign_in() -> Result<()> {
+	let harness = SiteHarness::new().await;
+	let built = harness
+		.build(&options(), "https://admin.notes.example")
+		.await;
+	let mut visitor = Browser::default();
+
+	// Anonymous: sign in, then back to Notes.
+	let anonymous = visitor.get(&built.router, SITE_ORIGIN, "/notes").await;
+	assert_eq!(anonymous.status(), StatusCode::SEE_OTHER);
+	assert_eq!(location(&anonymous), "/sign-in?return_to=%2Fnotes");
+
+	// A pass alone is not a session.
+	mint(&mut visitor, &built.router, "grace").await;
+	let passed = visitor.get(&built.router, SITE_ORIGIN, "/notes").await;
+	assert_eq!(
+		passed.status(),
+		StatusCode::SEE_OTHER,
+		"a pass is not a session"
+	);
+
+	sign_in_unclaimed(&mut visitor, &built.router).await;
+	let notes = visitor.get(&built.router, SITE_ORIGIN, "/notes").await;
+	assert_eq!(notes.status(), StatusCode::OK);
+	assert!(is_private_html(&notes));
+	let html = text_body(notes).await;
+	assert!(html.contains("Welcome, Grace."), "the real persona");
+	assert!(
+		html.contains("https://admin.notes.example/_leptoskit/admin/"),
+		"the admin's address comes from configuration"
+	);
+	assert!(html.contains("Writing notes comes in the next slice"));
+	assert!(
+		html.contains("Resets in"),
+		"every Notes page discloses the reset"
+	);
+	assert!(html.contains("Infrastructure is simulated"));
+	assert!(
+		!html.contains("localhost:48") && !html.contains(":4801"),
+		"no fixed port or domain"
+	);
+
+	// Signed in already: sign-in goes straight on, except the admin's
+	// request for a fresh sign-in, which shows the page.
+	let again = visitor.get(&built.router, SITE_ORIGIN, "/sign-in").await;
+	assert_eq!(again.status(), StatusCode::SEE_OTHER);
+	assert_eq!(location(&again), "/notes");
+	let oauth = visitor
+		.get(
+			&built.router,
+			SITE_ORIGIN,
+			"/sign-in?return_to=%2Foauth%2Fauthorize%3Fclient_id%3Dx",
+		)
+		.await;
+	assert_eq!(oauth.status(), StatusCode::OK);
+	let html = text_body(oauth).await;
+	let state = page_state(&html);
+	assert_eq!(state["flow"], "switch");
+	assert!(
+		html.contains("data-state=\"choose\""),
+		"the visitor picks again"
+	);
+	assert_eq!(state["preselect"], "ada");
+
+	// Signing out leaves the pass, so the front door welcomes them back.
+	let out = visitor
+		.post_json(&built.router, SITE_ORIGIN, "/auth/sign-out", json!({}))
+		.await;
+	assert_eq!(out.status(), StatusCode::NO_CONTENT);
+	let door = visitor
+		.get(&built.router, SITE_ORIGIN, "/?signed_out=1")
+		.await;
+	let html = text_body(door).await;
+	assert!(html.contains("Signed out of Notes."));
+	assert!(html.contains("Sign in as Grace"));
+	Ok(())
+}
+
+/// A pass from an earlier day is cleared and explained, and mail this
+/// process does not hold is named lost without any code in the page.
+#[tokio::test]
+async fn stale_passes_and_lost_mail_are_named_without_leaking_codes() -> Result<()> {
+	let harness = SiteHarness::new().await;
+	let built = harness.build(&options(), ADMIN_ORIGIN).await;
+	let mut stale = Browser::default();
+	stale
+		.jars
+		.entry(SITE_ORIGIN.to_owned())
+		.or_default()
+		.insert("demo-pass".to_owned(), "2020-01-01.deadbeef".to_owned());
+	let door = stale.get(&built.router, SITE_ORIGIN, "/").await;
+	assert!(
+		door.headers()
+			.get_all(header::SET_COOKIE)
+			.iter()
+			.any(|value| value.to_str().is_ok_and(|text| text.contains("Max-Age=0"))),
+		"the earlier day's cookie is cleared"
+	);
+	let html = text_body(door).await;
+	assert!(html.contains("A new demo day started at 00:00 UTC."));
+	assert_eq!(page_state(&html)["notice"], "new-day");
+
+	let mut ada = Browser::default();
+	mint(&mut ada, &built.router, "ada").await;
+	let view = inbox(&mut ada, &built.router).await;
+	let address = view["people"][0]["email"]
+		.as_str()
+		.expect("email")
+		.to_owned();
+	assert_eq!(
+		send_code(&mut ada, &built.router, &address).await.status(),
+		StatusCode::NO_CONTENT
+	);
+	let held = inbox(&mut ada, &built.router).await;
+	let code = code_of(held["messages"][0]["subject"].as_str().expect("subject"));
+
+	// The sending process still holds it: the page says how many, not what.
+	let here = text_body(ada.get(&built.router, SITE_ORIGIN, "/sign-in?as=ada").await).await;
+	assert_eq!(page_state(&here)["mail"]["held"], 1);
+	assert!(here.contains("data-state=\"sent\""));
+	assert!(!here.contains(&code), "the code never rides in the page");
+
+	// Another process does not: the page names the code lost, and still
+	// shows no code.
+	let pass = ada.pass(SITE_ORIGIN).expect("the pass");
+	let reopened = harness.second_instance(&options()).await;
+	let mut again = Browser::default();
+	again
+		.jars
+		.entry(SITE_ORIGIN.to_owned())
+		.or_default()
+		.insert("demo-pass".to_owned(), pass);
+	let lost = text_body(again.get(&reopened, SITE_ORIGIN, "/sign-in?as=ada").await).await;
+	let data = page_state(&lost);
+	assert!(lost.contains("data-state=\"lost\""));
+	assert!(data["mail"]["lostAtMs"].is_i64(), "the loss has a time");
+	assert_eq!(data["mail"]["held"], 0);
+	assert!(!lost.contains(&code));
 	Ok(())
 }

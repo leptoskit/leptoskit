@@ -22,6 +22,8 @@ chrono = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
+leptos = { workspace = true, features = ["ssr"] }
+leptoskit = { workspace = true, features = ["web"] }
 leptoskit_admin = { workspace = true }
 leptoskit_analytics = { workspace = true, features = ["derive", "server-client", "service"] }
 leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }

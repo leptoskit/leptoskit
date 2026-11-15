@@ -2264,6 +2264,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "insta",
+ "leptos",
+ "leptoskit",
  "leptoskit_admin",
  "leptoskit_analytics",
  "leptoskit_auth",

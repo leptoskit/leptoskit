@@ -13,8 +13,9 @@
 //!
 //! Before initialization commits, every authority gets the fallback:
 //! `/healthz` answers 200, `/readyz` names the failing generation check,
-//! and ordinary pages answer 503 with `Retry-After`, so the edge never
-//! routes a visitor into a half-open generation. Once the generation is
+//! and ordinary pages answer 503 with `Retry-After` and a styled "opening
+//! today's demo" page that works without scripts, so the edge never routes
+//! a visitor into a half-open generation. Once the generation is
 //! set — exactly once, into a `OnceLock` — those same authorities dispatch
 //! into its routers.
 
@@ -30,6 +31,7 @@ use tower::ServiceExt as _;
 use crate::config::Authority;
 use crate::generation::Generation;
 use crate::marker::GENERATION_FORMAT;
+use crate::pages;
 
 /// The path of the generation event stream, served on the public hosts
 /// only.
@@ -112,18 +114,30 @@ fn fallback(path: &str) -> Response {
 	match path {
 		"/healthz" => (StatusCode::OK, "ok").into_response(),
 		"/readyz" => readiness_report(),
-		_ => {
-			let mut response = (
-				StatusCode::SERVICE_UNAVAILABLE,
-				"The demo is resetting. Back in a few seconds.",
-			)
-				.into_response();
-			response
-				.headers_mut()
-				.insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
-			response
-		}
+		_ => opening_page(),
 	}
+}
+
+/// What a visitor sees while the generation builds: a styled page that
+/// works without scripts, asks for nothing else, and checks again by
+/// itself. The status and `Retry-After` stay what a proxy or crawler
+/// reads; the page says only that the demo is not ready, never that a
+/// reset happened.
+fn opening_page() -> Response {
+	let mut response = (
+		StatusCode::SERVICE_UNAVAILABLE,
+		[
+			(header::CONTENT_TYPE, "text/html; charset=utf-8"),
+			(header::CACHE_CONTROL, "no-store"),
+		],
+		pages::opening(),
+	)
+		.into_response();
+	response.headers_mut().insert(
+		header::RETRY_AFTER,
+		HeaderValue::from(u64::from(pages::RETRY_SECONDS)),
+	);
+	response
 }
 
 /// The readiness report the fallback serves: the generation check fails
@@ -270,5 +284,41 @@ mod tests {
 				"{host:?} names no authority"
 			);
 		}
+	}
+
+	/// While no generation exists, a page is a styled 503 that checks
+	/// again by itself and runs no script, and the health routes keep
+	/// their meaning.
+	#[tokio::test]
+	async fn the_fallback_page_is_styled_safe_and_honest() {
+		let response = fallback("/");
+		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+		assert_eq!(response.headers()[header::RETRY_AFTER], "5");
+		assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+		assert!(
+			response.headers()[header::CONTENT_TYPE]
+				.to_str()
+				.expect("a content type")
+				.starts_with("text/html")
+		);
+		let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+			.await
+			.expect("a body");
+		let html = String::from_utf8_lossy(&body);
+		assert!(
+			html.contains("Notes is opening today&#39;s demo.")
+				|| html.contains("Notes is opening today's demo.")
+		);
+		assert!(html.contains("http-equiv=\"refresh\" content=\"5\""));
+		assert!(!html.contains("<script"), "the page needs no script");
+		assert!(!html.contains("reset happened"), "it never claims a reset");
+
+		assert_eq!(fallback("/healthz").status(), StatusCode::OK);
+		let readiness = fallback("/readyz");
+		assert_eq!(readiness.status(), StatusCode::SERVICE_UNAVAILABLE);
+		assert_eq!(
+			readiness.headers()[header::CONTENT_TYPE],
+			"application/json"
+		);
 	}
 }
