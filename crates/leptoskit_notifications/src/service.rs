@@ -15,8 +15,6 @@ pub mod config;
 pub mod push;
 pub mod transport;
 
-use std::sync::Arc;
-
 use leptoskit_axum::axum::Router;
 use leptoskit_db::Db;
 use leptoskit_rpc as rpc;
@@ -430,7 +428,16 @@ pub fn routes(db: Db, origin: Option<&str>) -> (Router, rpc::server::Live) {
 /// is the framework's default.
 #[must_use]
 pub fn workers(db: Db) -> rpc::server::Jobs {
+	workers_with_push(db, push::Push { runtime: None })
+}
+
+/// Workers sharing the same push configuration as [`routes_with_push`].
+/// Rebuild the runtime at startup; pending jobs use this allocation on
+/// recovery.
+#[must_use]
+pub fn workers_with_push(db: Db, push: push::Push) -> rpc::server::Jobs {
 	rpc::server::Jobs::new(db)
+		.state(push)
 		.service(Some(SERVICE))
 		.poll(std::time::Duration::from_secs(1))
 		.retention(Some(std::time::Duration::from_hours(24)))
@@ -458,20 +465,14 @@ pub fn routes_with(
 	(router, live)
 }
 
-/// [`routes_with`], carrying `push`'s configuration in every request's
-/// context: the transports its enrollments check against, and the
-/// instance key its jobs name back. This is what a service with push
-/// configured serves; [`routes`] serves one without. The instance key
-/// should be stable across restarts of the same service — its database
-/// URL is the natural one — so a queued push job finds its transports
-/// again after one.
+/// [`routes_with`], carrying push configuration in every request.
+/// Pass a clone of the same configuration to [`workers_with_push`].
 pub fn routes_with_push(
 	db: Db,
 	origin: Option<&str>,
 	callers: impl rpc::server::Identify,
 	push: push::Push,
 ) -> (Router, rpc::server::Live) {
-	push::register_instance(Arc::clone(&push.instance), push.runtime.clone());
 	routes_with(db, origin, WithPush::new(callers, push))
 }
 

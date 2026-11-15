@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use leptoskit_db::Actor;
+use leptoskit_db::Context;
 use leptoskit_db::Db;
 use leptoskit_db::Id;
 use leptoskit_db::Json;
@@ -113,6 +114,7 @@ impl RunState {
 /// What a job's body receives: a database handle that bypasses policies,
 /// who enqueued the job, and the tools to run it in steps.
 pub struct JobCx {
+	worker_state: Context,
 	db: Db,
 	identity: Identity,
 	id: String,
@@ -132,6 +134,7 @@ impl JobCx {
 	pub fn new(db: Db, identity: Identity, id: String, attempt: u32) -> Self {
 		let owner = identity.context.actor();
 		Self {
+			worker_state: Context::new(),
 			db,
 			identity,
 			id,
@@ -150,8 +153,10 @@ impl JobCx {
 		attempt: u32,
 		owner: Option<Actor>,
 		state: Arc<RunState>,
+		worker_state: Context,
 	) -> Self {
 		Self {
+			worker_state,
 			db,
 			identity,
 			id: row.to_string(),
@@ -160,6 +165,13 @@ impl JobCx {
 			owner,
 			state,
 		}
+	}
+
+	/// Process-local state configured with [`super::Jobs::state`].
+	/// This is separate from owner identity and database authorization and is
+	/// absent when running a job directly outside the worker.
+	pub fn state<T: Send + Sync + 'static>(&self) -> Option<&T> {
+		self.worker_state.get::<T>()
 	}
 
 	/// The database. It bypasses policies, since nobody's request is

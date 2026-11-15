@@ -425,7 +425,6 @@ async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
 		Some(ORIGIN),
 		callers,
 		push::Push {
-			instance: format!("postgres-race-{}", Uuid::now_v7()).into(),
 			runtime: Some(std::sync::Arc::new(
 				PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
 					.expect("the runtime builds"),

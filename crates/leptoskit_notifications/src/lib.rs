@@ -534,8 +534,8 @@ pub async fn send(
 	// A send on a server with push configured fans its deliveries out;
 	// on one without, or from a route that carries no configuration, the
 	// inbox is the whole send.
-	if let Ok(push) = service::push::Push::of(cx) {
-		service::push::schedule(cx, push, &idempotency_key, &spec, &fanout).await?;
+	if service::push::Push::of(cx).is_ok() {
+		service::push::schedule(cx, &idempotency_key, &spec, &fanout).await?;
 	}
 
 	Ok(SendResult {

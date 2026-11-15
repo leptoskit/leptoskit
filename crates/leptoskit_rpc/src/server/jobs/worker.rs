@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use leptoskit_db::Actor;
 use leptoskit_db::Connection;
+use leptoskit_db::Context;
 use leptoskit_db::Db;
 use leptoskit_db::DbError;
 use leptoskit_db::Json;
@@ -98,6 +99,7 @@ impl Faults {
 /// How workers claim and run jobs.
 #[derive(Clone)]
 pub(crate) struct Settings {
+	pub state: Context,
 	/// How long a worker holds a job it isn't heard from.
 	pub lease: Duration,
 	/// Each queue's concurrency, across every instance; queues not named
@@ -115,6 +117,7 @@ pub(crate) struct Settings {
 impl Settings {
 	pub(crate) fn new(clock: Clock) -> Self {
 		Self {
+			state: Context::new(),
 			lease: Duration::from_secs(60),
 			queues: Arc::default(),
 			clock,
@@ -182,6 +185,18 @@ pub struct Jobs {
 }
 
 impl Jobs {
+	/// Adds process-local typed state for every attempt run by these workers.
+	///
+	/// Retrieve it with [`JobCx::state`]. Values are never persisted or merged
+	/// into the job owner's authorization context. Adding the same type
+	/// replaces its previous value. Use an `Arc` to share a runtime with
+	/// request handlers.
+	#[must_use]
+	pub fn state<T: Send + Sync + 'static>(mut self, state: T) -> Self {
+		self.settings.state = self.settings.state.with(state);
+		self
+	}
+
 	/// Workers for `db`'s jobs: four at a time, checking every five seconds
 	/// as well as whenever a job is enqueued, with a one-minute lease each,
 	/// keeping finished jobs for a week, and enqueuing `#[rpc::cron]` jobs.
@@ -778,6 +793,7 @@ async fn run_handler(registration: &'static JobRegistration, job: ClaimedJob<'_>
 		job.row.attempts,
 		job.owner,
 		Arc::clone(job.state),
+		job.settings.state.clone(),
 	);
 
 	let running = (registration.handler)(JobRun {

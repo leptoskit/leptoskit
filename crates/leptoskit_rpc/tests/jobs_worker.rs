@@ -24,6 +24,95 @@ use leptoskit_rpc::server::jobs::JobRow;
 use leptoskit_rpc::server::jobs::JobState;
 use leptoskit_rpc::testing::TestJobs;
 
+/// A process-local dependency whose lifetime is owned by the workers.
+struct WorkerRuntime(std::sync::atomic::AtomicUsize);
+
+/// Checks that typed dependencies never become authorization context.
+#[rpc::job(retries = 1)]
+pub async fn worker_typed_state(cx: &rpc::JobCx, owner: Option<String>) -> rpc::Result<()> {
+	let runtime = cx
+		.state::<std::sync::Arc<WorkerRuntime>>()
+		.expect("configured runtime");
+	assert!(cx.state::<leptoskit_db::Actor>().is_some());
+	assert!(cx.state::<rpc::server::Identity>().is_some());
+	assert_eq!(cx.owner().map(|actor| actor.uuid().to_string()), owner);
+	assert_eq!(cx.identity().context.actor(), cx.owner());
+	assert_eq!(cx.db().actor(), cx.owner());
+	assert!(
+		cx.identity()
+			.context
+			.get::<std::sync::Arc<WorkerRuntime>>()
+			.is_none()
+	);
+	assert!(!format!("{cx:?}").contains("worker-secret"));
+	runtime.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+	if cx.attempt() == 1 {
+		return Err(rpc::Error::retry("try again"));
+	}
+
+	Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_worker_state_survives_retries_without_changing_authorization() {
+	use std::sync::Arc;
+
+	use leptoskit_db::Actor;
+	use leptoskit_db::Context;
+
+	let db = leptoskit_db::testing::sqlite().await;
+	let owner = Actor::of(
+		"00000000-0000-0000-0000-000000000001"
+			.parse::<Id<()>>()
+			.unwrap(),
+	);
+	let impostor = Actor::of(
+		"00000000-0000-0000-0000-000000000002"
+			.parse::<Id<()>>()
+			.unwrap(),
+	);
+	let runtime = Arc::new(WorkerRuntime(std::sync::atomic::AtomicUsize::new(0)));
+	let weak = Arc::downgrade(&runtime);
+	let anonymous = rpc::enqueue(&db, WorkerTypedState { owner: None })
+		.await
+		.unwrap();
+	let owned_db = db.with_context(Context::new().with(owner));
+	let owned = rpc::enqueue(
+		&owned_db,
+		WorkerTypedState {
+			owner: Some(owner.uuid().to_string()),
+		},
+	)
+	.await
+	.unwrap();
+	let jobs = Jobs::new(db.clone())
+		.service(None)
+		.state(impostor)
+		.state(rpc::server::Identity::new(Context::new().with(impostor)))
+		.state("worker-secret")
+		.state(Arc::clone(&runtime))
+		.poll(Duration::from_millis(10))
+		.start();
+
+	for id in [anonymous, owned] {
+		let finished = wait_row("typed state retry", &db, id, |row| {
+			row.state == JobState::Done
+		})
+		.await;
+		assert_eq!(finished.attempts, 2);
+	}
+
+	assert_eq!(runtime.0.load(std::sync::atomic::Ordering::SeqCst), 4);
+	drop(runtime);
+	assert!(weak.upgrade().is_some());
+	jobs.shutdown().await;
+	assert!(
+		weak.upgrade().is_none(),
+		"shutdown releases worker dependencies"
+	);
+}
+
 /// Reports progress until someone cancels it.
 #[rpc::job]
 pub async fn worker_slow(cx: &rpc::JobCx) -> rpc::Result<()> {

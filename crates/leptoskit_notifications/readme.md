@@ -9,3 +9,7 @@ When the operator configures a push transport — APNs by `.p8` key, FCM by serv
 What this crate deliberately does not do yet: **the client half of enrollment**. The native token acquisition (APNs/FCM registration through the platform plugins) and the generated browser service-worker handlers that hand the service its subscription are later work — today an app brings its own platform-issued credential to `register_push_endpoint`. There is no delivery receipt: the service knows what the provider accepted and nothing more. Compose received items with the local-notifications plugin (`leptoskit_plugin_notifications`) where the platform supports it, and see the notifications guide for the platform gaps.
 
 Add the service with `[services.notifications]` in `leptoskit.toml`; see the notifications guide on the site for the whole flow, the transport variables, and what push costs you.
+
+## Worker runtime ownership
+
+When embedding the push service, pass clones of the same `service::push::Push` configuration to `service::routes_with_push` and `service::workers_with_push`. Each database's workers own their transports. Rebuild the runtime on restart; pending jobs use that fresh runtime and persist only send and round IDs. `service::workers` and `service::routes` remain usable without push configured.

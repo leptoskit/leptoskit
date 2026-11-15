@@ -777,11 +777,9 @@ pub async fn push_deliveries(
 /// becomes visible, and again whenever attempts are waiting to retry.
 /// Each attempt re-reads the notification's schedule, cancellation,
 /// expiry, and the person's latest opt-out at the moment it fires, and
-/// never holds a database transaction across the network call. The
-/// `instance` names the service instance whose push transports carry the
-/// attempts: a process may serve several notifications services, each
-/// with its own credentials, and a delivery always answers to the
-/// configuration that enqueued it.
+/// never holds a database transaction across the network call. The workers
+/// supply the instance runtime from memory.
+/// Arguments contain only logical send and round identifiers.
 ///
 /// Transient failures wait and retry — honoring the provider's
 /// `Retry-After` when it gives one — until [`MAX_DELIVERY_ATTEMPTS`] is
@@ -799,13 +797,11 @@ pub async fn push_deliveries(
 	queue = "push",
 	timeout = 5m
 )]
-pub async fn push_send(
-	cx: &rpc::JobCx,
-	send_key: String,
-	round: u32,
-	instance: String,
-) -> rpc::Result<()> {
-	crate::service::push::round(cx, &send_key, round, &instance).await
+pub async fn push_send(cx: &rpc::JobCx, send_key: String, round: u32) -> rpc::Result<()> {
+	let push = cx
+		.state::<crate::service::push::Push>()
+		.ok_or_else(|| rpc::Error::server("push worker state is missing"))?;
+	crate::service::push::round(cx, &send_key, round, push).await
 }
 
 #[cfg(test)]

@@ -22,14 +22,11 @@
 //!   call; a send's inbox rows never roll back because one endpoint failed.
 //! - **The transports are per service instance, not per process.** A process
 //!   may serve several notifications services, each with its own credentials:
-//!   the routes carry theirs in the request context, and the push job carries
-//!   its instance's key in its arguments, so a delivery always answers to the
-//!   configuration that enqueued it and no other's.
+//!   routes and workers share the same explicit runtime. Jobs persist only
+//!   logical send and round identifiers; credentials stay in worker memory.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::RwLock;
 
 use leptoskit_db::Db;
 use leptoskit_rpc as rpc;
@@ -59,16 +56,11 @@ use crate::service::transport::PushRuntime;
 const STALLED_RETRY_SECS: i64 = 60;
 
 /// The service instance's push configuration, carried in the request
-/// context the routes build: the runtime its enrollments check against,
-/// and the key its jobs are enqueued under. Not a process global — a
+/// context the routes build and in worker state. Not a process global — a
 /// process may serve several notifications services — and not
 /// interchangeable: it is fixed when the routes are built.
 #[derive(Clone)]
 pub struct Push {
-	/// The instance's key: what the enqueued jobs name back. Stable
-	/// across restarts of the same service — its database URL is the
-	/// natural one.
-	pub instance: Arc<str>,
 	/// The instance's transports, or `None` when push is unconfigured —
 	/// enrollment refuses every platform, and queued deliveries skip as
 	/// unconfigured.
@@ -88,45 +80,6 @@ fn push_unconfigured() -> rpc::Error {
 		"push is not configured on this server: set a transport's configuration to enroll an \
 		 endpoint",
 	)
-}
-
-/// An instance's registered configuration: transports, or their
-/// deliberate absence.
-#[derive(Clone)]
-struct Registered(Option<Arc<PushRuntime>>);
-
-/// The registered instances' transports, keyed by the instance key their
-/// routes and jobs share. This is the job side's half of the
-/// configuration: the job framework rebuilds a job's context from its
-/// owner alone, so a job's body cannot read the route context the send
-/// saw — it names its instance instead, and finds the same configuration
-/// the enqueueing route registered. Routes look nothing up here.
-type Instances = HashMap<Arc<str>, Registered>;
-static INSTANCES: OnceLock<RwLock<Instances>> = OnceLock::new();
-
-fn instances() -> &'static RwLock<Instances> {
-	INSTANCES.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// Registers `instance`'s transports: what a service's startup does once,
-/// before its routes and workers start, and what its jobs look up by
-/// key. Registering replaces an earlier registration under the same key —
-/// the same service starting again over the same database — and never
-/// touches another instance's.
-pub(crate) fn register_instance(instance: Arc<str>, runtime: Option<Arc<PushRuntime>>) {
-	instances()
-		.write()
-		.unwrap_or_else(std::sync::PoisonError::into_inner)
-		.insert(instance, Registered(runtime));
-}
-
-/// Looks up `instance`'s registered transports.
-fn instance_runtime(instance: &str) -> Option<Registered> {
-	instances()
-		.read()
-		.unwrap_or_else(std::sync::PoisonError::into_inner)
-		.get(instance)
-		.cloned()
 }
 
 /// An endpoint's fingerprint: the SHA-256 of its platform and its
@@ -468,7 +421,6 @@ pub(crate) async fn status_page(
 /// Whatever a write or an enqueue fails with.
 pub(crate) async fn schedule(
 	cx: &rpc::MutationCx,
-	push: &Push,
 	send_key: &str,
 	spec: &crate::SendSpec,
 	fanout: &Fanout,
@@ -530,8 +482,7 @@ pub(crate) async fn schedule(
 
 	// The round-zero job, at the notification's visibility. Its key keeps
 	// a raced or retried send from doubling it, exactly as the wake jobs
-	// are kept, and its arguments name the instance whose transports
-	// carry the attempts.
+	// are kept. Its arguments contain only logical identifiers.
 	let now = leptoskit_db::now();
 	let becomes_visible = spec
 		.visible_at
@@ -539,7 +490,6 @@ pub(crate) async fn schedule(
 	cx.enqueue(PushSend {
 		send_key: send_key.to_owned(),
 		round: 0,
-		instance: push.instance.to_string(),
 	})
 	.at(becomes_visible)
 	.key(format!("push:{send_key}:0"))
@@ -566,15 +516,8 @@ pub(crate) async fn schedule(
 /// job framework retries the round; the deliveries already written are
 /// skipped by their state on the retry.
 #[doc(hidden)]
-pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, instance: &str) -> rpc::Result<()> {
-	let runtime = instance_runtime(instance).ok_or_else(|| {
-		rpc::Error::retry(
-			"the push transports of the instance that enqueued this send are not registered in \
-			 this process",
-		)
-	})?;
-
-	let Some(runtime) = runtime.0 else {
+pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, push: &Push) -> rpc::Result<()> {
+	let Some(runtime) = push.runtime.as_ref() else {
 		// Nothing is configured: every delivery of this send skips,
 		// loudly and visibly in the send's status.
 		skip_all(cx.db(), send_key, DeliveryReason::TransportUnavailable).await?;
@@ -604,7 +547,7 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, instance: &str) 
 
 		for row in batch {
 			let db = cx.db().clone();
-			let runtime = Arc::clone(&runtime);
+			let runtime = Arc::clone(runtime);
 			attempts.spawn(try_delivery(db, runtime, row));
 		}
 
@@ -640,7 +583,6 @@ pub async fn round(cx: &rpc::JobCx, send_key: &str, round: u32, instance: &str) 
 			PushSend {
 				send_key: send_key.to_owned(),
 				round: round.saturating_add(1),
-				instance: instance.to_owned(),
 			},
 		)
 		.at(at.max(leptoskit_db::now()))

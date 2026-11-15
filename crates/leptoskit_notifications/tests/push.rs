@@ -249,48 +249,38 @@ impl Boundary for Mock {
 struct Service {
 	address: std::net::SocketAddr,
 	db: Db,
-	instance: Arc<str>,
+	push: push::Push,
 	jobs: Option<rpc::server::JobsHandle>,
 }
 
 /// A fresh, migrated service on a free port, its push transports built
 /// over `mock` and carried by its routes, its workers not yet running:
-/// tests start them when the queue should move. The instance key is
-/// unique per service, except where a test restarts one over the same
-/// database and passes the same key.
+/// tests start them when the queue should move. Each service owns its runtime.
 async fn start(db: Db, config: &config::PushConfig, mock: &Arc<Mock>) -> Service {
-	start_keyed(db, config, mock, &Uuid::now_v7().to_string()).await
-}
-
-/// [`start`], with an explicit instance key: the restart test's stable
-/// one, or `None` for a service with no push configuration at all.
-async fn start_keyed(
-	db: Db,
-	config: &config::PushConfig,
-	mock: &Arc<Mock>,
-	instance: &str,
-) -> Service {
 	let runtime = if config.apns.is_some() || config.fcm.is_some() || config.web.is_some() {
 		Some(PushRuntime::build_over(config, mock.clone()).expect("the runtime builds"))
 	} else {
 		None
 	};
 
-	start_push(db, runtime, instance).await
+	start_push(db, runtime).await
 }
 
-/// [`start_keyed`], over an already-built (or absent) runtime.
-async fn start_push(db: Db, runtime: Option<PushRuntime>, instance: &str) -> Service {
+/// [`start`], over an already-built (or absent) runtime.
+async fn start_push(db: Db, runtime: Option<PushRuntime>) -> Service {
 	let push = push::Push {
-		instance: instance.to_owned().into(),
 		runtime: runtime.map(Arc::new),
 	};
 
 	let callers = ServiceCallers::new(Anonymous)
 		.caller(TOKEN, rpc::server::APP_CALLER)
 		.forwarded_identity(SERVICE, TOKEN);
-	let (router, live) =
-		leptoskit_notifications::service::routes_with_push(db.clone(), Some(ORIGIN), callers, push);
+	let (router, live) = leptoskit_notifications::service::routes_with_push(
+		db.clone(),
+		Some(ORIGIN),
+		callers,
+		push.clone(),
+	);
 	live.start().await.expect("live starts");
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let address = listener.local_addr().unwrap();
@@ -301,7 +291,7 @@ async fn start_push(db: Db, runtime: Option<PushRuntime>, instance: &str) -> Ser
 	Service {
 		address,
 		db,
-		instance: instance.to_owned().into(),
+		push,
 		jobs: None,
 	}
 }
@@ -310,7 +300,7 @@ impl Service {
 	/// Starts the workers on a test-fast poll.
 	fn resume(&mut self) {
 		self.jobs = Some(
-			leptoskit_notifications::service::workers(self.db.clone())
+			leptoskit_notifications::service::workers_with_push(self.db.clone(), self.push.clone())
 				.poll(Duration::from_millis(50))
 				.start(),
 		);
@@ -322,7 +312,7 @@ impl Service {
 /// spawned beside whatever it races.
 fn spawn_round(service: &Service, send_key: &str, round: u32) -> tokio::task::JoinHandle<()> {
 	let db = service.db.clone();
-	let instance = Arc::clone(&service.instance);
+	let push = service.push.clone();
 	let send_key = send_key.to_owned();
 
 	tokio::spawn(async move {
@@ -332,7 +322,7 @@ fn spawn_round(service: &Service, send_key: &str, round: u32) -> tokio::task::Jo
 			format!("test:{send_key}:{round}"),
 			1,
 		);
-		push::round(&cx, &send_key, round, &instance)
+		push::round(&cx, &send_key, round, &push)
 			.await
 			.expect("the round runs");
 	})
@@ -972,7 +962,7 @@ async fn a_platform_without_a_transport_is_refused_loudly() {
 	// runtime absent, answering for itself — never the other service's
 	// credentials.
 	let bare = Mock::new();
-	let unconfigured = start_push(db().await, None, &Uuid::now_v7().to_string()).await;
+	let unconfigured = start_push(db().await, None).await;
 
 	let (status, body) = enroll(&unconfigured, ALICE, apns_credential(&device_token(1))).await;
 	assert_eq!(status, 400, "with push disabled, nothing enrolls: {body}");
@@ -2280,18 +2270,17 @@ async fn two_services_in_one_process_keep_their_own_credentials() {
 		Scripted::Default
 	});
 
-	// Service one sends first; then service two, while one's token is
-	// still cached.
+	// Both workers and sends run concurrently, each with its own runtime.
 	let mut one = one;
 	one.resume();
-	let (status, _) = send(&one, "mine", spec(), &[ALICE]).await;
-	assert_eq!(status, 200);
-	settled(&one, "mine").await;
-
 	two.resume();
-	let (status, _) = send(&two, "theirs", spec(), &[BOB]).await;
-	assert_eq!(status, 200);
-	settled(&two, "theirs").await;
+	let (first, second) = tokio::join!(
+		send(&one, "mine", spec(), &[ALICE]),
+		send(&two, "theirs", spec(), &[BOB])
+	);
+	assert_eq!(first.0, 200);
+	assert_eq!(second.0, 200);
+	tokio::join!(settled(&one, "mine"), settled(&two, "theirs"));
 
 	// Each service's assertion is its own account's, and each send
 	// carries its own access token.
@@ -2459,11 +2448,10 @@ async fn an_unregistered_credential_ends_and_invalidates() {
 	assert_eq!(status, 200);
 	let (status, _) = enroll(&service, ALICE, apns_credential(&device_token(2))).await;
 	assert_eq!(status, 200);
-	service.resume();
 
 	// Two sends, so the unregistered endpoint holds two deliveries. The
-	// script is in place before they fire, so no attempt can slip past
-	// it while the workers are already polling.
+	// workers start after both sends commit, and run one round at a time,
+	// so the second delivery witnesses the first one's invalidation.
 	mock.scripted(|request, _| {
 		if !request.url.contains(APNS_HOST) {
 			return Scripted::Default;
@@ -2484,6 +2472,15 @@ async fn an_unregistered_credential_ends_and_invalidates() {
 	assert_eq!(status, 200);
 	let (status, _) = send(&service, "second", spec(), &[ALICE]).await;
 	assert_eq!(status, 200);
+	service.jobs = Some(
+		leptoskit_notifications::service::workers_with_push(
+			service.db.clone(),
+			service.push.clone(),
+		)
+		.queue("push", 1)
+		.poll(Duration::from_millis(50))
+		.start(),
+	);
 
 	let first = settled(&service, "first").await;
 	let second = settled(&service, "second").await;
@@ -2899,6 +2896,20 @@ async fn an_opt_out_made_in_the_queue_decides_at_the_attempt() {
 
 // Durability.
 
+#[test]
+fn push_job_arguments_ignore_the_old_instance_field() {
+	let job: leptoskit_notifications::push::PushSend = serde_json::from_value(json!({
+		"send_key": "legacy-send",
+		"round": 2,
+		"instance": "obsolete-instance"
+	}))
+	.unwrap();
+	assert_eq!(
+		serde_json::to_value(job).unwrap(),
+		json!({"send_key": "legacy-send", "round": 2})
+	);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_restart_recovers_pending_work() {
 	let file = tempfile::Builder::new()
@@ -2909,20 +2920,27 @@ async fn a_restart_recovers_pending_work() {
 	let url = format!("sqlite://{}", file.path().display());
 	let mock = Arc::new(Mock::new());
 
-	// The instance key is stable across the restart, like a service's
-	// database URL: the queued job names it, and the new process's
-	// registry answers to it.
-	let instance = format!("restart:{url}");
-
 	// The first process: enroll, send, and stop before any attempt runs.
 	let db = Db::connect(&url).await.expect("the database opens");
 	db.migrate(MIGRATIONS).await.expect("migrations apply");
 	{
-		let service = start_keyed(db, &all_transports(), &mock, &instance).await;
+		let service = start(db, &all_transports(), &mock).await;
 		let (status, _) = enroll(&service, ALICE, apns_credential(&device_token(1))).await;
 		assert_eq!(status, 200);
 		let (status, _) = send(&service, "across-restart", spec(), &[ALICE]).await;
 		assert_eq!(status, 200);
+
+		let jobs = rpc::server::jobs::JobRow::query()
+			.filter(|row| row.name.eq("push_send"))
+			.all(&service.db.system("inspect durable push arguments"))
+			.await
+			.unwrap();
+		assert_eq!(jobs.len(), 1);
+		assert_eq!(
+			jobs[0].arguments.0,
+			json!({"send_key": "across-restart", "round": 0})
+		);
+		assert!(!format!("{:?}", jobs[0].arguments).contains(&url));
 
 		let enqueued = delivery_status(&service, "across-restart").await;
 		assert_eq!(enqueued[0]["state"], "enqueued", "{enqueued:?}");
@@ -2935,9 +2953,11 @@ async fn a_restart_recovers_pending_work() {
 	}
 
 	// The second process, over the same database: the delivery row and
-	// its round-zero job are there, and the push completes.
+	// its round-zero job are there. Only a freshly allocated runtime's
+	// provider receives the recovered work.
+	let fresh_mock = Arc::new(Mock::new());
 	let db = Db::connect(&url).await.expect("the database opens again");
-	let mut restarted = start_keyed(db, &all_transports(), &mock, &instance).await;
+	let mut restarted = start(db, &all_transports(), &fresh_mock).await;
 	restarted.resume();
 	let outcomes = settled(&restarted, "across-restart").await;
 	assert_eq!(
@@ -2945,7 +2965,8 @@ async fn a_restart_recovers_pending_work() {
 		vec![("accepted".to_owned(), None)],
 		"{outcomes:?}"
 	);
-	assert_eq!(mock.requests_to(APNS_HOST).len(), 1);
+	assert_eq!(fresh_mock.requests_to(APNS_HOST).len(), 1);
+	assert!(mock.requests_to(APNS_HOST).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
