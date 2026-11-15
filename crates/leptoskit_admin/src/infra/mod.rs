@@ -166,7 +166,9 @@ impl ProjectState {
 			.filter(|operation| operation.project == project.id)
 			.cloned()
 			.collect();
-		mine.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| b.id.cmp(&a.id)));
+		// The journal supplies newest first. Preserve that order within a
+		// second; operation IDs are random, not a release sequence.
+		mine.sort_by_key(|operation| std::cmp::Reverse(operation.created));
 
 		let config = leptoskit_config::LeptoskitConfig::load_from(&project.root)
 			.map_err(|error| error.to_string())

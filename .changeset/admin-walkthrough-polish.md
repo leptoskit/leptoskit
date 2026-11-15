@@ -16,3 +16,7 @@ The Workings drawer is easier to follow:
 - Escape and Close give focus back to the control that opened the drawer, such as a plan row.
 
 On Live, a typed event always shows its `struct` badge, even when it arrives after an untyped one.
+
+Simulation wording also covers deploy, first release, maintenance, rollback, health checks, and backup verification. Confirmations and lesson evidence distinguish sample results from real work, and simulated plans never claim to execute the operator CLI. The browser CI suite runs the five Workings and live-event regression checks.
+
+Releases recorded in the same second keep their journal order, so the current release and rollback choices do not depend on random operation IDs.

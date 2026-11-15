@@ -286,10 +286,10 @@ pub(crate) fn project(state: &ProjectState, tab: Tab, context: &Context<'_>) -> 
 	let (body, drawers, open) = match tab {
 		Tab::Overview => overview(state, context),
 		Tab::Changes => changes(state, context),
-		Tab::Releases => releases(state, context.now),
+		Tab::Releases => releases(state, context.now, context.simulated),
 		Tab::Operations => (operations(state, context.now), Vec::new(), None),
 		Tab::Health => health_tab(state, context),
-		Tab::Backups => backups(state, context.now),
+		Tab::Backups => backups(state, context.now, context.simulated),
 		Tab::Config => config(state),
 	};
 
@@ -360,7 +360,7 @@ fn overview(state: &ProjectState, context: &Context<'_>) -> Body {
 			Kind::Quiet,
 			"Run health check",
 			"action:status",
-			"Runs `lk infra status`: it probes every host and changes nothing.",
+			status_explanation(context.simulated),
 		));
 
 	let now_serving = components::card("Now serving")
@@ -590,8 +590,8 @@ fn simulated_notice() -> Element {
 /// What the plan confirmation says before `lk infra plan` runs.
 fn plan_explanation(simulated: bool) -> &'static str {
 	if simulated {
-		"Simulated: runs `lk infra plan` against a stand-in cloud. Planning changes nothing, and \
-		 no provider is contacted."
+		"Simulated: compares the configuration with a stand-in cloud. Planning changes nothing, \
+		 and no provider is contacted."
 	} else {
 		"Runs `lk infra plan`. Planning changes nothing."
 	}
@@ -603,9 +603,8 @@ fn apply_explanation(changes: usize, simulated: bool) -> String {
 
 	if simulated {
 		format!(
-			"Simulated: applies exactly this plan to a stand-in cloud with `lk infra apply`. \
-			 {changes} change{plural} to the stand-in; no provider is contacted and no real \
-			 infrastructure changes."
+			"Simulated: applies exactly this plan to a stand-in cloud. {changes} change{plural} \
+			 to the stand-in; no provider is contacted and no real infrastructure changes."
 		)
 	} else {
 		format!(
@@ -613,6 +612,15 @@ fn apply_explanation(changes: usize, simulated: bool) -> String {
 			 configuration, provider lock, or state changed since it was made. {changes} \
 			 change{plural} to real infrastructure."
 		)
+	}
+}
+
+fn status_explanation(simulated: bool) -> &'static str {
+	if simulated {
+		"Simulated: returns a sample health result; no provider is contacted and no real host is \
+		 probed."
+	} else {
+		"Runs `lk infra status`: it probes every host and changes nothing."
 	}
 }
 
@@ -865,7 +873,7 @@ fn changes(state: &ProjectState, context: &Context<'_>) -> Body {
 	(body, vec![drawers::plan_drawer(state)], open)
 }
 
-fn releases(state: &ProjectState, now: u64) -> Body {
+fn releases(state: &ProjectState, now: u64, simulated: bool) -> Body {
 	let serving = state.serving().and_then(super::version).map(str::to_owned);
 
 	let deploy = components::card("Deploy")
@@ -901,22 +909,37 @@ fn releases(state: &ProjectState, now: u64) -> Body {
 					Kind::Primary,
 					"Deploy",
 					"action:deploy",
-					"Runs `lk deploy --version <version>`: it starts the new image, waits for \
-					 health checks, then moves traffic.",
+					if simulated {
+						"Simulated: records a release on the stand-in cloud; no provider is \
+						 contacted, no image is built, and no real traffic moves."
+					} else {
+						"Runs `lk deploy --version <version>`: it starts the new image, waits for \
+						 health checks, then moves traffic."
+					},
 				))
 				.child(confirmable(
 					Kind::Secondary,
 					"First release",
 					"action:first-release",
-					"Runs `lk deploy --setup`: it creates the database and runs every migration \
-					 before the first image starts. Use it once, for a new project.",
+					if simulated {
+						"Simulated: records a first release on the stand-in cloud; no provider is \
+						 contacted, no database is created, and no migration runs."
+					} else {
+						"Runs `lk deploy --setup`: it creates the database and runs every \
+						 migration before the first image starts. Use it once, for a new project."
+					},
 				))
 				.child(confirmable(
 					Kind::Secondary,
 					"Deploy in maintenance",
 					"action:maintenance",
-					"Runs `lk deploy --maintenance`: visitors see the maintenance page and live \
-					 connections are told to reconnect later.",
+					if simulated {
+						"Simulated: records a maintenance release on the stand-in cloud; no \
+						 provider is contacted and visitors' connections stay open."
+					} else {
+						"Runs `lk deploy --maintenance`: visitors see the maintenance page and \
+						 live connections are told to reconnect later."
+					},
 				)),
 		)
 		.build();
@@ -950,10 +973,19 @@ fn releases(state: &ProjectState, now: u64) -> Body {
 					Kind::Danger,
 					&format!("Roll back to {}", short(version)),
 					&format!("action:rollback:{version}"),
-					&format!(
-						"Moves traffic back to {}. Database changes made since stay as they are.",
-						short(version)
-					),
+					&if simulated {
+						format!(
+							"Simulated: records a rollback to {} on the stand-in cloud; no \
+							 provider is contacted and no real traffic moves.",
+							short(version)
+						)
+					} else {
+						format!(
+							"Moves traffic back to {}. Database changes made since stay as they \
+							 are.",
+							short(version)
+						)
+					},
 				)),
 		);
 	}
@@ -1016,7 +1048,7 @@ fn health_tab(state: &ProjectState, context: &Context<'_>) -> Body {
 				Kind::Secondary,
 				"Run health check",
 				"action:status",
-				"Runs `lk infra status`: it probes every host and changes nothing.",
+				status_explanation(context.simulated),
 			))
 			.build(),
 	];
@@ -1037,7 +1069,7 @@ fn health_tab(state: &ProjectState, context: &Context<'_>) -> Body {
 	(body, vec![drawers::status_drawer(state)], None)
 }
 
-fn backups(state: &ProjectState, now: u64) -> Body {
+fn backups(state: &ProjectState, now: u64, simulated: bool) -> Body {
 	let mut card = components::card("Backups").workings("backup", "[infra.backups]");
 
 	match &state.config {
@@ -1113,8 +1145,13 @@ fn backups(state: &ProjectState, now: u64) -> Body {
 		Kind::Primary,
 		"Verify last backup",
 		"action:backup",
-		"Runs `lk infra backups verify`: it restores the latest backup into a scratch database \
-		 and checks it. Nothing that's serving changes.",
+		if simulated {
+			"Simulated: returns a sample backup verification; no provider is contacted and no \
+			 backup is restored or checked."
+		} else {
+			"Runs `lk infra backups verify`: it restores the latest backup into a scratch database \
+			 and checks it. Nothing that's serving changes."
+		},
 	));
 
 	(

@@ -306,15 +306,25 @@ fn evidence(lesson: &Lesson, proof: &Proof<'_>) -> Option<String> {
 			let deployed = succeeded(&|action| matches!(action, Action::Deploy { .. }))?;
 			let rolled = succeeded(&|action| matches!(action, Action::Rollback { .. }))?;
 			Some(format!(
-				"You deployed on {} and rolled back {}",
+				"You deployed on {} and rolled back{} {}",
 				deployed.0,
+				if proof.simulated {
+					" on the simulated cloud"
+				} else {
+					""
+				},
 				crate::infra::ago(rolled.1, now)
 			))
 		}
 		"backups-restored" => {
 			succeeded(&|action| matches!(action, Action::Backup)).map(|(project, at)| {
 				format!(
-					"A backup of {project} restored and checked {}",
+					"{} {}",
+					if proof.simulated {
+						format!("A simulated backup verification completed for {project}")
+					} else {
+						format!("A backup of {project} restored and checked")
+					},
 					crate::infra::ago(at, now)
 				)
 			})
@@ -322,7 +332,8 @@ fn evidence(lesson: &Lesson, proof: &Proof<'_>) -> Option<String> {
 		"reading-health" => {
 			succeeded(&|action| matches!(action, Action::Status)).map(|(project, at)| {
 				format!(
-					"{project} passed a health check {}",
+					"{project} passed a {}health check {}",
+					if proof.simulated { "simulated " } else { "" },
 					crate::infra::ago(at, now)
 				)
 			})
