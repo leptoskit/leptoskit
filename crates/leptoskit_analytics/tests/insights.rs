@@ -441,7 +441,17 @@ async fn retention_builds_the_cohort_grid() {
 			.unwrap(),
 	);
 	assert_eq!(first_time.period, Interval::Day);
-	assert_eq!(first_time.cohorts.len(), 1);
+	// One cohort per day of the range; only day zero's has anyone in it,
+	// and each later cohort is followed only as far as the range reaches.
+	assert_eq!(first_time.cohorts.len(), 4);
+	assert_eq!(
+		first_time
+			.cohorts
+			.iter()
+			.map(|cohort| (cohort.size, cohort.returns.len()))
+			.collect::<Vec<_>>(),
+		[(3, 4), (0, 3), (0, 2), (0, 1)]
+	);
 	let cohort = &first_time.cohorts[0];
 	assert_eq!(cohort.start, "2026-11-09T00:00:00");
 	assert_eq!(cohort.size, 3);
@@ -486,6 +496,128 @@ async fn retention_builds_the_cohort_grid() {
 	assert_eq!(names.len(), 2);
 	assert!(names.contains(&"ada".to_owned()));
 	assert!(names.contains(&"grace".to_owned()));
+}
+
+/// Every period of the range starts a cohort. First-time retention leaves
+/// out anyone who started before the range, and puts each person in one
+/// cohort; recurring retention puts them in every cohort they started in.
+#[tokio::test(flavor = "multi_thread")]
+async fn retention_starts_a_cohort_every_period() {
+	let harness = Harness::start().await;
+	harness
+		.store(vec![
+			identify("grace", "grace", &at(0, 8)),
+			identify("linus", "linus", &at(0, 8)),
+		])
+		.await;
+	// Zoe first signed up the day before the range. Linus signs up twice.
+	harness
+		.store(vec![
+			event("signed_up", "zoe", &at(0, 9), &json!({})),
+			event("signed_up", "zoe", &at(1, 9), &json!({})),
+			event("signed_up", "ada", &at(1, 10), &json!({})),
+			event("signed_up", "linus", &at(1, 11), &json!({})),
+			event("signed_up", "grace", &at(2, 9), &json!({})),
+			event("signed_up", "linus", &at(3, 11), &json!({})),
+			event("opened", "zoe", &at(2, 9), &json!({})),
+			event("opened", "ada", &at(2, 10), &json!({})),
+			event("opened", "ada", &at(3, 10), &json!({})),
+			event("opened", "grace", &at(3, 9), &json!({})),
+			event("opened", "linus", &at(4, 11), &json!({})),
+		])
+		.await;
+	let retention = |kind: RetentionKind| {
+		Query::Retention(RetentionQuery {
+			range: DateRange::between(at(1, 0), at(5, 0)),
+			start_event: "signed_up".into(),
+			return_event: "opened".into(),
+			kind,
+			period: Interval::Day,
+			periods: None,
+			filters: Vec::new(),
+			test_accounts: None,
+		})
+	};
+	let grid = |answer: Answer| {
+		let QueryResult::Retention(result) = answer.result else {
+			panic!("expected retention");
+		};
+		result
+			.cohorts
+			.into_iter()
+			.map(|cohort| (cohort.size, cohort.returns))
+			.collect::<Vec<_>>()
+	};
+
+	let first_time = grid(
+		harness
+			.as_app(query::Run {
+				query: retention(RetentionKind::FirstTime),
+			})
+			.await
+			.unwrap(),
+	);
+	assert_eq!(
+		first_time,
+		[
+			(2, vec![0, 1, 1, 1]),
+			(1, vec![0, 1, 0]),
+			(0, vec![0, 0]),
+			(0, vec![0]),
+		]
+	);
+
+	let recurring = grid(
+		harness
+			.as_app(query::Run {
+				query: retention(RetentionKind::Recurring),
+			})
+			.await
+			.unwrap(),
+	);
+	assert_eq!(
+		recurring,
+		[
+			(3, vec![0, 2, 1, 1]),
+			(1, vec![0, 1, 0]),
+			(1, vec![0, 1]),
+			(0, vec![0]),
+		]
+	);
+
+	// A later cohort's cell names its own people: Grace started on the
+	// range's second day and came back the day after.
+	let cell = |kind: RetentionKind, start_period: u32| {
+		Query::Actors(Box::new(ActorsQuery {
+			query: retention(kind),
+			point: ActorPoint::RetentionCell {
+				start_period,
+				return_period: 1,
+			},
+			limit: 50,
+			offset: 0,
+		}))
+	};
+	for (kind, start_period, who) in [
+		(RetentionKind::FirstTime, 1, "grace"),
+		(RetentionKind::Recurring, 2, "linus"),
+	] {
+		let answer = harness
+			.as_app(query::Run {
+				query: cell(kind, start_period),
+			})
+			.await
+			.unwrap();
+		let QueryResult::Actors(page) = answer.result else {
+			panic!("expected actors");
+		};
+		let names: Vec<&String> = page
+			.actors
+			.iter()
+			.flat_map(|actor| actor.distinct_ids.iter())
+			.collect();
+		assert_eq!(names, [who], "{kind:?} cohort {start_period}");
+	}
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -915,6 +1047,75 @@ async fn only_the_app_runs_queries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_catalogue_lists_events_with_their_types_and_properties() {
+	let harness = Harness::start().await;
+	harness
+		.store(vec![
+			event("note_saved", "ada", &at(0, 9), &json!({ "words": 412 })),
+			event(
+				"note_saved",
+				"ada",
+				&at(0, 10),
+				&json!({ "words": 12, "pinned": true }),
+			),
+			event(
+				"searched",
+				"grace",
+				&at(0, 11),
+				&json!({ "query": "rust", "score": 0.5 }),
+			),
+		])
+		.await;
+	leptoskit_analytics::service::Catalogue::new(harness.db.clone())
+		.register(vec![leptoskit_analytics::service::catalogue::SchemaInput {
+			schema_id: leptoskit_analytics::schema_id("note_saved", &[("words", "u32")]),
+			name: "note_saved".into(),
+			fields: vec![("words".into(), "u32".into())],
+		}])
+		.await
+		.expect("the schema registers");
+
+	let definitions = harness
+		.as_app(query::EventDefinitions {})
+		.await
+		.expect("the catalogue reads");
+	assert_eq!(
+		definitions
+			.iter()
+			.map(|definition| (definition.name.as_str(), definition.volume))
+			.collect::<Vec<_>>(),
+		[("note_saved", 2), ("searched", 1)],
+		"most stored first"
+	);
+	assert_eq!(
+		definitions[0].fields,
+		Some(vec![("words".to_owned(), "u32".to_owned())])
+	);
+	assert_eq!(
+		definitions[0].properties,
+		[
+			("pinned".to_owned(), "boolean".to_owned()),
+			("words".to_owned(), "integer".to_owned())
+		]
+	);
+	assert_eq!(definitions[1].fields, None, "untyped events have no fields");
+	assert_eq!(
+		definitions[1].properties,
+		[
+			("query".to_owned(), "string".to_owned()),
+			("score".to_owned(), "number".to_owned())
+		]
+	);
+
+	let cx = rpc::QueryCx::new(harness.db.clone(), rpc::server::Identity::anonymous());
+	let error = query::EventDefinitions {}
+		.run(&cx)
+		.await
+		.expect_err("only the app reads the catalogue");
+	assert!(error.to_string().contains("only the app"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_tail_holds_what_the_writer_stored() {
 	let harness = Harness::start().await;
 	harness
@@ -995,4 +1196,30 @@ async fn postgres_runs_the_same_queries() {
 		.map(|count| count.name.clone())
 		.collect();
 	assert_eq!(names, ["/", "/pricing"]);
+}
+
+/// A retention query keeps its cohort kind through JSON: the field must not
+/// share the name of `Query`'s own `kind` tag, or the rpc `run` action and
+/// saved insights can't read it back.
+#[test]
+fn a_retention_query_round_trips_through_json() {
+	for kind in [RetentionKind::FirstTime, RetentionKind::Recurring] {
+		let query = Query::Retention(RetentionQuery {
+			range: DateRange::last_days(30),
+			start_event: "signed_up".into(),
+			return_event: "note_created".into(),
+			kind,
+			period: Interval::Week,
+			periods: None,
+			filters: Vec::new(),
+			test_accounts: None,
+		});
+		let json = serde_json::to_value(&query).expect("serializes");
+
+		assert_eq!(json["kind"], "retention");
+		assert_eq!(
+			serde_json::from_value::<Query>(json).expect("reads back"),
+			query
+		);
+	}
 }

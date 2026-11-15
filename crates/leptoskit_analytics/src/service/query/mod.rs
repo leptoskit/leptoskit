@@ -176,7 +176,7 @@ pub async fn run(cx: &rpc::QueryCx, query: crate::query::Query) -> rpc::Result<A
 			))
 		}
 		(
-			crate::query::Query::Retention(retention),
+			crate::query::Query::Retention(_),
 			Plan::Retention {
 				cohort,
 				returns,
@@ -189,7 +189,6 @@ pub async fn run(cx: &rpc::QueryCx, query: crate::query::Query) -> rpc::Result<A
 			let cohort_rows = run_statement(db, cohort, &mut work).await?;
 			let return_rows = run_statement(db, returns, &mut work).await?;
 			QueryResult::Retention(fold_retention(
-				retention,
 				*period,
 				*kind,
 				*periods,
@@ -786,71 +785,93 @@ fn median(values: &mut [f64]) -> Option<f64> {
 	})
 }
 
-/// Folds a retention query's answer from its cohort and returns rows.
-#[allow(
-	clippy::too_many_arguments,
-	reason = "the fold takes what the plan ran"
-)]
+/// Each cohort's members, by period index: everyone who did the start
+/// event in that period, or, for first-time retention, only those for whom
+/// it was the first period they ever did it. The rows are the cohort
+/// statement's `(person, period)` pairs, history included.
+fn cohort_members(
+	kind: RetentionKind,
+	period_starts: &[String],
+	cohort_rows: &[Vec<Value>],
+) -> Vec<BTreeSet<PersonKey>> {
+	let mut started: BTreeMap<PersonKey, BTreeSet<String>> = BTreeMap::new();
+	for row in cohort_rows {
+		if let (Some(person), Some(label)) = (PersonKey::of(row.first()), text_of(row.get(1))) {
+			started.entry(person).or_default().insert(label);
+		}
+	}
+	let mut members = vec![BTreeSet::new(); period_starts.len()];
+	for (person, labels) in started {
+		// Labels are wall-clock text, so they sort as time does.
+		let joined: Vec<&String> = match kind {
+			RetentionKind::FirstTime => labels.first().into_iter().collect(),
+			RetentionKind::Recurring => labels.iter().collect(),
+		};
+		for label in joined {
+			if let Some(index) = period_starts.iter().position(|start| start == label) {
+				members[index].insert(person.clone());
+			}
+		}
+	}
+	members
+}
+
+/// The periods, by index, each person did the return event in.
+fn return_periods(
+	period_starts: &[String],
+	return_rows: &[Vec<Value>],
+) -> BTreeMap<PersonKey, BTreeSet<usize>> {
+	let mut returned: BTreeMap<PersonKey, BTreeSet<usize>> = BTreeMap::new();
+	for row in return_rows {
+		if let (Some(person), Some(label)) = (PersonKey::of(row.first()), text_of(row.get(1)))
+			&& let Some(index) = period_starts.iter().position(|start| *start == label)
+		{
+			returned.entry(person).or_default().insert(index);
+		}
+	}
+	returned
+}
+
+/// Folds a retention query's answer from its cohort and returns rows: one
+/// cohort per period the range holds, each followed for `periods` periods
+/// or to the range's end, whichever comes first.
 fn fold_retention(
-	_retention: &crate::query::RetentionQuery,
 	period: crate::query::Interval,
 	kind: RetentionKind,
-	_periods: u32,
+	periods: u32,
 	period_starts: &[String],
 	cohort_rows: &[Vec<Value>],
 	return_rows: &[Vec<Value>],
 ) -> RetentionResult {
-	let mut members: BTreeSet<PersonKey> = BTreeSet::new();
-	for row in cohort_rows {
-		let Some(person) = PersonKey::of(row.first()) else {
-			continue;
-		};
-		let Some(entered) = timestamp_of(row.get(2)) else {
-			continue;
-		};
-		if kind == RetentionKind::FirstTime {
-			let Some(first_ever) = timestamp_of(row.get(1)) else {
-				continue;
-			};
-			if first_ever != entered {
-				continue;
+	let members = cohort_members(kind, period_starts, cohort_rows);
+	let returned = return_periods(period_starts, return_rows);
+	let follow = usize::try_from(periods)
+		.unwrap_or(usize::MAX)
+		.saturating_add(1);
+	let cohorts = members
+		.iter()
+		.enumerate()
+		.map(|(index, people)| {
+			let length = follow.min(period_starts.len() - index);
+			let mut returns = vec![0u64; length];
+			for periods in people.iter().filter_map(|person| returned.get(person)) {
+				for (offset, count) in returns.iter_mut().enumerate() {
+					if periods.contains(&(index + offset)) {
+						*count += 1;
+					}
+				}
 			}
-		}
-		members.insert(person);
-	}
-	// Who returned, in which of the cohort's periods.
-	let mut returns_by_person: BTreeMap<PersonKey, BTreeSet<usize>> = BTreeMap::new();
-	for row in return_rows {
-		let Some(person) = PersonKey::of(row.first()) else {
-			continue;
-		};
-		let Some(label) = text_of(row.get(1)) else {
-			continue;
-		};
-		if let Some(index) = period_starts.iter().position(|start| *start == label)
-			&& members.contains(&person)
-		{
-			returns_by_person.entry(person).or_default().insert(index);
-		}
-	}
-	let cohort_start = period_starts.first().cloned().unwrap_or_default();
-	let mut returns = vec![0u64; period_starts.len()];
-	for index in returns_by_person.values().flatten() {
-		returns[*index] += 1;
-	}
-	let cohort = if members.is_empty() {
-		Vec::new()
-	} else {
-		vec![RetentionCohort {
-			start: cohort_start,
-			size: members.len() as u64,
-			returns,
-		}]
-	};
+			RetentionCohort {
+				start: period_starts[index].clone(),
+				size: people.len() as u64,
+				returns,
+			}
+		})
+		.collect();
 	RetentionResult {
 		period,
 		kind,
-		cohorts: cohort,
+		cohorts,
 	}
 }
 
@@ -1103,7 +1124,10 @@ async fn actors_people(
 				.collect())
 		}
 		(
-			Point::RetentionCell { return_period, .. },
+			Point::RetentionCell {
+				start_period,
+				return_period,
+			},
 			Plan::Retention {
 				cohort,
 				returns,
@@ -1114,48 +1138,29 @@ async fn actors_people(
 		) => {
 			let cohort_rows = run_statement(db, cohort, work).await?;
 			let return_rows = run_statement(db, returns, work).await?;
-			// The cohort's members, as the retention fold picks them:
-			// everyone whose start fell in the first period, first-timers
-			// only when the query is first-time retention.
-			let members: Vec<PersonKey> = cohort_rows
+			// The cell's people, as the retention fold counts them: the
+			// cohort's members who did the return event that many periods
+			// after their cohort's start.
+			let start = usize::try_from(*start_period).unwrap_or(usize::MAX);
+			let members = cohort_members(*kind, period_starts, &cohort_rows);
+			let Some(people) = members.get(start) else {
+				return Ok(Vec::new());
+			};
+			let target =
+				start.saturating_add(usize::try_from(*return_period).unwrap_or(usize::MAX));
+			let returned = return_periods(period_starts, &return_rows);
+			Ok(people
 				.iter()
-				.filter_map(|row| {
-					let person = PersonKey::of(row.first())?;
-					let entered = timestamp_of(row.get(2))?;
-					if *kind == RetentionKind::FirstTime
-						&& timestamp_of(row.get(1)) != Some(entered)
-					{
-						return None;
-					}
-					Some(person)
+				.filter(|person| {
+					returned
+						.get(*person)
+						.is_some_and(|periods| periods.contains(&target))
 				})
-				.collect();
-			let index = usize::try_from(*return_period).unwrap_or(usize::MAX);
-			Ok(members
-				.into_iter()
-				.filter(|person| returned_in(&return_rows, person, index, period_starts))
-				.filter_map(|person| person.uuid())
+				.filter_map(PersonKey::uuid)
 				.collect())
 		}
 		_ => Ok(Vec::new()),
 	}
-}
-
-/// Whether a person returned in the period at `index`, from the returns
-/// statement's rows.
-fn returned_in(
-	return_rows: &[Vec<Value>],
-	person: &PersonKey,
-	index: usize,
-	period_starts: &[String],
-) -> bool {
-	let Some(label) = period_starts.get(index) else {
-		return false;
-	};
-	return_rows.iter().any(|row| {
-		PersonKey::of(row.first()).as_ref() == Some(person)
-			&& text_of(row.get(1)).as_deref() == Some(label)
-	})
 }
 
 /// The persons behind the people, as one page: their rows and their
@@ -1742,4 +1747,118 @@ pub async fn live_events(
 		},
 	)
 	.flatten())
+}
+
+/// One event name the service has stored, as the catalogue knows it: what
+/// the admin's series picker lists, and what its Workings drawer shows in
+/// Emit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EventDefinitionView {
+	pub name: String,
+	/// How many have been stored.
+	pub volume: i64,
+	pub first_seen: String,
+	pub last_seen: String,
+	/// The latest schema registered for it, when the app declares it as a
+	/// Rust type (`#[derive(Event)]`): each property's name and type as
+	/// spelled.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fields: Option<Vec<(String, String)>>,
+	/// The keys of the properties the latest few events carried, each with
+	/// the JSON type its values had (`string`, `integer`, `number`,
+	/// `boolean`, `array`, `object`), sorted by key. For an event without a
+	/// type, it's what a derive could be written from.
+	pub properties: Vec<(String, String)>,
+}
+
+/// How many recent events [`event_definitions`] reads per name for their
+/// property keys.
+const SAMPLED_EVENTS: i64 = 20;
+
+/// The event catalogue: every event name stored, most stored first, with
+/// its typed schema when it has one and the property keys recent events
+/// carried.
+///
+/// # Errors
+///
+/// [`rpc::Error`] when the caller isn't the app, or a read fails.
+#[rpc::query(service = "analytics")]
+pub async fn event_definitions(cx: &rpc::QueryCx) -> rpc::Result<Vec<EventDefinitionView>> {
+	app_only(cx.identity())?;
+	let db = cx.db();
+	let dialect = db.dialect();
+	read_tick(db, dialect).await?;
+	let definitions = tables::EventDefinition::query()
+		.order_by(|definition| definition.volume.desc())
+		.all(db)
+		.await?;
+	let schemas = tables::EventSchema::query()
+		.order_by(|schema| schema.last_registered.asc())
+		.all(db)
+		.await?;
+	let mut latest: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+
+	for schema in schemas {
+		if let Ok(fields) = serde_json::from_str::<Vec<(String, String)>>(&schema.fields) {
+			// Ordered oldest first, so the last one written wins.
+			latest.insert(schema.name, fields);
+		}
+	}
+
+	let mut views = Vec::with_capacity(definitions.len());
+
+	for definition in definitions {
+		let statement = Statement::new(
+			format!(
+				"SELECT \"properties\" FROM \"events\" WHERE \"name\" = {} ORDER BY \"timestamp\" \
+				 DESC LIMIT {SAMPLED_EVENTS}",
+				placeholder(dialect, 1)
+			),
+			vec![Value::Text(definition.name.clone())],
+		)
+		.reads::<tables::Event>();
+		let rows = tokio::time::timeout(plan::QUERY_TIMEOUT, statement.fetch(db))
+			.await
+			.map_err(|_| rpc::Error::server("the query took over its timeout"))?
+			.map_err(|error| rpc::Error::server(error.to_string()))?;
+		let mut properties: BTreeMap<String, String> = BTreeMap::new();
+
+		for row in rows {
+			let Some(Value::Text(text)) = row.first() else {
+				continue;
+			};
+			let Ok(serde_json::Value::Object(object)) = serde_json::from_str(text) else {
+				continue;
+			};
+
+			for (key, value) in object {
+				properties.entry(key).or_insert_with(|| json_type(&value));
+			}
+		}
+
+		views.push(EventDefinitionView {
+			fields: latest.get(&definition.name).cloned(),
+			name: definition.name,
+			volume: definition.volume,
+			first_seen: super::persons::stamp(definition.first_seen),
+			last_seen: super::persons::stamp(definition.last_seen),
+			properties: properties.into_iter().collect(),
+		});
+	}
+
+	Ok(views)
+}
+
+/// A JSON value's type, as [`EventDefinitionView::properties`] names it.
+fn json_type(value: &serde_json::Value) -> String {
+	match value {
+		serde_json::Value::Null => "null",
+		serde_json::Value::Bool(_) => "boolean",
+		serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+		serde_json::Value::Number(_) => "number",
+		serde_json::Value::String(_) => "string",
+		serde_json::Value::Array(_) => "array",
+		serde_json::Value::Object(_) => "object",
+	}
+	.to_owned()
 }

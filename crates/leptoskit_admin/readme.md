@@ -43,16 +43,18 @@ The admin is a separate web app from your site, with its own address and its own
 Inside, there are three sections:
 
 - **Infrastructure** works against the deployment service's control API. Plan, apply, deploy, first release, maintenance, roll back, health checks, and backup verification all run as operations, recorded under the signed-in admin's name, with progress streamed live to the page.
-- **Analytics** teaches until your app sends its first typed event, rather than drawing charts from nothing.
-- **Learn** has short lessons that tick themselves when they become true of your projects: you applied a plan, a backup restored, a health check passed.
+- **Analytics** reads the main site's analytics service: the web overview, trends, funnels, retention, people and their timelines, a live event tail, and saved insights on dashboards that update as events arrive. Any number on a chart opens onto the people behind it. Until a service is connected, it says how to connect one.
+- **Learn** has short lessons that tick themselves when they become true of your data: you applied a plan, a backup restored, a typed event arrived, you saved a funnel.
 
-Every card has a **Workings** drawer that walks the thing on screen back to where it comes from: the `leptoskit.toml` lines that declare it, the `main.tf.json` they generate, the plan, the command the worker runs, and the check that says it's done. `W` opens it; `Shift+W` keeps the sources showing on every card.
+Every card has a **Workings** drawer that walks the thing on screen back to where it comes from. For infrastructure, that's the `leptoskit.toml` lines that declare it, the `main.tf.json` they generate, the plan, the command the worker runs, and the check that says it's done. For an insight, it's five stations: the Rust type the app emits, the bytes it sends, the tables it lands in, the query as Rust, SQL, and HTTP, and the rows the chart draws. `W` opens it; `Shift+W` keeps the sources showing on every card.
 
 ## How it fits
 
 The main site runs `leptoskit_auth` with a `Roles` hook and `leptoskit_idp`, and registers the admin as a first-party client. The admin is an OpenID Connect client of it (`oidc:main`, reading roles from `userinfo`), so a role change on the main site applies at the admin's next sign-in. The admin keeps its own small SQLite database for sessions, the roles it was last given, and each person's preferences.
 
 Infrastructure actions go through `leptoskit_deploy_console`'s `control::Service`, the same service `lk console serve` runs, so the admin and the CLI see the same operations.
+
+Analytics calls the main site's analytics service as the app, through `leptoskit_rpc`'s `AppCaller`, signed with the service's token: the same caller the main site's server is. The token stays on the admin's server; pages never see it. The admin follows the service's `live_events` stream once and shares it with every open page.
 
 ## Use it
 
@@ -69,6 +71,7 @@ Or mount it in your own binary:
 
 ```rust,ignore
 use leptoskit_admin::Admin;
+use leptoskit_admin::AnalyticsService;
 use leptoskit_admin::MainSite;
 
 let admin = Admin::builder("Notes")
@@ -77,12 +80,13 @@ let admin = Admin::builder("Notes")
 	.keys(leptoskit_auth::Keys::from_env("LEPTOSKIT_ADMIN_KEYS")?)
 	.data_dir("/var/lib/notes-admin")
 	.control(service)
+	.analytics(AnalyticsService::new("http://10.0.0.2:4800", analytics_token))
 	.build()
 	.await?;
 axum::serve(listener, admin.router()).await?;
 ```
 
-`.roles(["admin", "ops"])` accepts other roles, `.environment(Environment::Staging)` labels a staging admin, and `.database(db)` uses a database you opened instead of `.data_dir`.
+`AnalyticsService::from_env()` reads `LEPTOSKIT_SERVICE_ANALYTICS_URL` and `LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`, which `lk admin serve` also reads (`--analytics-url` overrides the address). `.roles(["admin", "ops"])` accepts other roles, `.environment(Environment::Staging)` labels a staging admin, and `.database(db)` uses a database you opened instead of `.data_dir`.
 
 ## Try it
 
@@ -90,10 +94,11 @@ axum::serve(listener, admin.router()).await?;
 
 ```sh
 cargo run -p admin_demo                  # operations are simulated
+cargo run -p admin_demo -- --seed        # and a month of analytics
 cargo run -p admin_demo -- --executor lk # the real `lk` commands
 ```
 
-Open `http://127.0.0.1:4801/_leptoskit/admin`. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is.
+Open `http://127.0.0.1:4801/_leptoskit/admin`. The main site at `http://localhost:4800` runs the real analytics service and sends typed events from its pages; `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is.
 
 ## Learn more
 

@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_admin/tests/admin.rs
-assertion_line: 145
 expression: "redact(&world,\n&regions(&outline(&html), &[\"top-bar\", \"rail\", \"main\", \"tab-bar\"]))"
 ---
 header [top-bar]
@@ -38,15 +37,15 @@ nav [rail] label="Admin"
     <vector>
     span [rail-label]
       "Live"
-  a label="Trends" href=/_leptoskit/admin/analytics/insights/new?kind=trends
+  a label="Trends" href=/_leptoskit/admin/analytics/trends
     <vector>
     span [rail-label]
       "Trends"
-  a label="Funnels" href=/_leptoskit/admin/analytics/insights/new?kind=funnels
+  a label="Funnels" href=/_leptoskit/admin/analytics/funnels
     <vector>
     span [rail-label]
       "Funnels"
-  a label="Retention" href=/_leptoskit/admin/analytics/insights/new?kind=retention
+  a label="Retention" href=/_leptoskit/admin/analytics/retention
     <vector>
     span [rail-label]
       "Retention"
@@ -81,7 +80,7 @@ nav [rail] label="Admin"
     span [rail-label]
       "Your progress"
     span [rail-label]
-      "1/5"
+      "1/11"
   a label="Glossary" href=/_leptoskit/admin/learn/glossary
     <vector>
     span [rail-label]

@@ -138,6 +138,60 @@ impl std::fmt::Debug for MainSite {
 	}
 }
 
+/// The main site's analytics service, which the Analytics area reads.
+///
+/// The admin is its own app, so it calls the service the way the main
+/// site's server does: at the service's private URL, signed with the
+/// service's token (`LEPTOSKIT_SERVICE_ANALYTICS_TOKEN` on the main site),
+/// as the caller the service knows as the app. Only the admin's server
+/// holds the token; pages never see it.
+#[derive(Clone)]
+pub struct AnalyticsService {
+	url: String,
+	token: String,
+}
+
+impl AnalyticsService {
+	/// The service at `url`, its private origin (such as
+	/// `http://127.0.0.1:3110`), signed with `token`.
+	pub fn new(url: impl Into<String>, token: impl Into<String>) -> Self {
+		Self {
+			url: url.into().trim_end_matches('/').to_owned(),
+			token: token.into(),
+		}
+	}
+
+	/// The service as the main site's server is told about it:
+	/// `LEPTOSKIT_SERVICE_ANALYTICS_URL` and
+	/// `LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`. `None` unless both are set.
+	#[must_use]
+	pub fn from_env() -> Option<Self> {
+		let read = |name: &str| {
+			std::env::var(name)
+				.ok()
+				.filter(|value| !value.trim().is_empty())
+		};
+		Some(Self::new(
+			read("LEPTOSKIT_SERVICE_ANALYTICS_URL")?,
+			read("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN")?,
+		))
+	}
+
+	/// The service's origin.
+	#[must_use]
+	pub fn url(&self) -> &str {
+		&self.url
+	}
+}
+
+impl std::fmt::Debug for AnalyticsService {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AnalyticsService")
+			.field("url", &self.url)
+			.finish_non_exhaustive()
+	}
+}
+
 /// Why the admin couldn't start or answer.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum AdminError {
@@ -183,6 +237,7 @@ pub struct AdminBuilder {
 	data_dir: Option<PathBuf>,
 	db: Option<Db>,
 	control: Option<Service>,
+	analytics: Option<AnalyticsService>,
 	http: Option<SharedHttp>,
 }
 
@@ -247,6 +302,15 @@ impl AdminBuilder {
 	#[must_use]
 	pub fn control(mut self, service: Service) -> Self {
 		self.control = Some(service);
+		self
+	}
+
+	/// The main site's analytics service, which the Analytics area reads
+	/// and saves insights to. Without it, every Analytics screen says how
+	/// to connect one.
+	#[must_use]
+	pub fn analytics(mut self, service: AnalyticsService) -> Self {
+		self.analytics = Some(service);
 		self
 	}
 
@@ -347,6 +411,7 @@ impl AdminBuilder {
 			db,
 			auth,
 			control: self.control,
+			analytics: self.analytics.map(analytics::Connection::new),
 		})))
 	}
 }
@@ -366,6 +431,7 @@ pub(crate) struct Inner {
 	pub db: Db,
 	pub auth: Auth,
 	pub control: Option<Service>,
+	pub analytics: Option<analytics::Connection>,
 }
 
 impl Admin {
@@ -381,6 +447,7 @@ impl Admin {
 			data_dir: None,
 			db: None,
 			control: None,
+			analytics: None,
 			http: None,
 		}
 	}

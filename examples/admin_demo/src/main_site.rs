@@ -1,13 +1,19 @@
 //! The main site: accounts, sign-in, and the identity provider the admin
 //! signs in through. Its own requests feed the health tab.
 
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
+use axum::Extension;
+use axum::Json;
 use axum::Router;
 use axum::extract::Query;
 use axum::response::Html;
 use axum::routing::get;
+use axum::routing::post;
+use leptoskit_analytics::client::server::Analytics;
+use leptoskit_analytics::client::server::Config as AnalyticsConfig;
 use leptoskit_auth::Account;
 use leptoskit_auth::Auth;
 use leptoskit_auth::AuthContext as _;
@@ -33,6 +39,7 @@ use leptoskit_idp::SigningAlgorithm;
 use crate::ADMIN;
 use crate::MAIN_SITE;
 use crate::PROJECT;
+use crate::analytics;
 
 /// The main site's people. Ada keeps the place.
 #[table(name = "users")]
@@ -72,7 +79,7 @@ pub struct MainSite {
 
 /// Sets up the main site, registers the admin as its first-party client,
 /// and reports the site's request metrics to the control store.
-pub async fn start(store: Store) -> Result<MainSite> {
+pub async fn start(store: Store, data: &Path) -> Result<MainSite> {
 	let db = Db::connect("sqlite::memory:").await?;
 	leptoskit_db::testing::create_tables(&db).await?;
 
@@ -111,9 +118,25 @@ pub async fn start(store: Store) -> Result<MainSite> {
 	};
 	let client_secret = secret.ok_or_else(|| anyhow::anyhow!("no client secret issued"))?;
 
+	// The analytics service, beside the site as `lk dev` runs it, and the
+	// site's own server sending typed events to it.
+	let service = analytics::start(data, MAIN_SITE).await?;
+	let events = Analytics::new(
+		MAIN_SITE,
+		Some(analytics::TOKEN.to_owned()),
+		AnalyticsConfig::default(),
+	);
+
 	let router = Router::new()
 		.route("/", get(home))
+		.route("/pricing", get(pricing))
+		.route("/notes", get(notes))
 		.route("/sign-in", get(sign_in))
+		.route("/demo/sign-up", post(sign_up))
+		.route("/demo/checkout", post(checkout))
+		.route("/demo/note", post(note))
+		.layer(Extension(events))
+		.merge(service)
 		.merge(auth.router())
 		.merge(idp.router());
 	// The IdP answers discovery and tokens from its layer, so the layers go
@@ -161,15 +184,184 @@ const STYLE: &str = "<meta name=viewport content='width=device-width'><style>bod
                      system-ui;max-width:28rem;margin:4rem auto;padding:0 \
                      1rem;color:#222}button{display:block;width:100%;margin:.5rem \
                      0;padding:.7rem;font:inherit;border:1px solid \
-                     #999;border-radius:8px;background:#fff;cursor:pointer}small{color:#666}</\
-                     style>";
+                     #999;border-radius:8px;background:#fff;cursor:pointer}small{color:#\
+                     666}nav{margin-bottom:2rem}</style>";
+
+/// What every page of the site runs: an anonymous id kept in the browser,
+/// a session, and a `$pageview` sent to the analytics service's `capture`
+/// operation, as the web client does. Buttons with `data-post` call the
+/// site's own server, which sends the typed events.
+const CAPTURE: &str = r#"<script type=module>
+const uuid7 = () => {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  let t = Date.now();
+  for (let i = 5; i >= 0; i--) { b[i] = t % 256; t = Math.floor(t / 256); }
+  b[6] = (b[6] & 15) | 0x70; b[8] = (b[8] & 63) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
+const anon = localStorage.getItem("notes-anon") ?? `anon-web-${uuid7().slice(-8)}`;
+localStorage.setItem("notes-anon", anon);
+const who = () => localStorage.getItem("notes-member") ?? anon;
+const session = sessionStorage.getItem("notes-session") ?? uuid7();
+sessionStorage.setItem("notes-session", session);
+const mobile = /Mobi|Android|iPhone/.test(navigator.userAgent);
+fetch("/_leptoskit/services/analytics/rpc/capture", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ batch: [{
+    event: "$pageview", distinct_id: who(), uuid: uuid7(), session_id: session,
+    properties: {
+      $current_url: location.href, $pathname: location.pathname, $referrer: document.referrer,
+      $device_type: mobile ? "Mobile" : "Desktop",
+    },
+  }] }),
+});
+for (const button of document.querySelectorAll("[data-post]")) {
+  button.onclick = async () => {
+    const response = await fetch(button.dataset.post, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ who: who(), anon, session, plan: button.dataset.plan ?? "pro" }),
+    });
+    const answer = await response.json().catch(() => ({}));
+    if (answer.member) localStorage.setItem("notes-member", answer.member);
+    button.nextElementSibling.textContent = answer.message ?? `Failed (${response.status})`;
+  };
+}
+</script>"#;
+
+fn page(title: &str, body: &str) -> Html<String> {
+	Html(format!(
+		"<!doctype html><meta charset=utf-8><title>{title} · Notes</title>{STYLE}<nav><a \
+		 href=/>Notes</a> · <a href=/pricing>Pricing</a> · <a href=/notes>Your \
+		 notes</a></nav>{body}{CAPTURE}"
+	))
+}
 
 async fn home() -> Html<String> {
-	Html(format!(
-		"<!doctype html><meta charset=utf-8><title>Notes</title>{STYLE}<h1>Notes</h1><p>The main \
-		 site. Its admin is at <a href='{ADMIN}{base}'>{ADMIN}{base}</a>.</p>",
-		base = leptoskit_admin::BASE
-	))
+	page(
+		"Notes",
+		&format!(
+			"<h1>Notes</h1><p>The main site. Each page you open here is a <code>$pageview</code> \
+			 in its analytics; its admin is at <a \
+			 href='{ADMIN}{base}'>{ADMIN}{base}</a>.</p><button data-post=/demo/sign-up \
+			 data-plan=free>Sign up</button><small></small>",
+			base = leptoskit_admin::BASE
+		),
+	)
+}
+
+async fn pricing() -> Html<String> {
+	page(
+		"Pricing",
+		"<h1>Pricing</h1><p>Each button sends a typed event from the site's server: \
+		 <code>CheckoutStarted</code>, <code>PaymentSubmitted</code>, \
+		 <code>CheckoutCompleted</code>.</p><button data-post=/demo/checkout?step=started \
+		 data-plan=pro>Start checkout (Pro)</button><small></small><button \
+		 data-post=/demo/checkout?step=paid data-plan=pro>Pay</button><small></small><button \
+		 data-post=/demo/checkout?step=completed data-plan=pro>Finish</button><small></small>",
+	)
+}
+
+async fn notes() -> Html<String> {
+	page(
+		"Your notes",
+		"<h1>Your notes</h1><p>Writing one sends <code>NoteCreated</code>.</p><button \
+		 data-post=/demo/note>Write a note</button><small></small>",
+	)
+}
+
+#[derive(serde::Deserialize)]
+struct Visitor {
+	who: String,
+	anon: String,
+	#[serde(default)]
+	plan: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct Step {
+	step: String,
+}
+
+/// Signs the visitor up: `SignedUp`, then identify, which joins their
+/// anonymous visits to their new account.
+async fn sign_up(
+	Extension(events): Extension<Analytics>,
+	Json(visitor): Json<Visitor>,
+) -> Json<serde_json::Value> {
+	let plan = visitor.plan.unwrap_or_else(|| "free".to_owned());
+	let email = format!("{}@visitors.notes.example", visitor.anon);
+	events.capture_event(
+		&visitor.anon,
+		analytics::SignedUp {
+			plan: plan.clone(),
+			source: "demo".to_owned(),
+		},
+	);
+	events.identify(
+		&email,
+		&visitor.anon,
+		vec![
+			("email".into(), email.as_str().into()),
+			("plan".into(), plan.into()),
+		],
+	);
+	Json(serde_json::json!({
+		"member": email,
+		"message": format!("Signed up as {email}: SignedUp sent, and identify joined your visits."),
+	}))
+}
+
+async fn checkout(
+	Extension(events): Extension<Analytics>,
+	Query(step): Query<Step>,
+	Json(visitor): Json<Visitor>,
+) -> Json<serde_json::Value> {
+	let plan = visitor.plan.unwrap_or_else(|| "pro".to_owned());
+	let sent = match step.step.as_str() {
+		"started" => {
+			events.capture_event(&visitor.who, analytics::CheckoutStarted { plan, seats: 1 });
+			"CheckoutStarted"
+		}
+		"paid" => {
+			events.capture_event(
+				&visitor.who,
+				analytics::PaymentSubmitted {
+					plan,
+					method: "card".to_owned(),
+				},
+			);
+			"PaymentSubmitted"
+		}
+		_ => {
+			events.capture_event(
+				&visitor.who,
+				analytics::CheckoutCompleted {
+					plan,
+					seats: 1,
+					amount_cents: 800,
+				},
+			);
+			"CheckoutCompleted"
+		}
+	};
+	Json(serde_json::json!({ "message": format!("{sent} sent for {}.", visitor.who) }))
+}
+
+async fn note(
+	Extension(events): Extension<Analytics>,
+	Json(visitor): Json<Visitor>,
+) -> Json<serde_json::Value> {
+	events.capture_event(
+		&visitor.who,
+		analytics::NoteCreated {
+			words: 120,
+			shared: false,
+		},
+	);
+	Json(serde_json::json!({ "message": format!("NoteCreated sent for {}.", visitor.who) }))
 }
 
 #[derive(serde::Deserialize)]

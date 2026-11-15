@@ -50,6 +50,20 @@ const TOKENS: &[Token] = &[
 	token("series-4", "#8a5cd6", "#8f6ee6"),
 	token("series-5", "#b57c00", "#c08a12"),
 	token("series-6", "#d6528f", "#d65690"),
+	// The sequential ramp for the retention grid, one hue, and the text on
+	// each step: white from step 4 in light, near-black from step 5 in dark.
+	token("seq-1", "#dde8fa", "#1f2c48"),
+	token("seq-2", "#b9cff3", "#22396a"),
+	token("seq-3", "#8db1ea", "#2a4d8f"),
+	token("seq-4", "#5b8fe0", "#3a66b8"),
+	token("seq-5", "#2f6fd6", "#5b8ae6"),
+	token("seq-6", "#1f53a8", "#8fb2f2"),
+	token("seq-text-1", "#16111f", "#f4efe8"),
+	token("seq-text-2", "#16111f", "#f4efe8"),
+	token("seq-text-3", "#16111f", "#f4efe8"),
+	token("seq-text-4", "#ffffff", "#f4efe8"),
+	token("seq-text-5", "#ffffff", "#0f0b16"),
+	token("seq-text-6", "#ffffff", "#0f0b16"),
 ];
 
 /// The faces: the system sans for reading, Skribble Mono for code, and

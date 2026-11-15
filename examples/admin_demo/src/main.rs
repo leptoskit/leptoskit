@@ -5,8 +5,15 @@
 //! isn't. The admin (`http://127.0.0.1:4801/_leptoskit/admin`) signs people
 //! in through it and manages a demo project's `[infra]`.
 //!
+//! The main site also runs the real analytics service, which the admin's
+//! Analytics area reads as the app. `--seed` fills it with 30 days of
+//! visits, sign-ups, a checkout funnel, and returning members, sent
+//! through the service's own ingestion; the site's pages add more as you
+//! click around.
+//!
 //! ```text
 //! cargo run -p admin_demo                  # simulated operations
+//! cargo run -p admin_demo -- --seed        # and a month of analytics
 //! cargo run -p admin_demo -- --executor lk # the real `lk` commands
 //! ```
 //!
@@ -16,6 +23,7 @@
 //! the worker runs `lk infra plan` and friends for real, and without
 //! provider tokens those fail, which the admin shows as it is.
 
+mod analytics;
 mod executor;
 mod main_site;
 
@@ -26,6 +34,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use anyhow::Result;
 use leptoskit_admin::Admin;
+use leptoskit_admin::AnalyticsService;
 use leptoskit_admin::MainSite;
 use leptoskit_auth::Keys;
 use leptoskit_deploy_console::control::Project;
@@ -33,6 +42,9 @@ use leptoskit_deploy_console::control::Service;
 use leptoskit_deploy_console::control::Store;
 
 const MAIN_SITE: &str = "http://localhost:4800";
+/// Where the admin reaches the main site's analytics service: its private
+/// address, as a deployment's would be.
+const ANALYTICS: &str = "http://127.0.0.1:4800";
 const ADMIN: &str = "http://127.0.0.1:4801";
 const PROJECT: &str = "notes-production";
 /// The demo's own owner credential for the in-process control service.
@@ -52,25 +64,31 @@ fn main() -> Result<()> {
 		return Ok(());
 	}
 
-	let real = match std::env::args().nth(1).as_deref() {
-		None => false,
-		Some("--executor") => {
-			match std::env::args().nth(2).as_deref() {
-				Some("lk") => true,
-				Some("demo") => false,
-				_ => anyhow::bail!("--executor takes `demo` or `lk`"),
+	let mut real = false;
+	let mut seed = false;
+	let mut arguments = std::env::args().skip(1);
+
+	while let Some(argument) = arguments.next() {
+		match argument.as_str() {
+			"--seed" => seed = true,
+			"--executor" => {
+				real = match arguments.next().as_deref() {
+					Some("lk") => true,
+					Some("demo") => false,
+					_ => anyhow::bail!("--executor takes `demo` or `lk`"),
+				};
 			}
+			other => anyhow::bail!("unknown argument `{other}`; try `--seed` or `--executor lk`"),
 		}
-		Some(other) => anyhow::bail!("unknown argument `{other}`; try `--executor lk`"),
-	};
+	}
 
 	tokio::runtime::Builder::new_multi_thread()
 		.enable_all()
 		.build()?
-		.block_on(run(real))
+		.block_on(run(real, seed))
 }
 
-async fn run(real: bool) -> Result<()> {
+async fn run(real: bool, seed: bool) -> Result<()> {
 	let data = std::env::temp_dir().join("leptoskit-admin-demo");
 
 	// Each run starts from scratch, in a directory only the demo writes.
@@ -96,13 +114,14 @@ async fn run(real: bool) -> Result<()> {
 	})?;
 	let service = Service::new(store.clone(), CONTROL_KEY, ADMIN)?;
 
-	let site = main_site::start(store.clone()).await?;
+	let site = main_site::start(store.clone(), &data).await?;
 	let admin = Admin::builder("Notes")
 		.origin(ADMIN)
 		.main_site(MainSite::new(MAIN_SITE, site.client_id, site.client_secret).name("Notes"))
 		.keys(Keys::single("admin-demo", [7; 32]))
 		.data_dir(data.join("admin"))
 		.control(service.clone())
+		.analytics(AnalyticsService::new(ANALYTICS, analytics::TOKEN))
 		.build()
 		.await?;
 
@@ -134,6 +153,24 @@ async fn run(real: bool) -> Result<()> {
 		"Sign in as Ada (an admin) or Grace (not one). Data: {}",
 		data.display()
 	);
+
+	// The month is sent once the site is listening, through its own
+	// ingestion, so the admin shows it within seconds of starting.
+	tokio::spawn(async move {
+		let result = if seed {
+			analytics::seed(ANALYTICS).await.map(Some)
+		} else {
+			analytics::register(ANALYTICS).await.map(|()| None)
+		};
+
+		match result {
+			Ok(Some(entries)) => {
+				println!("Analytics: seeded {entries} events from the last 30 days");
+			}
+			Ok(None) => println!("Analytics: empty; run with --seed for a month of traffic"),
+			Err(error) => eprintln!("Analytics: {error:#}"),
+		}
+	});
 
 	tokio::select! {
 		result = leptoskit_axum::serve_listener(main_listener, site.router) => result?,

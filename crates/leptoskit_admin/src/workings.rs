@@ -47,6 +47,18 @@ pub enum Body {
 	Checks(Vec<(Tone, String)>),
 	/// Nothing to show, and why: "can't explain" states are honest.
 	Missing(String),
+	/// The same thing several ways, one tab each, such as the Ask station's
+	/// Rust, SQL, and HTTP. The root's `data-admin-ask` picks the tab.
+	Tabs(Vec<Tab>),
+}
+
+/// One tab of [`Body::Tabs`].
+#[derive(Clone, Debug)]
+pub struct Tab {
+	/// `Rust`, `SQL`, `HTTP`; lowercased, its test identifier.
+	pub name: &'static str,
+	pub lines: Vec<Line>,
+	pub copy_as: &'static str,
 }
 
 impl Station {
@@ -69,7 +81,10 @@ impl Station {
 /// The drawer's panel, hidden until its card's tab opens it.
 pub fn panel(drawer: &Drawer) -> Element {
 	let header = View()
-		.class("flex-row items-start gap-3 border-b border-[var(--admin-underside-line)] px-5 py-4")
+		.class(
+			"shrink-0 flex-row items-start gap-3 border-b border-[var(--admin-underside-line)] \
+			 px-5 py-4",
+		)
 		.child(
 			View()
 				.class("mt-1 h-3.5 w-3.5 shrink-0 rounded-[3px] bg-[#5ef2c2] -rotate-12")
@@ -92,37 +107,55 @@ pub fn panel(drawer: &Drawer) -> Element {
 		);
 
 	let count = drawer.stations.len();
+	let analytics = drawer
+		.stations
+		.first()
+		.is_some_and(|station| station.name == "Emit");
 	let mut rail = View().class("flex-col px-5 pb-6 pt-1.5");
 
 	for (index, station) in drawer.stations.iter().enumerate() {
 		rail = rail.child(station_view(station, index, count));
 	}
 
+	// The header stays put; the stations scroll beneath it.
 	View()
-		.class("flex-col")
+		.class("h-full flex-col")
 		.test_id(format!("drawer:{}", drawer.id))
 		.aria_label(format!("Workings: {}", drawer.title))
 		.child(header)
-		.child(rail)
 		.child(
 			View()
-				.class("flex-row flex-wrap gap-2 px-5 pb-6 pl-12")
+				.class("min-h-0 flex-1 flex-col overflow-scroll")
+				.child(rail)
 				.child(
-					Button("Copy all")
-						.class(
-							"rounded-lg border border-[#5ef2c2] bg-[#5ef2c2] px-3 py-1.5 text-xs \
-							 font-semibold text-[#0f0b16] cursor-pointer hover:opacity-90",
+					View()
+						.class("flex-row flex-wrap gap-2 px-5 pb-6 pl-12")
+						.child(
+							Button("Copy all")
+								.class(
+									"rounded-lg border border-[#5ef2c2] bg-[#5ef2c2] px-3 py-1.5 \
+									 text-xs font-semibold text-[#0f0b16] cursor-pointer \
+									 hover:opacity-90",
+								)
+								.test_id("copy-all"),
 						)
-						.test_id("copy-all"),
-				)
-				.child(
-					Pressable("Open the infrastructure guide")
-						.href("https://leptoskit.dev/docs/guide/24-deploying.html")
-						.class(
-							"rounded-lg border border-[#4a3f58] px-3 py-1.5 cursor-pointer \
-							 hover:border-[#c9c0d0]",
-						)
-						.child(Text("Open docs").class("text-xs font-semibold text-[#c9c0d0]")),
+						.child(
+							Pressable(if analytics {
+								"Open the product analytics guide"
+							} else {
+								"Open the infrastructure guide"
+							})
+							.href(if analytics {
+								"https://leptoskit.dev/docs/guide/40-product-analytics.html"
+							} else {
+								"https://leptoskit.dev/docs/guide/24-deploying.html"
+							})
+							.class(
+								"rounded-lg border border-[#4a3f58] px-3 py-1.5 cursor-pointer \
+								 hover:border-[#c9c0d0]",
+							)
+							.child(Text("Open docs").class("text-xs font-semibold text-[#c9c0d0]")),
+						),
 				),
 		)
 }
@@ -197,6 +230,38 @@ fn station_view(station: &Station, index: usize, count: usize) -> Element {
 			}
 
 			view.child(list)
+		}
+		Body::Tabs(tabs) => {
+			let mut row = View()
+				.class("flex-row gap-1.5")
+				.role(leptoskit::native::Role::TabList)
+				.aria_label(format!("{} as", station.name));
+
+			for tab in tabs {
+				row = row.child(
+					Button(tab.name)
+						.role(leptoskit::native::Role::Tab)
+						.class(
+							"rounded-lg border border-[#4a3f58] px-3 py-1 text-[13px] \
+							 font-semibold text-[#c9c0d0] cursor-pointer hover:text-white",
+						)
+						.test_id(format!("ask-tab:{}", tab.name.to_lowercase())),
+				);
+			}
+
+			let mut panels = View().class("flex-col");
+
+			for tab in tabs {
+				panels = panels.child(
+					View()
+						.class("flex-col")
+						.role(leptoskit::native::Role::TabPanel)
+						.test_id(format!("ask-panel:{}", tab.name.to_lowercase()))
+						.child(components::code_block(&tab.lines, tab.copy_as)),
+				);
+			}
+
+			view.child(row).child(panels)
 		}
 		Body::Missing(reason) => {
 			view.child(components::prose(reason).class(

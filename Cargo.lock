@@ -15,6 +15,7 @@ dependencies = [
  "anyhow",
  "axum",
  "leptoskit_admin",
+ "leptoskit_analytics",
  "leptoskit_apm",
  "leptoskit_auth",
  "leptoskit_axum",
@@ -23,6 +24,8 @@ dependencies = [
  "leptoskit_db",
  "leptoskit_deploy_console",
  "leptoskit_idp",
+ "leptoskit_rpc",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -5234,17 +5237,22 @@ name = "leptoskit_admin"
 version = "0.3.0"
 dependencies = [
  "axum",
+ "chrono",
  "futures",
  "http-body-util",
  "insta",
  "leptos",
  "leptoskit",
+ "leptoskit_analytics",
  "leptoskit_auth",
+ "leptoskit_axum",
  "leptoskit_config",
  "leptoskit_db",
  "leptoskit_db_schema",
  "leptoskit_deploy_console",
  "leptoskit_idp",
+ "leptoskit_rpc",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
@@ -5252,6 +5260,7 @@ dependencies = [
  "tokio",
  "tower",
  "url",
+ "uuid",
 ]
 
 [[package]]

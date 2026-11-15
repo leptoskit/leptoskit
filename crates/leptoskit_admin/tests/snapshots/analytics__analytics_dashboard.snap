@@ -1,0 +1,37 @@
+---
+source: crates/leptoskit_admin/tests/analytics.rs
+expression: screen(html)
+---
+main [main]
+  div [notice] role=status
+  div [live-refresh]
+    a label="← Library" href=/_leptoskit/admin/analytics/library?tab=dashboards
+      "← Library"
+    "Product"
+    "dashboard · 1 card · updates live"
+    div [grid-tiles]
+      div [dashboard-tile]
+        "Notes, weekly"
+        "Trends"
+        div [trend-chart] role=img label="note_created, 5 Oct – 1 Nov over time"
+          "note_created"
+          "4"
+          "3"
+          "2"
+          "1"
+          "0"
+          <vector>
+          <vector>
+          <vector>
+          div [chart-points]
+            a [chart-point] label="Show the people behind 5 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Finsights%2F<id 0>&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-05T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+            a [chart-point] label="Show the people behind 12 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Finsights%2F<id 0>&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-12T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+            a [chart-point] label="Show the people behind 19 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Finsights%2F<id 0>&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-19T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+            a [chart-point] label="Show the people behind 26 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Finsights%2F<id 0>&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-26T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "note_created"
+          "1"
+          "5 Oct"
+          "19 Oct"
+          "26 Oct"
+        a label="Open →" href=/_leptoskit/admin/analytics/insights/<id 0>
+          "Open →"

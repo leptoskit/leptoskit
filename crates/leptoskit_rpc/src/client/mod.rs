@@ -524,6 +524,88 @@ pub fn call_as_app<O: Operation>(
 	}
 }
 
+/// Calls one service's operations as the app, from a process that was told
+/// where the service is and its token rather than reading them from the
+/// environment: what [`call_as_app`] does, for a separate program acting
+/// for the app, such as its admin.
+///
+/// ```ignore
+/// let analytics = rpc::AppCaller::new("analytics", "http://127.0.0.1:3110", token);
+/// let answer = analytics.call(Run { query }).await?;
+/// ```
+///
+/// Keep it on the server, like the token it holds.
+#[cfg(all(feature = "services", not(target_arch = "wasm32")))]
+#[derive(Clone)]
+pub struct AppCaller {
+	service: &'static str,
+	api: Arc<dyn Api>,
+}
+
+#[cfg(all(feature = "services", not(target_arch = "wasm32")))]
+impl AppCaller {
+	/// Calls `service` at its private `url` (its origin, such as
+	/// `http://127.0.0.1:3110`), signed with `token`.
+	pub fn new(service: &'static str, url: impl Into<String>, token: impl Into<String>) -> Self {
+		Self {
+			service,
+			api: services::as_app_at(service, url.into(), token.into()),
+		}
+	}
+
+	/// The service it calls.
+	#[must_use]
+	pub fn service(&self) -> &'static str {
+		self.service
+	}
+
+	/// Calls `op`, which must be one of this service's operations.
+	///
+	/// # Errors
+	///
+	/// As [`call_as_app`]; [`FnError::Other`] when `op` belongs to another
+	/// service or to the app itself.
+	#[expect(
+		clippy::needless_pass_by_value,
+		reason = "a call is written `caller.call(Op { … })`: the arguments are built for it"
+	)]
+	pub fn call<O: Operation>(
+		&self,
+		op: O,
+	) -> impl Future<Output = Result<O::Output, FnError>> + Send + 'static {
+		let key = if O::KIND == crate::Kind::Mutation {
+			Key::Fresh
+		} else {
+			Key::None
+		};
+		let pending = if O::SERVICE == Some(self.service) {
+			serde_json::to_value(&op)
+				.map(|arguments| self.api.call(O::NAME, arguments, key))
+				.map_err(|error| FnError::Invalid(format!("the arguments aren't JSON: {error}")))
+		} else {
+			Err(FnError::Other(format!(
+				"`{}` isn't one of the `{}` service's operations",
+				O::NAME,
+				self.service
+			)))
+		};
+		async move {
+			let value = pending?.await?;
+			serde_json::from_value(value)
+				.map_err(|error| FnError::Decode(format!("`{}` answered with {error}", O::NAME)))
+		}
+	}
+}
+
+#[cfg(all(feature = "services", not(target_arch = "wasm32")))]
+impl std::fmt::Debug for AppCaller {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AppCaller")
+			.field("service", &self.service)
+			.finish_non_exhaustive()
+	}
+}
+
 fn send<O: Operation>(
 	op: &O,
 	key: Key,

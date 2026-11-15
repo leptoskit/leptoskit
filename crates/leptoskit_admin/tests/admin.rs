@@ -451,11 +451,16 @@ async fn key_screens() {
 		redact(&world, &regions(&outline(&html), &["main", "drawer-aside"]))
 	);
 
-	// An Analytics screen teaches rather than inventing numbers.
-	let (_, html) = page(&world, &mut ada, &format!("{BASE}/analytics/overview")).await;
-	assert!(html.contains("Waiting for your first event"));
+	// With no analytics service connected, an Analytics screen teaches how
+	// to connect one rather than inventing numbers.
+	let (status, html) = page(&world, &mut ada, &format!("{BASE}/analytics/overview")).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		html.contains("data-testid=\"analytics-not-configured\""),
+		"{html}"
+	);
 	insta::assert_snapshot!(
-		"analytics_overview",
+		"analytics_not_configured",
 		redact(&world, &regions(&outline(&html), &["main", "drawer-aside"]))
 	);
 }
