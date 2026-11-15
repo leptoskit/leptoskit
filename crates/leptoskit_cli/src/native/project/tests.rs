@@ -988,3 +988,137 @@ fn ios_signs_with_selected_plugin_entitlements_and_drops_them_when_deselected() 
 	);
 	std::fs::remove_dir_all(root).unwrap();
 }
+
+/// `[native.ios] aps-environment` writes the APNs environment as the
+/// entitlement's exact string — Apple's key is a string, not the boolean the
+/// plugin entitlements are — alongside any plugin keys, and dropping it
+/// removes the key, then the file. An app that selects the notifications
+/// plugin but never sets it generates no push entitlement, so existing
+/// local-only notifications users stay local-only.
+#[test]
+fn the_aps_environment_entitlement_is_a_string_that_comes_and_goes_with_the_setting() {
+	let root = std::env::temp_dir()
+		.canonicalize()
+		.unwrap()
+		.join(format!("leptoskit-ios-aps-{}", std::process::id()));
+	let bridge = root.join("sdk/leptoskit_bridge_ffi");
+	write(&bridge.join("Package.swift"), "// bridge").unwrap();
+	let registry_plugin = |value: serde_json::Value, name: &str, directory: &Path| {
+		let mut plugin: super::super::registry::Plugin = serde_json::from_value(value).unwrap();
+		plugin.directory = directory.to_path_buf();
+		plugin.package_name = name.into();
+		plugin
+	};
+	write(&root.join("sdk/Notify/Package.swift"), "// plugin").unwrap();
+	write(&root.join("sdk/Health/Package.swift"), "// plugin").unwrap();
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	let path = root.join(".leptoskit/ios/App.entitlements");
+	let project = root.join(".leptoskit/ios/Host.xcodeproj/project.pbxproj");
+	let generate = |plugins: Vec<super::super::registry::Plugin>,
+	                config: &leptoskit_config::LeptoskitConfig| {
+		let registry = Registry {
+			package: "demo".into(),
+			plugins,
+			support: vec![],
+			bridge: bridge.clone(),
+			target: root.join("target"),
+			host_features: vec![],
+			devtools_feature: None,
+			missing: Vec::new(),
+			scene3d: false,
+		};
+		ios::generate(&root, config, &registry).unwrap();
+	};
+
+	// A local-notifications app without the setting: no entitlements file at
+	// all, and no signing setting.
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "notifications", "apple-module": "LeptosKitNotifications",
+				"apple-type": "NotificationsPlugin"
+			}),
+			"Notify",
+			&root.join("sdk/Notify"),
+		)],
+		&config,
+	);
+	assert!(!path.exists());
+	assert!(
+		!std::fs::read_to_string(&project)
+			.unwrap()
+			.contains("CODE_SIGN_ENTITLEMENTS")
+	);
+
+	// Opting in writes the exact string, and the signing setting appears.
+	config.native.ios.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "notifications", "apple-module": "LeptosKitNotifications",
+				"apple-type": "NotificationsPlugin"
+			}),
+			"Notify",
+			&root.join("sdk/Notify"),
+		)],
+		&config,
+	);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert_eq!(
+		entitlements.get("aps-environment"),
+		Some(&plist::Value::String("development".into()))
+	);
+	assert_eq!(
+		entitlements.len(),
+		1,
+		"nothing else is granted: {entitlements:?}"
+	);
+
+	// A plugin's own boolean entitlements ride beside the string.
+	let health = registry_plugin(
+		serde_json::json!({
+			"name": "health", "apple-module": "Health", "apple-type": "HealthPlugin",
+			"apple-entitlements": ["com.apple.developer.healthkit"]
+		}),
+		"Health",
+		&root.join("sdk/Health"),
+	);
+	config.native.ios.aps_environment = Some(leptoskit_config::ApsEnvironment::Production);
+	generate(vec![health], &config);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert_eq!(
+		entitlements.get("aps-environment"),
+		Some(&plist::Value::String("production".into()))
+	);
+	assert_eq!(
+		entitlements.get("com.apple.developer.healthkit"),
+		Some(&plist::Value::Boolean(true))
+	);
+
+	// Dropping the setting leaves the plugin's keys and removes the string.
+	config.native.ios.aps_environment = None;
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "health", "apple-module": "Health", "apple-type": "HealthPlugin",
+				"apple-entitlements": ["com.apple.developer.healthkit"]
+			}),
+			"Health",
+			&root.join("sdk/Health"),
+		)],
+		&config,
+	);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert!(!entitlements.contains_key("aps-environment"));
+	assert_eq!(entitlements.len(), 1);
+	std::fs::remove_dir_all(root).unwrap();
+}

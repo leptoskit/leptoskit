@@ -2,7 +2,7 @@
 
 You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. When you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **the client half of enrollment** (platform token acquisition and the browser service-worker handlers), and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web and iOS** (Android's FCM token acquisition, the macOS host wiring), push tap routing, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -196,7 +196,7 @@ The APNs topic and environment, the FCM project, and the VAPID identity are all 
 
 ### Enroll a device
 
-The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. (The native token-acquisition plumbing is still to come; today a native app brings its own platform-issued credential. On the web the plumbing is [this crate's `browser` module](#enroll-a-browser), below.)
+The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. On iOS the plumbing is [this crate's `native` module](#enroll-an-ios-device), below; on the web it is [the `browser` module](#enroll-a-browser), further down.
 
 ```rust,ignore
 leptoskit_rpc::call(leptoskit_notifications::push::RegisterPushEndpoint {
@@ -219,6 +219,59 @@ leptoskit_rpc::call(leptoskit_notifications::push::RevokePushEndpoint { endpoint
 ```
 
 Revoking deletes the endpoint and skips everything still queued for it as `endpoint_revoked`. Each attempt checks endpoint liveness immediately before sending: an attempt that passed that check before revocation committed may still reach the provider. Revocation does not recall provider delivery already in flight or visible banners. Another person's endpoint — or an id nobody holds — is `404`, exactly as if it didn't exist.
+
+### Enroll an iOS device
+
+On an iOS device the whole enrollment is this crate's `native` module, behind the feature of the same name. It is iOS only: Android's FCM enrollment and the macOS host wiring are later work, so there is no universal native push claim yet. Depend on the crate in your app, select the notifications plugin, and opt the iOS build into push:
+
+```toml
+[dependencies]
+leptoskit_notifications = { version = "0.3", features = ["native"] }
+
+[native]
+plugins = ["notifications"]
+
+[native.ios]
+aps-environment = "development" # or "production"
+```
+
+The `aps-environment` line is the opt-in. It is a string — Apple's entitlement takes exactly `development` or `production`, not a boolean — and generation writes it into `.leptoskit/ios/App.entitlements`. It must match three things that have to agree: this setting, the provisioning profile your build signs with, and the notifications service's `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` — a development-signed build registers with Apple's sandbox, and a TestFlight or store build registers with production. An app without the setting generates exactly as before, with no push entitlement: selecting the notifications plugin for local banners never turns an app into a push-enabled one. No provisioning or certificate access happens in the build.
+
+The generated app delegate already forwards the OS's answers: `didRegisterForRemoteNotificationsWithDeviceToken` and `didFailToRegisterForRemoteNotificationsWithError` land in the notifications plugin's in-memory broker, which survives the early callbacks that can arrive before the plugin and its guest exist. The token is held in memory only — the OS hands it out again on the next launch — and Apple's bytes are forwarded as exact lower-case hex, of whatever length the OS chooses; nothing assumes the historical 32 bytes, and nothing is invented on failure.
+
+Then the app's own flow, in order:
+
+```rust,ignore
+use leptoskit_notifications::native;
+use leptoskit_plugin_notifications::guest::Notifications;
+use leptoskit_plugin_notifications::Permission;
+
+// From an explicit gesture — a "turn on notifications" switch, never a
+// mount or a render: the OS permission question.
+let notifications = Notifications::new()?;
+if notifications.request_permission().await? != Permission::Granted {
+	// Show your own "notifications are off" state; the OS shows nothing.
+}
+
+// Still in the gesture: register, wait the OS's bounded answer, enroll.
+// The answer is an opaque endpoint id — keep it beside the session.
+let enrollment = native::enroll().await?;
+```
+
+At **launch**, once the person is signed in, call `native::reconcile()`. It reads the broker's snapshot — a call that never prompts and never registers — and re-registers the token the OS already holds under whoever is signed in right now, answering `None` when it holds none. A rotated token re-registers the same destination, and the service answers the same endpoint id, so refreshes never eat into the ten-endpoint bound. Reconciliation never enrolls a previous account: the identity is the app's forwarded session, and the session's lifecycle is yours.
+
+```rust,ignore
+// At launch, without prompting:
+if native::reconcile().await?.is_none() {
+	// Show the switch; from its click handler, ask permission and enroll.
+}
+```
+
+**Sign out by disabling.** While the person is still authenticated, `native::disable(&enrollment).await?` revokes this person's service enrollment with a stable idempotency key derived from the endpoint id — the same contract as the web's `browser::disable` — so a retried sign-out is safe. It never changes OS registration or permission; the token stays the device's, and the next account enrolls from clean. When the OS rotates the token, the new destination is its own endpoint until the app disables the old handle, which is the explicit cleanup — churn is bounded, not accumulated.
+
+Registration failures are surfaced, not guessed around: the OS's provisioning refusal (most often a mismatched or missing `aps-environment`) comes back as an error naming it, a silent OS answers a bounded "no token yet" instead of hanging, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
+
+**What a push does while the app is closed** is the OS's work: APNs wakes the system, which shows the alert from the payload — title and body, collapsed by the notification's id — and your durable inbox row is already in the service. What this does **not** include yet: routing a tap into a screen (the envelope's `data` is carried, but the tap-routing story is later work), and any claim of live APNs acceptance here — provider acceptance is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 
 ### Enroll a browser
 
@@ -316,11 +369,11 @@ A Web Push subscription's endpoint is attacker-shaped material — anyone who ca
 
 ### Platforms
 
-Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser). **Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on the native platforms also needs the app's own OS setup there (capabilities, `GoogleService-Info.plist` or `google-services.json`) — the native token-acquisition plumbing that wires this up is still to come.
+Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser), and the iOS client half is [the `native` module](#enroll-an-ios-device). **Android and macOS enrollments bring their own credentials today; their token-acquisition plumbing is later work. Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on Android also needs the app's own OS setup there (`google-services.json`).
 
 ## What it doesn't do yet
 
-- **No native client enrollment plumbing.** The service side of enrollment is done, and the web client is this crate's `browser` module (above). The generated native token acquisition is later work: today a native app brings its own platform-issued credential to `register_push_endpoint`.
+- **Native client enrollment is iOS only.** The service side of enrollment is done, the web client is this crate's `browser` module, and the iOS client is the `native` module (both above). Android's FCM token acquisition and the macOS host's APNs wiring are later work: today those apps bring their own platform-issued credential to `register_push_endpoint`. Push notification **tap routing** into a screen is also later work, everywhere.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
 

@@ -1366,6 +1366,42 @@ pub struct IosConfig {
 	/// for registered devices, or `development`. `--export-method`
 	/// overrides it for one build.
 	pub export_method: ExportMethod,
+	/// The APNs environment the iOS app is signed for: `development` while
+	/// building from Xcode, `production` for TestFlight and store builds.
+	/// Setting it opts the iOS app into push: generation writes the matching
+	/// `aps-environment` entitlement, the generated app delegate forwards
+	/// APNs device tokens to the notifications plugin, and
+	/// `leptoskit_notifications`' `native` module can enroll them. It must
+	/// match the app's provisioning profile and the notifications service's
+	/// `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps
+	/// that only post local notifications; they generate exactly as before,
+	/// with no push entitlement.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub aps_environment: Option<ApsEnvironment>,
+}
+
+/// Which APNs environment an iOS app's `aps-environment` entitlement names.
+/// The entitlement is a string, not a boolean, so Apple's own values are
+/// kept exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ApsEnvironment {
+	/// The sandbox environment a development-signed build registers with.
+	Development,
+	/// The environment TestFlight and store-signed builds register with.
+	Production,
+}
+
+impl ApsEnvironment {
+	/// The entitlement string, exactly as Apple's `aps-environment` takes it.
+	#[must_use]
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Development => "development",
+			Self::Production => "production",
+		}
+	}
 }
 
 impl IosConfig {

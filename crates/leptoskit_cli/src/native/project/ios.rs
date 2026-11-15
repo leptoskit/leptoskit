@@ -118,7 +118,7 @@ pub(super) fn generate(
 		&frameworks,
 		&resources,
 	)?;
-	let entitlements = entitlements(registry, &dir)?;
+	let entitlements = entitlements(registry, &dir, config)?;
 	ios_configurations(
 		&mut objects,
 		root,
@@ -501,18 +501,25 @@ fn ios_configurations(
 
 	Ok(())
 }
-/// The entitlements selected plugins need, each `true`, in
-/// `.leptoskit/ios/App.entitlements`; `None`, and no stale file, when no
-/// selected plugin needs one.
-fn entitlements(registry: &Registry, dir: &Path) -> Result<Option<std::path::PathBuf>> {
+/// The entitlements the iOS app is signed with, in
+/// `.leptoskit/ios/App.entitlements`: each selected plugin's keys as `true`,
+/// and, when `[native.ios] aps-environment` opts the app into push, the APNs
+/// environment as its exact string. `None`, and no stale file, when nothing
+/// needs one, so apps that never opted in generate without it.
+fn entitlements(
+	registry: &Registry,
+	dir: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+) -> Result<Option<std::path::PathBuf>> {
 	let path = dir.join("App.entitlements");
 	let keys: std::collections::BTreeSet<_> = registry
 		.plugins
 		.iter()
 		.flat_map(|plugin| &plugin.apple_entitlements)
 		.collect();
+	let aps = config.native.ios.aps_environment;
 
-	if keys.is_empty() {
+	if keys.is_empty() && aps.is_none() {
 		if std::fs::symlink_metadata(&path).is_ok() {
 			std::fs::remove_file(&path)?;
 		}
@@ -520,10 +527,19 @@ fn entitlements(registry: &Registry, dir: &Path) -> Result<Option<std::path::Pat
 		return Ok(None);
 	}
 
-	let dictionary: plist::Dictionary = keys
-		.into_iter()
-		.map(|key| (key.clone(), plist::Value::Boolean(true)))
-		.collect();
+	let mut dictionary = plist::Dictionary::new();
+
+	for key in keys {
+		dictionary.insert(key.clone(), plist::Value::Boolean(true));
+	}
+
+	if let Some(environment) = aps {
+		dictionary.insert(
+			"aps-environment".into(),
+			plist::Value::String(environment.as_str().into()),
+		);
+	}
+
 	let mut xml = Vec::new();
 	plist::Value::Dictionary(dictionary).to_writer_xml(&mut xml)?;
 	write(&path, &String::from_utf8(xml)?)?;

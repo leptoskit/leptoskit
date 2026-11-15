@@ -48,6 +48,23 @@ impl Notifications {
 		self.empty(DELETE_CHANNEL, &id.encode()?).await
 	}
 
+	/// Reads the host's latest APNs registration answer without side
+	/// effects. iOS only; every other platform answers Unavailable. Safe at
+	/// launch: reading never prompts and never registers.
+	pub async fn remote_snapshot(self) -> Result<ApnsRegistration, Error> {
+		ApnsRegistration::decode(&self.0.call(REMOTE_TOKEN, &[])?.await?)
+	}
+
+	/// Asks the OS to register for remote notifications and waits, bounded
+	/// by the host, for its answer, returned as the snapshot it produced.
+	/// iOS only; every other platform answers Unavailable. The host's wait
+	/// bound means this resolves even when the OS stays silent; compare the
+	/// answered revision against [`ApnsRegistration::none`] to tell silence
+	/// from an answer.
+	pub async fn register_remote(self) -> Result<ApnsRegistration, Error> {
+		ApnsRegistration::decode(&self.0.call(REMOTE_REGISTER, &[])?.await?)
+	}
+
 	async fn empty(self, method: MethodId, payload: &[u8]) -> Result<(), Error> {
 		if self.0.call(method, payload)?.await?.is_empty() {
 			Ok(())

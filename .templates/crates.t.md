@@ -869,7 +869,9 @@ plugin in `native.plugins`; supported generated hosts discover it from Cargo met
 Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
 `guest::Notifications` rather than resolving the plugin on every call. A successful call
 means the OS accepted the request, not that a banner appeared; focus modes and user
-settings can still suppress it.
+settings can still suppress it. On iOS the generated app delegate forwards APNs device
+tokens into the plugin's broker, and `REMOTE_REGISTER` turns an explicit opt-in into a
+bounded, typed registration answer; every other platform reports `Unavailable` for it.
 
 <!-- {/p_notificationsSummary} -->
 

@@ -40,7 +40,10 @@
 //! On the web, the [`browser`] module is the person's own half of
 //! enrollment: it serves the receiver worker that shows what arrives, and
 //! enrolls, reconciles, and disables the browser's subscription from the
-//! app's client, with the same forwarded identity and no service token.
+//! app's client, with the same forwarded identity and no service token. On
+//! an iOS device, the [`native`] module is the same half for APNs: it turns
+//! the device token the generated app delegate forwarded into the same
+//! enrollment, with the same boundaries.
 
 use leptoskit_db::table;
 use leptoskit_rpc as rpc;
@@ -50,6 +53,9 @@ use serde::Serialize;
 
 #[cfg(feature = "browser")]
 pub mod browser;
+
+#[cfg(feature = "native")]
+pub mod native;
 
 #[cfg(feature = "service")]
 pub mod service;

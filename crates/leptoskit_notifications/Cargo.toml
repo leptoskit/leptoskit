@@ -58,6 +58,10 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 httpdate = { version = "1", optional = true }
 leptoskit_db = { workspace = true }
+# The plugin contract the native enrollment rides on: the snapshot types the
+# iOS host's answers cross the bridge in. Its wire codec is tiny and adds no
+# server dependency; only the `native` feature turns its guest client on.
+leptoskit_plugin_notifications = { workspace = true }
 leptoskit_rpc = { workspace = true, features = ["client"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -105,6 +109,13 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The native client's guest transport: the plugin guest clients the `native`
+# module reads the APNs broker through, and the bridge error type its
+# failures carry. Wasm-only, so the service and the shared types never
+# compile them.
+leptoskit_bridge = { workspace = true, optional = true }
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
@@ -125,6 +136,16 @@ browser = [
 	"dep:thiserror",
 	"dep:wasm-bindgen",
 	"leptoskit_rpc/web",
+]
+# The native client for iOS: enrollment from the app's Wasm guest through
+# the notifications plugin's APNs token broker, with `leptoskit_rpc/guest`
+# as the transport. Like `browser`, it adds no server dependency, and the
+# same test checks its tree.
+native = [
+	"dep:leptoskit_bridge",
+	"dep:thiserror",
+	"leptoskit_plugin_notifications/guest",
+	"leptoskit_rpc/guest",
 ]
 # Building the service: the operations' bodies, their registrations, the
 # SQLite driver, live queries, and the push engine. Only `lk` turns this

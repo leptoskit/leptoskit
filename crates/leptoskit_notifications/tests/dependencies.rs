@@ -2,7 +2,7 @@
 //! that only names the notification types doesn't build the service, the
 //! HTTP client, or the database. `cargo deny` can't check this, because the
 //! service uses some of them legitimately. The tree is read for the browser
-//! target, which is what an app's client build compiles.
+//! and native targets, which are what an app's client builds compile.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -37,6 +37,11 @@ fn the_client_build_compiles_none_of_the_banned_crates() {
 #[test]
 fn the_browser_client_build_compiles_none_of_the_banned_crates() {
 	check(&["--no-default-features", "--features", "browser"]);
+}
+
+#[test]
+fn the_native_client_build_compiles_none_of_the_banned_crates() {
+	check(&["--no-default-features", "--features", "native"]);
 }
 
 fn check(extra: &[&str]) {

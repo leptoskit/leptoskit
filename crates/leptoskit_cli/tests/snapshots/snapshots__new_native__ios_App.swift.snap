@@ -30,6 +30,24 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         #endif
         completionHandler(true)
     }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteDeviceToken(deviceToken)
+        #endif
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: any Error
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteRegistrationFailure(error)
+        #endif
+    }
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {

@@ -35,15 +35,15 @@
 
 Immediate local notifications with explicit permission requests, bounded binary messages and cancellation. A successful call means the platform accepted the request. It does not prove that a banner appeared or the user saw it: Focus modes, channel settings, foreground presentation policy and desktop services control delivery.
 
-| Platform    | Implementation                          | Scope                                                                                   |
-| ----------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
-| iOS / macOS | Swift `UNUserNotificationCenter`        | Permission query/request, immediate posting, named cancellation, namespace cancellation |
-| Android 26+ | Kotlin `NotificationManager`            | The above, plus channels and Android 13 notification permission                         |
-| Browser     | Rust `web` module using `Notification`  | Explicit permission request, posting and cancellation through retained handles          |
-| Linux       | Rust `linux` module using session D-Bus | Immediate posting and cancellation through retained handles                             |
-| Windows     | Unavailable                             | No Windows toast backend yet                                                            |
+| Platform    | Implementation                          | Scope                                                                                                                                     |
+| ----------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS / macOS | Swift `UNUserNotificationCenter`        | Permission query/request, immediate posting, named cancellation, namespace cancellation; iOS also APNs token acquisition and registration |
+| Android 26+ | Kotlin `NotificationManager`            | The above, plus channels and Android 13 notification permission                                                                           |
+| Browser     | Rust `web` module using `Notification`  | Explicit permission request, posting and cancellation through retained handles                                                            |
+| Linux       | Rust `linux` module using session D-Bus | Immediate posting and cancellation through retained handles                                                                               |
+| Windows     | Unavailable                             | No Windows toast backend yet                                                                                                              |
 
-Scheduled notifications, remote push registration, service-worker notifications, badges, attachments, click/action routing and delivery receipts are not implemented. Unsupported operations return `Unavailable` where the backend exposes them. Linux and browser APIs are called directly from Rust; they are not native bridge registrations.
+Scheduled notifications, service-worker notifications, badges, attachments, click/action routing and delivery receipts are not implemented. Remote push registration is iOS only, and it acquires a device token: it does not send anything to a push provider. Unsupported operations return `Unavailable` where the backend exposes them. Linux and browser APIs are called directly from Rust; they are not native bridge registrations.
 
 ## Native registration and use
 
@@ -67,21 +67,27 @@ Browser permission requests need a secure context and usually a user gesture. Br
 
 Linux `Notifications::new` connects to the session bus without posting anything. The service assigns a numeric ID returned inside the cancellation handle; the portable ID is not used to replace notifications. Dropping a handle preserves delivery. Calls can block up to five seconds and belong off the rendering thread. The body is escaped for the desktop notification protocol's markup. App display names are metadata, not trusted application identity. Linux desktop permission prompting is not standardized, so this module does not manufacture a permission state.
 
+## Remote registration (iOS)
+
+On iOS hosts the generated app delegate forwards `didRegisterForRemoteNotificationsWithDeviceToken` and `didFailToRegisterForRemoteNotificationsWithError` into a process-wide broker, and the plugin's `REMOTE_TOKEN` reads its latest answer while `REMOTE_REGISTER` asks the OS to register and waits a bounded time for the answer. The broker is static on purpose: answers that arrive before the plugin or its guest exists are not lost, a closed plugin leaves the OS's answer readable, and no closed guest is retained. The token is held in memory only — the OS hands it out again on the next launch — and its bytes are never logged. Every other platform answers `Unavailable` for both methods. Registration is not permission: alerts still need `request_permission`, and without the app's `aps-environment` entitlement the OS refuses with a provisioning failure.
+
 ## Binary protocol
 
 All integers are little-endian `u32`. Strings are `u32` byte lengths followed by strict UTF-8. Every decoder rejects trailing bytes, truncated fields, invalid UTF-8 and values outside their domain before calling a platform API.
 
-| ID | Method             | Request                                                   | Response         |
-| -- | ------------------ | --------------------------------------------------------- | ---------------- |
-| 0  | Permission         | Empty                                                     | Permission `u32` |
-| 1  | Request permission | Empty                                                     | Permission `u32` |
-| 2  | Show               | ID, title, body, channel strings                          | Empty            |
-| 3  | Cancel             | ID string                                                 | Empty            |
-| 4  | Configure channel  | ID, name, description strings, importance and sound `u32` | Empty            |
-| 5  | Delete channel     | ID string                                                 | Empty            |
-| 6  | Cancel all         | Empty                                                     | Empty            |
+| ID | Method             | Request                                                   | Response                            |
+| -- | ------------------ | --------------------------------------------------------- | ----------------------------------- |
+| 0  | Permission         | Empty                                                     | Permission `u32`                    |
+| 1  | Request permission | Empty                                                     | Permission `u32`                    |
+| 2  | Show               | ID, title, body, channel strings                          | Empty                               |
+| 3  | Cancel             | ID string                                                 | Empty                               |
+| 4  | Configure channel  | ID, name, description strings, importance and sound `u32` | Empty                               |
+| 5  | Delete channel     | ID string                                                 | Empty                               |
+| 6  | Cancel all         | Empty                                                     | Empty                               |
+| 7  | Remote token       | Empty                                                     | Revision `u64`, state `u32`, string |
+| 8  | Remote register    | Empty                                                     | Revision `u64`, state `u32`, string |
 
-IDs contain 1–64 ASCII letters, digits, `.`, `_` or `-`. Titles have at most 256 UTF-8 bytes, bodies 4096, channel names 128 and descriptions 1024. Titles and names must contain non-whitespace text. Control characters are rejected except line feeds and tabs in bodies/descriptions. Sound is exactly 0 or 1; importance is Low=1, Default=2 or High=3. Permission is Unknown=0, NotDetermined=1, Denied=2, Granted=3, Provisional=4 or Ephemeral=5.
+IDs contain 1–64 ASCII letters, digits, `.`, `_` or `-`. Titles have at most 256 UTF-8 bytes, bodies 4096, channel names 128 and descriptions 1024. Titles and names must contain non-whitespace text. Control characters are rejected except line feeds and tabs in bodies/descriptions. Sound is exactly 0 or 1; importance is Low=1, Default=2 or High=3. Permission is Unknown=0, NotDetermined=1, Denied=2, Granted=3, Provisional=4 or Ephemeral=5. Remote state is None=0, Token=1 or Failed=2; the token is 32–200 lower-case hex characters, never an assumed length, and failure reasons are bounded, control-free text. The revision is the host's monotonic answer counter; 0 means no answer has arrived.
 
 ## Verification and references
 
@@ -93,7 +99,7 @@ API scope is informed by [Expo Notifications](https://docs.expo.dev/versions/lat
 
 <!-- {=p_notificationsSummary} -->
 
-Add `leptoskit_plugin_notifications` as a direct dependency and select the `notifications` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Notifications` rather than resolving the plugin on every call. A successful call means the OS accepted the request, not that a banner appeared; focus modes and user settings can still suppress it.
+Add `leptoskit_plugin_notifications` as a direct dependency and select the `notifications` plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata. Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse `guest::Notifications` rather than resolving the plugin on every call. A successful call means the OS accepted the request, not that a banner appeared; focus modes and user settings can still suppress it. On iOS the generated app delegate forwards APNs device tokens into the plugin's broker, and `REMOTE_REGISTER` turns an explicit opt-in into a bounded, typed registration answer; every other platform reports `Unavailable` for it.
 
 <!-- {/p_notificationsSummary} -->
 

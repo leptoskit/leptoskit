@@ -470,6 +470,21 @@
 			},
 			"additionalProperties": false
 		},
+		"ApsEnvironment": {
+			"description": "Which APNs environment an iOS app's `aps-environment` entitlement names.\nThe entitlement is a string, not a boolean, so Apple's own values are\nkept exactly.",
+			"oneOf": [
+				{
+					"description": "The sandbox environment a development-signed build registers with.",
+					"type": "string",
+					"const": "development"
+				},
+				{
+					"description": "The environment TestFlight and store-signed builds register with.",
+					"type": "string",
+					"const": "production"
+				}
+			]
+		},
 		"Artifact": {
 			"description": "A trusted repository build recipe with a named output directory. Its\ncommand is an argument vector, not a shell fragment or user input.",
 			"type": "object",
@@ -2554,6 +2569,17 @@
 			"description": "How `leptoskit build --release --platform ios` signs the app and exports\nits `.ipa`. Only settings that aren't secret live here: the team, the\nsigning identity, the provisioning profile, and the App Store Connect key\ncome from the environment.",
 			"type": "object",
 			"properties": {
+				"aps-environment": {
+					"description": "The APNs environment the iOS app is signed for: `development` while\nbuilding from Xcode, `production` for TestFlight and store builds.\nSetting it opts the iOS app into push: generation writes the matching\n`aps-environment` entitlement, the generated app delegate forwards\nAPNs device tokens to the notifications plugin, and\n`leptoskit_notifications`' `native` module can enroll them. It must\nmatch the app's provisioning profile and the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ApsEnvironment"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"export-method": {
 					"description": "Who the `.ipa` is for: `app-store-connect` (the default), `ad-hoc`\nfor registered devices, or `development`. `--export-method`\noverrides it for one build.",
 					"$ref": "#/$defs/ExportMethod",

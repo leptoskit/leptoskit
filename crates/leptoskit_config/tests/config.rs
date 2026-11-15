@@ -225,6 +225,41 @@ fn missing_plugins_warn_by_default_and_can_stop_the_build() {
 	assert!(toml::from_str::<LeptoskitConfig>("[native]\nmissing-plugins = \"ignore\"").is_err());
 }
 
+/// `aps-environment` is off by default — local-only notifications apps never
+/// gain a push entitlement — and takes exactly Apple's two values, whose
+/// names become the entitlement string verbatim.
+#[test]
+fn the_aps_environment_is_opt_in_and_names_apples_exact_strings() {
+	let config: LeptoskitConfig = toml::from_str("").unwrap();
+	assert_eq!(config.native.ios.aps_environment, None);
+	assert!(
+		!toml::to_string(&config)
+			.unwrap()
+			.contains("aps-environment")
+	);
+
+	for (name, environment) in [
+		("development", leptoskit_config::ApsEnvironment::Development),
+		("production", leptoskit_config::ApsEnvironment::Production),
+	] {
+		let config: LeptoskitConfig =
+			toml::from_str(&format!("[native.ios]\naps-environment = \"{name}\"")).unwrap();
+		assert_eq!(config.native.ios.aps_environment, Some(environment));
+		assert_eq!(environment.as_str(), name);
+		assert!(
+			toml::to_string(&config)
+				.unwrap()
+				.contains(&format!("aps-environment = \"{name}\""))
+		);
+	}
+
+	// Apple's key takes nothing else, so neither does the config.
+	assert!(
+		toml::from_str::<LeptoskitConfig>("[native.ios]\naps-environment = \"ad-hoc\"").is_err()
+	);
+	assert!(toml::from_str::<LeptoskitConfig>("[native.ios]\naps-environment = true").is_err());
+}
+
 #[test]
 fn the_log_level_follows_the_build_unless_set() {
 	let config: LeptoskitConfig = toml::from_str("").unwrap();
