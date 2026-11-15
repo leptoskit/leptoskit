@@ -57,17 +57,23 @@ impl Simulated {
 	/// A missing file falls back to `committed`, and construction writes
 	/// nothing: the file appears with the first persisted Apply. A missing
 	/// file is the only fallback — a file that exists but can't be read,
-	/// through permissions or bytes that aren't UTF-8, is an error, never a
-	/// silent reset to `committed`.
+	/// through permissions, encoding, or invalid configuration, is an error,
+	/// never a silent reset to `committed`.
 	///
 	/// Apply replaces `path` atomically and durably, and reports success
 	/// only once the text is on disk; see [`persist_applied`].
+	/// Persisted mode requires Unix directory syncing; other platforms
+	/// return an error before reading or writing the applied state.
 	///
 	/// The caller must hold the generation's exclusive worker file lock
 	/// before constructing the executor and keep holding it for as long as
 	/// the executor runs: this worker is the only reader and writer of
 	/// `path`, and no locking happens here.
 	pub fn persisted(service: Service, committed: &str, path: &Path) -> Result<Self> {
+		anyhow::ensure!(
+			cfg!(unix),
+			"persisted demo state requires Unix directory syncing"
+		);
 		let applied = match std::fs::read_to_string(path) {
 			Ok(text) => text,
 			Err(error) if error.kind() == io::ErrorKind::NotFound => committed.to_owned(),
@@ -78,6 +84,12 @@ impl Simulated {
 				)));
 			}
 		};
+		LeptoskitConfig::from_toml(&applied, parent_of(path)).with_context(|| {
+			format!(
+				"the simulated cloud's applied configuration at {} is invalid",
+				path.display()
+			)
+		})?;
 
 		Ok(Self {
 			service,
@@ -302,6 +314,11 @@ fn set_applied(applied: &Mutex<String>, text: &str) -> Result<()> {
 fn persist_applied(path: &Path, text: &str, applied: &Mutex<String>) -> Result<String> {
 	use sha2::Digest as _;
 
+	LeptoskitConfig::from_toml(text, parent_of(path))
+		.context("the simulated cloud's new applied configuration is invalid")?;
+	let mut memory = applied
+		.lock()
+		.map_err(|_| anyhow::anyhow!("the applied state is poisoned"))?;
 	let parent = parent_of(path);
 	let mut temporary = tempfile::Builder::new()
 		.prefix(".applied.")
@@ -335,9 +352,7 @@ fn persist_applied(path: &Path, text: &str, applied: &Mutex<String>) -> Result<S
 		)));
 	}
 
-	set_applied(applied, text).context(
-		"the applied state was replaced, but the executor's memory of it couldn't be updated",
-	)?;
+	text.clone_into(&mut memory);
 
 	if let Err(error) = sync_directory(parent) {
 		return Err(anyhow::anyhow!(
@@ -357,22 +372,21 @@ fn parent_of(path: &Path) -> &Path {
 		.unwrap_or(Path::new("."))
 }
 
-/// Makes a rename or new entry in `directory` durable. Unix needs an fsync
-/// of the directory itself; Windows cannot open a directory as a file
-/// through `std`, and NTFS journals the metadata change — the same
-/// trade-off the codepush store makes, stated here rather than silently
-/// skipped.
+/// Syncs the directory entry on Unix; unsupported platforms cannot claim
+/// that the replacement is durable.
 fn sync_directory(directory: &Path) -> io::Result<()> {
 	#[cfg(test)]
 	if injected_directory_sync_failure(directory) {
 		return Err(io::Error::other("the directory sync failed"));
 	}
 
-	if cfg!(unix) {
-		std::fs::File::open(directory)?.sync_all()?;
+	if !cfg!(unix) {
+		return Err(io::Error::new(
+			io::ErrorKind::Unsupported,
+			"Unix directory syncing is required",
+		));
 	}
-
-	Ok(())
+	std::fs::File::open(directory)?.sync_all()
 }
 
 /// Whether the test seam has armed a directory-sync failure for this
@@ -569,6 +583,7 @@ mod tests {
 	}
 
 	/// Arms the seam that fails the next sync of this directory.
+	#[cfg(unix)]
 	fn fail_next_directory_sync(directory: &Path) {
 		*FAIL_NEXT_DIRECTORY_SYNC
 			.lock()
@@ -595,6 +610,20 @@ mod tests {
 		Ok((directory, project_root, state))
 	}
 
+	#[cfg(not(unix))]
+	#[test]
+	fn persisted_mode_refuses_platforms_without_directory_sync() -> Result<()> {
+		let (directory, _project_root, state) = workspace()?;
+		let path = state.join("applied.toml");
+		let Err(error) = Simulated::persisted(service(directory.path())?, COMMITTED, &path) else {
+			panic!("persisted state cannot promise durability without directory syncing");
+		};
+		assert!(error.to_string().contains("Unix directory syncing"));
+		assert!(!path.exists());
+		Ok(())
+	}
+
+	#[cfg(unix)]
 	#[tokio::test(start_paused = true)]
 	async fn a_restarted_worker_recovers_the_last_applied_configuration() -> Result<()> {
 		let workspace = workspace()?;
@@ -622,6 +651,7 @@ mod tests {
 		Ok(())
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(start_paused = true)]
 	async fn a_persisted_apply_reports_the_digest_of_the_file_it_wrote() -> Result<()> {
 		let workspace = workspace()?;
@@ -705,6 +735,7 @@ mod tests {
 		Ok(())
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(start_paused = true)]
 	async fn a_missing_file_uses_the_committed_configuration_until_the_first_apply() -> Result<()> {
 		let workspace = workspace()?;
@@ -759,10 +790,11 @@ mod tests {
 		Ok(())
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(start_paused = true)]
 	async fn unreadable_or_malformed_applied_state_is_an_error_not_a_reset() -> Result<()> {
 		let workspace = workspace()?;
-		let (directory, _project_root, state) = (&workspace.0, &workspace.1, &workspace.2);
+		let (directory, project_root, state) = (&workspace.0, &workspace.1, &workspace.2);
 		let service = service(directory.path())?;
 
 		// Malformed: the file holds bytes that aren't UTF-8.
@@ -777,6 +809,32 @@ mod tests {
 			"the error names the file: {error}"
 		);
 		assert_eq!(std::fs::read(&malformed)?, [0xFF, 0xFE]);
+
+		// Valid UTF-8 is not enough to recover an applied configuration.
+		let invalid_toml = "[infra\ninstances = 3\n";
+		std::fs::write(&malformed, invalid_toml)?;
+		assert!(Simulated::persisted(service.clone(), COMMITTED, &malformed).is_err());
+		assert_eq!(std::fs::read_to_string(&malformed)?, invalid_toml);
+
+		std::fs::write(&malformed, COMMITTED)?;
+		let worker = Simulated::persisted(service.clone(), COMMITTED, &malformed)?;
+		std::fs::write(project_root.join("leptoskit.toml"), invalid_toml)?;
+		let apply = run(
+			&worker,
+			project_root,
+			"invalid-apply",
+			Action::Apply {
+				plan_id: "plan".into(),
+			},
+		)
+		.await;
+		assert!(!apply.succeeded, "{}", apply.message);
+		assert_eq!(apply.details["code"], "demo_failed");
+		assert_eq!(std::fs::read_to_string(&malformed)?, COMMITTED);
+		assert_eq!(
+			status_hosts(&worker, project_root, "after-invalid-apply").await,
+			1
+		);
 
 		// Unreadable in another way: the path is a directory.
 		let occupied = state.join("occupied");
@@ -794,6 +852,7 @@ mod tests {
 		Ok(())
 	}
 
+	#[cfg(unix)]
 	#[tokio::test(start_paused = true)]
 	async fn a_failed_directory_sync_reports_failure_with_memory_matching_the_file() -> Result<()> {
 		let workspace = workspace()?;
