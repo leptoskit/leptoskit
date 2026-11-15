@@ -13,12 +13,13 @@
 //! seeding a volume.
 //!
 //! The proofs are Linux-only, where `/proc/self/fd` exists; the harness
-//! they drive compiles everywhere, so the host's compiler and lints
+//! they drive compiles on Unix, so the macOS compiler and lints
 //! still check it.
 
+#![cfg(unix)]
 #![allow(
 	dead_code,
-	reason = "the proofs run on Linux only; the harness still typechecks everywhere"
+	reason = "the proofs run on Linux only; the harness still typechecks on Unix"
 )]
 
 mod support;

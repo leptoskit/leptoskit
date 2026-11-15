@@ -14,6 +14,8 @@
 //!   out of release builds, off unless its environment variables name local
 //!   files, bounded, and unreachable over HTTP.
 
+#![cfg(unix)]
+
 mod support;
 
 use std::path::Path;

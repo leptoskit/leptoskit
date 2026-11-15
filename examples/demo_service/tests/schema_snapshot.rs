@@ -7,6 +7,8 @@
 //! schema change shows up in review as a diff that demands a
 //! `GENERATION_FORMAT` bump alongside it.
 
+#![cfg(unix)]
+
 use std::path::Path;
 
 use anyhow::Result;

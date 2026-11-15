@@ -25,30 +25,52 @@
 //!
 //! Visitor onboarding (personas, inbox, limits, pages) is a later task:
 //! this slice has no public sign-in and the mailer is a sink.
+//!
+//! The runtime is Unix only, deliberately: the locks are `flock`, the
+//! daily reset re-executes through `execve`, and the deployment is Linux.
+//! Everything below is gated to `cfg(unix)` — on an unsupported platform
+//! this library compiles empty and the binary refuses to start rather
+//! than emulate any of it.
 
+#[cfg(unix)]
 pub mod admin;
+#[cfg(unix)]
 pub mod barrier;
+#[cfg(unix)]
 pub mod clock;
+#[cfg(unix)]
 pub mod config;
+#[cfg(unix)]
 pub mod dispatch;
+#[cfg(unix)]
 pub mod generation;
+#[cfg(unix)]
 pub mod locks;
+#[cfg(unix)]
 pub mod marker;
+#[cfg(unix)]
 pub mod secrets;
+#[cfg(unix)]
 pub mod shutdown;
+#[cfg(unix)]
 pub mod site;
+#[cfg(unix)]
 pub mod worker;
 
+#[cfg(unix)]
 use std::sync::OnceLock;
 
+#[cfg(unix)]
 use crate::config::Authorities;
 
 /// The authorities the process answers for, set once at startup before the
 /// listener exists, so the fallback already rejects foreign hosts with 421.
+#[cfg(unix)]
 pub static AUTHORITIES: OnceLock<Authorities> = OnceLock::new();
 
 /// The opened generation. Set exactly once, when initialization commits:
 /// one process image serves one generation and never replaces it.
+#[cfg(unix)]
 pub static GENERATION: OnceLock<generation::Generation> = OnceLock::new();
 
 /// Why the process stops serving: a supervisor's SIGTERM, or its own daily
@@ -56,6 +78,7 @@ pub static GENERATION: OnceLock<generation::Generation> = OnceLock::new();
 /// authoritative: a SIGTERM wins over a reset in whichever order they
 /// arrive, and the exit-or-exec choice reads the stop state once more
 /// after the runtime has stopped.
+#[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exit {
 	/// A deliberate stop (`SIGTERM`): leave with status 0.

@@ -2,6 +2,8 @@
 
 `demo_service` is the public demo's runtime: one process image serves one UTC day's generation, resets itself at midnight by re-executing the same binary in the same PID, and shares a volume with the previous and next images safely through kernel file locks. This page is the operator contract: the environment it takes, the rules a release must follow, and what it deliberately does not do yet.
 
+The service is a Unix process, and deliberately so: its locks are `flock`, its reset re-executes through `execve`, and it is deployed on Linux (developed on macOS). The workspace still checks on Windows, but there the binary refuses to start — a nonzero exit naming the Unix `flock`/`exec` requirement, before reading configuration, binding, or creating state — instead of emulating any of it, and the integration tests compile only on Unix.
+
 ## The environment
 
 | Variable                         | Meaning                                                                                                                                          |

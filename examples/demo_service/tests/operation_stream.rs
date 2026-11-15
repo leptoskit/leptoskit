@@ -20,6 +20,8 @@
 //! needs the onboarding slice's real admin session; the stand-ins here prove
 //! the wrapper's behavior only, and a direct Store read is not an SSE proof.
 
+#![cfg(unix)]
+
 use std::time::Duration;
 
 use axum::Router;

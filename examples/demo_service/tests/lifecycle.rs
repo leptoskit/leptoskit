@@ -12,6 +12,8 @@
 //! crash during a build, (8) failed initialization, (9) dispatch
 //! boundaries, (10) schema drift refused, (11) cleanup and budget.
 
+#![cfg(unix)]
+
 mod support;
 
 use std::fs::File;
