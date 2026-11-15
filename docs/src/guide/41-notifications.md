@@ -1,8 +1,8 @@
 # Notifications
 
-You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox.
+You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. When you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
 
-This page shows how to add it, send from your server, read the inbox on every platform, and manage categories and schedules. It also says plainly what it does not do yet: **OS background push**. Delivery today is inbox retrieval while your app runs — a signed-in screen asks the service what is new, and a live query updates it the moment it arrives. APNs, FCM, and Web Push transports and device enrollment are later work.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **the client half of enrollment** (platform token acquisition and the browser service-worker handlers), and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -176,13 +176,80 @@ notifications
 	.await?;
 ```
 
-This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. Scheduled **local** notifications, badges from the plugin, and click routing are not available everywhere either — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is the background-push gap below.
+This shows a banner only while your app runs, and only where the plugin is implemented: iOS and macOS through `UNUserNotificationCenter`, Android 26+ through `NotificationManager`, the browser through the `Notification` API, and Linux through D-Bus. **Windows returns `Unavailable`** — there is no Windows toast backend yet. On Android the channel must exist before a post (posts to a channel that doesn't are dropped), and Android 13+ also needs `POST_NOTIFICATIONS` — declared in your app's `android/app/src/main/AndroidManifest.xml` ([the `android/` folder is yours](../platforms/android.md)) and granted at runtime through `request_permission`, which uses the host's permission broker. On every platform a successful post doesn't prove the person saw anything: Focus modes, notification permissions, channel settings, and foreground presentation policy decide that. Scheduled **local** notifications, badges from the plugin, and click routing are not available everywhere either — see the [plugin inventory](../platforms/plugin-inventory.md) for what each platform does. None of this posting reaches a device where your app isn't running; that is what server push, below, is for.
+
+## Push delivery
+
+When your app isn't running on a device, nothing above can show a banner. The service can: configure a transport, enroll the person's devices, and every send that creates an inbox row also reaches those devices. A push never stands in for the durable row — it is a knock on the door of an inbox the device can open anyway.
+
+### Configure a transport
+
+Each transport is optional and configured through the service's environment, which `lk` passes through from your deploy configuration — provider credentials are secrets and belong there, never in the repo or in client code. A transport with all of its variables set is on; a transport with none is off (its platform is refused at enrollment, and the inbox is untouched); a transport with some set refuses to start, naming every missing variable, because half-configured looks like push works until the first send fails.
+
+| Transport | Variables                                                                                                                                                                                                                                                                                             |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| APNs      | `LEPTOSKIT_NOTIFICATIONS_APNS_KEY_P8` (the `.p8` file's contents), `_APNS_KEY_ID`, `_APNS_TEAM_ID`, `_APNS_TOPIC` (your app's bundle id), `_APNS_ENVIRONMENT` (`sandbox` or `production`)                                                                                                             |
+| FCM       | `LEPTOSKIT_NOTIFICATIONS_FCM_SERVICE_ACCOUNT` (the service-account JSON file's contents)                                                                                                                                                                                                              |
+| Web Push  | `LEPTOSKIT_NOTIFICATIONS_WEB_PUSH_VAPID_PRIVATE_KEY` and `_VAPID_PUBLIC_KEY` (the pair the ecosystem's own tools generate: 32 and 65 bytes, base64url), `_VAPID_SUBJECT` (a `mailto:` or `https:` contact), `_WEB_PUSH_EXTRA_HOSTS` (optional, comma-separated push services beyond the shipped ones) |
+
+The APNs topic and environment, the FCM project, and the VAPID identity are all yours on the server; an enrollment carries only the device credential, so nothing a client sends can steer where a push goes.
+
+### Enroll a device
+
+The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. (The generated token-acquisition plumbing and the browser service-worker handler that receives the decrypted push are still to come; today your app brings its own credential.)
+
+```rust,ignore
+leptoskit_rpc::call(leptoskit_notifications::RegisterPushEndpoint {
+    credential: leptoskit_notifications::PushCredential::Apns {
+        device_token: token_from_the_os,
+    },
+})
+.await?;
+```
+
+The service answers an opaque endpoint id — the credential itself never comes back, and never appears in a list, a status row, or an error. Registering a credential that account already holds answers the same endpoint again, so a retried enrollment makes no duplicate. A person holds at most ten live endpoints. A credential another live account holds is **refused, not reassigned**: signing out of the app on a device revokes that device's endpoints, and then the next account on it enrolls cleanly. That is the account-switch story, and it is why revocation matters.
+
+List and revoke are the person's own:
+
+```rust,ignore
+let endpoints = leptoskit_rpc::call(leptoskit_notifications::PushEndpoints).await?;
+leptoskit_rpc::call(leptoskit_notifications::RevokePushEndpoint { endpoint: id }).await?;
+```
+
+Revoking deletes the endpoint and skips everything still queued for it as `endpoint_revoked`. Another person's endpoint — or an id nobody holds — is `404`, exactly as if it didn't exist.
+
+### What a send does
+
+When a recipient of a send has enrolled endpoints and your server has configured that platform's transport, the send enqueues one durable delivery per notification and endpoint in the send's own transaction. The push job attempts each one when the notification becomes visible — a scheduled send pushes at its `visible_at`, not before — and re-checks, at the moment of the attempt, everything that could have changed since the send: cancellation, expiry, the category opt-out the person may have flipped meanwhile, and the endpoint's liveness. A cancelled send never pushes; an expired one is skipped; an opt-out made after the send reaches the queue still stops the push.
+
+Transient failures — a 429, a 5xx, a network error — retry with the provider's `Retry-After` honored when given, up to eight attempts, and then end as rejected with `attempts_exhausted`. Permanent failures end at once with a reason code, and when the provider says the credential no longer exists the endpoint is invalidated, so nothing further is pushed to it and its other queued deliveries are skipped. Failure of one endpoint never rolls back the inbox row or the other endpoints' deliveries: the inbox row committed with the send, and push is best-effort on top of it.
+
+Read what happened from your server, per endpoint, with `call_as_app`:
+
+```rust,ignore
+let page = call_as_app(leptoskit_notifications::PushDeliveries {
+    send_key: "invoice-paid-42".into(),
+    page: Default::default(),
+}).await?;
+```
+
+Each item names the notification, the endpoint's opaque id, the platform, a state — `enqueued`, `retrying`, `accepted`, `rejected`, or `skipped` — and, when it left the queue, a sanitized reason code. **`accepted` is the provider taking the message, not a person seeing one.** There are no delivery receipts here: focus modes, notification permissions, and quiet hours all decide what a delivered push becomes, and the service can't see past the provider's answer.
+
+Delivery is **at least once**. An attempt whose answer was lost retries, so a device may see the same notification twice; every attempt carries the notification's id as its collapse id — `apns-collapse-id`, the FCM collapse key, the Web Push `Topic` — so a repeat replaces its predecessor instead of stacking. The payload is the visible title and body plus the notification's id for routing; the send's `data` rides along where it fits and is dropped, down to an id-only envelope, when the provider's payload limit says so (limits are checked on the encoded bytes, not the raw strings). Nothing executable ever rides in a push.
+
+### Web Push hosts and security
+
+A Web Push subscription's endpoint is attacker-shaped material — anyone who can drive an enrollment can hand the service a URL — so the service pushes only to the shipped push services' hosts: Google's (`fcm.googleapis.com`, where Chrome and Android Chrome deliver), Mozilla's (`updates.push.services.mozilla.com`), and Apple's (`webpush.apple.com`). Lookalike hosts (`fcm.googleapis.com.attacker.test`), private addresses, credentials-in-URL, and non-443 ports are refused at enrollment. To push through another operator-run push service, name it in `_WEB_PUSH_EXTRA_HOSTS`; those are resolved and validated at connection time (every address must be public), and the connection is pinned to the addresses that passed, so a DNS rebinding has nothing to land on. Requests are never redirected: a push service that answers with a redirect has, as far as this service is concerned, not taken the message.
+
+### Platforms
+
+Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID). **Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery also needs the app's own OS setup on each platform (capabilities, `GoogleService-Info.plist` or `google-services.json`, a browser service worker) — the native token-acquisition plumbing that wires this up is still to come, so treat today's push as server-complete and client-plumbing-outstanding.
 
 ## What it doesn't do yet
 
-- **No OS background push.** There is no APNs, FCM, or Web Push transport, and no device enrollment: nothing wakes a device where your app isn't running. A person sees what arrived while a signed-in screen of theirs was up — or the next time one opens, when the inbox is already there.
+- **No client enrollment plumbing.** The service side of enrollment is done; the generated native token acquisition and the browser service-worker handler that receives decrypted pushes are later work. Today an app brings its own platform-issued credential to `register_push_endpoint`, and a web client decrypts the push with its own worker.
+- **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
-- **No delivery receipts.** The service knows what it stored; it doesn't track who saw a banner.
 
 The engineering notes in the repository describe the transport work that follows.
 

@@ -50,10 +50,39 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		println!("applied migration {name}");
 	}
 
+	// The push transports, from the operator's environment: none is a
+	// normal way to run — the inbox is the whole service — and a
+	// half-configured provider refuses to start, named in full. Installed
+	// before the routes and workers, so enrollment and delivery answer to
+	// the same configuration.
+	let push = service::config::PushConfig::from_env()
+		.and_then(|config| {
+			if config.apns.is_none() && config.fcm.is_none() && config.web.is_none() {
+				return Ok(None);
+			}
+
+			println!(
+				"push transports: {}",
+				[
+					config.apns.as_ref().map(|_| "apns"),
+					config.fcm.as_ref().map(|_| "fcm"),
+					config.web.as_ref().map(|_| "web_push"),
+				]
+				.into_iter()
+				.flatten()
+				.collect::<Vec<_>>()
+				.join(", ")
+			);
+			service::transport::PushRuntime::build(&config).map(Some)
+		})
+		.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+	service::push::install(push);
+
 	let (router, live) = service::routes(db.clone(), env.public_origin());
 	live.start().await?;
 	// The workers run the wake jobs a scheduled or expiring send enqueues,
-	// and keep the change log the live queries follow pruned.
+	// the push deliveries' rounds, and keep the change log the live
+	// queries follow pruned.
 	service::workers(db).start();
 	Ok(router)
 }

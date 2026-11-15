@@ -59,20 +59,21 @@ SQLite in the service's own file handles the target load — badge polls are one
 
 ## 8. Status
 
-| Part                                   | Status                                                                                                     |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Service crate, storage, ops            | Built and tested on SQLite; Postgres tested on an ephemeral local cluster, with a compile check            |
-| App-only send/cancel                   | Built, behind the `ServiceCallers` trust boundary                                                          |
-| Durable per-person inbox               | Built: live queries, bounded pages, cross-device state                                                     |
-| Idempotency across restart             | Built: file-backed restart test proves it, before and after a send's expiry                                |
-| Categories + opt-outs                  | Built: enforced at send and at visibility; live on open screens; raced settings land on the last committed |
-| Scheduled visibility + cancel          | Built: SQL visibility, wake jobs on due, cancel-before-due (zero-fanout included)                          |
-| Expiry                                 | Built at visibility and on open screens (wake at `expires_at`); no physical prune yet                      |
-| OS background push (APNs/FCM/Web Push) | Not started; subsequent task                                                                               |
-| Native enrollment                      | Not started; subsequent task                                                                               |
-| Delivery receipts                      | Not started                                                                                                |
-| Physical prune of expired rows         | Not started                                                                                                |
+| Part                           | Status                                                                                                                                                           |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Service crate, storage, ops    | Built and tested on SQLite; Postgres tested on an ephemeral local cluster, with a compile check                                                                  |
+| App-only send/cancel           | Built, behind the `ServiceCallers` trust boundary                                                                                                                |
+| Durable per-person inbox       | Built: live queries, bounded pages, cross-device state                                                                                                           |
+| Idempotency across restart     | Built: file-backed restart test proves it, before and after a send's expiry                                                                                      |
+| Categories + opt-outs          | Built: enforced at send and at visibility; live on open screens; raced settings land on the last committed                                                       |
+| Scheduled visibility + cancel  | Built: SQL visibility, wake jobs on due, cancel-before-due (zero-fanout included)                                                                                |
+| Expiry                         | Built at visibility and on open screens (wake at `expires_at`); no physical prune yet                                                                            |
+| Durable push (server)          | Built: enrollment, fanout, at-least-once attempts, retries, invalidation, sanitized status; tested over an injected boundary on SQLite, Postgres compile-checked |
+| Native enrollment plumbing     | Not started; subsequent task (today an app brings its own platform credential)                                                                                   |
+| Browser push handlers          | Not started; subsequent task (subscription decryption service worker)                                                                                            |
+| Delivery receipts              | Not started; `accepted` is provider acceptance, deliberately                                                                                                     |
+| Physical prune of expired rows | Not started                                                                                                                                                      |
 
 ## 9. What follows
 
-The transports land as separate slices on top of this store: device enrollment (a `devices` table keyed by person, with platform credentials at rest), a Web Push sender the service process runs (Web Push needs no vendor contract and serves the browser first), then APNs/FCM senders that read pending, undelivered rows. Composing with the local-notifications plugin is documented for the surfaces where it exists; Windows toasts wait on the plugin's backend.
+The server side of push is built: `crates/leptoskit_notifications`'s `push` module holds the typed credentials and enrollment operations, `service::push` the delivery engine, and `service::transport` the APNs, FCM, and Web Push senders over ring's primitives, behind an injected HTTP boundary, with the shipped-provider host policy for Web Push. What follows is the client half: native token acquisition through the platform plugins and the generated browser service-worker handler that receives the decrypted push — today an app brings its own platform-issued credential to `register_push_endpoint`. Windows toasts wait on the plugin's backend; Windows and Linux enrollment has no story yet.

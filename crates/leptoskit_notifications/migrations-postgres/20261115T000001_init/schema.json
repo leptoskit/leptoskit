@@ -259,6 +259,241 @@
     },
     {
       "name": {
+        "name": "push_deliveries"
+      },
+      "comment": "One attempt's record, per notification and endpoint: the durable\ndelivery the push job works through, from enqueued to accepted,\nrejected, or skipped. Unique per pair, so a raced or repeated send\ncannot double-enroll an endpoint for a notification.\n\nDelivery is at-least-once: a retry after an answered-but-lost attempt\ncan push twice, and the provider's acceptance says it took the\nmessage, not that anyone saw it.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "notification",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The inbox notification this delivery carries."
+        },
+        {
+          "name": "send_key",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "The send that created it, for the app's status pages."
+        },
+        {
+          "name": "endpoint",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The endpoint it goes to. The endpoint may be gone — revoked —\nwhile this row remains, explaining what happened."
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The recipient, denormalized from the notification."
+        },
+        {
+          "name": "platform",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "The endpoint's platform, denormalized: the row outlives its\nendpoint."
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "Where the delivery stands, as [`DeliveryState`]'s names."
+        },
+        {
+          "name": "reason",
+          "type": {
+            "kind": "text",
+            "max_len": 32
+          },
+          "nullable": true,
+          "comment": "Why it left the queue, as [`DeliveryReason`]'s names, when it did."
+        },
+        {
+          "name": "attempts",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many times it has been attempted, the first try included."
+        },
+        {
+          "name": "next_attempt_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the next attempt may run, while it waits or retries."
+        },
+        {
+          "name": "attempted_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the last attempt ran."
+        },
+        {
+          "name": "finished_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When it left the queue for good: accepted, rejected, or skipped."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "push_deliveries_send_key_id_idx",
+          "columns": [
+            "send_key",
+            "id"
+          ]
+        },
+        {
+          "name": "push_deliveries_state_next_attempt_at_idx",
+          "columns": [
+            "state",
+            "next_attempt_at"
+          ]
+        },
+        {
+          "name": "push_deliveries_notification_endpoint_key",
+          "columns": [
+            "notification",
+            "endpoint"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "push_endpoints"
+      },
+      "comment": "One enrolled endpoint: the opaque record of a device or browser the\nperson's app pushed them to enroll. The credential is never in it.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "An opaque id the service assigns: what lists and revocations name."
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The person whose endpoint it is, from their forwarded identity."
+        },
+        {
+          "name": "platform",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "Which platform's service this speaks to."
+        },
+        {
+          "name": "credential",
+          "type": {
+            "kind": "text",
+            "max_len": 6144
+          },
+          "nullable": false,
+          "comment": "The platform's credential, verbatim: secret material, left out of\nthe audit log and redacted in debug output."
+        },
+        {
+          "name": "fingerprint",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "A SHA-256 of the credential, in hex: how the service knows a\ncredential is already enrolled, without ever searching on the\nsecret itself."
+        },
+        {
+          "name": "invalidated_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the provider said this credential no longer exists: expired,\nuninstalled, or unregistered. The endpoint stays as an explainable\nrecord and takes no further deliveries."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "push_endpoints_person_idx",
+          "columns": [
+            "person"
+          ]
+        },
+        {
+          "name": "push_endpoints_fingerprint_key",
+          "columns": [
+            "fingerprint"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "push_endpoints_fingerprint_length",
+          "rule": {
+            "kind": "length",
+            "column": "fingerprint",
+            "min": 64,
+            "max": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": {
         "name": "sends"
       },
       "comment": "One send the app's server made. Keyed by its idempotency key, so a\nretried send is recognised after a restart: the same key with the same\nintent answers the stored result, and the same key with a different one\nis a conflict.",
@@ -330,7 +565,7 @@
       "name": {
         "name": "wakes"
       },
-      "comment": "One wake row per person: the clock event for their open subscriptions.\n\nThe inbox and badge queries read the reader's wake row and ignore its\nvalue, which puts `wakes` in their read set; when a send's schedule\nturns — it becomes due, or it expires — the [`wake_send`] job writes\nthe row of everyone the send reached, and each of their open\nsubscriptions re-runs with a fresh `now`, so a scheduled item appears\nand an expired one leaves without any other write. A wake that changes\nnothing (the send was cancelled, the row dismissed) re-runs the query\nand sends nothing, because its result didn't change.\n\nOne row per person, so the table stays as big as the audience, not as\nthe schedule.",
+      "comment": "One wake row per person: the clock event for their open subscriptions.\n\nThe inbox and badge queries read the reader's wake row and ignore its\nvalue, which puts `wakes` in their read set; when a send's schedule\nturns — it becomes visible, or it expires — the [`wake_send`] job\nwrites the row of everyone the send reached, and each of their open\nsubscriptions re-runs with a fresh `now`, so a new item appears and an\nexpired one leaves without any other write. A wake that changes\nnothing (the send was cancelled, the row dismissed) re-runs the query\nand sends nothing, because its result didn't change.\n\nOne row per person, so the table stays as big as the audience, not as\nthe schedule.",
       "columns": [
         {
           "name": "id",

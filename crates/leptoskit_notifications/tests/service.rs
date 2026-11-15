@@ -511,7 +511,9 @@ async fn a_retried_send_answers_once_across_a_restart() {
 /// the intent, not a reason to stop answering it. A retry after the
 /// expiry — across a restart, on the same file — returns the first run's
 /// counts; a changed intent still conflicts; a new send with a past
-/// expiry is still refused.
+/// expiry is still refused — including one whose explicit `visible_at` is
+/// also past, where an expiry after that but before now would otherwise
+/// slip through and be born never-visible.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_accepted_send_answers_after_its_expiry_across_a_restart() {
 	let file = tempfile::Builder::new()
@@ -570,6 +572,33 @@ async fn an_accepted_send_answers_after_its_expiry_across_a_restart() {
 	)
 	.await;
 	assert_eq!(status, 400, "a new send can't be born expired: {body}");
+
+	// The slip the simple check misses: an explicit past `visible_at`
+	// with a past `expires_at` after it satisfies `expires >
+	// visible_at`, but the notification would never be visible at all.
+	let (status, body) = send(
+		&restarted,
+		"born-expired-scheduled",
+		json!({
+			"category": "news",
+			"title": "Never seen",
+			"visible_at": (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339(),
+			"expires_at": (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339(),
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(
+		status, 400,
+		"a send whose expiry is already past is refused: {body}"
+	);
+
+	// And an accepted send still answers from its store, not the clock:
+	// the same key with the same intent replays after the refusals.
+	let (status, body) = send(&restarted, "fleeting", expiring.clone(), &[ALICE, BOB]).await;
+	assert_eq!(status, 200, "{body}");
+	let replay: SendResult = serde_json::from_str(&body).unwrap();
+	assert!(replay.duplicate, "{body}");
 }
 
 /// A send every recipient opted out of delivered nothing, and cancelling

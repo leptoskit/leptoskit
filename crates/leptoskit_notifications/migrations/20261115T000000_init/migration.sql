@@ -56,6 +56,44 @@ CREATE TABLE "wakes" (
 
 CREATE UNIQUE INDEX "wakes_person_key" ON "wakes" ("person");
 
+CREATE TABLE "push_endpoints" (
+	"id" BLOB NOT NULL CHECK (length("id") = 16),
+	"person" BLOB NOT NULL CHECK (length("person") = 16),
+	"platform" TEXT NOT NULL CHECK (length("platform") <= 16),
+	"credential" TEXT NOT NULL CHECK (length("credential") <= 6144),
+	"fingerprint" TEXT NOT NULL CHECK (length("fingerprint") >= 64 AND length("fingerprint") <= 64),
+	"invalidated_at" TEXT,
+	"created_at" TEXT NOT NULL,
+	CONSTRAINT "push_endpoints_pkey" PRIMARY KEY ("id")
+) STRICT;
+
+CREATE UNIQUE INDEX "push_endpoints_fingerprint_key" ON "push_endpoints" ("fingerprint");
+
+CREATE INDEX "push_endpoints_person_idx" ON "push_endpoints" ("person");
+
+CREATE TABLE "push_deliveries" (
+	"id" BLOB NOT NULL CHECK (length("id") = 16),
+	"notification" BLOB NOT NULL CHECK (length("notification") = 16),
+	"send_key" TEXT NOT NULL CHECK (length("send_key") <= 255),
+	"endpoint" BLOB NOT NULL CHECK (length("endpoint") = 16),
+	"person" BLOB NOT NULL CHECK (length("person") = 16),
+	"platform" TEXT NOT NULL CHECK (length("platform") <= 16),
+	"state" TEXT NOT NULL CHECK (length("state") <= 16),
+	"reason" TEXT CHECK (length("reason") <= 32),
+	"attempts" INTEGER NOT NULL,
+	"next_attempt_at" TEXT,
+	"attempted_at" TEXT,
+	"finished_at" TEXT,
+	"created_at" TEXT NOT NULL,
+	CONSTRAINT "push_deliveries_pkey" PRIMARY KEY ("id")
+) STRICT;
+
+CREATE UNIQUE INDEX "push_deliveries_notification_endpoint_key" ON "push_deliveries" ("notification", "endpoint");
+
+CREATE INDEX "push_deliveries_send_key_id_idx" ON "push_deliveries" ("send_key", "id");
+
+CREATE INDEX "push_deliveries_state_next_attempt_at_idx" ON "push_deliveries" ("state", "next_attempt_at");
+
 CREATE TABLE "live_changes" (
 	"seq" INTEGER NOT NULL,
 	"txid" INTEGER,

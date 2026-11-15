@@ -1,6 +1,7 @@
 //! The service's own code, compiled only with the `service` feature: who is
-//! calling, which rows are visible, the send's bookkeeping, and the routes
-//! `lk` serves.
+//! calling, which rows are visible, the send's bookkeeping, the routes
+//! `lk` serves, and the push delivery engine behind the optional
+//! transports.
 //!
 //! Identity follows the framework's trust boundary exactly: the routes take
 //! a [`ServiceCallers`], so a request signed with the service's token is
@@ -9,6 +10,10 @@
 //! ([`rpc::server::ForwardedIdentity`]). Nothing reads a user id from a
 //! header or an argument on the recipient's side, so there is nothing to
 //! forge.
+
+pub mod config;
+pub mod push;
+pub mod transport;
 
 use leptoskit_axum::axum::Router;
 use leptoskit_db::Db;
@@ -191,11 +196,15 @@ pub(crate) fn answer_send(existing: &AppSend, intent: &str) -> rpc::Result<SendR
 	})
 }
 
-/// What a send's fanout came to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a send's fanout came to, with the rows it wrote so the push
+/// deliveries can join them.
+#[derive(Clone, Debug)]
 pub(crate) struct Fanout {
 	pub delivered: u32,
 	pub skipped_opted_out: u32,
+	/// One pair per inbox row the fanout wrote: the recipient and their
+	/// notification's id.
+	pub delivered_to: Vec<(Uuid, Uuid)>,
 }
 
 /// Writes one durable inbox row per recipient who hasn't opted out of the
@@ -228,6 +237,7 @@ pub(crate) async fn fanout(
 	let mut fanout = Fanout {
 		delivered: 0,
 		skipped_opted_out: 0,
+		delivered_to: Vec::new(),
 	};
 
 	for person in recipients {
@@ -236,8 +246,9 @@ pub(crate) async fn fanout(
 			continue;
 		}
 
+		let id = Uuid::now_v7();
 		NewNotification {
-			id: Uuid::now_v7(),
+			id,
 			send_key: send_key.to_owned(),
 			person: *person,
 			category: spec.category.clone(),
@@ -253,6 +264,7 @@ pub(crate) async fn fanout(
 		.insert(tx)
 		.await?;
 		fanout.delivered += 1;
+		fanout.delivered_to.push((*person, id));
 	}
 
 	Ok(fanout)
@@ -397,7 +409,8 @@ pub(crate) fn inbox_item(row: Notification) -> InboxItem {
 /// `LEPTOSKIT_SERVICE_TOKEN` are the app, and callers presenting a token
 /// the app minted for this service are the person it names, which needs
 /// `forward_identity` in `[services.notifications]` — on by default for a
-/// first-party service.
+/// first-party service. Push is not configured; see
+/// [`routes_with_push`].
 pub fn routes(db: Db, origin: Option<&str>) -> (Router, rpc::server::Live) {
 	use rpc::server::Anonymous;
 	use rpc::server::ServiceCallers;

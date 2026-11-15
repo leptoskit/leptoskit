@@ -37,24 +37,31 @@ required-features = ["postgres"]
 # service, and the shared validation it runs before it calls. No server
 # dependencies; `tests/dependencies.rs` keeps it that way. `chrono` rides
 # with `leptoskit_db`'s own, so the shared schedule checks don't add one.
+base64 = { workspace = true }
 chrono = { workspace = true }
 leptoskit_db = { workspace = true }
 leptoskit_rpc = { workspace = true, features = ["client"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 # Everything below is the service's. The library without features (the shared
-# types and validation) doesn't compile any of it.
+# types and validation) doesn't compile any of it. Push's signing, key
+# agreement, and encryption are ring's, already in the graph through TLS.
 hex = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
+ring = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures = { workspace = true }
 leptoskit_axum = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+ring = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
@@ -62,12 +69,15 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 [features]
 default = []
 # Building the service: the operations' bodies, their registrations, the
-# SQLite driver, and live queries. Only `lk` turns this on, when it builds the
-# service; the app never does.
+# SQLite driver, live queries, and the push engine. Only `lk` turns this
+# on, when it builds the service; the app never does.
 service = [
 	"dep:hex",
 	"dep:leptoskit_axum",
+	"dep:reqwest",
+	"dep:ring",
 	"dep:sha2",
+	"dep:tokio",
 	"leptoskit_db/sqlite",
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",

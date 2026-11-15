@@ -3,10 +3,14 @@
 //! An app's server sends a notification to explicit users, and the service
 //! stores one durable inbox row per recipient, in a database of its own.
 //! The recipients read their own inbox from any device their app signs in
-//! on: the web, a native app, or the server while it renders. Everything
-//! here is the durable store and the inbox retrieval, delivered while the
-//! app runs. OS background push — APNs, FCM, Web Push — and device
-//! enrollment are later work, not part of this crate.
+//! on: the web, a native app, or the server while it renders. When the
+//! operator configures a push transport — APNs, FCM, or Web Push — the
+//! same send also reaches the devices its recipients enrolled
+//! ([`push`]): one durable delivery per notification and endpoint,
+//! attempted by a background job with bounded retries, and reported back
+//! to the app as sanitized status. Nothing here claims a person saw a
+//! banner: provider acceptance is the farthest the service can see, and
+//! delivery is at-least-once.
 //!
 //! The inbox queries are live, and time is one of the things that changes
 //! what they answer: a scheduled row appears when it is due, an expiring
@@ -21,14 +25,17 @@
 //!
 //! Who may call what:
 //!
-//! - [`send`] and [`cancel`] answer only the app's server, signed with the
-//!   service's token ([`rpc::client::call_as_app`]).
+//! - [`send`], [`cancel`], and [`push_deliveries`] answer only the app's
+//!   server, signed with the service's token ([`rpc::client::call_as_app`]). A
+//!   recipient has no operation that sends or steers a push.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
-//!   [`mark_dismissed`], and [`set_category_preference`] answer the signed-in
-//!   person the app forwarded ([`rpc::server::ForwardedIdentity`]), and only
-//!   ever touch their own rows. Anonymous calls, and calls that forge a user id
-//!   in any header, are refused; the recipient is always read from the app's
-//!   forwarded identity, never from an argument.
+//!   [`mark_dismissed`], [`set_category_preference`],
+//!   [`register_push_endpoint`], [`push_endpoints`], and
+//!   [`revoke_push_endpoint`] answer the signed-in person the app forwarded
+//!   ([`rpc::server::ForwardedIdentity`]), and only ever touch their own rows.
+//!   Anonymous calls, and calls that forge a user id in any header, are
+//!   refused; the recipient is always read from the app's forwarded identity,
+//!   never from an argument.
 
 use leptoskit_db::table;
 use leptoskit_rpc as rpc;
@@ -38,6 +45,8 @@ use serde::Serialize;
 
 #[cfg(feature = "service")]
 pub mod service;
+
+pub mod push;
 
 /// The service's name: the `[services.notifications]` table in the app's
 /// `leptoskit.toml` must use it, because every operation is addressed to it.
@@ -396,7 +405,9 @@ pub fn check_data(data: Option<&str>) -> Result<(), String> {
 
 /// Checks what the clock says about a new send: `visible_at` within
 /// [`MAX_SCHEDULE_SECS`] of now, and `expires_at` after visibility begins
-/// and within [`MAX_SCHEDULE_SECS`] of now. Only a send the service
+/// and within [`MAX_SCHEDULE_SECS`] of now. An expiry already past refuses
+/// a new send even when it is after an explicit past `visible_at`: such a
+/// notification would never be visible at all. Only a send the service
 /// doesn't already hold is judged by this; an accepted one answers from
 /// its stored outcome however the clock has moved on.
 ///
@@ -424,6 +435,12 @@ pub fn check_send_timing(
 			return Err("an expiry must be after the notification becomes visible".into());
 		}
 
+		if expires_at <= now {
+			return Err(
+				"an expiry is already past, so the notification would never be visible".to_owned(),
+			);
+		}
+
 		if (expires_at - now).num_seconds() > MAX_SCHEDULE_SECS {
 			return Err(format!(
 				"an expiry may be at most {MAX_SCHEDULE_SECS} seconds ahead"
@@ -444,7 +461,11 @@ fn valid_text(value: &str) -> bool {
 /// Every named recipient gets one durable inbox row, in the service's own
 /// database, visible from now — or from `spec.visible_at`, when it
 /// schedules one — until it expires. Recipients who opted out of the
-/// category are skipped and counted, not delivered to.
+/// category are skipped and counted, not delivered to. When a recipient
+/// has enrolled push endpoints and the operator configured their
+/// transport, one durable push delivery per endpoint is enqueued with the
+/// row, and the push job attempts it when the notification becomes
+/// visible; see [`push`].
 ///
 /// The send is idempotent by idempotency key: the same key with the same
 /// intent answers the first run's result and writes nothing, across
@@ -509,6 +530,7 @@ pub async fn send(
 	let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
 	service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
 	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
+	service::push::schedule(cx, &idempotency_key, &spec, &fanout).await?;
 
 	Ok(SendResult {
 		delivered: fanout.delivered,

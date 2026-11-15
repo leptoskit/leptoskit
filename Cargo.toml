@@ -201,7 +201,10 @@ unic-langid = "0.9"
 unicode-width = "0.2"
 ureq = { version = "3", default-features = false }
 url = "2"
-uuid = "1"
+# `js` is inert off wasm — its randomness source is target-gated — and
+# gives `v7`'s generator its wasm32-unknown-unknown source, so client
+# builds that hold UUIDs compile.
+uuid = { version = "1", features = ["js"] }
 walkdir = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-cli-support = "0.2"

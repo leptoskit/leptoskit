@@ -13,6 +13,7 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "postgres"))]
 
+use std::future::Future;
 use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
@@ -523,4 +524,129 @@ async fn a_zero_fanout_send_still_cancels() {
 	.await;
 	assert_eq!(status, 200, "{body}");
 	assert_eq!(body, "0");
+}
+
+/// Two devices of one person enroll the same credential at the same
+/// time: the unique violation on the credential's fingerprint aborts one
+/// transaction, and that registration runs again, finding the row the
+/// other wrote. One endpoint exists, and both devices hold its id.
+///
+/// The same credential from two different accounts races the other way:
+/// exactly one wins, and the loser is refused rather than reassigned.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn concurrent_enrollments_of_one_credential_land_on_one_endpoint() {
+	use leptoskit_notifications::service::config;
+	use leptoskit_notifications::service::push;
+	use leptoskit_notifications::service::transport::Boundary;
+	use leptoskit_notifications::service::transport::PushRuntime;
+	use leptoskit_notifications::service::transport::WireError;
+	use leptoskit_notifications::service::transport::WireRequest;
+	use leptoskit_notifications::service::transport::WireResponse;
+
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let service = service(db).await;
+
+	// A runtime with one APNs transport, so enrollment is accepted. The
+	// boundary is never called on this path.
+	let key_p8 = {
+		let rng = ring::rand::SystemRandom::new();
+		let document = ring::signature::EcdsaKeyPair::generate_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&rng,
+		)
+		.expect("a key");
+		let der = document.as_ref().to_vec();
+		format!(
+			"-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+			base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &der)
+		)
+	};
+	let config = config::PushConfig {
+		apns: Some(config::ApnsConfig {
+			key_p8,
+			key_id: "KEY".into(),
+			team_id: "TEAM".into(),
+			topic: "dev.leptoskit.app".into(),
+			environment: config::ApnsEnvironment::Sandbox,
+		}),
+		fcm: None,
+		web: None,
+	};
+	push::install(Some(
+		PushRuntime::build_over(&config, std::sync::Arc::new(DeadBoundary))
+			.expect("the runtime builds"),
+	));
+
+	let token = "0".repeat(64);
+	let credential = serde_json::json!({ "apns": { "device_token": token } });
+	let alice = signed_in(ALICE);
+
+	let phone = post(
+		&service,
+		"register_push_endpoint",
+		serde_json::json!({ "credential": credential }),
+		Some(&alice),
+	);
+	let laptop = post(
+		&service,
+		"register_push_endpoint",
+		serde_json::json!({ "credential": credential }),
+		Some(&alice),
+	);
+	let (a, a_body) = phone.await;
+	let (b, b_body) = laptop.await;
+
+	// Both answer: one did the work, the other found its row — or, if
+	// the unique violation landed first, contended and ran again.
+	assert_eq!(a, 200, "the phone's answer: {a_body}");
+	assert_eq!(b, 200, "the laptop's answer: {b_body}");
+
+	let stored = rows(
+		&service,
+		&format!("SELECT count(*) FROM push_endpoints WHERE person = '{ALICE}'"),
+	)
+	.await;
+	assert_eq!(
+		text(&stored[0][0]),
+		"1",
+		"one endpoint, not two: {stored:?}"
+	);
+
+	// Bob's raced enrollment of the same credential is refused, and the
+	// row stays alice's.
+	let bob = signed_in(BOB);
+	let stranger = post(
+		&service,
+		"register_push_endpoint",
+		serde_json::json!({ "credential": credential }),
+		Some(&bob),
+	);
+	let (status, body) = stranger.await;
+	assert_eq!(status, 409, "a stranger's enrollment is refused: {body}");
+
+	// A boundary that answers nothing: enrollment never reaches it, and
+	// if a delivery somehow did, its failure is loud.
+	struct DeadBoundary;
+
+	impl Boundary for DeadBoundary {
+		fn post(
+			&self,
+			_request: WireRequest,
+		) -> std::pin::Pin<Box<dyn Future<Output = Result<WireResponse, WireError>> + Send>>
+		{
+			Box::pin(async { Err(WireError::Unreachable) })
+		}
+	}
+
+	let _ = DeadBoundary;
 }

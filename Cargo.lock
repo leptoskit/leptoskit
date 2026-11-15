@@ -6140,6 +6140,7 @@ dependencies = [
 name = "leptoskit_notifications"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures",
  "hex",
@@ -6147,6 +6148,7 @@ dependencies = [
  "leptoskit_db",
  "leptoskit_rpc",
  "reqwest 0.12.28",
+ "ring",
  "schemars",
  "serde",
  "serde_json",
@@ -6154,6 +6156,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "url",
  "uuid",
 ]
 
@@ -10005,6 +10008,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
