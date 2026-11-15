@@ -33,8 +33,8 @@ fn checksum(sql: &str) -> String {
 }
 
 /// Hashes a migration list into one unambiguous digest: each migration's
-/// version and SQL, framed by its byte length so no two different lists
-/// can hash alike. Public through [`Store::schema_fingerprint`] so a
+/// version and SQL, framed by its byte length to distinguish the inputs.
+/// Public through [`Store::schema_fingerprint`] so a
 /// caller that must refuse schema drift *before* opening the journal —
 /// and thereby before [`Store::open`] applies new migrations — can hold
 /// the same contract the journal itself checks.

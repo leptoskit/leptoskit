@@ -20,15 +20,6 @@
 //! needs the onboarding slice's real admin session; the stand-ins here prove
 //! the wrapper's behavior only, and a direct Store read is not an SSE proof.
 
-/// The pending proof, so it is named where it will be written: see the
-/// module docs. Runs only with `--ignored`, and fails loudly until the
-/// onboarding slice provides a real admin session.
-#[test]
-#[ignore = "needs the onboarding slice's real admin session; a Store read is not an SSE proof"]
-fn an_authenticated_browser_reconnects_across_a_worker_handoff() {
-	panic!("pending: drive the real admin session's EventSource across a worker handoff");
-}
-
 use std::time::Duration;
 
 use axum::Router;
