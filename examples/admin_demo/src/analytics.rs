@@ -1,19 +1,25 @@
-//! The main site's analytics: the real `leptoskit_analytics` service, its
-//! typed events, and a month of traffic to look at.
+//! The demo's analytics: the real `leptoskit_analytics` service, its
+//! typed events, and a month of traffic to seed it with.
 //!
-//! The service runs inside the main site, as `lk dev` would run it beside
-//! the app, on its own SQLite database. The admin reads it as the app, with
-//! [`TOKEN`]. `--seed` sends 30 days of visits through the same ingestion
-//! path a client uses (`POST v1/batch`, signed as the app): sessions from
-//! six channels on three kinds of device, sign-ups that identify their
-//! anonymous visitor, a checkout funnel that loses people at each step,
-//! and people who come back, less each week.
+//! [`start`] runs the service on its own SQLite database, as `lk dev` would
+//! run it beside an app; the caller passes the token its callers present to
+//! count as the app, and nothing outside the process that serves the
+//! routes should accept it. [`seed`] sends the month over HTTP; [`seed_with`]
+//! drives the service's own routes instead, so a caller can seed its
+//! generation before it serves. Either way the visits go through the same
+//! ingestion path a client uses (`POST v1/batch`, signed as the app):
+//! sessions from six channels on three kinds of device, sign-ups that
+//! identify their anonymous visitor, a checkout funnel that loses people
+//! at each step, and people who come back, less each week.
 
 use std::path::Path;
 
 use anyhow::Context as _;
 use anyhow::Result;
 use axum::Router;
+use axum::http::Method;
+use axum::http::Request;
+use axum::http::header;
 use leptoskit_analytics::Event;
 use leptoskit_analytics::service;
 use leptoskit_analytics::service::catalogue::SchemaInput;
@@ -25,10 +31,10 @@ use leptoskit_rpc::client::AppCaller;
 use leptoskit_rpc::server::APP_CALLER;
 use leptoskit_rpc::server::Anonymous;
 use leptoskit_rpc::server::ServiceCallers;
+use tower::ServiceExt as _;
 
-/// The analytics service's token for the app's own callers: the main
-/// site's server and the admin. Nothing outside this process accepts it.
-pub const TOKEN: &str = "admin-demo-analytics-app-token-not-a-secret-0123";
+/// How many bytes of a refused response an error message quotes.
+const REFUSED_BYTES: usize = 16 * 1024;
 
 /// Someone signed up.
 #[derive(Event)]
@@ -86,8 +92,12 @@ pub fn schemas() -> Vec<SchemaInput> {
 	]
 }
 
-/// The service's routes, its database migrated, its live stream started.
-pub async fn start(data: &Path, origin: &str) -> Result<Router> {
+/// The service's routes, its database migrated, its live stream started,
+/// its files under `data`. `token` is the service's token for the app's
+/// own callers, which the caller keeps: whoever presents it registers and
+/// reads as the app. Nothing outside the process serving these routes
+/// accepts it.
+pub async fn start(data: &Path, origin: &str, token: &str) -> Result<Router> {
 	let db = Db::connect(&format!(
 		"sqlite://{}",
 		data.join("analytics.sqlite3").display()
@@ -98,16 +108,16 @@ pub async fn start(data: &Path, origin: &str) -> Result<Router> {
 		db,
 		Some(origin),
 		service::IngestConfig::default(),
-		ServiceCallers::new(Anonymous).caller(TOKEN, APP_CALLER),
+		ServiceCallers::new(Anonymous).caller(token, APP_CALLER),
 	);
 	live.start().await?;
 	Ok(router)
 }
 
-/// The app's typed events, put in the service's catalogue, as the app's
-/// server does when it starts.
-pub async fn register(url: &str) -> Result<()> {
-	AppCaller::new(leptoskit_analytics::SERVICE, url, TOKEN)
+/// The app's typed events, put in the service at `url`'s catalogue, as the
+/// app's server does when it starts, signed with `token`.
+pub async fn register(url: &str, token: &str) -> Result<()> {
+	AppCaller::new(leptoskit_analytics::SERVICE, url, token)
 		.call(service::RegisterEvents { schemas: schemas() })
 		.await
 		.map_err(|error| anyhow::anyhow!("registering the typed events: {}", error.message()))?;
@@ -532,9 +542,10 @@ fn month(now_millis: i64) -> Vec<wire::Batch> {
 	batches
 }
 
-/// Sends a month of traffic to the service at `url`, as the app.
-pub async fn seed(url: &str) -> Result<usize> {
-	register(url).await?;
+/// Sends a month of traffic to the service at `url`, as the app signed
+/// with `token`.
+pub async fn seed(url: &str, token: &str) -> Result<usize> {
+	register(url, token).await?;
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)?
 		.as_millis();
@@ -548,8 +559,8 @@ pub async fn seed(url: &str) -> Result<usize> {
 				"{url}{}/v1/batch",
 				leptoskit_rpc::service_prefix(leptoskit_analytics::SERVICE)
 			))
-			.bearer_auth(TOKEN)
-			.header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+			.bearer_auth(token)
+			.header(header::CONTENT_TYPE, "application/octet-stream")
 			.body(wire::encode(batch))
 			.send()
 			.await
@@ -566,9 +577,121 @@ pub async fn seed(url: &str) -> Result<usize> {
 	Ok(sent)
 }
 
+/// Registers the typed events and sends a month of traffic through
+/// `router`, the service's own routes, as the app signed with `token`:
+/// what [`seed`] does over HTTP, without a network. The month ends at
+/// `now_millis`, so a caller that seeds before it serves passes the time
+/// it started at, and the first reader sees a month that's current.
+pub async fn seed_with(router: Router, token: &str, now_millis: i64) -> Result<usize> {
+	register_with(&router, token).await?;
+	let mut sent = 0;
+
+	for batch in &month(now_millis) {
+		let response = router
+			.clone()
+			.oneshot(
+				Request::builder()
+					.method(Method::POST)
+					.uri(format!(
+						"{}/v1/batch",
+						leptoskit_rpc::service_prefix(leptoskit_analytics::SERVICE)
+					))
+					.header(header::AUTHORIZATION, format!("Bearer {token}"))
+					.header(header::CONTENT_TYPE, "application/octet-stream")
+					.body(axum::body::Body::from(wire::encode(batch)))?,
+			)
+			.await
+			.context("sending a seed batch")?;
+		let status = response.status();
+		anyhow::ensure!(
+			status.is_success(),
+			"the service refused a seed batch ({status}): {}",
+			quote_refusal(response).await
+		);
+		sent += batch.entries.len();
+	}
+
+	Ok(sent)
+}
+
+/// Puts the typed events in `router`'s catalogue, as the app signed with
+/// `token`, through the service's own `register_events` route.
+async fn register_with(router: &Router, token: &str) -> Result<()> {
+	let arguments = service::RegisterEvents { schemas: schemas() };
+	let response = router
+		.clone()
+		.oneshot(
+			Request::builder()
+				.method(Method::POST)
+				.uri(format!(
+					"{}/rpc/register_events",
+					leptoskit_rpc::service_prefix(leptoskit_analytics::SERVICE)
+				))
+				.header(header::ACCEPT, "application/json")
+				.header(header::CONTENT_TYPE, "application/json")
+				.header(header::AUTHORIZATION, format!("Bearer {token}"))
+				.body(axum::body::Body::from(serde_json::to_vec(&arguments)?))?,
+		)
+		.await
+		.context("registering the typed events")?;
+	let status = response.status();
+	anyhow::ensure!(
+		status.is_success(),
+		"the service refused the typed events ({status}): {}",
+		quote_refusal(response).await
+	);
+	Ok(())
+}
+
+/// A refused response's body, for the error message.
+async fn quote_refusal(response: axum::response::Response) -> String {
+	let Ok(bytes) = axum::body::to_bytes(response.into_body(), REFUSED_BYTES).await else {
+		return String::new();
+	};
+	String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
+	use std::path::PathBuf;
+
+	use axum::http::StatusCode;
+
 	use super::*;
+
+	/// A directory only the tests write, wiped between runs.
+	fn scratch() -> PathBuf {
+		let data =
+			std::env::temp_dir().join(format!("admin-demo-seed-test-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&data);
+		data
+	}
+
+	/// Asks the service's `path`, as the app signed with `token`.
+	async fn ask(router: &Router, path: &str, token: &str) -> axum::response::Response {
+		router
+			.clone()
+			.oneshot(
+				Request::builder()
+					.method(Method::POST)
+					.uri(path)
+					.header(header::ACCEPT, "application/json")
+					.header(header::CONTENT_TYPE, "application/json")
+					.header(header::AUTHORIZATION, format!("Bearer {token}"))
+					.body(axum::body::Body::empty())
+					.expect("the request builds"),
+			)
+			.await
+			.expect("the service answers")
+	}
+
+	/// Where the service names the events it has stored.
+	fn definitions_path() -> String {
+		format!(
+			"{}/rpc/event_definitions",
+			leptoskit_rpc::service_prefix(leptoskit_analytics::SERVICE)
+		)
+	}
 
 	#[test]
 	fn the_month_has_a_funnel_and_comebacks() {
@@ -595,5 +718,59 @@ mod tests {
 			count("checkout_completed")
 		);
 		assert!(batches.iter().all(|batch| batch.entries.len() < 10_000));
+	}
+
+	#[tokio::test]
+	async fn seeding_the_service_leaves_a_month_a_token_guards() -> Result<()> {
+		const TOKEN: &str = "admin-demo-seed-test-token-not-a-secret-012";
+		const MONTH_END: i64 = 1_763_000_000_000;
+		let data = scratch();
+		std::fs::create_dir_all(&data)?;
+		let router = start(&data, "http://localhost:4800", TOKEN).await?;
+
+		// The month lands through the service's own routes, and says so.
+		let sent = seed_with(router.clone(), TOKEN, MONTH_END).await?;
+		assert!(sent > 1_000, "{sent} entries seeded");
+
+		// The summary the admin reads holds the month's events and the
+		// schemas the typed events were sent under.
+		let answer = ask(&router, &definitions_path(), TOKEN).await;
+		let status = answer.status();
+		let bytes = axum::body::to_bytes(answer.into_body(), REFUSED_BYTES)
+			.await
+			.expect("the summary arrives");
+		assert_eq!(
+			status,
+			StatusCode::OK,
+			"{}",
+			String::from_utf8_lossy(&bytes)
+		);
+		let summary: Vec<serde_json::Value> = serde_json::from_slice(&bytes)?;
+		let named = |name: &str| summary.iter().find(|definition| definition["name"] == name);
+		assert!(
+			summary
+				.iter()
+				.filter_map(|definition| definition["volume"].as_i64())
+				.sum::<i64>()
+				> 1_000,
+			"{summary:?}"
+		);
+		let signed_up = named("signed_up").expect("signed_up in the summary");
+		assert!(
+			signed_up["fields"].is_array(),
+			"the signed_up schema is registered: {signed_up}"
+		);
+		assert!(named("$pageview").is_some(), "{summary:?}");
+
+		// A token the service wasn't given reads nothing and seeds nothing.
+		let refused = ask(&router, &definitions_path(), "not-the-token").await;
+		assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+		assert!(
+			seed_with(router, "not-the-token", MONTH_END).await.is_err(),
+			"the service refuses an unknown token's seed"
+		);
+
+		std::fs::remove_dir_all(&data).ok();
+		Ok(())
 	}
 }
