@@ -77,6 +77,12 @@ function serve(directory) {
 						},
 					);
 				case `${BASE}/analytics/trends`:
+					if (url.searchParams.get("by") === "session:channel") {
+						return page("trends-channels.html");
+					}
+					if (url.searchParams.get("s0") === "$pageview") {
+						return page("trends-pageviews.html");
+					}
 					return page(
 						url.searchParams.get("interval") === "week"
 							? "trends-week.html"
@@ -161,6 +167,7 @@ async function open(page, url, { width = 1280, height = 900 } = {}) {
 }
 
 const KEYS = {
+	Tab: 9,
 	ArrowRight: 39,
 	ArrowLeft: 37,
 	Home: 36,
@@ -170,9 +177,10 @@ const KEYS = {
 	w: 87,
 };
 
-async function press(page, key) {
+async function press(page, key, { shift = false } = {}) {
 	const common = {
 		key,
+		modifiers: shift ? 8 : 0,
 		code: key.length === 1 ? `Key${key.toUpperCase()}` : key,
 		windowsVirtualKeyCode: KEYS[key],
 	};
@@ -188,6 +196,143 @@ const focused = (page) =>
 	page.evaluate(
 		"document.activeElement?.getAttribute('data-testid') ?? document.activeElement?.tagName",
 	);
+
+Deno.test("a breakdown has the same colours after a builder change as after a reload", async () => {
+	await withBrowser(async (page, site) => {
+		await open(
+			page,
+			`${site.origin}${BASE}/analytics/trends?s0=%24pageview&interval=day`,
+		);
+		await page.evaluate("window.beforeSwap = true");
+		await page.click(
+			'[data-testid="menu-toggle"][aria-description="breakdown"]',
+		);
+		await page.click('[data-testid="menu-item"][href*="by=session%3Achannel"]');
+		await page.until(
+			"() => new URLSearchParams(location.search).get('by') === 'session:channel'",
+			"the channel breakdown arrives",
+		);
+		assert(
+			await page.evaluate("window.beforeSwap === true"),
+			"the builder swapped without a reload",
+		);
+		const colours = () =>
+			page.evaluate(`(() => {
+			const chart = document.querySelector('[data-testid="trend-chart"]');
+			return {
+				lines: Array.from(chart.querySelectorAll('svg')).map(line => getComputedStyle(line).color),
+				swatches: Array.from(chart.firstElementChild.children).map(row => getComputedStyle(row.firstElementChild).backgroundColor),
+			};
+		})()`);
+		const swapped = await colours();
+		await open(page, await page.evaluate("location.href"));
+		const reloaded = await colours();
+		assert(
+			new Set(reloaded.swatches).size >= 3,
+			`the fixture has distinct channels: ${JSON.stringify(reloaded)}`,
+		);
+		assert(
+			JSON.stringify(swapped) === JSON.stringify(reloaded),
+			`colours survive a swap: ${JSON.stringify({ swapped, reloaded })}`,
+		);
+		assert(
+			!swapped.swatches.includes("rgba(0, 0, 0, 0)"),
+			"every channel has a visible swatch",
+		);
+	});
+});
+
+Deno.test("confirmation dialogs contain focus and restore their opener without closing Workings", async () => {
+	await withBrowser(async (page, site) => {
+		await open(
+			page,
+			`${site.origin}${BASE}/infra/projects/notes-production/overview#workings=release`,
+		);
+		await page.evaluate(`(() => {
+			const held = document.createElement('button');
+			held.id = 'already-inert';
+			held.inert = true;
+			document.body.append(held);
+			document.querySelector('[data-testid="action:status"]').focus();
+		})()`);
+		await press(page, "Enter");
+		await page.until(
+			"() => document.querySelector('[data-testid=\"confirm-sheet\"]')",
+			"the health dialog",
+		);
+		assert(
+			await focused(page) === "confirm-yes",
+			"the confirmation receives focus",
+		);
+		await press(page, "Tab");
+		assert(
+			await focused(page) === "confirm-no",
+			`Tab wraps inside the dialog, not ${await focused(page)}`,
+		);
+		await press(page, "Tab", { shift: true });
+		assert(
+			await focused(page) === "confirm-yes",
+			"Shift+Tab wraps back to confirmation",
+		);
+		assert(
+			await page.evaluate("document.querySelector('[data-lk-root]').inert"),
+			"the background is inert while confirming",
+		);
+		await press(page, "Escape");
+		assert(
+			await focused(page) === "action:status",
+			"Escape restores the exact opener",
+		);
+		assert(
+			await page.evaluate(
+				"document.documentElement.getAttribute('data-admin-drawer') === 'release'",
+			),
+			"Escape dismisses only the dialog",
+		);
+		assert(
+			await page.evaluate(
+				"!document.querySelector('[data-lk-root]').inert && document.getElementById('already-inert').inert",
+			),
+			"closing restores prior inert states",
+		);
+		await press(page, "Enter");
+		await page.until(
+			"() => document.querySelector('[data-testid=\"confirm-sheet\"]')",
+			"the reopened dialog",
+		);
+		await page.click('[data-testid="confirm-no"]');
+		assert(
+			await focused(page) === "action:status",
+			"Cancel restores the opener too",
+		);
+
+		await open(page, `${site.origin}${BASE}/analytics/trends`);
+		// Pointer activation need not focus the opener (notably in Safari).
+		await page.evaluate(
+			"document.querySelector('[data-testid=\"save-insight\"]').click()",
+		);
+		await page.until(
+			"() => document.querySelector('[data-testid=\"confirm-input\"]')",
+			"the save dialog",
+		);
+		assert(
+			await focused(page) === "confirm-input",
+			"a text dialog starts in its input",
+		);
+		await press(page, "Tab", { shift: true });
+		assert(
+			await focused(page) === "confirm-yes",
+			`Shift+Tab wraps from the first input, not ${await focused(page)}`,
+		);
+		await press(page, "Tab");
+		assert(await focused(page) === "confirm-input", "Tab wraps to the input");
+		await press(page, "Escape");
+		assert(
+			await focused(page) === "save-insight",
+			"pointer activation also restores the opener",
+		);
+	});
+});
 
 Deno.test("a live event's struct badge follows the event, not the row it copies", async () => {
 	await withBrowser(async (page, site) => {

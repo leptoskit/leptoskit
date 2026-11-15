@@ -17,6 +17,8 @@ The Workings drawer is easier to follow:
 
 On Live, a typed event always shows its `struct` badge, even when it arrives after an untyped one.
 
-Simulation wording also covers deploy, first release, maintenance, rollback, health checks, and backup verification. Confirmations and lesson evidence distinguish sample results from real work, and simulated plans never claim to execute the operator CLI. The browser CI suite runs the five Workings and live-event regression checks.
+Simulation wording also covers deploy, first release, maintenance, rollback, health checks, and backup verification. Confirmations and lesson evidence distinguish sample results from real work, and simulated plans never claim to execute the operator CLI. The browser CI suite covers Workings, live events, chart colours after builder changes, and confirmation dialog focus.
 
 Releases recorded in the same second keep their journal order, so the current release and rollback choices do not depend on random operation IDs.
+
+Changing a chart's breakdown updates its generated styles immediately, keeping the same series colours as a full reload. Confirmation dialogs keep keyboard focus inside, make the background inert, and return focus to their opener when dismissed; Escape no longer also closes Workings behind the dialog.

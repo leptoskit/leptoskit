@@ -196,6 +196,7 @@ function prose(text) {
  * label }). It resolves to `false`, or to `{ value, choice }`.
  */
 function confirmSheet(title, explanation, options = {}) {
+	const opener = options.invoker ?? document.activeElement;
 	return new Promise((resolve) => {
 		const veil = document.createElement("div");
 		veil.setAttribute("data-testid", "confirm-sheet");
@@ -205,6 +206,7 @@ function confirmSheet(title, explanation, options = {}) {
 		card.setAttribute("role", "dialog");
 		card.setAttribute("aria-modal", "true");
 		card.setAttribute("aria-labelledby", "confirm-title");
+		card.setAttribute("aria-describedby", "confirm-description");
 		card.style.cssText =
 			"width:100%;max-width:440px;display:flex;flex-direction:column;gap:14px;padding:20px;border-radius:12px;border:1px solid var(--admin-line);background:var(--admin-surface);color:var(--admin-ink);font:14px/1.5 var(--admin-font-sans)";
 		const heading = document.createElement("h2");
@@ -212,6 +214,7 @@ function confirmSheet(title, explanation, options = {}) {
 		heading.textContent = title;
 		heading.style.cssText = "margin:0;font-size:17px;font-weight:600";
 		const body = document.createElement("p");
+		body.id = "confirm-description";
 		body.append(...prose(explanation));
 		body.style.cssText = "margin:0;color:var(--admin-ink-2)";
 		const row = document.createElement("div");
@@ -295,9 +298,18 @@ function confirmSheet(title, explanation, options = {}) {
 		check();
 		veil.append(card);
 		document.body.append(veil);
-		(field && !field.disabled ? field : go).focus();
+		const background = Array.from(document.body.children)
+			.filter((element) => element instanceof HTMLElement && element !== veil)
+			.map((element) => [element, element.inert]);
+		for (const [element] of background) element.inert = true;
+		(field && !field.disabled ? field : go.disabled ? cancel : go).focus();
 		const done = (answer) => {
+			if (!veil.isConnected) return;
 			veil.remove();
+			for (const [element, inert] of background) element.inert = inert;
+			if (opener instanceof HTMLElement && opener.isConnected) {
+				opener.focus({ preventScroll: true });
+			}
 			resolve(answer);
 		};
 		cancel.addEventListener("click", () => done(false));
@@ -316,8 +328,29 @@ function confirmSheet(title, explanation, options = {}) {
 			}
 		});
 		veil.addEventListener("keydown", (event) => {
+			// Dialog keys must not also trigger the page's Workings shortcuts.
+			event.stopPropagation();
 			if (event.key === "Escape") {
+				event.preventDefault();
 				done(false);
+				return;
+			}
+			if (event.key === "Tab") {
+				const stops = Array.from(card.querySelectorAll("button, input"))
+					.filter((element) =>
+						!element.disabled && element.tabIndex >= 0 &&
+						element.getClientRects().length &&
+						(element.type !== "radio" || element.checked)
+					);
+				const first = stops[0];
+				const last = stops.at(-1);
+				if (event.shiftKey && document.activeElement === first) {
+					event.preventDefault();
+					last?.focus();
+				} else if (!event.shiftKey && document.activeElement === last) {
+					event.preventDefault();
+					first?.focus();
+				}
 			}
 		});
 	});
@@ -368,7 +401,7 @@ async function runAction(button) {
 	}
 	const title = button.textContent.trim();
 	const explanation = button.getAttribute("aria-description") ?? "";
-	if (!(await confirmSheet(title, explanation))) {
+	if (!(await confirmSheet(title, explanation, { invoker: button }))) {
 		return;
 	}
 	button.setAttribute("aria-busy", "true");
@@ -633,10 +666,22 @@ async function swapTo(href, push, reveal = false) {
 		restoreDrawerPlace(place);
 		if (invoker && !invoker.isConnected) invoker = locate(opener);
 		locate(focused)?.focus({ preventScroll: true });
-		const style = document.querySelector("head style");
-		const nextStyle = next.querySelector("head style");
-		if (style && nextStyle && style.textContent !== nextStyle.textContent) {
-			style.textContent = nextStyle.textContent;
+		// The shell's CSS is in head; the renderer puts component CSS in body.
+		for (const selector of ["head > style", "body > style"]) {
+			const style = document.querySelector(selector);
+			const nextStyle = next.querySelector(selector);
+			if (style && nextStyle && style.textContent !== nextStyle.textContent) {
+				style.textContent = nextStyle.textContent;
+			}
+		}
+		const scope = next.querySelector("[data-lk-root]")?.getAttribute(
+			"data-lk-root",
+		);
+		if (scope) {
+			document.querySelector("[data-lk-root]")?.setAttribute(
+				"data-lk-root",
+				scope,
+			);
 		}
 		document.title = next.title;
 		for (const [drawer, blocks] of drawerCode(document)) {
@@ -878,7 +923,7 @@ async function saveInsight() {
 		insight
 			? "Saves what the builder shows now over this insight. Dashboards that hold it update."
 			: "Saves this insight to the library, where anyone with the admin can open it.",
-		{ input: { label: "Name", value: name } },
+		{ invoker: byId("save-insight"), input: { label: "Name", value: name } },
 	);
 	if (!answer) return;
 	const result = await post(`${BASE}/api/analytics/insights`, {
@@ -913,7 +958,11 @@ async function addToDashboard(button) {
 		`Adds “${button.getAttribute("aria-description") ?? name}” as a card${
 			insight ? "" : ", saving it to the library first"
 		}.`,
-		{ choices, input: { label: "New dashboard's name", value: "Product" } },
+		{
+			invoker: button,
+			choices,
+			input: { label: "New dashboard's name", value: "Product" },
+		},
 	);
 	if (!answer) return;
 	const result = await post(`${BASE}/api/analytics/dashboards`, {
@@ -938,6 +987,7 @@ async function exportPerson(button) {
 	const answer = await confirmSheet(
 		"Export",
 		"Downloads everything stored about this person as JSON: their properties, ids, events, and sessions. Handle it as personal data.",
+		{ invoker: button },
 	);
 	if (!answer) return;
 	const response = await fetch(`${BASE}/api/analytics/people/${id}/export`, {
@@ -963,6 +1013,7 @@ async function deletePerson(button) {
 		"Delete",
 		`Deletes this person, every id merged into them, and all their events and sessions, for good. Type \`${confirmation}\` to confirm.`,
 		{
+			invoker: button,
 			input: { label: "Type their name to confirm", placeholder: confirmation },
 			mustMatch: confirmation,
 			danger: true,

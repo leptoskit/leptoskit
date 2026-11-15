@@ -838,6 +838,16 @@ async fn pages_for_the_script() {
 			"trends-week.html",
 			format!("{BASE}/analytics/trends?{RANGE}&interval=week"),
 		),
+		(
+			"trends-pageviews.html",
+			format!("{BASE}/analytics/trends?{RANGE}&s0=%24pageview&interval=day"),
+		),
+		(
+			"trends-channels.html",
+			format!(
+				"{BASE}/analytics/trends?{RANGE}&s0=%24pageview&interval=day&by=session:channel"
+			),
+		),
 		("live.html", format!("{BASE}/analytics/live")),
 		("overview.html", format!("{project}/overview")),
 		("changes.html", format!("{project}/changes")),
