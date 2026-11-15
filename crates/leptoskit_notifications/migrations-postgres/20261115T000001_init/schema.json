@@ -43,7 +43,7 @@
       "name": {
         "name": "category_preferences"
       },
-      "comment": "One person's opt-out for one category. A send skips recipients who opted\nout of its category, and an inbox hides rows whose category its reader\nhas since opted out of, so an opt-out takes hold on what is already\nstored as well as on what comes after.",
+      "comment": "One person's opt-out for one category. A send skips recipients who opted\nout of its category, and an inbox hides rows whose category its reader\nhas since opted out of, so an opt-out takes hold on what is already\nstored as well as on what comes after.\n\nThe table is live: setting a preference re-runs the open inbox and\nbadge subscriptions of the person who set it, and the preferences\nquery they may be watching, without any other write.",
       "columns": [
         {
           "name": "id",
@@ -323,6 +323,56 @@
             "min": 64,
             "max": 64
           }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "wakes"
+      },
+      "comment": "One wake row per person: the clock event for their open subscriptions.\n\nThe inbox and badge queries read the reader's wake row and ignore its\nvalue, which puts `wakes` in their read set; when a send's schedule\nturns — it becomes due, or it expires — the [`wake_send`] job writes\nthe row of everyone the send reached, and each of their open\nsubscriptions re-runs with a fresh `now`, so a scheduled item appears\nand an expired one leaves without any other write. A wake that changes\nnothing (the send was cancelled, the row dismissed) re-runs the query\nand sends nothing, because its result didn't change.\n\nOne row per person, so the table stays as big as the audience, not as\nthe schedule.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "Whose inbox time changed for. The queries read this and nothing\nelse of the row."
+        },
+        {
+          "name": "woken_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When they were last woken. The value is a record for operators,\nnot something a query answers from."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "wakes_person_key",
+          "columns": [
+            "person"
+          ],
+          "unique": true
         }
       ]
     },
@@ -1049,6 +1099,41 @@
     {
       "name": "live_capture",
       "table": {
+        "name": "category_preferences"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "category",
+        "opted_out",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "category_preferences",
+          "id",
+          "id",
+          "person",
+          "category",
+          "opted_out",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
         "name": "notifications"
       },
       "timing": "after",
@@ -1093,6 +1178,39 @@
           "cancelled_at",
           "read_at",
           "dismissed_at",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "name": "wakes"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "woken_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "wakes",
+          "id",
+          "id",
+          "person",
+          "woken_at",
           "created_at"
         ]
       }

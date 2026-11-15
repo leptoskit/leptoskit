@@ -20,7 +20,11 @@ CREATE UNIQUE INDEX "category_preferences_person_category_key" ON "category_pref
 COMMENT ON TABLE "category_preferences" IS 'One person''s opt-out for one category. A send skips recipients who opted
 out of its category, and an inbox hides rows whose category its reader
 has since opted out of, so an opt-out takes hold on what is already
-stored as well as on what comes after.';
+stored as well as on what comes after.
+
+The table is live: setting a preference re-runs the open inbox and
+badge subscriptions of the person who set it, and the preferences
+query they may be watching, without any other write.';
 
 CREATE TABLE "notifications" (
 	"id" uuid NOT NULL,
@@ -96,6 +100,36 @@ COMMENT ON COLUMN "sends"."delivered" IS 'How many inbox rows the send created.'
 
 COMMENT ON COLUMN "sends"."skipped_opted_out" IS 'How many recipients it skipped because they opted out of the
 category.';
+
+CREATE TABLE "wakes" (
+	"id" uuid NOT NULL,
+	"person" uuid NOT NULL,
+	"woken_at" timestamptz NOT NULL,
+	"created_at" timestamptz NOT NULL,
+	CONSTRAINT "wakes_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "wakes_person_key" ON "wakes" ("person");
+
+COMMENT ON TABLE "wakes" IS 'One wake row per person: the clock event for their open subscriptions.
+
+The inbox and badge queries read the reader''s wake row and ignore its
+value, which puts `wakes` in their read set; when a send''s schedule
+turns — it becomes due, or it expires — the [`wake_send`] job writes
+the row of everyone the send reached, and each of their open
+subscriptions re-runs with a fresh `now`, so a scheduled item appears
+and an expired one leaves without any other write. A wake that changes
+nothing (the send was cancelled, the row dismissed) re-runs the query
+and sends nothing, because its result didn''t change.
+
+One row per person, so the table stays as big as the audience, not as
+the schedule.';
+
+COMMENT ON COLUMN "wakes"."person" IS 'Whose inbox time changed for. The queries read this and nothing
+else of the row.';
+
+COMMENT ON COLUMN "wakes"."woken_at" IS 'When they were last woken. The value is a record for operators,
+not something a query answers from.';
 
 CREATE TABLE "live"."changes" (
 	"seq" bigint NOT NULL,
@@ -424,7 +458,11 @@ BEGIN
 END;
 $leptoskit$;
 
+CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "category_preferences" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('category_preferences', 'id', 'id', 'person', 'category', 'opted_out', 'created_at');
+
 CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "notifications" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('notifications', 'id', 'id', 'send_key', 'person', 'category', 'title', 'body', 'data', 'visible_at', 'expires_at', 'cancelled_at', 'read_at', 'dismissed_at', 'created_at');
+
+CREATE TRIGGER "live_capture" AFTER INSERT OR UPDATE OR DELETE ON "wakes" FOR EACH ROW EXECUTE FUNCTION "live"."capture"('wakes', 'id', 'id', 'person', 'woken_at', 'created_at');
 
 CREATE CONSTRAINT TRIGGER "seal" AFTER INSERT ON "live"."pending" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "live"."seal"();
 

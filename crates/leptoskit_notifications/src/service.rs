@@ -21,10 +21,12 @@ use crate::AppSend;
 use crate::InboxItem;
 use crate::NewAppSend;
 use crate::NewNotification;
+use crate::NewWake;
 use crate::Notification;
 use crate::Preference;
 use crate::SERVICE;
 use crate::SendResult;
+use crate::Wake;
 
 /// The person the app forwarded, or the error a stranger gets: nobody's
 /// inbox answers without one, and no argument can name one.
@@ -283,6 +285,99 @@ pub(crate) async fn own_row(
 	}
 }
 
+/// Reads the person's wake row, so the queries that follow it carry
+/// `wakes` in their read set: the wake job at a schedule's turning point
+/// writes that row, and their open subscriptions re-run with a fresh
+/// `now`. The row's value is never used — only its change matters.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn follow_wake(db: &impl leptoskit_db::Read, person: Uuid) -> rpc::Result<()> {
+	Wake::query()
+		.filter(|wake| wake.person.eq(person))
+		.first(db)
+		.await?;
+
+	Ok(())
+}
+
+/// Enqueues the send's wake jobs, in its own transaction: one when it
+/// becomes visible, and one at `expires_at` when it expires. Visibility
+/// is `visible_at` for a scheduled send and now for an immediate one —
+/// an open subscription's read was taken with an earlier `now`, whose
+/// `visible_at <= now` can't match a row that did not exist then, so the
+/// send itself needs the wake as much as its schedule does. Each job
+/// exists exactly when the send lands, and its idempotency key keeps a
+/// raced or retried enqueue from doubling it.
+///
+/// # Errors
+///
+/// Whatever an enqueue fails with.
+pub(crate) async fn schedule_wakes(
+	cx: &rpc::MutationCx,
+	send_key: &str,
+	spec: &crate::SendSpec,
+) -> rpc::Result<()> {
+	let now = leptoskit_db::now();
+	let mut wakes = Vec::with_capacity(2);
+	let becomes_visible = spec
+		.visible_at
+		.map_or(now, |visible_at| visible_at.max(now));
+	wakes.push(("visible", becomes_visible));
+
+	if let Some(expires_at) = spec.expires_at {
+		wakes.push(("expires", expires_at));
+	}
+
+	for (turning, at) in wakes {
+		cx.enqueue(crate::WakeSend {
+			send_key: send_key.to_owned(),
+		})
+		.at(at)
+		.key(format!("wake:{send_key}:{turning}"))
+		.await?;
+	}
+
+	Ok(())
+}
+
+/// Writes one wake row per person the send delivered to, in one
+/// transaction: the clock event that re-runs their open inbox and badge
+/// subscriptions. Bounded by [`crate::MAX_RECIPIENTS`] rows; a wake for a
+/// send that no longer changes anyone's answer re-runs those queries and
+/// sends nothing.
+///
+/// # Errors
+///
+/// Whatever the reads or writes fail with.
+pub(crate) async fn wake(db: &Db, send_key: &str) -> rpc::Result<()> {
+	let people: Vec<Uuid> = Notification::query()
+		.filter(|notification| notification.send_key.eq(send_key.to_owned()))
+		.order_by(|notification| notification.person.asc())
+		.all(db)
+		.await?
+		.into_iter()
+		.map(|notification| notification.person)
+		.collect();
+
+	let tx = db.begin().await?;
+	let now = leptoskit_db::now();
+
+	for person in people {
+		NewWake {
+			person,
+			woken_at: now,
+		}
+		.upsert(&tx, |wake| wake.person)
+		.await?;
+	}
+
+	tx.commit().await?;
+
+	Ok(())
+}
+
 /// What a stored row tells a screen.
 pub(crate) fn inbox_item(row: Notification) -> InboxItem {
 	InboxItem {
@@ -308,6 +403,22 @@ pub fn routes(db: Db, origin: Option<&str>) -> (Router, rpc::server::Live) {
 	use rpc::server::ServiceCallers;
 
 	routes_with(db, origin, ServiceCallers::for_service(Anonymous))
+}
+
+/// The service's job workers: they run the [`wake_send`](crate::wake_send)
+/// jobs a scheduled or expiring send enqueues, and with them the change
+/// log's upkeep. Start them once beside [`routes`] — the service's own
+/// binary does — or a wake waits in `rpc_jobs` until someone does.
+///
+/// They poll every second rather than the framework's five, so a
+/// scheduled notification's wake lands close to its time; everything else
+/// is the framework's default.
+#[must_use]
+pub fn workers(db: Db) -> rpc::server::Jobs {
+	rpc::server::Jobs::new(db)
+		.service(Some(SERVICE))
+		.poll(std::time::Duration::from_secs(1))
+		.retention(Some(std::time::Duration::from_hours(24)))
 }
 
 /// [`routes`], identifying callers with `callers`.

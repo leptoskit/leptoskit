@@ -6141,6 +6141,7 @@ name = "leptoskit_notifications"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "futures",
  "hex",
  "leptoskit_axum",
  "leptoskit_db",
@@ -6152,6 +6153,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "uuid",
 ]
 

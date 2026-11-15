@@ -12,7 +12,8 @@ It follows the [analytics service](analytics-service.md)'s shape: a service crat
 - Operations, all under `/_leptoskit/services/notifications`:
   - `send` and `cancel` answer only the app (`caller == "app"`, per `ServiceCallers`), as `rpc::client::call_as_app` calls them.
   - `inbox`, `unread_count`, `category_preferences` are live queries for the forwarded person; `mark_read`, `mark_dismissed`, `set_category_preference` are their mutations.
-- Tables: `notifications` (one row per recipient; `live`, indexed `(person, id)`), `sends` (one row per idempotency key, with a SHA-256 intent hash and the counts), `category_preferences` (unique `(person, category)`), plus the `rpc` and `live` packs the service runtime needs.
+  - `wake_send` is a job (`#[rpc::job(service = "notifications")]`), never an RPC: only the service's workers run it.
+- Tables: `notifications` (one row per recipient; `live`, indexed `(person, id)`), `sends` (one row per idempotency key, with a SHA-256 intent hash and the counts), `category_preferences` (`live`, unique `(person, category)`), `wakes` (`live`, unique `person`, one row per person the service has woken), plus the `rpc` and `live` packs the service runtime needs.
 - Migrations: `migrations/` (SQLite) and `migrations-postgres/`, generated the way `leptoskit db migration create` writes them (schema diff from empty), one `init` each.
 - `docs/src/guide/41-notifications.md` is the public page; the "Where things stand" section of `docs/src/readme.md` carries the accurate status.
 
@@ -27,21 +28,22 @@ The service takes a `ServiceCallers` exactly as the framework prescribes (`route
 
 ## 3. Semantics worth knowing when changing this
 
-- **Idempotency is domain-level, not receipt-level.** `send` writes the `sends` row first (its key is the primary key), then fans out, then records the outcome — all in the mutation's one transaction. A retry re-reads the row: same intent (the canonical hash of `SendSpec` plus the deduplicated recipient set) answers the stored counts with `duplicate: true`; a different intent is a `409`. A concurrent duplicate hits the unique key, re-reads, and compares. Receipts (`rpc_receipts`) remain available to callers through the normal RPC layer; the domain row is what survives any client's forgetfulness.
+- **Idempotency is domain-level, not receipt-level.** `send` writes the `sends` row first (its key is the primary key), then fans out, then records the outcome — all in the mutation's one transaction. A retry re-reads the row: same intent (the canonical hash of `SendSpec` plus the deduplicated recipient set) answers the stored counts with `duplicate: true`, whenever it is asked; a different intent is a `409`. A concurrent duplicate hits the unique key and the whole mutation runs again (`Error::Contended`; on Postgres the violation aborts the transaction, so there is nothing to read in it), then answers from the store. Receipts (`rpc_receipts`) remain available to callers through the normal RPC layer; the domain row is what survives any client's forgetfulness.
+- **Validation is split by what the clock can move.** `check_send_shape` checks what a send always is — lengths, printable text, `data`'s JSON-object shape, the recipient bound, and `expires_at > visible_at` when the spec names both — and runs before the stored-send lookup, so an accepted send answers identically forever (an expiry in the intent never makes its own retry invalid). `check_send_timing` checks what only a new send can satisfy — the year horizon, and an expiry after now when the send doesn't schedule — and runs only when the key is unknown. `check_send` runs both, for app-side pre-validation.
 - **Fanout is bounded at `MAX_RECIPIENTS` (1,000) per send** and inserts one row per recipient. Larger audiences are the app's business (loop with distinct keys).
-- **Scheduled visibility and expiry are SQL predicates, not a daemon.** `visible` is `visible_at <= now AND cancelled_at IS NULL AND (expires_at IS NULL OR expires_at > now)`, plus the reader's opted-out categories. Nothing wakes to flip a row; nothing deletes expired rows yet (a later prune job can, without changing behavior).
-- **Cancel-before-due:** `cancel` refuses once any row of the send is visible and uncancelled; a fully cancelled send answers `0` whenever it's asked again.
-- **Preferences bind at both ends:** the send skips opted-out recipients (counted in `skipped_opted_out`), and the inbox hides rows in categories the reader opted out of since, so an opt-out covers history too. At most `MAX_PREFERENCES` (100) rows per person, so the visibility filter stays a bounded `ne` chain.
+- **Visibility is a SQL predicate; arrival is a wake.** `visible` is `visible_at <= now AND cancelled_at IS NULL AND (expires_at IS NULL OR expires_at > now)`, plus the reader's opted-out categories — but a recorded live read set is judged against the condition it was read with, and its `now` is a constant of that run: a row inserted after the read (scheduled or not) can't match `visible_at <= then`, and no commit happens at all when an expiry's time simply passes. So the service owns the clock event: every send enqueues a `wake_send` job when it becomes visible (now for an immediate send, `visible_at` for a scheduled one) and another at its `expires_at`, in the send's transaction. The job writes one `wakes` row per person the send reached — `inbox` and `unread_count` read the reader's wake row and ignore its value, which puts `wakes` in their read set — and each of their open subscriptions re-runs with a fresh `now`. A wake that changes nothing (cancelled send, dismissed row) re-runs the query and sends nothing, because the result didn't change. The jobs are the framework's own (`rpc_jobs`, claim, lease, retry): no new scheduler, no polling daemon; the workers are started by the service's binary (`service::workers`) beside its routes and poll every second, so a scheduled item lands close to its time.
+- **Cancel-before-due:** `cancel` refuses once any row of the send is visible and uncancelled; a fully cancelled send answers `0` whenever it's asked again. Existence is the `sends` row, not the fanout: a send every recipient opted out of has no rows, and cancelling it answers `0` idempotently rather than `404`.
+- **Preferences bind at both ends:** the send skips opted-out recipients (counted in `skipped_opted_out`), and the inbox hides rows in categories the reader opted out of since, so an opt-out covers history too. The table is `live`, so the preference write itself re-runs the setter's open inbox, badge, and preferences subscriptions. A raced insert (two devices, one new category) fails the unique key and the mutation runs again, so the last setting to commit is the one that holds — no answer is swallowed. At most `MAX_PREFERENCES` (100) rows per person, so the visibility filter stays a bounded `ne` chain.
 - **Row ids are UUID v7**, assigned by the service, so `ORDER BY id DESC` is arrival order and a stable pagination cursor; `notifications` is indexed `(person, id)` for exactly that query. Inbox pages clamp to `MAX_INBOX_PAGE` (100) before the framework's own 1,000-row clamp.
-- **Live:** `notifications` is a `live` table, so `inbox` and `unread_count` update watching screens on sends and on cross-device reads and dismissals.
+- **Live:** `notifications`, `category_preferences`, and `wakes` are `live` tables. Sends, reads, dismissals, opt-outs, schedules turning due, and expiries all reach watching screens.
 
 ## 4. Tests
 
-`tests/service.rs` runs a real server over a migrated SQLite database: authorization (anonymous, wrong token, forged and foreign-service identity tokens, app-only send/cancel), cross-person isolation, cross-device shared state, idempotency across a file-backed database restart, conflicting key reuse, every bound (keys, titles, bodies, data shape and size, recipient count, schedule horizon and ordering), scheduled visibility arriving, cancelling before due and refusing after, expiry leaving every view, preferences at send and at visibility, three-page pagination with cursor order, concurrent duplicate sends fanning out once, and the migrations themselves (tables and packs exist; the `sends` intent row is written). `tests/dependencies.rs` keeps server crates out of the client tree. The Postgres behavior test is `#[ignore]`d behind `LEPTOSKIT_NOTIFICATIONS_TEST_POSTGRES`, as the analytics tests are; the `postgres` feature is compile-checked.
+`tests/service.rs` runs a real server over a migrated SQLite database: authorization (anonymous, wrong token, forged and foreign-service identity tokens, app-only send/cancel), cross-person isolation, cross-device shared state, idempotency across a file-backed database restart — and the same after a send's expiry, with a changed intent still conflicting and a born-expired new send refused — every bound (keys, titles, bodies, data shape and size, recipient count, schedule horizon and ordering), scheduled visibility arriving, cancelling before due and refusing after (including a zero-fanout send), expiry leaving every view, preferences at send and at visibility, three-page pagination with cursor order, concurrent duplicate sends fanning out once, and the migrations themselves (tables and packs exist; the `sends` intent row is written). `tests/live.rs` drives the live WebSocket: a scheduled send appearing on an open inbox and badge with no write but the wake, an expiring item leaving both, an opt-out hiding an already-open page, a read on one device reaching another's screen, one person's wake never touching another's, and the wake jobs surviving a workers-down restart, draining once, and not spinning. `tests/postgres.rs` starts a private Postgres from local binaries (skipping without them, unless `LEPTOSKIT_REQUIRE_POSTGRES` is set) and runs the Postgres-specific races: concurrent preference settings from two devices landing on one committed row, concurrent same-key sends fanning out once, the after-expiry retry, and zero-fanout cancellation. `tests/dependencies.rs` keeps server crates out of the client tree. The older `#[ignore]`d `postgres_behaves_like_sqlite` remains for a private long-lived database; the `postgres` feature is compile-checked.
 
 ## 5. What an app that uses this must set
 
-- `[services.notifications]` with `crate = "leptoskit_notifications"` (or a workspace `package`), default `forward_identity` on for first-party.
+- `[services.notifications]` with `crate = "leptoskit_notifications"` (or a workspace `package`) and `trust = "first-party"` — a workspace `package` defaults first-party, but a registry `crate` defaults `isolated`, which forwards no identity; the guide's first snippet says it explicitly. `forward_identity` then defaults on.
 - The app's server serves `rpc::server::Server` with its sign-in `Identify` (the scaffold's shape) so forwarded-identity tokens can be minted.
 - Sending needs the service's token on the server side, which `leptoskit dev`/`serve` and deploys provide as `LEPTOSKIT_SERVICE_NOTIFICATIONS_TOKEN`.
 
@@ -53,23 +55,23 @@ SQLite in the service's own file handles the target load — badge polls are one
 
 - **No OS push transports** (APNs, FCM, Web Push), no device registry, no tokens-at-rest for vendors. The next slices add transports; this crate only stores and serves.
 - **No management dashboard**, no admin UI, no generic "transport" trait with speculative backends.
-- **No polling daemon** for visibility or expiry; SQL predicates cover both.
+- **No generic scheduler or polling daemon.** The wake jobs are lifecycle-managed rows in the framework's own `rpc_jobs` table — enqueued in the send's transaction, run once by the service's workers, pruned with them — not a service-owned loop. This revises the first slice's "no daemon" note: time-based arrival on an open subscription turned out to need the wake (§3), and this is the smallest mechanism that provides it on the framework's existing jobs and live invalidation.
 
 ## 8. Status
 
-| Part                                   | Status                                                 |
-| -------------------------------------- | ------------------------------------------------------ |
-| Service crate, storage, ops            | Built and tested on SQLite; Postgres compile-checked   |
-| App-only send/cancel                   | Built, behind the `ServiceCallers` trust boundary      |
-| Durable per-person inbox               | Built: live queries, bounded pages, cross-device state |
-| Idempotency across restart             | Built: file-backed restart test proves it              |
-| Categories + opt-outs                  | Built: enforced at send and at visibility              |
-| Scheduled visibility + cancel          | Built: SQL visibility, cancel-before-due               |
-| Expiry                                 | Built at visibility; no physical prune yet             |
-| OS background push (APNs/FCM/Web Push) | Not started; subsequent task                           |
-| Native enrollment                      | Not started; subsequent task                           |
-| Delivery receipts                      | Not started                                            |
-| Physical prune of expired rows         | Not started                                            |
+| Part                                   | Status                                                                                                     |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Service crate, storage, ops            | Built and tested on SQLite; Postgres tested on an ephemeral local cluster, with a compile check            |
+| App-only send/cancel                   | Built, behind the `ServiceCallers` trust boundary                                                          |
+| Durable per-person inbox               | Built: live queries, bounded pages, cross-device state                                                     |
+| Idempotency across restart             | Built: file-backed restart test proves it, before and after a send's expiry                                |
+| Categories + opt-outs                  | Built: enforced at send and at visibility; live on open screens; raced settings land on the last committed |
+| Scheduled visibility + cancel          | Built: SQL visibility, wake jobs on due, cancel-before-due (zero-fanout included)                          |
+| Expiry                                 | Built at visibility and on open screens (wake at `expires_at`); no physical prune yet                      |
+| OS background push (APNs/FCM/Web Push) | Not started; subsequent task                                                                               |
+| Native enrollment                      | Not started; subsequent task                                                                               |
+| Delivery receipts                      | Not started                                                                                                |
+| Physical prune of expired rows         | Not started                                                                                                |
 
 ## 9. What follows
 

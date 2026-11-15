@@ -39,7 +39,7 @@
       "name": {
         "name": "category_preferences"
       },
-      "comment": "One person's opt-out for one category. A send skips recipients who opted\nout of its category, and an inbox hides rows whose category its reader\nhas since opted out of, so an opt-out takes hold on what is already\nstored as well as on what comes after.",
+      "comment": "One person's opt-out for one category. A send skips recipients who opted\nout of its category, and an inbox hides rows whose category its reader\nhas since opted out of, so an opt-out takes hold on what is already\nstored as well as on what comes after.\n\nThe table is live: setting a preference re-runs the open inbox and\nbadge subscriptions of the person who set it, and the preferences\nquery they may be watching, without any other write.",
       "columns": [
         {
           "name": "id",
@@ -319,6 +319,56 @@
             "min": 64,
             "max": 64
           }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "wakes"
+      },
+      "comment": "One wake row per person: the clock event for their open subscriptions.\n\nThe inbox and badge queries read the reader's wake row and ignore its\nvalue, which puts `wakes` in their read set; when a send's schedule\nturns — it becomes due, or it expires — the [`wake_send`] job writes\nthe row of everyone the send reached, and each of their open\nsubscriptions re-runs with a fresh `now`, so a scheduled item appears\nand an expired one leaves without any other write. A wake that changes\nnothing (the send was cancelled, the row dismissed) re-runs the query\nand sends nothing, because its result didn't change.\n\nOne row per person, so the table stays as big as the audience, not as\nthe schedule.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "Whose inbox time changed for. The queries read this and nothing\nelse of the row."
+        },
+        {
+          "name": "woken_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When they were last woken. The value is a record for operators,\nnot something a query answers from."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "wakes_person_key",
+          "columns": [
+            "person"
+          ],
+          "unique": true
         }
       ]
     },
@@ -979,6 +1029,69 @@
   ],
   "triggers": [
     {
+      "name": "live_category_preferences_delete",
+      "table": {
+        "name": "category_preferences"
+      },
+      "timing": "after",
+      "events": [
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "category",
+        "opted_out",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'category_preferences', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'person', CASE WHEN OLD.\"person\" IS NULL THEN NULL ELSE lower(hex(OLD.\"person\")) END, 'category', OLD.\"category\", 'opted_out', OLD.\"opted_out\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
+      }
+    },
+    {
+      "name": "live_category_preferences_insert",
+      "table": {
+        "name": "category_preferences"
+      },
+      "timing": "after",
+      "events": [
+        "insert"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "category",
+        "opted_out",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'category_preferences', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'person', CASE WHEN NEW.\"person\" IS NULL THEN NULL ELSE lower(hex(NEW.\"person\")) END, 'category', NEW.\"category\", 'opted_out', NEW.\"opted_out\", 'created_at', NEW.\"created_at\"), '[]');"
+      }
+    },
+    {
+      "name": "live_category_preferences_update",
+      "table": {
+        "name": "category_preferences"
+      },
+      "timing": "after",
+      "events": [
+        "update"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "category",
+        "opted_out",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'category_preferences', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'person', CASE WHEN OLD.\"person\" IS NULL THEN NULL ELSE lower(hex(OLD.\"person\")) END, 'category', OLD.\"category\", 'opted_out', OLD.\"opted_out\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'person', CASE WHEN NEW.\"person\" IS NULL THEN NULL ELSE lower(hex(NEW.\"person\")) END, 'category', NEW.\"category\", 'opted_out', NEW.\"opted_out\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"category\" IS NOT NEW.\"category\" THEN 'category' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"opted_out\" IS NOT NEW.\"opted_out\" THEN 'opted_out' END, CASE WHEN OLD.\"person\" IS NOT NEW.\"person\" THEN 'person' END)) WHERE \"type\" <> 'null'));"
+      }
+    },
+    {
       "name": "live_notifications_delete",
       "table": {
         "name": "notifications"
@@ -1063,6 +1176,66 @@
       "action": {
         "kind": "statements",
         "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'notifications', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'send_key', OLD.\"send_key\", 'person', CASE WHEN OLD.\"person\" IS NULL THEN NULL ELSE lower(hex(OLD.\"person\")) END, 'category', OLD.\"category\", 'title', OLD.\"title\", 'body', OLD.\"body\", 'data', OLD.\"data\", 'visible_at', OLD.\"visible_at\", 'expires_at', OLD.\"expires_at\", 'cancelled_at', OLD.\"cancelled_at\", 'read_at', OLD.\"read_at\", 'dismissed_at', OLD.\"dismissed_at\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'send_key', NEW.\"send_key\", 'person', CASE WHEN NEW.\"person\" IS NULL THEN NULL ELSE lower(hex(NEW.\"person\")) END, 'category', NEW.\"category\", 'title', NEW.\"title\", 'body', NEW.\"body\", 'data', NEW.\"data\", 'visible_at', NEW.\"visible_at\", 'expires_at', NEW.\"expires_at\", 'cancelled_at', NEW.\"cancelled_at\", 'read_at', NEW.\"read_at\", 'dismissed_at', NEW.\"dismissed_at\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"body\" IS NOT NEW.\"body\" THEN 'body' END, CASE WHEN OLD.\"cancelled_at\" IS NOT NEW.\"cancelled_at\" THEN 'cancelled_at' END, CASE WHEN OLD.\"category\" IS NOT NEW.\"category\" THEN 'category' END, CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"data\" IS NOT NEW.\"data\" THEN 'data' END, CASE WHEN OLD.\"dismissed_at\" IS NOT NEW.\"dismissed_at\" THEN 'dismissed_at' END, CASE WHEN OLD.\"expires_at\" IS NOT NEW.\"expires_at\" THEN 'expires_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"person\" IS NOT NEW.\"person\" THEN 'person' END, CASE WHEN OLD.\"read_at\" IS NOT NEW.\"read_at\" THEN 'read_at' END, CASE WHEN OLD.\"send_key\" IS NOT NEW.\"send_key\" THEN 'send_key' END, CASE WHEN OLD.\"title\" IS NOT NEW.\"title\" THEN 'title' END, CASE WHEN OLD.\"visible_at\" IS NOT NEW.\"visible_at\" THEN 'visible_at' END)) WHERE \"type\" <> 'null'));"
+      }
+    },
+    {
+      "name": "live_wakes_delete",
+      "table": {
+        "name": "wakes"
+      },
+      "timing": "after",
+      "events": [
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "woken_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'wakes', 'D', json_array(CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'person', CASE WHEN OLD.\"person\" IS NULL THEN NULL ELSE lower(hex(OLD.\"person\")) END, 'woken_at', OLD.\"woken_at\", 'created_at', OLD.\"created_at\"), NULL, '[]');"
+      }
+    },
+    {
+      "name": "live_wakes_insert",
+      "table": {
+        "name": "wakes"
+      },
+      "timing": "after",
+      "events": [
+        "insert"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "woken_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'wakes', 'I', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), NULL, json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'person', CASE WHEN NEW.\"person\" IS NULL THEN NULL ELSE lower(hex(NEW.\"person\")) END, 'woken_at', NEW.\"woken_at\", 'created_at', NEW.\"created_at\"), '[]');"
+      }
+    },
+    {
+      "name": "live_wakes_update",
+      "table": {
+        "name": "wakes"
+      },
+      "timing": "after",
+      "events": [
+        "update"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "woken_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "statements",
+        "sql": "INSERT INTO \"live_changes\" (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\") VALUES ((SELECT coalesce(max(\"seq\"), 0) + 1 FROM \"live_changes\"), NULL, NULL, 'wakes', 'U', json_array(CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END), json_object('id', CASE WHEN OLD.\"id\" IS NULL THEN NULL ELSE lower(hex(OLD.\"id\")) END, 'person', CASE WHEN OLD.\"person\" IS NULL THEN NULL ELSE lower(hex(OLD.\"person\")) END, 'woken_at', OLD.\"woken_at\", 'created_at', OLD.\"created_at\"), json_object('id', CASE WHEN NEW.\"id\" IS NULL THEN NULL ELSE lower(hex(NEW.\"id\")) END, 'person', CASE WHEN NEW.\"person\" IS NULL THEN NULL ELSE lower(hex(NEW.\"person\")) END, 'woken_at', NEW.\"woken_at\", 'created_at', NEW.\"created_at\"), (SELECT json_group_array(\"value\") FROM json_each(json_array(CASE WHEN OLD.\"created_at\" IS NOT NEW.\"created_at\" THEN 'created_at' END, CASE WHEN OLD.\"id\" IS NOT NEW.\"id\" THEN 'id' END, CASE WHEN OLD.\"person\" IS NOT NEW.\"person\" THEN 'person' END, CASE WHEN OLD.\"woken_at\" IS NOT NEW.\"woken_at\" THEN 'woken_at' END)) WHERE \"type\" <> 'null'));"
       }
     },
     {

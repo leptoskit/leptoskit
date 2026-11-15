@@ -21,6 +21,17 @@ required-features = ["service"]
 name = "service"
 required-features = ["service"]
 
+# The live socket tests need the bodies and their server.
+[[test]]
+name = "live"
+required-features = ["service"]
+
+# The Postgres races need the Postgres service; they start a private
+# Postgres from local binaries and skip without them.
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
+
 [dependencies]
 # The client side: the operations' types, which the app compiles to call the
 # service, and the shared validation it runs before it calls. No server
@@ -41,10 +52,12 @@ leptoskit_axum = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+futures = { workspace = true }
 leptoskit_axum = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
 [features]
 default = []

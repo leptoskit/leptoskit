@@ -46,6 +46,16 @@ CREATE TABLE "sends" (
 	CONSTRAINT "sends_intent_length" CHECK (length("intent") >= 64 AND length("intent") <= 64)
 ) STRICT;
 
+CREATE TABLE "wakes" (
+	"id" BLOB NOT NULL CHECK (length("id") = 16),
+	"person" BLOB NOT NULL CHECK (length("person") = 16),
+	"woken_at" TEXT NOT NULL,
+	"created_at" TEXT NOT NULL,
+	CONSTRAINT "wakes_pkey" PRIMARY KEY ("id")
+) STRICT;
+
+CREATE UNIQUE INDEX "wakes_person_key" ON "wakes" ("person");
+
 CREATE TABLE "live_changes" (
 	"seq" INTEGER NOT NULL,
 	"txid" INTEGER,
@@ -150,6 +160,18 @@ CREATE INDEX "rpc_receipts_created_at_idx" ON "rpc_receipts" ("created_at");
 
 CREATE UNIQUE INDEX "rpc_receipts_owner_request_id_key" ON "rpc_receipts" ("owner", "request_id");
 
+CREATE TRIGGER "live_category_preferences_delete" AFTER DELETE ON "category_preferences" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'category_preferences', 'D', json_array(CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'category', OLD."category", 'opted_out', OLD."opted_out", 'created_at', OLD."created_at"), NULL, '[]');
+END;
+
+CREATE TRIGGER "live_category_preferences_insert" AFTER INSERT ON "category_preferences" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'category_preferences', 'I', json_array(CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END), NULL, json_object('id', CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END, 'person', CASE WHEN NEW."person" IS NULL THEN NULL ELSE lower(hex(NEW."person")) END, 'category', NEW."category", 'opted_out', NEW."opted_out", 'created_at', NEW."created_at"), '[]');
+END;
+
+CREATE TRIGGER "live_category_preferences_update" AFTER UPDATE ON "category_preferences" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'category_preferences', 'U', json_array(CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'category', OLD."category", 'opted_out', OLD."opted_out", 'created_at', OLD."created_at"), json_object('id', CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END, 'person', CASE WHEN NEW."person" IS NULL THEN NULL ELSE lower(hex(NEW."person")) END, 'category', NEW."category", 'opted_out', NEW."opted_out", 'created_at', NEW."created_at"), (SELECT json_group_array("value") FROM json_each(json_array(CASE WHEN OLD."category" IS NOT NEW."category" THEN 'category' END, CASE WHEN OLD."created_at" IS NOT NEW."created_at" THEN 'created_at' END, CASE WHEN OLD."id" IS NOT NEW."id" THEN 'id' END, CASE WHEN OLD."opted_out" IS NOT NEW."opted_out" THEN 'opted_out' END, CASE WHEN OLD."person" IS NOT NEW."person" THEN 'person' END)) WHERE "type" <> 'null'));
+END;
+
 CREATE TRIGGER "live_notifications_delete" AFTER DELETE ON "notifications" FOR EACH ROW BEGIN
 	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'notifications', 'D', json_array(CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'send_key', OLD."send_key", 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'category', OLD."category", 'title', OLD."title", 'body', OLD."body", 'data', OLD."data", 'visible_at', OLD."visible_at", 'expires_at', OLD."expires_at", 'cancelled_at', OLD."cancelled_at", 'read_at', OLD."read_at", 'dismissed_at', OLD."dismissed_at", 'created_at', OLD."created_at"), NULL, '[]');
 END;
@@ -160,6 +182,18 @@ END;
 
 CREATE TRIGGER "live_notifications_update" AFTER UPDATE ON "notifications" FOR EACH ROW BEGIN
 	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'notifications', 'U', json_array(CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'send_key', OLD."send_key", 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'category', OLD."category", 'title', OLD."title", 'body', OLD."body", 'data', OLD."data", 'visible_at', OLD."visible_at", 'expires_at', OLD."expires_at", 'cancelled_at', OLD."cancelled_at", 'read_at', OLD."read_at", 'dismissed_at', OLD."dismissed_at", 'created_at', OLD."created_at"), json_object('id', CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END, 'send_key', NEW."send_key", 'person', CASE WHEN NEW."person" IS NULL THEN NULL ELSE lower(hex(NEW."person")) END, 'category', NEW."category", 'title', NEW."title", 'body', NEW."body", 'data', NEW."data", 'visible_at', NEW."visible_at", 'expires_at', NEW."expires_at", 'cancelled_at', NEW."cancelled_at", 'read_at', NEW."read_at", 'dismissed_at', NEW."dismissed_at", 'created_at', NEW."created_at"), (SELECT json_group_array("value") FROM json_each(json_array(CASE WHEN OLD."body" IS NOT NEW."body" THEN 'body' END, CASE WHEN OLD."cancelled_at" IS NOT NEW."cancelled_at" THEN 'cancelled_at' END, CASE WHEN OLD."category" IS NOT NEW."category" THEN 'category' END, CASE WHEN OLD."created_at" IS NOT NEW."created_at" THEN 'created_at' END, CASE WHEN OLD."data" IS NOT NEW."data" THEN 'data' END, CASE WHEN OLD."dismissed_at" IS NOT NEW."dismissed_at" THEN 'dismissed_at' END, CASE WHEN OLD."expires_at" IS NOT NEW."expires_at" THEN 'expires_at' END, CASE WHEN OLD."id" IS NOT NEW."id" THEN 'id' END, CASE WHEN OLD."person" IS NOT NEW."person" THEN 'person' END, CASE WHEN OLD."read_at" IS NOT NEW."read_at" THEN 'read_at' END, CASE WHEN OLD."send_key" IS NOT NEW."send_key" THEN 'send_key' END, CASE WHEN OLD."title" IS NOT NEW."title" THEN 'title' END, CASE WHEN OLD."visible_at" IS NOT NEW."visible_at" THEN 'visible_at' END)) WHERE "type" <> 'null'));
+END;
+
+CREATE TRIGGER "live_wakes_delete" AFTER DELETE ON "wakes" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'wakes', 'D', json_array(CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'woken_at', OLD."woken_at", 'created_at', OLD."created_at"), NULL, '[]');
+END;
+
+CREATE TRIGGER "live_wakes_insert" AFTER INSERT ON "wakes" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'wakes', 'I', json_array(CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END), NULL, json_object('id', CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END, 'person', CASE WHEN NEW."person" IS NULL THEN NULL ELSE lower(hex(NEW."person")) END, 'woken_at', NEW."woken_at", 'created_at', NEW."created_at"), '[]');
+END;
+
+CREATE TRIGGER "live_wakes_update" AFTER UPDATE ON "wakes" FOR EACH ROW BEGIN
+	INSERT INTO "live_changes" ("seq", "txid", "version", "table_name", "op", "key", "old", "new", "changed") VALUES ((SELECT coalesce(max("seq"), 0) + 1 FROM "live_changes"), NULL, NULL, 'wakes', 'U', json_array(CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END), json_object('id', CASE WHEN OLD."id" IS NULL THEN NULL ELSE lower(hex(OLD."id")) END, 'person', CASE WHEN OLD."person" IS NULL THEN NULL ELSE lower(hex(OLD."person")) END, 'woken_at', OLD."woken_at", 'created_at', OLD."created_at"), json_object('id', CASE WHEN NEW."id" IS NULL THEN NULL ELSE lower(hex(NEW."id")) END, 'person', CASE WHEN NEW."person" IS NULL THEN NULL ELSE lower(hex(NEW."person")) END, 'woken_at', NEW."woken_at", 'created_at', NEW."created_at"), (SELECT json_group_array("value") FROM json_each(json_array(CASE WHEN OLD."created_at" IS NOT NEW."created_at" THEN 'created_at' END, CASE WHEN OLD."id" IS NOT NEW."id" THEN 'id' END, CASE WHEN OLD."person" IS NOT NEW."person" THEN 'person' END, CASE WHEN OLD."woken_at" IS NOT NEW."woken_at" THEN 'woken_at' END)) WHERE "type" <> 'null'));
 END;
 
 CREATE TRIGGER "live_rpc_inbox_delete" AFTER DELETE ON "rpc_inbox" FOR EACH ROW BEGIN

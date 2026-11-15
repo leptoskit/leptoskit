@@ -50,7 +50,10 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		println!("applied migration {name}");
 	}
 
-	let (router, live) = service::routes(db, env.public_origin());
+	let (router, live) = service::routes(db.clone(), env.public_origin());
 	live.start().await?;
+	// The workers run the wake jobs a scheduled or expiring send enqueues,
+	// and keep the change log the live queries follow pruned.
+	service::workers(db).start();
 	Ok(router)
 }

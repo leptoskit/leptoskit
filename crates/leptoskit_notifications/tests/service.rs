@@ -1,9 +1,11 @@
 //! The service on a real port: who may call what (the app only sends;
 //! a forwarded person reads only their own inbox), idempotency across a
-//! restart, bounds, scheduled visibility and cancelling it before it's due,
-//! expiry, read and dismissal isolation between people, preferences at send
-//! and at visibility, bounded pagination, concurrent duplicate sends, and
-//! the migrations themselves.
+//! restart — before and after a send's expiry — bounds, scheduled
+//! visibility with cancel-before-due semantics (including a send with no
+//! delivered rows), expiry, read and dismissal isolation between people,
+//! preferences at send and at visibility, bounded pagination, concurrent
+//! duplicate sends, and the migrations themselves. The live socket's own
+//! tests are in `live.rs`.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -39,10 +41,15 @@ const BOB: Uuid = Uuid::from_u128(0xB0B0_0000_0000_0000_0000_0000_0000_0002);
 struct Service {
 	address: std::net::SocketAddr,
 	db: Db,
+	/// The service's job workers, stopped with the service so no test
+	/// leaves one polling behind it.
+	jobs: rpc::server::JobsHandle,
 }
 
 /// A fresh, migrated service on a free port, knowing `TOKEN` as the app and
-/// forwarding identity as `lk` does for a first-party service.
+/// forwarding identity as `lk` does for a first-party service. Its job
+/// workers run on a test-fast poll, so a schedule's wake lands soon after
+/// its time.
 async fn start(db: Db) -> Service {
 	let callers = ServiceCallers::new(Anonymous)
 		.caller(TOKEN, rpc::server::APP_CALLER)
@@ -55,7 +62,16 @@ async fn start(db: Db) -> Service {
 	tokio::spawn(async move {
 		leptoskit_axum::axum::serve(listener, router).await.unwrap();
 	});
-	Service { address, db }
+	let jobs = leptoskit_notifications::service::workers(db.clone())
+		.poll(Duration::from_millis(50))
+		.start();
+	Service { address, db, jobs }
+}
+
+impl Drop for Service {
+	fn drop(&mut self) {
+		self.jobs.stop();
+	}
 }
 
 async fn service() -> Service {
@@ -489,6 +505,127 @@ async fn a_retried_send_answers_once_across_a_restart() {
 
 	let stored = rows(&restarted, "SELECT count(*) FROM notifications").await;
 	assert_eq!(text(&stored[0][0]), "2", "no second copy was written");
+}
+
+/// An accepted send answers its stored outcome forever: expiry is part of
+/// the intent, not a reason to stop answering it. A retry after the
+/// expiry — across a restart, on the same file — returns the first run's
+/// counts; a changed intent still conflicts; a new send with a past
+/// expiry is still refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_accepted_send_answers_after_its_expiry_across_a_restart() {
+	let file = tempfile::Builder::new()
+		.prefix("notifications-expired-retry-")
+		.suffix(".sqlite3")
+		.tempfile()
+		.expect("a database file");
+	let url = format!("sqlite://{}", file.path().display());
+
+	let db = Db::connect(&url).await.expect("the database opens");
+	db.migrate(MIGRATIONS).await.expect("migrations apply");
+	let first = start(db).await;
+
+	let expiring = json!({
+		"category": "news",
+		"title": "Gone by the time you read this",
+		"expires_at": (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339(),
+	});
+	let (status, body) = send(&first, "fleeting", expiring.clone(), &[ALICE, BOB]).await;
+	assert_eq!(status, 200, "{body}");
+	let sent: SendResult = serde_json::from_str(&body).unwrap();
+	assert_eq!(sent.delivered, 2);
+
+	// The second process, after the send has expired.
+	let restarted = start(Db::connect(&url).await.expect("the database opens again")).await;
+	tokio::time::sleep(Duration::from_millis(1_300)).await;
+
+	let (status, body) = send(&restarted, "fleeting", expiring.clone(), &[ALICE, BOB]).await;
+	assert_eq!(status, 200, "the stored outcome, not the clock: {body}");
+	let again: SendResult = serde_json::from_str(&body).unwrap();
+	assert!(again.duplicate, "{body}");
+	assert_eq!(again.delivered, 2, "the first run's counts come back");
+
+	let (status, body) = send(
+		&restarted,
+		"fleeting",
+		json!({
+			"category": "news",
+			"title": "A different send entirely",
+			"expires_at": (chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339(),
+		}),
+		&[ALICE, BOB],
+	)
+	.await;
+	assert_eq!(status, 409, "a changed intent is still a conflict: {body}");
+
+	let (status, body) = send(
+		&restarted,
+		"born-expired",
+		json!({
+			"category": "news",
+			"title": "Too late",
+			"expires_at": (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+		}),
+		&[ALICE],
+	)
+	.await;
+	assert_eq!(status, 400, "a new send can't be born expired: {body}");
+}
+
+/// A send every recipient opted out of delivered nothing, and cancelling
+/// it is still cancelling it: the send's own row is what makes the key
+/// known, so cancelling answers 0 idempotently instead of not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_with_no_delivered_rows_still_cancels() {
+	let service = service().await;
+	let bob = signed_in(BOB);
+
+	let (status, body) = post(
+		&service,
+		"set_category_preference",
+		json!({ "category": "marketing", "opted_out": true }),
+		Some(&bob),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let (status, body) = send(&service, "nobody-sees", spec("marketing", "A sale"), &[BOB]).await;
+	assert_eq!(status, 200, "{body}");
+	let sent: SendResult = serde_json::from_str(&body).unwrap();
+	assert_eq!(
+		(sent.delivered, sent.skipped_opted_out),
+		(0, 1),
+		"bob opted out, so nothing was delivered"
+	);
+
+	let (status, body) = post(
+		&service,
+		"cancel",
+		json!({ "idempotency_key": "nobody-sees" }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "a known zero-fanout send cancels: {body}");
+	assert_eq!(body, "0", "there were no rows to cancel");
+
+	let (status, body) = post(
+		&service,
+		"cancel",
+		json!({ "idempotency_key": "nobody-sees" }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "idempotently: {body}");
+	assert_eq!(body, "0");
+
+	let (status, body) = post(
+		&service,
+		"cancel",
+		json!({ "idempotency_key": "never-sent" }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 404, "an unknown key is still not found: {body}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

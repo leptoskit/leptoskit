@@ -8,6 +8,12 @@
 //! app runs. OS background push — APNs, FCM, Web Push — and device
 //! enrollment are later work, not part of this crate.
 //!
+//! The inbox queries are live, and time is one of the things that changes
+//! what they answer: a scheduled row appears when it is due, an expiring
+//! one leaves when it lapses, and an opt-out hides what was already sent.
+//! Each of those re-runs every open subscription, through the wake rows
+//! and jobs described on [`Wake`] and [`wake_send`].
+//!
 //! Without features, this crate is the operations' types, which an app
 //! compiles to call the service, and the shared validation its server runs
 //! before it sends. With the `service` feature, it's the service itself,
@@ -135,13 +141,43 @@ pub struct AppSend {
 /// out of its category, and an inbox hides rows whose category its reader
 /// has since opted out of, so an opt-out takes hold on what is already
 /// stored as well as on what comes after.
-#[table(name = "category_preferences", unique(person, category))]
+///
+/// The table is live: setting a preference re-runs the open inbox and
+/// badge subscriptions of the person who set it, and the preferences
+/// query they may be watching, without any other write.
+#[table(name = "category_preferences", live, unique(person, category))]
 pub struct Preference {
 	pub id: leptoskit_db::Id<Self>,
 	pub person: uuid::Uuid,
 	#[db(min_len = 1, max_len = 64)]
 	pub category: String,
 	pub opted_out: bool,
+	#[db(created_at)]
+	pub created_at: leptoskit_db::Timestamp,
+}
+
+/// One wake row per person: the clock event for their open subscriptions.
+///
+/// The inbox and badge queries read the reader's wake row and ignore its
+/// value, which puts `wakes` in their read set; when a send's schedule
+/// turns — it becomes visible, or it expires — the [`wake_send`] job
+/// writes the row of everyone the send reached, and each of their open
+/// subscriptions re-runs with a fresh `now`, so a new item appears and an
+/// expired one leaves without any other write. A wake that changes
+/// nothing (the send was cancelled, the row dismissed) re-runs the query
+/// and sends nothing, because its result didn't change.
+///
+/// One row per person, so the table stays as big as the audience, not as
+/// the schedule.
+#[table(name = "wakes", live, unique(person))]
+pub struct Wake {
+	pub id: leptoskit_db::Id<Self>,
+	/// Whose inbox time changed for. The queries read this and nothing
+	/// else of the row.
+	pub person: uuid::Uuid,
+	/// When they were last woken. The value is a record for operators,
+	/// not something a query answers from.
+	pub woken_at: leptoskit_db::Timestamp,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
 }
@@ -237,13 +273,33 @@ pub struct CategoryPreference {
 }
 
 /// Checks a send before it's made, so an app's server rejects bad input
-/// without a round trip and the service rejects it all the same.
+/// without a round trip and the service rejects it all the same: the
+/// immutable shape every retry must keep (see [`check_send_shape`]), and
+/// what the clock says about a new one (see [`check_send_timing`]).
 ///
 /// # Errors
 ///
 /// A message naming what's wrong: a length, a control character, `data`
 /// that isn't a JSON object, or a schedule that doesn't hold together.
 pub fn check_send(
+	idempotency_key: &str,
+	spec: &SendSpec,
+	recipients: &[uuid::Uuid],
+) -> Result<(), String> {
+	check_send_shape(idempotency_key, spec, recipients)?;
+	check_send_timing(spec.visible_at, spec.expires_at)
+}
+
+/// Checks what can never change about a send, whatever the clock says
+/// later: lengths, printable text, `data`'s shape, the recipient bound,
+/// and an expiry that contradicts the visibility it names. A send the
+/// service accepted passes this forever, so a retry of it is judged by
+/// its key, not by the clock.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_send_shape(
 	idempotency_key: &str,
 	spec: &SendSpec,
 	recipients: &[uuid::Uuid],
@@ -270,7 +326,11 @@ pub fn check_send(
 		return Err(format!("a send names 1 to {MAX_RECIPIENTS} recipients"));
 	}
 
-	check_schedule(spec.visible_at, spec.expires_at)?;
+	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
+		&& expires_at <= visible_at
+	{
+		return Err("an expiry must be after the notification becomes visible".into());
+	}
 
 	Ok(())
 }
@@ -334,13 +394,16 @@ pub fn check_data(data: Option<&str>) -> Result<(), String> {
 	Ok(())
 }
 
-/// Checks a send's schedule: `visible_at` within [`MAX_SCHEDULE_SECS`] of
-/// now, and `expires_at` after visibility begins.
+/// Checks what the clock says about a new send: `visible_at` within
+/// [`MAX_SCHEDULE_SECS`] of now, and `expires_at` after visibility begins
+/// and within [`MAX_SCHEDULE_SECS`] of now. Only a send the service
+/// doesn't already hold is judged by this; an accepted one answers from
+/// its stored outcome however the clock has moved on.
 ///
 /// # Errors
 ///
 /// A message naming what's wrong.
-pub fn check_schedule(
+pub fn check_send_timing(
 	visible_at: Option<leptoskit_db::Timestamp>,
 	expires_at: Option<leptoskit_db::Timestamp>,
 ) -> Result<(), String> {
@@ -385,16 +448,27 @@ fn valid_text(value: &str) -> bool {
 ///
 /// The send is idempotent by idempotency key: the same key with the same
 /// intent answers the first run's result and writes nothing, across
-/// restarts, and the same key with a different intent is a conflict.
-/// Generate one key per logical send and keep it stable on retry.
+/// restarts and however much time has passed — an accepted send with an
+/// expiry still answers its stored outcome after the expiry. The same key
+/// with a different intent is a conflict. Generate one key per logical
+/// send and keep it stable on retry.
+///
+/// A send enqueues a [`wake_send`] job when it becomes visible — now for
+/// an immediate send, `visible_at` for a scheduled one — and another at
+/// its `expires_at`, in the send's own transaction: when the time comes,
+/// the job re-runs every open inbox and badge subscription of everyone
+/// the send reached, so a new item appears and an expiring one leaves
+/// without any other write.
 ///
 /// Only the app may call it: [`rpc::client::call_as_app`] from server code.
 ///
 /// # Errors
 ///
 /// [`rpc::Error::Forbidden`] from anywhere but the app's server,
-/// [`rpc::Error::Invalid`] for input [`check_send`] refuses, and
-/// [`rpc::Error::Conflict`] when the key was used for a different send.
+/// [`rpc::Error::Invalid`] for input the checks refuse — the immutable
+/// shape always, the schedule of a send the service doesn't already hold
+/// — and [`rpc::Error::Conflict`] when the key was used for a different
+/// send.
 #[rpc::mutation(service = "notifications")]
 pub async fn send(
 	cx: &rpc::MutationCx,
@@ -408,7 +482,9 @@ pub async fn send(
 		));
 	}
 
-	check_send(&idempotency_key, &spec, &recipients).map_err(rpc::Error::invalid)?;
+	// What the send is, not when it is: a retry of an accepted send must be
+	// judged by its key alone, or an expiry would make it unanswerable.
+	check_send_shape(&idempotency_key, &spec, &recipients).map_err(rpc::Error::invalid)?;
 
 	let recipients: std::collections::BTreeSet<uuid::Uuid> = recipients.into_iter().collect();
 	let intent = service::intent_hash(&spec, &recipients);
@@ -417,21 +493,22 @@ pub async fn send(
 		return service::answer_send(&existing, &intent);
 	}
 
+	// New send, so the clock applies: how far ahead it may schedule.
+	check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+
 	match service::write_send(cx.tx(), &idempotency_key, &intent).await {
 		Ok(()) => {}
 		// Another send with this key committed between the read and the
-		// write: compare intents as if it had been there first.
-		Err(leptoskit_db::DbError::Conflict { .. }) => {
-			let existing = service::find_send(cx.tx(), &idempotency_key)
-				.await?
-				.ok_or_else(|| rpc::Error::conflict("the send vanished while writing it"))?;
-			return service::answer_send(&existing, &intent);
-		}
+		// write. On Postgres the unique violation ends this transaction,
+		// so its outcome can't be read here: the mutation runs again from
+		// the start, finds the send, and answers from the store.
+		Err(leptoskit_db::DbError::Conflict { .. }) => return Err(rpc::Error::Contended),
 		Err(error) => return Err(error.into()),
 	}
 
 	let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
 	service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
+	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
 
 	Ok(SendResult {
 		delivered: fanout.delivered,
@@ -441,10 +518,27 @@ pub async fn send(
 	})
 }
 
+/// Wakes the people a send reached, when its schedule turns: the job
+/// every send enqueues when it becomes visible, and any send with an
+/// expiry at its `expires_at`. It writes one [`Wake`] row per person the
+/// send delivered to, in one bounded transaction, which re-runs their
+/// open inbox and badge subscriptions with a fresh `now`.
+///
+/// The wake runs whether or not a screen is watching, and whether or not
+/// the send was cancelled or its rows dismissed in the meantime: a re-run
+/// that changes nothing sends nothing. Only the service's own workers run
+/// it ([`service::workers`]); the app never enqueues it.
+#[rpc::job(service = "notifications")]
+pub async fn wake_send(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
+	service::wake(cx.db(), &send_key).await
+}
+
 /// Cancels a scheduled send before it's due: every row it created stops
 /// being visible, forever. Once a row of the send is visible the send can
 /// no longer be cancelled, and a key the service doesn't know is not found.
-/// Cancelling an already-cancelled send answers `0`, whenever it happens.
+/// A send the service knows with no rows left to cancel — every recipient
+/// opted out, or it was already cancelled — answers `0`, whenever it's
+/// asked: a known send is always cancellable to a point, idempotently.
 ///
 /// Only the app may call it.
 ///
@@ -469,7 +563,14 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 		.all(cx.tx())
 		.await?;
 
-	if rows.is_empty() {
+	// Existence is the send's own row, not its fanout: a send every
+	// recipient opted out of delivered nothing, and cancelling it is still
+	// cancelling it.
+	if rows.is_empty()
+		&& service::find_send(cx.tx(), &idempotency_key)
+			.await?
+			.is_none()
+	{
 		return Err(rpc::Error::not_found(
 			"no send with this idempotency key exists",
 		));
@@ -525,6 +626,11 @@ pub async fn inbox(
 	page.limit = page.limit.clamp(1, MAX_INBOX_PAGE);
 	let now = leptoskit_db::now();
 	let opted_out = service::opted_out_categories(cx.db(), me).await?;
+	// The clock is part of the answer, so the person's wake row is read
+	// too: it puts `wakes` in this query's read set, and the wake job a
+	// schedule or expiry runs writes it, re-running every open
+	// subscription of theirs with a fresh `now`.
+	service::follow_wake(cx.db(), me).await?;
 
 	let mut query = Notification::query()
 		.filter(|notification| service::visible(notification, me, now, &opted_out));
@@ -573,6 +679,8 @@ pub async fn unread_count(cx: &rpc::QueryCx) -> rpc::Result<u64> {
 	let me = service::me(cx.identity())?;
 	let now = leptoskit_db::now();
 	let opted_out = service::opted_out_categories(cx.db(), me).await?;
+	// As in [`inbox`]: the wake row makes time a tracked read.
+	service::follow_wake(cx.db(), me).await?;
 
 	let count = Notification::query()
 		.filter(|notification| service::visible(notification, me, now, &opted_out))
@@ -678,22 +786,25 @@ pub async fn set_category_preference(
 		)));
 	}
 
-	NewPreference {
+	let inserted: leptoskit_db::Result<()> = NewPreference {
 		person: me,
 		category,
 		opted_out,
 	}
 	.insert(cx.tx())
 	.await
-	.map(|_| ())
-	.or_else(|error| {
-		match error {
-			// Another device set this category while we read: its answer is
-			// the answer.
-			leptoskit_db::DbError::Conflict { .. } => Ok(()),
-			error => Err(error.into()),
-		}
-	})
+	.map(|_| ());
+
+	match inserted {
+		// Another device inserted this category between the read and
+		// the write. On Postgres the unique violation ends this
+		// transaction, so its row can't be read here: the mutation
+		// runs again from the start, finds the row the other device
+		// wrote, and sets it, so the last setting to commit is the one
+		// that holds — neither device's answer is silently dropped.
+		Err(leptoskit_db::DbError::Conflict { .. }) => Err(rpc::Error::Contended),
+		other => other.map_err(rpc::Error::from),
+	}
 }
 
 /// The signed-in person's category preferences, by category name.
