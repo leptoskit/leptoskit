@@ -113,7 +113,11 @@ fn wait_within(child: &mut Child) -> ExitStatus {
 		match child.try_wait().expect("the child's status is readable") {
 			Some(status) => return status,
 			None if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
-			None => panic!("the child neither refused nor reached the bind within 15 seconds"),
+			None => {
+				let _ = child.kill();
+				let _ = child.wait();
+				panic!("the child neither refused nor reached the bind within 15 seconds");
+			}
 		}
 	}
 }
@@ -160,7 +164,7 @@ fn assert_refused_at_the_guard(started: &Start, address: SocketAddr) {
 #[test]
 fn a_normal_process_gets_past_the_descriptor_guard() {
 	let root = volume();
-	let (bind, address) = held_bind();
+	let (_bind, address) = held_bind();
 
 	let started = exec_with_descriptor(&root, address, None);
 
@@ -183,7 +187,7 @@ fn a_normal_process_gets_past_the_descriptor_guard() {
 #[test]
 fn an_inherited_ordinary_file_is_refused_before_serving() {
 	let root = volume();
-	let (bind, address) = held_bind();
+	let (_bind, address) = held_bind();
 	let file = plant(&root, "note.txt", false);
 
 	let started = exec_with_descriptor(&root, address, Some(&file));
@@ -201,7 +205,7 @@ fn an_inherited_ordinary_file_is_refused_before_serving() {
 #[test]
 fn an_inherited_file_named_fd_is_refused_before_serving() {
 	let root = volume();
-	let (bind, address) = held_bind();
+	let (_bind, address) = held_bind();
 	let file = plant(&root, "fd", false);
 
 	let started = exec_with_descriptor(&root, address, Some(&file));
@@ -219,7 +223,7 @@ fn an_inherited_file_named_fd_is_refused_before_serving() {
 #[test]
 fn an_inherited_directory_named_fd_is_refused_before_serving() {
 	let root = volume();
-	let (bind, address) = held_bind();
+	let (_bind, address) = held_bind();
 	let directory = plant(&root, "fd", true);
 
 	let started = exec_with_descriptor(&root, address, Some(&directory));
@@ -241,7 +245,7 @@ fn an_inherited_directory_named_fd_is_refused_before_serving() {
 #[test]
 fn an_inherited_handle_to_the_descriptor_directory_is_refused_before_serving() {
 	let root = volume();
-	let (bind, address) = held_bind();
+	let (_bind, address) = held_bind();
 
 	let started = exec_with_descriptor(&root, address, Some(Path::new("/proc/self/fd")));
 
