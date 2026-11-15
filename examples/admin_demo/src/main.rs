@@ -122,6 +122,9 @@ async fn run(real: bool, seed: bool) -> Result<()> {
 		.data_dir(data.join("admin"))
 		.control(service.clone())
 		.analytics(AnalyticsService::new(ANALYTICS, analytics::TOKEN))
+		// The admin says "Simulated" everywhere unless the real `lk`
+		// commands run.
+		.simulated_infrastructure(!real)
 		.build()
 		.await?;
 

@@ -150,6 +150,11 @@ fn october() -> Vec<JsonEvent> {
 /// The service, seeded with October and its typed events registered, and
 /// the admin reading it as the app.
 async fn seeded() -> (World, AnalyticsFixture) {
+	seeded_with(false).await
+}
+
+/// [`seeded`], with the admin told whether its infrastructure is simulated.
+async fn seeded_with(simulated: bool) -> (World, AnalyticsFixture) {
 	let analytics = analytics_service().await;
 	analytics
 		.register(&[
@@ -164,7 +169,7 @@ async fn seeded() -> (World, AnalyticsFixture) {
 		])
 		.await;
 	analytics.capture(october()).await;
-	let world = world_with(Some(analytics.connection(ANALYTICS_TOKEN))).await;
+	let world = world_with_options(Some(analytics.connection(ANALYTICS_TOKEN)), simulated).await;
 	(world, analytics)
 }
 
@@ -199,6 +204,25 @@ fn attribute_on(html: &str, test_id: &str, attribute: &str, last: bool) -> Strin
 
 fn attribute_of(html: &str, test_id: &str, attribute: &str) -> String {
 	attribute_on(html, test_id, attribute, false)
+}
+
+/// Each Live row's event name, and whether its struct badge shows.
+fn live_badges(html: &str) -> Vec<(String, bool)> {
+	html.split("data-testid=\"live-event\"")
+		.skip(1)
+		.map(|row| {
+			let name = row.split("aria-description=\"").nth(1).map_or_else(
+				|| attribute_of(row, "how-toggle", "aria-label"),
+				|value| value[..value.find('"').unwrap()].to_owned(),
+			);
+			let badge = row
+				.find("data-testid=\"struct-badge\"")
+				.unwrap_or_else(|| panic!("a row without a badge: {row}"));
+			let tag =
+				&row[row[..badge].rfind('<').unwrap()..badge + row[badge..].find('>').unwrap()];
+			(name, !tag.contains("aria-hidden=\"true\""))
+		})
+		.collect()
 }
 
 /// Replaces what changes between runs: ids, timings, and how long ago.
@@ -528,9 +552,39 @@ async fn every_page_reads_the_service_as_the_app() {
 	snapshot("analytics_learn", &html);
 
 	// The live page starts from the latest events and follows the tail.
+	// Every row carries the struct badge, shown only for a typed event, so
+	// the script can set it from each new event whichever row it copies.
+	let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+	analytics
+		.capture(vec![
+			event(
+				"note_created",
+				"anon-live",
+				&now,
+				&json!({ "words": 3, "shared": false }),
+			),
+			event(
+				"$pageview",
+				"anon-live",
+				&now,
+				&json!({ "$pathname": "/notes" }),
+			),
+		])
+		.await;
 	let (_, html) = page(&world, &mut ada, &format!("{BASE}/analytics/live")).await;
 	assert!(html.contains("data-testid=\"live-events\""));
 	assert!(html.contains("data-testid=\"live-pause\""));
+	let rows = live_badges(&html);
+	assert!(
+		rows.contains(&("note_created".to_owned(), true))
+			&& rows.contains(&("$pageview".to_owned(), false)),
+		"{rows:?}"
+	);
+	assert!(
+		rows.iter()
+			.all(|(name, shown)| *shown == (name == "note_created" || name == "signed_up")),
+		"{rows:?}"
+	);
 
 	// Every call the admin made carried the service's token.
 	let authorizations = analytics.rpc_authorizations();
@@ -706,4 +760,90 @@ async fn export_and_delete_need_a_confirmation_and_the_role() {
 	)
 	.await;
 	assert!(!html.contains("data-testid=\"person-row\""));
+}
+
+/// Writes real pages, as the admin renders them, into the directory
+/// `LEPTOSKIT_ADMIN_PAGES` names, for `tests/script.mjs` to drive the
+/// admin's script against in a browser. It runs from there.
+#[tokio::test]
+#[ignore = "tests/script.mjs runs it"]
+async fn pages_for_the_script() {
+	let directory = std::path::PathBuf::from(
+		std::env::var_os("LEPTOSKIT_ADMIN_PAGES").expect("set LEPTOSKIT_ADMIN_PAGES"),
+	);
+	let (world, analytics) = seeded_with(true).await;
+	let mut ada = world.ada().await;
+
+	// The tail's newest event is untyped, so the next typed one copies a
+	// row without a visible badge.
+	let now = chrono::Utc::now();
+	let at = |seconds: i64| {
+		(now - chrono::Duration::seconds(seconds))
+			.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+	};
+	analytics
+		.capture(vec![
+			event(
+				"note_created",
+				"anon-live",
+				&at(20),
+				&json!({ "words": 3, "shared": false }),
+			),
+			event(
+				"$pageview",
+				"anon-live",
+				&at(10),
+				&json!({ "$pathname": "/notes" }),
+			),
+		])
+		.await;
+
+	// A plan with changes, for Changes.
+	let response = ada
+		.post_json(
+			&world.admin,
+			ADMIN,
+			&format!("{BASE}/api/projects/notes-production/actions"),
+			json!({ "kind": "plan", "idempotency_key": "plan" }),
+		)
+		.await;
+	assert!(response.status().is_success(), "{response:?}");
+	let claimed = world
+		.store
+		.claim_project(Some("notes-production"))
+		.unwrap()
+		.unwrap();
+	world
+		.store
+		.finish(
+			&claimed.id,
+			&leptoskit_deploy_console::control::RunResult {
+				succeeded: true,
+				message: "Completed. The plan was compared with the simulated cloud.".into(),
+				details: json!({
+					"code": "completed",
+					"changes": [{ "address": "hcloud_server.web[1]", "actions": ["create"] }],
+				}),
+			},
+		)
+		.unwrap();
+
+	let project = format!("{BASE}/infra/projects/notes-production");
+	for (file, path) in [
+		(
+			"trends-day.html",
+			format!("{BASE}/analytics/trends?{RANGE}&interval=day"),
+		),
+		(
+			"trends-week.html",
+			format!("{BASE}/analytics/trends?{RANGE}&interval=week"),
+		),
+		("live.html", format!("{BASE}/analytics/live")),
+		("overview.html", format!("{project}/overview")),
+		("changes.html", format!("{project}/changes")),
+	] {
+		let (status, html) = page(&world, &mut ada, &path).await;
+		assert_eq!(status, StatusCode::OK, "{path}");
+		std::fs::write(directory.join(file), html).unwrap();
+	}
 }

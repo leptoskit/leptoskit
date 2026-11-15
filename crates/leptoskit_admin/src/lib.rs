@@ -238,6 +238,7 @@ pub struct AdminBuilder {
 	db: Option<Db>,
 	control: Option<Service>,
 	analytics: Option<AnalyticsService>,
+	simulated_infrastructure: bool,
 	http: Option<SharedHttp>,
 }
 
@@ -311,6 +312,20 @@ impl AdminBuilder {
 	#[must_use]
 	pub fn analytics(mut self, service: AnalyticsService) -> Self {
 		self.analytics = Some(service);
+		self
+	}
+
+	/// Says that the control service's worker runs against a stand-in
+	/// cloud, as `admin_demo`'s simulated executor does, rather than real
+	/// providers. Every screen then shows **Simulated** beside the
+	/// environment pill, Overview and Changes say no provider is contacted,
+	/// and plan and apply confirmations say they act on the stand-in.
+	///
+	/// Off by default, so a production admin never claims its actions are
+	/// pretend. Only turn it on when the executor really is simulated.
+	#[must_use]
+	pub fn simulated_infrastructure(mut self, simulated: bool) -> Self {
+		self.simulated_infrastructure = simulated;
 		self
 	}
 
@@ -412,6 +427,7 @@ impl AdminBuilder {
 			auth,
 			control: self.control,
 			analytics: self.analytics.map(analytics::Connection::new),
+			simulated_infrastructure: self.simulated_infrastructure,
 		})))
 	}
 }
@@ -432,6 +448,8 @@ pub(crate) struct Inner {
 	pub auth: Auth,
 	pub control: Option<Service>,
 	pub analytics: Option<analytics::Connection>,
+	/// Whether infrastructure actions run against a stand-in cloud.
+	pub simulated_infrastructure: bool,
 }
 
 impl Admin {
@@ -448,6 +466,7 @@ impl Admin {
 			db: None,
 			control: None,
 			analytics: None,
+			simulated_infrastructure: false,
 			http: None,
 		}
 	}
@@ -476,6 +495,7 @@ impl std::fmt::Debug for Admin {
 			.field("origin", &self.0.origin)
 			.field("main_site", &self.0.main_site)
 			.field("roles", &self.0.roles)
+			.field("simulated_infrastructure", &self.0.simulated_infrastructure)
 			.finish_non_exhaustive()
 	}
 }

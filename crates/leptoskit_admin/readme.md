@@ -98,7 +98,7 @@ cargo run -p admin_demo -- --seed        # and a month of analytics
 cargo run -p admin_demo -- --executor lk # the real `lk` commands
 ```
 
-Open `http://127.0.0.1:4801/_leptoskit/admin`. The main site at `http://localhost:4800` runs the real analytics service and sends typed events from its pages; `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is.
+Open `http://127.0.0.1:4801/_leptoskit/admin`. The main site at `http://localhost:4800` runs the real analytics service and sends typed events from its pages; `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion. The simulated executor contacts no cloud provider: it runs the real generator and compares the result with what it last "applied", and says it's a simulation in every operation. With `--executor lk`, plans run `lk infra plan` for real and fail without provider tokens, which the admin shows as it is. The demo builds its admin with `.simulated_infrastructure(true)` unless the real commands run, so every screen says **Simulated**.
 
 ## Learn more
 

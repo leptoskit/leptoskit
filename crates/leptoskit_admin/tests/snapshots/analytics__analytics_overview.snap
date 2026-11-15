@@ -243,2303 +243,2367 @@ aside [drawer-aside] label="Workings"
   div [drawer:web] label="Workings: Web overview · 5 Oct – 1 Nov · live"
     "Workings"
     "Web overview · 5 Oct – 1 Nov · live"
+    div [drawer-changed] role=status
     button [workings-close] label="Close workings (W)"
       "Close"
-    div [station:emit]
-      "Emit"
-      "sent by the analytics client"
-      "$pageview"
-      "is one of the client's own events: the web client sends it by itself, with the properties below, once"
-      "web::init"
-      "runs."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "$current_url"
-            ":"
-            "string"
-        div [code-line]
-          "2"
-          span [code-text]
-            "$pathname"
-            ":"
-            "string"
-        div [code-line]
-          "3"
-          span [code-text]
-            "$referrer"
-            ":"
-            "string"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:send]
-      "Send"
-      "the latest $pageview, re-encoded here"
-      "Without a type the names travel with every event: 105 bytes in the binary format, 282 as JSON. Measured as one event alone in a batch."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "binary"
-            ","
-            "named"
-            "105"
-            "bytes"
-        div [code-line]
-          "2"
-          span [code-text]
-            "JSON"
-            ","
-            "named"
-            "282"
-            "bytes"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:store]
-      "Store"
-      "events, person_distinct_ids, person_overrides, sessions on sqlite"
-      "Events land in"
-      "events"
-      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "events"
-        div [code-line]
-          "2"
-          span [code-text]
-            "uuid"
-            "BLOB"
-        div [code-line]
-          "3"
-          span [code-text]
-            "name"
-            "TEXT"
-        div [code-line]
-          "4"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "5"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "6"
-          span [code-text]
-            "timestamp"
-            "TEXT"
-        div [code-line]
-          "7"
-          span [code-text]
-            "received_at"
-            "TEXT"
-        div [code-line]
-          "8"
-          span [code-text]
-            "session_id"
-            "BLOB"
-        div [code-line]
-          "9"
-          span [code-text]
-            "context_id"
-            "INTEGER"
-        div [code-line]
-          "10"
-          span [code-text]
-            "properties"
-            "TEXT"
-        div [code-line]
-          "11"
-          span [code-text]
-            "source"
-            "INTEGER"
-        div [code-line]
-          "12"
-          span [code-text]
-        div [code-line]
-          "13"
-          span [code-text]
-            "person_distinct_ids"
-        div [code-line]
-          "14"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "15"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "16"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        div [code-line]
-          "17"
-          span [code-text]
-        div [code-line]
-          "18"
-          span [code-text]
-            "person_overrides"
-        div [code-line]
-          "19"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "20"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "21"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        div [code-line]
-          "22"
-          span [code-text]
-        div [code-line]
-          "23"
-          span [code-text]
-            "sessions"
-        div [code-line]
-          "24"
-          span [code-text]
-            "id"
-            "BLOB"
-        div [code-line]
-          "25"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "26"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "27"
-          span [code-text]
-            "first_timestamp"
-            "TEXT"
-        div [code-line]
-          "28"
-          span [code-text]
-            "last_timestamp"
-            "TEXT"
-        div [code-line]
-          "29"
-          span [code-text]
-            "duration_ms"
-            "INTEGER"
-        div [code-line]
-          "30"
-          span [code-text]
-            "entry_url"
-            "TEXT"
-        div [code-line]
-          "31"
-          span [code-text]
-            "entry_pathname"
-            "TEXT"
-        div [code-line]
-          "32"
-          span [code-text]
-            "exit_url"
-            "TEXT"
-        div [code-line]
-          "33"
-          span [code-text]
-            "exit_pathname"
-            "TEXT"
-        div [code-line]
-          "34"
-          span [code-text]
-            "event_count"
-            "INTEGER"
-        div [code-line]
-          "35"
-          span [code-text]
-            "pageview_count"
-            "INTEGER"
-        div [code-line]
-          "36"
-          span [code-text]
-            "is_bounce"
-            "INTEGER"
-        div [code-line]
-          "37"
-          span [code-text]
-            "channel"
-            "TEXT"
-        div [code-line]
-          "38"
-          span [code-text]
-            "referrer_domain"
-            "TEXT"
-        div [code-line]
-          "39"
-          span [code-text]
-            "utm_source"
-            "TEXT"
-        div [code-line]
-          "40"
-          span [code-text]
-            "utm_medium"
-            "TEXT"
-        div [code-line]
-          "41"
-          span [code-text]
-            "utm_campaign"
-            "TEXT"
-        div [code-line]
-          "42"
-          span [code-text]
-            "device_type"
-            "TEXT"
-        div [code-line]
-          "43"
-          span [code-text]
-            "browser"
-            "TEXT"
-        div [code-line]
-          "44"
-          span [code-text]
-            "os"
-            "TEXT"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:ask]
-      "Ask"
-      "the query"
-      "Every insight is one value of the typed"
-      "Query"
-      "enum. The SQL is what it became. It ran 4 statements on sqlite in <n> ms. Change the builder and these lines change with it."
-      div role=tablist label="Ask as"
-        button [ask-tab:rust] role=tab
-          "Rust"
-        button [ask-tab:sql] role=tab
-          "SQL"
-        button [ask-tab:http] role=tab
-          "HTTP"
-      div [ask-panel:rust] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "use"
-              "leptoskit_analytics"
-              ":"
-              ":"
-              "query"
-              ":"
-              ":"
-              "*;"
-          div [code-line]
-            "2"
-            span [code-text]
-          div [code-line]
-            "3"
-            span [code-text]
-              "let"
-              "query"
-              "="
-              "Query"
-              ":"
-              ":"
-              "WebOverview(WebQuery"
-              "{"
-          div [code-line]
-            "4"
-            span [code-text]
-              "range"
-              ":"
-              "DateRange"
-              ":"
-              ":"
-              "between("
-              "\"2026-10-05T00:00:00Z\""
-              ","
-              "\"2026-11-02T00:00:00Z\""
-              ")"
-              ","
-          div [code-line]
-            "5"
-            span [code-text]
-              "compare"
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "6"
-            span [code-text]
-              "filters"
-              ":"
-              "Vec"
-              ":"
-              ":"
-              "new()"
-              ","
-          div [code-line]
-            "7"
-            span [code-text]
-              "table_limit"
-              ":"
-              "6"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "}"
-              ");"
-          div [code-line]
-            "9"
-            span [code-text]
-          div [code-line]
-            "10"
-            span [code-text]
-              "//"
-              "From"
-              "the"
-              "app's"
-              "server"
-              ","
-              "as"
-              "the"
-              "app"
-              ":"
-          div [code-line]
-            "11"
-            span [code-text]
-              "let"
-              "answer"
-              "="
-              "rpc"
-              ":"
-              ":"
-              "client"
-              ":"
-              ":"
-              "call_as_app(Run"
-              "{"
-              "query"
-              "}"
-              ").await?;"
-          button [copy] label="Copy as Rust"
-            "Copy"
-      div [ask-panel:sql] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "--"
-              "web"
-              "overview"
-              "(sqlite)"
-          div [code-line]
-            "2"
-            span [code-text]
-              "SELECT"
-              "count(*)"
-              "AS"
-              "\"sessions\""
-              ","
-              "sum("
-              "\"s\""
-              "."
-              "\"pageview_count\""
-              ")"
-              "AS"
-              "\"pageviews\""
-              ","
-              "count(distinct"
-              "coalesce(COALESCE((SELECT"
-              "\"po\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "3"
-            span [code-text]
-              "FROM"
-              "\"person_overrides\""
-              "\"po\""
-          div [code-line]
-            "4"
-            span [code-text]
-              "WHERE"
-              "\"po\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              ")"
-              ","
-              "\"s\""
-              "."
-              "\"person_id\""
-              ","
-              "(SELECT"
-              "\"pdi\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "5"
-            span [code-text]
-              "FROM"
-              "\"person_distinct_ids\""
-              "\"pdi\""
-          div [code-line]
-            "6"
-            span [code-text]
-              "WHERE"
-              "\"pdi\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              "))"
-              ","
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              "))"
-              "AS"
-              "\"visitors\""
-              ","
-              "sum(CASE"
-              "WHEN"
-              "\"s\""
-              "."
-              "\"is_bounce\""
-              "THEN"
+    div [drawer-scroll]
+      div [station:emit]
+        div [station-dot]
+        div [station-head]
+          "Emit"
+          "sent by the analytics client"
+        button [station-toggle] label="Emit station"
+        div [station-body]
+          "$pageview"
+          "is one of the client's own events: the web client sends it by itself, with the properties below, once"
+          "web::init"
+          "runs."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
               "1"
-              "ELSE"
-              "0"
-              "END)"
-              "AS"
-              "\"bounces\""
-              ","
-              "sum("
-              "\"s\""
-              "."
-              "\"duration_ms\""
-              ")"
-              "AS"
-              "\"duration\""
-          div [code-line]
-            "7"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "8"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "9"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "10"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-          div [code-line]
-            "11"
-            span [code-text]
-          div [code-line]
-            "12"
-            span [code-text]
-              "--"
-              "web"
-              "overview"
-              "previous"
-              "(sqlite)"
-          div [code-line]
-            "13"
-            span [code-text]
-              "SELECT"
-              "count(*)"
-              "AS"
-              "\"sessions\""
-              ","
-              "sum("
-              "\"s\""
-              "."
-              "\"pageview_count\""
-              ")"
-              "AS"
-              "\"pageviews\""
-              ","
-              "count(distinct"
-              "coalesce(COALESCE((SELECT"
-              "\"po\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "14"
-            span [code-text]
-              "FROM"
-              "\"person_overrides\""
-              "\"po\""
-          div [code-line]
-            "15"
-            span [code-text]
-              "WHERE"
-              "\"po\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              ")"
-              ","
-              "\"s\""
-              "."
-              "\"person_id\""
-              ","
-              "(SELECT"
-              "\"pdi\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "16"
-            span [code-text]
-              "FROM"
-              "\"person_distinct_ids\""
-              "\"pdi\""
-          div [code-line]
-            "17"
-            span [code-text]
-              "WHERE"
-              "\"pdi\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              "))"
-              ","
-              "\"s\""
-              "."
-              "\"distinct_id\""
-              "))"
-              "AS"
-              "\"visitors\""
-              ","
-              "sum(CASE"
-              "WHEN"
-              "\"s\""
-              "."
-              "\"is_bounce\""
-              "THEN"
+              span [code-text]
+                "$current_url"
+                ":"
+                "string"
+            div [code-line]
+              "2"
+              span [code-text]
+                "$pathname"
+                ":"
+                "string"
+            div [code-line]
+              "3"
+              span [code-text]
+                "$referrer"
+                ":"
+                "string"
+      div [station:send]
+        div [station-dot]
+        div [station-head]
+          "Send"
+          "the latest $pageview, re-encoded here"
+        button [station-toggle] label="Send station"
+        div [station-body]
+          "Without a type the names travel with every event: 105 bytes in the binary format, 282 as JSON. Measured as one event alone in a batch."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
               "1"
-              "ELSE"
-              "0"
-              "END)"
-              "AS"
-              "\"bounces\""
-              ","
-              "sum("
-              "\"s\""
-              "."
-              "\"duration_ms\""
-              ")"
-              "AS"
-              "\"duration\""
-          div [code-line]
-            "18"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "19"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "20"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "21"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-09-07T00:00:00.000Z\""
-              ","
-              "\"2026-10-05T00:00:00.000Z\""
-          div [code-line]
-            "22"
-            span [code-text]
-          div [code-line]
-            "23"
-            span [code-text]
-              "--"
-              "web"
-              "overview"
-              "pages"
-              "(sqlite)"
-          div [code-line]
-            "24"
-            span [code-text]
-              "SELECT"
-              "json_extract("
-              "\"events\""
-              "."
-              "\"properties\""
-              ","
-              "?4)"
-              "AS"
-              "\"page\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "25"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "26"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "27"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "28"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"name\""
-              "="
-              "?3"
-          div [code-line]
-            "29"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"page\""
-          div [code-line]
-            "30"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"count\""
-              "DESC"
-              ","
-              "\"page\""
-          div [code-line]
-            "31"
-            span [code-text]
-              "LIMIT"
+              span [code-text]
+                "binary"
+                ","
+                "named"
+                "105"
+                "bytes"
+            div [code-line]
+              "2"
+              span [code-text]
+                "JSON"
+                ","
+                "named"
+                "282"
+                "bytes"
+      div [station:store]
+        div [station-dot]
+        div [station-head]
+          "Store"
+          "events, person_distinct_ids, person_overrides, sessions on sqlite"
+        button [station-toggle] label="Store station"
+        div [station-body]
+          "Events land in"
+          "events"
+          "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "events"
+            div [code-line]
+              "2"
+              span [code-text]
+                "uuid"
+                "BLOB"
+            div [code-line]
+              "3"
+              span [code-text]
+                "name"
+                "TEXT"
+            div [code-line]
+              "4"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "5"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
               "6"
-          div [code-line]
-            "32"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-              ","
-              "\"$pageview\""
-              ","
-              "\"$.\\\""
-              "$pathname\\"
-              "\"\""
-          div [code-line]
-            "33"
-            span [code-text]
-          div [code-line]
-            "34"
-            span [code-text]
-              "--"
-              "web"
-              "overview"
-              "tables"
-              "(sqlite)"
-          div [code-line]
-            "35"
-            span [code-text]
-              "SELECT"
-              "\"dimension\""
-              ","
-              "\"value\""
-              ","
-              "\"count\""
-          div [code-line]
-            "36"
-            span [code-text]
-              "FROM"
-              "(SELECT"
-              "'entry_pathname'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"entry_pathname\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "37"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "38"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "39"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "40"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"entry_pathname\""
-              "<>"
-              "''"
-          div [code-line]
-            "41"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"entry_pathname\""
-          div [code-line]
-            "42"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'exit_pathname'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"exit_pathname\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "43"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "44"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "45"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "46"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"exit_pathname\""
-              "<>"
-              "''"
-          div [code-line]
-            "47"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"exit_pathname\""
-          div [code-line]
-            "48"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'referrer_domain'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"referrer_domain\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "49"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "50"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "51"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "52"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"referrer_domain\""
-              "<>"
-              "''"
-          div [code-line]
-            "53"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"referrer_domain\""
-          div [code-line]
-            "54"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'channel'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"channel\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "55"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "56"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "57"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "58"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"channel\""
-              "<>"
-              "''"
-          div [code-line]
-            "59"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"channel\""
-          div [code-line]
-            "60"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'utm_source'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"utm_source\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "61"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "62"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "63"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "64"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"utm_source\""
-              "<>"
-              "''"
-          div [code-line]
-            "65"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"utm_source\""
-          div [code-line]
-            "66"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'utm_campaign'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"utm_campaign\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "67"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "68"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "69"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "70"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"utm_campaign\""
-              "<>"
-              "''"
-          div [code-line]
-            "71"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"utm_campaign\""
-          div [code-line]
-            "72"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'device_type'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"device_type\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "73"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "74"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "75"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "76"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"device_type\""
-              "<>"
-              "''"
-          div [code-line]
-            "77"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"device_type\""
-          div [code-line]
-            "78"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'browser'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"browser\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "79"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "80"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "81"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "82"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"browser\""
-              "<>"
-              "''"
-          div [code-line]
-            "83"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"browser\""
-          div [code-line]
-            "84"
-            span [code-text]
-              "UNION"
-              "ALL"
-              "SELECT"
-              "'os'"
-              "AS"
-              "\"dimension\""
-              ","
-              "\"s\""
-              "."
-              "\"os\""
-              "AS"
-              "\"value\""
-              ","
-              "count(*)"
-              "AS"
-              "\"count\""
-          div [code-line]
-            "85"
-            span [code-text]
-              "FROM"
-              "\"sessions\""
-              "\"s\""
-          div [code-line]
-            "86"
-            span [code-text]
-              "WHERE"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "87"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"first_timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "88"
-            span [code-text]
-              "AND"
-              "\"s\""
-              "."
-              "\"os\""
-              "<>"
-              "''"
-          div [code-line]
-            "89"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"s\""
-              "."
-              "\"os\""
-              ")"
-              "AS"
-              "\"tables\""
-          div [code-line]
-            "90"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"dimension\""
-              ","
-              "\"count\""
-              "DESC"
-              ","
-              "\"value\""
-          div [code-line]
-            "91"
-            span [code-text]
-              "LIMIT"
-              "54"
-          div [code-line]
-            "92"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-          button [copy] label="Copy as SQL"
-            "Copy"
-      div [ask-panel:http] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "curl"
-              "-X"
-              "POST"
-              "http"
-              ":"
-              "//127.0.0.1"
-              ":"
-              "<port>/_leptoskit/services/analytics/rpc/run"
-              "\\"
-          div [code-line]
-            "2"
-            span [code-text]
-              "-H"
-              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
-              "\\"
-          div [code-line]
-            "3"
-            span [code-text]
-              "-H"
-              "\"content-type: application/json\""
-              "\\"
-          div [code-line]
-            "4"
-            span [code-text]
-              "-d"
-              "@-"
-              "<<'JSON'"
-          div [code-line]
-            "5"
-            span [code-text]
-              "{"
-          div [code-line]
-            "6"
-            span [code-text]
-              "\"query\""
-              ":"
-              "{"
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"compare\""
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "\"kind\""
-              ":"
-              "\"web_overview\""
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "\"range\""
-              ":"
-              "{"
-          div [code-line]
-            "10"
-            span [code-text]
-              "\"from\""
-              ":"
-              "\"2026-10-05T00:00:00Z\""
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "\"to\""
-              ":"
-              "\"2026-11-02T00:00:00Z\""
-          div [code-line]
-            "12"
-            span [code-text]
-              "}"
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "\"table_limit\""
-              ":"
+              span [code-text]
+                "timestamp"
+                "TEXT"
+            div [code-line]
+              "7"
+              span [code-text]
+                "received_at"
+                "TEXT"
+            div [code-line]
+              "8"
+              span [code-text]
+                "session_id"
+                "BLOB"
+            div [code-line]
+              "9"
+              span [code-text]
+                "context_id"
+                "INTEGER"
+            div [code-line]
+              "10"
+              span [code-text]
+                "properties"
+                "TEXT"
+            div [code-line]
+              "11"
+              span [code-text]
+                "source"
+                "INTEGER"
+            div [code-line]
+              "12"
+              span [code-text]
+            div [code-line]
+              "13"
+              span [code-text]
+                "person_distinct_ids"
+            div [code-line]
+              "14"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "15"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "16"
+              span [code-text]
+                "created_at"
+                "TEXT"
+            div [code-line]
+              "17"
+              span [code-text]
+            div [code-line]
+              "18"
+              span [code-text]
+                "person_overrides"
+            div [code-line]
+              "19"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "20"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "21"
+              span [code-text]
+                "created_at"
+                "TEXT"
+            div [code-line]
+              "22"
+              span [code-text]
+            div [code-line]
+              "23"
+              span [code-text]
+                "sessions"
+            div [code-line]
+              "24"
+              span [code-text]
+                "id"
+                "BLOB"
+            div [code-line]
+              "25"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "26"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "27"
+              span [code-text]
+                "first_timestamp"
+                "TEXT"
+            div [code-line]
+              "28"
+              span [code-text]
+                "last_timestamp"
+                "TEXT"
+            div [code-line]
+              "29"
+              span [code-text]
+                "duration_ms"
+                "INTEGER"
+            div [code-line]
+              "30"
+              span [code-text]
+                "entry_url"
+                "TEXT"
+            div [code-line]
+              "31"
+              span [code-text]
+                "entry_pathname"
+                "TEXT"
+            div [code-line]
+              "32"
+              span [code-text]
+                "exit_url"
+                "TEXT"
+            div [code-line]
+              "33"
+              span [code-text]
+                "exit_pathname"
+                "TEXT"
+            div [code-line]
+              "34"
+              span [code-text]
+                "event_count"
+                "INTEGER"
+            div [code-line]
+              "35"
+              span [code-text]
+                "pageview_count"
+                "INTEGER"
+            div [code-line]
+              "36"
+              span [code-text]
+                "is_bounce"
+                "INTEGER"
+            div [code-line]
+              "37"
+              span [code-text]
+                "channel"
+                "TEXT"
+            div [code-line]
+              "38"
+              span [code-text]
+                "referrer_domain"
+                "TEXT"
+            div [code-line]
+              "39"
+              span [code-text]
+                "utm_source"
+                "TEXT"
+            div [code-line]
+              "40"
+              span [code-text]
+                "utm_medium"
+                "TEXT"
+            div [code-line]
+              "41"
+              span [code-text]
+                "utm_campaign"
+                "TEXT"
+            div [code-line]
+              "42"
+              span [code-text]
+                "device_type"
+                "TEXT"
+            div [code-line]
+              "43"
+              span [code-text]
+                "browser"
+                "TEXT"
+            div [code-line]
+              "44"
+              span [code-text]
+                "os"
+                "TEXT"
+      div [station:ask]
+        div [station-dot]
+        div [station-head]
+          "Ask"
+          "the query"
+        button [station-toggle] label="Ask station"
+        div [station-body]
+          "Every insight is one value of the typed"
+          "Query"
+          "enum. The SQL is what it became. It ran 4 statements on sqlite in <n> ms. Change the builder and these lines change with it."
+          div role=tablist label="Ask as"
+            button [ask-tab:rust] role=tab
+              "Rust"
+            button [ask-tab:sql] role=tab
+              "SQL"
+            button [ask-tab:http] role=tab
+              "HTTP"
+          div [ask-panel:rust] role=tabpanel
+            div [code]
+              div [code-head]
+                "Rust"
+                button [copy] label="Copy as Rust"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "use"
+                  "leptoskit_analytics"
+                  ":"
+                  ":"
+                  "query"
+                  ":"
+                  ":"
+                  "*;"
+              div [code-line]
+                "2"
+                span [code-text]
+              div [code-line]
+                "3"
+                span [code-text]
+                  "let"
+                  "query"
+                  "="
+                  "Query"
+                  ":"
+                  ":"
+                  "WebOverview(WebQuery"
+                  "{"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "range"
+                  ":"
+                  "DateRange"
+                  ":"
+                  ":"
+                  "between("
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+                  "\"2026-11-02T00:00:00Z\""
+                  ")"
+                  ","
+              div [code-line]
+                "5"
+                span [code-text]
+                  "compare"
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "6"
+                span [code-text]
+                  "filters"
+                  ":"
+                  "Vec"
+                  ":"
+                  ":"
+                  "new()"
+                  ","
+              div [code-line]
+                "7"
+                span [code-text]
+                  "table_limit"
+                  ":"
+                  "6"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "}"
+                  ");"
+              div [code-line]
+                "9"
+                span [code-text]
+              div [code-line]
+                "10"
+                span [code-text]
+                  "//"
+                  "From"
+                  "the"
+                  "app's"
+                  "server"
+                  ","
+                  "as"
+                  "the"
+                  "app"
+                  ":"
+              div [code-line]
+                "11"
+                span [code-text]
+                  "let"
+                  "answer"
+                  "="
+                  "rpc"
+                  ":"
+                  ":"
+                  "client"
+                  ":"
+                  ":"
+                  "call_as_app(Run"
+                  "{"
+                  "query"
+                  "}"
+                  ").await?;"
+          div [ask-panel:sql] role=tabpanel
+            div [code]
+              div [code-head]
+                "SQL"
+                button [copy] label="Copy as SQL"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "--"
+                  "web"
+                  "overview"
+                  "(sqlite)"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "SELECT"
+                  "count(*)"
+                  "AS"
+                  "\"sessions\""
+                  ","
+                  "sum("
+                  "\"s\""
+                  "."
+                  "\"pageview_count\""
+                  ")"
+                  "AS"
+                  "\"pageviews\""
+                  ","
+                  "count(distinct"
+                  "coalesce(COALESCE((SELECT"
+                  "\"po\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "3"
+                span [code-text]
+                  "FROM"
+                  "\"person_overrides\""
+                  "\"po\""
+              div [code-line]
+                "4"
+                span [code-text]
+                  "WHERE"
+                  "\"po\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  ","
+                  "\"s\""
+                  "."
+                  "\"person_id\""
+                  ","
+                  "(SELECT"
+                  "\"pdi\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "5"
+                span [code-text]
+                  "FROM"
+                  "\"person_distinct_ids\""
+                  "\"pdi\""
+              div [code-line]
+                "6"
+                span [code-text]
+                  "WHERE"
+                  "\"pdi\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  ","
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  "AS"
+                  "\"visitors\""
+                  ","
+                  "sum(CASE"
+                  "WHEN"
+                  "\"s\""
+                  "."
+                  "\"is_bounce\""
+                  "THEN"
+                  "1"
+                  "ELSE"
+                  "0"
+                  "END)"
+                  "AS"
+                  "\"bounces\""
+                  ","
+                  "sum("
+                  "\"s\""
+                  "."
+                  "\"duration_ms\""
+                  ")"
+                  "AS"
+                  "\"duration\""
+              div [code-line]
+                "7"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "8"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "9"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+              div [code-line]
+                "11"
+                span [code-text]
+              div [code-line]
+                "12"
+                span [code-text]
+                  "--"
+                  "web"
+                  "overview"
+                  "previous"
+                  "(sqlite)"
+              div [code-line]
+                "13"
+                span [code-text]
+                  "SELECT"
+                  "count(*)"
+                  "AS"
+                  "\"sessions\""
+                  ","
+                  "sum("
+                  "\"s\""
+                  "."
+                  "\"pageview_count\""
+                  ")"
+                  "AS"
+                  "\"pageviews\""
+                  ","
+                  "count(distinct"
+                  "coalesce(COALESCE((SELECT"
+                  "\"po\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "14"
+                span [code-text]
+                  "FROM"
+                  "\"person_overrides\""
+                  "\"po\""
+              div [code-line]
+                "15"
+                span [code-text]
+                  "WHERE"
+                  "\"po\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  ","
+                  "\"s\""
+                  "."
+                  "\"person_id\""
+                  ","
+                  "(SELECT"
+                  "\"pdi\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "16"
+                span [code-text]
+                  "FROM"
+                  "\"person_distinct_ids\""
+                  "\"pdi\""
+              div [code-line]
+                "17"
+                span [code-text]
+                  "WHERE"
+                  "\"pdi\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  ","
+                  "\"s\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  "AS"
+                  "\"visitors\""
+                  ","
+                  "sum(CASE"
+                  "WHEN"
+                  "\"s\""
+                  "."
+                  "\"is_bounce\""
+                  "THEN"
+                  "1"
+                  "ELSE"
+                  "0"
+                  "END)"
+                  "AS"
+                  "\"bounces\""
+                  ","
+                  "sum("
+                  "\"s\""
+                  "."
+                  "\"duration_ms\""
+                  ")"
+                  "AS"
+                  "\"duration\""
+              div [code-line]
+                "18"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "19"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "20"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "21"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-09-07T00:00:00.000Z\""
+                  ","
+                  "\"2026-10-05T00:00:00.000Z\""
+              div [code-line]
+                "22"
+                span [code-text]
+              div [code-line]
+                "23"
+                span [code-text]
+                  "--"
+                  "web"
+                  "overview"
+                  "pages"
+                  "(sqlite)"
+              div [code-line]
+                "24"
+                span [code-text]
+                  "SELECT"
+                  "json_extract("
+                  "\"events\""
+                  "."
+                  "\"properties\""
+                  ","
+                  "?4)"
+                  "AS"
+                  "\"page\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "25"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "26"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "27"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "28"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "="
+                  "?3"
+              div [code-line]
+                "29"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"page\""
+              div [code-line]
+                "30"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"count\""
+                  "DESC"
+                  ","
+                  "\"page\""
+              div [code-line]
+                "31"
+                span [code-text]
+                  "LIMIT"
+                  "6"
+              div [code-line]
+                "32"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+                  ","
+                  "\"$pageview\""
+                  ","
+                  "\"$.\\\""
+                  "$pathname\\"
+                  "\"\""
+              div [code-line]
+                "33"
+                span [code-text]
+              div [code-line]
+                "34"
+                span [code-text]
+                  "--"
+                  "web"
+                  "overview"
+                  "tables"
+                  "(sqlite)"
+              div [code-line]
+                "35"
+                span [code-text]
+                  "SELECT"
+                  "\"dimension\""
+                  ","
+                  "\"value\""
+                  ","
+                  "\"count\""
+              div [code-line]
+                "36"
+                span [code-text]
+                  "FROM"
+                  "(SELECT"
+                  "'entry_pathname'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"entry_pathname\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "37"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "38"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "39"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "40"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"entry_pathname\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "41"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"entry_pathname\""
+              div [code-line]
+                "42"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'exit_pathname'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"exit_pathname\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "43"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "44"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "45"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "46"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"exit_pathname\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "47"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"exit_pathname\""
+              div [code-line]
+                "48"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'referrer_domain'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"referrer_domain\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "49"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "50"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "51"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "52"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"referrer_domain\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "53"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"referrer_domain\""
+              div [code-line]
+                "54"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'channel'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"channel\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "55"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "56"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "57"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "58"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"channel\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "59"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"channel\""
+              div [code-line]
+                "60"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'utm_source'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"utm_source\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "61"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "62"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "63"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "64"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"utm_source\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "65"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"utm_source\""
+              div [code-line]
+                "66"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'utm_campaign'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"utm_campaign\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "67"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "68"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "69"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "70"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"utm_campaign\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "71"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"utm_campaign\""
+              div [code-line]
+                "72"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'device_type'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"device_type\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "73"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "74"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "75"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "76"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"device_type\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "77"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"device_type\""
+              div [code-line]
+                "78"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'browser'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"browser\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "79"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "80"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "81"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "82"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"browser\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "83"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"browser\""
+              div [code-line]
+                "84"
+                span [code-text]
+                  "UNION"
+                  "ALL"
+                  "SELECT"
+                  "'os'"
+                  "AS"
+                  "\"dimension\""
+                  ","
+                  "\"s\""
+                  "."
+                  "\"os\""
+                  "AS"
+                  "\"value\""
+                  ","
+                  "count(*)"
+                  "AS"
+                  "\"count\""
+              div [code-line]
+                "85"
+                span [code-text]
+                  "FROM"
+                  "\"sessions\""
+                  "\"s\""
+              div [code-line]
+                "86"
+                span [code-text]
+                  "WHERE"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "87"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"first_timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "88"
+                span [code-text]
+                  "AND"
+                  "\"s\""
+                  "."
+                  "\"os\""
+                  "<>"
+                  "''"
+              div [code-line]
+                "89"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"s\""
+                  "."
+                  "\"os\""
+                  ")"
+                  "AS"
+                  "\"tables\""
+              div [code-line]
+                "90"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"dimension\""
+                  ","
+                  "\"count\""
+                  "DESC"
+                  ","
+                  "\"value\""
+              div [code-line]
+                "91"
+                span [code-text]
+                  "LIMIT"
+                  "54"
+              div [code-line]
+                "92"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+          div [ask-panel:http] role=tabpanel
+            div [code]
+              div [code-head]
+                "shell"
+                button [copy] label="Copy as shell"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "curl"
+                  "-X"
+                  "POST"
+                  "http"
+                  ":"
+                  "//127.0.0.1"
+                  ":"
+                  "<port>/_leptoskit/services/analytics/rpc/run"
+                  "\\"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "-H"
+                  "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+                  "\\"
+              div [code-line]
+                "3"
+                span [code-text]
+                  "-H"
+                  "\"content-type: application/json\""
+                  "\\"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "-d"
+                  "@-"
+                  "<<'JSON'"
+              div [code-line]
+                "5"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "6"
+                span [code-text]
+                  "\"query\""
+                  ":"
+                  "{"
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"compare\""
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "\"kind\""
+                  ":"
+                  "\"web_overview\""
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "\"range\""
+                  ":"
+                  "{"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "\"from\""
+                  ":"
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "\"to\""
+                  ":"
+                  "\"2026-11-02T00:00:00Z\""
+              div [code-line]
+                "12"
+                span [code-text]
+                  "}"
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "\"table_limit\""
+                  ":"
+                  "6"
+              div [code-line]
+                "14"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "15"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "16"
+                span [code-text]
+                  "JSON"
+      div [station:draw]
+        div [station-dot]
+        div [station-head]
+          "Draw"
+          "rows → chart"
+        button [station-toggle] label="Draw station"
+        div [station-body]
+          "One row per figure, then one per table row: the tiles show the value and its change against the period before; each table is a bar list, its bar the share of the largest row. Bounce rate and session length have no daily series yet, so their tiles have no sparkline."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "metric"
+                "value"
+                "previous"
+            div [code-line]
+              "2"
+              span [code-text]
+                "visitors"
+                "10"
+                "0"
+            div [code-line]
+              "3"
+              span [code-text]
+                "pageviews"
+                "20"
+                "0"
+            div [code-line]
+              "4"
+              span [code-text]
+                "sessions"
+                "10"
+                "0"
+            div [code-line]
+              "5"
+              span [code-text]
+                "bounce_rate"
+                "0"
+                "0"
+            div [code-line]
               "6"
-          div [code-line]
-            "14"
-            span [code-text]
-              "}"
-          div [code-line]
-            "15"
-            span [code-text]
-              "}"
-          div [code-line]
-            "16"
-            span [code-text]
-              "JSON"
-          button [copy] label="Copy as shell"
-            "Copy"
-    div [station:draw]
-      "Draw"
-      "rows → chart"
-      "One row per figure, then one per table row: the tiles show the value and its change against the period before; each table is a bar list, its bar the share of the largest row. Bounce rate and session length have no daily series yet, so their tiles have no sparkline."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "metric"
-            "value"
-            "previous"
-        div [code-line]
-          "2"
-          span [code-text]
-            "visitors"
-            "10"
-            "0"
-        div [code-line]
-          "3"
-          span [code-text]
-            "pageviews"
-            "20"
-            "0"
-        div [code-line]
-          "4"
-          span [code-text]
-            "sessions"
-            "10"
-            "0"
-        div [code-line]
-          "5"
-          span [code-text]
-            "bounce_rate"
-            "0"
-            "0"
-        div [code-line]
-          "6"
-          span [code-text]
-            "avg_session_s"
-            "60"
-            "0"
-        button [copy] label="Copy as text"
-          "Copy"
-    button [copy-all]
-      "Copy all"
-    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
-      "Open docs"
+              span [code-text]
+                "avg_session_s"
+                "60"
+                "0"
+      button [copy-all]
+        "Copy all"
+      a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+        "Open docs"
   div [drawer:visitors] label="Workings: Visitors over time · Trends insight · live"
     "Workings"
     "Visitors over time · Trends insight · live"
+    div [drawer-changed] role=status
     button [workings-close] label="Close workings (W)"
       "Close"
-    div [station:emit]
-      "Emit"
-      "sent by the analytics client"
-      "$pageview"
-      "is one of the client's own events: the web client sends it by itself, with the properties below, once"
-      "web::init"
-      "runs."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "$current_url"
-            ":"
-            "string"
-        div [code-line]
-          "2"
-          span [code-text]
-            "$pathname"
-            ":"
-            "string"
-        div [code-line]
-          "3"
-          span [code-text]
-            "$referrer"
-            ":"
-            "string"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:send]
-      "Send"
-      "the latest $pageview, re-encoded here"
-      "Without a type the names travel with every event: 105 bytes in the binary format, 282 as JSON. Measured as one event alone in a batch."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "binary"
-            ","
-            "named"
-            "105"
-            "bytes"
-        div [code-line]
-          "2"
-          span [code-text]
-            "JSON"
-            ","
-            "named"
-            "282"
-            "bytes"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:store]
-      "Store"
-      "events, person_distinct_ids, person_overrides on sqlite"
-      "Events land in"
-      "events"
-      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "events"
-        div [code-line]
-          "2"
-          span [code-text]
-            "uuid"
-            "BLOB"
-        div [code-line]
-          "3"
-          span [code-text]
-            "name"
-            "TEXT"
-        div [code-line]
-          "4"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "5"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "6"
-          span [code-text]
-            "timestamp"
-            "TEXT"
-        div [code-line]
-          "7"
-          span [code-text]
-            "received_at"
-            "TEXT"
-        div [code-line]
-          "8"
-          span [code-text]
-            "session_id"
-            "BLOB"
-        div [code-line]
-          "9"
-          span [code-text]
-            "context_id"
-            "INTEGER"
-        div [code-line]
-          "10"
-          span [code-text]
-            "properties"
-            "TEXT"
-        div [code-line]
-          "11"
-          span [code-text]
-            "source"
-            "INTEGER"
-        div [code-line]
-          "12"
-          span [code-text]
-        div [code-line]
-          "13"
-          span [code-text]
-            "person_distinct_ids"
-        div [code-line]
-          "14"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "15"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "16"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        div [code-line]
-          "17"
-          span [code-text]
-        div [code-line]
-          "18"
-          span [code-text]
-            "person_overrides"
-        div [code-line]
-          "19"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "20"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "21"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:ask]
-      "Ask"
-      "the query"
-      "Every insight is one value of the typed"
-      "Query"
-      "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
-      div role=tablist label="Ask as"
-        button [ask-tab:rust] role=tab
-          "Rust"
-        button [ask-tab:sql] role=tab
-          "SQL"
-        button [ask-tab:http] role=tab
-          "HTTP"
-      div [ask-panel:rust] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "use"
-              "leptoskit_analytics"
-              ":"
-              ":"
-              "query"
-              ":"
-              ":"
-              "*;"
-          div [code-line]
-            "2"
-            span [code-text]
-          div [code-line]
-            "3"
-            span [code-text]
-              "let"
-              "query"
-              "="
-              "Query"
-              ":"
-              ":"
-              "Trends(TrendsQuery"
-              "{"
-          div [code-line]
-            "4"
-            span [code-text]
-              "range"
-              ":"
-              "DateRange"
-              ":"
-              ":"
-              "between("
-              "\"2026-10-05T00:00:00Z\""
-              ","
-              "\"2026-11-02T00:00:00Z\""
-              ")"
-              ","
-          div [code-line]
-            "5"
-            span [code-text]
-              "interval"
-              ":"
-              "Interval"
-              ":"
-              ":"
-              "Day"
-              ","
-          div [code-line]
-            "6"
-            span [code-text]
-              "series"
-              ":"
-              "vec!"
-              "["
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"$pageview\""
-              ".into()"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "]"
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "filters"
-              ":"
-              "Vec"
-              ":"
-              ":"
-              "new()"
-              ","
-          div [code-line]
-            "10"
-            span [code-text]
-              "math"
-              ":"
-              "Math"
-              ":"
-              ":"
-              "UniquePersons"
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "breakdown"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "12"
-            span [code-text]
-              "compare"
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "test_accounts"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "14"
-            span [code-text]
-              "}"
-              ");"
-          div [code-line]
-            "15"
-            span [code-text]
-          div [code-line]
-            "16"
-            span [code-text]
-              "//"
-              "From"
-              "the"
-              "app's"
-              "server"
-              ","
-              "as"
-              "the"
-              "app"
-              ":"
-          div [code-line]
-            "17"
-            span [code-text]
-              "let"
-              "answer"
-              "="
-              "rpc"
-              ":"
-              ":"
-              "client"
-              ":"
-              ":"
-              "call_as_app(Run"
-              "{"
-              "query"
-              "}"
-              ").await?;"
-          button [copy] label="Copy as Rust"
-            "Copy"
-      div [ask-panel:sql] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "--"
-              "trends"
-              ":"
-              "$pageview"
-              "(sqlite)"
-          div [code-line]
-            "2"
-            span [code-text]
-              "SELECT"
-              "strftime('%Y-%m-%dT00"
-              ":"
-              "00"
-              ":"
-              "00'"
-              ","
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ","
-              "?4)"
-              "AS"
-              "\"bucket\""
-              ","
-              "count(distinct"
-              "coalesce(COALESCE((SELECT"
-              "\"po\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "3"
-            span [code-text]
-              "FROM"
-              "\"person_overrides\""
-              "\"po\""
-          div [code-line]
-            "4"
-            span [code-text]
-              "WHERE"
-              "\"po\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              ")"
-              ","
-              "\"events\""
-              "."
-              "\"person_id\""
-              ","
-              "(SELECT"
-              "\"pdi\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "5"
-            span [code-text]
-              "FROM"
-              "\"person_distinct_ids\""
-              "\"pdi\""
-          div [code-line]
-            "6"
-            span [code-text]
-              "WHERE"
-              "\"pdi\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              "))"
-              ","
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              "))"
-              "AS"
-              "\"value\""
-          div [code-line]
-            "7"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "8"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "9"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "10"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"name\""
-              "="
-              "?3"
-          div [code-line]
-            "11"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "12"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "13"
-            span [code-text]
-              "LIMIT"
-              "20000"
-          div [code-line]
-            "14"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-              ","
-              "\"$pageview\""
-              ","
-              "\"+0 seconds\""
-          div [code-line]
-            "15"
-            span [code-text]
-          div [code-line]
-            "16"
-            span [code-text]
-              "--"
-              "trends"
-              "previous"
-              ":"
-              "$pageview"
-              "(sqlite)"
-          div [code-line]
-            "17"
-            span [code-text]
-              "SELECT"
-              "strftime('%Y-%m-%dT00"
-              ":"
-              "00"
-              ":"
-              "00'"
-              ","
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ","
-              "?4)"
-              "AS"
-              "\"bucket\""
-              ","
-              "count(distinct"
-              "coalesce(COALESCE((SELECT"
-              "\"po\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "18"
-            span [code-text]
-              "FROM"
-              "\"person_overrides\""
-              "\"po\""
-          div [code-line]
-            "19"
-            span [code-text]
-              "WHERE"
-              "\"po\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              ")"
-              ","
-              "\"events\""
-              "."
-              "\"person_id\""
-              ","
-              "(SELECT"
-              "\"pdi\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "20"
-            span [code-text]
-              "FROM"
-              "\"person_distinct_ids\""
-              "\"pdi\""
-          div [code-line]
-            "21"
-            span [code-text]
-              "WHERE"
-              "\"pdi\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              "))"
-              ","
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              "))"
-              "AS"
-              "\"value\""
-          div [code-line]
-            "22"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "23"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "24"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "25"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"name\""
-              "="
-              "?3"
-          div [code-line]
-            "26"
-            span [code-text]
-              "GROUP"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "27"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"bucket\""
-          div [code-line]
-            "28"
-            span [code-text]
-              "LIMIT"
-              "20000"
-          div [code-line]
-            "29"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-09-07T00:00:00.000Z\""
-              ","
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"$pageview\""
-              ","
-              "\"+0 seconds\""
-          button [copy] label="Copy as SQL"
-            "Copy"
-      div [ask-panel:http] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "curl"
-              "-X"
-              "POST"
-              "http"
-              ":"
-              "//127.0.0.1"
-              ":"
-              "<port>/_leptoskit/services/analytics/rpc/run"
-              "\\"
-          div [code-line]
-            "2"
-            span [code-text]
-              "-H"
-              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
-              "\\"
-          div [code-line]
-            "3"
-            span [code-text]
-              "-H"
-              "\"content-type: application/json\""
-              "\\"
-          div [code-line]
-            "4"
-            span [code-text]
-              "-d"
-              "@-"
-              "<<'JSON'"
-          div [code-line]
-            "5"
-            span [code-text]
-              "{"
-          div [code-line]
-            "6"
-            span [code-text]
-              "\"query\""
-              ":"
-              "{"
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"compare\""
-              ":"
-              "true"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "\"interval\""
-              ":"
-              "\"day\""
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "\"kind\""
-              ":"
-              "\"trends\""
-              ","
-          div [code-line]
-            "10"
-            span [code-text]
-              "\"math\""
-              ":"
-              "\"unique_persons\""
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "\"range\""
-              ":"
-              "{"
-          div [code-line]
-            "12"
-            span [code-text]
-              "\"from\""
-              ":"
-              "\"2026-10-05T00:00:00Z\""
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "\"to\""
-              ":"
-              "\"2026-11-02T00:00:00Z\""
-          div [code-line]
-            "14"
-            span [code-text]
-              "}"
-              ","
-          div [code-line]
-            "15"
-            span [code-text]
-              "\"series\""
-              ":"
-              "["
-          div [code-line]
-            "16"
-            span [code-text]
-              "{"
-          div [code-line]
-            "17"
-            span [code-text]
-              "\"event\""
-              ":"
-              "\"$pageview\""
-          div [code-line]
-            "18"
-            span [code-text]
-              "}"
-          div [code-line]
-            "19"
-            span [code-text]
-              "]"
-          div [code-line]
-            "20"
-            span [code-text]
-              "}"
-          div [code-line]
-            "21"
-            span [code-text]
-              "}"
-          div [code-line]
-            "22"
-            span [code-text]
-              "JSON"
-          button [copy] label="Copy as shell"
-            "Copy"
-    div [station:draw]
-      "Draw"
-      "rows → chart"
-      "28 rows per line came back, one per day; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "day"
-            "Visitors"
-        div [code-line]
-          "2"
-          span [code-text]
-            "2026-10-29"
-            "0"
-        div [code-line]
-          "3"
-          span [code-text]
-            "2026-10-30"
-            "0"
-        div [code-line]
-          "4"
-          span [code-text]
-            "2026-10-31"
-            "0"
-        div [code-line]
-          "5"
-          span [code-text]
-            "2026-11-01"
-            "0"
-        button [copy] label="Copy as text"
-          "Copy"
-    button [copy-all]
-      "Copy all"
-    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
-      "Open docs"
+    div [drawer-scroll]
+      div [station:emit]
+        div [station-dot]
+        div [station-head]
+          "Emit"
+          "sent by the analytics client"
+        button [station-toggle] label="Emit station"
+        div [station-body]
+          "$pageview"
+          "is one of the client's own events: the web client sends it by itself, with the properties below, once"
+          "web::init"
+          "runs."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "$current_url"
+                ":"
+                "string"
+            div [code-line]
+              "2"
+              span [code-text]
+                "$pathname"
+                ":"
+                "string"
+            div [code-line]
+              "3"
+              span [code-text]
+                "$referrer"
+                ":"
+                "string"
+      div [station:send]
+        div [station-dot]
+        div [station-head]
+          "Send"
+          "the latest $pageview, re-encoded here"
+        button [station-toggle] label="Send station"
+        div [station-body]
+          "Without a type the names travel with every event: 105 bytes in the binary format, 282 as JSON. Measured as one event alone in a batch."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "binary"
+                ","
+                "named"
+                "105"
+                "bytes"
+            div [code-line]
+              "2"
+              span [code-text]
+                "JSON"
+                ","
+                "named"
+                "282"
+                "bytes"
+      div [station:store]
+        div [station-dot]
+        div [station-head]
+          "Store"
+          "events, person_distinct_ids, person_overrides on sqlite"
+        button [station-toggle] label="Store station"
+        div [station-body]
+          "Events land in"
+          "events"
+          "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "events"
+            div [code-line]
+              "2"
+              span [code-text]
+                "uuid"
+                "BLOB"
+            div [code-line]
+              "3"
+              span [code-text]
+                "name"
+                "TEXT"
+            div [code-line]
+              "4"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "5"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "6"
+              span [code-text]
+                "timestamp"
+                "TEXT"
+            div [code-line]
+              "7"
+              span [code-text]
+                "received_at"
+                "TEXT"
+            div [code-line]
+              "8"
+              span [code-text]
+                "session_id"
+                "BLOB"
+            div [code-line]
+              "9"
+              span [code-text]
+                "context_id"
+                "INTEGER"
+            div [code-line]
+              "10"
+              span [code-text]
+                "properties"
+                "TEXT"
+            div [code-line]
+              "11"
+              span [code-text]
+                "source"
+                "INTEGER"
+            div [code-line]
+              "12"
+              span [code-text]
+            div [code-line]
+              "13"
+              span [code-text]
+                "person_distinct_ids"
+            div [code-line]
+              "14"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "15"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "16"
+              span [code-text]
+                "created_at"
+                "TEXT"
+            div [code-line]
+              "17"
+              span [code-text]
+            div [code-line]
+              "18"
+              span [code-text]
+                "person_overrides"
+            div [code-line]
+              "19"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "20"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "21"
+              span [code-text]
+                "created_at"
+                "TEXT"
+      div [station:ask]
+        div [station-dot]
+        div [station-head]
+          "Ask"
+          "the query"
+        button [station-toggle] label="Ask station"
+        div [station-body]
+          "Every insight is one value of the typed"
+          "Query"
+          "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
+          div role=tablist label="Ask as"
+            button [ask-tab:rust] role=tab
+              "Rust"
+            button [ask-tab:sql] role=tab
+              "SQL"
+            button [ask-tab:http] role=tab
+              "HTTP"
+          div [ask-panel:rust] role=tabpanel
+            div [code]
+              div [code-head]
+                "Rust"
+                button [copy] label="Copy as Rust"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "use"
+                  "leptoskit_analytics"
+                  ":"
+                  ":"
+                  "query"
+                  ":"
+                  ":"
+                  "*;"
+              div [code-line]
+                "2"
+                span [code-text]
+              div [code-line]
+                "3"
+                span [code-text]
+                  "let"
+                  "query"
+                  "="
+                  "Query"
+                  ":"
+                  ":"
+                  "Trends(TrendsQuery"
+                  "{"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "range"
+                  ":"
+                  "DateRange"
+                  ":"
+                  ":"
+                  "between("
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+                  "\"2026-11-02T00:00:00Z\""
+                  ")"
+                  ","
+              div [code-line]
+                "5"
+                span [code-text]
+                  "interval"
+                  ":"
+                  "Interval"
+                  ":"
+                  ":"
+                  "Day"
+                  ","
+              div [code-line]
+                "6"
+                span [code-text]
+                  "series"
+                  ":"
+                  "vec!"
+                  "["
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"$pageview\""
+                  ".into()"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "]"
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "filters"
+                  ":"
+                  "Vec"
+                  ":"
+                  ":"
+                  "new()"
+                  ","
+              div [code-line]
+                "10"
+                span [code-text]
+                  "math"
+                  ":"
+                  "Math"
+                  ":"
+                  ":"
+                  "UniquePersons"
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "breakdown"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "12"
+                span [code-text]
+                  "compare"
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "test_accounts"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "14"
+                span [code-text]
+                  "}"
+                  ");"
+              div [code-line]
+                "15"
+                span [code-text]
+              div [code-line]
+                "16"
+                span [code-text]
+                  "//"
+                  "From"
+                  "the"
+                  "app's"
+                  "server"
+                  ","
+                  "as"
+                  "the"
+                  "app"
+                  ":"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "let"
+                  "answer"
+                  "="
+                  "rpc"
+                  ":"
+                  ":"
+                  "client"
+                  ":"
+                  ":"
+                  "call_as_app(Run"
+                  "{"
+                  "query"
+                  "}"
+                  ").await?;"
+          div [ask-panel:sql] role=tabpanel
+            div [code]
+              div [code-head]
+                "SQL"
+                button [copy] label="Copy as SQL"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "--"
+                  "trends"
+                  ":"
+                  "$pageview"
+                  "(sqlite)"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "SELECT"
+                  "strftime('%Y-%m-%dT00"
+                  ":"
+                  "00"
+                  ":"
+                  "00'"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ","
+                  "?4)"
+                  "AS"
+                  "\"bucket\""
+                  ","
+                  "count(distinct"
+                  "coalesce(COALESCE((SELECT"
+                  "\"po\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "3"
+                span [code-text]
+                  "FROM"
+                  "\"person_overrides\""
+                  "\"po\""
+              div [code-line]
+                "4"
+                span [code-text]
+                  "WHERE"
+                  "\"po\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"person_id\""
+                  ","
+                  "(SELECT"
+                  "\"pdi\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "5"
+                span [code-text]
+                  "FROM"
+                  "\"person_distinct_ids\""
+                  "\"pdi\""
+              div [code-line]
+                "6"
+                span [code-text]
+                  "WHERE"
+                  "\"pdi\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  "AS"
+                  "\"value\""
+              div [code-line]
+                "7"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "8"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "9"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "="
+                  "?3"
+              div [code-line]
+                "11"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "12"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "13"
+                span [code-text]
+                  "LIMIT"
+                  "20000"
+              div [code-line]
+                "14"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+                  ","
+                  "\"$pageview\""
+                  ","
+                  "\"+0 seconds\""
+              div [code-line]
+                "15"
+                span [code-text]
+              div [code-line]
+                "16"
+                span [code-text]
+                  "--"
+                  "trends"
+                  "previous"
+                  ":"
+                  "$pageview"
+                  "(sqlite)"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "SELECT"
+                  "strftime('%Y-%m-%dT00"
+                  ":"
+                  "00"
+                  ":"
+                  "00'"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ","
+                  "?4)"
+                  "AS"
+                  "\"bucket\""
+                  ","
+                  "count(distinct"
+                  "coalesce(COALESCE((SELECT"
+                  "\"po\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "18"
+                span [code-text]
+                  "FROM"
+                  "\"person_overrides\""
+                  "\"po\""
+              div [code-line]
+                "19"
+                span [code-text]
+                  "WHERE"
+                  "\"po\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"person_id\""
+                  ","
+                  "(SELECT"
+                  "\"pdi\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "20"
+                span [code-text]
+                  "FROM"
+                  "\"person_distinct_ids\""
+                  "\"pdi\""
+              div [code-line]
+                "21"
+                span [code-text]
+                  "WHERE"
+                  "\"pdi\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  "AS"
+                  "\"value\""
+              div [code-line]
+                "22"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "23"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "24"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "25"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "="
+                  "?3"
+              div [code-line]
+                "26"
+                span [code-text]
+                  "GROUP"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "27"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"bucket\""
+              div [code-line]
+                "28"
+                span [code-text]
+                  "LIMIT"
+                  "20000"
+              div [code-line]
+                "29"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-09-07T00:00:00.000Z\""
+                  ","
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"$pageview\""
+                  ","
+                  "\"+0 seconds\""
+          div [ask-panel:http] role=tabpanel
+            div [code]
+              div [code-head]
+                "shell"
+                button [copy] label="Copy as shell"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "curl"
+                  "-X"
+                  "POST"
+                  "http"
+                  ":"
+                  "//127.0.0.1"
+                  ":"
+                  "<port>/_leptoskit/services/analytics/rpc/run"
+                  "\\"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "-H"
+                  "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+                  "\\"
+              div [code-line]
+                "3"
+                span [code-text]
+                  "-H"
+                  "\"content-type: application/json\""
+                  "\\"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "-d"
+                  "@-"
+                  "<<'JSON'"
+              div [code-line]
+                "5"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "6"
+                span [code-text]
+                  "\"query\""
+                  ":"
+                  "{"
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"compare\""
+                  ":"
+                  "true"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "\"interval\""
+                  ":"
+                  "\"day\""
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "\"kind\""
+                  ":"
+                  "\"trends\""
+                  ","
+              div [code-line]
+                "10"
+                span [code-text]
+                  "\"math\""
+                  ":"
+                  "\"unique_persons\""
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "\"range\""
+                  ":"
+                  "{"
+              div [code-line]
+                "12"
+                span [code-text]
+                  "\"from\""
+                  ":"
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "\"to\""
+                  ":"
+                  "\"2026-11-02T00:00:00Z\""
+              div [code-line]
+                "14"
+                span [code-text]
+                  "}"
+                  ","
+              div [code-line]
+                "15"
+                span [code-text]
+                  "\"series\""
+                  ":"
+                  "["
+              div [code-line]
+                "16"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "17"
+                span [code-text]
+                  "\"event\""
+                  ":"
+                  "\"$pageview\""
+              div [code-line]
+                "18"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "19"
+                span [code-text]
+                  "]"
+              div [code-line]
+                "20"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "21"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "22"
+                span [code-text]
+                  "JSON"
+      div [station:draw]
+        div [station-dot]
+        div [station-head]
+          "Draw"
+          "rows → chart"
+        button [station-toggle] label="Draw station"
+        div [station-body]
+          "28 rows per line came back, one per day; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "day"
+                "Visitors"
+            div [code-line]
+              "2"
+              span [code-text]
+                "2026-10-29"
+                "0"
+            div [code-line]
+              "3"
+              span [code-text]
+                "2026-10-30"
+                "0"
+            div [code-line]
+              "4"
+              span [code-text]
+                "2026-10-31"
+                "0"
+            div [code-line]
+              "5"
+              span [code-text]
+                "2026-11-01"
+                "0"
+      button [copy-all]
+        "Copy all"
+      a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+        "Open docs"

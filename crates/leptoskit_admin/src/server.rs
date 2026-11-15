@@ -253,6 +253,7 @@ pub(crate) fn render(
 	let viewer = Viewer {
 		app_name: inner.app_name.clone(),
 		environment: inner.environment,
+		simulated: inner.simulated_infrastructure,
 		who: gate.who.clone(),
 		workings_mode: gate.preferences.workings_mode,
 		appearance: appearance(headers),
@@ -360,6 +361,7 @@ async fn signed_in_screen(
 		now: now(),
 		facts: facts.as_ref(),
 		preferences: &gate.preferences,
+		simulated: admin.inner().simulated_infrastructure,
 	};
 
 	match screen(&proof) {
@@ -416,6 +418,7 @@ async fn project(
 		now,
 		preferences: &gate.preferences,
 		fleet,
+		simulated: admin.inner().simulated_infrastructure,
 	};
 	let screen = infra::project(state, tab, &context);
 	let facts = analytics_facts(&admin).await;
@@ -424,6 +427,7 @@ async fn project(
 		now,
 		facts: facts.as_ref(),
 		preferences: &gate.preferences,
+		simulated: admin.inner().simulated_infrastructure,
 	};
 	render(&admin, &gate, &headers, &proof, screen)
 }

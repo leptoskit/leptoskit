@@ -144,671 +144,704 @@ aside [drawer-aside] label="Workings"
   div [drawer:funnels] label="Workings: checkout_started → checkout_completed · Funnels insight · live"
     "Workings"
     "checkout_started → checkout_completed · Funnels insight · live"
+    div [drawer-changed] role=status
     button [workings-close] label="Close workings (W)"
       "Close"
-    div [station:emit]
-      "Emit"
-      "the event catalogue"
-      "checkout_started"
-      "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "#[derive(Event)]"
-        div [code-line]
-          "2"
-          span [code-text]
-            "struct"
-            "CheckoutStarted"
-            "{"
-        div [code-line]
-          "3"
-          span [code-text]
-            "plan"
-            ":"
-            "String"
-            ","
-        div [code-line]
-          "4"
-          span [code-text]
-            "seats"
-            ":"
-            "u32"
-            ","
-        div [code-line]
-          "5"
-          span [code-text]
-            "}"
-        button [copy] label="Copy as Rust"
-          "Copy"
-    div [station:send]
-      "Send"
-      "the latest checkout_started, re-encoded here"
-      "Typed events send no property names, so this one is 92 bytes instead of 209: 56.0% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "typed"
-            ","
-            "positional"
-            "92"
-            "bytes"
-        div [code-line]
-          "2"
-          span [code-text]
-            "JSON"
-            ","
-            "named"
-            "209"
-            "bytes"
-        div [code-line]
-          "3"
-          span [code-text]
-        div [code-line]
-          "4"
-          span [code-text]
-            "//"
-            "values"
-            "in"
-            "field"
-            "order"
-            ":"
-            "pro"
-            ","
-            "2"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:store]
-      "Store"
-      "events, person_distinct_ids, person_overrides on sqlite"
-      "Events land in"
-      "events"
-      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "events"
-        div [code-line]
-          "2"
-          span [code-text]
-            "uuid"
-            "BLOB"
-        div [code-line]
-          "3"
-          span [code-text]
-            "name"
-            "TEXT"
-        div [code-line]
-          "4"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "5"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "6"
-          span [code-text]
-            "timestamp"
-            "TEXT"
-        div [code-line]
-          "7"
-          span [code-text]
-            "received_at"
-            "TEXT"
-        div [code-line]
-          "8"
-          span [code-text]
-            "session_id"
-            "BLOB"
-        div [code-line]
-          "9"
-          span [code-text]
-            "context_id"
-            "INTEGER"
-        div [code-line]
-          "10"
-          span [code-text]
-            "properties"
-            "TEXT"
-        div [code-line]
-          "11"
-          span [code-text]
-            "source"
-            "INTEGER"
-        div [code-line]
-          "12"
-          span [code-text]
-        div [code-line]
-          "13"
-          span [code-text]
-            "person_distinct_ids"
-        div [code-line]
-          "14"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "15"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "16"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        div [code-line]
-          "17"
-          span [code-text]
-        div [code-line]
-          "18"
-          span [code-text]
-            "person_overrides"
-        div [code-line]
-          "19"
-          span [code-text]
-            "distinct_id"
-            "TEXT"
-        div [code-line]
-          "20"
-          span [code-text]
-            "person_id"
-            "BLOB"
-        div [code-line]
-          "21"
-          span [code-text]
-            "created_at"
-            "TEXT"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:ask]
-      "Ask"
-      "the query"
-      "Every insight is one value of the typed"
-      "Query"
-      "enum. The SQL is what it became. It ran 1 statement on sqlite in <n> ms. Change the builder and these lines change with it."
-      div role=tablist label="Ask as"
-        button [ask-tab:rust] role=tab
-          "Rust"
-        button [ask-tab:sql] role=tab
-          "SQL"
-        button [ask-tab:http] role=tab
-          "HTTP"
-      div [ask-panel:rust] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "use"
-              "leptoskit_analytics"
-              ":"
-              ":"
-              "query"
-              ":"
-              ":"
-              "*;"
-          div [code-line]
-            "2"
-            span [code-text]
-          div [code-line]
-            "3"
-            span [code-text]
-              "let"
-              "query"
-              "="
-              "Query"
-              ":"
-              ":"
-              "Funnels(FunnelsQuery"
-              "{"
-          div [code-line]
-            "4"
-            span [code-text]
-              "range"
-              ":"
-              "DateRange"
-              ":"
-              ":"
-              "between("
-              "\"2026-10-05T00:00:00Z\""
-              ","
-              "\"2026-11-02T00:00:00Z\""
-              ")"
-              ","
-          div [code-line]
-            "5"
-            span [code-text]
-              "steps"
-              ":"
-              "vec!"
-              "["
-          div [code-line]
-            "6"
-            span [code-text]
-              "\"checkout_started\""
-              ".into()"
-              ","
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"payment_submitted\""
-              ".into()"
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "\"checkout_completed\""
-              ".into()"
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "]"
-              ","
-          div [code-line]
-            "10"
-            span [code-text]
-              "window_seconds"
-              ":"
-              "Some(1209600)"
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "order"
-              ":"
-              "FunnelOrder"
-              ":"
-              ":"
-              "Ordered"
-              ","
-          div [code-line]
-            "12"
-            span [code-text]
-              "filters"
-              ":"
-              "Vec"
-              ":"
-              ":"
-              "new()"
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "breakdown"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "14"
-            span [code-text]
-              "test_accounts"
-              ":"
-              "None"
-              ","
-          div [code-line]
-            "15"
-            span [code-text]
-              "}"
-              ");"
-          div [code-line]
-            "16"
-            span [code-text]
-          div [code-line]
-            "17"
-            span [code-text]
-              "//"
-              "From"
-              "the"
-              "app's"
-              "server"
-              ","
-              "as"
-              "the"
-              "app"
-              ":"
-          div [code-line]
-            "18"
-            span [code-text]
-              "let"
-              "answer"
-              "="
-              "rpc"
-              ":"
-              ":"
-              "client"
-              ":"
-              ":"
-              "call_as_app(Run"
-              "{"
-              "query"
-              "}"
-              ").await?;"
-          button [copy] label="Copy as Rust"
-            "Copy"
-      div [ask-panel:sql] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "--"
-              "funnel"
-              "pull"
-              "(sqlite)"
-          div [code-line]
-            "2"
-            span [code-text]
-              "SELECT"
-              "coalesce(COALESCE((SELECT"
-              "\"po\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "3"
-            span [code-text]
-              "FROM"
-              "\"person_overrides\""
-              "\"po\""
-          div [code-line]
-            "4"
-            span [code-text]
-              "WHERE"
-              "\"po\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              ")"
-              ","
-              "\"events\""
-              "."
-              "\"person_id\""
-              ","
-              "(SELECT"
-              "\"pdi\""
-              "."
-              "\"person_id\""
-          div [code-line]
-            "5"
-            span [code-text]
-              "FROM"
-              "\"person_distinct_ids\""
-              "\"pdi\""
-          div [code-line]
-            "6"
-            span [code-text]
-              "WHERE"
-              "\"pdi\""
-              "."
-              "\"distinct_id\""
-              "="
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              "))"
-              ","
-              "\"events\""
-              "."
-              "\"distinct_id\""
-              ")"
-              "AS"
-              "\"person\""
-              ","
-              "\"events\""
-              "."
-              "\"name\""
-              "AS"
-              "\"name\""
-              ","
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "AS"
-              "\"at\""
-              ","
-              "NULL"
-              "AS"
-              "\"group\""
-          div [code-line]
-            "7"
-            span [code-text]
-              "FROM"
-              "\"events\""
-          div [code-line]
-            "8"
-            span [code-text]
-              "WHERE"
-              "\"events\""
-              "."
-              "\"name\""
-              "IN"
-              "(?3"
-              ","
-              "?4"
-              ","
-              "?5)"
-          div [code-line]
-            "9"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              ">"
-              "="
-              "?1"
-          div [code-line]
-            "10"
-            span [code-text]
-              "AND"
-              "\"events\""
-              "."
-              "\"timestamp\""
-              "<"
-              "?2"
-          div [code-line]
-            "11"
-            span [code-text]
-              "ORDER"
-              "BY"
-              "\"person\""
-              ","
-              "\"at\""
-          div [code-line]
-            "12"
-            span [code-text]
-              "LIMIT"
-              "100000"
-          div [code-line]
-            "13"
-            span [code-text]
-              "--"
-              "bound"
-              ":"
-              "\"2026-10-05T00:00:00.000Z\""
-              ","
-              "\"2026-11-02T00:00:00.000Z\""
-              ","
-              "\"checkout_started\""
-              ","
-              "\"payment_submitted\""
-              ","
-              "\"checkout_completed\""
-          button [copy] label="Copy as SQL"
-            "Copy"
-      div [ask-panel:http] role=tabpanel
-        div [code]
-          div [code-line]
-            "1"
-            span [code-text]
-              "curl"
-              "-X"
-              "POST"
-              "http"
-              ":"
-              "//127.0.0.1"
-              ":"
-              "<port>/_leptoskit/services/analytics/rpc/run"
-              "\\"
-          div [code-line]
-            "2"
-            span [code-text]
-              "-H"
-              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
-              "\\"
-          div [code-line]
-            "3"
-            span [code-text]
-              "-H"
-              "\"content-type: application/json\""
-              "\\"
-          div [code-line]
-            "4"
-            span [code-text]
-              "-d"
-              "@-"
-              "<<'JSON'"
-          div [code-line]
-            "5"
-            span [code-text]
-              "{"
-          div [code-line]
-            "6"
-            span [code-text]
-              "\"query\""
-              ":"
-              "{"
-          div [code-line]
-            "7"
-            span [code-text]
-              "\"kind\""
-              ":"
-              "\"funnels\""
-              ","
-          div [code-line]
-            "8"
-            span [code-text]
-              "\"order\""
-              ":"
-              "\"ordered\""
-              ","
-          div [code-line]
-            "9"
-            span [code-text]
-              "\"range\""
-              ":"
-              "{"
-          div [code-line]
-            "10"
-            span [code-text]
-              "\"from\""
-              ":"
-              "\"2026-10-05T00:00:00Z\""
-              ","
-          div [code-line]
-            "11"
-            span [code-text]
-              "\"to\""
-              ":"
-              "\"2026-11-02T00:00:00Z\""
-          div [code-line]
-            "12"
-            span [code-text]
-              "}"
-              ","
-          div [code-line]
-            "13"
-            span [code-text]
-              "\"steps\""
-              ":"
-              "["
-          div [code-line]
-            "14"
-            span [code-text]
-              "\"checkout_started\""
-              ","
-          div [code-line]
-            "15"
-            span [code-text]
-              "\"payment_submitted\""
-              ","
-          div [code-line]
-            "16"
-            span [code-text]
-              "\"checkout_completed\""
-          div [code-line]
-            "17"
-            span [code-text]
-              "]"
-              ","
-          div [code-line]
-            "18"
-            span [code-text]
-              "\"window_seconds\""
-              ":"
-              "1209600"
-          div [code-line]
-            "19"
-            span [code-text]
-              "}"
-          div [code-line]
-            "20"
-            span [code-text]
-              "}"
-          div [code-line]
-            "21"
-            span [code-text]
-              "JSON"
-          button [copy] label="Copy as shell"
-            "Copy"
-    div [station:draw]
-      "Draw"
-      "rows → chart"
-      "One row per step: how many people reached it within the window. Each column's height is that count; the hatched part is who reached the step before and stopped. Overall, 50.0% converted, taking 8m 00s at the median."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "step"
-            "people"
-            "of"
-            "first"
-            "dropped"
-        div [code-line]
-          "2"
-          span [code-text]
-            "1."
-            "checkout_started"
-            "4"
-            "100.0%"
-            "0"
-        div [code-line]
-          "3"
-          span [code-text]
-            "2."
-            "payment_submitted"
-            "3"
-            "75.0%"
-            "1"
-        div [code-line]
-          "4"
-          span [code-text]
-            "3."
-            "checkout_completed"
-            "2"
-            "50.0%"
-            "1"
-        button [copy] label="Copy as text"
-          "Copy"
-    button [copy-all]
-      "Copy all"
-    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
-      "Open docs"
+    div [drawer-scroll]
+      div [station:emit]
+        div [station-dot]
+        div [station-head]
+          "Emit"
+          "the event catalogue"
+        button [station-toggle] label="Emit station"
+        div [station-body]
+          "checkout_started"
+          "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
+          div [code]
+            div [code-head]
+              "Rust"
+              button [copy] label="Copy as Rust"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "#[derive(Event)]"
+            div [code-line]
+              "2"
+              span [code-text]
+                "struct"
+                "CheckoutStarted"
+                "{"
+            div [code-line]
+              "3"
+              span [code-text]
+                "plan"
+                ":"
+                "String"
+                ","
+            div [code-line]
+              "4"
+              span [code-text]
+                "seats"
+                ":"
+                "u32"
+                ","
+            div [code-line]
+              "5"
+              span [code-text]
+                "}"
+      div [station:send]
+        div [station-dot]
+        div [station-head]
+          "Send"
+          "the latest checkout_started, re-encoded here"
+        button [station-toggle] label="Send station"
+        div [station-body]
+          "Typed events send no property names, so this one is 92 bytes instead of 209: 56.0% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "typed"
+                ","
+                "positional"
+                "92"
+                "bytes"
+            div [code-line]
+              "2"
+              span [code-text]
+                "JSON"
+                ","
+                "named"
+                "209"
+                "bytes"
+            div [code-line]
+              "3"
+              span [code-text]
+            div [code-line]
+              "4"
+              span [code-text]
+                "//"
+                "values"
+                "in"
+                "field"
+                "order"
+                ":"
+                "pro"
+                ","
+                "2"
+      div [station:store]
+        div [station-dot]
+        div [station-head]
+          "Store"
+          "events, person_distinct_ids, person_overrides on sqlite"
+        button [station-toggle] label="Store station"
+        div [station-body]
+          "Events land in"
+          "events"
+          "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "events"
+            div [code-line]
+              "2"
+              span [code-text]
+                "uuid"
+                "BLOB"
+            div [code-line]
+              "3"
+              span [code-text]
+                "name"
+                "TEXT"
+            div [code-line]
+              "4"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "5"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "6"
+              span [code-text]
+                "timestamp"
+                "TEXT"
+            div [code-line]
+              "7"
+              span [code-text]
+                "received_at"
+                "TEXT"
+            div [code-line]
+              "8"
+              span [code-text]
+                "session_id"
+                "BLOB"
+            div [code-line]
+              "9"
+              span [code-text]
+                "context_id"
+                "INTEGER"
+            div [code-line]
+              "10"
+              span [code-text]
+                "properties"
+                "TEXT"
+            div [code-line]
+              "11"
+              span [code-text]
+                "source"
+                "INTEGER"
+            div [code-line]
+              "12"
+              span [code-text]
+            div [code-line]
+              "13"
+              span [code-text]
+                "person_distinct_ids"
+            div [code-line]
+              "14"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "15"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "16"
+              span [code-text]
+                "created_at"
+                "TEXT"
+            div [code-line]
+              "17"
+              span [code-text]
+            div [code-line]
+              "18"
+              span [code-text]
+                "person_overrides"
+            div [code-line]
+              "19"
+              span [code-text]
+                "distinct_id"
+                "TEXT"
+            div [code-line]
+              "20"
+              span [code-text]
+                "person_id"
+                "BLOB"
+            div [code-line]
+              "21"
+              span [code-text]
+                "created_at"
+                "TEXT"
+      div [station:ask]
+        div [station-dot]
+        div [station-head]
+          "Ask"
+          "the query"
+        button [station-toggle] label="Ask station"
+        div [station-body]
+          "Every insight is one value of the typed"
+          "Query"
+          "enum. The SQL is what it became. It ran 1 statement on sqlite in <n> ms. Change the builder and these lines change with it."
+          div role=tablist label="Ask as"
+            button [ask-tab:rust] role=tab
+              "Rust"
+            button [ask-tab:sql] role=tab
+              "SQL"
+            button [ask-tab:http] role=tab
+              "HTTP"
+          div [ask-panel:rust] role=tabpanel
+            div [code]
+              div [code-head]
+                "Rust"
+                button [copy] label="Copy as Rust"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "use"
+                  "leptoskit_analytics"
+                  ":"
+                  ":"
+                  "query"
+                  ":"
+                  ":"
+                  "*;"
+              div [code-line]
+                "2"
+                span [code-text]
+              div [code-line]
+                "3"
+                span [code-text]
+                  "let"
+                  "query"
+                  "="
+                  "Query"
+                  ":"
+                  ":"
+                  "Funnels(FunnelsQuery"
+                  "{"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "range"
+                  ":"
+                  "DateRange"
+                  ":"
+                  ":"
+                  "between("
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+                  "\"2026-11-02T00:00:00Z\""
+                  ")"
+                  ","
+              div [code-line]
+                "5"
+                span [code-text]
+                  "steps"
+                  ":"
+                  "vec!"
+                  "["
+              div [code-line]
+                "6"
+                span [code-text]
+                  "\"checkout_started\""
+                  ".into()"
+                  ","
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"payment_submitted\""
+                  ".into()"
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "\"checkout_completed\""
+                  ".into()"
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "]"
+                  ","
+              div [code-line]
+                "10"
+                span [code-text]
+                  "window_seconds"
+                  ":"
+                  "Some(1209600)"
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "order"
+                  ":"
+                  "FunnelOrder"
+                  ":"
+                  ":"
+                  "Ordered"
+                  ","
+              div [code-line]
+                "12"
+                span [code-text]
+                  "filters"
+                  ":"
+                  "Vec"
+                  ":"
+                  ":"
+                  "new()"
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "breakdown"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "14"
+                span [code-text]
+                  "test_accounts"
+                  ":"
+                  "None"
+                  ","
+              div [code-line]
+                "15"
+                span [code-text]
+                  "}"
+                  ");"
+              div [code-line]
+                "16"
+                span [code-text]
+              div [code-line]
+                "17"
+                span [code-text]
+                  "//"
+                  "From"
+                  "the"
+                  "app's"
+                  "server"
+                  ","
+                  "as"
+                  "the"
+                  "app"
+                  ":"
+              div [code-line]
+                "18"
+                span [code-text]
+                  "let"
+                  "answer"
+                  "="
+                  "rpc"
+                  ":"
+                  ":"
+                  "client"
+                  ":"
+                  ":"
+                  "call_as_app(Run"
+                  "{"
+                  "query"
+                  "}"
+                  ").await?;"
+          div [ask-panel:sql] role=tabpanel
+            div [code]
+              div [code-head]
+                "SQL"
+                button [copy] label="Copy as SQL"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "--"
+                  "funnel"
+                  "pull"
+                  "(sqlite)"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "SELECT"
+                  "coalesce(COALESCE((SELECT"
+                  "\"po\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "3"
+                span [code-text]
+                  "FROM"
+                  "\"person_overrides\""
+                  "\"po\""
+              div [code-line]
+                "4"
+                span [code-text]
+                  "WHERE"
+                  "\"po\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"person_id\""
+                  ","
+                  "(SELECT"
+                  "\"pdi\""
+                  "."
+                  "\"person_id\""
+              div [code-line]
+                "5"
+                span [code-text]
+                  "FROM"
+                  "\"person_distinct_ids\""
+                  "\"pdi\""
+              div [code-line]
+                "6"
+                span [code-text]
+                  "WHERE"
+                  "\"pdi\""
+                  "."
+                  "\"distinct_id\""
+                  "="
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  "))"
+                  ","
+                  "\"events\""
+                  "."
+                  "\"distinct_id\""
+                  ")"
+                  "AS"
+                  "\"person\""
+                  ","
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "AS"
+                  "\"name\""
+                  ","
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "AS"
+                  "\"at\""
+                  ","
+                  "NULL"
+                  "AS"
+                  "\"group\""
+              div [code-line]
+                "7"
+                span [code-text]
+                  "FROM"
+                  "\"events\""
+              div [code-line]
+                "8"
+                span [code-text]
+                  "WHERE"
+                  "\"events\""
+                  "."
+                  "\"name\""
+                  "IN"
+                  "(?3"
+                  ","
+                  "?4"
+                  ","
+                  "?5)"
+              div [code-line]
+                "9"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  ">"
+                  "="
+                  "?1"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "AND"
+                  "\"events\""
+                  "."
+                  "\"timestamp\""
+                  "<"
+                  "?2"
+              div [code-line]
+                "11"
+                span [code-text]
+                  "ORDER"
+                  "BY"
+                  "\"person\""
+                  ","
+                  "\"at\""
+              div [code-line]
+                "12"
+                span [code-text]
+                  "LIMIT"
+                  "100000"
+              div [code-line]
+                "13"
+                span [code-text]
+                  "--"
+                  "bound"
+                  ":"
+                  "\"2026-10-05T00:00:00.000Z\""
+                  ","
+                  "\"2026-11-02T00:00:00.000Z\""
+                  ","
+                  "\"checkout_started\""
+                  ","
+                  "\"payment_submitted\""
+                  ","
+                  "\"checkout_completed\""
+          div [ask-panel:http] role=tabpanel
+            div [code]
+              div [code-head]
+                "shell"
+                button [copy] label="Copy as shell"
+                  "Copy"
+              div [code-line]
+                "1"
+                span [code-text]
+                  "curl"
+                  "-X"
+                  "POST"
+                  "http"
+                  ":"
+                  "//127.0.0.1"
+                  ":"
+                  "<port>/_leptoskit/services/analytics/rpc/run"
+                  "\\"
+              div [code-line]
+                "2"
+                span [code-text]
+                  "-H"
+                  "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+                  "\\"
+              div [code-line]
+                "3"
+                span [code-text]
+                  "-H"
+                  "\"content-type: application/json\""
+                  "\\"
+              div [code-line]
+                "4"
+                span [code-text]
+                  "-d"
+                  "@-"
+                  "<<'JSON'"
+              div [code-line]
+                "5"
+                span [code-text]
+                  "{"
+              div [code-line]
+                "6"
+                span [code-text]
+                  "\"query\""
+                  ":"
+                  "{"
+              div [code-line]
+                "7"
+                span [code-text]
+                  "\"kind\""
+                  ":"
+                  "\"funnels\""
+                  ","
+              div [code-line]
+                "8"
+                span [code-text]
+                  "\"order\""
+                  ":"
+                  "\"ordered\""
+                  ","
+              div [code-line]
+                "9"
+                span [code-text]
+                  "\"range\""
+                  ":"
+                  "{"
+              div [code-line]
+                "10"
+                span [code-text]
+                  "\"from\""
+                  ":"
+                  "\"2026-10-05T00:00:00Z\""
+                  ","
+              div [code-line]
+                "11"
+                span [code-text]
+                  "\"to\""
+                  ":"
+                  "\"2026-11-02T00:00:00Z\""
+              div [code-line]
+                "12"
+                span [code-text]
+                  "}"
+                  ","
+              div [code-line]
+                "13"
+                span [code-text]
+                  "\"steps\""
+                  ":"
+                  "["
+              div [code-line]
+                "14"
+                span [code-text]
+                  "\"checkout_started\""
+                  ","
+              div [code-line]
+                "15"
+                span [code-text]
+                  "\"payment_submitted\""
+                  ","
+              div [code-line]
+                "16"
+                span [code-text]
+                  "\"checkout_completed\""
+              div [code-line]
+                "17"
+                span [code-text]
+                  "]"
+                  ","
+              div [code-line]
+                "18"
+                span [code-text]
+                  "\"window_seconds\""
+                  ":"
+                  "1209600"
+              div [code-line]
+                "19"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "20"
+                span [code-text]
+                  "}"
+              div [code-line]
+                "21"
+                span [code-text]
+                  "JSON"
+      div [station:draw]
+        div [station-dot]
+        div [station-head]
+          "Draw"
+          "rows → chart"
+        button [station-toggle] label="Draw station"
+        div [station-body]
+          "One row per step: how many people reached it within the window. Each column's height is that count; the hatched part is who reached the step before and stopped. Overall, 50.0% converted, taking 8m 00s at the median."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "step"
+                "people"
+                "of"
+                "first"
+                "dropped"
+            div [code-line]
+              "2"
+              span [code-text]
+                "1."
+                "checkout_started"
+                "4"
+                "100.0%"
+                "0"
+            div [code-line]
+              "3"
+              span [code-text]
+                "2."
+                "payment_submitted"
+                "3"
+                "75.0%"
+                "1"
+            div [code-line]
+              "4"
+              span [code-text]
+                "3."
+                "checkout_completed"
+                "2"
+                "50.0%"
+                "1"
+      button [copy-all]
+        "Copy all"
+      a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+        "Open docs"

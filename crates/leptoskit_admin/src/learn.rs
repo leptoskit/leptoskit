@@ -51,6 +51,9 @@ pub(crate) struct Proof<'a> {
 	/// answer.
 	pub facts: Option<&'a Facts>,
 	pub preferences: &'a Preferences,
+	/// Whether infrastructure actions ran against a stand-in cloud, so
+	/// evidence doesn't claim real infrastructure changed.
+	pub simulated: bool,
 }
 
 /// One lesson.
@@ -289,7 +292,12 @@ fn evidence(lesson: &Lesson, proof: &Proof<'_>) -> Option<String> {
 		"plan-review-apply" => {
 			succeeded(&|action| matches!(action, Action::Apply { .. })).map(|(project, at)| {
 				format!(
-					"You applied a plan on {project} {}",
+					"You applied a plan on {project}{} {}",
+					if proof.simulated {
+						" on the simulated cloud"
+					} else {
+						""
+					},
 					crate::infra::ago(at, now)
 				)
 			})

@@ -1,5 +1,6 @@
 //! The Infrastructure screens.
 
+use leptoskit::native::TextSpan;
 use leptoskit::prelude::*;
 use leptoskit_deploy_console::control::Fleet;
 use leptoskit_deploy_console::control::Operation;
@@ -80,6 +81,8 @@ pub(crate) struct Context<'a> {
 	pub preferences: &'a Preferences,
 	/// The last hour of fleet measurements, for Health.
 	pub fleet: Option<Result<Fleet, String>>,
+	/// Whether plans and applies run against a stand-in cloud.
+	pub simulated: bool,
 }
 
 fn project_href(id: &str, tab: Tab) -> String {
@@ -275,6 +278,10 @@ pub(crate) fn project(state: &ProjectState, tab: Tab, context: &Context<'_>) -> 
 	}
 
 	page = page.children(active_banner(state, context.now));
+
+	if context.simulated && matches!(tab, Tab::Overview | Tab::Changes) {
+		page = page.child(simulated_notice());
+	}
 
 	let (body, drawers, open) = match tab {
 		Tab::Overview => overview(state, context),
@@ -562,6 +569,53 @@ fn operation_row(operation: &Operation, now: u64) -> Element {
 		)
 }
 
+/// Says plainly that this admin's infrastructure is a stand-in, on the
+/// screens where a change starts.
+fn simulated_notice() -> Element {
+	View()
+		.class("rounded-xl border border-[var(--admin-line-strong)] px-4 py-2.5")
+		.test_id("simulated-notice")
+		.child(
+			Text("")
+				.spans([
+					TextSpan::new("Simulated: ").weight(leptoskit::native::FontWeight::Semibold),
+					TextSpan::new(
+						"plans and applies run against a stand-in cloud; no provider is contacted.",
+					),
+				])
+				.class(style::SECONDARY),
+		)
+}
+
+/// What the plan confirmation says before `lk infra plan` runs.
+fn plan_explanation(simulated: bool) -> &'static str {
+	if simulated {
+		"Simulated: runs `lk infra plan` against a stand-in cloud. Planning changes nothing, and \
+		 no provider is contacted."
+	} else {
+		"Runs `lk infra plan`. Planning changes nothing."
+	}
+}
+
+/// What the apply confirmation says before exactly this plan runs.
+fn apply_explanation(changes: usize, simulated: bool) -> String {
+	let plural = if changes == 1 { "" } else { "s" };
+
+	if simulated {
+		format!(
+			"Simulated: applies exactly this plan to a stand-in cloud with `lk infra apply`. \
+			 {changes} change{plural} to the stand-in; no provider is contacted and no real \
+			 infrastructure changes."
+		)
+	} else {
+		format!(
+			"Applies exactly this plan with `lk infra apply`. Apply refuses it if the \
+			 configuration, provider lock, or state changed since it was made. {changes} \
+			 change{plural} to real infrastructure."
+		)
+	}
+}
+
 /// A button that asks first: the script shows the confirm sheet with
 /// `explain` before sending the action.
 fn confirmable(kind: Kind, label: &str, action: &str, explain: &str) -> Element {
@@ -769,13 +823,7 @@ fn changes(state: &ProjectState, context: &Context<'_>) -> Body {
 					if plan.changes.len() == 1 { "" } else { "s" }
 				),
 				&format!("action:apply:{}", plan.operation.id),
-				&format!(
-					"Applies exactly this plan with `lk infra apply`. Apply refuses it if the \
-					 configuration, provider lock, or state changed since it was made. {} \
-					 change{} to real infrastructure.",
-					plan.changes.len(),
-					if plan.changes.len() == 1 { "" } else { "s" }
-				),
+				&apply_explanation(plan.changes.len(), context.simulated),
 			));
 		}
 
@@ -783,14 +831,14 @@ fn changes(state: &ProjectState, context: &Context<'_>) -> Body {
 			Kind::Secondary,
 			"Plan again",
 			"action:plan",
-			"Runs `lk infra plan`. Planning changes nothing.",
+			plan_explanation(context.simulated),
 		));
 	} else {
 		buttons = buttons.child(confirmable(
 			Kind::Primary,
 			"Plan changes",
 			"action:plan",
-			"Runs `lk infra plan`. Planning changes nothing.",
+			plan_explanation(context.simulated),
 		));
 	}
 

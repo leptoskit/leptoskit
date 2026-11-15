@@ -104,107 +104,120 @@ aside [drawer-aside] label="Workings"
   div [drawer:person] label="Workings: member-01@notes.example · person"
     "Workings"
     "member-01@notes.example · person"
+    div [drawer-changed] role=status
     button [workings-close] label="Close workings (W)"
       "Close"
-    div [station:store]
-      "Store"
-      "`persons`, `person_distinct_ids`"
-      "A person is one row in"
-      "persons"
-      "; each id they've used is a row in"
-      "person_distinct_ids"
-      "pointing at it. Identify adds a row; a merge repoints the anonymous one."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "anon-01"
-            "→"
-            "<id 0>"
-        div [code-line]
-          "2"
-          span [code-text]
-            "member-01@notes.example"
-            "→"
-            "<id 0>"
-        button [copy] label="Copy as text"
-          "Copy"
-    div [station:ask]
-      "Ask"
-      "the operations"
-      "The page is four app-only operations on the analytics service, the same your server can call."
-      div [code]
-        div [code-line]
-          "1"
-          span [code-text]
-            "let"
-            "person"
-            "="
-            "call_as_app(Person"
-            "{"
-            "id"
-            ":"
-            "<id 0>.parse()?"
-            "}"
-            ").await?;"
-        div [code-line]
-          "2"
-          span [code-text]
-            "let"
-            "events"
-            "="
-            "call_as_app(PersonEvents"
-            "{"
-            "id"
-            ","
-            "limit"
-            ":"
-            "50"
-            ","
-            "offset"
-            ":"
-            "0"
-            "}"
-            ").await?;"
-        div [code-line]
-          "3"
-          span [code-text]
-            "let"
-            "sessions"
-            "="
-            "call_as_app(PersonSessions"
-            "{"
-            "id"
-            ","
-            "limit"
-            ":"
-            "20"
-            ","
-            "offset"
-            ":"
-            "0"
-            "}"
-            ").await?;"
-        div [code-line]
-          "4"
-          span [code-text]
-            "//"
-            "Export"
-            "and"
-            "delete"
-            ":"
-            "ExportPerson"
-            "{"
-            "id"
-            "}"
-            ","
-            "DeletePerson"
-            "{"
-            "id"
-            "}"
-        button [copy] label="Copy as Rust"
-          "Copy"
-    button [copy-all]
-      "Copy all"
-    a label="Open the infrastructure guide" href=https://leptoskit.dev/docs/guide/24-deploying.html
-      "Open docs"
+    div [drawer-scroll]
+      div [station:store]
+        div [station-dot]
+        div [station-head]
+          "Store"
+          "`persons`, `person_distinct_ids`"
+        button [station-toggle] label="Store station"
+        div [station-body]
+          "A person is one row in"
+          "persons"
+          "; each id they've used is a row in"
+          "person_distinct_ids"
+          "pointing at it. Identify adds a row; a merge repoints the anonymous one."
+          div [code]
+            div [code-head]
+              button [copy] label="Copy as text"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "anon-01"
+                "→"
+                "<id 0>"
+            div [code-line]
+              "2"
+              span [code-text]
+                "member-01@notes.example"
+                "→"
+                "<id 0>"
+      div [station:ask]
+        div [station-dot]
+        div [station-head]
+          "Ask"
+          "the operations"
+        button [station-toggle] label="Ask station"
+        div [station-body]
+          "The page is four app-only operations on the analytics service, the same your server can call."
+          div [code]
+            div [code-head]
+              "Rust"
+              button [copy] label="Copy as Rust"
+                "Copy"
+            div [code-line]
+              "1"
+              span [code-text]
+                "let"
+                "person"
+                "="
+                "call_as_app(Person"
+                "{"
+                "id"
+                ":"
+                "<id 0>.parse()?"
+                "}"
+                ").await?;"
+            div [code-line]
+              "2"
+              span [code-text]
+                "let"
+                "events"
+                "="
+                "call_as_app(PersonEvents"
+                "{"
+                "id"
+                ","
+                "limit"
+                ":"
+                "50"
+                ","
+                "offset"
+                ":"
+                "0"
+                "}"
+                ").await?;"
+            div [code-line]
+              "3"
+              span [code-text]
+                "let"
+                "sessions"
+                "="
+                "call_as_app(PersonSessions"
+                "{"
+                "id"
+                ","
+                "limit"
+                ":"
+                "20"
+                ","
+                "offset"
+                ":"
+                "0"
+                "}"
+                ").await?;"
+            div [code-line]
+              "4"
+              span [code-text]
+                "//"
+                "Export"
+                "and"
+                "delete"
+                ":"
+                "ExportPerson"
+                "{"
+                "id"
+                "}"
+                ","
+                "DeletePerson"
+                "{"
+                "id"
+                "}"
+      button [copy-all]
+        "Copy all"
+      a label="Open the infrastructure guide" href=https://leptoskit.dev/docs/guide/24-deploying.html
+        "Open docs"

@@ -119,6 +119,7 @@ fn finish(admin: &Admin, ready: &Ready, headers: &HeaderMap, screen: Screen) -> 
 		now: server::now(),
 		facts: ready.facts.as_ref().and_then(|facts| facts.as_ref().ok()),
 		preferences: &ready.gate.preferences,
+		simulated: admin.inner().simulated_infrastructure,
 	};
 	server::render(admin, &ready.gate, headers, &proof, screen)
 }
