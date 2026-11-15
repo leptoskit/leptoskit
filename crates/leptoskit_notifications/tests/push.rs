@@ -3934,3 +3934,39 @@ async fn provider_wait_is_not_shortened_and_cancellation_prevents_another_reques
 		"cancelled"
 	);
 }
+
+/// A lost revoke response can be replayed only by its original actor.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_receipts_replay_without_crossing_accounts_or_new_enrollments() {
+	let mock = Mock::new();
+	let service = service(&mock, &all_transports()).await;
+	let credential = web_credential(&format!("https://{WEB_HOST}/push/receipt"));
+	let (status, body) = enroll(&service, ALICE, credential.clone()).await;
+	assert_eq!(status, 200, "{body}");
+	let old: Value = serde_json::from_str(&body).unwrap();
+	let key = format!("notifications:disable:{}", old["id"].as_str().unwrap());
+	let revoke = |person| {
+		reqwest::Client::new()
+			.post(format!(
+				"http://{}{PREFIX}/rpc/revoke_push_endpoint",
+				service.address
+			))
+			.bearer_auth(signed_in(person))
+			.header("idempotency-key", &key)
+			.json(&json!({"endpoint": old["id"]}))
+			.send()
+	};
+	assert_eq!(revoke(ALICE).await.unwrap().status().as_u16(), 200);
+	let (status, body) = enroll(&service, BOB, credential).await;
+	assert_eq!(status, 200, "{body}");
+	let new: Value = serde_json::from_str(&body).unwrap();
+	assert_ne!(new["id"], old["id"]);
+	// Alice can recover her acknowledgement after the destination is reused.
+	assert_eq!(revoke(ALICE).await.unwrap().status().as_u16(), 200);
+	// Bob cannot reuse Alice's receipt, even with exactly the same key and
+	// args.
+	assert_eq!(revoke(BOB).await.unwrap().status().as_u16(), 404);
+	let bob = endpoints_of(&service, BOB).await;
+	assert_eq!(bob.len(), 1);
+	assert_eq!(bob[0]["id"], new["id"]);
+}

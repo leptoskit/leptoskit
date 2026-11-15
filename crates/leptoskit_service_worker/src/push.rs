@@ -154,45 +154,6 @@ impl PushManager {
 			js::unavailable_async("PushSubscription.unsubscribe").await
 		}
 	}
-
-	/// Unsubscribes the registration's current subscription only when its
-	/// endpoint is `endpoint`, and answers whether it was removed.
-	///
-	/// The subscription that answers is unsubscribed itself, so whatever
-	/// the browser holds afterwards — a subscription another sender
-	/// enrolled, or a rotated replacement — is never touched, and a
-	/// subscription that went away on its own answers `false` rather than
-	/// destroying whatever replaced it.
-	///
-	/// # Errors
-	///
-	/// Outside a browser, or when the browser refuses the read or the call.
-	pub async fn unsubscribe_endpoint(&self, endpoint: &str) -> Result<bool> {
-		#[cfg(target_arch = "wasm32")]
-		{
-			let subscription = js::call_method(&self.inner, "getSubscription", &[]).await?;
-
-			if subscription.is_null() || subscription.is_undefined() {
-				return Ok(false);
-			}
-
-			let held = js::property(&subscription, "endpoint")?
-				.as_string()
-				.ok_or_else(|| Error::Browser("push subscription has no endpoint".into()))?;
-
-			if held != endpoint {
-				return Ok(false);
-			}
-
-			let result = js::call_method(&subscription, "unsubscribe", &[]).await?;
-			Ok(result.as_bool().unwrap_or(false))
-		}
-		#[cfg(not(target_arch = "wasm32"))]
-		{
-			let _ = endpoint;
-			js::unavailable_async("PushSubscription.unsubscribe").await
-		}
-	}
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -445,10 +406,6 @@ mod tests {
 		);
 		assert_eq!(
 			block_on(manager.unsubscribe()),
-			Err(Error::Unavailable("PushSubscription.unsubscribe".into()))
-		);
-		assert_eq!(
-			block_on(manager.unsubscribe_endpoint("https://push.test/sub")),
 			Err(Error::Unavailable("PushSubscription.unsubscribe".into()))
 		);
 	}

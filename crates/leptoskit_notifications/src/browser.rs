@@ -45,25 +45,13 @@
 //!    long before the gesture: `subscribe` is the one call whose permission the
 //!    browser ties to the gesture, and a worker still installing when the
 //!    gesture arrives can eat the gesture's window.
-//! 5. Keep the [`Enrollment`] it answers — the endpoint's opaque id, the
-//!    subscription it names, and the scope it was enrolled under. On sign-out,
-//!    while the person is still authenticated, call [`disable`]: the endpoint
-//!    is revoked first, then that one subscription — never whatever the browser
-//!    holds now — is unsubscribed. A failure of either half is returned, never
-//!    swallowed: a disable that couldn't revoke leaves the browser subscription
-//!    alone so the whole sequence can be retried while still signed in (a retry
-//!    after the revoke already landed completes: the service's "no such
-//!    endpoint" answer for an endpoint no longer in the person's own list is
-//!    already-done, not failure), and the next account on this browser is
-//!    refused (`EnrollError::Enroll`) until the old account's revoke lands. The
-//!    service itself refuses to reassign a live destination to another account,
-//!    so a switch can never quietly enroll the previous account's endpoint.
+//! 5. Keep the [`Enrollment`] endpoint id beside the person's session. Call
+//!    [`disable`] while still authenticated before signing out. It requires an
+//!    acknowledged server revoke and keeps the origin subscription and OS
+//!    permission reusable. Re-enabling can reuse that subscription.
 //!
-//! When the worker is registered under an explicit scope, say so in
-//! [`EnrollOptions::worker_scope`]: the enrollment waits for that exact
-//! scope's worker and records the scope, and [`disable`] unsubscribes at
-//! that scope only. A broader worker — the origin's root, say — never
-//! stands in for it.
+//! Explicit [`EnrollOptions::worker_scope`] scopes are matched exactly during
+//! enrollment and reconciliation.
 //!
 //! Subscription changes the browser makes on its own (a rotated or
 //! replaced subscription, `pushsubscriptionchange`) cannot be reconciled
@@ -265,37 +253,11 @@ pub fn availability() -> Availability {
 	Availability::Unsupported
 }
 
-/// One enrolled browser: the opaque handle the service answered, the one
-/// subscription it may unsubscribe, and the scope that subscription lives
-/// under. Store it beside the person's session on this device — it is the
-/// whole of [`disable`]. The credential the service holds never appears
-/// here, and the subscription's URL — the one capability in it, since
-/// whoever holds a push service endpoint can push to it — is redacted
-/// from the [`Debug`] print.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The server endpoint identity needed to disable this person's enrollment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enrollment {
-	/// The endpoint's opaque id, as [`crate::push::EndpointSummary`]
-	/// lists it.
+	/// The endpoint's opaque id, as [`crate::push::EndpointSummary`] lists it.
 	pub endpoint: uuid::Uuid,
-	/// The subscription's push service endpoint URL, exactly as the
-	/// browser answered it: [`disable`] unsubscribes this subscription and
-	/// no other, so a handle whose subscription the browser has since
-	/// replaced — rotated, or re-enrolled by another sender — leaves the
-	/// replacement alone.
-	pub subscription: String,
-	/// The registration's absolute scope the worker was enrolled under:
-	/// [`disable`] looks the worker up there, and only there.
-	pub scope: String,
-}
-
-impl std::fmt::Debug for Enrollment {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("Enrollment")
-			.field("endpoint", &self.endpoint)
-			.field("subscription", &"<redacted>")
-			.field("scope", &self.scope)
-			.finish()
-	}
 }
 
 /// What [`enroll`] takes: the public half of the operator's VAPID pair,
@@ -427,7 +389,7 @@ pub async fn enroll(options: &EnrollOptions) -> Result<Enrollment, EnrollError> 
 			}
 		};
 
-		register_subscription(&registration, &subscription).await
+		register_subscription(&subscription).await
 	}
 }
 
@@ -464,61 +426,41 @@ pub async fn reconcile(options: &EnrollOptions) -> Result<Option<Enrollment>, En
 	{
 		match held_subscription(options).await? {
 			(_, Held::Absent) => Ok(None),
-			(registration, Held::Subscription(subscription)) => {
-				Ok(Some(
-					register_subscription(&registration, &subscription).await?,
-				))
+			(_, Held::Subscription(subscription)) => {
+				Ok(Some(register_subscription(&subscription).await?))
 			}
 		}
 	}
 }
 
-/// Why a disable stopped, and what state it left. Both halves are
-/// surfaced: a revoke that failed leaves the browser subscription in
-/// place so the sequence can be retried while still signed in, and an
-/// unsubscribe that failed after a successful revoke leaves a browser
-/// subscription that can push nothing further.
+/// Why disabling the service enrollment was not confirmed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DisableError {
-	/// The revoke failed, so the service still holds a live endpoint for
-	/// this browser. Nothing was unsubscribed: retry the whole disable
-	/// while this person is still authenticated. A revoke that answers
-	/// "no such endpoint" for an endpoint no longer in the person's own
-	/// list is not this failure — that one already landed, and the
-	/// disable carries on.
+	/// No successful revoke acknowledgement: retry while authenticated.
 	#[error("revoking the endpoint failed: {0}")]
 	Revoke(leptoskit_rpc::FnError),
-	/// The endpoint is revoked, but the browser couldn't unsubscribe
-	/// (the worker at the enrolled scope is gone, or the browser
-	/// refused). The service pushes nothing further to a revoked
-	/// endpoint; the browser half can be cleaned up by unconditionally
-	/// unsubscribing on next launch.
-	#[error("the browser kept its subscription: {0}")]
-	Unsubscribe(String),
-	/// Not in a browser: nothing was revoked and nothing was
-	/// unsubscribed, so a native build never strands an endpoint by
-	/// calling this.
+	/// Outside a browser; no revoke was attempted.
 	#[error("browser push is unavailable here: {0}")]
 	Unavailable(String),
 }
 
-/// Disables one enrollment before its person signs out: the endpoint is
-/// revoked **while the person is still authenticated**, then the one
-/// subscription the enrollment recorded is unsubscribed, at the scope it
-/// was enrolled under. This order is the account-switch guarantee: an
-/// endpoint the previous account never revoked is refused to the next
-/// one, so nothing of an old account can be quietly re-enrolled, and a
-/// stale handle never takes out the replacement subscription or another
-/// sender's enrollment, because the subscription it unsubscribes must be
-/// the very endpoint URL it recorded. Failures are returned, never
-/// swallowed.
+/// Disables this person's service enrollment while still authenticated.
+///
+/// Never unsubscribes the browser or changes OS permission. Revocation stops
+/// future attempts under the service's revocation boundary; provider deliveries
+/// already in flight and visible banners are not recalled. The subscription
+/// remains reusable, but this service requires enrollment before sending.
+/// Origin-wide unsubscribe and permission revocation belong in browser settings
+/// or the lower-level worker API, separately from this account's enrollment.
+///
+/// Retries use the same endpoint-derived idempotency key, including after
+/// reload. Receipts belong to the authenticated caller; replay works only while
+/// the service retains the receipt. A pruned receipt may leave a retry
+/// unconfirmed.
 ///
 /// # Errors
 ///
-/// [`DisableError::Revoke`] when the service refused or the network
-/// dropped the revoke — the browser subscription is left untouched for a
-/// retry; [`DisableError::Unsubscribe`] when the revoke landed but the
-/// browser half didn't.
+/// [`DisableError::Revoke`] for every unconfirmed revoke, including not-found.
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(clippy::unused_async, reason = "matches the browser signature")
@@ -533,7 +475,7 @@ pub async fn disable(enrollment: &Enrollment) -> Result<(), DisableError> {
 	}
 
 	#[cfg(target_arch = "wasm32")]
-	disable_in_browser(enrollment).await
+	revoke_endpoint(enrollment.endpoint).await
 }
 
 /// What the browser holds for this app's key when enrollment looks.
@@ -585,12 +527,8 @@ async fn held_subscription(options: &EnrollOptions) -> Result<(Registration, Hel
 /// never from anything this module holds.
 #[cfg(target_arch = "wasm32")]
 async fn register_subscription(
-	registration: &Registration,
 	subscription: &leptoskit_service_worker::PushSubscription,
 ) -> Result<Enrollment, EnrollError> {
-	let scope = registration
-		.scope()
-		.map_err(|error| EnrollError::Unavailable(error.to_string()))?;
 	let summary = leptoskit_rpc::client::call(crate::push::RegisterPushEndpoint {
 		credential: crate::push::PushCredential::WebPush {
 			endpoint: subscription.endpoint.clone(),
@@ -605,8 +543,6 @@ async fn register_subscription(
 
 	Ok(Enrollment {
 		endpoint: summary.id,
-		subscription: subscription.endpoint.clone(),
-		scope,
 	})
 }
 
@@ -727,85 +663,17 @@ fn decoded_key(key: &str) -> Result<Vec<u8>, EnrollError> {
 		})
 }
 
-/// The revoke half of [`disable`], tolerant of the one failure that means
-/// success: a revoke whose endpoint is already gone. The wire folds the
-/// service's "no such endpoint" — what a retried disable meets once its
-/// first attempt revoked and its unsubscribe failed — into the same
-/// variant as a real failure, so the person's own endpoint list says
-/// which it was: still listed, the revoke really failed; gone, it already
-/// landed and the disable carries on.
+/// Requires the authenticated service's acknowledgement, never a list
+/// inference.
 #[cfg(target_arch = "wasm32")]
 async fn revoke_endpoint(endpoint: uuid::Uuid) -> Result<(), DisableError> {
-	use leptoskit_rpc::FnError;
-
-	match leptoskit_rpc::client::call(crate::push::RevokePushEndpoint { endpoint }).await {
-		Ok(()) => Ok(()),
-		Err(error @ FnError::Server(_)) => {
-			let still_listed = match leptoskit_rpc::client::call(crate::push::PushEndpoints {
-				page: leptoskit_rpc::PageArgs::default(),
-			})
-			.await
-			{
-				Ok(page) => page.items.iter().any(|summary| summary.id == endpoint),
-				// The list couldn't say: treat the endpoint as still
-				// held, so the failure stays explicit and the retry runs.
-				Err(_) => true,
-			};
-
-			if still_listed {
-				Err(DisableError::Revoke(error))
-			} else {
-				Ok(())
-			}
-		}
-		Err(error) => Err(DisableError::Revoke(error)),
-	}
-}
-
-/// The browser half of [`disable`]: only the subscription this enrollment
-/// recorded, only at the scope it was enrolled under.
-#[cfg(target_arch = "wasm32")]
-async fn disable_in_browser(enrollment: &Enrollment) -> Result<(), DisableError> {
-	// Revoke first: unsubscribing first would strand the service's
-	// record behind a dead subscription exactly when the person can no
-	// longer revoke it.
-	revoke_endpoint(enrollment.endpoint).await?;
-
-	// A registration that no longer exists took its subscriptions with
-	// it: nothing of this enrollment's is left in the browser.
-	// `getRegistration` still answers any scope it covers, so the scope is
-	// verified exactly — a broader worker's subscription is not this
-	// enrollment's to destroy.
-	let Some(registration) = registration_at(&enrollment.scope)
-		.await
-		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?
-	else {
-		return Ok(());
-	};
-
-	let push = registration
-		.push_manager()
-		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?;
-
-	// The subscription that answers is unsubscribed itself, so whatever
-	// the browser holds now — a rotated replacement, another sender's —
-	// is never touched.
-	push.unsubscribe_endpoint(&enrollment.subscription)
-		.await
-		.map_err(|error| DisableError::Unsubscribe(error.to_string()))?;
-
-	Ok(())
-}
-
-/// The registration whose scope is exactly `scope`, if one exists.
-#[cfg(target_arch = "wasm32")]
-async fn registration_at(
-	scope: &str,
-) -> Result<Option<Registration>, leptoskit_service_worker::Error> {
-	match get_registration(Some(scope)).await? {
-		Some(found) if found.scope()? == scope => Ok(Some(found)),
-		_ => Ok(None),
-	}
+	leptoskit_rpc::client::call_with(
+		crate::push::RevokePushEndpoint { endpoint },
+		leptoskit_rpc::client::CallOptions::new()
+			.idempotency_key(format!("notifications:disable:{endpoint}")),
+	)
+	.await
+	.map_err(DisableError::Revoke)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -952,19 +820,6 @@ mod tests {
 		);
 	}
 
-	/// The enrollment handle keeps its capability out of the `Debug`
-	/// print: the endpoint id and the scope explain it, the subscription
-	/// URL — whoever holds it can push — does not appear.
-	#[cfg(not(target_arch = "wasm32"))]
-	#[test]
-	fn the_enrollment_debug_print_hides_the_subscription() {
-		let printed = format!("{:?}", an_enrollment());
-		assert!(printed.contains("6ec0f4b1-0000-7000-8000-000000000001"));
-		assert!(printed.contains("/app/"));
-		assert!(printed.contains("<redacted>"));
-		assert!(!printed.contains("https://push.test/push/one"));
-	}
-
 	/// Availability is classified in the order a settings screen can act
 	/// on: serving scheme, browser, then the person's refusal.
 	#[test]
@@ -1011,8 +866,6 @@ mod tests {
 			endpoint: "6ec0f4b1-0000-7000-8000-000000000001"
 				.parse()
 				.expect("a uuid"),
-			subscription: "https://push.test/push/one".to_owned(),
-			scope: "https://app.test/app/".to_owned(),
 		}
 	}
 }

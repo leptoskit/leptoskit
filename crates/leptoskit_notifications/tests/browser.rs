@@ -253,7 +253,7 @@ fn shown_options(record: &js_sys::Object) -> js_sys::Object {
 		.expect("an options object")
 }
 
-fn option<'a>(options: &'a js_sys::Object, name: &str) -> JsValue {
+fn option(options: &js_sys::Object, name: &str) -> JsValue {
 	js_sys::Reflect::get(options, &JsValue::from_str(name)).unwrap_or(JsValue::UNDEFINED)
 }
 
@@ -578,7 +578,7 @@ async fn a_click_without_a_window_opens_the_route_with_the_id() {
 	wait_for_handlers().await;
 
 	assert_eq!(count("__lknClosed"), 1);
-	assert!(opened() == vec![format!("{}/inbox?lkn={}", origin(), id)]);
+	assert_eq!(opened(), vec![format!("{}/inbox?lkn={}", origin(), id)]);
 
 	remove_fakes();
 }
@@ -604,7 +604,7 @@ async fn payload_content_cannot_choose_where_a_click_goes() {
 		vec![format!("{}/inbox", origin())],
 		"no id on the address line, and no foreign route"
 	);
-	assert!(opened().is_empty());
+	assert_eq!(opened(), Vec::<String>::new());
 
 	remove_fakes();
 }
@@ -995,29 +995,11 @@ fn requests_to(route: &str) -> Vec<serde_json::Value> {
 		.collect()
 }
 
-/// Scripts the revoke and list answers together, as the disable paths
-/// read them: `revoke` answers `status` with `body`, and the person's
-/// endpoint list answers `listed` when it still holds the endpoint.
-fn answer_revoke(status: u16, body: &str, listed: Option<&str>) {
-	let items = match listed {
-		Some(id) => {
-			format!(
-				r#"[{{"id":{id},"platform":"web_push","created_at":"2026-11-15T00:00:00Z","invalidated_at":null}}]"#,
-				id = serde_json::to_string(id).expect("an id literal"),
-			)
-		}
-		None => "[]".to_owned(),
-	};
+/// Scripts a revoke acknowledgement or explicit failure.
+fn answer_revoke(status: u16, body: &str) {
 	eval(&format!(
-		r#"
-		window.__lknRouteAnswers["{SERVICE_PREFIX}/revoke_push_endpoint"] = async () =>
-			new Response({body:?}, {{ status: {status} }});
-		window.__lknRouteAnswers["{SERVICE_PREFIX}/push_endpoints"] = async () =>
-			new Response(
-				JSON.stringify({{ items: {items}, end: null, has_more: false }}),
-				{{ status: 200 }},
-			);
-	"#,
+		r#"window.__lknRouteAnswers["{SERVICE_PREFIX}/revoke_push_endpoint"] = async () =>
+		new Response({body:?}, {{ status: {status} }});"#,
 	));
 }
 
@@ -1034,18 +1016,9 @@ async fn enrollment_rides_a_real_worker_and_reaches_the_service_over_rpc() {
 	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
 	let enrollment = lkn::enroll(&options).await.expect("the browser enrolls");
 
-	assert_eq!(enrollment.scope, at(FIXTURE_SCOPE));
 	assert_eq!(
 		enrollment.endpoint.to_string(),
 		"6ec0f4b1-0000-7000-8000-0000000000f1"
-	);
-	assert_eq!(
-		enrollment.subscription,
-		eval_string(&format!(
-			"window.__lknSubscriptionAt({})",
-			serde_json::to_string(&at(FIXTURE_SCOPE)).expect("a scope literal")
-		)),
-		"the handle records the subscription it enrolled"
 	);
 
 	// The app minted the person's token first, then the service's own
@@ -1073,7 +1046,7 @@ async fn enrollment_rides_a_real_worker_and_reaches_the_service_over_rpc() {
 		serde_json::from_str(register[0]["body"].as_str().expect("a body")).expect("JSON");
 	assert_eq!(
 		body["credential"]["web_push"]["endpoint"],
-		enrollment.subscription
+		"https://push.test/push/1"
 	);
 	let keys = body["credential"]["web_push"]["keys"]
 		.as_object()
@@ -1109,7 +1082,6 @@ async fn a_second_enroll_replays_the_same_subscription_and_endpoint() {
 	let second = lkn::enroll(&options).await.expect("the replay enrolls");
 
 	assert_eq!(first, second, "the same browser, the same endpoint");
-	assert_eq!(first.subscription, "https://push.test/push/held");
 	assert_eq!(
 		eval_string(&format!(
 			"String(window.__lknSubscribesAt({}))",
@@ -1155,7 +1127,7 @@ async fn a_denied_origin_answers_denied_and_touches_nothing() {
 		Err(lkn::EnrollError::Denied),
 		"the standing refusal answers before any worker or route is touched"
 	);
-	assert!(requests().as_array().expect("an array").is_empty());
+	assert_eq!(requests().as_array().expect("an array").len(), 0);
 
 	eval(
 		r#"
@@ -1187,7 +1159,7 @@ async fn a_refused_subscription_surfaces_the_browser_error() {
 		matches!(&error, lkn::EnrollError::Subscribe(message) if message.contains("gesture")),
 		"the browser's refusal is the error: {error:?}"
 	);
-	assert!(requests_to("register_push_endpoint").is_empty());
+	assert_eq!(requests_to("register_push_endpoint").len(), 0);
 
 	remove_boundaries().await;
 }
@@ -1210,7 +1182,7 @@ async fn a_subscription_for_another_sender_is_refused() {
 		lkn::enroll(&options).await,
 		Err(lkn::EnrollError::KeyMismatch)
 	);
-	assert!(requests_to("register_push_endpoint").is_empty());
+	assert_eq!(requests_to("register_push_endpoint").len(), 0);
 	assert_eq!(
 		eval_string(&format!(
 			"window.__lknSubscriptionAt({})",
@@ -1247,7 +1219,7 @@ async fn a_broader_worker_never_stands_in_for_a_missing_scope() {
 		Err(lkn::EnrollError::NoWorker),
 		"a scope no registration covers answers no worker"
 	);
-	assert!(requests_to("register_push_endpoint").is_empty());
+	assert_eq!(requests_to("register_push_endpoint").len(), 0);
 
 	remove_boundaries().await;
 }
@@ -1262,7 +1234,7 @@ async fn enrollment_waits_for_the_selected_workers_activation() {
 	let mut options = lkn::EnrollOptions::new(vapid_key());
 	options.worker_scope = Some(SLOW_SCOPE.to_owned());
 	let started = js_sys::Date::now();
-	let enrollment = lkn::enroll(&options)
+	let _enrollment = lkn::enroll(&options)
 		.await
 		.expect("the slow worker enrolls");
 	let waited = js_sys::Date::now() - started;
@@ -1271,7 +1243,6 @@ async fn enrollment_waits_for_the_selected_workers_activation() {
 		waited >= 500.0,
 		"the 700 ms install was waited out, not raced: {waited} ms"
 	);
-	assert_eq!(enrollment.scope, at(SLOW_SCOPE));
 	assert!(
 		registration.active().expect("readable").is_some(),
 		"the worker is active by the time enrollment answers"
@@ -1298,7 +1269,7 @@ async fn a_worker_that_never_activates_errors_instead_of_hanging() {
 
 	assert_eq!(error, lkn::EnrollError::NoWorker);
 	assert!(took < 10_000.0, "the failure is bounded: {took} ms");
-	assert!(requests_to("register_push_endpoint").is_empty());
+	assert_eq!(requests_to("register_push_endpoint").len(), 0);
 
 	remove_boundaries().await;
 }
@@ -1314,11 +1285,10 @@ async fn reconcile_registers_what_is_held_and_never_prompts() {
 
 	let mut held = lkn::EnrollOptions::new(vapid_key());
 	held.worker_scope = Some(FIXTURE_SCOPE.to_owned());
-	let enrollment = lkn::reconcile(&held)
+	let _enrollment = lkn::reconcile(&held)
 		.await
 		.expect("reconcile runs")
 		.expect("held");
-	assert_eq!(enrollment.subscription, "https://push.test/push/held");
 	assert_eq!(
 		eval_string(&format!(
 			"String(window.__lknSubscribesAt({}))",
@@ -1347,12 +1317,9 @@ async fn reconcile_registers_what_is_held_and_never_prompts() {
 	remove_boundaries().await;
 }
 
-/// Disable revokes at the service first, then unsubscribes exactly the
-/// subscription the enrollment recorded, at the scope it named: the
-/// other scope's subscription — here under the receiver's own template —
-/// is untouched.
+/// Disable revokes the enrollment and preserves both browser subscriptions.
 #[wasm_bindgen_test]
-async fn disable_revokes_then_unsubscribes_only_the_enrolled_subscription() {
+async fn disable_revokes_without_unsubscribing() {
 	install_boundaries().await;
 	let _enrolled = register_fixture(FIXTURE_SCRIPT).await;
 	let _other = register_fixture(RECEIVER_SCRIPT_URL).await;
@@ -1374,8 +1341,8 @@ async fn disable_revokes_then_unsubscribes_only_the_enrolled_subscription() {
 	assert_eq!(body["endpoint"], enrollment.endpoint.to_string());
 	assert_eq!(
 		eval_string("JSON.stringify(window.__lknUnsubscribed)"),
-		r#"["https://push.test/push/mine"]"#,
-		"the enrolled subscription, and only it, was unsubscribed"
+		"[]",
+		"disable never unsubscribes"
 	);
 	assert_eq!(
 		eval_string(&format!(
@@ -1424,11 +1391,9 @@ async fn a_stale_handle_leaves_a_replaced_subscription_alone() {
 	remove_boundaries().await;
 }
 
-/// A retried disable whose revoke already landed completes the browser
-/// half: the service's "no such endpoint" for an endpoint no longer in
-/// the person's own list is already-done, not failure.
+/// A missing endpoint is unconfirmed, even absent from the first list page.
 #[wasm_bindgen_test]
-async fn a_retried_disable_completes_after_the_revoke_landed() {
+async fn a_missing_endpoint_is_not_a_revoke_acknowledgement() {
 	install_boundaries().await;
 	let _registration = register_fixture(FIXTURE_SCRIPT).await;
 	seed(&at(FIXTURE_SCOPE), "https://push.test/push/held");
@@ -1437,23 +1402,27 @@ async fn a_retried_disable_completes_after_the_revoke_landed() {
 	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
 	let enrollment = lkn::enroll(&options).await.expect("the browser enrolls");
 
-	answer_revoke(404, "ServerError|no such endpoint", None);
+	answer_revoke(404, "ServerError|no such endpoint");
 	lkn::disable(&enrollment)
 		.await
-		.expect("the retry completes");
+		.expect_err("a 404 is not an acknowledgement");
+	answer_revoke(500, "ServerError|the service is down");
+	assert!(matches!(
+		lkn::disable(&enrollment).await,
+		Err(lkn::DisableError::Revoke(_))
+	));
+	assert_eq!(requests_to("push_endpoints").len(), 0);
 
 	assert_eq!(
 		eval_string("JSON.stringify(window.__lknUnsubscribed)"),
-		r#"["https://push.test/push/held"]"#,
-		"the browser half still finished"
+		"[]",
+		"the browser subscription remains reusable"
 	);
 
 	remove_boundaries().await;
 }
 
-/// A revoke the service really refused — the endpoint is still the
-/// person's own — stays explicit: nothing is unsubscribed, and the whole
-/// disable can be retried while the person is still signed in.
+/// Failure stays explicit; retries use a stable key through the real client.
 #[wasm_bindgen_test]
 async fn a_refused_revoke_stays_explicit_and_touches_nothing() {
 	install_boundaries().await;
@@ -1464,11 +1433,9 @@ async fn a_refused_revoke_stays_explicit_and_touches_nothing() {
 	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
 	let enrollment = lkn::enroll(&options).await.expect("the browser enrolls");
 
-	answer_revoke(
-		500,
-		"ServerError|the service is down",
-		Some(&enrollment.endpoint.to_string()),
-	);
+	eval(&format!(
+		r#"window.__lknRouteAnswers["{SERVICE_PREFIX}/revoke_push_endpoint"] = async () => {{ throw new TypeError("response lost"); }};"#
+	));
 	let error = lkn::disable(&enrollment)
 		.await
 		.expect_err("the refused revoke");
@@ -1479,15 +1446,75 @@ async fn a_refused_revoke_stays_explicit_and_touches_nothing() {
 		"a failed revoke leaves the browser subscription for the retry"
 	);
 
+	assert_eq!(requests_to("push_endpoints").len(), 0);
+	let restored: lkn::Enrollment =
+		serde_json::from_str(&serde_json::to_string(&enrollment).expect("serialize handle"))
+			.expect("reload handle");
 	// The service recovers: the same disable now runs end to end.
-	answer_revoke(200, "null", None);
-	lkn::disable(&enrollment)
+	answer_revoke(200, "null");
+	lkn::disable(&restored)
 		.await
 		.expect("the retried disable completes");
+	let calls = requests_to("revoke_push_endpoint");
+	assert_eq!(calls[0]["idempotency_key"], calls[1]["idempotency_key"]);
+	assert_eq!(
+		calls[0]["idempotency_key"],
+		format!("notifications:disable:{}", enrollment.endpoint)
+	);
 	assert_eq!(
 		eval_string("JSON.stringify(window.__lknUnsubscribed)"),
-		r#"["https://push.test/push/held"]"#
+		"[]"
 	);
 
+	remove_boundaries().await;
+}
+
+/// The next account reuses the subscription, and a stale handle cannot remove
+/// it.
+#[wasm_bindgen_test]
+async fn confirmed_revoke_reuses_subscription_and_stale_handle_never_unsubscribes() {
+	install_boundaries().await;
+	let _registration = register_fixture(FIXTURE_SCRIPT).await;
+	seed(&at(FIXTURE_SCOPE), "https://push.test/push/reused");
+	let mut options = lkn::EnrollOptions::new(vapid_key());
+	options.worker_scope = Some(FIXTURE_SCOPE.to_owned());
+	let old = lkn::enroll(&options).await.expect("first account");
+	lkn::disable(&old).await.expect("confirmed revoke");
+	// The service returns a fresh id when the next account enrolls the same
+	// URL.
+	eval(&format!(
+		r#"
+	window.__lknRouteAnswers["{SERVICE_PREFIX}/register_push_endpoint"] = async () =>
+		new Response(JSON.stringify({{
+			id: "6ec0f4b1-0000-7000-8000-0000000000f2", platform: "web_push",
+			created_at: "2026-11-15T00:00:00Z", invalidated_at: null
+		}}), {{status: 200}});
+	"#
+	));
+	let new = lkn::enroll(&options).await.expect("next account");
+	assert_ne!(old.endpoint, new.endpoint);
+	answer_revoke(404, "ServerError|no such endpoint");
+	assert!(matches!(
+		lkn::disable(&old).await,
+		Err(lkn::DisableError::Revoke(_))
+	));
+	assert_eq!(requests_to("push_endpoints").len(), 0);
+	for call in requests_to("revoke_push_endpoint") {
+		let body: serde_json::Value = serde_json::from_str(call["body"].as_str().unwrap()).unwrap();
+		assert_eq!(body["endpoint"], old.endpoint.to_string());
+	}
+	assert_eq!(
+		eval_string("JSON.stringify(window.__lknUnsubscribed)"),
+		"[]"
+	);
+	let calls = requests_to("register_push_endpoint");
+	assert_eq!(calls[0]["body"], calls[1]["body"]);
+	assert_eq!(
+		eval_string(&format!(
+			"String(window.__lknSubscribesAt({:?}))",
+			at(FIXTURE_SCOPE)
+		)),
+		"0"
+	);
 	remove_boundaries().await;
 }
