@@ -1,0 +1,75 @@
+[package]
+name = "leptoskit_notifications"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Durable notifications for LeptosKit apps: a service with its own database, the sends its app's server makes, and the inbox its clients read."
+
+# The service itself. `lk` builds it with the `service` feature.
+[[bin]]
+name = "leptoskit_notifications"
+path = "src/main.rs"
+required-features = ["service"]
+
+# The service's tests need its bodies.
+[[test]]
+name = "service"
+required-features = ["service"]
+
+[dependencies]
+# The client side: the operations' types, which the app compiles to call the
+# service, and the shared validation it runs before it calls. No server
+# dependencies; `tests/dependencies.rs` keeps it that way. `chrono` rides
+# with `leptoskit_db`'s own, so the shared schedule checks don't add one.
+chrono = { workspace = true }
+leptoskit_db = { workspace = true }
+leptoskit_rpc = { workspace = true, features = ["client"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+# Everything below is the service's. The library without features (the shared
+# types and validation) doesn't compile any of it.
+hex = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+leptoskit_axum = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+# Building the service: the operations' bodies, their registrations, the
+# SQLite driver, and live queries. Only `lk` turns this on, when it builds the
+# service; the app never does.
+service = [
+	"dep:hex",
+	"dep:leptoskit_axum",
+	"dep:sha2",
+	"leptoskit_db/sqlite",
+	"leptoskit_rpc/server",
+	"leptoskit_rpc/sqlite",
+	"leptoskit_rpc/live",
+]
+# The same service on Postgres, for an app whose `[db]` is Postgres.
+postgres = ["service", "leptoskit_db/postgres", "leptoskit_rpc/postgres"]
+
+# What `lk` reads to run this crate as a service.
+[package.metadata.leptoskit.service]
+name = "notifications"
+port = 3120
+public = true
+features = ["service"]
+database = true
+
+[lints]
+workspace = true
