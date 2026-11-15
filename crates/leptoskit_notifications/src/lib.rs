@@ -36,12 +36,20 @@
 //!   Anonymous calls, and calls that forge a user id in any header, are
 //!   refused; the recipient is always read from the app's forwarded identity,
 //!   never from an argument.
+//!
+//! On the web, the [`browser`] module is the person's own half of
+//! enrollment: it serves the receiver worker that shows what arrives, and
+//! enrolls, reconciles, and disables the browser's subscription from the
+//! app's client, with the same forwarded identity and no service token.
 
 use leptoskit_db::table;
 use leptoskit_rpc as rpc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+
+#[cfg(feature = "browser")]
+pub mod browser;
 
 #[cfg(feature = "service")]
 pub mod service;

@@ -34,6 +34,11 @@ fn the_client_build_compiles_none_of_the_banned_crates() {
 	check(&["--no-default-features"]);
 }
 
+#[test]
+fn the_browser_client_build_compiles_none_of_the_banned_crates() {
+	check(&["--no-default-features", "--features", "browser"]);
+}
+
 fn check(extra: &[&str]) {
 	let output = Command::new(env!("CARGO"))
 		.arg("tree")

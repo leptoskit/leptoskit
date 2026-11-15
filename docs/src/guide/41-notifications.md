@@ -196,10 +196,10 @@ The APNs topic and environment, the FCM project, and the VAPID identity are all 
 
 ### Enroll a device
 
-The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. (The generated token-acquisition plumbing and the browser service-worker handler that receives the decrypted push are still to come; today your app brings its own credential.)
+The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. (The native token-acquisition plumbing is still to come; today a native app brings its own platform-issued credential. On the web the plumbing is [this crate's `browser` module](#enroll-a-browser), below.)
 
 ```rust,ignore
-leptoskit_rpc::call(leptoskit_notifications::RegisterPushEndpoint {
+leptoskit_rpc::call(leptoskit_notifications::push::RegisterPushEndpoint {
     credential: leptoskit_notifications::PushCredential::Apns {
         device_token: token_from_the_os,
     },
@@ -215,10 +215,53 @@ List and revoke are the person's own. The list is one bounded page at a time, ol
 let page = leptoskit_rpc::call(leptoskit_notifications::PushEndpoints {
     page: Default::default(),
 }).await?;
-leptoskit_rpc::call(leptoskit_notifications::RevokePushEndpoint { endpoint: id }).await?;
+leptoskit_rpc::call(leptoskit_notifications::push::RevokePushEndpoint { endpoint: id }).await?;
 ```
 
 Revoking deletes the endpoint and skips everything still queued for it as `endpoint_revoked`. Another person's endpoint — or an id nobody holds — is `404`, exactly as if it didn't exist.
+
+### Enroll a browser
+
+On the web the whole enrollment is this crate's `browser` module, behind the feature of the same name. Depend on the crate in your app and turn the feature on:
+
+```toml
+[dependencies]
+leptoskit_notifications = { version = "0.3", features = ["browser"] }
+```
+
+The module is three things: the **receiver** service-worker script, an **availability** check, and the **enroll** and **disable** flows. All of it rides your app's own RPC client, so the enrollment is the signed-in person's, forwarded by your app exactly as their inbox reads are — no service token, and no copy of the session anywhere in the module or in the worker.
+
+**Serve the receiver.** Build the script with your inbox route baked in and ship it with your web assets at the origin's root — `web/sw.js`, served as `/sw.js` with a JavaScript content type — so its scope covers the app:
+
+```rust,ignore
+let script = leptoskit_notifications::browser::receiver_script("/inbox")?;
+// Write `script` to `web/sw.js` at build time, or serve it from a route.
+```
+
+The route is the only URL a notification click may open, checked against the worker's own origin again at click time — payload content can never add a host, a scheme, or a path, and a route the builder refuses (empty, not a `/`-rooted path, scheme-relative, backslash, control characters) never ships. Register the script once at startup, the way [the web platform page](../platforms/web.md#service-workers) does it, and wait for it to control the page:
+
+```rust,ignore
+use leptoskit_notifications::browser;
+
+let registration = browser::register("/sw.js", browser::RegisterOptions::default()).await?;
+let _ = browser::ready().await?;
+```
+
+**Ask before you offer.** `browser::availability()` reads where push stands — `ready`, `insecure_context` (serve `https`; nothing in code works around it), `unsupported`, or `denied` (the person refused; link to the browser's site settings rather than prompting again). It never prompts, so a settings screen may call it on every render. **Prompting is the browser's answer to subscribing, and it happens only inside `enroll`** — so call that from an explicit gesture, a button, never from a mount or a render:
+
+```rust,ignore
+// From the click handler, with the operator's VAPID public key — the
+// private half never leaves the service:
+let enrollment = browser::enroll(&browser::EnrollOptions::new(vapid_public_key)).await?;
+```
+
+`enroll` checks availability first, waits for the **active** worker instead of racing its install, reuses the subscription the browser already holds (a second tap re-enrolls the same endpoint instead of prompting twice, and two racing calls converge on one subscription), and registers it under the person who is signed in. It answers an opaque `Enrollment` — the endpoint's id — which you keep beside the person's session on the device.
+
+**Sign out by disabling.** While the person is still authenticated, `browser::disable(&enrollment).await?` revokes the endpoint first, then unsubscribes the browser. Failures come back, never swallowed: a revoke that failed leaves the browser subscription untouched so the whole sequence retries while still signed in. The order is the account-switch guarantee — the service refuses to hand a live destination to another account, so until the previous account's revoke lands, the next account's `enroll` is refused and told so, and nothing of an old account is ever quietly re-enrolled.
+
+**When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `enroll` again; the replaced subscription's endpoint then dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
+
+The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and brings it to your inbox route with the notification's id, or opens that route in a new window. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
 
 ### What a send does
 

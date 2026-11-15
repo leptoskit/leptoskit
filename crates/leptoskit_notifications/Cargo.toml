@@ -42,6 +42,13 @@ required-features = ["service"]
 name = "postgres"
 required-features = ["postgres"]
 
+# The browser tests run in Chrome through the wasm runner; they exercise
+# the receiver script and the enrollment entry points' browser-side
+# behavior.
+[[test]]
+name = "browser"
+required-features = ["browser"]
+
 [dependencies]
 # The client side: the operations' types, which the app compiles to call the
 # service, and the shared validation it runs before it calls. No server
@@ -55,8 +62,17 @@ leptoskit_rpc = { workspace = true, features = ["client"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+thiserror = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
+
+# The browser client's bindings. They live here, optional and workspace-
+# inherited, and only the `browser` feature turns them on; the code that
+# uses them is behind `cfg(target_arch = "wasm32")`, so the service and
+# the shared types never compile them.
+js-sys = { workspace = true, optional = true }
+leptoskit_service_worker = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
 
 # Everything below is the service's. The library without features (the shared
 # types and validation) doesn't compile any of it. The push protocols are the
@@ -89,8 +105,23 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "Node"] }
+
 [features]
 default = []
+# The browser client: enrollment from the app's web build through the
+# browser's own Push API, and the receiver service-worker script. It adds
+# no server dependency; `tests/dependencies.rs` checks the tree the app's
+# client build compiles.
+browser = [
+	"dep:js-sys",
+	"dep:leptoskit_service_worker",
+	"dep:thiserror",
+	"dep:wasm-bindgen",
+]
 # Building the service: the operations' bodies, their registrations, the
 # SQLite driver, live queries, and the push engine. Only `lk` turns this
 # on, when it builds the service; the app never does.
