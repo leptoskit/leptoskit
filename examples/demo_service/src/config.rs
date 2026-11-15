@@ -68,15 +68,7 @@ impl Authority {
 		}
 
 		let (host, port) = match value.rsplit_once(':') {
-			// A colon with no port — `site.example:` — names nothing.
-			Some((_, "")) => return None,
-			Some((host, port)) => {
-				let port = port.parse::<u16>().ok()?;
-				if port == 0 {
-					return None;
-				}
-				(host, Some(port))
-			}
+			Some((host, port)) => (host, Some(parse_port(port)?)),
 			None => (value, None),
 		};
 		let host = normalize_host(host)?;
@@ -92,14 +84,7 @@ impl Authority {
 		// After the closing bracket, only a port may follow.
 		let port = match rest {
 			"" => None,
-			rest => {
-				let port = rest.strip_prefix(':')?;
-				let port = port.parse::<u16>().ok()?;
-				if port == 0 {
-					return None;
-				}
-				Some(port)
-			}
+			rest => Some(parse_port(rest.strip_prefix(':')?)?),
 		};
 		let address = literal.parse::<Ipv6Addr>().ok()?;
 		Some(Self {
@@ -182,7 +167,7 @@ pub struct Config {
 	pub bind: SocketAddr,
 	/// The state root: mode 0700, owned by this account, not a symlink.
 	pub volume: std::path::PathBuf,
-	/// The full origins, as they were configured.
+	/// The configured origins in their normalized spelling.
 	pub site_origin: String,
 	pub admin_origin: String,
 	/// Their authorities, plus the bind's.
@@ -344,6 +329,17 @@ fn origin(value: &str) -> Result<(String, Authority)> {
 		(scheme, None) => format!("{scheme}://{}", authority.host),
 	};
 	Ok((text, authority))
+}
+
+/// A nonzero decimal port. Integer parsing alone also accepts a leading
+/// `+`, which is not part of an HTTP authority's port grammar.
+fn parse_port(value: &str) -> Option<u16> {
+	if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+		return None;
+	}
+
+	let port = value.parse::<u16>().ok()?;
+	(port != 0).then_some(port)
 }
 
 /// One host, normalized the same way on every path an authority enters
@@ -545,6 +541,7 @@ mod tests {
 			"   ",
 			"[::1]garbage",
 			"[::1]:bad",
+			"[::1]:+443",
 			"[::1]:",
 			"[::1]:0",
 			"[::1]:99999",
@@ -556,6 +553,7 @@ mod tests {
 			"site.example:0",
 			"site.example:65536",
 			"site.example:-1",
+			"site.example:+443",
 			"site.example/a",
 			"site.example?q",
 			"site.example#f",
