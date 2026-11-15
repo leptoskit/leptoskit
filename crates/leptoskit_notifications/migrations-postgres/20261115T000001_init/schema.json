@@ -296,6 +296,14 @@
           "comment": "The endpoint it goes to. The endpoint may be gone — revoked —\nwhile this row remains, explaining what happened."
         },
         {
+          "name": "generation",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "Credential revision this queued delivery follows."
+        },
+        {
           "name": "person",
           "type": {
             "kind": "uuid"
@@ -439,12 +447,20 @@
           "comment": "The platform's credential, verbatim: secret material, left out of\nthe audit log and redacted in debug output."
         },
         {
+          "name": "generation",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "Monotonic credential revision, advanced on rotation or reactivation."
+        },
+        {
           "name": "fingerprint",
           "type": {
             "kind": "text"
           },
           "nullable": false,
-          "comment": "A SHA-256 of the credential, in hex: how the service knows a\ncredential is already enrolled, without ever searching on the\nsecret itself."
+          "comment": "A SHA-256 of the endpoint's platform and destination — its token,\nor a Web Push subscription's endpoint URL — in hex: how the service\nknows two enrollments name the same endpoint without ever searching\non the secret itself. It deliberately does not cover a Web Push\nsubscription's keys, so a browser that rotates them keeps its\nendpoint and its owner."
         },
         {
           "name": "invalidated_at",

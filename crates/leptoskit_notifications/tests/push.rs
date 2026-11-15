@@ -813,15 +813,12 @@ fn derive(salt: &[u8], secret: &[u8], infos: &[&[u8]], length: usize) -> Vec<u8>
 
 /// The stored credential of one endpoint, by its opaque id.
 async fn credential_of(service: &Service, endpoint: &str) -> String {
-	let simple = endpoint.replace('-', "");
-	let stored = rows(
-		service,
-		&format!("SELECT credential FROM push_endpoints WHERE lower(hex(id)) = '{simple}'"),
-	)
-	.await;
-
-	assert!(!stored.is_empty(), "no endpoint row for {endpoint}");
-	text(&stored[0][0])
+	leptoskit_notifications::push::PushEndpoint::query()
+		.filter(|row| row.id.eq(Uuid::parse_str(endpoint).unwrap()))
+		.one(&service.db)
+		.await
+		.expect("stored endpoint")
+		.credential
 }
 
 /// A 64-hex device token, as a device holds one.
@@ -1186,7 +1183,7 @@ async fn the_same_token_under_two_platforms_is_two_endpoints() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_invalidated_destination_can_re_enroll_and_be_taken_over() {
+async fn an_invalidated_destination_requires_its_owner_to_revoke() {
 	let mock = Mock::new();
 	let mut service = service(&mock, &all_transports()).await;
 
@@ -1233,8 +1230,7 @@ async fn an_invalidated_destination_can_re_enroll_and_be_taken_over() {
 	let outcomes = settled(&service, "revived").await;
 	assert_eq!(outcomes, vec![("accepted".to_owned(), None)]);
 
-	// An invalidated endpoint another account re-enrolls is taken over
-	// clean: the previous holder's hold ended with the invalidation.
+	// Invalidation preserves ownership until explicit revocation.
 	let (status, _) = post(
 		&service,
 		"revoke_push_endpoint",
@@ -1263,11 +1259,24 @@ async fn an_invalidated_destination_can_re_enroll_and_be_taken_over() {
 		.expect("the invalidated endpoint");
 	let (status, body) = enroll(&service, BOB, web_credential(&endpoint)).await;
 	assert_eq!(
-		status, 200,
-		"an invalidated destination is nobody's: {body}"
+		status, 409,
+		"invalidated destinations still belong to their owner: {body}"
 	);
+	let (status, body) = post(
+		&service,
+		"revoke_push_endpoint",
+		json!({"endpoint": current["id"]}),
+		Some(&signed_in(ALICE)),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+	let (status, body) = enroll(&service, BOB, web_credential(&endpoint)).await;
+	assert_eq!(status, 200, "{body}");
 	let taken: Value = serde_json::from_str(&body).unwrap();
-	assert_eq!(taken["id"], current["id"], "the row is taken over in place");
+	assert_ne!(
+		taken["id"], current["id"],
+		"revocation followed by enrollment creates a fresh ID"
+	);
 
 	let bob = endpoints_of(&service, BOB).await;
 	assert_eq!(bob.len(), 1);
@@ -1356,11 +1365,8 @@ async fn the_endpoint_list_is_bounded_and_paginated() {
 	let rest: Value = serde_json::from_str(&body).unwrap();
 	assert_eq!(rest["items"].as_array().map(Vec::len), Some(5));
 
-	// History is bounded: however many invalidations come and go, the
-	// person's rows never grow past the live bound plus the history
-	// bound. Each wave has the provider invalidate one live endpoint —
-	// growing the history and freeing a live slot — and enrolls a fresh
-	// victim in the room.
+	// Ownership survives invalidation history; only explicit revocation frees a
+	// destination.
 	for wave in 0..12_u8 {
 		let listed = endpoints_of(&service, ALICE).await;
 		let victim_now = listed
@@ -1386,11 +1392,14 @@ async fn the_endpoint_list_is_bounded_and_paginated() {
 
 	let count = rows(&service, "SELECT count(*) FROM push_endpoints").await;
 	let total: usize = text(&count[0][0]).parse().unwrap();
-	assert!(
-		total
-			<= leptoskit_notifications::push::MAX_ENDPOINTS
-				+ leptoskit_notifications::push::MAX_ENDPOINT_HISTORY,
-		"{total} rows for one person is past the bounds"
+	assert_eq!(
+		total, 25,
+		"invalidation must never silently release ownership"
+	);
+	let (status, body) = enroll(&service, BOB, apns_credential(&device_token(1))).await;
+	assert_eq!(
+		status, 409,
+		"even the oldest invalidated destination stays owned: {body}"
 	);
 }
 
@@ -2039,7 +2048,11 @@ async fn a_generic_fcm_404_does_not_invalidate_the_device() {
 		Scripted::Reply(
 			404,
 			Vec::new(),
-			json!({ "error": { "code": 404, "status": "UNREGISTERED" } }).to_string(),
+			json!({ "error": { "code": 404, "status": "NOT_FOUND", "details": [{
+				"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+				"errorCode": "UNREGISTERED"
+			}] } })
+			.to_string(),
 		)
 	});
 
@@ -3487,4 +3500,258 @@ fn a_malformed_extra_host_is_refused_by_name_at_the_build() {
 		error.contains("push.example.net"),
 		"the refusal names the entry: {error}"
 	);
+}
+
+#[cfg(feature = "postgres")]
+#[path = "support/postgres.rs"]
+mod postgres;
+
+/// Held answers from an old credential revision cannot change the rotated
+/// queue, regardless of whether they accept, retry, or invalidate it.
+async fn credential_generations(db: Db) {
+	let mock = Mock::new();
+	let service = start(db, &all_transports(), &mock).await;
+	let endpoint = format!("https://{WEB_HOST}/push/generation-test");
+	for reactivate in [false, true] {
+		for status in [410, 503, 200] {
+			generation_case(&service, &mock, &endpoint, reactivate, status).await;
+		}
+	}
+	// Even inconsistent persisted ownership must never route somebody else's
+	// payload.
+	let sent = mock.requests_to(WEB_HOST).len();
+	assert_eq!(send(&service, "wrong-owner", spec(), &[ALICE]).await.0, 200);
+	leptoskit_notifications::push::PushDelivery::update()
+		.filter(|row| row.send_key.eq("wrong-owner"))
+		.set(|row| row.person, BOB)
+		.run(&service.db)
+		.await
+		.unwrap();
+	spawn_round(&service, "wrong-owner", 0).await.unwrap();
+	assert_eq!(mock.requests_to(WEB_HOST).len(), sent);
+	assert_eq!(
+		delivery_status(&service, "wrong-owner").await[0]["state"],
+		"skipped"
+	);
+	assert_eq!(
+		send(&service, "wrong-notification-owner", spec(), &[ALICE])
+			.await
+			.0,
+		200
+	);
+	leptoskit_notifications::Notification::update()
+		.filter(|row| row.send_key.eq("wrong-notification-owner"))
+		.set(|row| row.person, BOB)
+		.run(&service.db)
+		.await
+		.unwrap();
+	spawn_round(&service, "wrong-notification-owner", 0)
+		.await
+		.unwrap();
+	assert_eq!(mock.requests_to(WEB_HOST).len(), sent);
+	assert_eq!(
+		delivery_status(&service, "wrong-notification-owner").await[0]["state"],
+		"skipped"
+	);
+}
+
+/// Runs one response across a credential transition with the HTTP boundary
+/// held.
+async fn generation_case(
+	service: &Service,
+	mock: &Mock,
+	endpoint: &str,
+	reactivate: bool,
+	status: u16,
+) {
+	let suffix = format!("{reactivate}-{status}");
+	let old = format!("old-{suffix}");
+	let fresh = format!("fresh-{suffix}");
+	let (code, body) = enroll(service, ALICE, web_credential(endpoint)).await;
+	assert_eq!(code, 200, "{body}");
+	assert_eq!(send(service, &old, spec(), &[ALICE]).await.0, 200);
+	mock.scripted(move |_, _| Scripted::Hold(status, Vec::new(), String::new()));
+	let held = spawn_round(service, &old, 0);
+	mock.wait_held(1).await;
+	if reactivate {
+		mock.scripted(|_, _| Scripted::Reply(410, Vec::new(), String::new()));
+		let invalidate = format!("invalidate-{suffix}");
+		assert_eq!(send(service, &invalidate, spec(), &[ALICE]).await.0, 200);
+		spawn_round(service, &invalidate, 0).await.unwrap();
+	}
+	let (_, _, auth, public) = web_subscription(endpoint);
+	let rotated = json!({"web_push": {"endpoint": endpoint, "keys": {"p256dh": public, "auth": URL_SAFE_NO_PAD.encode(auth)}}});
+	let (code, body) = enroll(service, ALICE, rotated).await;
+	assert_eq!(code, 200, "{body}");
+	assert_eq!(send(service, &fresh, spec(), &[ALICE]).await.0, 200);
+	let before = delivery_status(service, &old).await;
+	mock.release();
+	held.await.unwrap();
+	assert_eq!(
+		delivery_status(service, &old).await,
+		before,
+		"stale {status} changed the old delivery"
+	);
+	assert_rotated_queue(service, mock, &fresh, &old, reactivate).await;
+}
+
+/// Verifies new queued work and old terminal states after a held response
+/// lands.
+async fn assert_rotated_queue(
+	service: &Service,
+	mock: &Mock,
+	fresh: &str,
+	old: &str,
+	reactivate: bool,
+) {
+	let queued = delivery_status(service, fresh).await;
+	assert_eq!(queued[0]["state"], "enqueued", "{queued:?}");
+	assert_eq!(queued[0]["attempts"], 0);
+	assert!(endpoints_of(service, ALICE).await[0]["invalidated_at"].is_null());
+	mock.scripted(|_, _| Scripted::Default);
+	spawn_round(service, fresh, 0).await.unwrap();
+	assert_eq!(
+		delivery_status(service, fresh).await[0]["state"],
+		"accepted"
+	);
+	if !reactivate {
+		spawn_round(service, old, 1).await.unwrap();
+		assert_eq!(delivery_status(service, old).await[0]["state"], "accepted");
+	}
+}
+
+async fn reactivation_capacity(db: Db) {
+	let mock = Mock::new();
+	let service = start(db, &all_transports(), &mock).await;
+	for n in 1..=10 {
+		assert_eq!(
+			enroll(&service, ALICE, apns_credential(&device_token(n)))
+				.await
+				.0,
+			200
+		);
+	}
+	mock.scripted(|request, _| {
+		if request.url.ends_with(&device_token(1)) || request.url.ends_with(&device_token(2)) {
+			Scripted::Reply(
+				410,
+				Vec::new(),
+				json!({"reason":"Unregistered"}).to_string(),
+			)
+		} else {
+			Scripted::Default
+		}
+	});
+	assert_eq!(
+		send(&service, "invalidate-two", spec(), &[ALICE]).await.0,
+		200
+	);
+	spawn_round(&service, "invalidate-two", 0).await.unwrap();
+	for n in 11..=12 {
+		assert_eq!(
+			enroll(&service, ALICE, apns_credential(&device_token(n)))
+				.await
+				.0,
+			200
+		);
+	}
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(1)))
+			.await
+			.0,
+		400
+	);
+	assert_eq!(
+		enroll(&service, ALICE, apns_credential(&device_token(12)))
+			.await
+			.0,
+		200
+	);
+	let bob = enroll(&service, BOB, apns_credential(&device_token(1))).await;
+	assert_eq!(bob.0, 409, "{}", bob.1);
+	// Revoking one live endpoint frees exactly one slot for two concurrent
+	// reactivations.
+	let live = endpoints_of(&service, ALICE)
+		.await
+		.into_iter()
+		.find(|row| row["invalidated_at"].is_null())
+		.unwrap();
+	assert_eq!(
+		post(
+			&service,
+			"revoke_push_endpoint",
+			json!({"endpoint":live["id"]}),
+			Some(&signed_in(ALICE))
+		)
+		.await
+		.0,
+		200
+	);
+	let (a, b) = tokio::join!(
+		enroll(&service, ALICE, apns_credential(&device_token(1))),
+		enroll(&service, ALICE, apns_credential(&device_token(2)))
+	);
+	let mut codes = [a.0, b.0];
+	codes.sort_unstable();
+	assert_eq!(codes, [200, 400], "{a:?} {b:?}");
+	assert_eq!(
+		endpoints_of(&service, ALICE)
+			.await
+			.iter()
+			.filter(|row| row["invalidated_at"].is_null())
+			.count(),
+		10
+	);
+	revoke_and_reenroll(&service).await;
+}
+
+/// An explicitly revoked destination enrolls to a different owner with a new
+/// id.
+async fn revoke_and_reenroll(service: &Service) {
+	let invalid = endpoints_of(service, ALICE)
+		.await
+		.into_iter()
+		.find(|row| row["invalidated_at"].is_string())
+		.unwrap();
+	let credential = credential_of(service, invalid["id"].as_str().unwrap()).await;
+	assert_eq!(
+		post(
+			service,
+			"revoke_push_endpoint",
+			json!({"endpoint": invalid["id"]}),
+			Some(&signed_in(ALICE))
+		)
+		.await
+		.0,
+		200
+	);
+	let (status, body) = enroll(service, BOB, apns_credential(&credential)).await;
+	assert_eq!(status, 200, "{body}");
+	let replacement: Value = serde_json::from_str(&body).unwrap();
+	assert_ne!(replacement["id"], invalid["id"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_credential_generation_and_capacity_races() {
+	credential_generations(db().await).await;
+	reactivation_capacity(db().await).await;
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_credential_generation_and_capacity_races() {
+	let Some(postgres) = postgres::Postgres::start() else {
+		return;
+	};
+	for generations in [true, false] {
+		let db = Db::connect(&postgres.database()).await.unwrap();
+		db.migrate(leptoskit_notifications::POSTGRES_MIGRATIONS)
+			.await
+			.unwrap();
+		if generations {
+			credential_generations(db).await;
+		} else {
+			reactivation_capacity(db).await;
+		}
+	}
 }

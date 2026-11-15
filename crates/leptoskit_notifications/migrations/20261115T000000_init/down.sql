@@ -3,10 +3,10 @@
 --
 -- loses data: every row in `category_preferences` is deleted
 -- loses data: every row in `notifications` is deleted
+-- loses data: every row in `push_deliveries` is deleted
+-- loses data: every row in `push_endpoints` is deleted
 -- loses data: every row in `sends` is deleted
 -- loses data: every row in `wakes` is deleted
--- loses data: every row in `push_endpoints` is deleted
--- loses data: every row in `push_deliveries` is deleted
 -- loses data: every row in `live.changes` is deleted
 -- loses data: every row in `live.commits` is deleted
 -- loses data: every row in `rpc.inbox` is deleted
@@ -46,13 +46,13 @@ DROP TABLE "category_preferences";
 
 DROP TABLE "notifications";
 
-DROP TABLE "sends";
-
-DROP TABLE "wakes";
-
 DROP TABLE "push_deliveries";
 
 DROP TABLE "push_endpoints";
+
+DROP TABLE "sends";
+
+DROP TABLE "wakes";
 
 DROP TABLE "live_changes";
 

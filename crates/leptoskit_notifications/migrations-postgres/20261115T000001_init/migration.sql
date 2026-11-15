@@ -76,6 +76,107 @@ COMMENT ON COLUMN "notifications"."read_at" IS 'When the recipient read it, on a
 
 COMMENT ON COLUMN "notifications"."dismissed_at" IS 'When the recipient dismissed it, on any device.';
 
+CREATE TABLE "push_deliveries" (
+	"id" uuid NOT NULL,
+	"notification" uuid NOT NULL,
+	"send_key" varchar(255) NOT NULL,
+	"endpoint" uuid NOT NULL,
+	"generation" bigint NOT NULL,
+	"person" uuid NOT NULL,
+	"platform" varchar(16) NOT NULL,
+	"state" varchar(16) NOT NULL,
+	"reason" varchar(32),
+	"attempts" bigint NOT NULL,
+	"next_attempt_at" timestamptz,
+	"attempted_at" timestamptz,
+	"finished_at" timestamptz,
+	"created_at" timestamptz NOT NULL,
+	CONSTRAINT "push_deliveries_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "push_deliveries_send_key_id_idx" ON "push_deliveries" ("send_key", "id");
+
+CREATE INDEX "push_deliveries_state_next_attempt_at_idx" ON "push_deliveries" ("state", "next_attempt_at");
+
+CREATE UNIQUE INDEX "push_deliveries_notification_endpoint_key" ON "push_deliveries" ("notification", "endpoint");
+
+COMMENT ON TABLE "push_deliveries" IS 'One attempt''s record, per notification and endpoint: the durable
+delivery the push job works through, from enqueued to accepted,
+rejected, or skipped. Unique per pair, so a raced or repeated send
+cannot double-enroll an endpoint for a notification.
+
+Delivery is at-least-once: a retry after an answered-but-lost attempt
+can push twice, and the provider''s acceptance says it took the
+message, not that anyone saw it.';
+
+COMMENT ON COLUMN "push_deliveries"."notification" IS 'The inbox notification this delivery carries.';
+
+COMMENT ON COLUMN "push_deliveries"."send_key" IS 'The send that created it, for the app''s status pages.';
+
+COMMENT ON COLUMN "push_deliveries"."endpoint" IS 'The endpoint it goes to. The endpoint may be gone — revoked —
+while this row remains, explaining what happened.';
+
+COMMENT ON COLUMN "push_deliveries"."generation" IS 'Credential revision this queued delivery follows.';
+
+COMMENT ON COLUMN "push_deliveries"."person" IS 'The recipient, denormalized from the notification.';
+
+COMMENT ON COLUMN "push_deliveries"."platform" IS 'The endpoint''s platform, denormalized: the row outlives its
+endpoint.';
+
+COMMENT ON COLUMN "push_deliveries"."state" IS 'Where the delivery stands, as [`DeliveryState`]''s names.';
+
+COMMENT ON COLUMN "push_deliveries"."reason" IS 'Why it left the queue, as [`DeliveryReason`]''s names, when it did.';
+
+COMMENT ON COLUMN "push_deliveries"."attempts" IS 'How many times it has been attempted, the first try included.';
+
+COMMENT ON COLUMN "push_deliveries"."next_attempt_at" IS 'When the next attempt may run, while it waits or retries.';
+
+COMMENT ON COLUMN "push_deliveries"."attempted_at" IS 'When the last attempt ran.';
+
+COMMENT ON COLUMN "push_deliveries"."finished_at" IS 'When it left the queue for good: accepted, rejected, or skipped.';
+
+CREATE TABLE "push_endpoints" (
+	"id" uuid NOT NULL,
+	"person" uuid NOT NULL,
+	"platform" varchar(16) NOT NULL,
+	"credential" varchar(6144) NOT NULL,
+	"generation" bigint NOT NULL,
+	"fingerprint" text NOT NULL,
+	"invalidated_at" timestamptz,
+	"created_at" timestamptz NOT NULL,
+	CONSTRAINT "push_endpoints_pkey" PRIMARY KEY ("id"),
+	CONSTRAINT "push_endpoints_fingerprint_length" CHECK (char_length("fingerprint") >= 64 AND char_length("fingerprint") <= 64)
+);
+
+CREATE INDEX "push_endpoints_person_idx" ON "push_endpoints" ("person");
+
+CREATE UNIQUE INDEX "push_endpoints_fingerprint_key" ON "push_endpoints" ("fingerprint");
+
+COMMENT ON TABLE "push_endpoints" IS 'One enrolled endpoint: the opaque record of a device or browser the
+person''s app pushed them to enroll. The credential is never in it.';
+
+COMMENT ON COLUMN "push_endpoints"."id" IS 'An opaque id the service assigns: what lists and revocations name.';
+
+COMMENT ON COLUMN "push_endpoints"."person" IS 'The person whose endpoint it is, from their forwarded identity.';
+
+COMMENT ON COLUMN "push_endpoints"."platform" IS 'Which platform''s service this speaks to.';
+
+COMMENT ON COLUMN "push_endpoints"."credential" IS 'The platform''s credential, verbatim: secret material, left out of
+the audit log and redacted in debug output.';
+
+COMMENT ON COLUMN "push_endpoints"."generation" IS 'Monotonic credential revision, advanced on rotation or reactivation.';
+
+COMMENT ON COLUMN "push_endpoints"."fingerprint" IS 'A SHA-256 of the endpoint''s platform and destination — its token,
+or a Web Push subscription''s endpoint URL — in hex: how the service
+knows two enrollments name the same endpoint without ever searching
+on the secret itself. It deliberately does not cover a Web Push
+subscription''s keys, so a browser that rotates them keeps its
+endpoint and its owner.';
+
+COMMENT ON COLUMN "push_endpoints"."invalidated_at" IS 'When the provider said this credential no longer exists: expired,
+uninstalled, or unregistered. The endpoint stays as an explainable
+record and takes no further deliveries.';
+
 CREATE TABLE "sends" (
 	"idempotency_key" text NOT NULL,
 	"intent" text NOT NULL,
@@ -115,10 +216,10 @@ COMMENT ON TABLE "wakes" IS 'One wake row per person: the clock event for their 
 
 The inbox and badge queries read the reader''s wake row and ignore its
 value, which puts `wakes` in their read set; when a send''s schedule
-turns — it becomes due, or it expires — the [`wake_send`] job writes
-the row of everyone the send reached, and each of their open
-subscriptions re-runs with a fresh `now`, so a scheduled item appears
-and an expired one leaves without any other write. A wake that changes
+turns — it becomes visible, or it expires — the [`wake_send`] job
+writes the row of everyone the send reached, and each of their open
+subscriptions re-runs with a fresh `now`, so a new item appears and an
+expired one leaves without any other write. A wake that changes
 nothing (the send was cancelled, the row dismissed) re-runs the query
 and sends nothing, because its result didn''t change.
 
@@ -130,97 +231,6 @@ else of the row.';
 
 COMMENT ON COLUMN "wakes"."woken_at" IS 'When they were last woken. The value is a record for operators,
 not something a query answers from.';
-
-CREATE TABLE "push_endpoints" (
-	"id" uuid NOT NULL,
-	"person" uuid NOT NULL,
-	"platform" varchar(16) NOT NULL,
-	"credential" varchar(6144) NOT NULL,
-	"fingerprint" varchar(64) NOT NULL,
-	"invalidated_at" timestamptz,
-	"created_at" timestamptz NOT NULL,
-	CONSTRAINT "push_endpoints_pkey" PRIMARY KEY ("id")
-);
-
-CREATE UNIQUE INDEX "push_endpoints_fingerprint_key" ON "push_endpoints" ("fingerprint");
-
-CREATE INDEX "push_endpoints_person_idx" ON "push_endpoints" ("person");
-
-COMMENT ON TABLE "push_endpoints" IS 'One enrolled endpoint: the opaque record of a device or browser the
-person''s app pushed them to enroll. The credential is never in it.';
-
-COMMENT ON COLUMN "push_endpoints"."id" IS 'An opaque id the service assigns: what lists and revocations name.';
-
-COMMENT ON COLUMN "push_endpoints"."person" IS 'The person whose endpoint it is, from their forwarded identity.';
-
-COMMENT ON COLUMN "push_endpoints"."platform" IS 'Which platform''s service this speaks to.';
-
-COMMENT ON COLUMN "push_endpoints"."credential" IS 'The platform''s credential, verbatim: secret material, left out of
-the audit log and redacted in debug output.';
-
-COMMENT ON COLUMN "push_endpoints"."fingerprint" IS 'A SHA-256 of the credential, in hex: how the service knows a
-credential is already enrolled, without ever searching on the
-secret itself.';
-
-COMMENT ON COLUMN "push_endpoints"."invalidated_at" IS 'When the provider said this credential no longer exists: expired,
-uninstalled, or unregistered. The endpoint stays as an explainable
-record and takes no further deliveries.';
-
-CREATE TABLE "push_deliveries" (
-	"id" uuid NOT NULL,
-	"notification" uuid NOT NULL,
-	"send_key" varchar(255) NOT NULL,
-	"endpoint" uuid NOT NULL,
-	"person" uuid NOT NULL,
-	"platform" varchar(16) NOT NULL,
-	"state" varchar(16) NOT NULL,
-	"reason" varchar(32),
-	"attempts" bigint NOT NULL,
-	"next_attempt_at" timestamptz,
-	"attempted_at" timestamptz,
-	"finished_at" timestamptz,
-	"created_at" timestamptz NOT NULL,
-	CONSTRAINT "push_deliveries_pkey" PRIMARY KEY ("id")
-);
-
-CREATE UNIQUE INDEX "push_deliveries_notification_endpoint_key" ON "push_deliveries" ("notification", "endpoint");
-
-CREATE INDEX "push_deliveries_send_key_id_idx" ON "push_deliveries" ("send_key", "id");
-
-CREATE INDEX "push_deliveries_state_next_attempt_at_idx" ON "push_deliveries" ("state", "next_attempt_at");
-
-COMMENT ON TABLE "push_deliveries" IS 'One attempt''s record, per notification and endpoint: the durable
-delivery the push job works through, from enqueued to accepted,
-rejected, or skipped. Unique per pair, so a raced or repeated send
-cannot double-enroll an endpoint for a notification.
-
-Delivery is at-least-once: a retry after an answered-but-lost attempt
-can push twice, and the provider''s acceptance says it took the
-message, not that anyone saw it.';
-
-COMMENT ON COLUMN "push_deliveries"."notification" IS 'The inbox notification this delivery carries.';
-
-COMMENT ON COLUMN "push_deliveries"."send_key" IS 'The send that created it, for the app''s status pages.';
-
-COMMENT ON COLUMN "push_deliveries"."endpoint" IS 'The endpoint it goes to. The endpoint may be gone — revoked —
-while this row remains, explaining what happened.';
-
-COMMENT ON COLUMN "push_deliveries"."person" IS 'The recipient, denormalized from the notification.';
-
-COMMENT ON COLUMN "push_deliveries"."platform" IS 'The endpoint''s platform, denormalized: the row outlives its
-endpoint.';
-
-COMMENT ON COLUMN "push_deliveries"."state" IS 'Where the delivery stands, as [`DeliveryState`][''s names.';
-
-COMMENT ON COLUMN "push_deliveries"."reason" IS 'Why it left the queue, as [`DeliveryReason`][''s names, when it did.';
-
-COMMENT ON COLUMN "push_deliveries"."attempts" IS 'How many times it has been attempted, the first try included.';
-
-COMMENT ON COLUMN "push_deliveries"."next_attempt_at" IS 'When the next attempt may run, while it waits or retries.';
-
-COMMENT ON COLUMN "push_deliveries"."attempted_at" IS 'When the last attempt ran.';
-
-COMMENT ON COLUMN "push_deliveries"."finished_at" IS 'When it left the queue for good: accepted, rejected, or skipped.';
 
 CREATE TABLE "live"."changes" (
 	"seq" bigint NOT NULL,

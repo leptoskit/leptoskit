@@ -497,7 +497,7 @@ fn classify(response: &WireResponse) -> Outcome {
 			// Only the error detail that says the registration token is
 			// gone may invalidate the endpoint: a plain 404 on the send
 			// URL is the operator's project naming, not a dead device.
-			if status(response).as_deref() == Some("UNREGISTERED") {
+			if unregistered(response) {
 				return Outcome::Ended {
 					reason: DeliveryReason::Unregistered,
 					invalidate: true,
@@ -510,7 +510,7 @@ fn classify(response: &WireResponse) -> Outcome {
 			// A registration token the project doesn't know is dead
 			// here; a payload-shaped 400 is the send's own, and the
 			// endpoint stays.
-			if status(response).as_deref() == Some("UNREGISTERED") {
+			if unregistered(response) {
 				return Outcome::Ended {
 					reason: DeliveryReason::Unregistered,
 					invalidate: true,
@@ -545,16 +545,21 @@ fn classify(response: &WireResponse) -> Outcome {
 	}
 }
 
-/// A provider answer's status string, when its body is the error object
-/// FCM answers with.
-fn status(response: &WireResponse) -> Option<String> {
-	let parsed = serde_json::from_slice::<serde_json::Value>(response.body.trim_ascii()).ok()?;
+/// Only an FCM-specific detail identifies an unregistered token.
+fn unregistered(response: &WireResponse) -> bool {
+	let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(response.body.trim_ascii()) else {
+		return false;
+	};
 
-	parsed
-		.get("error")?
-		.get("status")?
-		.as_str()
-		.map(str::to_owned)
+	parsed["error"]["details"]
+		.as_array()
+		.is_some_and(|details| {
+			details.iter().any(|detail| {
+				detail["@type"].as_str()
+					== Some("type.googleapis.com/google.firebase.fcm.v1.FcmError")
+					&& detail["errorCode"].as_str() == Some("UNREGISTERED")
+			})
+		})
 }
 
 /// A `Retry-After` header as a delay, capped at the engine's ceiling.
@@ -575,4 +580,33 @@ fn retry_after(response: &WireResponse) -> Option<Duration> {
 	Some(Duration::from_secs(
 		seconds.min(crate::push::MAX_RETRY_DELAY_SECS) as u64,
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn unregistered_requires_an_fcm_typed_detail() {
+		let response = |body: &str| {
+			WireResponse {
+				status: 404,
+				headers: Vec::new(),
+				body: body.as_bytes().to_vec(),
+			}
+		};
+
+		assert!(unregistered(&response(
+			r#"{"error":{"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}"#
+		)));
+		assert!(!unregistered(&response(
+			r#"{"error":{"status":"NOT_FOUND"}}"#
+		)));
+		assert!(!unregistered(&response(
+			r#"{"error":{"details":[{"errorCode":"UNREGISTERED"}]}}"#
+		)));
+		assert!(!unregistered(&response(
+			r#"{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","errorCode":"UNREGISTERED"}]}}"#
+		)));
+	}
 }

@@ -3,10 +3,10 @@
 --
 -- loses data: every row in `category_preferences` is deleted
 -- loses data: every row in `notifications` is deleted
+-- loses data: every row in `push_deliveries` is deleted
+-- loses data: every row in `push_endpoints` is deleted
 -- loses data: every row in `sends` is deleted
 -- loses data: every row in `wakes` is deleted
--- loses data: every row in `push_endpoints` is deleted
--- loses data: every row in `push_deliveries` is deleted
 -- loses data: every row in `live.changes` is deleted
 -- loses data: every row in `live.commits` is deleted
 -- loses data: every row in `live.pending` is deleted
@@ -27,10 +27,10 @@ DROP TRIGGER "live_capture" ON "rpc"."jobs";
 
 DROP TABLE "category_preferences",
 "notifications",
+"push_deliveries",
+"push_endpoints",
 "sends",
 "wakes",
-"push_endpoints",
-"push_deliveries",
 "live"."changes",
 "live"."commits",
 "live"."pending",

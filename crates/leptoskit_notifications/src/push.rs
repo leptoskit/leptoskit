@@ -30,10 +30,8 @@ use serde::Serialize;
 /// a re-registration of a held credential is idempotent.
 pub const MAX_ENDPOINTS: usize = 10;
 
-/// How many of a person's invalidated endpoints stay as explainable
-/// history. Older ones are deleted as new enrollments come in, so the
-/// table can't grow without bound however often a device churns; the
-/// delivery rows keep the full story either way.
+/// Additional invalidated entries allowed per endpoint-list page. Ownership
+/// records stay until explicit revocation, even after provider invalidation.
 pub const MAX_ENDPOINT_HISTORY: usize = 10;
 
 /// The longest APNs device token, in hex characters. Tokens are 64 today;
@@ -443,6 +441,8 @@ pub struct PushEndpoint {
 	/// the audit log and redacted in debug output.
 	#[db(secret, max_len = 6_144)]
 	pub credential: String,
+	/// Monotonic credential revision, advanced on rotation or reactivation.
+	pub generation: i64,
 	/// A SHA-256 of the endpoint's platform and destination — its token,
 	/// or a Web Push subscription's endpoint URL — in hex: how the service
 	/// knows two enrollments name the same endpoint without ever searching
@@ -484,6 +484,8 @@ pub struct PushDelivery {
 	/// The endpoint it goes to. The endpoint may be gone — revoked —
 	/// while this row remains, explaining what happened.
 	pub endpoint: uuid::Uuid,
+	/// Credential revision this queued delivery follows.
+	pub generation: i64,
 	/// The recipient, denormalized from the notification.
 	pub person: uuid::Uuid,
 	/// The endpoint's platform, denormalized: the row outlives its
