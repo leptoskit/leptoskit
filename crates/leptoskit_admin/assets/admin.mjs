@@ -126,7 +126,14 @@ function prose(text) {
 	});
 }
 
-function confirmSheet(title, explanation) {
+/**
+ * A sheet that asks before doing something. `options.input` adds a text
+ * field ({ label, value, placeholder }); `options.mustMatch` keeps the
+ * button disabled until the field holds exactly that text, for what can't
+ * be undone; `options.choices` adds a list of radio buttons ({ value,
+ * label }). It resolves to `false`, or to `{ value, choice }`.
+ */
+function confirmSheet(title, explanation, options = {}) {
 	return new Promise((resolve) => {
 		const veil = document.createElement("div");
 		veil.setAttribute("data-testid", "confirm-sheet");
@@ -159,16 +166,88 @@ function confirmSheet(title, explanation) {
 		go.style.cssText =
 			"padding:8px 16px;border-radius:8px;border:1px solid var(--admin-button);background:var(--admin-button);color:var(--admin-button-text);font-weight:600;cursor:pointer;box-shadow:4px 4px 0 var(--admin-ember-warm)";
 		row.append(cancel, go);
-		card.append(heading, body, row);
+		card.append(heading, body);
+		const fieldStyle =
+			"padding:8px 12px;border-radius:8px;border:1px solid var(--admin-line-strong);background:var(--admin-surface);color:var(--admin-ink);font:14px var(--admin-font-sans)";
+		let choice = null;
+		if (options.choices?.length) {
+			const list = document.createElement("div");
+			list.setAttribute("role", "radiogroup");
+			list.style.cssText = "display:flex;flex-direction:column;gap:6px";
+			for (const [index, option] of options.choices.entries()) {
+				const label = document.createElement("label");
+				label.style.cssText =
+					"display:flex;gap:8px;align-items:center;cursor:pointer";
+				const radio = document.createElement("input");
+				radio.type = "radio";
+				radio.name = "confirm-choice";
+				radio.value = option.value;
+				radio.setAttribute("data-testid", `confirm-choice:${index}`);
+				if (index === 0) {
+					radio.checked = true;
+					choice = option.value;
+				}
+				radio.addEventListener("change", () => {
+					choice = option.value;
+					if (field) field.disabled = option.value !== "";
+				});
+				label.append(radio, document.createTextNode(option.label));
+				list.append(label);
+			}
+			card.append(list);
+		}
+		let field = null;
+		if (options.input) {
+			const label = document.createElement("label");
+			label.style.cssText =
+				"display:flex;flex-direction:column;gap:6px;font-weight:600;color:var(--admin-ink-2)";
+			label.textContent = options.input.label;
+			field = document.createElement("input");
+			field.type = "text";
+			field.value = options.input.value ?? "";
+			field.placeholder = options.input.placeholder ?? "";
+			field.setAttribute("data-testid", "confirm-input");
+			field.style.cssText = fieldStyle;
+			if (choice !== null && choice !== "") field.disabled = true;
+			label.append(field);
+			card.append(label);
+		}
+		const status = document.createElement("p");
+		status.setAttribute("role", "status");
+		status.setAttribute("data-testid", "confirm-status");
+		status.style.cssText = "margin:0;color:var(--admin-bad);font-size:13px";
+		card.append(status, row);
+		if (options.danger) {
+			go.style.background = "var(--admin-bad)";
+			go.style.borderColor = "var(--admin-bad)";
+			go.style.color = "#fff";
+			go.style.boxShadow = "none";
+		}
+		const check = () => {
+			if (options.mustMatch !== undefined) {
+				go.disabled = field?.value.trim() !== options.mustMatch;
+				go.style.opacity = go.disabled ? ".5" : "1";
+			}
+		};
+		field?.addEventListener("input", check);
+		check();
 		veil.append(card);
 		document.body.append(veil);
-		go.focus();
+		(field && !field.disabled ? field : go).focus();
 		const done = (answer) => {
 			veil.remove();
 			resolve(answer);
 		};
 		cancel.addEventListener("click", () => done(false));
-		go.addEventListener("click", () => done(true));
+		go.addEventListener("click", () => {
+			if (go.disabled) return;
+			done({ value: field?.value.trim() ?? "", choice });
+		});
+		field?.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" && !go.disabled) {
+				done({ value: field.value.trim(), choice });
+			}
+		});
 		veil.addEventListener("click", (event) => {
 			if (event.target === veil) {
 				done(false);
@@ -321,6 +400,413 @@ function followOperation() {
 	});
 }
 
+// Analytics -------------------------------------------------------------------
+
+const pageParams = () =>
+	Object.fromEntries(new URLSearchParams(location.search));
+
+/** Lines of each code block in the drawers, by drawer and block. */
+function drawerCode(scope) {
+	const code = new Map();
+	for (const drawer of scope.querySelectorAll('[data-testid^="drawer:"]')) {
+		const blocks = Array.from(drawer.querySelectorAll('[data-testid="code"]'))
+			.map((block) =>
+				new Set(
+					Array.from(block.querySelectorAll('[data-testid="code-text"]'))
+						.map((line) => line.textContent),
+				)
+			);
+		code.set(drawer.getAttribute("data-testid"), blocks);
+	}
+	return code;
+}
+
+let swapping = false;
+
+/**
+ * Fetches `href` and puts its page in place of this one, keeping the open
+ * drawer open and washing the lines of code that changed.
+ */
+async function swapTo(href, push) {
+	if (swapping) return false;
+	swapping = true;
+	try {
+		const response = await fetch(href, { credentials: "same-origin" });
+		if (!response.ok || response.redirected) {
+			location.assign(href);
+			return true;
+		}
+		const next = new DOMParser().parseFromString(
+			await response.text(),
+			"text/html",
+		);
+		const main = byId("main");
+		const nextMain = next.querySelector('[data-testid="main"]');
+		if (!main || !nextMain) {
+			location.assign(href);
+			return true;
+		}
+		const before = drawerCode(document);
+		main.replaceChildren(...nextMain.childNodes);
+		const aside = byId("drawer-aside");
+		const nextAside = next.querySelector('[data-testid="drawer-aside"]');
+		if (aside && nextAside) {
+			aside.replaceChildren(...nextAside.childNodes);
+		}
+		const style = document.querySelector("head style");
+		const nextStyle = next.querySelector("head style");
+		if (style && nextStyle && style.textContent !== nextStyle.textContent) {
+			style.textContent = nextStyle.textContent;
+		}
+		document.title = next.title;
+		for (const [drawer, blocks] of drawerCode(document)) {
+			const old = before.get(drawer);
+			if (!old) continue;
+			const panel = byId(drawer);
+			const rendered = Array.from(
+				panel?.querySelectorAll('[data-testid="code"]') ?? [],
+			);
+			for (const [index, block] of rendered.entries()) {
+				const seen = old[index];
+				if (!seen) continue;
+				for (
+					const line of block.querySelectorAll('[data-testid^="code-line"]')
+				) {
+					const text = line.querySelector('[data-testid="code-text"]')
+						?.textContent;
+					if (text && text.trim() && !seen.has(text)) {
+						line.setAttribute("data-changed", "");
+					}
+				}
+			}
+		}
+		if (push) {
+			history.pushState(null, "", href + location.hash);
+		}
+		return true;
+	} catch {
+		location.assign(href);
+		return true;
+	} finally {
+		swapping = false;
+	}
+}
+
+/** Whether a link only changes this page's query, so it can swap in place. */
+/** Closes every open builder menu. */
+function closeMenus() {
+	for (
+		const toggle of document.querySelectorAll(
+			'[data-testid="menu-toggle"][aria-expanded="true"]',
+		)
+	) {
+		toggle.setAttribute("aria-expanded", "false");
+	}
+}
+
+function swappable(link) {
+	if (!(link instanceof HTMLAnchorElement) || !byId("live-refresh")) {
+		return false;
+	}
+	const url = new URL(link.href, location.href);
+	return url.origin === location.origin && url.pathname === location.pathname;
+}
+
+window.addEventListener("popstate", () => {
+	if (byId("live-refresh")) {
+		swapTo(location.href, false);
+	}
+});
+
+/** A sparkline's line and dot, redrawn from `values`. */
+function redrawSpark(spark, values) {
+	if (!spark || values.length < 2) return;
+	const highest = Math.max(...values, Number.EPSILON);
+	const points = values.map((value, index) => [
+		(index / (values.length - 1)) * 97,
+		25 - (value / highest) * 22,
+	]);
+	const path = spark.querySelector("path");
+	if (path) {
+		path.setAttribute(
+			"d",
+			points.map(([x, y], index) =>
+				`${index ? "L" : "M"}${x.toFixed(2)} ${y.toFixed(2)}`
+			)
+				.join(" "),
+		);
+	}
+	const dot = spark.lastElementChild;
+	if (dot && dot.tagName !== "svg") {
+		const [x, y] = points[points.length - 1];
+		dot.style.left = `${x.toFixed(1)}%`;
+		dot.style.top = `${((y / 28) * 100).toFixed(1)}%`;
+	}
+}
+
+let paused = false;
+const waiting = [];
+let lastLatest = null;
+let lastRefresh = Date.now();
+
+function filterLive() {
+	const filter = byId("live-filter")?.value.trim().toLowerCase() ?? "";
+	for (const row of all('[data-testid="live-event"]')) {
+		const name = (row.getAttribute("aria-description") ?? "").toLowerCase();
+		row.toggleAttribute(
+			"data-filtered",
+			filter !== "" && !name.includes(filter),
+		);
+	}
+}
+
+function addLiveEvent(event) {
+	const list = byId("live-events");
+	const template = list?.querySelector('[data-testid="live-event"]');
+	if (!list || !template) {
+		location.reload();
+		return;
+	}
+	const row = template.cloneNode(true);
+	row.setAttribute("aria-description", event.name);
+	const at = new Date(event.timestamp);
+	const time = Number.isNaN(at.getTime()) ? "" : at.toISOString().slice(11, 19);
+	const toggle = row.querySelector('[data-testid="how-toggle"]');
+	toggle?.setAttribute("aria-expanded", "false");
+	toggle?.setAttribute(
+		"aria-label",
+		`${event.name} from ${event.distinct_id} at ${time}`,
+	);
+	const cells = toggle?.firstElementChild?.children ?? [];
+	if (cells[0]) cells[0].textContent = time;
+	const title = cells[1];
+	if (title) {
+		const name = title.firstElementChild;
+		if (name) name.textContent = event.name;
+		const badge = title.children[1];
+		if (badge && !event.typed) badge.remove();
+	}
+	if (cells[2]) cells[2].textContent = event.properties?.$pathname ?? "";
+	if (cells[3]) cells[3].textContent = event.distinct_id;
+	const panel = row.querySelector('[data-testid="how-panel"]');
+	const code = panel?.querySelector('[data-testid="code"]');
+	const line = code?.querySelector('[data-testid="code-line"]');
+	if (code && line) {
+		for (const old of code.querySelectorAll('[data-testid="code-line"]')) {
+			old.remove();
+		}
+		const copyButton = code.querySelector('[data-testid="copy"]');
+		for (
+			const text of JSON.stringify(event.properties ?? {}, null, 2).split("\n")
+		) {
+			const next = line.cloneNode(true);
+			const span = next.querySelector('[data-testid="code-text"]');
+			if (span) span.textContent = text;
+			code.insertBefore(next, copyButton);
+		}
+	}
+	list.prepend(row);
+	for (const extra of Array.from(list.children).slice(200)) {
+		extra.remove();
+	}
+	filterLive();
+}
+
+function followAnalytics() {
+	if (!byId("pulse-rate") || !("EventSource" in window)) {
+		return;
+	}
+	const tail = Boolean(byId("live-events"));
+	const source = new EventSource(
+		`${BASE}/api/analytics/live${tail ? "?events=1" : ""}`,
+	);
+	source.addEventListener("pulse", (message) => {
+		const pulse = JSON.parse(message.data);
+		const rate = byId("pulse-rate");
+		if (rate) rate.textContent = `${Math.round(pulse.per_second)}/s`;
+		byId("live-pulse")?.setAttribute(
+			"aria-label",
+			`Live events: ${pulse.per_second.toFixed(1)} a second`,
+		);
+		const dot = byId("pulse-dot");
+		if (dot) {
+			dot.style.background = pulse.status.state === "live"
+				? "var(--admin-ember)"
+				: "var(--admin-ink-3)";
+		}
+		redrawSpark(byId("pulse-spark"), pulse.seconds);
+		const liveRate = byId("live-rate");
+		if (liveRate) liveRate.textContent = `${pulse.per_second.toFixed(1)}/s`;
+		const minute = byId("live-minute");
+		if (minute) minute.textContent = pulse.per_minute.toLocaleString("en");
+		redrawSpark(byId("live-spark"), pulse.seconds);
+		// A page that draws from the data re-reads it when there's more, at
+		// most every ten seconds, unless someone is in the middle of something.
+		if (lastLatest === null) {
+			lastLatest = pulse.latest;
+		} else if (
+			pulse.latest > lastLatest && byId("live-refresh") &&
+			Date.now() - lastRefresh > 10_000 &&
+			!document.querySelector(
+				'[data-testid="how-toggle"][aria-expanded="true"],[data-testid="menu-toggle"][aria-expanded="true"]',
+			) &&
+			!byId("confirm-sheet") &&
+			!(document.activeElement instanceof HTMLInputElement)
+		) {
+			lastLatest = pulse.latest;
+			lastRefresh = Date.now();
+			swapTo(location.href, false);
+		}
+	});
+	if (tail) {
+		source.addEventListener("event", (message) => {
+			const event = JSON.parse(message.data);
+			if (paused) {
+				waiting.push(event);
+				const pause = byId("live-pause");
+				if (pause) pause.textContent = `Resume (${waiting.length})`;
+			} else {
+				addLiveEvent(event);
+			}
+		});
+	}
+}
+
+/** Which insight the page shows: its kind, saved id, and name. */
+function pageInsight() {
+	const [kind, id, ...name] = (
+		byId("save-insight")?.getAttribute("aria-description") ??
+			"web||Web overview"
+	).split("|");
+	return { kind, insight: id || null, name: name.join("|") };
+}
+
+async function saveInsight() {
+	const { kind, insight, name } = pageInsight();
+	const answer = await confirmSheet(
+		insight ? "Save changes" : "Save",
+		insight
+			? "Saves what the builder shows now over this insight. Dashboards that hold it update."
+			: "Saves this insight to the library, where anyone with the admin can open it.",
+		{ input: { label: "Name", value: name } },
+	);
+	if (!answer) return;
+	const result = await post(`${BASE}/api/analytics/insights`, {
+		kind,
+		insight,
+		name: answer.value,
+		params: pageParams(),
+	}).catch(() => ({ ok: false, data: null }));
+	if (result.ok && result.data?.href) {
+		location.assign(result.data.href);
+	} else {
+		notice(
+			result.data?.message ?? "The admin couldn't save it. Nothing changed.",
+		);
+	}
+}
+
+async function addToDashboard(button) {
+	const { kind, insight, name } = pageInsight();
+	const listed = await fetch(`${BASE}/api/analytics/dashboards`, {
+		credentials: "same-origin",
+	}).then((response) => response.json()).catch(() => ({ dashboards: [] }));
+	const choices = (listed.dashboards ?? []).map((dashboard) => ({
+		value: dashboard.id,
+		label: `${dashboard.name} (${dashboard.cards} card${
+			dashboard.cards === 1 ? "" : "s"
+		})`,
+	}));
+	choices.push({ value: "", label: "A new dashboard" });
+	const answer = await confirmSheet(
+		"Add to dashboard",
+		`Adds “${button.getAttribute("aria-description") ?? name}” as a card${
+			insight ? "" : ", saving it to the library first"
+		}.`,
+		{ choices, input: { label: "New dashboard's name", value: "Product" } },
+	);
+	if (!answer) return;
+	const result = await post(`${BASE}/api/analytics/dashboards`, {
+		kind,
+		insight,
+		name,
+		params: pageParams(),
+		dashboard: answer.choice || null,
+		dashboard_name: answer.choice ? null : answer.value,
+	}).catch(() => ({ ok: false, data: null }));
+	if (result.ok && result.data?.href) {
+		location.assign(result.data.href);
+	} else {
+		notice(
+			result.data?.message ?? "The admin couldn't add it. Nothing changed.",
+		);
+	}
+}
+
+async function exportPerson(button) {
+	const id = button.getAttribute("aria-description");
+	const answer = await confirmSheet(
+		"Export",
+		"Downloads everything stored about this person as JSON: their properties, ids, events, and sessions. Handle it as personal data.",
+	);
+	if (!answer) return;
+	const response = await fetch(`${BASE}/api/analytics/people/${id}/export`, {
+		credentials: "same-origin",
+	}).catch(() => null);
+	if (!response?.ok) {
+		notice("The admin couldn't export them.");
+		return;
+	}
+	const link = document.createElement("a");
+	link.href = URL.createObjectURL(await response.blob());
+	link.download = `person-${id}.json`;
+	link.click();
+	setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+async function deletePerson(button) {
+	const [id, ...name] = (button.getAttribute("aria-description") ?? "").split(
+		"|",
+	);
+	const confirmation = name.join("|");
+	const answer = await confirmSheet(
+		"Delete",
+		`Deletes this person, every id merged into them, and all their events and sessions, for good. Type \`${confirmation}\` to confirm.`,
+		{
+			input: { label: "Type their name to confirm", placeholder: confirmation },
+			mustMatch: confirmation,
+			danger: true,
+		},
+	);
+	if (!answer) return;
+	const result = await post(`${BASE}/api/analytics/people/${id}/delete`, {
+		confirm: answer.value,
+	}).catch(() => ({ ok: false, data: null }));
+	if (result.ok && result.data?.href) {
+		location.assign(result.data.href);
+	} else {
+		notice(
+			result.data?.message ??
+				"The admin couldn't delete them. Nothing was deleted.",
+		);
+	}
+}
+
+function searchPeople() {
+	const params = new URLSearchParams();
+	for (
+		const [key, id] of [
+			["search", "people-search"],
+			["property", "people-property"],
+			["value", "people-value"],
+		]
+	) {
+		const value = byId(id)?.value.trim();
+		if (value) params.set(key, value);
+	}
+	location.assign(`${BASE}/analytics/people${params.size ? `?${params}` : ""}`);
+}
+
 // Search ----------------------------------------------------------------------
 
 function searchTargets() {
@@ -377,6 +863,28 @@ function search(input) {
 // Wiring ----------------------------------------------------------------------
 
 document.addEventListener("click", async (event) => {
+	// A builder control only changes this page's query: fetch it in place.
+	const link = event.target instanceof Element
+		? event.target.closest("a[href]")
+		: null;
+	if (
+		link && event.button === 0 && !event.metaKey && !event.ctrlKey &&
+		!event.shiftKey && !event.altKey && swappable(link)
+	) {
+		event.preventDefault();
+		closeMenus();
+		await swapTo(link.href, true);
+		return;
+	}
+	// A press outside an open menu closes it.
+	if (
+		!(event.target instanceof Element &&
+			event.target.closest(
+				'[data-testid="menu-panel"],[data-testid="menu-toggle"]',
+			))
+	) {
+		closeMenus();
+	}
 	// The control pressed, not the decoration inside it (the Workings
 	// switch's track, a row's text).
 	const target = event.target instanceof Element
@@ -410,6 +918,14 @@ document.addEventListener("click", async (event) => {
 		event.preventDefault();
 		if (target.getAttribute("aria-busy") !== "true") {
 			await runAction(target);
+		}
+		return;
+	}
+	if (id.startsWith("ask-tab:")) {
+		const tab = id.slice("ask-tab:".length);
+		root.setAttribute("data-admin-ask", tab);
+		if (tab === "sql") {
+			preference({ kind: "use_note", note: "ask-sql" });
 		}
 		return;
 	}
@@ -488,6 +1004,41 @@ document.addEventListener("click", async (event) => {
 			}
 			break;
 		}
+		case "save-insight":
+			await saveInsight();
+			break;
+		case "add-to-dashboard":
+			await addToDashboard(target);
+			break;
+		case "person-export":
+			await exportPerson(target);
+			break;
+		case "person-delete":
+			await deletePerson(target);
+			break;
+		case "people-apply":
+			searchPeople();
+			break;
+		case "live-pause": {
+			paused = !paused;
+			target.setAttribute("aria-pressed", String(paused));
+			if (paused) {
+				target.textContent = "Resume";
+			} else {
+				target.textContent = "Pause";
+				for (const waited of waiting.splice(0)) {
+					addLiveEvent(waited);
+				}
+			}
+			preference({ kind: "use_note", note: "live-pause" });
+			break;
+		}
+		case "menu-toggle": {
+			const open = target.getAttribute("aria-expanded") !== "true";
+			closeMenus();
+			target.setAttribute("aria-expanded", String(open));
+			break;
+		}
 		case "how-toggle":
 			target.setAttribute(
 				"aria-expanded",
@@ -516,7 +1067,13 @@ document.addEventListener("keydown", (event) => {
 		return;
 	}
 	if (event.key === "Escape") {
-		if (root.hasAttribute("data-admin-menu")) {
+		if (
+			document.querySelector(
+				'[data-testid="menu-toggle"][aria-expanded="true"]',
+			)
+		) {
+			closeMenus();
+		} else if (root.hasAttribute("data-admin-menu")) {
 			root.removeAttribute("data-admin-menu");
 		} else if (root.hasAttribute("data-admin-drawer")) {
 			closeDrawer();
@@ -552,6 +1109,12 @@ document.addEventListener("input", (event) => {
 	) {
 		search(event.target);
 	}
+	if (
+		event.target instanceof HTMLInputElement &&
+		event.target.getAttribute("data-testid") === "live-filter"
+	) {
+		filterLive();
+	}
 });
 
 document.addEventListener("keydown", (event) => {
@@ -565,6 +1128,12 @@ document.addEventListener("keydown", (event) => {
 			location.assign(first.getAttribute("href"));
 		}
 	}
+	if (
+		event.key === "Enter" && event.target instanceof HTMLInputElement &&
+		(event.target.getAttribute("data-testid") ?? "").startsWith("people-")
+	) {
+		searchPeople();
+	}
 });
 
 // A link can open a card with its workings showing: `#workings=plan`.
@@ -577,3 +1146,4 @@ if (root.getAttribute("data-admin-drawer") === "plan" && !linked) {
 	preference({ kind: "use_note", note: "plan-workings" });
 }
 followOperation();
+followAnalytics();

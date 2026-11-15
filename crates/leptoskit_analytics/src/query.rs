@@ -353,21 +353,23 @@ pub struct FunnelsQuery {
 	pub test_accounts: Option<TestAccounts>,
 }
 
-/// Whether a cohort is everyone whose first-ever start event falls in the
-/// first period, or everyone who started there at all.
+/// Whether a cohort is everyone whose first-ever start event falls in its
+/// period, or everyone who started there at all.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RetentionKind {
-	/// People whose first start event ever falls in the first period.
+	/// People whose first start event ever falls in the cohort's period:
+	/// each person joins one cohort at most.
 	#[default]
 	FirstTime,
-	/// Everyone who started in the first period, whenever they first did.
+	/// Everyone who started in the cohort's period, whenever they first
+	/// did: a person joins every cohort they started in.
 	Recurring,
 }
 
-/// Who comes back: a cohort grid of the people who did the start event in
-/// the range's first period, and how many of them did the return event in
-/// each later period.
+/// Who comes back: a cohort grid with a row for each period the range
+/// holds, of the people who did the start event in it, and how many of
+/// them did the return event in each later period, up to the range's end.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RetentionQuery {
 	/// When it looks: the range bounds the cohorts.
@@ -376,14 +378,16 @@ pub struct RetentionQuery {
 	pub start_event: String,
 	/// The event that counts as coming back.
 	pub return_event: String,
-	/// First-time or recurring cohorts.
-	#[serde(default)]
+	/// First-time or recurring cohorts. Named `retention_kind` on the wire,
+	/// because [`Query`]'s own tag is `kind`.
+	#[serde(default, rename = "retention_kind")]
 	pub kind: RetentionKind,
 	/// How wide a cohort and each return period are: day or week.
 	#[serde(default)]
 	pub period: Interval,
-	/// How many return periods to follow each cohort into. Default: the
-	/// range holds, up to twelve.
+	/// How many return periods to follow each cohort into, at most: a
+	/// later cohort stops at the range's end. Default: as many as the range
+	/// holds after its first period, up to twelve.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub periods: Option<u32>,
 	/// Conditions on the events retention reads, both events'.
@@ -651,7 +655,8 @@ pub struct RetentionCohort {
 	/// How many people started here.
 	pub size: u64,
 	/// How many returned in the cohort's 0th, 1st, … later period. Index 0
-	/// is the start period itself.
+	/// is the start period itself; a later cohort's list is shorter, ending
+	/// where the range does.
 	pub returns: Vec<u64>,
 }
 
@@ -661,8 +666,9 @@ pub struct RetentionResult {
 	/// How wide a cohort is, as the query asked.
 	pub period: Interval,
 	pub kind: RetentionKind,
-	/// One cohort per period the range holds that anyone started in,
-	/// oldest first.
+	/// One cohort per period the range holds, oldest first, so a
+	/// [`ActorPoint::RetentionCell`]'s `start_period` indexes it. A period
+	/// nobody started in has a cohort of size 0.
 	pub cohorts: Vec<RetentionCohort>,
 }
 

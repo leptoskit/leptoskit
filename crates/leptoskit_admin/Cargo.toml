@@ -12,26 +12,32 @@ description = "One admin web app for a leptoskit site: analytics, infrastructure
 
 [dependencies]
 axum = { workspace = true }
+chrono = { workspace = true }
 futures = { workspace = true }
 leptos = { workspace = true, features = ["ssr"] }
 leptoskit = { workspace = true, features = ["web", "apm", "db"] }
+leptoskit_analytics = { workspace = true, features = ["service"] }
 leptoskit_auth = { workspace = true, features = ["axum", "oauth", "sqlite"] }
 leptoskit_config = { workspace = true }
 leptoskit_db = { workspace = true, features = ["sqlite"] }
 leptoskit_db_schema = { workspace = true }
 leptoskit_deploy_console = { workspace = true, features = ["server"] }
+leptoskit_rpc = { workspace = true, features = ["services"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "process", "sync", "time"] }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
 insta = { workspace = true }
+leptoskit_axum = { workspace = true }
 leptoskit_idp = { workspace = true, features = ["axum", "sqlite"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
 tower = { workspace = true, features = ["util"] }
 url = { workspace = true }
 

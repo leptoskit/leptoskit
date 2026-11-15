@@ -1,0 +1,955 @@
+---
+source: crates/leptoskit_admin/tests/analytics.rs
+expression: screen(html)
+---
+main [main]
+  div [notice] role=status
+  div [live-refresh]
+    "signed_up → note_created retention"
+    "Retention · new · updates live"
+    button [add-to-dashboard]
+      "Add to dashboard"
+    button [save-insight]
+      "Save"
+    a label="Last 7 days" href=/_leptoskit/admin/analytics/retention?days=7&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up
+      "Last 7 days"
+    a label="Last 14 days" href=/_leptoskit/admin/analytics/retention?days=14&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up
+      "Last 14 days"
+    a label="Last 30 days" href=/_leptoskit/admin/analytics/retention?days=30&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up
+      "Last 30 days"
+    a label="Last 90 days" href=/_leptoskit/admin/analytics/retention?days=90&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up
+      "Last 90 days"
+    a label="5 Oct – 1 Nov" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up&amp;to=2026-11-02 current=page
+      "5 Oct – 1 Nov"
+    div [builder]
+      "People who did"
+      "signed_up"
+      "struct"
+      button [menu-toggle]
+        "Change ▾"
+      div [menu-panel]
+        a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24pageview&amp;to=2026-11-02
+          "$pageview"
+          "20"
+        a [menu-item] label="note_created" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=note_created&amp;to=2026-11-02
+          "note_created"
+          "struct · 11"
+        a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=%24identify&amp;to=2026-11-02
+          "$identify"
+          "6"
+        a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_started&amp;to=2026-11-02
+          "checkout_started"
+          "struct · 4"
+        a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=payment_submitted&amp;to=2026-11-02
+          "payment_submitted"
+          "struct · 3"
+        a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=checkout_completed&amp;to=2026-11-02
+          "checkout_completed"
+          "struct · 2"
+      "and came back to do"
+      "note_created"
+      "struct"
+      button [menu-toggle]
+        "Change ▾"
+      div [menu-panel]
+        a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24pageview&amp;start=signed_up&amp;to=2026-11-02
+          "$pageview"
+          "20"
+        a [menu-item] label="signed_up" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=signed_up&amp;start=signed_up&amp;to=2026-11-02
+          "signed_up"
+          "struct · 6"
+        a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=%24identify&amp;start=signed_up&amp;to=2026-11-02
+          "$identify"
+          "6"
+        a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_started&amp;start=signed_up&amp;to=2026-11-02
+          "checkout_started"
+          "struct · 4"
+        a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=payment_submitted&amp;start=signed_up&amp;to=2026-11-02
+          "payment_submitted"
+          "struct · 3"
+        a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=checkout_completed&amp;start=signed_up&amp;to=2026-11-02
+          "checkout_completed"
+          "struct · 2"
+      "Counts"
+      div role=group label="Counts"
+        a label="First time" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up&amp;to=2026-11-02 current=page
+          "First time"
+        a label="Every time" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=recurring&amp;period=week&amp;return=note_created&amp;start=signed_up&amp;to=2026-11-02
+          "Every time"
+      "Period"
+      div role=group label="Period"
+        a label="Day" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=day&amp;return=note_created&amp;start=signed_up&amp;to=2026-11-02
+          "Day"
+        a label="Week" href=/_leptoskit/admin/analytics/retention?from=2026-10-05&amp;kind=first&amp;period=week&amp;return=note_created&amp;start=signed_up&amp;to=2026-11-02 current=page
+          "Week"
+      div [note:retention-cells]
+        "Each row is the people who started in that period. Press a cell to see who came back."
+        button [note-dismiss:retention-cells]
+          "Got it"
+    div [chart-card]
+      "signed_up → note_created"
+      "% of each cohort"
+      button [workings-tab:retention] label="Show workings: SignedUp → Retention"
+        div [mint-piece]
+        "Workings"
+        span [mint-source]
+          "SignedUp → Retention"
+      div role=table label="Retention by cohort"
+        "Cohort"
+        "People"
+        "Week 0"
+        "Week 1"
+        "Week 2"
+        "Week 3"
+        div [retention-mean]
+          "Mean"
+          "6"
+          "100%"
+          "67%"
+          "20%"
+          "0%"
+        "5 Oct"
+        "3"
+        a [retention-cell] label="Show the 3 people from the 5 Oct cohort who came back in week 0" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A0%2C%22return_period%22%3A0%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "100%"
+        a [retention-cell] label="Show the 2 people from the 5 Oct cohort who came back in week 1" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A0%2C%22return_period%22%3A1%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "67%"
+        a [retention-cell] label="Show the 1 person from the 5 Oct cohort who came back in week 2" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A0%2C%22return_period%22%3A2%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "33%"
+        "0%"
+        "12 Oct"
+        "2"
+        a [retention-cell] label="Show the 2 people from the 12 Oct cohort who came back in week 0" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A1%2C%22return_period%22%3A0%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "100%"
+        a [retention-cell] label="Show the 1 person from the 12 Oct cohort who came back in week 1" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A1%2C%22return_period%22%3A1%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "50%"
+        "0%"
+        "19 Oct"
+        "1"
+        a [retention-cell] label="Show the 1 person from the 19 Oct cohort who came back in week 0" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A2%2C%22return_period%22%3A0%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "100%"
+        a [retention-cell] label="Show the 1 person from the 19 Oct cohort who came back in week 1" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Fretention%3Ffrom%3D2026-10-05%26kind%3Dfirst%26period%3Dweek%26return%3Dnote_created%26start%3Dsigned_up%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22retention%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22start_event%22%3A%22signed_up%22%2C%22return_event%22%3A%22note_created%22%2C%22retention_kind%22%3A%22first_time%22%2C%22period%22%3A%22week%22%7D%2C%22point%22%3A%7B%22point%22%3A%22retention_cell%22%2C%22start_period%22%3A2%2C%22return_period%22%3A1%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "100%"
+        "26 Oct"
+        "0"
+        "0%"
+aside [drawer-aside] label="Workings"
+  div [drawer:retention] label="Workings: signed_up → note_created retention · Retention insight · live"
+    "Workings"
+    "signed_up → note_created retention · Retention insight · live"
+    button [workings-close] label="Close workings (W)"
+      "Close"
+    div [station:emit]
+      "Emit"
+      "the event catalogue"
+      "signed_up"
+      "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "#[derive(Event)]"
+        div [code-line]
+          "2"
+          span [code-text]
+            "struct"
+            "SignedUp"
+            "{"
+        div [code-line]
+          "3"
+          span [code-text]
+            "plan"
+            ":"
+            "String"
+            ","
+        div [code-line]
+          "4"
+          span [code-text]
+            "source"
+            ":"
+            "String"
+            ","
+        div [code-line]
+          "5"
+          span [code-text]
+            "}"
+        button [copy] label="Copy as Rust"
+          "Copy"
+    div [station:send]
+      "Send"
+      "the latest signed_up, re-encoded here"
+      "Typed events send no property names, so this one is 77 bytes instead of 196: 60.7% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "typed"
+            ","
+            "positional"
+            "77"
+            "bytes"
+        div [code-line]
+          "2"
+          span [code-text]
+            "JSON"
+            ","
+            "named"
+            "196"
+            "bytes"
+        div [code-line]
+          "3"
+          span [code-text]
+        div [code-line]
+          "4"
+          span [code-text]
+            "//"
+            "values"
+            "in"
+            "field"
+            "order"
+            ":"
+            "free"
+            ","
+            "pricing"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:store]
+      "Store"
+      "events, person_distinct_ids, person_overrides on sqlite"
+      "Events land in"
+      "events"
+      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "events"
+        div [code-line]
+          "2"
+          span [code-text]
+            "uuid"
+            "BLOB"
+        div [code-line]
+          "3"
+          span [code-text]
+            "name"
+            "TEXT"
+        div [code-line]
+          "4"
+          span [code-text]
+            "distinct_id"
+            "TEXT"
+        div [code-line]
+          "5"
+          span [code-text]
+            "person_id"
+            "BLOB"
+        div [code-line]
+          "6"
+          span [code-text]
+            "timestamp"
+            "TEXT"
+        div [code-line]
+          "7"
+          span [code-text]
+            "received_at"
+            "TEXT"
+        div [code-line]
+          "8"
+          span [code-text]
+            "session_id"
+            "BLOB"
+        div [code-line]
+          "9"
+          span [code-text]
+            "context_id"
+            "INTEGER"
+        div [code-line]
+          "10"
+          span [code-text]
+            "properties"
+            "TEXT"
+        div [code-line]
+          "11"
+          span [code-text]
+            "source"
+            "INTEGER"
+        div [code-line]
+          "12"
+          span [code-text]
+        div [code-line]
+          "13"
+          span [code-text]
+            "person_distinct_ids"
+        div [code-line]
+          "14"
+          span [code-text]
+            "distinct_id"
+            "TEXT"
+        div [code-line]
+          "15"
+          span [code-text]
+            "person_id"
+            "BLOB"
+        div [code-line]
+          "16"
+          span [code-text]
+            "created_at"
+            "TEXT"
+        div [code-line]
+          "17"
+          span [code-text]
+        div [code-line]
+          "18"
+          span [code-text]
+            "person_overrides"
+        div [code-line]
+          "19"
+          span [code-text]
+            "distinct_id"
+            "TEXT"
+        div [code-line]
+          "20"
+          span [code-text]
+            "person_id"
+            "BLOB"
+        div [code-line]
+          "21"
+          span [code-text]
+            "created_at"
+            "TEXT"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:ask]
+      "Ask"
+      "the query"
+      "Every insight is one value of the typed"
+      "Query"
+      "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
+      div role=tablist label="Ask as"
+        button [ask-tab:rust] role=tab
+          "Rust"
+        button [ask-tab:sql] role=tab
+          "SQL"
+        button [ask-tab:http] role=tab
+          "HTTP"
+      div [ask-panel:rust] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "use"
+              "leptoskit_analytics"
+              ":"
+              ":"
+              "query"
+              ":"
+              ":"
+              "*;"
+          div [code-line]
+            "2"
+            span [code-text]
+          div [code-line]
+            "3"
+            span [code-text]
+              "let"
+              "query"
+              "="
+              "Query"
+              ":"
+              ":"
+              "Retention(RetentionQuery"
+              "{"
+          div [code-line]
+            "4"
+            span [code-text]
+              "range"
+              ":"
+              "DateRange"
+              ":"
+              ":"
+              "between("
+              "\"2026-10-05T00:00:00Z\""
+              ","
+              "\"2026-11-02T00:00:00Z\""
+              ")"
+              ","
+          div [code-line]
+            "5"
+            span [code-text]
+              "start_event"
+              ":"
+              "\"signed_up\""
+              ".into()"
+              ","
+          div [code-line]
+            "6"
+            span [code-text]
+              "return_event"
+              ":"
+              "\"note_created\""
+              ".into()"
+              ","
+          div [code-line]
+            "7"
+            span [code-text]
+              "kind"
+              ":"
+              "RetentionKind"
+              ":"
+              ":"
+              "FirstTime"
+              ","
+          div [code-line]
+            "8"
+            span [code-text]
+              "period"
+              ":"
+              "Interval"
+              ":"
+              ":"
+              "Week"
+              ","
+          div [code-line]
+            "9"
+            span [code-text]
+              "periods"
+              ":"
+              "None"
+              ","
+          div [code-line]
+            "10"
+            span [code-text]
+              "filters"
+              ":"
+              "Vec"
+              ":"
+              ":"
+              "new()"
+              ","
+          div [code-line]
+            "11"
+            span [code-text]
+              "test_accounts"
+              ":"
+              "None"
+              ","
+          div [code-line]
+            "12"
+            span [code-text]
+              "}"
+              ");"
+          div [code-line]
+            "13"
+            span [code-text]
+          div [code-line]
+            "14"
+            span [code-text]
+              "//"
+              "From"
+              "the"
+              "app's"
+              "server"
+              ","
+              "as"
+              "the"
+              "app"
+              ":"
+          div [code-line]
+            "15"
+            span [code-text]
+              "let"
+              "answer"
+              "="
+              "rpc"
+              ":"
+              ":"
+              "client"
+              ":"
+              ":"
+              "call_as_app(Run"
+              "{"
+              "query"
+              "}"
+              ").await?;"
+          button [copy] label="Copy as Rust"
+            "Copy"
+      div [ask-panel:sql] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "--"
+              "retention"
+              "cohort"
+              "(sqlite)"
+          div [code-line]
+            "2"
+            span [code-text]
+              "SELECT"
+              "coalesce(COALESCE((SELECT"
+              "\"po\""
+              "."
+              "\"person_id\""
+          div [code-line]
+            "3"
+            span [code-text]
+              "FROM"
+              "\"person_overrides\""
+              "\"po\""
+          div [code-line]
+            "4"
+            span [code-text]
+              "WHERE"
+              "\"po\""
+              "."
+              "\"distinct_id\""
+              "="
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              ")"
+              ","
+              "\"events\""
+              "."
+              "\"person_id\""
+              ","
+              "(SELECT"
+              "\"pdi\""
+              "."
+              "\"person_id\""
+          div [code-line]
+            "5"
+            span [code-text]
+              "FROM"
+              "\"person_distinct_ids\""
+              "\"pdi\""
+          div [code-line]
+            "6"
+            span [code-text]
+              "WHERE"
+              "\"pdi\""
+              "."
+              "\"distinct_id\""
+              "="
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              "))"
+              ","
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              ")"
+              "AS"
+              "\"person\""
+              ","
+              "strftime('%Y-%m-%dT00"
+              ":"
+              "00"
+              ":"
+              "00'"
+              ","
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ","
+              "?4"
+              ","
+              "'-6"
+              "days'"
+              ","
+              "'weekday"
+              "1')"
+              "AS"
+              "\"period\""
+          div [code-line]
+            "7"
+            span [code-text]
+              "FROM"
+              "\"events\""
+          div [code-line]
+            "8"
+            span [code-text]
+              "WHERE"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ">"
+              "="
+              "?1"
+          div [code-line]
+            "9"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              "<"
+              "?2"
+          div [code-line]
+            "10"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"name\""
+              "="
+              "?3"
+          div [code-line]
+            "11"
+            span [code-text]
+              "GROUP"
+              "BY"
+              "\"person\""
+              ","
+              "\"period\""
+          div [code-line]
+            "12"
+            span [code-text]
+              "ORDER"
+              "BY"
+              "\"person\""
+              ","
+              "\"period\""
+          div [code-line]
+            "13"
+            span [code-text]
+              "LIMIT"
+              "100000"
+          div [code-line]
+            "14"
+            span [code-text]
+              "--"
+              "bound"
+              ":"
+              "\"1970-01-01T00:00:00.000Z\""
+              ","
+              "\"2026-11-02T00:00:00.000Z\""
+              ","
+              "\"signed_up\""
+              ","
+              "\"+0 seconds\""
+          div [code-line]
+            "15"
+            span [code-text]
+          div [code-line]
+            "16"
+            span [code-text]
+              "--"
+              "retention"
+              "returns"
+              "(sqlite)"
+          div [code-line]
+            "17"
+            span [code-text]
+              "SELECT"
+              "coalesce(COALESCE((SELECT"
+              "\"po\""
+              "."
+              "\"person_id\""
+          div [code-line]
+            "18"
+            span [code-text]
+              "FROM"
+              "\"person_overrides\""
+              "\"po\""
+          div [code-line]
+            "19"
+            span [code-text]
+              "WHERE"
+              "\"po\""
+              "."
+              "\"distinct_id\""
+              "="
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              ")"
+              ","
+              "\"events\""
+              "."
+              "\"person_id\""
+              ","
+              "(SELECT"
+              "\"pdi\""
+              "."
+              "\"person_id\""
+          div [code-line]
+            "20"
+            span [code-text]
+              "FROM"
+              "\"person_distinct_ids\""
+              "\"pdi\""
+          div [code-line]
+            "21"
+            span [code-text]
+              "WHERE"
+              "\"pdi\""
+              "."
+              "\"distinct_id\""
+              "="
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              "))"
+              ","
+              "\"events\""
+              "."
+              "\"distinct_id\""
+              ")"
+              "AS"
+              "\"person\""
+              ","
+              "strftime('%Y-%m-%dT00"
+              ":"
+              "00"
+              ":"
+              "00'"
+              ","
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ","
+              "?4"
+              ","
+              "'-6"
+              "days'"
+              ","
+              "'weekday"
+              "1')"
+              "AS"
+              "\"period\""
+          div [code-line]
+            "22"
+            span [code-text]
+              "FROM"
+              "\"events\""
+          div [code-line]
+            "23"
+            span [code-text]
+              "WHERE"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ">"
+              "="
+              "?1"
+          div [code-line]
+            "24"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              "<"
+              "?2"
+          div [code-line]
+            "25"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"name\""
+              "="
+              "?3"
+          div [code-line]
+            "26"
+            span [code-text]
+              "GROUP"
+              "BY"
+              "\"person\""
+              ","
+              "\"period\""
+          div [code-line]
+            "27"
+            span [code-text]
+              "ORDER"
+              "BY"
+              "\"person\""
+              ","
+              "\"period\""
+          div [code-line]
+            "28"
+            span [code-text]
+              "LIMIT"
+              "100000"
+          div [code-line]
+            "29"
+            span [code-text]
+              "--"
+              "bound"
+              ":"
+              "\"2026-10-05T00:00:00.000Z\""
+              ","
+              "\"2026-11-02T00:00:00.000Z\""
+              ","
+              "\"note_created\""
+              ","
+              "\"+0 seconds\""
+          button [copy] label="Copy as SQL"
+            "Copy"
+      div [ask-panel:http] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "curl"
+              "-X"
+              "POST"
+              "http"
+              ":"
+              "//127.0.0.1"
+              ":"
+              "<port>/_leptoskit/services/analytics/rpc/run"
+              "\\"
+          div [code-line]
+            "2"
+            span [code-text]
+              "-H"
+              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+              "\\"
+          div [code-line]
+            "3"
+            span [code-text]
+              "-H"
+              "\"content-type: application/json\""
+              "\\"
+          div [code-line]
+            "4"
+            span [code-text]
+              "-d"
+              "@-"
+              "<<'JSON'"
+          div [code-line]
+            "5"
+            span [code-text]
+              "{"
+          div [code-line]
+            "6"
+            span [code-text]
+              "\"query\""
+              ":"
+              "{"
+          div [code-line]
+            "7"
+            span [code-text]
+              "\"kind\""
+              ":"
+              "\"retention\""
+              ","
+          div [code-line]
+            "8"
+            span [code-text]
+              "\"period\""
+              ":"
+              "\"week\""
+              ","
+          div [code-line]
+            "9"
+            span [code-text]
+              "\"range\""
+              ":"
+              "{"
+          div [code-line]
+            "10"
+            span [code-text]
+              "\"from\""
+              ":"
+              "\"2026-10-05T00:00:00Z\""
+              ","
+          div [code-line]
+            "11"
+            span [code-text]
+              "\"to\""
+              ":"
+              "\"2026-11-02T00:00:00Z\""
+          div [code-line]
+            "12"
+            span [code-text]
+              "}"
+              ","
+          div [code-line]
+            "13"
+            span [code-text]
+              "\"retention_kind\""
+              ":"
+              "\"first_time\""
+              ","
+          div [code-line]
+            "14"
+            span [code-text]
+              "\"return_event\""
+              ":"
+              "\"note_created\""
+              ","
+          div [code-line]
+            "15"
+            span [code-text]
+              "\"start_event\""
+              ":"
+              "\"signed_up\""
+          div [code-line]
+            "16"
+            span [code-text]
+              "}"
+          div [code-line]
+            "17"
+            span [code-text]
+              "}"
+          div [code-line]
+            "18"
+            span [code-text]
+              "JSON"
+          button [copy] label="Copy as shell"
+            "Copy"
+    div [station:draw]
+      "Draw"
+      "rows → chart"
+      "4 cohorts came back, each a row of returns per week. A cell is that period's returns over the cohort's size, shaded in one hue so darker means more stayed; the top row is the mean, weighted by each cohort's size."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "cohort"
+            "size"
+            "week0"
+            "week1"
+            "week2"
+            "week3"
+        div [code-line]
+          "2"
+          span [code-text]
+            "2026-10-05"
+            "3"
+            "3"
+            "2"
+            "1"
+            "0"
+        div [code-line]
+          "3"
+          span [code-text]
+            "2026-10-12"
+            "2"
+            "2"
+            "1"
+            "0"
+        div [code-line]
+          "4"
+          span [code-text]
+            "2026-10-19"
+            "1"
+            "1"
+            "1"
+        div [code-line]
+          "5"
+          span [code-text]
+            "2026-10-26"
+            "0"
+            "0"
+        button [copy] label="Copy as text"
+          "Copy"
+    button [copy-all]
+      "Copy all"
+    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+      "Open docs"

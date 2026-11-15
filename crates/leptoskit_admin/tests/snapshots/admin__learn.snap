@@ -1,6 +1,5 @@
 ---
 source: crates/leptoskit_admin/tests/admin.rs
-assertion_line: 356
 expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
 ---
 main [main]
@@ -8,9 +7,9 @@ main [main]
   "Learn"
   "Short lessons that check your real project, not a quiz."
   div [progress-mark] role=img label="Your mark: 0 of 3 pieces"
-  "1 down. 4 to go."
+  "1 down. 10 to go."
   span [progress]
-    "Finish a track and a piece of the mark lands. Infrastructure 1 of 5 · Analytics comes with its data."
+    "Finish a track and a piece of the mark lands. Analytics 0 of 6 · Infrastructure 1 of 5"
   div [up-next]
     "Up next"
     "5 min · Infrastructure"
@@ -21,8 +20,41 @@ main [main]
       "Continue in notes-production"
     a label="Read it here instead" href=/_leptoskit/admin/learn/infrastructure/plan-review-apply
       "Read it here instead"
-    "This lesson ticks itself once it's true of your projects."
+    "This lesson ticks itself once it's true of your data."
   div [grid-main]
+    "Analytics"
+    "0/6"
+    a [lesson:first-typed-event] label="Your first typed event: to do" href=/_leptoskit/admin/learn/analytics/first-typed-event
+      "○"
+      "Your first typed event"
+      "Check: an event with a Rust type arrived"
+      "4 min"
+    a [lesson:reading-a-trend] label="Reading a trend: to do" href=/_leptoskit/admin/learn/analytics/reading-a-trend
+      "○"
+      "Reading a trend"
+      "Check: you saved a trend"
+      "4 min"
+    a [lesson:building-a-funnel] label="Building a funnel: to do" href=/_leptoskit/admin/learn/analytics/building-a-funnel
+      "○"
+      "Building a funnel"
+      "Check: you saved a funnel of three steps or more"
+      "5 min"
+    a [lesson:retention-honestly] label="Retention, honestly: to do" href=/_leptoskit/admin/learn/analytics/retention-honestly
+      "○"
+      "Retention, honestly"
+      "Check: you saved a retention grid"
+      "4 min"
+    a [lesson:who-are-these-people] label="Who are these people?: to do" href=/_leptoskit/admin/learn/analytics/who-are-these-people
+      "○"
+      "Who are these people?"
+      "Check: someone's anonymous visits were merged into their account"
+      "3 min"
+    a [lesson:sql-when-you-need-it] label="SQL when you need it: to do" href=/_leptoskit/admin/learn/analytics/sql-when-you-need-it
+      "○"
+      "SQL when you need it"
+      "Check: you read a query's SQL in its Workings"
+      "3 min"
+    "These lessons check your real analytics, which the admin can't read: either no analytics service is connected, or it didn't answer. Analytics says which."
     "Infrastructure"
     "1/5"
     a [lesson:what-infra-describes] label="What [infra] describes: done" href=/_leptoskit/admin/learn/infrastructure/what-infra-describes
@@ -50,26 +82,6 @@ main [main]
       "Reading health"
       "Check: a health check passed"
       "5 min"
-    "Analytics"
-    "coming with Analytics"
-    "○"
-    "Your first typed event"
-    "coming with Analytics"
-    "○"
-    "Reading a trend"
-    "coming with Analytics"
-    "○"
-    "Building a funnel"
-    "coming with Analytics"
-    "○"
-    "Retention, honestly"
-    "coming with Analytics"
-    "○"
-    "Who are these people?"
-    "coming with Analytics"
-    "○"
-    "SQL when you need it"
-    "coming with Analytics"
     "Build with leptoskit"
     "in the book; not tracked here"
     a label="Builder components" href=https://leptoskit.dev/docs/guide/07-shared-components.html

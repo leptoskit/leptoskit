@@ -1,0 +1,76 @@
+---
+source: crates/leptoskit_admin/tests/admin.rs
+expression: "redact(&world, &regions(&outline(&html), &[\"main\", \"drawer-aside\"]))"
+---
+main [main]
+  div [notice] role=status
+  div [analytics-not-configured]
+    "Web analytics"
+    div [empty-state]
+      "Connect the admin to your analytics"
+      "The admin is its own app, so it reads your site's analytics the way your site's server does: from the analytics service, signed with the service's token. It hasn't been given either yet. Set both where the admin runs, then reload:"
+      div [code]
+        div [code-line]
+          span [code-text]
+            "# Wherever the admin runs: the main site's analytics service,"
+        div [code-line]
+          span [code-text]
+            "# at an address the admin can reach, and the token its server uses."
+        div [code-line]
+          span [code-text]
+            "export LEPTOSKIT_SERVICE_ANALYTICS_URL=http://127.0.0.1:4800"
+        div [code-line]
+          span [code-text]
+            "export LEPTOSKIT_SERVICE_ANALYTICS_TOKEN=…   # the same token as the site's server"
+        div [code-line]
+          span [code-text]
+            "lk admin serve --main-site https://notes.example"
+        button [copy] label="Copy as shell"
+          "Copy"
+      "The token is the app's: with it the admin can read every event, so keep it in the admin's environment, never in a page. AdminBuilder::analytics does the same from Rust."
+    "Then, from your app"
+    "once the service runs"
+    "Your app sends events with a Rust type for each, so a misspelled property fails when it compiles rather than in a chart:"
+    div [code]
+      div [code-line]
+        span [code-text]
+          "use leptoskit_analytics::Event;"
+      div [code-line]
+        span [code-text]
+          "use leptoskit_analytics::client::web;"
+      div [code-line]
+        span [code-text]
+      div [code-line]
+        span [code-text]
+          "#[derive(Event)]"
+      div [code-line]
+        span [code-text]
+          "struct SignedUp {"
+      div [code-line]
+        span [code-text]
+          "plan: String,"
+      div [code-line]
+        span [code-text]
+          "seats: u32,"
+      div [code-line]
+        span [code-text]
+          "}"
+      div [code-line]
+        span [code-text]
+      div [code-line]
+        span [code-text]
+          "web::init(web::Options::default());"
+      div [code-line]
+        span [code-text]
+          "web::capture_event(SignedUp {"
+      div [code-line]
+        span [code-text]
+          "plan: \"pro\".into(),"
+      div [code-line]
+        span [code-text]
+          "seats: 3,"
+      div [code-line]
+        span [code-text]
+          "});"
+      button [copy] label="Copy as Rust"
+        "Copy"

@@ -1,0 +1,818 @@
+---
+source: crates/leptoskit_admin/tests/analytics.rs
+expression: screen(html)
+---
+main [main]
+  div [notice] role=status
+  div [live-refresh]
+    "note_created, 5 Oct – 1 Nov"
+    "Trends · new · updates live"
+    button [add-to-dashboard]
+      "Add to dashboard"
+    button [save-insight]
+      "Save"
+    a label="Last 7 days" href=/_leptoskit/admin/analytics/trends?compare=1&amp;days=7&amp;interval=week&amp;math=total&amp;s0=note_created
+      "Last 7 days"
+    a label="Last 14 days" href=/_leptoskit/admin/analytics/trends?compare=1&amp;days=14&amp;interval=week&amp;math=total&amp;s0=note_created
+      "Last 14 days"
+    a label="Last 30 days" href=/_leptoskit/admin/analytics/trends?compare=1&amp;days=30&amp;interval=week&amp;math=total&amp;s0=note_created
+      "Last 30 days"
+    a label="Last 90 days" href=/_leptoskit/admin/analytics/trends?compare=1&amp;days=90&amp;interval=week&amp;math=total&amp;s0=note_created
+      "Last 90 days"
+    a label="5 Oct – 1 Nov" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02 current=page
+      "5 Oct – 1 Nov"
+    div [builder]
+      "Series"
+      div [series]
+        div [series:0]
+          "A"
+          "note_created"
+          "struct"
+          "Total count"
+        button [menu-toggle]
+          "+ Add series"
+        div [menu-panel]
+          a [menu-item] label="$pageview" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24pageview&amp;to=2026-11-02
+            "$pageview"
+            "20"
+          a [menu-item] label="signed_up" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=signed_up&amp;to=2026-11-02
+            "signed_up"
+            "struct · 6"
+          a [menu-item] label="$identify" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=%24identify&amp;to=2026-11-02
+            "$identify"
+            "6"
+          a [menu-item] label="checkout_started" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_started&amp;to=2026-11-02
+            "checkout_started"
+            "struct · 4"
+          a [menu-item] label="payment_submitted" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=payment_submitted&amp;to=2026-11-02
+            "payment_submitted"
+            "struct · 3"
+          a [menu-item] label="checkout_completed" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;s1=checkout_completed&amp;to=2026-11-02
+            "checkout_completed"
+            "struct · 2"
+      "Breakdown"
+      button [menu-toggle]
+        "None ▾"
+      div [menu-panel]
+        a [menu-item] label="None" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "None"
+        a [menu-item] label="words (from note_created)" href=/_leptoskit/admin/analytics/trends?by=words&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "words (from note_created)"
+        a [menu-item] label="shared (from note_created)" href=/_leptoskit/admin/analytics/trends?by=shared&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "shared (from note_created)"
+        a [menu-item] label="Channel (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Achannel&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Channel (session)"
+        a [menu-item] label="Browser (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Abrowser&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Browser (session)"
+        a [menu-item] label="Operating system (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aos&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Operating system (session)"
+        a [menu-item] label="Device (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Adevice_type&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Device (session)"
+        a [menu-item] label="Referrer (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Areferrer_domain&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Referrer (session)"
+        a [menu-item] label="UTM source (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Autm_source&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "UTM source (session)"
+        a [menu-item] label="Entry page (session)" href=/_leptoskit/admin/analytics/trends?by=session%3Aentry_pathname&amp;compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Entry page (session)"
+      div [note:breakdown]
+        "Breakdowns split each line by a property. Try one your struct sends, like plan: it comes straight from its fields."
+        button [note-dismiss:breakdown]
+          "Got it"
+      "Count"
+      div role=group label="Count"
+        a label="Total" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02 current=page
+          "Total"
+        a label="People" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=people&amp;s0=note_created&amp;to=2026-11-02
+          "People"
+        a label="Sessions" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=sessions&amp;s0=note_created&amp;to=2026-11-02
+          "Sessions"
+      "Interval"
+      div role=group label="Interval"
+        a label="Hour" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=hour&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Hour"
+        a label="Day" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=day&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Day"
+        a label="Week" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02 current=page
+          "Week"
+      "Compare"
+      div role=group label="Compare"
+        a label="Previous period" href=/_leptoskit/admin/analytics/trends?compare=1&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02 current=page
+          "Previous period"
+        a label="Off" href=/_leptoskit/admin/analytics/trends?compare=0&amp;from=2026-10-05&amp;interval=week&amp;math=total&amp;s0=note_created&amp;to=2026-11-02
+          "Off"
+    div [chart-card]
+      "note_created"
+      "weekly"
+      button [workings-tab:trends] label="Show workings: NoteCreated → Trends"
+        div [mint-piece]
+        "Workings"
+        span [mint-source]
+          "NoteCreated → Trends"
+      div [trend-chart] role=img label="note_created, 5 Oct – 1 Nov over time"
+        "note_created"
+        "4"
+        "3"
+        "2"
+        "1"
+        "0"
+        <vector>
+        <vector>
+        <vector>
+        div [chart-points]
+          a [chart-point] label="Show the people behind 5 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Ftrends%3Fcompare%3D1%26from%3D2026-10-05%26interval%3Dweek%26math%3Dtotal%26s0%3Dnote_created%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-05T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          a [chart-point] label="Show the people behind 12 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Ftrends%3Fcompare%3D1%26from%3D2026-10-05%26interval%3Dweek%26math%3Dtotal%26s0%3Dnote_created%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-12T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          a [chart-point] label="Show the people behind 19 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Ftrends%3Fcompare%3D1%26from%3D2026-10-05%26interval%3Dweek%26math%3Dtotal%26s0%3Dnote_created%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-19T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          a [chart-point] label="Show the people behind 26 Oct" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Ftrends%3Fcompare%3D1%26from%3D2026-10-05%26interval%3Dweek%26math%3Dtotal%26s0%3Dnote_created%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-26T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+        "note_created"
+        "1"
+        "5 Oct"
+        "19 Oct"
+        "26 Oct"
+      div [trend-table] role=table label="Each line's total"
+        "Series"
+        "Total"
+        "vs previous"
+        "People"
+        "note_created"
+        "11"
+        "—"
+        a label="People in the last bucket of note_created" href=/_leptoskit/admin/analytics/actors?back=%2F_leptoskit%2Fadmin%2Fanalytics%2Ftrends%3Fcompare%3D1%26from%3D2026-10-05%26interval%3Dweek%26math%3Dtotal%26s0%3Dnote_created%26to%3D2026-11-02&amp;q=%7B%22query%22%3A%7B%22kind%22%3A%22trends%22%2C%22range%22%3A%7B%22from%22%3A%222026-10-05T00%3A00%3A00Z%22%2C%22to%22%3A%222026-11-02T00%3A00%3A00Z%22%7D%2C%22interval%22%3A%22week%22%2C%22series%22%3A%5B%7B%22event%22%3A%22note_created%22%7D%5D%2C%22math%22%3A%22total%22%2C%22compare%22%3Atrue%7D%2C%22point%22%3A%7B%22point%22%3A%22bucket%22%2C%22series%22%3A0%2C%22bucket%22%3A%222026-10-26T00%3A00%3A00%22%7D%2C%22limit%22%3A50%2C%22offset%22%3A0%7D
+          "Latest →"
+aside [drawer-aside] label="Workings"
+  div [drawer:trends] label="Workings: note_created, 5 Oct – 1 Nov · Trends insight · live"
+    "Workings"
+    "note_created, 5 Oct – 1 Nov · Trends insight · live"
+    button [workings-close] label="Close workings (W)"
+      "Close"
+    div [station:emit]
+      "Emit"
+      "the event catalogue"
+      "note_created"
+      "is a Rust type in your app, so its properties are its fields and a misspelled one fails when it compiles. This is the shape the app last registered; the service doesn't record where in your code it's sent from."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "#[derive(Event)]"
+        div [code-line]
+          "2"
+          span [code-text]
+            "struct"
+            "NoteCreated"
+            "{"
+        div [code-line]
+          "3"
+          span [code-text]
+            "words"
+            ":"
+            "u32"
+            ","
+        div [code-line]
+          "4"
+          span [code-text]
+            "shared"
+            ":"
+            "bool"
+            ","
+        div [code-line]
+          "5"
+          span [code-text]
+            "}"
+        button [copy] label="Copy as Rust"
+          "Copy"
+    div [station:send]
+      "Send"
+      "the latest note_created, re-encoded here"
+      "Typed events send no property names, so this one is 85 bytes instead of 208: 59.1% smaller. Measured as one event alone in a batch; a real batch shares its context and session between events, so it shrinks further."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "typed"
+            ","
+            "positional"
+            "85"
+            "bytes"
+        div [code-line]
+          "2"
+          span [code-text]
+            "JSON"
+            ","
+            "named"
+            "208"
+            "bytes"
+        div [code-line]
+          "3"
+          span [code-text]
+        div [code-line]
+          "4"
+          span [code-text]
+            "//"
+            "values"
+            "in"
+            "field"
+            "order"
+            ":"
+            "180"
+            ","
+            "true"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:store]
+      "Store"
+      "events on sqlite"
+      "Events land in"
+      "events"
+      "as they arrive; sessions and persons are kept up to date beside them as each batch is stored, so a query reads tables, never a queue. These are the ones this query read."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "events"
+        div [code-line]
+          "2"
+          span [code-text]
+            "uuid"
+            "BLOB"
+        div [code-line]
+          "3"
+          span [code-text]
+            "name"
+            "TEXT"
+        div [code-line]
+          "4"
+          span [code-text]
+            "distinct_id"
+            "TEXT"
+        div [code-line]
+          "5"
+          span [code-text]
+            "person_id"
+            "BLOB"
+        div [code-line]
+          "6"
+          span [code-text]
+            "timestamp"
+            "TEXT"
+        div [code-line]
+          "7"
+          span [code-text]
+            "received_at"
+            "TEXT"
+        div [code-line]
+          "8"
+          span [code-text]
+            "session_id"
+            "BLOB"
+        div [code-line]
+          "9"
+          span [code-text]
+            "context_id"
+            "INTEGER"
+        div [code-line]
+          "10"
+          span [code-text]
+            "properties"
+            "TEXT"
+        div [code-line]
+          "11"
+          span [code-text]
+            "source"
+            "INTEGER"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:ask]
+      "Ask"
+      "the query"
+      "Every insight is one value of the typed"
+      "Query"
+      "enum. The SQL is what it became. It ran 2 statements on sqlite in <n> ms. Change the builder and these lines change with it."
+      div role=tablist label="Ask as"
+        button [ask-tab:rust] role=tab
+          "Rust"
+        button [ask-tab:sql] role=tab
+          "SQL"
+        button [ask-tab:http] role=tab
+          "HTTP"
+      div [ask-panel:rust] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "use"
+              "leptoskit_analytics"
+              ":"
+              ":"
+              "query"
+              ":"
+              ":"
+              "*;"
+          div [code-line]
+            "2"
+            span [code-text]
+          div [code-line]
+            "3"
+            span [code-text]
+              "let"
+              "query"
+              "="
+              "Query"
+              ":"
+              ":"
+              "Trends(TrendsQuery"
+              "{"
+          div [code-line]
+            "4"
+            span [code-text]
+              "range"
+              ":"
+              "DateRange"
+              ":"
+              ":"
+              "between("
+              "\"2026-10-05T00:00:00Z\""
+              ","
+              "\"2026-11-02T00:00:00Z\""
+              ")"
+              ","
+          div [code-line]
+            "5"
+            span [code-text]
+              "interval"
+              ":"
+              "Interval"
+              ":"
+              ":"
+              "Week"
+              ","
+          div [code-line]
+            "6"
+            span [code-text]
+              "series"
+              ":"
+              "vec!"
+              "["
+          div [code-line]
+            "7"
+            span [code-text]
+              "\"note_created\""
+              ".into()"
+              ","
+          div [code-line]
+            "8"
+            span [code-text]
+              "]"
+              ","
+          div [code-line]
+            "9"
+            span [code-text]
+              "filters"
+              ":"
+              "Vec"
+              ":"
+              ":"
+              "new()"
+              ","
+          div [code-line]
+            "10"
+            span [code-text]
+              "math"
+              ":"
+              "Math"
+              ":"
+              ":"
+              "Total"
+              ","
+          div [code-line]
+            "11"
+            span [code-text]
+              "breakdown"
+              ":"
+              "None"
+              ","
+          div [code-line]
+            "12"
+            span [code-text]
+              "compare"
+              ":"
+              "true"
+              ","
+          div [code-line]
+            "13"
+            span [code-text]
+              "test_accounts"
+              ":"
+              "None"
+              ","
+          div [code-line]
+            "14"
+            span [code-text]
+              "}"
+              ");"
+          div [code-line]
+            "15"
+            span [code-text]
+          div [code-line]
+            "16"
+            span [code-text]
+              "//"
+              "From"
+              "the"
+              "app's"
+              "server"
+              ","
+              "as"
+              "the"
+              "app"
+              ":"
+          div [code-line]
+            "17"
+            span [code-text]
+              "let"
+              "answer"
+              "="
+              "rpc"
+              ":"
+              ":"
+              "client"
+              ":"
+              ":"
+              "call_as_app(Run"
+              "{"
+              "query"
+              "}"
+              ").await?;"
+          button [copy] label="Copy as Rust"
+            "Copy"
+      div [ask-panel:sql] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "--"
+              "trends"
+              ":"
+              "note_created"
+              "(sqlite)"
+          div [code-line]
+            "2"
+            span [code-text]
+              "SELECT"
+              "strftime('%Y-%m-%dT00"
+              ":"
+              "00"
+              ":"
+              "00'"
+              ","
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ","
+              "?4"
+              ","
+              "'-6"
+              "days'"
+              ","
+              "'weekday"
+              "1')"
+              "AS"
+              "\"bucket\""
+              ","
+              "count(*)"
+              "AS"
+              "\"value\""
+          div [code-line]
+            "3"
+            span [code-text]
+              "FROM"
+              "\"events\""
+          div [code-line]
+            "4"
+            span [code-text]
+              "WHERE"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ">"
+              "="
+              "?1"
+          div [code-line]
+            "5"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              "<"
+              "?2"
+          div [code-line]
+            "6"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"name\""
+              "="
+              "?3"
+          div [code-line]
+            "7"
+            span [code-text]
+              "GROUP"
+              "BY"
+              "\"bucket\""
+          div [code-line]
+            "8"
+            span [code-text]
+              "ORDER"
+              "BY"
+              "\"bucket\""
+          div [code-line]
+            "9"
+            span [code-text]
+              "LIMIT"
+              "20000"
+          div [code-line]
+            "10"
+            span [code-text]
+              "--"
+              "bound"
+              ":"
+              "\"2026-10-05T00:00:00.000Z\""
+              ","
+              "\"2026-11-02T00:00:00.000Z\""
+              ","
+              "\"note_created\""
+              ","
+              "\"+0 seconds\""
+          div [code-line]
+            "11"
+            span [code-text]
+          div [code-line]
+            "12"
+            span [code-text]
+              "--"
+              "trends"
+              "previous"
+              ":"
+              "note_created"
+              "(sqlite)"
+          div [code-line]
+            "13"
+            span [code-text]
+              "SELECT"
+              "strftime('%Y-%m-%dT00"
+              ":"
+              "00"
+              ":"
+              "00'"
+              ","
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ","
+              "?4"
+              ","
+              "'-6"
+              "days'"
+              ","
+              "'weekday"
+              "1')"
+              "AS"
+              "\"bucket\""
+              ","
+              "count(*)"
+              "AS"
+              "\"value\""
+          div [code-line]
+            "14"
+            span [code-text]
+              "FROM"
+              "\"events\""
+          div [code-line]
+            "15"
+            span [code-text]
+              "WHERE"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              ">"
+              "="
+              "?1"
+          div [code-line]
+            "16"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"timestamp\""
+              "<"
+              "?2"
+          div [code-line]
+            "17"
+            span [code-text]
+              "AND"
+              "\"events\""
+              "."
+              "\"name\""
+              "="
+              "?3"
+          div [code-line]
+            "18"
+            span [code-text]
+              "GROUP"
+              "BY"
+              "\"bucket\""
+          div [code-line]
+            "19"
+            span [code-text]
+              "ORDER"
+              "BY"
+              "\"bucket\""
+          div [code-line]
+            "20"
+            span [code-text]
+              "LIMIT"
+              "20000"
+          div [code-line]
+            "21"
+            span [code-text]
+              "--"
+              "bound"
+              ":"
+              "\"2026-09-07T00:00:00.000Z\""
+              ","
+              "\"2026-10-05T00:00:00.000Z\""
+              ","
+              "\"note_created\""
+              ","
+              "\"+0 seconds\""
+          button [copy] label="Copy as SQL"
+            "Copy"
+      div [ask-panel:http] role=tabpanel
+        div [code]
+          div [code-line]
+            "1"
+            span [code-text]
+              "curl"
+              "-X"
+              "POST"
+              "http"
+              ":"
+              "//127.0.0.1"
+              ":"
+              "<port>/_leptoskit/services/analytics/rpc/run"
+              "\\"
+          div [code-line]
+            "2"
+            span [code-text]
+              "-H"
+              "\"authorization: Bearer $LEPTOSKIT_SERVICE_ANALYTICS_TOKEN\""
+              "\\"
+          div [code-line]
+            "3"
+            span [code-text]
+              "-H"
+              "\"content-type: application/json\""
+              "\\"
+          div [code-line]
+            "4"
+            span [code-text]
+              "-d"
+              "@-"
+              "<<'JSON'"
+          div [code-line]
+            "5"
+            span [code-text]
+              "{"
+          div [code-line]
+            "6"
+            span [code-text]
+              "\"query\""
+              ":"
+              "{"
+          div [code-line]
+            "7"
+            span [code-text]
+              "\"compare\""
+              ":"
+              "true"
+              ","
+          div [code-line]
+            "8"
+            span [code-text]
+              "\"interval\""
+              ":"
+              "\"week\""
+              ","
+          div [code-line]
+            "9"
+            span [code-text]
+              "\"kind\""
+              ":"
+              "\"trends\""
+              ","
+          div [code-line]
+            "10"
+            span [code-text]
+              "\"math\""
+              ":"
+              "\"total\""
+              ","
+          div [code-line]
+            "11"
+            span [code-text]
+              "\"range\""
+              ":"
+              "{"
+          div [code-line]
+            "12"
+            span [code-text]
+              "\"from\""
+              ":"
+              "\"2026-10-05T00:00:00Z\""
+              ","
+          div [code-line]
+            "13"
+            span [code-text]
+              "\"to\""
+              ":"
+              "\"2026-11-02T00:00:00Z\""
+          div [code-line]
+            "14"
+            span [code-text]
+              "}"
+              ","
+          div [code-line]
+            "15"
+            span [code-text]
+              "\"series\""
+              ":"
+              "["
+          div [code-line]
+            "16"
+            span [code-text]
+              "{"
+          div [code-line]
+            "17"
+            span [code-text]
+              "\"event\""
+              ":"
+              "\"note_created\""
+          div [code-line]
+            "18"
+            span [code-text]
+              "}"
+          div [code-line]
+            "19"
+            span [code-text]
+              "]"
+          div [code-line]
+            "20"
+            span [code-text]
+              "}"
+          div [code-line]
+            "21"
+            span [code-text]
+              "}"
+          div [code-line]
+            "22"
+            span [code-text]
+              "JSON"
+          button [copy] label="Copy as shell"
+            "Copy"
+    div [station:draw]
+      "Draw"
+      "rows → chart"
+      "4 rows per line came back, one per week; 1 line drawn; the previous period had nothing in it, so there's no dashed line. The page re-reads it when new events arrive."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "week"
+            "note_created"
+        div [code-line]
+          "2"
+          span [code-text]
+            "2026-10-05"
+            "3"
+        div [code-line]
+          "3"
+          span [code-text]
+            "2026-10-12"
+            "4"
+        div [code-line]
+          "4"
+          span [code-text]
+            "2026-10-19"
+            "3"
+        div [code-line]
+          "5"
+          span [code-text]
+            "2026-10-26"
+            "1"
+        button [copy] label="Copy as text"
+          "Copy"
+    button [copy-all]
+      "Copy all"
+    a label="Open the product analytics guide" href=https://leptoskit.dev/docs/guide/40-product-analytics.html
+      "Open docs"

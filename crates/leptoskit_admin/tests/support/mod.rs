@@ -266,6 +266,11 @@ pub struct World {
 }
 
 pub async fn world() -> World {
+	world_with(None).await
+}
+
+/// Both sites, with the admin reading `analytics` when one is given.
+pub async fn world_with(analytics: Option<leptoskit_admin::AnalyticsService>) -> World {
 	let notes_db = Db::connect("sqlite::memory:").await.unwrap();
 	let admin_db = Db::connect("sqlite::memory:").await.unwrap();
 	leptoskit_db::testing::create_tables(&notes_db)
@@ -336,16 +341,19 @@ pub async fn world() -> World {
 		.unwrap();
 	let service = Service::new(store.clone(), OWNER, "http://localhost:4700").unwrap();
 
-	let admin = Admin::builder("Notes")
+	let mut admin = Admin::builder("Notes")
 		.origin(ADMIN)
 		.main_site(MainSite::new(NOTES, client.client_id, secret.unwrap()))
 		.keys(Keys::single("admin", [7; 32]))
 		.database(admin_db.clone())
 		.control(service.clone())
-		.provider_http(InProcess(notes.clone()))
-		.build()
-		.await
-		.unwrap();
+		.provider_http(InProcess(notes.clone()));
+
+	if let Some(analytics) = analytics {
+		admin = admin.analytics(analytics);
+	}
+
+	let admin = admin.build().await.unwrap();
 
 	World {
 		notes,
@@ -574,4 +582,130 @@ pub fn regions(outline: &str, test_ids: &[&str]) -> String {
 	}
 
 	out
+}
+
+/// The token the analytics service knows the app by.
+pub const ANALYTICS_TOKEN: &str = "test-only-analytics-token-0123456789";
+
+/// Each request the service received: its path and `Authorization` header.
+pub type Authorizations = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+/// The real analytics service on a local port, with every request's
+/// `Authorization` header written down.
+pub struct AnalyticsFixture {
+	pub url: String,
+	pub authorizations: Authorizations,
+	_data: tempfile::TempDir,
+}
+
+/// Starts the service, migrated and listening, its live stream running.
+pub async fn analytics_service() -> AnalyticsFixture {
+	use leptoskit_analytics::service;
+	use leptoskit_rpc::server::APP_CALLER;
+	use leptoskit_rpc::server::Anonymous;
+	use leptoskit_rpc::server::ServiceCallers;
+
+	let data = tempfile::tempdir().unwrap();
+	let db = Db::connect(&format!(
+		"sqlite://{}",
+		data.path().join("analytics.sqlite3").display()
+	))
+	.await
+	.unwrap();
+	db.migrate(service::MIGRATIONS).await.unwrap();
+	let (router, live) = service::routes_with(
+		db,
+		Some(NOTES),
+		service::IngestConfig::default(),
+		ServiceCallers::new(Anonymous).caller(ANALYTICS_TOKEN, APP_CALLER),
+	);
+	live.start().await.unwrap();
+	let authorizations = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	let seen = authorizations.clone();
+	let router = router.layer(axum::middleware::from_fn(
+		move |request: axum::extract::Request, next: axum::middleware::Next| {
+			let seen = seen.clone();
+			async move {
+				let authorization = request
+					.headers()
+					.get(header::AUTHORIZATION)
+					.and_then(|value| value.to_str().ok())
+					.map(str::to_owned);
+				seen.lock()
+					.unwrap()
+					.push((request.uri().path().to_owned(), authorization));
+				next.run(request).await
+			}
+		},
+	));
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let url = format!("http://{}", listener.local_addr().unwrap());
+	tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+	AnalyticsFixture {
+		url,
+		authorizations,
+		_data: data,
+	}
+}
+
+impl AnalyticsFixture {
+	/// The admin's connection to it, signed with `token`.
+	pub fn connection(&self, token: &str) -> leptoskit_admin::AnalyticsService {
+		leptoskit_admin::AnalyticsService::new(self.url.clone(), token)
+	}
+
+	fn app(&self) -> leptoskit_rpc::client::AppCaller {
+		leptoskit_rpc::client::AppCaller::new(
+			leptoskit_analytics::SERVICE,
+			self.url.clone(),
+			ANALYTICS_TOKEN,
+		)
+	}
+
+	/// Registers typed events' fields, as the app's server does.
+	pub async fn register(&self, schemas: &[(&str, &[(&str, &str)])]) {
+		let schemas = schemas
+			.iter()
+			.map(|(name, fields)| {
+				leptoskit_analytics::service::catalogue::SchemaInput {
+					schema_id: leptoskit_analytics::schema_id(name, fields),
+					name: (*name).to_owned(),
+					fields: fields
+						.iter()
+						.map(|(field, kind)| ((*field).to_owned(), (*kind).to_owned()))
+						.collect(),
+				}
+			})
+			.collect();
+		self.app()
+			.call(leptoskit_analytics::service::RegisterEvents { schemas })
+			.await
+			.unwrap();
+	}
+
+	/// Captures events through the service's own capture action, as the
+	/// app, and waits for them to be stored.
+	pub async fn capture(&self, batch: Vec<leptoskit_analytics::service::JsonEvent>) {
+		let result = self
+			.app()
+			.call(leptoskit_analytics::service::Capture {
+				sent_at: None,
+				batch,
+			})
+			.await
+			.unwrap();
+		assert!(result.refused.is_empty(), "{:?}", result.refused);
+	}
+
+	/// The `Authorization` headers the service saw on its rpc routes.
+	pub fn rpc_authorizations(&self) -> Vec<Option<String>> {
+		self.authorizations
+			.lock()
+			.unwrap()
+			.iter()
+			.filter(|(path, _)| path.contains("/rpc/"))
+			.map(|(_, authorization)| authorization.clone())
+			.collect()
+	}
 }

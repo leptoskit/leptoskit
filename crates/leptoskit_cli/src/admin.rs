@@ -20,6 +20,9 @@ pub enum AdminCommand {
 	/// Reads `LEPTOSKIT_ADMIN_CLIENT_SECRET` (the client secret the main site
 	/// issued), `LEPTOSKIT_ADMIN_KEYS` (the admin's own session keys), and
 	/// `LEPTOSKIT_CONTROL_KEY` (the deployment service's owner credential).
+	/// For the Analytics area it reads `LEPTOSKIT_SERVICE_ANALYTICS_TOKEN`,
+	/// the analytics service's token, the same one the main site's server
+	/// has.
 	Serve {
 		/// A repository whose `[infra]` the admin manages. Repeat for more.
 		#[arg(long, required = true)]
@@ -52,6 +55,13 @@ pub enum AdminCommand {
 		/// The app's name, shown in the top bar.
 		#[arg(long, default_value = "LeptosKit")]
 		app_name: String,
+		/// Where the main site's analytics service answers, such as
+		/// `http://10.0.0.2:4800`: the address the admin can reach, not
+		/// necessarily the public one. Defaults to
+		/// `LEPTOSKIT_SERVICE_ANALYTICS_URL`; without either, the Analytics
+		/// area explains how to connect.
+		#[arg(long)]
+		analytics_url: Option<String>,
 	},
 }
 
@@ -68,6 +78,7 @@ pub fn run(command: AdminCommand) -> Result<()> {
 			roles,
 			environment,
 			app_name,
+			analytics_url,
 		} => {
 			let secret = std::env::var("LEPTOSKIT_ADMIN_CLIENT_SECRET").context(
 				"set LEPTOSKIT_ADMIN_CLIENT_SECRET to the client secret the main site issued to \
@@ -83,6 +94,22 @@ pub fn run(command: AdminCommand) -> Result<()> {
 				site = site.name(name);
 			}
 
+			let analytics_url = analytics_url
+				.or_else(|| std::env::var("LEPTOSKIT_SERVICE_ANALYTICS_URL").ok())
+				.filter(|url| !url.trim().is_empty());
+			let analytics = match analytics_url {
+				Some(url) => {
+					Some(leptoskit_admin::AnalyticsService::new(
+						url,
+						std::env::var("LEPTOSKIT_SERVICE_ANALYTICS_TOKEN").context(
+							"set LEPTOSKIT_SERVICE_ANALYTICS_TOKEN to the analytics service's \
+							 token, the one the main site's server uses",
+						)?,
+					))
+				}
+				None => None,
+			};
+
 			let runtime = tokio::runtime::Builder::new_multi_thread()
 				.worker_threads(4)
 				.enable_all()
@@ -95,9 +122,13 @@ pub fn run(command: AdminCommand) -> Result<()> {
 					.environment(environment)
 					.keys(keys)
 					.data_dir(data.join("admin"))
-					.control(service.clone())
-					.build()
-					.await?;
+					.control(service.clone());
+				let admin = match analytics {
+					Some(analytics) => admin.analytics(analytics),
+					None => admin,
+				}
+				.build()
+				.await?;
 				let mut worker = service.worker(Arc::new(CommandRunner::new(
 					data,
 					std::env::current_exe()?,

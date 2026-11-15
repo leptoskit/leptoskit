@@ -335,7 +335,7 @@ pub enum Plan {
 		period: Interval,
 		kind: crate::query::RetentionKind,
 		periods: u32,
-		/// The cohort period's start, and each return period's, as labels.
+		/// Every period the range holds, as labels: each starts a cohort.
 		period_starts: Vec<String>,
 	},
 	/// The web overview's three reads: the sessions' totals, the
@@ -793,16 +793,6 @@ fn funnels_plan(sql: &DialectSql, query: &FunnelsQuery, now: Timestamp) -> Resul
 	})
 }
 
-/// The seconds one period holds, for the planner's arithmetic.
-fn period_seconds(period: Interval) -> i64 {
-	match period {
-		Interval::Day => 86_400,
-		Interval::Week => 604_800,
-		Interval::Hour => 3_600,
-		Interval::Month => 2_629_800,
-	}
-}
-
 /// Plans retention: the cohort's starts, and the returns' periods.
 fn retention_plan(
 	sql: &DialectSql,
@@ -820,65 +810,52 @@ fn retention_plan(
 		));
 	}
 	let range = resolve_range(&query.range, now)?;
-	let mut starts = range.buckets(query.period, 366);
-	if starts.is_empty() {
+	// Every period the range holds starts a cohort; each cohort's returns
+	// are counted in the periods after it, as far as the range reaches.
+	let period_starts = range.buckets(query.period, 366);
+	if period_starts.is_empty() {
 		return Err(PlanError::Range(
 			"the range holds less than one cohort period".into(),
 		));
 	}
-	// Only the first period holds a cohort; the rest are what the cohort
-	// can return in.
-	let cohort_start = starts.remove(0);
-	let cohort_start_label = cohort_start.clone();
 	let periods = query
 		.periods
-		.unwrap_or_else(|| starts.len().min(12) as u32)
+		.unwrap_or_else(|| (period_starts.len() - 1).min(12) as u32)
 		.clamp(1, 12);
-	let cohort_from = range.utc(&cohort_start)?;
-	let cohort_to = cohort_from + Duration::seconds(period_seconds(query.period));
 
-	// The cohort statement reads the start event over the whole range, so
-	// `first_ever` is the whole history of that event, and `entered` is
-	// the start inside the cohort's first period. The CASE's bounds are
-	// the WHERE's own, so they share the first two placeholders.
+	// The starts, one row per person and period. The statement reads the
+	// start event's whole history up to the range's end, so first-time
+	// retention can tell a person's first period ever from a later one.
 	let mut cohort_args = Vec::new();
 	let cohort_where = event_where(
 		sql,
 		&mut cohort_args,
 		&Range {
-			from: range.from,
-			to: cohort_to,
+			from: Timestamp::UNIX_EPOCH,
+			to: range.to,
 			offset_seconds: range.offset_seconds,
 		},
 		&query.filters,
 		Some(&query.start_event),
 		query.test_accounts.as_ref(),
 	)?;
+	cohort_args.push(shift_arg(sql.dialect, &range));
+	let cohort_bucket = sql.bucket(query.period, cohort_args.len())?;
 	// Retention counts whoever did the steps, the way funnels do: a
 	// person resolved through the overrides, or the distinct id itself.
 	let cohort_sql = format!(
-		"SELECT coalesce({0}, \"events\".\"distinct_id\") AS \"person\", \
-		 min(\"events\".\"timestamp\") AS \"first_ever\", min(CASE WHEN \"events\".\"timestamp\" \
-		 >= {1} AND \"events\".\"timestamp\" < {2} THEN \"events\".\"timestamp\" END) AS \
-		 \"entered\" FROM \"events\" WHERE {cohort_where} GROUP BY \"person\" ORDER BY \"person\" \
-		 LIMIT {MAX_ROWS}",
+		"SELECT coalesce({0}, \"events\".\"distinct_id\") AS \"person\", {cohort_bucket} AS \
+		 \"period\" FROM \"events\" WHERE {cohort_where} GROUP BY \"person\", \"period\" ORDER BY \
+		 \"person\", \"period\" LIMIT {MAX_ROWS}",
 		person_of_events(),
-		sql.placeholder(1),
-		sql.placeholder(2),
 	);
 	let cohort = Statement::new("retention cohort", cohort_sql, cohort_args);
 
-	let returns_to =
-		cohort_from + Duration::seconds(period_seconds(query.period) * i64::from(periods + 1));
 	let mut returns_args = Vec::new();
 	let returns_where = event_where(
 		sql,
 		&mut returns_args,
-		&Range {
-			from: range.from,
-			to: returns_to,
-			offset_seconds: range.offset_seconds,
-		},
+		&range,
 		&query.filters,
 		Some(&query.return_event),
 		query.test_accounts.as_ref(),
@@ -893,12 +870,6 @@ fn retention_plan(
 	);
 	let returns = Statement::new("retention returns", returns_sql, returns_args);
 
-	let mut period_starts = vec![cohort_start_label];
-	let mut wall = cohort_start;
-	for _ in 0..periods {
-		step(&mut wall, query.period);
-		period_starts.push(wall.clone());
-	}
 	Ok(Plan::Retention {
 		cohort,
 		returns,

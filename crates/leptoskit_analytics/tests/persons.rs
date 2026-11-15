@@ -1225,6 +1225,24 @@ async fn the_app_reads_persons_their_events_and_their_sessions() {
 	)
 	.await;
 	assert_eq!(answer.as_array().unwrap().len(), 0);
+	// A property name carrying SQL is only ever a name: it matches no one
+	// instead of widening the filter to everyone.
+	let (status, answer) = call(
+		&service,
+		"persons",
+		serde_json::json!({
+			"property": "x') = json_extract(\"properties\", '$.email') OR ('a",
+			"value": "a",
+			"limit": 10,
+		}),
+		Some("app-token"),
+	)
+	.await;
+	assert_eq!(
+		(status, answer.as_array().unwrap().len()),
+		(200, 0),
+		"{answer}"
+	);
 	let (_, answer) = call(
 		&service,
 		"persons",

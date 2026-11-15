@@ -454,6 +454,26 @@ pub(crate) fn as_app(service: &'static str) -> Arc<dyn Api> {
 	)
 }
 
+/// As [`as_app`], at `url` with `token` instead of the environment's: what
+/// [`AppCaller`](super::AppCaller) sends with.
+#[cfg(all(feature = "services", not(target_arch = "wasm32")))]
+pub(crate) fn as_app_at(service: &'static str, url: String, token: String) -> Arc<dyn Api> {
+	let url_name = crate::service_env_name(service, "URL");
+	let token_name = crate::service_env_name(service, "TOKEN");
+	Arc::new(
+		FromEnvironment::new(service, super::reqwest::Reqwest::shared(), move |name| {
+			if name == url_name {
+				Some(url.clone())
+			} else if name == token_name {
+				Some(token.clone())
+			} else {
+				None
+			}
+		})
+		.signed_as_app(),
+	)
+}
+
 /// Anywhere else there's no way to reach a service, and each call says so.
 #[cfg(not(any(
 	all(any(feature = "guest", feature = "web"), target_arch = "wasm32"),

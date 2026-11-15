@@ -119,7 +119,13 @@ pub async fn persons(
 	let mut where_clause = String::new();
 	let mut args: Vec<Value> = Vec::new();
 	if let (Some(property), Some(value)) = (property.as_deref(), value.as_deref()) {
-		args.push(Value::Text(property.to_owned()));
+		// The name is always a bound argument, never part of the SQL: on
+		// SQLite as the JSON path `$."name"`, on Postgres as the key.
+		let key = match dialect {
+			Dialect::Postgres => property.to_owned(),
+			Dialect::Sqlite => format!(r#"$."{}""#, property.replace('"', "\"\"")),
+		};
+		args.push(Value::Text(key));
 		args.push(Value::Text(value.to_owned()));
 		let last = args.len();
 		where_clause = match dialect {
@@ -128,8 +134,8 @@ pub async fn persons(
 			}
 			Dialect::Sqlite => {
 				format!(
-					"WHERE json_extract(\"properties\", '$.\"{}\"') = ?{last}",
-					property.replace('"', "\"\""),
+					"WHERE json_extract(\"properties\", ?{}) = ?{last}",
+					last - 1
 				)
 			}
 		};

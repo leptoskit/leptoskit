@@ -7,8 +7,8 @@ The admin is a separate app with its own address, such as `admin.notes.example`.
 ## What's inside
 
 - **Infrastructure** shows what's serving, the changes waiting in `leptoskit.toml`, releases, operations, health, backups, and the configuration. Plan, apply, deploy, first release, maintenance, roll back, health checks, and backup verification each ask you to confirm, run on the [deployment service](28-deployment-service.md)'s worker, and are recorded under your name. The page follows each one live, and the work carries on if you close the tab.
-- **Analytics** teaches until your app sends its first typed event. It never draws charts from nothing.
-- **Learn** has short lessons that tick themselves when they're true of your projects: you applied a plan, a backup restored, a health check passed.
+- **Analytics** reads your site's [product analytics](40-product-analytics.md): the web overview, trends, funnels, retention, people, a live event tail, and saved insights on dashboards. Before it's connected, it shows how to connect it rather than empty charts.
+- **Learn** has short lessons that tick themselves when they're true of your data: you applied a plan, a backup restored, a typed event arrived, you saved a funnel.
 
 Every card has a **Workings** drawer that walks what's on screen back to where it comes from: the `leptoskit.toml` lines that declare it, the `main.tf.json` they generate, the plan OpenTofu makes, the command the worker runs, and the check that says it's done. Press `W` to open it, and `Shift+W` to keep each card's source showing.
 
@@ -61,6 +61,33 @@ Repeat `--project` for each repository. The admin listens on `127.0.0.1:4801`; p
 
 `--role ops` lets in a different role (repeat it to accept several), `--environment staging` labels a staging admin, and `--app-name Notes` names it in the top bar.
 
+## Connect analytics
+
+The admin is its own app, so it reads analytics the way your site's server does: it calls your site's analytics service as the app, signed with the service's token. Give it the service's address, one the admin's machine can reach, and the same token your site's server uses:
+
+```sh
+export LEPTOSKIT_SERVICE_ANALYTICS_TOKEN=…   # the same token as the site's server
+lk admin serve --project /srv/notes \
+  --url https://admin.notes.example \
+  --main-site https://notes.example \
+  --client-id <client id> \
+  --analytics-url http://10.0.0.2:4800
+```
+
+`--analytics-url` defaults to `LEPTOSKIT_SERVICE_ANALYTICS_URL`. The token only ever lives on the admin's server; pages never see it, and with it the admin can read every event, so keep it in your secret store. Without both, every Analytics page explains how to connect.
+
+Once connected, these pages read your real data:
+
+- **Overview**: visitors, pageviews, sessions, and bounce rate against the previous period, with top and entry pages, referrers, channels, UTM sources, devices, browsers, and operating systems. Every site gets this without setup.
+- **Trends**: pick events from the ones your app has sent (events with a Rust type wear a `struct` badge), count them in total, by person, or by session, split them by a property, and compare with the previous period. Press a point to see the people behind it.
+- **Funnels**: the steps people take in order, how many reach each, the median time between them, and who dropped off.
+- **Retention**: a grid of people who started in each day or week and how many came back. Press a cell to see who.
+- **People**: search by email or name, filter by a property, and open someone to see their properties, ids, timeline, and sessions. Export and delete are there too, and each asks you to type the person's name first.
+- **Live**: events a few seconds after they happen, with a filter and a pause. The pulse in the top bar follows it on every page.
+- **Library**: save any insight, add it to a dashboard, and watch dashboards update as events arrive.
+
+Every chart's **Workings** drawer follows a number from end to end: the Rust type your app emits, the bytes it sends, the tables it lands in, the query as Rust, SQL, and HTTP (which change as you change the builder), and the rows that became the chart.
+
 ## Embed it in your own server
 
 The admin is also a library, `leptoskit_admin`, for when you'd rather run it from your own binary:
@@ -80,20 +107,22 @@ let admin = Admin::builder("Notes")
 axum::serve(listener, admin.router()).await?;
 ```
 
-`service` is the deployment service's `control::Service`. Start its worker as `lk console serve` does, or operations wait in the queue.
+`service` is the deployment service's `control::Service`. Start its worker as `lk console serve` does, or operations wait in the queue. Add `.analytics(AnalyticsService::new(url, token))` (or `AnalyticsService::from_env()`, which reads the two variables above) to connect analytics.
 
 ## Try it on your machine
 
 The `admin_demo` example runs a site and its admin side by side, with two people: Ada, who is an admin, and Grace, who isn't. From a checkout of leptoskit:
 
 ```sh
-cargo run -p admin_demo
+cargo run -p admin_demo             # infrastructure, with analytics waiting for events
+cargo run -p admin_demo -- --seed   # and a month of analytics
 ```
 
-Open `http://127.0.0.1:4801/_leptoskit/admin` and continue as either of them. The demo's operations are simulated and contact no cloud provider: a plan runs the real generator and compares the result with what it last applied, and every operation says it's a simulation. `cargo run -p admin_demo -- --executor lk` runs the real `lk` commands instead; without provider tokens, plans fail, and the admin shows the failure as it is.
+Open `http://127.0.0.1:4801/_leptoskit/admin` and continue as either of them. The demo runs the real analytics service inside the main site, at `http://localhost:4800`. Its pages send typed events as you click around, so they show up under **Live**, and `--seed` first sends 30 days of visits, sign-ups, notes, and checkouts through the same ingestion your app's events use. The data lives in your temporary folder and starts fresh each run. The demo's operations are simulated and contact no cloud provider: a plan runs the real generator and compares the result with what it last applied, and every operation says it's a simulation. `cargo run -p admin_demo -- --executor lk` runs the real `lk` commands instead; without provider tokens, plans fail, and the admin shows the failure as it is.
 
 ## What it doesn't do yet
 
-- Analytics screens teach and wait; charts for trends, funnels, retention, and people arrive with product analytics.
+- Funnels show the median time for the whole funnel, not for each step.
+- Analytics has no cohorts, actions, or SQL editor yet; the Workings drawer shows each query's SQL, but you can't edit it.
 - The budget card shows the limit `[infra.budget]` sets, without a cost estimate.
 - The admin manages the repositories passed to it with `--project`; adding one means restarting it.

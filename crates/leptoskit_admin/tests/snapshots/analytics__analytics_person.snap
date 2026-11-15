@@ -1,0 +1,210 @@
+---
+source: crates/leptoskit_admin/tests/analytics.rs
+expression: screen(html)
+---
+main [main]
+  div [notice] role=status
+  a label="← People" href=/_leptoskit/admin/analytics/people
+    "← People"
+  "M"
+  "member-01@notes.example"
+  "identified · first seen 5 Oct 2026 · 2 ids"
+  button [person-export]
+    "Export"
+  button [person-delete]
+    "Delete"
+  div [grid-main]
+    "Events"
+    "newest first"
+    div [person-timeline]
+      div [timeline-event]
+        "21 Oct 2026 11:08"
+        "checkout_completed"
+        "struct"
+        "plan: pro · seats: 2"
+        "member-01@notes.example"
+      div [timeline-event]
+        "21 Oct 2026 11:04"
+        "payment_submitted"
+        "struct"
+        "plan: pro · seats: 2"
+        "member-01@notes.example"
+      div [timeline-event]
+        "21 Oct 2026 11:00"
+        "checkout_started"
+        "struct"
+        "plan: pro · seats: 2"
+        "member-01@notes.example"
+      div [timeline-event]
+        "20 Oct 2026 15:00"
+        "note_created"
+        "struct"
+        "shared: false · words: 130"
+        "member-01@notes.example"
+      div [timeline-event]
+        "13 Oct 2026 15:00"
+        "note_created"
+        "struct"
+        "shared: false · words: 130"
+        "member-01@notes.example"
+      div [timeline-event]
+        "6 Oct 2026 15:00"
+        "note_created"
+        "struct"
+        "shared: false · words: 130"
+        "member-01@notes.example"
+      div [timeline-event]
+        "5 Oct 2026 10:06"
+        "$identify"
+        "member-01@notes.example"
+      div [timeline-event]
+        "5 Oct 2026 10:05"
+        "signed_up"
+        "struct"
+        "plan: free · source: pricing"
+        "anon-01"
+      div [timeline-event]
+        "5 Oct 2026 10:01"
+        "$pageview"
+        "/pricing"
+        "anon-01"
+      div [timeline-event]
+        "5 Oct 2026 10:00"
+        "$pageview"
+        "/"
+        "anon-01"
+    "Properties"
+    div [person-properties]
+      "email"
+      "member-01@notes.example"
+      "plan"
+      "free"
+    div [card:person]
+      "Distinct ids"
+      "merged into one person"
+      button [workings-tab:person] label="Show workings: persons ⨝ person_distinct_ids"
+        div [mint-piece]
+        "Workings"
+        span [mint-source]
+          "persons ⨝ person_distinct_ids"
+      div [distinct-ids]
+        "anon-01"
+        "member-01@notes.example"
+      div [note:person-ids]
+        "These ids were one person all along: identify joined the anonymous one to the account when they signed in."
+        button [note-dismiss:person-ids]
+          "Got it"
+    "Sessions"
+    "latest 20"
+    div [sessions]
+      "<n> <unit> ago"
+      "1m 00s"
+      "/ · 2 pageviews · Direct · Firefox on Mac OS X"
+aside [drawer-aside] label="Workings"
+  div [drawer:person] label="Workings: member-01@notes.example · person"
+    "Workings"
+    "member-01@notes.example · person"
+    button [workings-close] label="Close workings (W)"
+      "Close"
+    div [station:store]
+      "Store"
+      "`persons`, `person_distinct_ids`"
+      "A person is one row in"
+      "persons"
+      "; each id they've used is a row in"
+      "person_distinct_ids"
+      "pointing at it. Identify adds a row; a merge repoints the anonymous one."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "anon-01"
+            "→"
+            "<id 0>"
+        div [code-line]
+          "2"
+          span [code-text]
+            "member-01@notes.example"
+            "→"
+            "<id 0>"
+        button [copy] label="Copy as text"
+          "Copy"
+    div [station:ask]
+      "Ask"
+      "the operations"
+      "The page is four app-only operations on the analytics service, the same your server can call."
+      div [code]
+        div [code-line]
+          "1"
+          span [code-text]
+            "let"
+            "person"
+            "="
+            "call_as_app(Person"
+            "{"
+            "id"
+            ":"
+            "<id 0>.parse()?"
+            "}"
+            ").await?;"
+        div [code-line]
+          "2"
+          span [code-text]
+            "let"
+            "events"
+            "="
+            "call_as_app(PersonEvents"
+            "{"
+            "id"
+            ","
+            "limit"
+            ":"
+            "50"
+            ","
+            "offset"
+            ":"
+            "0"
+            "}"
+            ").await?;"
+        div [code-line]
+          "3"
+          span [code-text]
+            "let"
+            "sessions"
+            "="
+            "call_as_app(PersonSessions"
+            "{"
+            "id"
+            ","
+            "limit"
+            ":"
+            "20"
+            ","
+            "offset"
+            ":"
+            "0"
+            "}"
+            ").await?;"
+        div [code-line]
+          "4"
+          span [code-text]
+            "//"
+            "Export"
+            "and"
+            "delete"
+            ":"
+            "ExportPerson"
+            "{"
+            "id"
+            "}"
+            ","
+            "DeletePerson"
+            "{"
+            "id"
+            "}"
+        button [copy] label="Copy as Rust"
+          "Copy"
+    button [copy-all]
+      "Copy all"
+    a label="Open the infrastructure guide" href=https://leptoskit.dev/docs/guide/24-deploying.html
+      "Open docs"

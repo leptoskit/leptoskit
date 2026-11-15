@@ -2,64 +2,64 @@
 source: examples/gallery/tests/trees.rs
 expression: "lines.join(\"\\n\")"
 ---
-View [flex-col h-full w-full] #887f6bb0f684
-  ScrollView [flex-1] #c378bcfd874e
-    View [flex-col pb-5] #d3d70f6fd06a
-      Image [h-[140px] w-full] #02ebdc898bef
-      View [flex-col gap-4 px-5] #a672e28a51b4
-        View [flex-row gap-2 h-12 items-center justify-end pt-3] #11b553aa9a97
-          Button "Message" [h-9 px-[18px] py-0 rounded-[18px]] #f252d6fb7769
-          Button "Follow" [h-9 px-[18px] py-0 rounded-[18px]] #d512648c161e
-        View [flex-col gap-1] #e269a8c54387
-          View [flex-row gap-2 items-center] #ff30f783944c
+View [flex-col h-full w-full] #a133ae83c7b9
+  ScrollView [flex-1] #472186a8f70d
+    View [flex-col pb-5] #3386a20d4f07
+      Image [h-[140px] w-full] #0048599e4608
+      View [flex-col gap-4 px-5] #15fc6215bc77
+        View [flex-row gap-2 h-12 items-center justify-end pt-3] #e68ad3e24022
+          Button "Message" [h-9 px-[18px] py-0 rounded-[18px]] #5a332dccb9e9
+          Button "Follow" [h-9 px-[18px] py-0 rounded-[18px]] #762838a5ad19
+        View [flex-col gap-1] #753822caa382
+          View [flex-row gap-2 items-center] #7a2d600c0885
             Text "Amara Okafor" #8f5824703229
-            View [px-2 py-0.5 rounded-[6px]] #ef5fcb91d2d3
+            View [px-2 py-0.5 rounded-[6px]] #1e7d17f4e726
               Text "PRO" #c657f635fe19
           Text "@amara · Product designer" #e0fa6238f092
         Text "Designing calm software for loud cities. Currently building a field guide to West African type foundries, one specimen at a time." #3a9643e17c88
         Text "Lagos, Nigeria  ·  Joined March 2021  ·  amara.design" #593d7107a74b
-        View [flex-row items-center px-0 py-3 rounded-[14px]] #7186d9976a64
-          View [flex-1 flex-col gap-0.5 items-center] #983af36e9849
+        View [flex-row items-center px-0 py-3 rounded-[14px]] #2137902c4910
+          View [flex-1 flex-col gap-0.5 items-center] #4fd20512817d
             Text "1,284" #1268c380ad6b
             Text "Followers" #403728b3dcb2
-          View [h-7 w-[1px]] #d6faddaca337
-          View [flex-1 flex-col gap-0.5 items-center] #983af36e9849
+          View [h-7 w-[1px]] #e28f127111d0
+          View [flex-1 flex-col gap-0.5 items-center] #4fd20512817d
             Text "312" #d0f43d4bd2e8
             Text "Following" #d9a3aebdd2a7
-          View [h-7 w-[1px]] #d6faddaca337
-          View [flex-1 flex-col gap-0.5 items-center] #983af36e9849
+          View [h-7 w-[1px]] #e28f127111d0
+          View [flex-1 flex-col gap-0.5 items-center] #4fd20512817d
             Text "86" #eb2af4fb519c
             Text "Projects" #81048ff97d46
-        View [flex-row items-center justify-between mt-1] #05d532dc0b09
+        View [flex-row items-center justify-between mt-1] #c99156512809
           Text "Recent work" #d54bb98047ec
           Text "See all" #d9c63843fb45
-        View [flex-row gap-2 items-center] #ff30f783944c
-          Image [aspect-square flex-1 rounded-[14px]] #91cfcf14ea8c
-          Image [aspect-square flex-1 rounded-[14px]] #9c93c442bd1b
-          Image [aspect-square flex-1 rounded-[14px]] #efaf1d96845d
-        View [flex-row gap-2 items-center] #ff30f783944c
-          View [h-7 w-16] #4714d05618c0
-            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #82fc821f65c7
-              Image [h-full rounded-[12px] w-full] #2dd89b81d044
-            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #497ec96044fe
-              Image [h-full rounded-[12px] w-full] #bcf9b13ca78d
-            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #8a9e2a5f0360
-              Image [h-full rounded-[12px] w-full] #65181ee50ad6
-          Text "Followed by Kemi, Tolu, and 12 others" [flex-1] #ddc16fa0322a
-      View [absolute h-24 left-5 p-1 rounded-[48px] top-[92px] w-24] #7f3c3fd5dcbf
-        Image [h-full rounded-[44px] w-full] #d66d1e292c1f
-  View [flex-col] #7be3bb3babb0
-    View [h-[1px]] #509ca5fc8248
-    View [flex-row items-center pb-safe-offset-2 pt-2 px-2] #666ff99a4405
-      View [flex-1 flex-col gap-1 items-center] #d317604bca6b
-        View [h-[22px] w-[22px]] #cf2a9732ca4d
-        Text "Home" [text-center] #8b4244cf81f0
-      View [flex-1 flex-col gap-1 items-center] #d317604bca6b
-        View [h-[22px] w-[22px]] #b6c7816274ce
-        Text "Search" [text-center] #741bc1d70969
-      View [flex-1 flex-col gap-1 items-center] #d317604bca6b
-        View [h-[22px] w-[22px]] #db5f3e8c90b0
-        Text "Inbox" [text-center] #e5807b8d7dee
-      View [flex-1 flex-col gap-1 items-center] #d317604bca6b
-        View [h-[22px] rounded-[11px] w-[22px]] #6ccbc5cd2fc4
-        Text "Profile" [text-center] #d313a1b4fae1
+        View [flex-row gap-2 items-center] #7a2d600c0885
+          Image [aspect-square flex-1 rounded-[14px]] #800e0f0afa94
+          Image [aspect-square flex-1 rounded-[14px]] #b33fada5bd9b
+          Image [aspect-square flex-1 rounded-[14px]] #8ebc561b73e6
+        View [flex-row gap-2 items-center] #7a2d600c0885
+          View [h-7 w-16] #90b2549a64a4
+            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #500177cee6b1
+              Image [h-full rounded-[12px] w-full] #53dd7c8a9c4d
+            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #db24b3e9324c
+              Image [h-full rounded-[12px] w-full] #c36e8db381d1
+            View [absolute h-7 p-0.5 rounded-[14px] top-0 w-7] #a20526aa9fb9
+              Image [h-full rounded-[12px] w-full] #218eb94baba7
+          Text "Followed by Kemi, Tolu, and 12 others" [flex-1] #16b672294706
+      View [absolute h-24 left-5 p-1 rounded-[48px] top-[92px] w-24] #cfc3ea834c15
+        Image [h-full rounded-[44px] w-full] #f0b0f35500bb
+  View [flex-col] #002d8aa83860
+    View [h-[1px]] #de0f5c2606f0
+    View [flex-row items-center pb-safe-offset-2 pt-2 px-2] #723d5f773435
+      View [flex-1 flex-col gap-1 items-center] #3473e866ce97
+        View [h-[22px] w-[22px]] #3f0ea4da5b27
+        Text "Home" [text-center] #db706dbd07be
+      View [flex-1 flex-col gap-1 items-center] #3473e866ce97
+        View [h-[22px] w-[22px]] #ffb443575bda
+        Text "Search" [text-center] #14b8d4b5866d
+      View [flex-1 flex-col gap-1 items-center] #3473e866ce97
+        View [h-[22px] w-[22px]] #cd876a0cad7b
+        Text "Inbox" [text-center] #8187b8fd0a9f
+      View [flex-1 flex-col gap-1 items-center] #3473e866ce97
+        View [h-[22px] rounded-[11px] w-[22px]] #8a1bac84fe13
+        Text "Profile" [text-center] #ebef534b3faf

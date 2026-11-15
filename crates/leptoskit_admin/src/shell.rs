@@ -43,6 +43,8 @@ pub(crate) struct Viewer {
 	pub projects: Vec<String>,
 	/// Lessons finished and lessons there are.
 	pub progress: (usize, usize),
+	/// How fast analytics events arrive, when the admin is connected.
+	pub pulse: Option<crate::analytics::live::Pulse>,
 }
 
 impl Viewer {
@@ -166,6 +168,7 @@ pub(crate) fn mark(size: f32) -> Element {
 		)
 }
 
+#[expect(clippy::too_many_lines, reason = "the top bar, left to right")]
 fn top_bar(viewer: &Viewer, section: &Section) -> Element {
 	let brand = Pressable(format!("{} admin home", viewer.app_name))
 		.href(format!("{BASE}/"))
@@ -213,15 +216,52 @@ fn top_bar(viewer: &Viewer, section: &Section) -> Element {
 		);
 	}
 
-	let pulse = Pressable("Live events: analytics isn't connected yet")
-		.href(format!("{BASE}/analytics/live"))
-		.class(
-			"flex-row items-center gap-2 rounded-full border border-[var(--admin-line)] px-2.5 \
-			 py-1 cursor-pointer hover:bg-[var(--admin-sunken)] max-sm:hidden",
-		)
-		.test_id("live-pulse")
-		.child(View().class("h-[7px] w-[7px] rounded-full bg-[var(--admin-ink-3)]"))
-		.child(Text("Not listening").class("text-xs text-[var(--admin-ink-2)] max-md:hidden"));
+	let pulse = match &viewer.pulse {
+		None => {
+			Pressable("Live events: analytics isn't connected yet")
+				.href(format!("{BASE}/analytics/live"))
+				.class(
+					"flex-row items-center gap-2 rounded-full border border-[var(--admin-line)] \
+					 px-2.5 py-1 cursor-pointer hover:bg-[var(--admin-sunken)] max-sm:hidden",
+				)
+				.test_id("live-pulse")
+				.child(View().class("h-[7px] w-[7px] rounded-full bg-[var(--admin-ink-3)]"))
+				.child(
+					Text("Not listening").class("text-xs text-[var(--admin-ink-2)] max-md:hidden"),
+				)
+		}
+		Some(pulse) => {
+			#[expect(clippy::cast_precision_loss, reason = "counts for drawing")]
+			let seconds: Vec<f64> = pulse.seconds.iter().map(|count| *count as f64).collect();
+			let live = pulse.status == crate::analytics::live::Status::Live;
+			Pressable(format!("Live events: {:.1} a second", pulse.per_second))
+				.href(format!("{BASE}/analytics/live"))
+				.class(
+					"flex-row items-center gap-2 rounded-full border border-[var(--admin-line)] \
+					 px-2.5 py-1 cursor-pointer hover:bg-[var(--admin-sunken)] max-sm:hidden",
+				)
+				.test_id("live-pulse")
+				.child(
+					crate::analytics::draw::sparkline(&seconds, "h-4 w-14 max-md:hidden")
+						.test_id("pulse-spark"),
+				)
+				.child(
+					View()
+						.class("h-[7px] w-[7px] rounded-full")
+						.class(if live {
+							"bg-[var(--admin-ember)]"
+						} else {
+							"bg-[var(--admin-ink-3)]"
+						})
+						.test_id("pulse-dot"),
+				)
+				.child(
+					Text(format!("{:.0}/s", pulse.per_second))
+						.class("text-xs tabular-nums text-[var(--admin-ink-2)]")
+						.test_id("pulse-rate"),
+				)
+		}
+	};
 
 	// The track and the words are one button, so the words can go on a
 	// phone and the switch still reads "Show workings" to a screen reader.
@@ -424,19 +464,19 @@ fn rail(viewer: &Viewer, section: &Section) -> Element {
 		))
 		.child(item(
 			"Trends",
-			format!("{BASE}/analytics/insights/new?kind=trends"),
+			format!("{BASE}/analytics/trends"),
 			ICON_TRENDS,
 			*section == Section::Trends,
 		))
 		.child(item(
 			"Funnels",
-			format!("{BASE}/analytics/insights/new?kind=funnels"),
+			format!("{BASE}/analytics/funnels"),
 			ICON_FUNNELS,
 			*section == Section::Funnels,
 		))
 		.child(item(
 			"Retention",
-			format!("{BASE}/analytics/insights/new?kind=retention"),
+			format!("{BASE}/analytics/retention"),
 			ICON_RETENTION,
 			*section == Section::Retention,
 		))
@@ -653,6 +693,20 @@ pub(crate) fn shell_css(drawers: &[Drawer]) -> String {
 		 media (prefers-reduced-motion:reduce){{*{{animation:none!important;transition:none!\
 		 important}}}}",
 		tokens = style::tokens_css()
+	);
+
+	// The analytics drawers: the Ask station's tabs, the lines a builder
+	// change washed, and the live tail's filter. A raw string, so rustfmt
+	// leaves its quotes alone.
+	css.push_str(
+		r#"[data-changed]{background:rgba(94,242,194,.22)!important;box-shadow:inset 3px 0 #5ef2c2}
+[data-testid^="ask-panel:"]{display:none!important}
+html:not([data-admin-ask]) [data-testid="ask-panel:rust"],html[data-admin-ask=rust] [data-testid="ask-panel:rust"],html[data-admin-ask=sql] [data-testid="ask-panel:sql"],html[data-admin-ask=http] [data-testid="ask-panel:http"]{display:flex!important}
+html:not([data-admin-ask]) [data-testid="ask-tab:rust"],html[data-admin-ask=rust] [data-testid="ask-tab:rust"],html[data-admin-ask=sql] [data-testid="ask-tab:sql"],html[data-admin-ask=http] [data-testid="ask-tab:http"]{border-color:#5ef2c2!important;color:#5ef2c2!important}
+[data-testid=live-event][data-filtered]{display:none!important}
+[data-testid=live-event] [data-testid=how-toggle]::before{display:none}
+[data-testid=menu-panel]{z-index:10;box-shadow:0 12px 32px -12px rgba(15,11,22,.28)}
+[data-testid=menu-toggle][aria-expanded=false]~[data-testid=menu-panel]{display:none!important}"#,
 	);
 
 	for drawer in drawers {

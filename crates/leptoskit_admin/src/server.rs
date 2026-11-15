@@ -61,8 +61,6 @@ pub(crate) fn router(admin: Admin) -> Router {
 		.route(BASE, get(home))
 		.route(&at("/"), get(home))
 		.route(&at("/sign-in"), get(sign_in))
-		.route(&at("/analytics/{page}"), get(analytics_page))
-		.route(&at("/analytics/insights/new"), get(insights))
 		.route(&at("/infra/projects"), get(projects))
 		.route(&at("/infra/projects/{id}"), get(project_home))
 		.route(&at("/infra/projects/{id}/{tab}"), get(project))
@@ -76,19 +74,20 @@ pub(crate) fn router(admin: Admin) -> Router {
 		.route(&at("/assets/admin.mjs"), get(script))
 		.route(&at("/assets/sketch.woff2"), get(|| async { font(SKETCH) }))
 		.route(&at("/assets/mono.woff2"), get(|| async { font(MONO) }))
+		.merge(analytics::routes::router())
 		.merge(auth.router())
 		.layer(Extension(admin))
 		.layer(auth.layer())
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
 	std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// The person's chosen appearance, from the `admin_theme` cookie.
-fn appearance(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn appearance(headers: &HeaderMap) -> Option<String> {
 	headers
 		.get_all(header::COOKIE)
 		.iter()
@@ -100,7 +99,7 @@ fn appearance(headers: &HeaderMap) -> Option<String> {
 		.filter(|value| value == "light" || value == "dark")
 }
 
-fn no_store(mut response: Response) -> Response {
+pub(crate) fn no_store(mut response: Response) -> Response {
 	response.headers_mut().insert(
 		header::CACHE_CONTROL,
 		"no-store".parse().expect("a valid header"),
@@ -108,21 +107,25 @@ fn no_store(mut response: Response) -> Response {
 	response
 }
 
-fn html(body: String) -> Response {
+pub(crate) fn html(body: String) -> Response {
 	no_store(Html(body).into_response())
 }
 
 /// A signed-in admin, or the response that turns everyone else away.
-struct Gate {
-	who: String,
-	preferences: access::Preferences,
+pub(crate) struct Gate {
+	pub who: String,
+	pub preferences: access::Preferences,
 }
 
 #[expect(
 	clippy::result_large_err,
 	reason = "the error is the response sent instead, once per request; boxing it buys nothing"
 )]
-async fn gate(admin: &Admin, me: Option<SignedIn>, headers: &HeaderMap) -> Result<Gate, Response> {
+pub(crate) async fn gate(
+	admin: &Admin,
+	me: Option<SignedIn>,
+	headers: &HeaderMap,
+) -> Result<Gate, Response> {
 	let inner = admin.inner();
 	let Some(me) = me else {
 		return Err(Redirect::to(&format!("{BASE}/sign-in")).into_response());
@@ -160,7 +163,10 @@ async fn gate(admin: &Admin, me: Option<SignedIn>, headers: &HeaderMap) -> Resul
 	clippy::result_large_err,
 	reason = "the error is the response sent instead, once per request; boxing it buys nothing"
 )]
-async fn api_gate(admin: &Admin, me: Option<SignedIn>) -> Result<(SignedIn, String), Response> {
+pub(crate) async fn api_gate(
+	admin: &Admin,
+	me: Option<SignedIn>,
+) -> Result<(SignedIn, String), Response> {
 	let inner = admin.inner();
 	let Some(me) = me else {
 		return Err(problem(
@@ -197,11 +203,11 @@ async fn api_gate(admin: &Admin, me: Option<SignedIn>) -> Result<(SignedIn, Stri
 	Ok((me, who))
 }
 
-fn problem(status: StatusCode, code: &str, message: &str) -> Response {
+pub(crate) fn problem(status: StatusCode, code: &str, message: &str) -> Response {
 	no_store((status, Json(json!({ "error": code, "message": message }))).into_response())
 }
 
-fn failure(message: &str) -> Response {
+pub(crate) fn failure(message: &str) -> Response {
 	(
 		StatusCode::INTERNAL_SERVER_ERROR,
 		format!("The admin couldn't answer: {message}"),
@@ -210,7 +216,7 @@ fn failure(message: &str) -> Response {
 }
 
 /// Every project and its journal, read in one go.
-async fn states(admin: &Admin) -> Result<Vec<ProjectState>, String> {
+pub(crate) async fn states(admin: &Admin) -> Result<Vec<ProjectState>, String> {
 	let Some(service) = admin.inner().control.clone() else {
 		return Ok(Vec::new());
 	};
@@ -228,12 +234,19 @@ async fn states(admin: &Admin) -> Result<Vec<ProjectState>, String> {
 	.map_err(|error| error.to_string())?
 }
 
+/// The analytics facts lessons are checked against, when the admin is
+/// connected and the service answers.
+pub(crate) async fn analytics_facts(admin: &Admin) -> Option<analytics::Facts> {
+	let connection = admin.inner().analytics.as_ref()?;
+	connection.facts().await.ok()
+}
+
 /// Renders a signed-in screen.
-fn render(
+pub(crate) fn render(
 	admin: &Admin,
 	gate: &Gate,
 	headers: &HeaderMap,
-	states: &[ProjectState],
+	proof: &learn::Proof<'_>,
 	screen: Screen,
 ) -> Response {
 	let inner = admin.inner();
@@ -243,11 +256,16 @@ fn render(
 		who: gate.who.clone(),
 		workings_mode: gate.preferences.workings_mode,
 		appearance: appearance(headers),
-		projects: states
+		projects: proof
+			.states
 			.iter()
 			.map(|state| state.project.id.clone())
 			.collect(),
-		progress: learn::progress(states, now()),
+		progress: learn::progress(proof),
+		pulse: inner
+			.analytics
+			.as_ref()
+			.map(|connection| connection.live().pulse()),
 	};
 	html(shell::page(&viewer, screen))
 }
@@ -321,40 +339,12 @@ async fn sign_in(
 		.into_response()
 }
 
-async fn analytics_page(
-	Extension(admin): Extension<Admin>,
-	me: Option<SignedIn>,
-	headers: HeaderMap,
-	Path(page): Path<String>,
-) -> Response {
-	let Some(page) = analytics::Page::parse(&page, None) else {
-		return not_found();
-	};
-	signed_in_screen(&admin, me, &headers, |_| Some(analytics::screen(page))).await
-}
-
-#[derive(Deserialize)]
-struct InsightQuery {
-	kind: Option<String>,
-}
-
-async fn insights(
-	Extension(admin): Extension<Admin>,
-	me: Option<SignedIn>,
-	headers: HeaderMap,
-	Query(query): Query<InsightQuery>,
-) -> Response {
-	let page = analytics::Page::parse("insights", query.kind.as_deref())
-		.unwrap_or(analytics::Page::Trends);
-	signed_in_screen(&admin, me, &headers, |_| Some(analytics::screen(page))).await
-}
-
 /// Gates, loads the projects, and renders what `screen` makes of them.
 async fn signed_in_screen(
 	admin: &Admin,
 	me: Option<SignedIn>,
 	headers: &HeaderMap,
-	screen: impl FnOnce(&[ProjectState]) -> Option<Screen>,
+	screen: impl FnOnce(&learn::Proof<'_>) -> Option<Screen>,
 ) -> Response {
 	let gate = match gate(admin, me, headers).await {
 		Ok(gate) => gate,
@@ -364,9 +354,16 @@ async fn signed_in_screen(
 		Ok(states) => states,
 		Err(error) => return failure(&format!("the control service didn't answer: {error}")),
 	};
+	let facts = analytics_facts(admin).await;
+	let proof = learn::Proof {
+		states: &states,
+		now: now(),
+		facts: facts.as_ref(),
+		preferences: &gate.preferences,
+	};
 
-	match screen(&states) {
-		Some(screen) => render(admin, &gate, headers, &states, screen),
+	match screen(&proof) {
+		Some(screen) => render(admin, &gate, headers, &proof, screen),
 		None => not_found(),
 	}
 }
@@ -376,8 +373,8 @@ async fn projects(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |states| {
-		Some(infra::projects(states, now()))
+	signed_in_screen(&admin, me, &headers, |proof| {
+		Some(infra::projects(proof.states, proof.now))
 	})
 	.await
 }
@@ -421,7 +418,14 @@ async fn project(
 		fleet,
 	};
 	let screen = infra::project(state, tab, &context);
-	render(&admin, &gate, &headers, &states, screen)
+	let facts = analytics_facts(&admin).await;
+	let proof = learn::Proof {
+		states: &states,
+		now,
+		facts: facts.as_ref(),
+		preferences: &gate.preferences,
+	};
+	render(&admin, &gate, &headers, &proof, screen)
 }
 
 async fn operation(
@@ -433,9 +437,10 @@ async fn operation(
 	let Some(service) = admin.inner().control.clone() else {
 		return not_found();
 	};
-	signed_in_screen(&admin, me, &headers, |states| {
+	signed_in_screen(&admin, me, &headers, |proof| {
 		let operation = service.operation(&Principal::owner(), &id).ok()?;
-		let state = states
+		let state = proof
+			.states
 			.iter()
 			.find(|state| state.project.id == operation.project)?;
 		Some(infra::operation(state, &operation, now()))
@@ -748,10 +753,7 @@ async fn learn_hub(
 	me: Option<SignedIn>,
 	headers: HeaderMap,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |states| {
-		Some(learn::hub(states, now()))
-	})
-	.await
+	signed_in_screen(&admin, me, &headers, |proof| Some(learn::hub(proof))).await
 }
 
 async fn glossary(
@@ -768,8 +770,8 @@ async fn lesson(
 	headers: HeaderMap,
 	Path((track, lesson)): Path<(String, String)>,
 ) -> Response {
-	signed_in_screen(&admin, me, &headers, |states| {
-		learn::lesson(&track, &lesson, states, now())
+	signed_in_screen(&admin, me, &headers, |proof| {
+		learn::lesson(&track, &lesson, proof)
 	})
 	.await
 }
@@ -796,6 +798,6 @@ fn font(bytes: &'static [u8]) -> Response {
 		.into_response()
 }
 
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
 	(StatusCode::NOT_FOUND, "There's nothing here.").into_response()
 }
