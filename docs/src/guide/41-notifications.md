@@ -1,8 +1,8 @@
 # Notifications
 
-You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. When you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
+You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, or to the people a condition matches, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, person attributes and segments as audiences, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -40,6 +40,7 @@ leptoskit_notifications = "0.3"
 
 ```rust
 use leptoskit_notifications::SendSpec;
+use leptoskit_notifications::SendTarget;
 use leptoskit_rpc::client::call_as_app;
 
 let sent = call_as_app(leptoskit_notifications::Send {
@@ -52,12 +53,13 @@ let sent = call_as_app(leptoskit_notifications::Send {
         visible_at: None,
         expires_at: None,
     },
-    recipients: vec![alice_id, bob_id],
+    target: SendTarget::Recipients(vec![alice_id, bob_id]),
+    validate_only: false,
 })
 .await?;
 ```
 
-Every named recipient gets one durable row of their own, visible immediately — or at `visible_at`, when you schedule one — until `expires_at`. The counts come back: `delivered`, `skipped_opted_out` (recipients who opted out of the category), and `recipients`. The whole send is one transaction, so it lands all at once or not at all.
+Every named recipient gets one durable row of their own, visible immediately — or at `visible_at`, when you schedule one — until `expires_at`. The counts come back: `delivered`, `skipped_opted_out` (recipients who opted out of the category), and `recipients`. A recipients send is one transaction, so it lands all at once or not at all, and answers with its final counts.
 
 The `idempotency_key` is how retries stay safe: derive one stable key per logical send (like the invoice id above) and reuse it on retry. The same key with the same intent answers the first run's result and writes nothing — across restarts, and past the send's expiry, because the send's bookkeeping lives in the service's database — and the same key with a different intent is refused with a conflict, so a reused key can't quietly send something else.
 
@@ -75,6 +77,156 @@ let cancelled: u32 = call_as_app(leptoskit_notifications::Cancel {
 ```
 
 After it's due the service refuses with a conflict — what someone has already seen can't be unsent. Cancelling again answers `0`, and so does cancelling a send every recipient opted out of: it delivered nothing, but the service knows the key, and cancelling it is still cancelling it.
+
+## Send to a topic
+
+Naming every recipient stops scaling the moment your audience chooses itself: everyone who pressed "follow" wants the next post, and your server shouldn't have to keep that list in memory to reach it. A topic is the list: the app's server subscribes people in batches, and a send to the topic reaches everyone subscribed, however many that is.
+
+```rust
+use leptoskit_rpc::client::call_as_app;
+
+// Whenever someone follows, in batches of at most 1,000:
+let changes = call_as_app(leptoskit_notifications::SubscribeToTopic {
+    topic: "posts.alice".into(),
+    persons: vec![follower_id],
+})
+.await?;
+
+// And the send itself:
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: format!("post-{post_id}"),
+    spec: SendSpec {
+        category: "social".into(),
+        title: "Alice posted".into(),
+        body: preview.clone(),
+        data: Some(serde_json::json!({ "screen": "post", "id": post_id }).to_string()),
+        visible_at: None,
+        expires_at: None,
+    },
+    target: SendTarget::Topic("posts.alice".into()),
+    validate_only: false,
+})
+.await?;
+```
+
+A topic names 1 to 128 bytes of the characters FCM accepts — letters, digits, `-`, `.`, `_`, `~`, `%` — and a person holds at most 500 of them. Batching is idempotent: people who already hold the topic change nothing and count nothing, and people already at their 500 are skipped and counted in the answer rather than refusing the whole batch. Topics belong to people, not devices: every device signed in as the person receives what the person receives, the same way the inbox does.
+
+Because the audience can be any size, the send doesn't hold it in one transaction. `Send` records the send and enqueues a fanout job, then answers immediately with state `fanning_out`. The job walks the audience in batches of 500, ordered by person id, writing each batch's rows — and its push deliveries, and the live updates open screens follow — exactly as a recipients send does: opt-outs skipped and counted, schedules and expiry honored. The audience is snapshotted as the fanout reaches each person, so someone who subscribes after it passed them by waits for the next send. A crashed or replayed batch never duplicates: the send holds one row per person by a database constraint.
+
+Unsubscribe the same way — `UnsubscribeFromTopic { topic, persons }` in batches — and `send_status` (below) follows a large send's progress.
+
+## Let people subscribe themselves
+
+Your server can subscribe anyone; a person pressing a switch in your app should only be able to join the audiences you published as joinable. That boundary is configuration: topics are open to self-subscription only when the operator declares them open, in the service's environment — patterns like `news.*`:
+
+```bash
+LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS=news.*, inbox
+```
+
+Nothing is open by default, and a pattern that can't match a topic name refuses to start, named. `*` stands for any run of topic characters: `news.*` matches `news.breaking` but not `news`. The reason for the gate is whose choice a subscription is — your server follows your product's logic, while a person's own call should only reach the topics you said they could reach.
+
+The person's own calls need no list and name no one but themselves — the person is read from the app's forwarded identity, never from an argument, so nobody can subscribe anyone else:
+
+```rust
+leptoskit_rpc::call(leptoskit_notifications::Subscribe { topic: "news.breaking".into() }).await?;
+leptoskit_rpc::call(leptoskit_notifications::Unsubscribe { topic: "news.breaking".into() }).await?;
+```
+
+A closed topic is refused with a clear forbidden error; a bad topic name is invalid. Unsubscribing is always allowed — leaving an audience is the person's to do, whatever subscribed them — and `my_topics` is their own list, live and paginated, so a screen follows the app's batch subscriptions and the person's own joins and leaves alike. A follow switch is the whole client half:
+
+```rust
+use leptoskit::prelude::*;
+use leptoskit_rpc::call;
+use leptoskit_rpc::use_live_paginated;
+
+#[component]
+pub fn BreakingNews() -> impl IntoView {
+    let topics = use_live_paginated(
+        move |page| leptoskit_notifications::MyTopics { page },
+        20,
+    );
+    let following = move || {
+        topics
+            .items()
+            .iter()
+            .any(|topic| topic == "news.breaking")
+    };
+    let toggle = move || {
+        leptos::task::spawn_local(async move {
+            let _ = if following() {
+                call(leptoskit_notifications::Unsubscribe {
+                    topic: "news.breaking".into(),
+                })
+                .await
+            } else {
+                call(leptoskit_notifications::Subscribe {
+                    topic: "news.breaking".into(),
+                })
+                .await
+            };
+        });
+    };
+
+    view! {
+        <Button on_press=toggle>
+            {move || if following() { "Stop following" } else { "Follow breaking news" }}
+        </Button>
+    }
+}
+```
+
+## Target with conditions
+
+A topic is one audience; a product usually wants the overlap — everyone in `news.sports` who is also in `alerts.local`, or in one and not the other. A condition writes that, in the same grammar Firebase Cloud Messaging uses, so a migration is a paste:
+
+```text
+'news.sports' in topics && 'alerts.local' in topics
+'TopicA' in topics && ('TopicB' in topics || !('TopicC' in topics))
+```
+
+```rust
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "game-42-final".into(),
+    spec: SendSpec {
+        category: "alerts".into(),
+        title: "Final score".into(),
+        body: format!("{home} {home_score} – {away_score} {away}"),
+        data: None,
+        visible_at: None,
+        expires_at: None,
+    },
+    target: SendTarget::Condition(
+        "'news.sports' in topics && 'alerts.local' in topics".into(),
+    ),
+    validate_only: false,
+})
+.await?;
+```
+
+The grammar is `&&`, `||`, `!`, and parentheses over `'topic' in topics`, with `!` binding tightest. At most five distinct topics, nesting at most eight levels deep, and at most 1,024 bytes — FCM's bounds, checked on both sides, with errors that name the byte they gave up at. One shape is refused outright: a condition that already holds for a person with no topics, like `!('a' in topics)`, would quietly become an "everyone" audience as soon as anyone exists, and there is no everyone audience yet — send to explicit recipients for that. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency.
+
+## Track a large send
+
+A recipients send answers with its final counts because it finished inside the call. A topic or condition send answers `fanning_out` and keeps working — so ask it how it's going, and try the whole thing without spending it:
+
+```rust
+// How the fanout is going, from your server:
+let progress = call_as_app(leptoskit_notifications::SendStatus {
+    idempotency_key: "post-1234".into(),
+})
+.await?;
+
+// What the send would reach right now, writing nothing:
+let dry = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "post-1235".into(),
+    spec,
+    target: SendTarget::Topic("posts.alice".into()),
+    validate_only: true,
+})
+.await?;
+```
+
+`send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
 
 ## Read the inbox on any platform
 
@@ -443,6 +595,7 @@ Push reaches a device through its platform's service: iOS and macOS through APNs
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
+- **Audiences are topics and conditions, not attributes.** There is no "send to everyone in Berlin" or "everyone who signed up this month": topics are the only segmentation, subscribed by your server or — where you open them — by the person. Person attributes and segments, and "send to everyone", are later work.
 
 The engineering notes in the repository describe the transport work that follows.
 

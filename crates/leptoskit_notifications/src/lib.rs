@@ -1,6 +1,7 @@
 //! Durable notifications for leptoskit apps.
 //!
-//! An app's server sends a notification to explicit users, and the service
+//! An app's server sends a notification to explicit users, to a topic's
+//! subscribers, or to the people a condition matches, and the service
 //! stores one durable inbox row per recipient, in a database of its own.
 //! The recipients read their own inbox from any device their app signs in
 //! on: the web, a native app, or the server while it renders. When the
@@ -25,17 +26,18 @@
 //!
 //! Who may call what:
 //!
-//! - [`send`], [`cancel`], and [`push_deliveries`] answer only the app's
+//! - [`send`], [`cancel`], [`send_status`], [`subscribe_to_topic`],
+//!   [`unsubscribe_from_topic`], and [`push_deliveries`] answer only the app's
 //!   server, signed with the service's token ([`rpc::client::call_as_app`]). A
 //!   recipient has no operation that sends or steers a push.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
 //!   [`mark_dismissed`], [`set_category_preference`],
-//!   [`register_push_endpoint`], [`push_endpoints`], and
-//!   [`revoke_push_endpoint`] answer the signed-in person the app forwarded
-//!   ([`rpc::server::ForwardedIdentity`]), and only ever touch their own rows.
-//!   Anonymous calls, and calls that forge a user id in any header, are
-//!   refused; the recipient is always read from the app's forwarded identity,
-//!   never from an argument.
+//!   [`register_push_endpoint`], [`push_endpoints`], [`revoke_push_endpoint`],
+//!   [`subscribe`], [`unsubscribe`], and [`my_topics`] answer the signed-in
+//!   person the app forwarded ([`rpc::server::ForwardedIdentity`]), and only
+//!   ever touch their own rows. Anonymous calls, and calls that forge a user id
+//!   in any header, are refused; the recipient is always read from the app's
+//!   forwarded identity, never from an argument.
 //!
 //! On the web, the [`browser`] module is the person's own half of
 //! enrollment: it serves the receiver worker that shows what arrives, and
@@ -51,6 +53,8 @@ use leptoskit_rpc as rpc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+
+pub mod condition;
 
 #[cfg(feature = "browser")]
 pub mod browser;
@@ -93,6 +97,25 @@ pub const MAX_PREFERENCES: usize = 100;
 /// but tighter, so a screen scrolls a bounded amount.
 pub const MAX_INBOX_PAGE: u32 = 100;
 
+/// The longest topic name, in bytes: FCM's bound.
+pub const MAX_TOPIC_LEN: usize = 128;
+
+/// The most topics one person may hold. A person's devices all receive
+/// what the person receives, so a topic list is per person, never per
+/// device.
+pub const MAX_TOPICS_PER_PERSON: usize = 500;
+
+/// The most persons one [`subscribe_to_topic`] or
+/// [`unsubscribe_from_topic`] call may name, mirroring FCM's batch bound.
+pub const MAX_SUBSCRIBE_PERSONS: usize = 1_000;
+
+/// The most items one [`my_topics`] page reads.
+pub const MAX_TOPICS_PAGE: u32 = 100;
+
+/// How many people a fanout job step delivers to, in one transaction: the
+/// batch size a topic or condition send walks its audience in.
+pub const FANOUT_BATCH: usize = 500;
+
 /// The farthest ahead a notification may be scheduled or set to expire, in
 /// seconds: about a year.
 pub const MAX_SCHEDULE_SECS: i64 = 366 * 24 * 60 * 60;
@@ -105,7 +128,16 @@ pub const MAX_SCHEDULE_SECS: i64 = 366 * 24 * 60 * 60;
 /// Rows the app cancelled before they were due ([`cancel`]) stay in the
 /// table with `cancelled_at` set, so a send's history stays explainable;
 /// they never become visible.
-#[table(name = "notifications", live, index(person, id))]
+///
+/// One row per send and person, enforced by the database: a batch of a
+/// fanout that replays after a crash can never write a person a second
+/// copy of the same send.
+#[table(
+	name = "notifications",
+	live,
+	unique(send_key, person),
+	index(person, id)
+)]
 pub struct Notification {
 	/// A UUID v7 the service assigns, so rows order by arrival and pages
 	/// have a stable cursor.
@@ -148,15 +180,62 @@ pub struct AppSend {
 	#[db(key, min_len = 1, max_len = 255)]
 	pub idempotency_key: String,
 	/// A SHA-256 of the send's canonical intent: category, content,
-	/// recipients, schedule, and expiry. Same key, same hash; anything else
+	/// target, schedule, and expiry. Same key, same hash; anything else
 	/// is a different send that must use another key.
 	#[db(min_len = 64, max_len = 64)]
 	pub intent: String,
-	/// How many inbox rows the send created.
+	/// How many inbox rows the send created. For a send whose fanout runs
+	/// as a job, the rows written so far.
 	pub delivered: i64,
 	/// How many recipients it skipped because they opted out of the
 	/// category.
 	pub skipped_opted_out: i64,
+	/// How many people the target matched so far: every named recipient
+	/// for a recipients send, every person the fanout matched for a topic
+	/// or condition one.
+	#[db(default = 0)]
+	pub targeted: i64,
+	/// Where the send stands, as [`SendState`]'s names. A recipients send
+	/// is complete the moment it is made; a topic or condition send fans
+	/// out until this says otherwise.
+	#[db(one_of("fanning_out", "complete", "cancelled"), default = "complete")]
+	pub state: String,
+	/// The stored target, for a send whose fanout runs as a job. A
+	/// recipients send needs none: its fanout happened in its own
+	/// transaction.
+	#[db(max_len = 1_200)]
+	pub target: Option<String>,
+	/// The stored spec, for the same sends, as the JSON it was sent as.
+	#[db(max_len = 8_192)]
+	pub spec: Option<String>,
+	/// The last person the fanout delivered to: where a replayed job step
+	/// picks up after. `None` before the first batch.
+	pub cursor: Option<uuid::Uuid>,
+	#[db(created_at)]
+	pub created_at: leptoskit_db::Timestamp,
+}
+
+/// One person's subscription to one topic. Topics are per person, not per
+/// device: the inbox is per person, and every device signed in as
+/// [`TopicSubscription::person`] receives what the person receives.
+///
+/// The app's server subscribes people in batches ([`subscribe_to_topic`]);
+/// a person may subscribe themselves, to topics the operator opened for
+/// it, with [`subscribe`]. The table is live, so an open [`my_topics`]
+/// page follows both.
+#[table(
+	name = "topic_subscriptions",
+	live,
+	unique(person, topic),
+	index(topic, person)
+)]
+pub struct TopicSubscription {
+	pub id: leptoskit_db::Id<Self>,
+	pub person: uuid::Uuid,
+	/// The topic's name: 1 to [`MAX_TOPIC_LEN`] bytes of the characters
+	/// FCM accepts, checked everywhere a topic is named.
+	#[db(min_len = 1, max_len = 128)]
+	pub topic: String,
 	#[db(created_at)]
 	pub created_at: leptoskit_db::Timestamp,
 }
@@ -238,22 +317,139 @@ pub struct SendSpec {
 	pub expires_at: Option<leptoskit_db::Timestamp>,
 }
 
+/// Who a send goes to. Explicit recipients are today's send, unchanged;
+/// a topic or a condition addresses the people subscribed to topics, and
+/// fans out durably, in batches, until the whole audience has its rows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SendTarget {
+	/// The people the app named, at most [`MAX_RECIPIENTS`] of them after
+	/// duplicates collapse. One transaction, the answer immediately.
+	Recipients(Vec<uuid::Uuid>),
+	/// Everyone subscribed to one topic now and as the fanout reaches
+	/// them.
+	Topic(String),
+	/// Everyone a [condition](condition) matches, written the way FCM
+	/// writes conditions: `'news.sports' in topics && 'alerts.local' in
+	/// topics`.
+	Condition(String),
+}
+
+impl SendTarget {
+	/// The stored form, for a send whose fanout runs as a job: the
+	/// canonical JSON of the target, whatever the caller's key order was.
+	#[cfg(feature = "service")]
+	pub(crate) fn stored(&self) -> String {
+		serde_json::to_string(self).expect("the target is plain JSON")
+	}
+
+	/// The target a stored row names, for the same sends.
+	///
+	/// # Errors
+	///
+	/// [`rpc::Error::server`], when a stored target no longer parses,
+	/// which is a bug's shape, not a caller's.
+	#[cfg(feature = "service")]
+	pub(crate) fn from_stored(stored: &str) -> rpc::Result<Self> {
+		serde_json::from_str(stored).map_err(|error| {
+			rpc::Error::server(format!("a stored send target won't parse: {error}"))
+		})
+	}
+}
+
+/// Where a send stands. A recipients send is [`SendState::Complete`] the
+/// moment it is made; a topic or condition send answers
+/// [`SendState::FanningOut`] and stays there until its fanout job has
+/// walked the whole audience, or the app cancelled it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SendState {
+	/// The fanout job is still walking the audience; the counts in the
+	/// answer are what it has written so far.
+	FanningOut,
+	/// Every person the target matched has their row, or was counted
+	/// skipped.
+	#[default]
+	Complete,
+	/// The app cancelled it, mid-fanout or after.
+	Cancelled,
+}
+
+impl SendState {
+	/// The stored name.
+	#[must_use]
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::FanningOut => "fanning_out",
+			Self::Complete => "complete",
+			Self::Cancelled => "cancelled",
+		}
+	}
+
+	/// The state a stored name stands for, or `None` for anything else.
+	#[must_use]
+	pub fn from_str_value(name: &str) -> Option<Self> {
+		match name {
+			"fanning_out" => Some(Self::FanningOut),
+			"complete" => Some(Self::Complete),
+			"cancelled" => Some(Self::Cancelled),
+			_ => None,
+		}
+	}
+}
+
 /// What a send came to. The counts describe the first run: a send repeated
 /// with the same key answers the stored counts again, marked
 /// [`SendResult::duplicate`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SendResult {
-	/// How many recipients received a durable inbox row.
+	/// How many recipients received a durable inbox row. A send that is
+	/// still fanning out answers the rows written so far.
 	pub delivered: u32,
 	/// How many recipients were skipped because they opted out of the
 	/// category.
 	pub skipped_opted_out: u32,
 	/// How many recipients the send named, after duplicates collapsed.
+	/// A topic or condition send names no one, so it answers 0.
 	pub recipients: u32,
 	/// Whether this answer repeats an earlier send with the same key and
 	/// the same intent, and nothing new was written.
 	#[serde(default)]
 	pub duplicate: bool,
+	/// Where the send stands: [`SendState::Complete`] for a recipients
+	/// send, [`SendState::FanningOut`] for a fresh topic or condition one.
+	pub state: SendState,
+	/// How many people the target matched: every named recipient for a
+	/// recipients send, the audience found so far for a fanning-out one,
+	/// or the audience a `validate_only` send would reach now.
+	pub targeted: u32,
+}
+
+/// What [`send_status`] answers: where a send stands and what it has done
+/// so far. For a recipients send, the final counts the moment it was
+/// made; for a topic or condition send, the fanout's progress, complete
+/// when its state says so.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SendProgress {
+	/// Where the send stands.
+	pub state: SendState,
+	/// How many people the target matched so far.
+	pub targeted: u32,
+	/// How many inbox rows the send has written.
+	pub delivered: u32,
+	/// How many matched people it skipped for opting out of the category.
+	pub skipped_opted_out: u32,
+}
+
+/// What one app-side topic subscription call changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TopicChanges {
+	/// How many subscriptions the call wrote. Already-held ones change
+	/// nothing, so a retried call answers 0.
+	pub subscribed: u32,
+	/// How many named persons were skipped: they already hold
+	/// [`MAX_TOPICS_PER_PERSON`] topics and this would be one more.
+	pub skipped_full: u32,
 }
 
 /// One item of a recipient's inbox: everything a screen needs to show it
@@ -304,21 +500,24 @@ pub struct CategoryPreference {
 /// # Errors
 ///
 /// A message naming what's wrong: a length, a control character, `data`
-/// that isn't a JSON object, or a schedule that doesn't hold together.
+/// that isn't a JSON object, a target that isn't one (an empty recipient
+/// list, a malformed topic name, or a condition the parser refuses), or a
+/// schedule that doesn't hold together.
 pub fn check_send(
 	idempotency_key: &str,
 	spec: &SendSpec,
-	recipients: &[uuid::Uuid],
+	target: &SendTarget,
 ) -> Result<(), String> {
-	check_send_shape(idempotency_key, spec, recipients)?;
+	check_send_shape(idempotency_key, spec, target)?;
 	check_send_timing(spec.visible_at, spec.expires_at)
 }
 
 /// Checks what can never change about a send, whatever the clock says
-/// later: lengths, printable text, `data`'s shape, the recipient bound,
-/// and an expiry that contradicts the visibility it names. A send the
-/// service accepted passes this forever, so a retry of it is judged by
-/// its key, not by the clock.
+/// later: lengths, printable text, `data`'s shape, the target's own
+/// bounds — the recipient bound, the topic name, or the whole condition
+/// grammar — and an expiry that contradicts the visibility it names. A
+/// send the service accepted passes this forever, so a retry of it is
+/// judged by its key, not by the clock.
 ///
 /// # Errors
 ///
@@ -326,7 +525,7 @@ pub fn check_send(
 pub fn check_send_shape(
 	idempotency_key: &str,
 	spec: &SendSpec,
-	recipients: &[uuid::Uuid],
+	target: &SendTarget,
 ) -> Result<(), String> {
 	check_key(idempotency_key)?;
 	check_category(&spec.category)?;
@@ -346,8 +545,16 @@ pub fn check_send_shape(
 
 	check_data(spec.data.as_deref())?;
 
-	if recipients.is_empty() || recipients.len() > MAX_RECIPIENTS {
-		return Err(format!("a send names 1 to {MAX_RECIPIENTS} recipients"));
+	match target {
+		SendTarget::Recipients(recipients) => {
+			if recipients.is_empty() || recipients.len() > MAX_RECIPIENTS {
+				return Err(format!("a send names 1 to {MAX_RECIPIENTS} recipients"));
+			}
+		}
+		SendTarget::Topic(topic) => check_topic(topic)?,
+		SendTarget::Condition(text) => {
+			condition::check_condition(text).map_err(|error| error.to_string())?;
+		}
 	}
 
 	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
@@ -357,6 +564,34 @@ pub fn check_send_shape(
 	}
 
 	Ok(())
+}
+
+/// Checks a topic name wherever one is named — a send's target, a
+/// subscription, a condition's quotes: 1 to [`MAX_TOPIC_LEN`] bytes of the
+/// characters FCM accepts, so every path agrees on what a topic is.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_topic(topic: &str) -> Result<(), String> {
+	if topic.is_empty() || topic.len() > MAX_TOPIC_LEN {
+		return Err(format!("a topic name is 1 to {MAX_TOPIC_LEN} bytes"));
+	}
+
+	if !topic.bytes().all(topic_byte) {
+		return Err(
+			"a topic name uses the characters FCM accepts: letters, digits, `-`, `.`, `_`, `~`, \
+			 and `%`"
+				.into(),
+		);
+	}
+
+	Ok(())
+}
+
+/// Whether a byte can appear in a topic name.
+pub(crate) fn topic_byte(byte: u8) -> bool {
+	byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'%')
 }
 
 /// Checks an idempotency key.
@@ -471,16 +706,30 @@ fn valid_text(value: &str) -> bool {
 	!value.chars().any(char::is_control)
 }
 
-/// Sends a notification to explicit users: the app's server only.
+/// Sends a notification to explicit users, a topic's subscribers, or the
+/// people a condition matches: the app's server only.
 ///
-/// Every named recipient gets one durable inbox row, in the service's own
-/// database, visible from now — or from `spec.visible_at`, when it
-/// schedules one — until it expires. Recipients who opted out of the
-/// category are skipped and counted, not delivered to. When a recipient
-/// has enrolled push endpoints and the operator configured their
-/// transport, one durable push delivery per endpoint is enqueued with the
-/// row, and the push job attempts it when the notification becomes
-/// visible; see [`push`].
+/// **Recipients** ([`SendTarget::Recipients`]) is the whole send in one
+/// transaction: every named recipient gets one durable inbox row, visible
+/// from now — or from `spec.visible_at`, when it schedules one — until it
+/// expires, and the answer carries the final counts.
+///
+/// **A topic or a condition** ([`SendTarget::Topic`],
+/// [`SendTarget::Condition`]) can name any number of people, so the send
+/// records itself, enqueues a fanout job in the same transaction, and
+/// answers immediately with [`SendState::FanningOut`]. The job walks the
+/// audience in batches of [`FANOUT_BATCH`], ordered by person id, writing
+/// each batch's rows — and its push deliveries — in one transaction, and
+/// snapshots the audience as it reaches each person: someone who
+/// subscribes after the fanout passed them by is not reached by this
+/// send. Ask [`send_status`] how far it has come; a send that is still
+/// fanning out answers the counts so far. Opt-outs, schedules, expiry,
+/// push enqueueing, and live inbox updates behave exactly as for a
+/// recipients send.
+///
+/// `validate_only` checks everything and answers the audience the send
+/// would reach right now — matched by the target, minus the people opted
+/// out of the category — and writes nothing.
 ///
 /// The send is idempotent by idempotency key: the same key with the same
 /// intent answers the first run's result and writes nothing, across
@@ -510,7 +759,8 @@ pub async fn send(
 	cx: &rpc::MutationCx,
 	idempotency_key: String,
 	spec: SendSpec,
-	recipients: Vec<uuid::Uuid>,
+	target: SendTarget,
+	#[serde(default)] validate_only: bool,
 ) -> rpc::Result<SendResult> {
 	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
 		return Err(rpc::Error::forbidden(
@@ -520,10 +770,30 @@ pub async fn send(
 
 	// What the send is, not when it is: a retry of an accepted send must be
 	// judged by its key alone, or an expiry would make it unanswerable.
-	check_send_shape(&idempotency_key, &spec, &recipients).map_err(rpc::Error::invalid)?;
+	check_send_shape(&idempotency_key, &spec, &target).map_err(rpc::Error::invalid)?;
 
-	let recipients: std::collections::BTreeSet<uuid::Uuid> = recipients.into_iter().collect();
-	let intent = service::intent_hash(&spec, &recipients);
+	if validate_only {
+		// A dry run follows the new-send rules — the clock applies — but
+		// no key is read and nothing is written.
+		check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+		let audience = service::audience_now(cx.tx(), &spec, &target).await?;
+
+		return Ok(SendResult {
+			delivered: audience.delivered,
+			skipped_opted_out: audience.skipped_opted_out,
+			recipients: matches!(target, SendTarget::Recipients(_))
+				.then_some(audience.targeted)
+				.unwrap_or(0),
+			duplicate: false,
+			state: match target {
+				SendTarget::Recipients(_) => SendState::Complete,
+				_ => SendState::FanningOut,
+			},
+			targeted: audience.targeted,
+		});
+	}
+
+	let intent = service::intent_hash(&spec, &target);
 
 	if let Some(existing) = service::find_send(cx.tx(), &idempotency_key).await? {
 		return service::answer_send(&existing, &intent);
@@ -532,40 +802,124 @@ pub async fn send(
 	// New send, so the clock applies: how far ahead it may schedule.
 	check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
 
-	match service::write_send(cx.tx(), &idempotency_key, &intent).await {
+	// A recipients send is the whole fanout in this transaction.
+	if let SendTarget::Recipients(named) = &target {
+		let recipients: std::collections::BTreeSet<uuid::Uuid> = named.iter().copied().collect();
+		let targeted = recipients.len().try_into().unwrap_or(u32::MAX);
+
+		match service::write_send(cx.tx(), &idempotency_key, &intent, targeted).await {
+			Ok(()) => {}
+			// Another send with this key committed between the read and
+			// the write. On Postgres the unique violation ends this
+			// transaction, so its outcome can't be read here: the
+			// mutation runs again from the start, finds the send, and
+			// answers from the store.
+			Err(leptoskit_db::DbError::Conflict { .. }) => return Err(rpc::Error::Contended),
+			Err(error) => return Err(error.into()),
+		}
+
+		let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
+		service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
+		service::schedule_wakes(cx, &idempotency_key, &spec).await?;
+
+		// A send on a server with push configured fans its deliveries
+		// out; on one without, or from a route that carries no
+		// configuration, the inbox is the whole send.
+		if service::push::Push::of(cx).is_ok() {
+			service::push::schedule(cx, &idempotency_key, &spec, &fanout).await?;
+		}
+
+		return Ok(SendResult {
+			delivered: fanout.delivered,
+			skipped_opted_out: fanout.skipped_opted_out,
+			recipients: targeted,
+			duplicate: false,
+			state: SendState::Complete,
+			targeted,
+		});
+	}
+
+	// A topic or a condition can name any number of people: the send
+	// records itself — target, spec, and its key — and the fanout job
+	// walks the audience from here. The job exists exactly when the send
+	// lands, and its key keeps a raced or retried send from doubling it.
+	match service::write_fanout_send(cx.tx(), &idempotency_key, &intent, &target, &spec).await {
 		Ok(()) => {}
-		// Another send with this key committed between the read and the
-		// write. On Postgres the unique violation ends this transaction,
-		// so its outcome can't be read here: the mutation runs again from
-		// the start, finds the send, and answers from the store.
 		Err(leptoskit_db::DbError::Conflict { .. }) => return Err(rpc::Error::Contended),
 		Err(error) => return Err(error.into()),
 	}
 
-	let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
-	service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
+	cx.enqueue(FanoutSend {
+		send_key: idempotency_key.clone(),
+		step: 0,
+	})
+	.at(leptoskit_db::now())
+	.key(format!("fanout:{idempotency_key}:0"))
+	.await?;
+
 	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
 
-	// A send on a server with push configured fans its deliveries out;
-	// on one without, or from a route that carries no configuration, the
-	// inbox is the whole send.
-	if service::push::Push::of(cx).is_ok() {
-		service::push::schedule(cx, &idempotency_key, &spec, &fanout).await?;
+	Ok(SendResult {
+		delivered: 0,
+		skipped_opted_out: 0,
+		recipients: 0,
+		duplicate: false,
+		state: SendState::FanningOut,
+		targeted: 0,
+	})
+}
+
+/// One step of a topic or condition send's fanout: the batch of people
+/// the job [`send`](fn@send) enqueued walks next, delivered in one
+/// transaction with their push deliveries, and the successor step
+/// enqueued when more audience remains. The stored cursor is where a
+/// replayed step picks up after, and the send's row is what a step checks
+/// before it writes, so a [`cancel`] that lands between steps ends the
+/// fanout with nothing more written.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications", queue = "fanout", retries = 8, timeout = 5m)]
+pub async fn fanout_send(cx: &rpc::JobCx, send_key: String, step: u32) -> rpc::Result<()> {
+	service::fanout_step(cx, &send_key, step).await
+}
+
+/// Where a send stands and what it has done so far: the answer for the
+/// app's server, from the send's own bookkeeping row. A recipients send
+/// answers its final counts; a topic or condition send answers the
+/// fanout's progress, and once its state is [`SendState::Complete`] the
+/// counts are final too.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server,
+/// [`rpc::Error::NotFound`] for a key no send holds, and
+/// [`rpc::Error::Invalid`] for a malformed key.
+#[rpc::query(service = "notifications")]
+pub async fn send_status(cx: &rpc::QueryCx, idempotency_key: String) -> rpc::Result<SendProgress> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app reads send status: call this from its server, with the service's token",
+		));
 	}
 
-	Ok(SendResult {
-		delivered: fanout.delivered,
-		skipped_opted_out: fanout.skipped_opted_out,
-		recipients: recipients.len().try_into().unwrap_or(u32::MAX),
-		duplicate: false,
-	})
+	check_key(&idempotency_key).map_err(rpc::Error::invalid)?;
+
+	let Some(send) = service::find_send(cx.db(), &idempotency_key).await? else {
+		return Err(rpc::Error::not_found(
+			"no send with this idempotency key exists",
+		));
+	};
+
+	Ok(service::progress_of(&send))
 }
 
 /// Wakes the people a send reached, when its schedule turns: the job
 /// every send enqueues when it becomes visible, and any send with an
 /// expiry at its `expires_at`. It writes one [`Wake`] row per person the
-/// send delivered to, in one bounded transaction, which re-runs their
-/// open inbox and badge subscriptions with a fresh `now`.
+/// send delivered to, in bounded transactions, which re-run their open
+/// inbox and badge subscriptions with a fresh `now`.
 ///
 /// The wake runs whether or not a screen is watching, and whether or not
 /// the send was cancelled or its rows dismissed in the meantime: a re-run
@@ -583,13 +937,19 @@ pub async fn wake_send(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
 /// opted out, or it was already cancelled — answers `0`, whenever it's
 /// asked: a known send is always cancellable to a point, idempotently.
 ///
+/// A send that is still fanning out can be cancelled mid-fanout: the
+/// fanout stops before its next batch, the rows written so far are
+/// cancelled — visible or not, because an audience this large can't wait
+/// for the schedule to turn — and the send answers
+/// [`SendState::Cancelled`] from then on.
+///
 /// Only the app may call it.
 ///
 /// # Errors
 ///
 /// [`rpc::Error::Forbidden`] from anywhere but the app's server,
 /// [`rpc::Error::NotFound`] for an unknown key, and
-/// [`rpc::Error::Conflict`] once the send is visible.
+/// [`rpc::Error::Conflict`] once the send is complete and visible.
 #[rpc::mutation(service = "notifications")]
 pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Result<u32> {
 	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
@@ -601,6 +961,7 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 	check_key(&idempotency_key).map_err(rpc::Error::invalid)?;
 
 	let now = leptoskit_db::now();
+	let send = service::find_send(cx.tx(), &idempotency_key).await?;
 	let rows = Notification::query()
 		.filter(|notification| notification.send_key.eq(idempotency_key.clone()))
 		.all(cx.tx())
@@ -609,23 +970,32 @@ pub async fn cancel(cx: &rpc::MutationCx, idempotency_key: String) -> rpc::Resul
 	// Existence is the send's own row, not its fanout: a send every
 	// recipient opted out of delivered nothing, and cancelling it is still
 	// cancelling it.
-	if rows.is_empty()
-		&& service::find_send(cx.tx(), &idempotency_key)
-			.await?
-			.is_none()
-	{
+	if send.is_none() && rows.is_empty() {
 		return Err(rpc::Error::not_found(
 			"no send with this idempotency key exists",
 		));
 	}
 
-	if rows
-		.iter()
-		.any(|notification| notification.visible_at <= now && notification.cancelled_at.is_none())
-	{
+	// A fanout still walking its audience is stoppable whatever its rows
+	// say; a complete one keeps today's rule: what someone has already
+	// seen can't be unsent.
+	let fanning = send
+		.as_ref()
+		.is_some_and(|send| SendState::from_str_value(&send.state) == Some(SendState::FanningOut));
+
+	if !fanning
+		&& rows.iter().any(|notification| {
+			notification.visible_at <= now && notification.cancelled_at.is_none()
+		}) {
 		return Err(rpc::Error::conflict(
 			"this send is already visible, so it can no longer be cancelled",
 		));
+	}
+
+	if fanning {
+		// The state the fanout's next step checks: once this commits, no
+		// later batch of this send writes anything.
+		service::cancel_fanout(cx.tx(), &idempotency_key).await?;
 	}
 
 	let mut cancelled = 0u32;
@@ -875,4 +1245,140 @@ pub async fn category_preferences(cx: &rpc::QueryCx) -> rpc::Result<Vec<Category
 			}
 		})
 		.collect())
+}
+
+/// Subscribes people to a topic, in one batch: the app's server only, the
+/// way FCM's batch subscribe is. At most [`MAX_SUBSCRIBE_PERSONS`] people
+/// per call, duplicates collapse, and the call is idempotent: people who
+/// already hold the topic change nothing and count nothing. A person
+/// holds at most [`MAX_TOPICS_PER_PERSON`] topics; people at that bound
+/// are skipped and counted in [`TopicChanges::skipped_full`], so one full
+/// person in a large batch never refuses the rest.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
+/// [`rpc::Error::Invalid`] for a bad topic name or an empty or oversized
+/// batch.
+#[rpc::mutation(service = "notifications")]
+pub async fn subscribe_to_topic(
+	cx: &rpc::MutationCx,
+	topic: String,
+	persons: Vec<uuid::Uuid>,
+) -> rpc::Result<TopicChanges> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app subscribes people in batches: call this from its server, with the \
+			 service's token",
+		));
+	}
+
+	service::subscribe_batch(cx.tx(), &topic, persons).await
+}
+
+/// Unsubscribes people from a topic, in one batch: the app's server only,
+/// the mirror of [`subscribe_to_topic`]. People who didn't hold the topic
+/// count nothing, so a retried call answers 0.
+///
+/// Only the app may call it.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
+/// [`rpc::Error::Invalid`] for a bad topic name or an empty or oversized
+/// batch.
+#[rpc::mutation(service = "notifications")]
+pub async fn unsubscribe_from_topic(
+	cx: &rpc::MutationCx,
+	topic: String,
+	persons: Vec<uuid::Uuid>,
+) -> rpc::Result<u32> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app unsubscribes people in batches: call this from its server, with the \
+			 service's token",
+		));
+	}
+
+	service::unsubscribe_batch(cx.tx(), &topic, persons).await
+}
+
+/// Subscribes the signed-in person to a topic, for themselves only: the
+/// person is read from the forwarded identity, never from an argument,
+/// so nobody can subscribe anyone else.
+///
+/// Self-subscription is open only to topics the operator declared open —
+/// patterns like `news.*` in `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS` — and
+/// nothing is open by default. The reason is whose choice a subscription
+/// is: the app's server subscribes whoever its product logic says, while
+/// a person may only join the audiences the operator published as
+/// joinable. A closed topic is refused with a clear forbidden error that
+/// names nothing but the topic's closedness.
+///
+/// A person holds at most [`MAX_TOPICS_PER_PERSON`] topics; past that the
+/// call is refused, unlike the batch call, which skips.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person
+/// or the topic isn't open to self-subscription, [`rpc::Error::Invalid`]
+/// for a bad topic name or a person at their topic bound.
+#[rpc::mutation(service = "notifications")]
+pub async fn subscribe(cx: &rpc::MutationCx, topic: String) -> rpc::Result<()> {
+	let me = service::me(cx.identity())?;
+	check_topic(&topic).map_err(rpc::Error::invalid)?;
+	service::check_open_topic(cx, &topic)?;
+
+	service::subscribe_self(cx.tx(), me, &topic).await
+}
+
+/// Unsubscribes the signed-in person from a topic, for themselves only.
+/// Every topic is unsubscribable, open or not: leaving an audience is
+/// always the person's to do. Not holding the topic is not an error.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person,
+/// and [`rpc::Error::Invalid`] for a bad topic name.
+#[rpc::mutation(service = "notifications")]
+pub async fn unsubscribe(cx: &rpc::MutationCx, topic: String) -> rpc::Result<()> {
+	let me = service::me(cx.identity())?;
+	check_topic(&topic).map_err(rpc::Error::invalid)?;
+
+	service::unsubscribe_self(cx.tx(), me, &topic).await
+}
+
+/// The topics the signed-in person holds, oldest first, one bounded page
+/// at a time. A live query: the app's batch subscriptions and the
+/// person's own joins and leaves reach a screen that has it open.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] unless the app forwarded a signed-in person.
+#[rpc::query(service = "notifications")]
+pub async fn my_topics(cx: &rpc::QueryCx, page: rpc::PageArgs) -> rpc::Result<rpc::Page<String>> {
+	let me = service::me(cx.identity())?;
+	let mut page = page;
+	page.limit = page.limit.clamp(1, MAX_TOPICS_PAGE);
+
+	let page_of_rows = rpc::paginate(
+		cx.db(),
+		TopicSubscription::query().filter(|subscription| subscription.person.eq(me)),
+		&page,
+		|subscription| subscription.id.asc(),
+		|subscription| subscription.id,
+	)
+	.await?;
+
+	Ok(rpc::Page {
+		items: page_of_rows
+			.items
+			.into_iter()
+			.map(|subscription| subscription.topic)
+			.collect(),
+		end: page_of_rows.end,
+		has_more: page_of_rows.has_more,
+	})
 }

@@ -126,7 +126,7 @@ async fn send(service: &Service, key: &str, spec: Value, recipients: &[Uuid]) ->
 		json!({
 			"idempotency_key": key,
 			"spec": spec,
-			"recipients": recipients,
+			"target": { "recipients": recipients },
 		}),
 		Some(TOKEN),
 	)
@@ -181,7 +181,7 @@ async fn only_the_app_sends_and_cancels() {
 		json!({
 			"idempotency_key": "anon",
 			"spec": spec("news", "hello"),
-			"recipients": [ALICE],
+			"target": { "recipients": [ALICE] },
 		}),
 		None,
 	)
@@ -194,7 +194,7 @@ async fn only_the_app_sends_and_cancels() {
 		json!({
 			"idempotency_key": "wrong-token",
 			"spec": spec("news", "hello"),
-			"recipients": [ALICE],
+			"target": { "recipients": [ALICE] },
 		}),
 		Some("not-the-token"),
 	)
@@ -466,7 +466,7 @@ async fn a_retried_send_answers_once_across_a_restart() {
 	// The first process: connect, migrate, serve, send.
 	let db = Db::connect(&url).await.expect("the database opens");
 	let applied = db.migrate(MIGRATIONS).await.expect("migrations apply");
-	assert_eq!(applied.len(), 1, "the first migration applies: {applied:?}");
+	assert_eq!(applied.len(), 2, "the migrations apply: {applied:?}");
 	let first = start(db).await;
 	let (status, body) = send(
 		&first,
@@ -688,7 +688,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": " ",
 				"spec": spec("news", "hello"),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -696,7 +696,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "k".repeat(MAX_KEY_LEN + 1),
 				"spec": spec("news", "hello"),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -704,7 +704,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "blank-title",
 				"spec": spec("news", " "),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -712,7 +712,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "long-title",
 				"spec": json!({ "category": "news", "title": "x".repeat(MAX_TITLE_LEN + 1) }),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -720,7 +720,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "control-body",
 				"spec": json!({ "category": "news", "title": "hello", "body": "a\nb" }),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -728,7 +728,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "bad-data",
 				"spec": json!({ "category": "news", "title": "hello", "data": "{not json" }),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -736,7 +736,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "array-data",
 				"spec": json!({ "category": "news", "title": "hello", "data": "[1]" }),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -748,7 +748,7 @@ async fn bounds_are_enforced() {
 					"title": "hello",
 					"data": json!({ "x": "x".repeat(MAX_DATA_LEN) }).to_string(),
 				}),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -756,7 +756,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "no-recipients",
 				"spec": spec("news", "hello"),
-				"recipients": [],
+				"target": { "recipients": [] },
 			}),
 		),
 		(
@@ -764,9 +764,11 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "too-many",
 				"spec": spec("news", "hello"),
-				"recipients": (0..=MAX_RECIPIENTS)
-					.map(|n| Uuid::from_u128(u128::try_from(n).expect("a small index")))
-					.collect::<Vec<_>>(),
+				"target": {
+					"recipients": (0..=MAX_RECIPIENTS)
+						.map(|n| Uuid::from_u128(u128::try_from(n).expect("a small index")))
+						.collect::<Vec<_>>(),
+				},
 			}),
 		),
 		(
@@ -774,7 +776,7 @@ async fn bounds_are_enforced() {
 			json!({
 				"idempotency_key": "too-far",
 				"spec": json!({ "category": "news", "title": "hello", "visible_at": far.to_rfc3339() }),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 		(
@@ -787,7 +789,7 @@ async fn bounds_are_enforced() {
 					"visible_at": (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339(),
 					"expires_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
 				}),
-				"recipients": [ALICE],
+				"target": { "recipients": [ALICE] },
 			}),
 		),
 	];

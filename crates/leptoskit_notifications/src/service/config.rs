@@ -10,6 +10,10 @@
 //! send. A provider with nothing set is unconfigured, which is a normal
 //! way to run — its platform is refused at enrollment and its inbox is
 //! untouched.
+//!
+//! Beside the secrets sits one plain setting, [`OpenTopics`]: the topic
+//! patterns a signed-in person may subscribe themselves to. It is read
+//! the same way, once at startup, and nothing being open is the default.
 
 /// APNs's two servers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,4 +275,161 @@ fn required(
 		"the {provider} push transport is half configured: set all of its variables or none. \
 		 Missing: {missing}"
 	))
+}
+
+/// The topics a signed-in person may subscribe themselves to: patterns
+/// like `news.*`, read from `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS`,
+/// comma-separated. Nothing is open by default — a topic a person may
+/// join is the operator's deliberate publication, not the service's
+/// guess — and every topic is open to the app's own batch calls
+/// regardless.
+///
+/// A pattern is a topic name with `*` standing for any run of the
+/// characters a topic name allows, including none: `news.*` matches
+/// `news.breaking` and `news.`, but not `news` itself. The patterns are
+/// validated once at startup, so a typo refuses to start named rather
+/// than quietly closing or opening topics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenTopics {
+	patterns: Vec<String>,
+}
+
+impl OpenTopics {
+	/// Reads the operator's environment.
+	///
+	/// # Errors
+	///
+	/// Every unusable pattern, named, so an operator sees the whole fix
+	/// at once.
+	pub fn from_env() -> Result<Self, String> {
+		Self::from_vars(std::env::vars())
+	}
+
+	/// Reads the operator's configuration from `vars` instead of the
+	/// process's, as a test does.
+	///
+	/// # Errors
+	///
+	/// As [`from_env`](Self::from_env).
+	pub fn from_vars<K: AsRef<str>, V: AsRef<str>>(
+		vars: impl IntoIterator<Item = (K, V)>,
+	) -> Result<Self, String> {
+		let raw = vars
+			.into_iter()
+			.find(|(key, _)| key.as_ref() == "LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS")
+			.map(|(_, value)| value.as_ref().to_owned())
+			.unwrap_or_default();
+
+		let patterns = raw
+			.split(',')
+			.map(str::trim)
+			.filter(|pattern| !pattern.is_empty())
+			.map(|pattern| {
+				if pattern.len() > crate::MAX_TOPIC_LEN
+					|| !pattern
+						.bytes()
+						.all(|byte| byte == b'*' || crate::topic_byte(byte))
+				{
+					return Err(format!(
+						"LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS holds `{pattern}`, which isn't a \
+						 topic pattern: topic characters with `*` as the wildcard"
+					));
+				}
+
+				Ok(pattern.to_owned())
+			})
+			.collect::<Result<Vec<_>, _>>()?;
+
+		Ok(Self { patterns })
+	}
+
+	/// The patterns the operator declared, as written.
+	#[must_use]
+	pub fn patterns(&self) -> &[String] {
+		&self.patterns
+	}
+
+	/// Whether `topic` matches one of them.
+	#[must_use]
+	pub fn is_open(&self, topic: &str) -> bool {
+		self.patterns.iter().any(|pattern| matches(pattern, topic))
+	}
+}
+
+/// Whether `topic` fits `pattern`: the literal parts in order, each `*`
+/// any run of topic characters, including none.
+fn matches(pattern: &str, topic: &str) -> bool {
+	let mut stars = pattern.split('*');
+	let first = stars.next().unwrap_or_default();
+
+	if !topic.starts_with(first) {
+		return false;
+	}
+
+	let mut rest = &topic[first.len()..];
+	let segments: Vec<&str> = stars.collect();
+	let Some((&last, middles)) = segments.split_last() else {
+		// No `*` anywhere: the whole pattern had to be the topic.
+		return rest.is_empty();
+	};
+
+	for middle in middles {
+		let Some(at) = rest.find(middle) else {
+			return false;
+		};
+
+		rest = &rest[at + middle.len()..];
+	}
+
+	rest.ends_with(last)
+}
+
+#[cfg(test)]
+mod open_topics_tests {
+	use super::OpenTopics;
+
+	fn open(patterns: &str) -> OpenTopics {
+		OpenTopics::from_vars([("LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS", patterns)]).unwrap()
+	}
+
+	#[test]
+	fn nothing_is_open_by_default() {
+		let none = OpenTopics::from_vars(Vec::<(String, String)>::new()).unwrap();
+		assert!(!none.is_open("news"), "no variable at all opens nothing");
+		assert!(!open("").is_open("news"), "an empty value opens nothing");
+		assert!(
+			none.patterns().is_empty(),
+			"no variable at all opens nothing"
+		);
+	}
+
+	#[test]
+	fn a_star_matches_any_run_of_topic_characters() {
+		let topics = open("news.*, alerts.*");
+		assert!(topics.is_open("news.breaking"));
+		assert!(topics.is_open("news."));
+		assert!(!topics.is_open("news"));
+		assert!(!topics.is_open("offers.local"));
+		assert!(topics.is_open("alerts.local"), "the second pattern counts");
+
+		assert!(open("a*b").is_open("ab"), "even nothing at all");
+		assert!(open("a*b").is_open("a-middle-b"));
+		assert!(!open("a*b").is_open("a-middle-c"));
+
+		// A `*` in the middle narrows both sides.
+		assert!(open("news.*.major").is_open("news.breaking.major"));
+		assert!(!open("news.*.major").is_open("news.major"));
+	}
+
+	#[test]
+	fn an_unusable_pattern_refuses_to_start_named() {
+		for bad in ["news/child", "a b", "*é", "news (major)"] {
+			let error = OpenTopics::from_vars([("LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS", bad)])
+				.expect_err(bad);
+			assert!(
+				error.contains(bad) && error.contains("topic pattern"),
+				"names the pattern and the rule: {error}"
+			);
+		}
+	}
 }

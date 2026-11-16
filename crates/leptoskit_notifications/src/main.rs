@@ -81,11 +81,25 @@ async fn run(env: ServiceEnv) -> Result<Router, Error> {
 		runtime: push.map(std::sync::Arc::new),
 	};
 
-	let (router, live) = service::routes_with_push(
+	// The topics a signed-in person may subscribe themselves to: nothing
+	// unless the operator says otherwise, and a pattern that can't match
+	// anything refuses to start, named.
+	let open_topics = service::config::OpenTopics::from_env()
+		.map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+
+	if !open_topics.patterns().is_empty() {
+		println!(
+			"topics open to self-subscription: {}",
+			open_topics.patterns().join(", ")
+		);
+	}
+
+	let (router, live) = service::routes_with_settings(
 		db.clone(),
 		env.public_origin(),
 		ServiceCallers::for_service(Anonymous),
 		push.clone(),
+		open_topics,
 	);
 	live.start().await?;
 	// The workers run the wake jobs a scheduled or expiring send enqueues,

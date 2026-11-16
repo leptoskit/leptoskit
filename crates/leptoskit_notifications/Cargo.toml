@@ -26,6 +26,12 @@ required-features = ["service"]
 name = "live"
 required-features = ["service"]
 
+# The topics, conditions, and fanout tests exercise the send paths that
+# walk an audience in the background.
+[[test]]
+name = "topics"
+required-features = ["service"]
+
 # The push tests exercise the transports over an injected boundary; the
 # boundary tests below run real local HTTP servers.
 [[test]]
