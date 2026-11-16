@@ -57,6 +57,7 @@ pub fn generate(root: &Path, config: &LeptoskitConfig, registry: &Registry) -> R
 		&app
 	};
 	write(&directory.join("Sources/App.swift"), app)?;
+	write_macos_entitlements(root, config)?;
 	let mut sources = vec!["App.swift".to_owned(), "GeneratedPlugins.swift".to_owned()];
 
 	for source in super::project::platform_sources::MACOS {
@@ -131,17 +132,54 @@ pub fn build(root: &Path, config: &LeptoskitConfig, release: bool) -> Result<()>
 		)?;
 	}
 
-	super::run_tool(
-		Command::new("codesign")
-			.args(["--force", "--sign", "-", "--timestamp=none"])
-			.arg(&bundle),
-	)?;
+	// The push entitlement rides the local build's signature the same way it
+	// rides a distribution's: without it the OS refuses remote registration.
+	let entitlements = entitlements_path(root);
+	let mut signature = Command::new("codesign");
+	signature.args(["--force", "--sign", "-", "--timestamp=none"]);
+
+	if let Some(path) = &entitlements {
+		signature.arg("--entitlements").arg(path);
+	}
+	super::run_tool(signature.arg(&bundle))?;
 	super::run_tool(
 		Command::new("codesign")
 			.args(["--verify", "--strict"])
 			.arg(&bundle),
 	)?;
 	println!("built application at {}", bundle.display());
+	Ok(())
+}
+
+/// Where the macOS app's entitlements live: `.leptoskit/macos/
+/// App.entitlements`, present only while `[native.macos] aps-environment`
+/// opts the app into push.
+pub(crate) fn entitlements_path(root: &Path) -> Option<std::path::PathBuf> {
+	let path = root.join(".leptoskit/macos/App.entitlements");
+	path.is_file().then_some(path)
+}
+
+/// Writes `.leptoskit/macos/App.entitlements` with the APNs environment when
+/// `[native.macos] aps-environment` opts the app into push, and removes a
+/// stale one when it doesn't, so apps that never opted in generate — and
+/// sign — exactly as before.
+fn write_macos_entitlements(root: &Path, config: &LeptoskitConfig) -> Result<()> {
+	let path = root.join(".leptoskit/macos/App.entitlements");
+	let Some(environment) = config.native.macos.aps_environment else {
+		if std::fs::symlink_metadata(&path).is_ok() {
+			std::fs::remove_file(&path)?;
+		}
+		return Ok(());
+	};
+
+	let mut dictionary = plist::Dictionary::new();
+	dictionary.insert(
+		"com.apple.developer.aps-environment".into(),
+		plist::Value::String(environment.as_str().into()),
+	);
+	let mut xml = Vec::new();
+	plist::Value::Dictionary(dictionary).to_writer_xml(&mut xml)?;
+	write(&path, &String::from_utf8(xml)?)?;
 	Ok(())
 }
 

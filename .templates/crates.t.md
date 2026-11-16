@@ -870,7 +870,7 @@ Generated Linux hosts register it where it has a Linux Rust implementation; gene
 `guest::Notifications` rather than resolving the plugin on every call; web builds keep the default `browser` feature, and interpreter guests turn it off so their dependency
 tree stays free of browser imports. A successful call
 means the OS accepted the request, not that a banner appeared; focus modes and user
-settings can still suppress it. On iOS the generated app delegate forwards APNs device
+settings can still suppress it. On iOS and macOS the generated app delegate forwards APNs device
 tokens into the plugin's broker, and on Android a push-enabled generated app forwards
 FCM registration tokens into the same broker; `REMOTE_REGISTER` turns an explicit
 opt-in into a

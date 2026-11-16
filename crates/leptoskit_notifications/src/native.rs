@@ -1,8 +1,8 @@
 //! The native half of push enrollment: the device token the OS issues — an
-//! APNs device token on iOS, an FCM registration token on Android — acquired
-//! through the notifications plugin and enrolled under the signed-in person.
-//! It is the native counterpart of [`crate::browser`], with the same shape
-//! and the same boundaries.
+//! APNs device token on iOS and macOS, an FCM registration token on Android —
+//! acquired through the notifications plugin and enrolled under the
+//! signed-in person. It is the native counterpart of [`crate::browser`], with
+//! the same shape and the same boundaries.
 //!
 //! What the module does and does not touch: the token comes from the
 //! generated app delegate via the plugin's broker — never from storage this
@@ -16,12 +16,14 @@
 //!
 //! The whole workflow, in the order an app wires it:
 //!
-//! 1. Configure the build: `[native.ios] aps-environment` set to the
-//!    environment the app's provisioning profile and the service's
-//!    `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` name, the `notifications`
-//!    plugin in `[native] plugins`, and the `native` feature on the crate.
-//!    Without the entitlement the OS refuses registration with a provisioning
-//!    failure; nothing here can work around it.
+//! 1. Configure the build: the platform's push opt-in — `[native.ios]
+//!    aps-environment` or `[native.macos] aps-environment`, set to the
+//!    environment the app's signing and the service's
+//!    `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT` name, or `[native.android]
+//!    push` — the `notifications` plugin in `[native] plugins`, and the
+//!    `native` feature on the crate. Without the entitlement the OS refuses
+//!    registration with a provisioning failure; nothing here can work around
+//!    it.
 //! 2. On an **explicit user gesture** — a "turn on notifications" switch, never
 //!    a mount or a render — request notification permission through the
 //!    plugin's existing guest API
@@ -31,22 +33,22 @@
 //!    banners the person never opted into.
 //! 3. Still in the gesture, call [`enroll`]: it asks the OS to register, waits
 //!    a bounded time for the answer, and registers the token as the person's
-//!    typed [`crate::push::PushCredential`] — `Apns` from an iOS host, `Fcm`
-//!    from an Android one. The platform is a transport choice and nothing more:
-//!    the token kind the host answers names the provider kind, and the workflow
-//!    around it is identical. The answer is an opaque [`Enrollment`] id: keep
-//!    it, with the opt-in, beside the person's session.
+//!    typed [`crate::push::PushCredential`] — `Apns` from an iOS or macOS host,
+//!    `Fcm` from an Android one. The platform is a transport choice and nothing
+//!    more: the token kind the host answers names the provider kind, and the
+//!    workflow around it is identical. The answer is an opaque [`Enrollment`]
+//!    id: keep it, with the opt-in, beside the person's session.
 //! 4. On **launch**, once the person is signed in, call [`reconcile`] with that
 //!    saved enrollment — and only with one: it is the record that this person
 //!    opted in on this device, and without it nothing registers, so a disabled
 //!    device is never silently re-enabled. With it, the module asks the OS to
-//!    register again — registration prompts nothing on either platform; iOS
-//!    expects it every launch and Android refreshes its token the same way —
-//!    waits the bounded answer, and brings the service up to date with whatever
-//!    the OS now issues. The answer is an explicit [`Outcome`]: unchanged,
-//!    rotated with the old handle's retirement acknowledged, or rotated with a
-//!    stale handle — a previous account's leftover — dropped rather than
-//!    operated under this one.
+//!    register again — registration prompts nothing on any platform; iOS
+//!    expects it every launch, macOS re-reads the OS's answer the same way, and
+//!    Android refreshes its token the same way — waits the bounded answer, and
+//!    brings the service up to date with whatever the OS now issues. The answer
+//!    is an explicit [`Outcome`]: unchanged, rotated with the old handle's
+//!    retirement acknowledged, or rotated with a stale handle — a previous
+//!    account's leftover — dropped rather than operated under this one.
 //! 5. On **sign out**, while this person is still authenticated, call
 //!    [`disable`]. It requires an acknowledged server revoke and replays a
 //!    stable idempotency key derived from the endpoint id — the same contract
@@ -55,8 +57,7 @@
 //!    enrolls from clean. Clear the saved enrollment and opt-in once the revoke
 //!    is acknowledged.
 //!
-//! iOS and Android only. macOS shares the APNs transport but not this plugin
-//! path; it is later work, and calls on hosts without the plugin answer
+//! iOS, Android, and macOS. Calls on hosts without the plugin answer
 //! `Unavailable` rather than pretending.
 
 use schemars::JsonSchema;
@@ -90,9 +91,9 @@ pub struct Enrollment {
 /// enrollment to keep retrying with.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnrollError {
-	/// This host runs no native enrollment. Only an iOS or Android guest
-	/// runs it; macOS is later work.
-	#[error("native enrollment needs an iOS or Android guest on this host")]
+	/// This host runs no native enrollment. Only an iOS, macOS, or Android
+	/// guest runs it.
+	#[error("native enrollment needs an iOS, macOS, or Android guest on this host")]
 	Unavailable,
 	/// The notifications plugin is not installed: add `"notifications"` to
 	/// `[native] plugins`. Nothing was prompted and nothing registered.
@@ -104,7 +105,7 @@ pub enum EnrollError {
 	Register(String),
 	/// The OS refused registration; the reason is one of the plugin
 	/// contract's stable codes — most often `aps-environment` for a missing
-	/// or mismatched iOS entitlement, or `firebase-not-configured` when an
+	/// or mismatched Apple entitlement, or `firebase-not-configured` when an
 	/// Android app generates without `[native.android] push` or its
 	/// `google-services.json`. Nothing was registered with the service.
 	#[error("the OS refused registration: {0}")]
@@ -158,7 +159,7 @@ pub enum DisableError {
 	#[error("revoking the endpoint failed: {0}")]
 	Revoke(leptoskit_rpc::FnError),
 	/// Outside a native guest; no revoke was attempted.
-	#[error("native enrollment needs an iOS or Android guest on this host")]
+	#[error("native enrollment needs an iOS, macOS, or Android guest on this host")]
 	Unavailable,
 }
 
@@ -175,10 +176,10 @@ pub fn disable_key(endpoint: uuid::Uuid) -> String {
 /// What a registration snapshot means for enrollment: the token to register
 /// as the person's credential, `None` when the OS holds no answer yet, or
 /// the OS's own refusal. The platform is a transport choice the host's own
-/// answer names — an APNs hex token means iOS, an FCM printable token means
-/// Android — and this module never second-guesses it. The token's shape was
-/// validated at the plugin boundary; its bytes are forwarded verbatim, never
-/// re-derived or stored.
+/// answer names — an APNs hex token means an iOS or macOS host, an FCM
+/// printable token means Android — and this module never second-guesses it.
+/// The token's shape was validated at the plugin boundary; its bytes are
+/// forwarded verbatim, never re-derived or stored.
 pub fn decide(
 	snapshot: &leptoskit_plugin_notifications::RemoteRegistration,
 ) -> Result<Option<PushCredential>, EnrollError> {
@@ -244,9 +245,9 @@ pub enum Retirement {
 /// Enrolls this device for the signed-in person, from an explicit user
 /// gesture: permission is the app's own prior call, so this asks the OS to
 /// register, waits the host's bounded time for the answer, and registers
-/// the token — APNs on an iOS host, FCM on an Android one. Two racing calls
-/// converge on one endpoint: the service answers the same id for the same
-/// destination.
+/// the token — APNs on an iOS or macOS host, FCM on an Android one. Two
+/// racing calls converge on one endpoint: the service answers the same id
+/// for the same destination.
 ///
 /// # Errors
 ///
@@ -284,7 +285,7 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 /// nothing registers, so a person who disabled notifications is never
 /// silently re-enabled, and a fresh install is never enrolled by startup
 /// code. With it, the module registers with the OS again — registration
-/// prompts nothing on either platform; only permission requests do, and
+/// prompts nothing on any platform; only permission requests do, and
 /// those stay the gesture's — and reconciles whatever the OS now issues,
 /// under whoever is signed in right now:
 ///
@@ -582,7 +583,7 @@ mod tests {
 	}
 
 	/// The snapshot decides enrollment: a token becomes the typed credential
-	/// with the exact bytes — APNs from an iOS host, FCM from an Android one
+	/// with the exact bytes — APNs from an Apple host, FCM from an Android one
 	/// — silence stays None, the OS's refusal is surfaced rather than retried
 	/// into a fake enrollment, and an unconfirmed registration is never
 	/// mistaken for a fresh token.

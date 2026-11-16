@@ -442,18 +442,65 @@ struct RemoteNotifications {
         RemoteRegistration.reset()
     }
 
-    /// Only iOS hosts advertise the remote methods; the generated dispatcher
+    /// Apple's hosts advertise the remote methods; the generated dispatcher
     /// answers Unavailable for anything `methods` doesn't list.
     @Test
-    func onlyIosAdvertisesTheRemoteMethods() {
-        #if os(iOS)
-        #expect(NotificationsPlugin(service: Service()).methods.contains(7))
-        #expect(NotificationsPlugin(service: Service()).methods.contains(8))
-        #else
+    func appleHostsAdvertiseTheRemoteMethods() {
         let plugin = NotificationsPlugin(service: Service())
+
+        #if os(iOS) || os(macOS)
+        #expect(plugin.methods.contains(7))
+        #expect(plugin.methods.contains(8))
+        #else
         #expect(!plugin.methods.contains(7))
         #expect(!plugin.methods.contains(8))
+        #endif
         plugin.close()
+    }
+
+    /// The macOS path of the whole registration call, exercised exactly as a
+    /// generated macOS app runs it: the plugin advertises `REMOTE_TOKEN` and
+    /// `REMOTE_REGISTER`, the delegate-shaped forward lands in the broker
+    /// before any plugin exists, and the registration call answers the
+    /// forwarded token through the same codec as iOS. The OS boundaries stay
+    /// injected — the production `NSApplication` call is the one line the
+    /// typecheck of the generated app proves.
+    @Test
+    func theMacOSPathAnswersTheDelegateForwardThroughTheAdvertisedMethods() async throws {
+        #if os(macOS)
+        RemoteRegistration.reset()
+
+        // The generated MacApp delegate forwards before any plugin exists;
+        // a plugin created afterwards reads the same answer.
+        NotificationsPlugin.noteDeviceToken(oddToken)
+        let plugin = NotificationsPlugin(service: Service())
+        #expect(plugin.methods.contains(7) && plugin.methods.contains(8))
+
+        let reply = try snapshot(try await plugin.invoke(method: 7, payload: payload([])))
+        #expect(reply.revision == 1)
+        #expect(reply.state == 1)
+        #expect(reply.text == oddToken.map { String(format: "%02x", $0) }.joined())
+
+        // A registration through the same dispatch shape answers the new
+        // answer, never a stale one.
+        let registrar = FakeRegistrar()
+        let asking = NotificationsPlugin(
+            service: Service(),
+            registrar: registrar,
+            remoteWaitLimitNanos: 5_000_000_000
+        )
+        let task = Task { try await asking.invoke(method: 8, payload: payload([])) }
+        for _ in 0..<100 { await Task.yield() }
+        #expect(registrar.calls == 1)
+        NotificationsPlugin.noteDeviceToken(Data(repeating: 0x5a, count: 40))
+        let registered = try snapshot(try await task.value)
+        #expect(registered.revision == 2)
+        #expect(registered.state == 1)
+        #expect(registered.text == String(repeating: "5a", count: 40))
+
+        plugin.close()
+        asking.close()
+        RemoteRegistration.reset()
         #endif
     }
 }

@@ -49,16 +49,17 @@ impl Notifications {
 	}
 
 	/// Reads the host's latest remote-registration answer without side
-	/// effects. iOS and Android; every other platform answers Unavailable.
-	/// Safe at launch: reading never prompts and never registers.
+	/// effects. iOS, macOS, and Android; every other platform answers
+	/// Unavailable. Safe at launch: reading never prompts and never
+	/// registers.
 	pub async fn remote_snapshot(self) -> Result<RemoteRegistration, Error> {
 		RemoteRegistration::decode(&self.0.call(REMOTE_TOKEN, &[])?.await?)
 	}
 
 	/// Asks the OS to register for remote notifications and waits, bounded
 	/// by the host, for its answer, returned as the snapshot it produced.
-	/// iOS and Android; every other platform answers Unavailable. When the
-	/// host's wait bound passes with no new answer, the reply is
+	/// iOS, macOS, and Android; every other platform answers Unavailable.
+	/// When the host's wait bound passes with no new answer, the reply is
 	/// [`RemoteRegistration::unconfirmed`]: the broker's previous answer —
 	/// a token an earlier registration issued — is never handed back as if
 	/// it were fresh; read it separately with

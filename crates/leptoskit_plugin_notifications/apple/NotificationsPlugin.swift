@@ -1,6 +1,9 @@
 import Foundation
 import LeptosKitBridge
 import UserNotifications
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -15,7 +18,9 @@ protocol NotificationService {
 }
 
 /// The remote-registration boundary the OS owns. Production calls
-/// `UIApplication.registerForRemoteNotifications`; tests substitute a fake.
+/// `UIApplication.registerForRemoteNotifications` on iOS and
+/// `NSApplication.registerForRemoteNotifications` on macOS; tests substitute
+/// a fake.
 @MainActor
 protocol RemoteRegistrar {
     func register() async
@@ -26,6 +31,9 @@ private struct SystemRemoteRegistrar: RemoteRegistrar {
     func register() async {
         #if canImport(UIKit) && os(iOS)
         UIApplication.shared.registerForRemoteNotifications()
+        #endif
+        #if os(macOS)
+        NSApplication.shared.registerForRemoteNotifications()
         #endif
     }
 }
@@ -163,7 +171,10 @@ private final class SystemNotificationService: NotificationService {
 @MainActor
 public final class NotificationsPlugin: NativePlugin {
     public let name = "notifications"
-    #if os(iOS)
+    // The iOS and macOS hosts advertise the remote methods; the other hosts
+    // keep the local-only set. The dispatcher answers Unavailable for
+    // anything `methods` omits.
+    #if os(iOS) || os(macOS)
     public let methods: [UInt32] = [0, 1, 2, 3, 6, 7, 8]
     #else
     public let methods: [UInt32] = [0, 1, 2, 3, 6]
@@ -250,8 +261,8 @@ public final class NotificationsPlugin: NativePlugin {
             guard !closed else { throw PluginError.cancelled }
             service.remove(identifiers)
         // Methods 7 and 8 are dispatched only where `methods` advertises
-        // them: iOS hosts. The macOS switch keeps them for tests, which
-        // inject the registration boundary.
+        // them: the iOS and macOS hosts. Other platforms keep the cases for
+        // tests, which inject the registration boundary.
         case 7:
             guard payload.count == 0 else { throw PluginError.invalidArgument }
             return try Self.encodeSnapshot(RemoteRegistration.current())
@@ -270,8 +281,8 @@ public final class NotificationsPlugin: NativePlugin {
     /// one runs join its wait rather than asking the OS again. A silent OS
     /// answers `unconfirmed`, never the previous token as though it were
     /// fresh — a late callback still lands in the broker for the next read,
-    /// and a plugin closed while waiting never succeeds. Only iOS hosts
-    /// dispatch this: `methods` advertises 8 there alone.
+    /// and a plugin closed while waiting never succeeds. Only iOS and macOS
+    /// hosts dispatch this: `methods` advertises 8 there alone.
     private func registerRemote(payload: NativeBuffer) async throws -> Data {
         guard payload.count == 0 else { throw PluginError.invalidArgument }
         guard !closed else { throw PluginError.cancelled }

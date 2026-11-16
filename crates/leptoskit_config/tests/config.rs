@@ -260,6 +260,42 @@ fn the_aps_environment_is_opt_in_and_names_apples_exact_strings() {
 	assert!(toml::from_str::<LeptoskitConfig>("[native.ios]\naps-environment = true").is_err());
 }
 
+/// The macOS switch mirrors the iOS one: off by default, Apple's exact two
+/// strings, and serialized only when set so local-only apps generate
+/// byte-identically.
+#[test]
+fn the_macos_aps_environment_is_opt_in_and_names_apples_exact_strings() {
+	let config: LeptoskitConfig = toml::from_str("").unwrap();
+	assert_eq!(config.native.macos.aps_environment, None);
+	assert!(
+		!toml::to_string(&config)
+			.unwrap()
+			.contains("aps-environment")
+	);
+	assert!(!toml::to_string(&config).unwrap().contains("[native.macos]"));
+
+	for (name, environment) in [
+		("development", leptoskit_config::ApsEnvironment::Development),
+		("production", leptoskit_config::ApsEnvironment::Production),
+	] {
+		let config: LeptoskitConfig =
+			toml::from_str(&format!("[native.macos]\naps-environment = \"{name}\"")).unwrap();
+		assert_eq!(config.native.macos.aps_environment, Some(environment));
+		assert_eq!(environment.as_str(), name);
+		assert!(
+			toml::to_string(&config)
+				.unwrap()
+				.contains(&format!("aps-environment = \"{name}\""))
+		);
+	}
+
+	// Apple's key takes nothing else, so neither does the config.
+	assert!(
+		toml::from_str::<LeptoskitConfig>("[native.macos]\naps-environment = \"ad-hoc\"").is_err()
+	);
+	assert!(toml::from_str::<LeptoskitConfig>("[native.macos]\naps-environment = true").is_err());
+}
+
 /// `[native.android] push` is off by default — local-only notifications apps
 /// never gain a Firebase dependency or a messaging service — and it is a
 /// boolean with no other keys.

@@ -482,7 +482,7 @@
 			"additionalProperties": false
 		},
 		"ApsEnvironment": {
-			"description": "Which APNs environment an iOS app's `aps-environment` entitlement names.\nThe entitlement is a string, not a boolean, so Apple's own values are\nkept exactly.",
+			"description": "Which APNs environment an Apple app's entitlement names — `aps-environment`\non iOS, `com.apple.developer.aps-environment` on macOS. The entitlement is\na string, not a boolean, so Apple's own values are kept exactly.",
 			"oneOf": [
 				{
 					"description": "The sandbox environment a development-signed build registers with.",
@@ -2869,6 +2869,24 @@
 				}
 			]
 		},
+		"MacosConfig": {
+			"description": "What opts the macOS app into push. Leave it unset for apps that only post\nlocal notifications; they generate exactly as before, with no push\nentitlement.",
+			"type": "object",
+			"properties": {
+				"aps-environment": {
+					"description": "The APNs environment the macOS app is signed for: `development` while\nbuilding and running locally, `production` for notarized Developer ID\ndistributions. Setting it opts the macOS app into push: generation\nwrites the matching `com.apple.developer.aps-environment` entitlement,\nthe generated app delegate forwards APNs device tokens to the\nnotifications plugin, and `leptoskit_notifications`' `native` module\ncan enroll them. It must match the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ApsEnvironment"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"additionalProperties": false
+		},
 		"MacosDistribution": {
 			"description": "How the macOS app is distributed.",
 			"oneOf": [
@@ -3172,6 +3190,10 @@
 							"type": "null"
 						}
 					]
+				},
+				"macos": {
+					"description": "What opts the macOS app into push, such as APNs enrollment.",
+					"$ref": "#/$defs/MacosConfig"
 				},
 				"missing-plugins": {
 					"description": "What a build does when a selected plugin has no implementation the\nplatform's host can run. `warn` (the default) leaves it out with a\nwarning, so its calls fail with `Unavailable`; `error` stops the build.",

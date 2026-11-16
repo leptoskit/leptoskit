@@ -1314,6 +1314,9 @@ pub struct NativeConfig {
 	/// How a release iOS build is signed and exported.
 	#[serde(skip_serializing_if = "IosConfig::is_default")]
 	pub ios: IosConfig,
+	/// What opts the macOS app into push, such as APNs enrollment.
+	#[serde(skip_serializing_if = "MacosConfig::is_default")]
+	pub macos: MacosConfig,
 	/// What opts the Android app into push, such as FCM enrollment.
 	#[serde(skip_serializing_if = "AndroidConfig::is_default")]
 	pub android: AndroidConfig,
@@ -1347,6 +1350,7 @@ impl Default for NativeConfig {
 			],
 			quest: QuestConfig::default(),
 			ios: IosConfig::default(),
+			macos: MacosConfig::default(),
 			android: AndroidConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
@@ -1384,9 +1388,9 @@ pub struct IosConfig {
 	pub aps_environment: Option<ApsEnvironment>,
 }
 
-/// Which APNs environment an iOS app's `aps-environment` entitlement names.
-/// The entitlement is a string, not a boolean, so Apple's own values are
-/// kept exactly.
+/// Which APNs environment an Apple app's entitlement names — `aps-environment`
+/// on iOS, `com.apple.developer.aps-environment` on macOS. The entitlement is
+/// a string, not a boolean, so Apple's own values are kept exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
@@ -1434,6 +1438,33 @@ pub struct AndroidConfig {
 }
 
 impl AndroidConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// What opts the macOS app into push. Leave it unset for apps that only post
+/// local notifications; they generate exactly as before, with no push
+/// entitlement.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct MacosConfig {
+	/// The APNs environment the macOS app is signed for: `development` while
+	/// building and running locally, `production` for notarized Developer ID
+	/// distributions. Setting it opts the macOS app into push: generation
+	/// writes the matching `com.apple.developer.aps-environment` entitlement,
+	/// the generated app delegate forwards APNs device tokens to the
+	/// notifications plugin, and `leptoskit_notifications`' `native` module
+	/// can enroll them. It must match the notifications service's
+	/// `LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps
+	/// that only post local notifications; they generate exactly as before,
+	/// with no push entitlement.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub aps_environment: Option<ApsEnvironment>,
+}
+
+impl MacosConfig {
 	fn is_default(&self) -> bool {
 		*self == Self::default()
 	}

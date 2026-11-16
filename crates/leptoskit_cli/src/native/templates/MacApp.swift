@@ -3,6 +3,9 @@ import LeptosKitBridge
 #if canImport(LeptosKitAppShortcuts)
 import LeptosKitAppShortcuts
 #endif
+#if canImport(LeptosKitNotifications)
+import LeptosKitNotifications
+#endif
 
 @main
 @MainActor
@@ -126,6 +129,24 @@ final class MacApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppShortcutsPlugin.noteLaunchIfPresent(id: id)
     }
     #endif
+
+    func application(
+        _ application: NSApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteDeviceToken(deviceToken)
+        #endif
+    }
+
+    func application(
+        _ application: NSApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: any Error
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteRegistrationFailure(error)
+        #endif
+    }
 
     func windowWillClose(_ notification: Notification) {
         controller?.close()

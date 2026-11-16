@@ -10,10 +10,10 @@
 //! builds keep the default `browser` feature, and interpreter guests turn it
 //! off so their dependency tree stays free of browser imports. A successful
 //! call means the OS accepted the request, not that a banner appeared; focus
-//! modes and user settings can still suppress it. On iOS the generated app
-//! delegate forwards APNs device tokens into the plugin's broker, and on
-//! Android a push-enabled generated app forwards FCM registration tokens into
-//! the same broker; `REMOTE_REGISTER` turns an explicit opt-in into a
+//! modes and user settings can still suppress it. On iOS and macOS the
+//! generated app delegate forwards APNs device tokens into the plugin's broker,
+//! and on Android a push-enabled generated app forwards FCM registration tokens
+//! into the same broker; `REMOTE_REGISTER` turns an explicit opt-in into a
 //! bounded, typed registration answer, answers `unconfirmed` when the OS stays
 //! silent rather than replaying a prior token, and carries refusal as stable
 //! reason codes instead of the OS's own text. Every other platform reports
@@ -44,13 +44,14 @@ pub const CONFIGURE_CHANNEL: MethodId = MethodId(4);
 pub const DELETE_CHANNEL: MethodId = MethodId(5);
 /// Empty payload; dismisses only notifications owned by this plugin namespace.
 pub const CANCEL_ALL: MethodId = MethodId(6);
-/// iOS and Android: empty payload; reads the latest remote-registration
-/// answer without side effects. Other platforms report `Unavailable`.
+/// iOS, macOS, and Android: empty payload; reads the latest
+/// remote-registration answer without side effects. Other platforms report
+/// `Unavailable`.
 pub const REMOTE_TOKEN: MethodId = MethodId(7);
-/// iOS and Android: empty payload; asks the OS to register for remote
-/// notifications and waits a bounded time for its answer, returned as the
-/// new snapshot — or [`RemoteState::Unconfirmed`] when no answer arrived in
-/// the bound, so silence can never masquerade as a stale token. Other
+/// iOS, macOS, and Android: empty payload; asks the OS to register for
+/// remote notifications and waits a bounded time for its answer, returned as
+/// the new snapshot — or [`RemoteState::Unconfirmed`] when no answer arrived
+/// in the bound, so silence can never masquerade as a stale token. Other
 /// platforms report `Unavailable`.
 pub const REMOTE_REGISTER: MethodId = MethodId(8);
 /// Exported independently grantable operations.
@@ -206,11 +207,11 @@ pub enum RemoteState {
 	/// issued for a previous process run is not remembered: hosts hand
 	/// tokens out again on launch.
 	None,
-	/// The OS issued an APNs device token, as lower-case hex. iOS answers
-	/// this; Android never does.
+	/// The OS issued an APNs device token, as lower-case hex. iOS and macOS
+	/// answer this; Android never does.
 	Token(DeviceToken),
 	/// The OS issued an FCM registration token, as printable ASCII. Android
-	/// answers this; iOS never does.
+	/// answers this; iOS and macOS never do.
 	FcmToken(FcmToken),
 	/// The OS refused registration. The reason is one of the contract's
 	/// stable [`remote_failure`] codes, bounded and control-free by
@@ -241,11 +242,11 @@ impl std::fmt::Debug for RemoteState {
 pub mod remote_failure {
 	/// The OS refused registration and the host could not narrow it further.
 	/// Most often a missing or mismatched `aps-environment` entitlement on
-	/// iOS; the app's own messaging decides what to say.
+	/// an Apple platform; the app's own messaging decides what to say.
 	pub const OS_REFUSED: &str = "os-refused";
 	/// The OS refused registration naming the `aps-environment` entitlement
 	/// specifically: the app's signing does not carry the push entitlement
-	/// registration needs. iOS only; Firebase never answers it.
+	/// registration needs. Apple platforms only; Firebase never answers it.
 	pub const APS_ENVIRONMENT: &str = "aps-environment";
 	/// The OS handed the host a token outside the contract's bounds. Its
 	/// bytes are refused, not shortened or padded.
