@@ -27,8 +27,9 @@ use leptoskit_bridge::PluginId;
 use leptoskit_native::EventOutcome;
 use leptoskit_native::HeadlessBackend;
 use leptoskit_plugin_http::protocol;
-use leptoskit_plugin_notifications::ApnsRegistration;
 use leptoskit_plugin_notifications::DeviceToken;
+use leptoskit_plugin_notifications::FcmToken;
+use leptoskit_plugin_notifications::RemoteRegistration;
 use leptoskit_plugin_notifications::RemoteState;
 use leptoskit_wasm::EventKind;
 use leptoskit_wasm::WasmHost;
@@ -46,9 +47,13 @@ fn token(seed: u8) -> String {
 	hex
 }
 
-/// What the fake OS answers for one `REMOTE_REGISTER`, in order.
+/// What the fake OS answers for one `REMOTE_REGISTER`, in order. `Token` is
+/// an APNs hex device token — iOS's answer — and `Fcm` is a registration
+/// token in Firebase's own alphabet — Android's answer.
 enum Answer {
 	Token(String),
+	Fcm(String),
+	Failed(&'static str),
 	Unconfirmed,
 }
 
@@ -90,12 +95,21 @@ impl Service {
 		}
 	}
 
-	/// One `register_push_endpoint` call.
+	/// One `register_push_endpoint` call. The credential is whatever the
+	/// guest sent — APNs from an iOS host, FCM from an Android one — and
+	/// the platform rides the reply, as the real service's would.
 	fn register(&mut self, body: &str) -> (u16, String) {
-		let destination = body_json(body)["credential"]["apns"]["device_token"]
-			.as_str()
-			.expect("the credential the guest sends")
-			.to_owned();
+		let body = body_json(body);
+		let credential = &body["credential"];
+		let (platform, destination) =
+			if let Some(token) = credential["apns"]["device_token"].as_str() {
+				("apns", token)
+			} else if let Some(token) = credential["fcm"]["registration_token"].as_str() {
+				("fcm", token)
+			} else {
+				panic!("the guest sent no credential the service can parse: {body}");
+			};
+		let destination = destination.to_owned();
 		match self.register.first().copied().unwrap_or(Refusal::Success) {
 			Refusal::Network => {
 				self.register.remove(0);
@@ -131,7 +145,7 @@ impl Service {
 		(
 			200,
 			format!(
-				r#"{{"id":"{id}","platform":"apns","created_at":"2026-11-16T00:00:00Z","invalidated_at":null}}"#
+				r#"{{"id":"{id}","platform":"{platform}","created_at":"2026-11-16T00:00:00Z","invalidated_at":null}}"#
 			),
 		)
 	}
@@ -222,7 +236,7 @@ fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, mut service: Service) -> Run
 	let mut answers = os.into_iter().map(|answer| {
 		match answer {
 			Answer::Token(hex) => {
-				ApnsRegistration::new(
+				RemoteRegistration::new(
 					1,
 					RemoteState::Token(DeviceToken::new(hex).expect("a fake token in bounds")),
 				)
@@ -230,10 +244,29 @@ fn run(wasm: &[u8], scenario: u32, os: Vec<Answer>, mut service: Service) -> Run
 				.encode()
 				.expect("the plugin codec")
 			}
-			Answer::Unconfirmed => ApnsRegistration::unconfirmed().encode().expect("the codec"),
+			Answer::Fcm(fcm) => {
+				RemoteRegistration::new(
+					1,
+					RemoteState::FcmToken(FcmToken::new(fcm).expect("a fake token in bounds")),
+				)
+				.expect("a snapshot")
+				.encode()
+				.expect("the plugin codec")
+			}
+			Answer::Failed(code) => {
+				RemoteRegistration::new(1, RemoteState::Failed(code.into()))
+					.expect("a snapshot")
+					.encode()
+					.expect("the plugin codec")
+			}
+			Answer::Unconfirmed => {
+				RemoteRegistration::unconfirmed()
+					.encode()
+					.expect("the codec")
+			}
 		}
 	});
-	let mut latest = ApnsRegistration::none().encode().expect("the codec");
+	let mut latest = RemoteRegistration::none().encode().expect("the codec");
 
 	let mut steps = Vec::new();
 	let deadline = Instant::now() + Duration::from_secs(10);
@@ -356,6 +389,18 @@ fn http_reply(service: &mut Service, payload: &[u8]) -> Result<Bytes, Error> {
 fn guest() -> Vec<u8> {
 	let path = std::env::var("LEPTOSKIT_NOTIFICATIONS_GUEST").expect("fixture wasm path");
 	std::fs::read(path).expect("the built guest")
+}
+
+/// An FCM registration token, in Firebase's own printable alphabet. Fake
+/// material: nothing here ever reaches a provider.
+fn fcm_token(seed: u8) -> String {
+	use std::fmt::Write as _;
+
+	let mut fcm = String::new();
+	for byte in 0..16_u8 {
+		let _ = write!(fcm, "{}", char::from(b'a' + (byte.wrapping_add(seed) % 26)));
+	}
+	format!("{}:{}{}", fcm, "_-0", seed)
 }
 
 #[test]
@@ -567,5 +612,99 @@ fn disable_replays_its_stable_key() {
 			&format!("revoke({enrollment}) key=notifications:disable:{enrollment} auth=…"),
 		],
 		"a retried sign-out replays the same idempotency key"
+	);
+}
+
+/// Android's answer is an FCM registration token: the same gesture and
+/// cold-relaunch flow enrolls it, and the exact Firebase bytes are the
+/// destination the service dedupes on — nothing assumed hex or APNs.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_android_token_enrolls_and_relaunches_as_the_fcm_credential() {
+	let first = fcm_token(0);
+	let service = Service::new();
+	let run = run(
+		&guest(),
+		0,
+		vec![Answer::Fcm(first.clone()), Answer::Fcm(first.clone())],
+		service,
+	);
+	let id = run.service.destinations[&first];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("enroll=ok:{id}"), format!("reconcile=ok:kept:{id}")]
+	);
+	assert_eq!(
+		run.service.destinations.keys().collect::<Vec<_>>(),
+		vec![&first],
+		"the FCM token is the destination, not a hex token: {:?}",
+		run.service.destinations
+	);
+	assert_eq!(
+		run.service
+			.log
+			.iter()
+			.filter(|line| line.starts_with("register("))
+			.count(),
+		2,
+		"a same-token relaunch re-registers the destination idempotently"
+	);
+	assert!(
+		!run.service
+			.log
+			.iter()
+			.any(|line| line.starts_with("revoke(")),
+		"nothing needs retiring when the destination is unchanged"
+	);
+}
+
+/// A rotated FCM token enrolls a new endpoint and retires the previous
+/// handle under its owner — rotation logic shared with APNs, on a
+/// credential whose kind the snapshot itself named.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn a_rotated_fcm_token_enrolls_and_retires_the_previous_handle() {
+	let previous = Uuid::from_u128(0x1111_1111_1111_7111_8111_1111_1111_1111);
+	let rotated = fcm_token(1);
+	let mut service = Service::new();
+	service.owned = vec![previous];
+	let run = run(&guest(), 1, vec![Answer::Fcm(rotated.clone())], service);
+	let current = run.service.destinations[&rotated];
+
+	assert_eq!(
+		run.steps,
+		vec![format!("reconcile=ok:rotated:{current}:revoked:{previous}")]
+	);
+	assert!(
+		run.service.log.iter().any(|line| {
+			line == &format!("revoke({previous}) key=notifications:disable:{previous} auth=…")
+		}),
+		"the previous handle is retired under its owner with the stable key: {:?}",
+		run.service.log
+	);
+	assert!(!run.service.owned.contains(&previous));
+}
+
+/// An Android host whose Firebase is not configured refuses with its stable
+/// code, and nothing reaches the service.
+#[test]
+#[ignore = "run by test:plugins:guest, which compiles the wasm fixture"]
+fn an_unconfigured_firebase_refuses_with_its_code_and_registers_nothing() {
+	let run = run(
+		&guest(),
+		8,
+		vec![Answer::Failed("firebase-not-configured")],
+		Service::new(),
+	);
+
+	assert_eq!(
+		run.steps,
+		vec!["enroll=err:failed:firebase-not-configured".to_owned()]
+	);
+	assert!(
+		run.service.log.is_empty(),
+		"nothing reached the service: {:?}",
+		run.service.log
 	);
 }

@@ -8,6 +8,7 @@ import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -21,6 +22,7 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Isolated emulator only: posts silent notifications into the generated test app. */
 class NotificationsPluginTest {
@@ -135,6 +137,193 @@ class NotificationsPluginTest {
                 withContext(Dispatchers.Main) { plugin.close() }
             }
         }
+
+    /** A registration whose registrar feeds the broker answers the new
+     * snapshot — wire state 4, Firebase's exact bytes — and no description
+     * of the broker's state carries those bytes. Reading before any answer
+     * reports the empty snapshot without asking the OS. */
+    @Test
+    fun remoteRegistrationAnswersTheBrokerThroughABoundedWait() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val token = "fcm-${System.nanoTime()}:A-z_09"
+            RemoteRegistration.reset()
+            val plugin =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, { RemoteRegistration.noteToken(token) }, 5_000)
+                }
+            try {
+                withContext(Dispatchers.Main) {
+                    val reply = snapshot(plugin.invoke(7, ByteBuffer.allocate(0)))
+                    assertEquals(0L, reply.revision)
+                    assertEquals(0, reply.state)
+                    assertEquals("", reply.text)
+
+                    val registered = snapshot(plugin.invoke(8, ByteBuffer.allocate(0)))
+                    assertEquals(1L, registered.revision)
+                    assertEquals(4, registered.state)
+                    assertEquals(token, registered.text)
+                }
+
+                assertFalse(RemoteRegistration.current().toString().contains(token))
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                RemoteRegistration.reset()
+            }
+        }
+
+    /** Silence at the bound is an explicit non-answer: revision 0, state
+     * Unconfirmed, never the broker's previous token dressed up as fresh.
+     * That previous answer stays readable through `REMOTE_TOKEN`. */
+    @Test
+    fun aSilentRegistrationAnswersUnconfirmedAndNeverAStaleToken() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val stale = "fcm-stale-${System.nanoTime()}"
+            RemoteRegistration.reset()
+            RemoteRegistration.noteToken(stale)
+            val plugin =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, { /* the OS stays silent */ }, 150)
+                }
+            try {
+                withContext(Dispatchers.Main) {
+                    val reply = snapshot(plugin.invoke(8, ByteBuffer.allocate(0)))
+                    assertEquals(0L, reply.revision)
+                    assertEquals(3, reply.state)
+                    assertEquals("", reply.text)
+
+                    val read = snapshot(plugin.invoke(7, ByteBuffer.allocate(0)))
+                    assertEquals(1L, read.revision)
+                    assertEquals(4, read.state)
+                    assertEquals(stale, read.text)
+                }
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                RemoteRegistration.reset()
+            }
+        }
+
+    /** A token outside the contract's bounds is an honest failure, never a
+     * shortened or padded token, and its bytes never reach the reason. */
+    @Test
+    fun anUnrepresentableTokenBecomesAFailureWithoutLeakingBytes() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val unrepresentable = "fcm-" + "x".repeat(4_097)
+            RemoteRegistration.reset()
+            val plugin =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, { RemoteRegistration.noteToken(unrepresentable) }, 5_000)
+                }
+            try {
+                withContext(Dispatchers.Main) {
+                    val reply = snapshot(plugin.invoke(8, ByteBuffer.allocate(0)))
+                    assertEquals(1L, reply.revision)
+                    assertEquals(2, reply.state)
+                    assertEquals("token-shape", reply.text)
+                }
+
+                assertFalse(RemoteRegistration.current().toString().contains(unrepresentable))
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                RemoteRegistration.reset()
+            }
+        }
+
+    /** A plugin closed while its registration waits never answers a token:
+     * the close is checked after the wait, so a late callback lands in the
+     * broker without reaching the caller that left. */
+    @Test
+    fun closingWhileWaitingNeverAnswersAToken() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            RemoteRegistration.reset()
+            var subject: NotificationsPlugin? = null
+            val plugin =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(context, null, { subject?.close() }, 150)
+                        .also { subject = it }
+                }
+            try {
+                withContext(Dispatchers.Main) {
+                    try {
+                        plugin.invoke(8, ByteBuffer.allocate(0))
+                        fail("A closed plugin answered a registration")
+                    } catch (error: PluginException) {
+                        assertEquals(PluginException.CANCELLED, error.code)
+                    }
+                }
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                RemoteRegistration.reset()
+            }
+        }
+
+    /** Callers that arrive while one registration runs join its wait: the OS
+     * is asked once, and every waiter sees the same answer. */
+    @Test
+    fun concurrentRegistrationsAskOnceAndSeeTheSameAnswer() =
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val token = "fcm-shared-${System.nanoTime()}"
+            val asks = AtomicInteger()
+            RemoteRegistration.reset()
+            val plugin =
+                withContext(Dispatchers.Main) {
+                    NotificationsPlugin(
+                        context,
+                        null,
+                        {
+                            asks.incrementAndGet()
+                            RemoteRegistration.noteToken(token)
+                        },
+                        5_000,
+                    )
+                }
+            try {
+                val waiters =
+                    listOf(
+                        async(Dispatchers.Main) { snapshot(plugin.invoke(8, ByteBuffer.allocate(0))) },
+                        async(Dispatchers.Main) { snapshot(plugin.invoke(8, ByteBuffer.allocate(0))) },
+                    )
+                // The first caller asks and starts waiting; the broker's
+                // answer reaches both through the shared wait.
+                withTimeout(5000) {
+                    while (asks.get() == 0) delay(10)
+                }
+                RemoteRegistration.noteToken(token)
+
+                for (waiter in waiters) {
+                    val reply = waiter.await()
+                    assertEquals(1L, reply.revision)
+                    assertEquals(4, reply.state)
+                    assertEquals(token, reply.text)
+                }
+                assertEquals(1, asks.get())
+            } finally {
+                withContext(Dispatchers.Main) { plugin.close() }
+                RemoteRegistration.reset()
+            }
+        }
+
+    /** One snapshot reply, decoded: revision `u64`, state `u32`, string. */
+    private class SnapshotReply(
+        val revision: Long,
+        val state: Int,
+        val text: String,
+    )
+
+    private fun snapshot(reply: ByteArray): SnapshotReply {
+        val data = ByteBuffer.wrap(reply).order(ByteOrder.LITTLE_ENDIAN)
+        val revision = (data.int.toLong() shl 32) or (data.int.toLong() and 0xFFFFFFFFL)
+        val state = data.int
+        val bytes = ByteArray(data.int)
+
+        data.get(bytes)
+
+        return SnapshotReply(revision, state, String(bytes, Charsets.UTF_8))
+    }
 
     private suspend fun awaitNotification(
         manager: NotificationManager,

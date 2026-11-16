@@ -255,6 +255,11 @@ async fn run_scenario(scenario: u32) {
 			report_unit("disable", &disable(&enrollment).await).await;
 			report_unit("disable", &disable(&enrollment).await).await;
 		}
+		// An Android host whose Firebase is not configured — the app
+		// generated without the push opt-in, or without its
+		// google-services.json — refuses with its stable code, and nothing
+		// reaches the service.
+		8 => report_step("enroll", &native::enroll().await).await,
 		other => report(PANICKED, format!("unknown scenario {other}").as_bytes()),
 	}
 }

@@ -260,6 +260,39 @@ fn the_aps_environment_is_opt_in_and_names_apples_exact_strings() {
 	assert!(toml::from_str::<LeptoskitConfig>("[native.ios]\naps-environment = true").is_err());
 }
 
+/// `[native.android] push` is off by default — local-only notifications apps
+/// never gain a Firebase dependency or a messaging service — and it is a
+/// boolean with no other keys.
+#[test]
+fn the_android_push_switch_is_opt_in() {
+	let config: LeptoskitConfig = toml::from_str("").unwrap();
+	assert!(!config.native.android.push);
+	assert!(!toml::to_string(&config).unwrap().contains("push = "));
+	assert!(
+		!toml::to_string(&config)
+			.unwrap()
+			.contains("[native.android]")
+	);
+
+	let config: LeptoskitConfig = toml::from_str("[native.android]\npush = true").unwrap();
+	assert!(config.native.android.push);
+	assert!(toml::to_string(&config).unwrap().contains("push = true"));
+
+	let config: LeptoskitConfig = toml::from_str("[native.android]\npush = false").unwrap();
+	assert!(!config.native.android.push);
+	assert!(
+		!toml::to_string(&config).unwrap().contains("push = "),
+		"an explicit off matches the unset default byte for byte"
+	);
+
+	// The key takes nothing else, so neither does the config.
+	assert!(toml::from_str::<LeptoskitConfig>("[native.android]\npush = \"yes\"").is_err());
+	assert!(
+		toml::from_str::<LeptoskitConfig>("[native.android]\naps-environment = \"development\"")
+			.is_err()
+	);
+}
+
 #[test]
 fn the_log_level_follows_the_build_unless_set() {
 	let config: LeptoskitConfig = toml::from_str("").unwrap();

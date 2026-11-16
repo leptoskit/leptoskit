@@ -1314,6 +1314,9 @@ pub struct NativeConfig {
 	/// How a release iOS build is signed and exported.
 	#[serde(skip_serializing_if = "IosConfig::is_default")]
 	pub ios: IosConfig,
+	/// What opts the Android app into push, such as FCM enrollment.
+	#[serde(skip_serializing_if = "AndroidConfig::is_default")]
+	pub android: AndroidConfig,
 	/// The initial viewport width for the headless layout pass.
 	pub viewport_width: f32,
 	/// The initial viewport height for the headless layout pass.
@@ -1344,6 +1347,7 @@ impl Default for NativeConfig {
 			],
 			quest: QuestConfig::default(),
 			ios: IosConfig::default(),
+			android: AndroidConfig::default(),
 			viewport_width: 390.0,
 			viewport_height: 844.0,
 		}
@@ -1405,6 +1409,31 @@ impl ApsEnvironment {
 }
 
 impl IosConfig {
+	fn is_default(&self) -> bool {
+		*self == Self::default()
+	}
+}
+
+/// What opts the Android app into push. Leave it unset for apps that only
+/// post local notifications; they generate exactly as before, with no
+/// Firebase dependency, no messaging service, and no Google services plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct AndroidConfig {
+	/// Opts the Android app into push enrollment: generation adds the
+	/// `firebase-messaging` dependency, applies Google's services Gradle
+	/// plugin, and declares the messaging service that forwards FCM
+	/// registration tokens to the notifications plugin, whose `native`
+	/// module enrolls them. Requires the `notifications` plugin in
+	/// `[native] plugins` and the app author's `google-services.json` in
+	/// `hosts/android/app/` — an app-owned file leptoskit never generates.
+	/// Leave it unset for apps that only post local notifications.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub push: bool,
+}
+
+impl AndroidConfig {
 	fn is_default(&self) -> bool {
 		*self == Self::default()
 	}

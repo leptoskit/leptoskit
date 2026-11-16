@@ -871,7 +871,9 @@ Generated Linux hosts register it where it has a Linux Rust implementation; gene
 tree stays free of browser imports. A successful call
 means the OS accepted the request, not that a banner appeared; focus modes and user
 settings can still suppress it. On iOS the generated app delegate forwards APNs device
-tokens into the plugin's broker; `REMOTE_REGISTER` turns an explicit opt-in into a
+tokens into the plugin's broker, and on Android a push-enabled generated app forwards
+FCM registration tokens into the same broker; `REMOTE_REGISTER` turns an explicit
+opt-in into a
 bounded, typed registration answer, answers `unconfirmed` when the OS stays silent rather than replaying a prior token, and carries refusal as stable reason codes instead
 of the OS's own text. Every other platform reports `Unavailable` for it.
 

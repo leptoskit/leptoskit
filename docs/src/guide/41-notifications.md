@@ -2,7 +2,7 @@
 
 You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. When you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web and iOS** (Android's FCM token acquisition, the macOS host wiring), push tap routing, and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, and Android** (the macOS host wiring), push tap routing, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -196,7 +196,7 @@ The APNs topic and environment, the FCM project, and the VAPID identity are all 
 
 ### Enroll a device
 
-The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. On iOS the plumbing is [this crate's `native` module](#enroll-an-ios-device), below; on the web it is [the `browser` module](#enroll-a-browser), further down.
+The signed-in person enrolls through the service's RPC — `register_push_endpoint` with one typed credential. What the credential is and how your app obtains it is platform work: request the OS's push permission, get the token or subscription, and hand it over. On iOS it is [this crate's `native` module](#enroll-an-ios-device), on Android the same module answers with an FCM token ([enroll an Android device](#enroll-an-android-device)), and on the web it is [the `browser` module](#enroll-a-browser), further down.
 
 ```rust,ignore
 leptoskit_rpc::call(leptoskit_notifications::push::RegisterPushEndpoint {
@@ -222,7 +222,7 @@ Revoking deletes the endpoint and skips everything still queued for it as `endpo
 
 ### Enroll an iOS device
 
-On an iOS device the whole enrollment is this crate's `native` module, behind the feature of the same name. It is iOS only: Android's FCM enrollment and the macOS host wiring are later work, so there is no universal native push claim yet. Depend on the crate in your app, select the notifications plugin, and opt the iOS build into push:
+On an iOS device the whole enrollment is this crate's `native` module, behind the feature of the same name. The Android flow is the same module with an FCM token ([the next section](#enroll-an-android-device)); the macOS host wiring is later work, so there is no universal native push claim yet. Depend on the crate in your app, select the notifications plugin, and opt the iOS build into push:
 
 ```toml
 [dependencies]
@@ -281,6 +281,37 @@ Failures name their retry state rather than swallowing it: `EnrollError::Unconfi
 Registration failures are surfaced, not guessed around: the OS's provisioning refusal comes back as an error carrying a stable code — `aps-environment` names the missing or mismatched entitlement — never the OS's own error text, a silent OS answers an explicit "unconfirmed" instead of hanging or replaying a prior token, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
 
 **What a push does while the app is closed** is the OS's work: APNs wakes the system, which shows the alert from the payload — title and body, collapsed by the notification's id — and your durable inbox row is already in the service. What this does **not** include yet: routing a tap into a screen (the envelope's `data` is carried, but the tap-routing story is later work), and any claim of live APNs acceptance here — provider acceptance is only ever proven by a real device with real credentials, which this setup doesn't exercise.
+
+### Enroll an Android device
+
+On an Android device the enrollment is the same `native` module as iOS — the same `enroll`, `reconcile`, and `disable` calls, the same error shapes — but the OS's answer is an **FCM registration token** instead of an APNs device token, so the opt-in is a build switch instead of an entitlement. It is Android only; the macOS host wiring is still later work.
+
+Depend on the crate and select the plugin exactly as for iOS, then opt the Android build into push:
+
+```toml
+[dependencies]
+leptoskit_notifications = { version = "0.3", features = ["native"] }
+
+[native]
+plugins = ["notifications"]
+
+[native.android]
+push = true
+```
+
+The `push` line is the opt-in. Generation adds four things to the generated Android project and nothing else changes: the pinned `com.google.firebase:firebase-messaging` dependency, Google's services Gradle plugin (applied through `.leptoskit/android/gradle-plugins.txt`, which the current `leptoskit new` scaffold reads), the messaging service that receives FCM's token refreshes, and the `POST_NOTIFICATIONS` permission the local-notifications plugin already declares. An app without the line generates byte-for-byte as before, so selecting the plugin for local banners never turns an app into a push-enabled one.
+
+Two things are yours, not leptoskit's: **`google-services.json`** — the file the Firebase console issues for your app's package id, placed at `android/app/google-services.json`. Generation stops and names the path when push is on and it's missing; leptoskit never generates or commits it. And the Gradle script reader: apps scaffolded before this setting get a generation error that names the exact lines to add to their app-owned `android/app/build.gradle.kts`.
+
+At runtime the flow is the iOS flow verbatim — request permission, enroll from the gesture, reconcile at launch with the saved enrollment, disable on sign out:
+
+```rust,ignore
+let enrollment = native::enroll().await?;
+```
+
+What differs under the hood: Firebase answers with a registration token — printable ASCII of no assumed length, not hex — the generated messaging service forwards token **refreshes** to the same in-memory broker the registration task feeds, and a device without usable Firebase refuses instead of pretending. The refusal is a stable code, not SDK text: `firebase-not-configured` means the app generated without the push opt-in or has no `google-services.json` values (the Firebase classes are found reflectively, so an app that never opted in simply answers this), `os-refused` covers the rest, and `token-shape` means Firebase handed over something outside the contract's bounds. The token is held in memory only — Firebase hands it out again on the next launch — and its bytes never appear in a log, an error, or a `Debug` print.
+
+A device at Google Play services' mercy is a real constraint worth knowing: delivery needs Play services on the device, and while your app is **foregrounded** an arriving push is data your app must compose itself (the local-notifications plugin, above). What a push does while the app is **closed** is Google's work: the message's notification block shows the title and body in the system tray, collapsed by the notification's id, and your durable inbox row is already in the service. A tap opens the app — routing it into a screen is the same later work as iOS's. And as everywhere: acceptance at the provider is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 
 ### Enroll a browser
 
@@ -378,11 +409,11 @@ A Web Push subscription's endpoint is attacker-shaped material — anyone who ca
 
 ### Platforms
 
-Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser), and the iOS client half is [the `native` module](#enroll-an-ios-device). **Android and macOS enrollments bring their own credentials today; their token-acquisition plumbing is later work. Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on Android also needs the app's own OS setup there (`google-services.json`).
+Push reaches a device through its platform's service: iOS and macOS through APNs, Android through FCM, and the web through the browser's own push service (Web Push with VAPID) — the browser's client half is [this crate's `browser` module](#enroll-a-browser), and the native client half for iOS and Android is [the `native` module](#enroll-an-ios-device). **macOS enrollment brings its own credential today; its token-acquisition plumbing is later work. Windows and Linux have no enrollment story in leptoskit yet**, and HarmonyOS and the watch surfaces are out of scope for push — their inbox is durable retrieval, as everywhere. Background delivery on Android also needs the app's own OS setup there (`google-services.json`, and `[native.android] push` checked).
 
 ## What it doesn't do yet
 
-- **Native client enrollment is iOS only.** The service side of enrollment is done, the web client is this crate's `browser` module, and the iOS client is the `native` module (both above). Android's FCM token acquisition and the macOS host's APNs wiring are later work: today those apps bring their own platform-issued credential to `register_push_endpoint`. Push notification **tap routing** into a screen is also later work, everywhere.
+- **Native client enrollment is iOS and Android.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's APNs token and Android's FCM token alike — is the `native` module (all above). The macOS host's APNs wiring is later work: today that app brings its own platform-issued credential to `register_push_endpoint`. Push notification **tap routing** into a screen is also later work, everywhere.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
 

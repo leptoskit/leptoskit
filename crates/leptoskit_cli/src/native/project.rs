@@ -45,6 +45,10 @@ pub fn generate(
 		crate::ui::warning(warning);
 	}
 
+	if target.is_android() {
+		validate_android_push(root, config, registry)?;
+	}
+
 	registrant(root, config, registry, target)?;
 
 	match target {
@@ -132,6 +136,79 @@ fn validate_ios_usage_descriptions(root: &Path, registry: &Registry) -> Result<(
 			path.display()
 		);
 	}
+
+	Ok(())
+}
+
+/// The Firebase SDK the push-enabled Android app builds against. Explicit
+/// Maven coordinates only: never Gradle expressions or version ranges.
+const FCM_MESSAGING_DEPENDENCY: &str = "com.google.firebase:firebase-messaging:26.0.2";
+
+/// The Gradle plugin the push-enabled app applies, so Google's SDK finds the
+/// app author's `google-services.json` values.
+const GOOGLE_SERVICES_PLUGIN: &str = "com.google.gms.google-services";
+
+/// The messaging service the generated app declares: Google Play services
+/// delivers refreshed FCM registration tokens to it, in the notifications
+/// plugin's package, and the tokens land in that plugin's broker.
+const MESSAGING_SERVICE: &str = "dev.leptoskit.plugins.notifications.LeptosKitMessagingService";
+
+/// The generated messaging service's file name, so turning push off removes
+/// exactly what turning it on wrote.
+const MESSAGING_SERVICE_FILE: &str = "LeptosKitMessagingService.kt";
+
+/// The Gradle-plugins data file the app's build script reads: each line is
+/// applied as a plugin id, and the file exists only while the app is
+/// push-enabled, so an existing app's script applies nothing until
+/// `[native.android] push` turns on.
+const GRADLE_PLUGINS_FILE: &str = "gradle-plugins.txt";
+
+/// `[native.android] push` needs the three things generation cannot make up:
+/// the notifications plugin that enrolls the token, the app author's
+/// `google-services.json` — never generated, never committed — and an
+/// app-owned Gradle script that applies the plugins generation lists. All of
+/// it is checked before any write, so a refused configuration leaves the
+/// generated project exactly as it was.
+fn validate_android_push(
+	root: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+	registry: &Registry,
+) -> Result<()> {
+	if !config.native.android.push {
+		return Ok(());
+	}
+
+	anyhow::ensure!(
+		registry
+			.plugins
+			.iter()
+			.any(|plugin| plugin.name == "notifications"),
+		"native.android.push enrolls the device's FCM token through the notifications plugin; add \
+		 \"notifications\" to [native] plugins"
+	);
+
+	let configuration = super::host_dir(root, Target::Android).join("app/google-services.json");
+	anyhow::ensure!(
+		configuration.is_file(),
+		"native.android.push needs Google's Firebase configuration at {}; that is the file the \
+		 Firebase console issues for this app's package id, and it is the app author's to add — \
+		 leptoskit never generates or commits it",
+		configuration.display()
+	);
+
+	let script_path = super::host_dir(root, Target::Android).join("app/build.gradle.kts");
+	let script = std::fs::read_to_string(&script_path)
+		.with_context(|| format!("read the app's Gradle script {}", script_path.display()))?;
+	anyhow::ensure!(
+		script.contains(GRADLE_PLUGINS_FILE),
+		"native.android.push applies {GOOGLE_SERVICES_PLUGIN} through \
+		 .leptoskit/android/{GRADLE_PLUGINS_FILE}, which {} doesn't read. Add these lines to it, \
+		 right after its plugins block:\n\n    \
+		 file(\"../../.leptoskit/android/{GRADLE_PLUGINS_FILE}\").takeIf {{ it.exists() \
+		 }}?.readLines()?.filter {{ it.isNotBlank() }}?.forEach {{\n        apply(plugin = it)\n    \
+		 }}\n",
+		script_path.display()
+	);
 
 	Ok(())
 }
@@ -230,7 +307,10 @@ fn android(
 }
 
 /// The generated half of the Android host, for a phone or, with `quest`, for
-/// a Meta Quest headset.
+/// a Meta Quest headset. `[native.android] push` adds the Firebase pieces:
+/// the messaging dependency, the Google services plugin's data file, the
+/// messaging service source, and its manifest declaration. With push off,
+/// none of it is written and stale copies of all of it are removed.
 fn android_host(
 	root: &Path,
 	config: &leptoskit_config::LeptoskitConfig,
@@ -238,13 +318,15 @@ fn android_host(
 	abi: &str,
 	quest: Option<&leptoskit_config::QuestConfig>,
 ) -> Result<()> {
+	let push = config.native.android.push;
 	let dir = root.join(".leptoskit/android");
 	write(&dir.join("version.properties"), &android_version(config))?;
 	write(
 		&dir.join("plugin-dependencies.txt"),
-		&android_dependencies(registry),
+		&android_dependencies(registry, push),
 	)?;
 	write(&dir.join("abi.txt"), abi)?;
+	push_plugins_file(&dir, push)?;
 	copy(
 		&registry.bridge.join("android/proguard-rules.pro"),
 		&dir.join("proguard-rules.pro"),
@@ -259,6 +341,14 @@ fn android_host(
 	);
 
 	android_registrant(registry, &sources, &mut kotlin)?;
+	if push {
+		write(
+			&sources.join(MESSAGING_SERVICE_FILE),
+			&messaging_service_kotlin(),
+		)?;
+	} else {
+		let _ = std::fs::remove_file(sources.join(MESSAGING_SERVICE_FILE));
+	}
 	let manifest = std::fs::read_to_string(
 		super::host_dir(root, Target::Android).join("app/src/main/AndroidManifest.xml"),
 	)?;
@@ -284,9 +374,22 @@ fn android_host(
 	let mut manifest =
 		super::manifest::merge(&manifest, &permissions, &query_actions, &query_intents)?;
 	manifest = super::manifest::components::merge(&manifest, &query_packages, &activities)?;
+	let mut services = android_services(registry);
+
+	if push {
+		// The messaging service is unexported: only Google Play services'
+		// own delivery talks to it. It is not a foreground service, so it
+		// names no foregroundServiceType.
+		services.push(super::manifest::services::ServiceComponent {
+			name: MESSAGING_SERVICE.to_owned(),
+			foreground_service_type: String::new(),
+			exported: false,
+		});
+	}
+
 	manifest = super::manifest::services::app_components(
 		&manifest,
-		&android_services(registry),
+		&services,
 		&android_receivers(registry),
 	)?;
 	// `app.icon` becomes the launcher icons, in resources only leptoskit
@@ -446,12 +549,21 @@ fn android_file_providers(registry: &Registry, res: &Path, manifest: &str) -> Re
 	super::manifest::with_file_providers(manifest, &providers)
 }
 
-fn android_dependencies(registry: &Registry) -> String {
-	let dependencies: std::collections::BTreeSet<_> = registry
+fn android_dependencies(registry: &Registry, push: bool) -> String {
+	let mut dependencies: std::collections::BTreeSet<&str> = registry
 		.plugins
 		.iter()
 		.flat_map(|plugin| &plugin.android_dependencies)
+		.map(String::as_str)
 		.collect();
+
+	// The messaging SDK rides the same data file as every plugin's own
+	// dependencies: the app's Gradle script reads it as one `implementation`
+	// line each, and push off simply leaves it out.
+	if push {
+		dependencies.insert(FCM_MESSAGING_DEPENDENCY);
+	}
+
 	let mut output = String::new();
 
 	for dependency in dependencies {
@@ -460,6 +572,37 @@ fn android_dependencies(registry: &Registry) -> String {
 	}
 
 	output
+}
+
+/// Writes the Gradle-plugins data file while push is on, and removes a stale
+/// one when push turns off, so the app's script applies nothing rather than
+/// a plugin whose configuration generation no longer writes.
+fn push_plugins_file(dir: &Path, push: bool) -> Result<()> {
+	let plugins = dir.join(GRADLE_PLUGINS_FILE);
+
+	if push {
+		write(&plugins, &format!("{GOOGLE_SERVICES_PLUGIN}\n"))?;
+	} else {
+		let _ = std::fs::remove_file(&plugins);
+	}
+
+	Ok(())
+}
+
+/// The generated messaging service: Google Play services delivers refreshed
+/// FCM registration tokens here, and every token lands in the notifications
+/// plugin's broker exactly as a registration task's own answer does. Tokens
+/// are held in memory only and are never logged or stored.
+fn messaging_service_kotlin() -> String {
+	"// Generated by leptoskit from [native.android] push. Google Play\n// services delivers \
+	 registration-token refreshes to this service; every\n// token lands in the notifications \
+	 plugin's broker exactly as a\n// registration task's own answer does. Tokens are held in \
+	 memory only\n// and are never logged or stored.\npackage \
+	 dev.leptoskit.plugins.notifications\n\nimport \
+	 com.google.firebase.messaging.FirebaseMessagingService\n\nclass LeptosKitMessagingService : \
+	 FirebaseMessagingService() {\n\x20   override fun onNewToken(token: String) {\n\x20       \
+	 RemoteRegistration.noteToken(token)\n\x20   }\n}\n"
+		.to_owned()
 }
 
 fn android_services(registry: &Registry) -> Vec<super::manifest::services::ServiceComponent> {

@@ -1,7 +1,8 @@
-//! The native half of push enrollment: an iOS app's APNs device token,
-//! acquired through the notifications plugin, enrolled under the signed-in
-//! person. It is the iOS counterpart of [`crate::browser`], with the same
-//! shape and the same boundaries.
+//! The native half of push enrollment: the device token the OS issues — an
+//! APNs device token on iOS, an FCM registration token on Android — acquired
+//! through the notifications plugin and enrolled under the signed-in person.
+//! It is the native counterpart of [`crate::browser`], with the same shape
+//! and the same boundaries.
 //!
 //! What the module does and does not touch: the token comes from the
 //! generated app delegate via the plugin's broker — never from storage this
@@ -28,21 +29,24 @@
 //!    Alerts are what the permission gates; registration itself needs no
 //!    dialog, but an app that enrolls without asking has quietly promised
 //!    banners the person never opted into.
-//! 3. Still in the gesture, call [`enroll`]: it asks the OS to register for
-//!    remote notifications, waits a bounded time for the delegate's answer, and
-//!    registers the token as the person's typed
-//!    [`crate::push::PushCredential::Apns`]. The answer is an opaque
-//!    [`Enrollment`] id: keep it, with the opt-in, beside the person's session.
+//! 3. Still in the gesture, call [`enroll`]: it asks the OS to register, waits
+//!    a bounded time for the answer, and registers the token as the person's
+//!    typed [`crate::push::PushCredential`] — `Apns` from an iOS host, `Fcm`
+//!    from an Android one. The platform is a transport choice and nothing more:
+//!    the token kind the host answers names the provider kind, and the workflow
+//!    around it is identical. The answer is an opaque [`Enrollment`] id: keep
+//!    it, with the opt-in, beside the person's session.
 //! 4. On **launch**, once the person is signed in, call [`reconcile`] with that
 //!    saved enrollment — and only with one: it is the record that this person
 //!    opted in on this device, and without it nothing registers, so a disabled
 //!    device is never silently re-enabled. With it, the module asks the OS to
-//!    register again — registration is not a permission prompt, and Apple
-//!    expects it every launch — waits the bounded answer, and brings the
-//!    service up to date with whatever the OS now issues. The answer is an
-//!    explicit [`Outcome`]: unchanged, rotated with the old handle's retirement
-//!    acknowledged, or rotated with a stale handle — a previous account's
-//!    leftover — dropped rather than operated under this one.
+//!    register again — registration prompts nothing on either platform; iOS
+//!    expects it every launch and Android refreshes its token the same way —
+//!    waits the bounded answer, and brings the service up to date with whatever
+//!    the OS now issues. The answer is an explicit [`Outcome`]: unchanged,
+//!    rotated with the old handle's retirement acknowledged, or rotated with a
+//!    stale handle — a previous account's leftover — dropped rather than
+//!    operated under this one.
 //! 5. On **sign out**, while this person is still authenticated, call
 //!    [`disable`]. It requires an acknowledged server revoke and replays a
 //!    stable idempotency key derived from the endpoint id — the same contract
@@ -51,9 +55,9 @@
 //!    enrolls from clean. Clear the saved enrollment and opt-in once the revoke
 //!    is acknowledged.
 //!
-//! iOS only. Android enrolls an FCM registration token and macOS shares the
-//! APNs transport but not this plugin path; both are later work, and calls
-//! on hosts without the plugin answer `Unavailable` rather than pretending.
+//! iOS and Android only. macOS shares the APNs transport but not this plugin
+//! path; it is later work, and calls on hosts without the plugin answer
+//! `Unavailable` rather than pretending.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -86,9 +90,9 @@ pub struct Enrollment {
 /// enrollment to keep retrying with.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnrollError {
-	/// This platform has no native enrollment. Only an iOS host runs it;
-	/// Android and macOS are later work.
-	#[error("native enrollment is iOS-only on this host")]
+	/// This host runs no native enrollment. Only an iOS or Android guest
+	/// runs it; macOS is later work.
+	#[error("native enrollment needs an iOS or Android guest on this host")]
 	Unavailable,
 	/// The notifications plugin is not installed: add `"notifications"` to
 	/// `[native] plugins`. Nothing was prompted and nothing registered.
@@ -99,8 +103,10 @@ pub enum EnrollError {
 	#[error("registering for remote notifications failed: {0}")]
 	Register(String),
 	/// The OS refused registration; the reason is one of the plugin
-	/// contract's stable codes, most often `aps-environment` for a missing
-	/// or mismatched entitlement. Nothing was registered with the service.
+	/// contract's stable codes — most often `aps-environment` for a missing
+	/// or mismatched iOS entitlement, or `firebase-not-configured` when an
+	/// Android app generates without `[native.android] push` or its
+	/// `google-services.json`. Nothing was registered with the service.
 	#[error("the OS refused registration: {0}")]
 	Failed(String),
 	/// The OS answered nothing within the host's registration bound. Any
@@ -151,8 +157,8 @@ pub enum DisableError {
 	/// No successful revoke acknowledgement: retry while authenticated.
 	#[error("revoking the endpoint failed: {0}")]
 	Revoke(leptoskit_rpc::FnError),
-	/// Outside an iOS native guest; no revoke was attempted.
-	#[error("native enrollment is iOS-only on this host")]
+	/// Outside a native guest; no revoke was attempted.
+	#[error("native enrollment needs an iOS or Android guest on this host")]
 	Unavailable,
 }
 
@@ -168,10 +174,13 @@ pub fn disable_key(endpoint: uuid::Uuid) -> String {
 
 /// What a registration snapshot means for enrollment: the token to register
 /// as the person's credential, `None` when the OS holds no answer yet, or
-/// the OS's own refusal. The token's shape was validated at the plugin
-/// boundary; its bytes are forwarded verbatim, never re-derived or stored.
+/// the OS's own refusal. The platform is a transport choice the host's own
+/// answer names — an APNs hex token means iOS, an FCM printable token means
+/// Android — and this module never second-guesses it. The token's shape was
+/// validated at the plugin boundary; its bytes are forwarded verbatim, never
+/// re-derived or stored.
 pub fn decide(
-	snapshot: &leptoskit_plugin_notifications::ApnsRegistration,
+	snapshot: &leptoskit_plugin_notifications::RemoteRegistration,
 ) -> Result<Option<PushCredential>, EnrollError> {
 	use leptoskit_plugin_notifications::RemoteState;
 
@@ -182,6 +191,11 @@ pub fn decide(
 		RemoteState::Token(token) => {
 			Ok(Some(PushCredential::Apns {
 				device_token: token.as_str().to_owned(),
+			}))
+		}
+		RemoteState::FcmToken(token) => {
+			Ok(Some(PushCredential::Fcm {
+				registration_token: token.as_str().to_owned(),
 			}))
 		}
 	}
@@ -229,9 +243,10 @@ pub enum Retirement {
 
 /// Enrolls this device for the signed-in person, from an explicit user
 /// gesture: permission is the app's own prior call, so this asks the OS to
-/// register for remote notifications, waits the host's bounded time for the
-/// delegate's answer, and registers the token. Two racing calls converge on
-/// one endpoint: the service answers the same id for the same destination.
+/// register, waits the host's bounded time for the answer, and registers
+/// the token — APNs on an iOS host, FCM on an Android one. Two racing calls
+/// converge on one endpoint: the service answers the same id for the same
+/// destination.
 ///
 /// # Errors
 ///
@@ -268,10 +283,10 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 /// reconciliation runs on. Without it the answer is [`Outcome::Off`]:
 /// nothing registers, so a person who disabled notifications is never
 /// silently re-enabled, and a fresh install is never enrolled by startup
-/// code. With it, the module registers with APNs again — registration
-/// prompts nothing; only permission requests do, and those stay the
-/// gesture's — and reconciles whatever the OS now issues, under whoever is
-/// signed in right now:
+/// code. With it, the module registers with the OS again — registration
+/// prompts nothing on either platform; only permission requests do, and
+/// those stay the gesture's — and reconciles whatever the OS now issues,
+/// under whoever is signed in right now:
 ///
 /// - The same token keeps the same endpoint id (the service dedupes the
 ///   destination): [`Outcome::Kept`], one idempotent call.
@@ -475,10 +490,13 @@ use std::future::Future;
 #[cfg(target_arch = "wasm32")]
 async fn plugin_snapshot<F>(
 	read: impl FnOnce(leptoskit_plugin_notifications::guest::Notifications) -> F,
-) -> Result<leptoskit_plugin_notifications::ApnsRegistration, EnrollError>
+) -> Result<leptoskit_plugin_notifications::RemoteRegistration, EnrollError>
 where
 	F: Future<
-		Output = Result<leptoskit_plugin_notifications::ApnsRegistration, leptoskit_bridge::Error>,
+		Output = Result<
+			leptoskit_plugin_notifications::RemoteRegistration,
+			leptoskit_bridge::Error,
+		>,
 	>,
 {
 	let notifications = leptoskit_plugin_notifications::guest::Notifications::new()
@@ -528,8 +546,9 @@ pub async fn disable(enrollment: &Enrollment) -> Result<(), DisableError> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-	use leptoskit_plugin_notifications::ApnsRegistration;
 	use leptoskit_plugin_notifications::DeviceToken;
+	use leptoskit_plugin_notifications::FcmToken;
+	use leptoskit_plugin_notifications::RemoteRegistration;
 	use leptoskit_plugin_notifications::RemoteState;
 	use leptoskit_plugin_notifications::remote_failure;
 
@@ -544,18 +563,29 @@ mod tests {
 	/// codec. The token is deliberately 33 bytes — the shape the boundary
 	/// must accept — and mixed case is folded by the host, so the wire only
 	/// ever carries lower case.
-	fn fake_host_token(hex: &str) -> ApnsRegistration {
-		ApnsRegistration::new(
+	fn fake_host_token(hex: &str) -> RemoteRegistration {
+		RemoteRegistration::new(
 			1,
 			RemoteState::Token(DeviceToken::new(hex).expect("the fake token is in bounds")),
 		)
 		.expect("a revisioned snapshot")
 	}
 
-	/// The snapshot decides enrollment: a token becomes the typed APNs
-	/// credential with the exact bytes, silence stays None, the OS's
-	/// refusal is surfaced rather than retried into a fake enrollment, and
-	/// an unconfirmed registration is never mistaken for a fresh token.
+	/// The Android counterpart: a registration token in Firebase's own
+	/// alphabet — printable ASCII, never hex, of no assumed length.
+	fn fake_host_fcm_token(token: &str) -> RemoteRegistration {
+		RemoteRegistration::new(
+			1,
+			RemoteState::FcmToken(FcmToken::new(token).expect("the fake token is in bounds")),
+		)
+		.expect("a revisioned snapshot")
+	}
+
+	/// The snapshot decides enrollment: a token becomes the typed credential
+	/// with the exact bytes — APNs from an iOS host, FCM from an Android one
+	/// — silence stays None, the OS's refusal is surfaced rather than retried
+	/// into a fake enrollment, and an unconfirmed registration is never
+	/// mistaken for a fresh token.
 	#[test]
 	fn a_snapshot_decides_what_enrollment_registers() {
 		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
@@ -567,9 +597,18 @@ mod tests {
 			}
 		);
 
-		assert_eq!(decide(&ApnsRegistration::none()).unwrap(), None);
+		let fcm = "WebView-Help:dTOkay8-_fake".repeat(6); // gitleaks:allow (a fake FCM token a test builds)
+		let credential = decide(&fake_host_fcm_token(&fcm)).unwrap().unwrap();
+		assert_eq!(
+			credential,
+			PushCredential::Fcm {
+				registration_token: fcm,
+			}
+		);
 
-		let refused = ApnsRegistration::new(
+		assert_eq!(decide(&RemoteRegistration::none()).unwrap(), None);
+
+		let refused = RemoteRegistration::new(
 			2,
 			RemoteState::Failed(remote_failure::APS_ENVIRONMENT.into()),
 		)
@@ -579,15 +618,28 @@ mod tests {
 			Err(EnrollError::Failed(remote_failure::APS_ENVIRONMENT.into()))
 		);
 
+		let unconfigured = RemoteRegistration::new(
+			2,
+			RemoteState::Failed(remote_failure::FIREBASE_NOT_CONFIGURED.into()),
+		)
+		.unwrap();
 		assert_eq!(
-			decide(&ApnsRegistration::unconfirmed()),
+			decide(&unconfigured),
+			Err(EnrollError::Failed(
+				remote_failure::FIREBASE_NOT_CONFIGURED.into()
+			))
+		);
+
+		assert_eq!(
+			decide(&RemoteRegistration::unconfirmed()),
 			Err(EnrollError::Unconfirmed)
 		);
 	}
 
 	/// The typed RPC request the guest sends: the credential serialized
-	/// exactly as the service parses it, with no identity field to forge.
-	/// The identity half runs against the real service in `tests/native.rs`.
+	/// exactly as the service parses it, per platform, with no identity
+	/// field to forge. The identity half runs against the real service in
+	/// `tests/native.rs`.
 	#[test]
 	fn the_request_is_the_service_typed_envelope_and_nothing_else() {
 		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
@@ -600,6 +652,34 @@ mod tests {
 				"credential": { "apns": { "device_token": token } }
 			})
 		);
+
+		let fcm = "WebView-Help:dTOkay8-_fake".repeat(6); // gitleaks:allow (a fake FCM token a test builds)
+		let credential = decide(&fake_host_fcm_token(&fcm)).unwrap().unwrap();
+		let request = serde_json::to_value(RegisterPushEndpoint { credential }).unwrap();
+
+		assert_eq!(
+			request,
+			serde_json::json!({
+				"credential": { "fcm": { "registration_token": fcm } }
+			})
+		);
+	}
+
+	/// A credential's `Debug` never carries the token, so a logged or
+	/// panicked enrollment value leaks nothing, on either platform.
+	#[test]
+	fn the_credential_debug_redacts_both_token_kinds() {
+		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
+		let fcm = "WebView-Help:dTOkay8-_fake".repeat(6); // gitleaks:allow (a fake FCM token a test builds)
+
+		for credential in [
+			decide(&fake_host_token(&token)).unwrap().unwrap(),
+			decide(&fake_host_fcm_token(&fcm)).unwrap().unwrap(),
+		] {
+			let printed = format!("{credential:?}");
+			assert!(!printed.contains(&token), "{printed}");
+			assert!(!printed.contains(&fcm), "{printed}");
+		}
 	}
 
 	/// Disabling replays the browser module's stable key for the same

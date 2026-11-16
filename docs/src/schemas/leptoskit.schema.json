@@ -259,6 +259,17 @@
 			},
 			"additionalProperties": false
 		},
+		"AndroidConfig": {
+			"description": "What opts the Android app into push. Leave it unset for apps that only\npost local notifications; they generate exactly as before, with no\nFirebase dependency, no messaging service, and no Google services plugin.",
+			"type": "object",
+			"properties": {
+				"push": {
+					"description": "Opts the Android app into push enrollment: generation adds the\n`firebase-messaging` dependency, applies Google's services Gradle\nplugin, and declares the messaging service that forwards FCM\nregistration tokens to the notifications plugin, whose `native`\nmodule enrolls them. Requires the `notifications` plugin in\n`[native] plugins` and the app author's `google-services.json` in\n`hosts/android/app/` — an app-owned file leptoskit never generates.\nLeave it unset for apps that only post local notifications.",
+					"type": "boolean"
+				}
+			},
+			"additionalProperties": false
+		},
 		"AndroidIcons": {
 			"description": "Android launcher and notification icons.",
 			"type": "object",
@@ -3124,6 +3135,10 @@
 			"description": "Native app settings.",
 			"type": "object",
 			"properties": {
+				"android": {
+					"description": "What opts the Android app into push, such as FCM enrollment.",
+					"$ref": "#/$defs/AndroidConfig"
+				},
 				"android_certificates": {
 					"description": "The SHA-256 fingerprints of the certificates that sign the Android\napp, as `keytool -list` prints them (`AB:CD:…`, 32 bytes). With them,\n`leptoskit::server` publishes `/.well-known/assetlinks.json`, and the\napp's passkeys are accepted. List the upload key and the Play app\nsigning key when Google signs the release.",
 					"type": "array",

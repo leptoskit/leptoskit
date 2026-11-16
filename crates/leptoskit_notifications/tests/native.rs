@@ -74,11 +74,11 @@ fn device_token(seed: u8) -> String {
 
 /// The fake host's answer for `token`: the plugin codec's own serialization
 /// of a revisioned token snapshot — the bytes a real iOS host replies with.
-fn fake_host_token(token: &str) -> leptoskit_plugin_notifications::ApnsRegistration {
+fn fake_host_token(token: &str) -> leptoskit_plugin_notifications::RemoteRegistration {
 	use leptoskit_plugin_notifications::DeviceToken;
 	use leptoskit_plugin_notifications::RemoteState;
 
-	leptoskit_plugin_notifications::ApnsRegistration::new(
+	leptoskit_plugin_notifications::RemoteRegistration::new(
 		1,
 		RemoteState::Token(DeviceToken::new(token).expect("the fake token is in bounds")),
 	)
@@ -222,7 +222,7 @@ async fn post(
 async fn enroll_as(
 	service: &Service,
 	person: Uuid,
-	snapshot: &leptoskit_plugin_notifications::ApnsRegistration,
+	snapshot: &leptoskit_plugin_notifications::RemoteRegistration,
 ) -> (u16, Value) {
 	let credential = native::decide(snapshot)
 		.expect("the snapshot decides")
@@ -388,7 +388,7 @@ async fn anonymous_calls_enroll_nothing_and_refusals_decide_nothing() {
 	// A snapshot whose answer is the OS's refusal never reaches the wire,
 	// and silence offers nothing to enroll. The refusal is the contract's
 	// stable code, never the OS's own text.
-	let refused = leptoskit_plugin_notifications::ApnsRegistration::new(
+	let refused = leptoskit_plugin_notifications::RemoteRegistration::new(
 		1,
 		leptoskit_plugin_notifications::RemoteState::Failed(
 			leptoskit_plugin_notifications::remote_failure::APS_ENVIRONMENT.into(),
@@ -402,7 +402,7 @@ async fn anonymous_calls_enroll_nothing_and_refusals_decide_nothing() {
 		))
 	);
 	assert_eq!(
-		native::decide(&leptoskit_plugin_notifications::ApnsRegistration::none()),
+		native::decide(&leptoskit_plugin_notifications::RemoteRegistration::none()),
 		Ok(None)
 	);
 }
