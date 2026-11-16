@@ -17,6 +17,7 @@ pub mod transport;
 
 use leptoskit_axum::axum::Router;
 use leptoskit_db::Db;
+use leptoskit_db::Statement;
 use leptoskit_rpc as rpc;
 use sha2::Digest as _;
 use sha2::Sha256;
@@ -26,12 +27,14 @@ use crate::AppSend;
 use crate::InboxItem;
 use crate::NewAppSend;
 use crate::NewNotification;
+use crate::NewTopicSubscription;
 use crate::NewWake;
 use crate::Notification;
 use crate::Preference;
 use crate::SERVICE;
-use crate::SendResult;
+use crate::TopicSubscription;
 use crate::Wake;
+use crate::condition::Condition;
 
 /// The person the app forwarded, or the error a stranger gets: nobody's
 /// inbox answers without one, and no argument can name one.
@@ -90,19 +93,51 @@ pub(crate) async fn opted_out_categories(
 }
 
 /// The canonical form of what a send intends, hashed: the same send twice
-/// hashes the same, and a changed category, content, recipient list,
-/// schedule, or expiry changes the hash, so reusing its key fails.
-pub(crate) fn intent_hash(
-	spec: &crate::SendSpec,
-	recipients: &std::collections::BTreeSet<Uuid>,
-) -> String {
+/// hashes the same, and a changed category, content, target, schedule, or
+/// expiry changes the hash, so reusing its key fails.
+///
+/// A recipients send serializes exactly the shape it always did — the
+/// spec and the recipient list — so a send recorded before targets
+/// existed keeps answering its own retries.
+pub(crate) fn intent_hash(spec: &crate::SendSpec, target: &crate::SendTarget) -> String {
 	#[derive(serde::Serialize)]
 	struct Intent<'a> {
 		spec: &'a crate::SendSpec,
-		recipients: &'a std::collections::BTreeSet<Uuid>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		recipients: Option<std::collections::BTreeSet<Uuid>>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		topic: Option<&'a str>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		condition: Option<&'a str>,
 	}
 
-	let intent = Intent { spec, recipients };
+	let intent = match target {
+		crate::SendTarget::Recipients(recipients) => {
+			Intent {
+				spec,
+				recipients: Some(recipients.iter().copied().collect()),
+				topic: None,
+				condition: None,
+			}
+		}
+		crate::SendTarget::Topic(topic) => {
+			Intent {
+				spec,
+				recipients: None,
+				topic: Some(topic),
+				condition: None,
+			}
+		}
+		crate::SendTarget::Condition(condition) => {
+			Intent {
+				spec,
+				recipients: None,
+				topic: None,
+				condition: Some(condition),
+			}
+		}
+	};
+
 	let encoded = serde_json::to_vec(&intent).expect("the intent is plain JSON");
 
 	hex::encode(Sha256::digest(&encoded))
@@ -124,9 +159,8 @@ pub(crate) async fn find_send(
 		.map_err(rpc::Error::from)
 }
 
-/// Writes the send row that holds a key, so a second send with it is
-/// recognised. The counts are filled in once the fanout has run; both
-/// writes are in one transaction, so a send is all or nothing.
+/// Writes the send row a recipients send holds: complete from the start,
+/// with its audience count, and nothing stored to fan out later.
 ///
 /// # Errors
 ///
@@ -135,12 +169,48 @@ pub(crate) async fn write_send(
 	tx: &leptoskit_db::Tx,
 	key: &str,
 	intent: &str,
+	targeted: u32,
 ) -> leptoskit_db::Result<()> {
 	NewAppSend {
 		idempotency_key: key.to_owned(),
 		intent: intent.to_owned(),
 		delivered: 0,
 		skipped_opted_out: 0,
+		targeted: i64::from(targeted),
+		state: crate::SendState::Complete.as_str().to_owned(),
+		target: None,
+		spec: None,
+		cursor: None,
+	}
+	.insert(tx)
+	.await
+	.map(|_| ())
+}
+
+/// Writes the send row a topic or condition send holds: still fanning
+/// out, with its target and spec stored for the job that walks the
+/// audience.
+///
+/// # Errors
+///
+/// [`leptoskit_db::DbError::Conflict`] when another send holds the key.
+pub(crate) async fn write_fanout_send(
+	tx: &leptoskit_db::Tx,
+	key: &str,
+	intent: &str,
+	target: &crate::SendTarget,
+	spec: &crate::SendSpec,
+) -> leptoskit_db::Result<()> {
+	NewAppSend {
+		idempotency_key: key.to_owned(),
+		intent: intent.to_owned(),
+		delivered: 0,
+		skipped_opted_out: 0,
+		targeted: 0,
+		state: crate::SendState::FanningOut.as_str().to_owned(),
+		target: Some(target.stored()),
+		spec: Some(serde_json::to_string(spec).expect("the spec is plain JSON")),
+		cursor: None,
 	}
 	.insert(tx)
 	.await
@@ -177,7 +247,7 @@ pub(crate) async fn record_outcome(
 /// # Errors
 ///
 /// [`rpc::Error::Conflict`] for a different intent.
-pub(crate) fn answer_send(existing: &AppSend, intent: &str) -> rpc::Result<SendResult> {
+pub(crate) fn answer_send(existing: &AppSend, intent: &str) -> rpc::Result<crate::SendResult> {
 	if existing.intent != intent {
 		return Err(rpc::Error::conflict(
 			"this idempotency key was already used for a different send; use a new key for each \
@@ -187,13 +257,32 @@ pub(crate) fn answer_send(existing: &AppSend, intent: &str) -> rpc::Result<SendR
 
 	let delivered = u32::try_from(existing.delivered).unwrap_or(u32::MAX);
 	let skipped_opted_out = u32::try_from(existing.skipped_opted_out).unwrap_or(u32::MAX);
+	let targeted = u32::try_from(existing.targeted).unwrap_or(u32::MAX);
+	let state =
+		crate::SendState::from_str_value(&existing.state).unwrap_or(crate::SendState::Complete);
+	let recipients = existing
+		.target
+		.as_ref()
+		.map_or(delivered.saturating_add(skipped_opted_out), |_| 0);
 
-	Ok(SendResult {
+	Ok(crate::SendResult {
 		delivered,
 		skipped_opted_out,
-		recipients: delivered.saturating_add(skipped_opted_out),
+		recipients,
 		duplicate: true,
+		state,
+		targeted,
 	})
+}
+
+/// The send row as [`crate::send_status`] answers it.
+pub(crate) fn progress_of(send: &AppSend) -> crate::SendProgress {
+	crate::SendProgress {
+		state: crate::SendState::from_str_value(&send.state).unwrap_or(crate::SendState::Complete),
+		targeted: u32::try_from(send.targeted).unwrap_or(u32::MAX),
+		delivered: u32::try_from(send.delivered).unwrap_or(u32::MAX),
+		skipped_opted_out: u32::try_from(send.skipped_opted_out).unwrap_or(u32::MAX),
+	}
 }
 
 /// What a send's fanout came to, with the rows it wrote so the push
@@ -354,40 +443,762 @@ pub(crate) async fn schedule_wakes(
 	Ok(())
 }
 
-/// Writes one wake row per person the send delivered to, in one
-/// transaction: the clock event that re-runs their open inbox and badge
-/// subscriptions. Bounded by [`crate::MAX_RECIPIENTS`] rows; a wake for a
-/// send that no longer changes anyone's answer re-runs those queries and
-/// sends nothing.
+/// Writes one wake row per person the send delivered to, in bounded
+/// transactions: the clock event that re-runs their open inbox and badge
+/// subscriptions. A recipient send reaches at most
+/// [`crate::MAX_RECIPIENTS`] people, but a topic or condition send reaches
+/// as many as subscribed, so the people are walked in pages of
+/// [`crate::FANOUT_BATCH`]; a wake for a send that no longer changes
+/// anyone's answer re-runs those queries and sends nothing.
 ///
 /// # Errors
 ///
 /// Whatever the reads or writes fail with.
 pub(crate) async fn wake(db: &Db, send_key: &str) -> rpc::Result<()> {
-	let people: Vec<Uuid> = Notification::query()
-		.filter(|notification| notification.send_key.eq(send_key.to_owned()))
-		.order_by(|notification| notification.person.asc())
+	let mut cursor: Option<Uuid> = None;
+
+	loop {
+		let page = Notification::query()
+			.filter(|notification| {
+				let mut condition = notification.send_key.eq(send_key.to_owned());
+				if let Some(cursor) = cursor {
+					condition = condition & notification.person.gt(cursor);
+				}
+				condition
+			})
+			.order_by(|notification| notification.person.asc())
+			.limit(u64::try_from(crate::FANOUT_BATCH).unwrap_or(u64::MAX))
+			.all(db)
+			.await?;
+
+		if page.is_empty() {
+			return Ok(());
+		}
+
+		cursor = page.last().map(|notification| notification.person);
+		let tx = db.begin().await?;
+		let now = leptoskit_db::now();
+
+		for notification in &page {
+			NewWake {
+				person: notification.person,
+				woken_at: now,
+			}
+			.upsert(&tx, |wake| wake.person)
+			.await?;
+		}
+
+		tx.commit().await?;
+	}
+}
+
+/// The audience a target names, and how many of it a send to `spec`'s
+/// category would reach right now: what `validate_only` answers. A
+/// recipients target counts its deduplicated list against the opt-outs;
+/// a topic or condition walks every candidate the same way the fanout
+/// will, evaluating as it goes, but writes nothing.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for a stored shape that no longer parses, and
+/// whatever a read fails with.
+pub(crate) async fn audience_now(
+	db: &impl leptoskit_db::Read,
+	spec: &crate::SendSpec,
+	target: &crate::SendTarget,
+) -> rpc::Result<Audience> {
+	let mut audience = Audience::default();
+
+	match target {
+		crate::SendTarget::Recipients(named) => {
+			let recipients: std::collections::BTreeSet<Uuid> = named.iter().copied().collect();
+			audience.targeted = recipients.len().try_into().unwrap_or(u32::MAX);
+			audience.skipped_opted_out = opted_out_among(db, &spec.category, &recipients)
+				.await?
+				.try_into()
+				.unwrap_or(u32::MAX);
+			audience.delivered = audience.targeted.saturating_sub(audience.skipped_opted_out);
+		}
+		target => {
+			let condition = condition_of(target)?;
+			let mut cursor: Option<Uuid> = None;
+
+			loop {
+				let page = candidates(db, &condition, cursor, FANOUT_PAGE + 1).await?;
+
+				if page.is_empty() {
+					break;
+				}
+
+				let more = page.len() > FANOUT_PAGE;
+				let page = &page[..page.len().saturating_sub(usize::from(more))];
+				cursor = page.last().copied();
+
+				let matching = evaluate(db, &condition, page).await?;
+				audience.targeted = audience
+					.targeted
+					.saturating_add(matching.len().try_into().unwrap_or(u32::MAX));
+
+				let matched: std::collections::BTreeSet<Uuid> = matching.iter().copied().collect();
+				audience.skipped_opted_out = audience.skipped_opted_out.saturating_add(
+					opted_out_among(db, &spec.category, &matched)
+						.await?
+						.try_into()
+						.unwrap_or(u32::MAX),
+				);
+
+				if !more {
+					break;
+				}
+			}
+
+			audience.delivered = audience.targeted.saturating_sub(audience.skipped_opted_out);
+		}
+	}
+
+	Ok(audience)
+}
+
+/// What an audience walk came to.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Audience {
+	pub(crate) targeted: u32,
+	pub(crate) delivered: u32,
+	pub(crate) skipped_opted_out: u32,
+}
+
+/// How many of `recipients` opted out of `category`.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn opted_out_among(
+	db: &impl leptoskit_db::Read,
+	category: &str,
+	recipients: &std::collections::BTreeSet<Uuid>,
+) -> rpc::Result<usize> {
+	if recipients.is_empty() {
+		return Ok(0);
+	}
+
+	let rows = Preference::query()
+		.filter(|preference| {
+			preference.category.eq(category.to_owned())
+				& preference.opted_out.eq(true)
+				& preference.person.in_list(recipients.iter().copied())
+		})
 		.all(db)
+		.await?;
+
+	Ok(rows.len())
+}
+
+/// The condition a target names: a topic is the membership of one name;
+/// a condition is parsed. Both were validated when the send was made, so
+/// a parse failure here is a bug's shape.
+///
+/// # Errors
+///
+/// [`rpc::Error::server`] when a stored condition no longer parses.
+fn condition_of(target: &crate::SendTarget) -> rpc::Result<Condition> {
+	match target {
+		crate::SendTarget::Topic(topic) => Ok(Condition::Topic(topic.clone())),
+		crate::SendTarget::Condition(text) => {
+			Condition::parse(text).map_err(|error| {
+				rpc::Error::server(format!("a stored condition no longer parses: {error}"))
+			})
+		}
+		crate::SendTarget::Recipients(_) => {
+			Err(rpc::Error::server("a recipients send has no condition"))
+		}
+	}
+}
+
+/// How many people one fanout page reads past its batch, to see whether
+/// more follow without asking for them twice.
+const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
+
+/// The distinct people subscribed to any topic the condition names,
+/// ordered by person id, after `cursor`, at most `limit`: the candidates
+/// a fanout page evaluates. Raw SQL because the page is one column's
+/// distinct values, which the typed query builder reads as whole rows;
+/// the statement still names its table, so a connection that tracks
+/// reads records it.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn candidates(
+	db: &impl leptoskit_db::Read,
+	condition: &Condition,
+	cursor: Option<Uuid>,
+	limit: usize,
+) -> rpc::Result<Vec<Uuid>> {
+	let dialect = db.dialect();
+	let topics = condition.topics();
+	let mut sql = String::from(
+		"SELECT DISTINCT \"person\" FROM \"topic_subscriptions\" WHERE \"topic\" IN (",
+	);
+	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+
+	for topic in &topics {
+		if !args.is_empty() {
+			sql.push_str(", ");
+		}
+
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Text((*topic).to_owned()));
+	}
+
+	sql.push(')');
+
+	if let Some(cursor) = cursor {
+		sql.push_str(" AND \"person\" > ");
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Uuid(cursor));
+	}
+
+	sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
+	sql.push_str(&placeholder(dialect, args.len() + 1));
+	args.push(leptoskit_db::Value::Int(
+		i64::try_from(limit).unwrap_or(i64::MAX),
+	));
+
+	let rows = Statement::new(sql, args)
+		.reads::<TopicSubscription>()
+		.fetch(db)
+		.await?;
+
+	Ok(rows
+		.into_iter()
+		.filter_map(|row| uuid_of(row.first()?))
+		.collect())
+}
+
+/// Which of `people` the condition matches, evaluated against the topics
+/// they hold among the ones it names.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn evaluate(
+	db: &impl leptoskit_db::Read,
+	condition: &Condition,
+	people: &[Uuid],
+) -> rpc::Result<Vec<Uuid>> {
+	if people.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let topics = condition.topics();
+	let rows = TopicSubscription::query()
+		.filter(|subscription| {
+			subscription.person.in_list(people.iter().copied())
+				& subscription
+					.topic
+					.in_list(topics.iter().map(|topic| (*topic).to_owned()))
+		})
+		.all(db)
+		.await?;
+
+	let mut held: std::collections::HashMap<Uuid, std::collections::BTreeSet<String>> =
+		std::collections::HashMap::new();
+
+	for row in rows {
+		held.entry(row.person).or_default().insert(row.topic);
+	}
+
+	Ok(people
+		.iter()
+		.copied()
+		.filter(|person| {
+			condition.matches(|topic| {
+				held.get(person)
+					.is_some_and(|topics| topics.contains(topic))
+			})
+		})
+		.collect())
+}
+
+/// One step of a topic or condition send's fanout, the body of the
+/// [`fanout_send`](crate::fanout_send) job: one batch of
+/// [`crate::FANOUT_BATCH`] candidates, evaluated and delivered in one
+/// transaction, the send's cursor and counts advanced in the same commit,
+/// and the successor enqueued when more audience remains.
+///
+/// Every write in the step is fenced on the send still fanning out: a
+/// [`cancel`](crate::cancel) that commits between steps makes the next
+/// step's update match nothing, and the step ends without writing. A
+/// step that replays — a crash after commit, before the job recorded its
+/// success — finds the people it already delivered by the send's unique
+/// row per person, skips them, and changes no count.
+///
+/// # Errors
+///
+/// Whatever a read, a write, or an enqueue fails with. The job framework
+/// retries the step; what already committed is not done twice.
+pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> rpc::Result<()> {
+	let db = cx.db();
+	let Some(send) = find_send(db, send_key).await? else {
+		// The send never landed: nothing to walk.
+		return Ok(());
+	};
+
+	if crate::SendState::from_str_value(&send.state) != Some(crate::SendState::FanningOut) {
+		return Ok(());
+	}
+
+	let target = send
+		.target
+		.as_deref()
+		.map(crate::SendTarget::from_stored)
+		.transpose()?
+		.ok_or_else(|| rpc::Error::server("a fanning send holds no target"))?;
+	let spec: crate::SendSpec = serde_json::from_str(
+		send.spec
+			.as_deref()
+			.ok_or_else(|| rpc::Error::server("a fanning send holds no spec"))?,
+	)
+	.map_err(|error| rpc::Error::server(format!("a stored spec no longer parses: {error}")))?;
+	let condition = condition_of(&target)?;
+
+	let page = candidates(db, &condition, send.cursor, FANOUT_PAGE + 1).await?;
+
+	if page.is_empty() {
+		finish_fanout(db, send_key).await?;
+
+		return Ok(());
+	}
+
+	let more = page.len() > FANOUT_PAGE;
+	let page = &page[..page.len().saturating_sub(usize::from(more))];
+	let last = page.last().copied();
+	let matching = evaluate(db, &condition, page).await?;
+
+	// One transaction: the batch's rows, its push deliveries, and the
+	// cursor that says the batch ran. Everything inside is fenced on the
+	// send still fanning out, so a cancel that lands first empties the
+	// whole step.
+	let tx = db.begin().await?;
+	let already: std::collections::BTreeSet<Uuid> = Notification::query()
+		.filter(|notification| {
+			notification.send_key.eq(send_key.to_owned())
+				& notification.person.in_list(matching.iter().copied())
+		})
+		.all(&tx)
 		.await?
 		.into_iter()
 		.map(|notification| notification.person)
 		.collect();
+	let fresh: std::collections::BTreeSet<Uuid> = matching
+		.iter()
+		.copied()
+		.filter(|person| !already.contains(person))
+		.collect();
 
-	let tx = db.begin().await?;
-	let now = leptoskit_db::now();
-
-	for person in people {
-		NewWake {
-			person,
-			woken_at: now,
+	let fanout = if fresh.is_empty() {
+		Fanout {
+			delivered: 0,
+			skipped_opted_out: 0,
+			delivered_to: Vec::new(),
 		}
-		.upsert(&tx, |wake| wake.person)
+	} else {
+		fanout(&tx, send_key, &spec, &fresh).await?
+	};
+
+	let delivered_rows = push::deliveries_in_tx(&tx, send_key, &fanout).await?;
+
+	// The advance is fenced on the send still fanning out and on this
+	// batch still being the furthest one — a lease that expired and
+	// replays a step while its successor committed can only move the
+	// cursor forward, never back.
+	let mut advance = AppSend::update()
+		.filter(|send| {
+			send.idempotency_key.eq(send_key.to_owned())
+				& send.state.eq(crate::SendState::FanningOut.as_str())
+		})
+		.set(|send| send.cursor, last);
+
+	if let Some(last) = last {
+		advance = advance.filter(|send| send.cursor.is_null() | send.cursor.lt(last));
+	}
+
+	let advanced = advance
+		.set(
+			|send| send.targeted,
+			send.targeted + i64::try_from(fresh.len()).unwrap_or(i64::MAX),
+		)
+		.set(
+			|send| send.delivered,
+			send.delivered + i64::from(fanout.delivered),
+		)
+		.set(
+			|send| send.skipped_opted_out,
+			send.skipped_opted_out + i64::from(fanout.skipped_opted_out),
+		)
+		.run(&tx)
 		.await?;
+
+	// A cancel or a completed fanout claimed the send between the read and
+	// this commit: this step writes nothing, and the cancel's own rows
+	// stand as the truth.
+	if advanced == 0 {
+		tx.rollback().await?;
+
+		return Ok(());
 	}
 
 	tx.commit().await?;
 
+	if delivered_rows > 0 {
+		push::enqueue_round(db, send_key, &spec).await?;
+	}
+
+	// The batch's insert alone can't reach an open inbox: a live read's
+	// `visible_at <= now` was taken with an earlier `now`, which a row
+	// that didn't exist can't match — the wake is the clock event, the
+	// same way a recipients send's is. One wake per step, so a batch's
+	// people hear about their rows without waiting for the whole
+	// audience.
+	rpc::enqueue(
+		db,
+		crate::WakeSend {
+			send_key: send_key.to_owned(),
+		},
+	)
+	.at(leptoskit_db::now())
+	.key(format!("wake:{send_key}:fanout:{step}"))
+	.await?;
+
+	if !more {
+		finish_fanout(db, send_key).await?;
+
+		return Ok(());
+	}
+
+	// The successor exists only once this step's batch committed, and its
+	// key keeps a replayed step from doubling it.
+	rpc::enqueue(
+		db,
+		crate::FanoutSend {
+			send_key: send_key.to_owned(),
+			step: step.saturating_add(1),
+		},
+	)
+	.at(leptoskit_db::now())
+	.key(format!("fanout:{send_key}:{}", step.saturating_add(1)))
+	.await?;
+
 	Ok(())
+}
+
+/// Marks a fanning send complete — only while it still is, so a cancel
+/// that lands first stays a cancel.
+///
+/// # Errors
+///
+/// Whatever the write fails with.
+async fn finish_fanout(db: &Db, send_key: &str) -> rpc::Result<()> {
+	AppSend::update()
+		.filter(|send| {
+			send.idempotency_key.eq(send_key.to_owned())
+				& send.state.eq(crate::SendState::FanningOut.as_str())
+		})
+		.set(|send| send.state, crate::SendState::Complete.as_str())
+		.run(db)
+		.await?;
+
+	Ok(())
+}
+
+/// Marks a fanning send cancelled, in the cancel mutation's transaction:
+/// the fanout's next step checks the state before it writes, so nothing
+/// more is delivered from the moment this commits.
+///
+/// # Errors
+///
+/// Whatever the write fails with.
+pub(crate) async fn cancel_fanout(tx: &leptoskit_db::Tx, send_key: &str) -> rpc::Result<()> {
+	AppSend::update()
+		.filter(|send| {
+			send.idempotency_key.eq(send_key.to_owned())
+				& send.state.eq(crate::SendState::FanningOut.as_str())
+		})
+		.set(|send| send.state, crate::SendState::Cancelled.as_str())
+		.run(tx)
+		.await?;
+
+	Ok(())
+}
+
+/// Subscribes a batch of people to `topic`, the body of
+/// [`subscribe_to_topic`](crate::subscribe_to_topic): idempotent, and
+/// skipping people at [`crate::MAX_TOPICS_PER_PERSON`] rather than
+/// refusing the batch for one full person.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for a bad topic name or batch bound, and
+/// whatever a read or write fails with.
+pub(crate) async fn subscribe_batch(
+	tx: &leptoskit_db::Tx,
+	topic: &str,
+	persons: Vec<Uuid>,
+) -> rpc::Result<crate::TopicChanges> {
+	crate::check_topic(topic).map_err(rpc::Error::invalid)?;
+	check_persons(&persons)?;
+
+	let persons: std::collections::BTreeSet<Uuid> = persons.into_iter().collect();
+
+	let held = TopicSubscription::query()
+		.filter(|subscription| {
+			subscription.topic.eq(topic.to_owned())
+				& subscription.person.in_list(persons.iter().copied())
+		})
+		.all(tx)
+		.await?
+		.into_iter()
+		.map(|subscription| subscription.person)
+		.collect::<std::collections::BTreeSet<_>>();
+
+	// One grouped read of how many topics each named person already
+	// holds, rather than a query per person.
+	let cap = u64::try_from(crate::MAX_TOPICS_PER_PERSON).unwrap_or(u64::MAX);
+	let counts = topics_held_by(tx, &persons).await?;
+	let mut changes = crate::TopicChanges::default();
+
+	for person in persons {
+		if held.contains(&person) {
+			continue;
+		}
+
+		if counts.get(&person).is_some_and(|held| *held >= cap) {
+			changes.skipped_full += 1;
+			continue;
+		}
+
+		let inserted: leptoskit_db::Result<()> = NewTopicSubscription {
+			person,
+			topic: topic.to_owned(),
+		}
+		.insert(tx)
+		.await
+		.map(|_| ());
+
+		match inserted {
+			Ok(()) => changes.subscribed += 1,
+			// Two batches, or a batch and a self-subscription, raced on
+			// the same person and topic: the other one holds it, which is
+			// what this call wanted.
+			Err(leptoskit_db::DbError::Conflict { .. }) => {}
+			Err(error) => return Err(error.into()),
+		}
+	}
+
+	Ok(changes)
+}
+
+/// Unsubscribes a batch of people from `topic`, the body of
+/// [`unsubscribe_from_topic`](crate::unsubscribe_from_topic): people who
+/// didn't hold it count nothing.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for a bad topic name or batch bound, and
+/// whatever a read or write fails with.
+pub(crate) async fn unsubscribe_batch(
+	tx: &leptoskit_db::Tx,
+	topic: &str,
+	persons: Vec<Uuid>,
+) -> rpc::Result<u32> {
+	crate::check_topic(topic).map_err(rpc::Error::invalid)?;
+	check_persons(&persons)?;
+
+	let persons: std::collections::BTreeSet<Uuid> = persons.into_iter().collect();
+
+	let removed = TopicSubscription::query()
+		.filter(|subscription| {
+			subscription.topic.eq(topic.to_owned())
+				& subscription.person.in_list(persons.iter().copied())
+		})
+		.delete(tx)
+		.await?;
+
+	Ok(u32::try_from(removed).unwrap_or(u32::MAX))
+}
+
+/// A batch call's person bound.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for an empty batch or one past
+/// [`crate::MAX_SUBSCRIBE_PERSONS`].
+fn check_persons(persons: &[Uuid]) -> rpc::Result<()> {
+	if persons.is_empty() || persons.len() > crate::MAX_SUBSCRIBE_PERSONS {
+		return Err(rpc::Error::invalid(format!(
+			"a topic batch names 1 to {} people",
+			crate::MAX_SUBSCRIBE_PERSONS
+		)));
+	}
+
+	Ok(())
+}
+
+/// How many topics `person` holds.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn topics_held(db: &impl leptoskit_db::Read, person: Uuid) -> rpc::Result<u64> {
+	TopicSubscription::query()
+		.filter(|subscription| subscription.person.eq(person))
+		.count(db)
+		.await
+		.map_err(rpc::Error::from)
+}
+
+/// How many topics each of `persons` holds, in one grouped read.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn topics_held_by(
+	db: &impl leptoskit_db::Read,
+	persons: &std::collections::BTreeSet<Uuid>,
+) -> rpc::Result<std::collections::HashMap<Uuid, u64>> {
+	if persons.is_empty() {
+		return Ok(std::collections::HashMap::new());
+	}
+
+	let dialect = db.dialect();
+	let mut sql = String::from(
+		"SELECT \"person\", count(*) FROM \"topic_subscriptions\" WHERE \"person\" IN (",
+	);
+	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+
+	for person in persons {
+		if !args.is_empty() {
+			sql.push_str(", ");
+		}
+
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Uuid(*person));
+	}
+
+	sql.push_str(") GROUP BY \"person\"");
+
+	let rows = Statement::new(sql, args)
+		.reads::<TopicSubscription>()
+		.fetch(db)
+		.await?;
+
+	Ok(rows
+		.into_iter()
+		.filter_map(|row| {
+			let person = uuid_of(row.first()?)?;
+			let count = match row.get(1)? {
+				leptoskit_db::Value::Int(count) => u64::try_from(*count).ok()?,
+				_ => return None,
+			};
+			Some((person, count))
+		})
+		.collect())
+}
+
+/// The person's own subscription, the body of [`subscribe`](crate::subscribe):
+/// refused at their topic bound, idempotent beneath it.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] at the bound, and whatever a read or write
+/// fails with.
+pub(crate) async fn subscribe_self(
+	tx: &leptoskit_db::Tx,
+	me: Uuid,
+	topic: &str,
+) -> rpc::Result<()> {
+	if topics_held(tx, me).await? >= u64::try_from(crate::MAX_TOPICS_PER_PERSON).unwrap_or(u64::MAX)
+	{
+		return Err(rpc::Error::invalid(format!(
+			"a person holds at most {} topics; unsubscribe from one first",
+			crate::MAX_TOPICS_PER_PERSON
+		)));
+	}
+
+	let inserted: leptoskit_db::Result<()> = NewTopicSubscription {
+		person: me,
+		topic: topic.to_owned(),
+	}
+	.insert(tx)
+	.await
+	.map(|_| ());
+
+	match inserted {
+		// A retried subscription, or one raced against a batch, finds the
+		// row the unique key refused to duplicate: already subscribed,
+		// which is what this call wanted.
+		Ok(()) | Err(leptoskit_db::DbError::Conflict { .. }) => Ok(()),
+		Err(error) => Err(error.into()),
+	}
+}
+
+/// The person's own unsubscription, the body of
+/// [`unsubscribe`](crate::unsubscribe).
+///
+/// # Errors
+///
+/// Whatever the read or write fails with.
+pub(crate) async fn unsubscribe_self(
+	tx: &leptoskit_db::Tx,
+	me: Uuid,
+	topic: &str,
+) -> rpc::Result<()> {
+	TopicSubscription::query()
+		.filter(|subscription| subscription.person.eq(me) & subscription.topic.eq(topic.to_owned()))
+		.delete(tx)
+		.await?;
+
+	Ok(())
+}
+
+/// Whether `topic` is one the operator opened to self-subscription, from
+/// the request's carried configuration: the patterns of
+/// `LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS`, and nothing at all when the
+/// route carries none.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] when the topic isn't open, naming the rule
+/// and not the person.
+pub(crate) fn check_open_topic(cx: &rpc::MutationCx, topic: &str) -> rpc::Result<()> {
+	let open = cx.get::<config::OpenTopics>();
+
+	if !open.is_some_and(|open| open.is_open(topic)) {
+		return Err(rpc::Error::forbidden(
+			"this topic isn't open to self-subscription: the operator opens topics in \
+			 LEPTOSKIT_NOTIFICATIONS_OPEN_TOPICS, and everything else is the app's to subscribe \
+			 people to",
+		));
+	}
+
+	Ok(())
+}
+
+/// A uuid a raw fetch answered, whichever driver's shape it came in.
+fn uuid_of(value: &leptoskit_db::Value) -> Option<Uuid> {
+	match value {
+		leptoskit_db::Value::Uuid(uuid) => Some(*uuid),
+		leptoskit_db::Value::Bytes(bytes) => Uuid::from_slice(bytes).ok(),
+		_ => None,
+	}
+}
+
+/// The `number`th placeholder for the dialect.
+fn placeholder(dialect: leptoskit_db::Dialect, number: usize) -> String {
+	match dialect {
+		leptoskit_db::Dialect::Postgres => format!("${number}"),
+		leptoskit_db::Dialect::Sqlite => format!("?{number}"),
+	}
 }
 
 /// What a stored row tells a screen.
@@ -467,39 +1278,63 @@ pub fn routes_with(
 
 /// [`routes_with`], carrying push configuration in every request.
 /// Pass a clone of the same configuration to [`workers_with_push`].
+/// No topic is open to self-subscription; see [`routes_with_settings`].
 pub fn routes_with_push(
 	db: Db,
 	origin: Option<&str>,
 	callers: impl rpc::server::Identify,
 	push: push::Push,
 ) -> (Router, rpc::server::Live) {
-	routes_with(db, origin, WithPush::new(callers, push))
+	routes_with_settings(db, origin, callers, push, config::OpenTopics::default())
+}
+
+/// [`routes_with_push`], also carrying which topics the operator opened
+/// to self-subscription, beside the push configuration. The service's own
+/// binary builds both from its environment; an embedded one passes what
+/// it wants.
+pub fn routes_with_settings(
+	db: Db,
+	origin: Option<&str>,
+	callers: impl rpc::server::Identify,
+	push: push::Push,
+	open_topics: config::OpenTopics,
+) -> (Router, rpc::server::Live) {
+	routes_with(db, origin, WithSettings::new(callers, push, open_topics))
 }
 
 /// [`Identify`](rpc::server::Identify) as the wrapped caller would
-/// answer, with the service instance's push configuration added to the
-/// context: the framework's own way of carrying request-scoped state to
-/// an operation's body, the same road [`rpc::server::ForwardedIdentity`]
-/// takes. Nothing in the request can change it.
-struct WithPush<I> {
+/// answer, with the service instance's settings added to the context: its
+/// push configuration and the topics open to self-subscription — the
+/// framework's own way of carrying request-scoped state to an operation's
+/// body, the same road [`rpc::server::ForwardedIdentity`] takes. Nothing
+/// in the request can change either.
+struct WithSettings<I> {
 	inner: I,
 	push: push::Push,
+	open_topics: config::OpenTopics,
 }
 
-impl<I: rpc::server::Identify> WithPush<I> {
-	fn new(inner: I, push: push::Push) -> Self {
-		Self { inner, push }
+impl<I: rpc::server::Identify> WithSettings<I> {
+	fn new(inner: I, push: push::Push, open_topics: config::OpenTopics) -> Self {
+		Self {
+			inner,
+			push,
+			open_topics,
+		}
 	}
 }
 
-impl<I: rpc::server::Identify> rpc::server::Identify for WithPush<I> {
+impl<I: rpc::server::Identify> rpc::server::Identify for WithSettings<I> {
 	fn identify<'a>(
 		&'a self,
 		parts: &'a http::request::Parts,
 	) -> leptoskit_query::BoxFuture<'a, rpc::Result<rpc::server::Identity>> {
 		Box::pin(async move {
 			let mut identity = self.inner.identify(parts).await?;
-			identity.context = identity.context.with(self.push.clone());
+			identity.context = identity
+				.context
+				.with(self.push.clone())
+				.with(self.open_topics.clone());
 			Ok(identity)
 		})
 	}

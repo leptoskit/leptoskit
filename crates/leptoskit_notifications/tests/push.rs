@@ -516,7 +516,7 @@ async fn send(service: &Service, key: &str, spec: Value, recipients: &[Uuid]) ->
 		json!({
 			"idempotency_key": key,
 			"spec": spec,
-			"recipients": recipients,
+			"target": { "recipients": recipients },
 		}),
 		Some(TOKEN),
 	)
@@ -1548,6 +1548,57 @@ async fn a_send_fans_out_one_delivery_per_endpoint() {
 			"{id} is one of the send's notifications"
 		);
 	}
+}
+
+/// A topic send's fanout enqueues the same per-endpoint deliveries a
+/// recipients send does: one per enrolled endpoint of everyone the
+/// fanout matched, attempted when the notification is visible.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_topic_send_fans_out_one_delivery_per_endpoint() {
+	let mock = Mock::new();
+	let mut service = service(&mock, &all_transports()).await;
+
+	for n in 1..3_u8 {
+		let (status, body) = enroll(&service, ALICE, apns_credential(&device_token(n))).await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let (status, body) = post(
+		&service,
+		"subscribe_to_topic",
+		json!({ "topic": "news.push", "persons": [ALICE, BOB] }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	service.resume();
+
+	let (status, body) = post(
+		&service,
+		"send",
+		json!({
+			"idempotency_key": "topic-fanout",
+			"spec": spec(),
+			"target": { "topic": "news.push" },
+		}),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	// Bob enrolled nothing, so only alice's two endpoints carry it.
+	let outcomes = settled(&service, "topic-fanout").await;
+	assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+	assert!(
+		outcomes
+			.iter()
+			.all(|(state, reason)| state == "accepted" && reason.is_none()),
+		"{outcomes:?}"
+	);
+
+	let sent = mock.requests_to(APNS_HOST);
+	assert_eq!(sent.len(), 2, "one request per endpoint");
 }
 
 #[tokio::test(flavor = "multi_thread")]

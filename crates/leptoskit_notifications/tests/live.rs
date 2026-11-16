@@ -139,7 +139,7 @@ async fn send(service: &Service, key: &str, spec: Value, recipients: &[Uuid]) {
 		json!({
 			"idempotency_key": key,
 			"spec": spec,
-			"recipients": recipients,
+			"target": { "recipients": recipients },
 		}),
 		Some(TOKEN),
 	)
@@ -392,6 +392,78 @@ fn in_seconds(seconds: i64) -> String {
 /// An inbox page's items.
 fn items(page: &Value) -> Vec<Value> {
 	page["items"].as_array().cloned().unwrap_or_default()
+}
+
+/// A topic send's fanout reaches an open inbox the way a recipients send
+/// does: the batch's insert is the only write, and the subscription
+/// re-runs with the new row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_topic_send_reaches_an_open_inbox_of_a_subscriber() {
+	let service = service().await;
+	// Bob's connection opens first, so alice's binding can keep the
+	// helper's name.
+	let mut bob = screen(&service, BOB).await;
+	let mut screen = screen(&service, ALICE).await;
+
+	let page = screen
+		.subscribe(
+			"inbox",
+			json!({ "page": { "limit": 10 }, "show": "active" }),
+		)
+		.await;
+	assert_eq!(items(&page).len(), 0, "{page}");
+
+	// The app subscribes alice to the topic, then sends to it.
+	let (status, body) = post(
+		&service,
+		"subscribe_to_topic",
+		json!({ "topic": "news.live", "persons": [ALICE, BOB] }),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let inbox_seen = screen.changes(1);
+	let (status, body) = post(
+		&service,
+		"send",
+		json!({
+			"idempotency_key": "live-topic",
+			"spec": { "category": "news", "title": "By topic" },
+			"target": { "topic": "news.live" },
+		}),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let arrived = screen.next_change(1, inbox_seen).await;
+	assert_eq!(items(&arrived).len(), 1, "{arrived}");
+	assert_eq!(arrived["items"][0]["title"], "By topic");
+
+	// His topics list is live too: an open `my_topics` page follows the
+	// subscription that preceded the send.
+	let topics = bob
+		.subscribe("my_topics", json!({ "page": { "limit": 10 } }))
+		.await;
+	assert_eq!(
+		topics["items"],
+		json!(["news.live"]),
+		"the app's batch subscription is there: {topics}"
+	);
+
+	let topics_seen = bob.changes(1);
+	let (status, body) = post(
+		&service,
+		"unsubscribe",
+		json!({ "topic": "news.live" }),
+		Some(&signed_in(BOB)),
+	)
+	.await;
+	assert_eq!(status, 200, "{body}");
+
+	let gone = bob.next_change(1, topics_seen).await;
+	assert_eq!(gone["items"], json!([]), "his own unsubscribe reaches it");
 }
 
 #[tokio::test(flavor = "multi_thread")]

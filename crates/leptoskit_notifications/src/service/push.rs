@@ -425,8 +425,35 @@ pub(crate) async fn schedule(
 	spec: &crate::SendSpec,
 	fanout: &Fanout,
 ) -> rpc::Result<()> {
+	let enqueued = deliveries_in_tx(cx.tx(), send_key, fanout).await?;
+
+	if enqueued > 0 {
+		cx.enqueue(PushSend {
+			send_key: send_key.to_owned(),
+			round: 0,
+		})
+		.at(becomes_visible(spec))
+		.key(format!("push:{send_key}:0"))
+		.await?;
+	}
+
+	Ok(())
+}
+
+/// Writes the deliveries themselves, in whatever transaction the caller
+/// holds: the half of [`schedule`] a fanout job step reuses, so a batch's
+/// rows and its deliveries commit together.
+///
+/// # Errors
+///
+/// Whatever a read or a write fails with.
+pub(crate) async fn deliveries_in_tx(
+	tx: &leptoskit_db::Tx,
+	send_key: &str,
+	fanout: &Fanout,
+) -> rpc::Result<usize> {
 	if fanout.delivered_to.is_empty() {
-		return Ok(());
+		return Ok(0);
 	}
 
 	let people: std::collections::BTreeSet<Uuid> = fanout
@@ -438,11 +465,11 @@ pub(crate) async fn schedule(
 		.filter(|endpoint| {
 			endpoint.person.in_list(people.iter().copied()) & endpoint.invalidated_at.is_null()
 		})
-		.all(cx.tx())
+		.all(tx)
 		.await?;
 
 	if endpoints.is_empty() {
-		return Ok(());
+		return Ok(0);
 	}
 
 	let mut by_person: HashMap<Uuid, Vec<&PushEndpoint>> = HashMap::new();
@@ -451,7 +478,7 @@ pub(crate) async fn schedule(
 		by_person.entry(endpoint.person).or_default().push(endpoint);
 	}
 
-	let mut enqueued = 0_u32;
+	let mut enqueued = 0_usize;
 
 	for (person, notification) in &fanout.delivered_to {
 		for endpoint in by_person.get(person).into_iter().flatten() {
@@ -470,32 +497,48 @@ pub(crate) async fn schedule(
 				attempted_at: None,
 				finished_at: None,
 			}
-			.insert(cx.tx())
+			.insert(tx)
 			.await?;
 			enqueued += 1;
 		}
 	}
 
-	if enqueued == 0 {
-		return Ok(());
-	}
+	Ok(enqueued)
+}
 
-	// The round-zero job, at the notification's visibility. Its key keeps
-	// a raced or retried send from doubling it, exactly as the wake jobs
-	// are kept. Its arguments contain only logical identifiers.
+/// When the notification becomes visible, as the round-zero job's own
+/// schedule: a scheduled send's first round waits for its time, the way
+/// its wake job does.
+pub(crate) fn becomes_visible(spec: &crate::SendSpec) -> leptoskit_db::Timestamp {
 	let now = leptoskit_db::now();
-	let becomes_visible = spec
-		.visible_at
-		.map_or(now, |visible_at| visible_at.max(now));
-	cx.enqueue(PushSend {
-		send_key: send_key.to_owned(),
-		round: 0,
-	})
-	.at(becomes_visible)
-	.key(format!("push:{send_key}:0"))
-	.await?;
+	spec.visible_at
+		.map_or(now, |visible_at| visible_at.max(now))
+}
 
-	Ok(())
+/// Enqueues the send's round-zero push job, after a fanout batch
+/// committed its deliveries: outside the mutation's transaction, with
+/// the same idempotency key [`schedule`] uses, so a replayed step never
+/// doubles it and a crashed one enqueues it on its retry.
+///
+/// # Errors
+///
+/// Whatever the enqueue fails with.
+pub(crate) async fn enqueue_round(
+	db: &Db,
+	send_key: &str,
+	spec: &crate::SendSpec,
+) -> rpc::Result<()> {
+	rpc::enqueue(
+		db,
+		PushSend {
+			send_key: send_key.to_owned(),
+			round: 0,
+		},
+	)
+	.at(becomes_visible(spec))
+	.key(format!("push:{send_key}:0"))
+	.await
+	.map(|_| ())
 }
 
 /// One round of the send's push job: the due deliveries, attempted in
