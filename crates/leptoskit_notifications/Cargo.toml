@@ -84,12 +84,12 @@ wasm-bindgen = { workspace = true, optional = true }
 # Everything below is the service's. The library without features (the shared
 # types and validation) doesn't compile any of it. The push protocols are the
 # maintained libraries': Web Push encryption and VAPID through `web-push`
-# (Mozilla's `ece` underneath), the FCM service-account JWT through
-# `jsonwebtoken` with its Rust crypto, and APNs's ES256 provider token over
-# ring's primitives, already in the graph through TLS.
+# (Mozilla's `ece` underneath), while both signed tokens — the FCM
+# service-account RSA assertion (RS256) and APNs's ES256 provider token — are
+# built and signed here over ring's constant-time primitives, already in the
+# graph through TLS.
 hex = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
-jsonwebtoken = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
 leptoskit_query = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
@@ -107,7 +107,6 @@ hyper-util = { workspace = true, features = ["http1", "http2", "server", "server
 leptoskit_axum = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 ring = { workspace = true }
-rsa = { workspace = true, features = ["std", "encoding", "getrandom"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
@@ -159,7 +158,6 @@ service = [
 	"dep:httpdate",
 	"dep:hex",
 	"dep:http",
-	"dep:jsonwebtoken",
 	"dep:leptoskit_axum",
 	"dep:leptoskit_query",
 	"dep:reqwest",

@@ -4,9 +4,10 @@
 //!
 //! Google issues service-account keys as RSA, and the token endpoint
 //! accepts only RS256 — the [service-account JWT flow][flow] is explicit
-//! about both — so the assertion is built and signed with the maintained
-//! `jsonwebtoken` crate, and a key that won't sign RS256 refuses at
-//! startup rather than at the first delivery.
+//! about both — so the assertion is built and signed here over ring's
+//! constant-time RSA, the same primitives APNs signs its provider token
+//! with, and a key that won't sign RS256 refuses at startup rather than
+//! at the first delivery.
 //!
 //! The access token is short-lived by design, so it's exchanged on
 //! demand, one exchange in flight at a time, and cached only until two
@@ -30,10 +31,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use jsonwebtoken::Algorithm;
-use jsonwebtoken::EncodingKey;
-use jsonwebtoken::Header;
-use jsonwebtoken::encode;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ring::rand::SystemRandom;
+use ring::signature::RSA_PKCS1_SHA256;
+use ring::signature::RsaKeyPair;
 use serde::Serialize;
 
 use crate::push::DeliveryReason;
@@ -138,7 +140,7 @@ struct AssertionClaims<'a> {
 /// The FCM sender.
 pub struct Fcm {
 	account: Account,
-	key: EncodingKey,
+	key: RsaKeyPair,
 	boundary: std::sync::Arc<dyn Boundary>,
 	/// The cached access token, and the epoch second it stops being
 	/// trusted. Held in a tokio mutex so one exchange is in flight at a
@@ -158,7 +160,9 @@ impl Fcm {
 	/// A message naming what's wrong with the account or its key.
 	pub fn new(config: &FcmConfig, boundary: std::sync::Arc<dyn Boundary>) -> Result<Self, String> {
 		let account = service_account(&config.service_account_json)?;
-		let key = EncodingKey::from_rsa_pem(account.key_pem.as_bytes()).map_err(|_| {
+		let der = super::apns::pem_body(&account.key_pem)
+			.ok_or("FCM: the service account's private_key isn't an RSA PEM key".to_owned())?;
+		let key = RsaKeyPair::from_pkcs8(&der).map_err(|_| {
 			"FCM: the service account's private_key isn't an RSA PEM key".to_owned()
 		})?;
 
@@ -179,18 +183,29 @@ impl Fcm {
 	}
 
 	/// A signed assertion for `now`: the JWT-bearer grant's whole proof.
-	fn assert_now(&self, now: i64) -> Result<String, jsonwebtoken::errors::Error> {
-		encode(
-			&Header::new(Algorithm::RS256),
-			&AssertionClaims {
-				iss: &self.account.email,
-				scope: SEND_SCOPE,
-				aud: TOKEN_ENDPOINT,
-				iat: now,
-				exp: now + ASSERTION_LIFETIME_SECS,
-			},
-			&self.key,
-		)
+	fn assert_now(&self, now: i64) -> Result<String, ring::error::Unspecified> {
+		let header = r#"{"alg":"RS256","typ":"JWT"}"#;
+		let claims = serde_json::to_string(&AssertionClaims {
+			iss: &self.account.email,
+			scope: SEND_SCOPE,
+			aud: TOKEN_ENDPOINT,
+			iat: now,
+			exp: now + ASSERTION_LIFETIME_SECS,
+		})
+		.expect("the assertion claims are plain JSON values");
+		let signed = format!(
+			"{}.{}",
+			URL_SAFE_NO_PAD.encode(header),
+			URL_SAFE_NO_PAD.encode(claims)
+		);
+		let mut signature = vec![0; self.key.public().modulus_len()];
+		self.key.sign(
+			&RSA_PKCS1_SHA256,
+			&SystemRandom::new(),
+			signed.as_bytes(),
+			&mut signature,
+		)?;
+		Ok(format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature)))
 	}
 
 	/// The access token: cached until near its lapse, exchanged fresh

@@ -11,3 +11,7 @@ paths = ['''(^|/)Podfile\.lock$''']
 [[allowlists]]
 description = "A throwaway RSA key the IdP tests sign RS256 ID tokens with; it signs nothing outside the test suite"
 paths = ['''^crates/leptoskit_idp/tests/fixtures/test-only-[a-z-]+\.pem$''']
+
+[[allowlists]]
+description = "A throwaway RSA key the notifications tests sign RS256 service-account assertions with; it signs nothing outside the test suite"
+paths = ['''^crates/leptoskit_notifications/tests/fixtures/test-only-rsa-key\.pem$''']

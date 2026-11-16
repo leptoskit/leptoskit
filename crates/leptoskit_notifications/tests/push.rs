@@ -54,11 +54,10 @@ use ring::rand::SystemRandom;
 use ring::signature::ECDSA_P256_SHA256_FIXED;
 use ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING;
 use ring::signature::EcdsaKeyPair;
+use ring::signature::RSA_PKCS1_2048_8192_SHA256;
+use ring::signature::RsaPublicKeyComponents;
 use rpc::server::Anonymous;
 use rpc::server::ServiceCallers;
-use rsa::pkcs8::EncodePrivateKey;
-use rsa::sha2::Sha256;
-use rsa::signature::Verifier;
 use serde_json::Value;
 use serde_json::json;
 use uuid::Uuid;
@@ -360,43 +359,68 @@ fn generated_pem() -> (String, Vec<u8>) {
 	(pem, der[73..138].to_vec())
 }
 
-/// A generated RSA private key in the PKCS#8 PEM form Google's service
-/// account JSON carries.
-fn generated_rsa() -> (String, rsa::PrivateKey) {
-	// The rsa crate's key generation wants a `TryCryptoRng`; ring's
-	// system randomness is one, behind a small infallible adapter.
-	struct RingRng(SystemRandom);
+/// A test-only 2048-bit RSA private key, in the PKCS#8 PEM form Google's
+/// service-account JSON carries. ring signs RSA but generates no RSA
+/// keys, so this key was made once, out of band, for these tests alone —
+/// the same fixture pattern the `IdP` suite uses; it signs nothing outside
+/// the tests, whose provider sockets are all mocks.
+const TEST_RSA_KEY: &str = include_str!("fixtures/test-only-rsa-key.pem");
 
-	impl rsa::rand_core::TryRng for RingRng {
-		type Error = core::convert::Infallible;
+/// The test RSA key, as the service-account JSON carries it, next to the
+/// modulus and exponent its signatures must verify against.
+fn test_rsa() -> (String, (Vec<u8>, Vec<u8>)) {
+	(
+		TEST_RSA_KEY.to_owned(),
+		rsa_public_half(&pem_der(TEST_RSA_KEY)),
+	)
+}
 
-		fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-			let mut bytes = [0_u8; 4];
-			self.0.fill(&mut bytes).expect("system randomness");
-			Ok(u32::from_be_bytes(bytes))
+/// One DER tag-length-value out of `input`: the tag, its contents, and
+/// what follows. Enough for the fixed shape a PKCS#8 RSA key has.
+fn der_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+	let (&tag, rest) = input.split_first()?;
+	let (&first, rest) = rest.split_first()?;
+	let (length, rest) = if first & 0x80 == 0 {
+		(usize::from(first), rest)
+	} else {
+		let count = usize::from(first & 0x7f);
+		let mut length = 0_usize;
+
+		for byte in rest.get(..count)? {
+			length = (length << 8) | usize::from(*byte);
 		}
 
-		fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-			let mut bytes = [0_u8; 8];
-			self.0.fill(&mut bytes).expect("system randomness");
-			Ok(u64::from_be_bytes(bytes))
-		}
+		(length, rest.get(count..)?)
+	};
+	let contents = rest.get(..length)?;
 
-		fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
-			self.0.fill(dest).expect("system randomness");
-			Ok(())
-		}
-	}
+	Some((tag, contents, rest.get(length..)?))
+}
 
-	impl rsa::rand_core::TryCryptoRng for RingRng {}
+/// The public half of a PKCS#8 RSA private key: the modulus and the
+/// exponent, big-endian without leading zeros, as ring's verifier takes
+/// them. A small walk over the DER shape — a `PrivateKeyInfo` around an
+/// `RSAPrivateKey`, whose first two integers are the public half.
+fn rsa_public_half(pkcs8_der: &[u8]) -> (Vec<u8>, Vec<u8>) {
+	let (_, info, _) = der_tlv(pkcs8_der).expect("a PrivateKeyInfo sequence");
+	let (_, version, rest) = der_tlv(info).expect("a version integer");
+	assert_eq!(version, [0], "a PKCS#8 v1 key");
+	let (_, _algorithm, rest) = der_tlv(rest).expect("an algorithm identifier");
+	let (_, key, _) = der_tlv(rest).expect("the private key octets");
+	let (_, key_sequence, _) = der_tlv(key).expect("an RSAPrivateKey sequence");
+	let (_, _version, rest) = der_tlv(key_sequence).expect("an RSA version");
+	let (_, modulus, rest) = der_tlv(rest).expect("the modulus");
+	let (_, exponent, _) = der_tlv(rest).expect("the exponent");
 
-	let mut rng = RingRng(SystemRandom::new());
-	let private = rsa::PrivateKey::new(&mut rng, 2048).expect("an RSA key");
-	let pem = private
-		.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-		.expect("PKCS#8 PEM")
-		.to_string();
-	(pem, private)
+	let magnitude = |bytes: &[u8]| -> Vec<u8> {
+		let start = bytes
+			.iter()
+			.position(|byte| *byte != 0)
+			.unwrap_or(bytes.len().saturating_sub(1));
+		bytes[start..].to_vec()
+	};
+
+	(magnitude(modulus), magnitude(exponent))
 }
 
 fn apns_config_for(key_p8: String) -> config::ApnsConfig {
@@ -663,10 +687,10 @@ fn verify_jwt(token: &str, point: &[u8]) -> (Value, Value) {
 	(header, claims)
 }
 
-/// Verifies an RS256 JWT against `private`'s public half — an
-/// independent check, the rsa crate's own verifier against the
-/// jsonwebtoken crate's signer — answering its header and claims.
-fn verify_rs256(token: &str, private: &rsa::PrivateKey) -> (Value, Value) {
+/// Verifies an RS256 JWT against the public half of the key that signed
+/// it — ring's own RSA verifier, an independent check of this file's
+/// signer — answering its header and claims.
+fn verify_rs256(token: &str, public: &(Vec<u8>, Vec<u8>)) -> (Value, Value) {
 	let parts: Vec<&str> = token.split('.').collect();
 	assert_eq!(parts.len(), 3, "a JWT has three parts: {token}");
 	let signing = format!("{}.{}", parts[0], parts[1]);
@@ -674,11 +698,13 @@ fn verify_rs256(token: &str, private: &rsa::PrivateKey) -> (Value, Value) {
 		.decode(parts[2])
 		.expect("the signature is base64url");
 
-	let public = rsa::PublicKey::from(private);
-	let key = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(public);
-	let signature = rsa::pkcs1v15::Signature::try_from(signature.as_slice()).expect("a signature");
-	key.verify(signing.as_bytes(), &signature)
-		.expect("the RS256 signature verifies");
+	let (modulus, exponent) = public;
+	RsaPublicKeyComponents {
+		n: modulus,
+		e: exponent,
+	}
+	.verify(&RSA_PKCS1_2048_8192_SHA256, signing.as_bytes(), &signature)
+	.expect("the RS256 signature verifies");
 
 	let header: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
 	let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
@@ -832,7 +858,7 @@ fn spec_expiring() -> Value {
 /// All three transports, over keys nobody verifies: an EC `.p8` for
 /// APNs, an RSA service account for FCM, and a VAPID pair for Web Push.
 fn all_transports() -> config::PushConfig {
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	config::PushConfig {
 		apns: Some(apns_config_for(generated_pem().0)),
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -1589,7 +1615,7 @@ async fn the_apns_wire_carries_a_verified_cached_provider_token_and_the_expiry()
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fcm_wire_exchanges_a_verified_rs256_account_jwt() {
 	let mock = Mock::new();
-	let (rsa_pem, rsa_private) = generated_rsa();
+	let (rsa_pem, rsa_public) = test_rsa();
 	let config = config::PushConfig {
 		apns: None,
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -1602,10 +1628,11 @@ async fn the_fcm_wire_exchanges_a_verified_rs256_account_jwt() {
 	service.resume();
 
 	// The token endpoint answers a short-lived access token. The script
-	// verifies each assertion independently — RS256, the rsa crate's
-	// own verifier — and checks the exact claims the grant needs. The
-	// account's JSON names a token_uri of its own; the exchange must go
-	// to the fixed first-party endpoint regardless.
+	// verifies each assertion independently — RS256, ring's own RSA
+	// verifier against the key's public half — and checks the exact
+	// claims the grant needs. The account's JSON names a token_uri of
+	// its own; the exchange must go to the fixed first-party endpoint
+	// regardless.
 	let exchanges = Arc::new(AtomicUsize::new(0));
 	let counting = Arc::clone(&exchanges);
 	mock.scripted(move |request, _| {
@@ -1636,7 +1663,7 @@ async fn the_fcm_wire_exchanges_a_verified_rs256_account_jwt() {
 			.expect("the assertion value");
 
 		let now = leptoskit_db::now().timestamp();
-		let (header, claims) = verify_rs256(assertion, &rsa_private);
+		let (header, claims) = verify_rs256(assertion, &rsa_public);
 		assert_eq!(header["alg"], "RS256", "Google's OAuth needs RS256");
 		assert_eq!(header["typ"], "JWT");
 		assert_eq!(claims["iss"], "push@leptoskit-push.iam.gserviceaccount.com");
@@ -1723,7 +1750,7 @@ async fn the_fcm_wire_exchanges_a_verified_rs256_account_jwt() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fcm_data_map_drops_reserved_keys_and_unneeded_ttls() {
 	let mock = Mock::new();
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	let config = config::PushConfig {
 		apns: None,
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -1798,7 +1825,7 @@ async fn the_fcm_data_map_drops_reserved_keys_and_unneeded_ttls() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_broken_fcm_account_stalls_the_delivery_without_failing_it() {
 	let mock = Mock::new();
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	let config = config::PushConfig {
 		apns: None,
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -1863,7 +1890,7 @@ async fn a_broken_fcm_account_stalls_the_delivery_without_failing_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_authorization_refreshes_once_and_then_stalls() {
 	let mock = Mock::new();
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	let config = config::PushConfig {
 		apns: None,
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -1976,7 +2003,7 @@ async fn a_refused_authorization_refreshes_once_and_then_stalls() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_generic_fcm_404_does_not_invalidate_the_device() {
 	let mock = Mock::new();
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	let config = config::PushConfig {
 		apns: None,
 		fcm: Some(fcm_config_for(&rsa_pem)),
@@ -2208,7 +2235,7 @@ async fn two_services_in_one_process_keep_their_own_credentials() {
 	// embedded in one process, each with its own FCM account, each send
 	// signed by its own account only.
 	let one_mock = Mock::new();
-	let (one_pem, one_private) = generated_rsa();
+	let (one_pem, one_public) = test_rsa();
 	let one = start(
 		db().await,
 		&config::PushConfig {
@@ -2221,7 +2248,7 @@ async fn two_services_in_one_process_keep_their_own_credentials() {
 	.await;
 
 	let two_mock = Mock::new();
-	let (two_pem, two_private) = generated_rsa();
+	let (two_pem, two_public) = test_rsa();
 	let mut two = start(
 		db().await,
 		&config::PushConfig {
@@ -2287,7 +2314,7 @@ async fn two_services_in_one_process_keep_their_own_credentials() {
 	let one_assertion =
 		String::from_utf8(one_mock.requests_to(FCM_TOKEN_HOST)[0].body.clone()).unwrap();
 	let assertion = one_assertion.split("assertion=").nth(1).unwrap().to_owned();
-	let (_, claims) = verify_rs256(&assertion, &one_private);
+	let (_, claims) = verify_rs256(&assertion, &one_public);
 	assert_eq!(
 		claims["iss"], "push@leptoskit-push.iam.gserviceaccount.com",
 		"service one signs as itself"
@@ -2296,7 +2323,7 @@ async fn two_services_in_one_process_keep_their_own_credentials() {
 	let two_assertion =
 		String::from_utf8(two_mock.requests_to(FCM_TOKEN_HOST)[0].body.clone()).unwrap();
 	let assertion = two_assertion.split("assertion=").nth(1).unwrap().to_owned();
-	let (_, claims) = verify_rs256(&assertion, &two_private);
+	let (_, claims) = verify_rs256(&assertion, &two_public);
 	assert_eq!(
 		claims["iss"], "push@leptoskit-other.iam.gserviceaccount.com",
 		"service two signs as itself, never with one's account"
@@ -2650,7 +2677,7 @@ async fn oversized_payloads_drop_data_first_and_end_clearly() {
 	// all — and the fallback keeps its collapse ids, so a repeat that
 	// fits coalesces with the full payload would have.
 	let mock2 = Mock::new();
-	let (rsa_pem, _) = generated_rsa();
+	let (rsa_pem, _) = test_rsa();
 	let mut service2 = start(
 		db().await,
 		&config::PushConfig {
@@ -2700,7 +2727,7 @@ async fn oversized_payloads_drop_data_first_and_end_clearly() {
 	// the apns headers: a fallback that dropped them would let a repeat
 	// stack banners the full payload would have replaced.
 	let mock3 = Mock::new();
-	let (rsa_pem3, _) = generated_rsa();
+	let (rsa_pem3, _) = test_rsa();
 	let mut service3 = start(
 		db().await,
 		&config::PushConfig {
