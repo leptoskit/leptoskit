@@ -77,9 +77,9 @@ async fn typed_worker_state_survives_retries_without_changing_authorization() {
 	let anonymous = rpc::enqueue(&db, WorkerTypedState { owner: None })
 		.await
 		.unwrap();
-	let owned_db = db.with_context(Context::new().with(owner));
-	let owned = rpc::enqueue(
-		&owned_db,
+	let owner_db = db.with_context(Context::new().with(owner));
+	let personal = rpc::enqueue(
+		&owner_db,
 		WorkerTypedState {
 			owner: Some(owner.uuid().to_string()),
 		},
@@ -95,7 +95,7 @@ async fn typed_worker_state_survives_retries_without_changing_authorization() {
 		.poll(Duration::from_millis(10))
 		.start();
 
-	for id in [anonymous, owned] {
+	for id in [anonymous, personal] {
 		let finished = wait_row("typed state retry", &db, id, |row| {
 			row.state == JobState::Done
 		})
