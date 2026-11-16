@@ -1,17 +1,18 @@
 //! Durable notifications for leptoskit apps.
 //!
 //! An app's server sends a notification to explicit users, to a topic's
-//! subscribers, or to the people a condition matches, and the service
-//! stores one durable inbox row per recipient, in a database of its own.
-//! The recipients read their own inbox from any device their app signs in
-//! on: the web, a native app, or the server while it renders. When the
-//! operator configures a push transport — APNs, FCM, or Web Push — the
-//! same send also reaches the devices its recipients enrolled
-//! ([`push`]): one durable delivery per notification and endpoint,
-//! attempted by a background job with bounded retries, and reported back
-//! to the app as sanitized status. Nothing here claims a person saw a
-//! banner: provider acceptance is the farthest the service can see, and
-//! delivery is at-least-once.
+//! subscribers, to the people a condition matches over topics and the
+//! attributes the server set, or to everyone the service knows, and the
+//! service stores one durable inbox row per recipient, in a database of
+//! its own. The recipients read their own inbox from any device their
+//! app signs in on: the web, a native app, or the server while it
+//! renders. When the operator configures a push transport — APNs, FCM,
+//! or Web Push — the same send also reaches the devices its recipients
+//! enrolled ([`push`]): one durable delivery per notification and
+//! endpoint, attempted by a background job with bounded retries, and
+//! reported back to the app as sanitized status. Nothing here claims a
+//! person saw a banner: provider acceptance is the farthest the service
+//! can see, and delivery is at-least-once.
 //!
 //! The inbox queries are live, and time is one of the things that changes
 //! what they answer: a scheduled row appears when it is due, an expiring
@@ -27,9 +28,12 @@
 //! Who may call what:
 //!
 //! - [`send`], [`cancel`], [`send_status`], [`subscribe_to_topic`],
-//!   [`unsubscribe_from_topic`], and [`push_deliveries`] answer only the app's
-//!   server, signed with the service's token ([`rpc::client::call_as_app`]). A
-//!   recipient has no operation that sends or steers a push.
+//!   [`unsubscribe_from_topic`], [`set_person_attributes`],
+//!   [`person_attributes`], [`forget_person`], and [`push_deliveries`] answer
+//!   only the app's server, signed with the service's token
+//!   ([`rpc::client::call_as_app`]). A recipient has no operation that sends,
+//!   steers a push, or describes anyone with attributes — segments must not be
+//!   forgeable from the client side.
 //! - [`inbox`], [`unread_count`], [`category_preferences`], [`mark_read`],
 //!   [`mark_dismissed`], [`set_category_preference`],
 //!   [`register_push_endpoint`], [`push_endpoints`], [`revoke_push_endpoint`],
@@ -111,6 +115,21 @@ pub const MAX_SUBSCRIBE_PERSONS: usize = 1_000;
 
 /// The most items one [`my_topics`] page reads.
 pub const MAX_TOPICS_PAGE: u32 = 100;
+
+/// The longest attribute key, in bytes: `[a-z0-9_]`, the shape a
+/// condition's `user.<key>` can name.
+pub const MAX_ATTRIBUTE_KEY_LEN: usize = 64;
+
+/// The longest attribute value, in bytes.
+pub const MAX_ATTRIBUTE_VALUE_LEN: usize = 256;
+
+/// The most attributes one person may hold, so a segment's evaluation
+/// stays bounded.
+pub const MAX_ATTRIBUTES_PER_PERSON: usize = 50;
+
+/// The most persons one [`set_person_attributes`] call may name,
+/// mirroring the topic batch bound.
+pub const MAX_ATTRIBUTE_PERSONS: usize = 1_000;
 
 /// How many people a fanout job step delivers to, in one transaction: the
 /// batch size a topic or condition send walks its audience in.
@@ -259,6 +278,52 @@ pub struct Preference {
 	pub created_at: leptoskit_db::Timestamp,
 }
 
+/// One person the service knows. The registry every audience that isn't
+/// a topic's subscribers or an explicit list walks: [`send`] with
+/// [`SendTarget::Everyone`] reaches every row here, and an unanchored
+/// condition — one that can match a person holding none of its topics —
+/// walks the same rows.
+///
+/// A person becomes known through an act, never by being named in
+/// someone else's: the app's server setting their attributes
+/// ([`set_person_attributes`]), a push enrollment, a topic
+/// subscription, or a category preference. [`forget_person`] removes
+/// the row again, with their attributes and topic subscriptions.
+#[table(name = "audience_members", unique(person))]
+pub struct AudienceMember {
+	pub id: leptoskit_db::Id<Self>,
+	pub person: uuid::Uuid,
+	/// When the service first knew them. An upsert keeps it.
+	#[db(created_at)]
+	pub first_seen: leptoskit_db::Timestamp,
+	/// When the service last wrote about them: an attribute, topic, or
+	/// registry change bumps it.
+	#[db(updated_at)]
+	pub updated_at: leptoskit_db::Timestamp,
+}
+
+/// One attribute the app's server set for one person: the `plan` or
+/// `country` a segment asks about, never anything a person set for
+/// themselves, so an audience can't be forged from the client side.
+///
+/// At most [`MAX_ATTRIBUTES_PER_PERSON`] rows per person; keys are
+/// `[a-z0-9_]{1,64}` and values at most
+/// [`MAX_ATTRIBUTE_VALUE_LEN`] bytes, checked everywhere an attribute is
+/// named, the condition grammar included.
+#[table(name = "person_attributes", unique(person, key))]
+pub struct PersonAttribute {
+	pub id: leptoskit_db::Id<Self>,
+	pub person: uuid::Uuid,
+	#[db(min_len = 1, max_len = 64)]
+	pub key: String,
+	#[db(max_len = 256)]
+	pub value: String,
+	#[db(created_at)]
+	pub created_at: leptoskit_db::Timestamp,
+	#[db(updated_at)]
+	pub updated_at: leptoskit_db::Timestamp,
+}
+
 /// One wake row per person: the clock event for their open subscriptions.
 ///
 /// The inbox and badge queries read the reader's wake row and ignore its
@@ -318,8 +383,9 @@ pub struct SendSpec {
 }
 
 /// Who a send goes to. Explicit recipients are today's send, unchanged;
-/// a topic or a condition addresses the people subscribed to topics, and
-/// fans out durably, in batches, until the whole audience has its rows.
+/// a topic, a condition, or everyone addresses people the service
+/// knows, and fans out durably, in batches, until the whole audience has
+/// its rows.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SendTarget {
@@ -331,8 +397,15 @@ pub enum SendTarget {
 	Topic(String),
 	/// Everyone a [condition](condition) matches, written the way FCM
 	/// writes conditions: `'news.sports' in topics && 'alerts.local' in
-	/// topics`.
+	/// topics`, or over the app's own attributes: `user.plan == 'pro' &&
+	/// !('beta' in topics)`.
 	Condition(String),
+	/// Every person the service knows: its [registry](AudienceMember) — the
+	/// people whose attributes the app set, who subscribed to a topic,
+	/// enrolled a push endpoint, or set a category preference. A send to
+	/// this target is the loudest thing the service does; see [`send`]
+	/// for what that means.
+	Everyone,
 }
 
 impl SendTarget {
@@ -452,6 +525,23 @@ pub struct TopicChanges {
 	pub skipped_full: u32,
 }
 
+/// What one [`set_person_attributes`] call changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PersonAttributeChanges {
+	/// How many persons the call newly registered in the service's
+	/// registry. Already-known persons change nothing here, however many
+	/// attributes moved.
+	pub registered: u32,
+	/// How many attribute values the call wrote. A value already stored
+	/// exactly as sent changes nothing, so a retried call answers 0.
+	pub set: u32,
+	/// How many attributes the call removed. Absent ones count nothing.
+	pub removed: u32,
+	/// How many writes were skipped: the person already holds
+	/// [`MAX_ATTRIBUTES_PER_PERSON`] attributes and the key was new.
+	pub skipped_full: u32,
+}
+
 /// One item of a recipient's inbox: everything a screen needs to show it
 /// and act on it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -555,6 +645,7 @@ pub fn check_send_shape(
 		SendTarget::Condition(text) => {
 			condition::check_condition(text).map_err(|error| error.to_string())?;
 		}
+		SendTarget::Everyone => {}
 	}
 
 	if let (Some(visible_at), Some(expires_at)) = (spec.visible_at, spec.expires_at)
@@ -592,6 +683,54 @@ pub fn check_topic(topic: &str) -> Result<(), String> {
 /// Whether a byte can appear in a topic name.
 pub(crate) fn topic_byte(byte: u8) -> bool {
 	byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'%')
+}
+
+/// Checks an attribute key wherever one is named — a
+/// [`set_person_attributes`] call, or a condition's `user.<key>`: 1 to
+/// [`MAX_ATTRIBUTE_KEY_LEN`] bytes of `a-z`, `0-9`, and `_`, lowercase
+/// by design so a key in the app's server and one in a condition can't
+/// drift by case.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_attribute_key(key: &str) -> Result<(), String> {
+	if key.is_empty() || key.len() > MAX_ATTRIBUTE_KEY_LEN {
+		return Err(format!(
+			"an attribute key is 1 to {MAX_ATTRIBUTE_KEY_LEN} bytes of a-z, 0-9, and _"
+		));
+	}
+
+	if !key
+		.bytes()
+		.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+	{
+		return Err(
+			"an attribute key uses `a-z`, `0-9`, and `_`, as in `plan` or `signup_campaign`".into(),
+		);
+	}
+
+	Ok(())
+}
+
+/// Checks an attribute value: at most [`MAX_ATTRIBUTE_VALUE_LEN`] bytes,
+/// with no control characters, so a value is text a screen could show.
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub fn check_attribute_value(value: &str) -> Result<(), String> {
+	if value.len() > MAX_ATTRIBUTE_VALUE_LEN {
+		return Err(format!(
+			"an attribute value is at most {MAX_ATTRIBUTE_VALUE_LEN} bytes"
+		));
+	}
+
+	if !valid_text(value) {
+		return Err("an attribute value has no control characters".into());
+	}
+
+	Ok(())
 }
 
 /// Checks an idempotency key.
@@ -706,26 +845,38 @@ fn valid_text(value: &str) -> bool {
 	!value.chars().any(char::is_control)
 }
 
-/// Sends a notification to explicit users, a topic's subscribers, or the
-/// people a condition matches: the app's server only.
+/// Sends a notification to explicit users, a topic's subscribers, the
+/// people a condition matches, or everyone the service knows: the app's
+/// server only.
 ///
 /// **Recipients** ([`SendTarget::Recipients`]) is the whole send in one
 /// transaction: every named recipient gets one durable inbox row, visible
 /// from now — or from `spec.visible_at`, when it schedules one — until it
 /// expires, and the answer carries the final counts.
 ///
-/// **A topic or a condition** ([`SendTarget::Topic`],
-/// [`SendTarget::Condition`]) can name any number of people, so the send
-/// records itself, enqueues a fanout job in the same transaction, and
-/// answers immediately with [`SendState::FanningOut`]. The job walks the
-/// audience in batches of [`FANOUT_BATCH`], ordered by person id, writing
-/// each batch's rows — and its push deliveries — in one transaction, and
-/// snapshots the audience as it reaches each person: someone who
-/// subscribes after the fanout passed them by is not reached by this
-/// send. Ask [`send_status`] how far it has come; a send that is still
-/// fanning out answers the counts so far. Opt-outs, schedules, expiry,
-/// push enqueueing, and live inbox updates behave exactly as for a
-/// recipients send.
+/// **A topic, a condition, or everyone** ([`SendTarget::Topic`],
+/// [`SendTarget::Condition`], [`SendTarget::Everyone`]) can name any
+/// number of people, so the send records itself, enqueues a fanout job
+/// in the same transaction, and answers immediately with
+/// [`SendState::FanningOut`]. The job walks the audience in batches of
+/// [`FANOUT_BATCH`], ordered by person id, writing each batch's rows —
+/// and its push deliveries — in one transaction, and snapshots the
+/// audience as it reaches each person: someone who subscribes after the
+/// fanout passed them by is not reached by this send. Ask
+/// [`send_status`] how far it has come; a send that is still fanning out
+/// answers the counts so far. Opt-outs, schedules, expiry, push
+/// enqueueing, and live inbox updates behave exactly as for a recipients
+/// send.
+///
+/// Which audience a fanout walks depends on the target: a topic's
+/// subscribers for a topic, the same for a condition that cannot match
+/// without one of its topics, and the service's [person
+/// registry](AudienceMember) for a condition that can — one anchored only on
+/// attributes, like `user.plan == 'pro'` — and for everyone. Everyone is
+/// the loudest target: it reaches every registered person, so a send to
+/// it should be rare, deliberate, and `validate_only`'d first — and
+/// remember that people who opted out of the category are skipped
+/// silently, which is the courtesy, not a bug.
 ///
 /// `validate_only` checks everything and answers the audience the send
 /// would reach right now — matched by the target, minus the people opted
@@ -869,9 +1020,9 @@ pub async fn send(
 	})
 }
 
-/// One step of a topic or condition send's fanout: the batch of people
-/// the job [`send`](fn@send) enqueued walks next, delivered in one
-/// transaction with their push deliveries, and the successor step
+/// One step of a topic, condition, or everyone send's fanout: the batch
+/// of people the job [`send`](fn@send) enqueued walks next, delivered in
+/// one transaction with their push deliveries, and the successor step
 /// enqueued when more audience remains. The stored cursor is where a
 /// replayed step picks up after, and the send's row is what a step checks
 /// before it writes, so a [`cancel`] that lands between steps ends the
@@ -1184,6 +1335,7 @@ pub async fn set_category_preference(
 	if let Some(mut preference) = existing {
 		preference.opted_out = opted_out;
 		preference.save(cx.tx()).await?;
+		service::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
 
 		return Ok(());
 	}
@@ -1216,7 +1368,12 @@ pub async fn set_category_preference(
 		// wrote, and sets it, so the last setting to commit is the one
 		// that holds — neither device's answer is silently dropped.
 		Err(leptoskit_db::DbError::Conflict { .. }) => Err(rpc::Error::Contended),
-		other => other.map_err(rpc::Error::from),
+		other => {
+			other.map_err(rpc::Error::from)?;
+			service::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
+
+			Ok(())
+		}
 	}
 }
 
@@ -1381,4 +1538,99 @@ pub async fn my_topics(cx: &rpc::QueryCx, page: rpc::PageArgs) -> rpc::Result<rp
 		end: page_of_rows.end,
 		has_more: page_of_rows.has_more,
 	})
+}
+
+/// Sets and removes person attributes in one batch: the app's server
+/// only, because an attribute is the app's own statement about a person,
+/// and a segment built from client-set attributes would be a forgeable
+/// audience. A person has no operation that sets or reads attributes,
+/// their own or anyone else's.
+///
+/// At most [`MAX_ATTRIBUTE_PERSONS`] persons per call, duplicates
+/// collapse, and the call is idempotent: a value already stored exactly
+/// as sent changes nothing and counts nothing. `remove` is the last
+/// word: a key in both `set` and `remove` is removed, never set. Each
+/// person holds at most [`MAX_ATTRIBUTES_PER_PERSON`] attributes; a new
+/// key past that bound is skipped and counted in
+/// [`PersonAttributeChanges::skipped_full`], per person and key, so one
+/// full person never refuses the batch.
+///
+/// Setting any attribute registers the named persons in the service's
+/// [registry](AudienceMember) — the audience [`SendTarget::Everyone`] and
+/// attribute-anchored conditions walk.
+///
+/// Only the app may call it: [`rpc::client::call_as_app`] from server code.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server, and
+/// [`rpc::Error::Invalid`] for a bad key or value, an empty or oversized
+/// batch, or a call that neither sets nor removes anything.
+#[rpc::mutation(service = "notifications")]
+pub async fn set_person_attributes(
+	cx: &rpc::MutationCx,
+	persons: Vec<uuid::Uuid>,
+	#[serde(default)] set: std::collections::BTreeMap<String, String>,
+	#[serde(default)] remove: Vec<String>,
+) -> rpc::Result<PersonAttributeChanges> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app describes people with attributes: call this from its server, with the \
+			 service's token",
+		));
+	}
+
+	service::set_attributes(cx.tx(), persons, set, remove).await
+}
+
+/// Reads one person's attributes as the app set them, keyed and sorted:
+/// the app's own read-back of what a segment will see. A person the
+/// service doesn't know, or who holds none, answers an empty map.
+///
+/// Only the app may call it.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server.
+#[rpc::query(service = "notifications")]
+pub async fn person_attributes(
+	cx: &rpc::QueryCx,
+	person: uuid::Uuid,
+) -> rpc::Result<std::collections::BTreeMap<String, String>> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app reads person attributes: call this from its server, with the service's \
+			 token",
+		));
+	}
+
+	service::read_attributes(cx.db(), person).await
+}
+
+/// Removes one person from the service's [registry](AudienceMember), with their
+/// attributes and their topic subscriptions: the app's server only, for
+/// a person who should belong to no audience anymore — a deleted
+/// account, a withdrawn consent. Their inbox rows stay exactly as they
+/// are ([`inbox`] keeps answering them if the app still signs them in);
+/// push endpoints and category preferences stay too, so a returning
+/// person's devices and opt-outs survive. Future sends to everyone, or
+/// to a condition only attributes anchor, no longer reach them.
+///
+/// Idempotent: forgetting a person the service doesn't know does
+/// nothing and succeeds.
+///
+/// Only the app may call it.
+///
+/// # Errors
+///
+/// [`rpc::Error::Forbidden`] from anywhere but the app's server.
+#[rpc::mutation(service = "notifications")]
+pub async fn forget_person(cx: &rpc::MutationCx, person: uuid::Uuid) -> rpc::Result<()> {
+	if cx.identity().caller.as_deref() != Some(rpc::server::APP_CALLER) {
+		return Err(rpc::Error::forbidden(
+			"only the app forgets a person: call this from its server, with the service's token",
+		));
+	}
+
+	service::forget_person(cx.tx(), person).await
 }

@@ -1,29 +1,49 @@
 //! Targeting conditions: the boolean grammar a send can address an
-//! audience with, written the way Firebase Cloud Messaging writes it, so
-//! a migration from FCM's conditions is a paste.
+//! audience with, written the way Firebase Cloud Messaging writes its
+//! topic half, so a migration from FCM's conditions is a paste.
 //!
 //! ```text
 //! 'TopicA' in topics && ('TopicB' in topics || !('TopicC' in topics))
+//! user.plan == 'pro' && 'news.product' in topics
 //! ```
 //!
-//! A condition names topics and combines them with `&&`, `||`, `!`, and
-//! parentheses. Precedence is `!` first, then `&&`, then `||`, so
-//! `'a' in topics || 'b' in topics && 'c' in topics` means
-//! `'a' in topics || ('b' in topics && 'c' in topics)`.
+//! A condition names topics and person attributes, and combines them
+//! with `&&`, `||`, `!`, and parentheses. Precedence is `!` first, then
+//! `&&`, then `||`, so `'a' in topics || 'b' in topics && user.beta ==
+//! 'yes'` means `'a' in topics || ('b' in topics && user.beta ==
+//! 'yes')`.
+//!
+//! A topic membership is `'name' in topics`. An attribute predicate is
+//! one of:
+//!
+//! - `user.<key> == 'value'`, `user.<key> != 'value'`
+//! - `user.<key> in ['a', 'b']`
+//! - `has(user.<key>)`
+//! - `user.<key> < '10'` with `<`, `<=`, `>`, `>=`: numeric, true only when the
+//!   held value and the literal both parse as finite numbers
+//!
+//! An attribute the person doesn't hold answers false to every
+//! predicate, `!=` and `in` included, so nobody matches a predicate
+//! merely for lacking the attribute.
 //!
 //! One shape is refused outright: a condition that is already true when
-//! the person holds no topics at all, such as `!('a' in topics)`. There
-//! is no "everyone" audience yet, and a condition that starts matching
-//! before a person subscribes to anything would quietly become one, so
+//! the person holds no topics and no attributes at all, such as
+//! `!('a' in topics)`. That is an "everyone" audience in disguise — the
+//! registry has a plain target for that ([`SendTarget::Everyone`]) — so
 //! [`Condition::parse`] checks the parsed tree with every membership
-//! false and refuses a condition that holds.
+//! false and every attribute absent, and refuses a condition that
+//! holds.
 //!
 //! The bounds follow FCM's: at most [`MAX_CONDITION_TOPICS`] distinct
-//! topics, nesting at most [`MAX_CONDITION_DEPTH`] levels deep, and at
-//! most [`MAX_CONDITION_LEN`] bytes of text. Topic names inside the
-//! quotes are topic names anywhere: 1 to
+//! topics, at most [`MAX_CONDITION_ATTRIBUTES`] attribute predicates,
+//! nesting at most [`MAX_CONDITION_DEPTH`] levels deep, and at most
+//! [`MAX_CONDITION_LEN`] bytes of text. Topic names inside the quotes
+//! are topic names anywhere: 1 to
 //! [`MAX_TOPIC_LEN`](crate::MAX_TOPIC_LEN) bytes of the characters FCM
-//! accepts.
+//! accepts. Attribute keys are `[a-z0-9_]` — 1 to
+//! [`MAX_ATTRIBUTE_KEY_LEN`](crate::MAX_ATTRIBUTE_KEY_LEN) bytes — and
+//! values are 1 to
+//! [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes.
 
 /// The longest condition, in bytes.
 pub const MAX_CONDITION_LEN: usize = 1_024;
@@ -31,23 +51,93 @@ pub const MAX_CONDITION_LEN: usize = 1_024;
 /// The most distinct topics one condition may name, as FCM allows.
 pub const MAX_CONDITION_TOPICS: usize = 5;
 
+/// The most attribute predicates one condition may use.
+pub const MAX_CONDITION_ATTRIBUTES: usize = 10;
+
 /// How deeply a condition may nest: a membership is depth 1, and every
 /// `!`, `&&`, and `||` over it adds one.
 pub const MAX_CONDITION_DEPTH: usize = 8;
 
-/// A parsed condition: a boolean over the topics a person holds. Built by
-/// [`Condition::parse`], evaluated by [`Condition::matches`] against the
-/// set the moment asks about.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A parsed condition: a boolean over the topics a person holds and the
+/// attributes the app set for them. Built by [`Condition::parse`],
+/// evaluated by [`Condition::matches`] and [`Condition::matches_over`]
+/// against the person the moment asks about.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Condition {
 	/// `'name' in topics`: true when the person holds the topic.
 	Topic(String),
+	/// `user.<key> …`: true when the attribute the app set answers the
+	/// test. False whenever the person holds no such attribute.
+	Attribute { key: String, test: Test },
 	/// `left && right`.
 	And(Box<Condition>, Box<Condition>),
 	/// `left || right`.
 	Or(Box<Condition>, Box<Condition>),
 	/// `!inner`.
 	Not(Box<Condition>),
+}
+
+/// What an attribute predicate asks of the value the app set.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Test {
+	/// `== 'value'`.
+	Equals(String),
+	/// `!= 'value'`.
+	NotEquals(String),
+	/// `in ['a', 'b']`.
+	AnyOf(Vec<String>),
+	/// `has(user.<key>)`.
+	Has,
+	/// A numeric comparison: true only when the held value parses as a
+	/// finite number. The literal was checked finite at parse time.
+	Numeric { op: NumericOp, bound: f64 },
+}
+
+/// The numeric operators an attribute predicate can compare with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericOp {
+	Less,
+	LessEq,
+	Greater,
+	GreaterEq,
+}
+
+impl Test {
+	/// Whether the test holds for the attribute value a person holds, or
+	/// `None`: absent answers false to every test.
+	#[must_use]
+	pub fn holds(&self, value: Option<&str>) -> bool {
+		let Some(value) = value else {
+			return false;
+		};
+
+		match self {
+			Test::Has => true,
+			Test::Equals(want) => value == want,
+			Test::NotEquals(want) => value != want,
+			Test::AnyOf(wanted) => wanted.iter().any(|want| want == value),
+			Test::Numeric { op, bound } => {
+				value
+					.parse::<f64>()
+					.ok()
+					.filter(|number| number.is_finite())
+					.is_some_and(|number| op.holds(number, *bound))
+			}
+		}
+	}
+}
+
+impl NumericOp {
+	/// Whether `number op bound` holds. Both sides are finite.
+	#[must_use]
+	pub fn holds(self, number: f64, bound: f64) -> bool {
+		match self {
+			NumericOp::Less => number < bound,
+			NumericOp::LessEq => number <= bound,
+			NumericOp::Greater => number > bound,
+			NumericOp::GreaterEq => number >= bound,
+		}
+	}
 }
 
 /// Why a condition can't be used: what's wrong with it, and the byte
@@ -69,19 +159,20 @@ impl std::fmt::Display for ConditionError {
 impl std::error::Error for ConditionError {}
 
 impl Condition {
-	/// Parses and checks a condition: the grammar, the topic names, the
-	/// bounds, and the anchoring rule above. The same text always parses
-	/// to the same tree, and a condition that passed once can be stored
-	/// and parsed again by the service's fanout.
+	/// Parses and checks a condition: the grammar, the topic names and
+	/// attribute keys, the bounds, and the anchoring rule above. The same
+	/// text always parses to the same tree, and a condition that passed
+	/// once can be stored and parsed again by the service's fanout.
 	///
 	/// # Errors
 	///
 	/// [`ConditionError`], with the byte offset the parser gave up at:
 	/// text past the length bound, a topic name outside FCM's charset, a
-	/// missing `in topics`, unbalanced parentheses, a stray token, more
-	/// than [`MAX_CONDITION_TOPICS`] distinct topics, nesting past
-	/// [`MAX_CONDITION_DEPTH`], or a condition that holds when nobody
-	/// holds any topic.
+	/// malformed attribute predicate, a missing `in topics`, unbalanced
+	/// parentheses, a stray token, more than [`MAX_CONDITION_TOPICS`]
+	/// distinct topics or [`MAX_CONDITION_ATTRIBUTES`] attribute
+	/// predicates, nesting past [`MAX_CONDITION_DEPTH`], or a condition
+	/// that holds when nobody holds any topic or attribute.
 	pub fn parse(text: &str) -> Result<Self, ConditionError> {
 		if text.len() > MAX_CONDITION_LEN {
 			return Err(ConditionError {
@@ -94,6 +185,7 @@ impl Condition {
 			text: text.as_bytes(),
 			pos: 0,
 			topics: Vec::new(),
+			predicates: 0,
 		};
 		let parsed = parser.expression()?;
 		parser.skip_whitespace();
@@ -118,12 +210,13 @@ impl Condition {
 			});
 		}
 
-		// Anchored: a person with no topics must not match, or the
-		// condition would be an everyone audience in disguise.
+		// Anchored: a person with no topics and no attributes must not
+		// match, or the condition would be an everyone audience in
+		// disguise — the registry's own target says that plainly.
 		if parsed.matches(|_| false) {
 			return Err(ConditionError {
-				message: "a condition must not match a person who holds no topics: name at least \
-				          one topic it requires"
+				message: "a condition must not match a person who holds no topics and no \
+				          attributes: name at least one topic or attribute it requires"
 					.into(),
 				offset: 0,
 			});
@@ -141,22 +234,92 @@ impl Condition {
 		topics
 	}
 
-	/// Whether the condition holds for a person whose memberships `holds`
-	/// answers: called with the topic names the condition names, never
-	/// any other.
+	/// The distinct attribute keys the condition's predicates read, in
+	/// order of first appearance. At most [`MAX_CONDITION_ATTRIBUTES`]
+	/// once parsed, each key once however many predicates read it.
 	#[must_use]
-	pub fn matches(&self, holds: impl Fn(&str) -> bool) -> bool {
-		self.matches_with(&holds)
+	pub fn attribute_keys(&self) -> Vec<&str> {
+		let mut keys = Vec::new();
+		collect_keys(self, &mut keys);
+		keys
 	}
 
-	/// [`Condition::matches`] over a trait object, so the recursion
+	/// Whether the condition holds for a person whose memberships `holds`
+	/// answers: called with the topic names the condition names, never
+	/// any other. The person is taken to hold no attributes at all, so
+	/// every attribute predicate answers false.
+	#[must_use]
+	pub fn matches(&self, holds: impl Fn(&str) -> bool) -> bool {
+		self.matches_over(holds, |_| None)
+	}
+
+	/// Whether the condition holds for a person whose memberships `holds`
+	/// answers and whose attributes `attribute` answers: called with the
+	/// topic names and attribute keys the condition names, never any
+	/// other, with `None` for an attribute the person doesn't hold.
+	#[must_use]
+	pub fn matches_over<'k>(
+		&'k self,
+		holds: impl Fn(&str) -> bool,
+		attribute: impl Fn(&'k str) -> Option<&'k str>,
+	) -> bool {
+		self.matches_with(&holds, &attribute)
+	}
+
+	/// [`Condition::matches_over`] over trait objects, so the recursion
 	/// doesn't build a fresh closure type per level.
-	fn matches_with(&self, holds: &dyn Fn(&str) -> bool) -> bool {
+	fn matches_with<'k>(
+		&'k self,
+		holds: &dyn Fn(&str) -> bool,
+		attribute: &dyn Fn(&'k str) -> Option<&'k str>,
+	) -> bool {
 		match self {
 			Condition::Topic(topic) => holds(topic),
-			Condition::And(left, right) => left.matches_with(holds) && right.matches_with(holds),
-			Condition::Or(left, right) => left.matches_with(holds) || right.matches_with(holds),
-			Condition::Not(inner) => !inner.matches_with(holds),
+			Condition::Attribute { key, test } => test.holds(attribute(key)),
+			Condition::And(left, right) => {
+				left.matches_with(holds, attribute) && right.matches_with(holds, attribute)
+			}
+			Condition::Or(left, right) => {
+				left.matches_with(holds, attribute) || right.matches_with(holds, attribute)
+			}
+			Condition::Not(inner) => !inner.matches_with(holds, attribute),
+		}
+	}
+
+	/// Whether the condition is false for every person who holds none of
+	/// the topics it names, whatever attributes they hold. Only such a
+	/// condition can be walked over the topic index's subscribers alone;
+	/// anything else may match a person the index has never seen, so its
+	/// audience is the person registry.
+	#[must_use]
+	pub fn topic_anchored(&self) -> bool {
+		matches!(self.sans_topics(), Tri::False)
+	}
+
+	/// The condition's truth for a person who holds none of the named
+	/// topics, with their attributes unknown: definitely [`Tri::False`],
+	/// or [`Tri::Unknown`] — true for some attributes, or definitely
+	/// true, which only an everyone audience in disguise manages, and
+	/// [`Condition::parse`] refuses those.
+	fn sans_topics(&self) -> Tri {
+		match self {
+			Condition::Topic(_) => Tri::False,
+			// An attribute predicate may hold whatever the person holds;
+			// `!false` would be true for every topic-less person, which
+			// is the disguise parse refuses — both stay unknown.
+			Condition::Attribute { .. } | Condition::Not(_) => Tri::Unknown,
+			Condition::And(left, right) => {
+				match (left.sans_topics(), right.sans_topics()) {
+					(Tri::False, _) | (_, Tri::False) => Tri::False,
+					(Tri::Unknown, Tri::Unknown) => Tri::Unknown,
+				}
+			}
+			Condition::Or(left, right) => {
+				match (left.sans_topics(), right.sans_topics()) {
+					(Tri::False, Tri::False) => Tri::False,
+					_ => Tri::Unknown,
+				}
+			}
 		}
 	}
 
@@ -164,13 +327,20 @@ impl Condition {
 	/// adds a level.
 	fn depth(&self) -> usize {
 		match self {
-			Condition::Topic(_) => 1,
+			Condition::Topic(_) | Condition::Attribute { .. } => 1,
 			Condition::And(left, right) | Condition::Or(left, right) => {
 				left.depth().max(right.depth()) + 1
 			}
 			Condition::Not(inner) => inner.depth() + 1,
 		}
 	}
+}
+
+/// What a condition definitely is for a topic-less person: false, or
+/// unknown — true under some attributes.
+enum Tri {
+	False,
+	Unknown,
 }
 
 /// Collects the distinct topics a tree names, in order.
@@ -181,11 +351,30 @@ fn collect_topics<'a>(condition: &'a Condition, topics: &mut Vec<&'a str>) {
 				topics.push(topic.as_str());
 			}
 		}
+		Condition::Attribute { .. } => {}
 		Condition::And(left, right) | Condition::Or(left, right) => {
 			collect_topics(left, topics);
 			collect_topics(right, topics);
 		}
 		Condition::Not(inner) => collect_topics(inner, topics),
+	}
+}
+
+/// Collects the distinct attribute keys a tree's predicates read, in
+/// order.
+fn collect_keys<'a>(condition: &'a Condition, keys: &mut Vec<&'a str>) {
+	match condition {
+		Condition::Topic(_) => {}
+		Condition::Attribute { key, .. } => {
+			if !keys.contains(&key.as_str()) {
+				keys.push(key.as_str());
+			}
+		}
+		Condition::And(left, right) | Condition::Or(left, right) => {
+			collect_keys(left, keys);
+			collect_keys(right, keys);
+		}
+		Condition::Not(inner) => collect_keys(inner, keys),
 	}
 }
 
@@ -200,12 +389,14 @@ pub fn check_condition(text: &str) -> Result<(), ConditionError> {
 	Condition::parse(text).map(|_| ())
 }
 
-/// The recursive-descent parser. Tracks the position in the text and the
-/// distinct topics seen, so the topic bound can name its offset.
+/// The recursive-descent parser. Tracks the position in the text, the
+/// distinct topics and attribute predicates seen, so the bounds can name
+/// their offsets.
 struct Parser<'a> {
 	text: &'a [u8],
 	pos: usize,
 	topics: Vec<(&'a str, usize)>,
+	predicates: usize,
 }
 
 impl Parser<'_> {
@@ -237,7 +428,7 @@ impl Parser<'_> {
 		Ok(left)
 	}
 
-	/// `!`, a parenthesized expression, or a membership.
+	/// `!`, a parenthesized expression, or a predicate.
 	fn unary(&mut self) -> Result<Condition, ConditionError> {
 		self.skip_whitespace();
 
@@ -265,7 +456,30 @@ impl Parser<'_> {
 			return Ok(inner);
 		}
 
-		self.membership()
+		self.predicate(start)
+	}
+
+	/// A topic membership or an attribute predicate.
+	fn predicate(&mut self, start: usize) -> Result<Condition, ConditionError> {
+		if self.peek() == Some(b'\'') {
+			return self.membership();
+		}
+
+		if self.eat_word(b"has") {
+			return self.has_predicate(start);
+		}
+
+		if self.eat_word(b"user") {
+			return self.attribute_predicate(start);
+		}
+
+		Err(ConditionError {
+			message: format!(
+				"expected a topic in quotes, `user.<key>`, or `has(user.<key>)`, found {}",
+				self.here()
+			),
+			offset: self.pos,
+		})
 	}
 
 	/// `'name' in topics`.
@@ -331,6 +545,259 @@ impl Parser<'_> {
 		Ok(Condition::Topic(name.to_owned()))
 	}
 
+	/// `has(user.<key>)`.
+	fn has_predicate(&mut self, start: usize) -> Result<Condition, ConditionError> {
+		self.skip_whitespace();
+
+		if !self.eat(b"(") {
+			return Err(ConditionError {
+				message: "expected `(` after `has`".into(),
+				offset: self.pos,
+			});
+		}
+
+		self.skip_whitespace();
+
+		if !self.eat_word(b"user") {
+			return Err(ConditionError {
+				message: format!(
+					"expected `user.<key>` inside `has(…)`, found {}",
+					self.here()
+				),
+				offset: self.pos,
+			});
+		}
+
+		if !self.eat(b".") {
+			return Err(ConditionError {
+				message: "expected `.` after `user`".into(),
+				offset: self.pos,
+			});
+		}
+
+		let key = self.attribute_key()?;
+		self.skip_whitespace();
+
+		if !self.eat(b")") {
+			return Err(ConditionError {
+				message: "an unclosed `has(…)`: expected `)` here".into(),
+				offset: self.pos,
+			});
+		}
+
+		self.count_predicate(start)?;
+
+		Ok(Condition::Attribute {
+			key,
+			test: Test::Has,
+		})
+	}
+
+	/// `user.<key> == 'v'`, with every operator the grammar allows.
+	fn attribute_predicate(&mut self, start: usize) -> Result<Condition, ConditionError> {
+		if !self.eat(b".") {
+			return Err(ConditionError {
+				message: "expected `.` after `user`".into(),
+				offset: self.pos,
+			});
+		}
+
+		let key = self.attribute_key()?;
+		self.skip_whitespace();
+
+		let test = if self.eat(b"==") {
+			Test::Equals(self.value()?.0)
+		} else if self.eat(b"!=") {
+			Test::NotEquals(self.value()?.0)
+		} else if self.eat(b"<=") {
+			self.numeric(NumericOp::LessEq)?
+		} else if self.eat(b">=") {
+			self.numeric(NumericOp::GreaterEq)?
+		} else if self.eat(b"<") {
+			self.numeric(NumericOp::Less)?
+		} else if self.eat(b">") {
+			self.numeric(NumericOp::Greater)?
+		} else if self.eat_word(b"in") {
+			self.list()?
+		} else {
+			return Err(ConditionError {
+				message: "expected an operator after `user.<key>`: `==`, `!=`, `in`, `<`, `<=`, \
+				          `>`, or `>=`"
+					.into(),
+				offset: self.pos,
+			});
+		};
+
+		self.count_predicate(start)?;
+
+		Ok(Condition::Attribute { key, test })
+	}
+
+	/// The `<key>` of a `user.<key>` reference: `[a-z0-9_]{1,64}`.
+	fn attribute_key(&mut self) -> Result<String, ConditionError> {
+		let start = self.pos;
+
+		while self
+			.peek()
+			.is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+		{
+			self.pos += 1;
+		}
+
+		let end = self.pos;
+		let len = end - start;
+
+		if len == 0 {
+			return Err(ConditionError {
+				message: "an attribute key is 1 to 64 bytes of `a-z`, `0-9`, or `_`, as in \
+				          `user.plan`"
+					.into(),
+				offset: start,
+			});
+		}
+
+		if len > crate::MAX_ATTRIBUTE_KEY_LEN {
+			return Err(ConditionError {
+				message: format!(
+					"an attribute key is at most {} bytes",
+					crate::MAX_ATTRIBUTE_KEY_LEN
+				),
+				offset: start,
+			});
+		}
+
+		Ok(std::str::from_utf8(&self.text[start..end])
+			.expect("the key is ASCII")
+			.to_owned())
+	}
+
+	/// A quoted value: `'…'`, at most
+	/// [`MAX_ATTRIBUTE_VALUE_LEN`](crate::MAX_ATTRIBUTE_VALUE_LEN) bytes,
+	/// no whitespace inside. Answers the value and where it starts.
+	fn value(&mut self) -> Result<(String, usize), ConditionError> {
+		self.skip_whitespace();
+
+		if !self.eat(b"'") {
+			return Err(ConditionError {
+				message: format!("expected a value in quotes, found {}", self.here()),
+				offset: self.pos,
+			});
+		}
+
+		let value_start = self.pos;
+
+		while self
+			.peek()
+			.is_some_and(|byte| byte != b'\'' && !byte.is_ascii_whitespace())
+		{
+			self.pos += 1;
+		}
+
+		let value_end = self.pos;
+
+		if !self.eat(b"'") {
+			return Err(ConditionError {
+				message: "an unclosed value: expected `'` here".into(),
+				offset: self.pos,
+			});
+		}
+
+		if value_end - value_start > crate::MAX_ATTRIBUTE_VALUE_LEN {
+			return Err(ConditionError {
+				message: format!(
+					"an attribute value is at most {} bytes",
+					crate::MAX_ATTRIBUTE_VALUE_LEN
+				),
+				offset: value_start,
+			});
+		}
+
+		let value = std::str::from_utf8(&self.text[value_start..value_end]).map_err(|_| {
+			ConditionError {
+				message: "an attribute value is one UTF-8 string".into(),
+				offset: value_start,
+			}
+		})?;
+
+		Ok((value.to_owned(), value_start))
+	}
+
+	/// A numeric comparison's quoted literal, which must be a finite
+	/// number: `NaN` and `inf` are not numbers here.
+	fn numeric(&mut self, op: NumericOp) -> Result<Test, ConditionError> {
+		let (literal, literal_start) = self.value()?;
+		let bound = literal.parse::<f64>().map_err(|_| {
+			ConditionError {
+				message: format!(
+					"a numeric comparison's value is a finite number in quotes, and `{literal}` \
+					 isn't one"
+				),
+				offset: literal_start,
+			}
+		})?;
+
+		if !bound.is_finite() {
+			return Err(ConditionError {
+				message: format!(
+					"a numeric comparison's value is a finite number, and `{literal}` isn't"
+				),
+				offset: literal_start,
+			});
+		}
+
+		Ok(Test::Numeric { op, bound })
+	}
+
+	/// `in ['a', 'b']`: one or more quoted values in brackets.
+	fn list(&mut self) -> Result<Test, ConditionError> {
+		self.skip_whitespace();
+
+		if !self.eat(b"[") {
+			return Err(ConditionError {
+				message: format!("expected `[` after `in`, found {}", self.here()),
+				offset: self.pos,
+			});
+		}
+
+		let mut values = vec![self.value()?.0];
+
+		loop {
+			self.skip_whitespace();
+
+			if self.eat(b"]") {
+				break;
+			}
+
+			if !self.eat(b",") {
+				return Err(ConditionError {
+					message: "expected `,` or `]` between the values of `in`".into(),
+					offset: self.pos,
+				});
+			}
+
+			self.skip_whitespace();
+			values.push(self.value()?.0);
+		}
+
+		Ok(Test::AnyOf(values))
+	}
+
+	/// Counts one more attribute predicate against the bound.
+	fn count_predicate(&mut self, offset: usize) -> Result<(), ConditionError> {
+		self.predicates += 1;
+
+		if self.predicates > MAX_CONDITION_ATTRIBUTES {
+			return Err(ConditionError {
+				message: format!(
+					"a condition uses at most {MAX_CONDITION_ATTRIBUTES} attribute predicates"
+				),
+				offset,
+			});
+		}
+
+		Ok(())
+	}
+
 	/// Consumes `bytes` when the parser is on it, answering whether it
 	/// did. Whitespace before it is allowed.
 	fn operator(&mut self, bytes: &[u8]) -> bool {
@@ -370,6 +837,27 @@ impl Parser<'_> {
 		} else {
 			false
 		}
+	}
+
+	/// Whether the parser is on the word `bytes`, which it then consumes:
+	/// a word ends at a character that can't continue one, so the `user`
+	/// of `user.plan` matches and the `user` of `username` doesn't.
+	fn eat_word(&mut self, bytes: &[u8]) -> bool {
+		if !self.eat(bytes) {
+			return false;
+		}
+
+		if self
+			.peek()
+			.is_some_and(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+		{
+			// Not a whole word: give the bytes back.
+			self.pos -= bytes.len();
+
+			return false;
+		}
+
+		true
 	}
 
 	fn peek(&self) -> Option<u8> {
@@ -413,6 +901,8 @@ fn name_of(byte: u8) -> String {
 		b')' => "`)`".to_owned(),
 		b'&' => "`&&`".to_owned(),
 		b'|' => "`||`".to_owned(),
+		b'u' => "an attribute".to_owned(),
+		b'h' => "`has`".to_owned(),
 		other if other.is_ascii_whitespace() => "whitespace".to_owned(),
 		other => format!("`{}`", char::from(other)),
 	}
@@ -428,6 +918,16 @@ mod tests {
 	/// The topics a person holds, as a set.
 	fn holding<'a>(topics: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
 		move |topic| topics.contains(&topic)
+	}
+
+	/// The attributes a person holds, as a lookup.
+	fn attrs<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&'a str) -> Option<&'a str> + 'a {
+		move |key| {
+			pairs
+				.iter()
+				.find(|(held, _)| *held == key)
+				.map(|(_, value)| *value)
+		}
 	}
 
 	/// FCM's documented example: subscribed to `TopicA`, and either `TopicB`
@@ -495,6 +995,9 @@ mod tests {
 	fn whitespace_is_free() {
 		let parsed = Condition::parse("  'a'  in   topics\n&&\t'b' in topics  ").unwrap();
 		assert!(parsed.matches(holding(&["a", "b"])));
+
+		let attributes = Condition::parse("user.plan  ==\t'pro' &&\nhas( user.beta )").unwrap();
+		assert!(attributes.matches_over(holding(&[]), attrs(&[("plan", "pro"), ("beta", "1")])));
 	}
 
 	/// Every way a condition can be wrong, each with the offset the
@@ -514,7 +1017,7 @@ mod tests {
 			("'a' in topics)", 13),
 			("'a in topics", 2),
 			("'a&' in topics", 1),
-			("!(", 2),
+			("(!", 2),
 			("!'a' in topics &&", 17),
 		];
 
@@ -527,7 +1030,244 @@ mod tests {
 		}
 	}
 
-	/// The bounds: length, distinct topics, and nesting depth.
+	/// The attribute predicates' errors, at the bytes they gave up at.
+	#[test]
+	fn attribute_errors_carry_byte_offsets() {
+		let cases: &[(&str, usize)] = &[
+			("user", 4),
+			("user.", 5),
+			("user.Plan == 'pro'", 5),
+			("user.plan", 9),
+			("user.plan ==", 12),
+			("user.plan == ", 13),
+			("user.plan == 'pro", 17),
+			("user.plan ~ 'pro'", 10),
+			("user.plan in 'pro'", 13),
+			("user.plan in", 12),
+			("user.plan in [", 14),
+			("user.plan in ['pro'", 19),
+			("user.plan in []", 14),
+			("user.plan in ['pro' 'free']", 20),
+			("user.plan < 'ten'", 13),
+			("user.plan < 'NaN'", 13),
+			("user.plan < 'inf'", 13),
+			("user.plan < '1e400'", 13),
+			("has(user.plan", 13),
+			("has user.plan", 4),
+			("has(user.plan) &&", 17),
+			("user.plan == 'pro' &&", 21),
+			("username == 'x'", 0),
+		];
+
+		for (text, offset) in cases {
+			let error = Condition::parse(text).expect_err(text);
+			assert_eq!(
+				error.offset, *offset,
+				"{text:?}: the error points where the parser gave up: {error}"
+			);
+		}
+	}
+
+	/// Every attribute predicate parses, matches, and refuses as its
+	/// semantics say.
+	#[test]
+	fn attribute_predicates_parse_and_evaluate() {
+		let equals = Condition::parse("user.plan == 'pro'").unwrap();
+		assert!(equals.matches_over(holding(&[]), attrs(&[("plan", "pro")])));
+		assert!(!equals.matches_over(holding(&[]), attrs(&[("plan", "free")])));
+		assert!(!equals.matches_over(holding(&[]), attrs(&[])), "absent");
+
+		let not_equals = Condition::parse("user.plan != 'pro'").unwrap();
+		assert!(not_equals.matches_over(holding(&[]), attrs(&[("plan", "free")])));
+		assert!(!not_equals.matches_over(holding(&[]), attrs(&[("plan", "pro")])));
+		assert!(
+			!not_equals.matches_over(holding(&[]), attrs(&[])),
+			"absent answers false, even to `!=`"
+		);
+
+		let any_of = Condition::parse("user.country in ['de', 'at', 'ch']").unwrap();
+		assert!(any_of.matches_over(holding(&[]), attrs(&[("country", "at")])));
+		assert!(!any_of.matches_over(holding(&[]), attrs(&[("country", "fr")])));
+		assert!(!any_of.matches_over(holding(&[]), attrs(&[])));
+
+		let has = Condition::parse("has(user.beta)").unwrap();
+		assert!(has.matches_over(holding(&[]), attrs(&[("beta", "yes")])));
+		assert!(!has.matches_over(holding(&[]), attrs(&[])));
+		assert!(
+			has.matches_over(holding(&[]), attrs(&[("beta", "")])),
+			"any value"
+		);
+
+		// Absent attributes answer false everywhere, including under a
+		// negation, so a predicate never matches for lack.
+		let not_has = Condition::parse("!has(user.beta) && 'a' in topics").unwrap();
+		assert!(not_has.matches_over(holding(&["a"]), attrs(&[])));
+		assert!(!not_has.matches_over(holding(&["a"]), attrs(&[("beta", "no")])));
+	}
+
+	/// Numeric predicates compare as numbers, and only as numbers: a
+	/// value that doesn't parse as a finite number answers false, and
+	/// literals that aren't finite numbers are refused at parse time.
+	#[test]
+	fn numeric_predicates_compare_as_numbers() {
+		for (text, held, matches) in [
+			("user.spend >= '1000'", Some("1000"), true),
+			("user.spend >= '1000'", Some("999.99"), false),
+			("user.spend > '1000'", Some("1000"), false),
+			("user.spend > '1000'", Some("1000.5"), true),
+			("user.spend < '10'", Some("9"), true),
+			("user.spend <= '10'", Some("10"), true),
+			("user.spend > '9'", Some("10"), true),
+			// String order would say "10" < "9": numbers, not text.
+			("user.spend > '9'", Some("10"), true),
+			("user.spend < '10'", Some("2"), true),
+			// A non-numeric held value answers false, both ways.
+			("user.spend >= '1000'", Some("lots"), false),
+			("user.spend < '1000'", Some("lots"), false),
+			("user.spend >= '1000'", Some(""), false),
+			// An absent attribute answers false, like every predicate.
+			("user.spend >= '0'", None, false),
+		] {
+			let parsed = Condition::parse(text).unwrap();
+			let spend: Vec<(&str, &str)> = held.map_or(Vec::new(), |spend| vec![("spend", spend)]);
+			let lookup = attrs(&spend);
+
+			assert_eq!(
+				parsed.matches_over(holding(&[]), lookup),
+				matches,
+				"{text} against spend={held:?}"
+			);
+		}
+
+		// Literals that aren't finite numbers are refused, NaN and inf
+		// included — Rust's parser accepts both as numbers.
+		for bad in [
+			"user.spend > 'NaN'",
+			"user.spend > 'inf'",
+			"user.spend > '-infinity'",
+			"user.spend > '1e400'",
+			"user.spend > 'lots'",
+			"user.spend > ''",
+		] {
+			let error = Condition::parse(bad).expect_err(bad);
+			assert!(
+				error.message.contains("finite"),
+				"{bad}: the refusal names the rule: {error}"
+			);
+		}
+
+		// Negative and exponent-form literals are finite numbers.
+		Condition::parse("user.delta >= '-1.5'").unwrap();
+		Condition::parse("user.delta < '1e3'").unwrap();
+	}
+
+	/// Attributes mix with topics under the same operators, and the tree
+	/// carries both.
+	#[test]
+	fn attributes_mix_with_topics() {
+		let mixed = Condition::parse("'news.product' in topics && user.plan == 'pro'").unwrap();
+		assert_eq!(mixed.topics(), vec!["news.product"]);
+		assert_eq!(mixed.attribute_keys(), vec!["plan"]);
+		assert!(mixed.matches_over(holding(&["news.product"]), attrs(&[("plan", "pro")])));
+		assert!(!mixed.matches_over(holding(&["news.product"]), attrs(&[("plan", "free")])));
+		assert!(!mixed.matches_over(holding(&[]), attrs(&[("plan", "pro")])));
+
+		// The same key in two predicates is one key and two predicates.
+		let twice = Condition::parse("user.plan == 'pro' || user.plan == 'enterprise'").unwrap();
+		assert_eq!(twice.attribute_keys(), vec!["plan"]);
+
+		// Precedence holds with attributes in the tree.
+		let precedence =
+			Condition::parse("user.beta == 'yes' || 'a' in topics && user.plan == 'pro'").unwrap();
+		let expected = Condition::Or(
+			Box::new(Condition::Attribute {
+				key: "beta".into(),
+				test: super::Test::Equals("yes".into()),
+			}),
+			Box::new(Condition::And(
+				Box::new(Condition::Topic("a".into())),
+				Box::new(Condition::Attribute {
+					key: "plan".into(),
+					test: super::Test::Equals("pro".into()),
+				}),
+			)),
+		);
+		assert_eq!(precedence, expected);
+	}
+
+	/// A condition anchored only by an attribute parses; one that holds
+	/// for a person with no topics and no attributes is still refused.
+	#[test]
+	fn attribute_anchored_conditions_parse_and_everyone_disguises_refuse() {
+		// Anchored by an attribute: nobody without attributes matches.
+		let anchored = Condition::parse("user.plan == 'pro' && !('beta' in topics)").unwrap();
+		assert!(!anchored.matches(holding(&[])), "no attributes: false");
+		assert!(anchored.matches_over(holding(&[]), attrs(&[("plan", "pro")])));
+		assert!(!anchored.matches_over(holding(&["beta"]), attrs(&[("plan", "pro")])));
+
+		// `!=` alone is anchored too: absent answers false.
+		Condition::parse("user.plan != 'pro'").expect("absent answers false");
+
+		for text in [
+			"!'a' in topics",
+			"!('a' in topics && 'b' in topics)",
+			"'a' in topics || !'b' in topics",
+			"!('a' in topics) || !('b' in topics)",
+			"!has(user.beta)",
+			"!(user.plan == 'pro')",
+			"user.plan == 'pro' || !('a' in topics)",
+			"!('a' in topics) || user.plan == 'pro'",
+		] {
+			let error = Condition::parse(text).expect_err(text);
+			assert!(
+				error.message.contains("no topics"),
+				"{text}: the refusal says why: {error}"
+			);
+		}
+
+		// Requiring any topic or attribute, even beside negations, anchors it.
+		Condition::parse("!'a' in topics && 'b' in topics").expect("anchored by `b`");
+		Condition::parse("!'a' in topics && !('b' in topics || !'c' in topics)").unwrap();
+		Condition::parse("user.plan == 'pro' || 'a' in topics").expect("anchored by both sides");
+	}
+
+	/// A condition that needs a topic to match is topic-anchored: the
+	/// fanout can walk the topic index alone. One that can match without
+	/// any of its topics walks the registry instead.
+	#[test]
+	fn topic_anchored_conditions_name_their_walk() {
+		for text in [
+			"'a' in topics",
+			"'a' in topics && 'b' in topics",
+			"'a' in topics && user.plan == 'pro'",
+			"user.plan == 'pro' && 'a' in topics",
+			"'a' in topics && !('b' in topics)",
+			"user.plan == 'pro' && 'a' in topics && user.country == 'de'",
+		] {
+			let parsed = Condition::parse(text).expect(text);
+			assert!(parsed.topic_anchored(), "{text}: false without its topics");
+		}
+
+		for text in [
+			"user.plan == 'pro'",
+			"user.plan == 'pro' || 'a' in topics",
+			"'a' in topics || user.plan == 'pro'",
+			"has(user.beta) || 'a' in topics",
+			"user.plan == 'pro' && !('beta' in topics)",
+			"user.plan == 'pro' && ('a' in topics || user.country == 'de')",
+			"!('a' in topics) && user.plan == 'pro'",
+			"user.plan == 'pro' || !('a' in topics) && user.beta == 'yes'",
+		] {
+			let parsed = Condition::parse(text).expect(text);
+			assert!(
+				!parsed.topic_anchored(),
+				"{text}: may match without any of its topics"
+			);
+		}
+	}
+
+	/// The bounds: length, distinct topics, attribute predicates, value
+	/// length, and nesting depth.
 	#[test]
 	fn the_bounds_hold() {
 		let long = format!("'{}' in topics", "a".repeat(MAX_CONDITION_LEN));
@@ -547,6 +1287,22 @@ mod tests {
 		let error = Condition::parse(&six).expect_err("six distinct topics don't");
 		assert!(
 			error.message.contains("at most 5"),
+			"the error names the bound: {error}"
+		);
+
+		// Ten attribute predicates fit when the tree stays inside the
+		// depth bound — a balanced shape, not one long chain, which the
+		// depth bound below refuses on its own; the eleventh doesn't fit
+		// however it's written.
+		let ten = "((user.k1 == 'v' && user.k2 == 'v') && (user.k3 == 'v' && user.k4 == 'v')) && \
+		           ((user.k5 == 'v' && user.k6 == 'v') && (user.k7 == 'v' && user.k8 == 'v')) && \
+		           user.k9 == 'v' && user.k10 == 'v'";
+		Condition::parse(ten).expect("ten attribute predicates fit");
+
+		let eleven = format!("{ten} && user.k11 == 'v'");
+		let error = Condition::parse(&eleven).expect_err("eleven don't");
+		assert!(
+			error.message.contains("at most 10"),
 			"the error names the bound: {error}"
 		);
 
@@ -573,29 +1329,18 @@ mod tests {
 			error.message.contains("unclosed") || error.message.contains("nest"),
 			"{error}"
 		);
-	}
 
-	/// A condition that already holds for a person with no topics is an
-	/// everyone audience in disguise, and is refused wherever the
-	/// negation hides.
-	#[test]
-	fn unanchored_conditions_are_refused() {
-		for text in [
-			"!'a' in topics",
-			"!('a' in topics && 'b' in topics)",
-			"'a' in topics || !'b' in topics",
-			"!('a' in topics) || !('b' in topics)",
-		] {
-			let error = Condition::parse(text).expect_err(text);
-			assert!(
-				error.message.contains("no topics"),
-				"{text}: the refusal says why: {error}"
-			);
-		}
+		// Values are bounded, wherever they sit.
+		let long_value = format!("user.plan == '{}'", "v".repeat(257));
+		let error = Condition::parse(&long_value).expect_err("values are bounded");
+		assert!(error.message.contains("at most 256"), "{error}");
 
-		// Requiring any topic, even beside negations, anchors it.
-		Condition::parse("!'a' in topics && 'b' in topics").expect("anchored by `b`");
-		Condition::parse("!'a' in topics && !('b' in topics || !'c' in topics)").unwrap();
+		let longest_key = format!("user.{} == 'v'", "k".repeat(64));
+		Condition::parse(&longest_key).expect("64-byte keys fit");
+
+		let over_key = format!("user.{} == 'v'", "k".repeat(65));
+		let error = Condition::parse(&over_key).expect_err("65-byte keys don't");
+		assert!(error.message.contains("at most 64"), "{error}");
 	}
 
 	/// A topic name outside the charset is refused where it starts.

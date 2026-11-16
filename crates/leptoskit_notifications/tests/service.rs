@@ -466,7 +466,7 @@ async fn a_retried_send_answers_once_across_a_restart() {
 	// The first process: connect, migrate, serve, send.
 	let db = Db::connect(&url).await.expect("the database opens");
 	let applied = db.migrate(MIGRATIONS).await.expect("migrations apply");
-	assert_eq!(applied.len(), 2, "the migrations apply: {applied:?}");
+	assert_eq!(applied.len(), 3, "the migrations apply: {applied:?}");
 	let first = start(db).await;
 	let (status, body) = send(
 		&first,

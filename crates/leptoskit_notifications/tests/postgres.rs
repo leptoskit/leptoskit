@@ -354,6 +354,108 @@ async fn a_topic_send_reaches_its_audience_once_on_postgres() {
 	);
 }
 
+/// A send to everyone walks the person registry on Postgres too: 1,201
+/// registered persons — set by two attribute batches — reach exactly
+/// 1,201 rows, once each, and a same-key resend in flight together fans
+/// out once between them.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_everyone_send_walks_the_registry_once_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+	let service = service(db).await;
+
+	let audience: Vec<Uuid> = (0..1_201)
+		.map(|n| {
+			Uuid::from_u128(
+				0x0F70_0000_0000_0000_0000_0000_0000_0000 | u128::try_from(n).expect("small"),
+			)
+		})
+		.collect();
+
+	for chunk in audience.chunks(1_000) {
+		let (status, body) = post(
+			&service,
+			"set_person_attributes",
+			json!({ "persons": chunk, "set": { "plan": "member" } }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{body}");
+	}
+
+	let send = |key: &str| {
+		post(
+			&service,
+			"send",
+			json!({
+				"idempotency_key": key,
+				"spec": { "category": "news", "title": "To everyone" },
+				"target": "everyone",
+			}),
+			Some(TOKEN),
+		)
+	};
+	let first = send("pg-everyone");
+	let second = send("pg-everyone");
+	let (a, a_body) = first.await;
+	let (b, b_body) = second.await;
+
+	assert_eq!(a, 200, "{a_body}");
+	assert_eq!(b, 200, "{b_body}");
+	let first: SendResult = serde_json::from_str(&a_body).unwrap();
+	let second: SendResult = serde_json::from_str(&b_body).unwrap();
+	assert_ne!(
+		first.duplicate, second.duplicate,
+		"one of each: {first:?} {second:?}"
+	);
+
+	// The fanout settles with the whole registry, once each.
+	let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+	loop {
+		let (status, body) = post(
+			&service,
+			"send_status",
+			json!({ "idempotency_key": "pg-everyone" }),
+			Some(TOKEN),
+		)
+		.await;
+		assert_eq!(status, 200, "{body}");
+		let progress: leptoskit_notifications::SendProgress = serde_json::from_str(&body).unwrap();
+
+		if progress.state == leptoskit_notifications::SendState::Complete {
+			assert_eq!(progress.targeted, 1_201, "{progress:?}");
+			assert_eq!(progress.delivered, 1_201);
+
+			break;
+		}
+
+		assert!(
+			tokio::time::Instant::now() < deadline,
+			"the fanout never settled: {progress:?}"
+		);
+		tokio::time::sleep(Duration::from_millis(100)).await;
+	}
+
+	let stored = rows(
+		&service,
+		"SELECT count(*), count(DISTINCT person) FROM notifications WHERE send_key = 'pg-everyone'",
+	)
+	.await;
+	assert_eq!(
+		(text(&stored[0][0]), text(&stored[0][1])),
+		("1201".to_owned(), "1201".to_owned()),
+		"one row per registered person, nobody twice: {stored:?}"
+	);
+}
+
 /// The clock never invalidates an accepted send: after its expiry, the
 /// same key with the same intent answers the stored counts, the same key
 /// with a different intent conflicts, and a new born-expired send is
