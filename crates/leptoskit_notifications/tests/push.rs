@@ -2150,10 +2150,16 @@ async fn the_web_push_wire_carries_vapid_and_an_independently_opened_body() {
 		.expect("the scheme");
 	let (token, public) = vapid.split_once(", k=").expect("t= and k= halves");
 	let token = token.strip_prefix("t=").expect("the token half");
-	let (_, claims) = verify_jwt(token, &vapids);
+	let (header, claims) = verify_jwt(token, &vapids);
+	assert_eq!(header["typ"], "JWT");
+	assert_eq!(header["alg"], "ES256", "VAPID is ES256 only");
 	assert_eq!(claims["aud"], format!("https://{WEB_HOST}"));
 	assert_eq!(claims["sub"], "mailto:push@leptoskit.dev");
 	assert!(claims["exp"].as_i64().unwrap() > leptoskit_db::now().timestamp());
+	assert!(
+		claims["exp"].as_i64().unwrap() - leptoskit_db::now().timestamp() <= 24 * 3_600,
+		"RFC 8292 caps a token's life at a day"
+	);
 	assert_eq!(
 		URL_SAFE_NO_PAD.decode(public).unwrap(),
 		vapids,

@@ -217,7 +217,6 @@ wasm_split_cli_support = "0.2.4"
 wasmi = "2"
 wasmi_core = "2"
 wasmparser = "0.261"
-web-push = { version = "0.11", default-features = false }
 web-sys = "0.3"
 webpki-roots = "1"
 wgpu = { version = "30", default-features = false }

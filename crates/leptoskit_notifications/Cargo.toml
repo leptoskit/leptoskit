@@ -82,12 +82,11 @@ leptoskit_service_worker = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 
 # Everything below is the service's. The library without features (the shared
-# types and validation) doesn't compile any of it. The push protocols are the
-# maintained libraries': Web Push encryption and VAPID through `web-push`
-# (Mozilla's `ece` underneath), while both signed tokens — the FCM
-# service-account RSA assertion (RS256) and APNs's ES256 provider token — are
-# built and signed here over ring's constant-time primitives, already in the
-# graph through TLS.
+# types and validation) doesn't compile any of it. All three push protocols are
+# built here on ring's constant-time primitives directly: RFC 8291 encryption
+# and RFC 8292 VAPID for Web Push, the FCM service-account RSA assertion
+# (RS256), and APNs's ES256 provider token — ring already in the graph through
+# TLS.
 hex = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 leptoskit_axum = { workspace = true, optional = true }
@@ -96,7 +95,6 @@ reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls",
 ring = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
-web-push = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures = { workspace = true }
@@ -164,7 +162,6 @@ service = [
 	"dep:ring",
 	"dep:sha2",
 	"dep:tokio",
-	"dep:web-push",
 	"leptoskit_db/sqlite",
 	"leptoskit_rpc/server",
 	"leptoskit_rpc/sqlite",
