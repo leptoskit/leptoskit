@@ -12,6 +12,10 @@
 //!   of exactly `POST /auth/email/send` and `POST /auth/email/verify`, and the
 //!   Auth hooks' registration.
 //!
+//! Private notes are [`crate::notes`], sent through [`crate::activity`]'s
+//! one analytics event; this module owns their two routes and the
+//! ownership gate in front of them.
+//!
 //! The pages are [`crate::pages`]: real leptoskit trees, built here from
 //! what the visitor's pass and session say, and always `no-store`.
 //! Everything a visitor can reach is tested through the real routers, and
@@ -48,7 +52,12 @@ use leptoskit_idp::NewClientSpec;
 use leptoskit_idp::SigningAlgorithm;
 use tower::ServiceExt as _;
 
+use crate::activity::Analytics;
 use crate::inbox::DemoInbox;
+use crate::notes;
+use crate::notes::CreateError;
+use crate::notes::NoteText;
+use crate::notes::Notebook;
 use crate::pages;
 use crate::return_to;
 use crate::visitors;
@@ -75,6 +84,10 @@ const MAX_FORM_BYTES: usize = 4 * 1024;
 /// The most bytes a gated sign-in body may carry; Auth's original bytes
 /// are forwarded inside this bound.
 const MAX_GATE_BODY: usize = 4 * 1024;
+
+/// The most bytes a note's JSON body may carry. A note is at most 280
+/// characters, so even a body of `\uXXXX` escapes fits with room to spare.
+const MAX_NOTE_BODY: usize = 4 * 1024;
 
 /// What every build registers for the admin: its first-party client on
 /// this site's identity provider. The client secret is shown once by the
@@ -176,6 +189,8 @@ struct Shared(Arc<Parts>);
 
 struct Parts {
 	visitors: Visitors,
+	notes: Notebook,
+	analytics: Analytics,
 	inbox: Arc<DemoInbox>,
 	/// The configured site origin, which a mint's Origin must equal.
 	origin: String,
@@ -188,6 +203,8 @@ struct Parts {
 
 /// Builds the site for a fresh generation: its identity provider client
 /// is registered once, and the credentials are returned for persistence.
+/// `analytics` is the generation's one analytics service, already started,
+/// which notes send their event through.
 /// The site database's tables were created by the build before this runs;
 /// a reopened generation calls [`rebuild`] instead.
 ///
@@ -201,6 +218,7 @@ pub async fn build(
 	site_origin: &str,
 	admin_origin: &str,
 	options: &SiteOptions,
+	analytics: Analytics,
 ) -> Result<Site> {
 	let inbox = Arc::new(DemoInbox::new(db.system("demo: inbox")));
 	let visitors = Visitors::new(db.clone(), &keys, &options.day, site_origin, options.caps)?;
@@ -211,6 +229,8 @@ pub async fn build(
 	let router = routes(
 		Shared(Arc::new(Parts {
 			visitors,
+			notes: Notebook::new(db.clone()),
+			analytics,
 			inbox,
 			origin: site_origin.to_owned(),
 			admin_origin: admin_origin.to_owned(),
@@ -229,7 +249,8 @@ pub async fn build(
 }
 
 /// Rebuilds the site's routes for a reopened generation: same keys, same
-/// database, and the identity provider client it already has.
+/// database, the identity provider client it already has, and the
+/// generation's analytics service.
 ///
 /// # Errors
 ///
@@ -240,6 +261,7 @@ pub fn rebuild(
 	site_origin: &str,
 	admin_origin: &str,
 	options: &SiteOptions,
+	analytics: Analytics,
 ) -> Result<Router> {
 	let inbox = Arc::new(DemoInbox::new(db.system("demo: inbox")));
 	let visitors = Visitors::new(db.clone(), &keys, &options.day, site_origin, options.caps)?;
@@ -249,6 +271,8 @@ pub fn rebuild(
 	Ok(routes(
 		Shared(Arc::new(Parts {
 			visitors,
+			notes: Notebook::new(db.clone()),
+			analytics,
 			inbox,
 			origin: site_origin.to_owned(),
 			admin_origin: admin_origin.to_owned(),
@@ -293,6 +317,7 @@ fn routes(shared: Shared, auth: &Auth, idp: &Idp) -> Router {
 		.route("/notes", get(notes))
 		.route("/demo/pass", post(mint_pass))
 		.route("/demo/inbox", get(demo_inbox))
+		.route("/demo/notes", get(list_notes).post(create_note))
 		.route("/demo/assets/{file}", get(font))
 		.with_state(shared.clone())
 		.merge(auth.router())
@@ -926,6 +951,216 @@ async fn notes(
 	};
 
 	html_page(pages::notes(&welcome), None)
+}
+
+/// The person a notes request is for: the pass's person whose real
+/// account the request's session is signed in as.
+struct Owner {
+	person: leptoskit_db::Id<DemoPerson>,
+	persona: Persona,
+	who: SignedIn,
+}
+
+/// Resolves who a notes request is for, from the pass cookie and the
+/// session and nothing the caller sends: the pass must be this
+/// generation's, and the session must be the account one of its people
+/// claimed. Anything else is a `401` that names only what kind of visit
+/// it was, never anyone's data.
+async fn owner(
+	shared: &Parts,
+	headers: &HeaderMap,
+	session: Option<&SignedIn>,
+) -> Result<Owner, Box<Response>> {
+	let visit = visit(shared, headers, session)
+		.await
+		.map_err(|error| Box::new(no_store(internal_error(&error))))?;
+
+	let held = session.and_then(|session| {
+		visit
+			.signed_in()
+			.map(|held| (held.person.id, held.person.persona, session.clone()))
+	});
+	let Some((person, persona, who)) = held else {
+		let state = if visit.earlier_day {
+			"new_day"
+		} else if visit.people.is_empty() {
+			"absent"
+		} else {
+			"signed_out"
+		};
+		let mut body = serde_json::json!({ "error": "no_visit", "pass": state });
+		if visit.earlier_day {
+			body["day"] = serde_json::Value::String(shared.visitors.day().to_owned());
+		}
+		return Err(Box::new(notes_response(
+			StatusCode::UNAUTHORIZED,
+			body,
+			clearing(shared, &visit),
+		)));
+	};
+
+	Ok(Owner {
+		person,
+		persona,
+		who,
+	})
+}
+
+/// A notes answer: JSON, never stored, clearing a stale pass cookie when
+/// the browser carried one.
+fn notes_response(
+	status: StatusCode,
+	body: serde_json::Value,
+	clear: Option<axum::http::HeaderValue>,
+) -> Response {
+	let mut response = no_store((status, axum::Json(body)).into_response());
+
+	if let Some(cookie) = clear {
+		response.headers_mut().append(header::SET_COOKIE, cookie);
+	}
+
+	response
+}
+
+/// A refusal with a stable code and nothing else.
+fn notes_error(status: StatusCode, code: &str) -> Response {
+	notes_response(status, serde_json::json!({ "error": code }), None)
+}
+
+/// A note as the page shows it.
+fn note_json(note: &notes::DemoNote) -> serde_json::Value {
+	serde_json::json!({
+		"id": note.id.to_string(),
+		"text": note.text,
+		"created_at": note.created_at.timestamp_millis(),
+	})
+}
+
+/// `GET /demo/notes`: this signed-in person's notes, newest first, at most
+/// the notebook's cap. The account is the session's; nothing in the
+/// request can name another.
+async fn list_notes(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	session: Option<SignedIn>,
+) -> Response {
+	let shared = shared.0;
+	let owner = match owner(&shared, &headers, session.as_ref()).await {
+		Ok(owner) => owner,
+		Err(refusal) => return *refusal,
+	};
+
+	let notes = match shared.notes.list(&owner.who).await {
+		Ok(notes) => notes,
+		Err(error) => return no_store(internal_error(&error)),
+	};
+
+	notes_response(
+		StatusCode::OK,
+		serde_json::json!({
+			"notes": notes.iter().map(note_json).collect::<Vec<_>>(),
+			"limit": notes::MAX_NOTES,
+			"max_chars": notes::MAX_CHARS,
+			"actor": crate::activity::actor(owner.person),
+		}),
+		None,
+	)
+}
+
+/// What `POST /demo/notes` accepts: the text, and nothing else.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewNote {
+	text: String,
+}
+
+/// Whether the request's one `Content-Type` is `application/json`,
+/// parameters aside.
+fn is_json(headers: &HeaderMap) -> bool {
+	let mut types = headers.get_all(header::CONTENT_TYPE).iter();
+	let Some(first) = types.next() else {
+		return false;
+	};
+
+	types.next().is_none()
+		&& first.to_str().is_ok_and(|value| {
+			value
+				.split(';')
+				.next()
+				.is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"))
+		})
+}
+
+/// `POST /demo/notes`: saves one private note for the signed-in person.
+///
+/// The order is the contract. A cross-origin request is refused first
+/// (`403`); then the visit must be a real one (`401`) before the body is
+/// read at all; then the media type (`415`), the 4 KiB bound (`413`), the
+/// JSON shape with no unknown fields (`400`), and the text's length
+/// (`422`). Only a request that passes every one reaches the notebook,
+/// where a full notebook is `409 notes_full`. A refusal has no note and no
+/// event as a side effect.
+///
+/// The note commits first, in its own transaction. Its event is then sent
+/// once, and the answer says whether the analytics service confirmed it:
+/// the note is saved either way, and nothing sends the event again.
+async fn create_note(
+	State(shared): State<Shared>,
+	headers: HeaderMap,
+	session: Option<SignedIn>,
+	body: axum::body::Body,
+) -> Response {
+	let shared = shared.0;
+
+	if !same_origin(&headers, &shared.origin) {
+		return notes_error(StatusCode::FORBIDDEN, "cross_origin");
+	}
+
+	let owner = match owner(&shared, &headers, session.as_ref()).await {
+		Ok(owner) => owner,
+		Err(refusal) => return *refusal,
+	};
+
+	if !is_json(&headers) {
+		return notes_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type");
+	}
+
+	let Ok(bytes) = axum::body::to_bytes(body, MAX_NOTE_BODY).await else {
+		return notes_error(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+	};
+
+	let Ok(submitted) = serde_json::from_slice::<NewNote>(&bytes) else {
+		return notes_error(StatusCode::BAD_REQUEST, "bad_request");
+	};
+
+	let text = match NoteText::parse(&submitted.text) {
+		Ok(text) => text,
+		Err(error) => return notes_error(StatusCode::UNPROCESSABLE_ENTITY, error.code()),
+	};
+
+	let note = match shared.notes.create(&owner.who, &text).await {
+		Ok(note) => note,
+		Err(CreateError::Full) => return notes_error(StatusCode::CONFLICT, "notes_full"),
+		Err(CreateError::Database(error)) => return no_store(internal_error(&error)),
+	};
+
+	let actor = crate::activity::actor(owner.person);
+	let words = crate::activity::words(text.as_str());
+	let delivery = shared
+		.analytics
+		.note_created(&actor, owner.persona, words)
+		.await;
+
+	notes_response(
+		StatusCode::CREATED,
+		serde_json::json!({
+			"note": note_json(&note),
+			"words": words,
+			"analytics": delivery.as_str(),
+			"actor": actor,
+		}),
+		None,
+	)
 }
 
 /// The admin's two faces, served from this site: `GET /demo/assets/…`.

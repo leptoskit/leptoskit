@@ -563,6 +563,107 @@ button[disabled][data-testid="resend"] {
 	transform: translate(2px, 2px);
 }
 
+/* ---------- The notebook ---------- */
+
+/* Without scripts nothing can be saved, so the form gives way to a note;
+   with them, the note is gone. */
+html:not([data-js]) [data-testid="note-form"] {
+	display: none !important;
+}
+
+html[data-js] [data-testid="note-needs-js"] {
+	display: none !important;
+}
+
+textarea[data-testid="note-text"] {
+	display: block;
+	font: inherit;
+	font-size: 15px;
+	line-height: 1.55;
+	resize: vertical;
+	max-height: 60vh;
+}
+
+textarea[data-testid="note-text"]:disabled {
+	opacity: 0.6;
+}
+
+textarea[data-testid="note-text"][aria-invalid="true"] {
+	border: 2px solid var(--admin-bad) !important;
+}
+
+[data-testid="note-error"]:empty {
+	display: none;
+}
+
+[data-testid="note-chars"][data-over] {
+	color: var(--admin-bad) !important;
+	font-weight: 700;
+}
+
+[data-testid="note-save"]:disabled {
+	opacity: 0.65;
+	cursor: default;
+}
+
+/* What a save came to shows only when the script says so. */
+[data-testid="note-alert"],
+[data-testid="note-saved"],
+[data-testid="note-unconfirmed"] {
+	display: none !important;
+}
+
+[data-testid="note-alert"][data-shown],
+[data-testid="note-saved"][data-shown],
+[data-testid="note-unconfirmed"][data-shown] {
+	display: flex !important;
+}
+
+/* The actor is the exact value to look for in the admin: one click selects it. */
+[data-testid="note-actor"] {
+	user-select: all;
+	overflow-wrap: anywhere;
+}
+
+.note {
+	border: 1px solid var(--admin-line);
+	border-radius: 10px;
+	background: var(--admin-surface);
+	padding: 10px 12px;
+}
+
+.note-text,
+.note-when {
+	margin: 0;
+}
+
+/* A note is the visitor's own text: keep their line breaks, and let long
+   words wrap rather than widen the page. */
+.note-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 15px;
+	line-height: 1.55;
+	color: var(--admin-ink);
+}
+
+.note-when {
+	margin-top: 4px;
+	font: 12px/1.4 var(--admin-font-mono);
+	color: var(--admin-ink-3);
+}
+
+.note[data-new] {
+	animation: note-in 0.4s ease-out;
+}
+
+@keyframes note-in {
+	from {
+		background: var(--admin-mint-wash);
+		transform: translateY(-4px);
+	}
+}
+
 /* ---------- The account menu ---------- */
 
 [data-testid="menu-panel"] {

@@ -1,7 +1,8 @@
 // The public demo's visitor pages, in headless Chrome against the real
 // service: the front door, a real emailed-code sign-in through the demo
 // inbox, Notes' welcome, the real admin hand-off, the new-day dialog, lost
-// mail after a restart, and the page served while a generation builds.
+// mail after a restart, the page served while a generation builds, and the
+// private notebook with its real `note_created` event in the real admin.
 //
 // Nothing here forges a session or a code: every sign-in goes through the
 // pages' own controls and Auth's real routes, and the code is read from the
@@ -1099,6 +1100,692 @@ Deno.test("while a generation builds, the page says so and needs no script", asy
 		await browser.close();
 		await service.close();
 	}
+	if (SHOTS) await writeGallery(gallery);
+});
+
+/** The escaped-markup note: every character here must stay text. */
+const MARKUP_NOTE =
+	`<img src=x onerror="window.__pwned=1"> & "quotes" <b>hi</b>`;
+
+/** The page's own record of what `/demo/notes` answered, newest last. */
+const answers = (browser) => browser.eval(`window.__notes`);
+
+/** Waits until the nth `/demo/notes` POST answer has arrived. */
+async function postAnswer(browser, nth) {
+	await waitFor(
+		browser,
+		`window.__notes.filter((n) => n.method === "POST").length >= ${nth}`,
+		`POST /demo/notes answer #${nth}`,
+	);
+	const posts = (await answers(browser)).filter((n) => n.method === "POST");
+	return { ...posts[nth - 1], json: JSON.parse(posts[nth - 1].body || "null") };
+}
+
+Deno.test("a visitor writes a private note and finds its real event in the admin", async (t) => {
+	// A volume of its own: this journey mints two passes, and the real
+	// hourly limit is per network address.
+	const service = await Service.start();
+	await service.ready();
+	const browser = await Browser.open();
+	await browser.page.send("Page.addScriptToEvaluateOnNewDocument", {
+		// Records every real answer `/demo/notes` gives the page.
+		source: `(() => {
+			const Native = window.fetch.bind(window);
+			window.__notes = [];
+			window.fetch = async (input, init) => {
+				const url = new URL(typeof input === "string" ? input : input.url, location.href);
+				const method = (init && init.method) || "GET";
+				if (url.pathname !== "/demo/notes") return Native(input, init);
+				try {
+					const response = await Native(input, init);
+					const copy = response.clone();
+					copy.text().then((body) => window.__notes.push({
+						method,
+						status: response.status,
+						cacheControl: response.headers.get("cache-control"),
+						body,
+					}));
+					return response;
+				} catch (error) {
+					window.__notes.push({ method, status: 0, cacheControl: null, body: "" });
+					throw error;
+				}
+			};
+		})();`,
+	});
+	await browser.look(LOOKS[0]);
+	const field = 'textarea[data-testid="note-text"]';
+	let actor = null;
+	let liveHref = null;
+
+	try {
+		await t.step(
+			"Ada signs in and finds an empty, labelled notebook",
+			async () => {
+				await choose(browser, service, "ada");
+				await sendAndSignIn(browser, "/notes");
+				await waitFor(
+					browser,
+					`document.querySelector('${field}')`,
+					"the textarea",
+				);
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-empty"]')?.textContent.startsWith("Nothing saved yet")`,
+					"the empty notebook",
+				);
+				assert(
+					(await browser.text("notes-count")) === "0 of 20 notes",
+					"the count is out of twenty",
+				);
+				assert(
+					(await browser.eval(
+								`document.querySelector('${field}').getAttribute("aria-labelledby")`,
+							)) === "note-label" &&
+						(await browser.eval(
+								`document.getElementById("note-label").textContent`,
+							)) ===
+							"Write a note",
+					"the field is labelled",
+				);
+				assert(
+					(await browser.text("note-chars")) === "0 / 280",
+					"the 280-character limit is visible",
+				);
+				assert(
+					!(await browser.visible("note-saved")) &&
+						!(await browser.visible("note-alert")),
+					"no result shows before a save",
+				);
+				assert(
+					(await browser.text("welcome-title")) === "Welcome, Ada.",
+					"the welcome and the account menu stay",
+				);
+				assert(await browser.visible("menu-toggle"), "the account menu stays");
+				liveHref = await browser.eval(
+					`document.querySelector('[data-testid="open-admin-live"]').href`,
+				);
+				assert(
+					liveHref === `${service.adminOrigin}/_leptoskit/admin/analytics/live`,
+					`Live is the configured admin's: ${liveHref}`,
+				);
+				await capture(
+					browser,
+					"16-notebook-empty",
+					"Notebook, nothing saved yet",
+				);
+			},
+		);
+
+		await t.step(
+			"the keyboard saves; markup stays text; the real answer says analytics heard it",
+			async () => {
+				await browser.click("note-text");
+				await browser.type(MARKUP_NOTE);
+				assert(
+					(await browser.text("note-chars")) ===
+						`${[...MARKUP_NOTE].length} / 280`,
+					"the count follows the text",
+				);
+				await browser.chord("Enter", 2);
+				const saved = await postAnswer(browser, 1);
+				assert(saved.status === 201, `created, not ${saved.status}`);
+				assert(
+					saved.cacheControl === "no-store",
+					`never stored: ${saved.cacheControl}`,
+				);
+				assert(
+					saved.json.analytics === "confirmed",
+					`confirmed: ${saved.body}`,
+				);
+				assert(saved.json.words === 6, `six words: ${saved.json.words}`);
+				assert(
+					saved.json.note.text === MARKUP_NOTE,
+					"the text came back whole",
+				);
+				actor = saved.json.actor;
+				assert(
+					/^v-[0-9a-f]{64}$/.test(actor),
+					`a pseudonymous actor: ${actor}`,
+				);
+
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-saved"][data-shown]')`,
+					"the confirmed result",
+				);
+				assert(
+					(await browser.text("note-actor")) === actor,
+					"the page shows the exact actor",
+				);
+				assert(
+					(await browser.text("note-saved")).includes("note_created"),
+					"it names the real event",
+				);
+				assert(
+					(await browser.focused()) === "note-text",
+					"focus stays in the field for the next note",
+				);
+				assert(
+					(await browser.eval(`document.querySelector('${field}').value`)) ===
+						"",
+					"the field is cleared after a save",
+				);
+				const item = await browser.eval(`(() => {
+					const note = document.querySelector('[data-testid="note-list"] [data-testid="note"] p');
+					return { text: note.textContent, children: note.children.length,
+						pwned: window.__pwned === undefined,
+						images: document.querySelectorAll('[data-testid="note-list"] img, [data-testid="note-list"] b').length };
+				})()`);
+				assert(
+					item.text === MARKUP_NOTE && item.children === 0 && item.images === 0,
+					`the note is text, not markup: ${JSON.stringify(item)}`,
+				);
+				assert(item.pwned, "no script from a note ever ran");
+				assert(
+					(await browser.text("notes-count")) === "1 of 20 notes",
+					"the count follows",
+				);
+				const said = await browser.eval(
+					`[...document.querySelectorAll('[role="status"].sr-only')].map((e) => e.textContent).join("|")`,
+				);
+				assert(
+					said.includes(
+						"Note saved. Its note_created event reached analytics.",
+					),
+					`the result is announced once: ${said}`,
+				);
+				await capture(
+					browser,
+					"17-notebook-saved",
+					"Notebook, first note saved and confirmed",
+				);
+			},
+		);
+
+		await t.step(
+			"the second note is saved from the Save button, by keyboard",
+			async () => {
+				await browser.type("second note, plain");
+				await browser.tabTo("note-save");
+				assert(
+					(await browser.eval(
+						`document.querySelector('[data-testid="note-save"]').disabled`,
+					)) === false,
+					"Save is a real, enabled button",
+				);
+				await browser.press("Enter");
+				const saved = await postAnswer(browser, 2);
+				assert(saved.status === 201 && saved.json.words === 3, `${saved.body}`);
+				assert(saved.json.actor === actor, "the same person, the same actor");
+				await waitFor(
+					browser,
+					`document.querySelectorAll('[data-testid="note-list"] [data-testid="note"]').length === 2`,
+					"two notes",
+				);
+				assert(
+					(await browser.eval(
+						`document.querySelector('[data-testid="note-list"] [data-testid="note"] p').textContent`,
+					)) === "second note, plain",
+					"the newest is first",
+				);
+				assert(
+					(await browser.focused()) === "note-save",
+					"focus returns to the button that was used",
+				);
+			},
+		);
+
+		await t.step(
+			"a reload keeps the notes, and nothing sends an event again",
+			async () => {
+				const before = await browser.eval(`window.__notes.length`);
+				await browser.go(`${service.siteOrigin}/notes`);
+				await waitFor(
+					browser,
+					`document.querySelectorAll('[data-testid="note-list"] [data-testid="note"]').length === 2`,
+					"both notes after a reload",
+				);
+				const reread = (await answers(browser)).filter((n) =>
+					n.method === "GET"
+				);
+				assert(
+					reread.length === 1 && reread[0].status === 200,
+					"one read, answered",
+				);
+				assert(
+					JSON.parse(reread[0].body).actor === actor,
+					"the same actor after the reload",
+				);
+				assert(before >= 2, "the earlier saves were answered");
+				assert(
+					(await browser.text("notes-count")) === "2 of 20 notes",
+					"the count survives",
+				);
+				await capture(
+					browser,
+					"18-notebook-two-notes",
+					"Notebook after a reload, two notes",
+				);
+			},
+		);
+
+		await t.step(
+			"an empty or too-long note is a field error, announced, with no request",
+			async () => {
+				const posts = () =>
+					browser.eval(
+						`window.__notes.filter((n) => n.method === "POST").length`,
+					);
+				await browser.click("note-save");
+				assert(
+					(await browser.text("note-error")) === "Write something first.",
+					"empty is named at the field",
+				);
+				assert(
+					(await browser.eval(
+								`document.querySelector('${field}').getAttribute("aria-invalid")`,
+							)) === "true" &&
+						(await browser.eval(
+							`document.querySelector('${field}').getAttribute("aria-describedby")`,
+						)).includes("note-error"),
+					"the error is tied to the field",
+				);
+				assert(
+					(await browser.focused()) === "note-text",
+					"focus goes to the field",
+				);
+				assert((await posts()) === 0, "no request for an empty note");
+
+				await browser.type("x".repeat(285));
+				assert(
+					await browser.eval(
+						`document.querySelector('[data-testid="note-chars"]').hasAttribute("data-over")`,
+					),
+					"the count turns over the limit",
+				);
+				await browser.chord("Enter", 2);
+				assert(
+					(await browser.text("note-error")).includes(
+						"5 characters over the 280 limit",
+					),
+					`it says by how much: ${await browser.text("note-error")}`,
+				);
+				assert((await posts()) === 0, "no request for a too-long note");
+				await capture(
+					browser,
+					"19-notebook-too-long",
+					"Notebook, a note over the limit",
+				);
+				await browser.eval(`(() => {
+				const area = document.querySelector('${field}');
+				area.value = "";
+				area.dispatchEvent(new Event("input", { bubbles: true }));
+			})()`);
+				assert(
+					(await browser.text("note-error")) === "",
+					"editing clears the error",
+				);
+			},
+		);
+
+		await t.step(
+			"the real admin's Live shows the matching note_created event",
+			async () => {
+				await browser.go(liveHref);
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="continue"]')`,
+					"the admin's sign-in card",
+				);
+				await browser.click("continue");
+				await waitFor(
+					browser,
+					`location.origin === ${
+						JSON.stringify(service.adminOrigin)
+					} && !location.pathname.endsWith("/sign-in")`,
+					"the admin",
+				);
+				await browser.go(liveHref);
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="live-events"]')`,
+					"the Live page",
+				);
+				// Live is "a few seconds after they happen": reload until the
+				// admin's own list has caught up, and say how many tries it took.
+				let rows = [];
+				let tries = 0;
+				for (; tries < 8 && rows.length < 2; tries++) {
+					if (tries > 0) {
+						await sleep(1500);
+						await browser.go(liveHref);
+						await waitFor(
+							browser,
+							`document.querySelector('[data-testid="live-events"]')`,
+							"the Live page again",
+						);
+					}
+					rows = await browser.eval(
+						`[...document.querySelectorAll('[data-testid="live-event"]')]
+				.map((row) => ({
+					name: row.getAttribute("aria-description"),
+					label: row.querySelector('[data-testid="how-toggle"]')?.getAttribute("aria-label") ?? "",
+				}))
+				.filter((row) => row.label.includes(${JSON.stringify(actor)}))`,
+					);
+				}
+				console.log(`Live listed the visitor's events after ${tries} load(s)`);
+				assert(
+					rows.length === 2 && rows.every((row) => row.name === "note_created"),
+					`Live shows exactly the visitor's two real events: ${
+						JSON.stringify(rows)
+					}`,
+				);
+				await browser.eval(`(() => {
+				const filter = document.querySelector('[data-testid="live-filter"]');
+				filter.value = "note_created";
+				filter.dispatchEvent(new Event("input", { bubbles: true }));
+			})()`);
+				assert(
+					await browser.eval(
+						`[...document.querySelectorAll('[data-testid="live-event"]:not([data-filtered])')].every((row) => row.getAttribute("aria-description") === "note_created")`,
+					),
+					"the name filter the page offers narrows to the event",
+				);
+				await capture(
+					browser,
+					"20-admin-live-note",
+					"The real admin's Live, with the visitor's event",
+					{
+						looks: [LOOKS[0], LOOKS[3]],
+					},
+				);
+			},
+		);
+
+		await t.step(
+			"a failed save keeps the text, says so, and recovers",
+			async () => {
+				await browser.go(`${service.siteOrigin}/notes`);
+				await waitFor(
+					browser,
+					`document.querySelectorAll('[data-testid="note-list"] [data-testid="note"]').length === 2`,
+					"the notebook",
+				);
+				await browser.click("note-text");
+				await browser.type("written while the server is down");
+				await service.stop();
+				await browser.click("note-save");
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					"the failure",
+				);
+				assert(
+					(await browser.text("note-alert")).includes("Couldn't reach Notes"),
+					"the failure is named",
+				);
+				assert(
+					(await browser.eval(
+						`document.querySelector('${field}').value`,
+					)) === "written while the server is down",
+					"the typed text is kept",
+				);
+				assert(
+					(await browser.eval(
+						`document.querySelector('[data-testid="note-save"]').disabled`,
+					)) === false,
+					"the button is usable again",
+				);
+				assert(
+					(await browser.eval(
+						`document.querySelector('[data-testid="note-alert"]').getAttribute("role")`,
+					)) === "alert",
+					"the failure is announced by its own alert",
+				);
+				assert(
+					(await browser.text("notes-count")) === "2 of 20 notes",
+					"the notes already on screen stay",
+				);
+				await capture(
+					browser,
+					"21-notebook-failed",
+					"Notebook, the server could not be reached",
+					{
+						looks: [LOOKS[0], LOOKS[2]],
+					},
+				);
+
+				await service.spawn();
+				await service.ready();
+				await browser.click("note-save");
+				// The refused attempt was this page's first POST; the retry is its second.
+				const retried = await postAnswer(browser, 2);
+				assert(
+					retried.status === 201 &&
+						retried.json.note.text === "written while the server is down",
+					`the retried note is saved after the restart: ${retried.body}`,
+				);
+				await waitFor(
+					browser,
+					`!document.querySelector('[data-testid="note-alert"][data-shown]') && document.querySelector('[data-testid="note-saved"][data-shown]')`,
+					"the failure gives way to the result",
+				);
+			},
+		);
+
+		await t.step(
+			"a full notebook says so, and a save into it is refused cleanly",
+			async () => {
+				// Fill all but one place through the real route, as a second tab would.
+				await browser.eval(`(async () => {
+				for (let index = 0; index < 16; index++) {
+					const response = await fetch("/demo/notes", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ text: "filler " + index }),
+						credentials: "same-origin",
+					});
+					if (response.status !== 201) throw new Error("filler " + response.status);
+				}
+			})()`);
+				await browser.go(`${service.siteOrigin}/notes`);
+				await waitFor(
+					browser,
+					`document.querySelectorAll('[data-testid="note-list"] [data-testid="note"]').length === 19`,
+					"nineteen notes",
+				);
+				assert(
+					(await browser.text("notes-count")) === "19 of 20 notes",
+					"19 of 20",
+				);
+				await browser.click("note-text");
+				await browser.type("the twentieth, in this tab");
+				// Another tab takes the last place first.
+				await browser.eval(`fetch("/demo/notes", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ text: "taken elsewhere" }),
+				credentials: "same-origin",
+			}).then((r) => r.status)`);
+				await browser.click("note-save");
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					"the full notebook's alert",
+				);
+				assert(
+					(await browser.text("note-alert")).includes("Your notebook is full"),
+					"the 409 is named",
+				);
+				await waitFor(
+					browser,
+					`document.querySelector('${field}').disabled`,
+					"the field closes",
+				);
+				assert(
+					(await browser.eval(`document.querySelector('${field}').value`)) ===
+						"the twentieth, in this tab",
+					"what was typed is not thrown away",
+				);
+				assert(
+					(await browser.text("notes-count")) === "20 of 20 notes",
+					"20 of 20",
+				);
+				assert(
+					(await browser.text("note-error")).includes("notebook is full"),
+					"the full state is explained at the field",
+				);
+				await capture(
+					browser,
+					"22-notebook-full",
+					"Notebook, twenty of twenty",
+				);
+			},
+		);
+
+		await t.step(
+			"another visitor cannot see the note, and has an actor of their own",
+			async () => {
+				await browser.clearCookies();
+				await choose(browser, service, "grace");
+				await sendAndSignIn(browser, "/notes");
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-empty"]')?.textContent.startsWith("Nothing saved yet")`,
+					"Grace's own, empty notebook",
+				);
+				assert(
+					(await browser.text("notes-count")) === "0 of 20 notes",
+					"Grace starts empty",
+				);
+				const graces = (await answers(browser)).filter((n) =>
+					n.method === "GET"
+				).pop();
+				assert(
+					graces.status === 200 &&
+						!graces.body.includes("second note") &&
+						!graces.body.includes("filler") &&
+						!graces.body.includes(actor),
+					`Grace's list holds nothing of Ada's: ${graces.body}`,
+				);
+
+				await browser.click("note-text");
+				await browser.type("grace writes too");
+				await browser.chord("Enter", 2);
+				const saved = await postAnswer(browser, 1);
+				assert(saved.json.analytics === "confirmed", `${saved.body}`);
+				assert(
+					saved.json.actor !== actor,
+					"a different person has a different actor",
+				);
+				assert(
+					(await browser.text("note-saved")).includes(
+						"Grace has no admin role",
+					),
+					"Grace is told Live will turn her away",
+				);
+				await capture(browser, "23-notebook-grace", "Grace's notebook, saved", {
+					looks: [LOOKS[0], LOOKS[2], LOOKS[3]],
+				});
+			},
+		);
+
+		await t.step(
+			"reduced motion shows a new note without animating it",
+			async () => {
+				await browser.look({ ...LOOKS[0], reducedMotion: true });
+				await browser.click("note-text");
+				await browser.type("calm note");
+				await browser.chord("Enter", 2);
+				await waitFor(
+					browser,
+					`document.querySelectorAll('[data-testid="note-list"] [data-testid="note"]').length === 2`,
+					"the calm note",
+				);
+				const motion = await browser.eval(
+					`getComputedStyle(document.querySelector('[data-testid="note-list"] [data-testid="note"][data-new]')).animationName`,
+				);
+				assert(
+					motion === "none",
+					`reduced motion stops the entrance: ${motion}`,
+				);
+				await browser.look(LOOKS[0]);
+			},
+		);
+
+		await t.step(
+			"a signed-out save is named, keeps the text, and offers the way back",
+			async () => {
+				await browser.eval(
+					`fetch("/auth/sign-out", { method: "POST", credentials: "same-origin" }).then((r) => r.status)`,
+				);
+				await browser.click("note-text");
+				await browser.type("typed after signing out");
+				await browser.click("note-save");
+				await waitFor(
+					browser,
+					`document.querySelector('[data-testid="note-alert"][data-shown]')`,
+					"the signed-out alert",
+				);
+				assert(
+					(await browser.text("note-alert")).includes("You're signed out"),
+					"a lost session is named",
+				);
+				assert(
+					(await browser.eval(`document.querySelector('${field}').value`)) ===
+						"typed after signing out",
+					"the text is kept",
+				);
+				assert(
+					(await browser.eval(
+						`document.querySelector('[data-testid="note-sign-in"]').getAttribute("href")`,
+					)) ===
+						"/sign-in?return_to=%2Fnotes",
+					"the way back returns here",
+				);
+				const refused = (await answers(browser)).filter((n) =>
+					n.method === "POST"
+				).pop();
+				assert(
+					refused.status === 401,
+					`the real answer is a 401: ${refused.status}`,
+				);
+				assert(
+					!refused.body.includes("typed after signing out") &&
+						!refused.body.includes("grace writes too") &&
+						!refused.body.includes("calm note"),
+					"a refusal carries no note",
+				);
+				await capture(
+					browser,
+					"24-notebook-signed-out",
+					"Notebook, the sign-in ended",
+					{
+						looks: [LOOKS[0], LOOKS[2]],
+					},
+				);
+			},
+		);
+
+		const foreign = browser.requests.filter((url) =>
+			!url.startsWith(service.siteOrigin) &&
+			!url.startsWith(service.adminOrigin) &&
+			!url.startsWith("data:")
+		);
+		assert(foreign.length === 0, `no request leaves the demo: ${foreign}`);
+		assert(
+			browser.errors.every((error) =>
+				/Failed to load resource|net::ERR|Failed to fetch/.test(error)
+			),
+			`no script error, only the stopped server's refusals: ${browser.errors}`,
+		);
+	} finally {
+		await browser.close();
+		await service.close();
+	}
+
 	if (SHOTS) await writeGallery(gallery);
 });
 

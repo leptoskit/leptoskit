@@ -3,7 +3,7 @@
 //! This is evidence for the fingerprint contract, not the protection
 //! itself: the runtime refuses a published marker whose fingerprint
 //! doesn't match before anything opens (see `generation::open_or_build`).
-//! The snapshot pins what format 2's databases actually look like, so a
+//! The snapshot pins what format 3's databases actually look like, so a
 //! schema change shows up in review as a diff that demands a
 //! `GENERATION_FORMAT` bump alongside it.
 
@@ -24,7 +24,7 @@ use sha2::Digest as _;
 /// format with a sha256 of each database's `sqlite_master` SQL plus the
 /// admin's schema snapshot file.
 #[tokio::test]
-async fn format_two_is_pinned() -> Result<()> {
+async fn format_three_is_pinned() -> Result<()> {
 	let root = tempfile::tempdir()?.keep();
 	#[cfg(unix)]
 	{

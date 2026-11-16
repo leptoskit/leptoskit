@@ -314,11 +314,24 @@ mod tests {
 		}
 
 		for who in [person("ada", true), person("grace", true)] {
+			let ada = who.is_ada();
 			let html = notes(&Welcome {
 				context: context(),
 				person: who,
 			});
 			assert!(html.contains("Welcome,"));
+			assert!(html.contains("Your notebook"));
+			assert!(html.contains("data-testid=\"note-text\""));
+			assert!(html.contains("data-testid=\"note-save\""));
+			assert!(
+				html.contains("http://admin.example/_leptoskit/admin/analytics/live"),
+				"the way to Live is drawn from configuration"
+			);
+			assert_eq!(
+				html.contains("Grace has no admin role, so Live"),
+				!ada,
+				"only Grace is told Live will turn her away"
+			);
 		}
 
 		assert!(

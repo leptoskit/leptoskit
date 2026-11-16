@@ -27,6 +27,7 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header;
+use demo_service::activity::Analytics;
 use demo_service::generation;
 use demo_service::site;
 use futures::future::join_all;
@@ -54,6 +55,8 @@ const SECURE_ADMIN_ORIGIN: &str = "https://admin.example";
 const SECURE_SITE_HOST: &str = "notes.example";
 /// A fixed test key: the proofs care about the contract, not secrecy.
 const TEST_SITE_KEY: [u8; 32] = [9; 32];
+/// The analytics token the harness's real analytics service runs on.
+const TEST_ANALYTICS_TOKEN: &str = "sign-in-proof-analytics-token";
 
 /// A browser: one cookie jar per origin it visits.
 #[derive(Default)]
@@ -351,6 +354,10 @@ struct SiteHarness {
 	db: Db,
 	keys: Keys,
 	day: String,
+	/// The real analytics service the site hands its notes' events to. The
+	/// sign-in proofs never send one; the site just needs the service it
+	/// is built against.
+	analytics: Analytics,
 	/// The directory must outlive the databases; it is never read again.
 	#[allow(dead_code, reason = "the directory must outlive the databases")]
 	dir: PathBuf,
@@ -369,8 +376,17 @@ impl SiteHarness {
 		leptoskit_db::testing::create_tables(&db)
 			.await
 			.expect("the site's tables create");
+		let router = admin_demo::analytics::start(&dir, SITE_ORIGIN, TEST_ANALYTICS_TOKEN)
+			.await
+			.expect("the analytics service starts");
 
-		Self { db, keys, day, dir }
+		Self {
+			db,
+			keys,
+			day,
+			analytics: Analytics::new(router, TEST_ANALYTICS_TOKEN),
+			dir,
+		}
 	}
 
 	/// Builds the site's routes.
@@ -381,6 +397,7 @@ impl SiteHarness {
 			SITE_ORIGIN,
 			admin_origin,
 			options,
+			self.analytics.clone(),
 		)
 		.await
 		.expect("the site builds")
@@ -395,8 +412,15 @@ impl SiteHarness {
 		))
 		.await
 		.expect("the second handle opens");
-		site::rebuild(&db, self.keys.clone(), SITE_ORIGIN, ADMIN_ORIGIN, options)
-			.expect("the site reopens")
+		site::rebuild(
+			&db,
+			self.keys.clone(),
+			SITE_ORIGIN,
+			ADMIN_ORIGIN,
+			options,
+			self.analytics.clone(),
+		)
+		.expect("the site reopens")
 	}
 
 	/// A system handle for proofs that read what visitors must not.
@@ -491,6 +515,7 @@ async fn a_mint_sets_host_cookies_and_refuses_foreign_origins() -> Result<()> {
 		SECURE_SITE_ORIGIN,
 		SECURE_ADMIN_ORIGIN,
 		&secure,
+		harness.analytics.clone(),
 	)
 	.await
 	.expect("the secure site builds");
@@ -631,6 +656,7 @@ async fn unusable_pass_cookies_are_cleared_and_named() -> Result<()> {
 		SECURE_SITE_ORIGIN,
 		SECURE_ADMIN_ORIGIN,
 		&secure,
+		harness.analytics.clone(),
 	)
 	.await
 	.expect("the secure site builds");
@@ -1803,7 +1829,11 @@ async fn notes_welcomes_the_signed_in_account_and_sends_others_to_sign_in() -> R
 		html.contains("https://admin.notes.example/_leptoskit/admin/"),
 		"the admin's address comes from configuration"
 	);
-	assert!(html.contains("Writing notes comes in the next slice"));
+	assert!(html.contains("Your notebook"), "the notebook is drawn");
+	assert!(
+		!html.contains("next slice"),
+		"the page no longer says notes are missing"
+	);
 	assert!(
 		html.contains("Resets in"),
 		"every Notes page discloses the reset"

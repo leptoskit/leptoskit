@@ -1242,11 +1242,13 @@ fn collection_keeps_recent_published_generations_and_never_deletes_what_it_canno
 	let clock = root.join("clock");
 	set_clock(&clock, noon(0));
 
-	// Yesterday in a foreign format: published, recent, unheld.
-	let foreign_name = format!("{}.f1", day_before(1));
+	// Yesterday in the previous format, as a same-day release that bumped
+	// the format leaves it: published, recent, unheld.
+	let previous = GENERATION_FORMAT - 1;
+	let foreign_name = format!("{}.f{previous}", day_before(1));
 	let foreign = plant_generation(&root, &foreign_name, false);
 	let foreign_marker = serde_json::to_vec_pretty(&demo_service::marker::Published {
-		format: 1,
+		format: previous,
 		fingerprint: "0".repeat(64),
 		day: day_before(1),
 		seed_events: 900,
@@ -1255,14 +1257,19 @@ fn collection_keeps_recent_published_generations_and_never_deletes_what_it_canno
 
 	// A recent generation of this format whose marker is truncated:
 	// unreadable means kept, counted, and reported — never deleted.
-	let corrupt_name = format!("{}.f2", day_before(1));
+	let corrupt_name = format!("{}.f{GENERATION_FORMAT}", day_before(1));
 	let corrupt = plant_generation(&root, &corrupt_name, false);
-	let truncated_marker = b"{\"format\": 2, \"fingerprint\": \"aa".to_vec();
+	let truncated_marker =
+		format!("{{\"format\": {GENERATION_FORMAT}, \"fingerprint\": \"aa").into_bytes();
 	std::fs::write(corrupt.join("published"), &truncated_marker)?;
 
 	// An expired published generation of this format and an unpublished
 	// leftover: both genuinely collectable.
-	plant_generation(&root, &format!("{}.f2", day_before(2)), true);
+	plant_generation(
+		&root,
+		&format!("{}.f{GENERATION_FORMAT}", day_before(2)),
+		true,
+	);
 	plant_generation(
 		&root,
 		&format!("{}.building-leftover", day_before(2)),

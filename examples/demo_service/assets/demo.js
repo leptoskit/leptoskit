@@ -1,6 +1,6 @@
 // The public demo's behaviour: the band's countdown and disclosure, the
 // front door's choice, real email-code sign-in with the demo inbox, the
-// account menu, and the new-day dialog.
+// account menu, the private notebook, and the new-day dialog.
 //
 // Everything the page shows from the network is put in with `textContent`,
 // never as markup. The server hands this script one JSON blob
@@ -1111,7 +1111,332 @@
 		window.setTimeout(() => element.remove(), 8000);
 	};
 
-	const notes = () => {
+	// ---------- The notebook ----------
+	//
+	// The person's saved notes come from `GET /demo/notes`, and the form
+	// saves through `POST /demo/notes`. Note text goes in with `textContent`
+	// only. The web renderer has no multi-line field, so the markup's text
+	// input is swapped for a `<textarea>` carrying every attribute the markup
+	// gave it. Each function takes the `book`: the notebook's elements and
+	// its small state.
+
+	/** Characters as the server counts them: Unicode scalar values, trimmed. */
+	const scalarLength = (text) => Array.from(text.trim()).length;
+
+	const plural = (number, word) =>
+		`${number} ${word}${number === 1 ? "" : "s"}`;
+
+	const swapForTextarea = (input) => {
+		const area = document.createElement("textarea");
+		for (const { name, value } of Array.from(input.attributes)) {
+			if (name !== "type" && name !== "value") area.setAttribute(name, value);
+		}
+		area.setAttribute("name", "note");
+		area.setAttribute("rows", "4");
+		area.setAttribute("autocomplete", "off");
+		input.replaceWith(area);
+		return area;
+	};
+
+	/** The notebook's elements and state, or `null` when the page has none. */
+	const openNotebook = (dialog) => {
+		const input = tid("note-text");
+		if (!S.notebook || !input || !tid("note-save")) return null;
+		return {
+			config: S.notebook,
+			dialog,
+			area: swapForTextarea(input),
+			save: tid("note-save"),
+			count: tid("notes-count"),
+			chars: tid("note-chars"),
+			error: tid("note-error"),
+			alertBox: tid("note-alert"),
+			savedBox: tid("note-saved"),
+			unconfirmedBox: tid("note-unconfirmed"),
+			list: tid("note-list"),
+			empty: tid("note-empty"),
+			actor: tid("note-actor"),
+			notes: [],
+			saving: false,
+			announcedFull: false,
+		};
+	};
+
+	const updateChars = (book) => {
+		const used = scalarLength(book.area.value);
+		book.chars.textContent = `${used} / ${book.config.maxChars}`;
+		book.chars.toggleAttribute("data-over", used > book.config.maxChars);
+	};
+
+	/** A problem with the field, tied to it, or its absence. */
+	const setFieldError = (book, text, invalid = true) => {
+		book.error.textContent = text;
+		if (text && invalid) book.area.setAttribute("aria-invalid", "true");
+		else book.area.removeAttribute("aria-invalid");
+		book.area.setAttribute(
+			"aria-describedby",
+			text ? "note-help note-error" : "note-help",
+		);
+	};
+
+	const clearResults = (book) => {
+		for (const box of [book.alertBox, book.savedBox, book.unconfirmedBox]) {
+			box.removeAttribute("data-shown");
+		}
+		tid("note-sign-in")?.remove();
+	};
+
+	const showResult = (book, box, title, body) => {
+		clearResults(book);
+		tid("status-title", box).textContent = title;
+		tid("status-body", box).textContent = body;
+		box.setAttribute("data-shown", "");
+	};
+
+	const noteItem = (note) => {
+		const item = make("div", "note");
+		item.setAttribute("role", "listitem");
+		item.dataset.testid = "note";
+		item.append(
+			make("p", "note-text", note.text),
+			make("p", "note-when", `${utcTime(note.created_at)} UTC`),
+		);
+		return item;
+	};
+
+	const renderNotes = (book) => {
+		const { config, notes } = book;
+		book.list.replaceChildren(...notes.map(noteItem));
+		book.empty.hidden = notes.length > 0;
+		book.empty.textContent =
+			"Nothing saved yet. Your first note will be here, and only you can read it.";
+		book.count.textContent = `${notes.length} of ${config.maxNotes} notes`;
+		const full = notes.length >= config.maxNotes;
+		book.area.disabled = full;
+		book.save.disabled = full || book.saving;
+		if (full && !book.announcedFull) {
+			book.announcedFull = true;
+			setFieldError(
+				book,
+				`Your notebook is full: ${config.maxNotes} notes is the limit for a demo day.`,
+				false,
+			);
+		}
+	};
+
+	/** What a refused visit means here: the day ended, or the sign-in did. */
+	const showSignedOut = (book, body) => {
+		if (body?.pass === "new_day") {
+			showResult(
+				book,
+				book.alertBox,
+				"The demo reset",
+				"Your notebook belonged to yesterday's demo. What you typed is still in the box.",
+			);
+			book.dialog.show();
+			return;
+		}
+		showResult(
+			book,
+			book.alertBox,
+			"You're signed out",
+			"Sign in again to keep writing. What you typed is still in the box.",
+		);
+		const link = make("a", "msg-link", "Sign in again");
+		link.href = "/sign-in?return_to=%2Fnotes";
+		link.dataset.testid = "note-sign-in";
+		tid("status-body", book.alertBox).parentElement.append(link);
+	};
+
+	const requestNotes = async () => {
+		const response = await fetch("/demo/notes", {
+			headers: { Accept: "application/json" },
+			credentials: "same-origin",
+			cache: "no-store",
+		});
+		return { response, body: await jsonOf(response) };
+	};
+
+	const loadNotes = async (book) => {
+		try {
+			const { response, body } = await requestNotes();
+			if (response.status === 401) {
+				showSignedOut(book, body);
+				book.empty.textContent = "Sign in again to see your notes.";
+			} else if (response.ok && Array.isArray(body?.notes)) {
+				book.notes = body.notes;
+				renderNotes(book);
+			} else {
+				throw new Error("unusable answer");
+			}
+		} catch {
+			// A failed refresh of a list already on screen stays quiet.
+			if (book.notes.length > 0) return;
+			book.empty.hidden = false;
+			book.empty.textContent =
+				"Couldn't load your notes. Reload the page to try again.";
+		}
+	};
+
+	/** What is wrong with the draft before it is sent, or `null`. */
+	const draftProblem = (book) => {
+		const used = scalarLength(book.area.value);
+		const { maxChars } = book.config;
+		if (used === 0) return "Write something first.";
+		if (used <= maxChars) return null;
+		return `That's ${
+			plural(used - maxChars, "character")
+		} over the ${maxChars} limit.`;
+	};
+
+	const postNote = async (text) => {
+		try {
+			const response = await fetch("/demo/notes", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json",
+				},
+				body: JSON.stringify({ text }),
+				credentials: "same-origin",
+			});
+			return { response, body: await jsonOf(response) };
+		} catch {
+			return { response: null, body: null };
+		}
+	};
+
+	const setSaving = (book, saving) => {
+		book.saving = saving;
+		book.save.disabled = saving;
+		book.save.textContent = saving ? "Saving…" : "Save note";
+		if (saving) book.save.setAttribute("aria-busy", "true");
+		else book.save.removeAttribute("aria-busy");
+		book.area.readOnly = saving;
+	};
+
+	/** A saved note: in the list, with what became of its event. */
+	const reportSaved = (book, body) => {
+		const { maxNotes } = book.config;
+		book.notes = [body.note, ...book.notes].slice(0, maxNotes);
+		book.area.value = "";
+		updateChars(book);
+		renderNotes(book);
+		book.list.firstElementChild?.setAttribute("data-new", "");
+
+		if (body.analytics === "confirmed") {
+			book.actor.textContent = body.actor;
+			showResult(
+				book,
+				book.savedBox,
+				"Saved. Analytics heard about it.",
+				`Your note is private to this account. Its note_created event (${
+					plural(body.words, "word")
+				}, none of your text) reached analytics.`,
+			);
+			announcer("Note saved. Its note_created event reached analytics.");
+			return;
+		}
+		showResult(
+			book,
+			book.unconfirmedBox,
+			"Saved. Analytics didn't confirm.",
+			"Your note is saved in your notebook. We couldn't confirm that its note_created event reached analytics, so it may not show in the admin. Nothing will resend it.",
+		);
+		announcer("Note saved. Analytics delivery could not be confirmed.");
+	};
+
+	/** Everything that is not a saved note: each keeps what was typed. */
+	const reportRefusal = async (book, response, body) => {
+		const { maxNotes } = book.config;
+		if (response === null) {
+			showResult(
+				book,
+				book.alertBox,
+				"Couldn't reach Notes",
+				"Your note may not have saved. Check Saved notes before trying again; what you typed is still in the box.",
+			);
+			await loadNotes(book);
+		} else if (response.status === 401) {
+			showSignedOut(book, body);
+		} else if (response.status === 409 && body?.error === "notes_full") {
+			showResult(
+				book,
+				book.alertBox,
+				"Your notebook is full",
+				`${maxNotes} notes is the limit for a demo day, and everything resets at 00:00 UTC. What you typed is still in the box.`,
+			);
+			await loadNotes(book);
+		} else if (response.status === 422) {
+			const problem = body?.error === "empty_note"
+				? "Write something first."
+				: `That's over the ${book.config.maxChars} character limit.`;
+			setFieldError(book, problem);
+			announcer(problem);
+		} else {
+			showResult(
+				book,
+				book.alertBox,
+				"That didn't save",
+				"Something went wrong on our side. What you typed is still in the box, so you can try again.",
+			);
+		}
+	};
+
+	const submitNote = async (book) => {
+		if (book.saving) return;
+		const problem = draftProblem(book);
+		if (problem) {
+			setFieldError(book, problem);
+			announcer(problem);
+			book.area.focus();
+			return;
+		}
+
+		setFieldError(book, "");
+		clearResults(book);
+		const held = document.activeElement;
+		setSaving(book, true);
+		const { response, body } = await postNote(book.area.value);
+		setSaving(book, false);
+
+		if (response?.status === 201 && body?.note) reportSaved(book, body);
+		else await reportRefusal(book, response, body);
+
+		if (book.notes.length < book.config.maxNotes) book.save.disabled = false;
+		// Disabling the button dropped focus; give it back to where it was.
+		if (
+			held && document.contains(held) && !held.disabled &&
+			document.activeElement === document.body
+		) {
+			held.focus({ preventScroll: true });
+		}
+	};
+
+	const notebook = (dialog) => {
+		const book = openNotebook(dialog);
+		if (!book) return;
+
+		book.save.addEventListener("click", () => submitNote(book));
+		book.area.addEventListener("keydown", (event) => {
+			if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+				event.preventDefault();
+				submitNote(book);
+			}
+		});
+		book.area.addEventListener("input", () => {
+			updateChars(book);
+			if (book.area.hasAttribute("aria-invalid")) setFieldError(book, "");
+		});
+		tid("note-label")?.addEventListener("click", () => book.area.focus());
+
+		updateChars(book);
+		loadNotes(book);
+	};
+
+	const notes = (dialog) => {
+		notebook(dialog);
+
 		const toggle = tid("menu-toggle");
 		const panel = tid("menu-panel");
 		if (!toggle || !panel) return;
@@ -1184,5 +1509,5 @@
 
 	if (S.page === "front") frontDoor();
 	else if (S.page === "sign-in") signIn(dialog);
-	else if (S.page === "notes") notes();
+	else if (S.page === "notes") notes(dialog);
 })();

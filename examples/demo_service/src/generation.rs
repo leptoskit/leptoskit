@@ -51,6 +51,7 @@ use leptoskit_deploy_console::control::Store;
 use tokio::sync::Semaphore;
 use tower::ServiceExt as _;
 
+use crate::activity::Analytics;
 use crate::clock;
 use crate::config::Config;
 use crate::locks;
@@ -233,6 +234,7 @@ async fn open(
 		&config.site_origin,
 		&config.admin_origin,
 		&site_options(config, marker.day.as_str()),
+		Analytics::new(analytics.clone(), &secrets.analytics_token),
 	)
 	.context("starting the site")?;
 
@@ -290,12 +292,22 @@ async fn build(
 	leptoskit_db::testing::create_tables(&site_db)
 		.await
 		.context("creating the site's tables")?;
+
+	// The analytics service starts once, before the site, so the site's
+	// private clone of its router and the loopback's are the same service:
+	// a visitor's event lands in the database the admin reads. It is not
+	// started again below.
+	let analytics = site::start_analytics(dir, &config.site_origin, &secrets.analytics_token)
+		.await
+		.context("starting the analytics service")?;
+
 	let built = site::build(
 		&site_db,
 		site_keys(&secrets),
 		&config.site_origin,
 		&config.admin_origin,
 		&site_options(config, day),
+		Analytics::new(analytics.clone(), &secrets.analytics_token),
 	)
 	.await
 	.context("building the site")?;
@@ -304,12 +316,9 @@ async fn build(
 		.create(dir)
 		.context("persisting the generation's credentials")?;
 
-	// The analytics service, then the month through its own ingestion,
-	// then the observable barrier: a read-back of what is durably
-	// stored, recorded in the marker before publication.
-	let analytics = site::start_analytics(dir, &config.site_origin, &secrets.analytics_token)
-		.await
-		.context("starting the analytics service")?;
+	// Then the month through the service's own ingestion, then the
+	// observable barrier: a read-back of what is durably stored, recorded
+	// in the marker before publication.
 
 	// A deterministic initialization failure, requested by a debug test
 	// hook, at the point where this process image already runs

@@ -304,6 +304,23 @@ export class Browser {
 		await this.page.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 	}
 
+	/** Presses a key with modifiers held (Alt 1, Ctrl 2, Meta 4, Shift 8). */
+	async chord(key, modifiers) {
+		const named = { Enter: { code: "Enter", vk: 13, text: "\r" } }[key];
+		const base = {
+			key,
+			code: named.code,
+			windowsVirtualKeyCode: named.vk,
+			nativeVirtualKeyCode: named.vk,
+			modifiers,
+		};
+		await this.page.send("Input.dispatchKeyEvent", {
+			type: "rawKeyDown",
+			...base,
+		});
+		await this.page.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+	}
+
 	async shiftTab() {
 		const base = {
 			key: "Tab",

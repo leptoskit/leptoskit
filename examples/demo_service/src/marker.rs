@@ -41,9 +41,12 @@ use sha2::Sha256;
 ///
 /// Format 2 adds the visitors' tables (`demo_passes`, `demo_people`) to
 /// the site database and the `roles` scope to the admin's registered
-/// client. A format-1 generation from the same day is recent rollback
-/// state — recognized and kept, but never reopened by this binary.
-pub const GENERATION_FORMAT: u32 = 2;
+/// client. Format 3 adds the private notes table (`demo_notes`), whose rows
+/// belong to the accounts that wrote them. A format-2 generation from the
+/// same day is recent rollback state — recognized and kept, but never
+/// reopened by this binary, so a release that adds notes starts the day's
+/// notebooks empty rather than migrating a live generation.
+pub const GENERATION_FORMAT: u32 = 3;
 
 /// `published` inside the generation directory.
 const FILE: &str = "published";
