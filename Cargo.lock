@@ -1922,9 +1922,9 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-bigint"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c035cb64cba03dad2fb921f3e218785e8cf9a41790da5eb3a1400f62fa2be11"
+checksum = "914c195c4d7fbc5ed7f88d14cbf85914d5c664967658d43404b263913a477e82"
 dependencies = [
  "cpubits",
  "ctutils",
@@ -5188,6 +5188,7 @@ dependencies = [
  "leptoskit_l10n",
  "leptoskit_macros",
  "leptoskit_native",
+ "leptoskit_notifications",
  "leptoskit_plugin",
  "leptoskit_query",
  "leptoskit_rive",
@@ -6129,6 +6130,45 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "leptoskit_notifications"
+version = "0.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "hex",
+ "http",
+ "http-body-util",
+ "httpdate",
+ "hyper",
+ "hyper-util",
+ "js-sys",
+ "leptoskit_axum",
+ "leptoskit_bridge",
+ "leptoskit_db",
+ "leptoskit_plugin_notifications",
+ "leptoskit_query",
+ "leptoskit_rpc",
+ "leptoskit_service_worker",
+ "reqwest 0.12.28",
+ "ring",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "url",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -7375,6 +7415,7 @@ name = "leptoskit_service_worker"
 version = "0.3.0"
 dependencies = [
  "futures",
+ "gloo-timers",
  "js-sys",
  "serde",
  "serde_json",
@@ -7491,6 +7532,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_plugin_filesystem",
  "leptoskit_plugin_http",
+ "leptoskit_plugin_notifications",
  "leptoskit_rive",
  "leptoskit_yoga",
  "log",
@@ -7498,6 +7540,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "thiserror 2.0.21",
+ "uuid",
  "wasmi",
  "wasmi_core",
 ]
@@ -8153,6 +8196,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2de2bc5b451bfedaef92c90b8939a8fff5770bdcc1fafd6239d086aab8fa6b29"
 dependencies = [
  "nom 8.0.0",
+]
+
+[[package]]
+name = "notifications_guest_probe"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "futures",
+ "leptoskit_bridge",
+ "leptoskit_notifications",
+ "leptoskit_query",
+ "leptoskit_rpc",
 ]
 
 [[package]]
@@ -9983,6 +10038,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",

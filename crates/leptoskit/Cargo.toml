@@ -37,6 +37,7 @@ leptoskit_idp = { workspace = true, optional = true }
 leptoskit_l10n = { workspace = true, optional = true }
 leptoskit_macros = { workspace = true }
 leptoskit_native = { workspace = true }
+leptoskit_notifications = { workspace = true, optional = true }
 leptoskit_plugin = { workspace = true }
 leptoskit_query = { workspace = true, optional = true }
 leptoskit_rive = { workspace = true, optional = true }
@@ -233,6 +234,10 @@ macos = ["appkit"]
 # leptos's `nightly` feature, for its macro and renderer. Requires a nightly
 # compiler; a no-op on stable.
 nightly = ["leptos?/nightly"]
+## Durable notifications: `leptoskit::notifications`, the send format the
+## app's server uses and the inbox operations its screens call. The service
+## itself is `leptoskit_notifications`'s `service` feature.
+notifications = ["dep:leptoskit_notifications"]
 query = ["dep:leptoskit_query", "leptoskit_devtools?/query"]
 rive = ["dep:leptoskit_rive", "leptoskit_rive/native", "leptoskit_native/rive", "leptoskit_wasm?/rive"]
 uikit = ["dep:leptoskit_uikit"]

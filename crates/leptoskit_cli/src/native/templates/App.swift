@@ -3,6 +3,9 @@ import LeptosKitBridge
 #if canImport(LeptosKitAppShortcuts)
 import LeptosKitAppShortcuts
 #endif
+#if canImport(LeptosKitNotifications)
+import LeptosKitNotifications
+#endif
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -25,6 +28,24 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         AppShortcutsPlugin.noteLaunchIfPresent(id: shortcutItem.type)
         #endif
         completionHandler(true)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteDeviceToken(deviceToken)
+        #endif
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: any Error
+    ) {
+        #if canImport(LeptosKitNotifications)
+        NotificationsPlugin.noteRegistrationFailure(error)
+        #endif
     }
 }
 

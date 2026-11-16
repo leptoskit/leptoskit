@@ -58,6 +58,7 @@
 - [Background work](guide/24-background-work.md)
 - [Services](guide/32-services.md)
   - [Product analytics](guide/40-product-analytics.md)
+  - [Notifications](guide/41-notifications.md)
 - [Secret management](guide/secrets.md)
 - [Sign-in](guide/23-sign-in.md)
   - [Google](guide/auth/providers/google.md)

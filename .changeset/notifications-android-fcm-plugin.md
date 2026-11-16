@@ -1,0 +1,5 @@
+---
+"leptoskit_plugin_notifications": minor
+---
+
+Android FCM registration on the plugin side. `REMOTE_TOKEN` and `REMOTE_REGISTER` work on Android hosts, not iOS alone: a process-wide broker — the same shape as the Swift one — keeps the latest answer, fed by the registration task's own reply and by the messaging service's `onNewToken`, and the Android `REMOTE_REGISTER` asks `FirebaseMessaging` for its token reflectively (the generated app carries `firebase-messaging` only when push is opted into), coalesces OS requests at one, answers `Unconfirmed` on silence, never succeeds after close, and keeps the token out of every log and description. The stable failure codes gain `firebase-not-configured` — the Firebase classes are absent, or the app has no `google-services.json` values — beside `os-refused` and `token-shape`; tokens validate as 1–4096 bytes of printable ASCII and the wire gains state 4 for them. The Android instrumentation suite covers the bounded wait, unconfirmed silence, token-shape refusal, close-while-waiting, and the one-ask convergence with an injected registration boundary.

@@ -1399,7 +1399,12 @@ fn platform_files(
 		),
 		(
 			"android/build.gradle.kts".into(),
-			"plugins { id(\"com.android.application\") version \"9.0.1\" apply false }\n".into(),
+			"plugins {\n    id(\"com.android.application\") version \"9.0.1\" apply false\n    // \
+			 Applied by the app module only when leptoskit's generated\n    // configuration \
+			 lists it, which happens when [native.android] push\n    // opts the app into push \
+			 enrollment.\n    id(\"com.google.gms.google-services\") version \"4.6.0\" apply \
+			 false\n}\n"
+				.into(),
 		),
 		(
 			"android/gradle.properties".into(),

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::*;
 use crate::native::registry::Plugin;
 
@@ -242,5 +244,267 @@ fn menu_bar_mode_replaces_only_the_stock_host() {
 	assert_eq!(
 		std::fs::read_to_string(generated).unwrap(),
 		"// custom resident lifecycle"
+	);
+}
+
+/// `[native.macos] aps-environment` is the push opt-in: it alone writes
+/// `.leptoskit/macos/App.entitlements` with Apple's macOS key and exact
+/// string, and dropping it removes the file again while every other
+/// generated file stays byte-identical, so apps that never opted in
+/// generate — and sign — exactly as before.
+#[test]
+fn the_push_entitlement_comes_and_goes_with_the_setting() {
+	let temporary = tempfile::tempdir().unwrap();
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	let registry = clipboard_registry(&root);
+	let generated = |root: &Path| {
+		[
+			"Package.swift",
+			"Sources/App.swift",
+			"Sources/GeneratedPlugins.swift",
+		]
+		.into_iter()
+		.map(|file| {
+			(
+				file,
+				std::fs::read_to_string(root.join(".leptoskit/macos").join(file)).unwrap(),
+			)
+		})
+		.collect::<Vec<_>>()
+	};
+
+	generate(&root, &LeptoskitConfig::default(), &registry).unwrap();
+	let without = generated(&root);
+	assert!(!root.join(".leptoskit/macos/App.entitlements").exists());
+
+	// A stale entitlements file from an opted-in generation is removed, not
+	// left to leak push into a local-only app.
+	write(&root.join(".leptoskit/macos/App.entitlements"), "<stale/>").unwrap();
+	let mut config = LeptoskitConfig::default();
+	config.native.macos.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+	generate(&root, &config, &registry).unwrap();
+	let with = generated(&root);
+	assert_eq!(with, without, "the opt-in changes nothing else");
+
+	let entitlements =
+		plist::Value::from_file(root.join(".leptoskit/macos/App.entitlements")).unwrap();
+	let entitlements = entitlements.as_dictionary().unwrap();
+	assert_eq!(
+		entitlements.get("com.apple.developer.aps-environment"),
+		Some(&plist::Value::String("development".into()))
+	);
+	assert_eq!(entitlements.len(), 1, "nothing else is granted");
+	assert!(entitlements_path(&root).is_some());
+
+	config.native.macos.aps_environment = Some(leptoskit_config::ApsEnvironment::Production);
+	generate(&root, &config, &registry).unwrap();
+	let entitlements =
+		plist::Value::from_file(root.join(".leptoskit/macos/App.entitlements")).unwrap();
+	assert_eq!(
+		entitlements
+			.as_dictionary()
+			.unwrap()
+			.get("com.apple.developer.aps-environment"),
+		Some(&plist::Value::String("production".into()))
+	);
+
+	config.native.macos.aps_environment = None;
+	generate(&root, &config, &registry).unwrap();
+	assert!(!root.join(".leptoskit/macos/App.entitlements").exists());
+	assert_eq!(generated(&root), without);
+	assert!(
+		entitlements_path(&root).is_none(),
+		"build signs nothing extra"
+	);
+}
+
+// The generated macOS app's Swift compiles against the real modules: with
+// the notifications plugin selected its package is built for this Mac and
+// the stock host's conditional import resolves; without it the same host
+// compiles with the plugin simply absent. Non-macOS machines skip: the
+// generated project is still exercised textually by the tests everywhere
+// else.
+#[test]
+fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
+	let Some(sdk) = macos_sdk() else {
+		eprintln!("skipped: no macOS SDK on this machine");
+		return;
+	};
+
+	let temporary = tempfile::tempdir().unwrap();
+	let root = std::fs::canonicalize(temporary.path()).unwrap();
+	write(
+		&root.join("hosts/macos/App.swift"),
+		include_str!("../templates/MacApp.swift"),
+	)
+	.unwrap();
+
+	// The real notifications plugin, with its real package directory.
+	let mut plugin: Plugin = serde_json::from_value(serde_json::json!({
+		"name": "notifications",
+		"apple-module": "LeptosKitNotifications",
+		"apple-type": "NotificationsPlugin",
+	}))
+	.unwrap();
+	plugin.directory =
+		Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_plugin_notifications");
+	plugin.package_name = "leptoskit_plugin_notifications".into();
+	let registry = Registry {
+		package: "app".into(),
+		plugins: vec![plugin],
+		support: Vec::new(),
+		bridge: Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi"),
+		target: root.join("target"),
+		host_features: Vec::new(),
+		devtools_feature: None,
+		missing: Vec::new(),
+		scene3d: false,
+	};
+
+	generate(&root, &LeptoskitConfig::default(), &registry).unwrap();
+	let packages = root.join(".leptoskit/macos/packages");
+	let bridge = registry.bridge.clone();
+	let app = root.join(".leptoskit/macos/Sources");
+
+	// Build the plugin package (and, through it, the bridge) for this Mac:
+	// the modules the conditional import names.
+	let plugin_build = root.join("plugin-build");
+	swift(&[
+		"build".into(),
+		package_flag(&packages.join("leptoskit_plugin_notifications")),
+		"--product=LeptosKitNotifications".into(),
+		format!("--build-path={}", plugin_build.display()),
+	]);
+	let plugin_modules = modules(&plugin_build, "LeptosKitNotifications");
+	assert!(
+		plugin_modules
+			.join("LeptosKitNotifications.swiftmodule")
+			.exists(),
+		"the plugin module was built for macOS"
+	);
+
+	typecheck(&sdk, &plugin_modules, &bridge, &sources(&app));
+
+	// Without the plugin: the same host file, the module absent from the
+	// search path, and a registrant that registers nothing.
+	let without_plugin = Registry {
+		plugins: Vec::new(),
+		..registry
+	};
+	generate(&root, &LeptoskitConfig::default(), &without_plugin).unwrap();
+	let bridge_build = root.join("bridge-build");
+	swift(&[
+		"build".into(),
+		package_flag(&packages.join("leptoskit_bridge_ffi")),
+		"--product=LeptosKitBridge".into(),
+		format!("--build-path={}", bridge_build.display()),
+	]);
+	let bridge_modules = modules(&bridge_build, "LeptosKitBridge");
+	assert!(
+		!bridge_modules
+			.join("LeptosKitNotifications.swiftmodule")
+			.exists()
+	);
+	typecheck(&sdk, &bridge_modules, &bridge, &sources(&app));
+}
+
+/// The macOS SDK's path, when this machine has one.
+fn macos_sdk() -> Option<PathBuf> {
+	if !cfg!(target_os = "macos") {
+		return None;
+	}
+	let output = Command::new("xcrun")
+		.args(["--sdk", "macosx", "--show-sdk-path"])
+		.output()
+		.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	let path = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+	if path.is_empty() {
+		return None;
+	}
+	Some(PathBuf::from(path))
+}
+
+fn package_flag(path: &Path) -> String {
+	format!("--package-path={}", path.display())
+}
+
+fn swift(arguments: &[String]) {
+	let output = Command::new("swift")
+		.args(arguments)
+		.output()
+		.expect("swift runs");
+	assert!(
+		output.status.success(),
+		"swift {} failed:\n{}",
+		arguments.join(" "),
+		String::from_utf8_lossy(&output.stderr)
+	);
+}
+
+/// The directory a `swift build` exposes its built modules in — the products
+/// directory `SwiftPM` itself passes as `-I` to consumers, falling back to
+/// wherever the named module landed on an older layout.
+fn modules(build: &Path, module: &str) -> PathBuf {
+	let named = format!("{module}.swiftmodule");
+	let mut fallback = None;
+	for entry in walkdir::WalkDir::new(build)
+		.into_iter()
+		.filter_map(Result::ok)
+		.filter(|entry| entry.file_name().to_string_lossy() == named)
+	{
+		let parent = entry.path().parent().unwrap().to_path_buf();
+		if parent
+			.ancestors()
+			.any(|ancestor| ancestor.file_name().is_some_and(|name| name == "Products"))
+		{
+			return parent;
+		}
+		fallback.get_or_insert(parent);
+	}
+
+	fallback.unwrap_or_else(|| panic!("no {named} under {}", build.display()))
+}
+
+/// The generated executable target's own sources, exactly as `generate`
+/// compiles them.
+fn sources(directory: &Path) -> Vec<PathBuf> {
+	let mut names: Vec<_> = std::iter::once("App.swift")
+		.chain(std::iter::once("GeneratedPlugins.swift"))
+		.chain(
+			crate::native::project::platform_sources::MACOS
+				.iter()
+				.map(|path| Path::new(path).file_name().unwrap().to_str().unwrap()),
+		)
+		.map(str::to_owned)
+		.collect();
+	names.sort();
+	names.iter().map(|name| directory.join(name)).collect()
+}
+
+fn typecheck(sdk: &Path, import: &Path, bridge: &Path, sources: &[PathBuf]) {
+	let mut command = Command::new("swiftc");
+	command
+		.arg("-typecheck")
+		.arg("-sdk")
+		.arg(sdk)
+		.arg("-I")
+		.arg(import)
+		// The bridge's C header module, which the generated registrant
+		// imports beside the Swift one.
+		.arg("-Xcc")
+		.arg(format!(
+			"-fmodule-map-file={}",
+			bridge.join("include/module.modulemap").display()
+		));
+	command.args(sources.iter().map(|path| path as &Path));
+
+	let output = command.output().expect("swiftc runs");
+	assert!(
+		output.status.success(),
+		"typecheck failed:\n{}",
+		String::from_utf8_lossy(&output.stderr)
 	);
 }

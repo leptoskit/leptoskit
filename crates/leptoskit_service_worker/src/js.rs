@@ -2,7 +2,10 @@
 //! as JSON when they are data; object handles stay as JavaScript values.
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use imp::*;
+// `pub`, not `pub(crate)`: the crate root re-exports `Listener` from here,
+// and a `pub(crate)` glob would make that re-export illegal on this target,
+// where the module's items come from here rather than the fallback below.
+pub use imp::*;
 
 use crate::Error;
 
@@ -68,7 +71,7 @@ mod imp {
 		let global = js_sys::global();
 		let navigator = Reflect::get(&global, &JsValue::from_str("navigator"))
 			.ok()
-			.filter(|value| value.is_object())
+			.filter(JsValue::is_object)
 			.ok_or_else(|| Error::Unavailable("navigator.serviceWorker".into()))?;
 		Reflect::get(&navigator, &JsValue::from_str("serviceWorker"))
 			.ok()
@@ -144,27 +147,6 @@ mod imp {
 		Ok(Listener {
 			target: target.clone(),
 			remove_name: "removeEventListener",
-			function,
-			handler: Some(closure),
-		})
-	}
-
-	/// Listens with an extension-style `addListener` / `removeListener`.
-	pub(crate) fn listen_callback(
-		event: &JsValue,
-		handler: impl FnMut(JsValue) + 'static,
-	) -> Result<Listener, Error> {
-		let closure = Closure::<dyn FnMut(JsValue)>::new(handler);
-		let function: Function = closure.as_ref().clone().unchecked_into();
-		let add = Reflect::get(event, &JsValue::from_str("addListener"))
-			.ok()
-			.and_then(|value| value.dyn_into::<Function>().ok())
-			.ok_or_else(|| Error::Unavailable("addListener".into()))?;
-		add.call1(event, &function)
-			.map_err(|error| Error::Browser(message(&error)))?;
-		Ok(Listener {
-			target: event.clone(),
-			remove_name: "removeListener",
 			function,
 			handler: Some(closure),
 		})

@@ -118,7 +118,7 @@ pub(super) fn generate(
 		&frameworks,
 		&resources,
 	)?;
-	let entitlements = entitlements(registry, &dir)?;
+	let entitlements = entitlements(registry, &dir, config)?;
 	ios_configurations(
 		&mut objects,
 		root,
@@ -501,18 +501,25 @@ fn ios_configurations(
 
 	Ok(())
 }
-/// The entitlements selected plugins need, each `true`, in
-/// `.leptoskit/ios/App.entitlements`; `None`, and no stale file, when no
-/// selected plugin needs one.
-fn entitlements(registry: &Registry, dir: &Path) -> Result<Option<std::path::PathBuf>> {
+/// The entitlements the iOS app is signed with, in
+/// `.leptoskit/ios/App.entitlements`: each selected plugin's keys as `true`,
+/// and, when `[native.ios] aps-environment` opts the app into push, the APNs
+/// environment as its exact string. `None`, and no stale file, when nothing
+/// needs one, so apps that never opted in generate without it.
+fn entitlements(
+	registry: &Registry,
+	dir: &Path,
+	config: &leptoskit_config::LeptoskitConfig,
+) -> Result<Option<std::path::PathBuf>> {
 	let path = dir.join("App.entitlements");
 	let keys: std::collections::BTreeSet<_> = registry
 		.plugins
 		.iter()
 		.flat_map(|plugin| &plugin.apple_entitlements)
 		.collect();
+	let aps = config.native.ios.aps_environment;
 
-	if keys.is_empty() {
+	if keys.is_empty() && aps.is_none() {
 		if std::fs::symlink_metadata(&path).is_ok() {
 			std::fs::remove_file(&path)?;
 		}
@@ -520,10 +527,19 @@ fn entitlements(registry: &Registry, dir: &Path) -> Result<Option<std::path::Pat
 		return Ok(None);
 	}
 
-	let dictionary: plist::Dictionary = keys
-		.into_iter()
-		.map(|key| (key.clone(), plist::Value::Boolean(true)))
-		.collect();
+	let mut dictionary = plist::Dictionary::new();
+
+	for key in keys {
+		dictionary.insert(key.clone(), plist::Value::Boolean(true));
+	}
+
+	if let Some(environment) = aps {
+		dictionary.insert(
+			"aps-environment".into(),
+			plist::Value::String(environment.as_str().into()),
+		);
+	}
+
 	let mut xml = Vec::new();
 	plist::Value::Dictionary(dictionary).to_writer_xml(&mut xml)?;
 	write(&path, &String::from_utf8(xml)?)?;
@@ -1014,6 +1030,7 @@ pub(in crate::native) fn apple_plugins(
 #[cfg(test)]
 mod tests {
 	use std::path::Path;
+	use std::path::PathBuf;
 
 	use leptoskit_config::LeptoskitConfig;
 
@@ -1277,5 +1294,238 @@ mod tests {
 		super::generate(root, &pods_config(), &registry).unwrap();
 		assert!(!root.join(".leptoskit/ios/Podfile").exists());
 		assert!(!root.join(".leptoskit/ios/Host.xcworkspace").exists());
+	}
+
+	// The generated app target's Swift compiles against the real modules:
+	// with the notifications plugin selected its package is built for the
+	// iOS simulator and `App.swift`'s conditional import resolves; without
+	// it the same file compiles with the plugin simply absent. Anything but
+	// macOS, or a machine without Xcode, skips: the generated project is
+	// still exercised textually by the snapshot tests everywhere else.
+	#[test]
+	fn generated_app_swift_typechecks_with_and_without_the_notifications_module() {
+		let Some(sdk) = simulator_sdk() else {
+			eprintln!("skipped: no iOS simulator SDK on this machine");
+			return;
+		};
+
+		let base = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+		let temporary = tempfile::Builder::new()
+			.prefix("leptoskit-ios-typecheck-")
+			.tempdir_in(base)
+			.unwrap();
+		let root = temporary.path();
+		write_host_files(root);
+
+		// The real notifications plugin, with its real package directory.
+		let mut plugin: super::super::super::registry::Plugin =
+			serde_json::from_value(serde_json::json!({
+				"name": "notifications",
+				"apple-module": "LeptosKitNotifications",
+				"apple-type": "NotificationsPlugin",
+			}))
+			.unwrap();
+		plugin.directory =
+			Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_plugin_notifications");
+		plugin.package_name = "leptoskit_plugin_notifications".into();
+		let registry = Registry {
+			package: "app".into(),
+			plugins: vec![plugin],
+			support: Vec::new(),
+			bridge: Path::new(env!("CARGO_MANIFEST_DIR")).join("../leptoskit_bridge_ffi"),
+			target: root.join("target"),
+			host_features: Vec::new(),
+			devtools_feature: None,
+			missing: Vec::new(),
+			scene3d: false,
+		};
+
+		super::generate(root, &pods_config(), &registry).unwrap();
+		let packages = root.join(".leptoskit/ios/packages");
+		let bridge = registry.bridge.clone();
+		let app = root.join("hosts/ios/App.swift");
+		let sources = app_sources(&bridge);
+
+		// Build the plugin package (and, through it, the bridge) for the
+		// simulator: the module the conditional import names.
+		let plugin_build = root.join("plugin-build");
+		swift(&[
+			"build".into(),
+			package_flag(&packages.join("leptoskit_plugin_notifications")),
+			"--product=LeptosKitNotifications".into(),
+			triple(),
+			format!("--sdk={}", sdk.display()),
+			format!("--build-path={}", plugin_build.display()),
+		]);
+		let plugin_modules = modules(&plugin_build, "LeptosKitNotifications");
+		assert!(
+			plugin_modules
+				.join("LeptosKitNotifications.swiftmodule")
+				.exists(),
+			"the plugin module was built for the simulator"
+		);
+
+		typecheck(
+			&sdk,
+			&plugin_modules,
+			&bridge,
+			&sources,
+			&[
+				app.clone(),
+				root.join(".leptoskit/ios/GeneratedPlugins.swift"),
+			],
+		);
+
+		// Without the plugin: the same `App.swift`, the module absent from
+		// the search path, and a registrant that registers nothing.
+		let without_plugin = Registry {
+			plugins: Vec::new(),
+			..registry
+		};
+		super::generate(root, &pods_config(), &without_plugin).unwrap();
+		let bridge_build = root.join("bridge-build");
+		swift(&[
+			"build".into(),
+			package_flag(&packages.join("leptoskit_bridge_ffi")),
+			// The package's macOS controller target does not exist for iOS;
+			// the product's closure is the part the app target consumes.
+			"--product=LeptosKitBridge".into(),
+			triple(),
+			format!("--sdk={}", sdk.display()),
+			format!("--build-path={}", bridge_build.display()),
+		]);
+		let bridge_modules = modules(&bridge_build, "LeptosKitBridge");
+		assert!(
+			!bridge_modules
+				.join("LeptosKitNotifications.swiftmodule")
+				.exists()
+		);
+		typecheck(
+			&sdk,
+			&bridge_modules,
+			&bridge,
+			&sources,
+			&[app, root.join(".leptoskit/ios/GeneratedPlugins.swift")],
+		);
+	}
+
+	/// The iOS simulator SDK's path, when this machine has one.
+	fn simulator_sdk() -> Option<PathBuf> {
+		if !cfg!(target_os = "macos") {
+			return None;
+		}
+		let output = std::process::Command::new("xcrun")
+			.args(["--sdk", "iphonesimulator", "--show-sdk-path"])
+			.output()
+			.ok()?;
+		if !output.status.success() {
+			return None;
+		}
+		let path = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+		if path.is_empty() {
+			return None;
+		}
+		Some(PathBuf::from(path))
+	}
+
+	fn package_flag(path: &Path) -> String {
+		format!("--package-path={}", path.display())
+	}
+
+	fn triple() -> String {
+		"--triple=arm64-apple-ios17.0-simulator".into()
+	}
+
+	fn swift(arguments: &[String]) {
+		let output = std::process::Command::new("swift")
+			.args(arguments)
+			.output()
+			.expect("swift runs");
+		assert!(
+			output.status.success(),
+			"swift {} failed:\n{}",
+			arguments.join(" "),
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+
+	/// The directory a `swift build` for the simulator exposes its built
+	/// modules in — the products directory `SwiftPM` itself passes as `-I`
+	/// to consumers, falling back to wherever the named module landed on an
+	/// older layout.
+	fn modules(build: &Path, module: &str) -> PathBuf {
+		let named = format!("{module}.swiftmodule");
+		let mut fallback = None;
+		for entry in walkdir::WalkDir::new(build)
+			.into_iter()
+			.filter_map(Result::ok)
+			.filter(|entry| entry.file_name().to_string_lossy() == named)
+		{
+			let parent = entry.path().parent().unwrap().to_path_buf();
+			if parent
+				.ancestors()
+				.any(|ancestor| ancestor.file_name().is_some_and(|name| name == "Products"))
+			{
+				return parent;
+			}
+			fallback.get_or_insert(parent);
+		}
+
+		fallback.unwrap_or_else(|| panic!("no {named} under {}", build.display()))
+	}
+
+	/// The app target's own sources beside `App.swift`: the bridge's mobile
+	/// files, exactly as `ios_sources` compiles them. `App.swift` and the
+	/// generated registrant are passed by the caller.
+	fn app_sources(bridge: &Path) -> Vec<PathBuf> {
+		super::super::platform_sources::IOS
+			.iter()
+			.map(|path| bridge.join(path))
+			.collect()
+	}
+
+	fn typecheck(sdk: &Path, import: &Path, bridge: &Path, sources: &[PathBuf], app: &[PathBuf]) {
+		let mut command = std::process::Command::new("swiftc");
+		command
+			.arg("-typecheck")
+			.arg("-target")
+			.arg("arm64-apple-ios17.0-simulator")
+			.arg("-sdk")
+			.arg(sdk)
+			.arg("-I")
+			.arg(import)
+			// The bridge's C header module, which the generated registrant
+			// imports beside the Swift one.
+			.arg("-Xcc")
+			.arg(format!(
+				"-fmodule-map-file={}",
+				bridge.join("include/module.modulemap").display()
+			));
+		command.args(sources.iter().chain(app).map(|path| path as &Path));
+
+		let output = command.output().expect("swiftc runs");
+		assert!(
+			output.status.success(),
+			"typecheck failed:\n{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+
+	/// The host files generation reads: the app-owned Info.plist and the
+	/// generated app delegate template.
+	fn write_host_files(root: &Path) {
+		std::fs::create_dir_all(root.join("hosts/ios")).unwrap();
+		std::fs::write(
+			root.join("hosts/ios/Info.plist"),
+			include_str!("../templates/Info.plist")
+				.replace("__PACKAGE__", "com.example.notes")
+				.replace("__NAME__", "notes"),
+		)
+		.unwrap();
+		std::fs::write(
+			root.join("hosts/ios/App.swift"),
+			include_str!("../templates/App.swift"),
+		)
+		.unwrap();
 	}
 }

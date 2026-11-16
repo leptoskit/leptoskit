@@ -1,0 +1,182 @@
+[package]
+name = "leptoskit_notifications"
+version = "0.3.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "readme.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Durable notifications for LeptosKit apps: a service with its own database, the sends its app's server makes, and the inbox its clients read."
+
+# The service itself. `lk` builds it with the `service` feature.
+[[bin]]
+name = "leptoskit_notifications"
+path = "src/main.rs"
+required-features = ["service"]
+
+# The service's tests need its bodies.
+[[test]]
+name = "service"
+required-features = ["service"]
+
+# The live socket tests need the bodies and their server.
+[[test]]
+name = "live"
+required-features = ["service"]
+
+# The push tests exercise the transports over an injected boundary; the
+# boundary tests below run real local HTTP servers.
+[[test]]
+name = "push"
+required-features = ["service"]
+
+[[test]]
+name = "boundary"
+required-features = ["service"]
+
+# The Postgres races need the Postgres service; they start a private
+# Postgres from local binaries and skip without them.
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
+
+# The browser tests run in Chrome through the wasm runner; they exercise
+# the receiver script and the enrollment entry points' browser-side
+# behavior.
+[[test]]
+name = "browser"
+required-features = ["browser"]
+
+[dependencies]
+# The client side: the operations' types, which the app compiles to call the
+# service, and the shared validation it runs before it calls. No server
+# dependencies; `tests/dependencies.rs` keeps it that way. `chrono` rides
+# with `leptoskit_db`'s own, so the shared schedule checks don't add one.
+base64 = { workspace = true }
+chrono = { workspace = true }
+httpdate = { version = "1", optional = true }
+leptoskit_db = { workspace = true }
+# The plugin contract the native enrollment rides on: the snapshot types the
+# iOS host's answers cross the bridge in. Optional, like every platform
+# plugin: only the `native` feature turns it on — its guest side alone,
+# without the browser implementation's imports or the Linux backend — so
+# the shared types and the service build without it everywhere the guest
+# enrollment does not run.
+leptoskit_plugin_notifications = { workspace = true, optional = true, default-features = false }
+leptoskit_rpc = { workspace = true, features = ["client"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true, optional = true }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+# The browser client's bindings. They live here, optional and workspace-
+# inherited, and only the `browser` feature turns them on; the code that
+# uses them is behind `cfg(target_arch = "wasm32")`, so the service and
+# the shared types never compile them.
+js-sys = { workspace = true, optional = true }
+leptoskit_service_worker = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+
+# Everything below is the service's. The library without features (the shared
+# types and validation) doesn't compile any of it. All three push protocols are
+# built here on ring's constant-time primitives directly: RFC 8291 encryption
+# and RFC 8292 VAPID for Web Push, the FCM service-account RSA assertion
+# (RS256), and APNs's ES256 provider token — ring already in the graph through
+# TLS.
+hex = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+leptoskit_axum = { workspace = true, optional = true }
+leptoskit_query = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["json", "rustls-tls", "http2"] }
+ring = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+futures = { workspace = true }
+hex = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "http2", "server"] }
+hyper-util = { workspace = true, features = ["http1", "http2", "server", "server-auto", "tokio"] }
+leptoskit_axum = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+ring = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The native client's guest transport: the plugin guest clients the `native`
+# module reads the APNs broker through, and the bridge error type its
+# failures carry. Wasm-only, so the service and the shared types never
+# compile them.
+leptoskit_bridge = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "Node"] }
+
+[features]
+default = []
+# The browser client: enrollment from the app's web build through the
+# browser's own Push API, and the receiver service-worker script. It adds
+# no server dependency; `tests/dependencies.rs` checks the tree the app's
+# client build compiles. `leptoskit_rpc/web` is the transport: without it
+# a standalone dependency on this crate with only `browser` turned on
+# would compile enrollment that cannot reach the service, so the feature
+# carries its own same-origin fetch backend.
+browser = [
+	"dep:js-sys",
+	"dep:leptoskit_service_worker",
+	"dep:thiserror",
+	"dep:wasm-bindgen",
+	"leptoskit_rpc/web",
+]
+# The native client for iOS: enrollment from the app's Wasm guest through
+# the notifications plugin's APNs token broker, with `leptoskit_rpc/guest`
+# as the transport. It turns the plugin contract on — the guest side only,
+# which compiles no platform backend — and like `browser` it adds no server
+# dependency; the same test checks its tree.
+native = [
+	"dep:leptoskit_bridge",
+	"dep:leptoskit_plugin_notifications",
+	"dep:thiserror",
+	"leptoskit_plugin_notifications/guest",
+	"leptoskit_rpc/guest",
+]
+# Building the service: the operations' bodies, their registrations, the
+# SQLite driver, live queries, and the push engine. Only `lk` turns this
+# on, when it builds the service; the app never does.
+service = [
+	"dep:httpdate",
+	"dep:hex",
+	"dep:http",
+	"dep:leptoskit_axum",
+	"dep:leptoskit_query",
+	"dep:reqwest",
+	"dep:ring",
+	"dep:sha2",
+	"dep:tokio",
+	"leptoskit_db/sqlite",
+	"leptoskit_rpc/server",
+	"leptoskit_rpc/sqlite",
+	"leptoskit_rpc/live",
+]
+# The same service on Postgres, for an app whose `[db]` is Postgres.
+postgres = ["service", "leptoskit_db/postgres", "leptoskit_rpc/postgres"]
+
+# What `lk` reads to run this crate as a service.
+[package.metadata.leptoskit.service]
+name = "notifications"
+port = 3120
+public = true
+features = ["service"]
+database = true
+
+[lints]
+workspace = true

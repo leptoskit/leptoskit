@@ -36,6 +36,10 @@ pub struct Plan<'a> {
 	pub identity: &'a str,
 	/// The Safari extension's entitlements, when the app carries it.
 	pub safari_entitlements: Option<&'a Path>,
+	/// The app's own entitlements, when `[native.macos] aps-environment`
+	/// opts it into push. Re-signing drops a built bundle's entitlements, so
+	/// the distribution passes them again.
+	pub entitlements: Option<&'a Path>,
 }
 
 /// What a distribution wrote.
@@ -175,7 +179,7 @@ pub fn distribute(runner: &dyn Runner, plan: &Plan<'_>, key: &KeyFile) -> Result
 		runner.run(&sign(plan.identity, &appex, Some(entitlements)))?;
 	}
 
-	runner.run(&sign(plan.identity, &artifacts.app, None))?;
+	runner.run(&sign(plan.identity, &artifacts.app, plan.entitlements))?;
 	runner.run(
 		&Tool::new("codesign")
 			.args(["--verify", "--strict", "--deep"])
@@ -300,6 +304,7 @@ mod tests {
 				build: None,
 				identity: "",
 				safari_entitlements: None,
+				entitlements: None,
 			}
 			.artifacts()
 		};
@@ -324,6 +329,7 @@ mod tests {
 		let app = built(root.path());
 		let out = root.path().join("out");
 		let entitlements = root.path().join("entitlements.plist");
+		let app_entitlements = root.path().join("App.entitlements");
 		let recorder = Recorder {
 			seen: std::cell::RefCell::default(),
 			answer: Box::new(|tool| {
@@ -342,6 +348,7 @@ mod tests {
 			build: Some(7),
 			identity: "Developer ID Application: Example (ABCDE12345)",
 			safari_entitlements: Some(&entitlements),
+			entitlements: Some(&app_entitlements),
 		};
 		let runner = CopyingRecorder {
 			inner: recorder,
@@ -365,7 +372,7 @@ mod tests {
 		insta::assert_snapshot!(seen.join("\n"), @r"
 		ditto <root>/App.app <root>/out/Notes.app
 		codesign --force --sign Developer ID Application: Example (ABCDE12345) --options runtime --timestamp --entitlements <root>/entitlements.plist <root>/out/Notes.app/Contents/PlugIns/SafariExtension.appex
-		codesign --force --sign Developer ID Application: Example (ABCDE12345) --options runtime --timestamp <root>/out/Notes.app
+		codesign --force --sign Developer ID Application: Example (ABCDE12345) --options runtime --timestamp --entitlements <root>/App.entitlements <root>/out/Notes.app
 		codesign --verify --strict --deep <root>/out/Notes.app
 		hdiutil create -volname Notes -srcfolder <root>/out/Notes.app -ov -format UDZO <root>/out/Notes.dmg
 		codesign --force --sign Developer ID Application: Example (ABCDE12345) --options runtime --timestamp <root>/out/Notes.dmg

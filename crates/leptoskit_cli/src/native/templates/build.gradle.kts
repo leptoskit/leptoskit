@@ -2,6 +2,15 @@ import java.util.Properties
 
 plugins { id("com.android.application") }
 
+// The plugins leptoskit's generated configuration lists — Google services
+// when [native.android] push opts the app into push enrollment. The file
+// exists only while the app is push-enabled, so nothing applies otherwise.
+file("../../../.leptoskit/android/gradle-plugins.txt")
+    .takeIf { it.exists() }
+    ?.readLines()
+    ?.filter { it.isNotBlank() }
+    ?.forEach { plugin -> apply(plugin) }
+
 // The app's version, from app.version in leptoskit.toml, which every build
 // writes here. `leptoskit publish play` numbers each upload with the
 // leptoskit.versionCode property.

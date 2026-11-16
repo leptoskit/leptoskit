@@ -152,6 +152,15 @@ pub mod apm {
 #[doc(hidden)]
 pub use apm as analytics;
 
+/// Durable notifications: the send format an app's server uses, the inbox
+/// operations its screens call, and the shared validation both sides run.
+/// The service itself is behind `leptoskit_notifications`'s `service`
+/// feature.
+#[cfg(feature = "notifications")]
+pub mod notifications {
+	pub use leptoskit_notifications::*;
+}
+
 pub mod plugin {
 	//! The plugin system.
 	pub use leptoskit_plugin::*;

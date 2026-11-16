@@ -259,6 +259,17 @@
 			},
 			"additionalProperties": false
 		},
+		"AndroidConfig": {
+			"description": "What opts the Android app into push. Leave it unset for apps that only\npost local notifications; they generate exactly as before, with no\nFirebase dependency, no messaging service, and no Google services plugin.",
+			"type": "object",
+			"properties": {
+				"push": {
+					"description": "Opts the Android app into push enrollment: generation adds the\n`firebase-messaging` dependency, applies Google's services Gradle\nplugin, and declares the messaging service that forwards FCM\nregistration tokens to the notifications plugin, whose `native`\nmodule enrolls them. Requires the `notifications` plugin in\n`[native] plugins` and the app author's `google-services.json` in\n`hosts/android/app/` — an app-owned file leptoskit never generates.\nLeave it unset for apps that only post local notifications.",
+					"type": "boolean"
+				}
+			},
+			"additionalProperties": false
+		},
 		"AndroidIcons": {
 			"description": "Android launcher and notification icons.",
 			"type": "object",
@@ -469,6 +480,21 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"ApsEnvironment": {
+			"description": "Which APNs environment an Apple app's entitlement names — `aps-environment`\non iOS, `com.apple.developer.aps-environment` on macOS. The entitlement is\na string, not a boolean, so Apple's own values are kept exactly.",
+			"oneOf": [
+				{
+					"description": "The sandbox environment a development-signed build registers with.",
+					"type": "string",
+					"const": "development"
+				},
+				{
+					"description": "The environment TestFlight and store-signed builds register with.",
+					"type": "string",
+					"const": "production"
+				}
+			]
 		},
 		"Artifact": {
 			"description": "A trusted repository build recipe with a named output directory. Its\ncommand is an argument vector, not a shell fragment or user input.",
@@ -2554,6 +2580,17 @@
 			"description": "How `leptoskit build --release --platform ios` signs the app and exports\nits `.ipa`. Only settings that aren't secret live here: the team, the\nsigning identity, the provisioning profile, and the App Store Connect key\ncome from the environment.",
 			"type": "object",
 			"properties": {
+				"aps-environment": {
+					"description": "The APNs environment the iOS app is signed for: `development` while\nbuilding from Xcode, `production` for TestFlight and store builds.\nSetting it opts the iOS app into push: generation writes the matching\n`aps-environment` entitlement, the generated app delegate forwards\nAPNs device tokens to the notifications plugin, and\n`leptoskit_notifications`' `native` module can enroll them. It must\nmatch the app's provisioning profile and the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ApsEnvironment"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
 				"export-method": {
 					"description": "Who the `.ipa` is for: `app-store-connect` (the default), `ad-hoc`\nfor registered devices, or `development`. `--export-method`\noverrides it for one build.",
 					"$ref": "#/$defs/ExportMethod",
@@ -2832,6 +2869,24 @@
 				}
 			]
 		},
+		"MacosConfig": {
+			"description": "What opts the macOS app into push. Leave it unset for apps that only post\nlocal notifications; they generate exactly as before, with no push\nentitlement.",
+			"type": "object",
+			"properties": {
+				"aps-environment": {
+					"description": "The APNs environment the macOS app is signed for: `development` while\nbuilding and running locally, `production` for notarized Developer ID\ndistributions. Setting it opts the macOS app into push: generation\nwrites the matching `com.apple.developer.aps-environment` entitlement,\nthe generated app delegate forwards APNs device tokens to the\nnotifications plugin, and `leptoskit_notifications`' `native` module\ncan enroll them. It must match the notifications service's\n`LEPTOSKIT_NOTIFICATIONS_APNS_ENVIRONMENT`. Leave it unset for apps\nthat only post local notifications; they generate exactly as before,\nwith no push entitlement.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ApsEnvironment"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"additionalProperties": false
+		},
 		"MacosDistribution": {
 			"description": "How the macOS app is distributed.",
 			"oneOf": [
@@ -3098,6 +3153,10 @@
 			"description": "Native app settings.",
 			"type": "object",
 			"properties": {
+				"android": {
+					"description": "What opts the Android app into push, such as FCM enrollment.",
+					"$ref": "#/$defs/AndroidConfig"
+				},
 				"android_certificates": {
 					"description": "The SHA-256 fingerprints of the certificates that sign the Android\napp, as `keytool -list` prints them (`AB:CD:…`, 32 bytes). With them,\n`leptoskit::server` publishes `/.well-known/assetlinks.json`, and the\napp's passkeys are accepted. List the upload key and the Play app\nsigning key when Google signs the release.",
 					"type": "array",
@@ -3131,6 +3190,10 @@
 							"type": "null"
 						}
 					]
+				},
+				"macos": {
+					"description": "What opts the macOS app into push, such as APNs enrollment.",
+					"$ref": "#/$defs/MacosConfig"
 				},
 				"missing-plugins": {
 					"description": "What a build does when a selected plugin has no implementation the\nplatform's host can run. `warn` (the default) leaves it out with a\nwarning, so its calls fail with `Unavailable`; `error` stops the build.",

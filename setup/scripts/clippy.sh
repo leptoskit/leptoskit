@@ -120,6 +120,9 @@ wasm() {
 	# Audio's guest feature replaces its web implementation; lint the browser
 	# engine separately so enabling every feature cannot hide it.
 	wasm_group "the browser audio engine" --package=leptoskit_plugin_audio --no-default-features --features browser --all-targets
+	# The notifications browser client: its service feature needs the host,
+	# so lint exactly the client build an app compiles.
+	wasm_group "the notifications browser client" --package=leptoskit_notifications --no-default-features --features browser --lib
 }
 
 wasm_group() {

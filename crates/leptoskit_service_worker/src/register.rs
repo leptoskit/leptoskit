@@ -197,6 +197,68 @@ impl Registration {
 			Err(Error::Unavailable("PushManager".into()))
 		}
 	}
+
+	/// Waits until this registration has an active worker, whatever scope
+	/// the registration covers, and answers it.
+	///
+	/// Unlike [`ready`], which waits only for a registration that controls
+	/// the page, this waits for the registration it is called on: one
+	/// enrolled under an explicit scope, or a freshly registered worker
+	/// still installing. Settles at once when a worker is already active,
+	/// and never waits forever: an install that failed and left no worker
+	/// to activate, or one that hasn't activated within a bounded wait, is
+	/// an error.
+	///
+	/// # Errors
+	///
+	/// Outside a browser, when the worker never installs or activates
+	/// within the bounded wait, or when the browser refuses a read.
+	pub async fn wait_until_active(&self) -> Result<Worker> {
+		#[cfg(target_arch = "wasm32")]
+		{
+			use gloo_timers::future::TimeoutFuture;
+
+			// How often the registration is re-read while a worker
+			// installs, how long a registration with nothing installing,
+			// waiting, or active is given for one to appear — `register`
+			// can resolve just before `installing` is set — and the whole
+			// wait's bound.
+			const POLL_MS: u32 = 50;
+			const CANDIDATE_GRACE_MS: u32 = 2_000;
+			const TIMEOUT_MS: u32 = 30_000;
+
+			let mut waited_ms = 0_u32;
+			let mut quiet_ms = 0_u32;
+
+			loop {
+				if let Some(worker) = self.active()? {
+					return Ok(worker);
+				}
+
+				let has_candidate = self.installing()?.is_some() || self.waiting()?.is_some();
+
+				quiet_ms = if has_candidate { 0 } else { quiet_ms + POLL_MS };
+				if quiet_ms > CANDIDATE_GRACE_MS {
+					return Err(Error::Browser(
+						"the service worker was replaced or failed without activating".into(),
+					));
+				}
+
+				if waited_ms >= TIMEOUT_MS {
+					return Err(Error::Browser(
+						"the service worker didn't activate in time".into(),
+					));
+				}
+
+				TimeoutFuture::new(POLL_MS).await;
+				waited_ms += POLL_MS;
+			}
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			js::unavailable_async("ServiceWorkerRegistration.wait_until_active").await
+		}
+	}
 }
 
 /// A service worker instance (installing, waiting, or active).
@@ -376,6 +438,10 @@ mod tests {
 			block_on(registration.unregister()),
 			Err(unavailable("ServiceWorkerRegistration.unregister"))
 		);
+		assert!(matches!(
+			block_on(registration.wait_until_active()),
+			Err(error) if error == unavailable("ServiceWorkerRegistration.wait_until_active")
+		));
 		assert!(matches!(
 			registration.active(),
 			Err(error) if error == unavailable("ServiceWorkerRegistration.active")

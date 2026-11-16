@@ -33,6 +33,7 @@ members = [
 	"examples/huddle/load",
 	"examples/huddle/macos",
 	"examples/islands",
+	"examples/notifications_guest",
 	"examples/observatory",
 	"examples/opencode",
 	"examples/platform_probe",
@@ -118,6 +119,7 @@ heck = "0.5"
 hex = "0.4"
 hmac = "0.12"
 http = "1"
+http-body-util = "0.1"
 hydration_context = "0.4.0-rc0"
 hyper = "1"
 hyper-util = "0.1"
@@ -201,7 +203,10 @@ unic-langid = "0.9"
 unicode-width = "0.2"
 ureq = { version = "3", default-features = false }
 url = "2"
-uuid = "1"
+# `js` is inert off wasm — its randomness source is target-gated — and
+# gives `v7`'s generator its wasm32-unknown-unknown source, so client
+# builds that hold UUIDs compile.
+uuid = { version = "1", features = ["js"] }
 walkdir = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-cli-support = "0.2"
@@ -260,6 +265,7 @@ leptoskit_lint = { path = "crates/leptoskit_lint", version = "0.3.0" }
 leptoskit_log = { path = "crates/leptoskit_log", version = "0.3.0" }
 leptoskit_macros = { path = "crates/leptoskit_macros", version = "0.3.0" }
 leptoskit_native = { path = "crates/leptoskit_native", version = "0.3.0" }
+leptoskit_notifications = { path = "crates/leptoskit_notifications", version = "0.3.0" }
 leptoskit_platform = { path = "crates/leptoskit_platform", version = "0.3.0" }
 leptoskit_platform_harmonyos = { path = "crates/leptoskit_platform_harmonyos", version = "0.3.0" }
 leptoskit_platform_oculus = { path = "crates/leptoskit_platform_oculus", version = "0.3.0" }

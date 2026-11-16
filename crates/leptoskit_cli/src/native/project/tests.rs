@@ -988,3 +988,291 @@ fn ios_signs_with_selected_plugin_entitlements_and_drops_them_when_deselected() 
 	);
 	std::fs::remove_dir_all(root).unwrap();
 }
+
+/// `[native.ios] aps-environment` writes the APNs environment as the
+/// entitlement's exact string — Apple's key is a string, not the boolean the
+/// plugin entitlements are — alongside any plugin keys, and dropping it
+/// removes the key, then the file. An app that selects the notifications
+/// plugin but never sets it generates no push entitlement, so existing
+/// local-only notifications users stay local-only.
+#[test]
+fn the_aps_environment_entitlement_is_a_string_that_comes_and_goes_with_the_setting() {
+	let root = std::env::temp_dir()
+		.canonicalize()
+		.unwrap()
+		.join(format!("leptoskit-ios-aps-{}", std::process::id()));
+	let bridge = root.join("sdk/leptoskit_bridge_ffi");
+	write(&bridge.join("Package.swift"), "// bridge").unwrap();
+	let registry_plugin = |value: serde_json::Value, name: &str, directory: &Path| {
+		let mut plugin: super::super::registry::Plugin = serde_json::from_value(value).unwrap();
+		plugin.directory = directory.to_path_buf();
+		plugin.package_name = name.into();
+		plugin
+	};
+	write(&root.join("sdk/Notify/Package.swift"), "// plugin").unwrap();
+	write(&root.join("sdk/Health/Package.swift"), "// plugin").unwrap();
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	let path = root.join(".leptoskit/ios/App.entitlements");
+	let project = root.join(".leptoskit/ios/Host.xcodeproj/project.pbxproj");
+	let generate = |plugins: Vec<super::super::registry::Plugin>,
+	                config: &leptoskit_config::LeptoskitConfig| {
+		let registry = Registry {
+			package: "demo".into(),
+			plugins,
+			support: vec![],
+			bridge: bridge.clone(),
+			target: root.join("target"),
+			host_features: vec![],
+			devtools_feature: None,
+			missing: Vec::new(),
+			scene3d: false,
+		};
+		ios::generate(&root, config, &registry).unwrap();
+	};
+
+	// A local-notifications app without the setting: no entitlements file at
+	// all, and no signing setting.
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "notifications", "apple-module": "LeptosKitNotifications",
+				"apple-type": "NotificationsPlugin"
+			}),
+			"Notify",
+			&root.join("sdk/Notify"),
+		)],
+		&config,
+	);
+	assert!(!path.exists());
+	assert!(
+		!std::fs::read_to_string(&project)
+			.unwrap()
+			.contains("CODE_SIGN_ENTITLEMENTS")
+	);
+
+	// Opting in writes the exact string, and the signing setting appears.
+	config.native.ios.aps_environment = Some(leptoskit_config::ApsEnvironment::Development);
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "notifications", "apple-module": "LeptosKitNotifications",
+				"apple-type": "NotificationsPlugin"
+			}),
+			"Notify",
+			&root.join("sdk/Notify"),
+		)],
+		&config,
+	);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert_eq!(
+		entitlements.get("aps-environment"),
+		Some(&plist::Value::String("development".into()))
+	);
+	assert_eq!(
+		entitlements.len(),
+		1,
+		"nothing else is granted: {entitlements:?}"
+	);
+
+	// A plugin's own boolean entitlements ride beside the string.
+	let health = registry_plugin(
+		serde_json::json!({
+			"name": "health", "apple-module": "Health", "apple-type": "HealthPlugin",
+			"apple-entitlements": ["com.apple.developer.healthkit"]
+		}),
+		"Health",
+		&root.join("sdk/Health"),
+	);
+	config.native.ios.aps_environment = Some(leptoskit_config::ApsEnvironment::Production);
+	generate(vec![health], &config);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert_eq!(
+		entitlements.get("aps-environment"),
+		Some(&plist::Value::String("production".into()))
+	);
+	assert_eq!(
+		entitlements.get("com.apple.developer.healthkit"),
+		Some(&plist::Value::Boolean(true))
+	);
+
+	// Dropping the setting leaves the plugin's keys and removes the string.
+	config.native.ios.aps_environment = None;
+	generate(
+		vec![registry_plugin(
+			serde_json::json!({
+				"name": "health", "apple-module": "Health", "apple-type": "HealthPlugin",
+				"apple-entitlements": ["com.apple.developer.healthkit"]
+			}),
+			"Health",
+			&root.join("sdk/Health"),
+		)],
+		&config,
+	);
+	let entitlements = plist::Value::from_file(&path)
+		.unwrap()
+		.into_dictionary()
+		.unwrap();
+	assert!(!entitlements.contains_key("aps-environment"));
+	assert_eq!(entitlements.len(), 1);
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `[native.android] push` is opt-in: an app that never sets it generates
+/// byte-for-byte as before — no Firebase dependency, no messaging service,
+/// no Google services plugin file. Turning it on adds all four pieces and
+/// stops, naming the app author's `google-services.json`, when that file is
+/// missing; turning it off again removes exactly what it wrote.
+#[test]
+fn the_android_push_configuration_comes_and_goes_with_the_setting() {
+	let directory = tempfile::tempdir().unwrap();
+	let root = directory.path().canonicalize().unwrap();
+	let notifications = root.join("sdk/notifications");
+	fixture(
+		&notifications.join("android/NotificationsPlugin.kt"),
+		"// notifications",
+	);
+	let mut registry = metadata_registry(
+		&root,
+		&[serde_json::json!({
+			"name": "notifications",
+			"android-type": "dev.leptoskit.plugins.notifications.NotificationsPlugin",
+			"android-context": true,
+			"android-permissions": ["android.permission.POST_NOTIFICATIONS"],
+		})],
+	);
+	registry.plugins[0].directory = notifications;
+	registry.plugins[0].package_name = "leptoskit_plugin_notifications".into();
+	for source in [
+		"android/NativePlugin.kt",
+		"android/proguard-rules.pro",
+		"mobile/LeptosKitView.kt",
+	] {
+		fixture(&registry.bridge.join(source), "// bridge fixture");
+	}
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	let manifest = root.join(".leptoskit/android/AndroidManifest.xml");
+	let dependencies = root.join(".leptoskit/android/plugin-dependencies.txt");
+	let service = root.join(format!(
+		".leptoskit/android/sources/{MESSAGING_SERVICE_FILE}"
+	));
+	let plugins = root.join(".leptoskit/android/gradle-plugins.txt");
+	let app_script = root.join("hosts/android/app/build.gradle.kts");
+	let configuration = root.join("hosts/android/app/google-services.json");
+	fixture(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
+	);
+	fixture(&app_script, include_str!("../templates/build.gradle.kts"));
+	fixture(&configuration, "{}");
+	let bytes = |path: &Path| std::fs::read(path).unwrap();
+
+	// A local-notifications app without the setting: none of the pieces.
+	generate(&root, &config, &registry, Target::Android, false).unwrap();
+	assert_eq!(bytes(&dependencies), b"");
+	assert!(!configuration_was_declared(&manifest));
+	assert!(!service.exists());
+	assert!(!plugins.exists());
+	let plain = bytes(&manifest);
+
+	// Opting in without the app author's `google-services.json` stops before
+	// anything is written. `google-services.json` is never generated.
+	std::fs::remove_file(&configuration).unwrap();
+	config.native.android.push = true;
+	let error = generate(&root, &config, &registry, Target::Android, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("google-services.json"), "{error}");
+	assert_eq!(bytes(&dependencies), b"", "nothing was written");
+	assert!(!service.exists());
+
+	// With the file present, opting in adds all four pieces.
+	fixture(&configuration, "{}");
+	generate(&root, &config, &registry, Target::Android, false).unwrap();
+	assert_eq!(
+		bytes(&dependencies),
+		b"com.google.firebase:firebase-messaging:26.0.2\n"
+	);
+	assert!(configuration_was_declared(&manifest));
+	assert!(service.exists());
+	assert_eq!(bytes(&plugins), b"com.google.gms.google-services\n");
+
+	// Turning push off again leaves none of it behind, byte for byte.
+	config.native.android.push = false;
+	generate(&root, &config, &registry, Target::Android, false).unwrap();
+	assert_eq!(bytes(&dependencies), b"");
+	assert_eq!(
+		bytes(&manifest),
+		plain,
+		"{:?}",
+		std::fs::read_to_string(&manifest)
+	);
+	assert!(!service.exists());
+	assert!(!plugins.exists());
+}
+
+/// Whether the generated manifest declares the messaging service.
+fn configuration_was_declared(manifest: &Path) -> bool {
+	std::fs::read_to_string(manifest)
+		.unwrap()
+		.contains(MESSAGING_SERVICE)
+}
+
+/// Push on without the notifications plugin, and push on with an app script
+/// that predates the generated plugins file, both stop with the fix named.
+#[test]
+fn the_android_push_configuration_names_what_is_missing() {
+	let directory = tempfile::tempdir().unwrap();
+	let root = directory.path().canonicalize().unwrap();
+	fixture(
+		&root.join("hosts/android/app/src/main/AndroidManifest.xml"),
+		"<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application/></manifest>",
+	);
+	let configuration = root.join("hosts/android/app/google-services.json");
+	fixture(&configuration, "{}");
+	let mut config = leptoskit_config::LeptoskitConfig::default();
+	config.native.android.push = true;
+	let registry = metadata_registry(&root, &[]);
+
+	let error = generate(&root, &config, &registry, Target::Android, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("notifications"), "{error}");
+
+	let notifications = root.join("sdk/notifications");
+	fixture(
+		&notifications.join("android/NotificationsPlugin.kt"),
+		"// notifications",
+	);
+	let mut plugin: super::super::registry::Plugin = serde_json::from_value(serde_json::json!({
+		"name": "notifications",
+		"android-type": "dev.leptoskit.plugins.notifications.NotificationsPlugin",
+		"android-context": true,
+	}))
+	.unwrap();
+	plugin.directory = notifications;
+	plugin.package_name = "leptoskit_plugin_notifications".into();
+	let registry = Registry {
+		plugins: vec![plugin],
+		..metadata_registry(&root, &[])
+	};
+
+	// An app script that never reads the generated plugins file cannot
+	// apply Google services, so generation stops and names the lines.
+	let app_script = root.join("hosts/android/app/build.gradle.kts");
+	fixture(&app_script, "plugins { id(\"com.android.application\") }\n");
+	let error = generate(&root, &config, &registry, Target::Android, false)
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("gradle-plugins.txt"), "{error}");
+	assert!(error.contains("apply(plugin = it)"), "{error}");
+	assert!(
+		!root.join(".leptoskit").exists(),
+		"validation precedes every generated write"
+	);
+}

@@ -15,21 +15,227 @@ import dev.leptoskit.bridge.NativePermissionHost
 import dev.leptoskit.bridge.NativePlugin
 import dev.leptoskit.bridge.PluginException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * The latest remote-registration answer the app forwarded. An object on
+ * purpose: answers can arrive before the plugin is constructed and its guest
+ * exists, a closed plugin must leave the OS's answer readable, and nothing
+ * here retains a plugin instance. The token is held only in memory: the
+ * process asks the OS again on the next launch rather than treating a stored
+ * copy as authoritative.
+ */
+public object RemoteRegistration {
+    /** Bounds shared with the Rust contract: the token is variable length and
+     * never assumed to be a hex string of any size. */
+    internal const val MAX_TOKEN_CHARACTERS = 4_096
+    internal const val MAX_FAILURE_BYTES = 256
+
+    /** The registration answer's shape. Descriptions never print a token's
+     * bytes. */
+    public sealed interface State {
+        /** No answer has arrived since the host process started. */
+        public data object None : State
+
+        /** The OS issued a registration token, exactly as issued. */
+        public data class Token(
+            public val value: String,
+        ) : State {
+            override fun toString(): String = "token(<${value.length} chars>)"
+        }
+
+        /** The OS refused registration; one of the contract's stable codes. */
+        public data class Failed(
+            public val reason: String,
+        ) : State
+
+        /** A registration wait ended without a new answer. The broker's last
+         * answer, if any, is unchanged and still readable. */
+        public data object Unconfirmed : State
+    }
+
+    /** The registration answer: a monotonic revision and the latest state.
+     * Revision `0` means no answer has arrived since the process started. */
+    public data class Snapshot(
+        public val revision: Long,
+        public val state: State,
+    ) {
+        override fun toString(): String = "Snapshot(revision: $revision, state: $state)"
+    }
+
+    @Volatile
+    private var snapshot: Snapshot = Snapshot(0, State.None)
+
+    /** Reads the latest answer without side effects. */
+    @Synchronized
+    public fun current(): Snapshot = snapshot
+
+    /**
+     * The messaging service's `onNewToken`, and the registration task's own
+     * answer. Firebase's bytes stay exactly as issued: printable ASCII of no
+     * assumed length. A token outside the contract's bounds is recorded as a
+     * failure instead of a token, and its bytes never reach a log.
+     */
+    @Synchronized
+    public fun noteToken(token: String) {
+        val shaped =
+            token.isNotEmpty() &&
+                token.length <= MAX_TOKEN_CHARACTERS &&
+                token.all { it.code in 0x21..0x7E }
+
+        if (!shaped) {
+            note(FailureCode.TOKEN_SHAPE)
+            return
+        }
+
+        snapshot = Snapshot(nextRevision(), State.Token(token))
+    }
+
+    /** The registration boundary's refusal, as a stable code. */
+    @Synchronized
+    public fun noteFailure(code: String) {
+        note(code)
+    }
+
+    /** The contract's stable failure codes, mirrored from the Rust side. */
+    internal object FailureCode {
+        const val OS_REFUSED = "os-refused"
+        const val FIREBASE_NOT_CONFIGURED = "firebase-not-configured"
+        const val TOKEN_SHAPE = "token-shape"
+    }
+
+    /** Maps the SDK's own failure to its stable code. The one distinction
+     * worth keeping is Firebase without initialization values — the app
+     * author's `google-services.json` is missing — matched on the exception
+     * family, never on error text. */
+    internal fun failureCode(error: Throwable?): String =
+        when (error) {
+            null -> FailureCode.OS_REFUSED
+            is IllegalStateException -> FailureCode.FIREBASE_NOT_CONFIGURED
+            else -> FailureCode.OS_REFUSED
+        }
+
+    @Synchronized
+    internal fun note(code: String) {
+        snapshot = Snapshot(nextRevision(), State.Failed(code))
+    }
+
+    /** The next revision, saturating instead of trapping should the counter
+     * ever reach the top. */
+    private fun nextRevision(): Long {
+        val next = snapshot.revision + 1
+        return if (next == 0L) Long.MAX_VALUE else next
+    }
+
+    /** Resets the broker. Process-scoped state, so only tests call this. */
+    @Synchronized
+    public fun reset(to: Snapshot = Snapshot(0, State.None)) {
+        snapshot = to
+    }
+}
+
+/**
+ * The registration boundary production asks through Google Play services.
+ * Tests substitute a fake.
+ */
+internal fun interface FirebaseRegistrar {
+    /**
+     * Asks Firebase for the registration token. Every failure lands in the
+     * broker as a stable code, never the SDK's own text, and a late token
+     * lands there too, exactly as a refresh would.
+     */
+    fun register()
+}
+
+/** Asks `FirebaseMessaging` for its token without a compile-time Firebase
+ * dependency: the app carries `firebase-messaging` only when
+ * `[native.android] push` opts it in, so the classes resolve reflectively and
+ * their absence is the contract's own `firebase-not-configured` answer.
+ * Tokens cross into the broker and are never logged. */
+internal object SystemFirebaseRegistrar : FirebaseRegistrar {
+    private const val MESSAGING = "com.google.firebase.messaging.FirebaseMessaging"
+    private const val SUCCESS = "com.google.android.gms.tasks.OnSuccessListener"
+    private const val FAILURE = "com.google.android.gms.tasks.OnFailureListener"
+
+    override fun register() {
+        try {
+            val loader = RemoteRegistration::class.java.classLoader
+            val messaging = Class.forName(MESSAGING, false, loader)
+            val instance = messaging.getMethod("getInstance").invoke(null)
+            val task = messaging.getMethod("getToken").invoke(instance)
+            val success = Class.forName(SUCCESS, false, loader)
+            val failure = Class.forName(FAILURE, false, loader)
+            val listener =
+                Proxy.newProxyInstance(loader, arrayOf(success, failure)) { proxy, method, arguments ->
+                    when (method.name) {
+                        "onSuccess" -> {
+                            RemoteRegistration.noteToken(arguments?.get(0) as? String ?: "")
+                        }
+
+                        "onFailure" -> {
+                            RemoteRegistration.noteFailure(
+                                RemoteRegistration.failureCode(arguments?.get(0) as? Throwable),
+                            )
+                        }
+
+                        "toString" -> {
+                            "LeptosKitTokenListener"
+                        }
+
+                        "hashCode" -> {
+                            System.identityHashCode(proxy)
+                        }
+
+                        "equals" -> {
+                            proxy === arguments?.get(0)
+                        }
+
+                        else -> {
+                            null
+                        }
+                    }
+                }
+            task.javaClass.getMethod("addOnSuccessListener", success).invoke(task, listener)
+            task.javaClass.getMethod("addOnFailureListener", failure).invoke(task, listener)
+        } catch (absent: ClassNotFoundException) {
+            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
+        } catch (absent: NoClassDefFoundError) {
+            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
+        } catch (uninitialized: IllegalStateException) {
+            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.FIREBASE_NOT_CONFIGURED)
+        } catch (refused: Exception) {
+            RemoteRegistration.noteFailure(RemoteRegistration.FailureCode.OS_REFUSED)
+        }
+    }
+}
 
 /** Immediate notifications only. Posting never implicitly requests permission. */
-class NotificationsPlugin(
+class NotificationsPlugin internal constructor(
     private val context: Context,
-    smallIcon: Int? = null,
+    smallIcon: Int?,
+    private val registrar: FirebaseRegistrar,
+    private val remoteWaitLimitMillis: Long,
 ) : NativePlugin {
+    /** The constructor the generated app and ordinary registrations use: the
+     * registration boundary is the real one, and the OS's own answer bound
+     * applies. */
+    internal constructor(
+        context: Context,
+        smallIcon: Int? = null,
+    ) : this(context, smallIcon, SystemFirebaseRegistrar, DEFAULT_REMOTE_WAIT_MILLIS)
+
     private val smallIcon: Int = smallIcon ?: resolveSmallIcon(context)
 
     override val name = "notifications"
-    override val methods = intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE)
+    override val methods =
+        intArrayOf(STATE, REQUEST, SHOW, CANCEL, CHANNEL, DELETE, ACTIVE, REMOTE_TOKEN, REMOTE_REGISTER)
 
     companion object {
         /** The notification tag and channel prefix the plugin owns. */
@@ -68,6 +274,23 @@ class NotificationsPlugin(
         /** Lists the plugin's posted notifications. */
         const val ACTIVE = 6
 
+        /** Reads the broker's latest remote-registration answer, without side
+         * effects. */
+        const val REMOTE_TOKEN = 7
+
+        /** Asks the OS to register and waits a bounded time for a new
+         * answer. */
+        const val REMOTE_REGISTER = 8
+
+        /** How long `REMOTE_REGISTER` waits for the OS answer before
+         * replying with the unchanged snapshot, in milliseconds. Firebase
+         * answers a cached token quickly; the bound keeps a silent OS from
+         * hanging the call. */
+        internal const val DEFAULT_REMOTE_WAIT_MILLIS = 10_000L
+
+        /** How often the bounded wait re-reads the broker, in milliseconds. */
+        internal const val REMOTE_WAIT_SLICE_MILLIS = 50L
+
         /** The largest show request: an id, title, body, and channel. */
         const val SHOW_BYTES = 4496
 
@@ -84,6 +307,7 @@ class NotificationsPlugin(
 
     private val manager = context.getSystemService(NotificationManager::class.java)
     private var closed = false
+    private val registering = AtomicBoolean(false)
 
     override suspend fun invoke(
         method: Int,
@@ -110,10 +334,131 @@ class NotificationsPlugin(
             CANCEL, DELETE -> cancelOrDelete(manager, method, payload)
             CHANNEL -> configure(Reader(payload, CHANNEL_BYTES), manager)
             ACTIVE -> active(manager, payload)
+            REMOTE_TOKEN -> return remoteToken(payload)
+            REMOTE_REGISTER -> return registerRemote(payload)
             else -> throw PluginException(PluginException.UNAVAILABLE)
         }
 
         return byteArrayOf()
+    }
+
+    /** Encodes the broker's latest answer: reading never asks and never
+     * registers, so it is safe at launch. */
+    private fun remoteToken(payload: ByteBuffer): ByteArray {
+        empty(payload)
+
+        return encodeSnapshot(RemoteRegistration.current())
+    }
+
+    /**
+     * Asks the OS to register for remote notifications, then waits a bounded
+     * time for the answer the registration task or the messaging service
+     * forwards into the broker. One registration is in flight at a time:
+     * callers that arrive while one runs join its wait rather than asking
+     * the OS again. A silent OS answers `unconfirmed`, never the previous
+     * token as though it were fresh — a late callback still lands in the
+     * broker for the next read, and a plugin closed while waiting never
+     * succeeds.
+     */
+    private suspend fun registerRemote(payload: ByteBuffer): ByteArray {
+        empty(payload)
+        if (closed) throw PluginException(PluginException.CANCELLED)
+        currentCoroutineContext().ensureActive()
+
+        val since = RemoteRegistration.current().revision
+
+        // Bound the OS requests at one: the first caller asks, the rest wait
+        // for whatever answer its registration produces.
+        val asking = registering.compareAndSet(false, true)
+
+        try {
+            if (asking) registrar.register()
+
+            val snapshot = waitRemoteChange(since)
+
+            if (closed) throw PluginException(PluginException.CANCELLED)
+            currentCoroutineContext().ensureActive()
+
+            // Silence at the bound is an explicit non-answer, not a stale
+            // token.
+            return if (snapshot.revision == since) {
+                encodeSnapshot(RemoteRegistration.Snapshot(0, RemoteRegistration.State.Unconfirmed))
+            } else {
+                encodeSnapshot(snapshot)
+            }
+        } finally {
+            if (asking) registering.set(false)
+        }
+    }
+
+    /**
+     * Polls the broker until its revision moves past `since` or the wait
+     * limit passes. Every waiter sees the same answer, the wait always
+     * terminates, and cancellation ends it without touching the broker.
+     */
+    internal suspend fun waitRemoteChange(since: Long): RemoteRegistration.Snapshot {
+        var waited = 0L
+
+        while (true) {
+            val snapshot = RemoteRegistration.current()
+
+            if (snapshot.revision != since) return snapshot
+            if (waited >= remoteWaitLimitMillis) return snapshot
+
+            delay(REMOTE_WAIT_SLICE_MILLIS)
+            waited += REMOTE_WAIT_SLICE_MILLIS
+        }
+    }
+
+    /** Encodes a snapshot reply: revision `u64`, state `u32`, then a
+     * length-prefixed string (empty for no answer). */
+    internal fun encodeSnapshot(snapshot: RemoteRegistration.Snapshot): ByteArray {
+        val data = ByteBuffer.allocate(16 + RemoteRegistration.MAX_TOKEN_CHARACTERS)
+
+        data.putInt((snapshot.revision ushr 32).toInt())
+        data.putInt(snapshot.revision.toInt())
+
+        when (val state = snapshot.state) {
+            is RemoteRegistration.State.None -> {
+                data.putInt(0)
+                putString(data, "", RemoteRegistration.MAX_FAILURE_BYTES)
+            }
+
+            is RemoteRegistration.State.Token -> {
+                // Android's answer is an FCM registration token: wire state
+                // 4, the printable-ASCII kind. State 1 is the iOS hex kind.
+                data.putInt(4)
+                putString(data, state.value, RemoteRegistration.MAX_TOKEN_CHARACTERS)
+            }
+
+            is RemoteRegistration.State.Failed -> {
+                data.putInt(2)
+                putString(data, state.reason, RemoteRegistration.MAX_FAILURE_BYTES)
+            }
+
+            is RemoteRegistration.State.Unconfirmed -> {
+                data.putInt(3)
+                putString(data, "", RemoteRegistration.MAX_FAILURE_BYTES)
+            }
+        }
+
+        return data.array().copyOf(data.position())
+    }
+
+    /** One length-prefixed UTF-8 string, bounded by the field's own
+     * contract. */
+    private fun putString(
+        data: ByteBuffer,
+        value: String,
+        maximum: Int,
+    ) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+
+        if (bytes.size > maximum) {
+            throw PluginException(PluginException.TOO_LARGE)
+        }
+        data.putInt(bytes.size)
+        data.put(bytes)
     }
 
     /** Reports the permission, asking for it when the caller asked to. */

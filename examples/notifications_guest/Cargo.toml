@@ -1,0 +1,22 @@
+[package]
+name = "notifications_guest_probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "A compiled Rust guest that runs the notifications native enrollment workflow, for leptoskit_wasm's headless host to check against fake OS and HTTP plugin boundaries."
+
+[lib]
+crate-type = ["cdylib"]
+
+# The guest compiles only for wasm32; the host build is an empty crate.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+any_spawner = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+leptoskit_bridge = { workspace = true, features = ["guest"] }
+leptoskit_notifications = { workspace = true, features = ["native"] }
+leptoskit_query = { workspace = true }
+leptoskit_rpc = { workspace = true }
+
+[lints]
+workspace = true

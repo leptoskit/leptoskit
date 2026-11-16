@@ -817,6 +817,7 @@ impl Session<'_> {
 		let out = self.root.join(OUTPUT).join("macos");
 		let version = apple_version(self.config);
 		let entitlements = out.join("SafariExtension.entitlements");
+		let app_entitlements = self.root.join(".leptoskit/macos/App.entitlements");
 		let plan = macos::Plan {
 			built: &self.root.join(".leptoskit/macos/App.app"),
 			out: &out,
@@ -831,6 +832,13 @@ impl Session<'_> {
 			identity: "",
 			safari_entitlements: crate::native::safari::configured(self.config)
 				.then_some(entitlements.as_path()),
+			entitlements: self
+				.config
+				.native
+				.macos
+				.aps_environment
+				.is_some()
+				.then_some(app_entitlements.as_path()),
 		};
 		let artifacts = plan.artifacts();
 		let (dmg, zip) = (self.relative(&artifacts.dmg), self.relative(&artifacts.zip));
