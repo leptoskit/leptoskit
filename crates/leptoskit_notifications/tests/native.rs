@@ -8,12 +8,16 @@
 //! sent as the JSON envelope the RPC client sends. What the socket sees is
 //! the production path's own: the service reads the person from the
 //! forwarded identity, never from the request, dedupes a destination to one
-//! endpoint, and answers revocations only to the owner. What is **not**
-//! exercised here is the wasm guest's own transport and the OS itself: the
-//! plugin bridge call and the device token's issuance need a device, and
-//! the module's wasm halves are compiled and stubbed, not run, on this
-//! target. Nothing is sent to a provider: the boundary would refuse, and
-//! the tests assert it stayed silent.
+//! endpoint, answers revocations only to the owner, and keeps one receipt
+//! per idempotency key. Nothing is sent to a provider: the boundary would
+//! refuse, and the tests assert it stayed silent.
+//!
+//! What is **not** exercised here is the guest's own control flow — the
+//! enroll/reconcile/rotate decisions, their plugin calls, and the guest
+//! RPC transport. Those run for real, in a compiled wasm guest against
+//! played OS and HTTP plugin boundaries, in
+//! `crates/leptoskit_wasm/tests/notifications_guest.rs`; the two suites
+//! meet at the wire contract each side really speaks.
 
 #![cfg(all(feature = "native", feature = "service", not(target_arch = "wasm32")))]
 
@@ -382,15 +386,20 @@ async fn anonymous_calls_enroll_nothing_and_refusals_decide_nothing() {
 	);
 
 	// A snapshot whose answer is the OS's refusal never reaches the wire,
-	// and silence offers nothing to enroll.
+	// and silence offers nothing to enroll. The refusal is the contract's
+	// stable code, never the OS's own text.
 	let refused = leptoskit_plugin_notifications::ApnsRegistration::new(
 		1,
-		leptoskit_plugin_notifications::RemoteState::Failed("no valid aps-environment".into()),
+		leptoskit_plugin_notifications::RemoteState::Failed(
+			leptoskit_plugin_notifications::remote_failure::APS_ENVIRONMENT.into(),
+		),
 	)
 	.unwrap();
 	assert_eq!(
 		native::decide(&refused),
-		Err(EnrollError::Failed("no valid aps-environment".into()))
+		Err(EnrollError::Failed(
+			leptoskit_plugin_notifications::remote_failure::APS_ENVIRONMENT.into()
+		))
 	);
 	assert_eq!(
 		native::decide(&leptoskit_plugin_notifications::ApnsRegistration::none()),

@@ -867,11 +867,13 @@ Browsers return `Unavailable`.
 Add `{{ plugin_notifications.package.name }}` as a direct dependency and select the `{{ plugin_notifications.package.metadata.leptoskit.runtime.name }}`
 plugin in `native.plugins`; supported generated hosts discover it from Cargo metadata.
 Generated Linux hosts register it where it has a Linux Rust implementation; generated Windows and terminal hosts currently omit runtime plugins, so use explicit registration in a custom host there. Guests enable the `guest` feature and reuse
-`guest::Notifications` rather than resolving the plugin on every call. A successful call
+`guest::Notifications` rather than resolving the plugin on every call; web builds keep the default `browser` feature, and interpreter guests turn it off so their dependency
+tree stays free of browser imports. A successful call
 means the OS accepted the request, not that a banner appeared; focus modes and user
 settings can still suppress it. On iOS the generated app delegate forwards APNs device
-tokens into the plugin's broker, and `REMOTE_REGISTER` turns an explicit opt-in into a
-bounded, typed registration answer; every other platform reports `Unavailable` for it.
+tokens into the plugin's broker; `REMOTE_REGISTER` turns an explicit opt-in into a
+bounded, typed registration answer, answers `unconfirmed` when the OS stays silent rather than replaying a prior token, and carries refusal as stable reason codes instead
+of the OS's own text. Every other platform reports `Unavailable` for it.
 
 <!-- {/p_notificationsSummary} -->
 

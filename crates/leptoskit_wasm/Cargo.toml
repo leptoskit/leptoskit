@@ -30,9 +30,14 @@ wasmi_core = { workspace = true }
 # The native analytics client's guest acceptance (`tests/analytics_guest.rs`):
 # the batch format, and the HTTP and filesystem plugins' wire formats.
 leptoskit_analytics = { workspace = true, features = ["typed"] }
+# The notifications native client's guest acceptance
+# (`tests/notifications_guest.rs`): the APNs snapshot codec its fake OS
+# boundary answers with, beside the HTTP plugin's wire format.
 leptoskit_log = { workspace = true, features = ["testing"] }
 leptoskit_plugin_filesystem = { workspace = true }
 leptoskit_plugin_http = { workspace = true }
+leptoskit_plugin_notifications = { workspace = true }
+uuid = { workspace = true }
 wasmi = { workspace = true, features = ["wat"] }
 
 [features]

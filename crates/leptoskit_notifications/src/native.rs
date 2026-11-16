@@ -8,10 +8,10 @@
 //! module keeps — and the enrollment call is the app's own RPC client, so
 //! the endpoint belongs to the forwarded signed-in person. No service
 //! token, no session copy, and no identity live here or anywhere host-side.
-//! The person's session lifecycle stays the app's: launch reconciliation is
-//! nonprompting and only enrolls under whoever is signed in right now, and
-//! signing out is the app's cue to call [`disable`] while still
-//! authenticated, before the next account signs in on the device.
+//! The person's session lifecycle stays the app's: it persists the opaque
+//! [`Enrollment`] handle beside its opt-in flag — never the token, which is
+//! the OS's to rotate — and every call here runs under whoever is signed in
+//! right now.
 //!
 //! The whole workflow, in the order an app wires it:
 //!
@@ -32,19 +32,24 @@
 //!    remote notifications, waits a bounded time for the delegate's answer, and
 //!    registers the token as the person's typed
 //!    [`crate::push::PushCredential::Apns`]. The answer is an opaque
-//!    [`Enrollment`] id: keep it beside the person's session.
-//! 4. On **launch**, once the person is signed in, call [`reconcile`]. It reads
-//!    the broker's snapshot without prompting and without registering: when the
-//!    OS has a token for this install — including a token rotated since the
-//!    last run — it re-registers that destination, which answers the same
-//!    endpoint id, so refreshes never exhaust the per-person endpoint quota.
-//!    `None` is the app's cue to offer the switch.
+//!    [`Enrollment`] id: keep it, with the opt-in, beside the person's session.
+//! 4. On **launch**, once the person is signed in, call [`reconcile`] with that
+//!    saved enrollment — and only with one: it is the record that this person
+//!    opted in on this device, and without it nothing registers, so a disabled
+//!    device is never silently re-enabled. With it, the module asks the OS to
+//!    register again — registration is not a permission prompt, and Apple
+//!    expects it every launch — waits the bounded answer, and brings the
+//!    service up to date with whatever the OS now issues. The answer is an
+//!    explicit [`Outcome`]: unchanged, rotated with the old handle's retirement
+//!    acknowledged, or rotated with a stale handle — a previous account's
+//!    leftover — dropped rather than operated under this one.
 //! 5. On **sign out**, while this person is still authenticated, call
 //!    [`disable`]. It requires an acknowledged server revoke and replays a
 //!    stable idempotency key derived from the endpoint id — the same contract
 //!    as [`crate::browser::disable`] — so a retried sign-out is safe. It
 //!    changes no OS state; the token stays the device's, and the next account
-//!    enrolls from clean.
+//!    enrolls from clean. Clear the saved enrollment and opt-in once the revoke
+//!    is acknowledged.
 //!
 //! iOS only. Android enrolls an FCM registration token and macOS shares the
 //! APNs transport but not this plugin path; both are later work, and calls
@@ -58,20 +63,27 @@ use serde::Serialize;
 use crate::push::EndpointSummary;
 use crate::push::PushCredential;
 #[cfg(target_arch = "wasm32")]
+use crate::push::PushEndpoints;
+#[cfg(target_arch = "wasm32")]
 use crate::push::RegisterPushEndpoint;
 #[cfg(target_arch = "wasm32")]
 use crate::push::RevokePushEndpoint;
 
 /// The server endpoint identity needed to disable this person's enrollment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// The app persists this opaque handle — and the fact that it opted in —
+/// beside the person's session. It never persists the device token: the
+/// token is the OS's to rotate, and the service dedupes destinations, so
+/// the handle is all reconciliation needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Enrollment {
 	/// The endpoint's opaque id, as [`crate::push::EndpointSummary`] lists it.
 	pub endpoint: uuid::Uuid,
 }
 
-/// Why enrolling this device did not happen. Every variant is actionable,
-/// and none of them changes OS state: a retried [`enroll`] asks the OS
-/// again, and nothing is half-enrolled.
+/// Why enrolling this device did not happen, and what still stands. Every
+/// variant names an explicit state: nothing is half-enrolled, nothing is
+/// silently retried, and the variants that carry handles say which
+/// enrollment to keep retrying with.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnrollError {
 	/// This platform has no native enrollment. Only an iOS host runs it;
@@ -86,22 +98,51 @@ pub enum EnrollError {
 	/// failure. Nothing was registered with the service.
 	#[error("registering for remote notifications failed: {0}")]
 	Register(String),
-	/// The OS answered no token within the host's registration bound. A
-	/// retry from a user gesture asks again; hosts hand tokens out on
-	/// launch, so [`reconcile`] also picks it up later.
-	#[error("the OS has not answered registration with a device token yet")]
-	NoToken,
-	/// The OS refused registration; the reason names why, most often a
-	/// missing or mismatched `aps-environment` entitlement. Nothing was
-	/// registered with the service.
+	/// The OS refused registration; the reason is one of the plugin
+	/// contract's stable codes, most often `aps-environment` for a missing
+	/// or mismatched entitlement. Nothing was registered with the service.
 	#[error("the OS refused registration: {0}")]
 	Failed(String),
-	/// The enrollment call failed: the network, or the service's own answer
-	/// — including the refusal that says another live account holds this
-	/// device token, which that account's [`disable`] releases. The failure
-	/// is surfaced, never swallowed.
-	#[error("enrolling failed: {0}")]
-	Enroll(leptoskit_rpc::FnError),
+	/// The OS answered nothing within the host's registration bound. Any
+	/// previous enrollment stands exactly as it was: a retry from a user
+	/// gesture asks again, and the next launch's [`reconcile`] asks again.
+	/// Silence made explicit — never a stale token dressed up as success.
+	#[error("the OS has not answered registration yet")]
+	Unconfirmed,
+	/// The enrollment call failed: the network, or the service's own answer.
+	/// The handle names the enrollment that still stands and should be
+	/// retried with — `None` when this attempt already retired the previous
+	/// handle (or found it stale), so the retry starts from the opt-in
+	/// alone.
+	#[error("enrolling failed: {1}")]
+	Enroll(Option<Enrollment>, leptoskit_rpc::FnError),
+	/// Revoking a handle was not acknowledged, so it still stands beside
+	/// whatever this attempt enrolled. `current` is the replacement
+	/// enrollment when one was made; keep it, and keep retrying the revoke
+	/// on `retired` — a later [`reconcile`] retries the retirement too.
+	#[error("revoking the previous enrollment failed: {cause}")]
+	RetireFailed {
+		/// The replacement enrollment, when the rotation got that far.
+		current: Option<Enrollment>,
+		/// The handle whose revoke was not acknowledged; it still stands.
+		retired: Enrollment,
+		/// Why the revoke failed: the network, or the service's answer.
+		#[source]
+		cause: leptoskit_rpc::FnError,
+	},
+	/// The service's endpoint listing failed, so ownership of the previous
+	/// handle could not be verified and nothing was revoked. As
+	/// [`EnrollError::RetireFailed`], both handles stand.
+	#[error("could not verify the previous enrollment's owner: {cause}")]
+	OwnershipUnknown {
+		/// The replacement enrollment, when the rotation got that far.
+		current: Option<Enrollment>,
+		/// The handle left unverified and unreleased.
+		retired: Enrollment,
+		/// Why the listing failed: the network, or the service's answer.
+		#[source]
+		cause: leptoskit_rpc::FnError,
+	},
 }
 
 /// Why disabling the service enrollment was not confirmed.
@@ -136,6 +177,7 @@ pub fn decide(
 
 	match snapshot.state() {
 		RemoteState::None => Ok(None),
+		RemoteState::Unconfirmed => Err(EnrollError::Unconfirmed),
 		RemoteState::Failed(reason) => Err(EnrollError::Failed(reason.clone())),
 		RemoteState::Token(token) => {
 			Ok(Some(PushCredential::Apns {
@@ -145,18 +187,44 @@ pub fn decide(
 	}
 }
 
-/// Registers one token as the signed-in person's, and answers the handle
-/// its disable needs. The person is read from the app's forwarded identity
-/// by the service, never from anything this module holds.
-#[cfg(target_arch = "wasm32")]
-async fn register(credential: PushCredential) -> Result<Enrollment, EnrollError> {
-	let summary: EndpointSummary = leptoskit_rpc::client::call(RegisterPushEndpoint { credential })
-		.await
-		.map_err(EnrollError::Enroll)?;
+/// What one launch reconciliation found, as an explicit transition the app
+/// persists: nothing to do, the same enrollment standing, or a rotation
+/// with the old handle's retirement accounted for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+	/// This device holds no enrollment to reconcile: the app never passed a
+	/// previous one, so nothing registered and nothing was asked. The app's
+	/// cue to offer the opt-in switch.
+	Off,
+	/// The OS still issues the token this enrollment holds: the service
+	/// answered the same endpoint id, the refresh was one idempotent
+	/// re-registration, and the handle the app saved is still the one to
+	/// keep.
+	Kept(Enrollment),
+	/// The OS now issues a different token. `current` is the new live
+	/// enrollment — the handle to keep from now on — and `retired` says how
+	/// the previous handle left: revoked under this same signed-in person,
+	/// or dropped because it was never this account's to operate.
+	Rotated {
+		/// The new enrollment; persist this in the previous one's place.
+		current: Enrollment,
+		/// How the previous handle left.
+		retired: Retirement,
+	},
+}
 
-	Ok(Enrollment {
-		endpoint: summary.id,
-	})
+/// How a rotated-out enrollment handle left, when rotation succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retirement {
+	/// The service acknowledged the revoke under the same signed-in person
+	/// who enrolled the replacement, with the stable [`disable_key`]. The
+	/// handle is gone; drop it.
+	Revoked(Enrollment),
+	/// The handle is not among this person's endpoints — a previous
+	/// account's leftover from a session switch, or one already revoked.
+	/// It was never operated under this identity: no revoke was attempted,
+	/// and no credential moved. Drop it.
+	Stale(Enrollment),
 }
 
 /// Enrolls this device for the signed-in person, from an explicit user
@@ -167,7 +235,8 @@ async fn register(credential: PushCredential) -> Result<Enrollment, EnrollError>
 ///
 /// # Errors
 ///
-/// [`EnrollError`] for each step's own failure.
+/// [`EnrollError`] for each step's own failure. A silent OS is
+/// [`EnrollError::Unconfirmed`], never a stale token.
 #[cfg_attr(
 	not(target_arch = "wasm32"),
 	allow(clippy::unused_async, reason = "matches the wasm signature")
@@ -178,46 +247,223 @@ pub async fn enroll() -> Result<Enrollment, EnrollError> {
 
 	#[cfg(target_arch = "wasm32")]
 	{
-		let snapshot = plugin_snapshot(|notifications| notifications.register_remote()).await?;
+		let snapshot =
+			plugin_snapshot(leptoskit_plugin_notifications::guest::Notifications::register_remote)
+				.await?;
 
 		match decide(&snapshot)? {
-			Some(credential) => register(credential).await,
-			None => Err(EnrollError::NoToken),
+			Some(credential) => {
+				register(&credential)
+					.await
+					.map_err(|cause| EnrollError::Enroll(None, cause))
+			}
+			None => Err(EnrollError::Unconfirmed),
 		}
 	}
 }
-/// The nonprompting half of enrollment, for app launch: reads the broker's
-/// snapshot — a call that neither prompts nor registers — and registers the
-/// token the OS already holds for this install, if it holds one, under the
-/// person signed in right now.
+
+/// The nonprompting half, for app launch — but only for a device that
+/// previously opted in: `previous` is the enrollment the app saved beside
+/// its opt-in flag when [`enroll`] succeeded, and it is the record
+/// reconciliation runs on. Without it the answer is [`Outcome::Off`]:
+/// nothing registers, so a person who disabled notifications is never
+/// silently re-enabled, and a fresh install is never enrolled by startup
+/// code. With it, the module registers with APNs again — registration
+/// prompts nothing; only permission requests do, and those stay the
+/// gesture's — and reconciles whatever the OS now issues, under whoever is
+/// signed in right now:
 ///
-/// A rotated token lands here too: re-registering a destination answers the
-/// same endpoint id, so the refresh is one idempotent call, never a new
-/// endpoint. `None` means the OS holds no token — the app's cue to offer
-/// the switch whose gesture-gated [`enroll`] can make one.
+/// - The same token keeps the same endpoint id (the service dedupes the
+///   destination): [`Outcome::Kept`], one idempotent call.
+/// - A rotated token is a new destination. The module verifies the previous
+///   handle against this person's endpoint list — cleanup runs only for the
+///   authenticated owner — and retires it with the stable [`disable_key`], so
+///   rotation never leaks an orphan endpoint. When the person is at the
+///   endpoint quota, the refusal is answered by retiring the known-stale handle
+///   and re-registering once, so rotation at the bound still succeeds.
+/// - A previous handle that is not this person's — a session switch left it
+///   behind — is dropped, not operated: no revoke is attempted under the new
+///   identity, and no credential moves ([`Retirement::Stale`]).
 ///
 /// # Errors
 ///
-/// As [`enroll`], minus the OS registration: there is no
-/// [`EnrollError::NoToken`], because nothing registers.
+/// [`EnrollError`] for each step's own failure, each naming what still
+/// stands: [`EnrollError::Unconfirmed`] leaves the previous enrollment
+/// untouched for the next launch, [`EnrollError::Enroll`] carries the
+/// handle to keep retrying with (or `None` when the handle was already
+/// retired or dropped), and [`EnrollError::RetireFailed`] /
+/// [`EnrollError::OwnershipUnknown`] leave any new enrollment live and the
+/// old handle still needing its revoke.
 #[cfg_attr(
 	not(target_arch = "wasm32"),
-	allow(clippy::unused_async, reason = "matches the wasm signature"),
-	allow(clippy::needless_return)
+	allow(clippy::unused_async, reason = "matches the wasm signature")
 )]
-pub async fn reconcile() -> Result<Option<Enrollment>, EnrollError> {
+pub async fn reconcile(previous: Option<&Enrollment>) -> Result<Outcome, EnrollError> {
 	#[cfg(not(target_arch = "wasm32"))]
-	return Err(EnrollError::Unavailable);
+	{
+		let _ = previous;
+		Err(EnrollError::Unavailable)
+	}
 
 	#[cfg(target_arch = "wasm32")]
 	{
-		let snapshot = plugin_snapshot(|notifications| notifications.remote_snapshot()).await?;
+		let Some(previous) = previous else {
+			return Ok(Outcome::Off);
+		};
 
-		match decide(&snapshot)? {
-			Some(credential) => Ok(Some(register(credential).await?)),
-			None => Ok(None),
-		}
+		let snapshot =
+			plugin_snapshot(leptoskit_plugin_notifications::guest::Notifications::register_remote)
+				.await?;
+		let credential = decide(&snapshot)?.ok_or(EnrollError::Unconfirmed)?;
+		rotate(previous, &credential).await
 	}
+}
+
+/// Brings the service up to date with the token the OS just issued:
+/// registers it, then retires the previous handle when — and only when —
+/// the destination actually changed and the handle is this person's.
+#[cfg(target_arch = "wasm32")]
+async fn rotate(
+	previous: &Enrollment,
+	credential: &PushCredential,
+) -> Result<Outcome, EnrollError> {
+	match register(credential).await {
+		// Same destination: one idempotent refresh, nothing to retire.
+		Ok(enrollment) if enrollment == *previous => Ok(Outcome::Kept(*previous)),
+		Ok(enrollment) => retire(previous, enrollment).await,
+		Err(cause) if quota_refused(&cause) => {
+			// The service's own remedy: revoke one first. The previous
+			// handle is the one this device owns and is about to discard.
+			// Freeing it needs the same ownership check as any retirement;
+			// a stale handle at quota is dropped, not operated, and the
+			// quota refusal is surfaced for the app to show.
+			match owned(previous).await {
+				Ok(true) => {}
+				Ok(false) => {
+					return Err(EnrollError::Enroll(None, cause));
+				}
+				Err(listing) => {
+					return Err(EnrollError::OwnershipUnknown {
+						current: None,
+						retired: *previous,
+						cause: listing,
+					});
+				}
+			}
+
+			if let Err(revoke) = revoke(previous).await {
+				return Err(EnrollError::RetireFailed {
+					current: None,
+					retired: *previous,
+					cause: revoke,
+				});
+			}
+
+			// Room made: one more registration, and the rotation completes
+			// with the retirement this attempt already acknowledged.
+			register(credential)
+				.await
+				.map(|current| {
+					Outcome::Rotated {
+						current,
+						retired: Retirement::Revoked(*previous),
+					}
+				})
+				.map_err(|cause| EnrollError::Enroll(None, cause))
+		}
+		Err(cause) => Err(EnrollError::Enroll(Some(*previous), cause)),
+	}
+}
+
+/// Registers a token and answers the enrollment its endpoint id names.
+#[cfg(target_arch = "wasm32")]
+async fn register(credential: &PushCredential) -> Result<Enrollment, leptoskit_rpc::FnError> {
+	let summary: EndpointSummary = leptoskit_rpc::client::call(RegisterPushEndpoint {
+		credential: credential.clone(),
+	})
+	.await?;
+
+	Ok(Enrollment {
+		endpoint: summary.id,
+	})
+}
+
+/// Whether `cause` is the service's endpoint-quota refusal, whose words are
+/// its documented contract: "a person holds at most … live endpoints;
+/// revoke one first". The credential's own shape was validated at the
+/// plugin boundary, so that is the one `Invalid` a real OS token can meet
+/// here.
+#[cfg(target_arch = "wasm32")]
+fn quota_refused(cause: &leptoskit_rpc::FnError) -> bool {
+	matches!(cause, leptoskit_rpc::FnError::Invalid(message)
+		if message.starts_with("a person holds at most"))
+}
+
+/// Whether `previous` is among the signed-in person's endpoints — the
+/// ownership check every retirement runs under the current identity.
+#[cfg(target_arch = "wasm32")]
+async fn owned(previous: &Enrollment) -> Result<bool, leptoskit_rpc::FnError> {
+	let endpoints: leptoskit_rpc::Page<EndpointSummary> =
+		leptoskit_rpc::client::call(PushEndpoints {
+			page: leptoskit_rpc::PageArgs::first(
+				u32::try_from(crate::push::MAX_ENDPOINTS + crate::push::MAX_ENDPOINT_HISTORY)
+					.unwrap_or(u32::MAX),
+			),
+		})
+		.await?;
+
+	Ok(endpoints
+		.items
+		.iter()
+		.any(|endpoint| endpoint.id == previous.endpoint))
+}
+
+/// Revokes `previous` with the stable [`disable_key`].
+#[cfg(target_arch = "wasm32")]
+async fn revoke(previous: &Enrollment) -> Result<(), leptoskit_rpc::FnError> {
+	leptoskit_rpc::client::call_with(
+		RevokePushEndpoint {
+			endpoint: previous.endpoint,
+		},
+		leptoskit_rpc::client::CallOptions::new().idempotency_key(disable_key(previous.endpoint)),
+	)
+	.await
+}
+
+/// The retirement half of a rotation: the previous handle leaves only under
+/// its owner. The endpoint list settles whose it is; a revoke that is not
+/// acknowledged, and a listing that cannot be read, both leave the new
+/// enrollment live and the old handle named in the error for retry.
+#[cfg(target_arch = "wasm32")]
+async fn retire(previous: &Enrollment, current: Enrollment) -> Result<Outcome, EnrollError> {
+	// Never this person's — a previous account's leftover. Operating it
+	// under the current identity is exactly what must not happen; drop it
+	// and say so.
+	if !owned(previous).await.map_err(|cause| {
+		EnrollError::OwnershipUnknown {
+			current: Some(current),
+			retired: *previous,
+			cause,
+		}
+	})? {
+		return Ok(Outcome::Rotated {
+			current,
+			retired: Retirement::Stale(*previous),
+		});
+	}
+
+	revoke(previous).await.map_err(|cause| {
+		EnrollError::RetireFailed {
+			current: Some(current),
+			retired: *previous,
+			cause,
+		}
+	})?;
+
+	Ok(Outcome::Rotated {
+		current,
+		retired: Retirement::Revoked(*previous),
+	})
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -285,6 +531,7 @@ mod tests {
 	use leptoskit_plugin_notifications::ApnsRegistration;
 	use leptoskit_plugin_notifications::DeviceToken;
 	use leptoskit_plugin_notifications::RemoteState;
+	use leptoskit_plugin_notifications::remote_failure;
 
 	use super::EnrollError;
 	use super::decide;
@@ -306,8 +553,9 @@ mod tests {
 	}
 
 	/// The snapshot decides enrollment: a token becomes the typed APNs
-	/// credential with the exact bytes, silence stays None, and the OS's
-	/// refusal is surfaced rather than retried into a fake enrollment.
+	/// credential with the exact bytes, silence stays None, the OS's
+	/// refusal is surfaced rather than retried into a fake enrollment, and
+	/// an unconfirmed registration is never mistaken for a fresh token.
 	#[test]
 	fn a_snapshot_decides_what_enrollment_registers() {
 		let token = "a1b2c3d4e5f67890".repeat(4); // gitleaks:allow (a fake device token a test builds)
@@ -323,14 +571,17 @@ mod tests {
 
 		let refused = ApnsRegistration::new(
 			2,
-			RemoteState::Failed("no valid aps-environment entitlement".into()),
+			RemoteState::Failed(remote_failure::APS_ENVIRONMENT.into()),
 		)
 		.unwrap();
 		assert_eq!(
 			decide(&refused),
-			Err(EnrollError::Failed(
-				"no valid aps-environment entitlement".into()
-			))
+			Err(EnrollError::Failed(remote_failure::APS_ENVIRONMENT.into()))
+		);
+
+		assert_eq!(
+			decide(&ApnsRegistration::unconfirmed()),
+			Err(EnrollError::Unconfirmed)
 		);
 	}
 
@@ -364,18 +615,24 @@ mod tests {
 	}
 
 	/// Outside a wasm guest, nothing enrolls and nothing is stranded — the
-	/// stubs answer their own unavailable errors without a call.
+	/// stubs answer their own unavailable errors without a call, whatever
+	/// they are handed.
 	#[test]
 	fn outside_a_guest_nothing_enrolls_and_nothing_is_stranded() {
 		let error = futures::executor::block_on(super::enroll());
 		assert_eq!(error, Err(EnrollError::Unavailable));
 
-		let error = futures::executor::block_on(super::reconcile());
-		assert_eq!(error, Err(EnrollError::Unavailable));
-
 		let enrollment = super::Enrollment {
 			endpoint: "6ec0f4b1-0000-7000-8000-000000000001".parse().unwrap(),
 		};
+		let error = futures::executor::block_on(super::reconcile(Some(&enrollment)));
+		assert_eq!(error, Err(EnrollError::Unavailable));
+		assert_eq!(
+			futures::executor::block_on(super::reconcile(None)),
+			Err(EnrollError::Unavailable),
+			"the non-guest stub stays unavailable for both shapes"
+		);
+
 		let error = futures::executor::block_on(super::disable(&enrollment));
 		assert_eq!(
 			error,

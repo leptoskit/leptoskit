@@ -6,12 +6,17 @@
 //! has a Linux Rust implementation; generated Windows and terminal hosts
 //! currently omit runtime plugins, so use explicit registration in a custom
 //! host there. Guests enable the `guest` feature and reuse
-//! `guest::Notifications` rather than resolving the plugin on every call. A
-//! successful call means the OS accepted the request, not that a banner
-//! appeared; focus modes and user settings can still suppress it. On iOS the
-//! generated app delegate forwards APNs device tokens into the plugin's broker,
-//! and `REMOTE_REGISTER` turns an explicit opt-in into a bounded, typed
-//! registration answer; every other platform reports `Unavailable` for it.
+//! `guest::Notifications` rather than resolving the plugin on every call; web
+//! builds keep the default `browser` feature, and interpreter guests turn it
+//! off so their dependency tree stays free of browser imports. A successful
+//! call means the OS accepted the request, not that a banner appeared; focus
+//! modes and user settings can still suppress it. On iOS the generated app
+//! delegate forwards APNs device tokens into the plugin's broker;
+//! `REMOTE_REGISTER` turns an explicit opt-in into a bounded, typed
+//! registration answer, answers `unconfirmed` when the OS stays silent rather
+//! than replaying a prior token, and carries refusal as stable reason codes
+//! instead of the OS's own text. Every other platform reports `Unavailable` for
+//! it.
 //!
 //! <!-- {/p_notificationsSummary} -->
 
@@ -42,8 +47,10 @@ pub const CANCEL_ALL: MethodId = MethodId(6);
 /// side effects. Other platforms report `Unavailable`.
 pub const REMOTE_TOKEN: MethodId = MethodId(7);
 /// iOS only: empty payload; asks the OS to register for remote notifications
-/// and waits a bounded time for its answer, returned as the new snapshot.
-/// Other platforms report `Unavailable`.
+/// and waits a bounded time for its answer, returned as the new snapshot —
+/// or [`RemoteState::Unconfirmed`] when no answer arrived in the bound, so
+/// silence can never masquerade as a stale token. Other platforms report
+/// `Unavailable`.
 pub const REMOTE_REGISTER: MethodId = MethodId(8);
 /// Exported independently grantable operations.
 pub const METHODS: &[MethodId] = &[
@@ -107,19 +114,22 @@ impl Permission {
 
 /// A validated APNs device token: exactly the lower-case hex bytes the OS
 /// handed the app, with no assumed length. Secret-ish material that names a
-/// device: logs and error messages show none of it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// device: [`Debug`](std::fmt::Debug) shows its length alone, never its
+/// bytes, and logs and error messages show none of it either.
+#[derive(Clone, PartialEq, Eq)]
 pub struct DeviceToken(String);
 impl DeviceToken {
-	/// Validates a token's shape:
+	/// Validates a token's shape: an even count of
 	/// [`MIN_APNS_TOKEN_CHARS`]..=[`MAX_APNS_TOKEN_CHARS`] lower-case hex
-	/// characters. The host lower-cases Apple's bytes before they cross the
-	/// bridge; anything else is refused here.
+	/// characters, whole bytes, whatever length the OS chose. The host
+	/// lower-cases Apple's bytes before they cross the bridge; anything else
+	/// is refused here.
 	pub fn new(value: impl Into<String>) -> Result<Self, Error> {
 		let value = value.into();
 
 		if value.len() < MIN_APNS_TOKEN_CHARS
 			|| value.len() > MAX_APNS_TOKEN_CHARS
+			|| value.len() % 2 != 0
 			|| !value
 				.bytes()
 				.all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
@@ -136,10 +146,16 @@ impl DeviceToken {
 		&self.0
 	}
 }
+impl std::fmt::Debug for DeviceToken {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		// The token names a device; its bytes never reach a log or a panic.
+		write!(f, "DeviceToken(<{} hex chars>)", self.0.len())
+	}
+}
 
 /// The host's latest remote-notification registration answer, or the
-/// absence of one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// absence of one. [`Debug`](std::fmt::Debug) never prints a token's bytes.
+#[derive(Clone, PartialEq, Eq)]
 pub enum RemoteState {
 	/// No answer has arrived since the host process started. A token the OS
 	/// issued for a previous process run is not remembered: hosts hand
@@ -147,30 +163,74 @@ pub enum RemoteState {
 	None,
 	/// The OS issued a device token for this app install.
 	Token(DeviceToken),
-	/// The OS refused registration. The reason is bounded, sanitized text
-	/// from the OS, never a token.
+	/// The OS refused registration. The reason is one of the contract's
+	/// stable [`remote_failure`] codes, bounded and control-free by
+	/// construction, never the OS's own error text and never a token.
 	Failed(String),
+	/// The host asked the OS to register and no new answer arrived within
+	/// its wait bound. Only `REMOTE_REGISTER` answers this; the broker's
+	/// last answer, if any, is still readable through `REMOTE_TOKEN`. A
+	/// caller must not treat a previous token as fresh because of it.
+	Unconfirmed,
+}
+impl std::fmt::Debug for RemoteState {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::None => f.write_str("None"),
+			Self::Token(token) => f.debug_tuple("Token").field(token).finish(),
+			Self::Failed(reason) => f.debug_tuple("Failed").field(reason).finish(),
+			Self::Unconfirmed => f.write_str("Unconfirmed"),
+		}
+	}
+}
+
+/// The stable failure codes a host may answer for remote registration.
+/// Hosts never forward the OS's own error text: it can carry device or
+/// provisioning detail an app has no business logging, and its shape varies
+/// between OS releases. These codes are the whole contract.
+pub mod remote_failure {
+	/// The OS refused registration and the host could not narrow it further.
+	/// Most often a missing or mismatched `aps-environment` entitlement; the
+	/// app's own messaging decides what to say.
+	pub const OS_REFUSED: &str = "os-refused";
+	/// The OS refused registration naming the `aps-environment` entitlement
+	/// specifically: the app's signing does not carry the push entitlement
+	/// registration needs.
+	pub const APS_ENVIRONMENT: &str = "aps-environment";
+	/// The OS handed the host a token outside the contract's bounds. Its
+	/// bytes are refused, not shortened or padded.
+	pub const TOKEN_SHAPE: &str = "token-shape";
 }
 
 /// A revisioned snapshot of the host's remote-registration state. Only the
 /// latest answer is kept: a queue could hand a caller a token the OS has
 /// already replaced, so observers compare [`ApnsRegistration::revision`] and
 /// re-read instead of replaying history.
+///
+/// The revision is a full `u64` and `0` means no answer has arrived; every
+/// answered state carries a revision of at least `1`, and the unanswered
+/// [`RemoteState::Unconfirmed`] is `0` by definition: it is the absence of a
+/// new answer, not one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApnsRegistration {
 	revision: u64,
 	state: RemoteState,
 }
 impl ApnsRegistration {
-	/// Builds a snapshot. The revision must not be zero, which is what a
-	/// host answers before any OS callback has arrived.
+	/// Builds a snapshot. Revision `0` is reserved for "nothing answered":
+	/// [`RemoteState::None`] and [`RemoteState::Unconfirmed`] take it alone,
+	/// and every answered state takes a revision of at least `1`.
 	pub fn new(revision: u64, state: RemoteState) -> Result<Self, Error> {
-		if revision == 0 || revision > u64::from(u32::MAX) {
+		let answered = !matches!(state, RemoteState::None | RemoteState::Unconfirmed);
+
+		if answered != (revision != 0) {
 			return Err(Error::InvalidArgument);
 		}
 
 		if let RemoteState::Failed(reason) = &state
-			&& (reason.len() > MAX_REMOTE_FAILURE_BYTES || reason.chars().any(char::is_control))
+			&& (reason.is_empty()
+				|| reason.len() > MAX_REMOTE_FAILURE_BYTES
+				|| !reason.bytes().all(|byte| byte.is_ascii_graphic()))
 		{
 			return Err(Error::InvalidArgument);
 		}
@@ -184,6 +244,16 @@ impl ApnsRegistration {
 		Self {
 			revision: 0,
 			state: RemoteState::None,
+		}
+	}
+
+	/// The snapshot `REMOTE_REGISTER` answers when its wait bound passed
+	/// with no new answer from the OS.
+	#[must_use]
+	pub fn unconfirmed() -> Self {
+		Self {
+			revision: 0,
+			state: RemoteState::Unconfirmed,
 		}
 	}
 
@@ -227,12 +297,17 @@ impl ApnsRegistration {
 				output.u32(2);
 				output.bytes(reason.as_bytes())?;
 			}
+			RemoteState::Unconfirmed => {
+				output.u32(3);
+				output.bytes(b"")?;
+			}
 		}
 
 		Ok(output.finish())
 	}
 
-	/// Validates a complete snapshot reply, including trailing bytes.
+	/// Validates a complete snapshot reply, including trailing bytes, under
+	/// the same rules as [`ApnsRegistration::new`].
 	pub fn decode(payload: &[u8]) -> Result<Self, Error> {
 		if payload.len() > 16 + MAX_REMOTE_FAILURE_BYTES {
 			return Err(Error::InvalidArgument);
@@ -254,21 +329,29 @@ impl ApnsRegistration {
 			2 => {
 				let reason = input.string()?.to_owned();
 
-				if reason.len() > MAX_REMOTE_FAILURE_BYTES || reason.chars().any(char::is_control) {
+				if reason.is_empty()
+					|| reason.len() > MAX_REMOTE_FAILURE_BYTES
+					|| !reason.bytes().all(|byte| byte.is_ascii_graphic())
+				{
 					return Err(Error::InvalidArgument);
 				}
 
 				RemoteState::Failed(reason)
 			}
+			3 => {
+				let text = input.string()?;
+
+				if !text.is_empty() {
+					return Err(Error::InvalidArgument);
+				}
+
+				RemoteState::Unconfirmed
+			}
 			_ => return Err(Error::InvalidArgument),
 		};
 		input.finish()?;
 
-		if revision > u64::from(u32::MAX) {
-			return Err(Error::InvalidArgument);
-		}
-
-		Ok(Self { revision, state })
+		Self::new(revision, state)
 	}
 }
 
@@ -506,7 +589,7 @@ impl Channel {
 pub mod guest;
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod linux;
-#[cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
+#[cfg(all(feature = "browser", target_arch = "wasm32", target_os = "unknown"))]
 pub mod web;
 
 #[cfg(test)]
@@ -672,14 +755,38 @@ mod tests {
 			assert_eq!(DeviceToken::new(token.clone()).unwrap().as_str(), token);
 		}
 
-		// Uppercase, too short, too long, and non-hex are all refused: the
-		// host lower-cases Apple's bytes before they cross the bridge.
+		// Uppercase, too short, too long, odd-length, and non-hex are all
+		// refused: the host lower-cases Apple's whole bytes before they
+		// cross the bridge, so a lone nibble is corruption, not a token.
 		assert!(DeviceToken::new(sample_tokens()[0].to_ascii_uppercase()).is_err());
 		assert!(DeviceToken::new("a".repeat(MIN_APNS_TOKEN_CHARS - 1)).is_err());
 		assert!(DeviceToken::new("a".repeat(MAX_APNS_TOKEN_CHARS + 1)).is_err());
 		assert!(DeviceToken::new(format!("{}g", "a".repeat(MIN_APNS_TOKEN_CHARS - 1))).is_err());
+		assert!(DeviceToken::new("a".repeat(MIN_APNS_TOKEN_CHARS + 1)).is_err());
 		assert!(DeviceToken::new("").is_err());
 	}
+
+	/// The token names a device: no `Debug` output — token, snapshot, or
+	/// state — carries its bytes, so a logged or panicked value leaks
+	/// nothing.
+	#[test]
+	fn debug_output_never_carries_token_bytes() {
+		let token = DeviceToken::new(sample_tokens()[0].clone()).unwrap();
+		let token_debug = format!("{token:?}");
+		assert_eq!(token_debug, "DeviceToken(<64 hex chars>)");
+		assert!(!token_debug.contains(&sample_tokens()[0]));
+
+		let snapshot = ApnsRegistration::new(7, RemoteState::Token(token)).unwrap();
+		for debug in [
+			format!("{:?}", snapshot.state()),
+			format!("{snapshot:?}"),
+			format!("{:?}", RemoteState::None),
+			format!("{:?}", ApnsRegistration::unconfirmed()),
+		] {
+			assert!(!debug.contains(&sample_tokens()[0]), "{debug}");
+		}
+	}
+
 	#[test]
 	fn apns_snapshots_round_trip_every_state() {
 		let none = ApnsRegistration::none();
@@ -701,14 +808,35 @@ mod tests {
 			Ok(token)
 		);
 
-		let failed =
-			ApnsRegistration::new(9, RemoteState::Failed("no valid aps-environment".into()))
-				.unwrap();
+		let failed = ApnsRegistration::new(
+			9,
+			RemoteState::Failed(remote_failure::APS_ENVIRONMENT.into()),
+		)
+		.unwrap();
 		assert!(failed.token().is_none());
 		assert_eq!(
 			ApnsRegistration::decode(&failed.encode().unwrap()),
 			Ok(failed)
 		);
+
+		let unconfirmed = ApnsRegistration::unconfirmed();
+		assert_eq!(unconfirmed.revision(), 0);
+		assert_eq!(unconfirmed.state(), &RemoteState::Unconfirmed);
+		assert!(unconfirmed.token().is_none());
+		assert_eq!(
+			ApnsRegistration::decode(&unconfirmed.encode().unwrap()),
+			Ok(unconfirmed)
+		);
+
+		// The revision is a full u64: the wire carries both halves, and the
+		// constructor refuses nothing but the answered/revision-0 mismatch.
+		let huge = ApnsRegistration::new(
+			u64::MAX,
+			RemoteState::Token(DeviceToken::new(sample_tokens()[0].clone()).unwrap()),
+		)
+		.unwrap();
+		assert_eq!(huge.revision(), u64::MAX);
+		assert_eq!(ApnsRegistration::decode(&huge.encode().unwrap()), Ok(huge));
 	}
 	#[test]
 	fn apns_snapshot_decode_rejects_broken_payloads() {
@@ -731,16 +859,45 @@ mod tests {
 			Err(Error::InvalidArgument)
 		);
 
-		// Revision 0 is reserved for "no answer yet", and revisions past the
-		// wire's u32 pair cannot exist.
+		// Revision 0 means "no answer": an answered state with it, and an
+		// unanswered state without it, are both refused — on the constructor
+		// and the decoder alike.
 		assert_eq!(
-			ApnsRegistration::new(0, RemoteState::None).unwrap_err(),
+			ApnsRegistration::new(
+				0,
+				RemoteState::Token(DeviceToken::new(sample_tokens()[0].clone()).unwrap())
+			)
+			.unwrap_err(),
 			Error::InvalidArgument
 		);
 		assert_eq!(
-			ApnsRegistration::new(u64::from(u32::MAX) + 1, RemoteState::None).unwrap_err(),
+			ApnsRegistration::new(0, RemoteState::Failed(remote_failure::OS_REFUSED.into()))
+				.unwrap_err(),
 			Error::InvalidArgument
 		);
+		assert_eq!(
+			ApnsRegistration::new(1, RemoteState::None).unwrap_err(),
+			Error::InvalidArgument
+		);
+		assert_eq!(
+			ApnsRegistration::new(1, RemoteState::Unconfirmed).unwrap_err(),
+			Error::InvalidArgument
+		);
+		assert_eq!(
+			ApnsRegistration::new(0, RemoteState::None).unwrap(),
+			ApnsRegistration::none()
+		);
+		assert_eq!(
+			ApnsRegistration::new(0, RemoteState::Unconfirmed).unwrap(),
+			ApnsRegistration::unconfirmed()
+		);
+
+		let mut zero_answered = Encoder::default();
+		zero_answered.u32(0);
+		zero_answered.u32(0);
+		zero_answered.u32(1);
+		zero_answered.bytes(sample_tokens()[0].as_bytes()).unwrap();
+		assert!(ApnsRegistration::decode(&zero_answered.finish()).is_err());
 
 		let mut bad_state = Encoder::default();
 		bad_state.u32(0);
@@ -750,7 +907,7 @@ mod tests {
 		assert!(ApnsRegistration::decode(&bad_state.finish()).is_err());
 
 		// A token-state string must be a valid token; a failure-state string
-		// must be bounded and control-free.
+		// must be one of the contract's codes: non-empty, printable, bounded.
 		let mut upper = Encoder::default();
 		upper.u32(0);
 		upper.u32(1);
@@ -776,16 +933,23 @@ mod tests {
 			.unwrap();
 		assert!(ApnsRegistration::decode(&long_reason.finish()).is_err());
 
-		assert_eq!(
-			ApnsRegistration::new(1, RemoteState::Failed("\t".into())).unwrap_err(),
-			Error::InvalidArgument
-		);
+		for reason in ["", "\t", "a b"] {
+			assert_eq!(
+				ApnsRegistration::new(1, RemoteState::Failed(reason.into())).unwrap_err(),
+				Error::InvalidArgument,
+				"{reason:?}"
+			);
+		}
 		assert!(
-			ApnsRegistration::new(
-				1,
-				RemoteState::Failed("x".repeat(MAX_REMOTE_FAILURE_BYTES + 1))
-			)
-			.is_err()
+			ApnsRegistration::new(1, RemoteState::Failed("x".repeat(MAX_REMOTE_FAILURE_BYTES)))
+				.is_ok()
 		);
+		for code in [
+			remote_failure::OS_REFUSED,
+			remote_failure::APS_ENVIRONMENT,
+			remote_failure::TOKEN_SHAPE,
+		] {
+			assert!(ApnsRegistration::new(1, RemoteState::Failed(code.into())).is_ok());
+		}
 	}
 }

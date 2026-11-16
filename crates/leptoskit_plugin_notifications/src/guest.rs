@@ -57,10 +57,11 @@ impl Notifications {
 
 	/// Asks the OS to register for remote notifications and waits, bounded
 	/// by the host, for its answer, returned as the snapshot it produced.
-	/// iOS only; every other platform answers Unavailable. The host's wait
-	/// bound means this resolves even when the OS stays silent; compare the
-	/// answered revision against [`ApnsRegistration::none`] to tell silence
-	/// from an answer.
+	/// iOS only; every other platform answers Unavailable. When the host's
+	/// wait bound passes with no new answer, the reply is
+	/// [`ApnsRegistration::unconfirmed`]: the broker's previous answer — a
+	/// token an earlier registration issued — is never handed back as if it
+	/// were fresh; read it separately with [`Notifications::remote_snapshot`].
 	pub async fn register_remote(self) -> Result<ApnsRegistration, Error> {
 		ApnsRegistration::decode(&self.0.call(REMOTE_REGISTER, &[])?.await?)
 	}

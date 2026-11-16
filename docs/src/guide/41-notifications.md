@@ -254,22 +254,31 @@ if notifications.request_permission().await? != Permission::Granted {
 }
 
 // Still in the gesture: register, wait the OS's bounded answer, enroll.
-// The answer is an opaque endpoint id — keep it beside the session.
+// The answer is an opaque endpoint id — persist it, with the opt-in flag,
+// beside the session. Never persist the token itself.
 let enrollment = native::enroll().await?;
 ```
 
-At **launch**, once the person is signed in, call `native::reconcile()`. It reads the broker's snapshot — a call that never prompts and never registers — and re-registers the token the OS already holds under whoever is signed in right now, answering `None` when it holds none. A rotated token re-registers the same destination, and the service answers the same endpoint id, so refreshes never eat into the ten-endpoint bound. Reconciliation never enrolls a previous account: the identity is the app's forwarded session, and the session's lifecycle is yours.
+At **launch**, once the person is signed in, call `native::reconcile(Some(&enrollment))` — with the enrollment you saved, and only with one: it is the record that this person opted in on this device. Reconciliation registers with APNs again — registration prompts nothing, Apple expects it every launch, and a device that never opted in is never registered, so a person who turned notifications off is not silently re-enabled. The answer is an explicit transition you persist:
+
+- `Outcome::Kept` — the OS still issues the same token; the service answered the same endpoint id, and the refresh was one idempotent call. Keep what you saved.
+- `Outcome::Rotated { current, retired }` — the OS now issues a different token. The module verifies the previous handle against this person's endpoint list and retires it under its owner — a rotated token never leaks an orphan endpoint — so you persist `current` and drop `retired`. When the person is at the ten-endpoint bound, the quota refusal is answered by retiring the known-stale handle and re-registering once, so rotation at the quota still completes. A `retired` handle that turns out to be a **previous account's leftover** — the session switched without the old account signing out — is reported as `Retirement::Stale`: it is dropped, never operated under the new identity, and no credential moves.
+- `Outcome::Off` — you passed no previous enrollment, so nothing was registered and nothing asked; the cue to show the opt-in switch.
 
 ```rust,ignore
 // At launch, without prompting:
-if native::reconcile().await?.is_none() {
-	// Show the switch; from its click handler, ask permission and enroll.
+match native::reconcile(Some(&enrollment)).await? {
+	native::Outcome::Kept(kept) => enrollment = kept,
+	native::Outcome::Rotated { current, .. } => enrollment = current,
+	native::Outcome::Off => {/* show the switch; from its handler, enroll */}
 }
 ```
 
-**Sign out by disabling.** While the person is still authenticated, `native::disable(&enrollment).await?` revokes this person's service enrollment with a stable idempotency key derived from the endpoint id — the same contract as the web's `browser::disable` — so a retried sign-out is safe. It never changes OS registration or permission; the token stays the device's, and the next account enrolls from clean. When the OS rotates the token, the new destination is its own endpoint until the app disables the old handle, which is the explicit cleanup — churn is bounded, not accumulated.
+Failures name their retry state rather than swallowing it: `EnrollError::Unconfirmed` means the OS did not answer within the host's bound — the previous enrollment stands untouched, and a stale token is never dressed up as success; `EnrollError::Enroll` carries the handle to keep retrying with (`None` when the attempt already retired it); `RetireFailed` and `OwnershipUnknown` leave the new enrollment live and name the old handle whose revoke to retry. A later `reconcile` retries an unfinished retirement by itself.
 
-Registration failures are surfaced, not guessed around: the OS's provisioning refusal (most often a mismatched or missing `aps-environment`) comes back as an error naming it, a silent OS answers a bounded "no token yet" instead of hanging, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
+**Sign out by disabling.** While the person is still authenticated, `native::disable(&enrollment).await?` revokes this person's service enrollment with a stable idempotency key derived from the endpoint id — the same contract as the web's `browser::disable` — so a retried sign-out is safe. It never changes OS registration or permission; the token stays the device's, and the next account enrolls from clean. Clear the saved enrollment and opt-in once the revoke is acknowledged: reconciliation runs only on what you pass it.
+
+Registration failures are surfaced, not guessed around: the OS's provisioning refusal comes back as an error carrying a stable code — `aps-environment` names the missing or mismatched entitlement — never the OS's own error text, a silent OS answers an explicit "unconfirmed" instead of hanging or replaying a prior token, and a cancelled wait gives up without losing the callback — the broker keeps it for the next read. There is no swizzling, no background daemon, and no token cached to storage.
 
 **What a push does while the app is closed** is the OS's work: APNs wakes the system, which shows the alert from the payload — title and body, collapsed by the notification's id — and your durable inbox row is already in the service. What this does **not** include yet: routing a tap into a screen (the envelope's `data` is carried, but the tap-routing story is later work), and any claim of live APNs acceptance here — provider acceptance is only ever proven by a real device with real credentials, which this setup doesn't exercise.
 

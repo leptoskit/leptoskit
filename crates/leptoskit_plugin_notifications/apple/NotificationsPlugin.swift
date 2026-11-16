@@ -44,20 +44,35 @@ public enum RemoteRegistration {
     static let maxTokenCharacters = 200
     static let maxFailureBytes = 256
 
-    /// The registration answer's shape.
-    public enum State: Equatable, Sendable {
+    /// The registration answer's shape. Descriptions never print a token's
+    /// bytes.
+    public enum State: Equatable, Sendable, CustomStringConvertible {
         case none
         /// The OS issued a device token, as lower-case hex.
         case token(String)
-        /// The OS refused registration; bounded, sanitized reason.
+        /// The OS refused registration; one of the contract's stable codes.
         case failed(String)
+        /// A registration wait ended without a new answer. The broker's last
+        /// answer, if any, is unchanged and still readable.
+        case unconfirmed
+
+        public var description: String {
+            switch self {
+            case .none: "none"
+            case .token(let hex): "token(<\(hex.count) hex chars>)"
+            case .failed(let reason): "failed(\(reason))"
+            case .unconfirmed: "unconfirmed"
+            }
+        }
     }
 
-    public struct Snapshot: Equatable, Sendable {
+    public struct Snapshot: Equatable, Sendable, CustomStringConvertible {
         /// Monotonic answer counter; `0` means no answer has arrived since
         /// the process started.
         public var revision: UInt64
         public var state: State
+
+        public var description: String { "Snapshot(revision: \(revision), state: \(state))" }
     }
 
     private static var snapshot = Snapshot(revision: 0, state: .none)
@@ -72,35 +87,55 @@ public enum RemoteRegistration {
         let hex = token.map { String(format: "%02x", $0) }.joined()
 
         guard hex.count >= minTokenCharacters, hex.count <= maxTokenCharacters else {
-            note(failure: "the device token has an unexpected length")
+            note(failure: FailureCode.tokenShape)
             return
         }
 
-        snapshot = Snapshot(revision: snapshot.revision + 1, state: .token(hex))
+        snapshot = Snapshot(revision: nextRevision(), state: .token(hex))
     }
 
     /// The app delegate's `didFailToRegisterForRemoteNotificationsWithError`.
-    /// The reason is sanitized to bounded, control-free text; the token never
-    /// travels through an error.
+    /// The reason becomes one of the contract's stable codes: the OS's own
+    /// error text can carry device or provisioning detail an app has no
+    /// business logging, so none of it crosses the bridge, and the token
+    /// never travels through an error.
     public static func noteRegistrationFailure(_ error: any Error) {
-        note(failure: sanitize(String(describing: error)))
+        note(failure: failureCode(for: error))
+    }
+
+    /// Maps the delegate's error to its stable code. The one distinction
+    /// worth keeping is the entitlement refusal — the app's own messaging
+    /// wants to name it — and it is matched on domain and code, never on the
+    /// error's text.
+    private static func failureCode(for error: any Error) -> String {
+        let native = error as NSError
+        if native.domain == NSCocoaErrorDomain, native.code == 3000 {
+            return FailureCode.apsEnvironment
+        }
+        return FailureCode.osRefused
+    }
+
+    /// The contract's stable failure codes, mirrored from the Rust side.
+    private enum FailureCode {
+        static let osRefused = "os-refused"
+        static let apsEnvironment = "aps-environment"
+        static let tokenShape = "token-shape"
     }
 
     static func note(failure: String) {
-        snapshot = Snapshot(revision: snapshot.revision + 1, state: .failed(sanitize(failure)))
+        snapshot = Snapshot(revision: nextRevision(), state: .failed(failure))
+    }
+
+    /// The next revision, saturating instead of trapping should the counter
+    /// ever reach the top.
+    private static func nextRevision() -> UInt64 {
+        let next = snapshot.revision &+ 1
+        return next == 0 ? .max : next
     }
 
     /// Resets the broker. Process-scoped state, so only tests call this.
     static func reset(_ snapshot: Snapshot = Snapshot(revision: 0, state: .none)) {
         self.snapshot = snapshot
-    }
-
-    private static func sanitize(_ text: String) -> String {
-        var bytes = Array(text.utf8.filter { !($0 < 32 || $0 == 127) })
-
-        if bytes.count > maxFailureBytes { bytes = Array(bytes[..<maxFailureBytes]) }
-
-        return String(bytes: bytes, encoding: .utf8) ?? ""
     }
 }
 
@@ -148,6 +183,7 @@ public final class NotificationsPlugin: NativePlugin {
     private let remoteWaitLimitNanos: UInt64
     private var closed = false
     private var requesting = false
+    private var registering = false
     private struct Pending { let ticket: UUID; var cancelled = false }
     private var pending: [String: Pending] = [:]
     static let prefix = "leptoskit.notifications."
@@ -230,8 +266,11 @@ public final class NotificationsPlugin: NativePlugin {
 
     /// Asks the OS to register for remote notifications on the main actor,
     /// then waits a bounded time for the answer the app delegate forwards.
-    /// A silent OS answers the unchanged snapshot, so the caller can tell
-    /// silence from a token or a failure by the revision. Only iOS hosts
+    /// One registration is in flight at a time: callers that arrive while
+    /// one runs join its wait rather than asking the OS again. A silent OS
+    /// answers `unconfirmed`, never the previous token as though it were
+    /// fresh — a late callback still lands in the broker for the next read,
+    /// and a plugin closed while waiting never succeeds. Only iOS hosts
     /// dispatch this: `methods` advertises 8 there alone.
     private func registerRemote(payload: NativeBuffer) async throws -> Data {
         guard payload.count == 0 else { throw PluginError.invalidArgument }
@@ -239,7 +278,14 @@ public final class NotificationsPlugin: NativePlugin {
         try Task.checkCancellation()
 
         let since = RemoteRegistration.current().revision
-        await registrar.register()
+
+        // Bound the OS requests at one: the first caller asks, the rest wait
+        // for whatever answer its registration produces.
+        let asking = !registering
+        if asking { registering = true }
+        defer { if asking { registering = false } }
+
+        if asking { await registrar.register() }
 
         let snapshot: RemoteRegistration.Snapshot
         do {
@@ -247,7 +293,16 @@ public final class NotificationsPlugin: NativePlugin {
         } catch {
             throw mapped(error)
         }
+
+        guard !closed else { throw PluginError.cancelled }
         try Task.checkCancellation()
+
+        // Silence at the bound is an explicit non-answer, not a stale token.
+        if snapshot.revision == since {
+            return try Self.encodeSnapshot(
+                RemoteRegistration.Snapshot(revision: 0, state: .unconfirmed)
+            )
+        }
         return try Self.encodeSnapshot(snapshot)
     }
 
@@ -301,6 +356,9 @@ public final class NotificationsPlugin: NativePlugin {
         case .failed(let reason):
             append(2)
             try append(reason)
+        case .unconfirmed:
+            append(3)
+            try append("")
         }
 
         return data

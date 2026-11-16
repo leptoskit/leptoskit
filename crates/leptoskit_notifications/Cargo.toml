@@ -59,9 +59,12 @@ chrono = { workspace = true }
 httpdate = { version = "1", optional = true }
 leptoskit_db = { workspace = true }
 # The plugin contract the native enrollment rides on: the snapshot types the
-# iOS host's answers cross the bridge in. Its wire codec is tiny and adds no
-# server dependency; only the `native` feature turns its guest client on.
-leptoskit_plugin_notifications = { workspace = true }
+# iOS host's answers cross the bridge in. Optional, like every platform
+# plugin: only the `native` feature turns it on — its guest side alone,
+# without the browser implementation's imports or the Linux backend — so
+# the shared types and the service build without it everywhere the guest
+# enrollment does not run.
+leptoskit_plugin_notifications = { workspace = true, optional = true, default-features = false }
 leptoskit_rpc = { workspace = true, features = ["client"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -139,10 +142,12 @@ browser = [
 ]
 # The native client for iOS: enrollment from the app's Wasm guest through
 # the notifications plugin's APNs token broker, with `leptoskit_rpc/guest`
-# as the transport. Like `browser`, it adds no server dependency, and the
-# same test checks its tree.
+# as the transport. It turns the plugin contract on — the guest side only,
+# which compiles no platform backend — and like `browser` it adds no server
+# dependency; the same test checks its tree.
 native = [
 	"dep:leptoskit_bridge",
+	"dep:leptoskit_plugin_notifications",
 	"dep:thiserror",
 	"leptoskit_plugin_notifications/guest",
 	"leptoskit_rpc/guest",

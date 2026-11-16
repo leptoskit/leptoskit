@@ -33,6 +33,7 @@ members = [
 	"examples/huddle/load",
 	"examples/huddle/macos",
 	"examples/islands",
+	"examples/notifications_guest",
 	"examples/observatory",
 	"examples/opencode",
 	"examples/platform_probe",

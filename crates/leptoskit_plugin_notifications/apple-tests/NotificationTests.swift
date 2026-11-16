@@ -196,7 +196,7 @@ struct RemoteNotifications {
     }
 
     /// A token outside the contract's bounds is an honest failure, never a
-    /// shortened or padded token, and its bytes never reach the reason text.
+    /// shortened or padded token, and its bytes never reach the reason code.
     @Test
     func anUnrepresentableTokenBecomesAFailureWithoutLeakingBytes() async throws {
         RemoteRegistration.reset()
@@ -205,34 +205,40 @@ struct RemoteNotifications {
         let reply = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
         #expect(reply.revision == 1)
         #expect(reply.state == 2)
-        #expect(reply.text == "the device token has an unexpected length")
+        #expect(reply.text == "token-shape")
         RemoteRegistration.reset()
     }
 
-    /// Failure reasons are sanitized to bounded, control-free text.
+    /// Failure reasons are the contract's stable codes: the OS's own error
+    /// text never crosses, whatever it carries, and the one diagnosis worth
+    /// keeping — the entitlement refusal — is matched on domain and code.
     @Test
-    func registrationFailuresAreSanitizedAndBounded() async throws {
+    func registrationFailuresBecomeStableReasonCodes() async throws {
         RemoteRegistration.reset()
-        struct Loud: Error {}
-        let long = String(repeating: "x", count: 600)
+
+        // Arbitrary error text, whatever it carries, becomes one code.
+        struct Loud: Error, CustomStringConvertible {
+            var description = "device 0xdeadbeef token=a1b2c3 no valid aps-environment \u{7}"
+        }
         NotificationsPlugin.noteRegistrationFailure(Loud())
-        #expect(RemoteRegistration.current().revision == 1)
+        var reply = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
+        #expect(reply.revision == 1)
+        #expect(reply.state == 2)
+        #expect(reply.text == "os-refused")
 
-        let first = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
-        #expect(first.state == 2)
+        // The entitlement refusal keeps its own stable code.
+        NotificationsPlugin.noteRegistrationFailure(
+            NSError(domain: NSCocoaErrorDomain, code: 3000)
+        )
+        reply = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
+        #expect(reply.revision == 2)
+        #expect(reply.text == "aps-environment")
 
-        RemoteRegistration.note(failure: "bad\nreason\u{7}")
-
-        let second = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
-        #expect(second.revision == 2)
-        #expect(second.state == 2)
-        #expect(second.text == "badreason")
-        #expect(!second.text.unicodeScalars.contains { $0.value < 32 })
-
-        RemoteRegistration.note(failure: long)
-        let third = try snapshot(NotificationsPlugin.encodeSnapshot(RemoteRegistration.current()))
-        #expect(third.text.utf8.count <= 256)
-        #expect(third.text.hasPrefix("xxx"))
+        // No description of the broker's state carries token bytes.
+        RemoteRegistration.noteDeviceToken(oddToken)
+        let described = String(describing: RemoteRegistration.current())
+        #expect(!described.contains(oddToken.map { String(format: "%02x", $0) }.joined()))
+        #expect(described.contains("hex chars"))
         RemoteRegistration.reset()
     }
 
@@ -256,12 +262,12 @@ struct RemoteNotifications {
         RemoteRegistration.reset()
     }
 
-    /// The full registration call: the OS boundary is asked once, the delegate's
-    /// answer lands in the reply as exact lower-case hex, a second caller while
-    /// one is waiting converges on the same answer, and a refresh sees the new
-    /// revision. The fake stands in for `registerForRemoteNotifications` and the
-    /// tests call the same delegate-shaped entry points the generated app
-    /// delegate does.
+    /// The full registration call: the OS boundary is asked exactly once
+    /// while concurrent callers share its wait, the delegate's answer lands
+    /// in every reply as exact lower-case hex, and a refresh sees the new
+    /// revision. The fake stands in for `registerForRemoteNotifications`
+    /// and the tests call the same delegate-shaped entry points the
+    /// generated app delegate does.
     @Test
     func registrationForwardsTheDelegateAnswerToEveryCaller() async throws {
         RemoteRegistration.reset()
@@ -272,7 +278,7 @@ struct RemoteNotifications {
         let second = Task { try await plugin.invoke(method: 8, payload: payload([])) }
 
         for _ in 0..<100 { await Task.yield() }
-        #expect(registrar.calls >= 1, "the OS boundary was asked")
+        #expect(registrar.calls == 1, "one OS request serves every concurrent caller")
         NotificationsPlugin.noteDeviceToken(oddToken)
 
         let hex = oddToken.map { String(format: "%02x", $0) }.joined()
@@ -286,7 +292,7 @@ struct RemoteNotifications {
         // A refresh answers again through the delegate with a new revision.
         let refresh = Task { try await plugin.invoke(method: 8, payload: payload([])) }
         for _ in 0..<100 { await Task.yield() }
-        #expect(registrar.calls >= 2, "the second call asked the OS boundary again")
+        #expect(registrar.calls == 2, "a later call asks the OS boundary again")
         NotificationsPlugin.noteDeviceToken(Data(repeating: 0x5a, count: 40))
         let refreshed = try snapshot(try await refresh.value)
         #expect(refreshed.revision == 2)
@@ -301,9 +307,7 @@ struct RemoteNotifications {
     @Test
     func registrationReportsTheDelegateFailureAndGuardsItsPayload() async throws {
         RemoteRegistration.reset()
-        struct Refused: Error, CustomStringConvertible {
-            var description = "no valid aps-environment entitlement"
-        }
+        struct Refused: Error {}
         let registrar = FakeRegistrar()
         let plugin = NotificationsPlugin(service: Service(), registrar: registrar, remoteWaitLimitNanos: 5_000_000_000)
 
@@ -314,7 +318,7 @@ struct RemoteNotifications {
         let reply = try snapshot(try await task.value)
         #expect(reply.revision == 1)
         #expect(reply.state == 2)
-        #expect(reply.text == "no valid aps-environment entitlement")
+        #expect(reply.text == "os-refused")
 
         await #expect(throws: PluginError.invalidArgument) {
             try await plugin.invoke(method: 8, payload: payload([120]))
@@ -331,11 +335,15 @@ struct RemoteNotifications {
         RemoteRegistration.reset()
     }
 
-    /// A silent OS answers the unchanged snapshot at the bound instead of
-    /// hanging, and a callback that arrives after the bound is still readable.
+    /// A silent OS answers `unconfirmed` at the bound instead of handing
+    /// back the previous token as though it were fresh — even when the
+    /// broker already holds one — and a callback that arrives after the
+    /// bound is still readable.
     @Test
-    func theWaitIsBoundedAndLateCallbacksStayReadable() async throws {
+    func theWaitIsBoundedAndNeverAnswersAPriorTokenAsFresh() async throws {
         RemoteRegistration.reset()
+        // A previous registration's token, already in the broker.
+        NotificationsPlugin.noteDeviceToken(oddToken)
         let plugin = NotificationsPlugin(
             service: Service(),
             registrar: FakeRegistrar(),
@@ -344,12 +352,18 @@ struct RemoteNotifications {
         let start = Date()
         let reply = try snapshot(try await plugin.invoke(method: 8, payload: payload([])))
         #expect(Date().timeIntervalSince(start) < 2, "the bound is honored, not a hang")
-        #expect(reply.revision == 0)
-        #expect(reply.state == 0)
+        #expect(reply.revision == 0, "an unconfirmed answer carries no revision")
+        #expect(reply.state == 3, "silence is unconfirmed, not the prior token")
+        #expect(reply.text.isEmpty)
 
-        NotificationsPlugin.noteDeviceToken(oddToken)
+        // The prior token is still readable, untouched, and a late callback
+        // still lands for the next reader.
+        let before = try snapshot(try await plugin.invoke(method: 7, payload: payload([])))
+        #expect(before.revision == 1)
+        #expect(before.state == 1)
+        NotificationsPlugin.noteDeviceToken(Data(repeating: 0x5a, count: 40))
         let after = try snapshot(try await plugin.invoke(method: 7, payload: payload([])))
-        #expect(after.revision == 1)
+        #expect(after.revision == 2)
         #expect(after.state == 1)
         plugin.close()
         RemoteRegistration.reset()
@@ -376,6 +390,38 @@ struct RemoteNotifications {
         #expect(snapshot.revision == 1)
         #expect(snapshot.state == 1)
         plugin.close()
+        RemoteRegistration.reset()
+    }
+
+    /// A plugin closed while a registration waits never succeeds with a
+    /// token: the call answers cancelled, while the broker keeps the late
+    /// callback readable for the next plugin instance.
+    @Test
+    func closingWhileWaitingNeverSucceedsWithAToken() async throws {
+        RemoteRegistration.reset()
+        let plugin = NotificationsPlugin(
+            service: Service(),
+            registrar: FakeRegistrar(),
+            remoteWaitLimitNanos: 30_000_000_000
+        )
+        let task = Task { try await plugin.invoke(method: 8, payload: payload([])) }
+
+        for _ in 0..<100 { await Task.yield() }
+        plugin.close()
+        NotificationsPlugin.noteDeviceToken(oddToken)
+
+        do {
+            let answer = try await task.value
+            Issue.record("a closed plugin must not answer a token: \(answer)")
+        } catch {
+            #expect(error is PluginError)
+        }
+
+        let later = try snapshot(
+            try await NotificationsPlugin(service: Service()).invoke(method: 7, payload: payload([]))
+        )
+        #expect(later.revision == 1)
+        #expect(later.state == 1)
         RemoteRegistration.reset()
     }
 

@@ -3,6 +3,9 @@ import LeptosKitBridge
 #if canImport(LeptosKitAppShortcuts)
 import LeptosKitAppShortcuts
 #endif
+#if canImport(LeptosKitNotifications)
+import LeptosKitNotifications
+#endif
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {

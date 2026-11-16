@@ -7931,6 +7931,7 @@ dependencies = [
  "leptoskit_native",
  "leptoskit_plugin_filesystem",
  "leptoskit_plugin_http",
+ "leptoskit_plugin_notifications",
  "leptoskit_rive",
  "leptoskit_yoga",
  "log",
@@ -7938,6 +7939,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "thiserror 2.0.21",
+ "uuid",
  "wasmi",
  "wasmi_core",
 ]
@@ -8620,6 +8622,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2de2bc5b451bfedaef92c90b8939a8fff5770bdcc1fafd6239d086aab8fa6b29"
 dependencies = [
  "nom 8.0.0",
+]
+
+[[package]]
+name = "notifications_guest_probe"
+version = "0.3.0"
+dependencies = [
+ "any_spawner",
+ "futures",
+ "leptoskit_bridge",
+ "leptoskit_notifications",
+ "leptoskit_query",
+ "leptoskit_rpc",
 ]
 
 [[package]]

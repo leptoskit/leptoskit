@@ -1,4 +1,4 @@
-#![cfg(all(target_arch = "wasm32", target_os = "unknown", not(feature = "guest")))]
+#![cfg(all(target_arch = "wasm32", target_os = "unknown", feature = "browser"))]
 
 use leptoskit_bridge::Error;
 use leptoskit_plugin_notifications::Identifier;

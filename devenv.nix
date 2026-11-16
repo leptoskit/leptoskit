@@ -1146,6 +1146,12 @@ in
         cargo build --locked --release --target wasm32-unknown-unknown --package timer_guest_probe
         LEPTOSKIT_TIMER_GUEST="$guest_target/wasm32-unknown-unknown/release/timer_guest_probe.wasm" \
           cargo test --locked --package leptoskit_wasm --test timers -- --ignored
+        # The notifications native enrollment's real guest control flow:
+        # the plugin guest and the RPC client over the HTTP plugin, with
+        # the OS and the service played by the host test.
+        cargo build --locked --release --target wasm32-unknown-unknown --package notifications_guest_probe
+        LEPTOSKIT_NOTIFICATIONS_GUEST="$guest_target/wasm32-unknown-unknown/release/notifications_guest_probe.wasm" \
+          cargo test --locked --package leptoskit_wasm --test notifications_guest -- --ignored
         # A debug build keeps every import its dependencies link, so any
         # wasm-bindgen import reactive_graph adds outside the interpreter's
         # shim set fails here rather than on a device.
