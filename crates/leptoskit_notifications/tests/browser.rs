@@ -119,6 +119,7 @@ fn install_fakes() {
 			w.__lknClosed = 0;
 			w.__lknPending = [];
 			w.__lknClients = [];
+			w.__lknBadges = [];
 			w.__lknRegistration = {
 				// One microtask of real asynchrony, so the banner lands
 				// inside the lifetime rather than during the call.
@@ -135,6 +136,22 @@ fn install_fakes() {
 					return null;
 				},
 			};
+			// The badge API, recorded: setAppBadge answers the count it
+			// was asked to set, and a zero is the clear the receiver
+			// translates it to.
+			try {
+				navigator.setAppBadge = (count) => {
+					w.__lknBadges.push(count);
+					return Promise.resolve();
+				};
+				navigator.clearAppBadge = () => {
+					w.__lknBadges.push(0);
+					return Promise.resolve();
+				};
+			} catch (_error) {
+				// A browser that locks its navigator down leaves the
+				// badge untested, never the banner.
+			}
 			w.__lknPushEvent = (text, byteLength) => {
 				const pending = [];
 				const event = {
@@ -190,13 +207,17 @@ fn remove_fakes() {
 			const w = window;
 			for (const name of [
 				"__lknShown", "__lknOpened", "__lknFocused", "__lknNavigated",
-				"__lknClosed", "__lknPending", "__lknClients",
+				"__lknClosed", "__lknPending", "__lknClients", "__lknBadges",
 				"__lknRegistration", "__lknPushEvent", "__lknClickEvent",
 			]) {
 				delete w[name];
 			}
 			delete w.registration;
 			delete w.clients;
+			try {
+				delete navigator.setAppBadge;
+				delete navigator.clearAppBadge;
+			} catch (_error) {}
 		})();
 	"#,
 	);
@@ -442,6 +463,189 @@ async fn the_id_only_envelope_shows_without_data() {
 			.unwrap_or(JsValue::UNDEFINED)
 			.is_undefined(),
 		"an envelope without data leaves none on the banner"
+	);
+
+	remove_fakes();
+}
+
+/// A data message shows nothing and only sets the badge it asked for:
+/// the worker's whole job for it is `lkbadge`, and a zero clears.
+#[wasm_bindgen_test]
+async fn a_data_message_shows_nothing_but_sets_the_badge() {
+	install_fakes();
+	install_script();
+
+	let id = notification_id();
+	let envelope = format!(
+		r#"{{"title":"Sync","body":"quiet","lkn":"{id}","lk":{{"since":"42"}},"lkdata":true,"lkbadge":3}}"#
+	);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+
+	assert_eq!(shown().len(), 0, "a data message shows no banner");
+	let badges = counter("__lknBadges");
+	assert_eq!(badges.length(), 1, "the badge was asked for");
+	assert_eq!(badges.get(0).as_f64(), Some(3.0));
+
+	// A zero is a clear.
+	let cleared = format!(r#"{{"lkn":"{id}","lkdata":true,"lkbadge":0}}"#);
+	deliver(&cleared, Some(cleared.len() as u32)).await;
+	assert_eq!(shown().len(), 0, "still nothing shows");
+	let badges = counter("__lknBadges");
+	assert_eq!(badges.get(1).as_f64(), Some(0.0), "a zero clears");
+
+	// A badge the platform wouldn't set — negative, fractional, a
+	// string — is ignored, not invented into one.
+	let junk = format!(r#"{{"lkn":"{id}","lkdata":true,"lkbadge":-1,"lk":{{}},"silent":"yes"}}"#);
+	deliver(&junk, Some(junk.len() as u32)).await;
+	assert_eq!(
+		counter("__lknBadges").length(),
+		2,
+		"junk badges change nothing"
+	);
+
+	remove_fakes();
+}
+
+/// The options shape the banner the receiver shows: the silent flag,
+/// the image, and the web presentation set, each passed through only
+/// when it is the shape the service would have sent.
+#[wasm_bindgen_test]
+async fn options_shape_the_banner() {
+	install_fakes();
+	install_script();
+
+	let id = notification_id();
+	let envelope = format!(
+		r#"{{"title":"Invoice paid","body":"See it","lkn":"{id}","silent":true,"image":"https://cdn.example.test/paid.png","lkw":{{"icon":"https://cdn.example.test/icon.png","badge":"/badge.png","actions":[{{"action":"open","title":"Open"}}],"require_interaction":true,"dir":"rtl","lang":"de"}}}}"#
+	);
+	deliver(&envelope, Some(envelope.len() as u32)).await;
+
+	let records = shown();
+	assert_eq!(records.len(), 1);
+	let options = shown_options(&records[0]);
+	assert_eq!(option(&options, "silent"), JsValue::from_bool(true));
+	assert_eq!(
+		option(&options, "image").as_string().expect("an image"),
+		"https://cdn.example.test/paid.png"
+	);
+	assert_eq!(
+		option(&options, "icon").as_string().expect("an icon"),
+		"https://cdn.example.test/icon.png"
+	);
+	assert_eq!(
+		option(&options, "badge")
+			.as_string()
+			.expect("a badge shape"),
+		"/badge.png"
+	);
+	assert_eq!(
+		option(&options, "requireInteraction"),
+		JsValue::from_bool(true)
+	);
+	assert_eq!(
+		option(&options, "dir").as_string().expect("a direction"),
+		"rtl"
+	);
+	assert_eq!(
+		option(&options, "lang").as_string().expect("a language"),
+		"de"
+	);
+	let actions = option(&options, "actions")
+		.dyn_into::<js_sys::Array>()
+		.expect("actions");
+	assert_eq!(actions.length(), 1);
+	let action =
+		js_sys::Reflect::get(&actions.get(0), &JsValue::from_str("action")).expect("an action id");
+	assert_eq!(action.as_string().expect("text"), "open");
+
+	// A mistyped presentation set is dropped whole, never partly
+	// honored: the banner still shows with what survived.
+	let junk = format!(
+		r#"{{"title":"T","body":"b","lkn":"{id}","lkw":{{"dir":"diagonal","actions":"no","lang":42}}}}"#
+	);
+	deliver(&junk, Some(junk.len() as u32)).await;
+	let options = shown_options(&shown()[1]);
+	assert!(
+		option(&options, "dir").is_undefined(),
+		"an unknown direction is dropped"
+	);
+	assert!(
+		option(&options, "actions").is_undefined(),
+		"junk actions are dropped"
+	);
+	assert!(
+		option(&options, "lang").is_undefined(),
+		"a mistyped language is dropped"
+	);
+	assert_eq!(
+		option(&options, "tag").as_string().expect("a tag"),
+		id,
+		"the banner itself is unaffected"
+	);
+
+	remove_fakes();
+}
+
+/// A click opens the send's own link when it resolves to this origin,
+/// and falls back to the inbox route for anything off it.
+#[wasm_bindgen_test]
+async fn a_click_opens_the_links_own_origin_and_refuses_foreign_ones() {
+	install_fakes();
+	install_script();
+	install_clients();
+
+	let id = notification_id();
+
+	// A path on this origin: opened as itself.
+	click(&format!(r#"{{"lkn":"{id}","lklink":"/invoice/42"}}"#)).await;
+	wait_for_handlers().await;
+	assert_eq!(
+		navigated(),
+		vec![format!("{}/invoice/42", origin())],
+		"the link is the click's own address"
+	);
+
+	// An absolute URL of this origin: itself too.
+	let absolute = format!("{}/invoices?paid=1", origin());
+	click(&format!(r#"{{"lkn":"{id}","lklink":"{absolute}"}}"#)).await;
+	wait_for_handlers().await;
+	assert_eq!(
+		navigated()[1],
+		absolute,
+		"an absolute same-origin link opens"
+	);
+
+	// A foreign authority — scheme-relative, absolute, or a scheme the
+	// platform would navigate — falls back to the route with the id,
+	// never off this origin.
+	for foreign in [
+		"//evil.test/invoice",
+		"https://evil.test/invoice",
+		"javascript:alert(1)",
+	] {
+		let data = serde_json::to_string(&serde_json::json!({
+			"lkn": id,
+			"lklink": foreign,
+		}))
+		.expect("a click's data");
+		click(&data).await;
+		wait_for_handlers().await;
+	}
+
+	let last = navigated().last().cloned().unwrap_or_default();
+	assert_eq!(
+		last,
+		format!("{}/inbox?lkn={id}", origin()),
+		"a foreign link falls back to the route"
+	);
+	assert!(
+		opened().is_empty(),
+		"no window ever opens off-origin: {:?}",
+		opened()
+	);
+	assert!(
+		focused_markers().len() >= 3,
+		"the same-origin window is reused"
 	);
 
 	remove_fakes();

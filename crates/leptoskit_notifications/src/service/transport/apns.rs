@@ -196,11 +196,28 @@ impl Apns {
 		payload: Vec<u8>,
 		message: &Message,
 	) -> Outcome {
+		// A silent data message is a background push: Apple requires the
+		// background push type, and priority 5 with it. A visible
+		// notification keeps the alert type and — as before options
+		// existed — priority 10 unless the send said otherwise.
+		let background = message.options.is_data();
+		let priority = if background {
+			"5"
+		} else {
+			match message.options.priority {
+				Some(crate::options::SendPriority::Normal) => "5",
+				Some(crate::options::SendPriority::High) | None => "10",
+			}
+		};
+
 		let mut headers = vec![
 			("authorization".to_owned(), format!("Bearer {token}")),
 			("apns-topic".to_owned(), self.topic.clone()),
-			("apns-push-type".to_owned(), "alert".to_owned()),
-			("apns-priority".to_owned(), "10".to_owned()),
+			(
+				"apns-push-type".to_owned(),
+				if background { "background" } else { "alert" }.to_owned(),
+			),
+			("apns-priority".to_owned(), priority.to_owned()),
 			("apns-id".to_owned(), message.id.to_string()),
 			// The stable collapse id: a repeat replaces, not stacks.
 			("apns-collapse-id".to_owned(), message.id.to_string()),
@@ -242,58 +259,199 @@ impl Transport for Apns {
 				return Outcome::Transient { after: None };
 			};
 
-			// Size is checked on the encoded payload: the full one first,
-			// then the minimal id-only envelope, and past both a terminal
-			// clear result.
-			let full = serde_json::to_vec(&apns_payload(message)).unwrap_or_else(|_| Vec::new());
+			// Size is checked on the encoded payload, trimming the
+			// optional extras in the shared order — platform overrides,
+			// then image, then sound, badge, and link — before falling
+			// back to the id-only envelope, and past it a terminal clear
+			// result.
+			let mut payload = apns_payload(message);
 
-			if full.len() > PAYLOAD_LIMIT {
-				let minimal =
-					serde_json::to_vec(&apns_minimal_payload(message)).unwrap_or_default();
+			for trim in [Trim::PlatformAndImage, Trim::SoundBadgeLink, Trim::Minimal] {
+				let encoded = serde_json::to_vec(&payload).unwrap_or_default();
 
-				if minimal.len() > PAYLOAD_LIMIT {
-					return Outcome::Ended {
-						reason: DeliveryReason::Oversized,
-						invalidate: false,
-					};
+				if encoded.len() <= PAYLOAD_LIMIT {
+					return self.post(credential, &token, encoded, message).await;
 				}
 
-				return self.post(credential, &token, minimal, message).await;
+				trim.apply(&mut payload, message);
 			}
 
-			self.post(credential, &token, full, message).await
+			let minimal = serde_json::to_vec(&payload).unwrap_or_default();
+
+			if minimal.len() > PAYLOAD_LIMIT {
+				return Outcome::Ended {
+					reason: DeliveryReason::Oversized,
+					invalidate: false,
+				};
+			}
+
+			self.post(credential, &token, minimal, message).await
 		};
 
 		Box::pin(send)
 	}
 }
 
-/// The full payload: the visible alert, the notification's id for
-/// routing and deduplication, and the send's `data`.
+/// One step of the documented degradation order, applied to the payload
+/// in place: first the platform overrides and the image, then the sound,
+/// the badge, and the link, then — the id-only envelope — the send's
+/// `data` and everything else optional.
+enum Trim {
+	PlatformAndImage,
+	SoundBadgeLink,
+	Minimal,
+}
+
+impl Trim {
+	/// What this step drops.
+	fn apply(self, payload: &mut serde_json::Value, message: &Message) {
+		match self {
+			Self::PlatformAndImage => {
+				if let Some(aps) = payload.get_mut("aps").and_then(|aps| aps.as_object_mut()) {
+					for key in [
+						"thread-id",
+						"category",
+						"interruption-level",
+						"relevance-score",
+						"mutable-content",
+					] {
+						aps.remove(key);
+					}
+
+					if let Some(alert) =
+						aps.get_mut("alert").and_then(|alert| alert.as_object_mut())
+					{
+						alert.remove("subtitle");
+					}
+				}
+
+				if let Some(object) = payload.as_object_mut() {
+					object.remove("lkimg");
+				}
+			}
+			Self::SoundBadgeLink => {
+				if let Some(aps) = payload.get_mut("aps").and_then(|aps| aps.as_object_mut()) {
+					aps.remove("sound");
+					aps.remove("badge");
+				}
+
+				if let Some(object) = payload.as_object_mut() {
+					object.remove("lklink");
+				}
+			}
+			Self::Minimal => {
+				// The id-only envelope: today's minimal payload, which
+				// for a data message keeps the background shape and its
+				// id, because a silent push must stay silent.
+				*payload = apns_minimal_payload(message);
+			}
+		}
+	}
+}
+
+/// The full payload: the visible alert — or a background message's
+/// `content-available` — the notification's id for routing and
+/// deduplication, the send's `data`, and every option that shapes the
+/// push: badge, sound, link, and the Apple overrides.
 fn apns_payload(message: &Message) -> serde_json::Value {
 	let mut payload = apns_minimal_payload(message);
-	let data: serde_json::Value = serde_json::from_str(&message.data).unwrap_or_default();
 
-	if let Some(object) = data.as_object()
+	if let Some(object) = data_object(message)
 		&& !object.is_empty()
 	{
-		payload["lk"] = data;
+		payload["lk"] = serde_json::Value::Object(object);
 	}
 
+	let mut aps = payload["aps"].take();
+
+	if !message.options.is_data() {
+		// An image needs a Notification Service Extension in the app to
+		// display: the mutable-content flag hands the payload to it,
+		// with the URL beside.
+		if let Some(image) = message.options.image.as_deref() {
+			aps["mutable-content"] = serde_json::json!(1);
+			payload["lkimg"] = serde_json::json!(image);
+		}
+
+		if let Some(apple) = message.options.apple.as_ref()
+			&& let Some(subtitle) = apple.subtitle.as_deref()
+		{
+			aps["alert"]["subtitle"] = serde_json::json!(subtitle);
+		}
+	}
+
+	if let Some(apple) = message.options.apple.as_ref() {
+		if let Some(thread_id) = apple.thread_id.as_deref() {
+			aps["thread-id"] = serde_json::json!(thread_id);
+		}
+
+		if let Some(category) = apple.category.as_deref() {
+			aps["category"] = serde_json::json!(category);
+		}
+
+		if let Some(level) = apple.interruption_level {
+			aps["interruption-level"] = serde_json::json!(level.as_str());
+		}
+
+		if let Some(score) = apple.relevance_score {
+			aps["relevance-score"] = serde_json::json!(score);
+		}
+	}
+
+	if let Some(badge) = message.badge {
+		aps["badge"] = serde_json::json!(badge);
+	}
+
+	match message.options.sound.as_ref() {
+		// Unset and Silent both leave the sound to the system: Apple
+		// platforms are silent without a `sound` key, so an explicit
+		// silence needs nothing.
+		None | Some(crate::options::NotificationSound::Silent) => {}
+		Some(crate::options::NotificationSound::Default) => {
+			aps["sound"] = serde_json::json!("default");
+		}
+		Some(crate::options::NotificationSound::Named(name)) => {
+			aps["sound"] = serde_json::json!(name);
+		}
+	}
+
+	if let Some(link) = message.options.link.as_deref() {
+		payload["lklink"] = serde_json::json!(link);
+	}
+
+	payload["aps"] = aps;
 	payload
 }
 
-/// The minimal payload: the visible alert and the notification's id.
+/// The minimal payload: the visible alert and the notification's id —
+/// or, for a data message, the background shape that shows nothing and
+/// the id.
 fn apns_minimal_payload(message: &Message) -> serde_json::Value {
-	serde_json::json!({
-		"aps": {
-			"alert": {
-				"title": message.title,
-				"body": message.body,
+	if message.options.is_data() {
+		serde_json::json!({
+			"aps": {
+				"content-available": 1,
 			},
-		},
-		"lkn": message.id.to_string(),
-	})
+			"lkn": message.id.to_string(),
+		})
+	} else {
+		serde_json::json!({
+			"aps": {
+				"alert": {
+					"title": message.title,
+					"body": message.body,
+				},
+			},
+			"lkn": message.id.to_string(),
+		})
+	}
+}
+
+/// The send's `data` as an object, when it parses as one.
+fn data_object(message: &Message) -> Option<serde_json::Map<String, serde_json::Value>> {
+	serde_json::from_str::<serde_json::Value>(&message.data)
+		.ok()
+		.and_then(|data| data.as_object().cloned())
 }
 
 /// Classifies one APNs answer. The provider's reason strings are read

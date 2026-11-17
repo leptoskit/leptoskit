@@ -1,6 +1,6 @@
 # Notifications
 
-You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics and the attributes you set, or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
+You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics and the attributes you set, or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between. Each send can be shaped — priority, an image, a sound, a badge, a click link, per-platform overrides, or a silent data message — and one call tests a spec on a real device before a campaign.
 
 This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, device attributes (a person's platform, locale, or app version as a segment), and any claim that a provider's acceptance means a person saw a banner.
 
@@ -348,6 +348,81 @@ let dry = call_as_app(leptoskit_notifications::Send {
 
 `send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does, for every target — recipients, topic, condition, and everyone. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
 
+## Shape a message
+
+A plain send shows a banner with its title and body everywhere. Most of the time that's right, and then there are the others: the message that shouldn't wake anyone, the one that should carry a picture, the one whose whole job is to correct the badge count. `SendSpec` takes an `options` object for those, and every field is optional — a send without options behaves exactly as sends always did, byte for byte on the wire.
+
+```rust
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: format!("invoice-paid-{invoice_id}"),
+    spec: SendSpec {
+        category: "billing".into(),
+        title: "Invoice paid".into(),
+        body: format!("Invoice #{invoice_id} is settled."),
+        data: None,
+        visible_at: None,
+        expires_at: None,
+        options: MessageOptions {
+            priority: Some(SendPriority::High),
+            image: Some(format!("https://cdn.example.test/invoices/{invoice_id}.png")),
+            sound: Some(NotificationSound::Default),
+            badge: Some(BadgeSetting::Unread),
+            link: Some(format!("/invoice/{invoice_id}")),
+            ..MessageOptions::default()
+        },
+    },
+    target: SendTarget::Recipients(vec![alice_id]),
+    validate_only: false,
+})
+.await?;
+```
+
+Options are part of the send's intent: the same idempotency key with different options is a conflict, exactly as a changed body would be. Each platform takes the options it understands:
+
+| Option          | APNs (iOS, macOS)                                                  | FCM (Android)                                        | Web Push                                                                               |
+| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `kind: "data"`  | background push, `content-available`, no banner                    | data-only message, no banner                         | receiver shows nothing (see below)                                                     |
+| `priority`      | `apns-priority` 10 or 5                                            | `android.priority` high or normal                    | `Urgency` header                                                                       |
+| `image`         | needs a Notification Service Extension in your app                 | shown in the notification                            | shown in the notification                                                              |
+| `sound`         | `aps.sound`, the named file                                        | `android.notification.sound`                         | `silent: true` on the notification (browsers play no sound by default)                 |
+| `badge`         | `aps.badge`                                                        | `notification_count`                                 | the receiver calls `navigator.setAppBadge`                                             |
+| `link`          | carried in the payload for your app to route                       | carried in the data map                              | the receiver opens it on click (your origin only)                                      |
+| `android { … }` | —                                                                  | channel, color, icon, tag, sticky                    | —                                                                                      |
+| `apple { … }`   | subtitle, thread-id, category, interruption-level, relevance-score | mirrored into the APNs block FCM serves for iOS apps | —                                                                                      |
+| `web { … }`     | —                                                                  | —                                                    | icon, badge shape, up to two actions buttons, require-interaction, direction, language |
+
+The per-platform blocks only shape that platform: `android.channel_id` posts through an Android channel your app must have created (the local-notifications plugin does), `apple.interruption_level` is what Focus modes read, and `web.actions` become `showNotification` action buttons. Everything is checked on both sides with errors that name the field — a color must be `#RRGGBB`, an image or link at most 1,024 bytes of `https` URL (or, for a link, a path starting with `/`), a sound name 1–64 bytes of letters, digits, `-`, `_`, and `.`.
+
+**When the payload is too big.** Every provider caps the message — 4 KiB for APNs and FCM, similar for Web Push — and options count toward it. When a send doesn't fit, the service drops the optional extras in a fixed order before giving up on anything you'd miss: the per-platform blocks first, then the image, then the sound, badge, and link, then the send's `data`, down to an id-only envelope that still shows the title and body and still collapses by the notification's id. A data message never loses its silent flag in the fallback. If even the id-only envelope doesn't fit, the delivery ends as `oversized` without a request.
+
+### Silent data messages
+
+```rust
+options: MessageOptions {
+    kind: MessageKind::Data,
+    ..MessageOptions::default()
+},
+```
+
+`kind: "data"` makes the send a **background message**: no banner on any platform. The send's `data` reaches your app instead — on Android through FCM's data message, on iOS and macOS as a background `content-available` push your app receives in the background, on the web as a push the receiver service worker deliberately does not show. Use it to sync, prefetch, or correct state without interrupting anyone.
+
+A data send still creates one durable row per recipient — the send's bookkeeping, not an inbox item. It never appears in the inbox, never counts toward `unread_count`, and can always be cancelled, because nobody ever saw it. Its push deliveries, status, idempotency, and fanout behave exactly like a visible send's.
+
+Two honest warnings. Apple requires background pushes at priority 5, so a data send ignores a higher one. And browsers penalize pushes that show nothing — Chrome may stop delivering silent pushes to a person who hasn't opened the site in a while — so on the web, prefer a visible notification whenever the person would want to know.
+
+### Badges
+
+```rust
+options: MessageOptions {
+    badge: Some(BadgeSetting::Unread),
+    ..MessageOptions::default()
+},
+```
+
+`badge` sets the app badge the platform shows next to your icon. `BadgeSetting::Set(n)` sets that exact number — `Set(0)` clears it. `BadgeSetting::Unread` is the interesting one: the service resolves it **per recipient at push time** to that person's live unread count — the same number `unread_count` would answer right then. One send to a thousand people badges each of their own counts.
+
+On the web the receiver service worker calls `navigator.setAppBadge(n)` where the browser supports it (and `clearAppBadge` for zero); where it doesn't, the count rides in the payload and nothing else happens. Data sends can carry a badge too — a silent badge correction is a classic background message.
+
 ## Read the inbox on any platform
 
 The signed-in person reads their own inbox, newest first, one bounded page at a time, from the web, iOS, Android, macOS, Windows, Linux, the terminal, or (experimentally) HarmonyOS — wherever your screens run. Each page is a [live query](24-real-time.md), and what reaches an open screen is everything that changes its answer: a send that reaches this person, a read or dismissal from their other device, a category they opt out of, a scheduled send becoming due, and an expiring one leaving. The service runs the wake jobs that make time visible: when a send's schedule turns, the screens it reaches re-run with a fresh clock, so a scheduled item appears when its time comes and an expired one goes when its time is up — on every platform the live connection reaches.
@@ -677,7 +752,7 @@ Disable requires a successful authenticated revoke acknowledgement. Failures, in
 
 **When the browser changes the subscription on its own** — a rotated or replaced subscription, the `pushsubscriptionchange` event — the worker cannot reconcile anything: it deliberately holds no credentials, so it has no identity to enroll with. The supported reconciliation is the next authenticated app launch calling `reconcile` again; a stale handle's `disable` leaves the replaced subscription alone, and the replaced subscription's endpoint dies at its push service, whose answer invalidates the stale record on its next delivery. Churn is bounded by the ten-endpoint limit, and the person can revoke the dead ones from their own list.
 
-The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and brings it to your inbox route with the notification's id, or opens that route in a new window. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
+The receiver itself shows what the service pushed: the envelope's title and body under a tag built from the notification's id, so a repeat replaces rather than stacks; the send's `data` rides on the banner's own data, inert. A send's options reach it too — an image, a badge count (`navigator.setAppBadge` where the browser has it), a silent flag, and the web presentation set — and a **data message** (`lkdata`) shows nothing at all, leaving only the badge it asked to set. A push that is missing, oversized (past the service's 4 KiB record), malformed, or typed wrong still shows one truthful banner — "New notification", no invented text — under a stable tag, so a broken sender can never silently swallow a delivery. A click closes the banner, focuses an app window of this origin and opens the send's own link when it resolves to this origin — a path like `/invoice/42`, or an absolute URL of this origin — and otherwise brings it to your inbox route with the notification's id, or opens that route in a new window. A link anywhere else is refused at click time: payload content can never steer a click off the app's own origin. The worker holds no credentials and calls no server: nothing fetches, and **no read state changes until the authenticated app itself opens** and marks what it read.
 
 ### What a send does
 
@@ -688,6 +763,23 @@ Transient failures — a 429, a 5xx, a network error — retry with the provider
 Delivery retries stop at eight actual push requests, including requests refused for authentication. OAuth token exchanges are separate and do not spend push attempts. FCM refreshes once after a 401; the next push goes through the durable queue and its attempt budget. An exchange failure retries every minute with sanitized `operator_configuration` status. Neither provider diagnostics nor credentials appear in that status.
 
 Every delivery has a deadline: the earlier of notification expiry and 24 hours after `visible_at`, including notifications with no expiry. Provider `Retry-After` accepts delta seconds and HTTP dates; invalid values use backoff. A provider delay is never shortened into an earlier push. If it exceeds the deadline, the queue wakes at the deadline and ends delivery (`expired` or `horizon_exceeded`) without another request. Unrepresentable arithmetic ends with `retry_overflow`. Local schedule, cancellation, expiry, and horizon decisions do not spend attempts. FCM transient retries use exponential backoff starting at one minute, plus stable per-delivery jitter, and respect longer provider delays. See [FCM error codes](https://firebase.google.com/docs/cloud-messaging/error-codes).
+
+A send's [options](#shape-a-message) ride the same deliveries, and when a payload is over its provider's limit the extras go in a fixed order — per-platform blocks, image, sound, badge, and link, then the send's `data` — before the id-only envelope, and only then a clear `oversized` end without a request.
+
+### Test on a device
+
+Before a campaign, ask a real device what it thinks of your message. `send_test` pushes a spec to one person's live endpoints — the way FCM's "test on device" does — and answers per endpoint, having written nothing: no inbox row, no delivery row, no count anywhere.
+
+```rust,ignore
+let outcomes = call_as_app(leptoskit_notifications::SendTest {
+    spec: test_spec,
+    person: alice_id,
+    endpoint: None, // or one endpoint id, to probe a single device
+})
+.await?;
+```
+
+The spec is a full `SendSpec` — options included, silent data messages included — so the device receives exactly what a real send to it would carry. The blast radius is the person's own enrollment: at most their ten live endpoints, each attempted exactly once, one provider request each. A transient failure answers `rejected` with no reason and the retry is calling again; an endpoint id that isn't the person's own live one is `404`. There is no idempotency key to reuse — a test answers, it doesn't record — so a repeated call pushes again; send the RPC layer's own idempotency header if your tooling retries.
 
 Read what happened from your server, per endpoint, with `call_as_app`:
 
@@ -712,9 +804,10 @@ Push reaches a device through its platform's service: iOS and macOS through APNs
 
 ## What it doesn't do yet
 
-- **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere.
+- **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere: a send's `link` is carried in every payload today, but opening it is each app's own code.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
+- **No localization or recipient-local scheduling.** A send's title and body are the same for everyone it reaches, and a scheduled send fires on the service's clock, not each recipient's timezone.
 - **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend — and nothing about the device: platform, locale, app version, and timezone are not attributes yet, and there is no per-device targeting at all. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
 
 The engineering notes in the repository describe the transport work that follows.

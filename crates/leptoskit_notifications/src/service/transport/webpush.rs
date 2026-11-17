@@ -175,8 +175,9 @@ impl WebPush {
 	}
 
 	/// Builds one fully encrypted and signed request for `keys` and
-	/// `message`, as the wire shape the boundary carries. `with_data` is
-	/// false for the minimal id-only envelope. Everything on the wire is
+	/// `message`, as the wire shape the boundary carries. `include` is
+	/// the degradation stage of the payload's optional extras, from all
+	/// of them down to the id-only envelope. Everything on the wire is
 	/// built here — the endpoint's URL, the TTL, urgency, and topic
 	/// headers, the RFC 8291-encrypted body, and the RFC 8292-signed
 	/// authorization — over key material drawn fresh for this one
@@ -190,7 +191,7 @@ impl WebPush {
 		endpoint: &str,
 		keys: &WebPushKeys,
 		message: &Message,
-		with_data: bool,
+		include: Include,
 		ttl: i64,
 	) -> Result<WireRequest, BuildFailure> {
 		let ua_public = base64_url(&keys.p256dh).ok_or(BuildFailure::Keys)?;
@@ -205,13 +206,21 @@ impl WebPush {
 			.map(|url| url.origin().ascii_serialization())
 			.ok_or(BuildFailure::Keys)?;
 		let authorization = self.vapid_header(&audience)?;
-		let body = encrypt_payload(&ua_public, &auth, &envelope(message, with_data))?;
+		let body = encrypt_payload(&ua_public, &auth, &envelope(message, include))?;
+
+		// Urgency tells the push service how hard to try: a high-priority
+		// send wakes the radio, an ordinary one may wait for the device
+		// to wake on its own. Unset is the service's ordinary, as before.
+		let urgency = match message.options.priority {
+			Some(crate::options::SendPriority::High) => "high",
+			Some(crate::options::SendPriority::Normal) | None => "normal",
+		};
 
 		Ok(WireRequest {
 			url: endpoint.to_owned(),
 			headers: vec![
 				("ttl".to_owned(), ttl.clamp(0, DEFAULT_TTL_SECS).to_string()),
-				("urgency".to_owned(), "normal".to_owned()),
+				("urgency".to_owned(), urgency.to_owned()),
 				// The stable tag: a repeat replaces, not stacks, wherever the
 				// service coalesces — best-effort, like every provider's. A topic
 				// is 32 base64url characters, exactly a UUID without its dashes.
@@ -325,38 +334,34 @@ impl Transport for WebPush {
 					.clamp(0, DEFAULT_TTL_SECS)
 			});
 
-			// Size is checked on the encrypted body: the full envelope
-			// first, then the minimal id-only one, and past both a
-			// terminal clear result — a body past the record size would
+			// Size is checked on the encrypted body, trimming the
+			// payload's optional extras in the shared order — platform
+			// overrides, then image, then sound, badge, and link —
+			// before falling back to the id-only envelope, and past it a
+			// terminal clear result: a body past the record size would
 			// overflow the single record its header declares, so nothing
 			// oversized is ever sent.
-			match self.build_wire(
-				&subscription.endpoint,
-				&subscription.keys,
-				message,
-				true,
-				ttl,
-			) {
-				Ok(request) if request.body.len() <= BODY_LIMIT => self.post(request, pinned).await,
-				_ => {
-					match self.build_wire(
-						&subscription.endpoint,
-						&subscription.keys,
-						message,
-						false,
-						ttl,
-					) {
-						Ok(request) if request.body.len() <= BODY_LIMIT => {
-							self.post(request, pinned).await
-						}
-						_ => {
-							Outcome::Ended {
-								reason: DeliveryReason::Oversized,
-								invalidate: false,
-							}
-						}
-					}
+			for include in [
+				Include::All,
+				Include::NoPlatform,
+				Include::NoSimpleOptions,
+				Include::Minimal,
+			] {
+				if let Ok(request) = self.build_wire(
+					&subscription.endpoint,
+					&subscription.keys,
+					message,
+					include,
+					ttl,
+				) && request.body.len() <= BODY_LIMIT
+				{
+					return self.post(request, pinned).await;
 				}
+			}
+
+			Outcome::Ended {
+				reason: DeliveryReason::Oversized,
+				invalidate: false,
 			}
 		};
 
@@ -488,23 +493,118 @@ fn hkdf(salt: &[u8], secret: &[u8], infos: &[&[u8]], length: usize) -> Vec<u8> {
 	out
 }
 
+/// What a payload carries beside its ids: everything, one step of the
+/// documented degradation order down, or the id-only envelope the
+/// record size can force.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Include {
+	/// The send's options and its `data`.
+	All,
+	/// The web presentation options dropped.
+	NoPlatform,
+	/// The image, the silent flag, the badge, and the link dropped too.
+	NoSimpleOptions,
+	/// The id-only envelope, which a data message still flags: a silent
+	/// push must stay silent.
+	Minimal,
+}
+
 /// The push envelope a client's service worker reads: the visible text,
-/// the notification's id, and — when it fits — the send's `data`. No
-/// executable anything rides in it.
-fn envelope(message: &Message, with_data: bool) -> Vec<u8> {
+/// the notification's id, and — when it fits — the send's `data` and the
+/// options that shape the banner: a silent data flag, an image, a badge
+/// count, a click link, and the web presentation options. No executable
+/// anything rides in it.
+fn envelope(message: &Message, include: Include) -> Vec<u8> {
 	let mut payload = serde_json::json!({
 		"title": message.title,
 		"body": message.body,
 		"lkn": message.id.to_string(),
 	});
 
-	if with_data {
-		let data: serde_json::Value = serde_json::from_str(&message.data).unwrap_or_default();
+	// A data message shows nothing wherever it lands: the flag rides the
+	// id-only envelope too, because a silent push that fell back to a
+	// banner would be a lie.
+	if message.options.is_data() {
+		payload["lkdata"] = serde_json::json!(true);
+	}
 
-		if let Some(object) = data.as_object()
-			&& !object.is_empty()
-		{
-			payload["lk"] = data;
+	if include != Include::Minimal
+		&& let Some(object) = serde_json::from_str::<serde_json::Value>(&message.data)
+			.ok()
+			.and_then(|data| data.as_object().cloned())
+			.filter(|object| !object.is_empty())
+	{
+		payload["lk"] = serde_json::Value::Object(object);
+	}
+
+	if include != Include::Minimal {
+		if let Some(image) = message.options.image.as_deref() {
+			payload["image"] = serde_json::json!(image);
+		}
+
+		if let Some(badge) = message.badge {
+			payload["lkbadge"] = serde_json::json!(badge);
+		}
+
+		if let Some(link) = message.options.link.as_deref() {
+			payload["lklink"] = serde_json::json!(link);
+		}
+
+		if matches!(
+			message.options.sound.as_ref(),
+			Some(crate::options::NotificationSound::Silent)
+		) {
+			payload["silent"] = serde_json::json!(true);
+		}
+	}
+
+	if include == Include::All
+		&& let Some(web) = message.options.web.as_ref()
+	{
+		let mut presentation = serde_json::Map::new();
+
+		if let Some(icon) = web.icon.as_deref() {
+			presentation.insert("icon".to_owned(), serde_json::json!(icon));
+		}
+
+		if let Some(badge) = web.badge_icon.as_deref() {
+			presentation.insert("badge".to_owned(), serde_json::json!(badge));
+		}
+
+		if !web.actions.is_empty() {
+			presentation.insert(
+				"actions".to_owned(),
+				serde_json::Value::Array(
+					web.actions
+						.iter()
+						.map(|action| {
+							serde_json::json!({
+								"action": action.action,
+								"title": action.title,
+							})
+						})
+						.collect(),
+				),
+			);
+		}
+
+		if let Some(require_interaction) = web.require_interaction {
+			presentation.insert(
+				"require_interaction".to_owned(),
+				serde_json::json!(require_interaction),
+			);
+		}
+
+		if let Some(dir) = web.dir {
+			presentation.insert("dir".to_owned(), serde_json::json!(dir.as_str()));
+		}
+
+		if let Some(lang) = web.lang.as_deref() {
+			presentation.insert("lang".to_owned(), serde_json::json!(lang));
+		}
+
+		if !presentation.is_empty() {
+			payload["lkw"] = serde_json::Value::Object(presentation);
 		}
 	}
 

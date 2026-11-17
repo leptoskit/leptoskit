@@ -35,6 +35,7 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use super::Fanout;
+use super::unread_for;
 use crate::push::DeliveryReason;
 use crate::push::DeliveryState;
 use crate::push::DeliveryStatus;
@@ -822,15 +823,58 @@ async fn attempt(db: &Db, runtime: &PushRuntime, delivery: &PushDelivery) -> rpc
 		});
 	};
 
+	// The send's options as the row stored them, and the badge resolved
+	// to this recipient's live count at the moment of the push: two
+	// recipients of one send badge their own unread numbers.
+	let options: crate::MessageOptions = match notification.options.as_deref() {
+		None => crate::MessageOptions::default(),
+		Some(stored) => {
+			serde_json::from_str(stored).map_err(|error| {
+				rpc::Error::server(format!("a stored options value no longer parses: {error}"))
+			})?
+		}
+	};
+	let badge = match options.badge {
+		Some(crate::options::BadgeSetting::Unread) => {
+			u32::try_from(unread_for(db, delivery.person).await?).ok()
+		}
+		Some(crate::options::BadgeSetting::Set(set)) => Some(set),
+		None => None,
+	};
+
 	let message = Message {
 		id: notification.id,
 		title: notification.title.clone(),
 		body: notification.body.clone(),
 		data: notification.data.clone(),
 		expires_at: notification.expires_at,
+		options,
+		badge,
 	};
 
 	Ok(transport.attempt(&endpoint.credential, &message).await)
+}
+
+/// The delivery state an ended reason counts as: the notification's own
+/// state or the endpoint's skipped it, and a provider-shaped answer
+/// rejected it. A local decision — one that never reached a provider —
+/// spends no attempt and stamps no attempt time.
+pub(crate) fn state_of(reason: DeliveryReason) -> DeliveryState {
+	match reason {
+		DeliveryReason::Expired
+		| DeliveryReason::Cancelled
+		| DeliveryReason::OptedOut
+		| DeliveryReason::EndpointRevoked
+		| DeliveryReason::EndpointUnavailable
+		| DeliveryReason::TransportUnavailable => DeliveryState::Skipped,
+		DeliveryReason::Oversized
+		| DeliveryReason::Unregistered
+		| DeliveryReason::ProviderRejected
+		| DeliveryReason::AttemptsExhausted
+		| DeliveryReason::HorizonExceeded
+		| DeliveryReason::RetryOverflow
+		| DeliveryReason::OperatorConfiguration => DeliveryState::Rejected,
+	}
 }
 
 /// Writes one attempt's outcome, in its own short write: no transaction
@@ -962,21 +1006,7 @@ async fn apply_outcome(
 			// state or the endpoint's skipped it, the provider's answer
 			// rejected it. A local decision — one that never reached a
 			// provider — spends no attempt and stamps no attempt time.
-			let state = match reason {
-				DeliveryReason::Expired
-				| DeliveryReason::Cancelled
-				| DeliveryReason::OptedOut
-				| DeliveryReason::EndpointRevoked
-				| DeliveryReason::EndpointUnavailable
-				| DeliveryReason::TransportUnavailable => DeliveryState::Skipped.as_str(),
-				DeliveryReason::Oversized
-				| DeliveryReason::Unregistered
-				| DeliveryReason::ProviderRejected
-				| DeliveryReason::AttemptsExhausted
-				| DeliveryReason::HorizonExceeded
-				| DeliveryReason::RetryOverflow
-				| DeliveryReason::OperatorConfiguration => DeliveryState::Rejected.as_str(),
-			};
+			let state = state_of(reason).as_str();
 
 			if invalidate {
 				// The credential is dead at the provider: the endpoint
