@@ -24,12 +24,16 @@ use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::AppSend;
+use crate::AudienceMember;
 use crate::InboxItem;
 use crate::NewAppSend;
+use crate::NewAudienceMember;
 use crate::NewNotification;
+use crate::NewPersonAttribute;
 use crate::NewTopicSubscription;
 use crate::NewWake;
 use crate::Notification;
+use crate::PersonAttribute;
 use crate::Preference;
 use crate::SERVICE;
 use crate::TopicSubscription;
@@ -109,6 +113,8 @@ pub(crate) fn intent_hash(spec: &crate::SendSpec, target: &crate::SendTarget) ->
 		topic: Option<&'a str>,
 		#[serde(skip_serializing_if = "Option::is_none")]
 		condition: Option<&'a str>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		everyone: Option<bool>,
 	}
 
 	let intent = match target {
@@ -118,6 +124,7 @@ pub(crate) fn intent_hash(spec: &crate::SendSpec, target: &crate::SendTarget) ->
 				recipients: Some(recipients.iter().copied().collect()),
 				topic: None,
 				condition: None,
+				everyone: None,
 			}
 		}
 		crate::SendTarget::Topic(topic) => {
@@ -126,6 +133,7 @@ pub(crate) fn intent_hash(spec: &crate::SendSpec, target: &crate::SendTarget) ->
 				recipients: None,
 				topic: Some(topic),
 				condition: None,
+				everyone: None,
 			}
 		}
 		crate::SendTarget::Condition(condition) => {
@@ -134,6 +142,16 @@ pub(crate) fn intent_hash(spec: &crate::SendSpec, target: &crate::SendTarget) ->
 				recipients: None,
 				topic: None,
 				condition: Some(condition),
+				everyone: None,
+			}
+		}
+		crate::SendTarget::Everyone => {
+			Intent {
+				spec,
+				recipients: None,
+				topic: None,
+				condition: None,
+				everyone: Some(true),
 			}
 		}
 	};
@@ -495,8 +513,9 @@ pub(crate) async fn wake(db: &Db, send_key: &str) -> rpc::Result<()> {
 /// The audience a target names, and how many of it a send to `spec`'s
 /// category would reach right now: what `validate_only` answers. A
 /// recipients target counts its deduplicated list against the opt-outs;
-/// a topic or condition walks every candidate the same way the fanout
-/// will, evaluating as it goes, but writes nothing.
+/// every other target walks its audience the same way the fanout will —
+/// the topic index or the registry, condition evaluated, nothing
+/// written.
 ///
 /// # Errors
 ///
@@ -520,11 +539,11 @@ pub(crate) async fn audience_now(
 			audience.delivered = audience.targeted.saturating_sub(audience.skipped_opted_out);
 		}
 		target => {
-			let condition = condition_of(target)?;
+			let walk = walk_of(target)?;
 			let mut cursor: Option<Uuid> = None;
 
 			loop {
-				let page = candidates(db, &condition, cursor, FANOUT_PAGE + 1).await?;
+				let page = candidates(db, &walk, cursor, FANOUT_PAGE + 1).await?;
 
 				if page.is_empty() {
 					break;
@@ -534,7 +553,7 @@ pub(crate) async fn audience_now(
 				let page = &page[..page.len().saturating_sub(usize::from(more))];
 				cursor = page.last().copied();
 
-				let matching = evaluate(db, &condition, page).await?;
+				let matching = evaluate(db, &walk, page).await?;
 				audience.targeted = audience
 					.targeted
 					.saturating_add(matching.len().try_into().unwrap_or(u32::MAX));
@@ -608,8 +627,56 @@ fn condition_of(target: &crate::SendTarget) -> rpc::Result<Condition> {
 				rpc::Error::server(format!("a stored condition no longer parses: {error}"))
 			})
 		}
+		crate::SendTarget::Recipients(_) | crate::SendTarget::Everyone => {
+			Err(rpc::Error::server("this target has no condition"))
+		}
+	}
+}
+
+/// Who a fanout walks, and how it decides who among them matches. A
+/// topic, and a condition that cannot hold without one of its topics,
+/// walk the topic index — a bounded, cheap set. Everything else walks
+/// the whole person registry: an unanchored condition, which can match a
+/// person holding none of its topics, and everyone.
+enum Walk {
+	/// The distinct subscribers of the condition's topics, evaluated
+	/// against it.
+	Topics(Condition),
+	/// The person registry, evaluated against the condition when it has
+	/// one, matched whole when it doesn't — everyone.
+	Registry(Option<Condition>),
+}
+
+impl Walk {
+	/// The condition to evaluate, if any.
+	fn condition(&self) -> Option<&Condition> {
+		match self {
+			Walk::Topics(condition) => Some(condition),
+			Walk::Registry(condition) => condition.as_ref(),
+		}
+	}
+}
+
+/// The audience `target` walks, from the same parse the app's server
+/// validated its send with.
+///
+/// # Errors
+///
+/// [`rpc::Error::server`] when a stored condition no longer parses.
+fn walk_of(target: &crate::SendTarget) -> rpc::Result<Walk> {
+	match target {
 		crate::SendTarget::Recipients(_) => {
-			Err(rpc::Error::server("a recipients send has no condition"))
+			Err(rpc::Error::server("a recipients send has no fanout"))
+		}
+		crate::SendTarget::Everyone => Ok(Walk::Registry(None)),
+		crate::SendTarget::Topic(_) | crate::SendTarget::Condition(_) => {
+			let condition = condition_of(target)?;
+
+			if condition.topic_anchored() {
+				Ok(Walk::Topics(condition))
+			} else {
+				Ok(Walk::Registry(Some(condition)))
+			}
 		}
 	}
 }
@@ -618,104 +685,173 @@ fn condition_of(target: &crate::SendTarget) -> rpc::Result<Condition> {
 /// more follow without asking for them twice.
 const FANOUT_PAGE: usize = crate::FANOUT_BATCH;
 
-/// The distinct people subscribed to any topic the condition names,
-/// ordered by person id, after `cursor`, at most `limit`: the candidates
-/// a fanout page evaluates. Raw SQL because the page is one column's
-/// distinct values, which the typed query builder reads as whole rows;
-/// the statement still names its table, so a connection that tracks
-/// reads records it.
+/// The people one fanout page evaluates next, ordered by person id,
+/// after `cursor`, at most `limit`. Raw SQL because the page is one
+/// column's distinct values, which the typed query builder reads as
+/// whole rows; the statement still names its table, so a connection that
+/// tracks reads records it.
 ///
 /// # Errors
 ///
 /// Whatever the read fails with.
 async fn candidates(
 	db: &impl leptoskit_db::Read,
-	condition: &Condition,
+	walk: &Walk,
 	cursor: Option<Uuid>,
 	limit: usize,
 ) -> rpc::Result<Vec<Uuid>> {
-	let dialect = db.dialect();
-	let topics = condition.topics();
-	let mut sql = String::from(
-		"SELECT DISTINCT \"person\" FROM \"topic_subscriptions\" WHERE \"topic\" IN (",
-	);
-	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+	match walk {
+		Walk::Topics(condition) => {
+			let dialect = db.dialect();
+			let topics = condition.topics();
+			let mut sql = String::from(
+				"SELECT DISTINCT \"person\" FROM \"topic_subscriptions\" WHERE \"topic\" IN (",
+			);
+			let mut args: Vec<leptoskit_db::Value> = Vec::new();
 
-	for topic in &topics {
-		if !args.is_empty() {
-			sql.push_str(", ");
+			for topic in &topics {
+				if !args.is_empty() {
+					sql.push_str(", ");
+				}
+
+				sql.push_str(&placeholder(dialect, args.len() + 1));
+				args.push(leptoskit_db::Value::Text((*topic).to_owned()));
+			}
+
+			sql.push(')');
+
+			if let Some(cursor) = cursor {
+				sql.push_str(" AND \"person\" > ");
+				sql.push_str(&placeholder(dialect, args.len() + 1));
+				args.push(leptoskit_db::Value::Uuid(cursor));
+			}
+
+			sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
+			sql.push_str(&placeholder(dialect, args.len() + 1));
+			args.push(leptoskit_db::Value::Int(
+				i64::try_from(limit).unwrap_or(i64::MAX),
+			));
+
+			let rows = Statement::new(sql, args)
+				.reads::<TopicSubscription>()
+				.fetch(db)
+				.await?;
+
+			Ok(rows
+				.into_iter()
+				.filter_map(|row| uuid_of(row.first()?))
+				.collect())
 		}
+		Walk::Registry(_) => {
+			let dialect = db.dialect();
+			let mut sql = String::from("SELECT \"person\" FROM \"audience_members\"");
+			let mut args: Vec<leptoskit_db::Value> = Vec::new();
 
-		sql.push_str(&placeholder(dialect, args.len() + 1));
-		args.push(leptoskit_db::Value::Text((*topic).to_owned()));
+			if let Some(cursor) = cursor {
+				sql.push_str(" WHERE \"person\" > ");
+				sql.push_str(&placeholder(dialect, args.len() + 1));
+				args.push(leptoskit_db::Value::Uuid(cursor));
+			}
+
+			sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
+			sql.push_str(&placeholder(dialect, args.len() + 1));
+			args.push(leptoskit_db::Value::Int(
+				i64::try_from(limit).unwrap_or(i64::MAX),
+			));
+
+			let rows = Statement::new(sql, args)
+				.reads::<AudienceMember>()
+				.fetch(db)
+				.await?;
+
+			Ok(rows
+				.into_iter()
+				.filter_map(|row| uuid_of(row.first()?))
+				.collect())
+		}
 	}
-
-	sql.push(')');
-
-	if let Some(cursor) = cursor {
-		sql.push_str(" AND \"person\" > ");
-		sql.push_str(&placeholder(dialect, args.len() + 1));
-		args.push(leptoskit_db::Value::Uuid(cursor));
-	}
-
-	sql.push_str(" ORDER BY \"person\" ASC LIMIT ");
-	sql.push_str(&placeholder(dialect, args.len() + 1));
-	args.push(leptoskit_db::Value::Int(
-		i64::try_from(limit).unwrap_or(i64::MAX),
-	));
-
-	let rows = Statement::new(sql, args)
-		.reads::<TopicSubscription>()
-		.fetch(db)
-		.await?;
-
-	Ok(rows
-		.into_iter()
-		.filter_map(|row| uuid_of(row.first()?))
-		.collect())
 }
 
-/// Which of `people` the condition matches, evaluated against the topics
-/// they hold among the ones it names.
+/// Which of `people` the walk matches, evaluated against the topics and
+/// attributes they hold among the ones its condition names. A registry
+/// walk with no condition — everyone — matches every person in the page.
 ///
 /// # Errors
 ///
 /// Whatever the read fails with.
 async fn evaluate(
 	db: &impl leptoskit_db::Read,
-	condition: &Condition,
+	walk: &Walk,
 	people: &[Uuid],
 ) -> rpc::Result<Vec<Uuid>> {
+	let Some(condition) = walk.condition() else {
+		return Ok(people.to_vec());
+	};
+
 	if people.is_empty() {
 		return Ok(Vec::new());
 	}
 
 	let topics = condition.topics();
-	let rows = TopicSubscription::query()
-		.filter(|subscription| {
-			subscription.person.in_list(people.iter().copied())
-				& subscription
-					.topic
-					.in_list(topics.iter().map(|topic| (*topic).to_owned()))
-		})
-		.all(db)
-		.await?;
-
 	let mut held: std::collections::HashMap<Uuid, std::collections::BTreeSet<String>> =
 		std::collections::HashMap::new();
 
-	for row in rows {
-		held.entry(row.person).or_default().insert(row.topic);
+	if !topics.is_empty() {
+		let rows = TopicSubscription::query()
+			.filter(|subscription| {
+				subscription.person.in_list(people.iter().copied())
+					& subscription
+						.topic
+						.in_list(topics.iter().map(|topic| (*topic).to_owned()))
+			})
+			.all(db)
+			.await?;
+
+		for row in rows {
+			held.entry(row.person).or_default().insert(row.topic);
+		}
+	}
+
+	let mut attributes: std::collections::HashMap<
+		Uuid,
+		std::collections::BTreeMap<String, String>,
+	> = std::collections::HashMap::new();
+	let keys = condition.attribute_keys();
+
+	if !keys.is_empty() {
+		let rows = PersonAttribute::query()
+			.filter(|attribute| {
+				attribute.person.in_list(people.iter().copied())
+					& attribute
+						.key
+						.in_list(keys.iter().map(|key| (*key).to_owned()))
+			})
+			.all(db)
+			.await?;
+
+		for row in rows {
+			attributes
+				.entry(row.person)
+				.or_default()
+				.insert(row.key, row.value);
+		}
 	}
 
 	Ok(people
 		.iter()
 		.copied()
 		.filter(|person| {
-			condition.matches(|topic| {
-				held.get(person)
-					.is_some_and(|topics| topics.contains(topic))
-			})
+			condition.matches_over(
+				|topic| {
+					held.get(person)
+						.is_some_and(|topics| topics.contains(topic))
+				},
+				|key| {
+					attributes
+						.get(person)
+						.and_then(|held| held.get(key).map(String::as_str))
+				},
+			)
 		})
 		.collect())
 }
@@ -760,9 +896,9 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 			.ok_or_else(|| rpc::Error::server("a fanning send holds no spec"))?,
 	)
 	.map_err(|error| rpc::Error::server(format!("a stored spec no longer parses: {error}")))?;
-	let condition = condition_of(&target)?;
+	let walk = walk_of(&target)?;
 
-	let page = candidates(db, &condition, send.cursor, FANOUT_PAGE + 1).await?;
+	let page = candidates(db, &walk, send.cursor, FANOUT_PAGE + 1).await?;
 
 	if page.is_empty() {
 		finish_fanout(db, send_key).await?;
@@ -773,7 +909,7 @@ pub(crate) async fn fanout_step(cx: &rpc::JobCx, send_key: &str, step: u32) -> r
 	let more = page.len() > FANOUT_PAGE;
 	let page = &page[..page.len().saturating_sub(usize::from(more))];
 	let last = page.last().copied();
-	let matching = evaluate(db, &condition, page).await?;
+	let matching = evaluate(db, &walk, page).await?;
 
 	// One transaction: the batch's rows, its push deliveries, and the
 	// cursor that says the batch ran. Everything inside is fenced on the
@@ -967,8 +1103,13 @@ pub(crate) async fn subscribe_batch(
 	let counts = topics_held_by(tx, &persons).await?;
 	let mut changes = crate::TopicChanges::default();
 
+	// Everyone the call subscribed, or found already subscribed: both
+	// hold the topic, and holding it is what registers a person.
+	let mut holders: std::collections::BTreeSet<Uuid> = std::collections::BTreeSet::new();
+
 	for person in persons {
 		if held.contains(&person) {
+			holders.insert(person);
 			continue;
 		}
 
@@ -986,7 +1127,10 @@ pub(crate) async fn subscribe_batch(
 		.map(|_| ());
 
 		match inserted {
-			Ok(()) => changes.subscribed += 1,
+			Ok(()) => {
+				changes.subscribed += 1;
+				holders.insert(person);
+			}
 			// Two batches, or a batch and a self-subscription, raced on
 			// the same person and topic: the other one holds it, which is
 			// what this call wanted.
@@ -994,6 +1138,8 @@ pub(crate) async fn subscribe_batch(
 			Err(error) => return Err(error.into()),
 		}
 	}
+
+	register_persons(tx, &holders).await?;
 
 	Ok(changes)
 }
@@ -1136,8 +1282,12 @@ pub(crate) async fn subscribe_self(
 	match inserted {
 		// A retried subscription, or one raced against a batch, finds the
 		// row the unique key refused to duplicate: already subscribed,
-		// which is what this call wanted.
-		Ok(()) | Err(leptoskit_db::DbError::Conflict { .. }) => Ok(()),
+		// which is what this call wanted. Either way the person holds
+		// the topic now, and holding one is what registers them.
+		Ok(()) | Err(leptoskit_db::DbError::Conflict { .. }) => {
+			register_persons(tx, &std::collections::BTreeSet::from([me])).await?;
+			Ok(())
+		}
 		Err(error) => Err(error.into()),
 	}
 }
@@ -1159,6 +1309,300 @@ pub(crate) async fn unsubscribe_self(
 		.await?;
 
 	Ok(())
+}
+
+/// Registers persons in the service's registry — the audience everyone
+/// sends and attribute-anchored conditions walk — without answering
+/// anything about them. Idempotent; answers how many were new.
+///
+/// # Errors
+///
+/// Whatever a read or write fails with.
+pub(crate) async fn register_persons(
+	tx: &leptoskit_db::Tx,
+	persons: &std::collections::BTreeSet<Uuid>,
+) -> rpc::Result<u32> {
+	if persons.is_empty() {
+		return Ok(0);
+	}
+
+	let known: std::collections::BTreeSet<Uuid> = AudienceMember::query()
+		.filter(|person| person.person.in_list(persons.iter().copied()))
+		.all(tx)
+		.await?
+		.into_iter()
+		.map(|person| person.person)
+		.collect();
+	let mut registered = 0;
+
+	for person in persons {
+		if known.contains(person) {
+			continue;
+		}
+
+		let inserted: leptoskit_db::Result<()> = NewAudienceMember { person: *person }
+			.insert(tx)
+			.await
+			.map(|_| ());
+
+		match inserted {
+			Ok(()) => registered += 1,
+			// Another call registered them between the read and the
+			// write: the registry holds them, which is what this wanted.
+			Err(leptoskit_db::DbError::Conflict { .. }) => {}
+			Err(error) => return Err(error.into()),
+		}
+	}
+
+	Ok(registered)
+}
+
+/// Sets and removes attributes for a batch of persons, the body of
+/// [`set_person_attributes`](crate::set_person_attributes). `remove` is
+/// the last word: a key in both is removed, never set. Idempotent per
+/// value, bounded per person, skipping at the bound rather than
+/// refusing the batch.
+///
+/// # Errors
+///
+/// [`rpc::Error::Invalid`] for a bad key or value, an empty or
+/// oversized batch, or a call that changes nothing, and whatever a read
+/// or write fails with.
+pub(crate) async fn set_attributes(
+	tx: &leptoskit_db::Tx,
+	persons: Vec<Uuid>,
+	set: std::collections::BTreeMap<String, String>,
+	remove: Vec<String>,
+) -> rpc::Result<crate::PersonAttributeChanges> {
+	if persons.is_empty() || persons.len() > crate::MAX_ATTRIBUTE_PERSONS {
+		return Err(rpc::Error::invalid(format!(
+			"an attribute batch names 1 to {} people",
+			crate::MAX_ATTRIBUTE_PERSONS
+		)));
+	}
+
+	if set.is_empty() && remove.is_empty() {
+		return Err(rpc::Error::invalid(
+			"an attribute call sets or removes at least one key",
+		));
+	}
+
+	for (key, value) in &set {
+		crate::check_attribute_key(key).map_err(rpc::Error::invalid)?;
+		crate::check_attribute_value(value).map_err(rpc::Error::invalid)?;
+	}
+
+	for key in &remove {
+		crate::check_attribute_key(key).map_err(rpc::Error::invalid)?;
+	}
+
+	let persons: std::collections::BTreeSet<Uuid> = persons.into_iter().collect();
+	let mut changes = crate::PersonAttributeChanges {
+		registered: register_persons(tx, &persons).await?,
+		set: 0,
+		removed: 0,
+		skipped_full: 0,
+	};
+
+	// `remove` is the last word: a key in both is removed, never set.
+	let removing: std::collections::BTreeSet<&str> = remove.iter().map(String::as_str).collect();
+	let set: Vec<(&String, &String)> = set
+		.iter()
+		.filter(|(key, _)| !removing.contains(key.as_str()))
+		.collect();
+
+	let mut keys: std::collections::BTreeSet<&str> =
+		set.iter().map(|(key, _)| key.as_str()).collect();
+	keys.extend(removing.iter().copied());
+
+	// What each named person already holds among these keys, and how
+	// much they hold altogether — the bound a new key has to fit under.
+	let mut existing: std::collections::HashMap<
+		Uuid,
+		std::collections::BTreeMap<String, (leptoskit_db::Id<PersonAttribute>, String)>,
+	> = std::collections::HashMap::new();
+
+	for attribute in PersonAttribute::query()
+		.filter(|attribute| {
+			attribute.person.in_list(persons.iter().copied())
+				& attribute.key.in_list(keys.into_iter().map(str::to_owned))
+		})
+		.all(tx)
+		.await?
+	{
+		existing
+			.entry(attribute.person)
+			.or_default()
+			.insert(attribute.key, (attribute.id, attribute.value));
+	}
+
+	let cap = u64::try_from(crate::MAX_ATTRIBUTES_PER_PERSON).unwrap_or(u64::MAX);
+	let held_by = attributes_held_by(tx, &persons).await?;
+
+	for person in &persons {
+		let rows = existing.get(person);
+		let mut held = held_by.get(person).copied().unwrap_or(0);
+
+		for (key, value) in &set {
+			match rows.and_then(|rows| rows.get(key.as_str())) {
+				// An idempotent re-set changes nothing and counts nothing.
+				Some((_, stored)) if stored.as_str() == value.as_str() => {}
+				Some((id, _)) => {
+					PersonAttribute::update()
+						.filter(|attribute| attribute.id.eq(*id))
+						.set(|attribute| attribute.value, (*value).clone())
+						.run(tx)
+						.await?;
+					changes.set += 1;
+				}
+				None => {
+					if held >= cap {
+						changes.skipped_full += 1;
+						continue;
+					}
+
+					let inserted: leptoskit_db::Result<()> = NewPersonAttribute {
+						person: *person,
+						key: (*key).clone(),
+						value: (*value).clone(),
+					}
+					.insert(tx)
+					.await
+					.map(|_| ());
+
+					match inserted {
+						Ok(()) => {
+							changes.set += 1;
+							held += 1;
+						}
+						// Another call wrote this key between the read
+						// and the write: it holds, which is what this
+						// call wanted.
+						Err(leptoskit_db::DbError::Conflict { .. }) => {}
+						Err(error) => return Err(error.into()),
+					}
+				}
+			}
+		}
+
+		for key in &remove {
+			let Some((id, _)) = rows.and_then(|rows| rows.get(key.as_str())) else {
+				continue;
+			};
+
+			PersonAttribute::query()
+				.filter(|attribute| attribute.id.eq(*id))
+				.delete(tx)
+				.await?;
+			changes.removed += 1;
+		}
+	}
+
+	// The registry's `updated_at` says when the service last wrote about
+	// them, attributes included.
+	if changes.set > 0 || changes.removed > 0 {
+		AudienceMember::update()
+			.filter(|person| person.person.in_list(persons.iter().copied()))
+			.run(tx)
+			.await?;
+	}
+
+	Ok(changes)
+}
+
+/// Reads one person's attributes, the body of
+/// [`person_attributes`](crate::person_attributes): keyed and sorted,
+/// empty for a person the service holds nothing about.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+pub(crate) async fn read_attributes(
+	db: &impl leptoskit_db::Read,
+	person: Uuid,
+) -> rpc::Result<std::collections::BTreeMap<String, String>> {
+	let rows = PersonAttribute::query()
+		.filter(|attribute| attribute.person.eq(person))
+		.all(db)
+		.await?;
+
+	Ok(rows
+		.into_iter()
+		.map(|attribute| (attribute.key, attribute.value))
+		.collect())
+}
+
+/// Removes one person from the registry, with their attributes and
+/// topic subscriptions, the body of [`forget_person`](crate::forget_person).
+/// Their inbox, preferences, and push endpoints stay: forgetting them
+/// ends their audiences, not their history or their own choices.
+///
+/// # Errors
+///
+/// Whatever the writes fail with.
+pub(crate) async fn forget_person(tx: &leptoskit_db::Tx, person: Uuid) -> rpc::Result<()> {
+	PersonAttribute::query()
+		.filter(|attribute| attribute.person.eq(person))
+		.delete(tx)
+		.await?;
+	TopicSubscription::query()
+		.filter(|subscription| subscription.person.eq(person))
+		.delete(tx)
+		.await?;
+	AudienceMember::query()
+		.filter(|row| row.person.eq(person))
+		.delete(tx)
+		.await?;
+
+	Ok(())
+}
+
+/// How many attributes each of `persons` holds, in one grouped read.
+///
+/// # Errors
+///
+/// Whatever the read fails with.
+async fn attributes_held_by(
+	db: &impl leptoskit_db::Read,
+	persons: &std::collections::BTreeSet<Uuid>,
+) -> rpc::Result<std::collections::HashMap<Uuid, u64>> {
+	if persons.is_empty() {
+		return Ok(std::collections::HashMap::new());
+	}
+
+	let dialect = db.dialect();
+	let mut sql = String::from(
+		"SELECT \"person\", count(*) FROM \"person_attributes\" WHERE \"person\" IN (",
+	);
+	let mut args: Vec<leptoskit_db::Value> = Vec::new();
+
+	for person in persons {
+		if !args.is_empty() {
+			sql.push_str(", ");
+		}
+
+		sql.push_str(&placeholder(dialect, args.len() + 1));
+		args.push(leptoskit_db::Value::Uuid(*person));
+	}
+
+	sql.push_str(") GROUP BY \"person\"");
+
+	let rows = Statement::new(sql, args)
+		.reads::<PersonAttribute>()
+		.fetch(db)
+		.await?;
+
+	Ok(rows
+		.into_iter()
+		.filter_map(|row| {
+			let person = uuid_of(row.first()?)?;
+			let count = match row.get(1)? {
+				leptoskit_db::Value::Int(count) => u64::try_from(*count).ok()?,
+				_ => return None,
+			};
+			Some((person, count))
+		})
+		.collect())
 }
 
 /// Whether `topic` is one the operator opened to self-subscription, from

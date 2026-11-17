@@ -1,0 +1,1905 @@
+{
+  "format": 2,
+  "dialect": "postgres",
+  "packs": [
+    {
+      "name": "live",
+      "tables": [
+        {
+          "namespace": "live",
+          "name": "changes"
+        },
+        {
+          "namespace": "live",
+          "name": "commits"
+        },
+        {
+          "namespace": "live",
+          "name": "pending"
+        }
+      ],
+      "builtin": true
+    },
+    {
+      "name": "rpc",
+      "tables": [
+        {
+          "namespace": "rpc",
+          "name": "inbox"
+        },
+        {
+          "namespace": "rpc",
+          "name": "jobs"
+        },
+        {
+          "namespace": "rpc",
+          "name": "receipts"
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "name": {
+        "name": "audience_members"
+      },
+      "comment": "One person the service knows. The registry every audience that isn't\na topic's subscribers or an explicit list walks: [`send`] with\n[`SendTarget::Everyone`] reaches every row here, and an unanchored\ncondition — one that can match a person holding none of its topics —\nwalks the same rows.\n\nA person becomes known through an act, never by being named in\nsomeone else's: the app's server setting their attributes\n([`set_person_attributes`]), a push enrollment, a topic\nsubscription, or a category preference. [`forget_person`] removes\nthe row again, with their attributes and topic subscriptions.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "first_seen",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the service first knew them. An upsert keeps it."
+        },
+        {
+          "name": "updated_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the service last wrote about them: an attribute, topic, or\nregistry change bumps it."
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "audience_members_person_key",
+          "columns": [
+            "person"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "category_preferences"
+      },
+      "comment": "One person's opt-out for one category. A send skips recipients who opted\nout of its category, and an inbox hides rows whose category its reader\nhas since opted out of, so an opt-out takes hold on what is already\nstored as well as on what comes after.\n\nThe table is live: setting a preference re-runs the open inbox and\nbadge subscriptions of the person who set it, and the preferences\nquery they may be watching, without any other write.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "category",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "opted_out",
+          "type": {
+            "kind": "bool"
+          },
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "category_preferences_person_category_key",
+          "columns": [
+            "person",
+            "category"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "category_preferences_category_length",
+          "rule": {
+            "kind": "length",
+            "column": "category",
+            "min": 1,
+            "max": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "notifications"
+      },
+      "comment": "One durable inbox row: the recipient's copy of a notification a send\ndelivered to them. The read, dismissed, and cancelled state lives here,\nshared by every device signed in as [`Notification::person`], never\nper-device.\n\nRows the app cancelled before they were due ([`cancel`]) stay in the\ntable with `cancelled_at` set, so a send's history stays explainable;\nthey never become visible.\n\nOne row per send and person, enforced by the database: a batch of a\nfanout that replays after a crash can never write a person a second\ncopy of the same send.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "A UUID v7 the service assigns, so rows order by arrival and pages\nhave a stable cursor."
+        },
+        {
+          "name": "send_key",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The idempotency key of the send that created this row."
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The recipient, as the app's server named them."
+        },
+        {
+          "name": "category",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "text",
+            "max_len": 2000
+          },
+          "nullable": false
+        },
+        {
+          "name": "data",
+          "type": {
+            "kind": "text",
+            "max_len": 4096
+          },
+          "nullable": false,
+          "comment": "The send's `data`, as a JSON object; `{}` when it carried none."
+        },
+        {
+          "name": "visible_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When it becomes visible: a scheduled send is invisible until this."
+        },
+        {
+          "name": "expires_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When it stops being visible. `None` never expires."
+        },
+        {
+          "name": "cancelled_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the app cancelled it before it was due."
+        },
+        {
+          "name": "read_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the recipient read it, on any device."
+        },
+        {
+          "name": "dismissed_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the recipient dismissed it, on any device."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "notifications_person_id_idx",
+          "columns": [
+            "person",
+            "id"
+          ]
+        },
+        {
+          "name": "notifications_send_key_person_key",
+          "columns": [
+            "send_key",
+            "person"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "notifications_send_key_length",
+          "rule": {
+            "kind": "length",
+            "column": "send_key",
+            "min": 1,
+            "max": 255
+          }
+        },
+        {
+          "name": "notifications_category_length",
+          "rule": {
+            "kind": "length",
+            "column": "category",
+            "min": 1,
+            "max": 64
+          }
+        },
+        {
+          "name": "notifications_title_length",
+          "rule": {
+            "kind": "length",
+            "column": "title",
+            "min": 1,
+            "max": 200
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "person_attributes"
+      },
+      "comment": "One attribute the app's server set for one person: the `plan` or\n`country` a segment asks about, never anything a person set for\nthemselves, so an audience can't be forged from the client side.\n\nAt most [`MAX_ATTRIBUTES_PER_PERSON`] rows per person; keys are\n`[a-z0-9_]{1,64}` and values at most\n[`MAX_ATTRIBUTE_VALUE_LEN`] bytes, checked everywhere an attribute is\nnamed, the condition grammar included.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "key",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": {
+            "kind": "text",
+            "max_len": 256
+          },
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "person_attributes_person_key_key",
+          "columns": [
+            "person",
+            "key"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "person_attributes_key_length",
+          "rule": {
+            "kind": "length",
+            "column": "key",
+            "min": 1,
+            "max": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "push_deliveries"
+      },
+      "comment": "One attempt's record, per notification and endpoint: the durable\ndelivery the push job works through, from enqueued to accepted,\nrejected, or skipped. Unique per pair, so a raced or repeated send\ncannot double-enroll an endpoint for a notification.\n\nDelivery is at-least-once: a retry after an answered-but-lost attempt\ncan push twice, and the provider's acceptance says it took the\nmessage, not that anyone saw it.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "notification",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The inbox notification this delivery carries."
+        },
+        {
+          "name": "send_key",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "The send that created it, for the app's status pages."
+        },
+        {
+          "name": "endpoint",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The endpoint it goes to. The endpoint may be gone — revoked —\nwhile this row remains, explaining what happened."
+        },
+        {
+          "name": "generation",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "Credential revision this queued delivery follows."
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The recipient, denormalized from the notification."
+        },
+        {
+          "name": "platform",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "The endpoint's platform, denormalized: the row outlives its\nendpoint."
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "Where the delivery stands, as [`DeliveryState`]'s names."
+        },
+        {
+          "name": "reason",
+          "type": {
+            "kind": "text",
+            "max_len": 32
+          },
+          "nullable": true,
+          "comment": "Why it left the queue, as [`DeliveryReason`]'s names, when it did."
+        },
+        {
+          "name": "attempts",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many times it has been attempted, the first try included."
+        },
+        {
+          "name": "next_attempt_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the next attempt may run, while it waits or retries."
+        },
+        {
+          "name": "attempted_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the last attempt ran."
+        },
+        {
+          "name": "finished_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When it left the queue for good: accepted, rejected, or skipped."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "push_deliveries_send_key_id_idx",
+          "columns": [
+            "send_key",
+            "id"
+          ]
+        },
+        {
+          "name": "push_deliveries_state_next_attempt_at_idx",
+          "columns": [
+            "state",
+            "next_attempt_at"
+          ]
+        },
+        {
+          "name": "push_deliveries_notification_endpoint_key",
+          "columns": [
+            "notification",
+            "endpoint"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "push_endpoints"
+      },
+      "comment": "One enrolled endpoint: the opaque record of a device or browser the\nperson's app pushed them to enroll. The credential is never in it.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "An opaque id the service assigns: what lists and revocations name."
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "The person whose endpoint it is, from their forwarded identity."
+        },
+        {
+          "name": "platform",
+          "type": {
+            "kind": "text",
+            "max_len": 16
+          },
+          "nullable": false,
+          "comment": "Which platform's service this speaks to."
+        },
+        {
+          "name": "credential",
+          "type": {
+            "kind": "text",
+            "max_len": 6144
+          },
+          "nullable": false,
+          "comment": "The platform's credential, verbatim: secret material, left out of\nthe audit log and redacted in debug output."
+        },
+        {
+          "name": "generation",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "Monotonic credential revision, advanced on rotation or reactivation."
+        },
+        {
+          "name": "fingerprint",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "A SHA-256 of the endpoint's platform and destination — its token,\nor a Web Push subscription's endpoint URL — in hex: how the service\nknows two enrollments name the same endpoint without ever searching\non the secret itself. It deliberately does not cover a Web Push\nsubscription's keys, so a browser that rotates them keeps its\nendpoint and its owner."
+        },
+        {
+          "name": "invalidated_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When the provider said this credential no longer exists: expired,\nuninstalled, or unregistered. The endpoint stays as an explainable\nrecord and takes no further deliveries."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "push_endpoints_person_idx",
+          "columns": [
+            "person"
+          ]
+        },
+        {
+          "name": "push_endpoints_fingerprint_key",
+          "columns": [
+            "fingerprint"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "push_endpoints_fingerprint_length",
+          "rule": {
+            "kind": "length",
+            "column": "fingerprint",
+            "min": 64,
+            "max": 64
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "sends"
+      },
+      "comment": "One send the app's server made. Keyed by its idempotency key, so a\nretried send is recognised after a restart: the same key with the same\nintent answers the stored result, and the same key with a different one\nis a conflict.",
+      "columns": [
+        {
+          "name": "idempotency_key",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "intent",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "A SHA-256 of the send's canonical intent: category, content,\ntarget, schedule, and expiry. Same key, same hash; anything else\nis a different send that must use another key."
+        },
+        {
+          "name": "delivered",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many inbox rows the send created. For a send whose fanout runs\nas a job, the rows written so far."
+        },
+        {
+          "name": "skipped_opted_out",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many recipients it skipped because they opted out of the\ncategory."
+        },
+        {
+          "name": "targeted",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "default": {
+            "integer": 0
+          },
+          "comment": "How many people the target matched so far: every named recipient\nfor a recipients send, every person the fanout matched for a topic\nor condition one."
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "default": {
+            "text": "complete"
+          },
+          "comment": "Where the send stands, as [`SendState`]'s names. A recipients send\nis complete the moment it is made; a topic or condition send fans\nout until this says otherwise."
+        },
+        {
+          "name": "target",
+          "type": {
+            "kind": "text",
+            "max_len": 1200
+          },
+          "nullable": true,
+          "comment": "The stored target, for a send whose fanout runs as a job. A\nrecipients send needs none: its fanout happened in its own\ntransaction."
+        },
+        {
+          "name": "spec",
+          "type": {
+            "kind": "text",
+            "max_len": 8192
+          },
+          "nullable": true,
+          "comment": "The stored spec, for the same sends, as the JSON it was sent as."
+        },
+        {
+          "name": "cursor",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": true,
+          "comment": "The last person the fanout delivered to: where a replayed job step\npicks up after. `None` before the first batch."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "idempotency_key"
+      ],
+      "checks": [
+        {
+          "name": "sends_idempotency_key_length",
+          "rule": {
+            "kind": "length",
+            "column": "idempotency_key",
+            "min": 1,
+            "max": 255
+          }
+        },
+        {
+          "name": "sends_intent_length",
+          "rule": {
+            "kind": "length",
+            "column": "intent",
+            "min": 64,
+            "max": 64
+          }
+        },
+        {
+          "name": "sends_state_values",
+          "rule": {
+            "kind": "one_of",
+            "column": "state",
+            "values": [
+              "fanning_out",
+              "complete",
+              "cancelled"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "topic_subscriptions"
+      },
+      "comment": "One person's subscription to one topic. Topics are per person, not per\ndevice: the inbox is per person, and every device signed in as\n[`TopicSubscription::person`] receives what the person receives.\n\nThe app's server subscribes people in batches ([`subscribe_to_topic`]);\na person may subscribe themselves, to topics the operator opened for\nit, with [`subscribe`]. The table is live, so an open [`my_topics`]\npage follows both.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "topic",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The topic's name: 1 to [`MAX_TOPIC_LEN`] bytes of the characters\nFCM accepts, checked everywhere a topic is named."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "topic_subscriptions_topic_person_idx",
+          "columns": [
+            "topic",
+            "person"
+          ]
+        },
+        {
+          "name": "topic_subscriptions_person_topic_key",
+          "columns": [
+            "person",
+            "topic"
+          ],
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "topic_subscriptions_topic_length",
+          "rule": {
+            "kind": "length",
+            "column": "topic",
+            "min": 1,
+            "max": 128
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "name": "wakes"
+      },
+      "comment": "One wake row per person: the clock event for their open subscriptions.\n\nThe inbox and badge queries read the reader's wake row and ignore its\nvalue, which puts `wakes` in their read set; when a send's schedule\nturns — it becomes visible, or it expires — the [`wake_send`] job\nwrites the row of everyone the send reached, and each of their open\nsubscriptions re-runs with a fresh `now`, so a new item appears and an\nexpired one leaves without any other write. A wake that changes\nnothing (the send was cancelled, the row dismissed) re-runs the query\nand sends nothing, because its result didn't change.\n\nOne row per person, so the table stays as big as the audience, not as\nthe schedule.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "person",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false,
+          "comment": "Whose inbox time changed for. The queries read this and nothing\nelse of the row."
+        },
+        {
+          "name": "woken_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When they were last woken. The value is a record for operators,\nnot something a query answers from."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "wakes_person_key",
+          "columns": [
+            "person"
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "changes"
+      },
+      "comment": "`live.changes`: one row per written row of a live table.",
+      "columns": [
+        {
+          "name": "seq",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The change's place among the database's changes."
+        },
+        {
+          "name": "txid",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": true,
+          "comment": "The Postgres transaction that wrote it, which joins it to its commit."
+        },
+        {
+          "name": "version",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": true,
+          "comment": "SQLite: the commit's version, set just before the commit."
+        },
+        {
+          "name": "table_name",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "The changed table, with its namespace: `messages` or `billing.invoices`."
+        },
+        {
+          "name": "op",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "What the write did."
+        },
+        {
+          "name": "key",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "comment": "The changed row's key, in key column order."
+        },
+        {
+          "name": "old",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": true,
+          "comment": "The row before an update or delete, without `secret` and\n`live = skip` columns."
+        },
+        {
+          "name": "new",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": true,
+          "comment": "The row after an insert or update, without those columns."
+        },
+        {
+          "name": "changed",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "comment": "For an update, every column whose value changed; empty otherwise."
+        }
+      ],
+      "primary_key": [
+        "seq"
+      ],
+      "indexes": [
+        {
+          "name": "live_changes_txid_idx",
+          "columns": [
+            "txid"
+          ]
+        },
+        {
+          "name": "live_changes_version_idx",
+          "columns": [
+            "version"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "name": "live_changes_op_values",
+          "rule": {
+            "kind": "one_of",
+            "column": "op",
+            "values": [
+              "I",
+              "U",
+              "D"
+            ]
+          }
+        }
+      ],
+      "partition": {
+        "column": "seq"
+      }
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "commits"
+      },
+      "comment": "`live.commits`: one row per committed transaction that wrote a live\ntable.",
+      "columns": [
+        {
+          "name": "version",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The transaction's place in the version line. Gaps are transactions\nthat rolled back after taking a version, which never become visible."
+        },
+        {
+          "name": "txid",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": true,
+          "comment": "The Postgres transaction ID, which joins the commit to its changes.\n`None` on SQLite."
+        },
+        {
+          "name": "committed_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "When the transaction committed."
+        },
+        {
+          "name": "actor",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": true,
+          "comment": "Who made the change, when the transaction said."
+        },
+        {
+          "name": "origin",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "What made it: what the transaction said, such as an operation's\nname, or `sql`."
+        },
+        {
+          "name": "lsn",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": true,
+          "comment": "Replication capture: where the commit's record starts in Postgres's\nwrite-ahead log, which orders commits as the database committed them.\n`None` for commits captured by triggers."
+        }
+      ],
+      "primary_key": [
+        "version"
+      ],
+      "indexes": [
+        {
+          "name": "live_commits_txid_idx",
+          "columns": [
+            "txid"
+          ]
+        }
+      ],
+      "partition": {
+        "column": "version"
+      }
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "pending"
+      },
+      "comment": "`live.pending`, Postgres only: the transactions waiting for a version at\ncommit.",
+      "columns": [
+        {
+          "name": "txid",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "The transaction's ID."
+        }
+      ],
+      "primary_key": [
+        "txid"
+      ]
+    },
+    {
+      "name": {
+        "namespace": "rpc",
+        "name": "inbox"
+      },
+      "comment": "One notice in someone's inbox, in the `rpc` pack's `inbox` table.\n\nIts policies let each account read and mark read only its own notices;\nonly server code writes them, through `cx.notify(...)`.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "account",
+          "type": {
+            "kind": "text",
+            "max_len": 64
+          },
+          "nullable": false,
+          "comment": "Whose notice it is: their account's UUID."
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "type": {
+            "kind": "text",
+            "max_len": 4000
+          },
+          "nullable": false
+        },
+        {
+          "name": "link",
+          "type": {
+            "kind": "text",
+            "max_len": 2000
+          },
+          "nullable": true
+        },
+        {
+          "name": "action",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": true,
+          "comment": "The button on it."
+        },
+        {
+          "name": "kind",
+          "type": {
+            "kind": "text",
+            "max_len": 32
+          },
+          "nullable": false,
+          "comment": "`info`, `success`, `warning`, or `error`."
+        },
+        {
+          "name": "read_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When its owner read it."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "rpc_inbox_account_created_at_idx",
+          "columns": [
+            "account",
+            "created_at"
+          ]
+        }
+      ]
+    },
+    {
+      "name": {
+        "namespace": "rpc",
+        "name": "jobs"
+      },
+      "comment": "One enqueued job, in the `rpc` pack's `jobs` table.\n\nIt's a live table: a client follows a job with\n[`use_job`](crate::client::use_job), and the hub sends each change. Its\npolicies show a job to the account that enqueued it, and to whoever\n`#[rpc::job(visible_to = ...)]` names, and let only the owner change it.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "key",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": true,
+          "comment": "The app's idempotency key, if it gave one: enqueuing it again returns\nthe same job, until the job is pruned."
+        },
+        {
+          "name": "name",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "The job's name."
+        },
+        {
+          "name": "queue",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "Its queue."
+        },
+        {
+          "name": "arguments",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "comment": "The arguments, as JSON."
+        },
+        {
+          "name": "owner",
+          "type": {
+            "kind": "text",
+            "max_len": 64
+          },
+          "nullable": false,
+          "comment": "The account that enqueued it, as a UUID, or empty when nobody signed\nin did."
+        },
+        {
+          "name": "viewer",
+          "type": {
+            "kind": "text",
+            "max_len": 64
+          },
+          "nullable": false,
+          "comment": "Another account that may read it, from `visible_to = argument`, or\nempty."
+        },
+        {
+          "name": "visibility",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "comment": "Who else may read it."
+        },
+        {
+          "name": "serial_key",
+          "type": {
+            "kind": "text",
+            "max_len": 512
+          },
+          "nullable": true,
+          "comment": "The job's name and its `serialize_by` argument: at most one job with\na key runs at a time."
+        },
+        {
+          "name": "state",
+          "type": {
+            "kind": "text"
+          },
+          "nullable": false
+        },
+        {
+          "name": "attempts",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many times a worker has started it."
+        },
+        {
+          "name": "max_attempts",
+          "type": {
+            "kind": "int64"
+          },
+          "nullable": false,
+          "comment": "How many starts it gets before it fails."
+        },
+        {
+          "name": "priority",
+          "type": {
+            "kind": "int32"
+          },
+          "nullable": false,
+          "comment": "Higher runs first."
+        },
+        {
+          "name": "run_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "comment": "Not before this instant."
+        },
+        {
+          "name": "deadline_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "No attempt starts after this instant."
+        },
+        {
+          "name": "started_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When a worker last started it."
+        },
+        {
+          "name": "finished_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "When it reached `done`, `failed`, or `cancelled`."
+        },
+        {
+          "name": "locked_until",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "comment": "Until when the running worker holds it; `None` when no one does."
+        },
+        {
+          "name": "result",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": true,
+          "comment": "What the body returned, as JSON."
+        },
+        {
+          "name": "error",
+          "type": {
+            "kind": "text",
+            "max_len": 2000
+          },
+          "nullable": true,
+          "comment": "Why the last attempt failed."
+        },
+        {
+          "name": "progress",
+          "type": {
+            "kind": "text",
+            "max_len": 500
+          },
+          "nullable": true,
+          "comment": "What it last said it was doing."
+        },
+        {
+          "name": "fraction",
+          "type": {
+            "kind": "float64"
+          },
+          "nullable": true,
+          "comment": "How far along it last said it was, from 0 to 1."
+        },
+        {
+          "name": "steps",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "comment": "The results of the steps it finished, by name."
+        },
+        {
+          "name": "cancel_requested",
+          "type": {
+            "kind": "bool"
+          },
+          "nullable": false,
+          "comment": "Someone asked it to stop."
+        },
+        {
+          "name": "failure_pending",
+          "type": {
+            "kind": "bool"
+          },
+          "nullable": false,
+          "comment": "It failed, and its `on_failure` mutation hasn't run yet."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "rpc_jobs_key_key",
+          "columns": [
+            "key"
+          ],
+          "unique": true
+        },
+        {
+          "name": "rpc_jobs_state_run_at_idx",
+          "columns": [
+            "state",
+            "run_at"
+          ]
+        },
+        {
+          "name": "rpc_jobs_locked_until_idx",
+          "columns": [
+            "locked_until"
+          ]
+        },
+        {
+          "name": "rpc_jobs_queue_state_idx",
+          "columns": [
+            "queue",
+            "state"
+          ]
+        },
+        {
+          "name": "rpc_jobs_serial_key_state_idx",
+          "columns": [
+            "serial_key",
+            "state"
+          ]
+        },
+        {
+          "name": "rpc_jobs_finished_at_idx",
+          "columns": [
+            "finished_at"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "name": "rpc_jobs_visibility_values",
+          "rule": {
+            "kind": "one_of",
+            "column": "visibility",
+            "values": [
+              "owner",
+              "signed_in",
+              "everyone"
+            ]
+          }
+        },
+        {
+          "name": "rpc_jobs_state_values",
+          "rule": {
+            "kind": "one_of",
+            "column": "state",
+            "values": [
+              "pending",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": {
+        "namespace": "rpc",
+        "name": "receipts"
+      },
+      "comment": "One mutation call that ran with a request ID, and what it returned.\n\nEach caller sees only their own receipts: the policy compares\n[`owner`](Self::owner) with the [`ReceiptOwner`] the RPC adds to the\ncontext it runs a mutation in.",
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "kind": "uuid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "owner",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "Who called: their [`Identity::caller`](super::Identity::caller), such\nas a session ID, or [`ANONYMOUS`] for anonymous callers."
+        },
+        {
+          "name": "request_id",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "The ID the call came with."
+        },
+        {
+          "name": "operation",
+          "type": {
+            "kind": "text",
+            "max_len": 255
+          },
+          "nullable": false,
+          "comment": "The operation's name."
+        },
+        {
+          "name": "arguments",
+          "type": {
+            "kind": "text",
+            "max_len": 64
+          },
+          "nullable": false,
+          "comment": "A SHA-256 of the operation's name and arguments, in hex: a repeat\nwith the same request ID and other arguments is refused rather than\nanswered with another call's result."
+        },
+        {
+          "name": "result",
+          "type": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "comment": "What the call returned, as JSON."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "kind": "timestamp"
+          },
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "rpc_receipts_created_at_idx",
+          "columns": [
+            "created_at"
+          ]
+        },
+        {
+          "name": "rpc_receipts_owner_request_id_key",
+          "columns": [
+            "owner",
+            "request_id"
+          ],
+          "unique": true
+        }
+      ]
+    }
+  ],
+  "sequences": [
+    {
+      "name": {
+        "namespace": "live",
+        "name": "change_seq"
+      }
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "version_seq"
+      }
+    }
+  ],
+  "functions": [
+    {
+      "name": {
+        "namespace": "live",
+        "name": "capture"
+      },
+      "returns": "trigger",
+      "language": "plpgsql",
+      "security_definer": true,
+      "body": "DECLARE\n\tcaptured_table text := TG_ARGV[0];\n\tkey_columns text[] := string_to_array(TG_ARGV[1], ',');\n\tcopied_columns text[] := TG_ARGV[2:TG_NARGS - 1];\n\tcurrent_txid bigint := pg_current_xact_id()::text::bigint;\n\told_row jsonb;\n\tnew_row jsonb;\n\tchanged_columns jsonb := '[]'::jsonb;\nBEGIN\n\tIF TG_OP <> 'INSERT' THEN\n\t\told_row := to_jsonb(OLD);\n\tEND IF;\n\n\tIF TG_OP <> 'DELETE' THEN\n\t\tnew_row := to_jsonb(NEW);\n\tEND IF;\n\n\tIF TG_OP = 'UPDATE' THEN\n\t\tSELECT coalesce(jsonb_agg(entry.key ORDER BY entry.key), '[]'::jsonb)\n\t\tINTO changed_columns\n\t\tFROM jsonb_each(new_row) AS entry\n\t\tWHERE entry.value IS DISTINCT FROM old_row -> entry.key;\n\tEND IF;\n\n\tINSERT INTO live.changes (\"seq\", \"txid\", \"version\", \"table_name\", \"op\", \"key\", \"old\", \"new\", \"changed\")\n\tVALUES (\n\t\tnextval('live.change_seq'),\n\t\tcurrent_txid,\n\t\tNULL,\n\t\tcaptured_table,\n\t\tleft(TG_OP, 1),\n\t\t(SELECT jsonb_agg(coalesce(new_row, old_row) -> part.name ORDER BY part.position)\n\t\t\tFROM unnest(key_columns) WITH ORDINALITY AS part(name, position)),\n\t\t(SELECT jsonb_object_agg(copied.name, old_row -> copied.name)\n\t\t\tFROM unnest(copied_columns) AS copied(name) WHERE old_row IS NOT NULL),\n\t\t(SELECT jsonb_object_agg(copied.name, new_row -> copied.name)\n\t\t\tFROM unnest(copied_columns) AS copied(name) WHERE new_row IS NOT NULL),\n\t\tchanged_columns\n\t);\n\n\t-- The first write in this transaction registers it for a version at\n\t-- commit. A transaction-local setting remembers it, rather than reading\n\t-- the table, which a serializable transaction would conflict through.\n\tIF current_setting('leptoskit.live_registered', true) IS DISTINCT FROM 'on' THEN\n\t\tPERFORM set_config('leptoskit.live_registered', 'on', true);\n\t\tINSERT INTO live.pending (txid) VALUES (current_txid);\n\tEND IF;\n\n\tRETURN NULL;\nEND;",
+      "checksum": "4097acf3d0ac8c842bbd5fe18d0e5bd2a958149aa7ecf56b6d1b743546eccff2"
+    },
+    {
+      "name": {
+        "namespace": "live",
+        "name": "seal"
+      },
+      "returns": "trigger",
+      "language": "plpgsql",
+      "security_definer": true,
+      "body": "DECLARE\n\tnext_version bigint;\nBEGIN\n\t-- A transaction registers once, so this runs once, even when\n\t-- `SET CONSTRAINTS ALL IMMEDIATE` runs it before a later write: that\n\t-- write's change joins the version, which nobody sees before the commit.\n\tPERFORM pg_advisory_xact_lock(7812448352492680805);\n\tnext_version := nextval('live.version_seq');\n\tINSERT INTO live.commits (version, txid, committed_at, actor, origin)\n\tVALUES (\n\t\tnext_version,\n\t\tNEW.txid,\n\t\tclock_timestamp(),\n\t\tnullif(current_setting('leptoskit.user_id', true), '')::uuid,\n\t\tcoalesce(nullif(current_setting('leptoskit.origin', true), ''), 'sql')\n\t);\n\tPERFORM pg_notify('leptoskit_live', next_version::text);\n\tRETURN NULL;\nEND;",
+      "checksum": "2bbe55683a748e37fc5ebc5fc661e7c0e6ccd529be2a445c5caf42dc0143b411"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "live_capture",
+      "table": {
+        "name": "category_preferences"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "category",
+        "opted_out",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "category_preferences",
+          "id",
+          "id",
+          "person",
+          "category",
+          "opted_out",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "name": "notifications"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "send_key",
+        "person",
+        "category",
+        "title",
+        "body",
+        "data",
+        "visible_at",
+        "expires_at",
+        "cancelled_at",
+        "read_at",
+        "dismissed_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "notifications",
+          "id",
+          "id",
+          "send_key",
+          "person",
+          "category",
+          "title",
+          "body",
+          "data",
+          "visible_at",
+          "expires_at",
+          "cancelled_at",
+          "read_at",
+          "dismissed_at",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "name": "topic_subscriptions"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "topic",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "topic_subscriptions",
+          "id",
+          "id",
+          "person",
+          "topic",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "name": "wakes"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "person",
+        "woken_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "wakes",
+          "id",
+          "id",
+          "person",
+          "woken_at",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "seal",
+      "table": {
+        "namespace": "live",
+        "name": "pending"
+      },
+      "timing": "after",
+      "events": [
+        "insert"
+      ],
+      "deferred": true,
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "seal"
+        }
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "namespace": "rpc",
+        "name": "inbox"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "account",
+        "title",
+        "body",
+        "link",
+        "action",
+        "kind",
+        "read_at",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "rpc.inbox",
+          "id",
+          "id",
+          "account",
+          "title",
+          "body",
+          "link",
+          "action",
+          "kind",
+          "read_at",
+          "created_at"
+        ]
+      }
+    },
+    {
+      "name": "live_capture",
+      "table": {
+        "namespace": "rpc",
+        "name": "jobs"
+      },
+      "timing": "after",
+      "events": [
+        "insert",
+        "update",
+        "delete"
+      ],
+      "columns": [
+        "id",
+        "key",
+        "name",
+        "queue",
+        "arguments",
+        "owner",
+        "viewer",
+        "visibility",
+        "serial_key",
+        "state",
+        "attempts",
+        "max_attempts",
+        "priority",
+        "run_at",
+        "deadline_at",
+        "started_at",
+        "finished_at",
+        "locked_until",
+        "result",
+        "error",
+        "progress",
+        "fraction",
+        "steps",
+        "cancel_requested",
+        "failure_pending",
+        "created_at"
+      ],
+      "action": {
+        "kind": "function",
+        "function": {
+          "namespace": "live",
+          "name": "capture"
+        },
+        "arguments": [
+          "rpc.jobs",
+          "id",
+          "id",
+          "key",
+          "name",
+          "queue",
+          "arguments",
+          "owner",
+          "viewer",
+          "visibility",
+          "serial_key",
+          "state",
+          "attempts",
+          "max_attempts",
+          "priority",
+          "run_at",
+          "deadline_at",
+          "started_at",
+          "finished_at",
+          "locked_until",
+          "result",
+          "error",
+          "progress",
+          "fraction",
+          "steps",
+          "cancel_requested",
+          "failure_pending",
+          "created_at"
+        ]
+      }
+    }
+  ]
+}

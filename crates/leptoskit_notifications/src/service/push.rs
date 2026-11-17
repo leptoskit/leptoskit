@@ -188,6 +188,10 @@ pub(crate) async fn register(
 					.await?;
 			}
 
+			// Enrolling a device is one of the acts that makes a person
+			// known: someone push can reach belongs in the registry.
+			super::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
+
 			return Ok(EndpointSummary {
 				id: existing.id,
 				platform,
@@ -225,6 +229,10 @@ pub(crate) async fn register(
 		Err(leptoskit_db::DbError::Conflict { .. }) => return Err(rpc::Error::Contended),
 		Err(error) => return Err(error.into()),
 	}
+
+	// A fresh enrollment registers the person, exactly as a re-enrollment
+	// does above.
+	super::register_persons(cx.tx(), &std::collections::BTreeSet::from([me])).await?;
 
 	Ok(EndpointSummary {
 		id,

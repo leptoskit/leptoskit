@@ -1,8 +1,8 @@
 # Notifications
 
-You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, or to the people a condition matches, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
+You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics and the attributes you set, or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, person attributes and segments as audiences, and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, device attributes (a person's platform, locale, or app version as a segment), and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -203,11 +203,131 @@ let sent = call_as_app(leptoskit_notifications::Send {
 .await?;
 ```
 
-The grammar is `&&`, `||`, `!`, and parentheses over `'topic' in topics`, with `!` binding tightest. At most five distinct topics, nesting at most eight levels deep, and at most 1,024 bytes — FCM's bounds, checked on both sides, with errors that name the byte they gave up at. One shape is refused outright: a condition that already holds for a person with no topics, like `!('a' in topics)`, would quietly become an "everyone" audience as soon as anyone exists, and there is no everyone audience yet — send to explicit recipients for that. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency.
+The grammar is `&&`, `||`, `!`, and parentheses over the predicates below, with `!` binding tightest, then `&&`, then `||`. At most five distinct topics, at most ten attribute predicates, nesting at most eight levels deep, and at most 1,024 bytes — FCM's bounds, checked on both sides, with errors that name the byte they gave up at.
+
+| Predicate                            | True when                                                   |
+| ------------------------------------ | ----------------------------------------------------------- |
+| `'name' in topics`                   | the person holds the topic                                  |
+| `user.<key> == 'value'`              | the app set the attribute to exactly that value             |
+| `user.<key> != 'value'`              | the app set the attribute to something else                 |
+| `user.<key> in ['a', 'b']`           | the attribute is one of the listed values                   |
+| `has(user.<key>)`                    | the app set the attribute, whatever its value               |
+| `user.<key> < '10'` (also `<= > >=`) | both sides parse as finite numbers and the comparison holds |
+
+An attribute the person doesn't have answers false to every predicate, `!=` and `in` included: nobody matches a segment merely for lacking the attribute. Numeric comparisons are numbers, not text — `user.version > '9'` is true for `10` — and a value that doesn't parse as a finite number answers false; `NaN` and `inf` are refused as literals at parse time. Values in quotes are at most 256 bytes with no whitespace inside, and keys are `a-z`, `0-9`, and `_`, up to 64 bytes — the same rules `set_person_attributes` enforces, so what you can send is what you can ask about.
+
+One shape is refused outright: a condition that already holds for a person with no topics and no attributes, like `!('a' in topics)`, is an "everyone" audience in disguise — the plain target below says that with a name, so the condition grammar makes you use it. Everything else anchors on something: a topic, or an attribute predicate such as `user.plan == 'pro'`. Condition sends fan out like topic sends: same batches, same snapshot-as-reached, same idempotency. Which index a condition's fanout walks follows from its anchor — a condition that cannot match without one of its topics walks the topic's subscribers, and one anchored only on attributes walks the person registry below.
+
+## Describe people with attributes
+
+Topics say what a person asked for; attributes say who they are. Your server describes each person with a handful of key-value pairs — the plan they're on, the country they're in, the campaign that brought them — and conditions read them as `user.<key>`. Only your server can set them, and only your server can read them back: an attribute is your statement about a person, and a segment built from client-set attributes would be an audience anyone could join by editing a request.
+
+```rust
+use leptoskit_rpc::client::call_as_app;
+
+// When a plan changes, in batches of at most 1,000 people:
+let changes = call_as_app(leptoskit_notifications::SetPersonAttributes {
+    persons: vec![alice_id, bob_id],
+    set: [
+        ("plan".to_owned(), "pro".to_owned()),
+        ("country".to_owned(), "de".to_owned()),
+    ]
+    .into(),
+    remove: vec!["trial_lapsed".to_owned()],
+})
+.await?;
+
+// What a segment will see, keyed and sorted:
+let attributes = call_as_app(leptoskit_notifications::PersonAttributes {
+    person: alice_id,
+})
+.await?;
+```
+
+Keys are 1 to 64 bytes of `a-z`, `0-9`, and `_`; values are strings of at most 256 bytes; a person holds at most 50 attributes, and a key past that bound is skipped and counted in `skipped_full` rather than refusing the batch. The call is idempotent — sending the same value again changes nothing and counts nothing — and `remove` is the last word: a key in both `set` and `remove` is removed, never set.
+
+Setting an attribute also registers the person with the service, because an attribute is one of the things that makes someone an audience: the registry the service keeps is who "everyone" means. Someone who subscribes to a topic, sets a category preference, or enrolls a push endpoint is registered too — including by the migration that adds the registry, which backfills it from those tables. Someone who only ever received a recipients send is not registered: naming people in a send never puts them in an audience.
+
+When a person should belong to no audience anymore — a deleted account, a withdrawn consent — `ForgetPerson` removes them from the registry, with their attributes and their topic subscriptions:
+
+```rust
+call_as_app(leptoskit_notifications::ForgetPerson { person: alice_id }).await?;
+```
+
+Their inbox rows stay as they are, and so do their push endpoints and category preferences: forgetting ends their audiences, not their history. A later attribute, subscription, preference, or enrollment registers them again.
+
+## Target a segment
+
+Attributes and topics mix freely in one condition, which is the whole point: a segment is "people like that, who also asked for this".
+
+```rust
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: format!("pro-de-launch-{launch_id}"),
+    spec: SendSpec {
+        category: "product".into(),
+        title: "New in your plan".into(),
+        body: "The launch post, in your language.".into(),
+        data: None,
+        visible_at: None,
+        expires_at: None,
+    },
+    target: SendTarget::Condition(
+        "user.plan == 'pro' && user.country in ['de', 'at'] && 'news.product' in topics"
+            .into(),
+    ),
+    validate_only: false,
+})
+.await?;
+```
+
+```text
+user.plan == 'pro' && !('beta' in topics)
+user.spend >= '1000' || has(user.enterprise)
+user.country != 'us' && 'news.product' in topics
+```
+
+The second example is a condition anchored only on attributes: it can match a person who holds no topics at all, so its fanout walks the person registry instead of a topic's subscribers — every registered person is a candidate, evaluated against the attributes your server set. The first and third name a topic their match depends on, so they walk that topic's subscribers and cost no more than a topic send. You don't choose the walk; the condition's shape does, and `validate_only` counts either way:
+
+```rust
+let dry = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "pro-de-launch-dry".into(),
+    spec,
+    target: SendTarget::Condition("user.plan == 'pro'".into()),
+    validate_only: true,
+})
+.await?;
+```
+
+The audience is snapshotted as the fanout reaches each person, so change an attribute mid-fanout and the people the walk already passed keep the value it saw.
+
+## Send to everyone
+
+Some sends really are for everyone: a terms change, a service window, a new version shipped. `SendTarget::Everyone` reaches every person in the service's registry — the people whose attributes your server set, who subscribed to a topic, set a category preference, or enrolled a device.
+
+```rust
+let count = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: format!("terms-v{n}"),
+    spec: SendSpec {
+        category: "account".into(),
+        title: "Terms of service changed".into(),
+        body: "The new terms take effect next month.".into(),
+        data: None,
+        visible_at: None,
+        expires_at: None,
+    },
+    target: SendTarget::Everyone,
+    validate_only: true,
+})
+.await?;
+```
+
+Treat this target with the respect a big lever deserves. It fans out in the same batches as any large send, so the service stays healthy however many people it knows — but every registered person gets a row, and every enrolled device gets a push, in one send. Two courtesies are built in: people who opted out of the send's category are skipped and counted, and `validate_only` (as above) answers how many people the send would reach right now, before anything is written. `forget_person` is the other half of this: a person your server forgot is not part of "everyone" anymore, whatever their history.
+
+Everyone is not a condition, and it can't be narrowed: `SendTarget::Everyone` is the whole registry, every time. When you want most people, say which ones — a condition over attributes — because a send to everyone is a promise to every person in it.
 
 ## Track a large send
 
-A recipients send answers with its final counts because it finished inside the call. A topic or condition send answers `fanning_out` and keeps working — so ask it how it's going, and try the whole thing without spending it:
+A recipients send answers with its final counts because it finished inside the call. A topic, condition, or everyone send answers `fanning_out` and keeps working — so ask it how it's going, and try the whole thing without spending it:
 
 ```rust
 // How the fanout is going, from your server:
@@ -226,7 +346,7 @@ let dry = call_as_app(leptoskit_notifications::Send {
 .await?;
 ```
 
-`send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
+`send_status` answers the state — `fanning_out`, `complete`, or `cancelled` — and the counts so far: `targeted` (everyone the target matched), `delivered`, and `skipped_opted_out`. Once the state is `complete` the counts are final; `validate_only` answers the same shape for the audience as it stands now, without writing a row, the way FCM's `validate_only` does, for every target — recipients, topic, condition, and everyone. Cancelling works mid-fanout too: the fanout stops before its next batch, the rows written so far are cancelled, and the send answers `cancelled` from then on.
 
 ## Read the inbox on any platform
 
@@ -595,7 +715,7 @@ Push reaches a device through its platform's service: iOS and macOS through APNs
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
-- **Audiences are topics and conditions, not attributes.** There is no "send to everyone in Berlin" or "everyone who signed up this month": topics are the only segmentation, subscribed by your server or — where you open them — by the person. Person attributes and segments, and "send to everyone", are later work.
+- **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend — and nothing about the device: platform, locale, app version, and timezone are not attributes yet, and there is no per-device targeting at all. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
 
 The engineering notes in the repository describe the transport work that follows.
 

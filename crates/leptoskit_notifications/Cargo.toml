@@ -32,6 +32,12 @@ required-features = ["service"]
 name = "topics"
 required-features = ["service"]
 
+# The segments tests exercise person attributes, the registry, and the
+# audience paths that walk it: everyone sends and unanchored conditions.
+[[test]]
+name = "segments"
+required-features = ["service"]
+
 # The push tests exercise the transports over an injected boundary; the
 # boundary tests below run real local HTTP servers.
 [[test]]
