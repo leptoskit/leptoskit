@@ -1172,6 +1172,17 @@ another application's scene.
 
 <!-- {/p_store_reviewSummary} -->
 
+<!-- {@p_thermalSummary} -->
+
+Add `{{ plugin_thermal.package.name }}` as a direct dependency and select the
+`{{ plugin_thermal.package.metadata.leptoskit.runtime.name }}` plugin in `native.plugins`; generated iOS, Android, and macOS
+hosts discover it from Cargo metadata. Guests enable the `guest` feature and reuse
+`guest::Thermal` rather than resolving the plugin on every call. A platform that cannot
+report its thermal state answers `Unknown` instead of pretending the device is cool, and
+Android's finer throttling status is kept alongside the shared four-level state.
+
+<!-- {/p_thermalSummary} -->
+
 <!-- {@p_tracking_transparencySummary} -->
 
 Add `{{ plugin_tracking_transparency.package.name }}` as a direct dependency and select the

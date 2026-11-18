@@ -80,6 +80,7 @@ pub use leptoskit_plugin_speech;
 pub use leptoskit_plugin_sqlite;
 pub use leptoskit_plugin_store;
 pub use leptoskit_plugin_store_review;
+pub use leptoskit_plugin_thermal;
 pub use leptoskit_plugin_tracking_transparency;
 pub use leptoskit_plugin_tray;
 pub use leptoskit_plugin_updater;
