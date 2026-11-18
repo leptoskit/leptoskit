@@ -20,6 +20,33 @@
 //! # }
 //! ```
 //!
+//! # In a leptoskit element
+//!
+//! An app built with leptoskit does not call [`attach`]. It gives the
+//! editor's id to a `CanvistEditor` element, and the editor appears in that
+//! element when the element does and leaves with it:
+//!
+//! ```ignore
+//! let note = CanvistState::new(Extensions::paragraphs());
+//!
+//! CanvistEditor(note.id())
+//! 	.accessibility_label("Note")
+//! 	.placeholder("Write a note…")
+//! 	.class("min-h-40 w-full rounded-lg border p-3 text-base")
+//! ```
+//!
+//! The element's own settings reach the editor and follow it as they
+//! change: its placeholder, `read_only`, its accessible label, `focused`,
+//! and its classes, which the editor reads its text style from. An element
+//! that sets no placeholder and is not read-only leaves alone what the app
+//! set on the handle. `on_focus` and `on_blur` handlers on the element hear
+//! the editor gain and lose the keyboard. A disabled element cannot be
+//! edited, but its text can still be selected.
+//!
+//! On a server-rendered page the element arrives empty and the editor
+//! appears when the page hydrates. Dispose the handle when the component
+//! that made it goes away, on the server too: nothing else frees an editor.
+//!
 //! # Styling
 //!
 //! The editor looks like the text of its container: it reads the
@@ -54,6 +81,7 @@
 mod device;
 mod dom;
 mod editor;
+mod elements;
 mod fonts;
 mod host;
 mod input;
@@ -108,7 +136,7 @@ impl Attachment {
 	/// The editor paints by itself; this is for code that reads the canvas
 	/// right after changing the editor, such as a test or a screenshot.
 	pub fn render(&self) {
-		host::with(self.state.id(), Some(self.serial), host::Host::render);
+		host::with(self.state.key(), Some(self.serial), host::Host::render);
 	}
 
 	/// Read the container's styles again.
@@ -119,7 +147,7 @@ impl Attachment {
 	/// other time.
 	pub fn refresh_theme(&self) {
 		host::with(
-			self.state.id(),
+			self.state.key(),
 			Some(self.serial),
 			host::Host::refresh_theme,
 		);
@@ -128,28 +156,33 @@ impl Attachment {
 
 impl Drop for Attachment {
 	fn drop(&mut self) {
-		host::detach(self.state.id(), Some(self.serial));
+		host::detach(self.state.key(), Some(self.serial));
 	}
 }
 
 /// The app replaced the document of the editor with `id`.
-pub(crate) fn document_replaced(id: u64) {
+pub(crate) fn document_replaced(id: u32) {
 	host::with(id, None, host::Host::document_replaced);
 }
 
 /// The app changed read-only or the placeholder of the editor with `id`.
-pub(crate) fn options_changed(id: u64) {
+pub(crate) fn options_changed(id: u32) {
 	host::with(id, None, host::Host::apply_options);
 }
 
 /// Move keyboard focus to the editor with `id`.
-pub(crate) fn focus(id: u64) {
+pub(crate) fn focus(id: u32) {
 	host::with(id, None, |host| host.focus());
 }
 
 /// The editor with `id` was disposed.
-pub(crate) fn disposed(id: u64) {
+pub(crate) fn disposed(id: u32) {
 	host::detach(id, None);
+}
+
+/// Start putting editors in the `CanvistEditor` elements that name them.
+pub(crate) fn watch_elements() {
+	elements::watch();
 }
 
 pub(crate) use device::platform;

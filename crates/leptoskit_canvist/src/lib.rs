@@ -24,16 +24,17 @@
 //!
 //! # Where it runs
 //!
-//! - **The web**, behind the `web` feature: [`web::attach`] puts the editor in
-//!   an element of the page. The whole browser host is Rust compiled to Wasm,
-//!   with no JavaScript of its own.
+//! - **The web**, behind the `web` feature. With leptoskit, give the editor's
+//!   [`CanvistState::id`] to a `CanvistEditor` element and the editor appears
+//!   in it. A page built some other way puts the editor in an element with
+//!   [`web::attach`]. Either way the whole browser host is Rust compiled to
+//!   Wasm, with no JavaScript of its own.
 //! - **Everywhere else** the handle still loads, converts and exports
 //!   documents, so a server can read what an editor saved, but nothing draws an
-//!   editor yet.
+//!   editor yet: a `CanvistEditor` element is an empty view.
 //!
 //! This first slice edits plain paragraphs. Formatting, lists, ink and the
-//! native hosts come later, and so does the `leptoskit` element that mounts
-//! an editor for you.
+//! native hosts come later.
 //!
 //! canvist's own types stay out of this crate's API: canvist is still moving
 //! fast, and its releases should not break apps that only hold a handle.

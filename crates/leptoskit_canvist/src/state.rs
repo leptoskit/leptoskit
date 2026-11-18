@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use crate::session;
@@ -14,11 +14,12 @@ use crate::session::Session;
 use crate::session::Shared;
 
 /// Every live editor, by its handle's id.
-static SESSIONS: Mutex<BTreeMap<u64, Shared>> = Mutex::new(BTreeMap::new());
+static SESSIONS: Mutex<BTreeMap<u32, Shared>> = Mutex::new(BTreeMap::new());
 
 /// The id the next editor gets. Ids are never reused, so a handle to a
-/// disposed editor can never reach a newer one.
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// disposed editor can never reach a newer one. They are `u32` because that
+/// is what a `CanvistEditor` element carries.
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 /// An editor the app owns.
 ///
@@ -44,7 +45,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// An editor lives until [`CanvistState::dispose`]: nothing drops it when the
 /// last copy of the handle goes away, because a `Copy` handle cannot tell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CanvistState(u64);
+pub struct CanvistState(u32);
 
 /// The formats a document loads from and exports to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -319,13 +320,51 @@ impl CanvistState {
 		sessions().remove(&self.0);
 	}
 
-	/// The id hosts file this editor under.
-	#[cfg_attr(
-		not(all(feature = "web", target_arch = "wasm32")),
-		expect(dead_code, reason = "only a host files editors by id")
-	)]
-	pub(crate) fn id(self) -> u64 {
+	/// The editor's id: what a `CanvistEditor` element takes to show this
+	/// editor.
+	///
+	/// ```
+	/// use leptoskit_canvist::CanvistState;
+	/// use leptoskit_canvist::Extensions;
+	///
+	/// let note = CanvistState::new(Extensions::paragraphs());
+	/// let other = CanvistState::new(Extensions::paragraphs());
+	///
+	/// assert_ne!(note.id(), other.id());
+	/// # note.dispose();
+	/// # other.dispose();
+	/// ```
+	///
+	/// With leptoskit that is `CanvistEditor(note.id())`. On the web, with
+	/// the `web` feature, asking for the id also starts watching the page, so
+	/// the editor appears in that element when it does and leaves with it;
+	/// see `web` for what the element's own settings do. An id is never
+	/// handed out twice, and the server's editor and the browser's have
+	/// different ones.
+	#[must_use]
+	pub fn id(self) -> u32 {
+		#[cfg(all(feature = "web", target_arch = "wasm32"))]
+		crate::web::watch_elements();
+
 		self.0
+	}
+
+	/// The id hosts file this editor under, without watching the page.
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	pub(crate) fn key(self) -> u32 {
+		self.0
+	}
+
+	/// The handle with `id`, whether or not such an editor is alive.
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	pub(crate) fn from_id(id: u32) -> Self {
+		Self(id)
+	}
+
+	/// Whether the editor is alive: created and not yet disposed.
+	#[cfg(all(feature = "web", target_arch = "wasm32"))]
+	pub(crate) fn is_alive(self) -> bool {
+		sessions().contains_key(&self.0)
 	}
 
 	pub(crate) fn session(self) -> Option<Shared> {
@@ -333,7 +372,7 @@ impl CanvistState {
 	}
 }
 
-fn sessions() -> std::sync::MutexGuard<'static, BTreeMap<u64, Shared>> {
+fn sessions() -> std::sync::MutexGuard<'static, BTreeMap<u32, Shared>> {
 	SESSIONS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
