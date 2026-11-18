@@ -312,6 +312,8 @@ final class MacWidgetRenderer: NSObject, NSTextFieldDelegate, NativeRiveSink {
         case "camera", "Camera": widget = NativeCameraView()
         case "map", "Map": widget = NativeMapView()
         case "live_photo", "LivePhoto": widget = NativeLivePhotoView()
+        // A canvist editor has no macOS host yet: an empty view holds its place.
+        case "canvist_editor", "CanvistEditor": widget = FlippedView()
         default: widget = try makeControl(item)
         }
         (widget as? NativeScene3dView)?.show(scene: item.props.scene3d)

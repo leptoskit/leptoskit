@@ -760,8 +760,8 @@ impl NativeBackend for GtkBackend {
 
 		let control: gtk::Widget = match kind {
 			// A 3D scene draws in the generated hosts' Swift and Kotlin renderers (not
-			// GTK yet);
-			// this backend holds its place as an empty view.
+			// GTK yet), and a canvist editor has no native host yet; this backend
+			// holds their place as an empty view.
 			NativeKind::View
 			| NativeKind::Modal
 			| NativeKind::Popover
@@ -770,7 +770,8 @@ impl NativeBackend for GtkBackend {
 			| NativeKind::Video
 			| NativeKind::Camera
 			| NativeKind::Map
-			| NativeKind::LivePhoto => content.clone().upcast(),
+			| NativeKind::LivePhoto
+			| NativeKind::CanvistEditor => content.clone().upcast(),
 			NativeKind::Text | NativeKind::TextRun => {
 				gtk::Label::builder()
 					.wrap(true)

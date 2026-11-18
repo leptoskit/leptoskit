@@ -99,6 +99,7 @@ fn controls_take_their_values_as_props() {
 			<ActivityIndicator running=false />
 			<PasswordInput placeholder="Password" />
 			<TextArea placeholder="Notes" max_length=200 />
+			<CanvistEditor editor=3 placeholder="Write a note…" />
 			<Pressable accessibility_label="Open">
 				<Text>"Open"</Text>
 			</Pressable>
@@ -114,6 +115,7 @@ fn controls_take_their_values_as_props() {
 		ActivityIndicator(false),
 		PasswordInput().placeholder("Password"),
 		TextArea().placeholder("Notes").max_length(200),
+		CanvistEditor(3).placeholder("Write a note…"),
 		Pressable("Open").child(Text("Open")),
 		ScrollView().class("flex-1"),
 	]);

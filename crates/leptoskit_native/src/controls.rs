@@ -23,6 +23,8 @@ pub enum ControlTreeError {
 	/// A Live Photo session and an accessible label or decorative state are
 	/// required.
 	InvalidLivePhoto,
+	/// A canvist editor element needs an editor, and only it may name one.
+	InvalidCanvistEditor,
 	/// A leaf widget cannot contain child widgets.
 	Children { kind: NativeKind },
 	/// Radio options require an explicit named group.
@@ -93,6 +95,11 @@ impl fmt::Display for ControlTreeError {
 				formatter.write_str(
 					"use a LivePhoto element with a session and an accessible label or \
 					 aria_hidden(true)",
+				)
+			}
+			Self::InvalidCanvistEditor => {
+				formatter.write_str(
+					"use a CanvistEditor element with an editor; no other element names one",
 				)
 			}
 			Self::RiveNotEnabled => {

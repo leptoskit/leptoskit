@@ -36,6 +36,7 @@ pub const BUILT_IN_COMPONENTS: &[&str] = &[
 	"Alert",
 	"Button",
 	"Camera",
+	"CanvistEditor",
 	"Card",
 	"Center",
 	"Checkbox",

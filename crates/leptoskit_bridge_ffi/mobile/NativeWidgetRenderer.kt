@@ -523,6 +523,11 @@ internal class NativeWidgetRenderer(
                     overlay(id, hangs = true)
                 }
 
+                "canvist_editor", "CanvistEditor" -> {
+                    // A canvist editor has no Android host yet: an empty view holds its place.
+                    FrameLayout(context)
+                }
+
                 else -> {
                     // GTK draws an unknown or custom kind as an empty container.
                     // Stopping the tree here took the whole activity down.

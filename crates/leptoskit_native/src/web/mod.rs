@@ -1076,6 +1076,37 @@ fn semantic_element(
 	}
 }
 
+/// A progress bar: `<progress>` with a value, or without one while the amount
+/// is unknown.
+fn linear_progress(progress: Progress, attrs: impl Attribute + 'static) -> AnyView {
+	let value = match progress {
+		Progress::Indeterminate => None,
+		Progress::Determinate(value) => Some(value.get().to_string()),
+	};
+
+	html::progress()
+		.max("1")
+		.value(value)
+		.add_any_attr(attrs)
+		.into_any()
+}
+
+/// A `CanvistEditor`'s container. `leptoskit_canvist`'s web host finds it by
+/// its editor and builds the editor inside, so apps without an editor never
+/// link one. The host takes the placeholder and the read-only state from the
+/// attributes here, and the editor's name from the container's label.
+fn canvist_editor_element(props: NativeProps, attrs: impl Attribute + 'static) -> AnyView {
+	html::div()
+		.attr(
+			"data-lk-canvist-editor",
+			props.canvist_editor.map(|editor| editor.to_string()),
+		)
+		.attr("data-lk-placeholder", props.placeholder)
+		.attr("data-lk-read-only", props.read_only == Some(true))
+		.add_any_attr(attrs)
+		.into_any()
+}
+
 fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 	let NodeParts {
 		kind,
@@ -1164,6 +1195,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		NativeKind::Camera => camera_element(props.camera, attrs),
 		NativeKind::Map => map_element(props.map, attrs),
 		NativeKind::LivePhoto => live_photo_element(props.live_photo, attrs),
+		NativeKind::CanvistEditor => canvist_editor_element(props, attrs),
 		NativeKind::TextInput | NativeKind::TextArea | NativeKind::PasswordInput => {
 			text_input(kind, props, text, enabled, chain, attrs)
 		}
@@ -1189,16 +1221,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 				.into_any()
 		}
 		NativeKind::LinearProgressIndicator => {
-			let value = match props.progress.unwrap_or_default() {
-				Progress::Indeterminate => None,
-				Progress::Determinate(value) => Some(value.get().to_string()),
-			};
-
-			html::progress()
-				.max("1")
-				.value(value)
-				.add_any_attr(attrs)
-				.into_any()
+			linear_progress(props.progress.unwrap_or_default(), attrs)
 		}
 		NativeKind::ActivityIndicator => activity_indicator(props.running.unwrap_or(true), attrs),
 		NativeKind::Vector => {

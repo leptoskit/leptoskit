@@ -50,6 +50,7 @@ fn every_kind_retains_canonical_and_legacy_wire_names() {
 		(NativeKind::Camera, "Camera"),
 		(NativeKind::Map, "Map"),
 		(NativeKind::LivePhoto, "LivePhoto"),
+		(NativeKind::CanvistEditor, "CanvistEditor"),
 	] {
 		let canonical = serde_json::json!(kind.wire_name());
 		assert_eq!(

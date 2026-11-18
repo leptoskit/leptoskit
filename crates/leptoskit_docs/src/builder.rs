@@ -1255,6 +1255,7 @@ fn builtin(name: &str) -> Option<Start> {
 		"Vector" => attribute("view_box", Some("ViewBox::UNIT")),
 		"Rive" => attribute("rive_playback", None),
 		"Scene3d" => attribute("scene", None),
+		"CanvistEditor" => attribute("editor", None),
 		"Radio" => Start::Radio,
 		"Modal" => attribute("open", Some("false")),
 		"Popover" => Start::Popover,

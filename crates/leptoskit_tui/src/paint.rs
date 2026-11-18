@@ -147,7 +147,8 @@ impl Painter<'_> {
 			}
 			NativeKind::ActivityIndicator => self.activity(id, rect, fg, bg, attrs),
 			// Image and vector pixels, including Rive frames and 3D scenes, do
-			// not resolve to cells.
+			// not resolve to cells, and a canvist editor has no terminal host
+			// yet: each holds its place as a dim block.
 			NativeKind::Image
 			| NativeKind::Vector
 			| NativeKind::Rive
@@ -155,7 +156,8 @@ impl Painter<'_> {
 			| NativeKind::Video
 			| NativeKind::Camera
 			| NativeKind::Map
-			| NativeKind::LivePhoto => {
+			| NativeKind::LivePhoto
+			| NativeKind::CanvistEditor => {
 				self.image(rect, bg, dim);
 			}
 		}

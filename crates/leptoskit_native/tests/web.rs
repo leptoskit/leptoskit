@@ -222,6 +222,46 @@ fn a_text_naming_one_field_renders_as_its_label() {
 }
 
 #[test]
+fn a_canvist_editor_renders_the_container_its_host_looks_for() {
+	let element = Element::view().children([
+		Element::canvist_editor(7)
+			.accessibility_label("Note")
+			.placeholder("Write a note…")
+			.with_props(|props| props.read_only = Some(true)),
+		Element::canvist_editor(8).accessibility_label("Plain"),
+	]);
+	let html = render(element).to_html();
+
+	let editor = html
+		.split("<div data-lk-canvist-editor")
+		.nth(1)
+		.expect("first editor");
+	let (tag, rest) = editor.split_once('>').expect("opening tag");
+	assert!(tag.starts_with("=\"7\""), "{tag}");
+	assert!(
+		tag.contains("data-lk-placeholder=\"Write a note…\""),
+		"{tag}"
+	);
+	assert!(tag.contains(" data-lk-read-only"), "{tag}");
+	// The host's own text field is the text box; the container only carries
+	// the name for it.
+	assert!(tag.contains("aria-label=\"Note\""), "{tag}");
+	assert!(!tag.contains("role="), "{tag}");
+	assert!(!tag.contains("tabindex"), "{tag}");
+	// Nothing inside until the host builds the editor.
+	assert!(rest.starts_with("</div>"), "{rest}");
+
+	let plain = html
+		.split("<div data-lk-canvist-editor")
+		.nth(2)
+		.expect("second editor");
+	let (tag, _) = plain.split_once('>').expect("opening tag");
+	assert!(tag.starts_with("=\"8\""), "{tag}");
+	assert!(!tag.contains("data-lk-placeholder"), "{tag}");
+	assert!(!tag.contains("data-lk-read-only"), "{tag}");
+}
+
+#[test]
 fn text_areas_render_a_textarea_with_their_lines_and_hints() {
 	let element = Element::view().children([
 		Element::text_area()

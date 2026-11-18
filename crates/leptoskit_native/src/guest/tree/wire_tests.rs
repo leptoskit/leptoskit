@@ -115,6 +115,7 @@ fn every_prop() -> NativeProps {
 		camera: Some(5),
 		map: Some(6),
 		live_photo: Some(7),
+		canvist_editor: Some(8),
 		text: Some("Take the oath".into()),
 		source: Some("nfts/degenApes_1.webp".into()),
 		placeholder: Some("Your name".into()),
@@ -387,6 +388,7 @@ fn common_props(kind: NativeKind) -> Element {
 			NativeKind::Camera => props.camera = all.camera,
 			NativeKind::Map => props.map = all.map,
 			NativeKind::LivePhoto => props.live_photo = all.live_photo,
+			NativeKind::CanvistEditor => props.canvist_editor = all.canvist_editor,
 			NativeKind::Image => props.source = all.source,
 			NativeKind::Vector => props.drawing = all.drawing,
 			NativeKind::Slider => props.slider = all.slider,
@@ -474,7 +476,8 @@ fn every_kind_has_the_code_both_sides_read() {
 			| NativeKind::Map
 			| NativeKind::LivePhoto
 			| NativeKind::Modal
-			| NativeKind::Popover => {}
+			| NativeKind::Popover
+			| NativeKind::CanvistEditor => {}
 			NativeKind::Custom(name) => panic!("custom widget `{name}` has a code"),
 		}
 	}

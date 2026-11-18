@@ -915,6 +915,7 @@ fn every_kind_the_guest_creates_is_the_kind_the_host_shows() {
 			NativeKind::Camera => serde_json::json!({ "camera": 1 }),
 			NativeKind::Map => serde_json::json!({ "map": 1 }),
 			NativeKind::LivePhoto => serde_json::json!({ "live_photo": 1 }),
+			NativeKind::CanvistEditor => serde_json::json!({ "canvist_editor": 1 }),
 			_ => serde_json::json!({}),
 		};
 		let mut props = serde_json::json!({ "accessibility_label": "A node", "opacity": 0.5 });
