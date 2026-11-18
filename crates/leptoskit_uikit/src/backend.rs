@@ -822,7 +822,7 @@ fn apply_props(widget: &mut Widget, props: &NativeProps, mtm: MainThreadMarker) 
 			slider.setAccessibilityValue(Some(&NSString::from_str(&announced)), mtm);
 		}
 		Control::Input { field, .. } => {
-			apply_input_props(field, props, widget.kind, &foreground, &font)
+			apply_input_props(field, props, widget.kind, &foreground, &font);
 		}
 		Control::Image { image, source } => {
 			if source != &props.source {
@@ -971,11 +971,11 @@ fn apply_password_traits(field: &UITextField) {
 }
 
 /// Sends the `UITextInputTraits` setters objc2's direct Method lookup cannot
-/// validate, one NSInteger each.
+/// validate, one `NSInteger` each.
 ///
 /// # Safety
 ///
-/// Every selector must be a forwarded setter that takes one NSInteger and
+/// Every selector must be a forwarded setter that takes one `NSInteger` and
 /// returns void, and the field must remain alive on the main thread through
 /// each synchronous send.
 unsafe fn send_integer_traits(field: &UITextField, traits: &[(Sel, isize)]) {
@@ -1014,9 +1014,10 @@ fn autocapitalization(capitalize: Option<Capitalize>) -> UITextAutocapitalizatio
 	match capitalize {
 		Some(Capitalize::None) => UITextAutocapitalizationType::None,
 		Some(Capitalize::Words) => UITextAutocapitalizationType::Words,
-		Some(Capitalize::Sentences) => UITextAutocapitalizationType::Sentences,
 		Some(Capitalize::Characters) => UITextAutocapitalizationType::AllCharacters,
-		None => UITextAutocapitalizationType::Sentences,
+		// Sentence capitalization is also UIKit's default for a field that
+		// asks for nothing.
+		Some(Capitalize::Sentences) | None => UITextAutocapitalizationType::Sentences,
 	}
 }
 

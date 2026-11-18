@@ -331,9 +331,7 @@ define_class!(
 			let proposed =
 				replaced.saturating_sub(range.length).saturating_add(replacement.length());
 
-			usize::try_from(proposed)
-				.is_ok_and(|proposed| proposed <= max_length)
-				.into()
+			(proposed <= max_length).into()
 		}
 	}
 
