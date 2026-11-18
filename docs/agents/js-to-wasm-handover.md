@@ -36,8 +36,8 @@ One pull request per item. Every backend is kept in step, with AppKit as the ref
 | #  | Change                                                      | Gap      | State       |
 | -- | ----------------------------------------------------------- | -------- | ----------- |
 | 1  | Text input hints                                            | G9       | #852, open  |
-| 2  | `TextArea`                                                  | G12      | PR open     |
-| 3  | Labels that focus their fields                              | G13      | not started |
+| 2  | `TextArea`                                                  | G12      | #877, open  |
+| 3  | Labels that focus their fields                              | G13      | PR open     |
 | 4  | One-shot focus requests                                     | G2       | not started |
 | 5  | Arrow-key navigation for tabs, radio groups and menus       | G5       | not started |
 | 6  | `Modal` and `Popover`                                       | G1       | not started |
@@ -61,7 +61,7 @@ Adds `.keyboard()`, `.read_only()`, `.max_length()`, `.capitalize()`, `.autocorr
 - **Verified:** the `leptoskit_native` tests with `web,serde`; AppKit's 14 control tests; the terminal tests; the Swift typecheck tests for the generated iOS and macOS apps; the gallery tree snapshots (only hashes changed). Every lint step of the pre-push gate passed on a second machine on the commit before the last rebase.
 - **Not verified:** no complete pre-push gate ran on the final commit. It was pushed with the hook skipped, on the owner's instruction, and **CI on the pull request is the gate.** Merge it with a squash only when CI is green. Nothing has run on an iOS, Android, Linux or Windows device.
 
-### `feat/text-area`: stacked on `feat/text-input-typed-hints`
+### `feat/text-area`: pull request #877, stacked on #852
 
 Adds `TextArea()` and `NativeKind::TextArea` (wire name `text_area`, appended last in the wire kind table) on the web, AppKit, UIKit, Android, GTK, Windows, the terminal, and the Swift and Kotlin renderers. Enter adds a line and never raises `Submit`. `aria_multiline(true)` on a single-line field now fails validation.
 
@@ -69,6 +69,14 @@ Adds `TextArea()` and `NativeKind::TextArea` (wire name `text_area`, appended la
 - **Compiled and linted only, by cross-checking from Linux:** `leptoskit_appkit`, `leptoskit_uikit` and `leptoskit_windows`. Their new tests have not run.
 - **Not compiled anywhere before CI:** the Swift renderers (`MacTextArea`, `MobileTextArea`) and the Kotlin ones (`NativeTextArea`, and `text_area` in `WidgetHost.kt`). Swift was parsed with `swift-format` and Kotlin linted with ktlint, nothing more.
 - **Known gaps:** GTK and Windows show no placeholder. HarmonyOS and the watch surfaces do not draw the component. The Android probe screen has no `TextArea` yet.
+
+### `feat/label-focus`: stacked on `feat/text-area`
+
+On the web, a plain `Text` that is the one `aria_labelled_by` target of a field renders as `<label for>` (`crates/leptoskit_native/src/web/labels.rs`). Android's `WidgetHost.kt` sets `labelFor`. No new API.
+
+- **Run on Linux:** the `leptoskit_native` tests, including the new markup test and a wire test for the keys Android reads; host and Wasm clippy; ktlint.
+- **Not run:** the Android host change, and no browser test clicks a label yet. The demo's `visitor_pages.mjs` covers it once the demo is converted (DM-19).
+- **Found on the way, not fixed:** `WidgetHost.kt`'s `applyAccessibility` reads `aria_hidden`, `role`, `aria_live` and the rest from the top level of the props, but the wire nests them in an `aria` object, so the Rust Android backend appears to drop every ARIA property except the name. The Kotlin renderer for generated apps reads the nested object. Needs an Android device to confirm.
 
 ### `feat/public-demo`: no pull request
 

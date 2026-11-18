@@ -170,6 +170,57 @@ fn renders_semantic_controls_and_escapes_user_content() {
 }
 
 #[test]
+fn a_text_naming_one_field_renders_as_its_label() {
+	use leptoskit_native::components::*;
+
+	let element = View().children(vec![
+		Text("Email").id("email-label"),
+		TextInput().id("email").aria_labelled_by(["email-label"]),
+		Text("Remember me").id("remember-label"),
+		Checkbox(false)
+			.id("remember")
+			.aria_labelled_by(["remember-label"]),
+		// Named by two elements: neither is the field's one label.
+		Text("Street").id("street-label"),
+		Text("Optional").id("street-hint"),
+		TextInput()
+			.id("street")
+			.aria_labelled_by(["street-label", "street-hint"]),
+		// Two fields named after one text: a label has a single target.
+		Text("Phone").id("phone-label"),
+		TextInput().id("phone-1").aria_labelled_by(["phone-label"]),
+		TextInput().id("phone-2").aria_labelled_by(["phone-label"]),
+		// A field without an id has nothing for `for` to point at.
+		Text("City").id("city-label"),
+		TextInput().aria_labelled_by(["city-label"]),
+		// A heading keeps its element, and a button is not a field.
+		Text("Notes")
+			.id("notes-label")
+			.role(leptoskit_native::Role::Heading)
+			.aria_level(2),
+		TextArea().id("notes").aria_labelled_by(["notes-label"]),
+		Text("Save").id("save-label"),
+		Button("Go").id("save").aria_labelled_by(["save-label"]),
+	]);
+	let html = render(element).to_html();
+	let labels = html
+		.split("<label")
+		.skip(1)
+		.map(|label| label.split_once("</label>").expect("closing tag").0)
+		.collect::<Vec<_>>();
+
+	assert_eq!(labels.len(), 2, "{html}");
+	assert!(labels[0].contains("for=\"email\""), "{}", labels[0]);
+	assert!(labels[0].contains("id=\"email-label\""), "{}", labels[0]);
+	assert!(labels[0].contains(">Email"), "{}", labels[0]);
+	assert!(labels[1].contains("for=\"remember\""), "{}", labels[1]);
+	assert!(labels[1].contains(">Remember me"), "{}", labels[1]);
+	// The fields keep the relationship assistive technology reads.
+	assert!(html.contains("aria-labelledby=\"email-label\""), "{html}");
+	assert!(html.contains("<h2"), "{html}");
+}
+
+#[test]
 fn text_areas_render_a_textarea_with_their_lines_and_hints() {
 	let element = Element::view().children([
 		Element::text_area()

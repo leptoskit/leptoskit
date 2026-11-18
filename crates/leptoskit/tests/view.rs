@@ -359,3 +359,26 @@ fn props_may_share_names_with_builder_internals() {
 		Some("level: 2")
 	);
 }
+
+#[test]
+fn a_field_names_its_label_by_id() {
+	let markup = view! {
+		<View>
+			<Text id="email-label">"Email"</Text>
+			<TextInput id="email" aria_labelled_by=["email-label"] />
+			<Checkbox id="remember" checked=false aria_labelled_by=["remember-label"] />
+			<Text id="remember-label">"Remember me"</Text>
+		</View>
+	};
+	let builders = View().children([
+		Text("Email").id("email-label"),
+		TextInput().id("email").aria_labelled_by(["email-label"]),
+		Checkbox(false)
+			.id("remember")
+			.aria_labelled_by(["remember-label"]),
+		Text("Remember me").id("remember-label"),
+	]);
+
+	assert_eq!(outline(&markup), outline(&builders));
+	markup.validate().expect("the labels exist");
+}

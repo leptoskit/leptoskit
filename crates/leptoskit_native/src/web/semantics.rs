@@ -46,6 +46,8 @@ pub(super) enum Tag {
 	Paragraph,
 	/// An `<hr>`.
 	Rule,
+	/// A `<label>` naming one field, which a click focuses or toggles.
+	Label,
 }
 
 impl Tag {
@@ -72,13 +74,14 @@ impl Tag {
 			Self::Search => "search",
 			Self::Paragraph => "p",
 			Self::Rule => "hr",
+			Self::Label => "label",
 		}
 	}
 
 	/// The role the element implies without a `role` attribute.
 	const fn implied_role(self) -> Option<Role> {
 		match self {
-			Self::Div | Self::Span => None,
+			Self::Div | Self::Span | Self::Label => None,
 			Self::Heading(_) => Some(Role::Heading),
 			Self::List => Some(Role::List),
 			Self::ListItem => Some(Role::ListItem),

@@ -40,6 +40,7 @@ use crate::SubmitLabel;
 use crate::element::HandlerEntry;
 
 mod controls;
+mod labels;
 mod motion;
 #[cfg(feature = "rive")]
 mod rive;
@@ -112,12 +113,15 @@ pub fn render(element: Element) -> AnyView {
 	let wants_focus = asks_for_focus(&element);
 	let scrolls = sets_scroll_offset(&element);
 	let mut sheets = BTreeMap::new();
+	let mut labels = labels::Labels::default();
+	labels.collect(std::slice::from_ref(&element));
 	let root = render_node(
 		element,
 		Inherited::ROOT,
 		&[],
 		&mut sheets,
 		&NodePath::root(),
+		&labels,
 	);
 	let mut css = crate::Theme::css();
 	let scope = root_scope(&sheets);
@@ -340,6 +344,22 @@ fn announce_read_only(kind: NativeKind, props: &mut NativeProps) {
 	}
 }
 
+/// Fills in the children a `For` or `Show` keeps in its region. Reading the
+/// region is what subscribes the leptos view that called `render`, so the web
+/// rebuilds this container when the list or the condition changes.
+///
+/// A region's children are only known now, so the labels among them are found
+/// here and returned with the ones the tree around them declared.
+fn expand_region(element: &mut Element, labels: &labels::Labels) -> Option<labels::Labels> {
+	let region = element.region.take()?;
+	element.children = region
+		.render()
+		.into_iter()
+		.map(|(_, child)| child)
+		.collect();
+	labels.with(&element.children)
+}
+
 /// Builds each typed DOM control before adding attributes common to all kinds.
 fn render_node(
 	mut element: Element,
@@ -347,6 +367,7 @@ fn render_node(
 	ancestors: &[Handlers],
 	sheets: &mut BTreeMap<String, String>,
 	path: &NodePath,
+	labels: &labels::Labels,
 ) -> AnyView {
 	let Inherited {
 		root,
@@ -354,16 +375,8 @@ fn render_node(
 		hidden: parent_hidden,
 		stagger,
 	} = inherited;
-	// A `For` or `Show` keeps its children in the region. Reading it here is
-	// what subscribes the leptos view that called `render`, so the web rebuilds
-	// this container when the list or the condition changes.
-	if let Some(region) = element.region.take() {
-		element.children = region
-			.render()
-			.into_iter()
-			.map(|(_, child)| child)
-			.collect();
-	}
+	let local = expand_region(&mut element, labels);
+	let labels = local.as_ref().unwrap_or(labels);
 
 	let devtools = path.attributes(&element);
 	// The render's stylesheet sets the defaults once, so each scope's sheet
@@ -433,6 +446,8 @@ fn render_node(
 	// An unnamed drawing is decoration, as an image with empty alt text is.
 	let decorative = kind == NativeKind::Vector && !named && props.aria().role.is_none();
 	let tag = semantics::tag(kind, props.aria(), named, element.children.is_empty());
+	let label_for = labels.target(kind, tag, &props, id.as_deref());
+	let tag = if label_for.is_some() { Tag::Label } else { tag };
 	let label = props
 		.accessibility_label
 		.clone()
@@ -459,7 +474,7 @@ fn render_node(
 				hidden,
 				stagger: child_stagger.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX)),
 			};
-			render_node(child, inherited, &chain, sheets, &child_path)
+			render_node(child, inherited, &chain, sheets, &child_path, labels)
 		})
 		.collect::<Vec<_>>();
 	let focused = props.focused == Some(true);
@@ -473,6 +488,7 @@ fn render_node(
 		custom_attribute("data-lk-motion", motion_scope),
 		custom_attribute("data-lk-focus", focused.then_some("true")),
 		custom_attribute("data-lk-scroll", scroll),
+		custom_attribute("for", label_for),
 		custom_attribute("class", classes),
 		custom_attribute("data-lk-node", devtools.node),
 		custom_attribute("data-lk-key", devtools.key),
@@ -863,7 +879,7 @@ fn typed_element(parts: NodeParts, attrs: impl Attribute + 'static) -> AnyView {
 		}
 		NativeKind::Text | NativeKind::TextRun => {
 			match tag {
-				Tag::Heading(_) => {
+				Tag::Heading(_) | Tag::Label => {
 					custom(tag.name())
 						.child((content, children))
 						.add_any_attr(attrs)

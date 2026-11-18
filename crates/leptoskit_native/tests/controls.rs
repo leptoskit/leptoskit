@@ -352,6 +352,27 @@ fn text_areas_propose_edits_keep_identity_and_never_submit() {
 	assert_eq!(surface.root(), Some(root));
 }
 
+/// The Android host reads these two keys to set a label's `labelFor`.
+#[cfg(feature = "serde")]
+#[test]
+fn resolved_fields_keep_their_id_and_the_id_of_their_label_on_the_wire() {
+	let form = View().children([
+		Text("Email").id("email-label"),
+		TextInput().id("email").aria_labelled_by(["email-label"]),
+	]);
+	let resolved = form.resolved(&StyleContext::default());
+	let label = serde_json::to_value(&resolved.children[0].props).unwrap();
+	let field = serde_json::to_value(&resolved.children[1].props).unwrap();
+
+	assert_eq!(label["id"], "email-label");
+	assert_eq!(field["id"], "email");
+	assert_eq!(
+		field["aria"]["aria_labelled_by"],
+		serde_json::json!(["email-label"])
+	);
+	assert_eq!(field["accessibility_label"], "Email");
+}
+
 #[test]
 fn single_line_fields_refuse_to_call_themselves_multiline() {
 	for kind in [NativeKind::TextInput, NativeKind::PasswordInput] {

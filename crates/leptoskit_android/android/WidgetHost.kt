@@ -334,6 +334,7 @@ class WidgetHost(
         checkUiThread()
         suppress {
             val mutations = JSONArray(encoded)
+            var relabel = false
             repeat(mutations.length()) { index ->
                 val mutation = mutations.getJSONObject(index)
                 val name = mutation.keys().next()
@@ -342,12 +343,14 @@ class WidgetHost(
                 when (name) {
                     "Create" -> {
                         create(id, fields.getString("kind"), fields.getJSONObject("props"))
+                        relabel = relabel || labelledBy(fields.getJSONObject("props")) != null
                     }
 
                     "UpdateProps" -> {
                         val node = checkNotNull(nodes[id])
                         node.props = fields.getJSONObject("props")
                         update(node)
+                        relabel = relabel || labelledBy(node.props) != null
                     }
 
                     "UpdateLayout" -> {
@@ -409,10 +412,34 @@ class WidgetHost(
                     }
                 }
             }
+            if (relabel) linkLabels()
             refresh()
             refreshMountedRoot()
         }
     }
+
+    /**
+     * Tells accessibility services which field each label names: a text
+     * field, toggle or slider that one `Text` names through `aria_labelled_by`
+     * is that text's `labelFor` target, as `<label for>` is on the web.
+     */
+    private fun linkLabels() {
+        val named = nodes.values.mapNotNull { node -> node.props.string("id")?.let { it to node } }.toMap()
+
+        for (field in nodes.values) {
+            val control = field.control ?: continue
+            val ids = labelledBy(field.props) ?: continue
+
+            if (ids.length() != 1 || !(control is EditText || control is CompoundButton || control is SeekBar)) continue
+            val label = named[ids.getString(0)]?.takeIf { it.kind == "text" }?.control ?: continue
+
+            if (control.id == View.NO_ID) control.id = View.generateViewId()
+            label.labelFor = control.id
+        }
+    }
+
+    /** The ids naming a node. They travel inside the props' nested `aria` object. */
+    private fun labelledBy(props: JSONObject): JSONArray? = props.optJSONObject("aria")?.optJSONArray("aria_labelled_by")
 
     fun setDarkMode(value: Boolean) {
         checkUiThread()

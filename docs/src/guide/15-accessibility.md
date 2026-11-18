@@ -79,6 +79,31 @@ Some contracts are checked before any tree commits, like radio groups and pressa
 
 `aria_labelled_by` and `aria_described_by` reference element ids. On the web the renderer keeps the id references and browsers compute the name live. Native accessibility APIs have no id references, so the renderer resolves them: referenced text is folded into the label before backends see it, and radio options learn their position in the group automatically.
 
+### Labels that focus their field
+
+On a web page, people expect a click on a field's label to put the caret in the field, and a click on "Remember me" to tick its checkbox. That needs no handler and no script. Give the field an `id`, give the `Text` beside it an `id`, and name the field after the text:
+
+```rust
+view! {
+	<View class="gap-2">
+		<Text id="email-label">"Email"</Text>
+		<TextInput id="email" aria_labelled_by=["email-label"] on:change=set_email />
+		<View class="flex-row gap-2">
+			<Checkbox id="remember" checked=remember aria_labelled_by=["remember-label"] on:toggle=set_remember />
+			<Text id="remember-label">"Remember me"</Text>
+		</View>
+	</View>
+}
+```
+
+The [`Field`](16-accessible-components.md#field) helper and `leptoskit::form` already build this shape, so their labels work the same way.
+
+- **Web:** the text renders as `<label for="email">`, so the browser focuses a text field and toggles a `Checkbox`, `Switch` or `Radio` when its label is clicked. It applies to `TextInput`, `PasswordInput`, `TextArea`, `Checkbox`, `Switch`, `Radio` and `Slider`.
+- **Android:** the label's view is marked with `labelFor`, so TalkBack knows which field it names. A tap on the label does not move focus.
+- **macOS, iOS, Windows, Linux and the terminal:** nothing changes. Clicking a label is not a convention there, and the field already carries the label's text as its name.
+
+The text becomes a label only when the relationship is unambiguous: the field has an `id`, it is named by exactly one element, that element is a plain `Text` with no `role`, and no other field is named after the same text. A label and its field inside the same `For` or `Show` are matched; a label outside a `For` or `Show` whose field is inside it stays a plain text.
+
 A plain container with a `role` or an `aria_label` becomes one accessibility element, merging its content the way React Native's `accessible` does — VoiceOver and TalkBack read the card below as a single item:
 
 ```rust,ignore
