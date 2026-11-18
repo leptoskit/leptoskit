@@ -59,6 +59,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod condition;
+pub mod local;
 pub mod options;
 
 #[cfg(feature = "browser")]
@@ -72,6 +73,8 @@ pub mod service;
 
 pub mod push;
 
+pub use local::LocalTime;
+pub use local::Variant;
 pub use options::AndroidOptions;
 pub use options::AppleOptions;
 pub use options::BadgeSetting;
@@ -414,9 +417,14 @@ pub static POSTGRES_MIGRATIONS: &[leptoskit_db::Migration] =
 /// What a send carries, apart from its key and its recipients: the content,
 /// when it shows and stops showing, and the [options](MessageOptions) that
 /// shape the notification each platform shows. The app's server builds one
-/// per send, and the service stores it verbatim on every row. The lengths
-/// here are what [`check_send`] and the `notifications` table enforce.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// per send, and the service stores it on every row — in the language of
+/// the [variant](Variant) each person reads, when it carries any. The
+/// lengths here are what [`check_send`] and the `notifications` table
+/// enforce.
+///
+/// [`Default`] is every optional field unset, for `..SendSpec::default()`;
+/// its empty category and title are not a send [`check_spec`] accepts.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SendSpec {
 	pub category: String,
 	pub title: String,
@@ -438,6 +446,20 @@ pub struct SendSpec {
 	/// was before options existed.
 	#[serde(default, skip_serializing_if = "MessageOptions::is_empty")]
 	pub options: MessageOptions,
+	/// The send's text in other languages, keyed by BCP 47 tag: each
+	/// person's one inbox row, and its push, carry the text of the
+	/// variant their locale matches, or the text above when none does.
+	/// See [`local`] for how a person's locale is found and matched. A
+	/// send without variants serializes without the field, exactly as it
+	/// did before variants existed.
+	#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+	pub variants: std::collections::BTreeMap<String, Variant>,
+	/// A wall-clock time the send becomes visible at in each person's own
+	/// time zone, instead of the one instant `visible_at` names. A send
+	/// sets one or the other. See [`local`] for how a person's time zone
+	/// is found. A send without one serializes without the field.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub local_time: Option<LocalTime>,
 }
 
 impl SendSpec {
@@ -688,7 +710,23 @@ pub fn check_send(
 	target: &SendTarget,
 ) -> Result<(), String> {
 	check_send_shape(idempotency_key, spec, target)?;
-	check_send_timing(spec.visible_at, spec.expires_at)
+	check_timing(spec)
+}
+
+/// What the clock says about a new send's whole schedule: its instants
+/// ([`check_send_timing`]) and, when it has one, its local time
+/// ([`local::check_local_timing`]).
+///
+/// # Errors
+///
+/// A message naming what's wrong.
+pub(crate) fn check_timing(spec: &SendSpec) -> Result<(), String> {
+	check_send_timing(spec.visible_at, spec.expires_at)?;
+
+	match spec.local_time.as_ref() {
+		Some(local) => local::check_local_timing(local),
+		None => Ok(()),
+	}
 }
 
 /// Checks what can never change about a send, whatever the clock says
@@ -739,9 +777,9 @@ pub fn check_send_shape(
 	Ok(())
 }
 
-/// Checks a spec's own shape — category, content, `data`, and options —
-/// wherever a spec is named: a send, or a [`send_test`](fn@send_test)
-/// probe.
+/// Checks a spec's own shape — category, content, `data`, options,
+/// variants, and local time — wherever a spec is named: a send, or a
+/// [`send_test`](fn@send_test) probe.
 ///
 /// # Errors
 ///
@@ -764,11 +802,13 @@ pub fn check_spec(spec: &SendSpec) -> Result<(), String> {
 
 	check_data(spec.data.as_deref())?;
 	options::check_options(&spec.options)?;
+	local::check_variants(spec)?;
+	local::check_local_time(spec)?;
 
 	if stored_len(spec) > MAX_SPEC_LEN {
 		return Err(format!(
 			"a send is at most {MAX_SPEC_LEN} bytes once stored as JSON: shorten its data, body, \
-			 or options"
+			 or options, or carry fewer or shorter variants"
 		));
 	}
 
@@ -1029,6 +1069,17 @@ fn valid_text(value: &str) -> bool {
 /// with a different intent is a conflict. Generate one key per logical
 /// send and keep it stable on retry.
 ///
+/// **Variants and local time.** A spec may carry its text in other
+/// languages ([`SendSpec::variants`]) and may name a wall-clock time
+/// instead of an instant ([`SendSpec::local_time`]). Both resolve per
+/// person as the fanout reaches them — the app's `locale` or `time_zone`
+/// attribute, then the person's most recently seen live endpoint, then the
+/// send's default — with two reads per batch, and each person still gets
+/// exactly one row: in their language, visible when the time arrives where
+/// they are, or at once when it already has. A local-time send's pushes
+/// are queued for their own instants, and it enqueues one [`wake_local`]
+/// job per batch and distinct instant. See [`local`].
+///
 /// A send enqueues a [`wake_send`] job when it becomes visible — now for
 /// an immediate send, `visible_at` for a scheduled one — and another at
 /// its `expires_at`, in the send's own transaction: when the time comes,
@@ -1066,7 +1117,8 @@ pub async fn send(
 	if validate_only {
 		// A dry run follows the new-send rules — the clock applies — but
 		// no key is read and nothing is written.
-		check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+		check_timing(&spec).map_err(rpc::Error::invalid)?;
+		service::local::check_default_zone(&spec)?;
 		let audience = cx
 			.query(service::DryRun {
 				spec,
@@ -1123,8 +1175,10 @@ pub(crate) async fn send_write(
 		return service::answer_send(&existing, &intent);
 	}
 
-	// New send, so the clock applies: how far ahead it may schedule.
-	check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+	// New send, so the clock applies: how far ahead it may schedule. So
+	// does the time zone database, for a local time's default zone.
+	check_timing(&spec).map_err(rpc::Error::invalid)?;
+	service::local::check_default_zone(&spec)?;
 
 	// A recipients send is the whole fanout in this transaction.
 	if let SendTarget::Recipients(named) = &target {
@@ -1142,9 +1196,14 @@ pub(crate) async fn send_write(
 			Err(error) => return Err(error.into()),
 		}
 
-		let fanout = service::fanout(cx.tx(), &idempotency_key, &spec, &recipients).await?;
+		// Each recipient's language and local time, for the whole send in
+		// two reads — and in none for a send with neither.
+		let resolved =
+			service::local::resolve(cx.tx(), &spec, &recipients, leptoskit_db::now()).await?;
+		let fanout =
+			service::fanout(cx.tx(), &idempotency_key, &spec, &recipients, &resolved).await?;
 		service::record_outcome(cx.tx(), &idempotency_key, &fanout).await?;
-		service::schedule_wakes(cx, &idempotency_key, &spec).await?;
+		service::schedule_wakes(cx, &idempotency_key, &spec, Some(&fanout)).await?;
 
 		// A send on a server with push configured fans its deliveries
 		// out; on one without, or from a route that carries no
@@ -1181,7 +1240,7 @@ pub(crate) async fn send_write(
 	.key(service::job_key("fanout", &idempotency_key, 0))
 	.await?;
 
-	service::schedule_wakes(cx, &idempotency_key, &spec).await?;
+	service::schedule_wakes(cx, &idempotency_key, &spec, None).await?;
 
 	Ok(SendResult {
 		delivered: 0,
@@ -1277,7 +1336,27 @@ pub async fn wake_batch(
 	after: Option<uuid::Uuid>,
 	through: uuid::Uuid,
 ) -> rpc::Result<()> {
-	service::wake_range(cx.db(), &send_key, after, through).await
+	service::wake_range(cx.db(), &send_key, after, through, None).await
+}
+
+/// Wakes the people of a [local-time](LocalTime) send whose time has just
+/// arrived: those with rows of the send in `(after, through]` that become
+/// visible at `at`. A local-time send is visible at a different instant in
+/// each time zone, so a recipients send enqueues one of these per distinct
+/// instant still ahead, and a fanout one per batch and distinct instant:
+/// the jobs grow with the time zones an audience spans, never with its
+/// people, and each person is woken once, at their own time.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications")]
+pub async fn wake_local(
+	cx: &rpc::JobCx,
+	send_key: String,
+	after: Option<uuid::Uuid>,
+	through: uuid::Uuid,
+	at: leptoskit_db::Timestamp,
+) -> rpc::Result<()> {
+	service::wake_range(cx.db(), &send_key, after, through, Some(at)).await
 }
 
 /// Cancels the rows of a large fanout send that [`cancel`] left, in
@@ -1287,7 +1366,22 @@ pub async fn wake_batch(
 /// Only the service's own workers run it; the app never enqueues it.
 #[rpc::job(service = "notifications", serialize_by = send_key)]
 pub async fn cancel_rows(cx: &rpc::JobCx, send_key: String) -> rpc::Result<()> {
-	service::cancel_rows(cx.db(), &send_key).await
+	service::cancel_rows(cx.db(), &send_key, None).await
+}
+
+/// Cancels the rows of a large [local-time](LocalTime) send that were
+/// still ahead when [`cancel`] was asked — the ones not yet visible at
+/// `hidden_after`, and any silent data row — in batches of
+/// [`FANOUT_BATCH`], leaving what people had already seen.
+///
+/// Only the service's own workers run it; the app never enqueues it.
+#[rpc::job(service = "notifications", serialize_by = send_key)]
+pub async fn cancel_hidden_rows(
+	cx: &rpc::JobCx,
+	send_key: String,
+	hidden_after: leptoskit_db::Timestamp,
+) -> rpc::Result<()> {
+	service::cancel_rows(cx.db(), &send_key, Some(hidden_after)).await
 }
 
 /// Erases the rest of a forgotten person's inbox — the rows
@@ -1359,6 +1453,13 @@ pub async fn prune_rows(
 /// cancelled — visible or not, because an audience this large can't wait
 /// for the schedule to turn — and the send answers
 /// [`SendState::Cancelled`] from then on, and pushes nothing more.
+///
+/// A [local-time](LocalTime) send is due at a different moment for each
+/// person, so it stays cancellable while anyone is still waiting: once
+/// some of its rows are visible, a cancel stops exactly the rows that are
+/// not — and any silent data row — and leaves what people have seen. Asked
+/// again, it answers `0`; with nobody left waiting and nothing ever
+/// stopped, it is the conflict above.
 ///
 /// The answer is how many rows the cancel stops. A topic, condition, or
 /// everyone send with more than [`FANOUT_BATCH`] of them has them
@@ -1924,7 +2025,7 @@ pub async fn send_test(
 	}
 
 	check_spec(&spec).map_err(rpc::Error::invalid)?;
-	check_send_timing(spec.visible_at, spec.expires_at).map_err(rpc::Error::invalid)?;
+	check_timing(&spec).map_err(rpc::Error::invalid)?;
 
 	service::send_test(cx, &spec, person, endpoint).await
 }

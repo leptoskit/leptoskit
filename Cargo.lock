@@ -4627,6 +4627,7 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -4654,6 +4655,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "jiff-tzdb"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0980fca2cc272465bd60e82397607ba9f33add9e48defd77923301bbd03808f2"
 
 [[package]]
 name = "jni"
@@ -6151,6 +6158,7 @@ dependencies = [
  "httpdate",
  "hyper",
  "hyper-util",
+ "jiff",
  "js-sys",
  "leptoskit_axum",
  "leptoskit_bridge",

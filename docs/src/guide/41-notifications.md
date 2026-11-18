@@ -2,7 +2,7 @@
 
 You want to tell someone something after they have left the screen: an invoice was paid, a ride is arriving, someone replied. The usual route hands your users and your sending patterns to a third-party push platform, and binds delivery to OS credentials you have to enrol for. leptoskit has a notifications **service** you add with one table in `leptoskit.toml`: a small program with its own database that runs beside your app's server, stores one durable notification per recipient, and serves each person their own inbox. Your server sends to explicit recipients, to a topic's subscribers, to the people a condition matches over topics, the attributes you set, and the devices people enrolled — their platform, language, time zone, or app version — or to everyone the service knows, and when you configure a push transport, the same send also wakes the devices its recipients enrolled — APNs, FCM, and Web Push, first-party, with your app's own credentials and no management vendor in between. Each send can be shaped — priority, an image, a sound, a badge, a click link, per-platform overrides, or a silent data message — and one call tests a spec on a real device before a campaign.
 
-This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, translated text and delivery in each person's local time, and any claim that a provider's acceptance means a person saw a banner.
+This page shows how to add it, send from your server, read the inbox on every platform, manage categories and schedules, and stand up push delivery. It also says plainly what it does not do yet: **client enrollment beyond the web, iOS, Android, and macOS**, push tap routing, and any claim that a provider's acceptance means a person saw a banner.
 
 ## Add the service
 
@@ -76,7 +76,7 @@ let cancelled: u32 = call_as_app(leptoskit_notifications::Cancel {
 .await?;
 ```
 
-After it's due the service refuses with a conflict — what someone has already seen can't be unsent. Cancelling again answers `0`, and so does cancelling a send every recipient opted out of: it delivered nothing, but the service knows the key, and cancelling it is still cancelling it.
+After it's due the service refuses with a conflict — what someone has already seen can't be unsent. (A send in [each person's local time](#send-at-each-persons-local-time) is due at a different moment for each person, and can be cancelled for the people still waiting.) Cancelling again answers `0`, and so does cancelling a send every recipient opted out of: it delivered nothing, but the service knows the key, and cancelling it is still cancelling it.
 
 A send to a topic, a condition, or everyone can have far more rows than one write should touch. Cancelling one with more than 500 answers how many it stops, stops the send's pushes at once, and cancels the rows themselves in the background, a batch at a time; asked again before they are all done, it answers how many are left.
 
@@ -268,6 +268,8 @@ let attributes = call_as_app(leptoskit_notifications::PersonAttributes {
 ```
 
 Keys are 1 to 64 bytes of `a-z`, `0-9`, and `_`; values are strings of at most 256 bytes; a person holds at most 50 attributes, and a key past that bound is skipped and counted in `skipped_full` rather than refusing the batch. The call is idempotent — sending the same value again changes nothing and counts nothing — and `remove` is the last word: a key in both `set` and `remove` is removed, never set. One call names at most 100 keys across `set` and `remove`; a larger change is refused as a bad request, so split it into several calls.
+
+Two keys mean something to the service itself: `locale` is the language a person reads [translated sends](#say-it-in-each-persons-language) in, and `time_zone` is where they are for [local-time sends](#send-at-each-persons-local-time). Both are ordinary attributes that conditions can read too. Set them when your app knows better than the person's device does.
 
 Setting an attribute also registers the person with the service, because an attribute is one of the things that makes someone an audience: the registry the service keeps is who "everyone" means. Someone who subscribes to a topic, sets a category preference, or enrolls a push endpoint is registered too — including by the migration that adds the registry, which backfills it from those tables. Someone who only ever received a recipients send is not registered: naming people in a send never puts them in an audience.
 
@@ -461,6 +463,129 @@ options: MessageOptions {
 `badge` sets the app badge the platform shows next to your icon. `BadgeSetting::Set(n)` sets that exact number — `Set(0)` clears it. `BadgeSetting::Unread` is the interesting one: the service resolves it **per recipient at push time** to that person's live unread count — the same number `unread_count` would answer right then. One send to a thousand people badges each of their own counts.
 
 On the web the receiver service worker calls `navigator.setAppBadge(n)` where the browser supports it (and `clearAppBadge` for zero); where it doesn't, the count rides in the payload and nothing else happens. A data send can carry a badge too, but there is no notification for the platform to badge from: the number rides as `lkbadge` in the data, for your app to apply itself (`UNUserNotificationCenter.setBadgeCount` on Apple platforms; on Android, launchers badge from the app's notifications). That needs the data-message handler [described above](#silent-data-messages), which the generated hosts don't have yet.
+
+## Say it in each person's language
+
+Your app has people who read Portuguese, French, and English, and one announcement to make. You could keep three lists and make three sends, and then keep those lists right as people change their phone's language. Instead, make one send that carries each translation, and let the service give each person the one they read.
+
+```rust
+use leptoskit_notifications::SendSpec;
+use leptoskit_notifications::SendTarget;
+use leptoskit_notifications::Variant;
+
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "spring-sale".into(),
+    spec: SendSpec {
+        category: "offers".into(),
+        title: "The spring sale is on".into(),
+        body: "Everything is 20% off until Sunday.".into(),
+        variants: [
+            (
+                "pt-BR".to_owned(),
+                Variant {
+                    title: Some("A promoção de primavera começou".into()),
+                    body: Some("Tudo com 20% de desconto até domingo.".into()),
+                    ..Variant::default()
+                },
+            ),
+            (
+                "fr".to_owned(),
+                Variant {
+                    title: Some("Les soldes de printemps sont là".into()),
+                    body: Some("Tout est à -20 % jusqu'à dimanche.".into()),
+                    ..Variant::default()
+                },
+            ),
+        ]
+        .into(),
+        ..SendSpec::default()
+    },
+    target: SendTarget::Topic("offers".into()),
+    validate_only: false,
+})
+.await?;
+```
+
+The title and body of the spec are the send's default text. Each entry of `variants` is keyed by a language tag (`pt-BR`, `fr`, `zh-Hant`) and replaces the text for people who read that language. Everyone still gets exactly one inbox row. The row is written in their language, and the push for it carries the same words on every platform.
+
+**Which language a person reads** is decided in this order:
+
+1. The `locale` [attribute](#describe-people-with-attributes) your server set for them, if there is one. Set it when your app has its own language setting: `set: [("locale".to_owned(), "pt-BR".to_owned())]`.
+2. Otherwise the language of the device the service heard from most recently. Every enrolled device [reports its language](#what-a-device-says-about-itself) with no code from you.
+3. Otherwise nothing is known, and they read the default text.
+
+**Which variant that language gets:** the variant with exactly that tag, in any letter case. If there is none, the tag is shortened one part at a time, so `pt-BR` falls back to a `pt` variant and `zh-Hant-TW` tries `zh-Hant`, then `zh`. If nothing matches, the person reads the default text. A match never goes the other way: someone whose language is plain `pt` does not get a `pt-BR` variant, so add a `pt` variant if you want one text for all Portuguese readers.
+
+Your server's attribute wins even when it matches no variant. A person you marked `ja` reads the default text, not the French their browser reports.
+
+A variant only needs the fields it changes. Leave `body` out and that language keeps the default body. Besides `title` and `body`, a variant can translate two more pieces of text, when the send has them:
+
+- `subtitle` replaces `options.apple.subtitle`.
+- `actions` replaces the titles of `options.web.actions`, by action id: `actions: [("open".to_owned(), "Ouvrir".to_owned())].into()`.
+
+The limits, all checked before anything is sent and refused with the variant named:
+
+- At most 32 variants in one send.
+- Each key is a BCP 47 language tag, and no two keys may be the same tag in different spelling (`en-GB` and `en_gb`).
+- A variant must change something. Its title and body have the same length limits as the send's own.
+- A `subtitle` or an `actions` entry is accepted only when the send itself sets that subtitle or names that action.
+- The whole spec, variants included, must fit in 8 KiB as stored JSON. Five 2,000-byte bodies do not fit, so long texts mean fewer variants.
+- A [silent data message](#silent-data-messages) shows nothing, so it cannot carry variants.
+
+The language is chosen once, when the send writes a person's row. Someone who changes language afterwards keeps the row they have. Variants are part of what the send is: repeating the send with the same key and the same variants answers the first result, and changing a translation under the same key is refused as a different send. [`send_test`](#test-on-a-device) pushes the variant the person you name would read, and `validate_only` checks the variants without sending.
+
+## Send at each person's local time
+
+"Your weekly summary is ready" belongs at nine in the morning. But nine in the morning in Sydney is the middle of the night in Lisbon, and a send scheduled with `visible_at` goes to everyone at the same instant. Give the send a time on the clock instead, and each person gets it when their own clock shows that time.
+
+```rust
+use leptoskit_notifications::LocalTime;
+use leptoskit_notifications::SendSpec;
+use leptoskit_notifications::SendTarget;
+
+let sent = call_as_app(leptoskit_notifications::Send {
+    idempotency_key: "weekly-summary-2026-49".into(),
+    spec: SendSpec {
+        category: "summaries".into(),
+        title: "Your weekly summary is ready".into(),
+        local_time: Some(LocalTime {
+            at: "2026-12-01T09:00".into(),
+            default_time_zone: Some("Europe/London".into()),
+        }),
+        ..SendSpec::default()
+    },
+    target: SendTarget::Everyone,
+    validate_only: false,
+})
+.await?;
+```
+
+`at` is a date and a time with no offset, written `2026-12-01T09:00` or `2026-12-01T09:00:00`. The service writes everyone's inbox row straight away, as it does for any scheduled send, and sets each row to appear when that time arrives where the person is. The push goes out at the same moment. A send to the whole world therefore arrives over about a day: first in the Pacific, last in the zones twelve hours behind UTC.
+
+**Which time zone a person is in** is decided the same way as their language:
+
+1. The `time_zone` attribute your server set for them, such as `America/Sao_Paulo`.
+2. Otherwise the time zone of the device the service heard from most recently.
+3. Otherwise `default_time_zone` from the send. If the send names none, that is UTC.
+
+Time zones are IANA names like `Europe/London`. The service looks them up in the time zone data it was built with. A name it does not know, on an attribute or on a device, is skipped and the next step is used, so one odd value never fails a send. The send's own `default_time_zone` is different: an unknown name there is refused, because it is your typing mistake to fix.
+
+A few cases worth knowing:
+
+- **The time has already passed for someone.** If it is already past 09:00 on 1 December where a person is when the send reaches them, they get it at once. A time that has passed everywhere is the same as sending now.
+- **Clocks that jump forward.** If the time falls in the hour that a daylight-saving change skips (02:30 on a night when clocks go from 02:00 to 03:00), it arrives just after the jump, at 03:30.
+- **Clocks that go back.** If the time happens twice, it arrives the first time.
+- **Expiry.** `expires_at` is still one instant for everyone. It must be later than the moment the local time reaches the last time zone, which is the time in `at` plus twelve hours, read as UTC. For `2026-12-01T09:00` that is `2026-12-01T21:00:00Z`. An earlier expiry is refused, with that instant in the message, because someone's notification would expire before it ever showed.
+- **How far ahead.** The year's limit on scheduling is counted to the same last-zone moment.
+- **`visible_at`.** A send has one schedule. Setting both `visible_at` and `local_time` is refused.
+
+The time zone is chosen once, when the send writes a person's row. Someone who travels afterwards still gets it at the time worked out for where they were.
+
+`send_status` counts a row as `delivered` when it is written, not when it appears, so a local-time send to a topic reads `complete` once every row exists, while some of them are still waiting for their morning. `validate_only` checks the time and the default zone and counts the audience. [`send_test`](#test-on-a-device) ignores `local_time` and pushes at once.
+
+**Cancelling** works while anyone is still waiting. Once the first zone has seen the notification, a cancel stops it for everyone whose time has not come yet and leaves the rest alone; the answer is how many it stopped. Cancelling again answers `0`. When nobody is waiting any more, the cancel is refused with a conflict, as for any send people have already seen. For a topic, condition, or everyone send with more than 500 rows still waiting, the rows are stopped in the background, a batch at a time. A row whose time comes in the few seconds before its batch is reached can show and be pushed before it is withdrawn.
+
+Variants and local time work together: one send can say good morning in each person's language at each person's nine o'clock.
 
 ## Read the inbox on any platform
 
@@ -925,6 +1050,8 @@ They are sent when the device enrolls and again whenever they change: on iOS, An
 
 The service checks each detail's shape: the locale is a BCP 47 tag of at most 35 bytes, stored in canonical case (`en_gb` becomes `en-GB`); the time zone is an IANA-style name of at most 64 bytes — checked for shape only, not against a time zone database, because a device's database can be newer than the server's; the app version is free text of at most 64 bytes. A client drops a detail that fails its check rather than lose its enrollment over it, and a request that sends a bad one directly is refused with the detail named. Each re-enrollment replaces what the endpoint said before; a change to the details alone never rotates the endpoint's credential, so pushes already queued for it carry on untouched.
 
+The service also uses the language and the time zone itself: a [translated send](#say-it-in-each-persons-language) or a [local-time send](#send-at-each-persons-local-time) reads them from the device it heard from most recently, when your server has not set the person's `locale` or `time_zone` attribute. "Heard from" means the device enrolled, changed one of these details, or (on the web) renewed its enrollment at launch.
+
 Details belong to the endpoint and are read back only by its owner: `push_endpoints` answers each endpoint's `device` beside its platform, and nothing your server or anyone else reads — delivery status, test-send outcomes — carries them. The condition grammar reads them, below.
 
 ### What a send does
@@ -954,7 +1081,7 @@ let outcomes = call_as_app(leptoskit_notifications::SendTest {
 .await?;
 ```
 
-The spec is a full `SendSpec` — options included, silent data messages included — so the device receives exactly what a real send to it would carry. The blast radius is the person's own enrollment: at most their ten live endpoints, each attempted exactly once, one provider request each. A transient failure answers `rejected` with no reason and the retry is calling again; an endpoint id that isn't the person's own live one is `404`. There is no idempotency key to reuse — a test answers, it doesn't record — so a repeated call, a retried request included, pushes again. While the providers answer, the service holds nothing open, so a slow provider doesn't hold up its other work.
+The spec is a full `SendSpec` — options included, silent data messages included — so the device receives exactly what a real send to it would carry. If the spec has [variants](#say-it-in-each-persons-language), the test pushes the one this person would read. The blast radius is the person's own enrollment: at most their ten live endpoints, each attempted exactly once, one provider request each. A transient failure answers `rejected` with no reason and the retry is calling again; an endpoint id that isn't the person's own live one is `404`. There is no idempotency key to reuse — a test answers, it doesn't record — so a repeated call, a retried request included, pushes again. While the providers answer, the service holds nothing open, so a slow provider doesn't hold up its other work.
 
 Read what happened from your server, per endpoint, with `call_as_app`:
 
@@ -1076,9 +1203,9 @@ Retention is also the answer for personal data that isn't tied to one person's d
 - **Native client enrollment is iOS, Android, and macOS.** The service side of enrollment is done, the web client is this crate's `browser` module, and the native client — iOS's and macOS's APNs token and Android's FCM token alike — is the `native` module (all above). Push notification **tap routing** into a screen is later work, everywhere: a send's `link` is carried in every payload today, but opening it is each app's own code.
 - **No delivery receipts.** The service knows what it stored and what the provider accepted; it doesn't track who saw a banner. `accepted` is as far as status goes.
 - **No per-device state.** Read, dismissed, and cancelled state is per person, shared across their devices by design.
-- **No localization or recipient-local scheduling.** A send's title and body are the same for everyone it reaches, and a scheduled send fires on the service's clock, not each recipient's timezone.
+- **Translations are yours to write.** [Variants](#say-it-in-each-persons-language) pick the right text for each person, but the service does not translate anything, and it has no localization keys that a device resolves from its own string tables. [Local time](#send-at-each-persons-local-time) is a single date and time; a send that repeats every morning is a send your server makes each day.
 - **Person attributes are the app's own statements.** Segments read what your server set — plan, country, spend. Attributes are set in batches by the app's server only; a person cannot describe themselves into an audience.
-- **Device details are what the device reports.** The platform, locale, time zone, and app version are taken as each client sends them, checked for shape and never verified, and the time zone is not checked against a time zone database. There is no OS version or device model, `'apns'` doesn't tell an iPhone from a Mac, and a web app has a version only if you pass one. Windows and Linux devices can't enroll, so device conditions never reach them.
+- **Device details are what the device reports.** The platform, locale, time zone, and app version are taken as each client sends them, checked for shape and never verified, and a device's time zone is not checked against a time zone database when it enrolls (a [local-time send](#send-at-each-persons-local-time) skips one it does not know). There is no OS version or device model, `'apns'` doesn't tell an iPhone from a Mac, and a web app has a version only if you pass one. Windows and Linux devices can't enroll, so device conditions never reach them.
 
 The engineering notes in the repository describe the transport work that follows.
 
@@ -1096,7 +1223,7 @@ A new version of the service can change its tables, and it makes those changes w
 | `message_options` (adds a notification's kind and options)        | copies every notification and rebuilds its indexes                                                | reads every notification once to check the new column; nothing can read or write notifications until it finishes           |
 | `scale_indexes` (indexes for the unread count and the push queue) | builds one index over every notification and two over every push record; writes wait, reads go on | the same three builds; writes to those two tables wait, reads go on. You can build them ahead with no waiting, as below    |
 
-The other changes add empty tables or empty columns and take no measurable time at any size.
+The other changes add empty tables or empty columns and take no measurable time at any size. That includes `endpoint_seen`, which adds one empty column recording when each device was last heard from.
 
 On Postgres you can take the wait out of `scale_indexes` by building its three indexes yourself before you upgrade, while the old version is still running. Build each with `CREATE INDEX CONCURRENTLY`, under exactly the name and columns the migration file uses, and check that each one finished valid. The migration then finds them and only has a moment's work left. The migration file's own comment has the details.
 

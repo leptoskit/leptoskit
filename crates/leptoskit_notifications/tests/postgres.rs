@@ -43,6 +43,9 @@ use postgres::Postgres;
 #[path = "support/engine.rs"]
 mod engine;
 #[cfg(feature = "service")]
+#[path = "support/local.rs"]
+mod local;
+#[cfg(feature = "service")]
 #[path = "support/ownership.rs"]
 mod ownership;
 #[cfg(feature = "service")]
@@ -1299,4 +1302,108 @@ async fn an_attribute_call_names_a_bounded_number_of_keys_on_postgres() {
 	};
 	let (address, db) = ownership_service(&postgres).await;
 	ownership::an_attribute_call_names_a_bounded_number_of_keys(address, &db).await;
+}
+
+/// A migrated database on `postgres`, and the variant and local-time
+/// checks' service over it.
+#[cfg(feature = "service")]
+async fn local_service(postgres: &Postgres, workers: bool) -> local::Service {
+	let db = Db::connect(&postgres.database())
+		.await
+		.expect("the database opens");
+	db.migrate(POSTGRES_MIGRATIONS)
+		.await
+		.expect("migrations apply");
+
+	local::serve(&db, workers).await
+}
+
+/// Each person reads a send in their own language on Postgres too: one row
+/// per person, resolved from the batch's attributes and endpoints.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn each_person_reads_their_own_language_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::each_person_reads_their_own_language(&local_service(&postgres, true).await).await;
+}
+
+/// The endpoint heard from last decides a person's language on Postgres
+/// too, through `seen_at`.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn the_most_recently_seen_device_decides_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::the_most_recently_seen_device_decides(&local_service(&postgres, true).await).await;
+}
+
+/// A topic's fanout and a test send read variants on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn variants_reach_a_topic_and_a_test_send_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::variants_reach_a_topic_and_a_test_send(&local_service(&postgres, true).await).await;
+}
+
+/// Bad variants and local times are refused by name on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn bad_variants_and_local_times_are_refused_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::bad_variants_and_local_times_are_refused(&local_service(&postgres, true).await).await;
+}
+
+/// A local-time send arrives zone by zone on Postgres too, with its pushes
+/// queued for their instants and a cancel that stops what is still ahead.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn each_person_gets_it_at_their_own_nine_o_clock_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::each_person_gets_it_at_their_own_nine_o_clock(&local_service(&postgres, true).await)
+		.await;
+}
+
+/// A local-time send nobody has seen cancels whole, and one everybody has
+/// seen doesn't, on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_local_time_send_cancels_like_any_other_at_its_edges_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::a_local_time_send_cancels_like_any_other_at_its_edges(
+		&local_service(&postgres, true).await,
+	)
+	.await;
+}
+
+/// A local-time fanout wakes once per batch and instant on Postgres too.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_fanout_wakes_once_per_batch_and_instant_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::a_fanout_wakes_once_per_batch_and_instant(&local_service(&postgres, false).await).await;
+}
+
+/// A large local-time send cancelled once part of it is visible stops only
+/// what is still ahead on Postgres too, in batches.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "service")]
+async fn a_large_local_cancel_stops_only_what_is_ahead_on_postgres() {
+	let Some(postgres) = Postgres::start() else {
+		return;
+	};
+	local::a_large_local_cancel_stops_only_what_is_ahead(&local_service(&postgres, false).await)
+		.await;
 }

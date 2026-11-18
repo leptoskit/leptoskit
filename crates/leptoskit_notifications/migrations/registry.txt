@@ -5,3 +5,4 @@
 20261117T011208_message_options
 20261118T132531_device_details
 20261118T200800_scale_indexes
+20261118T210101_endpoint_seen

@@ -82,6 +82,10 @@ required-features = ["service"]
 # The Postgres races need the Postgres service; they start a private
 # Postgres from local binaries and skip without them.
 [[test]]
+name = "local"
+required-features = ["service"]
+
+[[test]]
 name = "postgres"
 required-features = ["postgres"]
 
@@ -100,6 +104,7 @@ required-features = ["browser"]
 base64 = { workspace = true }
 chrono = { workspace = true }
 httpdate = { version = "1", optional = true }
+jiff = { version = "0.2", optional = true, default-features = false, features = ["std", "tzdb-bundle-always"] }
 leptoskit_db = { workspace = true }
 # The plugin contract the native enrollment rides on: the snapshot types the
 # iOS host's answers cross the bridge in. Optional, like every platform
@@ -198,6 +203,7 @@ native = [
 service = [
 	"dep:httpdate",
 	"dep:hex",
+	"dep:jiff",
 	"dep:http",
 	"dep:leptoskit_axum",
 	"dep:leptoskit_query",

@@ -736,6 +736,12 @@ pub struct PushEndpoint {
 	/// condition's `device.app_version` reads.
 	#[db(max_len = 64)]
 	pub app_version: Option<String>,
+	/// When the endpoint last told the service about itself: its
+	/// enrollment, a renewal, or a change to its details. A send that
+	/// resolves a person's language or time zone reads their most recently
+	/// seen live endpoint. `None` for an endpoint enrolled before the
+	/// column existed, which counts as seen when it was created.
+	pub seen_at: Option<leptoskit_db::Timestamp>,
 }
 
 #[cfg(feature = "service")]
